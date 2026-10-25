@@ -380,7 +380,7 @@ def type_sizes(registry, header_text, compiler, include):
         if result.returncode:
             sys.stderr.write(result.stderr[-3000:])
             sys.exit(1)
-        subprocess.run([compiler.replace("gcc", "objcopy"), "-O", "binary", "-j", ".rdata", str(objfile), str(raw)], check=True)
+        subprocess.run([Path(compiler).with_name(Path(compiler).name.replace("gcc", "objcopy")), "-O", "binary", "-j", ".rdata", str(objfile), str(raw)], check=True)
         data = raw.read_bytes()
     values = [int.from_bytes(data[at:at + 4], "little") for at in range(0, len(data) - len(data) % 4, 4)]
     values = values[values.index(0xC0FFEE01) + 1:]
