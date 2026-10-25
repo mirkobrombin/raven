@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Replacement for the upstream private header: it keeps the public and shared-structure includes and drops the kernel-mode ones. */
 #pragma once
 #include <stdio.h>

@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* The entry points of the older msvcrt.dll that programs built against it import: startup, the stream table, formatted output to
  * a stream, signals and the x64 language handler of structured exceptions. The runtime also serves this component as msvcrt.dll to
  * 64-bit programs, a C runtime of its own as it is on Windows. Included by ucrtbase.c. */

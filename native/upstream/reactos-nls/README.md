@@ -6,7 +6,12 @@ and `media/nls/src/c_1252.txt`. The source archive SHA-256 is
 `5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69`.
 The tool retains its GPL-2.0-or-later notice and COPYING. ReactOS identifies
 Microsoft's Windows Supported Code Page Data Files as the text data's origin.
-Product packaging and source/data distribution review remains open.
+The same table is published as Unicode's `WindowsBestFit/bestfit1252.txt`.
+Every byte matches after CRLF-to-LF conversion. `data-provenance.json` records
+the URLs and hashes; [Unicode-3.0.txt](../../../LICENSES/Unicode-3.0.txt) preserves
+the applicable data license. Unicode's Terms of Use cover data files under
+`https://www.unicode.org/Public/` unless a specific exception is indicated.
+This records the table's terms separately from the GPL converter's license.
 
 The tool runs only during the build. Its generated NLS file must match
 `e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76` before

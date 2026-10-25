@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven fondue.exe: Windows Features on Demand, which the .NET Framework's shim starts when a program needs the .NET Framework 3.5 and the
  * feature is off (`fondue.exe /enable-feature:NETFX3 /caller-name:mscoreei.dll`).
  *

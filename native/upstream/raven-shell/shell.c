@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven shell component: the common file dialogs, shell items and the class registry behind CoCreateInstance.
  *
  * The dialogs are Raven code: one dialog template built in memory serves GetOpenFileName, GetSaveFileName and the

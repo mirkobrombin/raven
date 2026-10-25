@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven C runtime component, part two: file streams, descriptors, locale, time formatting, math and the remaining string and
  * conversion entry points that larger programs import. This file is included at the end of ucrtbase.c, so it shares that file's
  * stream type and helpers. */

@@ -15,5 +15,14 @@ The build exports `LoadIconWithScaleDown` at ordinal 381 as version 6 programs e
 traces, and `guids.c` instantiates the image list interface identifiers. Both are
 Raven code. The component imports only the system DLLs that Raven provides.
 
-Upstream license texts stay beside the sources: the library is LGPL-2.1+. Product
-license and distribution review remains required before packaging.
+`comctl32.dll` uses LGPL-2.1-or-later sources. The separate `raven-user32.dll`
+also compiles GPL-2.0-or-later sources: `windows/dialog.c`, `draw.c`, `font.c`,
+`messagebox.c`, `text.c` and `win32ss/user/rtl/text.c`. The two libraries must not
+be described as one LGPL-only component. Raven's own adapters, shell, CRT, DirectWrite, Direct2D and animation code
+remain MIT. The ReactOS-derived PE libraries are distributed under GPL version 2
+with their original source notices retained, including LGPL and other terms.
+
+The provisioner retains the upstream root license texts and module notices.
+`provenance.json` identifies the sources, patches and binaries of each build.
+See [LICENSES.md](../../../LICENSES.md) and the source-bundle requirements in
+[packaging](../../../docs/packaging.md) before distributing these binaries.

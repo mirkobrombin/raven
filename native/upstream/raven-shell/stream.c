@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven shell component: streams over files (SHCreateStreamOnFile, SHCreateStreamOnFileEx) and registry values (SHOpenRegStream).
  *
  * The stream holds the file handle it opened and reads, writes and seeks through it; its storage modes choose the access, the sharing

@@ -11,6 +11,8 @@ import subprocess
 import tarfile
 import urllib.request
 
+from component_licenses import mark_modified, preserve_notices
+
 
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
@@ -38,7 +40,7 @@ def main():
         for member in upstream:
             parts = Path(member.name).parts[1:]
             name = "/".join(parts)
-            if not member.isfile() or not (name.startswith(prefixes) or name in selected):
+            if not member.isfile() or not (name.startswith(prefixes) or name in selected or ("/" not in name and name.startswith("COPYING"))):
                 continue
             if not parts or ".." in parts or Path(name).is_absolute():
                 raise RuntimeError("invalid upstream archive path")
@@ -144,6 +146,8 @@ def main():
             heap[protection + len("PAGE_READWRITE);"):]
     (output / "heap.c").write_text(heap)
     (output / "unicode.c").write_text(extract(source / "sdk/lib/rtl/unicode.c", ["RtlInitUnicodeString"], "#include <rtl.h>"))
+    for name in ("support.c", "verifier.c", "critical.c", "heap.c", "unicode.c"):
+        mark_modified(output / name)
     includes = [generated, source / "sdk/lib/pseh/include", source / "sdk/include/vcruntime", source / "sdk/include/ndk",
                 source / "sdk/include/psdk", source / "sdk/include/crt", source / "sdk/include/ddk",
                 source / "sdk/include", source / "sdk/include/reactos", source / "sdk/lib/rtl", source / "dll/ntdll/include"]
@@ -167,6 +171,7 @@ def main():
                         "-Wl,--out-implib," + str(output / "raven-rtl.lib"), "-o", str(output / "raven-rtl.dll"),
                         *[str(objects / (path.stem + ".o")) for path in paths], str(repo / "native/upstream/reactos-rtl/raven-rtl.def"), "-lntdll", "-lgcc"]))
     result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, functions=functions, commands=records,
+                  license_notices=preserve_notices(source, output),
                   component_sha256=hashlib.sha256((output / "raven-rtl.dll").read_bytes()).hexdigest(),
                   source_hashes={path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
                                  for path in source.rglob("*") if path.is_file()})

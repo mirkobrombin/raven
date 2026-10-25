@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-25",
+  "original_code_license": "GPL-3.0-or-later with MIT guest-adapter exceptions",
+  "license_references": {
+    "LicenseRef-ReactOS-COPYING": "GPL version 2 under COPYING at the pinned ReactOS revision. PE component distribution selects version 2; no later-version permission is assumed.",
+    "LicenseRef-ReactOS-Installer-Mixed": "The GPL, LGPL and permissive source terms detailed in LICENSES.md; covered PE binaries are distributed under GPL version 2.",
+    "LicenseRef-ReactOS-CRT": "Selected CRT source under ReactOS root COPYING; PE component distribution selects GPL version 2.",
+    "LicenseRef-Configuration-Dependent": "Inventory depends on configured binary inputs."
+  },
+  "components": [
+    {
+      "name": "Raven Linux host and build tooling",
+      "paths": [
+        "native",
+        "scripts"
+      ],
+      "license": "GPL-3.0-or-later",
+      "review": "reviewed",
+      "provenance": "LICENSE; excludes the MIT guest adapters and imported sources listed below"
+    },
+    {
+      "name": "Raven guest adapters",
+      "paths": [
+        "native/upstream/raven-control/control.c",
+        "native/upstream/raven-control/control.manifest",
+        "native/upstream/raven-control/control.rc",
+        "native/upstream/raven-crt/ucrtbase.c",
+        "native/upstream/raven-crt/ucrtbase32.def",
+        "native/upstream/raven-crt/ucrtbase_cpp.c",
+        "native/upstream/raven-crt/ucrtbase_cxx.c",
+        "native/upstream/raven-crt/ucrtbase_io.c",
+        "native/upstream/raven-crt/ucrtbase_legacy.c",
+        "native/upstream/raven-crt/ucrtbase_more.c",
+        "native/upstream/raven-crt/ucrtbase_msvcrt.c",
+        "native/upstream/raven-d2d1/d2d1.c",
+        "native/upstream/raven-d2d1/d2d1_tables.h",
+        "native/upstream/raven-dism/dism.c",
+        "native/upstream/raven-dism/dism.manifest",
+        "native/upstream/raven-dism/dism.rc",
+        "native/upstream/raven-dism/fondue.c",
+        "native/upstream/raven-dism/regedit.c",
+        "native/upstream/raven-dwrite/analyzer.inc",
+        "native/upstream/raven-dwrite/crt.c",
+        "native/upstream/raven-dwrite/dwrite.c",
+        "native/upstream/raven-dwrite/dwrite_tables.h",
+        "native/upstream/raven-dwrite/text.inc",
+        "native/upstream/raven-mscoree/mscoree.c",
+        "native/upstream/raven-mscoree/mscoree32.def",
+        "native/upstream/raven-mscoree/mscoree64.def",
+        "native/upstream/raven-shell/com.c",
+        "native/upstream/raven-shell/dialog.c",
+        "native/upstream/raven-shell/link.c",
+        "native/upstream/raven-shell/shell.c",
+        "native/upstream/raven-shell/shell.h",
+        "native/upstream/raven-shell/stream.c",
+        "native/upstream/raven-uianimation/uianimation.c",
+        "native/upstream/raven-uianimation/uianimation_tables.h",
+        "native/upstream/reactos-controls/crt.c",
+        "native/upstream/reactos-controls/debug.c",
+        "native/upstream/reactos-controls/guids.c",
+        "native/upstream/reactos-installer/codecs.c",
+        "native/upstream/reactos-installer/dllmain.c",
+        "native/upstream/reactos-installer/entry.c",
+        "native/upstream/reactos-installer/entry_wide.c",
+        "native/upstream/reactos-installer/msftedit.c",
+        "native/upstream/reactos-installer/printers.c",
+        "native/upstream/reactos-installer/setup.c",
+        "native/upstream/reactos-installer/storage.c",
+        "native/upstream/reactos-installer/support.c",
+        "native/upstream/reactos-rtl/initialize.c",
+        "native/upstream/reactos-rtl/kernel.c",
+        "native/upstream/reactos-rtl/raven-rtl.def",
+        "native/upstream/reactos-text/user32.h",
+        "native/upstream/reactos-text/wine/debug.h",
+        "native/upstream/reactos-text/wrapper.c",
+        "native/upstream/reactos-user32/bridge.c",
+        "native/upstream/reactos-user32/register.c",
+        "native/upstream/reactos-user32/scrollbar_control.c",
+        "native/upstream/reactos-user32/shim/ndk/exfuncs.h",
+        "native/upstream/reactos-user32/shim/user32.h"
+      ],
+      "license": "MIT",
+      "review": "reviewed",
+      "boundary": "Original Raven code compiled into PE guest components, not the Linux host. Imported source and file notices are excluded."
+    },
+    {
+      "name": "ReactOS UTF-8",
+      "paths": [
+        "native/upstream/reactos-utf8"
+      ],
+      "license": "GPL-2.0-or-later",
+      "review": "reviewed",
+      "revision": "32bb061415f813b6ced25ff91f4d258f33c5191f",
+      "provenance": "native/upstream/reactos-utf8/provenance.json"
+    },
+    {
+      "name": "ReactOS nonclient",
+      "paths": [
+        "native/upstream/reactos-nonclient"
+      ],
+      "license": "LGPL-2.1-or-later",
+      "review": "reviewed",
+      "provenance": "native/upstream/reactos-nonclient/provenance.json"
+    },
+    {
+      "name": "CP1252 data",
+      "paths": [
+        "native/upstream/reactos-nls/c_1252.txt"
+      ],
+      "license": "Unicode-3.0",
+      "review": "reviewed",
+      "provenance": "native/upstream/reactos-nls/data-provenance.json"
+    },
+    {
+      "name": "ReactOS NLS converter",
+      "paths": [
+        "native/upstream/reactos-nls/txt2nls.cpp"
+      ],
+      "license": "GPL-2.0-or-later",
+      "review": "reviewed",
+      "boundary": "Build tool, not linked into raven"
+    },
+    {
+      "name": "ReactOS controls",
+      "cmake_keys": [
+        "RAVEN_CONTROLS_COMPONENT_DIR",
+        "RAVEN_CONTROLS32_COMPONENT_DIR"
+      ],
+      "review": "reviewed",
+      "revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
+      "source_terms": "LGPL-2.1-or-later AND GPL-2.0-or-later AND LicenseRef-ReactOS-COPYING",
+      "distribution_license": "GPL-2.0-only",
+      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
+      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+    },
+    {
+      "name": "ReactOS RTL",
+      "cmake_keys": [
+        "RAVEN_RTL_COMPONENT_PATH"
+      ],
+      "review": "reviewed",
+      "revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
+      "source_terms": "LGPL-2.1-or-later AND BSD-2-Clause AND GPL-2.0-or-later AND LicenseRef-ReactOS-COPYING",
+      "distribution_license": "GPL-2.0-only",
+      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
+      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+    },
+    {
+      "name": "ReactOS installer libraries",
+      "cmake_keys": [
+        "RAVEN_INSTALLER_COMPONENT_DIR",
+        "RAVEN_INSTALLER32_COMPONENT_DIR"
+      ],
+      "review": "reviewed",
+      "revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
+      "source_terms": "LicenseRef-ReactOS-Installer-Mixed",
+      "distribution_license": "GPL-2.0-only",
+      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
+      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+    },
+    {
+      "name": "ReactOS optional text",
+      "cmake_keys": [
+        "RAVEN_TEXT_COMPONENT_PATH"
+      ],
+      "review": "reviewed",
+      "provenance": "native/upstream/reactos-text/provenance.json",
+      "source_terms": "GPL-2.0-or-later AND LicenseRef-ReactOS-CRT",
+      "distribution_license": "GPL-2.0-only",
+      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
+      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+    },
+    {
+      "name": "External build inputs",
+      "license": "LicenseRef-Configuration-Dependent",
+      "review": "requires-release-inventory",
+      "provenance": "LICENSES.md and docs/packaging.md",
+      "boundary": "Skia, libpng, fonts, certificates and graphics backends need exact source materials and their applicable notices for each release."
+    },
+    {
+      "name": "Legacy DrawText Go port",
+      "paths": [
+        "pkg/win32/drawtext.go"
+      ],
+      "license": "GPL-2.0-or-later",
+      "review": "reviewed",
+      "boundary": "guest_windows only; excluded from native CMake",
+      "provenance": "LICENSES.md#drawtext-provenance"
+    }
+  ]
+}

@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import subprocess
 
+from component_licenses import mark_modified
+
 
 def main():
     parser = argparse.ArgumentParser(description="Build the selected ReactOS guest text-layout component")
@@ -33,6 +35,7 @@ def main():
     run(["patch", "--batch", "--output", str(patched), str(source / "reactos-rtl-text.c"), str(source / "failure-propagation.patch")])
     worker = output / "layout.c"
     run(["patch", "--batch", "--output", str(worker), str(patched), str(source / "layout-contracts.patch")])
+    mark_modified(worker)
     patched.unlink()
     component = output / "raven-text.dll"
     run(["x86_64-w64-mingw32-gcc", "-O2", "-DNDEBUG", "-D__REACTOS__", "-D_CRTBLD",

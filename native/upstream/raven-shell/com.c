@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven shell component: classes registered in the registry, as COM finds them on Windows.
  *
  * A class is looked up under HKEY_CLASSES_ROOT\CLSID\{class}\InprocServer32, whose default value names the library that serves it;

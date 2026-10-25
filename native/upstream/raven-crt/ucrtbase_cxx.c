@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* What programs built against the system msvcrt.dll import for C++: exit handlers kept by a library, and, for 32-bit programs, the
  * exceptions of the Microsoft C++ compiler. A throw is dispatched here, in the program's own process, along the chain of exception
  * frames the thread registered: each frame's handler is asked in turn, and the C++ frame handler finds the catch block that takes the

@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* The few C library routines that the compiler calls on its own: this component links against no runtime. */
 #include <stddef.h>
 

@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven control panel: the settings of the Windows the runtime provides and of the runtime itself, in the layout of Windows 11 Settings.
  *
  * A navigation column picks a page; each page is a column of cards whose rows name a setting and hold its control. Every setting is

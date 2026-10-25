@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* The ScrollBar control: a scroll bar of its own window (SBS_HORZ or SBS_VERT), or a size box, which tells its parent of every move
  * through WM_HSCROLL and WM_VSCROLL. Its range, page and position are set through the SBM_ messages, which SetScrollInfo and the other
  * scroll bar functions send for SB_CTL.

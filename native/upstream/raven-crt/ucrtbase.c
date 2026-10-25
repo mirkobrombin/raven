@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven C runtime component: the Universal CRT entry points that Windows programs import from ucrtbase.dll.
  *
  * This is Raven code on the public Windows headers. It covers program startup, memory, strings, formatted output and the

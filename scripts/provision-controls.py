@@ -11,6 +11,8 @@ import subprocess
 import tarfile
 import urllib.request
 
+from component_licenses import mark_patched_sources, preserve_notices
+
 
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
@@ -61,7 +63,7 @@ def main():
         for member in upstream:
             parts = Path(member.name).parts[1:]
             name = "/".join(parts)
-            if not member.isfile() or not name.startswith(PREFIXES):
+            if not member.isfile() or not (name.startswith(PREFIXES) or ("/" not in name and name.startswith("COPYING"))):
                 continue
             if not parts or ".." in parts or Path(name).is_absolute():
                 raise RuntimeError("invalid upstream archive path")
@@ -105,6 +107,7 @@ def main():
     patches = sorted((repo / "native/upstream/reactos-controls/patches").glob("*.patch"))
     for patch in patches:
         run(["patch", "-p1", "--forward", "--silent", "-i", patch], source)
+    mark_patched_sources(source, patches)
     generated = output / "generated"
     shutil.rmtree(generated, ignore_errors=True)
     (generated / "psdk").mkdir(parents=True)
@@ -316,6 +319,7 @@ def main():
         run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,{bases['crt']:#x},--no-insert-timestamp", *link_extra,
              "-o", output / "ucrtbase.dll", crt_object, "-lkernel32", "-lgcc"])
     result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, commands=records,
+                  license_notices=preserve_notices(source, output),
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest()
                                     for name in ("comctl32.dll", "raven-user32.dll", "raven-shell.dll", "raven-dwrite.dll", "raven-d2d1.dll", "raven-uianimation.dll",
                                                  "ucrtbase.dll")

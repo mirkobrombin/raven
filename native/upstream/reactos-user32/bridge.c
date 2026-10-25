@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 #include <user32.h>
 
 /* The upstream header turns these public calls into kernel calls, so the bridge reaches the real ones under their import names. */

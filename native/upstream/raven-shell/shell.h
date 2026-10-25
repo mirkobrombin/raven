@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven shell component: what the file dialog window shares with the dialog objects and the classic calls that show it. */
 #pragma once
 

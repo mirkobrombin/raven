@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* ---- text formats, text layouts and the GDI bitmap render target ----
  *
  * A text format keeps the font and paragraph settings. A text layout breaks a string into lines, measures them with the design metrics

@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* The older msvcrt.dll entry points that programs import next to the Universal CRT ones: bounded formatting with the
  * historic truncation rules, wide scanning, wide character classes and the C++ allocation operators. Included by ucrtbase.c. */
 

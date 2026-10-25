@@ -80,7 +80,7 @@ For copied or adapted code:
 - Record your modifications and give credit to the original authors.
 - Explain which Raven files contain derived code and which license applies.
 
-Raven's original code is MIT-licensed. Imported and derived code retains its applicable license obligations; it does not become MIT-licensed because it is placed in this repository.
+Submit original host-runtime contributions under GPL-3.0-or-later. Raven-owned guest adapters listed in LICENSES.json remain MIT-licensed; contributions to those files use MIT. Imported and derived code retains its applicable license obligations; placing it in this repository does not replace its license or copyright notices.
 
 Credit alone does not grant permission to copy code. GPL and LGPL requirements can also affect linking and distribution. Discuss imports with maintainers before integrating them, and document their origin and terms under `native/upstream` where appropriate.
 

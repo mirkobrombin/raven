@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven mscoree.dll: the system's entry to the .NET Framework, which managed programs and the libraries that host the runtime import.
  *
  * As on Windows, the system library itself holds no runtime: it finds the shim implementation the installed .NET Framework brings,

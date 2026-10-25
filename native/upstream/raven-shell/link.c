@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven shell component: the shell link object (CLSID_ShellLink).
  *
  * A link is created in memory through IShellLinkW and written or read through IPersistFile in the binary format of

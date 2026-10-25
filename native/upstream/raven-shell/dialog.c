@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven shell component: the file dialog window.
  *
  * One resizable window serves opening, saving and choosing folders: a bar with back, forward and up, the folder's address and a search

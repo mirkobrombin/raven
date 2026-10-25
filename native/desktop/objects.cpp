@@ -2,6 +2,7 @@
 #include "foreign_surface.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 
 namespace raven {
@@ -575,7 +576,10 @@ IconDisplay DesktopObjects::display() const { return icon_display; }
 #ifdef RAVEN_SKIA
 TextRenderer &DesktopObjects::text()
 {
-	if (!text_engine) text_engine=std::make_unique<TextRenderer>(RAVEN_FONT_DIRECTORY);
+	if (!text_engine) {
+		const auto bundled=std::filesystem::read_symlink("/proc/self/exe").parent_path()/"fonts";
+		text_engine=std::make_unique<TextRenderer>(std::filesystem::is_directory(bundled) ? bundled.string() : RAVEN_FONT_DIRECTORY);
+	}
 	return *text_engine;
 }
 #endif

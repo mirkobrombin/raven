@@ -1,0 +1,15 @@
+{
+  "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1252.txt",
+  "source_sha256": "72ea23c939c5b26fae7aded0207b327e2f3902d7d3c168d7087f5cfc38ee76a9",
+  "local_file": "c_1252.txt",
+  "local_sha256": "d606b8bf22f35178703d201cf81c45783bc211f0437f0d17db61c13fe53f1c69",
+  "transformation": "CRLF to LF only; all remaining bytes identical",
+  "license": "Unicode-3.0",
+  "license_url": "https://www.unicode.org/license.txt",
+  "terms_url": "https://www.unicode.org/copyright.html",
+  "terms_sha256": "9f83fb0a046180c87d22c2678e79300475125611ac8dfc2da303db6c6b347251",
+  "retrieved": "2026-10-25",
+  "license_file": "../../../LICENSES/Unicode-3.0.txt",
+  "license_sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+  "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1252.txt"
+}

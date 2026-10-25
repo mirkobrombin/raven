@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 #include <rtl.h>
 
 /* The kernel32 functions a program calls most often, run in the guest as Windows runs them in user mode: the process heap, critical

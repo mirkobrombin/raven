@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* The entry points the Visual C++ runtime libraries (vcruntime140, msvcp140, concrt140) import from the Universal CRT: bounded
  * string copies and formatting, the C locale's names of days and months, character classes, wide file and directory names, stream
  * positions and the C++ new handler. Included by ucrtbase.c. */

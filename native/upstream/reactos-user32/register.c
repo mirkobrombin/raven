@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 #include <user32.h>
 
 LRESULT WINAPI RavenScrollBarProcW(HWND window, UINT message, WPARAM wparam, LPARAM lparam);

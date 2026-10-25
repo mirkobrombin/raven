@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* ---- the text analyzer: what a program that lays out text itself (WPF does) asks before it places glyphs ----
  *
  * The analyzer reads the text from the program's source and reports to its sink: one script run, with the control characters marked as

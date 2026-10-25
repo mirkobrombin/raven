@@ -5,7 +5,9 @@ The original text worker and five CRT bodies are selected at ReactOS revision
 in provenance.json and the source files. The text worker carries GPL-2.0-or-later
 and explicit Wine-derived attribution. COPYING and COPYING.LIB are retained.
 This is selected ReactOS reuse, not a direct Wine source port or a clean-room
-implementation. Combined-license and distribution review remain packaging gates.
+implementation. The PE component is distributed under GPL version 2, retaining the worker's
+GPL-2.0-or-later notice and the original CRT source. Raven-owned wrapper and
+shim code remains MIT. It is not linked into the Linux host.
 
 scripts/provision-text.py applies failure-propagation.patch and layout-contracts.patch
 and builds a PE64

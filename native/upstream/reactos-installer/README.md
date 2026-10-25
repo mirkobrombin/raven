@@ -43,5 +43,17 @@ points. Binary patches of installed files are not applied yet.
 The build records every command, the hash of each extracted source and of each
 component in `provenance.json`.
 
-Upstream license texts stay beside the sources: the libraries are LGPL-2.1+. Product
-license and distribution review remains required before packaging.
+Raven-owned adapters remain MIT. The ReactOS-derived PE components are
+distributed under GPL version 2 with the source notices retained.
+The Wine-derived installer libraries contain LGPL-2.1-or-later code. This is not
+the license of every input: zlib, libxml2, libxslt, libwin-iconv, libpng, IJG JPEG
+and TIFF retain their own notices. In particular, IJG's acknowledgement must
+accompany a distribution that includes its JPEG library. Generated Bison parsers
+retain their GPL skeleton notice and parser exception; the generator's license
+alone does not make every generated parser GPL-only.
+
+The provisioner retains root license texts and module license, copyright and
+README files. Keep the exact source archive, patches, generated inputs and
+`provenance.json` with the binaries as described in
+[packaging](../../../docs/packaging.md). [LICENSES.md](../../../LICENSES.md)
+records the distribution boundaries; the source files remain authoritative.

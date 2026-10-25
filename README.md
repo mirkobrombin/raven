@@ -116,4 +116,6 @@ The [earlier chart data](docs/benchmarks.json), with CPU time and memory, remain
 
 ## License
 
-Raven's own code is under the [MIT License](LICENSE). The components in `native/upstream` and the files derived from them keep their own licenses (GPL, LGPL, BSD, libpng, Unicode and Skia), and a build that includes them follows those terms too. The bitmap font from Go Mono carries the [Bigelow & Holmes notice](pkg/wl/LICENSE-Go-Mono).
+Raven's Linux runtime is licensed under [GPL-3.0-or-later](LICENSE). Its own guest adapters listed in [LICENSES.json](LICENSES.json) remain MIT-licensed. Imported and derived components keep their own licenses and notices (GPL, LGPL, MIT, BSD, libpng, Unicode and Skia). The bitmap font from Go Mono carries the [Bigelow & Holmes notice](pkg/wl/LICENSE-Go-Mono). Earlier MIT grants remain valid.
+
+The Linux `raven` executable incorporates GPL UTF-8 conversion code and LGPL window-rectangle code. [LICENSES.md](LICENSES.md) records the component boundaries and distribution requirements; [packaging](docs/packaging.md) describes how to include the corresponding sources and notices with a build.

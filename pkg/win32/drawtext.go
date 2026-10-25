@@ -1,7 +1,8 @@
 //go:build guest_windows
 
-// SPDX-License-Identifier: LGPL-2.1-or-later
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 1993, 1994 Alexandre Julliard; 2002 Bill Medland
+// Copyright (C) 1998-2001 ReactOS Team
 // Derived from ReactOS win32ss/user/rtl/text.c, Wine-derived DrawText worker.
 // Upstream: https://github.com/reactos/reactos/tree/dacf2a6c47fa562799f9c8a41ab6d5c558556558
 
@@ -58,7 +59,7 @@ type DrawTextResult struct {
 // Implements the same subset of flags as ReactOS DrawTextExWorker.
 //
 // Port of Wine/ReactOS DrawTextExWorker from
-// win32ss/user/rtl/text.c (Alexandre Julliard / Bill Medland, LGPL).
+// win32ss/user/rtl/text.c, whose ReactOS version carries GPL-2.0-or-later.
 func DrawTextW(dc DrawTextMeasurer, text []rune, r *Rect, flags uint32) int32 {
 	if r == nil || dc == nil {
 		return 0

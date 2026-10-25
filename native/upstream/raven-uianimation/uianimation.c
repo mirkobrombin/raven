@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven Windows Animation component: the animation manager, its variables and storyboards, the library of transitions and the timer
  * that programs such as Paint.NET drive their interface animations with.
  *

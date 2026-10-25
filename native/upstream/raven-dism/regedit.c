@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven regedit: the Registry Editor as setup programs use it, `regedit /s file.reg`, importing registration entries into the registry.
  *
  * Both formats Windows writes are read: "Windows Registry Editor Version 5.00" files in UTF-16 and REGEDIT4 files in the ANSI code page.

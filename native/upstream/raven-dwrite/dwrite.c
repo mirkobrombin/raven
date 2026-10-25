@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven DirectWrite component: the factory, the system font collection and the font faces that programs such as Chromium use.
  *
  * The interfaces are COM objects written here. Fonts are found and measured by the host (ravenhost.dll, which answers with

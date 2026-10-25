@@ -15,6 +15,17 @@ Unimplemented thread/keyed-event/performance-counter/diagnostic paths stop
 explicitly. Guest exception handler dispatch remains incomplete.
 
 Upstream COPYING, COPYING.LIB and COPYING.ARM remain beside the extracted sources.
-The selected source/header set contains mixed licenses. Product license and
-distribution review remains required before packaging; source/function provenance
-does not replace that review.
+This is a mixed-license component, not an LGPL-only library. `critical.c`,
+`heap.c`, `heapuser.c`, `heapdbg.c`, `heappage.c`, `mem.c`, `slist.c`,
+`splaytree.c`, `libsupp.c` and `unicode.c` refer to the root GPL terms.
+Distribution uses GPL version 2 for the root-COPYING inputs and the version 2
+option of the explicitly GPL-2.0-or-later `verifier.c`. Raven-owned
+`initialize.c` and `kernel.c` remain MIT; the component is a PE DLL in the guest,
+not a native library in the Linux host. `error.c` carries LGPL-2.1-or-later;
+`appverifier.c` and `avltable.c` carry the BSD terms in COPYING.ARM. `bitmap.c`
+and the `bitmap64.c` instantiation retain their GPL/BSD notice.
+
+`provenance.json` records the compiled files and selected functions. Keep the
+complete pinned source archive and the build recipe with `raven-rtl.dll`;
+retaining hashes alone is not a source distribution. See
+[LICENSES.md](../../../LICENSES.md) and [packaging](../../../docs/packaging.md).

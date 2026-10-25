@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven DISM: the part of the Deployment Image Servicing and Management tool that turns on the .NET Framework 3.5 feature of the running
  * Windows from a local package, as `dism /Online /Enable-Feature /FeatureName:NetFx3 /Source:<package>` does with the Windows media.
  *

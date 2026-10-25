@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 #pragma once
 /* The message box asks the kernel to raise a hard error only for service sessions; the component has no such path. */
 #ifndef STATUS_SUCCESS

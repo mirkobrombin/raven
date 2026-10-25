@@ -11,6 +11,8 @@ import subprocess
 import tarfile
 import urllib.request
 
+from component_licenses import mark_patched_sources, preserve_notices
+
 
 # The ReactOS revision the common controls component is built from: one archive serves both.
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
@@ -62,7 +64,7 @@ def main():
         for member in upstream:
             parts = Path(member.name).parts[1:]
             name = "/".join(parts)
-            if not member.isfile() or not name.startswith(PREFIXES):
+            if not member.isfile() or not (name.startswith(PREFIXES) or ("/" not in name and name.startswith("COPYING"))):
                 continue
             if not parts or ".." in parts or Path(name).is_absolute():
                 raise RuntimeError("invalid upstream archive path")
@@ -104,6 +106,7 @@ def main():
     patches = sorted((support / "patches").glob("*.patch"))
     for patch in patches:
         run(["patch", "-p1", "--forward", "--silent", "-i", patch], source)
+    mark_patched_sources(source, patches)
     generated = output / "generated"
     shutil.rmtree(generated, ignore_errors=True)
     (generated / "psdk").mkdir(parents=True)
@@ -496,6 +499,7 @@ def main():
          "-o", output / "regsvr32.exe", *regsvr32, objects / "regsvr32.res.o", *debug,
          *[f"-l{library}" for library in ("user32", "shell32", "ole32", "msvcrt", "kernel32", "ntdll", "gcc", "kernel32")]])
     result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, arch=args.arch, commands=records,
+                  license_notices=preserve_notices(source, output),
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in COMPONENTS},
                   storage_exports=exported,
                   patches={patch.name: hashlib.sha256(patch.read_bytes()).hexdigest() for patch in patches},

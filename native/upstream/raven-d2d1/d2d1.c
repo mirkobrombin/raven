@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
 /* Raven Direct2D component: the factory, devices, device contexts and render targets, bitmaps, brushes, geometries and the other objects
  * that programs such as Paint.NET draw their windows with.
  *
