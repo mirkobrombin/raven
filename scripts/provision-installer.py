@@ -151,7 +151,8 @@ def main():
                 source / "sdk/include/crt", source / "sdk/include/ndk", source / "sdk/include", source / "sdk/include/reactos", source / "sdk/include/ddk"]
     # A function the headers do not declare would return a truncated int: none is allowed. The sources use the old CRT names, which the
     # oldnames library supplies upstream.
-    flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-Werror=implicit-function-declaration", "-Werror=int-conversion",
+    # The language the sources were written for; the other diagnostics GCC 14 made errors stay warnings, as they were.
+    flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-std=gnu17", "-fpermissive", "-Werror=implicit-function-declaration", "-Werror=int-conversion",
              "-Dwcsdup=_wcsdup", "-Dwcsicmp=_wcsicmp", "-Dwcsnicmp=_wcsnicmp", "-Dwcsupr=_wcsupr", "-Dwcslwr=_wcslwr", "-Dstrdup=_strdup", "-Dstricmp=_stricmp", "-Dstrnicmp=_strnicmp",
              "-D_WIN32_WINNT=0x600", "-DWINVER=0x600", "-D_WIN32_IE=0x0A00", "-D__REACTOS__", "-DUNICODE", "-D_UNICODE",
              "-D_M_IX86" if x86 else "-D_M_AMD64", "-D__WINESRC__", "-D_WINE", *([] if x86 else ["-D__ROS_LONG64__"]),
@@ -168,7 +169,20 @@ def main():
         run([triple + "-gcc", "-c", *flags, *extra, *["-I" + str(path) for path in paths], path, "-o", target])
         return target
 
+    # A toolchain whose default runtime is the UCRT has its msvcrt import library name the UCRT too; msvcrt-os names msvcrt.dll itself.
+    msvcrt = "-lmsvcrt-os" if (Path(subprocess.run([triple + "-gcc", "-print-file-name=libmsvcrt-os.a"], capture_output=True, text=True).stdout.strip())).is_file() else "-lmsvcrt"
+    # mingw-w64 14 replaced _assert and iswctype with emulations, and dropped the LZ functions from its 32-bit kernel32 import library;
+    # the components import them from the system libraries as before.
+    restored = {"msvcrt": ["_assert", "iswctype"]}
+    if x86:
+        restored["kernel32"] = ["LZClose@4", "LZOpenFileW@12", "LZRead@12", "LZSeek@12"]
+    for library, names in restored.items():
+        (output / f"{library}-restored.def").write_text(f"LIBRARY {library}.dll\nEXPORTS\n" + "".join(name + "\n" for name in names))
+        run([triple + "-dlltool", "-d", output / f"{library}-restored.def", "-l", output / f"lib{library}-restored.a", *(["-k"] if x86 else [])])
+
     def link(name, base, object_files, definition, libraries, implib=None):
+        libraries = [*libraries, *[output / f"lib{library}-restored.a" for library in restored if "-l" + library in libraries]]
+        libraries = [msvcrt if library == "-lmsvcrt" else library for library in libraries]
         run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,{base:#x},--no-insert-timestamp", *link_extra,
              *([f"-Wl,--out-implib,{implib}"] if implib and not x86 else []), "-o", output / name, *object_files, definition, *libraries])
         # A 32-bit import library keeps the stdcall decorations its callers link against, for the plain names the library exports.
@@ -283,7 +297,7 @@ def main():
          "-D_M_IX86" if x86 else "-D_M_AMD64", "-I" + str(msiexec_root), "-i", msiexec_root / "rsrc.rc", "-o", objects / "msiexec.res.o"])
     run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp",
          "-o", output / "msiexec.exe", *msiexec, objects / "msiexec.res.o", objects / "installer_support.o", *debug, "-L" + str(output),
-         *[f"-l{library}" for library in ("msi", "user32", "advapi32", "ole32", "comctl32", "msvcrt", "kernel32", "ntdll", "uuid", "gcc")]])
+         *[f"-l{library}" for library in ("msi", "user32", "advapi32", "ole32", "comctl32", msvcrt[2:], "kernel32", "ntdll", "uuid", "gcc")]])
     # msxml3.dll: the XML document object model installers and their bootstrappers parse their manifests with, on libxml2 and libxslt.
     xml_root = source / "sdk/lib/3rdparty/libxml2"
     iconv_root = source / "sdk/lib/3rdparty/libwin-iconv"
@@ -494,7 +508,7 @@ def main():
          "-D_M_IX86" if x86 else "-D_M_AMD64", "-I" + str(regsvr32_root), "-i", regsvr32_root / "regsvr32.rc", "-o", objects / "regsvr32.res.o"])
     run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp",
          "-o", output / "regsvr32.exe", *regsvr32, objects / "regsvr32.res.o", *debug,
-         *[f"-l{library}" for library in ("user32", "shell32", "ole32", "msvcrt", "kernel32", "ntdll", "gcc", "kernel32")]])
+         *[f"-l{library}" for library in ("user32", "shell32", "ole32", msvcrt[2:], "kernel32", "ntdll", "gcc", "kernel32")]])
     result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, arch=args.arch, commands=records,
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in COMPONENTS},
                   storage_exports=exported,

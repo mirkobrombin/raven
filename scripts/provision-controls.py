@@ -144,7 +144,8 @@ def main():
     includes = [source / "dll/win32/comctl32", generated, generated / "psdk", source / "sdk/lib/pseh/include", source / "sdk/include/vcruntime",
                 overlay, source / "sdk/include/psdk", source / "sdk/include/crt", source / "sdk/include/ndk", source / "sdk/include",
                 source / "sdk/include/reactos", source / "sdk/include/ddk"]
-    flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-w", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600", "-D_WIN32_IE=0x0A00",
+    # The upstream sources predate GCC 14 and 15: the language they were written for, and the diagnostics that were warnings then.
+    flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-w", "-std=gnu17", "-fpermissive", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600", "-D_WIN32_IE=0x0A00",
              "-D__REACTOS__", "-DUNICODE", "-D_UNICODE", cpu_define, "-D__WINESRC__", "-D_WINE", *long_defines, "-D_COMCTL32_",
              f"-ffile-prefix-map={source}=reactos", f"-ffile-prefix-map={repo}=raven", f"-ffile-prefix-map={output}=component",
              *["-I" + str(path) for path in includes]]
@@ -193,7 +194,7 @@ def main():
     user_support = repo / "native/upstream/reactos-user32"
     user_root = source / "win32ss/user/user32"
     user_includes = [user_support / "shim", source / "win32ss/include", user_root / "include", *includes[1:]]
-    user_flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-w", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600",
+    user_flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-w", "-std=gnu17", "-fpermissive", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600",
                   "-D__REACTOS__", "-DUNICODE", "-D_UNICODE", cpu_define, *long_defines, "-DUSE_PSEH",
                   f"-ffile-prefix-map={source}=reactos", f"-ffile-prefix-map={repo}=raven", f"-ffile-prefix-map={output}=component",
                   *["-I" + str(path) for path in user_includes]]

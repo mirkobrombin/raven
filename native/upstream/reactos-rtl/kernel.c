@@ -14,6 +14,8 @@ VOID NTAPI RtlAcquireSRWLockShared(PRTL_SRWLOCK lock);
 VOID NTAPI RtlWakeConditionVariable(PRTL_CONDITION_VARIABLE variable);
 VOID NTAPI RtlWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable);
 NTSTATUS NTAPI RtlWaitOnAddress(volatile VOID *address, PVOID compare, SIZE_T size, PLARGE_INTEGER timeout);
+/* Defined by the ReactOS critical sections built beside this file; the headers do not declare it. */
+NTSTATUS NTAPI RtlInitializeCriticalSectionEx(PRTL_CRITICAL_SECTION section, ULONG spin, ULONG flags);
 
 /* ---- the heap: the flags kernel32 accepts, and the error it reports when the heap fails ---- */
 PVOID WINAPI RavenHeapAlloc(HANDLE heap, ULONG flags, SIZE_T size)
