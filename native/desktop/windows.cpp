@@ -639,8 +639,12 @@ void NativeWindows::receive(const DesktopEvent &event)
 	if (menu_event(event)) return;
 	if (event.kind==DesktopEventKind::message) { post(event.window,event.message,event.wparam,event.lparam); return; }
 	if (event.kind==DesktopEventKind::keymap) {
-		if (std::any_of(key_down.begin(),key_down.end(),[](bool down) { return down; }))
-			throw std::runtime_error("keyboard map change with held keys requires qualification");
+		// A layout switch, or a virtual keyboard bringing its own map, can come while keys are held. They were pressed under the map that
+		// is going, so the program sees them released under it; the release the host sends later finds them up already.
+		const bool leaving=focus_leaving;
+		for (size_t code=0;code<key_down.size();++code)
+			if (key_down[code]) receive({event.window,uint32_t(code),0,0,DesktopEventKind::key});
+		focus_leaving=leaving;
 		keyboard_map.load(event.keymap); key_translation.reset(); return;
 	}
 	if (event.kind==DesktopEventKind::modifiers) {
