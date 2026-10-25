@@ -24,8 +24,6 @@ GPLv3 license applied to every file.
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
 | ReactOS delay-import test helper | MIT; `native/upstream/reactos-delayimp` |
-| Legacy Go Windows ports | GPL/LGPL per file, excluded from the native CMake build; `pkg/win32` |
-| Legacy Go Mono font | Bigelow & Holmes notice; `pkg/wl/LICENSE-Go-Mono` |
 
 The native link contains the selected UTF-8 and window-border functions. Its
 GPLv3 source distribution includes the material needed to modify and rebuild the
@@ -50,14 +48,6 @@ part on the work of the Independent JPEG Group." Preserve its README's copyright
 and warranty text too. System dependencies used from the recipient's distribution
 are separate from copies bundled in an archive; any added static or bundled
 library needs its applicable source material and notices.
-
-## DrawText
-
-`pkg/win32/drawtext.go` declares a port of ReactOS `win32ss/user/rtl/text.c` at
-`dacf2a6c47fa562799f9c8a41ab6d5c558556558`. That source states GPL-2.0-or-later,
-so the port uses that identifier and keeps the ReactOS and Wine author credits.
-It is a frozen legacy path, not part of the Linux native build. This does not
-change the LGPL license of Wine's separate implementation.
 
 ## Release contents
 

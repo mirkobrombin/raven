@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--cc", default="x86_64-w64-mingw32-gcc")
     parser.add_argument("--skip-downloads", action="store_true")
     parser.add_argument("--data-only", action="store_true")
-    parser.add_argument("--legacy", action="store_true", help="also build the earlier DLL, latency, RISC-V and Wayland fixtures")
+    parser.add_argument("--legacy", action="store_true", help="also build the earlier DLL, latency and Wayland fixtures")
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[1] / "testdata"
     output = args.output.resolve()
@@ -118,10 +118,6 @@ def main():
         subprocess.run([args.cc, "-O2", "-nostdlib", "-fno-stack-protector", "-Wl,--entry,entry,--no-insert-timestamp",
                         "-o", str(output / "latency/latency.exe"), str(source / "latency/latency.c"),
                         "-luser32", "-lkernel32"], env=env, check=True)
-        subprocess.run(["go", "run", str(source / "genelf.go"), str(output)], env=env | {"GO111MODULE": "off"}, check=True)
-        (output / "webserver").mkdir(exist_ok=True)
-        subprocess.run(["go", "build", "-trimpath", "-o", str(output / "webserver/webserver_rv64"),
-                        str(source / "webserver/main.go")], env=env | {"GOOS": "linux", "GOARCH": "riscv64", "GO111MODULE": "off"}, check=True)
         subprocess.run(["make", "-C", str(source.parent), "-j1", "BUILD_DIR=" + str(output / "wayland")], env=env, check=True)
 
 

@@ -177,16 +177,6 @@
       "review": "requires-release-inventory",
       "provenance": "LICENSES.md and docs/packaging.md",
       "boundary": "Skia, libpng, fonts, certificates and graphics backends need exact source materials and their applicable notices for each release."
-    },
-    {
-      "name": "Legacy DrawText Go port",
-      "paths": [
-        "pkg/win32/drawtext.go"
-      ],
-      "license": "GPL-2.0-or-later",
-      "review": "reviewed",
-      "boundary": "guest_windows only; excluded from native CMake",
-      "provenance": "LICENSES.md#drawtext-provenance"
     }
   ]
 }
