@@ -209,6 +209,51 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 			call.write(call[4], data);
 			call.ret(0);
 		});
+		// The older form reads the default value of the key or of a subkey of it; a key without one reads as the empty string.
+		registry.add("RegQueryValue" + suffix, 4, [&hive, &context, text_of, view, wide, ansi_page](ApiCall &call) {
+			uint64_t key = call[0];
+			uint64_t opened = 0;
+			const auto subkey = text_of(call, call[1], wide);
+			if (!subkey.empty()) {
+				const auto status = hive.open(key, view(key, subkey), opened);
+				if (status) {
+					call.ret(status);
+					return;
+				}
+				key = opened;
+			}
+			uint32_t type = 0;
+			std::vector<uint8_t> data;
+			const auto status = hive.query(key, u"", type, data);
+			if (opened) {
+				hive.close(opened);
+				context.objects.release_reserved(opened);
+			}
+			if (status == error_file_not_found)
+				data.assign(wide ? 2 : 1, 0);
+			else if (status) {
+				call.ret(status);
+				return;
+			} else if (!wide && is_text(type))
+				data = to_ansi_bytes(data, ansi_page);
+			if (!call[2]) {
+				if (call[3]) call.store<uint32_t>(call[3], uint32_t(data.size()));
+				call.ret(0);
+				return;
+			}
+			if (!call[3]) {
+				call.ret(error_invalid_parameter);
+				return;
+			}
+			const uint32_t capacity = call.load<uint32_t>(call[3]);
+			call.store<uint32_t>(call[3], uint32_t(data.size()));
+			if (data.size() > capacity) {
+				call.ret(error_more_data);
+				return;
+			}
+			call.write(call[2], data);
+			call.ret(0);
+		});
 		registry.add("RegDeleteValue" + suffix, 2, [&hive, text_of, wide](ApiCall &call) { call.ret(hive.remove_value(call[0], text_of(call, call[1], wide))); });
 		registry.add("RegDeleteKey" + suffix, 2, [&hive, text_of, wide, view](ApiCall &call) { call.ret(hive.remove_key(call[0], view(call[0], text_of(call, call[1], wide)))); });
 		// The older form: the buffer size is a plain count of characters, not a pointer to one.
