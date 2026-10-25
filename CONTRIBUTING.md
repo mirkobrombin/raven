@@ -49,6 +49,8 @@ Assisted-by: <tool>:<model-version>
 AI-Scope: <what the tool produced and the prompt or a short summary>
 ```
 
+These trailers belong in the commit message. Do not credit AI tools or models with `Co-Authored-By`; co-author credits are reserved for human contributors.
+
 Single-line completions, renames and formatting do not require these trailers.
 
 AI output is not evidence of correctness or permission to reuse code. Maintainers review contributions before merging. Pull requests that omit required disclosures must be corrected before they can be accepted.
