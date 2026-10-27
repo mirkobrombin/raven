@@ -85,6 +85,23 @@ int main(int argc,char **argv)
 				});
 			check(result.stop==raven::NativeStop::returned && !result.value && queries==std::vector<std::string>({"forward.dll","base.dll"}),"active forwarder acquisition differs");
 		}
+		{
+			raven::ModuleSet modules;auto &entry=modules.add("forward-client.exe",read_file(directory/"forward-client.exe"));
+			for (auto &symbol : entry.imports)
+				if (symbol.module=="forward.dll") symbol.module="winmm.dll";
+			std::vector<std::string> queries;
+			const auto result=raven::run_native_process(modules,entry,argv[1],std::chrono::seconds(3),
+				[&](std::string_view name)->std::optional<std::vector<uint8_t>> {
+					queries.emplace_back(name);
+					if (name=="winmm.dll") return read_file(directory/"forward.dll");
+					if (name=="base.dll") return base;
+					return std::nullopt;
+				});
+			check(result.stop==raven::NativeStop::returned && !result.value && queries==std::vector<std::string>({"winmm.dll","base.dll"}) &&
+				modules.all().contains("winmm.dll") && !modules.all().at("winmm.dll")->runtime_api &&
+				modules.all().contains("system32-winmm.dll") && modules.all().at("system32-winmm.dll")->runtime_api,
+				"non-core system DLL override or system32 fallback failed");
+		}
 		std::cout<<"Implicit initial dependencies, explicit-module preservation, active forwarders and pre-execution rollback passed\n";
 	} catch (const std::exception &error) { std::cerr<<error.what()<<'\n';return 1; }
 	return 0;

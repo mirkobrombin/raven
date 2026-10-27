@@ -16,6 +16,10 @@ std::span<const std::pair<std::string_view, uint16_t>> system_export_ordinals(st
 uint32_t system_export_words(std::string_view dll, std::string_view name);
 // Every library with a name list, in lower case with its ".dll" suffix.
 std::span<const std::string_view> system_library_names();
+// Core runtime libraries that cannot be replaced by a copy in the program's folder.
+inline constexpr std::string_view core_system_libraries[]{"ntdll.dll", "kernel32.dll", "kernelbase.dll", "user32.dll", "gdi32.dll",
+	"comctl32.dll", "advapi32.dll", "msvcrt.dll", "ucrtbase.dll", "ole32.dll", "oleaut32.dll", "combase.dll", "rpcrt4.dll",
+	"shell32.dll", "shlwapi.dll", "setupapi.dll", "comdlg32.dll"};
 // The system libraries the runtime ships as guest components beside itself (in x86/ for 32-bit programs), which are loaded from there
 // whatever copies a program ships or an installer leaves in the system directory.
 inline constexpr std::string_view runtime_components[]{"msi.dll", "cabinet.dll", "sxs.dll", "rpcrt4.dll", "msxml3.dll", "libxslt.dll", "atl100.dll",

@@ -441,24 +441,22 @@ int main(int argc, char **argv)
 						if (const auto folder = raven::activation_contexts().library_folder(name))
 							if (const auto redirected = find_file(*folder, name))
 								return read_module(redirected->c_str());
-						std::optional<std::filesystem::path> selected = find_file(directory, name);
-						if (!selected && (name == "opengl32.dll" || name == "glu32.dll" || name == "libgallium_wgl.dll" || name == "libglapi.dll"))
-							if (const char *graphics = std::getenv("RAVEN_OPENGL_DIRECTORY"))
-								selected = find_file(graphics, name);
-						// The runtime's own components are found beside the runtime when the program does not ship them.
-						// A 64-bit program built against msvcrt.dll gets the C runtime component as that library too: a runtime of its own, as
-						// msvcrt is beside ucrtbase on Windows.
-						if (!selected && name=="msvcrt.dll" && entry->image.is_64) {
+						// The runtime's own C runtime components answer for msvcrt.dll (on 64-bit) and ucrtbase.dll whatever copies a program ships.
+						if (name=="msvcrt.dll" && entry->image.is_64) {
 							const auto component = std::filesystem::read_symlink("/proc/self/exe").parent_path() / "ucrtbase.dll";
 							if (std::filesystem::exists(component))
 								return read_module(component.c_str());
 						}
-						if (!selected && name=="ucrtbase.dll") {
+						if (name=="ucrtbase.dll") {
 							// A 32-bit program gets the 32-bit build of the component.
 							const auto component = std::filesystem::read_symlink("/proc/self/exe").parent_path() / (entry->image.is_64 ? "ucrtbase.dll" : "ucrtbase32.dll");
 							if (std::filesystem::exists(component))
 								return read_module(component.c_str());
 						}
+						std::optional<std::filesystem::path> selected = find_file(directory, name);
+						if (!selected && (name == "opengl32.dll" || name == "glu32.dll" || name == "libgallium_wgl.dll" || name == "libglapi.dll"))
+							if (const char *graphics = std::getenv("RAVEN_OPENGL_DIRECTORY"))
+								selected = find_file(graphics, name);
 						// DirectWrite, Direct2D and Windows Animation are the runtime's own components too: the library names resolve to them.
 						if (!selected && (name=="dwrite.dll" || name=="d2d1.dll" || name=="uianimation.dll") && entry->image.is_64) {
 							const auto component = std::filesystem::read_symlink("/proc/self/exe").parent_path() /

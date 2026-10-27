@@ -1533,10 +1533,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		!std::any_of(modules.all().begin(), modules.all().end(), [&](const auto &item) { return item.second.get() == &entry; }))
 		throw std::runtime_error("native process requires an executable graph and positive timeout");
 	for (const auto &[name,module]:modules.all()) validate_native_image(module->image,name);
-	std::vector<std::string_view> native_modules{"kernel32.dll","kernelbase.dll","user32.dll","gdi32.dll","comctl32.dll","ntdll.dll"};
-	for (const auto library : system_library_names())
-		if (std::find(native_modules.begin(), native_modules.end(), library) == native_modules.end())
-			native_modules.push_back(library);
+	std::vector<std::string_view> native_modules{"kernel32.dll","kernelbase.dll","user32.dll","gdi32.dll","comctl32.dll","ntdll.dll",
+		"advapi32.dll","ole32.dll","combase.dll","shell32.dll","shlwapi.dll","setupapi.dll","comdlg32.dll"};
 #ifdef RAVEN_OPENGL
 	// The bridge is the program's OpenGL unless the program brings its own opengl32.dll and the bridge was not asked for.
 	const bool native_opengl = OpenGLBridge::enabled() && (OpenGLBridge::requested() || !modules.all().contains("opengl32.dll"));
@@ -1614,6 +1612,30 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto library : system_library_names())
 		if (std::find(system_modules.begin(), system_modules.end(), library) == system_modules.end())
 			system_modules.emplace_back(library);
+	std::set<std::string> beside_program;
+	if (launch) {
+		const auto probe_prefix = NativePrefix::from_environment();
+		const NativePaths probe(probe_prefix);
+		const auto program = probe.resolve(launch->image_path);
+		if (program && program->exists) {
+			std::error_code error;
+			for (const auto &item : std::filesystem::directory_iterator(program->host.parent_path(), error)) {
+				if (!item.is_regular_file(error))
+					continue;
+				auto filename = item.path().filename().string();
+				for (auto &character : filename)
+					if (character >= 'A' && character <= 'Z')
+						character = static_cast<char>(character + ('a' - 'A'));
+				if (const auto mapped = ModuleBytes::map(item.path())) {
+					try {
+						const PEImage candidate(*mapped);
+						if (candidate.is_64 && (candidate.characteristics & 0x2000))
+							beside_program.insert(std::move(filename));
+					} catch (...) {}
+				}
+			}
+		}
+	}
 	// A number with no name known for it still gets an export, so a program that imports by that number binds, and the call it ends in names the number.
 	std::map<std::string, std::vector<std::pair<std::string_view, uint16_t>>> unknown_ordinals;
 	std::map<std::string, std::vector<std::string>> unknown_names;
@@ -1673,17 +1695,29 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (const auto extra = unknown_ordinals.find(std::string(name)); extra != unknown_ordinals.end())
 			ordinals.insert(ordinals.end(), extra->second.begin(), extra->second.end());
 		PEModule *provider = nullptr;
+		const bool core = std::find(std::begin(core_system_libraries), std::end(core_system_libraries), std::string_view(name)) != std::end(core_system_libraries);
 		const auto found = modules.all().find(name);
-		if (found != modules.all().end()) {
-			if (!found->second->runtime_api)
-				continue;
+		if (found != modules.all().end() && found->second->runtime_api) {
 			provider = found->second.get();
+		} else if (found != modules.all().end()) {
+			if (core)
+				continue;
+			const auto fallback = "system32-" + name;
+			if (!modules.all().contains(fallback)) {
+				const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
+				const auto base = provider_base(modules, PEImage(bytes).image_size);
+				provider = &modules.add(fallback, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
+				provider->runtime_api = true;
+			}
 		} else {
+			const auto provider_key = (!core && beside_program.contains(name)) ? "system32-" + name : name;
 			const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
 			const auto base = provider_base(modules, PEImage(bytes).image_size);
-			provider = &modules.add(name, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
+			provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
 			provider->runtime_api = true;
 		}
+		if (!provider)
+			continue;
 		// A guest component that implements part of a system library receives those calls directly instead of through a trap.
 		if (provider->runtime_api) {
 			struct Overlay { const char *library, *component, *prefix; };
@@ -1795,6 +1829,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto &[address, name] : traps)
 		process.add_api_trap(address);
 	NativeEnvironment environment(process, entry.loaded.base(), uint32_t(::getpid()), 1);
+	const bool has_launch = launch.has_value();
 	if (!launch) {
 		NativeLaunch initial;
 		for (const char byte : entry.name) {
@@ -2214,9 +2249,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::copy(bytes.begin(), bytes.end(), place);
 		}
 	} served_pointers;
-	for (const auto &[module_name, module] : modules.all()) {
+	for (const auto &[module_key, module] : modules.all()) {
 		if (!module->runtime_api)
 			continue;
+		const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
 		for (const auto &symbol : module->exports) {
 			// The clock and the tick counts only read calibration; their pointers are safe while other threads run.
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() &&
@@ -2259,22 +2295,26 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	}
 	// A thread inside a commit prelude must not lose the processor between taking a log slot and filling it: the prelude counts as a
 	// served stub for the scheduler, in two pieces as it is longer than one.
-	for (const auto &[module_name, module] : modules.all())
-		if (module->runtime_api)
+	for (const auto &[module_key, module] : modules.all())
+		if (module->runtime_api) {
+			const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
 			for (const auto &symbol : module->exports)
 				if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && guest_commit_api(module_name, symbol.names.at(0)) &&
 					served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address)
 					for (const uint64_t piece : {uint64_t(0), uint64_t(served_trap)})
 						served_stubs.push_back(module->loaded.base() + symbol.address + piece);
+		}
 	// So must one between taking the screen context and reading which it is, or reading a window's record.
-	for (const auto &[module_name, module] : modules.all())
-		if (module->runtime_api)
+	for (const auto &[module_key, module] : modules.all())
+		if (module->runtime_api) {
+			const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
 			for (const auto &symbol : module->exports)
 				if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && (module_name == "user32.dll" || module_name == "ntdll.dll"))
 					if (const auto *prelude = block_prelude(module_name, symbol.names.at(0)); prelude && prelude != &screen_release_dc_prelude() &&
 						served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address)
 						for (uint64_t piece = 0; piece < prelude->size(); piece += served_stub_size)
 							served_stubs.push_back(module->loaded.base() + symbol.address + piece);
+		}
 	memory.set_commit_block(served_block);
 	windows.set_screen_block(served_block);
 	static_assert(focus_published == NativeWindows::focus_published && focus_window == NativeWindows::focus_window,
@@ -2528,20 +2568,28 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				identity += ".dll";
 			// A library named by its path in the system directory is looked for as by its name, as Windows finds its own there.
 			auto folder = slash == name.npos ? std::string() : name.substr(0, slash);
-			for (auto &character : folder)
-				if (character >= 'A' && character <= 'Z')
+			for (auto &character : folder) {
+				if (character == '/')
+					character = '\\';
+				else if (character >= 'A' && character <= 'Z')
 					character = static_cast<char>(character + ('a' - 'A'));
-			const bool system_folder = folder == "c:\\windows\\system32" || folder == "c:\\windows\\syswow64";
-			if (!system_folder && !modules.all().contains(identity) && !apiset_host(identity).empty() == false) {
-				const auto resolved = paths.resolve(from_utf8(name));
-				if (!resolved || !resolved->exists || !std::filesystem::is_regular_file(resolved->host)) {
-					environment.set_last_error(126);
-					return 0;
-				}
-				// The file named now is the one to load, even where a library of the same name came from another folder before.
-				explicit_files.insert_or_assign(identity, resolved->host);
 			}
-			name = identity;
+			const bool system_folder = folder == "c:\\windows\\system32" || folder == "c:\\windows\\syswow64";
+			if (system_folder && modules.all().contains("system32-" + identity)) {
+				name = "system32-" + identity;
+			} else {
+				const bool core = std::find(std::begin(core_system_libraries), std::end(core_system_libraries), std::string_view(identity)) != std::end(core_system_libraries);
+				if (!system_folder && !core && apiset_host(identity).empty()) {
+					const auto resolved = paths.resolve(from_utf8(name));
+					if (!resolved || !resolved->exists || !std::filesystem::is_regular_file(resolved->host)) {
+						environment.set_last_error(126);
+						return 0;
+					}
+					// The file named now is the one to load, even where a library of the same name came from another folder before.
+					explicit_files.insert_or_assign(identity, resolved->host);
+				}
+				name = identity;
+			}
 		}
 		for (auto &character : name) {
 			if (static_cast<unsigned char>(character) > 127) {
@@ -2557,6 +2605,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			name += ".dll";
 		if (const auto host = apiset_host(name); !host.empty())
 			name = host;
+		if ((flags & 0x1f00) == 0x800 && modules.all().contains("system32-" + name))
+			name = "system32-" + name;
 		const auto existing = modules.all().find(name);
 		// Other threads waited above, so a load already under way is this thread's own: a library starting up loads another, as
 		// Windows lets it. A library that is in the process already, even one the outer load has not started yet, is handed back.
@@ -2626,16 +2676,31 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			} else {
 				const auto system_names = system_library_names();
 				const bool system = std::find(system_names.begin(), system_names.end(), identity) != system_names.end();
-				if (!system && !activation_contexts().library_folder(identity)) {
+				const bool core = std::find(std::begin(core_system_libraries), std::end(core_system_libraries), std::string_view(identity)) != std::end(core_system_libraries);
+				if (has_launch && !core && !activation_contexts().library_folder(identity)) {
 					if (const auto found = paths.find_library(launch->image_path, from_utf8(identity), true, flags)) {
-						bytes = ModuleBytes::map(found->host);
-						origin = found->host;
-					} else if (flags & 0x1f00) {
+						bool system_copy = false;
+						if (system) {
+							auto dos_path = to_utf8(paths.dos(found->host));
+							for (auto &character : dos_path)
+								if (character >= 'A' && character <= 'Z')
+									character = static_cast<char>(character + ('a' - 'A'));
+							system_copy = dos_path.starts_with("c:\\windows\\system32\\") || dos_path.starts_with("c:\\windows\\syswow64\\");
+						}
+						if (!system_copy) {
+							bytes = ModuleBytes::map(found->host);
+							origin = found->host;
+						}
+					} else if ((flags & 0x1f00) && !system) {
 						throw LoadFailure{126};
 					}
 				}
-				if (!bytes)
+				if (!bytes && !(flags & 0x1f00))
 					if (auto read = source(identity)) bytes.emplace(std::move(*read));
+				if (!bytes && system) {
+					if (const auto fallback = modules.all().find("system32-" + identity); fallback != modules.all().end())
+						return *fallback->second;
+				}
 			}
 			// A library loaded by path finds its dependencies in its own directory, as LOAD_WITH_ALTERED_SEARCH_PATH and a DLL directory
 			// set to that folder do on Windows; programs that unpack themselves to a temporary folder rely on it.
