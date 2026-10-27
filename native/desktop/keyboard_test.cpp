@@ -23,6 +23,9 @@ int main()
 				const auto key=keyboard.decode(events[i]);
 				check(key.code==virtual_keys[i] && key.scan==scans[i] && !key.character && key.extended==(i<3),"system key translation differs");
 			}
+			// Keys the layout gives no symbol (the Japanese Ro key, a vendor key) pass with no virtual key instead of failing.
+			const auto ro=keyboard.decode(89),vendor=keyboard.decode(141);
+			check(!ro.code && ro.scan==89 && !ro.character && !vendor.code && !vendor.scan && !vendor.character,"key without a symbol differs");
 			const auto g=keyboard.decode(34),y=keyboard.decode(21);
 			check(g.code==71 && g.scan==34 && g.character=='g' && !g.extended,"G keyboard contract differs");
 			check(y.code==(layout[0]=='u' ? 89U : 90U) && y.character==(layout[0]=='u' ? 'y' : 'z'),"layout-dependent virtual key differs");

@@ -273,8 +273,10 @@ struct WaylandPresentation::State {
 		if (mapping==MAP_FAILED) { input_failed=true; return; }
 		try {
 			size_t bytes=0; for (const auto &event : pending) bytes+=event.keymap.size();
-			if (mapping[size-1] || bytes+size>4*1024*1024) input_failed=true;
-			else { DesktopEvent event{0,0}; event.kind=DesktopEventKind::keymap; event.keymap.assign(mapping,size-1); keyboard_event(std::move(event)); }
+			// The protocol does not require the terminating null: some compositors (niri) end the text at its last character.
+			const uint32_t length=mapping[size-1] ? size : size-1;
+			if (bytes+length>4*1024*1024) input_failed=true;
+			else { DesktopEvent event{0,0}; event.kind=DesktopEventKind::keymap; event.keymap.assign(mapping,length); keyboard_event(std::move(event)); }
 		} catch (...) { input_failed=true; }
 		munmap(const_cast<char *>(mapping),size);
 	}

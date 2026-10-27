@@ -104,8 +104,10 @@ KeyboardKey KeyboardMap::decode(uint32_t code) const
 		throw std::runtime_error("unsupported native keyboard keycode");
 	const auto layout=xkb_state_key_get_layout(state->keys,code+8);
 	const xkb_keysym_t *symbols=nullptr;
-	if (xkb_keymap_key_get_syms_by_level(state->map,code+8,layout,0,&symbols)!=1)
-		throw std::runtime_error("unsupported native keyboard symbol sequence");
+	// A key the layout gives no symbol (an unassigned or vendor key) has no virtual key and is passed over; one that gives several is
+	// known by the first, as Windows layouts give each key one.
+	if (xkb_keymap_key_get_syms_by_level(state->map,code+8,layout,0,&symbols)<1)
+		return KeyboardKey{0,code<=127 ? code : 0,0,false};
 	const auto symbol=symbols[0];
 	KeyboardKey key{0,code,xkb_state_key_get_utf32(state->keys,code+8),false};
 	const auto *name=xkb_keymap_key_get_name(state->map,code+8);
