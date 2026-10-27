@@ -3451,6 +3451,26 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_x86_string_pointer_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/x86-prefix)
             endif()
+            set(STOCK_ICON_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/stock-icon-fixtures)
+            add_custom_command(OUTPUT ${STOCK_ICON_FIXTURES}/client.exe
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${STOCK_ICON_FIXTURES}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry
+                    -o ${STOCK_ICON_FIXTURES}/client.exe ${LOADER_SOURCES}/stock_icon_client.c -lshell32 -luser32 -lgdi32
+                DEPENDS ${LOADER_SOURCES}/stock_icon_client.c VERBATIM)
+            add_custom_target(stock_icon_pe_fixture ALL DEPENDS ${STOCK_ICON_FIXTURES}/client.exe)
+            add_test(NAME native_stock_icon_cli COMMAND raven --run-process --execution=native ${STOCK_ICON_FIXTURES}/client.exe)
+            set_tests_properties(native_stock_icon_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            if(RAVEN_MINGW32)
+                add_custom_command(OUTPUT ${STOCK_ICON_FIXTURES}/x86/client.exe
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${STOCK_ICON_FIXTURES}/x86
+                    COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -Wl,--entry,_raven_entry
+                        -o ${STOCK_ICON_FIXTURES}/x86/client.exe ${LOADER_SOURCES}/stock_icon_client.c -lshell32 -luser32 -lgdi32
+                    DEPENDS ${LOADER_SOURCES}/stock_icon_client.c VERBATIM)
+                add_custom_target(stock_icon_pe32_fixture ALL DEPENDS ${STOCK_ICON_FIXTURES}/x86/client.exe)
+                add_test(NAME native_x86_stock_icon_cli COMMAND raven --run-process --execution=native ${STOCK_ICON_FIXTURES}/x86/client.exe)
+                set_tests_properties(native_x86_stock_icon_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/x86-prefix)
+            endif()
             set(RESOURCE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/resource-fixtures)
             add_custom_command(OUTPUT ${RESOURCE_FIXTURES}/resources.o
                 COMMAND ${CMAKE_COMMAND} -E make_directory ${RESOURCE_FIXTURES}
