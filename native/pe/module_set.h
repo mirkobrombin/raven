@@ -69,7 +69,9 @@ private:
 	std::map<std::string, std::unique_ptr<PEModule>> modules;
 	std::map<std::string, std::string> aliases;
 	std::set<std::string> data_names;
+	std::set<std::string> movable_names;
 	bool adding_data = false;
+	bool bound_any = false;
 	uint64_t resolve(std::string module, std::string name, uint32_t ordinal, bool by_ordinal,
 		std::set<std::pair<std::string, uint32_t>> &chain, std::vector<const PEModule *> *path = nullptr) const;
 };

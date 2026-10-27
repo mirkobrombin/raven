@@ -186,6 +186,13 @@ int main()
 				auto &data = constrained.add_data("resource", relocated, available);
 				check(data.loaded.base() == fallback + 3 * 65536 && read(data.loaded.data(), 0x1520, width) == target_base + 0x1000,
 					"data placement overlapped a process range or applied code relocations");
+				raven::ModuleSet displaced;
+				auto &displaced_first = displaced.add("first", relocated);
+				check(displaced_first.loaded.base() == target_base, "initial relocatable placement ignored free preferred base");
+				auto &displaced_fixed = displaced.add("fixed", target);
+				check(displaced_fixed.loaded.base() == target_base && displaced_first.loaded.base() == fallback &&
+					read(displaced_first.loaded.data(), 0x1520, width) == fallback + 0x1000,
+					"fixed-base module did not displace an unbound relocatable module");
 			}
 			rejected([&] { modules.resolve({"facade", "function", 0, false, 0}); });
 			rejected([&] { modules.resolve({"facade", "", 8, true, 0}); });

@@ -60,29 +60,71 @@ PEModule &ModuleSet::add(std::string name, ModuleBytes bytes, std::function<bool
 	uint64_t base = image.image_base;
 	if (!base || base % 65536 || base >= limit || image.image_size > limit - base)
 		throw std::runtime_error("invalid guest image base");
-	const auto overlap = [&](uint64_t candidate) {
+	const auto overlap_for = [&](uint64_t candidate, uint64_t size, const PEModule *skip = nullptr) {
 		for (const auto &[key, previous] : modules) {
+			if (previous.get() == skip)
+				continue;
 			const uint64_t start = previous->loaded.base();
 			const uint64_t end = start + previous->loaded.data().size();
-			if (candidate < end && start < candidate + image.image_size)
+			if (candidate < end && start < candidate + size)
 				return (end + 65535) & ~uint64_t(65535);
 		}
-		if (available && !available(candidate, image.image_size))
+		if (available && !available(candidate, size))
 			return candidate + 65536;
 		return uint64_t(0);
 	};
-	if (overlap(base)) {
+	const auto has_relocs = [](const PEImage &candidate) {
+		return !(candidate.characteristics & 1) && candidate.directories[5].address && candidate.directories[5].size;
+	};
+	const bool needs_relocs = image.entry || image.directories[1].address || image.directories[9].address || image.directories[13].address;
+	if (!adding_data && !available && !bound_any && !has_relocs(image) && needs_relocs && overlap_for(base, image.image_size)) {
+		std::vector<PEModule *> blockers;
+		bool all_movable = true;
+		for (const auto &[key, previous] : modules) {
+			const uint64_t start = previous->loaded.base();
+			const uint64_t end = start + previous->loaded.data().size();
+			if (base < end && start < base + image.image_size) {
+				if (!movable_names.contains(key)) {
+					all_movable = false;
+					break;
+				}
+				blockers.push_back(previous.get());
+			}
+		}
+		if (all_movable && !blockers.empty()) {
+			for (auto *blocker : blockers) {
+				uint64_t moved = blocker->image.is_64 ? 0x180000000ULL : 0x10000000ULL;
+				for (;;) {
+					if (moved >= limit || blocker->image.image_size > limit - moved)
+						throw std::runtime_error("no guest address available for PE module");
+					if (moved < base + image.image_size && base < moved + blocker->image.image_size) {
+						moved = (base + image.image_size + 65535) & ~uint64_t(65535);
+						continue;
+					}
+					const uint64_t next = overlap_for(moved, blocker->image.image_size, blocker);
+					if (!next)
+						break;
+					moved = next;
+				}
+				blocker->loaded = LoadedImage(blocker->image, moved, true);
+			}
+		}
+	}
+	if (overlap_for(base, image.image_size)) {
 		base = image.is_64 ? 0x180000000ULL : 0x10000000ULL;
 		for (;;) {
 			if (base >= limit || image.image_size > limit - base)
 				throw std::runtime_error("no guest address available for PE module");
-			const uint64_t next = overlap(base);
+			const uint64_t next = overlap_for(base, image.image_size);
 			if (!next)
 				break;
 			base = next;
 		}
 	}
-	return add(std::move(name), std::move(bytes), base);
+	auto &result = add(std::move(name), std::move(bytes), base);
+	if (!adding_data && has_relocs(result.image))
+		movable_names.insert(result.name);
+	return result;
 }
 
 PEModule &ModuleSet::add(std::string name, ModuleBytes bytes, uint64_t base)
@@ -134,6 +176,7 @@ void ModuleSet::remove(const PEModule &module)
 	if (found == modules.end() || found->second.get() != &module)
 		throw std::runtime_error("PE removal requires an owned module");
 	data_names.erase(found->first);
+	movable_names.erase(found->first);
 	modules.erase(found);
 }
 
@@ -243,6 +286,7 @@ size_t ModuleSet::bind_imports()
 		throw std::runtime_error(message);
 	}
 	// Commit only after every import resolves; failed binding leaves all images unchanged.
+	bound_any = true;
 	for (const auto &binding : bindings) {
 		auto data = binding.module->loaded.data();
 		for (size_t byte = 0; byte < binding.width; ++byte)

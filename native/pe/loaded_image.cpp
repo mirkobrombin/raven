@@ -150,6 +150,36 @@ LoadedImage::~LoadedImage()
 	release();
 }
 
+LoadedImage::LoadedImage(LoadedImage &&other) noexcept
+	: fd(other.fd), storage(other.storage), size(other.size), address(other.address),
+	relocated(other.relocated), protections(std::move(other.protections))
+{
+	other.fd = -1;
+	other.storage = nullptr;
+	other.size = 0;
+	other.address = 0;
+	other.relocated = 0;
+}
+
+LoadedImage &LoadedImage::operator=(LoadedImage &&other) noexcept
+{
+	if (this != &other) {
+		release();
+		fd = other.fd;
+		storage = other.storage;
+		size = other.size;
+		address = other.address;
+		relocated = other.relocated;
+		protections = std::move(other.protections);
+		other.fd = -1;
+		other.storage = nullptr;
+		other.size = 0;
+		other.address = 0;
+		other.relocated = 0;
+	}
+	return *this;
+}
+
 void LoadedImage::release()
 {
 	if (storage)

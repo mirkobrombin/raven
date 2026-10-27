@@ -17,6 +17,8 @@ public:
 	// An image mapped only to be read keeps its contents as they are wherever it lands: nothing in it runs.
 	LoadedImage(const PEImage &image, uint64_t base, bool relocated = true);
 	~LoadedImage();
+	LoadedImage(LoadedImage &&other) noexcept;
+	LoadedImage &operator=(LoadedImage &&other) noexcept;
 	LoadedImage(const LoadedImage &) = delete;
 	LoadedImage &operator=(const LoadedImage &) = delete;
 	std::span<uint8_t> data();
