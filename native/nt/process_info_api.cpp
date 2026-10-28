@@ -16,6 +16,7 @@
 #include <new>
 #include <sstream>
 #include <unistd.h>
+#include <utility>
 #include <variant>
 
 namespace raven {
@@ -1002,10 +1003,20 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 				if (pid == ::getpid() || !runtime_process_alive(pid))
 					continue;
 				std::ifstream arguments(entry.path() / "cmdline", std::ios::binary);
+				// The program is the runtime's first argument that is not an option: the last one for the processes it starts, and
+				// the one before -- and the program's own arguments when it was started by hand.
 				std::string argument, last;
-				while (std::getline(arguments, argument, '\0'))
-					if (!argument.empty())
+				bool first = true;
+				while (std::getline(arguments, argument, '\0')) {
+					if (std::exchange(first, false) || argument.empty())
+						continue;
+					if (argument == "--")
+						break;
+					if (argument[0] != '-') {
 						last = argument;
+						break;
+					}
+				}
 				std::ifstream stat(entry.path() / "stat");
 				std::string text;
 				std::getline(stat, text);

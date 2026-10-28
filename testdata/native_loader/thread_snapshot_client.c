@@ -26,8 +26,51 @@ static int find_thread(HANDLE snapshot, DWORD owner, DWORD id, LONG priority)
 	return GetLastError() == ERROR_NO_MORE_FILES ? found : -1;
 }
 
+/* The child started with "parent": its parent in the process snapshot is named by its program, the same file as the child's,
+   however the parent was started. */
+static int check_parent(void)
+{
+	WCHAR own[MAX_PATH], parent_name[MAX_PATH];
+	DWORD parent = 0;
+	BOOL found_self = FALSE, found_parent = FALSE;
+	PROCESSENTRY32W entry;
+	/* Two passes: the first finds this process and its parent's id, the second the parent. */
+	for (int pass = 0; pass < 2; ++pass) {
+		HANDLE processes = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+		if (processes == INVALID_HANDLE_VALUE)
+			return 20;
+		entry.dwSize = sizeof(entry);
+		for (BOOL more = Process32FirstW(processes, &entry); more; more = Process32NextW(processes, &entry)) {
+			if (!pass && entry.th32ProcessID == GetCurrentProcessId()) {
+				parent = entry.th32ParentProcessID;
+				lstrcpynW(own, entry.szExeFile, MAX_PATH);
+				found_self = TRUE;
+			} else if (pass && found_self && entry.th32ProcessID == parent) {
+				lstrcpynW(parent_name, entry.szExeFile, MAX_PATH);
+				found_parent = TRUE;
+			}
+			entry.dwSize = sizeof(entry);
+		}
+		CloseHandle(processes);
+	}
+	if (!found_self || !found_parent)
+		return 21;
+	return lstrcmpiW(own, parent_name) ? 22 : 0;
+}
+
+static BOOL started_as_child(void)
+{
+	const WCHAR *line = GetCommandLineW();
+	for (; *line; ++line)
+		if (line[0] == L'p' && line[1] == L'a' && line[2] == L'r' && line[3] == L'e' && line[4] == L'n' && line[5] == L't' && !line[6])
+			return TRUE;
+	return FALSE;
+}
+
 int raven_entry(void)
 {
+	if (started_as_child())
+		return check_parent();
 	DWORD id, later_id;
 	HANDLE thread = CreateThread(NULL, 0, worker, NULL, CREATE_SUSPENDED, &id);
 	if (!thread || !SetThreadPriority(thread, THREAD_PRIORITY_ABOVE_NORMAL))
@@ -77,5 +120,19 @@ int raven_entry(void)
 	CloseHandle(child.hProcess);
 	if (peers != INVALID_HANDLE_VALUE)
 		CloseHandle(peers);
-	return result ? 0 : 11;
+	if (!result)
+		return 11;
+	/* A child reads this process's name from the snapshot; the test starts this process with arguments of its own. */
+	WCHAR line[MAX_PATH + 16];
+	line[0] = L'"';
+	lstrcpynW(line + 1, path, MAX_PATH);
+	lstrcatW(line, L"\" parent");
+	DWORD code = 1;
+	if (!CreateProcessW(path, line, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child))
+		return 12;
+	WaitForSingleObject(child.hProcess, 20000);
+	GetExitCodeProcess(child.hProcess, &code);
+	CloseHandle(child.hThread);
+	CloseHandle(child.hProcess);
+	return code ? (int)code : 0;
 }
