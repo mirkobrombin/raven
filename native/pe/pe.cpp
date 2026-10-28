@@ -219,6 +219,12 @@ std::vector<PEDelayImport> PEImage::delay_imports() const
 		return {};
 	if (!directory.address || directory.size < 32)
 		throw std::runtime_error("invalid PE delay import directory");
+	// A packed program keeps the table in the part of a section the file holds no data for, where its unpacker writes it at run time;
+	// the table is read when a delayed function is first called. The file itself holds no table yet.
+	for (const auto &section : sections)
+		if (directory.address >= uint64_t(section.address) + section.file_size &&
+			uint64_t(directory.address) + directory.size <= uint64_t(section.address) + section.virtual_size)
+			return {};
 	const auto descriptors = file_span(directory.address, directory.size);
 	const uint32_t width = is_64 ? 8 : 4;
 	size_t import_count = 0;

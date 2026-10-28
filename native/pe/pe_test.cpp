@@ -124,6 +124,13 @@ static void delay_import_contracts()
 			bytes = valid;
 			std::fill(bytes.begin() + 0x2e2, bytes.end(), uint8_t('x'));
 			rejected([&] { raven::PEImage(bytes).delay_imports(); });
+			// A table in the part of a section the file does not hold, which a packed program's unpacker writes, is no table yet.
+			bytes = valid;
+			put(bytes, directory, 0x1200);
+			check(raven::PEImage(bytes).delay_imports().empty(), "delay directory the file does not hold produced imports");
+			// One that starts in the file and runs past it is malformed.
+			put(bytes, directory, 0x11e0);
+			rejected([&] { raven::PEImage(bytes).delay_imports(); });
 		}
 	}
 }
