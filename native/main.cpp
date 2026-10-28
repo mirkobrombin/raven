@@ -352,6 +352,9 @@ int main(int argc, char **argv)
 									const pid_t child = ::fork();
 									if (child == 0) {
 										::setenv("RAVEN_PREFIX_SETUP", "1", 1);
+										// Setup is quiet: only a failure says anything, on standard error.
+										if (const int quiet = ::open("/dev/null", O_WRONLY | O_CLOEXEC); quiet >= 0)
+											::dup2(quiet, 1);
 										const std::string self = std::filesystem::read_symlink("/proc/self/exe").string(), path = program.string();
 										::execl(self.c_str(), self.c_str(), "--run-process", "--execution=native", "--timeout-ms=60000", path.c_str(), "--", "/s",
 											server, static_cast<char *>(nullptr));
