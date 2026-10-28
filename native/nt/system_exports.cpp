@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <limits>
 #include <vector>
 
@@ -125,6 +126,19 @@ std::span<const std::string_view> system_library_names()
 		return list;
 	}();
 	return names;
+}
+
+bool program_may_replace(std::string_view dll)
+{
+	static const bool prefer_local = [] {
+		const char *value = std::getenv("RAVEN_PREFER_LOCAL_DLLS");
+		return value && std::string_view(value) == "1";
+	}();
+	if (std::find(std::begin(program_replaceable_libraries), std::end(program_replaceable_libraries), dll) != std::end(program_replaceable_libraries))
+		return true;
+	const auto names = system_library_names();
+	return prefer_local && std::find(names.begin(), names.end(), dll) != names.end() &&
+		std::find(std::begin(core_system_libraries), std::end(core_system_libraries), dll) == std::end(core_system_libraries);
 }
 
 }

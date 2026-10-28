@@ -3,9 +3,11 @@
 #include "pe/module_set.h"
 #include "cpu/native_cpu.h"
 
+#include <filesystem>
 #include <map>
 #include <functional>
 #include <optional>
+#include <string>
 
 namespace raven {
 
@@ -23,6 +25,22 @@ void forward_opengl_formats(ModuleSet &modules, PEModule &provider);
 void load_initial_dependencies(ModuleSet &modules,
 	const std::function<std::optional<ModuleBytes>(std::string_view)> &source,
 	std::span<const std::string_view> native_modules,bool is_64=true,bool tolerate_missing=false);
+
+// The copies of system libraries that a program ships beside its executable and that load instead of the runtime's (program_may_replace).
+// Only the names asked about are looked for: the folder is listed once, on the first such name, and only a file that answers a name is
+// read, to see that it is a DLL of the program's width.
+class ProgramLibraries {
+public:
+	ProgramLibraries() = default;
+	ProgramLibraries(std::u16string_view image_path, bool is_64);
+	bool contains(std::string_view dll);
+
+private:
+	std::filesystem::path folder;
+	bool is_64 = true;
+	std::optional<std::map<std::string, std::filesystem::path>> files;
+	std::map<std::string, bool, std::less<>> answers;
+};
 
 std::vector<const PEModule *> initialization_order(const ModuleSet &modules, const PEModule &entry);
 uint64_t initialize_loader_data(NativeProcess &process, uint64_t peb,

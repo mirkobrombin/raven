@@ -1533,8 +1533,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		!std::any_of(modules.all().begin(), modules.all().end(), [&](const auto &item) { return item.second.get() == &entry; }))
 		throw std::runtime_error("native process requires an executable graph and positive timeout");
 	for (const auto &[name,module]:modules.all()) validate_native_image(module->image,name);
-	std::vector<std::string_view> native_modules{"kernel32.dll","kernelbase.dll","user32.dll","gdi32.dll","comctl32.dll","ntdll.dll",
-		"advapi32.dll","ole32.dll","combase.dll","shell32.dll","shlwapi.dll","setupapi.dll","comdlg32.dll"};
+	// The system libraries are the runtime's, except those a copy in the program's folder may replace: those are looked for there first.
+	std::vector<std::string_view> native_modules{"kernel32.dll","kernelbase.dll","user32.dll","gdi32.dll","comctl32.dll","ntdll.dll"};
+	for (const auto library : system_library_names())
+		if (!program_may_replace(library) && std::find(native_modules.begin(), native_modules.end(), library) == native_modules.end())
+			native_modules.push_back(library);
 #ifdef RAVEN_OPENGL
 	// The bridge is the program's OpenGL unless the program brings its own opengl32.dll and the bridge was not asked for.
 	const bool native_opengl = OpenGLBridge::enabled() && (OpenGLBridge::requested() || !modules.all().contains("opengl32.dll"));
@@ -1612,30 +1615,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto library : system_library_names())
 		if (std::find(system_modules.begin(), system_modules.end(), library) == system_modules.end())
 			system_modules.emplace_back(library);
-	std::set<std::string> beside_program;
-	if (launch) {
-		const auto probe_prefix = NativePrefix::from_environment();
-		const NativePaths probe(probe_prefix);
-		const auto program = probe.resolve(launch->image_path);
-		if (program && program->exists) {
-			std::error_code error;
-			for (const auto &item : std::filesystem::directory_iterator(program->host.parent_path(), error)) {
-				if (!item.is_regular_file(error))
-					continue;
-				auto filename = item.path().filename().string();
-				for (auto &character : filename)
-					if (character >= 'A' && character <= 'Z')
-						character = static_cast<char>(character + ('a' - 'A'));
-				if (const auto mapped = ModuleBytes::map(item.path())) {
-					try {
-						const PEImage candidate(*mapped);
-						if (candidate.is_64 && (candidate.characteristics & 0x2000))
-							beside_program.insert(std::move(filename));
-					} catch (...) {}
-				}
-			}
-		}
-	}
+	ProgramLibraries program_libraries;
+	if (launch)
+		program_libraries = ProgramLibraries(launch->image_path, true);
 	// A number with no name known for it still gets an export, so a program that imports by that number binds, and the call it ends in names the number.
 	std::map<std::string, std::vector<std::pair<std::string_view, uint16_t>>> unknown_ordinals;
 	std::map<std::string, std::vector<std::string>> unknown_names;
@@ -1695,12 +1677,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (const auto extra = unknown_ordinals.find(std::string(name)); extra != unknown_ordinals.end())
 			ordinals.insert(ordinals.end(), extra->second.begin(), extra->second.end());
 		PEModule *provider = nullptr;
-		const bool core = std::find(std::begin(core_system_libraries), std::end(core_system_libraries), std::string_view(name)) != std::end(core_system_libraries);
 		const auto found = modules.all().find(name);
 		if (found != modules.all().end() && found->second->runtime_api) {
 			provider = found->second.get();
 		} else if (found != modules.all().end()) {
-			if (core)
+			if (!program_may_replace(name))
 				continue;
 			const auto fallback = "system32-" + name;
 			if (!modules.all().contains(fallback)) {
@@ -1710,7 +1691,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				provider->runtime_api = true;
 			}
 		} else {
-			const auto provider_key = (!core && beside_program.contains(name)) ? "system32-" + name : name;
+			const auto provider_key = program_libraries.contains(name) ? "system32-" + name : name;
 			const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
 			const auto base = provider_base(modules, PEImage(bytes).image_size);
 			provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
@@ -2578,8 +2559,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			if (system_folder && modules.all().contains("system32-" + identity)) {
 				name = "system32-" + identity;
 			} else {
-				const bool core = std::find(std::begin(core_system_libraries), std::end(core_system_libraries), std::string_view(identity)) != std::end(core_system_libraries);
-				if (!system_folder && !core && apiset_host(identity).empty()) {
+				if (!system_folder && (program_may_replace(identity) || !modules.all().contains(identity)) && apiset_host(identity).empty()) {
 					const auto resolved = paths.resolve(from_utf8(name));
 					if (!resolved || !resolved->exists || !std::filesystem::is_regular_file(resolved->host)) {
 						environment.set_last_error(126);
@@ -2676,8 +2656,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			} else {
 				const auto system_names = system_library_names();
 				const bool system = std::find(system_names.begin(), system_names.end(), identity) != system_names.end();
-				const bool core = std::find(std::begin(core_system_libraries), std::end(core_system_libraries), std::string_view(identity)) != std::end(core_system_libraries);
-				if (has_launch && !core && !activation_contexts().library_folder(identity)) {
+				if ((!system || (has_launch && program_may_replace(identity))) && !activation_contexts().library_folder(identity)) {
 					if (const auto found = paths.find_library(launch->image_path, from_utf8(identity), true, flags)) {
 						bool system_copy = false;
 						if (system) {
@@ -2695,7 +2674,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						throw LoadFailure{126};
 					}
 				}
-				if (!bytes && !(flags & 0x1f00))
+				if (!bytes && !(system && (flags & 0x1f00)))
 					if (auto read = source(identity)) bytes.emplace(std::move(*read));
 				if (!bytes && system) {
 					if (const auto fallback = modules.all().find("system32-" + identity); fallback != modules.all().end())
