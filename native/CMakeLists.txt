@@ -1342,7 +1342,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             # The components are copied whenever they change, whether or not the runtime itself was rebuilt.
             set(installer_copies)
             foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe libxslt.dll msxml3.dll atl100.dll oleaut32.dll
-                libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll)
+                libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll
+                raven-appx.dll)
                 if(NOT EXISTS "${installer_dir}/${component}")
                     message(FATAL_ERROR "Configured installer component does not exist: ${installer_dir}/${component}")
                 endif()
@@ -1359,6 +1360,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 list(APPEND installer_copies ${copy})
             endforeach()
             add_custom_target(installer_components_${width} ALL DEPENDS ${installer_copies})
+            # The packaging API on packages appx_fixtures.py writes: the manifest, payload files and block map of a package, its ZIP64 form,
+            # a package and a bundle told apart, a part the block map leaves out, and content that differs from the block map.
+            find_package(Python3 COMPONENTS Interpreter QUIET)
+            if(Python3_Interpreter_FOUND AND installer_compiler)
+                set(appx_fixture ${CMAKE_CURRENT_BINARY_DIR}/appx-fixtures/${installer_arch})
+                add_custom_command(OUTPUT ${appx_fixture}/appx-client.exe ${appx_fixture}/appx-good.msix
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/appx_fixtures.py ${appx_fixture}
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -I${PROJECT_SOURCE_DIR}/native/upstream/raven-appx
+                        -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${appx_fixture}/appx-client.exe
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/appx_client.c -lole32 -lshlwapi -lkernel32 -luuid
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/appx_fixtures.py ${PROJECT_SOURCE_DIR}/testdata/native_loader/appx_client.c
+                        ${PROJECT_SOURCE_DIR}/native/upstream/raven-appx/appxpackaging.h VERBATIM)
+                add_custom_target(appx_fixture_${installer_arch} ALL DEPENDS ${appx_fixture}/appx-client.exe ${appx_fixture}/appx-good.msix)
+                add_test(NAME native_appx_packaging_${installer_arch} COMMAND raven --run-process --execution=native ${appx_fixture}/appx-client.exe)
+                set_tests_properties(native_appx_packaging_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            endif()
             # A package made by wixl, read back as a database: tables, SQL views and the summary information stream; then installed.
             if(RAVEN_WIXL AND installer_compiler)
                 set(fixture ${MSI_FIXTURES}/${installer_arch})

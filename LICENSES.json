@@ -22,6 +22,12 @@
     {
       "name": "Raven guest adapters",
       "paths": [
+        "native/upstream/raven-appx/appx.h",
+        "native/upstream/raven-appx/archive.c",
+        "native/upstream/raven-appx/blockmap.c",
+        "native/upstream/raven-appx/manifest.c",
+        "native/upstream/raven-appx/package.c",
+        "native/upstream/raven-appx/support.c",
         "native/upstream/raven-cabinet/README.md",
         "native/upstream/raven-cabinet/cabinet.spec",
         "native/upstream/raven-cabinet/compose.c",
@@ -191,6 +197,17 @@
       "distribution_license": "GPL-2.0-only",
       "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
       "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+    },
+    {
+      "name": "Windows packaging interface declarations",
+      "paths": [
+        "native/upstream/raven-appx/appxpackaging.h"
+      ],
+      "license": "MIT",
+      "review": "pending-maintainer-review",
+      "revision": "58217a690d6256ee229044a174de67d72d28bc35",
+      "provenance": "Interface identifiers, method order, parameters, structures and error codes from Microsoft's Windows metadata as distributed by https://github.com/microsoft/windows-rs (MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation), written by scripts/generate-appx-header.py",
+      "boundary": "C declarations compiled into the PE guest component raven-appx.dll and its test. No code."
     },
     {
       "name": "External build inputs",

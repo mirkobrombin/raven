@@ -27,7 +27,10 @@ programs and, with `--arch x86`, for 32-bit ones:
 - `raven-setupapi.dll` (`dll/win32/setupapi`, with the LZ expansion functions of
   `dll/win32/kernel32/wine/lzexpand.c`): setup information files, file queues and
   cabinets, which the runtime's `setupapi.dll` hands to it; device management reaches
-  the plug and play service through the RPC client widl writes from `pnp.idl`.
+  the plug and play service through the RPC client widl writes from `pnp.idl`;
+- `raven-appx.dll` (`native/upstream/raven-appx`, Raven code on the same zlib): the
+  packaging API, whose AppxFactory and AppxBundleFactory classes package managers read
+  `.appx` and `.msix` packages with.
 
 The runtime takes these libraries from beside itself whatever copies a program ships or
 an installer leaves in the system directory. Each new prefix registers the classes of
