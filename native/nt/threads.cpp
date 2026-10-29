@@ -115,11 +115,21 @@ std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t para
 		throw std::runtime_error("native guest thread limit reached");
 	auto thread = std::make_shared<GuestThread>();
 	const uint64_t size = std::clamp<uint64_t>((stack_size + 0xffff) & ~uint64_t(0xffff), 256 * 1024, 64 * 1024 * 1024);
-	// One unreadable page below the stack turns an overflow into a fault instead of silent corruption.
-	const auto range = memory.allocate(0, size + 4096, 0x3000, 4);
+	// The stack is reserved, as Windows reserves a thread's stack, and only its top is committed: Windows commits more as the thread
+	// reaches its guard page, so a new thread is charged for what it starts with, not its whole reservation (a thread pool of one
+	// thread per processor with 8 MiB stacks would otherwise exhaust the commit limit). The pages below stay reserved in the
+	// accounting and are open to the thread, standing for the growth Windows gives it. One unreadable page below the stack turns an
+	// overflow into a fault instead of silent corruption.
+	const auto range = memory.allocate(0, size + 4096, 0x2000, 1);
 	if (range.status)
 		throw std::runtime_error("native guest thread stack allocation failed");
-	memory.protect(range.address, 4096, 1);
+	const uint64_t commit = std::min<uint64_t>(size, 64 * 1024), top = range.address + 4096 + size;
+	if (memory.allocate(top - commit, commit, 0x1000, 4).status) {
+		memory.free(range.address, 0, 0x8000);
+		throw std::runtime_error("native guest thread stack allocation failed");
+	}
+	if (size > commit)
+		process.protect_memory(range.address + 4096, size - commit, PROT_READ | PROT_WRITE);
 	thread->stack_low = range.address + 4096;
 	thread->stack_high = range.address + size + 4096;
 	thread->id = next_id;
