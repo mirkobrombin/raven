@@ -73,5 +73,7 @@ int raven_entry(void)
 	if (LocaleNameToLCID(L"x-none", 0) || GetLastError() != ERROR_INVALID_PARAMETER) return 19;
 	if (LCIDToLocaleName(0x407, name, LOCALE_NAME_MAX_LENGTH, 0) != 6 || name[0] != 'd' || name[3] != 'D') return 20;
 	if (LCIDToLocaleName(0x1234, name, LOCALE_NAME_MAX_LENGTH, 0)) return 21;
+	if (LCIDToLocaleName(0x459, name, LOCALE_NAME_MAX_LENGTH, 0) != 11 || lstrcmpW(name, L"sd-Deva-IN")) return 22;
+	if (LocaleNameToLCID(L"ar-EG", 0) != 0xc01) return 23;
 	return 0;
 }
