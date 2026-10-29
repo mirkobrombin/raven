@@ -1123,11 +1123,10 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87);
 			return;
 		}
+		// Removing a variable that is not set succeeds: Rust's standard library, for one, removes variables without looking first and
+		// stops when that fails.
 		if (!call[1]) {
-			if (!variables->values.erase(key_of(name))) {
-				call.fail(203);
-				return;
-			}
+			variables->values.erase(key_of(name));
 		} else {
 			variables->values[key_of(name)] = {name, call.wide(call[1])};
 		}
