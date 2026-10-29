@@ -1916,6 +1916,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${UCRT_IO_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_io_client.c -lucrtbase -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_io_client.c VERBATIM)
             add_custom_target(ucrt_io_fixture ALL DEPENDS ${UCRT_IO_CLIENT})
+            # The native sleeps, waits and thread alerts.
+            set(NATIVE_WAIT_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/native-wait.exe)
+            add_custom_command(OUTPUT ${NATIVE_WAIT_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1eb300000,--no-insert-timestamp
+                    -o ${NATIVE_WAIT_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/native_wait_client.c -lntdll -lucrtbase -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/native_wait_client.c VERBATIM)
+            add_custom_target(native_wait_fixture ALL DEPENDS ${NATIVE_WAIT_CLIENT})
+            add_test(NAME native_waits_and_alerts COMMAND raven --run-process --execution=native ${NATIVE_WAIT_CLIENT})
+            set_tests_properties(native_waits_and_alerts PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/native-wait-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
