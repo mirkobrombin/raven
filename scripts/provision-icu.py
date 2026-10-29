@@ -106,6 +106,7 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
+    repo = Path(__file__).resolve().parents[1]
     for tool in ("gcc", "g++", "ar", "nm", "strip", "objdump"):
         if not shutil.which(f"{triple}-{tool}"):
             raise RuntimeError(f"required ICU build tool is missing: {triple}-{tool}")
@@ -156,15 +157,18 @@ def main():
     public = public_functions(source)
     common_exports = sorted(public & defined_functions(f"{triple}-nm", libraries["common"]))
     i18n_exports = sorted(public & defined_functions(f"{triple}-nm", libraries["i18n"]))
-    (build / "icu.def").write_text("LIBRARY icu.dll\nEXPORTS\n" + "".join(f"    {name}\n" for name in [*common_exports, *i18n_exports]))
+    (build / "icu.def").write_text("LIBRARY icu.dll\nEXPORTS\n" + "".join(f"    {name}\n" for name in
+                                   [*common_exports, *i18n_exports, "NormalizeString", "IsNormalizedString"]))
     for library, exports in (("icuuc", common_exports), ("icuin", i18n_exports)):
         (build / f"{library}.def").write_text(f"LIBRARY {library}.dll\nEXPORTS\n" + "".join(f"    {name} = icu.{name}\n" for name in exports))
     (build / "data.S").write_text(f'\t.section .rdata,"dr"\n\t.globl {DATA[:-1]}_dat\n\t.balign 16\n{DATA[:-1]}_dat:\n'
                                   f'\t.incbin "{build / (DATA + ".dat")}"\n')
     run([f"{triple}-gcc", "-c", str(build / "data.S"), "-o", str(build / "data.o")])
+    run([f"{triple}-gcc", "-O2", "-Wall", "-DU_DISABLE_RENAMING=1", f"-I{source / 'common'}", "-c",
+         str(repo / "native/upstream/raven-icu/normalize.c"), "-o", str(build / "normalize.o")])
     component = output / "icu.dll"
     run([f"{triple}-g++", "-shared", "-static", "-static-libgcc", "-static-libstdc++", "-Wl,--gc-sections,--no-insert-timestamp",
-         "-Wl,--image-base,0x1b0000000", "-o", str(component), str(build / "icu.def"), str(build / "data.o"),
+         "-Wl,--image-base,0x1b0000000", "-o", str(component), str(build / "icu.def"), str(build / "normalize.o"), str(build / "data.o"),
          "-Wl,--start-group", str(libraries["i18n"]), str(libraries["common"]), "-Wl,--end-group", "-ladvapi32"])
     run([f"{triple}-strip", "--strip-unneeded", str(component)])
     (build / "empty.c").write_text("")

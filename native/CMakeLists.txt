@@ -1661,6 +1661,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/fold-volume-prefix)
         endif()
         # ICU as Windows ships it (scripts/provision-icu.py), for 64-bit programs: icu.dll, and icuuc.dll and icuin.dll forwarding to it.
+        # kernel32's Unicode normalization runs on it too.
         set(RAVEN_ICU_COMPONENT_DIR "" CACHE PATH "Directory holding icu.dll, icuuc.dll and icuin.dll built by scripts/provision-icu.py")
         if(RAVEN_ICU_COMPONENT_DIR)
             set(icu_copies)

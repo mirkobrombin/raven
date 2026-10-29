@@ -44,6 +44,22 @@ void load_initial_dependencies(ModuleSet &modules,
 			auto symbols=pending[index]->imports;
 			if (pending[index]->image.directories[14].address && pending[index]->image.directories[14].size)
 				symbols.push_back(PEImport{"mscoree.dll","_CorExeMain",0,false,0});
+			// The Unicode normalization of kernel32 is ICU's: a module that imports it brings the runtime's icu.dll, which kernel32 then
+			// forwards the calls to. Without one, and in 32-bit processes, the functions stay unimplemented.
+			if (is_64 && !modules.all().contains("icu.dll") && std::any_of(symbols.begin(),symbols.end(),[](const PEImport &symbol) {
+					if (symbol.by_ordinal || (symbol.name!="NormalizeString" && symbol.name!="IsNormalizedString")) return false;
+					auto library=symbol.module;
+					for (auto &character : library) if (character>='A' && character<='Z') character=char(character+('a'-'A'));
+					if (library.find('.')==library.npos) library+=".dll";
+					const auto host=apiset_host(library);
+					return library=="kernel32.dll" || library=="kernelbase.dll" || host=="kernel32.dll";
+				}))
+				if (auto bytes=source("icu.dll")) {
+					const PEImage image(*bytes);validate_native_image(image,"icu.dll",is_64);
+					staged.reserve(staged.size()+1);pending.reserve(pending.size()+1);
+					auto &module=modules.add("icu.dll",std::move(*bytes));
+					staged.push_back(&module);pending.push_back(&module);
+				}
 			for (const auto &symbol:symbols)
 				for (;;) {
 					try { modules.resolve(symbol);break; }

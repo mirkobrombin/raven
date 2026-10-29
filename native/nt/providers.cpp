@@ -1718,7 +1718,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				// The heap, critical sections and the free paths of SRW locks and condition variables run in the guest RTL.
 				{"kernel32.dll", "raven-rtl.dll", "raven-rtl."}, {"kernelbase.dll", "raven-rtl.dll", "raven-rtl."},
 				// The generic AVL tables of ntdll; its heap stays with the host, which calls the guest RTL itself.
-				{"ntdll.dll", "raven-rtl.dll", "raven-rtl."}};
+				{"ntdll.dll", "raven-rtl.dll", "raven-rtl."},
+				// Unicode normalization, on the runtime's ICU (the loader brings icu.dll in for a program that imports it).
+				{"kernel32.dll", "icu.dll", "icu."}, {"kernelbase.dll", "icu.dll", "icu."}};
 			for (const auto &overlay_rule : overlays) {
 				if (name != overlay_rule.library)
 					continue;

@@ -54,6 +54,7 @@
         "native/upstream/raven-dwrite/dwrite.c",
         "native/upstream/raven-dwrite/dwrite_tables.h",
         "native/upstream/raven-dwrite/text.inc",
+        "native/upstream/raven-icu/normalize.c",
         "native/upstream/raven-mscoree/mscoree.c",
         "native/upstream/raven-mscoree/mscoree32.def",
         "native/upstream/raven-mscoree/mscoree64.def",

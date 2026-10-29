@@ -24,11 +24,29 @@ static int same(const WCHAR *left, const WCHAR *right, int count)
 	return 1;
 }
 
-/* ICU through the libraries Windows ships it as, which forward to icu.dll: case mapping and folding, word breaks, collation and
- * regular expressions. */
+/* kernel32's Unicode normalization, which the runtime serves from its ICU: composition, decomposition and compatibility forms, the
+ * length asked for with an empty buffer and a buffer too small, malformed input and forms; then ICU itself through the libraries
+ * Windows ships it as, which forward to icu.dll: case mapping and folding, word breaks, collation and regular expressions. */
 int raven_entry(void)
 {
 	WCHAR out[32];
+	static const WCHAR decomposed[] = {'e', 0x301, 0}, composed[] = {0xe9, 0}, ligature[] = {0xfb01}, broken[] = {'a', 0xd800, 'b'};
+	SetLastError(1234);
+	if (NormalizeString(NormalizationC, decomposed, -1, out, 32) != 2 || !same(out, composed, 2) || GetLastError() != 1234) return 1;
+	if (NormalizeString(NormalizationD, composed, 1, out, 32) != 2 || !same(out, decomposed, 2)) return 2;
+	if (NormalizeString(NormalizationKC, ligature, 1, out, 32) != 2 || out[0] != 'f' || out[1] != 'i') return 3;
+	if (NormalizeString(NormalizationKD, ligature, 1, out, 32) != 2) return 4;
+	if (NormalizeString(NormalizationD, composed, -1, NULL, 0) < 3) return 5;
+	SetLastError(0);
+	const int short_result = NormalizeString(NormalizationD, composed, -1, out, 1);
+	if (short_result >= 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER || -short_result < 3) return 6;
+	SetLastError(0);
+	if (NormalizeString(NormalizationC, broken, 3, out, 32) > 0 || GetLastError() != ERROR_NO_UNICODE_TRANSLATION) return 7;
+	SetLastError(0);
+	if (NormalizeString((NORM_FORM)3, composed, -1, out, 32) || GetLastError() != ERROR_INVALID_PARAMETER) return 8;
+	if (IsNormalizedString(NormalizationC, decomposed, 2) || !IsNormalizedString(NormalizationC, composed, 1)) return 9;
+	if (!IsNormalizedString(NormalizationD, decomposed, -1) || IsNormalizedString(NormalizationD, composed, -1)) return 10;
+
 	HMODULE common = LoadLibraryW(L"icuuc.dll"), i18n = LoadLibraryW(L"icuin.dll");
 	if (!common || !i18n) return 20;
 	case_function to_upper = (case_function)GetProcAddress(common, "u_strToUpper");
