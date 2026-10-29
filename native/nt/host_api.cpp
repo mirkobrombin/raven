@@ -985,46 +985,43 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			else call.put_narrow(call[1], to_utf8(text), text.size() + 1);
 			call.ret(text.size());
 		});
-	// A drive's volume: the prefix keeps the files, so every drive reports one NTFS volume.
-	registry.add("GetVolumeInformationW", 8, [&context](ApiCall &call) {
-		if (call[0]) {
-			const auto root = context.paths.resolve(call.wide(call[0], 260));
-			if (!root || !root->exists) {
-				call.fail(3);
+	// A drive's volume: the prefix keeps the files, so every drive reports one NTFS volume. The volume's fields, from the second
+	// argument on, are the same however the volume is named.
+	const auto volume_fields = [](ApiCall &call, bool wide) {
+		const auto put_text = [&](uint64_t address, uint32_t capacity, std::string_view text) {
+			if (!address || !capacity)
 				return;
-			}
-		}
-		if (call[1] && call.u32(2))
-			call.put_wide(call[1], u"", call.u32(2));
+			if (wide) call.put_wide(address, widen_ascii(std::string(text)), capacity);
+			else call.put_narrow(address, std::string(text), capacity);
+		};
+		put_text(call[1], call.u32(2), "");
 		if (call[3])
 			call.store<uint32_t>(call[3], 0x52415645);
 		if (call[4])
 			call.store<uint32_t>(call[4], 255);
 		if (call[5])
 			call.store<uint32_t>(call[5], 0x0000000f);
-		if (call[6] && call.u32(7))
-			call.put_wide(call[6], u"NTFS", call.u32(7));
+		put_text(call[6], call.u32(7), "NTFS");
 		call.ret(1);
-	});
-	registry.add("GetVolumeInformationA", 8, [&context](ApiCall &call) {
-		if (call[0]) {
-			const auto root = context.paths.resolve(widen_ascii(call.narrow(call[0], 260)));
-			if (!root || !root->exists) {
-				call.fail(3);
-				return;
+	};
+	for (const bool wide : {true, false})
+		registry.add(wide ? "GetVolumeInformationW" : "GetVolumeInformationA", 8, [&context, volume_fields, wide](ApiCall &call) {
+			if (call[0]) {
+				const auto root = context.paths.resolve(wide ? call.wide(call[0], 260) : widen_ascii(call.narrow(call[0], 260)));
+				if (!root || !root->exists) {
+					call.fail(3);
+					return;
+				}
 			}
+			volume_fields(call, wide);
+		});
+	// The volume of an open file or directory.
+	registry.add("GetVolumeInformationByHandleW", 8, [&objects, volume_fields](ApiCall &call) {
+		if (!objects.object_as<FileObject>(call[0]) && objects.descriptor(call[0]) < 0) {
+			call.fail(6);
+			return;
 		}
-		if (call[1] && call.u32(2))
-			call.put_narrow(call[1], "", call.u32(2));
-		if (call[3])
-			call.store<uint32_t>(call[3], 0x52415645);
-		if (call[4])
-			call.store<uint32_t>(call[4], 255);
-		if (call[5])
-			call.store<uint32_t>(call[5], 0x0000000f);
-		if (call[6] && call.u32(7))
-			call.put_narrow(call[6], "NTFS", call.u32(7));
-		call.ret(1);
+		volume_fields(call, true);
 	});
 	// DPI awareness contexts are the pseudo handles -1 to -5; the process is system DPI aware at 96 dots per inch.
 	const auto awareness_of = [](uint64_t context) -> int32_t {
