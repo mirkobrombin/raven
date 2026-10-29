@@ -60,6 +60,14 @@ public:
 	// The volume a drive is, by its \\?\Volume{GUID}\ name: the GUID is made from the drive letter, so a drive is the same volume
 	// every time. A path may start with that name instead of the drive.
 	static std::u16string volume_name(char16_t letter);
+	// The volume's device, \Device\HarddiskVolumeN: drive C is the first volume and the drives after it follow in letter order (A and B
+	// come last), so each letter has its own number every time.
+	static std::u16string volume_device(char16_t letter);
+	// A Win32 path in the NT namespace as the object manager names files: a drive path on its volume's device, a UNC path on the
+	// network redirector's (\Device\Mup), a folder without its closing backslash unless it is a volume's root; empty for anything else.
+	static std::u16string device_path(std::u16string_view dos);
+	// The drives the prefix has, one bit for each letter from A: C: and Z: always, and any other letter with a folder behind it.
+	uint32_t drives() const;
 
 private:
 	const NativePrefix &prefix;

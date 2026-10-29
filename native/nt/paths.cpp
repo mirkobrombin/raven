@@ -86,6 +86,38 @@ std::optional<std::u16string> NativePaths::environment_value(std::u16string_view
 	return std::nullopt;
 }
 
+std::u16string NativePaths::volume_device(char16_t letter)
+{
+	const auto number = std::to_string((letter - u'A' + 24) % 26 + 1);
+	return u"\\Device\\HarddiskVolume" + std::u16string(number.begin(), number.end());
+}
+
+std::u16string NativePaths::device_path(std::u16string_view dos)
+{
+	// A folder is named without a closing backslash, except the root of a volume.
+	if (dos.size() > 3 && (dos.back() == u'\\' || dos.back() == u'/'))
+		return device_path(dos.substr(0, dos.size() - 1));
+	if (dos.starts_with(u"\\\\?\\") || dos.starts_with(u"\\\\.\\"))
+		return dos.size() > 8 && equal_fold(dos.substr(4, 4), u"UNC\\") ? u"\\Device\\Mup" + std::u16string(dos.substr(7)) :
+			device_path(dos.substr(4));
+	if (dos.size() >= 2 && dos[1] == u':' && ((dos[0] | 0x20) >= u'a' && (dos[0] | 0x20) <= u'z'))
+		return volume_device(char16_t(dos[0] & ~0x20)) + std::u16string(dos.substr(2));
+	if (dos.size() > 2 && dos[0] == u'\\' && dos[1] == u'\\' && dos[2] != u'?' && dos[2] != u'.')
+		return u"\\Device\\Mup" + std::u16string(dos.substr(1));
+	return {};
+}
+
+uint32_t NativePaths::drives() const
+{
+	uint32_t mask = 0;
+	for (char16_t letter = u'A'; letter <= u'Z'; ++letter) {
+		const std::u16string root{letter, u':', u'\\'};
+		if (const auto resolved = resolve(root); resolved && resolved->exists)
+			mask |= 1u << (letter - u'A');
+	}
+	return mask;
+}
+
 NativePaths::NativePaths(const NativePrefix &prefix) : prefix(prefix), directory(u"C:\\")
 {
 }
