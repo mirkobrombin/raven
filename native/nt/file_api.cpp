@@ -115,6 +115,26 @@ bool wildcard(std::u16string_view pattern, std::u16string_view name)
 	return p == pattern.size();
 }
 
+// The NTSTATUS a native file call returns for the Win32 error of the call it is built on.
+uint32_t status_from_error(uint32_t error)
+{
+	switch (error) {
+	case 2: return 0xc0000034U;
+	case 3: return 0xc000003aU;
+	case 5: return 0xc0000022U;
+	case 6: return 0xc0000008U;
+	case 24: case 87: return 0xc000000dU;
+	case 32: return 0xc0000043U;
+	case 80: case 183: return 0xc0000035U;
+	case 109: case 232: return 0xc000014bU;
+	case 112: return 0xc000007fU;
+	case 123: return 0xc0000033U;
+	case 145: return 0xc0000101U;
+	case 267: return 0xc0000103U;
+	default: return 0xc0000001U;
+	}
+}
+
 FindObject::Entry entry_of(const std::filesystem::path &path, const std::u16string &name)
 {
 	FindObject::Entry entry{name, attribute_normal, 0, 0, 0, 0};
@@ -462,14 +482,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		const uint64_t count = positioned ? call.load_pointer(overlapped + width) : call.load<uint32_t>(written);
 		uint32_t status = 0;
 		if (!inner.result) {
-			switch (call.last_error()) {
-			case 6: status = 0xc0000008U; break;
-			case 5: status = 0xc0000022U; break;
-			case 87: status = 0xc000000dU; break;
-			case 112: status = 0xc000007fU; break;
-			case 109: case 232: status = 0xc000014bU; break;
-			default: status = 0xc0000001U; break;
-			}
+			status = status_from_error(call.last_error());
 			call.set_last_error(before);
 		}
 		call.store_pointer(call[4], status);
@@ -576,6 +589,127 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("NtQueryDirectoryFile", 11, query_directory);
 	registry.add("ZwQueryDirectoryFile", 11, query_directory);
+	// NtCreateFile and NtOpenFile: the object name (relative to a directory handle when one is given) becomes a Win32 path, and the
+	// disposition and options become CreateFileW's, as the NtCreateFile documentation pairs them; a directory is made first when one
+	// is asked to be created. The IO_STATUS_BLOCK says what happened to the file.
+	const auto native_create = [&registry, &context, file_of](ApiCall &call, uint32_t access, uint64_t attributes_block, uint64_t status_block,
+		uint32_t file_attributes, uint32_t share, uint32_t disposition, uint32_t options) -> uint32_t {
+		const size_t width = call.pointer_width();
+		if (!call[0] || !attributes_block || !status_block)
+			return 0xc000000dU;
+		const uint64_t root = call.load_pointer(attributes_block + width), name_block = call.load_pointer(attributes_block + 2 * width);
+		if (!name_block)
+			return 0xc0000033U;
+		const uint16_t length = call.load<uint16_t>(name_block);
+		std::u16string name(length / 2, u'\0');
+		if (length) {
+			const auto bytes = call.read(call.load_pointer(name_block + width), length);
+			std::memcpy(name.data(), bytes.data(), length);
+		}
+		const auto set_status = [&](uint32_t status, uint64_t information) {
+			call.store_pointer(status_block, status);
+			call.store_pointer(status_block + width, information);
+		};
+		std::u16string path;
+		if (root) {
+			const auto directory = file_of(root);
+			if (!directory || !directory->directory)
+				return 0xc0000008U;
+			path = directory->dos_path + (name.empty() ? u"" : u"\\" + name);
+		} else if (name.starts_with(u"\\??\\UNC\\") || name.starts_with(u"\\DosDevices\\UNC\\")) {
+			path = u"\\" + name.substr(name.find(u"UNC\\") + 3);
+		} else if (name.starts_with(u"\\??\\")) {
+			path = name.substr(4);
+		} else if (name.starts_with(u"\\DosDevices\\")) {
+			path = name.substr(12);
+		} else {
+			return 0xc000003bU;
+		}
+		constexpr uint32_t directory_file = 0x1, write_through = 0x2, sequential_only = 0x4, no_buffering = 0x8, synchronous_alert = 0x10,
+			synchronous_nonalert = 0x20, non_directory_file = 0x40, random_access = 0x800, delete_on_close = 0x1000, open_reparse_point = 0x200000;
+		// FILE_SUPERSEDE, FILE_OPEN, FILE_CREATE, FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF.
+		static constexpr uint32_t dispositions[] = {2, 3, 1, 4, 5, 2};
+		if (disposition > 5)
+			return 0xc000000dU;
+		if ((options & directory_file) && (options & non_directory_file))
+			return 0xc000000dU;
+		const auto run = [&](const char *function, std::initializer_list<uint64_t> words) {
+			const auto handler = registry.find(function);
+			if (!handler) {
+				call.set_last_error(120);
+				return uint64_t(0);
+			}
+			ApiCall inner(call.process, call.environment, std::vector<uint64_t>(words));
+			handler->second(inner);
+			return inner.result;
+		};
+		const size_t bytes = (path.size() + 1) * 2;
+		const uint64_t text = call.process.map_memory((bytes + 4095) & ~size_t(4095), PROT_READ | PROT_WRITE);
+		struct Unmap {
+			NativeProcess &process;
+			uint64_t address;
+			~Unmap() { try { process.unmap_memory(address); } catch (...) {} }
+		} unmap{call.process, text};
+		call.put_wide(text, path, path.size() + 1);
+		const uint32_t before = call.last_error();
+		bool created = false;
+		if ((options & directory_file) && (disposition == 2 || disposition == 3)) {
+			if (run("CreateDirectoryW", {text, 0}))
+				created = true;
+			else if (disposition == 2 || call.last_error() != 183)
+				goto failed;
+		}
+		{
+			uint32_t flags = (file_attributes & 0x7fa7) | 0x02000000U;
+			if (options & write_through) flags |= 0x80000000U;
+			if (options & sequential_only) flags |= 0x08000000U;
+			if (options & no_buffering) flags |= 0x20000000U;
+			if (options & random_access) flags |= 0x10000000U;
+			if (options & delete_on_close) flags |= 0x04000000U;
+			if (options & open_reparse_point) flags |= 0x00200000U;
+			if (!(options & (synchronous_alert | synchronous_nonalert))) flags |= 0x40000000U;
+			const uint32_t win32 = (options & directory_file) && (disposition == 2 || disposition == 3) ? 3 : dispositions[disposition];
+			call.set_last_error(0);
+			const uint64_t handle = run("CreateFileW", {text, access, share, 0, win32, flags, 0});
+			if (handle == UINT64_MAX || !handle)
+				goto failed;
+			const bool existed = call.last_error() == 183;
+			const auto file = file_of(handle);
+			if (file && (options & directory_file) && !file->directory) {
+				context.objects.close(handle);
+				call.set_last_error(before);
+				return 0xc0000103U;
+			}
+			if (file && (options & non_directory_file) && file->directory) {
+				context.objects.close(handle);
+				call.set_last_error(before);
+				return 0xc00000baU;
+			}
+			// FILE_SUPERSEDED 0, FILE_OPENED 1, FILE_CREATED 2, FILE_OVERWRITTEN 3.
+			uint64_t information = 1;
+			switch (disposition) {
+			case 0: information = existed ? 0 : 2; break;
+			case 2: information = 2; break;
+			case 3: information = (options & directory_file) ? (created ? 2 : 1) : (existed ? 1 : 2); break;
+			case 4: information = 3; break;
+			case 5: information = existed ? 3 : 2; break;
+			}
+			call.store_pointer(call[0], handle);
+			set_status(0, information);
+			call.set_last_error(before);
+			return 0;
+		}
+	failed:
+		const uint32_t error = call.last_error();
+		call.set_last_error(before);
+		return status_from_error(error);
+	};
+	registry.add("NtCreateFile", 11, [native_create](ApiCall &call) {
+		call.ret(native_create(call, call.u32(1), call[2], call[3], call.u32(5), call.u32(6), call.u32(7), call.u32(8)));
+	});
+	registry.add("NtOpenFile", 6, [native_create](ApiCall &call) {
+		call.ret(native_create(call, call.u32(1), call[2], call[3], 0, call.u32(4), 1, call.u32(5)));
+	});
 	// No file is encrypted: decrypting one that exists has nothing to do, and encryption is not offered.
 	const auto decrypt = [&, resolve](ApiCall &call, bool wide) {
 		const auto name = wide ? call.wide(call[0]) : from_utf8(call.narrow(call[0]));
