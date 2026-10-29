@@ -4,6 +4,7 @@
 #include "elevation.h"
 #include "hash.h"
 #include "host_names.h"
+#include "file_objects.h"
 #include "kernel_context.h"
 #include "system_exports.h"
 
@@ -283,13 +284,44 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(1);
 		});
 
-	// mpr, the network provider router: the machine has no network drives or shares, so enumeration finds no network and a drive or
-	// path has no remote connection, the answers Windows gives on a machine that is not connected.
+	// mpr, the network provider router: the machine has no network drives or shares, so an enumeration of the connected, remembered
+	// or browsable resources opens and finds nothing, and a drive or path has no remote connection. Each function returns its error and
+	// also sets it as the last error, which callers that read GetLastError take.
+	const auto network_error = [](ApiCall &call, uint32_t error) { call.fail(error, error); };
 	for (const char *name : {"WNetOpenEnumW", "WNetOpenEnumA"})
-		registry.add(name, 5, [](ApiCall &call) { call.ret(1222); });
+		registry.add(name, 5, [&context, network_error](ApiCall &call) {
+			const uint32_t scope = call.u32(0);
+			if (!call[4] || scope < 1 || scope > 5) {
+				network_error(call, 87);
+				return;
+			}
+			const auto made = context.objects.add_object(std::make_shared<FindObject>());
+			if (made.status) {
+				network_error(call, 8);
+				return;
+			}
+			call.store_pointer(call[4], made.value);
+			call.set_last_error(0);
+			call.ret(0);
+		});
 	for (const char *name : {"WNetEnumResourceW", "WNetEnumResourceA"})
-		registry.add(name, 4, [](ApiCall &call) { call.ret(6); });
-	registry.add("WNetCloseEnum", 1, [](ApiCall &call) { call.ret(6); });
+		registry.add(name, 4, [&context, network_error](ApiCall &call) {
+			if (!context.objects.object_as<FindObject>(call[0])) {
+				network_error(call, 6);
+				return;
+			}
+			if (call[1])
+				call.store<uint32_t>(call[1], 0);
+			network_error(call, 259);
+		});
+	registry.add("WNetCloseEnum", 1, [&context, network_error](ApiCall &call) {
+		if (!context.objects.object_as<FindObject>(call[0]) || context.objects.close(call[0])) {
+			network_error(call, 6);
+			return;
+		}
+		call.set_last_error(0);
+		call.ret(0);
+	});
 	for (const char *name : {"WNetGetConnectionW", "WNetGetConnectionA"})
 		registry.add(name, 3, [](ApiCall &call) { call.ret(2250); });
 	for (const char *name : {"WNetGetUniversalNameW", "WNetGetUniversalNameA"})
