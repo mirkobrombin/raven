@@ -1,5 +1,6 @@
 #include "vulkan_marshal.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 
@@ -191,9 +192,13 @@ uint64_t Marshal::token(H type, uint64_t host_handle)
 void Marshal::forget(uint64_t token_value)
 {
 	if (const auto surface = bridge.surface_windows.find(token_value); surface != bridge.surface_windows.end()) {
-		if (bridge.surface_source.release)
-			bridge.surface_source.release(surface->second);
+		const auto window = surface->second;
 		bridge.surface_windows.erase(surface);
+		// A program may make several surfaces over one window; they all render to the window's one host surface, which goes with the last.
+		const bool shared = std::any_of(bridge.surface_windows.begin(), bridge.surface_windows.end(),
+			[window](const auto &entry) { return entry.second == window; });
+		if (bridge.surface_source.release && !shared)
+			bridge.surface_source.release(window);
 		bridge.surface_instances.erase(token_value);
 		bridge.foreign_surfaces.erase(token_value);
 	}

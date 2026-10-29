@@ -127,7 +127,8 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			}
 #endif
 			status = static_cast<uint32_t>(created);
-			if (created != VK_SUCCESS && surface_source.release) {
+			const bool shared = std::any_of(surface_windows.begin(), surface_windows.end(), [window](const auto &entry) { return entry.second == window; });
+			if (created != VK_SUCCESS && surface_source.release && !shared) {
 				surface_source.release(window);
 			}
 		} else if (foreign_window_size(window)) {
