@@ -99,6 +99,24 @@ int raven_entry(void)
 	if (WsSetInput(reader, &encoding.encoding, &flat_input.input, NULL, 0, error) ||
 		WsReadType(reader, WS_ELEMENT_TYPE_MAPPING, WS_STRUCT_TYPE, &list_type, WS_READ_REQUIRED_VALUE, heap, &list, sizeof(list), error) ||
 		list.count != 20 || !same(list.items[19], L"")) return 16;
+	{
+		/* Times convert between the two counts, and XML strings compare by their bytes. */
+		FILETIME file = {0x2a3b4c5d, 0x01d9e8f7}, back;
+		WS_DATETIME time;
+		WS_XML_STRING left = NAME("item"), right = NAME("item"), other = NAME("items");
+		if (WsFileTimeToDateTime(&file, &time, error) || time.format != WS_DATETIME_FORMAT_UTC ||
+			time.ticks != ((ULONGLONG)file.dwHighDateTime << 32 | file.dwLowDateTime) + 504911232000000000ULL ||
+			WsDateTimeToFileTime(&time, &back, error) || back.dwLowDateTime != file.dwLowDateTime || back.dwHighDateTime != file.dwHighDateTime) return 17;
+		time.ticks = 5;
+		if (WsDateTimeToFileTime(&time, &back, error) == S_OK) return 18;
+		if (WsXmlStringEquals(&left, &right, error) != S_OK || WsXmlStringEquals(&left, &other, error) != S_FALSE) return 19;
+	}
+	{
+		/* A service a program cannot reach: no proxy is made, and the call says why. */
+		WS_SERVICE_PROXY *proxy = (WS_SERVICE_PROXY *)1;
+		if (WsCreateServiceProxy(WS_CHANNEL_TYPE_REQUEST, WS_HTTP_CHANNEL_BINDING, NULL, NULL, 0, NULL, 0, &proxy, error) != E_NOTIMPL || proxy) return 20;
+		WsFreeServiceProxy(NULL);
+	}
 	WsFreeReader(reader);
 	WsFreeHeap(heap);
 	WsFreeError(error);

@@ -9,7 +9,8 @@
  * values from the type descriptions a program passes, allocating what they point to from a WS_HEAP. Element fields are matched by
  * name wherever they stand among the children of their element.
  *
- * Writers exist so that programs can create and free them; they write nothing yet. Channels, messages and services are not here.
+ * Writers exist so that programs can create and free them; they write nothing yet. Channels, messages and services are not here:
+ * creating one fails with E_NOTIMPL, as a service that cannot be reached, and the operations on them refuse what they are given.
  *
  * This is Raven code on the public Windows headers and the documentation of the API. */
 #define WIN32_LEAN_AND_MEAN
@@ -1446,6 +1447,179 @@ EXPORT void WINAPI WsFreeWriter(WS_XML_WRITER *writer)
 	if (writer)
 		HeapFree(GetProcessHeap(), 0, writer);
 }
+
+/* Times: a WS_DATETIME counts 100-nanosecond ticks from the start of the year 1, a FILETIME from the start of 1601. */
+#define FILETIME_START 504911232000000000ULL
+#define DATETIME_LAST 0x2bca2875f4373fffULL
+#ifndef WS_E_NUMERIC_OVERFLOW
+#define WS_E_NUMERIC_OVERFLOW ((HRESULT)0x803d0002)
+#endif
+
+EXPORT HRESULT WINAPI WsDateTimeToFileTime(const WS_DATETIME *time, FILETIME *out, WS_ERROR *error)
+{
+	ULONGLONG ticks;
+	if (!time || !out)
+		return E_INVALIDARG;
+	if (time->ticks < FILETIME_START)
+		return failed(error, WS_E_NUMERIC_OVERFLOW, L"The time is before the first time a FILETIME holds.");
+	ticks = time->ticks - FILETIME_START;
+	out->dwLowDateTime = (DWORD)ticks;
+	out->dwHighDateTime = (DWORD)(ticks >> 32);
+	return S_OK;
+}
+
+EXPORT HRESULT WINAPI WsFileTimeToDateTime(const FILETIME *time, WS_DATETIME *out, WS_ERROR *error)
+{
+	ULONGLONG ticks;
+	if (!time || !out)
+		return E_INVALIDARG;
+	ticks = (ULONGLONG)time->dwHighDateTime << 32 | time->dwLowDateTime;
+	if (ticks > DATETIME_LAST - FILETIME_START)
+		return failed(error, WS_E_NUMERIC_OVERFLOW, L"The time is past the last time a WS_DATETIME holds.");
+	out->ticks = ticks + FILETIME_START;
+	out->format = WS_DATETIME_FORMAT_UTC;
+	return S_OK;
+}
+
+/* Two XML strings are equal when their bytes are. */
+EXPORT HRESULT WINAPI WsXmlStringEquals(const WS_XML_STRING *first, const WS_XML_STRING *second, WS_ERROR *error)
+{
+	if (!first || !second)
+		return E_INVALIDARG;
+	return same_text((struct text){(const char *)first->bytes, first->length}, (const char *)second->bytes, second->length) ? S_OK : S_FALSE;
+}
+
+/* Channels, messages and service proxies are not here: creating one fails, so no call ever reaches the operations on them, and
+ * a program sees a service it cannot reach. Node by node reading and writing are not here either. */
+static HRESULT unavailable(WS_ERROR *error)
+{
+	return failed(error, E_NOTIMPL, L"This part of the Web Services API is not available.");
+}
+
+EXPORT HRESULT WINAPI WsCreateServiceProxy(const WS_CHANNEL_TYPE type, const WS_CHANNEL_BINDING binding, const WS_SECURITY_DESCRIPTION *security,
+	const WS_PROXY_PROPERTY *properties, const ULONG count, const WS_CHANNEL_PROPERTY *channel_properties, const ULONG channel_count,
+	WS_SERVICE_PROXY **out, WS_ERROR *error)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	return unavailable(error);
+}
+
+EXPORT HRESULT WINAPI WsCreateServiceProxyFromTemplate(WS_CHANNEL_TYPE type, const WS_PROXY_PROPERTY *properties, const ULONG count,
+	WS_BINDING_TEMPLATE_TYPE template_type, void *template_value, ULONG template_size, const void *description, ULONG description_size,
+	WS_SERVICE_PROXY **out, WS_ERROR *error)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	return unavailable(error);
+}
+
+EXPORT HRESULT WINAPI WsCreateChannel(WS_CHANNEL_TYPE type, WS_CHANNEL_BINDING binding, const WS_CHANNEL_PROPERTY *properties, ULONG count,
+	const WS_SECURITY_DESCRIPTION *security, WS_CHANNEL **out, WS_ERROR *error)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	return unavailable(error);
+}
+
+EXPORT HRESULT WINAPI WsCreateMessageForChannel(WS_CHANNEL *channel, const WS_MESSAGE_PROPERTY *properties, ULONG count, WS_MESSAGE **out,
+	WS_ERROR *error)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	return channel ? unavailable(error) : E_INVALIDARG;
+}
+
+EXPORT void WINAPI WsFreeServiceProxy(WS_SERVICE_PROXY *proxy) {}
+EXPORT void WINAPI WsFreeChannel(WS_CHANNEL *channel) {}
+EXPORT void WINAPI WsFreeMessage(WS_MESSAGE *message) {}
+
+/* No proxy, channel or message exists, so whatever these are handed was not made here. */
+#define NO_OBJECT(object) return (object) ? unavailable(error) : E_INVALIDARG
+
+EXPORT HRESULT WINAPI WsOpenServiceProxy(WS_SERVICE_PROXY *proxy, const WS_ENDPOINT_ADDRESS *address, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(proxy); }
+EXPORT HRESULT WINAPI WsCloseServiceProxy(WS_SERVICE_PROXY *proxy, const WS_ASYNC_CONTEXT *context, WS_ERROR *error) { NO_OBJECT(proxy); }
+EXPORT HRESULT WINAPI WsAbortServiceProxy(WS_SERVICE_PROXY *proxy, WS_ERROR *error) { NO_OBJECT(proxy); }
+EXPORT HRESULT WINAPI WsCall(WS_SERVICE_PROXY *proxy, const WS_OPERATION_DESCRIPTION *operation, const void **arguments, WS_HEAP *heap,
+	const WS_CALL_PROPERTY *properties, const ULONG count, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(proxy); }
+EXPORT HRESULT WINAPI WsOpenChannel(WS_CHANNEL *channel, const WS_ENDPOINT_ADDRESS *address, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(channel); }
+EXPORT HRESULT WINAPI WsCloseChannel(WS_CHANNEL *channel, const WS_ASYNC_CONTEXT *context, WS_ERROR *error) { NO_OBJECT(channel); }
+EXPORT HRESULT WINAPI WsAbortChannel(WS_CHANNEL *channel, WS_ERROR *error) { NO_OBJECT(channel); }
+EXPORT HRESULT WINAPI WsResetChannel(WS_CHANNEL *channel, WS_ERROR *error) { NO_OBJECT(channel); }
+EXPORT HRESULT WINAPI WsGetChannelProperty(WS_CHANNEL *channel, WS_CHANNEL_PROPERTY_ID id, void *value, ULONG size, WS_ERROR *error)
+{ NO_OBJECT(channel); }
+EXPORT HRESULT WINAPI WsInitializeMessage(WS_MESSAGE *message, WS_MESSAGE_INITIALIZATION initialization, WS_MESSAGE *source, WS_ERROR *error)
+{ NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsResetMessage(WS_MESSAGE *message, WS_ERROR *error) { NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsGetMessageProperty(WS_MESSAGE *message, WS_MESSAGE_PROPERTY_ID id, void *value, ULONG size, WS_ERROR *error)
+{ NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsAddMappedHeader(WS_MESSAGE *message, const WS_XML_STRING *name, WS_TYPE type, WS_WRITE_OPTION option, const void *value,
+	ULONG size, WS_ERROR *error)
+{ NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsGetMappedHeader(WS_MESSAGE *message, const WS_XML_STRING *name, WS_REPEATING_HEADER_OPTION repeating, ULONG index,
+	WS_TYPE type, WS_READ_OPTION option, WS_HEAP *heap, void *value, ULONG size, WS_ERROR *error)
+{ NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsSetHeader(WS_MESSAGE *message, WS_HEADER_TYPE header, WS_TYPE type, WS_WRITE_OPTION option, const void *value, ULONG size,
+	WS_ERROR *error)
+{ NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsAddCustomHeader(WS_MESSAGE *message, const WS_ELEMENT_DESCRIPTION *element, WS_WRITE_OPTION option, const void *value,
+	ULONG size, ULONG attributes, WS_ERROR *error)
+{ NO_OBJECT(message); }
+EXPORT HRESULT WINAPI WsWriteMessageStart(WS_CHANNEL *channel, WS_MESSAGE *message, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(channel && message); }
+EXPORT HRESULT WINAPI WsWriteMessageEnd(WS_CHANNEL *channel, WS_MESSAGE *message, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(channel && message); }
+EXPORT HRESULT WINAPI WsReadMessageStart(WS_CHANNEL *channel, WS_MESSAGE *message, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(channel && message); }
+EXPORT HRESULT WINAPI WsReadMessageEnd(WS_CHANNEL *channel, WS_MESSAGE *message, const WS_ASYNC_CONTEXT *context, WS_ERROR *error)
+{ NO_OBJECT(channel && message); }
+EXPORT HRESULT WINAPI WsAbandonMessage(WS_CHANNEL *channel, WS_MESSAGE *message, WS_ERROR *error) { NO_OBJECT(channel && message); }
+
+/* No call reaches a service, so no error holds a fault. */
+EXPORT HRESULT WINAPI WsGetFaultErrorDetail(WS_ERROR *error, const WS_FAULT_DETAIL_DESCRIPTION *description, WS_READ_OPTION option,
+	WS_HEAP *heap, void *value, ULONG size)
+{
+	return error && description && value ? unavailable(NULL) : E_INVALIDARG;
+}
+
+EXPORT HRESULT WINAPI WsReadNode(WS_XML_READER *reader, WS_ERROR *error) { NO_OBJECT(reader); }
+EXPORT HRESULT WINAPI WsGetReaderNode(WS_XML_READER *reader, const WS_XML_NODE **node, WS_ERROR *error) { NO_OBJECT(reader && node); }
+EXPORT HRESULT WINAPI WsReadChars(WS_XML_READER *reader, WCHAR *chars, ULONG count, ULONG *done, WS_ERROR *error) { NO_OBJECT(reader); }
+EXPORT HRESULT WINAPI WsReadBytes(WS_XML_READER *reader, void *bytes, ULONG count, ULONG *done, WS_ERROR *error) { NO_OBJECT(reader); }
+EXPORT HRESULT WINAPI WsFindAttribute(WS_XML_READER *reader, const WS_XML_STRING *local, const WS_XML_STRING *ns, WINBOOL required, ULONG *index,
+	WS_ERROR *error)
+{ NO_OBJECT(reader); }
+EXPORT HRESULT WINAPI WsReadStartAttribute(WS_XML_READER *reader, ULONG index, WS_ERROR *error) { NO_OBJECT(reader); }
+EXPORT HRESULT WINAPI WsReadEndAttribute(WS_XML_READER *reader, WS_ERROR *error) { NO_OBJECT(reader); }
+EXPORT HRESULT WINAPI WsSetInputToBuffer(WS_XML_READER *reader, WS_XML_BUFFER *buffer, const WS_XML_READER_PROPERTY *properties, ULONG count,
+	WS_ERROR *error)
+{ NO_OBJECT(reader && buffer); }
+EXPORT HRESULT WINAPI WsSetOutput(WS_XML_WRITER *writer, const WS_XML_WRITER_ENCODING *encoding, const WS_XML_WRITER_OUTPUT *output,
+	const WS_XML_WRITER_PROPERTY *properties, ULONG count, WS_ERROR *error)
+{ NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsGetWriterProperty(WS_XML_WRITER *writer, WS_XML_WRITER_PROPERTY_ID id, void *value, ULONG size, WS_ERROR *error)
+{ NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteStartElement(WS_XML_WRITER *writer, const WS_XML_STRING *prefix, const WS_XML_STRING *local, const WS_XML_STRING *ns,
+	WS_ERROR *error)
+{ NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteEndElement(WS_XML_WRITER *writer, WS_ERROR *error) { NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteStartAttribute(WS_XML_WRITER *writer, const WS_XML_STRING *prefix, const WS_XML_STRING *local, const WS_XML_STRING *ns,
+	WINBOOL single_quote, WS_ERROR *error)
+{ NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteEndAttribute(WS_XML_WRITER *writer, WS_ERROR *error) { NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteChars(WS_XML_WRITER *writer, const WCHAR *chars, ULONG count, WS_ERROR *error) { NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteBytes(WS_XML_WRITER *writer, const void *bytes, ULONG count, WS_ERROR *error) { NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsPullBytes(WS_XML_WRITER *writer, void *callback, void *state, WS_ERROR *error) { NO_OBJECT(writer); }
+EXPORT HRESULT WINAPI WsWriteType(WS_XML_WRITER *writer, WS_TYPE_MAPPING mapping, WS_TYPE type, const void *description, WS_WRITE_OPTION option,
+	const void *value, ULONG size, WS_ERROR *error)
+{ NO_OBJECT(writer); }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
