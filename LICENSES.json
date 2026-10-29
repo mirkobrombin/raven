@@ -203,7 +203,8 @@
     {
       "name": "Windows.Web.Http interface definitions",
       "paths": [
-        "native/upstream/raven-web/windows.web.http.idl"
+        "native/upstream/raven-web/windows.web.http.idl",
+        "native/upstream/raven-web/windows.web.http.head.idl"
       ],
       "license": "MIT",
       "review": "pending-maintainer-review",

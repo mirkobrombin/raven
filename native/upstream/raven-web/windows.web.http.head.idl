@@ -1,0 +1,95 @@
+/*
+ * The Windows.Web.Http, Windows.Web.Http.Headers and Windows.Web.Http.Filters namespaces of the Windows Runtime, for widl.
+ *
+ * Written by scripts/generate-winrt-idl.py from Microsoft's published Windows metadata as the windows-rs project distributes it
+ * (https://github.com/microsoft/windows-rs, revision 58217a690d6256ee229044a174de67d72d28bc35), under its MIT licence: Copyright (c)
+ * Microsoft Corporation; the licence text is LICENSES/MIT.txt. Edit windows.web.http.head.idl, which holds this part, and rerun the
+ * script rather than editing the output. The types of other namespaces that Wine's IDL files do not define are declared at their
+ * minimum: an identifier for generic instantiations, enumeration values.
+ */
+
+#ifdef __WIDL__
+#pragma winrt ns_prefix
+#endif
+
+import "inspectable.idl";
+import "asyncinfo.idl";
+import "eventtoken.idl";
+import "windowscontracts.idl";
+import "windows.foundation.idl";
+import "windows.storage.streams.idl";
+import "windows.networking.idl";
+import "windows.system.idl";
+import "windows.globalization.idl";
+
+namespace Windows.Security.Cryptography.Certificates {
+    typedef enum ChainValidationResult ChainValidationResult;
+
+    interface ICertificate;
+    runtimeclass Certificate;
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    enum ChainValidationResult
+    {
+        Success = 0,
+        Untrusted = 1,
+        Revoked = 2,
+        Expired = 3,
+        IncompleteChain = 4,
+        InvalidSignature = 5,
+        WrongUsage = 6,
+        InvalidName = 7,
+        InvalidCertificateAuthorityPolicy = 8,
+        BasicConstraintsError = 9,
+        UnknownCriticalExtension = 10,
+        RevocationInformationMissing = 11,
+        RevocationFailure = 12,
+        OtherErrors = 13
+    };
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        uuid(333f740c-04d8-43b3-b278-8c5fcc9be5a0)
+    ]
+    interface ICertificate : IInspectable
+    {
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    runtimeclass Certificate
+    {
+        [default] interface Windows.Security.Cryptography.Certificates.ICertificate;
+    }
+}
+
+namespace Windows.Security.Credentials {
+    interface IPasswordCredential;
+    runtimeclass PasswordCredential;
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        uuid(6ab18989-c720-41a7-a6c1-feadb36329a0)
+    ]
+    interface IPasswordCredential : IInspectable
+    {
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    runtimeclass PasswordCredential
+    {
+        [default] interface Windows.Security.Credentials.IPasswordCredential;
+    }
+}
+
+namespace Windows.Networking.Sockets {
+    typedef enum SocketSslErrorSeverity SocketSslErrorSeverity;
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    enum SocketSslErrorSeverity
+    {
+        None = 0,
+        Ignorable = 1,
+        Fatal = 2
+    };
+}
+

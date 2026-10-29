@@ -1,11 +1,11 @@
 /*
  * The Windows.Web.Http, Windows.Web.Http.Headers and Windows.Web.Http.Filters namespaces of the Windows Runtime, for widl.
  *
- * Interface identifiers, method order and signatures follow Microsoft's published Windows metadata as the windows-rs project
- * distributes it (https://github.com/microsoft/windows-rs, crates/libs/windows/src/Windows/Web/Http, revision
- * 58217a690d6256ee229044a174de67d72d28bc35), under its MIT licence: Copyright (c) Microsoft Corporation; the licence text is
- * LICENSES/MIT.txt. Every method's arity and indirection was checked against the vtable layouts there. The types of other namespaces
- * that Wine's IDL files do not define are declared at their minimum: an identifier for generic instantiations, enumeration values.
+ * Written by scripts/generate-winrt-idl.py from Microsoft's published Windows metadata as the windows-rs project distributes it
+ * (https://github.com/microsoft/windows-rs, revision 58217a690d6256ee229044a174de67d72d28bc35), under its MIT licence: Copyright (c)
+ * Microsoft Corporation; the licence text is LICENSES/MIT.txt. Edit windows.web.http.head.idl, which holds this part, and rerun the
+ * script rather than editing the output. The types of other namespaces that Wine's IDL files do not define are declared at their
+ * minimum: an identifier for generic instantiations, enumeration values.
  */
 
 #ifdef __WIDL__
