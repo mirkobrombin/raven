@@ -366,11 +366,11 @@ static HRESULT WINAPI point_container(IConnectionPoint *iface, IConnectionPointC
 
 static HRESULT WINAPI point_advise(IConnectionPoint *iface, IUnknown *sink, DWORD *cookie)
 {
-	IUnknown *events;
+	IUnknown *events = NULL;
 	if (!sink || !cookie)
 		return E_POINTER;
 	*cookie = 0;
-	if (FAILED(IUnknown_QueryInterface(sink, &((point *)iface)->kind, (void **)&events)))
+	if (FAILED(IUnknown_QueryInterface(sink, &((point *)iface)->kind, (void **)&events)) || !events)
 		return CONNECT_E_CANNOTCONNECT;
 	IUnknown_Release(events);
 	*cookie = (DWORD)InterlockedIncrement(&cookies);

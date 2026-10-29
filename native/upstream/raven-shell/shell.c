@@ -831,6 +831,29 @@ HRESULT WINAPI CoCreateInstanceEx(REFCLSID clsid, LPUNKNOWN outer, DWORD context
 	return found == count ? S_OK : found ? CO_S_NOTALLINTERFACES : E_NOINTERFACE;
 }
 
+/* shlwapi's table-driven QueryInterface: each entry gives an interface and the offset of its pointer from the object, a null identifier
+ * ends the table, and IUnknown is the first entry's pointer. */
+typedef struct {
+	const IID *iid;
+	DWORD offset;
+} interface_entry;
+
+HRESULT WINAPI QISearch(void *object, const interface_entry *table, REFIID iid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!object || !table || !iid)
+		return E_POINTER;
+	for (const interface_entry *entry = table; entry->iid; ++entry)
+		if (same_iid(iid, entry->iid) || (entry == table && same_iid(iid, &IID_IUnknown))) {
+			*out = (BYTE *)object + entry->offset;
+			IUnknown_AddRef((IUnknown *)*out);
+			return S_OK;
+		}
+	return E_NOINTERFACE;
+}
+
 /* shlwapi names this export by its ordinal (176): ask an object for a service through its service provider. */
 HRESULT WINAPI IUnknown_QueryService(IUnknown *object, REFGUID service, REFIID iid, void **out)
 {

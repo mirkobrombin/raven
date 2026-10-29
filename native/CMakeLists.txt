@@ -2899,6 +2899,33 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(uisettings_fixture ALL DEPENDS ${uisettings_client} uisettings_component)
                 add_test(NAME native_uisettings_x64 COMMAND raven --run-process --execution=native ${uisettings_client})
                 set_tests_properties(native_uisettings_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                # raven-twinapi.dll, system classes of the Windows Runtime for each width: Raven code on public metadata.
+                set(twinapi_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-twinapi)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll
+                        ${twinapi_source}/twinapi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
+                        ${twinapi_source}/twinapi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lkernel32 -lgcc
+                    DEPENDS ${twinapi_source}/twinapi.c VERBATIM)
+                add_custom_target(twinapi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
+                foreach(width 64 32)
+                    set(twinapi_client ${CMAKE_CURRENT_BINARY_DIR}/twinapi-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(twinapi_compiler ${RAVEN_MINGW64})
+                        set(twinapi_entry raven_entry)
+                    else()
+                        set(twinapi_compiler ${RAVEN_MINGW32})
+                        set(twinapi_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${twinapi_client}
+                        COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp
+                            -o ${twinapi_client} ${LOADER_SOURCES}/twinapi_client.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lole32 -lruntimeobject -lshlwapi -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/twinapi_client.c VERBATIM)
+                    add_custom_target(twinapi_fixture${width} ALL DEPENDS ${twinapi_client} twinapi_component)
+                    add_test(NAME native_twinapi_x${width} COMMAND raven --run-process --execution=native ${twinapi_client})
+                    set_tests_properties(native_twinapi_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
                 foreach(width 64 32)
                     set(deployment_client ${CMAKE_CURRENT_BINARY_DIR}/deployment-client${width}.exe)
                     if(width EQUAL 64)
