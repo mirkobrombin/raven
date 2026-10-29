@@ -1130,6 +1130,70 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("GetBestInterface", 2, best_interface);
 	registry.add("GetBestInterfaceEx", 2, best_interface);
+	// GetBestRoute2: the host's own choice of route, found by connecting a datagram socket to the destination (which sends nothing):
+	// the address it is bound to is the best source, and the adapter holding that address the interface. The MIB_IPFORWARD_ROW2 names
+	// that interface and the destination as a host route; the next hop is not known from here and stays unspecified.
+	registry.add("GetBestRoute2", 7, [](ApiCall &call) {
+		if (!call[3] || !call[5] || !call[6]) {
+			call.ret(87);
+			return;
+		}
+		auto destination = call.read(call[3], 28);
+		const uint16_t windows_family = uint16_t(destination[0] | destination[1] << 8);
+		const int family = windows_family == 2 ? AF_INET : windows_family == 23 ? AF_INET6 : -1;
+		if (family < 0) {
+			call.ret(87);
+			return;
+		}
+		sockaddr_storage target{};
+		std::memcpy(&target, destination.data(), family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
+		target.ss_family = sa_family_t(family);
+		const int probe = ::socket(family, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+		sockaddr_storage source{};
+		socklen_t length = sizeof(source);
+		const socklen_t size = family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+		if (family == AF_INET) reinterpret_cast<sockaddr_in &>(target).sin_port = htons(9);
+		else reinterpret_cast<sockaddr_in6 &>(target).sin6_port = htons(9);
+		const bool routed = probe >= 0 && !::connect(probe, reinterpret_cast<const sockaddr *>(&target), size) &&
+			!::getsockname(probe, reinterpret_cast<sockaddr *>(&source), &length);
+		if (probe >= 0)
+			::close(probe);
+		if (!routed) {
+			call.ret(1231);
+			return;
+		}
+		uint32_t index = 0, type = 0;
+		for (const auto &adapter : host_adapters(0))
+			for (const auto &address : adapter.unicast)
+				if (address.socket_address.size() >= (family == AF_INET ? 8u : 24u) &&
+					std::memcmp(address.socket_address.data() + (family == AF_INET ? 4 : 8),
+						family == AF_INET ? static_cast<const void *>(&reinterpret_cast<sockaddr_in &>(source).sin_addr)
+										  : static_cast<const void *>(&reinterpret_cast<sockaddr_in6 &>(source).sin6_addr),
+						family == AF_INET ? 4 : 16) == 0) {
+					index = adapter.index;
+					type = adapter.type;
+				}
+		std::vector<uint8_t> best(28, 0);
+		std::memcpy(best.data(), &source, size);
+		best[0] = uint8_t(windows_family);
+		best[1] = 0;
+		best[2] = best[3] = 0;
+		call.write(call[6], best);
+		// MIB_IPFORWARD_ROW2: the interface LUID and index, the destination prefix (address and length), the next hop, then the
+		// lifetimes, metric, protocol and flags.
+		std::vector<uint8_t> row(104, 0);
+		const uint64_t luid = uint64_t(type) << 48 | uint64_t(index) << 24;
+		std::memcpy(row.data(), &luid, 8);
+		std::memcpy(row.data() + 8, &index, 4);
+		std::memcpy(row.data() + 12, destination.data(), 28);
+		row[40] = family == AF_INET ? 32 : 128;
+		row[44] = uint8_t(windows_family);
+		const uint32_t forever = 0xffffffffU;
+		std::memcpy(row.data() + 76, &forever, 4);
+		std::memcpy(row.data() + 80, &forever, 4);
+		call.write(call[5], row);
+		call.ret(0);
+	});
 	// The class of human interface devices; none is present.
 	registry.add("HidD_GetHidGuid", 1, [](ApiCall &call) {
 		static const uint8_t guid[16] = {0xb2, 0x55, 0x1e, 0x4d, 0x6f, 0xf1, 0xcf, 0x11, 0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30};
