@@ -19,6 +19,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -96,8 +97,9 @@ std::string sfnt_name(FT_Face face, uint32_t id)
 // then the Win32 family and the typographic family and face. The family and face are the weight-stretch-style ones DirectWrite groups
 // by (name ids 21 and 22, else 1 and 2); GDI names a family by its Win32 name (id 1), which keeps Calibri Light or Arial Narrow apart
 // from Calibri and Arial, where FreeType's family name is the typographic one (id 16).
-// They are the fonts installed in the Windows Fonts folder of the prefix, which links the host's fonts and keeps the ones programs
-// install; without a prefix, the host's own font folders.
+// They are the fonts installed in the Windows Fonts folder of the prefix, which keeps the ones programs install, and the host's own font
+// folders, which stand for the fonts Windows ships: a prefix whose folder predates the links to them still has its system fonts. A file
+// the folder links is read once.
 std::vector<uint8_t> scan_fonts()
 {
 	static std::vector<uint8_t> cache;
@@ -108,12 +110,14 @@ std::vector<uint8_t> scan_fonts()
 	if (!freetype())
 		return cache;
 	std::error_code error;
-	std::vector<std::filesystem::path> roots{"/usr/share/fonts", "/usr/local/share/fonts"};
+	std::vector<std::filesystem::path> roots;
 	try {
 		const auto installed = NativePrefix::from_environment().root() / "drive_c" / "windows" / "Fonts";
 		if (std::filesystem::is_directory(installed, error))
-			roots = {installed};
+			roots.push_back(installed);
 	} catch (const std::exception &) {}
+	roots.insert(roots.end(), {"/usr/share/fonts", "/usr/local/share/fonts"});
+	std::set<std::filesystem::path> seen;
 	for (const auto &root : roots) {
 		if (!std::filesystem::exists(root, error))
 			continue;
@@ -124,6 +128,10 @@ std::vector<uint8_t> scan_fonts()
 			for (auto &character : extension)
 				character = char(std::tolower(character));
 			if (extension != ".ttf" && extension != ".otf" && extension != ".ttc" && extension != ".otc")
+				continue;
+			std::error_code resolving;
+			const auto target = std::filesystem::weakly_canonical(walk->path(), resolving);
+			if (!seen.insert(resolving ? walk->path() : target).second)
 				continue;
 			FT_Face probe = nullptr;
 			if (FT_New_Face(library, walk->path().c_str(), 0, &probe))
