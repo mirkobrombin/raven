@@ -1091,6 +1091,10 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	// The compatibility layer a program was started with changes the version Windows reports to it.
 	if (const auto layer = variables->values.find(u"__COMPAT_LAYER"); layer != variables->values.end())
 		activation_contexts().set_compatibility_layer(layer->second.second);
+	paths.set_search_path([variables] {
+		const auto found = variables->values.find(u"PATH");
+		return found == variables->values.end() ? std::u16string() : found->second.second;
+	});
 	context.environment_block = [variables]() {
 		std::u16string block;
 		for (const auto &[key, entry] : variables->values) {

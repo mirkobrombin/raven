@@ -42,6 +42,35 @@ std::optional<std::string> case_match(const std::filesystem::path &directory, co
 
 }
 
+std::vector<std::u16string> NativePaths::path_folders(std::u16string_view value)
+{
+	std::vector<std::u16string> folders;
+	for (size_t at = 0; at <= value.size();) {
+		const auto end = std::min(value.find(u';', at), value.size());
+		auto folder = std::u16string(value.substr(at, end - at));
+		if (folder.size() >= 2 && folder.front() == u'"' && folder.back() == u'"')
+			folder = folder.substr(1, folder.size() - 2);
+		if (!folder.empty())
+			folders.push_back(std::move(folder));
+		at = end + 1;
+	}
+	return folders;
+}
+
+std::optional<std::u16string> NativePaths::environment_value(std::u16string_view block, std::u16string_view name)
+{
+	for (size_t at = 0; at < block.size();) {
+		const auto end = std::min(block.find(u'\0', at), block.size());
+		const auto entry = block.substr(at, end - at);
+		if (entry.empty())
+			break;
+		if (entry.size() > name.size() && entry[name.size()] == u'=' && equal_fold(entry.substr(0, name.size()), name))
+			return std::u16string(entry.substr(name.size() + 1));
+		at = end + 1;
+	}
+	return std::nullopt;
+}
+
 NativePaths::NativePaths(const NativePrefix &prefix) : prefix(prefix), directory(u"C:\\")
 {
 }
@@ -257,6 +286,10 @@ std::optional<NativePaths::Resolved> NativePaths::find_library(std::u16string_vi
 		folders.push_back(u"C:\\Windows\\System");
 		folders.push_back(u"C:\\Windows");
 		if (!dll_folder) folders.push_back(directory);
+		// The standard search order ends with the folders of the PATH variable.
+		if (search_path)
+			for (auto &folder : path_folders(search_path()))
+				folders.push_back(std::move(folder));
 	}
 	for (const auto &folder : folders) {
 		const auto found = resolve(folder + u"\\" + std::u16string(name));

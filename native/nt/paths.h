@@ -49,6 +49,12 @@ public:
 	// The roots of the virtual application packages installed in the prefix, asked for when a path is missing: a file such a package
 	// keeps under its Root\VFS folder appears at the place it stands for, as the App-V file system shows it to the package's programs.
 	void set_package_roots(std::function<std::vector<std::u16string>()> source) { package_roots = std::move(source); }
+	// The program's PATH as it is now, which the standard library search ends with.
+	void set_search_path(std::function<std::u16string()> source) { search_path = std::move(source); }
+	// The folders of a PATH value: separated by semicolons, empty entries skipped, surrounding quotes removed.
+	static std::vector<std::u16string> path_folders(std::u16string_view value);
+	// The value of a variable in an environment block ("NAME=VALUE" entries each ended by a zero), the name compared without case.
+	static std::optional<std::u16string> environment_value(std::u16string_view block, std::u16string_view name);
 	// True for the DOS device names that are not files (NUL, CON, ...), optionally behind \\.\ or \\?\.
 	static bool device(std::u16string_view path);
 
@@ -58,6 +64,7 @@ private:
 	std::optional<std::u16string> dll_folder;
 	bool wow64 = false, redirecting = true;
 	std::function<std::vector<std::u16string>()> package_roots;
+	std::function<std::u16string()> search_path;
 	std::optional<std::filesystem::path> drive_root(char16_t letter) const;
 	std::optional<Resolved> resolve_direct(const std::u16string &path) const;
 	std::optional<Resolved> resolve_virtual(const std::u16string &path) const;
