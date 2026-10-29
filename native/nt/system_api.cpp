@@ -396,6 +396,20 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	};
 	// The processor state the system saves for threads: the x87 and SSE registers; programs then take the paths that need no more.
 	registry.add("GetEnabledXStateFeatures", 0, [](ApiCall &call) { call.ret(3); });
+	// Where a CONTEXT keeps an extended state feature: of the two features enabled above, the legacy floating-point state is the
+	// FXSAVE area (FltSave on x64, ExtendedRegisters on x86) and the SSE state its XMM registers. No other feature is in a context.
+	registry.add("LocateXStateFeature", 3, [](ApiCall &call) {
+		const bool wide = call.pointer_width() == 8;
+		const uint64_t save_area = call[0] + (wide ? 0x100 : 0xcc);
+		const uint32_t feature = call.u32(1);
+		if (!call[0] || feature > 1) {
+			call.ret(0);
+			return;
+		}
+		if (call[2])
+			call.store<uint32_t>(call[2], feature == 0 ? 512 : wide ? 256 : 128);
+		call.ret(feature == 0 ? save_area : save_area + 160);
+	});
 	// The number of file handles a process may have is no longer limited: the request is answered as asked.
 	registry.add("SetHandleCount", 1, [](ApiCall &call) { call.ret(call.u32(0)); });
 	registry.add("GetSystemInfo", 1, system_information);
