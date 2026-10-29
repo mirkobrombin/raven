@@ -1561,6 +1561,32 @@ void NativeProcess::pause_thread(NativeThreadState &thread)
 	forget_registers();
 }
 
+void NativeProcess::set_thread_registers(NativeThreadState &thread, const user_regs_struct &registers)
+{
+	thread.context.registers = registers;
+	if (!parallel() || (thread.stopped && !thread.context_in_task))
+		return;
+	if (thread.task <= 0)
+		throw std::runtime_error("native thread has no execution task");
+	auto &child = *state->child;
+	const pid_t caller = child.pid;
+	const bool stopped = state->stopped;
+	try {
+		child.pid = thread.task;
+		state->stopped = true;
+		forget_registers();
+		trace(PTRACE_SETREGS, child.pid, &thread.context.registers);
+	} catch (...) {
+		child.pid = caller;
+		state->stopped = stopped;
+		forget_registers();
+		throw;
+	}
+	child.pid = caller;
+	state->stopped = stopped;
+	forget_registers();
+}
+
 void NativeProcess::enter_fault_dispatch()
 {
 	state->require_stopped();

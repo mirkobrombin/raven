@@ -544,6 +544,41 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
+	// The registers of a suspended thread from a CONTEXT (x64): the control and integer groups, which it continues with when resumed. A
+	// thread that is not suspended, the caller among them, keeps its registers: Windows leaves the outcome of that undefined.
+	registry.add("SetThreadContext", 2, [thread_from, &threads, &context](ApiCall &call) {
+		if (call.pointer_width() == 4 || !call[1]) {
+			call.fail(call[1] ? 50 : 87);
+			return;
+		}
+		const auto thread = thread_from(call[0]);
+		if (!thread) {
+			call.fail(6);
+			return;
+		}
+		if (thread->id == threads.current_id() || !thread->suspend_count) {
+			call.fail(5);
+			return;
+		}
+		auto registers = thread->snapshot.context.registers;
+		const uint32_t flags = call.load<uint32_t>(call[1] + 0x30);
+		const auto get = [&](size_t at) { return call.load<uint64_t>(call[1] + at); };
+		if (flags & 0x1) {
+			// The flags a program may change: the status flags, direction and trap; the rest stay as the processor needs them.
+			registers.eflags = (registers.eflags & ~uint64_t(0xdd5)) | (call.load<uint32_t>(call[1] + 0x44) & 0xdd5);
+			registers.rsp = get(0x98);
+			registers.rbp = get(0xa0);
+			registers.rip = get(0xf8);
+		}
+		if (flags & 0x2) {
+			registers.rax = get(0x78); registers.rcx = get(0x80); registers.rdx = get(0x88); registers.rbx = get(0x90);
+			registers.rsi = get(0xa8); registers.rdi = get(0xb0);
+			registers.r8 = get(0xb8); registers.r9 = get(0xc0); registers.r10 = get(0xc8); registers.r11 = get(0xd0);
+			registers.r12 = get(0xd8); registers.r13 = get(0xe0); registers.r14 = get(0xe8); registers.r15 = get(0xf0);
+		}
+		context.process.set_thread_registers(thread->snapshot, registers);
+		call.ret(1);
+	});
 	// A thread's description is a name the program gives it; it is kept per thread and handed back in memory the program frees with LocalFree.
 	auto descriptions = std::make_shared<std::map<uint32_t, std::u16string>>();
 	registry.add("SetThreadDescription", 2, [thread_from, descriptions](ApiCall &call) {

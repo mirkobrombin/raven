@@ -130,6 +130,9 @@ public:
 	void set_execution_wait(std::function<void(std::function<bool()>, std::chrono::steady_clock::time_point)> wait);
 	void stop_thread(const NativeThreadState &thread);
 	void pause_thread(NativeThreadState &thread);
+	// The general registers a thread that is not running continues with: a thread paused in its own task gets them there, a saved
+	// thread in its snapshot (SetThreadContext on a suspended thread).
+	void set_thread_registers(NativeThreadState &thread, const user_regs_struct &registers);
 	// A fault stop becomes an API-style stop, so host code may run guest callbacks and redirect execution.
 	void enter_fault_dispatch();
 	// Continues the guest at a new context, dropping callbacks nested above depth (exception unwinding abandons them).
