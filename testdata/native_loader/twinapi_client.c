@@ -41,6 +41,7 @@ static const GUID connection_profile = {0x71ba143c, 0x598e, 0x49d0, {0x84, 0xeb,
 static const GUID profile_view = {0x6db1b492, 0x3852, 0x5df8, {0xa2, 0x9d, 0x69, 0x44, 0x00, 0x2f, 0x58, 0xd4}};
 static const GUID profile_iterable = {0x34dabef9, 0x87d0, 0x5b1c, {0xa7, 0xac, 0x9d, 0x29, 0x0a, 0xde, 0xb0, 0xc8}};
 static const GUID online_id = {0x85047792, 0xf634, 0x41e3, {0x96, 0xa4, 0x51, 0x64, 0xe9, 0x02, 0xc7, 0x40}};
+static const GUID ticket_request_factory = {0xbebb0a08, 0x9e73, 0x4077, {0x96, 0x14, 0x08, 0x61, 0x4c, 0x0b, 0xc2, 0x45}};
 static const GUID web_core = {0x6aca7c92, 0xa581, 0x4479, {0x9c, 0x10, 0x75, 0x2e, 0xff, 0x44, 0xfd, 0x34}};
 static const GUID provider_operation = {0x88c66009, 0x12f7, 0x58e2, {0x8d, 0xbe, 0x6e, 0xfc, 0x62, 0x0c, 0x85, 0xba}};
 static const GUID async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
@@ -212,6 +213,14 @@ int raven_entry(void)
 	METHOD(typed, 2, release_method)(typed);
 	METHOD(operation, 2, release_method)(operation);
 	if (!statics(L"Windows.Security.Authentication.OnlineId.OnlineIdSystemAuthenticator", &online_id)) return 27;
+	object *requests = statics(L"Windows.Security.Authentication.OnlineId.OnlineIdServiceTicketRequest", &ticket_request_factory);
+	struct reference service = {1, 12, {0, 0}, L"ssl.live.com"};
+	object *request = NULL;
+	void *named = NULL;
+	if (!requests || METHOD(requests, 6, HRESULT (WINAPI *)(object *, void *, void *, object **))(requests, &service, NULL, &request) != S_OK)
+		return 54;
+	if (METHOD(request, 6, object_method)(request, (object **)&named) != S_OK || !named) return 55;
+	METHOD(request, 2, release_method)(request);
 
 	object *core = statics(L"Windows.ApplicationModel.Core.CoreApplication", &core_application);
 	if (!core) return 28;

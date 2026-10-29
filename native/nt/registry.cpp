@@ -193,6 +193,7 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.System.Profile.RetailInfo", u"raven-twinapi.dll"}, {u"Windows.System.Profile.SharedModeSettings", u"raven-twinapi.dll"},
 		{u"Windows.Networking.Connectivity.NetworkInformation", u"raven-twinapi.dll"},
 		{u"Windows.Security.Authentication.OnlineId.OnlineIdSystemAuthenticator", u"raven-twinapi.dll"},
+		{u"Windows.Security.Authentication.OnlineId.OnlineIdServiceTicketRequest", u"raven-twinapi.dll"},
 		{u"Windows.Security.Authentication.Web.Core.WebAuthenticationCoreManager", u"raven-twinapi.dll"},
 		{u"Windows.ApplicationModel.Core.CoreApplication", u"raven-twinapi.dll"}};
 	for (const bool wow : {false, true})

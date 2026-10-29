@@ -18,6 +18,27 @@ typedef HRESULT (WINAPI *factory_function)(HSTRING, IActivationFactory **);
 
 static const IID activation_factory = {0x00000035, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
+/* A class nobody registered is named in Raven's trace, so the classes a program misses can be found. */
+static void trace_unregistered(HSTRING name)
+{
+	static void (WINAPI *raven_trace)(const char *);
+	static BOOL looked;
+	char line[200] = "winrt: no class ";
+	size_t at = 16;
+	UINT32 length = 0;
+	const WCHAR *text = WindowsGetStringRawBuffer(name, &length);
+	if (!looked) {
+		raven_trace = (void (WINAPI *)(const char *))GetProcAddress(LoadLibraryW(L"ravenhost.dll"), "RavenTrace");
+		looked = TRUE;
+	}
+	if (!raven_trace)
+		return;
+	for (UINT32 index = 0; index < length && at < ARRAYSIZE(line) - 1; ++index)
+		line[at++] = text[index] < 0x80 ? (char)text[index] : '?';
+	line[at] = 0;
+	raven_trace(line);
+}
+
 /* The library registered for a class, with environment variables expanded; FALSE when the class is not registered. */
 static BOOL class_library(HSTRING name, WCHAR *library, DWORD capacity)
 {
@@ -47,8 +68,10 @@ HRESULT WINAPI RoGetActivationFactory(HSTRING name, REFIID iid, void **out)
 	*out = NULL;
 	if (!name)
 		return E_INVALIDARG;
-	if (!class_library(name, library, MAX_PATH))
+	if (!class_library(name, library, MAX_PATH)) {
+		trace_unregistered(name);
 		return REGDB_E_CLASSNOTREG;
+	}
 	/* The library stays loaded for the objects it makes, as the runtime keeps it until the apartment ends. */
 	HMODULE module = LoadLibraryExW(library, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!module)

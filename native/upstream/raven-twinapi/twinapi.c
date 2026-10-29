@@ -48,6 +48,8 @@ static const IID iid_connection_cost = {0xbad7d829, 0x3416, 0x4b10, {0xa2, 0x02,
 static const IID iid_connection_cost2 = {0x8e113a05, 0xe209, 0x4549, {0xbb, 0x25, 0x5e, 0x0d, 0xb6, 0x91, 0xcb, 0x05}};
 static const IID iid_online_id_statics = {0x85047792, 0xf634, 0x41e3, {0x96, 0xa4, 0x51, 0x64, 0xe9, 0x02, 0xc7, 0x40}};
 static const IID iid_online_id_for_user = {0x5798befb, 0x1de4, 0x4186, {0xa2, 0xe6, 0xb5, 0x63, 0xf8, 0x6a, 0xaf, 0x44}};
+static const IID iid_ticket_request = {0x297445d3, 0xfb63, 0x4135, {0x89, 0x09, 0x4e, 0x35, 0x4c, 0x06, 0x14, 0x66}};
+static const IID iid_ticket_request_factory = {0xbebb0a08, 0x9e73, 0x4077, {0x96, 0x14, 0x08, 0x61, 0x4c, 0x0b, 0xc2, 0x45}};
 static const IID iid_ticket_result = {0xdb0a5ff8, 0xb098, 0x4acd, {0x9d, 0x13, 0x9e, 0x64, 0x06, 0x52, 0xb5, 0xb6}};
 static const IID iid_web_core = {0x6aca7c92, 0xa581, 0x4479, {0x9c, 0x10, 0x75, 0x2e, 0xff, 0x44, 0xfd, 0x34}};
 static const IID iid_web_core2 = {0xf584184a, 0x8b57, 0x4820, {0xb6, 0xa4, 0x70, 0xa5, 0xb6, 0xfc, 0xf4, 0x4a}};
@@ -109,7 +111,7 @@ static void trace(const char *first, const char *second)
 	char line[200] = "twinapi: ";
 	size_t at = 9;
 	if (!looked) {
-		raven_trace = (void (WINAPI *)(const char *))GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "RavenTrace");
+		raven_trace = (void (WINAPI *)(const char *))GetProcAddress(LoadLibraryW(L"ravenhost.dll"), "RavenTrace");
 		looked = TRUE;
 	}
 	if (!raven_trace)
@@ -1318,6 +1320,69 @@ static const struct kind online_id_kind = {"OnlineIdSystemAuthenticator", L"Wind
 	online_id_iids, NULL};
 static struct object online_id = {{online_id_factory_table.slots, online_id_statics_table.slots}, &online_id_kind, 1};
 
+/* OnlineIdServiceTicketRequest: the service and policy a ticket would be asked for, kept as given; the advanced form names no policy. */
+struct ticket_request {
+	struct object base;
+	HSTRING service, policy;
+};
+
+static void destroy_ticket_request(struct object *base)
+{
+	struct ticket_request *self = (struct ticket_request *)base;
+	WindowsDeleteString(self->service);
+	WindowsDeleteString(self->policy);
+}
+
+static HRESULT WINAPI ticket_request_service(void *iface, HSTRING *out)
+{
+	if (!out)
+		return E_POINTER;
+	return WindowsDuplicateString(((struct ticket_request *)owner(iface))->service, out);
+}
+
+static HRESULT WINAPI ticket_request_policy(void *iface, HSTRING *out)
+{
+	if (!out)
+		return E_POINTER;
+	return WindowsDuplicateString(((struct ticket_request *)owner(iface))->policy, out);
+}
+
+TABLE(ticket_request_table, 0, INSPECTABLE, (const void *)ticket_request_service, (const void *)ticket_request_policy);
+static const struct face_iid ticket_request_iids[] = {{&iid_ticket_request, 0}, {NULL, 0}};
+static const struct kind ticket_request_kind = {"OnlineIdServiceTicketRequest",
+	L"Windows.Security.Authentication.OnlineId.OnlineIdServiceTicketRequest", ticket_request_iids, destroy_ticket_request};
+
+static HRESULT ticket_request(HSTRING service, HSTRING policy, void **out)
+{
+	static const void *const *const tables[] = {ticket_request_table.slots};
+	if (!out)
+		return E_POINTER;
+	struct ticket_request *self = make(sizeof *self, &ticket_request_kind, tables, 1);
+	if (!(*out = self ? face_of(&self->base, 0) : NULL))
+		return E_OUTOFMEMORY;
+	if (FAILED(WindowsDuplicateString(service, &self->service)) || FAILED(WindowsDuplicateString(policy, &self->policy))) {
+		release(*out);
+		*out = NULL;
+		return E_OUTOFMEMORY;
+	}
+	return S_OK;
+}
+
+static HRESULT WINAPI ticket_request_create(void *iface, HSTRING service, HSTRING policy, void **out)
+{
+	return ticket_request(service, policy, out);
+}
+
+static HRESULT WINAPI ticket_request_create_advanced(void *iface, HSTRING service, void **out) { return ticket_request(service, NULL, out); }
+
+TABLE(ticket_request_factory_table, 0, FACTORY);
+TABLE(ticket_request_create_table, 1, INSPECTABLE, (const void *)ticket_request_create, (const void *)ticket_request_create_advanced);
+static const struct face_iid ticket_request_factory_iids[] = {{&iid_factory, 0}, {&iid_ticket_request_factory, 1}, {NULL, 0}};
+static const struct kind ticket_request_factory_kind = {"OnlineIdServiceTicketRequest",
+	L"Windows.Security.Authentication.OnlineId.OnlineIdServiceTicketRequest", ticket_request_factory_iids, NULL};
+static struct object ticket_request_factory = {{ticket_request_factory_table.slots, ticket_request_create_table.slots},
+	&ticket_request_factory_kind, 1};
+
 /* Windows.Security.Authentication.Web.Core: there is no web account provider. A search for one finds none, and a request names a
  * provider, which a program cannot have from this system. */
 static HRESULT no_provider(void **out) { return completed(&provider_operation, NULL, out); }
@@ -1424,7 +1489,8 @@ static const struct kind core_kind = {"CoreApplication", L"Windows.ApplicationMo
 static struct object core_application = {{core_factory_table.slots, core_table.slots, core2_table.slots, core3_table.slots,
 	core_exit_table.slots, core_immersive_table.slots, core_unhandled_table.slots}, &core_kind, 1};
 
-static struct object *const classes[] = {&retail_info, &shared_mode, &network_information, &online_id, &web_core, &core_application};
+static struct object *const classes[] = {&retail_info, &shared_mode, &network_information, &online_id, &ticket_request_factory, &web_core,
+	&core_application};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {
