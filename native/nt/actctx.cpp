@@ -213,6 +213,20 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 std::optional<ActivationContexts::Assembly> ActivationContexts::resolve(const Assembly &identity) const
 {
 	std::error_code error;
+	// A private assembly (no public key token) lives with the program, as Windows looks for it: <name>.manifest in the program's
+	// folder, then <name>\<name>.manifest; its files are beside its manifest.
+	if (identity.token.empty() && !identity.name.empty() && !application.empty())
+		for (const auto &place : {application / (identity.name + ".manifest"), application / identity.name / (identity.name + ".manifest")}) {
+			if (!std::filesystem::is_regular_file(place, error))
+				continue;
+			std::ifstream input(place, std::ios::binary);
+			const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+			auto candidate = parse(bytes, false);
+			if (!candidate || lowered(candidate->name) != lowered(identity.name))
+				continue;
+			candidate->folder = place.parent_path().string();
+			return candidate;
+		}
 	if (manifests.empty() || identity.name.empty() || !std::filesystem::is_directory(manifests, error))
 		return std::nullopt;
 	const std::string architecture = identity.architecture.empty() || identity.architecture == "*" ? (wide_process ? "amd64" : "x86") : identity.architecture;
@@ -238,11 +252,19 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::resolve(const As
 	return best;
 }
 
-void ActivationContexts::prepare(const std::filesystem::path &store, bool wide, std::string_view program_manifest)
+void ActivationContexts::prepare(const std::filesystem::path &store, bool wide, std::string_view program_manifest,
+	const std::filesystem::path &application_folder)
 {
 	manifests = store;
 	wide_process = wide;
+	application = application_folder;
 	program = program_manifest.empty() ? std::nullopt : parse(program_manifest, false);
+}
+
+std::filesystem::path ActivationContexts::folder_of(const Assembly &assembly) const
+{
+	const std::filesystem::path folder(assembly.folder);
+	return folder.is_absolute() ? folder : manifests.parent_path() / folder;
 }
 
 const ActivationContexts::Assembly *ActivationContexts::declaring(const Assembly &root, std::string_view name, uint32_t &index) const
@@ -269,7 +291,7 @@ std::optional<std::filesystem::path> ActivationContexts::library_folder(std::str
 	}
 	uint32_t index = 1;
 	if (const auto *assembly = root ? declaring(*root, name, index) : nullptr)
-		return manifests.parent_path() / assembly->folder;
+		return folder_of(*assembly);
 	return std::nullopt;
 }
 
@@ -293,7 +315,7 @@ std::optional<std::filesystem::path> ActivationContexts::assembly_folder(const A
 {
 	uint32_t index = 1;
 	if (const auto *assembly = declaring(root, name, index))
-		return manifests.parent_path() / assembly->folder;
+		return folder_of(*assembly);
 	return std::nullopt;
 }
 

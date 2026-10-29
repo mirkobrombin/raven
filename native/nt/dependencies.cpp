@@ -1,8 +1,10 @@
 #include "apiset.h"
 #include "loader.h"
 #include "memory.h"
+#include "actctx.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 
 namespace raven {
@@ -67,12 +69,26 @@ void load_initial_dependencies(ModuleSet &modules,
 							continue;
 						}
 						if (modules.all().size()>=10000) throw std::runtime_error("native DLL graph exceeds module limit");
-						auto bytes=source(identity);
+						// A library's own manifest names the side-by-side assemblies its imports come from (a private one beside the program
+						// among them): the loader looks there first, as Windows does.
+						std::optional<ModuleBytes> bytes;
+						std::filesystem::path redirected;
+						if (const auto own=activation_contexts().module_manifest(pending[index]->image))
+							if (const auto folder=activation_contexts().assembly_folder(*own,identity)) {
+								std::error_code error;
+								for (const auto &entry:std::filesystem::directory_iterator(*folder,error)) {
+									auto file=entry.path().filename().string();
+									for (auto &character:file) if (character>='A' && character<='Z') character=static_cast<char>(character+('a'-'A'));
+									if (file==identity && entry.is_regular_file(error)) { bytes=ModuleBytes::map(entry.path()); redirected=entry.path(); break; }
+								}
+							}
+						if (!bytes) bytes=source(identity);
 						if (!bytes) { if (tolerate_missing) break; throw; }
 						const PEImage image(*bytes);validate_native_image(image,identity,is_64);
 						if (!(image.characteristics & 0x2000)) throw std::runtime_error("native startup dependency must be a DLL: "+identity);
 						staged.reserve(staged.size()+1);pending.reserve(pending.size()+1);
 						auto &module=modules.add(identity,std::move(*bytes));
+						if (!redirected.empty()) module.file=redirected;
 						staged.push_back(&module);pending.push_back(&module);
 					}
 				}
