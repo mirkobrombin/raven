@@ -864,6 +864,22 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		thread->apcs.push_back({call[0], call[2]});
 		call.ret(1);
 	});
+	// QueueUserAPC2 with no flags queues the APC QueueUserAPC queues. Special user-mode APCs, which interrupt a thread that is not in
+	// an alertable wait (QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC, with or without the interrupted context), are not delivered here, so
+	// those flags are refused, as callers that test for them expect from a system without them.
+	registry.add("QueueUserAPC2", 4, [thread_from](ApiCall &call) {
+		if (call.u32(3)) {
+			call.fail(87);
+			return;
+		}
+		const auto thread = thread_from(call[1]);
+		if (!thread) {
+			call.fail(6);
+			return;
+		}
+		thread->apcs.push_back({call[0], call[2]});
+		call.ret(1);
+	});
 
 	// Waitable timers live in the process; a named one is found again by its name while a handle to it is open. A completion routine
 	// is accepted and not run: the timer still signals its waiters.
