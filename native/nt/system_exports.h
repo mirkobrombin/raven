@@ -31,6 +31,7 @@ bool program_may_replace(std::string_view dll);
 // whatever copies a program ships or an installer leaves in the system directory.
 inline constexpr std::string_view runtime_components[]{"msi.dll", "cabinet.dll", "sxs.dll", "rpcrt4.dll", "msxml3.dll", "libxslt.dll", "atl100.dll",
 	"libpng.dll", "libjpeg.dll", "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll",
-	"mscoree.dll", "taskschd.dll", "webservices.dll", "raven-accprop.dll", "raven-deployment.dll", "raven-netlist.dll", "raven-uisettings.dll", "raven-twinapi.dll", "xmllite.dll", "d3dcompiler_47.dll"};
+	"mscoree.dll", "taskschd.dll", "webservices.dll", "raven-accprop.dll", "raven-deployment.dll", "raven-netlist.dll", "raven-uisettings.dll", "raven-twinapi.dll", "xmllite.dll", "d3dcompiler_47.dll",
+	"icu.dll", "icuuc.dll", "icuin.dll"};
 
 }

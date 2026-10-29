@@ -1660,6 +1660,30 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_fold_volume_x32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/fold-volume-prefix)
         endif()
+        # ICU as Windows ships it (scripts/provision-icu.py), for 64-bit programs: icu.dll, and icuuc.dll and icuin.dll forwarding to it.
+        set(RAVEN_ICU_COMPONENT_DIR "" CACHE PATH "Directory holding icu.dll, icuuc.dll and icuin.dll built by scripts/provision-icu.py")
+        if(RAVEN_ICU_COMPONENT_DIR)
+            set(icu_copies)
+            foreach(component icu.dll icuuc.dll icuin.dll)
+                if(NOT EXISTS "${RAVEN_ICU_COMPONENT_DIR}/${component}")
+                    message(FATAL_ERROR "Configured ICU component does not exist: ${RAVEN_ICU_COMPONENT_DIR}/${component}")
+                endif()
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${component}
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_ICU_COMPONENT_DIR}/${component} ${CMAKE_CURRENT_BINARY_DIR}/${component}
+                    DEPENDS ${RAVEN_ICU_COMPONENT_DIR}/${component} VERBATIM)
+                list(APPEND icu_copies ${CMAKE_CURRENT_BINARY_DIR}/${component})
+            endforeach()
+            add_custom_target(icu_components ALL DEPENDS ${icu_copies})
+            set(ICU_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/icu-client.exe)
+            add_custom_command(OUTPUT ${ICU_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${ICU_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/icu_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/icu_client.c VERBATIM)
+            add_custom_target(icu_fixture ALL DEPENDS ${ICU_CLIENT} icu_components)
+            add_test(NAME native_icu_x64 COMMAND raven --run-process --execution=native ${ICU_CLIENT})
+            set_tests_properties(native_icu_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/icu-prefix)
+        endif()
         set(RAVEN_CONTROLS_COMPONENT_DIR "" CACHE PATH "Directory holding the common controls component built by scripts/provision-controls.py")
         # The same components built for 32-bit programs (scripts/provision-controls.py --arch x86); they sit in a directory beside the runtime.
         set(RAVEN_CONTROLS32_COMPONENT_DIR "" CACHE PATH "Directory holding the 32-bit components built by scripts/provision-controls.py --arch x86")

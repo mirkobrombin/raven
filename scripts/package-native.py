@@ -55,7 +55,7 @@ def runtime_paths(build):
         raven-uianimation.dll ucrtbase.dll raven-rtl.dll raven-storage.dll
         msi.dll cabinet.dll sxs.dll rpcrt4.dll libxslt.dll msxml3.dll atl100.dll oleaut32.dll
         libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll
-        urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll
+        urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll icu.dll icuuc.dll icuin.dll
         cmd.exe control.exe regedit.exe dism.exe fondue.exe msiexec.exe regsvr32.exe
         find.exe findstr.exe more.com sort.exe where.exe xcopy.exe attrib.exe
         timeout.exe choice.exe whoami.exe hostname.exe tasklist.exe taskkill.exe reg.exe rundll32.exe

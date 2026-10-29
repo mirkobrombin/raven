@@ -193,6 +193,18 @@
       "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
     },
     {
+      "name": "ICU",
+      "cmake_keys": [
+        "RAVEN_ICU_COMPONENT_DIR"
+      ],
+      "review": "pending-maintainer-review",
+      "revision": "79.1",
+      "provenance": "scripts/provision-icu.py and the provenance.json and licenses/ICU-LICENSE it writes beside icu.dll",
+      "source_terms": "Unicode-3.0 AND LicenseRef-ICU-third-party",
+      "distribution_license": "Unicode-3.0",
+      "boundary": "PE guest components (icu.dll, with icuuc.dll and icuin.dll forwarding to it) built unmodified from ICU4C with a subset of its prebuilt data, loaded into the supervised Windows process. No native linking into the Linux host. ICU's LICENSE file, which also carries the notices of the third-party code and data ICU includes, ships with the components."
+    },
+    {
       "name": "External build inputs",
       "license": "LicenseRef-Configuration-Dependent",
       "review": "requires-release-inventory",
