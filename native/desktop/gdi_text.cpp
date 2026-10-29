@@ -1401,6 +1401,51 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		dc->text_align = saved_align;
 		call.ret(0);
 	});
+	// ScriptGetProperties(table, count): the properties of the scripts ScriptItemize names, which is the one neutral script: no language,
+	// the ANSI character set and simple text. The table stays for the life of the process, as Uniscribe's does.
+	auto script_table = std::make_shared<uint64_t>(0);
+	registry.add("ScriptGetProperties", 2, [=, this](ApiCall &call) {
+		if (!call[0] && !call[1]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		if (!*script_table) {
+			const auto block = process.map_memory(4096, PROT_READ | PROT_WRITE);
+			if (!block) {
+				call.ret(0x8007000eU);
+				return;
+			}
+			// The array of pointers, then the eight bytes of SCRIPT_PROPERTIES the pointer names.
+			const uint64_t properties = block + 16;
+			call.write(properties, std::vector<uint8_t>(8, 0));
+			if (call.pointer_width() == 8)
+				call.store<uint64_t>(block, properties);
+			else
+				call.store<uint32_t>(block, uint32_t(properties));
+			*script_table = block;
+		}
+		if (call[0])
+			call.store_pointer(call[0], *script_table);
+		if (call[1])
+			call.store<int32_t>(call[1], 1);
+		call.ret(0);
+	});
+	// ScriptRecordDigitSubstitution(locale, SCRIPT_DIGITSUBSTITUTE): the locale's own language for national and traditional digits, and
+	// no substitution, as the locales Raven reports set it.
+	registry.add("ScriptRecordDigitSubstitution", 2, [](ApiCall &call) {
+		if (!call[1]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		const uint32_t locale = call.u32(0);
+		// The default locales stand for US English; a locale's primary language is the low ten bits of its language.
+		const uint16_t language = uint16_t((locale == 0 || locale == 0x400 || locale == 0x800 || locale == 0x7f ? 0x409 : locale) & 0x3ff);
+		const uint32_t languages = uint32_t(language) | uint32_t(language) << 16;
+		call.store<uint32_t>(call[1], languages);
+		call.store<uint32_t>(call[1] + 4, 1);
+		call.store<uint32_t>(call[1] + 8, 0);
+		call.ret(0);
+	});
 	// Word and character stops for plain text: every character is a cursor stop and a word starts after white space.
 	registry.add("ScriptBreak", 4, [=](ApiCall &call) {
 		const int32_t length = call.i32(1);

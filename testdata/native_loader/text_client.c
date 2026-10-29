@@ -74,6 +74,16 @@ int raven_entry(void)
 	WCHAR combining[]={L'e',0x0301}; SetLastError(0);
 	if(!TextOutW(dc,0,0,combining,2)) return 19;
 	SelectObject(dc,previous); DeleteObject(font);
+	/* Uniscribe describes the one script it itemizes and keeps the table; US English digits are not substituted. */
+	HMODULE usp=LoadLibraryW(L"usp10.dll"); if(!usp) return 20;
+	typedef HRESULT (WINAPI *properties_function)(const void ***,int *);
+	typedef HRESULT (WINAPI *digits_function)(LCID,DWORD *);
+	properties_function properties=(properties_function)GetProcAddress(usp,"ScriptGetProperties");
+	digits_function digits=(digits_function)GetProcAddress(usp,"ScriptRecordDigitSubstitution");
+	const void **table=NULL,**again=NULL; int scripts=0; DWORD substitute[3]={7,7,7};
+	if(!properties || !digits || properties(&table,&scripts)!=S_OK || !table || !table[0] || scripts<1) return 21;
+	if(properties(&again,NULL)!=S_OK || again!=table || ((const BYTE *)table[0])[2]&1) return 22;
+	if(digits(0x409,substitute)!=S_OK || substitute[0]!=(9|9<<16) || substitute[1]!=1 || digits(0x409,NULL)!=E_INVALIDARG) return 23;
 #endif
 	SelectObject(dc,previous_bitmap); if(!DeleteObject(bitmap) || !DeleteDC(dc) || text_frames!=390) return 18;
 	return 0;
