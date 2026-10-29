@@ -159,10 +159,11 @@ static HRESULT STDMETHODCALLTYPE tl_format_family(IDWriteTextLayout *self, WCHAR
 	memcpy(name, LAYOUT_OF(self)->family, (length + 1) * sizeof(WCHAR));
 	return S_OK;
 }
-static DWRITE_FONT_WEIGHT STDMETHODCALLTYPE tl_format_weight(IDWriteTextLayout *self) { return (DWRITE_FONT_WEIGHT)(LAYOUT_OF(self)->length ? LAYOUT_OF(self)->weights[0] : 400); }
-static DWRITE_FONT_STYLE STDMETHODCALLTYPE tl_format_style(IDWriteTextLayout *self) { return (DWRITE_FONT_STYLE)(LAYOUT_OF(self)->length ? LAYOUT_OF(self)->styles[0] : 0); }
+/* The first slot holds the format's own settings, also when there is no text. */
+static DWRITE_FONT_WEIGHT STDMETHODCALLTYPE tl_format_weight(IDWriteTextLayout *self) { return (DWRITE_FONT_WEIGHT)LAYOUT_OF(self)->weights[0]; }
+static DWRITE_FONT_STYLE STDMETHODCALLTYPE tl_format_style(IDWriteTextLayout *self) { return (DWRITE_FONT_STYLE)LAYOUT_OF(self)->styles[0]; }
 static DWRITE_FONT_STRETCH STDMETHODCALLTYPE tl_format_stretch(IDWriteTextLayout *self) { return LAYOUT_OF(self)->stretch; }
-static FLOAT STDMETHODCALLTYPE tl_format_size(IDWriteTextLayout *self) { return LAYOUT_OF(self)->length ? LAYOUT_OF(self)->sizes[0] : 0.0f; }
+static FLOAT STDMETHODCALLTYPE tl_format_size(IDWriteTextLayout *self) { return LAYOUT_OF(self)->sizes[0]; }
 static UINT32 STDMETHODCALLTYPE tl_format_locale_length(IDWriteTextLayout *self) { return (UINT32)wlen(LAYOUT_OF(self)->locale); }
 static HRESULT STDMETHODCALLTYPE tl_format_locale(IDWriteTextLayout *self, WCHAR *name, UINT32 size)
 {
@@ -946,7 +947,6 @@ static void init_text_tables(void)
 	SET(HitTestTextPosition, tl_hit_position); SET(HitTestTextRange, tl_hit_range);
 #undef SET
 	/* A text format is the front of the same object: its table is the layout's methods that a format has. */
-	DEBUG_WRAP(Layout_table_); /* DEBUG-TEMP */
 	memcpy(Format_table_, Layout_table_, sizeof(Format_table_));
 	text_tables_ready = TRUE;
 }
@@ -1311,7 +1311,6 @@ static HRESULT STDMETHODCALLTYPE interop_create_target(IDWriteGdiInterop *self, 
 	target = ALLOC(sizeof(Target));
 	if (!target)
 		return E_OUTOFMEMORY;
-	DEBUG_WRAP(Target_table_); /* DEBUG-TEMP */
 	target->vtbl = (const IDWriteBitmapRenderTargetVtbl *)Target_table_;
 	target->refs = 1;
 	target->ppd = 1.0f;

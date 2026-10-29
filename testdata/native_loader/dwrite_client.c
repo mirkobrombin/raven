@@ -102,6 +102,22 @@ int raven_entry(void)
 			++lit;
 	if (lit < 40)
 		return 18;
+	{
+		/* A text format and an empty layout made from it answer with the settings they were given. */
+		IDWriteTextFormat *format;
+		IDWriteTextLayout *layout;
+		if (FAILED(IDWriteFactory_CreateTextFormat(factory, L"Arial", NULL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STRETCH_NORMAL,
+			14.0f, L"en-us", &format)))
+			return 19;
+		if (IDWriteTextFormat_GetFontSize(format) != 14.0f || IDWriteTextFormat_GetFontWeight(format) != DWRITE_FONT_WEIGHT_BOLD ||
+			IDWriteTextFormat_GetFontStyle(format) != DWRITE_FONT_STYLE_ITALIC)
+			return 20;
+		if (FAILED(IDWriteFactory_CreateTextLayout(factory, L"", 0, format, 100.0f, 20.0f, &layout)) ||
+			IDWriteTextFormat_GetFontSize((IDWriteTextFormat *)layout) != 14.0f || IDWriteTextFormat_GetFontWeight((IDWriteTextFormat *)layout) != DWRITE_FONT_WEIGHT_BOLD)
+			return 21;
+		IDWriteTextLayout_Release(layout);
+		IDWriteTextFormat_Release(format);
+	}
 	IDWriteGlyphRunAnalysis_Release(analysis);
 	IDWriteFontFace_Release(face);
 	IDWriteFont_Release(font);
