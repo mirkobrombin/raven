@@ -334,13 +334,16 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 				inherited.push_back(std::move(record));
 			}
 		}
-		// The child starts with the environment the caller names, or with the one the caller has now.
+		// The child starts with the environment the caller names, or with the one the caller has now. The block is read a page at a
+		// time, so one that ends just before unmapped memory is still read whole.
 		std::u16string environment;
 		if (call[6]) {
 			const bool wide_block = call.u32(5) & create_unicode_environment;
 			for (uint64_t at = call[6]; environment.size() < 1 << 20;) {
-				const auto chunk = call.read(at, 4096);
-				at += 4096;
+				const size_t room = 4096 - at % 4096;
+				// Whole characters only; a wide character that straddles the page is read across it.
+				const auto chunk = call.read(at, !wide_block ? room : room >= 2 ? room & ~size_t(1) : 2);
+				at += chunk.size();
 				bool done = false;
 				for (size_t index = 0; index + 1 < chunk.size() + (wide_block ? 0 : 1) && !done; index += wide_block ? 2 : 1) {
 					const char16_t unit = wide_block ? char16_t(chunk[index] | chunk[index + 1] << 8) : char16_t(chunk[index]);
