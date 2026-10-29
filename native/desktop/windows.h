@@ -27,7 +27,9 @@ public:
 	void set_call(std::function<NativeResult(uint64_t,std::span<const uint64_t>)> invoke);
 	void set_presentation(DesktopPresentation presentation);
 	// A host surface over the client area of a window for a graphics driver to present into, and its release; null when the host shows no such window.
-	std::optional<HostSurface> host_surface(uint64_t window);
+	// The surface a graphics driver renders to for the window; a hidden window gets one only when asked for (hidden), as an OpenGL
+	// surface nothing shows would block the program's buffer swaps.
+	std::optional<HostSurface> host_surface(uint64_t window,bool hidden=false);
 	void release_host_surface(uint64_t window);
 	void *host_display() const { return presentation.host_display ? presentation.host_display() : nullptr; }
 	HostPlatform host_platform() const { return presentation.platform; }
@@ -233,11 +235,12 @@ private:
 	bool focus_leaving=false;
 	std::chrono::steady_clock::time_point focus_left{};
 	void settle_focus_leave(bool now);
-	// Roots whose host window carries a surface handed to a graphics driver: such a window must survive a resize.
-	std::set<uint64_t> hosting_surface;
-	// Where in its root's host window each driver surface was last placed (window, x, y, width, height), so that a frame moving or
-	// resizing the client area takes the surface along.
-	std::map<uint64_t,std::array<int64_t,5>> hosted_areas;
+	// The windows whose surface was handed to a graphics driver, by the root they were last placed in, so that a frame moving or
+	// resizing a client area, or showing or hiding a window, takes the surface along.
+	std::map<uint64_t,uint64_t> hosted_windows;
+	// Whether a window of the root carries a driver's surface: its host window must survive a resize.
+	bool hosts_surface(uint64_t root) const;
+	std::optional<HostSurface> place_hosted(uint64_t window);
 	void place_host_surface(uint64_t root);
 	// Whether nothing has been drawn into the window's client area yet: its surface still holds only zeros or what erasing it left,
 	// or there is none.

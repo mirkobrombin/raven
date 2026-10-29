@@ -99,16 +99,10 @@ struct WaylandPresentation::State {
 		// The buffer of the last commit, whose pixels are what the compositor shows, and the hash of each of its rows.
 		Buffer *shown=nullptr;
 		std::vector<uint64_t> row_hashes;
-		// A surface a graphics driver renders to, stacked over the client area.
-		wl_surface *child=nullptr;
-		wl_subsurface *child_role=nullptr;
-		void drop_child() {
-			if (child_role) wl_subsurface_destroy(child_role);
-			if (child) wl_surface_destroy(child);
-			child_role=nullptr; child=nullptr;
-		}
+		// Tells this surface from one made later for the same window, which surfaces stacked over it must be attached to again.
+		static inline uint64_t made=0;
+		const uint64_t serial=++made;
 		~Surface() {
-			drop_child();
 			if (popup) xdg_popup_destroy(popup);
 			if (role) xdg_toplevel_destroy(role);
 			if (shell) xdg_surface_destroy(shell);
@@ -163,6 +157,19 @@ struct WaylandPresentation::State {
 	wl_data_offer *drag_offer=nullptr;
 	uint64_t selection_counter=0;
 	std::map<uint64_t,std::unique_ptr<Surface>> surfaces;
+	// A surface a graphics driver renders to for one window of the program: a subsurface of the host window of its root, stacked over it
+	// while the window shows and under it while hidden, where the compositor still paces the driver's frames; without a role while the
+	// root has no host window, so that the driver keeps a valid surface while nothing shows it.
+	struct Hosted {
+		wl_surface *proxy=nullptr;
+		wl_subsurface *role=nullptr;
+		uint64_t parent=0;
+		int32_t x=0,y=0;
+		bool placed=false,above=false;
+		void drop_role() { if (role) wl_subsurface_destroy(role); role=nullptr; parent=0; placed=false; }
+		~Hosted() { drop_role(); if (proxy) wl_surface_destroy(proxy); }
+	};
+	std::map<uint64_t,std::unique_ptr<Hosted>> hosted;
 	std::set<uint64_t> maximized;
 
 	~State() {
@@ -174,6 +181,7 @@ struct WaylandPresentation::State {
 		if (shape_device) wp_cursor_shape_device_v1_destroy(shape_device);
 		if (shape_manager) wp_cursor_shape_manager_v1_destroy(shape_manager);
 #endif
+		hosted.clear();
 		surfaces.clear();
 		outputs.clear();
 		if (output_manager) zxdg_output_manager_v1_destroy(output_manager);
@@ -779,23 +787,42 @@ struct WaylandPresentation::State {
 		attach_frame(window,width,height,pixels);
 	}
 
-	std::optional<HostSurface> host_surface(uint64_t handle,int32_t x,int32_t y) {
+	std::optional<HostSurface> host_surface(uint64_t handle,uint64_t window,int32_t x,int32_t y,bool shown) {
+		if (!subcompositor) return std::nullopt;
 		const auto found=surfaces.find(handle);
-		if (found==surfaces.end() || found->second->is_popup || !subcompositor) return std::nullopt;
-		auto &window=*found->second;
-		if (!window.child) {
-			window.child=wl_compositor_create_surface(compositor);
-			window.child_role=wl_subcompositor_get_subsurface(subcompositor,window.child,window.proxy);
-			wl_subsurface_set_desync(window.child_role);
+		auto *parent=found!=surfaces.end() && !found->second->closed ? found->second.get() : nullptr;
+		auto &entry=hosted[window];
+		if (!entry) {
+			entry=std::make_unique<Hosted>();
+			entry->proxy=wl_compositor_create_surface(compositor);
 			// Input stays with the window: the driver's surface takes none of it.
 			wl_region *none=wl_compositor_create_region(compositor);
-			wl_surface_set_input_region(window.child,none);
+			wl_surface_set_input_region(entry->proxy,none);
 			wl_region_destroy(none);
 		}
-		wl_subsurface_set_position(window.child_role,x,y);
-		wl_surface_commit(window.proxy);
+		// A host window made again for the root leaves the old role inert.
+		const bool moved=entry->role && (!parent || entry->parent!=parent->serial);
+		if (moved) entry->drop_role();
+		bool changed=moved;
+		if (parent && !entry->role) {
+			entry->role=wl_subcompositor_get_subsurface(subcompositor,entry->proxy,parent->proxy);
+			wl_subsurface_set_desync(entry->role);
+			entry->parent=parent->serial;
+			entry->above=true;
+		}
+		if (parent && (!entry->placed || entry->x!=x || entry->y!=y)) {
+			wl_subsurface_set_position(entry->role,x,y);
+			entry->x=x; entry->y=y; entry->placed=true;
+			changed=true;
+		}
+		if (parent && entry->above!=shown) {
+			if (shown) wl_subsurface_place_above(entry->role,parent->proxy); else wl_subsurface_place_below(entry->role,parent->proxy);
+			entry->above=shown;
+			changed=true;
+		}
+		if (changed && parent) wl_surface_commit(parent->proxy);
 		wl_display_flush(display);
-		return HostSurface{display,window.child};
+		return HostSurface{display,entry->proxy};
 	}
 
 	void maximize(uint64_t handle,bool wanted) {
@@ -926,11 +953,11 @@ DesktopPresentation WaylandPresentation::callbacks()
 		wl_display_flush(state->display);
 	},[this](std::string_view text) { state->publish_text(text); },
 	[this]() { return state->fetch_text(); },
-	[this](uint64_t handle,int32_t x,int32_t y,uint32_t,uint32_t) { return state->host_surface(handle,x,y); },
-	[this](uint64_t handle) {
-		const auto found=state->surfaces.find(handle);
-		if (found==state->surfaces.end()) return;
-		found->second->drop_child();
+	[this](uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t,uint32_t,bool shown) {
+		return state->host_surface(handle,window,x,y,shown);
+	},
+	[this](uint64_t window) {
+		if (!state->hosted.erase(window)) return;
 		if (state->display) wl_display_flush(state->display);
 	},
 	[this](uint64_t handle,std::optional<std::array<int32_t,4>> rectangle) { state->confine(handle,rectangle); },

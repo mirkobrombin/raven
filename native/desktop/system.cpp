@@ -177,7 +177,7 @@ void NativeWindows::reshape(uint64_t handle, DesktopRect outer)
 		// window, because that surface stays attached to it; any other gets a new host window, which the compositor places afresh.
 		const bool visible = window->visible;
 		const bool kept = keep_host_window;
-		keep_host_window = keep_host_window || hosting_surface.contains(handle);
+		keep_host_window = keep_host_window || hosts_surface(handle);
 		resizing = true;
 		try { release_surface(handle); } catch (...) { keep_host_window = kept; resizing = false; throw; }
 		keep_host_window = kept;

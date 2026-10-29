@@ -53,11 +53,13 @@ struct DesktopPresentation {
 	std::function<void(std::string_view text)> clipboard_publish;
 	// Text of a selection owned by another client with a counter that changes with every new selection; empty when there is none.
 	std::function<std::optional<std::pair<uint64_t,std::string>>()> clipboard_fetch;
-	// Creates a child surface of the window over the rectangle (x, y, width, height) of its frame and returns it for a driver to render to; null
-	// when there is no such window. Pointer and keyboard input keep going to the window itself. Asking again for the same window moves and
-	// resizes the surface it already has.
-	std::function<std::optional<HostSurface>(uint64_t handle,int32_t x,int32_t y,uint32_t width,uint32_t height)> host_surface;
-	std::function<void(uint64_t handle)> release_host_surface;
+	// Returns the surface a driver renders to for the program's window (window), placed over the rectangle (x, y, width, height) of the
+	// frame of the host window of its root (handle) while shown, and kept where nothing shows it otherwise, or when that host window does
+	// not exist yet: a program makes its swap chain before it shows the window. Every window has a surface of its own. Pointer and
+	// keyboard input keep going to the host window. Asking again for the same window moves, resizes, shows or hides the surface it has.
+	std::function<std::optional<HostSurface>(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown)>
+		host_surface;
+	std::function<void(uint64_t window)> release_host_surface;
 	// Keeps the pointer inside the rectangle (left, top, right, bottom) of the window's frame, or holds it still when the rectangle is a
 	// point; no rectangle lets it go.
 	std::function<void(uint64_t handle,std::optional<std::array<int32_t,4>> rectangle)> confine;

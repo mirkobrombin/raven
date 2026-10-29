@@ -63,9 +63,15 @@ struct XcbPresentation::State {
 		std::vector<uint8_t> shown;
 		uint32_t shown_width=0,shown_height=0;
 		std::array<int32_t,4> exposed{0,0,0,0};
-		// A child window a graphics driver renders to, over the client area; it selects no input, so input reaches the window itself.
-		xcb_window_t child=0;
 	};
+	// A window a graphics driver renders to for one window of the program: a child of the host window of its root, over the client area,
+	// mapped while it shows, and kept unmapped under the screen's root otherwise. It selects no input, so input reaches the host window.
+	struct Hosted {
+		xcb_window_t id=0,parent=0;
+		std::array<uint32_t,4> place{};
+		bool shown=false;
+	};
+	std::map<uint64_t,Hosted> hosted;
 	xcb_connection_t *connection=nullptr;
 	xcb_screen_t *screen=nullptr;
 	xcb_gcontext_t gc=0;
@@ -125,10 +131,16 @@ struct XcbPresentation::State {
 
 	void destroy(Window &window) {
 		if (!connection) return;
-		if (tracing()) std::fprintf(stderr,"x11: destroy window %x child %x\n",window.id,window.child);
-		if (window.child) xcb_destroy_window(connection,window.child);
+		if (tracing()) std::fprintf(stderr,"x11: destroy window %x\n",window.id);
+		// The driver's windows outlive the host window, which would take its children along.
+		for (auto &[handle,entry] : hosted)
+			if (window.id && entry.parent==window.id) {
+				xcb_unmap_window(connection,entry.id);
+				xcb_reparent_window(connection,entry.id,screen->root,0,0);
+				entry.parent=screen->root; entry.shown=false;
+			}
 		if (window.id) xcb_destroy_window(connection,window.id);
-		window.child=0; window.id=0;
+		window.id=0;
 	}
 
 	uint64_t handle_of(xcb_window_t id) const {
@@ -774,23 +786,36 @@ struct XcbPresentation::State {
 		return std::make_pair(selection_counter,std::string());
 	}
 
-	std::optional<HostSurface> host_surface(uint64_t handle,int32_t x,int32_t y,uint32_t width,uint32_t height) {
+	std::optional<HostSurface> host_surface(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown) {
+		if (!connection) return std::nullopt;
 		const auto found=windows.find(handle);
-		if (found==windows.end() || found->second->is_popup || !found->second->id) return std::nullopt;
-		auto &window=*found->second;
+		const xcb_window_t parent=found!=windows.end() && found->second->id ? found->second->id : screen->root;
+		shown=shown && parent!=screen->root;
 		width=std::clamp(width,1U,8192U); height=std::clamp(height,1U,8192U);
-		const uint32_t place[]={uint32_t(x),uint32_t(y),width,height};
-		if (!window.child) {
-			window.child=xcb_generate_id(connection);
+		auto &entry=hosted[window];
+		if (!entry.id) {
+			entry.id=xcb_generate_id(connection);
+			entry.parent=parent;
 			const uint32_t values[]={XCB_BACK_PIXMAP_NONE,0,XCB_GRAVITY_NORTH_WEST};
-			xcb_create_window(connection,XCB_COPY_FROM_PARENT,window.child,window.id,int16_t(x),int16_t(y),uint16_t(width),uint16_t(height),0,
-				XCB_WINDOW_CLASS_INPUT_OUTPUT,XCB_COPY_FROM_PARENT,XCB_CW_BACK_PIXMAP|XCB_CW_BORDER_PIXEL|XCB_CW_BIT_GRAVITY,values);
-			xcb_map_window(connection,window.child);
-		} else
-			xcb_configure_window(connection,window.child,XCB_CONFIG_WINDOW_X|XCB_CONFIG_WINDOW_Y|XCB_CONFIG_WINDOW_WIDTH|XCB_CONFIG_WINDOW_HEIGHT,place);
+			xcb_create_window(connection,screen->root_depth,entry.id,parent,int16_t(x),int16_t(y),uint16_t(width),uint16_t(height),0,
+				XCB_WINDOW_CLASS_INPUT_OUTPUT,screen->root_visual,XCB_CW_BACK_PIXMAP|XCB_CW_BORDER_PIXEL|XCB_CW_BIT_GRAVITY,values);
+			entry.place={uint32_t(x),uint32_t(y),width,height};
+		} else if (entry.parent!=parent) {
+			xcb_reparent_window(connection,entry.id,parent,int16_t(x),int16_t(y));
+			entry.parent=parent;
+		}
+		const std::array<uint32_t,4> place{uint32_t(x),uint32_t(y),width,height};
+		if (place!=entry.place) {
+			xcb_configure_window(connection,entry.id,XCB_CONFIG_WINDOW_X|XCB_CONFIG_WINDOW_Y|XCB_CONFIG_WINDOW_WIDTH|XCB_CONFIG_WINDOW_HEIGHT,place.data());
+			entry.place=place;
+		}
+		if (shown!=entry.shown) {
+			if (shown) xcb_map_window(connection,entry.id); else xcb_unmap_window(connection,entry.id);
+			entry.shown=shown;
+		}
 		xcb_flush(connection);
-		if (tracing()) std::fprintf(stderr,"x11: surface of %x is %x at %d,%d %ux%u\n",window.id,window.child,x,y,width,height);
-		HostSurface surface{connection,nullptr,HostPlatform::xcb,window.child,screen->root_visual};
+		if (tracing()) std::fprintf(stderr,"x11: surface of %x is %x at %d,%d %ux%u%s\n",parent,entry.id,x,y,width,height,shown ? "" : " hidden");
+		HostSurface surface{connection,nullptr,HostPlatform::xcb,entry.id,screen->root_visual};
 		return surface;
 	}
 
@@ -903,13 +928,17 @@ DesktopPresentation XcbPresentation::callbacks()
 	},[this](uint64_t handle,uint32_t action) { state->interactive(handle,action); },
 	[this](std::string_view text) { state->publish_text(text); },
 	[this]() { return state->fetch_text(); },
-	[this](uint64_t handle,int32_t x,int32_t y,uint32_t width,uint32_t height) { return state->host_surface(handle,x,y,width,height); },
-	[this](uint64_t handle) {
-		const auto found=state->windows.find(handle);
-		if (found==state->windows.end() || !found->second->child) return;
-		xcb_destroy_window(state->connection,found->second->child);
-		found->second->child=0;
-		xcb_flush(state->connection);
+	[this](uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown) {
+		return state->host_surface(handle,window,x,y,width,height,shown);
+	},
+	[this](uint64_t window) {
+		const auto found=state->hosted.find(window);
+		if (found==state->hosted.end()) return;
+		if (state->connection) {
+			xcb_destroy_window(state->connection,found->second.id);
+			xcb_flush(state->connection);
+		}
+		state->hosted.erase(found);
 	},
 	[this](uint64_t handle,std::optional<std::array<int32_t,4>> rectangle) { state->confine(handle,rectangle); },
 	[this](uint64_t handle,uint64_t owner,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
