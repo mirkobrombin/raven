@@ -82,6 +82,13 @@ static int metrics(int width, int height, HDC screen)
 	mode.dmSize = sizeof mode;
 	if (!EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &mode) || mode.dmPelsWidth != (DWORD)width || mode.dmPelsHeight != (DWORD)height) return 3;
 	if (GetDeviceCaps(screen, HORZRES) != width || GetDeviceCaps(screen, VERTRES) != height) return 4;
+	/* At another DPI the sizes of interface parts scale and the screen does not. */
+	typedef int (WINAPI *metrics_for_dpi)(int, UINT);
+	metrics_for_dpi for_dpi = (metrics_for_dpi)GetProcAddress(GetModuleHandleA("user32.dll"), "GetSystemMetricsForDpi");
+	if (!for_dpi || !for_dpi(SM_CXFRAME, 96) || for_dpi(SM_CXFRAME, 96) != GetSystemMetrics(SM_CXFRAME) ||
+		for_dpi(SM_CYCAPTION, 192) != 2 * GetSystemMetrics(SM_CYCAPTION) || for_dpi(SM_CXSCREEN, 192) != width)
+		return 5;
+	if (GetSystemMetrics(SM_CXVSCROLL) <= 0 || GetSystemMetrics(SM_CYHSCROLL) <= 0 || GetSystemMetrics(SM_CXICON) != 32) return 6;
 	return 0;
 }
 

@@ -2353,11 +2353,11 @@ bool NativeWindows::dispatch(std::string_view name)
 	uint64_t result=name=="GetMessageW" ? UINT64_MAX : 0;
 	try {
 		if (name=="GetSystemMetrics") {
+			// The icon size belongs to the display the icons are drawn for; every other metric comes from the shared table.
 			const auto index=int32_t(uint32_t(args[0]));
 			if (index==11 || index==12) {
 				const auto display=objects.display();result=index==11 ? display.width : display.height;
-				if (result>INT32_MAX) throw uint32_t(120);
-			} else result=uint32_t(objects.nonclient_metrics().get(index));
+			} else result=system_metric(objects.nonclient_metrics(),index);
 		}
 		else if (adjustment) {
 			const auto bytes=process.read_memory(args[0],16);

@@ -249,7 +249,6 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	registry.add("GetDpiForSystem", 0, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetDpiForWindow", 1, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetSystemDpiForProcess", 1, [](ApiCall &call) { call.ret(96); });
-	registry.add("GetSystemMetricsForDpi", 2, [](ApiCall &call) { call.ret(0); });
 	registry.add("GetMessagePos", 0, [this](ApiCall &call) { call.ret(uint32_t(uint16_t(cursor_x)) | (uint32_t(uint16_t(cursor_y)) << 16)); });
 	registry.add("mouse_event", 5, [](ApiCall &call) { call.ret(0); });
 	registry.add("DragDetect", 3, [](ApiCall &call) { call.ret(0); });

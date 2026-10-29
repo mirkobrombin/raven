@@ -379,6 +379,20 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 		call.ret(1);
 	});
 	registry.add("GetSystemMetrics", 1, [this](ApiCall &call) { call.ret(system_metric(objects.nonclient_metrics(), call.i32(0))); });
+	// The metrics at another DPI: sizes of interface parts scale from the 96 dpi screen, counts, flags and screen sizes do not.
+	registry.add("GetSystemMetricsForDpi", 2, [this](ApiCall &call) {
+		const int32_t index = call.i32(0);
+		const uint32_t dpi = call.u32(1);
+		if (!dpi) {
+			call.fail(87);
+			return;
+		}
+		constexpr int32_t sizes[] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18, 20, 21, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 45, 46, 47,
+			48, 49, 50, 51, 52, 53, 54, 55, 57, 58, 59, 60, 61, 62, 68, 69, 71, 72, 83, 84, 92};
+		const auto value = int32_t(system_metric(objects.nonclient_metrics(), index));
+		const bool size = std::find(std::begin(sizes), std::end(sizes), index) != std::end(sizes);
+		call.ret(uint32_t(size && dpi != 96 ? int32_t((int64_t(value) * dpi + 48) / 96) : value));
+	});
 }
 
 }
