@@ -1322,8 +1322,8 @@ static constexpr std::pair<std::string_view, uint8_t> uxtheme_words[]{
 	{"GetThemeSysColorBrush",2},{"GetThemeSysFont",3},{"GetThemeSysInt",3},{"GetThemeSysSize",2},{"GetThemeSysString",4},{"GetThemeTextExtent",9},
 	{"GetThemeTextMetrics",5},{"GetThemeTransitionDuration",6},{"GetWindowTheme",1},{"HitTestThemeBackground",10},{"IsAppThemed",0},{"IsCompositionActive",0},
 	{"IsDarkModeAllowedForApp",0},{"IsDarkModeAllowedForWindow",1},{"IsThemeActive",0},{"IsThemeBackgroundPartiallyTransparent",3},{"IsThemeDialogTextureEnabled",1},{"IsThemePartDefined",3},
-	{"OpenThemeData",2},{"OpenThemeDataEx",3},{"RefreshImmersiveColorPolicyState",0},{"SetPreferredAppMode",1},{"SetThemeAppProperties",1},{"SetWindowTheme",3},
-	{"SetWindowThemeAttribute",4},{"ShouldAppsUseDarkMode",0},{"ShouldSystemUseDarkMode",0},{"ThemeInitApiHook",2},{"UpdatePanningFeedback",4},
+	{"OpenThemeData",2},{"OpenThemeDataEx",3},{"OpenThemeDataForDpi",3},{"RefreshImmersiveColorPolicyState",0},{"SetPreferredAppMode",1},{"SetThemeAppProperties",1},
+	{"SetWindowTheme",3},{"SetWindowThemeAttribute",4},{"ShouldAppsUseDarkMode",0},{"ShouldSystemUseDarkMode",0},{"ThemeInitApiHook",2},{"UpdatePanningFeedback",4},
 };
 static constexpr std::pair<std::string_view, uint8_t> version_words[]{
 	{"GetFileVersionInfoA",4},{"GetFileVersionInfoSizeA",2},{"GetFileVersionInfoSizeW",2},{"GetFileVersionInfoW",4},{"VerFindFileA",8},{"VerFindFileW",8},

@@ -37,8 +37,10 @@ EXTRA_WORDS["sfc"] = {"SfpDeleteCatalog": 1, "SfpInstallCatalog": 2, "SRSetResto
 UXTHEME_DARK = {"RefreshImmersiveColorPolicyState": 0, "GetIsImmersiveColorUsingHighContrast": 1, "ShouldAppsUseDarkMode": 0,
                 "AllowDarkModeForWindow": 2, "SetPreferredAppMode": 1, "FlushMenuThemes": 0, "IsDarkModeAllowedForWindow": 1,
                 "ShouldSystemUseDarkMode": 0, "IsDarkModeAllowedForApp": 0}
-EXTRA["uxtheme"] = sorted(UXTHEME_DARK)
-EXTRA_WORDS["uxtheme"] = UXTHEME_DARK
+# OpenThemeDataForDpi is documented in uxtheme.h since Windows 10 1703 and missing from the mingw-w64 import library.
+UXTHEME_DOCUMENTED = {"OpenThemeDataForDpi": 3}
+EXTRA["uxtheme"] = sorted({**UXTHEME_DARK, **UXTHEME_DOCUMENTED})
+EXTRA_WORDS["uxtheme"] = {**UXTHEME_DARK, **UXTHEME_DOCUMENTED}
 # loadperf.dll has no 32-bit import library in mingw-w64 either.
 EXTRA_WORDS["loadperf"] = {"LoadPerfCounterTextStringsA": 2, "LoadPerfCounterTextStringsW": 2, "UnloadPerfCounterTextStringsA": 2,
                            "UnloadPerfCounterTextStringsW": 2, "InstallPerfDllA": 3, "InstallPerfDllW": 3, "UpdatePerfNameFilesA": 4,

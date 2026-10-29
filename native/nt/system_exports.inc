@@ -1394,8 +1394,9 @@ static constexpr std::string_view uxtheme_exports[]{
 	"GetThemeSysFont","GetThemeSysInt","GetThemeSysSize","GetThemeSysString","GetThemeTextExtent","GetThemeTextMetrics",
 	"GetThemeTimingFunction","GetThemeTransitionDuration","GetUserColorPreference","GetWindowTheme","HitTestThemeBackground","IsAppThemed",
 	"IsCompositionActive","IsDarkModeAllowedForApp","IsDarkModeAllowedForWindow","IsThemeActive","IsThemeBackgroundPartiallyTransparent","IsThemeDialogTextureEnabled",
-	"IsThemePartDefined","OpenThemeData","OpenThemeDataEx","RefreshImmersiveColorPolicyState","SetPreferredAppMode","SetThemeAppProperties",
-	"SetWindowTheme","SetWindowThemeAttribute","ShouldAppsUseDarkMode","ShouldSystemUseDarkMode","ThemeInitApiHook","UpdatePanningFeedback",
+	"IsThemePartDefined","OpenThemeData","OpenThemeDataEx","OpenThemeDataForDpi","RefreshImmersiveColorPolicyState","SetPreferredAppMode",
+	"SetThemeAppProperties","SetWindowTheme","SetWindowThemeAttribute","ShouldAppsUseDarkMode","ShouldSystemUseDarkMode","ThemeInitApiHook",
+	"UpdatePanningFeedback",
 };
 static constexpr std::string_view version_exports[]{
 	"GetFileVersionInfoA","GetFileVersionInfoByHandle","GetFileVersionInfoExA","GetFileVersionInfoExW","GetFileVersionInfoSizeA","GetFileVersionInfoSizeExA",

@@ -47,6 +47,8 @@ static int dark_mode(HWND window, COLORREF light)
 
 	if (!allow || !allowed || !app_mode || !apps_dark || !app_allowed || !GetProcAddress(uxtheme, MAKEINTRESOURCEA(136)))
 		return 10;
+	if (!GetProcAddress(uxtheme, "OpenThemeDataForDpi"))
+		return 16;
 	if (allow(NULL, TRUE) || !allow(window, TRUE) || !allowed(window) || apps_dark())
 		return 11;
 	if (SetWindowTheme(window, L"Explorer", NULL) != S_OK || text_of(window, L"Button") != light)
