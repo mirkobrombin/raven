@@ -860,6 +860,25 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(0);
 	};
 	registry.add("PathCchCanonicalize", 3, path_cch_canonicalize);
+	// PathCchRemoveFileSpec drops the last element and keeps the root; S_FALSE says there was nothing left to remove.
+	registry.add("PathCchRemoveFileSpec", 2, [](ApiCall &call) {
+		if (!call[0] || !call[1] || call[1] > 32768) {
+			call.ret(0x80070057U);
+			return;
+		}
+		auto path = call.wide(call[0], size_t(call[1]));
+		const size_t root = root_length(path);
+		if (path.size() <= root) {
+			call.ret(1);
+			return;
+		}
+		size_t end = path.size();
+		while (end > root && !separator(path[end - 1]))
+			--end;
+		path.resize(end > root ? end - 1 : root);
+		call.put_wide(call[0], path, call[1]);
+		call.ret(0);
+	});
 	registry.add("PathCchCanonicalizeEx", 4, path_cch_canonicalize);
 	registry.add("PathAddBackslashW", 1, [](ApiCall &call) {
 		auto path = call.wide(call[0], max_path * 4);

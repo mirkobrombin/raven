@@ -624,6 +624,11 @@ int raven_entry(void)
 	WCHAR clean[MAX_PATH];
 	if (!canonicalize || canonicalize(clean, MAX_PATH, L"C:\\a\\.\\b\\..\\c.txt") || lstrcmpW(clean, L"C:\\a\\c.txt") ||
 		canonicalize(clean, 4, L"C:\\a\\c.txt") != (HRESULT)0x8007007a) return 179;
+	/* PathCchRemoveFileSpec keeps the root and reports S_FALSE once only the root is left. */
+	HRESULT (WINAPI *remove_spec)(WCHAR *, size_t) = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "PathCchRemoveFileSpec");
+	WCHAR spec[MAX_PATH] = L"C:\\a\\b.txt";
+	if (!remove_spec || remove_spec(spec, MAX_PATH) || lstrcmpW(spec, L"C:\\a") || remove_spec(spec, MAX_PATH) || lstrcmpW(spec, L"C:\\") ||
+		remove_spec(spec, MAX_PATH) != S_FALSE || lstrcmpW(spec, L"C:\\")) return 179;
 	if ((key_size = click_to_run_natives(key))) return 180 + (int)key_size;
 	RegDeleteKeyW(key, L"Inner");
 	RegCloseKey(key);
