@@ -85,13 +85,18 @@ std::shared_ptr<ProcessObject> start_program(KernelContext &context, const std::
 			if (!extension)
 				candidates.push_back(path + u".exe");
 		};
+		// CreateProcess looks in the caller's folder, the current folder, the system folders, the Windows folder and then the folders
+		// of PATH.
 		if (qualified) {
 			add(name);
 		} else {
 			add(own_directory + u"\\" + name);
 			add(paths.current() + u"\\" + name);
 			add(u"C:\\Windows\\System32\\" + name);
+			add(u"C:\\Windows\\System\\" + name);
 			add(u"C:\\Windows\\" + name);
+			for (const auto &folder : paths.search_folders())
+				add(folder + u"\\" + name);
 		}
 		for (const auto &candidate : candidates)
 			if (const auto resolved = paths.resolve(candidate); resolved && resolved->exists && std::filesystem::is_regular_file(resolved->host))

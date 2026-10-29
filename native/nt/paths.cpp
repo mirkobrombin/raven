@@ -302,9 +302,8 @@ std::optional<NativePaths::Resolved> NativePaths::find_library(std::u16string_vi
 		folders.push_back(u"C:\\Windows");
 		if (!dll_folder) folders.push_back(directory);
 		// The standard search order ends with the folders of the PATH variable.
-		if (search_path)
-			for (auto &folder : path_folders(search_path()))
-				folders.push_back(std::move(folder));
+		for (auto &folder : search_folders())
+			folders.push_back(std::move(folder));
 	}
 	for (const auto &folder : folders) {
 		const auto found = resolve(folder + u"\\" + std::u16string(name));
