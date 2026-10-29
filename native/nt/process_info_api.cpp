@@ -601,6 +601,25 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		call.store<uint64_t>(call[4], (uint64_t(cpu.tv_sec) * 1000000000ULL + uint64_t(cpu.tv_nsec)) / 100);
 		call.ret(1);
 	});
+	// IO_COUNTERS: the read, write and other operation counts, then the bytes of each. Raven's host process performs a program's I/O,
+	// so its Linux counters (/proc/<pid>/io) are the program's; no operation is counted as "other".
+	registry.add("GetProcessIoCounters", 2, [is_self, &objects](ApiCall &call) {
+		const auto child = objects.object_as<ProcessObject>(call[0]);
+		if ((!child && !is_self(call[0])) || !call[1]) {
+			call.fail(call[1] ? 6 : 87);
+			return;
+		}
+		std::ifstream source("/proc/" + (child ? std::to_string(child->pid) : std::string("self")) + "/io");
+		std::map<std::string, uint64_t> counts;
+		for (std::string name; source >> name;) {
+			uint64_t value = 0;
+			source >> value;
+			counts[name] = value;
+		}
+		const uint64_t values[6] = {counts["syscr:"], counts["syscw:"], 0, counts["rchar:"], counts["wchar:"], 0};
+		call.write(call[1], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(values), sizeof values));
+		call.ret(1);
+	});
 	registry.add("GetThreadTimes", 5, [started](ApiCall &call) {
 		if (!call[1] || !call[2] || !call[3] || !call[4]) {
 			call.fail(87);
