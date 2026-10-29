@@ -9,6 +9,7 @@
 #include <ctime>
 #include <map>
 #include <thread>
+#include <sched.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -517,6 +518,19 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		const long count = std::max<long>(::sysconf(_SC_NPROCESSORS_ONLN), 1);
 		return count >= 64 ? ~uint64_t(0) : (uint64_t(1) << count) - 1;
 	};
+	// The processor the calling thread runs on at this moment: the host processor it runs on, in group 0, within the processors the process may use.
+	const auto current_processor = [] {
+		const int processor = ::sched_getcpu();
+		return uint32_t(processor < 0 ? 0 : processor % std::min<long>(std::max<long>(::sysconf(_SC_NPROCESSORS_ONLN), 1), 64));
+	};
+	for (const char *name : {"GetCurrentProcessorNumber", "NtGetCurrentProcessorNumber", "RtlGetCurrentProcessorNumber"})
+		registry.add(name, 0, [current_processor](ApiCall &call) { call.ret(current_processor()); });
+	// PROCESSOR_NUMBER: the group, the number within it, a reserved byte.
+	for (const char *name : {"GetCurrentProcessorNumberEx", "NtGetCurrentProcessorNumberEx", "RtlGetCurrentProcessorNumberEx"})
+		registry.add(name, 1, [current_processor](ApiCall &call) {
+			if (call[0])
+				call.write(call[0], std::vector<uint8_t>{0, 0, uint8_t(current_processor()), 0});
+		});
 	registry.add("GetProcessAffinityMask", 3, [processor_mask](ApiCall &call) {
 		if (!call[1] || !call[2]) {
 			call.fail(87);
