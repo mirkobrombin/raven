@@ -848,6 +848,13 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 		case 0xc0000023U: call.ret(122); break;
 		case 0x80000005U: call.ret(234); break;
 		case 0xc0000008U: call.ret(6); break;
+		case 0x80000006U: call.ret(18); break;
+		case 0xc000000fU: call.ret(2); break;
+		case 0xc0000103U: call.ret(267); break;
+		case 0xc0000003U: call.ret(87); break;
+		case 0xc00000bbU: call.ret(50); break;
+		case 0xc0000004U: call.ret(24); break;
+		case 0xc0000005U: call.ret(998); break;
 		default: call.ret(317); break;
 		}
 	});

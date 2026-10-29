@@ -498,7 +498,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			if (!(objects.access_of(call[0]) & (0x80000000U | 0x10000000U | 1U))) { finish(0xc0000022U); return; }
 			if (call[1] || call[2] || call[3] || file->port) { finish(0xc00000bbU); return; }
 			const auto information = call.u32(7), capacity = call.u32(6);
-			const size_t header = information == 1 ? 64 : information == 2 ? 68 : information == 3 ? 94 : information == 12 ? 12 : 0;
+			// The record classes: directory (1), full (2), both (3), names (12), and the full (38), both (37) and extended (60) ones that
+			// add the file's identifier. Each record's fixed part ends where its name begins.
+			const size_t header = information == 1 ? 64 : information == 2 ? 68 : information == 3 ? 94 : information == 12 ? 12 :
+				information == 37 ? 104 : information == 38 ? 80 : information == 60 ? 88 : 0;
 			if (!header) { finish(0xc0000003U); return; }
 			if (capacity < header) { finish(0xc0000023U); return; }
 			if (!call[5]) { finish(0xc0000005U); return; }
@@ -533,7 +536,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 					if (::fstatat(file->descriptor, item->d_name, &metadata, 0)) continue;
 					scan->entries.push_back({name, attributes_of(metadata, item->d_name), filetime(metadata.st_ctim),
 						filetime(metadata.st_atim), filetime(metadata.st_mtim), S_ISDIR(metadata.st_mode) ? 0 : uint64_t(metadata.st_size),
-						uint64_t(metadata.st_blocks) * 512});
+						uint64_t(metadata.st_blocks) * 512, uint64_t(metadata.st_ino)});
 				}
 				file->directory_pattern = std::move(pattern);
 				file->directory_scan = std::move(scan);
@@ -563,6 +566,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 					put64(bytes, start + 48, entry.allocation);
 					put32(bytes, start + 56, entry.attributes);
 				}
+				if (information == 37)
+					put64(bytes, start + 96, entry.id);
+				else if (information == 38 || information == 60)
+					put64(bytes, start + 72, entry.id);
 				std::memcpy(bytes.data() + start + header, entry.name.data(), copied - header);
 				if (copied < size) { status = 0x80000005U; break; }
 				++next;
@@ -933,7 +940,34 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("SetCachedSigningLevel", 4, [file_of](ApiCall &call) {
 		call.fail(file_of(call[3]) ? 50 : 6);
 	});
-	registry.add("GetFileInformationByHandleEx", 4, [&, resolve, missing, file_of](ApiCall &call) {
+	registry.add("GetFileInformationByHandleEx", 4, [&, resolve, missing, file_of, query_directory](ApiCall &call) {
+		// The directory classes read a directory's entries as NtQueryDirectoryFile does, in the record of the matching native class:
+		// FileIdBothDirectoryInfo (10), FileFullDirectoryInfo (14) and FileIdExtdDirectoryInfo (19), and their restarting forms.
+		if (const uint32_t kind = call.u32(1); kind == 10 || kind == 11 || kind == 14 || kind == 15 || kind == 19 || kind == 20) {
+			const uint32_t native = kind <= 11 ? 37 : kind <= 15 ? 2 : 60;
+			const uint64_t status_block = call.process.map_memory(4096, PROT_READ | PROT_WRITE);
+			struct Unmap {
+				NativeProcess &process;
+				uint64_t address;
+				~Unmap() { try { process.unmap_memory(address); } catch (...) {} }
+			} unmap{call.process, status_block};
+			ApiCall inner(call.process, call.environment, {call[0], 0, 0, 0, status_block, call[2], call.u32(3), native, 0, 0,
+				uint64_t(kind == 11 || kind == 15 || kind == 20)});
+			query_directory(inner);
+			const uint32_t status = uint32_t(inner.result);
+			if (status == 0) {
+				call.ret(1);
+				return;
+			}
+			uint32_t error = 317;
+			if (const auto translator = registry.find("RtlNtStatusToDosError")) {
+				ApiCall translate(call.process, call.environment, {status});
+				translator->second(translate);
+				error = uint32_t(translate.result);
+			}
+			call.fail(error);
+			return;
+		}
 		const auto file = file_of(call[0]);
 		struct stat metadata{};
 		if (!file || ::fstat(file->descriptor, &metadata)) {

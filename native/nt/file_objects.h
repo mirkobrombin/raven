@@ -64,6 +64,8 @@ public:
 		uint32_t attributes;
 		uint64_t creation, access, write, size;
 		uint64_t allocation = 0;
+		// The file's identifier on its volume (the host inode), for the directory classes that report it.
+		uint64_t id = 0;
 	};
 	std::vector<Entry> entries;
 	size_t next = 0;
