@@ -84,6 +84,16 @@ static const char tessellation[] =
 	"[domain(\"tri\")] float4 domain(Constants c, float3 at : SV_DomainLocation, const OutputPatch<Point, 3> patch) : SV_Position\n"
 	"{ return float4(patch[0].position * at.x + patch[1].position * at.y + patch[2].position * at.z, c.inside); }\n";
 
+static const char effect[] =
+	"float4 tint = float4(1, 0.5, 0.25, 1);\n"
+	"float4 vs(float4 p : POSITION) : SV_Position { return p; }\n"
+	"float4 ps() : SV_Target { return tint; }\n"
+	"BlendState opaque { BlendEnable[0] = FALSE; };\n"
+	"technique11 Draw { pass P { SetVertexShader(CompileShader(vs_4_0, vs())); SetPixelShader(CompileShader(ps_4_0, ps()));\n"
+	"SetBlendState(opaque, float4(0, 0, 0, 0), 0xffffffff); } }\n";
+
+static const char legacy[] = "float4 tint; sampler2D image; float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(image, uv) * tint; }\n";
+
 int raven_entry(void)
 {
 	ID3DBlob *code = NULL, *errors = NULL, *part = NULL;
@@ -196,6 +206,30 @@ int raven_entry(void)
 	ID3D10Blob_Release(code);
 	if (D3DCompile(tessellation, sizeof(tessellation) - 1, NULL, NULL, NULL, "domain", "ds_5_0", 0, 0, &code, NULL) != S_OK)
 		return 29;
+	ID3D10Blob_Release(code);
+
+	/* An effect has no entry point: fx_5_0 comes out bare, fx_4_0 inside a container. */
+	if (D3DCompile(effect, sizeof(effect) - 1, NULL, NULL, NULL, NULL, "fx_5_0", 0, 0, &code, NULL) != S_OK)
+		return 30;
+	bytes = ID3D10Blob_GetBufferPointer(code);
+	if (ID3D10Blob_GetBufferSize(code) < 96 || bytes[0] != 0x01 || bytes[1] != 0x20 || bytes[2] != 0xff || bytes[3] != 0xfe)
+		return 31;
+	ID3D10Blob_Release(code);
+	if (D3DCompile(effect, sizeof(effect) - 1, NULL, NULL, NULL, NULL, "fx_4_0", 0, 0, &code, NULL) != E_FAIL)
+		return 32;
+	if (D3DCompile(effect, sizeof(effect) - 1, NULL, NULL, NULL, NULL, "fx_5_0", 0, D3DCOMPILE_EFFECT_CHILD_EFFECT, &code, NULL) != E_NOTIMPL)
+		return 33;
+
+	/* A shader model 3 pixel shader starts with its version token. */
+	if (D3DCompile(legacy, sizeof(legacy) - 1, NULL, NULL, NULL, "main", "ps_3_0", 0, 0, &code, NULL) != S_OK)
+		return 34;
+	bytes = ID3D10Blob_GetBufferPointer(code);
+	if (ID3D10Blob_GetBufferSize(code) < 8 || bytes[0] != 0x00 || bytes[1] != 0x03 || bytes[2] != 0xff || bytes[3] != 0xff)
+		return 35;
+	if (D3DDisassemble(bytes, ID3D10Blob_GetBufferSize(code), 0, NULL, &part) != S_OK || !contains(ID3D10Blob_GetBufferPointer(part), "ps_3_0") ||
+		!contains(ID3D10Blob_GetBufferPointer(part), "texld"))
+		return 36;
+	ID3D10Blob_Release(part);
 	ID3D10Blob_Release(code);
 
 	/* Blobs made by the program. */

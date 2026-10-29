@@ -2,6 +2,8 @@
 
 #include "dxbc.h"
 #include "hlsl_codegen.h"
+#include "hlsl_effect.h"
+#include "hlsl_legacy.h"
 #include "hlsl_parser.h"
 
 #include <functional>
@@ -81,7 +83,8 @@ uint32_t program_type(Stage stage)
 std::vector<uint8_t> resource_definitions(const Generated &generated, uint32_t flags)
 {
 	const bool sm5 = generated.major >= 5;
-	const size_t header = sm5 ? 60 : 28, binding_size = 32, buffer_size = 24, variable_size = sm5 ? 40 : 24;
+	const bool sm51 = sm5 && generated.minor == 1;
+	const size_t header = sm5 ? 60 : 28, binding_size = sm51 ? 40 : 32, buffer_size = 24, variable_size = sm5 ? 40 : 24;
 	// Fixed parts first: header, bindings, buffers, then every buffer's variables; types and strings follow.
 	size_t at = header;
 	const size_t bindings_at = at;
@@ -142,12 +145,16 @@ std::vector<uint8_t> resource_definitions(const Generated &generated, uint32_t f
 	out.u32(generated.buffers.empty() ? 0 : uint32_t(buffers_at));
 	out.u32(uint32_t(generated.bindings.size()));
 	out.u32(generated.bindings.empty() ? 0 : uint32_t(bindings_at));
-	out.u32(generated.minor | generated.major << 4 | program_type(generated.stage) << 16);
+	out.u32(generated.minor | generated.major << 8 | program_type(generated.stage) << 16);
 	out.u32(flags);
 	out.u32(creator);
 	if (sm5) {
-		out.bytes(std::span(reinterpret_cast<const uint8_t *>("RD11"), 4));
-		for (const uint32_t value : {60u, 24u, 32u, 40u, 36u, 12u, 0u})
+		// Shader model 5.1 marks its larger bindings, which add the space and range, with a different tag.
+		if (sm51)
+			out.u32(0x25441313);
+		else
+			out.bytes(std::span(reinterpret_cast<const uint8_t *>("RD11"), 4));
+		for (const uint32_t value : {60u, 24u, uint32_t(binding_size), 40u, 36u, 12u, 0u})
 			out.u32(value);
 	}
 	for (const auto &binding : generated.bindings) {
@@ -159,6 +166,10 @@ std::vector<uint8_t> resource_definitions(const Generated &generated, uint32_t f
 		out.u32(binding.bind_point);
 		out.u32(binding.bind_count);
 		out.u32(binding.flags);
+		if (sm51) {
+			out.u32(binding.space);
+			out.u32(binding.range);
+		}
 	}
 	for (size_t i = 0; i < generated.buffers.size(); ++i) {
 		const auto &buffer = generated.buffers[i];
@@ -211,6 +222,9 @@ std::string message(const std::string &name, uint32_t line, const std::string &t
 
 }
 
+// The bytecode of a generated program: DXBC from shader model 4 on, D3D9 bytecode before; throws a GenerateError.
+std::vector<uint8_t> bytecode(const Generated &generated, uint32_t flags);
+
 CompileResult compile(const CompileRequest &request)
 {
 	CompileResult result;
@@ -226,15 +240,45 @@ CompileResult compile(const CompileRequest &request)
 		result.failed = true;
 		return result;
 	}
-	Generated generated;
 	try {
-		generated = generate(parsed.program, request.entry, request.target, request.flags);
+		if (request.target.starts_with("fx_")) {
+			const auto shader = [&](const std::string &entry, const std::string &target, const std::vector<const Expr *> &uniforms, uint32_t line) {
+				if (target.starts_with("fx_"))
+					throw GenerateError{line, "an effect cannot compile an effect"};
+				const auto generated = generate(parsed.program, entry, target, request.flags, uniforms);
+				result.messages += generated.warnings;
+				return bytecode(generated, request.flags);
+			};
+			auto effect = effect_binary(parsed.program, request.target, request.flags, shader);
+			// Direct3D 10 effects come in a container; the Direct3D 11 effect runtime reads fx_5_0 bytes as they are.
+			if (request.target == "fx_5_0")
+				result.code = std::move(effect);
+			else
+				result.code = container(std::vector<Chunk>{{{'F', 'X', '1', '0'}, std::move(effect)}});
+			return result;
+		}
+		const auto generated = generate(parsed.program, request.entry, request.target, request.flags);
+		result.messages = generated.warnings;
+		result.code = bytecode(generated, request.flags);
 	} catch (const GenerateError &error) {
-		result.messages = message(request.name, error.line, error.message);
+		result.messages += message(request.name, error.line, error.message);
+		result.code.clear();
 		result.failed = true;
-		return result;
 	}
-	result.messages = generated.warnings;
+	return result;
+}
+
+std::vector<uint8_t> bytecode(const Generated &generated, uint32_t flags)
+{
+	// Shader model 2 and 3 programs are D3D9 bytecode, without a container.
+	if (generated.major < 4) {
+		const auto program = legacy_program(generated, flags);
+		std::vector<uint8_t> code(program.size() * 4);
+		for (size_t i = 0; i < program.size(); ++i)
+			for (int b = 0; b < 4; ++b)
+				code[i * 4 + size_t(b)] = uint8_t(program[i] >> (8 * b));
+		return code;
+	}
 	const uint32_t type = uint32_t(generated.stage);
 	const auto program = sm4::encode(type << 16 | generated.major << 4 | generated.minor, generated.instructions);
 	std::vector<uint8_t> tokens(program.size() * 4);
@@ -243,7 +287,7 @@ CompileResult compile(const CompileRequest &request)
 			tokens[i * 4 + size_t(b)] = uint8_t(program[i] >> (8 * b));
 	const bool streams = generated.stage == Stage::geometry && generated.major >= 5;
 	std::vector<Chunk> chunks;
-	chunks.push_back({{'R', 'D', 'E', 'F'}, resource_definitions(generated, request.flags)});
+	chunks.push_back({{'R', 'D', 'E', 'F'}, resource_definitions(generated, flags)});
 	chunks.push_back({{'I', 'S', 'G', 'N'}, signature(generated.inputs, false)});
 	// The patch constants a hull shader writes and a domain shader reads, after the outputs of the one and before those of the other.
 	const bool patches = generated.stage == Stage::hull || generated.stage == Stage::domain;
@@ -254,8 +298,7 @@ CompileResult compile(const CompileRequest &request)
 		chunks.push_back({{'P', 'C', 'S', 'G'}, signature(generated.patch_constants, false)});
 	chunks.push_back({generated.major >= 5 ? std::array<char, 4>{'S', 'H', 'E', 'X'} : std::array<char, 4>{'S', 'H', 'D', 'R'}, std::move(tokens)});
 	chunks.push_back({{'S', 'T', 'A', 'T'}, statistics(generated)});
-	result.code = container(chunks);
-	return result;
+	return container(chunks);
 }
 
 CompileResult preprocess_text(const CompileRequest &request)

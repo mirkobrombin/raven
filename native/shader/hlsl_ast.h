@@ -13,8 +13,14 @@ enum class Scalar : uint8_t { boolean, integer, unsigned_integer, floating, half
 enum class ObjectKind : uint8_t {
 	none, sampler, sampler_comparison, texture1d, texture1d_array, texture2d, texture2d_array, texture2dms, texture2dms_array, texture3d,
 	texture_cube, texture_cube_array, buffer, structured_buffer, byte_address_buffer, rw_texture1d, rw_texture1d_array, rw_texture2d,
-	rw_texture2d_array, rw_texture3d, rw_buffer, rw_structured_buffer, rw_byte_address_buffer
+	rw_texture2d_array, rw_texture3d, rw_buffer, rw_structured_buffer, rw_byte_address_buffer,
+	// What only effects declare: render state objects, shader variables, strings and views.
+	blend_state, depth_stencil_state, rasterizer_state, vertex_shader, pixel_shader, geometry_shader, hull_shader, domain_shader,
+	compute_shader, string, render_target_view, depth_stencil_view
 };
+
+// Whether a kind is one only effects use, which shaders never read.
+inline bool effect_object(ObjectKind kind) { return kind >= ObjectKind::blend_state; }
 
 struct StructType;
 
@@ -69,7 +75,7 @@ using ExprPtr = std::unique_ptr<Expr>;
 
 struct Expr {
 	enum class Kind : uint8_t {
-		literal, name, unary, binary, assign, ternary, call, member, index, cast, construct, initializer_list, postfix
+		literal, name, unary, binary, assign, ternary, call, member, index, cast, construct, initializer_list, postfix, string
 	} kind;
 	uint32_t line = 0;
 	// The operator of a unary, binary, assignment or postfix expression; the name of a variable, function or member.
@@ -85,6 +91,15 @@ struct Expr {
 struct Stmt;
 using StmtPtr = std::unique_ptr<Stmt>;
 
+// One assignment of an effect's state block or pass: "SrcBlend[1] = SRC_ALPHA;", "VertexShader = compile vs_2_0 main();", or in a pass
+// a call such as "SetPixelShader(CompileShader(ps_4_0, main()));", kept with the call as its value.
+struct StateAssignment {
+	std::string name;
+	std::optional<uint32_t> index;
+	ExprPtr value;
+	uint32_t line = 0;
+};
+
 struct Variable {
 	std::string name, semantic;
 	Type type;
@@ -93,9 +108,15 @@ struct Variable {
 	char register_class = 0;
 	int register_index = -1;
 	int pack_offset = -1;
+	// register(t0, space1): the space shader model 5.1 binds it in.
+	uint32_t register_space = 0;
 	bool is_static = false, is_const = false, is_uniform = false, is_groupshared = false;
 	std::vector<std::string> modifiers;
 	uint32_t line = 0;
+	// An effect's annotations, <string name = "text";>, and the state block of a state object.
+	std::vector<Variable> annotations;
+	std::vector<StateAssignment> states;
+	bool has_states = false;
 };
 
 struct Stmt {
@@ -138,7 +159,31 @@ struct ConstantBuffer {
 	std::string name;
 	bool texture_buffer = false;
 	int register_index = -1;
+	uint32_t register_space = 0;
 	std::vector<Variable> members;
+	uint32_t line = 0;
+};
+
+struct Pass {
+	std::string name;
+	std::vector<Variable> annotations;
+	std::vector<StateAssignment> states;
+	uint32_t line = 0;
+};
+
+struct Technique {
+	std::string name;
+	// technique10 or technique11; plain technique counts as technique10.
+	uint32_t version = 10;
+	std::vector<Variable> annotations;
+	std::vector<Pass> passes;
+	uint32_t line = 0;
+};
+
+struct Group {
+	std::string name;
+	std::vector<Variable> annotations;
+	std::vector<Technique> techniques;
 	uint32_t line = 0;
 };
 
@@ -149,6 +194,9 @@ struct Program {
 	std::vector<Function> functions;
 	// typedef names to their types.
 	std::vector<std::pair<std::string, Type>> aliases;
+	// An effect's techniques outside any group, and its groups.
+	std::vector<Technique> techniques;
+	std::vector<Group> groups;
 };
 
 }

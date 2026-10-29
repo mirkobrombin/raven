@@ -1,5 +1,6 @@
 #include "sm4.h"
 
+#include <algorithm>
 #include <map>
 
 namespace raven::shader::sm4 {
@@ -18,7 +19,11 @@ void put_relative(std::vector<uint32_t> &out, const Relative &relative)
 
 void put_operand(std::vector<uint32_t> &out, const Operand &operand)
 {
-	const bool modified = operand.negate || operand.absolute;
+	// A register chosen by an index that may differ between invocations carries the shader model 5.1 non-uniform flag.
+	const bool non_uniform = std::any_of(operand.relative.begin(), operand.relative.end(), [](const auto &relative) {
+		return relative && relative->non_uniform;
+	});
+	const bool modified = operand.negate || operand.absolute || non_uniform;
 	uint32_t token = operand.components == 0 ? 0 : operand.components == 1 ? 1 : 2;
 	if (operand.components == 4) {
 		switch (operand.mode) {
@@ -42,8 +47,10 @@ void put_operand(std::vector<uint32_t> &out, const Operand &operand)
 	if (modified)
 		token |= 1u << 31;
 	out.push_back(token);
-	if (modified)
-		out.push_back(1 | uint32_t(operand.absolute && operand.negate ? 3 : operand.absolute ? 2 : 1) << 6);
+	if (modified) {
+		const uint32_t modifier = operand.absolute && operand.negate ? 3 : operand.absolute ? 2 : operand.negate ? 1 : 0;
+		out.push_back(1 | modifier << 6 | uint32_t(non_uniform) << 17);
+	}
 	if (operand.type == immediate32) {
 		out.push_back(operand.immediate[0]);
 		if (operand.components == 4)

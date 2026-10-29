@@ -51,6 +51,7 @@ struct Relative {
 	uint8_t type = temp;
 	uint32_t index = 0;
 	uint8_t component = 0;
+	bool non_uniform = false;
 	bool operator==(const Relative &) const = default;
 };
 
@@ -66,6 +67,8 @@ struct Operand {
 	std::array<std::optional<Relative>, 3> relative{};
 	bool negate = false, absolute = false;
 	std::array<uint32_t, 4> immediate{};
+	// What each immediate component holds, for targets that keep every value as a float: 0 unknown, else the hlsl Scalar plus one.
+	std::array<uint8_t, 4> kinds{};
 
 	static Operand reg(uint8_t type, uint32_t number)
 	{

@@ -1,5 +1,6 @@
 #include "kernel_context.h"
 
+#include "shader/d3dbc.h"
 #include "shader/dxbc.h"
 #include "shader/hlsl_compile.h"
 #include "shader/sm4.h"
@@ -142,6 +143,15 @@ ShaderResult serve(const std::vector<uint8_t> &bytes)
 		return result;
 	}
 	const auto blob = bytes_of(in.text());
+	// Shader model 1 to 3 programs are bare tokens, not containers; only their listing is asked of them.
+	if (mode == Mode::disassemble && blob.size() >= 4 && blob.size() % 4 == 0) {
+		std::vector<uint32_t> tokens(blob.size() / 4);
+		std::memcpy(tokens.data(), blob.data(), blob.size());
+		if (shader::d3dbc::is_program(tokens)) {
+			result.code = bytes_of(shader::d3dbc::disassemble(tokens));
+			return result;
+		}
+	}
 	auto chunks = shader::read_container(blob);
 	if (chunks.empty()) {
 		result.status = 3;

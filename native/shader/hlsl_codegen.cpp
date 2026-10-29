@@ -1,9 +1,11 @@
 #include "hlsl_codegen.h"
 #include "hlsl_compile.h"
+#include "hlsl_legacy.h"
 
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <map>
@@ -100,6 +102,8 @@ struct Loc {
 	uint8_t component = 0;
 	bool immediate = false;
 	uint32_t bits = 0;
+	// The type of an immediate's bits, which shader model 2 and 3 turn into a float.
+	Scalar scalar = Scalar::none;
 };
 
 bool same_register(const Operand &left, const Operand &right)
@@ -128,6 +132,8 @@ struct Access {
 	// The resource, or the group shared variable.
 	int target = -1;
 	uint32_t element = 0;
+	// Shader model 5.1: an element of a resource array chosen at run time, added to element.
+	std::optional<sm4::Relative> element_dynamic;
 	bool uav = false;
 	// Typed: the coordinates. Structured and shared: the element index.
 	std::vector<Loc> address;
@@ -147,6 +153,7 @@ struct Ref {
 	// A texture, buffer or sampler: the index of its resource and, for an array of them, the element.
 	int resource = -1;
 	uint32_t resource_element = 0;
+	std::optional<sm4::Relative> resource_dynamic;
 	bool writable = false;
 	// Registers between consecutive elements of an array whose elements sit at regular register steps; 0 when they do not.
 	uint32_t element_registers = 0;
@@ -167,7 +174,10 @@ struct Resource {
 	char register_class = 't';
 	int explicit_register = -1;
 	int bound = -1;
+	// Shader model 5.1: the register space, and the range the declaration and its operands name.
+	uint32_t space = 0, range = 0;
 	uint32_t count = 1;
+	uint32_t line = 0;
 	bool used = false;
 	uint32_t stride = 0;
 	bool comparison = false;
@@ -175,6 +185,8 @@ struct Resource {
 	bool counter = false;
 	// The texture register of a tbuffer, which the tbuffer itself reflects.
 	bool texture_buffer = false;
+	// A sampler read with the D3D9 texture functions: the texture at its own register number that they sample.
+	int paired = -1;
 };
 
 struct BufferVariable {
@@ -183,6 +195,8 @@ struct BufferVariable {
 	uint32_t offset = 0, size = 0;
 	bool used = false;
 	std::vector<uint32_t> defaults;
+	// The declaration, whose initializer gives the variable's starting value.
+	const Variable *source = nullptr;
 };
 
 struct Buffer {
@@ -190,6 +204,8 @@ struct Buffer {
 	bool texture = false;
 	int explicit_register = -1;
 	int bound = -1;
+	uint32_t space = 0, range = 0;
+	uint32_t line = 0;
 	bool used = false;
 	uint32_t size = 0;
 	std::vector<BufferVariable> variables;
@@ -205,6 +221,9 @@ struct Loop {
 	// The condition of a do loop, tested again before each continue.
 	const Expr *until = nullptr;
 	bool is_switch = false;
+	// On shader model 2 and 3, the block a loop body with continue statements runs in: continue leaves it, and break leaves it with
+	// this flag set, for the loop around to leave as well.
+	std::optional<uint32_t> broken;
 };
 
 struct Frame {
@@ -229,13 +248,20 @@ public:
 
 	// Set on a second attempt after code needed a constant where a loop counter stood: every loop that can be unrolled is.
 	bool unroll_all = false;
+	// A shader model 2 or 3 target, whose program is turned into D3D9 bytecode afterwards.
+	bool legacy = false;
+	// The values an effect gives the entry point's uniform parameters, in order.
+	std::vector<const Expr *> uniform_arguments;
+
+	// Every constant buffer of the program with every variable, used or not, and the values they start with, as an effect lists them.
+	std::vector<ReflectedBuffer> layout();
 
 private:
 	const Program &program;
 	uint32_t flags;
 	Generated out;
 	Stage stage = Stage::pixel;
-	bool sm5 = false;
+	bool sm5 = false, sm51 = false;
 	std::vector<Instruction> code;
 	uint32_t temps = 0;
 	// Indexable temps: register count and components of each.
@@ -336,13 +362,19 @@ private:
 			return Operand::values({}, 1);
 		if (locs[0].immediate) {
 			std::array<uint32_t, 4> bits{};
-			for (int i = 0; i < 4; ++i)
+			std::array<uint8_t, 4> kinds{};
+			for (int i = 0; i < 4; ++i) {
 				bits[i] = locs[0].bits;
-			for (size_t k = 0; k < locs.size(); ++k)
+				kinds[i] = kind_of(locs[0]);
+			}
+			for (size_t k = 0; k < locs.size(); ++k) {
 				bits[dest[k]] = locs[k].bits;
-			if (std::all_of(locs.begin(), locs.end(), [&](const Loc &loc) { return loc.bits == locs[0].bits; }) && dest.size() == 1)
-				return Operand::values(bits, 1);
-			return Operand::values(bits, 4);
+				kinds[dest[k]] = kind_of(locs[k]);
+			}
+			const bool single = std::all_of(locs.begin(), locs.end(), [&](const Loc &loc) { return loc.bits == locs[0].bits; }) && dest.size() == 1;
+			Operand operand = Operand::values(bits, single ? 1 : 4);
+			operand.kinds = kinds;
+			return operand;
 		}
 		if (scalar_register(locs[0].base.type))
 			return scalar_source(locs[0]);
@@ -366,6 +398,14 @@ private:
 
 	static Operand source_first(const std::vector<Loc> &locs) { return source_for(locs, first_components(locs.size())); }
 
+	// The address ld reads holds the mip level in w whatever the texture's dimension, with zeros between it and the coordinates.
+	static std::vector<Loc> mip_last(std::vector<Loc> address)
+	{
+		while (address.size() < 4)
+			address.insert(address.end() - 1, constant_loc(0));
+		return address;
+	}
+
 	// Registers with a single component: the flattened thread index, the primitive and instance ids, the input coverage.
 	static bool scalar_register(uint8_t type)
 	{
@@ -375,11 +415,23 @@ private:
 			type == sm4::output_depth_greater_equal || type == sm4::output_depth_less_equal;
 	}
 
+	static Operand typed_values(std::array<uint32_t, 4> bits, Scalar kind)
+	{
+		Operand operand = Operand::values(bits, 4);
+		operand.kinds.fill(uint8_t(uint8_t(kind) + 1));
+		return operand;
+	}
+
+	static uint8_t kind_of(const Loc &loc) { return loc.scalar == Scalar::none ? 0 : uint8_t(uint8_t(loc.scalar) + 1); }
+
 	// A scalar operand: one component selected.
 	static Operand scalar_source(const Loc &loc)
 	{
-		if (loc.immediate)
-			return Operand::values({loc.bits, loc.bits, loc.bits, loc.bits}, 1);
+		if (loc.immediate) {
+			Operand operand = Operand::values({loc.bits, loc.bits, loc.bits, loc.bits}, 1);
+			operand.kinds.fill(kind_of(loc));
+			return operand;
+		}
 		if (scalar_register(loc.base.type)) {
 			Operand operand = loc.base;
 			operand.components = 1;
@@ -505,11 +557,14 @@ private:
 	{
 		Ref ref;
 		ref.type = type;
-		for (auto value : bits)
+		for (auto value : bits) {
 			ref.locs.push_back(constant_loc(value));
+			ref.locs.back().scalar = type.scalar;
+		}
 		return ref;
 	}
 
+	Ref bool_constant(bool value) { return constant(scalar_type(Scalar::boolean), {value ? ~0u : 0u}); }
 	Ref float_constant(float value) { return constant(scalar_type(Scalar::floating), {float_bits(value)}); }
 	Ref int_constant(int32_t value) { return constant(scalar_type(Scalar::integer), {uint32_t(value)}); }
 	Ref uint_constant(uint32_t value) { return constant(scalar_type(Scalar::unsigned_integer), {value}); }
@@ -668,8 +723,10 @@ private:
 		if (same_class)
 			return result;
 		if (all_immediate(value)) {
-			for (auto &loc : result.locs)
+			for (auto &loc : result.locs) {
 				loc.bits = fold(loc.bits, from, to);
+				loc.scalar = to;
+			}
 			return result;
 		}
 		result = new_value(result.type);
@@ -683,11 +740,11 @@ private:
 				emit(is_float(from) ? sm4::ne : sm4::ine, {target, input, zero});
 			} else if (is_float(to)) {
 				if (from == Scalar::boolean)
-					emit(sm4::op_and, {target, input, Operand::values({float_bits(1), float_bits(1), float_bits(1), float_bits(1)}, 4)});
+					emit(sm4::op_and, {target, input, typed_values({float_bits(1), float_bits(1), float_bits(1), float_bits(1)}, Scalar::floating)});
 				else
 					emit(from == Scalar::integer ? sm4::itof : sm4::utof, {target, input});
 			} else if (from == Scalar::boolean) {
-				emit(sm4::op_and, {target, input, Operand::values({1, 1, 1, 1}, 4)});
+				emit(sm4::op_and, {target, input, typed_values({1, 1, 1, 1}, Scalar::integer)});
 			} else {
 				emit(to == Scalar::integer ? sm4::ftoi : sm4::ftou, {target, input});
 			}
@@ -859,7 +916,8 @@ private:
 	// Where a value goes when the buffer so far ends at `offset`.
 	uint32_t cb_place(const Type &type, uint32_t offset) const
 	{
-		if (!type.array.empty() || type.shape == Type::Shape::matrix || type.shape == Type::Shape::structure)
+		// Shader model 2 and 3 start every variable and member on a register of its own.
+		if (legacy || !type.array.empty() || type.shape == Type::Shape::matrix || type.shape == Type::Shape::structure)
 			return align16(offset);
 		if (offset / 16 != (offset + cb_size(type) - 1) / 16)
 			return align16(offset);
@@ -949,7 +1007,7 @@ private:
 
 	// ---- resources ----
 
-	static bool is_uav(ObjectKind kind) { return kind >= ObjectKind::rw_texture1d; }
+	static bool is_uav(ObjectKind kind) { return kind >= ObjectKind::rw_texture1d && kind <= ObjectKind::rw_byte_address_buffer; }
 	static bool is_sampler(ObjectKind kind) { return kind == ObjectKind::sampler || kind == ObjectKind::sampler_comparison; }
 	static bool is_structured(ObjectKind kind) { return kind == ObjectKind::structured_buffer || kind == ObjectKind::rw_structured_buffer; }
 	static bool is_raw(ObjectKind kind) { return kind == ObjectKind::byte_address_buffer || kind == ObjectKind::rw_byte_address_buffer; }
@@ -1056,6 +1114,8 @@ private:
 	{
 		Operand operand = Operand::reg(type, uint32_t(ref.resource) | ref.resource_element << 16);
 		operand.mode = Operand::Mode::swizzle;
+		// Binding moves the register number to the second index, where the dynamic part is added to it.
+		operand.relative[1] = ref.resource_dynamic;
 		return operand;
 	}
 
@@ -1086,6 +1146,7 @@ private:
 		Ref holder;
 		holder.resource = access.target;
 		holder.resource_element = access.element;
+		holder.resource_dynamic = access.element_dynamic;
 		return resource_operand(holder, access.uav ? sm4::uav : sm4::resource);
 	}
 
@@ -1123,8 +1184,10 @@ private:
 		const Operand target = access_operand(access);
 		if (access.kind == Access::Kind::typed) {
 			auto address = access.address;
-			if (access.mip)
+			if (access.mip) {
 				address.push_back(constant_loc(0));
+				address = mip_last(address);
+			}
 			address = readable(address);
 			Operand resource = target;
 			const uint8_t mask = uint8_t((1 << result.locs.size()) - 1);
@@ -1448,6 +1511,18 @@ private:
 		return first;
 	}
 
+	// A dynamic index as a relative register: an unsigned value in one component of a temp.
+	sm4::Relative held_index(const Ref &position, uint32_t line)
+	{
+		Loc at = convert(position, scalar_type(Scalar::unsigned_integer), line).locs[0];
+		if (at.immediate || at.base.type != sm4::temp || at.base.relative[0]) {
+			const auto held = temp_locs(new_register(), 1);
+			write(held, {at});
+			at = held[0];
+		}
+		return sm4::Relative{sm4::temp, at.base.index[0], at.component};
+	}
+
 	// A value chosen among several by a dynamic index, with a conditional move for each.
 	Ref select(const std::vector<Ref> &choices, const Ref &position, uint32_t line)
 	{
@@ -1468,6 +1543,7 @@ private:
 		auto access = std::make_shared<Access>();
 		access->target = object.resource;
 		access->element = object.resource_element;
+		access->element_dynamic = object.resource_dynamic;
 		access->uav = is_uav(resource.kind);
 		Ref result;
 		result.type = resource.element;
@@ -1510,7 +1586,8 @@ private:
 			result.type = element;
 			if (all_immediate(position)) {
 				const uint32_t at = constant_index(position, line);
-				if (at >= base.type.array[0])
+				// An array of resources declared without a size, Texture2D t[], may be indexed anywhere.
+				if (at >= base.type.array[0] && !(base.type.shape == Type::Shape::object && base.type.array[0] == 0))
 					fail(line, "array index out of bounds");
 				if (base.type.shape == Type::Shape::object) {
 					result.resource_element += at;
@@ -1532,8 +1609,16 @@ private:
 					result.icb = base.icb + int(at * registers_of(element));
 				return result;
 			}
-			if (base.type.shape == Type::Shape::object)
-				fail(line, "an array of resources needs a constant index");
+			if (base.type.shape == Type::Shape::object) {
+				if (!sm51)
+					fail(line, "an array of resources needs a constant index before shader model 5.1");
+				if (base.resource_dynamic || base.type.array.size() > 1)
+					fail(line, "an array of resources takes one dynamic index");
+				result.resource_dynamic = held_index(position, line);
+				const Expr &chosen = *expr.operands[1];
+				result.resource_dynamic->non_uniform = chosen.kind == Expr::Kind::call && chosen.text == "NonUniformResourceIndex";
+				return result;
+			}
 			if (base.access && base.access->outer_array) {
 				auto access = std::make_shared<Access>(*base.access);
 				access->outer_array = false;
@@ -1673,7 +1758,9 @@ private:
 		const Ref left = apply(sm4::imax, type, {a, a}, false, {false, true});
 		const Ref right = apply(sm4::imax, type, {b, b}, false, {false, true});
 		const Ref result = apply_pair(sm4::udiv, type, {left, right}, !remainder);
-		const Ref negative = remainder ? apply(sm4::ilt, mask, {a, zero(type)}) : apply(sm4::ilt, mask, {apply(sm4::op_xor, type, {a, b}), zero(type)});
+		// The quotient is negative when the signs differ: the sign bit of a ^ b, or of a * b where integers are floats.
+		const Ref signs = legacy ? apply_pair(sm4::imul, type, {a, b}, false) : apply(sm4::op_xor, type, {a, b});
+		const Ref negative = remainder ? apply(sm4::ilt, mask, {a, zero(type)}) : apply(sm4::ilt, mask, {signs, zero(type)});
 		return apply(sm4::movc, type, {negative, apply(sm4::ineg, type, {result}), result});
 	}
 
@@ -1951,6 +2038,8 @@ private:
 			fail(expr.line, "unexpected initializer list");
 		case Expr::Kind::postfix:
 			return increment(*expr.operands[0], expr.text == "++", true, expr.line);
+		case Expr::Kind::string:
+			fail(expr.line, "strings are not valid in shader code");
 		}
 		fail(expr.line, "unknown expression");
 	}
@@ -2187,6 +2276,78 @@ private:
 			fail(line, "'" + name + "' needs shader model 5");
 	}
 
+	// tex2D, texCUBElod and the rest of the D3D9 texture functions: they name a sampler, and read the texture bound at its number.
+	std::optional<Ref> legacy_texture(const Expr &expr)
+	{
+		static const std::pair<const char *, ObjectKind> shapes[] = {{"tex1D", ObjectKind::texture1d}, {"tex2D", ObjectKind::texture2d},
+			{"tex3D", ObjectKind::texture3d}, {"texCUBE", ObjectKind::texture_cube}};
+		const auto &name = expr.text;
+		const uint32_t line = expr.line;
+		for (const auto &[prefix, kind] : shapes) {
+			if (!name.starts_with(prefix))
+				continue;
+			const std::string variant = name.substr(std::strlen(prefix));
+			if (variant != "" && variant != "bias" && variant != "lod" && variant != "grad" && variant != "proj")
+				return std::nullopt;
+			const size_t count = expr.operands.size();
+			const bool gradients = variant == "grad" || (variant.empty() && count == 4);
+			if (count != (gradients ? 4u : 2u))
+				fail(line, "wrong number of arguments to '" + name + "'");
+			const Ref sampler = eval(*expr.operands[0]);
+			auto &state = resource_of(sampler, line);
+			if (!is_sampler(state.kind))
+				fail(line, "'" + name + "' needs a sampler");
+			if (state.paired < 0) {
+				Resource texture;
+				texture.name = state.name;
+				texture.kind = kind;
+				texture.element = Type::make_vector(Scalar::floating, 4);
+				texture.count = state.count;
+				state.paired = int(resources.size());
+				resources.push_back(texture);
+			}
+			// Looked up again: adding the texture may have moved the resources.
+			auto &paired = resources[size_t(resources[size_t(sampler.resource)].paired)];
+			paired.used = true;
+			if (paired.kind != kind)
+				fail(line, "the sampler is read as two kinds of texture");
+			const uint32_t coords = coordinate_count(kind);
+			const Type full = Type::make_vector(Scalar::floating, 4);
+			auto address = readable(convert(value(*expr.operands[1]), variant.empty() || gradients ? Type::make_vector(Scalar::floating, uint8_t(coords)) : full, line).locs);
+			uint16_t opcode = sm4::sample;
+			std::vector<Operand> extra;
+			if (variant == "bias" || variant == "lod") {
+				opcode = variant == "bias" ? sm4::sample_b : sm4::sample_l;
+				extra.push_back(scalar_source(address[3]));
+				address.resize(coords);
+			} else if (variant == "proj") {
+				Ref position;
+				position.type = Type::make_vector(Scalar::floating, uint8_t(coords));
+				position.locs.assign(address.begin(), address.begin() + coords);
+				Ref divisor;
+				divisor.type = position.type;
+				divisor.locs.assign(coords, address[3]);
+				address = readable(apply(sm4::div, position.type, {position, divisor}).locs);
+			} else if (gradients) {
+				opcode = sm4::sample_d;
+				for (size_t k = 2; k < 4; ++k)
+					extra.push_back(source_first(readable(convert(value(*expr.operands[k]), Type::make_vector(Scalar::floating,
+						uint8_t(gradient_count(kind))), line).locs)));
+			}
+			Ref holder;
+			holder.resource = resources[size_t(sampler.resource)].paired;
+			holder.resource_element = sampler.resource_element;
+			holder.resource_dynamic = sampler.resource_dynamic;
+			Ref result = new_value(full);
+			std::vector<Operand> list{dest_of(result.locs[0], 0xf), source_first(address), resource_operand(holder, sm4::resource),
+				sampler_operand(sampler, line)};
+			list.insert(list.end(), extra.begin(), extra.end());
+			emit(opcode, list);
+			return result;
+		}
+		return std::nullopt;
+	}
+
 	Ref intrinsic(const Expr &expr)
 	{
 		const auto &name = expr.text;
@@ -2196,6 +2357,9 @@ private:
 			if (count != wanted)
 				fail(line, "'" + name + "' takes " + std::to_string(wanted) + " arguments");
 		};
+		if (name.starts_with("tex"))
+			if (auto sampled = legacy_texture(expr))
+				return *sampled;
 		// Intrinsics with out arguments read their arguments themselves.
 		if (name == "sincos") {
 			expect(3);
@@ -2506,7 +2670,12 @@ private:
 				return apply(sm4::eq, mask, {x, infinity}, false, {}, {true});
 			return apply(sm4::lt, mask, {x, infinity}, false, {}, {true});
 		}
-		if (name == "asfloat" || name == "asint" || name == "asuint") {
+		// Only marks the resource index it is written in as one that may differ between invocations.
+		if (name == "NonUniformResourceIndex") {
+			expect(1);
+			return args[0];
+		}
+				if (name == "asfloat" || name == "asint" || name == "asuint") {
 			expect(1);
 			Ref result = args[0];
 			result.type.scalar = name == "asfloat" ? Scalar::floating : name == "asint" ? Scalar::integer : Scalar::unsigned_integer;
@@ -2788,7 +2957,10 @@ private:
 				fail(line, "unknown method '" + name + "'");
 			const uint32_t coords = coordinate_count(kind) + (multisampled ? 0 : 1);
 			expect(multisampled ? 2 : 1, multisampled ? 3 : 2);
-			const auto address = readable(convert(value(argument(0)), Type::make_vector(Scalar::integer, uint8_t(coords)), line).locs);
+			auto address = convert(value(argument(0)), Type::make_vector(Scalar::integer, uint8_t(coords)), line).locs;
+			if (!multisampled)
+				address = mip_last(address);
+			address = readable(address);
 			Ref result = new_value(resource.element);
 			std::vector<Operand> list{dest_of(result.locs[0], uint8_t((1 << result.locs.size()) - 1)), source_first(address), texture};
 			size_t next = 1;
@@ -2825,6 +2997,7 @@ private:
 			target.access = std::make_shared<Access>();
 			target.access->target = object.resource;
 			target.access->element = object.resource_element;
+			target.access->element_dynamic = object.resource_dynamic;
 			target.access->uav = true;
 			target.access->address = convert(value(argument(0)), scalar_type(Scalar::unsigned_integer), line).locs;
 			std::vector<const Expr *> rest;
@@ -3127,20 +3300,98 @@ private:
 			statement(*function.body);
 			return;
 		}
+		returning(*function.body);
+	}
+
+	// A body that returns from inside flow control, in a block that every return breaks out of.
+	void returning(const Stmt &body)
+	{
 		const uint32_t flag = new_register();
 		frames.back().returned = flag;
 		frames.back().loop_depth = loops.size();
 		write(temp_locs(flag, 1), {constant_loc(0)});
-		// A switch with only a default case, which every return breaks out of.
-		emit(sm4::op_switch, {Operand::values({}, 1)});
-		emit(sm4::op_default, {});
 		Loop wrapper;
 		wrapper.is_switch = true;
+		once(wrapper, [&] { statement(body); });
+	}
+
+	// A switch with only a default case, which runs its contents once and which a break leaves.
+	void once(const Loop &wrapper, const std::function<void()> &contents)
+	{
+		emit(sm4::op_switch, {Operand::values({}, 1)});
+		emit(sm4::op_default, {});
 		loops.push_back(wrapper);
-		statement(*function.body);
+		contents();
 		loops.pop_back();
 		emit(sm4::op_break, {});
 		emit(sm4::endswitch, {});
+	}
+
+	// A switch on shader model 2 and 3, which have none: each case runs once a case at or before it matched, in a block that break
+	// leaves, and the default matches when no case does.
+	void legacy_switch(const Stmt &stmt, const Loc &selector)
+	{
+		const auto equals = [&](int64_t label) {
+			const uint32_t reg = new_register();
+			emit(sm4::ieq, {temp_dest(reg, 1), scalar_source(selector), typed_values({uint32_t(label), 0, 0, 0}, Scalar::integer)});
+			return temp_locs(reg, 1)[0];
+		};
+		std::optional<Loc> any;
+		for (const auto &[label, body] : stmt.cases) {
+			if (!label)
+				continue;
+			const Loc test = equals(*label);
+			if (any) {
+				const uint32_t reg = new_register();
+				emit(sm4::op_or, {temp_dest(reg, 1), scalar_source(*any), scalar_source(test)});
+				any = temp_locs(reg, 1)[0];
+			} else
+				any = test;
+		}
+		const uint32_t matched = new_register();
+		write(temp_locs(matched, 1), {bool_constant(false).locs[0]});
+		Loop wrapper;
+		wrapper.is_switch = true;
+		once(wrapper, [&] {
+			for (const auto &[label, body] : stmt.cases) {
+				if (label)
+					emit(sm4::op_or, {temp_dest(matched, 1), scalar_source(temp_locs(matched, 1)[0]), scalar_source(equals(*label))});
+				else if (any) {
+					const uint32_t none = new_register();
+					emit(sm4::op_not, {temp_dest(none, 1), scalar_source(*any)});
+					emit(sm4::op_or, {temp_dest(matched, 1), scalar_source(temp_locs(matched, 1)[0]), scalar_source(temp_locs(none, 1)[0])});
+				} else
+					write(temp_locs(matched, 1), {bool_constant(true).locs[0]});
+				emit(sm4::op_if, {scalar_source(temp_locs(matched, 1)[0])}, test_nonzero);
+				scopes.emplace_back();
+				for (const auto &item : body)
+					statement(*item);
+				scopes.pop_back();
+				emit(sm4::endif, {});
+			}
+		});
+		after_breakable();
+	}
+
+	// A loop body. On shader model 2 and 3, which have no continue, a body that continues runs in a block that continue leaves.
+	void loop_body(const Stmt &body)
+	{
+		bool breaks = false, continues = false;
+		jumps(body, false, breaks, continues);
+		if (!legacy || !continues) {
+			scoped(body);
+			return;
+		}
+		const uint32_t flag = new_register();
+		write(temp_locs(flag, 1), {constant_loc(0)});
+		Loop wrapper;
+		wrapper.is_switch = true;
+		wrapper.broken = flag;
+		once(wrapper, [&] { scoped(body); });
+		after_breakable();
+		emit(sm4::op_if, {scalar_source(temp_locs(flag, 1)[0])}, test_nonzero);
+		emit(sm4::op_break, {});
+		emit(sm4::endif, {});
 	}
 
 	Ref call(const Expr &expr)
@@ -3307,7 +3558,7 @@ private:
 		assigned_names(*stmt.then_branch, assigned);
 		bool breaks = false, continues = false;
 		jumps(*stmt.then_branch, false, breaks, continues);
-		if (assigned.count(name) || continues)
+		if (assigned.count(name) || (continues && !legacy))
 			return false;
 		// The passes, found without emitting anything: a bound that is not a constant leaves the loop as it is.
 		const size_t mark = code.size();
@@ -3337,15 +3588,14 @@ private:
 			return false;
 		}
 		// A break leaves the copies through a loop around them that runs once.
-		Loop once;
 		if (breaks) {
 			emit(sm4::loop, {});
-			loops.push_back(once);
+			loops.push_back(Loop{});
 		}
 		for (const auto pass : passes) {
 			scopes.emplace_back();
 			scopes.back()[name] = constant(type, {pass});
-			scoped(*stmt.then_branch);
+			loop_body(*stmt.then_branch);
 			scopes.pop_back();
 		}
 		if (breaks) {
@@ -3408,7 +3658,8 @@ private:
 		layout(value.type, slots, next, [](uint32_t reg) { return Operand::reg(sm4::immediate_constant_buffer, reg); });
 		icb.resize(icb.size() + next);
 		for (size_t k = 0; k < slots.size(); ++k)
-			icb[size_t(base) + slots[k].base.index[0]][slots[k].component] = value.locs[k].bits;
+			icb[size_t(base) + slots[k].base.index[0]][slots[k].component] =
+				legacy ? float_bits(legacy_value(value.locs[k].bits, kind_of(value.locs[k]))) : value.locs[k].bits;
 		return base;
 	}
 
@@ -3490,7 +3741,7 @@ private:
 				else if (!test.bits)
 					emit(sm4::op_break, {});
 			}
-			scoped(*stmt.then_branch);
+			loop_body(*stmt.then_branch);
 			if (stmt.step)
 				eval(*stmt.step);
 			if (stmt.kind == Stmt::Kind::do_statement) {
@@ -3510,6 +3761,10 @@ private:
 			const Ref selector = convert(value(*stmt.value), scalar_type(Scalar::integer), stmt.line);
 			if (!selector.type.numeric() || selector.locs.size() != 1)
 				fail(stmt.line, "switch needs a scalar");
+			if (legacy) {
+				legacy_switch(stmt, readable(selector.locs)[0]);
+				return;
+			}
 			emit(sm4::op_switch, {scalar_source(readable(selector.locs)[0])});
 			Loop loop;
 			loop.is_switch = true;
@@ -3532,9 +3787,15 @@ private:
 		case Stmt::Kind::break_statement:
 			if (loops.size() <= own_loops())
 				fail(stmt.line, "break outside of a loop or switch");
+			if (loops.back().broken)
+				write(temp_locs(*loops.back().broken, 1), {bool_constant(true).locs[0]});
 			emit(sm4::op_break, {});
 			return;
 		case Stmt::Kind::continue_statement: {
+			if (legacy && loops.size() > own_loops() && loops.back().broken) {
+				emit(sm4::op_break, {});
+				return;
+			}
 			const Loop *target = nullptr;
 			for (size_t at = loops.size(); at > own_loops(); --at)
 				if (!loops[at - 1].is_switch) {
@@ -3543,6 +3804,8 @@ private:
 				}
 			if (!target)
 				fail(stmt.line, "continue outside of a loop");
+			if (legacy)
+				fail(stmt.line, "continue inside a switch needs shader model 4");
 			const Loop copy = *target;
 			if (copy.step)
 				eval(*copy.step);
@@ -3560,7 +3823,7 @@ private:
 			if (stage != Stage::pixel)
 				fail(stmt.line, "discard is only valid in pixel shaders");
 			uses_discard = true;
-			emit(sm4::discard, {Operand::values({~0u, ~0u, ~0u, ~0u}, 1)}, test_nonzero);
+			emit(sm4::discard, {typed_values({~0u, ~0u, ~0u, ~0u}, Scalar::boolean)}, test_nonzero);
 			return;
 		case Stmt::Kind::return_statement: {
 			if (stmt.value) {
@@ -3574,12 +3837,12 @@ private:
 			Frame &frame = frames.back();
 			if (!stmt.value && frame.result.type.shape != Type::Shape::void_type)
 				fail(stmt.line, "the function must return a value");
-			if (frame.entry) {
+			if (frame.entry && !frame.returned) {
 				emit_outputs();
 				emit(sm4::ret, {});
 			} else if (frame.returned) {
 				if (loops.size() > frame.loop_depth + 1)
-					write(temp_locs(*frame.returned, 1), {constant_loc(~0u)});
+					write(temp_locs(*frame.returned, 1), {bool_constant(true).locs[0]});
 				emit(sm4::op_break, {});
 			}
 			return;
@@ -3599,7 +3862,9 @@ private:
 		resource.register_class = is_sampler(resource.kind) ? 's' : is_uav(resource.kind) ? 'u' : 't';
 		if (variable.register_class == resource.register_class)
 			resource.explicit_register = variable.register_index;
+		resource.space = variable.register_space;
 		resource.count = element_count(variable.type);
+		resource.line = variable.line;
 		resource.comparison = resource.kind == ObjectKind::sampler_comparison;
 		if (is_structured(resource.kind))
 			resource.stride = tight_size(resource.element);
@@ -3639,6 +3904,8 @@ private:
 		buffers.push_back(globals_buffer);
 		std::vector<std::pair<size_t, const Variable *>> members;
 		for (const auto &variable : program.globals) {
+			if (variable.type.shape == Type::Shape::object && effect_object(variable.type.object))
+				continue;
 			if (variable.type.shape == Type::Shape::object)
 				add_resource(variable);
 			else if (variable.is_groupshared)
@@ -3656,22 +3923,40 @@ private:
 				view.kind = ObjectKind::buffer;
 				view.element = Type::make_vector(Scalar::floating, 4);
 				view.explicit_register = declared.register_index;
+				view.space = declared.register_space;
+				view.line = declared.line;
 				view.texture_buffer = true;
 				buffer.resource = int(resources.size());
 				resources.push_back(view);
 			} else
 				buffer.explicit_register = declared.register_index;
+			buffer.space = declared.register_space;
+			buffer.line = declared.line;
 			buffers.push_back(buffer);
 			for (const auto &variable : declared.members) {
+				if (variable.type.shape == Type::Shape::object && effect_object(variable.type.object))
+					continue;
 				if (variable.type.shape == Type::Shape::object)
 					add_resource(variable);
 				else
 					members.emplace_back(buffers.size() - 1, &variable);
 			}
 		}
+		size_t argument = 0;
 		for (const auto &parameter : entry.parameters) {
 			if (!parameter.is_uniform)
 				continue;
+			// An effect's CompileShader(ps_4_0, main(true)) gives the uniform parameters their values.
+			if (argument < uniform_arguments.size()) {
+				scopes = {{}};
+				Ref bound = convert(value(*uniform_arguments[argument++]), parameter.type, entry.line);
+				scopes.clear();
+				if (!all_immediate(bound))
+					fail(entry.line, "the value of uniform parameter '" + parameter.name + "' must be a constant");
+				bound.writable = false;
+				globals[parameter.name] = bound;
+				continue;
+			}
 			if (parameter_uniforms.empty()) {
 				Buffer params;
 				params.name = "$Params";
@@ -3694,6 +3979,7 @@ private:
 			const uint32_t offset = variable->pack_offset >= 0 ? uint32_t(variable->pack_offset) * 4 : cb_place(type, ends[index]);
 			BufferVariable entry;
 			entry.name = variable->name;
+			entry.source = variable;
 			entry.type = type;
 			entry.offset = offset;
 			entry.size = cb_size(type);
@@ -3708,6 +3994,45 @@ private:
 		for (size_t i = 0; i < buffers.size(); ++i)
 			buffers[i].size = align16(ends[i]);
 	}
+
+	// The value a variable starts with, from its initializer, its scalars packed in the order written as effects store them; none when it
+	// has no initializer or it is not constant.
+	std::vector<uint8_t> default_value(const BufferVariable &variable)
+	{
+		if (!variable.source || !variable.source->initializer)
+			return {};
+		std::vector<std::pair<uint32_t, Scalar>> scalars;
+		try {
+			scalars = constant_scalars(*variable.source->initializer, variable.type);
+		} catch (const GenerateError &) {
+			return {};
+		}
+		std::vector<uint8_t> bytes(scalars.size() * 4);
+		for (size_t k = 0; k < scalars.size(); ++k)
+			std::memcpy(bytes.data() + k * 4, &scalars[k].first, 4);
+		return bytes;
+	}
+
+public:
+	std::vector<std::pair<uint32_t, Scalar>> constant_scalars(const Expr &expr, const Type &type)
+	{
+		scopes = {{}};
+		const Ref value = type.shape == Type::Shape::void_type ? this->value(expr) : initial_value(expr, type);
+		scopes.clear();
+		if (!all_immediate(value))
+			fail(expr.line, "the value must be a constant");
+		std::vector<std::pair<uint32_t, Scalar>> scalars;
+		for (const auto &loc : value.locs) {
+			// Effects store true as 1.
+			const Scalar kind = loc.scalar == Scalar::none ? (type.shape == Type::Shape::void_type ? Scalar::floating : type.scalar) : loc.scalar;
+			scalars.emplace_back(kind == Scalar::boolean ? (loc.bits ? 1 : 0) : loc.bits, kind);
+		}
+		return scalars;
+	}
+
+	ReflectedType reflected(const Type &type) { return reflect(type); }
+
+private:
 
 	// Static globals take their values at the start of the entry point.
 	void initialize_statics()
@@ -4240,11 +4565,18 @@ private:
 			fail(function.line, "a geometry shader needs an input primitive and an output stream");
 		frames.push_back(frame);
 		scopes = {scope};
-		statement(*function.body);
 		const auto &items = function.body->body;
-		if (items.empty() || items.back()->kind != Stmt::Kind::return_statement) {
+		// Shader model 2 and 3 return only at the end: an earlier return leaves a block around the body instead.
+		if (legacy && needs_wrap(*function.body)) {
+			returning(*function.body);
 			emit_outputs();
 			emit(sm4::ret, {});
+		} else {
+			statement(*function.body);
+			if (items.empty() || items.back()->kind != Stmt::Kind::return_statement) {
+				emit_outputs();
+				emit(sm4::ret, {});
+			}
 		}
 		frames.pop_back();
 		scopes.clear();
@@ -4256,12 +4588,12 @@ private:
 	template<typename List>
 	static void bind(List &list, const std::function<bool(const typename List::value_type &)> &member)
 	{
-		std::set<uint32_t> taken;
+		std::set<std::pair<uint32_t, uint32_t>> taken;
 		for (auto &item : list)
 			if (member(item) && item.used && item.explicit_register >= 0) {
 				item.bound = item.explicit_register;
 				for (uint32_t k = 0; k < count_of(item); ++k)
-					taken.insert(uint32_t(item.bound) + k);
+					taken.emplace(item.space, uint32_t(item.bound) + k);
 			}
 		for (auto &item : list) {
 			if (!member(item) || !item.used || item.bound >= 0)
@@ -4270,14 +4602,38 @@ private:
 			for (;; ++slot) {
 				bool free = true;
 				for (uint32_t k = 0; k < count_of(item) && free; ++k)
-					free = !taken.count(slot + k);
+					free = !taken.count({item.space, slot + k});
 				if (free)
 					break;
 			}
 			item.bound = int(slot);
 			for (uint32_t k = 0; k < count_of(item); ++k)
-				taken.insert(slot + k);
+				taken.emplace(item.space, slot + k);
 		}
+	}
+
+	// Shader model 5.1 ranges: per register class, numbered in the order of their spaces and registers.
+	void number_ranges()
+	{
+		const auto number = [](auto pointers) {
+			std::sort(pointers.begin(), pointers.end(), [](const auto *a, const auto *b) {
+				return std::pair(a->space, a->bound) < std::pair(b->space, b->bound);
+			});
+			for (size_t i = 0; i < pointers.size(); ++i)
+				pointers[i]->range = uint32_t(i);
+		};
+		for (const char letter : {'s', 't', 'u'}) {
+			std::vector<Resource *> list;
+			for (auto &resource : resources)
+				if (resource.used && resource.register_class == letter)
+					list.push_back(&resource);
+			number(list);
+		}
+		std::vector<Buffer *> list;
+		for (auto &buffer : buffers)
+			if (buffer.used && !buffer.texture)
+				list.push_back(&buffer);
+		number(list);
 	}
 
 	static uint32_t count_of(const Resource &resource) { return resource.count; }
@@ -4285,18 +4641,52 @@ private:
 
 	void bind_all()
 	{
-		for (const char letter : {'t', 's', 'u'})
+		// What only shader model 5.1 can bind is refused where it is used.
+		if (!sm51) {
+			for (const auto &resource : resources)
+				if (resource.used && !resource.count)
+					fail(resource.line, "an array of resources without a size needs shader model 5.1");
+			for (const auto &resource : resources)
+				if (resource.used && resource.space)
+					fail(resource.line, "register spaces need shader model 5.1");
+			for (const auto &buffer : buffers)
+				if (buffer.used && buffer.space)
+					fail(buffer.line, "register spaces need shader model 5.1");
+		}
+		// Samplers first: the texture a D3D9 texture function reads takes the number of its sampler.
+		for (const char letter : {'s', 't', 'u'}) {
 			bind(resources, [letter](const Resource &resource) { return resource.register_class == letter; });
+			if (letter == 's')
+				for (const auto &resource : resources)
+					if (resource.paired >= 0 && resource.used)
+						resources[size_t(resource.paired)].explicit_register = resource.bound;
+		}
 		bind(buffers, [](const Buffer &buffer) { return !buffer.texture; });
 		for (auto &buffer : buffers)
 			if (buffer.texture && buffer.used)
 				buffer.bound = resources[size_t(buffer.resource)].bound;
+		if (sm51)
+			number_ranges();
+		// Shader model 5.1 names a register by its range and its number in the space: t3 of the range t0 is t0[3], and the third
+		// register of cb1 at b2 is cb1[2][3].
 		const auto remap = [&](Operand &operand) {
 			if (operand.type == sm4::resource || operand.type == sm4::sampler || operand.type == sm4::uav) {
 				const auto &resource = resources[operand.index[0] & 0xffff];
-				operand.index[0] = uint32_t(resource.bound) + (operand.index[0] >> 16);
-			} else if (operand.type == sm4::constant_buffer)
-				operand.index[0] = uint32_t(buffers[operand.index[0]].bound);
+				const uint32_t number = uint32_t(resource.bound) + (operand.index[0] >> 16);
+				if (sm51) {
+					operand.dimension = 2;
+					operand.index = {resource.range, number, 0};
+				} else
+					operand.index[0] = number;
+			} else if (operand.type == sm4::constant_buffer) {
+				const auto &buffer = buffers[operand.index[0]];
+				if (sm51) {
+					operand.dimension = 3;
+					operand.index = {buffer.range, uint32_t(buffer.bound), operand.index[1]};
+					operand.relative = {std::nullopt, std::nullopt, operand.relative[1]};
+				} else
+					operand.index[0] = uint32_t(buffer.bound);
+			}
 		};
 		for (auto *list : {&code, &control_code})
 			for (auto &instruction : *list)
@@ -4460,33 +4850,55 @@ private:
 			operand.mode = Operand::Mode::swizzle;
 			operand.dimension = 2;
 			operand.index[1] = std::max<uint32_t>(1, buffer->size / 16);
-			list.push_back(declaration(sm4::dcl_constant_buffer, {operand}, buffer->dynamic ? 1 : 0));
+			if (sm51) {
+				operand.dimension = 3;
+				operand.index = {buffer->range, uint32_t(buffer->bound), uint32_t(buffer->bound)};
+				list.push_back(declaration(sm4::dcl_constant_buffer, {operand}, buffer->dynamic ? 1 : 0,
+					{std::max<uint32_t>(1, buffer->size / 16), buffer->space}));
+			} else
+				list.push_back(declaration(sm4::dcl_constant_buffer, {operand}, buffer->dynamic ? 1 : 0));
 		}
 		std::vector<const Resource *> used;
 		for (const auto &resource : resources)
 			if (resource.used)
 				used.push_back(&resource);
 		std::sort(used.begin(), used.end(), [](const Resource *a, const Resource *b) { return a->bound < b->bound; });
+		// Shader model 5.1 declares a resource array as one range, followed by its space; earlier models declare every register.
+		const auto ranges = [&](const Resource &resource, uint8_t type) {
+			std::vector<std::pair<Operand, std::vector<uint32_t>>> result;
+			if (sm51) {
+				Operand operand = declared(type, resource.range);
+				operand.dimension = 3;
+				operand.index = {resource.range, uint32_t(resource.bound), resource.count ? uint32_t(resource.bound) + resource.count - 1 : ~0u};
+				result.emplace_back(operand, std::vector<uint32_t>{resource.space});
+			} else
+				for (uint32_t k = 0; k < resource.count; ++k)
+					result.emplace_back(declared(type, uint32_t(resource.bound) + k), std::vector<uint32_t>{});
+			return result;
+		};
+		const auto with = [](std::vector<uint32_t> extra, const std::vector<uint32_t> &space) {
+			extra.insert(extra.end(), space.begin(), space.end());
+			return extra;
+		};
 		for (const auto *resource : used)
 			if (resource->register_class == 's')
-				for (uint32_t k = 0; k < resource->count; ++k)
-					list.push_back(declaration(sm4::dcl_sampler, {declared(sm4::sampler, uint32_t(resource->bound) + k)}, resource->comparison ? 1 : 0));
+				for (auto &[operand, space] : ranges(*resource, sm4::sampler))
+					list.push_back(declaration(sm4::dcl_sampler, {operand}, resource->comparison ? 1 : 0, space));
 		for (const char letter : {'t', 'u'})
 			for (const auto *resource : used) {
 				if (resource->register_class != letter)
 					continue;
 				const uint8_t type = letter == 't' ? sm4::resource : sm4::uav;
-				for (uint32_t k = 0; k < resource->count; ++k) {
-					const Operand operand = declared(type, uint32_t(resource->bound) + k);
+				for (auto &[operand, space] : ranges(*resource, type)) {
 					const uint32_t rt = return_type(resource->element);
 					if (is_raw(resource->kind))
-						list.push_back(declaration(letter == 't' ? sm4::dcl_resource_raw : sm4::dcl_uav_raw, {operand}));
+						list.push_back(declaration(letter == 't' ? sm4::dcl_resource_raw : sm4::dcl_uav_raw, {operand}, 0, space));
 					else if (is_structured(resource->kind))
 						list.push_back(declaration(letter == 't' ? sm4::dcl_resource_structured : sm4::dcl_uav_structured, {operand},
-							resource->counter ? 1u << 12 : 0, {resource->stride}));
+							resource->counter ? 1u << 12 : 0, with({resource->stride}, space)));
 					else
 						list.push_back(declaration(letter == 't' ? sm4::dcl_resource : sm4::dcl_uav_typed, {operand},
-							resource_dimension(resource->kind) | resource->samples << 5, {rt | rt << 4 | rt << 8 | rt << 12}));
+							resource_dimension(resource->kind) | resource->samples << 5, with({rt | rt << 4 | rt << 8 | rt << 12}, space)));
 				}
 			}
 		if (stage == Stage::geometry) {
@@ -4662,6 +5074,8 @@ private:
 		}
 		static const uint16_t kinds[] = {1, 2, 19, 3, 3, 39, 0};
 		result.type = base.shape == Type::Shape::structure ? 0 : kinds[int(base.scalar)];
+		result.size = cb_size(type);
+		result.element_size = cb_size(base);
 		result.rows = base.shape == Type::Shape::matrix ? base.rows : 1;
 		result.columns = base.shape == Type::Shape::matrix || base.shape == Type::Shape::vector ? base.columns : 1;
 		if (base.shape == Type::Shape::structure) {
@@ -4706,6 +5120,8 @@ private:
 			binding.name = resource.name;
 			binding.bind_point = uint32_t(resource.bound);
 			binding.bind_count = resource.count;
+			binding.space = resource.space;
+			binding.range = resource.range;
 			if (resource.explicit_register >= 0)
 				binding.flags |= 1;
 			if (is_sampler(resource.kind)) {
@@ -4739,6 +5155,8 @@ private:
 				binding.name = buffer.name;
 				binding.input_type = buffer.texture ? 1 : 0;
 				binding.bind_point = uint32_t(buffer.bound);
+				binding.space = buffer.texture ? resources[size_t(buffer.resource)].space : buffer.space;
+				binding.range = buffer.texture ? resources[size_t(buffer.resource)].range : buffer.range;
 				binding.flags = (buffer.texture ? resources[size_t(buffer.resource)].explicit_register : buffer.explicit_register) >= 0 ? 1 : 0;
 				binding.buffer = index++;
 				constants.push_back(binding);
@@ -4823,15 +5241,28 @@ Generated Generator::run(const std::string &entry, const std::string &target)
 	static const std::map<std::string, Stage> stages{{"ps", Stage::pixel}, {"vs", Stage::vertex}, {"gs", Stage::geometry}, {"hs", Stage::hull},
 		{"ds", Stage::domain}, {"cs", Stage::compute}};
 	const auto found = target.size() >= 6 ? stages.find(target.substr(0, 2)) : stages.end();
-	if (found == stages.end() || target[2] != '_' || target[4] != '_' || !std::isdigit(uint8_t(target[3])) || !std::isdigit(uint8_t(target[5])))
+	// xx_M_N, and the Direct3D 9 feature level forms of shader model 4: vs_4_0_level_9_1 and ps_4_0_level_9_3.
+	const bool level9 = target.size() == 16 && target.substr(2, 12) == "_4_0_level_9" && target[14] == '_' &&
+		(target[15] == '1' || target[15] == '3') && (found != stages.end() && (found->second == Stage::vertex || found->second == Stage::pixel));
+	if (found == stages.end() || (target.size() != 6 && !level9) || target[2] != '_' || target[4] != '_' || !std::isdigit(uint8_t(target[3])) ||
+		!std::isalnum(uint8_t(target[5])))
 		fail(0, "invalid target '" + target + "'");
 	stage = found->second;
 	out.stage = stage;
 	out.major = uint32_t(target[3] - '0');
 	out.minor = uint32_t(target[5] - '0');
-	if (out.major < 4 || out.major > 5 || out.minor > 1 || (out.major == 5 && out.minor != 0))
-		fail(0, "target '" + target + "' is not a shader model 4 or 5 target");
+	out.target = target;
+	static const char *const legacy_targets[] = {"vs_2_0", "vs_2_a", "vs_3_0", "ps_2_0", "ps_2_a", "ps_2_b", "ps_3_0"};
+	legacy = std::find(std::begin(legacy_targets), std::end(legacy_targets), target) != std::end(legacy_targets);
+	if (legacy) {
+		out.minor = 0;
+		// Shader model 2 has no loops that run a number of times found at run time, and pixel shaders cannot index constants at run time.
+		if (out.major == 2 || stage == Stage::pixel)
+			unroll_all = true;
+	} else if (out.major < 4 || out.major > 5 || out.minor > 1)
+		fail(0, "target '" + target + "' is not a shader model 2, 3, 4 or 5 target");
 	sm5 = out.major == 5;
+	sm51 = sm5 && out.minor == 1;
 	if ((stage == Stage::hull || stage == Stage::domain) && !sm5)
 		fail(0, "hull and domain shaders need shader model 5");
 	const Function *function = nullptr;
@@ -4870,10 +5301,55 @@ Generated Generator::run(const std::string &entry, const std::string &target)
 	return std::move(out);
 }
 
-Generated generate(const Program &program, const std::string &entry, const std::string &target, uint32_t flags)
+std::vector<ReflectedBuffer> Generator::layout()
+{
+	static const Function none;
+	sm5 = true;
+	collect_globals(none);
+	std::vector<ReflectedBuffer> result;
+	for (const auto &buffer : buffers) {
+		ReflectedBuffer reflected;
+		reflected.name = buffer.name;
+		reflected.size = buffer.size;
+		reflected.kind = buffer.texture ? 1 : 0;
+		for (const auto &variable : buffer.variables) {
+			ReflectedVariable item;
+			item.name = variable.name;
+			item.offset = variable.offset;
+			item.size = variable.size;
+			item.type = reflect(variable.type);
+			item.default_value = default_value(variable);
+			reflected.variables.push_back(item);
+		}
+		result.push_back(reflected);
+	}
+	return result;
+}
+
+std::vector<ReflectedBuffer> effect_layout(const Program &program, uint32_t flags)
+{
+	Generator generator(program, flags);
+	return generator.layout();
+}
+
+ReflectedType effect_type(const Program &program, const Type &type, uint32_t flags)
+{
+	Generator generator(program, flags);
+	return generator.reflected(type);
+}
+
+std::vector<std::pair<uint32_t, Scalar>> effect_constant(const Program &program, const Expr &expr, const Type &type, uint32_t flags)
+{
+	Generator generator(program, flags);
+	return generator.constant_scalars(expr, type);
+}
+
+Generated generate(const Program &program, const std::string &entry, const std::string &target, uint32_t flags,
+	const std::vector<const Expr *> &uniform_arguments)
 {
 	try {
 		Generator generator(program, flags);
+		generator.uniform_arguments = uniform_arguments;
 		return generator.run(entry, target);
 	} catch (const GenerateError &error) {
 		// Texture offsets, resource array indices and the like must be constants: loops whose counter reaches them run unrolled, as the
@@ -4883,6 +5359,7 @@ Generated generate(const Program &program, const std::string &entry, const std::
 			throw;
 		Generator generator(program, flags);
 		generator.unroll_all = true;
+		generator.uniform_arguments = uniform_arguments;
 		return generator.run(entry, target);
 	}
 }

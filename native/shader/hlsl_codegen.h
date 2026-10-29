@@ -30,6 +30,8 @@ struct ReflectedType {
 	std::string name;
 	std::vector<std::pair<std::string, ReflectedType>> members;
 	std::vector<uint32_t> member_offsets;
+	// Bytes the value takes in a constant buffer, and one element's, as effects describe types.
+	uint32_t size = 0, element_size = 0;
 };
 
 struct ReflectedVariable {
@@ -52,6 +54,8 @@ struct ReflectedBuffer {
 struct ReflectedBinding {
 	std::string name;
 	uint32_t input_type = 0, return_type = 0, dimension = 0, samples = 0, bind_point = 0, bind_count = 1, flags = 0, stride = 0;
+	// Shader model 5.1: the register space and the range the shader names it by.
+	uint32_t space = 0, range = 0;
 	// The constant buffer a cbuffer binding stands for.
 	int buffer = -1;
 };
@@ -59,6 +63,8 @@ struct ReflectedBinding {
 struct Generated {
 	Stage stage = Stage::pixel;
 	uint32_t major = 4, minor = 0;
+	// As given: "ps_2_b" and "vs_2_a" differ from their _0 targets in what they allow.
+	std::string target;
 	std::vector<sm4::Instruction> instructions;
 	std::vector<SignatureElement> inputs, outputs, patch_constants;
 	std::vector<ReflectedBuffer> buffers;
@@ -72,7 +78,19 @@ struct GenerateError {
 	std::string message;
 };
 
-// The program of the entry point for a target such as "ps_4_0" or "cs_5_0", or a GenerateError.
-Generated generate(const Program &program, const std::string &entry, const std::string &target, uint32_t flags);
+// The program of the entry point for a target such as "ps_4_0" or "cs_5_0", or a GenerateError. An effect gives the uniform parameters
+// of the entry point their values.
+Generated generate(const Program &program, const std::string &entry, const std::string &target, uint32_t flags,
+	const std::vector<const Expr *> &uniform_arguments = {});
+
+// Every constant buffer with every variable and its starting value, as an effect lists them.
+std::vector<ReflectedBuffer> effect_layout(const Program &program, uint32_t flags);
+
+// A type as reflection describes it.
+ReflectedType effect_type(const Program &program, const Type &type, uint32_t flags);
+
+// The scalars of a constant expression in the order written, converted to a type unless it is void, with their kinds; a GenerateError
+// when the expression is not constant.
+std::vector<std::pair<uint32_t, Scalar>> effect_constant(const Program &program, const Expr &expr, const Type &type, uint32_t flags);
 
 }

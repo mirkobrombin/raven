@@ -1,5 +1,6 @@
 #include "hlsl_parser.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <stdexcept>
@@ -34,14 +35,22 @@ const std::map<std::string, Scalar> &scalar_names()
 const std::map<std::string, ObjectKind> &object_names()
 {
 	static const std::map<std::string, ObjectKind> names{{"SamplerState", ObjectKind::sampler}, {"sampler", ObjectKind::sampler},
-		{"sampler2D", ObjectKind::sampler}, {"SamplerComparisonState", ObjectKind::sampler_comparison}, {"Texture1D", ObjectKind::texture1d},
+		{"sampler1D", ObjectKind::sampler}, {"sampler2D", ObjectKind::sampler}, {"sampler3D", ObjectKind::sampler},
+		{"samplerCUBE", ObjectKind::sampler}, {"SamplerComparisonState", ObjectKind::sampler_comparison},
+		{"texture", ObjectKind::texture2d}, {"texture1D", ObjectKind::texture1d}, {"texture2D", ObjectKind::texture2d},
+		{"texture3D", ObjectKind::texture3d}, {"textureCUBE", ObjectKind::texture_cube}, {"Texture1D", ObjectKind::texture1d},
 		{"Texture1DArray", ObjectKind::texture1d_array}, {"Texture2D", ObjectKind::texture2d}, {"Texture2DArray", ObjectKind::texture2d_array},
 		{"Texture2DMS", ObjectKind::texture2dms}, {"Texture2DMSArray", ObjectKind::texture2dms_array}, {"Texture3D", ObjectKind::texture3d},
 		{"TextureCube", ObjectKind::texture_cube}, {"TextureCubeArray", ObjectKind::texture_cube_array}, {"Buffer", ObjectKind::buffer},
 		{"StructuredBuffer", ObjectKind::structured_buffer}, {"ByteAddressBuffer", ObjectKind::byte_address_buffer},
 		{"RWTexture1D", ObjectKind::rw_texture1d}, {"RWTexture1DArray", ObjectKind::rw_texture1d_array}, {"RWTexture2D", ObjectKind::rw_texture2d},
 		{"RWTexture2DArray", ObjectKind::rw_texture2d_array}, {"RWTexture3D", ObjectKind::rw_texture3d}, {"RWBuffer", ObjectKind::rw_buffer},
-		{"RWStructuredBuffer", ObjectKind::rw_structured_buffer}, {"RWByteAddressBuffer", ObjectKind::rw_byte_address_buffer}};
+		{"RWStructuredBuffer", ObjectKind::rw_structured_buffer}, {"RWByteAddressBuffer", ObjectKind::rw_byte_address_buffer},
+		{"BlendState", ObjectKind::blend_state}, {"DepthStencilState", ObjectKind::depth_stencil_state},
+		{"RasterizerState", ObjectKind::rasterizer_state}, {"VertexShader", ObjectKind::vertex_shader}, {"PixelShader", ObjectKind::pixel_shader},
+		{"GeometryShader", ObjectKind::geometry_shader}, {"HullShader", ObjectKind::hull_shader}, {"DomainShader", ObjectKind::domain_shader},
+		{"ComputeShader", ObjectKind::compute_shader}, {"string", ObjectKind::string}, {"RenderTargetView", ObjectKind::render_target_view},
+		{"DepthStencilView", ObjectKind::depth_stencil_view}};
 	return names;
 }
 
@@ -315,20 +324,30 @@ private:
 	}
 
 	// The register and semantic annotations after a declaration: ": SEMANTIC", ": register(t0)", ": packoffset(c0.x)".
-	void annotations(std::string &semantic, char *register_class, int *register_index, int *pack_offset)
+	void annotations(std::string &semantic, char *register_class, int *register_index, int *pack_offset, uint32_t *register_space = nullptr)
 	{
 		while (accept(":")) {
 			if (accept("register")) {
 				expect("(");
 				const auto text = identifier();
 				// register(space0, t1) and register(t1, space0) both name the slot.
-				std::string slot = text;
+				std::string slot = text, space;
 				if (accept(",")) {
 					const auto other = identifier();
 					if (slot.starts_with("space"))
+						std::swap(slot, space);
+					if (slot.empty())
 						slot = other;
+					else
+						space = other;
 				}
 				expect(")");
+				if (!space.empty()) {
+					if (!space.starts_with("space") || space.size() < 6 || !std::all_of(space.begin() + 5, space.end(), ::isdigit))
+						throw ParseError(peek().line, "invalid register space '" + space + "'");
+					if (register_space)
+						*register_space = uint32_t(std::stoul(space.substr(5)));
+				}
 				if (register_class && register_index && slot.size() > 1) {
 					*register_class = char(std::tolower(static_cast<unsigned char>(slot[0])));
 					*register_index = std::stoi(slot.substr(1));
@@ -504,22 +523,21 @@ private:
 			expect(";");
 			return;
 		}
-		// What the effect framework adds to a shader source, techniques and render state objects, means nothing to a shader target.
-		if (is("technique") || is("technique10") || is("technique11") || is("fxgroup")) {
-			while (!is("{") && peek().kind != TokenKind::end)
-				++at;
-			skip_braces();
+		if (is("technique") || is("technique10") || is("technique11")) {
+			program.techniques.push_back(technique());
 			accept(";");
 			return;
 		}
-		if (is("BlendState") || is("DepthStencilState") || is("RasterizerState")) {
-			while (!is(";") && peek().kind != TokenKind::end) {
-				if (is("{"))
-					skip_braces();
-				else
-					++at;
-			}
-			expect(";");
+		if (accept("fxgroup")) {
+			Group group;
+			group.line = peek().line;
+			group.name = identifier();
+			group.annotations = annotation_list();
+			expect("{");
+			while (!accept("}"))
+				group.techniques.push_back(technique());
+			accept(";");
+			program.groups.push_back(std::move(group));
 			return;
 		}
 		if (is("cbuffer") || is("tbuffer")) {
@@ -529,7 +547,7 @@ private:
 			buffer.name = identifier();
 			std::string semantic;
 			char register_class = 0;
-			annotations(semantic, &register_class, &buffer.register_index, nullptr);
+			annotations(semantic, &register_class, &buffer.register_index, nullptr, &buffer.register_space);
 			expect("{");
 			while (!accept("}")) {
 				auto members = declaration_list();
@@ -537,6 +555,28 @@ private:
 					buffer.members.push_back(std::move(member));
 			}
 			accept(";");
+			program.buffers.push_back(std::move(buffer));
+			return;
+		}
+		// ConstantBuffer<T> name: a constant buffer holding one T, whose members are read as name.member.
+		if (is("ConstantBuffer") && is("<", 1)) {
+			ConstantBuffer buffer;
+			buffer.line = next().line;
+			expect("<");
+			Variable member;
+			member.line = buffer.line;
+			member.type = type(nullptr);
+			expect(">");
+			if (member.type.shape != Type::Shape::structure)
+				throw ParseError(buffer.line, "ConstantBuffer holds a structure");
+			buffer.name = member.name = identifier();
+			if (is("["))
+				throw ParseError(buffer.line, "arrays of constant buffers are not supported");
+			std::string semantic;
+			char register_class = 0;
+			annotations(semantic, &register_class, &buffer.register_index, nullptr, &buffer.register_space);
+			expect(";");
+			buffer.members.push_back(std::move(member));
 			program.buffers.push_back(std::move(buffer));
 			return;
 		}
@@ -583,11 +623,18 @@ private:
 			}
 			variable.name = identifier();
 			array_suffix(variable.type);
-			annotations(variable.semantic, &variable.register_class, &variable.register_index, &variable.pack_offset);
-			// Sampler state blocks of the effect framework are skipped.
-			if (is("{") && variable.type.shape == Type::Shape::object)
-				skip_braces();
-			else if (accept("="))
+			annotations(variable.semantic, &variable.register_class, &variable.register_index, &variable.pack_offset, &variable.register_space);
+			variable.annotations = annotation_list();
+			// The state block of an effect's state object, which describes state the effect sets rather than the shader; a D3D9 effect
+			// writes it as sampler_state { Texture = <t>; ... }.
+			if (is("{") && variable.type.shape == Type::Shape::object) {
+				variable.states = state_block();
+				variable.has_states = true;
+			} else if (variable.type.shape == Type::Shape::object && is("=") && (is("sampler_state", 1) || is("sampler", 1))) {
+				at += 2;
+				variable.states = state_block();
+				variable.has_states = true;
+			} else if (accept("="))
 				variable.initializer = is("{") ? initializer_list() : assignment();
 			list.push_back(std::move(variable));
 			if (!accept(","))
@@ -595,6 +642,106 @@ private:
 		}
 		expect(";");
 		return list;
+	}
+
+	// <string name = "text"; float scale = 2;>, the annotations an effect attaches to a variable, technique or pass.
+	std::vector<Variable> annotation_list()
+	{
+		std::vector<Variable> list;
+		if (!accept("<"))
+			return list;
+		while (!accept(">")) {
+			if (peek().kind == TokenKind::end)
+				fail("missing '>'");
+			for (auto &variable : declaration_list())
+				list.push_back(std::move(variable));
+		}
+		return list;
+	}
+
+	// The value of a state: an expression, "compile vs_2_0 main()" or a D3D9 "<name>".
+	ExprPtr state_value()
+	{
+		const uint32_t line = peek().line;
+		if (accept("compile")) {
+			auto compiled = node(Expr::Kind::call, "CompileShader", line);
+			compiled->operands.push_back(node(Expr::Kind::name, identifier(), line));
+			compiled->operands.push_back(assignment());
+			return compiled;
+		}
+		if (accept("<")) {
+			auto name = node(Expr::Kind::name, identifier(), line);
+			expect(">");
+			return name;
+		}
+		return is("{") ? initializer_list() : assignment();
+	}
+
+	StateAssignment state_assignment()
+	{
+		StateAssignment item;
+		item.line = peek().line;
+		item.name = identifier();
+		if (accept("[")) {
+			item.index = uint32_t(constant(*assignment()));
+			expect("]");
+		}
+		expect("=");
+		item.value = state_value();
+		expect(";");
+		return item;
+	}
+
+	std::vector<StateAssignment> state_block()
+	{
+		std::vector<StateAssignment> states;
+		expect("{");
+		while (!accept("}")) {
+			if (peek().kind == TokenKind::end)
+				fail("missing '}'");
+			states.push_back(state_assignment());
+		}
+		return states;
+	}
+
+	Technique technique()
+	{
+		Technique item;
+		item.line = peek().line;
+		const auto word = identifier();
+		if (word != "technique" && word != "technique10" && word != "technique11")
+			fail("expected a technique before '" + word + "'");
+		item.version = word == "technique11" ? 11 : 10;
+		if (peek().kind == TokenKind::identifier)
+			item.name = identifier();
+		item.annotations = annotation_list();
+		expect("{");
+		while (!accept("}")) {
+			Pass pass;
+			pass.line = peek().line;
+			if (!accept("pass"))
+				fail("expected a pass before '" + peek().text + "'");
+			if (peek().kind == TokenKind::identifier)
+				pass.name = identifier();
+			pass.annotations = annotation_list();
+			expect("{");
+			while (!accept("}")) {
+				if (peek().kind == TokenKind::end)
+					fail("missing '}'");
+				// SetPixelShader(...); is kept as a call; PixelShader = ...; as an assignment.
+				if (peek().kind == TokenKind::identifier && is("(", 1)) {
+					StateAssignment item;
+					item.line = peek().line;
+					item.name = peek().text;
+					item.value = assignment();
+					expect(";");
+					pass.states.push_back(std::move(item));
+				} else
+					pass.states.push_back(state_assignment());
+			}
+			item.passes.push_back(std::move(pass));
+		}
+		return item;
 	}
 
 	ExprPtr initializer_list()
@@ -895,6 +1042,16 @@ private:
 	ExprPtr primary()
 	{
 		const auto &token = peek();
+		if (token.kind == TokenKind::string) {
+			++at;
+			// Adjacent strings join, as in C.
+			std::string text = token.text.substr(1, token.text.size() - 2);
+			while (peek().kind == TokenKind::string) {
+				text += peek().text.substr(1, peek().text.size() - 2);
+				++at;
+			}
+			return node(Expr::Kind::string, text, token.line);
+		}
 		if (token.kind == TokenKind::integer || token.kind == TokenKind::floating) {
 			++at;
 			auto literal = node(Expr::Kind::literal, token.text, token.line);

@@ -423,22 +423,17 @@ EXPORT HRESULT WINAPI D3DCompile2(const void *data, SIZE_T size, const char *nam
 	const char *entry, const char *target, UINT flags, UINT effect_flags, UINT secondary_flags, const void *secondary, SIZE_T secondary_size,
 	ID3DBlob **code, ID3DBlob **errors)
 {
-	if (!target || !entry) {
-		if (code)
-			*code = NULL;
-		if (errors)
-			*errors = NULL;
+	const BOOL effect = target && target[0] == 'f' && target[1] == 'x' && target[2] == '_';
+	if (code)
+		*code = NULL;
+	if (errors)
+		*errors = NULL;
+	if (!target || (!entry && !effect))
 		return E_INVALIDARG;
-	}
-	/* Effects (fx_*) and secondary data would change what comes out; they are refused rather than ignored. */
-	if ((target[0] == 'f' && target[1] == 'x' && target[2] == '_') || (secondary_flags && secondary)) {
-		if (code)
-			*code = NULL;
-		if (errors)
-			*errors = NULL;
-		return unimplemented(secondary_flags ? "D3DCompile2 secondary data" : "D3DCompile effect targets");
-	}
-	return run_compile(MODE_COMPILE, data, size, name, CP_ACP, defines, include, entry, target, flags, code, errors);
+	/* Child effects share variables with a pool and secondary data would change what comes out; they are refused rather than ignored. */
+	if ((secondary_flags && secondary) || (effect && (effect_flags & D3DCOMPILE_EFFECT_CHILD_EFFECT)))
+		return unimplemented(effect ? "D3DCompile child effects" : "D3DCompile2 secondary data");
+	return run_compile(MODE_COMPILE, data, size, name, CP_ACP, defines, include, entry ? entry : "", target, flags, code, errors);
 }
 
 EXPORT HRESULT WINAPI D3DCompile(const void *data, SIZE_T size, const char *name, const D3D_SHADER_MACRO *defines, ID3DInclude *include,
@@ -489,22 +484,27 @@ EXPORT HRESULT WINAPI D3DCompileFromFile(const WCHAR *path, const D3D_SHADER_MAC
 		*code = NULL;
 	if (errors)
 		*errors = NULL;
-	if (!path || !entry || !target)
+	if (!path || !target || (!entry && !(target[0] == 'f' && target[1] == 'x' && target[2] == '_')))
 		return E_INVALIDARG;
+	if ((effect_flags & D3DCOMPILE_EFFECT_CHILD_EFFECT) && target[0] == 'f' && target[1] == 'x' && target[2] == '_')
+		return unimplemented("D3DCompile child effects");
 	if (FAILED(result = read_whole_file(path, &data, &size)))
 		return result;
 	/* Messages and standard includes use the path as given, in UTF-8. */
 	if (!WideCharToMultiByte(CP_UTF8, 0, path, -1, name, sizeof(name), NULL, NULL))
 		name[0] = 0;
-	if (target[0] == 'f' && target[1] == 'x' && target[2] == '_')
-		result = unimplemented("D3DCompile effect targets");
-	else
-		result = run_compile(MODE_COMPILE, data, size, name, CP_UTF8, defines, include, entry, target, flags, code, errors);
+	result = run_compile(MODE_COMPILE, data, size, name, CP_UTF8, defines, include, entry ? entry : "", target, flags, code, errors);
 	FREE(data);
 	return result;
 }
 
 /* Container parts. */
+
+static BOOL is_legacy_program(const void *data, SIZE_T size)
+{
+	const BYTE *bytes = data;
+	return data && size >= 8 && !(size & 3) && (bytes[3] == 0xff && (bytes[2] == 0xff || bytes[2] == 0xfe)) && bytes[1] >= 1 && bytes[1] <= 3;
+}
 
 static HRESULT container_request(UINT mode, const void *data, SIZE_T size, UINT word, const void *extra, SIZE_T extra_size, BOOL text,
 	ID3DBlob **out)
@@ -515,7 +515,8 @@ static HRESULT container_request(UINT mode, const void *data, SIZE_T size, UINT 
 	if (!out)
 		return E_INVALIDARG;
 	*out = NULL;
-	if (!is_container(data, size))
+	/* Shader model 1 to 3 programs are bare tokens, which only a listing is asked of. */
+	if (!is_container(data, size) && !(mode == MODE_DISASSEMBLE && is_legacy_program(data, size)))
 		return E_FAIL;
 	put_word(&in, mode);
 	put_bytes(&in, data, size);
@@ -1079,11 +1080,13 @@ static reflected_type *read_type(reflection *object, const chunk *part, UINT off
 static BOOL read_definitions(reflection *object)
 {
 	chunk part;
-	UINT index, k;
+	UINT index, k, binding_size;
 	BOOL sm5;
 	if (!find_chunk(object, "RDEF", &part))
 		return TRUE;
-	sm5 = word_at(&part, 28) == 0x31314452;
+	/* "RD11", or the tag of shader model 5.1, whose bindings also carry their space and range. */
+	sm5 = word_at(&part, 28) == 0x31314452 || word_at(&part, 28) == 0x25441313;
+	binding_size = word_at(&part, 28) == 0x25441313 ? 40 : 32;
 	object->desc.Creator = string_at(&part, word_at(&part, 24));
 	object->desc.Flags = word_at(&part, 20);
 	object->desc.ConstantBuffers = word_at(&part, 0);
@@ -1093,7 +1096,7 @@ static BOOL read_definitions(reflection *object)
 	if (object->desc.BoundResources && !(object->bindings = ALLOC(object->desc.BoundResources * sizeof(D3D11_SHADER_INPUT_BIND_DESC))))
 		return FALSE;
 	for (index = 0; index < object->desc.BoundResources; ++index) {
-		const UINT at = word_at(&part, 12) + index * 32;
+		const UINT at = word_at(&part, 12) + index * binding_size;
 		D3D11_SHADER_INPUT_BIND_DESC *binding = &object->bindings[index];
 		binding->Name = string_at(&part, word_at(&part, at));
 		binding->Type = (D3D_SHADER_INPUT_TYPE)word_at(&part, at + 4);
