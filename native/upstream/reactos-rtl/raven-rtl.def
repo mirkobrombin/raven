@@ -19,6 +19,14 @@ EXPORTS
  EnterCriticalSection=RavenEnterCriticalSection
  LeaveCriticalSection=RavenLeaveCriticalSection
  TryEnterCriticalSection=RavenTryEnterCriticalSection
+ CreateFiber=RavenCreateFiber
+ CreateFiberEx=RavenCreateFiberEx
+ ConvertThreadToFiber=RavenConvertThreadToFiber
+ ConvertThreadToFiberEx=RavenConvertThreadToFiberEx
+ ConvertFiberToThread=RavenConvertFiberToThread
+ SwitchToFiber=RavenSwitchToFiber
+ DeleteFiber=RavenDeleteFiber
+ IsThreadAFiber=RavenIsThreadAFiber
  InitializeSRWLock=RavenInitializeSRWLock
  AcquireSRWLockExclusive=RavenAcquireSRWLockExclusive
  TryAcquireSRWLockExclusive=RavenTryAcquireSRWLockExclusive
