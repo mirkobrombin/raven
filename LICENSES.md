@@ -21,6 +21,7 @@ GPLv3 license applied to every file.
 | Liberation fonts, if bundled | SIL Open Font License 1.1; preserve the font package's copyright and license |
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
+| Windows.Web.Http interface definitions | MIT (Microsoft's metadata from windows-rs); `native/upstream/raven-web/windows.web.http.idl` |
 
 The PE guest components are loaded and executed in the supervised Windows
 process. They are not ELF libraries linked or loaded into the Linux host. Their
