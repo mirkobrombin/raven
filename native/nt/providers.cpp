@@ -1991,6 +1991,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						std::cerr << " from " << module_name << '+' << std::hex << caller - module->loaded.base() << std::dec;
 				if (std::getenv("RAVEN_TRACE_STACK") && kernel_ptr && kernel_ptr->describe_stack)
 					std::cerr << " stack:" << kernel_ptr->describe_stack();
+				if (threads_ptr)
+					std::cerr << " on thread " << threads_ptr->current_id();
 				std::cerr << '\n';
 			}
 			if (const char *spec = std::getenv("RAVEN_STEP")) {
@@ -1999,6 +2001,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				const std::string text(spec);
 				const auto first = text.find(':'), second = text.find(':', first + 1);
 				if (first != text.npos && second != text.npos && api_name == text.substr(0, first) &&
+					(!trace_program || equal_fold(from_utf8(entry.name), from_utf8(trace_program))) &&
 					++seen[api_name] == std::stoi(text.substr(first + 1, second - first - 1)))
 					process.trace_instructions(size_t(std::stoul(text.substr(second + 1))), [&modules, &process](uint64_t rip) {
 						std::cerr << "step";

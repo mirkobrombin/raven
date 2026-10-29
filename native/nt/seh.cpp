@@ -275,6 +275,19 @@ public:
 			uint64_t rsp = 0;
 			std::memcpy(&rsp, origin.data() + 0x98, 8);
 			describe_record(record, rsp);
+			if (const uint32_t code = le32(record, 0); (code == 0xc06d007eU || code == 0xc06d007fU) && le32(record, 0x18) >= 1) {
+				// A failed delay load names the library and the procedure in the DelayLoadInfo its one parameter points to.
+				try {
+					const auto info = context.process.read_memory(load64(record, 0x20), 0x30);
+					const auto text = [&](uint64_t address) {
+						const auto bytes = context.process.read_memory(address, 128);
+						return std::string(reinterpret_cast<const char *>(bytes.data()), strnlen(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+					};
+					const std::string procedure = le32(info, 0x20) ? text(load64(info, 0x28)) : "#" + std::to_string(le32(info, 0x28));
+					std::fprintf(stderr, "raven:   delay load of %s!%s\n", text(load64(info, 0x18)).c_str(), procedure.c_str());
+				} catch (const std::exception &) {
+				}
+			}
 			try {
 				const auto stack = context.process.read_memory(rsp, 0x300);
 				for (size_t at = 0; at + 8 <= stack.size(); at += 8) {
