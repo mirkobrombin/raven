@@ -1916,6 +1916,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${UCRT_IO_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_io_client.c -lucrtbase -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_io_client.c VERBATIM)
             add_custom_target(ucrt_io_fixture ALL DEPENDS ${UCRT_IO_CLIENT})
+            # A library loaded by its path is found again by that path, by GetModuleHandleW and by GetModuleHandleExW pinning it.
+            set(MODULE_PATH_LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/module-path-library.dll)
+            add_custom_command(OUTPUT ${MODULE_PATH_LIBRARY}
+                COMMAND ${RAVEN_MINGW64} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_library_entry,--image-base,0x1ea600000,--no-insert-timestamp
+                    -o ${MODULE_PATH_LIBRARY} ${PROJECT_SOURCE_DIR}/testdata/native_loader/module_path_library.c
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/module_path_library.c VERBATIM)
+            set(MODULE_HANDLE_PATH_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/module-handle-path.exe)
+            add_custom_command(OUTPUT ${MODULE_HANDLE_PATH_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ea700000,--no-insert-timestamp
+                    -o ${MODULE_HANDLE_PATH_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/module_handle_path_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/module_handle_path_client.c VERBATIM)
+            add_custom_target(module_handle_path_fixture ALL DEPENDS ${MODULE_HANDLE_PATH_CLIENT} ${MODULE_PATH_LIBRARY})
+            add_test(NAME native_module_handle_path COMMAND raven --run-process --execution=native ${MODULE_HANDLE_PATH_CLIENT})
+            set_tests_properties(native_module_handle_path PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/module-handle-path-prefix")
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
