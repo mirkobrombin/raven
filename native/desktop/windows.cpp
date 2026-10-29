@@ -1634,7 +1634,18 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		if (!menu_loader) throw uint32_t(120);
 		record.menu=menu_loader(definition->instance,definition->menu_id);
 		if (std::getenv("RAVEN_TRACE_API")) std::cerr << "class menu " << definition->menu_id << " instance " << std::hex << definition->instance << " -> " << record.menu << std::dec << "\n";
-	} else if (!child && !args[9] && !definition->menu_name.empty()) throw uint32_t(120);
+	} else if (!child && !args[9] && !definition->menu_name.empty()) {
+		// A class menu named by a string loads by that name; a name the module has no menu for leaves the window without one.
+		if (!menu_loader) throw uint32_t(120);
+		std::vector<uint8_t> name((definition->menu_name.size()+1)*2);
+		std::memcpy(name.data(),definition->menu_name.data(),definition->menu_name.size()*2);
+		const auto at=process.map_memory(4096,PROT_READ | PROT_WRITE);
+		try {
+			process.write_memory(at,std::span<const uint8_t>(name.data(),std::min<size_t>(name.size(),4096)));
+			record.menu=menu_loader(definition->instance,at);
+		} catch (...) { process.unmap_memory(at); throw; }
+		process.unmap_memory(at);
+	}
 	record.extra.resize(definition->window_extra);
 	const auto handle=objects.add(std::move(record));
 	if (!handle) throw uint32_t(8);

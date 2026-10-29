@@ -42,6 +42,19 @@ int raven_entry(void)
 			GetMenuItemID(own,7)!=0x100) return 20;
 		if (!DestroyWindow(first) || IsMenu(own) || !IsMenu(other) || !DestroyWindow(fixed) || IsMenu(other)) return 21;
 	}
+	{
+		/* A class menu named by a string loads by that name; a name the module lacks still gives a window, without a menu. */
+		WNDCLASSW wc={0};
+		wc.lpfnWndProc=DefWindowProcW; wc.hInstance=module; wc.lpszClassName=L"named menu"; wc.lpszMenuName=L"named";
+		if (!RegisterClassW(&wc)) return 22;
+		HWND named=CreateWindowExW(0,wc.lpszClassName,L"",WS_OVERLAPPEDWINDOW,0,0,120,90,NULL,NULL,module,NULL);
+		if (!named || !GetMenu(named) || GetMenuItemCount(GetMenu(named))!=2) return 23;
+		wc.lpszClassName=L"missing menu"; wc.lpszMenuName=L"absent";
+		if (!RegisterClassW(&wc)) return 24;
+		HWND bare=CreateWindowExW(0,wc.lpszClassName,L"",WS_OVERLAPPEDWINDOW,0,0,120,90,NULL,NULL,module,NULL);
+		if (!bare || GetMenu(bare)) return 25;
+		if (!DestroyWindow(named) || !DestroyWindow(bare)) return 26;
+	}
 #ifdef MENU_BOUNDARY
 	SetLastError(71);
 	if (DestroyMenu(levels) || GetLastError()!=ERROR_CALL_NOT_IMPLEMENTED || !IsMenu(levels) || GetMenuItemCount(game)!=3) return 11;
