@@ -821,15 +821,8 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 				return module;
 		return nullptr;
 	};
-	const auto base_name = [module_at, is_self](ApiCall &call, bool wide) {
-		const auto *module = is_self(call[0]) ? module_at(call[1] ? call[1] : 0) : nullptr;
-		if (!module && is_self(call[0]) && !call[1])
-			module = nullptr;
-		if (!module) {
-			call.fail(is_self(call[0]) ? 126 : 6);
-			return;
-		}
-		const auto text = from_utf8(module->name);
+	// A module's file name into the caller's buffer, cut to fit; the count of characters copied is the result.
+	const auto put_module_name = [](ApiCall &call, const std::u16string &text, bool wide) {
 		const size_t capacity = call.u32(3);
 		if (!call[2] || !capacity) {
 			call.ret(0);
@@ -840,8 +833,15 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		else
 			call.ret(call.put_narrow(call[2], to_utf8(text), capacity) > capacity ? capacity : std::min(text.size(), capacity - 1));
 	};
-	registry.add("GetModuleBaseNameW", 4, [base_name](ApiCall &call) { base_name(call, true); });
-	registry.add("GetModuleBaseNameA", 4, [base_name](ApiCall &call) { base_name(call, false); });
+	// A module of the calling process by its handle; the program itself (no module named) is answered below, for any process.
+	const auto base_name = [module_at, is_self, put_module_name](ApiCall &call, bool wide) {
+		const auto *module = is_self(call[0]) ? module_at(call[1]) : nullptr;
+		if (!module) {
+			call.fail(is_self(call[0]) ? 126 : 6);
+			return;
+		}
+		put_module_name(call, from_utf8(module->name), wide);
+	};
 	// MODULEINFO: the base, the size of the image and the entry point.
 	registry.add("GetModuleInformation", 4, [is_self, module_at](ApiCall &call) {
 		const auto *module = is_self(call[0]) ? module_at(call[1]) : nullptr;
@@ -962,6 +962,22 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 			else call.put_narrow(call[2], narrow, length + 1);
 			call.store<uint32_t>(call[3], uint32_t(length));
 			call.ret(1);
+		});
+	// Without a module, GetModuleBaseName names the file the process was started from.
+	for (const bool wide : {true, false})
+		registry.add(wide ? "GetModuleBaseNameW" : "GetModuleBaseNameA", 4, [base_name, image_path, put_module_name, wide](ApiCall &call) {
+			if (call[1]) {
+				base_name(call, wide);
+				return;
+			}
+			const auto found = image_path(call[0], false);
+			if (const auto *error = std::get_if<uint32_t>(&found)) {
+				call.fail(*error);
+				return;
+			}
+			const auto &path = std::get<std::u16string>(found);
+			const auto slash = path.find_last_of(u"\\/");
+			put_module_name(call, slash == path.npos ? path : path.substr(slash + 1), wide);
 		});
 	// GetProcessImageFileName answers the device path and its length, cut to the buffer as GetModuleFileName does.
 	for (const bool wide : {true, false})
