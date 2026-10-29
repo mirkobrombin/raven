@@ -739,6 +739,7 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 			unit = upper_case(unit);
 		return text;
 	};
+	registry.add("RtlUpcaseUnicodeChar", 1, [](ApiCall &call) { call.ret(upper_case(char16_t(call[0]))); });
 	registry.add("RtlCompareUnicodeString", 3, [name_of, upper_text](ApiCall &call) {
 		auto left = name_of(call, call[0]), right = name_of(call, call[1]);
 		if (call.u32(2) & 0xff) {

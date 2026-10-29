@@ -948,8 +948,11 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 			exceptions->vectored.push_back(item);
 		call.ret(cookie);
 	};
-	registry.add("AddVectoredExceptionHandler", 2, [add_vectored](ApiCall &call) { add_vectored(call, false); });
-	registry.add("AddVectoredContinueHandler", 2, [add_vectored](ApiCall &call) { add_vectored(call, true); });
+	// ntdll's Rtl forms are the same functions.
+	for (const auto *name : {"AddVectoredExceptionHandler", "RtlAddVectoredExceptionHandler"})
+		registry.add(name, 2, [add_vectored](ApiCall &call) { add_vectored(call, false); });
+	for (const auto *name : {"AddVectoredContinueHandler", "RtlAddVectoredContinueHandler"})
+		registry.add(name, 2, [add_vectored](ApiCall &call) { add_vectored(call, true); });
 	const auto remove_vectored = [exceptions, &context](ApiCall &call) {
 		auto &list = exceptions->vectored;
 		const auto found = std::find_if(list.begin(), list.end(), [&](const auto &item) { return item.cookie == call[0]; });
@@ -961,8 +964,9 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 		context.allocator.release(call[0]);
 		call.ret(1);
 	};
-	registry.add("RemoveVectoredExceptionHandler", 1, remove_vectored);
-	registry.add("RemoveVectoredContinueHandler", 1, remove_vectored);
+	for (const auto *name : {"RemoveVectoredExceptionHandler", "RtlRemoveVectoredExceptionHandler", "RemoveVectoredContinueHandler",
+			 "RtlRemoveVectoredContinueHandler"})
+		registry.add(name, 1, remove_vectored);
 	// Function tables of generated code: the unwinder reads them from the program's memory, and calls a table's callback from there to
 	// find the entry of an address, as a runtime that compiles code registers its code heaps.
 	unwinder.set_guest_call([&context](uint64_t function, uint64_t first, uint64_t second) {

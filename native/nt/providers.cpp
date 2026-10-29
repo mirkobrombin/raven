@@ -1956,7 +1956,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			if (!service_name && found == traps.end())
 				return result;
 			const auto &api_name = service_name ? *service_name : found->second;
-			if (api_name == "ExitProcess") {
+			// ntdll's RtlExitUserProcess is the ExitProcess of programs that do without kernel32.
+			if (api_name == "ExitProcess" || api_name == "RtlExitUserProcess") {
 				const auto code=uint32_t(process.api_arguments(1)[0]);
 				process.abandon_call();
 				throw ProcessExit{code,result.instruction};
