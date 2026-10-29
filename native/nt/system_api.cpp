@@ -817,6 +817,28 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.write(call[0], std::vector<uint8_t>(size_t(call[2]), uint8_t(call[1])));
 		call.ret(call[0]);
 	});
+	// ntdll's C runtime string lengths and comparisons, with the bytes compared as unsigned characters.
+	registry.add("strlen", 1, [](ApiCall &call) { call.ret(call.narrow(call[0], SIZE_MAX - 1).size()); });
+	// A comparison reads no byte past the first difference, the terminator or the limit, so a bounded one may run up to the end of a
+	// buffer that has no terminator.
+	const auto compare_text = [](ApiCall &call, size_t limit) {
+		for (size_t at = 0; at < limit; ++at) {
+			const uint8_t left = call.load<uint8_t>(call[0] + at), right = call.load<uint8_t>(call[1] + at);
+			if (left != right || !left) {
+				call.ret(uint64_t(int64_t(left < right ? -1 : left > right ? 1 : 0)));
+				return;
+			}
+		}
+		call.ret(0);
+	};
+	registry.add("strcmp", 2, [compare_text](ApiCall &call) { compare_text(call, SIZE_MAX - 1); });
+	registry.add("strncmp", 3, [compare_text](ApiCall &call) {
+		if (!call[2]) {
+			call.ret(0);
+			return;
+		}
+		compare_text(call, size_t(call[2]));
+	});
 	registry.add("memcmp", 3, [](ApiCall &call) {
 		if (!call[2]) {
 			call.ret(0);
