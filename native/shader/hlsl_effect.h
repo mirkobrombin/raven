@@ -18,4 +18,8 @@ using EffectShaderCompiler =
 // compile. Throws a GenerateError.
 std::vector<uint8_t> effect_binary(const Program &program, const std::string &target, uint32_t flags, const EffectShaderCompiler &compile);
 
+// The binary of an fx_2_0 effect, the layout the Direct3D 9 effect runtime loads: its parameters with their starting values and
+// annotations, and its techniques and passes with the states they set and the shaders they compile. Throws a GenerateError.
+std::vector<uint8_t> effect9_binary(const Program &program, uint32_t flags, const EffectShaderCompiler &compile);
+
 }

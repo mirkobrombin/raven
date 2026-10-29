@@ -276,6 +276,7 @@ private:
 	};
 	std::vector<Shared> shared;
 	std::map<std::string, Ref> globals;
+	std::set<std::string> run_time_interfaces;
 	// Uniform parameters of the entry point, which live in the $Params constant buffer.
 	std::deque<Variable> parameter_uniforms;
 	// The constant buffer and variable a global name stands for.
@@ -791,6 +792,12 @@ private:
 
 	Ref convert(const Ref &value, const Type &to, uint32_t line)
 	{
+		// An interface value is the class instance it was given: its methods are chosen while compiling.
+		if (is_interface(to)) {
+			if (value.type.shape != Type::Shape::structure || !value.type.array.empty() || !value.type.structure->implements(to.structure.get()))
+				fail(line, "cannot convert from '" + value.type.name() + "' to '" + to.name() + "'");
+			return value;
+		}
 		if (to.shape == Type::Shape::structure || value.type.shape == Type::Shape::structure || !to.array.empty() ||
 			!value.type.array.empty()) {
 			if (flat_size(to) != flat_size(value.type) || !(to == value.type || to.shape == value.type.shape))
@@ -1366,6 +1373,8 @@ private:
 			}
 			return global->second;
 		}
+		if (run_time_interfaces.count(expr.text))
+			fail(expr.line, "'" + expr.text + "' is an interface instance chosen at run time, which needs dynamic shader linkage");
 		fail(expr.line, "undeclared identifier '" + expr.text + "'");
 	}
 
@@ -3170,10 +3179,17 @@ private:
 		return returns > 1 || body.body.empty() || body.body.back()->kind != Stmt::Kind::return_statement;
 	}
 
+	static bool is_interface(const Type &type)
+	{
+		return type.shape == Type::Shape::structure && type.array.empty() && type.structure && type.structure->is_interface;
+	}
+
 	static int match_score(const Type &parameter, const Type &argument)
 	{
 		if (parameter == argument)
 			return 3;
+		if (is_interface(parameter))
+			return argument.shape == Type::Shape::structure && argument.array.empty() && argument.structure->implements(parameter.structure.get()) ? 2 : -1;
 		if (parameter.shape == Type::Shape::object || argument.shape == Type::Shape::object)
 			return parameter.shape == argument.shape && parameter.object == argument.object ? 2 : -1;
 		if (parameter.numeric() && argument.numeric()) {
@@ -3255,7 +3271,7 @@ private:
 				continue;
 			}
 			Ref passed = convert(load(argument), parameter.type, line);
-			if (assigned.count(parameter.name)) {
+			if (assigned.count(parameter.name) && !is_interface(parameter.type)) {
 				Ref local = storage(parameter.type);
 				write(local.locs, passed.locs);
 				scope[parameter.name] = local;
@@ -3633,6 +3649,12 @@ private:
 			bind_variable(variable, type, &value);
 			return;
 		}
+		if (is_interface(type)) {
+			if (!variable.initializer)
+				fail(variable.line, "an interface variable needs the class instance it stands for");
+			scopes.back()[variable.name] = convert(eval(*variable.initializer), type, variable.line);
+			return;
+		}
 		if (type.shape == Type::Shape::object) {
 			if (!variable.initializer)
 				fail(variable.line, "a local resource needs an initializer");
@@ -3903,8 +3925,15 @@ private:
 		globals_buffer.name = "$Globals";
 		buffers.push_back(globals_buffer);
 		std::vector<std::pair<size_t, const Variable *>> members;
+		// An interface instance outside a function is chosen by the program at run time; it is refused where it is used.
+		const auto run_time_interface = [&](const Variable &variable) {
+			const bool found = variable.type.shape == Type::Shape::structure && variable.type.structure->is_interface;
+			if (found)
+				run_time_interfaces.insert(variable.name);
+			return found;
+		};
 		for (const auto &variable : program.globals) {
-			if (variable.type.shape == Type::Shape::object && effect_object(variable.type.object))
+			if ((variable.type.shape == Type::Shape::object && effect_object(variable.type.object)) || run_time_interface(variable))
 				continue;
 			if (variable.type.shape == Type::Shape::object)
 				add_resource(variable);
@@ -3934,7 +3963,7 @@ private:
 			buffer.line = declared.line;
 			buffers.push_back(buffer);
 			for (const auto &variable : declared.members) {
-				if (variable.type.shape == Type::Shape::object && effect_object(variable.type.object))
+				if ((variable.type.shape == Type::Shape::object && effect_object(variable.type.object)) || run_time_interface(variable))
 					continue;
 				if (variable.type.shape == Type::Shape::object)
 					add_resource(variable);
@@ -3943,7 +3972,16 @@ private:
 			}
 		}
 		size_t argument = 0;
+		// An interface parameter given a class instance of the effect is bound once the constant buffers are laid out.
+		std::vector<std::pair<const Parameter *, const Expr *>> instances;
 		for (const auto &parameter : entry.parameters) {
+			// An interface parameter of the entry point is uniform even unmarked; without a class instance the program picks it at run time.
+			if (is_interface(parameter.type)) {
+				if (argument >= uniform_arguments.size() || !parameter.is_uniform)
+					fail(entry.line, "interface parameter '" + parameter.name + "' is chosen at run time, which needs dynamic shader linkage");
+				instances.emplace_back(&parameter, uniform_arguments[argument++]);
+				continue;
+			}
 			if (!parameter.is_uniform)
 				continue;
 			// An effect's CompileShader(ps_4_0, main(true)) gives the uniform parameters their values.
@@ -3993,6 +4031,13 @@ private:
 		}
 		for (size_t i = 0; i < buffers.size(); ++i)
 			buffers[i].size = align16(ends[i]);
+		for (const auto &[parameter, instance] : instances) {
+			scopes = {{}};
+			Ref bound = convert(eval(*instance), parameter->type, entry.line);
+			scopes.clear();
+			bound.writable = false;
+			globals[parameter->name] = bound;
+		}
 	}
 
 	// The value a variable starts with, from its initializer, its scalars packed in the order written as effects store them; none when it

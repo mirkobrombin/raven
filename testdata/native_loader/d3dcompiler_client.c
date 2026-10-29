@@ -93,6 +93,8 @@ static const char effect[] =
 	"SetBlendState(opaque, float4(0, 0, 0, 0), 0xffffffff); } }\n";
 
 static const char legacy[] = "float4 tint; sampler2D image; float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(image, uv) * tint; }\n";
+static const char effect9[] = "float4 tint; sampler2D image; float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(image, uv) * tint; }\n"
+	"technique T { pass P { AlphaBlendEnable = true; PixelShader = compile ps_2_0 main(); } }\n";
 
 int raven_entry(void)
 {
@@ -230,6 +232,14 @@ int raven_entry(void)
 		!contains(ID3D10Blob_GetBufferPointer(part), "texld"))
 		return 36;
 	ID3D10Blob_Release(part);
+	ID3D10Blob_Release(code);
+
+	/* A Direct3D 9 effect comes out bare, starting with its version. */
+	if (D3DCompile(effect9, sizeof(effect9) - 1, NULL, NULL, NULL, NULL, "fx_2_0", 0, 0, &code, NULL) != S_OK)
+		return 37;
+	bytes = ID3D10Blob_GetBufferPointer(code);
+	if (ID3D10Blob_GetBufferSize(code) < 64 || bytes[0] != 0x01 || bytes[1] != 0x09 || bytes[2] != 0xff || bytes[3] != 0xfe)
+		return 38;
 	ID3D10Blob_Release(code);
 
 	/* Blobs made by the program. */

@@ -161,7 +161,7 @@ std::vector<std::string> contained_of(const std::string &source)
 bool effect_reads(const std::vector<uint8_t> &blob, const std::string &target, const std::filesystem::path &work, const std::string &stem,
 	const std::vector<std::string> &texts, std::string &problem)
 {
-	const bool contained = target != "fx_5_0";
+	const bool contained = target != "fx_5_0" && target != "fx_2_0";
 	if (contained) {
 		const auto chunks = read_container(blob);
 		if (chunks.size() != 1 || std::memcmp(chunks[0].tag.data(), "FX10", 4) != 0) {

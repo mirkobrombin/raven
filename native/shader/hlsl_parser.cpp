@@ -209,7 +209,7 @@ private:
 		Type result;
 		if (accept("void"))
 			return result;
-		if (is("struct") || is("class")) {
+		if (is("struct") || is("class") || is("interface")) {
 			result.shape = Type::Shape::structure;
 			result.structure = structure_definition();
 			return result;
@@ -370,16 +370,26 @@ private:
 
 	std::shared_ptr<StructType> structure_definition()
 	{
-		if (!accept("class"))
+		const bool is_interface = accept("interface");
+		if (!is_interface && !accept("class"))
 			expect("struct");
 		std::string name = peek().kind == TokenKind::identifier ? next().text : "";
+		// One structure to derive from and any number of interfaces, in any order.
 		std::shared_ptr<StructType> base;
-		if (accept(":")) {
-			const auto base_name = identifier();
-			base = find_struct(base_name);
-			if (!base)
-				fail("unknown structure '" + base_name + "'");
-		}
+		std::vector<std::shared_ptr<StructType>> interfaces;
+		if (accept(":"))
+			do {
+				const auto base_name = identifier();
+				auto found = find_struct(base_name);
+				if (!found)
+					fail("unknown structure '" + base_name + "'");
+				if (found->is_interface)
+					interfaces.push_back(found);
+				else if (base || is_interface)
+					fail("'" + name + "' cannot derive from more than one structure");
+				else
+					base = found;
+			} while (accept(","));
 		if (!is("{")) {
 			if (const auto existing = find_struct(name))
 				return existing;
@@ -388,6 +398,8 @@ private:
 		auto structure = std::make_shared<StructType>();
 		structure->name = name;
 		structure->base = base;
+		structure->is_interface = is_interface;
+		structure->interfaces = std::move(interfaces);
 		if (base)
 			structure->members = base->members;
 		program.structures.push_back(structure);
@@ -404,6 +416,8 @@ private:
 				function_rest(std::move(method));
 				continue;
 			}
+			if (is_interface)
+				fail("an interface holds methods only");
 			for (;;) {
 				Member item = member;
 				item.name = identifier();
@@ -580,7 +594,7 @@ private:
 			program.buffers.push_back(std::move(buffer));
 			return;
 		}
-		if ((is("struct") || is("class")) && (is("{", 2) || is(";", 2) || is(":", 2))) {
+		if ((is("struct") || is("class") || is("interface")) && (is("{", 2) || is(";", 2) || is(":", 2))) {
 			structure_definition();
 			expect(";");
 			return;
@@ -598,6 +612,22 @@ private:
 			function_rest(std::move(function));
 			return;
 		}
+		// A method defined outside its class: float3 Light::illuminate(float3 normal) { ... }
+		if (peek().kind == TokenKind::identifier && is("::", 1) && peek(2).kind == TokenKind::identifier && is("(", 3)) {
+			const auto owner_name = identifier();
+			const auto owner = find_struct(owner_name);
+			if (!owner)
+				fail("unknown class '" + owner_name + "'");
+			expect("::");
+			Function method;
+			method.attributes = std::move(attribute_list);
+			method.result = result;
+			method.owner = owner.get();
+			method.line = peek().line;
+			method.name = identifier();
+			function_rest(std::move(method));
+			return;
+		}
 		at = start;
 		for (auto &variable : declaration_list())
 			program.globals.push_back(std::move(variable));
@@ -609,11 +639,14 @@ private:
 		std::vector<std::string> modifiers;
 		const uint32_t line = peek().line;
 		auto base = type(&modifiers);
+		// sampler2D and sampler are one kind of object here, but a Direct3D 9 effect tells them apart.
+		const std::string written = at > 0 && base.shape == Type::Shape::object ? tokens[at - 1].text : "";
 		std::vector<Variable> list;
 		for (;;) {
 			Variable variable;
 			variable.line = line;
 			variable.type = base;
+			variable.written_type = written;
 			variable.modifiers = modifiers;
 			for (const auto &modifier : modifiers) {
 				variable.is_static |= modifier == "static";
@@ -627,7 +660,16 @@ private:
 			variable.annotations = annotation_list();
 			// The state block of an effect's state object, which describes state the effect sets rather than the shader; a D3D9 effect
 			// writes it as sampler_state { Texture = <t>; ... }.
-			if (is("{") && variable.type.shape == Type::Shape::object) {
+			if (is("{") && is("{", 1) && variable.type.shape == Type::Shape::object) {
+				expect("{");
+				do {
+					if (is("}"))
+						break;
+					variable.element_states.push_back(state_block());
+				} while (accept(","));
+				expect("}");
+				variable.has_states = true;
+			} else if (is("{") && variable.type.shape == Type::Shape::object) {
 				variable.states = state_block();
 				variable.has_states = true;
 			} else if (variable.type.shape == Type::Shape::object && is("=") && (is("sampler_state", 1) || is("sampler", 1))) {
@@ -635,7 +677,8 @@ private:
 				variable.states = state_block();
 				variable.has_states = true;
 			} else if (accept("="))
-				variable.initializer = is("{") ? initializer_list() : assignment();
+				// A Direct3D 9 effect gives a shader variable its program as compile vs_2_0 f().
+				variable.initializer = is("{") ? initializer_list() : is("compile") ? state_value() : assignment();
 			list.push_back(std::move(variable));
 			if (!accept(","))
 				break;

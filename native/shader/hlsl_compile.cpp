@@ -249,6 +249,10 @@ CompileResult compile(const CompileRequest &request)
 				result.messages += generated.warnings;
 				return bytecode(generated, request.flags);
 			};
+			if (request.target == "fx_2_0") {
+				result.code = effect9_binary(parsed.program, request.flags, shader);
+				return result;
+			}
 			auto effect = effect_binary(parsed.program, request.target, request.flags, shader);
 			// Direct3D 10 effects come in a container; the Direct3D 11 effect runtime reads fx_5_0 bytes as they are.
 			if (request.target == "fx_5_0")

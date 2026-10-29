@@ -365,6 +365,9 @@ private:
 		const std::string name = semantic_of(element);
 		Mapped mapped;
 		if (pixel && (name == "VPOS" || name == "POSITION" || name == "VFACE" || name == "SV_ISFRONTFACE")) {
+			// Shader model 2 takes the vertex shader's output structure with its position in it, as long as the shader does not read it.
+			if (!model3 && !element.used)
+				return;
 			if (!model3)
 				fail("'" + element.semantic + "' needs ps_3_0");
 			// Read through a temp that the prologue fills: SV_Position is the pixel centre, SV_IsFrontFace a boolean.

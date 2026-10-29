@@ -24,7 +24,9 @@ bool same_word(const std::string &a, const std::string &b)
 uint32_t align16(uint32_t value) { return (value + 15) & ~15u; }
 
 // ECompilerAssignmentType.
-enum Assignment : uint32_t { constant_assignment = 1, variable_assignment = 2, index_assignment = 3, inline_shader = 7, inline_shader5 = 8 };
+enum Assignment : uint32_t {
+	constant_assignment = 1, variable_assignment = 2, index_assignment = 3, variable_index_assignment = 4, inline_shader = 7, inline_shader5 = 8
+};
 
 // EScalarType.
 enum EffectScalar : uint32_t { scalar_float = 1, scalar_int = 2, scalar_uint = 3, scalar_bool = 4 };
@@ -489,9 +491,12 @@ private:
 				kind == ObjectKind::sampler || kind == ObjectKind::sampler_comparison) {
 				const Block block = kind == ObjectKind::blend_state ? Block::blend : kind == ObjectKind::depth_stencil_state ? Block::depth_stencil :
 					kind == ObjectKind::rasterizer_state ? Block::rasterizer : Block::sampler;
+				if (!variable.element_states.empty() && variable.element_states.size() != count)
+					fail(variable.line, "'" + variable.name + "' needs " + std::to_string(count) + " state blocks");
 				for (uint32_t i = 0; i < count; ++i) {
-					structured.u32(uint32_t(variable.states.size()));
-					for (const auto &state : variable.states)
+					const auto &states = variable.element_states.empty() ? variable.states : variable.element_states[i];
+					structured.u32(uint32_t(states.size()));
+					for (const auto &state : states)
 						assignment(block, state.name, state.index, *state.value, state.line);
 				}
 				(block == Block::blend ? blend_count : block == Block::depth_stencil ? depth_stencil_count : block == Block::rasterizer ?
@@ -662,6 +667,15 @@ private:
 		if (const Variable *variable = global(value)) {
 			structured.u32(variable_assignment);
 			structured.u32(unstructured.text(variable->name));
+			return;
+		}
+		// An element chosen by an integer variable the program sets; any other expression would need the effect expression machine.
+		if (value.kind == Expr::Kind::index && value.operands.size() == 2 && global(*value.operands[0]) && global(*value.operands[1])) {
+			const Variable &index = *global(*value.operands[1]);
+			if (index.type.shape != Type::Shape::scalar || (index.type.scalar != Scalar::integer && index.type.scalar != Scalar::unsigned_integer))
+				fail(line, "'" + index.name + "' is not an integer to index '" + value.operands[0]->text + "' with");
+			structured.u32(variable_index_assignment);
+			structured.u32(unstructured.words({unstructured.text(value.operands[0]->text), unstructured.text(index.name)}, false));
 			return;
 		}
 		if (value.kind == Expr::Kind::index && value.operands.size() == 2 && global(*value.operands[0])) {

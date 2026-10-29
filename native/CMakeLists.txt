@@ -22,7 +22,7 @@ add_test(NAME native_blackonwhite_contract COMMAND stretch_test
 set_tests_properties(native_blackonwhite_contract PROPERTIES TIMEOUT 30)
 
 add_library(raven_shader STATIC shader/dxbc.cpp shader/hlsl_lexer.cpp shader/hlsl_parser.cpp shader/hlsl_codegen.cpp
-    shader/hlsl_compile.cpp shader/d3dbc.cpp shader/hlsl_effect.cpp shader/hlsl_legacy.cpp shader/sm4.cpp)
+    shader/hlsl_compile.cpp shader/d3dbc.cpp shader/hlsl_effect.cpp shader/hlsl_effect9.cpp shader/hlsl_legacy.cpp shader/sm4.cpp)
 target_include_directories(raven_shader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(raven_shader PRIVATE -Wall -Wextra)
 add_executable(hlsl_compile_test shader/hlsl_compile_test.cpp)

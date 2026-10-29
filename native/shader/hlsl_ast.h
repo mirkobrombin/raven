@@ -68,6 +68,20 @@ struct StructType {
 	std::vector<Member> members;
 	// The structure this one derives from, whose members come first and whose methods it inherits.
 	std::shared_ptr<StructType> base;
+	// An interface declares methods only; a class names the interfaces it implements.
+	bool is_interface = false;
+	std::vector<std::shared_ptr<StructType>> interfaces;
+
+	// Whether a value of this type may stand for the interface: it implements it itself or through what it derives from.
+	bool implements(const StructType *target) const
+	{
+		if (this == target)
+			return true;
+		for (const auto &item : interfaces)
+			if (item->implements(target))
+				return true;
+		return base && base->implements(target);
+	}
 };
 
 struct Expr;
@@ -111,11 +125,15 @@ struct Variable {
 	// register(t0, space1): the space shader model 5.1 binds it in.
 	uint32_t register_space = 0;
 	bool is_static = false, is_const = false, is_uniform = false, is_groupshared = false;
+	// The object type's keyword as written: sampler2D, texture, textureCUBE.
+	std::string written_type;
 	std::vector<std::string> modifiers;
 	uint32_t line = 0;
 	// An effect's annotations, <string name = "text";>, and the state block of a state object.
 	std::vector<Variable> annotations;
 	std::vector<StateAssignment> states;
+	// An array of state objects gives each element its own block: RasterizerState r[2] { { ... }, { ... } };
+	std::vector<std::vector<StateAssignment>> element_states;
 	bool has_states = false;
 };
 
