@@ -813,6 +813,23 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 		if (call[1]) call.store<uint64_t>(call[1], function ? function->image_base : 0);
 		call.ret(function ? function->address : 0);
 	});
+	// dbghelp's symbol handler, as far as walking a stack needs it: the options are kept, a process's handler starts and ends (no
+	// symbol files are found for it, so it names no symbols), and a code address gives its function table entry, as
+	// RtlLookupFunctionEntry finds it, and the base of its module, as RtlPcToFileHeader does.
+	auto symbol_options = std::make_shared<uint32_t>(0);
+	registry.add("SymSetOptions", 1, [symbol_options](ApiCall &call) { call.ret(*symbol_options = call.u32(0)); });
+	registry.add("SymGetOptions", 0, [symbol_options](ApiCall &call) { call.ret(*symbol_options); });
+	for (const auto *name : {"SymInitialize", "SymInitializeW"})
+		registry.add(name, 3, [](ApiCall &call) { call.ret(1); });
+	registry.add("SymCleanup", 1, [](ApiCall &call) { call.ret(1); });
+	registry.add("SymFunctionTableAccess64", 2, [&unwinder](ApiCall &call) {
+		const auto function = unwinder.lookup(call[1]);
+		call.ret(function ? function->address : 0);
+	});
+	registry.add("SymGetModuleBase64", 2, [&unwinder](ApiCall &call) {
+		const auto *module = unwinder.module_at(call[1]);
+		call.ret(module ? module->loaded.base() : 0);
+	});
 	registry.add("RtlPcToFileHeader", 2, [&unwinder](ApiCall &call) {
 		const auto *module = unwinder.module_at(call[0]);
 		const uint64_t base = module ? module->loaded.base() : 0;
