@@ -347,7 +347,22 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		request.kind = "process:query";
 		request.handle = call.u32(1);
 		request.flags = uint32_t(call.pointer_width());
-		const auto answer = own ? std::optional(local_process_information(context, call.u32(1), call.pointer_width())) : request_process(call[0], request);
+		// A child that has ended can no longer answer; its basic information (class 0) stays with its object: the exit status, its id
+		// and this process as its parent.
+		std::optional<InheritedHandle> answer;
+		if (const auto child = own ? nullptr : objects.object_as<ProcessObject>(call[0]); child && child->exited() && call.u32(1) == 0) {
+			const size_t width = call.pointer_width();
+			std::string data(6 * width, '\0');
+			const auto put = [&](size_t offset, uint64_t value, size_t size) { std::memcpy(data.data() + offset, &value, size); };
+			put(0, child->exit_code(), 4);
+			put(3 * width, 8, 4);
+			put(4 * width, uint32_t(child->pid), width);
+			put(5 * width, uint32_t(::getpid()), width);
+			answer.emplace();
+			answer->path = std::move(data);
+		} else {
+			answer = own ? std::optional(local_process_information(context, call.u32(1), call.pointer_width())) : request_process(call[0], request);
+		}
 		if (!answer || answer->access) {
 			call.ret(answer ? answer->access : 0xc0000001U);
 			return;
