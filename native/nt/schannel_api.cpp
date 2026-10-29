@@ -206,21 +206,44 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(sec_ok);
 			return;
 		}
-		// SCHANNEL_CRED (version 4) and SCH_CREDENTIALS (version 5) keep their flags at different places.
-		uint32_t flags = 0;
+		// SCHANNEL_CRED (version 4) and SCH_CREDENTIALS (version 5) keep their flags at different places. The older structure offers
+		// no TLS 1.3, which only SCH_CREDENTIALS reaches, and its grbitEnabledProtocols, when it names any, bound the versions.
+		uint32_t flags = 0, enabled = 0;
+		int highest = TLS1_3_VERSION;
 		if (const uint64_t data = call[4]) {
 			const uint32_t version = call.load<uint32_t>(data);
 			const bool wide = call.pointer_width() == 8;
-			if (version == 4)
+			if (version == 4) {
 				flags = call.load<uint32_t>(data + (wide ? 72 : 48));
-			else if (version == 5)
+				enabled = call.load<uint32_t>(data + (wide ? 56 : 32));
+				highest = TLS1_2_VERSION;
+			} else if (version == 5) {
 				flags = call.load<uint32_t>(data + (wide ? 52 : 32));
+			}
 		}
 		auto credential = make_credential(flags, false);
 		if (!credential) {
 			call.ret(sec_internal_error);
 			return;
 		}
+		// SP_PROT_TLS1_0, 1_1, 1_2 and 1_3, the client and server bits of each.
+		static constexpr std::pair<uint32_t, int> versions[] = {{0xc0, TLS1_VERSION}, {0x300, TLS1_1_VERSION}, {0xc00, TLS1_2_VERSION},
+			{0x3000, TLS1_3_VERSION}};
+		int lowest = 0;
+		if (enabled) {
+			int top = 0;
+			for (const auto &[bits, protocol] : versions)
+				if (enabled & bits) {
+					if (!lowest)
+						lowest = protocol;
+					top = protocol;
+				}
+			if (top)
+				highest = std::min(highest, top);
+		}
+		if (lowest)
+			SSL_CTX_set_min_proto_version(credential->tls.get(), lowest);
+		SSL_CTX_set_max_proto_version(credential->tls.get(), highest);
 		std::lock_guard guard(provider->lock);
 		const uint64_t id = provider->next++;
 		provider->credentials[id] = credential;
