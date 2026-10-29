@@ -13,6 +13,77 @@ typedef struct {
 
 __declspec(dllexport) volatile unsigned phase;
 
+typedef HRESULT (WINAPI *sl_open)(void **);
+typedef HRESULT (WINAPI *sl_close)(void *);
+typedef HRESULT (WINAPI *sl_set_data)(void *,UINT,const BYTE *);
+typedef HRESULT (WINAPI *sl_get_result)(void *,UINT *,BYTE **);
+typedef HRESULT (WINAPI *sl_install)(void *,UINT,const BYTE *,GUID *);
+typedef HRESULT (WINAPI *sl_list)(void *,int,const GUID *,int,UINT *,GUID **);
+typedef HRESULT (WINAPI *sl_information)(void *,const GUID *,const WCHAR *,DWORD *,UINT *,BYTE **);
+typedef HRESULT (WINAPI *sl_load_policies)(const GUID *,const GUID *,DWORD,void **);
+
+static const GUID first_license={0x5d2c0a11,0x7e4b,0x4c1a,{0x9b,0x30,0x11,0x22,0x33,0x44,0x55,0x66}};
+static const GUID second_license={0x0aa0b0c0,0x1d2e,0x4f30,{0x80,0x01,0xa1,0xb2,0xc3,0xd4,0xe5,0xf6}};
+
+static int same_guid(const GUID *left,const GUID *right)
+{
+	const BYTE *a=(const BYTE *)left,*b=(const BYTE *)right;
+	for (unsigned index=0;index<sizeof(GUID);++index) if(a[index]!=b[index]) return 0;
+	return 1;
+}
+
+/* The license store keeps what is installed and reads it back; an authentication challenge is kept but cannot be answered. */
+static int check_licensing(void)
+{
+	static const char file[]="<?xml version=\"1.0\" encoding=\"utf-8\"?><rg:licenseGroup xmlns:rg=\"urn:x\" xmlns:r=\"urn:y\">"
+		"<r:license xmlns:r=\"urn:y\" licenseId=\"{5D2C0A11-7E4B-4C1A-9B30-112233445566}\"><r:otherInfo><tm:infoStr name=\"licenseType\">"
+		"Test</tm:infoStr></r:otherInfo></r:license>"
+		"<r:license licenseId='0aa0b0c0-1d2e-4f30-8001-a1b2c3d4e5f6'><r:otherInfo><tm:infoStr name=\"licenseVersion\">2.0</tm:infoStr>"
+		"<tm:infoStr name=\"productDescription\">One &amp; two</tm:infoStr></r:otherInfo></r:license></rg:licenseGroup>";
+	static const char empty[]="<rg:licenseGroup/>";
+	static const BYTE challenge[4]={1,2,3,4};
+	HMODULE sppc=LoadLibraryW(L"sppc.dll");
+	if (!sppc) return 20;
+	sl_open open=(sl_open)GetProcAddress(sppc,"SLOpen");
+	sl_close close=(sl_close)GetProcAddress(sppc,"SLClose");
+	sl_set_data set_data=(sl_set_data)GetProcAddress(sppc,"SLSetAuthenticationData");
+	sl_get_result get_result=(sl_get_result)GetProcAddress(sppc,"SLGetAuthenticationResult");
+	sl_install install=(sl_install)GetProcAddress(sppc,"SLInstallLicense");
+	sl_list list=(sl_list)GetProcAddress(sppc,"SLGetSLIDList");
+	sl_information information=(sl_information)GetProcAddress(sppc,"SLGetLicenseInformation");
+	sl_load_policies load_policies=(sl_load_policies)GetProcAddress(sppc,"SLLoadApplicationPolicies");
+	if (!open || !close || !set_data || !get_result || !install || !list || !information || !load_policies) return 21;
+	void *session=NULL;
+	if (open(&session)!=S_OK || !session) return 22;
+	UINT size=7;
+	BYTE *value=(BYTE *)1;
+	if ((ULONG)get_result(session,&size,&value)!=0xc004f079UL || size || value) return 23;
+	if (set_data(session,sizeof(challenge),challenge)!=S_OK || set_data(session,1,NULL)!=E_INVALIDARG) return 24;
+	if ((ULONG)get_result(session,&size,&value)!=0xc004f07aUL || size || value) return 25;
+	GUID id;
+	if ((ULONG)install(session,sizeof(empty)-1,(const BYTE *)empty,&id)!=0xc004f01fUL) return 26;
+	if (install(session,sizeof(file)-1,(const BYTE *)file,&id)!=S_OK || !same_guid(&id,&first_license)) return 27;
+	UINT count=0;
+	GUID *ids=NULL;
+	if (list(session,2,&id,3,&count,&ids)!=S_OK || count!=2 || !ids || !same_guid(&ids[0],&first_license) ||
+		!same_guid(&ids[1],&second_license))
+		return 28;
+	LocalFree(ids);
+	if ((ULONG)list(session,2,&second_license,3,&count,&ids)!=0xc004f011UL || count || ids) return 29;
+	DWORD type=0;
+	if (information(session,&second_license,L"Description",&type,&size,&value)!=S_OK || type!=REG_SZ || size!=20 ||
+		lstrcmpW((const WCHAR *)value,L"One & two"))
+		return 30;
+	LocalFree(value);
+	if (information(session,&first_license,L"LicenseType",&type,&size,&value)!=S_OK || lstrcmpW((const WCHAR *)value,L"Test")) return 31;
+	LocalFree(value);
+	if ((ULONG)information(session,&first_license,L"Version",&type,&size,&value)!=0xc004f012UL || size || value) return 32;
+	void *policies=(void *)1;
+	if ((ULONG)load_policies(&first_license,NULL,0,&policies)!=0xc004f072UL || policies) return 33;
+	if (close(session)!=S_OK || close(session)!=E_INVALIDARG) return 34;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	BasicInformation info;
@@ -73,6 +144,10 @@ int raven_entry(void)
 			offset+=entry->Size;
 		}
 		if(groups!=1) return 17;
+	}
+	{
+		const int licensing=check_licensing();
+		if (licensing) return licensing;
 	}
 	phase=1;
 	return 0;

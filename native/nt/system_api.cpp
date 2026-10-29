@@ -3,11 +3,17 @@
 #include "text.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cpuid.h>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <mutex>
+#include <optional>
+#include <span>
 #include <thread>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -152,6 +158,128 @@ std::map<std::u16string, std::pair<std::u16string, std::u16string>> default_envi
 			add(from_utf8(std::string(text.substr(prefix.size(), equals - prefix.size()))), from_utf8(std::string(text.substr(equals + 1))));
 	}
 	return result;
+}
+
+// The Software Protection Platform's license store: the files programs install, each named after the first license it holds and kept
+// where Windows keeps them. A license is an <r:license> element whose licenseId attribute is its SLID.
+struct LicenseStore {
+	std::mutex lock;
+	// Open sessions and the authentication data each was given.
+	std::map<uint64_t, std::vector<uint8_t>> sessions;
+};
+
+using Slid = std::array<uint8_t, 16>;
+
+std::optional<Slid> parse_slid(std::string_view text)
+{
+	if (text.size() == 38 && text.front() == '{' && text.back() == '}')
+		text = text.substr(1, 36);
+	if (text.size() != 36 || text[8] != '-' || text[13] != '-' || text[18] != '-' || text[23] != '-')
+		return std::nullopt;
+	std::string digits;
+	for (const char character : text)
+		if (character != '-')
+			digits += character;
+	uint8_t bytes[16];
+	for (size_t index = 0; index < 16; ++index) {
+		const auto digit = [](char character) -> int {
+			if (character >= '0' && character <= '9')
+				return character - '0';
+			character = char(character | 0x20);
+			return character >= 'a' && character <= 'f' ? character - 'a' + 10 : -1;
+		};
+		const int high = digit(digits[2 * index]), low = digit(digits[2 * index + 1]);
+		if (high < 0 || low < 0)
+			return std::nullopt;
+		bytes[index] = uint8_t(high << 4 | low);
+	}
+	// The text spells the first three fields big-endian; the SLID keeps them as little-endian numbers.
+	return Slid{bytes[3], bytes[2], bytes[1], bytes[0], bytes[5], bytes[4], bytes[7], bytes[6], bytes[8], bytes[9], bytes[10], bytes[11],
+		bytes[12], bytes[13], bytes[14], bytes[15]};
+}
+
+std::string slid_text(const Slid &id)
+{
+	char text[39];
+	std::snprintf(text, sizeof(text), "{%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X}", id[3], id[2], id[1], id[0], id[5],
+		id[4], id[7], id[6], id[8], id[9], id[10], id[11], id[12], id[13], id[14], id[15]);
+	return text;
+}
+
+// License files are UTF-8 XML; one saved as UTF-16 is read through its UTF-8 spelling.
+std::string license_text(std::span<const uint8_t> bytes)
+{
+	if (bytes.size() >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe) {
+		std::u16string wide((bytes.size() - 2) / 2, u'\0');
+		std::memcpy(wide.data(), bytes.data() + 2, wide.size() * 2);
+		return to_utf8(wide);
+	}
+	return std::string(bytes.begin(), bytes.end());
+}
+
+struct LicenseElement {
+	Slid id;
+	// The element's content, between its start and end tags.
+	std::string_view body;
+};
+
+std::vector<LicenseElement> license_elements(std::string_view text)
+{
+	std::vector<LicenseElement> result;
+	for (size_t start = text.find("<r:license"); start != text.npos; start = text.find("<r:license", start + 1)) {
+		const auto tag_end = text.find('>', start);
+		if (tag_end == text.npos)
+			break;
+		const auto tag = text.substr(start, tag_end - start);
+		const auto attribute = tag.find("licenseId");
+		if (attribute == tag.npos)
+			continue;
+		size_t cursor = attribute + 9;
+		while (cursor < tag.size() && (tag[cursor] == ' ' || tag[cursor] == '\t' || tag[cursor] == '\r' || tag[cursor] == '\n' || tag[cursor] == '='))
+			++cursor;
+		if (cursor >= tag.size() || (tag[cursor] != '"' && tag[cursor] != '\''))
+			continue;
+		const auto close = tag.find(tag[cursor], cursor + 1);
+		const auto id = close == tag.npos ? std::nullopt : parse_slid(tag.substr(cursor + 1, close - cursor - 1));
+		if (!id)
+			continue;
+		const auto end = text.find("</r:license>", tag_end);
+		result.push_back({*id, text.substr(tag_end + 1, end == text.npos ? text.npos : end - tag_end - 1)});
+	}
+	return result;
+}
+
+// The text of the first element under the license whose name attribute is the field, with the XML character references resolved.
+std::optional<std::string> license_field(std::string_view body, std::string_view field)
+{
+	const auto attribute = body.find("name=\"" + std::string(field) + "\"");
+	if (attribute == body.npos)
+		return std::nullopt;
+	const auto start = body.find('>', attribute);
+	const auto end = start == body.npos ? body.npos : body.find('<', start);
+	if (end == body.npos)
+		return std::nullopt;
+	std::string value;
+	const auto raw = body.substr(start + 1, end - start - 1);
+	for (size_t index = 0; index < raw.size(); ++index) {
+		constexpr std::pair<std::string_view, char> entities[] = {{"&amp;", '&'}, {"&lt;", '<'}, {"&gt;", '>'}, {"&quot;", '"'}, {"&apos;", '\''}};
+		const auto entity = std::find_if(std::begin(entities), std::end(entities), [&](const auto &item) { return raw.substr(index).starts_with(item.first); });
+		if (entity != std::end(entities)) {
+			value += entity->second;
+			index += entity->first.size() - 1;
+		} else {
+			value += raw[index];
+		}
+	}
+	return value;
+}
+
+std::optional<std::vector<uint8_t>> read_host_file(const std::filesystem::path &path)
+{
+	std::ifstream stream(path, std::ios::binary);
+	if (!stream)
+		return std::nullopt;
+	return std::vector<uint8_t>(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
 }
@@ -459,23 +587,199 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	const auto policy_value = [](ApiCall &call) { call.ret(call[0] ? 0xc004f012U : 0x80070057U); };
 	registry.add("SLGetWindowsInformation", 4, policy_value);
 	registry.add("SLGetWindowsInformationDWORD", 2, policy_value);
-	// The Software Protection Platform keeps no licenses, product keys or policies here, and nothing is installed into it: lists are
-	// empty, lookups find nothing, rights are not granted and installing is refused. A session handle names nothing beyond itself.
-	registry.add("SLOpen", 1, [&context](ApiCall &call) {
+	// The Software Protection Platform keeps the licenses programs install and lists and reads them back. It holds no product keys, no
+	// policies and no key to sign an answer to a program's authentication challenge, so rights are not granted and the challenge cannot
+	// be verified. A session handle names nothing beyond itself.
+	auto store = std::make_shared<LicenseStore>();
+	constexpr uint32_t invalid_argument = 0x80070057U, value_not_found = 0xc004f012U, file_not_installed = 0xc004f011U,
+		invalid_license = 0xc004f01fU;
+	const auto open_session = [store](uint64_t handle) {
+		std::lock_guard guard(store->lock);
+		return handle && store->sessions.contains(handle);
+	};
+	registry.add("SLOpen", 1, [&context, store](ApiCall &call) {
 		const auto handle = call[0] ? context.allocator.allocate(8, true) : 0;
 		if (!handle) {
-			call.ret(call[0] ? 0x8007000eU : 0x80070057U);
+			call.ret(call[0] ? 0x8007000eU : invalid_argument);
 			return;
+		}
+		{
+			std::lock_guard guard(store->lock);
+			store->sessions[handle];
 		}
 		call.store_pointer(call[0], handle);
 		call.ret(0);
 	});
-	registry.add("SLClose", 1, [](ApiCall &call) { call.ret(call[0] ? 0 : 0x80070057U); });
-	// Empty lists: SLGetSLIDList, SLGetLicensingStatusInformation and SLGetInstalledProductKeyIds give a count of zero and no array.
+	registry.add("SLClose", 1, [&context, store](ApiCall &call) {
+		std::lock_guard guard(store->lock);
+		if (!store->sessions.erase(call[0])) {
+			call.ret(invalid_argument);
+			return;
+		}
+		context.allocator.release(call[0]);
+		call.ret(0);
+	});
+	// The store directory as the host sees it, created when asked to be; the service's own System32, whatever the caller's width.
+	const auto store_directory = [&paths](bool create) -> std::optional<std::filesystem::path> {
+		const bool was = paths.redirect(false);
+		auto resolved = paths.resolve(u"C:\\Windows\\System32\\spp\\store\\2.0\\licenses");
+		auto system = paths.resolve(u"C:\\Windows\\System32");
+		paths.redirect(was);
+		if (resolved && resolved->exists)
+			return resolved->host;
+		if (!create || !system || !system->exists)
+			return std::nullopt;
+		std::error_code error;
+		const auto directory = system->host / "spp" / "store" / "2.0" / "licenses";
+		std::filesystem::create_directories(directory, error);
+		return error ? std::nullopt : std::optional(directory);
+	};
+	// SLInstallLicense keeps the file under the ID of its first license and gives that ID back as the file's.
+	registry.add("SLInstallLicense", 4, [call_store = store_directory, open_session](ApiCall &call) {
+		const uint32_t size = call.u32(1);
+		if (!open_session(call[0]) || !size || !call[2] || !call[3]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		const auto bytes = call.read(call[2], size);
+		const auto licenses = license_elements(license_text(bytes));
+		if (licenses.empty()) {
+			call.ret(invalid_license);
+			return;
+		}
+		const auto directory = call_store(true);
+		if (!directory) {
+			call.ret(0x80070003U);
+			return;
+		}
+		const auto target = *directory / (slid_text(licenses.front().id) + ".xrm-ms");
+		auto partial = target;
+		partial += ".partial";
+		{
+			std::ofstream stream(partial, std::ios::binary | std::ios::trunc);
+			stream.write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+			if (!stream.flush()) {
+				call.ret(0x8007001dU);
+				return;
+			}
+		}
+		std::error_code error;
+		std::filesystem::rename(partial, target, error);
+		if (error) {
+			std::filesystem::remove(partial, error);
+			call.ret(0x8007001dU);
+			return;
+		}
+		call.write(call[3], licenses.front().id);
+		call.ret(0);
+	});
+	// SLGetSLIDList answers for the licenses of an installed file; other questions find nothing installed and give an empty list.
+	registry.add("SLGetSLIDList", 6, [&context, call_store = store_directory, open_session](ApiCall &call) {
+		constexpr uint32_t license_file = 2, license = 3, last = 8;
+		const uint32_t query = call.u32(1), returned = call.u32(3);
+		if (!open_session(call[0]) || query >= last || returned >= last || !call[4] || !call[5]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		call.store<uint32_t>(call[4], 0);
+		call.store_pointer(call[5], 0);
+		if (query != license_file || returned != license) {
+			call.ret(0);
+			return;
+		}
+		if (!call[2]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		const auto file = call.read(call[2], 16);
+		const auto directory = call_store(false);
+		const auto bytes = directory ? read_host_file(*directory / (slid_text(*reinterpret_cast<const Slid *>(file.data())) + ".xrm-ms"))
+					     : std::nullopt;
+		if (!bytes) {
+			call.ret(file_not_installed);
+			return;
+		}
+		const auto licenses = license_elements(license_text(*bytes));
+		if (licenses.empty()) {
+			call.ret(value_not_found);
+			return;
+		}
+		const auto list = context.allocator.allocate(16 * licenses.size(), false);
+		if (!list) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		for (size_t index = 0; index < licenses.size(); ++index)
+			call.write(list + 16 * index, licenses[index].id);
+		call.store<uint32_t>(call[4], uint32_t(licenses.size()));
+		call.store_pointer(call[5], list);
+		call.ret(0);
+	});
+	// SLGetLicenseInformation reads the type, version and description an installed license states about itself, as a string.
+	registry.add("SLGetLicenseInformation", 6, [&context, call_store = store_directory, open_session](ApiCall &call) {
+		if (!open_session(call[0]) || !call[1] || !call[2] || !call[4] || !call[5]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		if (call[3])
+			call.store<uint32_t>(call[3], 0);
+		call.store<uint32_t>(call[4], 0);
+		call.store_pointer(call[5], 0);
+		const auto name = call.wide(call[2]);
+		const std::pair<std::u16string_view, std::vector<std::string_view>> fields[] = {
+			{u"LicenseType", {"licenseType"}}, {u"Version", {"licenseVersion"}}, {u"Description", {"description", "productDescription"}}};
+		const auto field = std::find_if(std::begin(fields), std::end(fields), [&](const auto &item) { return item.first == name; });
+		const auto directory = call_store(false);
+		if (field == std::end(fields) || !directory) {
+			call.ret(value_not_found);
+			return;
+		}
+		Slid id;
+		std::memcpy(id.data(), call.read(call[1], 16).data(), 16);
+		// The file named after the license holds it when it came first in what was installed; any other file may hold it too.
+		std::vector<std::filesystem::path> files{*directory / (slid_text(id) + ".xrm-ms")};
+		std::error_code error;
+		for (const auto &entry : std::filesystem::directory_iterator(*directory, error))
+			if (entry.path().extension() == ".xrm-ms" && entry.path() != files.front())
+				files.push_back(entry.path());
+		for (const auto &file : files) {
+			const auto bytes = read_host_file(file);
+			if (!bytes)
+				continue;
+			const auto text = license_text(*bytes);
+			for (const auto &license : license_elements(text)) {
+				if (license.id != id)
+					continue;
+				std::optional<std::string> value;
+				for (const auto spelling : field->second)
+					if (!value)
+						value = license_field(license.body, spelling);
+				if (!value) {
+					call.ret(value_not_found);
+					return;
+				}
+				const auto wide = from_utf8(*value);
+				const auto block = context.allocator.allocate(2 * (wide.size() + 1), true);
+				if (!block) {
+					call.ret(0x8007000eU);
+					return;
+				}
+				call.put_wide(block, wide, wide.size() + 1);
+				if (call[3])
+					call.store<uint32_t>(call[3], 1);
+				call.store<uint32_t>(call[4], uint32_t(2 * (wide.size() + 1)));
+				call.store_pointer(call[5], block);
+				call.ret(0);
+				return;
+			}
+		}
+		call.ret(value_not_found);
+	});
+	// Empty lists: SLGetLicensingStatusInformation and SLGetInstalledProductKeyIds give a count of zero and no array.
 	const auto empty_list = [](size_t count, size_t array) {
 		return [count, array](ApiCall &call) {
 			if (!call[0] || !call[count] || !call[array]) {
-				call.ret(0x80070057U);
+				call.ret(invalid_argument);
 				return;
 			}
 			call.store<uint32_t>(call[count], 0);
@@ -483,29 +787,58 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0);
 		};
 	};
-	registry.add("SLGetSLIDList", 6, empty_list(4, 5));
 	registry.add("SLGetLicensingStatusInformation", 6, empty_list(4, 5));
 	registry.add("SLGetInstalledProductKeyIds", 4, empty_list(2, 3));
-	const auto answer = [](uint32_t result) { return [result](ApiCall &call) { call.ret(call[0] ? result : 0x80070057U); }; };
+	const auto answer = [](uint32_t result) { return [result](ApiCall &call) { call.ret(call[0] ? result : invalid_argument); }; };
 	const std::pair<const char *, int> lookups[] = {{"SLGetApplicationInformation", 6}, {"SLGetProductSkuInformation", 6},
-		{"SLGetPKeyInformation", 6}, {"SLGetLicenseInformation", 6}, {"SLGetServiceInformation", 5}, {"SLGetPolicyInformation", 5},
-		{"SLGetPolicyInformationDWORD", 3}, {"SLGetApplicationPolicy", 5}, {"SLLoadApplicationPolicies", 4}};
+		{"SLGetPKeyInformation", 6}, {"SLGetServiceInformation", 5}, {"SLGetPolicyInformation", 5}, {"SLGetPolicyInformationDWORD", 3},
+		{"SLGetApplicationPolicy", 5}};
 	for (const auto &[name, words] : lookups)
-		registry.add(name, words, answer(0xc004f012U));
+		registry.add(name, words, answer(value_not_found));
+	// No policies are installed for any application: the handle it would load is cleared.
+	registry.add("SLLoadApplicationPolicies", 4, [](ApiCall &call) {
+		if (!call[0] || !call[3]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		call.store_pointer(call[3], 0);
+		call.ret(0xc004f072U);
+	});
 	registry.add("SLConsumeRight", 5, answer(0xc004f013U));
-	registry.add("SLGetLicense", 4, answer(0xc004f011U));
-	registry.add("SLGetLicenseFileId", 4, answer(0xc004f011U));
-	registry.add("SLUninstallLicense", 2, answer(0xc004f011U));
-	registry.add("SLUninstallProofOfPurchase", 2, answer(0xc004f012U));
-	registry.add("SLInstallLicense", 4, answer(0xc004f016U));
+	registry.add("SLGetLicense", 4, answer(file_not_installed));
+	registry.add("SLGetLicenseFileId", 4, answer(file_not_installed));
+	registry.add("SLUninstallLicense", 2, answer(file_not_installed));
+	registry.add("SLUninstallProofOfPurchase", 2, answer(value_not_found));
 	// No product key configuration is installed to tell a key's ID, and no SKU to identify offline, confirm or rearm.
 	registry.add("SLGetPKeyId", 6, answer(0xc004f016U));
-	registry.add("SLGenerateOfflineInstallationId", 3, answer(0xc004f012U));
+	registry.add("SLGenerateOfflineInstallationId", 3, answer(value_not_found));
 	registry.add("SLDepositOfflineConfirmationId", 4, answer(0xc004f016U));
 	registry.add("SLReArm", 4, answer(0xc004f016U));
-	registry.add("SLSetAuthenticationData", 3, answer(0xc004f016U));
+	// The session keeps the challenge it is given; an empty one clears it. Without the platform's signing key no result can be built
+	// for it, which SLGetAuthenticationResult reports as SL_E_AUTHN_CANT_VERIFY, or SL_E_AUTHN_CHALLENGE_NOT_SET before a challenge.
+	registry.add("SLSetAuthenticationData", 3, [store](ApiCall &call) {
+		const uint32_t size = call.u32(1);
+		std::lock_guard guard(store->lock);
+		const auto session = store->sessions.find(call[0]);
+		if (!call[0] || session == store->sessions.end() || (size && !call[2])) {
+			call.ret(invalid_argument);
+			return;
+		}
+		session->second = size ? call.read(call[2], size) : std::vector<uint8_t>();
+		call.ret(0);
+	});
+	registry.add("SLGetAuthenticationResult", 3, [store](ApiCall &call) {
+		std::lock_guard guard(store->lock);
+		const auto session = store->sessions.find(call[0]);
+		if (!call[0] || session == store->sessions.end() || !call[1] || !call[2]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		call.store<uint32_t>(call[1], 0);
+		call.store_pointer(call[2], 0);
+		call.ret(session->second.empty() ? 0xc004f079U : 0xc004f07aU);
+	});
 	registry.add("SLInstallProofOfPurchase", 6, answer(0xc004f016U));
-	registry.add("SLGetAuthenticationResult", 2, answer(0xc004f016U));
 	registry.add("SLPersistApplicationPolicies", 3, answer(0));
 	registry.add("SLUnloadApplicationPolicies", 2, answer(0));
 	// Undocumented: present because programs look for them, and they refuse every request.

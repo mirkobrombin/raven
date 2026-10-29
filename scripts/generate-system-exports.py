@@ -74,7 +74,7 @@ NAMES_ONLY["slc"] = sorted(SLC_WORDS)
 # sppc.dll, the Software Protection Platform client, has no import library in mingw-w64 either: the documented functions over the
 # licenses and policies it keeps.
 SPPC_WORDS = {"SLClose": 1, "SLConsumeRight": 5, "SLGetApplicationInformation": 6, "SLGetApplicationPolicy": 5,
-              "SLGetAuthenticationResult": 2, "SLGetInstalledProductKeyIds": 4, "SLGetLicense": 4, "SLGetLicenseFileId": 4,
+              "SLGetAuthenticationResult": 3, "SLGetInstalledProductKeyIds": 4, "SLGetLicense": 4, "SLGetLicenseFileId": 4,
               "SLGetLicenseInformation": 6, "SLGetLicensingStatusInformation": 6, "SLGetPKeyId": 6, "SLGetPKeyInformation": 6, "SLGetPolicyInformation": 5,
               "SLGetPolicyInformationDWORD": 3, "SLGetProductSkuInformation": 6, "SLGetSLIDList": 6, "SLGetServiceInformation": 5,
               "SLInstallLicense": 4, "SLInstallProofOfPurchase": 6, "SLLoadApplicationPolicies": 4, "SLOpen": 1,

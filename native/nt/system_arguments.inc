@@ -2592,7 +2592,7 @@ static constexpr std::pair<std::string_view, uint8_t> slc_words[]{
 };
 static constexpr std::pair<std::string_view, uint8_t> sppc_words[]{
 	{"SLClose",1},{"SLConsumeRight",5},{"SLDepositOfflineConfirmationId",4},{"SLGenerateOfflineInstallationId",3},{"SLGetApplicationInformation",6},{"SLGetApplicationPolicy",5},
-	{"SLGetAuthenticationResult",2},{"SLGetInstalledProductKeyIds",4},{"SLGetLicense",4},{"SLGetLicenseFileId",4},{"SLGetLicenseInformation",6},{"SLGetLicensingStatusInformation",6},
+	{"SLGetAuthenticationResult",3},{"SLGetInstalledProductKeyIds",4},{"SLGetLicense",4},{"SLGetLicenseFileId",4},{"SLGetLicenseInformation",6},{"SLGetLicensingStatusInformation",6},
 	{"SLGetPKeyId",6},{"SLGetPKeyInformation",6},{"SLGetPolicyInformation",5},{"SLGetPolicyInformationDWORD",3},{"SLGetProductSkuInformation",6},{"SLGetSLIDList",6},
 	{"SLGetServiceInformation",5},{"SLInstallLicense",4},{"SLInstallProofOfPurchase",6},{"SLLoadApplicationPolicies",4},{"SLOpen",1},{"SLPersistApplicationPolicies",3},
 	{"SLReArm",4},{"SLSetAuthenticationData",3},{"SLUninstallLicense",2},{"SLUninstallProofOfPurchase",2},{"SLUnloadApplicationPolicies",2},
