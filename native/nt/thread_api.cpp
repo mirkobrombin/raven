@@ -544,6 +544,43 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
+	// The registers of a stopped thread are written back the same way: a hook installed in another thread replaces the instruction it
+	// runs next, which the thread finds in its own context when it is let go again.
+	registry.add("SetThreadContext", 2, [thread_from, &threads](ApiCall &call) {
+		if (call.pointer_width() == 4 || !call[1]) {
+			call.fail(call[1] ? 50 : 87);
+			return;
+		}
+		const auto thread = thread_from(call[0]);
+		if (!thread) {
+			call.fail(6);
+			return;
+		}
+		// Only what a stopped thread will run with again can be written: the thread serving this call keeps running with the registers of
+		// the call itself, which the return would overwrite.
+		if (thread->id == threads.current_id() || thread->suspend_count == 0) {
+			call.fail(5);
+			return;
+		}
+		const uint32_t flags = call.load<uint32_t>(call[1] + 0x30);
+		auto &registers = thread->snapshot.context.registers;
+		const auto get = [&](size_t at) { return call.load<uint64_t>(call[1] + at); };
+		if (flags & 0x1) {
+			registers.cs = call.load<uint16_t>(call[1] + 0x38);
+			registers.ss = call.load<uint16_t>(call[1] + 0x42);
+			registers.eflags = call.load<uint32_t>(call[1] + 0x44);
+			registers.rsp = get(0x98);
+			registers.rbp = get(0xa0);
+			registers.rip = get(0xf8);
+		}
+		if (flags & 0x2) {
+			registers.rax = get(0x78); registers.rcx = get(0x80); registers.rdx = get(0x88); registers.rbx = get(0x90);
+			registers.rsi = get(0xa8); registers.rdi = get(0xb0);
+			registers.r8 = get(0xb8); registers.r9 = get(0xc0); registers.r10 = get(0xc8); registers.r11 = get(0xd0);
+			registers.r12 = get(0xd8); registers.r13 = get(0xe0); registers.r14 = get(0xe8); registers.r15 = get(0xf0);
+		}
+		call.ret(1);
+	});
 	// A thread's description is a name the program gives it; it is kept per thread and handed back in memory the program frees with LocalFree.
 	auto descriptions = std::make_shared<std::map<uint32_t, std::u16string>>();
 	registry.add("SetThreadDescription", 2, [thread_from, descriptions](ApiCall &call) {

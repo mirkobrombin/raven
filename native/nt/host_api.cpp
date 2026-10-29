@@ -1130,6 +1130,84 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("GetBestInterface", 2, best_interface);
 	registry.add("GetBestInterfaceEx", 2, best_interface);
+	// The interfaces as MIB_IFROW records, the shape the older table calls and GetIfEntry report them in: the name the TCP/IP stack knows
+	// an interface by, its index and kind, and what it carries. A program that asks how the host is networked reads these before it opens
+	// a socket, and one that finds no row cannot tell a missing interface from a missing network.
+	const auto fill_if_row = [](std::vector<uint8_t> &row, const Adapter &adapter) {
+		const auto put32 = [&](size_t at, uint32_t value) { std::memcpy(row.data() + at, &value, 4); };
+		// \DEVICE\TCPIP_{index}: Windows names an interface by a GUID, and every interface here has an index it answers to.
+		char name[64];
+		const int written = std::snprintf(name, sizeof name, "\\DEVICE\\TCPIP_{00000000-0000-0000-0000-%012u}", adapter.index);
+		std::u16string wide;
+		for (int at = 0; at < written && at < int(sizeof name); ++at)
+			wide.push_back(char16_t(uint8_t(name[at])));
+		std::memcpy(row.data(), wide.data(), std::min(wide.size(), size_t(255)) * 2);
+		put32(512, adapter.index);
+		put32(516, adapter.type);
+		put32(520, adapter.mtu);
+		put32(524, adapter.type == if_type_loopback ? 10000000 : 1000000000);
+		put32(528, adapter.hardware_length);
+		std::memcpy(row.data() + 532, adapter.hardware, std::min<uint32_t>(adapter.hardware_length, 8));
+		put32(540, 1);
+		put32(544, adapter.status == 1 ? 1 : 4);
+		const size_t description = std::min<size_t>(adapter.name.size(), 255);
+		put32(600, uint32_t(description));
+		std::memcpy(row.data() + 604, adapter.name.data(), description);
+	};
+	registry.add("GetIfEntry", 1, [fill_if_row](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(87);
+			return;
+		}
+		const uint32_t index = call.load<uint32_t>(call[0] + 512);
+		const auto adapters = host_adapters(0);
+		const auto adapter = std::find_if(adapters.begin(), adapters.end(), [&](const Adapter &item) { return item.index == index; });
+		if (!index || adapter == adapters.end()) {
+			call.fail(87);
+			return;
+		}
+		std::vector<uint8_t> row(860, 0);
+		fill_if_row(row, *adapter);
+		call.write(call[0], std::span<const uint8_t>(row.data(), row.size()));
+		call.ret(0);
+	});
+	registry.add("GetNumberOfInterfaces", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(87);
+			return;
+		}
+		call.store<uint32_t>(call[0], uint32_t(host_adapters(0).size()));
+		call.ret(0);
+	});
+	// GetIfTable(table, size, order): a count, then the rows; the size the caller holds is given back when it is too small.
+	registry.add("GetIfTable", 3, [fill_if_row](ApiCall &call) {
+		if (!call[1]) {
+			call.fail(87);
+			return;
+		}
+		auto adapters = host_adapters(0);
+		if (call[2])
+			std::sort(adapters.begin(), adapters.end(), [](const Adapter &left, const Adapter &right) { return left.index < right.index; });
+		const size_t needed = 4 + adapters.size() * 860;
+		const uint32_t capacity = call.load<uint32_t>(call[1]);
+		if (!call[0] || capacity < needed) {
+			call.store<uint32_t>(call[1], uint32_t(needed));
+			call.ret(error_buffer_overflow);
+			return;
+		}
+		std::vector<uint8_t> table(needed, 0);
+		const uint32_t count = uint32_t(adapters.size());
+		std::memcpy(table.data(), &count, 4);
+		for (size_t number = 0; number < adapters.size(); ++number) {
+			const size_t at = 4 + number * 860;
+			std::vector<uint8_t> row(860, 0);
+			fill_if_row(row, adapters[number]);
+			std::memcpy(table.data() + at, row.data(), row.size());
+		}
+		call.write(call[0], std::span<const uint8_t>(table.data(), table.size()));
+		call.store<uint32_t>(call[1], uint32_t(needed));
+		call.ret(0);
+	});
 	// The class of human interface devices; none is present.
 	registry.add("HidD_GetHidGuid", 1, [](ApiCall &call) {
 		static const uint8_t guid[16] = {0xb2, 0x55, 0x1e, 0x4d, 0x6f, 0xf1, 0xcf, 0x11, 0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30};

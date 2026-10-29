@@ -1925,6 +1925,34 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		if (call[0])
 			context.allocator.release(call[0]);
 	});
+	// getnameinfo: the name or the number of the address a program holds, from the host resolver. Windows numbers its NI_ flags
+	// differently from the host: the same five requests stand in another order.
+	registry.add("getnameinfo", 7, [fail](ApiCall &call) {
+		if (call.i32(1) < 2) {
+			fail(call, wsaeinval);
+			return;
+		}
+		const auto address = host_address(call, call[0], size_t(call.i32(1)));
+		int flags = 0;
+		if (call.u32(6) & 0x01) flags |= NI_NOFQDN;
+		if (call.u32(6) & 0x02) flags |= NI_NUMERICHOST;
+		if (call.u32(6) & 0x04) flags |= NI_NAMEREQD;
+		if (call.u32(6) & 0x08) flags |= NI_NUMERICSERV;
+		if (call.u32(6) & 0x10) flags |= NI_DGRAM;
+		const uint32_t node_length = call.u32(3), service_length = call.u32(5);
+		std::vector<char> node(std::max<uint32_t>(node_length, 1)), service(std::max<uint32_t>(service_length, 1));
+		const int status = ::getnameinfo(reinterpret_cast<const sockaddr *>(address.data()), socklen_t(address.size()),
+			node_length ? node.data() : nullptr, node_length, service_length ? service.data() : nullptr, service_length, flags);
+		if (status) {
+			fail(call, status == EAI_AGAIN ? 11002 : status == EAI_FAIL ? 11003 : status == EAI_OVERFLOW || status == EAI_FAMILY ? wsaeinval : wsahost_not_found);
+			return;
+		}
+		if (node_length)
+			call.put_narrow(call[2], std::string(node.data()), node_length);
+		if (service_length)
+			call.put_narrow(call[4], std::string(service.data()), service_length);
+		call.ret(0);
+	});
 	registry.add("gethostname", 2, [](ApiCall &call) {
 		char name[256] = {};
 		::gethostname(name, sizeof(name) - 1);
@@ -1986,6 +2014,36 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		std::array<char, 1024> buffer{};
 		getservbyport_r(int(uint16_t(call.u32(0))), call[1] ? protocol.c_str() : nullptr, &entry, buffer.data(), buffer.size(), &found);
 		service(call, found);
+	});
+	// getprotobyname and getprotobynumber answer from the protocols database into one PROTOENT the process reuses.
+	auto protocol_block = std::make_shared<uint64_t>(0);
+	const auto protocol = [&context, protocol_block](ApiCall &call, const protoent *found) {
+		if (!found) {
+			call.fail(11004, 0);
+			return;
+		}
+		if (!*protocol_block)
+			*protocol_block = context.allocator.allocate(256, true);
+		const bool narrow = call.pointer_width() == 4;
+		const uint64_t block = *protocol_block, aliases = block + 32, name = block + 48;
+		call.put_narrow(name, std::string(found->p_name).substr(0, 95), 96);
+		call.store_pointer(block, name);
+		call.store_pointer(block + (narrow ? 4 : 8), aliases);
+		call.store<uint16_t>(block + (narrow ? 8 : 16), uint16_t(found->p_proto));
+		call.ret(block);
+	};
+	registry.add("getprotobyname", 1, [protocol](ApiCall &call) {
+		const auto name = call.narrow(call[0], 256);
+		protoent entry{}, *found = nullptr;
+		std::array<char, 1024> buffer{};
+		getprotobyname_r(name.c_str(), &entry, buffer.data(), buffer.size(), &found);
+		protocol(call, found);
+	});
+	registry.add("getprotobynumber", 1, [protocol](ApiCall &call) {
+		protoent entry{}, *found = nullptr;
+		std::array<char, 1024> buffer{};
+		getprotobynumber_r(int(call.u32(0)), &entry, buffer.data(), buffer.size(), &found);
+		protocol(call, found);
 	});
 	registry.add("htons", 1, [](ApiCall &call) { call.ret(uint16_t(call.u32(0) << 8 | (call.u32(0) >> 8 & 0xff))); });
 	registry.add("ntohs", 1, [](ApiCall &call) { call.ret(uint16_t(call.u32(0) << 8 | (call.u32(0) >> 8 & 0xff))); });

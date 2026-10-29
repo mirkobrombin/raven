@@ -5,6 +5,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace raven {
@@ -28,6 +29,8 @@ private:
 	NativeMemory &memory;
 	NativeHeap &heap;
 	std::map<uint64_t, uint64_t> pages;
+	// The blocks the process heap gave out here: what a program may free again, and the only addresses whose size is answered.
+	std::set<uint64_t> heap_blocks;
 	// The small blocks given out, by address, with the size asked for; the free blocks of each size; the chunk being cut for each size.
 	std::map<uint64_t, uint64_t> shared;
 	std::array<std::vector<uint64_t>, size_classes> free_blocks;

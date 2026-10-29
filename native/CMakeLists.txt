@@ -2727,6 +2727,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${d3d10_source}/d3d10_1.c -lkernel32 -lgcc
                     DEPENDS ${d3d10_source}/d3d10_1.c VERBATIM)
                 add_custom_target(d3d10_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-d3d10_1.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-d3d10_1.dll)
+                # avrt.dll and mfplat.dll: the multimedia scheduler a media library takes its threads through, and the Media Foundation
+                # factories it creates samples and buffers with, for each width.
+                set(media_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-media)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
+                        ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll
+                        ${media_source}/avrt.c -lkernel32
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
+                        ${media_source}/mfplat.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll
+                        ${media_source}/avrt.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
+                        ${media_source}/mfplat.c -lkernel32
+                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c VERBATIM)
+                add_custom_target(media_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll)
                 foreach(width 64 32)
                     set(d3d10_client ${CMAKE_CURRENT_BINARY_DIR}/d3d10-client${width}.exe)
                     if(width EQUAL 64)
