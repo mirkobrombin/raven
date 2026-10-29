@@ -792,10 +792,10 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	// The SIDs that exist on every system, by their well known names.
-	registry.add("CreateWellKnownSid", 4, [](ApiCall &call) {
+	// The SIDs that exist on every system, by their WELL_KNOWN_SID_TYPE; none for a type this system does not name without a domain.
+	const auto well_known_sid = [](uint32_t type) {
 		std::vector<uint8_t> sid;
-		switch (call.u32(0)) {
+		switch (type) {
 		case 0: sid = make_sid(0, {0}); break;
 		case 1: sid = make_sid(1, {0}); break;
 		case 2: sid = make_sid(2, {0}); break;
@@ -813,7 +813,13 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		case 67: sid = make_sid(16, {8192}); break;
 		case 68: sid = make_sid(16, {12288}); break;
 		case 69: sid = make_sid(16, {16384}); break;
-		default:
+		default: break;
+		}
+		return sid;
+	};
+	registry.add("CreateWellKnownSid", 4, [well_known_sid](ApiCall &call) {
+		const auto sid = well_known_sid(call.u32(0));
+		if (sid.empty()) {
 			call.fail(87);
 			return;
 		}
@@ -829,6 +835,14 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.write(call[2], sid);
 		call.ret(1);
+	});
+	registry.add("IsWellKnownSid", 2, [well_known_sid](ApiCall &call) {
+		if (!valid_sid(call, call[0])) {
+			call.ret(0);
+			return;
+		}
+		const auto sid = well_known_sid(call.u32(1));
+		call.ret(!sid.empty() && sid_length(call, call[0]) == sid.size() && call.read(call[0], sid.size()) == sid);
 	});
 	// A descriptor as one self-relative block that the program frees with LocalFree: the owner, group and ACL pointers point inside it.
 	struct Entry {
