@@ -164,6 +164,7 @@ public:
 				// A search raised from a handler that an unwind is running continues in the frames of whoever called the unwind,
 				// then in the contexts of the dispatches that the unwind has already crossed.
 				if (pc == context.process.return_gate() && continuation_cursor < mine().continuation.size()) {
+					level = mine().continuation_depths[continuation_cursor];
 					current = mine().continuation[continuation_cursor++];
 					continue;
 				}
@@ -500,19 +501,27 @@ public:
 		size_t outer_cursor = previous_start;
 		mine().continuation_start = mine().continuation.size();
 		mine().continuation.push_back(current);
+		mine().continuation_depths.push_back(depth);
 		struct Release {
 			std::vector<ContextBytes> &stack;
+			std::vector<size_t> &depths;
 			size_t &start, previous_start, previous_size;
-			~Release() { stack.resize(previous_size); start = previous_start; }
-		} release{mine().continuation, mine().continuation_start, previous_start, previous_size};
+			~Release()
+			{
+				stack.resize(previous_size);
+				depths.resize(previous_size);
+				start = previous_start;
+			}
+		} release{mine().continuation, mine().continuation_depths, mine().continuation_start, previous_start, previous_size};
 		bool reached = false;
 		for (int frames = 0; frames < 1024 && !reached; ++frames) {
 			const uint64_t pc = context_rip(current);
 			if (pc == context.process.return_gate() && !mine().active.empty()) {
 				// The host callback boundary stands in for the dispatcher's own frames: continue from where the exception was raised.
 				current = mine().active.back().origin;
-				mine().continuation.push_back(current);
 				depth = mine().active.back().depth;
+				mine().continuation.push_back(current);
+				mine().continuation_depths.push_back(depth);
 				resume_mark = std::min(resume_mark, mine().active.back().mark);
 				mine().unwinds.back().mark = resume_mark;
 				mine().active.pop_back();
@@ -520,7 +529,9 @@ public:
 			}
 			// With no dispatch left to cross, an unwind raised from inside another unwind continues through the contexts
 			// that the enclosing unwind recorded.
+			// Execution resumes no deeper than the callback nesting those contexts were left at.
 			if (pc == context.process.return_gate() && outer_cursor < previous_size) {
+				depth = std::min(depth, mine().continuation_depths[outer_cursor]);
 				current = mine().continuation[outer_cursor++];
 				continue;
 			}
@@ -657,6 +668,8 @@ public:
 		std::vector<Active> unwinds;
 		// The contexts a running unwind was called from and the dispatch contexts it has crossed, in the order a stack walk meets them.
 		std::vector<ContextBytes> continuation;
+		// The callback nesting at each of those contexts.
+		std::vector<size_t> continuation_depths;
 		size_t continuation_start = 0;
 		std::vector<Consolidation> consolidations;
 		Scratch scratch;

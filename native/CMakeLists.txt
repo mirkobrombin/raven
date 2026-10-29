@@ -3844,6 +3844,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
                 endforeach()
             endif()
+            # The same through GCC's exceptions, which resume the unwind with a new exception at each frame that has locals to destroy.
+            find_program(RAVEN_MINGW64_CXX x86_64-w64-mingw32-g++)
+            if(RAVEN_MINGW64_CXX)
+                set(GCC_EXCEPTIONS_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/gcc-exceptions.exe)
+                add_custom_command(OUTPUT ${GCC_EXCEPTIONS_CLIENT}
+                    COMMAND ${RAVEN_MINGW64_CXX} -O1 -static -o ${GCC_EXCEPTIONS_CLIENT} ${LOADER_SOURCES}/gcc_exceptions_client.cpp
+                    DEPENDS ${LOADER_SOURCES}/gcc_exceptions_client.cpp VERBATIM)
+                add_custom_target(gcc_exceptions_fixture ALL DEPENDS ${GCC_EXCEPTIONS_CLIENT})
+                add_test(NAME native_gcc_exceptions COMMAND raven --run-process --execution=native --timeout-ms=60000 ${GCC_EXCEPTIONS_CLIENT})
+                set_tests_properties(native_gcc_exceptions PROPERTIES TIMEOUT 90 PASS_REGULAR_EXPRESSION "exited with status 0[^0-9]"
+                    ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+            endif()
         endif()
         find_program(RAVEN_WINDRES x86_64-w64-mingw32-windres)
         find_program(RAVEN_MINGW32 i686-w64-mingw32-gcc)
