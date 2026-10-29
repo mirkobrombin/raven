@@ -757,9 +757,11 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		if (call[3]) call.store<uint64_t>(call[3], filetime(metadata.st_mtim));
 		call.ret(1);
 	});
+	// Setting the times takes FILE_WRITE_ATTRIBUTES, which write access includes; a directory opened for it may be given its times too.
 	registry.add("SetFileTime", 4, [&, resolve, missing, file_of](ApiCall &call) {
 		const auto file = file_of(call[0]);
-		if (!file || !file->writable()) {
+		constexpr uint32_t write_attributes = 0x100, generic_write = 0x40000000, generic_all = 0x10000000, maximum_allowed = 0x02000000;
+		if (!file || !(file->writable() || (objects.access_of(call[0]) & (write_attributes | generic_write | generic_all | maximum_allowed)))) {
 			call.fail(file ? 5 : 6);
 			return;
 		}
