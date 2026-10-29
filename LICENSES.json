@@ -193,6 +193,18 @@
       "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
     },
     {
+      "name": "SQLite",
+      "cmake_keys": [
+        "RAVEN_SQLITE_COMPONENT_DIR"
+      ],
+      "review": "pending-maintainer-review",
+      "revision": "3.54.1",
+      "provenance": "scripts/provision-sqlite.py and the provenance.json it writes beside winsqlite3.dll",
+      "source_terms": "blessing",
+      "distribution_license": "blessing",
+      "boundary": "PE guest component (winsqlite3.dll) built unmodified from the public-domain amalgamation, loaded into the supervised Windows process. No native linking into the Linux host."
+    },
+    {
       "name": "External build inputs",
       "license": "LicenseRef-Configuration-Dependent",
       "review": "requires-release-inventory",
