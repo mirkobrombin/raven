@@ -1817,6 +1817,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (launch->standard_fds[i]<0) continue;
 		const auto inherited=kernel_objects.inherit_file(launch->standard_fds[i]);
 		if (inherited.status) throw std::runtime_error("cannot inherit native standard file");
+		// The standard handles came from the creator by inheritance, so they are inheritable, as programs that pass them on in a
+		// handle list (PROC_THREAD_ATTRIBUTE_HANDLE_LIST) require.
+		kernel_objects.set_inherit(inherited.value,true);
 		standard_handles[i]=inherited.value;
 	}
 	environment.prepare_parameters(*launch,standard_handles);
