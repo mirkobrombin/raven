@@ -80,7 +80,8 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 {
 	const uint32_t ansi_page = context.launch.ansi_code_page;
 	// Key handles come from the same space as every other handle, so CloseHandle and NtClose close them too.
-	hive.set_allocator([&objects = context.objects, &hive] { return objects.reserve([&hive](uint64_t key) { hive.close(key); }); });
+	hive.set_allocator([&objects = context.objects, &hive] { return objects.reserve([&hive](uint64_t key) { hive.close(key); }); },
+		[&objects = context.objects](uint64_t key) { objects.release_reserved(key); });
 	const size_t handle_width = context.process.mode() == NativeMode::x86 ? 4 : 8;
 	const auto text_of = [](ApiCall &call, uint64_t address, bool wide) {
 		if (!address)
@@ -858,11 +859,7 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 		call.ret(hive.remove_tree(call[0], call[1] ? view(call[0], text_of(call, call[1], false)) : std::u16string()));
 	});
 	registry.add("RegDeleteKeyExW", 4, [&hive, text_of, view](ApiCall &call) { call.ret(hive.remove_key(call[0], view(call[0], text_of(call, call[1], true), call.u32(2)))); });
-	registry.add("RegCloseKey", 1, [&hive, &context](ApiCall &call) {
-		const auto status = hive.close(call[0]);
-		context.objects.release_reserved(call[0]);
-		call.ret(status);
-	});
+	registry.add("RegCloseKey", 1, [&hive](ApiCall &call) { call.ret(hive.close(call[0])); });
 	registry.add("RegFlushKey", 1, [](ApiCall &call) { call.ret(0); });
 	// Predefined keys are resolved for each operation; no cached handles need invalidating.
 	registry.add("RegDisablePredefinedCache", 0, [](ApiCall &call) { call.ret(0); });

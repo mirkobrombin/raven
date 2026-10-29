@@ -496,7 +496,11 @@ uint32_t NativeRegistry::close(uint64_t key)
 {
 	if (predefined(key))
 		return 0;
-	return open_keys.erase(key) ? 0 : bad_handle;
+	if (!open_keys.erase(key))
+		return bad_handle;
+	if (release)
+		release(key);
+	return 0;
 }
 
 uint32_t NativeRegistry::query(uint64_t key, std::u16string_view name, uint32_t &type, std::vector<uint8_t> &data) const

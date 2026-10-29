@@ -224,6 +224,15 @@ static int virtual_package_files(void)
 		CloseHandle(file);
 	if (!result && GetFileAttributesW(L"C:\\Program Files\\Common Files\\RavenShared\\absent.txt") != INVALID_FILE_ATTRIBUTES)
 		result = 5;
+	/* Looking a missing file up in the packages takes no handle with it. */
+	if (!result) {
+		DWORD before = 0, after = 0;
+		GetProcessHandleCount(GetCurrentProcess(), &before);
+		for (int index = 0; index < 20; ++index)
+			GetFileAttributesW(L"C:\\Program Files\\Common Files\\RavenShared\\absent.txt");
+		if (!GetProcessHandleCount(GetCurrentProcess(), &after) || after != before)
+			result = 7;
+	}
 	RegDeleteValueW(key, L"C:\\RavenPackage");
 	RegCloseKey(key);
 	if (!result && GetFileAttributesW(L"C:\\Program Files\\Common Files\\RavenShared\\probe.txt") != INVALID_FILE_ATTRIBUTES)

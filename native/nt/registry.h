@@ -23,7 +23,12 @@ public:
 	uint32_t open(uint64_t parent, std::u16string_view path, uint64_t &key);
 	uint32_t close(uint64_t key);
 	// Where key handle values come from: a program's registry keys and kernel objects share one handle space when this names its source.
-	void set_allocator(std::function<uint64_t()> allocator) { allocate = std::move(allocator); }
+	// The release gives a closed key's value back to that space.
+	void set_allocator(std::function<uint64_t()> allocator, std::function<void(uint64_t)> releaser = {})
+	{
+		allocate = std::move(allocator);
+		release = std::move(releaser);
+	}
 	uint32_t query(uint64_t key, std::u16string_view name, uint32_t &type, std::vector<uint8_t> &data) const;
 	uint32_t set(uint64_t key, std::u16string_view name, uint32_t type, std::span<const uint8_t> data);
 	size_t handles() const { return open_keys.size(); }
@@ -58,6 +63,7 @@ private:
 	std::map<uint64_t, std::u16string> open_keys;
 	uint64_t next = 0x300;
 	std::function<uint64_t()> allocate;
+	std::function<void(uint64_t)> release;
 	uint64_t new_key_handle()
 	{
 		if (allocate)
