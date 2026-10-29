@@ -815,18 +815,20 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	};
+	// The flags are a UCHAR: only the low byte of the argument word is the caller's.
 	registry.add("SetFileCompletionNotificationModes", 2, [&context](ApiCall &call) {
-		if (!(call.u32(1) & ~3U) && set_socket_completion_modes(context.objects, call[0], call.u32(1))) {
+		const uint32_t modes = uint8_t(call[1]);
+		if (!(modes & ~3U) && set_socket_completion_modes(context.objects, call[0], modes)) {
 			call.ret(1);
 			return;
 		}
 		const auto file = context.objects.object_as<FileObject>(call[0]);
-		if (!file || (call.u32(1) & ~3U)) {
+		if (!file || (modes & ~3U)) {
 			call.fail(file ? error_invalid_parameter : 6);
 			return;
 		}
-		file->skip_port_on_success = call.u32(1) & 1;
-		file->skip_event_on_success = call.u32(1) & 2;
+		file->skip_port_on_success = modes & 1;
+		file->skip_event_on_success = modes & 2;
 		call.ret(1);
 	});
 	registry.add("CancelIoEx", 2, [cancel](ApiCall &call) { cancel(call, call[0], call[1], true); });
