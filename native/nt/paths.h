@@ -51,6 +51,9 @@ public:
 	void set_package_roots(std::function<std::vector<std::u16string>()> source) { package_roots = std::move(source); }
 	// True for the DOS device names that are not files (NUL, CON, ...), optionally behind \\.\ or \\?\.
 	static bool device(std::u16string_view path);
+	// The volume a drive is, by its \\?\Volume{GUID}\ name: the GUID is made from the drive letter, so a drive is the same volume
+	// every time. A path may start with that name instead of the drive.
+	static std::u16string volume_name(char16_t letter);
 
 private:
 	const NativePrefix &prefix;

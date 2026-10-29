@@ -970,6 +970,97 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			}
 			call.ret(result.size());
 		});
+	// The volumes: one for each drive (NativePaths::volume_name). FindFirstVolume lists them in letter order, and each is mounted at its
+	// drive's root alone.
+	const auto volume_name = [](char16_t letter) { return NativePaths::volume_name(letter); };
+	const auto volume_letter = [drives, volume_name](const std::u16string &name) -> char16_t {
+		const uint32_t mask = drives();
+		for (char16_t letter = u'A'; letter <= u'Z'; ++letter)
+			if ((mask & (1u << (letter - u'A'))) && volume_name(letter) == name)
+				return letter;
+		return 0;
+	};
+	// A name and its terminator into a buffer of the given characters; a buffer too small fails with ERROR_FILENAME_EXCED_RANGE.
+	const auto put_volume = [](ApiCall &call, uint64_t buffer, uint32_t capacity, const std::u16string &name) {
+		if (capacity <= name.size()) {
+			call.fail(206);
+			return;
+		}
+		call.put_wide(buffer, name, capacity);
+		call.ret(1);
+	};
+	registry.add("FindFirstVolumeW", 2, [&objects, drives, volume_name, put_volume](ApiCall &call) {
+		auto list = std::make_shared<FindObject>();
+		const uint32_t mask = drives();
+		for (char16_t letter = u'A'; letter <= u'Z'; ++letter)
+			if (mask & (1u << (letter - u'A')))
+				list->entries.push_back({volume_name(letter), 0, 0, 0, 0, 0});
+		const auto made = objects.add_object(list);
+		if (made.status || list->entries.empty()) {
+			call.fail(made.status ? 8 : 18, UINT64_MAX);
+			return;
+		}
+		list->next = 1;
+		put_volume(call, call[0], call.u32(1), list->entries[0].name);
+		if (call.result)
+			call.ret(made.value);
+		else
+			objects.close(made.value);
+	});
+	registry.add("FindNextVolumeW", 3, [&objects, put_volume](ApiCall &call) {
+		const auto list = objects.object_as<FindObject>(call[0]);
+		if (!list) {
+			call.fail(6);
+			return;
+		}
+		if (list->next >= list->entries.size()) {
+			call.fail(18);
+			return;
+		}
+		put_volume(call, call[1], call.u32(2), list->entries[list->next].name);
+		if (call.result)
+			++list->next;
+	});
+	registry.add("FindVolumeClose", 1, [&objects](ApiCall &call) {
+		if (!objects.object_as<FindObject>(call[0]) || objects.close(call[0])) {
+			call.fail(6);
+			return;
+		}
+		call.ret(1);
+	});
+	// A drive's root, with its trailing backslash, is the mount point of its volume.
+	registry.add("GetVolumeNameForVolumeMountPointW", 3, [drives, volume_name, put_volume](ApiCall &call) {
+		const auto point = call.wide(call[0], 260);
+		const char16_t letter = point.size() == 3 && point[1] == u':' && point[2] == u'\\' ? char16_t(point[0] & ~0x20) : 0;
+		if (point.empty() || point.back() != u'\\') {
+			call.fail(87);
+			return;
+		}
+		if (!letter || letter < u'A' || letter > u'Z' || !(drives() & (1u << (letter - u'A')))) {
+			call.fail(4390);
+			return;
+		}
+		put_volume(call, call[1], call.u32(2), volume_name(letter));
+	});
+	// The paths a volume is mounted at, as a list of strings ending with an empty one; the count of characters it takes is reported.
+	registry.add("GetVolumePathNamesForVolumeNameW", 4, [volume_letter](ApiCall &call) {
+		const char16_t letter = volume_letter(call.wide(call[0], 260));
+		if (!letter) {
+			call.fail(87);
+			return;
+		}
+		const std::u16string list{letter, u':', u'\\', 0, 0};
+		if (call[3])
+			call.store<uint32_t>(call[3], uint32_t(list.size()));
+		if (call.u32(2) < list.size()) {
+			call.fail(234);
+			return;
+		}
+		std::vector<uint8_t> bytes(list.size() * 2);
+		std::memcpy(bytes.data(), list.data(), bytes.size());
+		call.write(call[1], bytes);
+		call.ret(1);
+	});
 	for (const bool wide : {true, false})
 		registry.add(wide ? "GetLogicalDriveStringsW" : "GetLogicalDriveStringsA", 2, [drives, wide](ApiCall &call) {
 			std::u16string text;
