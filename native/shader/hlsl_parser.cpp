@@ -430,12 +430,16 @@ private:
 				Parameter parameter;
 				std::vector<std::string> parameter_modifiers;
 				// Geometry shader inputs and outputs name their primitive or stream before the type.
-				static const char *const primitive[] = {"point", "line", "triangle", "lineadj", "triangleadj"};
-				for (const auto word : primitive)
-					if (is(word) && peek(1).kind == TokenKind::identifier) {
-						parameter_modifiers.push_back(word);
-						++at;
-					}
+				static const char *const leading[] = {"in", "out", "inout", "uniform", "point", "line", "triangle", "lineadj", "triangleadj"};
+				for (bool found = true; found;) {
+					found = false;
+					for (const auto word : leading)
+						if (is(word) && peek(1).kind == TokenKind::identifier) {
+							parameter_modifiers.push_back(word);
+							++at;
+							found = true;
+						}
+				}
 				if (is("TriangleStream") || is("LineStream") || is("PointStream") || is("InputPatch") || is("OutputPatch")) {
 					parameter_modifiers.push_back(next().text);
 					auto arguments = template_arguments();

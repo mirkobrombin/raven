@@ -2380,7 +2380,8 @@ static constexpr std::pair<std::string_view, uint8_t> winspool_words[]{
 static constexpr std::pair<std::string_view, uint8_t> ravenhost_words[]{
 	{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},{"RavenCanvasPixels",8},{"RavenCanvasSize",2},{"RavenFontClose",1},
 	{"RavenFontGlyphs",4},{"RavenFontInfo",2},{"RavenFontMetrics",3},{"RavenFontName",4},{"RavenFontOpen",3},{"RavenFontOutline",4},
-	{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenTrace",1},
+	{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenShaderRelease",1},
+	{"RavenShaderRequest",2},{"RavenShaderResult",4},{"RavenTrace",1},
 };
 static constexpr std::pair<std::string_view, uint8_t> secur32_words[]{
 	{"AcceptSecurityContext",9},{"AcquireCredentialsHandleA",9},{"AcquireCredentialsHandleW",9},{"AddCredentialsA",8},{"AddCredentialsW",8},{"AddSecurityPackageA",2},
@@ -2600,13 +2601,6 @@ static constexpr std::pair<std::string_view, uint8_t> rstrtmgr_words[]{
 	{"RmAddFilter",5},{"RmCancelCurrentTask",1},{"RmEndSession",1},{"RmGetFilterList",4},{"RmGetList",5},{"RmJoinSession",2},
 	{"RmRegisterResources",7},{"RmRemoveFilter",4},{"RmReserveHeap",1},{"RmRestart",3},{"RmShutdown",3},{"RmStartSession",3},
 };
-static constexpr std::pair<std::string_view, uint8_t> d3dcompiler_47_words[]{
-	{"D3DAssemble",8},{"D3DCompile",11},{"D3DCompile2",14},{"D3DCompileFromFile",9},{"D3DCompressShaders",4},{"D3DCreateBlob",2},
-	{"D3DCreateFunctionLinkingGraph",2},{"D3DCreateLinker",1},{"D3DDecompressShaders",8},{"D3DDisassemble",5},{"D3DDisassemble10Effect",3},{"D3DDisassemble11Trace",7},
-	{"D3DDisassembleRegion",8},{"D3DGetBlobPart",5},{"D3DGetDebugInfo",3},{"D3DGetInputAndOutputSignatureBlob",3},{"D3DGetInputSignatureBlob",3},{"D3DGetOutputSignatureBlob",3},
-	{"D3DGetTraceInstructionOffsets",7},{"D3DLoadModule",3},{"D3DPreprocess",7},{"D3DReadFileToBlob",2},{"D3DReflect",4},{"D3DReflectLibrary",4},
-	{"D3DReturnFailure1",3},{"D3DSetBlobPart",7},{"D3DStripShader",4},{"D3DWriteBlobToFile",3},
-};
 static constexpr std::pair<std::string_view, std::span<const std::pair<std::string_view, uint8_t>>> argument_tables[]{
 	{"advapi32.dll", advapi32_words},
 	{"bcrypt.dll", bcrypt_words},
@@ -2677,5 +2671,4 @@ static constexpr std::pair<std::string_view, std::span<const std::pair<std::stri
 	{"slc.dll", slc_words},
 	{"sppc.dll", sppc_words},
 	{"rstrtmgr.dll", rstrtmgr_words},
-	{"d3dcompiler_47.dll", d3dcompiler_47_words},
 };

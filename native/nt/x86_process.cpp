@@ -1292,6 +1292,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_bcrypt_api(shared_api, kernel);
 	register_process_info_api(shared_api, kernel);
 	register_font_service(shared_api, kernel);
+	register_shader_service(shared_api, kernel);
 	// A 32-bit program runs under WOW64 on the 64-bit system Raven presents, its System32 being SysWOW64 until it switches redirection
 	// off. The value it keeps for the switch back is 1 when redirection was on.
 	shared_api.add("Wow64DisableWow64FsRedirection", 1, [&paths](ApiCall &call) {

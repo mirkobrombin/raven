@@ -2474,7 +2474,8 @@ static constexpr std::string_view winspool_exports[]{
 static constexpr std::string_view ravenhost_exports[]{
 	"RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw","RavenCanvasPixels","RavenCanvasSize","RavenFontClose",
 	"RavenFontGlyphs","RavenFontInfo","RavenFontMetrics","RavenFontName","RavenFontOpen","RavenFontOutline",
-	"RavenFontRender","RavenFontScan","RavenFontTable","RavenPathCombine","RavenPathWiden","RavenTrace",
+	"RavenFontRender","RavenFontScan","RavenFontTable","RavenPathCombine","RavenPathWiden","RavenShaderRelease",
+	"RavenShaderRequest","RavenShaderResult","RavenTrace",
 };
 static constexpr std::string_view secur32_exports[]{
 	"AcceptSecurityContext","AcquireCredentialsHandleA","AcquireCredentialsHandleW","AddCredentialsA","AddCredentialsW","AddSecurityPackageA",
@@ -2751,13 +2752,6 @@ static constexpr std::string_view rstrtmgr_exports[]{
 	"RmAddFilter","RmCancelCurrentTask","RmEndSession","RmGetFilterList","RmGetList","RmJoinSession",
 	"RmRegisterResources","RmRemoveFilter","RmReserveHeap","RmRestart","RmShutdown","RmStartSession",
 };
-static constexpr std::string_view d3dcompiler_47_exports[]{
-	"D3DAssemble","D3DCompile","D3DCompile2","D3DCompileFromFile","D3DCompressShaders","D3DCreateBlob",
-	"D3DCreateFunctionLinkingGraph","D3DCreateLinker","D3DDecompressShaders","D3DDisassemble","D3DDisassemble10Effect","D3DDisassemble11Trace",
-	"D3DDisassembleRegion","D3DGetBlobPart","D3DGetDebugInfo","D3DGetInputAndOutputSignatureBlob","D3DGetInputSignatureBlob","D3DGetOutputSignatureBlob",
-	"D3DGetTraceInstructionOffsets","D3DLoadModule","D3DPreprocess","D3DReadFileToBlob","D3DReflect","D3DReflectLibrary",
-	"D3DReturnFailure1","D3DSetBlobPart","D3DStripShader","D3DWriteBlobToFile","DebugSetMute",
-};
 static constexpr std::pair<std::string_view, std::span<const std::string_view>> libraries[]{
 	{"advapi32.dll", advapi32_exports},
 	{"bcrypt.dll", bcrypt_exports},
@@ -2829,5 +2823,4 @@ static constexpr std::pair<std::string_view, std::span<const std::string_view>> 
 	{"slc.dll", slc_exports},
 	{"sppc.dll", sppc_exports},
 	{"rstrtmgr.dll", rstrtmgr_exports},
-	{"d3dcompiler_47.dll", d3dcompiler_47_exports},
 };

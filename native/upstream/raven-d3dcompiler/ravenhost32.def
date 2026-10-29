@@ -1,0 +1,6 @@
+LIBRARY ravenhost.dll
+EXPORTS
+	RavenTrace@4
+	RavenShaderRequest@8
+	RavenShaderResult@16
+	RavenShaderRelease@4

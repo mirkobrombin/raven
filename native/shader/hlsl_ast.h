@@ -32,9 +32,18 @@ struct Type {
 	std::vector<uint32_t> array;
 	bool row_major = false;
 
-	static Type make_scalar(Scalar kind) { return {Shape::scalar, kind}; }
-	static Type make_vector(Scalar kind, uint8_t count) { return count == 1 ? make_scalar(kind) : Type{Shape::vector, kind, 1, count}; }
-	static Type make_matrix(Scalar kind, uint8_t rows, uint8_t columns) { return {Shape::matrix, kind, rows, columns}; }
+	static Type make(Shape shape, Scalar kind, uint8_t rows, uint8_t columns)
+	{
+		Type type;
+		type.shape = shape;
+		type.scalar = kind;
+		type.rows = rows;
+		type.columns = columns;
+		return type;
+	}
+	static Type make_scalar(Scalar kind) { return make(Shape::scalar, kind, 1, 1); }
+	static Type make_vector(Scalar kind, uint8_t count) { return count == 1 ? make_scalar(kind) : make(Shape::vector, kind, 1, count); }
+	static Type make_matrix(Scalar kind, uint8_t rows, uint8_t columns) { return make(Shape::matrix, kind, rows, columns); }
 	bool numeric() const { return array.empty() && (shape == Shape::scalar || shape == Shape::vector || shape == Shape::matrix); }
 	uint32_t components() const { return shape == Shape::scalar ? 1 : shape == Shape::vector ? columns : shape == Shape::matrix ? rows * columns : 0; }
 	bool operator==(const Type &other) const;

@@ -21,6 +21,15 @@ add_test(NAME native_blackonwhite_contract COMMAND stretch_test
     ${RAVEN_TESTDATA_DIR}/native_loader/blackonwhite_reference.bin)
 set_tests_properties(native_blackonwhite_contract PROPERTIES TIMEOUT 30)
 
+add_library(raven_shader STATIC shader/dxbc.cpp shader/hlsl_lexer.cpp shader/hlsl_parser.cpp shader/hlsl_codegen.cpp
+    shader/hlsl_compile.cpp shader/sm4.cpp)
+target_include_directories(raven_shader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(raven_shader PRIVATE -Wall -Wextra)
+add_executable(hlsl_compile_test shader/hlsl_compile_test.cpp)
+target_link_libraries(hlsl_compile_test PRIVATE raven_shader)
+add_test(NAME native_hlsl_compiler COMMAND hlsl_compile_test ${PROJECT_SOURCE_DIR}/testdata/hlsl ${CMAKE_CURRENT_BINARY_DIR}/hlsl-output)
+set_tests_properties(native_hlsl_compiler PROPERTIES TIMEOUT 120)
+
 find_package(PNG 1.6.59 QUIET)
 find_package(OpenSSL QUIET)
 find_package(Freetype QUIET)
@@ -65,7 +74,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     if(NOT NONCLIENT_SOURCE_HASH STREQUAL "dab51515f54adc39af43f088a02afe45a719476408bee3c7bef6113c25b180fc")
         message(FATAL_ERROR "Pinned ReactOS nonclient functions differ")
     endif()
-    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
+    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
     target_include_directories(raven_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     set(NLS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/reactos-nls)
     file(SHA256 ${NLS_SOURCE}/txt2nls.cpp NLS_TOOL_HASH)
@@ -148,7 +157,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_test(NAME native_ansi_code_page COMMAND nls_test ${RAVEN_TESTDATA_DIR}/native_loader/cp1252_reference.bin)
     set_tests_properties(native_ansi_code_page PROPERTIES TIMEOUT 15)
     target_sources(raven_cpu PRIVATE desktop/brush.cpp desktop/bitblt.cpp)
-    target_link_libraries(raven_cpu PUBLIC raven_pe raven_pixels)
+    target_link_libraries(raven_cpu PUBLIC raven_pe raven_pixels raven_shader)
     # The certificate chain functions of crypt32 are answered by the host's X.509 verifier when OpenSSL is there.
     if(OPENSSL_FOUND)
         target_link_libraries(raven_cpu PUBLIC OpenSSL::Crypto)
@@ -262,6 +271,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endif()
         target_link_libraries(raven_cpu PUBLIC Vulkan::Vulkan)
         target_compile_definitions(raven_cpu PUBLIC RAVEN_VULKAN=1)
+        # Compute shaders from the compiler run on the CPU driver and their results are checked.
+        if(EXISTS /usr/share/vulkan/icd.d/lvp_icd.json)
+            add_executable(hlsl_run_test shader/hlsl_run_test.cpp)
+            target_link_libraries(hlsl_run_test PRIVATE raven_shader Vulkan::Vulkan)
+            add_test(NAME native_hlsl_execution COMMAND hlsl_run_test ${PROJECT_SOURCE_DIR}/testdata/hlsl/run ${CMAKE_CURRENT_BINARY_DIR}/hlsl-run-output)
+            set_tests_properties(native_hlsl_execution PROPERTIES TIMEOUT 120
+                ENVIRONMENT "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json;LP_NUM_THREADS=2")
+        endif()
     endif()
     target_compile_options(raven_cpu PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
     target_link_libraries(raven PRIVATE raven_cpu)
@@ -2705,6 +2722,39 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(webservices_fixture${width} ALL DEPENDS ${webservices_client} webservices_component)
                     add_test(NAME native_webservices_x${width} COMMAND raven --run-process --execution=native ${webservices_client})
                     set_tests_properties(native_webservices_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
+                # d3dcompiler_47.dll for each width: Raven code on the public headers that hands compiles to the runtime's HLSL compiler
+                # through ravenhost.dll and reads reflection from the container itself.
+                set(d3dcompiler_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-d3dcompiler)
+                set(d3dcompiler_flags -O2 -Wall -Wno-unused-parameter -ffreestanding -fno-builtin -shared -nostdlib -ffile-prefix-map=${PROJECT_SOURCE_DIR}=raven)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler_47.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/d3dcompiler_47.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_DLLTOOL} -d ${d3dcompiler_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-d3dcompiler64.a
+                    COMMAND ${RAVEN_DLLTOOL32} -k -d ${d3dcompiler_source}/ravenhost32.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-d3dcompiler32.a
+                    COMMAND ${RAVEN_MINGW64} ${d3dcompiler_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler_47.dll
+                        ${d3dcompiler_source}/d3dcompiler.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-d3dcompiler64.a -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${d3dcompiler_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/d3dcompiler_47.dll
+                        ${d3dcompiler_source}/d3dcompiler.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-d3dcompiler32.a -lkernel32 -lgcc
+                    DEPENDS ${d3dcompiler_source}/d3dcompiler.c ${d3dcompiler_source}/ravenhost64.def ${d3dcompiler_source}/ravenhost32.def VERBATIM)
+                add_custom_target(d3dcompiler_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler_47.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/d3dcompiler_47.dll)
+                foreach(width 64 32)
+                    set(d3dcompiler_client ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(d3dcompiler_compiler ${RAVEN_MINGW64})
+                        set(d3dcompiler_entry raven_entry)
+                    else()
+                        set(d3dcompiler_compiler ${RAVEN_MINGW32})
+                        set(d3dcompiler_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${d3dcompiler_client}
+                        COMMAND ${d3dcompiler_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${d3dcompiler_entry},--no-insert-timestamp
+                            -o ${d3dcompiler_client} ${LOADER_SOURCES}/d3dcompiler_client.c -ld3dcompiler_47 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/d3dcompiler_client.c VERBATIM)
+                    add_custom_target(d3dcompiler_fixture${width} ALL DEPENDS ${d3dcompiler_client} d3dcompiler_component)
+                    add_test(NAME native_d3dcompiler_x${width} COMMAND raven --run-process --execution=native ${d3dcompiler_client})
+                    set_tests_properties(native_d3dcompiler_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # raven-accprop.dll, the AccPropServices class of oleacc for each width: Raven code on the public headers.
                 set(accprop_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-accprop)

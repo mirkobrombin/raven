@@ -328,14 +328,14 @@ int raven_entry(void)
 	if ((size = virtual_package_files()))
 		return 250 + (int)size;
 	{
-		/* Without a compiler behind it, a compile is refused and leaves no blobs. */
+		/* The runtime's compiler stands behind the library: a compile gives code and, with no warning, no message blob. */
 		typedef HRESULT (WINAPI *compile_type)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT,
 			void **, void **);
 		HMODULE compiler = LoadLibraryW(L"d3dcompiler_47.dll");
 		compile_type compile = compiler ? (compile_type)(void *)GetProcAddress(compiler, "D3DCompile") : NULL;
-		void *code = (void *)1, *errors = (void *)1;
-		if (!compile || compile("float4 main() : SV_Target { return 1; }", 39, NULL, NULL, NULL, "main", "ps_4_0", 0, 0, &code, &errors) !=
-			(HRESULT)0x80004001 || code || errors)
+		void *code = NULL, *errors = (void *)1;
+		if (!compile || compile("float4 main() : SV_Target { return 1; }", 39, NULL, NULL, NULL, "main", "ps_4_0", 0, 0, &code, &errors) != S_OK ||
+			!code || errors)
 			return 260;
 	}
 

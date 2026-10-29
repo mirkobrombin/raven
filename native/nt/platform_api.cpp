@@ -1110,15 +1110,6 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("RoParseTypeName", 3, [](ApiCall &call) { call.ret(0x80004001U); });
 	registry.add("RoResolveNamespace", 7, [](ApiCall &call) { call.ret(0x80004001U); });
 	registry.add("RoGetParameterizedTypeInstanceIID", 5, [](ApiCall &call) { call.ret(0x80004001U); });
-	// No HLSL compiler stands behind d3dcompiler_47 yet: a compile is refused with no code and no message blob, so a program falls back to
-	// what it does without a GPU path instead of running an empty shader.
-	registry.add("D3DCompile", 11, [](ApiCall &call) {
-		if (call[9])
-			call.store_pointer(call[9], 0);
-		if (call[10])
-			call.store_pointer(call[10], 0);
-		call.ret(0x80004001U);
-	});
 	// No Windows Runtime class exists here: initialization joins the thread to a COM apartment like CoInitializeEx (RO_INIT_MULTITHREADED
 	// is 1), and every activation reports that the class is not registered.
 	registry.add("RoInitialize", 1, [initialize](ApiCall &call) { initialize(call, call.u32(0) == 1, true); });

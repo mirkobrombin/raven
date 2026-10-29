@@ -106,6 +106,8 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context);
 void register_crypt32_api(ApiRegistry &registry, KernelContext &context);
 void register_bcrypt_api(ApiRegistry &registry, KernelContext &context);
 void register_font_service(ApiRegistry &registry, KernelContext &context);
+// The HLSL compiler behind d3dcompiler_47.dll: requests from the guest component, results read back in parts.
+void register_shader_service(ApiRegistry &registry, KernelContext &context);
 // An installed font family as GDI enumerates it: the face closest to regular, and the scripts and code pages its OS/2 table claims.
 struct InstalledFamily {
 	std::u16string name;

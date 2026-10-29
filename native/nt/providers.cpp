@@ -2411,6 +2411,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_bcrypt_api(api_registry, kernel);
 	register_process_info_api(api_registry, kernel);
 	register_font_service(api_registry, kernel);
+	register_shader_service(api_registry, kernel);
 	register_canvas_service(api_registry, kernel);
 	register_sync_api(api_registry, kernel);
 	register_thread_api(api_registry, kernel);
