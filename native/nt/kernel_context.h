@@ -52,6 +52,8 @@ struct KernelContext {
 	std::function<uint32_t(uint32_t,uint32_t,bool)> queue_status;
 	// Takes a reference on the loaded module at this base, or pins it for the life of the process (GetModuleHandleEx).
 	std::function<void(uint64_t, bool)> reference_module;
+	// The loaded module a guest string names, by name or by path, as GetModuleHandle finds it (zero, with the last error set, if none).
+	std::function<uint64_t(uint64_t, bool)> module_named;
 	// The environment variables the program has now, as the block a new process receives (set by the system handlers).
 	std::function<std::u16string()> environment_block;
 	// Started operations that finish later, such as overlapped socket transfers.

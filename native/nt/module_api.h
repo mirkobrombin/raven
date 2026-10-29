@@ -17,6 +17,8 @@ public:
 	uint32_t load_flags() const { return flags; }
 	// A library asked for by a path is a particular file, which only the loader that read it can tell is already in the process.
 	void set_path_lookup(std::function<uint64_t(const std::string &)> lookup) { path_lookup = std::move(lookup); }
+	// GetModuleHandle's lookup: the program for a null name, else the loaded module the guest string names.
+	uint64_t module_handle(uint64_t address, bool wide);
 
 private:
 	NativeProcess &process;
@@ -28,7 +30,6 @@ private:
 	std::function<uint64_t(const std::string &)> path_lookup;
 	uint32_t flags = 0;
 	std::optional<std::string> guest_name(uint64_t address, bool wide) const;
-	uint64_t module_handle(uint64_t address, bool wide);
 	uint64_t procedure(uint64_t handle, uint64_t name);
 };
 
