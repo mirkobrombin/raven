@@ -1851,7 +1851,9 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 	});
 
 	// Names: the answers come from the host resolver, and the result is one block of guest memory that freeaddrinfo gives back.
-	registry.add("getaddrinfo", 4, [&context](ApiCall &call) {
+	// getaddrinfo and GetAddrInfoW: the host resolver's answer as a chain of ADDRINFOA or ADDRINFOW records in one block the program
+	// frees with freeaddrinfo or FreeAddrInfoW. The two records differ only in the width of the canonical name.
+	const auto resolve_names = [&context](ApiCall &call, bool wide) {
 		const size_t width = call.pointer_width();
 		// ADDRINFOA: four ints, the address length, then the canonical name, the address and the next entry.
 		const size_t record = 16 + 4 * width;
@@ -1865,8 +1867,9 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			hints.ai_protocol = call.load<int32_t>(call[2] + 12);
 			use = &hints;
 		}
-		const auto node = call[0] ? call.narrow(call[0], 1025) : std::string();
-		const auto service = call[1] ? call.narrow(call[1], 256) : std::string();
+		const auto text = [&](uint64_t address, size_t limit) { return wide ? to_utf8(call.wide(address, limit)) : call.narrow(address, limit); };
+		const auto node = call[0] ? text(call[0], 1025) : std::string();
+		const auto service = call[1] ? text(call[1], 256) : std::string();
 		addrinfo *found = nullptr;
 		const int status = ::getaddrinfo(call[0] ? node.c_str() : nullptr, call[1] ? service.c_str() : nullptr, use, &found);
 		if (status) {
@@ -1878,7 +1881,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		size_t count = 0, size = 0;
 		for (const auto *entry = found; entry; entry = entry->ai_next) {
 			++count;
-			size += record + 32 + (entry->ai_canonname ? std::strlen(entry->ai_canonname) + 1 : 0);
+			size += record + 32 + (entry->ai_canonname ? (std::strlen(entry->ai_canonname) + 1) * (wide ? 2 : 1) : 0);
 		}
 		const auto block = context.allocator.allocate(size, true);
 		if (!block) {
@@ -1889,7 +1892,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		uint64_t cursor = block, previous = 0;
 		for (const auto *entry = found; entry; entry = entry->ai_next) {
 			const uint64_t self = cursor, address = self + record, canonical = address + 32;
-			cursor = canonical + (entry->ai_canonname ? std::strlen(entry->ai_canonname) + 1 : 0);
+			cursor = canonical + (entry->ai_canonname ? (std::strlen(entry->ai_canonname) + 1) * (wide ? 2 : 1) : 0);
 			call.store<int32_t>(self, entry->ai_flags);
 			call.store<int32_t>(self + 4, windows_family(entry->ai_family));
 			call.store<int32_t>(self + 8, entry->ai_socktype);
@@ -1909,7 +1912,10 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			call.store_pointer(self + address_at, address);
 			if (entry->ai_canonname) {
 				const std::string name(entry->ai_canonname);
-				call.write(canonical, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(name.c_str()), name.size() + 1));
+				if (wide)
+					call.put_wide(canonical, from_utf8(name), name.size() + 1);
+				else
+					call.write(canonical, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(name.c_str()), name.size() + 1));
 				call.store_pointer(self + canon_at, canonical);
 			}
 			if (previous)
@@ -1920,11 +1926,49 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		call.store_pointer(call[3], block);
 		call.ret(0);
 		(void)count;
-	});
-	registry.add("freeaddrinfo", 1, [&context](ApiCall &call) {
-		if (call[0])
-			context.allocator.release(call[0]);
-	});
+	};
+	registry.add("getaddrinfo", 4, [resolve_names](ApiCall &call) { resolve_names(call, false); });
+	registry.add("GetAddrInfoW", 4, [resolve_names](ApiCall &call) { resolve_names(call, true); });
+	// getnameinfo and GetNameInfoW: the host and service of an address, by the host resolver, with Winsock's NI_ flags.
+	const auto name_of_address = [](ApiCall &call, bool wide) {
+		const auto address = host_address(call, call[0], size_t(call.i32(1)));
+		const uint32_t flags = call.u32(6);
+		const int host_flags = (flags & 0x01 ? NI_NOFQDN : 0) | (flags & 0x02 ? NI_NUMERICHOST : 0) | (flags & 0x04 ? NI_NAMEREQD : 0) |
+			(flags & 0x08 ? NI_NUMERICSERV : 0) | (flags & 0x10 ? NI_DGRAM : 0);
+		char host[1025] = {}, service[32] = {};
+		const int status = ::getnameinfo(reinterpret_cast<const sockaddr *>(address.data()), socklen_t(address.size()), call[2] ? host : nullptr,
+			call[2] ? sizeof host : 0, call[4] ? service : nullptr, call[4] ? sizeof service : 0, host_flags);
+		if (status) {
+			const uint32_t error = status == EAI_NONAME ? wsahost_not_found : status == EAI_AGAIN ? 11002 : status == EAI_FAMILY ? wsaeafnosupport : wsaeinval;
+			call.fail(error, error);
+			return;
+		}
+		const auto put = [&](uint64_t buffer, uint32_t capacity, const char *text) {
+			const size_t length = std::strlen(text);
+			if (!buffer)
+				return true;
+			if (capacity <= length)
+				return false;
+			if (wide)
+				call.put_wide(buffer, from_utf8(text), capacity);
+			else
+				call.put_narrow(buffer, text, capacity);
+			return true;
+		};
+		if (!put(call[2], call.u32(3), host) || !put(call[4], call.u32(5), service)) {
+			call.fail(wsaefault, wsaefault);
+			return;
+		}
+		call.ret(0);
+	};
+	registry.add("getnameinfo", 7, [name_of_address](ApiCall &call) { name_of_address(call, false); });
+	registry.add("GetNameInfoW", 7, [name_of_address](ApiCall &call) { name_of_address(call, true); });
+
+	for (const char *name : {"freeaddrinfo", "FreeAddrInfoW"})
+		registry.add(name, 1, [&context](ApiCall &call) {
+			if (call[0])
+				context.allocator.release(call[0]);
+		});
 	registry.add("gethostname", 2, [](ApiCall &call) {
 		char name[256] = {};
 		::gethostname(name, sizeof(name) - 1);
