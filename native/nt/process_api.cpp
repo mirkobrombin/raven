@@ -334,6 +334,31 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 		call.set_last_error(error);
 		call.ret(error == 0 || error == 1300);
 	});
+	// ntdll's token calls take the arguments of their advapi32 forms and answer an NTSTATUS for the error those set:
+	// STATUS_NOT_ALL_ASSIGNED when the token lacks some of the privileges, STATUS_BUFFER_TOO_SMALL when the buffer is short.
+	const auto native_token_call = [&registry](ApiCall &call, const char *function, size_t arguments) {
+		std::vector<uint64_t> words;
+		for (size_t index = 0; index < arguments; ++index)
+			words.push_back(call[index]);
+		ApiCall inner(call.process, call.environment, std::move(words));
+		const uint32_t before = call.last_error();
+		call.set_last_error(0);
+		registry.find(function)->second(inner);
+		const uint32_t error = inner.result ? (call.last_error() == 1300 ? 1300 : 0) : call.last_error() ? call.last_error() : 87;
+		call.set_last_error(before);
+		switch (error) {
+		case 0: call.ret(0); break;
+		case 1300: call.ret(0x106); break;
+		case 1: call.ret(0xc0000003U); break;
+		case 5: call.ret(0xc0000022U); break;
+		case 6: call.ret(0xc0000008U); break;
+		case 24: call.ret(0xc0000004U); break;
+		case 122: call.ret(0xc0000023U); break;
+		default: call.ret(0xc000000dU); break;
+		}
+	};
+	registry.add("NtAdjustPrivilegesToken", 6, [native_token_call](ApiCall &call) { native_token_call(call, "AdjustTokenPrivileges", 6); });
+	registry.add("NtQueryInformationToken", 5, [native_token_call](ApiCall &call) { native_token_call(call, "GetTokenInformation", 5); });
 	registry.add("SetFileSecurityW", 3, [&context](ApiCall &call) {
 		const auto resolved = context.paths.resolve(call.wide(call[0]));
 		if (!resolved) {
