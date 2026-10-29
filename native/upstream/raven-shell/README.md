@@ -11,6 +11,8 @@ public Windows headers. It supplies what the system libraries of the guest canno
 - `ExtractIconExW` and `ExtractIconW`: the icons of a program, a library or an .ico file, at the system's large and small sizes.
 - UI Automation's reserved "not supported" and "mixed attribute" values, one object each for the process.
 - the task allocator, through `CoGetMalloc` and the shell's `SHGetMalloc`.
+- the free-threaded marshaler (`CoCreateFreeThreadedMarshaler`), which agile objects aggregate: it marshals interface pointers between
+  the apartments of the process as the pointers themselves.
 - streams over registry values (`SHOpenRegStream`, `SHOpenRegStream2`, `OpenRegStream`), written back when a writable one is released.
 - the network address control that `InitNetworkAddressControl` registers (`netaddress.c`): an edit field that reads a host name or an
   IPv4 or IPv6 address with an optional port.
