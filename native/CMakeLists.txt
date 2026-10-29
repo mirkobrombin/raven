@@ -1916,6 +1916,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${UCRT_IO_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_io_client.c -lucrtbase -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_io_client.c VERBATIM)
             add_custom_target(ucrt_io_fixture ALL DEPENDS ${UCRT_IO_CLIENT})
+            # ntdll's token calls: NtQueryInformationToken and NtAdjustPrivilegesToken.
+            set(NATIVE_TOKEN_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/native-token.exe)
+            add_custom_command(OUTPUT ${NATIVE_TOKEN_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1eb800000,--no-insert-timestamp
+                    -o ${NATIVE_TOKEN_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/native_token_client.c -lntdll -ladvapi32 -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/native_token_client.c VERBATIM)
+            add_custom_target(native_token_fixture ALL DEPENDS ${NATIVE_TOKEN_CLIENT})
+            add_test(NAME native_token_calls COMMAND raven --run-process --execution=native ${NATIVE_TOKEN_CLIENT})
+            set_tests_properties(native_token_calls PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/native-token-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
