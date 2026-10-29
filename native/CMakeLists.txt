@@ -2117,6 +2117,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_private_assembly PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/private-assembly-prefix)
             endif()
+            # ntdll's critical sections from the guest RTL, and the PEB's free FastPebLock.
+            set(NTDLL_LOCK_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/ntdll-lock.exe)
+            add_custom_command(OUTPUT ${NTDLL_LOCK_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1eb000000,--no-insert-timestamp
+                    -o ${NTDLL_LOCK_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ntdll_lock_client.c -lntdll -lucrtbase -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ntdll_lock_client.c VERBATIM)
+            add_custom_target(ntdll_lock_fixture ALL DEPENDS ${NTDLL_LOCK_CLIENT})
+            add_test(NAME native_ntdll_critical_sections COMMAND raven --run-process --execution=native ${NTDLL_LOCK_CLIENT})
+            set_tests_properties(native_ntdll_critical_sections PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ntdll-lock-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
