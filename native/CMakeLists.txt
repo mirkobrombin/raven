@@ -696,6 +696,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_capi_session_keys PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
     endif()
     if(RAVEN_MINGW64)
+        set(NCCREATE_CHILD ${CMAKE_CURRENT_BINARY_DIR}/nccreate-child.exe)
+        add_custom_command(OUTPUT ${NCCREATE_CHILD}
+            COMMAND ${RAVEN_MINGW64} -nostdlib -fno-stack-protector
+                -Wl,--entry,raven_entry,--no-insert-timestamp
+                -o ${NCCREATE_CHILD} ${PROJECT_SOURCE_DIR}/testdata/native_loader/nccreate_child_client.c -lkernel32 -luser32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/nccreate_child_client.c VERBATIM)
+        add_custom_target(nccreate_child_fixture ALL DEPENDS ${NCCREATE_CHILD})
+        add_test(NAME native_nccreate_child COMMAND raven --run-process --execution=native ${NCCREATE_CHILD})
+        set_tests_properties(native_nccreate_child PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(CLASS_MODULE ${CMAKE_CURRENT_BINARY_DIR}/class-module.dll)
         add_custom_command(OUTPUT ${CLASS_MODULE}
             COMMAND ${RAVEN_MINGW64} -shared -nostdlib -fno-stack-protector

@@ -138,7 +138,7 @@ uint64_t DesktopObjects::add(Object object)
 {
 	if (const auto *record=std::get_if<DesktopWindow>(&object); record && record->parent) {
 		const auto *parent=window(record->parent);
-		if (!parent || parent->destroying || !parent->client_ready) return 0;
+		if (!parent || parent->destroying) return 0;
 		unsigned depth=1;
 		while (parent->parent) {
 			if (++depth>=64) return 0;

@@ -1586,7 +1586,6 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 	if ((effective_style & 0x10000000U) && !presentation.present) throw uint32_t(120);
 	const auto *parent=child ? objects.window(args[8]) : nullptr;
 	if (child && (!parent || parent->destroying)) throw uint32_t(1400);
-	if (parent && !parent->client_ready) throw uint32_t(120);
 	// An owner of a top-level window must be a top-level window; message-only parents (HWND_MESSAGE) are not modelled.
 	if (!child && owner_handle && !objects.window(owner_handle)) throw uint32_t(1400);
 	const auto class_atom=atom(args[1],args[10]);
@@ -1699,7 +1698,13 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 			throw uint32_t(120);
 		}
 		auto *geometry=objects.window(handle);
+		// Children the window made during WM_NCCREATE were laid out in its window rectangle; they follow the client origin.
+		const std::pair<int32_t,int32_t> laid_out{geometry->x,geometry->y};
 		geometry->x=left; geometry->y=top;
+		if (left!=laid_out.first || top!=laid_out.second)
+			for (const auto inner : objects.child_windows(handle))
+				shift_window(inner,left-laid_out.first,top-laid_out.second);
+		geometry=objects.window(handle);
 		geometry->width=int32_t(right-uint32_t(left)); geometry->height=int32_t(bottom-uint32_t(top));
 		objects.update_window_dcs(handle);geometry->client_ready=true;
 		const auto created=send(handle,1,0,scratch);
