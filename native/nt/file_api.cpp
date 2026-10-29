@@ -596,9 +596,15 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("NtQueryDirectoryFile", 11, query_directory);
 	registry.add("ZwQueryDirectoryFile", 11, query_directory);
+	// Device control reaches the AFD endpoint's readiness poll (which libuv and mio use to poll sockets); no other device takes
+	// requests, and STATUS_INVALID_DEVICE_REQUEST tells a caller to do without.
+	registry.add("NtDeviceIoControlFile", 10, [&context](ApiCall &call) {
+		if (!afd_device_control(context, call))
+			call.ret(0xc0000010U);
+	});
 	// NtCreateFile and NtOpenFile: the object name (relative to a directory handle when one is given) becomes a Win32 path, and the
 	// disposition and options become CreateFileW's, as the NtCreateFile documentation pairs them; a directory is made first when one
-	// is asked to be created. The IO_STATUS_BLOCK says what happened to the file.
+	// is asked to be created. \Device\Afd names open an AFD endpoint. The IO_STATUS_BLOCK says what happened to the file.
 	const auto native_create = [&registry, &context, file_of](ApiCall &call, uint32_t access, uint64_t attributes_block, uint64_t status_block,
 		uint32_t file_attributes, uint32_t share, uint32_t disposition, uint32_t options) -> uint32_t {
 		const size_t width = call.pointer_width();
@@ -617,6 +623,15 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.store_pointer(status_block, status);
 			call.store_pointer(status_block + width, information);
 		};
+		if (!root && equal_fold(std::u16string_view(name).substr(0, std::min<size_t>(name.size(), 11)), u"\\Device\\Afd") &&
+			(name.size() == 11 || name[11] == u'\\')) {
+			const auto made = context.objects.add_object(make_afd_endpoint());
+			if (made.status)
+				return made.status;
+			call.store_pointer(call[0], made.value);
+			set_status(0, 1);
+			return 0;
+		}
 		std::u16string path;
 		if (root) {
 			const auto directory = file_of(root);
