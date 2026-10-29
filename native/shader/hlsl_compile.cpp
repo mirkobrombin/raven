@@ -245,7 +245,13 @@ CompileResult compile(const CompileRequest &request)
 	std::vector<Chunk> chunks;
 	chunks.push_back({{'R', 'D', 'E', 'F'}, resource_definitions(generated, request.flags)});
 	chunks.push_back({{'I', 'S', 'G', 'N'}, signature(generated.inputs, false)});
+	// The patch constants a hull shader writes and a domain shader reads, after the outputs of the one and before those of the other.
+	const bool patches = generated.stage == Stage::hull || generated.stage == Stage::domain;
+	if (patches && generated.stage == Stage::domain)
+		chunks.push_back({{'P', 'C', 'S', 'G'}, signature(generated.patch_constants, false)});
 	chunks.push_back({streams ? std::array<char, 4>{'O', 'S', 'G', '5'} : std::array<char, 4>{'O', 'S', 'G', 'N'}, signature(generated.outputs, streams)});
+	if (patches && generated.stage == Stage::hull)
+		chunks.push_back({{'P', 'C', 'S', 'G'}, signature(generated.patch_constants, false)});
 	chunks.push_back({generated.major >= 5 ? std::array<char, 4>{'S', 'H', 'E', 'X'} : std::array<char, 4>{'S', 'H', 'D', 'R'}, std::move(tokens)});
 	chunks.push_back({{'S', 'T', 'A', 'T'}, statistics(generated)});
 	result.code = container(chunks);

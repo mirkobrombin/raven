@@ -2,6 +2,7 @@
 #include "hlsl_compile.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -115,6 +116,25 @@ int compile_one(int argc, char **argv)
 	request.name = argv[2];
 	request.entry = argv[3];
 	request.target = argv[4];
+	const auto directory = std::filesystem::path(argv[2]).parent_path();
+	request.include = [&](std::string name, bool) -> std::optional<std::string> {
+		// Sources written for Windows separate directories with backslashes.
+		std::replace(name.begin(), name.end(), '\\', '/');
+		auto path = directory / name;
+		// Names on Windows ignore case.
+		if (!std::filesystem::exists(path) && std::filesystem::is_directory(path.parent_path())) {
+			const auto lower = [](std::string text) {
+				std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+				return text;
+			};
+			for (const auto &entry : std::filesystem::directory_iterator(path.parent_path()))
+				if (lower(entry.path().filename().string()) == lower(path.filename().string()))
+					path = entry.path();
+		}
+		if (!std::filesystem::exists(path))
+			return std::nullopt;
+		return read_file(path);
+	};
 	const auto result = compile(request);
 	std::cerr << result.messages;
 	if (result.failed)

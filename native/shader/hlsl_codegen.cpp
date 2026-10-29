@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -136,6 +137,8 @@ struct Access {
 	bool mip = false;
 	// A group shared array before its index is known: indexing it sets the address.
 	bool outer_array = false;
+	// Structured and shared: a byte offset known only at run time, from a dynamic index into an array inside the element.
+	std::optional<Loc> shift;
 };
 
 struct Ref {
@@ -170,6 +173,8 @@ struct Resource {
 	bool comparison = false;
 	uint32_t samples = 0;
 	bool counter = false;
+	// The texture register of a tbuffer, which the tbuffer itself reflects.
+	bool texture_buffer = false;
 };
 
 struct BufferVariable {
@@ -190,6 +195,8 @@ struct Buffer {
 	std::vector<BufferVariable> variables;
 	// Registers read with a dynamic index.
 	bool dynamic = false;
+	// A tbuffer: the resource its registers are loaded from.
+	int resource = -1;
 };
 
 struct Loop {
@@ -207,6 +214,8 @@ struct Frame {
 	// A function returning from inside flow control runs in a block that a return leaves, with this flag set for the loops around.
 	std::optional<uint32_t> returned;
 	size_t loop_depth = 0;
+	// A method: the object it was called on.
+	std::optional<Ref> self;
 };
 
 
@@ -217,6 +226,9 @@ public:
 	Generator(const Program &program, uint32_t flags) : program(program), flags(flags) {}
 
 	Generated run(const std::string &entry, const std::string &target);
+
+	// Set on a second attempt after code needed a constant where a loop counter stood: every loop that can be unrolled is.
+	bool unroll_all = false;
 
 private:
 	const Program &program;
@@ -238,6 +250,8 @@ private:
 	};
 	std::vector<Shared> shared;
 	std::map<std::string, Ref> globals;
+	// Uniform parameters of the entry point, which live in the $Params constant buffer.
+	std::deque<Variable> parameter_uniforms;
 	// The constant buffer and variable a global name stands for.
 	std::map<std::string, std::pair<int, int>> buffer_names;
 	std::vector<std::map<std::string, Ref>> scopes;
@@ -356,6 +370,7 @@ private:
 	static bool scalar_register(uint8_t type)
 	{
 		return type == sm4::thread_id_in_group_flattened || type == sm4::input_primitive_id || type == sm4::gs_instance_id ||
+			type == sm4::output_control_point_id || type == sm4::input_fork_instance_id || type == sm4::input_join_instance_id ||
 			type == sm4::input_coverage || type == sm4::output_depth || type == sm4::output_coverage ||
 			type == sm4::output_depth_greater_equal || type == sm4::output_depth_less_equal;
 	}
@@ -516,7 +531,19 @@ private:
 		return ref;
 	}
 
-	// Storage for a variable of any type: arrays in an indexable temp so that any index can reach them.
+	static bool holds_array(const Type &type)
+	{
+		if (!type.array.empty())
+			return true;
+		if (type.shape == Type::Shape::structure)
+			for (const auto &member : type.structure->members)
+				if (holds_array(member.type))
+					return true;
+		return false;
+	}
+
+	// Storage for a variable of any type: arrays, and structures holding them, in an indexable temp so that any index can reach them
+	// (only x# registers take a register index).
 	Ref storage(const Type &type)
 	{
 		Ref ref;
@@ -524,11 +551,11 @@ private:
 		ref.writable = true;
 		if (type.shape == Type::Shape::object)
 			fail(0, "objects cannot be local variables here");
-		if (!type.array.empty()) {
-			const Type element = element_of(type);
+		if (holds_array(type)) {
+			const Type element = type.array.empty() ? type : element_of(type);
 			const uint32_t per = registers_of(element);
 			const uint32_t index = uint32_t(indexables.size());
-			const uint32_t count = element_count(type) / element_count(element) * per;
+			const uint32_t count = type.array.empty() ? per : element_count(type) / element_count(element) * per;
 			indexables.push_back({count, 4});
 			uint32_t next = 0;
 			layout(type, ref.locs, next, [index](uint32_t reg) {
@@ -1113,10 +1140,20 @@ private:
 				mask |= uint8_t(1 << result.locs[k].component);
 				source.swizzle[result.locs[k].component] = uint8_t(k - start);
 			}
-			emit(sm4::ld_structured, {dest_of(result.locs[start], mask), scalar_source(index[0]), scalar_source(constant_loc(access.offsets[start])),
+			emit(sm4::ld_structured, {dest_of(result.locs[start], mask), scalar_source(index[0]), scalar_source(byte_offset(access, access.offsets[start])),
 				source});
 		}
 		return result;
+	}
+
+	Loc byte_offset(const Access &access, uint32_t offset)
+	{
+		if (!access.shift)
+			return constant_loc(offset);
+		Ref shift;
+		shift.type = scalar_type(Scalar::unsigned_integer);
+		shift.locs = {*access.shift};
+		return offset ? apply(sm4::iadd, shift.type, {shift, uint_constant(offset)}).locs[0] : *access.shift;
 	}
 
 	void store(const Ref &target, const Ref &value, uint32_t line)
@@ -1144,7 +1181,7 @@ private:
 			Operand dest = access_operand(access);
 			dest.mode = Operand::Mode::mask;
 			dest.mask = uint8_t((1 << part.size()) - 1);
-			emit(sm4::store_structured, {dest, scalar_source(index), scalar_source(constant_loc(access.offsets[start])), source_first(part)});
+			emit(sm4::store_structured, {dest, scalar_source(index), scalar_source(byte_offset(access, access.offsets[start])), source_first(part)});
 		}
 	}
 
@@ -1335,28 +1372,35 @@ private:
 		return result;
 	}
 
+	std::optional<Ref> member_of(const Ref &base, const std::string &name)
+	{
+		uint32_t start = 0;
+		for (const auto &member : base.type.structure->members) {
+			const uint32_t size = flat_size(member.type);
+			if (member.name == name) {
+				Ref result = base;
+				result.type = member.type;
+				result.icb = -1;
+				if (base.access) {
+					auto access = std::make_shared<Access>(*base.access);
+					access->offsets.assign(base.access->offsets.begin() + start, base.access->offsets.begin() + start + size);
+					result.access = access;
+				} else
+					result.locs.assign(base.locs.begin() + start, base.locs.begin() + start + size);
+				return result;
+			}
+			start += size;
+		}
+		return std::nullopt;
+	}
+
 	Ref member(const Expr &expr)
 	{
 		const Ref base = eval(*expr.operands[0]);
 		const auto &name = expr.text;
 		if (base.type.shape == Type::Shape::structure && base.type.array.empty()) {
-			uint32_t start = 0;
-			for (const auto &member : base.type.structure->members) {
-				const uint32_t size = flat_size(member.type);
-				if (member.name == name) {
-					Ref result = base;
-					result.type = member.type;
-					result.icb = -1;
-					if (base.access) {
-						auto access = std::make_shared<Access>(*base.access);
-						access->offsets.assign(base.access->offsets.begin() + start, base.access->offsets.begin() + start + size);
-						result.access = access;
-					} else
-						result.locs.assign(base.locs.begin() + start, base.locs.begin() + start + size);
-					return result;
-				}
-				start += size;
-			}
+			if (auto found = member_of(base, name))
+				return *found;
 			fail(expr.line, "'" + name + "' is not a member of '" + base.type.name() + "'");
 		}
 		if (base.type.array.empty() && (base.type.shape == Type::Shape::scalar || base.type.shape == Type::Shape::vector)) {
@@ -1501,8 +1545,21 @@ private:
 			if (base.access) {
 				if (base.access->kind == Access::Kind::typed)
 					fail(line, "this element cannot be indexed dynamically");
-				// Elements of an array inside a buffer element sit at a regular byte stride: index and offset fold into one address.
-				fail(line, "dynamic indexing inside a buffer element is not supported");
+				// Elements of an array inside a buffer element sit at a regular byte stride, added to the offsets at run time.
+				const uint32_t stride = base.type.array[0] > 1 ? base.access->offsets[per] - base.access->offsets[0] : 0;
+				const Type uint_type = scalar_type(Scalar::unsigned_integer);
+				Ref shift = apply_pair(sm4::imul, uint_type, {convert(position, uint_type, line), uint_constant(stride)}, false);
+				if (base.access->shift) {
+					Ref before;
+					before.type = uint_type;
+					before.locs = {*base.access->shift};
+					shift = apply(sm4::iadd, uint_type, {before, shift});
+				}
+				auto access = std::make_shared<Access>(*base.access);
+				access->offsets.resize(per);
+				access->shift = shift.locs[0];
+				result.access = access;
+				return result;
 			}
 			std::vector<Loc> first;
 			if (base.icb >= 0) {
@@ -1520,7 +1577,8 @@ private:
 				fail(line, "invalid index");
 			uint32_t step = registers_of(element);
 			// The vertices of a geometry shader input: v[vertex][register].
-			if (first[0].base.type == sm4::input && first[0].base.dimension == 2) {
+			if ((first[0].base.type == sm4::input || first[0].base.type == sm4::input_control_point || first[0].base.type == sm4::output_control_point) &&
+				first[0].base.dimension == 2) {
 				result.locs = relative(first, position, 1, line, 0);
 				return result;
 			}
@@ -1658,6 +1716,11 @@ private:
 			if (bits.size() == a.locs.size())
 				return constant(result_type, bits);
 		}
+		// A constant false on either side of && (true of ||) decides it, so that a branch it guards is left out.
+		if (logical)
+			for (const Ref *side : {&a, &b})
+				if (all_immediate(*side) && std::all_of(side->locs.begin(), side->locs.end(), [&](const Loc &loc) { return (loc.bits != 0) == (op == "||"); }))
+					return constant(type, std::vector<uint32_t>(a.locs.size(), op == "||" ? ~0u : 0u));
 		const Scalar kind = type.scalar;
 		const bool fp = is_float(kind), uns = kind == Scalar::unsigned_integer;
 		if (logical)
@@ -2502,7 +2565,7 @@ private:
 	{
 		if (access.kind == Access::Kind::typed)
 			return readable(access.address);
-		return readable({access.address[0], constant_loc(access.offsets[0])});
+		return readable({access.address[0], byte_offset(access, access.offsets[0])});
 	}
 
 	Operand atomic_target(const Access &access)
@@ -2612,6 +2675,12 @@ private:
 		const auto &name = expr.text;
 		const uint32_t line = expr.line;
 		const Ref object = eval(*expr.operands[0]);
+		if (object.stream < 0 && object.type.shape == Type::Shape::structure && object.type.array.empty()) {
+			const auto candidates = methods(*object.type.structure, name);
+			if (candidates.empty())
+				fail(line, "'" + name + "' is not a method of '" + object.type.name() + "'");
+			return call_function(expr, candidates, &object);
+		}
 		const size_t count = expr.operands.size() - 1;
 		const auto argument = [&](size_t index) -> const Expr & { return *expr.operands[index + 1]; };
 		const auto expect = [&](size_t low, size_t high) {
@@ -2863,12 +2932,21 @@ private:
 		if (expr.kind == Expr::Kind::assign || expr.kind == Expr::Kind::postfix || (expr.kind == Expr::Kind::unary && (expr.text == "++" || expr.text == "--")))
 			add(*expr.operands[0]);
 		if (expr.kind == Expr::Kind::call) {
-			bool writes = expr.text == "sincos" || expr.text == "modf" || expr.text.starts_with("Interlocked") || expr.text == "GetDimensions";
-			for (const auto &function : program.functions)
-				writes |= function.name == expr.text;
-			if (writes)
-				for (size_t i = expr.number == 1 ? 1 : 0; i < expr.operands.size(); ++i)
+			const bool writes = expr.text == "sincos" || expr.text == "modf" || expr.text.starts_with("Interlocked") || expr.text == "GetDimensions";
+			const size_t first = expr.number == 1 ? 1 : 0;
+			for (size_t i = first; i < expr.operands.size(); ++i) {
+				// A function of the program writes only what reaches an out parameter of some overload.
+				bool out = writes;
+				for (const auto &function : program.functions)
+					out |= function.name == expr.text && i - first < function.parameters.size() && function.parameters[i - first].is_out;
+				if (out)
 					add(*expr.operands[i]);
+			}
+			// A method may change the members of its object.
+			if (expr.number == 1)
+				for (const auto &function : program.functions)
+					if (function.owner && function.name == expr.text)
+						add(*expr.operands[0]);
 		}
 		for (const auto &operand : expr.operands)
 			if (operand)
@@ -2935,12 +3013,24 @@ private:
 		return flat_size(parameter) == flat_size(argument) && parameter.shape == argument.shape ? 1 : -1;
 	}
 
-	Ref call_function(const Expr &expr, const std::vector<const Function *> &candidates)
+	// The methods of a structure and of those it derives from, the nearest first.
+	std::vector<const Function *> methods(const StructType &structure, const std::string &name) const
+	{
+		std::vector<const Function *> found;
+		for (const StructType *owner = &structure; owner; owner = owner->base.get())
+			for (const auto &function : program.functions)
+				if (function.owner == owner && function.name == name)
+					found.push_back(&function);
+		return found;
+	}
+
+	// A call of a function, or of a method on self, whose operands then start after the object.
+	Ref call_function(const Expr &expr, const std::vector<const Function *> &candidates, const Ref *self = nullptr)
 	{
 		const uint32_t line = expr.line;
 		std::vector<Ref> places;
-		for (const auto &operand : expr.operands)
-			places.push_back(eval(*operand));
+		for (size_t i = self && expr.number == 1 ? 1 : 0; i < expr.operands.size(); ++i)
+			places.push_back(eval(*expr.operands[i]));
 		const Function *best = nullptr;
 		int best_score = -1;
 		for (const auto *candidate : candidates) {
@@ -2976,7 +3066,8 @@ private:
 		for (size_t i = 0; i < function.parameters.size(); ++i) {
 			const auto &parameter = function.parameters[i];
 			const Ref argument = i < places.size() ? places[i] : value(*parameter.default_value);
-			if (parameter.type.shape == Type::Shape::object) {
+			// Objects and geometry shader streams are passed as themselves.
+			if (parameter.type.shape == Type::Shape::object || argument.stream >= 0) {
 				scope[parameter.name] = argument;
 				continue;
 			}
@@ -3000,9 +3091,18 @@ private:
 				scope[parameter.name] = passed;
 			}
 		}
+		// A method names the members of its object directly, and the object itself as this.
+		if (self) {
+			for (const auto &member : self->type.structure->members)
+				if (!scope.count(member.name))
+					scope[member.name] = *member_of(*self, member.name);
+			scope["this"] = *self;
+		}
 		Frame frame;
 		frame.function = &function;
 		frame.loop_depth = loops.size();
+		if (self)
+			frame.self = *self;
 		if (function.result.shape != Type::Shape::void_type)
 			frame.result = storage(function.result);
 		auto saved = std::move(scopes);
@@ -3047,9 +3147,16 @@ private:
 	{
 		if (expr.number == 1)
 			return method(expr);
+		// Inside a method, the other methods of the object come before free functions.
+		if (!frames.empty() && frames.back().self) {
+			const Ref self = *frames.back().self;
+			const auto candidates = methods(*self.type.structure, expr.text);
+			if (!candidates.empty())
+				return call_function(expr, candidates, &self);
+		}
 		std::vector<const Function *> candidates;
 		for (const auto &function : program.functions)
-			if (function.name == expr.text)
+			if (function.name == expr.text && !function.owner)
 				candidates.push_back(&function);
 		if (!candidates.empty())
 			return call_function(expr, candidates);
@@ -3095,6 +3202,168 @@ private:
 		scopes.emplace_back();
 		statement(stmt);
 		scopes.pop_back();
+	}
+
+	// Whether a loop body breaks out of or continues the loop itself, past any loop or switch nested in it.
+	static void jumps(const Stmt &stmt, bool in_switch, bool &breaks, bool &continues)
+	{
+		switch (stmt.kind) {
+		case Stmt::Kind::break_statement:
+			breaks |= !in_switch;
+			return;
+		case Stmt::Kind::continue_statement:
+			continues = true;
+			return;
+		case Stmt::Kind::for_statement:
+		case Stmt::Kind::while_statement:
+		case Stmt::Kind::do_statement:
+			return;
+		case Stmt::Kind::switch_statement:
+			for (const auto &[label, body] : stmt.cases)
+				for (const auto &item : body)
+					jumps(*item, true, breaks, continues);
+			return;
+		default:
+			for (const auto &item : stmt.body)
+				jumps(*item, in_switch, breaks, continues);
+			if (stmt.then_branch)
+				jumps(*stmt.then_branch, in_switch, breaks, continues);
+			if (stmt.else_branch)
+				jumps(*stmt.else_branch, in_switch, breaks, continues);
+			return;
+		}
+	}
+
+	// The counter after one step of an unrolled loop, when the step is a constant change of it.
+	std::optional<uint32_t> stepped(const Expr &step, const std::string &name, uint32_t current, const Type &type)
+	{
+		const auto counter = [&](const Expr &expr) { return expr.kind == Expr::Kind::name && expr.text == name; };
+		if ((step.kind == Expr::Kind::unary || step.kind == Expr::Kind::postfix) && step.operands.size() == 1 && counter(*step.operands[0])) {
+			if (step.text == "++")
+				return current + 1;
+			if (step.text == "--")
+				return current - 1;
+			return std::nullopt;
+		}
+		if (step.kind != Expr::Kind::assign || step.operands.size() != 2 || !counter(*step.operands[0]))
+			return std::nullopt;
+		const Ref amount = convert(value(*step.operands[1]), type, step.line);
+		if (amount.locs.size() != 1 || !amount.locs[0].immediate)
+			return std::nullopt;
+		const uint32_t by = amount.locs[0].bits;
+		const bool is_signed = type.scalar == Scalar::integer;
+		const std::string &op = step.text;
+		if (op == "=")
+			return by;
+		if (op == "+=")
+			return current + by;
+		if (op == "-=")
+			return current - by;
+		if (op == "*=")
+			return current * by;
+		if ((op == "/=" || op == "%=") && by) {
+			if (is_signed)
+				return uint32_t(op == "/=" ? int32_t(current) / int32_t(by) : int32_t(current) % int32_t(by));
+			return op == "/=" ? current / by : current % by;
+		}
+		if (op == "<<=")
+			return current << (by & 31);
+		if (op == ">>=")
+			return is_signed ? uint32_t(int32_t(current) >> (by & 31)) : current >> (by & 31);
+		if (op == "&=")
+			return current & by;
+		if (op == "|=")
+			return current | by;
+		if (op == "^=")
+			return current ^ by;
+		return std::nullopt;
+	}
+
+	// [unroll], or a loop whose body needs constants: a for loop over one integer counter with constant bounds becomes a copy of its body
+	// per pass, the counter a constant in each. Returns false, having emitted nothing, for a loop that does not fit.
+	bool unroll(const Stmt &stmt)
+	{
+		const Stmt &init = *stmt.body[0];
+		std::string name;
+		const Expr *start = nullptr;
+		Type type;
+		Ref *existing = nullptr;
+		if (init.kind == Stmt::Kind::declaration && init.variables.size() == 1 && init.variables[0].initializer) {
+			name = init.variables[0].name;
+			start = init.variables[0].initializer.get();
+			type = init.variables[0].type;
+		} else if (init.kind == Stmt::Kind::expression && init.value && init.value->kind == Expr::Kind::assign && init.value->text == "=" &&
+			init.value->operands[0]->kind == Expr::Kind::name && (existing = find_local(init.value->operands[0]->text)) && existing->writable &&
+			!existing->access) {
+			name = init.value->operands[0]->text;
+			start = init.value->operands[1].get();
+			type = existing->type;
+		} else
+			return false;
+		if (type.shape != Type::Shape::scalar || !type.array.empty() || (type.scalar != Scalar::integer && type.scalar != Scalar::unsigned_integer) ||
+			!stmt.value || !stmt.step)
+			return false;
+		std::set<std::string> assigned;
+		assigned_names(*stmt.then_branch, assigned);
+		bool breaks = false, continues = false;
+		jumps(*stmt.then_branch, false, breaks, continues);
+		if (assigned.count(name) || continues)
+			return false;
+		// The passes, found without emitting anything: a bound that is not a constant leaves the loop as it is.
+		const size_t mark = code.size();
+		const uint32_t temps_mark = temps;
+		std::vector<uint32_t> passes;
+		std::optional<uint32_t> current;
+		scopes.emplace_back();
+		const Ref first = convert(value(*start), type, stmt.line);
+		if (first.locs.size() == 1 && first.locs[0].immediate)
+			current = first.locs[0].bits;
+		while (current) {
+			scopes.back()[name] = constant(type, {*current});
+			const Loc test = condition(*stmt.value);
+			if (!test.immediate || passes.size() > 1024) {
+				current.reset();
+				break;
+			}
+			if (!test.bits)
+				break;
+			passes.push_back(*current);
+			current = stepped(*stmt.step, name, *current, type);
+		}
+		scopes.pop_back();
+		if (!current || code.size() != mark) {
+			code.resize(mark);
+			temps = temps_mark;
+			return false;
+		}
+		// A break leaves the copies through a loop around them that runs once.
+		Loop once;
+		if (breaks) {
+			emit(sm4::loop, {});
+			loops.push_back(once);
+		}
+		for (const auto pass : passes) {
+			scopes.emplace_back();
+			scopes.back()[name] = constant(type, {pass});
+			scoped(*stmt.then_branch);
+			scopes.pop_back();
+		}
+		if (breaks) {
+			emit(sm4::op_break, {});
+			loops.pop_back();
+			emit(sm4::endloop, {});
+			after_breakable();
+		}
+		// The counter keeps its last value after the loop.
+		const Ref last = constant(type, {*current});
+		if (existing)
+			write(existing->locs, last.locs);
+		else {
+			Ref place = storage(type);
+			write(place.locs, last.locs);
+			scopes.back()[name] = place;
+		}
+		return true;
 	}
 
 	void declare(const Variable &variable)
@@ -3201,9 +3470,13 @@ private:
 		case Stmt::Kind::while_statement:
 		case Stmt::Kind::for_statement:
 		case Stmt::Kind::do_statement: {
-			scopes.emplace_back();
+			const auto marked = [&](const char *word) { return std::find(stmt.attributes.begin(), stmt.attributes.end(), word) != stmt.attributes.end(); };
+			if (stmt.kind == Stmt::Kind::for_statement && (marked("unroll") || (unroll_all && !marked("loop"))) && unroll(stmt))
+				return;
+			// A for loop's counter outlives the loop, as in older HLSL.
 			if (stmt.kind == Stmt::Kind::for_statement)
 				statement(*stmt.body[0]);
+			scopes.emplace_back();
 			emit(sm4::loop, {});
 			Loop loop;
 			loop.step = stmt.step.get();
@@ -3290,13 +3563,16 @@ private:
 			emit(sm4::discard, {Operand::values({~0u, ~0u, ~0u, ~0u}, 1)}, test_nonzero);
 			return;
 		case Stmt::Kind::return_statement: {
-			Frame &frame = frames.back();
 			if (stmt.value) {
-				if (frame.result.type.shape == Type::Shape::void_type)
+				if (frames.back().result.type.shape == Type::Shape::void_type)
 					fail(stmt.line, "void functions cannot return a value");
-				const Ref result = convert(value(*stmt.value), frame.result.type, stmt.line);
-				write(frame.result.locs, result.locs);
-			} else if (frame.result.type.shape != Type::Shape::void_type)
+				// The value may call functions, whose frames can move this one: it is looked up again afterwards.
+				const Ref returned = value(*stmt.value);
+				const Ref result = convert(returned, frames.back().result.type, stmt.line);
+				write(frames.back().result.locs, result.locs);
+			}
+			Frame &frame = frames.back();
+			if (!stmt.value && frame.result.type.shape != Type::Shape::void_type)
 				fail(stmt.line, "the function must return a value");
 			if (frame.entry) {
 				emit_outputs();
@@ -3356,7 +3632,7 @@ private:
 		globals[variable.name] = ref;
 	}
 
-	void collect_globals()
+	void collect_globals(const Function &entry)
 	{
 		Buffer globals_buffer;
 		globals_buffer.name = "$Globals";
@@ -3374,7 +3650,17 @@ private:
 			Buffer buffer;
 			buffer.name = declared.name;
 			buffer.texture = declared.texture_buffer;
-			buffer.explicit_register = declared.register_index;
+			if (buffer.texture) {
+				Resource view;
+				view.name = declared.name;
+				view.kind = ObjectKind::buffer;
+				view.element = Type::make_vector(Scalar::floating, 4);
+				view.explicit_register = declared.register_index;
+				view.texture_buffer = true;
+				buffer.resource = int(resources.size());
+				resources.push_back(view);
+			} else
+				buffer.explicit_register = declared.register_index;
 			buffers.push_back(buffer);
 			for (const auto &variable : declared.members) {
 				if (variable.type.shape == Type::Shape::object)
@@ -3382,6 +3668,22 @@ private:
 				else
 					members.emplace_back(buffers.size() - 1, &variable);
 			}
+		}
+		for (const auto &parameter : entry.parameters) {
+			if (!parameter.is_uniform)
+				continue;
+			if (parameter_uniforms.empty()) {
+				Buffer params;
+				params.name = "$Params";
+				buffers.push_back(params);
+			}
+			Variable &variable = parameter_uniforms.emplace_back();
+			variable.name = parameter.name;
+			variable.type = parameter.type;
+			variable.line = entry.line;
+			if (variable.type.shape == Type::Shape::object)
+				fail(entry.line, "a uniform entry point parameter cannot be an object");
+			members.emplace_back(buffers.size() - 1, &variable);
 		}
 		std::vector<uint32_t> ends(buffers.size());
 		for (const auto &[index, variable] : members) {
@@ -3479,6 +3781,16 @@ private:
 	// Where an appended geometry shader vertex goes, scalar by scalar.
 	std::vector<Loc> stream_layout;
 	uint32_t vertices = 0, input_primitive = 0, output_topology = 0;
+	// Tessellation: the control points in and out of a patch, the domain (1 isoline, 2 triangle, 3 quad), the hull shader's
+	// partitioning, output primitive and largest factor, and the patch constant registers handed out so far.
+	uint32_t control_points = 0, output_control_points = 0, tess_domain = 0, partitioning = 0, output_primitive = 0, next_patch = 0;
+	float max_tess_factor = 64.0f;
+	// A hull shader is generated as two phases: the control point function, kept here once done, then the patch constant function.
+	bool patch_phase = false;
+	std::vector<Instruction> control_code;
+	std::map<uint8_t, uint8_t> control_specials;
+	// A domain shader's inputs are patch constants, except the control points of its OutputPatch.
+	bool control_point_input = false;
 
 	Loc register_loc(uint8_t type, uint32_t reg, uint32_t component)
 	{
@@ -3532,8 +3844,15 @@ private:
 			if (found == compute.end())
 				fail(line, "invalid compute shader input semantic '" + semantic + "'");
 			special = found->second;
-		} else if (stage == Stage::geometry && key == "SV_PRIMITIVEID")
+		} else if ((stage == Stage::geometry || stage == Stage::hull || stage == Stage::domain) && key == "SV_PRIMITIVEID")
 			special = sm4::input_primitive_id;
+		else if (stage == Stage::hull && !patch_phase && key == "SV_OUTPUTCONTROLPOINTID")
+			special = sm4::output_control_point_id;
+		else if (stage == Stage::domain && key == "SV_DOMAINLOCATION") {
+			if (type.components() != (tess_domain == 2 ? 3u : 2u))
+				fail(line, "'SV_DomainLocation' has the wrong size for the domain");
+			special = sm4::input_domain_point;
+		}
 		else if (stage == Stage::geometry && key == "SV_GSINSTANCEID")
 			special = sm4::gs_instance_id;
 		else if (stage == Stage::pixel && key == "SV_COVERAGE")
@@ -3543,6 +3862,10 @@ private:
 			for (uint32_t c = 0; c < type.components(); ++c)
 				locs.push_back(special_loc(special, std::min(c, width - 1)));
 			special_inputs[special] |= uint8_t((1 << width) - 1);
+			return;
+		}
+		if (stage == Stage::domain && !control_point_input) {
+			patch_element(name, index, type, line, false, [&](const Loc &loc) { locs.push_back(loc); });
 			return;
 		}
 		const uint32_t sv = system_value(key, line);
@@ -3591,7 +3914,6 @@ private:
 			key = "SV_POSITION";
 		if (key.starts_with("SV_") && key != name && upper(name) != key)
 			name = key == "SV_TARGET" ? "SV_Target" : key == "SV_DEPTH" ? "SV_Depth" : "SV_Position";
-		const uint32_t sv = system_value(key, line);
 		const auto bind = [&](const Loc &dest) {
 			if (stream != ~0u)
 				stream_layout.push_back(dest);
@@ -3599,6 +3921,11 @@ private:
 				output_copies.emplace_back(dest, sources[at]);
 			++at;
 		};
+		if (patch_phase) {
+			patch_element(name, index, type, line, true, bind);
+			return;
+		}
+		const uint32_t sv = system_value(key, line);
 		if (stage == Stage::pixel) {
 			if (sv == 64) {
 				for (uint32_t r = 0; r < row_count(type); ++r) {
@@ -3653,6 +3980,76 @@ private:
 		}
 	}
 
+	// The D3D_NAME of a tessellation factor, or 0: an edge or inside factor of the domain, which has a fixed number of each.
+	uint32_t tess_factor(const std::string &key, uint32_t index, uint32_t line) const
+	{
+		const bool edge = key == "SV_TESSFACTOR", inside = key == "SV_INSIDETESSFACTOR";
+		if (!edge && !inside)
+			return 0;
+		static const uint32_t edges[] = {0, 2, 3, 4}, insides[] = {0, 0, 1, 2};
+		if (!tess_domain || index >= (edge ? edges : insides)[tess_domain])
+			fail(line, "the domain has no tessellation factor '" + key + std::to_string(index) + "'");
+		if (tess_domain == 1)
+			return index == 0 ? 16 : 15;
+		return (tess_domain == 3 ? 11 : 13) + (inside ? 1 : 0);
+	}
+
+	// The name a declaration gives a tessellation factor register (D3D11_SB_NAME), from its D3D_NAME and index.
+	static uint32_t tess_factor_name(uint32_t system_value, uint32_t index)
+	{
+		switch (system_value) {
+		case 11: return 11 + index;
+		case 12: return 15 + index;
+		case 13: return 17 + index;
+		case 14: return 20;
+		case 15: return 21;
+		default: return 22;
+		}
+	}
+
+	// One patch constant: written by a hull shader's patch constant function, read by a domain shader, each row in a register.
+	void patch_element(const std::string &name, uint32_t index, const Type &type, uint32_t line, bool output, const std::function<void(const Loc &)> &bind)
+	{
+		const std::string key = upper(name);
+		const uint32_t sv = tess_factor(key, index, line);
+		if (sv && (type.shape != Type::Shape::scalar || type.scalar != Scalar::floating))
+			fail(line, "tessellation factors are floats");
+		if (!sv && key.starts_with("SV_"))
+			fail(line, "invalid patch constant semantic '" + name + "'");
+		for (uint32_t r = 0; r < row_count(type); ++r) {
+			SignatureElement element;
+			element.semantic = name;
+			element.semantic_index = index + r;
+			element.system_value = sv;
+			element.component_type = component_type(type.scalar);
+			element.reg = next_patch++;
+			element.mask = uint8_t((1 << row_width(type)) - 1);
+			out.patch_constants.push_back(element);
+			for (uint32_t c = 0; c < row_width(type); ++c)
+				bind(register_loc(output ? sm4::output : sm4::input_patch_constant, element.reg, c));
+		}
+	}
+
+	// The registers of a control point as the signature already lays them out, from register 0 in member order.
+	void patch_layout(const Type &type, std::vector<Loc> &locs, uint32_t &next)
+	{
+		if (type.shape == Type::Shape::structure && type.array.empty()) {
+			for (const auto &member : type.structure->members)
+				patch_layout(member.type, locs, next);
+			return;
+		}
+		if (!type.array.empty()) {
+			for (uint32_t i = 0; i < type.array[0]; ++i)
+				patch_layout(element_of(type), locs, next);
+			return;
+		}
+		for (uint32_t r = 0; r < row_count(type); ++r) {
+			const uint32_t reg = next++;
+			for (uint32_t c = 0; c < row_width(type); ++c)
+				locs.push_back(register_loc(sm4::input, reg, c));
+		}
+	}
+
 	void emit_outputs()
 	{
 		std::vector<Loc> dest, values;
@@ -3681,6 +4078,37 @@ private:
 		return nullptr;
 	}
 
+	// The tessellator settings of a hull or domain shader's attributes; a domain shader names only its domain.
+	void tessellation(const Function &function)
+	{
+		const auto word = [&](const char *name, std::initializer_list<std::pair<const char *, uint32_t>> choices) -> uint32_t {
+			const auto *arguments = attribute(function, name);
+			if (!arguments || arguments->size() != 1)
+				fail(function.line, std::string("the entry point needs [") + name + "(...)]");
+			for (const auto &[text, value] : choices)
+				if ((*arguments)[0] == text)
+					return value;
+			fail(function.line, std::string("invalid [") + name + "] value '" + (*arguments)[0] + "'");
+		};
+		tess_domain = word("domain", {{"isoline", 1}, {"tri", 2}, {"quad", 3}});
+		if (stage == Stage::domain)
+			return;
+		partitioning = word("partitioning", {{"integer", 1}, {"pow2", 2}, {"fractional_odd", 3}, {"fractional_even", 4}});
+		output_primitive = word("outputtopology", {{"point", 1}, {"line", 2}, {"triangle_cw", 3}, {"triangle_ccw", 4}});
+		if (tess_domain == 1 && output_primitive > 2)
+			fail(function.line, "an isoline domain puts out points or lines");
+		const auto *points = attribute(function, "outputcontrolpoints");
+		if (!points || points->size() != 1)
+			fail(function.line, "a hull shader needs [outputcontrolpoints(n)]");
+		output_control_points = uint32_t(std::stoul((*points)[0]));
+		if (output_control_points > 32)
+			fail(function.line, "a hull shader puts out at most 32 control points");
+		if (const auto *largest = attribute(function, "maxtessfactor"); largest && largest->size() == 1)
+			max_tess_factor = std::stof((*largest)[0]);
+		if (max_tess_factor < 1.0f || max_tess_factor > 64.0f)
+			fail(function.line, "[maxtessfactor] lies between 1 and 64");
+	}
+
 	void entry_point(const Function &function)
 	{
 		Frame frame;
@@ -3692,8 +4120,9 @@ private:
 		uint32_t streams = 0;
 		for (const auto &parameter : function.parameters) {
 			const auto has = [&](const char *word) { return std::find(parameter.modifiers.begin(), parameter.modifiers.end(), word) != parameter.modifiers.end(); };
+			// Found through the globals, in $Params.
 			if (parameter.is_uniform)
-				fail(function.line, "uniform entry point parameters are not supported");
+				continue;
 			if (has("TriangleStream") || has("LineStream") || has("PointStream")) {
 				if (stage != Stage::geometry)
 					fail(function.line, "streams are only valid in geometry shaders");
@@ -3707,6 +4136,52 @@ private:
 				output_value(parameter.type, parameter.semantic, function.line, {}, at, streams);
 				++streams;
 				scope[parameter.name] = stream;
+				continue;
+			}
+			if (has("InputPatch") || has("OutputPatch")) {
+				if (stage != Stage::hull && stage != Stage::domain)
+					fail(function.line, "patches are only valid in hull and domain shaders");
+				const bool output_patch = has("OutputPatch");
+				if (parameter.type.array.empty() || !parameter.type.array[0] || parameter.type.array[0] > 32)
+					fail(function.line, "a patch holds 1 to 32 control points");
+				const uint32_t count = parameter.type.array[0];
+				const Type element = element_of(parameter.type);
+				std::vector<Loc> first;
+				uint8_t type = sm4::input_control_point;
+				if (stage == Stage::domain) {
+					if (!output_patch)
+						fail(function.line, "a domain shader reads its control points from an OutputPatch");
+					control_points = count;
+					control_point_input = true;
+					input_value(element, parameter.semantic, parameter.modifiers, function.line, first);
+					control_point_input = false;
+				} else if (!patch_phase) {
+					if (output_patch)
+						fail(function.line, "the control point function reads its control points from an InputPatch");
+					control_points = count;
+					input_value(element, parameter.semantic, parameter.modifiers, function.line, first);
+					type = sm4::input;
+				} else {
+					if (count != (output_patch ? output_control_points : control_points))
+						fail(function.line, "the patch does not hold as many control points as the hull shader");
+					uint32_t next = 0;
+					patch_layout(element, first, next);
+					if (output_patch)
+						type = sm4::output_control_point;
+				}
+				// Every control point's registers: v[point][register], vicp or vocp.
+				Ref input;
+				input.type = parameter.type;
+				for (uint32_t v = 0; v < count; ++v)
+					for (const auto &loc : first) {
+						Loc point = loc;
+						point.base = Operand::reg(type, 0);
+						point.base.dimension = 2;
+						point.base.index[0] = v;
+						point.base.index[1] = loc.base.index[loc.base.dimension - 1];
+						input.locs.push_back(point);
+					}
+				scope[parameter.name] = input;
 				continue;
 			}
 			if (stage == Stage::geometry && parameter.is_in && !parameter.is_out && !parameter.type.array.empty()) {
@@ -3812,10 +4287,10 @@ private:
 	{
 		for (const char letter : {'t', 's', 'u'})
 			bind(resources, [letter](const Resource &resource) { return resource.register_class == letter; });
+		bind(buffers, [](const Buffer &buffer) { return !buffer.texture; });
 		for (auto &buffer : buffers)
-			if (buffer.used && buffer.texture)
-				fail(0, "tbuffer is not supported");
-		bind(buffers, [](const Buffer &) { return true; });
+			if (buffer.texture && buffer.used)
+				buffer.bound = resources[size_t(buffer.resource)].bound;
 		const auto remap = [&](Operand &operand) {
 			if (operand.type == sm4::resource || operand.type == sm4::sampler || operand.type == sm4::uav) {
 				const auto &resource = resources[operand.index[0] & 0xffff];
@@ -3823,9 +4298,10 @@ private:
 			} else if (operand.type == sm4::constant_buffer)
 				operand.index[0] = uint32_t(buffers[operand.index[0]].bound);
 		};
-		for (auto &instruction : code)
-			for (auto &operand : instruction.operands)
-				remap(operand);
+		for (auto *list : {&code, &control_code})
+			for (auto &instruction : *list)
+				for (auto &operand : instruction.operands)
+					remap(operand);
 	}
 
 	// Temp registers renumbered so that registers whose lifetimes do not overlap share one; a register used inside a loop lives
@@ -3896,14 +4372,14 @@ private:
 		return uint32_t(busy_until.size());
 	}
 
-	// The components of each input register the program reads.
-	std::map<uint32_t, uint8_t> input_reads() const
+	// The components of each register of an input class (v, vicp, vocp, vpc) the program reads.
+	std::map<uint32_t, uint8_t> reads_of(uint8_t type) const
 	{
 		std::map<uint32_t, uint8_t> reads;
 		for (const auto &instruction : code)
 			for (size_t i = 0; i < instruction.operands.size(); ++i) {
 				const auto &operand = instruction.operands[i];
-				if (operand.type != sm4::input)
+				if (operand.type != type)
 					continue;
 				const uint32_t reg = operand.index[operand.dimension - 1];
 				uint8_t mask = 0;
@@ -3936,9 +4412,33 @@ private:
 		return instruction;
 	}
 
-	std::vector<Instruction> declarations(uint32_t temp_count, const Function &function)
+	// A control point register as a declaration names it: vicp[points][register] or vocp[points][register].
+	static Operand control_point(uint8_t type, uint32_t points, uint32_t reg, uint8_t mask)
+	{
+		Operand operand = Operand::reg(type, 0);
+		operand.dimension = 2;
+		operand.index[0] = points;
+		operand.index[1] = reg;
+		operand.mask = mask;
+		return operand;
+	}
+
+	// The declarations; a hull shader's also hold both phases with their code.
+	std::vector<Instruction> declarations(uint32_t temp_count, uint32_t control_temps, const Function &function)
 	{
 		std::vector<Instruction> list;
+		if (stage == Stage::hull) {
+			list.push_back(declaration(sm4::hs_decls, {}));
+			list.push_back(declaration(sm4::dcl_input_control_point_count, {}, control_points));
+			list.push_back(declaration(sm4::dcl_output_control_point_count, {}, output_control_points));
+			list.push_back(declaration(sm4::dcl_tess_domain, {}, tess_domain));
+			list.push_back(declaration(sm4::dcl_tess_partitioning, {}, partitioning));
+			list.push_back(declaration(sm4::dcl_tess_output_primitive, {}, output_primitive));
+			list.push_back(declaration(sm4::dcl_hs_max_tessfactor, {}, 0, {std::bit_cast<uint32_t>(max_tess_factor)}));
+		} else if (stage == Stage::domain) {
+			list.push_back(declaration(sm4::dcl_input_control_point_count, {}, control_points));
+			list.push_back(declaration(sm4::dcl_tess_domain, {}, tess_domain));
+		}
 		uint32_t global_flags = flags & compile_skip_optimization ? 0 : 1;
 		if (!sm5 && stage == Stage::compute)
 			global_flags |= 2;
@@ -3952,7 +4452,7 @@ private:
 		}
 		std::vector<const Buffer *> used_buffers;
 		for (const auto &buffer : buffers)
-			if (buffer.used)
+			if (buffer.used && !buffer.texture)
 				used_buffers.push_back(&buffer);
 		std::sort(used_buffers.begin(), used_buffers.end(), [](const Buffer *a, const Buffer *b) { return a->bound < b->bound; });
 		for (const auto *buffer : used_buffers) {
@@ -4001,8 +4501,31 @@ private:
 			if (const auto *instances = attribute(function, "instance"); instances && !instances->empty())
 				list.push_back(declaration(sm4::dcl_gs_instance_count, {}, 0, {uint32_t(std::stoul((*instances)[0]))}));
 		}
-		const auto reads = input_reads();
-		for (size_t i = 0; i < out.inputs.size(); ++i) {
+		if (stage != Stage::hull) {
+			io_declarations(list, temp_count, function);
+			return list;
+		}
+		// The control point phase, then the patch constant function as a single fork phase.
+		std::swap(code, control_code);
+		std::swap(special_inputs, control_specials);
+		patch_phase = false;
+		list.push_back(declaration(sm4::hs_control_point_phase, {}));
+		io_declarations(list, control_temps, function);
+		list.insert(list.end(), code.begin(), code.end());
+		std::swap(code, control_code);
+		std::swap(special_inputs, control_specials);
+		patch_phase = true;
+		list.push_back(declaration(sm4::hs_fork_phase, {}));
+		io_declarations(list, temp_count, function);
+		list.insert(list.end(), code.begin(), code.end());
+		return list;
+	}
+
+	// What a phase declares: the inputs it reads, its outputs and its registers.
+	void io_declarations(std::vector<Instruction> &list, uint32_t temp_count, const Function &function)
+	{
+		const auto reads = reads_of(sm4::input);
+		for (size_t i = 0; i < out.inputs.size() && !patch_phase; ++i) {
 			auto &element = out.inputs[i];
 			const auto found = reads.find(element.reg);
 			element.used = found == reads.end() ? 0 : uint8_t(found->second & element.mask);
@@ -4010,9 +4533,9 @@ private:
 				continue;
 			Operand operand = Operand::reg(sm4::input, element.reg);
 			operand.mask = element.used;
-			if (stage == Stage::geometry) {
+			if (stage == Stage::geometry || stage == Stage::hull) {
 				operand.dimension = 2;
-				operand.index[0] = vertices;
+				operand.index[0] = stage == Stage::geometry ? vertices : control_points;
 				operand.index[1] = element.reg;
 			}
 			const uint32_t sv = element.system_value;
@@ -4041,7 +4564,42 @@ private:
 			}
 			list.push_back(declaration(sm4::dcl_input, {operand}));
 		}
-		for (const auto &element : out.outputs) {
+		if (stage == Stage::domain || patch_phase) {
+			// Control points are read through vicp and, in the patch constant phase, the hull shader's own through vocp.
+			for (const auto &[reg, mask] : reads_of(sm4::input_control_point))
+				for (auto &element : out.inputs)
+					if (element.reg == reg) {
+						element.used |= uint8_t(mask & element.mask);
+						list.push_back(declaration(sm4::dcl_input, {control_point(sm4::input_control_point, control_points, reg, element.mask)}));
+					}
+			for (const auto &[reg, mask] : reads_of(sm4::output_control_point))
+				for (const auto &element : out.outputs)
+					if (element.reg == reg)
+						list.push_back(declaration(sm4::dcl_input, {control_point(sm4::output_control_point, output_control_points, reg, element.mask)}));
+			const auto patch = reads_of(sm4::input_patch_constant);
+			for (auto &element : out.patch_constants) {
+				const auto found = patch.find(element.reg);
+				if (stage != Stage::domain || found == patch.end())
+					continue;
+				element.used = uint8_t(found->second & element.mask);
+				Operand operand = Operand::reg(sm4::input_patch_constant, element.reg);
+				operand.mask = element.mask;
+				if (element.system_value)
+					list.push_back(declaration(sm4::dcl_input_siv, {operand}, 0, {tess_factor_name(element.system_value, element.semantic_index)}));
+				else
+					list.push_back(declaration(sm4::dcl_input, {operand}));
+			}
+		}
+		if (patch_phase)
+			for (const auto &element : out.patch_constants) {
+				Operand operand = Operand::reg(sm4::output, element.reg);
+				operand.mask = element.mask;
+				if (element.system_value)
+					list.push_back(declaration(sm4::dcl_output_siv, {operand}, 0, {tess_factor_name(element.system_value, element.semantic_index)}));
+				else
+					list.push_back(declaration(sm4::dcl_output, {operand}));
+			}
+		for (const auto &element : patch_phase ? std::vector<SignatureElement>() : out.outputs) {
 			if (element.reg == ~0u) {
 				const uint8_t types[] = {sm4::output_depth, sm4::output_coverage, sm4::output_depth_greater_equal, sm4::output_depth_less_equal};
 				Operand operand = Operand::none(types[element.system_value - 65]);
@@ -4058,8 +4616,14 @@ private:
 		}
 		if (temp_count)
 			list.push_back(declaration(sm4::dcl_temps, {}, 0, {temp_count}));
-		for (size_t i = 0; i < indexables.size(); ++i)
-			list.push_back(declaration(sm4::dcl_indexable_temp, {}, 0, {uint32_t(i), indexables[i].first, indexables[i].second}));
+		// Indexable temps belong to the phase that uses them.
+		std::set<uint32_t> indexed;
+		for (const auto &instruction : code)
+			for (const auto &operand : instruction.operands)
+				if (operand.type == sm4::indexable_temp)
+					indexed.insert(operand.index[0]);
+		for (const auto i : indexed)
+			list.push_back(declaration(sm4::dcl_indexable_temp, {}, 0, {i, indexables[i].first, indexables[i].second}));
 		for (size_t i = 0; i < shared.size(); ++i)
 			list.push_back(declaration(sm4::dcl_tgsm_structured, {declared(sm4::group_shared, uint32_t(i))}, 0, {shared[i].stride, shared[i].count}));
 		if (stage == Stage::compute) {
@@ -4071,7 +4635,6 @@ private:
 				sizes.push_back(uint32_t(std::stoul(size)));
 			list.push_back(declaration(sm4::dcl_thread_group, {}, 0, sizes));
 		}
-		return list;
 	}
 
 	// ---- reflection ----
@@ -4137,7 +4700,7 @@ private:
 		}
 		std::vector<ReflectedBinding> samplers, views, uavs, constants;
 		for (const auto &resource : resources) {
-			if (!resource.used)
+			if (!resource.used || resource.texture_buffer)
 				continue;
 			ReflectedBinding binding;
 			binding.name = resource.name;
@@ -4176,7 +4739,7 @@ private:
 				binding.name = buffer.name;
 				binding.input_type = buffer.texture ? 1 : 0;
 				binding.bind_point = uint32_t(buffer.bound);
-				binding.flags = buffer.explicit_register >= 0 ? 1 : 0;
+				binding.flags = (buffer.texture ? resources[size_t(buffer.resource)].explicit_register : buffer.explicit_register) >= 0 ? 1 : 0;
 				binding.buffer = index++;
 				constants.push_back(binding);
 			}
@@ -4187,14 +4750,68 @@ private:
 		}
 	}
 
+	// A tbuffer is read through its texture register: an operand naming one of its registers becomes a temp loaded with ld just before.
+	void load_texture_buffers()
+	{
+		for (auto &buffer : buffers)
+			if (buffer.texture && buffer.used)
+				resources[size_t(buffer.resource)].used = true;
+		for (auto *list : {&code, &control_code}) {
+			std::vector<Instruction> rewritten;
+			rewritten.reserve(list->size());
+			for (auto &instruction : *list) {
+				for (auto &operand : instruction.operands) {
+					if (operand.type != sm4::constant_buffer || !buffers[operand.index[0]].texture)
+						continue;
+					Operand address = Operand::values({operand.index[1], 0, 0, 0}, 1);
+					if (const auto relative = operand.relative[1]) {
+						Operand sum = Operand::reg(sm4::temp, new_register());
+						sum.mask = 1;
+						Operand base = Operand::reg(relative->type, relative->index);
+						base.mode = Operand::Mode::select;
+						base.swizzle[0] = relative->component;
+						Instruction add;
+						add.opcode = sm4::iadd;
+						add.operands = {sum, base, Operand::values({operand.index[1], 0, 0, 0}, 1)};
+						rewritten.push_back(add);
+						address = sum;
+						address.mode = Operand::Mode::select;
+						address.swizzle[0] = 0;
+					}
+					Operand loaded = Operand::reg(sm4::temp, new_register());
+					Operand view = Operand::reg(sm4::resource, uint32_t(buffers[operand.index[0]].resource));
+					view.mode = Operand::Mode::swizzle;
+					Instruction load;
+					load.opcode = sm4::ld;
+					load.operands = {loaded, address, view};
+					rewritten.push_back(load);
+					operand.type = sm4::temp;
+					operand.dimension = 1;
+					operand.index = {loaded.index[0], 0, 0};
+					operand.relative = {};
+				}
+				rewritten.push_back(std::move(instruction));
+			}
+			*list = std::move(rewritten);
+		}
+	}
+
 	void finish(const Function &function)
 	{
+		load_texture_buffers();
 		bind_all();
+		uint32_t control_temps = 0;
+		if (stage == Stage::hull) {
+			std::swap(code, control_code);
+			control_temps = compact_temps();
+			std::swap(code, control_code);
+		}
 		const uint32_t temp_count = compact_temps();
-		out.instruction_count = uint32_t(code.size());
-		out.temp_count = temp_count;
-		auto list = declarations(temp_count, function);
-		list.insert(list.end(), code.begin(), code.end());
+		out.instruction_count = uint32_t(code.size() + control_code.size());
+		out.temp_count = std::max(temp_count, control_temps);
+		auto list = declarations(temp_count, control_temps, function);
+		if (stage != Stage::hull)
+			list.insert(list.end(), code.begin(), code.end());
 		out.instructions = std::move(list);
 		reflection();
 		out.warnings = warnings;
@@ -4217,25 +4834,57 @@ Generated Generator::run(const std::string &entry, const std::string &target)
 	sm5 = out.major == 5;
 	if ((stage == Stage::hull || stage == Stage::domain) && !sm5)
 		fail(0, "hull and domain shaders need shader model 5");
-	if (stage == Stage::hull || stage == Stage::domain)
-		fail(0, "hull and domain shaders are not supported yet");
 	const Function *function = nullptr;
 	for (const auto &candidate : program.functions)
-		if (candidate.name == entry && candidate.body)
+		if (candidate.name == entry && candidate.body && !candidate.owner)
 			function = &candidate;
 	if (!function)
 		fail(0, "entry point '" + entry + "' not found");
-	collect_globals();
+	collect_globals(*function);
+	if (stage == Stage::hull || stage == Stage::domain)
+		tessellation(*function);
 	initialize_statics();
 	entry_point(*function);
+	if (stage == Stage::hull) {
+		// The patch constant function runs once per patch, after the control points, with registers of its own.
+		const auto *name = attribute(*function, "patchconstantfunc");
+		const Function *constants = nullptr;
+		for (const auto &candidate : program.functions)
+			if (name && !name->empty() && candidate.name == (*name)[0] && candidate.body)
+				constants = &candidate;
+		if (!constants)
+			fail(function->line, "a hull shader needs [patchconstantfunc(\"name\")] naming a function");
+		control_code = std::move(code);
+		code.clear();
+		control_specials = std::move(special_inputs);
+		special_inputs.clear();
+		output_copies.clear();
+		// The control point phase ended with its return; the new phase starts reachable.
+		unreachable = false;
+		dead_depth = 0;
+		patch_phase = true;
+		initialize_statics();
+		entry_point(*constants);
+	}
 	finish(*function);
 	return std::move(out);
 }
 
 Generated generate(const Program &program, const std::string &entry, const std::string &target, uint32_t flags)
 {
-	Generator generator(program, flags);
-	return generator.run(entry, target);
+	try {
+		Generator generator(program, flags);
+		return generator.run(entry, target);
+	} catch (const GenerateError &error) {
+		// Texture offsets, resource array indices and the like must be constants: loops whose counter reaches them run unrolled, as the
+		// reference compiler does without being asked.
+		static const char *const constants_needed[] = {"must be literal", "needs a constant index", "must be a constant"};
+		if (std::none_of(std::begin(constants_needed), std::end(constants_needed), [&](const char *text) { return error.message.find(text) != std::string::npos; }))
+			throw;
+		Generator generator(program, flags);
+		generator.unroll_all = true;
+		return generator.run(entry, target);
+	}
 }
 
 }

@@ -1192,7 +1192,8 @@ enum {
 	OP_DCL_INPUT_PS_SIV = 100, OP_DCL_INDEXABLE_TEMP = 105, OP_GATHER4 = 109, OP_EMIT_STREAM = 117, OP_CUT_STREAM = 118,
 	OP_GATHER4_C = 126, OP_GATHER4_PO = 127, OP_GATHER4_PO_C = 128, OP_F32TOF16 = 130, OP_F16TOF32 = 131, OP_DCL_THREAD_GROUP = 155,
 	OP_LD_UAV_TYPED = 163, OP_STORE_UAV_TYPED = 164, OP_LD_RAW = 165, OP_LD_STRUCTURED = 167, OP_ATOMIC_FIRST = 169, OP_ATOMIC_LAST = 189,
-	OP_SYNC = 190, OP_DCL_GS_INSTANCE_COUNT = 206
+	OP_SYNC = 190, OP_DCL_GS_INSTANCE_COUNT = 206, OP_DCL_INPUT_CONTROL_POINT_COUNT = 147, OP_DCL_OUTPUT_CONTROL_POINT_COUNT = 148,
+	OP_DCL_TESS_DOMAIN = 149, OP_DCL_TESS_PARTITIONING = 150, OP_DCL_TESS_OUTPUT_PRIMITIVE = 151
 };
 
 static BOOL is_bitwise(UINT opcode)
@@ -1236,6 +1237,16 @@ static void read_program(reflection *object)
 		case OP_DCL_MAX_OUTPUT_VERTEX_COUNT: desc->GSMaxOutputVertexCount = word_at(&part, at * 4 + 4); break;
 		case OP_DCL_GS_INSTANCE_COUNT: desc->cGSInstanceCount = word_at(&part, at * 4 + 4); break;
 		case OP_DCL_INDEXABLE_TEMP: desc->TempArrayCount += word_at(&part, at * 4 + 8); break;
+		/* A hull shader reports the control points it puts out, a domain shader those it reads. The tessellator's settings
+		 * share their numbering with D3D_TESSELLATOR_DOMAIN, _PARTITIONING and _OUTPUT_PRIMITIVE. */
+		case OP_DCL_INPUT_CONTROL_POINT_COUNT:
+			if (!desc->cControlPoints)
+				desc->cControlPoints = token >> 11 & 0x3f;
+			break;
+		case OP_DCL_OUTPUT_CONTROL_POINT_COUNT: desc->cControlPoints = token >> 11 & 0x3f; break;
+		case OP_DCL_TESS_DOMAIN: desc->TessellatorDomain = (D3D_TESSELLATOR_DOMAIN)(token >> 11 & 3); break;
+		case OP_DCL_TESS_PARTITIONING: desc->HSPartitioning = (D3D_TESSELLATOR_PARTITIONING)(token >> 11 & 7); break;
+		case OP_DCL_TESS_OUTPUT_PRIMITIVE: desc->HSOutputPrimitive = (D3D_TESSELLATOR_OUTPUT_PRIMITIVE)(token >> 11 & 7); break;
 		case OP_DCL_THREAD_GROUP:
 			object->group[0] = word_at(&part, at * 4 + 4);
 			object->group[1] = word_at(&part, at * 4 + 8);

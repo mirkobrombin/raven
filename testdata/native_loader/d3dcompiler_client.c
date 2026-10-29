@@ -75,6 +75,15 @@ static const char compute[] =
 	"RWStructuredBuffer<uint> output : register(u0);\n"
 	"[numthreads(8, 4, 1)] void main(uint3 id : SV_DispatchThreadID) { output[id.y * 8 + id.x] = id.x + VALUE; }\n";
 
+static const char tessellation[] =
+	"struct Point { float3 position : POSITION; };\n"
+	"struct Constants { float edges[3] : SV_TessFactor; float inside : SV_InsideTessFactor; };\n"
+	"Constants constants(InputPatch<Point, 3> patch) { Constants c; c.edges[0] = c.edges[1] = c.edges[2] = 4; c.inside = 2; return c; }\n"
+	"[domain(\"tri\")] [partitioning(\"integer\")] [outputtopology(\"triangle_cw\")] [outputcontrolpoints(3)] [patchconstantfunc(\"constants\")]\n"
+	"Point hull(InputPatch<Point, 3> patch, uint i : SV_OutputControlPointID) { return patch[i]; }\n"
+	"[domain(\"tri\")] float4 domain(Constants c, float3 at : SV_DomainLocation, const OutputPatch<Point, 3> patch) : SV_Position\n"
+	"{ return float4(patch[0].position * at.x + patch[1].position * at.y + patch[2].position * at.z, c.inside); }\n";
+
 int raven_entry(void)
 {
 	ID3DBlob *code = NULL, *errors = NULL, *part = NULL;
@@ -171,6 +180,22 @@ int raven_entry(void)
 	if (desc.BoundResources != 1)
 		return 24;
 	ID3D11ShaderReflection_Release(reflector);
+	ID3D10Blob_Release(code);
+
+	/* Hull and domain shaders, with the tessellator's settings in their reflection. */
+	if (D3DCompile(tessellation, sizeof(tessellation) - 1, NULL, NULL, NULL, "hull", "hs_5_0", 0, 0, &code, &errors) != S_OK)
+		return 26;
+	if (D3DReflect(ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), &IID_ID3D11ShaderReflection, (void **)&reflector) != S_OK)
+		return 27;
+	ID3D11ShaderReflection_GetDesc(reflector, &desc);
+	if (desc.Version >> 16 != 3 || desc.cControlPoints != 3 || desc.TessellatorDomain != D3D_TESSELLATOR_DOMAIN_TRI ||
+		desc.HSPartitioning != D3D_TESSELLATOR_PARTITIONING_INTEGER || desc.HSOutputPrimitive != D3D_TESSELLATOR_OUTPUT_TRIANGLE_CW ||
+		desc.PatchConstantParameters != 4)
+		return 28;
+	ID3D11ShaderReflection_Release(reflector);
+	ID3D10Blob_Release(code);
+	if (D3DCompile(tessellation, sizeof(tessellation) - 1, NULL, NULL, NULL, "domain", "ds_5_0", 0, 0, &code, NULL) != S_OK)
+		return 29;
 	ID3D10Blob_Release(code);
 
 	/* Blobs made by the program. */

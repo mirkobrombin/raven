@@ -8,6 +8,15 @@ namespace raven::shader {
 
 namespace {
 
+// A new expression or statement node of a kind, every other field at its default.
+template<typename Node>
+std::unique_ptr<Node> make_node(typename Node::Kind kind)
+{
+	auto made = std::make_unique<Node>();
+	made->kind = kind;
+	return made;
+}
+
 struct ParseError : std::runtime_error {
 	uint32_t line;
 	ParseError(uint32_t line, const std::string &message) : std::runtime_error(message), line(line) {}
@@ -105,8 +114,8 @@ private:
 		if (token.kind != TokenKind::identifier)
 			return false;
 		static const char *const prefixes[] = {"const", "static", "uniform", "row_major", "column_major", "volatile", "extern", "groupshared",
-			"precise", "inline", "linear", "centroid", "nointerpolation", "noperspective", "sample", "in", "out", "inout", "struct", "vector",
-			"matrix", "void", "snorm", "unorm", "globallycoherent", "shared"};
+			"precise", "inline", "linear", "centroid", "nointerpolation", "noperspective", "sample", "in", "out", "inout", "struct", "class", "vector",
+			"matrix", "void", "snorm", "unorm", "globallycoherent", "shared", "unsigned", "signed"};
 		for (const auto prefix : prefixes)
 			if (token.text == prefix)
 				return true;
@@ -191,9 +200,17 @@ private:
 		Type result;
 		if (accept("void"))
 			return result;
-		if (is("struct")) {
+		if (is("struct") || is("class")) {
 			result.shape = Type::Shape::structure;
 			result.structure = structure_definition();
+			return result;
+		}
+		// "unsigned int" is uint, "signed int" int.
+		if (is("unsigned") || is("signed")) {
+			const bool is_unsigned = next().text == "unsigned";
+			accept("int");
+			result = Type::make_scalar(is_unsigned ? Scalar::unsigned_integer : Scalar::integer);
+			result.row_major = row_major;
 			return result;
 		}
 		const auto name = identifier();
@@ -233,6 +250,15 @@ private:
 		}
 		result.row_major = row_major;
 		return result;
+	}
+
+	void skip_braces()
+	{
+		int depth = 0;
+		do {
+			depth += is("{") ? 1 : is("}") ? -1 : 0;
+			++at;
+		} while (depth && peek().kind != TokenKind::end);
 	}
 
 	void array_suffix(Type &type)
@@ -325,8 +351,16 @@ private:
 
 	std::shared_ptr<StructType> structure_definition()
 	{
-		expect("struct");
+		if (!accept("class"))
+			expect("struct");
 		std::string name = peek().kind == TokenKind::identifier ? next().text : "";
+		std::shared_ptr<StructType> base;
+		if (accept(":")) {
+			const auto base_name = identifier();
+			base = find_struct(base_name);
+			if (!base)
+				fail("unknown structure '" + base_name + "'");
+		}
 		if (!is("{")) {
 			if (const auto existing = find_struct(name))
 				return existing;
@@ -334,11 +368,23 @@ private:
 		}
 		auto structure = std::make_shared<StructType>();
 		structure->name = name;
+		structure->base = base;
+		if (base)
+			structure->members = base->members;
 		program.structures.push_back(structure);
 		expect("{");
 		while (!accept("}")) {
 			Member member;
 			member.type = type(&member.modifiers);
+			if (peek().kind == TokenKind::identifier && is("(", 1)) {
+				Function method;
+				method.result = member.type;
+				method.owner = structure.get();
+				method.line = peek().line;
+				method.name = identifier();
+				function_rest(std::move(method));
+				continue;
+			}
 			for (;;) {
 				Member item = member;
 				item.name = identifier();
@@ -373,6 +419,72 @@ private:
 		return list;
 	}
 
+	// The parameters, semantic and body of a function or method whose name was just read.
+	void function_rest(Function function)
+	{
+		expect("(");
+		while (!accept(")")) {
+			Parameter parameter;
+			std::vector<std::string> parameter_modifiers;
+			// Geometry shader inputs and outputs name their primitive or stream before the type.
+			static const char *const leading[] = {"in", "out", "inout", "uniform", "point", "line", "triangle", "lineadj", "triangleadj"};
+			for (bool found = true; found;) {
+				found = false;
+				for (const auto word : leading)
+					if (is(word) && peek(1).kind == TokenKind::identifier) {
+						parameter_modifiers.push_back(word);
+						++at;
+						found = true;
+					}
+			}
+			// A domain shader's control points come as a const OutputPatch.
+			while (is("const") && (is("in", 1) || is("InputPatch", 1) || is("OutputPatch", 1)))
+				++at;
+			if (is("in") && (is("InputPatch", 1) || is("OutputPatch", 1)))
+				++at;
+			if (is("TriangleStream") || is("LineStream") || is("PointStream") || is("InputPatch") || is("OutputPatch")) {
+				parameter_modifiers.push_back(next().text);
+				auto arguments = template_arguments();
+				parameter.type = arguments.empty() ? Type{} : type_from_text(arguments[0]);
+				if (arguments.size() > 1)
+					parameter.type.array.push_back(uint32_t(std::stoul(arguments[1])));
+			} else
+				parameter.type = type(&parameter_modifiers);
+			for (const auto &modifier : parameter_modifiers) {
+				if (modifier == "out") {
+					parameter.is_in = false;
+					parameter.is_out = true;
+				} else if (modifier == "inout")
+					parameter.is_out = true;
+				else if (modifier == "uniform")
+					parameter.is_uniform = true;
+			}
+			parameter.modifiers = std::move(parameter_modifiers);
+			parameter.name = identifier();
+			array_suffix(parameter.type);
+			annotations(parameter.semantic, nullptr, nullptr, nullptr);
+			if (accept("="))
+				parameter.default_value = assignment();
+			function.parameters.push_back(std::move(parameter));
+			if (!is(")"))
+				expect(",");
+		}
+		annotations(function.semantic, nullptr, nullptr, nullptr);
+		if (accept(";")) {
+			program.functions.push_back(std::move(function));
+			return;
+		}
+		function.body = block();
+		// A later definition replaces an earlier prototype of the same signature.
+		for (auto &existing : program.functions)
+			if (existing.name == function.name && existing.owner == function.owner && !existing.body &&
+				existing.parameters.size() == function.parameters.size()) {
+				existing = std::move(function);
+				return;
+			}
+		program.functions.push_back(std::move(function));
+	}
+
 	void top_level()
 	{
 		if (accept(";"))
@@ -388,6 +500,24 @@ private:
 				program.aliases.emplace_back(std::move(name), item);
 				if (!accept(","))
 					break;
+			}
+			expect(";");
+			return;
+		}
+		// What the effect framework adds to a shader source, techniques and render state objects, means nothing to a shader target.
+		if (is("technique") || is("technique10") || is("technique11") || is("fxgroup")) {
+			while (!is("{") && peek().kind != TokenKind::end)
+				++at;
+			skip_braces();
+			accept(";");
+			return;
+		}
+		if (is("BlendState") || is("DepthStencilState") || is("RasterizerState")) {
+			while (!is(";") && peek().kind != TokenKind::end) {
+				if (is("{"))
+					skip_braces();
+				else
+					++at;
 			}
 			expect(";");
 			return;
@@ -410,7 +540,7 @@ private:
 			program.buffers.push_back(std::move(buffer));
 			return;
 		}
-		if (is("struct") && (is("{", 2) || (is(";", 2)))) {
+		if ((is("struct") || is("class")) && (is("{", 2) || is(";", 2) || is(":", 2))) {
 			structure_definition();
 			expect(";");
 			return;
@@ -425,61 +555,7 @@ private:
 			function.result = result;
 			function.line = peek().line;
 			function.name = identifier();
-			expect("(");
-			while (!accept(")")) {
-				Parameter parameter;
-				std::vector<std::string> parameter_modifiers;
-				// Geometry shader inputs and outputs name their primitive or stream before the type.
-				static const char *const leading[] = {"in", "out", "inout", "uniform", "point", "line", "triangle", "lineadj", "triangleadj"};
-				for (bool found = true; found;) {
-					found = false;
-					for (const auto word : leading)
-						if (is(word) && peek(1).kind == TokenKind::identifier) {
-							parameter_modifiers.push_back(word);
-							++at;
-							found = true;
-						}
-				}
-				if (is("TriangleStream") || is("LineStream") || is("PointStream") || is("InputPatch") || is("OutputPatch")) {
-					parameter_modifiers.push_back(next().text);
-					auto arguments = template_arguments();
-					parameter.type = arguments.empty() ? Type{} : type_from_text(arguments[0]);
-					if (arguments.size() > 1)
-						parameter.type.array.push_back(uint32_t(std::stoul(arguments[1])));
-				} else
-					parameter.type = type(&parameter_modifiers);
-				for (const auto &modifier : parameter_modifiers) {
-					if (modifier == "out") {
-						parameter.is_in = false;
-						parameter.is_out = true;
-					} else if (modifier == "inout")
-						parameter.is_out = true;
-					else if (modifier == "uniform")
-						parameter.is_uniform = true;
-				}
-				parameter.modifiers = std::move(parameter_modifiers);
-				parameter.name = identifier();
-				array_suffix(parameter.type);
-				annotations(parameter.semantic, nullptr, nullptr, nullptr);
-				if (accept("="))
-					parameter.default_value = assignment();
-				function.parameters.push_back(std::move(parameter));
-				if (!is(")"))
-					expect(",");
-			}
-			annotations(function.semantic, nullptr, nullptr, nullptr);
-			if (accept(";")) {
-				program.functions.push_back(std::move(function));
-				return;
-			}
-			function.body = block();
-			// A later definition replaces an earlier prototype of the same signature.
-			for (auto &existing : program.functions)
-				if (existing.name == function.name && !existing.body && existing.parameters.size() == function.parameters.size()) {
-					existing = std::move(function);
-					return;
-				}
-			program.functions.push_back(std::move(function));
+			function_rest(std::move(function));
 			return;
 		}
 		at = start;
@@ -509,13 +585,9 @@ private:
 			array_suffix(variable.type);
 			annotations(variable.semantic, &variable.register_class, &variable.register_index, &variable.pack_offset);
 			// Sampler state blocks of the effect framework are skipped.
-			if (is("{") && variable.type.shape == Type::Shape::object) {
-				int depth = 0;
-				do {
-					depth += is("{") ? 1 : is("}") ? -1 : 0;
-					++at;
-				} while (depth && peek().kind != TokenKind::end);
-			} else if (accept("="))
+			if (is("{") && variable.type.shape == Type::Shape::object)
+				skip_braces();
+			else if (accept("="))
 				variable.initializer = is("{") ? initializer_list() : assignment();
 			list.push_back(std::move(variable));
 			if (!accept(","))
@@ -527,7 +599,7 @@ private:
 
 	ExprPtr initializer_list()
 	{
-		auto list = std::make_unique<Expr>(Expr{Expr::Kind::initializer_list});
+		auto list = make_node<Expr>(Expr::Kind::initializer_list);
 		list->line = peek().line;
 		expect("{");
 		while (!accept("}")) {
@@ -540,7 +612,7 @@ private:
 
 	std::unique_ptr<Stmt> block()
 	{
-		auto statement = std::make_unique<Stmt>(Stmt{Stmt::Kind::block});
+		auto statement = make_node<Stmt>(Stmt::Kind::block);
 		statement->line = peek().line;
 		expect("{");
 		while (!accept("}")) {
@@ -553,7 +625,7 @@ private:
 
 	StmtPtr make(Stmt::Kind kind)
 	{
-		auto statement = std::make_unique<Stmt>(Stmt{kind});
+		auto statement = make_node<Stmt>(kind);
 		statement->line = peek().line;
 		return statement;
 	}
@@ -676,7 +748,7 @@ private:
 
 	ExprPtr node(Expr::Kind kind, std::string text, uint32_t line)
 	{
-		auto expr = std::make_unique<Expr>(Expr{kind});
+		auto expr = make_node<Expr>(kind);
 		expr->text = std::move(text);
 		expr->line = line;
 		return expr;

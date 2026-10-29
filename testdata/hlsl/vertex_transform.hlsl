@@ -1,6 +1,8 @@
 // compile: main vs_4_0
 // compile: main vs_5_0
 // compile: skinned vs_5_0
+// compile: instanced vs_4_0
+// compile: instanced vs_5_0
 
 cbuffer Camera : register(b0)
 {
@@ -58,4 +60,16 @@ Output skinned(Input input)
 	output.uv = input.uv;
 	output.light = max(0, dot(output.normal, -light_direction));
 	return output;
+}
+
+// Bones read through a texture register.
+tbuffer Instances : register(t2)
+{
+	float4x4 instances[64];
+	float4 offset;
+};
+
+float4 instanced(Input input, uint instance : SV_InstanceID) : SV_Position
+{
+	return mul(float4(input.position, 1.0), instances[instance]) + offset;
 }

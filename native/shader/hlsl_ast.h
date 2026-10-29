@@ -60,6 +60,8 @@ struct Member {
 struct StructType {
 	std::string name;
 	std::vector<Member> members;
+	// The structure this one derives from, whose members come first and whose methods it inherits.
+	std::shared_ptr<StructType> base;
 };
 
 struct Expr;
@@ -127,6 +129,8 @@ struct Function {
 	std::unique_ptr<Stmt> body;
 	// [numthreads(x, y, z)], [maxvertexcount(n)], [domain("tri")] and the rest, with their arguments as written.
 	std::vector<std::pair<std::string, std::vector<std::string>>> attributes;
+	// A method: the structure it belongs to, whose members its body names directly.
+	const StructType *owner = nullptr;
 	uint32_t line = 0;
 };
 
