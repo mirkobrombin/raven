@@ -1654,6 +1654,9 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		return slots;
 	};
 	const auto tls = make_slots(1088), fls = make_slots(4080);
+	// TLS slot 0 is taken before the program runs, as the system libraries of a Windows process take it: programs (older Rust runtimes
+	// among them) take an index of 0 for "not allocated" and stop when TlsAlloc gives it.
+	tls->used[0] = true;
 	// The thread block mirrors values for the guest-side fast paths of Tls/FlsGetValue (and TlsSetValue).
 	const auto bind = [&](const char *prefix, std::shared_ptr<Slots> slots, bool callback) {
 		const std::string base = prefix;

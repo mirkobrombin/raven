@@ -35,7 +35,9 @@ private:
 	std::map<uint64_t, Srw> locks;
 	std::map<uint64_t, std::vector<std::shared_ptr<bool>>> sleepers;
 	std::map<uint32_t, std::map<uint32_t, uint32_t>> tls_values;
-	std::vector<bool> tls_used = std::vector<bool>(1088, false);
+	// Slot 0 is taken before the program runs, as the system libraries of a Windows process take it: programs (older Rust runtimes
+	// among them) take an index of 0 for "not allocated".
+	std::vector<bool> tls_used = [] { std::vector<bool> used(1088, false); used[0] = true; return used; }();
 	uint32_t unique_counter = 1;
 	uint32_t wait(const std::vector<uint64_t> &handles, bool all, uint32_t milliseconds);
 	void lock_exclusive(uint64_t address);
