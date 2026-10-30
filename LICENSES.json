@@ -70,6 +70,7 @@
         "native/upstream/raven-tools/tool.h",
         "native/upstream/raven-tools/where.c",
         "native/upstream/raven-tools/whoami.c",
+        "native/upstream/raven-tools/rundll32.c",
         "native/upstream/raven-tools/xcopy.c",
         "native/upstream/raven-uianimation/uianimation.c",
         "native/upstream/raven-uianimation/uianimation_tables.h",

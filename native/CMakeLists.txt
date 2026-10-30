@@ -2682,7 +2682,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         # The command-line tools a prefix has beside cmd, one program each as Windows has them, for each width; MORE is a .com.
         set(RAVEN_TOOLS_DIRECTORY ${PROJECT_SOURCE_DIR}/native/upstream/raven-tools)
         set(RAVEN_TOOL_HEADERS ${RAVEN_TOOLS_DIRECTORY}/tool.h ${RAVEN_TOOLS_DIRECTORY}/processes.h)
-        foreach(tool find findstr more sort where xcopy attrib timeout choice whoami hostname tasklist taskkill reg)
+        foreach(tool find findstr more sort where xcopy attrib timeout choice whoami hostname tasklist taskkill reg rundll32)
             set(tool_file ${tool}.exe)
             if(tool STREQUAL "more")
                 set(tool_file more.com)
@@ -2703,6 +2703,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         add_custom_target(raven_cmd ALL DEPENDS ${RAVEN_CMD_OUTPUTS})
         add_dependencies(raven raven_cmd)
+        # rundll32 reaches a library's entry by name, its wide form first, with the rest of the command line.
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/rundll32-fixture.dll
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -shared -fno-stack-protector -Wl,--entry,raven_library_entry,--no-insert-timestamp
+                -o ${CMAKE_CURRENT_BINARY_DIR}/rundll32-fixture.dll ${LOADER_SOURCES}/rundll32_fixture.c -lkernel32
+            DEPENDS ${LOADER_SOURCES}/rundll32_fixture.c VERBATIM)
+        add_custom_target(rundll32_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/rundll32-fixture.dll)
+        add_test(NAME native_rundll32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/rundll32.exe -- rundll32-fixture.dll,Report 7)
+        set_tests_properties(native_rundll32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 47[^0-9]")
+        add_test(NAME native_rundll32_wide COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/rundll32.exe -- rundll32-fixture.dll,Reported 7)
+        set_tests_properties(native_rundll32_wide PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 57[^0-9]")
         # Batch files through CreateProcess, cmd /c, and commands piped to the prompt, for 64-bit and 32-bit callers.
         add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-tree-loop-distribute-patterns -fno-stack-protector

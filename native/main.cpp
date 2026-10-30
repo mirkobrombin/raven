@@ -315,7 +315,7 @@ int main(int argc, char **argv)
 						for (const auto &[from, folder] : {std::pair{runtime, "system32"}, std::pair{runtime / "x86", "syswow64"}})
 							for (const char *program : {"cmd.exe", "msiexec.exe", "regsvr32.exe", "control.exe", "dism.exe", "fondue.exe", "regedit.exe", "mscoree.dll", "riched20.dll",
 									"msftedit.dll", "l_intl.nls", "find.exe", "findstr.exe", "more.com", "sort.exe", "where.exe", "xcopy.exe", "attrib.exe",
-									"timeout.exe", "choice.exe", "whoami.exe", "hostname.exe", "tasklist.exe", "taskkill.exe", "reg.exe"}) {
+									"timeout.exe", "choice.exe", "whoami.exe", "hostname.exe", "tasklist.exe", "taskkill.exe", "reg.exe", "rundll32.exe"}) {
 								std::error_code error;
 								// The 64-bit Registry Editor lives in the Windows folder itself.
 								const bool windows_folder = std::string_view(program) == "regedit.exe" && std::string_view(folder) == "system32";
