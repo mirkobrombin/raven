@@ -1482,6 +1482,155 @@ HRESULT WINAPI SHGetMalloc(LPMALLOC *out)
 	return CoGetMalloc(MEMCTX_TASK, out);
 }
 
+/* ---- the free-threaded marshaler ----
+ * CoCreateFreeThreadedMarshaler makes the object an agile object aggregates: its IMarshal hands an interface pointer to another
+ * apartment of the same process as the pointer itself, so every apartment calls the object directly. The marshaled form is the
+ * marshal flags and the pointer, read back by the same object's UnmarshalInterface. No other process takes COM calls here, so a
+ * destination outside the process is refused. */
+typedef struct {
+	IUnknown inner;
+	IMarshal marshal;
+	IUnknown *outer;
+	LONG references;
+} FreeMarshaler;
+
+typedef struct {
+	DWORD flags, reserved;
+	ULONGLONG pointer;
+} FreeMarshalData;
+
+static const CLSID in_process_free_marshaler = {0x0000033a, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+
+static FreeMarshaler *free_marshaler_inner(IUnknown *self) { return CONTAINING_RECORD(self, FreeMarshaler, inner); }
+static FreeMarshaler *free_marshaler(IMarshal *self) { return CONTAINING_RECORD(self, FreeMarshaler, marshal); }
+static BOOL in_process(DWORD context) { return context == MSHCTX_INPROC || context == MSHCTX_CROSSCTX; }
+
+static HRESULT WINAPI free_inner_query(IUnknown *self, REFIID iid, void **out)
+{
+	FreeMarshaler *marshaler = free_marshaler_inner(self);
+	if (!out)
+		return E_POINTER;
+	if (same_iid(iid, &IID_IUnknown))
+		*out = &marshaler->inner;
+	else if (same_iid(iid, &IID_IMarshal))
+		*out = &marshaler->marshal;
+	else {
+		*out = NULL;
+		return E_NOINTERFACE;
+	}
+	IUnknown_AddRef((IUnknown *)*out);
+	return S_OK;
+}
+
+static ULONG WINAPI free_inner_reference(IUnknown *self) { return InterlockedIncrement(&free_marshaler_inner(self)->references); }
+
+static ULONG WINAPI free_inner_release(IUnknown *self)
+{
+	FreeMarshaler *marshaler = free_marshaler_inner(self);
+	const ULONG left = InterlockedDecrement(&marshaler->references);
+	if (!left)
+		HeapFree(GetProcessHeap(), 0, marshaler);
+	return left;
+}
+
+static IUnknownVtbl free_inner_table = {free_inner_query, free_inner_reference, free_inner_release};
+
+static HRESULT WINAPI free_query(IMarshal *self, REFIID iid, void **out) { return IUnknown_QueryInterface(free_marshaler(self)->outer, iid, out); }
+static ULONG WINAPI free_reference(IMarshal *self) { return IUnknown_AddRef(free_marshaler(self)->outer); }
+static ULONG WINAPI free_release(IMarshal *self) { return IUnknown_Release(free_marshaler(self)->outer); }
+
+static HRESULT WINAPI free_unmarshal_class(IMarshal *self, REFIID iid, void *object, DWORD context, void *reserved, DWORD flags, CLSID *out)
+{
+	if (!out)
+		return E_POINTER;
+	if (!in_process(context))
+		return CO_E_NOT_SUPPORTED;
+	*out = in_process_free_marshaler;
+	return S_OK;
+}
+
+static HRESULT WINAPI free_size_max(IMarshal *self, REFIID iid, void *object, DWORD context, void *reserved, DWORD flags, DWORD *out)
+{
+	if (!out)
+		return E_POINTER;
+	if (!in_process(context))
+		return CO_E_NOT_SUPPORTED;
+	*out = sizeof(FreeMarshalData);
+	return S_OK;
+}
+
+static HRESULT WINAPI free_marshal(IMarshal *self, IStream *stream, REFIID iid, void *object, DWORD context, void *reserved, DWORD flags)
+{
+	IUnknown *pointer;
+	if (!stream || !object)
+		return E_INVALIDARG;
+	if (!in_process(context))
+		return CO_E_NOT_SUPPORTED;
+	HRESULT result = IUnknown_QueryInterface((IUnknown *)object, iid, (void **)&pointer);
+	if (FAILED(result))
+		return result;
+	FreeMarshalData data = {flags, 0, (ULONGLONG)(ULONG_PTR)pointer};
+	result = IStream_Write(stream, &data, sizeof data, NULL);
+	/* A normal or table-strong marshal keeps its reference until the data is unmarshaled or released; a table-weak one keeps none. */
+	if (FAILED(result) || flags == MSHLFLAGS_TABLEWEAK)
+		IUnknown_Release(pointer);
+	return result;
+}
+
+static HRESULT read_marshal_data(IStream *stream, FreeMarshalData *data)
+{
+	ULONG read = 0;
+	const HRESULT result = stream ? IStream_Read(stream, data, sizeof *data, &read) : E_INVALIDARG;
+	return FAILED(result) ? result : read == sizeof *data ? S_OK : STG_E_READFAULT;
+}
+
+static HRESULT WINAPI free_unmarshal(IMarshal *self, IStream *stream, REFIID iid, void **out)
+{
+	FreeMarshalData data;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	HRESULT result = read_marshal_data(stream, &data);
+	if (FAILED(result))
+		return result;
+	IUnknown *pointer = (IUnknown *)(ULONG_PTR)data.pointer;
+	result = IUnknown_QueryInterface(pointer, iid, out);
+	if (data.flags == MSHLFLAGS_NORMAL)
+		IUnknown_Release(pointer);
+	return result;
+}
+
+static HRESULT WINAPI free_release_data(IMarshal *self, IStream *stream)
+{
+	FreeMarshalData data;
+	const HRESULT result = read_marshal_data(stream, &data);
+	if (SUCCEEDED(result) && data.flags != MSHLFLAGS_TABLEWEAK)
+		IUnknown_Release((IUnknown *)(ULONG_PTR)data.pointer);
+	return result;
+}
+
+static HRESULT WINAPI free_disconnect(IMarshal *self, DWORD reserved) { return S_OK; }
+
+static IMarshalVtbl free_marshal_table = {free_query, free_reference, free_release, free_unmarshal_class, free_size_max, free_marshal,
+	free_unmarshal, free_release_data, free_disconnect};
+
+HRESULT WINAPI CoCreateFreeThreadedMarshaler(LPUNKNOWN outer, LPUNKNOWN *out)
+{
+	if (!out)
+		return E_INVALIDARG;
+	FreeMarshaler *marshaler = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *marshaler);
+	if (!marshaler) {
+		*out = NULL;
+		return E_OUTOFMEMORY;
+	}
+	marshaler->inner.lpVtbl = &free_inner_table;
+	marshaler->marshal.lpVtbl = &free_marshal_table;
+	marshaler->outer = outer ? outer : &marshaler->inner;
+	marshaler->references = 1;
+	*out = &marshaler->inner;
+	return S_OK;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
 	return TRUE;

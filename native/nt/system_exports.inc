@@ -2612,12 +2612,12 @@ static constexpr std::string_view dsound_exports[]{
 	"DirectSoundEnumerateA","DirectSoundEnumerateW","DirectSoundFullDuplexCreate","DllCanUnloadNow","DllGetClassObject","GetDeviceID",
 };
 static constexpr std::string_view combase_exports[]{
-	"CLSIDFromString","CoCreateGuid","CoCreateInstance","CoDecrementMTAUsage","CoGetApartmentType","CoGetMalloc",
-	"CoIncrementMTAUsage","CoInitializeEx","CoTaskMemAlloc","CoTaskMemFree","CoTaskMemRealloc","CoUninitialize",
-	"GetErrorInfo","RoActivateInstance","RoGetActivationFactory","RoGetParameterizedTypeInstanceIID","RoInitialize","RoOriginateError",
-	"RoOriginateErrorW","RoOriginateLanguageException","RoParseTypeName","RoResolveNamespace","RoUninitialize","SetErrorInfo",
-	"StringFromGUID2","WindowsCompareStringOrdinal","WindowsCreateString","WindowsCreateStringReference","WindowsDeleteString","WindowsDuplicateString",
-	"WindowsGetStringLen","WindowsGetStringRawBuffer","WindowsIsStringEmpty",
+	"CLSIDFromString","CoCreateFreeThreadedMarshaler","CoCreateGuid","CoCreateInstance","CoDecrementMTAUsage","CoGetApartmentType",
+	"CoGetMalloc","CoIncrementMTAUsage","CoInitializeEx","CoTaskMemAlloc","CoTaskMemFree","CoTaskMemRealloc",
+	"CoUninitialize","GetErrorInfo","RoActivateInstance","RoGetActivationFactory","RoGetParameterizedTypeInstanceIID","RoInitialize",
+	"RoOriginateError","RoOriginateErrorW","RoOriginateLanguageException","RoParseTypeName","RoResolveNamespace","RoUninitialize",
+	"SetErrorInfo","StringFromGUID2","WindowsCompareStringOrdinal","WindowsCreateString","WindowsCreateStringReference","WindowsDeleteString",
+	"WindowsDuplicateString","WindowsGetStringLen","WindowsGetStringRawBuffer","WindowsIsStringEmpty",
 };
 static constexpr std::string_view wer_exports[]{
 	"WerAddExcludedApplication","WerFreeString","WerRemoveExcludedApplication","WerReportAddDump","WerReportAddFile","WerReportCloseHandle",

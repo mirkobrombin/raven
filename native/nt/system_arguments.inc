@@ -2509,7 +2509,7 @@ static constexpr std::pair<std::string_view, uint8_t> dsound_words[]{
 	{"DirectSoundEnumerateA",2},{"DirectSoundEnumerateW",2},{"DirectSoundFullDuplexCreate",10},{"GetDeviceID",2},
 };
 static constexpr std::pair<std::string_view, uint8_t> combase_words[]{
-	{"CLSIDFromString",2},{"CoCreateGuid",1},{"CoCreateInstance",5},{"CoDecrementMTAUsage",1},{"CoGetApartmentType",2},{"CoGetMalloc",2},
+	{"CLSIDFromString",2},{"CoCreateFreeThreadedMarshaler",2},{"CoCreateGuid",1},{"CoCreateInstance",5},{"CoDecrementMTAUsage",1},{"CoGetApartmentType",2},{"CoGetMalloc",2},
 	{"CoIncrementMTAUsage",1},{"CoInitializeEx",2},{"CoTaskMemAlloc",1},{"CoTaskMemFree",1},{"CoTaskMemRealloc",2},{"CoUninitialize",0},
 	{"GetErrorInfo",2},{"RoActivateInstance",2},{"RoGetActivationFactory",3},{"RoGetParameterizedTypeInstanceIID",5},{"RoInitialize",1},{"RoOriginateError",2},
 	{"RoOriginateErrorW",3},{"RoOriginateLanguageException",3},{"RoParseTypeName",3},{"RoResolveNamespace",7},{"RoUninitialize",0},{"SetErrorInfo",2},

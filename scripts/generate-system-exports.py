@@ -61,7 +61,7 @@ NAMES_ONLY = {"ravenhost": ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo"
 # atlthunk.dll, the window procedure thunks of Windows 10, has no import library in mingw-w64; its four functions are listed here.
 NAMES_ONLY["atlthunk"] = ["AtlThunk_AllocateData", "AtlThunk_DataToCode", "AtlThunk_FreeData", "AtlThunk_InitData"]
 # combase.dll, Windows' COM and Windows Runtime base, has no import library in mingw-w64: the functions programs and the .NET runtime take from it.
-COMBASE_WORDS = {"CLSIDFromString": 2, "CoCreateGuid": 1, "CoCreateInstance": 5, "CoDecrementMTAUsage": 1, "CoGetApartmentType": 2,
+COMBASE_WORDS = {"CLSIDFromString": 2, "CoCreateFreeThreadedMarshaler": 2, "CoCreateGuid": 1, "CoCreateInstance": 5, "CoDecrementMTAUsage": 1, "CoGetApartmentType": 2,
                  "CoGetMalloc": 2, "CoIncrementMTAUsage": 1, "CoInitializeEx": 2, "CoTaskMemAlloc": 1, "CoTaskMemFree": 1, "CoTaskMemRealloc": 2,
                  "CoUninitialize": 0, "GetErrorInfo": 2, "RoActivateInstance": 2, "RoGetActivationFactory": 3,
                  "RoGetParameterizedTypeInstanceIID": 5, "RoInitialize": 1, "RoOriginateError": 2, "RoOriginateErrorW": 3,
