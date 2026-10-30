@@ -1230,6 +1230,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		return result;
 	};
 	windows.set_call(invoke);
+	desktop.set_call(invoke);
 	guest_threads.set_runner(invoke);
 	// Threads announce themselves to the images that keep per-thread state: TLS callbacks first, then the library entry points.
 	guest_threads.set_notifier([&](uint32_t reason) {

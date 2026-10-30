@@ -876,7 +876,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 				call.ret(0);
 				return;
 			}
-			// A process without a way to call back into its code, as 32-bit programs are here, enumerates no family rather than fail.
+			// A process without a way to call back into its code enumerates no family rather than fail.
 			if (!invoke) {
 				call.ret(1);
 				return;
