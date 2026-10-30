@@ -24,37 +24,32 @@ int32_t DesktopMetrics::get(int32_t index) const
 	}
 }
 
-struct Nonclient {
-	const DesktopMetrics &metrics;
-	using BOOL=int32_t;
-	using DWORD=uint32_t;
-	using VOID=void;
-	// Wide intermediates avoid signed overflow; the public RECT is serialized modulo 32 bits.
-	struct RECT { int64_t left,top,right,bottom; };
-	struct SIZE { int64_t cx,cy; };
-	using LPRECT=RECT *;
-	static constexpr BOOL TRUE=1,FALSE=0;
-	static constexpr DWORD WS_MINIMIZE=0x20000000,WS_THICKFRAME=0x40000,WS_CAPTION=0xc00000,WS_DLGFRAME=0x400000;
-	static constexpr DWORD WS_EX_DLGMODALFRAME=1,WS_EX_STATICEDGE=0x20000,WS_EX_CLIENTEDGE=0x200,WS_EX_TOOLWINDOW=0x80;
-	static constexpr int SM_CXFRAME=32,SM_CYFRAME=33,SM_CXDLGFRAME=7,SM_CYDLGFRAME=8,SM_CXBORDER=5,SM_CYBORDER=6;
-	static constexpr int SM_CYMENU=15,SM_CYSMCAPTION=51,SM_CYCAPTION=4;
-	int32_t GetSystemMetrics(int index) const { return metrics.get(index); }
-	BOOL InflateRect(LPRECT rect,int64_t x,int64_t y)
-	{
-		rect->left-=x; rect->top-=y; rect->right+=x; rect->bottom+=y;
-		return TRUE;
-	}
-#define WINAPI
-#include "../upstream/reactos-nonclient/borders.inc"
-#undef WINAPI
-};
-
+// How many border widths the frame around the client area takes: a raised edge is two, a static edge one, a window with any caption bit adds
+// the line of its border, and a client edge two more. A minimized window's frame does not resize, so the sizing part is left out.
 DesktopRect adjust_window_rect(const DesktopMetrics &metrics,DesktopRect rect,uint32_t style,bool menu,uint32_t ex_style)
 {
-	Nonclient component{metrics};
-	Nonclient::RECT result{rect.left,rect.top,rect.right,rect.bottom};
-	component.RealAdjustWindowRectEx(&result,style,menu,ex_style);
-	return {int32_t(uint32_t(result.left)),int32_t(uint32_t(result.top)),int32_t(uint32_t(result.right)),int32_t(uint32_t(result.bottom))};
+	constexpr uint32_t minimized=0x20000000,sizing=0x40000,dialog_frame=0x400000,caption_bits=0xc00000;
+	constexpr uint32_t modal_frame=1,client_edge=0x200,tool_window=0x80,static_edge=0x20000;
+	const bool raised=(style&minimized) || (ex_style&modal_frame) || (!(ex_style&static_edge) && (style&(sizing|dialog_frame)));
+	int64_t lines=raised ? 2 : (ex_style&static_edge) ? 1 : 0;
+	if (ex_style&client_edge)
+		lines+=2;
+	if ((style&caption_bits) || (ex_style&modal_frame))
+		++lines;
+	int64_t across=lines,down=lines;
+	if ((style&sizing) && !(style&minimized)) {
+		across+=int64_t(metrics.get(32))-metrics.get(7);
+		down+=int64_t(metrics.get(33))-metrics.get(8);
+	}
+	across*=metrics.get(5);
+	down*=metrics.get(6);
+	// Wide intermediates avoid signed overflow; the public RECT is serialized modulo 32 bits.
+	int64_t top=rect.top;
+	if (menu)
+		top-=metrics.get(15);
+	if ((style&caption_bits)==caption_bits)
+		top-=metrics.get((ex_style&tool_window) ? 51 : 4);
+	return {int32_t(uint32_t(rect.left-across)),int32_t(uint32_t(top-down)),int32_t(uint32_t(rect.right+across)),int32_t(uint32_t(rect.bottom+down))};
 }
 
 }

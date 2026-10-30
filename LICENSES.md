@@ -11,7 +11,6 @@ GPLv3 license applied to every file.
 | Component | Terms and source |
 | --- | --- |
 | Linux `raven` and `raven-bootstrap` | GPL-3.0-or-later; root LICENSE |
-| Window-border functions linked into the host | LGPL-2.1-or-later; `native/upstream/reactos-nonclient/provenance.json` |
 | Original Raven PE adapters | MIT; exact file list in LICENSES.json and terms in LICENSES/MIT.txt |
 | ReactOS-derived PE controls, RTL, installer and optional text components | Distributed under GPL version 2 with the original GPL, LGPL, BSD and other source notices retained; pinned recipes and modifications in `scripts/provision-*.py` and `native/upstream` |
 | CP1252 build converter | GPL-2.0-or-later; build tool, not linked into the host |
@@ -24,10 +23,6 @@ GPLv3 license applied to every file.
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
 | ReactOS delay-import test helper | MIT; `native/upstream/reactos-delayimp` |
-
-The native link contains the selected window-border functions. Its
-GPLv3 source distribution includes the material needed to modify and rebuild the
-LGPL portion, as LGPL-2.1 section 6 permits. Source notices remain intact.
 
 The PE guest components are loaded and executed in the supervised Windows
 process. They are not ELF libraries linked or loaded into the Linux host. Their

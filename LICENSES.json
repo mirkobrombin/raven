@@ -103,15 +103,6 @@
       "boundary": "Original Raven code compiled into PE guest components, not the Linux host. Imported source and file notices are excluded."
     },
     {
-      "name": "ReactOS nonclient",
-      "paths": [
-        "native/upstream/reactos-nonclient"
-      ],
-      "license": "LGPL-2.1-or-later",
-      "review": "reviewed",
-      "provenance": "native/upstream/reactos-nonclient/provenance.json"
-    },
-    {
       "name": "CP1252 data",
       "paths": [
         "native/upstream/reactos-nls/c_1252.txt"
