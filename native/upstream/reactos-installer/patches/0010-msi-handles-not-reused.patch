@@ -1,0 +1,34 @@
+--- a/dll/win32/msi/handle.c
++++ b/dll/win32/msi/handle.c
+@@ -79,13 +79,16 @@
+ 
+ static MSIHANDLE alloc_handle_table_entry(void)
+ {
+-    UINT i;
++    /* Raven: slots are taken in turn, so a late close from a custom action that has ended cannot reach the handle of the next one. */
++    static UINT next_slot;
++    UINT i, tried;
+ 
+     /* find a slot */
+-    for(i = 0; i < handle_table_size; i++)
++    i = handle_table_size ? next_slot % handle_table_size : 0;
++    for(tried = 0; tried < handle_table_size; tried++, i = (i + 1) % handle_table_size)
+         if (!handle_table[i].u.obj && !handle_table[i].u.rem)
+             break;
+-    if (i == handle_table_size)
++    if (tried == handle_table_size)
+     {
+         struct handle_info *p;
+         int newsize;
+@@ -102,9 +105,11 @@
+         }
+         if (!p)
+             return 0;
++        i = handle_table_size;
+         handle_table = p;
+         handle_table_size = newsize;
+     }
++    next_slot = i + 1;
+     return i + 1;
+ }
+ 
