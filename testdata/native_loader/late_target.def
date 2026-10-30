@@ -1,0 +1,3 @@
+LIBRARY late_target
+EXPORTS
+	Add=target_add @7

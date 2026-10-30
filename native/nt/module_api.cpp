@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 namespace raven {
@@ -80,19 +81,31 @@ uint64_t NativeModuleAPI::procedure(uint64_t handle, uint64_t name)
 	}
 	const bool ordinal = name <= UINT16_MAX;
 	const auto symbol = ordinal ? std::string{} : guest_name(name, false).value();
-	try {
-		return modules.resolve({found->first, symbol, static_cast<uint16_t>(ordinal ? name : 0), ordinal, 0});
-	} catch (const std::runtime_error &error) {
-		const std::string_view message = error.what();
-		if (std::getenv("RAVEN_TRACE_FAIL"))
-			std::cerr << "raven: GetProcAddress " << found->first << ' ' << (ordinal ? "#" + std::to_string(name) : symbol) << " fails: " << message << '\n';
-		if (message.starts_with("missing PE export:"))
-			environment.set_last_error(127);
-		else if (message.starts_with("missing PE module:"))
-			environment.set_last_error(126);
-		else
-			throw;
-		return 0;
+	// Loading a forwarder's target adds to the modules, so the module's name is kept apart from the entry that found it.
+	const std::string module = found->first;
+	// A forwarder names the library its target lives in; the lookup loads that library when no one has yet, as the loader does for an
+	// import, and goes on. Each library is tried once, so a chain that cannot be completed ends.
+	std::set<std::string> loaded;
+	for (;;) {
+		try {
+			return modules.resolve({module, symbol, static_cast<uint16_t>(ordinal ? name : 0), ordinal, 0});
+		} catch (const std::runtime_error &error) {
+			const std::string_view message = error.what();
+			if (message.starts_with("missing PE module: ") && load) {
+				std::string target(message.substr(19));
+				if (loaded.insert(target).second && load(target))
+					continue;
+			}
+			if (std::getenv("RAVEN_TRACE_FAIL"))
+				std::cerr << "raven: GetProcAddress " << module << ' ' << (ordinal ? "#" + std::to_string(name) : symbol) << " fails: " << message << '\n';
+			if (message.starts_with("missing PE export:"))
+				environment.set_last_error(127);
+			else if (message.starts_with("missing PE module:"))
+				environment.set_last_error(126);
+			else
+				throw;
+			return 0;
+		}
 	}
 }
 
