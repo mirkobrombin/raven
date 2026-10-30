@@ -2053,6 +2053,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_child_environment_page_end COMMAND raven --run-process --execution=native ${CHILD_ENVIRONMENT_CLIENT})
             set_tests_properties(native_child_environment_page_end PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/child-environment-prefix)
+            # The ntdll forms of kernel32 functions, ending with RtlExitUserProcess.
+            set(NTDLL_ALIAS_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/ntdll-alias.exe)
+            add_custom_command(OUTPUT ${NTDLL_ALIAS_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1eb200000,--no-insert-timestamp
+                    -o ${NTDLL_ALIAS_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ntdll_alias_client.c -lntdll -lucrtbase -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ntdll_alias_client.c VERBATIM)
+            add_custom_target(ntdll_alias_fixture ALL DEPENDS ${NTDLL_ALIAS_CLIENT})
+            add_test(NAME native_ntdll_aliases COMMAND raven --run-process --execution=native ${NTDLL_ALIAS_CLIENT})
+            set_tests_properties(native_ntdll_aliases PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native process exited with status 0"
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ntdll-alias-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)

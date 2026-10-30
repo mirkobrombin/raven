@@ -307,14 +307,17 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		const auto zone = zone_at(time_t((utc - filetime_epoch_offset) / 10000000ULL));
 		call.write(call[0], system_time(utc + int64_t(zone.offset_minutes) * 600000000LL));
 	});
-	registry.add("QueryPerformanceCounter", 1, [](ApiCall &call) {
-		call.store<uint64_t>(call[0], counter_ticks());
-		call.ret(1);
-	});
-	registry.add("QueryPerformanceFrequency", 1, [](ApiCall &call) {
-		call.store<uint64_t>(call[0], 10000000ULL);
-		call.ret(1);
-	});
+	// The performance counter, in kernel32's form and ntdll's (RtlQueryPerformanceCounter), which answers TRUE the same way.
+	for (const auto *name : {"QueryPerformanceCounter", "RtlQueryPerformanceCounter"})
+		registry.add(name, 1, [](ApiCall &call) {
+			call.store<uint64_t>(call[0], counter_ticks());
+			call.ret(1);
+		});
+	for (const auto *name : {"QueryPerformanceFrequency", "RtlQueryPerformanceFrequency"})
+		registry.add(name, 1, [](ApiCall &call) {
+			call.store<uint64_t>(call[0], 10000000ULL);
+			call.ret(1);
+		});
 	registry.add("GetTickCount64", 0, [](ApiCall &call) { call.ret(counter_ticks() / 10000); });
 	registry.add("GetTickCount", 0, [](ApiCall &call) { call.ret(uint32_t(counter_ticks() / 10000)); });
 	// winmm timers: the host clock already has millisecond resolution, so periods are accepted and change nothing.

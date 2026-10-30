@@ -1182,7 +1182,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				process.abandon_call();
 				throw ProcessExit{uint32_t(words[1]), result.instruction};
 			}
-			if (api == "ExitProcess" || api == "exit" || api == "_exit") {
+			if (api == "ExitProcess" || api == "RtlExitUserProcess" || api == "exit" || api == "_exit") {
 				const auto code = uint32_t(process.api_arguments(1)[0]);
 				process.abandon_call();
 				throw ProcessExit{code, result.instruction};
