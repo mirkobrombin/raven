@@ -2031,6 +2031,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_junction COMMAND raven --run-process --execution=native ${JUNCTION_CLIENT})
             set_tests_properties(native_junction PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/junction-prefix)
+            # The fibers of a 64-bit program, which the guest RTL component serves for kernel32.
+            set(FIBER_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/fiber64.exe)
+            add_custom_command(OUTPUT ${FIBER_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ea800000,--no-insert-timestamp
+                    -o ${FIBER_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/fiber_client.c -lucrtbase -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/fiber_client.c VERBATIM)
+            add_custom_target(fiber_fixture ALL DEPENDS ${FIBER_CLIENT})
+            add_test(NAME native_fiber_x64 COMMAND raven --run-process --execution=native ${FIBER_CLIENT})
+            set_tests_properties(native_fiber_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/fiber-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)

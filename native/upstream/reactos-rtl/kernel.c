@@ -277,3 +277,166 @@ VOID WINAPI RavenWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable)
 	if (*(volatile PVOID *)&variable->Ptr)
 		RtlWakeAllConditionVariable(variable);
 }
+
+/* ---- fibers: switching fibers only swaps registers and thread block fields, which the program's own thread does without the runtime.
+   The current fiber is the thread block's FiberData (gs:0x20), whose first word is the fiber's parameter, as GetFiberData reads it.
+   A switch keeps the callee-saved registers (xmm6 to xmm15 among them) and the floating point control words on the stack it leaves,
+   and the stack bounds of the thread block (StackBase, StackLimit, DeallocationStack) in the fiber. Fiber-local storage stays the
+   thread's. ---- */
+typedef struct {
+	PVOID data;
+	PVOID stack_base, stack_limit, deallocation_stack, stack_pointer;
+	LPFIBER_START_ROUTINE start;
+	/* The stack the fiber was created with, freed with it; null for a thread converted to a fiber. */
+	PVOID allocation;
+	SIZE_T allocation_size;
+} RAVEN_FIBER;
+
+/* SameTebFlags (TEB 0x17ee) bit HasFiberData, which IsThreadAFiber reads. */
+#define RAVEN_HAS_FIBER_DATA 0x4
+
+static USHORT *raven_same_teb_flags(void) { return (USHORT *)((PUCHAR)NtCurrentTeb() + 0x17ee); }
+static RAVEN_FIBER *raven_current_fiber(void) { return (RAVEN_FIBER *)NtCurrentTeb()->NtTib.FiberData; }
+
+static void raven_set_fiber(RAVEN_FIBER *fiber)
+{
+	NtCurrentTeb()->NtTib.FiberData = fiber;
+	if (fiber)
+		*raven_same_teb_flags() |= RAVEN_HAS_FIBER_DATA;
+	else
+		*raven_same_teb_flags() &= (USHORT)~RAVEN_HAS_FIBER_DATA;
+}
+
+/* SwitchToFiber: the record's stack bounds sit at 8, 16 and 24 and its stack pointer at 32. */
+__asm__(".text\n"
+	".globl RavenSwitchToFiber\n"
+	"RavenSwitchToFiber:\n\t"
+	"pushq %rbp\n\tpushq %rbx\n\tpushq %rdi\n\tpushq %rsi\n\tpushq %r12\n\tpushq %r13\n\tpushq %r14\n\tpushq %r15\n\t"
+	"subq $168, %rsp\n\t"
+	"movaps %xmm6, 0(%rsp)\n\tmovaps %xmm7, 16(%rsp)\n\tmovaps %xmm8, 32(%rsp)\n\tmovaps %xmm9, 48(%rsp)\n\t"
+	"movaps %xmm10, 64(%rsp)\n\tmovaps %xmm11, 80(%rsp)\n\tmovaps %xmm12, 96(%rsp)\n\tmovaps %xmm13, 112(%rsp)\n\t"
+	"movaps %xmm14, 128(%rsp)\n\tmovaps %xmm15, 144(%rsp)\n\t"
+	"stmxcsr 160(%rsp)\n\tfnstcw 164(%rsp)\n\t"
+	"movq %gs:0x20, %rax\n\t"
+	"movq %rsp, 32(%rax)\n\t"
+	"movq %gs:0x8, %rdx\n\tmovq %rdx, 8(%rax)\n\t"
+	"movq %gs:0x10, %rdx\n\tmovq %rdx, 16(%rax)\n\t"
+	"movq %gs:0x1478, %rdx\n\tmovq %rdx, 24(%rax)\n\t"
+	"movq %rcx, %gs:0x20\n\t"
+	"movq 8(%rcx), %rdx\n\tmovq %rdx, %gs:0x8\n\t"
+	"movq 16(%rcx), %rdx\n\tmovq %rdx, %gs:0x10\n\t"
+	"movq 24(%rcx), %rdx\n\tmovq %rdx, %gs:0x1478\n\t"
+	"movq 32(%rcx), %rsp\n\t"
+	"ldmxcsr 160(%rsp)\n\tfldcw 164(%rsp)\n\t"
+	"movaps 0(%rsp), %xmm6\n\tmovaps 16(%rsp), %xmm7\n\tmovaps 32(%rsp), %xmm8\n\tmovaps 48(%rsp), %xmm9\n\t"
+	"movaps 64(%rsp), %xmm10\n\tmovaps 80(%rsp), %xmm11\n\tmovaps 96(%rsp), %xmm12\n\tmovaps 112(%rsp), %xmm13\n\t"
+	"movaps 128(%rsp), %xmm14\n\tmovaps 144(%rsp), %xmm15\n\t"
+	"addq $168, %rsp\n\t"
+	"popq %r15\n\tpopq %r14\n\tpopq %r13\n\tpopq %r12\n\tpopq %rsi\n\tpopq %rdi\n\tpopq %rbx\n\tpopq %rbp\n\t"
+	"ret\n");
+VOID WINAPI RavenSwitchToFiber(PVOID fiber);
+
+/* A fiber whose start routine returns ends its thread, as on Windows. */
+void WINAPI raven_fiber_main(void)
+{
+	RAVEN_FIBER *fiber = raven_current_fiber();
+	fiber->start(fiber->data);
+	NtTerminateThread(NtCurrentThread(), 0);
+}
+
+/* Where a new fiber first runs, on a 16-byte aligned stack: home space, kept aligned for the call, then the routine above. */
+__asm__(".text\n"
+	"raven_fiber_entry:\n\t"
+	"subq $48, %rsp\n\t"
+	"call raven_fiber_main\n");
+void raven_fiber_entry(void);
+
+PVOID WINAPI RavenCreateFiberEx(SIZE_T commit, SIZE_T reserve, DWORD flags, LPFIBER_START_ROUTINE start, PVOID parameter)
+{
+	SIZE_T size = reserve > commit ? reserve : commit;
+	RAVEN_FIBER *fiber;
+	PVOID base = NULL;
+	if (!start) {
+		LAST_ERROR = ERROR_INVALID_PARAMETER;
+		return NULL;
+	}
+	size = ((size ? size : 1024 * 1024) + 0xffff) & ~(SIZE_T)0xffff;
+	fiber = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*fiber));
+	if (!fiber || !NT_SUCCESS(NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
+		if (fiber)
+			RtlFreeHeap(RtlGetProcessHeap(), 0, fiber);
+		LAST_ERROR = ERROR_NOT_ENOUGH_MEMORY;
+		return NULL;
+	}
+	fiber->allocation = base;
+	fiber->allocation_size = size;
+	fiber->data = parameter;
+	fiber->start = start;
+	fiber->stack_base = (PUCHAR)base + size;
+	fiber->stack_limit = base;
+	fiber->deallocation_stack = base;
+	/* The frame a switch resumes from, 16-byte aligned 256 bytes below the top: xmm6 to xmm15, the control words, the eight saved
+	   registers and the return into the entry. */
+	{
+		PUCHAR frame = (PUCHAR)fiber->stack_base - 256;
+		*(ULONG *)(frame + 160) = 0x1f80;
+		*(USHORT *)(frame + 164) = 0x27f;
+		((ULONG_PTR *)frame)[29] = (ULONG_PTR)raven_fiber_entry;
+		fiber->stack_pointer = frame;
+	}
+	(void)flags;
+	return fiber;
+}
+
+PVOID WINAPI RavenCreateFiber(SIZE_T size, LPFIBER_START_ROUTINE start, PVOID parameter) { return RavenCreateFiberEx(size, 0, 0, start, parameter); }
+
+BOOL WINAPI RavenIsThreadAFiber(void) { return (*raven_same_teb_flags() & RAVEN_HAS_FIBER_DATA) != 0; }
+
+PVOID WINAPI RavenConvertThreadToFiberEx(PVOID parameter, DWORD flags)
+{
+	RAVEN_FIBER *fiber;
+	(void)flags;
+	if (RavenIsThreadAFiber()) {
+		LAST_ERROR = ERROR_ALREADY_FIBER;
+		return NULL;
+	}
+	fiber = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*fiber));
+	if (!fiber) {
+		LAST_ERROR = ERROR_NOT_ENOUGH_MEMORY;
+		return NULL;
+	}
+	fiber->data = parameter;
+	raven_set_fiber(fiber);
+	return fiber;
+}
+
+PVOID WINAPI RavenConvertThreadToFiber(PVOID parameter) { return RavenConvertThreadToFiberEx(parameter, 0); }
+
+BOOL WINAPI RavenConvertFiberToThread(void)
+{
+	RAVEN_FIBER *fiber;
+	if (!RavenIsThreadAFiber()) {
+		LAST_ERROR = ERROR_ALREADY_THREAD;
+		return FALSE;
+	}
+	fiber = raven_current_fiber();
+	raven_set_fiber(NULL);
+	/* A thread runs on in whatever fiber it is in; only the record of a converted thread is its own to free. */
+	if (fiber && !fiber->allocation)
+		RtlFreeHeap(RtlGetProcessHeap(), 0, fiber);
+	return TRUE;
+}
+
+VOID WINAPI RavenDeleteFiber(PVOID handle)
+{
+	RAVEN_FIBER *fiber = handle;
+	SIZE_T size = 0;
+	if (!fiber)
+		return;
+	/* Deleting the running fiber ends the thread, whose stack that is. */
+	if (fiber == raven_current_fiber())
+		NtTerminateThread(NtCurrentThread(), 1);
+	if (fiber->allocation)
+		NtFreeVirtualMemory(NtCurrentProcess(), &fiber->allocation, &size, MEM_RELEASE);
+	RtlFreeHeap(RtlGetProcessHeap(), 0, fiber);
+}
