@@ -2042,6 +2042,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_fiber_x64 COMMAND raven --run-process --execution=native ${FIBER_CLIENT})
             set_tests_properties(native_fiber_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/fiber-prefix)
+            # An environment block for CreateProcessW that ends at the end of a page with nothing mapped after it.
+            set(CHILD_ENVIRONMENT_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/child-environment.exe)
+            add_custom_command(OUTPUT ${CHILD_ENVIRONMENT_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1eb100000,--no-insert-timestamp
+                    -o ${CHILD_ENVIRONMENT_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/child_environment_client.c -lntdll -lucrtbase -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/child_environment_client.c VERBATIM)
+            add_custom_target(child_environment_fixture ALL DEPENDS ${CHILD_ENVIRONMENT_CLIENT})
+            add_test(NAME native_child_environment_page_end COMMAND raven --run-process --execution=native ${CHILD_ENVIRONMENT_CLIENT})
+            set_tests_properties(native_child_environment_page_end PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/child-environment-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
