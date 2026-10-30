@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import urllib.request
 
@@ -18,9 +19,6 @@ REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "dll/win32/comctl32/",
             "win32ss/include/", "win32ss/user/user32/", "win32ss/user/rtl/")
-# Upstream user-mode sources of the user32 component, and the exports they define that user32 programs import.
-USER32_SOURCES = ("controls/button.c", "controls/combo.c", "controls/edit.c", "controls/listbox.c", "controls/static.c",
-                  "windows/dialog.c", "windows/draw.c", "windows/font.c", "windows/messagebox.c", "windows/text.c")
 IDLS = ("shtypes", "commoncontrols")
 
 
@@ -193,39 +191,29 @@ def main():
     if not wanted & {"user32", "shell", "crt", "dwrite", "d2d1", "uianimation"}:
         print(output / "comctl32.dll")
         return
-    # The user32 component: upstream user-mode sources on a bridge that stands in for the kernel services.
-    user_support = repo / "native/upstream/reactos-user32"
-    user_root = source / "win32ss/user/user32"
-    user_includes = [user_support / "shim", source / "win32ss/include", user_root / "include", *includes[1:]]
-    user_flags = ["-O2", "-nostdinc", "-isystem", gcc_include, "-fgnu89-inline", "-w", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600",
-                  "-D__REACTOS__", "-DUNICODE", "-D_UNICODE", cpu_define, *long_defines, "-DUSE_PSEH", "-Dwcsicmp=_wcsicmp",
-                  f"-ffile-prefix-map={source}=reactos", f"-ffile-prefix-map={repo}=raven", f"-ffile-prefix-map={output}=component",
-                  *["-I" + str(path) for path in user_includes]]
-    user_sources = [user_root / name for name in USER32_SOURCES] + [source / "win32ss/user/rtl/text.c",
-                    user_support / "bridge.c", user_support / "register.c", user_support / "scrollbar_control.c", support / "crt.c", support / "debug.c"]
+    # The user32 component: Raven code on the public headers, with resources it generates itself.
+    own_user32 = repo / "native/upstream/raven-user32"
+    user_flags = ["-O2", "-w", "-fno-builtin", "-D_USER32_", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600", "-DOEMRESOURCE", "-DUNICODE", "-D_UNICODE",
+                  f"-ffile-prefix-map={repo}=raven", "-I" + str(own_user32)]
+    user_sources = [own_user32 / name for name in ("button.c", "chars.c", "classes.c", "combo.c", "crt.c", "dialog.c", "draw.c", "edit.c", "listbox.c",
+                                                   "messagebox.c", "scrollbar.c", "static.c", "text.c")]
 
     def compile_user(path):
-        name = "user32_" + (path.parent.name + "_" if path.parent.name in ("windows", "controls", "rtl") else "") + path.stem
-        freestanding = ["-ffreestanding", "-fno-builtin", "-Uwcsicmp"] if path.name == "crt.c" else []
-        run([triple + "-gcc", "-c", *user_flags, *freestanding, path, "-o", objects / (name + ".o")])
-        return objects / (name + ".o")
+        run([triple + "-gcc", "-c", *user_flags, path, "-o", objects / ("user32_" + path.stem + ".o")])
+        return objects / ("user32_" + path.stem + ".o")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         user_objects = list(pool.map(compile_user, user_sources))
-    run([output / "spec2def", spec_arch, "-n=user32.dll", "-d=" + str(output / "user32.def"), user_root / "user32.spec"])
-    public = {match.group(1) for match in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s|=|@|$)", (output / "user32.def").read_text(), re.M)}
     defined = decorated(user_objects)
-    # FrameRect and FillRect keep the measured host behavior (error codes for invalid brushes and device contexts).
-    exported = sorted((public & set(defined)) - {"EXPORTS", "NAME", "FrameRect", "FillRect"})
-    (output / "raven-user32.def").write_text("NAME raven-user32.dll\nEXPORTS\n" + "".join(definition_line(name, defined[name]) for name in exported) +
-                                             definition_line("RavenInitControls", defined.get("RavenInitControls", 0)))
-    # The built-in bitmaps, icons, cursors and strings that user32 serves to LoadBitmap and LoadImage without a module.
-    run([triple + "-windres", "--preprocessor=" + str(wrapper), "-O", "coff", "-DLANGUAGE_EN_US", "-D__REACTOS__", "-D_WIN32_IE=0x0A00",
-         cpu_define, "-I" + str(user_root), "-I" + str(user_root / "include"), "-I" + str(generated / "reactos"),
-         "-i", user_root / "user32.rc", "-o", objects / "user32.res.o"])
+    exported = (own_user32 / "exports.txt").read_text().split()
+    (output / "raven-user32.def").write_text("NAME raven-user32.dll\nEXPORTS\n" + "".join(definition_line(name, defined[name]) for name in exported))
+    # The built-in bitmaps and icons that user32 serves to LoadBitmap and LoadImage without a module.
+    resources = output / "user32-resources"
+    run([sys.executable, own_user32 / "make_resources.py", resources])
+    run([triple + "-windres", "-O", "coff", "-I", resources, "-i", resources / "user32.rc", "-o", objects / "user32.res.o"])
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,{bases['user32']:#x},--no-insert-timestamp", *link_extra,
-         "-o", output / "raven-user32.dll", *user_objects, *pseh_objects, objects / "user32.res.o", output / "raven-user32.def",
-         "-luser32", "-lgdi32", "-ladvapi32", "-lkernel32", "-lntdll", "-limm32", "-lusp10", "-lgcc"])
+         "-o", output / "raven-user32.dll", *user_objects, objects / "user32.res.o", output / "raven-user32.def",
+         "-luser32", "-lgdi32", "-lkernel32", "-lgcc"])
     if not wanted & {"shell", "crt", "dwrite", "d2d1", "uianimation"}:
         print(output / "raven-user32.dll")
         return

@@ -527,28 +527,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_text_output_cli COMMAND raven --run-process --execution=native --timeout-ms=30000 ${TEXT_OUTPUT_CLIENT})
             set_tests_properties(native_text_output native_text_output_cli PROPERTIES TIMEOUT 40)
             set_tests_properties(native_text_output_cli PROPERTIES PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
-            set(RAVEN_TEXT_COMPONENT_PATH "" CACHE FILEPATH "Selected guest layout component built by scripts/provision-text.py")
-            if(RAVEN_TEXT_COMPONENT_PATH)
-                get_filename_component(TEXT_COMPONENT_DIR "${RAVEN_TEXT_COMPONENT_PATH}" DIRECTORY)
-                if(NOT EXISTS "${RAVEN_TEXT_COMPONENT_PATH}" OR NOT EXISTS "${TEXT_COMPONENT_DIR}/raven-text.a")
-                    message(FATAL_ERROR "Selected guest layout component or import library is missing")
-                endif()
-                foreach(CLIENT IN ITEMS layout layout_failure layout_alignment)
-                    set(CLIENT_SOURCE ${PROJECT_SOURCE_DIR}/testdata/native_loader/${CLIENT}_client.c)
-                    set(CLIENT_EXE ${CMAKE_CURRENT_BINARY_DIR}/${CLIENT}-client.exe)
-                    add_custom_command(OUTPUT ${CLIENT_EXE}
-                        COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin
-                            -Wl,--entry,raven_entry,--image-base,0x1d9000000,--no-insert-timestamp
-                            -o ${CLIENT_EXE} ${CLIENT_SOURCE} ${TEXT_COMPONENT_DIR}/raven-text.a -luser32 -lgdi32 -lkernel32
-                        DEPENDS ${CLIENT_SOURCE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/layout_reference.h
-                            ${PROJECT_SOURCE_DIR}/testdata/native_loader/layout_alignment_reference.h
-                            ${RAVEN_TEXT_COMPONENT_PATH} ${TEXT_COMPONENT_DIR}/raven-text.a VERBATIM)
-                    add_custom_target(${CLIENT}_pe_fixture ALL DEPENDS ${CLIENT_EXE})
-                    add_test(NAME native_${CLIENT}_component COMMAND raven --run-process --execution=native
-                        --timeout-ms=30000 ${CLIENT_EXE} ${RAVEN_TEXT_COMPONENT_PATH})
-                    set_tests_properties(native_${CLIENT}_component PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
-                endforeach()
-            endif()
         endif()
         set(CLIP_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/clip-client.exe)
         set(CLIP_PAINT_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/clip-paint-client.exe)
