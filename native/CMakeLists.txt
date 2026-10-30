@@ -2119,6 +2119,31 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_lcmap_string_lengths COMMAND raven --run-process --execution=native ${LCMAP_CLIENT})
             set_tests_properties(native_lcmap_string_lengths PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/lcmap-prefix)
+            # A private side-by-side assembly a library's own manifest depends on, in its folder beside the program (as Ruby ships its libraries).
+            if(RAVEN_WINDRES)
+                set(PRIVATE_ASSEMBLY_DIR ${CMAKE_CURRENT_BINARY_DIR}/private-assembly)
+                file(MAKE_DIRECTORY ${PRIVATE_ASSEMBLY_DIR}/raven.private)
+                set(PRIVATE_ASSEMBLY_CLIENT ${PRIVATE_ASSEMBLY_DIR}/private-assembly.exe)
+                add_custom_command(OUTPUT ${PRIVATE_ASSEMBLY_CLIENT}
+                    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/raven.private.manifest ${PRIVATE_ASSEMBLY_DIR}/raven.private/raven.private.manifest
+                    COMMAND ${RAVEN_MINGW64} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,DllMainCRTStartup,--no-insert-timestamp
+                        -o ${PRIVATE_ASSEMBLY_DIR}/raven.private/private_target.dll ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_target.c -lkernel32
+                    COMMAND ${RAVEN_WINDRES} private_middle.rc ${PRIVATE_ASSEMBLY_DIR}/private_middle_res.o
+                    COMMAND ${RAVEN_MINGW64} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,DllMainCRTStartup,--no-insert-timestamp
+                        -o ${PRIVATE_ASSEMBLY_DIR}/private_middle.dll ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_middle.c
+                        ${PRIVATE_ASSEMBLY_DIR}/private_middle_res.o ${PRIVATE_ASSEMBLY_DIR}/raven.private/private_target.dll -lkernel32
+                    COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                        -Wl,--entry,raven_entry,--image-base,0x1ebb00000,--no-insert-timestamp
+                        -o ${PRIVATE_ASSEMBLY_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_assembly_client.c ${PRIVATE_ASSEMBLY_DIR}/private_middle.dll -lkernel32
+                    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/testdata/native_loader
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_assembly_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_middle.c
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_target.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_middle.rc
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/private_middle.manifest ${PROJECT_SOURCE_DIR}/testdata/native_loader/raven.private.manifest VERBATIM)
+                add_custom_target(private_assembly_fixture ALL DEPENDS ${PRIVATE_ASSEMBLY_CLIENT})
+                add_test(NAME native_private_assembly COMMAND raven --run-process --execution=native ${PRIVATE_ASSEMBLY_CLIENT})
+                set_tests_properties(native_private_assembly PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/private-assembly-prefix)
+            endif()
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)

@@ -24,7 +24,8 @@ public:
 		std::vector<Assembly> dependencies;
 		// The operating systems the manifest's compatibility section names, as lower-case GUIDs.
 		std::vector<std::string> supported_os;
-		// The assembly's folder in the side-by-side store, named like its manifest there; empty for a program's own manifest.
+		// The assembly's folder in the side-by-side store, named like its manifest there, or the absolute host folder of a private
+		// assembly; empty for a program's own manifest.
 		std::string folder;
 	};
 	struct Context {
@@ -37,7 +38,9 @@ public:
 	void attach(KernelContext &kernel);
 	// Before the process exists, as its first libraries are found: the host folder of the side-by-side store's manifests, the
 	// program's width and its own manifest.
-	void prepare(const std::filesystem::path &manifests, bool wide, std::string_view program_manifest);
+	// Private assemblies, which carry no public key token, are looked for in the program's folder when it is given.
+	void prepare(const std::filesystem::path &manifests, bool wide, std::string_view program_manifest,
+		const std::filesystem::path &application_folder = {});
 	// The side-by-side folder that serves a library named alone: an assembly the context in effect depends on, directly or through
 	// another, declares the file. The loader looks there before any other place, as Windows redirects it.
 	std::optional<std::filesystem::path> library_folder(std::string_view name) const;
@@ -76,13 +79,15 @@ public:
 
 private:
 	KernelContext *kernel = nullptr;
-	std::filesystem::path manifests;
+	std::filesystem::path manifests, application;
 	std::optional<Assembly> program;
 	std::map<uint64_t, Context> contexts;
 	std::map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> stacks;
 	uint64_t next_handle = 0x7e000001, next_cookie = 1, process_default = 0;
 	std::optional<Version> layer_version;
 	std::optional<Assembly> resolve(const Assembly &identity) const;
+	// The host folder an assembly's files are in.
+	std::filesystem::path folder_of(const Assembly &assembly) const;
 	const Assembly *declaring(const Assembly &root, std::string_view name, uint32_t &index) const;
 };
 

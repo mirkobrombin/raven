@@ -398,7 +398,8 @@ int main(int argc, char **argv)
 								manifest.assign(reinterpret_cast<const char *>(bytes.data()), bytes.size());
 								break;
 							}
-						raven::activation_contexts().prepare(prefix.root() / "drive_c" / "windows" / "WinSxS" / "Manifests", entry->image.is_64, manifest);
+						raven::activation_contexts().prepare(prefix.root() / "drive_c" / "windows" / "WinSxS" / "Manifests", entry->image.is_64, manifest,
+							std::filesystem::absolute(argv[first_file]).parent_path());
 					}
 					// A library of the other width is passed over, as the Windows loader goes on searching past it.
 					const auto find_file = [&](const std::filesystem::path &folder, std::string_view name) {
