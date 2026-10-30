@@ -158,7 +158,7 @@ constexpr std::string_view shared_allowed[] = {
 	"RegCloseKey", "RegDisablePredefinedCache", "RegDisablePredefinedCacheEx", "RegCreateKeyExA", "RegCreateKeyExW", "RegOpenKeyA", "RegOpenKeyW", "RegOpenKeyExA", "RegOpenKeyExW", "RegQueryValueExA",
 	"RegQueryValueExW", "RegSetValueExA", "RegSetValueExW", "RegDeleteKeyA", "RegDeleteKeyW", "RegDeleteValueA", "RegDeleteValueW",
 	"RegEnumKeyA", "RegEnumKeyW", "RegEnumKeyExA", "RegEnumKeyExW", "RegEnumValueA", "RegEnumValueW", "RegGetValueA", "RegGetValueW",
-	"GetAdaptersInfo", "RtlConvertDeviceFamilyInfoToString", "GetPackagesByPackageFamily", "GetUserDefaultGeoName", "SLGetWindowsInformation", "SLGetWindowsInformationDWORD",
+	"GetAdaptersInfo", "GetNetworkParams", "RtlConvertDeviceFamilyInfoToString", "GetPackagesByPackageFamily", "GetUserDefaultGeoName", "SLGetWindowsInformation", "SLGetWindowsInformationDWORD",
 	"GetWindowLongW", "SetWindowLongW", "GetFileVersionInfoA", "GetFileVersionInfoExW", "GetFileVersionInfoSizeA", "GetFileVersionInfoSizeExW",
 	"GetFileVersionInfoSizeW", "GetFileVersionInfoW", "VerQueryValueA", "VerQueryValueW", "GetSystemDirectoryW", "GetSystemDirectoryA", "GetWindowsDirectoryW", "LocalAlloc", "LocalReAlloc", "GlobalReAlloc", "GlobalSize", "GetComputerNameA",
 	"GetComputerNameW", "FileTimeToSystemTime", "SystemTimeToFileTime", "GetTimeZoneInformation", "GetCurrentProcessId", "SetFileAttributesA",

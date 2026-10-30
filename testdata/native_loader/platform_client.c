@@ -383,6 +383,15 @@ int raven_entry(void)
 		return 62;
 	if (GetAdaptersInfo(NULL, NULL) != ERROR_INVALID_PARAMETER)
 		return 63;
+	{
+		FIXED_INFO fixed;
+		ULONG fixed_size = 0;
+		if (GetNetworkParams(NULL, NULL) != ERROR_INVALID_PARAMETER || GetNetworkParams(NULL, &fixed_size) != ERROR_BUFFER_OVERFLOW ||
+			fixed_size != sizeof(fixed))
+			return 64;
+		if (GetNetworkParams(&fixed, &fixed_size) != NO_ERROR || !fixed.HostName[0])
+			return 65;
+	}
 
 	if (!CryptProtectData(&plain, L"note", &entropy, NULL, NULL, 0, &sealed) || sealed.cbData <= plain.cbData)
 		return 8;

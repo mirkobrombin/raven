@@ -327,6 +327,34 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		(void)skip_anycast; (void)skip_multicast;
 		call.ret(0);
 	});
+	// FIXED_INFO: the host's name and the first resolver of its configuration, which is the whole server list.
+	registry.add("GetNetworkParams", 2, [](ApiCall &call) {
+		if (!call[1]) {
+			call.ret(error_invalid_parameter);
+			return;
+		}
+		const size_t width = call.pointer_width();
+		const size_t list_at = 264 + width, string_size = (width + 36 + width - 1) & ~(width - 1);
+		const size_t node_at = list_at + string_size, record = (node_at + 276 + width - 1) & ~(width - 1);
+		if (!call[0] || call.load<uint32_t>(call[1]) < record) {
+			call.store<uint32_t>(call[1], uint32_t(record));
+			call.ret(error_buffer_overflow);
+			return;
+		}
+		std::vector<uint8_t> block(record);
+		char host[132] = {};
+		::gethostname(host, sizeof(host) - 1);
+		std::memcpy(block.data(), host, std::strlen(host));
+		std::ifstream configuration("/etc/resolv.conf");
+		for (std::string line; std::getline(configuration, line);)
+			if (line.starts_with("nameserver ") && line.find(':') == line.npos && line.size() - 11 < 16) {
+				std::memcpy(block.data() + list_at + width, line.data() + 11, line.size() - 11);
+				break;
+			}
+		block[node_at] = 1;
+		call.write(call[0], std::span<const uint8_t>(block));
+		call.ret(0);
+	});
 	// The IPv4 adapters in IP_ADAPTER_INFO records, loopback left out; addresses past the first of an adapter are chained after the records.
 	registry.add("GetAdaptersInfo", 2, [](ApiCall &call) {
 		if (!call[1]) {
