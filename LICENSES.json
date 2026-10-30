@@ -22,6 +22,14 @@
     {
       "name": "Raven guest adapters",
       "paths": [
+        "native/upstream/raven-cabinet/README.md",
+        "native/upstream/raven-cabinet/cabinet.spec",
+        "native/upstream/raven-cabinet/compose.c",
+        "native/upstream/raven-cabinet/extract.c",
+        "native/upstream/raven-cabinet/format.h",
+        "native/upstream/raven-cabinet/lzx.c",
+        "native/upstream/raven-cabinet/quantum.c",
+        "native/upstream/raven-cabinet/session.c",
         "native/upstream/raven-cmd/cmd.c",
         "native/upstream/raven-control/control.c",
         "native/upstream/raven-control/control.manifest",
@@ -49,6 +57,13 @@
         "native/upstream/raven-mscoree/mscoree.c",
         "native/upstream/raven-mscoree/mscoree32.def",
         "native/upstream/raven-mscoree/mscoree64.def",
+        "native/upstream/raven-rtl/README.md",
+        "native/upstream/raven-rtl/heap.c",
+        "native/upstream/raven-rtl/kernel.c",
+        "native/upstream/raven-rtl/memory.c",
+        "native/upstream/raven-rtl/raven-rtl.def",
+        "native/upstream/raven-rtl/raven_rtl.h",
+        "native/upstream/raven-rtl/tables.c",
         "native/upstream/raven-shell/com.c",
         "native/upstream/raven-shell/dialog.c",
         "native/upstream/raven-shell/link.c",
@@ -63,6 +78,8 @@
         "native/upstream/raven-tools/more.c",
         "native/upstream/raven-tools/processes.h",
         "native/upstream/raven-tools/reg.c",
+        "native/upstream/raven-tools/regsvr32.c",
+        "native/upstream/raven-tools/rundll32.c",
         "native/upstream/raven-tools/sort.c",
         "native/upstream/raven-tools/taskkill.c",
         "native/upstream/raven-tools/tasklist.c",
@@ -70,10 +87,32 @@
         "native/upstream/raven-tools/tool.h",
         "native/upstream/raven-tools/where.c",
         "native/upstream/raven-tools/whoami.c",
-        "native/upstream/raven-tools/rundll32.c",
         "native/upstream/raven-tools/xcopy.c",
         "native/upstream/raven-uianimation/uianimation.c",
         "native/upstream/raven-uianimation/uianimation_tables.h",
+        "native/upstream/raven-user32/README.md",
+        "native/upstream/raven-user32/button.c",
+        "native/upstream/raven-user32/chars.c",
+        "native/upstream/raven-user32/classes.c",
+        "native/upstream/raven-user32/combo.c",
+        "native/upstream/raven-user32/crt.c",
+        "native/upstream/raven-user32/dialog.c",
+        "native/upstream/raven-user32/draw.c",
+        "native/upstream/raven-user32/edit.c",
+        "native/upstream/raven-user32/exports.txt",
+        "native/upstream/raven-user32/listbox.c",
+        "native/upstream/raven-user32/make_resources.py",
+        "native/upstream/raven-user32/messagebox.c",
+        "native/upstream/raven-user32/scrollbar.c",
+        "native/upstream/raven-user32/static.c",
+        "native/upstream/raven-user32/text.c",
+        "native/upstream/raven-user32/user32_private.h",
+        "native/upstream/raven-xmllite/README.md",
+        "native/upstream/raven-xmllite/guid.c",
+        "native/upstream/raven-xmllite/reader.c",
+        "native/upstream/raven-xmllite/shared.h",
+        "native/upstream/raven-xmllite/writer.c",
+        "native/upstream/raven-xmllite/xmllite.spec",
         "native/upstream/reactos-controls/crt.c",
         "native/upstream/reactos-controls/debug.c",
         "native/upstream/reactos-controls/guids.c",
@@ -85,18 +124,7 @@
         "native/upstream/reactos-installer/printers.c",
         "native/upstream/reactos-installer/setup.c",
         "native/upstream/reactos-installer/storage.c",
-        "native/upstream/reactos-installer/support.c",
-        "native/upstream/reactos-rtl/initialize.c",
-        "native/upstream/reactos-rtl/kernel.c",
-        "native/upstream/reactos-rtl/raven-rtl.def",
-        "native/upstream/reactos-text/user32.h",
-        "native/upstream/reactos-text/wine/debug.h",
-        "native/upstream/reactos-text/wrapper.c",
-        "native/upstream/reactos-user32/bridge.c",
-        "native/upstream/reactos-user32/register.c",
-        "native/upstream/reactos-user32/scrollbar_control.c",
-        "native/upstream/reactos-user32/shim/ndk/exfuncs.h",
-        "native/upstream/reactos-user32/shim/user32.h"
+        "native/upstream/reactos-installer/support.c"
       ],
       "license": "MIT",
       "review": "reviewed",
@@ -130,15 +158,6 @@
       "provenance": "native/upstream/reactos-nls/single-byte-provenance.json"
     },
     {
-      "name": "ReactOS NLS converter",
-      "paths": [
-        "native/upstream/reactos-nls/txt2nls.cpp"
-      ],
-      "license": "GPL-2.0-or-later",
-      "review": "reviewed",
-      "boundary": "Build tool, not linked into raven"
-    },
-    {
       "name": "ReactOS controls",
       "cmake_keys": [
         "RAVEN_CONTROLS_COMPONENT_DIR",
@@ -152,16 +171,13 @@
       "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
     },
     {
-      "name": "ReactOS RTL",
+      "name": "Raven RTL",
       "cmake_keys": [
         "RAVEN_RTL_COMPONENT_PATH"
       ],
       "review": "reviewed",
-      "revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
-      "source_terms": "LGPL-2.1-or-later AND BSD-2-Clause AND GPL-2.0-or-later AND LicenseRef-ReactOS-COPYING",
-      "distribution_license": "GPL-2.0-only",
-      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
-      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+      "boundary": "Original Raven code compiled into a PE guest component, loaded into the supervised Windows process.",
+      "license": "MIT"
     },
     {
       "name": "ReactOS installer libraries",
@@ -172,18 +188,6 @@
       "review": "reviewed",
       "revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
       "source_terms": "LicenseRef-ReactOS-Installer-Mixed",
-      "distribution_license": "GPL-2.0-only",
-      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
-      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
-    },
-    {
-      "name": "ReactOS optional text",
-      "cmake_keys": [
-        "RAVEN_TEXT_COMPONENT_PATH"
-      ],
-      "review": "reviewed",
-      "provenance": "native/upstream/reactos-text/provenance.json",
-      "source_terms": "GPL-2.0-or-later AND LicenseRef-ReactOS-CRT",
       "distribution_license": "GPL-2.0-only",
       "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
       "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
