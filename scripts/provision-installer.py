@@ -20,7 +20,7 @@ ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/", "sdk/lib/3rdparty/libwine/",
             "dll/win32/cabinet/", "dll/win32/msi/", "dll/win32/sxs/", "dll/win32/ole32/", "dll/win32/coml2/",
             "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
-            "dll/win32/msxml3/", "dll/win32/stdole2.tlb/", "base/system/regsvr32/",
+            "dll/win32/msxml3/", "dll/win32/stdole2.tlb/",
             "dll/win32/atl/", "dll/win32/atl100/", "dll/win32/oleaut32/", "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
             "dll/win32/propsys/", "dll/win32/mlang/", "dll/win32/windowscodecs/", "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/urlmon/", "dll/win32/combase/", "dll/win32/riched20/", "dll/win32/msvfw32/", "dll/win32/advpack/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c",
             "dll/win32/xmllite/")
@@ -33,7 +33,7 @@ ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees
 # are bound with and the streams over global memory.
 STORAGE = ("ole32/bindctx.c", "combase/hglobalstream.c", "ole32/storage32.c", "ole32/stg_prop.c", "ole32/stg_stream.c", "ole32/filelockbytes.c", "ole32/dictionary.c",
            "coml2/memlockbytes.c", "coml2/stg_prop.c", "coml2/storage32.c")
-COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "libxslt.dll", "msxml3.dll", "regsvr32.exe", "atl100.dll", "oleaut32.dll", "libpng.dll", "libjpeg.dll",
+COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "libxslt.dll", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libpng.dll", "libjpeg.dll",
               "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll")
 
 
@@ -514,15 +514,6 @@ def main():
             objects_more=[compile(support / "printers.c", "setupapi_printers"),
                           compile(source / "dll/win32/kernel32/wine/lzexpand.c", "setupapi_lzexpand", ["-I" + str(generated / "lzexpand")],
                                   wine_module=False)])
-    # regsvr32.exe: registers the classes a library serves, as installers and the runtime's own prefix setup run it.
-    regsvr32_root = source / "base/system/regsvr32"
-    regsvr32 = [compile(regsvr32_root / "regsvr32.c", "regsvr32_regsvr32", ["-DUNICODE", "-D_UNICODE", "-I" + str(regsvr32_root)], wine_module=False),
-                compile(support / "entry_wide.c", "regsvr32_entry")]
-    run([triple + "-windres", "--preprocessor=" + str(wrapper), "-O", "coff", "-DLANGUAGE_EN_US", "-D__REACTOS__",
-         "-D_M_IX86" if x86 else "-D_M_AMD64", "-I" + str(regsvr32_root), "-i", regsvr32_root / "regsvr32.rc", "-o", objects / "regsvr32.res.o"])
-    run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp",
-         "-o", output / "regsvr32.exe", *regsvr32, objects / "regsvr32.res.o", *debug,
-         *runtime(f"-l{library}" for library in ("user32", "shell32", "ole32", "msvcrt", "kernel32", "ntdll", "gcc", "kernel32"))])
     result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, arch=args.arch, commands=records,
                   license_notices=preserve_notices(source, output),
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in COMPONENTS},

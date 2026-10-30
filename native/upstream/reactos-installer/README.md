@@ -8,7 +8,7 @@ programs and, with `--arch x86`, for 32-bit ones:
 
 - `msi.dll` (`dll/win32/msi`): the installer engine, its SQL and condition grammars
   (bison) and the RPC stubs of its custom action server (widl);
-- `msiexec.exe` (`base/system/msiexec`) and `regsvr32.exe` (`base/system/regsvr32`),
+- `msiexec.exe` (`base/system/msiexec`),
   which each prefix also keeps in its system directories;
 - `cabinet.dll` (`dll/win32/cabinet`, on `sdk/lib/3rdparty/zlib`);
 - `sxs.dll` (`dll/win32/sxs`): the side-by-side assembly cache;

@@ -554,10 +554,10 @@ int main(int argc, char **argv)
 						}
 						return names;
 					}();
-					// A .NET program reaches every system library through its runtime, which loads them as it needs them, and rundll32 runs a library
-					// it knows nothing about: they get every component.
+					// A .NET program reaches every system library through its runtime, which loads them as it needs them, and rundll32 and regsvr32 run a
+					// library they know nothing about: they get every component.
 					const bool managed = (entry->image.directories[14].address && entry->image.directories[14].size) ||
-						std::filesystem::path(argv[first_file]).filename() == "rundll32.exe";
+						std::filesystem::path(argv[first_file]).filename() == "rundll32.exe" || std::filesystem::path(argv[first_file]).filename() == "regsvr32.exe";
 					const auto imports_any = [&](std::initializer_list<const char *> libraries) {
 						return managed || std::any_of(libraries.begin(), libraries.end(), [&](const char *library) {
 							const std::string_view wanted(library);

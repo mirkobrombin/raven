@@ -1363,7 +1363,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             endif()
             # The components are copied whenever they change, whether or not the runtime itself was rebuilt.
             set(installer_copies)
-            foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe libxslt.dll msxml3.dll regsvr32.exe atl100.dll oleaut32.dll
+            foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe libxslt.dll msxml3.dll atl100.dll oleaut32.dll
                 libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll)
                 if(NOT EXISTS "${installer_dir}/${component}")
                     message(FATAL_ERROR "Configured installer component does not exist: ${installer_dir}/${component}")
@@ -2668,7 +2668,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         # The command-line tools a prefix has beside cmd, one program each as Windows has them, for each width; MORE is a .com.
         set(RAVEN_TOOLS_DIRECTORY ${PROJECT_SOURCE_DIR}/native/upstream/raven-tools)
         set(RAVEN_TOOL_HEADERS ${RAVEN_TOOLS_DIRECTORY}/tool.h ${RAVEN_TOOLS_DIRECTORY}/processes.h)
-        foreach(tool find findstr more sort where xcopy attrib timeout choice whoami hostname tasklist taskkill reg rundll32)
+        foreach(tool find findstr more sort where xcopy attrib timeout choice whoami hostname tasklist taskkill reg rundll32 regsvr32)
             set(tool_file ${tool}.exe)
             if(tool STREQUAL "more")
                 set(tool_file more.com)
@@ -2699,6 +2699,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_rundll32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 47[^0-9]")
         add_test(NAME native_rundll32_wide COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/rundll32.exe -- rundll32-fixture.dll,Reported 7)
         set_tests_properties(native_rundll32_wide PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 57[^0-9]")
+        # regsvr32 tells the outcomes apart by its exit code.
+        add_test(NAME native_regsvr32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/regsvr32.exe -- /s rundll32-fixture.dll)
+        set_tests_properties(native_regsvr32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 0[^0-9]")
+        add_test(NAME native_regsvr32_install COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/regsvr32.exe -- /s /i:line /n rundll32-fixture.dll)
+        set_tests_properties(native_regsvr32_install PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 5[^0-9]")
+        add_test(NAME native_regsvr32_missing COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/regsvr32.exe -- /s no-such-library.dll)
+        set_tests_properties(native_regsvr32_missing PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "exited with status 3[^0-9]")
         # Batch files through CreateProcess, cmd /c, and commands piped to the prompt, for 64-bit and 32-bit callers.
         add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-tree-loop-distribute-patterns -fno-stack-protector

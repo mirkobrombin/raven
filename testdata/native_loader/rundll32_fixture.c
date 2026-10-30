@@ -19,3 +19,7 @@ BOOL WINAPI raven_library_entry(HINSTANCE instance,DWORD reason,LPVOID reserved)
 	(void)instance;(void)reason;(void)reserved;
 	return TRUE;
 }
+
+/* What regsvr32 calls: registering succeeds, and the installer entry fails so its exit code can be told apart. */
+__declspec(dllexport) HRESULT __stdcall DllRegisterServer(void) { return S_OK; }
+__declspec(dllexport) HRESULT __stdcall DllInstall(BOOL install, const WCHAR *line) { (void)install; (void)line; return E_FAIL; }
