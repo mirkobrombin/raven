@@ -103,16 +103,6 @@
       "boundary": "Original Raven code compiled into PE guest components, not the Linux host. Imported source and file notices are excluded."
     },
     {
-      "name": "ReactOS UTF-8",
-      "paths": [
-        "native/upstream/reactos-utf8"
-      ],
-      "license": "GPL-2.0-or-later",
-      "review": "reviewed",
-      "revision": "32bb061415f813b6ced25ff91f4d258f33c5191f",
-      "provenance": "native/upstream/reactos-utf8/provenance.json"
-    },
-    {
       "name": "ReactOS nonclient",
       "paths": [
         "native/upstream/reactos-nonclient"

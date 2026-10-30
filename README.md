@@ -143,4 +143,4 @@ The [earlier chart data](docs/benchmarks.json), with CPU time and memory, remain
 
 Raven's Linux runtime is licensed under [GPL-3.0-or-later](LICENSE). Its own guest adapters listed in [LICENSES.json](LICENSES.json) remain MIT-licensed. Imported and derived components keep their own licenses and notices (GPL, LGPL, MIT, BSD, libpng, Unicode and Skia). Earlier MIT grants remain valid.
 
-The Linux `raven` executable incorporates GPL UTF-8 conversion code and LGPL window-rectangle code. [LICENSES.md](LICENSES.md) records the component boundaries and distribution requirements; [packaging](docs/packaging.md) describes how to include the corresponding sources and notices with a build.
+The Linux `raven` executable incorporates LGPL window-rectangle code. [LICENSES.md](LICENSES.md) records the component boundaries and distribution requirements; [packaging](docs/packaging.md) describes how to include the corresponding sources and notices with a build.

@@ -21,12 +21,83 @@ constexpr NTSTATUS STATUS_BUFFER_TOO_SMALL=NTSTATUS(0xc0000023U);
 constexpr NTSTATUS STATUS_INVALID_PARAMETER=NTSTATUS(0xc000000dU);
 constexpr NTSTATUS STATUS_INVALID_PARAMETER_4=NTSTATUS(0xc00000f2U);
 constexpr NTSTATUS STATUS_INVALID_PARAMETER_5=NTSTATUS(0xc00000f3U);
-#define NTAPI
-#include "upstream/reactos-utf8/decode.inc"
-#define ASSERT(value) do { if (!(value)) throw std::runtime_error("invalid UTF-8 scalar"); } while (0)
-#include "upstream/reactos-utf8/encode.inc"
-#undef ASSERT
-#undef NTAPI
+constexpr WCHAR replacement=0xfffd;
+
+// RtlUTF8ToUnicodeN as ntdll answers it, malformed input included, which MultiByteToWideChar below passes on:
+// - a byte that starts no sequence (0x80 to 0xc1, 0xf5 and up) is one U+FFFD;
+// - a sequence a byte breaks off is one U+FFFD, and that byte starts the next one;
+// - a sequence the input ends inside is one U+FFFD and ends the conversion;
+// - a complete sequence for a surrogate, a value past U+10FFFF or an overlong form is one U+FFFD for each continuation byte;
+// - units that do not fit are dropped one by one, so a pair may lose its second half, while the input is still read.
+// The status is that of the last of these events.
+NTSTATUS RtlUTF8ToUnicodeN(WCHAR *target,ULONG capacity,ULONG *written,const CHAR *source,ULONG size)
+{
+	if (!source) return STATUS_INVALID_PARAMETER_4;
+	if (!written) return STATUS_INVALID_PARAMETER;
+	NTSTATUS status=STATUS_SUCCESS;
+	ULONG units=0,room=capacity/2;
+	const auto put=[&](WCHAR unit) {
+		if (!target) ++units;
+		else if (room) { target[units++]=unit;--room; }
+		else status=STATUS_BUFFER_TOO_SMALL;
+	};
+	const auto *bytes=reinterpret_cast<const BYTE *>(source);
+	for (ULONG at=0;at<size;) {
+		const BYTE lead=bytes[at++];
+		uint32_t value=lead,continuations=0;
+		if (lead>=0xf5 || (lead>=0x80 && lead<0xc2)) { status=STATUS_SOME_NOT_MAPPED;put(replacement);continue; }
+		if (lead>=0xf0) { value=lead&7;continuations=3; }
+		else if (lead>=0xe0) { value=lead&15;continuations=2; }
+		else if (lead>=0x80) { value=lead&31;continuations=1; }
+		if (size-at<continuations) { status=STATUS_SOME_NOT_MAPPED;put(replacement);break; }
+		uint32_t taken=0;
+		for (;taken<continuations && (bytes[at]&0xc0)==0x80;++taken) value=value<<6 | (bytes[at++]&0x3f);
+		if (taken<continuations) { status=STATUS_SOME_NOT_MAPPED;put(replacement);continue; }
+		if (value>0x10ffff || (value>=0xd800 && value<=0xdfff) || (continuations==2 && value<0x800) || (continuations==3 && value<0x10000)) {
+			status=STATUS_SOME_NOT_MAPPED;
+			for (uint32_t index=0;index<continuations;++index) put(replacement);
+			continue;
+		}
+		if (value>=0x10000) {
+			value-=0x10000;
+			put(WCHAR(0xd800+(value>>10)));put(WCHAR(0xdc00+(value&0x3ff)));
+		} else put(WCHAR(value));
+	}
+	*written=units*2;
+	return status;
+}
+
+// RtlUnicodeToUTF8N as ntdll answers it: a surrogate without its partner is U+FFFD, and once a character does not fit nothing more
+// is written, while the input is still read. The status is that of the last event, as above.
+NTSTATUS RtlUnicodeToUTF8N(CHAR *target,ULONG capacity,ULONG *written,const WCHAR *source,ULONG size)
+{
+	if (!source) return STATUS_INVALID_PARAMETER_4;
+	if (!written) return STATUS_INVALID_PARAMETER;
+	if (target && size%2) return STATUS_INVALID_PARAMETER_5;
+	NTSTATUS status=STATUS_SUCCESS;
+	ULONG count=0;
+	const ULONG units=size/2;
+	for (ULONG at=0;at<units;) {
+		uint32_t value=source[at++];
+		if (value>=0xd800 && value<=0xdfff) {
+			if (value<0xdc00 && at<units && source[at]>=0xdc00 && source[at]<=0xdfff) value=0x10000+((value-0xd800)<<10)+(source[at++]-0xdc00);
+			else { value=replacement;status=STATUS_SOME_NOT_MAPPED; }
+		}
+		BYTE sequence[4];
+		ULONG length=0;
+		if (value<0x80) sequence[length++]=BYTE(value);
+		else {
+			const ULONG tail=value<0x800 ? 1 : value<0x10000 ? 2 : 3;
+			sequence[length++]=BYTE((0xff00>>(tail+1)) | value>>(6*tail));
+			for (ULONG shift=tail;shift--;) sequence[length++]=BYTE(0x80 | (value>>(6*shift)&0x3f));
+		}
+		if (!target) count+=length;
+		else if (capacity>=length) { std::memcpy(target+count,sequence,length);count+=length;capacity-=length; }
+		else { capacity=0;status=STATUS_BUFFER_TOO_SMALL; }
+	}
+	*written=count;
+	return status;
+}
 
 struct Decomposition { uint16_t value,first,second; };
 constexpr std::array<Decomposition,58> decompositions{{
