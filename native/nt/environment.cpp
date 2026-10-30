@@ -3,7 +3,9 @@
 
 #include <array>
 #include <atomic>
+#include <mutex>
 #include <thread>
+#include <vector>
 #include <chrono>
 #include <string_view>
 #include <algorithm>
@@ -61,6 +63,30 @@ void store_clocks(uint8_t *page)
 	store_system_time(page, 0x320, ticks);
 }
 
+// One thread keeps every shared user data page this host made current, so a host that runs several guest processes (the unit tests
+// do) does not gain a thread for each. It updates them every millisecond, finer than the 15.625 ms clock tick Windows runs at by
+// default, as Go reads its monotonic clock there. The pages and their list live as long as the host, past the end of main too.
+void keep_clocks(uint8_t *page)
+{
+	struct Kept {
+		std::mutex lock;
+		std::vector<uint8_t *> pages;
+	};
+	static auto *kept = new Kept;
+	std::lock_guard guard(kept->lock);
+	kept->pages.push_back(page);
+	if (kept->pages.size() > 1)
+		return;
+	std::thread([] {
+		for (;;) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::lock_guard guard(kept->lock);
+			for (auto *page : kept->pages)
+				store_clocks(page);
+		}
+	}).detach();
+}
+
 }
 
 static void map_shared_user_data(NativeProcess &process)
@@ -105,14 +131,7 @@ static void map_shared_user_data(NativeProcess &process)
 	field(process, base + 0x2e8, sysconf(_SC_PHYS_PAGES), 4);
 	field(process, base + 0x3c0, std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN)), 4);
 	process.protect_memory(base, 4096, PROT_READ);
-	// The host's view of the page lives as long as the process; the thread updates it every millisecond, finer than the 15.625 ms
-	// clock tick Windows runs at by default.
-	std::thread([page] {
-		for (;;) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			store_clocks(page);
-		}
-	}).detach();
+	keep_clocks(page);
 }
 
 NativeEnvironment::NativeEnvironment(NativeProcess &process, uint64_t image_base,
