@@ -466,11 +466,18 @@ int main(int argc, char **argv)
 							if (std::filesystem::exists(component))
 								return read_module(component.c_str());
 						}
-						// The Direct3D libraries a Windows installation provides come from RAVEN_D3D_DIRECTORY (a DXVK build of the program's width)
-						// or from beside the runtime.
-						if (!selected && (name=="dxgi.dll" || name=="d3d11.dll" || name=="d3d10core.dll" || name=="d3d10_1.dll" || name=="d3d9.dll" || name=="d3d8.dll")) {
+						// The Direct3D libraries a Windows installation provides come from RAVEN_D3D_DIRECTORY (one or more directories separated by
+						// colons, such as a DXVK build and a vkd3d-proton build of the program's width) or from beside the runtime.
+						if (!selected && (name=="dxgi.dll" || name=="d3d11.dll" || name=="d3d10core.dll" || name=="d3d10_1.dll" || name=="d3d9.dll" || name=="d3d8.dll" ||
+							name=="d3d12.dll" || name=="d3d12core.dll")) {
 							std::vector<std::filesystem::path> places;
-							if (const char *directory = std::getenv("RAVEN_D3D_DIRECTORY")) places.emplace_back(directory);
+							if (const char *directories = std::getenv("RAVEN_D3D_DIRECTORY"))
+								for (std::string_view rest = directories; !rest.empty();) {
+									const auto colon = rest.find(':');
+									if (const auto part = rest.substr(0, colon); !part.empty())
+										places.emplace_back(std::string(part));
+									rest = colon == rest.npos ? std::string_view() : rest.substr(colon + 1);
+								}
 							places.emplace_back(std::filesystem::read_symlink("/proc/self/exe").parent_path());
 							for (const auto &place : places)
 								if (std::filesystem::exists(place / name))
