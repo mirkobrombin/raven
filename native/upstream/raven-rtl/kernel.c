@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Mirko Brombin
  * See LICENSES/MIT.txt.
  */
-#include <rtl.h>
+#include "raven_rtl.h"
 
 /* The kernel32 functions a program calls most often, run in the guest as Windows runs them in user mode: the process heap, critical
  * sections, SRW locks and the waking of condition variables. The runtime forwards kernel32's exports of these names here, so a call
@@ -10,15 +10,12 @@
  * sleepers, go to the runtime's implementation through ntdll. */
 
 #define LAST_ERROR (*(volatile ULONG *)((PUCHAR)NtCurrentTeb() + 0x68))
-#define THREAD_ID ((ULONG)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread)
+#define THREAD_ID ((ULONG)(ULONG_PTR)TEB_THREAD_ID)
 
 /* The runtime's waits, served by its scheduler. */
-VOID NTAPI RtlAcquireSRWLockExclusive(PRTL_SRWLOCK lock);
-VOID NTAPI RtlAcquireSRWLockShared(PRTL_SRWLOCK lock);
 VOID NTAPI RtlWakeConditionVariable(PRTL_CONDITION_VARIABLE variable);
 VOID NTAPI RtlWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable);
 NTSTATUS NTAPI RtlWaitOnAddress(volatile VOID *address, PVOID compare, SIZE_T size, PLARGE_INTEGER timeout);
-NTSTATUS NTAPI RtlInitializeCriticalSectionEx(PRTL_CRITICAL_SECTION section, ULONG spin, ULONG flags);
 
 /* ---- the heap: the flags kernel32 accepts, and the error it reports when the heap fails ---- */
 PVOID WINAPI RavenHeapAlloc(HANDLE heap, ULONG flags, SIZE_T size)
@@ -75,37 +72,53 @@ SIZE_T WINAPI RavenHeapSize(HANDLE heap, ULONG flags, LPCVOID block)
 
 HANDLE WINAPI RavenGetProcessHeap(VOID)
 {
-	return NtCurrentPeb()->ProcessHeap;
+	return PEB_PROCESS_HEAP;
 }
 
-/* ---- critical sections: laid out and initialized by the RTL, without spinning, since only one guest thread runs at a time and
-   spinning only delays the owner ---- */
+/* ---- critical sections: without spinning, since only one guest thread runs at a time and spinning only delays the owner. No debug record: DebugInfo holds
+   -1 as on Windows when it is left out, and the wait goes on LockCount itself, so nothing here needs a handle a program could close by mistake. ---- */
+static void init_section(PRTL_CRITICAL_SECTION section)
+{
+	section->DebugInfo = (PRTL_CRITICAL_SECTION_DEBUG)(LONG_PTR)-1;
+	section->LockCount = -1;
+	section->RecursionCount = 0;
+	section->OwningThread = NULL;
+	section->LockSemaphore = NULL;
+	section->SpinCount = 0;
+}
+
 VOID WINAPI RavenInitializeCriticalSection(PRTL_CRITICAL_SECTION section)
 {
-	RtlInitializeCriticalSectionAndSpinCount(section, 0);
+	init_section(section);
 }
 
 BOOL WINAPI RavenInitializeCriticalSectionAndSpinCount(PRTL_CRITICAL_SECTION section, ULONG spin)
 {
-	return NT_SUCCESS(RtlInitializeCriticalSectionAndSpinCount(section, 0));
+	(void)spin;
+	init_section(section);
+	return TRUE;
 }
 
 BOOL WINAPI RavenInitializeCriticalSectionEx(PRTL_CRITICAL_SECTION section, ULONG spin, ULONG flags)
 {
-	NTSTATUS status;
+	(void)spin;
 	/* Only the high byte holds RTL flags; the low bits are ignored during initialization. */
 	flags &= RTL_CRITICAL_SECTION_ALL_FLAG_BITS;
 	if (flags & ~0x1f000000U) {
 		LAST_ERROR = ERROR_INVALID_PARAMETER;
 		return FALSE;
 	}
-	status = RtlInitializeCriticalSectionEx(section, 0, flags);
-	if (!NT_SUCCESS(status))
-		LAST_ERROR = RtlNtStatusToDosError(status);
-	return NT_SUCCESS(status);
+	init_section(section);
+	return TRUE;
 }
 
-VOID WINAPI RavenDeleteCriticalSection(PRTL_CRITICAL_SECTION section) { RtlDeleteCriticalSection(section); }
+VOID WINAPI RavenDeleteCriticalSection(PRTL_CRITICAL_SECTION section)
+{
+	section->DebugInfo = NULL;
+	section->LockCount = -1;
+	section->RecursionCount = 0;
+	section->OwningThread = NULL;
+}
 
 /* Entering takes LockCount from -1 to 0 with one exchange; a section that is held is waited for on that word, which the runtime's
    scheduler looks at again on every round. Leaving puts -1 back and hands the section to nobody, so a thread that releases it and asks
@@ -113,7 +126,7 @@ VOID WINAPI RavenDeleteCriticalSection(PRTL_CRITICAL_SECTION section) { RtlDelet
    processor here take turns through the scheduler on every entry. */
 VOID WINAPI RavenEnterCriticalSection(PRTL_CRITICAL_SECTION section)
 {
-	HANDLE self = NtCurrentTeb()->ClientId.UniqueThread;
+	HANDLE self = TEB_THREAD_ID;
 	LONG held;
 	if (section->OwningThread == self) {
 		section->RecursionCount++;
@@ -138,7 +151,7 @@ VOID WINAPI RavenLeaveCriticalSection(PRTL_CRITICAL_SECTION section)
 
 BOOL WINAPI RavenTryEnterCriticalSection(PRTL_CRITICAL_SECTION section)
 {
-	HANDLE self = NtCurrentTeb()->ClientId.UniqueThread;
+	HANDLE self = TEB_THREAD_ID;
 	if (section->OwningThread == self) {
 		section->RecursionCount++;
 		return TRUE;
@@ -148,68 +161,6 @@ BOOL WINAPI RavenTryEnterCriticalSection(PRTL_CRITICAL_SECTION section)
 	section->OwningThread = self;
 	section->RecursionCount = 1;
 	return TRUE;
-}
-
-/* ---- the heap lock: a word taken with one exchange, as an SRW lock is, so a thread that releases it and asks again gets it back at once
-   instead of handing it to a waiter and queueing behind it; a held lock is waited for by the runtime, which sees it become free when the
-   scheduler looks again. The thread that holds it may take it again: the heap code nests its locking. ---- */
-typedef struct {
-	PVOID word;
-	HANDLE owner;
-	LONG recursion;
-} RAVEN_HEAP_LOCK;
-
-C_ASSERT(sizeof(RAVEN_HEAP_LOCK) <= sizeof(HEAP_LOCK));
-
-NTSTATUS NTAPI RtlInitializeHeapLock(IN OUT PHEAP_LOCK *Lock)
-{
-	RtlZeroMemory(*Lock, sizeof(RAVEN_HEAP_LOCK));
-	return STATUS_SUCCESS;
-}
-
-NTSTATUS NTAPI RtlDeleteHeapLock(IN OUT PHEAP_LOCK Lock)
-{
-	return STATUS_SUCCESS;
-}
-
-NTSTATUS NTAPI RtlEnterHeapLock(IN OUT PHEAP_LOCK Lock, IN BOOLEAN Exclusive)
-{
-	RAVEN_HEAP_LOCK *lock = (RAVEN_HEAP_LOCK *)Lock;
-	HANDLE self = NtCurrentTeb()->ClientId.UniqueThread;
-	if (lock->owner == self) {
-		lock->recursion++;
-		return STATUS_SUCCESS;
-	}
-	if (InterlockedCompareExchangePointer(&lock->word, (PVOID)1, NULL))
-		RtlAcquireSRWLockExclusive((PRTL_SRWLOCK)&lock->word);
-	lock->owner = self;
-	lock->recursion = 1;
-	return STATUS_SUCCESS;
-}
-
-BOOLEAN NTAPI RtlTryEnterHeapLock(IN OUT PHEAP_LOCK Lock, IN BOOLEAN Exclusive)
-{
-	RAVEN_HEAP_LOCK *lock = (RAVEN_HEAP_LOCK *)Lock;
-	HANDLE self = NtCurrentTeb()->ClientId.UniqueThread;
-	if (lock->owner == self) {
-		lock->recursion++;
-		return TRUE;
-	}
-	if (InterlockedCompareExchangePointer(&lock->word, (PVOID)1, NULL))
-		return FALSE;
-	lock->owner = self;
-	lock->recursion = 1;
-	return TRUE;
-}
-
-NTSTATUS NTAPI RtlLeaveHeapLock(IN OUT PHEAP_LOCK Lock)
-{
-	RAVEN_HEAP_LOCK *lock = (RAVEN_HEAP_LOCK *)Lock;
-	if (--lock->recursion)
-		return STATUS_SUCCESS;
-	lock->owner = NULL;
-	InterlockedExchangePointer(&lock->word, NULL);
-	return STATUS_SUCCESS;
 }
 
 /* ---- SRW locks: one word, 1 when held exclusively, shared holders counting in steps of 2, as the runtime keeps them; a lock that is
@@ -296,11 +247,13 @@ typedef struct {
 #define RAVEN_HAS_FIBER_DATA 0x4
 
 static USHORT *raven_same_teb_flags(void) { return (USHORT *)((PUCHAR)NtCurrentTeb() + 0x17ee); }
-static RAVEN_FIBER *raven_current_fiber(void) { return (RAVEN_FIBER *)NtCurrentTeb()->NtTib.FiberData; }
+/* The TIB's FiberData. */
+static RAVEN_FIBER **raven_fiber_slot(void) { return (RAVEN_FIBER **)((PUCHAR)NtCurrentTeb() + 0x20); }
+static RAVEN_FIBER *raven_current_fiber(void) { return *raven_fiber_slot(); }
 
 static void raven_set_fiber(RAVEN_FIBER *fiber)
 {
-	NtCurrentTeb()->NtTib.FiberData = fiber;
+	*raven_fiber_slot() = fiber;
 	if (fiber)
 		*raven_same_teb_flags() |= RAVEN_HAS_FIBER_DATA;
 	else
@@ -341,7 +294,7 @@ void WINAPI raven_fiber_main(void)
 {
 	RAVEN_FIBER *fiber = raven_current_fiber();
 	fiber->start(fiber->data);
-	NtTerminateThread(NtCurrentThread(), 0);
+	NtTerminateThread(((HANDLE)(LONG_PTR)-2), 0);
 }
 
 /* Where a new fiber first runs, on a 16-byte aligned stack: home space, kept aligned for the call, then the routine above. */
@@ -361,10 +314,10 @@ PVOID WINAPI RavenCreateFiberEx(SIZE_T commit, SIZE_T reserve, DWORD flags, LPFI
 		return NULL;
 	}
 	size = ((size ? size : 1024 * 1024) + 0xffff) & ~(SIZE_T)0xffff;
-	fiber = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*fiber));
-	if (!fiber || !NT_SUCCESS(NtAllocateVirtualMemory(NtCurrentProcess(), &base, 0, &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
+	fiber = RtlAllocateHeap(PEB_PROCESS_HEAP, HEAP_ZERO_MEMORY, sizeof(*fiber));
+	if (!fiber || !NT_SUCCESS(ZwAllocateVirtualMemory(CURRENT_PROCESS, &base, 0, &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
 		if (fiber)
-			RtlFreeHeap(RtlGetProcessHeap(), 0, fiber);
+			RtlFreeHeap(PEB_PROCESS_HEAP, 0, fiber);
 		LAST_ERROR = ERROR_NOT_ENOUGH_MEMORY;
 		return NULL;
 	}
@@ -400,7 +353,7 @@ PVOID WINAPI RavenConvertThreadToFiberEx(PVOID parameter, DWORD flags)
 		LAST_ERROR = ERROR_ALREADY_FIBER;
 		return NULL;
 	}
-	fiber = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*fiber));
+	fiber = RtlAllocateHeap(PEB_PROCESS_HEAP, HEAP_ZERO_MEMORY, sizeof(*fiber));
 	if (!fiber) {
 		LAST_ERROR = ERROR_NOT_ENOUGH_MEMORY;
 		return NULL;
@@ -423,7 +376,7 @@ BOOL WINAPI RavenConvertFiberToThread(void)
 	raven_set_fiber(NULL);
 	/* A thread runs on in whatever fiber it is in; only the record of a converted thread is its own to free. */
 	if (fiber && !fiber->allocation)
-		RtlFreeHeap(RtlGetProcessHeap(), 0, fiber);
+		RtlFreeHeap(PEB_PROCESS_HEAP, 0, fiber);
 	return TRUE;
 }
 
@@ -435,8 +388,8 @@ VOID WINAPI RavenDeleteFiber(PVOID handle)
 		return;
 	/* Deleting the running fiber ends the thread, whose stack that is. */
 	if (fiber == raven_current_fiber())
-		NtTerminateThread(NtCurrentThread(), 1);
+		NtTerminateThread(((HANDLE)(LONG_PTR)-2), 1);
 	if (fiber->allocation)
-		NtFreeVirtualMemory(NtCurrentProcess(), &fiber->allocation, &size, MEM_RELEASE);
-	RtlFreeHeap(RtlGetProcessHeap(), 0, fiber);
+		ZwFreeVirtualMemory(CURRENT_PROCESS, &fiber->allocation, &size, MEM_RELEASE);
+	RtlFreeHeap(PEB_PROCESS_HEAP, 0, fiber);
 }

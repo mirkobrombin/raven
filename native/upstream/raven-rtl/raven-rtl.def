@@ -1,7 +1,7 @@
 LIBRARY raven-rtl.dll
 EXPORTS
  RavenInitializeRTL
- RtlCreateHeap=RavenCreateHeap
+ RtlCreateHeap
  RtlAllocateHeap
  RtlReAllocateHeap
  RtlSizeHeap
