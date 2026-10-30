@@ -41,8 +41,9 @@ void *memmove(void *target, const void *source, size_t size)
 	return target;
 }
 
-/* The standard handles commands use now: the process's own, or the files and pipes a redirection names. */
-static HANDLE standard[3];
+/* The handles commands use now: the standard three, the process's own or the files and pipes a redirection names, and 3 to 9,
+   which only a redirection opens, for others to be pointed at (3>log.txt, then 1>&3). */
+static HANDLE standard[10];
 #define input standard[0]
 #define output standard[1]
 #define error_output standard[2]
@@ -1392,14 +1393,14 @@ static DWORD run_batch(const WCHAR *path, const WCHAR *arguments);
 
 /* The files a command's redirections opened, closed when it ends. */
 struct Opened {
-	HANDLE saved[3];
+	HANDLE saved[10];
 	HANDLE handles[16];
 	int count;
 };
 
 static void restore(struct Opened *opened)
 {
-	for (int index = 0; index < 3; ++index)
+	for (int index = 0; index < 10; ++index)
 		standard[index] = opened->saved[index];
 	for (int index = 0; index < opened->count; ++index)
 		CloseHandle(opened->handles[index]);
@@ -1424,16 +1425,21 @@ static const WCHAR *file_error(DWORD error)
 /* Points the standard handles where a command's redirections say, in their order, so that 2>&1 after >file joins the file. */
 static BOOL redirect(struct Redirect *list, struct Opened *opened)
 {
-	for (int index = 0; index < 3; ++index)
+	for (int index = 0; index < 10; ++index)
 		opened->saved[index] = standard[index];
 	opened->count = 0;
 	SECURITY_ATTRIBUTES inherit = {sizeof inherit, NULL, TRUE};
 	for (struct Redirect *item = list; item; item = item->next) {
-		if (item->handle > 2)
-			continue;
 		if (item->kind == L'&') {
-			if (item->source <= 2)
-				standard[item->handle] = standard[item->source];
+			/* n>&m copies what m is now; a handle no redirection has opened can't be copied. */
+			if (!standard[item->source]) {
+				const WCHAR number[] = {(WCHAR)(L'0' + item->handle), L'.', L'\r', L'\n', 0};
+				complain(L"The handle could not be duplicated\r\nduring redirection of handle ");
+				complain(number);
+				restore(opened);
+				return FALSE;
+			}
+			standard[item->handle] = standard[item->source];
 			continue;
 		}
 		WCHAR *expanded = prepared(item->target), *target = unquoted(expanded);
