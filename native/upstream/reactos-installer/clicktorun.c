@@ -293,6 +293,36 @@ BOOL raven_clicktorun_qualifier(const WCHAR *category, DWORD index, WCHAR *quali
 	return FALSE;
 }
 
+/* The component a manifest publishes a qualifier of a category through, as a GUID_LENGTH + 1 buffer. A component that holds its
+ * publications names them without repeating itself, so the enclosing component tag stands for it there. */
+BOOL raven_clicktorun_published(const WCHAR *category, const WCHAR *qualifier, WCHAR *component)
+{
+	if (!category || !qualifier || lstrlenW(category) != GUID_LENGTH)
+		return FALSE;
+	for (const struct manifest *entry = load(); entry != &none; entry = entry->next)
+		for (const WCHAR *at = entry->text; (at = find_attribute(at, L"<PublishComponent PublishComponentId=\"", category)); ++at)
+		{
+			WCHAR name[MAX_PATH], owner[MAX_PATH];
+			const WCHAR *outer;
+
+			if (!tag_attribute(at, L"Qualifier=\"", name) || lstrcmpiW(name, qualifier))
+				continue;
+			if (tag_attribute(at, L" ComponentId=\"", owner) && lstrlenW(owner) == GUID_LENGTH)
+			{
+				lstrcpyW(component, owner);
+				return TRUE;
+			}
+			for (outer = at; outer > entry->text && wcsncmp(outer, L"<Component ComponentId=\"", 24); --outer)
+				;
+			if (outer > entry->text && wcschr(outer + 24, '"') == outer + 24 + GUID_LENGTH)
+			{
+				lstrcpynW(component, outer + 24, GUID_LENGTH + 1);
+				return TRUE;
+			}
+		}
+	return FALSE;
+}
+
 BOOL raven_clicktorun_product(const WCHAR *product)
 {
 	if (!product || lstrlenW(product) != GUID_LENGTH)

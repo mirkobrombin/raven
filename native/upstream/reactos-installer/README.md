@@ -39,8 +39,8 @@ build. `support.c`, `storage.c`, `codecs.c`, `setup.c`, `printers.c`, `dllmain.c
 `entry_wide.c` and `clicktorun.c` are Raven code: they answer the compatibility database,
 binary file patches, the class key helper and the delay-loaded imports the sources expect
 from libraries Raven does not ship, give the programs and plain libraries their entry
-points, and let the installer's queries find the components of Click-to-Run products in
-the manifests their packages keep. Binary patches of installed files are not applied yet.
+points, and let the installer's queries find the components of Click-to-Run products, and
+the files those products publish by qualifier, in the manifests their packages keep. Binary patches of installed files are not applied yet.
 The build records every command, the hash of each extracted source and of each
 component in `provenance.json`.
 
