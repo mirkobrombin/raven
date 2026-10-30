@@ -369,6 +369,10 @@ void NativeRegistry::seed()
 		// DirectX 9.0c, which Windows 10 reports as its DirectX version and the DirectX redistributable checks before it installs.
 		const auto directx = root + u"\\Microsoft\\DirectX";
 		text(directx.c_str(), u"Version", u"4.09.00.0904");
+		// Internet Explorer 11, a part of Windows 10 whose version installers read as a requirement.
+		const auto explorer = root + u"\\Microsoft\\Internet Explorer";
+		text(explorer.c_str(), u"Version", u"9.11.19041.2364");
+		text(explorer.c_str(), u"svcVersion", u"11.0.19041.2364");
 		uint64_t key = 0;
 		uint32_t disposition = 0;
 		if (!create(0x80000002ULL, directx, key, disposition)) {
