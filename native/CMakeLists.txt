@@ -2009,6 +2009,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_time_zone_rules COMMAND raven --run-process --execution=native ${TIME_ZONE_RULES_CLIENT})
             set_tests_properties(native_time_zone_rules PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/time-zone-rules-prefix;TZ=America/New_York")
+            # NtCreateFile and NtOpenFile: dispositions, directories, relative names and the statuses of a clash and a missing name.
+            set(NT_CREATE_FILE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/nt-create-file.exe)
+            add_custom_command(OUTPUT ${NT_CREATE_FILE_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ea200000,--no-insert-timestamp
+                    -o ${NT_CREATE_FILE_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_create_file_client.c -lntdll -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_create_file_client.c VERBATIM)
+            add_custom_target(nt_create_file_fixture ALL DEPENDS ${NT_CREATE_FILE_CLIENT})
+            add_test(NAME native_nt_create_file COMMAND raven --run-process --execution=native ${NT_CREATE_FILE_CLIENT})
+            set_tests_properties(native_nt_create_file PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/nt-create-file-prefix")
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
