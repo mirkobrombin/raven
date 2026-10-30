@@ -275,6 +275,39 @@ public:
 			uint64_t rsp = 0;
 			std::memcpy(&rsp, origin.data() + 0x98, 8);
 			describe_record(record, rsp);
+			if (le32(record, 0) == 0xe06d7363U && le32(record, 0x18) >= 4) {
+				// A C++ exception names the types it can be caught as, from its throw information, and shows the start of the thrown object.
+				try {
+					const uint64_t object = load64(record, 0x28), throw_info = load64(record, 0x30), image = load64(record, 0x38);
+					const auto info = context.process.read_memory(throw_info, 16);
+					const auto types = context.process.read_memory(image + le32(info, 12), 4 + 4 * 8);
+					bool standard = false;
+					std::fprintf(stderr, "raven:   thrown");
+					for (uint32_t index = 0; index < std::min<uint32_t>(le32(types, 0), 8); ++index) {
+						const auto type = context.process.read_memory(image + le32(types, 4 + index * 4), 8);
+						const auto bytes = context.process.read_memory(image + le32(type, 4) + 16, 96);
+						const std::string name(reinterpret_cast<const char *>(bytes.data()), strnlen(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+						standard = standard || name == ".?AVexception@std@@";
+						std::fprintf(stderr, " %s", name.c_str());
+					}
+					const auto bytes = context.process.read_memory(object, 32);
+					std::fprintf(stderr, "\nraven:   object");
+					for (size_t at = 0; at < bytes.size(); at += 8) {
+						uint64_t value = 0;
+						std::memcpy(&value, bytes.data() + at, 8);
+						std::fprintf(stderr, " %016llx", (unsigned long long)value);
+					}
+					std::fprintf(stderr, "\n");
+					// A std::exception keeps its message pointer after the table pointer.
+					uint64_t message = 0;
+					std::memcpy(&message, bytes.data() + 8, 8);
+					if (standard && message) {
+						const auto text = context.process.read_memory(message, 200);
+						std::fprintf(stderr, "raven:   what %s\n", std::string(reinterpret_cast<const char *>(text.data()), strnlen(reinterpret_cast<const char *>(text.data()), text.size())).c_str());
+					}
+				} catch (const std::exception &) {
+				}
+			}
 			if (const uint32_t code = le32(record, 0); (code == 0xc06d007eU || code == 0xc06d007fU) && le32(record, 0x18) >= 1) {
 				// A failed delay load names the library and the procedure in the DelayLoadInfo its one parameter points to.
 				try {
