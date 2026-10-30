@@ -14,10 +14,7 @@
 #define WINVER 0x0601
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
-/* The FDI structures are packed to four bytes, as in the Windows SDK and the cabinet library; MinGW's header leaves them aligned. */
-#include <pshpack4.h>
 #include <fdi.h>
-#include <poppack.h>
 
 /* FDI seeks from the start, the position or the end, as the C library's fseek does. */
 enum { SEEK_SET, SEEK_CUR, SEEK_END };
