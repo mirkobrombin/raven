@@ -879,12 +879,155 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		::fsync(file->descriptor);
 		call.ret(1);
 	});
-	// Files of a prefix lie on a host file system that answers no device or file system control codes: the caller hears that the
-	// function is not supported, as from a volume whose driver lacks it, and nothing comes back.
-	registry.add("DeviceIoControl", 8, [](ApiCall &call) {
+	// Reparse points are the host's symbolic links. FSCTL_SET_REPARSE_POINT makes an empty directory a mount point (a junction) or
+	// a file or directory a symbolic link to the target its REPARSE_DATA_BUFFER names; FSCTL_GET_REPARSE_POINT describes a link,
+	// as a mount point when it holds an absolute path to a directory (what a junction is) and as a symbolic link otherwise; and
+	// FSCTL_DELETE_REPARSE_POINT removes the link, leaving an empty directory or file. Other control codes are not supported by
+	// the host file system, as from a volume whose driver lacks them, and nothing comes back.
+	constexpr uint32_t fsctl_set_reparse_point = 0x900a4, fsctl_get_reparse_point = 0x900a8, fsctl_delete_reparse_point = 0x900ac;
+	constexpr uint32_t tag_mount_point = 0xa0000003U, tag_symbolic_link = 0xa000000cU;
+	registry.add("DeviceIoControl", 8, [&, file_of](ApiCall &call) {
+		const uint32_t code = call.u32(1);
 		if (call[6])
 			call.store<uint32_t>(call[6], 0);
-		call.fail(1);
+		const auto file = file_of(call[0]);
+		if (code != fsctl_set_reparse_point && code != fsctl_get_reparse_point && code != fsctl_delete_reparse_point) {
+			call.fail(1);
+			return;
+		}
+		if (!file) {
+			call.fail(6);
+			return;
+		}
+		struct stat own{};
+		if (::lstat(file->path.c_str(), &own)) {
+			call.fail(error_of(errno));
+			return;
+		}
+		const bool link = S_ISLNK(own.st_mode);
+		if (code == fsctl_get_reparse_point) {
+			if (!link) {
+				call.fail(4390);
+				return;
+			}
+			std::error_code error;
+			const auto target = std::filesystem::read_symlink(file->path, error);
+			if (error) {
+				call.fail(error_of(error.value()));
+				return;
+			}
+			const bool absolute = target.is_absolute();
+			const bool mount_point = absolute && std::filesystem::is_directory(file->path, error);
+			const auto print = absolute ? paths.dos(target) : [&] {
+				auto text = from_utf8(target.string());
+				for (auto &character : text)
+					if (character == u'/')
+						character = u'\\';
+				return text;
+			}();
+			const auto substitute = absolute ? u"\\??\\" + print : print;
+			// The header, the offsets and lengths of the two names, the flags of a symbolic link, then the names one after the other.
+			const size_t names_at = mount_point ? 16 : 20;
+			std::vector<uint8_t> bytes(names_at + (substitute.size() + print.size() + 2) * 2, 0);
+			put32(bytes, 0, mount_point ? tag_mount_point : tag_symbolic_link);
+			const auto put16 = [&](size_t at, size_t value) { const uint16_t word = uint16_t(value); std::memcpy(bytes.data() + at, &word, 2); };
+			put16(4, bytes.size() - 8);
+			put16(8, 0);
+			put16(10, substitute.size() * 2);
+			put16(12, (substitute.size() + 1) * 2);
+			put16(14, print.size() * 2);
+			if (!mount_point)
+				put32(bytes, 16, absolute ? 0 : 1);
+			std::memcpy(bytes.data() + names_at, substitute.data(), substitute.size() * 2);
+			std::memcpy(bytes.data() + names_at + (substitute.size() + 1) * 2, print.data(), print.size() * 2);
+			if (call.u32(5) < bytes.size()) {
+				if (call.u32(5) >= 8 && call[4])
+					call.write(call[4], std::span<const uint8_t>(bytes.data(), 8));
+				call.fail(call.u32(5) >= 8 ? 234 : 122);
+				return;
+			}
+			call.write(call[4], bytes);
+			if (call[6])
+				call.store<uint32_t>(call[6], uint32_t(bytes.size()));
+			call.ret(1);
+			return;
+		}
+		if (code == fsctl_delete_reparse_point) {
+			if (!link) {
+				call.fail(4390);
+				return;
+			}
+			std::error_code error;
+			const bool directory = std::filesystem::is_directory(file->path, error);
+			if (::unlink(file->path.c_str()) || (directory ? ::mkdir(file->path.c_str(), 0777) : ::close(::open(file->path.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0666)))) {
+				call.fail(error_of(errno));
+				return;
+			}
+			call.ret(1);
+			return;
+		}
+		// FSCTL_SET_REPARSE_POINT: the tag, the data length, then the names' offsets and lengths (and a symbolic link's flags).
+		if (!call[2] || call.u32(3) < 16) {
+			call.fail(4392);
+			return;
+		}
+		const auto header = call.read(call[2], 20);
+		uint32_t tag;
+		std::memcpy(&tag, header.data(), 4);
+		if (tag != tag_mount_point && tag != tag_symbolic_link) {
+			call.fail(4394);
+			return;
+		}
+		const auto word = [&](size_t at) { uint16_t value; std::memcpy(&value, header.data() + at, 2); return size_t(value); };
+		const size_t names_at = tag == tag_mount_point ? 16 : 20;
+		uint32_t flags = 0;
+		if (tag == tag_symbolic_link)
+			std::memcpy(&flags, header.data() + 16, 4);
+		if (word(10) == 0 || names_at + word(8) + word(10) > call.u32(3)) {
+			call.fail(4392);
+			return;
+		}
+		const auto bytes = call.read(call[2] + names_at + word(8), word(10));
+		std::u16string substitute(bytes.size() / 2, u'\0');
+		std::memcpy(substitute.data(), bytes.data(), substitute.size() * 2);
+		const bool relative = tag == tag_symbolic_link && (flags & 1);
+		if (!relative && substitute.starts_with(u"\\??\\"))
+			substitute = substitute.substr(4);
+		std::filesystem::path content;
+		if (relative) {
+			auto text = substitute;
+			for (auto &character : text)
+				if (character == u'\\')
+					character = u'/';
+			content = to_utf8(text);
+		} else {
+			const auto target = paths.resolve(substitute);
+			if (!target) {
+				call.fail(123);
+				return;
+			}
+			content = target->host;
+		}
+		if (link) {
+			call.fail(4391);
+			return;
+		}
+		// A mount point goes on an empty directory, a symbolic link on any file or directory that is empty.
+		std::error_code error;
+		const bool directory = S_ISDIR(own.st_mode);
+		if (tag == tag_mount_point && !directory) {
+			call.fail(267);
+			return;
+		}
+		if (directory ? !std::filesystem::is_empty(file->path, error) : own.st_size != 0) {
+			call.fail(145);
+			return;
+		}
+		if ((directory ? ::rmdir(file->path.c_str()) : ::unlink(file->path.c_str())) || ::symlink(content.c_str(), file->path.c_str())) {
+			call.fail(error_of(errno));
+			return;
+		}
+		call.ret(1);
 	});
 	registry.add("GetFileTime", 4, [&, resolve, missing, file_of](ApiCall &call) {
 		const auto file = file_of(call[0]);

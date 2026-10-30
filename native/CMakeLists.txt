@@ -2020,6 +2020,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_nt_create_file COMMAND raven --run-process --execution=native ${NT_CREATE_FILE_CLIENT})
             set_tests_properties(native_nt_create_file PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/nt-create-file-prefix")
+            # Junctions through FSCTL_SET_REPARSE_POINT, read back and removed, and a file that is no reparse point.
+            set(JUNCTION_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/junction.exe)
+            add_custom_command(OUTPUT ${JUNCTION_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ea900000,--no-insert-timestamp
+                    -o ${JUNCTION_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/junction_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/junction_client.c VERBATIM)
+            add_custom_target(junction_fixture ALL DEPENDS ${JUNCTION_CLIENT})
+            add_test(NAME native_junction COMMAND raven --run-process --execution=native ${JUNCTION_CLIENT})
+            set_tests_properties(native_junction PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/junction-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
