@@ -1582,6 +1582,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"RtlWakeAddressSingle", "RtlWakeAddressAll",
 		// The processor a thread runs on.
 		"NtGetCurrentProcessorNumber", "NtGetCurrentProcessorNumberEx", "RtlGetCurrentProcessorNumber", "RtlGetCurrentProcessorNumberEx",
+		// The C runtime string functions ntdll exports.
+		"strlen", "strcmp", "strncmp",
 		// What the runtime's own components import from ntdll, which they need whether a program loads them at start or later.
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
