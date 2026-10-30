@@ -3,6 +3,7 @@
 #include "event.h"
 #include "mutex.h"
 
+#include <array>
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -127,7 +128,17 @@ int main(int argc, char **argv)
 		process.protect_memory(output,4096,PROT_READ);
 		check(invoke("NtCreateEvent",{output,0x1f0003,0,0,0})==0xc0000005U && !objects.count(),"readonly event output allocated state");
 		process.protect_memory(output,4096,PROT_READ | PROT_WRITE);
-		check(invoke("NtCreateEvent",{output,0x1f0003,1,0,0})==0xc00000bbU && !objects.count(),"unsupported attributes created state");
+		check(invoke("NtCreateEvent",{output,0x1f0003,1,0,0})==0xc0000005U && !objects.count(),"unreadable attributes created state");
+		// OBJECT_ATTRIBUTES without a name make an unnamed event, inheritable with OBJ_INHERIT; a named one is not made here.
+		const auto attributes=process.map_memory(4096,PROT_READ | PROT_WRITE);
+		std::array<uint8_t,48> unnamed{}; unnamed[0]=48; unnamed[24]=2;
+		process.write_memory(attributes,unnamed);
+		check(invoke("NtCreateEvent",{output,0x1f0003,attributes,0,0})==0 && objects.count()==1,"unnamed attributes made no event");
+		const auto inheritable=process.read_memory(output,8);
+		uint64_t made_event=0; for (size_t byte=0; byte<8; ++byte) made_event|=uint64_t(inheritable[byte])<<(byte*8);
+		check(objects.inherit(made_event) && invoke("CloseHandle",{made_event}) && !objects.count(),"OBJ_INHERIT was not kept");
+		unnamed[16]=0x10; process.write_memory(attributes,unnamed);
+		check(invoke("NtCreateEvent",{output,0x1f0003,attributes,0,0})==0xc00000bbU && !objects.count(),"named native event created state");
 		const auto live=invoke("CreateEventW",{0,1,0,0});
 		check(live && objects.count()==1 && invoke("NtSetEvent",{live,0x400000000000ULL})==0xc0000005U &&
 			objects.query_event(live).value==0,"bad previous-state output signaled an event");

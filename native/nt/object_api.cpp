@@ -71,11 +71,20 @@ bool NativeObjectAPI::dispatch(std::string_view name)
 	try {
 		if (create) {
 			if (nt) writable(args[0],8);
-			if (nt && args[2]) status=0xc00000bbU;
+			// OBJECT_ATTRIBUTES without a name (the Cygwin runtime passes them for inheritance and security) make an unnamed event,
+			// inheritable with OBJ_INHERIT; a named native event is not made here.
+			bool named=false,inherit=false;
+			if (nt && args[2]) {
+				const auto attributes=process.read_memory(args[2],32);
+				for (size_t byte=16; byte<24; ++byte) named|=attributes[byte]!=0;
+				inherit=attributes[24] & 2;
+			}
+			if (named) status=0xc00000bbU;
 			else {
 				const auto made=objects.create_event(nt ? uint32_t(args[1]) : 0x1f0003,
 					nt ? uint32_t(args[3]) : uint32_t(args[1]) ? 0 : 1,nt ? uint8_t(args[4])!=0 : uint32_t(args[2])!=0);
 				status=made.status; result=made.value;
+				if (!status && inherit) objects.set_inherit(result,true);
 				if (nt && !status) {
 					std::array<uint8_t,8> output{}; put(output,0,result,8);
 					try { process.write_memory(args[0],output); }
