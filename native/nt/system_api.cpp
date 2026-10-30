@@ -1137,6 +1137,13 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 				call.store<uint32_t>(call[0], 0);
 			call.ret(15700);
 		});
+	// The same for any process, which is never packaged either: the length follows the process handle.
+	for (const char *name : {"GetPackageFullName", "GetPackageFamilyName", "GetApplicationUserModelId"})
+		registry.add(name, 3, [](ApiCall &call) {
+			if (call[1])
+				call.store<uint32_t>(call[1], 0);
+			call.ret(15700);
+		});
 	// No app package is installed: a family has no packages, and the counts say so.
 	registry.add("GetPackagesByPackageFamily", 5, [](ApiCall &call) {
 		if (!call[0] || !call[1] || !call[3]) {
