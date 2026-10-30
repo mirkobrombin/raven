@@ -22,8 +22,7 @@ PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2d
             "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/msxml3/", "dll/win32/stdole2.tlb/",
             "dll/win32/atl/", "dll/win32/atl100/", "dll/win32/oleaut32/", "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
-            "dll/win32/propsys/", "dll/win32/mlang/", "dll/win32/windowscodecs/", "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/urlmon/", "dll/win32/combase/", "dll/win32/riched20/", "dll/win32/msvfw32/", "dll/win32/advpack/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c",
-            "dll/win32/xmllite/")
+            "dll/win32/propsys/", "dll/win32/mlang/", "dll/win32/windowscodecs/", "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/urlmon/", "dll/win32/combase/", "dll/win32/riched20/", "dll/win32/msvfw32/", "dll/win32/advpack/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -490,8 +489,8 @@ def main():
     # administrator and run INF files through.
     library("advpack.dll", source / "dll/win32/advpack", [], ["ole32", "setupapi", "version", "advapi32"], rc="advpack.rc")
     # xmllite.dll: the streaming XML reader and writer, which the Office Click-to-Run client reads its configuration with.
-    xmllite_root = source / "dll/win32/xmllite"
-    library("xmllite.dll", xmllite_root, sources=[*listed_sources(xmllite_root), xmllite_root / "guid.c"])
+    xmllite_root = repo / "native/upstream/raven-xmllite"
+    library("xmllite.dll", xmllite_root, wine_module=False, sources=[xmllite_root / name for name in ("guid.c", "reader.c", "writer.c")])
     # raven-setupapi.dll: the setup API, which the runtime's setupapi.dll hands its setup information files, file queues and cabinets to;
     # device management reaches the plug and play service through the RPC client widl writes.
     setupapi_root = source / "dll/win32/setupapi"
