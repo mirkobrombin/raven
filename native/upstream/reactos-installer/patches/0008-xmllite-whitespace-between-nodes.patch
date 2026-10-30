@@ -1,0 +1,14 @@
+--- a/dll/win32/xmllite/writer.c
++++ b/dll/win32/xmllite/writer.c
+@@ -2030,7 +2030,11 @@
+         break;
+     case XmlWriterState_InvalidEncoding:
+         return MX_E_ENCODING;
++    /* Raven: whitespace goes anywhere outside a start tag, after the declaration and between elements as much as before them. */
+     case XmlWriterState_Ready:
++    case XmlWriterState_PIDocStarted:
++    case XmlWriterState_DocStarted:
++    case XmlWriterState_Content:
+         break;
+     default:
+         return WR_E_INVALIDACTION;

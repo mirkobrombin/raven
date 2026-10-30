@@ -66,5 +66,28 @@ int raven_entry(void)
 	IXmlReader_Release(reader);
 	IStream_Release(output);
 	IStream_Release(input);
+	{
+		/* A document copied whole from a reader into a writer, declaration and an empty default namespace included, as programs load
+		 * a file into a writer to keep it. */
+		static const char copied[] = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<R Id=\"7\" xmlns=\"\">\r\n  <S>\r\n    <U T=\"1\" />\r\n  </S>\r\n</R>";
+		HRESULT result;
+		if (CreateStreamOnHGlobal(NULL, TRUE, &input) != S_OK || IStream_Write(input, copied, sizeof copied - 1, NULL) != S_OK) return 14;
+		IStream_Seek(input, start, STREAM_SEEK_SET, NULL);
+		if (CreateXmlReader(&IID_IXmlReader, (void **)&reader, NULL) != S_OK || IXmlReader_SetInput(reader, (IUnknown *)input) != S_OK) return 15;
+		if (CreateStreamOnHGlobal(NULL, TRUE, &output) != S_OK || CreateXmlWriter(&IID_IXmlWriter, (void **)&writer, NULL) != S_OK ||
+			IXmlWriter_SetOutput(writer, (IUnknown *)output) != S_OK) return 16;
+		while (!IXmlReader_IsEOF(reader))
+			if ((result = IXmlWriter_WriteNode(writer, reader, TRUE)) != S_OK && result != S_FALSE)
+				return 100 + (int)(result & 0xff);
+		if (IXmlWriter_Flush(writer) != S_OK) return 17;
+		if (GetHGlobalFromStream(output, &memory) != S_OK || IStream_Stat(output, &stat, STATFLAG_NONAME) != S_OK) return 18;
+		written = GlobalLock(memory);
+		if (!written || !contains(written, stat.cbSize.LowPart, "<U T=\"1\"") || !contains(written, stat.cbSize.LowPart, "</R>")) return 19;
+		GlobalUnlock(memory);
+		IXmlWriter_Release(writer);
+		IXmlReader_Release(reader);
+		IStream_Release(output);
+		IStream_Release(input);
+	}
 	return 0;
 }
