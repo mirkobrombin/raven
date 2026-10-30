@@ -1517,8 +1517,14 @@ static HRESULT STDMETHODCALLTYPE font_info_strings(IDWriteFont *self, DWRITE_INF
 		text = entry->full;
 	else if (id == DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_NAME)
 		text = entry->postscript;
-	else if (id == DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES)
-		text = entry->win32 && entry->win32[0] ? entry->win32 : entry->family;
+	else if (id == DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES || id == DWRITE_INFORMATIONAL_STRING_TYPOGRAPHIC_FAMILY_NAMES) {
+		/* A face found through an alias family goes by the alias, as it does in the system set. */
+		FamilyEntry *family = FONT_OF(self)->family;
+		if (family && !wequal_fold(family->name, entry->family))
+			text = family->name;
+		else if (id == DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES)
+			text = entry->win32 && entry->win32[0] ? entry->win32 : entry->family;
+	}
 	if (!text && (int)id > 0 && (size_t)id < sizeof(name_ids) / sizeof(name_ids[0])) {
 		FaceData *data = face_data_for_entry(entry);
 		if (data) {
@@ -2129,6 +2135,13 @@ static IDWriteFontFaceReference *make_reference(FontEntry *entry)
 }
 
 /* ---- the sets ---- */
+/* A font listed under an alias family, such as a Liberation Sans face standing for Arial, goes by the alias in every family name, so a
+ * program that lists the families of the set finds the names it asks for. */
+static BOOL aliased(const SetFont *font)
+{
+	return font->family && !wequal_fold(font->family->name, font->entry->family);
+}
+
 /* The text of one property of a font, written into the buffer when it is a number; NULL when the font has no such property. */
 static const WCHAR *property_text(const SetFont *font, DWRITE_FONT_PROPERTY_ID id, WCHAR buffer[16])
 {
@@ -2139,8 +2152,12 @@ static const WCHAR *property_text(const SetFont *font, DWRITE_FONT_PROPERTY_ID i
 	case DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME:
 		return font->family ? font->family->name : entry->family;
 	case DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FAMILY_NAME:
+		if (aliased(font))
+			return font->family->name;
 		return entry->typographic && entry->typographic[0] ? entry->typographic : entry->family;
 	case DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME:
+		if (aliased(font))
+			return font->family->name;
 		return entry->win32 && entry->win32[0] ? entry->win32 : entry->family;
 	case DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FACE_NAME:
 		return entry->face ? entry->face : L"Regular";

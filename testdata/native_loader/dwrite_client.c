@@ -62,6 +62,14 @@ int raven_entry(void)
 		return 7;
 	if (IDWriteFont_GetWeight(font) != DWRITE_FONT_WEIGHT_REGULAR)
 		return 8;
+	{
+		/* A face found under Arial goes by Arial in its Win32 family name, whichever host font stands for it. */
+		IDWriteLocalizedStrings *win32 = NULL;
+		if (FAILED(IDWriteFont_GetInformationalStrings(font, DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &win32, &exists)) || !exists ||
+			FAILED(IDWriteLocalizedStrings_GetString(win32, 0, name, 64)) || lstrcmpW(name, L"Arial"))
+			return 22;
+		IDWriteLocalizedStrings_Release(win32);
+	}
 	if (FAILED(IDWriteFont_CreateFontFace(font, &face)))
 		return 9;
 	IDWriteFontFace_GetMetrics(face, &metrics);
