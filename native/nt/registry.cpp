@@ -128,8 +128,8 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 // hosts, meta host and strong names in mscoree, which programs and the Framework's own libraries create through COM, and the Task
 // Scheduler, which installers use to start a program once they finish, the accessibility annotation services of oleacc, which
 // programs create for their windows' controls, the MSXML 6.0 classes, which the XML component serves beside its own, the network list,
-// which programs ask whether they are online, and the package manager of the Windows Runtime. A hive that lacks them, a new one or one
-// made before they were registered, gets them.
+// which programs ask whether they are online, the package manager of the Windows Runtime, and the factories of the packaging API, which
+// package managers read .appx and .msix packages with. A hive that lacks them, a new one or one made before they were registered, gets them.
 void NativeRegistry::register_runtime_classes()
 {
 	static constexpr std::pair<const char16_t *, const char16_t *> classes[] = {{u"{E5CB7A31-7512-11D2-89CE-0080C792E5D8}", u"mscoree.dll"},
@@ -141,7 +141,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"{88D96A08-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{88D96A0A-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"},
 		{u"{88D96A0B-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{88D96A0C-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"},
 		{u"{88D96A0E-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{88D96A0F-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"},
-		{u"{88D96A11-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{DCB00C01-570F-4A9B-8D69-199FDBA5723B}", u"raven-netlist.dll"}};
+		{u"{88D96A11-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{DCB00C01-570F-4A9B-8D69-199FDBA5723B}", u"raven-netlist.dll"},
+		{u"{5842A140-FF9F-4166-8F5C-62F5B7B0C781}", u"raven-appx.dll"}, {u"{378E0446-5384-43B7-8877-E7DBDD883446}", u"raven-appx.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;
