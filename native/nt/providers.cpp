@@ -2530,6 +2530,31 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		else if (found->second != UINT64_MAX)
 			++found->second;
 	};
+	// A library named by its path is in the process when the module of that file name came from that file. The libraries Raven
+	// serves itself live in the system folder, where GetModuleFileName reports them.
+	module_api.set_path_lookup([&](const std::string &name) -> uint64_t {
+		const auto slash = name.find_last_of("/\\");
+		auto identity = name.substr(slash == name.npos ? 0 : slash + 1);
+		for (auto &character : identity)
+			if (character >= 'A' && character <= 'Z')
+				character = static_cast<char>(character + ('a' - 'A'));
+		if (identity.find('.') == identity.npos)
+			identity += ".dll";
+		const auto found = modules.all().find(identity);
+		if (found == modules.all().end())
+			return 0;
+		const auto requested = paths.resolve(from_utf8(name));
+		if (!requested)
+			return 0;
+		std::error_code error;
+		const auto explicit_file = explicit_files.find(identity);
+		const auto file = explicit_file != explicit_files.end() ? explicit_file->second : found->second->file;
+		if (!file.empty())
+			return std::filesystem::equivalent(requested->host, file, error) ? found->second->loaded.base() : 0;
+		const auto system = paths.resolve(u"C:\\Windows\\System32\\" + from_utf8(identity));
+		return system && requested->host == system->host ? found->second->loaded.base() : 0;
+	});
+	kernel.module_named = [&](uint64_t address, bool wide) { return module_api.module_handle(address, wide); };
 	module_api.set_loader([&](std::string name) -> uint64_t {
 		await_loader();
 		// DONT_RESOLVE_DLL_REFERENCES maps the library alone: its imports are not followed and it is not started, so even an image of

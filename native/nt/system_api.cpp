@@ -1408,6 +1408,12 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 					handle = module->loaded.base();
 		} else if (!call[1]) {
 			handle = context.entry.loaded.base();
+		} else if (context.module_named) {
+			handle = context.module_named(call[1], true);
+			if (!handle) {
+				call.ret(0);
+				return;
+			}
 		} else {
 			auto name = to_utf8(call.wide(call[1]));
 			for (auto &character : name)
