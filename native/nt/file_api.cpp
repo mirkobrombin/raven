@@ -1975,6 +1975,15 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("DuplicateHandle", 7, [&, resolve, missing, file_of, find_first, copy_file](ApiCall &call) {
 		constexpr uint64_t current = UINT64_MAX;
 		constexpr uint32_t same_access = 0x2, close_source = 0x1;
+		// DUPLICATE_CLOSE_SOURCE closes a handle of this process whatever else happens, failures included: programs (Go's process
+		// start among them) close handles with no target process at all this way.
+		struct CloseSource {
+			NativeObjects &objects;
+			uint64_t handle;
+			bool wanted;
+			~CloseSource() { if (wanted) objects.close(handle); }
+		} close_after{objects, call[1], (call.u32(6) & close_source) && call[1] != UINT64_MAX && call[1] != UINT64_MAX - 1 &&
+			(call[0] == current || objects.object_as<SelfProcessObject>(call[0]) != nullptr)};
 		const auto source_process = call[0] == current ? nullptr : objects.object(call[0]);
 		const auto target_process = call[2] == current ? nullptr : objects.object(call[2]);
 		for (const auto handle : {call[0], call[2]}) {
@@ -2029,8 +2038,6 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			}
 			if (call[3])
 				call.store_pointer(call[3], made.value);
-			if ((call.u32(6) & close_source) && call[1] != UINT64_MAX && call[1] != UINT64_MAX - 1)
-				objects.close(call[1]);
 			call.ret(1);
 			return;
 		}
@@ -2106,9 +2113,6 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			objects.set_inherit(made.value, true);
 		if (call[3])
 			call.store_pointer(call[3], made.value);
-		// DUPLICATE_CLOSE_SOURCE closes the original whatever else happens.
-		if ((call.u32(6) & close_source) && call[1] != UINT64_MAX && call[1] != UINT64_MAX - 1)
-			objects.close(call[1]);
 		call.ret(1);
 	});
 	// NtDuplicateObject takes the arguments of DuplicateHandle, with OBJ_INHERIT among the attributes, and answers with a status.
