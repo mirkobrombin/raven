@@ -834,39 +834,36 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(left < right ? 1 : left == right ? 2 : 3);
 	});
-	const auto map_string = [](ApiCall &call, uint32_t flags, std::u16string text, uint64_t destination, int32_t capacity) {
+	// LCMAP_LOWERCASE and LCMAP_UPPERCASE.
+	const auto map_case = [](uint32_t flags, std::u16string text) {
 		if (flags & 0x100) for (auto &character : text) character = fold_case(character);
 		else if (flags & 0x200) for (auto &character : text) character = upper_case(character);
-		const size_t needed = text.size();
+		return text;
+	};
+	// What LCMapString answers: a source given with its length maps to that many units and no more, one ended by a zero (length -1)
+	// maps, counts and writes its zero too. Without a destination the count is the answer; a destination too small fails with
+	// ERROR_INSUFFICIENT_BUFFER and is not written.
+	const auto deliver = [](ApiCall &call, std::span<const uint8_t> bytes, size_t units, uint64_t destination, int32_t capacity) {
 		if (!capacity) {
-			call.ret(needed);
+			call.ret(units);
 			return;
 		}
-		if (size_t(capacity) < needed) {
+		if (capacity < 0 || size_t(capacity) < units) {
 			call.fail(122);
 			return;
 		}
-		call.put_wide(destination, text, size_t(capacity) + 1);
-		std::vector<uint8_t> bytes(text.size() * 2);
-		std::memcpy(bytes.data(), text.data(), bytes.size());
 		call.write(destination, bytes);
-		call.ret(needed);
+		call.ret(units);
 	};
-	registry.add("LCMapStringW", 6, [map_string](ApiCall &call) {
-		const int32_t length = call.i32(3);
-		auto text = counted_wide(call, call[2], length);
-		if (length < 0) text.push_back(u'\0');
-		const auto zero = length < 0;
-		if (zero) text.pop_back();
-		map_string(call, call.u32(1), text, call[4], call.i32(5));
-		if (zero && call.result) call.ret(call.result + 1);
-	});
-	registry.add("LCMapStringEx", 9, [map_string](ApiCall &call) {
-		const int32_t length = call.i32(3);
-		auto text = counted_wide(call, call[2], length);
-		map_string(call, call.u32(1), text, call[4], call.i32(5));
-		if (length < 0 && call.result) call.ret(call.result + 1);
-	});
+	const auto map_wide = [map_case, deliver](ApiCall &call, size_t source_at) {
+		const int32_t length = call.i32(source_at + 1);
+		auto text = map_case(call.u32(1), counted_wide(call, call[source_at], length));
+		if (length < 0)
+			text.push_back(u'\0');
+		deliver(call, {reinterpret_cast<const uint8_t *>(text.data()), text.size() * 2}, text.size(), call[source_at + 2], call.i32(source_at + 3));
+	};
+	registry.add("LCMapStringW", 6, [map_wide](ApiCall &call) { map_wide(call, 2); });
+	registry.add("LCMapStringEx", 9, [map_wide](ApiCall &call) { map_wide(call, 2); });
 	registry.add("FoldStringW", 5, [](ApiCall &call) {
 		const uint32_t flags = call.u32(0);
 		const int32_t length = call.i32(2), capacity = call.i32(4);
@@ -925,26 +922,13 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("IdnToAscii", 5, [convert_name](ApiCall &call) { convert_name(call, idn_to_ascii); });
 	registry.add("IdnToUnicode", 5, [convert_name](ApiCall &call) { convert_name(call, idn_to_unicode); });
-	registry.add("LCMapStringA", 6, [&, map_string, ansi_page](ApiCall &call) {
+	registry.add("LCMapStringA", 6, [&, map_case, deliver, ansi_page](ApiCall &call) {
 		const int32_t length = call.i32(3);
-		const auto narrow = counted_narrow(call, call[2], length);
 		const auto page = ansi_page(0);
-		auto text = decode_ansi(narrow, page);
-		const uint32_t flags = call.u32(1);
-		if (flags & 0x100) for (auto &character : text) character = fold_case(character);
-		else if (flags & 0x200) for (auto &character : text) character = upper_case(character);
-		auto result = encode_ansi(text, page);
-		const int32_t capacity = call.i32(5);
-		if (!capacity) {
-			call.ret(result.size());
-			return;
-		}
-		if (size_t(capacity) < result.size()) {
-			call.fail(122);
-			return;
-		}
-		call.write(call[4], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(result.data()), result.size()));
-		call.ret(result.size());
+		auto result = encode_ansi(map_case(call.u32(1), decode_ansi(counted_narrow(call, call[2], length), page)), page);
+		if (length < 0)
+			result.push_back('\0');
+		deliver(call, {reinterpret_cast<const uint8_t *>(result.data()), result.size()}, result.size(), call[4], call.i32(5));
 	});
 	// The character classes of a text for CT_CTYPE1, CT_CTYPE2 and CT_CTYPE3.
 	const auto classify = [](uint32_t kind, const std::u16string &text) {
