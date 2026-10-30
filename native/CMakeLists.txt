@@ -1987,6 +1987,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_directory_by_handle COMMAND raven --run-process --execution=native ${DIRECTORY_BY_HANDLE_CLIENT})
             set_tests_properties(native_directory_by_handle PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/directory-by-handle-prefix")
+            # The clocks of KUSER_SHARED_DATA advance and agree with GetSystemTimeAsFileTime.
+            set(SHARED_CLOCK_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/shared-clock.exe)
+            add_custom_command(OUTPUT ${SHARED_CLOCK_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ea400000,--no-insert-timestamp
+                    -o ${SHARED_CLOCK_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/shared_clock_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/shared_clock_client.c VERBATIM)
+            add_custom_target(shared_clock_fixture ALL DEPENDS ${SHARED_CLOCK_CLIENT})
+            add_test(NAME native_shared_clock COMMAND raven --run-process --execution=native ${SHARED_CLOCK_CLIENT})
+            set_tests_properties(native_shared_clock PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/shared-clock-prefix")
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)

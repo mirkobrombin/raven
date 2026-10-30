@@ -2,6 +2,8 @@
 #include "nls.h"
 
 #include <array>
+#include <atomic>
+#include <thread>
 #include <chrono>
 #include <string_view>
 #include <algorithm>
@@ -29,44 +31,88 @@ static uint32_t value(NativeProcess &process, uint64_t address)
 }
 
 // KUSER_SHARED_DATA, the page Windows maps read-only at 0x7ffe0000 in every process: programs and installers read the version of
-// Windows, the system folder and the processor count straight from it. The values agree with what GetVersionEx answers; the clock
-// fields hold the time the process started, as the page is not kept current.
+// Windows, the system folder and the processor count straight from it, and Go reads its clocks there. The values agree with what
+// GetVersionEx answers. The page is shared with the host, which keeps the clock fields current as Windows does at each clock tick.
+namespace {
+
+constexpr uint64_t shared_user_data = 0x7ffe0000;
+
+// A KSYSTEM_TIME: the low word and two copies of the high word. Readers take the first high copy, the low word and the second copy,
+// and read again when the copies differ, so the second copy is written first and the first copy last.
+void store_system_time(uint8_t *page, size_t at, uint64_t value)
+{
+	const auto word = [&](size_t offset) { return std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t *>(page + at + offset)); };
+	word(8).store(uint32_t(value >> 32), std::memory_order_release);
+	word(0).store(uint32_t(value), std::memory_order_release);
+	word(4).store(uint32_t(value >> 32), std::memory_order_release);
+}
+
+// The clock fields: the tick count (in ticks of 15.625 ms, the TickCountMultiplier the page declares), the interrupt time since boot
+// and the system time since 1601, both in 100-nanosecond units.
+void store_clocks(uint8_t *page)
+{
+	using namespace std::chrono;
+	const auto interrupt_time = uint64_t(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count() / 100);
+	const auto system_time = uint64_t(duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count() / 100) + 116444736000000000ULL;
+	const uint64_t ticks = interrupt_time / 156250;
+	std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t *>(page)).store(uint32_t(ticks), std::memory_order_release);
+	store_system_time(page, 0x08, interrupt_time);
+	store_system_time(page, 0x14, system_time);
+	store_system_time(page, 0x320, ticks);
+}
+
+}
+
 static void map_shared_user_data(NativeProcess &process)
 {
-	constexpr uint64_t page = 0x7ffe0000;
 	try {
-		process.read_memory(page, 4);
+		process.read_memory(shared_user_data, 4);
 		return;
 	} catch (...) {}
-	process.map_memory(4096, PROT_READ | PROT_WRITE, page);
-	using namespace std::chrono;
-	const auto since_1601 = uint64_t(duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count() / 100) + 116444736000000000ULL;
-	const auto uptime = uint64_t(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count() / 100);
-	const auto ticks = uptime / 10000;
-	field(process, page + 0x00, uint32_t(ticks), 4);
-	field(process, page + 0x04, 0x0fa00000, 4);
-	const auto system_time = [&](uint64_t at, uint64_t value) {
-		field(process, at, uint32_t(value), 4);
-		field(process, at + 4, uint32_t(value >> 32), 4);
-		field(process, at + 8, uint32_t(value >> 32), 4);
-	};
-	system_time(page + 0x08, uptime);
-	system_time(page + 0x14, since_1601);
-	field(process, page + 0x2c, 0x14c, 2);
-	field(process, page + 0x2e, 0x8664, 2);
+	const int descriptor = ::memfd_create("raven-shared-user-data", MFD_CLOEXEC);
+	if (descriptor < 0 || ::ftruncate(descriptor, 4096)) {
+		if (descriptor >= 0)
+			::close(descriptor);
+		throw std::runtime_error("cannot create the shared user data page");
+	}
+	auto *page = static_cast<uint8_t *>(::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, descriptor, 0));
+	if (page == MAP_FAILED) {
+		::close(descriptor);
+		throw std::runtime_error("cannot map the shared user data page");
+	}
+	try {
+		process.map_shared(descriptor, 4096, 0, shared_user_data);
+	} catch (...) {
+		::munmap(page, 4096);
+		::close(descriptor);
+		throw;
+	}
+	::close(descriptor);
+	const uint64_t base = shared_user_data;
+	field(process, base + 0x04, 0x0fa00000, 4);
+	store_clocks(page);
+	field(process, base + 0x2c, 0x14c, 2);
+	field(process, base + 0x2e, 0x8664, 2);
 	const std::u16string_view root = u"C:\\Windows";
 	for (size_t index = 0; index < root.size(); ++index)
-		field(process, page + 0x30 + index * 2, root[index], 2);
-	field(process, page + 0x260, 19045, 4);
-	field(process, page + 0x264, 1, 4);
-	field(process, page + 0x268, 1, 1);
-	field(process, page + 0x26c, 10, 4);
-	field(process, page + 0x270, 0, 4);
-	field(process, page + 0x2d0, 0x100, 4);
-	field(process, page + 0x2e8, sysconf(_SC_PHYS_PAGES), 4);
-	system_time(page + 0x320, ticks);
-	field(process, page + 0x3c0, std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN)), 4);
-	process.protect_memory(page, 4096, PROT_READ);
+		field(process, base + 0x30 + index * 2, root[index], 2);
+	field(process, base + 0x260, 19045, 4);
+	field(process, base + 0x264, 1, 4);
+	field(process, base + 0x268, 1, 1);
+	field(process, base + 0x26c, 10, 4);
+	field(process, base + 0x270, 0, 4);
+	field(process, base + 0x2d0, 0x100, 4);
+	field(process, base + 0x2e8, sysconf(_SC_PHYS_PAGES), 4);
+	field(process, base + 0x3c0, std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN)), 4);
+	process.protect_memory(base, 4096, PROT_READ);
+	// The host's view of the page lives as long as the process; the thread updates it every millisecond, finer than the 15.625 ms
+	// clock tick Windows runs at by default.
+	std::thread([page] {
+		for (;;) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			store_clocks(page);
+		}
+	}).detach();
 }
 
 NativeEnvironment::NativeEnvironment(NativeProcess &process, uint64_t image_base,

@@ -998,9 +998,9 @@ uint64_t NativeProcess::map_memory(size_t size, int protection, uint64_t address
 	return mapped;
 }
 
-uint64_t NativeProcess::map_shared(int descriptor, size_t size, uint64_t offset)
+uint64_t NativeProcess::map_shared(int descriptor, size_t size, uint64_t offset, uint64_t address)
 {
-	return map_file(descriptor, size, offset, false);
+	return map_file(descriptor, size, offset, false, address);
 }
 
 uint64_t NativeProcess::map_descriptor(int descriptor, size_t size, uint64_t offset)
@@ -1058,7 +1058,7 @@ uint64_t NativeProcess::receive_descriptor(int descriptor, uint64_t scratch)
 	return uint64_t(received);
 }
 
-uint64_t NativeProcess::map_file(int descriptor, size_t size, uint64_t offset, bool transfer)
+uint64_t NativeProcess::map_file(int descriptor, size_t size, uint64_t offset, bool transfer, uint64_t address)
 {
 	state->trap_page.clear();
 	state->require_memory();
@@ -1079,15 +1079,16 @@ uint64_t NativeProcess::map_file(int descriptor, size_t size, uint64_t offset, b
 		}
 		// Windows places views on the 64 KiB allocation granularity and programs round view addresses down to it, so a view starts on
 		// such a boundary: a reservation one granule larger is made, the file is mapped over its aligned part and the slack is returned.
-		constexpr uint64_t granularity = 0x10000;
-		const auto hint = state->mode == NativeMode::x86 ? low_gap(state->child->pid, size + granularity, state->limit()) : 0;
+		// A view asked for at an address goes exactly there and needs no slack.
+		const uint64_t granularity = address ? 0 : 0x10000;
+		const auto hint = address ? address : state->mode == NativeMode::x86 ? low_gap(state->child->pid, size + granularity, state->limit()) : 0;
 		const auto reserved = memory_syscall(SYS_mmap, hint, size + granularity, PROT_NONE,
 			MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (hint ? MAP_FIXED_NOREPLACE : 0), uint64_t(-1), 0);
-		if (reserved >= state->limit() || size + granularity > state->limit() - reserved) {
+		if (reserved >= state->limit() || size + granularity > state->limit() - reserved || (address && reserved != address)) {
 			state->child->stop();
 			throw std::runtime_error("host returned an invalid shared mapping address");
 		}
-		const uint64_t aligned = (reserved + granularity - 1) & ~(granularity - 1);
+		const uint64_t aligned = granularity ? (reserved + granularity - 1) & ~(granularity - 1) : reserved;
 		const auto mapped = memory_syscall(SYS_mmap, aligned, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, guest_descriptor, offset);
 		if (mapped != aligned) {
 			state->child->stop();
