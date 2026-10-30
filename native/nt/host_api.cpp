@@ -10,6 +10,7 @@
 #include <ifaddrs.h>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
@@ -75,6 +76,34 @@ uint8_t prefix_length(const sockaddr *mask)
 	for (size_t index = 0; index < size; ++index)
 		bits = uint8_t(bits + __builtin_popcount(bytes[index]));
 	return bits;
+}
+
+// The host's DNS servers, the nameserver lines of its resolver configuration, as Windows socket addresses (AF_INET6 is 23 there).
+std::vector<std::vector<uint8_t>> host_dns_servers()
+{
+	std::vector<std::vector<uint8_t>> servers;
+	std::ifstream configuration("/etc/resolv.conf");
+	for (std::string line; std::getline(configuration, line);) {
+		std::istringstream words(line);
+		std::string keyword, address;
+		if (!(words >> keyword >> address) || keyword != "nameserver")
+			continue;
+		address = address.substr(0, address.find('%'));
+		in_addr four{};
+		in6_addr six{};
+		if (::inet_pton(AF_INET, address.c_str(), &four) == 1) {
+			std::vector<uint8_t> bytes(16, 0);
+			bytes[0] = AF_INET;
+			std::memcpy(bytes.data() + 4, &four, 4);
+			servers.push_back(std::move(bytes));
+		} else if (::inet_pton(AF_INET6, address.c_str(), &six) == 1) {
+			std::vector<uint8_t> bytes(28, 0);
+			bytes[0] = 23;
+			std::memcpy(bytes.data() + 8, &six, 16);
+			servers.push_back(std::move(bytes));
+		}
+	}
+	return servers;
 }
 
 std::vector<Adapter> host_adapters(uint32_t family)
@@ -189,9 +218,17 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		const size_t origin_at = unicast_cursor; unicast_cursor += 24;
 		const size_t prefix_at = unicast_cursor;
 		const size_t unicast_record = align(prefix_at + 1, width);
+		// IP_ADAPTER_DNS_SERVER_ADDRESS_XP: length and reserved word, next, then the socket address and its length. Every adapter
+		// that is not the loopback one uses the host's DNS servers.
+		const auto dns_servers = (flags & skip_dns_server) ? std::vector<std::vector<uint8_t>>() : host_dns_servers();
+		const size_t dns_record = align(8 + 2 * width + 4, 8);
+		constexpr uint32_t loopback_type = 24;
 		size_t needed = 0;
 		for (const auto &adapter : adapters) {
 			needed += record;
+			if (adapter.type != loopback_type)
+				for (const auto &server : dns_servers)
+					needed += dns_record + align(server.size(), 8);
 			if (!(flags & skip_unicast))
 				for (const auto &address : adapter.unicast)
 					needed += unicast_record + align(address.socket_address.size(), 8);
@@ -232,7 +269,20 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			}
 			put_pointer(self + suffix_at, base + position);
 			position += 2;
-			(void)dns_at;
+			position = align(position, 8);
+			if (adapter.type != loopback_type) {
+				size_t last = 0;
+				for (const auto &server : dns_servers) {
+					const size_t entry = position, stored = position + dns_record;
+					position = stored + align(server.size(), 8);
+					put32(entry, uint32_t(dns_record));
+					std::memcpy(block.data() + stored, server.data(), server.size());
+					put_pointer(entry + 8 + width, base + stored);
+					put32(entry + 8 + 2 * width, uint32_t(server.size()));
+					put_pointer(last ? last + 8 : self + dns_at, base + entry);
+					last = entry;
+				}
+			}
 			std::memcpy(block.data() + self + physical_at, adapter.hardware, 8);
 			put32(self + physical_length_at, adapter.hardware_length);
 			put32(self + flags_at, 0x10 | 0x80);
@@ -274,7 +324,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			position = align(position, 8);
 		}
 		call.write(base, std::span<const uint8_t>(block.data(), std::min(position, block.size())));
-		(void)skip_anycast; (void)skip_multicast; (void)skip_dns_server;
+		(void)skip_anycast; (void)skip_multicast;
 		call.ret(0);
 	});
 	// The IPv4 adapters in IP_ADAPTER_INFO records, loopback left out; addresses past the first of an adapter are chained after the records.
