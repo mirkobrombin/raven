@@ -1510,6 +1510,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(text.size());
 	});
+	// The path as given, each component after its root in the long form the directory holds: the folders keep no 8.3 names, so that is
+	// the entry's own name (its case may differ from the caller's). Relative paths stay relative and the separators stay as written.
 	registry.add("GetLongPathNameW", 3, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
 		const auto name = call.wide(call[0]);
 		const auto resolved = resolve(call, name);
@@ -1519,7 +1521,41 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(missing(*resolved));
 			return;
 		}
-		const auto text = paths.dos(resolved->host);
+		const auto separator = [](char16_t c) { return c == u'\\' || c == u'/'; };
+		size_t root = 0;
+		if (name.starts_with(u"\\\\?\\") || name.starts_with(u"\\\\.\\"))
+			root = 4;
+		if (name.size() >= root + 2 && name[root + 1] == u':')
+			root += 2;
+		else if (root == 0 && name.size() >= 2 && separator(name[0]) && separator(name[1])) {
+			// \\server\share: both stay as written.
+			size_t at = 2;
+			for (int parts = 0; parts < 2 && at < name.size(); ++parts) {
+				while (at < name.size() && !separator(name[at]))
+					++at;
+				if (parts == 0 && at < name.size())
+					++at;
+			}
+			root = at;
+		}
+		std::u16string text = name.substr(0, root);
+		for (size_t at = root; at < name.size();) {
+			if (separator(name[at])) {
+				text.push_back(name[at++]);
+				continue;
+			}
+			size_t end = at;
+			while (end < name.size() && !separator(name[end]))
+				++end;
+			const auto component = name.substr(at, end - at);
+			if (component != u"." && component != u"..") {
+				const auto here = paths.resolve(name.substr(0, end));
+				text += here && here->exists && !here->host.filename().empty() ? from_utf8(here->host.filename().string()) : component;
+			} else {
+				text += component;
+			}
+			at = end;
+		}
 		const size_t capacity = call.u32(2);
 		call.put_wide(call[1], text, capacity);
 		call.ret(capacity > text.size() ? text.size() : text.size() + 1);
