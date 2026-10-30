@@ -1226,6 +1226,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	// Every process runs in session 1, the interactive one.
+	registry.add("WTSGetActiveConsoleSessionId", 0, [](ApiCall &call) { call.ret(1); });
 	registry.add("ProcessIdToSessionId", 2, [](ApiCall &call) {
 		if (!call[1]) {
 			call.fail(87);
@@ -1355,6 +1356,9 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	// The scheduling class of the process, kept as the program sets it; the host does not change how the process is scheduled.
 	auto priority_class = std::make_shared<uint32_t>(0x20);
 	registry.add("GetPriorityClass", 1, [priority_class](ApiCall &call) { call.ret(*priority_class); });
+	// Host memory is the kernel's to manage: the limits a program asks for are advice, which Windows may ignore as well.
+	registry.add("SetProcessWorkingSetSize", 3, [](ApiCall &call) { call.ret(1); });
+	registry.add("SetProcessWorkingSetSizeEx", 4, [](ApiCall &call) { call.ret(1); });
 	registry.add("SetPriorityClass", 2, [priority_class](ApiCall &call) {
 		const uint32_t value = call.u32(1);
 		if (value != 0x20 && value != 0x40 && value != 0x80 && value != 0x100 && value != 0x4000 && value != 0x8000 && value != 0x00100000 && value != 0x00200000) {
