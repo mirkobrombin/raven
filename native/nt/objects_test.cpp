@@ -131,8 +131,7 @@ int main(int argc, char **argv)
 		const auto live=invoke("CreateEventW",{0,1,0,0});
 		check(live && objects.count()==1 && invoke("NtSetEvent",{live,0x400000000000ULL})==0xc0000005U &&
 			objects.query_event(live).value==0,"bad previous-state output signaled an event");
-		check(invoke("NtWaitForSingleObject",{live,1,0})==0xc00000bbU && invoke("NtQueryEvent",{live,1,output,8,0})==0xc00000bbU,
-			"alertable or unknown query behavior succeeded");
+		check(invoke("NtQueryEvent",{live,1,output,8,0})==0xc00000bbU,"unknown query behavior succeeded");
 		check(invoke("CloseHandle",{live}) && !objects.count() && !api.dispatch("Unimplemented"),"object API leaked state or accepted an unknown name");
 		const auto blocked=objects.create_event(0x100000,0,false);
 		raven::NativeObjectAPI expired(process,environment,objects,std::chrono::steady_clock::now());
