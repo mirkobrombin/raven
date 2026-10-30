@@ -515,6 +515,13 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		thread->alerted_by_id = true;
 		call.ret(0);
 	});
+	// The whole allocation, guard pages included: from DeallocationStack up to the base in the thread block.
+	registry.add("GetCurrentThreadStackLimits", 2, [&threads](ApiCall &call) {
+		const auto teb = threads.current().teb;
+		call.write(call[0], call.read(teb + 0x1478, 8));
+		call.write(call[1], call.read(teb + 0x08, 8));
+		call.ret(0);
+	});
 	registry.add("SwitchToThread", 0, [&threads](ApiCall &call) { call.ret(threads.yield()); });
 
 	registry.add("CreateThread", 6, [&, handle_of](ApiCall &call) {

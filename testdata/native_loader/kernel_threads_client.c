@@ -138,6 +138,9 @@ int raven_entry(void)
 {
 	const int options = critical_options();
 	if (options) return options;
+	ULONG_PTR stack_low=0,stack_high=0;
+	GetCurrentThreadStackLimits(&stack_low,&stack_high);
+	CHECK(78,stack_low && stack_low<(ULONG_PTR)&stack_low && (ULONG_PTR)&stack_low<stack_high);
 	CHECK(79,InitializeCriticalSectionEx(&section,0,1));
 	HANDLE workers[4];
 	for(int i=0;i<4;++i) {

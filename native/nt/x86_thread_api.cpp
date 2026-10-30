@@ -10,8 +10,8 @@ namespace raven {
 
 namespace {
 
-constexpr std::array<std::pair<std::string_view, uint32_t>, 15> thread_exports{{
-	{"CreateThread", 6}, {"DeleteCriticalSection", 1}, {"EnterCriticalSection", 1}, {"ExitThread", 1}, {"GetExitCodeThread", 2},
+constexpr std::array<std::pair<std::string_view, uint32_t>, 16> thread_exports{{
+	{"CreateThread", 6}, {"DeleteCriticalSection", 1}, {"EnterCriticalSection", 1}, {"ExitThread", 1}, {"GetCurrentThreadStackLimits", 2}, {"GetExitCodeThread", 2},
 	{"InitializeCriticalSection", 1}, {"InitializeCriticalSectionAndSpinCount", 2}, {"InitializeCriticalSectionEx", 3}, {"LeaveCriticalSection", 1}, {"ResumeThread", 1}, {"SetThreadPriority", 2},
 	{"Sleep", 1}, {"SwitchToThread", 0}, {"TryEnterCriticalSection", 1}, {"WaitForSingleObject", 2},
 }};
@@ -128,6 +128,13 @@ bool NativeX86Threads::dispatch(std::string_view name)
 		const uint32_t code = thread.state == GuestThread::State::done ? thread.exit_code : still_active;
 		process.write_memory(args[1], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(&code), 4));
 		process.return_api(1);
+	} else if (name == "GetCurrentThreadStackLimits") {
+		// The whole allocation, guard pages included: from DeallocationStack up to the base in the thread block.
+		const auto teb = threads.current().teb;
+		const auto low = process.read_memory(teb + 0xe0c, 4), high = process.read_memory(teb + 0x04, 4);
+		process.write_memory(args[0], low);
+		process.write_memory(args[1], high);
+		process.return_api(0);
 	} else if (name == "ResumeThread") {
 		if (const auto child = objects.object_as<ChildThreadObject>(args[0])) {
 			process.return_api(child->resume());
