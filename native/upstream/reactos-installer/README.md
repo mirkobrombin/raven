@@ -10,7 +10,6 @@ programs and, with `--arch x86`, for 32-bit ones:
   (bison) and the RPC stubs of its custom action server (widl);
 - `msiexec.exe` (`base/system/msiexec`),
   which each prefix also keeps in its system directories;
-- `cabinet.dll` (`dll/win32/cabinet`, on `sdk/lib/3rdparty/zlib`);
 - `sxs.dll` (`dll/win32/sxs`): the side-by-side assembly cache;
 - `rpcrt4.dll` (`dll/win32/rpcrt4`): remote procedure calls over local named pipes;
 - `raven-storage.dll`: the structured storage of `dll/win32/ole32` and

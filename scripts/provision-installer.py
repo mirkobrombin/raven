@@ -18,7 +18,7 @@ from component_licenses import mark_patched_sources, preserve_notices
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/", "sdk/lib/3rdparty/libwine/",
-            "dll/win32/cabinet/", "dll/win32/msi/", "dll/win32/sxs/", "dll/win32/ole32/", "dll/win32/coml2/",
+            "dll/win32/msi/", "dll/win32/sxs/", "dll/win32/ole32/", "dll/win32/coml2/",
             "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/msxml3/", "dll/win32/stdole2.tlb/",
             "dll/win32/atl/", "dll/win32/atl100/", "dll/win32/oleaut32/", "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
@@ -216,11 +216,11 @@ def main():
     # cabinet.dll: cabinet files, their compression and extraction, on zlib.
     zlib_include = source / "sdk/include/reactos/libs/zlib"
     zlib = [compile(source / "sdk/lib/3rdparty/zlib" / name, "zlib_" + Path(name).stem, ["-I" + str(zlib_include)]) for name in ZLIB]
-    cabinet_root = source / "dll/win32/cabinet"
+    cabinet_root = repo / "native/upstream/raven-cabinet"
     with ThreadPoolExecutor(max_workers=2) as pool:
         cabinet = list(pool.map(lambda name: compile(cabinet_root / name, "cabinet_" + Path(name).stem,
-                                                     ["-DHAVE_ZLIB", "-I" + str(cabinet_root), "-I" + str(zlib_include)]),
-                                ("cabinet_main.c", "fci.c", "fdi.c", "stubs.c")))
+                                                     ["-I" + str(cabinet_root), "-I" + str(zlib_include)], wine_module=False),
+                                ("compose.c", "extract.c", "lzx.c", "quantum.c", "session.c")))
     run([output / "spec2def", spec_arch, "-n=cabinet.dll", "-d=" + str(output / "cabinet.def"), cabinet_root / "cabinet.spec"])
     link("cabinet.dll", bases["cabinet"], [*zlib, *cabinet, *debug], output / "cabinet.def", ["-lmsvcrt", "-lkernel32", "-lntdll", "-lgcc"],
          output / "libcabinet.a")
