@@ -352,7 +352,10 @@ std::vector<PEExport> PEImage::exports() const
 		if (ordinal >= result.size())
 			throw std::runtime_error("PE export name ordinal exceeds address table");
 		auto name = string_at(read32(names, size_t(index) * 4));
-		if (name.empty() || (index && name <= previous))
+		// Tools that fill the table after linking leave placeholder slots with no name, which no lookup can reach; they sort first.
+		if (name.empty())
+			continue;
+		if (!previous.empty() && name <= previous)
 			throw std::runtime_error("PE export names are empty, duplicated or unsorted");
 		previous = name;
 		result[ordinal].names.push_back(std::move(name));
