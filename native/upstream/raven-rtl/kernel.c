@@ -75,11 +75,14 @@ HANDLE WINAPI RavenGetProcessHeap(VOID)
 	return PEB_PROCESS_HEAP;
 }
 
-/* ---- critical sections: without spinning, since only one guest thread runs at a time and spinning only delays the owner. No debug record: DebugInfo holds
-   -1 as on Windows when it is left out, and the wait goes on LockCount itself, so nothing here needs a handle a program could close by mistake. ---- */
+/* ---- critical sections: without spinning, since only one guest thread runs at a time and spinning only delays the owner. No debug record: the wait goes on LockCount
+   itself, so nothing here needs a handle a program could close by mistake. DebugInfo leads to one shared block, since some sources name their sections
+   through that pointer. ---- */
+static RTL_CRITICAL_SECTION_DEBUG shared_section_debug;
+
 static void init_section(PRTL_CRITICAL_SECTION section)
 {
-	section->DebugInfo = (PRTL_CRITICAL_SECTION_DEBUG)(LONG_PTR)-1;
+	section->DebugInfo = &shared_section_debug;
 	section->LockCount = -1;
 	section->RecursionCount = 0;
 	section->OwningThread = NULL;
