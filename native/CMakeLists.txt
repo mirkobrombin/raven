@@ -3991,7 +3991,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             execute_process(COMMAND ${RAVEN_MINGW64} -print-file-name=libkernel32.a
                 OUTPUT_VARIABLE RAVEN_KERNEL32_IMPORT OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
             set(DELAY_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/delay-fixtures)
-            set(DELAY_HELPER ${CMAKE_CURRENT_SOURCE_DIR}/upstream/reactos-delayimp/delayimp.c)
+            set(DELAY_HELPER ${LOADER_SOURCES}/delay_helper.c)
             add_custom_command(OUTPUT ${DELAY_FIXTURES}/helper.obj ${DELAY_FIXTURES}/client.obj ${DELAY_FIXTURES}/target.obj
                 COMMAND ${CMAKE_COMMAND} -E make_directory ${DELAY_FIXTURES}
                 COMMAND ${RAVEN_MINGW64} -O2 -fno-stack-protector -c ${DELAY_HELPER} -o ${DELAY_FIXTURES}/helper.obj
