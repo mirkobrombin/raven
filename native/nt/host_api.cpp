@@ -1567,17 +1567,116 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(status == 0 ? 0 : status == 0xc0000073U ? 1332 : status == 0x107 ? 1332 : status == 0xc0000022U ? 5 : status == 0xc000000dU ? 87 :
 			status == 0xc0000017U ? 8 : 317);
 	});
+	// LSA_REFERENCED_DOMAIN_LIST: its header, the entries, then their names and SIDs, in memory LsaFreeMemory gives back.
+	const auto referenced_domains = [&context](ApiCall &call, const std::vector<std::u16string> &domains, const std::vector<std::vector<uint8_t>> &domain_sids) -> uint64_t {
+		const size_t width = call.pointer_width(), text_size = width == 8 ? 16 : 8, trust_size = text_size + width;
+		size_t domain_bytes = 16 + domains.size() * trust_size;
+		for (size_t index = 0; index < domains.size(); ++index)
+			domain_bytes += (domains[index].size() + 1) * 2 + domain_sids[index].size();
+		const uint64_t domain_block = context.allocator.allocate(domain_bytes, true);
+		if (!domain_block)
+			return 0;
+		const auto pointer_at = [&](uint64_t address, uint64_t value) {
+			if (width == 8) call.store<uint64_t>(address, value);
+			else call.store<uint32_t>(address, uint32_t(value));
+		};
+		call.store<uint32_t>(domain_block, uint32_t(domains.size()));
+		pointer_at(domain_block + (width == 8 ? 8 : 4), domains.empty() ? 0 : domain_block + 16);
+		uint64_t cursor = domain_block + 16 + domains.size() * trust_size;
+		for (size_t index = 0; index < domains.size(); ++index) {
+			const uint64_t entry = domain_block + 16 + index * trust_size;
+			call.store<uint16_t>(entry, uint16_t(domains[index].size() * 2));
+			call.store<uint16_t>(entry + 2, uint16_t((domains[index].size() + 1) * 2));
+			pointer_at(entry + (width == 8 ? 8 : 4), cursor);
+			call.put_wide(cursor, domains[index], domains[index].size() + 1);
+			cursor += (domains[index].size() + 1) * 2;
+			pointer_at(entry + text_size, cursor);
+			call.write(cursor, domain_sids[index]);
+			cursor += domain_sids[index].size();
+		}
+		return domain_block;
+	};
+	// The domain's SID is the account's without its last part.
+	const auto domain_sid_of = [](std::vector<uint8_t> sid) {
+		if (sid.size() > 8 && sid[1] > 0) {
+			sid[1] = uint8_t(sid[1] - 1);
+			sid.resize(sid.size() - 4);
+		}
+		return sid;
+	};
+	// LsaLookupSids(policy, count, sids, domains, names): LSA_TRANSLATED_NAME for each SID and the domains they belong to. An unknown SID is
+	// reported as such, with no name.
+	registry.add("LsaLookupSids", 5, [&context, accounts, referenced_domains, domain_sid_of](ApiCall &call) {
+		const uint32_t count = call.u32(1);
+		if (!call[2] || !call[3] || !call[4] || !count || count > 20480) {
+			call.ret(0xc000000dU);
+			return;
+		}
+		const size_t width = call.pointer_width(), name_at = width == 8 ? 8 : 4, index_at = name_at + (width == 8 ? 16 : 8), translated_size = width == 8 ? 32 : 16;
+		const auto known = accounts();
+		std::vector<const Account *> found(count, nullptr);
+		std::vector<std::u16string> domains;
+		std::vector<std::vector<uint8_t>> domain_sids;
+		std::vector<int32_t> domain_of(count, -1);
+		size_t name_bytes = count * translated_size;
+		for (uint32_t index = 0; index < count; ++index) {
+			const uint64_t sid_at = width == 8 ? call.load<uint64_t>(call[2] + index * 8ULL) : call.load<uint32_t>(call[2] + index * 4ULL);
+			if (!sid_at)
+				continue;
+			const auto sid = call.read(sid_at, 8 + size_t(call.read(sid_at, 2)[1]) * 4);
+			const auto match = std::find_if(known.begin(), known.end(), [&](const Account &account) { return account.sid == sid; });
+			if (match == known.end())
+				continue;
+			found[index] = &*match;
+			name_bytes += (match->name.size() + 1) * 2;
+			if (match->domain.empty())
+				continue;
+			const auto known_domain = std::find_if(domains.begin(), domains.end(), [&](const auto &domain) { return equal_fold(domain, match->domain); });
+			domain_of[index] = int32_t(known_domain - domains.begin());
+			if (known_domain == domains.end()) {
+				domains.push_back(match->domain);
+				domain_sids.push_back(domain_sid_of(match->sid));
+			}
+		}
+		const uint64_t domain_block = referenced_domains(call, domains, domain_sids), name_block = context.allocator.allocate(name_bytes, true);
+		if (!domain_block || !name_block) {
+			if (domain_block) context.allocator.release(domain_block);
+			if (name_block) context.allocator.release(name_block);
+			call.ret(0xc0000017U);
+			return;
+		}
+		uint64_t cursor = name_block + count * translated_size;
+		uint32_t mapped = 0;
+		for (uint32_t index = 0; index < count; ++index) {
+			const uint64_t entry = name_block + index * translated_size;
+			if (!found[index]) {
+				call.store<uint32_t>(entry, 8);
+				call.store<int32_t>(entry + index_at, -1);
+				continue;
+			}
+			++mapped;
+			call.store<uint32_t>(entry, found[index]->use);
+			call.store<uint16_t>(entry + name_at, uint16_t(found[index]->name.size() * 2));
+			call.store<uint16_t>(entry + name_at + 2, uint16_t((found[index]->name.size() + 1) * 2));
+			call.store_pointer(entry + name_at + (width == 8 ? 8 : 4), cursor);
+			call.put_wide(cursor, found[index]->name, found[index]->name.size() + 1);
+			cursor += (found[index]->name.size() + 1) * 2;
+			call.store<int32_t>(entry + index_at, domain_of[index]);
+		}
+		call.store_pointer(call[3], domain_block);
+		call.store_pointer(call[4], name_block);
+		call.ret(mapped == count ? 0 : mapped ? 0x107 : 0xc0000073U);
+	});
 	// LsaLookupNames2(policy, flags, count, names, domains, sids): LSA_TRANSLATED_SID2 for each name, "account" or "domain\account", and
 	// the LSA_REFERENCED_DOMAIN_LIST of the domains they belong to, each in memory LsaFreeMemory gives back. STATUS_SOME_NOT_MAPPED or
 	// STATUS_NONE_MAPPED when names are not known.
-	registry.add("LsaLookupNames2", 6, [&context, accounts](ApiCall &call) {
+	registry.add("LsaLookupNames2", 6, [&context, accounts, referenced_domains, domain_sid_of](ApiCall &call) {
 		const uint32_t count = call.u32(2);
 		if (!call[3] || !call[4] || !call[5] || !count || count > 1000) {
 			call.ret(0xc000000dU);
 			return;
 		}
 		const size_t width = call.pointer_width(), text_size = width == 8 ? 16 : 8, translated_size = width == 8 ? 24 : 16;
-		const size_t trust_size = text_size + width;
 		const auto known = accounts();
 		std::vector<const Account *> found(count, nullptr);
 		std::vector<std::u16string> domains;
@@ -1607,24 +1706,14 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			domain_of[index] = int32_t(known_domain - domains.begin());
 			if (known_domain == domains.end()) {
 				domains.push_back(match->domain);
-				// The domain's SID is the account's without its last part.
-				auto sid = match->sid;
-				if (sid.size() > 8 && sid[1] > 0) {
-					sid[1] = uint8_t(sid[1] - 1);
-					sid.resize(sid.size() - 4);
-				}
-				domain_sids.push_back(std::move(sid));
+				domain_sids.push_back(domain_sid_of(match->sid));
 			}
 		}
-		// The domain list: its header, the entries, then their names and SIDs.
-		size_t domain_bytes = 16 + domains.size() * trust_size;
-		for (size_t index = 0; index < domains.size(); ++index)
-			domain_bytes += (domains[index].size() + 1) * 2 + domain_sids[index].size();
 		size_t sid_bytes = count * translated_size;
 		for (const auto *account : found)
 			if (account)
 				sid_bytes += account->sid.size();
-		const uint64_t domain_block = context.allocator.allocate(domain_bytes, true), sid_block = context.allocator.allocate(sid_bytes, true);
+		const uint64_t domain_block = referenced_domains(call, domains, domain_sids), sid_block = context.allocator.allocate(sid_bytes, true);
 		if (!domain_block || !sid_block) {
 			if (domain_block) context.allocator.release(domain_block);
 			if (sid_block) context.allocator.release(sid_block);
@@ -1635,21 +1724,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			if (width == 8) call.store<uint64_t>(address, value);
 			else call.store<uint32_t>(address, uint32_t(value));
 		};
-		call.store<uint32_t>(domain_block, uint32_t(domains.size()));
-		pointer_at(domain_block + (width == 8 ? 8 : 4), domains.empty() ? 0 : domain_block + 16);
-		uint64_t cursor = domain_block + 16 + domains.size() * trust_size;
-		for (size_t index = 0; index < domains.size(); ++index) {
-			const uint64_t entry = domain_block + 16 + index * trust_size;
-			call.store<uint16_t>(entry, uint16_t(domains[index].size() * 2));
-			call.store<uint16_t>(entry + 2, uint16_t((domains[index].size() + 1) * 2));
-			pointer_at(entry + (width == 8 ? 8 : 4), cursor);
-			call.put_wide(cursor, domains[index], domains[index].size() + 1);
-			cursor += (domains[index].size() + 1) * 2;
-			pointer_at(entry + text_size, cursor);
-			call.write(cursor, domain_sids[index]);
-			cursor += domain_sids[index].size();
-		}
-		cursor = sid_block + count * translated_size;
+		uint64_t cursor = sid_block + count * translated_size;
 		uint32_t mapped = 0;
 		for (uint32_t index = 0; index < count; ++index) {
 			const uint64_t entry = sid_block + index * translated_size;
