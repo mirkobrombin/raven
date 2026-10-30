@@ -4393,3 +4393,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_initial_dependency_cli native_initial_forwarder_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
     endif()
 endif()
+
+# A test that names no prefix gets one of its own in the build tree, so it neither reads the RAVEN_PREFIX of the shell that runs
+# ctest nor writes into the user's default prefix.
+get_property(native_tests DIRECTORY PROPERTY TESTS)
+foreach(native_test IN LISTS native_tests)
+    get_test_property(${native_test} ENVIRONMENT native_test_environment)
+    if(NOT "${native_test_environment}" MATCHES "(^|;)RAVEN_PREFIX=")
+        set_property(TEST ${native_test} APPEND PROPERTY ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test-prefixes/${native_test}")
+    endif()
+endforeach()
