@@ -397,32 +397,93 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		const auto a = call.load<uint64_t>(call[0]), b = call.load<uint64_t>(call[1]);
 		call.ret(uint32_t(a < b ? -1 : a > b ? 1 : 0));
 	});
-	const auto zone_information = [](ApiCall &call, bool dynamic) {
-		const time_t now = ::time(nullptr);
-		tm january{}, july{};
-		const time_t year_start = now - now % (365 * 86400);
-		::localtime_r(&year_start, &january);
-		const time_t middle = year_start + 182 * 86400;
-		::localtime_r(&middle, &july);
-		const auto first = zone_at(year_start), second = zone_at(middle), current = zone_at(now);
+	// The host zone's TIME_ZONE_INFORMATION for a year (172 bytes; the dynamic form adds a 128-character key name and a flag): the
+	// standard bias, the names, and the transitions, found by stepping through the year's offsets. Each transition is the recurring
+	// "nth weekday of the month" rule (wYear zero, wDay 1 to 4, or 5 for the last), at the local time on the clock it leaves: daylight
+	// time starts at a standard-time hour, standard time at a daylight-time hour. The result says whether the zone has daylight time.
+	const auto zone_for_year = [](int year, bool dynamic, std::vector<uint8_t> &bytes) {
+		tm start{};
+		start.tm_year = year - 1900;
+		start.tm_mday = 1;
+		const time_t year_start = ::timegm(&start);
+		struct Change { time_t at; ZoneInfo before, after; };
+		std::vector<Change> changes;
+		auto previous = zone_at(year_start);
+		for (int day = 1; day <= 366; ++day) {
+			const time_t at = year_start + time_t(day) * 86400;
+			const auto zone = zone_at(at);
+			if (zone.offset_minutes != previous.offset_minutes) {
+				// The first second of the new offset, between the two days.
+				time_t low = at - 86400, high = at;
+				while (high - low > 1) {
+					const time_t middle = low + (high - low) / 2;
+					(zone_at(middle).offset_minutes == previous.offset_minutes ? low : high) = middle;
+				}
+				changes.push_back({high, previous, zone});
+			}
+			previous = zone;
+		}
+		const auto first = zone_at(year_start), second = zone_at(year_start + 182 * 86400);
 		const int standard = std::min(first.offset_minutes, second.offset_minutes), daylight = std::max(first.offset_minutes, second.offset_minutes);
-		// The dynamic form adds a 128-character key name and a flag after the 172 bytes of the plain one.
-		std::vector<uint8_t> bytes(dynamic ? 432 : 172);
+		bytes.assign(dynamic ? 432 : 172, 0);
+		const auto put_rule = [&](size_t at, const Change &change) {
+			const time_t local = change.at + time_t(change.before.offset_minutes) * 60;
+			tm clock{};
+			::gmtime_r(&local, &clock);
+			const int month_days = clock.tm_mon == 1 ? ((year % 4 == 0 && year % 100) || year % 400 == 0 ? 29 : 28) :
+				(clock.tm_mon == 3 || clock.tm_mon == 5 || clock.tm_mon == 8 || clock.tm_mon == 10) ? 30 : 31;
+			const uint16_t occurrence = clock.tm_mday + 7 > month_days ? 5 : uint16_t((clock.tm_mday - 1) / 7 + 1);
+			const uint16_t fields[8] = {0, uint16_t(clock.tm_mon + 1), uint16_t(clock.tm_wday), occurrence, uint16_t(clock.tm_hour),
+				uint16_t(clock.tm_min), uint16_t(clock.tm_sec), 0};
+			std::memcpy(bytes.data() + at, fields, sizeof fields);
+		};
 		const int32_t bias = -standard;
 		std::memcpy(bytes.data(), &bias, 4);
 		const auto standard_name = from_utf8(first.offset_minutes <= second.offset_minutes ? first.name : second.name).substr(0, 31);
 		const auto daylight_name = from_utf8(first.offset_minutes > second.offset_minutes ? first.name : second.name).substr(0, 31);
 		std::memcpy(bytes.data() + 4, standard_name.data(), standard_name.size() * 2);
 		std::memcpy(bytes.data() + 88, daylight_name.data(), daylight_name.size() * 2);
+		if (standard != daylight)
+			for (const auto &change : changes)
+				put_rule(change.after.offset_minutes == daylight ? 152 : 68, change);
 		const int32_t daylight_bias = standard - daylight;
 		std::memcpy(bytes.data() + 168, &daylight_bias, 4);
 		if (dynamic) {
-			const auto key_name = from_utf8(first.offset_minutes <= second.offset_minutes ? first.name : second.name).substr(0, 127);
+			const auto key_name = standard_name.substr(0, 127);
 			std::memcpy(bytes.data() + 172, key_name.data(), key_name.size() * 2);
 		}
-		call.write(call[0], bytes);
-		call.ret(standard == daylight ? 0 : current.daylight ? 2 : 1);
+		return standard != daylight;
 	};
+	const auto current_year = [] {
+		const time_t now = ::time(nullptr);
+		tm local{};
+		::localtime_r(&now, &local);
+		return local.tm_year + 1900;
+	};
+	const auto zone_information = [zone_for_year, current_year](ApiCall &call, bool dynamic) {
+		std::vector<uint8_t> bytes;
+		const bool has_daylight = zone_for_year(current_year(), dynamic, bytes);
+		call.write(call[0], bytes);
+		call.ret(!has_daylight ? 0 : zone_at(::time(nullptr)).daylight ? 2 : 1);
+	};
+	// A year's rules for the zone named, or for the current zone when none is. The host has one zone: a dynamic zone with another key
+	// name is not found.
+	registry.add("GetTimeZoneInformationForYear", 3, [zone_for_year, current_year](ApiCall &call) {
+		if (!call[2]) {
+			call.fail(87);
+			return;
+		}
+		const int year = uint16_t(call[0]) ? int(uint16_t(call[0])) : current_year();
+		std::vector<uint8_t> bytes;
+		zone_for_year(year, true, bytes);
+		if (call[1] && call.read(call[1] + 172, 256) != std::vector<uint8_t>(bytes.begin() + 172, bytes.begin() + 428)) {
+			call.fail(2);
+			return;
+		}
+		bytes.resize(172);
+		call.write(call[2], bytes);
+		call.ret(1);
+	});
 	registry.add("GetTimeZoneInformation", 1, [zone_information](ApiCall &call) { zone_information(call, false); });
 	registry.add("GetDynamicTimeZoneInformation", 1, [zone_information](ApiCall &call) { zone_information(call, true); });
 	// The reverse of the call below: a local time becomes UTC by taking the zone's offset off.
