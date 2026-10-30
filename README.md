@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.svg" alt="Raven" width="320"></p>
+<p align="center"><img src="docs/logo.svg" alt="Raven" width="120"></p>
 
 <p align="center"><b>A Windows your apps recognize.</b></p>
 
