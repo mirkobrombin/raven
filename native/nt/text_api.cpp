@@ -423,7 +423,7 @@ std::optional<std::u16string> module_message(KernelContext &context, uint64_t ba
 	if (!image || image->runtime_api)
 		return std::nullopt;
 	const auto directory = image->image.directories[2];
-	if (!directory.address || !directory.size || directory.size > 16 * 1024 * 1024)
+	if (!directory.address || !directory.size || directory.size > image->image.image_size)
 		return std::nullopt;
 	const auto resources = read_resources(directory, context.process.read_memory(image->loaded.base() + directory.address, directory.size),
 		image->image.image_size);
