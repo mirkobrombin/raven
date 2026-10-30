@@ -1580,6 +1580,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtWriteFile", "NtQueryDirectoryFile", "ZwQueryDirectoryFile", "RtlNtStatusToDosError", "NtQueryObject", "NtMapViewOfSection", "NtUnmapViewOfSection",
 		"RtlAcquireSRWLockExclusive", "RtlAcquireSRWLockShared", "RtlWakeConditionVariable", "RtlWakeAllConditionVariable", "RtlWaitOnAddress",
 		"RtlWakeAddressSingle", "RtlWakeAddressAll",
+		// The processor a thread runs on.
+		"NtGetCurrentProcessorNumber", "NtGetCurrentProcessorNumberEx", "RtlGetCurrentProcessorNumber", "RtlGetCurrentProcessorNumberEx",
 		// What the runtime's own components import from ntdll, which they need whether a program loads them at start or later.
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
