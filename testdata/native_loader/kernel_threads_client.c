@@ -122,12 +122,33 @@ static int critical_options(void)
 		for (unsigned at = 0; at < sizeof(option); ++at) ((BYTE *)&option)[at] = 0xa5;
 		if (!InitializeCriticalSectionEx(&option, 0, flags[index])) return 80;
 		if ((flags[index] & 0x01000000) && option.DebugInfo && (ULONG_PTR)option.DebugInfo != (ULONG_PTR)-1) return 81;
+		/* Without CRITICAL_SECTION_NO_DEBUG_INFO there is a debug record to write into, as the libraries built from Wine sources name their
+		   sections in it. */
+		if (!(flags[index] & 0x01000000)) {
+			if (!option.DebugInfo || (ULONG_PTR)option.DebugInfo == (ULONG_PTR)-1) return 86;
+			option.DebugInfo->Flags = 0x5a5a5a5a;
+			if (option.DebugInfo->Flags != 0x5a5a5a5a) return 87;
+		}
 		EnterCriticalSection(&option);
 		if (!TryEnterCriticalSection(&option)) return 82;
 		LeaveCriticalSection(&option);
 		LeaveCriticalSection(&option);
 		DeleteCriticalSection(&option);
 	}
+	CRITICAL_SECTION plain;
+	InitializeCriticalSection(&plain);
+	if (!plain.DebugInfo || (ULONG_PTR)plain.DebugInfo == (ULONG_PTR)-1) return 88;
+	plain.DebugInfo->Flags = 0x5a5a5a5a;
+	DeleteCriticalSection(&plain);
+	/* A section with a debug record of the program's own, as static initializers make: deleting it leaves the record alone. */
+	static RTL_CRITICAL_SECTION_DEBUG own;
+	static CRITICAL_SECTION owned = {&own, -1, 0, 0, 0, 0};
+	own.CriticalSection = &owned;
+	own.Flags = 7;
+	EnterCriticalSection(&owned);
+	LeaveCriticalSection(&owned);
+	DeleteCriticalSection(&owned);
+	if (own.Flags != 7 || own.CriticalSection != &owned) return 89;
 	for (unsigned at = 0; at < sizeof(option); ++at) ((BYTE *)&option)[at] = 0xa5;
 	if (InitializeCriticalSectionEx(&option, 0, 0x20000001) || GetLastError() != ERROR_INVALID_PARAMETER) return 83;
 	for (unsigned at = 0; at < sizeof(option); ++at) if (((BYTE *)&option)[at] != 0xa5) return 84;

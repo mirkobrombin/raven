@@ -39,6 +39,7 @@ PVOID NTAPI RtlReAllocateHeap(PVOID handle, ULONG flags, PVOID block, SIZE_T siz
 BOOLEAN NTAPI RtlFreeHeap(PVOID handle, ULONG flags, PVOID block);
 SIZE_T NTAPI RtlSizeHeap(PVOID handle, ULONG flags, PVOID block);
 PVOID NTAPI RtlDestroyHeap(PVOID handle);
+PVOID NTAPI RtlCreateHeap(ULONG flags, PVOID base, SIZE_T reserve, SIZE_T commit, PVOID lock, PRTL_HEAP_PARAMETERS parameters);
 
 /* The generic table types, as the Windows DDK documents them. */
 typedef struct _RTL_BALANCED_LINKS {
