@@ -1,6 +1,7 @@
 #include "apiset.h"
 #include "loader.h"
 #include "memory.h"
+#include "system_exports.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -51,8 +52,11 @@ void load_initial_dependencies(ModuleSet &modules,
 						if (std::find(native_modules.begin(),native_modules.end(),identity)!=native_modules.end()) break;
 						// An API set name stands for the system library that implements it; that library is served natively, and alias_api_sets
 						// ties the name to it once the runtime has made it.
-						if (const auto host=apiset_host(identity); !host.empty() && host!="ucrtbase.dll" &&
-							std::find(native_modules.begin(),native_modules.end(),host)!=native_modules.end()) break;
+						if (const auto host=apiset_host(identity); !host.empty() && host!="ucrtbase.dll") {
+							const auto system_names=system_library_names();
+							if (std::find(native_modules.begin(),native_modules.end(),host)!=native_modules.end() ||
+								std::find(system_names.begin(),system_names.end(),host)!=system_names.end()) break;
+						}
 						// A C runtime contract resolves through the runtime component, whichever contract version the module names.
 						if (apiset_host(identity)=="ucrtbase.dll") {
 							if (!modules.all().contains("ucrtbase.dll")) {
@@ -68,7 +72,11 @@ void load_initial_dependencies(ModuleSet &modules,
 						}
 						if (modules.all().size()>=10000) throw std::runtime_error("native DLL graph exceeds module limit");
 						auto bytes=source(identity);
-						if (!bytes) { if (tolerate_missing) break; throw; }
+						if (!bytes) {
+							const auto system_names=system_library_names();
+							if (tolerate_missing || std::find(system_names.begin(),system_names.end(),identity)!=system_names.end()) break;
+							throw;
+						}
 						const PEImage image(*bytes);validate_native_image(image,identity,is_64);
 						if (!(image.characteristics & 0x2000)) throw std::runtime_error("native startup dependency must be a DLL: "+identity);
 						staged.reserve(staged.size()+1);pending.reserve(pending.size()+1);

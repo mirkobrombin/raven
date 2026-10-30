@@ -120,14 +120,26 @@ PEModule *NativeX86Loader::bring(const std::string &requested)
 		const auto base = name.substr(slash + 1);
 		if (const auto found = modules.all().find(base); found != modules.all().end() && found->second->runtime_api)
 			return found->second.get();
-		const auto folder = name.substr(0, slash);
-		if (folder == "c:\\windows\\system32" || folder == "c:\\windows\\syswow64")
+		auto folder = name.substr(0, slash);
+		for (auto &character : folder)
+			if (character == '/')
+				character = '\\';
+		if (folder == "c:\\windows\\system32" || folder == "c:\\windows\\syswow64") {
+			if (const auto fallback = modules.all().find("system32-" + base); fallback != modules.all().end())
+				return fallback->second.get();
 			return bring(base);
+		}
+	}
+	if ((library_flags & 0x1f00) == 0x800) {
+		if (const auto fallback = modules.all().find("system32-" + name); fallback != modules.all().end())
+			return fallback->second.get();
 	}
 	std::string identity;
 	std::filesystem::path file;
 	auto bytes = read_library(name, identity, file);
 	if (!bytes) {
+		if (const auto fallback = modules.all().find("system32-" + name); fallback != modules.all().end())
+			return fallback->second.get();
 		if (trace())
 			std::cerr << "raven: library file not found: " << requested << '\n';
 		environment.set_last_error(126);

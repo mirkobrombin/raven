@@ -414,10 +414,16 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			throw std::runtime_error("native x86 process cannot mix PE64 modules: " + name);
 	// Libraries the program ships and imports statically join its graph; the runtime's own libraries answer for the system ones.
 	if (source) {
-		// The system's libraries are the runtime's whatever copies the program ships or an installer left in the system directory.
-		std::vector<std::string_view> provided{"kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "setupapi.dll", "msvcrt.dll", "winmm.dll",
-			"dsound.dll", "vulkan-1.dll", "shell32.dll", "comctl32.dll", "ntdll.dll", "version.dll", "ole32.dll"};
-		provided.insert(provided.end(), system_library_names().begin(), system_library_names().end());
+		// The system's libraries are the runtime's whatever copies the program ships or an installer left in the system directory, except those a
+		// copy in the program's folder may replace.
+		std::vector<std::string_view> provided;
+		for (const std::string_view library : {"kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "setupapi.dll", "msvcrt.dll", "winmm.dll",
+			"dsound.dll", "vulkan-1.dll", "shell32.dll", "comctl32.dll", "ntdll.dll", "version.dll", "ole32.dll"})
+			if (!program_may_replace(library))
+				provided.push_back(library);
+		for (const auto library : system_library_names())
+			if (!program_may_replace(library))
+				provided.push_back(library);
 		if (!source("d3d9.dll"))
 			provided.push_back("d3d9.dll");
 		// A library that is not there is left for the binder, which names every unresolved import at once.
@@ -571,11 +577,24 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		gdi_pending.push_back(item.name);
 	add_desktop("user32.dll", NativeDesktop::user_exports(), user_pending);
 	add_desktop("gdi32.dll", NativeDesktop::gdi_exports(), gdi_pending);
+	ProgramLibraries program_libraries;
+	if (launch)
+		program_libraries = ProgramLibraries(launch->image_path, false);
 	// Libraries whose argument counts come from their own implementation or the unsupported-service table.
 	const auto add_library = [&](const char *dll, std::span<const std::string_view> exports, std::span<const std::string_view> data,
 		const std::function<uint32_t(std::string_view)> &count, std::span<const std::pair<std::string_view, uint16_t>> ordinals = {}) {
-		if (modules.all().contains(dll))
-			return;
+		std::string provider_key = dll;
+		if (modules.all().contains(dll)) {
+			if (!program_may_replace(dll) || modules.all().at(dll)->runtime_api)
+				return;
+			provider_key = std::string("system32-") + dll;
+			if (modules.all().contains(provider_key))
+				return;
+		} else if (program_libraries.contains(dll)) {
+			provider_key = std::string("system32-") + dll;
+			if (modules.all().contains(provider_key))
+				return;
+		}
 		const auto merged = with_imports(dll, exports);
 		const auto published_numbers = ordinals.empty() ? system_export_ordinals(dll) : ordinals;
 		std::vector<std::pair<std::string_view, uint16_t>> numbered(published_numbers.begin(), published_numbers.end());
@@ -583,7 +602,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			numbered.insert(numbered.end(), extra->second.begin(), extra->second.end());
 		const auto size = PEImage(runtime_provider(dll, 0x70000000ULL, merged, true, data, numbered)).image_size;
 		const auto base = provider_base(modules, size);
-		auto &provider = modules.add(dll, runtime_provider(dll, base, merged, true, data, numbered), base);
+		auto &provider = modules.add(provider_key, runtime_provider(dll, base, merged, true, data, numbered), base);
 		provider.runtime_api = true;
 		overlay(provider, dll);
 		for (const auto &symbol : provider.exports) {
@@ -650,20 +669,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	add_library("dsound.dll", NativeX86DirectSound::entry_names(), {}, [](std::string_view name) { return NativeX86DirectSound::entry_words(name); });
 	add_library("raven-dsound.dll", dsound_methods, {}, [](std::string_view name) { return NativeX86DirectSound::method_words(name); });
 	// A Direct3D 9 library that ships beside the program is the program's choice (DXVK, for one); the built-in one answers otherwise.
-	bool d3d9_beside = false;
-	if (launch) {
-		const auto probe_prefix = NativePrefix::from_environment();
-		const NativePaths probe(probe_prefix);
-		const auto program = probe.resolve(launch->image_path);
-		if (program && program->exists)
-			for (const auto &item : std::filesystem::directory_iterator(program->host.parent_path())) {
-				auto filename = item.path().filename().string();
-				for (auto &character : filename)
-					if (character >= 'A' && character <= 'Z')
-						character = static_cast<char>(character + ('a' - 'A'));
-				d3d9_beside |= filename == "d3d9.dll";
-			}
-	}
+	const bool d3d9_beside = program_libraries.contains("d3d9.dll");
 	const auto d3d9_methods = NativeX86D3D9::method_names();
 	if (!d3d9_beside) {
 		add_library("d3d9.dll", NativeX86D3D9::entry_names(), {}, [](std::string_view) { return uint32_t(1); });
@@ -722,8 +728,6 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	for (const auto library : system_library_names())
 		served.insert(std::string(library));
 	for (const auto &library : served) {
-		if (modules.all().contains(library))
-			continue;
 		add_library(library.c_str(), {}, {}, [](std::string_view name) { return registry_words(name) != UINT32_MAX ? registry_words(name) : uint32_t(0); },
 			system_export_ordinals(library));
 	}
