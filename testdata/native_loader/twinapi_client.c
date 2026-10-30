@@ -5,6 +5,8 @@
 __declspec(dllimport) HRESULT WINAPI RoInitialize(int type);
 __declspec(dllimport) HRESULT WINAPI RoGetActivationFactory(void *name, const GUID *iid, void **factory);
 __declspec(dllimport) void WINAPI CoTaskMemFree(void *block);
+__declspec(dllimport) const WCHAR *WINAPI WindowsGetStringRawBuffer(void *string, UINT32 *length);
+__declspec(dllimport) HRESULT WINAPI WindowsDeleteString(void *string);
 /* shlwapi's table-driven QueryInterface, which Office's own objects answer through. */
 typedef struct {
 	const GUID *iid;
@@ -36,6 +38,7 @@ typedef HRESULT (WINAPI *event_method)(object *, object *, INT64 *);
 
 static const GUID retail_info = {0x0712c6b8, 0x8b92, 0x4f2a, {0x84, 0x99, 0x03, 0x1f, 0x17, 0x98, 0xd6, 0xef}};
 static const GUID shared_mode = {0x893df40e, 0xcad6, 0x4d50, {0x8c, 0x49, 0x6f, 0xcf, 0xc0, 0x3e, 0xdb, 0x29}};
+static const GUID analytics_info = {0x1d5ee066, 0x188d, 0x5ba9, {0x43, 0x87, 0xac, 0xae, 0xb0, 0xe7, 0xe3, 0x05}};
 static const GUID network_information = {0x5074f851, 0x950d, 0x4165, {0x9c, 0x15, 0x36, 0x56, 0x19, 0x48, 0x1e, 0xea}};
 static const GUID connection_profile = {0x71ba143c, 0x598e, 0x49d0, {0x84, 0xeb, 0x8f, 0xeb, 0xae, 0xdc, 0xc1, 0x95}};
 static const GUID profile_view = {0x6db1b492, 0x3852, 0x5df8, {0xa2, 0x9d, 0x69, 0x44, 0x00, 0x2f, 0x58, 0xd4}};
@@ -149,6 +152,48 @@ static int check_search(void)
 	return 0;
 }
 
+/* Whether a string a class answered holds the text; the string is freed. */
+static BOOL holds(void *string, const WCHAR *text)
+{
+	UINT32 length = 0;
+	const WCHAR *characters = WindowsGetStringRawBuffer(string, &length);
+	const BOOL equal = CompareStringOrdinal(characters, (int)length, text, -1, FALSE) == CSTR_EQUAL;
+	WindowsDeleteString(string);
+	return equal;
+}
+
+/* AnalyticsInfo, which winget asks which Windows it runs on: the desktop family, at the version RtlGetVersion and the update build revision
+ * give, packed in sixteen bits each and written in decimal, and the desktop form. */
+static int check_analytics(void)
+{
+	object *analytics = statics(L"Windows.System.Profile.AnalyticsInfo", &analytics_info);
+	if (!analytics) return 56;
+	object *info = NULL;
+	void *text = NULL;
+	if (METHOD(analytics, 6, object_method)(analytics, &info) != S_OK || !info) return 57;
+	if (METHOD(info, 6, object_method)(info, (object **)&text) != S_OK || !holds(text, L"Windows.Desktop")) return 58;
+	LONG (WINAPI *get_version)(RTL_OSVERSIONINFOW *) =
+		(LONG (WINAPI *)(RTL_OSVERSIONINFOW *))GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+	RTL_OSVERSIONINFOW version = {sizeof version};
+	DWORD revision = 0, size = sizeof revision;
+	if (!get_version || get_version(&version)) return 59;
+	if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR", RRF_RT_REG_DWORD, NULL, &revision, &size))
+		return 60;
+	ULONGLONG packed = (ULONGLONG)version.dwMajorVersion << 48 | (ULONGLONG)version.dwMinorVersion << 32 |
+		(ULONGLONG)version.dwBuildNumber << 16 | revision;
+	WCHAR expected[21];
+	int at = 20;
+	expected[at] = 0;
+	do {
+		expected[--at] = (WCHAR)(L'0' + packed % 10);
+		packed /= 10;
+	} while (packed);
+	if (METHOD(info, 7, object_method)(info, (object **)&text) != S_OK || !holds(text, expected + at)) return 61;
+	METHOD(info, 2, release_method)(info);
+	if (METHOD(analytics, 7, object_method)(analytics, (object **)&text) != S_OK || !holds(text, L"Desktop")) return 62;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	/* Programs that use the Windows Runtime use COM as well, as Office does. */
@@ -230,6 +275,8 @@ int raven_entry(void)
 	if (METHOD(core, 7, event_method)(core, &handler, &token) != S_OK || !token) return 30;
 	object *core2 = statics(L"Windows.ApplicationModel.Core.CoreApplication", &core_application2);
 	if (!core2 || METHOD(core2, 12, HRESULT (WINAPI *)(object *, BYTE))(core2, 1) != S_OK) return 31;
-	const int failure = check_properties(core);
-	return failure ? failure : check_search();
+	int failure = check_properties(core);
+	if (!failure)
+		failure = check_search();
+	return failure ? failure : check_analytics();
 }
