@@ -742,7 +742,9 @@ void NativeWindows::register_theme_api(ApiRegistry &registry)
 	const auto draw_text = [this, &registry, read_box, palette](ApiCall &call, bool extended) {
 		const auto found = themes.find(call[0]);
 		auto *dc = objects.dc(call[1]);
-		if (found == themes.end() || !dc || !call[4] || !call[8]) {
+		// DrawThemeText has a second flags word where DrawThemeTextEx goes straight on to the rectangle and the options.
+		const uint64_t rectangle = call[extended ? 7 : 8];
+		if (found == themes.end() || !dc || !call[4] || !rectangle) {
 			call.ret(found == themes.end() ? e_handle : e_invalidarg);
 			return;
 		}
@@ -751,11 +753,11 @@ void NativeWindows::register_theme_api(ApiRegistry &registry)
 		if (count >= 0 && text.size() > size_t(count))
 			text.resize(size_t(count));
 		const uint32_t flags = call.u32(6);
-		const auto box = read_box(call, call[8]);
+		const auto box = read_box(call, rectangle);
 		uint32_t color = text_color(palette(call[0]), found->second, call.i32(2), call.i32(3));
-		if (extended && call[9]) {
+		if (extended && call[8]) {
 			// DTTOPTS: size, flags, then the text color when DTT_TEXTCOLOR (1) is set.
-			const auto options = call.read(call[9], 12);
+			const auto options = call.read(call[8], 12);
 			uint32_t options_flags;
 			std::memcpy(&options_flags, options.data() + 4, 4);
 			if (options_flags & 1)
@@ -841,7 +843,7 @@ void NativeWindows::register_theme_api(ApiRegistry &registry)
 		call.ret(s_ok);
 	};
 	registry.add("DrawThemeText", 9, [draw_text](ApiCall &call) { draw_text(call, false); });
-	registry.add("DrawThemeTextEx", 10, [draw_text](ApiCall &call) { draw_text(call, true); });
+	registry.add("DrawThemeTextEx", 9, [draw_text](ApiCall &call) { draw_text(call, true); });
 	// GetThemeTextExtent(theme, dc, part, state, text, count, flags, bounding rect, extent rect): the size the text takes in the DC.
 	registry.add("GetThemeTextExtent", 9, [this, &registry](ApiCall &call) {
 		if (!themes.contains(call[0]) || !call[4] || !call[8]) {
