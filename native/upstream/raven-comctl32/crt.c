@@ -19,6 +19,16 @@ PLAIN void *memcpy(void *destination, const void *source, size_t count)
 	return destination;
 }
 
+PLAIN int memcmp(const void *left, const void *right, size_t count)
+{
+	const unsigned char *a = left, *b = right;
+	for (; count--; a++, b++) {
+		if (*a != *b)
+			return *a - *b;
+	}
+	return 0;
+}
+
 PLAIN void *memmove(void *destination, const void *source, size_t count)
 {
 	unsigned char *to = destination;
@@ -57,6 +67,17 @@ char *strcpy(char *destination, const char *source)
 	while ((*destination++ = *source++))
 		;
 	return start;
+}
+
+char *strrchr(const char *text, int character)
+{
+	const char *found = NULL;
+
+	do {
+		if (*text == (char)character)
+			found = text;
+	} while (*text++);
+	return (char *)found;
 }
 
 char *strcat(char *destination, const char *source)

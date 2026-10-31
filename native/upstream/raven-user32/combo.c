@@ -3,6 +3,7 @@
  * See LICENSES/MIT.txt.
  */
 #include <windows.h>
+#include <uxtheme.h>
 #include "user32_private.h"
 
 /* The combo box control, from Microsoft's documentation of its parts, messages and notification order. */
@@ -10,6 +11,10 @@
 #define LIST_ID 1000
 #define EDIT_ID 1001
 #define BORDER 2
+
+/* Combo box parts as vsstyle.h numbers them; the looks are normal, hot, pressed and disabled. */
+#define PART_BORDER 4
+#define PART_ARROW 6
 #define FIELD_INSET 3
 #define MIN_VISIBLE 30
 
@@ -332,6 +337,23 @@ static void paint(HWND window, combo_state *state, HDC dc)
 	box = client;
 	box.bottom = state->field_height;
 	HBRUSH brush = (HBRUSH)SendMessageW(state->owner, state->edit ? WM_CTLCOLOREDIT : WM_CTLCOLORLISTBOX, (WPARAM)dc, (LPARAM)window);
+	HTHEME theme = user32_styled() ? OpenThemeData(window, L"Combobox") : NULL;
+	if (theme) {
+		const int look = !IsWindowEnabled(window) ? 4 : state->pressed ? 3 : 1;
+		/* The rounded corners show what the parent paints behind the control. */
+		HBRUSH behind = (HBRUSH)SendMessageW(state->owner, WM_CTLCOLORSTATIC, (WPARAM)dc, (LPARAM)window);
+		FillRect(dc, &box, behind ? behind : GetSysColorBrush(COLOR_3DFACE));
+		DrawThemeBackground(theme, dc, PART_BORDER, look, &box, NULL);
+		if (kind_of(window) != CBS_SIMPLE) {
+			RECT button;
+			button_rect(window, state, &button);
+			DrawThemeBackground(theme, dc, PART_ARROW, look, &button, NULL);
+		}
+		if (!state->edit)
+			paint_field(window, state, dc);
+		CloseThemeData(theme);
+		return;
+	}
 	FillRect(dc, &box, brush ? brush : GetSysColorBrush(COLOR_WINDOW));
 	if (kind_of(window) != CBS_SIMPLE) {
 		RECT button;

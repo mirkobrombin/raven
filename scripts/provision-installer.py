@@ -198,7 +198,7 @@ def main():
     expansion.write_text("LIBRARY kernel32.dll\nEXPORTS\n" + "".join(" " + name + ("@" + size if x86 else "") + "\n" for name, size in
                          (("LZOpenFileW", "12"), ("LZRead", "12"), ("LZSeek", "12"), ("LZClose", "4"))))
     run([triple + "-dlltool", "-d", expansion, "-l", output / "liblzimports.a", *(["-k"] if x86 else [])])
-    debug = compile(repo / "native/upstream/reactos-controls/debug.c", "debug")
+    debug = compile(repo / "native/upstream/reactos-installer/debug.c", "debug")
     # 32-bit code registers its exception frames on the thread's chain: the frame based PSEH support of ReactOS is built into each component.
     pseh = []
     if x86:

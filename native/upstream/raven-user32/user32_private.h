@@ -11,4 +11,6 @@
 
 extern HINSTANCE User32Instance;
 
+BOOL user32_styled(void);
+
 #endif

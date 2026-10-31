@@ -3,12 +3,27 @@
  * See LICENSES/MIT.txt.
  */
 #include <windows.h>
+#include <uxtheme.h>
+#include <commctrl.h>
 #include "user32_private.h"
 
 /* The button control, from Microsoft's documentation of its styles, messages and notifications. */
 
 #define CHECK_SIZE 13
 #define CHECK_GAP 4
+#define SPLIT_WIDTH 16
+
+/* Button parts and the theme color of text, as vsstyle.h and vssym32.h number them. */
+#define PART_PUSH 1
+#define PART_RADIO 2
+#define PART_CHECK 3
+#define PART_GROUP 4
+#define TEXT_COLOR_PROPERTY 3803
+#define PBS_NORMAL 1
+#define PBS_HOT 2
+#define PBS_PRESSED 3
+#define PBS_DISABLED 4
+#define PBS_DEFAULTED 5
 
 #ifndef BS_PUSHBOX
 #define BS_PUSHBOX 0x0000000a
@@ -21,6 +36,16 @@
 #define BS_DEFCOMMANDLINK 0x0000000f
 #endif
 
+#ifndef BCM_SETNOTE
+#define BCM_SETNOTE 0x1609
+#define BCM_GETNOTE 0x160a
+#define BCM_GETNOTELENGTH 0x160b
+#endif
+
+#ifndef BCM_GETIDEALSIZE
+#define BCM_GETIDEALSIZE 0x1601
+#endif
+
 #ifndef BM_SETDONTCLICK
 #define BM_SETDONTCLICK 0x00f8
 #endif
@@ -30,7 +55,8 @@ typedef struct {
 	HANDLE image;
 	BOOL image_is_icon;
 	UINT check;
-	BOOL highlighted, focused, captured, hide_focus, hide_prefix, down_by_key, no_click;
+	BOOL highlighted, focused, captured, hide_focus, hide_prefix, down_by_key, no_click, hot;
+	WCHAR *note;
 } button_state;
 
 static button_state *state_of(HWND window)
@@ -74,6 +100,11 @@ static BOOL is_push_kind(UINT kind)
 }
 
 /* The two-state and three-state boxes also take +, = and - from the keyboard. */
+static BOOL is_link_kind(UINT kind)
+{
+	return kind == BS_COMMANDLINK || kind == BS_DEFCOMMANDLINK;
+}
+
 static BOOL is_box_kind(UINT kind)
 {
 	return kind == BS_CHECKBOX || kind == BS_AUTOCHECKBOX || kind == BS_3STATE || kind == BS_AUTO3STATE;
@@ -148,6 +179,53 @@ static void image_size(HANDLE image, BOOL is_icon, int *out_width, int *out_heig
 	*out_height = height;
 }
 
+/* The size that shows the whole label and image with the frame the kind draws around them. */
+static void ideal_size(HWND window, DWORD style, UINT kind, const button_state *state, SIZE *out)
+{
+	HDC dc = GetDC(window);
+	HGDIOBJ previous = state->font ? SelectObject(dc, state->font) : NULL;
+	WCHAR text[512];
+	RECT box = {0, 0, 0, 0};
+	int image_width = 0, image_height = 0, width, height, room;
+	const int length = GetWindowTextW(window, text, ARRAYSIZE(text));
+	const int edge = GetSystemMetrics(SM_CXEDGE) * 2 + 8;
+	if (length)
+		DrawTextW(dc, text, length, &box, DT_CALCRECT | (style & BS_MULTILINE ? 0 : DT_SINGLELINE));
+	else
+	{
+		TEXTMETRICW metrics;
+		GetTextMetricsW(dc, &metrics);
+		box.bottom = metrics.tmHeight;
+	}
+	if (state->image)
+		image_size(state->image, state->image_is_icon, &image_width, &image_height);
+	width = box.right + image_width + (length && image_width ? 4 : 0);
+	height = max(box.bottom, image_height);
+	if (is_link_kind(kind) && state->note)
+	{
+		RECT note = {0, 0, 0, 0};
+		DrawTextW(dc, state->note, -1, &note, DT_CALCRECT);
+		width = max(width, note.right);
+		height += note.bottom;
+	}
+	if (is_check_kind(kind) || is_radio_kind(kind))
+	{
+		room = GetSystemMetrics(SM_CXMENUCHECK) + 4;
+		width += room;
+		height = max(height, GetSystemMetrics(SM_CYMENUCHECK));
+	}
+	else
+	{
+		width += edge;
+		height += edge;
+	}
+	if (previous)
+		SelectObject(dc, previous);
+	ReleaseDC(window, dc);
+	out->cx = width;
+	out->cy = height;
+}
+
 static void draw_label(HWND window, HDC dc, DWORD style, UINT kind, const RECT *area, button_state *state)
 {
 	RECT text_area = *area;
@@ -191,6 +269,61 @@ static void draw_label(HWND window, HDC dc, DWORD style, UINT kind, const RECT *
 		HeapFree(GetProcessHeap(), 0, text);
 }
 
+/* Version 6 of the common controls is what draws buttons with the visual style: a program that loads it asked for that look. */
+BOOL user32_styled(void)
+{
+	return GetModuleHandleW(L"comctl32.dll") != NULL;
+}
+
+static BOOL is_split_kind(UINT kind)
+{
+	return kind == BS_SPLITBUTTON || kind == BS_DEFSPLITBUTTON;
+}
+
+static void take_theme_color(HTHEME theme, HDC dc, int part, int look)
+{
+	COLORREF color;
+	if (GetThemeColor(theme, part, look, TEXT_COLOR_PROPERTY, &color) == S_OK)
+		SetTextColor(dc, color);
+}
+
+static void draw_split_arrow(HDC dc, const RECT *area)
+{
+	const COLORREF color = GetTextColor(dc);
+	HPEN pen = CreatePen(PS_SOLID, 1, color);
+	HGDIOBJ old = SelectObject(dc, pen);
+	const int x = area->right - SPLIT_WIDTH, middle = (area->top + area->bottom) / 2;
+	MoveToEx(dc, x, area->top + 4, NULL);
+	LineTo(dc, x, area->bottom - 4);
+	for (int row = 0; row < 3; row++) {
+		MoveToEx(dc, x + 5 + row, middle - 1 + row, NULL);
+		LineTo(dc, x + 12 - row, middle - 1 + row);
+	}
+	SelectObject(dc, old);
+	DeleteObject(pen);
+}
+
+static void paint_push_styled(HWND window, HDC dc, DWORD style, UINT kind, const RECT *client, button_state *state, HTHEME theme)
+{
+	RECT label = *client;
+	int look = !IsWindowEnabled(window) ? PBS_DISABLED : state->highlighted || state->check == BST_CHECKED ? PBS_PRESSED : state->hot ? PBS_HOT : is_default_kind(kind) ? PBS_DEFAULTED : PBS_NORMAL;
+	/* The corners of the shape show what the parent paints behind the button. */
+	FillRect(dc, client, parent_brush(window, dc, WM_CTLCOLORBTN));
+	DrawThemeBackground(theme, dc, PART_PUSH, look, client, NULL);
+	take_theme_color(theme, dc, PART_PUSH, look);
+	InflateRect(&label, -2, -2);
+	if (is_split_kind(kind)) {
+		draw_split_arrow(dc, client);
+		label.right -= SPLIT_WIDTH;
+	}
+	draw_label(window, dc, style, kind, &label, state);
+	if (state->focused && !state->hide_focus) {
+		RECT focus = *client;
+		InflateRect(&focus, -3, -3);
+		DrawFocusRect(dc, &focus);
+	}
+}
+
 static void paint_push(HWND window, HDC dc, DWORD style, UINT kind, const RECT *client, button_state *state)
 {
 	RECT area = *client;
@@ -214,24 +347,97 @@ static void paint_push(HWND window, HDC dc, DWORD style, UINT kind, const RECT *
 	}
 }
 
-static void paint_check(HWND window, HDC dc, DWORD style, UINT kind, const RECT *client, button_state *state)
+/* The arrow, the title and under it the note, flat on the parent's background. BS_BITMAP without an image asks for no arrow. */
+static void paint_link(HWND window, HDC dc, DWORD style, UINT kind, const RECT *client, button_state *state)
+{
+	RECT area = *client, text_area;
+	HBRUSH background = parent_brush(window, dc, WM_CTLCOLORBTN);
+	const COLORREF title_color = IsWindowEnabled(window) ? RGB(0, 51, 153) : GetSysColor(COLOR_GRAYTEXT);
+	int left = 10, length = GetWindowTextLengthW(window);
+	WCHAR *text = HeapAlloc(GetProcessHeap(), 0, (length + 1) * sizeof(WCHAR));
+	LOGFONTW description;
+	HFONT large = NULL;
+	HGDIOBJ old_font = NULL;
+	TEXTMETRICW metrics;
+	int title_height;
+
+	FillRect(dc, &area, state->highlighted ? GetSysColorBrush(COLOR_3DLIGHT) : background);
+	if (state->highlighted || state->focused || is_default_kind(kind))
+		FrameRect(dc, &area, GetSysColorBrush(COLOR_3DSHADOW));
+	SetBkMode(dc, TRANSPARENT);
+	if (!(style & BS_BITMAP) || state->image) {
+		const int middle = state->note ? area.top + 16 : (area.top + area.bottom) / 2;
+		HPEN pen = CreatePen(PS_SOLID, 2, title_color);
+		HGDIOBJ old_pen = SelectObject(dc, pen);
+		MoveToEx(dc, left, middle, NULL);
+		LineTo(dc, left + 14, middle);
+		MoveToEx(dc, left + 9, middle - 5, NULL);
+		LineTo(dc, left + 14, middle);
+		LineTo(dc, left + 9, middle + 5);
+		SelectObject(dc, old_pen);
+		DeleteObject(pen);
+		left += 22;
+	}
+	if (GetObjectW(GetCurrentObject(dc, OBJ_FONT), sizeof(description), &description)) {
+		description.lfHeight = description.lfHeight * 5 / 4;
+		large = CreateFontIndirectW(&description);
+	}
+	if (large)
+		old_font = SelectObject(dc, large);
+	GetTextMetricsW(dc, &metrics);
+	title_height = metrics.tmHeight;
+	SetRect(&text_area, area.left + left, area.top + (state->note ? 5 : (area.bottom - area.top - title_height) / 2), area.right - 6, area.bottom);
+	SetTextColor(dc, title_color);
+	if (text) {
+		GetWindowTextW(window, text, length + 1);
+		DrawTextW(dc, text, -1, &text_area, DT_SINGLELINE | DT_LEFT | (state->hide_prefix ? DT_HIDEPREFIX : 0));
+		HeapFree(GetProcessHeap(), 0, text);
+	}
+	if (large) {
+		SelectObject(dc, old_font);
+		DeleteObject(large);
+	}
+	if (state->note) {
+		text_area.top += title_height + 1;
+		SetTextColor(dc, IsWindowEnabled(window) ? GetSysColor(COLOR_BTNTEXT) : GetSysColor(COLOR_GRAYTEXT));
+		DrawTextW(dc, state->note, -1, &text_area, DT_WORDBREAK | DT_LEFT | DT_NOPREFIX);
+	}
+	if (state->focused && !state->hide_focus) {
+		InflateRect(&area, -2, -2);
+		DrawFocusRect(dc, &area);
+	}
+}
+
+static void paint_check(HWND window, HDC dc, DWORD style, UINT kind, const RECT *client, button_state *state, HTHEME theme)
 {
 	FillRect(dc, client, parent_brush(window, dc, WM_CTLCOLORSTATIC));
 	RECT box = *client, label = *client;
 	BOOL right = style & BS_LEFTTEXT;
-	int top = (client->bottom - CHECK_SIZE) / 2;
+	const BOOL radio = is_radio_kind(kind);
+	const int part = radio ? PART_RADIO : PART_CHECK;
+	int look = 1, size = CHECK_SIZE;
+	if (theme) {
+		SIZE measured;
+		/* Four looks to a state: normal, hot, pressed, disabled; unchecked first, then checked, then mixed. */
+		look = !IsWindowEnabled(window) ? 4 : state->highlighted ? 3 : state->hot ? 2 : 1;
+		look += (state->check == BST_CHECKED ? 4 : state->check == BST_INDETERMINATE && !radio ? 8 : 0);
+		if (GetThemePartSize(theme, dc, part, look, NULL, TS_DRAW, &measured) == S_OK && measured.cy > 0)
+			size = measured.cy;
+		take_theme_color(theme, dc, part, look);
+	}
+	int top = (client->bottom - size) / 2;
 	if ((style & BS_VCENTER) == BS_TOP)
 		top = 0;
 	else if ((style & BS_VCENTER) == BS_BOTTOM)
-		top = client->bottom - CHECK_SIZE;
+		top = client->bottom - size;
 	box.top = top;
-	box.bottom = top + CHECK_SIZE;
+	box.bottom = top + size;
 	if (right) {
-		box.left = client->right - CHECK_SIZE;
-		label.right -= CHECK_SIZE + CHECK_GAP;
+		box.left = client->right - size;
+		label.right -= size + CHECK_GAP;
 	} else {
-		box.right = box.left + CHECK_SIZE;
-		label.left += CHECK_SIZE + CHECK_GAP;
+		box.right = box.left + size;
+		label.left += size + CHECK_GAP;
 	}
 	UINT frame;
 	if (is_radio_kind(kind))
@@ -248,7 +454,10 @@ static void paint_check(HWND window, HDC dc, DWORD style, UINT kind, const RECT 
 		frame |= DFCS_INACTIVE;
 	if (style & BS_FLAT)
 		frame |= DFCS_FLAT;
-	DrawFrameControl(dc, &box, DFC_BUTTON, frame);
+	if (theme)
+		DrawThemeBackground(theme, dc, part, look, &box, NULL);
+	else
+		DrawFrameControl(dc, &box, DFC_BUTTON, frame);
 	draw_label(window, dc, style, kind, &label, state);
 	if (state->focused && !state->hide_focus && GetWindowTextLengthW(window)) {
 		WCHAR text[256];
@@ -266,14 +475,20 @@ static void paint_check(HWND window, HDC dc, DWORD style, UINT kind, const RECT 
 	}
 }
 
-static void paint_group(HWND window, HDC dc, DWORD style, const RECT *client, button_state *state)
+static void paint_group(HWND window, HDC dc, DWORD style, const RECT *client, button_state *state, HTHEME theme)
 {
 	TEXTMETRICW metrics;
 	GetTextMetricsW(dc, &metrics);
 	HBRUSH brush = parent_brush(window, dc, WM_CTLCOLORSTATIC);
 	RECT frame = *client;
 	frame.top += metrics.tmHeight / 2;
-	DrawEdge(dc, &frame, EDGE_ETCHED, BF_RECT | (style & BS_FLAT ? BF_FLAT | BF_MONO : 0));
+	if (theme) {
+		const int look = IsWindowEnabled(window) ? 1 : 2;
+		DrawThemeBackground(theme, dc, PART_GROUP, look, &frame, NULL);
+		take_theme_color(theme, dc, PART_GROUP, look);
+	}
+	else
+		DrawEdge(dc, &frame, EDGE_ETCHED, BF_RECT | (style & BS_FLAT ? BF_FLAT | BF_MONO : 0));
 	int length = GetWindowTextLengthW(window);
 	if (!length)
 		return;
@@ -330,7 +545,16 @@ static void paint(HWND window, HDC dc, button_state *state, UINT action)
 	IntersectClipRect(dc, client.left, client.top, client.right, client.bottom);
 	SetBkColor(dc, GetSysColor(COLOR_3DFACE));
 	SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-	if (is_push_kind(kind) || (is_check_kind(kind) && (style & BS_PUSHLIKE))) {
+	HTHEME theme = user32_styled() && kind != BS_OWNERDRAW && kind != BS_USERBUTTON && !is_link_kind(kind) ? OpenThemeData(window, L"Button") : NULL;
+	if (theme && (is_push_kind(kind) || (is_check_kind(kind) && (style & BS_PUSHLIKE)))) {
+		paint_push_styled(window, dc, style, is_check_kind(kind) ? BS_PUSHBUTTON : kind, &client, state, theme);
+		kind = BS_PUSHBUTTON;
+	}
+	else if (is_link_kind(kind)) {
+		paint_link(window, dc, style, kind, &client, state);
+		kind = BS_PUSHBUTTON;
+	}
+	else if (is_push_kind(kind) || (is_check_kind(kind) && (style & BS_PUSHLIKE))) {
 		paint_push(window, dc, style, is_check_kind(kind) ? BS_PUSHBUTTON : kind, &client, state);
 		kind = BS_PUSHBUTTON;
 	}
@@ -338,7 +562,7 @@ static void paint(HWND window, HDC dc, button_state *state, UINT action)
 	case BS_PUSHBUTTON:
 		break;
 	case BS_GROUPBOX:
-		paint_group(window, dc, style, &client, state);
+		paint_group(window, dc, style, &client, state, theme);
 		break;
 	case BS_OWNERDRAW:
 		paint_owner(window, dc, &client, state, action);
@@ -347,10 +571,12 @@ static void paint(HWND window, HDC dc, button_state *state, UINT action)
 		SendMessageW(GetParent(window), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(window), BN_PAINT), (LPARAM)window);
 		break;
 	default:
-		paint_check(window, dc, style, kind, &client, state);
+		paint_check(window, dc, style, kind, &client, state, theme);
 		break;
 	}
 	RestoreDC(dc, saved);
+	if (theme)
+		CloseThemeData(theme);
 	if (previous)
 		SelectObject(dc, previous);
 }
@@ -450,6 +676,8 @@ LRESULT WINAPI RavenButtonProcW(HWND window, UINT message, WPARAM wparam, LPARAM
 			SetWindowLongPtrW(window, GWL_STYLE, (style & ~(DWORD)BS_TYPEMASK) | BS_PUSHBUTTON);
 		return DefWindowProcW(window, message, wparam, lparam);
 	case WM_NCDESTROY:
+		if (state->note)
+			HeapFree(GetProcessHeap(), 0, state->note);
 		HeapFree(GetProcessHeap(), 0, state);
 		SetWindowLongPtrW(window, 0, 0);
 		return DefWindowProcW(window, message, wparam, lparam);
@@ -532,12 +760,32 @@ LRESULT WINAPI RavenButtonProcW(HWND window, UINT message, WPARAM wparam, LPARAM
 		/* Without notifications a double click is one more click. */
 		/* fall through */
 	case WM_LBUTTONDOWN:
+		if (is_split_kind(kind) && user32_styled()) {
+			RECT client;
+			GetClientRect(window, &client);
+			if ((short)LOWORD(lparam) >= client.right - SPLIT_WIDTH) {
+				NMBCDROPDOWN request = {{window, (UINT_PTR)GetDlgCtrlID(window), BCN_DROPDOWN}, {client.right - SPLIT_WIDTH, 0, client.right, client.bottom}};
+				SetFocus(window);
+				SendMessageW(GetParent(window), WM_NOTIFY, request.hdr.idFrom, (LPARAM)&request);
+				return 0;
+			}
+		}
 		SetCapture(window);
 		state->captured = TRUE;
 		SetFocus(window);
 		set_highlight(window, state, TRUE);
 		return 0;
+	case WM_MOUSELEAVE:
+		state->hot = FALSE;
+		InvalidateRect(window, NULL, FALSE);
+		return 0;
 	case WM_MOUSEMOVE:
+		if (!state->hot && user32_styled()) {
+			TRACKMOUSEEVENT leave = {sizeof(leave), TME_LEAVE, window, 0};
+			state->hot = TRUE;
+			TrackMouseEvent(&leave);
+			InvalidateRect(window, NULL, FALSE);
+		}
 		if (state->captured) {
 			POINT point = {(short)LOWORD(lparam), (short)HIWORD(lparam)};
 			RECT client;
@@ -635,11 +883,67 @@ LRESULT WINAPI RavenButtonProcW(HWND window, UINT message, WPARAM wparam, LPARAM
 	}
 	case BM_SETSTYLE: {
 		/* The type changes with the look: a dialog moves the default this way. */
-		LONG_PTR updated = (style & ~(DWORD)BS_TYPEMASK) | (wparam & BS_TYPEMASK);
+		UINT type = wparam & BS_TYPEMASK;
+		/* A dialog only knows push buttons, and a command link stays one when it gains or loses the default. */
+		if (is_link_kind(kind) && (type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON))
+			type = type == BS_PUSHBUTTON ? BS_COMMANDLINK : BS_DEFCOMMANDLINK;
+		LONG_PTR updated = (style & ~(DWORD)BS_TYPEMASK) | type;
 		SetWindowLongPtrW(window, GWL_STYLE, updated);
 		if (lparam)
 			InvalidateRect(window, NULL, TRUE);
 		return 0;
+	}
+	case BCM_GETIDEALSIZE:
+		if (!lparam)
+			return FALSE;
+		ideal_size(window, style, kind, state, (SIZE *)lparam);
+		return TRUE;
+	case BCM_SETNOTE: {
+		const WCHAR *given = (const WCHAR *)lparam;
+		if (!is_link_kind(kind)) {
+			SetLastError(ERROR_NOT_SUPPORTED);
+			return FALSE;
+		}
+		if (state->note)
+			HeapFree(GetProcessHeap(), 0, state->note);
+		state->note = NULL;
+		if (given && *given) {
+			const SIZE_T size = (lstrlenW(given) + 1) * sizeof(WCHAR);
+			state->note = HeapAlloc(GetProcessHeap(), 0, size);
+			if (state->note)
+				CopyMemory(state->note, given, size);
+		}
+		InvalidateRect(window, NULL, TRUE);
+		return TRUE;
+	}
+	case BCM_GETNOTELENGTH:
+		if (!is_link_kind(kind)) {
+			SetLastError(ERROR_NOT_SUPPORTED);
+			return 0;
+		}
+		return state->note ? lstrlenW(state->note) : 0;
+	case BCM_GETNOTE: {
+		DWORD *size = (DWORD *)wparam;
+		WCHAR *out = (WCHAR *)lparam;
+		const DWORD needed = state->note ? lstrlenW(state->note) + 1 : 1;
+		if (!is_link_kind(kind)) {
+			SetLastError(ERROR_NOT_SUPPORTED);
+			return FALSE;
+		}
+		if (!size || !out) {
+			SetLastError(ERROR_INVALID_PARAMETER);
+			return FALSE;
+		}
+		if (*size < needed) {
+			*size = needed;
+			SetLastError(ERROR_INSUFFICIENT_BUFFER);
+			return FALSE;
+		}
+		if (state->note)
+			lstrcpyW(out, state->note);
+		else
+			out[0] = 0;
+		return TRUE;
 	}
 	case BM_CLICK:
 		if (!IsWindowEnabled(window))
