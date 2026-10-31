@@ -26,6 +26,14 @@ DEFINE_GUID(mx_clsid_xmlhttp_old, 0xed8c108e, 0x4349, 0x11d2, 0x91, 0xa4, 0x00, 
 DEFINE_GUID(mx_clsid_xmlparser, 0xd2423620, 0x51a0, 0x11d2, 0x9c, 0xaf, 0x00, 0x60, 0xb0, 0xec, 0x3d, 0x39);
 DEFINE_GUID(mx_clsid_xmlparser26, 0xd2423622, 0x51a0, 0x11d2, 0x9c, 0xaf, 0x00, 0x60, 0xb0, 0xec, 0x3d, 0x39);
 DEFINE_GUID(mx_clsid_xmlparser30, 0xf5078f31, 0xc551, 0x11d3, 0x89, 0xb9, 0x00, 0x00, 0xf8, 0x1f, 0xe2, 0x21);
+DEFINE_GUID(mx_clsid_free_document60, 0x88d96a06, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_template60, 0x88d96a08, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_sax_reader60, 0x88d96a0c, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_sax_attributes60, 0x88d96a0e, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_writer60, 0x88d96a0f, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_namespace_manager60, 0x88d96a11, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_xmlhttp60, 0x88d96a0a, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
+DEFINE_GUID(mx_clsid_server_xmlhttp60, 0x88d96a0b, 0xf192, 0x11d4, 0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5);
 
 static const class_entry classes[] = {
 	{&mx_clsid_old_document, mx_document_create, NULL, MX_1, L"Microsoft.XMLDOM", NULL, L"XML DOM Document"},
@@ -39,7 +47,7 @@ static const class_entry classes[] = {
 	DOM(FreeThreadedDOMDocument26, MX_26, L"Msxml2.FreeThreadedDOMDocument.2.6", L"Free threaded XML DOM Document 2.6"),
 	DOM(FreeThreadedDOMDocument30, MX_3, L"Msxml2.FreeThreadedDOMDocument.3.0", L"Free threaded XML DOM Document 3.0"),
 	DOM(FreeThreadedDOMDocument40, MX_4, L"Msxml2.FreeThreadedDOMDocument.4.0", L"Free threaded XML DOM Document 4.0"),
-	DOM(FreeThreadedDOMDocument60, MX_6, L"Msxml2.FreeThreadedDOMDocument.6.0", L"Free threaded XML DOM Document 6.0"),
+	{&mx_clsid_free_document60, mx_document_create, NULL, MX_6, L"Msxml2.FreeThreadedDOMDocument.6.0", NULL, L"Free threaded XML DOM Document 6.0"},
 	{&CLSID_XMLSchemaCache, mx_schema_cache_create, NULL, MX_DEFAULT, L"Msxml2.XMLSchemaCache", NULL, L"XML Schema Cache"},
 	{&CLSID_XMLSchemaCache26, mx_schema_cache_create, NULL, MX_26, L"Msxml2.XMLSchemaCache.2.6", NULL, L"XML Schema Cache 2.6"},
 	{&CLSID_XMLSchemaCache30, mx_schema_cache_create, NULL, MX_3, L"Msxml2.XMLSchemaCache.3.0", NULL, L"XML Schema Cache 3.0"},
@@ -49,32 +57,32 @@ static const class_entry classes[] = {
 	{&CLSID_XSLTemplate26, mx_template_create, NULL, MX_26, L"Msxml2.XSLTemplate.2.6", NULL, L"XSL Template 2.6"},
 	{&CLSID_XSLTemplate30, mx_template_create, NULL, MX_3, L"Msxml2.XSLTemplate.3.0", NULL, L"XSL Template 3.0"},
 	{&CLSID_XSLTemplate40, mx_template_create, NULL, MX_4, L"Msxml2.XSLTemplate.4.0", NULL, L"XSL Template 4.0"},
-	{&CLSID_XSLTemplate60, mx_template_create, NULL, MX_6, L"Msxml2.XSLTemplate.6.0", NULL, L"XSL Template 6.0"},
+	{&mx_clsid_template60, mx_template_create, NULL, MX_6, L"Msxml2.XSLTemplate.6.0", NULL, L"XSL Template 6.0"},
 	{&CLSID_SAXXMLReader, mx_sax_reader_create, NULL, MX_DEFAULT, L"Msxml2.SAXXMLReader", NULL, L"SAX XML Reader"},
 	{&CLSID_SAXXMLReader30, mx_sax_reader_create, NULL, MX_3, L"Msxml2.SAXXMLReader.3.0", NULL, L"SAX XML Reader 3.0"},
 	{&CLSID_SAXXMLReader40, mx_sax_reader_create, NULL, MX_4, L"Msxml2.SAXXMLReader.4.0", NULL, L"SAX XML Reader 4.0"},
-	{&CLSID_SAXXMLReader60, mx_sax_reader_create, NULL, MX_6, L"Msxml2.SAXXMLReader.6.0", NULL, L"SAX XML Reader 6.0"},
+	{&mx_clsid_sax_reader60, mx_sax_reader_create, NULL, MX_6, L"Msxml2.SAXXMLReader.6.0", NULL, L"SAX XML Reader 6.0"},
 	{&CLSID_SAXAttributes, mx_sax_attributes_create, NULL, MX_DEFAULT, L"Msxml2.SAXAttributes", NULL, L"SAX Attributes"},
 	{&CLSID_SAXAttributes30, mx_sax_attributes_create, NULL, MX_3, L"Msxml2.SAXAttributes.3.0", NULL, L"SAX Attributes 3.0"},
 	{&CLSID_SAXAttributes40, mx_sax_attributes_create, NULL, MX_4, L"Msxml2.SAXAttributes.4.0", NULL, L"SAX Attributes 4.0"},
-	{&CLSID_SAXAttributes60, mx_sax_attributes_create, NULL, MX_6, L"Msxml2.SAXAttributes.6.0", NULL, L"SAX Attributes 6.0"},
+	{&mx_clsid_sax_attributes60, mx_sax_attributes_create, NULL, MX_6, L"Msxml2.SAXAttributes.6.0", NULL, L"SAX Attributes 6.0"},
 	{&CLSID_MXXMLWriter, mx_writer_create, NULL, MX_DEFAULT, L"Msxml2.MXXMLWriter", NULL, L"MX XML Writer"},
 	{&CLSID_MXXMLWriter30, mx_writer_create, NULL, MX_3, L"Msxml2.MXXMLWriter.3.0", NULL, L"MX XML Writer 3.0"},
 	{&CLSID_MXXMLWriter40, mx_writer_create, NULL, MX_4, L"Msxml2.MXXMLWriter.4.0", NULL, L"MX XML Writer 4.0"},
-	{&CLSID_MXXMLWriter60, mx_writer_create, NULL, MX_6, L"Msxml2.MXXMLWriter.6.0", NULL, L"MX XML Writer 6.0"},
+	{&mx_clsid_writer60, mx_writer_create, NULL, MX_6, L"Msxml2.MXXMLWriter.6.0", NULL, L"MX XML Writer 6.0"},
 	{&CLSID_MXNamespaceManager, mx_namespace_manager_create, NULL, MX_DEFAULT, L"Msxml2.MXNamespaceManager", NULL, L"MX Namespace Manager"},
 	{&CLSID_MXNamespaceManager40, mx_namespace_manager_create, NULL, MX_4, L"Msxml2.MXNamespaceManager.4.0", NULL, L"MX Namespace Manager 4.0"},
-	{&CLSID_MXNamespaceManager60, mx_namespace_manager_create, NULL, MX_6, L"Msxml2.MXNamespaceManager.6.0", NULL, L"MX Namespace Manager 6.0"},
+	{&mx_clsid_namespace_manager60, mx_namespace_manager_create, NULL, MX_6, L"Msxml2.MXNamespaceManager.6.0", NULL, L"MX Namespace Manager 6.0"},
 	{&CLSID_XMLHTTP, NULL, mx_http_create, MX_DEFAULT, L"Msxml2.XMLHTTP", NULL, L"XML HTTP"},
 	{&mx_clsid_xmlhttp_old, NULL, mx_http_create, MX_DEFAULT, L"Microsoft.XMLHTTP", NULL, L"XML HTTP"},
 	{&CLSID_XMLHTTP26, NULL, mx_http_create, MX_26, L"Msxml2.XMLHTTP.2.6", NULL, L"XML HTTP 2.6"},
 	{&CLSID_XMLHTTP30, NULL, mx_http_create, MX_3, L"Msxml2.XMLHTTP.3.0", NULL, L"XML HTTP 3.0"},
 	{&CLSID_XMLHTTP40, NULL, mx_http_create, MX_4, L"Msxml2.XMLHTTP.4.0", NULL, L"XML HTTP 4.0"},
-	{&CLSID_XMLHTTP60, NULL, mx_http_create, MX_6, L"Msxml2.XMLHTTP.6.0", NULL, L"XML HTTP 6.0"},
+	{&mx_clsid_xmlhttp60, NULL, mx_http_create, MX_6, L"Msxml2.XMLHTTP.6.0", NULL, L"XML HTTP 6.0"},
 	{&CLSID_ServerXMLHTTP, NULL, mx_server_http_create, MX_DEFAULT, L"Msxml2.ServerXMLHTTP", NULL, L"Server XML HTTP"},
 	{&CLSID_ServerXMLHTTP30, NULL, mx_server_http_create, MX_3, L"Msxml2.ServerXMLHTTP.3.0", NULL, L"Server XML HTTP 3.0"},
 	{&CLSID_ServerXMLHTTP40, NULL, mx_server_http_create, MX_4, L"Msxml2.ServerXMLHTTP.4.0", NULL, L"Server XML HTTP 4.0"},
-	{&CLSID_ServerXMLHTTP60, NULL, mx_server_http_create, MX_6, L"Msxml2.ServerXMLHTTP.6.0", NULL, L"Server XML HTTP 6.0"},
+	{&mx_clsid_server_xmlhttp60, NULL, mx_server_http_create, MX_6, L"Msxml2.ServerXMLHTTP.6.0", NULL, L"Server XML HTTP 6.0"},
 	{&CLSID_XMLDocument, NULL, mx_legacy_document_create, MX_DEFAULT, L"Msxml", NULL, L"XML Document"},
 	{&mx_clsid_xmlparser, NULL, mx_parser_create, MX_DEFAULT, L"Msxml2.XMLParser", NULL, L"XML Parser"},
 	{&mx_clsid_xmlparser26, NULL, mx_parser_create, MX_26, L"Msxml2.XMLParser.2.6", NULL, L"XML Parser 2.6"},

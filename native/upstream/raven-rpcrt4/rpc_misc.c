@@ -849,7 +849,7 @@ void RPC_ENTRY NdrMesTypeEncode2(handle_t handle, const MIDL_TYPE_PICKLING_INFO 
 		*state->dynamic = target;
 		break;
 	case MES_INCREMENTAL_HANDLE: {
-		ULONG got = total;
+		unsigned int got = total;
 		target = NULL;
 		state->alloc(state->user, &target, &got);
 		if (!target || got < total)
@@ -881,7 +881,7 @@ void RPC_ENTRY NdrMesTypeDecode2(handle_t handle, const MIDL_TYPE_PICKLING_INFO 
 	mes_state *state = handle;
 	mes_stub_setup(state, desc);
 	char *source = state->fixed;
-	ULONG size = state->size;
+	unsigned int size = state->size;
 	if (state->style == MES_INCREMENTAL_HANDLE) {
 		size = MES_HEAD_SIZE;
 		state->read(state->user, &source, &size);

@@ -648,7 +648,7 @@ LPVOID WINAPI ICSeqCompressFrame(COMPVARS *state, UINT flags, void *bits, BOOL *
 {
 	BOOL want_key = state->lKey && !state->lKeyCount, wanted_size = size && *size;
 	DWORD keys = 0, chunk = 0, status, bytes;
-	status = ICCompress(state->hic, want_key ? ICCOMPRESS_KEYFRAME : 0, state->lpbiOut, state->lpBitsOut, &state->lpbiIn->bmiHeader, bits, &chunk, &keys, state->lFrame,
+	status = ICCompress(state->hic, want_key ? ICCOMPRESS_KEYFRAME : 0, &state->lpbiOut->bmiHeader, state->lpBitsOut, &state->lpbiIn->bmiHeader, bits, &chunk, &keys, state->lFrame,
 		wanted_size ? *size : 0, state->lQ, want_key ? NULL : &state->lpbiIn->bmiHeader, want_key ? NULL : state->lpBitsPrev);
 	if (status != ICERR_OK)
 		return NULL;

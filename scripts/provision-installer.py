@@ -337,7 +337,7 @@ def main():
     (output / "msxml3.def").write_text("LIBRARY msxml3.dll\nEXPORTS\n" + (own_msxml / "exports.txt").read_text())
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{bases['msxml']:#x},--no-insert-timestamp,--allow-multiple-definition", *link_extra,
          "-o", output / "msxml3.dll", *msxml_objects, *xslt, *xml, *zlib, objects / "installer_support.o", *debug, output / "msxml3.def", output / "libcrtmath.a",
-         *[f"-l{library}" for library in ("urlmon", "ws2_32", "shlwapi", "oleaut32", "ole32", "user32", "advapi32", "msvcrt", "kernel32", "ntdll", "uuid", "gcc", "kernel32", "msvcrt")]])
+         *runtime(f"-l{library}" for library in ("urlmon", "ws2_32", "shlwapi", "oleaut32", "ole32", "user32", "advapi32", "msvcrt", "kernel32", "ntdll", "uuid", "gcc", "kernel32", "msvcrt"))])
     # atl100.dll: the ATL registrar, which reads the registration scripts libraries register their classes with, and the control host.
     own_atl = repo / "native/upstream/raven-atl100"
     atl_objects = []
@@ -414,7 +414,7 @@ def main():
     # propsys.dll: property values, the in-memory store and the system's property table, generated from the public key list.
     own_propsys = repo / "native/upstream/raven-propsys"
     propsys_flags = ["-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DCONST_VTABLE", "-DINITGUID", "-D_PROPSYS_", "-I" + str(generated)]
-    run([sys.executable, own_propsys / "make_schema.py", Path("/usr/share/mingw-w64/include/propkey.h"), generated / "schema.inc"])
+    run([sys.executable, own_propsys / "make_schema.py", headers / "propkey.h", generated / "schema.inc"])
     propsys_objects = []
     for part in ("convert", "store", "system", "main"):
         propsys_objects.append(objects / ("propsys_" + part + ".o"))
