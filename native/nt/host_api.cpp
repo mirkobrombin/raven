@@ -1399,9 +1399,135 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		objects.close(call[0]);
 		call.ret(1);
 	});
-	// Remote desktop session queries have no answer here.
-	registry.add("WTSQuerySessionInformationW", 5, [](ApiCall &call) { call.fail(1, 0); });
-	registry.add("WTSFreeMemory", 1, [](ApiCall &) {});
+	// The sessions a desktop machine has: services apart in session 0, the user at the console in session 1.
+	registry.add("WTSEnumerateSessionsW", 5, [&context](ApiCall &call) {
+		if (call[1] || call.u32(2) != 1 || !call[3] || !call[4]) {
+			call.fail(87, 0);
+			return;
+		}
+		const std::u16string services = u"Services", console = u"Console";
+		const size_t record = call.pointer_width() == 4 ? 12 : 24, width = call.pointer_width();
+		const uint64_t block = context.allocator.allocate(2 * record + (services.size() + console.size() + 2) * 2);
+		if (!block) {
+			call.fail(8, 0);
+			return;
+		}
+		const uint64_t first = block + 2 * record, second = first + (services.size() + 1) * 2;
+		call.put_wide(first, services, services.size() + 1);
+		call.put_wide(second, console, console.size() + 1);
+		call.store<uint32_t>(block, 0);
+		call.store_pointer(block + width, first);
+		call.store<uint32_t>(block + 2 * width, 4);
+		call.store<uint32_t>(block + record, 1);
+		call.store_pointer(block + record + width, second);
+		call.store<uint32_t>(block + record + 2 * width, 0);
+		call.store_pointer(call[3], block);
+		call.store<uint32_t>(call[4], 2);
+		call.ret(1);
+	});
+	registry.add("WTSQuerySessionInformationW", 5, [&context, computer_name](ApiCall &call) {
+		if (!call[3] || !call[4] || call.u32(1) > 1) {
+			call.fail(87, 0);
+			return;
+		}
+		const uint32_t session = call.u32(1);
+		std::u16string text;
+		std::optional<uint32_t> number;
+		switch (call.u32(2)) {
+		case 4: number = session; break;
+		case 5: text = session ? context.paths.user_name() : u""; break;
+		case 6: text = session ? u"Console" : u"Services"; break;
+		case 7: text = session ? computer_name(0).value_or(u"RAVEN") : u""; break;
+		case 8: number = session ? 0U : 4U; break;
+		default: call.fail(1, 0); return;
+		}
+		const size_t size = number ? 4 : (text.size() + 1) * 2;
+		const uint64_t block = context.allocator.allocate(size);
+		if (!block) {
+			call.fail(8, 0);
+			return;
+		}
+		if (number)
+			call.store<uint32_t>(block, *number);
+		else
+			call.put_wide(block, text, text.size() + 1);
+		call.store_pointer(call[3], block);
+		call.store<uint32_t>(call[4], uint32_t(size));
+		call.ret(1);
+	});
+	registry.add("WTSQueryUserToken", 2, [&context, &objects](ApiCall &call) {
+		if (!call[1] || call.u32(0) != 1) {
+			call.fail(call[1] ? 7022 : 87, 0);
+			return;
+		}
+		const auto made = objects.add_object(context.process_token);
+		if (made.status) {
+			call.fail(8, 0);
+			return;
+		}
+		objects.set_access(made.value, 0xf01ff);
+		call.store_pointer(call[1], made.value);
+		call.ret(1);
+	});
+	// There is one user and its hive is always loaded, so a profile is its current user key.
+	registry.add("LoadUserProfileW", 2, [](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.fail(87, 0);
+			return;
+		}
+		call.store_pointer(call[1] + (call.pointer_width() == 4 ? 28 : 48), 0x80000001ULL);
+		call.ret(1);
+	});
+	registry.add("UnloadUserProfile", 2, [](ApiCall &call) { call.ret(1); });
+	registry.add("GetUserProfileDirectoryW", 3, [&context](ApiCall &call) {
+		if (!call[0] || !call[2]) {
+			call.fail(87, 0);
+			return;
+		}
+		const auto profile = context.paths.user_profile();
+		const uint32_t room = call.load<uint32_t>(call[2]);
+		call.store<uint32_t>(call[2], uint32_t(profile.size() + 1));
+		if (!call[1] || room <= profile.size()) {
+			call.fail(122, 0);
+			return;
+		}
+		call.put_wide(call[1], profile, profile.size() + 1);
+		call.ret(1);
+	});
+	// Scheduling and desktop hints a single user runtime has no use for.
+	registry.add("IsWindowRedirectedForPrint", 1, [](ApiCall &call) { call.ret(0); });
+	registry.add("RegisterTouchHitTestingWindow", 2, [](ApiCall &call) { call.ret(1); });
+	// PM_DESKTOP (POWER_PLATFORM_ROLE).
+	registry.add("PowerDeterminePlatformRoleEx", 1, [](ApiCall &call) { call.ret(1); });
+	registry.add("SHGetSettings", 2, [](ApiCall &call) {
+		if (call[0])
+			call.store<uint32_t>(call[0], 0);
+	});
+	// SYSPAL_STATIC: a true color display has no palette to give up.
+	registry.add("GetSystemPaletteUse", 1, [](ApiCall &call) { call.ret(1); });
+	registry.add("InheritWindowMonitor", 2, [](ApiCall &call) { call.ret(1); });
+	registry.add("IsImmersiveProcess", 1, [](ApiCall &call) { call.ret(0); });
+	registry.add("ImmGetProperty", 2, [](ApiCall &call) { call.ret(0); });
+	// INPUT_MESSAGE_SOURCE: no device and no origin is known for a message.
+	registry.add("GetCurrentInputMessageSource", 1, [](ApiCall &call) {
+		call.store<uint64_t>(call[0], 0);
+		call.ret(1);
+	});
+	registry.add("GetCurrentProcessExplicitAppUserModelID", 1, [](ApiCall &call) {
+		call.store_pointer(call[0], 0);
+		call.ret(0x80004005U);
+	});
+	// The guest sees no network interface to describe.
+	registry.add("ConvertInterfaceGuidToLuid", 2, [](ApiCall &call) { call.ret(1168); });
+	registry.add("GetIfEntry2", 1, [](ApiCall &call) { call.ret(1168); });
+	registry.add("SetProcessInformation", 4, [](ApiCall &call) { call.ret(1); });
+	registry.add("SetProcessPriorityBoost", 2, [](ApiCall &call) { call.ret(1); });
+	registry.add("SetUserObjectInformationW", 4, [](ApiCall &call) { call.ret(1); });
+	registry.add("IsWinEventHookInstalled", 1, [](ApiCall &call) { call.ret(0); });
+	registry.add("WTSFreeMemory", 1, [&context](ApiCall &call) {
+		if (call[0])
+			context.allocator.release(call[0]);
+	});
 	// No input method editor is installed.
 	registry.add("ImmGetIMEFileNameW", 3, [](ApiCall &call) { call.ret(0); });
 	registry.add("ImmGetIMEFileNameA", 3, [](ApiCall &call) { call.ret(0); });

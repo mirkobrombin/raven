@@ -30,6 +30,8 @@ struct Adapter {
 };
 
 const Adapter adapters[] = {
+	{"AddAtomA", {0}},
+	{"FindAtomA", {0}},
 	{"CreateFileA", {0}},
 	{"GetFileAttributesA", {0}},
 	{"SetupDiGetClassDevsA", {1}},

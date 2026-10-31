@@ -824,6 +824,25 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// Properties a certificate context answers from its encoded certificate: its SHA-1 and MD5 hashes, and its key identifier, which is
 	// the subject key identifier the certificate names or else the SHA-1 of its public key.
+	// CERT_ENHKEY_USAGE with no identifiers and CRYPT_E_NOT_FOUND: the certificate holds no restriction, good for every use.
+	registry.add("CertGetEnhancedKeyUsage", 4, [](ApiCall &call) {
+		const uint32_t size = call.pointer_width() == 4 ? 8 : 16;
+		if (!call[3]) {
+			call.fail(87, 0);
+			return;
+		}
+		const uint32_t room = call.load<uint32_t>(call[3]);
+		call.store<uint32_t>(call[3], size);
+		if (call[2]) {
+			if (room < size) {
+				call.fail(234, 0);
+				return;
+			}
+			call.store<uint32_t>(call[2], 0);
+			call.store_pointer(call[2] + call.pointer_width(), 0);
+		}
+		call.fail(0x80092004U, 1);
+	});
 	registry.add("CertGetCertificateContextProperty", 4, [encoded_of](ApiCall &call) {
 		constexpr uint32_t sha1_hash = 3, md5_hash = 4, key_identifier = 20, more_data = 234, not_found = 0x80092004U;
 		if (!call[0] || !call[3]) {

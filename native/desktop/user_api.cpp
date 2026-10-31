@@ -176,6 +176,19 @@ void NativeWindows::register_api(ApiRegistry &registry)
 		}
 		call.ret(std::max<size_t>(1, objects.count()));
 	});
+	// CURSORINFO: always showing, and the shape is not told apart here.
+	registry.add("GetCursorInfo", 1, [this](ApiCall &call) {
+		const size_t width = call.pointer_width();
+		if (!call[0] || call.load<uint32_t>(call[0]) != (width == 4 ? 20 : 24)) {
+			call.fail(87, 0);
+			return;
+		}
+		call.store<uint32_t>(call[0] + 4, 1);
+		call.store_pointer(call[0] + 8, 0);
+		call.store<int32_t>(call[0] + 8 + width, cursor_x);
+		call.store<int32_t>(call[0] + 12 + width, cursor_y);
+		call.ret(1);
+	});
 	registry.add("GetCursorPos", 1, [this](ApiCall &call) {
 		call.store<int32_t>(call[0], cursor_x);
 		call.store<int32_t>(call[0] + 4, cursor_y);
