@@ -255,6 +255,8 @@ static HRESULT allocate_sector(volume *vol, DWORD *result)
 		reused = TRUE;
 	} else {
 		sector = vol->end_sector++;
+		/* Its slot in the table still reads as free: the search must not hand it out again. */
+		vol->fat_cursor = vol->end_sector;
 	}
 	status = ensure_stamp(&vol->stamps, &vol->stamp_count, sector);
 	if (FAILED(status))
@@ -280,6 +282,8 @@ static HRESULT allocate_mini(volume *vol, DWORD *result)
 		sector = vol->mini_cursor++;
 	} else {
 		sector = vol->mini_end++;
+		/* Its slot in the table still reads as free: the search must not hand it out again. */
+		vol->mini_cursor = vol->mini_end;
 		status = element_resize(vol, vol->root, (ULONGLONG)vol->mini_end * MINI_SIZE);
 		if (FAILED(status))
 			return status;
