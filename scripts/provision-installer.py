@@ -23,7 +23,7 @@ PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2d
             "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/stdole2.tlb/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
-            "dll/win32/windowscodecs/", "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/riched20/", "dll/win32/msvfw32/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
+            "dll/win32/windowscodecs/", "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/riched20/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -497,10 +497,16 @@ def main():
     next_base[0] -= 0x400000 if x86 else 0x4000000
     link("msftedit.dll", next_base[0], [compile(support / "msftedit.c", "msftedit", plain, False)], output / "msftedit.def",
          ["-L" + str(output), *[f"-l{library}" for library in ("riched20", "kernel32", "gcc")]])
-    # msvfw32.dll: video for Windows, which the animation control opens its clips through. Its English strings only: the shared ReactOS
-    # resource script also names a manifest the ReactOS build generates.
-    (generated / "msvfw32.rc").write_text('#include "msvideo_private.h"\n#pragma code_page(65001)\n#include "lang/msvfw32_En.rc"\n')
-    library("msvfw32.dll", source / "dll/win32/msvfw32", [], ["winmm", "comctl32", "user32", "gdi32", "advapi32"], rc=generated / "msvfw32.rc")
+    # msvfw32.dll: Raven's own video for Windows: the codec manager, DrawDib and the MCI window.
+    own_vfw = repo / "native/upstream/raven-msvfw32"
+    vfw_objects = []
+    for part in ("codecs", "draw", "mciwnd", "main"):
+        vfw_objects.append(objects / ("msvfw32_" + part + ".o"))
+        run([triple + "-gcc", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-w", "-c", "-o", vfw_objects[-1], own_vfw / (part + ".c")])
+    (output / "msvfw32.def").write_text("LIBRARY msvfw32.dll\nEXPORTS\n" + (own_vfw / "exports.txt").read_text())
+    next_base[0] -= 0x400000 if x86 else 0x4000000
+    run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
+         "-o", output / "msvfw32.dll", *vfw_objects, repo / "native/upstream/raven-comctl32/crt.c", output / "msvfw32.def", "-lcomdlg32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
     # xmllite.dll: the streaming XML reader and writer, which the Office Click-to-Run client reads its configuration with.
     xmllite_root = repo / "native/upstream/raven-xmllite"
     library("xmllite.dll", xmllite_root, wine_module=False, sources=[xmllite_root / name for name in ("guid.c", "reader.c", "writer.c")])
