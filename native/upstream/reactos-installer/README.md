@@ -19,7 +19,8 @@ programs and, with `--arch x86`, for 32-bit ones:
   `sdk/lib/3rdparty/libxml2` and `dll/3rdparty/libxslt`, and `atl100.dll`, Raven's own from [`native/upstream/raven-atl100`](../raven-atl100/README.md);
 - `urlmon.dll`: Raven's own from [`native/upstream/raven-urlmon`](../raven-urlmon/README.md): URLs, monikers
   and the protocols behind them;
-- the imaging stack: `windowscodecs.dll`, `gdiplus.dll`, `mlang.dll` (Raven's own, from
+- the imaging stack: `windowscodecs.dll` (Raven's own, from
+  [`native/upstream/raven-windowscodecs`](../raven-windowscodecs/README.md)), `gdiplus.dll`, `mlang.dll` (Raven's own, from
   [`native/upstream/raven-mlang`](../raven-mlang/README.md)) and `libpng.dll`, `libjpeg.dll`, `libtiff.dll` (`dll/3rdparty`);
 - `advpack.dll`: Raven's own from [`native/upstream/raven-advpack`](../raven-advpack/README.md): the setup helpers IExpress packages and the
   DirectX setup run INF files through.

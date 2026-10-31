@@ -23,7 +23,7 @@ PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2d
             "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/stdole2.tlb/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
-            "dll/win32/windowscodecs/", "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/riched20/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
+            "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/riched20/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -446,22 +446,27 @@ def main():
                         for word in line.split()[-1:] if word.lstrip("_").split("@")[0] in wanted})
     (output / "mlang_import.def").write_text("LIBRARY mlang.dll\nEXPORTS\n" + "".join(f" {name}\n" for name in mlang_names))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "mlang_import.def", "-l", output / "libmlang.a"])
-    # windowscodecs.dll: the imaging component; its interfaces' proxies register through a script widl writes from the IDL.
-    codecs_root = source / "dll/win32/windowscodecs"
-    codecs_widl = [*widl, "-I", codecs_root]
-    run([*codecs_widl, "-h", "-H", generated / "windowscodecs_wincodec.h", codecs_root / "windowscodecs_wincodec.idl"])
-    run([*codecs_widl, "-p", "-P", generated / "windowscodecs_wincodec_p.c", codecs_root / "windowscodecs_wincodec.idl"])
-    run([*codecs_widl, "-r", "-o", generated / "windowscodecs_wincodec_r.rgs", codecs_root / "windowscodecs_wincodec.idl"])
-    run([*widl, "--dlldata-only", "--dlldata=" + str(generated / "windowscodecs_dlldata.c"), "windowscodecs_wincodec"])
-    (generated / "windowscodecs_r.rc").write_text("1 WINE_REGISTRY windowscodecs_wincodec_r.rgs\n")
-    run([triple + "-windres", "--preprocessor=" + str(wrapper), "-O", "coff", "-D__REACTOS__", "-D__WINESRC__", "-D_M_IX86" if x86 else "-D_M_AMD64",
-         "-I" + str(generated), "-i", generated / "windowscodecs_r.rc", "-o", objects / "windowscodecs_r.res.o"])
-    codecs_flags = ["-DENTRY_PREFIX=WIC_", "-DPROXY_DELEGATION", "-DWINE_REGISTER_DLL", "-I" + str(libs / "libpng"), "-I" + str(libs / "libjpeg"),
-                    "-I" + str(libs / "libtiff"), "-I" + str(zlib_include)]
-    library("windowscodecs.dll", codecs_root, codecs_flags, ["libjpeg", "libpng", "libtiff", "ole32", "oleaut32", "rpcrt4", "shlwapi", "user32", "gdi32",
-            "advapi32", "propsys"], sources=[*listed_sources(codecs_root), codecs_root / "bitmap.c", codecs_root / "guid.c",
-            generated / "windowscodecs_wincodec_p.c", generated / "windowscodecs_dlldata.c"], objects_more=[objects / "windowscodecs_r.res.o"],
-            helpers=("register.c",), rc="version.rc")
+    # windowscodecs.dll: Raven's own imaging component; JPEG and TIFF go through the libraries built above, named by path so
+    # no export of the component can resolve to one of the installer's own import libraries.
+    own_codecs = repo / "native/upstream/raven-windowscodecs"
+    codecs_objects = []
+    for path in [*sorted(own_codecs.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+        target = objects / ("codecs_" + path.stem + ".o")
+        run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
+             "-I" + str(libs / "libjpeg"), "-I" + str(libs / "libtiff"), "-w", path, "-o", target])
+        codecs_objects.append(target)
+    codecs_exports = (own_codecs / "exports.txt").read_text()
+    (output / "windowscodecs.def").write_text("LIBRARY windowscodecs.dll\nEXPORTS\n" + codecs_exports)
+    next_base[0] -= 0x400000 if x86 else 0x4000000
+    run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
+         "-o", output / "windowscodecs.dll", *codecs_objects, output / "windowscodecs.def", output / "liblibjpeg.a", output / "liblibtiff.a", "-lole32", "-loleaut32", "-luuid", "-ladvapi32",
+         "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
+    codecs_defined = decorated(codecs_objects)
+    codecs_names = [line.split()[0].partition("=")[0] for line in codecs_exports.splitlines() if line.strip()]
+    (output / "windowscodecs_import.def").write_text("LIBRARY windowscodecs.dll\nEXPORTS\n" + "".join(
+        f" {name}{'@' + str(codecs_defined[name]) if x86 and codecs_defined.get(name) is not None else ''}\n" for name in codecs_names))
+    run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "windowscodecs_import.def", "-l", output / "libwindowscodecs.a"])
+    # gdiplus.dll: Raven's own drawing library, which reads and writes pictures through the imaging component.
     gdiplus_root = source / "dll/win32/gdiplus"
     library("gdiplus.dll", gdiplus_root, ["-D_USE_MATH_DEFINES", "-U_WIN32_WINNT", "-D_WIN32_WINNT=0x601", "-UWINVER", "-DWINVER=0x601"], ["mlang", "shlwapi", "oleaut32", "ole32", "user32", "gdi32", "windowscodecs"],
             sources=[*listed_sources(gdiplus_root), gdiplus_root / "guid.c"], rc="gdiplus.rc")

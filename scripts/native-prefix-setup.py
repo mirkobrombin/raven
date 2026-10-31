@@ -29,8 +29,8 @@ def main():
             if result.returncode:
                 raise RuntimeError(f"prefix setup client failed: {result.stdout}")
             count = (prefix / "drive_c" / "registration-count.bin").read_bytes()
-            if count != b"x" * (4 * (attempt + 1)):
-                raise RuntimeError(f"registration ran {len(count)} times after {attempt + 1} independent launches; expected {4 * (attempt + 1)}")
+            if count != b"x" * (5 * (attempt + 1)):
+                raise RuntimeError(f"registration ran {len(count)} times after {attempt + 1} independent launches; expected {5 * (attempt + 1)}")
         print("Failed registrations retry once per independent launch; suspended children accept tokens without repeating setup")
 
 
