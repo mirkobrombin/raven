@@ -1,0 +1,4 @@
+CreateAssemblyCache
+CreateAssemblyNameObject
+SxsLookupClrGuid
+SxspGenerateManifestPathOnAssemblyIdentity
