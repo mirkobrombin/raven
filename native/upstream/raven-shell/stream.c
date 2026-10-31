@@ -414,6 +414,26 @@ static IStream *registry_stream(HKEY root, LPCWSTR subkey, LPCWSTR value, DWORD 
 	return (IStream *)stream;
 }
 
+/* A stream over memory alone: the registry stream without its key, starting from a copy of the bytes given. */
+IStream *WINAPI SHCreateMemStream(const BYTE *data, UINT size)
+{
+	RegistryStream *stream = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *stream);
+	if (!stream)
+		return NULL;
+	stream->vtbl = &registry_vtbl;
+	stream->refs = 1;
+	stream->writable = TRUE;
+	if (data && size) {
+		if (!registry_room(stream, size)) {
+			HeapFree(GetProcessHeap(), 0, stream);
+			return NULL;
+		}
+		CopyMemory(stream->data, data, size);
+		stream->size = size;
+	}
+	return (IStream *)stream;
+}
+
 static LPWSTR widened(LPCSTR text)
 {
 	if (!text)
