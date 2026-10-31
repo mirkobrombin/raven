@@ -1,0 +1,5 @@
+LIBRARY late_facade
+EXPORTS
+	Named=late_target.Add @1
+	Ordinal="late_target.#7" @2 NONAME
+	Missing=raven_absent.Add @3

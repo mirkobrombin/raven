@@ -4309,6 +4309,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_test(NAME native_module_api_cli COMMAND raven --run-process --execution=native
             ${MODULE_FIXTURES}/client.exe ${MODULE_FIXTURES}/facade.dll ${MODULE_FIXTURES}/target.dll)
         set_tests_properties(native_module_api_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # A library loaded at run time whose exports forward to one that is not loaded yet.
+        add_custom_command(OUTPUT ${MODULE_FIXTURES}/late_target.dll ${MODULE_FIXTURES}/late_facade.dll ${MODULE_FIXTURES}/late-forwarder.exe
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${MODULE_FIXTURES}
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -shared -fno-stack-protector
+                -Wl,--entry,0,--image-base,0x180200000 -o ${MODULE_FIXTURES}/late_target.dll
+                ${LOADER_SOURCES}/target.c ${LOADER_SOURCES}/late_target.def
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -shared -fno-stack-protector
+                -Wl,--entry,0,--image-base,0x180300000 -o ${MODULE_FIXTURES}/late_facade.dll
+                ${LOADER_SOURCES}/target.c ${LOADER_SOURCES}/late_facade.def
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                -Wl,--entry,raven_entry,--image-base,0x188100000
+                -o ${MODULE_FIXTURES}/late-forwarder.exe ${CALLBACK_SOURCES}/late_forwarder_client.c -lkernel32
+            DEPENDS ${LOADER_SOURCES}/target.c ${LOADER_SOURCES}/late_target.def ${LOADER_SOURCES}/late_facade.def
+                ${CALLBACK_SOURCES}/late_forwarder_client.c VERBATIM)
+        add_custom_target(late_forwarder_fixtures ALL DEPENDS ${MODULE_FIXTURES}/late-forwarder.exe)
+        add_test(NAME native_late_forwarder_cli COMMAND raven --run-process --execution=native ${MODULE_FIXTURES}/late-forwarder.exe)
+        set_tests_properties(native_late_forwarder_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
 
         set(LIFECYCLE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/lifecycle-fixtures)
         add_custom_command(OUTPUT ${LIFECYCLE_FIXTURES}/base.dll ${LIFECYCLE_FIXTURES}/base.a
