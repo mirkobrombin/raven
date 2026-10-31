@@ -184,6 +184,48 @@ VOID WINAPI RavenLeaveCriticalSection(PRTL_CRITICAL_SECTION section)
 	InterlockedExchange(&section->LockCount, -1);
 }
 
+/* ntdll's forms of the same, which programs that call ntdll directly (Zig's standard library) use; they answer an NTSTATUS. */
+NTSTATUS NTAPI RavenRtlEnterCriticalSection(PRTL_CRITICAL_SECTION section)
+{
+	RavenEnterCriticalSection(section);
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI RavenRtlLeaveCriticalSection(PRTL_CRITICAL_SECTION section)
+{
+	RavenLeaveCriticalSection(section);
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI RavenRtlInitializeCriticalSection(PRTL_CRITICAL_SECTION section)
+{
+	init_section(section, TRUE);
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI RavenRtlInitializeCriticalSectionAndSpinCount(PRTL_CRITICAL_SECTION section, ULONG spin)
+{
+	(void)spin;
+	init_section(section, TRUE);
+	return STATUS_SUCCESS;
+}
+
+/* The flags are checked as kernel32's form checks them; a bad one is answered with a status instead of the last error. */
+NTSTATUS NTAPI RavenRtlInitializeCriticalSectionEx(PRTL_CRITICAL_SECTION section, ULONG spin, ULONG flags)
+{
+	(void)spin;
+	if ((flags & RTL_CRITICAL_SECTION_ALL_FLAG_BITS) & ~0x1f000000U)
+		return STATUS_INVALID_PARAMETER;
+	init_section(section, !(flags & RTL_CRITICAL_SECTION_FLAG_NO_DEBUG_INFO));
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS NTAPI RavenRtlDeleteCriticalSection(PRTL_CRITICAL_SECTION section)
+{
+	RavenDeleteCriticalSection(section);
+	return STATUS_SUCCESS;
+}
+
 BOOL WINAPI RavenTryEnterCriticalSection(PRTL_CRITICAL_SECTION section)
 {
 	HANDLE self = TEB_THREAD_ID;

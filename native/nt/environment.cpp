@@ -170,6 +170,9 @@ NativeEnvironment::NativeEnvironment(NativeProcess &process, uint64_t image_base
 		// The PEB version agrees with KUSER_SHARED_DATA and GetVersionEx.
 		field(process, process_block + 0x118, 10, 4);
 		field(process, process_block + 0x11c, 0, 4);
+		// The PEB lock, FastPebLock at PEB+0x38, which code that reads the process parameters takes: another free critical section.
+		field(process, process_block + 0x840 + 0x08, UINT32_MAX, 4);
+		field(process, process_block + 0x38, process_block + 0x840, 8);
 		field(process, process_block + 0x120, 19045, 2);
 		field(process, process_block + 0x124, 2, 4);
 		context.registers.gs_base = thread_block;
@@ -264,6 +267,9 @@ void NativeEnvironment::x86_constructor(uint64_t image_base, uint32_t process_id
 		field(process, process_block + 0xa4, 10, 4);
 		field(process, process_block + 0xa8, 0, 4);
 		field(process, process_block + 0xac, 19045, 2);
+		// The PEB lock, FastPebLock at PEB+0x1c.
+		field(process, process_block + 0x840 + 0x04, UINT32_MAX, 4);
+		field(process, process_block + 0x1c, process_block + 0x840, 4);
 		field(process, process_block + 0xb0, 2, 4);
 		process.set_teb(thread_block);
 	} catch (...) {
