@@ -4,6 +4,8 @@
 #include <libxslt/xsltInternals.h>
 #include <libxslt/transform.h>
 #include <libxslt/xsltutils.h>
+#include <libxslt/extensions.h>
+#include <libxslt/variables.h>
 
 /* --- The transform itself. --- */
 
@@ -88,8 +90,45 @@ static HRESULT result_text(xmlDocPtr result, xsltStylesheetPtr sheet, BSTR *out)
 	return *out ? S_OK : E_OUTOFMEMORY;
 }
 
+/* msxsl:node-set: a tree fragment already holds its nodes, and any other value becomes the text of a new one. */
+static void node_set_function(xmlXPathParserContextPtr parser, int count)
+{
+	xsltTransformContextPtr transform;
+	xmlDocPtr fragment;
+	xmlNodePtr text;
+	xmlChar *value;
+	if (count != 1)
+	{
+		xmlXPathSetArityError(parser);
+		return;
+	}
+	if (xmlXPathStackIsNodeSet(parser))
+	{
+		parser->value->type = XPATH_NODESET;
+		return;
+	}
+	transform = xsltXPathGetTransformContext(parser);
+	fragment = xsltCreateRVT(transform);
+	if (!fragment)
+		return;
+	xsltRegisterLocalRVT(transform, fragment);
+	value = xmlXPathPopString(parser);
+	text = xmlNewDocText(fragment, value);
+	xmlFree(value);
+	if (text)
+		xmlAddChild((xmlNodePtr)fragment, text);
+	xmlXPathReturnNodeSet(parser, xmlXPathNodeSetCreate(text));
+}
+
+static BOOL WINAPI register_extensions(INIT_ONCE *once, void *unused, void **context)
+{
+	xsltRegisterExtModuleFunction((const xmlChar *)"node-set", (const xmlChar *)"urn:schemas-microsoft-com:xslt", node_set_function);
+	return TRUE;
+}
+
 static HRESULT run_transform(xmlNodePtr node, xsltStylesheetPtr sheet, const parameter *list, xmlDocPtr *result)
 {
+	static INIT_ONCE extensions = INIT_ONCE_STATIC_INIT;
 	const char *names[64];
 	const parameter *at;
 	unsigned count = 0;
@@ -97,6 +136,7 @@ static HRESULT run_transform(xmlNodePtr node, xsltStylesheetPtr sheet, const par
 	xmlDocPtr tree = source_tree(node, &owned);
 	if (!tree)
 		return E_OUTOFMEMORY;
+	InitOnceExecuteOnce(&extensions, register_extensions, NULL, NULL);
 	for (at = list; at && count < ARRAYSIZE(names) - 2; at = at->next)
 	{
 		names[count++] = at->name;

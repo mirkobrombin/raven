@@ -29,6 +29,7 @@ static schema_cache *cache_from(IXMLDOMSchemaCollection2 *iface)
 	return (schema_cache *)iface;
 }
 
+static const GUID class_identity_60 = {0x88d96a07, 0xf192, 0x11d4, {0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5}};
 const GUID mx_private_cache_iid = {0x7c4b3f1f, 0x52a0, 0x4f6e, {0x9d, 0x11, 0x3a, 0x6c, 0x88, 0x20, 0xe5, 0x18}};
 
 static HRESULT WINAPI cache_QueryInterface(IXMLDOMSchemaCollection2 *iface, REFIID riid, void **out)
@@ -42,8 +43,10 @@ static HRESULT WINAPI cache_QueryInterface(IXMLDOMSchemaCollection2 *iface, REFI
 		*out = self;
 		return S_OK;
 	}
+	/* Click-to-Run's manifest reader asks the 6.0 cache for its own class identity and expects the collection. */
 	if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDispatch) || IsEqualGUID(riid, &IID_IXMLDOMSchemaCollection) ||
-		(self->version >= MX_4 && IsEqualGUID(riid, &IID_IXMLDOMSchemaCollection2)))
+		(self->version >= MX_4 && IsEqualGUID(riid, &IID_IXMLDOMSchemaCollection2)) ||
+		(self->version == MX_6 && IsEqualGUID(riid, &class_identity_60)))
 		*out = iface;
 	else if (IsEqualGUID(riid, &IID_ISupportErrorInfo))
 		*out = &self->errors_vtbl;
