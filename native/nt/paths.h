@@ -51,6 +51,8 @@ public:
 	void set_package_roots(std::function<std::vector<std::u16string>()> source) { package_roots = std::move(source); }
 	// The program's PATH as it is now, which the standard library search ends with.
 	void set_search_path(std::function<std::u16string()> source) { search_path = std::move(source); }
+	// The folders of the program's PATH as it is now, where the standard searches for programs and libraries end.
+	std::vector<std::u16string> search_folders() const { return search_path ? path_folders(search_path()) : std::vector<std::u16string>(); }
 	// The folders of a PATH value: separated by semicolons, empty entries skipped, surrounding quotes removed.
 	static std::vector<std::u16string> path_folders(std::u16string_view value);
 	// The value of a variable in an environment block ("NAME=VALUE" entries each ended by a zero), the name compared without case.

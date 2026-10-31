@@ -2117,6 +2117,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_private_assembly PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/private-assembly-prefix)
             endif()
+            # CreateProcess finds a program named alone in the folders of PATH.
+            set(PATH_SEARCH_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/path-search.exe)
+            add_custom_command(OUTPUT ${PATH_SEARCH_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ebd00000,--no-insert-timestamp
+                    -o ${PATH_SEARCH_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/path_search_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/path_search_client.c VERBATIM)
+            add_custom_target(path_search_fixture ALL DEPENDS ${PATH_SEARCH_CLIENT})
+            add_test(NAME native_create_process_path_search COMMAND raven --run-process --execution=native ${PATH_SEARCH_CLIENT})
+            set_tests_properties(native_create_process_path_search PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/path-search-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
