@@ -805,27 +805,54 @@ RPC_STATUS RPC_ENTRY I_RpcBindingInqLocalClientPID(RPC_BINDING_HANDLE handle, UL
 	return RPC_S_OK;
 }
 
+// Pipes carry their client's identity; a socket arrives from nobody in particular.
+static BOOL binding_has_identity(rpc_binding *binding)
+{
+	return binding->server && lstrcmpW(binding->protseq, L"ncacn_ip_tcp");
+}
+
 RPC_STATUS RPC_ENTRY RpcImpersonateClient(RPC_BINDING_HANDLE handle)
 {
-	return rpc_binding_of(handle ? handle : I_RpcGetCurrentCallHandle()) ? RPC_S_OK : RPC_S_NO_CALL_ACTIVE;
+	rpc_binding *binding = rpc_binding_of(handle ? handle : I_RpcGetCurrentCallHandle());
+	if (!binding)
+		return RPC_S_NO_CALL_ACTIVE;
+	if (!binding_has_identity(binding))
+		return RPC_S_BINDING_HAS_NO_AUTH;
+	connection_state *state = CONTAINING_RECORD(binding, connection_state, binding);
+	return ImpersonateNamedPipeClient(state->stream.pipe) ? RPC_S_OK : RPC_S_CANNOT_SUPPORT;
 }
 
 RPC_STATUS RPC_ENTRY RpcRevertToSelfEx(RPC_BINDING_HANDLE handle)
 {
 	(void)handle;
-	return RPC_S_OK;
+	return RevertToSelf() ? RPC_S_OK : RPC_S_CANNOT_SUPPORT;
 }
 
 RPC_STATUS RPC_ENTRY RpcRevertToSelf(void)
 {
-	return RPC_S_OK;
+	return RpcRevertToSelfEx(NULL);
 }
 
-// No provider verifies anybody, so no client ever arrives authenticated.
+// The local transport vouches for its client without any provider in between.
 RPC_STATUS RPC_ENTRY RpcBindingInqAuthClientExW(RPC_BINDING_HANDLE handle, RPC_AUTHZ_HANDLE *privileges, RPC_WSTR *principal, ULONG *level, ULONG *service, ULONG *authz, ULONG flags)
 {
-	(void)privileges; (void)principal; (void)level; (void)service; (void)authz; (void)flags;
-	return rpc_binding_of(handle ? handle : I_RpcGetCurrentCallHandle()) ? RPC_S_BINDING_HAS_NO_AUTH : RPC_S_NO_CALL_ACTIVE;
+	(void)flags;
+	rpc_binding *binding = rpc_binding_of(handle ? handle : I_RpcGetCurrentCallHandle());
+	if (!binding)
+		return RPC_S_NO_CALL_ACTIVE;
+	if (!binding->server || lstrcmpW(binding->protseq, L"ncalrpc"))
+		return RPC_S_BINDING_HAS_NO_AUTH;
+	if (privileges)
+		*privileges = NULL;
+	if (principal)
+		*principal = NULL;
+	if (level)
+		*level = RPC_C_AUTHN_LEVEL_PKT_PRIVACY;
+	if (service)
+		*service = RPC_C_AUTHN_WINNT;
+	if (authz)
+		*authz = RPC_C_AUTHZ_NONE;
+	return RPC_S_OK;
 }
 
 RPC_STATUS RPC_ENTRY RpcBindingInqAuthClientExA(RPC_BINDING_HANDLE handle, RPC_AUTHZ_HANDLE *privileges, RPC_CSTR *principal, ULONG *level, ULONG *service, ULONG *authz, ULONG flags)
