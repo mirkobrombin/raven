@@ -2139,6 +2139,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_volume_names COMMAND raven --run-process --execution=native ${VOLUME_NAME_CLIENT})
             set_tests_properties(native_volume_names PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/volume-name-prefix)
+            # The AFD readiness poll mio and wepoll use: an accept completes through the completion port, a cancelled poll ends as cancelled.
+            set(AFD_POLL_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/afd-poll.exe)
+            add_custom_command(OUTPUT ${AFD_POLL_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1ea300000,--no-insert-timestamp
+                    -o ${AFD_POLL_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/afd_poll_client.c -lws2_32 -lntdll -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/afd_poll_client.c VERBATIM)
+            add_custom_target(afd_poll_fixture ALL DEPENDS ${AFD_POLL_CLIENT})
+            add_test(NAME native_afd_poll COMMAND raven --run-process --execution=native ${AFD_POLL_CLIENT})
+            set_tests_properties(native_afd_poll PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/afd-poll-prefix")
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)

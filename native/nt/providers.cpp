@@ -1584,6 +1584,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtGetCurrentProcessorNumber", "NtGetCurrentProcessorNumberEx", "RtlGetCurrentProcessorNumber", "RtlGetCurrentProcessorNumberEx",
 		// The C runtime string functions ntdll exports.
 		"strlen", "strcmp", "strncmp",
+		// Cancelling one pending operation, which mio uses for its AFD polls.
+		"NtCancelIoFileEx",
 		// Opening files by their native names, which Rust's standard library and mio look up at run time.
 		"NtCreateFile", "NtOpenFile",
 		// What the runtime's own components import from ntdll, which they need whether a program loads them at start or later.

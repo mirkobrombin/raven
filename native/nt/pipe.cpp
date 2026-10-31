@@ -836,6 +836,15 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 	const auto native_cancel = [&context, pipe_of](ApiCall &call, uint64_t handle, uint64_t status_block, uint64_t outcome) {
 		const auto pipe = pipe_of(handle);
 		if (!pipe) {
+			// An AFD endpoint's polls end as cancelled, with their completions.
+			if (const auto found = afd_cancel(context, handle, status_block)) {
+				if (outcome) {
+					put_word(context.process, outcome, 0, call.pointer_width());
+					put_word(context.process, outcome + call.pointer_width(), 0, call.pointer_width());
+				}
+				call.ret(*found || !status_block ? 0 : 0xc0000225U);
+				return;
+			}
 			call.ret(0xc0000008U);
 			return;
 		}

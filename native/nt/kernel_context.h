@@ -9,6 +9,7 @@
 #include "completion_port.h"
 #include "pipe.h"
 #include "threads.h"
+#include <optional>
 #include <string>
 #include "pe/module_set.h"
 
@@ -97,8 +98,16 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context);
 void register_winsock_api(ApiRegistry &registry, KernelContext &context);
 // WinINet's synchronous HTTP client over host sockets and the host's OpenSSL.
 void register_wininet_api(ApiRegistry &registry, KernelContext &context);
-// SetFileCompletionNotificationModes for a socket handle; false when the handle is not a socket.
+// SetFileCompletionNotificationModes for a socket handle or an AFD endpoint; false when the handle is neither.
 bool set_socket_completion_modes(NativeObjects &objects, uint64_t handle, uint32_t modes);
+// AFD, the socket driver's device (winsock_api.cpp): an endpoint opened as \Device\Afd\<name>, which reports socket readiness
+// through IOCTL_AFD_POLL.
+std::shared_ptr<KernelObject> make_afd_endpoint();
+// NtDeviceIoControlFile on an AFD endpoint; false when the handle is not one.
+bool afd_device_control(KernelContext &context, ApiCall &call);
+// Cancels an endpoint's polls, every one or the one with this IO_STATUS_BLOCK: nothing when the handle is not an endpoint, else
+// whether a poll was found.
+std::optional<bool> afd_cancel(KernelContext &context, uint64_t handle, uint64_t status_block);
 void register_host_api(ApiRegistry &registry, KernelContext &context);
 void register_job_api(ApiRegistry &registry, KernelContext &context);
 // winmm wave output through the host sound server.
