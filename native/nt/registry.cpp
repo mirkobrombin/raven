@@ -186,7 +186,7 @@ void NativeRegistry::register_runtime_classes()
 	// The Windows Runtime classes the runtime brings, in-process (activation type 0) and callable from any apartment (threading 0):
 	// installers ask the package manager whether a packaged version of what they install is present, and Office asks the UI settings
 	// for the theme's colours and the text scale while it starts, along with the network, the device's profile, the system's accounts
-	// and the application model.
+	// and the application model, and programs make HTTP requests to the URIs they go to.
 	static constexpr std::pair<const char16_t *, const char16_t *> runtime_classes[] = {
 		{u"Windows.Management.Deployment.PackageManager", u"raven-deployment.dll"},
 		{u"Windows.UI.ViewManagement.UISettings", u"raven-uisettings.dll"},
@@ -195,7 +195,11 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.Security.Authentication.OnlineId.OnlineIdSystemAuthenticator", u"raven-twinapi.dll"},
 		{u"Windows.Security.Authentication.OnlineId.OnlineIdServiceTicketRequest", u"raven-twinapi.dll"},
 		{u"Windows.Security.Authentication.Web.Core.WebAuthenticationCoreManager", u"raven-twinapi.dll"},
-		{u"Windows.ApplicationModel.Core.CoreApplication", u"raven-twinapi.dll"}};
+		{u"Windows.ApplicationModel.Core.CoreApplication", u"raven-twinapi.dll"},
+		{u"Windows.Foundation.Uri", u"raven-web.dll"}, {u"Windows.Web.Http.HttpClient", u"raven-web.dll"},
+		{u"Windows.Web.Http.HttpMethod", u"raven-web.dll"}, {u"Windows.Web.Http.HttpRequestMessage", u"raven-web.dll"},
+		{u"Windows.Web.Http.HttpResponseMessage", u"raven-web.dll"}, {u"Windows.Web.Http.Filters.HttpBaseProtocolFilter", u"raven-web.dll"},
+		{u"Windows.Web.Http.Headers.HttpDateOrDeltaHeaderValue", u"raven-web.dll"}};
 	for (const bool wow : {false, true})
 		for (const auto &[name, library] : runtime_classes) {
 			const std::u16string path = std::u16string(wow ? u"SOFTWARE\\Wow6432Node" : u"SOFTWARE") +

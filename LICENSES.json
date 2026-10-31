@@ -264,6 +264,14 @@
         "native/upstream/raven-user32/static.c",
         "native/upstream/raven-user32/text.c",
         "native/upstream/raven-user32/user32_private.h",
+        "native/upstream/raven-web/content.c",
+        "native/upstream/raven-web/headers.c",
+        "native/upstream/raven-web/http.c",
+        "native/upstream/raven-web/transport.c",
+        "native/upstream/raven-web/uri.c",
+        "native/upstream/raven-web/web.h",
+        "native/upstream/raven-winrt/winrt.c",
+        "native/upstream/raven-winrt/winrt.h",
         "native/upstream/raven-xmllite/README.md",
         "native/upstream/raven-xmllite/guid.c",
         "native/upstream/raven-xmllite/reader.c",
@@ -341,6 +349,18 @@
       "distribution_license": "GPL-2.0-only",
       "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
       "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+    },
+    {
+      "name": "Windows.Web.Http interface definitions",
+      "paths": [
+        "native/upstream/raven-web/windows.web.http.idl",
+        "native/upstream/raven-web/windows.web.http.head.idl"
+      ],
+      "license": "MIT",
+      "review": "pending-maintainer-review",
+      "revision": "58217a690d6256ee229044a174de67d72d28bc35",
+      "provenance": "Interface identifiers, method order and signatures from Microsoft's Windows metadata as distributed by https://github.com/microsoft/windows-rs (MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation)",
+      "boundary": "Interface definitions compiled by widl into a header for the PE guest component raven-web.dll. No code."
     },
     {
       "name": "External build inputs",

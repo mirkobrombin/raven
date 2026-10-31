@@ -3084,6 +3084,52 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${deployment_source}/deployment.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -lkernel32 -lgcc
                     DEPENDS ${deployment_source}/deployment.c VERBATIM)
                 add_custom_target(deployment_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-deployment.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-deployment.dll)
+                # raven-web.dll, the HTTP classes of the Windows Runtime (Windows.Web.Http, its Headers and Filters) and Windows.Foundation.Uri,
+                # for each width: Raven code over WinINet, on interface definitions taken from Microsoft's published metadata
+                # (native/upstream/raven-web/windows.web.http.idl), which widl compiles against Wine's IDL files.
+                find_program(RAVEN_WIDL widl)
+                if(RAVEN_WIDL)
+                    get_filename_component(widl_directory ${RAVEN_WIDL} DIRECTORY)
+                    set(RAVEN_WIDL_INCLUDE_DIR "${widl_directory}/../include/wine/windows" CACHE PATH "Directory holding Wine's IDL files, which widl imports")
+                    set(web_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-web)
+                    set(winrt_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-winrt)
+                    set(web_generated ${CMAKE_CURRENT_BINARY_DIR}/web-generated)
+                    add_custom_command(OUTPUT ${web_generated}/windows.web.http.h
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${web_generated}
+                        COMMAND ${RAVEN_WIDL} -h -o ${web_generated}/windows.web.http.h -I ${RAVEN_WIDL_INCLUDE_DIR} ${web_source}/windows.web.http.idl
+                        DEPENDS ${web_source}/windows.web.http.idl VERBATIM)
+                    set(web_sources ${web_source}/http.c ${web_source}/headers.c ${web_source}/content.c ${web_source}/transport.c ${web_source}/uri.c
+                        ${winrt_source}/winrt.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c)
+                    set(web_libraries -lruntimeobject -lwininet -lurlmon -lole32 -loleaut32 -lkernel32 -lgcc)
+                    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-web.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-web.dll
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                        COMMAND ${RAVEN_MINGW64} ${accprop_flags} -I${web_generated} -Wl,--entry,DllMain,--gc-sections,--no-insert-timestamp
+                            -o ${CMAKE_CURRENT_BINARY_DIR}/raven-web.dll ${web_sources} ${web_libraries}
+                        COMMAND ${RAVEN_MINGW32} ${accprop_flags} -I${web_generated} -Wl,--entry,_DllMain@12,--kill-at,--gc-sections,--no-insert-timestamp
+                            -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-web.dll ${web_sources} ${web_libraries}
+                        DEPENDS ${web_sources} ${web_source}/web.h ${winrt_source}/winrt.h ${web_generated}/windows.web.http.h VERBATIM)
+                    add_custom_target(web_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-web.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-web.dll)
+                    foreach(width 64 32)
+                        set(web_client ${CMAKE_CURRENT_BINARY_DIR}/web-client${width}.exe)
+                        if(width EQUAL 64)
+                            set(web_compiler ${RAVEN_MINGW64})
+                            set(web_entry raven_entry)
+                        else()
+                            set(web_compiler ${RAVEN_MINGW32})
+                            set(web_entry _raven_entry)
+                        endif()
+                        add_custom_command(OUTPUT ${web_client}
+                            COMMAND ${web_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -I${web_generated}
+                                -Wl,--entry,${web_entry},--no-insert-timestamp -o ${web_client} ${LOADER_SOURCES}/web_client.c
+                                ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -lws2_32 -lkernel32 -lgcc
+                            DEPENDS ${LOADER_SOURCES}/web_client.c ${web_generated}/windows.web.http.h VERBATIM)
+                        add_custom_target(web_fixture${width} ALL DEPENDS ${web_client} web_component)
+                        add_test(NAME native_web_http_x${width} COMMAND raven --run-process --execution=native ${web_client})
+                        set_tests_properties(native_web_http_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endforeach()
+                else()
+                    message(STATUS "widl not found: the Windows.Web.Http component (raven-web.dll) and its tests are not built")
+                endif()
                 # raven-uisettings.dll, the UISettings class of the Windows Runtime for each width: Raven code on the public headers.
                 set(uisettings_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-uisettings)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-uisettings.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-uisettings.dll
@@ -3145,6 +3191,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(deployment_fixture${width} ALL DEPENDS ${deployment_client} deployment_component)
                     add_test(NAME native_deployment_x${width} COMMAND raven --run-process --execution=native ${deployment_client})
                     set_tests_properties(native_deployment_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A program importing only the Windows Runtime's activation, through runtimeobject's API sets.
+                    set(winrt_import_client ${CMAKE_CURRENT_BINARY_DIR}/winrt-import-client${width}.exe)
+                    add_custom_command(OUTPUT ${winrt_import_client}
+                        COMMAND ${deployment_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${deployment_entry},--no-insert-timestamp
+                            -o ${winrt_import_client} ${LOADER_SOURCES}/winrt_import_client.c -lruntimeobject -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/winrt_import_client.c VERBATIM)
+                    add_custom_target(winrt_import_fixture${width} ALL DEPENDS ${winrt_import_client} deployment_component)
+                    add_test(NAME native_winrt_activation_imports_x${width} COMMAND raven --run-process --execution=native ${winrt_import_client})
+                    set_tests_properties(native_winrt_activation_imports_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # raven-netlist.dll, the NetworkListManager class of netprofm for each width: Raven code on the public headers.
                 set(netlist_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-netlist)
