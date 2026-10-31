@@ -3145,6 +3145,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(deployment_fixture${width} ALL DEPENDS ${deployment_client} deployment_component)
                     add_test(NAME native_deployment_x${width} COMMAND raven --run-process --execution=native ${deployment_client})
                     set_tests_properties(native_deployment_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A program importing only the Windows Runtime's activation, through runtimeobject's API sets.
+                    set(winrt_import_client ${CMAKE_CURRENT_BINARY_DIR}/winrt-import-client${width}.exe)
+                    add_custom_command(OUTPUT ${winrt_import_client}
+                        COMMAND ${deployment_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${deployment_entry},--no-insert-timestamp
+                            -o ${winrt_import_client} ${LOADER_SOURCES}/winrt_import_client.c -lruntimeobject -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/winrt_import_client.c VERBATIM)
+                    add_custom_target(winrt_import_fixture${width} ALL DEPENDS ${winrt_import_client} deployment_component)
+                    add_test(NAME native_winrt_activation_imports_x${width} COMMAND raven --run-process --execution=native ${winrt_import_client})
+                    set_tests_properties(native_winrt_activation_imports_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # raven-netlist.dll, the NetworkListManager class of netprofm for each width: Raven code on the public headers.
                 set(netlist_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-netlist)
