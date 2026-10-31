@@ -22,6 +22,7 @@ GPLv3 license applied to every file.
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
 | SQLite (`winsqlite3.dll`), if bundled | Public domain (SPDX `blessing`); unmodified amalgamation pinned in `scripts/provision-sqlite.py` |
+| Windows Runtime interface declarations | MIT (Microsoft's metadata from windows-rs); `native/upstream/raven-web/windows.web.http.h`, `native/upstream/raven-winrt/foundation.h` |
 
 The PE guest components are loaded and executed in the supervised Windows
 process. They are not ELF libraries linked or loaded into the Linux host. Their

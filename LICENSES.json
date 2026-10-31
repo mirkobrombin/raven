@@ -442,6 +442,18 @@
       "boundary": "PE guest component (winsqlite3.dll) built unmodified from the public-domain amalgamation, loaded into the supervised Windows process. No native linking into the Linux host."
     },
     {
+      "name": "Windows Runtime interface declarations",
+      "paths": [
+        "native/upstream/raven-web/windows.web.http.h",
+        "native/upstream/raven-winrt/foundation.h"
+      ],
+      "license": "MIT",
+      "review": "pending-maintainer-review",
+      "revision": "58217a690d6256ee229044a174de67d72d28bc35",
+      "provenance": "Interface identifiers, method order, signatures, structures, enumerations and the type signatures generic instances are identified by, from Microsoft's Windows metadata as distributed by https://github.com/microsoft/windows-rs (MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation), written by scripts/generate-winrt-header.py",
+      "boundary": "C declarations compiled into the PE guest components raven-web.dll and its test, and the shared raven-winrt plumbing. No code."
+    },
+    {
       "name": "External build inputs",
       "license": "LicenseRef-Configuration-Dependent",
       "review": "requires-release-inventory",
