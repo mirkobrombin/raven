@@ -1,3 +1,4 @@
+#include <atomic>
 #include "kernel_context.h"
 #include "actctx.h"
 #include "text.h"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -866,7 +868,57 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0);
 		};
 	};
-	registry.add("SLGetLicensingStatusInformation", 6, empty_list(4, 5));
+	// SLGetLicensingStatusInformation lists the SKUs the installed licenses name, each unlicensed: nothing here can grant a right, and
+	// no product key is installed, which is the reason each gives. A right asked for by name is one no SKU holds.
+	registry.add("SLGetLicensingStatusInformation", 6, [&context, call_store = store_directory, open_session](ApiCall &call) {
+		constexpr uint32_t status_size = 40, no_product_key = 0xc004f014U;
+		if (!open_session(call[0]) || !call[4] || !call[5]) {
+			call.ret(invalid_argument);
+			return;
+		}
+		call.store<uint32_t>(call[4], 0);
+		call.store_pointer(call[5], 0);
+		const auto directory = call_store(false);
+		std::set<Slid> skus;
+		const auto wanted = [&](size_t argument, const std::optional<std::string> &text) {
+			if (!call[argument])
+				return true;
+			const auto id = text ? parse_slid(*text) : std::nullopt;
+			return id && std::equal(id->begin(), id->end(), call.read(call[argument], 16).begin());
+		};
+		std::error_code error;
+		if (directory && !call[3])
+			for (const auto &entry : std::filesystem::directory_iterator(*directory, error)) {
+				const auto bytes = entry.path().extension() == ".xrm-ms" ? read_host_file(entry.path()) : std::nullopt;
+				if (!bytes)
+					continue;
+				const auto text = license_text(*bytes);
+				for (const auto &license : license_elements(text)) {
+					const auto sku = license_field(license.body, "productSkuId");
+					const auto id = sku ? parse_slid(*sku) : std::nullopt;
+					if (id && wanted(1, license_field(license.body, "applicationId")) && wanted(2, sku))
+						skus.insert(*id);
+				}
+			}
+		if (skus.empty()) {
+			call.ret(0);
+			return;
+		}
+		const auto list = context.allocator.allocate(status_size * skus.size(), true);
+		if (!list) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		uint64_t at = list;
+		for (const auto &sku : skus) {
+			call.write(at, sku);
+			call.store<uint32_t>(at + 28, no_product_key);
+			at += status_size;
+		}
+		call.store<uint32_t>(call[4], uint32_t(skus.size()));
+		call.store_pointer(call[5], list);
+		call.ret(0);
+	});
 	registry.add("SLGetInstalledProductKeyIds", 4, empty_list(2, 3));
 	const auto answer = [](uint32_t result) { return [result](ApiCall &call) { call.ret(call[0] ? result : invalid_argument); }; };
 	const std::pair<const char *, int> lookups[] = {{"SLGetApplicationInformation", 6}, {"SLGetProductSkuInformation", 6},
@@ -1427,7 +1479,10 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		context.unhandled_filter = call[0];
 		call.ret(previous);
 	});
-	registry.add("SetErrorMode", 1, [](ApiCall &call) { call.ret(0); });
+	// The process's error mode has no effect here, as no dialog reports a critical error; programs read back what they set.
+	auto error_mode = std::make_shared<std::atomic<uint32_t>>(0);
+	registry.add("SetErrorMode", 1, [error_mode](ApiCall &call) { call.ret(error_mode->exchange(call.u32(0))); });
+	registry.add("GetErrorMode", 0, [error_mode](ApiCall &call) { call.ret(error_mode->load()); });
 	// Each thread keeps the error mode it sets, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX and SEM_NOOPENFILEERRORBOX, and starts with none.
 	const auto thread_modes = std::make_shared<std::map<uint64_t, uint32_t>>();
 	registry.add("SetThreadErrorMode", 2, [thread_modes](ApiCall &call) {
