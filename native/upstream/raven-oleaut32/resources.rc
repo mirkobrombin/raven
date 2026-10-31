@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mirko Brombin
+ * See LICENSES/MIT.txt.
+ */
+#include <winver.h>
+
+1 TYPELIB "stdole2.tlb"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 6, 1, 7601, 0
+PRODUCTVERSION 6, 1, 7601, 0
+FILEOS VOS_NT
+FILETYPE VFT_DLL
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904B0"
+		BEGIN
+			VALUE "FileDescription", "OLE Automation"
+			VALUE "FileVersion", "6.1.7601.0"
+			VALUE "InternalName", "oleaut32"
+			VALUE "OriginalFilename", "oleaut32.dll"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x0409, 0x04B0
+	END
+END
