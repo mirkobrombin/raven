@@ -6,6 +6,7 @@
  * library as twinapi.appcore.dll and its neighbours serve them on Windows.
  *
  * - Windows.System.Profile.RetailInfo and SharedModeSettings: the computer is not a store demonstration unit and not a shared device.
+ * - Windows.System.Profile.AnalyticsInfo: a desktop, of the family Windows.Desktop at the version Windows reports.
  * - Windows.Networking.Connectivity.NetworkInformation: one wired connection profile with Internet access when the computer has an IPv4
  *   address beyond loopback, as raven-netlist answers the same question through COM; its cost is unrestricted.
  * - Windows.Security.Authentication.OnlineId.OnlineIdSystemAuthenticator and Windows.Security.Authentication.Web.Core.
@@ -40,6 +41,8 @@ static const IID iid_async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00
 static const IID iid_retail_info = {0x0712c6b8, 0x8b92, 0x4f2a, {0x84, 0x99, 0x03, 0x1f, 0x17, 0x98, 0xd6, 0xef}};
 static const IID iid_shared_mode = {0x893df40e, 0xcad6, 0x4d50, {0x8c, 0x49, 0x6f, 0xcf, 0xc0, 0x3e, 0xdb, 0x29}};
 static const IID iid_shared_mode2 = {0x608988a4, 0xccf1, 0x4ee8, {0xa5, 0xe2, 0xfd, 0x6a, 0x1d, 0x0c, 0xfa, 0xc8}};
+static const IID iid_analytics_info = {0x1d5ee066, 0x188d, 0x5ba9, {0x43, 0x87, 0xac, 0xae, 0xb0, 0xe7, 0xe3, 0x05}};
+static const IID iid_analytics_version = {0x926130b8, 0x9955, 0x4c74, {0xbd, 0xc1, 0x7c, 0xd0, 0xde, 0xcf, 0x9b, 0x03}};
 static const IID iid_network_information = {0x5074f851, 0x950d, 0x4165, {0x9c, 0x15, 0x36, 0x56, 0x19, 0x48, 0x1e, 0xea}};
 static const IID iid_network_information2 = {0x459ced14, 0x2832, 0x49b6, {0xba, 0x6e, 0xe2, 0x65, 0xf0, 0x47, 0x86, 0xa8}};
 static const IID iid_connection_profile = {0x71ba143c, 0x598e, 0x49d0, {0x84, 0xeb, 0x8f, 0xeb, 0xae, 0xdc, 0xc1, 0x95}};
@@ -1084,6 +1087,69 @@ static const struct face_iid shared_iids[] = {{&iid_factory, 0}, {&iid_shared_mo
 static const struct kind shared_kind = {"SharedModeSettings", L"Windows.System.Profile.SharedModeSettings", shared_iids, NULL};
 static struct object shared_mode = {{shared_factory_table.slots, shared_statics_table.slots, shared_statics2_table.slots}, &shared_kind, 1};
 
+/* Windows.System.Profile.AnalyticsInfo. The family's version is written as Windows writes it: the major, minor, build and revision numbers
+ * in sixteen bits each, read as one number in decimal. The numbers are those RtlGetVersion reports and the registry's update build
+ * revision. */
+static HRESULT WINAPI analytics_family(void *iface, HSTRING *out)
+{
+	static const WCHAR family[] = L"Windows.Desktop";
+	if (!out)
+		return E_POINTER;
+	return WindowsCreateString(family, ARRAYSIZE(family) - 1, out);
+}
+
+static HRESULT WINAPI analytics_family_version(void *iface, HSTRING *out)
+{
+	LONG (WINAPI *get_version)(RTL_OSVERSIONINFOW *) =
+		(LONG (WINAPI *)(RTL_OSVERSIONINFOW *))GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+	RTL_OSVERSIONINFOW version = {sizeof version};
+	DWORD revision = 0, size = sizeof revision;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!get_version || get_version(&version))
+		return E_FAIL;
+	if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR", RRF_RT_REG_DWORD, NULL, &revision, &size))
+		revision = 0;
+	ULONGLONG packed = (ULONGLONG)(version.dwMajorVersion & 0xffff) << 48 | (ULONGLONG)(version.dwMinorVersion & 0xffff) << 32 |
+		(ULONGLONG)(version.dwBuildNumber & 0xffff) << 16 | (revision & 0xffff);
+	WCHAR text[20];
+	UINT32 at = ARRAYSIZE(text);
+	do {
+		text[--at] = (WCHAR)(L'0' + packed % 10);
+		packed /= 10;
+	} while (packed);
+	return WindowsCreateString(text + at, ARRAYSIZE(text) - at, out);
+}
+
+static HRESULT WINAPI analytics_form(void *iface, HSTRING *out)
+{
+	static const WCHAR form[] = L"Desktop";
+	if (!out)
+		return E_POINTER;
+	return WindowsCreateString(form, ARRAYSIZE(form) - 1, out);
+}
+
+TABLE(analytics_version_table, 0, INSPECTABLE, (const void *)analytics_family, (const void *)analytics_family_version);
+static const struct face_iid analytics_version_iids[] = {{&iid_analytics_version, 0}, {NULL, 0}};
+static const struct kind analytics_version_kind = {"AnalyticsVersionInfo", L"Windows.System.Profile.AnalyticsVersionInfo",
+	analytics_version_iids, NULL};
+static struct object analytics_version = {{analytics_version_table.slots}, &analytics_version_kind, 1};
+
+static HRESULT WINAPI analytics_version_info(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = face_of(&analytics_version, 0);
+	return S_OK;
+}
+
+TABLE(analytics_factory_table, 0, FACTORY);
+TABLE(analytics_statics_table, 1, INSPECTABLE, (const void *)analytics_version_info, (const void *)analytics_form);
+static const struct face_iid analytics_iids[] = {{&iid_factory, 0}, {&iid_analytics_info, 1}, {NULL, 0}};
+static const struct kind analytics_kind = {"AnalyticsInfo", L"Windows.System.Profile.AnalyticsInfo", analytics_iids, NULL};
+static struct object analytics_info = {{analytics_factory_table.slots, analytics_statics_table.slots}, &analytics_kind, 1};
+
 /* Windows.Networking.Connectivity: the computer is connected when it has an IPv4 address beyond loopback. */
 static BOOL connected(void)
 {
@@ -1489,7 +1555,7 @@ static const struct kind core_kind = {"CoreApplication", L"Windows.ApplicationMo
 static struct object core_application = {{core_factory_table.slots, core_table.slots, core2_table.slots, core3_table.slots,
 	core_exit_table.slots, core_immersive_table.slots, core_unhandled_table.slots}, &core_kind, 1};
 
-static struct object *const classes[] = {&retail_info, &shared_mode, &network_information, &online_id, &ticket_request_factory, &web_core,
+static struct object *const classes[] = {&retail_info, &shared_mode, &analytics_info, &network_information, &online_id, &ticket_request_factory, &web_core,
 	&core_application};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)

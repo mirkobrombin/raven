@@ -3116,9 +3116,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll
-                        ${twinapi_source}/twinapi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lkernel32 -lgcc
+                        ${twinapi_source}/twinapi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -liphlpapi -ladvapi32 -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
-                        ${twinapi_source}/twinapi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lkernel32 -lgcc
+                        ${twinapi_source}/twinapi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lruntimeobject -liphlpapi -ladvapi32 -lkernel32 -lgcc
                     DEPENDS ${twinapi_source}/twinapi.c VERBATIM)
                 add_custom_target(twinapi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
                 foreach(width 64 32)
@@ -3132,7 +3132,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     endif()
                     add_custom_command(OUTPUT ${twinapi_client}
                         COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp
-                            -o ${twinapi_client} ${LOADER_SOURCES}/twinapi_client.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lole32 -lruntimeobject -lshlwapi -lkernel32 -lgcc
+                            -o ${twinapi_client} ${LOADER_SOURCES}/twinapi_client.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lole32 -lruntimeobject -lshlwapi -ladvapi32 -lkernel32 -lgcc
                         DEPENDS ${LOADER_SOURCES}/twinapi_client.c VERBATIM)
                     add_custom_target(twinapi_fixture${width} ALL DEPENDS ${twinapi_client} twinapi_component)
                     add_test(NAME native_twinapi_x${width} COMMAND raven --run-process --execution=native ${twinapi_client})
