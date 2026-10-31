@@ -1093,6 +1093,16 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 		call.put_wide(buffer, name, size_t(capacity));
 		call.ret(name.size() + 1);
 	};
+	// The one locale there is answers for its own name, its language alone, and no name at all.
+	registry.add("ResolveLocaleName", 3, [locale_name](ApiCall &call) {
+		const auto name = call[0] ? call.wide(call[0], 85) : std::u16string{};
+		if (!name.empty() && compare_fold(name, u"en-US") != 0 && compare_fold(name, u"en") != 0) {
+			if (call[1] && call.i32(2) > 0) call.put_wide(call[1], u"", size_t(call.i32(2)));
+			call.ret(1);
+			return;
+		}
+		locale_name(call, call[1], call[1] ? call.i32(2) : 0);
+	});
 	registry.add("GetUserDefaultLocaleName", 2, [locale_name](ApiCall &call) { locale_name(call, call[0], call.i32(1)); });
 	registry.add("GetSystemDefaultLocaleName", 2, [locale_name](ApiCall &call) { locale_name(call, call[0], call.i32(1)); });
 	// A name the table does not know, as the culture-neutral "x-none" programs use, is not a locale. No name is the user's, the empty one

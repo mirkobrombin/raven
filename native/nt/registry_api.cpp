@@ -954,6 +954,47 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 		call.ret(0);
 	};
 	registry.add("RegGetValueW", 7, [get_value](ApiCall &call) { get_value(call, true); });
+	// RegQueryValue, from 16-bit Windows: the unnamed value of a subkey, always as text; a key without one reads as the empty text.
+	for (const bool wide : {true, false})
+		registry.add(wide ? "RegQueryValueW" : "RegQueryValueA", 4, [&hive, &context, text_of, view, ansi_page, wide](ApiCall &call) {
+			uint64_t key = call[0];
+			uint64_t opened = 0;
+			const auto subkey = call[1] ? text_of(call, call[1], wide) : std::u16string{};
+			if (!subkey.empty()) {
+				const auto status = hive.open(key, view(key, subkey, 0), opened);
+				if (status) {
+					call.ret(status);
+					return;
+				}
+				key = opened;
+			}
+			uint32_t type = 0;
+			std::vector<uint8_t> data;
+			const auto status = hive.query(key, u"", type, data);
+			if (opened) {
+				hive.close(opened);
+				context.objects.release_reserved(opened);
+			}
+			if (status && status != 2) {
+				call.ret(status);
+				return;
+			}
+			if (status || !is_text(type)) data.assign(wide ? 2 : 1, 0);
+			else if (!wide) data = to_ansi_bytes(data, ansi_page);
+			if (!call[2]) {
+				if (call[3]) call.store<uint32_t>(call[3], uint32_t(data.size()));
+				call.ret(0);
+				return;
+			}
+			const uint32_t capacity = call[3] ? call.load<uint32_t>(call[3]) : 0;
+			if (call[3]) call.store<uint32_t>(call[3], uint32_t(data.size()));
+			if (data.size() > capacity) {
+				call.ret(error_more_data);
+				return;
+			}
+			call.write(call[2], data);
+			call.ret(0);
+		});
 	registry.add("RegGetValueA", 7, [get_value](ApiCall &call) { get_value(call, false); });
 	// RegSetKeyValue creates the subkey when it is missing, then writes the value as RegSetValueEx does.
 	for (const bool wide : {true, false})
