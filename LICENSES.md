@@ -21,6 +21,7 @@ GPLv3 license applied to every file.
 | Liberation fonts, if bundled | SIL Open Font License 1.1; preserve the font package's copyright and license |
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
+| SQLite (`winsqlite3.dll`), if bundled | Public domain (SPDX `blessing`); unmodified amalgamation pinned in `scripts/provision-sqlite.py` |
 
 The PE guest components are loaded and executed in the supervised Windows
 process. They are not ELF libraries linked or loaded into the Linux host. Their

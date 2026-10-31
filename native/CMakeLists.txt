@@ -1660,6 +1660,26 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_fold_volume_x32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/fold-volume-prefix)
         endif()
+        # SQLite as Windows ships it, winsqlite3.dll (scripts/provision-sqlite.py), for 64-bit programs.
+        set(RAVEN_SQLITE_COMPONENT_DIR "" CACHE PATH "Directory holding winsqlite3.dll built by scripts/provision-sqlite.py")
+        if(RAVEN_SQLITE_COMPONENT_DIR)
+            if(NOT EXISTS "${RAVEN_SQLITE_COMPONENT_DIR}/winsqlite3.dll")
+                message(FATAL_ERROR "Configured SQLite component does not exist: ${RAVEN_SQLITE_COMPONENT_DIR}/winsqlite3.dll")
+            endif()
+            add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/winsqlite3.dll
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_SQLITE_COMPONENT_DIR}/winsqlite3.dll ${CMAKE_CURRENT_BINARY_DIR}/winsqlite3.dll
+                DEPENDS ${RAVEN_SQLITE_COMPONENT_DIR}/winsqlite3.dll VERBATIM)
+            add_custom_target(sqlite_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/winsqlite3.dll)
+            set(SQLITE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/sqlite-client.exe)
+            add_custom_command(OUTPUT ${SQLITE_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${SQLITE_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/sqlite_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/sqlite_client.c VERBATIM)
+            add_custom_target(sqlite_fixture ALL DEPENDS ${SQLITE_CLIENT} sqlite_component)
+            add_test(NAME native_sqlite_x64 COMMAND raven --run-process --execution=native ${SQLITE_CLIENT})
+            set_tests_properties(native_sqlite_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/sqlite-prefix)
+        endif()
         set(RAVEN_CONTROLS_COMPONENT_DIR "" CACHE PATH "Directory holding the common controls component built by scripts/provision-controls.py")
         # The same components built for 32-bit programs (scripts/provision-controls.py --arch x86); they sit in a directory beside the runtime.
         set(RAVEN_CONTROLS32_COMPONENT_DIR "" CACHE PATH "Directory holding the 32-bit components built by scripts/provision-controls.py --arch x86")
