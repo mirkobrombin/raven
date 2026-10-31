@@ -20,7 +20,7 @@ REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/", "sdk/lib/3rdparty/libwine/",
             "dll/win32/msi/",
-            "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
+            "base/system/msiexec/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/stdole2.tlb/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
             "sdk/lib/getopt/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
@@ -231,23 +231,21 @@ def main():
                                            (("CreateAssemblyCache", 8), ("CreateAssemblyNameObject", 16), ("SxsLookupClrGuid", 24), ("SxspGenerateManifestPathOnAssemblyIdentity", 16))))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "sxs_import.def", "-l", output / "libsxs.a"])
     compile(support / "support.c", "installer_support")
-    # rpcrt4.dll: remote procedure calls, which the installer's custom action server speaks over local pipes, with the NDR engine.
-    rpc_root = source / "dll/win32/rpcrt4"
-    run([*widl, "-I", rpc_root, "-c", "-C", generated / "epm_c.c", "-h", "-H", generated / "epm_c.h", rpc_root / "epm.idl"])
-    run([*widl, "-I", rpc_root, "-Oicf", "-p", "-P", generated / "ndr_types_p.c", "-h", "-H", generated / "ndr_types.h", rpc_root / "ndr_types.idl"])
-    run([*widl, "--dlldata-only", "--dlldata=" + str(generated / "proxy.dlldata.c"), "ndr_types"])
-    run([output / "spec2def", spec_arch, "-n=rpcrt4.dll", "-d=" + str(output / "rpcrt4.def"), "-s=" + str(generated / "rpcrt4_stubs.c"), rpc_root / "rpcrt4.spec"])
-    rpc_flags = ["-D_RPCRT4_", "-DCOM_NO_WINDOWS_H", "-D_CRT_NON_CONFORMING_SWPRINTFS", "-DMSWMSG", "-I" + str(rpc_root)]
-    rpc_sources = [rpc_root / name for name in ("cproxy.c", "cpsf.c", "cstub.c", "ndr_clientserver.c", "ndr_contexthandle.c", "ndr_es.c",
-                   "ndr_fullpointer.c", "ndr_marshall.c", "ndr_ole.c", "ndr_stubless.c", "ros_extra.c", "rpc_assoc.c", "rpc_async.c", "rpc_binding.c",
-                   "rpc_epmap.c", "rpc_message.c", "rpcrt4_main.c", "rpc_server.c", "rpc_transport.c", "thunks.c", "unix_func.c", "ndr_typelib.c")] + [
-                   generated / name for name in ("epm_c.c", "ndr_types_p.c", "proxy.dlldata.c", "rpcrt4_stubs.c")]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        rpc = list(pool.map(lambda path: compile(path, "rpcrt4_" + path.stem.replace(".", "_"), rpc_flags), rpc_sources))
-    rpc.append(compile(source / "sdk/lib/3rdparty/libwine/register.c", "rpcrt4_register", ["-I" + str(rpc_root)]))
-    link("rpcrt4.dll", bases["rpcrt4"], [*rpc, objects / "installer_support.o", *debug], output / "rpcrt4.def",
-         [*[f"-l{library}" for library in ("advapi32", "ws2_32", "iphlpapi", "wininet", "secur32", "user32", "ole32", "oleaut32", "msvcrt",
-          "kernel32", "ntdll", "uuid", "gcc", "kernel32", "msvcrt")]], output / "librpcrt4.a")
+    # rpcrt4.dll: Raven's own remote procedure calls, which the installer's custom action server speaks over local pipes.
+    own_rpc = repo / "native/upstream/raven-rpcrt4"
+    rpc_objects = []
+    for path in [*sorted(own_rpc.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+        target = objects / ("rpcrt4_" + path.stem + ".o")
+        run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCOBJMACROS", "-D_RPCRT4_", "-I" + str(own_rpc), "-o", target, path])
+        rpc_objects.append(target)
+    rpc_exports = (own_rpc / "exports.txt").read_text()
+    (output / "rpcrt4.def").write_text("LIBRARY rpcrt4.dll\nEXPORTS\n" + rpc_exports)
+    run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{bases['rpcrt4']:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
+         "-o", output / "rpcrt4.dll", *rpc_objects, output / "rpcrt4.def", "-lole32", "-loleaut32", "-luuid", "-luser32", "-ladvapi32", "-lkernel32", "-lntdll", "-lgcc"])
+    rpc_defined = decorated(rpc_objects)
+    (output / "rpcrt4_import.def").write_text("LIBRARY rpcrt4.dll\nEXPORTS\n" + "".join(
+        f" {name}{'' if rpc_defined.get(name) is None else '@' + str(rpc_defined[name])}\n" for name in (line.split()[0] for line in rpc_exports.splitlines() if line.strip()) if "PRIVATE" not in name))
+    run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "rpcrt4_import.def", "-l", output / "librpcrt4.a"])
     # msi.dll: the Windows Installer engine, its SQL and condition grammars, and the RPC stubs of its custom action server.
     msi_root = source / "dll/win32/msi"
     run(["bison", "-o", generated / "cond.tab.c", "-d", msi_root / "cond.y"])

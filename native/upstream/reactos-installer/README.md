@@ -11,7 +11,8 @@ programs and, with `--arch x86`, for 32-bit ones:
 - `msiexec.exe` (`base/system/msiexec`),
   which each prefix also keeps in its system directories;
 - `sxs.dll`: Raven's own side-by-side assembly cache from [`native/upstream/raven-sxs`](../raven-sxs/README.md);
-- `rpcrt4.dll` (`dll/win32/rpcrt4`): remote procedure calls over local named pipes;
+- `rpcrt4.dll`: Raven's own from [`native/upstream/raven-rpcrt4`](../raven-rpcrt4/README.md): remote
+  procedure calls and the NDR engine;
 - `raven-storage.dll`: Raven's own structured storage from
   [`native/upstream/raven-storage`](../raven-storage/README.md);
 - `oleaut32.dll` (`dll/win32/oleaut32`): automation, variants and type libraries;
