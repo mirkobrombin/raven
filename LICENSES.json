@@ -220,6 +220,8 @@
         "native/upstream/raven-gdiplus/region.c",
         "native/upstream/raven-gdiplus/region.h",
         "native/upstream/raven-gdiplus/stroke.c",
+        "native/upstream/raven-hlink/hlink.c",
+        "native/upstream/raven-hlink/hlink.def",
         "native/upstream/raven-riched20/README.md",
         "native/upstream/raven-riched20/doc.c",
         "native/upstream/raven-riched20/edit.c",

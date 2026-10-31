@@ -1,0 +1,19 @@
+LIBRARY hlink.dll
+EXPORTS
+HlinkCreateFromMoniker @3
+HlinkCreateFromString @4
+HlinkCreateFromData @5
+HlinkCreateBrowseContext @6
+HlinkClone @7
+HlinkOnNavigate @9
+HlinkNavigate @10
+HlinkUpdateStackItem @11
+HlinkParseDisplayName @18
+HlinkSetSpecialReference @21
+HlinkGetSpecialReference @22
+HlinkCreateShortcut @23
+HlinkIsShortcut @25
+HlinkResolveShortcutToString @26
+HlinkCreateShortcutFromString @27
+HlinkCreateShortcutFromMoniker @29
+HlinkTranslateURL @31

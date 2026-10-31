@@ -3043,6 +3043,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${accprop_source}/accprop.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -loleaut32 -lole32 -luuid -lkernel32 -lgcc
                     DEPENDS ${accprop_source}/accprop.c VERBATIM)
                 add_custom_target(accprop_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-accprop.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-accprop.dll)
+                # hlink.dll, the flat hyperlink functions for each width: Raven code on the public headers.
+                set(hlink_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-hlink)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hlink.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/hlink.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/hlink.dll
+                        ${hlink_source}/hlink.c ${hlink_source}/hlink.def ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lole32 -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--enable-stdcall-fixup,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/hlink.dll
+                        ${hlink_source}/hlink.c ${hlink_source}/hlink.def ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c -lole32 -lkernel32 -lgcc
+                    DEPENDS ${hlink_source}/hlink.c ${hlink_source}/hlink.def VERBATIM)
+                add_custom_target(hlink_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/hlink.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/hlink.dll)
                 # raven-d3d10_1.dll, Direct3D 10.1 device creation over the d3d10core.dll the runtime is given, for each width.
                 set(d3d10_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-d3d10)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-d3d10_1.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-d3d10_1.dll
@@ -3086,6 +3096,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(accprop_fixture${width} ALL DEPENDS ${accprop_client} accprop_component)
                     add_test(NAME native_accprop_x${width} COMMAND raven --run-process --execution=native ${accprop_client})
                     set_tests_properties(native_accprop_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(hlink_client ${CMAKE_CURRENT_BINARY_DIR}/hlink-client${width}.exe)
+                    add_custom_command(OUTPUT ${hlink_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${hlink_client} ${LOADER_SOURCES}/hlink_client.c -lole32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/hlink_client.c VERBATIM)
+                    add_custom_target(hlink_fixture${width} ALL DEPENDS ${hlink_client} hlink_component)
+                    add_test(NAME native_hlink_x${width} COMMAND raven --run-process --execution=native ${hlink_client})
+                    set_tests_properties(native_hlink_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(stream_client ${CMAKE_CURRENT_BINARY_DIR}/stream-client${width}.exe)
                     add_custom_command(OUTPUT ${stream_client}
                         COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
