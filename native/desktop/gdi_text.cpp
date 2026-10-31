@@ -499,6 +499,75 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 	});
 	// GetTextCharsetInfo(dc, FONTSIGNATURE, flags): the character set of the selected font, and the scripts and code pages its OS/2 table
 	// claims; a face the system does not enumerate stands in for the default face, which covers Latin.
+	// What a font covers is known by the blocks its OS/2 table claims, the first of which are listed here.
+	registry.add("GetFontUnicodeRanges", 2, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			static constexpr struct { int bit; uint16_t first, last; } blocks[] = {
+				{0, 0x20, 0x7e}, {1, 0xa0, 0xff}, {2, 0x100, 0x17f}, {3, 0x180, 0x24f}, {7, 0x370, 0x3ff}, {9, 0x400, 0x4ff}, {11, 0x590, 0x5ff}, {13, 0x600, 0x6ff},
+				{24, 0xe00, 0xe7f}, {31, 0x2000, 0x206f}, {33, 0x20a0, 0x20cf}, {49, 0x3040, 0x309f}, {50, 0x30a0, 0x30ff}, {56, 0xac00, 0xd7a3}, {59, 0x4e00, 0x9fff},
+			};
+			auto &dc = require_dc(call, 0);
+			const auto &font = selected_font(dc);
+			std::u16string face;
+			for (size_t at = 28; at + 1 < font.definition.size() && at < 28 + 64; at += 2) {
+				const char16_t character = char16_t(font.definition[at] | font.definition[at + 1] << 8);
+				if (!character)
+					break;
+				face.push_back(character);
+			}
+			InstalledFamily family{face};
+			family.unicode_ranges[0] = 3;
+			const auto families = enumerable_families();
+			if (const auto found = std::find_if(families.begin(), families.end(), [&](const InstalledFamily &item) { return equal_fold(item.name, face); });
+				found != families.end())
+				family = *found;
+			std::vector<uint8_t> set(16, 0);
+			uint32_t ranges = 0, glyphs = 0;
+			for (const auto &block : blocks) {
+				if (!(family.unicode_ranges[block.bit / 32] >> (block.bit % 32) & 1))
+					continue;
+				const uint16_t count = uint16_t(block.last - block.first + 1);
+				set.push_back(uint8_t(block.first));
+				set.push_back(uint8_t(block.first >> 8));
+				set.push_back(uint8_t(count));
+				set.push_back(uint8_t(count >> 8));
+				glyphs += count;
+				++ranges;
+			}
+			const uint32_t size = uint32_t(set.size());
+			std::memcpy(set.data(), &size, 4);
+			std::memcpy(set.data() + 8, &glyphs, 4);
+			std::memcpy(set.data() + 12, &ranges, 4);
+			if (call[1])
+				call.write(call[1], set);
+			call.ret(size);
+		});
+	});
+	registry.add("TranslateCharsetInfo", 3, [](ApiCall &call) {
+		// In the order of the code page bits of a font signature; the last bit is the symbol set.
+		static constexpr struct { uint32_t charset, code_page; int bit; } sets[] = {
+			{0, 1252, 0}, {238, 1250, 1}, {204, 1251, 2}, {161, 1253, 3}, {162, 1254, 4}, {177, 1255, 5}, {178, 1256, 6}, {186, 1257, 7},
+			{163, 1258, 8}, {222, 874, 16}, {128, 932, 17}, {134, 936, 18}, {129, 949, 19}, {136, 950, 20}, {130, 1361, 21}, {2, 42, 31},
+		};
+		const uint32_t kind = call.u32(2);
+		const uint32_t mask = kind == 3 && call[0] ? call.load<uint32_t>(call[0]) : 0;
+		const auto found = std::find_if(std::begin(sets), std::end(sets), [&](const auto &set) {
+			if (kind == 1) return set.charset == uint32_t(call[0]);
+			if (kind == 2) return set.code_page == uint32_t(call[0]);
+			return (mask >> set.bit & 1) != 0;
+		});
+		if (found == std::end(sets) || !call[1]) {
+			call.ret(0);
+			return;
+		}
+		std::vector<uint8_t> info(32, 0);
+		std::memcpy(info.data(), &found->charset, 4);
+		std::memcpy(info.data() + 4, &found->code_page, 4);
+		const uint32_t bit = 1U << found->bit;
+		std::memcpy(info.data() + 24, &bit, 4);
+		call.write(call[1], info);
+		call.ret(1);
+	});
 	registry.add("GetTextCharsetInfo", 3, [=, this](ApiCall &call) {
 		guarded(call, 1, [&] {
 			auto &dc = require_dc(call, 0);

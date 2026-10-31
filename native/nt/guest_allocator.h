@@ -5,6 +5,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace raven {
@@ -22,6 +23,18 @@ public:
 	// Usable size of a block, or UINT64_MAX when the address is not a block of this allocator.
 	uint64_t size(uint64_t address);
 	bool owns(uint64_t address);
+	// A movable block (LMEM_MOVEABLE, GMEM_MOVEABLE) keeps its handle for life. The handle is the address the block started at, so what
+	// reads a handle as a pointer keeps working until the block first moves; the first block then stays behind as the handle's anchor.
+	uint64_t allocate_movable(uint64_t size, bool zero);
+	void make_movable(uint64_t address);
+	bool movable(uint64_t handle) const { return movable_blocks.contains(handle); }
+	// The block a handle stands for, and the handle of a block; anything else maps to itself.
+	uint64_t data(uint64_t handle) const;
+	uint64_t handle(uint64_t block) const;
+	// The block of a movable handle is now `block`; the one it had is released.
+	void move(uint64_t handle, uint64_t block);
+	// A block asked for with no bytes reports size zero, whatever the allocator set aside for it.
+	void mark_empty(uint64_t block) { empty.insert(block); }
 
 private:
 	static constexpr size_t size_classes = 9;
@@ -32,6 +45,9 @@ private:
 	std::map<uint64_t, uint64_t> shared;
 	std::array<std::vector<uint64_t>, size_classes> free_blocks;
 	std::array<std::pair<uint64_t, uint64_t>, size_classes> cutting{};
+	std::map<uint64_t, uint64_t> movable_blocks, moved_blocks;
+	std::set<uint64_t> empty;
+	bool release_block(uint64_t address);
 };
 
 }

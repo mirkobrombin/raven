@@ -58,6 +58,9 @@ std::pair<uint32_t, bool> brush_color_at(const DesktopBrush &brush, const Deskto
 uint32_t device_caps(const DesktopObjects &objects, const DesktopDC &dc, int32_t index);
 
 // Raster-operation transfer between device contexts (source may be null for pattern operations); true when pixels changed.
+// Bytes per row, and the COLORREF of one pixel of a row, for a bitmap of any depth.
+size_t bitmap_row_bytes(const DesktopBitmap &bitmap);
+uint32_t bitmap_color(const DesktopBitmap &bitmap, const uint8_t *row, int64_t x);
 bool blit(DesktopObjects &objects, DesktopDC &destination, int32_t dx, int32_t dy, int32_t dw, int32_t dh, DesktopDC *source_dc,
 	int32_t sx, int32_t sy, int32_t sw, int32_t sh, uint32_t rop);
 

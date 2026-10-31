@@ -184,23 +184,25 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	auto &allocator = context.allocator;
 	auto &memory = context.memory;
 	auto &objects = context.objects;
-	constexpr uint32_t zero_flag = 0x40;
-	registry.add("LocalAlloc", 2, [&](ApiCall &call) {
-		const auto address = allocator.allocate(call[1], call.u32(0) & zero_flag);
+	constexpr uint32_t zero_flag = 0x40, movable_flag = 2, modify_flag = 0x80;
+	const auto allocate_block = [&](ApiCall &call) {
+		const bool zero = call.u32(0) & zero_flag;
+		uint64_t address;
+		if (call.u32(0) & movable_flag) {
+			address = allocator.allocate_movable(call[1], zero);
+		} else {
+			address = allocator.allocate(call[1], zero);
+			if (address && !call[1])
+				allocator.mark_empty(address);
+		}
 		if (!address) {
 			call.fail(8);
 			return;
 		}
 		call.ret(address);
-	});
-	registry.add("GlobalAlloc", 2, [&](ApiCall &call) {
-		const auto address = allocator.allocate(call[1], call.u32(0) & zero_flag);
-		if (!address) {
-			call.fail(8);
-			return;
-		}
-		call.ret(address);
-	});
+	};
+	registry.add("LocalAlloc", 2, allocate_block);
+	registry.add("GlobalAlloc", 2, allocate_block);
 	const auto free_block = [&](ApiCall &call) {
 		if (call[0] && !allocator.release(call[0])) {
 			call.fail(6, call[0]);
@@ -211,11 +213,18 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("LocalFree", 1, free_block);
 	registry.add("GlobalFree", 1, free_block);
 	const auto lock_block = [&](ApiCall &call) {
-		if (allocator.size(call[0]) == UINT64_MAX) {
+		const auto block = allocator.data(call[0]);
+		const auto size = allocator.size(block);
+		if (size == UINT64_MAX) {
 			call.fail(6);
 			return;
 		}
-		call.ret(call[0]);
+		// A movable block without bytes is what Windows calls discarded: it has a handle, and nothing to lock.
+		if (!size && allocator.movable(call[0])) {
+			call.fail(157);
+			return;
+		}
+		call.ret(block);
 	};
 	registry.add("LocalLock", 1, lock_block);
 	registry.add("GlobalLock", 1, lock_block);
@@ -223,7 +232,7 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("LocalUnlock", 1, unlock_block);
 	registry.add("GlobalUnlock", 1, unlock_block);
 	const auto size_block = [&](ApiCall &call) {
-		const auto size = allocator.size(call[0]);
+		const auto size = allocator.size(allocator.data(call[0]));
 		if (size == UINT64_MAX) {
 			call.fail(6);
 			return;
@@ -232,10 +241,27 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("LocalSize", 1, size_block);
 	registry.add("GlobalSize", 1, size_block);
+	const auto handle_block = [&](ApiCall &call) {
+		if (allocator.size(call[0]) == UINT64_MAX) {
+			call.fail(6);
+			return;
+		}
+		call.ret(allocator.handle(call[0]));
+	};
+	registry.add("LocalHandle", 1, handle_block);
+	registry.add("GlobalHandle", 1, handle_block);
 	const auto resize_block = [&](ApiCall &call) {
-		const auto old = allocator.size(call[0]);
+		const auto block = allocator.data(call[0]);
+		const auto old = allocator.size(block);
 		if (old == UINT64_MAX) {
 			call.fail(6);
+			return;
+		}
+		// LMEM_MODIFY changes what kind of block this is, not its bytes.
+		if (call.u32(2) & modify_flag) {
+			if (call.u32(2) & movable_flag)
+				allocator.make_movable(call[0]);
+			call.ret(call[0]);
 			return;
 		}
 		const auto address = allocator.allocate(call[1], call.u32(2) & zero_flag);
@@ -243,7 +269,15 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(8);
 			return;
 		}
-		call.write(address, call.read(call[0], std::min<uint64_t>(old, call[1])));
+		if (const auto kept = std::min<uint64_t>(old, call[1]))
+			call.write(address, call.read(block, kept));
+		if (!call[1])
+			allocator.mark_empty(address);
+		if (allocator.movable(call[0])) {
+			allocator.move(call[0], address);
+			call.ret(call[0]);
+			return;
+		}
 		allocator.release(call[0]);
 		call.ret(address);
 	};

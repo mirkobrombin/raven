@@ -65,7 +65,7 @@ std::optional<Conversion> parse_conversion(std::u16string_view format, size_t &a
 		}
 	}
 	for (; at < format.size(); ++at) {
-		if (format[at] == u'l') item.wide_size = true;
+		if (format[at] == u'l' || format[at] == u'w') item.wide_size = true;
 		else if (format[at] == u'h') item.narrow_size = true;
 		else break;
 	}

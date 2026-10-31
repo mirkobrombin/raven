@@ -565,7 +565,23 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		call.write(call[0], std::span<const uint8_t>(vk_state.data(), vk_state.size()));
 		call.ret(1);
 	});
-	registry.add("SetKeyboardState", 1, [](ApiCall &call) { call.ret(1); });
+	registry.add("SetKeyboardState", 1, [this](ApiCall &call) {
+		const auto bytes = call.read(call[0], vk_state.size());
+		std::copy(bytes.begin(), bytes.end(), vk_state.begin());
+		call.ret(1);
+	});
+	for (const bool extended : {false, true}) {
+		registry.add(extended ? "GetClassInfoExA" : "GetClassInfoA", 3, [this, extended](ApiCall &call) {
+			const uint64_t name = call[1];
+			const uint64_t args[] = {call[0], name, call[2]};
+			try {
+				const uint16_t id = name && name <= UINT16_MAX ? atom(name, call[0]) : objects.find_class(call[0], call.narrow(name));
+				call.ret(fill_class_info(id, extended, args));
+			} catch (uint32_t error) {
+				call.fail(error);
+			}
+		});
+	}
 	registry.add("MapVirtualKeyW", 2, [](ApiCall &call) {
 		const uint32_t code = call.u32(0), type = call.u32(1);
 		if (type == 0 || type == 4) {

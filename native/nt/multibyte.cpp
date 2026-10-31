@@ -133,7 +133,8 @@ bool NativeEnvironment::multibyte_information(std::string_view name)
 		else if (code_page==1) code_page=437;
 		if (flags & ~15U) throw uint32_t(1004);
 		const auto *single=native_single_byte_page(code_page);
-		if (code_page!=1252 && code_page!=65001 && !single) throw uint32_t(120);
+		const bool ascii=code_page==20127,latin1=code_page==28591;
+		if (code_page!=1252 && code_page!=65001 && !single && !ascii && !latin1) throw uint32_t(120);
 		constexpr size_t limit=1024*1024;
 		std::vector<uint8_t> input;
 		if (length>0) {
@@ -153,14 +154,14 @@ bool NativeEnvironment::multibyte_information(std::string_view name)
 		}
 		std::u16string text;
 		bool invalid=false,insufficient=false;
-		if (code_page==1252 || single) {
+		if (code_page==1252 || single || ascii || latin1) {
 			text.reserve(input.size());
 			for (const auto byte:input) {
-				const auto value=single ? single->bytes[byte] : native_mb1252[byte];
+				const auto value=ascii ? uint16_t(byte & 0x7f) : latin1 ? uint16_t(byte) : single ? single->bytes[byte] : native_mb1252[byte];
 				const auto found=std::lower_bound(decompositions.begin(),decompositions.end(),value,
 					[](const Decomposition &entry,uint16_t character) { return entry.value<character; });
 				// The selected decompositions cover the CP1252 characters; the other pages keep their composed characters.
-				if ((flags & 2) && !single && found!=decompositions.end() && found->value==value) {
+				if ((flags & 2) && !single && !ascii && !latin1 && found!=decompositions.end() && found->value==value) {
 					text.push_back(char16_t(found->first));text.push_back(char16_t(found->second));
 				} else text.push_back(char16_t(value));
 			}

@@ -437,12 +437,14 @@ bool NativeRegistry::resolve(uint64_t parent, std::u16string_view path, std::u16
 		{u"hkey_current_user\\software\\classes", u"HKEY_CLASSES_ROOT"},
 		{u"hkey_users\\s-1-5-21-1000-1000-1000-1000_classes", u"HKEY_CLASSES_ROOT"},
 		{u"hkey_users\\s-1-5-21-1000-1000-1000-1000", u"HKEY_CURRENT_USER"}};
-	for (const auto &[alias, target] : aliases)
+	for (const auto &[spelling, target] : aliases) {
+		const auto alias = fold(spelling);
 		if (folded.starts_with(alias) && (folded.size() == alias.size() || folded[alias.size()] == u'\\')) {
 			folded = fold(std::u16string(target)) + folded.substr(alias.size());
 			display = std::u16string(target) + display.substr(alias.size());
 			break;
 		}
+	}
 	return true;
 }
 

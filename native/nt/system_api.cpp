@@ -1065,6 +1065,11 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("GetUserPreferredUILanguages", 4, preferred_languages);
 	registry.add("GetSystemPreferredUILanguages", 4, preferred_languages);
 	registry.add("GetProcessPreferredUILanguages", 4, preferred_languages);
+	// The list stays the one language the runtime speaks; a program asking for another finds that out from the getters.
+	registry.add("SetThreadPreferredUILanguages", 3, [](ApiCall &call) {
+		if (call[2]) call.store<uint32_t>(call[2], 1);
+		call.ret(1);
+	});
 	// Power: always on mains power, no battery, nothing to suspend.
 	registry.add("GetSystemPowerStatus", 1, [](ApiCall &call) {
 		if (!call[0]) {

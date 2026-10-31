@@ -255,7 +255,7 @@ static DesktopBitmap mask_bitmap(const DesktopIcon &icon)
 		for (size_t x = 0; x < width; ++x) {
 			const size_t pixel = y * width + x;
 			bitmap.bits[y * stride + x / 8] |= uint8_t(image.and_mask[pixel] << (7 - x % 8));
-			if (icon.monochrome)
+			if (icon.monochrome && pixel < image.xor_mask.size())
 				bitmap.bits[(y + height) * stride + x / 8] |= uint8_t(image.xor_mask[pixel] << (7 - x % 8));
 		}
 	return bitmap;

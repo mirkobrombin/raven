@@ -1110,6 +1110,7 @@
 {"SetThreadDescription", 2},
 {"SetThreadDesktop", 1},
 {"SetThreadDpiAwarenessContext", 1},
+{"SetThreadPreferredUILanguages", 3},
 {"SetThreadErrorMode", 3},
 {"SetThreadInformation", 4},
 {"SetThreadLocale", 1},

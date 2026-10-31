@@ -1453,9 +1453,11 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 				call.store<int32_t>(call[5] + 4, int32_t(bitmap->width));
 				call.store<int32_t>(call[5] + 8, int32_t(bitmap->height));
 				call.store<uint16_t>(call[5] + 12, 1);
-				call.store<uint16_t>(call[5] + 14, uint16_t(bitmap->depth == 1 ? 1 : 32));
+				// A DIB section answers with the format its creator asked for.
+				const uint32_t format = bitmap->depth == 1 || bitmap->dib_section ? bitmap->depth : 32;
+				call.store<uint16_t>(call[5] + 14, uint16_t(format));
 				call.store<uint32_t>(call[5] + 16, 0);
-				call.store<uint32_t>(call[5] + 20, uint32_t(((size_t(bitmap->width) * (bitmap->depth == 1 ? 1 : 32) + 31) / 32) * 4 * bitmap->height));
+				call.store<uint32_t>(call[5] + 20, uint32_t(((size_t(bitmap->width) * format + 31) / 32) * 4 * bitmap->height));
 				call.ret(1);
 				return;
 			}
@@ -1463,7 +1465,9 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 				call.ret(1);
 				return;
 			}
-			if (bit_count != 32 && bit_count != 24 && bit_count != 8 && bit_count != 1)
+			// An indexed request of the bitmap's own depth is answered with its own indices and colours.
+			const bool same_indexed = bit_count <= 8 && bit_count == bitmap->depth && !bitmap->palette.empty();
+			if (bit_count != 32 && bit_count != 24 && bit_count != 16 && bit_count != 8 && bit_count != 1 && !same_indexed)
 				throw uint32_t(120);
 			const uint32_t start = call.u32(2), lines = call.u32(3);
 			const int32_t height_field = call.load<int32_t>(call[5] + 8);
@@ -1479,22 +1483,22 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 				const size_t memory_row = bitmap->top_down ? image_row : bitmap->height - 1 - image_row;
 				// A bottom-up DIB stores the image's last row first.
 				const size_t out_row = top_down ? row : take - 1 - row;
+				const uint8_t *line = pixels.data() + memory_row * bitmap_row_bytes(*bitmap);
+				if (same_indexed) {
+					std::copy_n(line, (size_t(bitmap->width) * bit_count + 7) / 8, &output[out_row * stride]);
+					continue;
+				}
 				for (uint32_t x = 0; x < bitmap->width; ++x) {
-					uint32_t color, alpha = 0;
-					if (bitmap->depth == 1) {
-						const size_t source_stride = ((size_t(bitmap->width) + 15) / 16) * 2;
-						color = ((pixels[memory_row * source_stride + x / 8] >> (7 - x % 8)) & 1) ? 0xffffff : 0;
-					} else {
-						const auto *p = &pixels[(memory_row * bitmap->width + x) * 4];
-						color = uint32_t(p[2]) | uint32_t(p[1]) << 8 | uint32_t(p[0]) << 16;
-						alpha = p[3];
-					}
+					const uint32_t color = bitmap_color(*bitmap, line, x), alpha = bitmap->depth == 32 ? line[x * 4 + 3] : 0;
 					auto *target = &output[out_row * stride];
 					if (bit_count == 32) {
 						// A bitmap that carries an alpha channel hands it back, which image lists use to tell ARGB images from plain ones.
 						target[x * 4] = uint8_t(color >> 16); target[x * 4 + 1] = uint8_t(color >> 8); target[x * 4 + 2] = uint8_t(color); target[x * 4 + 3] = uint8_t(alpha);
 					} else if (bit_count == 24) {
 						target[x * 3] = uint8_t(color >> 16); target[x * 3 + 1] = uint8_t(color >> 8); target[x * 3 + 2] = uint8_t(color);
+					} else if (bit_count == 16) {
+						const uint32_t word = (color_red(color) >> 3) << 10 | (color_green(color) >> 3) << 5 | color_blue(color) >> 3;
+						target[x * 2] = uint8_t(word); target[x * 2 + 1] = uint8_t(word >> 8);
 					} else if (bit_count == 8) {
 						target[x] = uint8_t((color_red(color) * 30 + color_green(color) * 59 + color_blue(color) * 11) / 100);
 					} else {
@@ -1505,9 +1509,14 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			call.write(call[4], output);
 			// The colour table of an indexed result is part of the answer: black and white, or the grey ramp the indices stand for.
 			if (bit_count <= 8) {
-				const uint32_t entries = bit_count == 1 ? 2 : 256;
+				const uint32_t entries = 1u << bit_count;
 				std::vector<uint8_t> table(entries * 4);
 				for (uint32_t entry = 0; entry < entries; ++entry) {
+					if (same_indexed) {
+						const uint32_t color = entry < bitmap->palette.size() ? bitmap->palette[entry] : 0;
+						table[entry * 4] = uint8_t(color_blue(color)); table[entry * 4 + 1] = uint8_t(color_green(color)); table[entry * 4 + 2] = uint8_t(color_red(color));
+						continue;
+					}
 					const uint8_t level = bit_count == 1 ? (entry ? 255 : 0) : uint8_t(entry);
 					table[entry * 4] = table[entry * 4 + 1] = table[entry * 4 + 2] = level;
 				}

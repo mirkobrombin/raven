@@ -56,7 +56,7 @@ const std::map<uint32_t, std::u16string> &locale_strings()
 			{0x21, u"0"}, {0x22, u"1"}, {0x23, u"0"}, {0x24, u"0"}, {0x25, u"0"}, {0x26, u"1"}, {0x27, u"1"}, {0x28, u"AM"},
 			{0x29, u"PM"}, {0x1001, u"English"}, {0x1002, u"United States"}, {0x1003, u"h:mm:ss tt"}, {0x1004, u"1252"},
 			{0x1005, u"437"}, {0x1006, u"437"}, {0x1007, u"1"}, {0x1008, u"1"}, {0x1009, u"1"}, {0x100b, u"0"}, {0x100c, u"6"},
-			{0x100d, u"0"}, {0x100a, u"1"}, {0x1010, u"1"}, {0x1011, u"10000"}, {0x1012, u"037"}, {0x1014, u"1"}, {0x59, u"en"}, {0x5a, u"US"}, {0x5b, u"ENU"}, {0x5c, u"en-US"}, {0x5d, u"USA"}, {0x66, u"en-US"},
+			{0x100d, u"0"}, {0x100a, u"1"}, {0x1010, u"1"}, {0x1011, u"10000"}, {0x1012, u"037"}, {0x1014, u"1"}, {0x59, u"en"}, {0x5a, u"US"}, {0x5b, u"ENU"}, {0x5c, u"en-US"}, {0x5d, u"USA"}, {0x60, u"Mo"}, {0x61, u"Tu"}, {0x62, u"We"}, {0x63, u"Th"}, {0x64, u"Fr"}, {0x65, u"Sa"}, {0x66, u"Su"},
 			{0x6e, u"."}, {0x74, u"0"}, {0x75, u"0"}, {0x1000, u"0409"}, {0x4a, u"+"}, {0x4b, u"-"}, {0x50, u""}, {0x51, u"-"},
 			{0x52, u"3"}, {0x53, u"0"}, {0x54, u"1"}, {0x55, u"0"}, {0x56, u"1"}, {0x57, u"0"},
 		};
@@ -223,6 +223,28 @@ std::u16string decode_ansi(std::string_view text, uint32_t code_page)
 int collate(std::u16string_view left, std::u16string_view right, uint32_t flags)
 {
 	const bool ignore_case = flags & (0x1 | 0x10000000 | 0x10);
+	// Word sort sets hyphens and apostrophes aside unless SORT_STRINGSORT asks otherwise; they only break ties.
+	if (!(flags & 0x1000) && (left.find_first_of(u"-'") != left.npos || right.find_first_of(u"-'") != right.npos)) {
+		const auto bare = [](std::u16string_view text) {
+			std::u16string result;
+			for (const char16_t unit : text)
+				if (unit != u'-' && unit != u'\'')
+					result.push_back(unit);
+			return result;
+		};
+		const std::u16string plain_left = bare(left), plain_right = bare(right);
+		const int order = collate(plain_left, plain_right, flags);
+		if (order)
+			return order;
+		if (plain_left.size() != left.size() || plain_right.size() != right.size()) {
+			if (left.size() != right.size())
+				return left.size() < right.size() ? -1 : 1;
+			const int folded = compare_fold(left, right);
+			if (folded)
+				return folded;
+		}
+		return order;
+	}
 	const int folded = compare_fold(left, right);
 	if (folded || ignore_case)
 		return folded;

@@ -483,6 +483,16 @@ struct Source {
 
 }
 
+size_t bitmap_row_bytes(const DesktopBitmap &bitmap)
+{
+	return row_bytes(bitmap);
+}
+
+uint32_t bitmap_color(const DesktopBitmap &bitmap, const uint8_t *row, int64_t x)
+{
+	return get_color(bitmap, row, x);
+}
+
 bool blit(DesktopObjects &objects, DesktopDC &destination, int32_t dx, int32_t dy, int32_t dw, int32_t dh, DesktopDC *source_dc,
 	int32_t sx, int32_t sy, int32_t sw, int32_t sh, uint32_t rop)
 {
