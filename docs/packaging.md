@@ -46,15 +46,15 @@ The maintainer supplies a JSON inventory of configured third-party inputs:
 ```json
 [
   {
-    "name": "reactos-controls-x64",
-    "cmake_keys": ["RAVEN_CONTROLS_COMPONENT_DIR"],
+    "name": "reactos-installer-x64",
+    "cmake_keys": ["RAVEN_INSTALLER_COMPONENT_DIR"],
     "source": "/absolute/path/to/reactos-source.tar.gz",
     "sha256": "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69",
-    "recipe": "/absolute/path/to/controls/provenance.json",
+    "recipe": "/absolute/path/to/installer/provenance.json",
     "notices": [
-      "/absolute/path/to/controls/licenses/COPYING",
-      "/absolute/path/to/controls/licenses/COPYING.LIB",
-      "/absolute/path/to/controls/licenses/COPYING.ARM"
+      "/absolute/path/to/installer/licenses/COPYING",
+      "/absolute/path/to/installer/licenses/COPYING.LIB",
+      "/absolute/path/to/installer/licenses/COPYING.ARM"
     ]
   }
 ]

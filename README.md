@@ -36,7 +36,7 @@ export RAVEN_PREFIX="$HOME/.local/share/raven/my-app"
 build/native/raven --run-process --execution=native --timeout-ms=600000 --desktop=wayland setup.exe
 ```
 
-This minimal build runs console programs and simple windows. Installers and most desktop programs also need the common controls, the shell dialogs and the installer services, which Raven builds from pinned ReactOS sources, for both 64-bit and 32-bit programs. Without them a program stops at its first call into them, such as `InitCommonControls`:
+This minimal build runs console programs and simple windows. Installers and most desktop programs also need the common controls, the shell dialogs and the installer services, which Raven builds from its own sources and, for the installer services, from pinned ReactOS sources, for both 64-bit and 32-bit programs. Without them a program stops at its first call into them, such as `InitCommonControls`:
 
 ```sh
 python3 scripts/provision-rtl.py --output components/rtl

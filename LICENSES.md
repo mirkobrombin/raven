@@ -12,7 +12,7 @@ GPLv3 license applied to every file.
 | --- | --- |
 | Linux `raven` and `raven-bootstrap` | GPL-3.0-or-later; root LICENSE |
 | Original Raven PE adapters | MIT; exact file list in LICENSES.json and terms in LICENSES/MIT.txt |
-| ReactOS-derived PE common controls and installer components | Distributed under GPL version 2 with the original GPL, LGPL, BSD and other source notices retained; pinned recipes and modifications in `scripts/provision-*.py` and `native/upstream` |
+| ReactOS-derived PE installer components | Distributed under GPL version 2 with the original GPL, LGPL, BSD and other source notices retained; pinned recipes and modifications in `scripts/provision-*.py` and `native/upstream` |
 | CP1252 mapping data | Unicode-3.0; `native/upstream/reactos-nls/data-provenance.json` |
 | Code pages 1250, 1251 and 1253-1258 mapping data | Unicode-3.0; `native/upstream/reactos-nls/single-byte-provenance.json` |
 | Unicode decomposition data | Unicode terms; `native/upstream/unicode/LICENSE` and provenance.json |
@@ -30,8 +30,8 @@ For sources referring to ReactOS's root COPYING, distribution uses GPL version 2
 it does not infer an "or later" permission. Explicit GPL-2.0-or-later inputs also
 permit that version. LGPL portions keep their notices and corresponding source.
 
-The common controls build is LGPL code with GPL inputs; it must not be described
-as LGPL-only. The user32 component is original MIT code with no ReactOS input.
+The common controls and user32 components are original MIT code with no ReactOS
+input.
 Installer components also contain zlib, XML/XSLT/iconv, PNG, IJG JPEG and TIFF
 code with their individual notices. Bison-generated parsers retain their skeleton
 exception; the generator's GPL license alone does not determine the output's license.
