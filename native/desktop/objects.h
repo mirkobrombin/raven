@@ -50,10 +50,17 @@ struct DesktopBitmap {
 	// DIB sections keep the format their creator asked for: bytes per row, and the color table of indexed depths (COLORREF).
 	uint32_t stride = 0;
 	std::vector<uint32_t> palette{};
+	// The channel masks of a BI_BITFIELDS section, as its creator gave them.
+	std::array<uint32_t,3> masks{};
 	// The physical size a program records with SetBitmapDimensionEx, in 0.1 mm; GDI keeps it and never uses it.
 	int32_t dimension_x = 0, dimension_y = 0;
 	std::span<uint8_t> pixels() { return shared ? std::span<uint8_t>(shared->data(), shared->size()) : std::span<uint8_t>(bits); }
 	std::span<const uint8_t> pixels() const { return shared ? std::span<const uint8_t>(shared->data(), shared->size()) : std::span<const uint8_t>(bits); }
+};
+
+// A logical palette: its entries as COLORREF, in the program's order.
+struct DesktopPalette {
+	std::vector<uint32_t> entries{};
 };
 
 struct DesktopFont {
@@ -213,7 +220,7 @@ struct DesktopMenu {
 
 // One scroll bar of a window: range, page size, position and which arrows are disabled.
 struct DesktopScroll {
-	int32_t min=0,max=0,pos=0,track=0;
+	int32_t min=0,max=100,pos=0,track=0;
 	uint32_t page=0,disabled=0;
 };
 
@@ -273,7 +280,7 @@ public:
 	explicit DesktopObjects(size_t limit = 256 * 1024 * 1024, IconDisplay display = {},DesktopMetrics metrics = {},DesktopColors colors = desktop_colors);
 	DesktopObjects(const DesktopObjects &) = delete;
 	DesktopObjects &operator=(const DesktopObjects &) = delete;
-	using Object = std::variant<DesktopIcon, DesktopBitmap, DesktopDC, DesktopWindow, DesktopFont, DesktopBrush, DesktopMenu, DesktopRegion, DesktopPen>;
+	using Object = std::variant<DesktopIcon, DesktopBitmap, DesktopDC, DesktopWindow, DesktopFont, DesktopBrush, DesktopMenu, DesktopRegion, DesktopPen, DesktopPalette>;
 	uint64_t add(Object object);
 	bool erase(uint64_t handle);
 	const DesktopMenu *menu(uint64_t handle) const;
@@ -307,6 +314,7 @@ public:
 	uint64_t select_brush(uint64_t dc,uint64_t brush);
 	bool delete_brush(uint64_t brush);
 	const DesktopPen *pen(uint64_t handle) const;
+	DesktopPalette *palette(uint64_t handle);
 	uint64_t select_pen(uint64_t dc,uint64_t pen);
 	bool delete_pen(uint64_t pen);
 	void update_window_dcs(uint64_t window);

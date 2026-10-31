@@ -24,6 +24,7 @@ static size_t object_size(const DesktopObjects::Object &object)
 		return sizeof(DesktopFont);
 	if (std::holds_alternative<DesktopBrush>(object)) return sizeof(DesktopBrush);
 	if (std::holds_alternative<DesktopPen>(object)) return sizeof(DesktopPen);
+	if (const auto *palette=std::get_if<DesktopPalette>(&object)) return sizeof(DesktopPalette)+palette->entries.size()*4;
 	if (const auto *region=std::get_if<DesktopRegion>(&object)) return sizeof(DesktopRegion)+region->bytes();
 	const auto &dc=std::get<DesktopDC>(object);
 	return sizeof(DesktopDC)+(dc.clip ? dc.clip->bytes() : 0)+(dc.application_clip ? dc.application_clip->bytes() : 0);
@@ -250,6 +251,12 @@ uint64_t DesktopObjects::select_font(uint64_t handle,uint64_t selected_font)
 	device->font=selected_font;
 	if (const auto *record=font(previous); record && record->pending_delete && !font_selected(previous)) erase(previous);
 	return previous;
+}
+
+DesktopPalette *DesktopObjects::palette(uint64_t handle)
+{
+	const auto found=objects.find(handle);
+	return found==objects.end() ? nullptr : std::get_if<DesktopPalette>(&found->second);
 }
 
 uint32_t DesktopObjects::set_dc_brush_color(uint32_t color)

@@ -568,6 +568,13 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		call.write(call[1], info);
 		call.ret(1);
 	});
+	// LOGFONT holds the character set past its numbers and three flag bytes; asking for the default answers ANSI.
+	registry.add("GetTextCharset", 1, [=, this](ApiCall &call) {
+		guarded(call, 1, [&] {
+			const uint8_t charset = selected_font(require_dc(call, 0)).definition[23];
+			call.ret(charset == 1 ? 0 : charset);
+		});
+	});
 	registry.add("GetTextCharsetInfo", 3, [=, this](ApiCall &call) {
 		guarded(call, 1, [&] {
 			auto &dc = require_dc(call, 0);

@@ -368,6 +368,11 @@ uint64_t NativeDesktop::get_object(std::span<const uint64_t> args,bool ansi)
 		put(bytes, plain + 12, 1, 2);
 		put(bytes, plain + 14, bitmap->depth, 2);
 		put(bytes, plain + 20, size_t(bitmap->stride ? bitmap->stride : bitmap->width*4)*bitmap->height);
+		if (bitmap->masks[0] || bitmap->masks[1] || bitmap->masks[2]) {
+			put(bytes, plain + 16, 3);
+			for (size_t channel = 0; channel < 3; ++channel)
+				put(bytes, plain + 40 + channel * 4, bitmap->masks[channel]);
+		}
 	}
 	process.write_memory(args[2], bytes);
 	return bytes.size();
@@ -476,7 +481,7 @@ bool NativeDesktop::dispatch(std::string_view name)
 			result = icon->shared || objects.erase(handle);
 	} else if (name == "DeleteObject") {
 		const auto handle = process.api_arguments(1)[0];
-		result = objects.pen(handle) ? objects.delete_pen(handle) : objects.region(handle) ? objects.erase(handle) : objects.brush(handle) ? objects.delete_brush(handle) : objects.font(handle) ? objects.delete_font(handle) : objects.dc(handle) ? delete_dc(handle) : delete_bitmap(handle);
+		result = objects.pen(handle) ? objects.delete_pen(handle) : objects.region(handle) || objects.palette(handle) ? objects.erase(handle) : objects.brush(handle) ? objects.delete_brush(handle) : objects.font(handle) ? objects.delete_font(handle) : objects.dc(handle) ? delete_dc(handle) : delete_bitmap(handle);
 	} else if (name == "CreateSolidBrush") {
 		auto color=uint32_t(process.api_arguments(1)[0]);
 		// A palette-relative color is the color itself on a display without a palette.

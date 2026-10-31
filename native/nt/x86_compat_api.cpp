@@ -15,7 +15,7 @@ constexpr std::array<std::pair<std::string_view, uint32_t>, 28> compat_exports{{
 	{"RegisterClassA", 1}, {"RegisterClassExA", 1}, {"UnregisterClassA", 2}, {"GetClassInfoA", 3}, {"GetClassInfoExA", 3},
 	{"GlobalHandle", 1}, {"GetVersionExA", 1}, {"WinExec", 2}, {"GetCurrentProcess", 0}, {"SetHandleCount", 1}, {"GetEnvironmentStrings", 0},
 	{"FreeEnvironmentStringsA", 1}, {"UnhandledExceptionFilter", 1}, {"RtlUnwind", 4}, {"HeapCreate", 3}, {"HeapDestroy", 1},
-	{"ExitWindowsEx", 2}, {"RealizePalette", 1}, {"CreatePalette", 1},
+	{"ExitWindowsEx", 2}, {"RealizePalette", 1},
 }};
 
 constexpr uint64_t process_heap_handle = 0x00150000, executable_heap_handle = 0x00160000, heap_region = 1 << 20, large_block = 256 << 10, header = 16;
@@ -175,10 +175,6 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	} else if (name == "RealizePalette") {
 		process.api_arguments(1);
 		process.return_api(0);
-	} else if (name == "CreatePalette") {
-		// Palettes are not modelled: the program gets a handle that selects and realizes harmlessly.
-		process.api_arguments(1);
-		process.return_api(0x1800);
 	} else if (name == "WinExec") {
 		process.api_arguments(2);
 		process.return_api(2);

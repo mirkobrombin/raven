@@ -435,6 +435,73 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			call.ret(call.u32(1) & 0xffffff);
 		});
 	});
+	// LOGPALETTE: the version and the count as words, then red, green, blue and flags for each entry.
+	registry.add("CreatePalette", 1, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			const uint32_t count = call.load<uint16_t>(call[0] + 2);
+			if (!count || call.load<uint16_t>(call[0]) != 0x300)
+				throw uint32_t(87);
+			DesktopPalette palette;
+			palette.entries.resize(count);
+			for (uint32_t i = 0; i < count; ++i)
+				palette.entries[i] = call.load<uint32_t>(call[0] + 4 + uint64_t(i) * 4) & 0xffffff;
+			const auto handle = objects.add(std::move(palette));
+			if (!handle)
+				throw uint32_t(8);
+			call.ret(handle);
+		});
+	});
+	registry.add("GetPaletteEntries", 4, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			const auto *palette = objects.palette(call[0]);
+			if (!palette)
+				throw uint32_t(6);
+			const size_t total = palette->entries.size(), start = call.u32(1);
+			if (!call[3]) {
+				call.ret(total);
+				return;
+			}
+			const size_t take = start < total ? std::min<size_t>(call.u32(2), total - start) : 0;
+			for (size_t i = 0; i < take; ++i)
+				call.store<uint32_t>(call[3] + i * 4, palette->entries[start + i]);
+			call.ret(take);
+		});
+	});
+	registry.add("GetNearestPaletteIndex", 2, [=, this](ApiCall &call) {
+		guarded(call, clr_invalid, [&] {
+			const auto *palette = objects.palette(call[0]);
+			if (!palette)
+				throw uint32_t(6);
+			const uint32_t wanted = call.u32(1);
+			size_t best = 0;
+			int64_t closest = INT64_MAX;
+			for (size_t i = 0; i < palette->entries.size(); ++i) {
+				const uint32_t have = palette->entries[i];
+				const int64_t r = int64_t(have & 255) - int64_t(wanted & 255), g = int64_t((have >> 8) & 255) - int64_t((wanted >> 8) & 255), b = int64_t((have >> 16) & 255) - int64_t((wanted >> 16) & 255);
+				const int64_t distance = r * r + g * g + b * b;
+				if (distance < closest) {
+					closest = distance;
+					best = i;
+				}
+			}
+			call.ret(best);
+		});
+	});
+	registry.add("RealizePalette", 1, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			require_dc(call, 0);
+			call.ret(0);
+		});
+	});
+	// Only the default mapping exists, and there extents have no effect: they stay one to one and the call succeeds.
+	for (const auto *name : {"SetWindowExtEx", "SetViewportExtEx"})
+		registry.add(name, 4, [=, this](ApiCall &call) {
+			guarded(call, 0, [&] {
+				require_dc(call, 0);
+				write_point(call, call[3], 1, 1);
+				call.ret(1);
+			});
+		});
 	registry.add("SelectPalette", 3, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
 			require_dc(call, 0);
@@ -716,22 +783,54 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			adopt(box_region(std::min(rect.left, rect.right), std::min(rect.top, rect.bottom), std::max(rect.left, rect.right), std::max(rect.top, rect.bottom)), call);
 		});
 	});
-	registry.add("CreateRoundRectRgn", 6, [=, this](ApiCall &call) {
+	const auto rounded_region = [](int64_t left, int64_t top, int64_t right, int64_t bottom, int32_t corner_x, int32_t corner_y) {
+		if (right <= left || bottom <= top || right - left > 16384 || bottom - top > 16384)
+			throw uint32_t(87);
+		DesktopRegion region;
+		const double rx = std::min<double>(std::abs(corner_x), double(right - left)) / 2.0, ry = std::min<double>(std::abs(corner_y), double(bottom - top)) / 2.0;
+		for (int64_t y = top; y < bottom; ++y) {
+			const double row = double(y - top) + 0.5;
+			double inset = 0;
+			const double height = double(bottom - top);
+			double dy = row < ry ? ry - row : row > height - ry ? row - (height - ry) : 0;
+			if (dy > 0 && ry > 0)
+				inset = rx - rx * std::sqrt(std::max(0.0, 1.0 - (dy / ry) * (dy / ry)));
+			region.add({int32_t(left + std::floor(inset + 0.5)), int32_t(y), int32_t(right - std::floor(inset + 0.5)), int32_t(y + 1)});
+		}
+		return region;
+	};
+	// An ellipse is a rounded rectangle whose corners take the whole box.
+	registry.add("CreateEllipticRgn", 4, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
 			const int64_t left = call.i32(0), top = call.i32(1), right = call.i32(2), bottom = call.i32(3);
-			if (right <= left || bottom <= top || right - left > 16384 || bottom - top > 16384)
-				throw uint32_t(87);
-			DesktopRegion region;
-			const double rx = std::min<double>(std::abs(call.i32(4)), double(right - left)) / 2.0, ry = std::min<double>(std::abs(call.i32(5)), double(bottom - top)) / 2.0;
-			for (int64_t y = top; y < bottom; ++y) {
-				const double row = double(y - top) + 0.5;
-				double inset = 0;
-				const double height = double(bottom - top);
-				double dy = row < ry ? ry - row : row > height - ry ? row - (height - ry) : 0;
-				if (dy > 0 && ry > 0)
-					inset = rx - rx * std::sqrt(std::max(0.0, 1.0 - (dy / ry) * (dy / ry)));
-				region.add({int32_t(left + std::floor(inset + 0.5)), int32_t(y), int32_t(right - std::floor(inset + 0.5)), int32_t(y + 1)});
+			adopt(rounded_region(std::min(left, right), std::min(top, bottom), std::max(left, right), std::max(top, bottom), INT32_MAX, INT32_MAX), call);
+		});
+	});
+	registry.add("CreateEllipticRgnIndirect", 1, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			const auto rect = read_rect(call, call[0]);
+			adopt(rounded_region(std::min(rect.left, rect.right), std::min(rect.top, rect.bottom), std::max(rect.left, rect.right), std::max(rect.top, rect.bottom), INT32_MAX, INT32_MAX), call);
+		});
+	});
+	registry.add("OffsetClipRgn", 3, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			auto &dc = require_dc(call, 0);
+			// Without a clipping region there is nothing to move, and the answer is the plain rectangle of the whole surface.
+			if (!dc.application_clip) {
+				call.ret(2);
+				return;
 			}
+			auto moved = *dc.application_clip;
+			moved.offset(call.i32(1), call.i32(2));
+			const auto kind = moved.complexity();
+			if (!objects.select_clip(call[0], std::move(moved)))
+				throw uint32_t(8);
+			call.ret(kind);
+		});
+	});
+	registry.add("CreateRoundRectRgn", 6, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			auto region = rounded_region(call.i32(0), call.i32(1), call.i32(2), call.i32(3), call.i32(4), call.i32(5));
 			adopt(std::move(region), call);
 		});
 	});
@@ -1525,16 +1624,29 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			call.ret(take);
 		});
 	});
+	// The colour table of the section selected in the context: RGBQUAD to the program, COLORREF here.
 	registry.add("GetDIBColorTable", 4, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
-			require_dc(call, 0);
-			call.ret(0);
+			const auto *bitmap = objects.bitmap(require_dc(call, 0).bitmap);
+			const size_t total = bitmap ? bitmap->palette.size() : 0, start = call.u32(1);
+			const size_t take = start < total ? std::min<size_t>(call.u32(2), total - start) : 0;
+			for (size_t i = 0; i < take; ++i) {
+				const uint32_t color = bitmap->palette[start + i];
+				call.store<uint32_t>(call[3] + i * 4, color_red(color) << 16 | color_green(color) << 8 | color_blue(color));
+			}
+			call.ret(take);
 		});
 	});
 	registry.add("SetDIBColorTable", 4, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
-			require_dc(call, 0);
-			call.ret(0);
+			auto *bitmap = objects.bitmap(require_dc(call, 0).bitmap);
+			const size_t total = bitmap ? bitmap->palette.size() : 0, start = call.u32(1);
+			const size_t take = start < total ? std::min<size_t>(call.u32(2), total - start) : 0;
+			for (size_t i = 0; i < take; ++i) {
+				const uint32_t quad = call.load<uint32_t>(call[3] + i * 4);
+				bitmap->palette[start + i] = (quad >> 16 & 255) | (quad & 0xff00) | (quad & 255) << 16;
+			}
+			call.ret(take);
 		});
 	});
 	registry.add("PlayEnhMetaFile", 3, [=, this](ApiCall &call) {
@@ -1542,6 +1654,11 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 	});
 
 	// ---- printing is not provided ----
+	// With no printers there is no default one.
+	for (const auto *name : {"GetDefaultPrinterA", "GetDefaultPrinterW"})
+		registry.add(name, 2, [=, this](ApiCall &call) {
+			call.fail(2, 0);
+		});
 	for (const auto *name : {"StartDocW", "StartDocA", "EndDoc", "StartPage", "EndPage", "AbortDoc"})
 		registry.add(name, 2, [](ApiCall &call) { call.fail(120, 0); });
 	registry.add("GdiGetCodePage", 1, [](ApiCall &call) { call.ret(1252); });
@@ -1830,9 +1947,32 @@ void NativeDesktop::register_image_api(ApiRegistry &registry)
 			const size_t width = call.pointer_width();
 			const auto mask_handle = call.load_pointer(call[0] + (width == 8 ? 16 : 12)), color_handle = call.load_pointer(call[0] + (width == 8 ? 24 : 16));
 			const auto *mask = objects.bitmap(mask_handle);
-			const auto *color = objects.bitmap(color_handle);
-			if (!mask || !color || color->depth != 32)
+			const auto *color = color_handle ? objects.bitmap(color_handle) : nullptr;
+			if (!mask || (color_handle && !color) || mask->depth != 1 || (color && color->depth != 1 && color->depth != 8 && color->depth != 24 && color->depth != 32))
 				throw uint32_t(120);
+			// Without a colour bitmap the mask holds two pictures, the AND half over the XOR half.
+			const uint32_t width_px = mask->width, height_px = color ? color->height : mask->height / 2;
+			const auto row_of = [](const DesktopBitmap &bitmap, uint32_t y) { return size_t(bitmap.top_down ? y : bitmap.height - 1 - y); };
+			const auto bit_at = [&](const DesktopBitmap &bitmap, uint32_t x, uint32_t y) {
+				const size_t stride = bitmap.stride ? bitmap.stride : ((size_t(bitmap.width) + 15) / 16) * 2;
+				return x < bitmap.width && y < bitmap.height && ((bitmap.pixels()[row_of(bitmap, y) * stride + x / 8] >> (7 - x % 8)) & 1);
+			};
+			// BGRA of one pixel of the colour bitmap; an indexed depth goes through its table when it has one.
+			const auto color_at = [&](uint32_t x, uint32_t y) {
+				std::array<uint8_t, 4> pixel{0, 0, 0, 0};
+				const auto from = color->pixels();
+				const size_t row = row_of(*color, y);
+				if (color->depth == 32) {
+					std::copy_n(&from[(row * color->width + x) * 4], 4, pixel.begin());
+				} else if (color->depth == 24) {
+					std::copy_n(&from[row * color->stride + size_t(x) * 3], 3, pixel.begin());
+				} else {
+					const uint32_t entry = color->depth == 1 ? bit_at(*color, x, y) : from[row * color->stride + x];
+					const uint32_t value = entry < color->palette.size() ? color->palette[entry] : entry ? 0xffffff : 0;
+					pixel = {uint8_t(color_blue(value)), uint8_t(color_green(value)), uint8_t(color_red(value)), 0};
+				}
+				return pixel;
+			};
 			DesktopIcon icon{};
 			icon.monochrome = false;
 			icon.shared = false;
@@ -1840,27 +1980,33 @@ void NativeDesktop::register_image_api(ApiRegistry &registry)
 			icon.hotspot_x = int32_t(call.load<uint32_t>(call[0] + 4));
 			icon.hotspot_y = int32_t(call.load<uint32_t>(call[0] + 8));
 			auto &image = icon.image;
-			image.color.width = color->width;
-			image.color.height = color->height;
-			image.color.rgba.assign(size_t(color->width) * color->height * 4, 0);
-			image.and_mask.assign(size_t(color->width) * color->height, 0);
+			image.color.width = color ? color->width : width_px;
+			image.color.height = height_px;
+			image.color.rgba.assign(size_t(image.color.width) * height_px * 4, 0);
+			image.and_mask.assign(size_t(image.color.width) * height_px, 0);
 			image.xor_mask.clear();
-			const auto from = color->pixels();
-			const auto bits = mask->pixels();
-			const size_t stride = ((size_t(mask->width) + 15) / 16) * 2;
 			bool any_alpha = false;
-			for (uint32_t y = 0; y < color->height; ++y)
-				for (uint32_t x = 0; x < color->width; ++x) {
-					const size_t row = color->top_down ? y : color->height - 1 - y;
-					const auto *p = &from[(row * color->width + x) * 4];
-					const size_t mrow = mask->top_down ? y : mask->height - 1 - y;
-					const bool transparent = x < mask->width && y < mask->height && ((bits[mrow * stride + x / 8] >> (7 - x % 8)) & 1);
-					const size_t at = (size_t(y) * color->width + x) * 4;
-					image.color.rgba[at] = p[2]; image.color.rgba[at + 1] = p[1]; image.color.rgba[at + 2] = p[0];
-					image.color.rgba[at + 3] = p[3];
-					any_alpha = any_alpha || p[3];
-					image.and_mask[size_t(y) * color->width + x] = transparent;
+			for (uint32_t y = 0; y < height_px; ++y)
+				for (uint32_t x = 0; x < image.color.width; ++x) {
+					std::array<uint8_t, 4> pixel{};
+					if (color) {
+						pixel = color_at(x, y);
+					} else if (bit_at(*mask, x, y + height_px)) {
+						pixel = {255, 255, 255, 0};
+					}
+					const size_t at = (size_t(y) * image.color.width + x) * 4;
+					image.color.rgba[at] = pixel[2]; image.color.rgba[at + 1] = pixel[1]; image.color.rgba[at + 2] = pixel[0];
+					image.color.rgba[at + 3] = pixel[3];
+					any_alpha = any_alpha || pixel[3];
+					image.and_mask[size_t(y) * image.color.width + x] = bit_at(*mask, x, y);
 				}
+			if (!color) {
+				icon.monochrome = true;
+				image.xor_mask.resize(image.and_mask.size());
+				for (uint32_t y = 0; y < height_px; ++y)
+					for (uint32_t x = 0; x < width_px; ++x)
+						image.xor_mask[size_t(y) * width_px + x] = bit_at(*mask, x, y + height_px);
+			}
 			image.has_alpha = any_alpha;
 			if (!any_alpha)
 				for (size_t i = 0; i < image.and_mask.size(); ++i)

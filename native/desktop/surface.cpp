@@ -136,6 +136,11 @@ uint64_t NativeDesktop::create_section(std::span<const uint64_t> args)
 	const auto bitmap=allocate_dib(uint32_t(width),uint32_t(height<0 ? -height : height),bits,height<0,std::move(palette),args[4],uint32_t(args[5]));
 	if (!bitmap) return 0;
 	try {
+		if (compression == 3) {
+			const auto masks = process.read_memory(args[1] + 40, 12);
+			for (size_t channel = 0; channel < 3; ++channel)
+				objects.bitmap(bitmap)->masks[channel] = field(masks, channel * 4);
+		}
 		const auto address=objects.bitmap(bitmap)->address;
 		for (size_t byte=0;byte<output.size();++byte) output[byte]=uint8_t(address>>(byte*8));
 		if (args[3]) process.write_memory(args[3],output);

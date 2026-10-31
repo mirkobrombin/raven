@@ -23,7 +23,7 @@ PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2d
             "base/system/msiexec/", "dll/win32/rpcrt4/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/stdole2.tlb/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
-            "dll/win32/gdiplus/", "sdk/lib/getopt/", "dll/win32/riched20/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
+            "sdk/lib/getopt/", "dll/win32/riched20/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -467,9 +467,22 @@ def main():
         f" {name}{'@' + str(codecs_defined[name]) if x86 and codecs_defined.get(name) is not None else ''}\n" for name in codecs_names))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "windowscodecs_import.def", "-l", output / "libwindowscodecs.a"])
     # gdiplus.dll: Raven's own drawing library, which reads and writes pictures through the imaging component.
-    gdiplus_root = source / "dll/win32/gdiplus"
-    library("gdiplus.dll", gdiplus_root, ["-D_USE_MATH_DEFINES", "-U_WIN32_WINNT", "-D_WIN32_WINNT=0x601", "-UWINVER", "-DWINVER=0x601"], ["mlang", "shlwapi", "oleaut32", "ole32", "user32", "gdi32", "windowscodecs"],
-            sources=[*listed_sources(gdiplus_root), gdiplus_root / "guid.c"], rc="gdiplus.rc")
+    own_gdiplus = repo / "native/upstream/raven-gdiplus"
+    gdiplus_objects = []
+    for path in [*sorted(own_gdiplus.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+        target = objects / ("gdiplus_" + path.stem + ".o")
+        run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCOBJMACROS", "-D_CRTIMP=", "-I" + str(own_gdiplus), path, "-o", target])
+        gdiplus_objects.append(target)
+    gdiplus_exports = (own_gdiplus / "exports.txt").read_text()
+    (output / "gdiplus.def").write_text("LIBRARY gdiplus.dll\nEXPORTS\n" + gdiplus_exports)
+    next_base[0] -= 0x400000 if x86 else 0x4000000
+    run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
+         "-o", output / "gdiplus.dll", *gdiplus_objects, output / "gdiplus.def", "-lole32", "-loleaut32", "-lshlwapi", "-luuid", "-luser32", "-lgdi32", "-lkernel32", "-ladvapi32", "-lgcc"])
+    gdiplus_defined = decorated(gdiplus_objects)
+    gdiplus_names = [line.strip() for line in gdiplus_exports.splitlines() if line.strip()]
+    (output / "gdiplus_import.def").write_text("LIBRARY gdiplus.dll\nEXPORTS\n" + "".join(
+        f" {name}{'@' + str(gdiplus_defined[name]) if x86 and gdiplus_defined.get(name) is not None else ''}\n" for name in gdiplus_names))
+    run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "gdiplus_import.def", "-l", output / "libgdiplus.a"])
     # urlmon.dll: Raven's own. Ordinals without a name are the ones old callers import by.
     own_urlmon = repo / "native/upstream/raven-urlmon"
     urlmon_objects = []

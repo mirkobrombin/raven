@@ -31,6 +31,7 @@ bool NativeDesktop::color_dispatch(std::string_view name)
 			else if (objects.bitmap(args[0])) result=7;
 			else if (objects.region(args[0])) result=8;
 			else if (objects.pen(args[0])) result=1;
+			else if (objects.palette(args[0])) result=5;
 			else throw uint32_t(6);
 		} else {
 			auto *dc=objects.dc(args[0]);if (!dc) throw uint32_t(6);
