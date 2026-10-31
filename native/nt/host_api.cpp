@@ -999,18 +999,10 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			call.store_pointer(call[1], 0x04090409);
 		call.ret(1);
 	});
-	// The drives the prefix has: C: and Z: always, and any other letter with a folder behind it. GetLogicalDriveStrings lists their roots.
-	const auto drives = [&context] {
-		uint32_t mask = 0;
-		for (char16_t letter = u'A'; letter <= u'Z'; ++letter) {
-			const std::u16string root{letter, u':', u'\\'};
-			if (const auto resolved = context.paths.resolve(root); resolved && resolved->exists)
-				mask |= 1u << (letter - u'A');
-		}
-		return mask;
-	};
+	// The drives the prefix has (NativePaths::drives). GetLogicalDriveStrings lists their roots.
+	const auto drives = [&context] { return context.paths.drives(); };
 	registry.add("GetLogicalDrives", 0, [drives](ApiCall &call) { call.ret(drives()); });
-	// QueryDosDevice: each drive of the prefix is a volume device, \Device\HarddiskVolumeN in letter order; without a name, the list of
+	// QueryDosDevice: each drive of the prefix is its volume device (NativePaths::volume_device); without a name, the list of
 	// the drives' device names.
 	for (const bool wide : {true, false})
 		registry.add(wide ? "QueryDosDeviceW" : "QueryDosDeviceA", 3, [drives, wide](ApiCall &call) {
@@ -1027,11 +1019,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 					call.fail(2);
 					return;
 				}
-				uint32_t number = 1;
-				for (char16_t other = u'A'; other < letter; ++other)
-					if (mask & (1u << (other - u'A')))
-						++number;
-				result = u"\\Device\\HarddiskVolume" + widen_ascii(std::to_string(number)) + std::u16string(1, 0);
+				result = NativePaths::volume_device(letter) + std::u16string(1, 0);
 			}
 			result.push_back(0);
 			if (capacity < result.size()) {

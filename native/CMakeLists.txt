@@ -2128,6 +2128,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_create_process_path_search COMMAND raven --run-process --execution=native ${PATH_SEARCH_CLIENT})
             set_tests_properties(native_create_process_path_search PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/path-search-prefix)
+            # The volume devices of drives and the NT name of an open folder.
+            set(VOLUME_NAME_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/volume-name.exe)
+            add_custom_command(OUTPUT ${VOLUME_NAME_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1eb500000,--no-insert-timestamp
+                    -o ${VOLUME_NAME_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/volume_name_client.c -lntdll -lucrtbase -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/volume_name_client.c VERBATIM)
+            add_custom_target(volume_name_fixture ALL DEPENDS ${VOLUME_NAME_CLIENT})
+            add_test(NAME native_volume_names COMMAND raven --run-process --execution=native ${VOLUME_NAME_CLIENT})
+            set_tests_properties(native_volume_names PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/volume-name-prefix)
             add_test(NAME native_ucrt_io_contract COMMAND raven --run-process --execution=native ${UCRT_IO_CLIENT})
             set_tests_properties(native_ucrt_io_contract PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-prefix)
