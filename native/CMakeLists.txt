@@ -2168,6 +2168,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(installed_memory_fixture${width} ALL DEPENDS ${memory_client})
                     add_test(NAME native_installed_memory_x${width} COMMAND raven --run-process --execution=native ${memory_client})
                     set_tests_properties(native_installed_memory_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(package_client ${CMAKE_CURRENT_BINARY_DIR}/package-identity${width}.exe)
+                    add_custom_command(OUTPUT ${package_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${package_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/package_identity_client.c -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/package_identity_client.c VERBATIM)
+                    add_custom_target(package_identity_fixture${width} ALL DEPENDS ${package_client})
+                    add_test(NAME native_package_identity_x${width} COMMAND raven --run-process --execution=native ${package_client})
+                    set_tests_properties(native_package_identity_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(folder_client ${CMAKE_CURRENT_BINARY_DIR}/special-folder${width}.exe)
                     add_custom_command(OUTPUT ${folder_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
