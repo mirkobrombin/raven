@@ -330,7 +330,7 @@ int main(int argc, char **argv)
 							}
 						// The classes the runtime's components serve are registered in the prefix, as Windows ships them registered: regsvr32 runs
 						// for each width when the components changed since the prefix last registered them. The runs themselves skip this step.
-						const char *servers[] = {"msxml3.dll", "windowscodecs.dll", "mlang.dll", "propsys.dll"};
+						const char *servers[] = {"oleaut32.dll", "msxml3.dll", "windowscodecs.dll", "mlang.dll", "propsys.dll"};
 						std::string stamp;
 						for (const auto &from : {runtime, runtime / "x86"})
 							for (const char *server : servers) {
