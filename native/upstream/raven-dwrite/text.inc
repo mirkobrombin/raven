@@ -46,6 +46,14 @@ typedef struct {
 	TextLine *lines;
 	UINT32 line_count;
 	float total_height, widest, widest_with_space;
+	/* IDWriteTextFormat1: kept and answered back; lines break and glyphs fall back the same whatever they say. */
+	DWRITE_VERTICAL_GLYPH_ORIENTATION vertical_orientation;
+	DWRITE_OPTICAL_ALIGNMENT optical;
+	BOOL last_line_unwrapped;
+	IDWriteFontFallback *fallback;
+	/* IDWriteTextLayout1: for the whole text, whichever range they were set on. Spacing widens each glyph's advance. */
+	BOOL pair_kerning;
+	float leading_spacing, trailing_spacing, minimum_advance;
 } TextLayout;
 
 #define LAYOUT_OF(self) ((TextLayout *)(self))
@@ -73,13 +81,14 @@ static HRESULT STDMETHODCALLTYPE tl_query(IDWriteTextLayout *self, REFIID iid, v
 {
 	if (!out)
 		return E_POINTER;
-	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteTextFormat) || (LAYOUT_OF(self)->is_layout && same_guid(iid, &IID_IDWriteTextLayout))) {
+	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteTextFormat) || (LAYOUT_OF(self)->is_layout && (same_guid(iid, &IID_IDWriteTextLayout) || same_guid(iid, &IID_IDWriteTextLayout1))) ||
+		(!LAYOUT_OF(self)->is_layout && same_guid(iid, &IID_IDWriteTextFormat1))) {
 		InterlockedIncrement(&LAYOUT_OF(self)->refs);
 		*out = self;
 		return S_OK;
 	}
 	*out = NULL;
-	return E_NOINTERFACE;
+	return no_interface(iid);
 }
 static ULONG STDMETHODCALLTYPE tl_add_ref(IDWriteTextLayout *self) { return (ULONG)InterlockedIncrement(&LAYOUT_OF(self)->refs); }
 static ULONG STDMETHODCALLTYPE tl_release(IDWriteTextLayout *self)
@@ -89,6 +98,8 @@ static ULONG STDMETHODCALLTYPE tl_release(IDWriteTextLayout *self)
 	if (!refs) {
 		UINT32 index;
 		free_lines(layout);
+		if (layout->fallback)
+			IDWriteFontFallback_Release(layout->fallback);
 		if (layout->families)
 			for (index = 0; index < layout->length; ++index)
 				FREE(layout->families[index]);
@@ -419,6 +430,9 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 			/* Layouts made for GDI use whole-pixel advances, as GDI does. */
 			if (layout->gdi_compatible)
 				advance = round_float(advance * layout->ppd) / layout->ppd;
+			advance += layout->leading_spacing + layout->trailing_spacing;
+			if (advance < layout->minimum_advance)
+				advance = layout->minimum_advance;
 			run->advances[glyph] = advance;
 			run->width += advance;
 		}
@@ -563,6 +577,18 @@ static void relayout(TextLayout *layout)
 				FREE(probe.glyphs);
 				FREE(probe.cluster_map);
 				FREE(probe.advances);
+			} else if (!layout->length) {
+				/* No text has no run to ask, so the font of the format answers. */
+				IDWriteFontFace *face = face_for(family_at(layout, 0), (DWRITE_FONT_WEIGHT)layout->weights[0], layout->stretch, (DWRITE_FONT_STYLE)layout->styles[0]);
+				if (face) {
+					DWRITE_FONT_METRICS font;
+					float scale;
+					IDWriteFontFace_GetMetrics(face, &font);
+					scale = layout->sizes[0] / font.designUnitsPerEm;
+					line->baseline = font.ascent * scale;
+					line->height = (font.ascent + font.descent + font.lineGap) * scale;
+					IDWriteFontFace_Release(face);
+				}
 			}
 		}
 		{
@@ -912,15 +938,81 @@ static HRESULT STDMETHODCALLTYPE tl_draw(IDWriteTextLayout *self, void *context,
 	return S_OK;
 }
 
-static void *Layout_table_[IDWriteTextLayout_methods];
-static void *Format_table_[IDWriteTextFormat_methods];
+/* IDWriteTextFormat1 and IDWriteTextLayout1 each add their methods past the end of the table they extend. */
+static HRESULT STDMETHODCALLTYPE f1_set_vertical(IDWriteTextLayout *self, DWRITE_VERTICAL_GLYPH_ORIENTATION value) { LAYOUT_OF(self)->vertical_orientation = value; return S_OK; }
+static DWRITE_VERTICAL_GLYPH_ORIENTATION STDMETHODCALLTYPE f1_get_vertical(IDWriteTextLayout *self) { return LAYOUT_OF(self)->vertical_orientation; }
+static HRESULT STDMETHODCALLTYPE f1_set_last_line(IDWriteTextLayout *self, WINBOOL wrapping) { LAYOUT_OF(self)->last_line_unwrapped = !wrapping; return S_OK; }
+static WINBOOL STDMETHODCALLTYPE f1_get_last_line(IDWriteTextLayout *self) { return !LAYOUT_OF(self)->last_line_unwrapped; }
+static HRESULT STDMETHODCALLTYPE f1_set_optical(IDWriteTextLayout *self, DWRITE_OPTICAL_ALIGNMENT value) { LAYOUT_OF(self)->optical = value; return S_OK; }
+static DWRITE_OPTICAL_ALIGNMENT STDMETHODCALLTYPE f1_get_optical(IDWriteTextLayout *self) { return LAYOUT_OF(self)->optical; }
+static HRESULT STDMETHODCALLTYPE f1_set_fallback(IDWriteTextLayout *self, IDWriteFontFallback *fallback)
+{
+	TextLayout *layout = LAYOUT_OF(self);
+	if (fallback)
+		IDWriteFontFallback_AddRef(fallback);
+	if (layout->fallback)
+		IDWriteFontFallback_Release(layout->fallback);
+	layout->fallback = fallback;
+	return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE f1_get_fallback(IDWriteTextLayout *self, IDWriteFontFallback **fallback)
+{
+	if (!fallback)
+		return E_POINTER;
+	*fallback = LAYOUT_OF(self)->fallback;
+	if (*fallback)
+		IDWriteFontFallback_AddRef(*fallback);
+	return S_OK;
+}
+
+static void whole_text(TextLayout *layout, DWRITE_TEXT_RANGE *range)
+{
+	if (range) {
+		range->startPosition = 0;
+		range->length = layout->length;
+	}
+}
+static HRESULT STDMETHODCALLTYPE l1_set_kerning(IDWriteTextLayout *self, WINBOOL enabled, DWRITE_TEXT_RANGE range) { LAYOUT_OF(self)->pair_kerning = enabled; return S_OK; }
+static HRESULT STDMETHODCALLTYPE l1_get_kerning(IDWriteTextLayout *self, UINT32 position, WINBOOL *enabled, DWRITE_TEXT_RANGE *range)
+{
+	if (!enabled)
+		return E_POINTER;
+	*enabled = LAYOUT_OF(self)->pair_kerning;
+	whole_text(LAYOUT_OF(self), range);
+	return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE l1_set_spacing(IDWriteTextLayout *self, FLOAT leading, FLOAT trailing, FLOAT minimum, DWRITE_TEXT_RANGE range)
+{
+	TextLayout *layout = LAYOUT_OF(self);
+	if (minimum < 0)
+		return E_INVALIDARG;
+	layout->leading_spacing = leading;
+	layout->trailing_spacing = trailing;
+	layout->minimum_advance = minimum;
+	layout->dirty = TRUE;
+	return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE l1_get_spacing(IDWriteTextLayout *self, UINT32 position, FLOAT *leading, FLOAT *trailing, FLOAT *minimum, DWRITE_TEXT_RANGE *range)
+{
+	TextLayout *layout = LAYOUT_OF(self);
+	if (!leading || !trailing || !minimum)
+		return E_POINTER;
+	*leading = layout->leading_spacing;
+	*trailing = layout->trailing_spacing;
+	*minimum = layout->minimum_advance;
+	whole_text(layout, range);
+	return S_OK;
+}
+
+static void *Layout_table_[IDWriteTextLayout_methods + 4];
+static void *Format_table_[IDWriteTextFormat_methods + 8];
 static BOOL text_tables_ready;
 
 static void init_text_tables(void)
 {
 	if (text_tables_ready)
 		return;
-	memcpy(Layout_table_, IDWriteTextLayout_table, sizeof(Layout_table_));
+	memcpy(Layout_table_, IDWriteTextLayout_table, sizeof(IDWriteTextLayout_table));
 #define SET(name, function) Layout_table_[IDWriteTextLayout_##name] = (void *)function
 	SET(QueryInterface, tl_query); SET(AddRef, tl_add_ref); SET(Release, tl_release);
 	SET(SetTextAlignment, tl_set_alignment); SET(SetParagraphAlignment, tl_set_paragraph); SET(SetWordWrapping, tl_set_wrapping);
@@ -947,7 +1039,14 @@ static void init_text_tables(void)
 	SET(HitTestTextPosition, tl_hit_position); SET(HitTestTextRange, tl_hit_range);
 #undef SET
 	/* A text format is the front of the same object: its table is the layout's methods that a format has. */
-	memcpy(Format_table_, Layout_table_, sizeof(Format_table_));
+	memcpy(Format_table_, Layout_table_, IDWriteTextFormat_methods * sizeof(void *));
+	{
+		void *const layout1[] = {(void *)l1_set_kerning, (void *)l1_get_kerning, (void *)l1_set_spacing, (void *)l1_get_spacing};
+		void *const format1[] = {(void *)f1_set_vertical, (void *)f1_get_vertical, (void *)f1_set_last_line, (void *)f1_get_last_line,
+			(void *)f1_set_optical, (void *)f1_get_optical, (void *)f1_set_fallback, (void *)f1_get_fallback};
+		memcpy(Layout_table_ + IDWriteTextLayout_methods, layout1, sizeof(layout1));
+		memcpy(Format_table_ + IDWriteTextFormat_methods, format1, sizeof(format1));
+	}
 	text_tables_ready = TRUE;
 }
 
@@ -1034,6 +1133,13 @@ static HRESULT layout_from_format(const WCHAR *text, UINT32 length, IDWriteTextF
 	layout->flow = source->flow;
 	layout->tab = source->tab;
 	layout->trimming = source->trimming;
+	layout->vertical_orientation = source->vertical_orientation;
+	layout->optical = source->optical;
+	layout->last_line_unwrapped = source->last_line_unwrapped;
+	if (source->fallback) {
+		layout->fallback = source->fallback;
+		IDWriteFontFallback_AddRef(layout->fallback);
+	}
 	layout->spacing_method = source->spacing_method;
 	layout->line_spacing = source->line_spacing;
 	layout->line_baseline = source->line_baseline;
@@ -1074,7 +1180,7 @@ static HRESULT STDMETHODCALLTYPE sign_query(IDWriteInlineObject *self, REFIID ii
 		return S_OK;
 	}
 	*out = NULL;
-	return E_NOINTERFACE;
+	return no_interface(iid);
 }
 static ULONG STDMETHODCALLTYPE sign_add_ref(IDWriteInlineObject *self) { return (ULONG)InterlockedIncrement(&SIGN_OF(self)->refs); }
 static ULONG STDMETHODCALLTYPE sign_release(IDWriteInlineObject *self)
@@ -1161,7 +1267,7 @@ static HRESULT STDMETHODCALLTYPE target_query(IDWriteBitmapRenderTarget *self, R
 		return S_OK;
 	}
 	*out = NULL;
-	return E_NOINTERFACE;
+	return no_interface(iid);
 }
 static ULONG STDMETHODCALLTYPE target_add_ref(IDWriteBitmapRenderTarget *self) { return (ULONG)InterlockedIncrement(&TARGET_OF(self)->refs); }
 static ULONG STDMETHODCALLTYPE target_release(IDWriteBitmapRenderTarget *self)

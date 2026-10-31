@@ -1090,7 +1090,7 @@ static INT32 pixel_round(INT32 value, float em, INT32 units_per_em)
 }
 
 /* ---- font faces ---- */
-/* IDWriteFontFace1 extends IDWriteFontFace, so one table serves both interfaces and one pointer names both. */
+/* IDWriteFontFace1 and 2 extend IDWriteFontFace, so one table serves all three interfaces and one pointer names them. */
 typedef struct {
 	const IDWriteFontFace1Vtbl *vtbl;
 	LONG refs;
@@ -1108,7 +1108,7 @@ static HRESULT STDMETHODCALLTYPE face_query(IDWriteFontFace *self, REFIID iid, v
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontFace) || same_guid(iid, &IID_IDWriteFontFace1))
+	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontFace) || same_guid(iid, &IID_IDWriteFontFace1) || same_guid(iid, &IID_IDWriteFontFace2))
 		*out = face;
 	else
 		return no_interface(iid);
@@ -1385,14 +1385,32 @@ static HRESULT STDMETHODCALLTYPE face1_vertical_variants(IDWriteFontFace1 *self,
 }
 static WINBOOL STDMETHODCALLTYPE face1_has_vertical(IDWriteFontFace1 *self) { return FALSE; }
 
-static void *Face1_table_[IDWriteFontFace1_methods];
+/* IDWriteFontFace2: the runtime draws no color layers, so a face reports none. */
+static WINBOOL STDMETHODCALLTYPE face2_is_color(IDWriteFontFace1 *self) { return FALSE; }
+static UINT32 STDMETHODCALLTYPE face2_palette_count(IDWriteFontFace1 *self) { return 0; }
+static UINT32 STDMETHODCALLTYPE face2_entry_count(IDWriteFontFace1 *self) { return 0; }
+static HRESULT STDMETHODCALLTYPE face2_entries(IDWriteFontFace1 *self, UINT32 palette, UINT32 first, UINT32 count, DWRITE_COLOR_F *entries) { return DWRITE_E_NOCOLOR; }
+static HRESULT STDMETHODCALLTYPE face2_recommended(IDWriteFontFace1 *self, FLOAT em, FLOAT dpi_x, FLOAT dpi_y, const DWRITE_MATRIX *transform, WINBOOL sideways,
+	DWRITE_OUTLINE_THRESHOLD threshold, DWRITE_MEASURING_MODE measuring, IDWriteRenderingParams *params, DWRITE_RENDERING_MODE *rendering, DWRITE_GRID_FIT_MODE *grid_fit)
+{
+	*rendering = DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
+	*grid_fit = DWRITE_GRID_FIT_MODE_DISABLED;
+	return S_OK;
+}
+
+static void *Face1_table_[IDWriteFontFace1_methods + 5];
 static const IDWriteFontFace1Vtbl *face_vtbl;
 
 static void init_face_tables(void)
 {
 	if (face_vtbl)
 		return;
-	memcpy(Face1_table_, IDWriteFontFace1_table, sizeof(Face1_table_));
+	memcpy(Face1_table_, IDWriteFontFace1_table, sizeof(IDWriteFontFace1_table));
+	Face1_table_[IDWriteFontFace1_methods] = (void *)face2_is_color;
+	Face1_table_[IDWriteFontFace1_methods + 1] = (void *)face2_palette_count;
+	Face1_table_[IDWriteFontFace1_methods + 2] = (void *)face2_entry_count;
+	Face1_table_[IDWriteFontFace1_methods + 3] = (void *)face2_entries;
+	Face1_table_[IDWriteFontFace1_methods + 4] = (void *)face2_recommended;
 	Face1_table_[IDWriteFontFace_QueryInterface] = (void *)face_query;
 	Face1_table_[IDWriteFontFace_AddRef] = (void *)face_add_ref;
 	Face1_table_[IDWriteFontFace_Release] = (void *)face_release;

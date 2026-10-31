@@ -8,13 +8,15 @@
  * having no visual; bidirectional levels from the paragraph direction and the strong letters (Hebrew and Arabic right to left); the
  * places a line may or must end (after spaces and hyphens, between ideographs, after a line break). Glyphs are one per character, as
  * text that needs no shaping has them, and placements are the design advances at the size, whole pixels for GDI-compatible text.
- * Scripts that need contextual shaping (Arabic joining, Indic reordering) are placed as their separate characters. */
+ * Scripts that need contextual shaping (Arabic joining, Indic reordering) are placed as their separate characters.
+ * The same object answers for IDWriteTextAnalyzer1 and 2, the versions a program asks for at startup: spacing, baselines,
+ * orientation, complexity and features, kept as simple as its one-script runs. */
 
 /* Uniscribe's justification classes, which the glyph properties carry: SCRIPT_JUSTIFY_CHARACTER and SCRIPT_JUSTIFY_BLANK. */
 enum { JUSTIFY_CHARACTER = 2, JUSTIFY_BLANK = 4 };
 
 typedef struct {
-	const IDWriteTextAnalyzerVtbl *vtbl;
+	const void *const *vtbl;
 	LONG refs;
 } TextAnalyzer;
 
@@ -22,13 +24,14 @@ static HRESULT STDMETHODCALLTYPE ta_query(IDWriteTextAnalyzer *self, REFIID iid,
 {
 	if (!out)
 		return E_POINTER;
-	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteTextAnalyzer)) {
+	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteTextAnalyzer) || same_guid(iid, &IID_IDWriteTextAnalyzer1) ||
+		same_guid(iid, &IID_IDWriteTextAnalyzer2)) {
 		InterlockedIncrement(&((TextAnalyzer *)self)->refs);
 		*out = self;
 		return S_OK;
 	}
 	*out = NULL;
-	return E_NOINTERFACE;
+	return no_interface(iid);
 }
 static ULONG STDMETHODCALLTYPE ta_add_ref(IDWriteTextAnalyzer *self) { return (ULONG)InterlockedIncrement(&((TextAnalyzer *)self)->refs); }
 static ULONG STDMETHODCALLTYPE ta_release(IDWriteTextAnalyzer *self)
@@ -317,8 +320,218 @@ static HRESULT STDMETHODCALLTYPE ta_gdi_placements(IDWriteTextAnalyzer *self, co
 	return place_glyphs(glyphs, glyph_properties, count, face, size, sideways, pixels, advances, offsets);
 }
 
-static const IDWriteTextAnalyzerVtbl text_analyzer_vtbl = {
+/* IDWriteTextAnalyzer1: spacing added around each cluster, never below the smallest advance asked for. */
+static HRESULT STDMETHODCALLTYPE ta_spacing(void *self, FLOAT leading, FLOAT trailing, FLOAT minimum, UINT32 length, UINT32 count, const UINT16 *clusters,
+	const FLOAT *advances, const DWRITE_GLYPH_OFFSET *offsets, const DWRITE_SHAPING_GLYPH_PROPERTIES *properties, FLOAT *out_advances,
+	DWRITE_GLYPH_OFFSET *out_offsets)
+{
+	if (!clusters || !advances || !offsets || !out_advances || !out_offsets)
+		return E_INVALIDARG;
+	memmove(out_advances, advances, count * sizeof(FLOAT));
+	memmove(out_offsets, offsets, count * sizeof(DWRITE_GLYPH_OFFSET));
+	for (UINT32 at = 0; at < length;) {
+		UINT32 next = at + 1;
+		while (next < length && clusters[next] == clusters[at])
+			++next;
+		const UINT32 first = clusters[at], last = next < length ? (UINT32)clusters[next] - 1 : count - 1;
+		if (first < count && last < count && first <= last) {
+			out_advances[first] += leading;
+			out_offsets[first].advanceOffset += leading;
+			out_advances[last] += trailing;
+			if (out_advances[first] < minimum)
+				out_advances[first] = minimum;
+		}
+		at = next;
+	}
+	return S_OK;
+}
+
+/* The font tells where its own alphabetic baseline and its extents are; any other baseline is worked out from those when the caller
+ * allows that, and is reported as not in the font. */
+static HRESULT STDMETHODCALLTYPE ta_baseline(void *self, IDWriteFontFace *face, DWRITE_BASELINE baseline, WINBOOL vertical, WINBOOL simulate,
+	DWRITE_SCRIPT_ANALYSIS analysis, const WCHAR *locale, INT32 *coordinate, WINBOOL *exists)
+{
+	DWRITE_FONT_METRICS metrics;
+	if (!face || !coordinate || !exists)
+		return E_INVALIDARG;
+	*coordinate = 0;
+	*exists = FALSE;
+	IDWriteFontFace_GetMetrics(face, &metrics);
+	INT32 value = 0;
+	switch (baseline) {
+	case DWRITE_BASELINE_DEFAULT:
+	case DWRITE_BASELINE_ROMAN: *exists = TRUE; return S_OK;
+	case DWRITE_BASELINE_CENTRAL: value = ((INT32)metrics.ascent - (INT32)metrics.descent) / 2; break;
+	case DWRITE_BASELINE_MATH: value = (INT32)metrics.xHeight / 2; break;
+	case DWRITE_BASELINE_HANGING: value = (INT32)metrics.capHeight; break;
+	case DWRITE_BASELINE_IDEOGRAPHIC_BOTTOM:
+	case DWRITE_BASELINE_MINIMUM: value = -(INT32)metrics.descent; break;
+	case DWRITE_BASELINE_IDEOGRAPHIC_TOP:
+	case DWRITE_BASELINE_MAXIMUM: value = (INT32)metrics.ascent; break;
+	default: return E_INVALIDARG;
+	}
+	if (simulate)
+		*coordinate = value;
+	return S_OK;
+}
+
+/* Vertical text keeps every character upright: the analyzer has no table of the characters that turn sideways. */
+static HRESULT STDMETHODCALLTYPE ta_vertical(void *self, IDWriteTextAnalysisSource1 *source, UINT32 position, UINT32 length, IDWriteTextAnalysisSink1 *sink)
+{
+	if (!source || !sink)
+		return E_INVALIDARG;
+	return length ? IDWriteTextAnalysisSink1_SetGlyphOrientation(sink, position, length, DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES, 0, FALSE, FALSE) : S_OK;
+}
+
+static HRESULT orientation(DWRITE_GLYPH_ORIENTATION_ANGLE angle, WINBOOL sideways, FLOAT x, FLOAT y, DWRITE_MATRIX *out)
+{
+	static const FLOAT turns[4][4] = {{1, 0, 0, 1}, {0, 1, -1, 0}, {-1, 0, 0, -1}, {0, -1, 1, 0}};
+	if (!out)
+		return E_INVALIDARG;
+	if ((UINT32)angle > DWRITE_GLYPH_ORIENTATION_ANGLE_270_DEGREES) {
+		memset(out, 0, sizeof *out);
+		return E_INVALIDARG;
+	}
+	const FLOAT *turn = turns[((UINT32)angle + (sideways ? 1 : 0)) & 3];
+	out->m11 = turn[0];
+	out->m12 = turn[1];
+	out->m21 = turn[2];
+	out->m22 = turn[3];
+	/* Turning about the origin the caller names leaves that point where it was. */
+	out->dx = x - x * turn[0] - y * turn[2];
+	out->dy = y - x * turn[1] - y * turn[3];
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE ta_orientation(void *self, DWRITE_GLYPH_ORIENTATION_ANGLE angle, WINBOOL sideways, DWRITE_MATRIX *out)
+{
+	return orientation(angle, sideways, 0, 0, out);
+}
+
+static HRESULT STDMETHODCALLTYPE ta_orientation2(void *self, DWRITE_GLYPH_ORIENTATION_ANGLE angle, WINBOOL sideways, FLOAT x, FLOAT y, DWRITE_MATRIX *out)
+{
+	return orientation(angle, sideways, x, y, out);
+}
+
+/* The analyzer has one script run for all text, written as words of separate letters with spaces between. */
+static HRESULT STDMETHODCALLTYPE ta_script_properties(void *self, DWRITE_SCRIPT_ANALYSIS analysis, DWRITE_SCRIPT_PROPERTIES *out)
+{
+	if (!out)
+		return E_INVALIDARG;
+	memset(out, 0, sizeof *out);
+	out->isoScriptCode = DWRITE_MAKE_OPENTYPE_TAG('L', 'a', 't', 'n');
+	out->isoScriptNumber = 215;
+	out->justificationCharacter = L' ';
+	out->usesWordDividers = 1;
+	out->isDiscreteWriting = 1;
+	return S_OK;
+}
+
+/* Simple text maps one to one onto glyphs the font has, with no shaping: below the combining marks, and past the control characters. */
+static BOOL simple_character(IDWriteFontFace *face, WCHAR letter, UINT16 *glyph)
+{
+	const UINT32 point = letter;
+	*glyph = 0;
+	if (point < 0x20 || (point >= 0x7f && point < 0xa0) || point >= 0x300)
+		return FALSE;
+	return SUCCEEDED(IDWriteFontFace_GetGlyphIndices(face, &point, 1, glyph)) && *glyph;
+}
+
+static HRESULT STDMETHODCALLTYPE ta_complexity(void *self, const WCHAR *text, UINT32 length, IDWriteFontFace *face, WINBOOL *simple, UINT32 *read, UINT16 *glyphs)
+{
+	UINT16 glyph;
+	if (!simple || !read)
+		return E_INVALIDARG;
+	*simple = FALSE;
+	*read = 0;
+	if (!text || !face || !length)
+		return E_INVALIDARG;
+	const BOOL first = simple_character(face, text[0], &glyph);
+	UINT32 at = 0;
+	for (; at < length && simple_character(face, text[at], &glyph) == first; ++at)
+		if (glyphs)
+			glyphs[at] = first ? glyph : 0;
+	*simple = first;
+	*read = at;
+	return S_OK;
+}
+
+/* Nothing here stretches or shrinks: a glyph offers no opportunities, so justified text keeps its advances unless a caller supplies some. */
+static HRESULT STDMETHODCALLTYPE ta_opportunities(void *self, IDWriteFontFace *face, FLOAT size, DWRITE_SCRIPT_ANALYSIS analysis, UINT32 length, UINT32 count,
+	const WCHAR *text, const UINT16 *clusters, const DWRITE_SHAPING_GLYPH_PROPERTIES *properties, DWRITE_JUSTIFICATION_OPPORTUNITY *out)
+{
+	if (count && !out)
+		return E_INVALIDARG;
+	memset(out, 0, count * sizeof *out);
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE ta_justify(void *self, FLOAT width, UINT32 count, const DWRITE_JUSTIFICATION_OPPORTUNITY *opportunities, const FLOAT *advances,
+	const DWRITE_GLYPH_OFFSET *offsets, FLOAT *out_advances, DWRITE_GLYPH_OFFSET *out_offsets)
+{
+	FLOAT used = 0, room = 0, shrink = 0;
+	if (count && (!opportunities || !advances || !offsets))
+		return E_INVALIDARG;
+	for (UINT32 index = 0; index < count; ++index) {
+		used += advances[index];
+		room += opportunities[index].expansionMaximum;
+		shrink += opportunities[index].compressionMaximum;
+	}
+	const FLOAT change = width - used;
+	const FLOAT share = change > 0 ? (room > 0 ? (change < room ? change / room : 1) : 0) : (shrink > 0 ? (-change < shrink ? change / shrink : -1) : 0);
+	for (UINT32 index = 0; index < count; ++index) {
+		const FLOAT moved = share * (change > 0 ? opportunities[index].expansionMaximum : opportunities[index].compressionMaximum);
+		if (out_advances)
+			out_advances[index] = advances[index] + moved;
+		if (out_offsets)
+			out_offsets[index] = offsets[index];
+	}
+	return S_OK;
+}
+
+/* No glyph changes shape when justified, so the run keeps its glyphs and takes the new advances. */
+static HRESULT STDMETHODCALLTYPE ta_justified_glyphs(void *self, IDWriteFontFace *face, FLOAT size, DWRITE_SCRIPT_ANALYSIS analysis, UINT32 length, UINT32 count,
+	UINT32 capacity, const UINT16 *clusters, const UINT16 *glyphs, const FLOAT *advances, const FLOAT *justified, const DWRITE_GLYPH_OFFSET *offsets,
+	const DWRITE_SHAPING_GLYPH_PROPERTIES *properties, UINT32 *actual, UINT16 *out_clusters, UINT16 *out_glyphs, FLOAT *out_advances,
+	DWRITE_GLYPH_OFFSET *out_offsets)
+{
+	if (!actual)
+		return E_INVALIDARG;
+	*actual = count;
+	if (capacity < count)
+		return E_NOT_SUFFICIENT_BUFFER;
+	if (out_clusters && clusters)
+		memmove(out_clusters, clusters, length * sizeof(UINT16));
+	memmove(out_glyphs, glyphs, count * sizeof(UINT16));
+	memmove(out_advances, justified, count * sizeof(FLOAT));
+	memmove(out_offsets, offsets, count * sizeof(DWRITE_GLYPH_OFFSET));
+	return S_OK;
+}
+
+/* The shaping here applies no OpenType features, so a font offers none through the analyzer. */
+static HRESULT STDMETHODCALLTYPE ta_features(void *self, IDWriteFontFace *face, DWRITE_SCRIPT_ANALYSIS analysis, const WCHAR *locale, UINT32 capacity, UINT32 *actual,
+	DWRITE_FONT_FEATURE_TAG *tags)
+{
+	if (!actual)
+		return E_INVALIDARG;
+	*actual = 0;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE ta_check_feature(void *self, IDWriteFontFace *face, DWRITE_SCRIPT_ANALYSIS analysis, const WCHAR *locale, DWRITE_FONT_FEATURE_TAG feature,
+	UINT32 count, const UINT16 *glyphs, UINT8 *applies)
+{
+	if (count && !applies)
+		return E_INVALIDARG;
+	memset(applies, 0, count);
+	return S_OK;
+}
+
+/* In the order of IDWriteTextAnalyzer2, which continues IDWriteTextAnalyzer1 and IDWriteTextAnalyzer. */
+static const void *const text_analyzer_vtbl[] = {
 	ta_query, ta_add_ref, ta_release, ta_script, ta_bidi, ta_numbers, ta_breaks, ta_glyphs, ta_placements, ta_gdi_placements,
+	ta_spacing, ta_baseline, ta_vertical, ta_orientation, ta_script_properties, ta_complexity, ta_opportunities, ta_justify, ta_justified_glyphs,
+	ta_orientation2, ta_features, ta_check_feature,
 };
 
 static HRESULT STDMETHODCALLTYPE factory_text_analyzer(IDWriteFactory2 *self, IDWriteTextAnalyzer **analyzer)
@@ -329,7 +542,7 @@ static HRESULT STDMETHODCALLTYPE factory_text_analyzer(IDWriteFactory2 *self, ID
 	*analyzer = NULL;
 	if (!(object = ALLOC(sizeof(TextAnalyzer))))
 		return E_OUTOFMEMORY;
-	object->vtbl = &text_analyzer_vtbl;
+	object->vtbl = text_analyzer_vtbl;
 	object->refs = 1;
 	*analyzer = (IDWriteTextAnalyzer *)object;
 	return S_OK;

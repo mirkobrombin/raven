@@ -123,8 +123,76 @@ int raven_entry(void)
 		if (FAILED(IDWriteFactory_CreateTextLayout(factory, L"", 0, format, 100.0f, 20.0f, &layout)) ||
 			IDWriteTextFormat_GetFontSize((IDWriteTextFormat *)layout) != 14.0f || IDWriteTextFormat_GetFontWeight((IDWriteTextFormat *)layout) != DWRITE_FONT_WEIGHT_BOLD)
 			return 21;
+		{
+			/* A format answers for version 1 and hands its settings to the layouts made from it. */
+			IDWriteTextFormat1 *format1;
+			IDWriteTextLayout1 *layout1;
+			IDWriteFontFace2 *face2;
+			IDWriteTextLayout *wide;
+			DWRITE_TEXT_METRICS plain, spaced;
+			FLOAT leading, trailing, minimum;
+			DWRITE_TEXT_RANGE range = {0, 2};
+			if (FAILED(IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat1, (void **)&format1)))
+				return 28;
+			if (FAILED(IDWriteTextFormat1_SetLastLineWrapping(format1, FALSE)) || IDWriteTextFormat1_GetLastLineWrapping(format1))
+				return 29;
+			IDWriteTextFormat1_Release(format1);
+			if (FAILED(IDWriteFactory_CreateTextLayout(factory, L"ab", 2, format, 400.0f, 40.0f, &wide)) ||
+				FAILED(IDWriteTextLayout_GetMetrics(wide, &plain)))
+				return 30;
+			if (FAILED(IDWriteTextLayout_QueryInterface(wide, &IID_IDWriteTextLayout1, (void **)&layout1)))
+				return 31;
+			if (FAILED(IDWriteTextLayout1_SetCharacterSpacing(layout1, 1.0f, 2.0f, 0.0f, range)) ||
+				FAILED(IDWriteTextLayout1_GetCharacterSpacing(layout1, 0, &leading, &trailing, &minimum, NULL)) ||
+				leading != 1.0f || trailing != 2.0f || minimum != 0.0f)
+				return 32;
+			if (FAILED(IDWriteTextLayout_GetMetrics(wide, &spaced)) || spaced.width < plain.width + 5.0f)
+				return 33;
+			IDWriteTextLayout1_Release(layout1);
+			IDWriteTextLayout_Release(wide);
+			if (FAILED(IDWriteFontFace_QueryInterface(face, &IID_IDWriteFontFace2, (void **)&face2)))
+				return 34;
+			if (IDWriteFontFace2_IsColorFont(face2) || IDWriteFontFace2_GetColorPaletteCount(face2))
+				return 35;
+			IDWriteFontFace2_Release(face2);
+		}
+		{
+			/* No text still takes a line of the format's font, with no room or plenty. */
+			DWRITE_TEXT_METRICS empty;
+			IDWriteTextLayout *none;
+			if (FAILED(IDWriteTextLayout_GetMetrics(layout, &empty)) || empty.height < 10.0f || empty.width != 0.0f)
+				return 36;
+			if (FAILED(IDWriteFactory_CreateTextLayout(factory, L"", 0, format, 0.0f, 0.0f, &none)) ||
+				FAILED(IDWriteTextLayout_GetMetrics(none, &empty)) || empty.height < 10.0f)
+				return 37;
+			IDWriteTextLayout_Release(none);
+		}
 		IDWriteTextLayout_Release(layout);
 		IDWriteTextFormat_Release(format);
+	}
+	{
+		/* The analyzer answers for its later versions, and one of their methods places a rotated glyph. */
+		IDWriteTextAnalyzer *analyzer;
+		IDWriteTextAnalyzer1 *analyzer1;
+		IDWriteTextAnalyzer2 *analyzer2;
+		DWRITE_MATRIX turned;
+		if (FAILED(IDWriteFactory_CreateTextAnalyzer(factory, &analyzer)))
+			return 22;
+		if (FAILED(IDWriteTextAnalyzer_QueryInterface(analyzer, &IID_IDWriteTextAnalyzer1, (void **)&analyzer1)))
+			return 23;
+		if (FAILED(IDWriteTextAnalyzer_QueryInterface(analyzer, &IID_IDWriteTextAnalyzer2, (void **)&analyzer2)))
+			return 24;
+		if (FAILED(IDWriteTextAnalyzer1_GetGlyphOrientationTransform(analyzer1, DWRITE_GLYPH_ORIENTATION_ANGLE_90_DEGREES, FALSE, &turned)) ||
+			turned.m11 != 0.0f || turned.m12 != 1.0f || turned.m21 != -1.0f || turned.m22 != 0.0f)
+			return 25;
+		if (FAILED(IDWriteTextAnalyzer2_GetGlyphOrientationTransform(analyzer2, DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES, FALSE, 5.0f, 6.0f, &turned)) ||
+			turned.m11 != 1.0f || turned.m22 != 1.0f)
+			return 26;
+		if (IDWriteTextAnalyzer_QueryInterface(analyzer, &IID_IDWriteFactory, (void **)&factory2) != E_NOINTERFACE)
+			return 27;
+		IDWriteTextAnalyzer2_Release(analyzer2);
+		IDWriteTextAnalyzer1_Release(analyzer1);
+		IDWriteTextAnalyzer_Release(analyzer);
 	}
 	IDWriteGlyphRunAnalysis_Release(analysis);
 	IDWriteFontFace_Release(face);

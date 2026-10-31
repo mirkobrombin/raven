@@ -74,6 +74,25 @@ static UINT wic_depth(IWICBitmap *wic)
 /* The headers leave this one out. */
 DEFINE_GUID(IID_ID2D1HwndRenderTarget, 0x2cd90698, 0x12e2, 0x11dc, 0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9);
 
+/* A refused interface goes to the trace by its GUID, so a program that needs one more interface shows which. */
+static HRESULT no_interface(REFIID iid)
+{
+	static const char digits[] = "0123456789abcdef";
+	static const BYTE order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+	char text[64] = "d2d1: no interface ";
+	size_t at = 19;
+	const BYTE *bytes = (const BYTE *)iid;
+	for (size_t index = 0; index < 16; ++index) {
+		if (index == 4 || index == 6 || index == 8 || index == 10)
+			text[at++] = '-';
+		text[at++] = digits[bytes[order[index]] >> 4];
+		text[at++] = digits[bytes[order[index]] & 15];
+	}
+	text[at] = 0;
+	RavenTrace(text);
+	return E_NOINTERFACE;
+}
+
 static BOOL same_guid(const GUID *a, const GUID *b)
 {
 	return memcmp(a, b, sizeof(GUID)) == 0;
@@ -622,7 +641,7 @@ static HRESULT STDMETHODCALLTYPE object_QueryInterface(void *iface, REFIID riid,
 		return S_OK;
 	}
 	*out = NULL;
-	return E_NOINTERFACE;
+	return no_interface(riid);
 }
 
 static ULONG STDMETHODCALLTYPE object_AddRef(void *iface)
@@ -1983,7 +2002,7 @@ static HRESULT STDMETHODCALLTYPE target_QueryInterface(void *iface, REFIID riid,
 		found = &self->gdi;
 	if (!found) {
 		*out = NULL;
-		return E_NOINTERFACE;
+		return no_interface(riid);
 	}
 	InterlockedIncrement(&self->refs);
 	*out = found;
@@ -3251,7 +3270,7 @@ static HRESULT STDMETHODCALLTYPE renderer_QueryInterface(IDWriteTextRenderer *if
 		return S_OK;
 	}
 	*out = NULL;
-	return E_NOINTERFACE;
+	return no_interface(riid);
 }
 static ULONG STDMETHODCALLTYPE renderer_AddRef(IDWriteTextRenderer *iface) { return 2; }
 static ULONG STDMETHODCALLTYPE renderer_Release(IDWriteTextRenderer *iface) { return 1; }
@@ -3921,7 +3940,7 @@ static HRESULT STDMETHODCALLTYPE effect_QueryInterface(void *iface, REFIID riid,
 	}
 	*out = found;
 	if (!found)
-		return E_NOINTERFACE;
+		return no_interface(riid);
 	InterlockedIncrement(&self->base.refs);
 	return S_OK;
 }
@@ -4195,7 +4214,7 @@ static HRESULT STDMETHODCALLTYPE factory_QueryInterface(void *iface, REFIID riid
 		found = &self->multithread;
 	if (!found) {
 		*out = NULL;
-		return E_NOINTERFACE;
+		return no_interface(riid);
 	}
 	InterlockedIncrement(&self->refs);
 	*out = found;
