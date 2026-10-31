@@ -190,6 +190,7 @@ void NativeRegistry::register_runtime_classes()
 	static constexpr std::pair<const char16_t *, const char16_t *> runtime_classes[] = {
 		{u"Windows.Management.Deployment.PackageManager", u"raven-deployment.dll"},
 		{u"Windows.UI.ViewManagement.UISettings", u"raven-uisettings.dll"},
+		{u"Windows.Globalization.Language", u"raven-twinapi.dll"},
 		{u"Windows.System.Profile.RetailInfo", u"raven-twinapi.dll"}, {u"Windows.System.Profile.SharedModeSettings", u"raven-twinapi.dll"},
 		{u"Windows.System.Profile.AnalyticsInfo", u"raven-twinapi.dll"},
 		{u"Windows.Networking.Connectivity.NetworkInformation", u"raven-twinapi.dll"},

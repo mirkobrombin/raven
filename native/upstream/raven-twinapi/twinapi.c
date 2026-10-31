@@ -5,6 +5,7 @@
 /* Raven Windows Runtime component: system classes of the Windows Runtime that desktop programs ask for while they start, served from one
  * library as twinapi.appcore.dll and its neighbours serve them on Windows.
  *
+ * - Windows.Globalization.Language: a BCP 47 tag with the names and layout direction of the locale of that name.
  * - Windows.System.Profile.RetailInfo and SharedModeSettings: the computer is not a store demonstration unit and not a shared device.
  * - Windows.System.Profile.AnalyticsInfo: a desktop, of the family Windows.Desktop at the version Windows reports.
  * - Windows.Networking.Connectivity.NetworkInformation: one wired connection profile with Internet access when the computer has an IPv4
@@ -38,6 +39,11 @@ static const IID iid_inspectable = {0xaf86e2e0, 0xb12d, 0x4c6a, {0x9c, 0x5a, 0xd
 static const IID iid_agile = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
 static const IID iid_factory = {0x00000035, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const IID iid_async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID iid_language = {0xea79a752, 0xf7c2, 0x4265, {0xb1, 0xbd, 0xc4, 0xde, 0xc4, 0xe4, 0xf0, 0x80}};
+static const IID iid_language2 = {0x6a47e5b5, 0xd94d, 0x4886, {0xa4, 0x04, 0xa5, 0xa5, 0xb9, 0xd5, 0xb4, 0x94}};
+static const IID iid_language_factory = {0x9b0252ac, 0x0c27, 0x44f8, {0xb7, 0x92, 0x97, 0x93, 0xfb, 0x66, 0xc6, 0x3e}};
+static const IID iid_language_statics = {0xb23cd557, 0x0865, 0x46d4, {0x89, 0xb8, 0xd5, 0x9b, 0xe8, 0x99, 0x0f, 0x0d}};
+static const IID iid_language_statics2 = {0x30199f6e, 0x914b, 0x4b2a, {0x9d, 0x6e, 0xe3, 0xb0, 0xe2, 0x7d, 0xbe, 0x4f}};
 static const IID iid_retail_info = {0x0712c6b8, 0x8b92, 0x4f2a, {0x84, 0x99, 0x03, 0x1f, 0x17, 0x98, 0xd6, 0xef}};
 static const IID iid_shared_mode = {0x893df40e, 0xcad6, 0x4d50, {0x8c, 0x49, 0x6f, 0xcf, 0xc0, 0x3e, 0xdb, 0x29}};
 static const IID iid_shared_mode2 = {0x608988a4, 0xccf1, 0x4ee8, {0xa5, 0xe2, 0xfd, 0x6a, 0x1d, 0x0c, 0xfa, 0xc8}};
@@ -1555,7 +1561,146 @@ static const struct kind core_kind = {"CoreApplication", L"Windows.ApplicationMo
 static struct object core_application = {{core_factory_table.slots, core_table.slots, core2_table.slots, core3_table.slots,
 	core_exit_table.slots, core_immersive_table.slots, core_unhandled_table.slots}, &core_kind, 1};
 
-static struct object *const classes[] = {&retail_info, &shared_mode, &analytics_info, &network_information, &online_id, &ticket_request_factory, &web_core,
+/* Windows.Globalization.Language: a well-formed BCP 47 tag, named and laid out as the system's locale of that name says. */
+struct language {
+	struct object base;
+	HSTRING tag;
+};
+
+static void destroy_language(struct object *base)
+{
+	WindowsDeleteString(((struct language *)base)->tag);
+}
+
+/* What the locale of the language's tag answers, or the empty text for a language the system has no locale for. */
+static int language_info(void *iface, LCTYPE type, WCHAR *text, int capacity)
+{
+	const WCHAR *tag = WindowsGetStringRawBuffer(((struct language *)owner(iface))->tag, NULL);
+	const int written = GetLocaleInfoEx(tag, type, text, capacity);
+	if (written <= 0)
+		text[0] = 0;
+	return written > 0 ? written - 1 : 0;
+}
+
+static HRESULT WINAPI language_tag(void *iface, HSTRING *out)
+{
+	if (!out)
+		return E_POINTER;
+	return WindowsDuplicateString(((struct language *)owner(iface))->tag, out);
+}
+
+/* A language without a locale is called by its tag. */
+static HRESULT language_name(void *iface, LCTYPE type, HSTRING *out)
+{
+	WCHAR text[LOCALE_NAME_MAX_LENGTH * 2];
+	if (!out)
+		return E_POINTER;
+	const int length = language_info(iface, type, text, ARRAYSIZE(text));
+	return length ? WindowsCreateString(text, length, out) : language_tag(iface, out);
+}
+
+static HRESULT WINAPI language_display_name(void *iface, HSTRING *out) { return language_name(iface, 0x00000002 /* LOCALE_SLOCALIZEDDISPLAYNAME */, out); }
+static HRESULT WINAPI language_native_name(void *iface, HSTRING *out) { return language_name(iface, 0x00000073 /* LOCALE_SNATIVEDISPLAYNAME */, out); }
+
+static HRESULT WINAPI language_script(void *iface, HSTRING *out)
+{
+	WCHAR text[64];
+	if (!out)
+		return E_POINTER;
+	language_info(iface, 0x0000006c /* LOCALE_SSCRIPTS */, text, ARRAYSIZE(text));
+	/* The locale lists its scripts in order, each ended by a semicolon; the language's own is the first. */
+	int length = 0;
+	while (text[length] && text[length] != L';')
+		++length;
+	return WindowsCreateString(text, length, out);
+}
+
+/* LOCALE_IREADINGLAYOUT numbers the vertical layouts the other way round from LanguageLayoutDirection. */
+static HRESULT WINAPI language_layout(void *iface, INT32 *out)
+{
+	static const INT32 directions[] = {0, 1, 3, 2};
+	DWORD layout = 0;
+	if (!out)
+		return E_POINTER;
+	language_info(iface, 0x00000070 /* LOCALE_IREADINGLAYOUT */ | LOCALE_RETURN_NUMBER, (WCHAR *)&layout, sizeof layout / sizeof(WCHAR));
+	*out = directions[layout & 3];
+	return S_OK;
+}
+
+TABLE(language_table, 0, INSPECTABLE, (const void *)language_tag, (const void *)language_display_name, (const void *)language_native_name,
+	(const void *)language_script);
+TABLE(language2_table, 1, INSPECTABLE, (const void *)language_layout);
+static const struct face_iid language_iids[] = {{&iid_language, 0}, {&iid_language2, 1}, {NULL, 0}};
+static const struct kind language_kind = {"Language", L"Windows.Globalization.Language", language_iids, destroy_language};
+
+/* RFC 5646 in shape only: subtags of one to eight letters or digits, the first of two to eight letters. */
+static BOOL language_well_formed(HSTRING tag)
+{
+	UINT32 length = 0, subtag = 0;
+	BOOL first = TRUE;
+	const WCHAR *text = WindowsGetStringRawBuffer(tag, &length);
+	for (UINT32 index = 0; index <= length; ++index) {
+		const WCHAR letter = index < length ? text[index] : L'-';
+		if (letter == L'-') {
+			if (!subtag || subtag > 8 || (first && subtag < 2))
+				return FALSE;
+			subtag = 0;
+			first = FALSE;
+			continue;
+		}
+		const BOOL alpha = (letter >= L'a' && letter <= L'z') || (letter >= L'A' && letter <= L'Z');
+		if (!alpha && (first || letter < L'0' || letter > L'9'))
+			return FALSE;
+		++subtag;
+	}
+	return TRUE;
+}
+
+static HRESULT WINAPI language_create(void *iface, HSTRING tag, void **out)
+{
+	static const void *const *const tables[] = {language_table.slots, language2_table.slots};
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!language_well_formed(tag))
+		return E_INVALIDARG;
+	struct language *self = make(sizeof *self, &language_kind, tables, 2);
+	if (!self)
+		return E_OUTOFMEMORY;
+	*out = face_of(&self->base, 0);
+	if (FAILED(WindowsDuplicateString(tag, &self->tag))) {
+		release(*out);
+		*out = NULL;
+		return E_OUTOFMEMORY;
+	}
+	return S_OK;
+}
+
+static HRESULT WINAPI language_is_well_formed(void *iface, HSTRING tag, boolean *out) { return answer_flag(out, language_well_formed(tag)); }
+
+/* The input method follows the user's language: the host's keyboard does not name one of its own. */
+static HRESULT WINAPI language_input_tag(void *iface, HSTRING *out)
+{
+	WCHAR name[LOCALE_NAME_MAX_LENGTH];
+	if (!out)
+		return E_POINTER;
+	const int length = GetUserDefaultLocaleName(name, ARRAYSIZE(name));
+	return WindowsCreateString(name, length > 0 ? length - 1 : 0, out);
+}
+
+static HRESULT WINAPI language_set_input_tag(void *iface, HSTRING tag, boolean *out) { return answer_flag(out, FALSE); }
+
+TABLE(language_factory_table, 0, FACTORY);
+TABLE(language_create_table, 1, INSPECTABLE, (const void *)language_create);
+TABLE(language_statics_table, 2, INSPECTABLE, (const void *)language_is_well_formed, (const void *)language_input_tag);
+TABLE(language_statics2_table, 3, INSPECTABLE, (const void *)language_set_input_tag);
+static const struct face_iid language_factory_iids[] = {{&iid_factory, 0}, {&iid_language_factory, 1}, {&iid_language_statics, 2},
+	{&iid_language_statics2, 3}, {NULL, 0}};
+static const struct kind language_factory_kind = {"Language", L"Windows.Globalization.Language", language_factory_iids, NULL};
+static struct object language_factory = {{language_factory_table.slots, language_create_table.slots, language_statics_table.slots,
+	language_statics2_table.slots}, &language_factory_kind, 1};
+
+static struct object *const classes[] = {&language_factory, &retail_info, &shared_mode, &analytics_info, &network_information, &online_id, &ticket_request_factory, &web_core,
 	&core_application};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
