@@ -109,7 +109,7 @@ def main():
     user_flags = ["-O2", "-w", "-fno-builtin", "-D_USER32_", "-D_WIN32_WINNT=0x600", "-DWINVER=0x600", "-DOEMRESOURCE", "-DUNICODE", "-D_UNICODE",
                   f"-ffile-prefix-map={repo}=raven", "-I" + str(own_user32)]
     user_sources = [own_user32 / name for name in ("button.c", "chars.c", "classes.c", "combo.c", "crt.c", "dialog.c", "draw.c", "edit.c", "listbox.c",
-                                                   "messagebox.c", "scrollbar.c", "static.c", "text.c")]
+                                                   "mdi.c", "messagebox.c", "scrollbar.c", "static.c", "text.c")]
 
     def compile_user(path):
         run([triple + "-gcc", "-c", *user_flags, path, "-o", objects / ("user32_" + path.stem + ".o")])
@@ -133,7 +133,7 @@ def main():
     # The shell component is Raven code on the public headers: the file dialogs and the class registries of COM and the Windows Runtime.
     shell_support = repo / "native/upstream/raven-shell"
     shell_objects = [objects / "shell.o", objects / "shell_link.o", objects / "shell_com.o", objects / "shell_crt.o", objects / "shell_stream.o", objects / "shell_dialog.o",
-                     objects / "shell_netaddress.o", objects / "shell_winrt.o", objects / "shell_knownfolder.o"]
+                     objects / "shell_netaddress.o", objects / "shell_winrt.o", objects / "shell_knownfolder.o", objects / "shell_rot.o"]
     shell_flags = ["-O2", "-w", "-ffreestanding", f"-ffile-prefix-map={repo}=raven"]
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "shell.c", "-o", shell_objects[0]])
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "link.c", "-o", shell_objects[1]])
@@ -144,8 +144,9 @@ def main():
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "netaddress.c", "-o", shell_objects[6]])
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "winrt.c", "-o", shell_objects[7]])
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "knownfolder.c", "-o", shell_objects[8]])
+    run([triple + "-gcc", "-c", *shell_flags, shell_support / "rot.c", "-o", shell_objects[9]])
     shell_defined = decorated(shell_objects)
-    shell_names = ("CoCreateInstance", "CoCreateInstanceEx", "CoGetClassObject", "CoGetTreatAsClass", "CoGetMalloc", "SHCreateItemFromParsingName", "SHGetPropertyStoreForWindow", "PropVariantClear", "SHAppBarMessage", "GetOpenFileNameW", "GetSaveFileNameW", "CommDlgExtendedError", "GetFileTitleW", "IUnknown_QueryService", "QISearch", "CLSIDFromProgID",
+    shell_names = ("GetRunningObjectTable", "CreateItemMoniker", "CoCreateInstance", "CoCreateInstanceEx", "CoGetClassObject", "CoGetTreatAsClass", "CoGetMalloc", "SHCreateItemFromParsingName", "SHGetPropertyStoreForWindow", "PropVariantClear", "SHAppBarMessage", "GetOpenFileNameW", "GetSaveFileNameW", "CommDlgExtendedError", "GetFileTitleW", "IUnknown_QueryService", "QISearch", "CLSIDFromProgID",
                    "SHCreateStreamOnFileA", "SHCreateStreamOnFileW", "SHCreateStreamOnFileEx", "SHCreateMemStream", "PropVariantCopy", "CoGetContextToken", "CoGetObjectContext", "ExtractIconExW", "ExtractIconW", "UiaGetReservedNotSupportedValue", "UiaGetReservedMixedAttributeValue", "SHGetMalloc",
                    "OpenRegStream", "SHOpenRegStreamW", "SHOpenRegStreamA", "SHOpenRegStream2W", "SHOpenRegStream2A", "InitNetworkAddressControl",
                    "RoGetActivationFactory", "RoActivateInstance", "CoCreateFreeThreadedMarshaler")

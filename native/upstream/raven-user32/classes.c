@@ -13,6 +13,7 @@ LRESULT WINAPI RavenStaticProcW(HWND window, UINT message, WPARAM wparam, LPARAM
 LRESULT WINAPI RavenListBoxProcW(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 LRESULT WINAPI RavenComboProcW(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 LRESULT WINAPI RavenEditProcW(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+LRESULT WINAPI RavenMdiClientProcW(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
 /* Registers the built-in window classes whose window procedures live in this component. */
 
@@ -43,6 +44,7 @@ BOOL WINAPI RavenInitControls(VOID)
 		{L"ComboLBox", RavenListBoxProcW, CS_DBLCLKS | CS_SAVEBITS},
 		{L"ComboBox", RavenComboProcW, CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC},
 		{L"Edit", RavenEditProcW, CS_DBLCLKS | CS_PARENTDC},
+		{L"MDIClient", RavenMdiClientProcW, 0},
 	};
 	for (index = 0; index < sizeof own_classes / sizeof own_classes[0]; ++index) {
 		ZeroMemory(&definition, sizeof definition);

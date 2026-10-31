@@ -23,8 +23,13 @@ CreateDialogIndirectParamAorW
 CreateDialogIndirectParamW
 CreateDialogParamA
 CreateDialogParamW
+CreateMDIWindowW
 DefDlgProcA
 DefDlgProcW
+DefFrameProcA
+DefFrameProcW
+DefMDIChildProcA
+DefMDIChildProcW
 DialogBoxIndirectParamA
 DialogBoxIndirectParamAorW
 DialogBoxIndirectParamW
@@ -89,6 +94,7 @@ OemToCharA
 OemToCharBuffA
 OemToCharBuffW
 OemToCharW
+RavenInitControls
 SendDlgItemMessageA
 SendDlgItemMessageW
 SetDlgItemInt
@@ -96,4 +102,4 @@ SetDlgItemTextA
 SetDlgItemTextW
 TabbedTextOutA
 TabbedTextOutW
-RavenInitControls
+TranslateMDISysAccel
