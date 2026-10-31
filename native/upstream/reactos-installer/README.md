@@ -19,6 +19,8 @@ programs and, with `--arch x86`, for 32-bit ones:
   `sdk/lib/3rdparty/libxml2` and `dll/3rdparty/libxslt`, and `atl100.dll`, Raven's own from [`native/upstream/raven-atl100`](../raven-atl100/README.md);
 - `urlmon.dll`: Raven's own from [`native/upstream/raven-urlmon`](../raven-urlmon/README.md): URLs, monikers
   and the protocols behind them;
+- `riched20.dll`: Raven's own from [`native/upstream/raven-riched20`](../raven-riched20/README.md): the rich
+  edit control and its object model;
 - the imaging stack: `windowscodecs.dll` (Raven's own, from
   [`native/upstream/raven-windowscodecs`](../raven-windowscodecs/README.md)), `gdiplus.dll` (Raven's own, from
   [`native/upstream/raven-gdiplus`](../raven-gdiplus/README.md)), `mlang.dll` (Raven's own, from

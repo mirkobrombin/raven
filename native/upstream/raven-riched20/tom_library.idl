@@ -1,0 +1,266 @@
+/* SPDX-License-Identifier: MIT */
+// The text object model as automation sees it. The order of each interface is its table in tom.c and tomformat.c.
+import "oaidl.idl";
+
+[
+	uuid(8cc497c9-a1df-11ce-8098-00aa0047be5d),
+	version(1.0),
+	helpstring("Text object model")
+]
+library tom
+{
+	importlib("stdole2.tlb");
+
+	interface ITextDocument;
+	interface ITextRange;
+	interface ITextSelection;
+	interface ITextFont;
+	interface ITextPara;
+	interface ITextStoryRanges;
+
+	[
+		object,
+		uuid(8cc497c0-a1df-11ce-8098-00aa0047be5d),
+		dual,
+		oleautomation
+	]
+	interface ITextDocument : IDispatch
+	{
+		[id(DISPID_VALUE), propget] HRESULT Name([out, retval] BSTR *value);
+		[propget] HRESULT Selection([out, retval] ITextSelection **value);
+		[propget] HRESULT StoryCount([out, retval] LONG *value);
+		[propget] HRESULT StoryRanges([out, retval] ITextStoryRanges **value);
+		[propget] HRESULT Saved([out, retval] LONG *value);
+		[propput] HRESULT Saved([in] LONG value);
+		[propget] HRESULT DefaultTabStop([out, retval] float *value);
+		[propput] HRESULT DefaultTabStop([in] float value);
+		HRESULT New(void);
+		HRESULT Open([in] VARIANT *file, [in] LONG flags, [in] LONG code_page);
+		HRESULT Save([in] VARIANT *file, [in] LONG flags, [in] LONG code_page);
+		HRESULT Freeze([out, retval] LONG *result);
+		HRESULT Unfreeze([out, retval] LONG *result);
+		HRESULT BeginEditCollection(void);
+		HRESULT EndEditCollection(void);
+		HRESULT Undo([in] LONG count, [out, retval] LONG *result);
+		HRESULT Redo([in] LONG count, [out, retval] LONG *result);
+		HRESULT Range([in] LONG first, [in] LONG last, [out, retval] ITextRange **result);
+		HRESULT RangeFromPoint([in] LONG x, [in] LONG y, [out, retval] ITextRange **result);
+	}
+
+	[
+		object,
+		uuid(8cc497c2-a1df-11ce-8098-00aa0047be5d),
+		dual,
+		oleautomation
+	]
+	interface ITextRange : IDispatch
+	{
+		[id(DISPID_VALUE), propget] HRESULT Text([out, retval] BSTR *value);
+		[id(DISPID_VALUE), propput] HRESULT Text([in] BSTR value);
+		[propget] HRESULT Char([out, retval] LONG *value);
+		[propput] HRESULT Char([in] LONG value);
+		[propget] HRESULT Duplicate([out, retval] ITextRange **value);
+		[propget] HRESULT FormattedText([out, retval] ITextRange **value);
+		[propput] HRESULT FormattedText([in] ITextRange *value);
+		[propget] HRESULT Start([out, retval] LONG *value);
+		[propput] HRESULT Start([in] LONG value);
+		[propget] HRESULT End([out, retval] LONG *value);
+		[propput] HRESULT End([in] LONG value);
+		[propget] HRESULT Font([out, retval] ITextFont **value);
+		[propput] HRESULT Font([in] ITextFont *value);
+		[propget] HRESULT Para([out, retval] ITextPara **value);
+		[propput] HRESULT Para([in] ITextPara *value);
+		[propget] HRESULT StoryLength([out, retval] LONG *value);
+		[propget] HRESULT StoryType([out, retval] LONG *value);
+		HRESULT Collapse([in] LONG start);
+		HRESULT Expand([in] LONG unit, [out, retval] LONG *result);
+		HRESULT GetIndex([in] LONG unit, [out, retval] LONG *result);
+		HRESULT SetIndex([in] LONG unit, [in] LONG index, [in] LONG extend);
+		HRESULT SetRange([in] LONG active, [in] LONG other);
+		HRESULT InRange([in] ITextRange *other, [out, retval] LONG *result);
+		HRESULT InStory([in] ITextRange *other, [out, retval] LONG *result);
+		HRESULT IsEqual([in] ITextRange *other, [out, retval] LONG *result);
+		HRESULT Select(void);
+		HRESULT StartOf([in] LONG unit, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT EndOf([in] LONG unit, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT Move([in] LONG unit, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveStart([in] LONG unit, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveEnd([in] LONG unit, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveWhile([in] VARIANT *set, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveStartWhile([in] VARIANT *set, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveEndWhile([in] VARIANT *set, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveUntil([in] VARIANT *set, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveStartUntil([in] VARIANT *set, [in] LONG count, [out, retval] LONG *result);
+		HRESULT MoveEndUntil([in] VARIANT *set, [in] LONG count, [out, retval] LONG *result);
+		HRESULT FindText([in] BSTR text, [in] LONG count, [in] LONG flags, [out, retval] LONG *result);
+		HRESULT FindTextStart([in] BSTR text, [in] LONG count, [in] LONG flags, [out, retval] LONG *result);
+		HRESULT FindTextEnd([in] BSTR text, [in] LONG count, [in] LONG flags, [out, retval] LONG *result);
+		HRESULT Delete([in] LONG unit, [in] LONG count, [out, retval] LONG *result);
+		HRESULT Cut([in, out] VARIANT *data);
+		HRESULT Copy([in, out] VARIANT *data);
+		HRESULT Paste([in] VARIANT *data, [in] LONG format);
+		HRESULT CanPaste([in] VARIANT *data, [in] LONG format, [out, retval] LONG *result);
+		HRESULT CanEdit([out, retval] LONG *result);
+		HRESULT ChangeCase([in] LONG type);
+		HRESULT GetPoint([in] LONG type, [out] LONG *x, [out] LONG *y);
+		HRESULT SetPoint([in] LONG x, [in] LONG y, [in] LONG type, [in] LONG extend);
+		HRESULT ScrollIntoView([in] LONG value);
+		HRESULT GetEmbeddedObject([out, retval] IUnknown **result);
+	}
+
+	[
+		object,
+		uuid(8cc497c1-a1df-11ce-8098-00aa0047be5d),
+		dual,
+		oleautomation
+	]
+	interface ITextSelection : ITextRange
+	{
+		[propget] HRESULT Flags([out, retval] LONG *value);
+		[propput] HRESULT Flags([in] LONG value);
+		[propget] HRESULT Type([out, retval] LONG *value);
+		HRESULT MoveLeft([in] LONG unit, [in] LONG count, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT MoveRight([in] LONG unit, [in] LONG count, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT MoveUp([in] LONG unit, [in] LONG count, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT MoveDown([in] LONG unit, [in] LONG count, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT HomeKey([in] LONG unit, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT EndKey([in] LONG unit, [in] LONG extend, [out, retval] LONG *result);
+		HRESULT TypeText([in] BSTR text);
+	}
+
+	[
+		object,
+		uuid(8cc497c3-a1df-11ce-8098-00aa0047be5d),
+		dual,
+		oleautomation
+	]
+	interface ITextFont : IDispatch
+	{
+		[id(DISPID_VALUE), propget] HRESULT Duplicate([out, retval] ITextFont **value);
+		[id(DISPID_VALUE), propput] HRESULT Duplicate([in] ITextFont *value);
+		HRESULT CanChange([out, retval] LONG *result);
+		HRESULT IsEqual([in] ITextFont *other, [out, retval] LONG *result);
+		HRESULT Reset([in] LONG value);
+		[propget] HRESULT Style([out, retval] LONG *value);
+		[propput] HRESULT Style([in] LONG value);
+		[propget] HRESULT AllCaps([out, retval] LONG *value);
+		[propput] HRESULT AllCaps([in] LONG value);
+		[propget] HRESULT Animation([out, retval] LONG *value);
+		[propput] HRESULT Animation([in] LONG value);
+		[propget] HRESULT BackColor([out, retval] LONG *value);
+		[propput] HRESULT BackColor([in] LONG value);
+		[propget] HRESULT Bold([out, retval] LONG *value);
+		[propput] HRESULT Bold([in] LONG value);
+		[propget] HRESULT Emboss([out, retval] LONG *value);
+		[propput] HRESULT Emboss([in] LONG value);
+		[propget] HRESULT ForeColor([out, retval] LONG *value);
+		[propput] HRESULT ForeColor([in] LONG value);
+		[propget] HRESULT Hidden([out, retval] LONG *value);
+		[propput] HRESULT Hidden([in] LONG value);
+		[propget] HRESULT Engrave([out, retval] LONG *value);
+		[propput] HRESULT Engrave([in] LONG value);
+		[propget] HRESULT Italic([out, retval] LONG *value);
+		[propput] HRESULT Italic([in] LONG value);
+		[propget] HRESULT Kerning([out, retval] float *value);
+		[propput] HRESULT Kerning([in] float value);
+		[propget] HRESULT LanguageID([out, retval] LONG *value);
+		[propput] HRESULT LanguageID([in] LONG value);
+		[propget] HRESULT Name([out, retval] BSTR *value);
+		[propput] HRESULT Name([in] BSTR value);
+		[propget] HRESULT Outline([out, retval] LONG *value);
+		[propput] HRESULT Outline([in] LONG value);
+		[propget] HRESULT Position([out, retval] float *value);
+		[propput] HRESULT Position([in] float value);
+		[propget] HRESULT Protected([out, retval] LONG *value);
+		[propput] HRESULT Protected([in] LONG value);
+		[propget] HRESULT Shadow([out, retval] LONG *value);
+		[propput] HRESULT Shadow([in] LONG value);
+		[propget] HRESULT Size([out, retval] float *value);
+		[propput] HRESULT Size([in] float value);
+		[propget] HRESULT SmallCaps([out, retval] LONG *value);
+		[propput] HRESULT SmallCaps([in] LONG value);
+		[propget] HRESULT Spacing([out, retval] float *value);
+		[propput] HRESULT Spacing([in] float value);
+		[propget] HRESULT StrikeThrough([out, retval] LONG *value);
+		[propput] HRESULT StrikeThrough([in] LONG value);
+		[propget] HRESULT Subscript([out, retval] LONG *value);
+		[propput] HRESULT Subscript([in] LONG value);
+		[propget] HRESULT Superscript([out, retval] LONG *value);
+		[propput] HRESULT Superscript([in] LONG value);
+		[propget] HRESULT Underline([out, retval] LONG *value);
+		[propput] HRESULT Underline([in] LONG value);
+		[propget] HRESULT Weight([out, retval] LONG *value);
+		[propput] HRESULT Weight([in] LONG value);
+	}
+
+	[
+		object,
+		uuid(8cc497c4-a1df-11ce-8098-00aa0047be5d),
+		dual,
+		oleautomation
+	]
+	interface ITextPara : IDispatch
+	{
+		[id(DISPID_VALUE), propget] HRESULT Duplicate([out, retval] ITextPara **value);
+		[id(DISPID_VALUE), propput] HRESULT Duplicate([in] ITextPara *value);
+		HRESULT CanChange([out, retval] LONG *result);
+		HRESULT IsEqual([in] ITextPara *other, [out, retval] LONG *result);
+		HRESULT Reset([in] LONG value);
+		[propget] HRESULT Style([out, retval] LONG *value);
+		[propput] HRESULT Style([in] LONG value);
+		[propget] HRESULT Alignment([out, retval] LONG *value);
+		[propput] HRESULT Alignment([in] LONG value);
+		[propget] HRESULT Hyphenation([out, retval] LONG *value);
+		[propput] HRESULT Hyphenation([in] LONG value);
+		[propget] HRESULT FirstLineIndent([out, retval] float *value);
+		[propget] HRESULT KeepTogether([out, retval] LONG *value);
+		[propput] HRESULT KeepTogether([in] LONG value);
+		[propget] HRESULT KeepWithNext([out, retval] LONG *value);
+		[propput] HRESULT KeepWithNext([in] LONG value);
+		[propget] HRESULT LeftIndent([out, retval] float *value);
+		[propget] HRESULT LineSpacing([out, retval] float *value);
+		[propget] HRESULT LineSpacingRule([out, retval] LONG *value);
+		[propget] HRESULT ListAlignment([out, retval] LONG *value);
+		[propput] HRESULT ListAlignment([in] LONG value);
+		[propget] HRESULT ListLevelIndex([out, retval] LONG *value);
+		[propput] HRESULT ListLevelIndex([in] LONG value);
+		[propget] HRESULT ListStart([out, retval] LONG *value);
+		[propput] HRESULT ListStart([in] LONG value);
+		[propget] HRESULT ListTab([out, retval] float *value);
+		[propput] HRESULT ListTab([in] float value);
+		[propget] HRESULT ListType([out, retval] LONG *value);
+		[propput] HRESULT ListType([in] LONG value);
+		[propget] HRESULT NoLineNumber([out, retval] LONG *value);
+		[propput] HRESULT NoLineNumber([in] LONG value);
+		[propget] HRESULT PageBreakBefore([out, retval] LONG *value);
+		[propput] HRESULT PageBreakBefore([in] LONG value);
+		[propget] HRESULT RightIndent([out, retval] float *value);
+		[propput] HRESULT RightIndent([in] float value);
+		HRESULT SetIndents([in] float first, [in] float left, [in] float right);
+		HRESULT SetLineSpacing([in] LONG rule, [in] float spacing);
+		[propget] HRESULT SpaceAfter([out, retval] float *value);
+		[propput] HRESULT SpaceAfter([in] float value);
+		[propget] HRESULT SpaceBefore([out, retval] float *value);
+		[propput] HRESULT SpaceBefore([in] float value);
+		[propget] HRESULT WidowControl([out, retval] LONG *value);
+		[propput] HRESULT WidowControl([in] LONG value);
+		[propget] HRESULT TabCount([out, retval] LONG *value);
+		HRESULT AddTab([in] float position, [in] LONG alignment, [in] LONG leader);
+		HRESULT ClearAllTabs(void);
+		HRESULT DeleteTab([in] float position);
+		HRESULT GetTab([in] LONG index, [out] float *position, [out] LONG *alignment, [out] LONG *leader);
+	}
+
+	[
+		object,
+		uuid(8cc497c5-a1df-11ce-8098-00aa0047be5d),
+		dual,
+		oleautomation
+	]
+	interface ITextStoryRanges : IDispatch
+	{
+		HRESULT _NewEnum([out, retval] IUnknown **result);
+		HRESULT Item([in] LONG index, [out, retval] ITextRange **result);
+		[propget] HRESULT Count([out, retval] LONG *value);
+	}
+}
