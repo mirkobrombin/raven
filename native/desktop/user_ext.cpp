@@ -614,7 +614,8 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 			call.ret(key_characters(code).first ? std::toupper(key_characters(code).first) : 0);
 		}
 	});
-	registry.add("VkKeyScanW", 1, [](ApiCall &call) {
+	// There is one keyboard layout, whichever layout VkKeyScanEx names.
+	const auto key_scan = [](ApiCall &call) {
 		const char16_t c = char16_t(call.u32(0));
 		for (uint32_t vk = 8; vk < 0xe0; ++vk) {
 			const auto pair = key_characters(vk);
@@ -628,7 +629,9 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 			}
 		}
 		call.ret(0xffff);
-	});
+	};
+	registry.add("VkKeyScanW", 1, key_scan);
+	registry.add("VkKeyScanExW", 2, key_scan);
 	registry.add("GetKeyNameTextW", 3, [](ApiCall &call) {
 		const uint32_t scan = (call.u32(0) >> 16) & 0xff;
 		const bool extended = call.u32(0) & (1U << 24);
@@ -1102,6 +1105,25 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		case 0x1022: case 0x1026: case 0x1042: answer(0); return;
 		case 0x0a: case 0x0d: answer(500); return;
 		case 0x0b: answer(0); return;
+		// SPI_GETHIGHCONTRAST and SPI_GETANIMATION fill structures whose first field is their size: no high contrast, no minimize animation.
+		case 0x42:
+			if (pointer) {
+				call.store<uint32_t>(pointer + 4, 0);
+				call.store<uint64_t>(pointer + 8, 0);
+			}
+			call.ret(1);
+			return;
+		case 0x48:
+			if (pointer)
+				call.store<uint32_t>(pointer + 4, 0);
+			call.ret(1);
+			return;
+		// No screen reader, no menu animation, the drop shadow family off.
+		case 0x46: case 0x1002: case 0x103e: answer(0); return;
+		case 0x66: answer(400); return;
+		case 0x2006: answer(1); return;
+		case 0x200a: answer(2); return;
+		case 0x200c: answer(1400); return;
 		default:
 			call.ret(1);
 		}

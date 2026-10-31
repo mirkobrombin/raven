@@ -916,6 +916,13 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	});
 	// Layered window attributes are kept per window for GetLayeredWindowAttributes; the compositor draws windows opaque.
 	auto layered = std::make_shared<std::map<uint64_t, std::array<uint32_t, 3>>>();
+	registry.add("UpdateLayeredWindow", 9, [this](ApiCall &call) {
+		if (!objects.window(call[0])) {
+			call.fail(1400);
+			return;
+		}
+		call.ret(1);
+	});
 	registry.add("SetLayeredWindowAttributes", 4, [this, layered](ApiCall &call) {
 		if (!objects.window(call[0])) {
 			call.fail(1400);
@@ -936,6 +943,35 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 		call.ret(1);
 	});
 	// Of the attributes the compositor keeps for a window, the dark frame changes what is drawn; the others are accepted and ignored.
+	// The attributes a program reads to place its own caption: the composition is on, nothing is cloaked, the frame is the window
+	// and the caption buttons sit in its top right corner, in window coordinates. Others are refused, as for an unknown attribute.
+	registry.add("DwmGetWindowAttribute", 4, [this](ApiCall &call) {
+		const auto *window = objects.window(call[0]);
+		if (!window) {
+			call.ret(0x80070006U);
+			return;
+		}
+		const uint32_t attribute = call.u32(1), size = call.u32(3);
+		const auto rect = [&](int32_t left, int32_t top, int32_t right, int32_t bottom) {
+			const int32_t values[] = {left, top, right, bottom};
+			call.write(call[2], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(values), sizeof(values)));
+			call.ret(0);
+		};
+		if (attribute == 1 && size >= 4) {
+			call.store<uint32_t>(call[2], 1);
+			call.ret(0);
+		} else if (attribute == 14 && size >= 4) {
+			call.store<uint32_t>(call[2], 0);
+			call.ret(0);
+		} else if (attribute == 5 && size >= 16) {
+			constexpr int32_t buttons_width = 138, buttons_height = 30;
+			rect(std::max(window->width - buttons_width, 0), 0, window->width, buttons_height);
+		} else if (attribute == 9 && size >= 16) {
+			rect(window->x, window->y, window->x + window->width, window->y + window->height);
+		} else {
+			call.ret(0x80070057U);
+		}
+	});
 	registry.add("DwmSetWindowAttribute", 4, [this](ApiCall &call) {
 		auto *window = objects.window(call[0]);
 		if (!window) {

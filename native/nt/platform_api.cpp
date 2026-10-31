@@ -303,9 +303,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("BufferedPaintStopAllAnimations", 1, [](ApiCall &call) { call.ret(s_ok); });
 	registry.add("BufferedPaintRenderAnimation", 2, [](ApiCall &call) { call.ret(0); });
 
-	// dwmapi: attribute reads are refused; setting attributes and the frame extended into the client area are the desktop's
-	// (window_manager.cpp).
-	registry.add("DwmGetWindowAttribute", 4, [](ApiCall &call) { call.ret(e_invalidarg); });
+	// dwmapi: attributes and the frame extended into the client area are the desktop's (window_manager.cpp).
 	// Composition is always on since Windows 8.
 	registry.add("DwmIsCompositionEnabled", 1, [](ApiCall &call) {
 		call.store<uint32_t>(call[0], 1);
@@ -752,6 +750,13 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		if (call[4]) call.store_pointer(call[4], 0);
 		call.ret(class_not_registered);
 	});
+	// A program offering its own classes to others: nobody else asks here, so the offer only needs a cookie to take back.
+	registry.add("CoRegisterClassObject", 5, [](ApiCall &call) {
+		static std::atomic<uint32_t> cookies{1};
+		if (call[4]) call.store<uint32_t>(call[4], cookies++);
+		call.ret(0);
+	});
+	registry.add("CoRevokeClassObject", 1, [](ApiCall &call) { call.ret(0); });
 	registry.add("CoGetClassObject", 5, [](ApiCall &call) {
 		if (call[4]) call.store_pointer(call[4], 0);
 		call.ret(class_not_registered);
@@ -1258,6 +1263,8 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	// is often the reason a program gave up.
 	struct EventSource : KernelObject {};
 	for (const bool wide : {true, false}) {
+		// There is no log to read: as Windows does for a log it does not have, opening one fails.
+		registry.add(wide ? "OpenEventLogW" : "OpenEventLogA", 2, [](ApiCall &call) { call.fail(1502, 0); });
 		registry.add(wide ? "RegisterEventSourceW" : "RegisterEventSourceA", 2, [&context](ApiCall &call) {
 			const auto made = context.objects.add_object(std::make_shared<EventSource>());
 			if (made.status) {
