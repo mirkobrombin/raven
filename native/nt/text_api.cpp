@@ -125,11 +125,11 @@ uint32_t as_number(const std::u16string &text)
 	return value;
 }
 
-// Reads a counted or zero-terminated UTF-16 argument; a count of -1 means "until the terminator".
+// Reads a counted or zero-terminated UTF-16 argument; a count of -1 means "until the terminator", however far that is.
 std::u16string counted_wide(ApiCall &call, uint64_t address, int32_t count)
 {
 	if (count < 0)
-		return call.wide(address);
+		return call.wide(address, size_t(INT32_MAX));
 	const auto bytes = call.read(address, size_t(count) * 2);
 	std::u16string text(size_t(count), u'\0');
 	std::memcpy(text.data(), bytes.data(), bytes.size());
