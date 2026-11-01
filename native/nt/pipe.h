@@ -45,13 +45,14 @@ public:
 		record.descriptor = descriptor;
 		record.access = access;
 		record.flags = flags;
-		record.bits = (message_mode ? 1U : 0U) | (server ? 2U : 0U);
+		record.bits = (message_mode ? 1U : 0U) | (server ? 2U : 0U) | (read_messages ? 4U : 0U);
 		record.text = name;
 		return true;
 	}
 	bool overlapped() const { return flags & 0x40000000U; }
 	std::shared_ptr<PipeListener> listener;
-	bool server = false, connected = false, message_mode = false, inherit = false;
+	// message_mode is the type of the pipe; read_messages how this handle reads it.
+	bool server = false, connected = false, message_mode = false, read_messages = false, inherit = false;
 	std::u16string name;
 	// The unread rest of a message that did not fit the buffer of the read that took it.
 	std::vector<uint8_t> carry;

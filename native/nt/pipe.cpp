@@ -150,7 +150,9 @@ int attempt(KernelContext &context, PipeObject &pipe, Transfer &transfer, uint32
 			bytes = part;
 			if (part < message.size()) {
 				pipe.carry.assign(message.begin() + ptrdiff_t(part), message.end());
-				error = error_more_data;
+				// Only a handle that reads messages hears that one did not fit: in byte mode the rest is simply the next bytes.
+				if (pipe.read_messages)
+					error = error_more_data;
 			}
 			return 0;
 		}
@@ -263,7 +265,7 @@ Started start_overlapped(KernelContext &context, size_t width, const std::shared
 		if (!finished)
 			return false;
 		state.pending.erase(std::remove(state.pending.begin(), state.pending.end(), io), state.pending.end());
-		finish_io(context, port, key, overlapped, width, error, bytes, !native, event);
+		finish_io(context, pipe ? pipe->port : port, pipe ? pipe->key : key, overlapped, width, error, bytes, !native, event);
 		return true;
 	}, pipe->descriptor, short(shared->reading ? POLLIN : POLLOUT));
 	return {true, 0, 0};
@@ -273,6 +275,7 @@ std::shared_ptr<PipeObject> make_client(int descriptor, uint32_t access, uint32_
 {
 	auto pipe = std::make_shared<PipeObject>(descriptor, access, flags);
 	pipe->connected = true;
+	// A client starts in byte read mode whatever the pipe's type, until SetNamedPipeHandleState says otherwise.
 	pipe->message_mode = type == SOCK_SEQPACKET;
 	pipe->name = name;
 	return pipe;
@@ -529,6 +532,7 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 		pipe->server = true;
 		pipe->listener = listener;
 		pipe->message_mode = message;
+		pipe->read_messages = message && (type & 2);
 		pipe->name = *name;
 		pipe->inherit = inheritable_handle(call, call[7]);
 		++listener->instances;
@@ -586,7 +590,8 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 			else if (!ensure_pipe_connected(*pipe))
 				return false;
 			state.pending.erase(std::remove(state.pending.begin(), state.pending.end(), io), state.pending.end());
-			finish_io(context, port, key, overlapped, width, error, 0);
+			// The port is the one bound when the operation ends: a program may bind it after starting the wait.
+			finish_io(context, pipe ? pipe->port : port, pipe ? pipe->key : key, overlapped, width, error, 0);
 			return true;
 		}, pipe->listener ? pipe->listener->descriptor : -1, short(POLLIN));
 		call.fail(error_io_pending);
@@ -623,7 +628,7 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (call[1])
-			pipe->message_mode = pipe->message_mode && (call.load<uint32_t>(call[1]) & 2);
+			pipe->read_messages = pipe->message_mode && (call.load<uint32_t>(call[1]) & 2);
 		call.ret(1);
 	});
 	registry.add("GetNamedPipeInfo", 5, [pipe_of](ApiCall &call) {
@@ -649,7 +654,7 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (call[1])
-			call.store<uint32_t>(call[1], pipe->message_mode ? 2 : 0);
+			call.store<uint32_t>(call[1], pipe->read_messages ? 2 : 0);
 		if (call[2])
 			call.store<uint32_t>(call[2], pipe->listener ? pipe->listener->instances : 1);
 		if (call[3])

@@ -196,6 +196,51 @@ int raven_entry(void)
 	if (ReadFile(read_end, buffer, 16, &count, NULL) || GetLastError() != ERROR_BROKEN_PIPE)
 		return 51;
 	CloseHandle(read_end);
+	/* A completion port bound after the wait started still hears of the connection. */
+	{
+		OVERLAPPED wait = {0}, *done = NULL;
+		ULONG_PTR key = 0;
+		HANDLE late_port;
+		server = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE, 1, 64, 64, 0, NULL);
+		if (server == INVALID_HANDLE_VALUE)
+			return 54;
+		if (ConnectNamedPipe(server, &wait) || GetLastError() != ERROR_IO_PENDING)
+			return 55;
+		late_port = CreateIoCompletionPort(server, NULL, 7, 0);
+		if (!late_port)
+			return 56;
+		client = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+		if (client == INVALID_HANDLE_VALUE)
+			return 57;
+		if (!GetQueuedCompletionStatus(late_port, &count, &key, &done, 5000) || key != 7 || done != &wait)
+			return 58;
+		CloseHandle(client);
+		CloseHandle(server);
+		CloseHandle(late_port);
+	}
+	/* A client of a message pipe reads bytes until it asks otherwise: a short read is no error, and the rest follows. */
+	server = CreateNamedPipeW(message_name, PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1, 4096, 4096, 0, NULL);
+	if (server == INVALID_HANDLE_VALUE)
+		return 59;
+	client = CreateFileW(message_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (client == INVALID_HANDLE_VALUE)
+		return 60;
+	if (!WriteFile(server, "abcdef", 6, &count, NULL) || count != 6)
+		return 61;
+	SetLastError(0);
+	if (!ReadFile(client, buffer, 4, &count, NULL) || count != 4 || !same(buffer, "abcd", 4))
+		return 62;
+	if (!ReadFile(client, buffer, 4, &count, NULL) || count != 2 || !same(buffer, "ef", 2))
+		return 63;
+	/* The server asked for messages when it made the pipe, so it hears that one did not fit. */
+	if (!WriteFile(client, "ghijkl", 6, &count, NULL) || count != 6)
+		return 64;
+	if (ReadFile(server, buffer, 4, &count, NULL) || GetLastError() != ERROR_MORE_DATA || count != 4)
+		return 65;
+	if (!ReadFile(server, buffer, 4, &count, NULL) || count != 2 || !same(buffer, "kl", 2))
+		return 66;
+	CloseHandle(client);
+	CloseHandle(server);
 	/* A pipe nobody serves cannot be opened. */
 	error = 0;
 	if (CreateFileW(name, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL) != INVALID_HANDLE_VALUE)

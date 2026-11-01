@@ -118,6 +118,7 @@ std::shared_ptr<KernelObject> object_from_record(const InheritedHandle &item)
 		auto pipe = std::make_shared<PipeObject>(item.descriptor, item.access, item.flags);
 		pipe->connected = true;
 		pipe->message_mode = item.bits & 1;
+		pipe->read_messages = item.bits & 4;
 		pipe->server = item.bits & 2;
 		pipe->inherit = true;
 		pipe->name = item.text;
