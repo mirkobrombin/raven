@@ -275,6 +275,14 @@ public:
 			uint64_t rsp = 0;
 			std::memcpy(&rsp, origin.data() + 0x98, 8);
 			describe_record(record, rsp);
+			// The integer registers of the context, in its own order: Rax to Rdi and R8 to R15, without Rsp.
+			if (le32(record, 0) == 0xc0000005U) {
+				std::fprintf(stderr, "raven:   registers");
+				for (size_t offset = 0x78; offset <= 0xf0; offset += 8)
+					if (offset != 0x98)
+						std::fprintf(stderr, " %llx", (unsigned long long)load64(origin, offset));
+				std::fprintf(stderr, "\n");
+			}
 			if (le32(record, 0) == 0xe06d7363U && le32(record, 0x18) >= 4) {
 				// A C++ exception names the types it can be caught as, from its throw information, and shows the start of the thrown object.
 				try {
