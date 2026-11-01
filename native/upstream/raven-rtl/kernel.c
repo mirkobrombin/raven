@@ -80,31 +80,69 @@ HANDLE WINAPI RavenGetProcessHeap(VOID)
 
 /* A section has a debug record unless its caller asks for none (CRITICAL_SECTION_NO_DEBUG_INFO), as Windows documents and as the runtime's
    32-bit sections have; callers may write into it, as the components built from Wine sources name their sections there. The records live
-   in a heap of their own, made when the first is asked for, so deleting a section gives back only a record that came from there and
-   leaves a program's own, static one alone. Without memory for a record, DebugInfo holds -1, as for a section without one. */
-static PVOID section_records;
+   in a pool of their own outside the process's list of heaps, as Windows keeps them, so deleting a section gives back only a record that
+   came from there and leaves a program's own, static one alone. Without memory for a record, DebugInfo holds -1, as for a section without one. */
+typedef struct section_block {
+	struct section_block *next;
+	RTL_CRITICAL_SECTION_DEBUG records[(0x10000 - sizeof(void *) * 2) / sizeof(RTL_CRITICAL_SECTION_DEBUG)];
+} section_block;
+
+static section_block *section_blocks;
+static PVOID section_free, section_lock;
+static ULONG section_used;
+
+static void lock_sections(void)
+{
+	while (InterlockedCompareExchangePointer(&section_lock, (PVOID)1, NULL))
+		YieldProcessor();
+}
+
+static void unlock_sections(void)
+{
+	InterlockedExchangePointer(&section_lock, NULL);
+}
 
 static PRTL_CRITICAL_SECTION_DEBUG new_section_record(PRTL_CRITICAL_SECTION section)
 {
-	PVOID records = section_records;
-	PRTL_CRITICAL_SECTION_DEBUG record;
-	if (!records) {
-		PVOID made = RtlCreateHeap(HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
-		if (!made)
-			return NULL;
-		records = InterlockedCompareExchangePointer(&section_records, made, NULL);
-		if (records)
-			RtlDestroyHeap(made);
-		else
-			records = made;
+	PRTL_CRITICAL_SECTION_DEBUG record = NULL;
+	lock_sections();
+	if (section_free) {
+		record = section_free;
+		section_free = *(PVOID *)record;
+	} else {
+		if (!section_blocks || section_used == ARRAYSIZE(section_blocks->records)) {
+			PVOID base = NULL;
+			SIZE_T size = sizeof(section_block);
+			if (NT_SUCCESS(ZwAllocateVirtualMemory(CURRENT_PROCESS, &base, 0, &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
+				((section_block *)base)->next = section_blocks;
+				section_blocks = base;
+				section_used = 0;
+			}
+		}
+		if (section_blocks && section_used < ARRAYSIZE(section_blocks->records))
+			record = &section_blocks->records[section_used++];
 	}
-	record = RtlAllocateHeap(records, HEAP_ZERO_MEMORY, sizeof(*record));
+	unlock_sections();
 	if (!record)
 		return NULL;
+	ZeroMemory(record, sizeof(*record));
 	record->Type = RTL_CRITSECT_TYPE;
 	record->CriticalSection = section;
 	record->ProcessLocksList.Flink = record->ProcessLocksList.Blink = &record->ProcessLocksList;
 	return record;
+}
+
+/* Only what the pool handed out goes back to it: a program may give a section a record of its own. */
+static void free_section_record(PRTL_CRITICAL_SECTION_DEBUG record)
+{
+	lock_sections();
+	for (section_block *block = section_blocks; block; block = block->next)
+		if ((BYTE *)record >= (BYTE *)block->records && (BYTE *)record < (BYTE *)(block->records + ARRAYSIZE(block->records))) {
+			*(PVOID *)record = section_free;
+			section_free = record;
+			break;
+		}
+	unlock_sections();
 }
 
 static void init_section(PRTL_CRITICAL_SECTION section, BOOLEAN debug)
@@ -146,9 +184,8 @@ BOOL WINAPI RavenInitializeCriticalSectionEx(PRTL_CRITICAL_SECTION section, ULON
 VOID WINAPI RavenDeleteCriticalSection(PRTL_CRITICAL_SECTION section)
 {
 	PRTL_CRITICAL_SECTION_DEBUG record = section->DebugInfo;
-	/* The heap gives back only what it holds; any other record is not this component's to free. */
-	if (record && record != (PRTL_CRITICAL_SECTION_DEBUG)(LONG_PTR)-1 && section_records)
-		RtlFreeHeap(section_records, 0, record);
+	if (record && record != (PRTL_CRITICAL_SECTION_DEBUG)(LONG_PTR)-1)
+		free_section_record(record);
 	section->DebugInfo = NULL;
 	section->LockCount = -1;
 	section->RecursionCount = 0;
