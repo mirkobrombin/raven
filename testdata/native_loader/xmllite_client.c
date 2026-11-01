@@ -18,6 +18,79 @@ static int contains(const char *text, ULONG size, const char *part)
 	return 0;
 }
 
+/* Programs compare what the reader answers by address: the empty string, a namespace and a prefix are one string each, from the declaration on. */
+static int string_identity(void)
+{
+	static const char document[] = "<elem xmlns=\"myns\" xmlns:p=\"pns\"><p:inner p:attr=\"\"/>text</elem>";
+	static const LARGE_INTEGER start;
+	IStream *stream;
+	IXmlReader *reader;
+	XmlNodeType type;
+	const WCHAR *name, *uri, *empty, *value, *text, *xmlns_name, *pns, *p;
+	if (CreateStreamOnHGlobal(NULL, TRUE, &stream) != S_OK || IStream_Write(stream, document, sizeof document - 1, NULL) != S_OK ||
+		IStream_Seek(stream, start, STREAM_SEEK_SET, NULL) != S_OK || CreateXmlReader(&IID_IXmlReader, (void **)&reader, NULL) != S_OK ||
+		IXmlReader_SetInput(reader, (IUnknown *)stream) != S_OK)
+		return 40;
+	if (IXmlReader_Read(reader, &type) != S_OK || type != XmlNodeType_Element)
+		return 41;
+	IXmlReader_GetValue(reader, &empty, NULL);
+	IXmlReader_GetPrefix(reader, &text, NULL);
+	if (text != empty)
+		return 42;
+	IXmlReader_GetLocalName(reader, &name, NULL);
+	IXmlReader_GetQualifiedName(reader, &text, NULL);
+	IXmlReader_GetNamespaceUri(reader, &uri, NULL);
+	if (text != name)
+		return 43;
+	if (IXmlReader_MoveToNextAttribute(reader) != S_OK)
+		return 44;
+	IXmlReader_GetValue(reader, &value, NULL);
+	IXmlReader_GetPrefix(reader, &text, NULL);
+	IXmlReader_GetLocalName(reader, &xmlns_name, NULL);
+	if (value != uri || text != empty)
+		return 45;
+	IXmlReader_GetQualifiedName(reader, &text, NULL);
+	if (text != xmlns_name)
+		return 46;
+	if (IXmlReader_MoveToNextAttribute(reader) != S_OK)
+		return 47;
+	IXmlReader_GetValue(reader, &pns, NULL);
+	IXmlReader_GetPrefix(reader, &text, NULL);
+	IXmlReader_GetLocalName(reader, &p, NULL);
+	if (text != xmlns_name)
+		return 48;
+	if (IXmlReader_Read(reader, &type) != S_OK || type != XmlNodeType_Element)
+		return 49;
+	IXmlReader_GetPrefix(reader, &text, NULL);
+	IXmlReader_GetNamespaceUri(reader, &value, NULL);
+	if (text != p || value != pns)
+		return 50;
+	if (IXmlReader_MoveToNextAttribute(reader) != S_OK)
+		return 51;
+	IXmlReader_GetPrefix(reader, &text, NULL);
+	IXmlReader_GetNamespaceUri(reader, &value, NULL);
+	if (text != p || value != pns)
+		return 52;
+	IXmlReader_GetValue(reader, &value, NULL);
+	if (value == empty)
+		return 53;
+	if (IXmlReader_Read(reader, &type) != S_OK || type != XmlNodeType_Text)
+		return 54;
+	IXmlReader_GetNamespaceUri(reader, &value, NULL);
+	IXmlReader_GetLocalName(reader, &text, NULL);
+	if (value != empty || text != empty)
+		return 55;
+	if (IXmlReader_Read(reader, &type) != S_OK || type != XmlNodeType_EndElement)
+		return 56;
+	IXmlReader_GetLocalName(reader, &text, NULL);
+	IXmlReader_GetNamespaceUri(reader, &value, NULL);
+	if (text != name || value != uri)
+		return 57;
+	IXmlReader_Release(reader);
+	IStream_Release(stream);
+	return 0;
+}
+
 /* The streaming XML reader and writer: a configuration read node by node from a stream, with an element's attribute and text, and a
  * document written to a stream. */
 int raven_entry(void)
@@ -89,5 +162,5 @@ int raven_entry(void)
 		IStream_Release(output);
 		IStream_Release(input);
 	}
-	return 0;
+	return string_identity();
 }

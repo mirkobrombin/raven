@@ -71,6 +71,10 @@ struct reader
 
 static const WCHAR uri_xml[] = L"http://www.w3.org/XML/1998/namespace";
 static const WCHAR uri_xmlns[] = L"http://www.w3.org/2000/xmlns/";
+/* Programs compare what the reader answers by address, not only by text: every empty answer is one string, the name
+ * xmlns is one string, and a namespace or prefix is the same string wherever it appears, from its declaration on. */
+static WCHAR empty_text[] = L"";
+static WCHAR name_xmlns[] = L"xmlns";
 
 static struct reader *reader_of(IXmlReader *iface)
 {
@@ -391,16 +395,15 @@ static void set_node_name(struct reader *reader, WCHAR *qualified, UINT length, 
 	reader->qualified = qualified;
 	reader->qualified_length = length;
 	reader->prefix_length = prefix_length;
-	reader->prefix = arena_copy(reader, qualified, prefix_length);
+	reader->prefix = prefix_length ? arena_copy(reader, qualified, prefix_length) : empty_text;
 	reader->local = prefix_length ? qualified + prefix_length + 1 : qualified;
 	reader->local_length = prefix_length ? length - prefix_length - 1 : length;
 }
 
 static void set_blank_node(struct reader *reader, XmlNodeType type)
 {
-	static WCHAR nothing[] = L"";
 	reader->type = type;
-	reader->prefix = reader->local = reader->qualified = reader->uri = reader->value = nothing;
+	reader->prefix = reader->local = reader->qualified = reader->uri = reader->value = empty_text;
 	reader->prefix_length = reader->local_length = reader->qualified_length = reader->uri_length = reader->value_length = 0;
 	reader->value_read = 0;
 }
@@ -439,7 +442,7 @@ static HRESULT read_declaration(struct reader *reader)
 		UINT value_length;
 		if (FAILED(failure = read_attribute_value(reader, &value, &value_length)) || FAILED(failure = add_attribute(reader, &attribute)))
 			return failure;
-		attribute->prefix = attribute->uri = (WCHAR *)L"";
+		attribute->prefix = attribute->uri = empty_text;
 		attribute->qualified = attribute->local = text;
 		attribute->qualified_length = attribute->local_length = length;
 		attribute->value = value;
@@ -596,10 +599,11 @@ static HRESULT resolve_attribute_names(struct reader *reader)
 			const struct binding *binding = find_binding(reader, attribute->prefix, attribute->prefix_length);
 			if (!binding)
 				return NC_E_UNDECLAREDPREFIX;
+			attribute->prefix = binding->prefix;
 			attribute->uri = binding->uri;
 			attribute->uri_length = binding->uri_length;
 		} else {
-			attribute->uri = (WCHAR *)L"";
+			attribute->uri = empty_text;
 		}
 		for (UINT other = 0; other < index; other++) {
 			const struct attribute *before = &reader->attributes[other];
@@ -657,7 +661,7 @@ static HRESULT read_element(struct reader *reader)
 		attribute->qualified = attribute_text;
 		attribute->qualified_length = attribute_length;
 		attribute->prefix_length = attribute_prefix;
-		attribute->prefix = arena_copy(reader, attribute_text, attribute_prefix);
+		attribute->prefix = attribute_prefix ? arena_copy(reader, attribute_text, attribute_prefix) : empty_text;
 		attribute->local = attribute_prefix ? attribute_text + attribute_prefix + 1 : attribute_text;
 		attribute->local_length = attribute_prefix ? attribute_length - attribute_prefix - 1 : attribute_length;
 		attribute->value = value;
@@ -670,9 +674,14 @@ static HRESULT read_element(struct reader *reader)
 				return NC_E_EMPTYURI;
 			if (FAILED(failure = add_binding(reader, attribute->local, attribute->local_length, value, value_length)))
 				return failure;
+			attribute->prefix = name_xmlns;
+			attribute->local = reader->bindings[reader->binding_count - 1].prefix;
+			attribute->value = reader->bindings[reader->binding_count - 1].uri;
 		} else if (!attribute_prefix && attribute_length == 5 && !memcmp(attribute_text, L"xmlns", 5 * sizeof(WCHAR))) {
 			if (FAILED(failure = add_binding(reader, L"", 0, value, value_length)))
 				return failure;
+			attribute->qualified = attribute->local = name_xmlns;
+			attribute->value = reader->bindings[reader->binding_count - 1].uri;
 		}
 	}
 	if (FAILED(failure = resolve_attribute_names(reader)))
@@ -685,6 +694,8 @@ static HRESULT read_element(struct reader *reader)
 		if (!binding && prefix_length)
 			return NC_E_UNDECLAREDPREFIX;
 		if (binding) {
+			if (prefix_length)
+				reader->prefix = binding->prefix;
 			reader->uri = binding->uri;
 			reader->uri_length = binding->uri_length;
 		}
@@ -696,9 +707,13 @@ static HRESULT read_element(struct reader *reader)
 		reader->pending_pop = TRUE;
 		if (!reader->element_count)
 			reader->root_done = TRUE;
-		return push_element(reader, qualified, length, mark);
 	}
-	return push_element(reader, qualified, length, mark);
+	/* From here on the name is the open element's own string, which its end tag answers too. */
+	if (FAILED(failure = push_element(reader, qualified, length, mark)))
+		return failure;
+	reader->qualified = reader->elements[reader->element_count - 1].qualified;
+	reader->local = prefix_length ? reader->qualified + prefix_length + 1 : reader->qualified;
+	return S_OK;
 }
 
 static HRESULT read_end_element(struct reader *reader)
@@ -726,12 +741,17 @@ static HRESULT read_end_element(struct reader *reader)
 		return E_OUTOFMEMORY;
 	set_blank_node(reader, XmlNodeType_EndElement);
 	set_node_name(reader, qualified, length, prefix_length);
+	reader->local = prefix_length ? open->qualified + prefix_length + 1 : open->qualified;
+	if (!prefix_length)
+		reader->qualified = open->qualified;
 	if (prefix_length == 3 && !memcmp(name, L"xml", 3 * sizeof(WCHAR))) {
 		reader->uri = (WCHAR *)uri_xml;
 		reader->uri_length = ARRAY_SIZE(uri_xml) - 1;
 	} else {
 		const struct binding *binding = find_binding(reader, name, prefix_length);
 		if (binding) {
+			if (prefix_length)
+				reader->prefix = binding->prefix;
 			reader->uri = binding->uri;
 			reader->uri_length = binding->uri_length;
 		}
