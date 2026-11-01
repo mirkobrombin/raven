@@ -428,8 +428,11 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[0], acl);
 		call.ret(1);
 	});
-	const auto add_ace = [](ApiCall &call, uint8_t type) {
-		if (!valid_sid(call, call[3])) {
+	const auto add_ace = [](ApiCall &call, uint8_t type, bool with_flags) {
+		// The Ex forms carry the inheritance flags as a third argument, ahead of the mask and the SID.
+		const size_t mask_argument = with_flags ? 3 : 2;
+		const uint64_t sid_address = call[mask_argument + 1];
+		if (!valid_sid(call, sid_address)) {
 			call.fail(1337);
 			return;
 		}
@@ -444,7 +447,7 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 			std::memcpy(&entry_size, entry.data() + 2, 2);
 			used += entry_size;
 		}
-		const auto length = sid_length(call, call[3]);
+		const auto length = sid_length(call, sid_address);
 		const uint32_t entry_size = 8 + length;
 		if (used + entry_size > size) {
 			call.fail(122);
@@ -452,11 +455,12 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		}
 		std::vector<uint8_t> entry(entry_size);
 		entry[0] = type;
+		entry[1] = with_flags ? uint8_t(call.u32(2)) : 0;
 		const uint16_t entry_size16 = uint16_t(entry_size);
-		const uint32_t mask = call.u32(2);
+		const uint32_t mask = call.u32(mask_argument);
 		std::memcpy(entry.data() + 2, &entry_size16, 2);
 		std::memcpy(entry.data() + 4, &mask, 4);
-		const auto sid = call.read(call[3], length);
+		const auto sid = call.read(sid_address, length);
 		std::memcpy(entry.data() + 8, sid.data(), length);
 		call.write(call[0] + used, entry);
 		call.store<uint16_t>(call[0] + 4, uint16_t(count + 1));
@@ -1647,8 +1651,10 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		call.store<uint16_t>(call[0] + 4, uint16_t(count + added_count));
 		call.ret(1);
 	});
-	registry.add("AddAccessAllowedAce", 4, [add_ace](ApiCall &call) { add_ace(call, 0); });
-	registry.add("AddAccessDeniedAce", 4, [add_ace](ApiCall &call) { add_ace(call, 1); });
+	registry.add("AddAccessAllowedAce", 4, [add_ace](ApiCall &call) { add_ace(call, 0, false); });
+	registry.add("AddAccessDeniedAce", 4, [add_ace](ApiCall &call) { add_ace(call, 1, false); });
+	registry.add("AddAccessAllowedAceEx", 5, [add_ace](ApiCall &call) { add_ace(call, 0, true); });
+	registry.add("AddAccessDeniedAceEx", 5, [add_ace](ApiCall &call) { add_ace(call, 1, true); });
 }
 
 }
