@@ -1707,6 +1707,28 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.write(address, bytes);
 		call.ret(address);
 	});
+	// The one user here has no environment apart from the process's own, so a user's block is a copy of it.
+	registry.add("CreateEnvironmentBlock", 3, [&, variables](ApiCall &call) {
+		std::u16string block;
+		for (const auto &[key, entry] : variables->values) {
+			block += entry.first + u"=" + entry.second;
+			block.push_back(0);
+		}
+		block.push_back(0);
+		const auto address = context.allocator.allocate(block.size() * 2);
+		if (!address || !call[0]) {
+			call.fail(address ? 87 : 8);
+			return;
+		}
+		std::vector<uint8_t> bytes(block.size() * 2);
+		std::memcpy(bytes.data(), block.data(), bytes.size());
+		call.write(address, bytes);
+		call.store_pointer(call[0], address);
+		call.ret(1);
+	});
+	registry.add("DestroyEnvironmentBlock", 1, [&](ApiCall &call) {
+		call.ret(context.allocator.release(call[0]));
+	});
 	registry.add("FreeEnvironmentStringsW", 1, [&](ApiCall &call) {
 		call.ret(context.allocator.release(call[0]));
 	});

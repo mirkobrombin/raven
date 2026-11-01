@@ -1275,6 +1275,24 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 		}
 		locale_info(call, call.u32(1), call[2], call.i32(3), true);
 	});
+	// The one user interface language: by number unless the flags ask for its name.
+	registry.add("EnumUILanguagesW", 3, [&](ApiCall &call) {
+		const auto scratch = memory.allocate(0, 4096, 0x3000, 4);
+		if (scratch.status) {
+			call.fail(8);
+			return;
+		}
+		const std::u16string name = call.u32(1) & 8 ? u"en-US" : u"0409";
+		std::vector<uint8_t> bytes((name.size() + 1) * 2);
+		std::memcpy(bytes.data(), name.data(), name.size() * 2);
+		call.write(scratch.address, bytes);
+		const uint64_t arguments[] = {scratch.address, call[2]};
+		const auto result = context.call(call[0], arguments);
+		memory.free(scratch.address, 0, 0x8000);
+		if (result.stop != NativeStop::returned)
+			throw result;
+		call.ret(1);
+	});
 	registry.add("EnumSystemLocalesW", 2, [&](ApiCall &call) {
 		const auto scratch = memory.allocate(0, 4096, 0x3000, 4);
 		if (scratch.status) {

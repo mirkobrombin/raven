@@ -1293,6 +1293,48 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			call.store<int32_t>(call[6], 1);
 		call.ret(0);
 	});
+	// ScriptItemizeOpenType: the same items, with the one item's OpenType script tag in its own array.
+	registry.add("ScriptItemizeOpenType", 8, [](ApiCall &call) {
+		const int32_t count = call.i32(1), capacity = call.i32(2);
+		if (!call[0] || count <= 0 || !call[5] || !call[6]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		if (capacity < 2) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		const std::vector<uint8_t> items(16, 0);
+		call.write(call[5], items);
+		call.store<int32_t>(call[5] + 8, count);
+		call.store<uint32_t>(call[6], 0x544c4644);
+		if (call[7])
+			call.store<int32_t>(call[7], 1);
+		call.ret(0);
+	});
+	// ScriptGetFontLanguageTags(dc, cache, analysis, script tag, capacity, tags, count): the default language.
+	registry.add("ScriptGetFontLanguageTags", 7, [](ApiCall &call) {
+		if (!call[5] || !call[6] || call.i32(4) < 1) {
+			call.ret(0x80070057U);
+			return;
+		}
+		call.store<uint32_t>(call[5], 0x746c6664);
+		call.store<int32_t>(call[6], 1);
+		call.ret(0);
+	});
+	// Fonts come from the system's own list here: a private font that exists counts as added, and its faces stay out of the list.
+	registry.add("AddFontResourceExW", 3, [](ApiCall &call) { call.ret(call[0] ? 1 : 0); });
+	registry.add("RemoveFontResourceExW", 3, [](ApiCall &call) { call.ret(call[0] ? 1 : 0); });
+	// ScriptGetFontScriptTags(dc, cache, analysis, capacity, tags, count): the default script serves every font's text here.
+	registry.add("ScriptGetFontScriptTags", 6, [](ApiCall &call) {
+		if (!call[4] || !call[5] || call.i32(3) < 1) {
+			call.ret(0x80070057U);
+			return;
+		}
+		call.store<uint32_t>(call[4], 0x544c4644);
+		call.store<int32_t>(call[5], 1);
+		call.ret(0);
+	});
 	// ScriptShape(dc, cache, text, count, glyph capacity, analysis, glyphs, clusters, visual attributes, glyph count).
 	registry.add("ScriptShape", 10, [=](ApiCall &call) {
 		const int32_t count = call.i32(3), capacity = call.i32(4);

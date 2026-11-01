@@ -1,6 +1,7 @@
 #include "elevation.h"
 #include "access_token.h"
 #include "file_objects.h"
+#include "hash.h"
 #include "kernel_context.h"
 #include "text.h"
 
@@ -1430,6 +1431,38 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 	// memory; a process of the prefix is not visible to the others, so the bytes stay as they are and both directions succeed.
 	registry.add("SystemFunction040", 3, [](ApiCall &call) { call.ret(0); });
 	registry.add("SystemFunction041", 3, [](ApiCall &call) { call.ret(0); });
+	// An AppContainer's SID is S-1-15-2 and the SHA-256 of its lowercased name split in seven words.
+	const auto container_sid = [&context](ApiCall &call, uint64_t name, uint64_t out) {
+		auto text = call.wide(name, 64);
+		if (text.empty()) {
+			call.ret(0x80070057);
+			return;
+		}
+		for (auto &character : text)
+			if (character >= u'A' && character <= u'Z')
+				character = char16_t(character + 32);
+		const auto digest = make_digest(0x800c);
+		digest->update({reinterpret_cast<const uint8_t *>(text.data()), text.size() * sizeof(char16_t)});
+		const auto hash = digest->finish();
+		std::vector<uint8_t> sid(8 + 8 * 4);
+		sid[0] = 1;
+		sid[1] = 8;
+		sid[7] = 15;
+		sid[8] = 2;
+		std::memcpy(sid.data() + 12, hash.data(), 28);
+		const auto block = context.allocator.allocate(sid.size(), false);
+		if (!block) {
+			call.ret(0x8007000e);
+			return;
+		}
+		call.write(block, sid);
+		call.store_pointer(out, block);
+		call.ret(0);
+	};
+	registry.add("DeriveAppContainerSidFromAppContainerName", 2, [container_sid](ApiCall &call) { container_sid(call, call[0], call[1]); });
+	// Containers keep no profile of their own here: creating one only names its SID, and deleting one has nothing to remove.
+	registry.add("CreateAppContainerProfile", 6, [container_sid](ApiCall &call) { container_sid(call, call[0], call[5]); });
+	registry.add("DeleteAppContainerProfile", 1, [](ApiCall &call) { call.ret(0); });
 	registry.add("ConvertStringSidToSidW", 2, [&context](ApiCall &call) {
 		const auto parsed = sid_from_text(call.wide(call[0], 256));
 		if (!parsed) {

@@ -149,6 +149,20 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 		call.put_wide(call[4], *location, 260);
 		call.ret(0);
 	});
+	registry.add("SHGetFolderPathAndSubDirW", 6, [&paths](ApiCall &call) {
+		const int csidl = call.i32(1);
+		auto location = folder_for(csidl, paths.user_profile(), call.process.mode() == NativeMode::x86);
+		if (!location) {
+			call.ret(0x80070057U);
+			return;
+		}
+		if (call[4])
+			*location += u"\\" + call.wide(call[4], 260);
+		if (const auto resolved = paths.resolve(*location); resolved && csidl & 0x8000)
+			std::filesystem::create_directories(resolved->host);
+		call.put_wide(call[5], *location, 260);
+		call.ret(0);
+	});
 	registry.add("SHGetFolderPathA", 5, [&paths](ApiCall &call) {
 		const int csidl = call.i32(1);
 		const auto location = folder_for(csidl, paths.user_profile(), call.process.mode() == NativeMode::x86);
@@ -198,6 +212,26 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 		call.store_pointer(call[3], memory);
 		call.ret(0);
 	});
+	// An AppContainer's own folder, named by its SID in text. It exists from the moment a program asks.
+	registry.add("GetAppContainerFolderPath", 2, [&paths, &context](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		const auto location = paths.user_profile() + u"\\AppData\\Local\\Packages\\" + call.wide(call[0], 256) + u"\\AC";
+		// The folders a profile comes with: programs write straight into Temp and the caches.
+		if (const auto resolved = paths.resolve(location))
+			for (const char *folder : {"Temp", "INetCache", "INetCookies", "INetHistory", "Microsoft"})
+				std::filesystem::create_directories(resolved->host / folder);
+		const auto memory = context.allocator.allocate((location.size() + 1) * 2, true);
+		if (!memory) {
+			call.ret(0x8007000EU);
+			return;
+		}
+		call.put_wide(memory, location, location.size() + 1);
+		call.store_pointer(call[1], memory);
+		call.ret(0);
+	});
 	// A folder location as an item id list. Programs treat it as opaque: one item that carries the path, then the terminating empty item.
 	// The list address, zero when the folder is unknown, or the error the call returns.
 	const auto folder_list = [&paths, &context](ApiCall &call, int csidl, bool create) -> std::pair<uint64_t, uint32_t> {
@@ -219,6 +253,23 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 		call.write(address, bytes);
 		return {address, 0};
 	};
+	registry.add("SHGetKnownFolderIDList", 4, [folder_list](ApiCall &call) {
+		if (!call[0] || !call[3]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		const uint32_t first = call.load<uint32_t>(call[0]);
+		for (const auto &folder : known_folders) {
+			if (folder.first != first || folder.csidl < 0)
+				continue;
+			const auto [address, status] = folder_list(call, folder.csidl, call.u32(1) & 0x8000);
+			if (address)
+				call.store_pointer(call[3], address);
+			call.ret(status);
+			return;
+		}
+		call.ret(0x80070002U);
+	});
 	registry.add("SHGetSpecialFolderLocation", 3, [folder_list](ApiCall &call) {
 		if (!call[2]) {
 			call.ret(0x80070057U);
@@ -233,24 +284,41 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("SHCloneSpecialIDList", 3, [folder_list](ApiCall &call) {
 		call.ret(folder_list(call, call.i32(1) & 0xff, call.i32(2) || (call.i32(1) & 0x8000)).first);
 	});
-	registry.add("SHGetPathFromIDListW", 2, [](ApiCall &call) {
+	const auto path_from_list = [](ApiCall &call, size_t capacity) {
 		if (!call[0] || !call[1]) {
 			call.ret(0);
 			return;
 		}
-		const auto header = call.read(call[0], 4);
-		const size_t size = header[0] | header[1] << 8;
-		if (size < 4 || size > 4 + 520 || header[2] != 'R' || header[3] != 'V') {
+		// A list made at a folder has one item per level: the path of the first, then a name for each below it.
+		std::u16string text;
+		uint64_t at = call[0];
+		for (;;) {
+			const auto header = call.read(at, 2);
+			const size_t size = header[0] | header[1] << 8;
+			if (!size)
+				break;
+			const auto item = call.read(at, size < 4 ? 4 : size);
+			if (size < 4 || size > 4 + 520 || item[2] != 'R' || item[3] != 'V') {
+				call.ret(0);
+				return;
+			}
+			if (!text.empty() && text.back() != u'\\')
+				text.push_back(u'\\');
+			for (size_t index = 4; index + 1 < size; index += 2)
+				text.push_back(char16_t(item[index] | item[index + 1] << 8));
+			at += size;
+		}
+		if (text.empty() || text.size() >= capacity) {
 			call.ret(0);
 			return;
 		}
-		const auto raw = call.read(call[0] + 4, size - 4);
-		std::u16string text;
-		for (size_t index = 0; index + 1 < raw.size(); index += 2)
-			text.push_back(char16_t(raw[index] | raw[index + 1] << 8));
-		call.put_wide(call[1], text, 260);
+		call.put_wide(call[1], text, capacity);
 		call.ret(1);
-	});
+	};
+	// The recent list only feeds the shell's own menus, which nothing here shows.
+	registry.add("SHAddToRecentDocs", 2, [](ApiCall &call) { call.ret(0); });
+	registry.add("SHGetPathFromIDListW", 2, [path_from_list](ApiCall &call) { path_from_list(call, 260); });
+	registry.add("SHGetPathFromIDListEx", 4, [path_from_list](ApiCall &call) { path_from_list(call, call.u32(2)); });
 	for (const bool ansi : {false, true})
 		registry.add(ansi ? "SHGetSpecialFolderPathA" : "SHGetSpecialFolderPathW", 4, [&paths, ansi](ApiCall &call) {
 			const int csidl = call.i32(2);
