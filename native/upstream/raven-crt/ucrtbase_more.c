@@ -813,16 +813,20 @@ CRT int __stdio_common_vfscanf(unsigned long long options, void *stream, const c
 	return vsscanf(line, format, arguments);
 }
 
+#define SCANF_SECURE 1ULL
+int scan_narrow_text(const char *input, const char *format, va_list arguments, int secure);
+int scan_wide_text(const wchar_t *input, const wchar_t *format, va_list arguments, int secure);
+
 CRT int __stdio_common_vsscanf(unsigned long long options, const char *input, size_t count, const char *format, void *locale, va_list arguments)
 {
 	if (count == (size_t)-1 || !input)
-		return vsscanf(input, format, arguments);
+		return scan_narrow_text(input, format, arguments, options & SCANF_SECURE);
 	char *copy = malloc(count + 1);
 	if (!copy)
 		return -1;
 	memcpy(copy, input, count);
 	copy[count] = 0;
-	const int result = vsscanf(copy, format, arguments);
+	const int result = scan_narrow_text(copy, format, arguments, options & SCANF_SECURE);
 	free(copy);
 	return result;
 }
@@ -830,13 +834,13 @@ CRT int __stdio_common_vsscanf(unsigned long long options, const char *input, si
 CRT int __stdio_common_vswscanf(unsigned long long options, const wchar_t *input, size_t count, const wchar_t *format, void *locale, va_list arguments)
 {
 	if (count == (size_t)-1 || !input)
-		return vswscanf(input, format, arguments);
+		return scan_wide_text(input, format, arguments, options & SCANF_SECURE);
 	wchar_t *copy = malloc((count + 1) * sizeof(wchar_t));
 	if (!copy)
 		return -1;
 	memcpy(copy, input, count * sizeof(wchar_t));
 	copy[count] = 0;
-	const int result = vswscanf(copy, format, arguments);
+	const int result = scan_wide_text(copy, format, arguments, options & SCANF_SECURE);
 	free(copy);
 	return result;
 }

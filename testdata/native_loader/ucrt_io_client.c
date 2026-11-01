@@ -203,6 +203,28 @@ static int office_helpers(void)
 	return 0;
 }
 
+/* The secure scanners take a capacity after each string target; a text that does not fit empties the target and stops. */
+extern int __stdio_common_vswscanf(unsigned long long, const wchar_t *, size_t, const wchar_t *, void *, __builtin_va_list);
+static int secure_scan_call(const wchar_t *input, const wchar_t *format, ...)
+{
+	__builtin_va_list arguments;
+	__builtin_va_start(arguments, format);
+	int result = __stdio_common_vswscanf(1, input, (size_t)-1, format, NULL, arguments);
+	__builtin_va_end(arguments);
+	return result;
+}
+
+static int secure_scan(void)
+{
+	wchar_t word[6], after[6];
+	if (secure_scan_call(L"en-US rest", L"%5[^-]-%s", word, 6, after, 6) != 2 || word[0] != 'e' || word[2] != 0 || after[1] != 'S' || after[2] != 0)
+		return 1;
+	word[0] = 'x';
+	if (secure_scan_call(L"toolongword", L"%s", word, 6) != 0 || word[0] != 0)
+		return 2;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	char line[64], big[64];
@@ -256,5 +278,7 @@ int raven_entry(void)
 	free(block);
 	if (named_helpers() != 0) return 20 + named_helpers();
 	if ((count = office_helpers())) return 100 + (int)count;
+	if ((count = secure_scan()))
+		return 200 + (int)count;
 	return temp_names();
 }

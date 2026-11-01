@@ -218,7 +218,8 @@ static int scan_digit(wchar_t c, int base)
 }
 
 /* Scans wide text; with narrow set, %s, %c and %[ without a size store narrow strings, as sscanf's do. */
-static int scan_wide(const wchar_t *input, const wchar_t *format, va_list arguments, int narrow_strings)
+/* secure: every string target is followed by its capacity, and a text that does not fit empties it and stops the scan. */
+static int scan_wide(const wchar_t *input, const wchar_t *format, va_list arguments, int narrow_strings, int secure)
 {
 	const wchar_t *start = input;
 	int assigned = 0, converted_any = 0;
@@ -384,8 +385,16 @@ static int scan_wide(const wchar_t *input, const wchar_t *format, va_list argume
 			const int narrow_target = size < 0 || (narrow_strings && size == 0);
 			wchar_t *wide = !suppress && !narrow_target ? va_arg(arguments, wchar_t *) : NULL;
 			char *narrow = !suppress && narrow_target ? va_arg(arguments, char *) : NULL;
+			const unsigned room = secure && !suppress ? va_arg(arguments, unsigned) : 0xffffffffu;
 			size_t written = 0;
 			while (remaining-- > 0 && *input && !iswspace(*input)) {
+				if ((wide || narrow) && written + 1 >= room) {
+					if (room && wide)
+						wide[0] = 0;
+					else if (room && narrow)
+						narrow[0] = 0;
+					return assigned;
+				}
 				if (wide)
 					wide[written++] = *input;
 				else if (narrow)
@@ -404,8 +413,16 @@ static int scan_wide(const wchar_t *input, const wchar_t *format, va_list argume
 			const int narrow_target = size < 0 || (narrow_strings && size == 0);
 			wchar_t *wide = !suppress && !narrow_target ? va_arg(arguments, wchar_t *) : NULL;
 			char *narrow = !suppress && narrow_target ? va_arg(arguments, char *) : NULL;
+			const unsigned room = secure && !suppress ? va_arg(arguments, unsigned) : 0xffffffffu;
 			size_t written = 0;
 			while (remaining-- > 0 && *input) {
+				if ((wide || narrow) && written >= room) {
+					if (room && wide)
+						wide[0] = 0;
+					else if (room && narrow)
+						narrow[0] = 0;
+					return assigned;
+				}
 				if (wide)
 					wide[written++] = *input;
 				else if (narrow)
@@ -423,6 +440,7 @@ static int scan_wide(const wchar_t *input, const wchar_t *format, va_list argume
 			const int narrow_target = size < 0 || (narrow_strings && size == 0);
 			wchar_t *wide = !suppress && !narrow_target ? va_arg(arguments, wchar_t *) : NULL;
 			char *narrow = !suppress && narrow_target ? va_arg(arguments, char *) : NULL;
+			const unsigned room = secure && !suppress ? va_arg(arguments, unsigned) : 0xffffffffu;
 			size_t written = 0;
 			if (*format == '^') {
 				invert = 1;
@@ -450,6 +468,13 @@ static int scan_wide(const wchar_t *input, const wchar_t *format, va_list argume
 				}
 				if (member == invert)
 					break;
+				if ((wide || narrow) && written + 1 >= room) {
+					if (room && wide)
+						wide[0] = 0;
+					else if (room && narrow)
+						narrow[0] = 0;
+					return assigned;
+				}
 				if (wide)
 					wide[written++] = *input;
 				else if (narrow)
@@ -472,14 +497,14 @@ static int scan_wide(const wchar_t *input, const wchar_t *format, va_list argume
 	return assigned;
 }
 
-CRT int vswscanf(const wchar_t *input, const wchar_t *format, va_list arguments) { return scan_wide(input, format, arguments, 0); }
+CRT int vswscanf(const wchar_t *input, const wchar_t *format, va_list arguments) { return scan_wide(input, format, arguments, 0, 0); }
 
 CRT int swscanf(const wchar_t *input, const wchar_t *format, ...)
 {
 	va_list arguments;
 	int result;
 	va_start(arguments, format);
-	result = scan_wide(input, format, arguments, 0);
+	result = scan_wide(input, format, arguments, 0, 0);
 	va_end(arguments);
 	return result;
 }
@@ -487,7 +512,9 @@ CRT int swscanf(const wchar_t *input, const wchar_t *format, ...)
 /* ---- narrow scanning ---- */
 
 /* sscanf reads through the wide scanner: the text and the format widen, narrow strings come back narrow. */
-CRT int vsscanf(const char *input, const char *format, va_list arguments)
+int scan_wide_text(const wchar_t *input, const wchar_t *format, va_list arguments, int secure) { return scan_wide(input, format, arguments, 0, secure); }
+
+int scan_narrow_text(const char *input, const char *format, va_list arguments, int secure)
 {
 	size_t input_length = strlen(input), format_length = strlen(format);
 	wchar_t *wide_input = malloc((input_length + 1) * sizeof(wchar_t)), *wide_format = malloc((format_length + 1) * sizeof(wchar_t));
@@ -497,12 +524,14 @@ CRT int vsscanf(const char *input, const char *format, va_list arguments)
 			wide_input[at] = (unsigned char)input[at];
 		for (size_t at = 0; at <= format_length; ++at)
 			wide_format[at] = (unsigned char)format[at];
-		result = scan_wide(wide_input, wide_format, arguments, 1);
+		result = scan_wide(wide_input, wide_format, arguments, 1, secure);
 	}
 	free(wide_input);
 	free(wide_format);
 	return result;
 }
+
+CRT int vsscanf(const char *input, const char *format, va_list arguments) { return scan_narrow_text(input, format, arguments, 0); }
 
 CRT int sscanf(const char *input, const char *format, ...)
 {
