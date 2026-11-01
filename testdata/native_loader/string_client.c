@@ -40,5 +40,16 @@ int raven_entry(void)
 	if (lstrcmpW(NULL, NULL) || lstrcmpW(NULL, L"") != -1 || lstrcmpW(L"", NULL) != 1 || lstrcmpiW(NULL, L"a") != -1 ||
 		lstrcmpA("a", NULL) != 1 || lstrcmpiA(NULL, NULL))
 		return 6;
+	/* Text longer than 32767 characters, counted or terminated, and one character outside ASCII so that the runtime converts it. */
+	static WCHAR long_wide[40001];
+	static char long_utf8[40004];
+	for (unsigned at = 0; at < 40000; ++at)
+		long_wide[at] = at ? L'x' : 0xfeff;
+	if (WideCharToMultiByte(CP_UTF8, 0, long_wide, 40000, NULL, 0, NULL, NULL) != 40002 ||
+		WideCharToMultiByte(CP_UTF8, 0, long_wide, 40000, long_utf8, 40004, NULL, NULL) != 40002 ||
+		(BYTE)long_utf8[0] != 0xef || (BYTE)long_utf8[1] != 0xbb || (BYTE)long_utf8[2] != 0xbf || long_utf8[40001] != 'x' ||
+		WideCharToMultiByte(CP_UTF8, 0, long_wide, -1, NULL, 0, NULL, NULL) != 40003 ||
+		WideCharToMultiByte(1252, 0, long_wide + 1, -1, long_utf8, 40004, NULL, NULL) != 40000 || long_utf8[39998] != 'x' || long_utf8[39999])
+		return 7;
 	return 0;
 }
