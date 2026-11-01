@@ -886,6 +886,46 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("LCMapStringW", 6, [map_wide](ApiCall &call) { map_wide(call, 2); });
 	registry.add("LCMapStringEx", 9, [map_wide](ApiCall &call) { map_wide(call, 2); });
+	// The forms are their numbers in NORM_FORM: C 1, D 2, KC 5, KD 6.
+	const auto normalized = [](ApiCall &call, uint32_t form, int32_t length) -> std::optional<std::u16string> {
+		if (form != 1 && form != 2 && form != 5 && form != 6) {
+			call.fail(87);
+			return std::nullopt;
+		}
+		auto result = normalize_unicode(counted_wide(call, call[1], length), form == 1 || form == 5, form >= 5);
+		if (!result)
+			call.fail(1113);
+		return result;
+	};
+	registry.add("NormalizeString", 5, [normalized](ApiCall &call) {
+		const int32_t length = call.i32(2), capacity = call.i32(4);
+		auto result = normalized(call, call.u32(0), length);
+		if (!result)
+			return;
+		if (length < 0)
+			result->push_back(u'\0');
+		call.set_last_error(0);
+		if (!capacity) {
+			call.ret(result->size());
+			return;
+		}
+		if (capacity < 0 || result->size() > size_t(capacity)) {
+			call.fail(122);
+			return;
+		}
+		std::vector<uint8_t> bytes(result->size() * 2);
+		std::memcpy(bytes.data(), result->data(), bytes.size());
+		call.write(call[3], bytes);
+		call.ret(result->size());
+	});
+	registry.add("IsNormalizedString", 3, [normalized](ApiCall &call) {
+		const std::u16string source = counted_wide(call, call[1], call.i32(2));
+		const auto result = normalized(call, call.u32(0), call.i32(2));
+		if (!result)
+			return;
+		call.set_last_error(0);
+		call.ret(*result == source);
+	});
 	registry.add("FoldStringW", 5, [](ApiCall &call) {
 		const uint32_t flags = call.u32(0);
 		const int32_t length = call.i32(2), capacity = call.i32(4);

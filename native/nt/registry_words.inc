@@ -337,6 +337,8 @@
 {"GetApplicationRestartSettings", 4},
 {"GetAsyncKeyState", 1},
 {"GetAutoRotationState", 1},
+{"NormalizeString", 5},
+{"IsNormalizedString", 3},
 {"GetAwarenessFromDpiAwarenessContext", 1},
 {"GetBestInterface", 2},
 {"GetBestInterfaceEx", 2},

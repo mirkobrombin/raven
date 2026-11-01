@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +21,9 @@ std::u16string widen_ascii(std::string_view text);
 std::u16string from_ansi(std::string_view text, uint32_t code_page);
 // Inverse of from_ansi; characters the code page lacks become '?'.
 std::string to_ansi(std::u16string_view text, uint32_t code_page);
+
+// A Unicode normalization form of the text (UAX #15); no value when it holds a lone surrogate.
+std::optional<std::u16string> normalize_unicode(std::u16string_view text, bool composed, bool compatibility);
 
 // What GetLocaleInfo answers, for the guest to read: an entry of 8 bytes for each type below 0x80 and then for 0x1000 to 0x100f (the
 // offset of its text in characters, or 0xffff for a type without one, the length without the terminator and the text as a number),
