@@ -100,7 +100,7 @@ void NativeWindows::register_ansi_api(ApiRegistry &registry)
 	});
 	// The message functions share their structures with the wide ones: the strings in the messages are the window procedure's concern.
 	for (const auto &[ansi, wide, arguments] : {std::tuple{"PeekMessageA", "PeekMessageW", 5u}, std::tuple{"GetMessageA", "GetMessageW", 4u},
-			std::tuple{"DispatchMessageA", "DispatchMessageW", 1u}})
+			std::tuple{"DispatchMessageA", "DispatchMessageW", 1u}, std::tuple{"PostThreadMessageA", "PostThreadMessageW", 4u}})
 		add(ansi, arguments, [=](ApiCall &call) {
 			std::vector<uint64_t> words;
 			for (size_t index = 0; index < arguments; ++index)
