@@ -1,0 +1,24 @@
+LIBRARY icuin.dll
+EXPORTS
+	ucol_close = icu.ucol_close
+	ucol_open = icu.ucol_open
+	ucol_setStrength = icu.ucol_setStrength
+	ucol_strcoll = icu.ucol_strcoll
+	uregex_clone = icu.uregex_clone
+	uregex_close = icu.uregex_close
+	uregex_end = icu.uregex_end
+	uregex_find = icu.uregex_find
+	uregex_findNext = icu.uregex_findNext
+	uregex_group = icu.uregex_group
+	uregex_groupCount = icu.uregex_groupCount
+	uregex_lookingAt = icu.uregex_lookingAt
+	uregex_matches = icu.uregex_matches
+	uregex_open = icu.uregex_open
+	uregex_openUText = icu.uregex_openUText
+	uregex_replaceAll = icu.uregex_replaceAll
+	uregex_replaceAllUText = icu.uregex_replaceAllUText
+	uregex_replaceFirst = icu.uregex_replaceFirst
+	uregex_reset = icu.uregex_reset
+	uregex_setText = icu.uregex_setText
+	uregex_setUText = icu.uregex_setUText
+	uregex_start = icu.uregex_start
