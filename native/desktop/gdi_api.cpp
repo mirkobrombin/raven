@@ -1464,6 +1464,11 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			const int64_t dest_left = dw < 0 ? int64_t(dx) + dw + 1 : dx, dest_top = dh < 0 ? int64_t(dy) + dh + 1 : dy;
 			// DIB source rows count from the bottom: the origin is the lower-left corner for bottom-up images.
 			const bool top_down = call.load<int32_t>(call[10] + 8) < 0;
+			constexpr uint32_t srccopy = 0xcc0020;
+			const uint32_t rop = call.u32(12);
+			const uint32_t table = rop >> 16 & 0xff;
+			const DesktopBrush *brush = (table ^ table >> 4) & 0x0f ? &selected_brush(objects, dc) : nullptr;
+			const int64_t brush_x = int64_t(dc.origin_x) - dc.user_dx + dc.brush_org_x, brush_y = int64_t(dc.origin_y) - dc.user_dy + dc.brush_org_y;
 			for (int64_t row = 0; row < abs_dh; ++row)
 				for (int64_t column = 0; column < abs_dw; ++column) {
 					const int64_t device_x = dest_left + column + dc.origin_x, device_y = dest_top + row + dc.origin_y;
@@ -1478,6 +1483,24 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 					if (image_x < 0 || image_x >= image.width || image_y < 0 || image_y >= image.height)
 						continue;
 					const uint32_t source_pixel = image.pixels[size_t(image_y) * image.width + size_t(image_x)];
+					if (rop != srccopy) {
+						// Other raster operations combine the image with what is there; a surface with an alpha byte combines that too.
+						uint32_t color = 0;
+						if (brush) {
+							const auto pattern = brush_color_at(*brush, dc, device_x - brush_x, device_y - brush_y);
+							color = pattern.second ? pattern.first : painter.read(device_x, device_y);
+						}
+						const uint32_t present = painter.read(device_x, device_y), source_color = colorref(source_pixel & 0xffffff);
+						uint32_t result = 0;
+						for (int shift = 0; shift < 24; shift += 8)
+							result |= uint32_t(combine_ternary(rop, uint8_t(color >> shift), uint8_t(source_color >> shift), uint8_t(present >> shift))) << shift;
+						auto *target = painter.bitmap.depth == 32 && image.has_alpha ? painter.pixel_pointer(device_x, device_y) : nullptr;
+						const uint8_t alpha = target ? combine_ternary(rop, 0, uint8_t(source_pixel >> 24), target[3]) : 0;
+						painter.plot(device_x, device_y, result, 13);
+						if (target)
+							target[3] = alpha;
+						continue;
+					}
 					painter.plot(device_x, device_y, colorref(source_pixel & 0xffffff), 13);
 					// A DIB section keeps the alpha channel of what is copied into it.
 					if (painter.bitmap.dib_section && painter.bitmap.depth == 32 && image.has_alpha)

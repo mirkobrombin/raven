@@ -34,6 +34,27 @@ int raven_entry(void)
 		if (GetObjectW(section, sizeof full, &full) != sizeof full || full.dsBmih.biWidth != 30 || full.dsBm.bmBits != bits)
 			return 6;
 	}
+	/* An image stretched with SRCPAINT adds to the pixels, alpha included, and does not replace them. */
+	HGDIOBJ previous = SelectObject(screen, section);
+	DWORD *pixels = bits;
+	for (int index = 0; index < 600; ++index)
+		pixels[index] = 0x00102030;
+	static const DWORD opaque = 0xff000000;
+	BITMAPINFO one = info;
+	one.bmiHeader.biWidth = 1;
+	one.bmiHeader.biHeight = 1;
+	if (StretchDIBits(screen, 0, 0, 30, 20, 0, 0, 1, 1, &opaque, &one, DIB_RGB_COLORS, SRCPAINT) != 20)
+		return 9;
+	for (int index = 0; index < 600; ++index)
+		if (pixels[index] != 0xff102030)
+			return 10;
+	/* SRCAND with black leaves nothing, SRCCOPY still replaces. */
+	static const DWORD blue = 0x000000ff;
+	if (StretchDIBits(screen, 0, 0, 30, 20, 0, 0, 1, 1, &blue, &one, DIB_RGB_COLORS, SRCAND) != 20 || pixels[0] != 0x00000030)
+		return 11;
+	if (StretchDIBits(screen, 0, 0, 30, 20, 0, 0, 1, 1, &opaque, &one, DIB_RGB_COLORS, SRCCOPY) != 20 || pixels[0] != 0xff000000)
+		return 12;
+	SelectObject(screen, previous);
 	if (!DeleteObject(plain) || GetObjectW(plain, 0, NULL) != 0)
 		return 7;
 	if (!DeleteObject(section) || !DeleteDC(screen))
