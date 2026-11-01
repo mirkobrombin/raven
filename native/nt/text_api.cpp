@@ -711,6 +711,165 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 	const auto ansi_page = [&](uint32_t code_page) {
 		return code_page == 0 || code_page == 3 ? context.launch.ansi_code_page : code_page == 1 ? 437 : code_page;
 	};
+	// The Uniscribe desktop handlers use measured glyphs and are compiled with the Skia text backend. Keep installer dialogs
+	// usable in the minimal build too, where a one-run, one-glyph-per-character fallback is sufficient.
+#ifndef RAVEN_SKIA
+	registry.add("GetTextCharset", 1, [](ApiCall &call) { call.ret(0); });
+	registry.add("GetTextCharsetInfo", 3, [](ApiCall &call) {
+		if (call[1]) {
+			std::vector<uint8_t> signature(24, 0);
+			signature[0] = 3; // Latin and Latin-1 coverage.
+		signature[16] = 1; // ANSI code page.
+			call.write(call[1], signature);
+		}
+		call.ret(0); // DEFAULT_CHARSET is realized as ANSI.
+	});
+	registry.add("ScriptItemize", 7, [](ApiCall &call) {
+		const int32_t count = call.i32(1), capacity = call.i32(2);
+		if (!call[0] || count <= 0 || !call[5]) { call.ret(0x80070057U); return; }
+		if (capacity < 2) { call.ret(0x8007000eU); return; }
+		call.write(call[5], std::vector<uint8_t>(16, 0));
+		call.store<int32_t>(call[5] + 8, count);
+		if (call[6]) call.store<int32_t>(call[6], 1);
+		call.ret(0);
+	});
+	registry.add("ScriptShape", 10, [](ApiCall &call) {
+		const int32_t count = call.i32(3), capacity = call.i32(4);
+		if (!call[2] || count <= 0 || !call[6] || !call[7] || !call[8] || !call[9]) { call.ret(0x80070057U); return; }
+		if (capacity < count) { call.ret(0x8007000eU); return; }
+		const auto text = call.read(call[2], size_t(count) * 2);
+		std::vector<uint8_t> clusters(size_t(count) * 2), attributes(size_t(count) * 2);
+		for (int32_t index = 0; index < count; ++index) {
+			clusters[size_t(index) * 2] = uint8_t(index);
+			clusters[size_t(index) * 2 + 1] = uint8_t(index >> 8);
+			const uint16_t character = uint16_t(text[size_t(index) * 2] | uint16_t(text[size_t(index) * 2 + 1]) << 8);
+			attributes[size_t(index) * 2] = uint8_t(0x10 | (character == u' ' ? 4 : 2));
+		}
+		call.write(call[6], text);
+		call.write(call[7], clusters);
+		call.write(call[8], attributes);
+		call.store<int32_t>(call[9], count);
+		call.ret(0);
+	});
+	registry.add("ScriptPlace", 9, [](ApiCall &call) {
+		const int32_t count = call.i32(3);
+		if (!call[2] || count <= 0 || !call[6]) { call.ret(0x80070057U); return; }
+		int64_t total = 0;
+		for (int32_t index = 0; index < count; ++index) {
+			call.store<int32_t>(call[6] + uint64_t(index) * 4, 8);
+			total += 8;
+		}
+		if (call[7]) call.write(call[7], std::vector<uint8_t>(size_t(count) * 8, 0));
+		if (call[8]) {
+			call.store<int32_t>(call[8], 0);
+			call.store<uint32_t>(call[8] + 4, uint32_t(total));
+			call.store<int32_t>(call[8] + 8, 0);
+		}
+		call.ret(0);
+	});
+	registry.add("ScriptLayout", 4, [](ApiCall &call) {
+		const int32_t count = call.i32(0);
+		if (count < 0 || !call[1]) { call.ret(0x80070057U); return; }
+		for (int32_t index = 0; index < count; ++index) {
+			if (call[2]) call.store<int32_t>(call[2] + uint64_t(index) * 4, index);
+			if (call[3]) call.store<int32_t>(call[3] + uint64_t(index) * 4, index);
+		}
+		call.ret(0);
+	});
+	registry.add("ScriptCPtoX", 9, [](ApiCall &call) {
+		const int32_t position = call.i32(0), count = call.i32(2);
+		if (!call[6] || !call[8] || count < 0) { call.ret(0x80070057U); return; }
+		const int32_t character = std::clamp(position, 0, count);
+		call.store<int32_t>(call[8], character * 8 + (call.u32(1) && position >= 0 && position < count ? 8 : 0));
+		call.ret(0);
+	});
+	registry.add("ScriptXtoCP", 9, [](ApiCall &call) {
+		const int32_t x = call.i32(0), count = call.i32(1);
+		if (!call[5] || !call[7] || !call[8] || count < 0) { call.ret(0x80070057U); return; }
+		int32_t position = count, trailing = 0;
+		if (x < 0) { position = -1; trailing = 1; }
+		else if (x < count * 8) { position = x / 8; trailing = x % 8 >= 4; }
+		call.store<int32_t>(call[7], position);
+		call.store<int32_t>(call[8], trailing);
+		call.ret(0);
+	});
+	registry.add("ScriptFreeCache", 1, [](ApiCall &call) {
+		if (call[0]) call.store_pointer(call[0], 0);
+		call.ret(0);
+	});
+	struct BasicScriptString { uint64_t block = 0; uint32_t count = 0; };
+	auto script_strings = std::make_shared<std::map<uint64_t, BasicScriptString>>();
+	registry.add("ScriptStringAnalyse", 13, [&context, script_strings](ApiCall &call) {
+		const int32_t requested = call.i32(2);
+		if (!call[1] || !call[12] || requested == 0 || requested < -1) { call.ret(0x80070057U); return; }
+		const auto text = requested < 0 ? call.wide(call[1], 65536) : call.wide(call[1], size_t(requested));
+		if (text.size() > 65536) { call.ret(0x80070057U); return; }
+		const uint64_t handle = context.allocator.allocate(16, true);
+		const uint64_t block = context.allocator.allocate(12, true);
+		if (!handle || !block) {
+			if (handle) context.allocator.release(handle);
+			if (block) context.allocator.release(block);
+			call.ret(0x8007000eU);
+			return;
+		}
+		const uint32_t count = uint32_t(text.size()), width = count * 8;
+		call.store<int32_t>(block, int32_t(width));
+		call.store<int32_t>(block + 4, 16);
+		call.store<int32_t>(block + 8, int32_t(count));
+		script_strings->emplace(handle, BasicScriptString{block, count});
+		call.store_pointer(call[12], handle);
+		call.ret(0);
+	});
+	const auto script_string = [script_strings](uint64_t handle) -> const BasicScriptString * {
+		const auto found = script_strings->find(handle);
+		return found == script_strings->end() ? nullptr : &found->second;
+	};
+	registry.add("ScriptStringFree", 1, [&context, script_strings](ApiCall &call) {
+		if (!call[0]) { call.ret(0x80070057U); return; }
+		const uint64_t handle = call.load_pointer(call[0]);
+		const auto found = script_strings->find(handle);
+		if (found == script_strings->end()) { call.ret(0x80070057U); return; }
+		context.allocator.release(found->second.block);
+		context.allocator.release(handle);
+		script_strings->erase(found);
+		call.store_pointer(call[0], 0);
+		call.ret(0);
+	});
+	registry.add("ScriptString_pSize", 1, [script_string](ApiCall &call) {
+		const auto *entry = script_string(call[0]);
+		call.ret(entry ? entry->block : 0);
+	});
+	registry.add("ScriptString_pcOutChars", 1, [script_string](ApiCall &call) {
+		const auto *entry = script_string(call[0]);
+		call.ret(entry ? entry->block + 8 : 0);
+	});
+	registry.add("ScriptStringGetLogicalWidths", 2, [script_string](ApiCall &call) {
+		const auto *entry = script_string(call[0]);
+		if (!entry || !call[1]) { call.ret(0x80070057U); return; }
+		for (uint32_t index = 0; index < entry->count; ++index)
+			call.store<int32_t>(call[1] + uint64_t(index) * 4, 8);
+		call.ret(0);
+	});
+	registry.add("ScriptStringCPtoX", 4, [script_string](ApiCall &call) {
+		const auto *entry = script_string(call[0]);
+		if (!entry || !call[3]) { call.ret(0x80070057U); return; }
+		const int32_t index = call.i32(1), count = int32_t(entry->count);
+		const bool trailing = call.u32(2) != 0;
+		if (index < -1 || index > count || (index == -1 && !trailing)) { call.ret(0x80070057U); return; }
+		call.store<int32_t>(call[3], std::max(0, std::min(count, index + (trailing ? 1 : 0))) * 8);
+		call.ret(0);
+	});
+	registry.add("ScriptStringXtoCP", 4, [script_string](ApiCall &call) {
+		const auto *entry = script_string(call[0]);
+		if (!entry || !call[2] || !call[3]) { call.ret(0x80070057U); return; }
+		const int32_t x = call.i32(1), count = int32_t(entry->count);
+		const int32_t position = x < 0 ? -1 : std::min(count, x / 8);
+		call.store<int32_t>(call[2], position);
+		call.store<int32_t>(call[3], x < 0 ? 1 : position < count && (x % 8) >= 4);
+		call.ret(0);
+	});
+	registry.add("ScriptStringOut", 8, [](ApiCall &call) { call.ret(0); });
+#endif
 
 	registry.add("lstrlenW", 1, [](ApiCall &call) { call.ret(call[0] ? call.wide(call[0], 1 << 24).size() : 0); });
 	registry.add("lstrlenA", 1, [](ApiCall &call) { call.ret(call[0] ? call.narrow(call[0], 1 << 24).size() : 0); });
