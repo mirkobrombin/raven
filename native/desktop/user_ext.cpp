@@ -246,6 +246,15 @@ void NativeWindows::track_pointer(uint64_t window)
 void NativeWindows::register_ext_api(ApiRegistry &registry)
 {
 	// ---- DPI: one 96 dpi screen ----
+	// AR_NOSENSOR: the output of a desktop session never rotates.
+	registry.add("GetAutoRotationState", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.ret(0);
+			return;
+		}
+		call.store<uint32_t>(call[0], 0x10);
+		call.ret(1);
+	});
 	registry.add("GetDpiForSystem", 0, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetDpiForWindow", 1, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetSystemDpiForProcess", 1, [](ApiCall &call) { call.ret(96); });

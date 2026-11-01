@@ -336,6 +336,7 @@
 {"GetAncestor", 2},
 {"GetApplicationRestartSettings", 4},
 {"GetAsyncKeyState", 1},
+{"GetAutoRotationState", 1},
 {"GetAwarenessFromDpiAwarenessContext", 1},
 {"GetBestInterface", 2},
 {"GetBestInterfaceEx", 2},
