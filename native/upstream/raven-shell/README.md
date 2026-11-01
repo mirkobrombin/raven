@@ -16,6 +16,7 @@ public Windows headers. It supplies what the system libraries of the guest canno
 - streams over registry values (`SHOpenRegStream`, `SHOpenRegStream2`, `OpenRegStream`), written back when a writable one is released.
 - the network address control that `InitNetworkAddressControl` registers (`netaddress.c`): an edit field that reads a host name or an
   IPv4 or IPv6 address with an optional port.
+- item id lists and the file system namespace (`folder.c`): `SHGetDesktopFolder`, `IShellFolder`, `IEnumIDList` and the `IL*` calls.
 - the known folder manager (`knownfolder.c`): `IKnownFolderManager` and `IKnownFolder` for the standard folders, with their
   canonical names, categories, CSIDL numbers and paths, and the lookup of the folder that holds a path.
 

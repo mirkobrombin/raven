@@ -526,6 +526,14 @@ static const IMonikerVtbl item_vtbl = {item_QueryInterface, item_AddRef, item_Re
 	item_GetTimeOfLastChange, item_Inverse, item_CommonPrefixWith, item_RelativePathTo, item_GetDisplayName, item_ParseDisplayName,
 	item_IsSystemMoniker};
 
+HRESULT WINAPI CreateItemMoniker(LPCOLESTR delimiter, LPCOLESTR item, IMoniker **out);
+
+/* A file moniker names its path the way an item moniker names its item. */
+HRESULT WINAPI CreateFileMoniker(LPCOLESTR path, IMoniker **out)
+{
+	return CreateItemMoniker(L"", path, out);
+}
+
 HRESULT WINAPI CreateItemMoniker(LPCOLESTR delimiter, LPCOLESTR item, IMoniker **out)
 {
 	item_moniker *self;

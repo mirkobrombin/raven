@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shobjidl.h>
+#include <shlobj.h>
 #include <servprov.h>
 #include <propsys.h>
 #include <shellapi.h>
@@ -869,6 +870,21 @@ HRESULT WINAPI IUnknown_QueryService(IUnknown *object, REFGUID service, REFIID i
 	result = IServiceProvider_QueryService(provider, service, iid, out);
 	IServiceProvider_Release(provider);
 	return result;
+}
+
+HRESULT WINAPI SHCreateItemFromParsingName(PCWSTR path, IBindCtx *context, REFIID iid, void **out);
+
+HRESULT WINAPI SHCreateItemFromIDList(PCIDLIST_ABSOLUTE list, REFIID iid, void **out)
+{
+	WCHAR path[MAX_PATH];
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	/* The host answers this call, under the shell's name. */
+	BOOL (WINAPI *path_of)(PCIDLIST_ABSOLUTE, LPWSTR) = (void *)GetProcAddress(LoadLibraryW(L"shell32.dll"), "SHGetPathFromIDListW");
+	if (!list || !path_of || !path_of(list, path))
+		return E_INVALIDARG;
+	return SHCreateItemFromParsingName(path, NULL, iid, out);
 }
 
 HRESULT WINAPI SHCreateItemFromParsingName(PCWSTR path, IBindCtx *context, REFIID iid, void **out)
