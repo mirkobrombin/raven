@@ -19,8 +19,7 @@ from component_licenses import mark_patched_sources, preserve_notices
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/", "sdk/lib/3rdparty/libwine/",
-            "dll/win32/msi/",
-            "base/system/msiexec/", "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
+            "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/win32/stdole2.tlb/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
             "sdk/lib/getopt/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
@@ -246,38 +245,22 @@ def main():
     (output / "rpcrt4_import.def").write_text("LIBRARY rpcrt4.dll\nEXPORTS\n" + "".join(
         f" {name}{'' if rpc_defined.get(name) is None else '@' + str(rpc_defined[name])}\n" for name in (line.split()[0] for line in rpc_exports.splitlines() if line.strip()) if "PRIVATE" not in name))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "rpcrt4_import.def", "-l", output / "librpcrt4.a"])
-    # msi.dll: the Windows Installer engine, its SQL and condition grammars, and the RPC stubs of its custom action server.
-    msi_root = source / "dll/win32/msi"
-    run(["bison", "-o", generated / "cond.tab.c", "-d", msi_root / "cond.y"])
-    run(["bison", "-o", generated / "sql.tab.c", "-d", msi_root / "sql.y"])
-    msi_widl = [*widl, "-I", msi_root, "--prefix-server=s_"]
-    for name in ("msiserver", "winemsi"):
-        run([*msi_widl, "-h", "-H", generated / (name + ".h"), msi_root / (name + ".idl")])
-        run([*msi_widl, "-u", "-U", generated / (name + "_i.c"), msi_root / (name + ".idl")])
-    run([*msi_widl, "-c", "-C", generated / "winemsi_c.c", msi_root / "winemsi.idl"])
-    run([*msi_widl, "-s", "-S", generated / "winemsi_s.c", msi_root / "winemsi.idl"])
-    run([output / "spec2def", spec_arch, "-n=msi.dll", "-d=" + str(output / "msi.def"), "-s=" + str(generated / "msi_stubs.c"), msi_root / "msi.spec"])
-    msi_sources = sorted(msi_root.glob("*.c")) + [generated / name for name in ("cond.tab.c", "sql.tab.c", "msiserver_i.c", "winemsi_c.c",
-                                                                                 "winemsi_s.c", "msi_stubs.c")]
-    msi_flags = ["-DMSIRUNMODE=MSIRUNMODE_T", "-I" + str(msi_root)]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        msi = list(pool.map(lambda path: compile(path, "msi_" + path.stem, msi_flags, wine_module=False), msi_sources))
-    msi.append(compile(source / "sdk/lib/3rdparty/libwine/register.c", "wine_register", ["-I" + str(msi_root)]))
-    # Its strings, bitmaps, registration script and version: installers check that version before they run.
-    wrapper = output / "resource-preprocessor.sh"
-    wrapper.write_text("#!/bin/sh\nexec " + triple + "-gcc -E -xc -DRC_INVOKED -nostdinc -isystem " + gcc_include + " " +
-                       " ".join("-I" + str(path) for path in [msi_root, *includes, generated / "reactos"] if path != overlay) + ' -w "$@"\n')
-    wrapper.chmod(0o755)
-    run([triple + "-windres", "--preprocessor=" + str(wrapper), "-O", "coff", "-DLANGUAGE_EN_US", "-D__REACTOS__", "-D__WINESRC__",
-         "-D_M_IX86" if x86 else "-D_M_AMD64", "-I" + str(msi_root), "-i", msi_root / "msi.rc", "-o", objects / "msi.res.o"])
-    msi.append(objects / "msi.res.o")
-    msi.append(objects / "installer_support.o")
-    msi.append(compile(support / "clicktorun.c", "msi_clicktorun"))
-    msi.append(compile(source / "sdk/lib/3rdparty/libwine/dll_register.c", "msi_dll_register", ["-I" + str(msi_root)]))
-    link("msi.dll", bases["msi"], [*msi, *debug], output / "msi.def",
-         ["-L" + str(output), "-lsxs", "-lcabinet", "-lrpcrt4", *[f"-l{library}" for library in ("advapi32", "comctl32", "gdi32", "ole32", "oleaut32", "shell32",
-          "shlwapi", "urlmon", "user32", "version", "wininet", "imagehlp", "msvcrt", "kernel32", "ntdll", "odbccp32", "crypt32",
-          "wintrust", "uuid", "gcc")]])
+    # msi.dll: the Windows Installer engine, Raven's own.
+    own_msi = repo / "native/upstream/raven-msi"
+    msi_objects = []
+    for path in [*sorted(p for p in own_msi.glob("*.c") if p.name != "msiexec.c"), repo / "native/upstream/raven-comctl32/crt.c"]:
+        target = objects / ("msi_" + path.stem + ".o")
+        run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCONST_VTABLE", "-D_CRTIMP=",
+             "-I" + str(own_msi), path, "-o", target])
+        msi_objects.append(target)
+    msi_exports = (own_msi / "exports.txt").read_text()
+    msi_defined = decorated(msi_objects)
+    def msi_line(line):
+        name = line.split()[0]
+        return " " + name + ("@" + str(msi_defined[name]) if x86 and msi_defined.get(name) is not None else "") + " " + " ".join(line.split()[1:]) + "\n"
+    (output / "msi.def").write_text("LIBRARY msi.dll\nEXPORTS\n" + "".join(msi_line(line) for line in [*msi_exports.splitlines(), "RavenActionHost"] if line.strip()))
+    link("msi.dll", bases["msi"], msi_objects, output / "msi.def",
+         ["-L" + str(output), "-lcabinet", "-lrpcrt4", *[f"-l{library}" for library in ("advapi32", "ole32", "shell32", "user32", "version", "kernel32", "uuid", "gcc")]], implib=output / "libmsi.a")
     # raven-storage.dll: Raven's own structured storage, which the runtime's ole32 hands those exports to.
     own_storage = repo / "native/upstream/raven-storage"
     own_objects = []
@@ -293,15 +276,9 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{bases['storage']:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "raven-storage.dll", *own_objects, output / "raven-storage.def", "-lole32", "-loleaut32", "-luser32", "-ladvapi32", "-lkernel32", "-luuid", "-lgcc"])
     # msiexec.exe: the command line of the installer, which installers and the shell start for packages.
-    msiexec_root = source / "base/system/msiexec"
-    msiexec = [compile(msiexec_root / name, "msiexec_" + Path(name).stem, ["-I" + str(msiexec_root)], wine_module=False)
-               for name in ("msiexec.c", "service.c")]
-    msiexec.append(compile(support / "entry.c", "msiexec_entry"))
-    run([triple + "-windres", "--preprocessor=" + str(wrapper), "-O", "coff", "-DLANGUAGE_EN_US", "-D__REACTOS__",
-         "-D_M_IX86" if x86 else "-D_M_AMD64", "-I" + str(msiexec_root), "-i", msiexec_root / "rsrc.rc", "-o", objects / "msiexec.res.o"])
-    run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp",
-         "-o", output / "msiexec.exe", *msiexec, objects / "msiexec.res.o", objects / "installer_support.o", *debug, "-L" + str(output),
-         *runtime(f"-l{library}" for library in ("msi", "user32", "advapi32", "ole32", "comctl32", "msvcrt", "kernel32", "ntdll", "uuid", "gcc"))])
+    run([triple + "-gcc", "-O2", "-std=gnu11", "-fno-builtin", "-nostdlib", "-mwindows", "-D_WIN32_WINNT=0x601", "-DUNICODE",
+         f"-Wl,--entry,{'_raven_msiexec@0' if x86 else 'raven_msiexec'},--no-insert-timestamp", "-I" + str(own_msi),
+         own_msi / "msiexec.c", repo / "native/upstream/raven-comctl32/crt.c", "-o", output / "msiexec.exe", "-L" + str(output), "-lmsi", "-luser32", "-lkernel32", "-lgcc"])
     # msxml3.dll: the XML document object model installers and their bootstrappers parse their manifests with, on libxml2 and libxslt.
     xml_root = source / "sdk/lib/3rdparty/libxml2"
     iconv_root = source / "sdk/lib/3rdparty/libwin-iconv"

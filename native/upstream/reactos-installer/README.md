@@ -6,9 +6,7 @@ installs with from the pinned ReactOS archive the common controls component uses
 `5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69`), for 64-bit
 programs and, with `--arch x86`, for 32-bit ones:
 
-- `msi.dll` (`dll/win32/msi`): the installer engine, its SQL and condition grammars
-  (bison) and the RPC stubs of its custom action server (widl);
-- `msiexec.exe` (`base/system/msiexec`),
+- `msi.dll` and `msiexec.exe`: Raven's own from [`native/upstream/raven-msi`](../raven-msi/README.md),
   which each prefix also keeps in its system directories;
 - `sxs.dll`: Raven's own side-by-side assembly cache from [`native/upstream/raven-sxs`](../raven-sxs/README.md);
 - `rpcrt4.dll`: Raven's own from [`native/upstream/raven-rpcrt4`](../raven-rpcrt4/README.md): remote

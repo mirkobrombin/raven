@@ -32,10 +32,31 @@ int raven_entry(void)
 	beside(package, L"basic.msi");
 	MsiSetInternalUI(INSTALLUILEVEL_NONE, NULL);
 	/* A prefix used before starts without the product. */
-	if (MsiQueryProductStateW(product) == INSTALLSTATE_DEFAULT)
+	if (MsiQueryProductStateW(product) != INSTALLSTATE_UNKNOWN)
 		MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT);
 	if (MsiQueryProductStateW(product) != INSTALLSTATE_UNKNOWN)
 		return 1;
+	/* Advertised: published with the feature on offer; removal forgets it, a configure installs it. */
+	if (MsiAdvertiseProductW(package, L"x.aas", NULL, 0) != ERROR_CALL_NOT_IMPLEMENTED)
+		return 20;
+	if (MsiAdvertiseProductW(package, (LPCWSTR)0, NULL, 0) != ERROR_SUCCESS)
+		return 21;
+	if (MsiQueryProductStateW(product) != INSTALLSTATE_ADVERTISED)
+		return 22;
+	if (MsiQueryFeatureStateW(product, L"Main") != INSTALLSTATE_ADVERTISED)
+		return 23;
+	if (MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT) != ERROR_SUCCESS)
+		return 24;
+	if (MsiQueryProductStateW(product) != INSTALLSTATE_UNKNOWN)
+		return 25;
+	if (MsiAdvertiseProductW(package, (LPCWSTR)0, NULL, 0) != ERROR_SUCCESS)
+		return 26;
+	if (MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_DEFAULT) != ERROR_SUCCESS)
+		return 27;
+	if (MsiQueryProductStateW(product) != INSTALLSTATE_DEFAULT || MsiQueryFeatureStateW(product, L"Main") != INSTALLSTATE_LOCAL)
+		return 28;
+	if (MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT) != ERROR_SUCCESS)
+		return 29;
 	UINT result = MsiInstallProductW(package, L"");
 	if (result != ERROR_SUCCESS)
 		return 100 + (int)(result % 100);

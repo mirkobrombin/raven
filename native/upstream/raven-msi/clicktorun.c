@@ -13,6 +13,7 @@
  * manifests, so a product asking about its own components finds them installed where the package keeps them. */
 
 #define GUID_LENGTH 38
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
 
 struct manifest
 {

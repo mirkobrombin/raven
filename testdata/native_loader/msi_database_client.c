@@ -59,5 +59,50 @@ int raven_entry(void)
 		return 7;
 	MsiCloseHandle(summary);
 	MsiCloseHandle(database);
+	/* The file hash is MD5: this is the known digest of "abc". */
+	{
+		WCHAR hash_path[MAX_PATH], hash_directory[MAX_PATH];
+		DWORD written;
+		MSIFILEHASHINFO info;
+		GetTempPathW(MAX_PATH, hash_directory);
+		GetTempFileNameW(hash_directory, L"rvn", 0, hash_path);
+		HANDLE hash_file = CreateFileW(hash_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+		WriteFile(hash_file, "abc", 3, &written, NULL);
+		CloseHandle(hash_file);
+		info.dwFileHashInfoSize = sizeof info;
+		UINT hashed = MsiGetFileHashW(hash_path, 0, &info);
+		DeleteFileW(hash_path);
+		if (hashed != ERROR_SUCCESS || info.dwData[0] != 0x98500190 || info.dwData[3] != 0x727fe128)
+			return 90;
+	}
+	if (MsiVerifyDiskSpace(0) != ERROR_INVALID_HANDLE)
+		return 94;
+	if (MsiCollectUserInfoW(L"{11111111-2222-3333-4444-555555555555}") != ERROR_UNKNOWN_PRODUCT || MsiCollectUserInfoW(NULL) != ERROR_INVALID_PARAMETER)
+		return 95;
+	/* A Darwin shortcut laid out as MS-SHLLINK says: a header, then the extra data block with the descriptor in its Unicode field. */
+	{
+		static const WCHAR descriptor[] = L"zn=BV3!!!!4!!!!MKKSkWord>m[8Q(!7fN4[M5LC!'6LC";
+		static BYTE link[0x4c + 0x314 + 4];
+		WCHAR link_path[MAX_PATH], link_directory[MAX_PATH], product[39], feature[64], component[39];
+		DWORD written;
+		*(DWORD *)link = 0x4c;
+		*(DWORD *)(link + 0x14) = 0x1000 | 0x80;
+		*(DWORD *)(link + 0x4c) = 0x314;
+		*(DWORD *)(link + 0x50) = 0xa0000006;
+		lstrcpyW((WCHAR *)(link + 0x4c + 0x10c), descriptor);
+		GetTempPathW(MAX_PATH, link_directory);
+		GetTempFileNameW(link_directory, L"rvn", 0, link_path);
+		HANDLE link_file = CreateFileW(link_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+		WriteFile(link_file, link, sizeof link, &written, NULL);
+		CloseHandle(link_file);
+		UINT target = MsiGetShortcutTargetW(link_path, product, feature, component);
+		DeleteFileW(link_path);
+		if (target != ERROR_SUCCESS)
+			return 91;
+		if (lstrcmpW(product, L"{90160000-000F-0000-1000-0000000FF1CE}") || lstrcmpW(feature, L"Word") || lstrcmpW(component, L"{11111111-2222-3333-4444-555555555555}"))
+			return 92;
+		if (MsiGetShortcutTargetW(L"C:\\raven-no-such.lnk", product, feature, component) == ERROR_SUCCESS)
+			return 93;
+	}
 	return 0;
 }

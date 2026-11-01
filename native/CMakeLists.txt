@@ -1362,12 +1362,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             # A package made by wixl, read back as a database: tables, SQL views and the summary information stream; then installed.
             if(RAVEN_WIXL AND installer_compiler)
                 set(fixture ${MSI_FIXTURES}/${installer_arch})
-                add_custom_command(OUTPUT ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/msi-install.exe ${fixture}/msiexec-client.exe
+                add_custom_command(OUTPUT ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/com-marshal.exe ${fixture}/msi-install.exe ${fixture}/msiexec-client.exe
                     ${fixture}/clicktorun/msi-clicktorun.exe
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${fixture}
                     COMMAND ${RAVEN_WIXL} -a ${installer_arch} -o ${fixture}/basic.msi msi_basic.wxs
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/msi-database.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_database_client.c -lmsi -lkernel32
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/com-marshal.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/com_marshal_client.c -lole32 -luuid -luser32 -lkernel32
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/msi-install.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_install_client.c -lmsi -ladvapi32 -lkernel32
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
@@ -1376,7 +1378,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/clicktorun/msi-clicktorun.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c -lmsi -ladvapi32 -lkernel32
                     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/testdata/native_loader
-                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_basic.wxs ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_database_client.c
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/com_marshal_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_basic.wxs ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_database_client.c
                         ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_install_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msiexec_client.c
                         ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c VERBATIM)
                 add_custom_target(msi_database_fixture_${installer_arch} ALL DEPENDS ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/msi-install.exe
@@ -1390,6 +1392,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_msi_database_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/prefix)
                 # The same package installed without a user interface and removed again: files, registry, product registration.
+                add_test(NAME native_com_marshal_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/com-marshal.exe)
+                set_tests_properties(native_com_marshal_${installer_arch} PROPERTIES TIMEOUT 90 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_test(NAME native_msi_install_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msi-install.exe)
                 set_tests_properties(native_msi_install_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/install-prefix)
@@ -2260,6 +2264,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(normalize_fixture${width} ALL DEPENDS ${normalize_client})
                     add_test(NAME native_normalize_x${width} COMMAND raven --run-process --execution=native ${normalize_client})
                     set_tests_properties(native_normalize_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(shell_folder_client ${CMAKE_CURRENT_BINARY_DIR}/shell-folder${width}.exe)
+                    add_custom_command(OUTPUT ${shell_folder_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${shell_folder_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/shell_folder_client.c -lshell32 -lole32 -lkernel32 -luuid
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/shell_folder_client.c VERBATIM)
+                    add_custom_target(shell_folder_fixture${width} ALL DEPENDS ${shell_folder_client})
+                    add_test(NAME native_shell_folder_x${width} COMMAND raven --run-process --execution=native ${shell_folder_client})
+                    set_tests_properties(native_shell_folder_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/shell-folder-prefix${width})
                     set(snapshot_client ${CMAKE_CURRENT_BINARY_DIR}/thread-snapshot${width}.exe)
                     add_custom_command(OUTPUT ${snapshot_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
