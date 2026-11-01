@@ -380,7 +380,7 @@ HRESULT STDMETHODCALLTYPE CStdStubBuffer_Connect(IRpcStubBuffer *iface, IUnknown
 	CStdStubBuffer *self = (CStdStubBuffer *)iface;
 	void *object = NULL;
 	HRESULT hr = IUnknown_QueryInterface(server, STUB_HEADER_OF(self)->piid, &object);
-	void *old = InterlockedExchangePointer(&self->pvServerObject, object);
+	void *old = InterlockedExchangePointer((void **)&self->pvServerObject, object);
 	if (old)
 		IUnknown_Release((IUnknown *)old);
 	return hr;
@@ -389,7 +389,7 @@ HRESULT STDMETHODCALLTYPE CStdStubBuffer_Connect(IRpcStubBuffer *iface, IUnknown
 void STDMETHODCALLTYPE CStdStubBuffer_Disconnect(IRpcStubBuffer *iface)
 {
 	CStdStubBuffer *self = (CStdStubBuffer *)iface;
-	void *old = InterlockedExchangePointer(&self->pvServerObject, NULL);
+	void *old = InterlockedExchangePointer((void **)&self->pvServerObject, NULL);
 	if (old)
 		IUnknown_Release((IUnknown *)old);
 }

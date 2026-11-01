@@ -13,8 +13,17 @@ The program's code runs directly on your CPU, inside a sandbox where it cannot r
 - Linux on x86_64
 - CMake 3.20 or newer, a C++20 compiler and Python 3.11 or newer
 - MinGW-w64 for x86_64 and i686, to build the Windows test programs
+- To build the installer components: clang, widl, bison and patch
+- Optionally, OpenSSL for crypt32's certificate chains, Schannel, HTTPS and the CryptoAPI ciphers
 - For desktop applications: Wayland, xkbcommon, pixman, FreeType and Vulkan
 - Optionally, for the experimental X11 desktop: libxcb with its xkb, xfixes and xinput extensions, and xkbcommon-x11
+
+On Fedora these are:
+
+```sh
+sudo dnf install cmake gcc-c++ clang python3 bison patch wine-devel mingw64-gcc mingw64-gcc-c++ mingw32-gcc mingw32-gcc-c++ \
+    wayland-devel libxkbcommon-devel pixman-devel freetype-devel vulkan-loader-devel vulkan-headers openssl-devel
+```
 
 The tested setup also uses libpng 1.6.59, a CPU build of Skia with the Liberation fonts, DXVK and vkd3d-proton; the `scripts/provision-*.py` tools download the pinned versions.
 

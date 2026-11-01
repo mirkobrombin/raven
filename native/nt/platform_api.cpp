@@ -8,7 +8,9 @@
 #include "kernel_context.h"
 #include "system_exports.h"
 
+#ifdef RAVEN_OPENSSL
 #include <openssl/evp.h>
+#endif
 #include <sys/random.h>
 #include <sys/sysinfo.h>
 #include "text.h"
@@ -42,7 +44,9 @@ struct CryptState {
 		uint32_t algorithm = 0;
 		std::vector<uint8_t> secret, iv, chained;
 		uint32_t mode = 1, mode_bits = 8;
+#ifdef RAVEN_OPENSSL
 		std::shared_ptr<EVP_CIPHER_CTX> stream;
+#endif
 	};
 	std::map<uint64_t, bool> providers;
 	std::map<uint64_t, std::unique_ptr<Digest>> hashes;
@@ -69,6 +73,7 @@ const SessionAlgorithm *session_algorithm(uint32_t id)
 	return nullptr;
 }
 
+#ifdef RAVEN_OPENSSL
 // The OpenSSL cipher for a session key in its mode: CBC, ECB or CFB with the feedback width KP_MODE_BITS gives; OFB is not offered.
 const EVP_CIPHER *session_cipher(const CryptState::Key &key)
 {
@@ -89,11 +94,16 @@ const EVP_CIPHER *session_cipher(const CryptState::Key &key)
 		name = std::string(key.secret.size() == 16 ? "DES-EDE-" : "DES-EDE3-") + mode;
 	return EVP_get_cipherbyname(name.c_str());
 }
+#endif
 
 // Runs data through a session key in one direction. A block mode starts from the IV the last call that was not final left, and a final
 // call pads (or strips the padding) as PKCS #5 says and goes back to the key's own IV; a stream cipher carries on where it was.
 std::optional<std::vector<uint8_t>> session_crypt(CryptState::Key &key, std::span<const uint8_t> data, bool final, bool encrypt)
 {
+#ifndef RAVEN_OPENSSL
+	// Without OpenSSL there is no cipher to run a session key through.
+	return std::nullopt;
+#else
 	const auto *cipher = session_cipher(key);
 	if (!cipher)
 		return std::nullopt;
@@ -137,6 +147,7 @@ std::optional<std::vector<uint8_t>> session_crypt(CryptState::Key &key, std::spa
 		key.chained.assign(cipher_text.end() - std::ptrdiff_t(block), cipher_text.end());
 	}
 	return out;
+#endif
 }
 
 // RSA public keys and signature checks for CryptImportKey and CryptVerifySignature. Numbers are little-endian 32-bit words; the only
@@ -1746,7 +1757,9 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		auto copy = key->second;
+#ifdef RAVEN_OPENSSL
 		copy.stream.reset();
+#endif
 		const auto handle = crypt->next++;
 		crypt->keys[handle] = std::move(copy);
 		call.store_pointer(call[3], handle);
