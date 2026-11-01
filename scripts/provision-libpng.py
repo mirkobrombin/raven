@@ -29,8 +29,10 @@ def main():
     build = output / "build"
     install = output / "install"
     build.mkdir(exist_ok=True)
+    # GNUInstallDirs picks lib64 on RPM-based distributions; the path printed below names lib.
     subprocess.run(["cmake", "-DCMAKE_BUILD_TYPE=Release", "-DPNG_SHARED=OFF", "-DPNG_TESTS=OFF", "-DPNG_TOOLS=OFF",
-                    f"-DCMAKE_INSTALL_PREFIX={install}", str(output / "libpng-1.6.59")], cwd=build, env=env, check=True, capture_output=True)
+                    f"-DCMAKE_INSTALL_PREFIX={install}", "-DCMAKE_INSTALL_LIBDIR=lib", str(output / "libpng-1.6.59")],
+                   cwd=build, env=env, check=True, capture_output=True)
     subprocess.run(["cmake", "--build", ".", "--target", "install", "-j2"], cwd=build, env=env, check=True, capture_output=True)
     print(f"configure Raven with -DPNG_LIBRARY_RELEASE={install}/lib/libpng16.a -DPNG_PNG_INCLUDE_DIR={install}/include")
 
