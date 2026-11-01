@@ -1008,6 +1008,15 @@ static void *Layout_table_[IDWriteTextLayout_methods + 4];
 static void *Format_table_[IDWriteTextFormat_methods + 8];
 static BOOL text_tables_ready;
 
+/* Inline objects are accepted and the text around them lays out as if they were absent. */
+static HRESULT STDMETHODCALLTYPE tl_set_inline(IDWriteTextLayout *self, IDWriteInlineObject *object, DWRITE_TEXT_RANGE range) { return S_OK; }
+static HRESULT STDMETHODCALLTYPE tl_get_inline(IDWriteTextLayout *self, UINT32 position, IDWriteInlineObject **object, DWRITE_TEXT_RANGE *range)
+{
+	if (object)
+		*object = NULL;
+	return S_OK;
+}
+
 static void init_text_tables(void)
 {
 	if (text_tables_ready)
@@ -1017,6 +1026,7 @@ static void init_text_tables(void)
 	SET(QueryInterface, tl_query); SET(AddRef, tl_add_ref); SET(Release, tl_release);
 	SET(SetTextAlignment, tl_set_alignment); SET(SetParagraphAlignment, tl_set_paragraph); SET(SetWordWrapping, tl_set_wrapping);
 	SET(SetReadingDirection, tl_set_reading); SET(SetFlowDirection, tl_set_flow); SET(SetIncrementalTabStop, tl_set_tab);
+	SET(SetInlineObject, tl_set_inline); SET(GetInlineObject, tl_get_inline);
 	SET(SetTrimming, tl_set_trimming); SET(SetLineSpacing, tl_set_line_spacing);
 	SET(GetTextAlignment, tl_get_alignment); SET(GetParagraphAlignment, tl_get_paragraph); SET(GetWordWrapping, tl_get_wrapping);
 	SET(GetReadingDirection, tl_get_reading); SET(GetFlowDirection, tl_get_flow); SET(GetIncrementalTabStop, tl_get_tab);
