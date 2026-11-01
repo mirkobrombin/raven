@@ -453,18 +453,21 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	});
 	registry.add("SetParent", 2, [this](ApiCall &call) {
 		auto *window = objects.window(call[0]);
-		if (!window || (call[1] && !objects.window(call[1]))) {
+		// HWND_MESSAGE takes the window off the desktop: it stays a top-level window that only receives messages.
+		const bool message_only = call[1] == UINT64_MAX - 2 || call[1] == 0xfffffffdULL;
+		const uint64_t target = message_only ? 0 : call[1];
+		if (!window || (target && !objects.window(target))) {
 			call.fail(1400);
 			return;
 		}
-		if (call[1] == call[0] || objects.is_child(call[0], call[1])) {
+		if (target == call[0] || objects.is_child(call[0], target)) {
 			call.fail(87);
 			return;
 		}
 		const auto previous = window->parent;
 		const auto *old_parent = previous ? objects.window(previous) : nullptr;
 		const int32_t old_x = old_parent ? old_parent->x : 0, old_y = old_parent ? old_parent->y : 0;
-		const auto *new_parent = call[1] ? objects.window(call[1]) : nullptr;
+		const auto *new_parent = target ? objects.window(target) : nullptr;
 		const int32_t new_x = new_parent ? new_parent->x : 0, new_y = new_parent ? new_parent->y : 0;
 		// Surfaces belong to the root a window draws on, so a move between roots drops every surface of the subtree.
 		const auto drop_surfaces = [&](auto &&self, uint64_t node) -> void {
@@ -474,13 +477,14 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			if (auto *record = objects.window(node))
 				record->bitmap = record->dc = 0;
 		};
-		if (previous != call[1])
+		if (previous != target || message_only)
 			drop_surfaces(drop_surfaces, call[0]);
 		window = objects.window(call[0]);
-		window->parent = call[1];
-		window->shown_on = !call[1] && previous ? objects.window_root(previous) : 0;
-		if (call[1]) window->style = (window->style & ~0x80000000U) | 0x40000000U;
+		window->parent = target;
+		window->shown_on = !target && previous ? objects.window_root(previous) : 0;
+		if (target) window->style = (window->style & ~0x80000000U) | 0x40000000U;
 		else window->style = (window->style & ~0x40000000U) | 0x80000000U;
+		if (message_only) window->style &= ~0x10000000U;
 		shift_window(call[0], new_x - old_x, new_y - old_y);
 		objects.restack(call[0], true);
 		objects.update_window_dcs(call[0]);

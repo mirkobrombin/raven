@@ -29,5 +29,11 @@ int raven_entry(void)
 	RECT client,outer;
 	if (!GetClientRect(early,&client) || client.right!=20 || client.bottom!=15 || !GetWindowRect(parent,&outer)) return 5;
 	if (!DestroyWindow(parent) || IsWindow(early)) return 6;
+	/* HWND_MESSAGE takes a child too: the window has no desktop parent and never shows. */
+	HWND message_child=CreateWindowExW(0,L"RavenEarlyChild",L"quiet",WS_CHILD|WS_VISIBLE,0,0,1,1,HWND_MESSAGE,NULL,NULL,NULL);
+	if (!message_child || IsWindowVisible(message_child) || GetParent(message_child)) return 7;
+	HWND moved=CreateWindowExW(0,L"RavenEarlyChild",L"moved",WS_OVERLAPPED,0,0,50,50,NULL,NULL,NULL,NULL);
+	if (!moved || GetParent(moved) || !SetParent(moved,HWND_MESSAGE) && GetLastError()) return 8;
+	if (IsWindowVisible(moved) || !DestroyWindow(moved) || !DestroyWindow(message_child)) return 9;
 	return 0;
 }

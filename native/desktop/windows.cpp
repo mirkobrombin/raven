@@ -1624,11 +1624,11 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 uint64_t NativeWindows::create(std::span<const uint64_t> args)
 {
 	const auto style=uint32_t(args[3]),ex_style=uint32_t(args[0]);
-	const bool child=(style & 0x40000000U)!=0;
-	// A message-only window (parent HWND_MESSAGE) only receives messages: it is a top-level window that is never shown.
-	const bool message_only=!child && (args[8]==UINT64_MAX-2 || args[8]==0xfffffffdULL);
+	// A message-only window (parent HWND_MESSAGE, with or without WS_CHILD) only receives messages: it is a top-level window that is never shown.
+	const bool message_only=args[8]==UINT64_MAX-2 || args[8]==0xfffffffdULL;
+	const bool child=!message_only && (style & 0x40000000U)!=0;
 	const uint64_t owner_handle=message_only ? 0 : args[8];
-	const auto effective_style=message_only ? style & ~0x10000000U : style;
+	const auto effective_style=message_only ? style & ~0x50000000U : style;
 	// A visible window needs somewhere to appear; headless runs can still create hidden windows.
 	if ((effective_style & 0x10000000U) && !presentation.present) throw uint32_t(120);
 	const auto *parent=child ? objects.window(args[8]) : nullptr;
