@@ -33,3 +33,12 @@ StgSetTimes
 WriteClassStg
 WriteClassStm
 WriteFmtUserTypeStg
+CoGetInterfaceAndReleaseStream
+CoGetMarshalSizeMax
+CoMarshalInterThreadInterfaceInStream
+CoMarshalInterface
+CoReleaseMarshalData
+CoUnmarshalInterface
+CoDisconnectObject
+CoFreeUnusedLibraries
+CoFreeUnusedLibrariesEx
