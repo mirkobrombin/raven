@@ -3151,6 +3151,26 @@ static HRESULT STDMETHODCALLTYPE interop_face_to_logfont(IDWriteGdiInterop *self
 	return result;
 }
 
+/* The font selected into the device context, as a face. */
+static HRESULT STDMETHODCALLTYPE interop_face_from_hdc(IDWriteGdiInterop *self, HDC dc, IDWriteFontFace **face)
+{
+	LOGFONTW logfont;
+	IDWriteFont *font = NULL;
+	HRESULT result;
+	if (!face)
+		return E_INVALIDARG;
+	*face = NULL;
+	HGDIOBJ selected = GetCurrentObject(dc, OBJ_FONT);
+	if (!selected || !GetObjectW(selected, sizeof(logfont), &logfont))
+		return E_INVALIDARG;
+	result = interop_create_font(self, &logfont, &font);
+	if (FAILED(result))
+		return result;
+	result = IDWriteFont_CreateFontFace(font, face);
+	IDWriteFont_Release(font);
+	return result;
+}
+
 /* IDWriteGdiInterop1: the font a LOGFONT names in a given collection, and the scripts and code pages a font claims. */
 static HRESULT STDMETHODCALLTYPE interop_create_font_in(IDWriteGdiInterop *self, const LOGFONTW *logfont, IDWriteFontCollection *collection,
 	IDWriteFont **font)
@@ -3248,6 +3268,7 @@ static IDWriteGdiInterop *get_interop(void)
 		Interop_table_[IDWriteGdiInterop_ConvertFontToLOGFONT] = (void *)interop_font_to_logfont;
 		Interop_table_[IDWriteGdiInterop_ConvertFontFaceToLOGFONT] = (void *)interop_face_to_logfont;
 		Interop_table_[IDWriteGdiInterop_CreateBitmapRenderTarget] = (void *)interop_create_target;
+		Interop_table_[IDWriteGdiInterop_CreateFontFaceFromHdc] = (void *)interop_face_from_hdc;
 		Interop_table_[Interop1_CreateFontFromLOGFONT] = (void *)interop_create_font_in;
 		Interop_table_[Interop1_GetFontSignature_face] = (void *)interop_signature;
 		Interop_table_[Interop1_GetFontSignature] = (void *)interop_signature;
