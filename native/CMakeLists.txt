@@ -70,7 +70,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_compile_options(raven-bootstrap PRIVATE -fno-sanitize=all)
     target_link_options(raven-bootstrap PRIVATE -fno-sanitize=all -nostdlib -static
         -Wl,-no-pie,-Ttext-segment=0x700000000000,-e,_start,--build-id=none)
-    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
+    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
     target_include_directories(raven_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     set(NLS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/reactos-nls)
     file(SHA256 ${NLS_SOURCE}/c_1252.txt NLS_TEXT_HASH)
@@ -460,6 +460,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_executable(firmware_test nt/firmware_test.cpp)
     target_link_libraries(firmware_test PRIVATE raven_cpu)
     add_test(NAME native_firmware_memory COMMAND firmware_test)
+    add_executable(interfaces_test nt/interfaces_test.cpp)
+    target_link_libraries(interfaces_test PRIVATE raven_cpu)
+    add_test(NAME native_interface_table_contract COMMAND interfaces_test)
+    set_tests_properties(native_interface_table_contract PROPERTIES TIMEOUT 15)
     target_link_libraries(memory_test PRIVATE raven_cpu)
     add_dependencies(memory_test raven-bootstrap)
     add_test(NAME native_memory_contract COMMAND memory_test $<TARGET_FILE:raven-bootstrap>)
@@ -498,6 +502,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_test(NAME native_multibyte_boundary COMMAND raven --run-process --execution=native ${MULTIBYTE_BOUNDARY})
         set_tests_properties(native_multibyte_contract PROPERTIES TIMEOUT 30)
         set_tests_properties(native_multibyte_cli native_multibyte_boundary PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        set(INTERFACE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/interface-client.exe)
+        add_custom_command(OUTPUT ${INTERFACE_CLIENT}
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                -Wl,--entry,raven_entry,--image-base,0x1d7000000,--no-insert-timestamp
+                -o ${INTERFACE_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c -liphlpapi -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c VERBATIM)
+        add_custom_target(interface_pe_fixture ALL DEPENDS ${INTERFACE_CLIENT})
+        add_test(NAME native_interface_table_client COMMAND raven --run-process --execution=native --timeout-ms=30000 ${INTERFACE_CLIENT})
+        set_tests_properties(native_interface_table_client PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # The records carry no pointer, so a 32-bit program reads the same rows; the fixture is built twice to check that it can.
+        find_program(RAVEN_MINGW32_INTERFACES i686-w64-mingw32-gcc)
+        if(RAVEN_MINGW32_INTERFACES)
+            set(INTERFACE_CLIENT32 ${CMAKE_CURRENT_BINARY_DIR}/interface-client32.exe)
+            add_custom_command(OUTPUT ${INTERFACE_CLIENT32}
+                COMMAND ${RAVEN_MINGW32_INTERFACES} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                    -Wl,--entry,_raven_entry,--image-base,0x1d7000000,--no-insert-timestamp
+                    -o ${INTERFACE_CLIENT32} ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c -liphlpapi -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c VERBATIM)
+            add_custom_target(interface_pe_fixture32 ALL DEPENDS ${INTERFACE_CLIENT32})
+            add_test(NAME native_interface_table_client_x32 COMMAND raven --run-process --execution=native --timeout-ms=30000 ${INTERFACE_CLIENT32})
+            set_tests_properties(native_interface_table_client_x32 PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        endif()
     endif()
     if(RAVEN_MINGW64 AND PIXMAN_FOUND)
         set(PEN_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/pen-client.exe)
