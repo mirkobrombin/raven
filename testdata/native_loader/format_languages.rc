@@ -1,0 +1,5 @@
+// The message compiler only knows regions; the tables here carry neutral languages, the first of them not English.
+LANGUAGE 4, 0
+1 11 "MSG00804.bin"
+LANGUAGE 9, 0
+1 11 "MSG00409.bin"

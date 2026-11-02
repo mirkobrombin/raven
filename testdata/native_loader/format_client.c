@@ -38,5 +38,12 @@ int raven_entry(void)
 	if (FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 11, 0, buffer, 64, NULL) ||
 		GetLastError() != ERROR_MR_MID_NOT_FOUND)
 		return 4;
+	/* The table has no entry for this region: its language's neutral form answers, not the table that sorts first. */
+	if (!FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 10, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), buffer, 64, NULL) ||
+		buffer[0] != L'D')
+		return 5;
+	if (!FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 10, MAKELANGID(LANG_CHINESE, SUBLANG_NEUTRAL), buffer, 64, NULL) ||
+		buffer[0] != L'T')
+		return 6;
 	return 0;
 }
