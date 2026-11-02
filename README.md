@@ -55,13 +55,16 @@ python3 scripts/provision-installer.py --output components/installer
 python3 scripts/provision-installer.py --arch x86 --output components/installer32
 python3 scripts/provision-graphics.py --destination components/graphics
 python3 scripts/provision-roots.py --output components/roots
+python3 scripts/provision-text.py --output components/text
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DRAVEN_RTL_COMPONENT_PATH=$PWD/components/rtl/raven-rtl.dll \
     -DRAVEN_CONTROLS_COMPONENT_DIR=$PWD/components/controls -DRAVEN_CONTROLS32_COMPONENT_DIR=$PWD/components/controls32 \
     -DRAVEN_INSTALLER_COMPONENT_DIR=$PWD/components/installer -DRAVEN_INSTALLER32_COMPONENT_DIR=$PWD/components/installer32 \
     -DRAVEN_DXVK_PE64_DIR=$PWD/components/graphics/dxvk/pe64 -DRAVEN_DXVK_PE32_DIR=$PWD/components/graphics/dxvk/pe32 \
     -DRAVEN_VKD3D_PE64_DIR=$PWD/components/graphics/vkd3d-proton/pe64 \
-    -DRAVEN_ROOT_CERTIFICATE_DIRECTORY=$PWD/components/roots
+    -DRAVEN_ROOT_CERTIFICATE_DIRECTORY=$PWD/components/roots \
+    -DRAVEN_SKIA_SOURCE=$PWD/components/text/skia -DRAVEN_SKIA_LIBRARY=$PWD/components/text/cpu-fonts/libskia.a \
+    -DRAVEN_FONT_DIRECTORY=$PWD/components/text/fonts
 cmake --build build -j2
 ```
 
