@@ -498,6 +498,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_test(NAME native_multibyte_boundary COMMAND raven --run-process --execution=native ${MULTIBYTE_BOUNDARY})
         set_tests_properties(native_multibyte_contract PROPERTIES TIMEOUT 30)
         set_tests_properties(native_multibyte_cli native_multibyte_boundary PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        set(PROTOCOL_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/protocol-client.exe)
+        find_program(RAVEN_MINGW32_PROTOCOLS i686-w64-mingw32-gcc)
+        add_custom_command(OUTPUT ${PROTOCOL_CLIENT}
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                -Wl,--entry,raven_entry,--image-base,0x1d8000000,--no-insert-timestamp
+                -o ${PROTOCOL_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/protocol_client.c -lws2_32 -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/protocol_client.c VERBATIM)
+        add_custom_target(protocol_pe_fixture ALL DEPENDS ${PROTOCOL_CLIENT})
+        add_test(NAME native_protocol_database_client COMMAND raven --run-process --execution=native --timeout-ms=30000 ${PROTOCOL_CLIENT})
+        set_tests_properties(native_protocol_database_client PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # The PROTOENT record keeps its pointers, so a 32-bit program reads it in the 32-bit layout; the fixture is built twice to check it.
+        if(RAVEN_MINGW32_PROTOCOLS)
+            set(PROTOCOL_CLIENT32 ${CMAKE_CURRENT_BINARY_DIR}/protocol-client32.exe)
+            add_custom_command(OUTPUT ${PROTOCOL_CLIENT32}
+                COMMAND ${RAVEN_MINGW32_PROTOCOLS} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                    -Wl,--entry,_raven_entry,--image-base,0x1d8000000,--no-insert-timestamp
+                    -o ${PROTOCOL_CLIENT32} ${PROJECT_SOURCE_DIR}/testdata/native_loader/protocol_client.c -lws2_32 -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/protocol_client.c VERBATIM)
+            add_custom_target(protocol_pe_fixture32 ALL DEPENDS ${PROTOCOL_CLIENT32})
+            add_test(NAME native_protocol_database_client_x32 COMMAND raven --run-process --execution=native --timeout-ms=30000 ${PROTOCOL_CLIENT32})
+            set_tests_properties(native_protocol_database_client_x32 PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        endif()
     endif()
     if(RAVEN_MINGW64 AND PIXMAN_FOUND)
         set(PEN_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/pen-client.exe)
