@@ -604,11 +604,18 @@ MSIHANDLE WINAPI MsiGetActiveDatabase(MSIHANDLE handle)
 	if (!package)
 		return 0;
 	if (package->remote) {
-		WCHAR *path = NULL;
-		remote_call(package->remote, REMOTE_DATABASE_PATH, NULL, NULL, 0, &path, NULL);
-		if (path)
-			MsiOpenDatabaseW(path, MSIDBOPEN_READONLY, &result);
-		msi_free(path);
+		// One database for the whole action, which asks for it again for every row it works on.
+		if (!package->db) {
+			WCHAR *path = NULL;
+			remote_call(package->remote, REMOTE_DATABASE_PATH, NULL, NULL, 0, &path, NULL);
+			if (path && db_open(path, (const WCHAR *)MSIDBOPEN_READONLY, &package->db))
+				package->db = NULL;
+			msi_free(path);
+		}
+		if (package->db) {
+			object_ref(&package->db->base);
+			result = handle_open(&package->db->base);
+		}
 	} else {
 		object_ref(&package->db->base);
 		result = handle_open(&package->db->base);

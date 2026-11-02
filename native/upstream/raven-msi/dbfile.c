@@ -204,6 +204,26 @@ static UINT effective_codepage(const msi_db *db)
 }
 
 // Each id keeps its place: tables on disk refer to strings by it, and a hole in the pool is an empty entry.
+// Packages hold tens of thousands of strings, nearly all ASCII, and every custom action host reads them all.
+// Stateful code pages (50000 and up, except UTF-8) give plain bytes other meanings.
+static void pool_decode(pool_entry *entry, UINT codepage, const char *bytes, UINT length)
+{
+	BOOL plain = codepage < 50000 || codepage == CP_UTF8;
+	for (UINT i = 0; plain && i < length; i++)
+		plain = (BYTE)bytes[i] < 0x80;
+	if (plain) {
+		entry->text = msi_alloc((length + 1) * sizeof(WCHAR));
+		for (UINT i = 0; i < length; i++)
+			entry->text[i] = (BYTE)bytes[i];
+		entry->length = length;
+		return;
+	}
+	INT wide = MultiByteToWideChar(codepage, 0, bytes, length, NULL, 0);
+	entry->text = msi_alloc((wide + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(codepage, 0, bytes, length, entry->text, wide);
+	entry->length = wide;
+}
+
 static BOOL pool_load(msi_db *db, UINT *ref_size)
 {
 	ULONG pool_size = 0, data_size = 0;
@@ -229,10 +249,7 @@ static BOOL pool_load(msi_db *db, UINT *ref_size)
 		}
 		UINT id = db->pool_count++;
 		if (length && offset + length <= data_size) {
-			INT wide = MultiByteToWideChar(effective_codepage(db), 0, (char *)data + offset, length, NULL, 0);
-			db->pool[id].text = msi_alloc((wide + 1) * sizeof(WCHAR));
-			MultiByteToWideChar(effective_codepage(db), 0, (char *)data + offset, length, db->pool[id].text, wide);
-			db->pool[id].length = wide;
+			pool_decode(&db->pool[id], effective_codepage(db), (char *)data + offset, length);
 			offset += length;
 		}
 	}
