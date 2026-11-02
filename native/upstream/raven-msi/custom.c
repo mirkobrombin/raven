@@ -133,6 +133,34 @@ static UINT run_program(const WCHAR *line, const WCHAR *directory, BOOL wait)
 	return status;
 }
 
+// A package kept as a storage inside this one, written out so it can be installed like any other.
+static WCHAR *nested_package(msi_package *package, const WCHAR *name)
+{
+	WCHAR encoded[64], folder[MAX_PATH], path[MAX_PATH];
+	IStorage *from = NULL, *to = NULL;
+	name_encode(name, FALSE, encoded);
+	if (!package->db->storage)
+		return NULL;
+	HRESULT hr = IStorage_OpenStorage(package->db->storage, encoded, NULL, STGM_DIRECT | STGM_READ | STGM_SHARE_EXCLUSIVE, NULL, 0, &from);
+	if (FAILED(hr))
+		hr = IStorage_OpenStorage(package->db->storage, name, NULL, STGM_DIRECT | STGM_READ | STGM_SHARE_EXCLUSIVE, NULL, 0, &from);
+	if (FAILED(hr))
+		return NULL;
+	GetTempPathW(MAX_PATH, folder);
+	GetTempFileNameW(folder, L"msi", 0, path);
+	if (SUCCEEDED(hr = StgCreateDocfile(path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0, &to))) {
+		hr = IStorage_CopyTo(from, 0, NULL, NULL, to);
+		IStorage_Commit(to, 0);
+		IStorage_Release(to);
+	}
+	IStorage_Release(from);
+	if (FAILED(hr)) {
+		DeleteFileW(path);
+		return NULL;
+	}
+	return msi_copy(path);
+}
+
 static UINT execute(msi_package *package, const WCHAR *name, INT type, const WCHAR *source, const WCHAR *target)
 {
 	INT kind = type & KIND_MASK, from = type & SOURCE_MASK;
@@ -187,21 +215,29 @@ static UINT execute(msi_package *package, const WCHAR *name, INT type, const WCH
 			package_log(L"Unknown text action %s", name);
 		break;
 	case KIND_INSTALL: {
+		// By its documented types: 7 a storage of this package, 23 a path below the source, 39 an advertised product's code.
+		if (from == SOURCE_DIRECTORY) {
+			status = MsiConfigureProductExW(source, INSTALLLEVEL_DEFAULT, INSTALLSTATE_DEFAULT, formatted);
+			break;
+		}
 		WCHAR *path = NULL;
-		if (from == SOURCE_DIRECTORY || from == SOURCE_PROPERTY) {
-			path = from == SOURCE_PROPERTY ? package_get(package, source) : NULL;
-			if (from == SOURCE_DIRECTORY) {
-				WCHAR *root = package_get(package, L"SourceDir");
-				if (root) {
-					path = msi_alloc((lstrlenW(root) + lstrlenW(source) + 1) * sizeof(WCHAR));
-					lstrcpyW(path, root);
-					lstrcatW(path, source);
-					msi_free(root);
-				}
+		BOOL temporary = FALSE;
+		if (from == SOURCE_BINARY) {
+			path = nested_package(package, source);
+			temporary = path != NULL;
+		} else if (from == SOURCE_FILE) {
+			WCHAR *root = package_get(package, L"SourceDir");
+			if (root) {
+				path = msi_alloc((lstrlenW(root) + lstrlenW(source) + 1) * sizeof(WCHAR));
+				lstrcpyW(path, root);
+				lstrcatW(path, source);
+				msi_free(root);
 			}
 		}
 		if (path) {
 			status = MsiInstallProductW(path, formatted);
+			if (temporary)
+				DeleteFileW(path);
 			msi_free(path);
 		} else {
 			package_log(L"Nested installation from this source is not available: %s", name);

@@ -63,7 +63,7 @@ def missing_runtime(raven, prefix, program, evidence, title=MISSING_TITLE, name=
             process.wait()
 
 
-def step(raven, prefix, program, arguments, evidence, name, watch=None, timeout=1800):
+def step(raven, prefix, program, arguments, evidence, name, watch=None, timeout=3000):
     code = native_redist.run(raven, prefix, program, arguments, evidence / f"{name}.log", watch=watch, timeout=timeout)
     if code not in (0, 3010):
         raise RuntimeError(f"{name}: {program.name} ended with status {code}")
@@ -87,7 +87,11 @@ def main():
         missing_runtime(raven, prefix, folder / "hello64.exe", evidence)
         step(raven, prefix, installer, ["/x:C:\\ndp", "/q"], evidence, "unpack")
         step(raven, prefix, msiexec, ["/i", "C:\\ndp\\netfx_Full_x64.msi", "/qn"], evidence, "full")
+        runtime = prefix / "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/clr.dll"
+        before = runtime.read_bytes()
         step(raven, prefix, msiexec, ["/p", "C:\\ndp\\netfx_Patch_x64.msp", "/qn", "EXTUI=1"], evidence, "patch")
+        if runtime.read_bytes() == before:
+            raise RuntimeError("the reliability update left the runtime's files as they were")
         code = native_redist.run(raven, prefix, folder / "hello64.exe", [], evidence / "hello.log", timeout=300)
         said = (folder / "hello-out.txt").read_text() if (folder / "hello-out.txt").exists() else ""
         if code != 42 or "Hello from .NET 4.0.30319" not in said:

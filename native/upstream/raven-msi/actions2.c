@@ -622,6 +622,8 @@ static UINT act_process_components(msi_package *package)
 // Removal drops the registration; the installation writes it, and its undo entries take it away on a failure.
 static UINT act_register_product(msi_package *package)
 {
+	if (package->removing)
+		patches_forget(package);
 	return package->removing ? product_unregister(package) : product_register(package);
 }
 
@@ -640,59 +642,7 @@ static UINT act_unpublish_features(msi_package *package)
 	return package->removing ? product_unregister(package) : ERROR_SUCCESS;
 }
 
-/* Searching the machine. */
-
-static UINT reg_locator_row(msi_record *row, void *context)
-{
-	struct { msi_package *package; const WCHAR *signature; WCHAR *found; } *search = context;
-	WCHAR a[16], b[16], c[16];
-	if (lstrcmpW(record_text(row, 1, a), search->signature) || search->found)
-		return ERROR_SUCCESS;
-	HKEY handle, root = registry_root(search->package, record_get_int(row, 2));
-	WCHAR *key = record_text(row, 3, b) ? format_text(search->package, b, NULL) : NULL;
-	WCHAR *name = record_text(row, 4, c) ? format_text(search->package, c, NULL) : NULL;
-	if (key && !RegOpenKeyExW(root, key, 0, KEY_READ, &handle)) {
-		DWORD type, size = 0;
-		if (!RegQueryValueExW(handle, name, NULL, &type, NULL, &size) && size) {
-			BYTE *data = msi_alloc(size + 2);
-			RegQueryValueExW(handle, name, NULL, &type, data, &size);
-			data[size] = data[size + 1] = 0;
-			if (type == REG_DWORD) {
-				WCHAR number[16];
-				wsprintfW(number, L"#%u", *(DWORD *)data);
-				search->found = msi_copy(number);
-			} else if (type == REG_SZ || type == REG_EXPAND_SZ)
-				search->found = msi_copy((WCHAR *)data);
-			msi_free(data);
-		}
-		RegCloseKey(handle);
-	}
-	msi_free(key);
-	msi_free(name);
-	return ERROR_SUCCESS;
-}
-
-static UINT app_search_row(msi_record *row, void *context)
-{
-	msi_package *package = context;
-	WCHAR a[16], b[16];
-	const WCHAR *property = record_text(row, 1, a), *signature = record_text(row, 2, b);
-	if (!property || !signature)
-		return ERROR_SUCCESS;
-	struct { msi_package *package; const WCHAR *signature; WCHAR *found; } search = { package, signature, NULL };
-	db_query_each(package->db, L"SELECT `Signature_`, `Root`, `Key`, `Name` FROM `RegLocator`", NULL, reg_locator_row, &search);
-	if (search.found) {
-		package_set(package, property, search.found);
-		msi_free(search.found);
-	}
-	return ERROR_SUCCESS;
-}
-
-static UINT act_app_search(msi_package *package)
-{
-	db_query_each(package->db, L"SELECT `Property`, `Signature_` FROM `AppSearch`", NULL, app_search_row, package);
-	return ERROR_SUCCESS;
-}
+/* Related products. */
 
 static UINT upgrade_row(msi_record *row, void *context)
 {
@@ -774,7 +724,7 @@ const extra_action extra_actions[] = {
 	{ L"RemoveFiles2", act_remove_listed_files, TRUE },
 	{ L"ProcessComponents", act_process_components, TRUE }, { L"RegisterProduct", act_register_product, TRUE }, { L"RegisterUser", act_none_extra, FALSE },
 	{ L"PublishProduct", act_publish_product, TRUE }, { L"PublishFeatures", act_publish_features, TRUE }, { L"UnpublishFeatures", act_unpublish_features, TRUE },
-	{ L"AppSearch", act_app_search, FALSE }, { L"FindRelatedProducts", act_find_related, FALSE }, { L"MigrateFeatureStates", act_none_extra, FALSE },
+	{ L"FindRelatedProducts", act_find_related, FALSE }, { L"MigrateFeatureStates", act_none_extra, FALSE },
 	{ L"RemoveExistingProducts", act_remove_existing, FALSE },
 	{ NULL, NULL, FALSE },
 };

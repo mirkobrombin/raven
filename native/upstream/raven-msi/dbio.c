@@ -885,6 +885,11 @@ static UINT apply_storage(msi_db *db, IStorage *storage, INT conditions)
 	return status;
 }
 
+UINT db_apply_storage(msi_db *db, IStorage *storage, INT conditions)
+{
+	return apply_storage(db, storage, conditions);
+}
+
 UINT db_apply_transform(msi_db *db, const WCHAR *path, INT conditions)
 {
 	IStorage *storage = NULL;

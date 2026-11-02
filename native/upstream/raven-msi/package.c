@@ -73,31 +73,33 @@ void package_message(msi_package *package, INSTALLMESSAGE type, const WCHAR *tex
 	ui_deliver(type, text ? text : L"", 0);
 }
 
+// Where each digit of a squashed code sits in the braced form: the first three groups reversed, the rest swapped in pairs.
+static const signed char squash_order[32] = { 8, 7, 6, 5, 4, 3, 2, 1, 13, 12, 11, 10, 18, 17, 16, 15, 21, 20, 23, 22, 26, 25, 28, 27, 30, 29, 32, 31, 34, 33, 36, 35 };
+
 BOOL guid_squash(const WCHAR *guid, WCHAR out[33])
 {
-	static const signed char swap[32] = { 8, 7, 6, 5, 4, 3, 2, 1, 12, 11, 10, 9, 17, 16, 15, 14, 21, 20, 24, 23, 27, 26, 29, 28, 31, 30, 33, 32, 35, 34, 37, 36 };
 	if (!guid || lstrlenW(guid) != 38 || guid[0] != '{' || guid[37] != '}')
 		return FALSE;
 	for (int i = 0; i < 32; i++)
-		out[i] = guid[swap[i]];
+		out[i] = guid[squash_order[i]];
 	out[32] = 0;
 	return TRUE;
 }
 
 BOOL guid_unsquash(const WCHAR *squashed, WCHAR out[39])
 {
-	static const signed char swap[32] = { 8, 7, 6, 5, 4, 3, 2, 1, 12, 11, 10, 9, 17, 16, 15, 14, 21, 20, 24, 23, 27, 26, 29, 28, 31, 30, 33, 32, 35, 34, 37, 36 };
 	if (!squashed || lstrlenW(squashed) != 32)
 		return FALSE;
 	lstrcpyW(out, L"{00000000-0000-0000-0000-000000000000}");
 	for (int i = 0; i < 32; i++)
-		out[swap[i]] = squashed[i];
+		out[squash_order[i]] = squashed[i];
 	return TRUE;
 }
 
 static void package_destroy(msi_object *object)
 {
 	msi_package *package = (msi_package *)object;
+	msi_free(package->command_line);
 	for (UINT i = 0; i < package->property_count; i++) {
 		msi_free(package->properties[i].name);
 		msi_free(package->properties[i].value);
@@ -380,10 +382,22 @@ msi_package *package_from_handle(MSIHANDLE handle)
 }
 
 // PROPERTY=value pairs, where a value may be quoted and "" stands for one quote.
+void package_reload_properties(msi_package *package)
+{
+	db_query_each(package->db, L"SELECT `Property`, `Value` FROM `Property`", NULL, property_row, package);
+	WCHAR *line = package->command_line ? msi_copy(package->command_line) : NULL;
+	package_command_line(package, line);
+	msi_free(line);
+}
+
 UINT package_command_line(msi_package *package, const WCHAR *line)
 {
 	if (!line)
 		return ERROR_SUCCESS;
+	if (line != package->command_line) {
+		msi_free(package->command_line);
+		package->command_line = msi_copy(line);
+	}
 	const WCHAR *at = line;
 	for (;;) {
 		while (*at == ' ' || *at == '\t')

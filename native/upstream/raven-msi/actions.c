@@ -308,14 +308,26 @@ static INT_PTR DIAMONDAPI fdi_notify(FDINOTIFICATIONTYPE kind, PFDINOTIFICATION 
 		WCHAR *key = msi_from_ansi(info->psz1);
 		msi_file *file = file_find(package, key);
 		msi_free(key);
-		if (!file || !file_wanted(file))
+		if (!file || !file_wanted(file) || file->extracted)
 			return 0;
+		file->extracted = package->patched;
+		if (file->has_delta) {
+			WCHAR folder[MAX_PATH], name[MAX_PATH];
+			GetTempPathW(MAX_PATH, folder);
+			if (!GetTempFileNameW(folder, L"dlt", 0, name))
+				return -1;
+			HANDLE out = CreateFileW(name, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+			if (out == INVALID_HANDLE_VALUE)
+				return -1;
+			file->delta_path = msi_copy(name);
+			return (INT_PTR)out;
+		}
 		WCHAR *path = file_target(package, file);
 		if (!path)
 			return 0;
 		INT_PTR handle = 0;
 		if (should_install(package, file, path)) {
-			const WCHAR *folder = directory_target(package, file->component->directory);
+			const WCHAR *folder = file->component->assembly_folder ? file->component->assembly_folder : directory_target(package, file->component->directory);
 			if (create_directories(package, folder) || !backup_existing(package, path))
 				context->status = ERROR_INSTALL_FAILURE;
 			else {
@@ -363,14 +375,9 @@ static BOOL extract_cabinet(msi_package *package, const WCHAR *cabinet_path, ext
 	return ok;
 }
 
-static UINT media_row(msi_record *row, void *raw)
+static UINT media_cabinet(extract_context *context, const WCHAR *cabinet)
 {
-	extract_context *context = raw;
 	msi_package *package = context->package;
-	WCHAR scratch[16];
-	const WCHAR *cabinet = record_text(row, 1, scratch);
-	if (!cabinet || !*cabinet)
-		return ERROR_SUCCESS;
 	WCHAR path[MAX_PATH * 2];
 	BOOL temporary = FALSE;
 	if (cabinet[0] == '#') {
@@ -395,6 +402,11 @@ static UINT media_row(msi_record *row, void *raw)
 		WCHAR *source = package_get(package, L"SourceDir");
 		wsprintfW(path, L"%s%s", source ? source : L"", cabinet);
 		msi_free(source);
+		// Maintenance runs from the cached package, away from the original media; a patched file comes from the patch.
+		if (package->patched && GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+			package_log(L"Cabinet %s is not here, its files stay as they are", path);
+			return ERROR_SUCCESS;
+		}
 	}
 	if (!extract_cabinet(package, path, context)) {
 		package_log(L"Cannot extract %s: %u", path, GetLastError());
@@ -403,6 +415,30 @@ static UINT media_row(msi_record *row, void *raw)
 	if (temporary)
 		DeleteFileW(path);
 	return context->status;
+}
+
+static UINT media_row(msi_record *row, void *raw)
+{
+	WCHAR scratch[16];
+	const WCHAR *cabinet = record_text(row, 1, scratch);
+	return cabinet && *cabinet ? media_cabinet(raw, cabinet) : ERROR_SUCCESS;
+}
+
+typedef struct media_list {
+	WCHAR **names;
+	UINT count;
+} media_list;
+
+static UINT media_collect(msi_record *row, void *raw)
+{
+	media_list *list = raw;
+	WCHAR scratch[16];
+	const WCHAR *cabinet = record_text(row, 1, scratch);
+	if (!cabinet || !*cabinet)
+		return ERROR_SUCCESS;
+	list->names = msi_grow(list->names, (list->count + 1) * sizeof(*list->names));
+	list->names[list->count++] = msi_copy(cabinet);
+	return ERROR_SUCCESS;
 }
 
 // Uncompressed payload sits below the source folder, along the directory tree's source names.
@@ -439,8 +475,27 @@ static UINT act_install_files(msi_package *package)
 {
 	BOOL compressed = package_compressed(package);
 	BOOL any_cabinet = FALSE;
+	// A patch's file sits in its cabinet whatever the base package says of it: the cabinets go first and mark what they gave.
+	if (package->patched) {
+		extract_context first = { package, ERROR_SUCCESS };
+		media_list media = { NULL, 0 };
+		UINT queried = db_query_each(package->db, L"SELECT `Cabinet` FROM `Media` ORDER BY `DiskId`", NULL, media_collect, &media);
+		if (queried)
+			first.status = queried;
+		// A patch adds its media after the product's, and what a cabinet gave stays: the newest goes first.
+		for (UINT i = media.count; i-- > 0;) {
+			if (!first.status)
+				media_cabinet(&first, media.names[i]);
+			msi_free(media.names[i]);
+		}
+		msi_free(media.names);
+		if (first.status)
+			return first.status;
+	}
 	for (UINT i = 0; i < package->file_count; i++) {
 		msi_file *file = &package->files[i];
+		if (file->extracted)
+			continue;
 		BOOL in_cabinet = file->attributes & msidbFileAttributesCompressed ? TRUE : file->attributes & msidbFileAttributesNoncompressed ? FALSE : compressed;
 		if (!file_wanted(file))
 			continue;
@@ -453,8 +508,12 @@ static UINT act_install_files(msi_package *package)
 		lstrcatW(source, file->name);
 		WCHAR *path = file_target(package, file);
 		UINT status = ERROR_SUCCESS;
-		if (path && should_install(package, file, path)) {
-			if (create_directories(package, directory_target(package, file->component->directory)) || !backup_existing(package, path) ||
+		// Maintenance may have no media: a file already in place then stays.
+		BOOL unreachable = package->maintenance && path && GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+		if (unreachable)
+			package_log(L"Source %s is not here, %s stays as it is", source, path);
+		else if (path && should_install(package, file, path)) {
+			if (create_directories(package, file->component->assembly_folder ? file->component->assembly_folder : directory_target(package, file->component->directory)) || !backup_existing(package, path) ||
 				!CopyFileW(source, path, FALSE)) {
 				package_log(L"Cannot copy %s to %s: %u", source, path, GetLastError());
 				status = ERROR_INSTALL_FAILURE;
@@ -464,7 +523,7 @@ static UINT act_install_files(msi_package *package)
 		if (status)
 			return status;
 	}
-	if (!any_cabinet)
+	if (!any_cabinet || package->patched)
 		return ERROR_SUCCESS;
 	extract_context context = { package, ERROR_SUCCESS };
 	db_query_each(package->db, L"SELECT `Cabinet` FROM `Media` ORDER BY `DiskId`", NULL, media_row, &context);
@@ -521,12 +580,33 @@ static UINT act_install_initialize(msi_package *package)
 static UINT act_cost_initialize(msi_package *package)
 {
 	tables_load(package);
+	assemblies_load(package);
+	return ERROR_SUCCESS;
+}
+
+static UINT patch_row(msi_record *row, void *context)
+{
+	msi_package *package = context;
+	WCHAR scratch[16];
+	msi_file *file = file_find(package, record_text(row, 1, scratch));
+	if (file)
+		file->has_delta = TRUE;
+	return ERROR_SUCCESS;
+}
+
+static UINT act_file_cost(msi_package *package)
+{
+	if (package->patched)
+		db_query_each(package->db, L"SELECT `File_` FROM `Patch`", NULL, patch_row, package);
 	return ERROR_SUCCESS;
 }
 
 static UINT act_cost_finalize(msi_package *package)
 {
 	states_select(package);
+	package->directories_published = TRUE;
+	directories_publish(package);
+	costs_publish(package);
 	return ERROR_SUCCESS;
 }
 
@@ -566,7 +646,8 @@ static UINT act_install_finalize(msi_package *package)
 {
 	UINT status = script_run(package);
 	package->in_script = FALSE;
-	return status;
+	// Maintenance may skip PublishProduct; a patch still belongs to the product once the script has gone through.
+	return status ? status : patches_register(package);
 }
 
 static UINT act_install_validate(msi_package *package)
@@ -577,7 +658,7 @@ static UINT act_install_validate(msi_package *package)
 }
 
 static const extra_action standard_actions[] = {
-	{ L"CostInitialize", act_cost_initialize, FALSE }, { L"FileCost", act_none, FALSE }, { L"CostFinalize", act_cost_finalize, FALSE },
+	{ L"CostInitialize", act_cost_initialize, FALSE }, { L"FileCost", act_file_cost, FALSE }, { L"CostFinalize", act_cost_finalize, FALSE },
 	{ L"InstallValidate", act_install_validate, FALSE }, { L"InstallInitialize", act_install_initialize, FALSE },
 	{ L"InstallFinalize", act_install_finalize, FALSE }, { L"InstallExecute", act_install_execute, FALSE },
 	{ L"InstallExecuteAgain", act_install_execute, FALSE }, { L"LaunchConditions", act_launch_conditions, FALSE },
@@ -608,7 +689,9 @@ UINT action_run(msi_package *package, const WCHAR *name)
 	package->current_action = msi_copy(name);
 	package_log(L"Action start: %s", name);
 	ui_deliver(INSTALLMESSAGE_ACTIONSTART, name, 0);
-	const extra_action *action = find_action(standard_actions, ARRAYSIZE(standard_actions), name);
+	const extra_action *action = find_action(more_actions, (UINT)-1, name);
+	if (!action)
+		action = find_action(standard_actions, ARRAYSIZE(standard_actions), name);
 	if (!action)
 		action = find_action(extra_actions, (UINT)-1, name);
 	if (action) {
@@ -781,6 +864,9 @@ UINT WINAPI MsiSequenceA(MSIHANDLE handle, LPCSTR table, INT mode)
 // The installation proper, without the dialogs: this engine has no internal wizard.
 UINT install_run(msi_package *package)
 {
+	UINT prepared = package_prepare(package);
+	if (prepared)
+		return prepared;
 	WCHAR *action = package_get(package, L"ACTION");
 	const WCHAR *table = L"InstallExecuteSequence";
 	if (action && !lstrcmpW(action, L"ADMIN"))

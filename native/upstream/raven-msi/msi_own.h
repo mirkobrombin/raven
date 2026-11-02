@@ -177,6 +177,7 @@ UINT db_open(const WCHAR *path, const WCHAR *persist, msi_db **db);
 UINT db_commit(msi_db *db);
 UINT db_open_on_storage(IStorage *storage, msi_db **db);
 UINT db_apply_transform(msi_db *db, const WCHAR *path, INT conditions);
+UINT db_apply_storage(msi_db *db, IStorage *storage, INT conditions);
 UINT pool_add(msi_db *db, const WCHAR *text, SIZE_T length);
 UINT pool_find(msi_db *db, const WCHAR *text);
 const WCHAR *pool_text(msi_db *db, UINT id);
@@ -261,6 +262,7 @@ struct msi_directory {
 	WCHAR *key, *parent, *target_name, *source_name;
 	WCHAR *target;		// resolved, with the trailing backslash
 	BOOL resolving;
+	BOOL published;		// its target stands in the property of its name
 };
 
 struct msi_component {
@@ -268,6 +270,8 @@ struct msi_component {
 	INT attributes;
 	INSTALLSTATE installed, action;
 	BOOL enabled;
+	WCHAR *assembly_folder;	// for the global cache: where its files wait for it
+	INT assembly_kind;
 };
 
 struct msi_feature {
@@ -282,6 +286,9 @@ struct msi_file {
 	WCHAR *key, *name, *version, *language;
 	msi_component *component;
 	INT size, attributes, sequence;
+	BOOL extracted;	// a newer cabinet already gave it
+	BOOL has_delta;	// a Patch row says the cabinet holds a difference
+	WCHAR *delta_path;
 };
 
 typedef struct {
@@ -319,13 +326,14 @@ typedef struct {
 	UINT component_count;
 	msi_file *files;
 	UINT file_count;
-	BOOL tables_loaded, costed;
+	BOOL tables_loaded, costed, directories_published;
 	script_entry *script;
 	UINT script_count, script_room;
 	undo_entry *undo;
 	UINT undo_count, undo_room;
 	BOOL in_script, scheduled, rollback, commit, reboot_at_end, reboot_now, nested;
-	BOOL removing, maintenance;
+	BOOL removing, maintenance, prepared, patched;
+	WCHAR *command_line;	// kept: it beats what a patch brings to the Property table
 	WCHAR *current_action;
 	WCHAR squashed[33];
 	MSIHANDLE session;
@@ -339,6 +347,7 @@ INT package_get_int(msi_package *package, const WCHAR *name, INT fallback);
 BOOL package_is(msi_package *package, const WCHAR *name, const WCHAR *value);
 UINT package_set(msi_package *package, const WCHAR *name, const WCHAR *value);
 UINT package_command_line(msi_package *package, const WCHAR *line);
+void package_reload_properties(msi_package *package);
 void package_message(msi_package *package, INSTALLMESSAGE type, const WCHAR *text);
 void package_log(const WCHAR *format, ...);
 UINT ui_deliver(INSTALLMESSAGE type, const WCHAR *text, UINT field_one);
@@ -362,6 +371,7 @@ msi_file *file_find(msi_package *package, const WCHAR *key);
 const WCHAR *directory_target(msi_package *package, const WCHAR *key);
 WCHAR *file_target(msi_package *package, const msi_file *file);
 void directories_reset(msi_package *package);
+void directories_publish(msi_package *package);
 void states_select(msi_package *package);
 
 // actions.c
@@ -387,6 +397,12 @@ typedef struct {
 extern const extra_action extra_actions[];
 void reg_set_view(REGSAM view);
 
+// actions3.c
+extern const extra_action more_actions[];
+void assemblies_load(msi_package *package);
+void costs_publish(msi_package *package);
+UINT component_cost(msi_package *package, const msi_component *component);
+
 // custom.c
 UINT custom_action_run(msi_package *package, const WCHAR *name, const WCHAR *data, BOOL *handled);
 UINT custom_scripted_run(msi_package *package, const script_entry *entry);
@@ -402,6 +418,7 @@ UINT remote_call(HANDLE pipe, UINT op, const WCHAR *a, const WCHAR *b, INT numbe
 DWORD WINAPI remote_serve(void *context);
 
 // product.c
+UINT WINAPI MsiDecomposeDescriptorW(LPCWSTR descriptor, LPWSTR product, LPWSTR feature, LPWSTR component, DWORD *used);
 INSTALLSTATE WINAPI MsiGetComponentPathExW(LPCWSTR product, LPCWSTR component, LPCWSTR user, MSIINSTALLCONTEXT context, LPWSTR out, LPDWORD size);
 typedef struct {
 	BOOL machine;
@@ -418,5 +435,12 @@ void product_user_sid(WCHAR out[80]);
 BOOL package_is_machine(msi_package *package);
 INSTALLSTATE product_component_installed(const WCHAR *product, const WCHAR *component);
 INSTALLSTATE product_feature_installed(const WCHAR *product, const WCHAR *feature);
+void user_data_key(WCHAR *key, BOOL machine, const WCHAR *rest);
+void published_key(WCHAR *key, BOOL machine, const WCHAR *rest);
+
+// patch.c
+UINT package_prepare(msi_package *package);
+UINT patches_register(msi_package *package);
+void patches_forget(msi_package *package);
 
 #endif

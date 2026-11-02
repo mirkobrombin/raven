@@ -174,12 +174,40 @@ msi_file *file_find(msi_package *package, const WCHAR *key)
 	return NULL;
 }
 
+// Once costing is done every directory is also the property of its name, which formatted text and custom actions read.
+void directories_publish(msi_package *package)
+{
+	for (UINT i = 0; i < package->directory_count; i++) {
+		msi_directory *entry = &package->directories[i];
+		WCHAR *chosen = package_get(package, entry->key);
+		if (!chosen || !*chosen) {
+			const WCHAR *target = directory_target(package, entry->key);
+			if (target) {
+				package_set(package, entry->key, target);
+				entry->published = TRUE;
+			}
+		}
+		msi_free(chosen);
+	}
+}
+
+// A published value still equal to the target only followed it, and goes; a different one was chosen since, and stays.
 void directories_reset(msi_package *package)
 {
 	for (UINT i = 0; i < package->directory_count; i++) {
-		msi_free(package->directories[i].target);
-		package->directories[i].target = NULL;
+		msi_directory *entry = &package->directories[i];
+		if (entry->published) {
+			WCHAR *current = package_get(package, entry->key);
+			if (current && entry->target && !lstrcmpW(current, entry->target))
+				package_set(package, entry->key, NULL);
+			msi_free(current);
+			entry->published = FALSE;
+		}
+		msi_free(entry->target);
+		entry->target = NULL;
 	}
+	if (package->directories_published)
+		directories_publish(package);
 }
 
 static WCHAR *with_backslash(WCHAR *path)
@@ -235,7 +263,7 @@ const WCHAR *directory_target(msi_package *package, const WCHAR *key)
 
 WCHAR *file_target(msi_package *package, const msi_file *file)
 {
-	const WCHAR *directory = file->component ? directory_target(package, file->component->directory) : NULL;
+	const WCHAR *directory = file->component ? file->component->assembly_folder ? file->component->assembly_folder : directory_target(package, file->component->directory) : NULL;
 	if (!directory || !file->name)
 		return NULL;
 	WCHAR *path = msi_alloc((lstrlenW(directory) + lstrlenW(file->name) + 1) * sizeof(WCHAR));

@@ -95,8 +95,21 @@ void WINAPI raven_msiexec(void)
 			next_argument(at, entry, ARRAYSIZE(entry));
 			ExitProcess(RavenActionHost(pipe, library, entry));
 		}
+		// The long spellings of the same commands.
+		if (!lstrcmpiW(argument + 1, L"update"))
+			lstrcpyW(argument + 1, L"p");
+		else if (!lstrcmpiW(argument + 1, L"package"))
+			lstrcpyW(argument + 1, L"i");
+		else if (!lstrcmpiW(argument + 1, L"uninstall"))
+			lstrcpyW(argument + 1, L"x");
+		else if (!lstrcmpiW(argument + 1, L"quiet"))
+			lstrcpyW(argument + 1, L"qn");
+		else if (!lstrcmpiW(argument + 1, L"passive"))
+			lstrcpyW(argument + 1, L"qb");
+		else if (!lstrcmpiW(argument + 1, L"norestart") || !lstrcmpiW(argument + 1, L"promptrestart") || !lstrcmpiW(argument + 1, L"forcerestart"))
+			continue;
 		WCHAR option = lower(argument[1]);
-		if (option == 'i' || option == 'x' || option == 'f' || option == 'a' || option == 'j') {
+		if (option == 'i' || option == 'x' || option == 'f' || option == 'a' || option == 'j' || option == 'p') {
 			command = option;
 			// /jm and /ju name the assignment; the package follows.
 			if (option == 'j') {
@@ -132,7 +145,16 @@ void WINAPI raven_msiexec(void)
 		status = MsiConfigureProductExW(package, INSTALLLEVEL_DEFAULT, INSTALLSTATE_DEFAULT, line);
 	else if (command == 'j')
 		status = MsiAdvertiseProductW(package, advertise_user ? (LPCWSTR)1 : (LPCWSTR)0, NULL, 0);
-	else if (command == 'i' || command == 'a') {
+	else if (command == 'p')
+		status = MsiApplyPatchW(package, NULL, INSTALLTYPE_DEFAULT, line);
+	else if (command == 'a') {
+		WCHAR *admin = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(line) + 16) * sizeof(WCHAR));
+		lstrcpyW(admin, L"ACTION=ADMIN ");
+		lstrcatW(admin, line);
+		status = MsiInstallProductW(package, admin);
+		if (status == ERROR_FILE_NOT_FOUND)
+			status = ERROR_INSTALL_PACKAGE_OPEN_FAILED;
+	} else if (command == 'i') {
 		status = MsiInstallProductW(package, line);
 		if (status == ERROR_FILE_NOT_FOUND)
 			status = ERROR_INSTALL_PACKAGE_OPEN_FAILED;

@@ -40,7 +40,7 @@ BOOL package_is_machine(msi_package *package)
 	return machine;
 }
 
-static void user_data_key(WCHAR *key, BOOL machine, const WCHAR *rest)
+void user_data_key(WCHAR *key, BOOL machine, const WCHAR *rest)
 {
 	WCHAR sid[80];
 	if (machine)
@@ -50,7 +50,7 @@ static void user_data_key(WCHAR *key, BOOL machine, const WCHAR *rest)
 	wsprintfW(key, INSTALLER_KEY L"\\UserData\\%s\\%s", sid, rest);
 }
 
-static void published_key(WCHAR *key, BOOL machine, const WCHAR *rest)
+void published_key(WCHAR *key, BOOL machine, const WCHAR *rest)
 {
 	wsprintfW(key, machine ? L"Software\\Classes\\Installer\\%s" : L"Software\\Microsoft\\Installer\\%s", rest);
 }
@@ -163,8 +163,11 @@ UINT product_publish(msi_package *package)
 	lstrcpynW(folder, package->path, min(MAX_PATH, (int)(base - package->path) + 1));
 	wsprintfW(list, L"%s\\SourceList", key);
 	wsprintfW(net, L"%s\\Net", list);
-	reg_write_text(package, root, list, L"PackageName", base);
-	reg_write_text(package, root, net, L"1", folder);
+	// Maintenance runs from the cached copy; the source stays what the installation came from.
+	if (!package->maintenance) {
+		reg_write_text(package, root, list, L"PackageName", base);
+		reg_write_text(package, root, net, L"1", folder);
+	}
 	WCHAR *upgrade = package_get(package, L"UpgradeCode");
 	if (upgrade) {
 		WCHAR squashed_upgrade[33];
@@ -649,6 +652,28 @@ UINT WINAPI MsiGetProductInfoExW(LPCWSTR product, LPCWSTR user, MSIINSTALLCONTEX
 	return MsiGetProductInfoW(product, attribute, out, size);
 }
 
+// PublishComponents' value: a descriptor, and the application's data behind it.
+static BOOL qualifier_lookup(const WCHAR *category, const WCHAR *qualifier, const WCHAR *product, WCHAR owner[39], WCHAR component[39])
+{
+	WCHAR squashed[33], rest[64], key[256], data[1024];
+	if (!guid_squash(category, squashed))
+		return FALSE;
+	wsprintfW(rest, L"Components\\%s", squashed);
+	for (int machine = 1; machine >= 0; machine--) {
+		DWORD size = sizeof data;
+		published_key(key, machine, rest);
+		if (RegGetValueW(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, qualifier, RRF_RT_REG_MULTI_SZ, NULL, data, &size))
+			continue;
+		WCHAR feature[MAX_FEATURE_CHARS + 1];
+		DWORD used = 0;
+		if (MsiDecomposeDescriptorW(data, owner, feature, component, &used))
+			continue;
+		if (!product || !lstrcmpiW(product, owner))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 UINT WINAPI MsiProvideQualifiedComponentExW(LPCWSTR category, LPCWSTR qualifier, DWORD mode, LPCWSTR product, DWORD unused1, DWORD unused2, LPWSTR out, LPDWORD size)
 {
 	(void)mode;
@@ -657,7 +682,8 @@ UINT WINAPI MsiProvideQualifiedComponentExW(LPCWSTR category, LPCWSTR qualifier,
 	WCHAR component[39], owner[39];
 	if (!category || !qualifier)
 		return ERROR_INVALID_PARAMETER;
-	if (!raven_clicktorun_published(category, qualifier, component) || !raven_clicktorun_component(component, product, 0, owner, NULL))
+	if (!qualifier_lookup(category, qualifier, product, owner, component)
+		&& (!raven_clicktorun_published(category, qualifier, component) || !raven_clicktorun_component(component, product, 0, owner, NULL)))
 		return ERROR_UNKNOWN_COMPONENT;
 	INSTALLSTATE state = MsiGetComponentPathExW(owner, component, NULL, MSIINSTALLCONTEXT_ALL, out, size);
 	if (state == INSTALLSTATE_MOREDATA)
@@ -755,12 +781,6 @@ UINT WINAPI MsiConfigureProductExW(LPCWSTR product, int level, INSTALLSTATE stat
 UINT WINAPI MsiConfigureProductW(LPCWSTR product, int level, INSTALLSTATE state)
 {
 	return MsiConfigureProductExW(product, level, state, NULL);
-}
-
-UINT WINAPI MsiReinstallProductW(LPCWSTR product, DWORD mode)
-{
-	(void)mode;
-	return MsiConfigureProductExW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_DEFAULT, NULL);
 }
 
 UINT WINAPI MsiOpenProductW(LPCWSTR product, MSIHANDLE *handle)
