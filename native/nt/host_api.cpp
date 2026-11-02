@@ -1,4 +1,5 @@
 #include "access_token.h"
+#include "interfaces.h"
 #include "kernel_context.h"
 #include "text.h"
 
@@ -11,9 +12,7 @@
 #include <map>
 #include <optional>
 #include <sstream>
-#include <net/if.h>
 #include <netinet/in.h>
-#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -21,10 +20,9 @@ namespace raven {
 
 namespace {
 
-constexpr uint32_t error_buffer_overflow = 111, error_no_data = 232, error_invalid_parameter = 87, wsaservice_not_found = 10108, wsa_invalid_handle = 6, wsa_not_enough_memory = 8, error_io_pending = 997, error_not_supported = 50, error_more_data = 234, error_no_more_items = 259;
+constexpr uint32_t error_buffer_overflow = 111, error_insufficient_buffer = 122, error_no_data = 232, error_invalid_parameter = 87, wsaservice_not_found = 10108, wsa_invalid_handle = 6, wsa_not_enough_memory = 8, error_io_pending = 997, error_not_supported = 50, error_more_data = 234, error_no_more_items = 259;
 constexpr uint32_t skip_unicast = 1, skip_anycast = 2, skip_multicast = 4, skip_dns_server = 8;
 constexpr uint32_t windows_inet6 = 23;
-constexpr uint32_t if_type_ethernet = 6, if_type_loopback = 24, if_type_wireless = 71;
 
 // A set of device interfaces that SetupDi hands out; the host exposes no devices to the guest, so the set stays empty.
 class DeviceInfoSet : public KernelObject {};
@@ -37,11 +35,7 @@ struct Address {
 	uint8_t prefix = 0;
 };
 
-struct Adapter {
-	std::string name;
-	uint32_t index = 0, mtu = 1500, type = if_type_ethernet, status = 2;
-	uint8_t hardware[8]{};
-	uint32_t hardware_length = 0;
+struct Adapter : HostInterface {
 	std::vector<Address> unicast;
 };
 
@@ -109,36 +103,21 @@ std::vector<std::vector<uint8_t>> host_dns_servers()
 std::vector<Adapter> host_adapters(uint32_t family)
 {
 	std::vector<Adapter> adapters;
+	std::map<std::string, size_t> found;
+	for (const auto &interface : host_interfaces()) {
+		Adapter adapter;
+		static_cast<HostInterface &>(adapter) = interface;
+		found.emplace(interface.name, adapters.size());
+		adapters.push_back(std::move(adapter));
+	}
 	ifaddrs *list = nullptr;
 	if (::getifaddrs(&list))
 		return adapters;
-	std::map<std::string, size_t> found;
 	for (const auto *entry = list; entry; entry = entry->ifa_next) {
-		if (!entry->ifa_name)
+		const auto position = entry->ifa_name ? found.find(entry->ifa_name) : found.end();
+		if (position == found.end() || !entry->ifa_addr)
 			continue;
-		auto position = found.find(entry->ifa_name);
-		if (position == found.end()) {
-			Adapter adapter;
-			adapter.name = entry->ifa_name;
-			adapter.index = ::if_nametoindex(entry->ifa_name);
-			adapter.status = (entry->ifa_flags & IFF_UP) && (entry->ifa_flags & IFF_RUNNING) ? 1 : 2;
-			adapter.type = (entry->ifa_flags & IFF_LOOPBACK) ? if_type_loopback :
-				::access(("/sys/class/net/" + adapter.name + "/wireless").c_str(), F_OK) == 0 ? if_type_wireless : if_type_ethernet;
-			if (const int probe = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0); probe >= 0) {
-				ifreq request{};
-				std::strncpy(request.ifr_name, entry->ifa_name, IFNAMSIZ - 1);
-				if (::ioctl(probe, SIOCGIFMTU, &request) == 0)
-					adapter.mtu = uint32_t(request.ifr_mtu);
-				if (adapter.type != if_type_loopback && ::ioctl(probe, SIOCGIFHWADDR, &request) == 0) {
-					std::memcpy(adapter.hardware, request.ifr_hwaddr.sa_data, 6);
-					adapter.hardware_length = 6;
-				}
-				::close(probe);
-			}
-			position = found.emplace(adapter.name, adapters.size()).first;
-			adapters.push_back(std::move(adapter));
-		}
-		if (!entry->ifa_addr || (entry->ifa_addr->sa_family != AF_INET && entry->ifa_addr->sa_family != AF_INET6))
+		if (entry->ifa_addr->sa_family != AF_INET && entry->ifa_addr->sa_family != AF_INET6)
 			continue;
 		if (family && family != uint32_t(entry->ifa_addr->sa_family == AF_INET ? AF_INET : windows_inet6))
 			continue;
@@ -1285,6 +1264,62 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("GetBestInterface", 2, best_interface);
 	registry.add("GetBestInterfaceEx", 2, best_interface);
+	// The interfaces of the host as the older table calls report them: MIB_IFROW records, which a program reads to learn how the machine
+	// is networked before it opens its first socket, and whose absence it cannot tell from a machine without a network. GetIfEntry names
+	// one by the index the record already holds, GetIfTable carries them all behind a count, GetNumberOfInterfaces counts them.
+	registry.add("GetIfEntry", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(error_invalid_parameter, error_invalid_parameter);
+			return;
+		}
+		// The index the record already holds says which interface is asked about; the error code it fails with is what it returns.
+		const uint32_t index = call.load<uint32_t>(call[0] + 512);
+		const auto interfaces = host_interfaces();
+		const auto found = std::find_if(interfaces.begin(), interfaces.end(), [&](const HostInterface &interface) { return interface.index == index; });
+		if (index == 0 || found == interfaces.end()) {
+			call.fail(error_invalid_parameter, error_invalid_parameter);
+			return;
+		}
+		const auto row = mib_if_row(*found);
+		call.write(call[0], row);
+		call.ret(0);
+	});
+	registry.add("GetNumberOfInterfaces", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(error_invalid_parameter, error_invalid_parameter);
+			return;
+		}
+		call.store<uint32_t>(call[0], uint32_t(host_interfaces().size()));
+		call.ret(0);
+	});
+	// GetIfTable(table, size, order): the count, then the rows, in the order the system lists them or by index when sorted.
+	registry.add("GetIfTable", 3, [](ApiCall &call) {
+		if (!call[1]) {
+			call.fail(error_invalid_parameter, error_invalid_parameter);
+			return;
+		}
+		auto interfaces = host_interfaces();
+		if (call[2])
+			std::sort(interfaces.begin(), interfaces.end(), [](const HostInterface &left, const HostInterface &right) { return left.index < right.index; });
+		const size_t needed = 4 + interfaces.size() * mib_if_row_size;
+		const uint32_t capacity = call.load<uint32_t>(call[1]);
+		// A table that does not fit is not written, and the size it needs is given back to the caller.
+		if (!call[0] || capacity < needed) {
+			call.store<uint32_t>(call[1], uint32_t(needed));
+			call.ret(error_insufficient_buffer);
+			return;
+		}
+		std::vector<uint8_t> table(needed, 0);
+		const uint32_t count = uint32_t(interfaces.size());
+		std::memcpy(table.data(), &count, 4);
+		for (size_t number = 0; number < interfaces.size(); ++number) {
+			const auto row = mib_if_row(interfaces[number]);
+			std::memcpy(table.data() + 4 + number * mib_if_row_size, row.data(), row.size());
+		}
+		call.write(call[0], table);
+		call.store<uint32_t>(call[1], uint32_t(needed));
+		call.ret(0);
+	});
 	// GetBestRoute2: the host's own choice of route, found by connecting a datagram socket to the destination (which sends nothing):
 	// the address it is bound to is the best source, and the adapter holding that address the interface. The MIB_IPFORWARD_ROW2 names
 	// that interface and the destination as a host route; the next hop is not known from here and stays unspecified.
@@ -1517,7 +1552,8 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.store_pointer(call[0], 0);
 		call.ret(0x80004005U);
 	});
-	// The guest sees no network interface to describe.
+	// The newer interface calls name an interface by a LUID or a GUID, which no interface here has: the rows of MIB_IF_ROW2 carry a GUID
+	// of their own that nothing else refers to, so they are left to the older MIB_IFROW calls, which go by the index.
 	registry.add("ConvertInterfaceGuidToLuid", 2, [](ApiCall &call) { call.ret(1168); });
 	registry.add("GetIfEntry2", 1, [](ApiCall &call) { call.ret(1168); });
 	registry.add("SetProcessInformation", 4, [](ApiCall &call) { call.ret(1); });
