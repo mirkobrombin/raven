@@ -458,9 +458,15 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(call[0]);
 	});
 
-	// One atom table serves the local and global names; atoms count from 0xc000 and integer atoms pass through.
+	// One atom table serves the local and global names; atoms count from 0xc000. Integer atoms take no entry: they pass through, also
+	// as the decimal text "#1234", which programs compare against the number.
+	struct AtomEntry {
+		std::u16string text;
+		uint16_t atom;
+		uint32_t references;
+	};
 	struct Atoms {
-		std::map<std::u16string, std::pair<uint16_t, uint32_t>> names;
+		std::map<std::u16string, AtomEntry> names;
 		uint16_t next = 0xc000;
 	};
 	const auto atoms = std::make_shared<Atoms>();
@@ -470,7 +476,19 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 				c = char16_t(c + 32);
 		return text;
 	};
-	const auto add_atom = [atoms, key](ApiCall &call) {
+	// The number of a "#1234" name, zero for one outside the integer atoms' range; empty for a name that is not a number.
+	const auto integer_atom = [](const std::u16string &text) -> std::optional<uint16_t> {
+		if (text.size() < 2 || text[0] != u'#')
+			return std::nullopt;
+		uint32_t value = 0;
+		for (size_t index = 1; index < text.size(); ++index) {
+			if (text[index] < u'0' || text[index] > u'9')
+				return std::nullopt;
+			value = std::min<uint32_t>(value * 10 + (text[index] - u'0'), 0xc000);
+		}
+		return uint16_t(value < 0xc000 ? value : 0);
+	};
+	const auto add_atom = [atoms, key, integer_atom](ApiCall &call) {
 		if (call[0] < 0x10000) {
 			call.ret(call[0]);
 			return;
@@ -480,32 +498,47 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87, 0);
 			return;
 		}
+		if (const auto number = integer_atom(text)) {
+			if (*number) call.ret(*number);
+			else call.fail(87, 0);
+			return;
+		}
 		auto found = atoms->names.find(key(text));
 		if (found == atoms->names.end()) {
 			if (atoms->next == 0xffff) {
 				call.fail(8, 0);
 				return;
 			}
-			found = atoms->names.emplace(key(text), std::pair<uint16_t, uint32_t>{atoms->next++, 0}).first;
+			found = atoms->names.emplace(key(text), AtomEntry{text, atoms->next++, 0}).first;
 		}
-		++found->second.second;
-		call.ret(found->second.first);
+		++found->second.references;
+		call.ret(found->second.atom);
 	};
-	const auto find_atom = [atoms, key](ApiCall &call) {
+	const auto find_atom = [atoms, key, integer_atom](ApiCall &call) {
 		if (call[0] < 0x10000) {
 			call.ret(call[0]);
 			return;
 		}
-		const auto found = atoms->names.find(key(atom_text(call, call[0])));
+		const auto text = atom_text(call, call[0]);
+		if (const auto number = integer_atom(text)) {
+			if (*number) call.ret(*number);
+			else call.fail(87, 0);
+			return;
+		}
+		const auto found = atoms->names.find(key(text));
 		if (found == atoms->names.end())
 			call.fail(2, 0);
 		else
-			call.ret(found->second.first);
+			call.ret(found->second.atom);
 	};
 	const auto delete_atom = [atoms](ApiCall &call) {
+		if (call.u32(0) < 0xc000) {
+			call.ret(0);
+			return;
+		}
 		for (auto found = atoms->names.begin(); found != atoms->names.end(); ++found)
-			if (found->second.first == call.u32(0)) {
-				if (--found->second.second == 0)
+			if (found->second.atom == call.u32(0)) {
+				if (--found->second.references == 0)
 					atoms->names.erase(found);
 				call.ret(0);
 				return;
@@ -513,15 +546,26 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 		call.fail(6, call.u32(0));
 	};
 	const auto atom_name = [atoms](ApiCall &call) {
-		for (const auto &[text, entry] : atoms->names)
-			if (entry.first == call.u32(0)) {
-				const size_t capacity = call.u32(2);
-				if (!capacity) {
-					call.fail(122, 0);
-					return;
-				}
-				const auto copied = call.put_wide(call[1], text, capacity);
-				call.ret(std::min(copied, capacity - 1));
+		const auto answer = [&](const std::u16string &text) {
+			const size_t capacity = call.u32(2);
+			if (!capacity) {
+				call.fail(122, 0);
+				return;
+			}
+			const auto copied = call.put_wide(call[1], text, capacity);
+			call.ret(std::min(copied, capacity - 1));
+		};
+		const uint32_t atom = call.u32(0);
+		if (atom && atom < 0xc000) {
+			std::u16string text = u"#";
+			for (const char digit : std::to_string(atom))
+				text.push_back(char16_t(digit));
+			answer(text);
+			return;
+		}
+		for (const auto &[name, entry] : atoms->names)
+			if (entry.atom == atom) {
+				answer(entry.text);
 				return;
 			}
 		call.fail(6, 0);

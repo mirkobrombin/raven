@@ -899,6 +899,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(text_client_test text_pe_fixture raven-bootstrap)
             add_test(NAME native_text_pixels COMMAND text_client_test $<TARGET_FILE:raven-bootstrap> ${TEXT_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/text-output)
             set_tests_properties(native_text_pixels PROPERTIES TIMEOUT 40)
+            set(ATOM_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/atom-client.exe)
+            add_custom_command(OUTPUT ${ATOM_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O1 -o ${ATOM_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/atom_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/atom_client.c VERBATIM)
+            add_custom_target(atom_fixture ALL DEPENDS ${ATOM_FIXTURE})
+            add_test(NAME native_atoms COMMAND raven --run-process --execution=native ${ATOM_FIXTURE})
+            set_tests_properties(native_atoms PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native process exited with status 0")
             set(TEXT_PAINT ${CMAKE_CURRENT_BINARY_DIR}/text-paint.exe)
             add_custom_command(OUTPUT ${TEXT_PAINT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -fno-stack-protector
