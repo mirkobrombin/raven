@@ -28,6 +28,12 @@
         "native/upstream/raven-advpack/files.c",
         "native/upstream/raven-advpack/install.c",
         "native/upstream/raven-advpack/misc.c",
+        "native/upstream/raven-appx/appx.h",
+        "native/upstream/raven-appx/archive.c",
+        "native/upstream/raven-appx/blockmap.c",
+        "native/upstream/raven-appx/manifest.c",
+        "native/upstream/raven-appx/package.c",
+        "native/upstream/raven-appx/support.c",
         "native/upstream/raven-cabinet/README.md",
         "native/upstream/raven-cabinet/cabinet.spec",
         "native/upstream/raven-cabinet/compose.c",
@@ -499,6 +505,17 @@
       "revision": "58217a690d6256ee229044a174de67d72d28bc35",
       "provenance": "Interface identifiers, method order, signatures, structures, enumerations and the type signatures generic instances are identified by, from Microsoft's Windows metadata as distributed by https://github.com/microsoft/windows-rs (MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation), written by scripts/generate-winrt-header.py",
       "boundary": "C declarations compiled into the PE guest components raven-web.dll and its test, and the shared raven-winrt plumbing. No code."
+    },
+    {
+      "name": "Windows packaging interface declarations",
+      "paths": [
+        "native/upstream/raven-appx/appxpackaging.h"
+      ],
+      "license": "MIT",
+      "review": "pending-maintainer-review",
+      "revision": "58217a690d6256ee229044a174de67d72d28bc35",
+      "provenance": "Interface identifiers, method order, parameters, structures and error codes from Microsoft's Windows metadata as distributed by https://github.com/microsoft/windows-rs (MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation), written by scripts/generate-appx-header.py",
+      "boundary": "C declarations compiled into the PE guest component raven-appx.dll and its test. No code."
     },
     {
       "name": "External build inputs",

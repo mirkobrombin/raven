@@ -29,7 +29,8 @@ IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "o
         "atliface", "winsxs", "msxml6", "msxml", "xmldso", "objsafe", "mshtmhst", "mshtmdid", "httprequest", "xmlparser", "asptlb", "perhist", "hlink", "mimeinfo", "mlang", "wincodec", "wincodecsdk", "propsys", "structuredquery", "dxgiformat", "dxgicommon", "dxgitype", "xmllite")
 ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
 COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libpng.dll", "libjpeg.dll",
-              "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll")
+              "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll",
+              "raven-appx.dll")
 
 
 def main():
@@ -539,6 +540,20 @@ def main():
     # xmllite.dll: the streaming XML reader and writer, which the Office Click-to-Run client reads its configuration with.
     xmllite_root = repo / "native/upstream/raven-xmllite"
     library("xmllite.dll", xmllite_root, wine_module=False, sources=[xmllite_root / name for name in ("guid.c", "reader.c", "writer.c")])
+    # raven-appx.dll: the packaging API (the AppxFactory and AppxBundleFactory classes), which package managers read .appx and .msix
+    # packages with. Raven code on the MinGW headers and the interface declarations generated from Microsoft's metadata; it reads the
+    # manifests with xmllite and inflates with the zlib cabinet.dll is built on.
+    appx_root = repo / "native/upstream/raven-appx"
+    appx = []
+    for name in ("package.c", "archive.c", "blockmap.c", "manifest.c", "support.c"):
+        target = objects / ("appx_" + Path(name).stem + ".o")
+        run([triple + "-gcc", "-c", "-O2", "-Wall", "-Wno-unused-parameter", f"-ffile-prefix-map={repo}=raven", f"-ffile-prefix-map={source}=reactos",
+             "-I" + str(appx_root), "-I" + str(zlib_include), appx_root / name, "-o", target])
+        appx.append(target)
+    (output / "raven-appx.def").write_text("NAME raven-appx.dll\nEXPORTS\n")
+    next_base[0] -= 0x400000 if x86 else 0x4000000
+    link("raven-appx.dll", next_base[0], [*appx, *zlib], output / "raven-appx.def",
+         ["-L" + str(output), *[f"-l{library}" for library in ("xmllite", "urlmon", "ole32", "bcrypt", "msvcrt", "kernel32", "uuid", "gcc")]])
     # raven-setupapi.dll: Raven's own setup API, which the runtime's setupapi.dll hands those exports to.
     own_setup = repo / "native/upstream/raven-setupapi"
     setup_objects = []

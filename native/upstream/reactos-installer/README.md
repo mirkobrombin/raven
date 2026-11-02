@@ -25,7 +25,10 @@ programs and, with `--arch x86`, for 32-bit ones:
   [`native/upstream/raven-gdiplus`](../raven-gdiplus/README.md)), `mlang.dll` (Raven's own, from
   [`native/upstream/raven-mlang`](../raven-mlang/README.md)) and `libpng.dll`, `libjpeg.dll`, `libtiff.dll` (`dll/3rdparty`);
 - `advpack.dll`: Raven's own from [`native/upstream/raven-advpack`](../raven-advpack/README.md): the setup helpers IExpress packages and the
-  DirectX setup run INF files through.
+  DirectX setup run INF files through;
+- `raven-appx.dll` (`native/upstream/raven-appx`, Raven code on the same zlib): the
+  packaging API, whose AppxFactory and AppxBundleFactory classes package managers read
+  `.appx` and `.msix` packages with.
 
 The runtime takes these libraries from beside itself whatever copies a program ships or
 an installer leaves in the system directory. Each new prefix registers the classes of
