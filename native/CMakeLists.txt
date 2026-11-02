@@ -1147,6 +1147,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(outer_surface_test outer_surface_paint_fixture)
             add_test(NAME native_outer_surface_paint COMMAND outer_surface_test $<TARGET_FILE:raven-bootstrap> ${OUTER_SURFACE_PAINT} capture ${CMAKE_CURRENT_BINARY_DIR}/outer-surface-paint.bgra)
             set_tests_properties(native_outer_surface_paint PROPERTIES TIMEOUT 15)
+            set(FRAME_HOVER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/frame-hover.exe)
+            add_custom_command(OUTPUT ${FRAME_HOVER_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${FRAME_HOVER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_hover_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_hover_client.c VERBATIM)
+            add_custom_target(frame_hover_fixture ALL DEPENDS ${FRAME_HOVER_FIXTURE})
+            add_executable(frame_hover_test desktop/frame_hover_test.cpp)
+            target_link_libraries(frame_hover_test PRIVATE raven_cpu)
+            add_dependencies(frame_hover_test frame_hover_fixture raven-bootstrap)
+            add_test(NAME native_frame_hover COMMAND frame_hover_test $<TARGET_FILE:raven-bootstrap> ${FRAME_HOVER_FIXTURE})
+            set_tests_properties(native_frame_hover PROPERTIES TIMEOUT 15)
         endif()
         set(INITIAL_MESSAGE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/initial-message-fixtures)
         add_custom_command(OUTPUT ${INITIAL_MESSAGE_FIXTURES}/client.exe ${INITIAL_MESSAGE_FIXTURES}/exit.exe

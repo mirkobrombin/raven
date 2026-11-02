@@ -86,17 +86,21 @@ uint64_t NativeWindows::nonclient_hit(const DesktopWindow &window,int32_t x,int3
 
 void NativeWindows::hover_frame(uint64_t handle,uint64_t hit)
 {
-	if (hovered_frame_window==handle && hovered_frame_hit==hit)
+	// Only a caption button lights up: a move over the caption or a border with none lit before changes nothing.
+	const uint64_t window=hit ? handle : 0;
+	if (hovered_frame_window==window && hovered_frame_hit==hit)
 		return;
 	const auto previous=hovered_frame_window;
-	hovered_frame_window=hit ? handle : 0;
+	hovered_frame_window=window;
 	hovered_frame_hit=hit;
 	if (!themed())
 		return;
-	if (previous && previous!=handle && objects.window(previous))
-		refresh_frame(previous);
-	if (objects.window(handle))
-		refresh_frame(handle);
+	// The frame is drawn from the hover state each time the window is presented. As on Windows, only the frame changes: the client
+	// area and the controls in it are not painted again, so they never show erased while the pointer crosses the frame.
+	if (previous && previous!=window)
+		drawing(previous);
+	if (window)
+		drawing(window);
 }
 
 void NativeWindows::nonclient_pointer(uint64_t handle,uint64_t hit,uint32_t message,int32_t x,int32_t y)
