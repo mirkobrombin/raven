@@ -70,6 +70,11 @@ def main():
     for tool in ("clang", triple + "-gcc", triple + "-dlltool", "widl", "bison"):
         if not shutil.which(tool):
             raise RuntimeError(f"required installer build tool is missing: {tool}")
+    # The headers of MinGW-w64 12 lack declarations the components use, such as MIDL_STUB_MESSAGE.CorrDespIncrement.
+    macros = subprocess.run([triple + "-gcc", "-E", "-dM", "-include", "_mingw.h", "-x", "c", os.devnull], capture_output=True, text=True).stdout
+    version = re.search(r"#define __MINGW64_VERSION_MAJOR (\d+)", macros)
+    if version and int(version.group(1)) < 13:
+        raise RuntimeError(f"{triple}-gcc uses the headers of MinGW-w64 {version.group(1)}; the installer components need MinGW-w64 13 or newer")
     records = []
 
     def run(command, cwd=None):

@@ -12,7 +12,7 @@ The program's code runs directly on your CPU, inside a sandbox where it cannot r
 
 - Linux on x86_64
 - CMake 3.20 or newer, a C++20 compiler and Python 3.11 or newer
-- MinGW-w64 for x86_64 and i686, to build the Windows test programs
+- MinGW-w64 13 or newer for x86_64 and i686, to build the Windows test programs
 - For desktop applications: Wayland, xkbcommon, pixman, FreeType and Vulkan
 - Optionally, for the experimental X11 desktop: libxcb with its xkb, xfixes and xinput extensions, and xkbcommon-x11
 
