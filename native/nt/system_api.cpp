@@ -294,6 +294,17 @@ uint64_t counter_ticks()
 	return uint64_t(now.tv_sec) * 10000000ULL + uint64_t(now.tv_nsec) / 100;
 }
 
+// The service pack of a version block: its name after the five numbers, and its number in the extended block.
+static void fill_service_pack(std::vector<uint8_t> &bytes, uint32_t pack)
+{
+	if (!pack)
+		return;
+	const std::u16string name = u"Service Pack " + std::u16string(1, char16_t(u'0' + pack));
+	std::memcpy(bytes.data() + 20, name.data(), name.size() * 2);
+	if (bytes.size() >= 284)
+		bytes[276] = uint8_t(pack);
+}
+
 void register_system_api(ApiRegistry &registry, KernelContext &context)
 {
 	auto &process = context.process;
@@ -627,6 +638,7 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		const uint32_t fields[5] = {size, version.major, version.minor, version.build, 2};
 		std::memcpy(bytes.data(), fields, 20);
 		// The extended block adds the service pack, the suite mask and the product type: a workstation.
+		fill_service_pack(bytes, version.service_pack);
 		if (size == 284)
 			bytes[282] = 1;
 		call.write(call[0], bytes);
@@ -644,6 +656,7 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		const auto version = activation_contexts().system_version();
 		const uint32_t fields[5] = {size, version.major, version.minor, version.build, 2};
 		std::memcpy(bytes.data(), fields, 20);
+		fill_service_pack(bytes, version.service_pack);
 		if (bytes.size() == 284)
 			bytes[282] = 1;
 		call.write(call[0], bytes);
@@ -1611,6 +1624,18 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	// The compatibility layer a program was started with changes the version Windows reports to it.
 	if (const auto layer = variables->values.find(u"__COMPAT_LAYER"); layer != variables->values.end())
 		activation_contexts().set_compatibility_layer(layer->second.second);
+	else if (const auto slash = context.launch.image_path.find_last_of(u"\\/"); slash != std::u16string::npos) {
+		// The .NET Framework 4.8 setup ends with "already installed" on the Windows 10 this system reports, which has it built in. Here the
+		// framework is not there yet, so the setup and the package that unpacks it are told the oldest Windows it installs on, where
+		// they unpack and install everything.
+		auto name = context.launch.image_path.substr(slash + 1);
+		for (auto &character : name)
+			character = upper_case(character);
+		const auto folder = context.launch.image_path.substr(0, slash + 1);
+		const auto resolved = paths.resolve(folder + u"netfx_Patch_x64.msp");
+		if (name.starts_with(u"NDP48") || (name == u"SETUP.EXE" && resolved && resolved->exists))
+			activation_contexts().set_compatibility_layer(u"WIN7SP1");
+	}
 	paths.set_search_path([variables] {
 		const auto found = variables->values.find(u"PATH");
 		return found == variables->values.end() ? std::u16string() : found->second.second;

@@ -85,5 +85,15 @@ int raven_entry(void)
 	/* The arguments of a command line start after the first space outside quotes. */
 	const WCHAR *line=L"\"C:\\Program Files\\Office\\run.exe\" /quiet now";
 	CHECK(36,PathGetArgsW(line)==line+34 && same(PathGetArgsW(L"alone"),L""));
+	WCHAR command[]=L"\"C:\\Program Files\\run.exe\" /quiet now";
+	PathRemoveArgsW(command);
+	CHECK(37,same(command,L"\"C:\\Program Files\\run.exe\""));
+	WCHAR lone[]=L"alone";
+	PathRemoveArgsW(lone);
+	CHECK(38,same(lone,L"alone"));
+	WCHAR way[MAX_PATH];
+	CHECK(39,PathRelativePathToW(way,L"C:\\a\\b\\file.txt",FILE_ATTRIBUTE_NORMAL,L"C:\\a\\c\\d.txt",FILE_ATTRIBUTE_NORMAL) && same(way,L"..\\c\\d.txt"));
+	CHECK(40,PathRelativePathToW(way,L"C:\\A\\b",FILE_ATTRIBUTE_DIRECTORY,L"c:\\a\\b\\e",FILE_ATTRIBUTE_NORMAL) && same(way,L".\\e"));
+	CHECK(41,!PathRelativePathToW(way,L"C:\\a",FILE_ATTRIBUTE_DIRECTORY,L"D:\\a",FILE_ATTRIBUTE_NORMAL));
 	return 0;
 }

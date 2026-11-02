@@ -350,6 +350,7 @@ UINT package_command_line(msi_package *package, const WCHAR *line);
 void package_reload_properties(msi_package *package);
 void package_message(msi_package *package, INSTALLMESSAGE type, const WCHAR *text);
 void package_log(const WCHAR *format, ...);
+const WCHAR *package_log_release(void);
 UINT ui_deliver(INSTALLMESSAGE type, const WCHAR *text, UINT field_one);
 BOOL guid_squash(const WCHAR *guid, WCHAR out[33]);
 BOOL guid_unsquash(const WCHAR *squashed, WCHAR out[39]);

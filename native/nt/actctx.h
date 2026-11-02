@@ -68,7 +68,7 @@ public:
 	// The version GetVersionEx and VerifyVersionInfo report to the process, as Windows 10 and later do: 10.0 for a program whose manifest
 	// supports Windows 10, 6.3 for one that supports Windows 8.1, and 6.2 for every other program. A compatibility layer the process was
 	// started with (__COMPAT_LAYER, as the compatibility engine reads it) reports the version of the Windows it names instead.
-	struct Version { uint32_t major, minor, build; };
+	struct Version { uint32_t major, minor, build, service_pack = 0; };
 	Version reported_version() const;
 	// The real version, which RtlGetVersion reports whatever the manifest says; a compatibility layer changes this one too, as it
 	// rewrites the version fields of the process environment block that the call reads.

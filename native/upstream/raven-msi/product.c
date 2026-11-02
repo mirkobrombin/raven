@@ -725,12 +725,73 @@ UINT WINAPI MsiProvideComponentW(LPCWSTR product, LPCWSTR feature, LPCWSTR compo
 
 /* Installing and removing, as programs ask for it. */
 
+#ifdef __i386__
+static BOOL package_is_64_bit(const WCHAR *path)
+{
+	MSIHANDLE summary;
+	WCHAR text[64];
+	DWORD size = ARRAYSIZE(text);
+	UINT type;
+	INT number;
+	FILETIME time;
+	BOOL wide = FALSE;
+	if (MsiGetSummaryInformationW(0, path, 0, &summary))
+		return FALSE;
+	if (!MsiSummaryInfoGetPropertyW(summary, PID_TEMPLATE, &type, &number, &time, text, &size))
+		wide = !wcsncmp(text, L"x64", 3) || !wcsncmp(text, L"Intel64", 7) || !wcsncmp(text, L"AMD64", 5) || !wcsncmp(text, L"Arm64", 5);
+	MsiCloseHandle(summary);
+	return wide;
+}
+
+// On Windows the installer service does the work, in a 64-bit process whatever the caller is. A 32-bit engine would see the 32-bit
+// folders and registry where a 64-bit package wants the others, so such a package goes to the 64-bit msiexec, silently like the caller.
+static BOOL install_in_64_bit_engine(const WCHAR *path, const WCHAR *command_line, UINT *status)
+{
+	BOOL wow64 = FALSE;
+	if (!IsWow64Process(GetCurrentProcess(), &wow64) || !wow64 || !package_is_64_bit(path))
+		return FALSE;
+	const WCHAR *log = package_log_release();
+	const size_t size = lstrlenW(path) + lstrlenW(log) + (command_line ? lstrlenW(command_line) : 0) + 128;
+	WCHAR *line = msi_alloc(size * sizeof(WCHAR));
+	if (!line)
+		return FALSE;
+	wsprintfW(line, L"msiexec.exe /i \"%s\" /qn", path);
+	if (log[0]) {
+		lstrcatW(line, L" /l*v \"");
+		lstrcatW(line, log);
+		lstrcatW(line, L"\"");
+	}
+	if (command_line && command_line[0]) {
+		lstrcatW(line, L" ");
+		lstrcatW(line, command_line);
+	}
+	STARTUPINFOW startup = { sizeof(startup) };
+	PROCESS_INFORMATION process;
+	BOOL started = CreateProcessW(L"C:\\Windows\\Sysnative\\msiexec.exe", line, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process);
+	msi_free(line);
+	if (!started)
+		return FALSE;
+	WaitForSingleObject(process.hProcess, INFINITE);
+	DWORD code = ERROR_INSTALL_FAILURE;
+	GetExitCodeProcess(process.hProcess, &code);
+	CloseHandle(process.hThread);
+	CloseHandle(process.hProcess);
+	*status = code;
+	return TRUE;
+}
+#endif
+
 UINT WINAPI MsiInstallProductW(LPCWSTR path, LPCWSTR command_line)
 {
 	if (!path)
 		return ERROR_INVALID_PARAMETER;
 	if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
 		return ERROR_FILE_NOT_FOUND;
+#ifdef __i386__
+	UINT forwarded;
+	if (install_in_64_bit_engine(path, command_line, &forwarded))
+		return forwarded;
+#endif
 	msi_package *package;
 	if (package_open(path, &package))
 		return ERROR_INSTALL_PACKAGE_INVALID;

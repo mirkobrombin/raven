@@ -936,6 +936,67 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 			}
 			call.ret(call[0] + text.size() * unit);
 		});
+	// The way from one path to another: up from what is left of the first once their shared folders are gone, then down the second. Paths
+	// on different roots have none. The attributes say whether each end is a folder, whose whole name counts, or a file, whose name does not.
+	registry.add("PathRelativePathToW", 5, [](ApiCall &call) {
+		if (!call[0] || !call[1] || !call[3]) {
+			call.ret(0);
+			return;
+		}
+		const auto parts_of = [](std::u16string path, bool folder) {
+			std::vector<std::u16string> parts;
+			size_t at = 0;
+			while (at <= path.size()) {
+				const size_t end = std::min(path.find_first_of(u"\\/", at), path.size());
+				if (end > at)
+					parts.push_back(path.substr(at, end - at));
+				at = end + 1;
+			}
+			if (!folder && !parts.empty())
+				parts.pop_back();
+			return parts;
+		};
+		const auto same_part = [](const std::u16string &left, const std::u16string &right) {
+			return std::equal(left.begin(), left.end(), right.begin(), right.end(), [](char16_t a, char16_t b) {
+				return (a >= u'A' && a <= u'Z' ? char16_t(a + 32) : a) == (b >= u'A' && b <= u'Z' ? char16_t(b + 32) : b);
+			});
+		};
+		const auto from = parts_of(call.wide(call[1]), call.u32(2) & 0x10), to = parts_of(call.wide(call[3]), true);
+		size_t shared = 0;
+		while (shared < from.size() && shared < to.size() && same_part(from[shared], to[shared]))
+			++shared;
+		if (!shared) {
+			call.ret(0);
+			return;
+		}
+		std::u16string out;
+		for (size_t index = shared; index < from.size(); ++index)
+			out += out.empty() ? u".." : u"\\..";
+		for (size_t index = shared; index < to.size(); ++index)
+			out += (out.empty() ? u".\\" : u"\\") + to[index];
+		if (out.empty())
+			out = u".";
+		call.put_wide(call[0], out, max_path);
+		call.ret(1);
+	});
+	// The command line cut before its arguments, without the space that led to them.
+	for (const bool narrow : {false, true})
+		registry.add(narrow ? "PathRemoveArgsA" : "PathRemoveArgsW", 1, [narrow](ApiCall &call) {
+			if (call[0]) {
+				const size_t unit = narrow ? 1 : 2;
+				const auto text = narrow ? widen_ascii(call.narrow(call[0], max_path * 8)) : call.wide(call[0], max_path * 8);
+				bool quoted = false;
+				for (size_t at = 0; at < text.size(); ++at) {
+					if (text[at] == u'"')
+						quoted = !quoted;
+					else if (text[at] == u' ' && !quoted) {
+						call.write(call[0] + at * unit, std::vector<uint8_t>(unit));
+						break;
+					}
+				}
+			}
+			call.ret(0);
+		});
 	registry.add("PathMatchSpecW", 2, [](ApiCall &call) {
 		const auto file = call.wide(call[0]);
 		const auto spec = call.wide(call[1]);

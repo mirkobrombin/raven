@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <fstream>
+#include <initializer_list>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 
 namespace raven {
@@ -401,6 +403,24 @@ void NativeRegistry::seed()
 		uint32_t disposition = 0;
 		if (!create(0x80000002ULL, service, key, disposition)) {
 			fill(key, u"ImagePath", 2, bytes_of(u"%systemroot%\\system32\\msiexec.exe /V"));
+			close(key);
+		}
+	}
+	// Services that every Windows has and that installers look for; nothing runs them here, so starting one fails as a missing file does.
+	for (const auto &[name, display, image] : std::initializer_list<std::tuple<std::u16string, std::u16string, std::u16string>>{
+		{u"wuauserv", u"Windows Update", u"%systemroot%\\system32\\svchost.exe -k netsvcs -p"},
+		{u"TrustedInstaller", u"Windows Modules Installer", u"%SystemRoot%\\servicing\\TrustedInstaller.exe"},
+		{u"BITS", u"Background Intelligent Transfer Service", u"%SystemRoot%\\System32\\svchost.exe -k netsvcs -p"}}) {
+		const auto service = u"SYSTEM\\CurrentControlSet\\Services\\" + name;
+		text(service.c_str(), u"DisplayName", display);
+		text(service.c_str(), u"ObjectName", u"LocalSystem");
+		number(service.c_str(), u"Type", 0x20);
+		number(service.c_str(), u"Start", 3);
+		number(service.c_str(), u"ErrorControl", 1);
+		uint64_t key = 0;
+		uint32_t disposition = 0;
+		if (!create(0x80000002ULL, service, key, disposition)) {
+			fill(key, u"ImagePath", 2, bytes_of(image));
 			close(key);
 		}
 	}

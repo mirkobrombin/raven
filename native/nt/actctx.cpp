@@ -332,9 +332,9 @@ void ActivationContexts::set_compatibility_layer(std::u16string_view layers)
 {
 	// The layers are names separated by spaces, after an optional "~" or "!"; the first that names a version of Windows decides.
 	static const std::pair<std::string_view, Version> versions[] = {{"WIN2000", {5, 0, 2195}}, {"WINXP", {5, 1, 2600}},
-		{"WINXPSP1", {5, 1, 2600}}, {"WINXPSP2", {5, 1, 2600}}, {"WINXPSP3", {5, 1, 2600}}, {"WINSRV03SP1", {5, 2, 3790}},
-		{"WINSRV03SP2", {5, 2, 3790}}, {"VISTARTM", {6, 0, 6000}}, {"VISTASP1", {6, 0, 6001}}, {"VISTASP2", {6, 0, 6002}},
-		{"WIN7RTM", {6, 1, 7600}}, {"WIN7SP1", {6, 1, 7601}}, {"WIN8RTM", {6, 2, 9200}}, {"WIN81RTM", {6, 3, 9600}}};
+		{"WINXPSP1", {5, 1, 2600, 1}}, {"WINXPSP2", {5, 1, 2600, 2}}, {"WINXPSP3", {5, 1, 2600, 3}}, {"WINSRV03SP1", {5, 2, 3790, 1}},
+		{"WINSRV03SP2", {5, 2, 3790, 2}}, {"VISTARTM", {6, 0, 6000}}, {"VISTASP1", {6, 0, 6001, 1}}, {"VISTASP2", {6, 0, 6002, 2}},
+		{"WIN7RTM", {6, 1, 7600}}, {"WIN7SP1", {6, 1, 7601, 1}}, {"WIN8RTM", {6, 2, 9200}}, {"WIN81RTM", {6, 3, 9600}}};
 	std::string name;
 	const auto decide = [&] {
 		for (const auto &[layer, version] : versions)

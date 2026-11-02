@@ -801,6 +801,13 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			call.store<uint32_t>(call[4], 0);
 		call.fail(error_no_more_items, 0);
 	});
+	// No log service keeps channels here: every channel is one that does not exist, and programs treat that as logging being off.
+	constexpr uint32_t error_evt_channel_not_found = 15007;
+	registry.add("EvtOpenChannelConfig", 3, [](ApiCall &call) { call.fail(error_evt_channel_not_found, 0); });
+	registry.add("EvtSubscribe", 8, [](ApiCall &call) { call.fail(error_evt_channel_not_found, 0); });
+	registry.add("EvtGetChannelConfigProperty", 6, [](ApiCall &call) { call.fail(6, 0); });
+	registry.add("EvtSetChannelConfigProperty", 4, [](ApiCall &call) { call.fail(6, 0); });
+	registry.add("EvtSaveChannelConfig", 2, [](ApiCall &call) { call.fail(6, 0); });
 	registry.add("EvtClose", 1, [&objects](ApiCall &call) {
 		if (!objects.object_as<EventQuery>(call[0])) {
 			call.fail(6, 0);
@@ -1587,6 +1594,12 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			"WerUnregisterMemoryBlock", "WerRegisterFile", "WerUnregisterFile", "WerSetFlags", "WerAddExcludedApplication",
 			"WerRemoveExcludedApplication", "WerRegisterCustomMetadata", "WerUnregisterCustomMetadata"})
 		registry.add(name, 2, [](ApiCall &call) { call.ret(0); });
+	// A report would go nowhere, so none is made: the caller goes on as it does when reporting is turned off.
+	registry.add("WerReportCreate", 4, [](ApiCall &call) {
+		if (call[3])
+			call.write(call[3], std::vector<uint8_t>(call.pointer_width()));
+		call.ret(0x80004001U);
+	});
 	// Binding writes the addresses of a program's imports into its file ahead of time, which only spares the loader work; the loader here
 	// resolves every import when it loads the image, so an image left unbound is as good as a bound one (Windows Installer binds the
 	// programs a package names in its BindImage table).

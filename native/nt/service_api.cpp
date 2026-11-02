@@ -96,6 +96,17 @@ const std::u16string services_path = u"SYSTEM\\CurrentControlSet\\Services\\";
 
 }
 
+// The manager hands out a service's command with the system folder spelled out, however the registry writes it.
+static std::u16string expanded_image_path(std::u16string path)
+{
+	for (const std::u16string_view name : {u"%systemroot%", u"%windir%"})
+		if (path.size() >= name.size() && std::equal(name.begin(), name.end(), path.begin(), [](char16_t left, char16_t right) {
+			return (left >= u'A' && left <= u'Z' ? char16_t(left + 32) : left) == (right >= u'A' && right <= u'Z' ? char16_t(right + 32) : right);
+		}))
+			return u"C:\\Windows" + path.substr(name.size());
+	return path;
+}
+
 void register_service_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive)
 {
 	auto &objects = context.objects;
@@ -273,6 +284,7 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 					out.pop_back();
 			};
 			text(u"ImagePath", path);
+			path = expanded_image_path(path);
 			text(u"ObjectName", account);
 			text(u"DisplayName", display);
 		});

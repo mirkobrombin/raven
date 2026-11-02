@@ -13,6 +13,7 @@ static INSTALLUILEVEL ui_level = INSTALLUILEVEL_DEFAULT;
 static HWND ui_window;
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static DWORD log_mode;
+static WCHAR log_path[MAX_PATH];
 
 void package_startup(void)
 {
@@ -699,14 +700,26 @@ UINT WINAPI MsiEnableLogW(DWORD mode, LPCWSTR path, DWORD attributes)
 		log_file = INVALID_HANDLE_VALUE;
 	}
 	log_mode = mode;
+	log_path[0] = 0;
 	if (!path || !mode)
 		return ERROR_SUCCESS;
+	lstrcpynW(log_path, path, MAX_PATH);
 	log_file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, attributes & INSTALLLOGATTRIBUTES_APPEND ? OPEN_ALWAYS : CREATE_ALWAYS, 0, NULL);
 	if (log_file == INVALID_HANDLE_VALUE)
 		return ERROR_INVALID_PARAMETER;
 	if (attributes & INSTALLLOGATTRIBUTES_APPEND)
 		SetFilePointer(log_file, 0, NULL, FILE_END);
 	return ERROR_SUCCESS;
+}
+
+// The log's path for another process to write it, which needs this one to let go of the file.
+const WCHAR *package_log_release(void)
+{
+	if (log_file != INVALID_HANDLE_VALUE) {
+		CloseHandle(log_file);
+		log_file = INVALID_HANDLE_VALUE;
+	}
+	return log_path;
 }
 
 UINT WINAPI MsiEnableLogA(DWORD mode, LPCSTR path, DWORD attributes)
