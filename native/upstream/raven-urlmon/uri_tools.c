@@ -3,6 +3,7 @@
  * See LICENSES/MIT.txt.
  */
 #include "urlmon_private.h"
+#define STRSAFE_NO_DEPRECATE
 #include <strsafe.h>
 
 #define COMBINE_FLAGS_OF(flags) \

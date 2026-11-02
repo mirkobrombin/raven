@@ -259,7 +259,9 @@ def main():
     run([output / "spec2def", spec_arch, "-n=msi.dll", "-d=" + str(output / "msi.def"), "-s=" + str(generated / "msi_stubs.c"), msi_root / "msi.spec"])
     msi_sources = sorted(msi_root.glob("*.c")) + [generated / name for name in ("cond.tab.c", "sql.tab.c", "msiserver_i.c", "winemsi_c.c",
                                                                                  "winemsi_s.c", "msi_stubs.c")]
-    msi_flags = ["-DMSIRUNMODE=MSIRUNMODE_T", "-I" + str(msi_root)]
+    # The RPC stubs widl writes guard their calls with the PSEH blocks of the ReactOS rpc.h, as upstream builds them, not with Wine's
+    # setjmp based frames, which nothing here provides.
+    msi_flags = ["-DMSIRUNMODE=MSIRUNMODE_T", "-DUSE_COMPILER_EXCEPTIONS", "-I" + str(msi_root)]
     with ThreadPoolExecutor(max_workers=2) as pool:
         msi = list(pool.map(lambda path: compile(path, "msi_" + path.stem, msi_flags, wine_module=False), msi_sources))
     msi.append(compile(source / "sdk/lib/3rdparty/libwine/register.c", "wine_register", ["-I" + str(msi_root)]))
@@ -503,7 +505,7 @@ def main():
          "-o", output / "urlmon.dll", *urlmon_objects, output / "urlmon.def", "-luuid", "-lole32", "-loleaut32", "-lshlwapi", "-ladvapi32", "-lwininet", "-luser32", "-lshell32", "-lkernel32", "-lgcc"])
     # riched20.dll: Raven's own rich edit control, with the type library of its text object model that its resources carry.
     own_riched = repo / "native/upstream/raven-riched20"
-    run([*widl, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
+    run([*widl, "-L", generated, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
     run([triple + "-windres", "-I", generated, own_riched / "resources.rc", "-o", objects / "riched20.res.o"])
     riched_objects = [objects / "riched20.res.o"]
     for path in [*sorted(own_riched.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
