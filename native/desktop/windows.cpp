@@ -101,8 +101,10 @@ void NativeWindows::refresh_screen()
 	}
 	for (const auto handle : top_level_windows()) {
 		const auto *window=objects.window(handle);
-		if ((window->style & 0x21000000U)==0x01000000U) reshape(handle,{0,0,size->first,size->second});
-		if (objects.window(handle)) post(handle,0x7e,32,uint16_t(size->first) | (uint64_t(uint16_t(size->second))<<16));
+		// Polling also runs while the scheduler checks another thread's wait, where no guest procedure may run: the program's own message
+		// loop takes the new size.
+		if ((window->style & 0x21000000U)==0x01000000U) pending_events.push_back({handle,0,0,0,DesktopEventKind::resize,size->first,size->second});
+		post(handle,0x7e,32,uint16_t(size->first) | (uint64_t(uint16_t(size->second))<<16));
 	}
 }
 
