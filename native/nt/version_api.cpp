@@ -1,4 +1,5 @@
 #include "kernel_context.h"
+#include "nls.h"
 #include "pe/resources.h"
 #include "text.h"
 
@@ -255,7 +256,7 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("GetFileVersionInfoW", 4, [info_of](ApiCall &call) { info_of(call, 0, 2, 3, false); });
 	registry.add("GetFileVersionInfoA", 4, [info_of](ApiCall &call) { info_of(call, 0, 2, 3, true); });
 	registry.add("GetFileVersionInfoExW", 5, [info_of](ApiCall &call) { info_of(call, 1, 3, 4, false); });
-	const auto query = [name_at, store_pointer](ApiCall &call, bool ansi) {
+	const auto query = [name_at, store_pointer, &context](ApiCall &call, bool ansi) {
 		if (!call[0] || !call[1]) {
 			call.fail(87);
 			return;
@@ -269,14 +270,17 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		// A text value asked for through the ANSI function is converted into the area after the block, at the same offset, as Windows does.
+		// The call is not told the buffer's size: the area is there when the caller sized it with GetFileVersionInfoSize, as it has to.
 		if (ansi && node->type == 1) {
 			const auto wide = call.read(call[0] + node->value_offset, size_t(node->value_length) * 2);
-			std::vector<uint8_t> narrow;
+			std::u16string text;
 			for (size_t i = 0; i + 1 < wide.size(); i += 2) {
 				const char16_t c = char16_t(wide[i] | wide[i + 1] << 8);
 				if (!c) break;
-				narrow.push_back(c < 0x100 ? uint8_t(c) : uint8_t('?'));
+				text.push_back(c);
 			}
+			const auto encoded = encode_ansi(text, context.launch.ansi_code_page);
+			std::vector<uint8_t> narrow(encoded.begin(), encoded.end());
 			narrow.push_back(0);
 			const uint64_t target = call[0] + total + 4 + node->value_offset;
 			call.write(target, narrow);
