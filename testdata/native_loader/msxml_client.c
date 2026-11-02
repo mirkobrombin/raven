@@ -85,6 +85,25 @@ int raven_entry(void)
 		return 6;
 	SysFreeString(value);
 	IXMLDOMNode_Release(node);
+	/* A document far longer than a path: its text is converted whole, in both directions. */
+	enum { long_text = 2 * 1024 * 1024 };
+	WCHAR *wide_text = GlobalAlloc(GMEM_FIXED, (long_text + 1) * sizeof(WCHAR));
+	char *narrow_text = GlobalAlloc(GMEM_FIXED, long_text + 1);
+	if (!wide_text || !narrow_text)
+		return 90;
+	for (int at = 0; at < long_text; at++)
+		narrow_text[at] = 'x';
+	narrow_text[0] = '<', narrow_text[1] = 'a', narrow_text[2] = '>';
+	narrow_text[long_text - 4] = '<', narrow_text[long_text - 3] = '/', narrow_text[long_text - 2] = 'a', narrow_text[long_text - 1] = '>';
+	narrow_text[long_text] = 0;
+	if (MultiByteToWideChar(CP_UTF8, 0, narrow_text, -1, wide_text, long_text + 1) != long_text + 1)
+		return 91;
+	BSTR long_document = SysAllocString(wide_text);
+	if (IXMLDOMDocument_loadXML(document, long_document, &loaded) != S_OK || loaded != VARIANT_TRUE)
+		return 92;
+	SysFreeString(long_document);
+	GlobalFree(wide_text);
+	GlobalFree(narrow_text);
 	WCHAR folder[MAX_PATH], path[MAX_PATH];
 	GetTempPathW(MAX_PATH, folder);
 	lstrcatW(folder, L"{F2DA498E-66A3-4183-B794-FD6A62ED92B0}");

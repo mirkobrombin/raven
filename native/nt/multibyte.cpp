@@ -108,7 +108,6 @@ constexpr std::array<Decomposition,58> decompositions{{
 
 std::string encode_utf8(std::u16string_view text,bool replace_invalid)
 {
-	if (text.size()>32766) throw uint32_t(120);
 	if (text.empty()) return {};
 	uint32_t needed=0,written=0;
 	const auto status=RtlUnicodeToUTF8N(nullptr,0,&needed,text.data(),uint32_t(text.size()*2));
@@ -135,7 +134,7 @@ bool NativeEnvironment::multibyte_information(std::string_view name)
 		const auto *single=native_single_byte_page(code_page);
 		const bool ascii=code_page==20127,latin1=code_page==28591;
 		if (code_page!=1252 && code_page!=65001 && !single && !ascii && !latin1) throw uint32_t(120);
-		constexpr size_t limit=1024*1024;
+		constexpr size_t limit=1024*1024*1024;
 		std::vector<uint8_t> input;
 		if (length>0) {
 			if (size_t(length)>limit) throw uint32_t(120);
