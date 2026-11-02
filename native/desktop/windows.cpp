@@ -1783,6 +1783,7 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		if (child) parent_notify(handle,1);
 		if (!objects.window(handle)) return 0;
 		if (const auto *created=objects.window(handle)) publish_window(handle,uint32_t(std::max(created->width,0)),uint32_t(std::max(created->height,0)));
+		if (const auto *created=objects.window(handle)) publish_window_traits(handle,{created->style,created->ex_style,objects.window_class(created->class_id)->name});
 		if (effective_style & 0x10000000U) {
 			auto *window=objects.window(handle);window->visible=true;objects.update_window_dcs(child ? window->parent : handle);
 			if (objects.window_visible(handle)) present(handle);

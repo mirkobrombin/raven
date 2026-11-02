@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace raven {
@@ -21,6 +22,16 @@ void publish_window(uint64_t window, uint32_t width, uint32_t height);
 void withdraw_window(uint64_t window);
 // Drawing side: the client size of a window another live process of the prefix owns.
 std::optional<std::pair<uint32_t, uint32_t>> foreign_window_size(uint64_t window);
+// The process that owns a window another live process of the prefix created.
+std::optional<uint32_t> foreign_window_owner(uint64_t window);
+
+// What another process may ask of a window it does not own: its styles and the name of its class.
+struct ForeignWindowTraits {
+	uint32_t style = 0, ex_style = 0;
+	std::string class_name;
+};
+void publish_window_traits(uint64_t window, const ForeignWindowTraits &traits);
+std::optional<ForeignWindowTraits> foreign_window_traits(uint64_t window);
 
 // Pixels of a window shared between the process that draws them and the owner: a header page, then 32-bit rows top down.
 class ForeignSurface {

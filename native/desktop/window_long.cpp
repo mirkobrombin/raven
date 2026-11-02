@@ -85,7 +85,13 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 	const auto window_long = [this](ApiCall &call, bool write, bool wide) {
 		auto *window = objects.window(call[0]);
 		if (!window) {
-			call.fail(1400);
+			// Another process may read the styles of a window, never change them from here.
+			const int32_t asked = call.i32(1);
+			const auto traits = !write && (asked == -16 || asked == -20) ? foreign_window_traits(call[0]) : std::nullopt;
+			if (traits)
+				call.ret(asked == -16 ? traits->style : traits->ex_style);
+			else
+				call.fail(1400);
 			return;
 		}
 		const int32_t index = call.i32(1);
@@ -180,6 +186,8 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 					std::memcpy(bytes.data() + 4, &next, 4);
 					process.write_memory(scratch, bytes);
 					send(call[0], 0x7d, index_word, scratch);
+					if (const auto *changed_window = objects.window(call[0]))
+						publish_window_traits(call[0], {changed_window->style, changed_window->ex_style, objects.window_class(changed_window->class_id)->name});
 					if (objects.window(call[0]) && objects.window_visible(call[0])) {
 						invalidate_tree(call[0], true);
 						drawing(call[0]);

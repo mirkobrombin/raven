@@ -574,6 +574,12 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	registry.add("AttachThreadInput", 3, [](ApiCall &call) { call.ret(1); });
 	registry.add("GetWindowThreadProcessId", 2, [this](ApiCall &call) {
 		if (!objects.window(call[0])) {
+			// A window of another process: its creating thread stays with the owner, whose first thread stands for it.
+			if (const auto owner = foreign_window_owner(call[0])) {
+				if (call[1]) call.store<uint32_t>(call[1], *owner);
+				call.ret(*owner);
+				return;
+			}
 			call.fail(1400);
 			return;
 		}
