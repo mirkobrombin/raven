@@ -1117,8 +1117,11 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		// SPI_GETHIGHCONTRAST and SPI_GETANIMATION fill structures whose first field is their size: no high contrast, no minimize animation.
 		case 0x42:
 			if (pointer) {
+				// HIGHCONTRASTW ends in a pointer, four bytes in a 32-bit program, to a scheme name that Windows always supplies.
+				if (!high_contrast_scheme)
+					high_contrast_scheme = process.map_memory(4096, PROT_READ | PROT_WRITE);
 				call.store<uint32_t>(pointer + 4, 0);
-				call.store<uint64_t>(pointer + 8, 0);
+				call.store_pointer(pointer + 8, high_contrast_scheme);
 			}
 			call.ret(1);
 			return;
