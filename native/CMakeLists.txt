@@ -2387,6 +2387,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${RAVEN_DLLTOOL} -d ${VULKAN_FIXTURE_DEF}
                     -l ${VULKAN_FIXTURES}/vulkan.a
                 DEPENDS ${VULKAN_FIXTURE_DEF} VERBATIM)
+            # One target owns each import library, so the fixtures that link it wait for it instead of running dlltool side by side.
+            add_custom_target(vulkan_import64 DEPENDS ${VULKAN_FIXTURES}/vulkan.a)
             add_custom_command(OUTPUT ${VULKAN_FIXTURES}/client.exe
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                     -idirafter ${Vulkan_INCLUDE_DIRS} -I${PROJECT_SOURCE_DIR}/testdata/native_cpu
@@ -2396,6 +2398,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_client.c
                     ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_compute_spirv.h ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_triangle_spirv.h ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_quad_spirv.h ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
             add_custom_target(vulkan_pe_fixture ALL DEPENDS ${VULKAN_FIXTURES}/client.exe)
+            add_dependencies(vulkan_pe_fixture vulkan_import64)
             add_executable(vulkan_bridge_test graphics/vulkan_bridge_test.cpp)
             target_link_libraries(vulkan_bridge_test PRIVATE raven_cpu)
             add_dependencies(vulkan_bridge_test vulkan_pe_fixture raven-bootstrap)
@@ -2415,6 +2418,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_extensions_client.c
                         ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_compute_spirv.h ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
                 add_custom_target(vulkan_extensions64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/extensions64.exe)
+                add_dependencies(vulkan_extensions64_fixture vulkan_import64)
                 add_test(NAME native_vulkan_extensions_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/extensions64.exe)
                 set_tests_properties(native_vulkan_extensions_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
                 add_test(NAME native_vulkan_queued_extensions_x64 COMMAND ${Python3_EXECUTABLE}
@@ -2428,6 +2432,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${VULKAN_FIXTURES}/vulkan.a -lkernel32
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/foreign_present_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
                 add_custom_target(vulkan_foreign64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/foreign-present64.exe)
+                add_dependencies(vulkan_foreign64_fixture vulkan_import64)
                 add_executable(foreign_present_test graphics/foreign_present_test.cpp)
                 target_link_libraries(foreign_present_test PRIVATE raven_cpu)
                 add_dependencies(foreign_present_test vulkan_foreign64_fixture raven-bootstrap)
@@ -2443,14 +2448,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/descriptor_buffer_client.c
                         ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_compute_spirv.h ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
                 add_custom_target(vulkan_descriptor64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/descriptor-buffer64.exe)
+                add_dependencies(vulkan_descriptor64_fixture vulkan_import64)
                 add_test(NAME native_vulkan_descriptor_buffer_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/descriptor-buffer64.exe)
                 set_tests_properties(native_vulkan_descriptor_buffer_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
                 if(TARGET vulkan_thunk32_generated)
                     find_program(RAVEN_DLLTOOL32 i686-w64-mingw32-dlltool)
                     if(RAVEN_DLLTOOL32)
                         add_custom_command(OUTPUT ${VULKAN_FIXTURES}/vulkan32.a
+                            COMMAND ${CMAKE_COMMAND} -E make_directory ${VULKAN_FIXTURES}
                             COMMAND ${RAVEN_DLLTOOL32} --kill-at -d ${VULKAN_GENERATED_DIR}/vulkan_thunk32_exports.def -l ${VULKAN_FIXTURES}/vulkan32.a
                             DEPENDS ${VULKAN_GENERATED_DIR}/vulkan_thunk32_exports.def VERBATIM)
+                        add_custom_target(vulkan_import32 DEPENDS ${VULKAN_FIXTURES}/vulkan32.a)
                         add_custom_command(OUTPUT ${VULKAN_FIXTURES}/foreign-present32.exe
                             COMMAND ${RAVEN_MINGW32_VULKAN} -minline-all-stringops -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                                 -I${VULKAN_GENERATED_DIR}/mingw-include
@@ -2459,6 +2467,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                                 ${VULKAN_FIXTURES}/vulkan32.a -lkernel32
                             DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/foreign_present_client.c ${VULKAN_FIXTURES}/vulkan32.a VERBATIM)
                         add_custom_target(vulkan_foreign32_fixture ALL DEPENDS ${VULKAN_FIXTURES}/foreign-present32.exe)
+                        add_dependencies(vulkan_foreign32_fixture vulkan_import32)
                         add_dependencies(foreign_present_test vulkan_foreign32_fixture)
                         add_test(NAME native_vulkan_foreign_present_x32 COMMAND foreign_present_test
                             $<TARGET_FILE:raven-bootstrap> ${VULKAN_FIXTURES}/foreign-present32.exe)
@@ -2472,6 +2481,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/descriptor_buffer_client.c
                                 ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_compute_spirv.h ${VULKAN_FIXTURES}/vulkan32.a VERBATIM)
                         add_custom_target(vulkan_descriptor32_fixture ALL DEPENDS ${VULKAN_FIXTURES}/descriptor-buffer32.exe)
+                        add_dependencies(vulkan_descriptor32_fixture vulkan_import32)
                         add_test(NAME native_vulkan_descriptor_buffer_x32 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/descriptor-buffer32.exe)
                         set_tests_properties(native_vulkan_descriptor_buffer_x32 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
                         add_custom_command(OUTPUT ${VULKAN_FIXTURES}/extensions32.exe
@@ -2483,6 +2493,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_extensions_client.c
                                 ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_compute_spirv.h ${VULKAN_FIXTURES}/vulkan32.a VERBATIM)
                         add_custom_target(vulkan_extensions32_fixture ALL DEPENDS ${VULKAN_FIXTURES}/extensions32.exe)
+                        add_dependencies(vulkan_extensions32_fixture vulkan_import32)
                         add_test(NAME native_vulkan_extensions_x32 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/extensions32.exe)
                         set_tests_properties(native_vulkan_extensions_x32 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
                     endif()
