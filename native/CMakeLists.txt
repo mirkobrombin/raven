@@ -1270,6 +1270,27 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_raw_buffer_x${QUEUE_ARCH} PROPERTIES TIMEOUT 15)
             endif()
         endforeach()
+        # SPI_GETHIGHCONTRAST answers both pointer widths without writing past the structure.
+        foreach(CONTRAST_ARCH IN ITEMS 64 32)
+            set(CONTRAST_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/high-contrast-${CONTRAST_ARCH}.exe)
+            if(CONTRAST_ARCH EQUAL 64)
+                set(CONTRAST_COMPILER ${RAVEN_MINGW64})
+                set(CONTRAST_ENTRY raven_entry)
+            else()
+                set(CONTRAST_COMPILER ${RAVEN_MINGW32})
+                set(CONTRAST_ENTRY _raven_entry)
+            endif()
+            if(CONTRAST_COMPILER)
+                add_custom_command(OUTPUT ${CONTRAST_FIXTURE}
+                    COMMAND ${CONTRAST_COMPILER} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                        -Wl,--entry,${CONTRAST_ENTRY},--no-insert-timestamp
+                        -o ${CONTRAST_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/high_contrast_client.c -luser32 -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/high_contrast_client.c VERBATIM)
+                add_custom_target(high_contrast_${CONTRAST_ARCH}_fixture ALL DEPENDS ${CONTRAST_FIXTURE})
+                add_test(NAME native_high_contrast_x${CONTRAST_ARCH} COMMAND raven --run-process --execution=native ${CONTRAST_FIXTURE})
+                set_tests_properties(native_high_contrast_x${CONTRAST_ARCH} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            endif()
+        endforeach()
         set(DEFAULT_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/default-fixture.exe)
         add_custom_command(OUTPUT ${DEFAULT_FIXTURE}
             COMMAND ${RAVEN_MINGW64} -nostdlib

@@ -404,6 +404,8 @@ private:
 	// Persistent guest scratch memory for API handlers that need to pass structures to guest callbacks.
 	uint64_t scratch_base=0;
 	size_t scratch_used=0;
+	// The empty high contrast scheme name SPI_GETHIGHCONTRAST points programs at; it stays valid for the life of the process.
+	uint64_t high_contrast_scheme=0;
 	uint64_t scratch_allocate(size_t size);
 	// Shows, hides, minimizes, maximizes or restores a window; returns whether it was visible before.
 	bool show_window(uint64_t window,uint32_t command);
