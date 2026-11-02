@@ -3409,6 +3409,42 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     # A machine without an address beyond loopback answers 30, disconnected, which is as correct.
                     set_tests_properties(native_netlist_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned (0|30) ")
                 endforeach()
+                # avrt.dll and mfplat.dll: the multimedia scheduler a media library registers its threads with, and the Media Foundation
+                # factories it makes its samples, types and buffers with, for each width.
+                set(media_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-media)
+                set(media_components ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll)
+                add_custom_command(OUTPUT ${media_components}
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll
+                        ${media_source}/avrt.c -lkernel32
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
+                        ${media_source}/mfplat.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll
+                        ${media_source}/avrt.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
+                        ${media_source}/mfplat.c -lkernel32
+                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c VERBATIM)
+                add_custom_target(media_component ALL DEPENDS ${media_components})
+                # A media library imports both, as cri_ware_unity.dll does; the fixture does too, and asks each one for its answers.
+                foreach(width 64 32)
+                    set(media_client ${CMAKE_CURRENT_BINARY_DIR}/media-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(media_compiler ${RAVEN_MINGW64})
+                        set(media_entry raven_entry)
+                    else()
+                        set(media_compiler ${RAVEN_MINGW32})
+                        set(media_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${media_client}
+                        COMMAND ${media_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${media_entry},--no-insert-timestamp
+                            -o ${media_client} ${LOADER_SOURCES}/media_client.c -lavrt -lmfplat -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/media_client.c VERBATIM)
+                    add_custom_target(media_fixture${width} ALL DEPENDS ${media_client} media_component)
+                    add_test(NAME native_media_x${width} COMMAND raven --run-process --execution=native ${media_client})
+                    set_tests_properties(native_media_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-client.exe
                     COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
                         -Wl,--entry,_raven_entry,--no-insert-timestamp
