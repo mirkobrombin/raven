@@ -358,7 +358,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	// The input event follows the explicit handles, so a signaled handle wins a wait-any tie.
 	const auto message_wait = [&context, &objects, &threads, handle_at, run_apcs](ApiCall &call, uint32_t count, uint64_t array,
 			uint32_t milliseconds, uint32_t mask, uint32_t flags) -> uint32_t {
-		if (count > 63 || (count && !array) || (flags & ~7U) || (mask & ~0x1dffU)) {
+		// 0x2000 is the bit WPF's dispatcher asks for with the input ones; nothing here raises it.
+		if (count > 63 || (count && !array) || (flags & ~7U) || (mask & ~0x3dffU)) {
 			call.set_last_error(87);
 			return wait_failed;
 		}

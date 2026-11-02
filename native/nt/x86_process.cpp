@@ -255,7 +255,7 @@ const std::map<std::string_view, uint32_t> &desktop_arguments()
 		{"UnregisterClassA",2},{"LoadCursorA",2},{"LoadIconA",2},{"GetAsyncKeyState",1},{"SetCursor",1},{"GetCursorPos",1},{"SetCursorPos",2},
 		{"DefWindowProcA",4},{"SendMessageA",4},{"PostMessageA",4},{"SetWindowTextA",2},
 		{"CreateFontA",14},{"ExtTextOutA",8},{"GetDIBits",7},{"GetTextExtentPoint32A",4},{"GetTextMetricsA",2},{"SetDIBits",7},
-		{"ExitWindowsEx",2},{"MessageBoxA",4},{"SetWindowPos",7},{"RealizePalette",1},{"SelectPalette",3},{"PatBlt",6},{"CreatePalette",1},
+		{"ExitWindowsEx",2},{"MessageBoxA",4},{"SetWindowPos",7},{"RealizePalette",1},{"CreateHalftonePalette",1},{"SelectPalette",3},{"PatBlt",6},{"CreatePalette",1},
 	};
 	for (const auto module : {"user32.dll", "gdi32.dll"})
 		for (const auto &item : host_exports(module))
@@ -567,7 +567,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		"CreateDialogParamW", "SendMessageTimeoutW"};
 	std::vector<std::string_view> gdi_pending{"CreateBrushIndirect", "GetDeviceCaps", "SetDIBitsToDevice", "SetLayout", "SetPixel", "SetROP2",
 		"CreateFontA", "ExtTextOutA", "GetDIBits", "GetTextExtentPoint32A", "GetTextMetricsA", "SetDIBits",
-		"RealizePalette", "SelectPalette", "PatBlt", "CreatePalette"};
+		"RealizePalette", "SelectPalette", "PatBlt", "CreatePalette", "CreateHalftonePalette"};
 	for (const auto name : system_export_names("gdi32.dll"))
 		if (name.starts_with("D3DKMT"))
 			gdi_pending.push_back(name);

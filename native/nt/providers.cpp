@@ -2712,7 +2712,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 							bytes = ModuleBytes::map(found->host);
 							origin = found->host;
 						}
-					} else if ((flags & 0x1f00) && !system) {
+					// A search of the system directory also finds what the runtime provides as part of it, DirectWrite among them.
+					} else if ((flags & 0x1f00) && !(flags & 0x800) && !system) {
 						throw LoadFailure{126};
 					}
 				}

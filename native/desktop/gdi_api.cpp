@@ -451,6 +451,28 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			call.ret(handle);
 		});
 	});
+	// The 256 colours GDI halftones to: the ten fixed colours at each end, a 6x6x6 cube and a grey ramp between them.
+	registry.add("CreateHalftonePalette", 1, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			static constexpr uint32_t first[10] = {0x000000, 0x000080, 0x008000, 0x008080, 0x800000, 0x800080, 0x808000, 0xc0c0c0, 0xc0dcc0, 0xf0caa6};
+			static constexpr uint32_t last[10] = {0xf0fbff, 0xa4a0a0, 0x808080, 0x0000ff, 0x00ff00, 0x00ffff, 0xff0000, 0xff00ff, 0xffff00, 0xffffff};
+			DesktopPalette palette;
+			palette.entries.assign(first, first + 10);
+			for (uint32_t b = 0; b < 6; ++b)
+				for (uint32_t g = 0; g < 6; ++g)
+					for (uint32_t r = 0; r < 6; ++r)
+						palette.entries.push_back(r * 51 | g * 51 << 8 | b * 51 << 16);
+			for (uint32_t i = 1; i <= 20; ++i) {
+				const uint32_t grey = i * 255 / 21;
+				palette.entries.push_back(grey | grey << 8 | grey << 16);
+			}
+			palette.entries.insert(palette.entries.end(), last, last + 10);
+			const auto handle = objects.add(std::move(palette));
+			if (!handle)
+				throw uint32_t(8);
+			call.ret(handle);
+		});
+	});
 	registry.add("GetPaletteEntries", 4, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
 			const auto *palette = objects.palette(call[0]);
