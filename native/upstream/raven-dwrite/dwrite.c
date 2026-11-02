@@ -1090,7 +1090,7 @@ static INT32 pixel_round(INT32 value, float em, INT32 units_per_em)
 }
 
 /* ---- font faces ---- */
-/* IDWriteFontFace1 and 2 extend IDWriteFontFace, so one table serves all three interfaces and one pointer names them. */
+/* IDWriteFontFace1, 2 and 3 extend IDWriteFontFace, so one table serves all four interfaces and one pointer names them. */
 typedef struct {
 	const IDWriteFontFace1Vtbl *vtbl;
 	LONG refs;
@@ -1108,7 +1108,8 @@ static HRESULT STDMETHODCALLTYPE face_query(IDWriteFontFace *self, REFIID iid, v
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontFace) || same_guid(iid, &IID_IDWriteFontFace1) || same_guid(iid, &IID_IDWriteFontFace2))
+	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontFace) || same_guid(iid, &IID_IDWriteFontFace1) || same_guid(iid, &IID_IDWriteFontFace2) ||
+		same_guid(iid, &IID_IDWriteFontFace3))
 		*out = face;
 	else
 		return no_interface(iid);
@@ -1398,7 +1399,122 @@ static HRESULT STDMETHODCALLTYPE face2_recommended(IDWriteFontFace1 *self, FLOAT
 	return S_OK;
 }
 
-static void *Face1_table_[IDWriteFontFace1_methods + 5];
+/* IDWriteFontFace3: what the system font set knows about the face; a font a program supplies has only its own name table. */
+static IDWriteFontFaceReference *make_reference(FontEntry *entry);
+
+static FontEntry *entry_of_face(const Face *face)
+{
+	UINT32 index;
+	if (!face->data->path)
+		return NULL;
+	ensure_system();
+	for (index = 0; index < font_count; ++index)
+		if (font_entries[index].index == face->data->index && font_entries[index].path && wequal_fold(font_entries[index].path, face->data->path))
+			return &font_entries[index];
+	return NULL;
+}
+static HRESULT named_strings(const Face *face, DWORD name_id, const WCHAR *text, const WCHAR *fallback, IDWriteLocalizedStrings **strings)
+{
+	WCHAR *wide = NULL;
+	if (!text) {
+		char buffer[512];
+		const DWORD length = RavenFontName(face->data->host, name_id, buffer, sizeof(buffer));
+		if (length && length < sizeof(buffer))
+			text = wide = widen(buffer);
+	}
+	*strings = make_strings(text ? text : fallback);
+	if (wide)
+		FREE(wide);
+	return *strings ? S_OK : E_OUTOFMEMORY;
+}
+static HRESULT STDMETHODCALLTYPE face3_reference(IDWriteFontFace1 *self, IDWriteFontFaceReference **reference)
+{
+	FontEntry *entry = entry_of_face(FACE_OF1(self));
+	*reference = entry ? make_reference(entry) : NULL;
+	return *reference ? S_OK : E_FAIL;
+}
+static void STDMETHODCALLTYPE face3_panose(IDWriteFontFace1 *self, DWRITE_PANOSE *panose)
+{
+	const void *table = NULL;
+	void *context = NULL;
+	UINT32 size = 0;
+	WINBOOL exists = FALSE;
+	memset(panose, 0, sizeof(*panose));
+	/* The classification sits at offset 32 of the OS/2 table. */
+	if (SUCCEEDED(face_table((IDWriteFontFace *)self, DWRITE_MAKE_OPENTYPE_TAG('O', 'S', '/', '2'), &table, &size, &context, &exists)) && exists) {
+		if (size >= 42)
+			memcpy(panose, (const BYTE *)table + 32, 10);
+		face_release_table((IDWriteFontFace *)self, context);
+	}
+}
+static DWRITE_FONT_WEIGHT STDMETHODCALLTYPE face3_weight(IDWriteFontFace1 *self)
+{
+	const FontEntry *entry = entry_of_face(FACE_OF1(self));
+	return entry ? (DWRITE_FONT_WEIGHT)entry->weight : DWRITE_FONT_WEIGHT_NORMAL;
+}
+static DWRITE_FONT_STRETCH STDMETHODCALLTYPE face3_stretch(IDWriteFontFace1 *self)
+{
+	const FontEntry *entry = entry_of_face(FACE_OF1(self));
+	return entry ? (DWRITE_FONT_STRETCH)entry->stretch : DWRITE_FONT_STRETCH_NORMAL;
+}
+static DWRITE_FONT_STYLE STDMETHODCALLTYPE face3_style(IDWriteFontFace1 *self)
+{
+	const FontEntry *entry = entry_of_face(FACE_OF1(self));
+	return entry ? (DWRITE_FONT_STYLE)entry->style : DWRITE_FONT_STYLE_NORMAL;
+}
+static HRESULT STDMETHODCALLTYPE face3_family_names(IDWriteFontFace1 *self, IDWriteLocalizedStrings **names)
+{
+	const FontEntry *entry = entry_of_face(FACE_OF1(self));
+	return named_strings(FACE_OF1(self), 1, entry ? entry->family : NULL, L"", names);
+}
+static HRESULT STDMETHODCALLTYPE face3_face_names(IDWriteFontFace1 *self, IDWriteLocalizedStrings **names)
+{
+	const FontEntry *entry = entry_of_face(FACE_OF1(self));
+	return named_strings(FACE_OF1(self), 2, entry ? entry->face : NULL, L"Regular", names);
+}
+static HRESULT STDMETHODCALLTYPE font_info_strings(IDWriteFont *self, DWRITE_INFORMATIONAL_STRING_ID id, IDWriteLocalizedStrings **strings, WINBOOL *exists);
+static IDWriteFont *make_font(FontEntry *entry, FamilyEntry *family);
+static FamilyEntry *family_of_entry(const FontEntry *entry);
+static HRESULT STDMETHODCALLTYPE face3_strings(IDWriteFontFace1 *self, DWRITE_INFORMATIONAL_STRING_ID id, IDWriteLocalizedStrings **strings, WINBOOL *exists)
+{
+	FontEntry *entry = entry_of_face(FACE_OF1(self));
+	IDWriteFont *font = entry ? make_font(entry, family_of_entry(entry)) : NULL;
+	HRESULT result = S_OK;
+	*strings = NULL;
+	*exists = FALSE;
+	if (font) {
+		result = font_info_strings(font, id, strings, exists);
+		IDWriteFont_Release(font);
+	}
+	return result;
+}
+static WINBOOL STDMETHODCALLTYPE face3_has_character(IDWriteFontFace1 *self, UINT32 character)
+{
+	UINT16 glyph = 0;
+	return SUCCEEDED(face_glyph_indices((IDWriteFontFace *)self, &character, 1, &glyph)) && glyph;
+}
+static HRESULT STDMETHODCALLTYPE face3_recommended(IDWriteFontFace1 *self, FLOAT em, FLOAT dpi_x, FLOAT dpi_y, const DWRITE_MATRIX *transform, WINBOOL sideways,
+	DWRITE_OUTLINE_THRESHOLD threshold, DWRITE_MEASURING_MODE measuring, IDWriteRenderingParams *params, DWRITE_RENDERING_MODE1 *rendering, DWRITE_GRID_FIT_MODE *grid_fit)
+{
+	*rendering = DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC;
+	*grid_fit = DWRITE_GRID_FIT_MODE_DISABLED;
+	return S_OK;
+}
+/* Every font lives on this machine: nothing is ever waiting for a download. */
+static WINBOOL STDMETHODCALLTYPE face3_character_local(IDWriteFontFace1 *self, UINT32 character, WINBOOL enqueue) { return TRUE; }
+static WINBOOL STDMETHODCALLTYPE face3_glyph_local(IDWriteFontFace1 *self, UINT16 glyph, WINBOOL enqueue) { return TRUE; }
+static HRESULT STDMETHODCALLTYPE face3_characters_local(IDWriteFontFace1 *self, const WCHAR *characters, UINT32 count, WINBOOL enqueue, WINBOOL *local)
+{
+	*local = TRUE;
+	return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE face3_glyphs_local(IDWriteFontFace1 *self, const UINT16 *glyphs, UINT32 count, WINBOOL enqueue, WINBOOL *local)
+{
+	*local = TRUE;
+	return S_OK;
+}
+
+static void *Face1_table_[IDWriteFontFace1_methods + 19];
 static const IDWriteFontFace1Vtbl *face_vtbl;
 
 static void init_face_tables(void)
@@ -1411,6 +1527,12 @@ static void init_face_tables(void)
 	Face1_table_[IDWriteFontFace1_methods + 2] = (void *)face2_entry_count;
 	Face1_table_[IDWriteFontFace1_methods + 3] = (void *)face2_entries;
 	Face1_table_[IDWriteFontFace1_methods + 4] = (void *)face2_recommended;
+	{
+		static void *const face3_methods[] = {(void *)face3_reference, (void *)face3_panose, (void *)face3_weight, (void *)face3_stretch, (void *)face3_style,
+			(void *)face3_family_names, (void *)face3_face_names, (void *)face3_strings, (void *)face3_has_character, (void *)face3_recommended,
+			(void *)face3_character_local, (void *)face3_glyph_local, (void *)face3_characters_local, (void *)face3_glyphs_local};
+		memcpy(Face1_table_ + IDWriteFontFace1_methods + 5, face3_methods, sizeof(face3_methods));
+	}
 	Face1_table_[IDWriteFontFace_QueryInterface] = (void *)face_query;
 	Face1_table_[IDWriteFontFace_AddRef] = (void *)face_add_ref;
 	Face1_table_[IDWriteFontFace_Release] = (void *)face_release;
