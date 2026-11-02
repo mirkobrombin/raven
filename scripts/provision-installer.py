@@ -480,7 +480,7 @@ def main():
          "-o", output / "urlmon.dll", *urlmon_objects, output / "urlmon.def", "-luuid", "-lole32", "-loleaut32", "-lshlwapi", "-ladvapi32", "-lwininet", "-luser32", "-lshell32", "-lkernel32", "-lgcc"])
     # riched20.dll: Raven's own rich edit control, with the type library of its text object model that its resources carry.
     own_riched = repo / "native/upstream/raven-riched20"
-    run([*widl, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
+    run([*widl, "-L", generated, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
     run([triple + "-windres", "-I", generated, own_riched / "resources.rc", "-o", objects / "riched20.res.o"])
     riched_objects = [objects / "riched20.res.o"]
     for path in [*sorted(own_riched.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
