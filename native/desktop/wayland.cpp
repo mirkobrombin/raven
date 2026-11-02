@@ -367,7 +367,8 @@ struct WaylandPresentation::State {
 					state.keyboard_window=0;
 					for (const auto &[handle,window] : state.surfaces) if (window->proxy==surface) state.keyboard_window=handle;
 					if (std::getenv("RAVEN_TRACE_KEYS")) fprintf(stderr,"keyboard enter %p -> %llx\n",(void *)surface,(unsigned long long)state.keyboard_window);
-					if (!state.keyboard_window) { state.input_error="keyboard entered an unknown native surface"; state.input_failed=true; return; }
+					// Focus sent to a surface just destroyed, as a popup menu made again or closed, was on its way before the compositor heard: nothing has focus.
+					if (!state.keyboard_window) { state.keyboard_event({0,0,0,0,DesktopEventKind::keyboard_focus}); return; }
 					DesktopEvent event{state.keyboard_window,0,0,0,DesktopEventKind::keyboard_focus};
 					try {
 						event.held_keys.resize(keys->size/sizeof(uint32_t));
