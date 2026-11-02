@@ -10,7 +10,11 @@
  *
  * This is Raven code on the public Windows headers. */
 #define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
 #include <windows.h>
+#include <objbase.h>
+
+#define CLR_E_SHIM_RUNTIME ((HRESULT)0x80131700)
 
 /* The exports, in the order of the table the thunks index. */
 #define EXPORTS(X) \
@@ -133,13 +137,75 @@ void *raven_mscoree_resolve(unsigned index)
 __asm__(".text\n" EXPORTS(THUNK) THUNK(120, raven_mscoree_shim_interface));
 __asm__(".section .drectve\n.ascii \"" EXPORTS(EXPORT) "\"\n.text");
 
-/* The runtime's folder: the implementation is told which code asks, by its return address, as the system shim tells it, so that a
- * library bound to an older runtime gets that runtime's folder. */
-typedef HRESULT (WINAPI *directory_with_caller)(WCHAR *, DWORD, DWORD *, void *);
+/* The runtime's folder, as the documented hosting interfaces give it: the runtime loaded in this process, or without one the newest
+ * installed. The tables hold the slots these calls use, in their published order after IUnknown. */
+typedef struct runtime_info runtime_info;
+typedef struct meta_host meta_host;
+struct runtime_info {
+	const struct {
+		HRESULT (WINAPI *QueryInterface)(runtime_info *, REFIID, void **);
+		ULONG (WINAPI *AddRef)(runtime_info *);
+		ULONG (WINAPI *Release)(runtime_info *);
+		HRESULT (WINAPI *GetVersionString)(runtime_info *, WCHAR *, DWORD *);
+		HRESULT (WINAPI *GetRuntimeDirectory)(runtime_info *, WCHAR *, DWORD *);
+	} *table;
+};
+struct meta_host {
+	const struct {
+		HRESULT (WINAPI *QueryInterface)(meta_host *, REFIID, void **);
+		ULONG (WINAPI *AddRef)(meta_host *);
+		ULONG (WINAPI *Release)(meta_host *);
+		HRESULT (WINAPI *GetRuntime)(meta_host *, const WCHAR *, REFIID, void **);
+		HRESULT (WINAPI *GetVersionFromFile)(meta_host *, const WCHAR *, WCHAR *, DWORD *);
+		HRESULT (WINAPI *EnumerateInstalledRuntimes)(meta_host *, IEnumUnknown **);
+		HRESULT (WINAPI *EnumerateLoadedRuntimes)(meta_host *, HANDLE, IEnumUnknown **);
+	} *table;
+};
+static const GUID clsid_meta_host = {0x9280188d, 0x0e8e, 0x4867, {0xb3, 0x0c, 0x7f, 0xa8, 0x38, 0x84, 0xe8, 0xde}};
+static const GUID iid_meta_host = {0xd332db9e, 0xb9b3, 0x4125, {0x82, 0x07, 0xa1, 0x48, 0x84, 0xf5, 0x32, 0x16}};
+static const GUID iid_runtime_info = {0xbd39d1d2, 0xba2f, 0x486a, {0x89, 0xb0, 0xb4, 0xb0, 0xcb, 0x46, 0x68, 0x91}};
+
+/* The last runtime of a list: the only one if loaded, the newest if installed, as the list goes by version. */
+static runtime_info *last_runtime(IEnumUnknown *list)
+{
+	runtime_info *found = NULL;
+	IUnknown *item = NULL;
+	while (IEnumUnknown_Next(list, 1, &item, NULL) == S_OK) {
+		runtime_info *info = NULL;
+		if (SUCCEEDED(IUnknown_QueryInterface(item, &iid_runtime_info, (void **)&info))) {
+			if (found)
+				found->table->Release(found);
+			found = info;
+		}
+		IUnknown_Release(item);
+	}
+	IEnumUnknown_Release(list);
+	return found;
+}
+
+typedef HRESULT (WINAPI *create_instance)(REFCLSID, REFIID, void **);
 
 HRESULT WINAPI GetCORSystemDirectory(WCHAR *buffer, DWORD size, DWORD *length)
 {
-	return ((directory_with_caller)raven_mscoree_resolve(35))(buffer, size, length, __builtin_return_address(0));
+	meta_host *host = NULL;
+	HRESULT hr = ((create_instance)raven_mscoree_resolve(0))(&clsid_meta_host, &iid_meta_host, (void **)&host);
+	if (FAILED(hr))
+		return hr;
+	IEnumUnknown *list = NULL;
+	runtime_info *info = NULL;
+	if (SUCCEEDED(host->table->EnumerateLoadedRuntimes(host, GetCurrentProcess(), &list)))
+		info = last_runtime(list);
+	list = NULL;
+	if (!info && SUCCEEDED(host->table->EnumerateInstalledRuntimes(host, &list)))
+		info = last_runtime(list);
+	host->table->Release(host);
+	if (!info)
+		return CLR_E_SHIM_RUNTIME;
+	hr = info->table->GetRuntimeDirectory(info, buffer, &size);
+	if (length)
+		*length = size;
+	info->table->Release(info);
+	return hr;
 }
 #ifdef __x86_64__
 __asm__(".section .drectve\n.ascii \" -export:GetCORSystemDirectory\"\n.text");
