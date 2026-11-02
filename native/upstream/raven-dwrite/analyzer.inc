@@ -20,6 +20,8 @@ typedef struct {
 	LONG refs;
 } TextAnalyzer;
 
+/* To check: refuse IDWriteTextAnalyzer1 and 2 here and open a document in Word. It stops with error 47, and no_interface
+ * prints both GUIDs to the trace (RAVEN_TRACE_DWRITE=1). */
 static HRESULT STDMETHODCALLTYPE ta_query(IDWriteTextAnalyzer *self, REFIID iid, void **out)
 {
 	if (!out)

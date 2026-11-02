@@ -156,6 +156,7 @@ NativeEnvironment::NativeEnvironment(NativeProcess &process, uint64_t image_base
 		field(process, thread_block + 0x08, stack_base, 8);
 		field(process, thread_block + 0x10, stack_limit, 8);
 		// DeallocationStack: the bottom of the stack's allocation, where a runtime that measures its stack finds its end.
+		// CoreCLR's threads.cpp (MIT) measures its stack through VirtualQuery and AllocationBase.
 		field(process, thread_block + 0x1478, stack_limit, 8);
 		field(process, thread_block + 0x30, thread_block, 8);
 		field(process, thread_block + 0x40, process_id, 8);
