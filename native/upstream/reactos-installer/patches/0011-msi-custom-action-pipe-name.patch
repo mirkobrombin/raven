@@ -1,0 +1,24 @@
+--- a/dll/win32/msi/custom.c
++++ b/dll/win32/msi/custom.c
+@@ -620,7 +620,8 @@
+     WCHAR path[MAX_PATH], cmdline[MAX_PATH + 23];
+     PROCESS_INFORMATION pi = {0};
+     STARTUPINFOW si = {0};
+-    WCHAR buffer[24];
++    /* Raven: the pipe name takes 26 characters with a process id of eight hex digits; Linux process ids pass 0xfffff on a desktop that has run for a while. */
++    WCHAR buffer[32];
+     HANDLE token;
+     void *cookie;
+     HANDLE pipe;
+--- a/base/system/msiexec/msiexec.c
++++ b/base/system/msiexec/msiexec.c
+@@ -411,7 +411,8 @@
+ {
+     GUID guid, *thread_guid;
+     DWORD64 thread64;
+-    WCHAR buffer[24];
++    /* Raven: the same room as the client names the pipe with, or a process id of six hex digits or more truncates the name. */
++    WCHAR buffer[32];
+     HANDLE thread;
+     HANDLE pipe;
+     DWORD size;

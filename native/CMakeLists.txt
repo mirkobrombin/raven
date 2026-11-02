@@ -1495,6 +1495,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${fixture}/custom/msi-custom.exe)
                 set_tests_properties(native_msi_custom_actions_${installer_arch} PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/custom-prefix)
+                # The same actions once process ids take six hex digits, as on a desktop that has run for a while: the custom action server
+                # finds the pipe the installer names after its process id. Skipped where no process id namespace of our own is allowed.
+                add_test(NAME native_msi_custom_actions_large_pid_${installer_arch} COMMAND ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/scripts/native-msi-large-pid.py $<TARGET_FILE:raven> ${fixture}/custom/msi-custom.exe)
+                set_tests_properties(native_msi_custom_actions_large_pid_${installer_arch} PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77
+                    PASS_REGULAR_EXPRESSION "PASS: " ENVIRONMENT RAVEN_PREFIX=${fixture}/large-pid-prefix)
                 # A 64-bit package whose action library is 32-bit, as many real ones are: the action runs in the 32-bit custom action server.
                 if(installer_arch STREQUAL x64 AND RAVEN_MINGW32_INSTALLER AND RAVEN_INSTALLER32_COMPONENT_DIR)
                     file(MAKE_DIRECTORY ${fixture}/wow64)
