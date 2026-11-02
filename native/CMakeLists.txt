@@ -1863,6 +1863,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_platform_services PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(ETW_CLIENTS)
             set(PROCESS_ENUM_CLIENTS)
+            set(WORKSTATION_CLIENTS)
             foreach(width 64 32)
                 if(width EQUAL 64)
                     set(etw_compiler ${RAVEN_MINGW64})
@@ -1892,10 +1893,21 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_process_enumeration_x${width} COMMAND raven --run-process --execution=native ${enum_client})
                     set_tests_properties(native_process_enumeration_x${width} PROPERTIES TIMEOUT 20 ENVIRONMENT RAVEN_PARALLEL=1
                         PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # The workstation information installers read through netapi32.
+                    set(workstation_client ${CMAKE_CURRENT_BINARY_DIR}/workstation-client${width}.exe)
+                    add_custom_command(OUTPUT ${workstation_client}
+                        COMMAND ${etw_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -mno-stack-arg-probe
+                            -Wl,--entry,${etw_entry},--image-base,0x1e600000,--no-insert-timestamp
+                            -o ${workstation_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/workstation_client.c -lkernel32 -lnetapi32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/workstation_client.c VERBATIM)
+                    list(APPEND WORKSTATION_CLIENTS ${workstation_client})
+                    add_test(NAME native_workstation_info_x${width} COMMAND raven --run-process --execution=native ${workstation_client})
+                    set_tests_properties(native_workstation_info_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
             endforeach()
             add_custom_target(etw_controller_fixtures ALL DEPENDS ${ETW_CLIENTS})
             add_custom_target(process_enum_fixtures ALL DEPENDS ${PROCESS_ENUM_CLIENTS})
+            add_custom_target(workstation_fixtures ALL DEPENDS ${WORKSTATION_CLIENTS})
             set(SOCKET_MESSAGE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/socket-message-client.exe)
             add_custom_command(OUTPUT ${SOCKET_MESSAGE_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector

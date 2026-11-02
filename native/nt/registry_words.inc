@@ -800,6 +800,7 @@
 {"NetApiBufferFree", 1},
 {"NetGetJoinInformation", 3},
 {"NetUserGetInfo", 4},
+{"NetWkstaGetInfo", 3},
 {"NotifyAddrChange", 2},
 {"NotifyRouteChange", 2},
 {"NotifyWinEvent", 4},
