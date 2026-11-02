@@ -225,7 +225,8 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (call[1]) call.store<uint32_t>(call[1], 0);
-		call.ret(data->size());
+		// As Windows does, room for an ANSI copy of the strings follows the block, so VerQueryValueA can answer string queries.
+		call.ret(data->size() * 2 + 4);
 	};
 	registry.add("GetFileVersionInfoSizeW", 2, [size_of](ApiCall &call) { size_of(call, false); });
 	registry.add("GetFileVersionInfoSizeA", 2, [size_of](ApiCall &call) { size_of(call, true); });
@@ -245,6 +246,9 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(122);
 			return;
 		}
+		// The ANSI area after the block starts zeroed, as far as the caller's buffer reaches.
+		const size_t extra = std::min(capacity, data->size() * 2 + 4) - data->size();
+		data->resize(data->size() + extra, 0);
 		call.write(call[data_index], *data);
 		call.ret(1);
 	};
@@ -259,14 +263,26 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 		const size_t total = call.read(call[0], 2)[0] | call.read(call[0] + 1, 1)[0] << 8;
 		const auto block = call.read(call[0], total);
 		const auto path = ansi ? name_at(call, 1, true) : call.wide(call[1], 512);
-		// The strings of a block are wide; an ANSI caller would need them converted, which is not done, so those queries are refused.
-		if (ansi && path.size() >= 15 && equal_fold(path.substr(0, 15), u"\\StringFileInfo")) {
-			call.fail(120);
-			return;
-		}
 		const auto node = find_node(block, path);
 		if (!node) {
 			call.fail(1813);
+			return;
+		}
+		// A text value asked for through the ANSI function is converted into the area after the block, at the same offset, as Windows does.
+		if (ansi && node->type == 1) {
+			const auto wide = call.read(call[0] + node->value_offset, size_t(node->value_length) * 2);
+			std::vector<uint8_t> narrow;
+			for (size_t i = 0; i + 1 < wide.size(); i += 2) {
+				const char16_t c = char16_t(wide[i] | wide[i + 1] << 8);
+				if (!c) break;
+				narrow.push_back(c < 0x100 ? uint8_t(c) : uint8_t('?'));
+			}
+			narrow.push_back(0);
+			const uint64_t target = call[0] + total + 4 + node->value_offset;
+			call.write(target, narrow);
+			if (call[2]) store_pointer(call, call[2], target);
+			if (call[3]) call.store<uint32_t>(call[3], uint32_t(narrow.size()));
+			call.ret(1);
 			return;
 		}
 		if (call[2]) store_pointer(call, call[2], call[0] + node->value_offset);
