@@ -51,9 +51,17 @@ def main():
     repo = Path(__file__).resolve().parents[1]
     archive = args.archive.resolve() if args.archive else output / "reactos-source.tar.gz"
     if not archive.exists():
-        urllib.request.urlretrieve(f"https://codeload.github.com/reactos/reactos/tar.gz/{REVISION}", archive)
+        # Downloaded beside the archive and moved into place once it checks out, so an interrupted download is not kept.
+        temporary = archive.with_suffix(archive.suffix + ".part")
+        try:
+            urllib.request.urlretrieve(f"https://codeload.github.com/reactos/reactos/tar.gz/{REVISION}", temporary)
+            if hashlib.sha256(temporary.read_bytes()).hexdigest() != ARCHIVE_SHA256:
+                raise RuntimeError("downloaded ReactOS source archive checksum differs")
+            temporary.replace(archive)
+        finally:
+            temporary.unlink(missing_ok=True)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != ARCHIVE_SHA256:
-        raise RuntimeError("ReactOS source archive checksum differs")
+        raise RuntimeError(f"ReactOS source archive checksum differs: {archive} is incomplete or not revision {REVISION}; delete it to download it again")
     source = output / "source"
     shutil.rmtree(source, ignore_errors=True)
     with tarfile.open(archive) as upstream:
@@ -83,6 +91,17 @@ def main():
         if result.returncode:
             raise RuntimeError(result.stderr or "installer build command failed: " + " ".join(map(str, command)))
         return result
+
+    def mingw_include(header):
+        """The directory of the cross compiler's own search path that holds a header: /usr/<triple>/include on Debian and Ubuntu,
+        /usr/<triple>/sys-root/mingw/include on Fedora."""
+        listing = run([triple + "-gcc", "-xc", "-E", "-v", os.devnull]).stderr.splitlines()
+        start = listing.index("#include <...> search starts here:") + 1
+        for line in listing[start:listing.index("End of search list.")]:
+            directory = Path(line.strip()).resolve()
+            if (directory / header).exists():
+                return directory
+        raise RuntimeError(f"the {triple} compiler has no {header}")
 
     def decorated(object_files):
         """Defined global functions of the objects by plain name, with their stdcall argument bytes on 32 bits (None for the others)."""
@@ -305,7 +324,7 @@ def main():
     # Its registration scripts' type library comes from the public headers, and stays with stdole2's for what else needs it.
     run([*widl, "-t", "-T", generated / "stdole2.tlb", repo / "native/upstream/raven-oleaut32/stdole2.idl"])
     own_msxml = repo / "native/upstream/raven-msxml3"
-    headers = Path("/usr") / triple / "include"
+    headers = mingw_include("msxml2.h")
     run([sys.executable, own_msxml / "make_idl.py", headers / "msxml2.h", headers / "msxml2did.h", headers / "msxml.h", generated / "msxml3.idl"])
     run([*widl, "-I", headers, "-L", generated, "-t", "-o", generated / "msxml3.tlb", generated / "msxml3.idl"])
     run([triple + "-windres", "-O", "coff", "-I", generated, "-i", own_msxml / "resources.rc", "-o", objects / "msxml3_resources.o"])
@@ -396,7 +415,7 @@ def main():
     # propsys.dll: property values, the in-memory store and the system's property table, generated from the public key list.
     own_propsys = repo / "native/upstream/raven-propsys"
     propsys_flags = ["-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DCONST_VTABLE", "-DINITGUID", "-D_PROPSYS_", "-I" + str(generated)]
-    run([sys.executable, own_propsys / "make_schema.py", headers / "propkey.h", generated / "schema.inc"])
+    run([sys.executable, own_propsys / "make_schema.py", mingw_include("propkey.h") / "propkey.h", generated / "schema.inc"])
     propsys_objects = []
     for part in ("convert", "store", "system", "main"):
         propsys_objects.append(objects / ("propsys_" + part + ".o"))
