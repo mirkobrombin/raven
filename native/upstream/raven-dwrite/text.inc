@@ -377,12 +377,19 @@ static IDWriteFontFace *face_for(const WCHAR *family_name, DWRITE_FONT_WEIGHT we
 
 static float round_float(float value) { return (float)(int)(value + (value < 0 ? -0.5f : 0.5f)); }
 
+/* Direction marks and other format controls are never seen and take no room. */
+static BOOL format_control(UINT32 code)
+{
+	return code == 0xad || (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e) || (code >= 0x2060 && code <= 0x2064) || code == 0xfeff;
+}
+
 /* Builds a run of the characters [start, end) that share their font settings: glyphs, advances and the font's vertical metrics. */
 static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run)
 {
 	DWRITE_FONT_METRICS metrics;
 	UINT32 position, count = 0;
 	UINT32 *codepoints;
+	BYTE *silent;
 	memset(run, 0, sizeof(*run));
 	run->start = start;
 	run->length = end - start;
@@ -391,11 +398,13 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 	if (!run->face)
 		return FALSE;
 	codepoints = ALLOC((end - start) * sizeof(UINT32));
+	silent = ALLOC(end - start);
 	run->glyphs = ALLOC((end - start) * sizeof(UINT16));
 	run->cluster_map = ALLOC((end - start) * sizeof(UINT16));
 	run->advances = ALLOC((end - start) * sizeof(FLOAT));
-	if (!codepoints || !run->glyphs || !run->cluster_map || !run->advances) {
+	if (!codepoints || !silent || !run->glyphs || !run->cluster_map || !run->advances) {
 		FREE(codepoints);
+		FREE(silent);
 		return FALSE;
 	}
 	for (position = start; position < end;) {
@@ -407,7 +416,8 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 		/* A tab or a line break takes no glyph of its own: it is a space as wide as the text around it. */
 		if (code == '\t' || code == '\n' || code == '\r')
 			code = ' ';
-		codepoints[count] = code;
+		silent[count] = format_control(code) != 0;
+		codepoints[count] = silent[count] ? ' ' : code;
 		run->cluster_map[position - start] = (UINT16)count;
 		if (units == 2)
 			run->cluster_map[position - start + 1] = (UINT16)count;
@@ -423,6 +433,10 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 		for (glyph = 0; glyph < count; ++glyph) {
 			DWRITE_GLYPH_METRICS design;
 			float advance;
+			if (silent[glyph]) {
+				run->advances[glyph] = 0;
+				continue;
+			}
 			if (SUCCEEDED(IDWriteFontFace_GetDesignGlyphMetrics(run->face, &run->glyphs[glyph], 1, &design, FALSE)))
 				advance = (float)design.advanceWidth * scale;
 			else
@@ -446,6 +460,7 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 		}
 	}
 	FREE(codepoints);
+	FREE(silent);
 	return TRUE;
 }
 
