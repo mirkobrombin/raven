@@ -46,7 +46,7 @@ static std::vector<uint8_t> read_file(const char *path)
 {
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 	if (!file)
-		throw std::runtime_error("cannot open PE file");
+		throw std::runtime_error(std::string("cannot open PE file: ")+path);
 	const auto size = file.tellg();
 	if (size < 0 || size > 1024 * 1024 * 1024)
 		throw std::runtime_error("PE file exceeds inspection size limit");
@@ -184,34 +184,28 @@ int main(int argc, char **argv)
 	auto timeout=std::chrono::milliseconds(5000);
 	bool timeout_given=false;
 	bool wayland=false,x11=false;
-	if (run_process && argc>3 && std::string_view(argv[3]).starts_with("--timeout-ms=")) {
-		const std::string_view value=std::string_view(argv[3]).substr(13);
-		uint64_t milliseconds=0;
-		const auto parsed=std::from_chars(value.data(),value.data()+value.size(),milliseconds);
-		if (parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || milliseconds<1 || milliseconds>86400000) {
-			std::cerr << "raven: native timeout must be 1..86400000 milliseconds\n";
-			return 2;
-		}
-		timeout=std::chrono::milliseconds(milliseconds);
-		timeout_given=true;
-		first_file=4;
-	}
-	if (run_process && argc>first_file && std::string_view(argv[first_file])=="--desktop=wayland") {
-		wayland=true; ++first_file;
-	} else if (run_process && argc>first_file && std::string_view(argv[first_file])=="--desktop=x11") {
-		x11=true; ++first_file;
-	}
 	bool inherited_stdio=false;
-	if (run_process && argc>first_file && std::string_view(argv[first_file])=="--stdio=inherit") {
-		inherited_stdio=true; ++first_file;
-	}
 	// A program started by another one carries the command line and the directory its parent chose.
 	std::optional<std::string> command_line_text, directory_text;
 	int environment_fd=-1,suspended_fd=-1,inherit_fd=-1,handle_channel_fd=-1,guest_error_fd=2;
 	bool elevated=false,noninteractive=false;
 	for (bool more=run_process;more && argc>first_file;) {
 		const std::string_view option=argv[first_file];
-		if (option.starts_with("--command-line=")) command_line_text=std::string(option.substr(15));
+		if (option.starts_with("--timeout-ms=")) {
+			const std::string_view value=option.substr(13);
+			uint64_t milliseconds=0;
+			const auto parsed=std::from_chars(value.data(),value.data()+value.size(),milliseconds);
+			if (parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || milliseconds<1 || milliseconds>86400000) {
+				std::cerr << "raven: native timeout must be 1..86400000 milliseconds\n";
+				return 2;
+			}
+			timeout=std::chrono::milliseconds(milliseconds);
+			timeout_given=true;
+		}
+		else if (option=="--desktop=wayland") { wayland=true; x11=false; }
+		else if (option=="--desktop=x11") { x11=true; wayland=false; }
+		else if (option=="--stdio=inherit") inherited_stdio=true;
+		else if (option.starts_with("--command-line=")) command_line_text=std::string(option.substr(15));
 		else if (option.starts_with("--directory=")) directory_text=std::string(option.substr(12));
 		else if (option.starts_with("--environment-fd=")) environment_fd=std::atoi(std::string(option.substr(17)).c_str());
 		else if (option.starts_with("--suspended-fd=")) {

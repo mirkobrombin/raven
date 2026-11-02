@@ -1563,11 +1563,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 file(MAKE_DIRECTORY ${fixture}/format)
                 add_custom_command(OUTPUT ${fixture}/format.exe
                     COMMAND ${message_compiler} -h ${fixture}/format -r ${fixture}/format ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_messages.mc
-                    COMMAND ${resource_compiler} -O coff -I ${fixture}/format -i ${fixture}/format/format_messages.rc -o ${fixture}/format/messages.o
+                    COMMAND ${resource_compiler} -O coff -I ${fixture}/format -i ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_languages.rc -o ${fixture}/format/messages.o
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/format.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_client.c ${fixture}/format/messages.o -lkernel32
                     WORKING_DIRECTORY ${fixture}/format
-                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_messages.mc VERBATIM)
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_languages.rc ${PROJECT_SOURCE_DIR}/testdata/native_loader/format_messages.mc VERBATIM)
                 add_custom_target(format_fixture_${installer_arch} ALL DEPENDS ${fixture}/format.exe)
                 add_test(NAME native_format_message_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/format.exe)
                 set_tests_properties(native_format_message_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
@@ -1774,19 +1774,21 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     message(FATAL_ERROR "Configured 32-bit controls component does not exist: ${component}")
                 endif()
             endforeach()
-            add_custom_command(TARGET raven POST_BUILD
+            add_custom_target(raven_controls32_components
                 COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:raven>/x86
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/comctl32.dll $<TARGET_FILE_DIR:raven>/x86/comctl32.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-user32.dll $<TARGET_FILE_DIR:raven>/x86/raven-user32.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-shell.dll $<TARGET_FILE_DIR:raven>/x86/raven-shell.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/control.exe $<TARGET_FILE_DIR:raven>/x86/control.exe
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/regedit.exe $<TARGET_FILE_DIR:raven>/x86/regedit.exe)
+            # Run at every build, so a component provisioned again reaches the runtime without relinking it.
+            add_dependencies(raven raven_controls32_components)
         endif()
         if(RAVEN_CONTROLS_COMPONENT_DIR)
             if(NOT EXISTS "${RAVEN_CONTROLS_COMPONENT_DIR}/comctl32.dll")
                 message(FATAL_ERROR "Configured controls component does not exist")
             endif()
-            add_custom_command(TARGET raven POST_BUILD
+            add_custom_target(raven_controls_components
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/comctl32.dll $<TARGET_FILE_DIR:raven>/comctl32.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-user32.dll $<TARGET_FILE_DIR:raven>/raven-user32.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-shell.dll $<TARGET_FILE_DIR:raven>/raven-shell.dll
@@ -1798,6 +1800,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-d2d1.dll $<TARGET_FILE_DIR:raven>/raven-d2d1.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-uianimation.dll $<TARGET_FILE_DIR:raven>/raven-uianimation.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/ucrtbase.dll $<TARGET_FILE_DIR:raven>/ucrtbase.dll)
+            # Run at every build, so a component provisioned again reaches the runtime without relinking it.
+            add_dependencies(raven raven_controls_components)
             set(EDIT_TEXT_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/edit-text.exe)
             add_custom_command(OUTPUT ${EDIT_TEXT_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib
@@ -2374,8 +2378,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             if(NOT EXISTS "${RAVEN_RTL_COMPONENT_PATH}")
                 message(FATAL_ERROR "Configured native RTL component does not exist")
             endif()
-            add_custom_command(TARGET raven POST_BUILD
+            add_custom_target(raven_rtl_component
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_RTL_COMPONENT_PATH} $<TARGET_FILE_DIR:raven>/raven-rtl.dll)
+            # Run at every build, so a component provisioned again reaches the runtime without relinking it.
+            add_dependencies(raven raven_rtl_component)
             set(HEAP_FIXTURE_DIR ${CMAKE_CURRENT_BINARY_DIR}/heap-fixtures)
             set(HEAP_PROBE ${HEAP_FIXTURE_DIR}/heap-probe.dll)
             set(HEAP_CLIENT ${HEAP_FIXTURE_DIR}/client.exe)
