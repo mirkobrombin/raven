@@ -1,4 +1,5 @@
 #include "kernel_context.h"
+#include "nls.h"
 #include "pe/resources.h"
 #include "text.h"
 
@@ -225,7 +226,8 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (call[1]) call.store<uint32_t>(call[1], 0);
-		call.ret(data->size());
+		// As Windows does, room for an ANSI copy of the strings follows the block, so VerQueryValueA can answer string queries.
+		call.ret(data->size() * 2 + 4);
 	};
 	registry.add("GetFileVersionInfoSizeW", 2, [size_of](ApiCall &call) { size_of(call, false); });
 	registry.add("GetFileVersionInfoSizeA", 2, [size_of](ApiCall &call) { size_of(call, true); });
@@ -245,13 +247,16 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(122);
 			return;
 		}
+		// The ANSI area after the block starts zeroed, as far as the caller's buffer reaches.
+		const size_t extra = std::min(capacity, data->size() * 2 + 4) - data->size();
+		data->resize(data->size() + extra, 0);
 		call.write(call[data_index], *data);
 		call.ret(1);
 	};
 	registry.add("GetFileVersionInfoW", 4, [info_of](ApiCall &call) { info_of(call, 0, 2, 3, false); });
 	registry.add("GetFileVersionInfoA", 4, [info_of](ApiCall &call) { info_of(call, 0, 2, 3, true); });
 	registry.add("GetFileVersionInfoExW", 5, [info_of](ApiCall &call) { info_of(call, 1, 3, 4, false); });
-	const auto query = [name_at, store_pointer](ApiCall &call, bool ansi) {
+	const auto query = [name_at, store_pointer, &context](ApiCall &call, bool ansi) {
 		if (!call[0] || !call[1]) {
 			call.fail(87);
 			return;
@@ -259,14 +264,29 @@ void register_version_api(ApiRegistry &registry, KernelContext &context)
 		const size_t total = call.read(call[0], 2)[0] | call.read(call[0] + 1, 1)[0] << 8;
 		const auto block = call.read(call[0], total);
 		const auto path = ansi ? name_at(call, 1, true) : call.wide(call[1], 512);
-		// The strings of a block are wide; an ANSI caller would need them converted, which is not done, so those queries are refused.
-		if (ansi && path.size() >= 15 && equal_fold(path.substr(0, 15), u"\\StringFileInfo")) {
-			call.fail(120);
-			return;
-		}
 		const auto node = find_node(block, path);
 		if (!node) {
 			call.fail(1813);
+			return;
+		}
+		// A text value asked for through the ANSI function is converted into the area after the block, at the same offset, as Windows does.
+		// The call is not told the buffer's size: the area is there when the caller sized it with GetFileVersionInfoSize, as it has to.
+		if (ansi && node->type == 1) {
+			const auto wide = call.read(call[0] + node->value_offset, size_t(node->value_length) * 2);
+			std::u16string text;
+			for (size_t i = 0; i + 1 < wide.size(); i += 2) {
+				const char16_t c = char16_t(wide[i] | wide[i + 1] << 8);
+				if (!c) break;
+				text.push_back(c);
+			}
+			const auto encoded = encode_ansi(text, context.launch.ansi_code_page);
+			std::vector<uint8_t> narrow(encoded.begin(), encoded.end());
+			narrow.push_back(0);
+			const uint64_t target = call[0] + total + 4 + node->value_offset;
+			call.write(target, narrow);
+			if (call[2]) store_pointer(call, call[2], target);
+			if (call[3]) call.store<uint32_t>(call[3], uint32_t(narrow.size()));
+			call.ret(1);
 			return;
 		}
 		if (call[2]) store_pointer(call, call[2], call[0] + node->value_offset);

@@ -41,10 +41,12 @@ int raven_entry(void)
 	if (!VerQueryValueW(data, L"\\StringFileInfo\\040904b0\\InternalName", (LPVOID *)&product, &length)) return 14;
 	if (length != 13 || !same(product, L"kernel32.dll", 12) || product[12]) return 15;
 
-	// Strings of the block are wide: the narrow query for one is refused, and says so.
+	// The narrow query for a string converts it to ANSI, outside the wide block.
+	char *product_ansi = 0;
 	SetLastError(0);
-	if (VerQueryValueA(data_ansi, "\\StringFileInfo\\040904b0\\InternalName", (LPVOID *)&product, &length)) return 16;
-	if (GetLastError() != 120) return 17;
+	if (!VerQueryValueA(data_ansi, "\\StringFileInfo\\040904b0\\InternalName", (LPVOID *)&product_ansi, &length)) return 16;
+	if (length != 13 || lstrcmpA(product_ansi, "kernel32.dll")) return 17;
+	if ((BYTE *)product_ansi < data_ansi + size_ansi / 2 || (BYTE *)product_ansi >= data_ansi + size_ansi) return 20;
 	// A name that is not there.
 	if (GetFileVersionInfoSizeA("no-such-file.dll", &handle)) return 18;
 	if (GetFileVersionInfoSizeW(L"no-such-file.dll", &handle)) return 19;
