@@ -1,5 +1,7 @@
 #include "x86_compat_api.h"
 
+#include "actctx.h"
+
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -30,6 +32,96 @@ void write_word(std::vector<uint8_t> &bytes, size_t offset, uint32_t value)
 {
 	for (size_t byte = 0; byte < 4; ++byte)
 		bytes[offset + byte] = uint8_t(value >> (byte * 8));
+}
+
+constexpr uint32_t guest_heap_classes = large_block / 16 + 1, guest_heap_pages = 1U << 20;
+
+void code_bytes(std::vector<uint8_t> &code, std::initializer_list<uint8_t> bytes)
+{
+	code.insert(code.end(), bytes);
+}
+
+void code_word(std::vector<uint8_t> &code, uint32_t value)
+{
+	for (size_t byte = 0; byte < 4; ++byte)
+		code.push_back(uint8_t(value >> (byte * 8)));
+}
+
+// A short forward jump whose target is set once the label is reached.
+size_t code_jump(std::vector<uint8_t> &code, uint8_t opcode)
+{
+	code_bytes(code, {opcode, 0});
+	return code.size();
+}
+
+void code_land(std::vector<uint8_t> &code, std::initializer_list<size_t> jumps)
+{
+	for (const auto after : jumps)
+		code[after - 1] = uint8_t(code.size() - after);
+}
+
+// The two calls that a C runtime makes for every malloc and free answer from free lists in guest memory, as a trap costs far more than
+// the allocation. The bitmap names the pages of the arena, so that a block from anywhere else, which has no header, goes to the runtime
+// and so does a heap whose blocks run code. The lock is only tried: a thread that finds it held takes the runtime's path, whose own lists
+// and bump region do not depend on it. Free lists link through the first word of the payload, and the runtime never sees them.
+std::vector<uint8_t> alloc_prelude(uint32_t lock, uint32_t lists, uint32_t executable)
+{
+	std::vector<uint8_t> code;
+	code_bytes(code, {0x8b, 0x44, 0x24, 0x04, 0x3d}); // mov eax,[esp+4]; cmp eax,executable
+	code_word(code, executable);
+	const auto foreign = code_jump(code, 0x74);
+	code_bytes(code, {0x8b, 0x44, 0x24, 0x0c, 0x8d, 0x48, 0xff, 0x81, 0xf9}); // mov eax,[esp+12]; lea ecx,[eax-1]; cmp ecx,limit
+	code_word(code, uint32_t(large_block) - 1);
+	const auto sized = code_jump(code, 0x77);
+	code_bytes(code, {0x83, 0xc0, 0x0f, 0xc1, 0xe8, 0x04, 0xb9, 1, 0, 0, 0, 0x87, 0x0d}); // add eax,15; shr eax,4; mov ecx,1; xchg [lock],ecx
+	code_word(code, lock);
+	code_bytes(code, {0x85, 0xc9}); // test ecx,ecx
+	const auto held = code_jump(code, 0x75);
+	code_bytes(code, {0x89, 0xc1, 0x8b, 0x04, 0x8d}); // mov ecx,eax; mov eax,[lists+ecx*4]
+	code_word(code, lists);
+	code_bytes(code, {0x85, 0xc0}); // test eax,eax
+	const auto empty = code_jump(code, 0x74);
+	code_bytes(code, {0x8b, 0x10, 0x89, 0x14, 0x8d}); // mov edx,[eax]; mov [lists+ecx*4],edx
+	code_word(code, lists);
+	code_bytes(code, {0xc7, 0x05}); // mov dword [lock],0
+	code_word(code, lock);
+	code_word(code, 0);
+	code_bytes(code, {0xf6, 0x44, 0x24, 0x08, 0x08}); // test byte [esp+8],HEAP_ZERO_MEMORY
+	const auto zero = code_jump(code, 0x75);
+	code_bytes(code, {0xc2, 0x0c, 0x00}); // ret 12
+	code_land(code, {zero});
+	code_bytes(code, {0x57, 0x89, 0xc7, 0x89, 0xc2, 0xc1, 0xe1, 0x02, 0x31, 0xc0, 0xf3, 0xab, 0x89, 0xd0, 0x5f, 0xc2, 0x0c, 0x00}); // rep stosd over the class, keeping edi
+	code_land(code, {empty});
+	code_bytes(code, {0xc7, 0x05}); // mov dword [lock],0
+	code_word(code, lock);
+	code_word(code, 0);
+	code_land(code, {foreign, sized, held});
+	return code;
+}
+
+std::vector<uint8_t> free_prelude(uint32_t lock, uint32_t lists, uint32_t pages)
+{
+	std::vector<uint8_t> code;
+	code_bytes(code, {0x8b, 0x44, 0x24, 0x0c, 0x89, 0xc1, 0xc1, 0xe9, 0x0c, 0x0f, 0xa3, 0x0d}); // mov eax,[esp+12]; mov ecx,eax; shr ecx,12; bt [pages],ecx
+	code_word(code, pages);
+	const auto foreign = code_jump(code, 0x73);
+	code_bytes(code, {0x8b, 0x48, 0xf0, 0xc1, 0xe9, 0x04, 0x81, 0xf9}); // mov ecx,[eax-16]; shr ecx,4; cmp ecx,classes
+	code_word(code, guest_heap_classes);
+	const auto sized = code_jump(code, 0x73);
+	code_bytes(code, {0xba, 1, 0, 0, 0, 0x87, 0x15}); // mov edx,1; xchg [lock],edx
+	code_word(code, lock);
+	code_bytes(code, {0x85, 0xd2}); // test edx,edx
+	const auto held = code_jump(code, 0x75);
+	code_bytes(code, {0x8b, 0x14, 0x8d}); // mov edx,[lists+ecx*4]
+	code_word(code, lists);
+	code_bytes(code, {0x89, 0x10, 0x89, 0x04, 0x8d}); // mov [eax],edx; mov [lists+ecx*4],eax
+	code_word(code, lists);
+	code_bytes(code, {0xc7, 0x05}); // mov dword [lock],0
+	code_word(code, lock);
+	code_word(code, 0);
+	code_bytes(code, {0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0x00}); // mov eax,1; ret 12
+	code_land(code, {foreign, sized, held});
+	return code;
 }
 
 }
@@ -76,6 +168,8 @@ uint64_t NativeX86Compat::heap_alloc(uint32_t size, bool zero, bool executable)
 	if (arena.region_left < payload + header) {
 		arena.region = process.map_memory(heap_region, protection);
 		arena.region_left = heap_region;
+		if (guest_pages && !executable)
+			process.write_memory(guest_pages + (arena.region >> 15), std::vector<uint8_t>(heap_region >> 15, 0xff));
 	}
 	process.write_memory(arena.region, prefix);
 	address = arena.region + header;
@@ -93,6 +187,48 @@ void NativeX86Compat::heap_free(uint64_t address)
 	}
 	const bool executable = read_word(process.read_memory(address - header + 4, 4), 0) == 1;
 	arenas[executable ? 1 : 0].free_blocks[payload].push_back(address);
+}
+
+void NativeX86Compat::guest_heap()
+{
+	if (!traps || guest_pages)
+		return;
+	const size_t lists_size = guest_heap_classes * 4, pages_size = guest_heap_pages / 8;
+	const auto lock = process.map_memory(4096 + ((lists_size + 4095) & ~size_t(4095)) + pages_size, PROT_READ | PROT_WRITE);
+	const auto lists = lock + 4096;
+	guest_pages = lists + ((lists_size + 4095) & ~size_t(4095));
+	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE | PROT_EXEC);
+	uint64_t next = code;
+	std::map<uint64_t, std::pair<std::string_view, uint32_t>> served;
+	for (const auto &[stub, api] : *traps) {
+		std::vector<uint8_t> body;
+		if (api.first == "GetProcessHeap") {
+			body = {0xb8};
+			code_word(body, uint32_t(process_heap_handle));
+			code_bytes(body, {0xc3});
+		} else if (api.first == "HeapAlloc")
+			body = alloc_prelude(uint32_t(lock), uint32_t(lists), uint32_t(executable_heap_handle));
+		else if (api.first == "HeapFree")
+			body = free_prelude(uint32_t(lock), uint32_t(lists), uint32_t(guest_pages));
+		else
+			continue;
+		if (api.first != "GetProcessHeap") {
+			served.emplace(next + body.size(), api);
+			code_bytes(body, {0xcc, 0xc3});
+		}
+		process.write_memory(next, body);
+		std::vector<uint8_t> jump{0xe9};
+		code_word(jump, uint32_t(next - (stub + 5)));
+		const auto page = stub & ~uint64_t(4095);
+		process.protect_image(page, 8192, PROT_READ | PROT_WRITE | PROT_EXEC);
+		process.write_memory(stub, jump);
+		process.protect_image(page, 8192, PROT_READ | PROT_EXEC);
+		next += (body.size() + 2 + 15) & ~size_t(15);
+	}
+	for (const auto &[address, api] : served) {
+		process.add_api_trap(address, api.second);
+		traps->emplace(address, api);
+	}
 }
 
 uint64_t NativeX86Compat::scratch_base()
@@ -134,6 +270,8 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	const auto known = std::find_if(compat_exports.begin(), compat_exports.end(), [&](const auto &item) { return item.first == name; });
 	if (known == compat_exports.end())
 		return false;
+	if (name.starts_with("Heap") || name == "GetProcessHeap")
+		guest_heap();
 	if (name == "GetProcessHeap") {
 		process.api_arguments(0);
 		process.return_api(process_heap_handle);
@@ -224,9 +362,17 @@ bool NativeX86Compat::dispatch(std::string_view name)
 		}
 		std::vector<uint8_t> info(size);
 		write_word(info, 0, size);
-		write_word(info, 4, 10);
-		write_word(info, 12, 19045);
+		const auto version = activation_contexts().reported_version();
+		write_word(info, 4, version.major);
+		write_word(info, 8, version.minor);
+		write_word(info, 12, version.build);
 		write_word(info, 16, 2);
+		if (version.service_pack) {
+			const std::string pack = "Service Pack " + std::to_string(version.service_pack);
+			std::copy(pack.begin(), pack.end(), info.begin() + 20);
+			if (size == 156)
+				info[148] = uint8_t(version.service_pack);
+		}
 		process.write_memory(args[0], info);
 		process.return_api(1);
 	} else if (name == "RegisterClassA" || name == "RegisterClassExA") {

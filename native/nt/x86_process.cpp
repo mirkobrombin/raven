@@ -853,6 +853,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	desktop.register_text_api(shared_api);
 	desktop.register_image_api(shared_api);
 	NativeX86Compat compat(process, environment, windows);
+	compat.set_traps(&traps);
 	// Shared handlers whose arguments are 32-bit words and whose structures carry no pointers.
 	std::set<std::string_view> shared_names{"MoveWindow", "LoadCursorA", "LoadIconA", "GetAsyncKeyState", "SetCursor", "GetCursorPos", "SetCursorPos",
 		"DefWindowProcA", "SendMessageA", "PostMessageA", "SetWindowTextA", "CreateFontA", "ExtTextOutA", "GetDIBits", "GetTextExtentPoint32A",
