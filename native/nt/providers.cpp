@@ -2496,7 +2496,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (tls_result.stop != NativeStop::returned)
 			return tls_result;
 		const uint64_t arguments[] = {module.loaded.base(), 0, reserved};
-		if ((module.image.characteristics & 0x2000) && module.image.entry) {
+		if ((module.image.characteristics & 0x2000) && module.image.entry && !module.image.il_only()) {
 			const auto result = invoke(module.loaded.base() + module.image.entry, arguments);
 			if (result.stop != NativeStop::returned)
 				return result;
@@ -2753,9 +2753,21 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			} catch (const std::runtime_error &) {
 				throw LoadFailure{193};
 			}
+			const bool only_mapped = unresolved && staged.empty();
+			// 64-bit Windows loads a library of managed code alone built for any CPU in its 64-bit form: the header is widened as for such
+			// a program, and the runtime that asked for it runs its code.
+			bool widened = false;
+			if (!parsed->is_64 && parsed->il_only() && !only_mapped && !as_data) {
+				const std::span<const uint8_t> view = *bytes;
+				std::vector<uint8_t> copy(view.begin(), view.end());
+				if (widen_il_only_image(copy)) {
+					bytes.emplace(std::move(copy));
+					parsed.emplace(*bytes);
+					widened = true;
+				}
+			}
 			// Reject unsupported initialization before publishing an image.
 			const PEImage &image = *parsed;
-			const bool only_mapped = unresolved && staged.empty();
 			// An image of the other width maps only as data, or when it holds managed code alone, as a 64-bit process maps the 32-bit form
 			// of a class library for the runtime; either stays apart from the libraries that run.
 			const bool apart = only_mapped && (as_data || (!image.is_64 && image.il_only()));
@@ -2763,7 +2775,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				throw LoadFailure{193};
 			// An image with no entry point maps and binds as a library even when it is not one, as the runtime loads a precompiled
 			// assembly built as a program: there is nothing of it to run.
-			const bool inert = image.is_64 && !image.entry;
+			const bool inert = image.is_64 && (!image.entry || widened);
 			if (!(image.characteristics & 0x2000) && !only_mapped && !inert)
 				throw LoadFailure{120};
 			if ((image.directories[13].address || image.directories[13].size) && !only_mapped)
@@ -2870,7 +2882,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (unresolved && module == &root)
 					continue;
 				checked(notify_tls(*module, 1));
-				if (module->image.entry) {
+				// Managed code alone has no native entry to start: its entry is the runtime's.
+				if (module->image.entry && !module->image.il_only()) {
 					const uint64_t arguments[] = {module->loaded.base(), 1, 0};
 					const auto context = entry_contexts.find(module);
 					const auto thread = threads.current_id();
@@ -2957,7 +2970,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		const auto notify = [&](const PEModule &module) {
 			if (const auto stopped = notify_tls(module, reason); stopped.stop != NativeStop::returned)
 				throw stopped;
-			if ((module.image.characteristics & 0x2000) && module.image.entry && !module.runtime_api) {
+			if ((module.image.characteristics & 0x2000) && module.image.entry && !module.runtime_api && !module.image.il_only()) {
 				const uint64_t arguments[] = {module.loaded.base(), reason, 0};
 				const auto result = invoke(module.loaded.base() + module.image.entry, arguments);
 				if (result.stop != NativeStop::returned)
@@ -3016,7 +3029,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const auto tls_result = notify_tls(*module, 1);
 			if (tls_result.stop != NativeStop::returned)
 				return tls_result;
-			if (!(module->image.characteristics & 0x2000) || !module->image.entry) {
+			if (!(module->image.characteristics & 0x2000) || !module->image.entry || module->image.il_only()) {
 				attached.push_back(module);
 				continue;
 			}

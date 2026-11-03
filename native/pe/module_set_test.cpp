@@ -239,7 +239,35 @@ int main()
 			mixed.add("target", target, target_base);
 			rejected([&] { mixed.add("other", fixture(!is_64, 0x700000), 0x700000); });
 		}
-		std::cout << "PE32/PE64 exports, aliases, holes, forwarding, transactional IAT binding and negative module contracts passed\n";
+		{
+			// A PE32 library of managed code alone, widened as a 64-bit process loads it, keeps its 32-bit fixup and applies the low half
+			// of the delta to it.
+			const uint64_t base = 0x10000000;
+			auto managed = fixture(false, base);
+			put(managed, 0x168, 0x1400);
+			put(managed, 0x16c, 0x48);
+			put(managed, 0x600, 0x48);
+			put(managed, 0x610, 1);
+			put(managed, 0x120, 0x1500);
+			put(managed, 0x124, 12);
+			put(managed, 0x700, 0x1000);
+			put(managed, 0x704, 12);
+			put(managed, 0x708, (3 << 12) | 0x520, 2);
+			put(managed, 0x720, base + 0x1000);
+			check(raven::widen_il_only_image(managed), "managed PE32 library was not widened");
+			raven::ModuleSet widened;
+			auto &library = widened.add("managed.dll", managed, base + 0x10000);
+			check(library.image.is_64 && library.image.il_only() && read(library.loaded.data(), 0x1520, 4) == base + 0x11000 &&
+				read(library.loaded.data(), 0x1524, 4) == 0, "widened library lost or widened its 32-bit fixup");
+			auto wrong = fixture(true, 0x180000000ULL);
+			put(wrong, 0x130, 0x1500);
+			put(wrong, 0x134, 12);
+			put(wrong, 0x700, 0x1000);
+			put(wrong, 0x704, 12);
+			put(wrong, 0x708, (7 << 12) | 0x520, 2);
+			rejected([&] { raven::ModuleSet other; other.add("wrong", wrong, 0x180010000ULL); });
+		}
+		std::cout << "PE32/PE64 exports, aliases, holes, forwarding, transactional IAT binding, widened managed libraries and negative module contracts passed\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

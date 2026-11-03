@@ -95,6 +95,8 @@ void LoadedImage::relocate(const PEImage &image)
 	// Every fixup is checked before any is applied. A block covers one page: when the page and the bytes a fixup at its end can reach lie
 	// in one section, every fixup of the block is mapped, and only blocks at a section boundary are checked a byte at a time. A library
 	// of hundreds of megabytes carries millions of fixups, relocated again in every process that loads it.
+	// The high bit marks a 32-bit fixup in a 64-bit image.
+	constexpr uint32_t narrow_fixup = 0x80000000U;
 	std::vector<uint32_t> fixups;
 	for (size_t offset = 0; offset < table.size();) {
 		if (table.size() - offset < 8 || offset % 4)
@@ -116,21 +118,26 @@ void LoadedImage::relocate(const PEImage &image)
 			const uint16_t type = entry >> 12;
 			if (!type)
 				continue;
-			if (type != (image.is_64 ? 10 : 3))
+			// A 64-bit image may also hold 32-bit fixups, as one of managed code alone widened from PE32 does for its entry stub; the
+			// fixup adds the low half of the delta, as on Windows.
+			if (type != (image.is_64 ? 10 : 3) && !(image.is_64 && type == 3))
 				throw std::runtime_error("unsupported PE relocation type");
+			const size_t reach_width = type == 3 ? 4 : 8;
 			const uint64_t target = uint64_t(page) + (entry & 0xfff);
-			if (target > size || width > size - target)
+			if (target > size || reach_width > size - target || target >= narrow_fixup)
 				throw std::runtime_error("PE relocation target exceeds image");
-			for (size_t byte = 0; !whole && byte < width; ++byte)
+			for (size_t byte = 0; !whole && byte < reach_width; ++byte)
 				if (!mapped(target + byte))
 					throw std::runtime_error("PE relocation target is not mapped");
-			fixups.push_back(static_cast<uint32_t>(target));
+			fixups.push_back(static_cast<uint32_t>(target) | (width == 8 && type == 3 ? narrow_fixup : 0));
 		}
 		offset += block_size;
 	}
 	const uint64_t delta = address - image.image_base;
-	for (const auto fixup : fixups) {
-		if (width == 8) {
+	for (auto fixup : fixups) {
+		const bool narrow = fixup & narrow_fixup;
+		fixup &= ~narrow_fixup;
+		if (width == 8 && !narrow) {
 			uint64_t value;
 			std::memcpy(&value, storage + fixup, 8);
 			value += delta;
