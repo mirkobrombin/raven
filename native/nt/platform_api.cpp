@@ -581,6 +581,40 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		const auto offset = call.load<uint32_t>(call[0] + 0x3c);
 		call.ret(call[0] + offset);
 	});
+	// CheckSumMappedFile(base, length, header sum, check sum): the PE checksum of a mapped file, the sum of its 16-bit words with the
+	// carries folded back, the CheckSum field left out, plus the file's length; and the value the header holds. The answer is the NT
+	// headers, or null when the file is not an image.
+	registry.add("CheckSumMappedFile", 4, [](ApiCall &call) {
+		const uint32_t length = call.u32(1);
+		const auto bytes = call.read(call[0], length);
+		uint64_t headers = 0;
+		size_t field = SIZE_MAX;
+		if (length >= 0x40 && bytes[0] == 'M' && bytes[1] == 'Z') {
+			uint32_t offset = 0;
+			std::memcpy(&offset, bytes.data() + 0x3c, 4);
+			// The signature, the file header (20 bytes) and the optional header, whose CheckSum is 64 bytes in for both widths.
+			if (size_t(offset) + 24 + 68 <= length && !std::memcmp(bytes.data() + offset, "PE\0\0", 4)) {
+				headers = call[0] + offset;
+				field = size_t(offset) + 24 + 64;
+			}
+		}
+		uint32_t stored = 0;
+		if (field != SIZE_MAX)
+			std::memcpy(&stored, bytes.data() + field, 4);
+		uint32_t sum = 0;
+		for (size_t at = 0; at < length; at += 2) {
+			if (at >= field && at < field + 4)
+				continue;
+			sum += bytes[at] | (at + 1 < length ? uint32_t(bytes[at + 1]) << 8 : 0);
+			sum = (sum & 0xffff) + (sum >> 16);
+		}
+		sum = (sum & 0xffff) + (sum >> 16);
+		if (call[2])
+			call.store<uint32_t>(call[2], stored);
+		if (call[3])
+			call.store<uint32_t>(call[3], (sum & 0xffff) + length);
+		call.ret(headers);
+	});
 
 #ifndef RAVEN_OPENSSL
 	// wininet: URL cracking is pure text processing; with the HTTP client the WinINet layer cracks URLs in both character sets.

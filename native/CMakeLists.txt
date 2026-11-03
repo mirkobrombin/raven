@@ -738,6 +738,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(capi_signature_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/capi-signature-client.exe)
         add_test(NAME native_capi_signatures COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/capi-signature-client.exe)
         set_tests_properties(native_capi_signatures PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/checksum-client.exe
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                -o ${CMAKE_CURRENT_BINARY_DIR}/checksum-client.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/checksum_client.c -limagehlp -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/checksum_client.c VERBATIM)
+        add_custom_target(checksum_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/checksum-client.exe)
+        add_test(NAME native_image_checksum COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/checksum-client.exe)
+        set_tests_properties(native_image_checksum PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
     endif()
     if(RAVEN_MINGW64)
         set(NCCREATE_CHILD ${CMAKE_CURRENT_BINARY_DIR}/nccreate-child.exe)
