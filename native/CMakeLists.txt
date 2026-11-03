@@ -3826,6 +3826,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         $<TARGET_FILE:raven> ${RAVEN_NETFX_INSTALLER} ${dotnet_fixtures} ${CMAKE_CURRENT_BINARY_DIR}/dotnet-evidence "${RAVEN_XNA_INSTALLER}" "${RAVEN_NETFX35_PACKAGE}")
                     set_tests_properties(native_dotnet_framework48 PROPERTIES TIMEOUT 7200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
                 endif()
+                # A self-contained .NET 8 program, published with the .NET SDK given: the runtime loads its libraries of managed code alone,
+                # built for any CPU, and a managed exception and a runtime one are thrown and caught.
+                set(RAVEN_DOTNET_SDK "" CACHE FILEPATH "the dotnet command of a .NET 8 SDK, which publishes testdata/dotnet/exceptions for win-x64")
+                if(RAVEN_DOTNET_SDK AND EXISTS ${RAVEN_DOTNET_SDK})
+                    set(dotnet8_fixture ${CMAKE_CURRENT_BINARY_DIR}/dotnet8-exceptions)
+                    add_custom_command(OUTPUT ${dotnet8_fixture}/exceptions.exe
+                        COMMAND ${CMAKE_COMMAND} -E env DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+                            ${RAVEN_DOTNET_SDK} publish ${PROJECT_SOURCE_DIR}/testdata/dotnet/exceptions/exceptions.csproj -c Release
+                            -o ${dotnet8_fixture} -p:BaseIntermediateOutputPath=${dotnet8_fixture}-obj/ -p:BaseOutputPath=${dotnet8_fixture}-bin/
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/dotnet/exceptions/exceptions.csproj ${PROJECT_SOURCE_DIR}/testdata/dotnet/exceptions/Program.cs
+                        VERBATIM)
+                    add_custom_target(dotnet8_fixture ALL DEPENDS ${dotnet8_fixture}/exceptions.exe)
+                    add_test(NAME native_dotnet8_exceptions COMMAND raven --run-process --execution=native --timeout-ms=60000 --stdio=inherit
+                        ${dotnet8_fixture}/exceptions.exe)
+                    set_tests_properties(native_dotnet8_exceptions PROPERTIES TIMEOUT 90
+                        PASS_REGULAR_EXPRESSION "start 8\\.[^\n]* 64-bit\ncaught boom\ncaught index\ndone")
+                endif()
                 add_test(NAME native_x86_process COMMAND ${Python3_EXECUTABLE}
                     ${PROJECT_SOURCE_DIR}/scripts/native-x86-process.py $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/x86-client.exe)
                 set_tests_properties(native_x86_process PROPERTIES TIMEOUT 30)
