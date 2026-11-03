@@ -1857,8 +1857,13 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	NativeTLS tls(process, environment, tls_order);
 	NativeModuleAPI module_api(process, environment, modules, entry);
 	NativeResources resources(process, environment, modules, entry);
-	// What a program may commit: 512 MiB by default, as set by RAVEN_COMMIT_LIMIT_MB (large programs, a browser engine for one, need more).
-	const size_t commit_limit=(std::getenv("RAVEN_COMMIT_LIMIT_MB") ? size_t(std::strtoull(std::getenv("RAVEN_COMMIT_LIMIT_MB"),nullptr,10)) : size_t(512))*1024*1024;
+	// What a program may commit, as set by RAVEN_COMMIT_LIMIT_MB. By default the host's memory, as Windows lets a 64-bit program commit up
+	// to its memory and page file: a .NET program maps assemblies of more than 100 MiB as images, and each is committed whole.
+	const size_t host_memory=size_t(std::max<long>(::sysconf(_SC_PHYS_PAGES),0))*size_t(std::max<long>(::sysconf(_SC_PAGESIZE),0));
+	// An empty or zero setting leaves the limit to the host, as the control panel describes it.
+	const char *setting=std::getenv("RAVEN_COMMIT_LIMIT_MB");
+	const size_t requested=setting ? size_t(std::strtoull(setting,nullptr,10)) : 0;
+	const size_t commit_limit=requested ? requested*1024*1024 : std::max(host_memory,size_t(512)*1024*1024);
 	NativeMemory memory(process,environment,commit_limit);
 	register_images(memory,modules);
 	NativeObjectAPI object_api(process,environment,kernel_objects,deadline);
