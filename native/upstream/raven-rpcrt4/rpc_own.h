@@ -33,6 +33,7 @@ void ndr_run(MIDL_STUB_MESSAGE *m, ndr_op op, BYTE *memory, const BYTE *format);
 void ndr_run_pointer(MIDL_STUB_MESSAGE *m, ndr_op op, void **slot, const BYTE *format);
 void ndr_interface(MIDL_STUB_MESSAGE *m, ndr_op op, BYTE *memory, const IID *iid);
 #define NDR_TRACKS_MEMORY ((ULONG_PTR)0x4d454d4c)
+void *ndr_allocate_owned(MIDL_STUB_MESSAGE *m, size_t size);
 void ndr_release_block(MIDL_STUB_MESSAGE *m, void *block);
 void ndr_release_all(MIDL_STUB_MESSAGE *m);
 SIZE_T ndr_memory_size(MIDL_STUB_MESSAGE *m, const BYTE *format);

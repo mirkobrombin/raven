@@ -224,8 +224,21 @@ typedef struct memory_link
 
 static const DWORD memory_link_magic = 'M' << 24 | 'E' << 16 | 'M' << 8 | 'L';
 
-// Every block carries a link behind it, so what a server stub never freed can go when the call ends.
+// The interpreter keeps a list only of the parameter storage it owns: a manager may free a block a parameter points to and hand back
+// one of its own, which the walk over the parameter then frees, so such a block must not stay on a list freed when the call ends.
 void *WINAPI NdrAllocate(PMIDL_STUB_MESSAGE m, size_t size)
+{
+	if (m->Unused == NDR_TRACKS_MEMORY) {
+		void *block = m->pfnAllocate(size ? size : 1);
+		if (!block)
+			RpcRaiseException(ERROR_OUTOFMEMORY);
+		return block;
+	}
+	return ndr_allocate_owned(m, size);
+}
+
+// Every block carries a link behind it, so what a server stub never freed can go when the call ends.
+void *ndr_allocate_owned(MIDL_STUB_MESSAGE *m, size_t size)
 {
 	SIZE_T aligned = (size + 7) & ~(SIZE_T)7;
 	if (aligned < size || aligned + sizeof(memory_link) < aligned)

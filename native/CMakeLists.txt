@@ -3350,6 +3350,30 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(rpc_auth_fixture${width} ALL DEPENDS ${rpc_auth_client})
                     add_test(NAME native_rpc_auth_x${width} COMMAND raven --run-process --execution=native ${rpc_auth_client})
                     set_tests_properties(native_rpc_auth_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A server manager that frees what an [in, out] parameter points to and hands back its own block, through stubs the
+                    # interpreter runs, generated from the IDL at build time.
+                    if(width EQUAL 64)
+                        find_program(RAVEN_WIDL64 x86_64-w64-mingw32-widl)
+                        set(rpc_replace_widl ${RAVEN_WIDL64})
+                    else()
+                        find_program(RAVEN_WIDL32 i686-w64-mingw32-widl)
+                        set(rpc_replace_widl ${RAVEN_WIDL32})
+                    endif()
+                    if(rpc_replace_widl)
+                        set(rpc_replace_stubs ${CMAKE_CURRENT_BINARY_DIR}/rpc-replace${width})
+                        set(rpc_replace_client ${CMAKE_CURRENT_BINARY_DIR}/rpc-replace-client${width}.exe)
+                        add_custom_command(OUTPUT ${rpc_replace_client}
+                            COMMAND ${CMAKE_COMMAND} -E make_directory ${rpc_replace_stubs}
+                            COMMAND ${CMAKE_COMMAND} -E chdir ${rpc_replace_stubs} ${rpc_replace_widl} -m${width} -Oif --prefix-server=server_
+                                -h -c -s -o rpc_replace ${LOADER_SOURCES}/rpc_replace.idl
+                            COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                                -I${rpc_replace_stubs} -o ${rpc_replace_client} ${LOADER_SOURCES}/rpc_replace_client.c
+                                ${rpc_replace_stubs}/rpc_replace_c.c ${rpc_replace_stubs}/rpc_replace_s.c -lrpcrt4 -lkernel32 -lntdll
+                            DEPENDS ${LOADER_SOURCES}/rpc_replace.idl ${LOADER_SOURCES}/rpc_replace_client.c VERBATIM)
+                        add_custom_target(rpc_replace_fixture${width} ALL DEPENDS ${rpc_replace_client})
+                        add_test(NAME native_rpc_replace_x${width} COMMAND raven --run-process --execution=native ${rpc_replace_client})
+                        set_tests_properties(native_rpc_replace_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endif()
                     if(width EQUAL 64)
                         set(timer_queue_client ${CMAKE_CURRENT_BINARY_DIR}/timer-queue-client${width}.exe)
                         add_custom_command(OUTPUT ${timer_queue_client}

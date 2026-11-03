@@ -627,7 +627,7 @@ static void server_unmarshal(MIDL_STUB_MESSAGE *m, const MIDL_STUB_DESC *desc, c
 		}
 		if (param.attributes & PARAM_BY_VALUE) {
 			if (by_value_indirect(m, param.type))
-				*slot = NdrAllocate(m, ndr_memory_size(m, param.type));
+				*slot = ndr_allocate_owned(m, ndr_memory_size(m, param.type));
 			ndr_run(m, NDR_UNMARSHAL, param_memory(m, &param, slot), param.type);
 			continue;
 		}
@@ -638,7 +638,7 @@ static void server_unmarshal(MIDL_STUB_MESSAGE *m, const MIDL_STUB_DESC *desc, c
 		}
 		// Flat data stays where it is in the buffer; anything else gets a block.
 		BYTE *in_place = ndr_flat_start(m, param.type);
-		*slot = in_place ? in_place : NdrAllocate(m, ndr_memory_size(m, param.type));
+		*slot = in_place ? in_place : ndr_allocate_owned(m, ndr_memory_size(m, param.type));
 		if (!in_place)
 			memset(*slot, 0, ndr_memory_size(m, param.type));
 		ndr_run(m, NDR_UNMARSHAL, *(BYTE **)slot, param.type);
@@ -662,12 +662,12 @@ static void server_unmarshal(MIDL_STUB_MESSAGE *m, const MIDL_STUB_DESC *desc, c
 		if (type_uses_slot(param.type) && *param.type != FC_IP) {
 			const BYTE *target = param.type[1] & FC_SIMPLE_POINTER ? param.type + 2 : param.type + 2 + (SHORT)read_u16(param.type + 2);
 			SIZE_T size = param.attributes & PARAM_ALLOC_MASK ? (SIZE_T)((param.attributes & PARAM_ALLOC_MASK) >> 13) * 8 : ndr_out_size(m, args, target);
-			*slot = NdrAllocate(m, size);
+			*slot = ndr_allocate_owned(m, size);
 			memset(*slot, 0, size);
 			continue;
 		}
 		SIZE_T size = param.attributes & PARAM_ALLOC_MASK ? (SIZE_T)((param.attributes & PARAM_ALLOC_MASK) >> 13) * 8 : ndr_out_size(m, args, param.type);
-		*slot = NdrAllocate(m, size);
+		*slot = ndr_allocate_owned(m, size);
 		memset(*slot, 0, size);
 	}
 }
