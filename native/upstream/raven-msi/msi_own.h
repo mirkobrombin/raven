@@ -199,6 +199,7 @@ db_stream *stream_find(msi_db *db, const WCHAR *name);
 void stream_put(msi_db *db, const WCHAR *name, msi_blob *blob);
 void stream_remove(msi_db *db, const WCHAR *name);
 msi_blob *db_read_named_stream(msi_db *db, const WCHAR *name);
+BOOL db_copy_named_stream(msi_db *db, const WCHAR *name, HANDLE file);
 void name_encode(const WCHAR *in, BOOL table, WCHAR *out);
 BOOL name_decode(const WCHAR *in, WCHAR *out);
 UINT row_to_record(msi_db *db, db_table *table, const UINT *cells, const UINT *columns, UINT count, msi_record *record, UINT first);

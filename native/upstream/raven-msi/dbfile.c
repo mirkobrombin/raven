@@ -779,6 +779,39 @@ msi_blob *db_read_named_stream(msi_db *db, const WCHAR *name)
 	return blob;
 }
 
+/* A stream of the database written into a file a piece at a time, as an embedded cabinet of hundreds of megabytes is: FALSE when there is
+ * no such stream or the copy fails. */
+BOOL db_copy_named_stream(msi_db *db, const WCHAR *name, HANDLE file)
+{
+	DWORD put = 0;
+	db_stream *pending = stream_find(db, name);
+	if (pending)
+		return WriteFile(file, pending->blob->data, (DWORD)pending->blob->size, &put, NULL) && put == (DWORD)pending->blob->size;
+	WCHAR *encoded = msi_alloc((lstrlenW(name) + 2) * sizeof(WCHAR));
+	IStream *stream = NULL;
+	name_encode(name, FALSE, encoded);
+	HRESULT hr = IStorage_OpenStream(db->storage, encoded, NULL, STGM_READ | STGM_SHARE_EXCLUSIVE, 0, &stream);
+	msi_free(encoded);
+	if (FAILED(hr))
+		return FALSE;
+	enum { piece = 1 << 20 };
+	BYTE *buffer = msi_alloc(piece);
+	BOOL ok = buffer != NULL;
+	while (ok) {
+		ULONG done = 0;
+		hr = IStream_Read(stream, buffer, piece, &done);
+		if (FAILED(hr))
+			ok = FALSE;
+		else if (!done)
+			break;
+		else
+			ok = WriteFile(file, buffer, done, &put, NULL) && put == done;
+	}
+	msi_free(buffer);
+	IStream_Release(stream);
+	return ok;
+}
+
 UINT row_to_record(msi_db *db, db_table *table, const UINT *cells, const UINT *columns, UINT count, msi_record *record, UINT first)
 {
 	for (UINT i = 0; i < count; i++) {

@@ -381,22 +381,19 @@ static UINT media_cabinet(extract_context *context, const WCHAR *cabinet)
 	WCHAR path[MAX_PATH * 2];
 	BOOL temporary = FALSE;
 	if (cabinet[0] == '#') {
-		msi_blob *blob = db_read_named_stream(package->db, cabinet + 1);
-		if (!blob) {
-			package_log(L"No embedded cabinet %s", cabinet);
-			context->status = ERROR_INSTALL_FAILURE;
-			return context->status;
-		}
 		WCHAR folder[MAX_PATH];
-		DWORD put;
 		GetTempPathW(MAX_PATH, folder);
 		GetTempFileNameW(folder, L"cab", 0, path);
 		HANDLE out = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-		if (out != INVALID_HANDLE_VALUE) {
-			WriteFile(out, blob->data, (DWORD)blob->size, &put, NULL);
+		const BOOL copied = out != INVALID_HANDLE_VALUE && db_copy_named_stream(package->db, cabinet + 1, out);
+		if (out != INVALID_HANDLE_VALUE)
 			CloseHandle(out);
+		if (!copied) {
+			package_log(L"No embedded cabinet %s", cabinet);
+			DeleteFileW(path);
+			context->status = ERROR_INSTALL_FAILURE;
+			return context->status;
 		}
-		blob_unref(blob);
 		temporary = TRUE;
 	} else {
 		WCHAR *source = package_get(package, L"SourceDir");
