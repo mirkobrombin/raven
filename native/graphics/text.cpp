@@ -181,6 +181,20 @@ std::vector<uint8_t> TextRenderer::mask(std::span<const uint8_t,92> definition,s
 	return coverage;
 }
 
+std::vector<uint8_t> TextRenderer::smooth(std::span<const uint8_t,92> definition,std::span<const uint16_t> text,
+	uint32_t width,uint32_t height,int32_t x,int32_t y)
+{
+	if (!width || !height || width>8192 || height>8192 || uint64_t(width)*height>16*1024*1024) throw uint32_t(87);
+	auto [font,family]=state->font(definition); (void)family;
+	font.setEdging(SkFont::Edging::kAntiAlias);
+	std::vector<uint8_t> alpha(size_t(width)*height);
+	SkBitmap bitmap;
+	if (!bitmap.installPixels(SkImageInfo::MakeA8(int(width),int(height)),alpha.data(),width)) throw std::bad_alloc();
+	SkCanvas canvas(bitmap); canvas.clear(SK_ColorTRANSPARENT); SkPaint paint; paint.setColor(SK_ColorBLACK); paint.setAntiAlias(true);
+	canvas.drawSimpleText(text.data(),text.size_bytes(),SkTextEncoding::kUTF16,SkScalar(x),SkScalar(int64_t(y)+metrics(definition).ascent),font,paint);
+	return alpha;
+}
+
 std::vector<int32_t> TextRenderer::advances(std::span<const uint8_t,92> definition,std::span<const uint16_t> text)
 {
 	auto [font,family]=state->font(definition);(void)family;

@@ -67,13 +67,25 @@ struct Canvas {
 		set(rect.left + 1, rect.bottom - 2, inner_bottom_right);
 	}
 
+	// Coverage of one byte a pixel (0..255) laid over the surface in a color: a full one takes the color, a partial one mixes it with
+	// what is below.
 	void blend(const std::vector<uint8_t> &coverage, int32_t mask_width, int32_t x, int32_t y, uint32_t rgb)
 	{
 		const int32_t mask_height = int32_t(coverage.size() / size_t(mask_width));
 		for (int32_t row = 0; row < mask_height; ++row)
-			for (int32_t column = 0; column < mask_width; ++column)
-				if (coverage[size_t(row) * size_t(mask_width) + size_t(column)])
-					set(x + column, y + row, rgb);
+			for (int32_t column = 0; column < mask_width; ++column) {
+				const uint32_t alpha = coverage[size_t(row) * size_t(mask_width) + size_t(column)];
+				const int32_t px = x + column, py = y + row;
+				if (!alpha || px < 0 || py < 0 || px >= width || py >= height)
+					continue;
+				if (alpha == 255) {
+					set(px, py, rgb);
+					continue;
+				}
+				const auto at = (size_t(py) * size_t(width) + size_t(px)) * 4;
+				const auto mixed = [&](uint32_t foreground, uint32_t background) { return (foreground * alpha + background * (255 - alpha) + 127) / 255; };
+				set(px, py, mixed(rgb & 0xff, pixels[at + 2]) | mixed(rgb >> 8 & 0xff, pixels[at + 1]) << 8 | mixed(rgb >> 16 & 0xff, pixels[at]) << 16);
+			}
 	}
 };
 
@@ -174,7 +186,7 @@ inline int32_t draw_text(TextRenderer &renderer, Canvas &canvas, std::u16string_
 	}
 	const auto metrics = renderer.metrics(font);
 	const int32_t mask_width = extent.width + 2, mask_height = extent.height;
-	const auto coverage = renderer.mask(font, characters, uint32_t(mask_width), uint32_t(mask_height), 0, 0);
+	const auto coverage = renderer.smooth(font, characters, uint32_t(mask_width), uint32_t(mask_height), 0, 0);
 	canvas.blend(coverage, mask_width, x, y, color);
 	if (underline && *underline < characters.size()) {
 		const auto before = renderer.extent(font, std::span<const uint16_t>(characters).first(*underline)).width;

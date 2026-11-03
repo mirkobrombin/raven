@@ -31,6 +31,9 @@ public:
 	std::vector<int32_t> advances(std::span<const uint8_t,92> definition,std::span<const uint16_t> text);
 	std::vector<uint8_t> mask(std::span<const uint8_t,92> definition,std::span<const uint16_t> text,
 		uint32_t width,uint32_t height,int32_t x,int32_t y,std::span<const std::array<int32_t,2>> positions={});
+	// The same text, placed as the mask places it, as anti-aliased coverage (0..255): the frame and menus draw their text with it.
+	std::vector<uint8_t> smooth(std::span<const uint8_t,92> definition,std::span<const uint16_t> text,
+		uint32_t width,uint32_t height,int32_t x,int32_t y);
 
 	// Windows-shaped services for any logical font and any text: unknown faces fall back to the closest bundled family,
 	// missing glyphs draw the face's replacement glyph, and rendering returns anti-aliased coverage.
