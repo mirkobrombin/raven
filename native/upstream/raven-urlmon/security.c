@@ -238,8 +238,7 @@ static HRESULT WINAPI manager_map_url(IInternetSecurityManagerEx2 *iface, LPCWST
 			*zone = URLZONE_INVALID;
 		return E_INVALIDARG;
 	}
-	if (flags)
-		return E_INVALIDARG;
+	/* The MUTZ_ flags tune how a URL is looked at; none of them makes a valid URL an invalid argument. */
 	return map_url(url, zone, flags);
 }
 
@@ -424,8 +423,6 @@ static HRESULT WINAPI manager_map_url_ex2(IInternetSecurityManagerEx2 *iface, IU
 		*zone = URLZONE_INVALID;
 		return E_INVALIDARG;
 	}
-	if (flags & ~MUTZ_ACCEPT_WILDCARD_SCHEME)
-		return E_INVALIDARG;
 	result = IUri_GetDisplayUri(uri, &display);
 	if (FAILED(result))
 		return result;

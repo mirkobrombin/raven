@@ -906,6 +906,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(atom_fixture ALL DEPENDS ${ATOM_FIXTURE})
             add_test(NAME native_atoms COMMAND raven --run-process --execution=native ${ATOM_FIXTURE})
             set_tests_properties(native_atoms PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native process exited with status 0")
+            set(ZONE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/zone-client.exe)
+            add_custom_command(OUTPUT ${ZONE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O1 -o ${ZONE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/zone_client.c -lurlmon -lole32 -luuid
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/zone_client.c VERBATIM)
+            add_custom_target(zone_fixture ALL DEPENDS ${ZONE_FIXTURE})
+            add_test(NAME native_zones COMMAND raven --run-process --execution=native ${ZONE_FIXTURE})
+            set_tests_properties(native_zones PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native process exited with status 0")
             set(TEXT_PAINT ${CMAKE_CURRENT_BINARY_DIR}/text-paint.exe)
             add_custom_command(OUTPUT ${TEXT_PAINT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -fno-stack-protector
