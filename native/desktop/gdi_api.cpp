@@ -1864,7 +1864,8 @@ void NativeDesktop::register_image_api(ApiRegistry &registry)
 		guarded(call, 0, [&] {
 			if (!call[0])
 				throw uint32_t(120);
-			call.ret(icon_resource(call, call[0], wide_name(call, call[1], true), 0, 0));
+			const auto display = objects.display();
+			call.ret(icon_resource(call, call[0], wide_name(call, call[1], true), uint32_t(display.width), uint32_t(display.height)));
 		});
 	});
 	registry.add("LoadCursorA", 2, [=, this](ApiCall &call) {

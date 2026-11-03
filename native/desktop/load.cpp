@@ -108,8 +108,9 @@ bool NativeDesktop::load_dispatch(std::string_view name)
 		}
 		if (!scratch)
 			scratch = process.map_memory(4096, PROT_READ | PROT_WRITE);
-		// LoadIcon picks the default icon size of the display, exactly like a zero-sized LoadImage.
-		const uint64_t forwarded[] = {instance, icon_name, 0, 0, scratch};
+		// LoadIcon gives the display's icon size, not the first image of the group: programs measure what they get.
+		const auto display = objects.display();
+		const uint64_t forwarded[] = {instance, icon_name, uint64_t(display.width), uint64_t(display.height), scratch};
 		const auto status = load_icon(forwarded);
 		if (status) {
 			if ((status & 0xffff0000U) == 0x80070000U)

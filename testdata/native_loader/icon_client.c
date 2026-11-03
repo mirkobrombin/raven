@@ -164,6 +164,20 @@ int raven_entry(void)
 		return 93;
 	module = LoadLibraryW(L"icons.dll");
 	HICON loaded = NULL, named = NULL;
+	/* LoadIcon gives the display's icon size, whichever image the group lists first. */
+	{
+		HICON loaded = LoadIconW(module, MAKEINTRESOURCEW(201));
+		ICONINFO info;
+		BITMAP bitmap;
+		if (!loaded || !GetIconInfo(loaded, &info) || !GetObjectW(info.hbmColor ? info.hbmColor : info.hbmMask, sizeof(bitmap), &bitmap))
+			return 98;
+		if (bitmap.bmWidth != GetSystemMetrics(SM_CXICON))
+			return 99;
+		if (info.hbmColor)
+			DeleteObject(info.hbmColor);
+		DeleteObject(info.hbmMask);
+		DestroyIcon(loaded);
+	}
 	if (!module || LoadIconWithScaleDown(module,MAKEINTRESOURCEW(201),16,16,&loaded) != S_OK || !loaded ||
 		LoadIconWithScaleDown(module,L"named",16,16,&named) != S_OK || !named || named == loaded || !FreeLibrary(module))
 		return 94;
