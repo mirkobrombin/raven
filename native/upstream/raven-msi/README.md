@@ -8,8 +8,10 @@ keeps it. Changes are scheduled, run at `InstallFinalize` and undone on a failur
 rollback custom actions; its commit custom actions run once the installation has succeeded.
 
 Library custom actions run in an `msiexec` host of the library's own width, talking to the installer over
-a pipe. Products installed by Click-to-Run answer the queries from their package's manifests.
+a pipe. VBScript custom actions run in the installer's own interpreter, which knows the language's statements
+and common functions and the session, installer and record objects; it creates no COM objects and has no
+classes. Products installed by Click-to-Run answer the queries from their package's manifests.
 
-Absent: the internal dialogs (every level installs without them), patches, advertising, script custom
+Absent: the internal dialogs (every level installs without them), patches, advertising, JScript custom
 actions and assemblies in the global cache. Those calls answer with the documented status for the
 situation. See [LICENSES.md](../../../LICENSES.md).

@@ -3,7 +3,7 @@
 #include <wtypes.h>
 
 /* Custom actions, by the source and kind bits of their type. Libraries run in a host process of their own width; programs
- * run as programs. Script actions need a script engine this runtime does not have: they fail unless told to be ignored. */
+ * run as programs. VBScript actions run in the interpreter of script.c; JScript ones fail unless told to be ignored. */
 
 enum {
 	KIND_MASK = 0x07, KIND_DLL = 1, KIND_EXE = 2, KIND_TEXT = 3, KIND_JSCRIPT = 5, KIND_VBSCRIPT = 6, KIND_INSTALL = 7,
@@ -28,7 +28,9 @@ static WCHAR *extract_binary(msi_package *package, const WCHAR *key, const WCHAR
 	WCHAR *result = NULL;
 	if (!MsiDatabaseOpenViewW(db, query, &view) && !MsiViewExecute(view, 0) && !MsiViewFetch(view, &record)) {
 		GetTempPathW(MAX_PATH, folder);
+		// The name is reserved by an empty file; the library goes beside it under its own extension, and the placeholder goes.
 		GetTempFileNameW(folder, L"msi", 0, path);
+		DeleteFileW(path);
 		lstrcatW(path, extension);
 		HANDLE out = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (out != INVALID_HANDLE_VALUE) {
@@ -46,6 +48,79 @@ static WCHAR *extract_binary(msi_package *package, const WCHAR *key, const WCHAR
 	MsiCloseHandle(view);
 	MsiCloseHandle(db);
 	return result;
+}
+
+// A script stored in the Binary table, whole.
+static BYTE *binary_data(msi_package *package, const WCHAR *key, SIZE_T *size)
+{
+	WCHAR query[256];
+	wsprintfW(query, L"SELECT `Data` FROM `Binary` WHERE `Name` = '%s'", key);
+	MSIHANDLE db = 0, view = 0, record = 0;
+	object_ref(&package->db->base);
+	db = handle_open(&package->db->base);
+	BYTE *data = NULL;
+	*size = 0;
+	if (!MsiDatabaseOpenViewW(db, query, &view) && !MsiViewExecute(view, 0) && !MsiViewFetch(view, &record)) {
+		DWORD length = MsiRecordDataSize(record, 1);
+		data = msi_alloc(length + 1);
+		if (!MsiRecordReadStream(record, 1, (char *)data, &length))
+			*size = length;
+	}
+	MsiCloseHandle(record);
+	MsiCloseHandle(view);
+	MsiCloseHandle(db);
+	return data;
+}
+
+static BYTE *file_data(const WCHAR *path, SIZE_T *size)
+{
+	*size = 0;
+	HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return NULL;
+	DWORD length = GetFileSize(file, NULL), got = 0;
+	BYTE *data = length < 64 * 1024 * 1024 ? msi_alloc(length + 1) : NULL;
+	if (data && ReadFile(file, data, length, &got, NULL))
+		*size = got;
+	CloseHandle(file);
+	return data;
+}
+
+// A VBScript action: the script comes from the Binary table, an installed file, the action's target or a property.
+static UINT run_vbscript(msi_package *package, const WCHAR *name, INT from, const WCHAR *source, const WCHAR *target)
+{
+	BYTE *data = NULL;
+	SIZE_T size = 0;
+	const WCHAR *entry = target;
+	if (from == SOURCE_BINARY)
+		data = binary_data(package, source, &size);
+	else if (from == SOURCE_FILE) {
+		tables_load(package);
+		msi_file *file = file_find(package, source);
+		WCHAR *path = file ? file_target(package, file) : NULL;
+		if (path)
+			data = file_data(path, &size);
+		msi_free(path);
+	} else {
+		WCHAR *text = from == SOURCE_PROPERTY ? package_get(package, source) : msi_copy(target);
+		if (from != SOURCE_PROPERTY)
+			entry = NULL;
+		if (text) {
+			int length = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
+			data = msi_alloc(length + 3);
+			data[0] = 0xef, data[1] = 0xbb, data[2] = 0xbf;
+			WideCharToMultiByte(CP_UTF8, 0, text, -1, (char *)data + 3, length, NULL, NULL);
+			size = length + 2;
+			msi_free(text);
+		}
+	}
+	if (!data) {
+		package_log(L"The script of %s is not there", name);
+		return ERROR_INSTALL_FAILURE;
+	}
+	UINT status = vbscript_run(package, package->session, data, size, entry, name);
+	msi_free(data);
+	return status;
 }
 
 // The library's own width picks the host: a 32-bit library runs in the system's 32-bit msiexec.
@@ -245,6 +320,9 @@ static UINT execute(msi_package *package, const WCHAR *name, INT type, const WCH
 		}
 		break;
 	}
+	case KIND_VBSCRIPT:
+		status = run_vbscript(package, name, from, source, target);
+		break;
 	default:
 		package_log(L"Script custom action is not available here: %s", name);
 		status = ERROR_INSTALL_FAILURE;

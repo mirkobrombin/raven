@@ -1433,6 +1433,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set(RAVEN_INSTALLER_COMPONENT_DIR "" CACHE PATH "Directory holding the installer components built by scripts/provision-installer.py")
         set(RAVEN_INSTALLER32_COMPONENT_DIR "" CACHE PATH "Directory holding the 32-bit installer components built by scripts/provision-installer.py --arch x86")
         find_program(RAVEN_WIXL wixl)
+        find_program(RAVEN_MSIBUILD msibuild)
         find_program(RAVEN_MINGW32_INSTALLER i686-w64-mingw32-gcc)
         if(RAVEN_MINGW32_INSTALLER)
             list(APPEND RAVEN_MINGW32_INSTALLER -minline-all-stringops)
@@ -1582,6 +1583,29 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${fixture}/wow64/msi-custom.exe)
                     set_tests_properties(native_msi_wow64_custom_actions PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${fixture}/wow64-prefix)
+                endif()
+                # VBScript custom actions. wixl writes no script actions, so msibuild turns its library actions into ones that run a function
+                # of the script in the Binary table (6, deferred without impersonation 3078) and into one whose target holds the script itself (38).
+                if(RAVEN_MSIBUILD)
+                    file(MAKE_DIRECTORY ${fixture}/script)
+                    add_custom_command(OUTPUT ${fixture}/script/script.msi ${fixture}/script/msi-script.exe
+                        COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt ${fixture}/script/msi_payload.txt
+                        COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.vbs ${fixture}/script/msi_script.vbs
+                        COMMAND ${RAVEN_WIXL} -a ${installer_arch} -o ${fixture}/script/script.msi ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.wxs
+                        COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q [=[UPDATE `CustomAction` SET `Type` = 6 WHERE `Type` = 1]=]
+                        COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q [=[UPDATE `CustomAction` SET `Type` = 3078 WHERE `Type` = 3073]=]
+                        COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q
+                            [=[UPDATE `CustomAction` SET `Type` = 38, `Source` = '', `Target` = 'Session.Property("INLINE_RESULT") = "inline " & (6 * 7)' WHERE `Action` = 'Inline']=]
+                        COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                            -o ${fixture}/script/msi-script.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script_client.c -lmsi -ladvapi32 -lkernel32
+                        WORKING_DIRECTORY ${fixture}/script
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.wxs ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.vbs
+                            ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt VERBATIM)
+                    add_custom_target(msi_script_fixture_${installer_arch} ALL DEPENDS ${fixture}/script/script.msi ${fixture}/script/msi-script.exe)
+                    add_test(NAME native_msi_script_actions_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=120000
+                        ${fixture}/script/msi-script.exe)
+                    set_tests_properties(native_msi_script_actions_${installer_arch} PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${fixture}/script-prefix)
                 endif()
                 # The XML document object through COM: the prefix registers the component's classes, the program finds and makes one.
                 add_custom_command(OUTPUT ${fixture}/msxml.exe

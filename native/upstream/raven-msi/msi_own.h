@@ -415,6 +415,9 @@ UINT component_cost(msi_package *package, const msi_component *component);
 UINT custom_action_run(msi_package *package, const WCHAR *name, const WCHAR *data, BOOL *handled);
 UINT custom_scripted_run(msi_package *package, const script_entry *entry);
 
+// script.c
+UINT vbscript_run(msi_package *package, MSIHANDLE session, const BYTE *data, SIZE_T size, const WCHAR *entry, const WCHAR *action);
+
 // remote.c
 enum {
 	REMOTE_GET_PROPERTY = 1, REMOTE_SET_PROPERTY, REMOTE_TARGET_PATH, REMOTE_SOURCE_PATH, REMOTE_SET_TARGET,

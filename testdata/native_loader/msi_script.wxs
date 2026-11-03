@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A package with VBScript custom actions. wixl writes them as library actions; the build turns them into script ones: Main, Refuse
+     and Broken run functions of msi_script.vbs, CheckData runs one deferred, Inline runs the script its target holds. The registry
+     values keep what the scripts found. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="7c2e9a41-5b3d-4f6e-8a1c-0d9b8e7f6a51" Name="Raven Script" Language="1033" Version="1.0.0" Manufacturer="Raven" UpgradeCode="7c2e9a41-5b3d-4f6e-8a1c-0d9b8e7f6a52">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"/>
+    <Media Id="1" Cabinet="script.cab" EmbedCab="yes"/>
+    <Binary Id="Script" SourceFile="msi_script.vbs"/>
+    <CustomAction Id="Main" BinaryKey="Script" DllEntry="Main" Execute="immediate" Return="check"/>
+    <CustomAction Id="Refuse" BinaryKey="Script" DllEntry="Refuse" Execute="immediate" Return="check"/>
+    <CustomAction Id="Broken" BinaryKey="Script" DllEntry="Broken" Execute="immediate" Return="check"/>
+    <CustomAction Id="CheckData" BinaryKey="Script" DllEntry="CheckData" Execute="deferred" Return="check"/>
+    <CustomAction Id="SetCheckData" Property="CheckData" Value="payload"/>
+    <CustomAction Id="Inline" Property="Inline" Value="replaced"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLDIR" Name="RavenScript">
+          <Component Id="Payload" Guid="7c2e9a41-5b3d-4f6e-8a1c-0d9b8e7f6a53">
+            <File Id="Hello" Name="hello.txt" Source="msi_payload.txt" KeyPath="yes"/>
+            <RegistryValue Root="HKLM" Key="Software\RavenScript" Name="Result" Value="[SCRIPT_RESULT]" Type="string"/>
+            <RegistryValue Root="HKLM" Key="Software\RavenScript" Name="Inline" Value="[INLINE_RESULT]" Type="string"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="Payload"/>
+    </Feature>
+    <InstallExecuteSequence>
+      <Custom Action="Main" After="CostFinalize">NOT REMOVE</Custom>
+      <Custom Action="Inline" After="Main">NOT REMOVE</Custom>
+      <Custom Action="Refuse" After="Inline">FAIL = "1"</Custom>
+      <Custom Action="Broken" After="Refuse">BROKEN = "1"</Custom>
+      <Custom Action="SetCheckData" After="InstallInitialize">NOT REMOVE</Custom>
+      <Custom Action="CheckData" After="SetCheckData">NOT REMOVE</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>
