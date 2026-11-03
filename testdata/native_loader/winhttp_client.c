@@ -119,6 +119,80 @@ static DWORD WINAPI serve_kept(void *unused)
 	return 0;
 }
 
+static SOCKET async_listener;
+
+/* Answers one request with a short body, for the asynchronous client. */
+static DWORD WINAPI serve_async(void *unused)
+{
+	SOCKET peer = accept(async_listener, NULL, NULL);
+	if (peer == INVALID_SOCKET || !read_request(peer)) return 20;
+	send_text(peer, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nasync!");
+	closesocket(peer);
+	return 0;
+}
+
+/* What the status callback saw: each notification in order, with the context and information it came with. */
+static DWORD seen[16];
+static int seen_count, wrong_context;
+static DWORD last_length, error_api, error_code;
+static HINTERNET closing;
+static char *read_buffer;
+
+static void CALLBACK status_callback(HINTERNET handle, DWORD_PTR context, DWORD status, void *information, DWORD length)
+{
+	if (context != 0x1234) ++wrong_context;
+	if (seen_count < 16) seen[seen_count++] = status;
+	if (status == WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE || status == WINHTTP_CALLBACK_STATUS_WRITE_COMPLETE)
+		last_length = *(DWORD *)information;
+	else if (status == WINHTTP_CALLBACK_STATUS_READ_COMPLETE)
+		last_length = information == read_buffer ? length : 0xffffffff;
+	else if (status == WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING)
+		closing = *(HINTERNET *)information;
+	else if (status == WINHTTP_CALLBACK_STATUS_REQUEST_ERROR) {
+		error_api = (DWORD)((WINHTTP_ASYNC_RESULT *)information)->dwResult;
+		error_code = ((WINHTTP_ASYNC_RESULT *)information)->dwError;
+	}
+}
+
+/* In the asynchronous mode every operation reports its completion to the callback, and a failure is a notification, not a result. */
+static int asynchronous(USHORT port, USHORT closed_port)
+{
+	HINTERNET session = WinHttpOpen(L"raven-test", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, WINHTTP_FLAG_ASYNC);
+	if (!session) return 90;
+	const DWORD wanted = WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES;
+	if (WinHttpSetStatusCallback(session, status_callback, wanted, 0) != NULL ||
+		WinHttpSetStatusCallback(session, status_callback, wanted, 0) != status_callback) return 91;
+	HINTERNET connection = WinHttpConnect(session, L"127.0.0.1", port, 0);
+	HINTERNET request = connection ? WinHttpOpenRequest(connection, L"GET", L"/async", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0) : NULL;
+	if (!request) return 92;
+	if (!WinHttpSendRequest(request, NULL, 0, NULL, 0, 0, 0x1234) || !WinHttpReceiveResponse(request, NULL)) return 93;
+	DWORD available = 0;
+	if (!WinHttpQueryDataAvailable(request, &available) || available != 6 || last_length != 6) return 94;
+	char body[8];
+	read_buffer = body;
+	if (!WinHttpReadData(request, body, 6, NULL) || last_length != 6 || !same_bytes(body, "async!", 6)) return 95;
+	DWORD_PTR value = 0;
+	DWORD size = sizeof(value);
+	if (!WinHttpQueryOption(request, WINHTTP_OPTION_CONTEXT_VALUE, &value, &size) || value != 0x1234) return 96;
+	if (!WinHttpCloseHandle(request) || closing != request) return 97;
+	const DWORD expected[] = {WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE, WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE,
+		WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE, WINHTTP_CALLBACK_STATUS_READ_COMPLETE, WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING};
+	if (seen_count != 5 || wrong_context) return 98;
+	for (int index = 0; index < 5; ++index)
+		if (seen[index] != expected[index]) return 99;
+	WinHttpCloseHandle(connection);
+	/* Nothing listens on the second port: the send still returns TRUE and the error arrives as a notification. */
+	seen_count = 0;
+	connection = WinHttpConnect(session, L"127.0.0.1", closed_port, 0);
+	request = connection ? WinHttpOpenRequest(connection, L"GET", L"/none", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0) : NULL;
+	if (!request || !WinHttpSendRequest(request, NULL, 0, NULL, 0, 0, 0x1234)) return 110;
+	if (seen_count != 1 || seen[0] != WINHTTP_CALLBACK_STATUS_REQUEST_ERROR || error_api != API_SEND_REQUEST || !error_code) return 111;
+	WinHttpCloseHandle(request);
+	WinHttpCloseHandle(connection);
+	WinHttpCloseHandle(session);
+	return 0;
+}
+
 static int read_all(HINTERNET request, char *buffer, DWORD capacity, DWORD *total)
 {
 	*total = 0;
@@ -214,6 +288,11 @@ static int cracked(void)
 	parts.lpszUrlPath = path;
 	parts.dwUrlPathLength = 4;
 	if (WinHttpCrackUrl(L"http://raven.example/long/path", 0, 0, &parts) || GetLastError() != ERROR_INSUFFICIENT_BUFFER) return 53;
+	/* Without the extra information asked for, the query stays on the path. */
+	zero(&parts, sizeof(parts));
+	parts.dwStructSize = sizeof(parts);
+	parts.dwUrlPathLength = (DWORD)-1;
+	if (!WinHttpCrackUrl(L"https://raven.example/versions/latest?action=select", 0, 0, &parts) || parts.dwUrlPathLength != 30) return 55;
 	if (WinHttpCrackUrl(L"ftp://raven.example/", 0, 0, &parts) || GetLastError() != ERROR_WINHTTP_UNRECOGNIZED_SCHEME) return 54;
 	return 0;
 }
@@ -288,6 +367,26 @@ int raven_entry(void)
 	if (!GetExitCodeThread(server, &code) || code) return 100 + code;
 	if (reused) return reused;
 	closesocket(kept_listener);
+	/* A port that was listening a moment ago and no longer is refuses the connection. */
+	SOCKET gone = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	address.sin_port = 0;
+	address_size = sizeof(address);
+	if (gone == INVALID_SOCKET || bind(gone, (SOCKADDR *)&address, sizeof(address)) || getsockname(gone, (SOCKADDR *)&address, &address_size)) return 9;
+	const USHORT closed_port = ntohs(address.sin_port);
+	closesocket(gone);
+	async_listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	address.sin_port = 0;
+	address_size = sizeof(address);
+	if (async_listener == INVALID_SOCKET || bind(async_listener, (SOCKADDR *)&address, sizeof(address)) || listen(async_listener, 1) ||
+		getsockname(async_listener, (SOCKADDR *)&address, &address_size)) return 10;
+	server = CreateThread(NULL, 0, serve_async, NULL, 0, NULL);
+	if (!server) return 11;
+	result = asynchronous(ntohs(address.sin_port), closed_port);
+	if (result) return result;
+	if (WaitForSingleObject(server, 10000) != WAIT_OBJECT_0) return 12;
+	code = 1;
+	if (!GetExitCodeThread(server, &code) || code) return 120 + code;
+	closesocket(async_listener);
 	WSACleanup();
 	return 0;
 }

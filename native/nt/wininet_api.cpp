@@ -1,3 +1,4 @@
+#include "authenticode.h"
 #include "child_process.h"
 #include "kernel_context.h"
 #include "text.h"
@@ -215,7 +216,11 @@ struct Exchange {
 	{
 		tls_context.reset(SSL_CTX_new(TLS_client_method()));
 		if (!tls_context) return internet_security_failure;
-		SSL_CTX_set_default_verify_paths(tls_context.get());
+		// The roots Windows trusts: the host's bundle and the Microsoft roots beside the runtime, which update servers chain to.
+		if (X509_STORE *roots = trust_anchors())
+			SSL_CTX_set1_cert_store(tls_context.get(), roots);
+		else
+			SSL_CTX_set_default_verify_paths(tls_context.get());
 		tls.reset(SSL_new(tls_context.get()));
 		if (!tls || !SSL_set_fd(tls.get(), descriptor)) return internet_security_failure;
 		SSL_set_tlsext_host_name(tls.get(), host.c_str());
@@ -385,6 +390,11 @@ struct InternetHandle : KernelObject {
 	uint64_t upload_total = 0;
 	bool waiting = false;
 	uint32_t redirect_policy = 1;
+	// WinHTTP's asynchronous mode (WINHTTP_FLAG_ASYNC): the status callback, the notifications it asked for and the context value it
+	// receives. Children take the callback their parent had when they were made.
+	bool async = false;
+	uint64_t callback = 0, context = 0;
+	uint32_t notifications = 0;
 };
 
 // Splits a URL into scheme, host, port and the path with its query; false when it is not an http or https URL.
@@ -838,10 +848,44 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 			handler(call);
 		});
 	};
+	// In the asynchronous mode each operation still completes within its call; the notification Windows would send from its own
+	// thread is then made on the calling one, before the call returns TRUE, with the information a program reads in it. A failure
+	// is reported as WINHTTP_CALLBACK_STATUS_REQUEST_ERROR with the API that failed, as Windows does once the call has returned.
+	const auto deliver = [&context](InternetHandle &handle, uint64_t value, uint32_t status, uint64_t information, uint64_t length) {
+		if (!handle.async || !handle.callback || !(handle.notifications & status))
+			return;
+		const uint64_t arguments[] = {value, handle.context, status, information, length};
+		context.call(handle.callback, arguments);
+	};
+	// The information a notification carries lives in guest scratch memory for the duration of the callback.
+	const auto notify = [&context, deliver](ApiCall &call, InternetHandle &handle, uint64_t value, uint32_t status,
+		std::span<const uint8_t> information) {
+		if (!handle.async || !handle.callback || !(handle.notifications & status))
+			return;
+		const uint64_t block = information.empty() ? 0 : context.allocator.allocate(information.size());
+		if (block)
+			call.write(block, information);
+		deliver(handle, value, status, block, information.size());
+		if (block)
+			context.allocator.release(block);
+	};
+	const auto word = [](uint64_t value, size_t width) {
+		std::vector<uint8_t> bytes(width);
+		std::memcpy(bytes.data(), &value, width);
+		return bytes;
+	};
+	// WINHTTP_ASYNC_RESULT: the API that failed (API_RECEIVE_RESPONSE 1 to API_SEND_REQUEST 5) and its error.
+	const auto report = [notify](ApiCall &call, InternetHandle &request, uint32_t api, uint32_t error) {
+		std::vector<uint8_t> result(call.pointer_width() * 2);
+		std::memcpy(result.data(), &api, 4);
+		std::memcpy(result.data() + call.pointer_width(), &error, 4);
+		notify(call, request, call[0], 0x00200000U, result);
+	};
 	winhttp("WinHttpOpen", 5, [add](ApiCall &call) {
 		auto session = std::make_shared<InternetHandle>();
 		session->agent = call[0] ? to_utf8(call.wide(call[0])) : std::string();
 		session->flags = call.u32(4);
+		session->async = session->flags & 0x10000000U;
 		add(call, session);
 	});
 	winhttp("WinHttpConnect", 4, [handle_of, fail_handle, add](ApiCall &call) {
@@ -856,6 +900,10 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		connection->connect_timeout = session->connect_timeout;
 		connection->receive_timeout = session->receive_timeout;
 		connection->redirect_policy = session->redirect_policy;
+		connection->async = session->async;
+		connection->callback = session->callback;
+		connection->notifications = session->notifications;
+		connection->context = session->context;
 		add(call, connection);
 	});
 	winhttp("WinHttpOpenRequest", 7, [handle_of, fail_handle, add](ApiCall &call) {
@@ -875,6 +923,10 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		request->connect_timeout = connection->connect_timeout;
 		request->receive_timeout = connection->receive_timeout;
 		request->redirect_policy = connection->redirect_policy;
+		request->async = connection->async;
+		request->callback = connection->callback;
+		request->notifications = connection->notifications;
+		request->context = connection->context;
 		std::string accept;
 		for (uint64_t at = call[5]; at && accept.size() < 4096; at += call.pointer_width()) {
 			const auto entry = call.load_pointer(at);
@@ -902,7 +954,7 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		if (!error && request.redirect_policy == 1 && was_secure && !(request.flags & flag_secure)) return http_redirect_failed;
 		return error;
 	};
-	winhttp("WinHttpSendRequest", 7, [handle_of, fail_handle, send_now](ApiCall &call) {
+	winhttp("WinHttpSendRequest", 7, [handle_of, fail_handle, send_now, notify, report](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
 		request->pending_headers = call[1] ? counted(call, call[1], call.u32(2), true) : std::string();
@@ -914,11 +966,19 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		request->upload_total = std::max<uint64_t>(call.u32(5), request->upload.size());
 		request->exchange.reset();
 		request->waiting = true;
+		if (request->async)
+			request->context = call[6];
 		if (request->upload.size() >= request->upload_total)
-			if (const auto error = send_now(*request)) { call.fail(error); return; }
+			if (const auto error = send_now(*request)) {
+				if (!request->async) { call.fail(error); return; }
+				call.ret(1);
+				report(call, *request, 5, error);
+				return;
+			}
 		call.ret(1);
+		notify(call, *request, call[0], 0x00400000U, {});
 	});
-	winhttp("WinHttpWriteData", 4, [handle_of, fail_handle](ApiCall &call) {
+	winhttp("WinHttpWriteData", 4, [handle_of, fail_handle, notify](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
 		if (!request->waiting) { call.fail(12019); return; }
@@ -926,31 +986,49 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		request->upload.append(bytes.begin(), bytes.end());
 		if (call[3]) call.store<uint32_t>(call[3], call.u32(2));
 		call.ret(1);
+		const uint32_t written = call.u32(2);
+		notify(call, *request, call[0], 0x00100000U, std::span(reinterpret_cast<const uint8_t *>(&written), 4));
 	});
-	winhttp("WinHttpReceiveResponse", 2, [handle_of, fail_handle, send_now](ApiCall &call) {
+	winhttp("WinHttpReceiveResponse", 2, [handle_of, fail_handle, send_now, notify, report](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
+		uint32_t error = 0;
 		if (request->waiting)
-			if (const auto error = send_now(*request)) { call.fail(error); return; }
-		if (!request->exchange) { call.fail(12019); return; }
+			error = send_now(*request);
+		if (!error && !request->exchange)
+			error = 12019;
+		if (error) {
+			if (!request->async) { call.fail(error); return; }
+			call.ret(1);
+			report(call, *request, 1, error);
+			return;
+		}
 		call.ret(1);
+		notify(call, *request, call[0], 0x00020000U, {});
 	});
 	winhttp("WinHttpQueryHeaders", 6, [handle_of, fail_handle, answer_header](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
 		answer_header(call, request, true, call[2], 3);
 	});
-	winhttp("WinHttpQueryDataAvailable", 2, [handle_of, fail_handle, offload](ApiCall &call) {
+	winhttp("WinHttpQueryDataAvailable", 2, [handle_of, fail_handle, offload, notify, report](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
 		if (!request->exchange) { call.fail(12019); return; }
 		auto *exchange = request->exchange.get();
 		if (exchange->body.empty() && !exchange->finished)
-			if (const auto error = offload([exchange] { return exchange->fill(1); }); error && exchange->body.empty()) { call.fail(error); return; }
-		if (call[1]) call.store<uint32_t>(call[1], uint32_t(std::min<size_t>(exchange->body.size(), UINT32_MAX)));
+			if (const auto error = offload([exchange] { return exchange->fill(1); }); error && exchange->body.empty()) {
+				if (!request->async) { call.fail(error); return; }
+				call.ret(1);
+				report(call, *request, 2, error);
+				return;
+			}
+		const uint32_t available = uint32_t(std::min<size_t>(exchange->body.size(), UINT32_MAX));
+		if (call[1]) call.store<uint32_t>(call[1], available);
 		call.ret(1);
+		notify(call, *request, call[0], 0x00040000U, std::span(reinterpret_cast<const uint8_t *>(&available), 4));
 	});
-	winhttp("WinHttpReadData", 4, [handle_of, fail_handle, offload](ApiCall &call) {
+	winhttp("WinHttpReadData", 4, [handle_of, fail_handle, offload, deliver, report](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
 		if (call[3]) call.store<uint32_t>(call[3], 0);
@@ -958,17 +1036,27 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		const uint32_t wanted = call.u32(2);
 		auto *exchange = request->exchange.get();
 		if (exchange->body.size() < wanted && !exchange->finished)
-			if (const auto error = offload([exchange, wanted] { return exchange->fill(wanted); }); error && exchange->body.empty()) { call.fail(error); return; }
+			if (const auto error = offload([exchange, wanted] { return exchange->fill(wanted); }); error && exchange->body.empty()) {
+				if (!request->async) { call.fail(error); return; }
+				call.ret(1);
+				report(call, *request, 3, error);
+				return;
+			}
 		const size_t taken = std::min<size_t>(wanted, exchange->body.size());
 		if (taken) call.write(call[1], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(exchange->body.data()), taken));
 		exchange->body.erase(0, taken);
 		if (call[3]) call.store<uint32_t>(call[3], uint32_t(taken));
 		call.ret(1);
+		// READ_COMPLETE points at the caller's own buffer, with the length read.
+		deliver(*request, call[0], 0x00080000U, call[1], taken);
 	});
-	winhttp("WinHttpCloseHandle", 1, [&objects](ApiCall &call) {
-		if (!objects.object_as<InternetHandle>(call[0])) { call.fail(error_invalid_handle); return; }
+	winhttp("WinHttpCloseHandle", 1, [&objects, notify, word](ApiCall &call) {
+		const auto handle = objects.object_as<InternetHandle>(call[0]);
+		if (!handle) { call.fail(error_invalid_handle); return; }
 		objects.close(call[0]);
 		call.ret(1);
+		// WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING carries the handle that is going away.
+		notify(call, *handle, call[0], 0x00000800U, word(call[0], call.pointer_width()));
 	});
 	winhttp("WinHttpSetTimeouts", 5, [handle_of](ApiCall &call) {
 		const auto handle = handle_of(call[0], 0);
@@ -991,6 +1079,8 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 			else if (option == 7) handle->receive_timeout = std::chrono::milliseconds(value);
 			else if (option == 31) handle->security |= value;
 			else if (option == 88) handle->redirect_policy = value;
+			// WINHTTP_OPTION_CONTEXT_VALUE: the value the status callback receives.
+			else if (option == 45 && call[2] && call.u32(3) >= call.pointer_width()) handle->context = call.load_pointer(call[2]);
 			// WINHTTP_OPTION_DISABLE_FEATURE with WINHTTP_DISABLE_REDIRECTS.
 			else if (option == 63 && (value & 2)) handle->redirect_policy = 0;
 		}
@@ -1016,6 +1106,15 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(1);
 			return;
 		}
+		// WINHTTP_OPTION_CONTEXT_VALUE is pointer-sized.
+		if (handle && option == 45) {
+			const uint32_t width = uint32_t(call.pointer_width());
+			if (capacity < width || !call[2]) { call.store<uint32_t>(call[3], width); call.fail(error_insufficient_buffer); return; }
+			call.store_pointer(call[2], handle->context);
+			call.store<uint32_t>(call[3], width);
+			call.ret(1);
+			return;
+		}
 		if (handle && option == 34 && handle->type == 13) {
 			const bool secure = handle->flags & flag_secure;
 			const auto text = from_utf8((secure ? "https://" : "http://") + handle->host +
@@ -1029,8 +1128,20 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.fail(internet_invalid_option);
 	});
-	// No callback is ever made: every request completes before its call returns. The previous callback, none, is the answer.
-	winhttp("WinHttpSetStatusCallback", 4, [](ApiCall &call) { call.ret(0); });
+	// The callback serves a handle in the asynchronous mode and the handles made from it afterwards; the answer is the one it had.
+	// A synchronous handle accepts one too and never calls it.
+	winhttp("WinHttpSetStatusCallback", 4, [handle_of](ApiCall &call) {
+		const auto handle = handle_of(call[0], 0);
+		if (!handle) {
+			call.fail(error_invalid_handle);
+			call.ret(call.pointer_width() == 4 ? 0xffffffffULL : UINT64_MAX);
+			return;
+		}
+		const uint64_t previous = handle->callback;
+		handle->callback = call[1];
+		handle->notifications = call.u32(2);
+		call.ret(previous);
+	});
 	winhttp("WinHttpSetCredentials", 6, [handle_of, fail_handle](ApiCall &call) {
 		const auto request = handle_of(call[0], 13);
 		if (!request) { fail_handle(call, call[0]); return; }
@@ -1146,7 +1257,9 @@ void register_wininet_api(ApiRegistry &registry, KernelContext &context)
 		fits &= set(host_part, host, host_end);
 		fits &= set(user_part, authority, has_user ? user_end : authority);
 		fits &= set(password_part, password, has_user ? password_end : password);
-		fits &= set(path_part, authority_end, path_end);
+		// A caller that does not ask for the extra information gets it as part of the path, the way it sends the path on.
+		const bool extra_wanted = call.load_pointer(components + extra_part.pointer) || call.load<uint32_t>(components + extra_part.length);
+		fits &= set(path_part, authority_end, extra_wanted ? path_end : url.size());
 		fits &= set(extra_part, path_end, url.size());
 		// INTERNET_SCHEME_FTP, _HTTP and _HTTPS are 1, 3 and 4 in WinINet; WinHTTP numbers HTTP and HTTPS 1 and 2.
 		call.store<uint32_t>(components + scheme_number, wininet ? (scheme == "ftp" ? 1 : scheme == "https" ? 4 : 3) : scheme == "https" ? 2 : 1);
