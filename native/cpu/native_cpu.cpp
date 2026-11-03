@@ -1344,7 +1344,9 @@ void NativeProcess::end_call()
 		while (child.take_stop(child.pid, discarded)) {}
 		state->stopped = true;
 	}
-	state->require_stopped();
+	// With the guest gone (the deadline ended it) there is only the bookkeeping of the call left to drop.
+	if (state->child && state->child->pid != -1)
+		state->require_stopped();
 	state->callbacks.clear();
 	state->callback_cleanups.clear();
 	state->active_call=false;
