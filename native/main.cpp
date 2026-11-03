@@ -217,10 +217,13 @@ int main(int argc, char **argv)
 		else if (option.starts_with("--diagnostics-fd=")) {
 			// The runtime's own messages go where the parent runtime writes its own; the program's standard error moves out of their way
 			// to a descriptor of its own, so nothing the runtime says ever lands in a pipe the program reads.
+			// RAVEN_TRACE_FILE already gave this process a file of its own, which the parent's descriptor would replace.
 			const int diagnostics=std::atoi(std::string(option.substr(17)).c_str());
-			const int moved=::fcntl(2,F_DUPFD_CLOEXEC,64);
-			if (moved>=0 && ::dup2(diagnostics,2)==2) guest_error_fd=moved;
-			else if (moved>=0) ::close(moved);
+			if (!std::getenv("RAVEN_TRACE_FILE")) {
+				const int moved=::fcntl(2,F_DUPFD_CLOEXEC,64);
+				if (moved>=0 && ::dup2(diagnostics,2)==2) guest_error_fd=moved;
+				else if (moved>=0) ::close(moved);
+			}
 			::close(diagnostics);
 		}
 #ifdef RAVEN_NATIVE_CPU
