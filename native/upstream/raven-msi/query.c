@@ -924,6 +924,50 @@ static UINT modify_insert(msi_view *view, msi_record *record, BOOL temporary)
 	return status;
 }
 
+static WCHAR *append(WCHAR *at, const WCHAR *text)
+{
+	while (*text)
+		*at++ = *text++;
+	*at = 0;
+	return at;
+}
+
+// A custom action works on a copy of the session's database, so a temporary row it adds is added to the installer's session as
+// well: a query naming the view's columns, and their values as I<number>; S<length>;<text> or N; one after the other.
+static UINT forward_insert(msi_view *view, msi_record *record)
+{
+	db_table *table = view->tables[0];
+	SIZE_T query_room = lstrlenW(table->name) + 32, values_room = 1;
+	for (UINT i = 0; i < view->column_count; i++) {
+		const record_field *field = &record->fields[i + 1];
+		query_room += lstrlenW(table->columns[view->columns[i].column].name) + 4;
+		values_room += 16 + (field->type == FIELD_TEXT && field->text ? lstrlenW(field->text) : 0);
+	}
+	WCHAR *query = msi_alloc(query_room * sizeof(WCHAR)), *values = msi_alloc(values_room * sizeof(WCHAR));
+	WCHAR *at = append(query, L"SELECT "), *value = values;
+	*value = 0;
+	for (UINT i = 0; i < view->column_count; i++) {
+		const record_field *field = &record->fields[i + 1];
+		at = append(append(append(at, i ? L", `" : L"`"), table->columns[view->columns[i].column].name), L"`");
+		WCHAR head[24];
+		BOOL text = field->type == FIELD_TEXT && field->text;
+		if (field->type == FIELD_INT)
+			wsprintfW(head, L"I%d;", field->number);
+		else if (text)
+			wsprintfW(head, L"S%d;", lstrlenW(field->text));
+		else
+			lstrcpyW(head, L"N;");
+		value = append(value, head);
+		if (text)
+			value = append(value, field->text);
+	}
+	append(append(append(at, L" FROM `"), table->name), L"`");
+	UINT status = remote_call(view->db->remote, REMOTE_INSERT_ROW, query, values, 0, NULL, NULL);
+	msi_free(query);
+	msi_free(values);
+	return status;
+}
+
 static UINT modify_set(msi_view *view, msi_record *record, db_row *row, BOOL keys_fixed)
 {
 	db_table *table = view->tables[0];
@@ -1050,7 +1094,8 @@ UINT WINAPI MsiViewModify(MSIHANDLE handle, MSIMODIFY mode, MSIHANDLE record_han
 		object_unref(&view->base);
 		return ERROR_INVALID_HANDLE;
 	}
-	if (!view->executed || view->statement->kind != SQL_SELECT) {
+	// A row is added through a view that has not run yet as well; the other changes work on the rows it fetched.
+	if (view->statement->kind != SQL_SELECT || (!view->executed && mode != MSIMODIFY_INSERT && mode != MSIMODIFY_INSERT_TEMPORARY)) {
 		status = ERROR_FUNCTION_FAILED;
 		goto done;
 	}
@@ -1096,6 +1141,8 @@ UINT WINAPI MsiViewModify(MSIHANDLE handle, MSIMODIFY mode, MSIHANDLE record_han
 		break;
 	case MSIMODIFY_INSERT_TEMPORARY:
 		status = modify_insert(view, record, TRUE);
+		if (!status && view->db->remote)
+			status = forward_insert(view, record);
 		break;
 	case MSIMODIFY_UPDATE:
 		status = modify_update(view, record);

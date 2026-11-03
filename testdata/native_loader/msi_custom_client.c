@@ -3,8 +3,8 @@
 #include <msi.h>
 
 /* A package whose DLL custom actions run in the installer's custom action server: the immediate one reads a package property and
-   records it in the registry; the deferred one, on request, fails the installation, and the installer rolls back the file it had put in
-   place and leaves the product unregistered. */
+   records it in the registry, directly and through a temporary row of the package's Registry table; the deferred one, on request,
+   fails the installation, and the installer rolls back the file it had put in place and leaves the product unregistered. */
 
 /* An action library of the other width writes through that width's view of the registry, as a 32-bit one does on 64-bit Windows. */
 #ifndef ACTION_VIEW
@@ -26,6 +26,10 @@ static void remove_marker(void)
 	HKEY key;
 	if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\RavenSample", 0, KEY_SET_VALUE | ACTION_VIEW, &key)) {
 		RegDeleteValueW(key, L"FromCustomAction");
+		RegCloseKey(key);
+	}
+	if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\RavenSample", 0, KEY_SET_VALUE, &key)) {
+		RegDeleteValueW(key, L"FromTemporaryRow");
 		RegCloseKey(key);
 	}
 }
@@ -53,6 +57,12 @@ int raven_entry(void)
 	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\RavenSample", 0, KEY_READ | ACTION_VIEW, &key) ||
 		RegQueryValueExW(key, L"FromCustomAction", NULL, &type, (BYTE *)value, &size) || type != REG_SZ || !same(value, L"from-the-command-line"))
 		return 2;
+	RegCloseKey(key);
+	/* The package's registry rows, the temporary one included, go to the view of the package's own width. */
+	size = sizeof value;
+	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\RavenSample", 0, KEY_READ, &key) ||
+		RegQueryValueExW(key, L"FromTemporaryRow", NULL, &type, (BYTE *)value, &size) || type != REG_SZ || !same(value, L"from-the-command-line"))
+		return 6;
 	RegCloseKey(key);
 	size = MAX_PATH;
 	if (MsiGetComponentPathW(product, component, path, &size) != INSTALLSTATE_LOCAL)

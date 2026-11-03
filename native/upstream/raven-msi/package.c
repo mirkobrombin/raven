@@ -610,6 +610,8 @@ MSIHANDLE WINAPI MsiGetActiveDatabase(MSIHANDLE handle)
 			remote_call(package->remote, REMOTE_DATABASE_PATH, NULL, NULL, 0, &path, NULL);
 			if (path && db_open(path, (const WCHAR *)MSIDBOPEN_READONLY, &package->db))
 				package->db = NULL;
+			if (package->db)
+				package->db->remote = package->remote;
 			msi_free(path);
 		}
 		if (package->db) {

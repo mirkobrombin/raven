@@ -169,6 +169,7 @@ typedef struct {
 	WCHAR *applied_transforms;
 	void *summary_pending;
 	UINT media_transform_offset, media_transform_disk;
+	HANDLE remote;		// in a custom action host: the installer whose session this is a copy of
 } msi_db;
 
 #define DB_READONLY(db) ((db)->mode == (UINT)(ULONG_PTR)MSIDBOPEN_READONLY)
@@ -414,7 +415,7 @@ enum {
 	REMOTE_GET_PROPERTY = 1, REMOTE_SET_PROPERTY, REMOTE_TARGET_PATH, REMOTE_SOURCE_PATH, REMOTE_SET_TARGET,
 	REMOTE_MODE, REMOTE_SET_MODE, REMOTE_LANGUAGE, REMOTE_CONDITION, REMOTE_MESSAGE, REMOTE_FILE_PATH,
 	REMOTE_COMPONENT_STATE, REMOTE_FEATURE_STATE, REMOTE_SET_COMPONENT, REMOTE_SET_FEATURE, REMOTE_DATABASE_PATH,
-	REMOTE_DO_ACTION, REMOTE_SEQUENCE,
+	REMOTE_DO_ACTION, REMOTE_SEQUENCE, REMOTE_INSERT_ROW,
 };
 UINT remote_call(HANDLE pipe, UINT op, const WCHAR *a, const WCHAR *b, INT number, WCHAR **text, INT *result);
 DWORD WINAPI remote_serve(void *context);

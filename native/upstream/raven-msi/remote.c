@@ -79,6 +79,61 @@ static WCHAR *read_text(HANDLE pipe, UINT size)
 	return text;
 }
 
+// One value of a row a custom action added: the next value after it, or NULL when the text is not one.
+static const WCHAR *read_value(const WCHAR *at, msi_record *record, UINT field)
+{
+	WCHAR kind = *at++;
+	BOOL negative = *at == L'-';
+	at += negative;
+	LONGLONG number = 0;
+	while (*at >= L'0' && *at <= L'9' && number <= 0x7fffffff)
+		number = number * 10 + (*at++ - L'0');
+	if (*at++ != L';' || number > 0x80000000LL || (!negative && number > 0x7fffffff))
+		return NULL;
+	if (kind == L'N')
+		return at;
+	if (kind == L'I') {
+		if (record)
+			record_set_int(record, field, (INT)(negative ? -number : number));
+		return at;
+	}
+	if (kind != L'S' || negative)
+		return NULL;
+	for (LONGLONG i = 0; i < number; i++)
+		if (!at[i])
+			return NULL;
+	if (record) {
+		WCHAR *text = msi_copy_n(at, (SIZE_T)number);
+		record_set_text(record, field, text);
+		msi_free(text);
+	}
+	return at + number;
+}
+
+static UINT insert_row(msi_package *package, const WCHAR *query, const WCHAR *values)
+{
+	if (!query || !values)
+		return ERROR_INVALID_PARAMETER;
+	UINT count = 0;
+	for (const WCHAR *at = values; *at; count++)
+		if (!(at = read_value(at, NULL, 0)))
+			return ERROR_INVALID_PARAMETER;
+	MSIHANDLE view = 0;
+	UINT status = view_open(package->db, query, &view);
+	if (status)
+		return status;
+	msi_record *record = record_new(count);
+	UINT field = 1;
+	for (const WCHAR *at = values; *at; field++)
+		at = read_value(at, record, field);
+	MSIHANDLE handle = handle_open(&record->base);
+	object_unref(&record->base);
+	status = MsiViewModify(view, MSIMODIFY_INSERT_TEMPORARY, handle);
+	MsiCloseHandle(handle);
+	MsiCloseHandle(view);
+	return status;
+}
+
 static UINT serve_one(msi_package *package, UINT op, const WCHAR *a, const WCHAR *b, INT number, WCHAR **text, INT *result)
 {
 	MSIHANDLE session = package->session;
@@ -151,6 +206,8 @@ static UINT serve_one(msi_package *package, UINT op, const WCHAR *a, const WCHAR
 		return MsiDoActionW(session, a);
 	case REMOTE_SEQUENCE:
 		return MsiSequenceW(session, a, number);
+	case REMOTE_INSERT_ROW:
+		return insert_row(package, a, b);
 	}
 	return ERROR_INVALID_FUNCTION;
 }

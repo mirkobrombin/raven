@@ -13,6 +13,7 @@
         <Directory Id="INSTALLDIR" Name="RavenCustom">
           <Component Id="Payload" Guid="6b5a4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2d">
             <File Id="Hello" Name="hello.txt" Source="msi_payload.txt" KeyPath="yes"/>
+            <RegistryValue Root="HKLM" Key="Software\RavenSample" Name="FromPackage" Value="package" Type="string"/>
           </Component>
         </Directory>
       </Directory>
