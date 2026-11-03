@@ -10,5 +10,12 @@ interface rpc_replace
 		[string] wchar_t *name;
 	} named;
 
+	typedef struct holder
+	{
+		named *inner;
+	} holder;
+
 	void replace_name([in] handle_t binding, [in, out] named *item);
+	void take_name([in] handle_t binding, [in, unique] named *item);
+	void take_holder([in] handle_t binding, [in] holder *item);
 }

@@ -28,6 +28,7 @@ typedef struct walk_frame
 static void walk(MIDL_STUB_MESSAGE *m, ndr_op op, BYTE *memory, const BYTE *format);
 static void pointer_target(MIDL_STUB_MESSAGE *m, ndr_op op, void **slot, const BYTE *format, ULONG id);
 static void top_pointer(MIDL_STUB_MESSAGE *m, ndr_op op, void **slot, const BYTE *format);
+static void frame_run(MIDL_STUB_MESSAGE *m, ndr_op op, BYTE *memory, const BYTE *format);
 
 static SHORT read_short(const BYTE *at)
 {
@@ -407,7 +408,8 @@ static void pointer_target(MIDL_STUB_MESSAGE *m, ndr_op op, void **slot, const B
 				ndr_release_block(m, pointer);
 			return;
 		}
-		walk(m, NDR_FREE, pointer, target);
+		// The pointers the target holds are read from it, so they go, queued ones too, before the target does.
+		frame_run(m, NDR_FREE, pointer, target);
 		if (inside_buffer(m, pointer) || format[1] & (FC_DONT_FREE | FC_ALLOCED_ON_STACK))
 			return;
 		ndr_release_block(m, pointer);
