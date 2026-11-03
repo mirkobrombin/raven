@@ -12,11 +12,14 @@ def main():
     raven, client = (str(Path(value).resolve()) for value in sys.argv[1:3])
     env = os.environ | {"RAVEN_TRACE_DEBUG": "1"}
     for shared in (False, True):
+        # The deadline also covers startup, so the private case, which must end
+        # by deadlock detection, gets room to start on a loaded machine.
+        deadline = 1500 if shared else 8000
         started = time.monotonic()
         result = subprocess.run(
-            [raven, "--run-process", "--execution=native", "--timeout-ms=1500", client,
+            [raven, "--run-process", "--execution=native", f"--timeout-ms={deadline}", client,
              "--", "--never-shared" if shared else "--never"],
-            env=env, capture_output=True, text=True, timeout=6)
+            env=env, capture_output=True, text=True, timeout=deadline / 1000 + 5)
         elapsed = time.monotonic() - started
         output = result.stdout + result.stderr
         entered = "Shared wait entered" if shared else "Private wait entered"

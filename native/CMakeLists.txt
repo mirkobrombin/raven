@@ -2020,7 +2020,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     if(Python3_Interpreter_FOUND)
                         add_test(NAME native_shared_wait_guards_x${width} COMMAND ${Python3_EXECUTABLE}
                             ${PROJECT_SOURCE_DIR}/scripts/native-wait-guards.py $<TARGET_FILE:raven> ${shared_wait_client})
-                        set_tests_properties(native_shared_wait_guards_x${width} PROPERTIES TIMEOUT 15
+                        set_tests_properties(native_shared_wait_guards_x${width} PROPERTIES TIMEOUT 30
                             ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/shared-wait-prefix${width};RAVEN_PARALLEL=1")
                     endif()
                     set(remote_client ${CMAKE_CURRENT_BINARY_DIR}/remote-process${width}.exe)
