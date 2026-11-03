@@ -537,6 +537,31 @@ int main(int argc, char **argv)
 							for (const auto &descriptor : item.second->image.delay_imports())
 								visit(descriptor.imports);
 						}
+						// A small launcher that loads its own libraries by name later, as an updater loads the one that does its work,
+						// needs what they import as much as what it imports itself. A program that uses the window manager already gets
+						// every component, so only one that does not looks at the libraries beside it; so does a .NET program, whose
+						// assemblies fill its folder.
+						const bool assembly = entry->image.directories[14].address && entry->image.directories[14].size;
+						if (!names.contains("user32.dll") && !assembly) {
+							std::error_code error;
+							size_t seen = 0;
+							for (const auto &item : std::filesystem::directory_iterator(std::filesystem::absolute(argv[first_file]).parent_path(), error)) {
+								if (++seen > 256)
+									break;
+								const auto file = lower(item.path().filename().string());
+								if (!file.ends_with(".dll") || !item.is_regular_file(error) || item.file_size(error) > 32 * 1024 * 1024)
+									continue;
+								try {
+									if (const auto bytes = source(file)) {
+										const raven::PEImage image(*bytes);
+										visit(image.imports());
+										for (const auto &descriptor : image.delay_imports())
+											visit(descriptor.imports);
+									}
+								} catch (const std::exception &) {
+								}
+							}
+						}
 						while (!pending.empty()) {
 							const auto name = pending.back();
 							pending.pop_back();

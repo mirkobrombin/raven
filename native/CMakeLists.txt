@@ -2443,6 +2443,25 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_updater_x${width} COMMAND raven --run-process --execution=native ${updater_client})
                     set_tests_properties(native_updater_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/updater-prefix${width})
+                    # A launcher in a folder of its own, beside the one library it loads by name.
+                    set(launcher_folder ${CMAKE_CURRENT_BINARY_DIR}/launcher${width})
+                    file(MAKE_DIRECTORY ${launcher_folder})
+                    if(width EQUAL 32)
+                        set(launcher_library_entry -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp)
+                    else()
+                        set(launcher_library_entry -Wl,--entry,DllMain,--no-insert-timestamp)
+                    endif()
+                    add_custom_command(OUTPUT ${launcher_folder}/launcher.exe ${launcher_folder}/launcher_work.dll
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -shared ${launcher_library_entry}
+                            -o ${launcher_folder}/launcher_work.dll ${PROJECT_SOURCE_DIR}/testdata/native_loader/launcher_work.c -lkernel32 -luser32
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${launcher_folder}/launcher.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/launcher_client.c -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/launcher_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/launcher_work.c VERBATIM)
+                    add_custom_target(launcher_fixture${width} ALL DEPENDS ${launcher_folder}/launcher.exe ${launcher_folder}/launcher_work.dll)
+                    add_test(NAME native_launcher_library_x${width} COMMAND raven --run-process --execution=native ${launcher_folder}/launcher.exe)
+                    set_tests_properties(native_launcher_library_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/launcher-prefix${width})
                 endif()
             endforeach()
         endif()
