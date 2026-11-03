@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A package with DLL custom actions: one immediate that records a property, one deferred that fails on request. -->
+<!-- A package with DLL custom actions: one immediate that records a property, a rollback and a commit one that mark where they ran,
+     one deferred that fails on request. -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="3f6a2b1c-8d4e-4a7b-9c1d-2e3f4a5b6c7d" Name="Raven Custom" Language="1033" Version="1.0.0" Manufacturer="Raven" UpgradeCode="9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"/>
@@ -8,6 +9,8 @@
     <Binary Id="Actions" SourceFile="msi_action.dll"/>
     <CustomAction Id="WriteMarker" BinaryKey="Actions" DllEntry="WriteMarker" Execute="immediate" Return="check"/>
     <CustomAction Id="FailInstall" BinaryKey="Actions" DllEntry="FailInstall" Execute="deferred" Return="check"/>
+    <CustomAction Id="RecordRollback" BinaryKey="Actions" DllEntry="RecordRollback" Execute="rollback" Return="check"/>
+    <CustomAction Id="RecordCommit" BinaryKey="Actions" DllEntry="RecordCommit" Execute="commit" Return="check"/>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
         <Directory Id="INSTALLDIR" Name="RavenCustom">
@@ -23,6 +26,8 @@
     </Feature>
     <InstallExecuteSequence>
       <Custom Action="WriteMarker" After="InstallInitialize">NOT REMOVE</Custom>
+      <Custom Action="RecordRollback" Before="InstallFiles">NOT REMOVE</Custom>
+      <Custom Action="RecordCommit" Before="InstallFiles">NOT REMOVE</Custom>
       <Custom Action="FailInstall" After="InstallFiles">FAIL = "1"</Custom>
     </InstallExecuteSequence>
   </Product>

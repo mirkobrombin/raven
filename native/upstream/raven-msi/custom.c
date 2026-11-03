@@ -297,8 +297,10 @@ UINT custom_action_run(msi_package *package, const WCHAR *name, const WCHAR *dat
 	*handled = TRUE;
 	UINT status = ERROR_SUCCESS;
 	if (found.type & FLAG_IN_SCRIPT) {
-		if (found.type & (FLAG_ROLLBACK | FLAG_COMMIT))
-			package_log(L"Rollback and commit actions do not run here: %s", name);
+		// A rollback or commit action only means something in the script, beside the changes it undoes or makes final.
+		WCHAR *disabled = found.type & FLAG_ROLLBACK ? package_get(package, L"RollbackDisabled") : NULL;
+		if ((found.type & (FLAG_ROLLBACK | FLAG_COMMIT)) && (!package->in_script || (disabled && *disabled)))
+			package_log(L"Not scheduled, no script to undo or commit: %s", name);
 		else if (package->in_script) {
 			if (package->script_count == package->script_room) {
 				package->script_room = package->script_room ? package->script_room * 2 : 64;
@@ -309,6 +311,7 @@ UINT custom_action_run(msi_package *package, const WCHAR *name, const WCHAR *dat
 			package->script[package->script_count++] = entry;
 		} else
 			status = execute(package, name, found.type, found.source, found.target);
+		msi_free(disabled);
 	} else
 		status = execute(package, name, found.type, found.source, found.target);
 	msi_free(found.source);

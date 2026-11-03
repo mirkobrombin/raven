@@ -3,7 +3,8 @@
 #include <msiquery.h>
 
 /* Custom actions of the test package, run by the installer's custom action server: one records a package property in the registry,
-   directly and through a temporary row of the package's Registry table, the other fails the installation so that the installer rolls back what it did. */
+   directly and through a temporary row of the package's Registry table; two more mark where the installer runs its rollback and commit
+   actions, and the last fails the installation so that the installer rolls back what it did. */
 
 __declspec(dllexport) UINT __stdcall WriteMarker(MSIHANDLE install)
 {
@@ -32,6 +33,29 @@ __declspec(dllexport) UINT __stdcall WriteMarker(MSIHANDLE install)
 	MsiCloseHandle(view);
 	MsiCloseHandle(database);
 	return status ? ERROR_INSTALL_FAILURE : ERROR_SUCCESS;
+}
+
+/* The rollback and commit actions leave a mark only in the mode the installer runs them in. */
+static UINT mark(MSIHANDLE install, MSIRUNMODE mode, const WCHAR *name)
+{
+	HKEY key;
+	if (!MsiGetMode(install, mode))
+		return ERROR_INSTALL_FAILURE;
+	if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\RavenSample", 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL))
+		return ERROR_INSTALL_FAILURE;
+	RegSetValueExW(key, name, 0, REG_SZ, (const BYTE *)L"yes", sizeof L"yes");
+	RegCloseKey(key);
+	return ERROR_SUCCESS;
+}
+
+__declspec(dllexport) UINT __stdcall RecordRollback(MSIHANDLE install)
+{
+	return mark(install, MSIRUNMODE_ROLLBACK, L"FromRollback");
+}
+
+__declspec(dllexport) UINT __stdcall RecordCommit(MSIHANDLE install)
+{
+	return mark(install, MSIRUNMODE_COMMIT, L"FromCommit");
 }
 
 __declspec(dllexport) UINT __stdcall FailInstall(MSIHANDLE install)

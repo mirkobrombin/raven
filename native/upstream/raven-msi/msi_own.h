@@ -300,10 +300,12 @@ typedef struct {
 	WCHAR *source, *target;
 } script_entry;
 
-typedef enum { UNDO_FILE, UNDO_DIRECTORY, UNDO_REGISTRY } undo_kind;
+// A rollback custom action is undone as the changes are: it runs, in reverse order, only when the installation fails after it.
+typedef enum { UNDO_FILE, UNDO_DIRECTORY, UNDO_REGISTRY, UNDO_ACTION } undo_kind;
 
 typedef struct {
 	undo_kind kind;
+	script_entry action;
 	WCHAR *path, *backup;
 	HKEY root;
 	WCHAR *key, *name;
@@ -333,6 +335,8 @@ typedef struct {
 	UINT script_count, script_room;
 	undo_entry *undo;
 	UINT undo_count, undo_room;
+	script_entry *commits;	// the commit custom actions the script passed, run once it succeeds
+	UINT commit_count;
 	BOOL in_script, scheduled, rollback, commit, reboot_at_end, reboot_now, nested;
 	BOOL removing, maintenance, prepared, patched;
 	WCHAR *command_line;	// kept: it beats what a patch brings to the Property table
@@ -386,6 +390,7 @@ UINT install_run(msi_package *package);
 void undo_file(msi_package *package, const WCHAR *path, const WCHAR *backup);
 void undo_directory(msi_package *package, const WCHAR *path);
 void undo_registry(msi_package *package, HKEY root, const WCHAR *key, const WCHAR *name);
+void script_entry_free(script_entry *entry);
 UINT reg_write(msi_package *package, HKEY root, const WCHAR *key, const WCHAR *name, DWORD type, const void *data, DWORD size);
 UINT reg_write_text(msi_package *package, HKEY root, const WCHAR *key, const WCHAR *name, const WCHAR *text);
 UINT reg_write_number(msi_package *package, HKEY root, const WCHAR *key, const WCHAR *name, DWORD number);
