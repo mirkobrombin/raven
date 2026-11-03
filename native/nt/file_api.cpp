@@ -1651,7 +1651,51 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87);
 			return;
 		}
-		const auto text = paths.full(name);
+		const auto separator = [](char16_t c) { return c == u'\\' || c == u'/'; };
+		std::u16string text;
+		if (name.starts_with(u"\\\\?\\")) {
+			// A path in the Win32 file namespace is passed through as written.
+			text = name;
+		} else if (name.size() >= 2 && separator(name[0]) && separator(name[1])) {
+			// A device path (\\.\pipe\name) keeps \\.\ as its root, a UNC path its server and share; the rest loses its . and ..
+			// components, which never climb above the root.
+			size_t at = 2;
+			const bool device = name.size() >= 4 && (name[2] == u'.' || name[2] == u'?') && separator(name[3]);
+			if (device)
+				at = 4;
+			else
+				for (int part = 0; part < 2; ++part) {
+					while (at < name.size() && !separator(name[at]))
+						++at;
+					if (part == 0 && at < name.size())
+						++at;
+				}
+			text = u"\\\\" + name.substr(2, at - 2);
+			for (auto &character : text)
+				if (character == u'/')
+					character = u'\\';
+			const size_t root = text.size();
+			for (size_t start = at; start < name.size();) {
+				size_t end = start;
+				while (end < name.size() && !separator(name[end]))
+					++end;
+				const auto part = name.substr(start, end - start);
+				if (part == u"..") {
+					const auto slash = text.find_last_of(u'\\');
+					if (text.size() > root && slash != text.npos && slash >= root)
+						text.resize(slash);
+				} else if (!part.empty() && part != u".") {
+					if (!text.ends_with(u'\\'))
+						text.push_back(u'\\');
+					text += part;
+				}
+				start = end + 1;
+			}
+			if (separator(name.back()) && !text.ends_with(u'\\'))
+				text.push_back(u'\\');
+		} else {
+			text = paths.full(name);
+		}
 		if (text.empty()) {
 			call.fail(123);
 			return;

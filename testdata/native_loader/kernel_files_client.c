@@ -120,6 +120,10 @@ int raven_entry(void)
 
 	WCHAR full[260],*part=0;
 	CHECK(28,GetFullPathNameW(L"C:\\a\\b\\..\\c.txt",260,full,&part)==10 && same(full,L"C:\\a\\c.txt") && part==full+5);
+	/* Device and UNC paths keep their root; only what follows it is normalized. */
+	CHECK(53,GetFullPathNameW(L"\\\\.\\pipe\\one\\..\\two",260,full,&part)==12 && same(full,L"\\\\.\\pipe\\two") && part==full+9);
+	CHECK(54,GetFullPathNameW(L"\\\\server\\share\\a\\..\\..\\b",260,full,0)==16 && same(full,L"\\\\server\\share\\b"));
+	CHECK(55,GetFullPathNameW(L"\\\\?\\C:\\a\\..\\b",260,full,0)==13 && same(full,L"\\\\?\\C:\\a\\..\\b"));
 	CHECK(29,SetCurrentDirectoryW(work_no_slash));
 	WCHAR current[260];
 	CHECK(30,GetCurrentDirectoryW(260,current)==length(work_no_slash) && same(current,work_no_slash));
