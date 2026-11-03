@@ -39,6 +39,11 @@ struct CryptState {
 		uint32_t exponent;
 		size_t length;
 		std::vector<uint8_t> blob;
+		// The private exponent of a key pair that came in as a PRIVATEKEYBLOB, which also keeps that blob.
+		std::vector<uint32_t> secret_exponent;
+		std::vector<uint8_t> private_blob;
+		// The ALG_ID an RSA key's blob names: CALG_RSA_SIGN or CALG_RSA_KEYX.
+		uint32_t pair_algorithm = 0xa400;
 		// A session key: its ALG_ID and secret, the IV and mode CryptSetKeyParam set (CBC with a zero IV and PKCS #5 padding until
 		// then), and the IV a message reached between calls that are not final. A stream cipher keeps its state between calls.
 		uint32_t algorithm = 0;
@@ -53,6 +58,10 @@ struct CryptState {
 	// The values CryptSetHashParam gave hashes in place of what their data computes.
 	std::map<uint64_t, std::vector<uint8_t>> hash_values;
 	std::map<uint64_t, Key> keys;
+	// The provider each hash was made from, and the key pair a provider holds for signing (2) and for exchange (1); the pair stays
+	// with the provider after the handle the import gave is destroyed.
+	std::map<uint64_t, uint64_t> hash_provider;
+	std::map<std::pair<uint64_t, uint32_t>, Key> user_keys;
 	// Where each provider's enumeration of algorithms has got to.
 	std::map<uint64_t, size_t> enumeration;
 	uint64_t next = 0x1000;
@@ -152,8 +161,8 @@ std::optional<std::vector<uint8_t>> session_crypt(CryptState::Key &key, std::spa
 #endif
 }
 
-// RSA public keys and signature checks for CryptImportKey and CryptVerifySignature. Numbers are little-endian 32-bit words; the only
-// operation needed is s^e mod n with the public exponent, so multiplication and a shift-and-subtract remainder are enough.
+// RSA for CryptImportKey, CryptVerifySignature and CryptSignHash. Numbers are little-endian 32-bit words; s^e mod n with the public
+// exponent or the private one needs only multiplication and a shift-and-subtract remainder.
 using Words = std::vector<uint32_t>;
 
 Words words_from_bytes(std::span<const uint8_t> little_endian)
@@ -223,6 +232,23 @@ Words power_mod(const Words &base, uint32_t exponent, const Words &modulus)
 		result = multiply_mod(result, result, modulus);
 		if (exponent >> bit & 1)
 			result = multiply_mod(result, base, modulus);
+	}
+	return result;
+}
+
+Words power_mod(const Words &base, const Words &exponent, const Words &modulus)
+{
+	Words result(modulus.size());
+	result[0] = 1;
+	result = remainder(result, modulus);
+	const Words reduced = remainder(base, modulus);
+	size_t bits = exponent.size() * 32;
+	while (bits && !(exponent[(bits - 1) / 32] >> ((bits - 1) % 32) & 1))
+		--bits;
+	for (size_t bit = bits; bit-- > 0;) {
+		result = multiply_mod(result, result, modulus);
+		if (exponent[bit / 32] >> (bit % 32) & 1)
+			result = multiply_mod(result, reduced, modulus);
 	}
 	return result;
 }
@@ -1529,6 +1555,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	});
 	registry.add("CryptReleaseContext", 2, [crypt](ApiCall &call) {
 		crypt->providers.erase(call[0]);
+		std::erase_if(crypt->user_keys, [&](const auto &entry) { return entry.first.first == call[0]; });
 		call.ret(1);
 	});
 	// advapi32's MD5 keeps its state in the caller's MD5_CTX: the bit count (two words), the four state words, the pending bytes and
@@ -1584,6 +1611,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		}
 		const auto handle = crypt->next++;
 		crypt->hashes[handle] = std::move(digest);
+		crypt->hash_provider[handle] = call[0];
 		call.store_pointer(call[4], handle);
 		call.ret(1);
 	});
@@ -1629,7 +1657,8 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	// PUBLICKEYBLOB of an RSA key: BLOBHEADER (type 6, version, algorithm), RSAPUBKEY ("RSA1", bit length, exponent), then the modulus,
-	// least significant byte first. Private and session keys are not imported.
+	// least significant byte first. A PRIVATEKEYBLOB (type 7, "RSA2") goes on with the two primes, their exponents and coefficient,
+	// and the private exponent; the provider keeps that pair as its signature or exchange key, after the algorithm.
 	registry.add("CryptImportKey", 6, [crypt](ApiCall &call) {
 		if (!crypt->providers.contains(call[0])) {
 			call.fail(6);
@@ -1661,16 +1690,30 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			std::memcpy(&bits, blob.data() + 12, 4);
 			std::memcpy(&exponent, blob.data() + 16, 4);
 		}
-		if (blob.size() < 20 || blob[0] != 6 || magic != 0x31415352U || !bits || bits % 8 || blob.size() < 20 + bits / 8 || !exponent) {
+		const bool pair = blob.size() >= 20 && blob[0] == 7 && magic == 0x32415352U;
+		const size_t length = bits / 8, half = bits / 16;
+		if (blob.size() < 20 || !(pair || (blob[0] == 6 && magic == 0x31415352U)) || !bits || bits % 16 || blob.size() < 20 + length + (pair ? 5 * half + length : 0) ||
+			!exponent) {
 			call.fail(0x8009000aU);
 			return;
 		}
 		const auto handle = crypt->next++;
 		CryptState::Key key{};
-		key.modulus = words_from_bytes(std::span(blob).subspan(20, bits / 8));
+		key.modulus = words_from_bytes(std::span(blob).subspan(20, length));
 		key.exponent = exponent;
-		key.length = bits / 8;
-		key.blob.assign(blob.begin(), blob.begin() + 20 + bits / 8);
+		key.length = length;
+		key.blob.assign(blob.begin(), blob.begin() + 20 + length);
+		std::memcpy(&key.pair_algorithm, blob.data() + 4, 4);
+		if (key.pair_algorithm != 0x2400)
+			key.pair_algorithm = 0xa400;
+		if (pair) {
+			key.blob[0] = 6;
+			key.blob[11] = '1';
+			key.secret_exponent = words_from_bytes(std::span(blob).subspan(20 + length + 5 * half, length));
+			key.private_blob.assign(blob.begin(), blob.begin() + 20 + length + 5 * half + length);
+		}
+		if (pair)
+			crypt->user_keys[{call[0], key.pair_algorithm == 0x2400 ? 2U : 1U}] = key;
 		crypt->keys[handle] = std::move(key);
 		call.store_pointer(call[5], handle);
 		call.ret(1);
@@ -1728,6 +1771,8 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			std::memcpy(blob.data() + 8, &sealing, 4);
 			for (size_t at = 0; at < length; ++at)
 				blob[12 + at] = uint8_t(sealed[at / 4] >> (at % 4 * 8));
+		} else if (!key->second.algorithm && call.u32(2) == 7 && !call[1] && !key->second.private_blob.empty()) {
+			blob = key->second.private_blob;
 		} else if (key->second.algorithm || call.u32(2) != 6 || call[1]) {
 			call.fail(0x8009000aU);
 			return;
@@ -1912,7 +1957,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		case 4: dword(state.mode); break;
 		case 5: dword(state.mode_bits); break;
 		case 6: dword(0x3f); break;
-		case 7: dword(state.algorithm ? state.algorithm : 0xa400); break;
+		case 7: dword(state.algorithm ? state.algorithm : state.pair_algorithm); break;
 		case 8: dword(uint32_t(block * 8)); break;
 		case 9: dword(uint32_t(state.algorithm ? state.secret.size() * 8 : state.length * 8)); break;
 		default:
@@ -1976,6 +2021,68 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("CryptVerifySignatureW", 6, verify_signature);
 	registry.add("CryptVerifySignatureA", 6, verify_signature);
+	// CryptGetUserKey(provider, key spec, key): the key pair the provider holds for that use.
+	registry.add("CryptGetUserKey", 3, [crypt](ApiCall &call) {
+		const auto found = crypt->user_keys.find({call[0], call.u32(1)});
+		if (!crypt->providers.contains(call[0]) || found == crypt->user_keys.end()) {
+			call.fail(crypt->providers.contains(call[0]) ? 0x8009000dU : 6);
+			return;
+		}
+		// The handle is a copy of the pair the program may destroy on its own.
+		const auto handle = crypt->next++;
+		crypt->keys[handle] = found->second;
+		call.store_pointer(call[2], handle);
+		call.ret(1);
+	});
+	// CryptSignHash(hash, key spec, description, flags, signature, length): the PKCS #1 v1.5 signature with the private key of the
+	// provider the hash came from, least significant byte first; a null buffer asks for the length.
+	const auto sign_hash = [crypt](ApiCall &call) {
+		const auto hash = crypt->hashes.find(call[0]);
+		const auto provider = crypt->hash_provider.find(call[0]);
+		if (hash == crypt->hashes.end() || provider == crypt->hash_provider.end()) {
+			call.fail(6);
+			return;
+		}
+		const auto key = crypt->user_keys.find({provider->second, call.u32(1)});
+		if (key == crypt->user_keys.end() || key->second.secret_exponent.empty()) {
+			call.fail(0x8009000dU);
+			return;
+		}
+		const size_t length = key->second.length;
+		const uint32_t capacity = call.load<uint32_t>(call[5]);
+		call.store<uint32_t>(call[5], uint32_t(length));
+		if (!call[4]) {
+			call.ret(1);
+			return;
+		}
+		if (capacity < length) {
+			call.fail(234);
+			return;
+		}
+		const auto fixed = crypt->hash_values.find(call[0]);
+		const auto digest = fixed != crypt->hash_values.end() ? fixed->second : hash->second->clone()->finish();
+		auto message = (call.u32(3) & 1) ? std::vector<uint8_t>() : digest_info(digest.size());
+		message.insert(message.end(), digest.begin(), digest.end());
+		if (message.size() + 11 > length) {
+			call.fail(0x80090004U);
+			return;
+		}
+		// 00 01, ff bytes, 00, the message, most significant byte first; reversed into the order the arithmetic reads.
+		std::vector<uint8_t> encoded(length, 0xff);
+		encoded[0] = 0;
+		encoded[1] = 1;
+		encoded[length - message.size() - 1] = 0;
+		std::copy(message.begin(), message.end(), encoded.end() - std::ptrdiff_t(message.size()));
+		std::reverse(encoded.begin(), encoded.end());
+		const auto signature = power_mod(words_from_bytes(encoded), key->second.secret_exponent, key->second.modulus);
+		std::vector<uint8_t> bytes(length);
+		for (size_t at = 0; at < length; ++at)
+			bytes[at] = uint8_t(signature[at / 4] >> (at % 4 * 8));
+		call.write(call[4], bytes);
+		call.ret(1);
+	};
+	registry.add("CryptSignHashW", 6, sign_hash);
+	registry.add("CryptSignHashA", 6, sign_hash);
 	// The object identifiers of the algorithms above, as CryptFindOIDInfo describes them: CRYPT_OID_INFO with the OID, its name, its
 	// group (1 hashes, 3 public keys, 4 signatures), its ALG_ID, extra information (a signature's public key algorithm) and the CNG
 	// names. The table is written once into the program's memory and stays there, as the system's does.
@@ -2169,6 +2276,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	});
 	registry.add("CryptDestroyHash", 1, [crypt](ApiCall &call) {
 		crypt->hash_values.erase(call[0]);
+		crypt->hash_provider.erase(call[0]);
 		call.ret(crypt->hashes.erase(call[0]) ? 1 : 0);
 	});
 	// HP_HASHVAL gives a hash the value a program computed itself, as long as the algorithm's; other parameters are not supported.
