@@ -2761,7 +2761,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const bool apart = only_mapped && (as_data || (!image.is_64 && image.il_only()));
 			if (!image.is_64 && !apart)
 				throw LoadFailure{193};
-			if (!(image.characteristics & 0x2000) && !only_mapped)
+			// An image with no entry point maps and binds as a library even when it is not one, as the runtime loads a precompiled
+			// assembly built as a program: there is nothing of it to run.
+			const bool inert = image.is_64 && !image.entry;
+			if (!(image.characteristics & 0x2000) && !only_mapped && !inert)
 				throw LoadFailure{120};
 			if ((image.directories[13].address || image.directories[13].size) && !only_mapped)
 				for (const auto &descriptor : image.delay_imports())
@@ -2769,7 +2772,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						throw LoadFailure{120};
 			// Mixed managed and native code starts through its entry point like any library, which hands it to the runtime; an image
 			// of managed code alone is the runtime's to map, unless it is only mapped.
-			if (image.il_only() && !(unresolved && staged.empty()))
+			if (image.il_only() && !only_mapped && !inert)
 				throw LoadFailure{120};
 			staged.reserve(staged.size() + 1);
 			// A library read as data takes a name of its own, so that nothing loaded later resolves imports through it.

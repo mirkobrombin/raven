@@ -29,7 +29,7 @@ int main(int argc, char **argv)
 		if (argc != 3)
 			throw std::runtime_error("bootstrap and dynamic fixture directory required");
 		const std::filesystem::path directory(argv[2]);
-		for (const auto *mode : {"success", "missing", "dependency", "reject", "fault", "loop", "detach_fault", "detach_loop", "executable"}) {
+		for (const auto *mode : {"success", "missing", "dependency", "reject", "fault", "loop", "detach_fault", "detach_loop", "executable", "inert"}) {
 			raven::ModuleSet modules;
 			auto &entry = modules.add("client.exe", read_file(directory / "failure.exe"));
 			const std::string selected(mode);
@@ -38,15 +38,18 @@ int main(int argc, char **argv)
 					return read_file(directory / "tlsprobe.dll");
 				if (name != "probe.dll" || selected == "missing")
 					return std::nullopt;
-				const auto filename = selected == "success" || selected == "executable" ? "tlsprobe.dll" :
+				const auto filename = selected == "success" || selected == "executable" || selected == "inert" ? "tlsprobe.dll" :
 					selected == "dependency" ? "parent.dll" : selected + ".dll";
 				auto bytes = read_file(directory / filename);
-				if (selected == "executable") {
-					// A valid executable image is not a LoadLibrary DLL.
+				if (selected == "executable" || selected == "inert") {
+					// A valid executable image is not a LoadLibrary DLL, unless it has no entry point to run.
 					size_t offset = 22;
 					for (size_t index = 0; index < 4; ++index)
 						offset += size_t(bytes.at(0x3c + index)) << (index * 8);
 					bytes.at(offset + 1) &= static_cast<uint8_t>(~0x20U);
+					if (selected == "inert")
+						for (size_t index = 0; index < 4; ++index)
+							bytes.at(offset + 18 + index) = 0;
 				}
 				return bytes;
 			};
@@ -60,12 +63,12 @@ int main(int argc, char **argv)
 				check(result.stop == (selected.ends_with("fault") ? raven::NativeStop::fault : raven::NativeStop::timeout), "dynamic DLL did not propagate terminal stop");
 				check(entered == (selected.starts_with("detach_") ? 1 : 0), "dynamic DLL stop resumed the guest caller");
 			} else {
-				const uint64_t error = selected == "success" ? 0 : selected == "reject" ? 1114 : selected == "executable" ? 120 : 126;
+				const uint64_t error = selected == "success" || selected == "inert" ? 0 : selected == "reject" ? 1114 : selected == "executable" ? 120 : 126;
 				check(result.stop == raven::NativeStop::returned && result.value == error && entered == 1, "dynamic loader failure contract differs");
 				check(!modules.all().contains("probe.dll") && !modules.all().contains("tlsprobe.dll"), "dynamic rollback or release retained graph images");
 			}
 		}
-		std::cout << "Dynamic guest loading, dependency rollback, unsupported executable loading and terminal attach stops passed\n";
+		std::cout << "Dynamic guest loading, dependency rollback, unsupported executable loading, entry-less executable loading and terminal attach stops passed\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

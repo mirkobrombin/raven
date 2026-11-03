@@ -274,7 +274,7 @@ void NativeLoaderData::add(const PEModule &module)
 {
 	const auto found = modules.all().find(module.name);
 	if (found == modules.all().end() || found->second.get() != &module || nodes.contains(&module) ||
-		nodes.size() >= 10000 || !module.image.is_64 || !(module.image.characteristics & 0x2000) ||
+		nodes.size() >= 10000 || !module.image.is_64 || (!(module.image.characteristics & 0x2000) && module.image.entry) ||
 		module.name.size() > 32766 || std::any_of(module.name.begin(), module.name.end(), [](unsigned char c) { return c > 127; }))
 		throw std::runtime_error("invalid dynamic native loader module");
 	validate();
