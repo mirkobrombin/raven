@@ -381,7 +381,10 @@ std::optional<std::u16string> system_message(uint32_t id)
 		{0x80092004U, u"Cannot find object or property."}, {0x80092009U, u"Cannot find the requested object."}, {0x80091004U, u"Invalid cryptographic message type."},
 		{0x80090008U, u"The parameter is incorrect."}, {0x80090016U, u"Keyset does not exist"},
 	};
-	const auto found = messages.find(id);
+	// An HRESULT of the Win32 facility words the error it carries.
+	auto found = messages.find(id);
+	if (found == messages.end() && (id & 0xffff0000U) == 0x80070000U)
+		found = messages.find(id & 0xffffU);
 	if (found == messages.end())
 		return std::nullopt;
 	return std::u16string(found->second) + u"\r\n";

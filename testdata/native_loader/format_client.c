@@ -45,5 +45,9 @@ int raven_entry(void)
 	if (!FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 10, MAKELANGID(LANG_CHINESE, SUBLANG_NEUTRAL), buffer, 64, NULL) ||
 		buffer[0] != L'T')
 		return 6;
+	/* An HRESULT that carries a system error is worded as that error, as error dialogs and runtimes ask for it. */
+	if (!FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 0x8007007e, 0, buffer, 64, NULL) ||
+		lstrcmpW(buffer, L"The specified module could not be found.\r\n"))
+		return 7;
 	return 0;
 }
