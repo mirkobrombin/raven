@@ -194,6 +194,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         target_sources(raven_cpu PRIVATE desktop/text.cpp)
         target_link_libraries(raven_cpu PUBLIC raven_text)
         target_compile_definitions(raven_cpu PUBLIC RAVEN_SKIA=1 PRIVATE RAVEN_FONT_DIRECTORY="${RAVEN_FONT_DIRECTORY}")
+    else()
+        # Without Skia the build still succeeds, but GDI text is left out and a desktop program stops at its first text call.
+        message(WARNING "Skia and fonts not configured: GDI text is not built, and desktop programs stop at their first text call, such as "
+            "CreateFontW or GetTextMetricsW, with \"unimplemented native API\". Run scripts/provision-text.py and configure again with "
+            "RAVEN_SKIA_SOURCE, RAVEN_SKIA_LIBRARY and RAVEN_FONT_DIRECTORY, as the README shows.")
     endif()
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
