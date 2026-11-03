@@ -1758,7 +1758,8 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(context.allocator.release(call[0]));
 	});
 
-	// TLS and FLS indexes are process-wide; values belong to the thread whose TEB asks.
+	// TLS and FLS indexes are process-wide; values belong to the thread that asks, by its id: a new thread may get the thread block of one
+	// that ended, and must not find that thread's values.
 	struct Slots {
 		std::vector<bool> used;
 		std::vector<uint64_t> callbacks;
@@ -1838,7 +1839,7 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 				call.fail(87);
 				return;
 			}
-			auto &values = slots->values[environment.teb()];
+			auto &values = slots->values[environment.thread_id()];
 			call.set_last_error(0);
 			call.ret(index < values.size() ? values[index] : 0);
 		};
@@ -1852,7 +1853,7 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 				call.fail(87);
 				return;
 			}
-			auto &values = slots->values[environment.teb()];
+			auto &values = slots->values[environment.thread_id()];
 			if (values.size() < slots->used.size())
 				values.resize(slots->used.size());
 			values[index] = call[1];
