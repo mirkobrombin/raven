@@ -182,8 +182,9 @@ void NativeWindows::present(uint64_t handle, bool force)
 	if (handle==desktop) return;
 	handle=objects.window_root(handle);
 	if (!handle) throw uint32_t(1400);
-	if (!presentation.present) throw uint32_t(120);
 	dirty_roots.erase(handle);
+	// Without a display the frame has nowhere to go and is dropped; the window lives on as on a screen that is switched off.
+	if (!presentation.present) return;
 	// The compositor does not show a window or its controls as empty rectangles: while the window or a visible child of the same thread
 	// still waits for its first WM_PAINT, the frame is put off, for at most a quarter of a second (two seconds before the window first
 	// shows, as a program can take that long to paint it), so that everything appears painted together. A window that has painted once
@@ -1631,8 +1632,6 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 	const bool child=!message_only && (style & 0x40000000U)!=0;
 	const uint64_t owner_handle=message_only ? 0 : args[8];
 	const auto effective_style=message_only ? style & ~0x50000000U : style;
-	// A visible window needs somewhere to appear; headless runs can still create hidden windows.
-	if ((effective_style & 0x10000000U) && !presentation.present) throw uint32_t(120);
 	const auto *parent=child ? objects.window(args[8]) : nullptr;
 	if (child && (!parent || parent->destroying)) throw uint32_t(1400);
 	// An owner of a top-level window must be a top-level window; message-only parents (HWND_MESSAGE) are not modelled.
