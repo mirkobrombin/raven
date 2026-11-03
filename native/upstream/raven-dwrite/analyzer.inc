@@ -252,7 +252,7 @@ static HRESULT STDMETHODCALLTYPE ta_glyphs(IDWriteTextAnalyzer *self, const WCHA
 			FREE(codepoints);
 			return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
 		}
-		codepoints[made] = rtl ? mirrored(code) : code;
+		codepoints[made] = format_control(code) ? ' ' : rtl ? mirrored(code) : code;
 		clusters[position] = (UINT16)made;
 		memset(&text_properties[position], 0, sizeof(text_properties[position]));
 		if (units == 2) {
@@ -262,7 +262,7 @@ static HRESULT STDMETHODCALLTYPE ta_glyphs(IDWriteTextAnalyzer *self, const WCHA
 		memset(&glyph_properties[made], 0, sizeof(glyph_properties[made]));
 		glyph_properties[made].justification = is_space((WCHAR)code) ? JUSTIFY_BLANK : JUSTIFY_CHARACTER;
 		glyph_properties[made].isClusterStart = 1;
-		glyph_properties[made].isZeroWidthSpace = (analysis && analysis->shapes == DWRITE_SCRIPT_SHAPES_NO_VISUAL) || code == 0x200b;
+		glyph_properties[made].isZeroWidthSpace = (analysis && analysis->shapes == DWRITE_SCRIPT_SHAPES_NO_VISUAL) || format_control(code);
 		position += units;
 		++made;
 	}

@@ -16,7 +16,14 @@ typedef struct {
 	UINT16 *glyphs, *cluster_map;
 	FLOAT *advances;
 	float width, ascent, descent, gap;
+	IDWriteInlineObject *inline_object;
 } TextRun;
+
+/* A range of the text an inline object stands for: the program measures and draws it, the characters are not shown. */
+typedef struct {
+	IDWriteInlineObject *object;
+	UINT32 start, length;
+} InlineSpan;
 
 typedef struct {
 	UINT32 start, length, newline, trailing;
@@ -54,6 +61,8 @@ typedef struct {
 	/* IDWriteTextLayout1: for the whole text, whichever range they were set on. Spacing widens each glyph's advance. */
 	BOOL pair_kerning;
 	float leading_spacing, trailing_spacing, minimum_advance;
+	InlineSpan *spans;
+	UINT32 span_count;
 } TextLayout;
 
 #define LAYOUT_OF(self) ((TextLayout *)(self))
@@ -98,6 +107,9 @@ static ULONG STDMETHODCALLTYPE tl_release(IDWriteTextLayout *self)
 	if (!refs) {
 		UINT32 index;
 		free_lines(layout);
+		for (index = 0; index < layout->span_count; ++index)
+			IDWriteInlineObject_Release(layout->spans[index].object);
+		FREE(layout->spans);
 		if (layout->fallback)
 			IDWriteFontFallback_Release(layout->fallback);
 		if (layout->families)
@@ -383,6 +395,15 @@ static BOOL format_control(UINT32 code)
 	return code == 0xad || (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e) || (code >= 0x2060 && code <= 0x2064) || code == 0xfeff;
 }
 
+static const InlineSpan *span_at(const TextLayout *layout, UINT32 position)
+{
+	UINT32 index;
+	for (index = 0; index < layout->span_count; ++index)
+		if (position >= layout->spans[index].start && position - layout->spans[index].start < layout->spans[index].length)
+			return &layout->spans[index];
+	return NULL;
+}
+
 /* Builds a run of the characters [start, end) that share their font settings: glyphs, advances and the font's vertical metrics. */
 static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run)
 {
@@ -390,6 +411,7 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 	UINT32 position, count = 0;
 	UINT32 *codepoints;
 	BYTE *silent;
+	const InlineSpan *span;
 	memset(run, 0, sizeof(*run));
 	run->start = start;
 	run->length = end - start;
@@ -397,6 +419,28 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 	run->face = face_for(family_at(layout, start), (DWRITE_FONT_WEIGHT)layout->weights[start], layout->stretch, (DWRITE_FONT_STYLE)layout->styles[start]);
 	if (!run->face)
 		return FALSE;
+	if ((span = span_at(layout, start))) {
+		DWRITE_INLINE_OBJECT_METRICS object_metrics;
+		UINT32 index;
+		run->glyphs = ALLOC((end - start) * sizeof(UINT16));
+		run->cluster_map = ALLOC((end - start) * sizeof(UINT16));
+		run->advances = ALLOC((end - start) * sizeof(FLOAT));
+		if (!run->glyphs || !run->cluster_map || !run->advances || FAILED(IDWriteInlineObject_GetMetrics(span->object, &object_metrics)))
+			return FALSE;
+		for (index = 0; index < end - start; ++index) {
+			run->glyphs[index] = 0;
+			run->cluster_map[index] = 0;
+			run->advances[index] = 0;
+		}
+		/* The object's width belongs to its first character. */
+		if (start == span->start)
+			run->advances[0] = run->width = object_metrics.width;
+		run->glyph_count = 1;
+		run->ascent = object_metrics.baseline;
+		run->descent = object_metrics.height - object_metrics.baseline;
+		run->inline_object = span->object;
+		return TRUE;
+	}
 	codepoints = ALLOC((end - start) * sizeof(UINT32));
 	silent = ALLOC(end - start);
 	run->glyphs = ALLOC((end - start) * sizeof(UINT16));
@@ -426,6 +470,14 @@ static BOOL build_run(TextLayout *layout, UINT32 start, UINT32 end, TextRun *run
 	}
 	run->glyph_count = count;
 	IDWriteFontFace_GetGlyphIndices(run->face, codepoints, count, run->glyphs);
+	/* A font without the non-breaking hyphen shows the plain one, which looks the same. */
+	{
+		UINT32 glyph;
+		const UINT32 hyphen = '-';
+		for (glyph = 0; glyph < count; ++glyph)
+			if (codepoints[glyph] == 0x2011 && !run->glyphs[glyph])
+				IDWriteFontFace_GetGlyphIndices(run->face, &hyphen, 1, &run->glyphs[glyph]);
+	}
 	IDWriteFontFace_GetMetrics(run->face, &metrics);
 	{
 		UINT32 glyph;
@@ -560,7 +612,8 @@ static void relayout(TextLayout *layout)
 				UINT32 run_end = run_start + 1;
 				TextRun *run;
 				while (run_end < end && layout->sizes[run_end] == layout->sizes[run_start] && layout->weights[run_end] == layout->weights[run_start] &&
-					layout->styles[run_end] == layout->styles[run_start] && family_at(layout, run_end) == family_at(layout, run_start))
+					layout->styles[run_end] == layout->styles[run_start] && family_at(layout, run_end) == family_at(layout, run_start) &&
+					span_at(layout, run_end) == span_at(layout, run_start))
 					++run_end;
 				if (runs == limit_runs) {
 					TextRun *grown = ALLOC(limit_runs * 2 * sizeof(TextRun));
@@ -930,6 +983,13 @@ static HRESULT STDMETHODCALLTYPE tl_draw(IDWriteTextLayout *self, void *context,
 			DWRITE_GLYPH_RUN glyph_run;
 			DWRITE_GLYPH_RUN_DESCRIPTION description;
 			HRESULT result;
+			if (run->inline_object) {
+				if (run->width > 0 && FAILED(result = renderer->lpVtbl->DrawInlineObject(renderer, context, pen, top + line->baseline - run->ascent,
+					run->inline_object, FALSE, FALSE, NULL)))
+					return result;
+				pen += run->width;
+				continue;
+			}
 			memset(&glyph_run, 0, sizeof(glyph_run));
 			glyph_run.fontFace = run->face;
 			glyph_run.fontEmSize = run->size;
@@ -1023,12 +1083,50 @@ static void *Layout_table_[IDWriteTextLayout_methods + 4];
 static void *Format_table_[IDWriteTextFormat_methods + 8];
 static BOOL text_tables_ready;
 
-/* Inline objects are accepted and the text around them lays out as if they were absent. */
-static HRESULT STDMETHODCALLTYPE tl_set_inline(IDWriteTextLayout *self, IDWriteInlineObject *object, DWRITE_TEXT_RANGE range) { return S_OK; }
+static HRESULT STDMETHODCALLTYPE tl_set_inline(IDWriteTextLayout *self, IDWriteInlineObject *object, DWRITE_TEXT_RANGE range)
+{
+	TextLayout *layout = LAYOUT_OF(self);
+	UINT32 index, kept = 0;
+	InlineSpan *grown;
+	if (range.startPosition > layout->length || range.length > layout->length - range.startPosition)
+		return E_INVALIDARG;
+	/* A new range replaces the spans it overlaps. */
+	for (index = 0; index < layout->span_count; ++index) {
+		const InlineSpan span = layout->spans[index];
+		if (span.start < range.startPosition + range.length && range.startPosition < span.start + span.length)
+			IDWriteInlineObject_Release(span.object);
+		else
+			layout->spans[kept++] = span;
+	}
+	layout->span_count = kept;
+	layout->dirty = TRUE;
+	if (!object || !range.length)
+		return S_OK;
+	if (!(grown = ALLOC((kept + 1) * sizeof(InlineSpan))))
+		return E_OUTOFMEMORY;
+	if (kept)
+		memcpy(grown, layout->spans, kept * sizeof(InlineSpan));
+	FREE(layout->spans);
+	layout->spans = grown;
+	IDWriteInlineObject_AddRef(object);
+	grown[kept].object = object;
+	grown[kept].start = range.startPosition;
+	grown[kept].length = range.length;
+	layout->span_count = kept + 1;
+	return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE tl_get_inline(IDWriteTextLayout *self, UINT32 position, IDWriteInlineObject **object, DWRITE_TEXT_RANGE *range)
 {
-	if (object)
-		*object = NULL;
+	const InlineSpan *span = span_at(LAYOUT_OF(self), position);
+	if (object) {
+		*object = span ? span->object : NULL;
+		if (span)
+			IDWriteInlineObject_AddRef(span->object);
+	}
+	if (range && span) {
+		range->startPosition = span->start;
+		range->length = span->length;
+	}
 	return S_OK;
 }
 
