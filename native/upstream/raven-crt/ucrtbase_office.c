@@ -1165,7 +1165,7 @@ CRT void *bsearch_s(const void *key, const void *data, size_t count, size_t size
 
 /* ---- what the shared Office library and the rest of the suite import besides ---- */
 /* A long double is a double in this runtime, as in Microsoft's. */
-__asm__(".section .drectve\n\t.ascii \" -export:strtold=raven_strtod -export:_copysign=copysign -export:_nextafter=nextafter"
+__asm__(".section .drectve\n\t.ascii \" -export:strtold=raven_strtod -export:_copysign=copysign -export:_copysignf=copysignf -export:_nextafter=nextafter"
 	" -export:llroundl=llround -export:lgammal=lgamma -export:__std_terminate=terminate\"\n\t.text");
 CRT float lgammaf(float x) { return (float)lgamma(x); }
 CRT float coshf(float x) { return (float)cosh(x); }
