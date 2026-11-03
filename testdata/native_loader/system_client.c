@@ -144,6 +144,21 @@ int raven_entry(void)
 			offset+=entry->Size;
 		}
 		if(groups!=1) return 17;
+		USHORT count=0,array[2]={7,7};
+		if (GetProcessGroupAffinity(GetCurrentProcess(),&count,array) || GetLastError()!=ERROR_INSUFFICIENT_BUFFER || count!=1 || array[0]!=7)
+			return 18;
+		count=2;
+		if (!GetProcessGroupAffinity(GetCurrentProcess(),&count,array) || count!=1 || array[0]!=0)
+			return 19;
+		GROUP_AFFINITY affinity;
+		for (unsigned index=0;index<sizeof(affinity);++index) ((unsigned char *)&affinity)[index]=0xa5;
+		if (!GetThreadGroupAffinity(GetCurrentThread(),&affinity) || affinity.Mask!=system.dwActiveProcessorMask || affinity.Group ||
+			affinity.Reserved[0] || affinity.Reserved[1] || affinity.Reserved[2])
+			return 20;
+		if (GetActiveProcessorGroupCount()!=1 || GetMaximumProcessorGroupCount()!=1 ||
+			GetActiveProcessorCount(0)!=system.dwNumberOfProcessors || GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)!=system.dwNumberOfProcessors ||
+			GetMaximumProcessorCount(0)!=system.dwNumberOfProcessors || GetActiveProcessorCount(1))
+			return 21;
 	}
 	{
 		const int licensing=check_licensing();

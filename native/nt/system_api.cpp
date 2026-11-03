@@ -1016,6 +1016,42 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.store_pointer(call[2], processor_mask());
 		call.ret(1);
 	});
+	// The process runs in group 0 alone: the count goes back even when the array is too small for it.
+	registry.add("GetProcessGroupAffinity", 3, [](ApiCall &call) {
+		if (!call[1]) {
+			call.fail(87);
+			return;
+		}
+		const uint16_t capacity = call.load<uint16_t>(call[1]);
+		call.store<uint16_t>(call[1], 1);
+		if (!capacity || !call[2]) {
+			call.fail(122);
+			return;
+		}
+		call.store<uint16_t>(call[2], 0);
+		call.ret(1);
+	});
+	// GROUP_AFFINITY: a pointer-sized mask, the group and three reserved words.
+	registry.add("GetThreadGroupAffinity", 2, [processor_mask](ApiCall &call) {
+		if (!call[1]) {
+			call.fail(87);
+			return;
+		}
+		std::vector<uint8_t> affinity(call.pointer_width() + 8, 0);
+		const uint64_t mask = processor_mask();
+		for (size_t index = 0; index < call.pointer_width(); ++index)
+			affinity[index] = uint8_t(mask >> (index * 8));
+		call.write(call[1], affinity);
+		call.ret(1);
+	});
+	registry.add("GetActiveProcessorGroupCount", 0, [](ApiCall &call) { call.ret(1); });
+	registry.add("GetMaximumProcessorGroupCount", 0, [](ApiCall &call) { call.ret(1); });
+	// Group 0, or every group (0xffff), holds all the processors; any other group has none.
+	for (const char *name : {"GetActiveProcessorCount", "GetMaximumProcessorCount"})
+		registry.add(name, 1, [](ApiCall &call) {
+			const uint16_t group = uint16_t(call[0]);
+			call.ret(group && group != 0xffff ? 0 : uint32_t(std::clamp<long>(::sysconf(_SC_NPROCESSORS_ONLN), 1, 64)));
+		});
 	// Affinity is not enforced: the call reports the mask the thread had, which is every processor.
 	registry.add("SetProcessAffinityMask", 2, [](ApiCall &call) { call.ret(1); });
 	registry.add("SetProcessShutdownParameters", 2, [](ApiCall &call) { call.ret(1); });
