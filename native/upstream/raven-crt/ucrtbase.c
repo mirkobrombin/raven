@@ -732,6 +732,8 @@ CRT int fputc(int c, void *stream) { char byte = (char)c; return write_stream(st
 CRT int putchar(int c) { return fputc(c, __acrt_iob_func(1)); }
 CRT int puts(const char *text) { return fputs(text, __acrt_iob_func(1)) < 0 || putchar('\n') < 0 ? -1 : 0; }
 CRT int fflush(void *stream) { return 0; }
+/* Streams write through to their descriptor, so there is never anything waiting to be flushed. */
+CRT int _flushall(void) { return 0; }
 CRT int _fileno(void *stream) { return stream ? ((Stream *)stream)->index : -1; }
 static intptr_t descriptor_handle(int fd);
 CRT intptr_t _get_osfhandle(int fd) { return descriptor_handle(fd); }

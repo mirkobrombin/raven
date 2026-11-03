@@ -225,6 +225,31 @@ static int secure_scan(void)
 	return 0;
 }
 
+/* The entry points the .NET host and runtime import: an error message in UTF-16, a fused multiply-add, the time zone as functions. */
+static int runtime_helpers(void)
+{
+	HMODULE crt = GetModuleHandleA("ucrtbase.dll");
+	int (__cdecl *wide_error)(wchar_t *, size_t, int) = (void *)GetProcAddress(crt, "_wcserror_s");
+	double (__cdecl *fused)(double, double, double) = (void *)GetProcAddress(crt, "fma");
+	float (__cdecl *fused_float)(float, float, float) = (void *)GetProcAddress(crt, "fmaf");
+	int (__cdecl *flush_all)(void) = (void *)GetProcAddress(crt, "_flushall");
+	long *(__cdecl *zone)(void) = (void *)GetProcAddress(crt, "__timezone");
+	char **(__cdecl *zone_names)(void) = (void *)GetProcAddress(crt, "__tzname");
+	int (__cdecl *get_zone)(long *) = (void *)GetProcAddress(crt, "_get_timezone");
+	if (!wide_error || !fused || !fused_float || !flush_all || !zone || !zone_names || !get_zone) return 1;
+	wchar_t text[64];
+	if (wide_error(text, 64, 2) || lstrcmpW(text, L"No such file or directory")) return 2;
+	if (wide_error(text, 4, 2) || lstrcmpW(text, L"No ")) return 3;
+	/* 0.1 * 10 rounds to 1 on its own; fused, the product keeps the 2^-54 that 0.1 is off by. */
+	volatile double tenth = 0.1, ten = 10, one = 1;
+	if (fused(tenth, ten, -one) != 0x1p-54) return 4;
+	if (fused_float(2.0f, 3.0f, 1.0f) != 7.0f || fused(2, 3, 1) != 7) return 5;
+	if (flush_all() < 0) return 6;
+	long seconds = 0;
+	if (get_zone(&seconds) || *zone() != seconds || !zone_names()[0] || !zone_names()[1]) return 7;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	char line[64], big[64];
@@ -280,5 +305,7 @@ int raven_entry(void)
 	if ((count = office_helpers())) return 100 + (int)count;
 	if ((count = secure_scan()))
 		return 200 + (int)count;
+	if ((count = runtime_helpers()))
+		return 300 + (int)count;
 	return temp_names();
 }

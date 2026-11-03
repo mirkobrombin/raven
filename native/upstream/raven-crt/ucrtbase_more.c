@@ -47,6 +47,10 @@ CRT int _get_daylight(int *hours)
 	return 0;
 }
 
+CRT long *__timezone(void) { return &_timezone; }
+CRT int *__daylight(void) { return &_daylight; }
+CRT char **__tzname(void) { return _tzname; }
+
 static int day_of_year(int year, int month, int day)
 {
 	static const int before[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
@@ -909,6 +913,19 @@ CRT int strerror_s(char *buffer, size_t size, int code)
 	return 0;
 }
 
+CRT int _wcserror_s(wchar_t *buffer, size_t size, int code)
+{
+	if (!buffer || !size)
+		return 22;
+	const char *text = strerror(code);
+	size_t length = 0;
+	/* The messages are ASCII, so each byte is one character. */
+	for (; text[length] && length + 1 < size; ++length)
+		buffer[length] = (unsigned char)text[length];
+	buffer[length] = 0;
+	return 0;
+}
+
 /* ---- environment ---- */
 
 CRT wchar_t *_wgetenv(const wchar_t *name)
@@ -1221,6 +1238,29 @@ CRT double trunc(double x)
 }
 
 CRT float truncf(float x) { return (float)trunc(x); }
+
+/* x * y + z with the product kept exact: Veltkamp splitting gives the product's rounding error, a two-sum the addition's, and the
+ * result is rounded once from their sum. Operands past 2^995, where the split would overflow, and infinities or NaN take the plain
+ * expression. */
+CRT double fma(double x, double y, double z)
+{
+	if (x - x != 0 || y - y != 0 || z - z != 0 || x * x > 1e299 || y * y > 1e299)
+		return x * y + z;
+	const double split = 134217729.0;
+	double c = split * x;
+	const double xh = c - (c - x), xl = x - xh;
+	c = split * y;
+	const double yh = c - (c - y), yl = y - yh;
+	const double product = x * y;
+	const double product_error = ((xh * yh - product) + xh * yl + xl * yh) + xl * yl;
+	const double sum = product + z;
+	const double part = sum - product;
+	const double sum_error = (product - (sum - part)) + (z - part);
+	return sum + (sum_error + product_error);
+}
+
+/* The product of two floats is exact in a double. */
+CRT float fmaf(float x, float y, float z) { return (float)fma((double)x, (double)y, (double)z); }
 
 CRT double round(double x)
 {
