@@ -48,6 +48,9 @@ bool NativeEnvironment::system_information()
 {
 	require_current();
 	const auto args=process.api_arguments(4);
+	// The list of processes is the API layer's, which knows the other instances of the runtime.
+	if (uint32_t(args[0])==5)
+		return false;
 	uint32_t status=0;
 	try {
 		if (uint32_t(args[0])!=0)

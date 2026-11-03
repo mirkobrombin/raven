@@ -1035,8 +1035,7 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(length);
 		});
 	// Toolhelp lists retain the entries present when the snapshot was taken.
-	registry.add("CreateToolhelp32Snapshot", 2, [&objects, &context, module_list](ApiCall &call) {
-		const uint32_t flags = call.u32(0);
+	const auto take_snapshot = [&objects, &context, module_list](uint32_t flags) {
 		auto snapshot = std::make_shared<Snapshot>();
 		if (flags & 2) {
 			// Every running instance of the runtime is a Windows process here: the programs this one started, its parent, and the
@@ -1115,12 +1114,75 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 						append_threads(uint32_t(pid), *answer);
 			}
 		}
-		const auto made = objects.add_object(snapshot);
+		return snapshot;
+	};
+	registry.add("CreateToolhelp32Snapshot", 2, [&objects, take_snapshot](ApiCall &call) {
+		const auto made = objects.add_object(take_snapshot(call.u32(0)));
 		if (made.status) {
 			call.fail(4, UINT64_MAX);
 			return;
 		}
 		call.ret(made.value);
+	});
+	// SystemProcessInformation (class 5) lists the same processes as a Toolhelp snapshot: a SYSTEM_PROCESS_INFORMATION for each, its
+	// SYSTEM_THREAD_INFORMATION entries after it and its image name after those, linked by NextEntryOffset. A buffer too small is
+	// answered with STATUS_INFO_LENGTH_MISMATCH and the length needed. The runtime answers the other classes before this one is reached.
+	registry.add("NtQuerySystemInformation", 4, [take_snapshot](ApiCall &call) {
+		if (call.u32(0) != 5) {
+			call.ret(0xc0000003U);
+			return;
+		}
+		const auto snapshot = take_snapshot(2 | 4);
+		const bool wide = call.pointer_width() == 8;
+		const size_t process_size = wide ? 0x100 : 0xb8, thread_size = wide ? 0x50 : 0x40, width = call.pointer_width();
+		const size_t name_at = 0x38, priority_at = wide ? 0x48 : 0x40, id_at = wide ? 0x50 : 0x44;
+		std::vector<uint8_t> bytes;
+		const auto put = [&bytes](size_t at, uint64_t value, size_t size) { std::memcpy(bytes.data() + at, &value, size); };
+		for (const auto &process : snapshot->processes) {
+			const size_t at = bytes.size();
+			std::vector<const Snapshot::Thread *> threads;
+			for (const auto &thread : snapshot->threads)
+				if (thread.owner == process.id)
+					threads.push_back(&thread);
+			const size_t name_offset = process_size + threads.size() * thread_size;
+			const size_t length = (name_offset + (process.name.size() + 1) * 2 + 7) & ~size_t(7);
+			bytes.resize(at + length);
+			put(at + 4, threads.size(), 4);
+			put(at + name_at, process.name.size() * 2, 2);
+			put(at + name_at + 2, (process.name.size() + 1) * 2, 2);
+			put(at + priority_at, 8, 4);
+			put(at + id_at, process.id, width);
+			put(at + id_at + width, process.parent, width);
+			put(at + id_at + width * 2 + 4, 1, 4);
+			for (size_t index = 0; index < threads.size(); ++index) {
+				const size_t entry = at + process_size + index * thread_size, client = wide ? 0x28 : 0x20;
+				put(entry + client, process.id, width);
+				put(entry + client + width, threads[index]->id, width);
+				put(entry + client + width * 2, uint32_t(threads[index]->priority), 4);
+				put(entry + client + width * 2 + 4, 8, 4);
+				put(entry + client + width * 2 + 12, 5, 4);
+			}
+			std::memcpy(bytes.data() + at + name_offset, process.name.data(), process.name.size() * 2);
+			if (&process != &snapshot->processes.back())
+				put(at, length, 4);
+		}
+		if (call[3])
+			call.store<uint32_t>(call[3], uint32_t(bytes.size()));
+		if (call.u32(2) < bytes.size()) {
+			call.ret(0xc0000004U);
+			return;
+		}
+		// The names are read through pointers into the caller's own buffer.
+		size_t entry = 0;
+		for (const auto &process : snapshot->processes) {
+			const uint32_t threads = uint32_t(bytes[entry + 4] | bytes[entry + 5] << 8 | bytes[entry + 6] << 16 | bytes[entry + 7] << 24);
+			put(entry + name_at + (wide ? 8 : 4), process.name.empty() ? 0 : call[1] + entry + process_size + threads * thread_size, width);
+			uint32_t next = 0;
+			std::memcpy(&next, bytes.data() + entry, 4);
+			entry += next;
+		}
+		call.write(call[1], bytes);
+		call.ret(0);
 	});
 	// PROCESSENTRY32: sizes, the process and parent ids, the thread count and the file name; the default heap and module ids are zero.
 	const auto process_entry = [](ApiCall &call, const Snapshot::Process &process, bool wide) {

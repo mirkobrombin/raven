@@ -130,7 +130,7 @@ constexpr std::string_view shared_allowed[] = {
 	"WaitForSingleObjectEx",
 	// ICONINFO is read at the program's pointer width.
 	"CreateIconIndirect",
-	"EnumProcesses", "K32EnumProcesses",
+	"EnumProcesses", "K32EnumProcesses", "NtQuerySystemInformation",
 	"QueryFullProcessImageNameW", "QueryFullProcessImageNameA",
 	"NtQueryInformationProcess", "NtReadVirtualMemory", "NtWriteVirtualMemory", "ReadProcessMemory", "WriteProcessMemory", "OpenProcess",
 	"NtSetInformationThread", "NtOpenThreadToken", "NtOpenThreadTokenEx", "NtOpenThread", "NtOpenProcess", "NtOpenProcessToken", "NtOpenProcessTokenEx", "NtQueryInformationThread", "OpenThread", "GetThreadId",
