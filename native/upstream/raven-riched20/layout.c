@@ -331,6 +331,27 @@ static void release_editor_dc(re_editor *editor, HDC dc)
 		ReleaseDC(NULL, dc);
 }
 
+// EN_REQUESTRESIZE asks for the window's own width, as the native control and Wine do, not the narrower formatting rectangle:
+// a program that resizes the control to the request would otherwise shrink it on every notification without end.
+void re_request_resize(re_editor *editor)
+{
+	REQRESIZE request;
+	RECT view, client = {0, 0, 0, 0};
+	memset(&request, 0, sizeof(request));
+	re_view_rect(editor, &view);
+	if (editor->host)
+		ITextHost_TxGetClientRect(editor->host, &client);
+	else if (editor->hwnd)
+		GetClientRect(editor->hwnd, &client);
+	else
+		client = view;
+	request.rc = view;
+	request.rc.left = client.left;
+	request.rc.right = client.right;
+	request.rc.bottom = view.top + editor->layout.total_height;
+	re_send_notify(editor, EN_REQUESTRESIZE, &request.nmhdr);
+}
+
 void re_layout_update(re_editor *editor)
 {
 	RECT view;
@@ -343,13 +364,8 @@ void re_layout_update(re_editor *editor)
 		width = MulDiv(editor->target_width, GetDeviceCaps(dc, LOGPIXELSX), 1440);
 	re_layout_document(editor, dc, &editor->layout, width, 1, 1);
 	release_editor_dc(editor, dc);
-	if (editor->event_mask & ENM_REQUESTRESIZE) {
-		REQRESIZE request;
-		memset(&request, 0, sizeof(request));
-		request.rc = view;
-		request.rc.bottom = request.rc.top + editor->layout.total_height;
-		re_send_notify(editor, EN_REQUESTRESIZE, &request.nmhdr);
-	}
+	if (editor->event_mask & ENM_REQUESTRESIZE)
+		re_request_resize(editor);
 }
 
 INT re_line_at(const re_layout *layout, INT at, BOOL at_line_start)

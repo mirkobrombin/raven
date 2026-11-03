@@ -236,6 +236,7 @@ void re_position(re_editor *editor, INT at, BOOL at_line_start, POINT *out, INT 
 INT re_char_from_point(re_editor *editor, INT x, INT y, BOOL *at_line_start);
 void re_paint(re_editor *editor, HDC dc, const RECT *update);
 void re_view_rect(re_editor *editor, RECT *out);
+void re_request_resize(re_editor *editor);
 void re_update_caret(re_editor *editor);
 void re_scroll_to_caret(re_editor *editor);
 void re_update_scrollbars(re_editor *editor);
