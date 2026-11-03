@@ -10,8 +10,9 @@ rollback custom actions; its commit custom actions run once the installation has
 Library custom actions run in an `msiexec` host of the library's own width, talking to the installer over
 a pipe. VBScript custom actions run in the installer's own interpreter, which knows the language's statements
 and common functions and the session, installer and record objects; it creates no COM objects and has no
-classes. Products installed by Click-to-Run answer the queries from their package's manifests.
+classes. .NET assemblies go into the global cache through the fusion of the newest framework installed,
+which checks their strong names, and Win32 ones into the side-by-side store. Products installed by
+Click-to-Run answer the queries from their package's manifests.
 
-Absent: the internal dialogs (every level installs without them), patches, advertising, JScript custom
-actions and assemblies in the global cache. Those calls answer with the documented status for the
-situation. See [LICENSES.md](../../../LICENSES.md).
+Absent: the internal dialogs (every level installs without them), patches, advertising and JScript custom
+actions. Those calls answer with the documented status for the situation. See [LICENSES.md](../../../LICENSES.md).
