@@ -5,8 +5,9 @@
 /* Raven shell component: classes registered in the registry, as COM finds them on Windows.
  *
  * A class is looked up under HKEY_CLASSES_ROOT\CLSID\{class}\InprocServer32, whose default value names the library that serves it;
- * the library is loaded and its DllGetClassObject asked for the class factory. Program identifiers lead to their class through
- * HKEY_CLASSES_ROOT\<identifier>\CLSID, following CurVer when the identifier is version independent. */
+ * the library is loaded and its DllGetClassObject asked for the class factory. A class a Windows service serves as a local server is
+ * served the same way. Program identifiers lead to their class through HKEY_CLASSES_ROOT\<identifier>\CLSID, following CurVer when
+ * the identifier is version independent. */
 #define CINTERFACE
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -26,15 +27,16 @@ static void class_key(REFCLSID clsid, const WCHAR *subkey, WCHAR *key)
 	lstrcatW(key, subkey);
 }
 
-/* The default value of a key under HKEY_CLASSES_ROOT, with environment variables expanded; FALSE when there is none. */
-static BOOL class_value(const WCHAR *key, WCHAR *value, DWORD capacity)
+/* A value of a key under HKEY_CLASSES_ROOT, the default one without a name, with environment variables expanded; FALSE when there is
+ * none. */
+static BOOL named_value(const WCHAR *key, const WCHAR *name, WCHAR *value, DWORD capacity)
 {
 	WCHAR raw[MAX_PATH];
 	DWORD type = 0, size = sizeof raw;
 	HKEY handle;
 	if (RegOpenKeyExW(HKEY_CLASSES_ROOT, key, 0, KEY_READ, &handle))
 		return FALSE;
-	const LONG status = RegQueryValueExW(handle, NULL, NULL, &type, (BYTE *)raw, &size);
+	const LONG status = RegQueryValueExW(handle, name, NULL, &type, (BYTE *)raw, &size);
 	RegCloseKey(handle);
 	if (status || (type != REG_SZ && type != REG_EXPAND_SZ) || size < sizeof(WCHAR))
 		return FALSE;
@@ -45,11 +47,29 @@ static BOOL class_value(const WCHAR *key, WCHAR *value, DWORD capacity)
 	return TRUE;
 }
 
+static BOOL class_value(const WCHAR *key, WCHAR *value, DWORD capacity)
+{
+	return named_value(key, NULL, value, capacity);
+}
+
+/* Whether a class belongs to an application that a Windows service runs, as HKEY_CLASSES_ROOT\AppID\{application} names it with its
+ * LocalService value. Raven runs no services, and serves their classes in the process of the program that asks for them. */
+static BOOL service_class(REFCLSID clsid)
+{
+	WCHAR key[MAX_PATH], application[64], service[MAX_PATH];
+	class_key(clsid, L"", key);
+	if (!named_value(key, L"AppID", application, 64))
+		return FALSE;
+	lstrcpyW(key, L"AppID\\");
+	lstrcatW(key, application);
+	return named_value(key, L"LocalService", service, MAX_PATH);
+}
+
 HRESULT raven_registered_class_object(REFCLSID clsid, DWORD context, REFIID iid, void **out)
 {
 	WCHAR key[MAX_PATH], library[MAX_PATH];
 	*out = NULL;
-	if (!(context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)))
+	if (!(context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) && !((context & CLSCTX_LOCAL_SERVER) && service_class(clsid)))
 		return REGDB_E_CLASSNOTREG;
 	class_key(clsid, L"\\InprocServer32", key);
 	if (!class_value(key, library, MAX_PATH))

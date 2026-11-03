@@ -3541,6 +3541,39 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     # A machine without an address beyond loopback answers 30, disconnected, which is as correct.
                     set_tests_properties(native_netlist_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned (0|30) ")
                 endforeach()
+                # raven-bits.dll, the background transfer manager of BITS for each width: Raven code on the public headers that downloads
+                # through WinHTTP. Its trace of methods nobody wrote goes to the runtime through ravenhost.dll.
+                set(bits_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-bits)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-bits.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-bits.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_DLLTOOL} -d ${taskschd_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-bits64.a
+                    COMMAND ${RAVEN_DLLTOOL32} -k -d ${taskschd_source}/ravenhost32.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-bits32.a
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-bits.dll
+                        ${bits_source}/bits.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-bits64.a
+                        -lwinhttp -lole32 -ladvapi32 -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-bits.dll
+                        ${bits_source}/bits.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-bits32.a
+                        -lwinhttp -lole32 -ladvapi32 -lkernel32 -lgcc
+                    DEPENDS ${bits_source}/bits.c ${taskschd_source}/ravenhost64.def ${taskschd_source}/ravenhost32.def VERBATIM)
+                add_custom_target(bits_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-bits.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-bits.dll)
+                foreach(width 64 32)
+                    set(bits_client ${CMAKE_CURRENT_BINARY_DIR}/bits-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(bits_compiler ${RAVEN_MINGW64})
+                        set(bits_entry raven_entry)
+                    else()
+                        set(bits_compiler ${RAVEN_MINGW32})
+                        set(bits_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${bits_client}
+                        COMMAND ${bits_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${bits_entry},--no-insert-timestamp
+                            -o ${bits_client} ${LOADER_SOURCES}/bits_client.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                            -lole32 -lws2_32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/bits_client.c VERBATIM)
+                    add_custom_target(bits_fixture${width} ALL DEPENDS ${bits_client} bits_component)
+                    add_test(NAME native_bits_x${width} COMMAND raven --run-process --execution=native ${bits_client})
+                    set_tests_properties(native_bits_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
                 # avrt.dll and mfplat.dll: the multimedia scheduler a media library registers its threads with, and the Media Foundation
                 # factories it makes its samples, types and buffers with, for each width.
                 set(media_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-media)

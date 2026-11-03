@@ -130,8 +130,9 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 // hosts, meta host and strong names in mscoree, which programs and the Framework's own libraries create through COM, and the Task
 // Scheduler, which installers use to start a program once they finish, the accessibility annotation services of oleacc, which
 // programs create for their windows' controls, the MSXML 6.0 classes, which the XML component serves beside its own, the network list,
-// which programs ask whether they are online, the package manager of the Windows Runtime, and the factories of the packaging API, which
-// package managers read .appx and .msix packages with. A hive that lacks them, a new one or one made before they were registered, gets them.
+// which programs ask whether they are online, the package manager of the Windows Runtime, the factories of the packaging API, which
+// package managers read .appx and .msix packages with, and the background transfer manager of each BITS version, which bootstrappers
+// download through. A hive that lacks them, a new one or one made before they were registered, gets them.
 void NativeRegistry::register_runtime_classes()
 {
 	static constexpr std::pair<const char16_t *, const char16_t *> classes[] = {{u"{E5CB7A31-7512-11D2-89CE-0080C792E5D8}", u"mscoree.dll"},
@@ -144,7 +145,10 @@ void NativeRegistry::register_runtime_classes()
 		{u"{88D96A0B-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{88D96A0C-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"},
 		{u"{88D96A0E-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{88D96A0F-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"},
 		{u"{88D96A11-F192-11D4-A65F-0040963251E5}", u"msxml3.dll"}, {u"{DCB00C01-570F-4A9B-8D69-199FDBA5723B}", u"raven-netlist.dll"},
-		{u"{5842A140-FF9F-4166-8F5C-62F5B7B0C781}", u"raven-appx.dll"}, {u"{378E0446-5384-43B7-8877-E7DBDD883446}", u"raven-appx.dll"}};
+		{u"{5842A140-FF9F-4166-8F5C-62F5B7B0C781}", u"raven-appx.dll"}, {u"{378E0446-5384-43B7-8877-E7DBDD883446}", u"raven-appx.dll"},
+		{u"{4991D34B-80A1-4291-83B6-3328366B9097}", u"raven-bits.dll"}, {u"{F087771F-D74F-4C1A-BB8A-E16ACA9124EA}", u"raven-bits.dll"},
+		{u"{6D18AD12-BDE3-4393-B311-099C346E6DF9}", u"raven-bits.dll"}, {u"{03CA98D6-FF5D-49B8-ABC6-03DD84127020}", u"raven-bits.dll"},
+		{u"{659CDEA7-489E-11D9-A9CD-000D56965251}", u"raven-bits.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;
@@ -168,6 +172,28 @@ void NativeRegistry::register_runtime_classes()
 			store(key, u"ThreadingModel", u"Both");
 			close(key);
 		}
+	// The transfer manager is a local service on Windows, which programs ask for as a local server: its classes name the service's
+	// application, and the application names the service, which tells COM to serve them in the process.
+	static constexpr const char16_t *bits_application = u"{69AD4AEE-51BE-439B-A92C-86AE490E8B30}";
+	const std::u16string application = std::u16string(u"AppID\\") + bits_application;
+	if (!keys.contains(fold(u"HKEY_CLASSES_ROOT\\" + application))) {
+		for (const bool wow : {false, true})
+			for (const auto &[clsid, library] : classes) {
+				uint64_t key = 0;
+				uint32_t disposition = 0;
+				if (std::u16string_view(library) != u"raven-bits.dll" ||
+					create(0x80000000ULL, std::u16string(wow ? u"Wow6432Node\\CLSID\\" : u"CLSID\\") + clsid, key, disposition))
+					continue;
+				store(key, u"AppID", bits_application);
+				close(key);
+			}
+		uint64_t key = 0;
+		uint32_t disposition = 0;
+		if (!create(0x80000000ULL, application, key, disposition)) {
+			store(key, u"LocalService", u"BITS");
+			close(key);
+		}
+	}
 	// Scripts create the scheduler, and programs the MSXML 6.0 classes, by name.
 	static constexpr std::pair<const char16_t *, const char16_t *> names[] = {{u"Schedule.Service", u"{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}"},
 		{u"Msxml2.DOMDocument.6.0", u"{88D96A05-F192-11D4-A65F-0040963251E5}"}, {u"Msxml2.FreeThreadedDOMDocument.6.0", u"{88D96A06-F192-11D4-A65F-0040963251E5}"},
