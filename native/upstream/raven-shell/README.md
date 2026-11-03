@@ -11,6 +11,8 @@ public Windows headers. It supplies what the system libraries of the guest canno
 - `ExtractIconExW` and `ExtractIconW`: the icons of a program, a library or an .ico file, at the system's large and small sizes.
 - UI Automation's reserved "not supported" and "mixed attribute" values, one object each for the process.
 - the task allocator, through `CoGetMalloc` and the shell's `SHGetMalloc`.
+- the error objects of automation (`errorinfo.c`): `CreateErrorInfo` makes one, `SetErrorInfo` hands it to the calling thread and
+  `GetErrorInfo` takes it back, once.
 - the free-threaded marshaler (`CoCreateFreeThreadedMarshaler`), which agile objects aggregate: it marshals interface pointers between
   the apartments of the process as the pointers themselves.
 - streams over registry values (`SHOpenRegStream`, `SHOpenRegStream2`, `OpenRegStream`), written back when a writable one is released.

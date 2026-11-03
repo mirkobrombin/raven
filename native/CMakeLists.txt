@@ -3400,6 +3400,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(stream_fixture${width} ALL DEPENDS ${stream_client})
                     add_test(NAME native_global_stream_x${width} COMMAND raven --run-process --execution=native ${stream_client})
                     set_tests_properties(native_global_stream_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(errorinfo_client ${CMAKE_CURRENT_BINARY_DIR}/errorinfo-client${width}.exe)
+                    add_custom_command(OUTPUT ${errorinfo_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${errorinfo_client} ${LOADER_SOURCES}/errorinfo_client.c -loleaut32 -luuid -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/errorinfo_client.c VERBATIM)
+                    add_custom_target(errorinfo_fixture${width} ALL DEPENDS ${errorinfo_client})
+                    add_test(NAME native_error_info_x${width} COMMAND raven --run-process --execution=native ${errorinfo_client})
+                    set_tests_properties(native_error_info_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(msxml6_client ${CMAKE_CURRENT_BINARY_DIR}/msxml6-client${width}.exe)
                     add_custom_command(OUTPUT ${msxml6_client}
                         COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
