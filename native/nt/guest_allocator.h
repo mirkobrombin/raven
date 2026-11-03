@@ -48,6 +48,7 @@ private:
 	std::map<uint64_t, uint64_t> movable_blocks, moved_blocks;
 	std::set<uint64_t> empty;
 	bool release_block(uint64_t address);
+	void forget(uint64_t address);
 };
 
 }

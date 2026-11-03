@@ -906,6 +906,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(atom_fixture ALL DEPENDS ${ATOM_FIXTURE})
             add_test(NAME native_atoms COMMAND raven --run-process --execution=native ${ATOM_FIXTURE})
             set_tests_properties(native_atoms PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native process exited with status 0")
+            set(LOCAL_REUSE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/local-reuse-client.exe)
+            add_custom_command(OUTPUT ${LOCAL_REUSE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O1 -o ${LOCAL_REUSE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/local_reuse_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/local_reuse_client.c VERBATIM)
+            add_custom_target(local_reuse_fixture ALL DEPENDS ${LOCAL_REUSE_FIXTURE})
+            add_test(NAME native_local_reuse COMMAND raven --run-process --execution=native ${LOCAL_REUSE_FIXTURE})
+            set_tests_properties(native_local_reuse PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native process exited with status 0")
             set(ZONE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/zone-client.exe)
             add_custom_command(OUTPUT ${ZONE_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O1 -o ${ZONE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/zone_client.c -lurlmon -lole32 -luuid

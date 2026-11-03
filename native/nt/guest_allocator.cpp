@@ -19,8 +19,13 @@ size_t size_class(uint64_t size)
 
 uint64_t GuestAllocator::allocate(uint64_t size, bool zero)
 {
-	if (heap.available())
-		return heap.allocate(zero ? 8 : 0, std::max<uint64_t>(size, 1));
+	if (heap.available()) {
+		const auto address = heap.allocate(zero ? 8 : 0, std::max<uint64_t>(size, 1));
+		// The program may have freed an earlier block at this address with HeapFree, which this allocator never sees: what it still
+		// remembers of that block (an empty request, a movable handle) belongs to nothing now and must not apply to the new one.
+		forget(address);
+		return address;
+	}
 	if (size <= largest_shared) {
 		const size_t index = size_class(std::max<uint64_t>(size, 1));
 		const uint64_t block = uint64_t(16) << index;
@@ -52,6 +57,19 @@ uint64_t GuestAllocator::allocate(uint64_t size, bool zero)
 		return 0;
 	pages.emplace(range.address, std::max<uint64_t>(size, 1));
 	return range.address;
+}
+
+void GuestAllocator::forget(uint64_t address)
+{
+	empty.erase(address);
+	if (const auto moved = moved_blocks.find(address); moved != moved_blocks.end()) {
+		movable_blocks.erase(moved->second);
+		moved_blocks.erase(moved);
+	}
+	if (const auto handle = movable_blocks.find(address); handle != movable_blocks.end()) {
+		moved_blocks.erase(handle->second);
+		movable_blocks.erase(handle);
+	}
 }
 
 uint64_t GuestAllocator::allocate_movable(uint64_t size, bool zero)
