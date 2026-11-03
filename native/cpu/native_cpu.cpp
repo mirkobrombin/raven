@@ -1698,7 +1698,7 @@ NativeResult NativeProcess::callback(uint64_t address, std::span<const uint64_t>
 		throw std::runtime_error(std::string("native callback requires a pending API call (last API ") + api_in_progress + ")");
 	}
 	if (state->callbacks.size() >= 64)
-		throw std::runtime_error("native callback exceeds initial nesting limit");
+		throw std::runtime_error(std::string("native callback exceeds initial nesting limit (last API ") + api_in_progress + ")");
 	// The procedure called keeps the nonvolatile vector and control registers, as the calling convention requires, and the volatile
 	// ones are the API call's to change: the general registers are all that has to come back.
 	NativeContext saved{};
