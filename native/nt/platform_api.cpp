@@ -50,6 +50,8 @@ struct CryptState {
 	};
 	std::map<uint64_t, bool> providers;
 	std::map<uint64_t, std::unique_ptr<Digest>> hashes;
+	// The values CryptSetHashParam gave hashes in place of what their data computes.
+	std::map<uint64_t, std::vector<uint8_t>> hash_values;
 	std::map<uint64_t, Key> keys;
 	// Where each provider's enumeration of algorithms has got to.
 	std::map<uint64_t, size_t> enumeration;
@@ -656,6 +658,10 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		static std::atomic<bool> done{false};
 		call.ret(done.exchange(true) ? 0x80010119U : s_ok);
 	});
+	// Interfaces are marshalled by the objects themselves within one process, so a proxy class for an interface and the
+	// authentication of a proxy have nothing to change.
+	registry.add("CoRegisterPSClsid", 2, [](ApiCall &call) { call.ret(call[0] && call[1] ? s_ok : 0x80070057U); });
+	registry.add("CoSetProxyBlanket", 8, [](ApiCall &call) { call.ret(call[0] ? s_ok : 0x80070057U); });
 	const auto uninitialize = [com, &context, ole_flags](ApiCall &call) {
 		const uint64_t thread = context.environment.teb();
 		auto found = com->threads.find(thread);
@@ -1374,6 +1380,24 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[0], std::vector<uint8_t>(call.pointer_width() == 4 ? 16 : 32));
 		call.ret(1);
 	});
+	// The default WinHTTP proxy is none, as on a machine where netsh never set one; setting one is accepted and not used.
+	registry.add("WinHttpGetDefaultProxyConfiguration", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(87);
+			return;
+		}
+		std::vector<uint8_t> info(call.pointer_width() == 4 ? 12 : 24);
+		info[0] = 1;
+		call.write(call[0], info);
+		call.ret(1);
+	});
+	registry.add("WinHttpSetDefaultProxyConfiguration", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(87);
+			return;
+		}
+		call.ret(1);
+	});
 	registry.add("WinHttpDetectAutoProxyConfigUrl", 2, [](ApiCall &call) { call.fail(12180); });
 	registry.add("WinHttpGetProxyForUrl", 4, [](ApiCall &call) {
 		if (!call[3]) {
@@ -1589,7 +1613,8 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(0x80090008U);
 			return;
 		}
-		auto value = found->second->clone()->finish();
+		const auto fixed = crypt->hash_values.find(call[0]);
+		auto value = fixed != crypt->hash_values.end() ? fixed->second : found->second->clone()->finish();
 		const uint32_t capacity = call.load<uint32_t>(call[3]);
 		call.store<uint32_t>(call[3], uint32_t(value.size()));
 		if (!call[2]) {
@@ -1934,7 +1959,8 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint8_t> encoded(key->second.length);
 		for (size_t at = 0; at < encoded.size(); ++at)
 			encoded[encoded.size() - 1 - at] = uint8_t(message[at / 4] >> (at % 4 * 8));
-		const auto digest = hash->second->clone()->finish();
+		const auto fixed = crypt->hash_values.find(call[0]);
+		const auto digest = fixed != crypt->hash_values.end() ? fixed->second : hash->second->clone()->finish();
 		auto expected = (call.u32(5) & 1) ? std::vector<uint8_t>() : digest_info(digest.size());
 		expected.insert(expected.end(), digest.begin(), digest.end());
 		bool valid = encoded.size() >= expected.size() + 11 && encoded[0] == 0 && encoded[1] == 1;
@@ -1950,6 +1976,92 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("CryptVerifySignatureW", 6, verify_signature);
 	registry.add("CryptVerifySignatureA", 6, verify_signature);
+	// The object identifiers of the algorithms above, as CryptFindOIDInfo describes them: CRYPT_OID_INFO with the OID, its name, its
+	// group (1 hashes, 3 public keys, 4 signatures), its ALG_ID, extra information (a signature's public key algorithm) and the CNG
+	// names. The table is written once into the program's memory and stays there, as the system's does.
+	struct OidEntry {
+		const char *oid;
+		std::u16string_view name;
+		uint32_t group, algorithm, extra;
+		std::u16string_view cng, cng_extra;
+	};
+	static constexpr OidEntry oid_entries[] = {
+		{"1.2.840.113549.2.5", u"md5", 1, 0x8003, 0, u"MD5", u""},
+		{"1.3.14.3.2.26", u"sha1", 1, 0x8004, 0, u"SHA1", u""},
+		{"2.16.840.1.101.3.4.2.1", u"sha256", 1, 0x800c, 0, u"SHA256", u""},
+		{"2.16.840.1.101.3.4.2.2", u"sha384", 1, 0x800d, 0, u"SHA384", u""},
+		{"2.16.840.1.101.3.4.2.3", u"sha512", 1, 0x800e, 0, u"SHA512", u""},
+		{"1.2.840.113549.1.1.1", u"RSA", 3, 0xa400, 0, u"RSA", u""},
+		{"1.2.840.113549.1.1.4", u"md5RSA", 4, 0x8003, 0x2400, u"MD5", u"RSA"},
+		{"1.2.840.113549.1.1.5", u"sha1RSA", 4, 0x8004, 0x2400, u"SHA1", u"RSA"},
+		{"1.2.840.113549.1.1.11", u"sha256RSA", 4, 0x800c, 0x2400, u"SHA256", u"RSA"},
+		{"1.2.840.113549.1.1.12", u"sha384RSA", 4, 0x800d, 0x2400, u"SHA384", u"RSA"},
+		{"1.2.840.113549.1.1.13", u"sha512RSA", 4, 0x800e, 0x2400, u"SHA512", u"RSA"},
+	};
+	auto oid_table = std::make_shared<uint64_t>(0);
+	registry.add("CryptFindOIDInfo", 3, [oid_table, &context](ApiCall &call) {
+		const size_t width = call.pointer_width();
+		// cbSize, pszOID, pwszName, dwGroupId, Algid, ExtraInfo (cbData, pbData), pwszCNGAlgid, pwszCNGExtraAlgid.
+		const size_t oid_at = width, name_at = 2 * width, group_at = 3 * width, algorithm_at = group_at + 4, extra_size_at = group_at + 8,
+			extra_at = width == 8 ? 40 : 24, cng_at = extra_at + width, cng_extra_at = cng_at + width, entry_size = cng_extra_at + width;
+		constexpr size_t text_room = 64;
+		const size_t count = std::size(oid_entries), strings_at = count * entry_size;
+		if (!*oid_table) {
+			const uint64_t base = context.allocator.allocate(strings_at + count * (text_room * 7), true);
+			if (!base) {
+				call.ret(0);
+				return;
+			}
+			for (size_t index = 0; index < count; ++index) {
+				const auto &item = oid_entries[index];
+				const uint64_t entry = base + index * entry_size, text = base + strings_at + index * text_room * 7;
+				call.store<uint32_t>(entry, uint32_t(entry_size));
+				call.put_narrow(text, item.oid, text_room);
+				call.store_pointer(entry + oid_at, text);
+				call.put_wide(text + text_room, item.name, text_room);
+				call.store_pointer(entry + name_at, text + text_room);
+				call.store<uint32_t>(entry + group_at, item.group);
+				call.store<uint32_t>(entry + algorithm_at, item.algorithm);
+				if (item.extra) {
+					call.store<uint32_t>(text + text_room * 3, item.extra);
+					call.store<uint32_t>(entry + extra_size_at, 4);
+					call.store_pointer(entry + extra_at, text + text_room * 3);
+				}
+				call.put_wide(text + text_room * 4, item.cng, text_room);
+				call.store_pointer(entry + cng_at, text + text_room * 4);
+				call.put_wide(text + text_room * 5 + text_room / 2, item.cng_extra, text_room);
+				call.store_pointer(entry + cng_extra_at, text + text_room * 5 + text_room / 2);
+			}
+			*oid_table = base;
+		}
+		const uint32_t key_type = call.u32(0), group = call.u32(2) & 0xffff;
+		const auto fold = [](std::u16string text) {
+			for (auto &character : text)
+				if (character >= u'a' && character <= u'z')
+					character = char16_t(character - 32);
+			return text;
+		};
+		for (size_t index = 0; index < count; ++index) {
+			const auto &item = oid_entries[index];
+			if (group && group != item.group)
+				continue;
+			bool found = false;
+			// CRYPT_OID_INFO_OID_KEY, _NAME_KEY, _ALGID_KEY and _SIGN_KEY (the hash and the public key ALG_IDs).
+			if (key_type == 1 && call[1])
+				found = call.narrow(call[1], 64) == item.oid;
+			else if (key_type == 2 && call[1])
+				found = fold(call.wide(call[1], 64)) == fold(std::u16string(item.name));
+			else if (key_type == 3 && call[1])
+				found = call.load<uint32_t>(call[1]) == item.algorithm && item.group != 4;
+			else if (key_type == 4 && call[1])
+				found = item.group == 4 && call.load<uint32_t>(call[1]) == item.algorithm && call.load<uint32_t>(call[1] + 4) == item.extra;
+			if (found) {
+				call.ret(*oid_table + index * entry_size);
+				return;
+			}
+		}
+		call.ret(0);
+	});
 	// The providers CryptAcquireContext opens for each type when it is given no name: the base RSA provider and the AES one.
 	registry.add("CryptGetDefaultProviderW", 5, [](ApiCall &call) {
 		const uint32_t type = call.u32(0);
@@ -2056,7 +2168,26 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("CryptDestroyHash", 1, [crypt](ApiCall &call) {
+		crypt->hash_values.erase(call[0]);
 		call.ret(crypt->hashes.erase(call[0]) ? 1 : 0);
+	});
+	// HP_HASHVAL gives a hash the value a program computed itself, as long as the algorithm's; other parameters are not supported.
+	registry.add("CryptSetHashParam", 4, [crypt](ApiCall &call) {
+		const auto found = crypt->hashes.find(call[0]);
+		if (found == crypt->hashes.end()) {
+			call.fail(6);
+			return;
+		}
+		if (call.u32(1) != 2) {
+			call.fail(0x80090008U);
+			return;
+		}
+		if (!call[2]) {
+			call.fail(87);
+			return;
+		}
+		crypt->hash_values[call[0]] = call.read(call[2], found->second->size());
+		call.ret(1);
 	});
 }
 

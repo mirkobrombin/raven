@@ -45,6 +45,8 @@ public:
 		std::u16string path;
 	};
 	uint32_t info(uint64_t key, Info &result) const;
+	// RegOverridePredefKey: a predefined root of this process stands for an open key until the override is removed with key 0.
+	uint32_t override_root(uint64_t root, uint64_t key);
 
 private:
 	struct Value { std::u16string name; uint32_t type; std::vector<uint8_t> data; };
@@ -61,6 +63,7 @@ private:
 	void refresh() const;
 	std::map<std::u16string, Key> keys;
 	std::map<uint64_t, std::u16string> open_keys;
+	std::map<uint64_t, std::u16string> overrides;
 	uint64_t next = 0x300;
 	std::function<uint64_t()> allocate;
 	std::function<void(uint64_t)> release;

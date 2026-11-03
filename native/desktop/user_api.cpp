@@ -122,6 +122,23 @@ void NativeWindows::register_api(ApiRegistry &registry)
 		call.put_wide(call[0], text, text.size() + 1);
 		call.ret(call[0]);
 	});
+	// The Buff forms change that many characters in place, zeros included, and answer how many they processed.
+	for (const bool lower : {true, false})
+		registry.add(lower ? "CharLowerBuffW" : "CharUpperBuffW", 2, [lower](ApiCall &call) {
+			if (!call[0] || !call.u32(1)) {
+				call.ret(0);
+				return;
+			}
+			auto bytes = call.read(call[0], size_t(call.u32(1)) * 2);
+			for (size_t at = 0; at + 1 < bytes.size(); at += 2) {
+				const auto character = char16_t(bytes[at] | bytes[at + 1] << 8);
+				const char16_t changed = lower ? fold_case(character) : upper_case(character);
+				bytes[at] = uint8_t(changed);
+				bytes[at + 1] = uint8_t(changed >> 8);
+			}
+			call.write(call[0], bytes);
+			call.ret(call.u32(1));
+		});
 	registry.add("IsCharAlphaW", 1, [](ApiCall &call) { call.ret(std::iswalpha(wint_t(call.u32(0) & 0xffff)) != 0); });
 	registry.add("IsCharAlphaNumericW", 1, [](ApiCall &call) { call.ret(std::iswalnum(wint_t(call.u32(0) & 0xffff)) != 0); });
 	registry.add("IsCharLowerW", 1, [](ApiCall &call) { call.ret(std::iswlower(wint_t(call.u32(0) & 0xffff)) != 0); });

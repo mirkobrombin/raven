@@ -2432,6 +2432,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_thread_snapshot_x${width} COMMAND raven --run-process --execution=native ${snapshot_client} -- an argument)
                     set_tests_properties(native_thread_snapshot_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/thread-snapshot-prefix${width})
+                    # What an updater asks of the machine and of the program it hands over to before it installs a newer version.
+                    set(updater_client ${CMAKE_CURRENT_BINARY_DIR}/updater${width}.exe)
+                    add_custom_command(OUTPUT ${updater_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${updater_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/updater_client.c -lkernel32 -luser32 -ladvapi32 -lshlwapi -lshell32 -lcrypt32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/updater_client.c VERBATIM)
+                    add_custom_target(updater_fixture${width} ALL DEPENDS ${updater_client})
+                    add_test(NAME native_updater_x${width} COMMAND raven --run-process --execution=native ${updater_client})
+                    set_tests_properties(native_updater_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/updater-prefix${width})
                 endif()
             endforeach()
         endif()

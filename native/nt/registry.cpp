@@ -459,7 +459,11 @@ bool NativeRegistry::resolve(uint64_t parent, std::u16string_view path, std::u16
 {
 	std::u16string base;
 	std::u16string shown;
-	if (predefined(parent)) {
+	const auto overridden = predefined(parent) ? overrides.find(uint32_t(parent)) : overrides.end();
+	if (overridden != overrides.end() && keys.contains(overridden->second)) {
+		base = overridden->second;
+		shown = keys.at(base).path;
+	} else if (predefined(parent)) {
 		static const char16_t *const names[] = {u"HKEY_CLASSES_ROOT", u"HKEY_CURRENT_USER", u"HKEY_LOCAL_MACHINE", u"HKEY_USERS"};
 		shown = names[uint32_t(parent) - 0x80000000U];
 		base = fold(shown);
@@ -548,6 +552,21 @@ uint32_t NativeRegistry::open(uint64_t parent, std::u16string_view path, uint64_
 	if (!key)
 		return 8;
 	open_keys.emplace(key, folded);
+	return 0;
+}
+
+uint32_t NativeRegistry::override_root(uint64_t root, uint64_t key)
+{
+	if (!predefined(root))
+		return bad_handle;
+	if (!key) {
+		overrides.erase(uint32_t(root));
+		return 0;
+	}
+	const auto found = open_keys.find(key);
+	if (found == open_keys.end())
+		return bad_handle;
+	overrides[uint32_t(root)] = found->second;
 	return 0;
 }
 

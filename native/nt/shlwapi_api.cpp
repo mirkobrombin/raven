@@ -794,6 +794,43 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(!path.empty() && root_length(path) == path.size());
 	});
 	registry.add("PathIsUNCW", 1, [](ApiCall &call) { call.ret(is_unc_root(call.wide(call[0]))); });
+	// The part two paths share, compared without case and ending at a whole component: C:\win\a and c:\win\b share C:\win, two
+	// paths on one drive share at least its root, and two UNC paths nothing unless their server is the same.
+	const auto common_prefix = [](const std::u16string &left, const std::u16string &right) {
+		const bool unc = left.starts_with(u"\\\\") && right.starts_with(u"\\\\");
+		size_t at = 0, common = 0;
+		while (at < left.size() && at < right.size() && upper_case(left[at]) == upper_case(right[at])) {
+			if (left[at] == u'\\' && !(unc && at < 2))
+				common = at == 2 && left[1] == u':' ? 3 : at;
+			++at;
+		}
+		const auto ends = [](const std::u16string &text, size_t at) { return at == text.size() || text[at] == u'\\'; };
+		if (ends(left, at) && ends(right, at))
+			common = at;
+		if (unc && left.find(u'\\', 2) != std::u16string::npos && common < left.find(u'\\', 2))
+			common = 0;
+		return common;
+	};
+	registry.add("PathCommonPrefixW", 3, [common_prefix](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.ret(0);
+			return;
+		}
+		const auto left = call.wide(call[0]);
+		const size_t common = common_prefix(left, call.wide(call[1]));
+		if (call[2])
+			call.put_wide(call[2], left.substr(0, common), 260);
+		call.ret(common);
+	});
+	// A prefix is a path the other one begins with, whole components and all.
+	registry.add("PathIsPrefixW", 2, [common_prefix](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.ret(0);
+			return;
+		}
+		const auto prefix = call.wide(call[0]);
+		call.ret(!prefix.empty() && common_prefix(prefix, call.wide(call[1])) == prefix.size());
+	});
 	registry.add("PathIsNetworkPathW", 1, [](ApiCall &call) { call.ret(is_unc_root(call.wide(call[0]))); });
 	registry.add("PathIsFileSpecW", 1, [](ApiCall &call) { call.ret(call.wide(call[0]).find_first_of(u"\\/:") == std::u16string::npos); });
 	registry.add("PathGetDriveNumberW", 1, [](ApiCall &call) {

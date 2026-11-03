@@ -72,21 +72,25 @@ std::optional<std::vector<uint8_t>> sid_from_text(std::u16string text)
 	size_t count = 0;
 	if (text.size() < 5 || text[0] != u'S' || text[1] != u'-' || text[2] != u'1' || text[3] != u'-')
 		return std::nullopt;
-	for (size_t at = 4; at < text.size() && count < 16;) {
+	// The authority and up to 15 subauthorities (SID_MAX_SUB_AUTHORITIES), as capability SIDs carry ten.
+	size_t at = 4;
+	while (at < text.size()) {
+		if (count == 16)
+			return std::nullopt;
 		unsigned long long value = 0;
 		size_t digits = 0;
-		while (at < text.size() && text[at] >= u'0' && text[at] <= u'9') {
+		while (at < text.size() && text[at] >= u'0' && text[at] <= u'9' && digits < 16) {
 			value = value * 10 + (text[at] - u'0');
 			++at;
 			++digits;
 		}
-		if (!digits || (at < text.size() && text[at] != u'-'))
+		if (!digits || (at < text.size() && text[at] != u'-') || value > (count ? 0xffffffffULL : 0xffffffffffffULL))
 			return std::nullopt;
 		numbers[count++] = value;
-		if (at < text.size())
-			++at;
+		if (at < text.size() && ++at == text.size())
+			return std::nullopt;
 	}
-	if (count < 2 || count > 9)
+	if (count < 2)
 		return std::nullopt;
 	std::vector<uint8_t> sid{1, uint8_t(count - 1), 0, 0, 0, 0, 0, 0};
 	for (int index = 0; index < 6; ++index)
@@ -1000,12 +1004,7 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// The descriptor of a kernel object, self-relative: the user owns what the process made, with the user's domain group, and a DACL that is
 	// present but null leaves the object open to everyone, which is how the runtime checks access to its objects.
-	registry.add("NtQuerySecurityObject", 5, [&objects](ApiCall &call) {
-		if (call[0] != UINT64_MAX && call[0] != UINT64_MAX - 1 && !objects.object(call[0])) {
-			call.ret(0xc0000008U);
-			return;
-		}
-		const uint32_t wanted = call.u32(1);
+	const auto object_descriptor = [](uint32_t wanted) {
 		const auto sid = [](uint32_t last) {
 			std::vector<uint8_t> bytes{1, 5, 0, 0, 0, 0, 0, 5};
 			for (const uint32_t value : {21u, 1000u, 1000u, 1000u, last})
@@ -1028,10 +1027,34 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		if (wanted & 4)
 			control |= 0x4;
 		std::memcpy(descriptor.data() + 2, &control, 2);
+		return descriptor;
+	};
+	registry.add("NtQuerySecurityObject", 5, [&objects, object_descriptor](ApiCall &call) {
+		if (call[0] != UINT64_MAX && call[0] != UINT64_MAX - 1 && !objects.object(call[0])) {
+			call.ret(0xc0000008U);
+			return;
+		}
+		const auto descriptor = object_descriptor(call.u32(1));
 		if (call[4])
 			call.store<uint32_t>(call[4], uint32_t(descriptor.size()));
 		if (call.u32(3) < descriptor.size()) {
 			call.ret(0xc0000023U);
+			return;
+		}
+		call.write(call[2], descriptor);
+		call.ret(0);
+	});
+	// A registry key answers the same descriptor as the runtime's objects; the size needed comes back with ERROR_INSUFFICIENT_BUFFER.
+	registry.add("RegGetKeySecurity", 4, [object_descriptor](ApiCall &call) {
+		if (!call[0] || !call[3]) {
+			call.ret(!call[0] ? 6 : 87);
+			return;
+		}
+		const auto descriptor = object_descriptor(call.u32(1));
+		const uint32_t capacity = call.load<uint32_t>(call[3]);
+		call.store<uint32_t>(call[3], uint32_t(descriptor.size()));
+		if (capacity < descriptor.size() || !call[2]) {
+			call.ret(122);
 			return;
 		}
 		call.write(call[2], descriptor);

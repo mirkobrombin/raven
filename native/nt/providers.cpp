@@ -1592,6 +1592,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
 		"RtlUnicodeToMultiByteSize", "RtlIsTextUnicode", "RtlImageNtHeader", "NtDeleteKey",
+		// What a browser installer looks up about the machine it runs on.
+		"RtlGetDeviceFamilyInfoEnum", "RtlConvertDeviceFamilyInfoToString",
 		// The unwinding of 64-bit frames, which libraries built with their own exception handling import.
 		"RtlCaptureContext", "RtlLookupFunctionEntry", "RtlPcToFileHeader", "RtlVirtualUnwind", "RtlUnwindEx",
 		// What the .NET runtime imports from ntdll: the function tables of the code it compiles, and the restoring of a context.
