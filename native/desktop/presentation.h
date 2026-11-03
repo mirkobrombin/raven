@@ -79,6 +79,8 @@ struct DesktopPresentation {
 	// The pointer over the program's windows: a system cursor by its IDC_ identifier (32512 the arrow), or none for 0.
 	std::function<void(uint32_t shape)> cursor;
 	HostPlatform platform = HostPlatform::wayland;
+	// Minimizes a top-level window to the host's taskbar, keeping its surface; absent, a minimized window is removed from the screen.
+	std::function<void(uint64_t)> minimize;
 };
 
 }

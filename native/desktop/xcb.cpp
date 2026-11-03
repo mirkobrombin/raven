@@ -41,10 +41,10 @@ template <typename T> struct Reply {
 
 constexpr const char *atom_names[]={"WM_PROTOCOLS","WM_DELETE_WINDOW","WM_NAME","WM_CLASS","_NET_WM_NAME","UTF8_STRING","STRING","TEXT",
 	"CLIPBOARD","TARGETS","text/plain;charset=utf-8","text/plain","RAVEN_SELECTION","INCR","_NET_WM_STATE","_NET_WM_STATE_MAXIMIZED_VERT",
-	"_NET_WM_STATE_MAXIMIZED_HORZ","_NET_WM_MOVERESIZE","_MOTIF_WM_HINTS","_NET_WM_WINDOW_TYPE","_NET_WM_WINDOW_TYPE_POPUP_MENU","ATOM"};
+	"_NET_WM_STATE_MAXIMIZED_HORZ","_NET_WM_MOVERESIZE","_MOTIF_WM_HINTS","_NET_WM_WINDOW_TYPE","_NET_WM_WINDOW_TYPE_POPUP_MENU","ATOM","WM_CHANGE_STATE","WM_STATE"};
 enum Atom { wm_protocols, wm_delete_window, wm_name, wm_class, net_wm_name, utf8_string, string_type, text_type, clipboard, targets,
 	text_utf8, text_plain, raven_selection, incr, net_wm_state, maximized_vert, maximized_horz, net_wm_moveresize, motif_hints,
-	window_type, window_type_popup, atom_type, atom_count };
+	window_type, window_type_popup, atom_type, wm_change_state, wm_state, atom_count };
 
 }
 
@@ -56,7 +56,7 @@ struct XcbPresentation::State {
 		int32_t popup_x=0,popup_y=0;
 		std::array<int32_t,4> screen{0,0,0,0};
 		uint64_t parent=0;
-		bool closed=false, close_posted=false, resized=false, maximized=false, mapped=false;
+		bool closed=false, close_posted=false, resized=false, maximized=false, mapped=false, iconic=false;
 		uint32_t width=0,height=0,pending_width=0,pending_height=0;
 		std::string title;
 		// The frame the window shows, kept to repaint what the server exposes and to send only what changed.
@@ -383,7 +383,7 @@ struct XcbPresentation::State {
 		const xcb_window_t id=xcb_generate_id(connection);
 		uint32_t mask=XCB_EVENT_MASK_EXPOSURE|XCB_EVENT_MASK_BUTTON_PRESS|XCB_EVENT_MASK_BUTTON_RELEASE|XCB_EVENT_MASK_POINTER_MOTION|
 			XCB_EVENT_MASK_ENTER_WINDOW|XCB_EVENT_MASK_LEAVE_WINDOW|XCB_EVENT_MASK_KEY_PRESS|XCB_EVENT_MASK_KEY_RELEASE;
-		if (!popup) mask|=XCB_EVENT_MASK_STRUCTURE_NOTIFY|XCB_EVENT_MASK_FOCUS_CHANGE;
+		if (!popup) mask|=XCB_EVENT_MASK_STRUCTURE_NOTIFY|XCB_EVENT_MASK_FOCUS_CHANGE|XCB_EVENT_MASK_PROPERTY_CHANGE;
 		// No background: what the server would clear to shows only until the frame arrives.
 		const uint32_t values[]={XCB_BACK_PIXMAP_NONE,0,XCB_GRAVITY_NORTH_WEST,popup ? 1U : 0U,mask,server_cursor(cursor)};
 		xcb_create_window(connection,XCB_COPY_FROM_PARENT,id,screen->root,int16_t(x),int16_t(y),uint16_t(width),uint16_t(height),0,
@@ -467,6 +467,26 @@ struct XcbPresentation::State {
 		message.data.data32[0]=wanted ? 1 : 0; message.data.data32[1]=states[0]; message.data.data32[2]=states[1]; message.data.data32[3]=1;
 		xcb_send_event(connection,0,screen->root,XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT|XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
 			reinterpret_cast<const char *>(&message));
+	}
+
+	// The user picked an iconified window from the taskbar: the program restores it, as Windows does with SC_RESTORE.
+	void restore_iconic(uint64_t handle,Window &window) {
+		if (!window.iconic) return;
+		window.iconic=false;
+		queue({handle,0x112,0xf120,0});
+	}
+
+	// Iconifies the host window as ICCCM asks, so it stays in the taskbar instead of disappearing.
+	void minimize(uint64_t handle) {
+		const auto found=windows.find(handle);
+		if (!connection || found==windows.end() || found->second->is_popup || !found->second->id) return;
+		found->second->iconic=true;
+		xcb_client_message_event_t message{};
+		message.response_type=XCB_CLIENT_MESSAGE; message.format=32; message.window=found->second->id; message.type=atoms[wm_change_state];
+		message.data.data32[0]=3;
+		xcb_send_event(connection,0,screen->root,XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT|XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+			reinterpret_cast<const char *>(&message));
+		xcb_flush(connection);
 	}
 
 	void maximize(uint64_t handle,bool wanted) {
@@ -655,7 +675,26 @@ struct XcbPresentation::State {
 		case XCB_MAP_NOTIFY: case XCB_UNMAP_NOTIFY: {
 			const auto &event=*reinterpret_cast<const xcb_map_notify_event_t *>(generic);
 			if (event.window!=event.event) return;
-			if (auto *window=window_of(event.window)) window->mapped=type==XCB_MAP_NOTIFY;
+			for (auto &[handle,window] : windows) {
+				if (window->id!=event.window) continue;
+				window->mapped=type==XCB_MAP_NOTIFY;
+				if (window->mapped) restore_iconic(handle,*window);
+				break;
+			}
+			return;
+		}
+		case XCB_PROPERTY_NOTIFY: {
+			// Window managers that keep minimized windows mapped, such as Muffin and Mutter, only change WM_STATE back to normal.
+			const auto &event=*reinterpret_cast<const xcb_property_notify_event_t *>(generic);
+			if (event.atom!=atoms[wm_state] || event.state!=XCB_PROPERTY_NEW_VALUE) return;
+			for (auto &[handle,window] : windows) {
+				if (window->id!=event.window || !window->iconic) continue;
+				auto *reply=xcb_get_property_reply(connection,xcb_get_property(connection,0,event.window,atoms[wm_state],atoms[wm_state],0,1),nullptr);
+				const bool normal=reply && xcb_get_property_value_length(reply)>=4 && *static_cast<const uint32_t *>(xcb_get_property_value(reply))==1;
+				free(reply);
+				if (normal) restore_iconic(handle,*window);
+				break;
+			}
 			return;
 		}
 		case XCB_CLIENT_MESSAGE: {
@@ -957,6 +996,7 @@ DesktopPresentation XcbPresentation::callbacks()
 		state->show_cursor();
 	}};
 	result.platform=HostPlatform::xcb;
+	result.minimize=[this](uint64_t handle) { state->minimize(handle); };
 	return result;
 }
 
