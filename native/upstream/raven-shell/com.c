@@ -65,15 +65,33 @@ static BOOL service_class(REFCLSID clsid)
 	return named_value(key, L"LocalService", service, MAX_PATH);
 }
 
+/* A class nobody registered is named in Raven's trace, so the classes a program misses can be found. */
+static HRESULT unregistered(REFCLSID clsid)
+{
+	static void (WINAPI *raven_trace)(const char *);
+	static BOOL looked;
+	char line[64];
+	if (!looked) {
+		raven_trace = (void (WINAPI *)(const char *))GetProcAddress(LoadLibraryW(L"ravenhost.dll"), "RavenTrace");
+		looked = TRUE;
+	}
+	if (raven_trace) {
+		wsprintfA(line, "com: no class {%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}", clsid->Data1, clsid->Data2, clsid->Data3,
+			clsid->Data4[0], clsid->Data4[1], clsid->Data4[2], clsid->Data4[3], clsid->Data4[4], clsid->Data4[5], clsid->Data4[6], clsid->Data4[7]);
+		raven_trace(line);
+	}
+	return REGDB_E_CLASSNOTREG;
+}
+
 HRESULT raven_registered_class_object(REFCLSID clsid, DWORD context, REFIID iid, void **out)
 {
 	WCHAR key[MAX_PATH], library[MAX_PATH];
 	*out = NULL;
 	if (!(context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) && !((context & CLSCTX_LOCAL_SERVER) && service_class(clsid)))
-		return REGDB_E_CLASSNOTREG;
+		return unregistered(clsid);
 	class_key(clsid, L"\\InprocServer32", key);
 	if (!class_value(key, library, MAX_PATH))
-		return REGDB_E_CLASSNOTREG;
+		return unregistered(clsid);
 	/* The library stays loaded for the objects it makes, as COM keeps it until CoFreeUnusedLibraries. */
 	HMODULE module = LoadLibraryExW(library, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!module)
