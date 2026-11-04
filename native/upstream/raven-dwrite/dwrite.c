@@ -497,6 +497,23 @@ static BOOL CALLBACK build_system(PINIT_ONCE once, PVOID parameter, PVOID *conte
 				}
 			}
 	}
+	/* A design whose regular face is missing still answers by its typographic name: Office installs Segoe UI Semilight and Calibri
+	   Light without Segoe UI or Calibri, and those faces keep the metrics of the design, which a free stand-in does not. */
+	for (index = 0; index < font_count; ++index) {
+		FontEntry *entry = &font_entries[index];
+		if (entry->typographic && entry->typographic[0] && entry->family && !wequal_fold(entry->typographic, entry->family)) {
+			FamilyEntry *family = find_family(entry->typographic);
+			UINT32 member;
+			BOOL grouped = FALSE;
+			if (!family)
+				family = add_family(entry->typographic);
+			for (member = 0; family && member < family->count; ++member)
+				if (family->entries[member] == entry)
+					grouped = TRUE;
+			if (family && !grouped && (!family->count || family->entries[0]->typographic && wequal_fold(family->entries[0]->typographic, entry->typographic) && !wequal_fold(family->entries[0]->family, family->name)))
+				family_add(family, entry);
+		}
+	}
 	for (index = 0; index < sizeof(aliases) / sizeof(aliases[0]); ++index) {
 		if (alias_target(aliases[index][1]) && !find_family(aliases[index][0])) {
 			/* Adding a family can move the list, so the target is looked up again afterwards. */
