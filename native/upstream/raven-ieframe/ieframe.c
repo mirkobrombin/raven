@@ -166,6 +166,9 @@ static HRESULT navigate(browser *control, const WCHAR *address)
 	BSTR text = SysAllocString(address && *address ? address : L"about:blank");
 	if (!text)
 		return E_OUTOFMEMORY;
+	char line[160] = "ieframe: navigate ";
+	WideCharToMultiByte(CP_UTF8, 0, text, -1, line + 18, sizeof(line) - 19, NULL, NULL);
+	RavenTrace(line);
 	V_VT(&url) = VT_BSTR;
 	V_BSTR(&url) = text;
 	V_VT(&flags) = VT_I4;
@@ -455,6 +458,7 @@ static HRESULT WINAPI browser_document(IWebBrowser2 *iface, IDispatch **out)
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
+	RavenTrace("ieframe: no document");
 	return S_OK;
 }
 
