@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # The actions are pinned to commits; this keeps the pins and their version comments current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

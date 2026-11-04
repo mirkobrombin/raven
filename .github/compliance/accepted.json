@@ -1,0 +1,196 @@
+{
+  "accepted": [
+    {
+      "rule": "MEM-001",
+      "path": "native/upstream/raven-comctl32/crt.c",
+      "text": "char *strcpy(char *destination, const char *source)",
+      "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
+    },
+    {
+      "rule": "MEM-001",
+      "path": "native/upstream/raven-comctl32/crt.c",
+      "text": "strcpy(destination + strlen(destination), source);",
+      "reason": "The guest C runtime's strcat, which has the same unbounded contract as the function it implements."
+    },
+    {
+      "rule": "MEM-002",
+      "path": "native/upstream/raven-comctl32/crt.c",
+      "text": "int sprintf(char *buffer, const char *format, ...)",
+      "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
+    },
+    {
+      "rule": "MEM-001",
+      "path": "native/upstream/raven-crt/ucrtbase.c",
+      "text": "CRT char *strcpy(char *to, const char *from)",
+      "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
+    },
+    {
+      "rule": "MEM-001",
+      "path": "native/upstream/raven-crt/ucrtbase.c",
+      "text": "strcpy(to + strlen(to), from);",
+      "reason": "The guest C runtime's strcat, which has the same unbounded contract as the function it implements."
+    },
+    {
+      "rule": "MEM-002",
+      "path": "native/upstream/raven-crt/ucrtbase_legacy.c",
+      "text": "CRT int sprintf(char *buffer, const char *text, ...)",
+      "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "native/upstream/raven-msxml3/make_idl.py",
+      "text": "ENUM = re.compile(r'typedef\\s+enum\\s+(\\w+)\\s*\\{(.*?)\\}\\s*(\\w+)\\s*;', re.S)",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "native/upstream/raven-msxml3/make_idl.py",
+      "text": "INTERFACE = re.compile(r'MIDL_INTERFACE\\(\"([0-9a-fA-F-]+)\"\\)\\s*(\\w+)\\s*:\\s*public\\s+(\\w+)\\s*\\{(.*?)\\n\\};', re.S)",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "native/upstream/raven-msxml3/make_idl.py",
+      "text": "METHOD = re.compile(r'virtual\\s+HRESULT\\s+STDMETHODCALLTYPE\\s+(\\w+)\\(\\s*(.*?)\\)\\s*=\\s*0;', re.S)",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "native/upstream/raven-propsys/make_schema.py",
+      "text": "LISTS = re.compile(r\"(Authors|Keywords|Ids|Addresses|Names|Categories|Artists|Composers|Contributors|Genre|Tags|Participants|Recipients|Conductors|Publishers)$\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "native/upstream/raven-propsys/make_schema.py",
+      "text": "pattern = re.compile(r\"DEFINE_PROPERTYKEY\\(PKEY_(\\w+),\\s*0x([0-9a-f]+),\\s*0x([0-9a-f]+),\\s*0x([0-9a-f]+),\\s*((?:0x[0-9a-f]+,\\s*){8})(\\d+)\\)\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/audit-independence.py",
+      "text": "FORBIDDEN = re.compile(r\"wine|proton|wineserver|ntdll\\.so|winebus|/\\.wine\", re.IGNORECASE)",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-com-tables.py",
+      "text": "METHOD = re.compile(r\"STDMETHOD_?\\(\\s*(?:[^,()]+,\\s*)?(\\w+)\\s*\\)|\\(STDMETHODCALLTYPE\\s*\\*\\s*(\\w+)\\)\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-com-vtables.py",
+      "text": "DECLARATION = re.compile(r\"DECLARE_INTERFACE(?:_IID)?_\\(\\s*(\\w+)\\s*,\\s*(\\w+)\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-registry-words.py",
+      "text": "pattern = re.compile(r'registry\\.add\\(\\s*\"(\\w+)\"\\s*,\\s*(\\d+)\\s*,')",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-registry-words.py",
+      "text": "suffixed = re.compile(r'registry\\.add\\(\\s*\"(\\w+)\"\\s*\\+\\s*suffix\\s*,\\s*(\\d+)\\s*,')",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-controls.py",
+      "text": "def compile(path):",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "built = list(pool.map(lambda path: compile(path, stem + \"_\" + path.stem.replace(\".\", \"_\"), flags_here, wine_module), parts))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "built.append(compile(generated / (interface + \"_i.c\"), stem + \"_\" + interface + \"_i\", flags_here, wine_module))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "built.append(compile(generated / (stem + \"_stubs.c\"), stem + \"_spec_stubs\", flags_here, wine_module))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "built.append(compile(source / \"sdk/lib/3rdparty/libwine\" / helper, stem + \"_\" + Path(helper).stem, flags_here))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "cabinet = list(pool.map(lambda name: compile(cabinet_root / name, \"cabinet_\" + Path(name).stem,",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "compile(support / \"support.c\", \"installer_support\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "debug = compile(repo / \"native/upstream/reactos-installer/debug.c\", \"debug\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "def compile(path, name, extra=(), wine_module=True):",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "entry_object = compile(support / \"dllmain.c\", \"plain_dllmain\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "link(\"msftedit.dll\", next_base[0], [compile(support / \"msftedit.c\", \"msftedit\", plain, False)], output / \"msftedit.def\",",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "xml += list(pool.map(lambda path: compile(path, \"libxml2_\" + path.stem, xml_flags, wine_module=False), xml_sources))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "xml = [compile(iconv_root / \"win_iconv.c\", \"iconv_win_iconv\", xml_flags, wine_module=False)]",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "xslt = list(pool.map(lambda path: compile(path, \"libxslt_\" + path.stem, xslt_flags, wine_module=False), sorted(xslt_root.glob(\"*.c\"))))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "zlib = [compile(source / \"sdk/lib/3rdparty/zlib\" / name, \"zlib_\" + Path(name).stem, [\"-I\" + str(zlib_include)]) for name in ZLIB]",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-rtl.py",
+      "text": "def compile(name):",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    }
+  ]
+}

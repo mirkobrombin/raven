@@ -1,0 +1,431 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Every container job uses the same absolute paths, so the CMake cache and the test files written by the build stay valid
+  # in the jobs that only download them.
+  COMPONENTS: /opt/ci/components
+  BUILD: /opt/ci/build
+  ARCHIVES: /opt/ci/archives
+  EUPROVGUARD_VERSION: "v1.2.1"
+  GO_VERSION: "1.25.13"
+
+jobs:
+  # Policy: cheap checks of what is being proposed, before any runner time is spent compiling it.
+
+  commits:
+    name: Commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check commit messages
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/scripts/check_commits.py "${BASE:-}" "${HEAD}"
+
+  files:
+    name: Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check tracked files
+        run: python3 .github/scripts/check_files.py
+
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check LICENSES.json against the tree
+        run: python3 .github/scripts/check_licenses.py
+
+  scripts:
+    name: Scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compile Python tools
+        run: python3 -m py_compile scripts/*.py .github/scripts/*.py
+
+      - name: Parse shell tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t shells < <(git ls-files '*.sh')
+          for script in "${shells[@]}"; do
+            bash -n "${script}"
+          done
+          echo "${#shells[@]} shell scripts parsed"
+
+  # Provision: the pinned external inputs, each in its own job because they share nothing and some take long. A component is
+  # rebuilt only when its recipe or its sources change.
+
+  provision:
+    name: Provision ${{ matrix.component }}
+    needs: [commits, files, licenses, scripts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: rtl
+            arguments: --output
+            recipe: scripts/provision-rtl.py
+            sources: native/upstream/raven-rtl/**
+          - component: controls
+            arguments: --arch x64 --output
+            recipe: scripts/provision-controls.py
+            sources: native/upstream/raven-*/**
+          - component: controls32
+            arguments: --arch x86 --output
+            recipe: scripts/provision-controls.py
+            sources: native/upstream/raven-*/**
+          - component: installer
+            arguments: --arch x64 --output
+            recipe: scripts/provision-installer.py
+            sources: native/upstream/**
+          - component: installer32
+            arguments: --arch x86 --output
+            recipe: scripts/provision-installer.py
+            sources: native/upstream/**
+          - component: sqlite
+            arguments: --output
+            recipe: scripts/provision-sqlite.py
+          - component: graphics
+            arguments: --destination
+            recipe: scripts/provision-graphics.py
+            sources: native/graphics/backends.json
+          - component: roots
+            arguments: --output
+            recipe: scripts/provision-roots.py
+          - component: libpng
+            arguments: --output
+            recipe: scripts/provision-libpng.py
+          - component: text
+            arguments: --jobs 4 --output
+            recipe: scripts/provision-text.py
+          - component: testdata
+            arguments: --output
+            recipe: scripts/provision-fixtures.py
+            sources: testdata/**
+    env:
+      COMPONENT: ${{ matrix.component }}
+      RECIPE: ${{ matrix.recipe }}
+      ARGUMENTS: ${{ matrix.arguments }}
+      TARGET: /opt/ci/components/${{ matrix.component }}
+    steps:
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3
+          git config --global --add safe.directory "*"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build packages
+        run: .github/scripts/install-fedora.sh build
+
+      - name: Restore component
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TARGET }}
+          key: component-${{ matrix.component }}-${{ hashFiles(matrix.recipe, matrix.sources || matrix.recipe) }}
+
+      - name: Provision ${{ matrix.component }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The arguments end with the option that names the output directory.
+          read -ra arguments <<< "${ARGUMENTS}"
+          python3 "${RECIPE}" "${arguments[@]}" "${TARGET}"
+
+      # Raven compiles a few Skia sources and includes its headers; the third-party trees Skia fetched for its own build
+      # are not needed afterwards and would make the cache ten times larger.
+      - name: Trim the Skia tree
+        if: matrix.component == 'text' && steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${TARGET}/skia"
+          find . -mindepth 1 -maxdepth 1 ! -name include ! -name src ! -name modules ! -name LICENSE -exec rm -rf {} +
+          find "${TARGET}/cpu-fonts" -mindepth 1 ! -name libskia.a -exec rm -rf {} +
+
+      # The ReactOS source archive and its extracted tree are the corresponding source of a release, which provisions its
+      # own; tests only load the built components.
+      - name: Trim the ReactOS sources
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "${TARGET}/reactos-source.tar.gz" "${TARGET}/source"
+
+      # Artifacts drop file modes, so the component travels as an archive.
+      - name: Pack component
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${ARCHIVES}"
+          tar -C "${COMPONENTS}" -cf - "${COMPONENT}" | zstd -T0 -3 -q -o "${ARCHIVES}/${COMPONENT}.tar.zst"
+          du -sh "${TARGET}" "${ARCHIVES}/${COMPONENT}.tar.zst"
+
+      - name: Upload component
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: component-${{ matrix.component }}
+          path: /opt/ci/archives/${{ matrix.component }}.tar.zst
+          retention-days: 3
+          if-no-files-found: error
+
+  compliance:
+    name: Compliance
+    needs: [commits, files, licenses, scripts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Install EUProvGuard
+        run: go install "github.com/fabricatorsltd/euprovguard@${EUPROVGUARD_VERSION}"
+
+      - name: Scan the tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p compliance
+          euprovguard \
+            -path . \
+            -name raven \
+            -version-tag "0.0.0-${GITHUB_SHA:0:7}" \
+            -output compliance/sbom.json \
+            -bundle compliance/report 2>&1 | tee compliance/scan.log
+
+      - name: Gate the findings
+        run: python3 .github/scripts/check_compliance.py compliance/sbom.json compliance/scan.log
+
+      - name: Upload compliance artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compliance-reports
+          path: compliance/
+          if-no-files-found: error
+
+  # Build: one Release tree with every provisioned component configured, so the tests below exercise the same inputs a
+  # release is made from.
+
+  build:
+    name: Build
+    needs: provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+    env:
+      CCACHE_DIR: /opt/ci/ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3
+          git config --global --add safe.directory "*"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build packages
+        run: .github/scripts/install-fedora.sh build
+
+      - name: Download components
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: component-*
+          path: /opt/ci/archives
+          merge-multiple: true
+
+      - name: Unpack components
+        run: .github/scripts/components.sh unpack
+
+      - name: Restore compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /opt/ci/ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t options < <(.github/scripts/components.sh options)
+          cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${options[@]}"
+
+      - name: Build
+        run: cmake --build "${BUILD}" -j "$(nproc)"
+
+      - name: Compiler cache statistics
+        run: ccache --show-stats
+
+      # Test jobs only run what was built; objects and static libraries stay behind to keep the archive small.
+      - name: Pack build tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C /opt/ci --exclude='*.o' --exclude='*.obj' --exclude='libraven_*.a' -cf - build \
+            | zstd -T0 -3 -q -o /opt/ci/build.tar.zst
+          du -sh "${BUILD}" /opt/ci/build.tar.zst
+
+      - name: Upload build tree
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build
+          path: /opt/ci/build.tar.zst
+          retention-days: 3
+          if-no-files-found: error
+
+  # Test: six shards of the ctest suite run side by side. Raven supervises the guest with ptrace and maps it into low
+  # addresses, which the default container profile forbids.
+
+  test:
+    name: Test ${{ matrix.shard }}/6
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+      options: --cap-add SYS_PTRACE --security-opt seccomp=unconfined --shm-size 2g
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      SHARD: ${{ matrix.shard }}
+      XDG_RUNTIME_DIR: /run/ci-runtime
+    steps:
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3
+          git config --global --add safe.directory "*"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test packages
+        run: .github/scripts/install-fedora.sh test
+
+      - name: Download components
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: component-*
+          path: /opt/ci/archives
+          merge-multiple: true
+
+      - name: Download build tree
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: /opt/ci
+
+      - name: Unpack
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/components.sh unpack
+          zstd -d -q -c /opt/ci/build.tar.zst | tar -C /opt/ci -xf -
+          install -d -m 0700 "${XDG_RUNTIME_DIR}"
+
+      - name: Run shard ${{ matrix.shard }}
+        run: >
+          ctest --test-dir "${BUILD}" -I "${SHARD},,6" -j 2 --timeout 1200
+          --output-on-failure --output-junit "${BUILD}/junit-${SHARD}.xml"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-${{ matrix.shard }}
+          path: |
+            /opt/ci/build/junit-${{ matrix.shard }}.xml
+            /opt/ci/build/Testing/Temporary/LastTest.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  # Report: one place that says how the run went, and one required check for branch protection.
+
+  report:
+    name: Report
+    needs: [commits, files, licenses, scripts, provision, compliance, build, test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download test results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tests-*
+          path: results
+
+      - name: Summarize
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/test_summary.py results >> "${GITHUB_STEP_SUMMARY}"
