@@ -562,16 +562,20 @@ int main(int argc, char **argv)
 								}
 							}
 						}
+						// A file under an imported name that is not an image adds no names here; the loader reports it if the program
+						// loads it.
 						while (!pending.empty()) {
 							const auto name = pending.back();
 							pending.pop_back();
-							if (const auto bytes = source(name))
-							{
-								const raven::PEImage image(*bytes);
-								visit(image.imports());
-								// A library the program loads lazily still needs its components in place.
-								for (const auto &descriptor : image.delay_imports())
-									visit(descriptor.imports);
+							try {
+								if (const auto bytes = source(name)) {
+									const raven::PEImage image(*bytes);
+									visit(image.imports());
+									// A library the program loads lazily still needs its components in place.
+									for (const auto &descriptor : image.delay_imports())
+										visit(descriptor.imports);
+								}
+							} catch (const std::runtime_error &) {
 							}
 						}
 						return names;
