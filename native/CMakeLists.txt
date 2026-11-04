@@ -1128,6 +1128,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(dc_attribute_pe_fixture ALL DEPENDS ${DC_ATTRIBUTE_FIXTURE})
         add_test(NAME native_dc_attribute_cli COMMAND raven --run-process --execution=native ${DC_ATTRIBUTE_FIXTURE})
         set_tests_properties(native_dc_attribute_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        set(TRANSPARENT_CHILD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/transparent-child-fixture.exe)
+        add_custom_command(OUTPUT ${TRANSPARENT_CHILD_FIXTURE}
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                -o ${TRANSPARENT_CHILD_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/transparent_child_client.c -lgdi32 -luser32 -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/transparent_child_client.c VERBATIM)
+        add_custom_target(transparent_child_pe_fixture ALL DEPENDS ${TRANSPARENT_CHILD_FIXTURE})
+        add_test(NAME native_transparent_child_cli COMMAND raven --run-process --execution=native ${TRANSPARENT_CHILD_FIXTURE})
+        set_tests_properties(native_transparent_child_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(RELEASE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/release-fixture.exe)
         add_custom_command(OUTPUT ${RELEASE_FIXTURE}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
