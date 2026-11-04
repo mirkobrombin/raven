@@ -1,0 +1,69 @@
+name: Pull request
+
+# pull_request_target runs with the base repository's token so that pull requests from forks can be labelled. It must never
+# check out or run the pull request's code: these jobs read only its metadata through the API.
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] no job checks out or runs the pull request
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # area labels
+    steps:
+      - name: Label by area
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          sync-labels: true
+
+  triage:
+    name: Triage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write # size labels and the measurements reminder
+      pull-requests: write # the same on pull requests
+    steps:
+      - name: Size, title and measurements
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pull = context.payload.pull_request;
+            const issue = { owner: context.repo.owner, repo: context.repo.repo, issue_number: pull.number };
+
+            // Size counts changed lines, so reviewers can see at a glance how much time a pull request asks for.
+            const changed = pull.additions + pull.deletions;
+            const sizes = [[10, 'XS'], [50, 'S'], [250, 'M'], [1000, 'L'], [Infinity, 'XL']];
+            const size = 'size: ' + sizes.find(([limit]) => changed < limit)[1];
+            const current = (await github.rest.issues.listLabelsOnIssue(issue)).data.map(label => label.name);
+            for (const stale of current.filter(name => name.startsWith('size: ') && name !== size))
+              await github.rest.issues.removeLabel({ ...issue, name: stale });
+            if (!current.includes(size))
+              await github.rest.issues.addLabels({ ...issue, labels: [size] });
+
+            // CONTRIBUTING.md: performance changes carry before-and-after measurements of the same workload.
+            const body = pull.body || '';
+            const marker = '<!-- measurements -->';
+            if (/^perf: /.test(pull.title) && !/before/i.test(body) && !/after/i.test(body)) {
+              const comments = await github.paginate(github.rest.issues.listComments, issue);
+              if (!comments.some(comment => comment.body.includes(marker)))
+                await github.rest.issues.createComment({ ...issue, body: marker + '\n' +
+                  'Thanks for the performance work. Please add before-and-after measurements of the same workload and ' +
+                  'settings, as CONTRIBUTING.md describes: which program, menu or gameplay, hardware or software rendering, ' +
+                  'and how many runs.' });
+            }
+
+            const types = ['feat', 'fix', 'docs', 'test', 'perf', 'refactor', 'build', 'ci', 'chore'];
+            if (!new RegExp(`^(${types.join('|')}): \\S`).test(pull.title))
+              core.setFailed(`The title follows the commit format, "type: describe the change", with one of ${types.join(', ')}.`);

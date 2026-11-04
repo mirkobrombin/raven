@@ -1,0 +1,56 @@
+"area: cpu":
+  - changed-files:
+      - any-glob-to-any-file: native/cpu/**
+
+"area: desktop":
+  - changed-files:
+      - any-glob-to-any-file: native/desktop/**
+
+"area: graphics":
+  - changed-files:
+      - any-glob-to-any-file:
+          - native/graphics/**
+          - native/shader/**
+          - scripts/provision-graphics.py
+
+"area: nt":
+  - changed-files:
+      - any-glob-to-any-file:
+          - native/nt/**
+          - native/pe/**
+
+"area: guest":
+  - changed-files:
+      - any-glob-to-any-file: native/upstream/**
+
+"area: build":
+  - changed-files:
+      - any-glob-to-any-file:
+          - CMakeLists.txt
+          - native/CMakeLists.txt
+          - Makefile
+          - scripts/provision-*.py
+          - scripts/package-native.py
+
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file: .github/**
+
+"area: tests":
+  - changed-files:
+      - any-glob-to-any-file: testdata/**
+
+licensing:
+  - changed-files:
+      - any-glob-to-any-file:
+          - LICENSE
+          - LICENSES/**
+          - LICENSES.json
+          - LICENSES.md
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - README.md
+          - CONTRIBUTING.md
+          - docs/**

@@ -1,0 +1,60 @@
+name: Moderation
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moderation
+  cancel-in-progress: false
+
+jobs:
+  waiting:
+    name: Waiting for information
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write # stale labels, reminders and closing
+      pull-requests: write # the same for pull requests
+    steps:
+      # Only threads a maintainer asked a question on: nothing else goes stale, however old.
+      - name: Close unanswered questions
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          only-labels: needs info
+          days-before-stale: 30
+          days-before-close: 30
+          stale-issue-label: stale
+          stale-pr-label: stale
+          labels-to-remove-when-unstale: stale
+          exempt-issue-labels: help wanted,security,accessibility
+          stale-issue-message: >
+            This issue is waiting for the information asked above. It will be closed in 30 days without a reply; a reply
+            reopens the conversation, and a closed issue can be reopened whenever the details are available.
+          stale-pr-message: >
+            This pull request is waiting for the changes asked above. It will be closed in 30 days without an update.
+          close-issue-message: Closed while waiting for information. Reopen it when you have the details.
+          close-pr-message: Closed while waiting for changes. Reopen it when you pick it up again.
+
+  lock:
+    name: Lock old threads
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write # locking closed issues
+      pull-requests: write # locking closed pull requests
+    steps:
+      # A comment on a thread closed for months reaches nobody; a new issue that links to it does.
+      - name: Lock threads closed for 90 days
+        uses: dessant/lock-threads@89ae32b08ed1a541efecbab17912962a5e38981c # v6.0.2
+        with:
+          issue-inactive-days: "90"
+          pr-inactive-days: "90"
+          issue-comment: >
+            This issue was closed a while ago and is now locked. If the problem is back, please open a new issue and link
+            to this one.
+          pr-comment: ""

@@ -1,0 +1,78 @@
+name: Issues
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issues-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  answered:
+    name: Answered functions
+    if: github.event.issue.state == 'open'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # the comment that lists answered functions
+    steps:
+      # The main branch, not anything the issue points at: the script reads git history and matches the issue text
+      # against it.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Match the named functions
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_CREATED: ${{ github.event.issue.created_at }}
+        run: python3 .github/scripts/triage_api.py "${RUNNER_TEMP}/answered.md"
+
+      # One comment per issue, updated when the issue is edited, so the thread does not fill with repeats.
+      - name: Comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const path = `${process.env.RUNNER_TEMP}/answered.md`;
+            if (!fs.existsSync(path))
+              return;
+            const body = fs.readFileSync(path, 'utf8');
+            const issue = { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number };
+            const comments = await github.paginate(github.rest.issues.listComments, issue);
+            const previous = comments.find(comment => comment.user.type === 'Bot' && comment.body.startsWith('<!-- answered-functions -->'));
+            if (!previous)
+              await github.rest.issues.createComment({ ...issue, body });
+            else if (previous.body !== body)
+              await github.rest.issues.updateComment({ owner: issue.owner, repo: issue.repo, comment_id: previous.id, body });
+
+  review:
+    name: New accounts
+    if: github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write # the needs review label
+    steps:
+      # Accounts a few days old that open an issue full of links are how spam arrives; a maintainer looks before anyone
+      # follows them. Nothing is closed or hidden automatically.
+      - name: Flag link-heavy issues from new accounts
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const author = context.payload.issue.user;
+            const { data: account } = await github.rest.users.getByUsername({ username: author.login });
+            const days = (Date.now() - Date.parse(account.created_at)) / 86400000;
+            const links = ((context.payload.issue.body || '').match(/https?:\/\//g) || []).length;
+            if (days < 7 && links >= 2)
+              await github.rest.issues.addLabels({ owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, labels: ['needs review'] });
