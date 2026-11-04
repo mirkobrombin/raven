@@ -5,6 +5,7 @@
 #endif
 
 #include <cstring>
+#include <memory>
 
 namespace raven {
 
@@ -34,18 +35,20 @@ void register_canvas_service(ApiRegistry &registry, KernelContext &)
 			return;
 		}
 		const size_t bytes = size_t(pitch) * (height - 1) + size_t(width) * 4;
-		std::vector<uint8_t> buffer(size_t(pitch) * height);
+		// Pixels written come straight from the guest's rows; pixels read are gathered before they go back.
 		const bool write = call.u32(7) != 0;
 		if (write) {
-			const auto source = call.read(call[5], bytes);
-			std::memcpy(buffer.data(), source.data(), bytes);
+			auto source = call.read(call[5], bytes);
+			call.ret(canvas::pixels(call.u32(0), call.i32(1), call.i32(2), width, height, source.data(), pitch, true));
+			return;
 		}
-		if (!canvas::pixels(call.u32(0), call.i32(1), call.i32(2), width, height, buffer.data(), pitch, write)) {
+		// Rows that fill their pitch are read whole from the surface, so their buffer starts unset; gaps between rows start zeroed.
+		const std::unique_ptr<uint8_t[]> buffer(pitch == width * 4 ? new uint8_t[bytes] : new uint8_t[bytes]());
+		if (!canvas::pixels(call.u32(0), call.i32(1), call.i32(2), width, height, buffer.get(), pitch, false)) {
 			call.ret(0);
 			return;
 		}
-		if (!write)
-			call.write(call[5], std::span<const uint8_t>(buffer.data(), bytes));
+		call.write(call[5], std::span<const uint8_t>(buffer.get(), bytes));
 		call.ret(1);
 	});
 	// RavenPathCombine(one, one floats, two, two floats, fills, mode, result, capacity): two paths in the command's float form combined;
@@ -112,6 +115,47 @@ void register_canvas_service(ApiRegistry &registry, KernelContext &)
 		std::memcpy(&command, record.data(), sizeof command);
 		const auto data = call.u32(3) ? call.read(call[2], call.u32(3)) : std::vector<uint8_t>();
 		call.ret(canvas::draw(call.u32(0), command, data));
+	});
+	// RavenCanvasBatch(records, size): the commands d2d1 queued, run in order. A record is a header of four words (the surface, the size
+	// of the variable parts, a status set to 1 for a command that ran, and the kind: 0 for a command, 1 for pixels written), the command,
+	// its variable parts and padding to eight bytes. The result is how many failed; only then are the statuses written back.
+	registry.add("RavenCanvasBatch", 2, [](ApiCall &call) {
+		constexpr size_t header = 16;
+		if (!call[0] || call.u32(1) > (64u << 20)) {
+			call.ret(UINT32_MAX);
+			return;
+		}
+		auto records = call.read(call[0], call.u32(1));
+		uint32_t failed = 0;
+		for (size_t at = 0; at + header + sizeof(canvas::Command) <= records.size();) {
+			uint32_t words[2];
+			std::memcpy(words, records.data() + at, sizeof words);
+			const size_t parts = at + header + sizeof(canvas::Command), end = parts + words[1];
+			if (end > records.size()) {
+				++failed;
+				break;
+			}
+			uint32_t status = 0, kind = 0;
+			std::memcpy(&kind, records.data() + at + 12, 4);
+			if (kind == 1) {
+				// Pixels written: where they go in the command's place, the rows packed after it.
+				int32_t place[4];
+				std::memcpy(place, records.data() + at + header, sizeof place);
+				const uint32_t width = uint32_t(place[2]), height = uint32_t(place[3]);
+				if (width && height && uint64_t(width) * 4 * height <= words[1])
+					status = canvas::pixels(words[0], place[0], place[1], width, height, records.data() + parts, width * 4, true) ? 1 : 0;
+			} else {
+				canvas::Command command;
+				std::memcpy(&command, records.data() + at + header, sizeof command);
+				status = canvas::draw(words[0], command, std::span<const uint8_t>(records.data() + parts, words[1])) ? 1 : 0;
+			}
+			std::memcpy(records.data() + at + 8, &status, 4);
+			failed += 1 - status;
+			at = (end + 7) & ~size_t(7);
+		}
+		if (failed)
+			call.write(call[0], records);
+		call.ret(failed);
 	});
 }
 

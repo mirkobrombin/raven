@@ -2378,10 +2378,10 @@ static constexpr std::pair<std::string_view, uint8_t> winspool_words[]{
 	{"XcvDataW",8},
 };
 static constexpr std::pair<std::string_view, uint8_t> ravenhost_words[]{
-	{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},{"RavenCanvasPixels",8},{"RavenCanvasSize",2},{"RavenFontClose",1},
-	{"RavenFontGlyphs",4},{"RavenFontInfo",2},{"RavenFontMetrics",3},{"RavenFontName",4},{"RavenFontOpen",3},{"RavenFontOutline",4},
-	{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenShaderRelease",1},
-	{"RavenShaderRequest",2},{"RavenShaderResult",4},{"RavenTrace",1},
+	{"RavenCanvasBatch",2},{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},{"RavenCanvasPixels",8},{"RavenCanvasSize",2},
+	{"RavenFontClose",1},{"RavenFontGlyphs",4},{"RavenFontInfo",2},{"RavenFontMetrics",3},{"RavenFontName",4},{"RavenFontOpen",3},
+	{"RavenFontOutline",4},{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},{"RavenPathCombine",8},{"RavenPathWiden",7},
+	{"RavenShaderRelease",1},{"RavenShaderRequest",2},{"RavenShaderResult",4},{"RavenTrace",1},
 };
 static constexpr std::pair<std::string_view, uint8_t> secur32_words[]{
 	{"AcceptSecurityContext",9},{"AcquireCredentialsHandleA",9},{"AcquireCredentialsHandleW",9},{"AddCredentialsA",8},{"AddCredentialsW",8},{"AddSecurityPackageA",2},
@@ -2509,12 +2509,12 @@ static constexpr std::pair<std::string_view, uint8_t> dsound_words[]{
 	{"DirectSoundEnumerateA",2},{"DirectSoundEnumerateW",2},{"DirectSoundFullDuplexCreate",10},{"GetDeviceID",2},
 };
 static constexpr std::pair<std::string_view, uint8_t> combase_words[]{
-	{"CLSIDFromString",2},{"CoCreateFreeThreadedMarshaler",2},{"CoCreateGuid",1},{"CoCreateInstance",5},{"CoDecrementMTAUsage",1},{"CoGetApartmentType",2},{"CoGetMalloc",2},
-	{"CoIncrementMTAUsage",1},{"CoInitializeEx",2},{"CoTaskMemAlloc",1},{"CoTaskMemFree",1},{"CoTaskMemRealloc",2},{"CoUninitialize",0},
-	{"GetErrorInfo",2},{"RoActivateInstance",2},{"RoGetActivationFactory",3},{"RoGetParameterizedTypeInstanceIID",5},{"RoInitialize",1},{"RoOriginateError",2},
-	{"RoOriginateErrorW",3},{"RoOriginateLanguageException",3},{"RoParseTypeName",3},{"RoResolveNamespace",7},{"RoUninitialize",0},{"SetErrorInfo",2},
-	{"StringFromGUID2",3},{"WindowsCompareStringOrdinal",3},{"WindowsCreateString",3},{"WindowsCreateStringReference",4},{"WindowsDeleteString",1},{"WindowsDuplicateString",2},
-	{"WindowsGetStringLen",1},{"WindowsGetStringRawBuffer",2},{"WindowsIsStringEmpty",1},
+	{"CLSIDFromString",2},{"CoCreateFreeThreadedMarshaler",2},{"CoCreateGuid",1},{"CoCreateInstance",5},{"CoDecrementMTAUsage",1},{"CoGetApartmentType",2},
+	{"CoGetMalloc",2},{"CoIncrementMTAUsage",1},{"CoInitializeEx",2},{"CoTaskMemAlloc",1},{"CoTaskMemFree",1},{"CoTaskMemRealloc",2},
+	{"CoUninitialize",0},{"GetErrorInfo",2},{"RoActivateInstance",2},{"RoGetActivationFactory",3},{"RoGetParameterizedTypeInstanceIID",5},{"RoInitialize",1},
+	{"RoOriginateError",2},{"RoOriginateErrorW",3},{"RoOriginateLanguageException",3},{"RoParseTypeName",3},{"RoResolveNamespace",7},{"RoUninitialize",0},
+	{"SetErrorInfo",2},{"StringFromGUID2",3},{"WindowsCompareStringOrdinal",3},{"WindowsCreateString",3},{"WindowsCreateStringReference",4},{"WindowsDeleteString",1},
+	{"WindowsDuplicateString",2},{"WindowsGetStringLen",1},{"WindowsGetStringRawBuffer",2},{"WindowsIsStringEmpty",1},
 };
 static constexpr std::pair<std::string_view, uint8_t> wer_words[]{
 	{"WerAddExcludedApplication",2},{"WerFreeString",1},{"WerRemoveExcludedApplication",2},{"WerReportAddDump",7},{"WerReportAddFile",4},{"WerReportCloseHandle",1},

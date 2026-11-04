@@ -2473,10 +2473,10 @@ static constexpr std::string_view winspool_exports[]{
 	"XcvDataW",
 };
 static constexpr std::string_view ravenhost_exports[]{
-	"RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw","RavenCanvasPixels","RavenCanvasSize","RavenFontClose",
-	"RavenFontGlyphs","RavenFontInfo","RavenFontMetrics","RavenFontName","RavenFontOpen","RavenFontOutline",
-	"RavenFontRender","RavenFontScan","RavenFontTable","RavenPathCombine","RavenPathWiden","RavenShaderRelease",
-	"RavenShaderRequest","RavenShaderResult","RavenTrace",
+	"RavenCanvasBatch","RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw","RavenCanvasPixels","RavenCanvasSize",
+	"RavenFontClose","RavenFontGlyphs","RavenFontInfo","RavenFontMetrics","RavenFontName","RavenFontOpen",
+	"RavenFontOutline","RavenFontRender","RavenFontScan","RavenFontTable","RavenPathCombine","RavenPathWiden",
+	"RavenShaderRelease","RavenShaderRequest","RavenShaderResult","RavenTrace",
 };
 static constexpr std::string_view secur32_exports[]{
 	"AcceptSecurityContext","AcquireCredentialsHandleA","AcquireCredentialsHandleW","AddCredentialsA","AddCredentialsW","AddSecurityPackageA",

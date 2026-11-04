@@ -26,6 +26,8 @@
 #include <string.h>
 
 #define ALLOC(size) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size))
+/* A buffer every byte of which is written before it is read, such as the pixels of a whole frame, needs no zeroing. */
+#define ALLOC_UNSET(size) HeapAlloc(GetProcessHeap(), 0, (size))
 #define GROW(block, size) ((block) ? HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (block), (size)) : ALLOC(size))
 #define FREE(block) HeapFree(GetProcessHeap(), 0, (block))
 #define CONTAINER(pointer, type, field) ((type *)((char *)(pointer) - offsetof(type, field)))
@@ -36,6 +38,7 @@ __declspec(dllimport) void WINAPI RavenCanvasDestroy(DWORD surface);
 __declspec(dllimport) DWORD WINAPI RavenCanvasSize(DWORD surface, DWORD *size);
 __declspec(dllimport) DWORD WINAPI RavenCanvasPixels(DWORD surface, INT32 x, INT32 y, DWORD width, DWORD height, void *data, DWORD pitch, DWORD write);
 __declspec(dllimport) DWORD WINAPI RavenCanvasDraw(DWORD surface, const void *command, const void *data, DWORD size);
+__declspec(dllimport) DWORD WINAPI RavenCanvasBatch(const void *records, DWORD size);
 __declspec(dllimport) DWORD WINAPI RavenPathCombine(const float *one, DWORD one_count, const float *two, DWORD two_count, DWORD fills, DWORD mode,
 	float *result, DWORD capacity);
 __declspec(dllimport) DWORD WINAPI RavenPathWiden(const float *path, DWORD count, DWORD fill, const float *stroke, DWORD stroke_count, float *result,
@@ -145,6 +148,122 @@ struct bytes {
 	BYTE *data;
 	size_t size, capacity;
 };
+
+/* ---- the draw queue ----
+ * Draw commands wait in one queue for the whole process, in the order they were made, and reach the host together: before any other
+ * call that reads or changes a surface, when a target ends or flushes its drawing, when it goes away and when the queue fills. A record
+ * is a header (the surface, the size of the variable parts, the status the host sets to 1 for a command that ran, the kind: 0 for a
+ * command, 1 for pixels written), the command, its variable parts and padding to eight bytes. The target that made a command takes the error of one that failed. */
+enum { QUEUE_SIZE = 512 * 1024, QUEUE_HEADER = 16, QUEUE_DIRECT = 64 * 1024, QUEUE_RECORDS = QUEUE_SIZE / (QUEUE_HEADER + sizeof(struct command)) + 1 };
+
+struct target;
+static void target_failed(struct target *target);
+static CRITICAL_SECTION queue_lock;
+static BYTE *queue_bytes;
+static struct target **queue_owners;
+static size_t queue_used;
+static UINT32 queue_count;
+
+static size_t queue_record_size(size_t data_size)
+{
+	return (QUEUE_HEADER + sizeof(struct command) + data_size + 7) & ~(size_t)7;
+}
+
+static void flush_queue_locked(void)
+{
+	UINT32 index;
+	size_t at = 0;
+	if (!queue_used)
+		return;
+	if (RavenCanvasBatch(queue_bytes, (DWORD)queue_used))
+		for (index = 0; index < queue_count; ++index) {
+			UINT32 header[4];
+			memcpy(header, queue_bytes + at, sizeof(header));
+			if (header[2] != 1 && queue_owners[index])
+				target_failed(queue_owners[index]);
+			at += queue_record_size(header[1]);
+		}
+	queue_used = 0;
+	queue_count = 0;
+}
+
+static void flush_queue(void)
+{
+	EnterCriticalSection(&queue_lock);
+	flush_queue_locked();
+	LeaveCriticalSection(&queue_lock);
+}
+
+/* Queues a command, or runs it at once when its variable parts are large or the queue cannot be had; FALSE when one run at once failed. */
+static BOOL queue_command(struct target *owner, DWORD surface, const struct command *command, const void *data, size_t size)
+{
+	const size_t need = queue_record_size(size);
+	UINT32 header[4] = {surface, (UINT32)size, 0, 0};
+	EnterCriticalSection(&queue_lock);
+	if (!queue_bytes && size < QUEUE_DIRECT) {
+		queue_bytes = ALLOC_UNSET(QUEUE_SIZE);
+		queue_owners = ALLOC_UNSET(QUEUE_RECORDS * sizeof(*queue_owners));
+		if (!queue_bytes || !queue_owners) {
+			FREE(queue_bytes);
+			FREE(queue_owners);
+			queue_bytes = NULL;
+			queue_owners = NULL;
+		}
+	}
+	if (queue_used + need > QUEUE_SIZE || queue_count == QUEUE_RECORDS)
+		flush_queue_locked();
+	if (size >= QUEUE_DIRECT || !queue_bytes) {
+		flush_queue_locked();
+		LeaveCriticalSection(&queue_lock);
+		return RavenCanvasDraw(surface, command, data, (DWORD)size) != 0;
+	}
+	memcpy(queue_bytes + queue_used, header, sizeof(header));
+	memcpy(queue_bytes + queue_used + QUEUE_HEADER, command, sizeof(*command));
+	if (size)
+		memcpy(queue_bytes + queue_used + QUEUE_HEADER + sizeof(*command), data, size);
+	queue_used += need;
+	queue_owners[queue_count++] = owner;
+	LeaveCriticalSection(&queue_lock);
+	return TRUE;
+}
+
+/* The other services that read or change a surface run after the queued commands. Small writes of pixels join the queue themselves, as
+ * a record whose header ends in 1 and whose command holds where the rows go, followed by the rows packed: Office uploads the icons it
+ * draws one by one. Such a write is taken as done; a failed one shows as a failed command of no target. */
+static DWORD canvas_pixels(DWORD surface, INT32 x, INT32 y, DWORD width, DWORD height, void *data, DWORD pitch, DWORD write)
+{
+	const size_t row = (size_t)width * 4, size = row * height;
+	if (write && width && height && pitch >= row && size < QUEUE_DIRECT) {
+		const size_t need = queue_record_size(size);
+		UINT32 header[4] = {surface, (UINT32)size, 0, 1}, place[4] = {(UINT32)x, (UINT32)y, width, height};
+		struct command command;
+		UINT32 line;
+		EnterCriticalSection(&queue_lock);
+		if (queue_bytes) {
+			if (queue_used + need > QUEUE_SIZE || queue_count == QUEUE_RECORDS)
+				flush_queue_locked();
+			memset(&command, 0, sizeof(command));
+			memcpy(&command, place, sizeof(place));
+			memcpy(queue_bytes + queue_used, header, sizeof(header));
+			memcpy(queue_bytes + queue_used + QUEUE_HEADER, &command, sizeof(command));
+			for (line = 0; line < height; ++line)
+				memcpy(queue_bytes + queue_used + QUEUE_HEADER + sizeof(command) + line * row, (const BYTE *)data + (size_t)line * pitch, row);
+			queue_used += need;
+			queue_owners[queue_count++] = NULL;
+			LeaveCriticalSection(&queue_lock);
+			return 1;
+		}
+		LeaveCriticalSection(&queue_lock);
+	}
+	flush_queue();
+	return RavenCanvasPixels(surface, x, y, width, height, data, pitch, write);
+}
+
+static void canvas_destroy(DWORD surface)
+{
+	flush_queue();
+	RavenCanvasDestroy(surface);
+}
 
 static BOOL bytes_add(struct bytes *buffer, const void *data, size_t size)
 {
@@ -1356,17 +1475,30 @@ struct bitmap {
 	UINT32 mapped_pitch;
 	D2D1_MAP_OPTIONS map_options;
 	ID2D1ColorContext *color_context;
-	/* For a bitmap over a Direct3D texture: whether Direct2D draws into it, so that its own pixels are the newer ones, and the frame
-	 * in which the texture's pixels were last read. */
+	/* For a bitmap over a Direct3D texture: whether Direct2D draws into it, so that its own pixels are the newer ones, the frame in
+	 * which the texture's pixels were last read and the areas read in it. */
 	BOOL targeted;
 	LONG read_frame;
+	UINT32 read_count;
+	RECT read[256];
+	/* A staging texture of the same size holding, in the frame the areas are read in, a copy of the whole texture, mapped until the
+	 * next frame. */
+	ID3D11Texture2D *staging;
+	ID3D11DeviceContext *staging_context;
+	D3D11_MAPPED_SUBRESOURCE staging_mapped;
 };
 
 static void bitmap_destroy(struct object *base)
 {
 	struct bitmap *self = (struct bitmap *)base;
 	if (self->surface)
-		RavenCanvasDestroy(self->surface);
+		canvas_destroy(self->surface);
+	if (self->staging) {
+		if (self->staging_mapped.pData)
+			ID3D11DeviceContext_Unmap(self->staging_context, (ID3D11Resource *)self->staging, 0);
+		ID3D11Texture2D_Release(self->staging);
+		ID3D11DeviceContext_Release(self->staging_context);
+	}
 	if (self->dxgi)
 		IDXGISurface_Release(self->dxgi);
 	FREE(self->mapped);
@@ -1424,7 +1556,7 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 				to[column * 4 + 3] = from[column];
 			}
 		}
-		RavenCanvasPixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
+		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
 		FREE(copy);
 		return S_OK;
 	}
@@ -1445,11 +1577,11 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 				to[column * 4 + 3] = 255;
 			}
 		}
-		RavenCanvasPixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
+		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
 		FREE(copy);
 		return S_OK;
 	}
-	return RavenCanvasPixels(self->surface, (INT32)area.left, (INT32)area.top, area.right - area.left, area.bottom - area.top, (void *)data, pitch, 1) ?
+	return canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, area.right - area.left, area.bottom - area.top, (void *)data, pitch, 1) ?
 		S_OK : E_FAIL;
 }
 
@@ -1465,7 +1597,7 @@ static void copy_surface(DWORD to, DWORD from, const D2D1_POINT_2U *point, const
 	command.source[3] = rect ? (float)(rect->bottom - rect->top) : (float)source_size.height;
 	command.rect[0] = point ? (float)point->x : 0;
 	command.rect[1] = point ? (float)point->y : 0;
-	RavenCanvasDraw(to, &command, NULL, 0);
+	queue_command(NULL, to, &command, NULL, 0);
 }
 
 static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_POINT_2U *point, ID2D1Bitmap *source, const D2D1_RECT_U *rect)
@@ -1489,7 +1621,7 @@ static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS option
 	if (!(self->mapped = ALLOC((size_t)self->pixels.width * 4 * self->pixels.height)))
 		return E_OUTOFMEMORY;
 	if (!(options & D2D1_MAP_OPTIONS_DISCARD)) {
-		RavenCanvasPixels(self->surface, 0, 0, self->pixels.width, self->pixels.height, self->mapped, self->pixels.width * 4, 0);
+		canvas_pixels(self->surface, 0, 0, self->pixels.width, self->pixels.height, self->mapped, self->pixels.width * 4, 0);
 		if (alpha) {
 			UINT32 index;
 			for (index = 0; index < self->pixels.width * self->pixels.height; ++index)
@@ -1969,6 +2101,12 @@ struct target {
 	void *gdi_bits;
 };
 
+static void target_failed(struct target *target)
+{
+	if (!target->error)
+		target->error = D2DERR_INVALID_CALL;
+}
+
 static void **hwnd_table, **dcrt_table, **bitmaprt_table, **rt_table, **context_table, **context_secondary_table, **gdi_table;
 
 static struct target *target_of(void *iface)
@@ -2019,6 +2157,8 @@ static ULONG STDMETHODCALLTYPE target_Release(void *iface)
 	struct target *self = target_of(iface);
 	const LONG refs = InterlockedDecrement(&self->refs);
 	if (!refs) {
+		/* No queued command may name a target that is gone. */
+		flush_queue();
 		if (self->bitmap)
 			object_Release(self->bitmap);
 		if (self->params)
@@ -2067,7 +2207,7 @@ static void send(struct target *self, const struct command *command, const struc
 	if (!self->bitmap)
 		return;
 	self->drawn = TRUE;
-	if (!RavenCanvasDraw(self->bitmap->surface, command, data ? data->data : NULL, data ? (DWORD)data->size : 0) && !self->error)
+	if (!queue_command(self, self->bitmap->surface, command, data ? data->data : NULL, data ? data->size : 0) && !self->error)
 		self->error = D2DERR_INVALID_CALL;
 }
 
@@ -2245,72 +2385,130 @@ static void STDMETHODCALLTYPE context_DrawGeometryRealization(void *iface, ID2D1
 static LONG frame_number;
 
 /* A bitmap over a Direct3D texture that the program fills itself, with its device or with a copy, is drawn with the texture's pixels:
- * they come through a staging copy into the bitmap's host surface. Formats without four bytes a pixel other than A8 are left as they
- * are. */
-static void read_texture(struct bitmap *bitmap)
+ * they come through a staging copy into the bitmap's host surface. The texture is copied and mapped once a frame, which waits for the
+ * device once, and only the areas the drawings sample go to the host surface: Office draws its ribbon icons as small pieces of one
+ * large atlas. Formats without four bytes a pixel other than A8 are left as they are. */
+static BOOL area_within(const RECT *areas, UINT32 count, const RECT *area)
 {
-	ID3D11Texture2D *texture = NULL, *staging = NULL;
-	ID3D11Device *device = NULL;
-	ID3D11DeviceContext *context = NULL;
+	UINT32 index;
+	for (index = 0; index < count; ++index)
+		if (areas[index].left <= area->left && areas[index].top <= area->top && areas[index].right >= area->right
+			&& areas[index].bottom >= area->bottom)
+			return TRUE;
+	return FALSE;
+}
+
+/* Makes the texture readable in the mapped staging texture: its first read in a frame copies the whole of it and maps it, which waits for
+ * the device once, and every later area of the frame is read from that mapping. Copying the areas one by one waited for the device at
+ * each new one, and Office samples dozens of icons of its atlas a frame. */
+static BOOL stage_texture(struct bitmap *bitmap, const D3D11_TEXTURE2D_DESC *texture_desc, ID3D11Texture2D *texture)
+{
+	if (bitmap->staging_mapped.pData)
+		return TRUE;
+	if (!bitmap->staging) {
+		ID3D11Device *device = NULL;
+		D3D11_TEXTURE2D_DESC desc = *texture_desc;
+		ID3D11Texture2D_GetDevice(texture, &device);
+		if (!device)
+			return FALSE;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.BindFlags = 0;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		desc.MiscFlags = 0;
+		ID3D11Device_GetImmediateContext(device, &bitmap->staging_context);
+		if (!bitmap->staging_context || FAILED(ID3D11Device_CreateTexture2D(device, &desc, NULL, &bitmap->staging))) {
+			if (bitmap->staging_context)
+				ID3D11DeviceContext_Release(bitmap->staging_context);
+			bitmap->staging_context = NULL;
+			bitmap->staging = NULL;
+			ID3D11Device_Release(device);
+			return FALSE;
+		}
+		ID3D11Device_Release(device);
+	}
+	ID3D11DeviceContext_CopySubresourceRegion(bitmap->staging_context, (ID3D11Resource *)bitmap->staging, 0, 0, 0, 0, (ID3D11Resource *)texture, 0, NULL);
+	if (FAILED(ID3D11DeviceContext_Map(bitmap->staging_context, (ID3D11Resource *)bitmap->staging, 0, D3D11_MAP_READ, 0, &bitmap->staging_mapped))) {
+		bitmap->staging_mapped.pData = NULL;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static void read_texture(struct bitmap *bitmap, const RECT *wanted)
+{
+	ID3D11Texture2D *texture = NULL;
 	D3D11_TEXTURE2D_DESC desc;
-	D3D11_MAPPED_SUBRESOURCE mapped;
-	BYTE *pixels = NULL;
-	UINT32 row, column;
+	BYTE *pixels;
+	UINT32 row, column, index, width, height;
+	RECT area = {0, 0, (LONG)bitmap->pixels.width, (LONG)bitmap->pixels.height};
 	const LONG frame = frame_number;
-	if (bitmap->targeted || bitmap->read_frame == frame)
+	if (bitmap->targeted)
 		return;
-	bitmap->read_frame = frame;
+	if (bitmap->read_frame != frame) {
+		/* The texture may have changed since: what the staging copy holds is old, and the areas read become the guess for this frame. */
+		bitmap->read_frame = frame;
+		bitmap->read_count = 0;
+		if (bitmap->staging_mapped.pData) {
+			ID3D11DeviceContext_Unmap(bitmap->staging_context, (ID3D11Resource *)bitmap->staging, 0);
+			bitmap->staging_mapped.pData = NULL;
+		}
+	}
+	if (wanted && bitmap->read_count < ARRAYSIZE(bitmap->read)) {
+		area.left = max(wanted->left, 0);
+		area.top = max(wanted->top, 0);
+		area.right = min(wanted->right, (LONG)bitmap->pixels.width);
+		area.bottom = min(wanted->bottom, (LONG)bitmap->pixels.height);
+		if (area.right <= area.left || area.bottom <= area.top)
+			return;
+	}
+	if (area_within(bitmap->read, bitmap->read_count, &area))
+		return;
+	if (bitmap->read_count < ARRAYSIZE(bitmap->read))
+		bitmap->read[bitmap->read_count++] = area;
+	else {
+		/* Past as many areas as the frame keeps, the whole texture is read and stands for them all. */
+		bitmap->read[0] = area;
+		bitmap->read_count = 1;
+	}
+	width = (UINT32)(area.right - area.left);
+	height = (UINT32)(area.bottom - area.top);
 	if (FAILED(IDXGISurface_QueryInterface(bitmap->dxgi, &IID_ID3D11Texture2D, (void **)&texture)))
 		return;
 	ID3D11Texture2D_GetDesc(texture, &desc);
 	if (desc.SampleDesc.Count != 1 || desc.Width != bitmap->pixels.width || desc.Height != bitmap->pixels.height
 		|| (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB && desc.Format != DXGI_FORMAT_B8G8R8X8_UNORM
-			&& desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB && desc.Format != DXGI_FORMAT_A8_UNORM))
-		goto done;
-	ID3D11Texture2D_GetDevice(texture, &device);
-	if (!device)
-		goto done;
-	ID3D11Device_GetImmediateContext(device, &context);
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Usage = D3D11_USAGE_STAGING;
-	desc.BindFlags = 0;
-	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-	desc.MiscFlags = 0;
-	if (!context || FAILED(ID3D11Device_CreateTexture2D(device, &desc, NULL, &staging)))
-		goto done;
-	ID3D11DeviceContext_CopySubresourceRegion(context, (ID3D11Resource *)staging, 0, 0, 0, 0, (ID3D11Resource *)texture, 0, NULL);
-	if (FAILED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &mapped)))
-		goto done;
-	if ((pixels = ALLOC((size_t)desc.Width * desc.Height * 4))) {
-		for (row = 0; row < desc.Height; ++row) {
-			const BYTE *from = (const BYTE *)mapped.pData + (size_t)row * mapped.RowPitch;
-			BYTE *to = pixels + (size_t)row * desc.Width * 4;
-			if (desc.Format == DXGI_FORMAT_A8_UNORM)
+			&& desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB && desc.Format != DXGI_FORMAT_A8_UNORM)
+		|| !stage_texture(bitmap, &desc, texture)) {
+		ID3D11Texture2D_Release(texture);
+		return;
+	}
+	if ((pixels = ALLOC_UNSET((size_t)width * height * 4))) {
+		const UINT32 depth = desc.Format == DXGI_FORMAT_A8_UNORM ? 1 : 4;
+		for (row = 0; row < height; ++row) {
+			const BYTE *from = (const BYTE *)bitmap->staging_mapped.pData + (size_t)(area.top + row) * bitmap->staging_mapped.RowPitch
+				+ (size_t)area.left * depth;
+			BYTE *to = pixels + (size_t)row * width * 4;
+			if (depth == 1)
 				/* An alpha-only bitmap draws as black of that coverage. */
-				for (column = 0; column < desc.Width; ++column)
+				for (column = 0; column < width; ++column) {
+					to[column * 4] = to[column * 4 + 1] = to[column * 4 + 2] = 0;
 					to[column * 4 + 3] = from[column];
+				}
 			else if (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
-				for (column = 0; column < desc.Width; ++column) {
+				for (column = 0; column < width; ++column) {
 					to[column * 4] = from[column * 4 + 2];
 					to[column * 4 + 1] = from[column * 4 + 1];
 					to[column * 4 + 2] = from[column * 4];
 					to[column * 4 + 3] = from[column * 4 + 3];
 				}
 			else
-				memcpy(to, from, (size_t)desc.Width * 4);
+				memcpy(to, from, (size_t)width * 4);
 		}
-		RavenCanvasPixels(bitmap->surface, 0, 0, desc.Width, desc.Height, pixels, desc.Width * 4, 1);
+		canvas_pixels(bitmap->surface, (INT32)area.left, (INT32)area.top, width, height, pixels, width * 4, 1);
 		FREE(pixels);
 	}
-	ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, 0);
-done:
-	if (staging)
-		ID3D11Texture2D_Release(staging);
-	if (context)
-		ID3D11DeviceContext_Release(context);
-	if (device)
-		ID3D11Device_Release(device);
 	ID3D11Texture2D_Release(texture);
 }
 
@@ -2320,8 +2518,18 @@ static void draw_bitmap(struct target *self, struct bitmap *bitmap, const D2D1_R
 	struct command command;
 	if (!bitmap)
 		return;
-	if (bitmap->dxgi)
-		read_texture(bitmap);
+	if (bitmap->dxgi) {
+		/* The source in pixels, a pixel wider on each side for the filtering that samples beside it. */
+		RECT wanted;
+		const float left = source ? source->left * bitmap->dpi_x / 96 : 0, top = source ? source->top * bitmap->dpi_y / 96 : 0;
+		const float right = source ? source->right * bitmap->dpi_x / 96 : (float)bitmap->pixels.width;
+		const float bottom = source ? source->bottom * bitmap->dpi_y / 96 : (float)bitmap->pixels.height;
+		wanted.left = (LONG)left - 1;
+		wanted.top = (LONG)top - 1;
+		wanted.right = (LONG)right + 2;
+		wanted.bottom = (LONG)bottom + 2;
+		read_texture(bitmap, &wanted);
+	}
 	command_start(self, &command, OP_DRAW_BITMAP);
 	command.bitmap = bitmap->surface;
 	command.opacity = opacity;
@@ -2406,7 +2614,7 @@ static void STDMETHODCALLTYPE target_FillOpacityMask(void *iface, ID2D1Bitmap *m
 	count = bitmap->pixels.width * bitmap->pixels.height;
 	if (!(pixels = ALLOC((size_t)count * 4)))
 		return;
-	RavenCanvasPixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
+	canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
 	for (index = 0; index < count; ++index)
 		pixels[index] = pixels[index * 4 + 3];
 	command_start(self, &command, OP_FILL_MASK);
@@ -2633,7 +2841,7 @@ static void read_wic(struct target *self)
 				pixels[index * 4 + 3] = alpha ? value : 255;
 			}
 		}
-		RavenCanvasPixels(self->bitmap->surface, 0, 0, width, height, pixels, width * 4, 1);
+		canvas_pixels(self->bitmap->surface, 0, 0, width, height, pixels, width * 4, 1);
 	}
 	FREE(pixels);
 }
@@ -2650,9 +2858,9 @@ static void present(struct target *self)
 	if (self->kind == TARGET_WIC && !self->drawn)
 		return;
 	self->drawn = FALSE;
-	if (!(pixels = ALLOC((size_t)width * height * 4)))
+	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
-	RavenCanvasPixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
+	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
 	if (self->kind == TARGET_HWND || self->kind == TARGET_DC) {
 		BITMAPINFO info;
 		HDC dc = self->kind == TARGET_HWND ? GetDC(self->hwnd) : self->dc;
@@ -2747,7 +2955,7 @@ static void read_bound_dc(struct target *self)
 		/* GDI leaves the fourth byte undefined: the pixels are opaque. */
 		for (index = 0; index < width * height; ++index)
 			((BYTE *)bits)[index * 4 + 3] = 255;
-		RavenCanvasPixels(self->bitmap->surface, 0, 0, width, height, bits, width * 4, 1);
+		canvas_pixels(self->bitmap->surface, 0, 0, width, height, bits, width * 4, 1);
 		SelectObject(memory, previous);
 	}
 	if (section)
@@ -2771,7 +2979,9 @@ static void STDMETHODCALLTYPE target_BeginDraw(void *iface)
 static HRESULT STDMETHODCALLTYPE target_EndDraw(void *iface, D2D1_TAG *tag1, D2D1_TAG *tag2)
 {
 	struct target *self = target_of(iface);
-	HRESULT result = self->drawing ? self->error : D2DERR_WRONG_STATE;
+	HRESULT result;
+	flush_queue();
+	result = self->drawing ? self->error : D2DERR_WRONG_STATE;
 	if (self->pushed && SUCCEEDED(result))
 		result = D2DERR_POP_CALL_DID_NOT_MATCH_PUSH;
 	while (self->pushed)
@@ -2786,6 +2996,7 @@ static HRESULT STDMETHODCALLTYPE target_EndDraw(void *iface, D2D1_TAG *tag1, D2D
 static HRESULT STDMETHODCALLTYPE target_Flush(void *iface, D2D1_TAG *tag1, D2D1_TAG *tag2)
 {
 	struct target *self = target_of(iface);
+	flush_queue();
 	if (self->bitmap && self->bitmap->dxgi)
 		present(self);
 	if (tag1) *tag1 = self->tag1;
@@ -3386,7 +3597,7 @@ static HRESULT STDMETHODCALLTYPE gdi_GetDC(void *iface, D2D1_DC_INITIALIZE_MODE 
 	}
 	self->gdi_previous = SelectObject(self->gdi_dc, self->gdi_bitmap);
 	if (mode == D2D1_DC_INITIALIZE_MODE_COPY)
-		RavenCanvasPixels(self->bitmap->surface, 0, 0, width, height, self->gdi_bits, width * 4, 0);
+		canvas_pixels(self->bitmap->surface, 0, 0, width, height, self->gdi_bits, width * 4, 0);
 	*out = self->gdi_dc;
 	return S_OK;
 }
@@ -3397,7 +3608,7 @@ static HRESULT STDMETHODCALLTYPE gdi_ReleaseDC(void *iface, const RECT *update)
 	const UINT32 width = self->bitmap ? self->bitmap->pixels.width : 0, height = self->bitmap ? self->bitmap->pixels.height : 0;
 	if (!self->gdi_dc)
 		return D2DERR_WRONG_STATE;
-	RavenCanvasPixels(self->bitmap->surface, 0, 0, width, height, self->gdi_bits, width * 4, 1);
+	canvas_pixels(self->bitmap->surface, 0, 0, width, height, self->gdi_bits, width * 4, 1);
 	SelectObject(self->gdi_dc, self->gdi_previous);
 	DeleteObject(self->gdi_bitmap);
 	DeleteDC(self->gdi_dc);
@@ -4876,7 +5087,9 @@ FLOAT WINAPI D2D1ComputeMaximumScaleFactor(const D2D1_MATRIX_3X2_F *matrix)
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {
-	if (reason == DLL_PROCESS_ATTACH)
+	if (reason == DLL_PROCESS_ATTACH) {
 		DisableThreadLibraryCalls(instance);
+		InitializeCriticalSection(&queue_lock);
+	}
 	return TRUE;
 }

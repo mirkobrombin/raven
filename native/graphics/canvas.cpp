@@ -329,14 +329,14 @@ bool draw(uint32_t handle, const Command &command, std::span<const uint8_t> data
 	}
 	case Op::draw_bitmap: {
 		sk_sp<SkImage> image;
-		{
-			std::lock_guard lock(surfaces_mutex);
-			const auto *source = find(command.bitmap);
-			if (!source)
-				return false;
-			// A surface drawn onto itself is read from a copy taken before the drawing.
-			image = source == surface ? SkImages::RasterFromPixmapCopy(source->bitmap.pixmap()) : source->bitmap.asImage();
-		}
+		// Another surface is drawn from its own pixels, without the copy an image of a changing bitmap takes: Office draws each icon
+		// of its ribbon from one large atlas. The surfaces stay locked until the drawing is done, so the pixels cannot go away under
+		// it. A surface drawn onto itself is read from a copy taken before the drawing.
+		std::unique_lock lock(surfaces_mutex);
+		const auto *source = find(command.bitmap);
+		if (!source)
+			return false;
+		image = source == surface ? SkImages::RasterFromPixmapCopy(source->bitmap.pixmap()) : SkImages::RasterFromPixmap(source->bitmap.pixmap(), nullptr, nullptr);
 		if (!image)
 			return false;
 		SkPaint paint;

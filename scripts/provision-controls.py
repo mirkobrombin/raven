@@ -182,7 +182,7 @@ def main():
     if wanted & {"dwrite", "d2d1", "uianimation"}:
         # The host services the DirectWrite and Direct2D components call: fonts measured and rasterized with FreeType, surfaces drawn with Skia.
         host_names = ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo", "RavenFontMetrics", "RavenFontName", "RavenFontOpen", "RavenFontOutline",
-                      "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasCreate", "RavenCanvasDestroy", "RavenCanvasDraw",
+                      "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasBatch", "RavenCanvasCreate", "RavenCanvasDestroy", "RavenCanvasDraw",
                       "RavenCanvasPixels", "RavenCanvasSize", "RavenPathCombine", "RavenPathWiden"]
         (output / "ravenhost.def").write_text("LIBRARY ravenhost.dll\nEXPORTS\n" + "".join(name + "\n" for name in host_names))
         run([triple + "-dlltool", "-d", output / "ravenhost.def", "-l", output / "libravenhost.a"])
