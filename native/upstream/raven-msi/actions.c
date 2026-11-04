@@ -536,8 +536,15 @@ static UINT act_install_files(msi_package *package)
 		UINT status = ERROR_SUCCESS;
 		// Maintenance may have no media: a file already in place then stays.
 		BOOL unreachable = package->maintenance && path && GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+		// A package that keeps its own media among the files it installs, as the .NET Framework does in its setup cache, names the
+		// installed file as its source once the source list points there: the file is already in place.
+		WCHAR full_source[MAX_PATH * 2], full_path[MAX_PATH * 2];
+		BOOL in_place = path && GetFullPathNameW(source, ARRAYSIZE(full_source), full_source, NULL) && GetFullPathNameW(path, ARRAYSIZE(full_path), full_path, NULL) &&
+			!lstrcmpiW(full_source, full_path);
 		if (unreachable)
 			package_log(L"Source %s is not here, %s stays as it is", source, path);
+		else if (in_place)
+			package_log(L"%s is its own source and stays as it is", path);
 		else if (path && should_install(package, file, path)) {
 			if (create_directories(package, file->component->assembly_folder ? file->component->assembly_folder : directory_target(package, file->component->directory)) || !backup_existing(package, path) ||
 				!CopyFileW(source, path, FALSE)) {
