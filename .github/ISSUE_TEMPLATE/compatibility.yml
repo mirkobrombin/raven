@@ -1,0 +1,49 @@
+name: Program does not run
+description: A Windows program or installer fails, stops or renders wrongly under Raven.
+labels: ["compatibility"]
+body:
+  - type: input
+    id: program
+    attributes:
+      label: Program and version
+      description: Name the exact build; where to get it helps too. Please do not attach the program itself.
+      placeholder: Notepad++ 8.7.6 portable, x64
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Raven revision
+      description: The output of `git rev-parse --short HEAD` in your checkout.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution, desktop and GPU driver
+      placeholder: Arch Linux, KDE Plasma on Wayland, Mesa 26.1 radv
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happens
+      description: Where it stops or what looks wrong. Screenshots are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      render: sh
+      placeholder: build/native/raven --run-process --execution=native --desktop=wayland setup.exe
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: >
+        The last lines Raven printed. Names of the Windows functions the program stopped at help most: write them as
+        `FunctionName` so they can be matched against the code.
+      render: text

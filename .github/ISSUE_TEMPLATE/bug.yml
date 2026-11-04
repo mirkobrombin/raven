@@ -1,0 +1,40 @@
+name: Bug
+description: Raven itself misbehaves, fails to build or a test fails.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happens
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Raven revision
+      description: The output of `git rev-parse --short HEAD` in your checkout.
+      placeholder: d3de1f87
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and desktop
+      placeholder: Fedora 44, GNOME on Wayland
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The exact commands, including the cmake options you configured with.
+      render: sh
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The relevant part of the output or the failing test log. It is formatted as code automatically.
+      render: text
