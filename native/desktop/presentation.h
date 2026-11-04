@@ -78,6 +78,11 @@ struct DesktopPresentation {
 	std::function<void(uint64_t,bool)> maximize;
 	// The pointer over the program's windows: a system cursor by its IDC_ identifier (32512 the arrow), or none for 0.
 	std::function<void(uint32_t shape)> cursor;
+	// Shows the pixels of a child window drawn by GDI over the surfaces drivers render to in the host window of its root (handle), at (x,
+	// y) of its frame: Windows composes child windows over a parent's swap chain, as the edit box of a pane drawn by Direct2D. No size
+	// removes the window's surface. Input keeps going to the host window.
+	std::function<void(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,
+		size_t stride)> overlay;
 	HostPlatform platform = HostPlatform::wayland;
 	// Minimizes a top-level window to the host's taskbar, keeping its surface; absent, a minimized window is removed from the screen.
 	std::function<void(uint64_t)> minimize;

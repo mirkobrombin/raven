@@ -242,6 +242,9 @@ private:
 	bool hosts_surface(uint64_t root) const;
 	std::optional<HostSurface> place_hosted(uint64_t window);
 	void place_host_surface(uint64_t root);
+	// Child windows shown over the driver's surfaces of their root (see DesktopPresentation::overlay), with that root.
+	std::map<uint64_t,uint64_t> overlay_windows;
+	void place_overlays(uint64_t root,const DesktopBitmap &bitmap,std::span<const uint8_t> pixels);
 	// Whether nothing has been drawn into the window's client area yet: its surface still holds only zeros or what erasing it left,
 	// or there is none.
 	bool blank_client(uint64_t handle) const;

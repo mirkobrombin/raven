@@ -358,6 +358,20 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 list(APPEND RAVEN_WAYLAND_PROTOCOL_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/${protocol}-unstable-v1-client-protocol.h
                     ${CMAKE_CURRENT_BINARY_DIR}/${protocol}-unstable-v1-protocol.c)
             endforeach()
+            # The size the surfaces graphics drivers render to are shown at: their window's, whatever size the driver's buffers are.
+            set(RAVEN_WAYLAND_VIEWPORTER OFF)
+            if(EXISTS "${WAYLAND_PROTOCOLS_DATA}/stable/viewporter/viewporter.xml")
+                set(RAVEN_WAYLAND_VIEWPORTER ON)
+                set(PROTOCOL_XML ${WAYLAND_PROTOCOLS_DATA}/stable/viewporter/viewporter.xml)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/viewporter-client-protocol.h
+                    COMMAND ${WAYLAND_SCANNER} client-header ${PROTOCOL_XML} ${CMAKE_CURRENT_BINARY_DIR}/viewporter-client-protocol.h
+                    DEPENDS ${PROTOCOL_XML} VERBATIM)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/viewporter-protocol.c
+                    COMMAND ${WAYLAND_SCANNER} private-code ${PROTOCOL_XML} ${CMAKE_CURRENT_BINARY_DIR}/viewporter-protocol.c
+                    DEPENDS ${PROTOCOL_XML} VERBATIM)
+                list(APPEND RAVEN_WAYLAND_PROTOCOL_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/viewporter-client-protocol.h
+                    ${CMAKE_CURRENT_BINARY_DIR}/viewporter-protocol.c)
+            endif()
             # Pointer shapes by name; the protocol refers to tablet tools, so their interfaces are generated with it.
             set(RAVEN_WAYLAND_CURSOR_SHAPE OFF)
             if(EXISTS "${WAYLAND_PROTOCOLS_DATA}/staging/cursor-shape/cursor-shape-v1.xml" AND EXISTS "${WAYLAND_PROTOCOLS_DATA}/stable/tablet/tablet-v2.xml")
@@ -380,6 +394,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ${RAVEN_WAYLAND_PROTOCOL_SOURCES})
             if(RAVEN_WAYLAND_CURSOR_SHAPE)
                 target_compile_definitions(raven_wayland PRIVATE RAVEN_WAYLAND_CURSOR_SHAPE=1)
+            endif()
+            if(RAVEN_WAYLAND_VIEWPORTER)
+                target_compile_definitions(raven_wayland PRIVATE RAVEN_WAYLAND_VIEWPORTER=1)
             endif()
             target_include_directories(raven_wayland PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
             target_link_libraries(raven_wayland PUBLIC PkgConfig::WAYLAND_CLIENT)

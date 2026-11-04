@@ -6,6 +6,9 @@
 #ifdef RAVEN_WAYLAND_CURSOR_SHAPE
 #include "cursor-shape-v1-client-protocol.h"
 #endif
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+#include "viewporter-client-protocol.h"
+#endif
 
 #include <wayland-client.h>
 #include <algorithm>
@@ -128,6 +131,9 @@ struct WaylandPresentation::State {
 	zwp_locked_pointer_v1 *locked=nullptr;
 	int64_t relative_x=0,relative_y=0;
 	uint64_t constrained_window=0;
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+	wp_viewporter *viewporter=nullptr;
+#endif
 #ifdef RAVEN_WAYLAND_CURSOR_SHAPE
 	wp_cursor_shape_manager_v1 *shape_manager=nullptr;
 	wp_cursor_shape_device_v1 *shape_device=nullptr;
@@ -166,10 +172,32 @@ struct WaylandPresentation::State {
 		uint64_t parent=0;
 		int32_t x=0,y=0;
 		bool placed=false,above=false;
+		// The window's client size, which the surface is shown at: a driver's buffers keep the size of the swap chain, which a program
+		// resizes after its window or not at all, and Windows shows them stretched over the client area rather than past its edges.
+		uint32_t width=0,height=0;
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+		wp_viewport *viewport=nullptr;
+#endif
 		void drop_role() { if (role) wl_subsurface_destroy(role); role=nullptr; parent=0; placed=false; }
-		~Hosted() { drop_role(); if (proxy) wl_surface_destroy(proxy); }
+		~Hosted() {
+			drop_role();
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+			if (viewport) wp_viewport_destroy(viewport);
+#endif
+			if (proxy) wl_surface_destroy(proxy);
+		}
 	};
 	std::map<uint64_t,std::unique_ptr<Hosted>> hosted;
+	// Child windows drawn by GDI shown over the driver's surfaces of their root (see overlay).
+	struct Overlay {
+		wl_surface *proxy=nullptr;
+		wl_subsurface *role=nullptr;
+		uint64_t root=0,parent=0;
+		int32_t x=0,y=0;
+		std::vector<std::unique_ptr<Buffer>> buffers;
+		~Overlay() { buffers.clear(); if (role) wl_subsurface_destroy(role); if (proxy) wl_surface_destroy(proxy); }
+	};
+	std::map<uint64_t,std::unique_ptr<Overlay>> overlays;
 	std::set<uint64_t> maximized;
 
 	~State() {
@@ -181,7 +209,11 @@ struct WaylandPresentation::State {
 		if (shape_device) wp_cursor_shape_device_v1_destroy(shape_device);
 		if (shape_manager) wp_cursor_shape_manager_v1_destroy(shape_manager);
 #endif
+		overlays.clear();
 		hosted.clear();
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+		if (viewporter) wp_viewporter_destroy(viewporter);
+#endif
 		surfaces.clear();
 		outputs.clear();
 		if (output_manager) zxdg_output_manager_v1_destroy(output_manager);
@@ -568,6 +600,10 @@ struct WaylandPresentation::State {
 			state.relative_manager=static_cast<zwp_relative_pointer_manager_v1 *>(wl_registry_bind(registry,name,&zwp_relative_pointer_manager_v1_interface,1));
 			state.watch_relative_motion();
 		}
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+		else if (!std::strcmp(interface,"wp_viewporter"))
+			state.viewporter=static_cast<wp_viewporter *>(wl_registry_bind(registry,name,&wp_viewporter_interface,1));
+#endif
 #ifdef RAVEN_WAYLAND_CURSOR_SHAPE
 		else if (!std::strcmp(interface,"wp_cursor_shape_manager_v1")) {
 			state.shape_manager=static_cast<wp_cursor_shape_manager_v1 *>(wl_registry_bind(registry,name,&wp_cursor_shape_manager_v1_interface,1));
@@ -793,7 +829,7 @@ struct WaylandPresentation::State {
 		attach_frame(window,width,height,pixels);
 	}
 
-	std::optional<HostSurface> host_surface(uint64_t handle,uint64_t window,int32_t x,int32_t y,bool shown) {
+	std::optional<HostSurface> host_surface(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown) {
 		if (!subcompositor) return std::nullopt;
 		const auto found=surfaces.find(handle);
 		auto *parent=found!=surfaces.end() && !found->second->closed ? found->second.get() : nullptr;
@@ -826,9 +862,78 @@ struct WaylandPresentation::State {
 			entry->above=shown;
 			changed=true;
 		}
+#ifdef RAVEN_WAYLAND_VIEWPORTER
+		if (viewporter && width && height && (entry->width!=width || entry->height!=height)) {
+			if (!entry->viewport) entry->viewport=wp_viewporter_get_viewport(viewporter,entry->proxy);
+			wp_viewport_set_destination(entry->viewport,int32_t(width),int32_t(height));
+			entry->width=width; entry->height=height;
+			// The size applies now, not only when the driver shows its next frame.
+			wl_surface_commit(entry->proxy);
+		}
+#endif
 		if (changed && parent) wl_surface_commit(parent->proxy);
 		wl_display_flush(display);
 		return HostSurface{display,entry->proxy};
+	}
+
+	void overlay(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,size_t stride) {
+		if (!width || !height) {
+			if (overlays.erase(window) && display) wl_display_flush(display);
+			return;
+		}
+		if (!subcompositor || !shm || width>4096 || height>4096 || stride<size_t(width)*4 || pixels.size()<stride*(height-1)+size_t(width)*4)
+			return;
+		const auto found=surfaces.find(handle);
+		if (found==surfaces.end() || found->second->closed) return;
+		auto &parent=*found->second;
+		auto &entry=overlays[window];
+		if (entry && entry->parent!=parent.serial) entry.reset();
+		bool moved=false;
+		if (!entry) {
+			entry=std::make_unique<Overlay>();
+			entry->proxy=wl_compositor_create_surface(compositor);
+			wl_region *none=wl_compositor_create_region(compositor);
+			wl_surface_set_input_region(entry->proxy,none);
+			wl_region_destroy(none);
+			// A subsurface made later stacks over those made before it, the driver's surfaces of the window among them.
+			entry->role=wl_subcompositor_get_subsurface(subcompositor,entry->proxy,parent.proxy);
+			wl_subsurface_set_desync(entry->role);
+			entry->root=handle; entry->parent=parent.serial;
+			moved=true;
+		}
+		if (moved || entry->x!=x || entry->y!=y) {
+			wl_subsurface_set_position(entry->role,x,y);
+			entry->x=x; entry->y=y; moved=true;
+		}
+		std::erase_if(entry->buffers,[&](const std::unique_ptr<Buffer> &buffer) {
+			return buffer->released && (buffer->width!=width || buffer->height!=height);
+		});
+		Buffer *target=nullptr;
+		for (const auto &buffer : entry->buffers) if (buffer->released && !target) target=buffer.get();
+		if (!target) {
+			if (entry->buffers.size()>=3) return;
+			auto buffer=std::make_unique<Buffer>(); buffer->size=size_t(width)*height*4; buffer->width=width; buffer->height=height;
+			const int descriptor=int(syscall(SYS_memfd_create,"raven-overlay",MFD_CLOEXEC));
+			if (descriptor<0) return;
+			if (ftruncate(descriptor,off_t(buffer->size))<0) { close(descriptor); return; }
+			buffer->pixels=mmap(nullptr,buffer->size,PROT_READ|PROT_WRITE,MAP_SHARED,descriptor,0);
+			if (buffer->pixels==MAP_FAILED) { close(descriptor); return; }
+			wl_shm_pool *pool=wl_shm_create_pool(shm,descriptor,int32_t(buffer->size)); close(descriptor);
+			buffer->proxy=wl_shm_pool_create_buffer(pool,0,int32_t(width),int32_t(height),int32_t(width*4),WL_SHM_FORMAT_XRGB8888);
+			wl_shm_pool_destroy(pool);
+			static const wl_buffer_listener buffer_listener{[](void *data,wl_buffer *) { static_cast<Buffer *>(data)->released=true; }};
+			wl_buffer_add_listener(buffer->proxy,&buffer_listener,buffer.get());
+			target=buffer.get();
+			entry->buffers.push_back(std::move(buffer));
+		}
+		for (uint32_t row=0;row<height;++row)
+			std::memcpy(static_cast<uint8_t *>(target->pixels)+size_t(row)*width*4,pixels.data()+size_t(row)*stride,size_t(width)*4);
+		target->released=false;
+		wl_surface_attach(entry->proxy,target->proxy,0,0);
+		wl_surface_damage(entry->proxy,0,0,int32_t(width),int32_t(height));
+		wl_surface_commit(entry->proxy);
+		if (moved) wl_surface_commit(parent.proxy);
+		wl_display_flush(display);
 	}
 
 	void maximize(uint64_t handle,bool wanted) {
@@ -929,6 +1034,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		if (state->keyboard_window==handle) state->keyboard_window=0;
 		std::erase_if(state->pending,[&](const DesktopEvent &event) { return event.window==handle; });
 		if (state->constrained_window==handle) state->release_constraint();
+		std::erase_if(state->overlays,[&](const auto &entry) { return entry.second->root==handle; });
 		if (state->surfaces.erase(handle) && state->display) state->sync();
 	},
 	[this](std::chrono::milliseconds budget) {
@@ -959,8 +1065,8 @@ DesktopPresentation WaylandPresentation::callbacks()
 		wl_display_flush(state->display);
 	},[this](std::string_view text) { state->publish_text(text); },
 	[this]() { return state->fetch_text(); },
-	[this](uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t,uint32_t,bool shown) {
-		return state->host_surface(handle,window,x,y,shown);
+	[this](uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown) {
+		return state->host_surface(handle,window,x,y,width,height,shown);
 	},
 	[this](uint64_t window) {
 		if (!state->hosted.erase(window)) return;
@@ -978,6 +1084,9 @@ DesktopPresentation WaylandPresentation::callbacks()
 		if (state->cursor==shape) return;
 		state->cursor=shape;
 		state->show_cursor();
+	},
+	[this](uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,size_t stride) {
+		state->overlay(handle,window,x,y,width,height,pixels,stride);
 	}};
 }
 

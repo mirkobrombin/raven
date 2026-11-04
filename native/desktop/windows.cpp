@@ -185,6 +185,13 @@ void NativeWindows::present(uint64_t handle, bool force)
 	dirty_roots.erase(handle);
 	// Without a display the frame has nowhere to go and is dropped; the window lives on as on a screen that is switched off.
 	if (!presentation.present) return;
+	// A window without area shows nothing, as on Windows. Office sizes the shadows of its dialogs and menus only through
+	// UpdateLayeredWindow, which draws nothing here: shown, they were black pixels where windows open by default.
+	if (const auto *empty=std::as_const(objects).window(handle);
+		empty && (empty->outer.right<=empty->outer.left || empty->outer.bottom<=empty->outer.top)) {
+		remove_host_window(handle);
+		return;
+	}
 	// The compositor does not show a window or its controls as empty rectangles: while the window or a visible child of the same thread
 	// still waits for its first WM_PAINT, the frame is put off, for at most a quarter of a second (two seconds before the window first
 	// shows, as a program can take that long to paint it), so that everything appears painted together. A window that has painted once
@@ -268,19 +275,51 @@ void NativeWindows::present(uint64_t handle, bool force)
 	if (presentation.maximize) presentation.maximize(handle,(window->style & 0x01000000U)!=0);
 	presentation.present(handle,encode_utf8(window->title,true),bitmap->width,bitmap->height,pixels);
 	place_host_surface(handle);
+	place_overlays(handle,*bitmap,pixels);
+}
+
+// A visible child that GDI draws, put by the program on a window a driver renders to, shows over that window's surface with all it holds,
+// as Windows composes child windows over a swap chain: the edit box of a pane Office draws with Direct2D. Its pixels are those painted
+// in the root's frame.
+void NativeWindows::place_overlays(uint64_t root,const DesktopBitmap &bitmap,std::span<const uint8_t> pixels)
+{
+	if (!presentation.overlay) return;
+	const auto *top=std::as_const(objects).window(root);
+	std::set<uint64_t> wanted;
+	if (top && !hosted_windows.empty())
+		for (const auto child : objects.window_handles()) {
+			const auto *window=std::as_const(objects).window(child);
+			if (!window || !window->parent || !hosted_windows.contains(window->parent) || hosted_windows.contains(child) ||
+				objects.window_root(child)!=root || !objects.window_visible(child))
+				continue;
+			const int32_t left=std::max(window->outer.left-top->outer.left,0),top_edge=std::max(window->outer.top-top->outer.top,0);
+			const int32_t right=std::min(window->outer.right-top->outer.left,int32_t(bitmap.width));
+			const int32_t bottom=std::min(window->outer.bottom-top->outer.top,int32_t(bitmap.height));
+			if (right<=left || bottom<=top_edge) continue;
+			const size_t stride=size_t(bitmap.width)*4;
+			presentation.overlay(root,child,left,top_edge,uint32_t(right-left),uint32_t(bottom-top_edge),
+				pixels.subspan(size_t(top_edge)*stride+size_t(left)*4),stride);
+			overlay_windows[child]=root;
+			wanted.insert(child);
+		}
+	for (auto entry=overlay_windows.begin();entry!=overlay_windows.end();) {
+		if (entry->second!=root || wanted.contains(entry->first)) { ++entry; continue; }
+		presentation.overlay(root,entry->first,0,0,0,0,{},0);
+		entry=overlay_windows.erase(entry);
+	}
 }
 
 std::optional<HostSurface> NativeWindows::host_surface(uint64_t handle,bool hidden)
 {
 	if (!presentation.host_surface) return std::nullopt;
 	const auto root=objects.window_root(handle);
-	if (!objects.window(root) || !objects.window(handle) || (!hidden && !objects.window_visible(handle))) return std::nullopt;
+	if (!std::as_const(objects).window(root) || !std::as_const(objects).window(handle) || (!hidden && !objects.window_visible(handle))) return std::nullopt;
 	// GPU drawing supplies the client pixels itself, so it cannot wait for WM_PAINT. A hidden window may get a surface nothing shows yet,
 	// as a program makes its swap chain before it shows the window.
 	if (objects.window_visible(root)) {
 		try { present(root,true); } catch (...) { return std::nullopt; }
 	}
-	if (!objects.window(handle)) return std::nullopt;
+	if (!std::as_const(objects).window(handle)) return std::nullopt;
 	hosted_windows[handle]=root;
 	auto surface=place_hosted(handle);
 	if (!surface) hosted_windows.erase(handle);
