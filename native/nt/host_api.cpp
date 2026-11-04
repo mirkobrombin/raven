@@ -1,4 +1,5 @@
 #include "access_token.h"
+#include "actctx.h"
 #include "interfaces.h"
 #include "kernel_context.h"
 #include "text.h"
@@ -499,7 +500,14 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// Network accounts: the one account of the prefix, a member of Administrators, on a machine in a workgroup. Buffers come from the
 	// guest allocator and go back through NetApiBufferFree.
-	registry.add("NetUserGetInfo", 4, [&context](ApiCall &call) {
+	static constexpr std::u16string_view workgroup = u"WORKGROUP";
+	const auto fold = [](std::u16string text) {
+		for (auto &character : text)
+			if (character >= u'a' && character <= u'z')
+				character = char16_t(character - 32);
+		return text;
+	};
+	registry.add("NetUserGetInfo", 4, [&context, fold](ApiCall &call) {
 		const auto user = context.paths.user_name();
 		if (!call[3]) {
 			call.ret(87);
@@ -507,12 +515,6 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.store_pointer(call[3], 0);
 		const auto asked = call[1] ? call.wide(call[1], 256) : std::u16string();
-		const auto fold = [](std::u16string text) {
-			for (auto &character : text)
-				if (character >= u'a' && character <= u'z')
-					character = char16_t(character - 32);
-			return text;
-		};
 		if (fold(asked) != fold(user)) {
 			call.ret(2221);
 			return;
@@ -552,7 +554,6 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(87);
 			return;
 		}
-		const std::u16string workgroup = u"WORKGROUP";
 		const uint64_t block = context.allocator.allocate((workgroup.size() + 1) * 2);
 		if (!block) {
 			call.ret(8);
@@ -561,6 +562,53 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.put_wide(block, workgroup, workgroup.size() + 1);
 		call.store_pointer(call[1], block);
 		call.store<uint32_t>(call[2], 2);
+		call.ret(0);
+	});
+	// The workstation: this computer, by its NetBIOS name or its host name, an NT platform (PLATFORM_ID_NT) at the real Windows version,
+	// with the prefix's one user logged on. Levels 100, 101 and 102 extend the same record; this machine has no LAN Manager directory.
+	registry.add("NetWkstaGetInfo", 3, [&context, computer_name, fold](ApiCall &call) {
+		if (!call[2]) {
+			call.ret(87);
+			return;
+		}
+		call.store_pointer(call[2], 0);
+		if (call[0]) {
+			auto server = fold(call.wide(call[0], 256));
+			if (server.starts_with(u"\\\\"))
+				server.erase(0, 2);
+			if (!server.empty() && server != fold(*computer_name(0)) && server != fold(*computer_name(1)) && server != fold(*computer_name(3))) {
+				call.ret(53);
+				return;
+			}
+		}
+		const uint32_t level = call.u32(1);
+		if (level != 100 && level != 101 && level != 102) {
+			call.ret(124);
+			return;
+		}
+		const auto name = *computer_name(0);
+		const size_t width = call.pointer_width();
+		const size_t record = level == 100 ? width == 4 ? 20 : 32 : level == 101 ? width == 4 ? 24 : 40 : width == 4 ? 28 : 48;
+		const uint64_t block = context.allocator.allocate(record + (name.size() + 1) * 2 + (workgroup.size() + 1) * 2 + 2);
+		if (!block) {
+			call.ret(8);
+			return;
+		}
+		const uint64_t computer = block + record, group = computer + (name.size() + 1) * 2, empty = group + (workgroup.size() + 1) * 2;
+		call.put_wide(computer, name, name.size() + 1);
+		call.put_wide(group, workgroup, workgroup.size() + 1);
+		call.store<uint16_t>(empty, 0);
+		const auto version = activation_contexts().system_version();
+		call.store<uint32_t>(block, 500);
+		call.store_pointer(block + width, computer);
+		call.store_pointer(block + 2 * width, group);
+		call.store<uint32_t>(block + 3 * width, version.major);
+		call.store<uint32_t>(block + 3 * width + 4, version.minor);
+		if (level >= 101)
+			call.store_pointer(block + 3 * width + 8, empty);
+		if (level == 102)
+			call.store<uint32_t>(block + 4 * width + 8, 1);
+		call.store_pointer(call[2], block);
 		call.ret(0);
 	});
 	registry.add("NetApiBufferFree", 1, [&context](ApiCall &call) {
