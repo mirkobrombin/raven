@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <thread>
 #include <unistd.h>
+#include <sys/stat.h>
 
 namespace raven {
 
@@ -512,7 +513,10 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	static const bool traced = std::getenv("RAVEN_TRACE_WAITS") != nullptr;
 	const auto began = std::chrono::steady_clock::now();
 	const char *api = api_in_progress;
+	me.waiting_in = api;
+	me.waiting_since = began;
 	schedule();
+	me.waiting_in = nullptr;
 	const bool satisfied = me.ready && me.ready();
 	me.state = GuestThread::State::running;
 	if (traced) {
@@ -526,6 +530,34 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 		}
 	}
 	return satisfied;
+}
+
+void NativeThreads::serve()
+{
+	for (const auto &service : services)
+		service();
+	// RAVEN_DUMP_THREADS_ON names a file: whenever it is touched every process lists its threads with their state and the wait each
+	// is in. A program that stops answering shows which thread waits for what.
+	static const char *trigger = std::getenv("RAVEN_DUMP_THREADS_ON");
+	static auto checked = std::chrono::steady_clock::now();
+	static timespec dumped{};
+	if (!trigger || std::chrono::steady_clock::now() - checked < std::chrono::milliseconds(200))
+		return;
+	checked = std::chrono::steady_clock::now();
+	struct stat touched{};
+	if (::stat(trigger, &touched) != 0 || (touched.st_mtim.tv_sec == dumped.tv_sec && touched.st_mtim.tv_nsec == dumped.tv_nsec))
+		return;
+	dumped = touched.st_mtim;
+	static constexpr const char *states[] = {"ready", "running", "waiting", "done"};
+	for (const auto &thread : threads) {
+		std::fprintf(stderr, "raven: thread %u %s", thread->id, states[size_t(thread->state)]);
+		if (thread->state == GuestThread::State::waiting && thread->waiting_in)
+			std::fprintf(stderr, " in %s for %lld ms", thread->waiting_in,
+				(long long)std::chrono::duration_cast<std::chrono::milliseconds>(checked - thread->waiting_since).count());
+		if (thread->suspend_count)
+			std::fprintf(stderr, " suspended %d", thread->suspend_count);
+		std::fprintf(stderr, " rip %llx rsp %llx\n", (unsigned long long)thread->snapshot.context.registers.rip, (unsigned long long)thread->snapshot.context.registers.rsp);
+	}
 }
 
 bool NativeThreads::yield()

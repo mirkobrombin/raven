@@ -370,11 +370,15 @@ bool NativeWindows::system_dispatch(std::string_view name)
 				throw uint32_t(8);
 			std::erase_if(timers, [&](const Timer &timer) { return timer.window == args[0] && timer.id == id; });
 			timers.push_back({args[0], id, args[3], interval, std::chrono::steady_clock::now() + std::chrono::milliseconds(interval), false, environment.thread_id()});
+			if (std::getenv("RAVEN_TRACE_TIMERS"))
+				std::cerr << "timer set " << std::hex << args[0] << ' ' << id << std::dec << " every " << interval << " ms on thread " << environment.thread_id() << '\n';
 			result = id;
 		} else if (name == "KillTimer") {
 			const auto args = process.api_arguments(2);
 			const auto before = timers.size();
 			std::erase_if(timers, [&](const Timer &timer) { return timer.window == args[0] && timer.id == args[1]; });
+			if (std::getenv("RAVEN_TRACE_TIMERS"))
+				std::cerr << "timer kill " << std::hex << args[0] << ' ' << args[1] << std::dec << '\n';
 			if (before == timers.size())
 				throw uint32_t(1814);
 			result = 1;

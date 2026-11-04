@@ -314,7 +314,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			return std::nullopt;
 		return std::chrono::steady_clock::now() + std::chrono::nanoseconds(from_now * 100);
 	};
-	const auto multiple = [wait, handle_at](ApiCall &call, bool alertable) {
+	const auto multiple = [wait, handle_at, &objects, &threads](ApiCall &call, bool alertable) {
 		const uint32_t count = call.u32(0);
 		if (count > 64 || !call[1]) {
 			call.fail(87, wait_failed);
@@ -323,6 +323,17 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint64_t> handles(count);
 		for (uint32_t index = 0; index < count; ++index)
 			handles[index] = handle_at(call, call[1], index);
+		// RAVEN_TRACE_WAITS also names what a wait for several objects is given: each handle, its type and whether it is signaled.
+		static const bool traced = std::getenv("RAVEN_TRACE_WAITS") != nullptr;
+		if (traced && call.u32(3)) {
+			std::fprintf(stderr, "raven: thread %u waits for %s of", threads.current_id(), call.u32(2) ? "all" : "any");
+			for (const auto handle : handles) {
+				const auto object = objects.object(handle);
+				std::fprintf(stderr, " %llx %s %d", (unsigned long long)handle, object ? to_utf8(std::u16string(object->type_name())).c_str() : "?",
+					objects.signaled(handle, threads.current_id()));
+			}
+			std::fprintf(stderr, "\n");
+		}
 		call.ret(wait(call, handles, call.u32(2), call.u32(3), alertable));
 	};
 	registry.add("WaitForMultipleObjects", 4, [multiple](ApiCall &call) { multiple(call, false); });
