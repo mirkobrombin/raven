@@ -1,0 +1,165 @@
+name: Nightly
+
+on:
+  schedule:
+    # Every night the full pipeline; on Sundays also the comparison with Wine.
+    - cron: "41 2 * * 1-6"
+    - cron: "41 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Also compare with Wine
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  COMPONENTS: /opt/ci/components
+  BUILD: /opt/ci/build
+  ARCHIVES: /opt/ci/archives
+
+jobs:
+  # The same graph as a push, on the main branch as it is tonight: new CVEs in the scanned inputs and tests broken by a
+  # change in the runner image show up here even on days nobody pushes.
+  ci:
+    name: CI
+    # The ./ form works with every tool that reads these files; the newer $/ form does not yet.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
+
+  drift:
+    name: Upstream versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # the issue that tracks newer upstream releases
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare pins with upstream releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/upstream_drift.py "${RUNNER_TEMP}/drift.md"
+
+      # One open issue holds the table and is updated in place; it is closed when every pin is current again.
+      - name: Update the tracking issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const table = fs.readFileSync(`${process.env.RUNNER_TEMP}/drift.md`, 'utf8');
+            const title = 'Pinned inputs with newer upstream releases';
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const open = (await github.paginate(github.rest.issues.listForRepo, { ...repo, state: 'open', labels: 'upstream' }))
+              .find(issue => issue.title === title);
+            const body = 'These external inputs have newer releases than the versions Raven pins. Moving to one changes what ' +
+              'Raven ships, so it needs a build, the tests and a license review first.\n\n' + table;
+            if (!table.includes('**newer**')) {
+              if (open)
+                await github.rest.issues.update({ ...repo, issue_number: open.number, state: 'closed', body });
+            } else if (!open) {
+              await github.rest.issues.create({ ...repo, title, body, labels: ['upstream'] });
+            } else if (open.body !== body) {
+              await github.rest.issues.update({ ...repo, issue_number: open.number, body });
+            }
+
+  benchmark:
+    name: Compare with Wine
+    needs: ci
+    if: inputs.benchmark || github.event.schedule == '41 2 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+      options: --cap-add SYS_PTRACE --security-opt seccomp=unconfined --shm-size 2g
+    steps:
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3
+          git config --global --add safe.directory "*"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test packages and Wine
+        run: |
+          .github/scripts/install-fedora.sh test
+          dnf install -y --setopt=install_weak_deps=False wine
+
+      - name: Download components
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: component-*
+          path: /opt/ci/archives
+          merge-multiple: true
+
+      - name: Download build tree
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: /opt/ci
+
+      - name: Unpack
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/components.sh unpack
+          zstd -d -q -c /opt/ci/build.tar.zst | tar -C /opt/ci -xf -
+
+      # Shared runners vary from run to run, so the figures show a trend, not a measurement to quote.
+      - name: Run startup and SQLite workloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /opt/ci/benchmark
+          {
+            echo "## Raven and Wine on a shared runner"
+            echo
+            echo '```'
+            python3 scripts/benchmark-wine.py "${BUILD}/native/raven" "$(command -v wine)" "${COMPONENTS}/testdata" \
+              "${COMPONENTS}/graphics/dxvk/pe64" "${COMPONENTS}/testdata/benchmark/startup.exe" /opt/ci/benchmark 5 startup sqlite
+            echo '```'
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload samples
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark
+          path: /opt/ci/benchmark/samples.json
+          retention-days: 90
+
+  alert:
+    name: Report failure
+    needs: [ci, drift, benchmark]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write # the issue that reports a failed night
+    steps:
+      # A failed night opens one issue, or comments on the one already open, so failures are not lost in the Actions tab.
+      - name: Open or update the failure issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const title = 'Nightly run failed';
+            const run = `${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
+            const open = (await github.paginate(github.rest.issues.listForRepo, { ...repo, state: 'open', labels: 'nightly' }))
+              .find(issue => issue.title === title);
+            if (open)
+              await github.rest.issues.createComment({ ...repo, issue_number: open.number, body: `Failed again: ${run}` });
+            else
+              await github.rest.issues.create({ ...repo, title, labels: ['nightly'],
+                body: `The nightly run on ${context.sha.slice(0, 7)} failed: ${run}\n\nClose this issue once the cause is fixed.` });

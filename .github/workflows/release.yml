@@ -1,0 +1,244 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, such as v0.1.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  COMPONENTS: /opt/ci/components
+  BUILD: /opt/ci/build
+  ARCHIVES: /opt/ci/archives
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  # Provision: a release ships only components whose corresponding source travels with it (docs/packaging.md), so it
+  # provisions those afresh, with their source archives, instead of reusing the trimmed CI caches.
+
+  provision:
+    name: Provision ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - component: rtl
+            arguments: --output
+            recipe: scripts/provision-rtl.py
+          - component: controls
+            arguments: --arch x64 --output
+            recipe: scripts/provision-controls.py
+          - component: controls32
+            arguments: --arch x86 --output
+            recipe: scripts/provision-controls.py
+          - component: installer
+            arguments: --arch x64 --output
+            recipe: scripts/provision-installer.py
+          - component: installer32
+            arguments: --arch x86 --output
+            recipe: scripts/provision-installer.py
+          - component: testdata
+            arguments: --output
+            recipe: scripts/provision-fixtures.py
+    env:
+      COMPONENT: ${{ matrix.component }}
+      RECIPE: ${{ matrix.recipe }}
+      ARGUMENTS: ${{ matrix.arguments }}
+      TARGET: /opt/ci/components/${{ matrix.component }}
+    steps:
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3
+          git config --global --add safe.directory "*"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Install build packages
+        run: .github/scripts/install-fedora.sh build
+
+      - name: Provision ${{ matrix.component }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -ra arguments <<< "${ARGUMENTS}"
+          python3 "${RECIPE}" "${arguments[@]}" "${TARGET}"
+
+      - name: Pack component
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${ARCHIVES}"
+          tar -C "${COMPONENTS}" -cf - "${COMPONENT}" | zstd -T0 -3 -q -o "${ARCHIVES}/${COMPONENT}.tar.zst"
+
+      - name: Upload component
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: component-${{ matrix.component }}
+          path: /opt/ci/archives/${{ matrix.component }}.tar.zst
+          retention-days: 7
+          if-no-files-found: error
+
+  # Build and test: docs/packaging.md as written, on one machine, because the seal and the bundle check the very tree the
+  # complete suite ran against.
+
+  package:
+    name: Build, test and bundle
+    needs: provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+      # The host root is mounted only to delete the runner's preinstalled SDKs: a RelWithDebInfo tree and its test
+      # prefixes need more disk than the runner leaves free.
+      options: --cap-add SYS_PTRACE --security-opt seccomp=unconfined --shm-size 2g -v /:/host
+    env:
+      XDG_RUNTIME_DIR: /run/ci-runtime
+    steps:
+      - name: Free disk space
+        run: |
+          rm -rf /host/usr/share/dotnet /host/usr/local/lib/android /host/opt/ghc /host/opt/hostedtoolcache
+          df -h /
+
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3
+          git config --global --add safe.directory "*"
+
+      # package-native.py records the exact source revision, so the full history and the tag are needed.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install test packages
+        run: .github/scripts/install-fedora.sh test
+
+      - name: Download components
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: component-*
+          path: /opt/ci/archives
+          merge-multiple: true
+
+      - name: Unpack components
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/components.sh unpack
+          install -d -m 0700 "${XDG_RUNTIME_DIR}"
+
+      - name: List source materials
+        run: python3 .github/scripts/release_materials.py "${COMPONENTS}" /opt/ci/materials.json
+
+      - name: Configure
+        run: >
+          cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DRAVEN_RTL_COMPONENT_PATH="${COMPONENTS}/rtl/raven-rtl.dll"
+          -DRAVEN_CONTROLS_COMPONENT_DIR="${COMPONENTS}/controls"
+          -DRAVEN_CONTROLS32_COMPONENT_DIR="${COMPONENTS}/controls32"
+          -DRAVEN_INSTALLER_COMPONENT_DIR="${COMPONENTS}/installer"
+          -DRAVEN_INSTALLER32_COMPONENT_DIR="${COMPONENTS}/installer32"
+          -DRAVEN_TESTDATA_DIR="${COMPONENTS}/testdata"
+
+      - name: Prepare
+        run: python3 scripts/package-native.py prepare --source "${GITHUB_WORKSPACE}" --build "${BUILD}"
+
+      - name: Build
+        run: cmake --build "${BUILD}" -j "$(nproc)"
+
+      - name: Seal
+        run: python3 scripts/package-native.py seal --source "${GITHUB_WORKSPACE}" --build "${BUILD}"
+
+      - name: Run the complete suite
+        run: >
+          ctest --test-dir "${BUILD}" --output-on-failure -j1 --timeout 1800
+          --output-junit "${BUILD}/ctest-results.xml"
+
+      - name: Bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python3 scripts/package-native.py bundle \
+            --source "${GITHUB_WORKSPACE}" --build "${BUILD}" \
+            --test-report "${BUILD}/ctest-results.xml" \
+            --materials /opt/ci/materials.json \
+            --output "dist/raven-${TAG}-linux-x86_64.tar.gz" \
+            --source-output "dist/raven-${TAG}-source.tar.gz"
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: dist/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-tests
+          path: |
+            /opt/ci/build/ctest-results.xml
+            /opt/ci/build/Testing/Temporary/LastTest.log
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Publish: a draft, so a maintainer reads the notes and publishes it by hand.
+
+  publish:
+    name: Draft release
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # the draft release and its assets
+      id-token: write # signing the provenance attestation
+      attestations: write # storing the provenance attestation
+    steps:
+      - name: Download bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::release ${TAG} already exists; delete the draft first to rebuild it"
+            exit 1
+          fi
+          gh release create "${TAG}" dist/* --draft --verify-tag --title "${TAG}" --generate-notes
