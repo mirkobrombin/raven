@@ -174,7 +174,18 @@ BOOL WINAPI _TrackMouseEvent(TRACKMOUSEEVENT *request)
 
 /* Subclassing */
 
-#define SUBCLASS_PROPERTY L"RavenSubclassChain"
+/* The chain is kept in a window property named by an atom rather than a string: a property named by an atom is answered from the window
+ * table the guest reads, without a call to the runtime, and every message of a subclassed window looks its chain up. */
+static ATOM subclass_atom;
+
+static LPCWSTR subclass_property(void)
+{
+	if (!subclass_atom)
+		subclass_atom = GlobalAddAtomW(L"RavenSubclassChain");
+	return subclass_atom ? MAKEINTATOM(subclass_atom) : L"RavenSubclassChain";
+}
+
+#define SUBCLASS_PROPERTY subclass_property()
 
 typedef struct subclass_entry {
 	struct subclass_entry *next;
