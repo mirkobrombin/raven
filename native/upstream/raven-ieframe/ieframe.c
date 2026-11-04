@@ -6,8 +6,9 @@
  *
  * The control activates in place in the window of its host, keeps its position and settings, takes navigations and tells the host's
  * DWebBrowserEvents2 sinks about them as the control does on Windows: BeforeNavigate2, which may cancel, then NavigateComplete2 and
- * DocumentComplete once the message loop of the control's thread runs. No page is fetched or drawn: the window stays blank and the
- * control has no document. */
+ * DocumentComplete once the message loop of the control's thread runs. When the runtime brings a page engine, pages are fetched and
+ * drawn by it, and the object the site offers through IDocHostUIHandler is their window.external; otherwise the window stays blank.
+ * The control has no document. */
 #define CINTERFACE
 #define COBJMACROS
 #define CONST_VTABLE
@@ -19,6 +20,7 @@
 #include <olectl.h>
 #include <exdisp.h>
 #include <exdispid.h>
+#include "engine.h"
 
 static const CLSID browser_class = {0x8856f961, 0x340a, 0x11d0, {0xa9, 0x6b, 0x00, 0xc0, 0x4f, 0xd7, 0x05, 0xa2}};
 static const IID unknown_iid = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
@@ -39,6 +41,7 @@ static const IID persist_iid = {0x0000010c, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0
 static const IID persist_stream_init_iid = {0x7fd52380, 0x4e07, 0x101b, {0xae, 0x2d, 0x08, 0x00, 0x2b, 0x2e, 0xc7, 0x13}};
 static const IID events2_iid = {0x34a715a0, 0x6587, 0x11d0, {0x92, 0x4a, 0x00, 0x20, 0xaf, 0xc7, 0xac, 0x4d}};
 static const IID null_iid = {0};
+static const IID host_handler_iid = {0xbd3f23c0, 0xd43e, 0x11cf, {0x89, 0x3b, 0x00, 0xaa, 0x00, 0xbd, 0xce, 0x1a}};
 
 #define SINKS 8
 #define NAVIGATED (WM_APP + 0x51)
@@ -159,18 +162,13 @@ static void complete(browser *control)
 	fire_reached(control, DISPID_DOCUMENTCOMPLETE);
 }
 
-static HRESULT navigate(browser *control, const WCHAR *address)
+/* BeforeNavigate2, whose sinks may cancel the navigation: TRUE when one did. */
+static BOOL fire_before(browser *control, BSTR address)
 {
 	VARIANT url, flags, frame, data, headers, arguments[7];
 	VARIANT_BOOL cancel = VARIANT_FALSE;
-	BSTR text = SysAllocString(address && *address ? address : L"about:blank");
-	if (!text)
-		return E_OUTOFMEMORY;
-	char line[160] = "ieframe: navigate ";
-	WideCharToMultiByte(CP_UTF8, 0, text, -1, line + 18, sizeof(line) - 19, NULL, NULL);
-	RavenTrace(line);
 	V_VT(&url) = VT_BSTR;
-	V_BSTR(&url) = text;
+	V_BSTR(&url) = address;
 	V_VT(&flags) = VT_I4;
 	V_I4(&flags) = 0;
 	V_VT(&frame) = VT_EMPTY;
@@ -186,25 +184,101 @@ static HRESULT navigate(browser *control, const WCHAR *address)
 	V_VT(&arguments[6]) = VT_DISPATCH;
 	V_DISPATCH(&arguments[6]) = (IDispatch *)&control->IWebBrowser2_iface;
 	fire(control, DISPID_BEFORENAVIGATE2, arguments, 7);
-	if (cancel) {
-		SysFreeString(text);
-		return S_OK;
-	}
+	return cancel != VARIANT_FALSE;
+}
+
+static void set_location(browser *control, BSTR text)
+{
 	SysFreeString(control->location);
 	control->location = text;
 	control->pending = TRUE;
-	// The rest arrives from the message loop, as the page would; a control not yet in a window finishes at once.
+}
+
+static HRESULT navigate(browser *control, const WCHAR *address)
+{
+	BSTR text = SysAllocString(address && *address ? address : L"about:blank");
+	if (!text)
+		return E_OUTOFMEMORY;
+	char line[160] = "ieframe: navigate ";
+	WideCharToMultiByte(CP_UTF8, 0, text, -1, line + 18, sizeof(line) - 19, NULL, NULL);
+	RavenTrace(line);
+	if (fire_before(control, text)) {
+		SysFreeString(text);
+		return S_OK;
+	}
+	set_location(control, text);
+	// A page engine finishes the navigation when its page has loaded; without one the rest arrives from the message loop, and a control
+	// not yet in a window finishes at once.
+	if (control->window && engine_navigate(control->window, text))
+		return S_OK;
 	if (!control->window || !PostMessageW(control->window, NAVIGATED, 0, 0))
 		complete(control);
 	return S_OK;
 }
 
+/* What the site offers pages as window.external, through IDocHostUIHandler as for Internet Explorer's pages; a reference for the caller. */
+typedef struct host_handler host_handler;
+typedef struct {
+	HRESULT(WINAPI *QueryInterface)(host_handler *self, REFIID iid, void **out);
+	ULONG(WINAPI *AddRef)(host_handler *self);
+	ULONG(WINAPI *Release)(host_handler *self);
+	void *ShowContextMenu, *GetHostInfo, *ShowUI, *HideUI, *UpdateUI, *EnableModeless, *OnDocWindowActivate, *OnFrameWindowActivate,
+		*ResizeBorder, *TranslateAccelerator, *GetOptionKeyPath, *GetDropTarget;
+	HRESULT(WINAPI *GetExternal)(host_handler *self, IDispatch **out);
+} host_handler_vtbl;
+struct host_handler {
+	const host_handler_vtbl *lpVtbl;
+};
+
+static IDispatch *site_external(browser *control)
+{
+	host_handler *handler = NULL;
+	IDispatch *external = NULL;
+	if (control->site && SUCCEEDED(IOleClientSite_QueryInterface(control->site, &host_handler_iid, (void **)&handler)) && handler) {
+		if (FAILED(handler->lpVtbl->GetExternal(handler, &external)))
+			external = NULL;
+		handler->lpVtbl->Release(handler);
+	}
+	if (!external)
+		RavenTrace("ieframe: the site offers pages no window.external");
+	return external;
+}
+
 static LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	browser *control = (browser *)GetWindowLongPtrW(window, GWLP_USERDATA);
+	LRESULT result = 0;
+	if (control && engine_message(window, message, wparam, lparam, &result))
+		return result;
 	if (message == NAVIGATED && control) {
 		complete(control);
 		return 0;
+	}
+	// The page engine reached an address of its own or the one asked for; a navigation the page started asks the sinks first.
+	if (message == ENGINE_REACHED) {
+		WCHAR *address = (WCHAR *)lparam;
+		BSTR text = control ? SysAllocString(address) : NULL;
+		HeapFree(GetProcessHeap(), 0, address);
+		if (text) {
+			set_location(control, text);
+			complete(control);
+		}
+		return 0;
+	}
+	if (message == ENGINE_EXTERNAL)
+		return control ? (LRESULT)site_external(control) : 0;
+	if (message == ENGINE_BEFORE) {
+		if (!control)
+			return FALSE;
+		BSTR text = SysAllocString((const WCHAR *)lparam);
+		if (!text)
+			return FALSE;
+		if (fire_before(control, text)) {
+			SysFreeString(text);
+			return TRUE;
+		}
+		set_location(control, text);
+		return FALSE;
 	}
 	return DefWindowProcW(window, message, wparam, lparam);
 }
@@ -271,8 +345,8 @@ static HRESULT activate(browser *control, IOleClientSite *site, BOOL ui)
 		}
 		SetWindowLongPtrW(control->window, GWLP_USERDATA, (LONG_PTR)control);
 		control->place = place;
-		// A navigation that came before the window completes now, from the loop.
-		if (control->pending)
+		// A navigation that came before the window goes to the page engine now, or completes from the loop.
+		if (control->pending && !engine_navigate(control->window, control->location))
 			PostMessageW(control->window, NAVIGATED, 0, 0);
 	}
 	if (ui && !control->ui_active) {
@@ -291,6 +365,7 @@ static void deactivate(browser *control)
 		control->ui_active = FALSE;
 		IOleInPlaceSite_OnUIDeactivate(place, FALSE);
 	}
+	engine_close(control->window);
 	SetWindowLongPtrW(control->window, GWLP_USERDATA, 0);
 	DestroyWindow(control->window);
 	control->window = NULL;

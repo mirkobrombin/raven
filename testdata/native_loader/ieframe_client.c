@@ -347,7 +347,7 @@ static int embed(void)
 		return 22;
 
 	// The start comes at once, the end from the message loop.
-	BSTR address = SysAllocString(L"https://example.com/");
+	BSTR address = SysAllocString(L"about:blank");
 	READYSTATE state = READYSTATE_UNINITIALIZED;
 	if (IWebBrowser2_Navigate(browser, address, NULL, NULL, NULL, NULL) || heard_count != 1 || heard[0] != DISPID_BEFORENAVIGATE2)
 		return 30;
@@ -356,7 +356,7 @@ static int embed(void)
 	pump();
 	if (heard_count != 3 || heard[1] != DISPID_NAVIGATECOMPLETE2 || heard[2] != DISPID_DOCUMENTCOMPLETE || wrong_sender)
 		return 32;
-	if (IWebBrowser2_get_ReadyState(browser, &state) || state != READYSTATE_COMPLETE || !location_is(browser, L"https://example.com/"))
+	if (IWebBrowser2_get_ReadyState(browser, &state) || state != READYSTATE_COMPLETE || !location_is(browser, L"about:blank"))
 		return 33;
 	SysFreeString(address);
 
@@ -368,7 +368,7 @@ static int embed(void)
 		return 34;
 	pump();
 	VariantClear(&target);
-	if (heard_count != 4 || heard[3] != DISPID_BEFORENAVIGATE2 || !location_is(browser, L"https://example.com/"))
+	if (heard_count != 4 || heard[3] != DISPID_BEFORENAVIGATE2 || !location_is(browser, L"about:blank"))
 		return 35;
 
 	SetRect(&position, 0, 0, 300, 100);
