@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 
 
@@ -16,6 +17,18 @@ FONTS = {
     "LiberationMono-Regular.ttf": "d18235f1e874771f4eaec3ddd6ddb4db849d334bdc6930c5c2185d9344834e62",
     "LiberationSerif-Regular.ttf": "350f4ffd773cae53560c63dca3d89a5070595614fde12f772bf43feb63d81064",
 }
+DEJAVU_RELEASE = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2"
+DEJAVU_RELEASE_SHA256 = "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"
+# Raven Sans stands in for the dialog face Tahoma. It is DejaVu Sans Condensed with every advance narrowed so the weighted
+# average width of Latin text matches Tahoma's, and with Tahoma's vertical metrics so a cell has the same height. The
+# targets are the published figures of @capsizecss/metrics 4.4.0 (Tahoma: ascent 2049, descent 423, average 917 regular
+# and 1044 bold on 2048 units); 937 and 1058 are the same average measured on the pinned DejaVu faces.
+DIALOG_FACES = {
+    "RavenSans-Regular.ttf": ("DejaVuSansCondensed.ttf", "Regular", 917 / 937),
+    "RavenSans-Bold.ttf": ("DejaVuSansCondensed-Bold.ttf", "Bold", 1044 / 1058),
+}
+DIALOG_ASCENT = 2049
+DIALOG_DESCENT = 423
 SKIA_REPOSITORY = "https://skia.googlesource.com/skia.git"
 SKIA_COMMIT = "a21aae83d6e4e3da284100a30f0a5eafc443b60f"
 SKIA_ARGUMENTS = """is_official_build = true
@@ -85,6 +98,63 @@ def provision_fonts(output):
     return fonts
 
 
+def dialog_face(source, target, style, ratio):
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(source, recalcTimestamp=False)
+    metrics = font["hmtx"].metrics
+    # Only the advances change: outlines, side bearings on the left and hinting stay as designed.
+    for glyph, (advance, bearing) in metrics.items():
+        metrics[glyph] = (round(advance * ratio), bearing)
+    font["hhea"].ascent = DIALOG_ASCENT
+    font["hhea"].descent = -DIALOG_DESCENT
+    font["hhea"].lineGap = 0
+    table = font["OS/2"]
+    table.usWinAscent = table.sTypoAscender = DIALOG_ASCENT
+    table.usWinDescent = DIALOG_DESCENT
+    table.sTypoDescender = -DIALOG_DESCENT
+    table.sTypoLineGap = 0
+    # Version 1 of the table defines the average on lower-case letters, which narrow by the same ratio.
+    table.xAvgCharWidth = round(table.xAvgCharWidth * ratio)
+    font["hhea"].recalc(font)
+    # The Bitstream Vera and Arev terms allow modified fonts only under names without their words; the notices stay.
+    names = font["name"]
+    full = "Raven Sans" if style == "Regular" else f"Raven Sans {style}"
+    replaced = {1: "Raven Sans", 2: style, 3: f"Raven Sans {style} 2.37", 4: full, 5: "Version 2.37",
+        6: f"RavenSans-{style}", 8: "Raven"}
+    names.names = [record for record in names.names if record.nameID not in (16, 17)]
+    for record in names.names:
+        if record.nameID in replaced:
+            record.string = replaced[record.nameID]
+    names.setName("Derived from DejaVu Sans Condensed 2.37 with narrower advances and taller cells.", 10, 3, 1, 0x409)
+    for word in ("Bitstream Vera", "Arev", "DejaVu Sans Condensed"):
+        for record in names.names:
+            if record.nameID in (1, 3, 4, 6) and word in str(record):
+                raise RuntimeError(f"the dialog face is still named after {word}")
+    font.save(target)
+
+
+def provision_dialog_faces(output, fonts):
+    archive = output / "dejavu-fonts-ttf-2.37.tar.bz2"
+    if not archive.exists():
+        partial = archive.with_suffix(".part")
+        urllib.request.urlretrieve(DEJAVU_RELEASE, partial)
+        partial.replace(archive)
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != DEJAVU_RELEASE_SHA256:
+        raise RuntimeError("DejaVu release checksum differs; delete it to download it again")
+    source = output / "dejavu"
+    source.mkdir(exist_ok=True)
+    # Python reads the bzip2 archive itself, so the host needs no bzip2 program.
+    with tarfile.open(archive, "r:bz2") as release:
+        for name in [f"ttf/{face}" for face, _, _ in DIALOG_FACES.values()] + ["LICENSE"]:
+            member = release.extractfile(f"dejavu-fonts-ttf-2.37/{name}")
+            (source / Path(name).name).write_bytes(member.read())
+    for target, (face, style, ratio) in DIALOG_FACES.items():
+        dialog_face(source / face, fonts / target, style, ratio)
+    shutil.copyfile(source / "LICENSE", fonts / "RavenSans-LICENSE.txt")
+    shutil.rmtree(source)
+
+
 def provision_skia(output, jobs):
     source = output / "skia"
     if not source.exists():
@@ -103,7 +173,7 @@ def provision_skia(output, jobs):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Provide the pinned Liberation fonts and the CPU build of Skia that text in guest windows needs")
+    parser = argparse.ArgumentParser(description="Provide the pinned Liberation fonts, the Raven Sans dialog faces and the CPU build of Skia that text in guest windows needs")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--fonts-only", action="store_true", help="only the fonts, as Skia takes a long time to build")
@@ -114,6 +184,7 @@ def main():
         if not shutil.which(tool):
             raise RuntimeError(f"required tool is missing: {tool}")
     fonts = provision_fonts(output)
+    provision_dialog_faces(output, fonts)
     if args.fonts_only:
         print(f"configure Raven with -DRAVEN_FONT_DIRECTORY={fonts}")
         return

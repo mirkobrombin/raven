@@ -19,6 +19,7 @@ GPLv3 license applied to every file.
 | libpng codec | PNG Reference Library License version 2; `native/upstream/libpng` |
 | Skia CPU backend | BSD-style terms and the notices of any compiled dependencies; `native/upstream/skia` |
 | Liberation fonts, if bundled | SIL Open Font License 1.1; preserve the font package's copyright and license |
+| Raven Sans fonts, if bundled | Bitstream Vera and Arev font terms, DejaVu changes in the public domain; derived from DejaVu Sans Condensed 2.37 by `scripts/provision-text.py` under a name the terms permit; LICENSES/DejaVu-fonts.txt |
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
 | SQLite (`winsqlite3.dll`), if bundled | Public domain (SPDX `blessing`); unmodified amalgamation pinned in `scripts/provision-sqlite.py` |

@@ -71,6 +71,9 @@ Static Skia requires its exact source, actual GN arguments and compiled dependen
 sources/notices. The libpng recipe and sources must match the linked library.
 Configured Liberation fonts are included in `runtime/fonts`, which the executable
 finds beside itself. Their copyright and OFL terms are included in `LICENSES/`.
+The Raven Sans dialog faces that `scripts/provision-text.py` derives from DejaVu
+Sans Condensed 2.37 go in the same directory, with the Bitstream Vera and Arev
+terms beside them in `RavenSans-LICENSE.txt` and in `LICENSES/`.
 Graphics backends need the matching source and
 build configuration, not just downloaded PE binaries. Certificate bundles retain
 their own provenance and notices. Unmodified compiler tools and system libraries

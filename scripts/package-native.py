@@ -72,6 +72,7 @@ def runtime_paths(build):
             name = f"Liberation{face}-Regular.ttf"
             paths["fonts/" + name] = fonts / name
         paths.update({"fonts/" + path.name: path for path in sorted(fonts.glob("Liberation*.ttf"))})
+        paths.update({"fonts/" + path.name: path for path in sorted(fonts.glob("RavenSans-*"))})
     for path in paths.values():
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"runtime input must be a regular file: {path}")

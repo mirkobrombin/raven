@@ -194,6 +194,25 @@ int raven_entry(void)
 		IDWriteTextAnalyzer1_Release(analyzer1);
 		IDWriteTextAnalyzer_Release(analyzer);
 	}
+	{
+		/* Tahoma is answered by Raven Sans, whose cell has Tahoma's height on 2048 units. */
+		IDWriteFontFamily *dialog_family;
+		IDWriteFont *dialog_font;
+		IDWriteFontFace *dialog_face;
+		DWRITE_FONT_METRICS dialog_metrics;
+		if (FAILED(IDWriteFontCollection_FindFamilyName(collection, L"Tahoma", &index, &exists)) || !exists ||
+			FAILED(IDWriteFontCollection_GetFontFamily(collection, index, &dialog_family)))
+			return 38;
+		if (FAILED(IDWriteFontFamily_GetFirstMatchingFont(dialog_family, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &dialog_font)) ||
+			FAILED(IDWriteFont_CreateFontFace(dialog_font, &dialog_face)))
+			return 39;
+		IDWriteFontFace_GetMetrics(dialog_face, &dialog_metrics);
+		if (dialog_metrics.designUnitsPerEm != 2048 || dialog_metrics.ascent != 2049 || dialog_metrics.descent != 423)
+			return 40;
+		IDWriteFontFace_Release(dialog_face);
+		IDWriteFont_Release(dialog_font);
+		IDWriteFontFamily_Release(dialog_family);
+	}
 	IDWriteGlyphRunAnalysis_Release(analysis);
 	IDWriteFontFace_Release(face);
 	IDWriteFont_Release(font);

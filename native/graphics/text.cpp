@@ -24,8 +24,8 @@ static uint32_t field(std::span<const uint8_t> bytes,size_t at,size_t count=4)
 
 struct TextRenderer::State {
 	std::array<sk_sp<SkTypeface>,3> faces;
-	// Every bundled style: family (sans, mono, serif) by regular, bold, italic, bold italic.
-	std::array<std::array<sk_sp<SkTypeface>,4>,3> styled;
+	// Every bundled style: family (sans, mono, serif, then the dialog face) by regular, bold, italic, bold italic.
+	std::array<std::array<sk_sp<SkTypeface>,4>,4> styled;
 	// Optional host faces that supply glyphs the bundled family lacks; only the general (non-qualified) text path uses them.
 	std::vector<sk_sp<SkTypeface>> fallbacks;
 
@@ -53,7 +53,12 @@ struct TextRenderer::State {
 		else if (contains_any(name,{"times","serif","georgia","cambria","garamond","palatino","book antiqua","century"}) && !contains_any(name,{"sans"}))
 			family=2;
 		const size_t style=(weight>=600 ? 1U : 0U)|(italic ? 2U : 0U);
-		auto face=styled[family][style];
+		// Dialogs laid out for Tahoma get Raven Sans, which has its widths and heights, when it is bundled. Like Tahoma it has
+		// no italic, so an italic request keeps the upright face.
+		sk_sp<SkTypeface> face;
+		if (name=="tahoma" || name=="ms shell dlg 2" || name=="raven sans")
+			face=styled[3][style&1U];
+		if (!face) face=styled[family][style];
 		if (!face) face=styled[family][0];
 		if (!face) face=faces[family];
 		float size=height<0 ? float(-height) : height>0 ? float(height) : 12.0f;
@@ -113,6 +118,8 @@ TextRenderer::TextRenderer(const std::string &directory) : state(std::make_uniqu
 	for (size_t family=0;family<3;++family)
 		for (size_t style=0;style<3;++style)
 			state->styled[family][style+1]=manager->makeFromFile((directory+"/"+styles[family][style]).c_str());
+	state->styled[3][0]=manager->makeFromFile((directory+"/RavenSans-Regular.ttf").c_str());
+	state->styled[3][1]=manager->makeFromFile((directory+"/RavenSans-Bold.ttf").c_str());
 	for (const auto *path : {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf","/usr/local/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"})
 		if (auto face=manager->makeFromFile(path)) state->fallbacks.push_back(std::move(face));
 }

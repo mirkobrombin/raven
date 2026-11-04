@@ -378,8 +378,8 @@ static void family_add(FamilyEntry *family, FontEntry *entry)
 /* The names Windows programs ask for, and the families of the host that answer for them. */
 static const WCHAR *aliases[][2] = {
 	{L"Arial", L"Liberation Sans"}, {L"Helvetica", L"Liberation Sans"}, {L"Times New Roman", L"Liberation Serif"}, {L"Times", L"Liberation Serif"},
-	{L"Courier New", L"Liberation Mono"}, {L"Courier", L"Liberation Mono"}, {L"Segoe UI", L"Noto Sans"}, {L"Tahoma", L"DejaVu Sans"},
-	{L"Verdana", L"DejaVu Sans"}, {L"Microsoft Sans Serif", L"Liberation Sans"}, {L"MS Shell Dlg", L"DejaVu Sans"}, {L"MS Shell Dlg 2", L"DejaVu Sans"},
+	{L"Courier New", L"Liberation Mono"}, {L"Courier", L"Liberation Mono"}, {L"Segoe UI", L"Noto Sans"}, {L"Tahoma", L"Raven Sans"},
+	{L"Verdana", L"DejaVu Sans"}, {L"Microsoft Sans Serif", L"Liberation Sans"}, {L"MS Shell Dlg", L"DejaVu Sans"}, {L"MS Shell Dlg 2", L"Raven Sans"},
 	{L"Calibri", L"Noto Sans"}, {L"Consolas", L"DejaVu Sans Mono"}, {L"Lucida Console", L"DejaVu Sans Mono"}, {L"Georgia", L"DejaVu Serif"},
 	{L"Trebuchet MS", L"Noto Sans"}, {L"Segoe UI Emoji", L"Noto Sans"}, {L"Segoe UI Symbol", L"DejaVu Sans"}, {L"Cambria", L"DejaVu Serif"},
 	{L"Palatino Linotype", L"DejaVu Serif"}, {L"Symbol", L"DejaVu Sans"}, {L"MS Gothic", L"DejaVu Sans Mono"},
@@ -387,7 +387,7 @@ static const WCHAR *aliases[][2] = {
 
 /* The free families that stand for one another when the host lacks one, so an alias still lands on a font of the same kind. */
 static const WCHAR *stand_ins[][2] = {
-	{L"Noto Sans", L"Liberation Sans"}, {L"Liberation Sans", L"DejaVu Sans"}, {L"DejaVu Sans", L"Liberation Sans"},
+	{L"Raven Sans", L"DejaVu Sans"}, {L"Noto Sans", L"Liberation Sans"}, {L"Liberation Sans", L"DejaVu Sans"}, {L"DejaVu Sans", L"Liberation Sans"},
 	{L"Liberation Serif", L"DejaVu Serif"}, {L"DejaVu Serif", L"Liberation Serif"},
 	{L"Liberation Mono", L"DejaVu Sans Mono"}, {L"DejaVu Sans Mono", L"Liberation Mono"},
 };

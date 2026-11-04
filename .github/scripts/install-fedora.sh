@@ -16,6 +16,8 @@ build=(
     vulkan-loader-devel vulkan-headers openssl-devel
     # The configure step registers the software Vulkan tests only when it finds Mesa's driver manifest.
     mesa-vulkan-drivers
+    # The text component derives the Raven Sans dialog faces from DejaVu with fontTools.
+    python3-fonttools
 )
 # Display tests start their own headless labwc or Xvfb when these tools are found, and skip themselves otherwise. Text
 # tests ask for Arial, Times New Roman and Courier New, which Raven serves from the Liberation and DejaVu faces it finds

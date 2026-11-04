@@ -3355,6 +3355,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(rotated_text_fixture${width} ALL DEPENDS ${rotated_text_client})
                     add_test(NAME native_rotated_text_x${width} COMMAND raven --run-process --execution=native ${rotated_text_client})
                     set_tests_properties(native_rotated_text_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(dialog_font_client ${CMAKE_CURRENT_BINARY_DIR}/dialog-font${width}.exe)
+                    add_custom_command(OUTPUT ${dialog_font_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${dialog_font_client} ${LOADER_SOURCES}/dialog_font_client.c -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/dialog_font_client.c VERBATIM)
+                    add_custom_target(dialog_font_fixture${width} ALL DEPENDS ${dialog_font_client})
+                    add_test(NAME native_dialog_font_x${width} COMMAND raven --run-process --execution=native ${dialog_font_client})
+                    set_tests_properties(native_dialog_font_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     # mlang comes with the installer components, whose import library the client links against.
                     if(width EQUAL 64)
                         set(mlang_dir ${RAVEN_INSTALLER_COMPONENT_DIR})
