@@ -3839,6 +3839,38 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_wmi_x${width} COMMAND raven --run-process --execution=native ${wmi_client})
                     set_tests_properties(native_wmi_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
+                # raven-ieframe.dll, the WebBrowser control of ieframe that hosts embed, for each width: Raven code on the public headers.
+                set(ieframe_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-ieframe)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_DLLTOOL} -d ${taskschd_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe64.a
+                    COMMAND ${RAVEN_DLLTOOL32} -k -d ${taskschd_source}/ravenhost32.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe32.a
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll
+                        ${ieframe_source}/ieframe.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe64.a
+                        -loleaut32 -lole32 -luser32 -lgdi32 -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll
+                        ${ieframe_source}/ieframe.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe32.a
+                        -loleaut32 -lole32 -luser32 -lgdi32 -lkernel32 -lgcc
+                    DEPENDS ${ieframe_source}/ieframe.c ${taskschd_source}/ravenhost64.def ${taskschd_source}/ravenhost32.def VERBATIM)
+                add_custom_target(ieframe_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll)
+                foreach(width 64 32)
+                    set(ieframe_client ${CMAKE_CURRENT_BINARY_DIR}/ieframe-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(ieframe_compiler ${RAVEN_MINGW64})
+                        set(ieframe_entry raven_entry)
+                    else()
+                        set(ieframe_compiler ${RAVEN_MINGW32})
+                        set(ieframe_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${ieframe_client}
+                        COMMAND ${ieframe_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${ieframe_entry},--no-insert-timestamp
+                            -o ${ieframe_client} ${LOADER_SOURCES}/ieframe_client.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                            -loleaut32 -lole32 -luser32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/ieframe_client.c VERBATIM)
+                    add_custom_target(ieframe_fixture${width} ALL DEPENDS ${ieframe_client} ieframe_component)
+                    add_test(NAME native_ieframe_x${width} COMMAND raven --run-process --execution=native ${ieframe_client})
+                    set_tests_properties(native_ieframe_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
                 # avrt.dll and mfplat.dll: the multimedia scheduler a media library registers its threads with, and the Media Foundation
                 # factories it makes its samples, types and buffers with, for each width.
                 set(media_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-media)
