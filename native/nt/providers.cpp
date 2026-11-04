@@ -2097,6 +2097,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
 		"RtlUnicodeToMultiByteSize", "RtlIsTextUnicode", "RtlImageNtHeader", "NtDeleteKey",
+		// What the Chromium Embedded Framework imports from ntdll, which the WebBrowser control loads when it first shows a page.
+		"RtlFormatCurrentUserKeyPath", "RtlGetLastNtStatus",
 		// What a browser installer looks up about the machine it runs on.
 		"RtlGetDeviceFamilyInfoEnum", "RtlConvertDeviceFamilyInfoToString",
 		// The unwinding of 64-bit frames, which libraries built with their own exception handling import.
