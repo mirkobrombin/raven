@@ -430,7 +430,9 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 		break;
 	}
 	// The establisher is the frame base the function maintains: its frame register once SET_FPREG ran, the stack pointer before that.
-	const bool established = frame_register && prolog_offset >= setfp_offset;
+	// A chained part runs after the prolog of the part it chains to, so its frame register is always set.
+	const bool chained = (first[0] >> 3) & 4;
+	const bool established = frame_register && (chained || prolog_offset >= setfp_offset);
 	result.establisher = established ? context_register(original, frame_register) - frame_offset : context_rsp(original);
 	unwind_leaf(context);
 	return result;
