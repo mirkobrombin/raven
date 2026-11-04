@@ -584,6 +584,19 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	if (launch)
 		program_libraries = ProgramLibraries(launch->image_path, false);
 	// Libraries whose argument counts come from their own implementation or the unsupported-service table.
+	// The common controls are the component's when a program that does not import them loads them later; the provider is then
+	// only the fallback.
+	const auto late_controls = [&](std::string_view dll) {
+		return dll == "comctl32.dll" && std::none_of(modules.all().begin(), modules.all().end(), [](const auto &item) {
+			return std::any_of(item.second->imports.begin(), item.second->imports.end(), [](const auto &symbol) {
+				auto library = symbol.module;
+				for (auto &character : library)
+					if (character >= 'A' && character <= 'Z')
+						character = static_cast<char>(character + ('a' - 'A'));
+				return library == "comctl32.dll" || library == "comctl32";
+			});
+		});
+	};
 	const auto add_library = [&](const char *dll, std::span<const std::string_view> exports, std::span<const std::string_view> data,
 		const std::function<uint32_t(std::string_view)> &count, std::span<const std::pair<std::string_view, uint16_t>> ordinals = {}) {
 		std::string provider_key = dll;
@@ -593,7 +606,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			provider_key = std::string("system32-") + dll;
 			if (modules.all().contains(provider_key))
 				return;
-		} else if (program_libraries.contains(dll)) {
+		} else if (program_libraries.contains(dll) || late_controls(dll)) {
 			provider_key = std::string("system32-") + dll;
 			if (modules.all().contains(provider_key))
 				return;

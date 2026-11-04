@@ -2206,7 +2206,18 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				provider->runtime_api = true;
 			}
 		} else {
-			const auto provider_key = program_libraries.contains(name) ? "system32-" + name : name;
+			// The common controls are the component's when a program that does not import them loads them later; the provider is
+			// then only the fallback a search of the system directory finds, as it is for a library the program ships.
+			const bool late_controls = name == "comctl32.dll" && std::none_of(modules.all().begin(), modules.all().end(), [](const auto &item) {
+				return std::any_of(item.second->imports.begin(), item.second->imports.end(), [](const auto &symbol) {
+					auto library = symbol.module;
+					for (auto &character : library)
+						if (character >= 'A' && character <= 'Z')
+							character = static_cast<char>(character + ('a' - 'A'));
+					return library == "comctl32.dll" || library == "comctl32";
+				});
+			});
+			const auto provider_key = program_libraries.contains(name) || late_controls ? "system32-" + name : name;
 			const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
 			const auto base = provider_base(modules, PEImage(bytes).image_size, name);
 			provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
