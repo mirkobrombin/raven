@@ -100,8 +100,10 @@ static uint32_t virtual_key_of_character(uint32_t c)
 KeyboardKey KeyboardMap::decode(uint32_t code) const
 {
 #ifdef RAVEN_XKB
-	if (!state->keys || code>255 || code+8<xkb_keymap_min_keycode(state->map) || code+8>xkb_keymap_max_keycode(state->map))
-		throw std::runtime_error("unsupported native keyboard keycode");
+	if (!state->keys || code>255) throw std::runtime_error("unsupported native keyboard keycode");
+	// A keycode the keymap does not reach (one a tool such as xdotool has just bound, or a vendor key) is passed over like an unassigned key.
+	if (code+8<xkb_keymap_min_keycode(state->map) || code+8>xkb_keymap_max_keycode(state->map))
+		return KeyboardKey{0,code<=127 ? code : 0,0,false};
 	const auto layout=xkb_state_key_get_layout(state->keys,code+8);
 	const xkb_keysym_t *symbols=nullptr;
 	// A key the layout gives no symbol (an unassigned or vendor key) has no virtual key and is passed over; one that gives several is

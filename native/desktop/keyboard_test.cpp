@@ -45,6 +45,13 @@ int main()
 			xkb_keymap_unref(map);
 		}
 		xkb_context_unref(context);
+		// A keycode past the end of the keymap, such as one xdotool binds for a moment, passes with no virtual key instead of failing.
+		raven::KeyboardMap small;
+		small.load("xkb_keymap { xkb_keycodes { <AC05> = 42; }; xkb_types { type \"ONE_LEVEL\" { modifiers=none; level_name[Level1]=\"Any\"; }; }; "
+			"xkb_compatibility { }; xkb_symbols { key <AC05> { [ g ] }; }; };");
+		check(small.decode(34).code==71,"small keymap differs");
+		const auto beyond=small.decode(200),before=small.decode(0);
+		check(!beyond.code && !beyond.character && !before.code && !before.character,"key outside the keymap differs");
 	} catch (const std::exception &error) { std::cerr<<error.what()<<'\n'; return 1; }
 	return 0;
 }
