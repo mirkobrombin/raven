@@ -3337,6 +3337,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(dbcs_fixture${width} ALL DEPENDS ${dbcs_client})
                     add_test(NAME native_dbcs_x${width} COMMAND raven --run-process --execution=native ${dbcs_client})
                     set_tests_properties(native_dbcs_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # mlang comes with the installer components, whose import library the client links against.
+                    if(width EQUAL 64)
+                        set(mlang_dir ${RAVEN_INSTALLER_COMPONENT_DIR})
+                    else()
+                        set(mlang_dir ${RAVEN_INSTALLER32_COMPONENT_DIR})
+                    endif()
+                    if(mlang_dir AND EXISTS ${mlang_dir}/libmlang.a)
+                        set(mlang_client ${CMAKE_CURRENT_BINARY_DIR}/mlang-japanese${width}.exe)
+                        add_custom_command(OUTPUT ${mlang_client}
+                            COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                                -o ${mlang_client} ${LOADER_SOURCES}/mlang_client.c ${mlang_dir}/libmlang.a -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/mlang_client.c VERBATIM)
+                        add_custom_target(mlang_japanese_fixture${width} ALL DEPENDS ${mlang_client})
+                        add_test(NAME native_mlang_japanese_x${width} COMMAND raven --run-process --execution=native ${mlang_client})
+                        set_tests_properties(native_mlang_japanese_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endif()
                 endforeach()
                 # d3dcompiler_47.dll for each width: Raven code on the public headers that hands compiles to the runtime's HLSL compiler
                 # through ravenhost.dll and reads reflection from the container itself.

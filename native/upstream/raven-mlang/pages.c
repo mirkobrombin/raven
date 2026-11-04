@@ -84,7 +84,8 @@ static void grid_from_half_kana(BYTE value, BYTE *row, BYTE *cell)
 	*cell = cells[index];
 }
 
-/* Shift-JIS bytes become EUC-JP or JIS; the targets are at most three times as long, plus the escapes. */
+/* Shift-JIS bytes become EUC-JP, the JIS grid with the high bit set, or JIS; the targets are at most three times as long,
+ * plus the escapes. */
 static SIZE_T shift_to_euc(const BYTE *source, SIZE_T size, BYTE *target)
 {
 	SIZE_T out = 0, index = 0;
@@ -100,8 +101,8 @@ static SIZE_T shift_to_euc(const BYTE *source, SIZE_T size, BYTE *target)
 		{
 			BYTE row, cell;
 			grid_from_shift(value, source[index++], &row, &cell);
-			target[out++] = row + 0xa0;
-			target[out++] = cell + 0xa0;
+			target[out++] = row | 0x80;
+			target[out++] = cell | 0x80;
 		}
 		else
 			target[out++] = value;
@@ -119,7 +120,7 @@ static SIZE_T euc_to_shift(const BYTE *source, SIZE_T size, BYTE *target)
 			target[out++] = source[index++];
 		else if (value >= 0xa1 && index < size)
 		{
-			shift_from_grid(value - 0xa0, source[index++] - 0xa0, &target[out], &target[out + 1]);
+			shift_from_grid(value & 0x7f, source[index++] & 0x7f, &target[out], &target[out + 1]);
 			out += 2;
 		}
 		else
