@@ -16,7 +16,7 @@ concurrency:
 jobs:
   label:
     name: Label
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -29,7 +29,7 @@ jobs:
 
   triage:
     name: Triage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write # size labels and the measurements reminder

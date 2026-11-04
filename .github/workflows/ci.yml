@@ -28,7 +28,7 @@ jobs:
 
   commits:
     name: Commits
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -45,7 +45,7 @@ jobs:
 
   files:
     name: Files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -58,7 +58,7 @@ jobs:
 
   licenses:
     name: Licenses
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -71,7 +71,7 @@ jobs:
 
   scripts:
     name: Scripts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -98,7 +98,7 @@ jobs:
   provision:
     name: Provision ${{ matrix.component }}
     needs: [commits, files, licenses, scripts]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     container:
       image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
@@ -221,7 +221,7 @@ jobs:
   compliance:
     name: Compliance
     needs: [commits, files, licenses, scripts]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -267,7 +267,7 @@ jobs:
   build:
     name: Build
     needs: provision
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     container:
       image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
@@ -342,7 +342,7 @@ jobs:
   test:
     name: Test ${{ matrix.shard }}/6
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     container:
       image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
@@ -411,7 +411,7 @@ jobs:
     name: Report
     needs: [commits, files, licenses, scripts, provision, compliance, build, test]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout

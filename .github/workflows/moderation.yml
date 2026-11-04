@@ -15,7 +15,7 @@ concurrency:
 jobs:
   waiting:
     name: Waiting for information
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write # stale labels, reminders and closing
@@ -42,7 +42,7 @@ jobs:
 
   lock:
     name: Lock old threads
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write # locking closed issues

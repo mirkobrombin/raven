@@ -34,7 +34,7 @@ jobs:
 
   drift:
     name: Upstream versions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -76,7 +76,7 @@ jobs:
     name: Compare with Wine
     needs: ci
     if: inputs.benchmark || github.event.schedule == '41 2 * * 0'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     container:
       image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
@@ -143,7 +143,7 @@ jobs:
     name: Report failure
     needs: [ci, drift, benchmark]
     if: failure()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write # the issue that reports a failed night

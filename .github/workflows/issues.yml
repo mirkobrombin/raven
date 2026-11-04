@@ -15,7 +15,7 @@ jobs:
   answered:
     name: Answered functions
     if: github.event.issue.state == 'open'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -58,7 +58,7 @@ jobs:
   review:
     name: New accounts
     if: github.event.action == 'opened'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write # the needs review label

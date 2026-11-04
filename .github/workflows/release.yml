@@ -28,7 +28,7 @@ jobs:
 
   provision:
     name: Provision ${{ matrix.component }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     container:
       image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
@@ -102,7 +102,7 @@ jobs:
   package:
     name: Build, test and bundle
     needs: provision
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 360
     container:
       image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
@@ -212,7 +212,7 @@ jobs:
   publish:
     name: Draft release
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: write # the draft release and its assets
