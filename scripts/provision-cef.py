@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Provision the pinned Chromium Embedded Framework build the WebBrowser control draws pages with.
+"""Provision the pinned Chromium Embedded Framework build the page engine draws pages with.
 
-Only the files the control needs are taken from the official binary distribution: the runtime, its resources and locales, the C API
+Only the files the engine needs are taken from the official binary distribution: the runtime, its resources and locales, the C API
 headers and the license texts. The distribution's Direct3D shader compiler and Vulkan loader are left out: the first is a Windows
 component, the second would hide Raven's own Vulkan bridge."""
 
@@ -43,7 +43,7 @@ def fetch(package, archive):
 
 
 def wanted(name, package):
-    """Where an archive entry goes in the output, or None for entries the control does not use."""
+    """Where an archive entry goes in the output, or None for entries the engine does not use."""
     path = PurePosixPath(name)
     if not path.parts or path.parts[0] != package["archive_root"] or ".." in path.parts:
         return None
@@ -87,10 +87,10 @@ def provision(destination, package):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Provision the pinned CEF runtime for the WebBrowser control")
+    parser = argparse.ArgumentParser(description="Provision the pinned CEF runtime for the page engine")
     parser.add_argument("--destination", type=Path, required=True)
     arguments = parser.parse_args()
-    manifest = Path(__file__).resolve().parent.parent / "native/upstream/raven-ieframe/cef.json"
+    manifest = Path(__file__).resolve().parent.parent / "native/upstream/raven-webengine/cef.json"
     try:
         provision(arguments.destination.resolve(), json.loads(manifest.read_text()))
     except (OSError, RuntimeError, tarfile.TarError) as error:

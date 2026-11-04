@@ -3847,18 +3847,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_wmi_x${width} COMMAND raven --run-process --execution=native ${wmi_client})
                     set_tests_properties(native_wmi_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
-                # raven-ieframe.dll, the WebBrowser control of ieframe that hosts embed, for each width: Raven code on the public headers.
-                # With RAVEN_CEF_DIRECTORY, the output of scripts/provision-cef.py, the 64-bit control draws pages with the Chromium
-                # Embedded Framework, whose runtime and raven-cefhost.exe stand in the runtime's cef folder.
-                set(ieframe_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-ieframe)
+                # raven-webengine.dll, the page engine of the runtime's web controls, and raven-cefhost.exe, its subprocess, built when
+                # RAVEN_CEF_DIRECTORY names the output of scripts/provision-cef.py: the Chromium Embedded Framework's runtime stands
+                # beside them in the runtime's cef folder.
+                set(webengine_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-webengine)
                 set(RAVEN_CEF_DIRECTORY "" CACHE PATH "Directory holding the CEF build provisioned by scripts/provision-cef.py")
-                set(ieframe_engine64 "")
-                set(ieframe_engine_depends "")
                 if(RAVEN_CEF_DIRECTORY)
                     if(NOT EXISTS "${RAVEN_CEF_DIRECTORY}/runtime/libcef.dll")
                         message(FATAL_ERROR "RAVEN_CEF_DIRECTORY must be the output of scripts/provision-cef.py")
                     endif()
-                    set(ieframe_engine64 -DRAVEN_CEF -DCEF_API_VERSION=15600 -I${RAVEN_CEF_DIRECTORY})
+                    set(cef_flags -DCEF_API_VERSION=15600 -I${RAVEN_CEF_DIRECTORY})
                     set(cef_folder ${CMAKE_CURRENT_BINARY_DIR}/cef)
                     file(GLOB cef_runtime RELATIVE ${RAVEN_CEF_DIRECTORY}/runtime ${RAVEN_CEF_DIRECTORY}/runtime/*)
                     set(cef_links "")
@@ -3868,24 +3866,36 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_command(OUTPUT ${cef_folder}/raven-cefhost.exe
                         COMMAND ${CMAKE_COMMAND} -E make_directory ${cef_folder}
                         ${cef_links}
-                        COMMAND ${RAVEN_MINGW64} -O1 -municode -mwindows -DCEF_API_VERSION=15600 -I${RAVEN_CEF_DIRECTORY} -Wl,--no-insert-timestamp
-                            -o ${cef_folder}/raven-cefhost.exe ${ieframe_source}/cefhost.c ${RAVEN_CEF_DIRECTORY}/runtime/libcef.dll
-                        DEPENDS ${ieframe_source}/cefhost.c ${RAVEN_CEF_DIRECTORY}/runtime/libcef.dll VERBATIM)
-                    set(ieframe_engine_depends ${cef_folder}/raven-cefhost.exe)
+                        COMMAND ${RAVEN_MINGW64} -O1 -municode -mwindows ${cef_flags} -Wl,--no-insert-timestamp
+                            -o ${cef_folder}/raven-cefhost.exe ${webengine_source}/cefhost.c ${RAVEN_CEF_DIRECTORY}/runtime/libcef.dll
+                        DEPENDS ${webengine_source}/cefhost.c ${RAVEN_CEF_DIRECTORY}/runtime/libcef.dll VERBATIM)
+                    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-webengine.dll
+                        COMMAND ${RAVEN_DLLTOOL} -d ${taskschd_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-webengine64.a
+                        COMMAND ${RAVEN_MINGW64} ${accprop_flags} ${cef_flags} -Wl,--entry,DllMain,--no-insert-timestamp
+                            -o ${CMAKE_CURRENT_BINARY_DIR}/raven-webengine.dll ${webengine_source}/engine.c ${webengine_source}/external.c
+                            ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-webengine64.a
+                            -loleaut32 -lole32 -lurlmon -luser32 -lgdi32 -lkernel32 -lgcc
+                        DEPENDS ${webengine_source}/engine.c ${webengine_source}/external.c ${webengine_source}/engine_cef.h
+                            ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def VERBATIM)
+                    add_custom_target(webengine_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-webengine.dll ${cef_folder}/raven-cefhost.exe)
                 endif()
+                # raven-ieframe.dll, the WebBrowser control of ieframe that hosts embed, for each width: Raven code on the public headers.
+                # The control draws pages with raven-webengine.dll when the runtime has it.
+                set(ieframe_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-ieframe)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_DLLTOOL} -d ${taskschd_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe64.a
                     COMMAND ${RAVEN_DLLTOOL32} -k -d ${taskschd_source}/ravenhost32.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe32.a
-                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} ${ieframe_engine64} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll
-                        ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c ${ieframe_source}/external.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -I${webengine_source} -Wl,--entry,DllMain,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c
+                        ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
                         ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe64.a -loleaut32 -lole32 -lurlmon -luser32 -lgdi32 -lkernel32 -lgcc
-                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll
-                        ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c ${ieframe_source}/external.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -I${webengine_source} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c
+                        ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
                         ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-ieframe32.a -loleaut32 -lole32 -lurlmon -luser32 -lgdi32 -lkernel32 -lgcc
-                    DEPENDS ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c ${ieframe_source}/engine.h ${ieframe_source}/engine_cef.h ${ieframe_source}/external.c
-                        ${taskschd_source}/ravenhost64.def
-                        ${taskschd_source}/ravenhost32.def ${ieframe_engine_depends} VERBATIM)
+                    DEPENDS ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def
+                        ${taskschd_source}/ravenhost32.def VERBATIM)
                 add_custom_target(ieframe_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll)
                 foreach(width 64 32)
                     set(ieframe_client ${CMAKE_CURRENT_BINARY_DIR}/ieframe-client${width}.exe)

@@ -8,8 +8,6 @@
  * the object becomes a call sent to the control's window: the page waits while the control's thread asks the object through IDispatch,
  * and the answer comes back converted to a script value. Objects the program returns reach the page the same way; their references stay
  * with the control's thread, which drops each one once the page has let go of it. */
-#ifdef RAVEN_CEF
-
 #define CINTERFACE
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -665,5 +663,3 @@ static void CEF_CALLBACK context_created(cef_render_process_handler_t *self, cef
 
 cef_render_process_handler_t external_pages = {.base = STATIC_BASE(cef_render_process_handler_t), .on_browser_created = browser_created,
 	.on_browser_destroyed = browser_destroyed, .on_context_created = context_created};
-
-#endif
