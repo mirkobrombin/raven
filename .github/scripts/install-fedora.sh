@@ -15,10 +15,14 @@ build=(
     wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel
     vulkan-loader-devel vulkan-headers openssl-devel
 )
-# Display tests start their own headless labwc or Xvfb when these tools are found, and skip themselves otherwise.
+# Display tests start their own headless labwc or Xvfb when these tools are found, and skip themselves otherwise. Text
+# tests ask for Arial, Times New Roman and Courier New, which Raven serves from the Liberation and DejaVu faces it finds
+# under /usr/share/fonts.
 test=(
     "${build[@]}" labwc grim wlrctl wtype wl-clipboard wlr-randr xorg-x11-server-Xvfb openbox xdotool xclip xkeyboard-config
     mesa-vulkan-drivers mesa-dri-drivers python3-pillow mono-devel msitools
+    liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts dejavu-sans-fonts dejavu-serif-fonts
+    dejavu-sans-mono-fonts
 )
 
 case "${1:-}" in
