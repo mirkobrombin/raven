@@ -1,6 +1,7 @@
 #include "access_token.h"
 #include "child_process.h"
 #include "kernel_context.h"
+#include "nls.h"
 #include "text.h"
 #include "pe/resources.h"
 
@@ -598,8 +599,15 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(1);
 		}
 	});
-	registry.add("IsDBCSLeadByte", 1, [](ApiCall &call) { call.ret(0); });
-	registry.add("IsDBCSLeadByteEx", 2, [](ApiCall &call) { call.ret(0); });
+	// A lead byte of a double-byte page; the single-byte pages have none. IsDBCSLeadByte asks about the ANSI page.
+	const auto lead_byte = [&context](uint32_t page, uint32_t byte) {
+		if (page == 0 || page == 3)
+			page = context.launch.ansi_code_page;
+		const auto *dbcs = native_double_byte_page(page);
+		return dbcs && byte < 256 && dbcs->slots[byte] != 0;
+	};
+	registry.add("IsDBCSLeadByte", 1, [lead_byte](ApiCall &call) { call.ret(lead_byte(0, call.u32(0) & 0xff)); });
+	registry.add("IsDBCSLeadByteEx", 2, [lead_byte](ApiCall &call) { call.ret(lead_byte(call.u32(0), call.u32(1) & 0xff)); });
 	registry.add("CompareStringA", 6, [](ApiCall &call) {
 		const int32_t left_count = call.i32(3), right_count = call.i32(5);
 		auto left = call.narrow(call[2], left_count < 0 ? 65536 : size_t(left_count));

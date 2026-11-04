@@ -485,6 +485,18 @@
       "provenance": "native/upstream/reactos-nls/single-byte-provenance.json"
     },
     {
+      "name": "Windows double-byte code page data",
+      "paths": [
+        "native/upstream/windows-bestfit/bestfit932.txt",
+        "native/upstream/windows-bestfit/bestfit936.txt",
+        "native/upstream/windows-bestfit/bestfit949.txt",
+        "native/upstream/windows-bestfit/bestfit950.txt"
+      ],
+      "license": "Unicode-3.0",
+      "review": "reviewed",
+      "provenance": "native/upstream/windows-bestfit/provenance.json"
+    },
+    {
       "name": "Raven controls",
       "cmake_keys": [
         "RAVEN_CONTROLS_COMPONENT_DIR",

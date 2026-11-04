@@ -118,6 +118,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         COMMAND ${CMAKE_COMMAND} -DSOURCE=${NLS_SOURCE} -DPAGES=${NLS_SINGLE_BYTE_ARGUMENT}
             -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-sbcs.h -P ${NLS_SOURCE}/sbcs.cmake
         DEPENDS ${NLS_SINGLE_BYTE_TEXTS} ${NLS_SOURCE}/sbcs.cmake VERBATIM)
+    # The Windows double-byte pages: Japanese, Simplified Chinese, Korean and Traditional Chinese, from Unicode's best-fit tables.
+    set(DBCS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/windows-bestfit)
+    set(NLS_DOUBLE_BYTE_PAGES 932 936 949 950)
+    set(NLS_DOUBLE_BYTE_HASHES
+        1b272514615653acd8031a22ea7fd2229a2b517afed26af606e8e2b5cbe85408 fceff446a5a8e70b9543c9a659757e6a36278101033900b879d99415303a8687
+        41cb5a618fd0a6ba859d8ba78e3621573700426ea5da67cd680855b3d3a7de73 2fe67e3872ede8eb2358c4ca084146dcb5b88b6ac71e640d262785c40bc3fa59)
+    set(NLS_DOUBLE_BYTE_TEXTS "")
+    foreach(PAGE HASH IN ZIP_LISTS NLS_DOUBLE_BYTE_PAGES NLS_DOUBLE_BYTE_HASHES)
+        file(SHA256 ${DBCS_SOURCE}/bestfit${PAGE}.txt PAGE_HASH)
+        if(NOT PAGE_HASH STREQUAL HASH)
+            message(FATAL_ERROR "Pinned Unicode code page ${PAGE} differs")
+        endif()
+        list(APPEND NLS_DOUBLE_BYTE_TEXTS ${DBCS_SOURCE}/bestfit${PAGE}.txt)
+    endforeach()
+    add_executable(raven-dbcs-tables nt/dbcs_tables.cpp)
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-dbcs.h
+        COMMAND raven-dbcs-tables ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-dbcs.h ${NLS_DOUBLE_BYTE_TEXTS}
+        DEPENDS raven-dbcs-tables ${NLS_DOUBLE_BYTE_TEXTS} VERBATIM)
     # The case tables of l_intl.nls, which the .NET Framework 2.0 runtime maps from the system directory of either width.
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_FOUND)
@@ -129,7 +147,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(intl_nls ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/l_intl.nls ${CMAKE_CURRENT_BINARY_DIR}/x86/l_intl.nls)
     endif()
     target_sources(raven_cpu PRIVATE nt/nls.cpp nt/multibyte.cpp nt/startup.cpp nt/launch.cpp nt/file.cpp nt/prefix.cpp nt/registry.cpp nt/advapi_api.cpp nt/msvcrt_api.cpp nt/profile_api.cpp nt/x86_process.cpp nt/x86_thread_api.cpp nt/x86_compat_api.cpp nt/x86_loader.cpp nt/x86_system_api.cpp nt/registry_words.cpp nt/x86_tls.cpp nt/x86_com.cpp nt/x86_dsound.cpp nt/x86_d3d9.cpp ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-cp1252.h
-        ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-sbcs.h)
+        ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-sbcs.h ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-dbcs.h)
     file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/upstream/unicode/cp1252-decomposition.inc DECOMPOSITION_HASH)
     if(NOT DECOMPOSITION_HASH STREQUAL "dc36d1023c7fcd96043122aae2854b6f67febb7debfe4be8780aadbb5a9ba30b")
         message(FATAL_ERROR "Pinned CP1252 decompositions differ")
@@ -3311,6 +3329,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(class_info_fixture${width} ALL DEPENDS ${class_info_client})
                     add_test(NAME native_class_info_x${width} COMMAND raven --run-process --execution=native ${class_info_client})
                     set_tests_properties(native_class_info_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(dbcs_client ${CMAKE_CURRENT_BINARY_DIR}/dbcs${width}.exe)
+                    add_custom_command(OUTPUT ${dbcs_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${dbcs_client} ${LOADER_SOURCES}/dbcs_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/dbcs_client.c VERBATIM)
+                    add_custom_target(dbcs_fixture${width} ALL DEPENDS ${dbcs_client})
+                    add_test(NAME native_dbcs_x${width} COMMAND raven --run-process --execution=native ${dbcs_client})
+                    set_tests_properties(native_dbcs_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # d3dcompiler_47.dll for each width: Raven code on the public headers that hands compiles to the runtime's HLSL compiler
                 # through ravenhost.dll and reads reflection from the container itself.

@@ -1,0 +1,39 @@
+{
+  "license": "Unicode-3.0",
+  "license_url": "https://www.unicode.org/license.txt",
+  "terms_url": "https://www.unicode.org/copyright.html",
+  "terms_sha256": "9f83fb0a046180c87d22c2678e79300475125611ac8dfc2da303db6c6b347251",
+  "license_file": "../../../LICENSES/Unicode-3.0.txt",
+  "license_sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+  "retrieved": "2026-11-04",
+  "files": [
+    {
+      "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit932.txt",
+      "source_sha256": "2614cfea35c3c86c41d33198793a84ca44edee3cf0ee0013a61a43fba4ece331",
+      "local_file": "bestfit932.txt",
+      "local_sha256": "1b272514615653acd8031a22ea7fd2229a2b517afed26af606e8e2b5cbe85408",
+      "transformation": "CRLF to LF only; all remaining bytes identical"
+    },
+    {
+      "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit936.txt",
+      "source_sha256": "e5070a2d6ad26619f5872ddbe64d3381c11620af5adbb04cda0f0abb1a91fdae",
+      "local_file": "bestfit936.txt",
+      "local_sha256": "fceff446a5a8e70b9543c9a659757e6a36278101033900b879d99415303a8687",
+      "transformation": "CRLF to LF only; all remaining bytes identical"
+    },
+    {
+      "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit949.txt",
+      "source_sha256": "50e13b60ea8fda66a8223ecc85270e0f182303222244e2345d3d57f3e839d20a",
+      "local_file": "bestfit949.txt",
+      "local_sha256": "41cb5a618fd0a6ba859d8ba78e3621573700426ea5da67cd680855b3d3a7de73",
+      "transformation": "CRLF to LF only; all remaining bytes identical"
+    },
+    {
+      "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit950.txt",
+      "source_sha256": "cf8c23389a42a226ea707f7ec32c665556d1fc3364db25bd765ce64d54eaee2a",
+      "local_file": "bestfit950.txt",
+      "local_sha256": "2fe67e3872ede8eb2358c4ca084146dcb5b88b6ac71e640d262785c40bc3fa59",
+      "transformation": "CRLF to LF only; all remaining bytes identical"
+    }
+  ]
+}

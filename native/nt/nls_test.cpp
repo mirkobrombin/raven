@@ -34,12 +34,28 @@ int main(int argc,char **argv)
 			"single-byte decoding differs from the code page table");
 		check(raven::encode_ansi(u"\u00e9\u0410\u4e2d",1251)=="e\xc0?" && raven::encode_single_byte(*cyrillic,u'\u00e9',true)<0,
 			"single-byte best fit differs from the code page table");
-		for (const uint32_t code_page : {0U,874U,932U,65001U}) {
+		// Each double-byte page reads every character it converts exactly back as that character, and keeps its best fits in order.
+		for (const uint32_t code_page : {932U,936U,949U,950U}) {
+			const auto *page=raven::native_double_byte_page(code_page);
+			check(page && page->best_fit_count>1000 && page->ranges[0]>=0x81,"double-byte code page missing");
+			for (size_t at=1;at<page->best_fit_count;++at) check(page->best_fit[at-1][0]<page->best_fit[at][0],"double-byte best fits out of order");
+			for (size_t at=0;at<page->best_fit_count;++at) {
+				const auto character=char16_t(page->best_fit[at][0]);
+				const auto bytes=raven::encode_double_byte(*page,character,true);
+				if (bytes<0) continue;
+				const std::string encoded=bytes>0xff ? std::string{char(bytes>>8),char(bytes)} : std::string(1,char(bytes));
+				bool invalid=false;
+				check(raven::decode_double_byte(*page,encoded,&invalid)==std::u16string(1,character) && !invalid,"double-byte page does not round-trip");
+			}
+		}
+		check(raven::encode_ansi(u"\u3042A\u0e01",932)=="\x82\xa0" "A?" && raven::encode_ansi(u"\u4e2d",936)=="\xd6\xd0",
+			"double-byte encoding differs from the code page table");
+		for (const uint32_t code_page : {0U,874U,1361U,65001U}) {
 			bool rejected=false;
 			try { raven::encode_ansi(u"",code_page); } catch (const std::runtime_error &) { rejected=true; }
 			check(rejected,"unsupported code page produced apparent success");
 		}
-		std::cout<<"All 65536 native CP1252 code units match NT; the other single-byte pages round-trip; unsupported code pages reject explicitly\n";
+		std::cout<<"All 65536 native CP1252 code units match NT; the other single-byte and the double-byte pages round-trip; unsupported code pages reject explicitly\n";
 	} catch (const std::exception &error) { std::cerr<<error.what()<<'\n'; return 1; }
 	return 0;
 }
