@@ -344,12 +344,12 @@ std::optional<time_t> stamped_time(PKCS7_SIGNER_INFO *signer)
 			return std::nullopt;
 		return timegm(&parts);
 	};
-	if (ASN1_TYPE *counter = PKCS7_get_attribute(signer, NID_pkcs9_countersignature); counter && counter->type == V_ASN1_SEQUENCE) {
-		const unsigned char *at = counter->value.sequence->data;
+	if (const ASN1_TYPE *counter = PKCS7_get_attribute(signer, NID_pkcs9_countersignature); counter && counter->type == V_ASN1_SEQUENCE) {
+		const unsigned char *at = ASN1_STRING_get0_data(counter->value.sequence);
 		std::unique_ptr<PKCS7_SIGNER_INFO, decltype(&PKCS7_SIGNER_INFO_free)> info(
-			d2i_PKCS7_SIGNER_INFO(nullptr, &at, counter->value.sequence->length), PKCS7_SIGNER_INFO_free);
+			d2i_PKCS7_SIGNER_INFO(nullptr, &at, ASN1_STRING_length(counter->value.sequence)), PKCS7_SIGNER_INFO_free);
 		if (info)
-			if (ASN1_TYPE *signed_at = PKCS7_get_signed_attribute(info.get(), NID_pkcs9_signingTime); signed_at && signed_at->type == V_ASN1_UTCTIME)
+			if (const ASN1_TYPE *signed_at = PKCS7_get_signed_attribute(info.get(), NID_pkcs9_signingTime); signed_at && signed_at->type == V_ASN1_UTCTIME)
 				return to_seconds(signed_at->value.utctime);
 	}
 	// An RFC 3161 timestamp token, which newer signatures carry under Microsoft's attribute; its identifier is compared as text, since the
@@ -359,17 +359,17 @@ std::optional<time_t> stamped_time(PKCS7_SIGNER_INFO *signer)
 		X509_ATTRIBUTE *attribute = sk_X509_ATTRIBUTE_value(unsigned_attributes, index);
 		char name[64] = {};
 		OBJ_obj2txt(name, sizeof(name), X509_ATTRIBUTE_get0_object(attribute), 1);
-		ASN1_TYPE *token = X509_ATTRIBUTE_get0_type(attribute, 0);
+		const ASN1_TYPE *token = X509_ATTRIBUTE_get0_type(attribute, 0);
 		if (std::strcmp(name, "1.3.6.1.4.1.311.3.3.1") != 0 || !token || token->type != V_ASN1_SEQUENCE)
 			continue;
 		// The token is CMS signed data, which the PKCS #7 parser does not accept in every form; its content is the TSTInfo.
-		const unsigned char *at = token->value.sequence->data;
+		const unsigned char *at = ASN1_STRING_get0_data(token->value.sequence);
 		std::unique_ptr<CMS_ContentInfo, decltype(&CMS_ContentInfo_free)> signed_token(
-			d2i_CMS_ContentInfo(nullptr, &at, token->value.sequence->length), CMS_ContentInfo_free);
+			d2i_CMS_ContentInfo(nullptr, &at, ASN1_STRING_length(token->value.sequence)), CMS_ContentInfo_free);
 		ASN1_OCTET_STRING **content = signed_token ? CMS_get0_content(signed_token.get()) : nullptr;
 		if (content && *content) {
-			const unsigned char *info_at = (*content)->data;
-			std::unique_ptr<TS_TST_INFO, decltype(&TS_TST_INFO_free)> info(d2i_TS_TST_INFO(nullptr, &info_at, (*content)->length), TS_TST_INFO_free);
+			const unsigned char *info_at = ASN1_STRING_get0_data(*content);
+			std::unique_ptr<TS_TST_INFO, decltype(&TS_TST_INFO_free)> info(d2i_TS_TST_INFO(nullptr, &info_at, ASN1_STRING_length(*content)), TS_TST_INFO_free);
 			if (info)
 				return to_seconds(TS_TST_INFO_get_time(info.get()));
 		}
@@ -482,7 +482,7 @@ AuthenticodeResult verify_authenticode(std::span<const uint8_t> file)
 	}
 	// SpcIndirectDataContent: what was signed, then the DigestInfo of the file's content.
 	const auto *content = signature->d.sign->contents->d.other->value.sequence;
-	const std::span<const uint8_t> indirect(content->data, size_t(content->length));
+	const std::span<const uint8_t> indirect(ASN1_STRING_get0_data(content), size_t(ASN1_STRING_length(content)));
 	const auto outer = der_header(indirect, 0);
 	const auto first = outer ? der_header(indirect, outer->first) : std::nullopt;
 	if (!outer || !first) {
@@ -511,7 +511,7 @@ AuthenticodeResult verify_authenticode(std::span<const uint8_t> file)
 	EVP_DigestInit_ex(hashing.get(), method, nullptr);
 	found->hash(hashing.get());
 	EVP_DigestFinal_ex(hashing.get(), computed, &computed_size);
-	if (int(computed_size) != expected->length || std::memcmp(computed, expected->data, computed_size) != 0) {
+	if (int(computed_size) != ASN1_STRING_length(expected) || std::memcmp(computed, ASN1_STRING_get0_data(expected), computed_size) != 0) {
 		result.status = trust_bad_digest;
 		return result;
 	}

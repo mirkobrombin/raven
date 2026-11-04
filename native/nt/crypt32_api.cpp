@@ -37,6 +37,13 @@ namespace raven {
 
 namespace {
 
+// The bytes of an ASN.1 string. OpenSSL 4 makes the structure opaque, so they are read through the accessors.
+std::vector<uint8_t> asn1_bytes(const ASN1_STRING *value)
+{
+	const unsigned char *data = value ? ASN1_STRING_get0_data(value) : nullptr;
+	return data ? std::vector<uint8_t>(data, data + ASN1_STRING_length(value)) : std::vector<uint8_t>();
+}
+
 constexpr uint32_t error_asn1_bad_tag = 0x8009310b, trust_not_time_valid = 0x1, trust_not_signature_valid = 0x8, trust_revoked = 0x4,
 	trust_untrusted_root = 0x20, trust_partial_chain = 0x10000, trust_self_signed = 0x8;
 constexpr uint32_t store_provider_memory = 2, store_provider_system_a = 9, store_provider_system_w = 10;
@@ -115,14 +122,14 @@ const char *attribute_label(int nid)
 
 // A distinguished name as CertNameToStr writes it: values alone, or prefixed by their object identifier or their short name, in the order
 // of the encoding or reversed, separated by commas, semicolons or line breaks.
-std::string name_text(X509_NAME *name, uint32_t type)
+std::string name_text(const X509_NAME *name, uint32_t type)
 {
 	constexpr uint32_t simple = 1, oid = 2, semicolon = 0x40000000, crlf = 0x08000000, no_plus = 0x20000000, no_quote = 0x10000000,
 		reverse = 0x02000000;
 	(void)no_plus;
 	std::vector<std::string> parts;
 	for (int index = 0; index < X509_NAME_entry_count(name); ++index) {
-		X509_NAME_ENTRY *entry = X509_NAME_get_entry(name, index);
+		const X509_NAME_ENTRY *entry = X509_NAME_get_entry(name, index);
 		unsigned char *utf8 = nullptr;
 		const int length = ASN1_STRING_to_UTF8(&utf8, X509_NAME_ENTRY_get_data(entry));
 		std::string value(utf8 ? reinterpret_cast<char *>(utf8) : "", length > 0 ? size_t(length) : 0);
@@ -150,7 +157,7 @@ std::string name_text(X509_NAME *name, uint32_t type)
 }
 
 // The first value of an attribute of a name, as UTF-8.
-std::string name_attribute(X509_NAME *name, int nid)
+std::string name_attribute(const X509_NAME *name, int nid)
 {
 	const int index = X509_NAME_get_index_by_NID(name, nid, -1);
 	if (index < 0)
@@ -228,8 +235,6 @@ uint64_t filetime_of(const ASN1_TIME *time)
 	if (!time)
 		return 0;
 	int days = 0, seconds = 0;
-	ASN1_TIME epoch;
-	std::memset(&epoch, 0, sizeof(epoch));
 	ASN1_TIME *unix_epoch = ASN1_TIME_set(nullptr, 0);
 	if (!unix_epoch || !ASN1_TIME_diff(&days, &seconds, unix_epoch, time)) {
 		ASN1_STRING_free(unix_epoch);
@@ -280,9 +285,9 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		const auto encoding_at = head.dword(), encoded_at = head.pointer(), encoded_size_at = head.dword(), info_at = head.pointer(), store_at = head.pointer();
 		// The serial number as CRYPT_INTEGER_BLOB holds it, little-endian.
 		const auto *name = X509_get_serialNumber(certificate.get());
-		std::vector<uint8_t> serial(name ? name->data : nullptr, name ? name->data + name->length : nullptr);
+		std::vector<uint8_t> serial = asn1_bytes(name);
 		std::reverse(serial.begin(), serial.end());
-		const auto name_bytes = [](X509_NAME *value) {
+		const auto name_bytes = [](const X509_NAME *value) {
 			const int length = i2d_X509_NAME(value, nullptr);
 			std::vector<uint8_t> bytes(length > 0 ? size_t(length) : 0);
 			unsigned char *at = bytes.data();
@@ -318,7 +323,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		size_t extension_bytes = size_t(extension_total) * extension.size();
 		for (int index = 0; index < extension_total; ++index) {
 			X509_EXTENSION *entry = sk_X509_EXTENSION_value(extensions, index);
-			extension_bytes += object_text(X509_EXTENSION_get_object(entry)).size() + size_t(X509_EXTENSION_get_data(entry)->length);
+			extension_bytes += object_text(X509_EXTENSION_get_object(entry)).size() + size_t(ASN1_STRING_length(X509_EXTENSION_get_data(entry)));
 		}
 		// One block: the context, the CERT_INFO, the extension array, then the byte strings they point at.
 		const size_t info_start = (head.size() + 15) / 16 * 16, bytes_start = (info_start + info.size() + 15) / 16 * 16;
@@ -373,8 +378,8 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 			const auto *value = X509_EXTENSION_get_data(entry);
 			put_pointer(at + extension_oid, place(object_text(X509_EXTENSION_get_object(entry))));
 			put32(at + extension_critical, uint32_t(X509_EXTENSION_get_critical(entry) > 0));
-			put32(at + extension_size, uint32_t(value->length));
-			put_pointer(at + extension_value, place(std::vector<uint8_t>(value->data, value->data + value->length)));
+			put32(at + extension_size, uint32_t(ASN1_STRING_length(value)));
+			put_pointer(at + extension_value, place(asn1_bytes(value)));
 		}
 		(void)issuer_unique; (void)subject_unique;
 		call.write(block, image);
@@ -861,10 +866,10 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		} else if (call.u32(1) == key_identifier) {
 			if (const auto certificate = parse(encoded)) {
 				if (const ASN1_OCTET_STRING *subject = X509_get0_subject_key_id(certificate.get())) {
-					value.assign(subject->data, subject->data + subject->length);
+					value = asn1_bytes(subject);
 				} else if (const ASN1_BIT_STRING *key = X509_get0_pubkey_bitstr(certificate.get())) {
 					value.resize(SHA_DIGEST_LENGTH);
-					SHA1(key->data, size_t(key->length), value.data());
+					SHA1(ASN1_STRING_get0_data(key), size_t(ASN1_STRING_length(key)), value.data());
 				}
 			}
 		}
@@ -1162,7 +1167,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 	};
 	// A serial number as CRYPT_INTEGER_BLOB holds it: little-endian.
 	const auto serial_bytes = [](const ASN1_INTEGER *serial) {
-		std::vector<uint8_t> bytes(serial->data, serial->data + serial->length);
+		std::vector<uint8_t> bytes = asn1_bytes(serial);
 		std::reverse(bytes.begin(), bytes.end());
 		return bytes;
 	};
@@ -1187,7 +1192,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		};
 		algorithm(signer->digest_alg, hash_oid, hash_parameters_size, hash_parameters);
 		algorithm(signer->digest_enc_alg, encryption_oid, encryption_parameters_size, encryption_parameters);
-		packed.put_blob(encrypted_size, encrypted_data, std::span<const uint8_t>(signer->enc_digest->data, size_t(signer->enc_digest->length)));
+		packed.put_blob(encrypted_size, encrypted_data, asn1_bytes(signer->enc_digest));
 		const auto attributes = [&](STACK_OF(X509_ATTRIBUTE) *list, size_t count_at, size_t array_at) {
 			const int count = list ? sk_X509_ATTRIBUTE_num(list) : 0;
 			Layout attribute(width);
@@ -1342,7 +1347,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		} else if (type == octet_string) {
 			const unsigned char *at = bytes.data();
 			if (ASN1_OCTET_STRING *octets = d2i_ASN1_OCTET_STRING(nullptr, &at, long(bytes.size()))) {
-				std::vector<uint8_t> content(octets->data, octets->data + octets->length);
+				std::vector<uint8_t> content = asn1_bytes(octets);
 				ASN1_OCTET_STRING_free(octets);
 				build = [content, width](uint64_t base) {
 					std::vector<uint8_t> image(width * 2 + content.size());
@@ -1424,7 +1429,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		case content_param: {
 			const auto *other = message->d.sign->contents->d.other;
 			const std::vector<uint8_t> inner = other && other->type == V_ASN1_SEQUENCE
-				? std::vector<uint8_t>(other->value.sequence->data, other->value.sequence->data + other->value.sequence->length) : std::vector<uint8_t>();
+				? asn1_bytes(other->value.sequence) : std::vector<uint8_t>();
 			answer_bytes(call, call[3], call[4], [&](uint64_t) { return inner; });
 			return;
 		}
@@ -1510,9 +1515,9 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 				// The content an Authenticode signer signs is the indirect data without its own header.
 				const auto *other = message->d.sign->contents->d.other;
 				std::unique_ptr<BIO, decltype(&BIO_free)> content(nullptr, BIO_free);
-				if (other && other->type == V_ASN1_SEQUENCE && other->value.sequence->length > 2) {
-					const unsigned char *bytes = other->value.sequence->data;
-					const size_t length = size_t(other->value.sequence->length);
+				if (other && other->type == V_ASN1_SEQUENCE && ASN1_STRING_length(other->value.sequence) > 2) {
+					const unsigned char *bytes = ASN1_STRING_get0_data(other->value.sequence);
+					const size_t length = size_t(ASN1_STRING_length(other->value.sequence));
 					const size_t header = bytes[1] < 0x80 ? 2 : 2 + (bytes[1] & 0x7f);
 					content.reset(BIO_new_mem_buf(bytes + header, int(length - header)));
 				}
@@ -1603,7 +1608,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 			std::string text;
 			if (call[0])
 				if (const auto certificate = parse(encoded_of(call, call[0]))) {
-					X509_NAME *name = call.u32(2) & issuer_flag ? X509_get_issuer_name(certificate.get()) : X509_get_subject_name(certificate.get());
+					const X509_NAME *name = call.u32(2) & issuer_flag ? X509_get_issuer_name(certificate.get()) : X509_get_subject_name(certificate.get());
 					switch (call.u32(1)) {
 					case email: text = name_attribute(name, NID_pkcs9_emailAddress); break;
 					case rdn: text = name_text(name, call[3] ? call.load<uint32_t>(call[3]) : 3); break;
