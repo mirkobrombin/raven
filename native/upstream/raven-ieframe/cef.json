@@ -1,0 +1,13 @@
+{
+  "version": "156.0.14+g4fa4ab5+chromium-156.0.8078.48",
+  "archive": "cef_binary_156.0.14+g4fa4ab5+chromium-156.0.8078.48_windows64_minimal.tar.bz2",
+  "size": 175051364,
+  "url": "https://cef-builds.spotifycdn.com/cef_binary_156.0.14%2Bg4fa4ab5%2Bchromium-156.0.8078.48_windows64_minimal.tar.bz2",
+  "sha256": "99f8a6dffd47417e0caee7845a98c549b41f1d4246cd715dec843ca4b699ee57",
+  "archive_root": "cef_binary_156.0.14+g4fa4ab5+chromium-156.0.8078.48_windows64_minimal",
+  "runtime": ["Release/chrome_elf.dll", "Release/libcef.dll", "Release/v8_context_snapshot.bin", "Release/vk_swiftshader.dll",
+              "Release/vk_swiftshader_icd.json", "Resources/chrome_100_percent.pak", "Resources/chrome_200_percent.pak",
+              "Resources/icudtl.dat", "Resources/resources.pak", "Resources/locales/"],
+  "headers": "include/",
+  "licenses": ["LICENSE.txt", "CREDITS.html", "README.txt"]
+}
