@@ -86,6 +86,9 @@ struct DesktopPresentation {
 	HostPlatform platform = HostPlatform::wayland;
 	// Minimizes a top-level window to the host's taskbar, keeping its surface; absent, a minimized window is removed from the screen.
 	std::function<void(uint64_t)> minimize;
+	// Keeps a top-level window above the top-level window that owns it, as Windows keeps an owned dialog; 0 for no owner. Given before the
+	// window's first frame.
+	std::function<void(uint64_t handle,uint64_t owner)> transient_for;
 };
 
 }
