@@ -68,7 +68,7 @@ int main(int argc,char **argv)
 			raven::NativeLaunch{u"image",std::u16string(32767,u'x')},
 			raven::NativeLaunch{std::u16string(u"a\0b",3),u"command"},
 			raven::NativeLaunch{u"image",std::u16string(u"a\0b",3)},
-			raven::NativeLaunch{u"image",u"command",65001},raven::NativeLaunch{u"image",u"command",932}}) {
+			raven::NativeLaunch{u"image",u"command",65001},raven::NativeLaunch{u"image",u"command",1361}}) {
 			bool rejected=false;
 			try { environment.prepare_parameters(launch); } catch (const std::runtime_error &) { rejected=true; }
 			check(rejected && !number(process,environment.peb()+0x20,8),"invalid parameters published a process block");
