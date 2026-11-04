@@ -48,9 +48,12 @@ PEModule::PEModule(std::string name, ModuleBytes bytes, uint64_t base, bool relo
 	: name(std::move(name)), bytes(std::move(bytes)), image(std::span<const uint8_t>(this->bytes)), loaded(image, base, relocated),
 	imports(image.il_only() ? std::vector<PEImport>{} : image.imports()), exports(image.exports())
 {
-	for (size_t index = 0; index < exports.size(); ++index)
+	for (size_t index = 0; index < exports.size(); ++index) {
+		export_ordinals.emplace(exports[index].ordinal, index);
 		for (const auto &export_name : exports[index].names)
 			export_names.emplace(export_name, index);
+	}
+	indexed_exports = exports.size();
 }
 
 PEModule &ModuleSet::add(std::string name, ModuleBytes bytes, std::function<bool(uint64_t, uint64_t)> available)
@@ -207,12 +210,17 @@ uint64_t ModuleSet::resolve(std::string module, std::string name, uint32_t ordin
 	if (path)
 		path->push_back(&target);
 	auto exported = target.exports.end();
-	if (by_ordinal)
-		exported = std::find_if(target.exports.begin(), target.exports.end(), [&](const auto &entry) { return entry.ordinal == ordinal; });
-	else if (const auto named = target.export_names.find(name); named != target.export_names.end())
+	// An index entry still names its export, and an export added after the module was built is found by a scan of the table.
+	const bool complete = target.indexed_exports == target.exports.size();
+	if (by_ordinal) {
+		if (const auto numbered = target.export_ordinals.find(ordinal);
+			complete && numbered != target.export_ordinals.end() && target.exports[numbered->second].ordinal == ordinal)
+			exported = target.exports.begin() + std::ptrdiff_t(numbered->second);
+		else if (!complete)
+			exported = std::find_if(target.exports.begin(), target.exports.end(), [&](const auto &entry) { return entry.ordinal == ordinal; });
+	} else if (const auto named = target.export_names.find(name); complete && named != target.export_names.end())
 		exported = target.exports.begin() + std::ptrdiff_t(named->second);
-	else
-		// An export added after the module was built is not indexed.
+	else if (!complete)
 		exported = std::find_if(target.exports.begin(), target.exports.end(), [&](const auto &entry) {
 			return std::find(entry.names.begin(), entry.names.end(), name) != entry.names.end();
 		});

@@ -42,6 +42,9 @@ struct PEModule {
 	std::vector<PEExport> exports;
 	// The first export that carries each name: imports are resolved by name, thousands of them for a large library.
 	std::unordered_map<std::string, size_t> export_names;
+	// The exports by ordinal, and how many exports both indexes cover: a lookup that misses them scans only when exports came after.
+	std::unordered_map<uint32_t, size_t> export_ordinals;
+	size_t indexed_exports = 0;
 	bool runtime_api = false;
 	// The host file a library loaded from a folder of the program's came from; empty for the runtime's own and for libraries found by name.
 	std::filesystem::path file;
