@@ -1998,6 +1998,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(ETW_CLIENTS)
             set(PROCESS_ENUM_CLIENTS)
             set(WORKSTATION_CLIENTS)
+            set(INITIALIZE_SPY_CLIENTS)
             foreach(width 64 32)
                 if(width EQUAL 64)
                     set(etw_compiler ${RAVEN_MINGW64})
@@ -2037,11 +2038,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     list(APPEND WORKSTATION_CLIENTS ${workstation_client})
                     add_test(NAME native_workstation_info_x${width} COMMAND raven --run-process --execution=native ${workstation_client})
                     set_tests_properties(native_workstation_info_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # The spies programs register to hear of each COM initialization on their threads.
+                    set(initialize_spy_client ${CMAKE_CURRENT_BINARY_DIR}/initialize-spy${width}.exe)
+                    add_custom_command(OUTPUT ${initialize_spy_client}
+                        COMMAND ${etw_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -mno-stack-arg-probe
+                            -Wl,--entry,${etw_entry},--image-base,0x1e700000,--no-insert-timestamp
+                            -o ${initialize_spy_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/initialize_spy_client.c -lole32 -luuid -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/initialize_spy_client.c VERBATIM)
+                    list(APPEND INITIALIZE_SPY_CLIENTS ${initialize_spy_client})
+                    add_test(NAME native_initialize_spy_x${width} COMMAND raven --run-process --execution=native ${initialize_spy_client})
+                    set_tests_properties(native_initialize_spy_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
             endforeach()
             add_custom_target(etw_controller_fixtures ALL DEPENDS ${ETW_CLIENTS})
             add_custom_target(process_enum_fixtures ALL DEPENDS ${PROCESS_ENUM_CLIENTS})
             add_custom_target(workstation_fixtures ALL DEPENDS ${WORKSTATION_CLIENTS})
+            add_custom_target(initialize_spy_fixtures ALL DEPENDS ${INITIALIZE_SPY_CLIENTS})
             set(SOCKET_MESSAGE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/socket-message-client.exe)
             add_custom_command(OUTPUT ${SOCKET_MESSAGE_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector

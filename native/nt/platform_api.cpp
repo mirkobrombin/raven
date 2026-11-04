@@ -276,6 +276,14 @@ struct ComState {
 	std::map<uint64_t, Thread> threads;
 	uint64_t main_sta = 0;
 	int mta_threads = 0;
+	// The IInitializeSpy objects each thread registered, in order, with their cookies. A registration outlives the thread's
+	// initialization, so it is kept apart from it.
+	struct Spy {
+		uint64_t cookie;
+		uint64_t object;
+	};
+	std::map<uint64_t, std::vector<Spy>> spies;
+	uint64_t last_cookie = 0;
 };
 
 }
@@ -691,13 +699,44 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.store<uint32_t>(data + 2 * width + 4, flags);
 	};
-	const auto initialize = [com, &context, ole_flags](ApiCall &call, bool multithreaded, bool no_dde) {
+	// Calls method `index` of a guest COM object's interface with the object and the arguments that follow it; the answer is its HRESULT.
+	const auto object_method = [&context](ApiCall &call, uint64_t object, size_t index, std::initializer_list<uint64_t> rest) {
+		const auto table = call.load_pointer(object);
+		std::vector<uint64_t> arguments{object};
+		arguments.insert(arguments.end(), rest);
+		const auto result = context.call(call.load_pointer(table + index * call.pointer_width()), arguments);
+		if (result.stop != NativeStop::returned)
+			throw result;
+		return uint32_t(result.value);
+	};
+	// The thread's spies hear of every CoInitializeEx and CoUninitialize it makes, in the order they were registered. A spy may
+	// register or revoke spies while it is told; one revoked meanwhile is not told after that.
+	const auto each_spy = [com, &context](const std::function<void(uint64_t)> &tell) {
+		const uint64_t thread = context.environment.teb();
+		const auto registered = com->spies.find(thread);
+		if (registered == com->spies.end())
+			return;
+		std::vector<uint64_t> cookies;
+		for (const auto &spy : registered->second)
+			cookies.push_back(spy.cookie);
+		for (const auto cookie : cookies) {
+			const auto now = com->spies.find(thread);
+			if (now == com->spies.end())
+				return;
+			const auto found = std::find_if(now->second.begin(), now->second.end(), [cookie](const auto &spy) { return spy.cookie == cookie; });
+			if (found != now->second.end())
+				tell(found->object);
+		}
+	};
+	const auto thread_count = [com, &context] {
+		const auto found = com->threads.find(context.environment.teb());
+		return found == com->threads.end() ? 0U : uint32_t(found->second.count);
+	};
+	const auto join = [com, &context, ole_flags](ApiCall &call, bool multithreaded, bool no_dde) {
 		const uint64_t thread = context.environment.teb();
 		auto &state = com->threads[thread];
-		if (state.count && state.multithreaded != multithreaded) {
-			call.ret(0x80010106U);
-			return;
-		}
+		if (state.count && state.multithreaded != multithreaded)
+			return 0x80010106U;
 		if (!state.count++) {
 			state.multithreaded = multithreaded;
 			if (multithreaded)
@@ -705,14 +744,23 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			else if (!com->main_sta)
 				com->main_sta = thread;
 			ole_flags(call, multithreaded ? 0x140U : no_dde ? 0xc0U : 0x80U);
-			call.ret(s_ok);
-			return;
+			return s_ok;
 		}
-		call.ret(s_false);
+		return s_false;
 	};
-	registry.add("CoInitialize", 1, [initialize](ApiCall &call) { initialize(call, false, false); });
-	registry.add("CoInitializeEx", 2, [initialize](ApiCall &call) { initialize(call, !(call.u32(1) & 2), call.u32(1) & 4); });
-	registry.add("OleInitialize", 1, [initialize](ApiCall &call) { initialize(call, false, false); });
+	// IInitializeSpy: PreInitialize(COINIT, references) is method 3, PostInitialize(HRESULT, COINIT, references) method 4. Each
+	// PostInitialize gets the HRESULT the one before it returned, and the last one's is CoInitializeEx's.
+	const auto initialize = [join, each_spy, object_method, thread_count](ApiCall &call, uint32_t co_init) {
+		const uint32_t before = thread_count();
+		each_spy([&](uint64_t spy) { object_method(call, spy, 3, {co_init, before}); });
+		uint32_t result = join(call, !(co_init & 2), co_init & 4);
+		const uint32_t after = thread_count();
+		each_spy([&](uint64_t spy) { result = object_method(call, spy, 4, {result, co_init, after}); });
+		call.ret(result);
+	};
+	registry.add("CoInitialize", 1, [initialize](ApiCall &call) { initialize(call, 2); });
+	registry.add("CoInitializeEx", 2, [initialize](ApiCall &call) { initialize(call, call.u32(1)); });
+	registry.add("OleInitialize", 1, [initialize](ApiCall &call) { initialize(call, 2); });
 	// CoInitializeSecurity sets the process's COM security once: the first call succeeds and any later one is too late, as on Windows.
 	registry.add("CoInitializeSecurity", 9, [](ApiCall &call) {
 		static std::atomic<bool> done{false};
@@ -722,7 +770,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	// authentication of a proxy have nothing to change.
 	registry.add("CoRegisterPSClsid", 2, [](ApiCall &call) { call.ret(call[0] && call[1] ? s_ok : 0x80070057U); });
 	registry.add("CoSetProxyBlanket", 8, [](ApiCall &call) { call.ret(call[0] ? s_ok : 0x80070057U); });
-	const auto uninitialize = [com, &context, ole_flags](ApiCall &call) {
+	const auto leave = [com, &context, ole_flags](ApiCall &call) {
 		const uint64_t thread = context.environment.teb();
 		auto found = com->threads.find(thread);
 		if (found == com->threads.end() || !found->second.count)
@@ -736,6 +784,62 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			ole_flags(call, 0);
 		}
 	};
+	// IInitializeSpy: PreUninitialize(references) is method 5, PostUninitialize(references) method 6.
+	const auto uninitialize = [leave, each_spy, object_method, thread_count](ApiCall &call) {
+		const uint32_t before = thread_count();
+		each_spy([&](uint64_t spy) { object_method(call, spy, 5, {before}); });
+		leave(call);
+		const uint32_t after = thread_count();
+		each_spy([&](uint64_t spy) { object_method(call, spy, 6, {after}); });
+	};
+	// A spy is registered through its IInitializeSpy interface, {00000034-0000-0000-C000-000000000046}: QueryInterface (method 0)
+	// gives the registration its own reference, which revoking it releases (method 2). Cookies name one registration on one thread.
+	registry.add("CoRegisterInitializeSpy", 2, [com, &context, object_method](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.ret(e_invalidarg);
+			return;
+		}
+		const uint64_t scratch = context.allocator.allocate(16 + 8, true);
+		if (!scratch) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		static constexpr uint8_t iid_initialize_spy[] = {0x34, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46};
+		call.write(scratch, iid_initialize_spy);
+		const uint32_t result = object_method(call, call[0], 0, {scratch, scratch + 16});
+		const uint64_t spy = call.load_pointer(scratch + 16);
+		context.allocator.release(scratch);
+		if ((result & 0x80000000U) || !spy) {
+			call.ret((result & 0x80000000U) ? result : 0x80004002U);
+			return;
+		}
+		const uint64_t cookie = ++com->last_cookie;
+		com->spies[context.environment.teb()].push_back({cookie, spy});
+		call.store<uint64_t>(call[1], cookie);
+		call.ret(s_ok);
+	});
+	// The cookie is a ULARGE_INTEGER passed by value: one register from a 64-bit caller, two stack words from a 32-bit one. A cookie
+	// another thread registered, or one already revoked, is not this thread's.
+	registry.add("CoRevokeInitializeSpy", 2, [com, &context, object_method](ApiCall &call) {
+		const uint64_t cookie = call.pointer_width() == 4 ? call.u32(0) | uint64_t(call.u32(1)) << 32 : call[0];
+		const auto registered = com->spies.find(context.environment.teb());
+		if (registered == com->spies.end()) {
+			call.ret(e_invalidarg);
+			return;
+		}
+		auto &spies = registered->second;
+		const auto found = std::find_if(spies.begin(), spies.end(), [cookie](const auto &spy) { return spy.cookie == cookie; });
+		if (found == spies.end()) {
+			call.ret(e_invalidarg);
+			return;
+		}
+		const uint64_t spy = found->object;
+		spies.erase(found);
+		if (spies.empty())
+			com->spies.erase(registered);
+		object_method(call, spy, 2, {});
+		call.ret(s_ok);
+	});
 	// Message filters belong to single-threaded apartments; there is no filter before the first one, so the previous one is null.
 	registry.add("CoRegisterMessageFilter", 2, [com, &context](ApiCall &call) {
 		const auto found = com->threads.find(context.environment.teb());
@@ -1224,9 +1328,9 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("RoParseTypeName", 3, [](ApiCall &call) { call.ret(0x80004001U); });
 	registry.add("RoResolveNamespace", 7, [](ApiCall &call) { call.ret(0x80004001U); });
 	registry.add("RoGetParameterizedTypeInstanceIID", 5, [](ApiCall &call) { call.ret(0x80004001U); });
-	// No Windows Runtime class exists here: initialization joins the thread to a COM apartment like CoInitializeEx (RO_INIT_MULTITHREADED
-	// is 1), and every activation reports that the class is not registered.
-	registry.add("RoInitialize", 1, [initialize](ApiCall &call) { initialize(call, call.u32(0) == 1, true); });
+	// No Windows Runtime class exists here: initialization joins the thread to a COM apartment like CoInitializeEx without OLE 1.0 DDE
+	// (RO_INIT_MULTITHREADED is 1), and every activation reports that the class is not registered.
+	registry.add("RoInitialize", 1, [initialize](ApiCall &call) { initialize(call, call.u32(0) == 1 ? 4 : 6); });
 	registry.add("RoUninitialize", 0, uninitialize);
 	registry.add("RoGetActivationFactory", 3, [](ApiCall &call) {
 		// The traced failure says which class was asked for.
