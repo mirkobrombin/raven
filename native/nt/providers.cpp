@@ -1993,9 +1993,23 @@ static bool guest_paths()
 	return enabled;
 }
 
-static uint64_t provider_base(const ModuleSet &modules, uint32_t size)
+// ntdll, kernel32 and kernelbase sit at the same address in every process, as on Windows, where a program finds them in another
+// process at the address they have in its own; the other providers follow in the order they are made, so their addresses depend
+// on the program.
+static uint64_t preferred_base(std::string_view name)
 {
-	uint64_t base = 0x6fff00000000ULL;
+	if (name == "ntdll.dll")
+		return 0x6fff00000000ULL;
+	if (name == "kernel32.dll")
+		return 0x6fff01000000ULL;
+	if (name == "kernelbase.dll")
+		return 0x6fff02000000ULL;
+	return 0x6fff03000000ULL;
+}
+
+static uint64_t provider_base(const ModuleSet &modules, uint32_t size, std::string_view name = {})
+{
+	uint64_t base = preferred_base(name);
 	for (;;) {
 		bool overlap = false;
 		for (const auto &[name, module] : modules.all()) {
@@ -2194,7 +2208,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		} else {
 			const auto provider_key = program_libraries.contains(name) ? "system32-" + name : name;
 			const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
-			const auto base = provider_base(modules, PEImage(bytes).image_size);
+			const auto base = provider_base(modules, PEImage(bytes).image_size, name);
 			provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
 			provider->runtime_api = true;
 		}
@@ -2254,7 +2268,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	});
 	if (nt==modules.all().end() && needs_nt) {
 		const auto bytes=runtime_provider("ntdll.dll",0x180000000ULL,nt_names,false,{},{},guest_paths());
-		const auto base=provider_base(modules,PEImage(bytes).image_size);
+		const auto base=provider_base(modules,PEImage(bytes).image_size,"ntdll.dll");
 		auto &provider=modules.add("ntdll.dll",runtime_provider("ntdll.dll",base,nt_names,false,{},{},guest_paths()),base);
 		provider.runtime_api=true;
 	}
