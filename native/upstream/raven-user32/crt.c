@@ -8,28 +8,27 @@
 
 void *memcpy(void *destination, const void *source, size_t count)
 {
-	unsigned char *to = destination;
-	const unsigned char *from = source;
-	while (count--)
-		*to++ = *from++;
-	return destination;
+	void *start = destination;
+	__asm__ volatile("rep movsb" : "+D"(destination), "+S"(source), "+c"(count) : : "memory");
+	return start;
 }
 
 void *memmove(void *destination, const void *source, size_t count)
 {
-	unsigned char *to = destination;
-	const unsigned char *from = source;
-	if (to <= from)
-		return memcpy(destination, source, count);
-	while (count--)
-		to[count] = from[count];
-	return destination;
+	void *start = destination;
+	if ((const unsigned char *)destination <= (const unsigned char *)source || (const unsigned char *)destination >= (const unsigned char *)source + count) {
+		__asm__ volatile("rep movsb" : "+D"(destination), "+S"(source), "+c"(count) : : "memory");
+	} else if (count) {
+		destination = (unsigned char *)destination + count - 1;
+		source = (const unsigned char *)source + count - 1;
+		__asm__ volatile("std\n\trep movsb\n\tcld" : "+D"(destination), "+S"(source), "+c"(count) : : "memory");
+	}
+	return start;
 }
 
 void *memset(void *destination, int value, size_t count)
 {
-	unsigned char *to = destination;
-	while (count--)
-		*to++ = (unsigned char)value;
-	return destination;
+	void *start = destination;
+	__asm__ volatile("rep stosb" : "+D"(destination), "+c"(count) : "a"(value) : "memory");
+	return start;
 }

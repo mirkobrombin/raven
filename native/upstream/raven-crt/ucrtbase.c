@@ -37,40 +37,34 @@
 #undef towlower
 #undef towupper
 
-/* ---- memory and strings: plain loops, no compiler idiom recognition, so they cannot call themselves ---- */
+/* ---- memory and strings: string instructions for the block moves, plain loops elsewhere, no compiler idiom recognition, so they cannot call themselves ---- */
 #define PLAIN __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
 CRT PLAIN void *memcpy(void *to, const void *from, size_t count)
 {
-	unsigned char *a = to;
-	const unsigned char *b = from;
-	while (count--)
-		*a++ = *b++;
-	return to;
+	void *start = to;
+	__asm__ volatile("rep movsb" : "+D"(to), "+S"(from), "+c"(count) : : "memory");
+	return start;
 }
 
 CRT PLAIN void *memmove(void *to, const void *from, size_t count)
 {
-	unsigned char *a = to;
-	const unsigned char *b = from;
-	if (a < b || a >= b + count) {
-		while (count--)
-			*a++ = *b++;
-	} else {
-		a += count;
-		b += count;
-		while (count--)
-			*--a = *--b;
+	void *start = to;
+	if ((const unsigned char *)to <= (const unsigned char *)from || (const unsigned char *)to >= (const unsigned char *)from + count) {
+		__asm__ volatile("rep movsb" : "+D"(to), "+S"(from), "+c"(count) : : "memory");
+	} else if (count) {
+		to = (unsigned char *)to + count - 1;
+		from = (const unsigned char *)from + count - 1;
+		__asm__ volatile("std\n\trep movsb\n\tcld" : "+D"(to), "+S"(from), "+c"(count) : : "memory");
 	}
-	return to;
+	return start;
 }
 
 CRT PLAIN void *memset(void *to, int value, size_t count)
 {
-	unsigned char *a = to;
-	while (count--)
-		*a++ = (unsigned char)value;
-	return to;
+	void *start = to;
+	__asm__ volatile("rep stosb" : "+D"(to), "+c"(count) : "a"(value) : "memory");
+	return start;
 }
 
 CRT PLAIN int memcmp(const void *left, const void *right, size_t count)
