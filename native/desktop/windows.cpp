@@ -280,6 +280,7 @@ void NativeWindows::present(uint64_t handle, bool force)
 	}
 	// Host titles use replacement characters; the guest retains every UTF-16 code unit.
 	if (presentation.maximize) presentation.maximize(handle,(window->style & 0x01000000U)!=0);
+	if (presentation.transient_for) presentation.transient_for(handle,owning ? owner : 0);
 	presentation.present(handle,encode_utf8(window->title,true),bitmap->width,bitmap->height,pixels);
 	place_host_surface(handle);
 	place_overlays(handle,*bitmap,pixels);

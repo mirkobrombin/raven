@@ -72,6 +72,7 @@ struct XcbPresentation::State {
 		bool shown=false;
 	};
 	std::map<uint64_t,Hosted> hosted;
+	std::map<uint64_t,uint64_t> transient_owners;
 	xcb_connection_t *connection=nullptr;
 	xcb_screen_t *screen=nullptr;
 	xcb_gcontext_t gc=0;
@@ -402,6 +403,27 @@ struct XcbPresentation::State {
 		property(window.id,atoms[wm_name],atoms[utf8_string],8,uint32_t(title.size()),title.data());
 	}
 
+	// The window manager keeps a window above its owner only when told; without this a dialog can fall behind the owner it disables.
+	void apply_transient(uint64_t handle,const Window &window) {
+		const auto owner=transient_owners.find(handle);
+		const auto found=owner==transient_owners.end() ? windows.end() : windows.find(owner->second);
+		if (found!=windows.end() && !found->second->is_popup && found->second->id)
+			property(window.id,XCB_ATOM_WM_TRANSIENT_FOR,XCB_ATOM_WINDOW,32,1,&found->second->id);
+		else xcb_delete_property(connection,window.id,XCB_ATOM_WM_TRANSIENT_FOR);
+	}
+
+	void transient_for(uint64_t handle,uint64_t owner) {
+		const auto known=transient_owners.find(handle);
+		if (known==transient_owners.end() ? !owner : known->second==owner) return;
+		if (owner) transient_owners[handle]=owner;
+		else transient_owners.erase(known);
+		const auto found=windows.find(handle);
+		if (connection && found!=windows.end() && !found->second->is_popup && found->second->id) {
+			apply_transient(handle,*found->second);
+			xcb_flush(connection);
+		}
+	}
+
 	void ungrab_if_unused() {
 		if (std::any_of(windows.begin(),windows.end(),[](const auto &entry) { return entry.second->grabbed && !entry.second->closed; })) return;
 		xcb_ungrab_keyboard(connection,XCB_CURRENT_TIME);
@@ -520,6 +542,7 @@ struct XcbPresentation::State {
 			property(window->id,atoms[motif_hints],atoms[motif_hints],32,5,hints);
 			set_title(*window,title);
 			set_maximized(*window,window->maximized,false);
+			apply_transient(handle,*window);
 			xcb_map_window(connection,window->id);
 			if (tracing()) std::fprintf(stderr,"x11: window %llx -> %x %ux%u\n",(unsigned long long)handle,window->id,width,height);
 			found=windows.emplace(handle,std::move(window)).first;
@@ -997,6 +1020,7 @@ DesktopPresentation XcbPresentation::callbacks()
 	}};
 	result.platform=HostPlatform::xcb;
 	result.minimize=[this](uint64_t handle) { state->minimize(handle); };
+	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
 	return result;
 }
 
