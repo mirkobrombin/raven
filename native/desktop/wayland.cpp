@@ -139,8 +139,8 @@ struct WaylandPresentation::State {
 	uint64_t keyboard_window=0;
 	int32_t pointer_x=0,pointer_y=0;
 	bool input_failed=false;
-	// Serial of the newest input event; popup grabs must quote one.
-	uint32_t last_serial=0;
+	// Serial of the newest input event, and of the newest button or key press: a compositor grants a popup grab only for a press.
+	uint32_t last_serial=0,press_serial=0;
 	// Pointer buttons held down, and a window whose move the window menu asked for while none was: the compositor starts a move only
 	// from a press, so the move begins with the next press on that window, as a click ends the move on Windows; a key cancels it.
 	uint32_t buttons_down=0;
@@ -315,6 +315,7 @@ struct WaylandPresentation::State {
 				value.button=[](void *data,wl_pointer *,uint32_t serial,uint32_t,uint32_t button,uint32_t pressed) {
 					auto &state=*static_cast<State *>(data);
 					state.last_serial=serial;
+					if (pressed) state.press_serial=serial;
 					state.buttons_down=pressed ? state.buttons_down+1 : state.buttons_down ? state.buttons_down-1 : 0;
 					if (pressed && state.pending_move) {
 						const auto found=state.surfaces.find(state.pending_move);
@@ -384,7 +385,7 @@ struct WaylandPresentation::State {
 				value.key=[](void *data,wl_keyboard *,uint32_t serial,uint32_t,uint32_t key,uint32_t pressed) {
 					auto &state=*static_cast<State *>(data);
 					state.last_serial=serial;
-					if (pressed) state.pending_move=0;
+					if (pressed) { state.press_serial=serial; state.pending_move=0; }
 					if (std::getenv("RAVEN_TRACE_KEYS")) {
 						timespec now{}; clock_gettime(CLOCK_REALTIME,&now);
 						fprintf(stderr,"key %u %s at %lld ns\n",key,pressed ? "down" : "up",(long long)now.tv_sec*1000000000LL+now.tv_nsec);
@@ -775,12 +776,16 @@ struct WaylandPresentation::State {
 				nullptr};
 			xdg_surface_add_listener(window->shell,&surface_listener,window.get());
 			xdg_popup_add_listener(window->popup,&popup_listener,window.get());
-			if (seat && grab) xdg_popup_grab(window->popup,seat,last_serial);
-			wl_surface_commit(window->proxy);
-			const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(2);
-			while (!window->configured && !window->closed && std::chrono::steady_clock::now()<end) events(std::chrono::milliseconds(20));
-			if (!window->configured || window->closed) throw std::runtime_error("Wayland popup configuration failed");
+			if (seat && grab) xdg_popup_grab(window->popup,seat,press_serial);
+			// The compositor can give a grabbing popup the keyboard along with its first configure, so the surface is known before then.
 			found=surfaces.emplace(handle,std::move(window)).first;
+			auto &made=*found->second;
+			wl_surface_commit(made.proxy);
+			try {
+				const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+				while (!made.configured && !made.closed && std::chrono::steady_clock::now()<end) events(std::chrono::milliseconds(20));
+				if (!made.configured || made.closed) throw std::runtime_error("Wayland popup configuration failed");
+			} catch (...) { surfaces.erase(found); throw; }
 		}
 		auto &window=*found->second;
 		if (!window.is_popup || window.closed || window.width!=width || window.height!=height)
