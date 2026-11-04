@@ -515,9 +515,10 @@ static char *joined_names(const char *const (*names)[2], int count)
 		return NULL;
 	for (int index = 0; index < count; ++index)
 		for (int form = 0; form < 2; ++form) {
+			const size_t length = strlen(names[index][form]);
 			*at++ = ':';
-			strcpy(at, names[index][form]);
-			at += strlen(at);
+			memcpy(at, names[index][form], length);
+			at += length;
 		}
 	*at = 0;
 	return text;

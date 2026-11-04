@@ -770,9 +770,10 @@ static void set_message(exception_object *self, const char *message)
 	self->message = NULL;
 	self->owned = 0;
 	if (message) {
-		char *copy = malloc(strlen(message) + 1);
+		const size_t size = strlen(message) + 1;
+		char *copy = malloc(size);
 		if (copy) {
-			strcpy(copy, message);
+			memcpy(copy, message, size);
 			self->message = copy;
 			self->owned = 1;
 		}

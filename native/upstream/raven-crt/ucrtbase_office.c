@@ -368,7 +368,13 @@ CRT int _gcvt_s(char *buffer, size_t size, double value, int count)
 		text[length++] = '.';
 		for (int at = 1; at < used; ++at)
 			text[length++] = digits[at];
-		length += (size_t)sprintf(text + length, "e%c%02d", exponent < 0 ? '-' : '+', exponent < 0 ? -exponent : exponent);
+		const int magnitude = exponent < 0 ? -exponent : exponent;
+		text[length++] = 'e';
+		text[length++] = exponent < 0 ? '-' : '+';
+		if (magnitude >= 100)
+			text[length++] = (char)('0' + magnitude / 100);
+		text[length++] = (char)('0' + magnitude / 10 % 10);
+		text[length++] = (char)('0' + magnitude % 10);
 	} else if (exponent < 0) {
 		text[length++] = '0';
 		text[length++] = '.';

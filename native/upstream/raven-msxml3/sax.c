@@ -1563,9 +1563,9 @@ static void XMLCALL on_element_declaration(void *context, const xmlChar *name, i
 		char model[5000] = "";
 		BSTR name_arg = arg_of(name), model_arg;
 		if (type == XML_ELEMENT_TYPE_EMPTY)
-			strcpy(model, "EMPTY");
+			memcpy(model, "EMPTY", sizeof("EMPTY"));
 		else if (type == XML_ELEMENT_TYPE_ANY)
-			strcpy(model, "ANY");
+			memcpy(model, "ANY", sizeof("ANY"));
 		else if (content)
 			xmlSnprintfElementContent(model, sizeof(model), content, 1);
 		model_arg = arg_of((const xmlChar *)model);
