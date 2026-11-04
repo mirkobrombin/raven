@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -44,6 +45,13 @@ std::vector<uint64_t> foreign_windows();
 bool post_foreign_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam);
 // Owner side: hands every message posted to a window `owned` accepts to `use`, oldest first from each poster, and forgets it.
 void take_foreign_messages(const std::function<bool(uint64_t)> &owned, const std::function<void(uint64_t, uint32_t, uint64_t, uint64_t)> &use);
+// A message sent to a window of another process, with the bytes it carries (those of WM_COPYDATA), waits for the owner's answer for at
+// most `timeout`; nothing when the time ran out or the owner ended first.
+std::optional<uint64_t> send_foreign_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam, const std::vector<uint8_t> &data,
+	std::chrono::milliseconds timeout);
+// Owner side: answers every message sent to a window `owned` accepts with what `use` returns.
+void take_foreign_sends(const std::function<bool(uint64_t)> &owned,
+	const std::function<uint64_t(uint64_t, uint32_t, uint64_t, uint64_t, const std::vector<uint8_t> &)> &use);
 
 // Pixels of a window shared between the process that draws them and the owner: a header page, then 32-bit rows top down.
 class ForeignSurface {

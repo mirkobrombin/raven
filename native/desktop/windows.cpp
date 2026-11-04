@@ -844,6 +844,59 @@ void NativeWindows::import_foreign_posts()
 		});
 }
 
+void NativeWindows::answer_foreign_sends()
+{
+	const auto stamp=foreign_frames_stamp();
+	if (stamp==sends_stamp) return;
+	sends_stamp=stamp;
+	take_foreign_sends([this](uint64_t window) { return std::as_const(objects).window(window)!=nullptr; },
+		[this](uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam,const std::vector<uint8_t> &data) -> uint64_t {
+			if (!std::as_const(objects).window(window)) return 0;
+			if (message!=0x4a) return send(window,message,wparam,lparam);
+			// WM_COPYDATA: the bytes and a COPYDATASTRUCT that points at them live in this process while the window reads them.
+			const bool narrow=process.mode()==NativeMode::x86;
+			const size_t header=narrow ? 12 : 24;
+			const auto address=process.map_memory(std::max<size_t>(4096,(header+data.size()+4095)&~size_t(4095)),PROT_READ|PROT_WRITE);
+			try {
+				std::vector<uint8_t> bytes(header+data.size());
+				const auto put_at=[&](size_t at,uint64_t value,size_t width) { std::memcpy(bytes.data()+at,&value,width); };
+				put_at(0,lparam,narrow ? 4 : 8);
+				put_at(narrow ? 4 : 8,data.size(),4);
+				put_at(narrow ? 8 : 16,data.empty() ? 0 : address+header,narrow ? 4 : 8);
+				if (!data.empty()) std::memcpy(bytes.data()+header,data.data(),data.size());
+				process.write_memory(address,bytes);
+				const auto result=send(window,message,wparam,address);
+				process.unmap_memory(address);
+				return result;
+			} catch (...) {
+				process.unmap_memory(address);
+				throw;
+			}
+		});
+}
+
+std::optional<uint64_t> NativeWindows::send_foreign(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam,std::chrono::milliseconds timeout)
+{
+	static constexpr uint32_t pointing[]={0x01,0x0c,0x0d,0x24,0x46,0x47,0x4e,0x81,0x83};
+	if (std::find(std::begin(pointing),std::end(pointing),message)!=std::end(pointing)) throw uint32_t(1159);
+	std::vector<uint8_t> data;
+	if (message==0x4a) {
+		// The sender's COPYDATASTRUCT travels as its first word and the bytes it points at.
+		if (!lparam) throw uint32_t(87);
+		const bool narrow=process.mode()==NativeMode::x86;
+		const auto header=process.read_memory(lparam,narrow ? 12 : 24);
+		uint64_t value=0,pointer=0;
+		uint32_t size=0;
+		std::memcpy(&value,header.data(),narrow ? 4 : 8);
+		std::memcpy(&size,header.data()+(narrow ? 4 : 8),4);
+		std::memcpy(&pointer,header.data()+(narrow ? 8 : 16),narrow ? 4 : 8);
+		if (size>(64U<<20) || (size && !pointer)) throw uint32_t(87);
+		if (size) data=process.read_memory(pointer,size);
+		lparam=value;
+	}
+	return send_foreign_message(window,message,wparam,lparam,data,timeout);
+}
+
 uint32_t NativeWindows::owner(uint64_t window) const
 {
 	const auto *record=std::as_const(objects).window(window);
@@ -1261,6 +1314,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			for (const auto &event : presentation.poll(std::chrono::milliseconds(0)))
 				receive(event);
 		if (kinds & 0x8) import_foreign_posts();
+		if (kinds & 0x40) answer_foreign_sends();
 		// Messages sent from other threads run before anything is retrieved, as they do while a Windows thread pumps its queue.
 		if (kinds & 0x40) serve_sent();
 		auto found=std::find_if(messages.begin(),messages.end(),matches);
@@ -1461,7 +1515,13 @@ uint16_t NativeWindows::atom(uint64_t name, uint64_t instance)
 uint64_t NativeWindows::send(uint64_t handle, uint32_t message, uint64_t wparam, uint64_t lparam)
 {
 	const auto *window=std::as_const(objects).window(handle);
-	if (!window) throw uint32_t(1400);
+	if (!window) {
+		// A window of another process answers from its own message loop; SendMessage waits as long as the owner lives.
+		if (!foreign_window_size(handle)) throw uint32_t(1400);
+		const auto answer=send_foreign(handle,message,wparam,lparam,std::chrono::hours(24*365));
+		if (!answer) throw uint32_t(1400);
+		return *answer;
+	}
 	if (!invoke) throw std::runtime_error("native window callbacks are not connected");
 	// A window of another thread runs its procedure on that thread: the message waits in its queue of sent messages, and this thread
 	// answers the messages sent to its own windows while it waits for the result.
@@ -2792,8 +2852,11 @@ bool NativeWindows::dispatch(std::string_view name)
 		else if (name=="SendMessageTimeoutW") {
 			uint64_t answer=0;
 			if (args[0]!=0xffff && args[0]!=0xffffffffffffffffULL) {
-				if (!std::as_const(objects).window(args[0])) throw uint32_t(1400);
-				answer=send(args[0],uint32_t(args[1]),args[2],args[3]);
+				if (std::as_const(objects).window(args[0])) answer=send(args[0],uint32_t(args[1]),args[2],args[3]);
+				else if (!foreign_window_size(args[0])) throw uint32_t(1400);
+				else if (const auto foreign=send_foreign(args[0],uint32_t(args[1]),args[2],args[3],std::chrono::milliseconds(uint32_t(args[5])))) answer=*foreign;
+				// The time ran out: ERROR_TIMEOUT, and nothing is returned.
+				else throw uint32_t(1460);
 			}
 			if (args[6]) {
 				const auto width=process.mode()==NativeMode::x86 ? 4 : 8;

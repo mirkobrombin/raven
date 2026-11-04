@@ -81,7 +81,8 @@ static void sweep_windows(const std::filesystem::path &directory)
 			stale.push_back(std::filesystem::path(path).replace_extension(".traits"));
 		} else if (path.extension() == ".pixels" && !std::filesystem::exists(std::filesystem::path(path).replace_extension(".window"), error)) {
 			stale.push_back(path);
-		} else if (path.extension() == ".post" || path.extension() == ".posting") {
+		} else if (path.extension() == ".post" || path.extension() == ".posting" || path.extension() == ".send" || path.extension() == ".sending" ||
+			path.extension() == ".reply" || path.extension() == ".replying") {
 			// Messages for a window no longer there, or half written by a poster that ended.
 			const auto window = path.filename().string().substr(0, 8);
 			if (!std::filesystem::exists(directory / (window + ".window"), error))
@@ -218,6 +219,90 @@ void take_foreign_messages(const std::function<bool(uint64_t)> &owned, const std
 		std::filesystem::remove(path, error);
 		if (read)
 			use(window, message, wparam, lparam);
+	}
+}
+
+std::optional<uint64_t> send_foreign_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam, const std::vector<uint8_t> &data,
+	std::chrono::milliseconds timeout)
+{
+	if (!foreign_record(window))
+		return std::nullopt;
+	static std::atomic<uint64_t> sequence{0};
+	char name[64];
+	std::snprintf(name, sizeof(name), "%s.%08x.%016llx", window_name(window).c_str(), unsigned(::getpid()),
+		static_cast<unsigned long long>(sequence++));
+	const auto request = window_directory() / (std::string(name) + ".send");
+	const auto temporary = window_directory() / (std::string(name) + ".sending");
+	const auto reply = window_directory() / (std::string(name) + ".reply");
+	{
+		std::ofstream output(temporary, std::ios::trunc | std::ios::binary);
+		output << message << ' ' << wparam << ' ' << lparam << ' ' << data.size() << '\n';
+		output.write(reinterpret_cast<const char *>(data.data()), std::streamsize(data.size()));
+		if (!output)
+			return std::nullopt;
+	}
+	std::error_code error;
+	std::filesystem::rename(temporary, request, error);
+	if (error)
+		return std::nullopt;
+	// The owner answers from its message loop; this thread looks for the answer until the time is up or the owner is gone.
+	const auto deadline = std::chrono::steady_clock::now() + timeout;
+	for (unsigned round = 0;; ++round) {
+		std::ifstream input(reply);
+		uint64_t result = 0;
+		if (input >> result) {
+			input.close();
+			std::filesystem::remove(reply, error);
+			return result;
+		}
+		if (std::chrono::steady_clock::now() >= deadline || (round % 64 == 63 && !foreign_record(window)))
+			break;
+		::usleep(round < 100 ? 200 : 2000);
+	}
+	// A request the owner has not taken yet is taken back; one it took may still be answered, and the sweep removes that answer.
+	std::filesystem::remove(request, error);
+	return std::nullopt;
+}
+
+void take_foreign_sends(const std::function<bool(uint64_t)> &owned,
+	const std::function<uint64_t(uint64_t, uint32_t, uint64_t, uint64_t, const std::vector<uint8_t> &)> &use)
+{
+	std::vector<std::filesystem::path> sent;
+	std::error_code error;
+	for (const auto &entry : std::filesystem::directory_iterator(window_directory(), error))
+		if (entry.path().extension() == ".send")
+			sent.push_back(entry.path());
+	std::sort(sent.begin(), sent.end());
+	for (const auto &path : sent) {
+		const auto name = path.filename().string();
+		char *end = nullptr;
+		const auto window = std::strtoull(name.substr(0, 8).c_str(), &end, 16);
+		if (name.size() < 9 || name[8] != '.' || !end || *end || !owned(window))
+			continue;
+		std::ifstream input(path, std::ios::binary);
+		uint32_t message = 0;
+		uint64_t wparam = 0, lparam = 0, size = 0;
+		if (!(input >> message >> wparam >> lparam >> size) || size > (64U << 20)) {
+			std::filesystem::remove(path, error);
+			continue;
+		}
+		input.ignore(1);
+		std::vector<uint8_t> data(size);
+		input.read(reinterpret_cast<char *>(data.data()), std::streamsize(size));
+		const bool complete = input.gcount() == std::streamsize(size);
+		input.close();
+		// Taking the request away first tells a sender that gave up that its answer is coming anyway.
+		std::filesystem::remove(path, error);
+		if (error || !complete)
+			continue;
+		const auto result = use(window, message, wparam, lparam, data);
+		const auto stem = std::filesystem::path(path).replace_extension("");
+		const auto temporary = std::filesystem::path(stem.string() + ".replying");
+		{
+			std::ofstream output(temporary, std::ios::trunc);
+			output << result << '\n';
+		}
+		std::filesystem::rename(temporary, std::filesystem::path(stem.string() + ".reply"), error);
 	}
 }
 

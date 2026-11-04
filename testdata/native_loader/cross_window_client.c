@@ -1,11 +1,26 @@
 // The windows of one process are visible to another of the same prefix: a child finds its parent's window by class and title, reads
-// its title and visibility, sees it in EnumWindows, learns which process owns it and posts it a message the parent's queue receives.
+// its title and visibility, sees it in EnumWindows, learns which process owns it, sends it messages (WM_COPYDATA among them) whose
+// answers come back, and posts it messages the parent's queue receives.
 #include <windows.h>
 
 static const wchar_t class_name[] = L"RavenCrossWindow";
 static const wchar_t title[] = L"Cross window probe é";
 
 struct search { HWND wanted; int seen; };
+static const char payload[] = "hello from the child";
+
+static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+{
+	if (message == WM_APP + 3)
+		return (LRESULT)(wparam * lparam + 1);
+	if (message == WM_COPYDATA) {
+		const COPYDATASTRUCT *data = (const COPYDATASTRUCT *)lparam;
+		if (data->dwData != 42 || data->cbData != sizeof(payload) || lstrcmpA((const char *)data->lpData, payload))
+			return 1;
+		return 77;
+	}
+	return DefWindowProcW(window, message, wparam, lparam);
+}
 
 static BOOL CALLBACK visit(HWND window, LPARAM parameter)
 {
@@ -45,6 +60,15 @@ static int child(DWORD parent)
 	struct search search = {window, 0};
 	if (!EnumWindows(visit, (LPARAM)&search) || !search.seen)
 		return 18;
+	// A sent message waits for the owner's answer; WM_COPYDATA carries its bytes along.
+	if (SendMessageW(window, WM_APP + 3, 5, 6) != 31)
+		return 21;
+	COPYDATASTRUCT data = {42, sizeof(payload), (void *)payload};
+	if (SendMessageW(window, WM_COPYDATA, 0, (LPARAM)&data) != 77)
+		return 22;
+	DWORD_PTR answer = 0;
+	if (!SendMessageTimeoutW(window, WM_APP + 3, 3, 4, SMTO_NORMAL, 5000, &answer) || answer != 13)
+		return 23;
 	// Parameters that point into this process cannot travel; plain values can.
 	SetLastError(0);
 	if (PostMessageW(window, WM_SETTEXT, 0, (LPARAM)L"lost") || GetLastError() != ERROR_MESSAGE_SYNC_ONLY)
@@ -67,7 +91,7 @@ int raven_entry(void)
 		}
 
 	WNDCLASSW definition = {0};
-	definition.lpfnWndProc = DefWindowProcW;
+	definition.lpfnWndProc = procedure;
 	definition.hInstance = GetModuleHandleW(NULL);
 	definition.lpszClassName = class_name;
 	if (!RegisterClassW(&definition))

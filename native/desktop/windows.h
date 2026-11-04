@@ -197,8 +197,11 @@ private:
 	std::chrono::steady_clock::time_point foreign_checked{};
 	uint64_t foreign_stamp=UINT64_MAX;
 	// The windows directory as it was when messages other processes posted were last taken in.
-	uint64_t posts_stamp=UINT64_MAX;
+	uint64_t posts_stamp=UINT64_MAX,sends_stamp=UINT64_MAX;
 	void import_foreign_posts();
+	void answer_foreign_sends();
+	// A message to a window of another process: the owner's answer, or nothing when it gave none in time.
+	std::optional<uint64_t> send_foreign(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam,std::chrono::milliseconds timeout);
 	void import_foreign_frames();
 	uint8_t *screen_block=nullptr;
 	// A table entry handed out while calls were in progress, with the depth of the outermost of them: it is compared again before the
