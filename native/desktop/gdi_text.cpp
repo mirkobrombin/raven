@@ -212,6 +212,11 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		const auto &font = *objects.font(dc.font);
 		const auto metrics = objects.text().logical_metrics(font.definition);
 		const auto units = to_units(text);
+		// lfEscapement turns the run about its reference point, in tenths of a degree counterclockwise.
+		int32_t escapement = 0;
+		std::memcpy(&escapement, font.definition.data() + 8, 4);
+		escapement %= 3600;
+		const int64_t pivot_x = int64_t(x) + dc.origin_x, pivot_y = int64_t(y) + dc.origin_y;
 		int32_t advance = 0;
 		std::vector<int32_t> offsets;
 		if (!units.empty()) {
@@ -246,7 +251,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			brush.color = dc.background_color;
 			painter.fill(clip_rect->left, clip_rect->top, clip_rect->right, clip_rect->bottom, brush);
 		}
-		if (!units.empty() && dc.background_mode == 2) {
+		if (!units.empty() && dc.background_mode == 2 && !escapement) {
 			DesktopBrush brush;
 			brush.color = dc.background_color;
 			const int32_t left = std::min(x, x + advance), right = std::max(x, x + advance);
@@ -276,24 +281,79 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		}
 		const bool underline = font.definition[21] != 0, strike = font.definition[22] != 0;
 		const uint32_t color = dc.text_color;
+		const auto blend = [&](int64_t px, int64_t py, uint32_t ink, uint8_t alpha) {
+			if (alpha >= 250 || painter.bitmap.depth == 1) {
+				painter.plot(px, py, ink, 13);
+				return;
+			}
+			if (!painter.visible(px, py))
+				return;
+			const uint32_t below = painter.read(px, py);
+			const auto mix = [&](uint32_t foreground, uint32_t background) { return (foreground * alpha + background * (255 - alpha) + 127) / 255; };
+			painter.plot(px, py, mix(color_red(ink), color_red(below)) | mix(color_green(ink), color_green(below)) << 8 | mix(color_blue(ink), color_blue(below)) << 16, 13);
+		};
+		if (escapement) {
+			// The lines go into the coverage first, so they turn with the glyphs.
+			const int32_t thickness = std::max(1, int32_t(std::lround(metrics.height / 16.0)));
+			const auto rule = [&](int32_t line_y) {
+				for (int32_t t = 0; t < thickness; ++t)
+					for (int32_t dx = 0; dx < advance; ++dx) {
+						const int64_t row = 2 + line_y + t, column = margin + dx;
+						if (row >= 0 && row < box_height && column >= 0 && column < box_width)
+							coverage[size_t(row) * box_width + size_t(column)] = 255;
+					}
+			};
+			if (underline)
+				rule(metrics.ascent + std::max(1, metrics.descent / 3));
+			if (strike)
+				rule(metrics.ascent * 3 / 5);
+			// Each device pixel of the turned box reads the coverage at the point it came from, between its four neighbours.
+			const double angle = escapement * 3.14159265358979323846 / 1800.0, cosine = std::cos(angle), sine = std::sin(angle);
+			const double box_x = double(device_x - margin - pivot_x), box_y = double(device_y - 2 - pivot_y);
+			const auto turned = [&](double u, double v) { return std::array<double, 2>{u * cosine + v * sine, v * cosine - u * sine}; };
+			double low_x = 0, low_y = 0, high_x = 0, high_y = 0;
+			for (const auto &corner : {turned(box_x, box_y), turned(box_x + box_width, box_y), turned(box_x, box_y + box_height),
+					turned(box_x + box_width, box_y + box_height)}) {
+				low_x = std::min(low_x, corner[0]), high_x = std::max(high_x, corner[0]);
+				low_y = std::min(low_y, corner[1]), high_y = std::max(high_y, corner[1]);
+			}
+			const auto sample = [&](double column, double row) -> uint32_t {
+				const auto left = int64_t(std::floor(column)), top = int64_t(std::floor(row));
+				const double across = column - double(left), down = row - double(top);
+				const auto at = [&](int64_t c, int64_t r) -> double {
+					return c >= 0 && r >= 0 && c < box_width && r < box_height ? coverage[size_t(r) * box_width + size_t(c)] : 0;
+				};
+				const double value = at(left, top) * (1 - across) * (1 - down) + at(left + 1, top) * across * (1 - down) +
+					at(left, top + 1) * (1 - across) * down + at(left + 1, top + 1) * across * down;
+				return uint32_t(std::lround(value));
+			};
+			for (auto py = int64_t(std::floor(low_y)); py <= int64_t(std::ceil(high_y)); ++py)
+				for (auto px = int64_t(std::floor(low_x)); px <= int64_t(std::ceil(high_x)); ++px) {
+					const double dx = double(px) + 0.5, dy = double(py) + 0.5;
+					const double u = dx * cosine - dy * sine - box_x - 0.5, v = dx * sine + dy * cosine - box_y - 0.5;
+					if (u < -1 || v < -1 || u > box_width || v > box_height)
+						continue;
+					const int64_t device_px = pivot_x + px, device_py = pivot_y + py;
+					const int64_t logical_x = device_px - dc.origin_x, logical_y = device_py - dc.origin_y;
+					if (logical_x < clip.left || logical_x >= clip.right || logical_y < clip.top || logical_y >= clip.bottom)
+						continue;
+					if (dc.background_mode == 2 && u >= margin && u < margin + advance && v >= 2 && v < 2 + metrics.height)
+						painter.plot(device_px, device_py, dc.background_color, 13);
+					if (const auto alpha = sample(u, v))
+						blend(device_px, device_py, color, uint8_t(std::min<uint32_t>(alpha, 255)));
+				}
+			if (painter.changed() && dc.window && dc.leased && updated)
+				updated(dc.window);
+			return advance;
+		}
 		for (uint32_t row = 0; row < box_height; ++row)
 			for (uint32_t column = 0; column < box_width; ++column) {
 				const int64_t px = device_x - margin + column, py = device_y - 2 + row;
 				const int64_t logical_x = px - dc.origin_x, logical_y = py - dc.origin_y;
 				if (logical_x < clip.left || logical_x >= clip.right || logical_y < clip.top || logical_y >= clip.bottom)
 					continue;
-				const uint8_t alpha = coverage[size_t(row) * box_width + column];
-				if (!alpha)
-					continue;
-				if (alpha >= 250 || painter.bitmap.depth == 1) {
-					painter.plot(px, py, color, 13);
-					continue;
-				}
-				if (!painter.visible(px, py))
-					continue;
-				const uint32_t below = painter.read(px, py);
-				const auto mix = [&](uint32_t foreground, uint32_t background) { return (foreground * alpha + background * (255 - alpha) + 127) / 255; };
-				painter.plot(px, py, mix(color_red(color), color_red(below)) | mix(color_green(color), color_green(below)) << 8 | mix(color_blue(color), color_blue(below)) << 16, 13);
+				if (const uint8_t alpha = coverage[size_t(row) * box_width + column])
+					blend(px, py, color, alpha);
 			}
 		const int32_t thickness = std::max(1, int32_t(std::lround(metrics.height / 16.0)));
 		const auto line_across = [&](int32_t line_y) {

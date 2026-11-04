@@ -3347,6 +3347,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(late_comctl32_fixture${width} ALL DEPENDS ${late_controls_client})
                     add_test(NAME native_late_comctl32_x${width} COMMAND raven --run-process --execution=native ${late_controls_client})
                     set_tests_properties(native_late_comctl32_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(rotated_text_client ${CMAKE_CURRENT_BINARY_DIR}/rotated-text${width}.exe)
+                    add_custom_command(OUTPUT ${rotated_text_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${rotated_text_client} ${LOADER_SOURCES}/rotated_text_client.c -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/rotated_text_client.c VERBATIM)
+                    add_custom_target(rotated_text_fixture${width} ALL DEPENDS ${rotated_text_client})
+                    add_test(NAME native_rotated_text_x${width} COMMAND raven --run-process --execution=native ${rotated_text_client})
+                    set_tests_properties(native_rotated_text_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     # mlang comes with the installer components, whose import library the client links against.
                     if(width EQUAL 64)
                         set(mlang_dir ${RAVEN_INSTALLER_COMPONENT_DIR})
