@@ -131,8 +131,9 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 // Scheduler, which installers use to start a program once they finish, the accessibility annotation services of oleacc, which
 // programs create for their windows' controls, the MSXML 6.0 classes, which the XML component serves beside its own, the network list,
 // which programs ask whether they are online, the package manager of the Windows Runtime, the factories of the packaging API, which
-// package managers read .appx and .msix packages with, and the background transfer manager of each BITS version, which bootstrappers
-// download through. A hive that lacks them, a new one or one made before they were registered, gets them.
+// package managers read .appx and .msix packages with, the background transfer manager of each BITS version, which bootstrappers
+// download through, and the locator and object path parser of management instrumentation, which System.Management asks what the
+// machine is made of through. A hive that lacks them, a new one or one made before they were registered, gets them.
 void NativeRegistry::register_runtime_classes()
 {
 	static constexpr std::pair<const char16_t *, const char16_t *> classes[] = {{u"{E5CB7A31-7512-11D2-89CE-0080C792E5D8}", u"mscoree.dll"},
@@ -148,7 +149,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"{5842A140-FF9F-4166-8F5C-62F5B7B0C781}", u"raven-appx.dll"}, {u"{378E0446-5384-43B7-8877-E7DBDD883446}", u"raven-appx.dll"},
 		{u"{4991D34B-80A1-4291-83B6-3328366B9097}", u"raven-bits.dll"}, {u"{F087771F-D74F-4C1A-BB8A-E16ACA9124EA}", u"raven-bits.dll"},
 		{u"{6D18AD12-BDE3-4393-B311-099C346E6DF9}", u"raven-bits.dll"}, {u"{03CA98D6-FF5D-49B8-ABC6-03DD84127020}", u"raven-bits.dll"},
-		{u"{659CDEA7-489E-11D9-A9CD-000D56965251}", u"raven-bits.dll"}};
+		{u"{659CDEA7-489E-11D9-A9CD-000D56965251}", u"raven-bits.dll"}, {u"{4590F811-1D3A-11D0-891F-00AA004B2E24}", u"raven-wmi.dll"},
+		{u"{CF4CC405-E2C5-4DDD-B3CE-5E7582D8C9FA}", u"raven-wmi.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;

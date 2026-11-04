@@ -3806,6 +3806,39 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_bits_x${width} COMMAND raven --run-process --execution=native ${bits_client})
                     set_tests_properties(native_bits_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
+                # raven-wmi.dll, the object path parser of wmiutils and the locator of wbemprox with the classes of root\cimv2, for each
+                # width: Raven code on the public headers.
+                set(wmi_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-wmi)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-wmi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-wmi.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_DLLTOOL} -d ${taskschd_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-wmi64.a
+                    COMMAND ${RAVEN_DLLTOOL32} -k -d ${taskschd_source}/ravenhost32.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-wmi32.a
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-wmi.dll
+                        ${wmi_source}/wmi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-wmi64.a
+                        -loleaut32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-wmi.dll
+                        ${wmi_source}/wmi.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-wmi32.a
+                        -loleaut32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                    DEPENDS ${wmi_source}/wmi.c ${taskschd_source}/ravenhost64.def ${taskschd_source}/ravenhost32.def VERBATIM)
+                add_custom_target(wmi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-wmi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-wmi.dll)
+                foreach(width 64 32)
+                    set(wmi_client ${CMAKE_CURRENT_BINARY_DIR}/wmi-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(wmi_compiler ${RAVEN_MINGW64})
+                        set(wmi_entry raven_entry)
+                    else()
+                        set(wmi_compiler ${RAVEN_MINGW32})
+                        set(wmi_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${wmi_client}
+                        COMMAND ${wmi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${wmi_entry},--no-insert-timestamp
+                            -o ${wmi_client} ${LOADER_SOURCES}/wmi_client.c ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                            -loleaut32 -lole32 -luser32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/wmi_client.c VERBATIM)
+                    add_custom_target(wmi_fixture${width} ALL DEPENDS ${wmi_client} wmi_component)
+                    add_test(NAME native_wmi_x${width} COMMAND raven --run-process --execution=native ${wmi_client})
+                    set_tests_properties(native_wmi_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
                 # avrt.dll and mfplat.dll: the multimedia scheduler a media library registers its threads with, and the Media Foundation
                 # factories it makes its samples, types and buffers with, for each width.
                 set(media_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-media)
