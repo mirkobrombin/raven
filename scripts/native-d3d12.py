@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+from lavapipe import icd as lavapipe_icd
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
     shutil.copy(dxvk / "dxgi.dll", run / "dxgi.dll")
     shutil.copy(workload, run / "device.exe")
     env = os.environ | {"RAVEN_PREFIX": str(prefix)}
-    lavapipe = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+    lavapipe = lavapipe_icd()
     if not gpu and "VK_DRIVER_FILES" not in env and lavapipe.exists():
         env["VK_DRIVER_FILES"] = str(lavapipe)
     result = subprocess.run([str(raven), "--run-process", "--execution=native", "--timeout-ms=250000", str(run / "device.exe")],

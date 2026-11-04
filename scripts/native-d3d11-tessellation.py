@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+from lavapipe import icd as lavapipe_icd
 
 
 def main():
@@ -28,7 +29,7 @@ def main():
         shutil.copy(dxvk / name, run / name)
     shutil.copy(workload, run / "tessellation.exe")
     env = os.environ | {"RAVEN_PREFIX": str(prefix)}
-    lavapipe = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+    lavapipe = lavapipe_icd()
     gpu = len(sys.argv) > 5 and sys.argv[5] == "gpu"
     if not gpu and "VK_DRIVER_FILES" not in env and lavapipe.exists():
         env["VK_DRIVER_FILES"] = str(lavapipe)

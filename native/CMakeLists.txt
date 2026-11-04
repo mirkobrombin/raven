@@ -30,6 +30,9 @@ target_link_libraries(hlsl_compile_test PRIVATE raven_shader)
 add_test(NAME native_hlsl_compiler COMMAND hlsl_compile_test ${PROJECT_SOURCE_DIR}/testdata/hlsl ${CMAKE_CURRENT_BINARY_DIR}/hlsl-output)
 set_tests_properties(native_hlsl_compiler PROPERTIES TIMEOUT 120)
 
+# The manifest of lavapipe, the software Vulkan driver tests run on: lvp_icd.json on Debian and Ubuntu, lvp_icd.x86_64.json on
+# Fedora and Arch.
+find_file(RAVEN_LAVAPIPE_ICD NAMES lvp_icd.json lvp_icd.x86_64.json PATHS /usr/share/vulkan/icd.d NO_DEFAULT_PATH)
 find_package(PNG 1.6.59 QUIET)
 find_package(OpenSSL QUIET)
 find_package(Freetype QUIET)
@@ -263,12 +266,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         target_link_libraries(raven_cpu PUBLIC Vulkan::Vulkan)
         target_compile_definitions(raven_cpu PUBLIC RAVEN_VULKAN=1)
         # Compute shaders from the compiler run on the CPU driver and their results are checked.
-        if(EXISTS /usr/share/vulkan/icd.d/lvp_icd.json)
+        if(RAVEN_LAVAPIPE_ICD)
             add_executable(hlsl_run_test shader/hlsl_run_test.cpp)
             target_link_libraries(hlsl_run_test PRIVATE raven_shader Vulkan::Vulkan)
             add_test(NAME native_hlsl_execution COMMAND hlsl_run_test ${PROJECT_SOURCE_DIR}/testdata/hlsl/run ${CMAKE_CURRENT_BINARY_DIR}/hlsl-run-output)
             set_tests_properties(native_hlsl_execution PROPERTIES TIMEOUT 120
-                ENVIRONMENT "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json;LP_NUM_THREADS=2")
+                ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2")
         endif()
     endif()
     target_compile_options(raven_cpu PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
@@ -447,10 +450,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_dependencies(shared_gpu_memory_test raven-bootstrap)
         add_test(NAME native_shared_gpu_memory_contract COMMAND shared_gpu_memory_test $<TARGET_FILE:raven-bootstrap>)
         set_tests_properties(native_shared_gpu_memory_contract PROPERTIES TIMEOUT 20 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
-        if(EXISTS /usr/share/vulkan/icd.d/lvp_icd.json)
+        if(RAVEN_LAVAPIPE_ICD)
             add_test(NAME native_shared_gpu_memory_software COMMAND shared_gpu_memory_test $<TARGET_FILE:raven-bootstrap>)
             set_tests_properties(native_shared_gpu_memory_software PROPERTIES TIMEOUT 20 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
-                ENVIRONMENT "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json;LP_NUM_THREADS=2;RAVEN_REQUIRE_GPU_MAPPING=1")
+                ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2;RAVEN_REQUIRE_GPU_MAPPING=1")
         endif()
     endif()
     add_executable(providers_test nt/providers_test.cpp)
@@ -3750,7 +3753,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             -o ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe ${LOADER_SOURCES}/x86_vulkan_client.c -lkernel32
                         DEPENDS ${LOADER_SOURCES}/x86_vulkan_client.c VERBATIM)
                     add_custom_target(x86_vulkan_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe)
-                    add_test(NAME native_x86_vulkan_compute COMMAND ${CMAKE_COMMAND} -E env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+                    add_test(NAME native_x86_vulkan_compute COMMAND ${CMAKE_COMMAND} -E env VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD}
                         $<TARGET_FILE:raven> --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe)
                     set_tests_properties(native_x86_vulkan_compute PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
@@ -4188,8 +4191,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(RAVEN_DXVK_PE64_DIR "" CACHE PATH "Directory holding DXVK d3d11.dll, dxgi.dll and d3d10core.dll for 64-bit programs")
             if(RAVEN_DXVK_PE64_DIR AND EXISTS ${RAVEN_DXVK_PE64_DIR}/d3d11.dll AND TARGET vulkan_bridge_test)
                 set(RAVEN_VULKAN_ICD "")
-                if(EXISTS /usr/share/vulkan/icd.d/lvp_icd.json)
-                    set(RAVEN_VULKAN_ICD VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json)
+                if(RAVEN_LAVAPIPE_ICD)
+                    set(RAVEN_VULKAN_ICD VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD})
                 endif()
                 add_test(NAME native_d3d11_triangle COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-d3d11.py
                     $<TARGET_FILE:raven> ${RAVEN_TESTDATA_DIR}/d3d11/triangle.exe ${RAVEN_DXVK_PE64_DIR}

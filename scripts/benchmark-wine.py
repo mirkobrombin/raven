@@ -22,6 +22,7 @@ import statistics
 import subprocess
 import sys
 import time
+from lavapipe import icd as lavapipe_icd
 
 QUERY = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<8000000) SELECT count(*) FROM c;\n"
 
@@ -66,7 +67,7 @@ def main():
                    if path.exists()), wine.with_name("wineserver"))
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    lavapipe = "/usr/share/vulkan/icd.d/lvp_icd.json"
+    lavapipe = str(lavapipe_icd())
     base = {"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"], "TMPDIR": os.environ.get("TMPDIR", str(work)), "VK_DRIVER_FILES": lavapipe, "LP_NUM_THREADS": "2",
             "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000"), "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "mscoree=;mshtml=;d3d11,dxgi,d3d10core=n"}
     d3d = work / "d3d"

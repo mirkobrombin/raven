@@ -17,6 +17,7 @@ import sys
 import time
 
 from PIL import Image
+from lavapipe import icd as lavapipe_icd
 
 SIDE = 160
 RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
@@ -71,7 +72,7 @@ def main():
         compositor = start_compositor(log)
         env = os.environ | environment() | {"RAVEN_PREFIX": str(prefix)}
         env["PATH"] = os.environ["PATH"]
-        lavapipe = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+        lavapipe = lavapipe_icd()
         if "VK_DRIVER_FILES" not in env and lavapipe.exists():
             env["VK_DRIVER_FILES"] = str(lavapipe)
         process = subprocess.Popen([str(raven), "--run-process", "--execution=native", "--timeout-ms=100000", "--desktop=wayland", str(run / "children.exe")],

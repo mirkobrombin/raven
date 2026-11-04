@@ -18,6 +18,7 @@ import sys
 import time
 
 from PIL import Image
+from lavapipe import icd as lavapipe_icd
 
 SIZE = 256
 GPU = len(sys.argv) > 6 and sys.argv[6] == "gpu"
@@ -64,7 +65,7 @@ def main():
         compositor = start_compositor(log)
         env = os.environ | environment() | {"RAVEN_PREFIX": str(prefix)}
         env["PATH"] = os.environ["PATH"]
-        lavapipe = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+        lavapipe = lavapipe_icd()
         if "VK_DRIVER_FILES" not in env and lavapipe.exists() and not GPU:
             env["VK_DRIVER_FILES"] = str(lavapipe)
         try:

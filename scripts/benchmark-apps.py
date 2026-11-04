@@ -22,6 +22,7 @@ import statistics
 import subprocess
 import sys
 import time
+from lavapipe import icd as lavapipe_icd
 
 TICKS = os.sysconf("SC_CLK_TCK")
 # Wine's server sits in the library directory on Debian style installations.
@@ -114,7 +115,7 @@ def main():
     for name in ("wayland-0", "wayland-0.lock"):
         (runtime_dir / name).unlink(missing_ok=True)
     base = {"PATH": str(Path(WINE).parent) + ":/usr/bin:/bin", "HOME": os.environ["HOME"], "TMPDIR": os.environ.get("TMPDIR", str(work)), "XDG_RUNTIME_DIR": str(runtime_dir),
-            "WAYLAND_DISPLAY": "wayland-0", "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/lvp_icd.json", "LP_NUM_THREADS": "2"}
+            "WAYLAND_DISPLAY": "wayland-0", "VK_DRIVER_FILES": str(lavapipe_icd()), "LP_NUM_THREADS": "2"}
     compositor = subprocess.Popen(["labwc"], env=base | {"WLR_BACKENDS": "headless", "WLR_RENDERER": "pixman", "WLR_HEADLESS_OUTPUTS": "1"},
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

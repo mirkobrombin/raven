@@ -23,6 +23,7 @@ import sys
 import time
 
 from x11_session import X11Session
+from lavapipe import icd as lavapipe_icd
 
 SIZE = (1280, 720)
 
@@ -61,7 +62,7 @@ def main():
     env = os.environ | {"RAVEN_PREFIX": str(prefix), "RAVEN_TRACE_DEBUG": "1"}
     for key in ("WAYLAND_DISPLAY", "MANGOHUD", "LD_PRELOAD"):
         env.pop(key, None)
-    lavapipe = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+    lavapipe = lavapipe_icd()
     if "VK_DRIVER_FILES" not in env and lavapipe.exists():
         env["VK_DRIVER_FILES"] = str(lavapipe)
     if mode.startswith("opengl"):

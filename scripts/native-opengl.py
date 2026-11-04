@@ -14,6 +14,7 @@ import tempfile
 import time
 
 from PIL import Image
+from lavapipe import icd as lavapipe_icd
 
 
 def main():
@@ -44,7 +45,7 @@ def main():
         if native:
             env["LIBGL_ALWAYS_SOFTWARE"] = "1"
         env["RAVEN_GUEST_LIBGL_ALWAYS_SOFTWARE"] = "1"
-        lavapipe = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+        lavapipe = lavapipe_icd()
         if lavapipe.exists():
             env["VK_DRIVER_FILES"] = str(lavapipe)
     guest = compositor = None
