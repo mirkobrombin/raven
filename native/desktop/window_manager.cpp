@@ -1084,6 +1084,40 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	registry.add("MonitorFromPoint", 2, [](ApiCall &call) { call.ret(1); });
 	registry.add("MonitorFromRect", 2, [](ApiCall &call) { call.ret(1); });
 	registry.add("MonitorFromWindow", 2, [](ApiCall &call) { call.ret(1); });
+	// Where a popup of the given size goes next to an anchor point: the TPM_ alignment flags place it, the screen keeps it whole, and
+	// the rectangle to keep clear pushes it aside, to the right or left of it, or below or above it with TPM_VERTICAL.
+	registry.add("CalculatePopupWindowPosition", 5, [this](ApiCall &call) {
+		const auto &metrics = objects.nonclient_metrics();
+		const int32_t x = call.load<int32_t>(call[0]), y = call.load<int32_t>(call[0] + 4);
+		const int32_t width = call.load<int32_t>(call[1]), height = call.load<int32_t>(call[1] + 4);
+		const uint32_t flags = call.u32(2);
+		if (width < 0 || height < 0 || !call[4]) {
+			call.fail(87);
+			return;
+		}
+		int32_t left = (flags & 8) ? x - width : (flags & 4) ? x - width / 2 : x;
+		int32_t top = (flags & 0x20) ? y - height : (flags & 0x10) ? y - height / 2 : y;
+		const auto fit = [](int32_t start, int32_t length, int32_t limit) { return std::max(0, std::min(start, limit - length)); };
+		if (call[3]) {
+			const int32_t ex_left = call.load<int32_t>(call[3]), ex_top = call.load<int32_t>(call[3] + 4);
+			const int32_t ex_right = call.load<int32_t>(call[3] + 8), ex_bottom = call.load<int32_t>(call[3] + 12);
+			const bool overlaps = left < ex_right && left + width > ex_left && top < ex_bottom && top + height > ex_top;
+			if (overlaps && (flags & 0x40))
+				top = ex_bottom + height <= metrics.screen_y || ex_top - height < 0 ? ex_bottom : ex_top - height;
+			else if (overlaps)
+				left = ex_right + width <= metrics.screen_x || ex_left - width < 0 ? ex_right : ex_left - width;
+			if (flags & 0x40)
+				left = fit(left, width, metrics.screen_x);
+			else
+				top = fit(top, height, metrics.screen_y);
+		} else {
+			left = fit(left, width, metrics.screen_x);
+			top = fit(top, height, metrics.screen_y);
+		}
+		const int32_t rect[4] = {left, top, left + width, top + height};
+		call.write(call[4], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(rect), sizeof(rect)));
+		call.ret(1);
+	});
 	// The one display has a single mode, which is the current one; mode numbers above 0 end the enumeration.
 	const auto display_mode = [this](ApiCall &call, size_t mode_index, size_t device_index, size_t output_index) {
 		const auto &metrics = objects.nonclient_metrics();

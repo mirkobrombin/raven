@@ -74,6 +74,7 @@
 {"CM_Unregister_Notification", 1},
 {"CallMsgFilterW", 2},
 {"CallNamedPipeW", 7},
+{"CalculatePopupWindowPosition", 5},
 {"CallNextHookEx", 4},
 {"CallNtPowerInformation", 5},
 {"CallWindowProcA", 5},
