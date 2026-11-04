@@ -305,7 +305,7 @@ static BOOL register_window_class(void)
 
 /* In-place activation as the site leads it: the site agrees, names its window and the control's place in it, and the control's
  * window opens there. */
-static HRESULT activate(browser *control, IOleClientSite *site, BOOL ui)
+static HRESULT activate(browser *control, IOleClientSite *site, BOOL ui, HWND container)
 {
 	if (!control->window) {
 		if (!site)
@@ -323,7 +323,11 @@ static HRESULT activate(browser *control, IOleClientSite *site, BOOL ui)
 		IOleInPlaceUIWindow *document = NULL;
 		RECT position = {0}, clip = {0};
 		OLEINPLACEFRAMEINFO frame_info = {sizeof(frame_info)};
+		// The window a verb names holds the control: Windows Forms parks the control's site in a hidden window until the control has a
+		// parent, and passes that parent with the verb.
 		IOleInPlaceSite_GetWindow(place, &parent);
+		if (container && IsWindow(container))
+			parent = container;
 		if (SUCCEEDED(IOleInPlaceSite_GetWindowContext(place, &frame, &document, &position, &clip, &frame_info)))
 			control->position = position;
 		if (frame)
@@ -961,9 +965,9 @@ static HRESULT WINAPI object_do_verb(IOleObject *iface, LONG verb, LPMSG message
 	case OLEIVERB_PRIMARY:
 	case OLEIVERB_SHOW:
 	case OLEIVERB_UIACTIVATE:
-		return activate(control, site, TRUE);
+		return activate(control, site, TRUE, parent);
 	case OLEIVERB_INPLACEACTIVATE:
-		return activate(control, site, FALSE);
+		return activate(control, site, FALSE, parent);
 	case OLEIVERB_HIDE:
 		if (control->window)
 			ShowWindow(control->window, SW_HIDE);
