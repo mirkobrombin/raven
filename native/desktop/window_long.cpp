@@ -187,8 +187,7 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 					std::memcpy(bytes.data() + 4, &next, 4);
 					process.write_memory(scratch, bytes);
 					send(call[0], 0x7d, index_word, scratch);
-					if (const auto *changed_window = std::as_const(objects).window(call[0]))
-						publish_window_traits(call[0], {changed_window->style, changed_window->ex_style, objects.window_class(changed_window->class_id)->name});
+					publish_traits(call[0]);
 					if (std::as_const(objects).window(call[0]) && objects.window_visible(call[0])) {
 						invalidate_tree(call[0], true);
 						drawing(call[0]);

@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 #include <vector>
 #include <mutex>
 #include <signal.h>
@@ -115,7 +117,8 @@ void publish_window_traits(uint64_t window, const ForeignWindowTraits &traits)
 	const auto temporary = directory / (window_name(window) + ".traits." + std::to_string(::getpid()));
 	{
 		std::ofstream output(temporary, std::ios::trunc);
-		output << traits.style << ' ' << traits.ex_style << '\n' << traits.class_name;
+		output << traits.style << ' ' << traits.ex_style << ' ' << traits.parent << ' ' << (traits.visible ? 1 : 0) << '\n' << traits.class_name << '\n'
+			<< traits.title;
 	}
 	std::error_code error;
 	std::filesystem::rename(temporary, final_path, error);
@@ -151,11 +154,38 @@ std::optional<ForeignWindowTraits> foreign_window_traits(uint64_t window)
 		return std::nullopt;
 	std::ifstream input(window_directory() / (window_name(window) + ".traits"));
 	ForeignWindowTraits traits;
-	if (!(input >> traits.style >> traits.ex_style))
+	std::string first;
+	if (!std::getline(input, first))
 		return std::nullopt;
-	input.ignore(1);
+	std::istringstream fields(first);
+	int visible = 0;
+	if (!(fields >> traits.style >> traits.ex_style >> traits.parent >> visible))
+		return std::nullopt;
+	traits.visible = visible != 0;
 	std::getline(input, traits.class_name);
+	// The title is the rest of the file, line breaks and all.
+	traits.title.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 	return traits;
+}
+
+std::vector<uint64_t> foreign_windows()
+{
+	std::vector<uint64_t> found;
+	std::error_code error;
+	for (const auto &entry : std::filesystem::directory_iterator(window_directory(), error)) {
+		const auto path = entry.path();
+		if (path.extension() != ".window")
+			continue;
+		const auto stem = path.stem().string();
+		char *end = nullptr;
+		const auto low = std::strtoull(stem.c_str(), &end, 16);
+		if (stem.size() != 8 || !end || *end)
+			continue;
+		// A handle keeps its process tag in the bits above the low word the name carries; window handles fit in those 32 bits.
+		if (foreign_record(low))
+			found.push_back(low);
+	}
+	return found;
 }
 
 std::optional<uint32_t> foreign_window_owner(uint64_t window)

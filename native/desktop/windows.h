@@ -185,6 +185,10 @@ private:
 	struct ForeignTarget { std::shared_ptr<ForeignSurface> surface; uint64_t bitmap=0; };
 	std::map<uint64_t,ForeignTarget> foreign_targets;
 	uint64_t foreign_dc(uint64_t window);
+	// Tells the other processes of the prefix what they may ask of a window: styles, parent, visibility, class and title.
+	void publish_traits(uint64_t window);
+	// A top-level window of another process of the prefix with this class (any when empty) and, when asked, this title; 0 when none.
+	uint64_t foreign_top_level(const std::u16string &class_name, bool titled, const std::u16string &title) const;
 	std::map<uint64_t,uint32_t> foreign_frames;
 	// Windows that received a frame from another process with something other than black on it.
 	std::set<uint64_t> foreign_content;

@@ -146,6 +146,10 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 	window->visible = !hide;
 	window->style = (window->style & ~ws_visible) | (window->visible ? ws_visible : 0);
 	objects.update_window_dcs(window->parent ? window->parent : handle);
+	if (!window->parent) {
+		publish_traits(handle);
+		window = objects.window(handle);
+	}
 	if (show) {
 		// Showing a window paints its whole subtree, so the children's update regions are invalidated with it.
 		if (!objects.invalidate(handle, {0, 0, window->width, window->height}, true))
@@ -353,6 +357,21 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 	process.unmap_memory(scratch);
 }
 
+uint64_t NativeWindows::foreign_top_level(const std::u16string &class_name, bool titled, const std::u16string &title) const
+{
+	for (const auto handle : foreign_windows()) {
+		const auto traits = foreign_window_traits(handle);
+		if (!traits || traits->parent)
+			continue;
+		if (!class_name.empty() && !equal_fold(from_utf8(traits->class_name), class_name))
+			continue;
+		if (titled && from_utf8(traits->title) != title)
+			continue;
+		return handle;
+	}
+	return 0;
+}
+
 void NativeWindows::register_manager_api(ApiRegistry &registry)
 {
 	registry.add("FindWindowW", 2, [this](ApiCall &call) {
@@ -369,6 +388,10 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			if (call[1] && window->title != title)
 				continue;
 			call.ret(*root);
+			return;
+		}
+		if (const auto found = foreign_top_level(name, call[1] != 0, title)) {
+			call.ret(found);
 			return;
 		}
 		call.fail(1400);
@@ -388,6 +411,10 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			if (call[1] && window->title != title)
 				continue;
 			call.ret(*root);
+			return;
+		}
+		if (const auto found = foreign_top_level(name, call[1] != 0, title)) {
+			call.ret(found);
 			return;
 		}
 		call.fail(1400);
@@ -654,7 +681,7 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	registry.add("WindowFromPoint", 1, [this](ApiCall &call) { call.ret(window_at(int32_t(call[0]), int32_t(call[0] >> 32))); });
 	const auto enumerate = [this](ApiCall &call, const std::vector<uint64_t> &handles, uint64_t procedure, uint64_t parameter) {
 		for (const auto handle : handles) {
-			if (!std::as_const(objects).window(handle))
+			if (!std::as_const(objects).window(handle) && !foreign_window_size(handle))
 				continue;
 			const uint64_t arguments[] = {handle, parameter};
 			const auto result = invoke(procedure, arguments);
@@ -668,6 +695,10 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	registry.add("EnumWindows", 2, [this, enumerate](ApiCall &call) {
 		auto roots = top_level_windows();
 		std::reverse(roots.begin(), roots.end());
+		// The top-level windows of the other processes of the prefix follow, as one desktop holds them all on Windows.
+		for (const auto handle : foreign_windows())
+			if (const auto traits = foreign_window_traits(handle); traits && !traits->parent)
+				roots.push_back(handle);
 		enumerate(call, roots, call[0], call[1]);
 	});
 	registry.add("EnumThreadWindows", 3, [this, enumerate](ApiCall &call) {

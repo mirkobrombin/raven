@@ -983,6 +983,12 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 			call.ret(0);
 			return;
 		}
+		if (const auto foreign = std::as_const(objects).window(call[0]) ? std::nullopt : foreign_window_traits(call[0])) {
+			const auto text = to_ansi(from_utf8(foreign->title), 1252);
+			call.put_narrow(call[1], text, size_t(call.i32(2)));
+			call.ret(std::min<size_t>(text.size(), size_t(call.i32(2)) - 1));
+			return;
+		}
 		call.ret(send_ansi(call, call[0], 0x0d, call[2], call[1]));
 	});
 	registry.add("TrackPopupMenu", 7, [=, this](ApiCall &call) {

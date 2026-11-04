@@ -511,6 +511,15 @@ void NativeWindows::watch_input()
 	}).detach();
 }
 
+void NativeWindows::publish_traits(uint64_t handle)
+{
+	const auto *window=std::as_const(objects).window(handle);
+	if (!window || window->destroying) return;
+	const auto *definition=objects.window_class(window->class_id);
+	publish_window_traits(handle,{window->style,window->ex_style,definition ? definition->name : std::string(),window->parent,window->visible,
+		to_utf8(window->title)});
+}
+
 uint64_t NativeWindows::foreign_dc(uint64_t handle)
 {
 	auto size=foreign_window_size(handle);
@@ -1605,6 +1614,8 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 		const auto address=message==0x81 ? (narrow ? read(process.read_memory(args[3],48),36,4) :
 			read(process.read_memory(args[3],80),56,8)) : args[3];
 		if (!objects.set_title(args[0],window_text(address))) throw uint32_t(8);
+		// Other processes look top-level windows up by title; a control's text changing often stays out of the shared directory.
+		if (!window->parent) publish_traits(args[0]);
 		if (objects.window_visible(args[0])) present(args[0]);
 		return 1;
 	}
@@ -1914,7 +1925,7 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		if (child) parent_notify(handle,1);
 		if (!std::as_const(objects).window(handle)) return 0;
 		if (const auto *created=std::as_const(objects).window(handle)) publish_window(handle,uint32_t(std::max(created->width,0)),uint32_t(std::max(created->height,0)));
-		if (const auto *created=std::as_const(objects).window(handle)) publish_window_traits(handle,{created->style,created->ex_style,objects.window_class(created->class_id)->name});
+		publish_traits(handle);
 		if (effective_style & 0x10000000U) {
 			auto *window=objects.window(handle);window->visible=true;objects.update_window_dcs(child ? window->parent : handle);
 			if (objects.window_visible(handle)) present(handle);
@@ -2648,6 +2659,19 @@ bool NativeWindows::dispatch(std::string_view name)
 			process.write_memory(args[1],rect); result=1;
 		}
 		else if (name=="DefWindowProcW") result=default_message(args);
+		// The title of another process's window comes from what it published; its procedure is not asked.
+		else if (const auto foreign=(name=="GetWindowTextLengthW" || name=="GetWindowTextW") && !std::as_const(objects).window(args[0]) ?
+			foreign_window_traits(args[0]) : std::nullopt) {
+			const auto title=from_utf8(foreign->title);
+			if (name=="GetWindowTextLengthW") result=title.size();
+			else if (int32_t(args[2])>0) {
+				const auto count=std::min<size_t>(title.size(),size_t(uint32_t(args[2]))-1);
+				std::vector<uint8_t> bytes((count+1)*2);
+				std::memcpy(bytes.data(),title.data(),count*2);
+				process.write_memory(args[1],bytes);
+				result=count;
+			}
+		}
 		else if (name=="GetWindowTextLengthW") result=send(args[0],0x0e,0,0);
 		else if (name=="SetWindowTextW") result=send(args[0],0x0c,0,args[1]);
 		else if (name=="GetWindowTextW") {
@@ -2833,7 +2857,8 @@ bool NativeWindows::dispatch(std::string_view name)
 				if (withdraw_screen_dc(args[1])) publish_screen_dc(owner);
 			}
 		} else if (name=="IsWindowVisible") {
-			result=objects.window_visible(args[0]);
+			if (std::as_const(objects).window(args[0])) result=objects.window_visible(args[0]);
+			else if (const auto foreign=foreign_window_traits(args[0])) result=foreign->visible;
 		} else if (name=="ShowWindow") {
 			result=show_window(args[0],uint32_t(args[1]));
 		} else if (name=="UpdateWindow") {
