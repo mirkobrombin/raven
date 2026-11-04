@@ -2048,13 +2048,8 @@ LRESULT re_message(re_editor *editor, UINT message, WPARAM wparam, LPARAM lparam
 			ShowScrollBar(editor->hwnd, (INT)wparam, (BOOL)lparam);
 		return 0;
 	case EM_REQUESTRESIZE:
-		if (editor->event_mask & ENM_REQUESTRESIZE) {
-			REQRESIZE request;
-			memset(&request, 0, sizeof(request));
-			re_view_rect(editor, &request.rc);
-			request.rc.bottom = request.rc.top + editor->layout.total_height;
-			re_send_notify(editor, EN_REQUESTRESIZE, &request.nmhdr);
-		}
+		if (editor->event_mask & ENM_REQUESTRESIZE)
+			re_request_resize(editor);
 		return 0;
 	case EM_GETHANDLE:
 		return 0;

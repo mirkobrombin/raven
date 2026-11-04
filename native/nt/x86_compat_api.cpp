@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "x86_compat_api.h"
 
 #include "actctx.h"
@@ -63,7 +64,8 @@ void code_land(std::vector<uint8_t> &code, std::initializer_list<size_t> jumps)
 // The two calls that a C runtime makes for every malloc and free answer from free lists in guest memory, as a trap costs far more than
 // the allocation. The bitmap names the pages of the arena, so that a block from anywhere else, which has no header, goes to the runtime
 // and so does a heap whose blocks run code. The lock is only tried: a thread that finds it held takes the runtime's path, whose own lists
-// and bump region do not depend on it. Free lists link through the first word of the payload, and the runtime never sees them.
+// and bump region do not depend on it. Free lists link through the third word of the block header, not the payload, so that a write
+// through a stale pointer after HeapFree, which the Windows heap survives, cannot redirect the next allocation.
 std::vector<uint8_t> alloc_prelude(uint32_t lock, uint32_t lists, uint32_t executable)
 {
 	std::vector<uint8_t> code;
@@ -81,7 +83,7 @@ std::vector<uint8_t> alloc_prelude(uint32_t lock, uint32_t lists, uint32_t execu
 	code_word(code, lists);
 	code_bytes(code, {0x85, 0xc0}); // test eax,eax
 	const auto empty = code_jump(code, 0x74);
-	code_bytes(code, {0x8b, 0x10, 0x89, 0x14, 0x8d}); // mov edx,[eax]; mov [lists+ecx*4],edx
+	code_bytes(code, {0x8b, 0x50, 0xf8, 0x89, 0x14, 0x8d}); // mov edx,[eax-8]; mov [lists+ecx*4],edx
 	code_word(code, lists);
 	code_bytes(code, {0xc7, 0x05}); // mov dword [lock],0
 	code_word(code, lock);
@@ -114,7 +116,7 @@ std::vector<uint8_t> free_prelude(uint32_t lock, uint32_t lists, uint32_t pages)
 	const auto held = code_jump(code, 0x75);
 	code_bytes(code, {0x8b, 0x14, 0x8d}); // mov edx,[lists+ecx*4]
 	code_word(code, lists);
-	code_bytes(code, {0x89, 0x10, 0x89, 0x04, 0x8d}); // mov [eax],edx; mov [lists+ecx*4],eax
+	code_bytes(code, {0x89, 0x50, 0xf8, 0x89, 0x04, 0x8d}); // mov [eax-8],edx; mov [lists+ecx*4],eax
 	code_word(code, lists);
 	code_bytes(code, {0xc7, 0x05}); // mov dword [lock],0
 	code_word(code, lock);
@@ -168,8 +170,16 @@ uint64_t NativeX86Compat::heap_alloc(uint32_t size, bool zero, bool executable)
 	if (arena.region_left < payload + header) {
 		arena.region = process.map_memory(heap_region, protection);
 		arena.region_left = heap_region;
-		if (guest_pages && !executable)
-			process.write_memory(guest_pages + (arena.region >> 15), std::vector<uint8_t>(heap_region >> 15, 0xff));
+		if (guest_pages && !executable) {
+			// One bit per page: mark exactly the region's pages, since a region need not start on a 32 KiB boundary and whole bytes
+			// would claim up to seven pages of unrelated memory, whose blocks the guest's HeapFree would then take for its own.
+			const uint64_t first = arena.region >> 12, count = heap_region >> 12;
+			const uint64_t low = first >> 3, high = (first + count + 7) >> 3;
+			auto bits = process.read_memory(guest_pages + low, size_t(high - low));
+			for (uint64_t page = first; page < first + count; ++page)
+				bits[size_t((page >> 3) - low)] |= uint8_t(1U << (page & 7));
+			process.write_memory(guest_pages + low, bits);
+		}
 	}
 	process.write_memory(arena.region, prefix);
 	address = arena.region + header;
@@ -270,7 +280,10 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	const auto known = std::find_if(compat_exports.begin(), compat_exports.end(), [&](const auto &item) { return item.first == name; });
 	if (known == compat_exports.end())
 		return false;
-	if (name.starts_with("Heap") || name == "GetProcessHeap")
+	// The guest-side heap is opt-in: with it, a 32-bit program that starts several threads at once (Bitvise SSH Client given -host)
+	// still crashes now and then on a corrupted block, and without it it does not.
+	static const bool guest_side = std::getenv("RAVEN_GUEST_HEAP") != nullptr;
+	if (guest_side && (name.starts_with("Heap") || name == "GetProcessHeap"))
 		guest_heap();
 	if (name == "GetProcessHeap") {
 		process.api_arguments(0);
