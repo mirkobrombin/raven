@@ -3753,7 +3753,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             -o ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe ${LOADER_SOURCES}/x86_vulkan_client.c -lkernel32
                         DEPENDS ${LOADER_SOURCES}/x86_vulkan_client.c VERBATIM)
                     add_custom_target(x86_vulkan_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe)
+                    # The loader's own messages say why no driver answers when the instance cannot be made.
                     add_test(NAME native_x86_vulkan_compute COMMAND ${CMAKE_COMMAND} -E env VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD}
+                        VK_LOADER_DEBUG=error,warn,driver
                         $<TARGET_FILE:raven> --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe)
                     set_tests_properties(native_x86_vulkan_compute PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
