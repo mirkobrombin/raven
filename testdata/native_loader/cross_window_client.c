@@ -1,5 +1,5 @@
 // The windows of one process are visible to another of the same prefix: a child finds its parent's window by class and title, reads
-// its title and visibility, sees it in EnumWindows and learns which process owns it.
+// its title and visibility, sees it in EnumWindows, learns which process owns it and posts it a message the parent's queue receives.
 #include <windows.h>
 
 static const wchar_t class_name[] = L"RavenCrossWindow";
@@ -45,6 +45,12 @@ static int child(DWORD parent)
 	struct search search = {window, 0};
 	if (!EnumWindows(visit, (LPARAM)&search) || !search.seen)
 		return 18;
+	// Parameters that point into this process cannot travel; plain values can.
+	SetLastError(0);
+	if (PostMessageW(window, WM_SETTEXT, 0, (LPARAM)L"lost") || GetLastError() != ERROR_MESSAGE_SYNC_ONLY)
+		return 19;
+	if (!PostMessageW(window, WM_APP + 1, 7, 9) || !PostMessageA(window, WM_APP + 2, 11, 13))
+		return 20;
 	return 0;
 }
 
@@ -79,6 +85,24 @@ int raven_entry(void)
 	PROCESS_INFORMATION information;
 	if (!CreateProcessW(path, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &information))
 		return 4;
+	// The parent keeps taking messages while the child runs, and once more after it ended.
+	int first = 0, second = 0, rounds = 0, ended = 0;
+	for (;;) {
+		MSG message;
+		while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE)) {
+			if (message.hwnd == window && message.message == WM_APP + 1 && message.wParam == 7 && message.lParam == 9)
+				first = !second;
+			else if (message.hwnd == window && message.message == WM_APP + 2 && message.wParam == 11 && message.lParam == 13)
+				second = first;
+			DispatchMessageW(&message);
+		}
+		if (ended || (first && second))
+			break;
+		ended = WaitForSingleObject(information.hProcess, 0) == WAIT_OBJECT_0;
+		if (++rounds > 4000)
+			return 5;
+		Sleep(5);
+	}
 	if (WaitForSingleObject(information.hProcess, 20000) != WAIT_OBJECT_0)
 		return 5;
 	DWORD code = 6;
@@ -86,5 +110,7 @@ int raven_entry(void)
 	CloseHandle(information.hThread);
 	CloseHandle(information.hProcess);
 	DestroyWindow(window);
-	return (int)code;
+	if (code)
+		return (int)code;
+	return first && second ? 0 : 7;
 }

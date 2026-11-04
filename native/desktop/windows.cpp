@@ -820,9 +820,28 @@ void NativeWindows::post(uint64_t window,uint32_t message,uint64_t wparam,uint64
 		for (const auto handle : top_level_windows()) post(handle,message,wparam,lparam);
 		return;
 	}
-	if (window && !std::as_const(objects).window(window)) throw uint32_t(1400);
+	if (window && !std::as_const(objects).window(window)) {
+		if (!foreign_window_size(window)) throw uint32_t(1400);
+		// A message whose parameters point into this process cannot reach another one; Windows answers that it may only be sent.
+		static constexpr uint32_t pointing[]={0x01,0x0c,0x0d,0x24,0x46,0x47,0x4a,0x4e,0x81,0x83};
+		if (std::find(std::begin(pointing),std::end(pointing),message)!=std::end(pointing)) throw uint32_t(1159);
+		if (!post_foreign_message(window,message,wparam,lparam)) throw uint32_t(1400);
+		return;
+	}
 	if (messages.size()>=10000) throw uint32_t(1816);
 	queue({window,wparam,lparam,message,message_time(),cursor_x,cursor_y});
+}
+
+void NativeWindows::import_foreign_posts()
+{
+	// The directory changes when a message is posted to any window of the prefix; only then are the posted messages looked at.
+	const auto stamp=foreign_frames_stamp();
+	if (stamp==posts_stamp) return;
+	posts_stamp=stamp;
+	take_foreign_messages([this](uint64_t window) { return std::as_const(objects).window(window)!=nullptr; },
+		[this](uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam) {
+			if (messages.size()<10000) queue({window,wparam,lparam,message,message_time(),cursor_x,cursor_y});
+		});
 }
 
 uint32_t NativeWindows::owner(uint64_t window) const
@@ -1241,6 +1260,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 		if (presentation.poll)
 			for (const auto &event : presentation.poll(std::chrono::milliseconds(0)))
 				receive(event);
+		if (kinds & 0x8) import_foreign_posts();
 		// Messages sent from other threads run before anything is retrieved, as they do while a Windows thread pumps its queue.
 		if (kinds & 0x40) serve_sent();
 		auto found=std::find_if(messages.begin(),messages.end(),matches);

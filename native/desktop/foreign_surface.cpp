@@ -4,6 +4,7 @@
 #include "nt/host_names.h"
 #include "nt/prefix.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -80,6 +81,11 @@ static void sweep_windows(const std::filesystem::path &directory)
 			stale.push_back(std::filesystem::path(path).replace_extension(".traits"));
 		} else if (path.extension() == ".pixels" && !std::filesystem::exists(std::filesystem::path(path).replace_extension(".window"), error)) {
 			stale.push_back(path);
+		} else if (path.extension() == ".post" || path.extension() == ".posting") {
+			// Messages for a window no longer there, or half written by a poster that ended.
+			const auto window = path.filename().string().substr(0, 8);
+			if (!std::filesystem::exists(directory / (window + ".window"), error))
+				stale.push_back(path);
 		}
 	}
 	for (const auto &path : stale)
@@ -166,6 +172,53 @@ std::optional<ForeignWindowTraits> foreign_window_traits(uint64_t window)
 	// The title is the rest of the file, line breaks and all.
 	traits.title.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 	return traits;
+}
+
+bool post_foreign_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam)
+{
+	if (!foreign_record(window))
+		return false;
+	static std::atomic<uint64_t> sequence{0};
+	char name[64];
+	// Window, poster and a running count, all of fixed width, so the names of one poster sort in the order it posted.
+	std::snprintf(name, sizeof(name), "%s.%08x.%016llx", window_name(window).c_str(), unsigned(::getpid()),
+		static_cast<unsigned long long>(sequence++));
+	const auto final_path = window_directory() / (std::string(name) + ".post");
+	const auto temporary = window_directory() / (std::string(name) + ".posting");
+	{
+		std::ofstream output(temporary, std::ios::trunc);
+		output << message << ' ' << wparam << ' ' << lparam << '\n';
+		if (!output)
+			return false;
+	}
+	std::error_code error;
+	std::filesystem::rename(temporary, final_path, error);
+	return !error;
+}
+
+void take_foreign_messages(const std::function<bool(uint64_t)> &owned, const std::function<void(uint64_t, uint32_t, uint64_t, uint64_t)> &use)
+{
+	std::vector<std::filesystem::path> posted;
+	std::error_code error;
+	for (const auto &entry : std::filesystem::directory_iterator(window_directory(), error))
+		if (entry.path().extension() == ".post")
+			posted.push_back(entry.path());
+	std::sort(posted.begin(), posted.end());
+	for (const auto &path : posted) {
+		const auto name = path.filename().string();
+		char *end = nullptr;
+		const auto window = std::strtoull(name.substr(0, 8).c_str(), &end, 16);
+		if (name.size() < 9 || name[8] != '.' || !end || *end || !owned(window))
+			continue;
+		std::ifstream input(path);
+		uint32_t message = 0;
+		uint64_t wparam = 0, lparam = 0;
+		const bool read = bool(input >> message >> wparam >> lparam);
+		input.close();
+		std::filesystem::remove(path, error);
+		if (read)
+			use(window, message, wparam, lparam);
+	}
 }
 
 std::vector<uint64_t> foreign_windows()

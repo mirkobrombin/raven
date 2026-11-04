@@ -196,6 +196,9 @@ private:
 	std::map<uint64_t,std::chrono::steady_clock::time_point> foreign_black;
 	std::chrono::steady_clock::time_point foreign_checked{};
 	uint64_t foreign_stamp=UINT64_MAX;
+	// The windows directory as it was when messages other processes posted were last taken in.
+	uint64_t posts_stamp=UINT64_MAX;
+	void import_foreign_posts();
 	void import_foreign_frames();
 	uint8_t *screen_block=nullptr;
 	// A table entry handed out while calls were in progress, with the depth of the outermost of them: it is compared again before the

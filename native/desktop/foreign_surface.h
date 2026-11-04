@@ -40,6 +40,11 @@ std::optional<ForeignWindowTraits> foreign_window_traits(uint64_t window);
 // The windows other live processes of the prefix own, in no particular order.
 std::vector<uint64_t> foreign_windows();
 
+// A message posted to a window of another process waits in the windows directory until the owner takes it into its queue.
+bool post_foreign_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam);
+// Owner side: hands every message posted to a window `owned` accepts to `use`, oldest first from each poster, and forgets it.
+void take_foreign_messages(const std::function<bool(uint64_t)> &owned, const std::function<void(uint64_t, uint32_t, uint64_t, uint64_t)> &use);
+
 // Pixels of a window shared between the process that draws them and the owner: a header page, then 32-bit rows top down.
 class ForeignSurface {
 public:
