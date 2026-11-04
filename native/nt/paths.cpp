@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cstdlib>
 #include <dirent.h>
+#include <mutex>
+#include <sys/stat.h>
+#include <time.h>
+#include <unordered_map>
 #include <vector>
 
 namespace raven {
@@ -29,26 +33,52 @@ std::u16string strip_namespace(std::u16string_view path)
 	return std::u16string(path);
 }
 
-// Looks for an entry that differs from name only by case, so Windows spellings find Linux files.
+// Looks for an entry that differs from name only by case, so Windows spellings find Linux files. The entries of a folder are kept by
+// their upper-case spelling while the folder stays as it was: programs ask for files that are not there by the hundred, Office for a
+// library at each click, and each miss read the whole folder. A folder changed in the last two seconds is read again each time, as its
+// time stamp may not have moved for a change made within the same tick.
 std::optional<std::string> case_match(const std::filesystem::path &directory, const std::string &name)
 {
 	std::error_code ignored;
 	if (std::filesystem::exists(directory / name, ignored))
 		return name;
-	const auto wanted = from_utf8(name);
-	DIR *handle = ::opendir(directory.c_str());
-	if (!handle)
+	const auto key = [](std::u16string text) {
+		for (auto &character : text)
+			character = upper_case(character);
+		return text;
+	};
+	struct Listing {
+		timespec changed{};
+		std::unordered_map<std::u16string, std::string> names;
+	};
+	static std::mutex lock;
+	static std::unordered_map<std::string, Listing> listings;
+	struct stat status{};
+	if (::stat(directory.c_str(), &status) != 0)
 		return std::nullopt;
-	std::optional<std::string> found;
-	while (const auto *entry = ::readdir(handle))
-		if (equal_fold(from_utf8(entry->d_name), wanted)) {
-			found = entry->d_name;
-			break;
-		}
-	::closedir(handle);
-	return found;
+	timespec now{};
+	::clock_gettime(CLOCK_REALTIME, &now);
+	const bool settled = now.tv_sec - status.st_mtim.tv_sec > 2;
+	std::lock_guard guard(lock);
+	auto cached = listings.find(directory.native());
+	if (!settled || cached == listings.end() || cached->second.changed.tv_sec != status.st_mtim.tv_sec ||
+		cached->second.changed.tv_nsec != status.st_mtim.tv_nsec) {
+		DIR *handle = ::opendir(directory.c_str());
+		if (!handle)
+			return std::nullopt;
+		Listing listing{status.st_mtim, {}};
+		while (const auto *entry = ::readdir(handle))
+			listing.names.emplace(key(from_utf8(entry->d_name)), entry->d_name);
+		::closedir(handle);
+		if (listings.size() > 4096)
+			listings.clear();
+		cached = listings.insert_or_assign(directory.native(), std::move(listing)).first;
+	}
+	const auto found = cached->second.names.find(key(from_utf8(name)));
+	if (found == cached->second.names.end())
+		return std::nullopt;
+	return found->second;
 }
-
 }
 
 std::u16string NativePaths::volume_name(char16_t letter)
