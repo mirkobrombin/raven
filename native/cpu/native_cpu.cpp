@@ -429,7 +429,9 @@ int NativeChild::wait(const std::function<bool()> *served)
 	}
 	// Guest code usually reaches its next trap within microseconds, so it is polled first; a guest that runs longer is waited for
 	// asleep, which leaves the processor to it. Waiting asleep at once costs a wake-up on every stop, which a program that stops thousands
-	// of times a second, as a game's graphics threads do, pays in frames. A served call made meanwhile ends in a trap, which wakes the wait.
+	// of times a second, as a game's graphics threads do, pays in frames. On a loaded machine a sleeping tracer is also woken late, so a
+	// window that handles one input in a few hundred stops took seconds with a short poll; two thousand tries keep it within its frame.
+	// A served call made meanwhile ends in a trap, which wakes the wait.
 	unsigned polls = 0;
 	for (;;) {
 		// A guest that is being served keeps running, so it is as busy as one that just started; it never stops for its calls, so its
@@ -442,12 +444,14 @@ int NativeChild::wait(const std::function<bool()> *served)
 		}
 		int status = 0;
 		pid_t result = waitpid(pid, &status, WNOHANG);
-		if (result == 0 && ++polls >= 200) {
+		if (result == 0) {
 			const auto now = std::chrono::steady_clock::now();
 			if (slice_end && now >= *slice_end)
 				return -2;
 			if (now >= deadline)
 				return -1;
+			if (++polls < 2000)
+				continue;
 			const auto until = slice_end ? std::min(*slice_end, deadline) : deadline;
 			const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(until - now).count();
 			itimerspec alarm{};
