@@ -3303,6 +3303,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(webservices_fixture${width} ALL DEPENDS ${webservices_client} webservices_component)
                     add_test(NAME native_webservices_x${width} COMMAND raven --run-process --execution=native ${webservices_client})
                     set_tests_properties(native_webservices_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(class_info_client ${CMAKE_CURRENT_BINARY_DIR}/class-info${width}.exe)
+                    add_custom_command(OUTPUT ${class_info_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${class_info_client} ${LOADER_SOURCES}/class_info_client.c -luser32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/class_info_client.c VERBATIM)
+                    add_custom_target(class_info_fixture${width} ALL DEPENDS ${class_info_client})
+                    add_test(NAME native_class_info_x${width} COMMAND raven --run-process --execution=native ${class_info_client})
+                    set_tests_properties(native_class_info_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # d3dcompiler_47.dll for each width: Raven code on the public headers that hands compiles to the runtime's HLSL compiler
                 # through ravenhost.dll and reads reflection from the container itself.
