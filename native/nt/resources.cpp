@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <sys/mman.h>
 
 namespace raven {
 
@@ -21,19 +22,36 @@ const PEModule *NativeResources::module(uint64_t handle)
 	return nullptr;
 }
 
-const std::vector<PEResource> &NativeResources::resources(const PEModule &image) const
+// A name folded to upper case, as resource names compare.
+static ResourceKey folded(const ResourceKey &key)
+{
+	auto value = key;
+	if (auto *text = std::get_if<std::u16string>(&value))
+		for (auto &c : *text)
+			if (c >= u'a' && c <= u'z')
+				c = static_cast<char16_t>(c - (u'a' - u'A'));
+	return value;
+}
+
+const NativeResources::Parsed &NativeResources::parse(const PEModule &image) const
 {
 	auto &cached = parsed[&image];
 	const auto directory = image.image.directories[2];
 	if (!directory.address && !directory.size) {
 		cached = {};
-		return cached.resources;
+		return cached;
 	}
 	// Self-extracting packages carry their whole payload as resources: the directory may be as large as the image that holds it.
 	if (uint64_t(directory.address) + directory.size > image.image.image_size)
 		throw std::runtime_error("native resource directory lies outside its image");
 	// The image the runtime maps for the guest is the live one, guest changes included.
 	const auto live = image.loaded.data();
+	if (cached.valid && cached.read_only && cached.mapping_changes == process.mapping_changes())
+		return cached;
+	const auto settle = [&] {
+		cached.read_only = process.has_protection(image.loaded.base() + directory.address, directory.size, PROT_READ);
+		cached.mapping_changes = process.mapping_changes();
+	};
 	if (cached.valid && uint64_t(directory.address) + directory.size <= live.size()) {
 		size_t at = 0;
 		bool same = true;
@@ -44,8 +62,10 @@ const std::vector<PEResource> &NativeResources::resources(const PEModule &image)
 			}
 			at += size;
 		}
-		if (same)
-			return cached.resources;
+		if (same) {
+			settle();
+			return cached;
+		}
 	}
 	// Read the live image, including guest changes, through the existing permission boundary.
 	const auto bytes = process.read_memory(image.loaded.base() + directory.address, directory.size);
@@ -61,8 +81,17 @@ const std::vector<PEResource> &NativeResources::resources(const PEModule &image)
 			cached.read.emplace_back(offset, size);
 	for (const auto &[offset, size] : cached.read)
 		cached.bytes.insert(cached.bytes.end(), bytes.begin() + ptrdiff_t(offset), bytes.begin() + ptrdiff_t(offset + size));
+	for (uint32_t index = 0; index < cached.resources.size(); ++index) {
+		const auto &resource = cached.resources[index];
+		const auto type = folded(resource.type);
+		cached.by_name[{type, folded(resource.name)}].push_back(index);
+		cached.types.insert(type);
+		cached.by_entry.emplace(resource.entry_address, index);
+		cached.by_data.emplace(resource.data_address, index);
+	}
 	cached.valid = true;
-	return cached.resources;
+	settle();
+	return cached;
 }
 
 std::optional<ResourceKey> NativeResources::key(uint64_t address, bool wide)
@@ -102,18 +131,6 @@ std::optional<ResourceKey> NativeResources::key(uint64_t address, bool wide)
 	throw std::runtime_error("native resource string exceeds initial limit");
 }
 
-static bool matches(const ResourceKey &left, const ResourceKey &right)
-{
-	if (left.index() != right.index())
-		return false;
-	if (std::holds_alternative<uint32_t>(left))
-		return left == right;
-	const auto fold = [](char16_t c) { return c >= u'a' && c <= u'z' ? static_cast<char16_t>(c - (u'a' - u'A')) : c; };
-	const auto &a = std::get<std::u16string>(left);
-	const auto &b = std::get<std::u16string>(right);
-	return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [&](auto x, auto y) { return fold(x) == fold(y); });
-}
-
 uint64_t NativeResources::find(uint64_t handle, uint64_t type, uint64_t name, uint16_t language, bool wide)
 {
 	const auto *image = module(handle);
@@ -123,15 +140,13 @@ uint64_t NativeResources::find(uint64_t handle, uint64_t type, uint64_t name, ui
 	const auto name_key = key(name, wide);
 	if (!type_key || !name_key)
 		return 0;
-	const auto &data = resources(*image);
+	const auto &index = parse(*image);
+	const auto &data = index.resources;
 	std::vector<const PEResource *> candidates;
-	bool has_type = false;
-	for (const auto &resource : data)
-		if (matches(resource.type, *type_key)) {
-			has_type = true;
-			if (matches(resource.name, *name_key))
-				candidates.push_back(&resource);
-		}
+	const bool has_type = index.types.contains(folded(*type_key));
+	if (const auto found = index.by_name.find({folded(*type_key), folded(*name_key)}); found != index.by_name.end())
+		for (const auto at : found->second)
+			candidates.push_back(&data[at]);
 	if (candidates.empty()) {
 		const auto non_ascii = [](const ResourceKey &value) {
 			const auto *text = std::get_if<std::u16string>(&value);
@@ -173,13 +188,15 @@ uint64_t NativeResources::access(uint64_t handle, uint64_t resource, bool size)
 	const auto *image = module(handle);
 	if (!image)
 		return 0;
-	for (const auto &item : resources(*image))
-		if (resource == image->loaded.base() + item.entry_address) {
+	const auto &index = parse(*image);
+	if (resource >= image->loaded.base() && resource - image->loaded.base() <= UINT32_MAX)
+		if (const auto found = index.by_entry.find(uint32_t(resource - image->loaded.base())); found != index.by_entry.end()) {
+			const auto &item = index.resources[found->second];
 			if (size)
 				return item.size;
 			if (item.size > 256 * 1024 * 1024)
 				throw std::runtime_error("native resource payload exceeds initial policy limit");
-			process.read_memory(image->loaded.base() + item.data_address, item.size);
+			readable(image->loaded.base() + item.data_address, item.size);
 			return image->loaded.base() + item.data_address;
 		}
 	environment.set_last_error(6);
@@ -194,9 +211,9 @@ std::optional<NativeResourceView> NativeResources::view(uint64_t handle, uint32_
 	const auto *image = module(handle);
 	if (!image)
 		return std::nullopt;
-	for (const auto &item : resources(*image)) {
-		if (found != image->loaded.base() + item.entry_address)
-			continue;
+	const auto &index = parse(*image);
+	if (const auto entry = index.by_entry.find(uint32_t(found - image->loaded.base())); entry != index.by_entry.end()) {
+		const auto &item = index.resources[entry->second];
 		if (item.size > 128 * 1024 * 1024)
 			throw std::runtime_error("native resource view exceeds payload policy");
 		return NativeResourceView{image->loaded.base() + item.data_address, item.size, item.language};
@@ -205,17 +222,24 @@ std::optional<NativeResourceView> NativeResources::view(uint64_t handle, uint32_
 	return std::nullopt;
 }
 
+// A payload handed out must be readable; one the guest's protection keeps readable is not copied to find out.
+void NativeResources::readable(uint64_t address, size_t size)
+{
+	if (!process.has_protection(address, size, PROT_READ))
+		process.read_memory(address, size);
+}
+
 uint64_t NativeResources::lock(uint64_t data)
 {
 	for (const auto &[name, image] : modules.all())
 		if (data >= image->loaded.base() && data - image->loaded.base() < image->image.image_size)
-			for (const auto &resource : resources(*image))
-				if (data == image->loaded.base() + resource.data_address) {
-					if (resource.size > 256 * 1024 * 1024)
-						throw std::runtime_error("native resource payload exceeds initial policy limit");
-					process.read_memory(data, resource.size);
-					return data;
-				}
+			if (const auto &index = parse(*image); index.by_data.contains(uint32_t(data - image->loaded.base()))) {
+				const auto &resource = index.resources[index.by_data.at(uint32_t(data - image->loaded.base()))];
+				if (resource.size > 256 * 1024 * 1024)
+					throw std::runtime_error("native resource payload exceeds initial policy limit");
+				readable(data, resource.size);
+				return data;
+			}
 	environment.set_last_error(6);
 	return 0;
 }

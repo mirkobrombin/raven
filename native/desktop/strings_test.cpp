@@ -74,6 +74,13 @@ int main(int argc, char **argv)
 		check(table.has_value(), "string table missing");
 		const auto original = process.read_memory(table->address, table->size);
 		const auto table_offset = size_t(table->address - entry.loaded.base());
+		// A program changes its resources only after it makes their read-only pages writable, which the resource cache notices.
+		{
+			const auto directory = entry.image.directories[2];
+			const uint64_t first = (entry.loaded.base() + directory.address) & ~uint64_t(4095);
+			const uint64_t end = (entry.loaded.base() + directory.address + directory.size + 4095) & ~uint64_t(4095);
+			process.protect_image(first, end - first, PROT_READ | PROT_WRITE);
+		}
 		const uint8_t changed[] = {'Z', 0};
 		std::copy(std::begin(changed), std::end(changed), entry.loaded.data().begin() + static_cast<ptrdiff_t>(table_offset + 4));
 		check(call({0, 1, output, 6}) == 5 && process.read_memory(output, 2) == std::vector<uint8_t>(changed, changed + 2),

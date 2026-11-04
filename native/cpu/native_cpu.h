@@ -80,6 +80,8 @@ public:
 	void protect_memory(uint64_t address, size_t size, int protection);
 	// Whether the guest's own mappings give exactly this protection to every page of the range.
 	bool has_protection(uint64_t address, size_t size, int protection) const;
+	// How many times the guest's mappings changed: equal counts mean every protection stayed as it was.
+	uint64_t mapping_changes() const;
 	// The same for pages of a mapped program image, which the program may protect although it did not allocate them.
 	void protect_image(uint64_t address, size_t size, int protection);
 	void unmap_memory(uint64_t address);

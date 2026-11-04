@@ -90,6 +90,13 @@ int main(int argc, char **argv)
 			"forged resource data was accepted");
 		// A neutral lookup over several languages follows the guest locale (en-US), like the thread language of a real system.
 		check(api("FindResourceW", {0, 101, 10}) == entry_info, "neutral lookup did not take the locale language");
+		// A program changes its resources only after it makes their read-only pages writable, which the resource cache notices.
+		{
+			const auto directory = entry.image.directories[2];
+			const uint64_t first = (entry.loaded.base() + directory.address) & ~uint64_t(4095);
+			const uint64_t end = (entry.loaded.base() + directory.address + directory.size + 4095) & ~uint64_t(4095);
+			process.protect_image(first, end - first, PROT_READ | PROT_WRITE);
+		}
 		const auto field = static_cast<size_t>(entry_info - entry.loaded.base());
 		entry.loaded.data()[field + 4] = 2;
 		check(api("SizeofResource", {0, entry_info}) == 2, "live resource metadata was cached");
