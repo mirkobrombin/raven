@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace raven {
 
@@ -104,7 +105,7 @@ bool NativeWindows::scroll_sync_visibility(uint64_t handle, int bar, bool allow_
 
 void NativeWindows::scroll_notify(uint64_t handle, int bar, uint32_t code, int32_t position)
 {
-	if (!objects.window(handle))
+	if (!std::as_const(objects).window(handle))
 		return;
 	send(handle, bar == 1 ? 0x115 : 0x114, uint64_t(code) | (uint64_t(uint16_t(position)) << 16), 0);
 }
@@ -159,7 +160,7 @@ void NativeWindows::register_scroll_api(ApiRegistry &registry)
 		call.ret(uint32_t(scroll.pos));
 	});
 	registry.add("GetScrollInfo", 3, [this, bar_of](ApiCall &call) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {
 			call.fail(1400);
 			return;
@@ -212,7 +213,7 @@ void NativeWindows::register_scroll_api(ApiRegistry &registry)
 		call.ret(uint32_t(previous));
 	});
 	registry.add("GetScrollPos", 2, [this, bar_of](ApiCall &call) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {
 			call.fail(1400);
 			return;
@@ -255,7 +256,7 @@ void NativeWindows::register_scroll_api(ApiRegistry &registry)
 		call.ret(1);
 	});
 	registry.add("GetScrollRange", 4, [this, bar_of](ApiCall &call) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {
 			call.fail(1400);
 			return;
@@ -320,7 +321,7 @@ void NativeWindows::register_scroll_api(ApiRegistry &registry)
 		call.ret(changed);
 	});
 	registry.add("GetScrollBarInfo", 3, [this](ApiCall &call) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {
 			call.fail(1400);
 			return;
@@ -355,7 +356,7 @@ void NativeWindows::register_scroll_api(ApiRegistry &registry)
 // Draws the scroll bars of every window of one top-level surface into its bitmap.
 void NativeWindows::paint_scrollbars(uint64_t root)
 {
-	const auto *top = objects.window(root);
+	const auto *top = std::as_const(objects).window(root);
 	if (!top || !top->bitmap)
 		return;
 	auto *bitmap = objects.bitmap(top->bitmap);
@@ -367,7 +368,7 @@ void NativeWindows::paint_scrollbars(uint64_t root)
 	const int32_t origin_x = top->outer.left, origin_y = top->outer.top;
 	const auto shifted = [&](DesktopRect rect) { return DesktopRect{rect.left - origin_x, rect.top - origin_y, rect.right - origin_x, rect.bottom - origin_y}; };
 	for (const auto handle : objects.window_handles()) {
-		const auto *window = objects.window(handle);
+		const auto *window = std::as_const(objects).window(handle);
 		if (!window || !(window->style & (ws_hscroll | ws_vscroll)) || objects.window_root(handle) != root || !objects.window_visible(handle))
 			continue;
 		// Drawing is clipped to the window's own outer rectangle and the ancestors' client areas.
@@ -553,7 +554,7 @@ void NativeWindows::scroll_idle()
 	if (now < scroll_drag.next)
 		return;
 	scroll_drag.next = now + std::chrono::milliseconds(50);
-	const auto *window = objects.window(scroll_drag.window);
+	const auto *window = std::as_const(objects).window(scroll_drag.window);
 	if (!window) {
 		scroll_drag = {};
 		return;

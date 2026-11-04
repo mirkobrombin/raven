@@ -400,7 +400,35 @@ uint64_t ActivationContexts::activate(uint32_t thread, uint64_t handle)
 {
 	const auto cookie = next_cookie++;
 	stacks[thread].emplace_back(handle, cookie);
+	publish(thread);
 	return cookie;
+}
+
+void ActivationContexts::set_process_default(uint64_t handle)
+{
+	process_default = handle;
+	if (current_table)
+		for (size_t slot = 0; slot < current_slots; ++slot)
+			__atomic_store_n(reinterpret_cast<uint32_t *>(current_table + slot * current_slot), uint32_t(0), __ATOMIC_RELEASE);
+}
+
+void ActivationContexts::set_current_table(uint8_t *table)
+{
+	current_table = table;
+	for (const auto &[thread, stack] : stacks)
+		publish(thread);
+}
+
+// The slot's thread is cleared first and written last, and the prelude reads it before and after the context, so a guest thread never
+// takes the context another thread's slot is being given.
+void ActivationContexts::publish(uint32_t thread)
+{
+	if (!current_table)
+		return;
+	auto *slot = current_table + (thread / 4 % current_slots) * current_slot;
+	__atomic_store_n(reinterpret_cast<uint32_t *>(slot), uint32_t(0), __ATOMIC_RELEASE);
+	__atomic_store_n(reinterpret_cast<uint64_t *>(slot + 8), current(thread), __ATOMIC_RELEASE);
+	__atomic_store_n(reinterpret_cast<uint32_t *>(slot), thread, __ATOMIC_RELEASE);
 }
 
 bool ActivationContexts::deactivate(uint32_t thread, uint64_t cookie)
@@ -410,6 +438,7 @@ bool ActivationContexts::deactivate(uint32_t thread, uint64_t cookie)
 	if (found == stack.end())
 		return false;
 	stack.erase(found, stack.end());
+	publish(thread);
 	return true;
 }
 
@@ -544,7 +573,7 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("DeactivateActCtx", 2, [&contexts, thread](ApiCall &call) {
-		if (!contexts.deactivate(thread(), call[1]) && call[1]) {
+		if (call[1] >> 48 != ActivationContexts::current_cookie && !contexts.deactivate(thread(), call[1]) && call[1]) {
 			call.fail(87);
 			return;
 		}

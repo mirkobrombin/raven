@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 namespace raven {
 
@@ -118,10 +119,10 @@ bool NativeWindows::tree_dispatch(std::string_view name)
 	if (name!="GetParent" && name!="GetDlgItem" && name!="GetDlgCtrlID" && name!="IsChild") return false;
 	const auto args=process.api_arguments(name=="GetParent" || name=="GetDlgCtrlID" ? 1 : 2);
 	uint64_t result=0;
-	const auto *record=objects.window(args[0]);
+	const auto *record=std::as_const(objects).window(args[0]);
 	if (name=="IsChild") result=objects.is_child(args[0],args[1]);
 	else if (!record) environment.set_last_error(1400);
-	else if (name=="GetParent") result=record->parent ? record->parent : (record->style & 0x80000000U) && objects.window(record->owner) ? record->owner : 0;
+	else if (name=="GetParent") result=record->parent ? record->parent : (record->style & 0x80000000U) && std::as_const(objects).window(record->owner) ? record->owner : 0;
 	else if (name=="GetDlgCtrlID") result=uint32_t(record->child_id);
 	else for (const auto child:objects.child_windows(args[0]))
 		if (uint32_t(objects.window(child)->child_id)==uint32_t(args[1])) { result=child;break; }
@@ -130,10 +131,10 @@ bool NativeWindows::tree_dispatch(std::string_view name)
 
 void NativeWindows::parent_notify(uint64_t handle,uint32_t message)
 {
-	const auto *record=objects.window(handle);
+	const auto *record=std::as_const(objects).window(handle);
 	if (!record || !record->parent || (record->ex_style & 4)) return;
 	const auto parent=record->parent;
-	if (!objects.window(parent) || objects.window(parent)->destroying) return;
+	if (!std::as_const(objects).window(parent) || std::as_const(objects).window(parent)->destroying) return;
 	send(parent,0x210,message | (uint64_t(uint16_t(record->child_id))<<16),handle);
 }
 
@@ -147,18 +148,18 @@ void NativeWindows::reject_tree(uint64_t handle)
 {
 	auto *record=objects.window(handle);if (!record) return;
 	record->destroying=true;record->visible=false;record->style&=~0x10000000U;
-	for (const auto child:objects.child_windows(handle)) if (objects.window(child)) reject_tree(child);
-	if (objects.window(handle)) send(handle,0x82,0,0);
+	for (const auto child:objects.child_windows(handle)) if (std::as_const(objects).window(child)) reject_tree(child);
+	if (std::as_const(objects).window(handle)) send(handle,0x82,0,0);
 	release_surface(handle);objects.erase(handle);
 }
 
 uint64_t NativeWindows::pointer_child(uint64_t handle,int32_t x,int32_t y)
 {
-	const auto *parent=objects.window(handle);if (!parent) return 0;
+	const auto *parent=std::as_const(objects).window(handle);if (!parent) return 0;
 	if (x<parent->x || y<parent->y || int64_t(x)>=int64_t(parent->x)+parent->width || int64_t(y)>=int64_t(parent->y)+parent->height) return handle;
 	const auto children=objects.child_windows(handle);
 	for (auto child=children.rbegin();child!=children.rend();++child) {
-		const auto *record=objects.window(*child);
+		const auto *record=std::as_const(objects).window(*child);
 		if (record && objects.window_visible(*child) && x>=record->outer.left && y>=record->outer.top && x<record->outer.right && y<record->outer.bottom) {
 			const auto inner=pointer_child(*child,x,y);
 			// A window that answers HTTRANSPARENT (a group box) leaves the point to the siblings beneath it.

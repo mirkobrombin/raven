@@ -700,13 +700,14 @@ std::optional<std::u16string> idn_to_unicode(const std::u16string &name)
 
 }
 
-std::vector<uint8_t> locale_table()
+std::vector<uint8_t> locale_table(bool names)
 {
 	std::vector<uint8_t> table(locale_table_entries * 8, 0xff);
 	std::u16string pool;
 	for (uint32_t index = 0; index < locale_table_entries; ++index) {
-		// The locale's own name and its parent's depend on the locale asked for, which the served block does not read: the runtime answers.
-		if (index == 0x5c || index == 0x6d)
+		// The locale's own name and its parent's depend on the name GetLocaleInfoEx is given, which its prelude does not read: the runtime
+		// answers them. GetLocaleInfoW answers them for the one locale whatever its number, so its table holds them.
+		if (!names && (index == 0x5c || index == 0x6d))
 			continue;
 		const auto text = locale_text(index < 0x80 ? index : 0x1000 + index - 0x80);
 		if (!text)

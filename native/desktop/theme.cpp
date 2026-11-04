@@ -8,6 +8,7 @@
 #include <cstring>
 #include <set>
 #include <sys/mman.h>
+#include <utility>
 
 // Visual styles: the uxtheme interface the common controls draw through, answered with the look of Windows 11 (rounded controls,
 // light fills, thin borders and the accent color) drawn with antialiasing into the caller's device context. The classic look stays
@@ -423,14 +424,14 @@ void NativeWindows::register_theme_api(ApiRegistry &registry)
 		else
 			named_windows.erase(call[0]);
 		// The window hears that its theme changed, as controls reopen their theme data then.
-		if (objects.window(call[0]))
+		if (std::as_const(objects).window(call[0]))
 			send(call[0], 0x31a, 0, 0);
 		call.ret(s_ok);
 	});
 	// The dark mode functions programs take by number: the window and app permissions the theme data follows, and the system's own
 	// preference, which is light.
 	registry.add("AllowDarkModeForWindow", 2, [this](ApiCall &call) {
-		if (!objects.window(call[0])) {
+		if (!std::as_const(objects).window(call[0])) {
 			call.ret(0);
 			return;
 		}
@@ -514,7 +515,7 @@ void NativeWindows::register_theme_api(ApiRegistry &registry)
 	// shifted so that its pixels land where they show through.
 	registry.add("DrawThemeParentBackground", 3, [this, read_box](ApiCall &call) {
 		auto *dc = objects.dc(call[1]);
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		const auto *parent = window && window->parent ? objects.window(window->parent) : nullptr;
 		if (!dc || !parent) {
 			call.ret(e_fail);

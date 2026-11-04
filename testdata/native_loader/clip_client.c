@@ -70,6 +70,28 @@ int raven_entry(void)
 	if(!SetRectRgn(out,0,0,1,1) || EqualRgn(a,out) || !DeleteObject(out))return 12;
 	SetLastError(71);state(dc,17,0);
 	if(SelectClipRgn(dc,NULL)!=SIMPLEREGION || GetClipRgn(dc,a)!=0)return 13;
+	// A ring of bands: rectangles meeting the hole are outside, those meeting a band inside, and every change is seen at once.
+	HRGN ring=CreateRectRgn(0,0,30,30),hole=CreateRectRgn(10,10,20,20);RECT probe,rbox;
+	if(!ring || !hole || CombineRgn(ring,ring,hole,RGN_DIFF)!=COMPLEXREGION)return 18;
+	SetRect(&probe,12,12,18,18);if(RectInRegion(ring,&probe))return 19;
+	SetRect(&probe,18,18,12,12);if(RectInRegion(ring,&probe))return 19;
+	SetRect(&probe,5,12,11,13);if(!RectInRegion(ring,&probe))return 20;
+	SetRect(&probe,12,12,12,18);if(RectInRegion(ring,&probe))return 20;
+	SetRect(&probe,30,0,40,10);if(RectInRegion(ring,&probe))return 20;
+	if(GetRgnBox(ring,&rbox)!=COMPLEXREGION || rbox.left!=0 || rbox.top!=0 || rbox.right!=30 || rbox.bottom!=30)return 21;
+	if(OffsetRgn(ring,100,0)!=COMPLEXREGION || GetRgnBox(ring,&rbox)!=COMPLEXREGION || rbox.left!=100 || rbox.right!=130)return 22;
+	SetRect(&probe,5,12,11,13);if(RectInRegion(ring,&probe))return 22;
+	SetRect(&probe,105,12,111,13);if(!RectInRegion(ring,&probe))return 22;
+	// Many bands, more than a record of the table holds.
+	if(!SetRectRgn(ring,0,0,1,1))return 23;
+	for(int i=1;i<40;++i){if(!SetRectRgn(hole,i*4,i*3,i*4+2,i*3+2) || CombineRgn(ring,ring,hole,RGN_OR)!=COMPLEXREGION)return 23;}
+	SetRect(&probe,40*4-4,39*3,40*4-3,39*3+1);if(!RectInRegion(ring,&probe))return 24;
+	SetRect(&probe,2,2,4,3);if(RectInRegion(ring,&probe))return 24;
+	if(GetRgnBox(ring,&rbox)!=COMPLEXREGION || rbox.right!=39*4+2 || rbox.bottom!=39*3+2)return 24;
+	if(!SetRectRgn(ring,0,0,0,0) || GetRgnBox(ring,&rbox)!=NULLREGION || rbox.left || rbox.right)return 25;
+	SetRect(&probe,0,0,5,5);if(RectInRegion(ring,&probe))return 25;
+	if(!DeleteObject(ring) || !DeleteObject(hole))return 26;
+	SetLastError(71);if(GetRgnBox(ring,&rbox) || GetLastError()!=71)return 26;
 	POINT points[3]={{-3,7},{0,0},{14,-9}};
 	if(!DPtoLP(dc,points,3) || !LPtoDP(dc,points,3) || points[0].x!=-3 || points[0].y!=7 || points[2].x!=14 || points[2].y!=-9 || !DPtoLP(dc,NULL,0))return 14;
 	unsigned negative=0;

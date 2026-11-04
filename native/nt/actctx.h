@@ -59,7 +59,13 @@ public:
 	uint64_t current(uint32_t thread) const;
 	uint64_t activate(uint32_t thread, uint64_t handle);
 	bool deactivate(uint32_t thread, uint64_t cookie);
-	void set_process_default(uint64_t handle) { process_default = handle; }
+	void set_process_default(uint64_t handle);
+	// The table the activation preludes read: for each slot, at a thread id divided by four modulo the slot count, the thread id and
+	// then the context in effect on that thread. ActivateActCtx of the context already in effect leaves the stack as it is, so the guest
+	// answers it with a cookie of its own (current_cookie in the top 16 bits), which DeactivateActCtx then takes back without the runtime.
+	static constexpr size_t current_slots = 64, current_slot = 16;
+	static constexpr uint64_t current_cookie = 0x5276;
+	void set_current_table(uint8_t *table);
 	uint64_t process_default_context() const { return process_default; }
 	// The name a class registers under while a thread has a context active: its version and an exclamation mark come first when the
 	// context's assembly declares the class. Lookups ask for the name an assembly the current context depends on gives it.
@@ -85,6 +91,8 @@ private:
 	std::map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> stacks;
 	uint64_t next_handle = 0x7e000001, next_cookie = 1, process_default = 0;
 	std::optional<Version> layer_version;
+	uint8_t *current_table = nullptr;
+	void publish(uint32_t thread);
 	std::optional<Assembly> resolve(const Assembly &identity) const;
 	// The host folder an assembly's files are in.
 	std::filesystem::path folder_of(const Assembly &assembly) const;

@@ -1,12 +1,14 @@
 #include "windows.h"
 #include "canvas.h"
 
+#include <utility>
+
 namespace raven {
 
 // Draws the border and edge of every visible child of one top-level surface, as the default non-client paint does.
 void NativeWindows::paint_child_frames(uint64_t root)
 {
-	const auto *top = objects.window(root);
+	const auto *top = std::as_const(objects).window(root);
 	if (!top || !top->bitmap)
 		return;
 	auto *bitmap = objects.bitmap(top->bitmap);
@@ -23,7 +25,7 @@ void NativeWindows::paint_child_frames(uint64_t root)
 	};
 	const auto walk = [&](auto &&self, uint64_t parent) -> void {
 		for (const auto handle : objects.child_windows(parent)) {
-			const auto *window = objects.window(handle);
+			const auto *window = std::as_const(objects).window(handle);
 			if (!window || !window->visible)
 				continue;
 			const DesktopRect rect{window->outer.left - top->outer.left, window->outer.top - top->outer.top,

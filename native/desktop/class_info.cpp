@@ -1,5 +1,6 @@
 #include "windows.h"
 #include <algorithm>
+#include <utility>
 
 namespace raven {
 
@@ -11,7 +12,7 @@ static void put(std::span<uint8_t> bytes,size_t at,uint64_t value,size_t width)
 uint64_t NativeWindows::class_info(std::string_view name,std::span<const uint64_t> args)
 {
 	if (name=="GetClassNameW" || name=="GetClassNameA") {
-		const auto *window=objects.window(args[0]);
+		const auto *window=std::as_const(objects).window(args[0]);
 		const auto foreign=window ? std::nullopt : foreign_window_traits(args[0]);
 		if (!window && !foreign) throw uint32_t(1400);
 		const auto count=uint32_t(args[2]); if (count<=1) throw uint32_t(122);

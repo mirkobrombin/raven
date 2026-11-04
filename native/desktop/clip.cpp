@@ -21,6 +21,7 @@ bool DesktopObjects::replace_region(uint64_t handle,DesktopRegion value)
 	const auto previous=std::get<DesktopRegion>(found->second).bytes(),current=value.bytes();
 	if (current>limit-used+previous) return false;
 	std::get<DesktopRegion>(found->second)=std::move(value);used=used-previous+current;
+	regions_touched.touch(handle);
 	return true;
 }
 

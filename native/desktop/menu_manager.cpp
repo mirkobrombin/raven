@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace raven {
 
@@ -356,7 +357,7 @@ void NativeWindows::register_menu_api(ApiRegistry &registry)
 		call.ret(std::min<size_t>(text.size(), size_t(capacity) - 1));
 	});
 	registry.add("GetMenu", 1, [this](ApiCall &call) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {
 			call.fail(1400);
 			return;
@@ -463,7 +464,7 @@ void NativeWindows::register_menu_api(ApiRegistry &registry)
 		call.ret(1);
 	});
 	registry.add("GetMenuBarInfo", 4, [this](ApiCall &call) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window || !window->menu) {
 			call.fail(window ? 1401 : 1400);
 			return;

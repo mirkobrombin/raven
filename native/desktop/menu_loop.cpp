@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
+#include <utility>
 
 namespace raven {
 
@@ -211,7 +212,7 @@ void NativeWindows::menu_close()
 			presentation.remove(handle);
 	}
 	open_menu_item.reset();
-	if (was_active && owner && objects.window(owner)) {
+	if (was_active && owner && std::as_const(objects).window(owner)) {
 		send(owner, 0x11f, 0xffff0000ULL, 0);
 		send(owner, 0x212, 0, 0);
 		if (objects.window_visible(owner))
@@ -257,7 +258,7 @@ void NativeWindows::menu_open_bar(uint64_t window, size_t index)
 		return;
 	}
 	send(window, 0x117, item.submenu, uint64_t(index));
-	if (!objects.window(window))
+	if (!std::as_const(objects).window(window))
 		return;
 	open_menu_item = index;
 	open_menu_window = window;
@@ -285,7 +286,7 @@ void NativeWindows::menu_highlight(size_t level, std::optional<size_t> index)
 	if (menu && index && *index < menu->items.size()) {
 		const auto &item = menu->items[*index];
 		const uint64_t flags = 0x80 | (item.submenu ? 0x10U : 0U) | ((item.state & item_grayed) ? 0x3U : 0U) | ((item.state & item_checked) ? 0x8U : 0U);
-		if (open_menu_window && objects.window(open_menu_window))
+		if (open_menu_window && std::as_const(objects).window(open_menu_window))
 			send(open_menu_window, 0x11f, (item.submenu ? *index : item.id) | (flags << 16), popup.menu);
 		if (item.submenu && is_enabled(item)) {
 			const auto rect = popup.items[*index];
@@ -320,18 +321,18 @@ void NativeWindows::menu_select(size_t level, size_t index)
 	menu_close();
 	if (menu_tracking)
 		tracked_command = item.id;
-	else if (owner && objects.window(owner) && messages.size() < 10000)
+	else if (owner && std::as_const(objects).window(owner) && messages.size() < 10000)
 		queue({owner, item.id, 0, system ? 0x112U : 0x111U, message_time(), cursor_x, cursor_y});
 }
 
 void NativeWindows::system_menu_open(uint64_t window, int32_t x, int32_t y)
 {
-	if (menu_active() || menu_tracking || !objects.window(window))
+	if (menu_active() || menu_tracking || !std::as_const(objects).window(window))
 		return;
 	const auto handle = system_menu(window);
 	if (!handle)
 		return;
-	const auto *owner = objects.window(window);
+	const auto *owner = std::as_const(objects).window(window);
 	// As in Windows, the standard commands are greyed for what the window's state and style rule out; items a program added keep theirs.
 	const uint32_t style = owner->style;
 	const bool maximized = style & 0x01000000U, minimized = style & 0x20000000U;
@@ -354,9 +355,9 @@ void NativeWindows::system_menu_open(uint64_t window, int32_t x, int32_t y)
 	send(window, 0x116, handle, 0);
 	// The high word of WM_INITMENUPOPUP's lParam says the popup is the window menu.
 	send(window, 0x117, handle, 0x10000);
-	if (!objects.window(window) || !objects.menu(handle)) {
+	if (!std::as_const(objects).window(window) || !objects.menu(handle)) {
 		open_menu_window = 0;
-		if (objects.window(window))
+		if (std::as_const(objects).window(window))
 			send(window, 0x212, 0, 0);
 		return;
 	}
@@ -367,7 +368,7 @@ void NativeWindows::system_menu_open(uint64_t window, int32_t x, int32_t y)
 uint64_t NativeWindows::track_popup_menu(uint64_t menu, uint32_t flags, int32_t x, int32_t y, uint64_t window)
 {
 	const auto root = objects.window_root(window);
-	const auto *top = objects.window(root);
+	const auto *top = std::as_const(objects).window(root);
 	if (!objects.menu(menu) || !top)
 		throw uint32_t(1401);
 	if (menu_active() || menu_tracking)
@@ -408,7 +409,7 @@ uint64_t NativeWindows::track_popup_menu(uint64_t menu, uint32_t flags, int32_t 
 	// TPM_RETURNCMD answers the command itself; otherwise it reaches the owner as WM_COMMAND and the answer is only whether one was chosen.
 	if (flags & 0x100)
 		return command;
-	if (command && !(flags & 0x80) && objects.window(window) && messages.size() < 10000)
+	if (command && !(flags & 0x80) && std::as_const(objects).window(window) && messages.size() < 10000)
 		queue({window, command, 0, 0x111, message_time(), cursor_x, cursor_y});
 	return command ? 1 : 0;
 }
@@ -441,7 +442,7 @@ bool NativeWindows::menu_event(const DesktopEvent &event)
 		return std::nullopt;
 	};
 	const auto bar_at = [&](int32_t x, int32_t y) -> std::optional<size_t> {
-		const auto *owner = objects.window(open_menu_window);
+		const auto *owner = std::as_const(objects).window(open_menu_window);
 		if (!owner)
 			return std::nullopt;
 		const auto layout = frame_layout(*owner);
@@ -543,7 +544,7 @@ bool NativeWindows::menu_event(const DesktopEvent &event)
 						return std::nullopt;
 					}());
 			} else if (popups.size() == 1 && open_menu_item) {
-				const auto *owner = objects.window(open_menu_window);
+				const auto *owner = std::as_const(objects).window(open_menu_window);
 				const auto *bar = owner ? objects.menu(owner->menu) : nullptr;
 				if (bar && !bar->items.empty())
 					menu_open_bar(open_menu_window, (*open_menu_item + 1) % bar->items.size());
@@ -555,7 +556,7 @@ bool NativeWindows::menu_event(const DesktopEvent &event)
 				if (presentation.remove)
 					presentation.remove(handle);
 			} else if (open_menu_item) {
-				const auto *owner = objects.window(open_menu_window);
+				const auto *owner = std::as_const(objects).window(open_menu_window);
 				const auto *bar = owner ? objects.menu(owner->menu) : nullptr;
 				if (bar && !bar->items.empty())
 					menu_open_bar(open_menu_window, (*open_menu_item + bar->items.size() - 1) % bar->items.size());
@@ -596,7 +597,7 @@ void NativeWindows::system_menu_open(uint64_t, int32_t, int32_t) {}
 
 uint64_t NativeWindows::system_menu(uint64_t window)
 {
-	if (!objects.window(window))
+	if (!std::as_const(objects).window(window))
 		return 0;
 	auto found = system_menus.find(window);
 	if (found == system_menus.end() || !objects.menu(found->second)) {

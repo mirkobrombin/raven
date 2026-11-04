@@ -716,6 +716,7 @@
 {"IsDebuggerPresent", 0},
 {"IsDestinationReachableW", 2},
 {"IsEnclaveTypeSupported", 1},
+{"IsGUIThread", 1},
 {"IsIconic", 1},
 {"IsImmersiveProcess", 1},
 {"IsNetworkAlive", 1},

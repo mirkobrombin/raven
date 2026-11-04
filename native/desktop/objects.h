@@ -347,10 +347,12 @@ public:
 	TouchedHandles &touched_bitmaps() { return bitmaps_touched; }
 	TouchedHandles &touched_dcs() { return dcs_touched; }
 	TouchedHandles &touched_icons() { return icons_touched; }
+	TouchedHandles &touched_regions() { return regions_touched; }
 	std::vector<uint64_t> menu_handles() const;
 	std::vector<uint64_t> bitmap_handles() const;
 	std::vector<uint64_t> dc_handles() const;
 	std::vector<uint64_t> icon_handles() const;
+	std::vector<uint64_t> region_handles() const;
 	uint64_t window_root(uint64_t handle) const;
 	// Children of a window in z-order, bottom to top. Top-level windows are the children of window zero.
 	std::vector<uint64_t> child_windows(uint64_t parent) const;
@@ -387,7 +389,7 @@ public:
 	bool set_screen_size(int32_t width,int32_t height);
 
 private:
-	TouchedHandles windows_touched{}, menus_touched{}, bitmaps_touched{}, dcs_touched{}, icons_touched{};
+	TouchedHandles windows_touched{}, menus_touched{}, bitmaps_touched{}, dcs_touched{}, icons_touched{}, regions_touched{};
 	// How many contexts each bitmap is selected into.
 	std::map<uint64_t,uint32_t> selections;
 	// The windows among the objects, in handle order.

@@ -294,6 +294,18 @@ uint64_t counter_ticks()
 	return uint64_t(now.tv_sec) * 10000000ULL + uint64_t(now.tv_nsec) / 100;
 }
 
+// The local time at the start of the current second and the performance counter span of that second, for a GetLocalTime the
+// guest answers itself: the counter where the second starts and ends, then the SYSTEMTIME with no milliseconds.
+std::array<uint64_t, 4> local_second()
+{
+	const uint64_t counter = counter_ticks(), utc = now_ticks();
+	const auto zone = zone_at(time_t((utc - filetime_epoch_offset) / 10000000ULL));
+	const uint64_t local = utc + int64_t(zone.offset_minutes) * 600000000LL, into = local % 10000000ULL;
+	std::array<uint64_t, 4> second{counter - into, counter - into + 10000000ULL, 0, 0};
+	std::memcpy(&second[2], system_time(local - into).data(), 16);
+	return second;
+}
+
 // The service pack of a version block: its name after the five numbers, and its number in the extended block.
 static void fill_service_pack(std::vector<uint8_t> &bytes, uint32_t pack)
 {

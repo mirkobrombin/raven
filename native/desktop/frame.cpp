@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace raven {
 
@@ -105,7 +106,7 @@ void NativeWindows::hover_frame(uint64_t handle,uint64_t hit)
 
 void NativeWindows::nonclient_pointer(uint64_t handle,uint64_t hit,uint32_t message,int32_t x,int32_t y)
 {
-	const auto *window=objects.window(handle);
+	const auto *window=std::as_const(objects).window(handle);
 	if (!window) return;
 	constexpr uint64_t caption_hit=2,system_menu_hit=3,menu_hit=5,minimize_hit=8,maximize_hit=9,close_hit=20;
 	// The window menu opens where the secondary button is released over the caption, or under the icon when the icon is pressed.
@@ -182,7 +183,7 @@ std::vector<DesktopRect> NativeWindows::menu_bar_items(const DesktopWindow &wind
 
 void NativeWindows::paint_nonclient(uint64_t handle)
 {
-	auto *window = objects.window(handle);
+	const auto *window = std::as_const(objects).window(handle);
 	if (!window || window->parent || !window->bitmap)
 		return;
 	const auto layout = frame_layout(*window);

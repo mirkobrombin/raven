@@ -903,15 +903,22 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("GetQueueStatus", 1, [&context](ApiCall &call) {
 		const uint32_t kinds = call.u32(0);
 		if (kinds & ~0x1dffU) { call.fail(87, 0); return; }
-		call.ret(context.queue_status ? context.queue_status(context.threads.current_id(), kinds, true) : 0);
+		const uint32_t status = context.queue_status ? context.queue_status(context.threads.current_id(), kinds, true) : 0;
+		if (!status && context.queue_quiet) context.queue_quiet(context.threads.current_id());
+		call.ret(status);
 	});
 	// Only keyboard and mouse-button input counts here, not posted messages, motion, timers or paint.
 	registry.add("GetInputState", 0, [&context](ApiCall &call) {
-		call.ret(context.queue_status && (context.queue_status(context.threads.current_id(), 5, false) >> 16) ? 1 : 0);
+		const bool input = context.queue_status && (context.queue_status(context.threads.current_id(), 5, false) >> 16);
+		if (!input && context.queue_quiet) context.queue_quiet(context.threads.current_id());
+		call.ret(input ? 1 : 0);
 	});
 	// Whether the message being handled was sent from another thread that waits for the reply: the window procedures of a program run
 	// on the thread that sent to them, so the answer is no (ISMEX_NOSEND).
 	registry.add("InSendMessage", 0, [](ApiCall &call) { call.ret(0); });
+	// Every thread already has the message queue and window state a GUI thread needs, so each one is a GUI thread and the conversion
+	// IsGUIThread(TRUE) asks for has nothing to do.
+	registry.add("IsGUIThread", 1, [](ApiCall &call) { call.ret(1); });
 	// The message filter that keeps lower integrity processes out: the prefix has no integrity levels, so every change is accepted
 	// (the per-window form is with the window functions).
 	registry.add("ChangeWindowMessageFilter", 2, [](ApiCall &call) { call.ret(1); });

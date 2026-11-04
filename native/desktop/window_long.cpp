@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace raven {
 
@@ -170,7 +171,7 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 					std::memcpy(bytes.data() + 4, &next, 4);
 					process.write_memory(scratch, bytes);
 					send(call[0], 0x7c, index_word, scratch);
-					if (!objects.window(call[0]))
+					if (!std::as_const(objects).window(call[0]))
 						return;
 					const auto changed = process.read_memory(scratch, 8);
 					std::memcpy(&next, changed.data() + 4, 4);
@@ -186,9 +187,9 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 					std::memcpy(bytes.data() + 4, &next, 4);
 					process.write_memory(scratch, bytes);
 					send(call[0], 0x7d, index_word, scratch);
-					if (const auto *changed_window = objects.window(call[0]))
+					if (const auto *changed_window = std::as_const(objects).window(call[0]))
 						publish_window_traits(call[0], {changed_window->style, changed_window->ex_style, objects.window_class(changed_window->class_id)->name});
-					if (objects.window(call[0]) && objects.window_visible(call[0])) {
+					if (std::as_const(objects).window(call[0]) && objects.window_visible(call[0])) {
 						invalidate_tree(call[0], true);
 						drawing(call[0]);
 					}
@@ -213,7 +214,7 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 		registry.add(name, 3, [=](ApiCall &call) { window_long(call, true, true); });
 
 	const auto class_long = [this](ApiCall &call, bool write, bool wide) {
-		const auto *window = objects.window(call[0]);
+		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {
 			call.fail(1400);
 			return;
@@ -342,7 +343,7 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 			// The window that holds the rectangle: the active one when it does, otherwise the first visible top-level window that does.
 			const int32_t cx = ((*rect)[0] + (*rect)[2]) / 2, cy = ((*rect)[1] + (*rect)[3]) / 2;
 			const auto holds = [&](uint64_t handle) {
-				const auto *candidate = objects.window(handle);
+				const auto *candidate = std::as_const(objects).window(handle);
 				return candidate && !candidate->parent && objects.window_visible(handle) && cx >= candidate->outer.left &&
 					cx < candidate->outer.right && cy >= candidate->outer.top && cy < candidate->outer.bottom;
 			};
@@ -361,7 +362,7 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 				presentation.confine(clip_window, std::nullopt);
 			clip_window = window;
 			if (window) {
-				const auto *target = objects.window(window);
+				const auto *target = std::as_const(objects).window(window);
 				presentation.confine(window, std::array<int32_t, 4>{(*rect)[0] - target->outer.left, (*rect)[1] - target->outer.top,
 					(*rect)[2] - target->outer.left, (*rect)[3] - target->outer.top});
 			}
@@ -373,14 +374,14 @@ void NativeWindows::register_long_api(ApiRegistry &registry)
 	registry.add("SetGestureConfig", 5, [](ApiCall &call) { call.ret(1); });
 	// Touch input reaches windows as mouse input here; registering for it changes nothing and succeeds.
 	registry.add("RegisterTouchWindow", 2, [this](ApiCall &call) {
-		if (!objects.window(call[0])) {
+		if (!std::as_const(objects).window(call[0])) {
 			call.fail(1400);
 			return;
 		}
 		call.ret(1);
 	});
 	registry.add("UnregisterTouchWindow", 1, [this](ApiCall &call) {
-		if (!objects.window(call[0])) {
+		if (!std::as_const(objects).window(call[0])) {
 			call.fail(1400);
 			return;
 		}

@@ -2846,6 +2846,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_served_semaphore_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         raven_kernel_fixture(api-hook api_hook_client.c 0x1b6000000 "-lkernel32;-luser32")
+        raven_kernel_fixture(guest-answers guest_answers_client.c 0x1bf000000 "-lkernel32;-luser32;-lole32")
+        foreach(mode default parallel)
+            add_test(NAME native_guest_answers_${mode} COMMAND raven --run-process --execution=native
+                ${CMAKE_CURRENT_BINARY_DIR}/guest-answers.exe)
+            set_tests_properties(native_guest_answers_${mode} PROPERTIES TIMEOUT 30
+                PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-answers-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_guest_answers_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         raven_kernel_fixture(queued-calls queued_calls_client.c 0x1b7000000 "")
         add_test(NAME native_queued_served_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap>
             --queued-served ${CMAKE_CURRENT_BINARY_DIR}/queued-calls.exe)

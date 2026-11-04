@@ -27,8 +27,8 @@ std::optional<std::u16string> normalize_unicode(std::u16string_view text, bool c
 
 // What GetLocaleInfo answers, for the guest to read: an entry of 8 bytes for each type below 0x80 and then for 0x1000 to 0x100f (the
 // offset of its text in characters, or 0xffff for a type without one, the length without the terminator and the text as a number),
-// then the texts, each with its terminator.
+// then the texts, each with its terminator. Without names the locale's own name and its parent's are left out, for GetLocaleInfoEx.
 constexpr uint32_t locale_table_entries = 0x90;
-std::vector<uint8_t> locale_table();
+std::vector<uint8_t> locale_table(bool names = false);
 
 }

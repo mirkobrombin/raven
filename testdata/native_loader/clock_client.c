@@ -24,5 +24,27 @@ int raven_entry(void)
 	const ULONGLONG later = GetTickCount64();
 	if (later < ticks + 45 || later > ticks + 250)
 		return 4;
+	/* The local time, which the program reads for each second the runtime publishes, agrees with the system time made local and
+	 * goes on without stepping back over the end of a second. */
+	FILETIME system, local, read;
+	SYSTEMTIME now;
+	GetSystemTimeAsFileTime(&system);
+	GetLocalTime(&now);
+	if (!FileTimeToLocalFileTime(&system, &local) || !SystemTimeToFileTime(&now, &read))
+		return 5;
+	const ULONGLONG made = ((ULONGLONG)local.dwHighDateTime << 32) | local.dwLowDateTime;
+	ULONGLONG previous = ((ULONGLONG)read.dwHighDateTime << 32) | read.dwLowDateTime;
+	if (distance(made, previous) > 500000)
+		return 6;
+	const ULONGLONG until = GetTickCount64() + 1200;
+	while (GetTickCount64() < until) {
+		GetLocalTime(&now);
+		if (now.wMilliseconds > 999 || now.wSecond > 59 || !SystemTimeToFileTime(&now, &read))
+			return 7;
+		const ULONGLONG value = ((ULONGLONG)read.dwHighDateTime << 32) | read.dwLowDateTime;
+		if (value + 50000 < previous)
+			return 8;
+		previous = value;
+	}
 	return 0;
 }

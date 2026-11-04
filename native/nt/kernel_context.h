@@ -9,6 +9,7 @@
 #include "completion_port.h"
 #include "pipe.h"
 #include "threads.h"
+#include <array>
 #include <optional>
 #include <string>
 #include "pe/module_set.h"
@@ -51,6 +52,8 @@ struct KernelContext {
 	std::function<std::string()> describe_stack;
 	// Current and new queue categories for a thread; the last argument clears the requested new bits.
 	std::function<uint32_t(uint32_t,uint32_t,bool)> queue_status;
+	// After a poll of a thread's queue found nothing: lets the guest answer the next polls itself for a moment.
+	std::function<void(uint32_t)> queue_quiet;
 	// Takes a reference on the loaded module at this base, or pins it for the life of the process (GetModuleHandleEx).
 	std::function<void(uint64_t, bool)> reference_module;
 	// The loaded module a guest string names, by name or by path, as GetModuleHandle finds it (zero, with the last error set, if none).
@@ -68,6 +71,8 @@ struct KernelContext {
 inline constexpr uint64_t filetime_epoch_offset = 11644473600ULL * 10000000ULL;
 // The performance counter in 100 ns units: the host's monotonic clock, as QueryPerformanceCounter reports it.
 uint64_t counter_ticks();
+// The counter span of the current local second and its SYSTEMTIME, as the guest's GetLocalTime reads them.
+std::array<uint64_t, 4> local_second();
 
 void register_exception_api(ApiRegistry &registry, KernelContext &context, class NativeUnwinder &unwinder);
 class NativeRegistry;
