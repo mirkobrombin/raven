@@ -1345,6 +1345,352 @@ static LRESULT change_button_flag(toolbar_state *state, int command, BYTE flag, 
 	return TRUE;
 }
 
+/* The Customize Toolbar dialog of TB_CUSTOMIZE. The buttons the parent offers through TBN_GETBUTTONINFO that are not on the toolbar
+ * are the available ones, with a separator always first; the current list shows the toolbar in order and ends with an empty row
+ * that stands for its end. The parent may refuse an insertion or a deletion (TBN_QUERYINSERT, TBN_QUERYDELETE), is told of every
+ * change (TBN_TOOLBARCHANGE), puts its buttons back on Reset (TBN_RESET) and shows its help on Help (TBN_CUSTHELP). */
+
+enum { CUSTOMIZE_AVAILABLE = 201, CUSTOMIZE_CURRENT, CUSTOMIZE_RESET, CUSTOMIZE_HELP, CUSTOMIZE_ADD, CUSTOMIZE_REMOVE, CUSTOMIZE_UP,
+	CUSTOMIZE_DOWN };
+
+/* NMTBCUSTOMIZEDLG as documented, which the MinGW headers lack: the notification header, the dialog and the button pressed. */
+typedef struct {
+	NMHDR hdr;
+	HWND hDlg;
+	UINT idButton;
+} customize_notice;
+
+typedef struct {
+	TBBUTTON button;
+	WCHAR *text;
+} offered_button;
+
+typedef struct {
+	toolbar_state *state;
+	HWND available, current;
+	offered_button *offered;
+	int offered_count;
+	BOOL hide_help;
+} customize_state;
+
+static void forget_offered(customize_state *dialog)
+{
+	int index;
+	for (index = 0; index < dialog->offered_count; ++index)
+		release(dialog->offered[index].text);
+	release(dialog->offered);
+	dialog->offered = NULL;
+	dialog->offered_count = 0;
+}
+
+/* Every button the parent can put on the toolbar, asked one by one until it answers no more. */
+static void gather_offered(customize_state *dialog)
+{
+	toolbar_state *state = dialog->state;
+	int item;
+	forget_offered(dialog);
+	for (item = 0;; ++item) {
+		offered_button found = {0};
+		offered_button *grown;
+		if (state->unicode) {
+			WCHAR text[RESTORE_INFO_TEXT] = {0};
+			NMTOOLBARW question = {0};
+			question.iItem = item;
+			question.cchText = RESTORE_INFO_TEXT;
+			question.pszText = text;
+			if (!notify_header(state, &question.hdr, TBN_GETBUTTONINFOW))
+				break;
+			found.button = question.tbButton;
+			found.text = text[0] ? duplicate(text) : NULL;
+			if (found.button.iString == (INT_PTR)text)
+				found.button.iString = (INT_PTR)found.text;
+		} else {
+			char text[RESTORE_INFO_TEXT] = {0};
+			NMTOOLBARA question = {0};
+			question.iItem = item;
+			question.cchText = RESTORE_INFO_TEXT;
+			question.pszText = text;
+			if (!notify_header(state, &question.hdr, TBN_GETBUTTONINFOA))
+				break;
+			found.button = question.tbButton;
+			found.text = text[0] ? widen(text) : NULL;
+			/* The text kept here is wide, so a button inserted from it is inserted wide. */
+			if (found.button.iString == (INT_PTR)text)
+				found.button.iString = (INT_PTR)found.text;
+		}
+		if (item > 4096 || !(grown = dialog->offered ? HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dialog->offered,
+			(dialog->offered_count + 1) * sizeof(*grown)) : allocate(sizeof(*grown)))) {
+			release(found.text);
+			break;
+		}
+		dialog->offered = grown;
+		dialog->offered[dialog->offered_count++] = found;
+	}
+}
+
+static const WCHAR *offered_text(const customize_state *dialog, const offered_button *offered)
+{
+	if (offered->text)
+		return offered->text;
+	if (is_string_index(offered->button.iString) && offered->button.iString < dialog->state->string_count)
+		return dialog->state->strings[offered->button.iString];
+	return L"";
+}
+
+static void fill_customize_lists(customize_state *dialog, int keep_current)
+{
+	toolbar_state *state = dialog->state;
+	int index;
+	SendMessageW(dialog->available, LB_RESETCONTENT, 0, 0);
+	SendMessageW(dialog->current, LB_RESETCONTENT, 0, 0);
+	SendMessageW(dialog->available, LB_ADDSTRING, 0, (LPARAM)L"Separator");
+	SendMessageW(dialog->available, LB_SETITEMDATA, 0, (LPARAM)-1);
+	for (index = 0; index < dialog->offered_count; ++index) {
+		const offered_button *offered = &dialog->offered[index];
+		LRESULT row;
+		if (offered->button.fsStyle & BTNS_SEP || index_of_command(state, offered->button.idCommand) >= 0)
+			continue;
+		row = SendMessageW(dialog->available, LB_ADDSTRING, 0, (LPARAM)offered_text(dialog, offered));
+		SendMessageW(dialog->available, LB_SETITEMDATA, row, index);
+	}
+	for (index = 0; index < state->count; ++index) {
+		const toolbar_button *button = &state->buttons[index];
+		const WCHAR *text = button->style & BTNS_SEP ? L"Separator" : text_of(state, button);
+		SendMessageW(dialog->current, LB_ADDSTRING, 0, (LPARAM)(text ? text : L""));
+		SendMessageW(dialog->current, LB_SETITEMDATA, index, index);
+	}
+	SendMessageW(dialog->current, LB_ADDSTRING, 0, (LPARAM)L"");
+	SendMessageW(dialog->current, LB_SETITEMDATA, state->count, (LPARAM)-1);
+	SendMessageW(dialog->available, LB_SETCURSEL, 0, 0);
+	SendMessageW(dialog->current, LB_SETCURSEL, min(max(keep_current, 0), state->count), 0);
+}
+
+static void toolbar_changed(customize_state *dialog)
+{
+	notify_header(dialog->state, &(NMHDR){0}, TBN_TOOLBARCHANGE);
+}
+
+static BOOL may_insert_at(toolbar_state *state, int at)
+{
+	NMTOOLBARW question = {0};
+	question.iItem = at;
+	if (at < state->count) {
+		question.tbButton.iBitmap = state->buttons[at].bitmap;
+		question.tbButton.idCommand = state->buttons[at].command;
+		question.tbButton.fsState = state->buttons[at].state;
+		question.tbButton.fsStyle = state->buttons[at].style;
+		question.tbButton.dwData = state->buttons[at].data;
+	}
+	return notify_header(state, &question.hdr, TBN_QUERYINSERT) != 0;
+}
+
+static void customize_add(customize_state *dialog)
+{
+	toolbar_state *state = dialog->state;
+	const LRESULT chosen = SendMessageW(dialog->available, LB_GETCURSEL, 0, 0);
+	const LRESULT at = SendMessageW(dialog->current, LB_GETCURSEL, 0, 0);
+	TBBUTTON button = {0};
+	int saved_size, offered;
+	if (chosen == LB_ERR || at == LB_ERR)
+		return;
+	if (!may_insert_at(state, (int)at)) {
+		MessageBeep(MB_OK);
+		return;
+	}
+	offered = (int)SendMessageW(dialog->available, LB_GETITEMDATA, chosen, 0);
+	if (offered < 0) {
+		button.fsStyle = BTNS_SEP;
+	} else {
+		button = dialog->offered[offered].button;
+		button.fsState &= ~TBSTATE_HIDDEN;
+	}
+	/* The offered button is a whole TBBUTTON, whatever size the program gave its own. */
+	saved_size = state->struct_size;
+	state->struct_size = sizeof(TBBUTTON);
+	add_buttons(state, 1, (int)at, &button, TRUE);
+	state->struct_size = saved_size;
+	toolbar_changed(dialog);
+	fill_customize_lists(dialog, (int)at + 1);
+}
+
+static void customize_remove(customize_state *dialog)
+{
+	toolbar_state *state = dialog->state;
+	const LRESULT at = SendMessageW(dialog->current, LB_GETCURSEL, 0, 0);
+	NMTOOLBARW question = {0};
+	if (at == LB_ERR || at >= state->count)
+		return;
+	question.iItem = (int)at;
+	question.tbButton.iBitmap = state->buttons[at].bitmap;
+	question.tbButton.idCommand = state->buttons[at].command;
+	question.tbButton.fsState = state->buttons[at].state;
+	question.tbButton.fsStyle = state->buttons[at].style;
+	question.tbButton.dwData = state->buttons[at].data;
+	if (!notify_header(state, &question.hdr, TBN_QUERYDELETE)) {
+		MessageBeep(MB_OK);
+		return;
+	}
+	delete_button(state, (int)at);
+	toolbar_changed(dialog);
+	fill_customize_lists(dialog, (int)at);
+}
+
+static void customize_move(customize_state *dialog, int step)
+{
+	toolbar_state *state = dialog->state;
+	const LRESULT at = SendMessageW(dialog->current, LB_GETCURSEL, 0, 0);
+	if (at == LB_ERR || at >= state->count || at + step < 0 || at + step >= state->count)
+		return;
+	SendMessageW(state->window, TB_MOVEBUTTON, (WPARAM)at, (LPARAM)(at + step));
+	toolbar_changed(dialog);
+	fill_customize_lists(dialog, (int)at + step);
+}
+
+static void draw_customize_item(customize_state *dialog, const DRAWITEMSTRUCT *item)
+{
+	toolbar_state *state = dialog->state;
+	const BOOL selected = (item->itemState & ODS_SELECTED) != 0;
+	WCHAR text[RESTORE_INFO_TEXT] = {0};
+	RECT area = item->rcItem;
+	int image = -1, at = (int)item->itemData;
+	if (item->itemID == (UINT)-1)
+		return;
+	FillRect(item->hDC, &area, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+	if (item->CtlID == CUSTOMIZE_CURRENT && at >= 0 && at < state->count && !(state->buttons[at].style & BTNS_SEP))
+		resolve_image(state, &state->buttons[at], &image);
+	else if (item->CtlID == CUSTOMIZE_AVAILABLE && at >= 0 && at < dialog->offered_count)
+		image = dialog->offered[at].button.iBitmap;
+	if (image >= 0 && image != I_IMAGENONE && state->lists[min(HIWORD(image), IMAGE_LISTS - 1)])
+		ImageList_Draw(state->lists[min(HIWORD(image), IMAGE_LISTS - 1)], LOWORD(image), item->hDC, area.left + 2,
+			area.top + (area.bottom - area.top - state->bitmap_height) / 2, ILD_TRANSPARENT);
+	SendMessageW(item->hwndItem, LB_GETTEXT, item->itemID, (LPARAM)text);
+	area.left += state->bitmap_width + 8;
+	SetBkMode(item->hDC, TRANSPARENT);
+	SetTextColor(item->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+	DrawTextW(item->hDC, text, -1, &area, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+	if (item->itemState & ODS_FOCUS)
+		DrawFocusRect(item->hDC, &item->rcItem);
+}
+
+static HWND customize_control(HWND dialog, const WCHAR *kind, const WCHAR *text, DWORD style, int id, int x, int y, int width, int height)
+{
+	RECT area = {x, y, x + width, y + height};
+	HWND control;
+	MapDialogRect(dialog, &area);
+	control = CreateWindowExW(lstrcmpW(kind, L"LISTBOX") ? 0 : WS_EX_CLIENTEDGE, kind, text, WS_CHILD | WS_VISIBLE | style, area.left, area.top,
+		area.right - area.left, area.bottom - area.top, dialog, (HMENU)(INT_PTR)id, NULL, NULL);
+	SendMessageW(control, WM_SETFONT, SendMessageW(dialog, WM_GETFONT, 0, 0), FALSE);
+	return control;
+}
+
+static INT_PTR CALLBACK customize_procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+{
+	customize_state *dialog = (customize_state *)GetWindowLongPtrW(window, DWLP_USER);
+	switch (message) {
+	case WM_INITDIALOG: {
+		const DWORD lists = WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT;
+		dialog = (customize_state *)lparam;
+		SetWindowLongPtrW(window, DWLP_USER, (LONG_PTR)dialog);
+		customize_control(window, L"STATIC", L"A&vailable toolbar buttons:", 0, -1, 4, 5, 110, 9);
+		dialog->available = customize_control(window, L"LISTBOX", NULL, lists, CUSTOMIZE_AVAILABLE, 4, 16, 110, 110);
+		customize_control(window, L"BUTTON", L"&Add ->", WS_TABSTOP, CUSTOMIZE_ADD, 120, 42, 54, 14);
+		customize_control(window, L"BUTTON", L"<- &Remove", WS_TABSTOP, CUSTOMIZE_REMOVE, 120, 60, 54, 14);
+		customize_control(window, L"STATIC", L"&Toolbar buttons:", 0, -1, 180, 5, 110, 9);
+		dialog->current = customize_control(window, L"LISTBOX", NULL, lists, CUSTOMIZE_CURRENT, 180, 16, 110, 110);
+		customize_control(window, L"BUTTON", L"&Close", WS_TABSTOP | BS_DEFPUSHBUTTON, IDCANCEL, 296, 16, 54, 14);
+		customize_control(window, L"BUTTON", L"R&eset", WS_TABSTOP, CUSTOMIZE_RESET, 296, 34, 54, 14);
+		if (!dialog->hide_help)
+			customize_control(window, L"BUTTON", L"&Help", WS_TABSTOP, CUSTOMIZE_HELP, 296, 52, 54, 14);
+		customize_control(window, L"BUTTON", L"Move &Up", WS_TABSTOP, CUSTOMIZE_UP, 296, 94, 54, 14);
+		customize_control(window, L"BUTTON", L"Move &Down", WS_TABSTOP, CUSTOMIZE_DOWN, 296, 112, 54, 14);
+		fill_customize_lists(dialog, 0);
+		SetFocus(dialog->current);
+		return FALSE;
+	}
+	case WM_MEASUREITEM: {
+		MEASUREITEMSTRUCT *item = (MEASUREITEMSTRUCT *)lparam;
+		item->itemHeight = max(dialog ? dialog->state->bitmap_height + 4 : 20, 18);
+		return TRUE;
+	}
+	case WM_DRAWITEM:
+		if (dialog)
+			draw_customize_item(dialog, (const DRAWITEMSTRUCT *)lparam);
+		return TRUE;
+	case WM_COMMAND:
+		switch (LOWORD(wparam)) {
+		case IDCANCEL:
+		case IDOK:
+			EndDialog(window, 0);
+			return TRUE;
+		case CUSTOMIZE_ADD:
+			customize_add(dialog);
+			return TRUE;
+		case CUSTOMIZE_REMOVE:
+			customize_remove(dialog);
+			return TRUE;
+		case CUSTOMIZE_UP:
+			customize_move(dialog, -1);
+			return TRUE;
+		case CUSTOMIZE_DOWN:
+			customize_move(dialog, 1);
+			return TRUE;
+		case CUSTOMIZE_HELP:
+			notify_header(dialog->state, &(NMHDR){0}, TBN_CUSTHELP);
+			return TRUE;
+		case CUSTOMIZE_RESET: {
+			customize_notice notice = {0};
+			notice.hDlg = window;
+			if (notify_header(dialog->state, &notice.hdr, TBN_RESET) & TBNRF_ENDCUSTOMIZE) {
+				EndDialog(window, 0);
+				return TRUE;
+			}
+			gather_offered(dialog);
+			fill_customize_lists(dialog, 0);
+			return TRUE;
+		}
+		case CUSTOMIZE_AVAILABLE:
+			if (HIWORD(wparam) == LBN_DBLCLK)
+				customize_add(dialog);
+			return TRUE;
+		case CUSTOMIZE_CURRENT:
+			if (HIWORD(wparam) == LBN_DBLCLK)
+				customize_remove(dialog);
+			return TRUE;
+		}
+		break;
+	}
+	return FALSE;
+}
+
+static BOOL customize(toolbar_state *state)
+{
+	/* An empty template in the dialog font; the controls are made at WM_INITDIALOG. */
+	static const WCHAR title[] = L"Customize Toolbar", face[] = L"MS Shell Dlg";
+	DWORD template[32] = {0};
+	DLGTEMPLATE *head = (DLGTEMPLATE *)template;
+	WORD *at = (WORD *)(head + 1);
+	customize_state dialog = {0};
+	customize_notice notice = {0};
+	head->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_SETFONT | DS_CENTER;
+	head->cx = 354;
+	head->cy = 132;
+	*at++ = 0;
+	*at++ = 0;
+	memcpy(at, title, sizeof(title));
+	at += ARRAYSIZE(title);
+	*at++ = 8;
+	memcpy(at, face, sizeof(face));
+	dialog.state = state;
+	notify_header(state, &(NMHDR){0}, TBN_BEGINADJUST);
+	notice.hDlg = NULL;
+	dialog.hide_help = (notify_header(state, &notice.hdr, TBN_INITCUSTOMIZE) & TBNRF_HIDEHELP) != 0;
+	gather_offered(&dialog);
+	DialogBoxIndirectParamW(COMCTL32_hModule, head, state->parent, customize_procedure, (LPARAM)&dialog);
+	forget_offered(&dialog);
+	notify_header(state, &(NMHDR){0}, TBN_ENDADJUST);
+	return TRUE;
+}
+
 static LRESULT CALLBACK toolbar_procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	toolbar_state *state = state_of(window);
@@ -1962,7 +2308,7 @@ static LRESULT CALLBACK toolbar_procedure(HWND window, UINT message, WPARAM wpar
 			return FALSE;
 		return wparam ? save_buttons(state, (const TBSAVEPARAMSW *)lparam) : restore_buttons(state, (const TBSAVEPARAMSW *)lparam);
 	case TB_CUSTOMIZE:
-		return 0;
+		return customize(state);
 	case TB_SETUNICODEFORMAT: {
 		BOOL previous = state->unicode;
 		state->unicode = wparam != 0;

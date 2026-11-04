@@ -3371,6 +3371,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(cross_window_fixture${width} ALL DEPENDS ${cross_window_client})
                     add_test(NAME native_cross_window_x${width} COMMAND raven --run-process --execution=native --timeout-ms=30000 ${cross_window_client})
                     set_tests_properties(native_cross_window_x${width} PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(toolbar_customize_client ${CMAKE_CURRENT_BINARY_DIR}/toolbar-customize${width}.exe)
+                    add_custom_command(OUTPUT ${toolbar_customize_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${toolbar_customize_client} ${LOADER_SOURCES}/toolbar_customize_client.c -lcomctl32 -luser32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/toolbar_customize_client.c VERBATIM)
+                    add_custom_target(toolbar_customize_fixture${width} ALL DEPENDS ${toolbar_customize_client})
+                    add_test(NAME native_toolbar_customize_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${toolbar_customize_client})
+                    set_tests_properties(native_toolbar_customize_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     # mlang comes with the installer components, whose import library the client links against.
                     if(width EQUAL 64)
                         set(mlang_dir ${RAVEN_INSTALLER_COMPONENT_DIR})
