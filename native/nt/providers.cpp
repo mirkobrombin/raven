@@ -2218,10 +2218,17 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				});
 			});
 			const auto provider_key = program_libraries.contains(name) || late_controls ? "system32-" + name : name;
-			const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
-			const auto base = provider_base(modules, PEImage(bytes).image_size, name);
-			provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
-			provider->runtime_api = true;
+			// A later pass over the same names finds the fallback it staged before under the system directory's key.
+			if (const auto staged = modules.all().find(provider_key); staged != modules.all().end()) {
+				provider = staged->second.get();
+				if (!provider->runtime_api)
+					continue;
+			} else {
+				const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
+				const auto base = provider_base(modules, PEImage(bytes).image_size, name);
+				provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
+				provider->runtime_api = true;
+			}
 		}
 		if (!provider)
 			continue;
