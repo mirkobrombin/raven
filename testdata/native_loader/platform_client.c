@@ -648,6 +648,24 @@ int raven_entry(void)
 	compare = 1;
 	if (wait_on(&watched, &compare, sizeof watched, 10) || GetLastError() != ERROR_TIMEOUT) return 167;
 	wake_all(&watched);
+	/* A structure kept in a profile as hexadecimal digits and a checksum; a damaged value or a different size reads as a failure. */
+	WCHAR profile_path[MAX_PATH + 32];
+	DWORD profile_length = GetTempPathW(MAX_PATH, profile_path);
+	lstrcpyW(profile_path + profile_length, L"raven-struct.ini");
+	BYTE placed[10] = {0x80, 0x02, 0, 0, 0xe0, 0x01, 0, 0, 0x5a, 0}, read_back[10] = {0};
+	if (!WritePrivateProfileStructW(L"Window", L"Placement", placed, sizeof placed, profile_path) ||
+		!GetPrivateProfileStructW(L"Window", L"Placement", read_back, sizeof read_back, profile_path)) return 180;
+	for (unsigned at = 0; at < sizeof placed; ++at)
+		if (placed[at] != read_back[at]) return 180;
+	WCHAR stored[64];
+	if (GetPrivateProfileStringW(L"Window", L"Placement", L"", stored, 64, profile_path) != 2 * sizeof placed + 2 ||
+		lstrcmpW(stored, L"80020000E00100005A00BD")) return 181;
+	if (GetPrivateProfileStructW(L"Window", L"Placement", read_back, sizeof read_back - 1, profile_path)) return 182;
+	WritePrivateProfileStringW(L"Window", L"Placement", L"80020000E00100005A00BE", profile_path);
+	if (GetPrivateProfileStructW(L"Window", L"Placement", read_back, sizeof read_back, profile_path)) return 183;
+	if (!WritePrivateProfileStructW(L"Window", L"Placement", NULL, 0, profile_path) ||
+		GetPrivateProfileStringW(L"Window", L"Placement", L"gone", stored, 64, profile_path) != 4) return 184;
+	DeleteFileW(profile_path);
 	/* A descriptor naming the local administrator account and a raw access mask, as installers write for their shared folders. */
 	PSECURITY_DESCRIPTOR shared_folder = NULL;
 	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;OI;GA;;;LS)(A;OI;GA;;;BA)(A;OI;GA;;;LA)(A;OI;GR;;;AU)(A;OI;0x00100000;;;BG)",

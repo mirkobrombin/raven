@@ -43,6 +43,14 @@ int raven_entry(void)
 	SetBkColor(dc, RGB(10, 20, 30));
 	if (!ExtTextOutW(dc, 0, 0, ETO_OPAQUE, &cell, L"", 0, NULL) || GetPixel(dc, 5, 5) != RGB(10, 20, 30))
 		return 10;
+	/* The stretching mode is the DC's own, and SaveDC keeps it. */
+	if (GetStretchBltMode(dc) != BLACKONWHITE || SetStretchBltMode(dc, HALFTONE) != BLACKONWHITE || GetStretchBltMode(dc) != HALFTONE)
+		return 13;
+	saved = SaveDC(dc);
+	SetStretchBltMode(dc, COLORONCOLOR);
+	SetLastError(0);
+	if (!RestoreDC(dc, saved) || GetStretchBltMode(dc) != HALFTONE || SetStretchBltMode(dc, 9) || GetLastError() != ERROR_INVALID_PARAMETER)
+		return 14;
 	if (!DeleteDC(dc))
 		return 11;
 	SetLastError(0);

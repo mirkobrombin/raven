@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <new>
+#include <utility>
 
 namespace raven {
 
@@ -156,7 +157,7 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			state.origin_x = dc.origin_x; state.origin_y = dc.origin_y; state.position_x = dc.position_x; state.position_y = dc.position_y;
 			state.brush_org_x = dc.brush_org_x; state.brush_org_y = dc.brush_org_y; state.window_org_x = dc.window_org_x;
 			state.window_org_y = dc.window_org_y; state.viewport_org_x = dc.viewport_org_x; state.viewport_org_y = dc.viewport_org_y;
-			state.graphics_mode = dc.graphics_mode; state.world = dc.world;
+			state.graphics_mode = dc.graphics_mode; state.stretch_mode = dc.stretch_mode; state.world = dc.world;
 			dc.saved.push_back(std::move(state));
 			call.ret(dc.saved.size());
 		});
@@ -181,7 +182,7 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			dc.brush_org_x = state.brush_org_x; dc.brush_org_y = state.brush_org_y; dc.window_org_x = state.window_org_x;
 			dc.window_org_y = state.window_org_y; dc.viewport_org_x = state.viewport_org_x; dc.viewport_org_y = state.viewport_org_y;
 			dc.user_dx = state.viewport_org_x - state.window_org_x; dc.user_dy = state.viewport_org_y - state.window_org_y;
-			dc.graphics_mode = state.graphics_mode; dc.world = state.world;
+			dc.graphics_mode = state.graphics_mode; dc.stretch_mode = state.stretch_mode; dc.world = state.world;
 			call.ret(1);
 		});
 	});
@@ -315,11 +316,18 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			call.ret(1);
 		});
 	});
+	// BLACKONWHITE, WHITEONBLACK, COLORONCOLOR or HALFTONE; the previous mode comes back.
 	registry.add("SetStretchBltMode", 2, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
-			require_dc(call, 0);
-			call.ret(1);
+			auto &dc = require_dc(call, 0);
+			const uint32_t mode = call.u32(1);
+			if (mode < 1 || mode > 4)
+				throw uint32_t(87);
+			call.ret(std::exchange(dc.stretch_mode, mode));
 		});
+	});
+	registry.add("GetStretchBltMode", 1, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] { call.ret(require_dc(call, 0).stretch_mode); });
 	});
 	registry.add("SetBrushOrgEx", 4, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {

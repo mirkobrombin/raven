@@ -322,6 +322,82 @@ bool NativeProfile::execute(std::string_view name, const std::vector<uint64_t> &
 		}
 		return true;
 	}
+	// A structure as a value: two hexadecimal digits a byte, then two more for the sum of the bytes, which reading checks.
+	if (name == "GetPrivateProfileStructW" || name == "WritePrivateProfileStructW") {
+		result = 0;
+		try {
+			const auto section = text(args[0]), key = text(args[1]), file_name = text(args[4]);
+			const auto size = uint32_t(args[3]);
+			const auto path = file_name ? locate(*file_name) : std::nullopt;
+			if (!section || !path || (name == "GetPrivateProfileStructW" && (!key || !args[2]))) {
+				environment.set_last_error(87);
+				return true;
+			}
+			if (name == "WritePrivateProfileStructW") {
+				std::optional<std::u16string> value;
+				if (args[2]) {
+					const auto bytes = process.read_memory(args[2], size);
+					static constexpr char16_t digits[] = u"0123456789ABCDEF";
+					value.emplace();
+					uint8_t sum = 0;
+					for (const auto byte : bytes) {
+						value->push_back(digits[byte >> 4]);
+						value->push_back(digits[byte & 15]);
+						sum = uint8_t(sum + byte);
+					}
+					value->push_back(digits[sum >> 4]);
+					value->push_back(digits[sum & 15]);
+				}
+				if (!std::filesystem::exists(path->parent_path()))
+					environment.set_last_error(3);
+				else if (write_value(*path, *section, key ? &*key : nullptr, value ? &*value : nullptr))
+					result = 1;
+				else
+					environment.set_last_error(5);
+				return true;
+			}
+			const auto value = lookup(*path, *section, *key);
+			if (!value) {
+				environment.set_last_error(2);
+				return true;
+			}
+			if (value->size() != size_t(size) * 2 + 2) {
+				environment.set_last_error(24);
+				return true;
+			}
+			const auto nibble = [](char16_t c) -> int {
+				return c >= u'0' && c <= u'9' ? c - u'0' : c >= u'A' && c <= u'F' ? c - u'A' + 10 : c >= u'a' && c <= u'f' ? c - u'a' + 10 : -1;
+			};
+			std::vector<uint8_t> bytes;
+			uint8_t sum = 0;
+			for (size_t at = 0; at + 1 < value->size(); at += 2) {
+				const int high = nibble((*value)[at]), low = nibble((*value)[at + 1]);
+				if (high < 0 || low < 0) {
+					environment.set_last_error(13);
+					return true;
+				}
+				bytes.push_back(uint8_t(high << 4 | low));
+			}
+			const uint8_t stored = bytes.back();
+			bytes.pop_back();
+			for (const auto byte : bytes)
+				sum = uint8_t(sum + byte);
+			if (sum != stored) {
+				environment.set_last_error(13);
+				return true;
+			}
+			if (size)
+				process.write_memory(args[2], bytes);
+			result = 1;
+		} catch (const std::runtime_error &failure) {
+			const std::string_view message = failure.what();
+			if (message.find("readable") == message.npos && message.find("writable") == message.npos)
+				throw;
+			environment.set_last_error(998);
+			result = 0;
+		}
+		return true;
+	}
 	const bool integer = name == "GetPrivateProfileIntW";
 	if (!integer && name != "GetPrivateProfileStringW")
 		return false;
@@ -387,9 +463,9 @@ bool NativeProfile::execute(std::string_view name, const std::vector<uint64_t> &
 bool NativeProfile::dispatch(std::string_view name)
 {
 	const uint32_t count = name == "GetPrivateProfileSectionNamesW" ? 3 : name == "GetPrivateProfileIntW" || name == "WritePrivateProfileStringW" ||
-		name == "GetPrivateProfileSectionW" ? 4 : 6;
+		name == "GetPrivateProfileSectionW" ? 4 : name == "GetPrivateProfileStructW" || name == "WritePrivateProfileStructW" ? 5 : 6;
 	if (name != "GetPrivateProfileSectionNamesW" && name != "GetPrivateProfileIntW" && name != "GetPrivateProfileStringW" && name != "WritePrivateProfileStringW" &&
-		name != "GetPrivateProfileSectionW")
+		name != "GetPrivateProfileSectionW" && name != "GetPrivateProfileStructW" && name != "WritePrivateProfileStructW")
 		return false;
 	uint64_t result = 0;
 	execute(name, process.api_arguments(count), result);
@@ -422,6 +498,12 @@ void register_profile_api(ApiRegistry &registry, NativeProfile &profile)
 		profile.execute("WritePrivateProfileStringW", {call[0], call[1], call[2], call[3]}, result);
 		call.ret(result);
 	});
+	for (const char *name : {"GetPrivateProfileStructW", "WritePrivateProfileStructW"})
+		registry.add(name, 5, [&profile, name](ApiCall &call) {
+			uint64_t result = 0;
+			profile.execute(name, {call[0], call[1], call[2], call[3], call[4]}, result);
+			call.ret(result);
+		});
 	registry.add("GetPrivateProfileStringW", 6, [&profile](ApiCall &call) {
 		uint64_t result = 0;
 		profile.execute("GetPrivateProfileStringW", {call[0], call[1], call[2], call[3], call[4], call[5]}, result);
