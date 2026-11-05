@@ -117,6 +117,31 @@ int raven_entry(void)
 		if (WsCreateServiceProxy(WS_CHANNEL_TYPE_REQUEST, WS_HTTP_CHANNEL_BINDING, NULL, NULL, 0, NULL, 0, &proxy, error) != E_NOTIMPL || proxy) return 20;
 		WsFreeServiceProxy(NULL);
 	}
+	{
+		/* Node by node, as a program walks a document itself: the beginning, the element with its attribute, its text, its end. */
+		static const char nodes[] = "<a x='1'>hi</a>";
+		WS_XML_READER_BUFFER_INPUT node_input = {{WS_XML_READER_INPUT_TYPE_BUFFER}, (void *)nodes, sizeof(nodes) - 1};
+		const WS_XML_NODE *node;
+		const WS_XML_ELEMENT_NODE *element;
+		const WS_XML_UTF8_TEXT *text;
+		ULONG charset = 0;
+		if (WsSetInput(reader, &encoding.encoding, &node_input.input, NULL, 0, error) || WsGetReaderNode(reader, &node, error) ||
+			node->nodeType != WS_XML_NODE_TYPE_BOF) return 21;
+		if (WsReadNode(reader, error) || WsGetReaderNode(reader, &node, error) || node->nodeType != WS_XML_NODE_TYPE_ELEMENT) return 22;
+		element = (const WS_XML_ELEMENT_NODE *)node;
+		if (element->localName->length != 1 || element->localName->bytes[0] != 'a' || element->attributeCount != 1 ||
+			element->attributes[0]->localName->bytes[0] != 'x' || element->isEmpty) return 23;
+		text = (const WS_XML_UTF8_TEXT *)element->attributes[0]->value;
+		if (text->text.textType != WS_XML_TEXT_TYPE_UTF8 || text->value.length != 1 || text->value.bytes[0] != '1') return 24;
+		if (WsReadNode(reader, error) || WsGetReaderNode(reader, &node, error) || node->nodeType != WS_XML_NODE_TYPE_TEXT) return 25;
+		text = (const WS_XML_UTF8_TEXT *)((const WS_XML_TEXT_NODE *)node)->text;
+		if (text->value.length != 2 || text->value.bytes[0] != 'h') return 26;
+		if (WsReadNode(reader, error) || WsGetReaderNode(reader, &node, error) || node->nodeType != WS_XML_NODE_TYPE_END_ELEMENT) return 27;
+		if (WsReadNode(reader, error) || WsGetReaderNode(reader, &node, error) || node->nodeType != WS_XML_NODE_TYPE_EOF ||
+			WsReadNode(reader, error) || WsGetReaderNode(reader, &node, error) || node->nodeType != WS_XML_NODE_TYPE_EOF) return 28;
+		if (WsGetReaderProperty(reader, WS_XML_READER_PROPERTY_CHARSET, &charset, sizeof(charset), error) || charset != WS_CHARSET_UTF8)
+			return 29;
+	}
 	WsFreeReader(reader);
 	WsFreeHeap(heap);
 	WsFreeError(error);

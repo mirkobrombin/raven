@@ -214,6 +214,19 @@ struct binding {
 	struct text prefix, uri;
 };
 
+/* The node a program is handed by WsGetReaderNode, rebuilt from the list each time it asks: its names, text and attributes point into
+ * the reader's data. */
+struct view {
+	WS_XML_NODE plain;
+	WS_XML_ELEMENT_NODE element;
+	WS_XML_TEXT_NODE text_node;
+	WS_XML_UTF8_TEXT text;
+	WS_XML_STRING names[3];
+	WS_XML_ATTRIBUTE *attributes, **attribute_list;
+	WS_XML_STRING *attribute_names;
+	WS_XML_UTF8_TEXT *attribute_values;
+};
+
 struct _WS_XML_READER {
 	char *data, *decoded;
 	ULONG size, used;
@@ -223,7 +236,24 @@ struct _WS_XML_READER {
 	ULONG attribute_count;
 	struct binding *bindings;
 	ULONG binding_count;
+	/* Before the first node is read the reader stands at the beginning of the document. */
+	BOOL at_beginning;
+	WS_CHARSET charset;
+	struct view view;
 };
+
+static void view_clear(struct view *view)
+{
+	HANDLE heap = GetProcessHeap();
+	HeapFree(heap, 0, view->attributes);
+	HeapFree(heap, 0, view->attribute_list);
+	HeapFree(heap, 0, view->attribute_names);
+	HeapFree(heap, 0, view->attribute_values);
+	view->attributes = NULL;
+	view->attribute_list = NULL;
+	view->attribute_names = NULL;
+	view->attribute_values = NULL;
+}
 
 static const char xml_namespace[] = "http://www.w3.org/XML/1998/namespace";
 static const char instance_namespace[] = "http://www.w3.org/2001/XMLSchema-instance";
@@ -241,6 +271,9 @@ static void reader_clear(WS_XML_READER *reader)
 	reader->attributes = NULL;
 	reader->bindings = NULL;
 	reader->size = reader->used = reader->count = reader->cursor = reader->attribute_count = reader->binding_count = 0;
+	reader->at_beginning = FALSE;
+	reader->charset = WS_CHARSET_UTF8;
+	view_clear(&reader->view);
 }
 
 EXPORT HRESULT WINAPI WsCreateReader(const WS_XML_READER_PROPERTY *properties, ULONG count, WS_XML_READER **out, WS_ERROR *error)
@@ -690,7 +723,10 @@ EXPORT HRESULT WINAPI WsSetInput(WS_XML_READER *reader, const WS_XML_READER_ENCO
 	}
 	if (!input) {
 		reader->data = HeapAlloc(GetProcessHeap(), 0, 1);
-		return reader->data ? parse(reader) : E_OUTOFMEMORY;
+		if (!reader->data)
+			return E_OUTOFMEMORY;
+		reader->at_beginning = TRUE;
+		return parse(reader);
 	}
 	if (input->inputType != WS_XML_READER_INPUT_TYPE_BUFFER)
 		return failed(error, E_NOTIMPL, L"Only buffers can be read.");
@@ -720,6 +756,8 @@ EXPORT HRESULT WINAPI WsSetInput(WS_XML_READER *reader, const WS_XML_READER_ENCO
 		reader_clear(reader);
 		return failed(error, result, L"The input data was not in the expected format.");
 	}
+	reader->charset = charset == WS_CHARSET_AUTO ? WS_CHARSET_UTF8 : charset;
+	reader->at_beginning = TRUE;
 	return S_OK;
 }
 
@@ -728,8 +766,10 @@ EXPORT HRESULT WINAPI WsFillReader(WS_XML_READER *reader, ULONG minimum, const W
 	return reader ? S_OK : E_INVALIDARG;
 }
 
+/* Every reading function moves past the beginning of the document. */
 static struct node *current(WS_XML_READER *reader)
 {
+	reader->at_beginning = FALSE;
 	return &reader->nodes[reader->cursor];
 }
 
@@ -1589,8 +1629,126 @@ EXPORT HRESULT WINAPI WsGetFaultErrorDetail(WS_ERROR *error, const WS_FAULT_DETA
 	return error && description && value ? unavailable(NULL) : E_INVALIDARG;
 }
 
-EXPORT HRESULT WINAPI WsReadNode(WS_XML_READER *reader, WS_ERROR *error) { NO_OBJECT(reader); }
-EXPORT HRESULT WINAPI WsGetReaderNode(WS_XML_READER *reader, const WS_XML_NODE **node, WS_ERROR *error) { NO_OBJECT(reader && node); }
+/* The next node: the first one from the beginning of the document, the one after the current one otherwise. The end of the document
+ * stays where it is. */
+EXPORT HRESULT WINAPI WsReadNode(WS_XML_READER *reader, WS_ERROR *error)
+{
+	if (!reader || !reader->nodes)
+		return E_INVALIDARG;
+	if (reader->at_beginning) {
+		reader->at_beginning = FALSE;
+		return S_OK;
+	}
+	if (reader->nodes[reader->cursor].kind != NODE_EOF)
+		++reader->cursor;
+	return S_OK;
+}
+
+static WS_XML_STRING *view_string(WS_XML_STRING *string, struct text text)
+{
+	string->length = text.length;
+	string->bytes = (BYTE *)text.bytes;
+	string->dictionary = NULL;
+	string->id = 0;
+	return string;
+}
+
+static void view_text(WS_XML_UTF8_TEXT *text, struct text value)
+{
+	text->text.textType = WS_XML_TEXT_TYPE_UTF8;
+	view_string(&text->value, value);
+}
+
+EXPORT HRESULT WINAPI WsGetReaderNode(WS_XML_READER *reader, const WS_XML_NODE **out, WS_ERROR *error)
+{
+	if (!reader || !out || !reader->nodes)
+		return E_INVALIDARG;
+	struct view *view = &reader->view;
+	view_clear(view);
+	if (reader->at_beginning) {
+		view->plain.nodeType = WS_XML_NODE_TYPE_BOF;
+		*out = &view->plain;
+		return S_OK;
+	}
+	const struct node *node = &reader->nodes[reader->cursor];
+	if (node->kind == NODE_TEXT) {
+		view_text(&view->text, node->value);
+		view->text_node.node.nodeType = WS_XML_NODE_TYPE_TEXT;
+		view->text_node.text = &view->text.text;
+		*out = &view->text_node.node;
+		return S_OK;
+	}
+	if (node->kind != NODE_START) {
+		view->plain.nodeType = node->kind == NODE_END ? WS_XML_NODE_TYPE_END_ELEMENT : WS_XML_NODE_TYPE_EOF;
+		*out = &view->plain;
+		return S_OK;
+	}
+	WS_XML_ELEMENT_NODE *element = &view->element;
+	element->node.nodeType = WS_XML_NODE_TYPE_ELEMENT;
+	element->prefix = view_string(&view->names[0], node->prefix);
+	element->localName = view_string(&view->names[1], node->local);
+	element->ns = view_string(&view->names[2], node->ns);
+	element->attributeCount = node->attribute_count;
+	element->attributes = NULL;
+	element->isEmpty = node->end == reader->cursor + 1;
+	if (node->attribute_count) {
+		HANDLE heap = GetProcessHeap();
+		const ULONG count = node->attribute_count;
+		view->attributes = HeapAlloc(heap, HEAP_ZERO_MEMORY, count * sizeof(*view->attributes));
+		view->attribute_list = HeapAlloc(heap, 0, count * sizeof(*view->attribute_list));
+		view->attribute_names = HeapAlloc(heap, 0, 3 * count * sizeof(*view->attribute_names));
+		view->attribute_values = HeapAlloc(heap, 0, count * sizeof(*view->attribute_values));
+		if (!view->attributes || !view->attribute_list || !view->attribute_names || !view->attribute_values) {
+			view_clear(view);
+			return E_OUTOFMEMORY;
+		}
+		for (ULONG index = 0; index < count; ++index) {
+			const struct attribute *source = &reader->attributes[node->first_attribute + index];
+			WS_XML_ATTRIBUTE *attribute = &view->attributes[index];
+			attribute->prefix = view_string(&view->attribute_names[3 * index], source->prefix);
+			attribute->localName = view_string(&view->attribute_names[3 * index + 1], source->local);
+			attribute->ns = view_string(&view->attribute_names[3 * index + 2], source->ns);
+			view_text(&view->attribute_values[index], source->value);
+			attribute->value = &view->attribute_values[index].text;
+			view->attribute_list[index] = attribute;
+		}
+		element->attributes = view->attribute_list;
+	}
+	*out = &element->node;
+	return S_OK;
+}
+
+/* The limits are the documented defaults, since a reader here takes its whole document at once and enforces none of them. */
+EXPORT HRESULT WINAPI WsGetReaderProperty(WS_XML_READER *reader, WS_XML_READER_PROPERTY_ID id, void *value, ULONG size, WS_ERROR *error)
+{
+	if (!reader || !value)
+		return E_INVALIDARG;
+	ULONG number;
+	switch (id) {
+	case WS_XML_READER_PROPERTY_MAX_DEPTH: number = 32; break;
+	case WS_XML_READER_PROPERTY_MAX_ATTRIBUTES: number = 128; break;
+	case WS_XML_READER_PROPERTY_MAX_NAMESPACES: number = 32; break;
+	case WS_XML_READER_PROPERTY_UTF8_TRIM_SIZE: number = 0; break;
+	case WS_XML_READER_PROPERTY_STREAM_BUFFER_SIZE: number = 16384; break;
+	case WS_XML_READER_PROPERTY_ALLOW_FRAGMENT:
+	case WS_XML_READER_PROPERTY_ALLOW_INVALID_CHARACTER_REFERENCES:
+	case WS_XML_READER_PROPERTY_IN_ATTRIBUTE: number = FALSE; break;
+	case WS_XML_READER_PROPERTY_READ_DECLARATION: number = TRUE; break;
+	case WS_XML_READER_PROPERTY_CHARSET: number = reader->charset; break;
+	case WS_XML_READER_PROPERTY_ROW:
+	case WS_XML_READER_PROPERTY_COLUMN:
+		if (size != sizeof(ULONGLONG))
+			return E_INVALIDARG;
+		*(ULONGLONG *)value = 0;
+		return S_OK;
+	default:
+		return failed(error, E_INVALIDARG, L"The reader has no such property.");
+	}
+	if (size != sizeof(ULONG))
+		return E_INVALIDARG;
+	*(ULONG *)value = number;
+	return S_OK;
+}
 EXPORT HRESULT WINAPI WsReadChars(WS_XML_READER *reader, WCHAR *chars, ULONG count, ULONG *done, WS_ERROR *error) { NO_OBJECT(reader); }
 EXPORT HRESULT WINAPI WsReadBytes(WS_XML_READER *reader, void *bytes, ULONG count, ULONG *done, WS_ERROR *error) { NO_OBJECT(reader); }
 EXPORT HRESULT WINAPI WsFindAttribute(WS_XML_READER *reader, const WS_XML_STRING *local, const WS_XML_STRING *ns, WINBOOL required, ULONG *index,
