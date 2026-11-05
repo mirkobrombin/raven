@@ -151,7 +151,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"{6D18AD12-BDE3-4393-B311-099C346E6DF9}", u"raven-bits.dll"}, {u"{03CA98D6-FF5D-49B8-ABC6-03DD84127020}", u"raven-bits.dll"},
 		{u"{659CDEA7-489E-11D9-A9CD-000D56965251}", u"raven-bits.dll"}, {u"{4590F811-1D3A-11D0-891F-00AA004B2E24}", u"raven-wmi.dll"},
 		{u"{CF4CC405-E2C5-4DDD-B3CE-5E7582D8C9FA}", u"raven-wmi.dll"}, {u"{8856F961-340A-11D0-A96B-00C04FD705A2}", u"raven-ieframe.dll"},
-		{u"{B54F3741-5B07-11CF-A4B0-00AA004A55E8}", u"vbscript.dll"}, {u"{3F4DACA4-160D-11D2-A8E9-00104B365C9F}", u"vbscript.dll"}};
+		{u"{B54F3741-5B07-11CF-A4B0-00AA004A55E8}", u"vbscript.dll"}, {u"{3F4DACA4-160D-11D2-A8E9-00104B365C9F}", u"vbscript.dll"},
+		{u"{EE09B103-97E0-11CF-978F-00A02463E06F}", u"scrrun.dll"}, {u"{0D43FE01-F093-11CF-8940-00A0C9054228}", u"scrrun.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;
@@ -200,6 +201,7 @@ void NativeRegistry::register_runtime_classes()
 	// Scripts create the scheduler, programs the MSXML 6.0 classes and script hosts the VBScript engine, by name.
 	static constexpr std::pair<const char16_t *, const char16_t *> names[] = {{u"Schedule.Service", u"{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}"},
 		{u"VBScript", u"{B54F3741-5B07-11CF-A4B0-00AA004A55E8}"}, {u"VBScript.RegExp", u"{3F4DACA4-160D-11D2-A8E9-00104B365C9F}"},
+		{u"Scripting.Dictionary", u"{EE09B103-97E0-11CF-978F-00A02463E06F}"}, {u"Scripting.FileSystemObject", u"{0D43FE01-F093-11CF-8940-00A0C9054228}"},
 		{u"Msxml2.DOMDocument.6.0", u"{88D96A05-F192-11D4-A65F-0040963251E5}"}, {u"Msxml2.FreeThreadedDOMDocument.6.0", u"{88D96A06-F192-11D4-A65F-0040963251E5}"},
 		{u"Msxml2.XMLSchemaCache.6.0", u"{88D96A07-F192-11D4-A65F-0040963251E5}"}, {u"Msxml2.XSLTemplate.6.0", u"{88D96A08-F192-11D4-A65F-0040963251E5}"},
 		{u"Msxml2.XMLHTTP.6.0", u"{88D96A0A-F192-11D4-A65F-0040963251E5}"}, {u"Msxml2.ServerXMLHTTP.6.0", u"{88D96A0B-F192-11D4-A65F-0040963251E5}"},

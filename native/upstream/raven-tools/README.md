@@ -2,7 +2,7 @@
 
 The programs a Windows command prompt has beside `cmd.exe`, one program each as Windows has them: `find`, `findstr`, `more` (a
 `.com`, as Windows names it), `sort`, `where`, `xcopy`, `attrib`, `timeout`, `choice`, `whoami`, `hostname`, `tasklist`, `taskkill`,
-`reg`, `rundll32` and `regsvr32`. CMake builds each with MinGW for both widths, on the public Windows headers and without a C runtime; Raven copies them into
+`reg`, `rundll32`, `regsvr32`, and the script hosts `cscript` and `wscript`. CMake builds each with MinGW for both widths, on the public Windows headers and without a C runtime; Raven copies them into
 every prefix's `System32` and `SysWOW64`.
 
 They are Raven code written from Microsoft's public description of each tool and from how they behave; no Windows code is used or
@@ -30,3 +30,8 @@ What each does:
 - `regsvr32`: `/u /s /c /n /i[:line]`, with the documented exit codes;
 - `reg`: `QUERY` (`/V /VE /S /F /K /D /C /E /T /SE`), `ADD` (`/V /VE /T /S /D /F`), `DELETE` (`/V /VE /VA /F`), `COPY`, `EXPORT` and
   `IMPORT` of `.reg` files, and `/reg:32` and `/reg:64`.
+- `cscript` and `wscript` (one source, `wsh.c`): a script file run in the engine of its language (`.vbs` VBScript, `.js` JScript, or
+  `//E:`), made through COM, with the `WScript` object (`Echo`, `Quit`, `Sleep`, `CreateObject`, `Arguments` with `Named` and
+  `Unnamed`, the standard streams through the scripting runtime, the script's and the host's names) and the `//B //I //T: //Nologo`
+  options; errors are reported as `script(line, column) source: description`. `wscript` shows message boxes. `.wsf` jobs are not
+  run yet.
