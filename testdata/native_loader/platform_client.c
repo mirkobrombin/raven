@@ -241,6 +241,55 @@ static int virtual_package_files(void)
 	return result;
 }
 
+/* What a database server asks of the system as it starts: its service name, the processors and memory of each node, the working set and
+ * the heaps it makes, the impersonation its threads take. */
+static int server_natives(void)
+{
+	typedef DWORD (WINAPI *make_spn)(const WCHAR *, const WCHAR *, const WCHAR *, USHORT, const WCHAR *, DWORD *, WCHAR *);
+	make_spn spn = (make_spn)GetProcAddress(LoadLibraryW(L"ntdsapi.dll"), "DsMakeSpnW");
+	WCHAR name[64];
+	DWORD length = 64;
+	if (!spn || spn(L"MSOLAPSvc.3", L"host.example", NULL, 2383, NULL, &length, name) || lstrcmpW(name, L"MSOLAPSvc.3/host.example:2383") ||
+		length != 30) return 270;
+	length = 64;
+	if (spn(L"http", L"service", L"node", 0, NULL, &length, name) || lstrcmpW(name, L"http/node/service")) return 271;
+	length = 4;
+	if (spn(L"http", L"service", L"node", 0, NULL, &length, name) != ERROR_BUFFER_OVERFLOW || length != 18) return 272;
+	PROCESSOR_NUMBER processor = {0, 0, 0};
+	USHORT node = 7;
+	BOOL (WINAPI *node_of)(PPROCESSOR_NUMBER, PUSHORT) = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetNumaProcessorNodeEx");
+	if (!node_of || !node_of(&processor, &node) || node) return 273;
+	processor.Group = 1;
+	if (node_of(&processor, &node) || node != 0xffff) return 274;
+	void *(WINAPI *numa_alloc)(HANDLE, void *, SIZE_T, DWORD, DWORD, DWORD) = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+		"VirtualAllocExNuma");
+	BYTE *block = numa_alloc ? numa_alloc(GetCurrentProcess(), NULL, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE, 0) : NULL;
+	if (!block) return 275;
+	block[65535] = 1;
+	VirtualFree(block, 0, MEM_RELEASE);
+	SIZE_T minimum = 0, maximum = 0;
+	if (!GetProcessWorkingSetSize(GetCurrentProcess(), &minimum, &maximum) || !minimum || maximum < minimum) return 276;
+	/* HEAP_GROWABLE is the RTL's own option; kernel32 takes it and grows the heap as one without a maximum does. */
+	HANDLE heap = HeapCreate(HEAP_GROWABLE, 1 << 20, 0);
+	void *large = heap ? HeapAlloc(heap, 0, 4 << 20) : NULL;
+	if (!large) return 277;
+	HeapDestroy(heap);
+	SLIST_HEADER list;
+	SLIST_ENTRY first, second;
+	PSLIST_ENTRY (WINAPI *head_of)(const SLIST_HEADER *) = (void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlFirstEntrySList");
+	InitializeSListHead(&list);
+	if (!head_of || head_of(&list)) return 278;
+	InterlockedPushEntrySList(&list, &first);
+	InterlockedPushEntrySList(&list, &second);
+	if (head_of(&list) != &second || QueryDepthSList(&list) != 2) return 279;
+	BOOL (WINAPI *anonymous)(HANDLE) = (void *)GetProcAddress(GetModuleHandleW(L"advapi32.dll"), "ImpersonateAnonymousToken");
+	HANDLE token = NULL;
+	if (!anonymous || !anonymous(GetCurrentThread()) || !OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) return 280;
+	CloseHandle(token);
+	if (!RevertToSelf() || OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) || GetLastError() != ERROR_NO_TOKEN) return 281;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	{
@@ -648,6 +697,7 @@ int raven_entry(void)
 	if (!remove_spec || remove_spec(spec, MAX_PATH) || lstrcmpW(spec, L"C:\\a") || remove_spec(spec, MAX_PATH) || lstrcmpW(spec, L"C:\\") ||
 		remove_spec(spec, MAX_PATH) != S_FALSE || lstrcmpW(spec, L"C:\\")) return 179;
 	if ((key_size = click_to_run_natives(key))) return 180 + (int)key_size;
+	if ((key_size = server_natives())) return (int)key_size;
 	RegDeleteKeyW(key, L"Inner");
 	RegCloseKey(key);
 	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\RavenKeyInformation");

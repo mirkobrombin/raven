@@ -1568,6 +1568,24 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			call.store<uint32_t>(call[0], 0);
 		call.ret(1);
 	});
+	// Node 0 for every processor the machine has in group 0; any other processor has no node.
+	const auto processors = [] { return uint32_t(std::max(1L, std::min(64L, ::sysconf(_SC_NPROCESSORS_ONLN)))); };
+	registry.add("GetNumaProcessorNode", 2, [processors](ApiCall &call) {
+		const bool known = (call[0] & 0xff) < processors();
+		call.store<uint8_t>(call[1], known ? 0 : 0xff);
+		if (known)
+			call.ret(1);
+		else
+			call.fail(87);
+	});
+	registry.add("GetNumaProcessorNodeEx", 2, [processors](ApiCall &call) {
+		const bool known = call[0] && call.load<uint16_t>(call[0]) == 0 && call.load<uint8_t>(call[0] + 2) < processors();
+		call.store<uint16_t>(call[1], known ? 0 : 0xffff);
+		if (known)
+			call.ret(1);
+		else
+			call.fail(87);
+	});
 	// Private namespaces: a boundary describes who shares one, and the objects a program names inside it behave as named objects do.
 	struct PrivateNamespace : KernelObject {};
 	registry.add("CreateBoundaryDescriptorW", 2, [&context](ApiCall &call) { call.ret(context.allocator.allocate(64, true)); });

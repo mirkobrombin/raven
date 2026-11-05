@@ -8,6 +8,7 @@ typedef LONG (WINAPI *query_process)(HANDLE, ULONG, void *, ULONG, ULONG *);
 typedef LONG (WINAPI *set_thread)(HANDLE, ULONG, void *, ULONG);
 typedef LONG (WINAPI *open_thread_token)(HANDLE, DWORD, BOOL, HANDLE *);
 typedef LONG (WINAPI *open_thread_token_ex)(HANDLE, DWORD, BOOL, ULONG, HANDLE *);
+typedef LONG (WINAPI *compare_tokens)(HANDLE, HANDLE, BOOLEAN *);
 
 struct basic_information {
 	LONG exit_status;
@@ -399,6 +400,10 @@ int raven_entry(void)
 	HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
 	open_token open = (open_token)GetProcAddress(ntdll, "NtOpenProcessToken");
 	open_token_ex open_ex = (open_token_ex)GetProcAddress(ntdll, "NtOpenProcessTokenEx");
+	compare_tokens compare = (compare_tokens)GetProcAddress(ntdll, "NtCompareTokens");
+	BOOLEAN equal = FALSE;
+	DWORD code = 0;
+	HANDLE blind = NULL;
 	HANDLE first = NULL, second = NULL, copy = NULL, limited, sentinel = (HANDLE)(ULONG_PTR)0x12345678;
 	DWORD flags, type, size, previous;
 	void *readonly;
@@ -452,6 +457,17 @@ int raven_entry(void)
 		return result;
 	if (integrity(first) != 2222 || integrity(copy) != 4096 || !set_integrity(copy, 8192) || integrity(first) != 2222)
 		return 10;
+	if (!compare || compare(first, second, &equal) || !equal || compare(first, copy, &equal) || equal ||
+		(ULONG)compare(first, (HANDLE)(ULONG_PTR)0x12345678, &equal) != 0xc0000008)
+		return 136;
+	if (!DuplicateTokenEx(first, TOKEN_DUPLICATE, NULL, SecurityImpersonation, TokenPrimary, &blind) ||
+		(ULONG)compare(first, blind, &equal) != 0xc0000022)
+		return 137;
+	CloseHandle(blind);
+	limited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, GetCurrentProcessId());
+	if (!limited || !GetExitCodeProcess(limited, &code) || code != STILL_ACTIVE)
+		return 138;
+	CloseHandle(limited);
 	CloseHandle(first);
 	CloseHandle(second);
 	CloseHandle(copy);

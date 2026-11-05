@@ -93,11 +93,9 @@ bool NativeHeap::dispatch(std::string_view name)
 		}
 	}
 	if (!nt && function=="RtlCreateHeap") {
-		// HEAP_NO_SERIALIZE, HEAP_GENERATE_EXCEPTIONS and HEAP_CREATE_ENABLE_EXECUTE, whose blocks the RTL commits executable.
-		if (uint32_t(arguments[0]) & ~0x40005U) {
-			environment.set_last_error(120); process.return_api(0); return true;
-		}
-		const uint64_t creation[]{uint32_t(arguments[0]) | (arguments[2] ? 0U : 2U),0,arguments[2],arguments[1],0,0};
+		// HEAP_NO_SERIALIZE, HEAP_GENERATE_EXCEPTIONS and HEAP_CREATE_ENABLE_EXECUTE, whose blocks the RTL commits executable. Other
+		// options are dropped rather than refused: Analysis Services passes HEAP_GROWABLE, which the maximum size already decides.
+		const uint64_t creation[]{(uint32_t(arguments[0]) & 0x40005U) | (arguments[2] ? 0U : 2U),0,arguments[2],arguments[1],0,0};
 		result=call(function,creation);
 	} else result=call(function,arguments);
 	if (function=="RtlFreeHeap") result=uint8_t(result);

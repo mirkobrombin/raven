@@ -507,3 +507,25 @@ VOID WINAPI RavenDeleteFiber(PVOID handle)
 		ZwFreeVirtualMemory(CURRENT_PROCESS, &fiber->allocation, &size, MEM_RELEASE);
 	RtlFreeHeap(PEB_PROCESS_HEAP, 0, fiber);
 }
+
+/* ---- the I/O completion threads of BindIoCompletionCallback ---- */
+/* The runtime binds each file to one completion port with the callback as the key, and starts threads here: each takes the packets of
+ * the port in turn and hands the callback the error, the bytes moved and the operation, as the thread pool of Windows does. A packet
+ * without an operation is not one of an I/O and is passed over. */
+struct io_completion_binding {
+	BOOL (WINAPI *dequeue)(HANDLE port, DWORD *bytes, ULONG_PTR *key, LPOVERLAPPED *operation, DWORD timeout);
+	HANDLE port;
+};
+
+DWORD WINAPI RavenIoCompletionWorker(struct io_completion_binding *binding)
+{
+	for (;;) {
+		DWORD bytes = 0;
+		ULONG_PTR key = 0;
+		LPOVERLAPPED operation = NULL;
+		const BOOL done = binding->dequeue(binding->port, &bytes, &key, &operation, INFINITE);
+		if (!operation || !key)
+			continue;
+		((LPOVERLAPPED_COMPLETION_ROUTINE)key)(done ? ERROR_SUCCESS : LAST_ERROR, bytes, operation);
+	}
+}

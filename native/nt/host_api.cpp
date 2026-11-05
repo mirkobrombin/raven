@@ -1472,6 +1472,20 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	// Host memory is the kernel's to manage: the limits a program asks for are advice, which Windows may ignore as well.
 	registry.add("SetProcessWorkingSetSize", 3, [](ApiCall &call) { call.ret(1); });
 	registry.add("SetProcessWorkingSetSizeEx", 4, [](ApiCall &call) { call.ret(1); });
+	// The documented default limits, 50 and 345 pages, neither of them enforced: the host decides what stays resident.
+	const auto working_set = [](ApiCall &call, bool extended) {
+		if (!call[1] || !call[2] || (extended && !call[3])) {
+			call.fail(87);
+			return;
+		}
+		call.store_pointer(call[1], 50 * 4096);
+		call.store_pointer(call[2], 345 * 4096);
+		if (extended)
+			call.store<uint32_t>(call[3], 0x2 | 0x8);
+		call.ret(1);
+	};
+	registry.add("GetProcessWorkingSetSize", 3, [working_set](ApiCall &call) { working_set(call, false); });
+	registry.add("GetProcessWorkingSetSizeEx", 4, [working_set](ApiCall &call) { working_set(call, true); });
 	registry.add("SetPriorityClass", 2, [priority_class](ApiCall &call) {
 		const uint32_t value = call.u32(1);
 		if (value != 0x20 && value != 0x40 && value != 0x80 && value != 0x100 && value != 0x4000 && value != 0x8000 && value != 0x00100000 && value != 0x00200000) {

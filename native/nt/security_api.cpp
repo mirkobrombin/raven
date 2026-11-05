@@ -669,6 +669,70 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(5);
 		call.ret(1);
 	});
+	// DsMakeSpn: "class/instance[:port][/service]", the instance being the service's host when none is named and the service part left
+	// out when it is the instance itself. The length is in characters with the terminator, the needed one when the buffer is short.
+	for (const bool wide : {true, false})
+		registry.add(wide ? "DsMakeSpnW" : "DsMakeSpnA", 7, [wide](ApiCall &call) {
+			if (!call[0] || !call[1] || !call[5]) {
+				call.ret(87);
+				return;
+			}
+			const auto text = [&](uint64_t address) {
+				if (wide)
+					return call.wide(address, 4096);
+				const auto narrow = call.narrow(address, 4096);
+				return std::u16string(narrow.begin(), narrow.end());
+			};
+			const auto service_class = text(call[0]), service = text(call[1]);
+			const auto instance = call[2] ? text(call[2]) : service;
+			std::u16string spn = service_class + u"/" + instance;
+			if (const auto port = uint16_t(call[3]))
+				for (const char digit : ":" + std::to_string(port))
+					spn += char16_t(digit);
+			if (service != instance)
+				spn += u"/" + service;
+			const auto capacity = call.load<uint32_t>(call[5]);
+			call.store<uint32_t>(call[5], uint32_t(spn.size() + 1));
+			if (!call[6] || capacity < spn.size() + 1) {
+				call.ret(111);
+				return;
+			}
+			if (wide)
+				call.put_wide(call[6], spn, capacity);
+			else
+				call.put_narrow(call[6], std::string(spn.begin(), spn.end()), capacity);
+			call.ret(0);
+		});
+	// Every token here belongs to the one user and carries the same groups, so two tokens differ only in their integrity level and in
+	// which privileges they still hold; whether a privilege is enabled does not count.
+	registry.add("NtCompareTokens", 3, [&objects](ApiCall &call) {
+		const auto first = objects.object_as<AccessToken>(call[0]);
+		const auto second = objects.object_as<AccessToken>(call[1]);
+		if (!first || !second) {
+			call.ret(0xc0000008U);
+			return;
+		}
+		if (!(objects.access_of(call[0]) & 8) || !(objects.access_of(call[1]) & 8)) {
+			call.ret(0xc0000022U);
+			return;
+		}
+		const auto held = [](const AccessToken::Data &data) {
+			std::vector<uint64_t> luids;
+			for (const auto &privilege : data.privileges)
+				if (!(privilege.attributes & 4))
+					luids.push_back(privilege.luid);
+			std::sort(luids.begin(), luids.end());
+			return luids;
+		};
+		const auto one = first->data(), other = second->data();
+		try {
+			call.store<uint8_t>(call[2], one.integrity == other.integrity && held(one) == held(other));
+		} catch (const ApiFault &) {
+			call.ret(0xc0000005U);
+			return;
+		}
+		call.ret(0);
+	});
 	// Copies own their DACL and integrity level; changing one leaves the source token unchanged.
 	registry.add("DuplicateTokenEx", 6, [&objects](ApiCall &call) {
 		if (!objects.object_as<AccessToken>(call[0]) || !call[5]) {

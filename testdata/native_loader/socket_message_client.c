@@ -248,6 +248,99 @@ static int selected_batch(void)
 	return 0;
 }
 
+#ifdef _WIN64
+static HANDLE callback_done;
+static volatile DWORD callback_error = 0xcccccccc, callback_bytes;
+static LPOVERLAPPED volatile callback_operation;
+
+static VOID CALLBACK operation_finished(DWORD error, DWORD bytes, LPOVERLAPPED operation)
+{
+	callback_error = error;
+	callback_bytes = bytes;
+	callback_operation = operation;
+	SetEvent(callback_done);
+}
+#endif
+
+/* A server the way Analysis Services is one: an exclusive listening port, connections taken with AcceptEx together with their first
+ * data, finished through a completion port. */
+static int accepted_with_data(void)
+{
+	GUID accept_id = WSAID_ACCEPTEX, addresses_id = WSAID_GETACCEPTEXSOCKADDRS;
+	LPFN_ACCEPTEX accept_ex = NULL;
+	LPFN_GETACCEPTEXSOCKADDRS accept_addresses = NULL;
+	SOCKET listener = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	SOCKET accepted = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	SOCKADDR_IN address;
+	int address_size = sizeof(address);
+	DWORD done = 0, exclusive = 1, connect_time = 0;
+	int length = sizeof(connect_time);
+	if (listener == INVALID_SOCKET || accepted == INVALID_SOCKET || client == INVALID_SOCKET) return 60;
+	if (WSAIoctl(listener, SIO_GET_EXTENSION_FUNCTION_POINTER, &accept_id, sizeof(accept_id), &accept_ex, sizeof(accept_ex), &done, NULL, NULL) ||
+		WSAIoctl(listener, SIO_GET_EXTENSION_FUNCTION_POINTER, &addresses_id, sizeof(addresses_id), &accept_addresses, sizeof(accept_addresses),
+			&done, NULL, NULL) || !accept_ex || !accept_addresses) return 61;
+	zero(&address, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	if (setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&exclusive, sizeof(exclusive)) ||
+		bind(listener, (SOCKADDR *)&address, sizeof(address)) || getsockname(listener, (SOCKADDR *)&address, &address_size) ||
+		listen(listener, SOMAXCONN)) return 62;
+	if (getsockopt(accepted, SOL_SOCKET, SO_CONNECT_TIME, (char *)&connect_time, &length) || connect_time != 0xffffffff) return 63;
+	HANDLE port = CreateIoCompletionPort((HANDLE)listener, NULL, 7, 0);
+	char buffer[5 + 2 * (sizeof(SOCKADDR_IN) + 16)];
+	OVERLAPPED operation;
+	zero(&operation, sizeof(operation));
+	if (!port) return 64;
+	if (accept_ex(listener, accepted, buffer, 5, sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &done, &operation) ||
+		WSAGetLastError() != ERROR_IO_PENDING) return 65;
+	if (connect(client, (SOCKADDR *)&address, sizeof(address))) return 66;
+	/* Connected, the operation still waits for the first data. */
+	DWORD bytes = 0;
+	ULONG_PTR key = 0;
+	LPOVERLAPPED finished = NULL;
+	if (GetQueuedCompletionStatus(port, &bytes, &key, &finished, 200) || GetLastError() != WAIT_TIMEOUT) return 67;
+	if (send(client, "hello", 5, 0) != 5 || !GetQueuedCompletionStatus(port, &bytes, &key, &finished, 5000) || bytes != 5 || key != 7 ||
+		finished != &operation || buffer[0] != 'h' || buffer[4] != 'o') return 68;
+	SOCKADDR *local, *remote;
+	int local_size = 0, remote_size = 0;
+	accept_addresses(buffer, 5, sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &local, &local_size, &remote, &remote_size);
+	if (local->sa_family != AF_INET || remote->sa_family != AF_INET || ((SOCKADDR_IN *)local)->sin_port != address.sin_port) return 69;
+	char text[64];
+	DWORD text_size = sizeof(text);
+	if (WSAAddressToStringA(local, local_size, NULL, text, &text_size) || text[0] != '1' || text[3] != '.' || text_size < 12) return 70;
+	DWORD small = 2;
+	if (WSAAddressToStringA(local, local_size, NULL, text, &small) != SOCKET_ERROR || WSAGetLastError() != WSAEFAULT || small != text_size)
+		return 71;
+	closesocket(client);
+	closesocket(accepted);
+	closesocket(listener);
+	CloseHandle(port);
+#ifdef _WIN64
+	/* The same through the thread pool: a callback bound to the listening socket runs on one of its threads. Its threads are those of
+	 * the guest RTL, which 32-bit programs do not have. */
+	listener = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	accepted = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	address.sin_port = 0;
+	address_size = sizeof(address);
+	callback_done = CreateEventW(NULL, TRUE, FALSE, NULL);
+	zero(&operation, sizeof(operation));
+	if (bind(listener, (SOCKADDR *)&address, sizeof(address)) || getsockname(listener, (SOCKADDR *)&address, &address_size) ||
+		listen(listener, SOMAXCONN) || !BindIoCompletionCallback((HANDLE)listener, operation_finished, 0)) return 72;
+	if (accept_ex(listener, accepted, buffer, 5, sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &done, &operation) ||
+		WSAGetLastError() != ERROR_IO_PENDING) return 73;
+	if (connect(client, (SOCKADDR *)&address, sizeof(address)) || send(client, "again", 5, 0) != 5) return 74;
+	if (WaitForSingleObject(callback_done, 5000) || callback_error || callback_bytes != 5 || callback_operation != &operation ||
+		buffer[0] != 'a') return 75;
+	closesocket(client);
+	closesocket(accepted);
+	closesocket(listener);
+	CloseHandle(callback_done);
+#endif
+	return 0;
+}
+
 int raven_entry(void)
 {
 	WSADATA data;
@@ -259,6 +352,8 @@ int raven_entry(void)
 	result = selected_events();
 	if (result) return result;
 	result = selected_batch();
+	if (result) return result;
+	result = accepted_with_data();
 	if (result) return result;
 	WSACleanup();
 	return 0;

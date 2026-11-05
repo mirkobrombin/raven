@@ -56,3 +56,4 @@ EXPORTS
  RtlLookupFirstMatchingElementGenericTableAvl
  RtlGetElementGenericTableAvl
  RtlDeleteElementGenericTableAvl
+ RavenIoCompletionWorker

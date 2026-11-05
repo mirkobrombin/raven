@@ -1273,14 +1273,22 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			fail(call, listener && target ? wsaeinval : wsaenotsock, 0);
 			return;
 		}
-		if (call.u32(3)) {
-			// Receiving the first data together with the connection is not done: the call says so.
-			fail(call, wsaeopnotsupp, 0);
-			return;
-		}
 		const size_t width = call.pointer_width();
-		const uint64_t overlapped = call[7], buffer = call[2], local_length = call.u32(4), remote_length = call.u32(5);
-		const auto attempt = [listener, target, &process, buffer, local_length, remote_length]() -> int {
+		const uint64_t overlapped = call[7], receive_length = call.u32(3), local_length = call.u32(4), remote_length = call.u32(5);
+		// With a receive length the first data of the connection comes first in the buffer and the addresses after it; the operation
+		// ends when that data has come, with its size.
+		const uint64_t data = call[2], buffer = call[2] + receive_length;
+		auto connected = std::make_shared<bool>(false);
+		const auto receive = [target, &process, data, receive_length]() -> int64_t {
+			std::vector<uint8_t> bytes(receive_length);
+			const auto got = ::recv(target->descriptor, bytes.data(), bytes.size(), 0);
+			if (got < 0)
+				return errno == EAGAIN || errno == EWOULDBLOCK ? -1 : -int64_t(wsa_error(errno)) - 2;
+			bytes.resize(size_t(got));
+			process.write_memory(data, bytes);
+			return got;
+		};
+		const auto accept_connection = [listener, target, &process, buffer, local_length, remote_length]() -> int {
 			sockaddr_storage peer{};
 			socklen_t peer_length = sizeof(peer);
 			const int accepted = ::accept4(listener->descriptor, reinterpret_cast<sockaddr *>(&peer), &peer_length, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -1304,9 +1312,30 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			write_address(buffer + local_length, remote_length, peer, peer_length);
 			return 0;
 		};
-		const int first = attempt();
+		// -1 while the operation waits, otherwise the error it ends with and, through moved, the bytes received.
+		const auto attempt = [accept_connection, receive, connected, receive_length](uint32_t &moved) -> int {
+			if (!*connected) {
+				const int accepted = accept_connection();
+				if (accepted)
+					return accepted;
+				*connected = true;
+			}
+			if (!receive_length)
+				return 0;
+			const auto got = receive();
+			if (got == -1)
+				return -1;
+			if (got < -1)
+				return int(-got - 2);
+			moved = uint32_t(got);
+			return 0;
+		};
+		uint32_t moved = 0;
+		const int first = attempt(moved);
 		if (first == 0) {
-			finish(listener, overlapped, width, 0, 0, true);
+			finish(listener, overlapped, width, 0, moved, true);
+			if (call[6])
+				call.store<uint32_t>(call[6], moved);
 			call.ret(1);
 			return;
 		}
@@ -1314,17 +1343,28 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			fail(call, uint32_t(first), 0);
 			return;
 		}
-		reactor.add([attempt, finish, listener, overlapped, width]() {
-			if (listener->closed) {
-				finish(listener, overlapped, width, 995, 0, false);
+		// The connection is waited for on the listening socket, its first data on the accepted one.
+		const auto wait = [&reactor, attempt, finish, listener, target, connected, overlapped, width](auto &&self) -> void {
+			reactor.add([attempt, finish, listener, target, connected, overlapped, width, self, &reactor]() {
+				if (listener->closed || (*connected && target->closed)) {
+					finish(listener, overlapped, width, 995, 0, false);
+					return true;
+				}
+				const bool was_connected = *connected;
+				uint32_t moved = 0;
+				const int result = attempt(moved);
+				if (result < 0) {
+					if (!was_connected && *connected) {
+						self(self);
+						return true;
+					}
+					return false;
+				}
+				finish(listener, overlapped, width, uint32_t(result), moved, false);
 				return true;
-			}
-			const int result = attempt();
-			if (result < 0)
-				return false;
-			finish(listener, overlapped, width, uint32_t(result), 0, false);
-			return true;
-		}, listener->descriptor, short(POLLIN));
+			}, *connected ? target->descriptor : listener->descriptor, short(POLLIN));
+		};
+		wait(wait);
 		fail(call, 997, 0);
 	});
 	registry.add("GetAcceptExSockaddrs", 8, [](ApiCall &call) {
@@ -1549,6 +1589,16 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			fail(call, wsaenotsock);
 			return;
 		}
+		// SO_EXCLUSIVEADDRUSE: a Linux socket without SO_REUSEADDR already refuses an address another socket holds, which is what a
+		// server asks for with it (Analysis Services sets it on its listening port).
+		if (call.u32(1) == sol_socket_windows && call.u32(2) == 0xfffffffbU) {
+			if (!call[3] || call.i32(4) < 1) {
+				fail(call, wsaefault);
+				return;
+			}
+			call.ret(0);
+			return;
+		}
 		const auto option = host_option(call.u32(1), call.u32(2));
 		if (!option) {
 			fail(call, wsaenoprotoopt);
@@ -1586,6 +1636,21 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		const auto socket = socket_of(call[0]);
 		if (!socket || !call[3] || !call[4]) {
 			fail(call, socket ? wsaefault : wsaenotsock);
+			return;
+		}
+		// SO_CONNECT_TIME: the seconds a socket has been connected, all bits set while it is not. Servers ask it of the sockets they
+		// hand to AcceptEx; the time a connection began is not kept, so a connected socket answers zero.
+		if (call.u32(1) == sol_socket_windows && call.u32(2) == 0x700c) {
+			if (call.load<uint32_t>(call[4]) < 4) {
+				fail(call, wsaefault);
+				return;
+			}
+			sockaddr_storage peer{};
+			socklen_t peer_length = sizeof(peer);
+			const bool connected = !::getpeername(socket->descriptor, reinterpret_cast<sockaddr *>(&peer), &peer_length);
+			call.store<uint32_t>(call[3], connected ? 0 : UINT32_MAX);
+			call.store<uint32_t>(call[4], 4);
+			call.ret(0);
 			return;
 		}
 		const auto option = host_option(call.u32(1), call.u32(2));
@@ -2299,6 +2364,48 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 				return;
 			}
 			call.write(call[3], address);
+			call.ret(0);
+		});
+	// The reverse: a SOCKADDR as text, with its port when it has one ("1.2.3.4:80", "[::1]:80"), and the scope of an IPv6 address.
+	for (const bool wide : {true, false})
+		registry.add(wide ? "WSAAddressToStringW" : "WSAAddressToStringA", 5, [wide](ApiCall &call) {
+			if (!call[0] || !call[4] || call.u32(1) < 2) {
+				call.fail(wsaefault, UINT64_MAX);
+				return;
+			}
+			const auto family = call.load<uint16_t>(call[0]);
+			const uint32_t length = call.u32(1);
+			if ((family != 2 && family != 23) || length < (family == 2 ? 16U : 28U)) {
+				call.fail(family != 2 && family != 23 ? 10047U : wsaefault, UINT64_MAX);
+				return;
+			}
+			const auto address = call.read(call[0], family == 2 ? 16 : 28);
+			uint16_t port;
+			std::memcpy(&port, address.data() + 2, 2);
+			port = ntohs(port);
+			char host[INET6_ADDRSTRLEN]{};
+			::inet_ntop(family == 2 ? AF_INET : AF_INET6, address.data() + (family == 2 ? 4 : 8), host, sizeof(host));
+			std::string text = host;
+			if (family == 23) {
+				uint32_t scope;
+				std::memcpy(&scope, address.data() + 24, 4);
+				if (scope)
+					text += "%" + std::to_string(scope);
+				if (port)
+					text = "[" + text + "]";
+			}
+			if (port)
+				text += ":" + std::to_string(port);
+			const auto capacity = call.load<uint32_t>(call[4]);
+			call.store<uint32_t>(call[4], uint32_t(text.size() + 1));
+			if (!call[3] || capacity < text.size() + 1) {
+				call.fail(wsaefault, UINT64_MAX);
+				return;
+			}
+			if (wide)
+				call.put_wide(call[3], std::u16string(text.begin(), text.end()), capacity);
+			else
+				call.put_narrow(call[3], text, capacity);
 			call.ret(0);
 		});
 	// WSAEnumProtocols(protocols, buffer, length): the base TCP and UDP providers of IPv4 and IPv6, each as a WSAPROTOCOL_INFO with

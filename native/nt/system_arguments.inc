@@ -2604,6 +2604,54 @@ static constexpr std::pair<std::string_view, uint8_t> rstrtmgr_words[]{
 static constexpr std::pair<std::string_view, uint8_t> wintypes_words[]{
 	{"RoGetMetaDataFile",5},{"RoIsApiContractMajorVersionPresent",3},{"RoIsApiContractPresent",4},{"RoParseTypeName",3},{"RoResolveNamespace",8},
 };
+static constexpr std::pair<std::string_view, uint8_t> security_words[]{
+	{"AcceptSecurityContext",9},{"AcquireCredentialsHandleA",9},{"AcquireCredentialsHandleW",9},{"AddSecurityPackageA",2},{"AddSecurityPackageW",2},{"ApplyControlToken",2},
+	{"CompleteAuthToken",2},{"DecryptMessage",4},{"DeleteSecurityContext",1},{"DeleteSecurityPackageA",1},{"DeleteSecurityPackageW",1},{"EncryptMessage",4},
+	{"EnumerateSecurityPackagesA",2},{"EnumerateSecurityPackagesW",2},{"ExportSecurityContext",4},{"FreeContextBuffer",1},{"FreeCredentialsHandle",1},{"ImpersonateSecurityContext",1},
+	{"ImportSecurityContextA",4},{"ImportSecurityContextW",4},{"InitSecurityInterfaceA",0},{"InitSecurityInterfaceW",0},{"InitializeSecurityContextA",12},{"InitializeSecurityContextW",12},
+	{"MakeSignature",4},{"QueryContextAttributesA",3},{"QueryContextAttributesW",3},{"QueryCredentialsAttributesA",3},{"QueryCredentialsAttributesW",3},{"QuerySecurityContextToken",2},
+	{"QuerySecurityPackageInfoA",2},{"QuerySecurityPackageInfoW",2},{"RevertSecurityContext",1},{"SealMessage",4},{"UnsealMessage",4},{"VerifySignature",4},
+};
+static constexpr std::pair<std::string_view, uint8_t> sspicli_words[]{
+	{"AcceptSecurityContext",9},{"AcquireCredentialsHandleA",9},{"AcquireCredentialsHandleW",9},{"AddCredentialsA",8},{"AddCredentialsW",8},{"AddSecurityPackageA",2},
+	{"AddSecurityPackageW",2},{"ApplyControlToken",2},{"ChangeAccountPasswordA",8},{"ChangeAccountPasswordW",8},{"CompleteAuthToken",2},{"CredMarshalTargetInfo",3},
+	{"CredUnmarshalTargetInfo",4},{"DecryptMessage",4},{"DeleteSecurityContext",1},{"DeleteSecurityPackageA",1},{"DeleteSecurityPackageW",1},{"EncryptMessage",4},
+	{"EnumerateSecurityPackagesA",2},{"EnumerateSecurityPackagesW",2},{"ExportSecurityContext",4},{"FreeContextBuffer",1},{"FreeCredentialsHandle",1},{"GetSecurityUserInfo",3},
+	{"GetUserNameExA",3},{"GetUserNameExW",3},{"ImpersonateSecurityContext",1},{"ImportSecurityContextA",4},{"ImportSecurityContextW",4},{"InitSecurityInterfaceA",0},
+	{"InitSecurityInterfaceW",0},{"InitializeSecurityContextA",12},{"InitializeSecurityContextW",12},{"LogonUserExExW",11},{"LsaCallAuthenticationPackage",7},{"LsaConnectUntrusted",1},
+	{"LsaDeregisterLogonProcess",1},{"LsaEnumerateLogonSessions",2},{"LsaFreeReturnBuffer",1},{"LsaGetLogonSessionData",2},{"LsaLogonUser",14},{"LsaLookupAuthenticationPackage",3},
+	{"LsaRegisterLogonProcess",3},{"LsaRegisterPolicyChangeNotification",2},{"LsaUnregisterPolicyChangeNotification",2},{"MakeSignature",4},{"QueryContextAttributesA",3},{"QueryContextAttributesW",3},
+	{"QueryCredentialsAttributesA",3},{"QueryCredentialsAttributesW",3},{"QuerySecurityContextToken",2},{"QuerySecurityPackageInfoA",2},{"QuerySecurityPackageInfoW",2},{"RevertSecurityContext",1},
+	{"SaslAcceptSecurityContext",9},{"SaslEnumerateProfilesA",2},{"SaslEnumerateProfilesW",2},{"SaslGetContextOption",5},{"SaslGetProfilePackageA",2},{"SaslGetProfilePackageW",2},
+	{"SaslIdentifyPackageA",2},{"SaslIdentifyPackageW",2},{"SaslInitializeSecurityContextA",12},{"SaslInitializeSecurityContextW",12},{"SaslSetContextOption",4},{"SealMessage",4},
+	{"SecCacheSspiPackages",0},{"SecDeleteUserModeContext",1},{"SecInitUserModeContext",2},{"SeciAllocateAndSetCallFlags",2},{"SeciAllocateAndSetIPAddress",3},{"SeciFreeCallContext",0},
+	{"SetContextAttributesA",4},{"SetContextAttributesW",4},{"SetCredentialsAttributesA",4},{"SetCredentialsAttributesW",4},{"SspiCompareAuthIdentities",4},{"SspiCopyAuthIdentity",2},
+	{"SspiDecryptAuthIdentity",1},{"SspiEncodeAuthIdentityAsStrings",4},{"SspiEncodeStringsAsAuthIdentity",4},{"SspiEncryptAuthIdentity",1},{"SspiExcludePackage",3},{"SspiFreeAuthIdentity",1},
+	{"SspiGetComputerNameForSPN",2},{"SspiGetTargetHostName",2},{"SspiIsAuthIdentityEncrypted",1},{"SspiLocalFree",1},{"SspiMarshalAuthIdentity",3},{"SspiPrepareForCredRead",4},
+	{"SspiPrepareForCredWrite",7},{"SspiUnmarshalAuthIdentity",3},{"SspiUnmarshalAuthIdentityInternal",4},{"SspiValidateAuthIdentity",1},{"SspiZeroAuthIdentity",1},{"UnsealMessage",4},
+	{"VerifySignature",4},
+};
+static constexpr std::pair<std::string_view, uint8_t> ntdsapi_words[]{
+	{"DsAddSidHistoryA",8},{"DsAddSidHistoryW",8},{"DsBindA",3},{"DsBindByInstanceA",8},{"DsBindByInstanceW",8},{"DsBindToISTGA",2},
+	{"DsBindToISTGW",2},{"DsBindW",3},{"DsBindWithCredA",4},{"DsBindWithCredW",4},{"DsBindWithSpnA",5},{"DsBindWithSpnExA",6},
+	{"DsBindWithSpnExW",6},{"DsBindWithSpnW",5},{"DsBindingSetTimeout",2},{"DsClientMakeSpnForTargetServerA",4},{"DsClientMakeSpnForTargetServerW",4},{"DsCrackNamesA",7},
+	{"DsCrackNamesW",7},{"DsCrackSpn2A",9},{"DsCrackSpn2W",9},{"DsCrackSpn3W",11},{"DsCrackSpnA",8},{"DsCrackSpnW",8},
+	{"DsCrackUnquotedMangledRdnA",4},{"DsCrackUnquotedMangledRdnW",4},{"DsFinishDemotionW",5},{"DsFreeDomainControllerInfoA",3},{"DsFreeDomainControllerInfoW",3},{"DsFreeNameResultA",1},
+	{"DsFreeNameResultW",1},{"DsFreePasswordCredentials",1},{"DsFreeSchemaGuidMapA",1},{"DsFreeSchemaGuidMapW",1},{"DsFreeSpnArrayA",2},{"DsFreeSpnArrayW",2},
+	{"DsGetBindAddrW",1},{"DsGetBindAnnotW",1},{"DsGetBindInstGuid",1},{"DsGetDomainControllerInfoA",5},{"DsGetDomainControllerInfoW",5},{"DsGetRdnW",6},
+	{"DsGetSpnA",9},{"DsGetSpnW",9},{"DsInheritSecurityIdentityA",4},{"DsInheritSecurityIdentityW",4},{"DsInitDemotionW",1},{"DsIsMangledDnA",2},
+	{"DsIsMangledDnW",2},{"DsIsMangledRdnValueA",3},{"DsIsMangledRdnValueW",3},{"DsListDomainsInSiteA",3},{"DsListDomainsInSiteW",3},{"DsListInfoForServerA",3},
+	{"DsListInfoForServerW",3},{"DsListRolesA",2},{"DsListRolesW",2},{"DsListServersForDomainInSiteA",4},{"DsListServersForDomainInSiteW",4},{"DsListServersInSiteA",3},
+	{"DsListServersInSiteW",3},{"DsListSitesA",2},{"DsListSitesW",2},{"DsLogEntry",0},{"DsMakePasswordCredentialsA",4},{"DsMakePasswordCredentialsW",4},
+	{"DsMakeSpnA",7},{"DsMakeSpnW",7},{"DsMapSchemaGuidsA",4},{"DsMapSchemaGuidsW",4},{"DsQuerySitesByCostA",6},{"DsQuerySitesByCostW",6},
+	{"DsQuerySitesFree",1},{"DsQuoteRdnValueA",4},{"DsQuoteRdnValueW",4},{"DsRemoveDsDomainA",2},{"DsRemoveDsDomainW",2},{"DsRemoveDsServerA",5},
+	{"DsRemoveDsServerW",5},{"DsReplicaAddA",7},{"DsReplicaAddW",7},{"DsReplicaConsistencyCheck",3},{"DsReplicaDelA",4},{"DsReplicaDelW",4},
+	{"DsReplicaDemotionW",4},{"DsReplicaFreeInfo",2},{"DsReplicaGetInfo2W",9},{"DsReplicaGetInfoW",5},{"DsReplicaModifyA",9},{"DsReplicaModifyW",9},
+	{"DsReplicaSyncA",4},{"DsReplicaSyncAllA",6},{"DsReplicaSyncAllW",6},{"DsReplicaSyncW",4},{"DsReplicaUpdateRefsA",5},{"DsReplicaUpdateRefsW",5},
+	{"DsReplicaVerifyObjectsA",4},{"DsReplicaVerifyObjectsW",4},{"DsServerRegisterSpnA",3},{"DsServerRegisterSpnW",3},{"DsUnBindA",1},{"DsUnBindW",1},
+	{"DsUnquoteRdnValueA",4},{"DsUnquoteRdnValueW",4},{"DsWriteAccountSpnA",5},{"DsWriteAccountSpnW",5},{"DsaopBind",5},{"DsaopBindWithCred",6},
+	{"DsaopBindWithSpn",7},{"DsaopExecuteScript",6},{"DsaopPrepareScript",4},{"DsaopUnBind",1},
+};
 static constexpr std::pair<std::string_view, std::span<const std::pair<std::string_view, uint8_t>>> argument_tables[]{
 	{"advapi32.dll", advapi32_words},
 	{"bcrypt.dll", bcrypt_words},
@@ -2675,4 +2723,7 @@ static constexpr std::pair<std::string_view, std::span<const std::pair<std::stri
 	{"sppc.dll", sppc_words},
 	{"rstrtmgr.dll", rstrtmgr_words},
 	{"wintypes.dll", wintypes_words},
+	{"security.dll", security_words},
+	{"sspicli.dll", sspicli_words},
+	{"ntdsapi.dll", ntdsapi_words},
 };

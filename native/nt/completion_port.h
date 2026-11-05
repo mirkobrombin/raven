@@ -44,14 +44,16 @@ public:
 	// A pending operation counts as work only the host can finish, so waiting threads are not taken for deadlocked. The descriptor and
 	// events it waits for, when it names them, let an idle process sleep until the operation can go on instead of trying it again and
 	// again.
+	// An operation may add the one that continues it while it runs; that one joins the others once the round is over.
 	void add(Operation operation, int descriptor = -1, short events = 0)
 	{
-		operations.emplace_back(Pending{std::move(operation), descriptor, events}, std::make_unique<HostWait>());
+		(polling ? added : operations).emplace_back(Pending{std::move(operation), descriptor, events}, std::make_unique<HostWait>());
 	}
 	// Gives every pending operation a chance to finish; true when any did.
 	bool poll()
 	{
 		bool finished = false;
+		polling = true;
 		for (size_t index = 0; index < operations.size();) {
 			if (operations[index].first.run()) {
 				operations.erase(operations.begin() + ptrdiff_t(index));
@@ -60,9 +62,13 @@ public:
 				++index;
 			}
 		}
+		polling = false;
+		for (auto &operation : added)
+			operations.push_back(std::move(operation));
+		added.clear();
 		return finished;
 	}
-	size_t pending() const { return operations.size(); }
+	size_t pending() const { return operations.size() + added.size(); }
 	// The descriptors pending operations wait on.
 	void watch(std::vector<pollfd> &descriptors) const
 	{
@@ -77,7 +83,8 @@ private:
 		int descriptor;
 		short events;
 	};
-	std::vector<std::pair<Pending, std::unique_ptr<HostWait>>> operations;
+	std::vector<std::pair<Pending, std::unique_ptr<HostWait>>> operations, added;
+	bool polling = false;
 };
 
 }

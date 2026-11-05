@@ -1473,6 +1473,8 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(head);
 	});
 	registry.add("QueryDepthSList", 1, [count](ApiCall &call) { call.ret(count(call) & 0xffff); });
+	// The entry at the head, left on the list.
+	registry.add("RtlFirstEntrySList", 1, [](ApiCall &call) { call.ret(call.load_pointer(call[0])); });
 	// ntdll's names for the same lists.
 	for (const auto &[native, win32] : {std::pair{"RtlInitializeSListHead", "InitializeSListHead"},
 			{"RtlInterlockedPushEntrySList", "InterlockedPushEntrySList"}, {"RtlInterlockedPopEntrySList", "InterlockedPopEntrySList"},

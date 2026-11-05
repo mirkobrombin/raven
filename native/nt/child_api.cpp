@@ -400,7 +400,8 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87);
 			return;
 		}
-		if (call[0] == current_process) {
+		// The process asking is still running, whether it names itself by the pseudo handle or by one OpenProcess gave.
+		if (call[0] == current_process || objects.object_as<SelfProcessObject>(call[0])) {
 			call.store<uint32_t>(call[1], 259);
 			call.ret(1);
 			return;
@@ -429,9 +430,11 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// RaiseFailFastException ends the process at once, with no handler run, its status the exception code (STATUS_FAIL_FAST_EXCEPTION
 	// without a record).
-	registry.add("RaiseFailFastException", 3, [](ApiCall &call) {
+	registry.add("RaiseFailFastException", 3, [&context](ApiCall &call) {
 		const uint32_t code = call[0] ? call.load<uint32_t>(call[0]) : 0xc0000602U;
-		std::fprintf(stderr, "raven: fail fast exception %x\n", code);
+		// Who gave up is what a diagnosis needs: the frames of the guest code that asked.
+		const std::string frames = context.describe_stack ? context.describe_stack() : std::string();
+		std::fprintf(stderr, "raven: fail fast exception %x from%s\n", code, frames.empty() ? " an unknown caller" : frames.c_str());
 		call.process.abandon_call();
 		throw ProcessExit{code, 0, true};
 	});
