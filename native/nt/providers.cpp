@@ -2770,6 +2770,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	KernelContext kernel{process, environment, memory, allocator, kernel_objects, threads, paths, modules, entry, *launch, invoke};
 	threads.set_watched([reactor = kernel.reactor](std::vector<pollfd> &descriptors) { reactor->watch(descriptors); });
 	windows.set_global_allocator([&allocator](uint64_t size) { return allocator.allocate(size,true); });
+	windows.set_global_data([&allocator](uint64_t handle) { return allocator.data(handle); });
 	kernel.queue_status=[&windows](uint32_t thread,uint32_t mask,bool clear) { return windows.queue_status(thread,mask,clear); };
 	kernel.queue_quiet=[&windows](uint32_t thread) { windows.mark_quiet(thread); };
 	windows.set_block([&threads](std::function<bool()> ready) {

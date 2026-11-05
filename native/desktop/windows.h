@@ -54,6 +54,8 @@ public:
 	// Resolves the default menu of a window class (module, resource identifier) to a menu handle.
 	// Allocates guest global memory for clipboard data that arrives from the host.
 	void set_global_allocator(std::function<uint64_t(uint64_t)> allocator) { global_allocator = std::move(allocator); }
+	// The bytes a global memory handle stands for: a movable block's handle stays fixed while its data moves.
+	void set_global_data(std::function<uint64_t(uint64_t)> data) { global_data = std::move(data); }
 	void set_menu_loader(std::function<uint64_t(uint64_t,uint64_t)> loader) { menu_loader = std::move(loader); }
 	bool dispatch(std::string_view name);
 	// The served block where the screen context the guest's GetDC(NULL) takes is published (see the screen preludes), and the
@@ -435,7 +437,7 @@ private:
 	// Sequence already offered to the host selection and the host selection already imported.
 	uint32_t clipboard_published=0;
 	uint64_t host_selection=0;
-	std::function<uint64_t(uint64_t)> global_allocator;
+	std::function<uint64_t(uint64_t)> global_allocator, global_data;
 	std::array<uint8_t,256> vk_state{},vk_async{};
 	// The mouse buttons count as keys too (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1 and 2), from the MK_ flags of a pointer message.
 	static void mouse_keys(std::array<uint8_t,256> &state,uint64_t buttons)

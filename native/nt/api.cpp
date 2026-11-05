@@ -107,8 +107,20 @@ void ApiCall::write(uint64_t address, std::span<const uint8_t> bytes) const
 	} catch (const std::runtime_error &failure) {
 		if (!memory_error(failure))
 			throw;
+		static const bool traced = std::getenv("RAVEN_TRACE_FAIL") != nullptr;
+		if (traced)
+			std::fprintf(stderr, "raven: %s writes %zu bytes at %llx\n", api_in_progress, bytes.size(), static_cast<unsigned long long>(address));
 		throw ApiFault{};
 	}
+}
+
+// A string longer than its caller allows fails the call as a fault does; RAVEN_TRACE_FAIL tells the two apart.
+static void trace_long_string(uint64_t address, size_t limit)
+{
+	static const bool traced = std::getenv("RAVEN_TRACE_FAIL") != nullptr;
+	if (traced)
+		std::fprintf(stderr, "raven: %s reads a string longer than %zu characters at %llx\n", api_in_progress, limit,
+			static_cast<unsigned long long>(address));
 }
 
 std::u16string ApiCall::wide(uint64_t address, size_t limit) const
@@ -125,6 +137,7 @@ std::u16string ApiCall::wide(uint64_t address, size_t limit) const
 			text.push_back(character);
 		}
 	}
+	trace_long_string(address, limit);
 	throw ApiFault{};
 }
 
@@ -140,6 +153,7 @@ std::string ApiCall::narrow(uint64_t address, size_t limit) const
 			text.push_back(char(byte));
 		}
 	}
+	trace_long_string(address, limit);
 	throw ApiFault{};
 }
 

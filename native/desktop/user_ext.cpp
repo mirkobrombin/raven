@@ -482,7 +482,7 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		const auto found = clipboard_data.find(13);
 		if (found == clipboard_data.end() || !found->second)
 			return;
-		const auto text = to_utf8(call.wide(found->second));
+		const auto text = to_utf8(call.wide(global_data ? global_data(found->second) : found->second, 1 << 24));
 		std::string host;
 		for (size_t at = 0; at < text.size(); ++at)
 			if (text[at] != '\r' || at + 1 >= text.size() || text[at + 1] != '\n')
@@ -571,11 +571,12 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 			call.store<uint32_t>(format + 2 * width + 8, 1); // TYMED_HGLOBAL
 			if (run(call.load_pointer(table + 3 * width), {object, format, medium}) || call.load<uint32_t>(medium) != 1)
 				continue;
-			const uint64_t memory = call.load_pointer(medium + width), owner = call.load_pointer(medium + 2 * width);
+			const uint64_t handle = call.load_pointer(medium + width), owner = call.load_pointer(medium + 2 * width);
+			const uint64_t memory = global_data && handle ? global_data(handle) : handle;
 			if (!memory)
 				continue;
 			if (!owner) {
-				clipboard_data[kind] = memory;
+				clipboard_data[kind] = handle;
 				continue;
 			}
 			// The object keeps the memory it hands out with an owner, so the clipboard takes a copy.
