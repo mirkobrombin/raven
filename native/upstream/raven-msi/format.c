@@ -99,6 +99,15 @@ static void expand(msi_package *package, msi_record *record, const WCHAR *text, 
 				at++;
 				continue;
 			}
+			// A group naming no property is plain text, braces and all, such as the class of a registry key.
+			const WCHAR *bracket = at + 1;
+			while (bracket < end && *bracket != '[')
+				bracket++;
+			if (bracket == end) {
+				put(out, at, end - at);
+				at = end;
+				continue;
+			}
 			WCHAR *inner = msi_copy_n(at + 1, end - at - 2);
 			builder group = {0};
 			BOOL gone = FALSE;

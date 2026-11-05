@@ -104,5 +104,17 @@ int raven_entry(void)
 		if (MsiGetShortcutTargetW(L"C:\\raven-no-such.lnk", product, feature, component) == ERROR_SUCCESS)
 			return 93;
 	}
+	{
+		/* A group in braces naming no property stays as written, braces and all; one that does loses its braces. */
+		MSIHANDLE record = MsiCreateRecord(2);
+		WCHAR text[96];
+		DWORD length = 96;
+		MsiRecordSetStringW(record, 0, L"CLSID\\{E2384F4D-5F0A-4CD4-B5D1-1164BA9E4481}{ v[1]}");
+		MsiRecordSetStringW(record, 1, L"1");
+		if (MsiFormatRecordW(0, record, text, &length) != ERROR_SUCCESS ||
+			lstrcmpW(text, L"CLSID\\{E2384F4D-5F0A-4CD4-B5D1-1164BA9E4481} v1"))
+			return 96;
+		MsiCloseHandle(record);
+	}
 	return 0;
 }
