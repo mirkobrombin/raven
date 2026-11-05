@@ -15,6 +15,8 @@
  *   provider search finds none. Programs then sign in their own way; nothing here grants an identity or a licence.
  * - Windows.ApplicationModel.Core.CoreApplication: a desktop process, which has no package identity and no core window, and whose
  *   Properties are one property set for the whole process.
+ * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
+ *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
  * Asynchronous operations complete before they are returned and call a completion handler as soon as it is set. Events take handlers
  * and never raise them. A method this component does not serve, or an interface it does not have, is named in Raven's trace. */
@@ -105,6 +107,7 @@ static const IID iid_property_map = {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x
 static const IID iid_observable_property_map = {0x236aac9d, 0xfb12, 0x5c4d, {0xa4, 0x1c, 0x9e, 0x44, 0x5f, 0xb4, 0xd7, 0xec}};
 /* pinterface({9939f4df-050a-4c0f-aa60-77075f9c4777};string) */
 static const IID iid_map_change = {0x60141efb, 0xf2f9, 0x5377, {0x96, 0xfd, 0xf8, 0xc6, 0x0d, 0x95, 0x58, 0xb5}};
+static const IID iid_api_information = {0x997439fe, 0xf681, 0x4a11, {0xb4, 0x16, 0xc1, 0x3a, 0x47, 0xe8, 0xba, 0x36}};
 static const IID iid_property_set = {0x8a43ed9f, 0xf4e6, 0x4421, {0xac, 0xf9, 0x1d, 0xab, 0x29, 0x86, 0x82, 0x0c}};
 
 /* What the Windows Runtime and Windows report when there is nothing to give. */
@@ -1700,8 +1703,50 @@ static const struct kind language_factory_kind = {"Language", L"Windows.Globaliz
 static struct object language_factory = {{language_factory_table.slots, language_create_table.slots, language_statics_table.slots,
 	language_statics2_table.slots}, &language_factory_kind, 1};
 
+/* Windows.Foundation.Metadata.ApiInformation. A type is present when a runtime class of that name is registered for activation. */
+static boolean registered(HSTRING type)
+{
+	static const WCHAR root[] = L"SOFTWARE\\Microsoft\\WindowsRuntime\\ActivatableClassId\\";
+	WCHAR path[ARRAYSIZE(root) + 256];
+	UINT32 length = 0;
+	const WCHAR *text = WindowsGetStringRawBuffer(type, &length);
+	HKEY key;
+	if (!length || length >= 256)
+		return FALSE;
+	memcpy(path, root, sizeof(root) - sizeof(WCHAR));
+	memcpy(path + ARRAYSIZE(root) - 1, text, length * sizeof(WCHAR));
+	path[ARRAYSIZE(root) - 1 + length] = 0;
+	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key))
+		return FALSE;
+	RegCloseKey(key);
+	return TRUE;
+}
+
+static HRESULT WINAPI api_type(void *iface, HSTRING type, boolean *out) { return answer_flag(out, registered(type)); }
+static HRESULT WINAPI api_member(void *iface, HSTRING type, HSTRING member, boolean *out) { return answer_flag(out, registered(type)); }
+
+static HRESULT WINAPI api_method_arity(void *iface, HSTRING type, HSTRING member, UINT32 count, boolean *out)
+{
+	return answer_flag(out, registered(type));
+}
+
+static HRESULT WINAPI api_contract(void *iface, HSTRING contract, UINT16 major, boolean *out) { return answer_flag(out, FALSE); }
+
+static HRESULT WINAPI api_contract_minor(void *iface, HSTRING contract, UINT16 major, UINT16 minor, boolean *out)
+{
+	return answer_flag(out, FALSE);
+}
+
+TABLE(api_factory_table, 0, FACTORY);
+TABLE(api_statics_table, 1, INSPECTABLE, (const void *)api_type, (const void *)api_member, (const void *)api_method_arity,
+	(const void *)api_member, (const void *)api_member, (const void *)api_member, (const void *)api_member, (const void *)api_member,
+	(const void *)api_contract, (const void *)api_contract_minor);
+static const struct face_iid api_iids[] = {{&iid_factory, 0}, {&iid_api_information, 1}, {NULL, 0}};
+static const struct kind api_kind = {"ApiInformation", L"Windows.Foundation.Metadata.ApiInformation", api_iids, NULL};
+static struct object api_information = {{api_factory_table.slots, api_statics_table.slots}, &api_kind, 1};
+
 static struct object *const classes[] = {&language_factory, &retail_info, &shared_mode, &analytics_info, &network_information, &online_id, &ticket_request_factory, &web_core,
-	&core_application};
+	&core_application, &api_information};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

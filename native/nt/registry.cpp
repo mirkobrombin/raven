@@ -229,6 +229,7 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.Security.Authentication.OnlineId.OnlineIdServiceTicketRequest", u"raven-twinapi.dll"},
 		{u"Windows.Security.Authentication.Web.Core.WebAuthenticationCoreManager", u"raven-twinapi.dll"},
 		{u"Windows.ApplicationModel.Core.CoreApplication", u"raven-twinapi.dll"},
+		{u"Windows.Foundation.Metadata.ApiInformation", u"raven-twinapi.dll"},
 		{u"Windows.Foundation.Uri", u"raven-web.dll"}, {u"Windows.Web.Http.HttpClient", u"raven-web.dll"},
 		{u"Windows.Web.Http.HttpMethod", u"raven-web.dll"}, {u"Windows.Web.Http.HttpRequestMessage", u"raven-web.dll"},
 		{u"Windows.Web.Http.HttpResponseMessage", u"raven-web.dll"}, {u"Windows.Web.Http.Filters.HttpBaseProtocolFilter", u"raven-web.dll"},
