@@ -1,0 +1,9 @@
+{
+  "version": "1.0.2365.46",
+  "archive": "microsoft.web.webview2.1.0.2365.46.nupkg",
+  "size": 8081674,
+  "url": "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2365.46",
+  "sha256": "1b0146d842344b8462520fb38ad8eff46e52031c19b955376c227bec619faefd",
+  "headers": ["build/native/include/WebView2.h", "build/native/include/WebView2EnvironmentOptions.h"],
+  "licenses": ["LICENSE.txt", "NOTICE.txt"]
+}
