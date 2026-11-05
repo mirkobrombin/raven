@@ -497,6 +497,14 @@ void DesktopObjects::finish_paint(uint64_t handle)
 	device->text_color=0; device->background_color=0xffffff; device->background_mode=2;
 }
 
+void DesktopObjects::abandon_paint(uint64_t handle)
+{
+	auto *record=window(handle);
+	if (!record || !record->painting) return;
+	if (auto *device=dc(record->dc); device && device->clip) { used-=device->clip->bytes(); device->clip.reset(); }
+	record->painting=false;
+}
+
 static bool same_name(std::string_view a,std::string_view b)
 {
 	if (a.size()!=b.size()) return false;

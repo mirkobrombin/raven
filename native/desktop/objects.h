@@ -368,6 +368,8 @@ public:
 	bool validate(uint64_t window,DesktopRect rect);
 	bool start_paint(uint64_t window);
 	void finish_paint(uint64_t window);
+	// A paint whose surface went away while it ran, as a window resized inside its own paint: the window is no longer painting.
+	void abandon_paint(uint64_t window);
 	uint16_t register_class(DesktopClass definition);
 	uint32_t unregister_class(uint16_t atom);
 	uint16_t find_class(uint64_t instance, std::string_view name) const;
