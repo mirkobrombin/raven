@@ -600,7 +600,9 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(0);
 	});
-	registry.add("connect", 3, [socket_of, fail, wait_ready](ApiCall &call) {
+	// connect, and WSAConnect with it: the connect data and quality of service WSAConnect may name are not something TCP carries, and
+	// the provider below it ignores them as Windows' does.
+	const auto connect_socket = [socket_of, fail, wait_ready](ApiCall &call) {
 		const auto socket = socket_of(call[0]);
 		if (!socket || call.i32(2) < 2) {
 			fail(call, socket ? wsaefault : wsaenotsock);
@@ -635,7 +637,9 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		call.ret(0);
-	});
+	};
+	registry.add("connect", 3, connect_socket);
+	registry.add("WSAConnect", 7, connect_socket);
 	registry.add("accept", 3, [&objects, socket_of, fail, wait_ready](ApiCall &call) {
 		const auto socket = socket_of(call[0]);
 		if (!socket) {

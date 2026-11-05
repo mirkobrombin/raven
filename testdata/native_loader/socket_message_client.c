@@ -294,7 +294,7 @@ static int accepted_with_data(void)
 	if (!port) return 64;
 	if (accept_ex(listener, accepted, buffer, 5, sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &done, &operation) ||
 		WSAGetLastError() != ERROR_IO_PENDING) return 65;
-	if (connect(client, (SOCKADDR *)&address, sizeof(address))) return 66;
+	if (WSAConnect(client, (SOCKADDR *)&address, sizeof(address), NULL, NULL, NULL, NULL)) return 66;
 	/* Connected, the operation still waits for the first data. */
 	DWORD bytes = 0;
 	ULONG_PTR key = 0;
