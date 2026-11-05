@@ -48,12 +48,17 @@ static WCHAR folder[MAX_PATH];
 
 void engine_trace(const char *what, const WCHAR *text)
 {
-	char line[300];
+	char line[1024];
 	int length = wsprintfA(line, "webengine: %s", what);
 	if (text) {
 		line[length++] = ' ';
-		WideCharToMultiByte(CP_UTF8, 0, text, -1, line + length, sizeof(line) - length - 1, NULL, NULL);
-		line[sizeof(line) - 1] = 0;
+		// A long text is cut, at most three bytes to a character, rather than lost.
+		int count = lstrlenW(text);
+		const int room = ((int)sizeof(line) - length - 1) / 3;
+		if (count > room)
+			count = room;
+		length += WideCharToMultiByte(CP_UTF8, 0, text, count, line + length, sizeof(line) - length - 1, NULL, NULL);
+		line[length] = 0;
 	}
 	RavenTrace(line);
 }
@@ -98,6 +103,28 @@ static BOOL builtin_scheme(const WCHAR *scheme)
 		if (!lstrcmpiW(scheme, known[i]))
 			return TRUE;
 	return FALSE;
+}
+
+/* A scheme the engine registers as the program's own, unless Chromium knows it or it is listed already. */
+static void add_scheme(const WCHAR *scheme)
+{
+	if (!*scheme || builtin_scheme(scheme))
+		return;
+	const int length = lstrlenW(scheme);
+	for (const WCHAR *list = schemes; *list;) {
+		const WCHAR *end = list;
+		while (*end && *end != L',')
+			end++;
+		if (end - list == length && CompareStringOrdinal(list, length, scheme, length, TRUE) == CSTR_EQUAL)
+			return;
+		list = *end ? end + 1 : end;
+	}
+	const int used = lstrlenW(schemes);
+	if (used + length + 2 > ARRAYSIZE(schemes))
+		return;
+	if (used)
+		schemes[used] = L',';
+	lstrcpyW(schemes + used + (used ? 1 : 0), scheme);
 }
 
 static BOOL scheme_of(const WCHAR *address, WCHAR *scheme, int size)
@@ -351,6 +378,173 @@ static cef_resource_handler_t *CEF_CALLBACK factory_create(cef_scheme_handler_fa
 
 static cef_scheme_handler_factory_t program_protocols = {.base = STATIC_BASE(cef_scheme_handler_factory_t), .create = factory_create};
 
+/* Host names whose pages come from a folder, as a program maps them: http and https requests to such a host read the file at the
+ * request's path under the folder. */
+static struct {
+	WCHAR host[256];
+	WCHAR folder[MAX_PATH];
+} mappings[16];
+static int mapping_count;
+static CRITICAL_SECTION mapping_lock;
+static INIT_ONCE mapping_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK mapping_init(INIT_ONCE *once, void *parameter, void **context)
+{
+	InitializeCriticalSection(&mapping_lock);
+	return TRUE;
+}
+
+static int hex_digit(WCHAR character)
+{
+	if (character >= L'0' && character <= L'9')
+		return character - L'0';
+	if (character >= L'a' && character <= L'f')
+		return character - L'a' + 10;
+	if (character >= L'A' && character <= L'F')
+		return character - L'A' + 10;
+	return -1;
+}
+
+/* The file a mapped address names, or FALSE when the address is not under a mapped host or leaves its folder. */
+static BOOL mapped_file(const WCHAR *address, WCHAR *path)
+{
+	const WCHAR *at = address;
+	while (*at && *at != L':')
+		at++;
+	if (at[0] != L':' || at[1] != L'/' || at[2] != L'/')
+		return FALSE;
+	const WCHAR *host = at + 3, *end = host;
+	while (*end && *end != L'/' && *end != L':' && *end != L'?' && *end != L'#')
+		end++;
+	const WCHAR *rest = end;
+	while (*rest && *rest != L'/' && *rest != L'?' && *rest != L'#')
+		rest++;
+	BOOL found = FALSE;
+	InitOnceExecuteOnce(&mapping_once, mapping_init, NULL, NULL);
+	EnterCriticalSection(&mapping_lock);
+	for (int i = 0; i < mapping_count && !found; i++)
+		if (lstrlenW(mappings[i].host) == end - host &&
+			CompareStringOrdinal(host, (int)(end - host), mappings[i].host, (int)(end - host), TRUE) == CSTR_EQUAL) {
+			lstrcpyW(path, mappings[i].folder);
+			found = TRUE;
+		}
+	LeaveCriticalSection(&mapping_lock);
+	if (!found)
+		return FALSE;
+	int length = lstrlenW(path);
+	for (const WCHAR *part = rest; *part && *part != L'?' && *part != L'#'; part++) {
+		WCHAR character = *part;
+		if (character == L'%' && hex_digit(part[1]) >= 0 && hex_digit(part[2]) >= 0) {
+			character = (WCHAR)(hex_digit(part[1]) * 16 + hex_digit(part[2]));
+			part += 2;
+		}
+		if (character == L'/')
+			character = L'\\';
+		if (length >= MAX_PATH - 1 || !character)
+			return FALSE;
+		path[length++] = character;
+	}
+	path[length] = 0;
+	// A path that climbs out of the folder names nothing.
+	for (const WCHAR *part = path; *part; part++)
+		if (part[0] == L'\\' && part[1] == L'.' && part[2] == L'.' && (!part[3] || part[3] == L'\\'))
+			return FALSE;
+	return TRUE;
+}
+
+static int CEF_CALLBACK file_open(cef_resource_handler_t *self, cef_request_t *cef_request, int *handle_request, cef_callback_t *callback)
+{
+	engine_release(cef_request);
+	engine_release(callback);
+	*handle_request = 1;
+	return 1;
+}
+
+static cef_resource_handler_t *CEF_CALLBACK files_create(cef_scheme_handler_factory_t *self, cef_browser_t *browser, cef_frame_t *frame,
+	const cef_string_t *scheme, cef_request_t *cef_request)
+{
+	WCHAR *address = engine_take_userfree(cef_request->get_url(cef_request));
+	WCHAR path[MAX_PATH];
+	fetch *request = NULL;
+	if (address && mapped_file(address, path))
+		request = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*request));
+	if (request) {
+		request->handler.base.size = sizeof(request->handler);
+		request->handler.base.add_ref = fetch_add_ref;
+		request->handler.base.release = fetch_release;
+		request->handler.base.has_one_ref = fetch_one_ref;
+		request->handler.base.has_at_least_one_ref = fetch_some_ref;
+		request->handler.open = file_open;
+		request->handler.get_response_headers = fetch_headers;
+		request->handler.skip = fetch_skip;
+		request->handler.read = fetch_read;
+		request->handler.cancel = fetch_cancel;
+		request->refs = 1;
+		request->address = address;
+		address = NULL;
+		request->mime = mime_of(path);
+		request->status = 404;
+		HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+		LARGE_INTEGER size;
+		if (file != INVALID_HANDLE_VALUE) {
+			if (GetFileSizeEx(file, &size) && size.QuadPart < 0x40000000 &&
+				(request->data = HeapAlloc(GetProcessHeap(), 0, size.QuadPart ? (SIZE_T)size.QuadPart : 1)) &&
+				ReadFile(file, request->data, (DWORD)size.QuadPart, &request->size, NULL) && request->size == (DWORD)size.QuadPart)
+				request->status = 200;
+			CloseHandle(file);
+		}
+		if (request->status != 200)
+			engine_trace("mapped folder has nothing at", request->address);
+	}
+	HeapFree(GetProcessHeap(), 0, address);
+	engine_release(cef_request);
+	engine_release(frame);
+	engine_release(browser);
+	// An address under no mapping, such as one of a host mapped only for another window, goes to the network.
+	return request ? &request->handler : NULL;
+}
+
+static cef_scheme_handler_factory_t folder_files = {.base = STATIC_BASE(cef_scheme_handler_factory_t), .create = files_create};
+
+static void register_mapping(int index)
+{
+	cef_string_t scheme = {0}, host = {0};
+	engine_set_text(&host, mappings[index].host);
+	for (int i = 0; i < 2; i++) {
+		engine_set_text(&scheme, i ? L"http" : L"https");
+		cef.register_factory(&scheme, &host, &folder_files);
+		cef.string_clear(&scheme);
+	}
+	cef.string_clear(&host);
+}
+
+BOOL engine_map_folder(const WCHAR *host, const WCHAR *folder_path)
+{
+	if (!host || !*host || !folder_path || lstrlenW(host) >= 256 || lstrlenW(folder_path) >= MAX_PATH - 1)
+		return FALSE;
+	InitOnceExecuteOnce(&mapping_once, mapping_init, NULL, NULL);
+	EnterCriticalSection(&mapping_lock);
+	int index = 0;
+	while (index < mapping_count && CompareStringOrdinal(mappings[index].host, -1, host, -1, TRUE) != CSTR_EQUAL)
+		index++;
+	if (index == ARRAYSIZE(mappings)) {
+		LeaveCriticalSection(&mapping_lock);
+		return FALSE;
+	}
+	if (index == mapping_count)
+		mapping_count++;
+	lstrcpyW(mappings[index].host, host);
+	lstrcpyW(mappings[index].folder, folder_path);
+	// The folder's path without a closing separator, as the request's path brings its own.
+	int length = lstrlenW(mappings[index].folder);
+	while (length && (mappings[index].folder[length - 1] == L'\\' || mappings[index].folder[length - 1] == L'/'))
+		mappings[index].folder[--length] = 0;
+	LeaveCriticalSection(&mapping_lock);
+	if (state == engine_running)
+		register_mapping(index);
+	return TRUE;
+}
+
 static void CEF_CALLBACK after_created(cef_life_span_handler_t *self, cef_browser_t *browser)
 {
 	HWND window = control_window(browser);
@@ -361,13 +555,13 @@ static void CEF_CALLBACK after_created(cef_life_span_handler_t *self, cef_browse
 
 static cef_life_span_handler_t life_span = {.base = STATIC_BASE(cef_life_span_handler_t), .on_after_created = after_created};
 
-static void reached(cef_browser_t *browser, cef_frame_t *frame)
+static void reached(cef_browser_t *browser, cef_frame_t *frame, BOOL failed)
 {
 	if (frame->is_main(frame)) {
 		HWND window = control_window(browser);
 		WCHAR *address = engine_take_userfree(frame->get_url(frame));
 		engine_trace("page reached", address);
-		if (!window || !address || !PostMessageW(window, ENGINE_REACHED, 0, (LPARAM)address))
+		if (!window || !address || !PostMessageW(window, ENGINE_REACHED, failed, (LPARAM)address))
 			HeapFree(GetProcessHeap(), 0, address);
 	}
 	engine_release(frame);
@@ -376,7 +570,7 @@ static void reached(cef_browser_t *browser, cef_frame_t *frame)
 
 static void CEF_CALLBACK load_end(cef_load_handler_t *self, cef_browser_t *browser, cef_frame_t *frame, int status)
 {
-	reached(browser, frame);
+	reached(browser, frame, FALSE);
 }
 
 static void CEF_CALLBACK load_error(cef_load_handler_t *self, cef_browser_t *browser, cef_frame_t *frame, cef_errorcode_t error, const cef_string_t *text,
@@ -385,7 +579,8 @@ static void CEF_CALLBACK load_error(cef_load_handler_t *self, cef_browser_t *bro
 	WCHAR *failed = engine_copy_text(address);
 	engine_trace("page failed", failed);
 	HeapFree(GetProcessHeap(), 0, failed);
-	reached(browser, frame);
+	// An aborted load is the start of another, not a failure.
+	reached(browser, frame, error != ERR_ABORTED);
 }
 
 static cef_load_handler_t loads = {.base = STATIC_BASE(cef_load_handler_t), .on_load_end = load_end, .on_load_error = load_error};
@@ -569,8 +764,23 @@ static BOOL start(const WCHAR *scheme)
 		return FALSE;
 	}
 	cef.api_hash(CEF_API_VERSION, 0);
-	if (!builtin_scheme(scheme))
-		lstrcpynW(schemes, scheme, ARRAYSIZE(schemes));
+	add_scheme(scheme);
+	// The schemes the process serves itself through urlmon's namespaces join the one that started the engine, as Chromium learns custom
+	// schemes only when it starts and a control of another kind may start it first.
+	DWORD (WINAPI *name_spaces)(WCHAR *, DWORD) = (void *)GetProcAddress(LoadLibraryW(L"urlmon.dll"), "RavenNameSpaces");
+	WCHAR served[256];
+	if (name_spaces && name_spaces(served, ARRAYSIZE(served)) < ARRAYSIZE(served))
+		for (WCHAR *name = served; *name;) {
+			WCHAR *end = name;
+			while (*end && *end != L',')
+				end++;
+			const BOOL last = !*end;
+			*end = 0;
+			add_scheme(name);
+			name = last ? end : end + 1;
+		}
+	if (*schemes)
+		engine_trace("page engine serves the schemes", schemes);
 
 	WCHAR text[MAX_PATH], program[MAX_PATH], data[MAX_PATH];
 	cef_settings_t settings = {sizeof(settings)};
@@ -599,13 +809,22 @@ static BOOL start(const WCHAR *scheme)
 		engine_trace("page engine did not start", NULL);
 		return FALSE;
 	}
-	if (*schemes) {
+	for (const WCHAR *list = schemes; *list;) {
+		const WCHAR *end = list;
+		while (*end && *end != L',')
+			end++;
 		cef_string_t name_text = {0};
-		engine_set_text(&name_text, schemes);
+		cef.string_set((const char16_t *)list, end - list, &name_text, 1);
 		cef.register_factory(&name_text, NULL, &program_protocols);
 		cef.string_clear(&name_text);
+		list = *end ? end + 1 : end;
 	}
 	state = engine_running;
+	InitOnceExecuteOnce(&mapping_once, mapping_init, NULL, NULL);
+	EnterCriticalSection(&mapping_lock);
+	for (int i = 0; i < mapping_count; i++)
+		register_mapping(i);
+	LeaveCriticalSection(&mapping_lock);
 	engine_trace("page engine started for", scheme);
 	return TRUE;
 }
@@ -681,6 +900,20 @@ WEBENGINE_API BOOL engine_navigate(HWND window, const WCHAR *address)
 		RemovePropW(window, expected_property);
 		return FALSE;
 	}
+	return TRUE;
+}
+
+WEBENGINE_API BOOL engine_execute(HWND window, const WCHAR *script)
+{
+	cef_browser_t *browser = GetPropW(window, browser_property);
+	cef_frame_t *frame = browser ? browser->get_main_frame(browser) : NULL;
+	if (!frame)
+		return FALSE;
+	cef_string_t code = {0}, address = {0};
+	engine_set_text(&code, script);
+	frame->execute_java_script(frame, &code, &address, 0);
+	cef.string_clear(&code);
+	engine_release(frame);
 	return TRUE;
 }
 

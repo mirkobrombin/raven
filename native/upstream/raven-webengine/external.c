@@ -640,9 +640,93 @@ static void CEF_CALLBACK browser_destroyed(cef_render_process_handler_t *self, c
 	engine_release(browser);
 }
 
+/* __ravenPost of a page whose control gave it a script to run first: what the page passes reaches the control's window in turn. */
+typedef struct poster {
+	cef_v8_handler_t handler;
+	LONG refs;
+	HWND window;
+} poster;
+
+static void CEF_CALLBACK poster_add_ref(cef_base_ref_counted_t *self)
+{
+	InterlockedIncrement(&((poster *)self)->refs);
+}
+
+static int CEF_CALLBACK poster_release(cef_base_ref_counted_t *self)
+{
+	if (InterlockedDecrement(&((poster *)self)->refs))
+		return 0;
+	HeapFree(GetProcessHeap(), 0, self);
+	return 1;
+}
+
+static int CEF_CALLBACK poster_one_ref(cef_base_ref_counted_t *self)
+{
+	return ((poster *)self)->refs == 1;
+}
+
+static int CEF_CALLBACK poster_some_ref(cef_base_ref_counted_t *self)
+{
+	return ((poster *)self)->refs > 0;
+}
+
+static int CEF_CALLBACK poster_execute(cef_v8_handler_t *self, const cef_string_t *name, cef_v8_value_t *object, size_t count,
+	cef_v8_value_t *const *arguments, cef_v8_value_t **result, cef_string_t *exception)
+{
+	WCHAR *text = NULL;
+	if (count && arguments[0]->is_string(arguments[0]))
+		text = engine_take_userfree(arguments[0]->get_string_value(arguments[0]));
+	for (size_t i = 0; i < count; i++)
+		engine_release(arguments[i]);
+	engine_release(object);
+	if (text && !PostMessageW(((poster *)self)->window, ENGINE_POSTED, 0, (LPARAM)text))
+		HeapFree(GetProcessHeap(), 0, text);
+	*result = cef.undefined();
+	return 1;
+}
+
+/* Runs the control's script for the document, with __ravenPost defined while it runs. */
+static void run_first(HWND window, cef_v8_context_t *context, WCHAR *script)
+{
+	cef_v8_value_t *global = context->get_global(context);
+	poster *handler = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*handler));
+	if (!global || !handler) {
+		HeapFree(GetProcessHeap(), 0, handler);
+		engine_release(global);
+		return;
+	}
+	handler->handler.base = (cef_base_ref_counted_t){sizeof(cef_v8_handler_t), poster_add_ref, poster_release, poster_one_ref, poster_some_ref};
+	handler->handler.execute = poster_execute;
+	handler->refs = 1;
+	handler->window = window;
+	cef_string_t key = {0}, code = {0}, address = {0};
+	engine_set_text(&key, L"__ravenPost");
+	cef_v8_value_t *function = cef.function(&key, &handler->handler);
+	global->set_value_bykey(global, &key, function, V8_PROPERTY_ATTRIBUTE_DONTENUM);
+	engine_set_text(&code, script);
+	cef_v8_value_t *value = NULL;
+	cef_v8_exception_t *error = NULL;
+	if (!context->eval(context, &code, &address, 0, &value, &error)) {
+		WCHAR *message = error ? engine_take_userfree(error->get_message(error)) : NULL;
+		engine_trace("document script failed", message);
+		HeapFree(GetProcessHeap(), 0, message);
+	}
+	engine_release(value);
+	engine_release(error);
+	global->delete_value_bykey(global, &key);
+	cef.string_clear(&key);
+	cef.string_clear(&code);
+	engine_release(global);
+}
+
 static void CEF_CALLBACK context_created(cef_render_process_handler_t *self, cef_browser_t *browser, cef_frame_t *frame, cef_v8_context_t *context)
 {
 	HWND window = window_of(browser);
+	WCHAR *script = window ? (WCHAR *)SendMessageW(window, ENGINE_SCRIPTS, 0, 0) : NULL;
+	if (script) {
+		run_first(window, context, script);
+		HeapFree(GetProcessHeap(), 0, script);
+	}
 	IDispatch *external = window ? (IDispatch *)SendMessageW(window, ENGINE_EXTERNAL, 0, 0) : NULL;
 	if (external) {
 		cef_v8_value_t *global = context->get_global(context);
