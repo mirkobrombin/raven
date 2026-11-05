@@ -9,6 +9,8 @@
 #include <cwctype>
 #include <functional>
 #include <map>
+#include <optional>
+#include <span>
 
 namespace raven {
 
@@ -43,6 +45,27 @@ constexpr std::pair<std::u16string_view, uint32_t> known_locales[]{{u"ar", 0x01}
 	{u"fr-BE", 0x80c}, {u"it-CH", 0x810}, {u"nl-BE", 0x813}, {u"nn-NO", 0x814}, {u"pt-PT", 0x816}, {u"zh-HK", 0xc04}, {u"de-AT", 0xc07},
 	{u"en-AU", 0xc09}, {u"es-ES", 0xc0a}, {u"fr-CA", 0xc0c}, {u"en-CA", 0x1009}, {u"fr-CH", 0x100c}, {u"en-IE", 0x1809}, {u"sr-Latn-RS", 0x241a},
 	{u"sr-Cyrl-RS", 0x281a}, {u"en-IN", 0x4009}, {u"es-US", 0x540a}};
+// Every other locale identifier Windows defines, with the name it gives it; the list above wins where both name one.
+#include "locale_identifiers.inc"
+
+// The identifier of a locale name, or of the name of an identifier, in the list above first and then in the generated one.
+std::optional<uint32_t> identifier_of(std::u16string_view name)
+{
+	for (const auto &list : {std::span<const std::pair<std::u16string_view, uint32_t>>(known_locales), std::span<const std::pair<std::u16string_view, uint32_t>>(generated_locales)})
+		for (const auto &[known, locale] : list)
+			if (!compare_fold(name, known))
+				return locale;
+	return std::nullopt;
+}
+
+std::optional<std::u16string_view> name_of(uint32_t locale)
+{
+	for (const auto &list : {std::span<const std::pair<std::u16string_view, uint32_t>>(known_locales), std::span<const std::pair<std::u16string_view, uint32_t>>(generated_locales)})
+		for (const auto &[known, identifier] : list)
+			if (identifier == locale)
+				return known;
+	return std::nullopt;
+}
 
 const std::map<uint32_t, std::u16string> &locale_strings()
 {
@@ -1218,11 +1241,10 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0x409);
 			return;
 		}
-		for (const auto &[known, locale] : known_locales)
-			if (!compare_fold(name, known)) {
-				call.ret(locale);
-				return;
-			}
+		if (const auto locale = identifier_of(name)) {
+			call.ret(*locale);
+			return;
+		}
 		call.fail(87);
 	});
 	registry.add("LCIDToLocaleName", 4, [](ApiCall &call) {
@@ -1231,12 +1253,12 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 		if (locale == 0 || locale == 0x400 || locale == 0x800)
 			name = u"en-US";
 		else if (locale != 0x7f) {
-			const auto known = std::find_if(std::begin(known_locales), std::end(known_locales), [locale](const auto &entry) { return entry.second == locale; });
-			if (known == std::end(known_locales)) {
+			const auto known = name_of(locale);
+			if (!known) {
 				call.fail(87);
 				return;
 			}
-			name = known->first;
+			name = *known;
 		}
 		const int32_t capacity = call.i32(2);
 		if (capacity && size_t(capacity) <= name.size()) {

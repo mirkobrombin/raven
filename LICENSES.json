@@ -510,6 +510,17 @@
       "provenance": "native/upstream/windows-bestfit/provenance.json"
     },
     {
+      "name": "Windows locale identifiers",
+      "paths": [
+        "native/nt/locale_identifiers.inc"
+      ],
+      "license": "Unicode-3.0",
+      "review": "reviewed",
+      "revision": "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
+      "provenance": "The identifier and name pairs of icu4c/source/common/locmap.cpp in ICU 78.2 as https://chromium.googlesource.com/chromium/deps/icu.git carries it, written by scripts/generate-locale-identifiers.py",
+      "boundary": "A table of locale identifiers and names compiled into raven. No ICU code."
+    },
+    {
       "name": "Raven controls",
       "cmake_keys": [
         "RAVEN_CONTROLS_COMPONENT_DIR",
