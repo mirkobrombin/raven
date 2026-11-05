@@ -2652,6 +2652,56 @@ static constexpr std::pair<std::string_view, uint8_t> ntdsapi_words[]{
 	{"DsUnquoteRdnValueA",4},{"DsUnquoteRdnValueW",4},{"DsWriteAccountSpnA",5},{"DsWriteAccountSpnW",5},{"DsaopBind",5},{"DsaopBindWithCred",6},
 	{"DsaopBindWithSpn",7},{"DsaopExecuteScript",6},{"DsaopPrepareScript",4},{"DsaopUnBind",1},
 };
+static constexpr std::pair<std::string_view, uint8_t> activeds_words[]{
+	{"ADsBuildEnumerator",2},{"ADsBuildVarArrayInt",3},{"ADsBuildVarArrayStr",3},{"ADsDecodeBinaryData",3},{"ADsEncodeBinaryData",3},{"ADsEnumerateNext",4},
+	{"ADsFreeEnumerator",1},{"ADsGetLastError",5},{"ADsGetObject",3},{"ADsOpenObject",6},{"ADsSetLastError",3},{"AdsFreeAdsValues",2},
+	{"AdsTypeToPropVariant",3},{"AdsTypeToPropVariant2",7},{"AllocADsMem",1},{"AllocADsStr",1},{"BinarySDToSecurityDescriptor",6},{"ConvertSecDescriptorToVariant",6},
+	{"ConvertSecurityDescriptorToSecDes",7},{"ConvertTrusteeToSid",7},{"DllCanUnloadNow",0},{"DllGetClassObject",3},{"FreeADsMem",1},{"FreeADsStr",1},
+	{"PropVariantToAdsType",4},{"PropVariantToAdsType2",8},{"ReallocADsMem",3},{"ReallocADsStr",2},{"SecurityDescriptorToBinarySD",10},
+};
+static constexpr std::pair<std::string_view, uint8_t> httpapi_words[]{
+	{"HttpAddFragmentToCache",5},{"HttpAddUrl",3},{"HttpAddUrlToUrlGroup",6},{"HttpCancelHttpRequest",4},{"HttpCloseRequestQueue",1},{"HttpCloseServerSession",2},
+	{"HttpCloseUrlGroup",2},{"HttpControlService",5},{"HttpCreateHttpHandle",2},{"HttpCreateRequestQueue",5},{"HttpCreateServerSession",3},{"HttpCreateUrlGroup",4},
+	{"HttpDeleteServiceConfiguration",5},{"HttpFlushResponseCache",4},{"HttpGetCounters",6},{"HttpInitialize",3},{"HttpQueryRequestQueueProperty",7},{"HttpQueryServerSessionProperty",6},
+	{"HttpQueryServiceConfiguration",8},{"HttpQueryUrlGroupProperty",6},{"HttpReadFragmentFromCache",7},{"HttpReceiveClientCertificate",8},{"HttpReceiveHttpRequest",8},{"HttpReceiveRequestEntityBody",8},
+	{"HttpRemoveUrl",2},{"HttpRemoveUrlFromUrlGroup",4},{"HttpSendHttpResponse",11},{"HttpSendResponseEntityBody",11},{"HttpSetRequestQueueProperty",6},{"HttpSetServerSessionProperty",5},
+	{"HttpSetServiceConfiguration",5},{"HttpSetUrlGroupProperty",5},{"HttpShutdownRequestQueue",1},{"HttpTerminate",2},{"HttpWaitForDemandStart",2},{"HttpWaitForDisconnect",4},
+	{"HttpWaitForDisconnectEx",5},
+};
+static constexpr std::pair<std::string_view, uint8_t> msacm32_words[]{
+	{"XRegThunkEntry",9},{"acmDriverAddA",5},{"acmDriverAddW",5},{"acmDriverClose",2},{"acmDriverDetailsA",3},{"acmDriverDetailsW",3},
+	{"acmDriverEnum",3},{"acmDriverID",3},{"acmDriverMessage",4},{"acmDriverOpen",3},{"acmDriverPriority",3},{"acmDriverRemove",2},
+	{"acmFilterChooseA",1},{"acmFilterChooseW",1},{"acmFilterDetailsA",3},{"acmFilterDetailsW",3},{"acmFilterEnumA",5},{"acmFilterEnumW",5},
+	{"acmFilterTagDetailsA",3},{"acmFilterTagDetailsW",3},{"acmFilterTagEnumA",5},{"acmFilterTagEnumW",5},{"acmFormatChooseA",1},{"acmFormatChooseW",1},
+	{"acmFormatDetailsA",3},{"acmFormatDetailsW",3},{"acmFormatEnumA",5},{"acmFormatEnumW",5},{"acmFormatSuggest",5},{"acmFormatTagDetailsA",3},
+	{"acmFormatTagDetailsW",3},{"acmFormatTagEnumA",5},{"acmFormatTagEnumW",5},{"acmGetVersion",0},{"acmMessage32",6},{"acmMetrics",3},
+	{"acmStreamClose",2},{"acmStreamConvert",3},{"acmStreamMessage",4},{"acmStreamOpen",8},{"acmStreamPrepareHeader",3},{"acmStreamReset",2},
+	{"acmStreamSize",4},{"acmStreamUnprepareHeader",3},
+};
+static constexpr std::pair<std::string_view, uint8_t> mscms_words[]{
+	{"AssociateColorProfileWithDeviceA",3},{"AssociateColorProfileWithDeviceW",3},{"CheckBitmapBits",9},{"CheckColors",5},{"CloseColorProfile",1},{"CloseDisplay",1},
+	{"ColorAdapterGetCurrentProfileCalibration",6},{"ColorAdapterGetDisplayCurrentStateID",4},{"ColorAdapterGetDisplayProfile",6},{"ColorAdapterGetDisplayTargetWhitePoint",6},{"ColorAdapterGetDisplayTransformData",5},{"ColorAdapterGetSystemModifyWhitePointCaps",2},
+	{"ColorAdapterRegisterOEMColorService",1},{"ColorAdapterUnregisterOEMColorService",1},{"ColorAdapterUpdateDeviceProfile",4},{"ColorAdapterUpdateDisplayGamma",5},{"ColorCplGetDefaultProfileScope",4},{"ColorCplGetDefaultRenderingIntentScope",1},
+	{"ColorCplGetProfileProperties",2},{"ColorCplHasSystemWideAssociationListChanged",3},{"ColorCplInitialize",0},{"ColorCplLoadAssociationList",5},{"ColorCplMergeAssociationLists",2},{"ColorCplOverwritePerUserAssociationList",2},
+	{"ColorCplReleaseProfileProperties",1},{"ColorCplResetSystemWideAssociationListChangedWarning",2},{"ColorCplSaveAssociationList",5},{"ColorCplSetUsePerUserProfiles",3},{"ColorCplUninitialize",0},{"ColorProfileAddDisplayAssociation",7},
+	{"ColorProfileGetDisplayDefault",7},{"ColorProfileGetDisplayList",6},{"ColorProfileGetDisplayUserScope",4},{"ColorProfileRemoveDisplayAssociation",6},{"ColorProfileSetDisplayDefaultAssociation",7},{"ConvertColorNameToIndex",4},
+	{"ConvertIndexToColorName",4},{"CreateColorTransformA",4},{"CreateColorTransformW",4},{"CreateDeviceLinkProfile",7},{"CreateMultiProfileTransform",6},{"CreateProfileFromLogColorSpaceA",2},
+	{"CreateProfileFromLogColorSpaceW",2},{"DccwCreateDisplayProfileAssociationList",1},{"DccwGetDisplayProfileAssociationList",3},{"DccwGetGamutSize",2},{"DccwReleaseDisplayProfileAssociationList",1},{"DccwSetDisplayProfileAssociationList",3},
+	{"DeleteColorTransform",1},{"DeviceRenameEvent",3},{"DisassociateColorProfileFromDeviceA",3},{"DisassociateColorProfileFromDeviceW",3},{"EnumColorProfilesA",5},{"EnumColorProfilesW",5},
+	{"GenerateCopyFilePaths",9},{"GetCMMInfo",2},{"GetColorDirectoryA",3},{"GetColorDirectoryW",3},{"GetColorProfileElement",6},{"GetColorProfileElementTag",3},
+	{"GetColorProfileFromHandle",3},{"GetColorProfileHeader",2},{"GetCountColorProfileElements",2},{"GetNamedProfileInfo",2},{"GetPS2ColorRenderingDictionary",5},{"GetPS2ColorRenderingIntent",4},
+	{"GetPS2ColorSpaceArray",6},{"GetStandardColorSpaceProfileA",4},{"GetStandardColorSpaceProfileW",4},{"InstallColorProfileA",2},{"InstallColorProfileW",2},{"InternalGetAppliedGDIGammaRamp",2},
+	{"InternalGetAppliedGammaRamp",2},{"InternalGetDeviceConfig",6},{"InternalGetDeviceGammaCapability",1},{"InternalGetPS2CSAFromLCS",4},{"InternalGetPS2ColorRenderingDictionary",5},{"InternalGetPS2ColorRenderingDictionary2",6},
+	{"InternalGetPS2ColorSpaceArray",6},{"InternalGetPS2ColorSpaceArray2",7},{"InternalGetPS2PreviewCRD",6},{"InternalGetPS2PreviewCRD2",8},{"InternalRefreshCalibration",2},{"InternalSetDeviceConfig",6},
+	{"InternalSetDeviceGDIGammaRamp",3},{"InternalSetDeviceGammaRamp",3},{"InternalSetDeviceTemperature",4},{"InternalWcsAssociateColorProfileWithDevice",5},{"InternalWcsDisassociateColorProfileWithDevice",4},{"IsColorProfileTagPresent",3},
+	{"IsColorProfileValid",2},{"OpenColorProfileA",4},{"OpenColorProfileW",4},{"OpenDisplay",4},{"RegisterCMMA",3},{"RegisterCMMW",3},
+	{"SelectCMM",1},{"SetColorProfileElement",5},{"SetColorProfileElementReference",3},{"SetColorProfileElementSize",3},{"SetColorProfileHeader",2},{"SetStandardColorSpaceProfileA",3},
+	{"SetStandardColorSpaceProfileW",3},{"SpoolerCopyFileEvent",3},{"TranslateBitmapBits",11},{"TranslateColors",6},{"UninstallColorProfileA",3},{"UninstallColorProfileW",3},
+	{"UnregisterCMMA",2},{"UnregisterCMMW",2},{"WcsAssociateColorProfileWithDevice",3},{"WcsCheckColors",7},{"WcsCreateIccProfile",2},{"WcsDisassociateColorProfileFromDevice",3},
+	{"WcsEnumColorProfiles",5},{"WcsEnumColorProfilesSize",3},{"WcsGetCalibrationManagementState",1},{"WcsGetDefaultColorProfile",7},{"WcsGetDefaultColorProfileSize",6},{"WcsGetDefaultRenderingIntent",2},
+	{"WcsGetUsePerUserProfiles",3},{"WcsGpCanInstallOrUninstallProfiles",1},{"WcsGpCanModifyDeviceAssociationList",3},{"WcsOpenColorProfileA",7},{"WcsOpenColorProfileW",7},{"WcsSetCalibrationManagementState",1},
+	{"WcsSetDefaultColorProfile",6},{"WcsSetDefaultRenderingIntent",2},{"WcsSetUsePerUserProfiles",3},{"WcsTranslateColors",10},
+};
 static constexpr std::pair<std::string_view, std::span<const std::pair<std::string_view, uint8_t>>> argument_tables[]{
 	{"advapi32.dll", advapi32_words},
 	{"bcrypt.dll", bcrypt_words},
@@ -2726,4 +2776,8 @@ static constexpr std::pair<std::string_view, std::span<const std::pair<std::stri
 	{"security.dll", security_words},
 	{"sspicli.dll", sspicli_words},
 	{"ntdsapi.dll", ntdsapi_words},
+	{"activeds.dll", activeds_words},
+	{"httpapi.dll", httpapi_words},
+	{"msacm32.dll", msacm32_words},
+	{"mscms.dll", mscms_words},
 };

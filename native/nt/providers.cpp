@@ -62,13 +62,13 @@ static std::vector<uint8_t> read_host_file(const std::filesystem::path &path)
 }
 
 // The PathCch functions live in kernelbase.dll on Windows and are not in the import libraries the public lists come from.
-static constexpr std::array<std::string_view, 50> names{
+static constexpr std::array<std::string_view, 51> names{
 	"CloseHandle","CreateEventA","CreateEventW","ExitProcess",
 	"FindResourceA", "FindResourceExA", "FindResourceExW", "FindResourceW", "FreeLibrary",
 	"GetACP", "GetCommandLineA", "GetCommandLineW", "GetCurrentProcessId", "GetCurrentThreadId", "GetFileType", "GetLastError", "GetModuleHandleA",
 	"GetModuleHandleW", "GetProcAddress", "GetProcessHeap", "GetStartupInfoA", "GetStartupInfoW", "GetStdHandle", "HeapAlloc", "HeapCreate", "HeapDestroy", "HeapFree", "HeapReAlloc", "HeapSize",
 	"LoadLibraryA", "LoadLibraryW", "LoadResource",
-	"LockResource", "MultiByteToWideChar", "PathCchCanonicalize", "PathCchCanonicalizeEx", "PathCchCombineEx", "PathCchRemoveFileSpec", "PathCchSkipRoot", "RaiseException", "ResetEvent", "SetEvent", "SetLastError", "SizeofResource",
+	"LockResource", "MultiByteToWideChar", "PathAllocCanonicalize", "PathCchCanonicalize", "PathCchCanonicalizeEx", "PathCchCombineEx", "PathCchRemoveFileSpec", "PathCchSkipRoot", "RaiseException", "ResetEvent", "SetEvent", "SetLastError", "SizeofResource",
 	"VirtualAlloc", "VirtualFree", "VirtualProtect", "VirtualQuery", "WaitForSingleObject", "WriteFile"
 };
 
@@ -2114,6 +2114,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"_vsnprintf",
 		// The registry natives, which libraries loaded after start (the Click-to-Run integration of Office among them) import by name.
 		"NtCreateKey", "NtOpenKey", "NtOpenKeyEx", "NtQueryKey", "NtQueryValueKey", "NtSetValueKey", "NtDeleteValueKey", "NtSetInformationKey",
+		// Creating and opening keyed events, which PDF-XChange Editor's core library imports beside waiting on and releasing them.
+		"NtCreateKeyedEvent", "NtOpenKeyedEvent",
 		// Looked up by diagnostics code that records where a call came from.
 		"RtlCaptureStackBackTrace",
 		// What the virtualization layer of Click-to-Run Office imports from ntdll: more of the registry and the objects, counted strings,

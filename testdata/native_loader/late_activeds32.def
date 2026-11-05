@@ -1,0 +1,5 @@
+; The directory services functions by number alone, as programs import them.
+LIBRARY ACTIVEDS.dll
+EXPORTS
+	ADsGetObject@12 @3 NONAME
+	ADsGetLastError@20 @13 NONAME

@@ -917,6 +917,29 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(0);
 	});
 	registry.add("PathCchCanonicalizeEx", 4, path_cch_canonicalize);
+	// PathAllocCanonicalize gives the same form in memory the caller frees with LocalFree. Only PATHCCH_ALLOW_LONG_PATHS lets the result
+	// pass MAX_PATH; a longer one is HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE).
+	registry.add("PathAllocCanonicalize", 3, [&context](ApiCall &call) {
+		if (call[2])
+			call.store_pointer(call[2], 0);
+		if (!call[0] || !call[2]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		const auto result = canonical(call.wide(call[0]));
+		if (result.size() >= (call.u32(1) & 1 ? 32768U : max_path)) {
+			call.ret(0x800700ceU);
+			return;
+		}
+		const auto copy = context.allocator.allocate((result.size() + 1) * 2, false);
+		if (!copy) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		call.put_wide(copy, result, result.size() + 1);
+		call.store_pointer(call[2], copy);
+		call.ret(0);
+	});
 	registry.add("PathAddBackslashW", 1, [](ApiCall &call) {
 		auto path = call.wide(call[0], max_path * 4);
 		if (path.empty() || separator(path.back())) {
