@@ -153,6 +153,18 @@ NativeMemoryRange NativeMemory::allocate(uint64_t address, uint64_t size, uint32
 		return {0,0,invalid};
 	// MEM_TOP_DOWN only asks for the highest free address; any free address serves the program as well.
 	type&=~0x100000U;
+	// MEM_RESET and MEM_RESET_UNDO only say whether the program still needs what committed pages hold. Keeping it always is allowed, so
+	// they change nothing once the range is known to be committed; the protection asked for is ignored, as Windows ignores it.
+	if (type==0x80000U || type==0x1000000U) {
+		const uint64_t base=address & ~uint64_t(4095), length=(size+address-base+4095) & ~uint64_t(4095);
+		const auto found=address && size ? region(base,length) : regions.end();
+		if (found==regions.end())
+			return {0,0,invalid};
+		const auto first=(base-found->first)/4096;
+		if (found->second.pages.nonzero(first,length/4096)!=length/4096)
+			return {0,0,conflict};
+		return {base,length};
+	}
 	if (!(type & 0x3000) || (type & ~0x3000U))
 		return {0,0,unsupported};
 	const auto permissions=protection(access);

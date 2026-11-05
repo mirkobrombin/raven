@@ -47,6 +47,11 @@ int main(int argc, char **argv)
 		process.write_memory(committed.address,std::array<uint8_t,1>{91});
 		check(!memory.allocate(committed.address,1,0x1000,4).status && process.read_memory(committed.address,1)[0]==91,
 			"repeated commit lost live data");
+		const auto reset=memory.allocate(committed.address,4096,0x80000,1);
+		check(!reset.status && reset.address==committed.address && reset.size==4096 && memory.bytes()==8192 &&
+			!memory.allocate(committed.address,4096,0x1000000,4).status,"reset of committed pages failed or changed accounting");
+		check(memory.allocate(reserved.address,8192,0x80000,4).status==0xc0000018U && memory.allocate(0,4096,0x80000,4).status &&
+			memory.allocate(committed.address,4096,0x81000,4).status,"reset of reserved pages, of no address or with a commit was accepted");
 		check(!memory.protect(committed.address+1,1,2).status,"readonly page protection failed");
 		rejected([&] { process.write_memory(committed.address,std::array<uint8_t,1>{0}); },"writable");
 		check(!memory.free(committed.address+7,1,0x4000).status,"decommit failed");
