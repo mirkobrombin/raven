@@ -286,6 +286,11 @@ int raven_entry(void)
 	/* Older MinGW import libraries omit this UCRT export. */
 	size_t (__cdecl *limited_length)(const char *, size_t) = (void *)GetProcAddress(GetModuleHandleA("ucrtbase.dll"), "strnlen");
 	if (!limited_length || strtoll("-9223372036854775808", 0, 10) != (long long)0x8000000000000000ULL || limited_length("abcdef", 3) != 3) return 14;
+	/* The locale forms of the case-insensitive compares, which the extended events engine of Analysis Services imports. */
+	int (__cdecl *compare_locale)(const char *, const char *, size_t, _locale_t) = (void *)GetProcAddress(GetModuleHandleA("ucrtbase.dll"), "_strnicmp_l");
+	int (__cdecl *whole_locale)(const char *, const char *, _locale_t) = (void *)GetProcAddress(GetModuleHandleA("ucrtbase.dll"), "_stricmp_l");
+	if (!compare_locale || !whole_locale || compare_locale("Event.X", "EVENT.y", 6, NULL) || !compare_locale("abc", "abd", 3, NULL) ||
+		whole_locale("Session", "SESSION", NULL) || whole_locale("a", "b", NULL) >= 0) return 61;
 	block = _aligned_malloc(100, 64);
 	if (!block || ((unsigned long long)block & 63)) return 15;
 	_aligned_free(block);

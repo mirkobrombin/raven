@@ -1267,6 +1267,8 @@ CRT int _isctype(int c, int mask) { return _isctype_l(c, mask, NULL); }
 CRT int _iswprint_l(wint_t c, _locale_t locale) { return iswprint(c); }
 CRT int _wcsicmp_l(const wchar_t *a, const wchar_t *b, _locale_t locale) { return _wcsicmp(a, b); }
 CRT int _wcsnicmp_l(const wchar_t *a, const wchar_t *b, size_t count, _locale_t locale) { return _wcsnicmp(a, b, count); }
+CRT int _stricmp_l(const char *a, const char *b, _locale_t locale) { return _stricmp(a, b); }
+CRT int _strnicmp_l(const char *a, const char *b, size_t count, _locale_t locale) { return _strnicmp(a, b, count); }
 
 CRT wchar_t *_itow(int value, wchar_t *to, int radix)
 {
