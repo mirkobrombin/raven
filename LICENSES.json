@@ -335,6 +335,8 @@
         "native/upstream/raven-webengine/webengine.h",
         "native/upstream/raven-webservices/webservices.c",
         "native/upstream/raven-webview/include/EventToken.h",
+        "native/upstream/raven-webview/webview.c",
+        "native/upstream/raven-webview/webview.rc",
         "native/upstream/raven-webview/webview2-sdk.json",
         "native/upstream/raven-windowscodecs/README.md",
         "native/upstream/raven-windowscodecs/bitmap.c",

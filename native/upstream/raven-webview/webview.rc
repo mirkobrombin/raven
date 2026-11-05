@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Mirko Brombin
+// See LICENSES/MIT.txt.
+//
+// The runtime's version, which a WebView2 loader reads as the browser version it found.
+#include <winver.h>
+
+#define TEXT_OF(value) #value
+#define VERSION_TEXT(value) TEXT_OF(value)
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION RAVEN_WEBVIEW_VERSION_NUMBERS
+PRODUCTVERSION RAVEN_WEBVIEW_VERSION_NUMBERS
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904B0"
+		BEGIN
+			VALUE "FileDescription", "Raven WebView2 runtime"
+			VALUE "FileVersion", VERSION_TEXT(RAVEN_WEBVIEW_VERSION_TEXT)
+			VALUE "ProductName", "Raven"
+			VALUE "ProductVersion", VERSION_TEXT(RAVEN_WEBVIEW_VERSION_TEXT)
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x409, 1200
+	END
+END

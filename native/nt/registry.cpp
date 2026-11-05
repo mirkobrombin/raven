@@ -385,6 +385,9 @@ void NativeRegistry::seed()
 		text(files.c_str(), u"CommonW6432Dir", u"C:\\Program Files\\Common Files");
 		text(files.c_str(), u"ProgramFilesPath", u"%ProgramFiles%");
 		text(files.c_str(), u"DevicePath", u"%SystemRoot%\\inf");
+		// Where a program's WebView2 loader finds the runtime's WebView2 runtime: the folder named after its version.
+		text((root + u"\\Microsoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}").c_str(), u"EBWebView",
+			u"C:\\Windows\\System32\\raven-webview\\" RAVEN_WEBVIEW_VERSION);
 		text(system.c_str(), u"ProductName", u"Windows 10 Pro");
 		text(system.c_str(), u"EditionID", u"Professional");
 		text(system.c_str(), u"InstallationType", u"Client");

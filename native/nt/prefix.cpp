@@ -50,14 +50,17 @@ void NativePrefix::place_runtime_components(const std::filesystem::path &runtime
 			if (std::filesystem::is_regular_file(from, error))
 				std::filesystem::copy_file(from, windows / folder / name, std::filesystem::copy_options::update_existing, error);
 		}
-	// The WebBrowser control's page engine is too large to copy into every prefix, so the system directory links to the runtime's.
-	std::error_code error;
-	const auto engine = runtime / "cef", link = windows / "system32" / "raven-cef";
-	if (std::filesystem::is_directory(engine, error)) {
-		if (std::filesystem::is_symlink(link, error) && std::filesystem::read_symlink(link, error) != engine)
+	// The page engine of the web controls and the WebView2 runtime over it are too large to copy into every prefix, so the system
+	// directory links to the runtime's.
+	for (const auto &[folder, name] : {std::pair{"cef", "raven-cef"}, std::pair{"webview", "raven-webview"}}) {
+		std::error_code error;
+		const auto target = runtime / folder, link = windows / "system32" / name;
+		if (!std::filesystem::is_directory(target, error))
+			continue;
+		if (std::filesystem::is_symlink(link, error) && std::filesystem::read_symlink(link, error) != target)
 			std::filesystem::remove(link, error);
 		if (!std::filesystem::exists(std::filesystem::symlink_status(link, error)))
-			std::filesystem::create_directory_symlink(engine, link, error);
+			std::filesystem::create_directory_symlink(target, link, error);
 	}
 }
 

@@ -148,6 +148,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     endif()
     target_sources(raven_cpu PRIVATE nt/nls.cpp nt/multibyte.cpp nt/startup.cpp nt/launch.cpp nt/file.cpp nt/prefix.cpp nt/registry.cpp nt/advapi_api.cpp nt/msvcrt_api.cpp nt/profile_api.cpp nt/x86_process.cpp nt/x86_thread_api.cpp nt/x86_compat_api.cpp nt/x86_loader.cpp nt/x86_system_api.cpp nt/registry_words.cpp nt/x86_tls.cpp nt/x86_com.cpp nt/x86_dsound.cpp nt/x86_d3d9.cpp ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-cp1252.h
         ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-sbcs.h ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-dbcs.h)
+    # The browser version of the runtime's WebView2 runtime, which the registry names and the runtime's folder carries: the Chromium
+    # version of the page engine it draws with.
+    file(READ ${PROJECT_SOURCE_DIR}/native/upstream/raven-webengine/cef.json cef_manifest)
+    string(JSON cef_release GET ${cef_manifest} version)
+    string(REGEX REPLACE ".*chromium-" "" RAVEN_WEBVIEW_VERSION ${cef_release})
+    target_compile_definitions(raven_cpu PRIVATE RAVEN_WEBVIEW_VERSION=u"${RAVEN_WEBVIEW_VERSION}")
     file(SHA256 ${CMAKE_CURRENT_SOURCE_DIR}/upstream/unicode/cp1252-decomposition.inc DECOMPOSITION_HASH)
     if(NOT DECOMPOSITION_HASH STREQUAL "dc36d1023c7fcd96043122aae2854b6f67febb7debfe4be8780aadbb5a9ba30b")
         message(FATAL_ERROR "Pinned CP1252 decompositions differ")
@@ -3878,6 +3884,31 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         DEPENDS ${webengine_source}/engine.c ${webengine_source}/external.c ${webengine_source}/engine_cef.h
                             ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def VERBATIM)
                     add_custom_target(webengine_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-webengine.dll ${cef_folder}/raven-cefhost.exe)
+                endif()
+                # EmbeddedBrowserWebView.dll, Raven's WebView2 runtime over the page engine, built when RAVEN_WEBVIEW2_SDK_DIRECTORY names the
+                # output of scripts/provision-webview2-sdk.py. It stands where a program's WebView2Loader.dll looks for it, in a folder named
+                # after its browser version.
+                set(RAVEN_WEBVIEW2_SDK_DIRECTORY "" CACHE PATH "Directory holding the WebView2 SDK headers provisioned by scripts/provision-webview2-sdk.py")
+                if(RAVEN_WEBVIEW2_SDK_DIRECTORY)
+                    if(NOT EXISTS "${RAVEN_WEBVIEW2_SDK_DIRECTORY}/webview2/include/WebView2.h")
+                        message(FATAL_ERROR "RAVEN_WEBVIEW2_SDK_DIRECTORY must be the output of scripts/provision-webview2-sdk.py")
+                    endif()
+                    set(webview_source ${PROJECT_SOURCE_DIR}/native/upstream/raven-webview)
+                    set(webview_folder ${CMAKE_CURRENT_BINARY_DIR}/webview/${RAVEN_WEBVIEW_VERSION}/EBWebView/x64)
+                    string(REPLACE "." "," webview_numbers ${RAVEN_WEBVIEW_VERSION})
+                    add_custom_command(OUTPUT ${webview_folder}/EmbeddedBrowserWebView.dll
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${webview_folder}
+                        COMMAND ${RAVEN_WINDRES} -DRAVEN_WEBVIEW_VERSION_TEXT=${RAVEN_WEBVIEW_VERSION} -DRAVEN_WEBVIEW_VERSION_NUMBERS=${webview_numbers}
+                            ${webview_source}/webview.rc ${CMAKE_CURRENT_BINARY_DIR}/webview-version.o
+                        COMMAND ${RAVEN_DLLTOOL} -d ${taskschd_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-webview64.a
+                        COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wno-unknown-pragmas -DRAVEN_WEBVIEW_VERSION=L"${RAVEN_WEBVIEW_VERSION}"
+                            -I${webview_source}/include -I${RAVEN_WEBVIEW2_SDK_DIRECTORY}/webview2/include -I${webengine_source}
+                            -Wl,--entry,DllMain,--no-insert-timestamp -o ${webview_folder}/EmbeddedBrowserWebView.dll ${webview_source}/webview.c
+                            ${CMAKE_CURRENT_BINARY_DIR}/webview-version.o ${PROJECT_SOURCE_DIR}/native/upstream/raven-dwrite/crt.c
+                            ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-webview64.a -lole32 -luser32 -lkernel32 -lgcc
+                        DEPENDS ${webview_source}/webview.c ${webview_source}/webview.rc ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def
+                        VERBATIM)
+                    add_custom_target(webview_component ALL DEPENDS ${webview_folder}/EmbeddedBrowserWebView.dll)
                 endif()
                 # raven-ieframe.dll, the WebBrowser control of ieframe that hosts embed, for each width: Raven code on the public headers.
                 # The control draws pages with raven-webengine.dll when the runtime has it.
