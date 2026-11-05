@@ -696,6 +696,17 @@ int raven_entry(void)
 	WCHAR spec[MAX_PATH] = L"C:\\a\\b.txt";
 	if (!remove_spec || remove_spec(spec, MAX_PATH) || lstrcmpW(spec, L"C:\\a") || remove_spec(spec, MAX_PATH) || lstrcmpW(spec, L"C:\\") ||
 		remove_spec(spec, MAX_PATH) != S_FALSE || lstrcmpW(spec, L"C:\\")) return 179;
+	/* PathAllocCanonicalize returns the same form in memory the caller frees with LocalFree; past MAX_PATH only when long paths are allowed. */
+	HRESULT (WINAPI *alloc_canonicalize)(const WCHAR *, ULONG, WCHAR **) =
+		(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "PathAllocCanonicalize");
+	WCHAR *allocated = NULL, long_path[MAX_PATH + 40] = L"C:\\";
+	if (!alloc_canonicalize || alloc_canonicalize(L"C:\\a\\.\\b\\..\\c.txt", 0, &allocated) || !allocated ||
+		lstrcmpW(allocated, L"C:\\a\\c.txt") || LocalFree(allocated)) return 179;
+	if (alloc_canonicalize(NULL, 0, &allocated) != E_INVALIDARG || alloc_canonicalize(L"C:\\a", 0, NULL) != E_INVALIDARG) return 179;
+	for (int index = 3; index < MAX_PATH + 20; ++index)
+		long_path[index] = index % 50 ? L'a' : L'\\';
+	if (SUCCEEDED(alloc_canonicalize(long_path, 0, &allocated)) || alloc_canonicalize(long_path, 1, &allocated) || !allocated ||
+		lstrcmpW(allocated, long_path) || LocalFree(allocated)) return 179;
 	if ((key_size = click_to_run_natives(key))) return 180 + (int)key_size;
 	if ((key_size = server_natives())) return (int)key_size;
 	RegDeleteKeyW(key, L"Inner");

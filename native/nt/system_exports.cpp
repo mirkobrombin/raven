@@ -102,6 +102,10 @@ std::span<const std::pair<std::string_view, uint16_t>> system_export_ordinals(st
 		return uxtheme_ordinals;
 	if (dll == "wldap32.dll")
 		return wldap32_spec_ordinals;
+	if (dll == "activeds.dll")
+		return activeds_spec_ordinals;
+	if (dll == "winspool.drv")
+		return winspool_spec_ordinals;
 	return {};
 }
 

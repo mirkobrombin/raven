@@ -3444,6 +3444,31 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(late_comctl32_fixture${width} ALL DEPENDS ${late_controls_client})
                     add_test(NAME native_late_comctl32_x${width} COMMAND raven --run-process --execution=native ${late_controls_client})
                     set_tests_properties(native_late_comctl32_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A library loaded after start from beside its program, as PDF-XChange Editor loads its core, binds what it imports from the
+                    # directory services by number and from the HTTP server, audio compression and color management libraries by name, with
+                    # ntdll's keyed events and, in 64-bit processes, the path function of the path API set that allocates its result.
+                    set(late_imports_dir ${CMAKE_CURRENT_BINARY_DIR}/late-imports-${width})
+                    if(width EQUAL 64)
+                        set(late_imports_dlltool ${RAVEN_DLLTOOL})
+                        set(late_imports_entry DllMain)
+                        set(late_imports_path -lpathcch)
+                    else()
+                        set(late_imports_dlltool ${RAVEN_DLLTOOL32} -k)
+                        set(late_imports_entry _DllMain@12)
+                        set(late_imports_path)
+                    endif()
+                    add_custom_command(OUTPUT ${late_imports_dir}/client.exe ${late_imports_dir}/late-imports.dll
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${late_imports_dir}
+                        COMMAND ${late_imports_dlltool} -d ${LOADER_SOURCES}/late_activeds${width}.def -l ${CMAKE_CURRENT_BINARY_DIR}/late-activeds${width}.a
+                        COMMAND ${webservices_compiler} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${late_imports_entry},--no-insert-timestamp
+                            -o ${late_imports_dir}/late-imports.dll ${LOADER_SOURCES}/late_imports.c ${CMAKE_CURRENT_BINARY_DIR}/late-activeds${width}.a
+                            -lhttpapi -lmsacm32 -lmscms ${late_imports_path} -lntdll -lkernel32
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${late_imports_dir}/client.exe ${LOADER_SOURCES}/late_imports_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/late_imports.c ${LOADER_SOURCES}/late_imports_client.c ${LOADER_SOURCES}/late_activeds${width}.def VERBATIM)
+                    add_custom_target(late_imports_fixture${width} ALL DEPENDS ${late_imports_dir}/client.exe ${late_imports_dir}/late-imports.dll)
+                    add_test(NAME native_late_system_imports_x${width} COMMAND raven --run-process --execution=native ${late_imports_dir}/client.exe)
+                    set_tests_properties(native_late_system_imports_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(rotated_text_client ${CMAKE_CURRENT_BINARY_DIR}/rotated-text${width}.exe)
                     add_custom_command(OUTPUT ${rotated_text_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

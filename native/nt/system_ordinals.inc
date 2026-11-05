@@ -212,3 +212,43 @@ constexpr std::pair<std::string_view, uint16_t> wldap32_spec_ordinals[]{
 	{"ldap_startup", 201}, {"ldap_stop_tls_s", 331}, {"ldap_ufn2dn", 220}, {"ldap_ufn2dnA", 221}, {"ldap_ufn2dnW", 222}, {"ldap_unbind", 13},
 	{"ldap_unbind_s", 46}, {"ldap_value_free", 38}, {"ldap_value_freeA", 223}, {"ldap_value_freeW", 224}, {"ldap_value_free_len", 79},
 };
+
+constexpr std::pair<std::string_view, uint16_t> activeds_spec_ordinals[]{
+	{"ADsBuildEnumerator", 4}, {"ADsBuildVarArrayInt", 8}, {"ADsBuildVarArrayStr", 7}, {"ADsDecodeBinaryData", 24}, {"ADsEncodeBinaryData", 20}, {"ADsEnumerateNext", 6},
+	{"ADsFreeEnumerator", 5}, {"ADsGetLastError", 13}, {"ADsGetObject", 3}, {"ADsOpenObject", 9}, {"ADsSetLastError", 12}, {"AdsFreeAdsValues", 23},
+	{"AdsTypeToPropVariant", 22}, {"AdsTypeToPropVariant2", 25}, {"AllocADsMem", 14}, {"AllocADsStr", 17}, {"BinarySDToSecurityDescriptor", 29}, {"ConvertSecDescriptorToVariant", 27},
+	{"ConvertSecurityDescriptorToSecDes", 28}, {"ConvertTrusteeToSid", 31}, {"FreeADsMem", 15}, {"FreeADsStr", 18}, {"PropVariantToAdsType", 21}, {"PropVariantToAdsType2", 26},
+	{"ReallocADsMem", 16}, {"ReallocADsStr", 19}, {"SecurityDescriptorToBinarySD", 30},
+};
+
+constexpr std::pair<std::string_view, uint16_t> winspool_spec_ordinals[]{
+	{"ADVANCEDSETUPDIALOG", 107}, {"AbortPrinter", 108}, {"AddFormA", 109}, {"AddFormW", 110}, {"AddJobA", 111}, {"AddJobW", 112},
+	{"AddMonitorA", 113}, {"AddMonitorW", 114}, {"AddPortA", 115}, {"AddPortExA", 116}, {"AddPortExW", 117}, {"AddPortW", 118},
+	{"AddPrintProcessorA", 119}, {"AddPrintProcessorW", 120}, {"AddPrintProvidorA", 121}, {"AddPrintProvidorW", 122}, {"AddPrinterA", 123}, {"AddPrinterConnectionA", 124},
+	{"AddPrinterConnectionW", 125}, {"AddPrinterDriverA", 126}, {"AddPrinterDriverExA", 127}, {"AddPrinterDriverExW", 128}, {"AddPrinterDriverW", 129}, {"AddPrinterW", 130},
+	{"AdvancedDocumentPropertiesA", 131}, {"AdvancedDocumentPropertiesW", 132}, {"AdvancedSetupDialog", 133}, {"ClosePrinter", 134}, {"CloseSpoolFileHandle", 135}, {"CommitSpoolData", 136},
+	{"ConfigurePortA", 137}, {"ConfigurePortW", 138}, {"ConnectToPrinterDlg", 139}, {"ConvertAnsiDevModeToUnicodeDevmode", 140}, {"ConvertUnicodeDevModeToAnsiDevmode", 141}, {"CreatePrinterIC", 142},
+	{"DEVICECAPABILITIES", 143}, {"DEVICEMODE", 144}, {"DeleteFormA", 145}, {"DeleteFormW", 146}, {"DeleteMonitorA", 147}, {"DeleteMonitorW", 148},
+	{"DeletePortA", 149}, {"DeletePortW", 150}, {"DeletePrintProcessorA", 151}, {"DeletePrintProcessorW", 152}, {"DeletePrintProvidorA", 153}, {"DeletePrintProvidorW", 154},
+	{"DeletePrinter", 155}, {"DeletePrinterConnectionA", 156}, {"DeletePrinterConnectionW", 157}, {"DeletePrinterDataA", 158}, {"DeletePrinterDataExA", 159}, {"DeletePrinterDataExW", 160},
+	{"DeletePrinterDataW", 161}, {"DeletePrinterDriverA", 162}, {"DeletePrinterDriverExA", 163}, {"DeletePrinterDriverExW", 164}, {"DeletePrinterDriverW", 165}, {"DeletePrinterIC", 166},
+	{"DeletePrinterKeyA", 167}, {"DeletePrinterKeyW", 168}, {"DevQueryPrint", 169}, {"DevQueryPrintEx", 170}, {"DeviceCapabilities", 171}, {"DeviceCapabilitiesA", 172},
+	{"DeviceCapabilitiesW", 173}, {"DeviceMode", 174}, {"DevicePropertySheets", 175}, {"DocumentEvent", 176}, {"DocumentPropertiesA", 177}, {"DocumentPropertiesW", 178},
+	{"DocumentPropertySheets", 179}, {"EXTDEVICEMODE", 180}, {"EndDocPrinter", 181}, {"EndPagePrinter", 182}, {"EnumFormsA", 183}, {"EnumFormsW", 184},
+	{"EnumJobsA", 185}, {"EnumJobsW", 186}, {"EnumMonitorsA", 187}, {"EnumMonitorsW", 188}, {"EnumPortsA", 189}, {"EnumPortsW", 190},
+	{"EnumPrintProcessorDatatypesA", 191}, {"EnumPrintProcessorDatatypesW", 192}, {"EnumPrintProcessorsA", 193}, {"EnumPrintProcessorsW", 194}, {"EnumPrinterDataA", 195}, {"EnumPrinterDataExA", 196},
+	{"EnumPrinterDataExW", 197}, {"EnumPrinterDataW", 198}, {"EnumPrinterDriversA", 199}, {"EnumPrinterDriversW", 200}, {"EnumPrinterKeyA", 225}, {"EnumPrinterKeyW", 233},
+	{"EnumPrintersA", 234}, {"EnumPrintersW", 235}, {"ExtDeviceMode", 236}, {"FindClosePrinterChangeNotification", 237}, {"FindFirstPrinterChangeNotification", 238}, {"FindNextPrinterChangeNotification", 239},
+	{"FlushPrinter", 240}, {"FreePrinterNotifyInfo", 241}, {"GetDefaultPrinterA", 201}, {"GetDefaultPrinterW", 203}, {"GetFormA", 242}, {"GetFormW", 243},
+	{"GetJobA", 244}, {"GetJobW", 245}, {"GetPrintProcessorDirectoryA", 246}, {"GetPrintProcessorDirectoryW", 247}, {"GetPrinterA", 248}, {"GetPrinterDataA", 249},
+	{"GetPrinterDataExA", 250}, {"GetPrinterDataExW", 251}, {"GetPrinterDataW", 252}, {"GetPrinterDriverA", 253}, {"GetPrinterDriverDirectoryA", 254}, {"GetPrinterDriverDirectoryW", 255},
+	{"GetPrinterDriverW", 256}, {"GetPrinterW", 257}, {"GetSpoolFileHandle", 258}, {"IsValidDevmodeA", 259}, {"IsValidDevmodeW", 260}, {"OpenPrinterA", 261},
+	{"OpenPrinterW", 262}, {"PerfClose", 104}, {"PerfCollect", 105}, {"PerfOpen", 106}, {"PlayGdiScriptOnPrinterIC", 263}, {"PrinterMessageBoxA", 264},
+	{"PrinterMessageBoxW", 265}, {"PrinterProperties", 266}, {"QueryColorProfile", 267}, {"QueryRemoteFonts", 268}, {"QuerySpoolMode", 269}, {"ReadPrinter", 270},
+	{"ResetPrinterA", 271}, {"ResetPrinterW", 272}, {"ScheduleJob", 273}, {"SeekPrinter", 274}, {"SetAllocFailCount", 275}, {"SetDefaultPrinterA", 202},
+	{"SetDefaultPrinterW", 204}, {"SetFormA", 276}, {"SetFormW", 277}, {"SetJobA", 278}, {"SetJobW", 279}, {"SetPortA", 280},
+	{"SetPortW", 281}, {"SetPrinterA", 282}, {"SetPrinterDataA", 283}, {"SetPrinterDataExA", 284}, {"SetPrinterDataExW", 285}, {"SetPrinterDataW", 286},
+	{"SetPrinterW", 287}, {"SplDriverUnloadComplete", 288}, {"SpoolerDevQueryPrintW", 289}, {"SpoolerInit", 290}, {"SpoolerPrinterEvent", 291}, {"StartDocDlgA", 292},
+	{"StartDocDlgW", 293}, {"StartDocPrinterA", 294}, {"StartDocPrinterW", 295}, {"StartPagePrinter", 296}, {"WaitForPrinterChange", 297}, {"WritePrinter", 298},
+	{"XcvDataW", 299},
+};
