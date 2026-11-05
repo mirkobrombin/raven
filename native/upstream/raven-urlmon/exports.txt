@@ -65,6 +65,7 @@ IsValidURL
 MkParseDisplayNameEx
 ObtainUserAgentString
 PrivateCoInstall=urlmon_missing
+RavenNameSpaces
 RegisterBindStatusCallback
 RegisterFormatEnumerator
 RegisterMediaTypeClass=urlmon_missing

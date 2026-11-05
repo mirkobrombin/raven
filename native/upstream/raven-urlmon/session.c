@@ -241,6 +241,30 @@ static HRESULT WINAPI session_register_name_space(IInternetSession *iface, IClas
 	return list_add(&name_spaces, factory, clsid, scheme);
 }
 
+/* Raven's page engine learns the schemes the process serves itself before it starts, as Chromium takes its custom schemes only then:
+ * the names of the registered namespaces, separated by commas, in a buffer of the given capacity in characters. The answer is the
+ * length of the whole list, which a buffer that is too small does not receive. */
+DWORD WINAPI RavenNameSpaces(WCHAR *buffer, DWORD capacity)
+{
+	DWORD length = 0;
+	const registration *entry;
+	EnterCriticalSection(&session_lock);
+	for (entry = name_spaces; entry; entry = entry->next)
+		length += (length ? 1 : 0) + lstrlenW(entry->name);
+	if (buffer && capacity > length)
+	{
+		buffer[0] = 0;
+		for (entry = name_spaces; entry; entry = entry->next)
+		{
+			if (buffer[0])
+				lstrcatW(buffer, L",");
+			lstrcatW(buffer, entry->name);
+		}
+	}
+	LeaveCriticalSection(&session_lock);
+	return length;
+}
+
 static HRESULT WINAPI session_unregister_name_space(IInternetSession *iface, IClassFactory *factory, LPCWSTR scheme)
 {
 	if (!factory || !scheme)
