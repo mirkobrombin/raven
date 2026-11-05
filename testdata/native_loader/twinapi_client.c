@@ -54,6 +54,7 @@ static const GUID language_factory = {0x9b0252ac, 0x0c27, 0x44f8, {0xb7, 0x92, 0
 static const GUID language_statics = {0xb23cd557, 0x0865, 0x46d4, {0x89, 0xb8, 0xd5, 0x9b, 0xe8, 0x99, 0x0f, 0x0d}};
 static const GUID property_set = {0x8a43ed9f, 0xf4e6, 0x4421, {0xac, 0xf9, 0x1d, 0xab, 0x29, 0x86, 0x82, 0x0c}};
 static const GUID property_map = {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x3b, 0x95, 0x39, 0x50, 0x6a, 0xca}};
+static const GUID api_information = {0x997439fe, 0xf681, 0x4a11, {0xb4, 0x16, 0xc1, 0x3a, 0x47, 0xe8, 0xba, 0x36}};
 static const GUID property_iterable = {0xfe2f3d47, 0x5d47, 0x5499, {0x83, 0x74, 0x43, 0x0c, 0x7c, 0xda, 0x02, 0x04}};
 
 static object *statics(const WCHAR *name, const GUID *iid)
@@ -166,6 +167,40 @@ static BOOL holds(void *string, const WCHAR *text)
 
 /* AnalyticsInfo, which winget asks which Windows it runs on: the desktop family, at the version RtlGetVersion and the update build revision
  * give, packed in sixteen bits each and written in decimal, and the desktop form. */
+/* What the CLR and programs built against newer SDKs ask before they touch a Windows Runtime type. */
+static int check_metadata(void)
+{
+	typedef HRESULT (WINAPI *parse_function)(void *, DWORD *, void ***);
+	object *api = statics(L"Windows.Foundation.Metadata.ApiInformation", &api_information);
+	struct reference present = {1, 42, {0, 0}, L"Windows.Foundation.Metadata.ApiInformation"};
+	struct reference absent = {1, 20, {0, 0}, L"Windows.Nothing.Here"};
+	BYTE found = 0;
+	if (!api) return 67;
+	if (METHOD(api, 6, HRESULT (WINAPI *)(object *, void *, BYTE *))(api, &present, &found) != S_OK || !found) return 68;
+	if (METHOD(api, 6, HRESULT (WINAPI *)(object *, void *, BYTE *))(api, &absent, &found) != S_OK || found) return 69;
+
+	HMODULE types = LoadLibraryW(L"WinTypes.dll");
+	parse_function parse = types ? (parse_function)GetProcAddress(types, "RoParseTypeName") : NULL;
+	if (!parse || !GetProcAddress(types, "RoResolveNamespace")) return 70;
+	struct reference generic = {1, 68, {0, 0}, L"Windows.Foundation.Collections.IMap`2<String,Windows.Foundation.Uri>"};
+	DWORD count = 0;
+	void **parts = NULL;
+	if (parse(&generic, &count, &parts) != S_OK || count != 3) return 71;
+	UINT32 length = 0;
+	const WCHAR *first = WindowsGetStringRawBuffer(parts[0], &length);
+	if (length != 37 || CompareStringOrdinal(first, (int)length, L"Windows.Foundation.Collections.IMap`2", -1, FALSE) != CSTR_EQUAL) return 72;
+	for (DWORD index = 0; index < count; ++index)
+		WindowsDeleteString(parts[index]);
+	CoTaskMemFree(parts);
+	struct reference broken = {1, 8, {0, 0}, L"Broken<>"};
+	if (parse(&broken, &count, &parts) != (HRESULT)0x80000010) return 73;
+
+	WCHAR name[LOCALE_NAME_MAX_LENGTH];
+	if (!LCIDToLocaleName(0x850, name, LOCALE_NAME_MAX_LENGTH, 0) || CompareStringOrdinal(name, -1, L"mn-Mong-CN", -1, FALSE) != CSTR_EQUAL)
+		return 74;
+	return LocaleNameToLCID(L"mn-Mong-CN", 0) == 0x850 ? 0 : 75;
+}
+
 static int check_analytics(void)
 {
 	object *analytics = statics(L"Windows.System.Profile.AnalyticsInfo", &analytics_info);
@@ -290,5 +325,7 @@ int raven_entry(void)
 	int failure = check_properties(core);
 	if (!failure)
 		failure = check_search();
-	return failure ? failure : check_analytics();
+	if (!failure)
+		failure = check_analytics();
+	return failure ? failure : check_metadata();
 }
