@@ -2,10 +2,14 @@
 #include "cpu/native_cpu.h"
 
 #include <array>
+#include <cinttypes>
+#include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
@@ -43,6 +47,22 @@ static void shared_file_mapping(raven::NativeProcess &process)
 		"a different file with the same name was accepted");
 	close(decoy);
 	munmap(reserve, 12288);
+}
+
+// Whether the driver's mapping at host is one of a DRM device node, as amdgpu's are, and not of a file or an anonymous inode.
+static bool device_node_mapping(const void *host)
+{
+	const auto address = reinterpret_cast<uintptr_t>(host);
+	std::ifstream maps("/proc/self/maps");
+	std::string line;
+	while (std::getline(maps, line)) {
+		uintptr_t first = 0, last = 0;
+		if (std::sscanf(line.c_str(), "%" SCNxPTR "-%" SCNxPTR, &first, &last) != 2 || address < first || address >= last)
+			continue;
+		const auto path = line.find('/');
+		return path != std::string::npos && line.compare(path, 9, "/dev/dri/") == 0;
+	}
+	return false;
 }
 
 int main(int argc, char **argv)
@@ -107,10 +127,11 @@ int main(int argc, char **argv)
 			const auto mapping = raven::map_gpu_memory(process, host, 4096 - 128);
 			if (!mapping) {
 				check(!std::getenv("RAVEN_REQUIRE_GPU_MAPPING"), "required direct GPU mapping is unavailable");
+				check(!device_node_mapping(host), "GPU memory mapped through a DRM device node was not shared directly");
 				continue;
 			}
 			direct = true;
-			check(mapping->address == mapping->base + 128, "GPU map pointer lost its non-page offset");
+			check((mapping->address - mapping->base) % 4096 == 128, "GPU map pointer lost its non-page offset");
 			const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
 			const std::vector<uint8_t> x64{0x8b, 0x01, 0x83, 0xc0, 0x01, 0x89, 0x01, 0xc3};
 			const std::vector<uint8_t> x86{0x8b, 0x4c, 0x24, 0x04, 0x8b, 0x01, 0x83, 0xc0, 0x01, 0x89, 0x01, 0xc2, 0x04, 0x00};
