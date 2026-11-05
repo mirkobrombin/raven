@@ -53,7 +53,7 @@ End Function
 
 ' Stops on an error nobody handles.
 Function Broken()
-	Dim shell
-	Set shell = CreateObject("WScript.Shell")
+	Dim missing
+	Set missing = CreateObject("Raven.NoSuchClass")
 	Broken = 1
 End Function

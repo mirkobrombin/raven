@@ -1557,7 +1557,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(installer_copies)
             foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe msxml3.dll atl100.dll oleaut32.dll
                 libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll
-                raven-appx.dll mspatcha.dll vbscript.dll scrrun.dll)
+                raven-appx.dll mspatcha.dll vbscript.dll scrrun.dll wshom.ocx)
                 if(NOT EXISTS "${installer_dir}/${component}")
                     message(FATAL_ERROR "Configured installer component does not exist: ${installer_dir}/${component}")
                 endif()
@@ -1615,8 +1615,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(vbscript_fixture_${installer_arch} ALL DEPENDS ${vbscript_fixture}/vbscript-client.exe ${vbscript_fixture}/vbscript_tests.vbs)
                 add_test(NAME native_vbscript_${installer_arch} COMMAND raven --run-process --execution=native ${vbscript_fixture}/vbscript-client.exe)
                 set_tests_properties(native_vbscript_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
-                # The script host runs scrrun_tests.vbs: the WScript object, the Dictionary and the file system through the scripting runtime.
-                # The script ends with WScript.Quit 7 when every check held.
+                # The script host runs scrrun_tests.vbs: the WScript object, the Dictionary and the file system through the scripting runtime;
+                # then wshom_tests.vbs: the shell and network objects. Each prints how many checks passed, or which failed.
                 if(installer_arch STREQUAL "x86")
                     set(script_host ${CMAKE_CURRENT_BINARY_DIR}/x86/cscript.exe)
                 else()
@@ -1629,6 +1629,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_cscript_${installer_arch} COMMAND raven --run-process --execution=native --stdio=inherit ${script_host} --
                     //nologo Z:${vbscript_fixture}/scrrun_tests.vbs first /named:value "two words")
                 set_tests_properties(native_cscript_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "out line\r?\necho 1 True\r?\n[0-9]+ checks passed" FAIL_REGULAR_EXPRESSION "FAIL|failed")
+                add_custom_command(OUTPUT ${vbscript_fixture}/wshom_tests.vbs
+                    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/wshom_tests.vbs ${vbscript_fixture}/wshom_tests.vbs
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/wshom_tests.vbs VERBATIM)
+                add_custom_target(wshom_fixture_${installer_arch} ALL DEPENDS ${vbscript_fixture}/wshom_tests.vbs)
+                add_test(NAME native_wshom_${installer_arch} COMMAND raven --run-process --execution=native --stdio=inherit ${script_host} --
+                    //nologo Z:${vbscript_fixture}/wshom_tests.vbs)
+                set_tests_properties(native_wshom_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "[0-9]+ checks passed" FAIL_REGULAR_EXPRESSION "FAIL|failed")
             endif()
             # A package made by wixl, read back as a database: tables, SQL views and the summary information stream; then installed.
             if(RAVEN_WIXL AND installer_compiler)
