@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Raven.Test.Managed" version="2.0.0.0" publicKeyToken="0123456789abcdef"/>
+  <clrClass clsid="{2a4e6c80-1b3d-4f57-a9cb-0d2f4e6a8c1e}" progid="Raven.Test.Managed.Helper" threadingModel="Both"
+    name="Raven.Test.Managed.Helper" runtimeVersion="v4.0.30319"/>
+</assembly>

@@ -27,7 +27,24 @@ public:
 		// The assembly's folder in the side-by-side store, named like its manifest there, or the absolute host folder of a private
 		// assembly; empty for a program's own manifest.
 		std::string folder;
+		// The classes the assembly serves without the registry, by lower-case braced class id: a comClass of one of its files, or a
+		// clrClass or clrSurrogate of managed code, which the runtime serves through mscoree.dll.
+		struct ComClass {
+			enum Kind { native, managed, surrogate } kind = native;
+			std::string file, name, progid, threading, runtime;
+		};
+		std::map<std::string, ComClass> com_classes;
+		// The type of the identity, such as win32, for the textual identity the runtime is given.
+		std::string type;
 	};
+	// A class an activation context serves: the class, the library it comes from as a guest path, the textual identity of its
+	// assembly and the assembly's place in the context.
+	struct ServedClass {
+		Assembly::ComClass entry;
+		std::u16string module, identity;
+		uint32_t roster = 1;
+	};
+	std::optional<ServedClass> served_class(uint64_t handle, std::string_view clsid) const;
 	struct Context {
 		Assembly root;
 		std::u16string source;

@@ -1766,12 +1766,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 file(MAKE_DIRECTORY ${fixture}/actctx)
                 add_custom_command(OUTPUT ${fixture}/actctx/actctx.exe ${fixture}/actctx/actctx.manifest
                     COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx.manifest ${fixture}/actctx/actctx.manifest
+                    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx_classes.manifest
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/Raven.Test.Managed.manifest ${fixture}/actctx
                     COMMAND ${resource_compiler} -O coff -i ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx.rc -o ${fixture}/actctx/actctx_res.o
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/actctx/actctx.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx_client.c ${fixture}/actctx/actctx_res.o
-                        -lcomctl32 -luxtheme -lgdi32 -luser32 -lkernel32
+                        -lcomctl32 -luxtheme -lole32 -luuid -lgdi32 -luser32 -lkernel32
                     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/testdata/native_loader
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx.manifest
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx_classes.manifest ${PROJECT_SOURCE_DIR}/testdata/native_loader/Raven.Test.Managed.manifest
                         ${PROJECT_SOURCE_DIR}/testdata/native_loader/actctx.rc VERBATIM)
                 add_custom_target(actctx_fixture_${installer_arch} ALL DEPENDS ${fixture}/actctx/actctx.exe)
                 add_test(NAME native_activation_contexts_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000

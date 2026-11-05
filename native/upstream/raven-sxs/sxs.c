@@ -1245,13 +1245,75 @@ HRESULT WINAPI CreateAssemblyCache(IAssemblyCache **out, DWORD reserved)
 
 /* --- The managed classes a context names. --- */
 
-/* The runtime's activation contexts hold no class sections for managed code, so there is never a class to report. */
+/* SXS_GUID_INFORMATION_CLR, as the documentation of SxsLookupClrGuid declares it: the strings follow it in the caller's buffer. */
+typedef struct {
+	DWORD size;
+	DWORD flags;
+	const WCHAR *runtime;
+	const WCHAR *type;
+	const WCHAR *identity;
+} clr_information;
+
+/* A managed class or surrogate the activation context declares, from the runtime's entry for it: its kind, then the offset and length of
+ * the library, the type name, the identity of its assembly and the runtime version. The context asked for is made the one in effect
+ * while it is looked up. */
+static const ULONG *clr_entry(GUID *clsid, ULONG section, ULONG kind, HANDLE context, BOOL own)
+{
+	ACTCTX_SECTION_KEYED_DATA data = {sizeof data};
+	ULONG_PTR cookie = 0;
+	if (own && !ActivateActCtx(context, &cookie))
+		return NULL;
+	const BOOL found = FindActCtxSectionGuid(0, NULL, section, clsid, &data);
+	if (own)
+		DeactivateActCtx(0, cookie);
+	if (!found || data.ulLength < 56)
+		return NULL;
+	const ULONG *entry = data.lpData;
+	return entry[1] == kind ? entry : NULL;
+}
+
 BOOL WINAPI SxsLookupClrGuid(DWORD flags, GUID *clsid, HANDLE context, void *buffer, SIZE_T size, SIZE_T *needed)
 {
+	enum { use_context = 1, find_surrogate = 0x10000, find_class = 0x20000, is_surrogate = 1, is_class = 2 };
 	if (needed)
 		*needed = 0;
-	SetLastError(ERROR_NOT_FOUND);
-	return FALSE;
+	if (!clsid || !needed || (size && !buffer)) {
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return FALSE;
+	}
+	/* A surrogate first, then a class, when both are asked for. */
+	const ULONG *entry = NULL;
+	DWORD kind = 0;
+	if ((flags & find_surrogate) && (entry = clr_entry(clsid, ACTIVATION_CONTEXT_SECTION_CLR_SURROGATES, 2, context, flags & use_context)))
+		kind = is_surrogate;
+	else if ((flags & find_class) && (entry = clr_entry(clsid, ACTIVATION_CONTEXT_SECTION_COM_SERVER_REDIRECTION, 1, context, flags & use_context)))
+		kind = is_class;
+	if (!entry) {
+		SetLastError(ERROR_NOT_FOUND);
+		return FALSE;
+	}
+	const BYTE *base = (const BYTE *)entry;
+	const ULONG type = 4, identity = 6, runtime = 8;
+	const SIZE_T total = sizeof(clr_information) + entry[type + 1] + entry[identity + 1] + entry[runtime + 1] + 3 * sizeof(WCHAR);
+	*needed = total;
+	if (size < total) {
+		SetLastError(ERROR_INSUFFICIENT_BUFFER);
+		return FALSE;
+	}
+	clr_information *information = buffer;
+	WCHAR *text = (WCHAR *)(information + 1);
+	const WCHAR **fields[] = {&information->type, &information->identity, &information->runtime};
+	const ULONG places[] = {type, identity, runtime};
+	information->size = sizeof *information;
+	information->flags = kind;
+	for (int index = 0; index < 3; ++index) {
+		const ULONG length = entry[places[index] + 1];
+		CopyMemory(text, base + entry[places[index]], length);
+		text[length / sizeof(WCHAR)] = 0;
+		*fields[index] = text;
+		text += length / sizeof(WCHAR) + 1;
+	}
+	return TRUE;
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)

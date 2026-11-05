@@ -3,6 +3,7 @@
 #include "pe/resources.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -186,7 +187,25 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 				root.version = identity.version;
 				root.architecture = identity.architecture;
 				root.token = identity.token;
+				root.type = lowered(attributes["type"]);
 			}
+		} else if ((element == "comclass" || element == "clrclass" || element == "clrsurrogate") && !closing && !in_dependency &&
+			attributes.contains("clsid")) {
+			Assembly::ComClass entry;
+			entry.kind = element == "comclass" ? Assembly::ComClass::native : element == "clrclass" ? Assembly::ComClass::managed
+				: Assembly::ComClass::surrogate;
+			if (entry.kind == Assembly::ComClass::native && (!in_file || root.files.empty()))
+				continue;
+			if (entry.kind == Assembly::ComClass::native)
+				entry.file = root.files.back();
+			entry.name = attributes["name"];
+			entry.progid = attributes["progid"];
+			entry.threading = attributes["threadingmodel"];
+			entry.runtime = attributes["runtimeversion"];
+			auto clsid = lowered(attributes["clsid"]);
+			if (!clsid.starts_with('{'))
+				clsid = "{" + clsid + "}";
+			root.com_classes.emplace(std::move(clsid), std::move(entry));
 		} else if (element == "supportedos" && !closing && attributes.contains("id")) {
 			root.supported_os.push_back(lowered(attributes["id"]));
 		} else if (element == "windowclass" && !closing && !self_closing && in_file && !in_dependency) {
@@ -203,7 +222,7 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 		}
 	}
 	// A program's manifest may leave out its own identity and still say which versions of Windows it supports.
-	if (!assembly || (!identified && root.dependencies.empty() && root.supported_os.empty() && root.classes.empty()))
+	if (!assembly || (!identified && root.dependencies.empty() && root.supported_os.empty() && root.classes.empty() && root.com_classes.empty()))
 		return std::nullopt;
 	return root;
 }
@@ -213,22 +232,30 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 std::optional<ActivationContexts::Assembly> ActivationContexts::resolve(const Assembly &identity) const
 {
 	std::error_code error;
-	// A private assembly (no public key token) lives with the program, as Windows looks for it: <name>.manifest in the program's
-	// folder, then <name>\<name>.manifest; its files are beside its manifest.
-	if (identity.token.empty() && !identity.name.empty() && !application.empty())
+	// A private assembly lives with the program, as Windows looks for it: <name>.manifest in the program's folder, then
+	// <name>\<name>.manifest; its files are beside its manifest. One without a public key token is looked for there first, one with a
+	// key after the side-by-side store, so a strong-named assembly a program carries along is found too.
+	const auto private_assembly = [&]() -> std::optional<Assembly> {
+		if (identity.name.empty() || application.empty())
+			return std::nullopt;
 		for (const auto &place : {application / (identity.name + ".manifest"), application / identity.name / (identity.name + ".manifest")}) {
 			if (!std::filesystem::is_regular_file(place, error))
 				continue;
 			std::ifstream input(place, std::ios::binary);
 			const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 			auto candidate = parse(bytes, false);
-			if (!candidate || lowered(candidate->name) != lowered(identity.name))
+			if (!candidate || lowered(candidate->name) != lowered(identity.name) || (!identity.token.empty() && candidate->token != identity.token))
 				continue;
 			candidate->folder = place.parent_path().string();
 			return candidate;
 		}
-	if (manifests.empty() || identity.name.empty() || !std::filesystem::is_directory(manifests, error))
 		return std::nullopt;
+	};
+	if (identity.token.empty())
+		if (auto found = private_assembly())
+			return found;
+	if (manifests.empty() || identity.name.empty() || !std::filesystem::is_directory(manifests, error))
+		return identity.token.empty() ? std::nullopt : private_assembly();
 	const std::string architecture = identity.architecture.empty() || identity.architecture == "*" ? (wide_process ? "amd64" : "x86") : identity.architecture;
 	const auto wanted = version_parts(identity.version);
 	std::optional<Assembly> best;
@@ -249,6 +276,8 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::resolve(const As
 			best = std::move(candidate);
 		}
 	}
+	if (!best && !identity.token.empty())
+		return private_assembly();
 	return best;
 }
 
@@ -317,6 +346,54 @@ std::optional<std::filesystem::path> ActivationContexts::assembly_folder(const A
 	if (const auto *assembly = declaring(root, name, index))
 		return folder_of(*assembly);
 	return std::nullopt;
+}
+
+std::optional<ActivationContexts::ServedClass> ActivationContexts::served_class(uint64_t handle, std::string_view clsid) const
+{
+	const auto context = contexts.find(handle);
+	if (context == contexts.end())
+		return std::nullopt;
+	const auto key = lowered(clsid);
+	// The textual identity of an assembly, as the documentation of SxsLookupClrGuid shows it: the name, then its attributes.
+	const auto identity = [](const Assembly &assembly) {
+		std::string text = assembly.name;
+		const auto attribute = [&](const char *name, const std::string &value) {
+			if (!value.empty())
+				text += std::string(",") + name + "='" + value + "'";
+		};
+		attribute("version", assembly.version);
+		attribute("publicKeyToken", assembly.token);
+		attribute("processorArchitecture", assembly.architecture);
+		attribute("type", assembly.type);
+		return from_utf8(text);
+	};
+	uint32_t index = 0;
+	std::optional<ServedClass> served;
+	const std::function<void(const Assembly &, const std::u16string &)> search = [&](const Assembly &assembly, const std::u16string &folder) {
+		++index;
+		if (served)
+			return;
+		if (const auto found = assembly.com_classes.find(key); found != assembly.com_classes.end()) {
+			served = ServedClass{found->second, {}, identity(assembly), index};
+			served->module = found->second.kind == Assembly::ComClass::native ? folder + u"\\" + from_utf8(found->second.file) : u"mscoree.dll";
+			return;
+		}
+		for (const auto &dependency : assembly.dependencies) {
+			std::u16string place;
+			if (kernel && !dependency.folder.empty())
+				place = kernel->paths.dos(folder_of(dependency));
+			search(dependency, place);
+			if (served)
+				return;
+		}
+	};
+	const auto &source = context->second.source;
+	const auto slash = source.find_last_of(u"\\/");
+	std::u16string own = slash == source.npos ? std::u16string() : source.substr(0, slash);
+	if (own.empty() && kernel)
+		own = kernel->paths.dos(application);
+	search(context->second.root, own);
+	return served;
 }
 
 std::optional<uint32_t> ActivationContexts::library_roster(uint64_t handle, std::string_view name) const
@@ -645,7 +722,64 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 		call.store<uint32_t>(call[4] + 8 + width * 7, *index);
 		call.ret(1);
 	});
-	registry.add("FindActCtxSectionGuid", 5, [](ApiCall &call) { call.fail(14007); });
+	// FindActCtxSectionGuid answers the COM server section and the CLR surrogate one: a class an assembly of the context in effect serves.
+	// The entry is Raven's own, read by its COM and side-by-side libraries: its size, the kind of class (0 a library's, 1 managed, 2 a
+	// surrogate), then the offset and length in bytes of the library, the type name, the textual identity of the assembly, the runtime
+	// version, the program identifier and the threading model, each a terminated UTF-16 string after the header.
+	registry.add("FindActCtxSectionGuid", 5, [&context, &contexts, thread, entries = std::make_shared<std::map<std::pair<uint64_t, std::string>,
+		std::pair<uint64_t, uint32_t>>>()](ApiCall &call) {
+		constexpr uint32_t server_section = 4, surrogate_section = 9, return_context = 1;
+		const uint32_t section = call.u32(2);
+		if ((section != server_section && section != surrogate_section) || !call[3] || !call[4]) {
+			call.fail(14007);
+			return;
+		}
+		const auto guid = call.read(call[3], 16);
+		char text[40];
+		std::snprintf(text, sizeof(text), "{%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x}", guid[3], guid[2], guid[1], guid[0],
+			guid[5], guid[4], guid[7], guid[6], guid[8], guid[9], guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]);
+		const auto handle = contexts.current(thread());
+		const auto served = contexts.served_class(handle, text);
+		if (!served || (section == surrogate_section) != (served->entry.kind == ActivationContexts::Assembly::ComClass::surrogate)) {
+			call.fail(14007);
+			return;
+		}
+		auto &entry = (*entries)[{handle, text}];
+		if (!entry.first) {
+			const std::u16string strings[] = {served->module, from_utf8(served->entry.name), served->identity, from_utf8(served->entry.runtime),
+				from_utf8(served->entry.progid), from_utf8(served->entry.threading)};
+			std::vector<uint8_t> data(8 + std::size(strings) * 8);
+			const auto put = [&](size_t at, uint32_t value) { std::memcpy(data.data() + at, &value, 4); };
+			put(4, uint32_t(served->entry.kind));
+			for (size_t index = 0; index < std::size(strings); ++index) {
+				put(8 + index * 8, uint32_t(data.size()));
+				put(12 + index * 8, uint32_t(strings[index].size() * 2));
+				const auto *bytes = reinterpret_cast<const uint8_t *>(strings[index].c_str());
+				data.insert(data.end(), bytes, bytes + (strings[index].size() + 1) * 2);
+			}
+			put(0, uint32_t(data.size()));
+			entry = {context.allocator.allocate(data.size()), uint32_t(data.size())};
+			if (!entry.first) {
+				call.fail(8);
+				return;
+			}
+			call.write(entry.first, data);
+		}
+		const size_t width = call.pointer_width();
+		const size_t size = std::min<size_t>(call.load<uint32_t>(call[4]), width == 4 ? 64 : 112);
+		if (size > 4)
+			call.write(call[4] + 4, std::vector<uint8_t>(size - 4, 0));
+		call.store<uint32_t>(call[4] + 4, 1);
+		call.store_pointer(call[4] + 8, entry.first);
+		call.store<uint32_t>(call[4] + 8 + width, entry.second);
+		if (call.u32(0) & return_context) {
+			call.store_pointer(call[4] + 8 + width * 6, handle);
+			if (auto *found = contexts.find(handle))
+				++found->references;
+		}
+		call.store<uint32_t>(call[4] + 8 + width * 7, served->roster);
+		call.ret(1);
+	});
 }
 
 }

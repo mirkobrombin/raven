@@ -4,8 +4,9 @@
  */
 /* Raven shell component: classes registered in the registry, as COM finds them on Windows.
  *
- * A class is looked up under HKEY_CLASSES_ROOT\CLSID\{class}\InprocServer32, whose default value names the library that serves it;
- * the library is loaded and its DllGetClassObject asked for the class factory. A class a Windows service serves as a local server is
+ * A class the activation context in effect declares is served by the library its manifest names. Otherwise a class is looked up
+ * under HKEY_CLASSES_ROOT\CLSID\{class}\InprocServer32, whose default value names the library that serves it; the library is loaded
+ * and its DllGetClassObject asked for the class factory. A class a Windows service serves as a local server is
  * served the same way. Program identifiers lead to their class through HKEY_CLASSES_ROOT\<identifier>\CLSID, following CurVer when
  * the identifier is version independent. */
 #define CINTERFACE
@@ -83,6 +84,21 @@ static HRESULT unregistered(REFCLSID clsid)
 	return REGDB_E_CLASSNOTREG;
 }
 
+/* The library that serves a class the activation context in effect declares, as a manifest's comClass or clrClass names it: the file
+ * of its assembly, or mscoree.dll for managed code, which finds the class in the context again. The entry is the runtime's: its size,
+ * its kind, then the offset and length of each of its strings, the library first. */
+static BOOL context_library(REFCLSID clsid, WCHAR *library, DWORD capacity)
+{
+	ACTCTX_SECTION_KEYED_DATA data = {sizeof data};
+	if (!FindActCtxSectionGuid(0, NULL, ACTIVATION_CONTEXT_SECTION_COM_SERVER_REDIRECTION, clsid, &data) || data.ulLength < 16)
+		return FALSE;
+	const ULONG *entry = data.lpData;
+	if (entry[2] + entry[3] > data.ulLength || entry[3] / sizeof(WCHAR) >= capacity)
+		return FALSE;
+	lstrcpynW(library, (const WCHAR *)((const BYTE *)data.lpData + entry[2]), (int)capacity);
+	return TRUE;
+}
+
 HRESULT raven_registered_class_object(REFCLSID clsid, DWORD context, REFIID iid, void **out)
 {
 	WCHAR key[MAX_PATH], library[MAX_PATH];
@@ -90,7 +106,8 @@ HRESULT raven_registered_class_object(REFCLSID clsid, DWORD context, REFIID iid,
 	if (!(context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) && !((context & CLSCTX_LOCAL_SERVER) && service_class(clsid)))
 		return unregistered(clsid);
 	class_key(clsid, L"\\InprocServer32", key);
-	if (!class_value(key, library, MAX_PATH))
+	/* The context in effect comes before the registry, as Windows looks there first. */
+	if (!((context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) && context_library(clsid, library, MAX_PATH)) && !class_value(key, library, MAX_PATH))
 		return unregistered(clsid);
 	/* The library stays loaded for the objects it makes, as COM keeps it until CoFreeUnusedLibraries. */
 	HMODULE module = LoadLibraryExW(library, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Raven.Test.Classes" version="1.0.0.0"/>
+  <file name="raven-absent-server.dll">
+    <comClass clsid="{6f1c9a3e-2b7d-4e15-9c80-3a5d7e2f4b11}" threadingModel="Both"/>
+  </file>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Raven.Test.Managed" version="2.0.0.0" publicKeyToken="0123456789abcdef"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>
