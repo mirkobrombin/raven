@@ -416,7 +416,8 @@ UINT custom_action_run(msi_package *package, const WCHAR *name, const WCHAR *dat
 UINT custom_scripted_run(msi_package *package, const script_entry *entry);
 
 // script.c
-UINT vbscript_run(msi_package *package, MSIHANDLE session, const BYTE *data, SIZE_T size, const WCHAR *entry, const WCHAR *action);
+UINT script_action_run(msi_package *package, MSIHANDLE session, const WCHAR *language, const BYTE *data, SIZE_T size, const WCHAR *entry,
+	const WCHAR *action);
 
 // remote.c
 enum {

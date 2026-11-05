@@ -86,8 +86,8 @@ static BYTE *file_data(const WCHAR *path, SIZE_T *size)
 	return data;
 }
 
-// A VBScript action: the script comes from the Binary table, an installed file, the action's target or a property.
-static UINT run_vbscript(msi_package *package, const WCHAR *name, INT from, const WCHAR *source, const WCHAR *target)
+// A script action, in VBScript or JScript: the script comes from the Binary table, an installed file, the action's target or a property.
+static UINT run_script(msi_package *package, const WCHAR *language, const WCHAR *name, INT from, const WCHAR *source, const WCHAR *target)
 {
 	BYTE *data = NULL;
 	SIZE_T size = 0;
@@ -118,7 +118,7 @@ static UINT run_vbscript(msi_package *package, const WCHAR *name, INT from, cons
 		package_log(L"The script of %s is not there", name);
 		return ERROR_INSTALL_FAILURE;
 	}
-	UINT status = vbscript_run(package, package->session, data, size, entry, name);
+	UINT status = script_action_run(package, package->session, language, data, size, entry, name);
 	msi_free(data);
 	return status;
 }
@@ -321,7 +321,8 @@ static UINT execute(msi_package *package, const WCHAR *name, INT type, const WCH
 		break;
 	}
 	case KIND_VBSCRIPT:
-		status = run_vbscript(package, name, from, source, target);
+	case KIND_JSCRIPT:
+		status = run_script(package, kind == KIND_VBSCRIPT ? L"VBScript" : L"JScript", name, from, source, target);
 		break;
 	default:
 		package_log(L"Script custom action is not available here: %s", name);

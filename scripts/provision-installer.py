@@ -285,7 +285,9 @@ def main():
         return " " + name + ("@" + str(msi_defined[name]) if x86 and msi_defined.get(name) is not None else "") + " " + " ".join(line.split()[1:]) + "\n"
     (output / "msi.def").write_text("LIBRARY msi.dll\nEXPORTS\n" + "".join(msi_line(line) for line in [*msi_exports.splitlines(), "RavenActionHost"] if line.strip()))
     link("msi.dll", bases["msi"], msi_objects, output / "msi.def",
-         ["-L" + str(output), "-lcabinet", "-lrpcrt4", *[f"-l{library}" for library in ("advapi32", "ole32", "shell32", "user32", "version", "kernel32", "uuid", "gcc")]], implib=output / "libmsi.a")
+         # The toolchain's oleaut32 import library by its file name: beside the output, -loleaut32 would find the runtime's own oleaut32.dll.
+         ["-L" + str(output), "-lcabinet", "-lrpcrt4", "-l:liboleaut32.a",
+          *[f"-l{library}" for library in ("advapi32", "ole32", "shell32", "user32", "version", "kernel32", "uuid", "gcc")]], implib=output / "libmsi.a")
     # raven-storage.dll: Raven's own structured storage, which the runtime's ole32 hands those exports to.
     own_storage = repo / "native/upstream/raven-storage"
     own_objects = []

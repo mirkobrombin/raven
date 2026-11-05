@@ -8,11 +8,10 @@ keeps it. Changes are scheduled, run at `InstallFinalize` and undone on a failur
 rollback custom actions; its commit custom actions run once the installation has succeeded.
 
 Library custom actions run in an `msiexec` host of the library's own width, talking to the installer over
-a pipe. VBScript custom actions run in the installer's own interpreter, which knows the language's statements
-and common functions and the session, installer and record objects; it creates no COM objects and has no
-classes. .NET assemblies go into the global cache through the fusion of the newest framework installed,
+a pipe. Script custom actions run in the installer: it hosts the language's Active Scripting engine (the
+runtime's own vbscript.dll, or a JScript engine where one is registered) and hands it the session, installer
+and record objects. .NET assemblies go into the global cache through the fusion of the newest framework installed,
 which checks their strong names, and Win32 ones into the side-by-side store. Products installed by
 Click-to-Run answer the queries from their package's manifests.
 
-Absent: the internal dialogs (every level installs without them), patches, advertising and JScript custom
-actions. Those calls answer with the documented status for the situation. See [LICENSES.md](../../../LICENSES.md).
+Absent: the internal dialogs (every level installs without them), patches and advertising. Those calls answer with the documented status for the situation. See [LICENSES.md](../../../LICENSES.md).
