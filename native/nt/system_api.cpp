@@ -2,6 +2,7 @@
 #include "kernel_context.h"
 #include "actctx.h"
 #include "text.h"
+#include "x86_compat_api.h"
 
 #include <algorithm>
 #include <array>
@@ -1705,8 +1706,11 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			character = upper_case(character);
 		const auto folder = context.launch.image_path.substr(0, slash + 1);
 		const auto resolved = paths.resolve(folder + u"netfx_Patch_x64.msp");
-		if (name.starts_with(u"NDP48") || (name == u"SETUP.EXE" && resolved && resolved->exists))
+		if (name.starts_with(u"NDP48") || (name == u"SETUP.EXE" && resolved && resolved->exists)) {
 			activation_contexts().set_compatibility_layer(u"WIN7SP1");
+			// The setup is a 32-bit program that reads its package catalog with about a million heap calls.
+			want_guest_heap();
+		}
 	}
 	paths.set_search_path([variables] {
 		const auto found = variables->values.find(u"PATH");

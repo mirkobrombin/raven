@@ -9,6 +9,10 @@
 
 namespace raven {
 
+// Turns the guest-side heap paths on for this process, as RAVEN_GUEST_HEAP does, for a program known to need them: one that allocates
+// so much that a stop per call makes it unusable.
+void want_guest_heap();
+
 // Services a 32-bit program needs beyond the shared handlers: the process heap, and the ANSI forms of the window functions, which
 // widen their strings and forward to the wide handler.
 class NativeX86Compat {

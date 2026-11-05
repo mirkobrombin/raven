@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <iostream>
 #include <sys/mman.h>
 
@@ -275,6 +276,13 @@ bool NativeX86Compat::forward(std::string_view wide_name)
 	return windows.dispatch(wide_name);
 }
 
+static std::atomic<bool> guest_heap_wanted{false};
+
+void want_guest_heap()
+{
+	guest_heap_wanted.store(true, std::memory_order_relaxed);
+}
+
 bool NativeX86Compat::dispatch(std::string_view name)
 {
 	const auto known = std::find_if(compat_exports.begin(), compat_exports.end(), [&](const auto &item) { return item.first == name; });
@@ -283,7 +291,7 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	// The guest-side heap is opt-in: with it, a 32-bit program that starts several threads at once (Bitvise SSH Client given -host)
 	// still crashes now and then on a corrupted block, and without it it does not.
 	static const bool guest_side = std::getenv("RAVEN_GUEST_HEAP") != nullptr;
-	if (guest_side && (name.starts_with("Heap") || name == "GetProcessHeap"))
+	if ((guest_side || guest_heap_wanted.load(std::memory_order_relaxed)) && (name.starts_with("Heap") || name == "GetProcessHeap"))
 		guest_heap();
 	if (name == "GetProcessHeap") {
 		process.api_arguments(0);

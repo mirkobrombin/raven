@@ -4289,6 +4289,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_dotnet_framework48 COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-dotnet.py
                         $<TARGET_FILE:raven> ${RAVEN_NETFX_INSTALLER} ${dotnet_fixtures} ${CMAKE_CURRENT_BINARY_DIR}/dotnet-evidence "${RAVEN_XNA_INSTALLER}" "${RAVEN_NETFX35_PACKAGE}")
                     set_tests_properties(native_dotnet_framework48 PROPERTIES TIMEOUT 7200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
+                    # The same installer run as bootstrappers run it, through its own Setup.exe, then a console program on what it installed.
+                    add_test(NAME native_dotnet_setup48 COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-dotnet-setup.py
+                        $<TARGET_FILE:raven> ${RAVEN_NETFX_INSTALLER} ${dotnet_fixtures} ${CMAKE_CURRENT_BINARY_DIR}/dotnet-setup-evidence)
+                    set_tests_properties(native_dotnet_setup48 PROPERTIES TIMEOUT 3000 PASS_REGULAR_EXPRESSION "PASS: ")
                 endif()
                 # A self-contained .NET 8 program, published with the .NET SDK given: the runtime loads its libraries of managed code alone,
                 # built for any CPU, and a managed exception and a runtime one are thrown and caught.
