@@ -87,6 +87,13 @@ int raven_entry(void)
 		return 9;
 	if (ImpersonateSecurityContext(&server) != SEC_E_OK || RevertSecurityContext(&server) != SEC_E_OK)
 		return 10;
+	/* The client's token is one the server can ask about and close. */
+	HANDLE token = NULL;
+	TOKEN_TYPE kind = 0;
+	DWORD kind_size = 0;
+	if (QuerySecurityContextToken(&server, &token) != SEC_E_OK || !token ||
+		!GetTokenInformation(token, TokenType, &kind, sizeof(kind), &kind_size) || !CloseHandle(token))
+		return 20;
 
 	/* Sealed messages both ways, twice each, so the sequence and the streams of both directions move on together. */
 	for (int round = 0; round < 2; ++round)

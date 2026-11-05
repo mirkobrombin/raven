@@ -1,3 +1,4 @@
+#include "access_token.h"
 #include "kernel_context.h"
 #include "ntlm.h"
 #include "text.h"
@@ -434,6 +435,32 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		return provider->contexts.contains(handle_of(call, call[0])) ? sec_ok : sec_invalid_handle;
 	};
 	registry.add("CompleteAuthToken", 2, [known_context](ApiCall &call) { call.ret(known_context(call)); });
+	// The token of the client an NTLM server context authenticated: the program's own account, so a handle to the process token with
+	// every access, which the caller closes.
+	registry.add("QuerySecurityContextToken", 2, [provider, &context](ApiCall &call) {
+		std::shared_ptr<Context> session;
+		{
+			std::lock_guard guard(provider->lock);
+			if (const auto found = provider->contexts.find(handle_of(call, call[0])); found != provider->contexts.end())
+				session = found->second;
+		}
+		if (!session || !session->ntlm || !session->ntlm->established()) {
+			call.ret(sec_invalid_handle);
+			return;
+		}
+		if (!call[1]) {
+			call.ret(sec_invalid_parameter);
+			return;
+		}
+		const auto made = context.objects.add_object(context.process_token);
+		if (made.status) {
+			call.ret(sec_insufficient_memory);
+			return;
+		}
+		context.objects.set_access(made.value, 0xf01ff);
+		call.store_pointer(call[1], made.value);
+		call.ret(sec_ok);
+	});
 	registry.add("ImpersonateSecurityContext", 1, [known_context](ApiCall &call) { call.ret(known_context(call)); });
 	registry.add("RevertSecurityContext", 1, [known_context](ApiCall &call) { call.ret(known_context(call)); });
 	registry.add("DeleteSecurityContext", 1, [provider](ApiCall &call) {
