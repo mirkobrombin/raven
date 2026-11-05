@@ -252,8 +252,9 @@ UINT WINAPI SetupPromptForDiskA(HWND owner, PCSTR title, PCSTR disk, PCSTR path,
 
 #define ERROR_ANSWER(name, parameters, answer) UINT WINAPI name parameters { return answer; }
 
-ERROR_ANSWER(SetupCopyErrorW, (HWND o, PCWSTR t, PCWSTR d, PCWSTR p, PCWSTR f, PCWSTR g, UINT w, DWORD s, PWSTR b, DWORD z, PDWORD r), DPROMPT_SKIPFILE)
-ERROR_ANSWER(SetupCopyErrorA, (HWND o, PCSTR t, PCSTR d, PCSTR p, PCSTR f, PCSTR g, UINT w, DWORD s, PSTR b, DWORD z, PDWORD r), DPROMPT_SKIPFILE)
+/* No dialog is shown: a copy error skips the file, unless the style takes the skip away, which leaves only cancelling. */
+ERROR_ANSWER(SetupCopyErrorW, (HWND o, PCWSTR t, PCWSTR d, PCWSTR p, PCWSTR f, PCWSTR g, UINT w, DWORD s, PWSTR b, DWORD z, PDWORD r), s & IDF_NOSKIP ? DPROMPT_CANCEL : DPROMPT_SKIPFILE)
+ERROR_ANSWER(SetupCopyErrorA, (HWND o, PCSTR t, PCSTR d, PCSTR p, PCSTR f, PCSTR g, UINT w, DWORD s, PSTR b, DWORD z, PDWORD r), s & IDF_NOSKIP ? DPROMPT_CANCEL : DPROMPT_SKIPFILE)
 ERROR_ANSWER(SetupDeleteErrorW, (HWND o, PCWSTR t, PCWSTR f, UINT w, DWORD s), DPROMPT_SKIPFILE)
 ERROR_ANSWER(SetupDeleteErrorA, (HWND o, PCSTR t, PCSTR f, UINT w, DWORD s), DPROMPT_SKIPFILE)
 ERROR_ANSWER(SetupRenameErrorW, (HWND o, PCWSTR t, PCWSTR a, PCWSTR b, UINT w, DWORD s), DPROMPT_SKIPFILE)

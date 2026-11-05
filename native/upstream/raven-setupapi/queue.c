@@ -657,6 +657,9 @@ static BOOL ask_media(media_group *media, file_op *first, PSP_FILE_CALLBACK_W ca
 	}
 }
 
+/* What a copy error lets the user do: the queued style's NOSKIP, NOBROWSE and WARNIFSKIP go to the callback in FILEPATHS.Flags. */
+#define COPY_ERROR_FLAGS(op) ((op)->style & (SP_COPY_NOSKIP | SP_COPY_NOBROWSE | SP_COPY_WARNIFSKIP))
+
 static UINT notify_copy(PSP_FILE_CALLBACK_W callback, void *context, UINT message, const WCHAR *source, const WCHAR *target, DWORD error, DWORD flags, UINT_PTR extra)
 {
 	FILEPATHS_W paths;
@@ -706,7 +709,7 @@ static BOOL commit_copy(file_op *op, media_group *media, WCHAR **root, const WCH
 		if (error == ERROR_SUCCESS)
 			break;
 		if (cabinet || (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)) {
-			answer = notify_copy(callback, context, SPFILENOTIFY_COPYERROR, source, target, error, FILEOP_COPY, 0);
+			answer = notify_copy(callback, context, SPFILENOTIFY_COPYERROR, source, target, error, COPY_ERROR_FLAGS(op), 0);
 			if (answer == FILEOP_ABORT) {
 				SetLastError(error);
 				result = FALSE;
@@ -722,7 +725,7 @@ static BOOL commit_copy(file_op *op, media_group *media, WCHAR **root, const WCH
 			WCHAR redirect[MAX_PATH];
 
 			redirect[0] = 0;
-			answer = notify_copy(callback, context, SPFILENOTIFY_COPYERROR, source, target, error, FILEOP_COPY, (UINT_PTR)redirect);
+			answer = notify_copy(callback, context, SPFILENOTIFY_COPYERROR, source, target, error, COPY_ERROR_FLAGS(op), (UINT_PTR)redirect);
 			if (answer == FILEOP_ABORT) {
 				SetLastError(error);
 				result = FALSE;
@@ -1044,6 +1047,9 @@ static UINT default_action(UINT message)
 
 UINT WINAPI SetupDefaultQueueCallbackW(PVOID context, UINT message, UINT_PTR param1, UINT_PTR param2)
 {
+	/* Nobody can be asked about a file that may not be skipped, so the copy fails and the commit with it. */
+	if (message == SPFILENOTIFY_COPYERROR && (((const FILEPATHS_W *)param1)->Flags & SP_COPY_NOSKIP))
+		return FILEOP_ABORT;
 	if (message == SPFILENOTIFY_NEEDMEDIA && param2) {
 		const SOURCE_MEDIA_W *media = (const SOURCE_MEDIA_W *)param1;
 		if (media->SourcePath)
@@ -1054,6 +1060,8 @@ UINT WINAPI SetupDefaultQueueCallbackW(PVOID context, UINT message, UINT_PTR par
 
 UINT WINAPI SetupDefaultQueueCallbackA(PVOID context, UINT message, UINT_PTR param1, UINT_PTR param2)
 {
+	if (message == SPFILENOTIFY_COPYERROR && (((const FILEPATHS_A *)param1)->Flags & SP_COPY_NOSKIP))
+		return FILEOP_ABORT;
 	if (message == SPFILENOTIFY_NEEDMEDIA && param2) {
 		const SOURCE_MEDIA_A *media = (const SOURCE_MEDIA_A *)param1;
 		if (media->SourcePath)

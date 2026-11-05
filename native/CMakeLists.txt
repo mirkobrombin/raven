@@ -4984,6 +4984,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(delay_setupapi_fixture ALL DEPENDS ${DELAY_FIXTURES}/cabinet-client.exe)
             add_test(NAME native_delay_setupapi COMMAND raven --run-process --execution=native ${DELAY_FIXTURES}/cabinet-client.exe)
             set_tests_properties(native_delay_setupapi PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            # A queued copy that fails: skipped by default, fatal when its style forbids skipping.
+            set(SETUPAPI_QUEUE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/setupapi-queue.exe)
+            add_custom_command(OUTPUT ${SETUPAPI_QUEUE_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x193000000,--no-insert-timestamp
+                    -o ${SETUPAPI_QUEUE_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/setupapi_queue_client.c -lsetupapi -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/setupapi_queue_client.c VERBATIM)
+            add_custom_target(setupapi_queue_fixture ALL DEPENDS ${SETUPAPI_QUEUE_CLIENT})
+            add_test(NAME native_setupapi_copy_errors COMMAND raven --run-process --execution=native ${SETUPAPI_QUEUE_CLIENT})
+            set_tests_properties(native_setupapi_copy_errors PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             add_executable(delay_loader_test nt/delay_loader_test.cpp)
             target_link_libraries(delay_loader_test PRIVATE raven_cpu)
             add_dependencies(delay_loader_test delay_pe_fixtures raven-bootstrap)
