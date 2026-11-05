@@ -1557,7 +1557,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(installer_copies)
             foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe msxml3.dll atl100.dll oleaut32.dll
                 libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll
-                raven-appx.dll)
+                raven-appx.dll mspatcha.dll)
                 if(NOT EXISTS "${installer_dir}/${component}")
                     message(FATAL_ERROR "Configured installer component does not exist: ${installer_dir}/${component}")
                 endif()
@@ -1589,6 +1589,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(appx_fixture_${installer_arch} ALL DEPENDS ${appx_fixture}/appx-client.exe ${appx_fixture}/appx-good.msix)
                 add_test(NAME native_appx_packaging_${installer_arch} COMMAND raven --run-process --execution=native ${appx_fixture}/appx-client.exe)
                 set_tests_properties(native_appx_packaging_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                # Delta patches mspatcha_fixtures.py writes, applied through the mspatcha exports by name, handle and buffer.
+                set(mspatcha_fixture ${CMAKE_CURRENT_BINARY_DIR}/mspatcha-fixtures/${installer_arch})
+                add_custom_command(OUTPUT ${mspatcha_fixture}/mspatcha-client.exe ${mspatcha_fixture}/delta.pa19
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/mspatcha_fixtures.py ${mspatcha_fixture}
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${mspatcha_fixture}/mspatcha-client.exe
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/mspatcha_client.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/mspatcha_fixtures.py ${PROJECT_SOURCE_DIR}/testdata/native_loader/mspatcha_client.c
+                    VERBATIM)
+                add_custom_target(mspatcha_fixture_${installer_arch} ALL DEPENDS ${mspatcha_fixture}/mspatcha-client.exe ${mspatcha_fixture}/delta.pa19)
+                add_test(NAME native_mspatcha_${installer_arch} COMMAND raven --run-process --execution=native ${mspatcha_fixture}/mspatcha-client.exe)
+                set_tests_properties(native_mspatcha_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             endif()
             # A package made by wixl, read back as a database: tables, SQL views and the summary information stream; then installed.
             if(RAVEN_WIXL AND installer_compiler)
