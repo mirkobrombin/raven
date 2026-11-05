@@ -37,6 +37,8 @@
 #undef towlower
 #undef towupper
 
+#include "ucrtbase_float.c"
+
 /* ---- memory and strings: string instructions for the block moves, plain loops elsewhere, no compiler idiom recognition, so they cannot call themselves ---- */
 #define PLAIN __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
@@ -365,45 +367,23 @@ CRT size_t wcsspn(const wchar_t *text, const wchar_t *accepted)
 	return length;
 }
 
-/* A decimal number with an optional exponent, its digits scaled by powers of ten; no digits read nothing. The headers define wcstod
- * inline, so the function has a name of its own and is exported as wcstod. */
+/* Blanks, a sign and a number as float_read takes it; no number reads nothing. The headers define wcstod inline, so the function has
+ * a name of its own and is exported as wcstod. */
 __asm__(".section .drectve\n\t.ascii \" -export:wcstod=raven_wcstod\"\n\t.text");
 double raven_wcstod(const wchar_t *text, wchar_t **end)
 {
 	const wchar_t *at = text;
-	int negative = 0, digits = 0;
-	double value = 0, scale = 1;
+	int negative = 0;
+	size_t used;
 	while (*at == ' ' || (*at >= 9 && *at <= 13))
 		++at;
 	if (*at == '-' || *at == '+')
 		negative = *at++ == '-';
-	while (*at >= '0' && *at <= '9')
-		value = value * 10 + (*at++ - '0'), ++digits;
-	if (*at == '.') {
-		++at;
-		while (*at >= '0' && *at <= '9') {
-			scale /= 10;
-			value += (*at++ - '0') * scale;
-			++digits;
-		}
-	}
-	if (!digits) {
-		if (end)
-			*end = (wchar_t *)text;
-		return 0;
-	}
-	if ((*at == 'e' || *at == 'E') && ((at[1] >= '0' && at[1] <= '9') || ((at[1] == '-' || at[1] == '+') && at[2] >= '0' && at[2] <= '9'))) {
-		int exponent = 0, exponent_negative = 0;
-		++at;
-		if (*at == '-' || *at == '+')
-			exponent_negative = *at++ == '-';
-		while (*at >= '0' && *at <= '9')
-			exponent = exponent * 10 + (*at++ - '0');
-		while (exponent-- > 0)
-			value = exponent_negative ? value / 10 : value * 10;
-	}
+	const double value = float_read(at, &used);
 	if (end)
-		*end = (wchar_t *)at;
+		*end = (wchar_t *)(used ? at + used : text);
+	if (!used)
+		return 0;
 	return negative ? -value : value;
 }
 
@@ -903,44 +883,37 @@ static int format(Sink *sink, const char *narrow_format, const wchar_t *wide_for
 				sink_put(sink, (wchar_t)digits[--count]);
 			if (left)
 				pad(sink, width - total, ' ');
-		} else if (spec == 'f' || spec == 'F' || spec == 'e' || spec == 'g' || spec == 'G') {
+		} else if (spec == 'f' || spec == 'F' || spec == 'e' || spec == 'E' || spec == 'g' || spec == 'G') {
 			double value = va_arg(arguments, double);
-			int negative = value < 0, digits = precision < 0 ? 6 : precision, count = 0, total;
-			char text[96];
-			unsigned long long whole;
-			double fraction;
+			float_bits parts = {value};
+			const int negative = (int)(parts.bits >> 63), finite = ((parts.bits >> 52) & 0x7ff) != 0x7ff;
+			const int upper = spec == 'F' || spec == 'E' || spec == 'G';
+			char text[FLOAT_DIGITS + 340];
+			int count, total;
 			if (negative)
 				value = -value;
-			whole = (unsigned long long)value;
-			fraction = value - (double)whole;
-			{
-				char reversed[24];
-				int used = 0;
-				do { reversed[used++] = (char)('0' + whole % 10); whole /= 10; } while (whole);
-				while (used)
-					text[count++] = reversed[--used];
+			if (finite)
+				count = float_text(text, value, spec, precision, alternate);
+			else {
+				/* The Universal CRT's names for infinity and nan, and the quiet nan with its sign bit is the indefinite one. */
+				const char *name = parts.bits & 0xfffffffffffffULL ? (negative && (parts.bits & 0x8000000000000ULL) ? "nan(ind)" :
+					(parts.bits & 0x8000000000000ULL) ? "nan" : "nan(snan)") : "inf";
+				for (count = 0; name[count]; ++count)
+					text[count] = upper && name[count] >= 'a' ? (char)(name[count] - 32) : name[count];
+				zero = 0;
 			}
-			if (digits) {
-				text[count++] = '.';
-				while (digits-- > 0 && count < 90) {
-					int digit;
-					fraction *= 10;
-					digit = (int)fraction;
-					text[count++] = (char)('0' + digit);
-					fraction -= digit;
-				}
-			}
-			total = count + (negative || plus ? 1 : 0);
+			total = count + (negative || plus || space ? 1 : 0);
 			if (!left && !zero)
 				pad(sink, width - total, ' ');
 			if (negative) sink_put(sink, '-');
 			else if (plus) sink_put(sink, '+');
+			else if (space) sink_put(sink, ' ');
 			if (!left && zero)
 				pad(sink, width - total, '0');
-			for (total = 0; total < count; ++total)
-				sink_put(sink, (wchar_t)text[total]);
+			for (int at = 0; at < count; ++at)
+				sink_put(sink, (wchar_t)text[at]);
 			if (left)
-				pad(sink, width - count - (negative || plus ? 1 : 0), ' ');
+				pad(sink, width - total, ' ');
 		} else {
 			sink_put(sink, '%');
 			sink_put(sink, spec);

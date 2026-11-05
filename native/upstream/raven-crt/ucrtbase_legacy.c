@@ -315,44 +315,23 @@ static int scan_wide(const wchar_t *input, const wchar_t *format, va_list argume
 			}
 			converted_any = 1;
 		} else if (c == 'e' || c == 'f' || c == 'g' || c == 'E' || c == 'G') {
-			/* A decimal number with an optional exponent: digits scaled by powers of ten. */
-			int remaining = width ? width : 1 << 30, negative = 0, digits = 0, exponent = 0, exponent_negative = 0;
-			double value = 0, scale = 1;
+			/* A sign and a number as strtod reads them, within the field width. */
+			int remaining = width ? width : 1 << 30, negative = 0;
+			wchar_t field[900];
+			size_t length = 0, used;
 			if (remaining > 0 && (*input == '-' || *input == '+')) {
 				negative = *input++ == '-';
 				--remaining;
 			}
-			while (remaining > 0 && *input >= '0' && *input <= '9') {
-				value = value * 10 + (*input++ - '0');
-				--remaining;
-				++digits;
+			while (remaining-- > 0 && input[length] && length + 1 < sizeof field / sizeof field[0]) {
+				field[length] = input[length];
+				++length;
 			}
-			if (remaining > 0 && *input == '.') {
-				++input;
-				--remaining;
-				while (remaining > 0 && *input >= '0' && *input <= '9') {
-					scale /= 10;
-					value += (*input++ - '0') * scale;
-					--remaining;
-					++digits;
-				}
-			}
-			if (!digits)
+			field[length] = 0;
+			double value = float_read(field, &used);
+			if (!used)
 				return assigned;
-			if (remaining > 1 && (*input == 'e' || *input == 'E') && ((input[1] >= '0' && input[1] <= '9') || input[1] == '-' || input[1] == '+')) {
-				++input;
-				--remaining;
-				if (*input == '-' || *input == '+') {
-					exponent_negative = *input++ == '-';
-					--remaining;
-				}
-				while (remaining > 0 && *input >= '0' && *input <= '9') {
-					exponent = exponent * 10 + (*input++ - '0');
-					--remaining;
-				}
-				while (exponent-- > 0)
-					value = exponent_negative ? value / 10 : value * 10;
-			}
+			input += used;
 			if (negative)
 				value = -value;
 			if (!suppress) {
@@ -553,10 +532,10 @@ __asm__(".section .drectve\n\t.ascii \" -export:strtod=raven_strtod\"\n\t.text")
 double raven_wcstod(const wchar_t *text, wchar_t **end);
 double raven_strtod(const char *text, char **end)
 {
-	wchar_t wide[128];
+	wchar_t wide[1024];
 	size_t length = 0;
 	wchar_t *wide_end;
-	while (text[length] && length < 127) {
+	while (text[length] && length < 1023) {
 		wide[length] = (unsigned char)text[length];
 		++length;
 	}

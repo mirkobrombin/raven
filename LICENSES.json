@@ -88,6 +88,7 @@
         "native/upstream/raven-crt/ucrtbase_cpp.c",
         "native/upstream/raven-crt/ucrtbase_cxx.c",
         "native/upstream/raven-crt/ucrtbase_fiber.c",
+        "native/upstream/raven-crt/ucrtbase_float.c",
         "native/upstream/raven-crt/ucrtbase_io.c",
         "native/upstream/raven-crt/ucrtbase_legacy.c",
         "native/upstream/raven-crt/ucrtbase_more.c",

@@ -240,53 +240,16 @@ CRT double _atof_l(const char *text, _locale_t locale) { return text ? raven_str
 CRT double _wtof_l(const wchar_t *text, _locale_t locale) { return text ? raven_wcstod(text, NULL) : 0.0; }
 CRT double _strtod_l(const char *text, char **end, _locale_t locale) { return raven_strtod(text, end); }
 
-/* The significant decimal digits of a positive finite value, rounded at `count`, and the power of ten of the first. The value is
-   scaled into [1, 10) in extended precision, which keeps the digits a double holds. */
+/* The significant decimal digits of a positive finite value, rounded to nearest at `count` and padded with zeros, and the power of ten of
+   the first. */
 static int decimal_digits(double value, int count, char *digits)
 {
-	long double scaled = value;
-	int exponent = 0;
-	if (value == 0) {
-		for (int at = 0; at < count; ++at)
-			digits[at] = '0';
-		digits[count] = 0;
-		return 0;
-	}
-	while (scaled >= 1e32L) {
-		scaled /= 1e32L;
-		exponent += 32;
-	}
-	while (scaled < 1e-32L) {
-		scaled *= 1e32L;
-		exponent -= 32;
-	}
-	while (scaled >= 10) {
-		scaled /= 10;
-		++exponent;
-	}
-	while (scaled < 1) {
-		scaled *= 10;
-		--exponent;
-	}
-	for (int at = 0; at < count; ++at) {
-		const int digit = (int)scaled;
-		digits[at] = (char)('0' + digit);
-		scaled = (scaled - digit) * 10;
-	}
+	int point;
+	int used = float_digits(value, count, digits, &point);
+	while (used < count)
+		digits[used++] = '0';
 	digits[count] = 0;
-	if (scaled >= 5) {
-		int at = count - 1;
-		while (at >= 0 && digits[at] == '9')
-			digits[at--] = '0';
-		if (at >= 0)
-			++digits[at];
-		else {
-			if (count)
-				digits[0] = '1';
-			++exponent;
-		}
-	}
-	return exponent;
+	return value == 0 ? 0 : point - 1;
 }
 
 /* `count` significant digits with no point; where the point goes and the sign come back apart. */

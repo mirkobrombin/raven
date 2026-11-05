@@ -58,6 +58,65 @@ static int temp_names(void)
 	return 0;
 }
 
+extern int __stdio_common_vsprintf(unsigned long long, char *, size_t, const char *, void *, __builtin_va_list);
+extern int __stdio_common_vsscanf(unsigned long long, const char *, size_t, const char *, void *, __builtin_va_list);
+
+static int print_float(char *buffer, const char *text, ...)
+{
+	__builtin_va_list arguments;
+	__builtin_va_start(arguments, text);
+	int result = __stdio_common_vsprintf(0, buffer, 128, text, 0, arguments);
+	__builtin_va_end(arguments);
+	return result;
+}
+
+static int scan_float(const char *input, const char *text, ...)
+{
+	__builtin_va_list arguments;
+	__builtin_va_start(arguments, text);
+	int result = __stdio_common_vsscanf(0, input, (size_t)-1, text, 0, arguments);
+	__builtin_va_end(arguments);
+	return result;
+}
+
+/* Floating-point text: exact digits rounded to nearest, ties to even, in the f, e and g forms, and decimal text read to the nearest double. */
+static int float_conversions(void)
+{
+	static const struct { const char *format; double value; const char *expected; } cases[] = {
+		{"%f", 3.14159265358979, "3.141593"}, {"%.2f", 2.675, "2.67"}, {"%.0f", 0.5, "0"}, {"%.0f", 2.5, "2"},
+		{"%.3f", 1e-10, "0.000"}, {"%f", 1e20, "100000000000000000000.000000"}, {"%.1f", 0.95, "0.9"}, {"%.1f", 9.96, "10.0"},
+		{"%e", 0.0, "0.000000e+00"}, {"%e", 610.0, "6.100000e+02"}, {"%.3E", 123456.0, "1.235E+05"}, {"%e", 1e300, "1.000000e+300"},
+		{"%e", 5e-324, "4.940656e-324"}, {"%g", 0.0001, "0.0001"}, {"%g", 0.00001, "1e-05"}, {"%g", 123456.0, "123456"},
+		{"%g", 1234567.0, "1.23457e+06"}, {"%g", 100.0, "100"}, {"%.3g", 3.14159, "3.14"}, {"%#g", 1.0, "1.00000"},
+		{"%G", 1e-10, "1E-10"}, {"%.0g", 25.0, "2e+01"}, {"%.17g", 0.1, "0.10000000000000001"}, {"%#.0f", 7.0, "7."},
+		{"%+.1f", 1.25, "+1.2"}, {"% .2f", 1.0, " 1.00"}, {"%08.2f", -3.5, "-0003.50"}, {"%-8.1f|", 2.0, "2.0     |"},
+		{"%f", -0.0, "-0.000000"}, {"%.1e", 9.96, "1.0e+01"},
+	};
+	char buffer[128];
+	for (unsigned index = 0; index < sizeof cases / sizeof cases[0]; ++index)
+		if (print_float(buffer, cases[index].format, cases[index].value) < 0 || strcmp(buffer, cases[index].expected)) return 1 + (int)index;
+	union { double value; unsigned long long bits; } infinity = {.bits = 0x7ff0000000000000ULL}, quiet = {.bits = 0xfff8000000000000ULL};
+	if (print_float(buffer, "%f|%E|%5.1f", infinity.value, -infinity.value, quiet.value) < 0 || strcmp(buffer, "inf|-INF|-nan(ind)")) return 31;
+	static const struct { const char *text; unsigned long long bits; int used; } reads[] = {
+		{"0.1", 0x3fb999999999999aULL, 3}, {"1e23", 0x44b52d02c7e14af6ULL, 4}, {"2.2250738585072011e-308", 0x000fffffffffffffULL, 23},
+		{"4.9e-324", 1ULL, 8}, {"1.7976931348623157e308", 0x7fefffffffffffffULL, 22}, {"  -12.5e-1x", 0xbff4000000000000ULL, 10},
+		{"0x1.8p3", 0x4028000000000000ULL, 7}, {"Infinity", 0x7ff0000000000000ULL, 8}, {"123456789012345678901234567890", 0x45f8ee90ff6c373eULL, 30},
+		{"9007199254740993", 0x4340000000000000ULL, 16}, {"1e", 0x3ff0000000000000ULL, 1}, {".5", 0x3fe0000000000000ULL, 2},
+	};
+	/* By address: the MinGW headers send strtod to a helper of their own. */
+	double (__cdecl *strtod)(const char *, char **) = (void *)GetProcAddress(GetModuleHandleA("ucrtbase.dll"), "strtod");
+	if (!strtod) return 32;
+	for (unsigned index = 0; index < sizeof reads / sizeof reads[0]; ++index) {
+		char *end;
+		union { double value; unsigned long long bits; } read = {.value = strtod(reads[index].text, &end)};
+		if (read.bits != reads[index].bits || end - reads[index].text != reads[index].used) return 40 + (int)index;
+	}
+	double first = 0, second = 0;
+	if (scan_float("3.25 -1e-3", "%lf %lf", &first, &second) != 2 || first != 3.25 || second != -0.001) return 60;
+	if (scan_float("12345", "%3lf", &first) != 1 || first != 123.0) return 61;
+	return 0;
+}
+
 static int compare(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
 static int __cdecl compare_context(void *context, const void *a, const void *b) { return compare(a, b); }
 static int close_to(float value, float expected) { float d = value - expected; return d < 0.001f && d > -0.001f; }
@@ -312,5 +371,7 @@ int raven_entry(void)
 		return 200 + (int)count;
 	if ((count = runtime_helpers()))
 		return 300 + (int)count;
+	if ((count = float_conversions()))
+		return 400 + (int)count;
 	return temp_names();
 }
