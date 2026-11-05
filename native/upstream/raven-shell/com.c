@@ -237,3 +237,62 @@ HRESULT WINAPI CoGetObjectContext(REFIID iid, void **out)
 	const HRESULT result = current_context(&context);
 	return FAILED(result) ? result : context_query(&context->callback, iid, out);
 }
+
+/* A wait of COM: in a single-threaded apartment the thread keeps dispatching the messages that reach it while it waits, as the modal
+ * loop of COM does, so a window of the apartment, or a completion posted to it, is served while the thread waits on a task. A quit
+ * message seen meanwhile is posted again for the thread's own loop. In the multithreaded apartment it is a plain wait. The result is the
+ * index of the handle that ended the wait (or WAIT_IO_COMPLETION after the thread ran its APCs), RPC_S_CALLPENDING when the time runs
+ * out. */
+HRESULT WINAPI CoWaitForMultipleHandles(DWORD flags, DWORD timeout, ULONG count, LPHANDLE handles, LPDWORD index)
+{
+	enum { wait_all = 1, alertable = 2, input_available = 4, known_flags = 0x1f };
+	APTTYPE type;
+	APTTYPEQUALIFIER qualifier;
+	if (!index)
+		return E_INVALIDARG;
+	*index = 0;
+	if (!handles || !count || (flags & ~known_flags))
+		return E_INVALIDARG;
+	const BOOL single = SUCCEEDED(CoGetApartmentType(&type, &qualifier)) && (type == APTTYPE_STA || type == APTTYPE_MAINSTA);
+	DWORD result;
+	if (!single)
+		result = WaitForMultipleObjectsEx(count, handles, (flags & wait_all) != 0, timeout, (flags & alertable) != 0);
+	else {
+		const DWORD wait_flags = ((flags & wait_all) ? MWMO_WAITALL : 0) | ((flags & alertable) ? MWMO_ALERTABLE : 0) |
+			((flags & input_available) ? MWMO_INPUTAVAILABLE : 0);
+		const DWORD start = GetTickCount();
+		BOOL quit = FALSE;
+		WPARAM quit_code = 0;
+		for (;;) {
+			DWORD remaining = timeout;
+			if (timeout != INFINITE) {
+				const DWORD spent = GetTickCount() - start;
+				remaining = spent >= timeout ? 0 : timeout - spent;
+			}
+			result = MsgWaitForMultipleObjectsEx(count, handles, remaining, QS_ALLINPUT, wait_flags);
+			if (result != WAIT_OBJECT_0 + count)
+				break;
+			MSG message;
+			while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE)) {
+				if (message.message == WM_QUIT) {
+					quit = TRUE;
+					quit_code = message.wParam;
+				} else
+					DispatchMessageW(&message);
+			}
+			if (quit || (timeout != INFINITE && GetTickCount() - start >= timeout)) {
+				result = WaitForMultipleObjectsEx(count, handles, (flags & wait_all) != 0, 0, FALSE);
+				if (quit || result != WAIT_TIMEOUT)
+					break;
+			}
+		}
+		if (quit)
+			PostQuitMessage((int)quit_code);
+	}
+	if (result == WAIT_TIMEOUT)
+		return RPC_S_CALLPENDING;
+	if (result == WAIT_FAILED)
+		return HRESULT_FROM_WIN32(GetLastError());
+	*index = result;
+	return S_OK;
+}
