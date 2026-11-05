@@ -258,13 +258,13 @@ def workflow(raven, source, evidence):
         click(box[0] + 343, box[1] + 59)
         wait_for("the Preferences dialog", lambda: "Preferences" in titles())
         time.sleep(2)
-        click(box[0] + 160, box[1] + 245)
+        click(box[0] + 160, box[1] + 235)
         time.sleep(1)
         probe = (box[0] + 810, box[1] + 500)
         light = screenshot(evidence / "07-preferences-light.png")
         if min(light.getpixel(probe)) < 200:
             raise RuntimeError(f"the Preferences dialog is not light before the switch: {light.getpixel(probe)}")
-        click(box[0] + 348, box[1] + 235)
+        click(box[0] + 348, box[1] + 225)
         deadline = time.time() + 90
         while True:
             time.sleep(2)
