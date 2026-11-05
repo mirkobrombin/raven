@@ -1,13 +1,17 @@
 #include "kernel_context.h"
+#include "ntlm.h"
 #include "text.h"
 
 #include <openssl/err.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,9 +29,14 @@ constexpr uint32_t sec_ok = 0, sec_continue_needed = 0x00090312, sec_context_exp
 	sec_unsupported_function = 0x80090302, sec_internal_error = 0x80090304, sec_invalid_token = 0x80090308,
 	sec_secpkg_not_found = 0x80090305, sec_buffer_too_small = 0x80090321, sec_incomplete_message = 0x80090318,
 	sec_wrong_principal = 0x80090322, sec_untrusted_root = 0x80090325, sec_illegal_message = 0x80090326,
-	sec_insufficient_memory = 0x80090300, sec_invalid_parameter = 0x8009035d;
+	sec_insufficient_memory = 0x80090300, sec_invalid_parameter = 0x8009035d, sec_logon_denied = 0x8009030c,
+	sec_message_altered = 0x8009030f, sec_out_of_sequence = 0x80090310;
 constexpr uint32_t buffer_empty = 0, buffer_data = 1, buffer_token = 2, buffer_missing = 4, buffer_extra = 5, buffer_trailer = 6,
-	buffer_header = 7, buffer_application_protocols = 18;
+	buffer_header = 7, buffer_stream = 10, buffer_application_protocols = 18;
+// The high bits of a buffer type say how it takes part; the rest is the type.
+constexpr uint32_t buffer_type_mask = 0x0fffffff, buffer_readonly = 0x80000000, buffer_readonly_with_checksum = 0x10000000;
+constexpr uint32_t qop_wrap_no_encrypt = 0x80000001;
+constexpr uint32_t attribute_sizes = 0, attribute_names = 1, attribute_lifespan = 2, attribute_session_key = 9;
 constexpr uint32_t request_allocate_memory = 0x100, request_manual_validation = 0x80000;
 constexpr uint32_t credentials_no_name_check = 0x4, credentials_manual_validation = 0x8;
 constexpr uint32_t attribute_stream_sizes = 4, attribute_application_protocol = 35, attribute_connection_info = 0x5a;
@@ -36,8 +45,7 @@ constexpr uint32_t attribute_stream_sizes = 4, attribute_application_protocol = 
 constexpr uint32_t record_header = 5, record_trailer = 1024, record_payload = 16384;
 constexpr uint64_t handle_tag = 0x52564e53;
 
-// A credential of the Windows logon packages holds no TLS context: local remote procedure calls only acquire one, and never build a
-// security context on it.
+// A credential of the Windows logon packages holds no TLS context: its contexts are NTLM exchanges for the account the program runs as.
 struct Credential {
 	std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> tls{nullptr, SSL_CTX_free};
 	bool verify = true, check_name = true;
@@ -45,6 +53,7 @@ struct Credential {
 
 struct Context {
 	std::unique_ptr<SSL, decltype(&SSL_free)> tls{nullptr, SSL_free};
+	std::unique_ptr<ntlm::Session> ntlm;
 	BIO *input = nullptr, *output = nullptr;
 	bool established = false, closing = false;
 };
@@ -127,6 +136,93 @@ std::shared_ptr<Credential> make_credential(uint32_t flags, bool manual)
 	credential->verify = !manual && !(flags & credentials_manual_validation);
 	credential->check_name = !(flags & credentials_no_name_check);
 	return credential;
+}
+
+// The one account of the machine, named as NTLM names it: the computer is the domain of a machine outside one. Programs of the prefix
+// authenticate to each other as it, so its password is a secret both sides derive from the names alone; no other account is known.
+std::u16string netbios_name()
+{
+	char host[256] = {};
+	::gethostname(host, sizeof(host) - 1);
+	std::u16string name;
+	for (const char *at = host; *at && *at != '.' && name.size() < 15; ++at)
+		name.push_back(char16_t(std::toupper(static_cast<unsigned char>(*at))));
+	return name.empty() ? u"RAVEN" : name;
+}
+
+ntlm::Identity local_identity(KernelContext &context)
+{
+	ntlm::Identity identity{context.paths.user_name(), netbios_name(), {}};
+	identity.hash = ntlm::nt_hash(u"raven local account " + identity.domain + u"\\" + identity.user);
+	return identity;
+}
+
+uint64_t file_time_now()
+{
+	const auto since = std::chrono::system_clock::now().time_since_epoch();
+	return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(since).count()) * 10 + 116444736000000000ULL;
+}
+
+template<size_t size> std::array<uint8_t, size> random_bytes()
+{
+	std::array<uint8_t, size> bytes{};
+	RAND_bytes(bytes.data(), int(size));
+	return bytes;
+}
+
+// The token a step of the exchange produced goes to the first token buffer, or the first empty one when the caller marked none; the
+// buffer is allocated when the caller asked for that.
+uint32_t put_token(ApiCall &call, KernelContext &context, uint64_t description, uint32_t request, const std::vector<uint8_t> &produced)
+{
+	const auto outputs = buffers(call, description);
+	auto chosen = std::find_if(outputs.begin(), outputs.end(), [](const Buffer &buffer) { return buffer.type == buffer_token; });
+	if (chosen == outputs.end())
+		chosen = std::find_if(outputs.begin(), outputs.end(), [](const Buffer &buffer) { return buffer.type == buffer_empty; });
+	if (chosen == outputs.end())
+		return produced.empty() ? sec_ok : sec_invalid_token;
+	uint64_t data = chosen->data;
+	if (request & request_allocate_memory) {
+		data = produced.empty() ? 0 : context.allocator.allocate(produced.size(), false);
+		if (!produced.empty() && !data)
+			return sec_insufficient_memory;
+	} else if (produced.size() > chosen->size)
+		return sec_buffer_too_small;
+	if (!produced.empty())
+		call.write(data, produced);
+	set_buffer(call, *chosen, buffer_token, uint32_t(produced.size()), data);
+	return sec_ok;
+}
+
+// The parts of a message an NTLM signature covers, read from the guest, and where they came from.
+struct Parts {
+	std::vector<const Buffer *> sources;
+	std::vector<std::vector<uint8_t>> bytes;
+	const Buffer *token = nullptr;
+
+	std::vector<std::span<uint8_t>> views()
+	{
+		return {bytes.begin(), bytes.end()};
+	}
+	void write_back(ApiCall &call) const
+	{
+		for (size_t index = 0; index < sources.size(); ++index)
+			call.write(sources[index]->data, bytes[index]);
+	}
+};
+
+Parts message_parts(ApiCall &call, const std::vector<Buffer> &list)
+{
+	Parts parts;
+	for (const auto &buffer : list) {
+		const uint32_t type = buffer.type & buffer_type_mask;
+		if (type == buffer_token && !parts.token)
+			parts.token = &buffer;
+		else if (type == buffer_data && !(buffer.type & (buffer_readonly | buffer_readonly_with_checksum))) {
+			parts.sources.push_back(&buffer);
+			parts.bytes.push_back(call.read(buffer.data, buffer.size));
+		}
+	}
+	return parts;
 }
 
 uint32_t failure_status(Context &context)
@@ -257,6 +353,89 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		std::lock_guard guard(provider->lock);
 		call.ret(provider->credentials.erase(handle_of(call, call[0])) ? sec_ok : sec_invalid_handle);
 	});
+	// The server's two steps of an NTLM exchange: a challenge to the client's first message, then the verdict on its answer. Only the
+	// local account is known, so only programs of the prefix authenticate.
+	registry.add("AcceptSecurityContext", 9, [provider, &context](ApiCall &call) {
+		const uint32_t request = call.u32(3);
+		std::shared_ptr<Context> session;
+		bool fresh = false;
+		{
+			std::lock_guard guard(provider->lock);
+			if (call[1]) {
+				const auto found = provider->contexts.find(handle_of(call, call[1]));
+				if (found == provider->contexts.end() || !found->second->ntlm) {
+					call.ret(sec_invalid_handle);
+					return;
+				}
+				session = found->second;
+			} else {
+				const auto found = provider->credentials.find(handle_of(call, call[0]));
+				if (found == provider->credentials.end()) {
+					call.ret(sec_invalid_handle);
+					return;
+				}
+				if (found->second->tls) {
+					call.ret(sec_unsupported_function);
+					return;
+				}
+				session = std::make_shared<Context>();
+				session->ntlm = std::make_unique<ntlm::Session>(true);
+				fresh = true;
+			}
+		}
+		const auto inputs = buffers(call, call[2]);
+		const auto token = std::find_if(inputs.begin(), inputs.end(), [](const Buffer &buffer) { return (buffer.type & buffer_type_mask) == buffer_token; });
+		const auto bytes = token != inputs.end() ? call.read(token->data, token->size) : std::vector<uint8_t>();
+		std::vector<uint8_t> produced;
+		uint32_t status = sec_ok;
+		if (fresh) {
+			const auto challenge = session->ntlm->challenge(bytes, netbios_name(), random_bytes<8>(), file_time_now());
+			if (!challenge) {
+				call.ret(sec_invalid_token);
+				return;
+			}
+			produced = *challenge;
+			status = sec_continue_needed;
+		} else {
+			const auto local = local_identity(context);
+			const bool accepted = !session->ntlm->established() && session->ntlm->accept(bytes, [&](std::u16string_view user, std::u16string_view domain) {
+				return equal_fold(user, local.user) && (equal_fold(domain, local.domain) || domain.empty()) ? std::optional(local.hash) : std::nullopt;
+			});
+			if (!accepted) {
+				if (tracing())
+					std::fprintf(stderr, "ntlm server refused the answer\n");
+				call.ret(sec_logon_denied);
+				return;
+			}
+		}
+		if (const uint32_t written = put_token(call, context, call[6], request, produced)) {
+			call.ret(written);
+			return;
+		}
+		if (fresh) {
+			std::lock_guard guard(provider->lock);
+			const uint64_t id = provider->next++;
+			provider->contexts[id] = session;
+			call.store_pointer(call[5], id);
+			call.store_pointer(call[5] + call.pointer_width(), handle_tag);
+		}
+		if (call[7])
+			call.store<uint32_t>(call[7], request & ~uint32_t(2));
+		if (call[8])
+			call.store<int64_t>(call[8], INT64_MAX);
+		if (tracing())
+			std::fprintf(stderr, "ntlm server step status %x sent %zu\n", status, produced.size());
+		call.ret(status);
+	});
+	// An NTLM context needs nothing more from CompleteAuthToken. Impersonating its client is running as the program's own account, which
+	// is the only one the context can stand for.
+	const auto known_context = [provider](ApiCall &call) {
+		std::lock_guard guard(provider->lock);
+		return provider->contexts.contains(handle_of(call, call[0])) ? sec_ok : sec_invalid_handle;
+	};
+	registry.add("CompleteAuthToken", 2, [known_context](ApiCall &call) { call.ret(known_context(call)); });
+	registry.add("ImpersonateSecurityContext", 1, [known_context](ApiCall &call) { call.ret(known_context(call)); });
+	registry.add("RevertSecurityContext", 1, [known_context](ApiCall &call) { call.ret(known_context(call)); });
 	registry.add("DeleteSecurityContext", 1, [provider](ApiCall &call) {
 		std::lock_guard guard(provider->lock);
 		call.ret(provider->contexts.erase(handle_of(call, call[0])) ? sec_ok : sec_invalid_handle);
@@ -352,7 +531,65 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 				session->closing = true;
 		call.ret(sec_ok);
 	});
-	registry.add("InitializeSecurityContextW", 12, [provider, &context](ApiCall &call) {
+	// The logon packages: the client's two steps of an NTLM exchange, its first message and then its answer to the challenge. Contexts of
+	// the TLS package are left to the code below.
+	const auto initialize_ntlm = [provider, &context](ApiCall &call) {
+		const uint32_t request = call.u32(3);
+		std::shared_ptr<Context> session;
+		bool fresh = false;
+		{
+			std::lock_guard guard(provider->lock);
+			if (call[1]) {
+				const auto found = provider->contexts.find(handle_of(call, call[1]));
+				if (found == provider->contexts.end() || !found->second->ntlm)
+					return false;
+				session = found->second;
+			} else {
+				const auto found = provider->credentials.find(handle_of(call, call[0]));
+				if (found == provider->credentials.end() || found->second->tls)
+					return false;
+				session = std::make_shared<Context>();
+				session->ntlm = std::make_unique<ntlm::Session>(false);
+				const uint64_t id = provider->next++;
+				provider->contexts[id] = session;
+				call.store_pointer(call[8], id);
+				call.store_pointer(call[8] + call.pointer_width(), handle_tag);
+				fresh = true;
+			}
+		}
+		std::vector<uint8_t> produced;
+		uint32_t status = sec_continue_needed;
+		if (fresh)
+			produced = session->ntlm->negotiate();
+		else {
+			const auto inputs = buffers(call, call[6]);
+			const auto token = std::find_if(inputs.begin(), inputs.end(), [](const Buffer &buffer) { return (buffer.type & buffer_type_mask) == buffer_token; });
+			const auto challenge = token != inputs.end() ? call.read(token->data, token->size) : std::vector<uint8_t>();
+			const auto answer = session->ntlm->established() ? std::nullopt :
+				session->ntlm->authenticate(challenge, local_identity(context), file_time_now(), random_bytes<8>(), random_bytes<16>());
+			if (!answer) {
+				call.ret(sec_invalid_token);
+				return true;
+			}
+			produced = *answer;
+			status = sec_ok;
+		}
+		if (const uint32_t written = put_token(call, context, call[9], request, produced)) {
+			call.ret(written);
+			return true;
+		}
+		if (call[10])
+			call.store<uint32_t>(call[10], request & ~uint32_t(2));
+		if (call[11])
+			call.store<int64_t>(call[11], INT64_MAX);
+		if (tracing())
+			std::fprintf(stderr, "ntlm client step status %x sent %zu\n", status, produced.size());
+		call.ret(status);
+		return true;
+	};
+	registry.add("InitializeSecurityContextW", 12, [provider, &context, initialize_ntlm](ApiCall &call) {
+		if (initialize_ntlm(call))
+			return;
 		const uint32_t request = call.u32(3);
 		std::shared_ptr<Context> session;
 		{
@@ -504,10 +741,54 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		const auto found = provider->contexts.find(handle_of(call, call[0]));
 		return found == provider->contexts.end() ? nullptr : found->second;
 	};
-	registry.add("QueryContextAttributesW", 3, [session_of](ApiCall &call) {
+	// What an NTLM context tells of itself: the sizes of its tokens and signatures, the account, its lifespan and the session key.
+	const auto query_ntlm = [&context](ApiCall &call, Context &session) {
+		const size_t width = call.pointer_width();
+		switch (call.u32(1)) {
+		case attribute_sizes: {
+			// SecPkgContext_Sizes: largest token, largest signature, block size and security trailer.
+			const uint32_t sizes[] = {2888, 16, 0, 16};
+			call.write(call[2], {reinterpret_cast<const uint8_t *>(sizes), sizeof(sizes)});
+			return sec_ok;
+		}
+		case attribute_names: {
+			const std::u16string name = session.ntlm->domain() + u"\\" + session.ntlm->user();
+			const uint64_t text = context.allocator.allocate((name.size() + 1) * 2, true);
+			if (!text)
+				return sec_insufficient_memory;
+			call.put_wide(text, name, name.size() + 1);
+			call.store_pointer(call[2], text);
+			return sec_ok;
+		}
+		case attribute_lifespan:
+			call.store<int64_t>(call[2], 0);
+			call.store<int64_t>(call[2] + 8, INT64_MAX);
+			return sec_ok;
+		case attribute_session_key: {
+			// SecPkgContext_SessionKey: the length, then a pointer to the key the caller frees with FreeContextBuffer.
+			const auto &key = session.ntlm->session_key();
+			const uint64_t bytes = context.allocator.allocate(key.size(), false);
+			if (!bytes)
+				return sec_insufficient_memory;
+			call.write(bytes, key);
+			call.store<uint32_t>(call[2], uint32_t(key.size()));
+			call.store_pointer(call[2] + width, bytes);
+			return sec_ok;
+		}
+		default:
+			if (tracing())
+				std::fprintf(stderr, "ntlm context attribute %u not answered\n", call.u32(1));
+			return sec_unsupported_function;
+		}
+	};
+	registry.add("QueryContextAttributesW", 3, [session_of, query_ntlm](ApiCall &call) {
 		const auto session = session_of(call);
 		if (!session) {
 			call.ret(sec_invalid_handle);
+			return;
+		}
+		if (session->ntlm) {
+			call.ret(session->ntlm->established() ? query_ntlm(call, *session) : sec_invalid_handle);
 			return;
 		}
 		switch (call.u32(1)) {
@@ -545,8 +826,67 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(sec_ok);
 	});
-	registry.add("EncryptMessage", 4, [session_of](ApiCall &call) {
+	// An NTLM message: its data buffers signed, and sealed unless the caller asked only for integrity, the signature in its token buffer.
+	const auto protect_ntlm = [](ApiCall &call, Context &session, uint64_t description, bool seal) {
+		if (!session.ntlm->established())
+			return sec_invalid_handle;
+		auto parts = message_parts(call, buffers(call, description));
+		if (!parts.token || parts.token->size < 16)
+			return parts.token ? sec_buffer_too_small : sec_invalid_token;
+		const auto signature = session.ntlm->sign(parts.views(), seal);
+		parts.write_back(call);
+		call.write(parts.token->data, signature);
+		set_buffer(call, *parts.token, parts.token->type, 16, parts.token->data);
+		return sec_ok;
+	};
+	// The other way: a token and data buffers, or one stream buffer holding the signature and then the data, which a data buffer then
+	// points into.
+	const auto open_ntlm = [](ApiCall &call, Context &session, uint64_t description, bool sealed) {
+		if (!session.ntlm->established())
+			return sec_invalid_handle;
+		const auto list = buffers(call, description);
+		const auto stream = std::find_if(list.begin(), list.end(), [](const Buffer &buffer) { return (buffer.type & buffer_type_mask) == buffer_stream; });
+		std::vector<uint8_t> signature;
+		Parts parts;
+		Buffer inner{};
+		if (stream != list.end()) {
+			const auto data = std::find_if(list.begin(), list.end(), [](const Buffer &buffer) { return (buffer.type & buffer_type_mask) == buffer_data; });
+			if (stream->size < 16 || data == list.end())
+				return sec_invalid_token;
+			signature = call.read(stream->data, 16);
+			inner = {data->at, stream->size - 16, buffer_data, stream->data + 16};
+			parts.sources.push_back(&inner);
+			parts.bytes.push_back(call.read(inner.data, inner.size));
+		} else {
+			parts = message_parts(call, list);
+			if (!parts.token || parts.token->size < 16)
+				return sec_invalid_token;
+			signature = call.read(parts.token->data, 16);
+		}
+		const bool valid = session.ntlm->verify(parts.views(), signature, sealed);
+		if (sealed)
+			parts.write_back(call);
+		if (stream != list.end())
+			set_buffer(call, inner, buffer_data, inner.size, inner.data);
+		return valid ? sec_ok : sec_message_altered;
+	};
+	registry.add("MakeSignature", 4, [session_of, protect_ntlm](ApiCall &call) {
 		const auto session = session_of(call);
+		call.ret(!session || !session->ntlm ? sec_invalid_handle : protect_ntlm(call, *session, call[2], false));
+	});
+	registry.add("VerifySignature", 4, [session_of, open_ntlm](ApiCall &call) {
+		const auto session = session_of(call);
+		const uint32_t status = !session || !session->ntlm ? sec_invalid_handle : open_ntlm(call, *session, call[1], false);
+		if (!status && call[3])
+			call.store<uint32_t>(call[3], 0);
+		call.ret(status);
+	});
+	registry.add("EncryptMessage", 4, [session_of, protect_ntlm](ApiCall &call) {
+		const auto session = session_of(call);
+		if (session && session->ntlm) {
+			call.ret(protect_ntlm(call, *session, call[2], call.u32(1) != qop_wrap_no_encrypt));
+			return;
+		}
 		if (!session || !session->established) {
 			call.ret(sec_invalid_handle);
 			return;
@@ -588,8 +928,15 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			std::fprintf(stderr, "schannel sealed %zu bytes into %zu\n", plain.size(), record.size());
 		call.ret(sec_ok);
 	});
-	registry.add("DecryptMessage", 4, [session_of](ApiCall &call) {
+	registry.add("DecryptMessage", 4, [session_of, open_ntlm](ApiCall &call) {
 		const auto session = session_of(call);
+		if (session && session->ntlm) {
+			const uint32_t status = open_ntlm(call, *session, call[1], true);
+			if (!status && call[3])
+				call.store<uint32_t>(call[3], 0);
+			call.ret(status);
+			return;
+		}
 		if (!session || !session->established) {
 			call.ret(sec_invalid_handle);
 			return;
