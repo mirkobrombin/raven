@@ -131,9 +131,35 @@ int raven_entry(void)
 	DeleteFileW(path);
 	SysFreeString(value);
 	VariantClear(&source);
+	IXMLDOMNode_Release(node);
+	node = NULL;
+	/* A query that matches nothing answers S_FALSE with no node, and one that does not parse fails. */
+	BSTR missing = SysAllocString(L"/bundle/absent"), broken = SysAllocString(L"/bundle/[");
+	if (IXMLDOMDocument_selectSingleNode(document, missing, &node) != S_FALSE || node)
+		return 20;
+	if (SUCCEEDED(IXMLDOMDocument_selectSingleNode(document, broken, &node)) || node)
+		return 21;
+	SysFreeString(missing);
+	SysFreeString(broken);
+	/* A malformed document does not load: S_FALSE, no document element, and a parse error with a code, a reason and a line. */
+	BSTR malformed = SysAllocString(L"<bundle>\n<package></bundle>");
+	IXMLDOMElement *root = NULL;
+	IXMLDOMParseError *error = NULL;
+	BSTR reason = NULL;
+	long code = 0, line = 0;
+	loaded = VARIANT_TRUE;
+	if (IXMLDOMDocument_loadXML(document, malformed, &loaded) != S_FALSE || loaded != VARIANT_FALSE)
+		return 22;
+	if (IXMLDOMDocument_get_documentElement(document, &root) != S_FALSE || root)
+		return 23;
+	if (IXMLDOMDocument_get_parseError(document, &error) != S_OK || !error || IXMLDOMParseError_get_errorCode(error, &code) != S_OK || code >= 0 ||
+		IXMLDOMParseError_get_reason(error, &reason) != S_OK || !reason || !reason[0] || IXMLDOMParseError_get_line(error, &line) != S_OK || line < 1)
+		return 24;
+	SysFreeString(reason);
+	IXMLDOMParseError_Release(error);
+	SysFreeString(malformed);
 	SysFreeString(query);
 	SysFreeString(text);
-	IXMLDOMNode_Release(node);
 	IXMLDOMDocument_Release(document);
 	HRESULT matched = E_FAIL, refused = S_OK;
 	int failed = validate(L"<v xmlns=\"urn:raven\">CAB-x</v>", &matched);
