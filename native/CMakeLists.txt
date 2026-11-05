@@ -2843,7 +2843,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_dependencies(foreign_present_test vulkan_foreign64_fixture raven-bootstrap)
                 add_test(NAME native_vulkan_foreign_present_x64 COMMAND foreign_present_test
                     $<TARGET_FILE:raven-bootstrap> ${VULKAN_FIXTURES}/foreign-present64.exe)
-                set_tests_properties(native_vulkan_foreign_present_x64 PROPERTIES TIMEOUT 20 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
+                # A prefix of its own keeps its window records apart from the other tests that publish windows.
+                set_tests_properties(native_vulkan_foreign_present_x64 PROPERTIES TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/foreign-present-x64-prefix)
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/descriptor-buffer64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                         -idirafter ${Vulkan_INCLUDE_DIRS} -I${PROJECT_SOURCE_DIR}/testdata/native_cpu
@@ -2876,7 +2878,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_dependencies(foreign_present_test vulkan_foreign32_fixture)
                         add_test(NAME native_vulkan_foreign_present_x32 COMMAND foreign_present_test
                             $<TARGET_FILE:raven-bootstrap> ${VULKAN_FIXTURES}/foreign-present32.exe)
-                        set_tests_properties(native_vulkan_foreign_present_x32 PROPERTIES TIMEOUT 20 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
+                        # A prefix of its own keeps its window records apart from the other tests that publish windows.
+                        set_tests_properties(native_vulkan_foreign_present_x32 PROPERTIES TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                            ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/foreign-present-x32-prefix)
                         add_custom_command(OUTPUT ${VULKAN_FIXTURES}/descriptor-buffer32.exe
                             COMMAND ${RAVEN_MINGW32_VULKAN} -minline-all-stringops -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                                 -I${VULKAN_GENERATED_DIR}/mingw-include -I${PROJECT_SOURCE_DIR}/testdata/native_cpu

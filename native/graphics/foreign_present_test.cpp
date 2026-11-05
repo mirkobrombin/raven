@@ -38,14 +38,15 @@ int main(int argc,char **argv)
 		if (!child) {
 			try {
 				const auto result=entry.image.is_64 ?
-					raven::run_native_process(modules,entry,argv[1],std::chrono::seconds(8)) :
-					raven::run_native_process_x86(modules,entry,argv[1],std::chrono::seconds(8));
+					raven::run_native_process(modules,entry,argv[1],std::chrono::seconds(30)) :
+					raven::run_native_process_x86(modules,entry,argv[1],std::chrono::seconds(30));
 				std::cerr<<"Foreign presentation returned "<<result.value<<'\n';
 				::_exit(result.stop==raven::NativeStop::returned ? int(result.value) : 100);
 			} catch (const std::exception &error) { std::cerr<<error.what()<<'\n'; ::_exit(101); }
 		}
 		uint32_t seen=0;
-		const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(8);
+		// Generous: in a parallel suite the software Vulkan driver shares the processors with other GPU tests.
+		const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
 		for (uint32_t frame=0;frame<2;++frame) {
 			bool received=false;
 			while (!received && std::chrono::steady_clock::now()<deadline) {

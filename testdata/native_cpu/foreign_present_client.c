@@ -60,7 +60,7 @@ unsigned int raven_entry(void)
 	if (vkCreateSemaphore(device,&semaphore_info,0,&acquired)!=VK_SUCCESS || vkCreateSemaphore(device,&semaphore_info,0,&finished)!=VK_SUCCESS) return 13;
 	for (uint32_t frame=0;frame<2;++frame) {
 		if (frame) {
-			for (uint32_t wait=0;!control && wait<5000;++wait) Sleep(1);
+			for (uint32_t wait=0;!control && wait<20000;++wait) Sleep(1);
 			if (control!=1) return 19;
 			uint32_t stale=0;
 			if (vkAcquireNextImageKHR(device,swap,0,acquired,0,&stale)!=VK_ERROR_OUT_OF_DATE_KHR) return 20;
@@ -94,7 +94,7 @@ unsigned int raven_entry(void)
 		VkPresentInfoKHR present={VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,0,1,&finished,1,&swap,&index,&presented};
 		if (vkQueuePresentKHR(queue,&present)!=VK_SUCCESS || presented!=VK_SUCCESS || vkQueueWaitIdle(queue)!=VK_SUCCESS) return 18;
 	}
-	for (uint32_t wait=0;control!=2 && wait<5000;++wait) Sleep(1);
+	for (uint32_t wait=0;control!=2 && wait<20000;++wait) Sleep(1);
 	if (control!=2) return 23;
 	uint32_t lost=0;
 	if (vkAcquireNextImageKHR(device,swap,0,acquired,0,&lost)!=VK_ERROR_SURFACE_LOST_KHR) return 24;
