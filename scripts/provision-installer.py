@@ -30,7 +30,7 @@ IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "o
 ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
 COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libpng.dll", "libjpeg.dll",
               "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll",
-              "raven-appx.dll", "mspatcha.dll", "vbscript.dll", "scrrun.dll", "wshom.ocx")
+              "raven-appx.dll", "mspatcha.dll", "vbscript.dll", "scrrun.dll", "wshom.ocx", "jscript.dll")
 
 
 def main():
@@ -644,6 +644,20 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "wshom.ocx", *wshom_objects, output / "wshom.def", "-lole32", "-loleaut32", "-luser32", "-lshell32", "-ladvapi32", "-luuid",
          "-lmsvcrt", "-lkernel32", "-lgcc"])
+    # jscript.dll: Raven's own JScript engine, an Active Scripting server; its regular expressions are the VBScript engine's matcher.
+    own_jscript = repo / "native/upstream/raven-jscript"
+    jscript_objects = []
+    for path in [*sorted(own_jscript.glob("*.c")), own_vbscript / "regex.c"]:
+        target = objects / ("jscript_" + path.parent.name + "_" + path.stem + ".o")
+        run([triple + "-gcc", "-c", "-O2", "-std=c11", "-fno-builtin", "-D_WIN32_WINNT=0x600", "-DUNICODE", "-I" + str(own_jscript), path, "-o", target])
+        jscript_objects.append(target)
+    defined = decorated(jscript_objects)
+    (output / "jscript.def").write_text("LIBRARY jscript.dll\nEXPORTS\n" + "".join(
+        f" {name}@{defined[name]} PRIVATE\n" if x86 and defined[name] is not None else f" {name} PRIVATE\n" for name in (own_jscript / "exports.txt").read_text().split()))
+    next_base[0] -= 0x400000 if x86 else 0x4000000
+    run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
+         "-o", output / "jscript.dll", *jscript_objects, output / "jscript.def", "-lole32", "-loleaut32", "-luser32", "-luuid", "-lmsvcrt",
+         "-lkernel32", "-lgcc"])
     result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, arch=args.arch, commands=records,
                   license_notices=preserve_notices(source, output),
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in COMPONENTS},

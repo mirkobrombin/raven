@@ -1557,7 +1557,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(installer_copies)
             foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe msxml3.dll atl100.dll oleaut32.dll
                 libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll
-                raven-appx.dll mspatcha.dll vbscript.dll scrrun.dll wshom.ocx)
+                raven-appx.dll mspatcha.dll vbscript.dll scrrun.dll wshom.ocx jscript.dll)
                 if(NOT EXISTS "${installer_dir}/${component}")
                     message(FATAL_ERROR "Configured installer component does not exist: ${installer_dir}/${component}")
                 endif()
@@ -1636,6 +1636,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_wshom_${installer_arch} COMMAND raven --run-process --execution=native --stdio=inherit ${script_host} --
                     //nologo Z:${vbscript_fixture}/wshom_tests.vbs)
                 set_tests_properties(native_wshom_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "[0-9]+ checks passed" FAIL_REGULAR_EXPRESSION "FAIL|failed")
+                # The JScript engine under the same host: the language, its built-in objects and the host's objects.
+                add_custom_command(OUTPUT ${vbscript_fixture}/jscript_tests.js
+                    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/jscript_tests.js ${vbscript_fixture}/jscript_tests.js
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/jscript_tests.js VERBATIM)
+                add_custom_target(jscript_fixture_${installer_arch} ALL DEPENDS ${vbscript_fixture}/jscript_tests.js)
+                add_test(NAME native_jscript_${installer_arch} COMMAND raven --run-process --execution=native --stdio=inherit ${script_host} --
+                    //nologo Z:${vbscript_fixture}/jscript_tests.js)
+                set_tests_properties(native_jscript_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "[0-9]+ checks passed" FAIL_REGULAR_EXPRESSION "FAIL|failed")
             endif()
             # A package made by wixl, read back as a database: tables, SQL views and the summary information stream; then installed.
             if(RAVEN_WIXL AND installer_compiler)
@@ -1730,23 +1738,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     set_tests_properties(native_msi_wow64_custom_actions PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${fixture}/wow64-prefix)
                 endif()
-                # VBScript custom actions. wixl writes no script actions, so msibuild turns its library actions into ones that run a function
-                # of the script in the Binary table (6, deferred without impersonation 3078) and into one whose target holds the script itself (38).
+                # VBScript and JScript custom actions. wixl writes no script actions, so msibuild turns its library actions into ones that run a
+                # function of the script in the Binary table (6, deferred without impersonation 3078; 5 for JScript) and into ones whose target
+                # holds the script itself (38, and 37 for JScript).
                 if(RAVEN_MSIBUILD)
                     file(MAKE_DIRECTORY ${fixture}/script)
                     add_custom_command(OUTPUT ${fixture}/script/script.msi ${fixture}/script/msi-script.exe
                         COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt ${fixture}/script/msi_payload.txt
                         COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.vbs ${fixture}/script/msi_script.vbs
+                        COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.js ${fixture}/script/msi_script.js
                         COMMAND ${RAVEN_WIXL} -a ${installer_arch} -o ${fixture}/script/script.msi ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.wxs
                         COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q [=[UPDATE `CustomAction` SET `Type` = 6 WHERE `Type` = 1]=]
                         COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q [=[UPDATE `CustomAction` SET `Type` = 3078 WHERE `Type` = 3073]=]
                         COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q
                             [=[UPDATE `CustomAction` SET `Type` = 38, `Source` = '', `Target` = 'Session.Property("INLINE_RESULT") = "inline " & (6 * 7)' WHERE `Action` = 'Inline']=]
+                        COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q [=[UPDATE `CustomAction` SET `Type` = 5 WHERE `Action` = 'JMain']=]
+                        COMMAND ${RAVEN_MSIBUILD} ${fixture}/script/script.msi -q
+                            [=[UPDATE `CustomAction` SET `Type` = 37, `Source` = '', `Target` = 'Session.Property("JINLINE_RESULT") = "inline " + (6 * 7)' WHERE `Action` = 'JInline']=]
                         COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                             -o ${fixture}/script/msi-script.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script_client.c -lmsi -ladvapi32 -lkernel32
                         WORKING_DIRECTORY ${fixture}/script
                         DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.wxs ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.vbs
-                            ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt VERBATIM)
+                            ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script.js ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_script_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt VERBATIM)
                     add_custom_target(msi_script_fixture_${installer_arch} ALL DEPENDS ${fixture}/script/script.msi ${fixture}/script/msi-script.exe)
                     add_test(NAME native_msi_script_actions_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=120000
                         ${fixture}/script/msi-script.exe)

@@ -154,7 +154,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"{B54F3741-5B07-11CF-A4B0-00AA004A55E8}", u"vbscript.dll"}, {u"{3F4DACA4-160D-11D2-A8E9-00104B365C9F}", u"vbscript.dll"},
 		{u"{EE09B103-97E0-11CF-978F-00A02463E06F}", u"scrrun.dll"}, {u"{0D43FE01-F093-11CF-8940-00A0C9054228}", u"scrrun.dll"},
 		{u"{72C24DD5-D70A-438B-8A42-98424B88AFB8}", u"wshom.ocx"}, {u"{093FF999-1EA0-4079-9525-9614C3504B74}", u"wshom.ocx"},
-		{u"{F935DC22-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"}, {u"{F935DC26-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"}};
+		{u"{F935DC22-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"}, {u"{F935DC26-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"},
+		{u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}", u"jscript.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;
@@ -200,9 +201,11 @@ void NativeRegistry::register_runtime_classes()
 			close(key);
 		}
 	}
-	// Scripts create the scheduler, programs the MSXML 6.0 classes and script hosts the VBScript engine, by name.
+	// Scripts create the scheduler, programs the MSXML 6.0 classes and script hosts the VBScript and JScript engines, by name.
 	static constexpr std::pair<const char16_t *, const char16_t *> names[] = {{u"Schedule.Service", u"{0F87369F-A4E5-4CFC-BD3E-73E6154572DD}"},
 		{u"VBScript", u"{B54F3741-5B07-11CF-A4B0-00AA004A55E8}"}, {u"VBScript.RegExp", u"{3F4DACA4-160D-11D2-A8E9-00104B365C9F}"},
+		{u"JScript", u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}"}, {u"JavaScript", u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}"},
+		{u"ECMAScript", u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}"},
 		{u"Scripting.Dictionary", u"{EE09B103-97E0-11CF-978F-00A02463E06F}"}, {u"Scripting.FileSystemObject", u"{0D43FE01-F093-11CF-8940-00A0C9054228}"},
 		{u"WScript.Shell", u"{72C24DD5-D70A-438B-8A42-98424B88AFB8}"}, {u"WScript.Shell.1", u"{72C24DD5-D70A-438B-8A42-98424B88AFB8}"},
 		{u"WScript.Network", u"{093FF999-1EA0-4079-9525-9614C3504B74}"}, {u"WScript.Network.1", u"{093FF999-1EA0-4079-9525-9614C3504B74}"},

@@ -3,7 +3,7 @@
 #include <wtypes.h>
 
 /* Custom actions, by the source and kind bits of their type. Libraries run in a host process of their own width; programs
- * run as programs. VBScript actions run in the interpreter of script.c; JScript ones fail unless told to be ignored. */
+ * run as programs. Script actions, VBScript and JScript, run on the Active Scripting engine of their language, which script.c hosts. */
 
 enum {
 	KIND_MASK = 0x07, KIND_DLL = 1, KIND_EXE = 2, KIND_TEXT = 3, KIND_JSCRIPT = 5, KIND_VBSCRIPT = 6, KIND_INSTALL = 7,

@@ -2,9 +2,10 @@
 #include <windows.h>
 #include <msi.h>
 
-/* A package whose VBScript custom actions run in the installer: one works through the language and the session and leaves its findings
-   in a property the package writes to the registry, one inline script does the same, a deferred one checks the data it was handed. A
-   script that answers failure, and one stopped by an error it does not handle, fail the installation. */
+/* A package whose VBScript and JScript custom actions run in the installer: one in each language works through the language and the
+   session and leaves its findings in a property the package writes to the registry, one inline script in each does the same, a deferred
+   one checks the data it was handed. A script that answers failure, and one stopped by an error it does not handle, fail the
+   installation. */
 
 static const WCHAR product[] = L"{7C2E9A41-5B3D-4F6E-8A1C-0D9B8E7F6A51}";
 
@@ -41,6 +42,10 @@ int raven_entry(void)
 		return 2;
 	if (!value_is(L"Inline", L"inline 42"))
 		return 3;
+	if (!value_is(L"JScript", L"RAVEN-12-caught-condition-1+2+3"))
+		return 6;
+	if (!value_is(L"JInline", L"inline 42"))
+		return 7;
 	if (MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT) != ERROR_SUCCESS)
 		return 4;
 
