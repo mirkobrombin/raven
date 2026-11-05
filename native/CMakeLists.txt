@@ -1557,7 +1557,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(installer_copies)
             foreach(component msi.dll cabinet.dll sxs.dll rpcrt4.dll raven-storage.dll msiexec.exe msxml3.dll atl100.dll oleaut32.dll
                 libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll
-                raven-appx.dll mspatcha.dll)
+                raven-appx.dll mspatcha.dll vbscript.dll)
                 if(NOT EXISTS "${installer_dir}/${component}")
                     message(FATAL_ERROR "Configured installer component does not exist: ${installer_dir}/${component}")
                 endif()
@@ -1601,6 +1601,20 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(mspatcha_fixture_${installer_arch} ALL DEPENDS ${mspatcha_fixture}/mspatcha-client.exe ${mspatcha_fixture}/delta.pa19)
                 add_test(NAME native_mspatcha_${installer_arch} COMMAND raven --run-process --execution=native ${mspatcha_fixture}/mspatcha-client.exe)
                 set_tests_properties(native_mspatcha_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                # The VBScript engine as a script host drives it: vbscript_tests.vbs through a site with a named item, then an expression, the
+                # script's globals through IDispatch and the errors the site is told of.
+                set(vbscript_fixture ${CMAKE_CURRENT_BINARY_DIR}/vbscript-fixtures/${installer_arch})
+                add_custom_command(OUTPUT ${vbscript_fixture}/vbscript-client.exe ${vbscript_fixture}/vbscript_tests.vbs
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${vbscript_fixture}
+                    COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/testdata/native_loader/vbscript_tests.vbs ${vbscript_fixture}/vbscript_tests.vbs
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${vbscript_fixture}/vbscript-client.exe
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/vbscript_client.c -lole32 -loleaut32 -luuid -luser32 -lmsvcrt -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/vbscript_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/vbscript_tests.vbs
+                    VERBATIM)
+                add_custom_target(vbscript_fixture_${installer_arch} ALL DEPENDS ${vbscript_fixture}/vbscript-client.exe ${vbscript_fixture}/vbscript_tests.vbs)
+                add_test(NAME native_vbscript_${installer_arch} COMMAND raven --run-process --execution=native ${vbscript_fixture}/vbscript-client.exe)
+                set_tests_properties(native_vbscript_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             endif()
             # A package made by wixl, read back as a database: tables, SQL views and the summary information stream; then installed.
             if(RAVEN_WIXL AND installer_compiler)
