@@ -43,7 +43,7 @@ int raven_entry(void)
 	SecBuffer server_out = {sizeof(to_client), SECBUFFER_TOKEN, to_client}, client_in = {0, SECBUFFER_TOKEN, to_client};
 	SecBufferDesc client_output = {SECBUFFER_VERSION, 1, &client_out}, server_input = {SECBUFFER_VERSION, 1, &server_in};
 	SecBufferDesc server_output = {SECBUFFER_VERSION, 1, &server_out}, client_input = {SECBUFFER_VERSION, 1, &client_in};
-	const ULONG wanted = ISC_REQ_CONFIDENTIALITY | ISC_REQ_INTEGRITY | ISC_REQ_CONNECTION;
+	const ULONG wanted = ISC_REQ_CONFIDENTIALITY | ISC_REQ_INTEGRITY | ISC_REQ_CONNECTION | ISC_REQ_MUTUAL_AUTH;
 	SECURITY_STATUS status = InitializeSecurityContextW(&outbound, NULL, L"localhost", wanted, 0, SECURITY_NATIVE_DREP, NULL, 0, &client,
 		&client_output, &attributes, &expiry);
 	if (status != SEC_I_CONTINUE_NEEDED || !client_out.cbBuffer)
@@ -57,7 +57,7 @@ int raven_entry(void)
 	client_out.cbBuffer = sizeof(to_server);
 	status = InitializeSecurityContextW(&outbound, &client, L"localhost", wanted, 0, SECURITY_NATIVE_DREP, &client_input, 0, &client,
 		&client_output, &attributes, &expiry);
-	if (status != SEC_E_OK || !client_out.cbBuffer)
+	if (status != SEC_E_OK || !client_out.cbBuffer || !(attributes & ISC_RET_MUTUAL_AUTH) || !(attributes & ISC_RET_CONFIDENTIALITY))
 		return 4;
 	/* A server that sees the same answer again is past its exchange and refuses it. */
 	server_in.cbBuffer = client_out.cbBuffer;

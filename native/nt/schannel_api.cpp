@@ -420,7 +420,7 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			call.store_pointer(call[5] + call.pointer_width(), handle_tag);
 		}
 		if (call[7])
-			call.store<uint32_t>(call[7], request & ~uint32_t(2));
+			call.store<uint32_t>(call[7], request);
 		if (call[8])
 			call.store<int64_t>(call[8], INT64_MAX);
 		if (tracing())
@@ -578,8 +578,10 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(written);
 			return true;
 		}
+		// The attributes asked for are the ones granted, mutual authentication among them: both ends are programs of this machine, and
+		// clients such as the Analysis Services one refuse a context without it.
 		if (call[10])
-			call.store<uint32_t>(call[10], request & ~uint32_t(2));
+			call.store<uint32_t>(call[10], request);
 		if (call[11])
 			call.store<int64_t>(call[11], INT64_MAX);
 		if (tracing())
