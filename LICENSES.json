@@ -190,6 +190,7 @@
         "native/upstream/raven-setupapi/stubs.c",
         "native/upstream/raven-setupapi/stubs.inc",
         "native/upstream/raven-shell/README.md",
+        "native/upstream/raven-shell/clipboard.c",
         "native/upstream/raven-shell/com.c",
         "native/upstream/raven-shell/dialog.c",
         "native/upstream/raven-shell/errorinfo.c",

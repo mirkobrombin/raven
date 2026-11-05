@@ -1,5 +1,7 @@
 /* Round trips several clipboard formats inside the process and returns 0, or the number of the first failing check. */
+#define COBJMACROS
 #include <windows.h>
+#include <ole2.h>
 
 static int same_bytes(const void *left, const void *right, unsigned size)
 {
@@ -54,6 +56,36 @@ unsigned int raven_entry(void)
 	}
 	if (!seen_custom || !seen_text)
 		return 11;
+	/* The OLE clipboard shows the same data: the formats it lists, the ones it has, and a copy of each that the caller frees. */
+	CloseClipboard();
+	IDataObject *data = NULL;
+	FORMATETC wanted = {(CLIPFORMAT)custom, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+	STGMEDIUM medium;
+	if (OleGetClipboard(&data) || !data)
+		return 13;
+	if (IDataObject_QueryGetData(data, &wanted) != S_OK)
+		return 14;
+	if (IDataObject_GetData(data, &wanted, &medium) || medium.tymed != TYMED_HGLOBAL || medium.hGlobal == blob ||
+		!same_bytes(GlobalLock(medium.hGlobal), payload, sizeof payload))
+		return 15;
+	GlobalUnlock(medium.hGlobal);
+	ReleaseStgMedium(&medium);
+	wanted.cfFormat = CF_HDROP;
+	if (IDataObject_QueryGetData(data, &wanted) != DV_E_FORMATETC)
+		return 16;
+	IEnumFORMATETC *formats = NULL;
+	FORMATETC listed;
+	int listed_custom = 0;
+	if (IDataObject_EnumFormatEtc(data, DATADIR_GET, &formats) || !formats)
+		return 17;
+	while (IEnumFORMATETC_Next(formats, 1, &listed, NULL) == S_OK)
+		listed_custom |= listed.cfFormat == custom;
+	IEnumFORMATETC_Release(formats);
+	IDataObject_Release(data);
+	if (!listed_custom)
+		return 18;
+	if (!OpenClipboard(NULL))
+		return 19;
 	if (!EmptyClipboard() || IsClipboardFormatAvailable(custom) || CountClipboardFormats() != 0)
 		return 12;
 	CloseClipboard();
