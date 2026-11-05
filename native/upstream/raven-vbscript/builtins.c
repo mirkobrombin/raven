@@ -1302,6 +1302,20 @@ static BOOL fn_getobject(builtin_call *c)
 	return vbs_raise(c->failure, VBS_E_CANNOT_CREATE, NULL);
 }
 
+static BOOL fn_getref(builtin_call *c)
+{
+	BSTR name;
+	if (!text_arg(c, 0, &name))
+		return FALSE;
+	IDispatch *ref = vbs_function_ref(c->en, name);
+	SysFreeString(name);
+	if (!ref)
+		return vbs_raise(c->failure, VBS_E_ARGUMENT, NULL);
+	V_VT(c->result) = VT_DISPATCH;
+	V_DISPATCH(c->result) = ref;
+	return TRUE;
+}
+
 static BOOL fn_err(builtin_call *c)
 {
 	V_VT(c->result) = VT_DISPATCH;
@@ -1437,7 +1451,7 @@ static const builtin builtins[] = {
 	{ L"WeekdayName", 1, 3, fn_weekdayname },
 	{ L"FormatNumber", 1, 5, fn_formatnumber }, { L"FormatCurrency", 1, 5, fn_formatcurrency },
 	{ L"FormatPercent", 1, 5, fn_formatpercent }, { L"FormatDateTime", 1, 2, fn_formatdatetime },
-	{ L"CreateObject", 1, 2, fn_createobject }, { L"GetObject", 0, 2, fn_getobject }, { L"Err", 0, 0, fn_err },
+	{ L"CreateObject", 1, 2, fn_createobject }, { L"GetObject", 0, 2, fn_getobject }, { L"GetRef", 1, 1, fn_getref }, { L"Err", 0, 0, fn_err },
 	{ L"Eval", 1, 1, fn_eval }, { L"Execute", 1, 1, fn_execute }, { L"ExecuteGlobal", 1, 1, fn_execute },
 	{ L"ScriptEngine", 0, 0, fn_scriptengine }, { L"ScriptEngineMajorVersion", 0, 0, fn_major },
 	{ L"ScriptEngineMinorVersion", 0, 0, fn_minor }, { L"ScriptEngineBuildVersion", 0, 0, fn_build }, { L"RGB", 3, 3, fn_rgb },

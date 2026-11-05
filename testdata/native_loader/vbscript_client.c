@@ -285,7 +285,7 @@ int raven_entry(void)
 		return 11;
 	if (failures)
 		return 12;
-	if (!done || checks < 100)
+	if (!done || checks < 130)
 		return 13;
 
 	/* An expression, evaluated at once. */

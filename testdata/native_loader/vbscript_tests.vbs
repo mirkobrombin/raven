@@ -295,6 +295,64 @@ Check Weekday(#1/1/2020#), "4", "Weekday"
 Check VarType("x") & " " & VarType(1) & " " & VarType(Null), "8 2 1", "VarType"
 Check IsNumeric("12.5") & IsNumeric("x"), "TrueFalse", "IsNumeric"
 
+' Regular expressions.
+Dim re, found, item, joined
+Set re = New RegExp
+re.Pattern = "(\w+)@(\w+)\.com"
+Check re.Test("mail bob@example.com now"), "True", "RegExp.Test"
+Set found = re.Execute("mail bob@example.com now")
+Check found.Count, "1", "Execute without Global finds one"
+Check found(0).Value & " " & found(0).FirstIndex & " " & found(0).Length, "bob@example.com 5 15", "a Match"
+Check found(0).SubMatches(0) & "/" & found(0).SubMatches(1), "bob/example", "SubMatches"
+re.Pattern = "\d+"
+re.Global = True
+Set found = re.Execute("a1 b22 c333")
+joined = ""
+For Each item In found
+	joined = joined & item & ","
+Next
+Check joined, "1,22,333,", "For Each over a global Execute"
+Check re.Replace("a1 b22", "#"), "a# b#", "global Replace"
+re.Pattern = "(\w+) (\w+)"
+re.Global = False
+Check re.Replace("one two three", "$2 $1 [$&]"), "two one [one two] three", "Replace with groups"
+re.Pattern = "^b.*$"
+re.Multiline = True
+re.Global = True
+Check re.Execute("abc" & vbLf & "bcd" & vbLf & "bed").Count, "2", "Multiline anchors"
+re.Pattern = "HELLO"
+re.IgnoreCase = True
+Check re.Test("say hello"), "True", "IgnoreCase"
+re.IgnoreCase = False
+Check re.Test("say hello"), "False", "IgnoreCase off again"
+re.Pattern = "a(?=b)|c(?!d)"
+Check re.Replace("ab ac cd ce", "_"), "_b a_ cd _e", "lookahead"
+re.Pattern = "(['""])(.*?)\1"
+Check re.Execute("say 'hi' and ""yo""")(1).SubMatches(1), "yo", "back reference and lazy repeat"
+re.Pattern = "[^a-c\s]{2,3}"
+Check re.Replace("abxyzw cd", "-"), "ab-w cd", "class, negation and counted repeat"
+re.Pattern = "(a|ab)(c|bcd)(d*)"
+re.Global = False
+Check re.Execute("abcd")(0).Value, "abcd", "alternation backtracks"
+re.Pattern = "x*"
+re.Global = True
+Check re.Replace("abc", "-"), "-a-b-c-", "empty matches advance"
+Set other = CreateObject("VBScript.RegExp")
+other.Pattern = "o"
+other.Global = True
+Check other.Replace("foo", "0"), "f00", "VBScript.RegExp through CreateObject"
+On Error Resume Next
+re.Pattern = "(unclosed"
+re.Test "x"
+Check Err.Number, "5020", "a pattern with an open group"
+Err.Clear
+On Error GoTo 0
+
+' GetRef: a procedure as an object.
+Dim handler
+Set handler = GetRef("Twice")
+Check handler(8), "16", "GetRef calls the procedure"
+
 Dim Greeting
 Greeting = "hi"
 Host.Done

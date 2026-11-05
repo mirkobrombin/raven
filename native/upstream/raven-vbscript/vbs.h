@@ -219,6 +219,10 @@ void vbs_add_code(engine *en, script_code *code);
 IDispatch *vbs_item_object(engine *en, UINT index);
 /* CreateObject: an object of a ProgID or {CLSID} through COM. */
 HRESULT vbs_create_object(engine *en, const WCHAR *name, IDispatch **out);
+/* GetRef: an object whose default method calls the script's procedure of this name; NULL when there is none. */
+IDispatch *vbs_function_ref(engine *en, const WCHAR *name);
+/* A new RegExp object. */
+IDispatch *vbs_regexp_new(void);
 /* Eval and Execute: parses text and evaluates or runs it at global level. */
 BOOL vbs_execute_text(engine *en, const WCHAR *source, BOOL expression, VARIANT *result, script_failure *failure);
 

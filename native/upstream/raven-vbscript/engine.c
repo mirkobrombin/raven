@@ -10,6 +10,7 @@
 const GUID IID_IActiveScriptParse32 = { 0xbb1a2ae2, 0xa4f9, 0x11cf, { 0x8f, 0x20, 0x00, 0x80, 0x5f, 0x2c, 0xd0, 0x64 } };
 const GUID IID_IActiveScriptParse64 = { 0xc7ef7658, 0xe1ee, 0x480e, { 0x97, 0xea, 0xd5, 0x2c, 0xb4, 0xd7, 0x6d, 0x17 } };
 static const CLSID CLSID_VBScript = { 0xb54f3741, 0x5b07, 0x11cf, { 0xa4, 0xb0, 0x00, 0xaa, 0x00, 0x4a, 0x55, 0xe8 } };
+static const CLSID CLSID_VBScriptRegExp = { 0x3f4daca4, 0x160d, 0x11d2, { 0xa8, 0xe9, 0x00, 0x10, 0x4b, 0x36, 0x5c, 0x9f } };
 
 static LONG module_locks;
 
@@ -382,6 +383,65 @@ static HRESULT WINAPI global_Invoke(IDispatch *iface, DISPID id, REFIID riid, LC
 static IDispatchVtbl global_vtbl = {
 	global_QueryInterface, global_AddRef, global_Release, global_GetTypeInfoCount, global_GetTypeInfo, global_GetIDsOfNames, global_Invoke,
 };
+
+/* What GetRef hands out: an object whose default method calls one of the script's procedures, as an event handler is called. */
+
+typedef struct {
+	IDispatch IDispatch_iface;
+	LONG refs;
+	engine *en;
+	DISPID id;
+} function_ref;
+
+static function_ref *ref_impl(IDispatch *iface) { return CONTAINING_RECORD(iface, function_ref, IDispatch_iface); }
+
+static ULONG WINAPI ref_AddRef(IDispatch *iface) { return InterlockedIncrement(&ref_impl(iface)->refs); }
+
+static ULONG WINAPI ref_Release(IDispatch *iface)
+{
+	function_ref *ref = ref_impl(iface);
+	LONG refs = InterlockedDecrement(&ref->refs);
+	if (!refs) {
+		IActiveScript_Release(&ref->en->IActiveScript_iface);
+		vbs_free(ref);
+	}
+	return refs;
+}
+
+static HRESULT WINAPI ref_GetIDsOfNames(IDispatch *iface, REFIID riid, LPOLESTR *names, UINT count, LCID lcid, DISPID *ids)
+{
+	for (UINT n = 0; n < count; n++)
+		ids[n] = DISPID_UNKNOWN;
+	return DISP_E_UNKNOWNNAME;
+}
+
+static HRESULT WINAPI ref_Invoke(IDispatch *iface, DISPID id, REFIID riid, LCID lcid, WORD flags, DISPPARAMS *params, VARIANT *result,
+	EXCEPINFO *info, UINT *bad)
+{
+	function_ref *ref = ref_impl(iface);
+	if (id != DISPID_VALUE || (flags & (DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF)))
+		return DISP_E_MEMBERNOTFOUND;
+	return global_Invoke(ref->en->global_dispatch, ref->id, riid, lcid, DISPATCH_METHOD, params, result, info, bad);
+}
+
+static IDispatchVtbl ref_vtbl = {
+	global_QueryInterface, ref_AddRef, ref_Release, global_GetTypeInfoCount, global_GetTypeInfo, ref_GetIDsOfNames, ref_Invoke,
+};
+
+IDispatch *vbs_function_ref(engine *en, const WCHAR *name)
+{
+	for (UINT i = en->procedure_count; i-- > 0;)
+		if (vbs_same(en->procedures[i]->name, name)) {
+			function_ref *ref = vbs_alloc(sizeof(function_ref));
+			ref->IDispatch_iface.lpVtbl = &ref_vtbl;
+			ref->refs = 1;
+			ref->en = en;
+			ref->id = GLOBAL_PROCEDURE_IDS + i;
+			IActiveScript_AddRef(&en->IActiveScript_iface);
+			return &ref->IDispatch_iface;
+		}
+	return NULL;
+}
 
 /* IActiveScript. */
 
@@ -768,12 +828,32 @@ static IClassFactoryVtbl factory_vtbl = {
 
 static IClassFactory factory = { &factory_vtbl };
 
+/* VBScript.RegExp, the regular expression object scripts in other languages create. */
+static HRESULT WINAPI regexp_factory_CreateInstance(IClassFactory *iface, IUnknown *outer, REFIID riid, void **out)
+{
+	*out = NULL;
+	if (outer)
+		return CLASS_E_NOAGGREGATION;
+	IDispatch *regexp = vbs_regexp_new();
+	HRESULT hr = IDispatch_QueryInterface(regexp, riid, out);
+	IDispatch_Release(regexp);
+	return hr;
+}
+
+static IClassFactoryVtbl regexp_factory_vtbl = {
+	factory_QueryInterface, factory_AddRef, factory_Release, regexp_factory_CreateInstance, factory_LockServer,
+};
+
+static IClassFactory regexp_factory = { &regexp_factory_vtbl };
+
 HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void **out)
 {
 	*out = NULL;
-	if (!IsEqualCLSID(clsid, &CLSID_VBScript))
-		return CLASS_E_CLASSNOTAVAILABLE;
-	return IClassFactory_QueryInterface(&factory, riid, out);
+	if (IsEqualCLSID(clsid, &CLSID_VBScript))
+		return IClassFactory_QueryInterface(&factory, riid, out);
+	if (IsEqualCLSID(clsid, &CLSID_VBScriptRegExp))
+		return IClassFactory_QueryInterface(&regexp_factory, riid, out);
+	return CLASS_E_CLASSNOTAVAILABLE;
 }
 
 HRESULT WINAPI DllCanUnloadNow(void)

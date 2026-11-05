@@ -12,12 +12,16 @@ conversions; objects are called through `IDispatch`.
 - `run.c`: the interpreter: variables and ByRef parameters, arrays, calls on objects, classes the
   script defines (as objects with an `IDispatch` of their own), `With`, `On Error Resume Next`.
 - `builtins.c`: the string, conversion, math, date, array and formatting functions, the `vb`
-  constants, `CreateObject`, `Eval` and `Execute`.
+  constants, `CreateObject`, `GetRef`, `Eval` and `Execute`.
 - `err.c`: the `Err` object.
+- `regex.c`: regular expressions in the syntax both script languages share, compiled to a graph of
+  nodes and run by a backtracking matcher; it needs nothing but Windows itself.
+- `regexp.c`: the `RegExp` object (`New RegExp`, or `VBScript.RegExp` through COM) with its
+  `Matches`, `Match` and `SubMatches`.
 - `engine.c`: the COM server: `IActiveScript`, `IActiveScriptParse`, `IObjectSafety`, errors
   reported to the site through `IActiveScriptError`, and the script's globals as an `IDispatch`.
 
-Not yet there: `RegExp`, `GetRef`, `GetObject`, `Execute` in the scope of the calling procedure
+Not yet there: `GetObject`, `Execute` in the scope of the calling procedure
 (it runs at global level), `AddScriptlet`, `AddTypeLib` and the debugging interfaces.
 
 `exports.txt` lists the exports. See [LICENSES.md](../../../LICENSES.md).

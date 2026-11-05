@@ -496,6 +496,24 @@ static BOOL member_call(frame *f, IDispatch *object, const WCHAR *name, WORD fla
 			return call_procedure(f->en, proc, self, args, count, result, f->failure);
 	}
 	HRESULT hr = vbs_invoke(object, name, flags, args, count, result, f->failure);
+	/* obj.Items(0) where Items takes no arguments: the property's value, then its element or its default member with them. */
+	if (hr == DISP_E_BADPARAMCOUNT && name && count && !(flags & (DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF))) {
+		VARIANT holder;
+		vbs_failure_clear(f->failure);
+		hr = vbs_invoke(object, name, DISPATCH_PROPERTYGET, NULL, 0, &holder, f->failure);
+		if (SUCCEEDED(hr)) {
+			if (is_array(&holder)) {
+				VARIANT *at = element(f, array_of(&holder), args, count);
+				hr = !at ? DISP_E_EXCEPTION : result ? VariantCopy(result, at) : S_OK;
+			} else if (V_VT(&holder) == VT_DISPATCH && V_DISPATCH(&holder)) {
+				hr = vbs_invoke(V_DISPATCH(&holder), NULL, flags, args, count, result, f->failure);
+			} else {
+				vbs_raise(f->failure, VBS_E_TYPE_MISMATCH, NULL);
+				hr = DISP_E_TYPEMISMATCH;
+			}
+			VariantClear(&holder);
+		}
+	}
 	return SUCCEEDED(hr);
 }
 
@@ -784,6 +802,11 @@ static BOOL evaluate(frame *f, expr *e, VARIANT *out)
 		return TRUE;
 	case E_NEW: {
 		class_def *c = find_class(f->en, e->name);
+		if (!c && vbs_same(e->name, L"RegExp")) {
+			V_VT(out) = VT_DISPATCH;
+			V_DISPATCH(out) = vbs_regexp_new();
+			return TRUE;
+		}
 		if (!c)
 			return vbs_raise(f->failure, 506, NULL);
 		instance *object = vbs_alloc(sizeof(instance));
