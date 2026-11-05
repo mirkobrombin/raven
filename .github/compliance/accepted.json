@@ -191,6 +191,30 @@
       "path": "scripts/provision-rtl.py",
       "text": "def compile(name):",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-winmd.py",
+      "text": "match = re.compile(r'\\s*([A-Za-z_][\\w.]*(?:`\\d+)?)').match(text, at)",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-locale-identifiers.py",
+      "text": "SUBTABLE = re.compile(r\"ILCID_POSIX_SUBTABLE\\((\\w+)\\)\\s*\\{(.*?)\\};\", re.S)",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-locale-identifiers.py",
+      "text": "ENTRY = re.compile(r\"\\{\\s*(0x[0-9a-fA-F]+)\\s*,\\s*\\\"([^\\\"]+)\\\"\\s*\\}\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/generate-locale-identifiers.py",
+      "text": "ELEMENT = re.compile(r\"ILCID_POSIX_ELEMENT_ARRAY\\(\\s*(0x[0-9a-fA-F]+)\\s*,\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     }
   ]
 }
