@@ -2687,8 +2687,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (name_first && failure_arguments.size() > name_index && failure_arguments[name_index] > 0xffff) {
 					std::string text;
 					try {
-						const auto raw = process.read_memory(failure_arguments[name_index], 240);
-						for (size_t i = 0; i < 120 && (raw[i * 2] | raw[i * 2 + 1]); ++i)
+						const auto raw = process.read_memory(failure_arguments[name_index], 520);
+						for (size_t i = 0; i < 260 && (raw[i * 2] | raw[i * 2 + 1]); ++i)
 							text.push_back(raw[i * 2 + 1] ? '?' : char(raw[i * 2]));
 					} catch (...) {}
 					std::cerr << " name=" << text;
