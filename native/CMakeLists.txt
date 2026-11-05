@@ -145,6 +145,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/l_intl.nls ${CMAKE_CURRENT_BINARY_DIR}/x86/l_intl.nls
             DEPENDS ${PROJECT_SOURCE_DIR}/scripts/generate-intl-nls.py VERBATIM)
         add_custom_target(intl_nls ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/l_intl.nls ${CMAKE_CURRENT_BINARY_DIR}/x86/l_intl.nls)
+        # The runtime's Windows Runtime metadata, which prefixes keep in System32\WinMetadata for .NET programs that call the Windows Runtime.
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/WinMetadata/Windows.winmd
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/WinMetadata
+            COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/generate-winmd.py ${PROJECT_SOURCE_DIR}/native/upstream/raven-winmd/windows.types
+                ${CMAKE_CURRENT_BINARY_DIR}/WinMetadata/Windows.winmd
+            DEPENDS ${PROJECT_SOURCE_DIR}/scripts/generate-winmd.py ${PROJECT_SOURCE_DIR}/native/upstream/raven-winmd/windows.types VERBATIM)
+        add_custom_target(windows_winmd ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/WinMetadata/Windows.winmd)
     endif()
     target_sources(raven_cpu PRIVATE nt/nls.cpp nt/multibyte.cpp nt/startup.cpp nt/launch.cpp nt/file.cpp nt/prefix.cpp nt/registry.cpp nt/advapi_api.cpp nt/msvcrt_api.cpp nt/profile_api.cpp nt/x86_process.cpp nt/x86_thread_api.cpp nt/x86_compat_api.cpp nt/x86_loader.cpp nt/x86_system_api.cpp nt/registry_words.cpp nt/x86_tls.cpp nt/x86_com.cpp nt/x86_dsound.cpp nt/x86_d3d9.cpp ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-cp1252.h
         ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-sbcs.h ${CMAKE_CURRENT_BINARY_DIR}/nls-generated/nls-dbcs.h)

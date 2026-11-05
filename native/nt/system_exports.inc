@@ -2753,6 +2753,9 @@ static constexpr std::string_view rstrtmgr_exports[]{
 	"RmAddFilter","RmCancelCurrentTask","RmEndSession","RmGetFilterList","RmGetList","RmJoinSession",
 	"RmRegisterResources","RmRemoveFilter","RmReserveHeap","RmRestart","RmShutdown","RmStartSession",
 };
+static constexpr std::string_view wintypes_exports[]{
+	"RoGetMetaDataFile","RoIsApiContractMajorVersionPresent","RoIsApiContractPresent","RoParseTypeName","RoResolveNamespace",
+};
 static constexpr std::pair<std::string_view, std::span<const std::string_view>> libraries[]{
 	{"advapi32.dll", advapi32_exports},
 	{"bcrypt.dll", bcrypt_exports},
@@ -2824,4 +2827,5 @@ static constexpr std::pair<std::string_view, std::span<const std::string_view>> 
 	{"slc.dll", slc_exports},
 	{"sppc.dll", sppc_exports},
 	{"rstrtmgr.dll", rstrtmgr_exports},
+	{"wintypes.dll", wintypes_exports},
 };

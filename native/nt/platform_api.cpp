@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -278,6 +279,39 @@ struct ComState {
 	int mta_threads = 0;
 };
 
+}
+
+// A list of strings a Windows Runtime function hands out: an array of string handles from CoTaskMemAlloc, each string a copy the caller
+// deletes, and their count.
+static bool hand_out_strings(ApiCall &call, KernelContext &context, const std::vector<std::u16string> &texts, uint64_t count, uint64_t out)
+{
+	const size_t width = call.pointer_width();
+	if (!out)
+		return true;
+	call.store<uint32_t>(count, uint32_t(texts.size()));
+	call.store_pointer(out, 0);
+	if (texts.empty())
+		return true;
+	const auto array = context.allocator.allocate(texts.size() * width, false);
+	if (!array)
+		return false;
+	for (size_t index = 0; index < texts.size(); ++index) {
+		const auto &value = texts[index];
+		const size_t head = 16 + width;
+		const auto block = context.allocator.allocate(head + (value.size() + 1) * 2, true);
+		if (!block)
+			return false;
+		std::vector<uint8_t> image(head + (value.size() + 1) * 2);
+		const uint32_t length = uint32_t(value.size());
+		const uint64_t characters = block + head;
+		std::memcpy(image.data() + 4, &length, 4);
+		std::memcpy(image.data() + 16, &characters, width);
+		std::memcpy(image.data() + head, value.data(), value.size() * 2);
+		call.write(block, image);
+		call.store_pointer(array + index * width, block);
+	}
+	call.store_pointer(out, array);
+	return true;
 }
 
 void register_platform_api(ApiRegistry &registry, KernelContext &context)
@@ -1219,10 +1253,160 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		call.store<int32_t>(call[2], order < 0 ? -1 : order > 0 ? 1 : 0);
 		call.ret(0);
 	});
-	// Without Windows Runtime metadata, a language exception has nowhere to go, and type names and namespaces resolve to nothing.
+	// A language exception has nowhere to go.
 	registry.add("RoOriginateLanguageException", 3, [](ApiCall &call) { call.ret(0); });
-	registry.add("RoParseTypeName", 3, [](ApiCall &call) { call.ret(0x80004001U); });
-	registry.add("RoResolveNamespace", 7, [](ApiCall &call) { call.ret(0x80004001U); });
+	// A type name split into the names it is made of, in the order they are written: "A`2<B, C`1<D>>" is A`2, B, C`1 and D. A generic name
+	// takes as many arguments as its arity says, and the name must be whole, or the result is RO_E_METADATA_INVALID_TYPE_FORMAT.
+	registry.add("RoParseTypeName", 3, [&context](ApiCall &call) {
+		if (!call[0] || !call[1] || !call[2]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		const auto length = call.load<uint32_t>(call[0] + 4);
+		const auto bytes = call.read(call.load_pointer(call[0] + 16), size_t(length) * 2);
+		const std::u16string name(reinterpret_cast<const char16_t *>(bytes.data()), length);
+		std::vector<std::u16string> parts;
+		size_t at = 0;
+		const auto skip = [&] {
+			while (at < name.size() && name[at] == u' ')
+				++at;
+		};
+		// One name and its arguments; false when the text is not a type name.
+		std::function<bool()> parse = [&]() -> bool {
+			skip();
+			const size_t start = at;
+			while (at < name.size() && name[at] != u'<' && name[at] != u'>' && name[at] != u',' && name[at] != u' ')
+				++at;
+			if (at == start)
+				return false;
+			const auto part = name.substr(start, at - start);
+			parts.push_back(part);
+			const auto tick = part.find(u'`');
+			unsigned arity = 0;
+			if (tick != std::u16string::npos) {
+				for (size_t index = tick + 1; index < part.size(); ++index) {
+					if (part[index] < u'0' || part[index] > u'9')
+						return false;
+					arity = arity * 10 + unsigned(part[index] - u'0');
+				}
+				if (!arity)
+					return false;
+			}
+			skip();
+			if (!arity)
+				return at == name.size() || name[at] != u'<';
+			if (at == name.size() || name[at] != u'<')
+				return false;
+			++at;
+			for (unsigned index = 0; index < arity; ++index) {
+				if (index) {
+					skip();
+					if (at == name.size() || name[at] != u',')
+						return false;
+					++at;
+				}
+				if (!parse())
+					return false;
+			}
+			skip();
+			if (at == name.size() || name[at] != u'>')
+				return false;
+			++at;
+			skip();
+			return true;
+		};
+		if (!parse() || at != name.size()) {
+			call.ret(0x80000010U); // RO_E_METADATA_INVALID_TYPE_FORMAT
+			return;
+		}
+		call.ret(hand_out_strings(call, context, parts, call[1], call[2]) ? 0 : 0x8007000eU);
+	});
+	// No API contract is installed: Raven describes Windows Runtime types one by one, not whole contracts.
+	registry.add("RoIsApiContractPresent", 4, [](ApiCall &call) {
+		if (call[3])
+			call.store<uint8_t>(call[3], 0);
+		call.ret(call[0] && call[3] ? 0 : 0x80070057U);
+	});
+	registry.add("RoIsApiContractMajorVersionPresent", 3, [](ApiCall &call) {
+		if (call[2])
+			call.store<uint8_t>(call[2], 0);
+		call.ret(call[0] && call[2] ? 0 : 0x80070057U);
+	});
+	// Finding a type's metadata through the metadata dispenser is not served; the .NET runtime resolves namespaces instead.
+	registry.add("RoGetMetaDataFile", 5, [](ApiCall &call) { call.ret(0x8000000FU); });
+	// The metadata files that may describe a namespace: those of the Windows metadata folder (System32\WinMetadata unless the caller names
+	// another) and of the package folders whose names are the namespace or one that encloses it, the most specific first, and the next
+	// parts of the namespaces their names extend it by. The runtime's own Windows.winmd describes every Windows namespace it knows.
+	registry.add("RoResolveNamespace", 8, [&context](ApiCall &call) {
+		const size_t width = call.pointer_width();
+		const auto text_of = [&](uint64_t handle) {
+			if (!handle)
+				return std::u16string();
+			const auto length = call.load<uint32_t>(handle + 4);
+			const auto bytes = call.read(call.load_pointer(handle + 16), size_t(length) * 2);
+			return std::u16string(reinterpret_cast<const char16_t *>(bytes.data()), length);
+		};
+		const auto fold = [](std::u16string text) {
+			for (auto &character : text)
+				if (character >= u'A' && character <= u'Z')
+					character = char16_t(character + 32);
+			return text;
+		};
+		const auto name = text_of(call[0]);
+		if (name.empty() || (!call[4] && !call[6])) {
+			call.ret(0x80070057U);
+			return;
+		}
+		std::vector<std::u16string> folders{call[1] ? text_of(call[1]) : u"C:\\Windows\\System32\\WinMetadata"};
+		for (uint32_t index = 0; index < call.u32(2) && call[3]; ++index)
+			folders.push_back(text_of(call.load_pointer(call[3] + index * width)));
+		std::vector<std::pair<size_t, std::u16string>> files;
+		std::vector<std::u16string> below;
+		const auto key = fold(name);
+		for (const auto &folder : folders) {
+			const auto resolved = context.paths.resolve(folder);
+			std::error_code error;
+			if (!resolved || !resolved->exists || !std::filesystem::is_directory(resolved->host, error))
+				continue;
+			for (const auto &entry : std::filesystem::directory_iterator(resolved->host, error)) {
+				const auto file = from_utf8(entry.path().filename().string());
+				if (file.size() <= 6 || fold(file.substr(file.size() - 6)) != u".winmd")
+					continue;
+				const auto stem = fold(file.substr(0, file.size() - 6));
+				if (key == stem || (key.size() > stem.size() && key.starts_with(stem) && key[stem.size()] == u'.'))
+					files.emplace_back(stem.size(), folder + u"\\" + file);
+				else if (stem.size() > key.size() && stem.starts_with(key) && stem[key.size()] == u'.') {
+					const auto rest = file.substr(key.size() + 1, file.size() - 6 - key.size() - 1);
+					const auto part = rest.substr(0, rest.find(u'.'));
+					if (std::none_of(below.begin(), below.end(), [&](const auto &known) { return fold(known) == fold(part); }))
+						below.push_back(part);
+				}
+			}
+		}
+		if (files.empty() && below.empty()) {
+			// The traced failure says which namespace was asked for.
+			if (std::getenv("RAVEN_TRACE_FAIL"))
+				std::fprintf(stderr, "raven: no Windows Runtime metadata for %s\n", to_utf8(name).c_str());
+			call.ret(0x8000000FU); // RO_E_METADATA_NAME_NOT_FOUND
+			return;
+		}
+		std::stable_sort(files.begin(), files.end(), [](const auto &left, const auto &right) { return left.first > right.first; });
+		const auto hand_out = [&](const std::vector<std::u16string> &texts, uint64_t count, uint64_t out) {
+			return hand_out_strings(call, context, texts, count, out);
+		};
+		std::vector<std::u16string> paths;
+		for (const auto &[_, path] : files)
+			paths.push_back(path);
+		if (call[4] && call[5] ? !hand_out(paths, call[4], call[5]) : false) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		if (call[6] && call[7] ? !hand_out(below, call[6], call[7]) : false) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		call.ret(0);
+	});
 	registry.add("RoGetParameterizedTypeInstanceIID", 5, [](ApiCall &call) { call.ret(0x80004001U); });
 	// No Windows Runtime class exists here: initialization joins the thread to a COM apartment like CoInitializeEx (RO_INIT_MULTITHREADED
 	// is 1), and every activation reports that the class is not registered.

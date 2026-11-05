@@ -18,7 +18,7 @@ import sys
 LIBRARIES = """advapi32 bcrypt comctl32 comdlg32 crypt32 dbghelp dwmapi gdi32 imm32 kernel32 ole32 oleaut32 psapi
 sensapi setupapi shell32 shlwapi user32 uxtheme version wininet winmm wintrust ws2_32 wsock32
 bcryptprimitives cfgmgr32 dhcpcsvc dnsapi hid imagehlp iphlpapi ntdll ktmw32 msimg32 mswsock ncrypt netapi32 opengl32 glu32 powrprof pdh runtimeobject winspool ravenhost secur32 shcore userenv wevtapi winhttp wtsapi32
-atlthunk oleacc odbccp32 usp10 sfc dsound combase wer uiautomationcore lz32 loadperf mpr shfolder wldap32 oledlg normaliz slc sppc rstrtmgr""".split()
+atlthunk oleacc odbccp32 usp10 sfc dsound combase wer uiautomationcore lz32 loadperf mpr shfolder wldap32 oledlg normaliz slc sppc rstrtmgr wintypes""".split()
 # Real exports whose names begin with an underscore, which the generic filter drops.
 # The interlocked functions are compiler intrinsics in the import libraries, yet kernel32 exports them and programs import them by name.
 # The address waits live in kernelbase on Windows and in no kernel32 import library; Raven publishes them from kernel32 as its 32-bit side does.
@@ -65,7 +65,7 @@ COMBASE_WORDS = {"CLSIDFromString": 2, "CoCreateFreeThreadedMarshaler": 2, "CoCr
                  "CoGetMalloc": 2, "CoIncrementMTAUsage": 1, "CoInitializeEx": 2, "CoTaskMemAlloc": 1, "CoTaskMemFree": 1, "CoTaskMemRealloc": 2,
                  "CoUninitialize": 0, "GetErrorInfo": 2, "RoActivateInstance": 2, "RoGetActivationFactory": 3,
                  "RoGetParameterizedTypeInstanceIID": 5, "RoInitialize": 1, "RoOriginateError": 2, "RoOriginateErrorW": 3,
-                 "RoOriginateLanguageException": 3, "RoParseTypeName": 3, "RoResolveNamespace": 7, "RoUninitialize": 0, "SetErrorInfo": 2,
+                 "RoOriginateLanguageException": 3, "RoParseTypeName": 3, "RoResolveNamespace": 8, "RoUninitialize": 0, "SetErrorInfo": 2,
                  "StringFromGUID2": 3, "WindowsCompareStringOrdinal": 3, "WindowsCreateString": 3, "WindowsCreateStringReference": 4,
                  "WindowsDeleteString": 1, "WindowsDuplicateString": 2, "WindowsGetStringLen": 1, "WindowsGetStringRawBuffer": 2,
                  "WindowsIsStringEmpty": 1}
@@ -85,7 +85,12 @@ SPPC_WORDS = {"SLClose": 1, "SLConsumeRight": 5, "SLGetApplicationInformation": 
 # Programs look for SLDepositMigrationBlob as the sign of a current platform, and for SLRegisterPlugin and SLPersistRTSPayloadOverride
 # with the rest of the client. Windows documents neither them nor their arguments, so they have no argument words.
 NAMES_ONLY["sppc"] = sorted([*SPPC_WORDS, "SLDepositMigrationBlob", "SLPersistRTSPayloadOverride", "SLRegisterPlugin"])
-NAMES_ONLY_WORDS = {**COMBASE_WORDS, **SLC_WORDS, **SPPC_WORDS, "AtlThunk_AllocateData": 0, "AtlThunk_DataToCode": 1, "AtlThunk_FreeData": 1, "AtlThunk_InitData": 3, "RavenFontClose": 1, "RavenFontGlyphs": 4, "RavenFontInfo": 2, "RavenFontMetrics": 3, "RavenFontName": 4, "RavenFontOpen": 3,
+# wintypes.dll, which resolves Windows Runtime type names to their metadata files, has no import library in mingw-w64: the functions
+# the .NET runtime loads from it by name.
+WINTYPES_WORDS = {"RoGetMetaDataFile": 5, "RoIsApiContractMajorVersionPresent": 3, "RoIsApiContractPresent": 4, "RoParseTypeName": 3,
+                  "RoResolveNamespace": 8}
+NAMES_ONLY["wintypes"] = sorted(WINTYPES_WORDS)
+NAMES_ONLY_WORDS = {**COMBASE_WORDS, **WINTYPES_WORDS, **SLC_WORDS, **SPPC_WORDS, "AtlThunk_AllocateData": 0, "AtlThunk_DataToCode": 1, "AtlThunk_FreeData": 1, "AtlThunk_InitData": 3, "RavenFontClose": 1, "RavenFontGlyphs": 4, "RavenFontInfo": 2, "RavenFontMetrics": 3, "RavenFontName": 4, "RavenFontOpen": 3,
                     "RavenFontOutline": 4, "RavenFontRender": 10, "RavenFontScan": 2, "RavenFontTable": 5, "RavenTrace": 1,
                     "RavenCanvasBatch": 2, "RavenCanvasCreate": 2, "RavenCanvasDestroy": 1, "RavenCanvasDraw": 4, "RavenCanvasPixels": 8, "RavenCanvasSize": 2, "RavenPathCombine": 8, "RavenPathWiden": 7,
                     "RavenShaderRequest": 2, "RavenShaderResult": 4, "RavenShaderRelease": 1}

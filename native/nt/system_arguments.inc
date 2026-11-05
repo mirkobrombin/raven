@@ -2512,7 +2512,7 @@ static constexpr std::pair<std::string_view, uint8_t> combase_words[]{
 	{"CLSIDFromString",2},{"CoCreateFreeThreadedMarshaler",2},{"CoCreateGuid",1},{"CoCreateInstance",5},{"CoDecrementMTAUsage",1},{"CoGetApartmentType",2},
 	{"CoGetMalloc",2},{"CoIncrementMTAUsage",1},{"CoInitializeEx",2},{"CoTaskMemAlloc",1},{"CoTaskMemFree",1},{"CoTaskMemRealloc",2},
 	{"CoUninitialize",0},{"GetErrorInfo",2},{"RoActivateInstance",2},{"RoGetActivationFactory",3},{"RoGetParameterizedTypeInstanceIID",5},{"RoInitialize",1},
-	{"RoOriginateError",2},{"RoOriginateErrorW",3},{"RoOriginateLanguageException",3},{"RoParseTypeName",3},{"RoResolveNamespace",7},{"RoUninitialize",0},
+	{"RoOriginateError",2},{"RoOriginateErrorW",3},{"RoOriginateLanguageException",3},{"RoParseTypeName",3},{"RoResolveNamespace",8},{"RoUninitialize",0},
 	{"SetErrorInfo",2},{"StringFromGUID2",3},{"WindowsCompareStringOrdinal",3},{"WindowsCreateString",3},{"WindowsCreateStringReference",4},{"WindowsDeleteString",1},
 	{"WindowsDuplicateString",2},{"WindowsGetStringLen",1},{"WindowsGetStringRawBuffer",2},{"WindowsIsStringEmpty",1},
 };
@@ -2601,6 +2601,9 @@ static constexpr std::pair<std::string_view, uint8_t> rstrtmgr_words[]{
 	{"RmAddFilter",5},{"RmCancelCurrentTask",1},{"RmEndSession",1},{"RmGetFilterList",4},{"RmGetList",5},{"RmJoinSession",2},
 	{"RmRegisterResources",7},{"RmRemoveFilter",4},{"RmReserveHeap",1},{"RmRestart",3},{"RmShutdown",3},{"RmStartSession",3},
 };
+static constexpr std::pair<std::string_view, uint8_t> wintypes_words[]{
+	{"RoGetMetaDataFile",5},{"RoIsApiContractMajorVersionPresent",3},{"RoIsApiContractPresent",4},{"RoParseTypeName",3},{"RoResolveNamespace",8},
+};
 static constexpr std::pair<std::string_view, std::span<const std::pair<std::string_view, uint8_t>>> argument_tables[]{
 	{"advapi32.dll", advapi32_words},
 	{"bcrypt.dll", bcrypt_words},
@@ -2671,4 +2674,5 @@ static constexpr std::pair<std::string_view, std::span<const std::pair<std::stri
 	{"slc.dll", slc_words},
 	{"sppc.dll", sppc_words},
 	{"rstrtmgr.dll", rstrtmgr_words},
+	{"wintypes.dll", wintypes_words},
 };

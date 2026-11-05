@@ -566,6 +566,16 @@
       "boundary": "C declarations compiled into the PE guest components raven-web.dll and its test, and the shared raven-winrt plumbing. No code."
     },
     {
+      "name": "Windows Runtime metadata description",
+      "paths": [
+        "native/upstream/raven-winmd/windows.types"
+      ],
+      "license": "MIT",
+      "review": "reviewed",
+      "provenance": "Type names, interface identifiers and member order of the public Windows Runtime API, taken as interoperability facts from the bindings of the windows crate 0.58.0 (https://github.com/microsoft/windows-rs, MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation) and the Windows Runtime headers of mingw-w64; scripts/generate-winmd.py writes System32\\WinMetadata\\Windows.winmd from it",
+      "boundary": "A data description turned into a metadata file without code at build time. No code is taken."
+    },
+    {
       "name": "Windows packaging interface declarations",
       "paths": [
         "native/upstream/raven-appx/appxpackaging.h"

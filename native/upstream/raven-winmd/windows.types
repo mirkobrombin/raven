@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Mirko Brombin
+# See LICENSES/MIT.txt.
+#
+# The Windows Runtime types Raven describes in System32\WinMetadata\Windows.winmd, for programs whose .NET code calls into the Windows
+# Runtime: scripts/generate-winmd.py writes the file from this description. Names, interface identifiers and the order of members follow
+# the public Windows Runtime API.
+#
+# Only the types programs are known to reach are described. A member a program does not reach keeps its slot in its interface, so the
+# ones after it stay where they belong, but may take Object for the types Raven does not describe.
+#
+# namespace N                        the namespace of the types that follow
+# struct S { Type Field, ... }       a structure
+# enum E { Name = value, ... }       an enumeration over Int32
+# interface I`n<T..> {guid} [requires J, ...]
+#                                    an interface; its members follow, one to a line:
+#   get Type Name / set Type Name    a property's accessor, in its slot
+#   Type Name(Type name, ...)        a method; "out Type name" passes the result back, "fill Type[] name" fills the caller's array
+#   overload Unique Type Name(...)   a method whose overloads share Name, Unique naming this one
+# delegate D`n<T..> {guid} Type Invoke(...)
+# class C [default I] [implements J, ...] [statics S]
+#                                    a runtime class: the members of its interfaces as its own, the members of S as its static ones
+
+namespace Windows.Foundation.Metadata
+attribute GuidAttribute(UInt32 a, UInt16 b, UInt16 c, UInt8 d, UInt8 e, UInt8 f, UInt8 g, UInt8 h, UInt8 i, UInt8 j, UInt8 k)
+attribute StaticAttribute(Type type, UInt32 version)
+attribute DefaultAttribute()
+attribute OverloadAttribute(String method)
+
+interface IApiInformationStatics {997439fe-f681-4a11-b416-c13a47e8ba36}
+	Boolean IsTypePresent(String typeName)
+	Boolean IsMethodPresent(String typeName, String methodName)
+	overload IsMethodPresentWithArity Boolean IsMethodPresent(String typeName, String methodName, UInt32 inputParameterCount)
+	Boolean IsEventPresent(String typeName, String eventName)
+	Boolean IsPropertyPresent(String typeName, String propertyName)
+	Boolean IsReadOnlyPropertyPresent(String typeName, String propertyName)
+	Boolean IsWriteablePropertyPresent(String typeName, String propertyName)
+	Boolean IsEnumNamedValuePresent(String enumTypeName, String valueName)
+	Boolean IsApiContractPresent(String contractName, UInt16 majorVersion)
+	overload IsApiContractPresentByMajorAndMinor Boolean IsApiContractPresent(String contractName, UInt16 majorVersion, UInt16 minorVersion)
+class ApiInformation statics IApiInformationStatics
+
+namespace Windows.Foundation
+struct HResult { Int32 Value }
+enum AsyncStatus { Started = 0, Completed = 1, Canceled = 2, Error = 3 }
+
+interface IAsyncInfo {00000036-0000-0000-c000-000000000046}
+	get UInt32 Id
+	get AsyncStatus Status
+	get HResult ErrorCode
+	Void Cancel()
+	Void Close()
+
+delegate AsyncActionCompletedHandler {a4ed5c81-76c9-40bd-8be6-b1d90fb20ae7} Void Invoke(IAsyncAction asyncInfo, AsyncStatus asyncStatus)
+interface IAsyncAction {5a648006-843a-4da9-865b-9d26e5dfad7b} requires IAsyncInfo
+	set AsyncActionCompletedHandler Completed
+	get AsyncActionCompletedHandler Completed
+	Void GetResults()
+
+delegate AsyncOperationCompletedHandler`1<TResult> {fcdcf02c-e5d8-4478-915a-4d90b74b83a5} Void Invoke(IAsyncOperation`1<TResult> asyncInfo, AsyncStatus asyncStatus)
+interface IAsyncOperation`1<TResult> {9fc2b0bb-e446-44e2-aa61-9cab8f636af2} requires IAsyncInfo
+	set AsyncOperationCompletedHandler`1<TResult> Completed
+	get AsyncOperationCompletedHandler`1<TResult> Completed
+	TResult GetResults()
+
+interface IUriRuntimeClass {9e365e57-48b2-4160-956f-c7385120bbfc}
+	get String AbsoluteUri
+	get String DisplayUri
+	get String Domain
+	get String Extension
+	get String Fragment
+	get String Host
+	get String Password
+	get String Path
+	get String Query
+	get Object QueryParsed
+	get String RawUri
+	get String SchemeName
+	get String UserName
+	get Int32 Port
+	get Boolean Suspicious
+	Boolean Equals(Uri pUri)
+	Uri CombineUri(String relativeUri)
+class Uri default IUriRuntimeClass
+
+namespace Windows.Foundation.Collections
+interface IIterator`1<T> {6a79e863-4300-459a-9966-cbb660963ee1}
+	get T Current
+	get Boolean HasCurrent
+	Boolean MoveNext()
+	UInt32 GetMany(fill T[] items)
+interface IIterable`1<T> {faa585ea-6214-4217-afda-7f46de5869b3}
+	IIterator`1<T> First()
+interface IKeyValuePair`2<K, V> {02b51929-c1c4-4a7e-8940-0312b5c18500}
+	get K Key
+	get V Value
+interface IMapView`2<K, V> {e480ce40-a338-4ada-adcf-272272e48cb9} requires IIterable`1<IKeyValuePair`2<K, V>>
+	V Lookup(K key)
+	get UInt32 Size
+	Boolean HasKey(K key)
+	Void Split(out IMapView`2<K, V> first, out IMapView`2<K, V> second)
+interface IMap`2<K, V> {3c2925fe-8519-45c1-aa79-197b6718c1c1} requires IIterable`1<IKeyValuePair`2<K, V>>
+	V Lookup(K key)
+	get UInt32 Size
+	Boolean HasKey(K key)
+	IMapView`2<K, V> GetView()
+	Boolean Insert(K key, V value)
+	Void Remove(K key)
+	Void Clear()
+
+namespace Windows.Storage.FileProperties
+interface IStorageItemContentProperties {05294bad-bc38-48bf-85d7-770e0e2ae0ba}
+	Windows.Foundation.IAsyncOperation`1<Object> GetMusicPropertiesAsync()
+	Windows.Foundation.IAsyncOperation`1<Object> GetVideoPropertiesAsync()
+	Windows.Foundation.IAsyncOperation`1<Object> GetImagePropertiesAsync()
+	Windows.Foundation.IAsyncOperation`1<Object> GetDocumentPropertiesAsync()
+interface IStorageItemExtraProperties {c54361b2-54cd-432b-bdbc-4b19c4b470d7}
+	Windows.Foundation.IAsyncOperation`1<Windows.Foundation.Collections.IMap`2<String, Object>> RetrievePropertiesAsync(Windows.Foundation.Collections.IIterable`1<String> propertiesToRetrieve)
+	Windows.Foundation.IAsyncAction SavePropertiesAsync(Windows.Foundation.Collections.IIterable`1<Windows.Foundation.Collections.IKeyValuePair`2<String, Object>> propertiesToSave)
+	overload SavePropertiesAsyncOverloadDefault Windows.Foundation.IAsyncAction SavePropertiesAsync()
+class StorageItemContentProperties default IStorageItemContentProperties implements IStorageItemExtraProperties
+
+namespace Windows.Storage
+interface IStorageItemProperties {86664478-8029-46fe-a789-1c2f3e2ffb5c}
+	overload GetThumbnailAsyncOverloadDefaultSizeDefaultOptions Windows.Foundation.IAsyncOperation`1<Object> GetThumbnailAsync(Int32 mode)
+	overload GetThumbnailAsyncOverloadDefaultOptions Windows.Foundation.IAsyncOperation`1<Object> GetThumbnailAsync(Int32 mode, UInt32 requestedSize)
+	Windows.Foundation.IAsyncOperation`1<Object> GetThumbnailAsync(Int32 mode, UInt32 requestedSize, UInt32 options)
+	get String DisplayName
+	get String DisplayType
+	get String FolderRelativeId
+	get Windows.Storage.FileProperties.StorageItemContentProperties Properties
+interface IStorageFileStatics {5984c710-daf2-43c8-8bb4-a4d3eacfd03f}
+	Windows.Foundation.IAsyncOperation`1<StorageFile> GetFileFromPathAsync(String path)
+	Windows.Foundation.IAsyncOperation`1<StorageFile> GetFileFromApplicationUriAsync(Windows.Foundation.Uri uri)
+	Windows.Foundation.IAsyncOperation`1<StorageFile> CreateStreamedFileAsync(String displayNameWithExtension, Object dataRequested, Object thumbnail)
+	Windows.Foundation.IAsyncOperation`1<StorageFile> ReplaceWithStreamedFileAsync(Object fileToReplace, Object dataRequested, Object thumbnail)
+	Windows.Foundation.IAsyncOperation`1<StorageFile> CreateStreamedFileFromUriAsync(String displayNameWithExtension, Windows.Foundation.Uri uri, Object thumbnail)
+	Windows.Foundation.IAsyncOperation`1<StorageFile> ReplaceWithStreamedFileFromUriAsync(Object fileToReplace, Windows.Foundation.Uri uri, Object thumbnail)
+class StorageFile default IStorageItemProperties statics IStorageFileStatics
+
+namespace Windows.System
+interface ILauncherStatics {277151c3-9e3e-42f6-91a4-5dfdeb232451}
+	Windows.Foundation.IAsyncOperation`1<Boolean> LaunchFileAsync(Object file)
+	overload LaunchFileWithOptionsAsync Windows.Foundation.IAsyncOperation`1<Boolean> LaunchFileAsync(Object file, Object options)
+	Windows.Foundation.IAsyncOperation`1<Boolean> LaunchUriAsync(Windows.Foundation.Uri uri)
+	overload LaunchUriWithOptionsAsync Windows.Foundation.IAsyncOperation`1<Boolean> LaunchUriAsync(Windows.Foundation.Uri uri, Object options)
+class Launcher statics ILauncherStatics
