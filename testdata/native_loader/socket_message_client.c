@@ -302,6 +302,10 @@ static int accepted_with_data(void)
 	if (GetQueuedCompletionStatus(port, &bytes, &key, &finished, 200) || GetLastError() != WAIT_TIMEOUT) return 67;
 	if (send(client, "hello", 5, 0) != 5 || !GetQueuedCompletionStatus(port, &bytes, &key, &finished, 5000) || bytes != 5 || key != 7 ||
 		finished != &operation || buffer[0] != 'h' || buffer[4] != 'o') return 68;
+	/* The accepted socket takes the listener's context, as a server does before it answers, and then answers. */
+	char reply[3] = {0};
+	if (setsockopt(accepted, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, (const char *)&listener, sizeof(listener)) ||
+		send(accepted, "ok", 2, 0) != 2 || recv(client, reply, 2, 0) != 2 || reply[0] != 'o' || reply[1] != 'k') return 76;
 	SOCKADDR *local, *remote;
 	int local_size = 0, remote_size = 0;
 	accept_addresses(buffer, 5, sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &local, &local_size, &remote, &remote_size);

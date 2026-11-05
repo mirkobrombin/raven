@@ -1599,6 +1599,17 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0);
 			return;
 		}
+		// SO_UPDATE_ACCEPT_CONTEXT and SO_UPDATE_CONNECT_CONTEXT: a socket AcceptEx or ConnectEx connected takes the listening socket's
+		// properties, or its connected state, for the functions that ask about it. The host socket under it is already accepted or
+		// connected, so there is nothing more to carry over.
+		if (call.u32(1) == sol_socket_windows && (call.u32(2) == 0x700bU || call.u32(2) == 0x7010U)) {
+			if (call.u32(2) == 0x700bU && (!call[3] || call.i32(4) < int32_t(call.pointer_width()))) {
+				fail(call, wsaefault);
+				return;
+			}
+			call.ret(0);
+			return;
+		}
 		const auto option = host_option(call.u32(1), call.u32(2));
 		if (!option) {
 			fail(call, wsaenoprotoopt);
