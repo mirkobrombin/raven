@@ -536,8 +536,20 @@ static int CEF_CALLBACK method_execute(cef_v8_handler_t *self, const cef_string_
 	request.count = (UINT)count;
 	const BOOL done = send(function->owner->window, &request);
 	WCHAR *called = engine_copy_text(name);
-	char text[64];
-	wsprintfA(text, "page called with %u arguments, 0x%08lX:", (unsigned)count, (unsigned long)request.status);
+	char text[160];
+	int written = wsprintfA(text, "page called with %u arguments, 0x%08lX", (unsigned)count, (unsigned long)request.status);
+	for (size_t i = 0; list && i < count && i < 4 && written < 120; i++) {
+		const VARIANT *value = &list[count - 1 - i];
+		if (V_VT(value) == VT_I4)
+			written += wsprintfA(text + written, " %ld", (long)V_I4(value));
+		else if (V_VT(value) == VT_R8)
+			written += wsprintfA(text + written, " %ld.", (long)V_R8(value));
+		else if (V_VT(value) == VT_BSTR)
+			written += wsprintfA(text + written, " '%.30ls'", V_BSTR(value));
+		else
+			written += wsprintfA(text + written, " vt%u", (unsigned)V_VT(value));
+	}
+	lstrcatA(text, ":");
 	engine_trace(text, called);
 	HeapFree(GetProcessHeap(), 0, called);
 	for (size_t i = 0; i < count; i++)
@@ -719,9 +731,64 @@ static void run_first(HWND window, cef_v8_context_t *context, WCHAR *script)
 	engine_release(global);
 }
 
+/* Internet Explorer tells an element that its size changed: through its onresize handler up to IE10 and the mselementresize event
+ * in IE11. Pages written for the control size their window that way, so an element given either hears, from a ResizeObserver, of
+ * every change of its size after it asked; the body and the root keep the window's own resize. */
+static const WCHAR element_resize[] =
+	L"(function () {"
+	L" if (typeof ResizeObserver !== 'function' || window.__ravenElementResize) return;"
+	L" Object.defineProperty(window, '__ravenElementResize', {value: true});"
+	L" var watched = new WeakMap();"
+	L" var observer = new ResizeObserver(function (entries) {"
+	L"  entries.forEach(function (entry) {"
+	L"   var element = entry.target, seen = watched.get(element);"
+	L"   if (!seen || (seen.width === element.offsetWidth && seen.height === element.offsetHeight)) return;"
+	L"   seen.width = element.offsetWidth; seen.height = element.offsetHeight;"
+	L"   if (seen.handler) element.dispatchEvent(new Event('resize'));"
+	L"   if (seen.listener) element.dispatchEvent(new Event('mselementresize'));"
+	L"  });"
+	L" });"
+	L" function watch(element, kind) {"
+	L"  if (!(element instanceof Element) || element === document.body || element === document.documentElement) return;"
+	L"  var seen = watched.get(element);"
+	L"  if (!seen) {"
+	L"   seen = {width: element.offsetWidth, height: element.offsetHeight};"
+	L"   watched.set(element, seen);"
+	L"   observer.observe(element);"
+	L"  }"
+	L"  seen[kind] = true;"
+	L" }"
+	L" var handler = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'onresize');"
+	L" if (handler && handler.set) Object.defineProperty(HTMLElement.prototype, 'onresize', {configurable: true, enumerable: handler.enumerable,"
+	L"  get: handler.get, set: function (value) { handler.set.call(this, value); if (value) watch(this, 'handler'); }});"
+	L" var listen = EventTarget.prototype.addEventListener;"
+	L" EventTarget.prototype.addEventListener = function (type) {"
+	L"  if (type === 'mselementresize') watch(this, 'listener');"
+	L"  return listen.apply(this, arguments);"
+	L" };"
+	L"})();";
+
+static void run_compatibility(cef_v8_context_t *context)
+{
+	cef_string_t code = {0}, address = {0};
+	engine_set_text(&code, element_resize);
+	cef_v8_value_t *value = NULL;
+	cef_v8_exception_t *error = NULL;
+	if (!context->eval(context, &code, &address, 0, &value, &error)) {
+		WCHAR *message = error ? engine_take_userfree(error->get_message(error)) : NULL;
+		engine_trace("element resize script failed", message);
+		HeapFree(GetProcessHeap(), 0, message);
+	}
+	engine_release(value);
+	engine_release(error);
+	cef.string_clear(&code);
+}
+
 static void CEF_CALLBACK context_created(cef_render_process_handler_t *self, cef_browser_t *browser, cef_frame_t *frame, cef_v8_context_t *context)
 {
 	HWND window = window_of(browser);
+	if (window)
+		run_compatibility(context);
 	WCHAR *script = window ? (WCHAR *)SendMessageW(window, ENGINE_SCRIPTS, 0, 0) : NULL;
 	if (script) {
 		run_first(window, context, script);
