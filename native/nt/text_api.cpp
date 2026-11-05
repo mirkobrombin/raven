@@ -790,13 +790,20 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 		call.put_narrow(call[0], text.substr(0, size_t(capacity) - 1), size_t(capacity));
 		call.ret(call[0]);
 	});
-	registry.add("lstrcmpW", 2, [](ApiCall &call) { call.ret(uint32_t(collate(call.wide(call[0]), call.wide(call[1]), 0))); });
-	registry.add("lstrcmpiW", 2, [](ApiCall &call) { call.ret(uint32_t(collate(call.wide(call[0]), call.wide(call[1]), 1))); });
-	registry.add("lstrcmpiA", 2, [](ApiCall &call) {
-		call.ret(uint32_t(collate(widen_ascii(call.narrow(call[0])), widen_ascii(call.narrow(call[1])), 1)));
+	// The lstrcmp family takes a null pointer for a string that comes before every other, as Windows does, rather than failing.
+	const auto ordered = [](ApiCall &call, auto compare) {
+		if (!call[0] || !call[1])
+			call.ret(call[0] == call[1] ? 0 : call[0] ? 1 : UINT32_MAX);
+		else
+			call.ret(uint32_t(compare()));
+	};
+	registry.add("lstrcmpW", 2, [ordered](ApiCall &call) { ordered(call, [&] { return collate(call.wide(call[0]), call.wide(call[1]), 0); }); });
+	registry.add("lstrcmpiW", 2, [ordered](ApiCall &call) { ordered(call, [&] { return collate(call.wide(call[0]), call.wide(call[1]), 1); }); });
+	registry.add("lstrcmpiA", 2, [ordered](ApiCall &call) {
+		ordered(call, [&] { return collate(widen_ascii(call.narrow(call[0])), widen_ascii(call.narrow(call[1])), 1); });
 	});
-	registry.add("lstrcmpA", 2, [](ApiCall &call) {
-		call.ret(uint32_t(collate(widen_ascii(call.narrow(call[0])), widen_ascii(call.narrow(call[1])), 0)));
+	registry.add("lstrcmpA", 2, [ordered](ApiCall &call) {
+		ordered(call, [&] { return collate(widen_ascii(call.narrow(call[0])), widen_ascii(call.narrow(call[1])), 0); });
 	});
 
 	registry.add("WideCharToMultiByte", 8, [&, ansi_page](ApiCall &call) {

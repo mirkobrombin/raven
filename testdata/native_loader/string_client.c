@@ -2,7 +2,8 @@
 #include <windows.h>
 
 /* The kernel string services the runtime may answer inside the program must agree with the ones it serves: lstrcmpW with
- * CompareStringW, lstrlenW and lstrcpynW with what they are given, and the plain ASCII conversions with their round trip. */
+ * CompareStringW, lstrlenW and lstrcpynW with what they are given, and the plain ASCII conversions with their round trip. A null string
+ * comes before every other in the lstrcmp family. */
 
 static int sign(int value)
 {
@@ -36,5 +37,8 @@ int raven_entry(void)
 	SetLastError(71);
 	if (MultiByteToWideChar(CP_UTF8, 0, "Raven", -1, wide, 2) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
 		return 5;
+	if (lstrcmpW(NULL, NULL) || lstrcmpW(NULL, L"") != -1 || lstrcmpW(L"", NULL) != 1 || lstrcmpiW(NULL, L"a") != -1 ||
+		lstrcmpA("a", NULL) != 1 || lstrcmpiA(NULL, NULL))
+		return 6;
 	return 0;
 }
