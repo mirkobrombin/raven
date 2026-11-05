@@ -55,7 +55,7 @@ def runtime_paths(build):
         raven-uianimation.dll ucrtbase.dll raven-rtl.dll raven-storage.dll
         msi.dll cabinet.dll sxs.dll rpcrt4.dll msxml3.dll atl100.dll oleaut32.dll
         libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll
-        urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll winsqlite3.dll raven-web.dll raven-appx.dll raven-wmi.dll raven-ieframe.dll raven-webengine.dll
+        urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll raven-setupapi.dll xmllite.dll winsqlite3.dll raven-web.dll raven-appx.dll raven-wmi.dll raven-ieframe.dll raven-webengine.dll raven-twinapi.dll
         icu.dll icuuc.dll icuin.dll
         cmd.exe control.exe regedit.exe dism.exe fondue.exe msiexec.exe regsvr32.exe
         find.exe findstr.exe more.com sort.exe where.exe xcopy.exe attrib.exe
@@ -64,6 +64,7 @@ def runtime_paths(build):
     for root in (native, native / "x86"):
         files += [root / name for name in names if (root / name).exists()]
     files += sorted((native / "roots").glob("*.crt"))
+    files += sorted((native / "WinMetadata").glob("*.winmd"))
     paths = {path.relative_to(native).as_posix(): path for path in files}
     font_directory = cache_values(build).get("RAVEN_FONT_DIRECTORY")
     if font_directory and not font_directory.endswith("-NOTFOUND"):
