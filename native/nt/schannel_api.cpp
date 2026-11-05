@@ -211,6 +211,8 @@ struct Parts {
 	}
 };
 
+// The parts point into the list, so it must outlive them.
+Parts message_parts(ApiCall &call, std::vector<Buffer> &&list) = delete;
 Parts message_parts(ApiCall &call, const std::vector<Buffer> &list)
 {
 	Parts parts;
@@ -859,7 +861,8 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 	const auto protect_ntlm = [](ApiCall &call, Context &session, uint64_t description, bool seal) {
 		if (!session.ntlm->established())
 			return sec_invalid_handle;
-		auto parts = message_parts(call, buffers(call, description));
+		const auto list = buffers(call, description);
+		auto parts = message_parts(call, list);
 		if (!parts.token || parts.token->size < 16)
 			return parts.token ? sec_buffer_too_small : sec_invalid_token;
 		const auto signature = session.ntlm->sign(parts.views(), seal);
