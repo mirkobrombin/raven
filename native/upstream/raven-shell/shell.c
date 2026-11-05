@@ -571,6 +571,7 @@ static HRESULT make_dialog(BOOL save, REFIID iid, void **out)
 
 HRESULT raven_make_shell_link(REFIID iid, void **out);
 HRESULT raven_make_known_folder_manager(REFIID iid, void **out);
+HRESULT raven_make_global_interface_table(REFIID iid, void **out);
 HRESULT raven_create_registered(REFCLSID clsid, LPUNKNOWN outer, DWORD context, REFIID iid, void **out);
 HRESULT raven_registered_class_object(REFCLSID clsid, DWORD context, REFIID iid, void **out);
 
@@ -637,6 +638,7 @@ static HRESULT make_taskbar_list(REFIID iid, void **out)
 /* Global options ---------------------------------------------------------------------------------------------- */
 
 static const CLSID global_options_class = {0x0000034b, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const CLSID global_interface_table_class = {0x00000323, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const IID global_options_iid = {0x0000015b, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
 /* The process-wide COM settings a program sets once while it starts, such as whether calls into its objects swallow exceptions. Every
@@ -715,6 +717,8 @@ static HRESULT make_builtin(REFCLSID clsid, REFIID iid, void **out, BOOL *served
 		return make_taskbar_list(iid, out);
 	if (same_iid(clsid, &CLSID_KnownFolderManager))
 		return raven_make_known_folder_manager(iid, out);
+	if (same_iid(clsid, &global_interface_table_class))
+		return raven_make_global_interface_table(iid, out);
 	*served = FALSE;
 	return REGDB_E_CLASSNOTREG;
 }
@@ -759,7 +763,8 @@ static IClassFactoryVtbl builtin_factory_vtbl = {bf_query, bf_add_ref, bf_releas
 static BOOL builtin_class(REFCLSID clsid)
 {
 	return same_iid(clsid, &CLSID_FileOpenDialog) || same_iid(clsid, &CLSID_FileSaveDialog) || same_iid(clsid, &CLSID_ShellLink) ||
-		same_iid(clsid, &CLSID_TaskbarList) || same_iid(clsid, &CLSID_KnownFolderManager) || same_iid(clsid, &global_options_class);
+		same_iid(clsid, &CLSID_TaskbarList) || same_iid(clsid, &CLSID_KnownFolderManager) || same_iid(clsid, &global_options_class) ||
+		same_iid(clsid, &global_interface_table_class);
 }
 
 

@@ -557,3 +557,118 @@ HRESULT WINAPI CreateItemMoniker(LPCOLESTR delimiter, LPCOLESTR item, IMoniker *
 	*out = &self->iface;
 	return S_OK;
 }
+
+/* --- The global interface table: interfaces a thread leaves for the other threads of the process, under a cookie. Every call here
+ * reaches its object directly, whatever its apartment, so an entry is the object itself rather than a marshalled reference. --- */
+
+typedef struct git_entry
+{
+	struct git_entry *next;
+	DWORD cookie;
+	IUnknown *object;
+} git_entry;
+
+static git_entry *git_entries;
+static DWORD git_next_cookie = 0x100;
+static SRWLOCK git_lock = SRWLOCK_INIT;
+
+static const IID git_iid = {0x00000146, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+static HRESULT WINAPI git_QueryInterface(IGlobalInterfaceTable *iface, REFIID iid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_iid(iid, &IID_IUnknown) || same_iid(iid, &git_iid))
+	{
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	return E_NOINTERFACE;
+}
+
+/* The table lives as long as the process. */
+static ULONG WINAPI git_AddRef(IGlobalInterfaceTable *iface)
+{
+	return 2;
+}
+
+static ULONG WINAPI git_Release(IGlobalInterfaceTable *iface)
+{
+	return 1;
+}
+
+static HRESULT WINAPI git_RegisterInterfaceInGlobal(IGlobalInterfaceTable *iface, IUnknown *object, REFIID iid, DWORD *cookie)
+{
+	git_entry *entry;
+	IUnknown *held;
+	HRESULT result;
+	if (!cookie)
+		return E_INVALIDARG;
+	*cookie = 0;
+	if (!object || !iid)
+		return E_INVALIDARG;
+	result = IUnknown_QueryInterface(object, iid, (void **)&held);
+	if (FAILED(result))
+		return result;
+	entry = HeapAlloc(GetProcessHeap(), 0, sizeof *entry);
+	if (!entry)
+	{
+		IUnknown_Release(held);
+		return E_OUTOFMEMORY;
+	}
+	entry->object = held;
+	AcquireSRWLockExclusive(&git_lock);
+	entry->cookie = git_next_cookie++;
+	entry->next = git_entries;
+	git_entries = entry;
+	ReleaseSRWLockExclusive(&git_lock);
+	*cookie = entry->cookie;
+	return S_OK;
+}
+
+static HRESULT WINAPI git_RevokeInterfaceFromGlobal(IGlobalInterfaceTable *iface, DWORD cookie)
+{
+	git_entry **link, *entry = NULL;
+	AcquireSRWLockExclusive(&git_lock);
+	for (link = &git_entries; *link; link = &(*link)->next)
+		if ((*link)->cookie == cookie)
+		{
+			entry = *link;
+			*link = entry->next;
+			break;
+		}
+	ReleaseSRWLockExclusive(&git_lock);
+	if (!entry)
+		return E_INVALIDARG;
+	IUnknown_Release(entry->object);
+	HeapFree(GetProcessHeap(), 0, entry);
+	return S_OK;
+}
+
+static HRESULT WINAPI git_GetInterfaceFromGlobal(IGlobalInterfaceTable *iface, DWORD cookie, REFIID iid, void **out)
+{
+	git_entry *entry;
+	HRESULT result = E_INVALIDARG;
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	AcquireSRWLockShared(&git_lock);
+	for (entry = git_entries; entry; entry = entry->next)
+		if (entry->cookie == cookie)
+		{
+			result = IUnknown_QueryInterface(entry->object, iid, out);
+			break;
+		}
+	ReleaseSRWLockShared(&git_lock);
+	return result;
+}
+
+static IGlobalInterfaceTableVtbl git_vtbl = {git_QueryInterface, git_AddRef, git_Release, git_RegisterInterfaceInGlobal,
+	git_RevokeInterfaceFromGlobal, git_GetInterfaceFromGlobal};
+static IGlobalInterfaceTable global_table = {&git_vtbl};
+
+HRESULT raven_make_global_interface_table(REFIID iid, void **out)
+{
+	return git_QueryInterface(&global_table, iid, out);
+}
