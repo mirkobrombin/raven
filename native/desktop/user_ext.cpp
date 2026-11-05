@@ -535,6 +535,65 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		publish_host(call);
 		call.ret(1);
 	});
+	// A data object put on the OLE clipboard gives up its text at once, as global memory the clipboard keeps; its other formats are not
+	// offered. The object itself is not kept, so the clipboard never names it as the current one.
+	registry.add("OleSetClipboard", 1, [this, publish_host, block = uint64_t(0)](ApiCall &call) mutable {
+		if (clipboard_window) {
+			call.ret(0x800401d0); // CLIPBRD_E_CANT_OPEN
+			return;
+		}
+		clipboard_data.clear();
+		clipboard_owner = 0;
+		++clipboard_sequence;
+		const uint64_t object = call[0];
+		const size_t width = call.pointer_width();
+		if (!block && object && global_allocator)
+			block = global_allocator(64);
+		if (!object || !block) {
+			call.ret(object ? 0x8007000e : 0);
+			return;
+		}
+		// FORMATETC, then STGMEDIUM, in the guest's layout.
+		const uint64_t format = block, medium = block + 32;
+		const auto run = [this](uint64_t procedure, std::initializer_list<uint64_t> list) {
+			const std::vector<uint64_t> arguments(list);
+			const auto result = invoke(procedure, arguments);
+			if (result.stop != NativeStop::returned)
+				throw result;
+			return uint32_t(result.value);
+		};
+		const uint64_t table = call.load_pointer(object);
+		for (const uint16_t kind : {uint16_t(13), uint16_t(1)}) {
+			call.write(block, std::vector<uint8_t>(64));
+			call.store<uint16_t>(format, kind);
+			call.store<uint32_t>(format + 2 * width, 1); // DVASPECT_CONTENT
+			call.store<int32_t>(format + 2 * width + 4, -1);
+			call.store<uint32_t>(format + 2 * width + 8, 1); // TYMED_HGLOBAL
+			if (run(call.load_pointer(table + 3 * width), {object, format, medium}) || call.load<uint32_t>(medium) != 1)
+				continue;
+			const uint64_t memory = call.load_pointer(medium + width), owner = call.load_pointer(medium + 2 * width);
+			if (!memory)
+				continue;
+			if (!owner) {
+				clipboard_data[kind] = memory;
+				continue;
+			}
+			// The object keeps the memory it hands out with an owner, so the clipboard takes a copy.
+			const auto text = kind == 13 ? call.wide(memory, 1 << 24) : std::u16string();
+			const auto narrow = kind == 1 ? call.narrow(memory, 1 << 24) : std::string();
+			const size_t size = kind == 13 ? (text.size() + 1) * 2 : narrow.size() + 1;
+			if (const auto copy = global_allocator(size)) {
+				if (kind == 13)
+					call.write(copy, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.c_str()), size));
+				else
+					call.write(copy, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(narrow.c_str()), size));
+				clipboard_data[kind] = copy;
+			}
+			run(call.load_pointer(call.load_pointer(owner) + 2 * width), {owner});
+		}
+		publish_host(call);
+		call.ret(0);
+	});
 	registry.add("EmptyClipboard", 0, [this](ApiCall &call) {
 		if (!clipboard_window) {
 			call.fail(1418);
