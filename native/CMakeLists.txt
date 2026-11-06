@@ -3534,6 +3534,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(rotated_text_fixture${width} ALL DEPENDS ${rotated_text_client})
                     add_test(NAME native_rotated_text_x${width} COMMAND raven --run-process --execution=native ${rotated_text_client})
                     set_tests_properties(native_rotated_text_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(glyph_index_client ${CMAKE_CURRENT_BINARY_DIR}/glyph-index${width}.exe)
+                    add_custom_command(OUTPUT ${glyph_index_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${glyph_index_client} ${LOADER_SOURCES}/glyph_index_client.c -lusp10 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/glyph_index_client.c VERBATIM)
+                    add_custom_target(glyph_index_fixture${width} ALL DEPENDS ${glyph_index_client})
+                    add_test(NAME native_glyph_index_x${width} COMMAND raven --run-process --execution=native ${glyph_index_client})
+                    set_tests_properties(native_glyph_index_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(dialog_font_client ${CMAKE_CURRENT_BINARY_DIR}/dialog-font${width}.exe)
                     add_custom_command(OUTPUT ${dialog_font_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
