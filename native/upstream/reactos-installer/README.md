@@ -4,7 +4,10 @@
 installs with from the pinned ReactOS archive the common controls component uses
 (`dacf2a6c47fa562799f9c8a41ab6d5c558556558`, SHA-256
 `5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69`), for 64-bit
-programs and, with `--arch x86`, for 32-bit ones:
+programs and, with `--arch x86`, for 32-bit ones. zlib comes from its own 1.3.1 release
+(SHA-256 `9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23`), kept beside
+the components as `zlib-1.3.1-source.tar.gz` with its `LICENSE` and `README` under
+`licenses/zlib-1.3.1`. The components are:
 
 - `msi.dll` and `msiexec.exe`: Raven's own from [`native/upstream/raven-msi`](../raven-msi/README.md),
   which each prefix also keeps in its system directories;

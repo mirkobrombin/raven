@@ -117,12 +117,6 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "built.append(compile(generated / (stem + \"_stubs.c\"), stem + \"_spec_stubs\", flags_here, wine_module))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
       "text": "cabinet = list(pool.map(lambda name: compile(cabinet_root / name, \"cabinet_\" + Path(name).stem,",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
@@ -177,7 +171,7 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "zlib = [compile(source / \"sdk/lib/3rdparty/zlib\" / name, \"zlib_\" + Path(name).stem, [\"-I\" + str(zlib_include)]) for name in ZLIB]",
+      "text": "zlib = [compile(zlib_source / name, \"zlib_\" + Path(name).stem, [\"-I\" + str(zlib_include)]) for name in ZLIB]",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {

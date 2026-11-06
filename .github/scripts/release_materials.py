@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Write the --materials file scripts/package-native.py bundles a release with.
 
-Each component built from ReactOS keeps the source archive it was built from, the recipe that built it (provenance.json)
+Each component built from ReactOS keeps the source archives it was built from (ReactOS's, and any other upstream release
+such as zlib's), the recipe that built it (provenance.json)
 and the license notices it carries. Those are the corresponding source materials of docs/packaging.md; a component without
 all three is not listed, and the bundle step then refuses a build that configured it.
 
@@ -42,6 +43,11 @@ def main():
             continue
         materials.append(dict(name=f"reactos-{name}", cmake_keys=keys, source=str(source), sha256=digest(source),
                               recipe=str(recipe), notices=[str(path) for path in notices]))
+        # The other upstream archives the component was built from as well, such as zlib's own release.
+        for other in sorted(directory.glob("*-source.tar.gz")):
+            if other != source:
+                materials.append(dict(name=f"{other.name.removesuffix('-source.tar.gz')}-{name}", cmake_keys=keys, source=str(other),
+                                      sha256=digest(other), recipe=str(recipe), notices=[str(path) for path in notices]))
     output.write_text(json.dumps(materials, indent=2) + "\n")
     print(f"{len(materials)} components with source materials")
     return 0 if materials else 1

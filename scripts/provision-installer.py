@@ -18,13 +18,16 @@ from component_licenses import mark_patched_sources, preserve_notices
 # The ReactOS revision the common controls component is built from: one archive serves both.
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
-PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/lib/3rdparty/zlib/",
+PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/",
             "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
         "atliface", "winsxs", "msxml6", "msxml", "xmldso", "objsafe", "mshtmhst", "mshtmdid", "httprequest", "xmlparser", "asptlb", "perhist", "hlink", "mimeinfo", "mlang", "wincodec", "wincodecsdk", "propsys", "structuredquery", "dxgiformat", "dxgicommon", "dxgitype", "xmllite")
+# zlib from its own release, which cabinet.dll, msxml3.dll, the image libraries and raven-appx.dll compress and inflate with.
+ZLIB_VERSION = "1.3.1"
+ZLIB_SHA256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
 ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
 COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libpng.dll", "libjpeg.dll",
               "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll",
@@ -53,6 +56,22 @@ def spec_exports(spec, name, x86):
     return "\n".join(lines) + "\n"
 
 
+# Downloads an archive beside where it belongs and moves it into place once its checksum matches, so an interrupted download is not kept;
+# one already there is checked the same way.
+def fetch(url, archive, sha256, what):
+    if not archive.exists():
+        temporary = archive.with_suffix(archive.suffix + ".part")
+        try:
+            urllib.request.urlretrieve(url, temporary)
+            if hashlib.sha256(temporary.read_bytes()).hexdigest() != sha256:
+                raise RuntimeError(f"downloaded {what} checksum differs")
+            temporary.replace(archive)
+        finally:
+            temporary.unlink(missing_ok=True)
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != sha256:
+        raise RuntimeError(f"{what} checksum differs: {archive} is incomplete or another version; delete it to download it again")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build the pinned ReactOS Windows Installer components: msi, cabinet and sxs")
     parser.add_argument("--output", type=Path, required=True)
@@ -70,18 +89,10 @@ def main():
     env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
     repo = Path(__file__).resolve().parents[1]
     archive = args.archive.resolve() if args.archive else output / "reactos-source.tar.gz"
-    if not archive.exists():
-        # Downloaded beside the archive and moved into place once it checks out, so an interrupted download is not kept.
-        temporary = archive.with_suffix(archive.suffix + ".part")
-        try:
-            urllib.request.urlretrieve(f"https://codeload.github.com/reactos/reactos/tar.gz/{REVISION}", temporary)
-            if hashlib.sha256(temporary.read_bytes()).hexdigest() != ARCHIVE_SHA256:
-                raise RuntimeError("downloaded ReactOS source archive checksum differs")
-            temporary.replace(archive)
-        finally:
-            temporary.unlink(missing_ok=True)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != ARCHIVE_SHA256:
-        raise RuntimeError(f"ReactOS source archive checksum differs: {archive} is incomplete or not revision {REVISION}; delete it to download it again")
+    fetch(f"https://codeload.github.com/reactos/reactos/tar.gz/{REVISION}", archive, ARCHIVE_SHA256, f"ReactOS source archive (revision {REVISION})")
+    zlib_archive = output / f"zlib-{ZLIB_VERSION}-source.tar.gz"
+    fetch(f"https://github.com/madler/zlib/releases/download/v{ZLIB_VERSION}/zlib-{ZLIB_VERSION}.tar.gz", zlib_archive, ZLIB_SHA256,
+          f"zlib {ZLIB_VERSION} source archive")
     source = output / "source"
     shutil.rmtree(source, ignore_errors=True)
     with tarfile.open(archive) as upstream:
@@ -93,6 +104,18 @@ def main():
             if not parts or ".." in parts or Path(name).is_absolute():
                 raise RuntimeError("invalid upstream archive path")
             target = source / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(upstream.extractfile(member).read())
+    zlib_source = output / "zlib-source"
+    shutil.rmtree(zlib_source, ignore_errors=True)
+    with tarfile.open(zlib_archive) as upstream:
+        for member in upstream:
+            parts = Path(member.name).parts[1:]
+            if not member.isfile() or not parts:
+                continue
+            if ".." in parts or Path(member.name).is_absolute():
+                raise RuntimeError("invalid zlib archive path")
+            target = zlib_source.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(upstream.extractfile(member).read())
     for tool in ("clang", triple + "-gcc", triple + "-dlltool", "widl", "bison"):
@@ -252,8 +275,8 @@ def main():
     else:
         debug = [debug]
     # cabinet.dll: cabinet files, their compression and extraction, on zlib.
-    zlib_include = source / "sdk/include/reactos/libs/zlib"
-    zlib = [compile(source / "sdk/lib/3rdparty/zlib" / name, "zlib_" + Path(name).stem, ["-I" + str(zlib_include)]) for name in ZLIB]
+    zlib_include = zlib_source
+    zlib = [compile(zlib_source / name, "zlib_" + Path(name).stem, ["-I" + str(zlib_include)]) for name in ZLIB]
     cabinet_root = repo / "native/upstream/raven-cabinet"
     with ThreadPoolExecutor(max_workers=2) as pool:
         cabinet = list(pool.map(lambda name: compile(cabinet_root / name, "cabinet_" + Path(name).stem,
@@ -673,8 +696,14 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "jscript.dll", *jscript_objects, output / "jscript.def", "-lole32", "-loleaut32", "-luser32", "-luuid", "-lmsvcrt",
          "-lkernel32", "-lgcc"])
-    result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, arch=args.arch, commands=records,
-                  license_notices=preserve_notices(source, output),
+    notices = preserve_notices(source, output)
+    for name in ("LICENSE", "README"):
+        target = output / "licenses" / f"zlib-{ZLIB_VERSION}" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(zlib_source / name, target)
+        notices[f"zlib-{ZLIB_VERSION}/{name}"] = hashlib.sha256(target.read_bytes()).hexdigest()
+    result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, zlib_version=ZLIB_VERSION, zlib_archive_sha256=ZLIB_SHA256, arch=args.arch,
+                  commands=records, license_notices=notices,
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in COMPONENTS},
                   storage_exports=exported,
                   patches={patch.name: hashlib.sha256(patch.read_bytes()).hexdigest() for patch in patches},
