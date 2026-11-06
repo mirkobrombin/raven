@@ -18,7 +18,7 @@ from component_licenses import mark_patched_sources, preserve_notices
 # The ReactOS revision the common controls component is built from: one archive serves both.
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
-PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/",
+PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/lib/3rdparty/zlib/",
             "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
             "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
@@ -31,6 +31,28 @@ COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.
               "raven-appx.dll", "mspatcha.dll", "vbscript.dll", "scrrun.dll", "wshom.ocx", "jscript.dll")
 
 
+# The export list of a library from its specification file: the subset of the format the specifications here use, one export per line,
+# an ordinal or "@" for the next one, stdcall or cdecl, -private, and a stdcall name decorated with its argument bytes on x86.
+def spec_exports(spec, name, x86):
+    lines = ["; File generated automatically, do not edit!", "", f"NAME {name}", "", "EXPORTS"]
+    ordinal = 0
+    for raw in spec.read_text().splitlines():
+        text = raw.split("#", 1)[0].strip()
+        if not text:
+            continue
+        match = re.fullmatch(r"(@|\d+)\s+(stdcall|cdecl)((?:\s+-\w+)*)\s+([A-Za-z_]\w*)\(([^)]*)\)", text)
+        if not match:
+            raise RuntimeError(f"{spec}: unsupported specification line: {raw}")
+        number, convention, options, symbol, arguments = match.groups()
+        ordinal = int(number) if number != "@" else ordinal + 1
+        entry = symbol
+        if x86 and convention == "stdcall":
+            size = sum({"int64": 8, "double": 8, "int128": 16}.get(argument, 4) for argument in arguments.split())
+            entry = f"{symbol}={symbol}@{size}"
+        lines.append(f" {entry} @{ordinal}" + (" PRIVATE" if "-private" in options.split() else ""))
+    return "\n".join(lines) + "\n"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build the pinned ReactOS Windows Installer components: msi, cabinet and sxs")
     parser.add_argument("--output", type=Path, required=True)
@@ -39,7 +61,6 @@ def main():
     args = parser.parse_args()
     x86 = args.arch == "x86"
     triple = "i686-w64-mingw32" if x86 else "x86_64-w64-mingw32"
-    spec_arch = "-a=i386" if x86 else "-a=x86_64"
     entry_point = "_DllMain@12" if x86 else "DllMain"
     link_extra = ["-Wl,--kill-at"] if x86 else []
     bases = dict(cabinet=0x1e000000, sxs=0x1e200000, rpcrt4=0x1d800000, msi=0x1e400000, storage=0x1ec00000, xslt=0x1d400000, msxml=0x1d000000, atl=0x1cc00000, oleaut=0x1c800000) if x86 else dict(
@@ -131,7 +152,6 @@ def main():
     (generated / "psdk").mkdir(parents=True)
     (generated / "reactos").mkdir()
     run(["clang", "-O2", "-w", source / "sdk/tools/hpp/hpp.c", "-o", output / "hpp"])
-    run(["clang", "-O1", "-w", source / "sdk/tools/spec2def/spec2def.c", "-o", output / "spec2def"])
     for name in ("winnt", "ntdef", "devioctl"):
         run([output / "hpp", name + ".template.h", generated / "psdk" / (name + ".h")], source / "sdk/include/xdk")
     widl = ["widl", "-m32" if x86 else "-m64", "-D__REACTOS__", "-I", source / "sdk/include/psdk", "-I", source / "sdk/include", "-I", generated / "psdk"]
@@ -239,7 +259,7 @@ def main():
         cabinet = list(pool.map(lambda name: compile(cabinet_root / name, "cabinet_" + Path(name).stem,
                                                      ["-I" + str(cabinet_root), "-I" + str(zlib_include)], wine_module=False),
                                 ("compose.c", "extract.c", "lzx.c", "quantum.c", "session.c")))
-    run([output / "spec2def", spec_arch, "-n=cabinet.dll", "-d=" + str(output / "cabinet.def"), cabinet_root / "cabinet.spec"])
+    (output / "cabinet.def").write_text(spec_exports(cabinet_root / "cabinet.spec", "cabinet.dll", x86))
     link("cabinet.dll", bases["cabinet"], [*zlib, *cabinet, *debug], output / "cabinet.def", ["-lmsvcrt", "-lkernel32", "-lntdll", "-lgcc"],
          output / "libcabinet.a")
     # sxs.dll: the side-by-side assembly cache.
@@ -382,12 +402,11 @@ def main():
     def library(name, root, extra_flags=(), libraries=(), wine_module=True, sources=None, objects_more=(), rc=None, interfaces=()):
         stem = Path(name).stem
         spec = root / (stem + ".spec") if (root / (stem + ".spec")).exists() else next(root.glob("*.spec"))
-        run([output / "spec2def", spec_arch, "-n=" + name, "-d=" + str(output / (stem + ".def")), "-s=" + str(generated / (stem + "_stubs.c")), spec])
+        (output / (stem + ".def")).write_text(spec_exports(spec, name, x86))
         flags_here = [*extra_flags, "-I" + str(root)]
         parts = sources if sources is not None else listed_sources(root)
         with ThreadPoolExecutor(max_workers=2) as pool:
             built = list(pool.map(lambda path: compile(path, stem + "_" + path.stem.replace(".", "_"), flags_here, wine_module), parts))
-        built.append(compile(generated / (stem + "_stubs.c"), stem + "_spec_stubs", flags_here, wine_module))
         # The identifiers of the public interfaces it names, which mingw-w64's uuid library does not all have.
         for interface in interfaces:
             run([*widl, "-u", "-U", generated / (interface + "_i.c"), source / "sdk/include/psdk" / (interface + ".idl")])
