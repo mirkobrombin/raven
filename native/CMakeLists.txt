@@ -1291,6 +1291,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(frame_hover_test frame_hover_fixture raven-bootstrap)
             add_test(NAME native_frame_hover COMMAND frame_hover_test $<TARGET_FILE:raven-bootstrap> ${FRAME_HOVER_FIXTURE})
             set_tests_properties(native_frame_hover PROPERTIES TIMEOUT 15)
+            set(FRAME_RESTORE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/frame-restore.exe)
+            add_custom_command(OUTPUT ${FRAME_RESTORE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${FRAME_RESTORE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c VERBATIM)
+            add_custom_target(frame_restore_fixture ALL DEPENDS ${FRAME_RESTORE_FIXTURE})
+            add_executable(frame_restore_test desktop/frame_restore_test.cpp)
+            target_link_libraries(frame_restore_test PRIVATE raven_cpu)
+            add_dependencies(frame_restore_test frame_restore_fixture raven-bootstrap)
+            add_test(NAME native_frame_restore COMMAND frame_restore_test $<TARGET_FILE:raven-bootstrap> ${FRAME_RESTORE_FIXTURE})
+            set_tests_properties(native_frame_restore PROPERTIES TIMEOUT 30)
         endif()
         set(INITIAL_MESSAGE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/initial-message-fixtures)
         add_custom_command(OUTPUT ${INITIAL_MESSAGE_FIXTURES}/client.exe ${INITIAL_MESSAGE_FIXTURES}/exit.exe
@@ -4235,6 +4247,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${PROJECT_SOURCE_DIR}/scripts/native-npp.py $<TARGET_FILE:raven>
                         ${RAVEN_TESTDATA_DIR}/npp ${CMAKE_CURRENT_BINARY_DIR}/notepadpp-evidence)
                     set_tests_properties(native_notepadpp_workflow PROPERTIES TIMEOUT 1200 RESOURCE_LOCK raven_compositor)
+                endif()
+                # The compositor maximizes and restores a window with its own shortcut; the program hears SC_MAXIMIZE and SC_RESTORE.
+                if(TARGET raven_wayland AND TARGET frame_restore_fixture AND RAVEN_LABWC AND RAVEN_WLRCTL AND RAVEN_WTYPE)
+                    add_test(NAME native_host_maximize COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-host-maximize.py
+                        $<TARGET_FILE:raven> ${FRAME_RESTORE_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/host-maximize)
+                    set_tests_properties(native_host_maximize PROPERTIES TIMEOUT 90 RESOURCE_LOCK raven_compositor)
                 endif()
                 find_program(RAVEN_XCLIP xclip)
                 if(RAVEN_X11_TESTS AND RAVEN_SKIA_LIBRARY AND RAVEN_XCLIP AND RAVEN_CONTROLS_COMPONENT_DIR AND EXISTS ${RAVEN_TESTDATA_DIR}/npp/notepad++.exe)

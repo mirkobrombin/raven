@@ -146,7 +146,8 @@ void NativeWindows::nonclient_pointer(uint64_t handle,uint64_t hit,uint32_t mess
 		pressed_frame_hit=0; pressed_frame_window=0;
 		if (hit==close_hit) send(handle,0x112,0xf060,0);
 		else if (hit==minimize_hit && (window->style & 0x20000U)) send(handle,0x112,0xf020,0);
-		else if (hit==maximize_hit && (window->style & 0x10000U)) send(handle,0x112,0xf030,0);
+		// The maximize button of a maximized window is its restore button.
+		else if (hit==maximize_hit && (window->style & 0x10000U)) send(handle,0x112,(window->style & 0x01000000U) ? 0xf120 : 0xf030,0);
 	}
 }
 

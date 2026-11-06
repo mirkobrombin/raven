@@ -97,6 +97,9 @@ struct WaylandPresentation::State {
 		int32_t popup_x=0,popup_y=0;
 		bool grabbed=false;
 		bool configured=false, closed=false, resized=false, close_posted=false, first_frame=false, maximized=false;
+		// Whether the compositor's last configure shows the window maximized, whether the state Raven asked for is still to come, and
+		// whether the program was told of a state the compositor chose itself.
+		bool shown_maximized=false, state_asked=true, state_reported=false;
 		uint32_t width=0,height=0,pending_width=0,pending_height=0;
 		std::vector<std::unique_ptr<Buffer>> buffers;
 		// The buffer of the last commit, whose pixels are what the compositor shows, and the hash of each of its rows.
@@ -942,6 +945,10 @@ struct WaylandPresentation::State {
 		if (found==surfaces.end() || !found->second->role || found->second->maximized==wanted) return;
 		auto &window=*found->second;
 		window.maximized=wanted;
+		window.state_reported=false;
+		// The program follows a state the compositor chose itself, which needs no request.
+		if (!window.state_asked && window.shown_maximized==wanted) return;
+		window.state_asked=true;
 		window.configured=false;
 		if (wanted) xdg_toplevel_set_maximized(window.role);
 		else xdg_toplevel_unset_maximized(window.role);
@@ -971,11 +978,14 @@ struct WaylandPresentation::State {
 				xdg_surface_ack_configure(surface,serial); static_cast<Surface *>(data)->configured=true;
 			}};
 			static const xdg_toplevel_listener role_listener{
-				[](void *data,xdg_toplevel *,int32_t width,int32_t height,wl_array *) {
+				[](void *data,xdg_toplevel *,int32_t width,int32_t height,wl_array *states) {
 					auto &window=*static_cast<Surface *>(data);
 					if (width>0 && height>0 && (uint32_t(width)!=window.width || uint32_t(height)!=window.height)) {
 						window.pending_width=uint32_t(width); window.pending_height=uint32_t(height); window.resized=true;
 					}
+					const auto *state=static_cast<const uint32_t *>(states->data);
+					window.shown_maximized=std::find(state,state+states->size/sizeof(uint32_t),uint32_t(XDG_TOPLEVEL_STATE_MAXIMIZED))!=
+						state+states->size/sizeof(uint32_t);
 				}, [](void *data,xdg_toplevel *) { static_cast<Surface *>(data)->closed=true; },nullptr,nullptr};
 			xdg_surface_add_listener(window->shell,&surface_listener,window.get());
 			xdg_toplevel_add_listener(window->role,&role_listener,window.get());
@@ -1043,7 +1053,17 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->events(budget);
 		events.swap(state->pending);
 		for (auto &[handle,surface] : state->surfaces) {
-			if (surface->resized && !surface->is_popup) {
+			// The compositor maximized or restored the window itself, with a shortcut or a move holding its modifier: the program gets
+			// the system command Windows sends when the shell changes a window's state, once, so its style, caption and frame follow.
+			// The configures before the state Raven asked for are not such a change.
+			if (!surface->is_popup && surface->shown_maximized==surface->maximized) surface->state_asked=surface->state_reported=false;
+			else if (!surface->is_popup && !surface->state_asked && !surface->state_reported) {
+				surface->state_reported=true;
+				events.push_back({handle,0x112,surface->shown_maximized ? 0xf030U : 0xf120U});
+			}
+			// The size that comes with such a state waits until the program has followed it, so the window it remembers to restore
+			// is the one it had, not the compositor's maximized size.
+			if (surface->resized && !surface->is_popup && !surface->state_reported) {
 				events.push_back({handle,0,0,0,DesktopEventKind::resize,int32_t(surface->pending_width),int32_t(surface->pending_height)});
 				surface->resized=false;
 			}
