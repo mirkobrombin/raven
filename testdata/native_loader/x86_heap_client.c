@@ -18,6 +18,72 @@ static DWORD WINAPI churn(void *failures)
 	return 0;
 }
 
+/* Each worker keeps blocks alive and checks their contents before it frees, grows or hands them to another worker, which frees them
+ * later: blocks move between threads and between the guest-side lists and the runtime's. */
+#define POOL 64
+static void *volatile handed[256];
+
+static DWORD next_random(DWORD *state)
+{
+	*state=*state*1103515245u+12345u;
+	return *state>>8;
+}
+
+static void fill(DWORD *block,DWORD words,DWORD tag)
+{
+	for (DWORD index=0; index<words; ++index) block[index]=tag^index;
+}
+
+static int intact(const DWORD *block,DWORD words,DWORD tag)
+{
+	for (DWORD index=0; index<words; ++index)
+		if (block[index]!=(tag^index)) return 0;
+	return 1;
+}
+
+static DWORD WINAPI exchange(void *parameter)
+{
+	HANDLE heap=GetProcessHeap();
+	DWORD state=(DWORD)(INT_PTR)parameter*7919+1;
+	DWORD *blocks[POOL]={0},words[POOL],tags[POOL];
+	for (int round=0; round<300000; ++round) {
+		const int slot=next_random(&state)%POOL;
+		if (!blocks[slot]) {
+			const DWORD count=1+next_random(&state)%300,zero=next_random(&state)&1;
+			DWORD *block=(DWORD *)HeapAlloc(heap,zero?HEAP_ZERO_MEMORY:0,count*4);
+			if (!block) return 1;
+			for (DWORD index=0; zero && index<count; ++index)
+				if (block[index]) return 2;
+			blocks[slot]=block;
+			words[slot]=count;
+			tags[slot]=next_random(&state);
+			fill(block,count,tags[slot]);
+			continue;
+		}
+		if (!intact(blocks[slot],words[slot],tags[slot])) return 3;
+		const DWORD action=next_random(&state)%8;
+		if (action==0) {
+			const DWORD count=1+next_random(&state)%600;
+			DWORD *block=(DWORD *)HeapReAlloc(heap,0,blocks[slot],count*4);
+			if (!block || !intact(block,count<words[slot]?count:words[slot],tags[slot])) return 4;
+			blocks[slot]=block;
+			words[slot]=count;
+			tags[slot]=next_random(&state);
+			fill(block,count,tags[slot]);
+			continue;
+		}
+		if (action==1) {
+			void *previous=InterlockedExchangePointer(&handed[next_random(&state)%256],blocks[slot]);
+			if (previous) HeapFree(heap,0,previous);
+		} else
+			HeapFree(heap,0,blocks[slot]);
+		blocks[slot]=0;
+	}
+	for (int slot=0; slot<POOL; ++slot)
+		if (blocks[slot]) HeapFree(heap,0,blocks[slot]);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	HANDLE heap=GetProcessHeap();
@@ -33,6 +99,8 @@ int raven_entry(void)
 	if (!first || HeapSize(heap,0,first)<5000) return 5;
 	for (int index=0; index<100; ++index)
 		if (first[index]!=index) return 6;
+	if (HeapReAlloc(heap,HEAP_REALLOC_IN_PLACE_ONLY,first,4000)!=first) return 30;
+	if (HeapReAlloc(heap,HEAP_REALLOC_IN_PLACE_ONLY,first,1<<20) || GetLastError()!=ERROR_NOT_ENOUGH_MEMORY) return 31;
 	if (!HeapFree(heap,0,second)) return 7;
 	BYTE *again=(BYTE *)HeapAlloc(heap,HEAP_ZERO_MEMORY,100);
 	if (again!=second) return 8;
@@ -75,5 +143,14 @@ int raven_entry(void)
 	if (!threads[0] || !threads[1]) return 20;
 	WaitForMultipleObjects(2,threads,TRUE,INFINITE);
 	if (failures) return 21;
+	HANDLE workers[4];
+	for (int index=0; index<4; ++index)
+		if (!(workers[index]=CreateThread(NULL,0,exchange,(void *)(INT_PTR)index,0,NULL))) return 22;
+	WaitForMultipleObjects(4,workers,TRUE,INFINITE);
+	for (int index=0; index<4; ++index) {
+		DWORD code=0;
+		GetExitCodeThread(workers[index],&code);
+		if (code) return 22+(int)code;
+	}
 	return 0;
 }

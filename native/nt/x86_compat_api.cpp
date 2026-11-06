@@ -313,6 +313,16 @@ bool NativeX86Compat::dispatch(std::string_view name)
 		const auto args = process.api_arguments(4);
 		const bool global = global_block(args[2]);
 		const uint32_t old_size = global ? uint32_t(global_size(args[2])) : block_size(args[2]), size = uint32_t(args[3]);
+		// HEAP_REALLOC_IN_PLACE_ONLY, which _expand asks for: the caller keeps using the block, so it may only stay where it is.
+		if (args[1] & 0x10) {
+			if (!global && size && size <= old_size) {
+				process.return_api(args[2]);
+				return true;
+			}
+			environment.set_last_error(8);
+			process.return_api(0);
+			return true;
+		}
 		const auto fresh = heap_alloc(size, args[1] & 0x8, uint32_t(args[0]) == executable_heap_handle);
 		process.write_memory(fresh, process.read_memory(args[2], std::min(old_size, size)));
 		if (global)
