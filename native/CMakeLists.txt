@@ -1661,7 +1661,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             if(RAVEN_WIXL AND installer_compiler)
                 set(fixture ${MSI_FIXTURES}/${installer_arch})
                 add_custom_command(OUTPUT ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/com-marshal.exe ${fixture}/msi-install.exe ${fixture}/msi-patch.exe ${fixture}/msiexec-client.exe
-                    ${fixture}/clicktorun/msi-clicktorun.exe
+                    ${fixture}/clicktorun/msi-clicktorun.exe ${fixture}/msi-ui.exe
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${fixture}
                     COMMAND ${RAVEN_WIXL} -a ${installer_arch} -o ${fixture}/basic.msi msi_basic.wxs
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
@@ -1674,15 +1674,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${fixture}/msi-patch.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_patch_client.c -lmsi -lole32 -ladvapi32 -lkernel32
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/msiexec-client.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msiexec_client.c -lmsi -lkernel32
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/msi-ui.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_ui_client.c -lmsi -luser32 -ladvapi32 -lkernel32
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${fixture}/clicktorun
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/clicktorun/msi-clicktorun.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c -lmsi -ladvapi32 -lkernel32
                     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/testdata/native_loader
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/com_marshal_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_basic.wxs ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_database_client.c
                         ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_install_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_patch_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msiexec_client.c
-                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c VERBATIM)
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_ui_client.c VERBATIM)
                 add_custom_target(msi_database_fixture_${installer_arch} ALL DEPENDS ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/msi-install.exe ${fixture}/msi-patch.exe
-                    ${fixture}/msiexec-client.exe ${fixture}/clicktorun/msi-clicktorun.exe)
+                    ${fixture}/msiexec-client.exe ${fixture}/clicktorun/msi-clicktorun.exe ${fixture}/msi-ui.exe)
                 # A Click-to-Run product known only from its package manifest: a component's product and the files it publishes by qualifier.
                 add_test(NAME native_msi_clicktorun_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000
                     ${fixture}/clicktorun/msi-clicktorun.exe)
@@ -1701,6 +1703,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_msi_install_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msi-install.exe)
                 set_tests_properties(native_msi_install_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/install-prefix)
+                # The same package with its own dialogs at the full user interface level: another thread cancels the wizard once, then
+                # goes through it, and what it chose is what the package installs.
+                add_test(NAME native_msi_ui_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msi-ui.exe)
+                set_tests_properties(native_msi_ui_${installer_arch} PROPERTIES TIMEOUT 90 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${fixture}/ui-prefix)
                 # DLL custom actions run in the custom action server of the package's width: an immediate one records a property, a deferred
                 # one fails on request and the installer rolls the installation back.
                 if(installer_arch STREQUAL x86)

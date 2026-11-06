@@ -653,6 +653,11 @@ MSIHANDLE WINAPI MsiGetLastErrorRecord(void)
 	return 0;
 }
 
+INSTALLUILEVEL ui_internal_level(void)
+{
+	return ui_level;
+}
+
 INSTALLUILEVEL WINAPI MsiSetInternalUI(INSTALLUILEVEL level, HWND *window)
 {
 	INSTALLUILEVEL old = ui_level;

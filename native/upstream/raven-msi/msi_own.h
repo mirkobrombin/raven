@@ -343,6 +343,7 @@ typedef struct {
 	WCHAR *current_action;
 	WCHAR squashed[33];
 	MSIHANDLE session;
+	void *ui;		// the dialogs, while the user interface sequence runs
 } msi_package;
 
 UINT package_open(const WCHAR *path, msi_package **package);
@@ -358,6 +359,7 @@ void package_message(msi_package *package, INSTALLMESSAGE type, const WCHAR *tex
 void package_log(const WCHAR *format, ...);
 const WCHAR *package_log_release(void);
 UINT ui_deliver(INSTALLMESSAGE type, const WCHAR *text, UINT field_one);
+INSTALLUILEVEL ui_internal_level(void);
 BOOL guid_squash(const WCHAR *guid, WCHAR out[33]);
 // Counts one use of an installed feature for MsiGetFeatureUsage.
 void count_feature_use(LPCWSTR product, LPCWSTR feature);
@@ -456,5 +458,12 @@ void published_key(WCHAR *key, BOOL machine, const WCHAR *rest);
 UINT package_prepare(msi_package *package);
 UINT patches_register(msi_package *package);
 void patches_forget(msi_package *package);
+
+// ui.c
+BOOL ui_wanted(msi_package *package, const WCHAR *sequence);
+UINT ui_run(msi_package *package, const WCHAR *sequence, const WCHAR *execute);
+BOOL ui_action(msi_package *package, const WCHAR *name, UINT *status);
+void ui_action_started(msi_package *package, const WCHAR *name);
+BOOL ui_progress(msi_package *package, UINT done, UINT total);	// FALSE once the user has cancelled
 
 #endif

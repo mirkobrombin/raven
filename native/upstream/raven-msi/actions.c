@@ -722,6 +722,13 @@ UINT action_run(msi_package *package, const WCHAR *name)
 	package->current_action = msi_copy(name);
 	package_log(L"Action start: %s", name);
 	ui_deliver(INSTALLMESSAGE_ACTIONSTART, name, 0);
+	ui_action_started(package, name);
+	if (ui_action(package, name, &status)) {
+		package_log(L"Action ended: %s, %u", name, status);
+		msi_free(package->current_action);
+		package->current_action = previous;
+		return status;
+	}
 	const extra_action *action = find_action(more_actions, (UINT)-1, name);
 	if (!action)
 		action = find_action(standard_actions, ARRAYSIZE(standard_actions), name);
@@ -757,6 +764,10 @@ UINT script_run(msi_package *package)
 	package->scheduled = TRUE;
 	for (UINT i = 0; i < package->script_count && !status; i++) {
 		script_entry *entry = &package->script[i];
+		if (!ui_progress(package, i, package->script_count)) {
+			status = ERROR_INSTALL_USEREXIT;
+			break;
+		}
 		package_log(L"Script: %s", entry->name);
 		if (entry->action)
 			status = ((const extra_action *)entry->action)->call(package);
@@ -899,18 +910,27 @@ UINT WINAPI MsiSequenceA(MSIHANDLE handle, LPCSTR table, INT mode)
 	return status;
 }
 
-// The installation proper, without the dialogs: this engine has no internal wizard.
+// The installation, behind the package's own dialogs when the user interface level asks for them.
 UINT install_run(msi_package *package)
 {
 	UINT prepared = package_prepare(package);
 	if (prepared)
 		return prepared;
+	// Packages test the level in their conditions; the default one is the basic level.
+	WCHAR level[8];
+	const INSTALLUILEVEL now = ui_internal_level() & 7;
+	wsprintfW(level, L"%u", now == INSTALLUILEVEL_DEFAULT || now == INSTALLUILEVEL_NOCHANGE ? INSTALLUILEVEL_BASIC : now);
+	package_set(package, L"UILevel", level);
 	WCHAR *action = package_get(package, L"ACTION");
 	const WCHAR *table = L"InstallExecuteSequence";
 	if (action && !lstrcmpW(action, L"ADMIN"))
 		table = L"AdminExecuteSequence";
 	else if (action && !lstrcmpW(action, L"ADVERTISE"))
 		table = L"AdvtExecuteSequence";
+	const WCHAR *dialogs = action && !lstrcmpW(action, L"ADMIN") ? L"AdminUISequence" : action && !lstrcmpW(action, L"ADVERTISE") ? NULL
+		: L"InstallUISequence";
 	msi_free(action);
+	if (dialogs && ui_wanted(package, dialogs))
+		return ui_run(package, dialogs, table);
 	return sequence_run(package, table);
 }

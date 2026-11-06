@@ -281,6 +281,7 @@
         "native/upstream/raven-msi/sql.c",
         "native/upstream/raven-msi/summary.c",
         "native/upstream/raven-msi/tables.c",
+        "native/upstream/raven-msi/ui.c",
         "native/upstream/raven-msvfw32/README.md",
         "native/upstream/raven-msvfw32/codecs.c",
         "native/upstream/raven-msvfw32/draw.c",

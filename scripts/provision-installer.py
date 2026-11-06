@@ -285,7 +285,7 @@ def main():
     link("msi.dll", bases["msi"], msi_objects, output / "msi.def",
          # The toolchain's oleaut32 import library by its file name: beside the output, -loleaut32 would find the runtime's own oleaut32.dll.
          ["-L" + str(output), "-lcabinet", "-lrpcrt4", "-l:liboleaut32.a",
-          *[f"-l{library}" for library in ("advapi32", "ole32", "shell32", "user32", "version", "kernel32", "uuid", "gcc")]], implib=output / "libmsi.a")
+          *[f"-l{library}" for library in ("advapi32", "ole32", "shell32", "user32", "gdi32", "version", "kernel32", "uuid", "gcc")]], implib=output / "libmsi.a")
     # raven-storage.dll: Raven's own structured storage, which the runtime's ole32 hands those exports to.
     own_storage = repo / "native/upstream/raven-storage"
     own_objects = []

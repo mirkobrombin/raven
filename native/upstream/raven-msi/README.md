@@ -14,4 +14,10 @@ and record objects. .NET assemblies go into the global cache through the fusion 
 which checks their strong names, and Win32 ones into the side-by-side store. Products installed by
 Click-to-Run answer the queries from their package's manifests.
 
-Absent: the internal dialogs (every level installs without them), patches and advertising. Those calls answer with the documented status for the situation. See [LICENSES.md](../../../LICENSES.md).
+At the full and reduced user interface levels, which msiexec uses without /q, the package's own dialogs
+run the user interface sequence: the Dialog, Control, ControlEvent, ControlCondition and EventMapping
+tables give the wizard, its text styles, bitmaps, edits, check boxes, radio buttons, lists and license
+text, and the progress dialog follows the installation. Directory lists, feature trees, volume lists and
+billboards are not shown yet; a wizard goes on without them.
+
+Absent: patches and advertising. Those calls answer with the documented status for the situation. See [LICENSES.md](../../../LICENSES.md).

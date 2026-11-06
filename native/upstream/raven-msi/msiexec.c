@@ -76,7 +76,7 @@ void WINAPI raven_msiexec(void)
 	UINT room = 0;
 	WCHAR command = 0;
 	BOOL advertise_user = FALSE;
-	INSTALLUILEVEL level = INSTALLUILEVEL_DEFAULT;
+	INSTALLUILEVEL level = INSTALLUILEVEL_FULL;	// without /q the package shows its own dialogs
 	while (*at) {
 		const WCHAR *start = at;
 		while (*start == ' ' || *start == '\t')
