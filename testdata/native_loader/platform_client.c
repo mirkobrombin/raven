@@ -745,5 +745,10 @@ int raven_entry(void)
 	if (!map_key_ex || !map_key_ex_ansi || !layout_of) return 224;
 	if (map_key_ex('A', 0, layout_of(0)) != 0x1e || map_key_ex(0x1e, 1, layout_of(0)) != 'A' || map_key_ex_ansi('A', 0, layout_of(0)) != 0x1e)
 		return 225;
+	/* CheckElevationEnabled, which elevation helpers ask before restarting elevated: User Account Control is on. */
+	DWORD (WINAPI *elevation_enabled)(BOOL *) = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CheckElevationEnabled");
+	BOOL enabled = FALSE;
+	if (!elevation_enabled || elevation_enabled(&enabled) != ERROR_SUCCESS || !enabled || elevation_enabled(NULL) != ERROR_INVALID_PARAMETER)
+		return 226;
 	return 0;
 }

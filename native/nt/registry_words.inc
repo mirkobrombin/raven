@@ -108,6 +108,7 @@
 {"CharPrevA", 2},
 {"CharPrevW", 2},
 {"CharUpperW", 1},
+{"CheckElevationEnabled", 1},
 {"CheckMenuRadioItem", 5},
 {"CheckRemoteDebuggerPresent", 2},
 {"CheckTokenMembership", 3},

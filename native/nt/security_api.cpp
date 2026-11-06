@@ -471,6 +471,15 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		call.store<uint16_t>(call[0] + 4, uint16_t(count + 1));
 		call.ret(1);
 	};
+	// User Account Control is on, as the token information below describes it: elevation helpers ask for it before restarting elevated.
+	registry.add("CheckElevationEnabled", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.ret(87);
+			return;
+		}
+		call.store<uint32_t>(call[0], 1);
+		call.ret(0);
+	});
 	// Token information: the account is one fixed user in session 1, an administrator under User Account Control: medium integrity and a
 	// limited token, or high integrity and the full token when the process runs elevated.
 	registry.add("GetTokenInformation", 5, [&objects, &context](ApiCall &call) {
