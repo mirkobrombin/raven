@@ -20,14 +20,20 @@ REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/",
             "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
-            "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/")
+            "dll/3rdparty/libtiff/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
         "atliface", "winsxs", "msxml6", "msxml", "xmldso", "objsafe", "mshtmhst", "mshtmdid", "httprequest", "xmlparser", "asptlb", "perhist", "hlink", "mimeinfo", "mlang", "wincodec", "wincodecsdk", "propsys", "structuredquery", "dxgiformat", "dxgicommon", "dxgitype", "xmllite")
-# zlib from its own release, which cabinet.dll, msxml3.dll, the image libraries and raven-appx.dll compress and inflate with.
-ZLIB_VERSION = "1.3.1"
-ZLIB_SHA256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+# Libraries taken from their own releases: zlib, which cabinet.dll, msxml3.dll, the image libraries and raven-appx.dll compress and
+# inflate with, and the Independent JPEG Group's library the codecs read and write JPEG through. Each is kept beside the components
+# as NAME-VERSION-source.tar.gz with the notices listed here, and unpacked to NAME-source.
+UPSTREAM = {
+    "zlib": dict(version="1.3.1", sha256="9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+                 url="https://github.com/madler/zlib/releases/download/v{version}/zlib-{version}.tar.gz", notices=("LICENSE", "README")),
+    "libjpeg": dict(version="10", sha256="8b9eaa13242690ebd03e1728ab1edf97a81a78ed6e83624d493655f31ac95ab5",
+                    url="https://www.ijg.org/files/jpegsrc.v{version}.tar.gz", notices=("README",)),
+}
 ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
 COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libjpeg.dll",
               "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll",
@@ -90,9 +96,26 @@ def main():
     repo = Path(__file__).resolve().parents[1]
     archive = args.archive.resolve() if args.archive else output / "reactos-source.tar.gz"
     fetch(f"https://codeload.github.com/reactos/reactos/tar.gz/{REVISION}", archive, ARCHIVE_SHA256, f"ReactOS source archive (revision {REVISION})")
-    zlib_archive = output / f"zlib-{ZLIB_VERSION}-source.tar.gz"
-    fetch(f"https://github.com/madler/zlib/releases/download/v{ZLIB_VERSION}/zlib-{ZLIB_VERSION}.tar.gz", zlib_archive, ZLIB_SHA256,
-          f"zlib {ZLIB_VERSION} source archive")
+    upstream_sources = {}
+    for name, release in UPSTREAM.items():
+        version = release["version"]
+        packed = output / f"{name}-{version}-source.tar.gz"
+        fetch(release["url"].format(version=version), packed, release["sha256"], f"{name} {version} source archive")
+        unpacked = upstream_sources[name] = output / f"{name}-source"
+        shutil.rmtree(unpacked, ignore_errors=True)
+        with tarfile.open(packed) as upstream:
+            for member in upstream:
+                parts = Path(member.name).parts[1:]
+                if not member.isfile() or not parts:
+                    continue
+                if ".." in parts or Path(member.name).is_absolute():
+                    raise RuntimeError(f"invalid {name} archive path")
+                target = unpacked.joinpath(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(upstream.extractfile(member).read())
+    zlib_source, jpeg_source = upstream_sources["zlib"], upstream_sources["libjpeg"]
+    # The library's own configuration for Windows compilers, which keeps boolean an unsigned char as the platform headers have it.
+    shutil.copyfile(jpeg_source / "jconfig.vc", jpeg_source / "jconfig.h")
     source = output / "source"
     shutil.rmtree(source, ignore_errors=True)
     with tarfile.open(archive) as upstream:
@@ -104,18 +127,6 @@ def main():
             if not parts or ".." in parts or Path(name).is_absolute():
                 raise RuntimeError("invalid upstream archive path")
             target = source / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(upstream.extractfile(member).read())
-    zlib_source = output / "zlib-source"
-    shutil.rmtree(zlib_source, ignore_errors=True)
-    with tarfile.open(zlib_archive) as upstream:
-        for member in upstream:
-            parts = Path(member.name).parts[1:]
-            if not member.isfile() or not parts:
-                continue
-            if ".." in parts or Path(member.name).is_absolute():
-                raise RuntimeError("invalid zlib archive path")
-            target = zlib_source.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(upstream.extractfile(member).read())
     for tool in ("clang", triple + "-gcc", triple + "-dlltool", "widl", "bison"):
@@ -446,10 +457,15 @@ def main():
     plain = ["-U__WINESRC__", "-U_WINE", "-D_CRT_DECLARE_NONSTDC_NAMES=1", "-D_DLL", "-DWIN32", "-D_WINDOWS"]
     entry_object = compile(support / "dllmain.c", "plain_dllmain")
     libs = source / "sdk/include/reactos/libs"
-    library("libjpeg.dll", source / "dll/3rdparty/libjpeg", [*plain, "-D_MBCS", "-DJPEG_DLL", "-Dmain=mainptr", "-I" + str(libs / "libjpeg")], wine_module=False,
-            objects_more=[entry_object])
+    # libjpeg.dll: the library's sources as its makefile lists them, with the memory manager that needs no temporary files, exporting the
+    # whole interface jpeglib.h declares.
+    jpeg_sources = re.search(r"^LIBSOURCES *=(.*?)\n\n", (jpeg_source / "Makefile.am").read_text(), re.S | re.M).group(1)
+    jpeg_sources = [jpeg_source / name.replace("@MEMORYMGR@", "jmemnobs") for name in jpeg_sources.replace("\\", " ").split()]
+    jpeg_interface = sorted(set(re.findall(r"EXTERN\([^)]*\) +(jpeg_\w+)", (jpeg_source / "jpeglib.h").read_text())))
+    (jpeg_source / "libjpeg.spec").write_text("".join(f"@ cdecl {name}()\n" for name in jpeg_interface))
+    library("libjpeg.dll", jpeg_source, [*plain, "-I" + str(jpeg_source)], wine_module=False, sources=jpeg_sources, objects_more=[entry_object])
     library("libtiff.dll", source / "dll/3rdparty/libtiff", [*plain, "-DNDEBUG=", "-DUSE_WIN32_FILEIO", "-DTIF_PLATFORM_CONSOLE", "-I" + str(libs / "libtiff"),
-            "-I" + str(libs / "libjpeg"), "-I" + str(zlib_include)], ["libjpeg", "user32"], wine_module=False, objects_more=[*zlib, entry_object])
+            "-I" + str(jpeg_source), "-I" + str(zlib_include)], ["libjpeg", "user32"], wine_module=False, objects_more=[*zlib, entry_object])
     registration = ("register.c", "dll_register.c", "dll_canunload.c")
     # propsys.dll: property values, the in-memory store and the system's property table, generated from the public key list.
     own_propsys = repo / "native/upstream/raven-propsys"
@@ -491,7 +507,7 @@ def main():
     for path in [*sorted(own_codecs.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
         target = objects / ("codecs_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
-             "-I" + str(libs / "libjpeg"), "-I" + str(libs / "libtiff"), "-w", path, "-o", target])
+             "-I" + str(jpeg_source), "-I" + str(libs / "libtiff"), "-w", path, "-o", target])
         codecs_objects.append(target)
     codecs_exports = (own_codecs / "exports.txt").read_text()
     (output / "windowscodecs.def").write_text("LIBRARY windowscodecs.dll\nEXPORTS\n" + codecs_exports)
@@ -695,12 +711,15 @@ def main():
          "-o", output / "jscript.dll", *jscript_objects, output / "jscript.def", "-lole32", "-loleaut32", "-luser32", "-luuid", "-lmsvcrt",
          "-lkernel32", "-lgcc"])
     notices = preserve_notices(source, output)
-    for name in ("LICENSE", "README"):
-        target = output / "licenses" / f"zlib-{ZLIB_VERSION}" / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(zlib_source / name, target)
-        notices[f"zlib-{ZLIB_VERSION}/{name}"] = hashlib.sha256(target.read_bytes()).hexdigest()
-    result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256, zlib_version=ZLIB_VERSION, zlib_archive_sha256=ZLIB_SHA256, arch=args.arch,
+    for name, release in UPSTREAM.items():
+        for notice in release["notices"]:
+            relative = f"{name}-{release['version']}/{notice}"
+            target = output / "licenses" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(upstream_sources[name] / notice, target)
+            notices[relative] = hashlib.sha256(target.read_bytes()).hexdigest()
+    result = dict(revision=REVISION, archive_sha256=ARCHIVE_SHA256,
+                  upstream={name: dict(version=release["version"], sha256=release["sha256"]) for name, release in UPSTREAM.items()}, arch=args.arch,
                   commands=records, license_notices=notices,
                   component_sha256={name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in COMPONENTS},
                   storage_exports=exported,

@@ -192,14 +192,14 @@ jobs:
           find . -mindepth 1 -maxdepth 1 ! -name include ! -name src ! -name modules ! -name LICENSE -exec rm -rf {} +
           find "${TARGET}/cpu-fonts" -mindepth 1 ! -name libskia.a -exec rm -rf {} +
 
-      # The ReactOS source archive and its extracted tree are the corresponding source of a release, which provisions its
+      # The ReactOS and other upstream source archives and their extracted trees are the corresponding source of a release, which provisions its
       # own; tests only load the built components.
       - name: Trim the ReactOS sources
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "${TARGET}/reactos-source.tar.gz" "${TARGET}/source" "${TARGET}"/zlib-*-source.tar.gz "${TARGET}/zlib-source"
+          rm -rf "${TARGET}/reactos-source.tar.gz" "${TARGET}/source" "${TARGET}"/*-source.tar.gz "${TARGET}"/*-source
 
       # Artifacts drop file modes, so the component travels as an archive.
       - name: Pack component
