@@ -1,0 +1,162 @@
+name: CMake
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: RelWithDebInfo
+  # MinGW-w64 >= 12.0.0 is required: 11.0.1 (Ubuntu 24.04) lacks
+  # D3D_FEATURE_LEVEL_12_2, which testdata/d3d12/device.c uses.
+  MINGW_W64_VERSION: "14.0.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The native runtime currently requires Linux on x86_64.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+
+    steps:
+    - name: Check out
+      uses: actions/checkout@v4
+
+    # CMake 3.20+, a C++20 compiler, Python 3.11+, MinGW-w64 for x86_64 and i686,
+    # and the desktop stack: Wayland, xkbcommon, pixman, FreeType, Vulkan.
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential cmake ninja-build pkg-config python3 \
+          gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+          libwayland-dev wayland-protocols libxkbcommon-dev libpixman-1-dev \
+          libfreetype-dev libvulkan-dev mesa-vulkan-drivers \
+          libssl-dev clang lld
+
+    # Ubuntu 24.04 ships mingw-w64 11.0.1, whose d3dcommon.h predates
+    # D3D_FEATURE_LEVEL_12_2 (added in mingw-w64 12.0.0). testdata/d3d12/*.c
+    # needs it, and provision-fixtures.py compiles with a fixed flag list, so
+    # the headers must be newer rather than the flags different.
+    - name: Install newer MinGW-w64 headers
+      run: |
+        set -eux
+        curl -fsSL -o /tmp/mingw-w64.tar.gz \
+          "https://github.com/mingw-w64/mingw-w64/archive/refs/tags/v${MINGW_W64_VERSION}.tar.gz"
+        tar -xf /tmp/mingw-w64.tar.gz -C /tmp
+        src="/tmp/mingw-w64-${MINGW_W64_VERSION}/mingw-w64-headers"
+        [ -x "${src}/configure" ] || ( cd "${src}" && autoreconf -i )
+        for host in x86_64-w64-mingw32 i686-w64-mingw32; do
+          sysroot="$(${host}-gcc -print-sysroot)"
+          [ -n "${sysroot}" ] || sysroot="/usr/${host}"
+          build="/tmp/mingw-headers-${host}"
+          mkdir -p "${build}"
+          ( cd "${build}" && "${src}/configure" \
+              --host="${host}" --prefix="${sysroot}" --with-default-msvcrt=msvcrt )
+          sudo make -C "${build}" install
+        done
+
+    - name: Check the requirements are met
+      run: |
+        set -eu
+        cmake --version
+        python3 --version
+        g++ --version | head -n1
+        for cc in x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
+          command -v "$cc" >/dev/null || { echo "missing $cc"; exit 1; }
+        done
+        pkg-config --exists wayland-client xkbcommon pixman-1 freetype2 \
+          || { echo "missing desktop dependency"; exit 1; }
+        python3 - <<'PY'
+        import sys
+        assert sys.version_info >= (3, 11), sys.version
+        PY
+        # The fixture sources use D3D_FEATURE_LEVEL_12_2; mingw-w64 11.x lacks it.
+        for host in x86_64-w64-mingw32 i686-w64-mingw32; do
+          printf '#include <d3d12.h>\nint probe = D3D_FEATURE_LEVEL_12_2;\n' > /tmp/probe.c
+          "${host}-gcc" -c -o /tmp/probe.o /tmp/probe.c \
+            || { echo "$host headers predate D3D_FEATURE_LEVEL_12_2"; exit 1; }
+        done
+
+    - name: Cache provisioned fixtures
+      uses: actions/cache@v4
+      with:
+        path: build/testdata
+        key: raven-fixtures-${{ runner.os }}-${{ hashFiles('scripts/provision-fixtures.py') }}
+        restore-keys: raven-fixtures-${{ runner.os }}-
+
+    - name: Configure CMake
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+    - name: Build
+      run: cmake --build build -j2
+
+    - name: Test
+      working-directory: ${{ github.workspace }}/build
+      continue-on-error: true
+      run: ctest -C ${{ env.BUILD_TYPE }} --output-on-failure -j1
+
+    - name: Assemble runtime bundle
+      run: |
+        set -eu
+        mkdir -p dist
+        cp build/native/raven dist/
+        cp build/native/raven-bootstrap dist/
+        for f in l_intl.nls mscoree.dll ucrtbase32.dll raven-rtl.dll; do
+          [ -f "build/native/$f" ] && cp "build/native/$f" dist/ || true
+        done
+        mkdir -p dist/x86
+        for f in l_intl.nls mscoree.dll; do
+          [ -f "build/native/x86/$f" ] && cp "build/native/x86/$f" dist/x86/ || true
+        done
+        ( cd dist && sha256sum -- * x86/* > SHA256SUMS 2>/dev/null || true )
+        find dist -type f -exec ls -la {} +
+
+    - name: Upload runtime bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: raven-linux-x86_64-${{ github.sha }}
+        path: dist/
+        if-no-files-found: error
+        retention-days: 30
+
+    - name: Upload full native build output
+      uses: actions/upload-artifact@v4
+      with:
+        name: raven-native-build-${{ github.sha }}
+        path: build/native/
+        if-no-files-found: error
+        retention-days: 14
+
+  release:
+    name: Attach release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+    - name: Download runtime bundle
+      uses: actions/download-artifact@v4
+      with:
+        name: raven-linux-x86_64-${{ github.sha }}
+        path: dist
+
+    - name: Archive
+      run: tar -czf "raven-${{ github.ref_name }}-linux-x86_64.tar.gz" -C dist .
+
+    - name: Publish release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: raven-${{ github.ref_name }}-linux-x86_64.tar.gz
+        generate_release_notes: true
