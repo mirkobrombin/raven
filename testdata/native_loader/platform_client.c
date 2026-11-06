@@ -737,5 +737,13 @@ int raven_entry(void)
 	RegCloseKey(child);
 	RegCloseKey(key);
 	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\RavenKeyInformation");
+	/* MapVirtualKeyEx with the layout a program got from GetKeyboardLayout: 'A' is scan code 0x1e and back, as MapVirtualKey says. */
+	HMODULE user32 = LoadLibraryW(L"user32.dll");
+	UINT (WINAPI *map_key_ex)(UINT, UINT, HKL) = (void *)GetProcAddress(user32, "MapVirtualKeyExW");
+	UINT (WINAPI *map_key_ex_ansi)(UINT, UINT, HKL) = (void *)GetProcAddress(user32, "MapVirtualKeyExA");
+	HKL (WINAPI *layout_of)(DWORD) = (void *)GetProcAddress(user32, "GetKeyboardLayout");
+	if (!map_key_ex || !map_key_ex_ansi || !layout_of) return 224;
+	if (map_key_ex('A', 0, layout_of(0)) != 0x1e || map_key_ex(0x1e, 1, layout_of(0)) != 'A' || map_key_ex_ansi('A', 0, layout_of(0)) != 0x1e)
+		return 225;
 	return 0;
 }

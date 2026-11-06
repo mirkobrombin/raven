@@ -669,7 +669,7 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 			}
 		});
 	}
-	registry.add("MapVirtualKeyW", 2, [](ApiCall &call) {
+	const auto map_key = [](ApiCall &call) {
 		const uint32_t code = call.u32(0), type = call.u32(1);
 		if (type == 0 || type == 4) {
 			for (uint32_t scan = 1; scan < 89; ++scan)
@@ -685,8 +685,11 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		} else {
 			call.ret(0);
 		}
-	});
-	registry.add("MapVirtualKeyA", 2, [](ApiCall &call) {
+	};
+	// There is one keyboard layout, whichever layout the Ex forms name.
+	registry.add("MapVirtualKeyW", 2, map_key);
+	registry.add("MapVirtualKeyExW", 3, map_key);
+	const auto map_key_ansi = [](ApiCall &call) {
 		const uint32_t code = call.u32(0), type = call.u32(1);
 		if (type == 1 || type == 3)
 			call.ret(code < 89 ? scan_to_vk[code] : 0);
@@ -700,7 +703,9 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		} else {
 			call.ret(key_characters(code).first ? std::toupper(key_characters(code).first) : 0);
 		}
-	});
+	};
+	registry.add("MapVirtualKeyA", 2, map_key_ansi);
+	registry.add("MapVirtualKeyExA", 3, map_key_ansi);
 	// There is one keyboard layout, whichever layout VkKeyScanEx names.
 	const auto key_scan = [](ApiCall &call) {
 		const char16_t c = char16_t(call.u32(0));
