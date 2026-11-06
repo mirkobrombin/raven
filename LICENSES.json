@@ -94,6 +94,7 @@
         "native/upstream/raven-crt/ucrtbase_more.c",
         "native/upstream/raven-crt/ucrtbase_msvcrt.c",
         "native/upstream/raven-crt/ucrtbase_office.c",
+        "native/upstream/raven-crt/ucrtbase_vc2022.c",
         "native/upstream/raven-d2d1/d2d1.c",
         "native/upstream/raven-d2d1/d2d1_tables.h",
         "native/upstream/raven-d3d10/d3d10_1.c",
