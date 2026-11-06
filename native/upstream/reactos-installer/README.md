@@ -5,8 +5,8 @@ installs with from the pinned ReactOS archive the common controls component uses
 (`dacf2a6c47fa562799f9c8a41ab6d5c558556558`, SHA-256
 `5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69`), for 64-bit
 programs and, with `--arch x86`, for 32-bit ones. zlib, the Independent JPEG Group's
-library, LibTIFF and libxml2 come from their own releases, pinned by SHA-256 in the script
-(zlib 1.3.1, IJG JPEG 10, LibTIFF 4.7.1 and libxml2 2.12.8, configured by the script for
+library, LibTIFF, libxml2 and libxslt come from their own releases, pinned by SHA-256 in the script
+(zlib 1.3.1, IJG JPEG 10, LibTIFF 4.7.1, libxml2 2.12.8 and libxslt 1.1.42, configured by the script for
 Windows), kept beside the components as `NAME-VERSION-source.tar.gz` with their notices
 under `licenses/NAME-VERSION`. The components are:
 
@@ -19,7 +19,7 @@ under `licenses/NAME-VERSION`. The components are:
   [`native/upstream/raven-storage`](../raven-storage/README.md);
 - `oleaut32.dll`: Raven's own from [`native/upstream/raven-oleaut32`](../raven-oleaut32/README.md): automation, variants and type libraries;
 - `msxml3.dll`: Raven's own from [`native/upstream/raven-msxml3`](../raven-msxml3/README.md), on
-  libxml2 2.12.8 and `dll/3rdparty/libxslt`, and `atl100.dll`, Raven's own from [`native/upstream/raven-atl100`](../raven-atl100/README.md);
+  libxml2 and libxslt, and `atl100.dll`, Raven's own from [`native/upstream/raven-atl100`](../raven-atl100/README.md);
 - `urlmon.dll`: Raven's own from [`native/upstream/raven-urlmon`](../raven-urlmon/README.md): URLs, monikers
   and the protocols behind them;
 - `riched20.dll`: Raven's own from [`native/upstream/raven-riched20`](../raven-riched20/README.md): the rich

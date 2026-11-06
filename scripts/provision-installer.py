@@ -18,8 +18,7 @@ from component_licenses import mark_patched_sources, preserve_notices
 # The ReactOS revision the common controls component is built from: one archive serves both.
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
-PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/",
-            "dll/3rdparty/libxslt/")
+PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -36,6 +35,8 @@ UPSTREAM = {
                     url="https://download.osgeo.org/libtiff/tiff-{version}.tar.gz", notices=("LICENSE.md", "README.md")),
     "libxml2": dict(version="2.12.8", sha256="43ad877b018bc63deb2468d71f95219c2fac196876ef36d1bee51d226173ec93",
                     url="https://download.gnome.org/sources/libxml2/2.12/libxml2-{version}.tar.xz", notices=("Copyright", "README.md")),
+    "libxslt": dict(version="1.1.42", sha256="85ca62cac0d41fc77d3f6033da9df6fd73d20ea2fc18b0a3609ffb4110e1baeb",
+                    url="https://download.gnome.org/sources/libxslt/1.1/libxslt-{version}.tar.xz", notices=("Copyright", "README.md")),
 }
 # The parts of libxml2 msxml3.dll is built with, and the features its configuration turns on for them.
 XML_SOURCES = ("buf.c", "catalog.c", "chvalid.c", "debugXML.c", "dict.c", "encoding.c", "entities.c", "error.c", "globals.c", "hash.c",
@@ -148,7 +149,7 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(upstream.extractfile(member).read())
     zlib_source, jpeg_source, tiff_source = upstream_sources["zlib"], upstream_sources["libjpeg"], upstream_sources["libtiff"] / "libtiff"
-    xml_root = upstream_sources["libxml2"]
+    xml_root, xslt_root = upstream_sources["libxml2"], upstream_sources["libxslt"]
     # The library's own configuration for Windows compilers, which keeps boolean an unsigned char as the platform headers have it.
     shutil.copyfile(jpeg_source / "jconfig.vc", jpeg_source / "jconfig.h")
     source = output / "source"
@@ -416,10 +417,16 @@ def main():
     xml_sources = [xml_root / name for name in XML_SOURCES]
     with ThreadPoolExecutor(max_workers=2) as pool:
         xml = list(pool.map(lambda path: compile(path, "libxml2_" + path.stem, xml_flags, wine_module=False), xml_sources))
-    xslt_root = source / "dll/3rdparty/libxslt"
-    xslt_flags = [*xml_flags, "-DHAVE_WIN32_THREADS", "-I" + str(xslt_root), "-I" + str(source / "sdk/include/reactos/libs/libxslt"), "-I" + str(source / "sdk/include/reactos/libs")]
+    # libxslt's configuration: its own one for Windows, which its internal header reads as config.h under mingw, and a version header
+    # with the debugger, profiler, plugins and trio left out.
+    shutil.copyfile(xslt_root / "libxslt/win32config.h", xslt_root / "libxslt/config.h")
+    major, minor, micro = (int(part) for part in UPSTREAM["libxslt"]["version"].split("."))
+    configure_file(xslt_root / "libxslt/xsltconfig.h.in", xslt_root / "libxslt/xsltconfig.h", dict(
+        VERSION=UPSTREAM["libxslt"]["version"], LIBXSLT_VERSION_NUMBER=major * 10000 + minor * 100 + micro, LIBXSLT_VERSION_EXTRA="",
+        WITH_XSLT_DEBUG=0, WITH_TRIO=0, WITH_DEBUGGER=0, WITH_PROFILER=0, WITH_MODULES=0, LIBXSLT_DEFAULT_PLUGINS_PATH=""))
+    xslt_flags = [*xml_flags, "-DHAVE_WIN32_THREADS", "-I" + str(xslt_root), "-I" + str(xslt_root / "libxslt")]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        xslt = list(pool.map(lambda path: compile(path, "libxslt_" + path.stem, xslt_flags, wine_module=False), sorted(xslt_root.glob("*.c"))))
+        xslt = list(pool.map(lambda path: compile(path, "libxslt_" + path.stem, xslt_flags, wine_module=False), sorted((xslt_root / "libxslt").glob("*.c"))))
     # Its registration scripts' type library comes from the public headers, and stays with stdole2's for what else needs it.
     run([*widl, "-t", "-T", generated / "stdole2.tlb", repo / "native/upstream/raven-oleaut32/stdole2.idl"])
     own_msxml = repo / "native/upstream/raven-msxml3"
@@ -428,7 +435,7 @@ def main():
     run([*widl, "-I", headers, "-L", generated, "-t", "-o", generated / "msxml3.tlb", generated / "msxml3.idl"])
     run([triple + "-windres", "-O", "coff", "-I", generated, "-i", own_msxml / "resources.rc", "-o", objects / "msxml3_resources.o"])
     msxml_flags = ["-O2", "-std=gnu11", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DLIBXML_STATIC", "-DLIBXSLT_STATIC", "-DCONST_VTABLE", "-I" + str(own_msxml),
-                   "-I" + str(xml_root / "include"), "-I" + str(xml_root), "-I" + str(source / "sdk/include/reactos/libs")]
+                   "-I" + str(xml_root / "include"), "-I" + str(xml_root), "-I" + str(xslt_root)]
     msxml_objects = [objects / "msxml3_resources.o"]
     for path in sorted(own_msxml.glob("*.c")):
         target = objects / ("msxml3_" + path.stem + ".o")

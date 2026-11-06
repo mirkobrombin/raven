@@ -159,7 +159,7 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "xslt = list(pool.map(lambda path: compile(path, \"libxslt_\" + path.stem, xslt_flags, wine_module=False), sorted(xslt_root.glob(\"*.c\"))))",
+      "text": "xslt = list(pool.map(lambda path: compile(path, \"libxslt_\" + path.stem, xslt_flags, wine_module=False), sorted((xslt_root / \"libxslt\").glob(\"*.c\"))))",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
