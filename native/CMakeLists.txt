@@ -2145,12 +2145,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     list(APPEND INITIALIZE_SPY_CLIENTS ${initialize_spy_client})
                     add_test(NAME native_initialize_spy_x${width} COMMAND raven --run-process --execution=native ${initialize_spy_client})
                     set_tests_properties(native_initialize_spy_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # Values written to Unicode and ANSI profiles, as installers' page files are.
+                    set(profile_client ${CMAKE_CURRENT_BINARY_DIR}/profile-client${width}.exe)
+                    add_custom_command(OUTPUT ${profile_client}
+                        COMMAND ${etw_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -mno-stack-arg-probe
+                            -Wl,--entry,${etw_entry},--image-base,0x1ea00000,--no-insert-timestamp
+                            -o ${profile_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/profile_client.c -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/profile_client.c VERBATIM)
+                    list(APPEND PROFILE_CLIENTS ${profile_client})
+                    add_test(NAME native_profile_encoding_x${width} COMMAND raven --run-process --execution=native ${profile_client})
+                    set_tests_properties(native_profile_encoding_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
             endforeach()
             add_custom_target(etw_controller_fixtures ALL DEPENDS ${ETW_CLIENTS})
             add_custom_target(process_enum_fixtures ALL DEPENDS ${PROCESS_ENUM_CLIENTS})
             add_custom_target(workstation_fixtures ALL DEPENDS ${WORKSTATION_CLIENTS})
             add_custom_target(initialize_spy_fixtures ALL DEPENDS ${INITIALIZE_SPY_CLIENTS})
+            add_custom_target(profile_fixtures ALL DEPENDS ${PROFILE_CLIENTS})
             set(SOCKET_MESSAGE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/socket-message-client.exe)
             add_custom_command(OUTPUT ${SOCKET_MESSAGE_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
