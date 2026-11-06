@@ -481,6 +481,39 @@ CRT int _stat64i32(const char *path, StatBuffer64i32 *out)
 	return 0;
 }
 
+/* msvcrt's _stati64 keeps the 64-bit size with the times of its time_t: 32-bit for 32-bit programs, so the struct is _stat32i64 there. */
+#ifdef _WIN64
+CRT int _stati64(const char *path, StatBuffer *out) { return _stat64(path, out); }
+#else
+typedef struct {
+	unsigned st_dev;
+	unsigned short st_ino, st_mode;
+	short st_nlink, st_uid, st_gid;
+	unsigned st_rdev;
+	long long st_size;
+	long st_atime, st_mtime, st_ctime;
+} StatBuffer32i64;
+
+CRT int _stati64(const char *path, StatBuffer32i64 *out)
+{
+	StatBuffer full;
+	if (_stat64(path, &full))
+		return -1;
+	out->st_dev = full.st_dev;
+	out->st_ino = full.st_ino;
+	out->st_mode = full.st_mode;
+	out->st_nlink = full.st_nlink;
+	out->st_uid = full.st_uid;
+	out->st_gid = full.st_gid;
+	out->st_rdev = full.st_rdev;
+	out->st_size = full.st_size;
+	out->st_atime = (long)full.st_atime;
+	out->st_mtime = (long)full.st_mtime;
+	out->st_ctime = (long)full.st_ctime;
+	return 0;
+}
+#endif
+
 CRT int _fstat64i32(int fd, StatBuffer64i32 *out)
 {
 	StatBuffer full;
