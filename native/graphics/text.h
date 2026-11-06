@@ -50,6 +50,22 @@ public:
 	std::vector<uint8_t> render(std::span<const uint8_t,92> definition,std::span<const uint16_t> text,
 		uint32_t width,uint32_t height,int32_t origin_x,int32_t origin_y,std::span<const int32_t> offsets={});
 
+	// Glyph identifiers: the indices of the face a logical font uses, as its cmap table maps characters to them and as programs that
+	// read that table themselves compute. A character the face lacks maps to 0, its missing glyph.
+	std::vector<uint16_t> logical_glyph_ids(std::span<const uint8_t,92> definition,std::span<const uint16_t> text);
+	// The pixel advance of each glyph, not cumulative.
+	std::vector<int32_t> logical_glyph_advances(std::span<const uint8_t,92> definition,std::span<const uint16_t> glyphs);
+	// One glyph's black box in whole pixels around its origin on the baseline (y grows downward) and its advance, from the outline's
+	// bounds, so any size measures; and its coverage over exactly that box.
+	struct GlyphBox {
+		int32_t left,top,right,bottom,advance;
+	};
+	GlyphBox logical_glyph_box(std::span<const uint8_t,92> definition,uint16_t glyph);
+	std::vector<uint8_t> render_glyph_box(std::span<const uint8_t,92> definition,uint16_t glyph,const GlyphBox &box);
+	// Alpha coverage of glyphs drawn as render() draws text, each at the next rounded advance or at its offset.
+	std::vector<uint8_t> render_glyphs(std::span<const uint8_t,92> definition,std::span<const uint16_t> glyphs,
+		uint32_t width,uint32_t height,int32_t origin_x,int32_t origin_y,std::span<const int32_t> offsets={});
+
 private:
 	struct State;
 	std::unique_ptr<State> state;
