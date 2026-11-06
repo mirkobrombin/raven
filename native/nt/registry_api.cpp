@@ -411,7 +411,11 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 	};
 	registry.add("NtOpenKey", 3, open_key);
 	registry.add("NtOpenKeyEx", 4, open_key);
-	registry.add("NtDeleteKey", 1, [&hive, status_of](ApiCall &call) { call.ret(status_of(hive.remove_key(call[0], u""))); });
+	// A key that still has subkeys cannot be deleted: STATUS_CANNOT_DELETE, which RegDeleteKey reports as access denied.
+	registry.add("NtDeleteKey", 1, [&hive, status_of](ApiCall &call) {
+		const auto result = hive.remove_key(call[0], u"");
+		call.ret(result == 5 ? 0xc0000121U : status_of(result));
+	});
 	const auto name_of = [handle_width](ApiCall &call, uint64_t address) {
 		if (!address)
 			return std::u16string();

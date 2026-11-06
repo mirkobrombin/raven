@@ -467,6 +467,20 @@ void NativeRegistry::seed()
 			close(key);
 		}
 	}
+	// Keys every installation has, empty until a program adds to them: some programs open them to write a value and fail when they are
+	// missing, as the Chrome updater's setup does with the user's Run key.
+	for (const auto &[root, path] : std::initializer_list<std::pair<uint64_t, const char16_t *>>{
+		{0x80000001ULL, u"Software\\Microsoft\\Windows\\CurrentVersion\\Run"}, {0x80000001ULL, u"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"},
+		{0x80000002ULL, u"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"}, {0x80000002ULL, u"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"},
+		{0x80000002ULL, u"SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run"},
+		{0x80000002ULL, u"SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce"}}) {
+		uint64_t key = 0;
+		uint32_t disposition = 0;
+		if (!create(root, path, key, disposition)) {
+			added = added || disposition == 1;
+			close(key);
+		}
+	}
 	seeding = false;
 	if (added)
 		save();
@@ -646,7 +660,8 @@ uint32_t NativeRegistry::remove_key(uint64_t parent, std::u16string_view path)
 	std::u16string folded, display;
 	if (!resolve(parent, path, folded, display))
 		return bad_handle;
-	if (path.empty())
+	// No path names the open key itself, as NtDeleteKey deletes it; a predefined root is never deleted.
+	if (path.empty() && predefined(parent))
 		return 5;
 	if (!keys.contains(folded))
 		return file_not_found;

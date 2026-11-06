@@ -727,7 +727,14 @@ int raven_entry(void)
 		lstrcmpW(allocated, long_path) || LocalFree(allocated)) return 179;
 	if ((key_size = click_to_run_natives(key))) return 180 + (int)key_size;
 	if ((key_size = server_natives())) return (int)key_size;
-	RegDeleteKeyW(key, L"Inner");
+	/* NtDeleteKey deletes the open key itself, though not while it has subkeys; the user's Run key is there in every prefix. */
+	LONG (WINAPI *NtDeleteKey)(HANDLE) = (void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtDeleteKey");
+	if (!NtDeleteKey || NtDeleteKey(key) != (LONG)0xc0000121) return 220;
+	if (RegOpenKeyExW(key, L"Inner", 0, KEY_ALL_ACCESS, &child) || NtDeleteKey(child)) return 221;
+	RegCloseKey(child);
+	if (!RegOpenKeyExW(key, L"Inner", 0, KEY_READ, &child)) return 222;
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &child)) return 223;
+	RegCloseKey(child);
 	RegCloseKey(key);
 	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\RavenKeyInformation");
 	return 0;
