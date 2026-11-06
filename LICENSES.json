@@ -520,7 +520,6 @@
         "native/upstream/raven-xmllite/writer.c",
         "native/upstream/raven-xmllite/xmllite.spec",
         "native/upstream/reactos-installer/codecs.c",
-        "native/upstream/reactos-installer/debug.c",
         "native/upstream/reactos-installer/dllmain.c",
         "native/upstream/reactos-installer/entry.c",
         "native/upstream/reactos-installer/entry_wide.c",

@@ -304,7 +304,7 @@ static HRESULT read_reference(struct reader *reader, UINT *value)
 	static const struct { const WCHAR *name; WCHAR value; } predefined[] = {
 		{ L"lt;", '<' }, { L"gt;", '>' }, { L"amp;", '&' }, { L"apos;", '\'' }, { L"quot;", '"' },
 	};
-	for (size_t index = 0; index < ARRAY_SIZE(predefined); index++) {
+	for (size_t index = 0; index < ARRAYSIZE(predefined); index++) {
 		if (at_text(reader, predefined[index].name)) {
 			advance(reader, (size_t)lstrlenW(predefined[index].name));
 			*value = predefined[index].value;
@@ -588,13 +588,13 @@ static HRESULT resolve_attribute_names(struct reader *reader)
 		struct attribute *attribute = &reader->attributes[index];
 		if (attribute->prefix_length == 5 && !memcmp(attribute->prefix, L"xmlns", 5 * sizeof(WCHAR))) {
 			attribute->uri = (WCHAR *)uri_xmlns;
-			attribute->uri_length = ARRAY_SIZE(uri_xmlns) - 1;
+			attribute->uri_length = ARRAYSIZE(uri_xmlns) - 1;
 		} else if (!attribute->prefix_length && attribute->qualified_length == 5 && !memcmp(attribute->qualified, L"xmlns", 5 * sizeof(WCHAR))) {
 			attribute->uri = (WCHAR *)uri_xmlns;
-			attribute->uri_length = ARRAY_SIZE(uri_xmlns) - 1;
+			attribute->uri_length = ARRAYSIZE(uri_xmlns) - 1;
 		} else if (attribute->prefix_length == 3 && !memcmp(attribute->prefix, L"xml", 3 * sizeof(WCHAR))) {
 			attribute->uri = (WCHAR *)uri_xml;
-			attribute->uri_length = ARRAY_SIZE(uri_xml) - 1;
+			attribute->uri_length = ARRAYSIZE(uri_xml) - 1;
 		} else if (attribute->prefix_length) {
 			const struct binding *binding = find_binding(reader, attribute->prefix, attribute->prefix_length);
 			if (!binding)
@@ -688,7 +688,7 @@ static HRESULT read_element(struct reader *reader)
 		return failure;
 	if (prefix_length == 3 && !memcmp(name, L"xml", 3 * sizeof(WCHAR))) {
 		reader->uri = (WCHAR *)uri_xml;
-		reader->uri_length = ARRAY_SIZE(uri_xml) - 1;
+		reader->uri_length = ARRAYSIZE(uri_xml) - 1;
 	} else {
 		const struct binding *binding = find_binding(reader, name, prefix_length);
 		if (!binding && prefix_length)
@@ -746,7 +746,7 @@ static HRESULT read_end_element(struct reader *reader)
 		reader->qualified = open->qualified;
 	if (prefix_length == 3 && !memcmp(name, L"xml", 3 * sizeof(WCHAR))) {
 		reader->uri = (WCHAR *)uri_xml;
-		reader->uri_length = ARRAY_SIZE(uri_xml) - 1;
+		reader->uri_length = ARRAYSIZE(uri_xml) - 1;
 	} else {
 		const struct binding *binding = find_binding(reader, name, prefix_length);
 		if (binding) {
@@ -818,7 +818,7 @@ static UINT sniff_declared_encoding(const unsigned char *bytes, size_t size)
 		unsigned char quote = bytes[index++];
 		WCHAR name[32];
 		UINT used = 0;
-		while (index < size && bytes[index] != quote && used + 1 < ARRAY_SIZE(name))
+		while (index < size && bytes[index] != quote && used + 1 < ARRAYSIZE(name))
 			name[used++] = bytes[index++];
 		name[used] = 0;
 		UINT page = code_page_of_name(name);
@@ -1505,7 +1505,7 @@ static const struct { const WCHAR *name; UINT code_page; } encodings[] = {
 
 UINT code_page_of_name(const WCHAR *name)
 {
-	for (size_t index = 0; index < ARRAY_SIZE(encodings); index++) {
+	for (size_t index = 0; index < ARRAYSIZE(encodings); index++) {
 		if (!lstrcmpiW(encodings[index].name, name))
 			return encodings[index].code_page;
 	}
@@ -1514,7 +1514,7 @@ UINT code_page_of_name(const WCHAR *name)
 
 const WCHAR *name_of_code_page(UINT code_page)
 {
-	for (size_t index = 0; index < ARRAY_SIZE(encodings); index++) {
+	for (size_t index = 0; index < ARRAYSIZE(encodings); index++) {
 		if (encodings[index].code_page == code_page)
 			return encodings[index].name;
 	}

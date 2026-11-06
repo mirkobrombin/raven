@@ -105,18 +105,6 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "built = list(pool.map(lambda path: compile(path, stem + \"_\" + path.stem.replace(\".\", \"_\"), flags_here, wine_module), parts))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "built.append(compile(generated / (interface + \"_i.c\"), stem + \"_\" + interface + \"_i\", flags_here, wine_module))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
       "text": "cabinet = list(pool.map(lambda name: compile(cabinet_root / name, \"cabinet_\" + Path(name).stem,",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
@@ -129,37 +117,7 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "debug = compile(repo / \"native/upstream/reactos-installer/debug.c\", \"debug\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "def compile(path, name, extra=(), wine_module=True):",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
       "text": "entry_object = compile(support / \"dllmain.c\", \"plain_dllmain\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "link(\"msftedit.dll\", next_base[0], [compile(support / \"msftedit.c\", \"msftedit\", plain, False)], output / \"msftedit.def\",",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "xml = list(pool.map(lambda path: compile(path, \"libxml2_\" + path.stem, xml_flags, wine_module=False), xml_sources))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "xslt = list(pool.map(lambda path: compile(path, \"libxslt_\" + path.stem, xslt_flags, wine_module=False), sorted((xslt_root / \"libxslt\").glob(\"*.c\"))))",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
@@ -196,6 +154,36 @@
       "rule": "INJ-001",
       "path": "scripts/generate-locale-identifiers.py",
       "text": "ELEMENT = re.compile(r\"ILCID_POSIX_ELEMENT_ARRAY\\(\\s*(0x[0-9a-fA-F]+)\\s*,\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\")",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "def compile(path, name, extra=()):",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "xml = list(pool.map(lambda path: compile(path, \"libxml2_\" + path.stem, xml_flags), xml_sources))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "xslt = list(pool.map(lambda path: compile(path, \"libxslt_\" + path.stem, xslt_flags), sorted((xslt_root / \"libxslt\").glob(\"*.c\"))))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "built = list(pool.map(lambda path: compile(path, stem + \"_\" + path.stem.replace(\".\", \"_\"), flags_here), sources))",
+      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
+    },
+    {
+      "rule": "INJ-001",
+      "path": "scripts/provision-installer.py",
+      "text": "link(\"msftedit.dll\", next_base[0], [compile(support / \"msftedit.c\", \"msftedit\", plain)], output / \"msftedit.def\",",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     }
   ]

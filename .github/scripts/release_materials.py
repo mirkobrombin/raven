@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Write the --materials file scripts/package-native.py bundles a release with.
 
-Each component built from ReactOS keeps the source archives it was built from (ReactOS's, and any other upstream release
-such as zlib's), the recipe that built it (provenance.json)
-and the license notices it carries. Those are the corresponding source materials of docs/packaging.md; a component without
-all three is not listed, and the bundle step then refuses a build that configured it.
+Each component built on upstream releases keeps the source archives it was built from (NAME-VERSION-source.tar.*, such as
+zlib's), the recipe that built it (provenance.json) and the license notices it carries. Those are the corresponding source
+materials of docs/packaging.md; a component without all three is not listed, and the bundle step then refuses a build that
+configured it.
 
 usage: release_materials.py COMPONENTS OUTPUT
 """
@@ -36,18 +36,14 @@ def main():
     materials = []
     for name, keys in KEYS.items():
         directory = components / name
-        source, recipe = directory / "reactos-source.tar.gz", directory / "provenance.json"
-        notices = sorted(path for path in (directory / "licenses").glob("*") if path.is_file())
-        if not (source.is_file() and recipe.is_file() and notices):
+        sources, recipe = sorted(directory.glob("*-source.tar.*")), directory / "provenance.json"
+        notices = sorted(path for path in (directory / "licenses").rglob("*") if path.is_file())
+        if not (sources and recipe.is_file() and notices):
             print(f"{name}: no source archive, recipe or notices; not listed", file=sys.stderr)
             continue
-        materials.append(dict(name=f"reactos-{name}", cmake_keys=keys, source=str(source), sha256=digest(source),
-                              recipe=str(recipe), notices=[str(path) for path in notices]))
-        # The other upstream archives the component was built from as well, such as zlib's own release.
-        for other in sorted(directory.glob("*-source.tar.*")):
-            if other != source:
-                materials.append(dict(name=f"{other.name.split('-source.tar.')[0]}-{name}", cmake_keys=keys, source=str(other),
-                                      sha256=digest(other), recipe=str(recipe), notices=[str(path) for path in notices]))
+        for source in sources:
+            materials.append(dict(name=f"{source.name.split('-source.tar.')[0]}-{name}", cmake_keys=keys, source=str(source),
+                                  sha256=digest(source), recipe=str(recipe), notices=[str(path) for path in notices]))
     output.write_text(json.dumps(materials, indent=2) + "\n")
     print(f"{len(materials)} components with source materials")
     return 0 if materials else 1

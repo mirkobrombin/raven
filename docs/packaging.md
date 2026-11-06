@@ -46,22 +46,21 @@ The maintainer supplies a JSON inventory of configured third-party inputs:
 ```json
 [
   {
-    "name": "reactos-installer-x64",
+    "name": "libxml2-2.12.8-installer",
     "cmake_keys": ["RAVEN_INSTALLER_COMPONENT_DIR"],
-    "source": "/absolute/path/to/reactos-source.tar.gz",
-    "sha256": "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69",
+    "source": "/absolute/path/to/installer/libxml2-2.12.8-source.tar.xz",
+    "sha256": "43ad877b018bc63deb2468d71f95219c2fac196876ef36d1bee51d226173ec93",
     "recipe": "/absolute/path/to/installer/provenance.json",
     "notices": [
-      "/absolute/path/to/installer/licenses/COPYING",
-      "/absolute/path/to/installer/licenses/COPYING.LIB",
-      "/absolute/path/to/installer/licenses/COPYING.ARM"
+      "/absolute/path/to/installer/licenses/libxml2-2.12.8/Copyright",
+      "/absolute/path/to/installer/licenses/libxml2-2.12.8/README.md"
     ]
   }
 ]
 ```
 
 One archive may cover several configuration keys. Include all applicable notices,
-not just the GNU texts in this example. The ReactOS source archive, Raven's
+not just the ones in this example. The upstream source archives, Raven's
 provisioning scripts and patches, and the recorded provenance supply the inputs
 and modifications. Include generated files too when the recipe cannot recreate
 them. The provisioners retain upstream root and module notices in `licenses/`

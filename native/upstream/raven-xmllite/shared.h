@@ -5,6 +5,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
+#include <stddef.h>
 #include <windows.h>
 #include <objbase.h>
 #include <xmllite.h>

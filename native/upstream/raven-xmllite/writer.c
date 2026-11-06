@@ -112,7 +112,7 @@ static HRESULT put_string(struct writer *writer, const WCHAR *text)
 static HRESULT put_hex_entity(struct writer *writer, UINT value)
 {
 	WCHAR digits[16];
-	UINT at = ARRAY_SIZE(digits);
+	UINT at = ARRAYSIZE(digits);
 	digits[--at] = 0;
 	digits[--at] = ';';
 	do {
