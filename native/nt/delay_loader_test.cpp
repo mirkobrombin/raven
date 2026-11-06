@@ -79,7 +79,7 @@ int main(int argc, char **argv)
 					"delay helper failure resumed or lost its observed error");
 			}
 		}
-		std::cout << "Real ReactOS guest delay helper, lazy name/ordinal binding, cached calls and raised failure records passed\n";
+		std::cout << "Guest delay helper, lazy name/ordinal binding, cached calls and raised failure records passed\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

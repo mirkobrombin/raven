@@ -13,7 +13,7 @@ programs and, with `--arch x86`, for 32-bit ones:
   procedure calls and the NDR engine;
 - `raven-storage.dll`: Raven's own structured storage from
   [`native/upstream/raven-storage`](../raven-storage/README.md);
-- `oleaut32.dll` (`dll/win32/oleaut32`): automation, variants and type libraries;
+- `oleaut32.dll`: Raven's own from [`native/upstream/raven-oleaut32`](../raven-oleaut32/README.md): automation, variants and type libraries;
 - `msxml3.dll`: Raven's own from [`native/upstream/raven-msxml3`](../raven-msxml3/README.md), on
   `sdk/lib/3rdparty/libxml2` and `dll/3rdparty/libxslt`, and `atl100.dll`, Raven's own from [`native/upstream/raven-atl100`](../raven-atl100/README.md);
 - `urlmon.dll`: Raven's own from [`native/upstream/raven-urlmon`](../raven-urlmon/README.md): URLs, monikers

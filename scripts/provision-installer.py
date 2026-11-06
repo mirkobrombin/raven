@@ -18,11 +18,9 @@ from component_licenses import mark_patched_sources, preserve_notices
 # The ReactOS revision the common controls component is built from: one archive serves both.
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
-PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/", "sdk/lib/3rdparty/libwine/",
+PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/", "sdk/tools/spec2def/", "sdk/lib/3rdparty/zlib/",
             "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
-            "dll/win32/stdole2.tlb/",
-            "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/",
-            "sdk/lib/getopt/", "dll/win32/setupapi/", "dll/win32/kernel32/wine/lzexpand.c")
+            "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -381,7 +379,7 @@ def main():
             names += [token for token in block.split() if token.endswith(".c") and not token.startswith(("#", "$"))]
         return [root / name for name in names]
 
-    def library(name, root, extra_flags=(), libraries=(), wine_module=True, sources=None, objects_more=(), helpers=(), rc=None, interfaces=()):
+    def library(name, root, extra_flags=(), libraries=(), wine_module=True, sources=None, objects_more=(), rc=None, interfaces=()):
         stem = Path(name).stem
         spec = root / (stem + ".spec") if (root / (stem + ".spec")).exists() else next(root.glob("*.spec"))
         run([output / "spec2def", spec_arch, "-n=" + name, "-d=" + str(output / (stem + ".def")), "-s=" + str(generated / (stem + "_stubs.c")), spec])
@@ -394,8 +392,6 @@ def main():
         for interface in interfaces:
             run([*widl, "-u", "-U", generated / (interface + "_i.c"), source / "sdk/include/psdk" / (interface + ".idl")])
             built.append(compile(generated / (interface + "_i.c"), stem + "_" + interface + "_i", flags_here, wine_module))
-        for helper in helpers:
-            built.append(compile(source / "sdk/lib/3rdparty/libwine" / helper, stem + "_" + Path(helper).stem, flags_here))
         if rc:
             run([triple + "-windres", "--preprocessor=" + str(wrapper), "-O", "coff", "-DLANGUAGE_EN_US", "-D__REACTOS__", "-D__WINESRC__",
                  "-D_M_IX86" if x86 else "-D_M_AMD64", "-I" + str(root), "-I" + str(generated), "-i", root / rc, "-o", objects / (stem + ".res.o")])

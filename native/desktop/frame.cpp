@@ -18,7 +18,7 @@ NativeWindows::FrameLayout NativeWindows::frame_layout(const DesktopWindow &wind
 	const uint32_t style = window.style & ~0x10000000U;
 	FrameLayout layout{};
 	const int32_t width = window.outer.right - window.outer.left, height = window.outer.bottom - window.outer.top;
-	// AdjustWindowRect already encodes ReactOS' border and caption rules; its deltas are the frame thickness.
+	// AdjustWindowRect already encodes the border and caption rules; its deltas are the frame thickness.
 	const auto adjusted = adjust_window_rect(metrics, {0, 0, 0, 0}, style, false, window.ex_style);
 	layout.border = -adjusted.left;
 	layout.caption_height = (style & 0xc00000U) == 0xc00000U ? metrics.caption : 0;

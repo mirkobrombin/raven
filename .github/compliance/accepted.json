@@ -123,12 +123,6 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "built.append(compile(source / \"sdk/lib/3rdparty/libwine\" / helper, stem + \"_\" + Path(helper).stem, flags_here))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
       "text": "cabinet = list(pool.map(lambda name: compile(cabinet_root / name, \"cabinet_\" + Path(name).stem,",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
