@@ -20,7 +20,7 @@ REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/",
             "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
-            "dll/3rdparty/libpng/", "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/")
+            "dll/3rdparty/libjpeg/", "dll/3rdparty/libtiff/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -29,7 +29,7 @@ IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "o
 ZLIB_VERSION = "1.3.1"
 ZLIB_SHA256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
 ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
-COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libpng.dll", "libjpeg.dll",
+COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libjpeg.dll",
               "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll",
               "raven-appx.dll", "mspatcha.dll", "vbscript.dll", "scrrun.dll", "wshom.ocx", "jscript.dll")
 
@@ -446,8 +446,6 @@ def main():
     plain = ["-U__WINESRC__", "-U_WINE", "-D_CRT_DECLARE_NONSTDC_NAMES=1", "-D_DLL", "-DWIN32", "-D_WINDOWS"]
     entry_object = compile(support / "dllmain.c", "plain_dllmain")
     libs = source / "sdk/include/reactos/libs"
-    library("libpng.dll", source / "dll/3rdparty/libpng", [*plain, "-DNDEBUG=", "-DPNG_BUILD_DLL", "-I" + str(libs / "libpng"), "-I" + str(zlib_include)],
-            wine_module=False, objects_more=[*zlib, entry_object])
     library("libjpeg.dll", source / "dll/3rdparty/libjpeg", [*plain, "-D_MBCS", "-DJPEG_DLL", "-Dmain=mainptr", "-I" + str(libs / "libjpeg")], wine_module=False,
             objects_more=[entry_object])
     library("libtiff.dll", source / "dll/3rdparty/libtiff", [*plain, "-DNDEBUG=", "-DUSE_WIN32_FILEIO", "-DTIF_PLATFORM_CONSOLE", "-I" + str(libs / "libtiff"),

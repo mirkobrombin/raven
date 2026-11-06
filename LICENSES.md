@@ -36,7 +36,7 @@ permit that version. LGPL portions keep their notices and corresponding source.
 
 The common controls and user32 components are original MIT code with no ReactOS
 input.
-Installer components also contain zlib, XML/XSLT/iconv, PNG, IJG JPEG and TIFF
+Installer components also contain zlib, XML/XSLT/iconv, IJG JPEG and TIFF
 code with their individual notices. Bison-generated parsers retain their skeleton
 exception; the generator's GPL license alone does not determine the output's license.
 

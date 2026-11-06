@@ -26,7 +26,7 @@ the components as `zlib-1.3.1-source.tar.gz` with its `LICENSE` and `README` und
 - the imaging stack: `windowscodecs.dll` (Raven's own, from
   [`native/upstream/raven-windowscodecs`](../raven-windowscodecs/README.md)), `gdiplus.dll` (Raven's own, from
   [`native/upstream/raven-gdiplus`](../raven-gdiplus/README.md)), `mlang.dll` (Raven's own, from
-  [`native/upstream/raven-mlang`](../raven-mlang/README.md)) and `libpng.dll`, `libjpeg.dll`, `libtiff.dll` (`dll/3rdparty`);
+  [`native/upstream/raven-mlang`](../raven-mlang/README.md)) and `libjpeg.dll`, `libtiff.dll` (`dll/3rdparty`), which the codecs import (PNG is decoded by `windowscodecs.dll` itself);
 - `advpack.dll`: Raven's own from [`native/upstream/raven-advpack`](../raven-advpack/README.md): the setup helpers IExpress packages and the
   DirectX setup run INF files through;
 - `raven-appx.dll` (`native/upstream/raven-appx`, Raven code on the same zlib): the
@@ -50,7 +50,7 @@ component in `provenance.json`.
 Raven-owned adapters remain MIT. The ReactOS-derived PE components are
 distributed under GPL version 2 with the source notices retained.
 The Wine-derived installer libraries contain LGPL-2.1-or-later code. This is not
-the license of every input: zlib, libxml2, libxslt, libwin-iconv, libpng, IJG JPEG
+the license of every input: zlib, libxml2, libxslt, libwin-iconv, IJG JPEG
 and TIFF retain their own notices. In particular, IJG's acknowledgement must
 accompany a distribution that includes its JPEG library. Generated Bison parsers
 retain their GPL skeleton notice and parser exception; the generator's license

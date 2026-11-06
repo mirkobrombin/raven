@@ -54,7 +54,7 @@ def runtime_paths(build):
     names = """comctl32.dll raven-user32.dll raven-shell.dll raven-dwrite.dll raven-d2d1.dll
         raven-uianimation.dll ucrtbase.dll raven-rtl.dll raven-storage.dll
         msi.dll cabinet.dll sxs.dll rpcrt4.dll msxml3.dll atl100.dll oleaut32.dll
-        libpng.dll libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll
+        libjpeg.dll libtiff.dll propsys.dll mlang.dll windowscodecs.dll gdiplus.dll
         urlmon.dll riched20.dll msftedit.dll msvfw32.dll advpack.dll mspatcha.dll vbscript.dll scrrun.dll wshom.ocx jscript.dll raven-setupapi.dll xmllite.dll winsqlite3.dll raven-web.dll raven-appx.dll raven-wmi.dll raven-ieframe.dll raven-webengine.dll raven-twinapi.dll
         icu.dll icuuc.dll icuin.dll
         cmd.exe control.exe regedit.exe dism.exe fondue.exe msiexec.exe regsvr32.exe
