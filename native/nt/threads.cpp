@@ -500,13 +500,16 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	me.ready = std::move(ready);
 	me.wake = wake;
 	me.state = GuestThread::State::waiting;
-	// The condition reads the waiting frame: it goes with the wait, also when an error or the end of the process leaves the frame.
+	// The condition reads the waiting frame: it goes with the wait, also when an error or the end of the process leaves the frame. A thread
+	// that leaves it that way runs on, unwinding: left waiting, with nothing that could wake it, the teardown would never come back to it.
 	struct Leave {
 		GuestThread &thread;
 		~Leave()
 		{
 			thread.ready = nullptr;
 			thread.wake.reset();
+			if (thread.state == GuestThread::State::waiting)
+				thread.state = GuestThread::State::running;
 		}
 	} leave{me};
 	// RAVEN_TRACE_WAITS names the waits that last longer than a quarter of a second: the API and how long it kept its thread.

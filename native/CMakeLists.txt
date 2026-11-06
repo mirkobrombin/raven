@@ -3027,6 +3027,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         raven_kernel_fixture(kernel-ansi kernel_ansi_client.c 0x1b5000000 "-lkernel32")
         raven_kernel_fixture(kernel-threads kernel_threads_client.c 0x1b2000000 "-lkernel32")
         raven_kernel_fixture(served-semaphore served_semaphore_client.c 0x1b8000000 "-lkernel32")
+        # A run whose threads all wait past its time limit ends at that limit.
+        raven_kernel_fixture(timeout-waits timeout_waits_client.c 0x1b8000000 "-lkernel32")
+        add_test(NAME native_timeout_waits COMMAND raven --run-process --execution=native --timeout-ms=2000
+            ${CMAKE_CURRENT_BINARY_DIR}/timeout-waits.exe)
+        set_tests_properties(native_timeout_waits PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "native entry timed out"
+            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/timeout-waits-prefix")
         foreach(mode default parallel)
             add_test(NAME native_served_semaphore_${mode} COMMAND raven --run-process --execution=native
                 ${CMAKE_CURRENT_BINARY_DIR}/served-semaphore.exe)
