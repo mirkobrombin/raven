@@ -359,6 +359,8 @@ void package_log(const WCHAR *format, ...);
 const WCHAR *package_log_release(void);
 UINT ui_deliver(INSTALLMESSAGE type, const WCHAR *text, UINT field_one);
 BOOL guid_squash(const WCHAR *guid, WCHAR out[33]);
+// Counts one use of an installed feature for MsiGetFeatureUsage.
+void count_feature_use(LPCWSTR product, LPCWSTR feature);
 BOOL guid_unsquash(const WCHAR *squashed, WCHAR out[39]);
 
 // condition.c

@@ -294,6 +294,15 @@ UINT product_unregister(msi_package *package)
 	wsprintfW(rest, L"Products\\%s", squashed);
 	user_data_key(key, machine, rest);
 	delete_tree(HKEY_LOCAL_MACHINE, key);
+	// The user's feature usage, which a product installed for the machine keeps under the user's own key: it goes, and so does that
+	// key once nothing else is in it, so that the product is no longer listed.
+	if (machine) {
+		user_data_key(key, FALSE, rest);
+		WCHAR usage[300];
+		wsprintfW(usage, L"%s\\Usage", key);
+		RegDeleteKeyW(HKEY_LOCAL_MACHINE, usage);
+		RegDeleteKeyW(HKEY_LOCAL_MACHINE, key);
+	}
 	published_key(key, machine, rest);
 	delete_tree(root, key);
 	wsprintfW(key, UNINSTALL_KEY L"\\%s", code);

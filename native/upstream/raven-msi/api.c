@@ -336,7 +336,13 @@ INSTALLSTATE WINAPI MsiUseFeatureExW(LPCWSTR product, LPCWSTR feature, DWORD mod
 {
 	if (reserved || !product || !feature)
 		return INSTALLSTATE_INVALIDARG;
-	return mode == INSTALLMODE_NODETECTION ? INSTALLSTATE_UNKNOWN : MsiQueryFeatureStateW(product, feature);
+	if (mode == INSTALLMODE_NODETECTION)
+		return INSTALLSTATE_UNKNOWN;
+	INSTALLSTATE state = MsiQueryFeatureStateW(product, feature);
+	// A use of an installed feature counts towards what MsiGetFeatureUsage reports.
+	if (state == INSTALLSTATE_LOCAL || state == INSTALLSTATE_SOURCE || state == INSTALLSTATE_DEFAULT)
+		count_feature_use(product, feature);
+	return state;
 }
 
 INSTALLSTATE WINAPI MsiUseFeatureExA(LPCSTR product, LPCSTR feature, DWORD mode, DWORD reserved)

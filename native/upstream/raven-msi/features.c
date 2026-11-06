@@ -336,7 +336,48 @@ UINT WINAPI MsiEnumComponentCostsA(MSIHANDLE handle, LPCSTR name, DWORD index, I
 	return status ? status : out_text_a(volume, lstrlenW(volume), drive, drive_size);
 }
 
-// Usage is not counted by this engine's MsiUseFeature, so a feature present reads as never used.
+/* Usage of a feature, which MsiUseFeatureEx counts: per user, in the product's UserData key as Windows keeps it, as the number of uses and
+ * the DOS date of the last one. The published key is not used, since a product whose key is there counts as advertised. */
+typedef struct {
+	DWORD count;
+	WORD date, reserved;
+} feature_usage;
+
+static BOOL usage_key(LPCWSTR product, BOOL create, HKEY *key)
+{
+	WCHAR squashed[33], rest[64], path[256];
+	if (!guid_squash(product, squashed))
+		return FALSE;
+	wsprintfW(rest, L"Products\\%s\\Usage", squashed);
+	user_data_key(path, FALSE, rest);
+	return create ? !RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, 0, KEY_READ | KEY_WRITE, NULL, key, NULL) :
+		!RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, key);
+}
+
+static feature_usage read_usage(HKEY key, LPCWSTR feature)
+{
+	feature_usage usage = {0};
+	DWORD size = sizeof usage, type;
+	if (RegQueryValueExW(key, feature, NULL, &type, (BYTE *)&usage, &size) || type != REG_BINARY || size != sizeof usage)
+		memset(&usage, 0, sizeof usage);
+	return usage;
+}
+
+void count_feature_use(LPCWSTR product, LPCWSTR feature)
+{
+	HKEY key;
+	if (!usage_key(product, TRUE, &key))
+		return;
+	feature_usage usage = read_usage(key, feature);
+	SYSTEMTIME now;
+	GetLocalTime(&now);
+	if (usage.count != MAXDWORD)
+		usage.count++;
+	usage.date = (WORD)(((now.wYear - 1980) << 9) | (now.wMonth << 5) | now.wDay);
+	RegSetValueExW(key, feature, 0, REG_BINARY, (const BYTE *)&usage, sizeof usage);
+	RegCloseKey(key);
+}
+
 UINT WINAPI MsiGetFeatureUsageW(LPCWSTR product, LPCWSTR feature, LPDWORD count, LPWORD date)
 {
 	if (!product || !feature)
@@ -344,10 +385,16 @@ UINT WINAPI MsiGetFeatureUsageW(LPCWSTR product, LPCWSTR feature, LPDWORD count,
 	INSTALLSTATE state = MsiQueryFeatureStateW(product, feature);
 	if (state == INSTALLSTATE_UNKNOWN)
 		return ERROR_UNKNOWN_FEATURE;
+	feature_usage usage = {0};
+	HKEY key;
+	if (usage_key(product, FALSE, &key)) {
+		usage = read_usage(key, feature);
+		RegCloseKey(key);
+	}
 	if (count)
-		*count = 0;
+		*count = usage.count;
 	if (date)
-		*date = 0;
+		*date = usage.date;
 	return ERROR_SUCCESS;
 }
 

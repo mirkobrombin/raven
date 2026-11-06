@@ -56,6 +56,18 @@ int raven_entry(void)
 		return 27;
 	if (MsiQueryProductStateW(product) != INSTALLSTATE_DEFAULT || MsiQueryFeatureStateW(product, L"Main") != INSTALLSTATE_LOCAL)
 		return 28;
+	/* Each use of an installed feature is counted, with the date of the last one. */
+	DWORD before = MAXDWORD, uses = 0;
+	WORD last = 0;
+	if (MsiGetFeatureUsageW(product, L"Main", &before, &last) != ERROR_SUCCESS || before == MAXDWORD)
+		return 33;
+	if (MsiUseFeatureW(product, L"Main") != INSTALLSTATE_LOCAL || MsiUseFeatureW(product, L"Main") != INSTALLSTATE_LOCAL)
+		return 34;
+	SYSTEMTIME today;
+	GetLocalTime(&today);
+	if (MsiGetFeatureUsageW(product, L"Main", &uses, &last) != ERROR_SUCCESS || uses != before + 2 || (last & 31) != today.wDay ||
+		MsiGetFeatureUsageW(product, L"Absent", &uses, &last) != ERROR_UNKNOWN_FEATURE)
+		return 35;
 	if (MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT) != ERROR_SUCCESS)
 		return 29;
 	/* After costing, a directory is the property of its name: text like [INSTALLDIR] depends on it. */
@@ -104,5 +116,10 @@ int raven_entry(void)
 	if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\RavenSample", 0, KEY_READ, &key) &&
 		!RegQueryValueExW(key, L"Installed", NULL, NULL, NULL, NULL))
 		return 9;
+	/* Gone from the list of products too, although its use was counted. */
+	WCHAR listed[39];
+	for (DWORD index = 0; MsiEnumProductsW(index, listed) == ERROR_SUCCESS; index++)
+		if (!lstrcmpiW(listed, product))
+			return 36;
 	return 0;
 }
