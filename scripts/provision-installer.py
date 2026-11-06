@@ -19,7 +19,7 @@ from component_licenses import mark_patched_sources, preserve_notices
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/",
-            "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/")
+            "dll/3rdparty/libxslt/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -34,7 +34,19 @@ UPSTREAM = {
                     url="https://www.ijg.org/files/jpegsrc.v{version}.tar.gz", notices=("README",)),
     "libtiff": dict(version="4.7.1", sha256="f698d94f3103da8ca7438d84e0344e453fe0ba3b7486e04c5bf7a9a3fabe9b69",
                     url="https://download.osgeo.org/libtiff/tiff-{version}.tar.gz", notices=("LICENSE.md", "README.md")),
+    "libxml2": dict(version="2.12.8", sha256="43ad877b018bc63deb2468d71f95219c2fac196876ef36d1bee51d226173ec93",
+                    url="https://download.gnome.org/sources/libxml2/2.12/libxml2-{version}.tar.xz", notices=("Copyright", "README.md")),
 }
+# The parts of libxml2 msxml3.dll is built with, and the features its configuration turns on for them.
+XML_SOURCES = ("buf.c", "catalog.c", "chvalid.c", "debugXML.c", "dict.c", "encoding.c", "entities.c", "error.c", "globals.c", "hash.c",
+               "HTMLparser.c", "HTMLtree.c", "list.c", "parser.c", "parserInternals.c", "pattern.c", "relaxng.c", "SAX.c", "SAX2.c", "threads.c",
+               "tree.c", "uri.c", "valid.c", "xinclude.c", "xmlIO.c", "xmlmemory.c", "xmlreader.c", "xmlregexp.c", "xmlsave.c", "xmlschemas.c",
+               "xmlschemastypes.c", "xmlstring.c", "xmlunicode.c", "xpath.c", "xpointer.c")
+XML_FEATURES = dict(WITH_TRIO=0, WITH_THREADS=1, WITH_THREAD_ALLOC=0, WITH_TREE=1, WITH_OUTPUT=1, WITH_PUSH=1, WITH_READER=1, WITH_PATTERN=1,
+                    WITH_WRITER=1, WITH_SAX1=1, WITH_FTP=0, WITH_HTTP=0, WITH_VALID=1, WITH_HTML=1, WITH_LEGACY=0, WITH_C14N=1, WITH_CATALOG=1,
+                    WITH_XPATH=1, WITH_XPTR=1, WITH_XPTR_LOCS=0, WITH_XINCLUDE=1, WITH_ICONV=0, WITH_ICU=0, WITH_ISO8859X=1, WITH_DEBUG=1,
+                    WITH_MEM_DEBUG=0, WITH_REGEXPS=1, WITH_SCHEMAS=1, WITH_SCHEMATRON=1, WITH_MODULES=0, MODULE_EXTENSION=".dll", WITH_ZLIB=0,
+                    WITH_LZMA=0)
 # libtiff's sources; the codecs whose support is not configured below compile to nothing.
 TIFF_SOURCES = ("tif_aux.c", "tif_close.c", "tif_codec.c", "tif_color.c", "tif_compress.c", "tif_dir.c", "tif_dirinfo.c", "tif_dirread.c",
                 "tif_dirwrite.c", "tif_dumpmode.c", "tif_error.c", "tif_extension.c", "tif_fax3.c", "tif_fax3sm.c", "tif_flush.c", "tif_getimage.c",
@@ -121,7 +133,7 @@ def main():
     upstream_sources = {}
     for name, release in UPSTREAM.items():
         version = release["version"]
-        packed = output / f"{name}-{version}-source.tar.gz"
+        packed = output / f"{name}-{version}-source.tar.{release['url'].rsplit('.', 1)[1]}"
         fetch(release["url"].format(version=version), packed, release["sha256"], f"{name} {version} source archive")
         unpacked = upstream_sources[name] = output / f"{name}-source"
         shutil.rmtree(unpacked, ignore_errors=True)
@@ -136,6 +148,7 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(upstream.extractfile(member).read())
     zlib_source, jpeg_source, tiff_source = upstream_sources["zlib"], upstream_sources["libjpeg"], upstream_sources["libtiff"] / "libtiff"
+    xml_root = upstream_sources["libxml2"]
     # The library's own configuration for Windows compilers, which keeps boolean an unsigned char as the platform headers have it.
     shutil.copyfile(jpeg_source / "jconfig.vc", jpeg_source / "jconfig.h")
     source = output / "source"
@@ -203,6 +216,13 @@ def main():
     for patch in patches:
         run(["patch", "-p1", "--forward", "--silent", "-i", patch], source)
     mark_patched_sources(source, patches)
+    # The corrections to a library taken from its own release live in a folder named after it.
+    for name, unpacked in upstream_sources.items():
+        own = sorted((support / "patches" / name).glob("*.patch"))
+        for patch in own:
+            run(["patch", "-p1", "--forward", "--silent", "-i", patch], unpacked)
+        mark_patched_sources(unpacked, own)
+        patches += own
     generated = output / "generated"
     shutil.rmtree(generated, ignore_errors=True)
     (generated / "psdk").mkdir(parents=True)
@@ -381,19 +401,21 @@ def main():
          f"-Wl,--entry,{'_raven_msiexec@0' if x86 else 'raven_msiexec'},--no-insert-timestamp", "-I" + str(own_msi),
          own_msi / "msiexec.c", repo / "native/upstream/raven-comctl32/crt.c", "-o", output / "msiexec.exe", "-L" + str(output), "-lmsi", "-luser32", "-lkernel32", "-lgcc"])
     # msxml3.dll: the XML document object model installers and their bootstrappers parse their manifests with, on libxml2 and libxslt.
-    xml_root = source / "sdk/lib/3rdparty/libxml2"
-    iconv_root = source / "sdk/lib/3rdparty/libwin-iconv"
-    xml_flags = ["-U__WINESRC__", "-U_WINE", "-D_CRT_DECLARE_NONSTDC_NAMES=1", "-D__MINGW32__", "-D_DLL", "-D__USE_CRTIMP", "-DLIBXML_STATIC", "-D_REENTRANT", "-D_MBCS", "-D_WINDOWS", "-DWIN32", "-DHAVE_CONFIG_H", "-DICONV_CONST=const",
-                 "-I" + str(xml_root / "include"), "-I" + str(xml_root), "-I" + str(iconv_root), "-I" + str(zlib_include)]
+    # libxml2's configuration: its own one for Windows compilers, and the version header with the features listed above.
+    shutil.copyfile(xml_root / "include/win32config.h", xml_root / "config.h")
+    major, minor, micro = (int(part) for part in UPSTREAM["libxml2"]["version"].split("."))
+    configure_file(xml_root / "include/libxml/xmlversion.h.in", xml_root / "include/libxml/xmlversion.h", dict(
+        XML_FEATURES, VERSION=UPSTREAM["libxml2"]["version"], LIBXML_VERSION_NUMBER=major * 10000 + minor * 100 + micro, LIBXML_VERSION_EXTRA=""))
+    xml_flags = ["-U__WINESRC__", "-U_WINE", "-D_CRT_DECLARE_NONSTDC_NAMES=1", "-D__MINGW32__", "-D_DLL", "-D__USE_CRTIMP", "-DLIBXML_STATIC", "-D_REENTRANT", "-D_MBCS", "-D_WINDOWS", "-DWIN32", "-DHAVE_CONFIG_H",
+                 "-I" + str(xml_root / "include"), "-I" + str(xml_root), "-I" + str(zlib_include)]
     # The C runtime's mathematics, which mingw's msvcrt import library would bring in as static code of its own.
     (output / "crtmath.def").write_text("LIBRARY msvcrt.dll\nEXPORTS\n" + "".join(" " + name + "\n" for name in
                                         ("floor", "ceil", "fabs", "fmod", "log", "log10", "exp", "pow", "sqrt", "atan", "atan2", "tan",
                                          "floorf", "ceilf", "_hypot")))
     run([triple + "-dlltool", "-d", output / "crtmath.def", "-l", output / "libcrtmath.a"])
-    xml = [compile(iconv_root / "win_iconv.c", "iconv_win_iconv", xml_flags, wine_module=False)]
-    xml_sources = sorted(path for path in xml_root.glob("*.c"))
+    xml_sources = [xml_root / name for name in XML_SOURCES]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        xml += list(pool.map(lambda path: compile(path, "libxml2_" + path.stem, xml_flags, wine_module=False), xml_sources))
+        xml = list(pool.map(lambda path: compile(path, "libxml2_" + path.stem, xml_flags, wine_module=False), xml_sources))
     xslt_root = source / "dll/3rdparty/libxslt"
     xslt_flags = [*xml_flags, "-DHAVE_WIN32_THREADS", "-I" + str(xslt_root), "-I" + str(source / "sdk/include/reactos/libs/libxslt"), "-I" + str(source / "sdk/include/reactos/libs")]
     with ThreadPoolExecutor(max_workers=2) as pool:

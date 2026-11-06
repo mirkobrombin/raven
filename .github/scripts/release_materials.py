@@ -44,9 +44,9 @@ def main():
         materials.append(dict(name=f"reactos-{name}", cmake_keys=keys, source=str(source), sha256=digest(source),
                               recipe=str(recipe), notices=[str(path) for path in notices]))
         # The other upstream archives the component was built from as well, such as zlib's own release.
-        for other in sorted(directory.glob("*-source.tar.gz")):
+        for other in sorted(directory.glob("*-source.tar.*")):
             if other != source:
-                materials.append(dict(name=f"{other.name.removesuffix('-source.tar.gz')}-{name}", cmake_keys=keys, source=str(other),
+                materials.append(dict(name=f"{other.name.split('-source.tar.')[0]}-{name}", cmake_keys=keys, source=str(other),
                                       sha256=digest(other), recipe=str(recipe), notices=[str(path) for path in notices]))
     output.write_text(json.dumps(materials, indent=2) + "\n")
     print(f"{len(materials)} components with source materials")

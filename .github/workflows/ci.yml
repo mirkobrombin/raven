@@ -199,7 +199,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "${TARGET}/reactos-source.tar.gz" "${TARGET}/source" "${TARGET}"/*-source.tar.gz "${TARGET}"/*-source
+          rm -rf "${TARGET}/reactos-source.tar.gz" "${TARGET}/source" "${TARGET}"/*-source.tar.* "${TARGET}"/*-source
 
       # Artifacts drop file modes, so the component travels as an archive.
       - name: Pack component

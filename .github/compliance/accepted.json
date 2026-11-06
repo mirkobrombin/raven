@@ -153,13 +153,7 @@
     {
       "rule": "INJ-001",
       "path": "scripts/provision-installer.py",
-      "text": "xml += list(pool.map(lambda path: compile(path, \"libxml2_\" + path.stem, xml_flags, wine_module=False), xml_sources))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "xml = [compile(iconv_root / \"win_iconv.c\", \"iconv_win_iconv\", xml_flags, wine_module=False)]",
+      "text": "xml = list(pool.map(lambda path: compile(path, \"libxml2_\" + path.stem, xml_flags, wine_module=False), xml_sources))",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
