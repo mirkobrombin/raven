@@ -4,9 +4,9 @@
 installs with from the pinned ReactOS archive the common controls component uses
 (`dacf2a6c47fa562799f9c8a41ab6d5c558556558`, SHA-256
 `5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69`), for 64-bit
-programs and, with `--arch x86`, for 32-bit ones. zlib and the Independent JPEG Group's
-library come from their own releases, pinned by SHA-256 in the script (zlib 1.3.1, IJG
-JPEG 10), kept beside the components as `NAME-VERSION-source.tar.gz` with their notices
+programs and, with `--arch x86`, for 32-bit ones. zlib, the Independent JPEG Group's
+library and LibTIFF come from their own releases, pinned by SHA-256 in the script (zlib
+1.3.1, IJG JPEG 10, LibTIFF 4.7.1, configured by the script for Windows), kept beside the components as `NAME-VERSION-source.tar.gz` with their notices
 under `licenses/NAME-VERSION`. The components are:
 
 - `msi.dll` and `msiexec.exe`: Raven's own from [`native/upstream/raven-msi`](../raven-msi/README.md),
@@ -26,7 +26,7 @@ under `licenses/NAME-VERSION`. The components are:
 - the imaging stack: `windowscodecs.dll` (Raven's own, from
   [`native/upstream/raven-windowscodecs`](../raven-windowscodecs/README.md)), `gdiplus.dll` (Raven's own, from
   [`native/upstream/raven-gdiplus`](../raven-gdiplus/README.md)), `mlang.dll` (Raven's own, from
-  [`native/upstream/raven-mlang`](../raven-mlang/README.md)) and `libjpeg.dll` (IJG JPEG 10) and `libtiff.dll` (`dll/3rdparty`), which the codecs import (PNG is decoded by `windowscodecs.dll` itself);
+  [`native/upstream/raven-mlang`](../raven-mlang/README.md)) and `libjpeg.dll` (IJG JPEG 10) and `libtiff.dll` (LibTIFF 4.7.1), which the codecs import (PNG is decoded by `windowscodecs.dll` itself);
 - `advpack.dll`: Raven's own from [`native/upstream/raven-advpack`](../raven-advpack/README.md): the setup helpers IExpress packages and the
   DirectX setup run INF files through;
 - `raven-appx.dll` (`native/upstream/raven-appx`, Raven code on the same zlib): the

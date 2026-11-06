@@ -19,8 +19,7 @@ from component_licenses import mark_patched_sources, preserve_notices
 REVISION = "dacf2a6c47fa562799f9c8a41ab6d5c558556558"
 ARCHIVE_SHA256 = "5373bbbb60541cb2a49e0acb53360e1218d4f5d56c31f9187b341b9fc16daa69"
 PREFIXES = ("sdk/include/", "sdk/lib/pseh/", "sdk/tools/hpp/",
-            "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/",
-            "dll/3rdparty/libtiff/")
+            "sdk/lib/3rdparty/libxml2/", "sdk/lib/3rdparty/libwin-iconv/", "dll/3rdparty/libxslt/")
 # Interface headers the installer sources include, generated from the public IDL files with what they import.
 IDLS = ("objidlbase", "commoncontrols", "fusion", "msxml2", "oaidl", "ocidl", "objidl", "unknwn", "wtypes", "propidl", "urlmon", "shobjidl", "servprov", "docobj", "oleidl",
         "exdisp", "activscp", "shldisp", "mshtml", "xmldom", "imnact", "msctf", "shtypes", "oleacc", "comcat", "mscoree", "wincodec", "dispex",
@@ -33,7 +32,16 @@ UPSTREAM = {
                  url="https://github.com/madler/zlib/releases/download/v{version}/zlib-{version}.tar.gz", notices=("LICENSE", "README")),
     "libjpeg": dict(version="10", sha256="8b9eaa13242690ebd03e1728ab1edf97a81a78ed6e83624d493655f31ac95ab5",
                     url="https://www.ijg.org/files/jpegsrc.v{version}.tar.gz", notices=("README",)),
+    "libtiff": dict(version="4.7.1", sha256="f698d94f3103da8ca7438d84e0344e453fe0ba3b7486e04c5bf7a9a3fabe9b69",
+                    url="https://download.osgeo.org/libtiff/tiff-{version}.tar.gz", notices=("LICENSE.md", "README.md")),
 }
+# libtiff's sources; the codecs whose support is not configured below compile to nothing.
+TIFF_SOURCES = ("tif_aux.c", "tif_close.c", "tif_codec.c", "tif_color.c", "tif_compress.c", "tif_dir.c", "tif_dirinfo.c", "tif_dirread.c",
+                "tif_dirwrite.c", "tif_dumpmode.c", "tif_error.c", "tif_extension.c", "tif_fax3.c", "tif_fax3sm.c", "tif_flush.c", "tif_getimage.c",
+                "tif_hash_set.c", "tif_jbig.c", "tif_jpeg.c", "tif_jpeg_12.c", "tif_lerc.c", "tif_luv.c", "tif_lzma.c", "tif_lzw.c", "tif_next.c",
+                "tif_ojpeg.c", "tif_open.c", "tif_packbits.c", "tif_pixarlog.c", "tif_predict.c", "tif_print.c", "tif_read.c", "tif_strip.c",
+                "tif_swab.c", "tif_thunder.c", "tif_tile.c", "tif_version.c", "tif_warning.c", "tif_webp.c", "tif_write.c", "tif_zip.c", "tif_zstd.c",
+                "tif_win32.c")
 ZLIB = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
 COMPONENTS = ("cabinet.dll", "sxs.dll", "rpcrt4.dll", "msi.dll", "raven-storage.dll", "msiexec.exe", "msxml3.dll", "atl100.dll", "oleaut32.dll", "libjpeg.dll",
               "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "raven-setupapi.dll", "xmllite.dll",
@@ -60,6 +68,20 @@ def spec_exports(spec, name, x86):
             entry = f"{symbol}={symbol}@{size}"
         lines.append(f" {entry} @{ordinal}" + (" PRIVATE" if "-private" in options.split() else ""))
     return "\n".join(lines) + "\n"
+
+
+# CMake's configure_file for the templates of a library: #cmakedefine lines become definitions for the names set, and @NAME@ the values,
+# empty for a name not set as CMake leaves it.
+def configure_file(template, target, values):
+    def line(text):
+        match = re.match(r"#(\s*)cmakedefine (\w+)(.*)", text)
+        if match:
+            indent, name, rest = match.groups()
+            return f"#{indent}define {name}{rest}" if values.get(name) else f"/* #{indent}undef {name} */"
+        return text
+    text = "\n".join(line(text) for text in template.read_text().splitlines()) + "\n"
+    text = re.sub(r"@(\w+)@", lambda match: str(values.get(match.group(1), "")), text)
+    target.write_text(text)
 
 
 # Downloads an archive beside where it belongs and moves it into place once its checksum matches, so an interrupted download is not kept;
@@ -113,7 +135,7 @@ def main():
                 target = unpacked.joinpath(*parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(upstream.extractfile(member).read())
-    zlib_source, jpeg_source = upstream_sources["zlib"], upstream_sources["libjpeg"]
+    zlib_source, jpeg_source, tiff_source = upstream_sources["zlib"], upstream_sources["libjpeg"], upstream_sources["libtiff"] / "libtiff"
     # The library's own configuration for Windows compilers, which keeps boolean an unsigned char as the platform headers have it.
     shutil.copyfile(jpeg_source / "jconfig.vc", jpeg_source / "jconfig.h")
     source = output / "source"
@@ -456,7 +478,6 @@ def main():
 
     plain = ["-U__WINESRC__", "-U_WINE", "-D_CRT_DECLARE_NONSTDC_NAMES=1", "-D_DLL", "-DWIN32", "-D_WINDOWS"]
     entry_object = compile(support / "dllmain.c", "plain_dllmain")
-    libs = source / "sdk/include/reactos/libs"
     # libjpeg.dll: the library's sources as its makefile lists them, with the memory manager that needs no temporary files, exporting the
     # whole interface jpeglib.h declares.
     jpeg_sources = re.search(r"^LIBSOURCES *=(.*?)\n\n", (jpeg_source / "Makefile.am").read_text(), re.S | re.M).group(1)
@@ -464,8 +485,25 @@ def main():
     jpeg_interface = sorted(set(re.findall(r"EXTERN\([^)]*\) +(jpeg_\w+)", (jpeg_source / "jpeglib.h").read_text())))
     (jpeg_source / "libjpeg.spec").write_text("".join(f"@ cdecl {name}()\n" for name in jpeg_interface))
     library("libjpeg.dll", jpeg_source, [*plain, "-I" + str(jpeg_source)], wine_module=False, sources=jpeg_sources, objects_more=[entry_object])
-    library("libtiff.dll", source / "dll/3rdparty/libtiff", [*plain, "-DNDEBUG=", "-DUSE_WIN32_FILEIO", "-DTIF_PLATFORM_CONSOLE", "-I" + str(libs / "libtiff"),
-            "-I" + str(jpeg_source), "-I" + str(zlib_include)], ["libjpeg", "user32"], wine_module=False, objects_more=[*zlib, entry_object])
+    # libtiff.dll: configured as its CMake build would be for Windows, with the codecs on JPEG and zlib and the ones needing other
+    # libraries left out, exporting the interface its own definition file lists.
+    size = 4 if x86 else 8
+    configure_file(tiff_source / "tif_config.h.cmake.in", tiff_source / "tif_config.h", dict(
+        CCITT_SUPPORT=1, CHECK_JPEG_YCBCR_SUBSAMPLING=1, HAVE_ASSERT_H=1, HAVE_FCNTL_H=1, HAVE_FSEEKO=1, HAVE_IO_H=1, HAVE_SETMODE=1,
+        HAVE_STRINGS_H=1, HAVE_SYS_TYPES_H=1, HAVE_UNISTD_H=1, USE_WIN32_FILEIO=1, STRIP_SIZE_DEFAULT=8192, TIFF_MAX_DIR_COUNT=1048576,
+        SIZEOF_SIZE_T=size, LIBJPEG_12_PATH="", PACKAGE_NAME="LibTIFF Software", PACKAGE_BUGREPORT="tiff@lists.osgeo.org",
+        PACKAGE_TARNAME="tiff", PACKAGE_URL=""))
+    configure_file(tiff_source / "tiffconf.h.cmake.in", tiff_source / "tiffconf.h", dict(
+        TIFF_INT8_T="int8_t", TIFF_INT16_T="int16_t", TIFF_INT32_T="int32_t", TIFF_INT64_T="int64_t", TIFF_UINT8_T="uint8_t",
+        TIFF_UINT16_T="uint16_t", TIFF_UINT32_T="uint32_t", TIFF_UINT64_T="uint64_t", TIFF_SSIZE_T=f"int{size * 8}_t", HAVE_IEEEFP=1,
+        HOST_BIG_ENDIAN=0, CCITT_SUPPORT=1, JPEG_SUPPORT=1, LOGLUV_SUPPORT=1, LZW_SUPPORT=1, NEXT_SUPPORT=1, PACKBITS_SUPPORT=1,
+        PIXARLOG_SUPPORT=1, THUNDER_SUPPORT=1, ZIP_SUPPORT=1, STRIPCHOP_DEFAULT=1, SUBIFD_SUPPORT=1, DEFAULT_EXTRASAMPLE_AS_ALPHA=1,
+        CHECK_JPEG_YCBCR_SUBSAMPLING=1, MDI_SUPPORT=1))
+    tiff_interface = (tiff_source / "libtiff.def").read_text().split("EXPORTS", 1)[1].split()
+    (tiff_source / "libtiff.spec").write_text("".join(f"@ cdecl {name}()\n" for name in tiff_interface))
+    library("libtiff.dll", tiff_source, [*plain, "-DNDEBUG=", "-DALLOW_TIFF_NON_EXT_ALLOC_FUNCTIONS", "-I" + str(tiff_source),
+            "-I" + str(jpeg_source), "-I" + str(zlib_include)], ["libjpeg", "user32"], wine_module=False,
+            sources=[tiff_source / name for name in TIFF_SOURCES], objects_more=[*zlib, entry_object])
     registration = ("register.c", "dll_register.c", "dll_canunload.c")
     # propsys.dll: property values, the in-memory store and the system's property table, generated from the public key list.
     own_propsys = repo / "native/upstream/raven-propsys"
@@ -507,7 +545,7 @@ def main():
     for path in [*sorted(own_codecs.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
         target = objects / ("codecs_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
-             "-I" + str(jpeg_source), "-I" + str(libs / "libtiff"), "-w", path, "-o", target])
+             "-I" + str(jpeg_source), "-I" + str(tiff_source), "-w", path, "-o", target])
         codecs_objects.append(target)
     codecs_exports = (own_codecs / "exports.txt").read_text()
     (output / "windowscodecs.def").write_text("LIBRARY windowscodecs.dll\nEXPORTS\n" + codecs_exports)
