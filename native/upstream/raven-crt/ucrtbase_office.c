@@ -1365,5 +1365,6 @@ __asm__(".section .drectve\n\t.ascii \""
 	SAME(iswprint) SAME(iswspace) SAME(iswxdigit) SAME(localeconv) SAME(malloc) SAME(qsort) SAME(realloc) SAME(setlocale) SAME(strcat_s)
 	SAME(strcpy_s) SAME(strncat_s) SAME(strncpy_s) SAME(terminate) SAME(tolower) SAME(towlower) SAME(wcscat_s) SAME(wcscpy_s)
 	SAME(wcsncat_s) SAME(wcsncpy_s) SAME(wcstoul) SAME(wmemcpy_s)
+	SAME(__stdio_common_vsprintf) SAME(_fpclass) SAME(_get_osfhandle) SAME(isalnum) SAME(isalpha) SAME(isdigit) SAME(isprint) SAME(toupper)
 	"\"\n\t.text");
 #undef SAME

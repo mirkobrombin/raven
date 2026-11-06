@@ -1006,3 +1006,4 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 #include "ucrtbase_more.c"
 #include "ucrtbase_fiber.c"
 #include "ucrtbase_office.c"
+#include "ucrtbase_vc2022.c"
