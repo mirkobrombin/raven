@@ -1140,7 +1140,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set(THEME_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/theme-fixture.exe)
         add_custom_command(OUTPUT ${THEME_FIXTURE}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
-                -o ${THEME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/theme_client.c -luxtheme -luser32 -lkernel32
+                -o ${THEME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/theme_client.c -luxtheme -lgdi32 -luser32 -lkernel32
             DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/theme_client.c VERBATIM)
         add_custom_target(theme_pe_fixture ALL DEPENDS ${THEME_FIXTURE})
         add_test(NAME native_theme_dark_cli COMMAND raven --run-process --execution=native ${THEME_FIXTURE})
@@ -3348,11 +3348,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_winhttp_x32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/x86-winhttp-client.exe)
                     set_tests_properties(native_winhttp_x32 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
-                # Dark visual style variants, and the dark mode functions taken by number.
+                # Dark visual style variants, the dark mode functions taken by number, and the dialog, menu and tooltip parts.
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-theme-client.exe
                     COMMAND ${RAVEN_MINGW32} -nostdlib -O1 -fno-builtin -fno-stack-protector
                         -Wl,--entry,_raven_entry,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86-theme-client.exe
-                        ${LOADER_SOURCES}/theme_client.c -luxtheme -luser32 -lkernel32
+                        ${LOADER_SOURCES}/theme_client.c -luxtheme -lgdi32 -luser32 -lkernel32
                     DEPENDS ${LOADER_SOURCES}/theme_client.c VERBATIM)
                 add_custom_target(x86_theme_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-theme-client.exe)
                 add_test(NAME native_theme_dark_x32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/x86-theme-client.exe)
