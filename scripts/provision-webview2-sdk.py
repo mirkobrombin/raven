@@ -67,7 +67,7 @@ def main():
     parser = argparse.ArgumentParser(description="Provision the pinned WebView2 SDK headers")
     parser.add_argument("--destination", type=Path, required=True)
     arguments = parser.parse_args()
-    manifest = Path(__file__).resolve().parent.parent / "native/upstream/raven-webview/webview2-sdk.json"
+    manifest = Path(__file__).resolve().parent.parent / "native/guest/raven-webview/webview2-sdk.json"
     try:
         provision(arguments.destination.resolve(), json.loads(manifest.read_text()))
     except (OSError, RuntimeError, zipfile.BadZipFile) as error:

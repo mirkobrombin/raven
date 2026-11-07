@@ -21,7 +21,9 @@
 
 "area: guest":
   - changed-files:
-      - any-glob-to-any-file: native/upstream/**
+      - any-glob-to-any-file:
+          - native/guest/**
+          - native/upstream/**
 
 "area: build":
   - changed-files:

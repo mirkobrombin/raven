@@ -2,67 +2,67 @@
   "accepted": [
     {
       "rule": "MEM-001",
-      "path": "native/upstream/raven-comctl32/crt.c",
+      "path": "native/guest/raven-comctl32/crt.c",
       "text": "char *strcpy(char *destination, const char *source)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "MEM-001",
-      "path": "native/upstream/raven-comctl32/crt.c",
+      "path": "native/guest/raven-comctl32/crt.c",
       "text": "strcpy(destination + strlen(destination), source);",
       "reason": "The guest C runtime's strcat, which has the same unbounded contract as the function it implements."
     },
     {
       "rule": "MEM-002",
-      "path": "native/upstream/raven-comctl32/crt.c",
+      "path": "native/guest/raven-comctl32/crt.c",
       "text": "int sprintf(char *buffer, const char *format, ...)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "MEM-001",
-      "path": "native/upstream/raven-crt/ucrtbase.c",
+      "path": "native/guest/raven-crt/ucrtbase.c",
       "text": "CRT char *strcpy(char *to, const char *from)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "MEM-001",
-      "path": "native/upstream/raven-crt/ucrtbase.c",
+      "path": "native/guest/raven-crt/ucrtbase.c",
       "text": "strcpy(to + strlen(to), from);",
       "reason": "The guest C runtime's strcat, which has the same unbounded contract as the function it implements."
     },
     {
       "rule": "MEM-002",
-      "path": "native/upstream/raven-crt/ucrtbase_legacy.c",
+      "path": "native/guest/raven-crt/ucrtbase_legacy.c",
       "text": "CRT int sprintf(char *buffer, const char *text, ...)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "INJ-001",
-      "path": "native/upstream/raven-msxml3/make_idl.py",
+      "path": "native/guest/raven-msxml3/make_idl.py",
       "text": "ENUM = re.compile(r'typedef\\s+enum\\s+(\\w+)\\s*\\{(.*?)\\}\\s*(\\w+)\\s*;', re.S)",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
       "rule": "INJ-001",
-      "path": "native/upstream/raven-msxml3/make_idl.py",
+      "path": "native/guest/raven-msxml3/make_idl.py",
       "text": "INTERFACE = re.compile(r'MIDL_INTERFACE\\(\"([0-9a-fA-F-]+)\"\\)\\s*(\\w+)\\s*:\\s*public\\s+(\\w+)\\s*\\{(.*?)\\n\\};', re.S)",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
       "rule": "INJ-001",
-      "path": "native/upstream/raven-msxml3/make_idl.py",
+      "path": "native/guest/raven-msxml3/make_idl.py",
       "text": "METHOD = re.compile(r'virtual\\s+HRESULT\\s+STDMETHODCALLTYPE\\s+(\\w+)\\(\\s*(.*?)\\)\\s*=\\s*0;', re.S)",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
       "rule": "INJ-001",
-      "path": "native/upstream/raven-propsys/make_schema.py",
+      "path": "native/guest/raven-propsys/make_schema.py",
       "text": "LISTS = re.compile(r\"(Authors|Keywords|Ids|Addresses|Names|Categories|Artists|Composers|Contributors|Genre|Tags|Participants|Recipients|Conductors|Publishers)$\")",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },
     {
       "rule": "INJ-001",
-      "path": "native/upstream/raven-propsys/make_schema.py",
+      "path": "native/guest/raven-propsys/make_schema.py",
       "text": "pattern = re.compile(r\"DEFINE_PROPERTYKEY\\(PKEY_(\\w+),\\s*0x([0-9a-f]+),\\s*0x([0-9a-f]+),\\s*0x([0-9a-f]+),\\s*((?:0x[0-9a-f]+,\\s*){8})(\\d+)\\)\")",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     },

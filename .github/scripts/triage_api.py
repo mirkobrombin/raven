@@ -45,8 +45,8 @@ def answer(name):
     files = git("grep", "-l", "-F", handler, "--", "native").split()
     if files:
         return files[0], handler
-    exported = git("grep", "-l", "-w", "-E", rf"^\s*{name}(\s|=|@|$)", "--", "native/upstream/*.def", "native/upstream/*exports.txt").split()
-    defined = git("grep", "-l", "-E", rf"^(CRT|EXPORT|__declspec\(dllexport\))[^(]*\b{name}\s*\(", "--", "native/upstream").split()
+    exported = git("grep", "-l", "-w", "-E", rf"^\s*{name}(\s|=|@|$)", "--", "native/guest/*.def", "native/guest/*exports.txt").split()
+    defined = git("grep", "-l", "-E", rf"^(CRT|EXPORT|__declspec\(dllexport\))[^(]*\b{name}\s*\(", "--", "native/guest").split()
     if exported or defined:
         return (exported or defined)[0], name
     return None

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check that LICENSES.json still describes the tree.
 
-Every tracked file of a Raven guest component under native/upstream/raven-* is listed by a component, because those files
-are MIT while the rest of native/ is GPL. Every listed path exists, every license is an SPDX identifier or a declared
-reference, and each imported source directory carries its own notices.
+Every tracked file of a Raven guest component under native/guest/ is listed by a component, because those files are MIT
+while the rest of native/ is GPL. Every listed path exists, every license is an SPDX identifier or a declared reference,
+and each third-party directory under native/upstream/ carries its own notices.
 
 usage: check_licenses.py
 """
@@ -13,6 +13,7 @@ import pathlib
 import subprocess
 import sys
 
+GUEST = "native/guest/"
 UPSTREAM = "native/upstream/"
 NOTICES = ("LICENSE", "LICENSE.md", "COPYING", "README.md", "provenance.json")
 KNOWN = {"GPL-2.0-only", "GPL-3.0-or-later", "MIT", "Unicode-3.0", "blessing", "BSD-3-Clause", "Apache-2.0", "Zlib", "libpng-2.0"}
@@ -34,7 +35,7 @@ def main():
         for path in component.get("paths", ()):
             if path not in tracked and not any(name.startswith(path.rstrip("/") + "/") for name in tracked):
                 fail(f"{component['name']} lists {path}, which is not tracked")
-            if path.startswith(UPSTREAM):
+            if path.startswith(GUEST):
                 listed.add(path.rstrip("/"))
         for key in ("license", "distribution_license", "source_terms"):
             value = component.get(key)
@@ -46,14 +47,13 @@ def main():
         return any("/".join(parts[:end]) in listed for end in range(3, len(parts) + 1))
 
     for name in sorted(tracked):
-        if not name.startswith(UPSTREAM):
-            continue
-        directory = name[len(UPSTREAM):].split("/", 1)[0]
-        if directory.startswith("raven-"):
+        if name.startswith(GUEST):
             if not covered(name):
                 fail("not listed by any component of LICENSES.json", name)
-        elif not any(f"{UPSTREAM}{directory}/{notice}" in tracked for notice in NOTICES):
-            fail(f"imported source has no {', '.join(NOTICES)}", f"{UPSTREAM}{directory}")
+        elif name.startswith(UPSTREAM):
+            directory = name[len(UPSTREAM):].split("/", 1)[0]
+            if not any(f"{UPSTREAM}{directory}/{notice}" in tracked for notice in NOTICES):
+                fail(f"imported source has no {', '.join(NOTICES)}", f"{UPSTREAM}{directory}")
     print(f"{len(tracked)} tracked files, {len(listed)} listed paths, {failed} problems")
     return 1 if failed else 0
 

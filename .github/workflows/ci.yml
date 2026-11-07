@@ -109,23 +109,23 @@ jobs:
           - component: rtl
             arguments: --output
             recipe: scripts/provision-rtl.py
-            sources: native/upstream/raven-rtl/**
+            sources: native/guest/raven-rtl/**
           - component: controls
             arguments: --arch x64 --output
             recipe: scripts/provision-controls.py
-            sources: native/upstream/raven-*/**
+            sources: native/guest/raven-*/**
           - component: controls32
             arguments: --arch x86 --output
             recipe: scripts/provision-controls.py
-            sources: native/upstream/raven-*/**
+            sources: native/guest/raven-*/**
           - component: installer
             arguments: --arch x64 --output
             recipe: scripts/provision-installer.py
-            sources: native/upstream/**
+            sources: native/guest/**
           - component: installer32
             arguments: --arch x86 --output
             recipe: scripts/provision-installer.py
-            sources: native/upstream/**
+            sources: native/guest/**
           - component: sqlite
             arguments: --output
             recipe: scripts/provision-sqlite.py

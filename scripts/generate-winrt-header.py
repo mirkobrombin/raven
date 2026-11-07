@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes native/upstream/raven-winrt/foundation.h and native/upstream/raven-web/windows.web.http.h, the Windows Runtime types Raven's
+"""Writes native/guest/raven-winrt/foundation.h and native/guest/raven-web/windows.web.http.h, the Windows Runtime types Raven's
 components use as C declarations, from Microsoft's Windows metadata as the windows-rs project distributes it (MIT OR Apache-2.0, used
 under MIT). Its generated bindings give each interface's identifier, the order of its methods and their signatures, the raw vtable layout
 each method is checked against, and the type signatures the identifiers of generic instances are computed from, as the Windows Runtime
@@ -45,8 +45,8 @@ HEADERS = ("inspectable.h", "asyncinfo.h", "eventtoken.h")
 GLOBAL = {"Windows.Foundation.AsyncStatus": "AsyncStatus", "Windows.Foundation.IAsyncInfo": "IAsyncInfo",
           "Windows.Foundation.EventRegistrationToken": "EventRegistrationToken"}
 ROOT = Path(__file__).resolve().parents[1]
-FOUNDATION_TARGET = ROOT / "native/upstream/raven-winrt/foundation.h"
-TARGET = ROOT / "native/upstream/raven-web/windows.web.http.h"
+FOUNDATION_TARGET = ROOT / "native/guest/raven-winrt/foundation.h"
+TARGET = ROOT / "native/guest/raven-web/windows.web.http.h"
 
 PRIM = {"bool": ("boolean", "b1"), "u8": ("BYTE", "u1"), "i8": ("INT8", "i1"), "u16": ("UINT16", "u2"), "i16": ("INT16", "i2"),
         "u32": ("UINT32", "u4"), "i32": ("INT32", "i4"), "u64": ("UINT64", "u8"), "i64": ("INT64", "i8"), "f32": ("FLOAT", "f4"),

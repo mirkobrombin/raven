@@ -12,7 +12,7 @@ GPLv3 license applied to every file.
 | --- | --- |
 | Linux `raven` and `raven-bootstrap` | GPL-3.0-or-later; root LICENSE |
 | Original Raven PE adapters | MIT; exact file list in LICENSES.json and terms in LICENSES/MIT.txt |
-| PE installer components | Raven code under MIT with zlib, libxml2, libxslt, IJG JPEG and LibTIFF under their own notices; pinned releases, recipe and patches in `scripts/provision-installer.py` and `native/upstream/raven-installer` |
+| PE installer components | Raven code under MIT with zlib, libxml2, libxslt, IJG JPEG and LibTIFF under their own notices; pinned releases, recipe and patches in `scripts/provision-installer.py` and `native/guest/raven-installer` |
 | CP1252 mapping data | Unicode-3.0; `native/upstream/windows-codepages/data-provenance.json` |
 | Code pages 1250, 1251 and 1253-1258 mapping data | Unicode-3.0; `native/upstream/windows-codepages/single-byte-provenance.json` |
 | Unicode decomposition data | Unicode terms; `native/upstream/unicode/LICENSE` and provenance.json |
@@ -23,8 +23,8 @@ GPLv3 license applied to every file.
 | DXVK, if bundled | zlib license and upstream notices; pinned version in `native/graphics/backends.json` |
 | vkd3d-proton, if bundled | LGPL-2.1-or-later and upstream notices; pinned version in the same record |
 | SQLite (`winsqlite3.dll`), if bundled | Public domain (SPDX `blessing`); unmodified amalgamation pinned in `scripts/provision-sqlite.py` |
-| Windows Runtime interface declarations | MIT (Microsoft's metadata from windows-rs); `native/upstream/raven-web/windows.web.http.h`, `native/upstream/raven-winrt/foundation.h` |
-| Windows packaging interface declarations | MIT (Microsoft's metadata from windows-rs); `native/upstream/raven-appx/appxpackaging.h` |
+| Windows Runtime interface declarations | MIT (Microsoft's metadata from windows-rs); `native/guest/raven-web/windows.web.http.h`, `native/guest/raven-winrt/foundation.h` |
+| Windows packaging interface declarations | MIT (Microsoft's metadata from windows-rs); `native/guest/raven-appx/appxpackaging.h` |
 
 The PE guest components run in the supervised Windows process; they are not
 linked or loaded into the Linux host.

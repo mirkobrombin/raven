@@ -90,7 +90,7 @@ def main():
     parser = argparse.ArgumentParser(description="Provision the pinned CEF runtime for the page engine")
     parser.add_argument("--destination", type=Path, required=True)
     arguments = parser.parse_args()
-    manifest = Path(__file__).resolve().parent.parent / "native/upstream/raven-webengine/cef.json"
+    manifest = Path(__file__).resolve().parent.parent / "native/guest/raven-webengine/cef.json"
     try:
         provision(arguments.destination.resolve(), json.loads(manifest.read_text()))
     except (OSError, RuntimeError, tarfile.TarError) as error:

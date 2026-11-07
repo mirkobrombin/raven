@@ -11,5 +11,5 @@
 
 - [ ] The title and every commit follow `type: describe the change` (CONTRIBUTING.md).
 - [ ] Commits with substantive AI assistance carry `Assisted-by` and `AI-Scope`, and no AI tool is credited as co-author.
-- [ ] New or changed files under `native/upstream/raven-*` are listed in `LICENSES.json`.
+- [ ] New or changed files under `native/guest/raven-*` are listed in `LICENSES.json`.
 - [ ] No Windows binaries, proprietary Windows material, or personal tool configuration is added.

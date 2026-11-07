@@ -19,7 +19,7 @@ def main():
     objects.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
     repo = Path(__file__).resolve().parents[1]
-    root = repo / "native/upstream/raven-rtl"
+    root = repo / "native/guest/raven-rtl"
     if not shutil.which("x86_64-w64-mingw32-gcc"):
         raise RuntimeError("required RTL build tool is missing: x86_64-w64-mingw32-gcc")
 

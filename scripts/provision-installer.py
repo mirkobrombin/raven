@@ -189,7 +189,7 @@ def main():
 
     # Raven's corrections to a library taken from its own release are kept as reviewable patches in a folder named after it, and recorded
     # in the provenance.
-    support = repo / "native/upstream/raven-installer"
+    support = repo / "native/guest/raven-installer"
     patches = []
     for name, unpacked in upstream_sources.items():
         own = sorted((support / "patches" / name).glob("*.patch"))
@@ -244,7 +244,7 @@ def main():
     # cabinet.dll: cabinet files, their compression and extraction, on zlib.
     zlib_include = zlib_source
     zlib = [compile(zlib_source / name, "zlib_" + Path(name).stem, ["-I" + str(zlib_include)]) for name in ZLIB]
-    cabinet_root = repo / "native/upstream/raven-cabinet"
+    cabinet_root = repo / "native/guest/raven-cabinet"
     with ThreadPoolExecutor(max_workers=2) as pool:
         cabinet = list(pool.map(lambda name: compile(cabinet_root / name, "cabinet_" + Path(name).stem,
                                                      ["-I" + str(cabinet_root), "-I" + str(zlib_include)]),
@@ -253,20 +253,20 @@ def main():
     link("cabinet.dll", bases["cabinet"], [*zlib, *cabinet], output / "cabinet.def", ["-lmsvcrt", "-lkernel32", "-lntdll", "-lgcc"],
          output / "libcabinet.a")
     # sxs.dll: the side-by-side assembly cache.
-    own_sxs = repo / "native/upstream/raven-sxs"
+    own_sxs = repo / "native/guest/raven-sxs"
     (output / "sxs.def").write_text("LIBRARY sxs.dll\nEXPORTS\n" + (own_sxs / "exports.txt").read_text())
     run([triple + "-gcc", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DCONST_VTABLE", "-shared", "-nostdlib",
          f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{bases['sxs']:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
-         "-o", output / "sxs.dll", own_sxs / "sxs.c", repo / "native/upstream/raven-comctl32/crt.c", output / "sxs.def", "-luuid", "-lole32", "-loleaut32", "-luser32", "-lkernel32", "-lgcc"])
+         "-o", output / "sxs.dll", own_sxs / "sxs.c", repo / "native/guest/raven-comctl32/crt.c", output / "sxs.def", "-luuid", "-lole32", "-loleaut32", "-luser32", "-lkernel32", "-lgcc"])
     # The installer engine links against the callers' view of these: on x86 their names carry their argument sizes.
     (output / "sxs_import.def").write_text("LIBRARY sxs.dll\nEXPORTS\n" + "".join(f" {name}{'@' + str(size) if x86 else ''}\n" for name, size in
                                            (("CreateAssemblyCache", 8), ("CreateAssemblyNameObject", 16), ("SxsLookupClrGuid", 24), ("SxspGenerateManifestPathOnAssemblyIdentity", 16))))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "sxs_import.def", "-l", output / "libsxs.a"])
     compile(support / "support.c", "installer_support")
     # rpcrt4.dll: Raven's own remote procedure calls, which the installer's custom action server speaks over local pipes.
-    own_rpc = repo / "native/upstream/raven-rpcrt4"
+    own_rpc = repo / "native/guest/raven-rpcrt4"
     rpc_objects = []
-    for path in [*sorted(own_rpc.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_rpc.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("rpcrt4_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCOBJMACROS", "-D_RPCRT4_", "-I" + str(own_rpc), "-o", target, path])
         rpc_objects.append(target)
@@ -279,9 +279,9 @@ def main():
         f" {name}{'' if rpc_defined.get(name) is None else '@' + str(rpc_defined[name])}\n" for name in (line.split()[0] for line in rpc_exports.splitlines() if line.strip()) if "PRIVATE" not in name))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "rpcrt4_import.def", "-l", output / "librpcrt4.a"])
     # msi.dll: the Windows Installer engine, Raven's own.
-    own_msi = repo / "native/upstream/raven-msi"
+    own_msi = repo / "native/guest/raven-msi"
     msi_objects = []
-    for path in [*sorted(p for p in own_msi.glob("*.c") if p.name != "msiexec.c"), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(p for p in own_msi.glob("*.c") if p.name != "msiexec.c"), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("msi_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCONST_VTABLE", "-D_CRTIMP=",
              "-I" + str(own_msi), path, "-o", target])
@@ -297,9 +297,9 @@ def main():
          ["-L" + str(output), "-lcabinet", "-lrpcrt4", "-l:liboleaut32.a",
           *[f"-l{library}" for library in ("advapi32", "ole32", "shell32", "user32", "gdi32", "version", "kernel32", "uuid", "gcc")]], implib=output / "libmsi.a")
     # raven-storage.dll: Raven's own structured storage, which the runtime's ole32 hands those exports to.
-    own_storage = repo / "native/upstream/raven-storage"
+    own_storage = repo / "native/guest/raven-storage"
     own_objects = []
-    for path in [*sorted(own_storage.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_storage.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("storage_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=c11", "-fno-builtin", "-D_WIN32_WINNT=0x600", "-DUNICODE", "-D_OLE32_", "-DCONST_VTABLE",
              "-I" + str(own_storage), path, "-o", target])
@@ -313,7 +313,7 @@ def main():
     # msiexec.exe: the command line of the installer, which installers and the shell start for packages.
     run([triple + "-gcc", "-O2", "-std=gnu11", "-fno-builtin", "-nostdlib", "-mwindows", "-D_WIN32_WINNT=0x601", "-DUNICODE",
          f"-Wl,--entry,{'_raven_msiexec@0' if x86 else 'raven_msiexec'},--no-insert-timestamp", "-I" + str(own_msi),
-         own_msi / "msiexec.c", repo / "native/upstream/raven-comctl32/crt.c", "-o", output / "msiexec.exe", "-L" + str(output), "-lmsi", "-luser32", "-lkernel32", "-lgcc"])
+         own_msi / "msiexec.c", repo / "native/guest/raven-comctl32/crt.c", "-o", output / "msiexec.exe", "-L" + str(output), "-lmsi", "-luser32", "-lkernel32", "-lgcc"])
     # msxml3.dll: the XML document object model installers and their bootstrappers parse their manifests with, on libxml2 and libxslt.
     # libxml2's configuration: its own one for Windows compilers, and the version header with the features listed above. Files are
     # examined with the C runtime's plain stat, for libxslt as well.
@@ -342,8 +342,8 @@ def main():
     with ThreadPoolExecutor(max_workers=2) as pool:
         xslt = list(pool.map(lambda path: compile(path, "libxslt_" + path.stem, xslt_flags), sorted((xslt_root / "libxslt").glob("*.c"))))
     # Its registration scripts' type library comes from the public headers, and stays with stdole2's for what else needs it.
-    run([*widl, "-t", "-T", generated / "stdole2.tlb", repo / "native/upstream/raven-oleaut32/stdole2.idl"])
-    own_msxml = repo / "native/upstream/raven-msxml3"
+    run([*widl, "-t", "-T", generated / "stdole2.tlb", repo / "native/guest/raven-oleaut32/stdole2.idl"])
+    own_msxml = repo / "native/guest/raven-msxml3"
     headers = mingw_include("msxml2.h")
     run([sys.executable, own_msxml / "make_idl.py", headers / "msxml2.h", headers / "msxml2did.h", headers / "msxml.h", generated / "msxml3.idl"])
     run([*widl, "-I", headers, "-L", generated, "-t", "-o", generated / "msxml3.tlb", generated / "msxml3.idl"])
@@ -361,18 +361,18 @@ def main():
          "-o", output / "msxml3.dll", *msxml_objects, *xslt, *xml, *zlib, objects / "installer_support.o", output / "msxml3.def", output / "libcrtmath.a",
          *runtime(f"-l{library}" for library in ("urlmon", "ws2_32", "shlwapi", "oleaut32", "ole32", "user32", "advapi32", "msvcrt", "mingwex", "kernel32", "ntdll", "uuid", "gcc", "kernel32", "msvcrt", "kernel32"))])
     # atl100.dll: the ATL registrar, which reads the registration scripts libraries register their classes with, and the control host.
-    own_atl = repo / "native/upstream/raven-atl100"
+    own_atl = repo / "native/guest/raven-atl100"
     atl_objects = []
     for part in ("module", "registrar", "ax"):
         atl_objects.append(objects / ("atl100_" + part + ".o"))
         run([triple + "-gcc", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DCONST_VTABLE", "-D_CRTIMP=", "-w", "-c", "-o", atl_objects[-1], own_atl / (part + ".c")])
     (output / "atl100.def").write_text("LIBRARY atl100.dll\nEXPORTS\n" + (own_atl / "exports.txt").read_text())
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{bases['atl']:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
-         "-o", output / "atl100.dll", *atl_objects, repo / "native/upstream/raven-comctl32/crt.c", output / "atl100.def", "-luuid", "-lole32", "-loleaut32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
+         "-o", output / "atl100.dll", *atl_objects, repo / "native/guest/raven-comctl32/crt.c", output / "atl100.def", "-luuid", "-lole32", "-loleaut32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
     # oleaut32.dll: Raven's own automation, variants, safe arrays and type libraries, carrying the standard type library.
-    own_oleaut = repo / "native/upstream/raven-oleaut32"
+    own_oleaut = repo / "native/guest/raven-oleaut32"
     oleaut_objects = []
-    for path in [*sorted(own_oleaut.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_oleaut.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("oleaut32_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_OLEAUT32_", "-DCONST_VTABLE", "-D_CRTIMP=", "-I" + str(own_oleaut), path, "-o", target])
         oleaut_objects.append(target)
@@ -434,7 +434,7 @@ def main():
             sources=[tiff_source / name for name in TIFF_SOURCES], objects_more=[*zlib, entry_object])
     registration = ("register.c", "dll_register.c", "dll_canunload.c")
     # propsys.dll: property values, the in-memory store and the system's property table, generated from the public key list.
-    own_propsys = repo / "native/upstream/raven-propsys"
+    own_propsys = repo / "native/guest/raven-propsys"
     propsys_flags = ["-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DCONST_VTABLE", "-DINITGUID", "-D_PROPSYS_", "-I" + str(generated)]
     run([sys.executable, own_propsys / "make_schema.py", mingw_include("propkey.h") / "propkey.h", generated / "schema.inc"])
     propsys_objects = []
@@ -444,7 +444,7 @@ def main():
     (output / "propsys.def").write_text("LIBRARY propsys.dll\nEXPORTS\n" + (own_propsys / "exports.txt").read_text())
     next_base[0] -= 0x400000 if x86 else 0x4000000
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
-         "-o", output / "propsys.dll", *propsys_objects, repo / "native/upstream/raven-comctl32/crt.c", output / "propsys.def", "-luuid", "-lole32", "-loleaut32", "-ladvapi32", "-luser32", "-lkernel32", "-lgcc"])
+         "-o", output / "propsys.dll", *propsys_objects, repo / "native/guest/raven-comctl32/crt.c", output / "propsys.def", "-luuid", "-lole32", "-loleaut32", "-ladvapi32", "-luser32", "-lkernel32", "-lgcc"])
     # Other components link against the callers' view: on x86 the names carry their argument sizes, which only the objects know.
     wanted = {line.split("=")[0].strip() for line in (own_propsys / "exports.txt").read_text().splitlines() if "=" not in line}
     propsys_names = sorted({word.lstrip("_") for line in subprocess.run([triple + "-nm", "-g", "--defined-only", *map(str, propsys_objects)], env=env, check=True, capture_output=True, text=True).stdout.splitlines()
@@ -452,7 +452,7 @@ def main():
     (output / "propsys_import.def").write_text("LIBRARY propsys.dll\nEXPORTS\n" + "".join(f" {name}\n" for name in propsys_names))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "propsys_import.def", "-l", output / "libpropsys.a"])
     # mlang.dll: code pages, language tags and font linking.
-    own_mlang = repo / "native/upstream/raven-mlang"
+    own_mlang = repo / "native/guest/raven-mlang"
     mlang_objects = []
     for part in ("pages", "tags", "fontlink", "language", "main"):
         mlang_objects.append(objects / ("mlang_" + part + ".o"))
@@ -460,7 +460,7 @@ def main():
     (output / "mlang.def").write_text("LIBRARY mlang.dll\nEXPORTS\n" + (own_mlang / "exports.txt").read_text())
     next_base[0] -= 0x400000 if x86 else 0x4000000
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
-         "-o", output / "mlang.dll", *mlang_objects, repo / "native/upstream/raven-comctl32/crt.c", output / "mlang.def", "-luuid", "-lole32", "-loleaut32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
+         "-o", output / "mlang.dll", *mlang_objects, repo / "native/guest/raven-comctl32/crt.c", output / "mlang.def", "-luuid", "-lole32", "-loleaut32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
     wanted = {line.split()[0] for line in (own_mlang / "exports.txt").read_text().splitlines() if "PRIVATE" not in line}
     mlang_names = sorted({word.lstrip("_") for line in subprocess.run([triple + "-nm", "-g", "--defined-only", *map(str, mlang_objects)], env=env, check=True, capture_output=True, text=True).stdout.splitlines()
                         for word in line.split()[-1:] if word.lstrip("_").split("@")[0] in wanted})
@@ -468,9 +468,9 @@ def main():
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "mlang_import.def", "-l", output / "libmlang.a"])
     # windowscodecs.dll: Raven's own imaging component; JPEG and TIFF go through the libraries built above, named by path so
     # no export of the component can resolve to one of the installer's own import libraries.
-    own_codecs = repo / "native/upstream/raven-windowscodecs"
+    own_codecs = repo / "native/guest/raven-windowscodecs"
     codecs_objects = []
-    for path in [*sorted(own_codecs.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_codecs.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("codecs_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
              "-I" + str(jpeg_source), "-I" + str(tiff_source), "-w", path, "-o", target])
@@ -487,9 +487,9 @@ def main():
         f" {name}{'@' + str(codecs_defined[name]) if x86 and codecs_defined.get(name) is not None else ''}\n" for name in codecs_names))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "windowscodecs_import.def", "-l", output / "libwindowscodecs.a"])
     # gdiplus.dll: Raven's own drawing library, which reads and writes pictures through the imaging component.
-    own_gdiplus = repo / "native/upstream/raven-gdiplus"
+    own_gdiplus = repo / "native/guest/raven-gdiplus"
     gdiplus_objects = []
-    for path in [*sorted(own_gdiplus.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_gdiplus.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("gdiplus_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCOBJMACROS", "-D_CRTIMP=", "-I" + str(own_gdiplus), path, "-o", target])
         gdiplus_objects.append(target)
@@ -504,9 +504,9 @@ def main():
         f" {name}{'@' + str(gdiplus_defined[name]) if x86 and gdiplus_defined.get(name) is not None else ''}\n" for name in gdiplus_names))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "gdiplus_import.def", "-l", output / "libgdiplus.a"])
     # urlmon.dll: Raven's own. Ordinals without a name are the ones old callers import by.
-    own_urlmon = repo / "native/upstream/raven-urlmon"
+    own_urlmon = repo / "native/guest/raven-urlmon"
     urlmon_objects = []
-    for path in [*sorted(own_urlmon.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_urlmon.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("urlmon_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DCONST_VTABLE", "-D_CRTIMP=", "-I" + str(own_urlmon), path, "-o", target])
         urlmon_objects.append(target)
@@ -524,11 +524,11 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "urlmon.dll", *urlmon_objects, output / "urlmon.def", "-luuid", "-lole32", "-loleaut32", "-lshlwapi", "-ladvapi32", "-lwininet", "-luser32", "-lshell32", "-lkernel32", "-lgcc"])
     # riched20.dll: Raven's own rich edit control, with the type library of its text object model that its resources carry.
-    own_riched = repo / "native/upstream/raven-riched20"
+    own_riched = repo / "native/guest/raven-riched20"
     run([*widl, "-L", generated, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
     run([triple + "-windres", "-I", generated, own_riched / "resources.rc", "-o", objects / "riched20.res.o"])
     riched_objects = [objects / "riched20.res.o"]
-    for path in [*sorted(own_riched.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_riched.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("riched20_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_UNICODE", "-DCOBJMACROS", "-D_CRTIMP=", "-I" + str(own_riched), path, "-o", target])
         riched_objects.append(target)
@@ -548,7 +548,7 @@ def main():
     link("msftedit.dll", next_base[0], [compile(support / "msftedit.c", "msftedit", plain)], output / "msftedit.def",
          ["-L" + str(output), *[f"-l{library}" for library in ("riched20", "kernel32", "gcc")]])
     # msvfw32.dll: Raven's own video for Windows: the codec manager, DrawDib and the MCI window.
-    own_vfw = repo / "native/upstream/raven-msvfw32"
+    own_vfw = repo / "native/guest/raven-msvfw32"
     vfw_objects = []
     for part in ("codecs", "draw", "mciwnd", "main"):
         vfw_objects.append(objects / ("msvfw32_" + part + ".o"))
@@ -556,14 +556,14 @@ def main():
     (output / "msvfw32.def").write_text("LIBRARY msvfw32.dll\nEXPORTS\n" + (own_vfw / "exports.txt").read_text())
     next_base[0] -= 0x400000 if x86 else 0x4000000
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp,--enable-stdcall-fixup", *link_extra,
-         "-o", output / "msvfw32.dll", *vfw_objects, repo / "native/upstream/raven-comctl32/crt.c", output / "msvfw32.def", "-lcomdlg32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
+         "-o", output / "msvfw32.dll", *vfw_objects, repo / "native/guest/raven-comctl32/crt.c", output / "msvfw32.def", "-lcomdlg32", "-ladvapi32", "-lgdi32", "-luser32", "-lkernel32", "-lgcc"])
     # xmllite.dll: the streaming XML reader and writer, which the Office Click-to-Run client reads its configuration with.
-    xmllite_root = repo / "native/upstream/raven-xmllite"
+    xmllite_root = repo / "native/guest/raven-xmllite"
     library("xmllite.dll", xmllite_root, sources=[xmllite_root / name for name in ("guid.c", "reader.c", "writer.c")])
     # raven-appx.dll: the packaging API (the AppxFactory and AppxBundleFactory classes), which package managers read .appx and .msix
     # packages with. Raven code on the MinGW headers and the interface declarations generated from Microsoft's metadata; it reads the
     # manifests with xmllite and inflates with the zlib cabinet.dll is built on.
-    appx_root = repo / "native/upstream/raven-appx"
+    appx_root = repo / "native/guest/raven-appx"
     appx = []
     for name in ("package.c", "archive.c", "blockmap.c", "manifest.c", "support.c"):
         target = objects / ("appx_" + Path(name).stem + ".o")
@@ -575,9 +575,9 @@ def main():
     link("raven-appx.dll", next_base[0], [*appx, *zlib], output / "raven-appx.def",
          ["-L" + str(output), *[f"-l{library}" for library in ("xmllite", "urlmon", "ole32", "bcrypt", "msvcrt", "kernel32", "uuid", "gcc")]])
     # raven-setupapi.dll: Raven's own setup API, which the runtime's setupapi.dll hands those exports to.
-    own_setup = repo / "native/upstream/raven-setupapi"
+    own_setup = repo / "native/guest/raven-setupapi"
     setup_objects = []
-    for path in [*sorted(own_setup.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_setup.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("setup_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=c11", "-fno-builtin", "-D_WIN32_WINNT=0x600", "-DUNICODE", "-D_SETUPAPI_", "-D_SETUPAPI_VER=0x0600", "-DCONST_VTABLE",
              "-I" + str(own_setup), path, "-o", target])
@@ -592,9 +592,9 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "raven-setupapi.dll", *setup_objects, output / "raven-setupapi.def", "-lole32", "-lshell32", "-lversion", "-ladvapi32", "-luser32", "-lkernel32", "-luuid", "-lgcc"])
     # advpack.dll: Raven's own, over that setup API. Its export order gives the ordinals old callers import by.
-    own_advpack = repo / "native/upstream/raven-advpack"
+    own_advpack = repo / "native/guest/raven-advpack"
     advpack_objects = []
-    for path in [*sorted(own_advpack.glob("*.c")), repo / "native/upstream/raven-comctl32/crt.c"]:
+    for path in [*sorted(own_advpack.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("advpack_" + path.stem + ".o")
         run([triple + "-gcc", "-c", "-O2", "-std=c11", "-fno-builtin", "-D_WIN32_WINNT=0x600", "-DUNICODE", "-I" + str(own_advpack), path, "-o", target])
         advpack_objects.append(target)
@@ -608,7 +608,7 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "advpack.dll", *advpack_objects, output / "advpack.def", "-lsetupapi", "-lole32", "-lshell32", "-lversion", "-ladvapi32", "-luser32", "-lkernel32", "-luuid", "-lgcc"])
     # mspatcha.dll: Raven's own, applying the delta patches of Windows Installer patches.
-    own_mspatcha = repo / "native/upstream/raven-mspatcha"
+    own_mspatcha = repo / "native/guest/raven-mspatcha"
     mspatcha_objects = []
     for path in sorted(own_mspatcha.glob("*.c")):
         target = objects / ("mspatcha_" + path.stem + ".o")
@@ -621,7 +621,7 @@ def main():
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{next_base[0]:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "mspatcha.dll", *mspatcha_objects, output / "mspatcha.def", "-lmsvcrt", "-lkernel32", "-lgcc"])
     # vbscript.dll: Raven's own VBScript engine, an Active Scripting server.
-    own_vbscript = repo / "native/upstream/raven-vbscript"
+    own_vbscript = repo / "native/guest/raven-vbscript"
     vbscript_objects = []
     for path in sorted(own_vbscript.glob("*.c")):
         target = objects / ("vbscript_" + path.stem + ".o")
@@ -635,7 +635,7 @@ def main():
          "-o", output / "vbscript.dll", *vbscript_objects, output / "vbscript.def", "-lole32", "-loleaut32", "-luser32", "-luuid", "-lmsvcrt",
          "-lkernel32", "-lgcc"])
     # scrrun.dll: Raven's own scripting runtime, the Dictionary and FileSystemObject classes.
-    own_scrrun = repo / "native/upstream/raven-scrrun"
+    own_scrrun = repo / "native/guest/raven-scrrun"
     scrrun_objects = []
     for path in sorted(own_scrrun.glob("*.c")):
         target = objects / ("scrrun_" + path.stem + ".o")
@@ -649,7 +649,7 @@ def main():
          "-o", output / "scrrun.dll", *scrrun_objects, output / "scrrun.def", "-lole32", "-loleaut32", "-luser32", "-lversion", "-luuid", "-lmsvcrt",
          "-lkernel32", "-lgcc"])
     # wshom.ocx: Raven's own script host object model, WScript.Shell and WScript.Network, on the scripting runtime's objects and streams.
-    own_wshom = repo / "native/upstream/raven-wshom"
+    own_wshom = repo / "native/guest/raven-wshom"
     wshom_objects = []
     for path in [*sorted(own_wshom.glob("*.c")), own_scrrun / "object.c", own_scrrun / "textstream.c"]:
         target = objects / ("wshom_" + path.parent.name + "_" + path.stem + ".o")
@@ -663,7 +663,7 @@ def main():
          "-o", output / "wshom.ocx", *wshom_objects, output / "wshom.def", "-lole32", "-loleaut32", "-luser32", "-lshell32", "-ladvapi32", "-luuid",
          "-lmsvcrt", "-lkernel32", "-lgcc"])
     # jscript.dll: Raven's own JScript engine, an Active Scripting server; its regular expressions are the VBScript engine's matcher.
-    own_jscript = repo / "native/upstream/raven-jscript"
+    own_jscript = repo / "native/guest/raven-jscript"
     jscript_objects = []
     for path in [*sorted(own_jscript.glob("*.c")), own_vbscript / "regex.c"]:
         target = objects / ("jscript_" + path.parent.name + "_" + path.stem + ".o")

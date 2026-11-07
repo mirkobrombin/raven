@@ -2,7 +2,7 @@
 
 `scripts/provision-installer.py` builds the Windows Installer engine and the libraries
 installers use, for 64-bit programs and, with `--arch x86`, for 32-bit ones. Each Raven
-library has its own folder and README under `native/upstream/raven-*`.
+library has its own folder and README under `native/guest/raven-*`.
 
 These libraries come from their own releases, pinned by SHA-256 in the script:
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes a Windows Runtime metadata file (.winmd) from a description in the format of native/upstream/raven-winmd/windows.types.
+"""Writes a Windows Runtime metadata file (.winmd) from a description in the format of native/guest/raven-winmd/windows.types.
 
 The file is an ECMA-335 metadata module in a PE image without code, in the shape the Windows Runtime gives its metadata: every type flagged
 as a Windows Runtime type, interfaces and delegates carrying their identifiers, runtime classes declaring the members of their interfaces,

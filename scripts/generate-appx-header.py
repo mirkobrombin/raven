@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes native/upstream/raven-appx/appxpackaging.h, the packaging API of Windows (the AppxFactory and AppxBundleFactory classes, their
+"""Writes native/guest/raven-appx/appxpackaging.h, the packaging API of Windows (the AppxFactory and AppxBundleFactory classes, their
 readers and writers) as C declarations, from Microsoft's Windows metadata as the windows-rs project distributes it (MIT OR Apache-2.0, used
 under MIT). Its generated bindings give each interface's identifier and base, the order of its methods and their raw ABI, the parameter names
 (the vtable shims) and the interfaces behind the ABI's untyped pointers (the wrapper methods); the three are checked against one another.
@@ -14,7 +14,7 @@ import urllib.request
 REVISION = "58217a690d6256ee229044a174de67d72d28bc35"
 SOURCES = (("appxpackaging", "3f6aa927339038fbd8d7e247e225206aaad3e98ec4679c006b020058a554c64b"),
            ("winerror", "68711e86d0c408f24c35ee39752fc719be2ad54b639d8d4de90d5c9b6cf579ff"))
-TARGET = Path(__file__).resolve().parents[1] / "native/upstream/raven-appx/appxpackaging.h"
+TARGET = Path(__file__).resolve().parents[1] / "native/guest/raven-appx/appxpackaging.h"
 
 SCALARS = {"windows_core::PCWSTR": "LPCWSTR", "windows_core::PWSTR": "LPWSTR", "windows_core::PCSTR": "LPCSTR", "windows_core::BOOL": "BOOL",
            "windows_core::HRESULT": "HRESULT", "windows_core::GUID": "GUID", "bool": "BOOL", "i32": "INT32", "u32": "UINT32"}
