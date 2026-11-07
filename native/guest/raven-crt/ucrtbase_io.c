@@ -671,8 +671,11 @@ CRT size_t wcsxfrm(wchar_t *to, const wchar_t *from, size_t count)
 }
 
 CRT int ___mb_cur_max_func(void) { return 1; }
-/* The code page of the locale's multibyte characters: zero is the "C" locale, whose bytes stand for themselves. */
-CRT unsigned int ___lc_codepage_func(void) { return 0; }
+/* The code page of the locale's multibyte characters: zero is the "C" locale, whose bytes stand for themselves. Older programs
+ * and MinGW-w64's own conversion helpers read it straight from msvcrt's __lc_codepage variable. */
+unsigned int raven_lc_codepage = 0;
+__asm__(".section .drectve\n\t.ascii \" -export:__lc_codepage=raven_lc_codepage,DATA\"\n\t.text");
+CRT unsigned int ___lc_codepage_func(void) { return raven_lc_codepage; }
 CRT size_t mbrtowc(wchar_t *wide, const char *bytes, size_t count, void *state)
 {
 	if (!bytes)
