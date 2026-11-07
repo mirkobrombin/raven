@@ -1,6 +1,6 @@
 file(SHA256 "${INPUT}" NLS_HASH)
 if(NOT NLS_HASH STREQUAL "e2634ee32da7977d762d2d45be2053309ee718572a7d8bb0034180dc1b0b6b76")
-    message(FATAL_ERROR "Generated ReactOS CP1252 table differs from the qualified input")
+    message(FATAL_ERROR "Generated CP1252 table differs from the qualified input")
 endif()
 file(READ "${INPUT}" NLS_HEX HEX)
 string(SUBSTRING "${NLS_HEX}" 1092 131072 TABLE_HEX)

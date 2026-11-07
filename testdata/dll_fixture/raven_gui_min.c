@@ -1,5 +1,5 @@
-// GUI fixture: a minimal PE32 GUI program that drives the REAL ReactOS
-// user32/gdi32 (loaded via -sysroot) WITHOUT any CRT or COM bootstrap.
+// GUI fixture: a minimal PE32 GUI program that drives user32/gdi32 without
+// any CRT or COM bootstrap.
 //
 // It registers a window class, creates a window, runs a GetMessage/Dispatch
 // loop, and on the first WM_PAINT paints (FillRect + TextOutW) then quits.

@@ -4,7 +4,7 @@
   "source_sha256": "2fc713e6a31a87c4850a37fe2caffa4218180fadb5de86b43a143ddb4581fb86",
   "license_url": "https://www.unicode.org/license.txt",
   "license_sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
-  "selection": "Canonical two-scalar decompositions of Unicode characters in the pinned ReactOS CP1252 MBTABLE. Compatibility decompositions excluded.",
+  "selection": "Canonical two-scalar decompositions of Unicode characters in the pinned CP1252 byte table. Compatibility decompositions excluded.",
   "records": 58,
   "selected_sha256": "dc36d1023c7fcd96043122aae2854b6f67febb7debfe4be8780aadbb5a9ba30b"
 }

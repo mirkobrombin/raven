@@ -3,10 +3,8 @@
   "review_date": "2026-10-30",
   "original_code_license": "GPL-3.0-or-later with MIT guest-adapter exceptions",
   "license_references": {
-    "LicenseRef-ReactOS-COPYING": "GPL version 2 under COPYING at the pinned ReactOS revision. PE component distribution selects version 2; no later-version permission is assumed.",
-    "LicenseRef-ReactOS-Installer-Mixed": "The GPL, LGPL and permissive source terms detailed in LICENSES.md; covered PE binaries are distributed under GPL version 2.",
-    "LicenseRef-ReactOS-CRT": "Selected CRT source under ReactOS root COPYING; PE component distribution selects GPL version 2.",
-    "LicenseRef-Configuration-Dependent": "Inventory depends on configured binary inputs."
+    "LicenseRef-Configuration-Dependent": "Inventory depends on configured binary inputs.",
+    "LicenseRef-Installer-Upstream": "zlib (Zlib), IJG JPEG (IJG), LibTIFF (libtiff), libxml2 and libxslt (MIT) under the notices kept with each pinned release; Raven's own code in the components is MIT."
   },
   "components": [
     {
@@ -519,13 +517,10 @@
         "native/upstream/raven-xmllite/shared.h",
         "native/upstream/raven-xmllite/writer.c",
         "native/upstream/raven-xmllite/xmllite.spec",
-        "native/upstream/reactos-installer/codecs.c",
-        "native/upstream/reactos-installer/dllmain.c",
-        "native/upstream/reactos-installer/entry.c",
-        "native/upstream/reactos-installer/entry_wide.c",
-        "native/upstream/reactos-installer/msftedit.c",
-        "native/upstream/reactos-installer/setup.c",
-        "native/upstream/reactos-installer/support.c"
+        "native/upstream/raven-installer/README.md",
+        "native/upstream/raven-installer/dllmain.c",
+        "native/upstream/raven-installer/msftedit.c",
+        "native/upstream/raven-installer/support.c"
       ],
       "license": "MIT",
       "review": "reviewed",
@@ -534,29 +529,29 @@
     {
       "name": "CP1252 data",
       "paths": [
-        "native/upstream/reactos-nls/c_1252.txt"
+        "native/upstream/windows-codepages/c_1252.txt"
       ],
       "license": "Unicode-3.0",
       "review": "reviewed",
-      "provenance": "native/upstream/reactos-nls/data-provenance.json"
+      "provenance": "native/upstream/windows-codepages/data-provenance.json"
     },
     {
       "name": "Windows single-byte code page data",
       "paths": [
-        "native/upstream/reactos-nls/c_1250.txt",
-        "native/upstream/reactos-nls/c_1251.txt",
-        "native/upstream/reactos-nls/c_1253.txt",
-        "native/upstream/reactos-nls/c_1254.txt",
-        "native/upstream/reactos-nls/c_1255.txt",
-        "native/upstream/reactos-nls/c_1256.txt",
-        "native/upstream/reactos-nls/c_1257.txt",
-        "native/upstream/reactos-nls/c_1258.txt",
-        "native/upstream/reactos-nls/CP437.TXT",
-        "native/upstream/reactos-nls/CP850.TXT"
+        "native/upstream/windows-codepages/c_1250.txt",
+        "native/upstream/windows-codepages/c_1251.txt",
+        "native/upstream/windows-codepages/c_1253.txt",
+        "native/upstream/windows-codepages/c_1254.txt",
+        "native/upstream/windows-codepages/c_1255.txt",
+        "native/upstream/windows-codepages/c_1256.txt",
+        "native/upstream/windows-codepages/c_1257.txt",
+        "native/upstream/windows-codepages/c_1258.txt",
+        "native/upstream/windows-codepages/CP437.TXT",
+        "native/upstream/windows-codepages/CP850.TXT"
       ],
       "license": "Unicode-3.0",
       "review": "reviewed",
-      "provenance": "native/upstream/reactos-nls/single-byte-provenance.json"
+      "provenance": "native/upstream/windows-codepages/single-byte-provenance.json"
     },
     {
       "name": "Windows double-byte code page data",
@@ -601,17 +596,17 @@
       "license": "MIT"
     },
     {
-      "name": "ReactOS installer libraries",
+      "name": "Installer upstream libraries",
       "cmake_keys": [
         "RAVEN_INSTALLER_COMPONENT_DIR",
         "RAVEN_INSTALLER32_COMPONENT_DIR"
       ],
       "review": "reviewed",
-      "revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
-      "source_terms": "LicenseRef-ReactOS-Installer-Mixed",
-      "distribution_license": "GPL-2.0-only",
-      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. Original Raven adapters remain MIT; original upstream notices remain applicable.",
-      "version_choice": "Use GPL version 2 for root-COPYING inputs and the version 2 option of GPL-2.0-or-later inputs. Retain LGPL and permissive source terms and supply the corresponding source and build scripts."
+      "paths": [
+        "native/upstream/raven-installer/patches"
+      ],
+      "source_terms": "LicenseRef-Installer-Upstream",
+      "boundary": "PE guest component, loaded into the supervised Windows process. No native linking into the Linux host. The patches under native/upstream/raven-installer/patches modify these libraries and follow their terms."
     },
     {
       "name": "SQLite",

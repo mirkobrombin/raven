@@ -189,7 +189,7 @@ def main():
 
     # Raven's corrections to a library taken from its own release are kept as reviewable patches in a folder named after it, and recorded
     # in the provenance.
-    support = repo / "native/upstream/reactos-installer"
+    support = repo / "native/upstream/raven-installer"
     patches = []
     for name, unpacked in upstream_sources.items():
         own = sorted((support / "patches" / name).glob("*.patch"))
@@ -388,8 +388,8 @@ def main():
     (output / "oleaut32.def").write_text("LIBRARY oleaut32.dll\nEXPORTS\n" + "".join(oleaut_export(line) for line in (own_oleaut / "exports.txt").read_text().splitlines()))
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{'_DllMain@12' if x86 else 'DllMain'},--image-base,{bases['oleaut']:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "oleaut32.dll", *oleaut_objects, output / "oleaut32.def", "-luuid", "-lole32", "-lgdi32", "-luser32", "-ladvapi32", "-lkernel32", "-lgcc"])
-    # The libraries below follow one pattern: the sources their ReactOS build lists, compiled with its definitions, a definition file from
-    # their specification and the libraries they import. Their base addresses count down from below the ones above.
+    # The libraries below follow one pattern: their sources compiled with the flags given, a definition file from their specification
+    # and the libraries they import. Their base addresses count down from below the ones above.
     next_base = [0x1c4000000 if not x86 else 0x1c400000]
 
     def library(name, root, extra_flags=(), libraries=(), sources=(), objects_more=()):

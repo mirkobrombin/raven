@@ -10,6 +10,5 @@
   "terms_sha256": "9f83fb0a046180c87d22c2678e79300475125611ac8dfc2da303db6c6b347251",
   "retrieved": "2026-10-25",
   "license_file": "../../../LICENSES/Unicode-3.0.txt",
-  "license_sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
-  "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1252.txt"
+  "license_sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
 }

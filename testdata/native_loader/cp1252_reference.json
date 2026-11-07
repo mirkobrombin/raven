@@ -8,6 +8,5 @@
   "wine_reference": "Wine 10.0, isolated prefix with GetACP() == 1252",
   "output_size": 65536,
   "output_sha256": "7c1d0cbe71f69c4660bbc7ea5bca1a48ebeedb5740742cc5d297b141c1e653c6",
-  "reactos_revision": "dacf2a6c47fa562799f9c8a41ab6d5c558556558",
   "scope": "CP1252 single-byte contract data; not source code or full NLS/Windows qualification."
 }

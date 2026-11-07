@@ -12,64 +12,56 @@
       "source_sha256": "cef9f171e67b09445bcb3f9ffccdc89418250ff825f1bd2d29a92d2074d7a53b",
       "local_file": "c_1250.txt",
       "local_sha256": "d6479e3a622ae1c80eced54ce11551f6e7bf40f68d1f45ba54fb274a5e9c592e",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1250.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1251.txt",
       "source_sha256": "59ec85612ff908d9da0e877893c935941e56b13a2882b4fb9c9599be3d1ce4e7",
       "local_file": "c_1251.txt",
       "local_sha256": "7ced69ac085f129fc0ba78f847d0519bc47092c1625a33e35828bfed4972005a",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1251.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1253.txt",
       "source_sha256": "ea80c442aff7f09b36da6335f85f8e527f51c146beeb9825ec00d1b6ca99a99e",
       "local_file": "c_1253.txt",
       "local_sha256": "15a6b99022011f70fad05221d7be4c6fccc5213bf7c75c7146bb565808e6c8d9",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1253.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1254.txt",
       "source_sha256": "3d02512087634dc493b720992b590277736ffb2d5b0b665d69b6b9727e2c361a",
       "local_file": "c_1254.txt",
       "local_sha256": "736c96e1f8135e7db4bec13517193ba42a81f773e6aa94df1b50c0ca25e02549",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1254.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1255.txt",
       "source_sha256": "fdd4bdda74f6571d89171b0070ac052cd3714c395dc3d1799bcd5e4a4da6f83a",
       "local_file": "c_1255.txt",
       "local_sha256": "e73e5fcf861fc9612688dc5abc11c348a998aa9e64420b296bb9b5c6990fa3d8",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1255.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1256.txt",
       "source_sha256": "745c447ada04a838da8bea406c13f446c7453b6371e8c6c7863a632443d56007",
       "local_file": "c_1256.txt",
       "local_sha256": "554a127084d0d30e94fc6f9b2d21c616900c78bde9498c7e4bdc14ae1e4a83bf",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1256.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1257.txt",
       "source_sha256": "b8c5d7f3b8c25c3d5625d44dd3d6ee7a06e652ddf77373d050282c1cb7517366",
       "local_file": "c_1257.txt",
       "local_sha256": "efbee49b9e1094a46adc96ad8149d989aa5ab3e2c0fbaf1564516da9b49f42ab",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1257.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1258.txt",
       "source_sha256": "5d52a9357b7d6b5b5014ed5a51be0ff9809b0c33625793d2a4feaf502e0682f1",
       "local_file": "c_1258.txt",
       "local_sha256": "6956c82004b36fbf480aeeba541e0abbe329a2c42964353e4e54baf1d227242b",
-      "transformation": "CRLF to LF only; all remaining bytes identical",
-      "original_import": "ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_1258.txt"
+      "transformation": "CRLF to LF only; all remaining bytes identical"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP437.TXT",
@@ -77,8 +69,7 @@
       "local_file": "CP437.TXT",
       "local_sha256": "6bad4dabcdf5940227c7d81fab130dcb18a77850b5d79de28b5dc4e047b0aaac",
       "transformation": "none",
-      "retrieved": "2026-10-28",
-      "cross_check": "Every byte maps to the same character as MBTABLE in ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_437.txt"
+      "retrieved": "2026-10-28"
     },
     {
       "source": "https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP850.TXT",
@@ -86,8 +77,7 @@
       "local_file": "CP850.TXT",
       "local_sha256": "ffdcc3c1c72f1aef600a63547100ef3dc452a09ad84923d382085519751c7479",
       "transformation": "none",
-      "retrieved": "2026-10-28",
-      "cross_check": "Every byte maps to the same character as MBTABLE in ReactOS dacf2a6c47fa562799f9c8a41ab6d5c558556558 media/nls/src/c_850.txt"
+      "retrieved": "2026-10-28"
     }
   ]
 }

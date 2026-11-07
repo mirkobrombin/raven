@@ -12,9 +12,9 @@ GPLv3 license applied to every file.
 | --- | --- |
 | Linux `raven` and `raven-bootstrap` | GPL-3.0-or-later; root LICENSE |
 | Original Raven PE adapters | MIT; exact file list in LICENSES.json and terms in LICENSES/MIT.txt |
-| ReactOS-derived PE installer components | Distributed under GPL version 2 with the original GPL, LGPL, BSD and other source notices retained; pinned recipes and modifications in `scripts/provision-*.py` and `native/upstream` |
-| CP1252 mapping data | Unicode-3.0; `native/upstream/reactos-nls/data-provenance.json` |
-| Code pages 1250, 1251 and 1253-1258 mapping data | Unicode-3.0; `native/upstream/reactos-nls/single-byte-provenance.json` |
+| PE installer components | Raven code under MIT with zlib, libxml2, libxslt, IJG JPEG and LibTIFF under their own notices; pinned releases, recipe and patches in `scripts/provision-installer.py` and `native/upstream/raven-installer` |
+| CP1252 mapping data | Unicode-3.0; `native/upstream/windows-codepages/data-provenance.json` |
+| Code pages 1250, 1251 and 1253-1258 mapping data | Unicode-3.0; `native/upstream/windows-codepages/single-byte-provenance.json` |
 | Unicode decomposition data | Unicode terms; `native/upstream/unicode/LICENSE` and provenance.json |
 | libpng codec | PNG Reference Library License version 2; `native/upstream/libpng` |
 | Skia CPU backend | BSD-style terms and the notices of any compiled dependencies; `native/upstream/skia` |
@@ -26,25 +26,10 @@ GPLv3 license applied to every file.
 | Windows Runtime interface declarations | MIT (Microsoft's metadata from windows-rs); `native/upstream/raven-web/windows.web.http.h`, `native/upstream/raven-winrt/foundation.h` |
 | Windows packaging interface declarations | MIT (Microsoft's metadata from windows-rs); `native/upstream/raven-appx/appxpackaging.h` |
 
-The PE guest components are loaded and executed in the supervised Windows
-process. They are not ELF libraries linked or loaded into the Linux host. Their
-NT/Win32 calls cross the runtime's system-service boundary. Raven-owned code in
-those PE components stays MIT so it can be combined with their GPLv2 inputs.
-For sources referring to ReactOS's root COPYING, distribution uses GPL version 2;
-it does not infer an "or later" permission. Explicit GPL-2.0-or-later inputs also
-permit that version. LGPL portions keep their notices and corresponding source.
+The PE guest components run in the supervised Windows process; they are not
+linked or loaded into the Linux host.
 
-The common controls and user32 components are original MIT code with no ReactOS
-input.
-Installer components also contain zlib, XML/XSLT, IJG JPEG and TIFF
-code with their individual notices. Bison-generated parsers retain their skeleton
-exception; the generator's GPL license alone does not determine the output's license.
-
-IJG JPEG distributions include this acknowledgement: "This software is based in
-part on the work of the Independent JPEG Group." Preserve its README's copyright
-and warranty text too. System dependencies used from the recipient's distribution
-are separate from copies bundled in an archive; any added static or bundled
-library needs its applicable source material and notices.
+This software is based in part on the work of the Independent JPEG Group.
 
 ## Release contents
 
@@ -60,4 +45,3 @@ a manifest does not replace them or grant permission over third-party work.
 - [GNU license compatibility](https://www.gnu.org/licenses/license-compatibility.html)
 - [GPLv3, corresponding source and section 6](https://www.gnu.org/licenses/gpl-3.0.html)
 - [LGPL 2.1, section 6](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html)
-- [ReactOS intellectual property guideline](https://reactos.org/intellectual-property-guideline/)
