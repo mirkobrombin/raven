@@ -454,4 +454,92 @@ std::vector<uint8_t> TextRenderer::render(std::span<const uint8_t,92> definition
 	return alpha;
 }
 
+// The symbol face draws its own shapes by character, so its glyph identifiers are the characters themselves.
+std::vector<uint16_t> TextRenderer::logical_glyph_ids(std::span<const uint8_t,92> definition,std::span<const uint16_t> text)
+{
+	if (is_marlett(definition)) return std::vector<uint16_t>(text.begin(),text.end());
+	const auto font=state->logical(definition);
+	std::vector<uint16_t> result(text.size(),0);
+	for (size_t i=0;i<text.size();++i) {
+		// A surrogate pair names one glyph, which the leading unit carries; the trailing unit maps to none of its own.
+		const bool pair=text[i]>=0xd800 && text[i]<=0xdbff && i+1<text.size() && text[i+1]>=0xdc00 && text[i+1]<=0xdfff;
+		SkGlyphID id=0;
+		font.textToGlyphs(&text[i],pair ? 4 : 2,SkTextEncoding::kUTF16,{&id,1});
+		result[i]=id;
+		if (pair) ++i;
+	}
+	return result;
+}
+
+std::vector<int32_t> TextRenderer::logical_glyph_advances(std::span<const uint8_t,92> definition,std::span<const uint16_t> glyphs)
+{
+	if (is_marlett(definition)) return std::vector<int32_t>(glyphs.size(),marlett_size(definition));
+	const auto font=state->logical(definition);
+	std::vector<SkGlyphID> ids(glyphs.begin(),glyphs.end());
+	std::vector<SkScalar> widths(ids.size());
+	font.getWidths(ids,widths);
+	std::vector<int32_t> result; result.reserve(widths.size());
+	for (const auto width : widths) result.push_back(int32_t(std::lround(width)));
+	return result;
+}
+
+TextRenderer::GlyphBox TextRenderer::logical_glyph_box(std::span<const uint8_t,92> definition,uint16_t glyph)
+{
+	if (is_marlett(definition)) {
+		const auto size=marlett_size(definition);
+		return {0,-size,size,0,size};
+	}
+	const auto font=state->logical(definition);
+	const SkGlyphID id=glyph;
+	SkRect bounds; SkScalar width=0;
+	font.getWidthsBounds({&id,1},{&width,1},{&bounds,1},nullptr);
+	if (bounds.isEmpty()) return {0,0,0,0,int32_t(std::lround(width))};
+	return {int32_t(std::floor(bounds.left())),int32_t(std::floor(bounds.top())),int32_t(std::ceil(bounds.right())),int32_t(std::ceil(bounds.bottom())),
+		int32_t(std::lround(width))};
+}
+
+std::vector<uint8_t> TextRenderer::render_glyph_box(std::span<const uint8_t,92> definition,uint16_t glyph,const GlyphBox &box)
+{
+	const int64_t width=int64_t(box.right)-box.left,height=int64_t(box.bottom)-box.top;
+	if (width<=0 || height<=0) return {};
+	if (width>16384 || height>16384 || width*height>32*1024*1024) throw uint32_t(87);
+	if (is_marlett(definition)) return render(definition,std::span<const uint16_t>(&glyph,1),uint32_t(width),uint32_t(height),0,0);
+	auto font=state->logical(definition);
+	std::vector<uint8_t> alpha(size_t(width*height));
+	SkBitmap bitmap;
+	if (!bitmap.installPixels(SkImageInfo::MakeA8(int(width),int(height)),alpha.data(),size_t(width))) throw std::bad_alloc();
+	SkCanvas canvas(bitmap); canvas.clear(SK_ColorTRANSPARENT);
+	SkPaint paint; paint.setColor(SK_ColorBLACK); paint.setAntiAlias(font.getEdging()!=SkFont::Edging::kAlias);
+	const SkGlyphID id=glyph;
+	const SkPoint at{SkScalar(-box.left),SkScalar(-box.top)};
+	canvas.drawGlyphs({&id,1},{&at,1},{0,0},font,paint);
+	return alpha;
+}
+
+std::vector<uint8_t> TextRenderer::render_glyphs(std::span<const uint8_t,92> definition,std::span<const uint16_t> glyphs,
+	uint32_t width,uint32_t height,int32_t origin_x,int32_t origin_y,std::span<const int32_t> offsets)
+{
+	if (is_marlett(definition)) return render(definition,glyphs,width,height,origin_x,origin_y,offsets);
+	if (!width || !height || width>16384 || height>16384 || uint64_t(width)*height>32*1024*1024) throw uint32_t(87);
+	auto font=state->logical(definition);
+	std::vector<uint8_t> alpha(size_t(width)*height);
+	SkBitmap bitmap;
+	if (!bitmap.installPixels(SkImageInfo::MakeA8(int(width),int(height)),alpha.data(),width)) throw std::bad_alloc();
+	SkCanvas canvas(bitmap); canvas.clear(SK_ColorTRANSPARENT);
+	SkPaint paint; paint.setColor(SK_ColorBLACK); paint.setAntiAlias(font.getEdging()!=SkFont::Edging::kAlias);
+	SkFontMetrics source; font.getMetrics(&source);
+	const auto baseline=SkScalar(origin_y)+SkScalar(std::lround(-source.fAscent));
+	std::vector<SkGlyphID> ids(glyphs.begin(),glyphs.end());
+	std::vector<SkScalar> widths(ids.size());
+	font.getWidths(ids,widths);
+	std::vector<SkPoint> points(ids.size());
+	SkScalar cursor=0;
+	for (size_t i=0;i<ids.size();++i) {
+		points[i]={SkScalar(origin_x)+(offsets.size()>i ? SkScalar(offsets[i]) : cursor),baseline};
+		cursor+=SkScalar(std::lround(widths[i]));
+	}
+	if (!ids.empty()) canvas.drawGlyphs({ids.data(),ids.size()},{points.data(),points.size()},{0,0},font,paint);
+	return alpha;
+}
+
 }

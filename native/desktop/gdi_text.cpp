@@ -205,9 +205,10 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			return objects.text().logical_advances(definition, units);
 		}
 	};
-	// Draws one run of text with GDI alignment, background and clipping rules; returns the run's advance width.
+	// Draws one run of text with GDI alignment, background and clipping rules; returns the run's advance width. With glyphs set the run
+	// holds glyph identifiers of the selected font (ETO_GLYPH_INDEX, Uniscribe) instead of characters.
 	const auto draw_run = [this, measured_advances](DesktopDC &dc, int32_t x, int32_t y, uint32_t options, const DesktopRect *clip_rect,
-		std::u16string_view text, std::span<const int32_t> deltas) -> int32_t {
+		std::u16string_view text, std::span<const int32_t> deltas, bool glyphs = false) -> int32_t {
 		Painter painter(objects, dc);
 		const auto &font = *objects.font(dc.font);
 		const auto metrics = objects.text().logical_metrics(font.definition);
@@ -227,6 +228,9 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 					position += deltas[i];
 				}
 				advance = position;
+			} else if (glyphs) {
+				for (const auto width : objects.text().logical_glyph_advances(font.definition, units))
+					advance += width;
 			} else {
 				const auto cumulative = measured_advances(font.definition, units);
 				advance = cumulative.back();
@@ -265,7 +269,9 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		std::vector<uint8_t> coverage;
 		try {
 			// Qualified fonts keep their measured monochrome glyphs; everything else is anti-aliased.
-			try {
+			if (glyphs)
+				coverage = objects.text().render_glyphs(font.definition, units, box_width, box_height, margin, 2, offsets);
+			else try {
 				std::vector<std::array<int32_t, 2>> positions;
 				for (const auto offset : offsets)
 					positions.push_back({offset, 0});
@@ -387,7 +393,16 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 				throw uint32_t(87);
 			if (count < 0)
 				throw uint32_t(87);
-			const auto text = count > 0 ? widen(call, call[5], count, ansi) : std::u16string();
+			// ETO_GLYPH_INDEX: the string is glyph identifiers, sixteen bits each in either form.
+			const bool glyph_index = (options & 0x10) != 0;
+			std::u16string text;
+			if (count > 0 && glyph_index) {
+				text.resize(size_t(count));
+				const auto bytes = call.read(call[5], size_t(count) * 2);
+				std::memcpy(text.data(), bytes.data(), bytes.size());
+			} else if (count > 0) {
+				text = widen(call, call[5], count, ansi);
+			}
 			std::vector<int32_t> deltas;
 			if (call[7] && count > 0) {
 				const bool pair = (options & 0x2000) != 0;
@@ -403,7 +418,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 				x = dc.position_x;
 				y = dc.position_y;
 			}
-			const auto advance = draw_run(dc, x, y, options, rect ? &*rect : nullptr, text, deltas);
+			const auto advance = draw_run(dc, x, y, options, rect ? &*rect : nullptr, text, deltas, glyph_index);
 			if (dc.text_align & 1)
 				dc.position_x = x + advance;
 			call.ret(1);
@@ -663,15 +678,17 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			call.ret(font.definition[23] == 1 ? 0 : font.definition[23]);
 		});
 	});
-	// GetGlyphOutlineW(dc, character, format, GLYPHMETRICS, size, buffer, MAT2): the metrics of a character of the selected font and its
-	// bitmap, rendered as text draws it: GGO_METRICS (0), GGO_BITMAP (1, a bit per pixel) and GGO_GRAY2, GRAY4 and GRAY8 (4, 5, 6: 4, 16
-	// and 64 levels a byte), rows padded to four bytes. Glyph indices, outlines and transforms other than the identity are not drawn:
-	// GDI_ERROR, as for a font that cannot give them.
+	// GetGlyphOutlineW(dc, character or glyph, format, metrics, size, buffer, matrix): GLYPHMETRICS and, for the bitmap formats, the glyph's
+	// coverage over its black box (GGO_BITMAP rows of bits padded to 32, GGO_GRAY2, GRAY4 and GRAY8 rows of 4, 16 and 64 levels padded to
+	// four bytes). The box comes from the outline, so the very large fonts programs create to read design metrics measure too. Outlines
+	// and transforms other than the identity are not given: GDI_ERROR, as for a font that cannot give them.
 	registry.add("GetGlyphOutlineW", 7, [=, this](ApiCall &call) {
 		guarded(call, 0xffffffffU, [&] {
 			auto &dc = require_dc(call, 0);
-			const uint32_t format = call.u32(2);
-			if (!call[3] || (format & 0x80) || (format != 0 && format != 1 && format != 4 && format != 5 && format != 6))
+			// GGO_GLYPH_INDEX: the second argument is a glyph identifier of the selected face instead of a character.
+			const bool glyph_index = (call.u32(2) & 0x80) != 0;
+			const uint32_t format = call.u32(2) & ~0x80U;
+			if (!call[3] || (format != 0 && format != 1 && format != 4 && format != 5 && format != 6))
 				throw uint32_t(87);
 			if (call[6]) {
 				const auto matrix = call.read(call[6], 16);
@@ -680,28 +697,59 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 					throw uint32_t(120);
 			}
 			const auto &font = selected_font(dc);
-			const auto info = objects.text().logical_metrics(font.definition);
-			const uint16_t character = uint16_t(call.u32(1));
-			const auto advance = objects.text().logical_advances(font.definition, std::span<const uint16_t>(&character, 1));
-			const int32_t cell = advance.empty() ? 0 : advance.back();
-			const int32_t pad = std::max(4, info.height / 2);
-			const uint32_t width = uint32_t(cell + 2 * pad), height = uint32_t(std::max(1, info.ascent + info.descent));
-			const auto coverage = objects.text().render(font.definition, std::span<const uint16_t>(&character, 1), width, height, pad, 0);
-			int32_t left = int32_t(width), right = -1, top = int32_t(height), bottom = -1;
-			for (uint32_t y = 0; y < height; ++y)
-				for (uint32_t x = 0; x < width; ++x)
-					if (coverage[size_t(y) * width + x]) {
-						left = std::min(left, int32_t(x)); right = std::max(right, int32_t(x));
-						top = std::min(top, int32_t(y)); bottom = std::max(bottom, int32_t(y));
-					}
-			const bool empty = right < 0;
-			const uint32_t box_width = empty ? 1 : uint32_t(right - left + 1), box_height = empty ? 1 : uint32_t(bottom - top + 1);
+			const uint16_t requested = uint16_t(call.u32(1));
+			uint16_t glyph = requested;
+			if (!glyph_index) {
+				const auto ids = objects.text().logical_glyph_ids(font.definition, std::span<const uint16_t>(&requested, 1));
+				glyph = ids.empty() ? 0 : ids[0];
+			}
 			std::vector<uint8_t> metrics(20, 0);
 			const auto put32 = [&](size_t at, int32_t value) { std::memcpy(metrics.data() + at, &value, 4); };
-			put32(0, int32_t(box_width)); put32(4, int32_t(box_height));
-			put32(8, empty ? 0 : left - pad); put32(12, empty ? 0 : info.ascent - top);
-			const int16_t increment = int16_t(cell), none = 0;
-			std::memcpy(metrics.data() + 16, &increment, 2); std::memcpy(metrics.data() + 18, &none, 2);
+			uint32_t box_width = 1, box_height = 1;
+			std::vector<uint8_t> coverage;
+			if (glyph_index || glyph) {
+				const auto box = objects.text().logical_glyph_box(font.definition, glyph);
+				const bool empty = box.right <= box.left || box.bottom <= box.top;
+				if (!empty) {
+					box_width = uint32_t(box.right - box.left);
+					box_height = uint32_t(box.bottom - box.top);
+				}
+				put32(0, int32_t(box_width)); put32(4, int32_t(box_height));
+				put32(8, empty ? 0 : box.left); put32(12, empty ? 0 : -box.top);
+				const int16_t increment = int16_t(std::clamp(box.advance, -32768, 32767)), none = 0;
+				std::memcpy(metrics.data() + 16, &increment, 2); std::memcpy(metrics.data() + 18, &none, 2);
+				if (format && !empty)
+					coverage = objects.text().render_glyph_box(font.definition, glyph, box);
+			} else {
+				// A character the face lacks: measured and drawn through the fallback faces, by rasterizing the character's cell.
+				const auto info = objects.text().logical_metrics(font.definition);
+				const std::span<const uint16_t> one(&requested, 1);
+				const auto advance = objects.text().logical_advances(font.definition, one);
+				const int32_t cell = advance.empty() ? 0 : advance.back();
+				const int32_t pad = std::max(4, info.height / 2);
+				const uint32_t width = uint32_t(cell + 2 * pad), height = uint32_t(std::max(1, info.ascent + info.descent));
+				const auto cell_coverage = objects.text().render(font.definition, one, width, height, pad, 0);
+				int32_t left = int32_t(width), right = -1, top = int32_t(height), bottom = -1;
+				for (uint32_t y = 0; y < height; ++y)
+					for (uint32_t x = 0; x < width; ++x)
+						if (cell_coverage[size_t(y) * width + x]) {
+							left = std::min(left, int32_t(x)); right = std::max(right, int32_t(x));
+							top = std::min(top, int32_t(y)); bottom = std::max(bottom, int32_t(y));
+						}
+				const bool empty = right < 0;
+				box_width = empty ? 1 : uint32_t(right - left + 1);
+				box_height = empty ? 1 : uint32_t(bottom - top + 1);
+				put32(0, int32_t(box_width)); put32(4, int32_t(box_height));
+				put32(8, empty ? 0 : left - pad); put32(12, empty ? 0 : info.ascent - top);
+				const int16_t increment = int16_t(cell), none = 0;
+				std::memcpy(metrics.data() + 16, &increment, 2); std::memcpy(metrics.data() + 18, &none, 2);
+				if (!empty) {
+					coverage.resize(size_t(box_width) * box_height);
+					for (uint32_t y = 0; y < box_height; ++y)
+						for (uint32_t x = 0; x < box_width; ++x)
+							coverage[size_t(y) * box_width + x] = cell_coverage[size_t(top + y) * width + uint32_t(left) + x];
+				}
+			}
 			call.write(call[3], metrics);
 			if (format == 0) {
 				call.ret(1);
@@ -709,10 +757,10 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			}
 			const uint32_t levels = format == 4 ? 4 : format == 5 ? 16 : 64;
 			const uint32_t stride = format == 1 ? ((box_width + 31) / 32) * 4 : (box_width + 3) & ~3U;
-			std::vector<uint8_t> bitmap(empty ? 0 : size_t(stride) * box_height, 0);
-			for (uint32_t y = 0; !empty && y < box_height; ++y)
+			std::vector<uint8_t> bitmap(coverage.empty() ? 0 : size_t(stride) * box_height, 0);
+			for (uint32_t y = 0; !coverage.empty() && y < box_height; ++y)
 				for (uint32_t x = 0; x < box_width; ++x) {
-					const uint8_t value = coverage[size_t(top + y) * width + uint32_t(left) + x];
+					const uint8_t value = coverage[size_t(y) * box_width + x];
 					if (format == 1) {
 						if (value >= 128)
 							bitmap[size_t(y) * stride + x / 8] |= uint8_t(0x80 >> (x % 8));
@@ -852,20 +900,26 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			call.ret(1);
 		});
 	});
-	// Glyph indices are the UTF-16 units themselves: a font's glyph for a character is named by the character, which ExtTextOutW with
-	// ETO_GLYPH_INDEX draws and the glyph measurements below measure.
+	// Glyph indices are the selected face's own, the ones its cmap table gives: programs that read that table themselves (Qt, Skia,
+	// HarfBuzz) compute the same numbers, which ExtTextOutW with ETO_GLYPH_INDEX draws and the glyph measurements below measure. With
+	// GGI_MARK_NONEXISTING_GLYPHS a character the face lacks is 0xffff instead of the missing glyph.
 	for (const bool narrow : {false, true})
 		registry.add(narrow ? "GetGlyphIndicesA" : "GetGlyphIndicesW", 5, [=, this](ApiCall &call) {
 			guarded(call, 0xffffffffU, [&] {
-				require_dc(call, 0);
 				const int32_t count = call.i32(2);
 				if (count < 0 || !call[1] || !call[3])
 					throw uint32_t(87);
+				auto &dc = require_dc(call, 0);
 				const auto text = widen(call, call[1], count, narrow);
-				std::vector<uint8_t> bytes(text.size() * 2);
-				std::memcpy(bytes.data(), text.data(), bytes.size());
+				auto ids = objects.text().logical_glyph_ids(selected_font(dc).definition, to_units(text));
+				if (call.u32(4) & 1)
+					for (auto &id : ids)
+						if (!id)
+							id = 0xffff;
+				std::vector<uint8_t> bytes(ids.size() * 2);
+				std::memcpy(bytes.data(), ids.data(), bytes.size());
 				call.write(call[3], bytes);
-				call.ret(uint32_t(text.size()));
+				call.ret(uint32_t(ids.size()));
 			});
 		});
 	// GetCharABCWidthsI(dc, first glyph, count, glyph array, ABC) and GetCharWidthI(dc, first glyph, count, glyph array, widths).
@@ -878,8 +932,8 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 				if (!call[4] || count > 65536)
 					throw uint32_t(87);
 				for (uint32_t index = 0; index < count; ++index) {
-					const uint16_t unit = call[3] ? call.load<uint16_t>(call[3] + uint64_t(index) * 2) : uint16_t(first + index);
-					const auto advance = measured_advances(font.definition, std::span<const uint16_t>(&unit, 1));
+					const uint16_t glyph = call[3] ? call.load<uint16_t>(call[3] + uint64_t(index) * 2) : uint16_t(first + index);
+					const auto advance = objects.text().logical_glyph_advances(font.definition, std::span<const uint16_t>(&glyph, 1));
 					const int32_t width = advance.empty() ? 0 : advance[0];
 					if (abc) {
 						const uint64_t at = call[4] + uint64_t(index) * 12;
@@ -1318,7 +1372,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		call.ret(0);
 	});
 	// The item, shape and place calls of Uniscribe for text that runs left to right in one script: one item, one glyph per character
-	// whose index is the character itself, and the advances the font gives. The script cache keeps the font a device context had, so
+	// named by the face's own glyph index, as GetGlyphIndicesW gives it, and the advances the font gives. The script cache keeps the font a device context had, so
 	// the calls that receive no device context still know it, as on Windows.
 	const auto cached_font = [=, this](ApiCall &call, uint64_t dc_handle, uint64_t cache) -> const DesktopFont * {
 		if (const auto *dc = dc_handle ? objects.dc(dc_handle) : nullptr; dc && objects.font(dc->font)) {
@@ -1327,13 +1381,6 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			return objects.font(dc->font);
 		}
 		return cache ? objects.font(call.load_pointer(cache)) : nullptr;
-	};
-	const auto glyph_advances = [=](const DesktopFont &font, const std::u16string &text) {
-		const auto cumulative = measured_advances(font.definition, to_units(text));
-		std::vector<int32_t> advances(text.size());
-		for (size_t index = 0; index < text.size() && index < cumulative.size(); ++index)
-			advances[index] = cumulative[index] - (index ? cumulative[index - 1] : 0);
-		return advances;
 	};
 	// ScriptItemize(text, count, item capacity, control, state, SCRIPT_ITEM, item count): one item and the end marker after it.
 	registry.add("ScriptItemize", 7, [](ApiCall &call) {
@@ -1396,13 +1443,14 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		call.ret(0);
 	});
 	// ScriptShape(dc, cache, text, count, glyph capacity, analysis, glyphs, clusters, visual attributes, glyph count).
-	registry.add("ScriptShape", 10, [=](ApiCall &call) {
+	registry.add("ScriptShape", 10, [=, this](ApiCall &call) {
 		const int32_t count = call.i32(3), capacity = call.i32(4);
 		if (!call[2] || count <= 0 || !call[6] || !call[7] || !call[8] || !call[9]) {
 			call.ret(0x80070057U);
 			return;
 		}
-		if (!cached_font(call, call[0], call[1])) {
+		const auto *shaped = cached_font(call, call[0], call[1]);
+		if (!shaped) {
 			call.ret(0x8000000aU);
 			return;
 		}
@@ -1419,14 +1467,19 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			const char16_t character = char16_t(text[size_t(index) * 2] | text[size_t(index) * 2 + 1] << 8);
 			attributes[size_t(index) * 2] = uint8_t(0x10 | (character == u' ' ? 4 : 2));
 		}
-		call.write(call[6], text);
+		std::vector<uint16_t> units(static_cast<size_t>(count));
+		std::memcpy(units.data(), text.data(), text.size());
+		const auto ids = objects.text().logical_glyph_ids(shaped->definition, units);
+		std::vector<uint8_t> glyph_bytes(ids.size() * 2);
+		std::memcpy(glyph_bytes.data(), ids.data(), glyph_bytes.size());
+		call.write(call[6], glyph_bytes);
 		call.write(call[7], clusters);
 		call.write(call[8], attributes);
 		call.store<int32_t>(call[9], count);
 		call.ret(0);
 	});
 	// ScriptPlace(dc, cache, glyphs, count, visual attributes, analysis, advances, offsets, ABC).
-	registry.add("ScriptPlace", 9, [=](ApiCall &call) {
+	registry.add("ScriptPlace", 9, [=, this](ApiCall &call) {
 		const int32_t count = call.i32(3);
 		const auto *font = cached_font(call, call[0], call[1]);
 		if (!call[2] || count <= 0 || !call[6]) {
@@ -1438,9 +1491,9 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			return;
 		}
 		const auto bytes = call.read(call[2], size_t(count) * 2);
-		std::u16string text(size_t(count), u'\0');
-		std::memcpy(text.data(), bytes.data(), bytes.size());
-		const auto advances = glyph_advances(*font, text);
+		std::vector<uint16_t> glyphs(static_cast<size_t>(count));
+		std::memcpy(glyphs.data(), bytes.data(), bytes.size());
+		const auto advances = objects.text().logical_glyph_advances(font->definition, glyphs);
 		int64_t total = 0;
 		for (int32_t index = 0; index < count; ++index) {
 			call.store<int32_t>(call[6] + uint64_t(index) * 4, advances[size_t(index)]);
@@ -1472,7 +1525,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		std::optional<DesktopRect> rect;
 		if (call[5])
 			rect = DesktopRect{call.load<int32_t>(call[5]), call.load<int32_t>(call[5] + 4), call.load<int32_t>(call[5] + 8), call.load<int32_t>(call[5] + 12)};
-		draw_run(*dc, call.i32(2), call.i32(3), call.u32(4) & 6, rect ? &*rect : nullptr, text, deltas);
+		draw_run(*dc, call.i32(2), call.i32(3), call.u32(4) & 6, rect ? &*rect : nullptr, text, deltas, true);
 		call.ret(0);
 	});
 	// ScriptCPtoX(position, trailing, characters, glyphs, clusters, visual attributes, advances, analysis, x).
@@ -1583,13 +1636,21 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 	// ScriptGetProperties(table, count): the properties of the scripts ScriptItemize names, which is the one neutral script: no language,
 	// the ANSI character set and simple text. The table stays for the life of the process, as Uniscribe's does.
 	auto script_table = std::make_shared<uint64_t>(0);
-	// SCRIPT_FONTPROPERTIES: glyphs here are the characters themselves, and no font offers a kashida.
-	registry.add("ScriptGetFontProperties", 3, [](ApiCall &call) {
+	// SCRIPT_FONTPROPERTIES(dc, cache, properties): the face's glyph for a space as the blank, its missing glyph 0 as the default and the
+	// invalid glyph, and no kashida.
+	registry.add("ScriptGetFontProperties", 3, [=, this](ApiCall &call) {
 		if (!call[2] || call.load<int32_t>(call[2]) != 16) {
 			call.ret(0x80070057U);
 			return;
 		}
-		call.store<uint16_t>(call[2] + 4, 0x20);
+		const auto *font = cached_font(call, call[0], call[1]);
+		if (!font) {
+			call.ret(0x8000000aU);
+			return;
+		}
+		const uint16_t space = u' ';
+		const auto blank = objects.text().logical_glyph_ids(font->definition, std::span<const uint16_t>(&space, 1));
+		call.store<uint16_t>(call[2] + 4, blank.empty() ? 0 : blank[0]);
 		call.store<uint16_t>(call[2] + 6, 0);
 		call.store<uint16_t>(call[2] + 8, 0);
 		call.store<uint16_t>(call[2] + 10, 0xffff);
