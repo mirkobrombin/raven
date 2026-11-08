@@ -26,6 +26,16 @@ int raven_entry(void)
 	if ((int)LOWORD(SendMessageW(left,EM_CHARFROMPOS,0,MAKELPARAM(start+1,5)))!=0) return 6;
 	if ((int)LOWORD(SendMessageW(left,EM_CHARFROMPOS,0,MAKELPARAM(third+1,5)))!=2) return 7;
 	if ((int)LOWORD(SendMessageW(left,EM_CHARFROMPOS,0,MAKELPARAM(58,5)))!=4) return 8;
+	// An MDI client erases what no child covers with the application workspace colour.
+	CLIENTCREATESTRUCT creation={0};
+	HWND client=CreateWindowExW(0,L"MDICLIENT",NULL,WS_CHILD,0,0,40,30,parent,NULL,NULL,&creation);
+	if (!client || GetClassLongPtrW(client,GCLP_HBRBACKGROUND)!=(ULONG_PTR)(COLOR_APPWORKSPACE+1)) return 9;
+	HDC screen=GetDC(NULL),memory=CreateCompatibleDC(screen);
+	HBITMAP bitmap=CreateCompatibleBitmap(screen,40,30),previous=SelectObject(memory,bitmap);
+	SetPixel(memory,10,10,RGB(1,2,3));
+	SendMessageW(client,WM_ERASEBKGND,(WPARAM)memory,0);
+	if (GetPixel(memory,10,10)!=GetSysColor(COLOR_APPWORKSPACE)) return 10;
+	SelectObject(memory,previous);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(NULL,screen);
 	DestroyWindow(parent);
 	return 0;
 }

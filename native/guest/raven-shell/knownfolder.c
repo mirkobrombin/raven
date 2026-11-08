@@ -61,6 +61,8 @@ static const folder_entry folders[] = {
 	{&FOLDERID_ProgramFilesCommon, L"ProgramFilesCommon", KF_CATEGORY_FIXED, CSIDL_PROGRAM_FILES_COMMON},
 	{&FOLDERID_ProgramFilesCommonX64, L"ProgramFilesCommonX64", KF_CATEGORY_FIXED, -1},
 	{&FOLDERID_ProgramFilesCommonX86, L"ProgramFilesCommonX86", KF_CATEGORY_FIXED, CSIDL_PROGRAM_FILES_COMMONX86},
+	{&FOLDERID_UserProgramFiles, L"UserProgramFiles", KF_CATEGORY_PERUSER, -1},
+	{&FOLDERID_UserProgramFilesCommon, L"UserProgramFilesCommon", KF_CATEGORY_PERUSER, -1},
 };
 #define FOLDER_COUNT (sizeof folders / sizeof folders[0])
 

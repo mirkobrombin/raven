@@ -97,6 +97,13 @@ static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM 
 #else
 		if (!dc || paint.hdc!=dc || paint.rcPaint.left || paint.rcPaint.top || paint.rcPaint.right!=32 || paint.rcPaint.bottom!=32)
 			failed=1;
+		{
+			/* A paint begun inside this one, as MFC's paint contexts nest, gets a context of its own and nothing left to update. */
+			PAINTSTRUCT inner;
+			HDC nested=BeginPaint(window,&inner);
+			if (!nested || nested==dc || inner.hdc!=nested || !IsRectEmpty(&inner.rcPaint)) failed=14;
+			if (!EndPaint(window,&inner)) failed=15;
+		}
 #ifdef RAVEN_BITBLT_PAINT
 		if (!BitBlt(dc,0,0,32,32,back_dc,0,0,SRCCOPY)) failed=2;
 #else

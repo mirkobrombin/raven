@@ -1341,6 +1341,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	shared_api.add("waveInGetNumDevs", 0, [](ApiCall &call) { call.ret(0); });
 	for (const auto *name : {"waveOutGetDevCapsW", "waveOutGetDevCapsA", "waveInGetDevCapsW", "waveInGetDevCapsA"})
 		shared_api.add(name, 3, [](ApiCall &call) { call.ret(2); });
+	register_midi_api(shared_api);
 	register_profile_api(shared_api, profile);
 	register_ansi_adapters(shared_api);
 	register_legacy_file_api(shared_api);

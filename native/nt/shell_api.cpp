@@ -70,7 +70,8 @@ constexpr KnownFolder known_folders[] = {
 	{0xdfdf76a2, -1, u"C:\\Users\\Public"}, {0x625b53c3, 0x0b, nullptr}, {0xa77f5d77, 0x02, nullptr}, {0xb97d20bb, 0x07, nullptr},
 	{0x352481e8, 0x20, nullptr}, {0x2b0f765d, 0x21, nullptr}, {0xd9dc8a3b, 0x22, nullptr}, {0x4c5c32ff, -1, u"%PROFILE%\\Saved Games"},
 	{0x1777f761, 0x06, nullptr}, {0xa4115719, 0x16, nullptr}, {0x0139d44e, 0x17, nullptr}, {0xae50c081, 0x27, nullptr},
-	{0x6365d5a7, -1, u"C:\\Program Files\\Common Files"}, {0x0762d272, -1, u"C:\\Users"}};
+	{0x6365d5a7, -1, u"C:\\Program Files\\Common Files"}, {0x0762d272, -1, u"C:\\Users"},
+	{0x5cd7aee2, -1, u"%PROFILE%\\AppData\\Local\\Programs"}, {0xbcbd3057, -1, u"%PROFILE%\\AppData\\Local\\Programs\\Common"}};
 
 // The double-NUL terminated file lists of SHFileOperation.
 // A list of names each ended by a zero and the list by one more, wide or in the ANSI code page.

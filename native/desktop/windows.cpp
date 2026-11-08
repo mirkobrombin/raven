@@ -1774,7 +1774,8 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 	}
 	if (message==0x0f && args[2]) return 0;
 	if (message==0x0f) {
-		if (window->painting) throw uint32_t(170);
+		// Inside a paint the window already began, the update is taken: nothing is left for the default procedure to paint.
+		if (window->painting) return 0;
 		start_paint(args[0]); finish_paint(args[0]);
 		if (std::as_const(objects).window(args[0])->visible) present(args[0]);
 		return 0;
@@ -2899,10 +2900,25 @@ bool NativeWindows::dispatch(std::string_view name)
 		}
 		else if (name=="BeginPaint") {
 			auto *window=objects.window(args[0]); if (!window) throw uint32_t(1400);
-			if (window->painting) throw uint32_t(170);
 			const bool narrow=process.mode()==NativeMode::x86;
 			const size_t P=narrow ? 4 : 8;
 			const auto old=process.read_memory(args[1],narrow ? 64 : 72); process.write_memory(args[1],old);
+			if (window->painting) {
+				// A paint begun inside another of the same window gets a context of its own over what is left to update, which the
+				// first paint already took: nothing, and an empty paint rectangle.
+				surface_dc(args[0]);
+				const auto *painted=std::as_const(objects).window(args[0]);
+				DesktopDC device{painted->bitmap,painted->bitmap,args[0]}; device.leased=true;
+				objects.configure_window_dc(args[0],device,false);
+				device.clip=DesktopRegion{};
+				result=objects.add(device);
+				if (!result) throw uint32_t(8);
+				std::vector<uint8_t> output(old.size());
+				put(output,0,result,P);
+				process.write_memory(args[1],output);
+				process.return_api(result);
+				return true;
+			}
 			const auto paint=start_paint(args[0]);
 			std::vector<uint8_t> output(old.size());
 			put(output,0,paint.dc,P); put(output,P,paint.erase,4);
@@ -2915,7 +2931,15 @@ bool NativeWindows::dispatch(std::string_view name)
 			const auto paint=process.read_memory(args[1],narrow ? 64 : 72);
 			// A paint the window's surface ended early, when the window changed size inside it, has nothing left to finish; EndPaint
 			// still succeeds, as it always does on Windows.
-			if (window->painting && read(paint,0,narrow ? 4 : 8)!=window->dc) throw uint32_t(87);
+			const uint64_t context=read(paint,0,narrow ? 4 : 8);
+			if (window->painting && context!=window->dc) {
+				// The end of a paint begun inside another: its own context goes, and the outer paint goes on.
+				const auto *device=objects.dc(context);
+				if (!device || !device->leased || device->window!=args[0]) throw uint32_t(87);
+				objects.erase(context);
+				process.return_api(1);
+				return true;
+			}
 			if (window->painting) finish_paint(args[0]);
 			if (objects.window_visible(args[0])) present(args[0]);
 			result=1;

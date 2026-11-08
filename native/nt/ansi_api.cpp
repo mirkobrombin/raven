@@ -27,6 +27,8 @@ struct Adapter {
 	uint32_t flag_mask = 0;
 	// The buffer holds a list: strings each ended by a zero, the list by one more, as the profile calls return keys and sections.
 	bool list = false;
+	// An input list at this argument, in the same form, as WritePrivateProfileSection takes a section's lines.
+	int input_list = -1;
 };
 
 const Adapter adapters[] = {
@@ -59,6 +61,7 @@ const Adapter adapters[] = {
 	{"GetPrivateProfileSectionNamesA", {2}, 0, 1, -1, -1, -1, 0, true},
 	{"GetPrivateProfileIntA", {0, 1, 3}},
 	{"WritePrivateProfileStringA", {0, 1, 2, 3}},
+	{"WritePrivateProfileSectionA", {0, 2}, -1, -1, -1, -1, -1, 0, false, 1},
 	{"GetDriveTypeA", {0}},
 	{"GetDateFormatA", {3}, 4, 5},
 	{"GetTimeFormatA", {3}, 4, 5},
@@ -125,6 +128,20 @@ void register_ansi_adapters(ApiRegistry &registry)
 				const auto at = scratch.block((text.size() + 1) * 2);
 				call.write(at, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.c_str()), (text.size() + 1) * 2));
 				words[index] = at;
+			}
+			if (adapter.input_list >= 0 && words[size_t(adapter.input_list)]) {
+				std::u16string joined;
+				for (uint64_t at = words[size_t(adapter.input_list)]; joined.size() < 65536;) {
+					const auto entry = call.narrow(at);
+					if (entry.empty())
+						break;
+					joined += from_ansi(entry, ansi_code_page) + u'\0';
+					at += entry.size() + 1;
+				}
+				joined.push_back(u'\0');
+				const auto at = scratch.block(joined.size() * 2);
+				call.write(at, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(joined.data()), joined.size() * 2));
+				words[size_t(adapter.input_list)] = at;
 			}
 			uint64_t narrow_buffer = 0, wide_buffer = 0;
 			uint32_t capacity = 0;

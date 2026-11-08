@@ -2073,7 +2073,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_command(OUTPUT ${EDIT_TEXT_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib
                     -Wl,--entry,raven_entry,--image-base,0x1da000000,--no-insert-timestamp
-                    -o ${EDIT_TEXT_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/edit_text_client.c -lkernel32 -luser32
+                    -o ${EDIT_TEXT_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/edit_text_client.c -lkernel32 -luser32 -lgdi32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/edit_text_client.c VERBATIM)
             add_custom_target(edit_text_fixture ALL DEPENDS ${EDIT_TEXT_CLIENT})
             add_test(NAME native_edit_text_contract COMMAND raven --run-process --execution=native ${EDIT_TEXT_CLIENT})
@@ -2106,7 +2106,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
                     -Wl,--entry,raven_entry,--image-base,0x1df000000,--no-insert-timestamp
                     -o ${PLATFORM_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/platform_client.c
-                    -lkernel32 -lshell32 -liphlpapi -ladvapi32 -lcrypt32 -lole32 -luuid -lws2_32 -lntdll -lgcc
+                    -lkernel32 -lshell32 -liphlpapi -ladvapi32 -lcrypt32 -lole32 -luuid -lws2_32 -lwinmm -lntdll -lgcc
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/platform_client.c VERBATIM)
             add_custom_target(platform_fixture ALL DEPENDS ${PLATFORM_CLIENT})
             add_test(NAME native_platform_services COMMAND raven --run-process --execution=native --timeout-ms=30000 ${PLATFORM_CLIENT})

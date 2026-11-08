@@ -37,6 +37,7 @@ BOOL WINAPI RavenInitControls(VOID)
 		const WCHAR *name;
 		WNDPROC procedure;
 		UINT style;
+		HBRUSH background;
 	} own_classes[] = {
 		{L"Button", RavenButtonProcW, CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC},
 		{L"Static", RavenStaticProcW, CS_DBLCLKS | CS_PARENTDC},
@@ -44,7 +45,7 @@ BOOL WINAPI RavenInitControls(VOID)
 		{L"ComboLBox", RavenListBoxProcW, CS_DBLCLKS | CS_SAVEBITS},
 		{L"ComboBox", RavenComboProcW, CS_DBLCLKS | CS_VREDRAW | CS_HREDRAW | CS_PARENTDC},
 		{L"Edit", RavenEditProcW, CS_DBLCLKS | CS_PARENTDC},
-		{L"MDIClient", RavenMdiClientProcW, 0},
+		{L"MDIClient", RavenMdiClientProcW, 0, (HBRUSH)(COLOR_APPWORKSPACE + 1)},
 	};
 	for (index = 0; index < sizeof own_classes / sizeof own_classes[0]; ++index) {
 		ZeroMemory(&definition, sizeof definition);
@@ -53,6 +54,7 @@ BOOL WINAPI RavenInitControls(VOID)
 		definition.lpfnWndProc = own_classes[index].procedure;
 		definition.cbWndExtra = sizeof(void *);
 		definition.hInstance = User32Instance;
+		definition.hbrBackground = own_classes[index].background;
 		definition.hCursor = LoadCursorW(NULL, own_classes[index].procedure == RavenEditProcW ? (LPCWSTR)IDC_IBEAM : (LPCWSTR)IDC_ARROW);
 		if (!(definition.lpszClassName = own_classes[index].name) || !RegisterClassExW(&definition))
 			return FALSE;

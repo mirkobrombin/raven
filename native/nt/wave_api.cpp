@@ -217,8 +217,25 @@ private:
 
 }
 
+void register_midi_api(ApiRegistry &registry)
+{
+	// No MIDI port, in or out: a program lists none, and opening one finds no such device; the mapper finds no device behind it.
+	constexpr uint32_t midierr_nodevice = 68, midi_mapper = 0xffffffffU;
+	for (const char *name : {"midiInGetNumDevs", "midiOutGetNumDevs"})
+		registry.add(name, 0, [](ApiCall &call) { call.ret(0); });
+	for (const char *name : {"midiInGetDevCapsW", "midiInGetDevCapsA", "midiOutGetDevCapsW", "midiOutGetDevCapsA"})
+		registry.add(name, 3, [](ApiCall &call) { call.ret(mmsyserr_baddeviceid); });
+	for (const char *name : {"midiInOpen", "midiOutOpen"})
+		registry.add(name, 5, [](ApiCall &call) {
+			if (call[0])
+				call.store_pointer(call[0], 0);
+			call.ret(call.u32(1) == midi_mapper ? midierr_nodevice : mmsyserr_baddeviceid);
+		});
+}
+
 void register_wave_api(ApiRegistry &registry, KernelContext &context)
 {
+	register_midi_api(registry);
 	auto &objects = context.objects;
 	auto devices = std::make_shared<std::map<uint64_t, std::weak_ptr<WaveOut>>>();
 	const auto device_of = [&objects](uint64_t handle) { return objects.object_as<WaveOut>(handle); };

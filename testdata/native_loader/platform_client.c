@@ -13,6 +13,7 @@
 #include <wincrypt.h>
 #include <aclapi.h>
 #include <psapi.h>
+#include <mmsystem.h>
 
 static void clear(void *memory, int length)
 {
@@ -381,6 +382,16 @@ int raven_entry(void)
 	if (SHGetKnownFolderPath(&FOLDERID_UserProfiles, 0, NULL, &folder) != S_OK || lstrcmpiW(folder, L"C:\\Users"))
 		return 240;
 	CoTaskMemFree(folder);
+	/* A program installed for one user goes under its local application data, where Inno Setup's {autopf} points then. */
+	if (SHGetKnownFolderPath(&FOLDERID_UserProgramFiles, 0, NULL, &folder) != S_OK || !contains(folder, L"AppData\\Local\\Programs"))
+		return 241;
+	CoTaskMemFree(folder);
+	{
+		/* No MIDI port: none is listed, and the mapper finds no device behind it. */
+		HMIDIOUT output = (HMIDIOUT)1;
+		if (midiInGetNumDevs() || midiOutGetNumDevs() || midiOutOpen(&output, MIDI_MAPPER, 0, 0, CALLBACK_NULL) != MIDIERR_NODEVICE || output)
+			return 242;
+	}
 	if ((size = known_folder_manager()))
 		return 230 + (int)size;
 	if ((size = virtual_package_files()))

@@ -138,6 +138,11 @@ int raven_entry(void)
 	if (!WritePrivateProfileSectionW(L"Field 1", L"Type=Groupbox\0Text=\x2192\0", unicode) || !has_value(L"Field 1", L"Type", L"Groupbox", unicode) ||
 		!has_value(L"Field 1", L"Text", L"\x2192", unicode) || !all_wide(unicode))
 		return 28;
+	/* The ANSI call takes the lines in the program's code page. */
+	if (!WideCharToMultiByte(CP_ACP, 0, sections, -1, path, MAX_PATH, NULL, NULL) ||
+		!WritePrivateProfileSectionA("Fourth", "Name=Caf\xe9\0Size=2\0", path) || !has_value(L"Fourth", L"Name", L"Caf\x00e9", sections) ||
+		GetPrivateProfileIntW(L"Fourth", L"Size", 0, sections) != 2)
+		return 29;
 
 	/* A file in a directory that does not exist is not written. */
 	SetLastError(0);
