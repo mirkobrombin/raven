@@ -313,7 +313,7 @@ void draw_part(Shapes &shapes, const Palette &tone, const std::string &klass, in
 			shapes.fill(box.left, box.top, box.right, box.bottom, tone.surface);
 		else if (part == 9 || part == 10) // MENU_POPUPBACKGROUND, MENU_POPUPBORDERS
 			shapes.rounded(box.left, box.top, box.right, box.bottom, 4, tone.white, tone.stroke);
-		else if ((part == 8 || part == 14) && (state == 2 || state == 3)) // MENU_BARITEM, MENU_POPUPITEM, hot or pushed
+		else if ((part == 8 && (state == 2 || state == 3)) || (part == 14 && state == 2)) // MENU_BARITEM hot or pushed, MENU_POPUPITEM hot
 			shapes.rounded(box.left + 2, box.top + 1, box.right - 2, box.bottom - 1, 4, tone.subtle_hot, std::nullopt);
 		else if (part == 15) // MENU_POPUPSEPARATOR
 			shapes.fill(box.left + 4, std::floor(box.cy()), box.right - 4, std::floor(box.cy()) + 1, tone.divider);
