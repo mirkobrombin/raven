@@ -16,6 +16,9 @@
 #define WP_DIALOG 29
 #define TTP_STANDARD 1
 #define MENU_POPUPBACKGROUND 9
+#define MENU_POPUPITEM 14
+#define MPI_HOT 2
+#define MPI_DISABLED 3
 #define EBP_HEADERBACKGROUND 1
 
 #define SURFACE RGB(0xf3, 0xf3, 0xf3)
@@ -47,8 +50,8 @@ static COLORREF text_of(HWND window, const WCHAR *classes)
 	return color;
 }
 
-/* The color at (x, y) of a part drawn over a 40x20 black bitmap; CLR_INVALID if the class cannot be opened or drawn. */
-static COLORREF drawn(const WCHAR *klass, int part, int x, int y)
+/* The color at (x, y) of a part in a state drawn over a 40x20 black bitmap; CLR_INVALID if the class cannot be opened or drawn. */
+static COLORREF drawn_in(const WCHAR *klass, int part, int state, int x, int y)
 {
 	BITMAPINFOHEADER header = {sizeof header, 40, -20, 1, 32, BI_RGB};
 	RECT whole = {0, 0, 40, 20};
@@ -63,7 +66,7 @@ static COLORREF drawn(const WCHAR *klass, int part, int x, int y)
 		for (int at = 0; at < 40 * 20; ++at)
 			pixels[at] = 0;
 		SelectObject(dc, bitmap);
-		if (DrawThemeBackground(theme, dc, part, 0, &whole, NULL) == S_OK) {
+		if (DrawThemeBackground(theme, dc, part, state, &whole, NULL) == S_OK) {
 			const BYTE *pixel = (const BYTE *)bits + (y * 40 + x) * 4;
 			color = RGB(pixel[2], pixel[1], pixel[0]);
 		}
@@ -74,6 +77,11 @@ static COLORREF drawn(const WCHAR *klass, int part, int x, int y)
 	if (theme)
 		CloseThemeData(theme);
 	return color;
+}
+
+static COLORREF drawn(const WCHAR *klass, int part, int x, int y)
+{
+	return drawn_in(klass, part, 0, x, y);
 }
 
 static int parts(void)
@@ -92,6 +100,9 @@ static int parts(void)
 		return 23;
 	if (drawn(L"Menu", MENU_POPUPBACKGROUND, 20, 10) != RGB(255, 255, 255))
 		return 24;
+	/* A hot popup item is highlighted; a disabled one is not, though its state number is the one a pushed menu bar item has. */
+	if (drawn_in(L"Menu", MENU_POPUPITEM, MPI_HOT, 20, 10) == RGB(0, 0, 0) || drawn_in(L"Menu", MENU_POPUPITEM, MPI_DISABLED, 20, 10) != RGB(0, 0, 0))
+		return 29;
 	theme = OpenThemeData(NULL, L"Tooltip");
 	if (!theme || !IsThemeBackgroundPartiallyTransparent(theme, TTP_STANDARD, 0))
 		return 25;
