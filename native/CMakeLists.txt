@@ -1303,6 +1303,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(token_membership_fixture ALL DEPENDS ${TOKEN_MEMBERSHIP_FIXTURE})
             add_test(NAME native_token_membership COMMAND raven --run-process --execution=native ${TOKEN_MEMBERSHIP_FIXTURE})
             set_tests_properties(native_token_membership PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(SECTION_VIEWS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/section-views.exe)
+            add_custom_command(OUTPUT ${SECTION_VIEWS_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${SECTION_VIEWS_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/section_views_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/section_views_client.c VERBATIM)
+            add_custom_target(section_views_fixture ALL DEPENDS ${SECTION_VIEWS_FIXTURE})
+            add_test(NAME native_section_views_share_pages COMMAND raven --run-process --execution=native ${SECTION_VIEWS_FIXTURE})
+            set_tests_properties(native_section_views_share_pages PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector

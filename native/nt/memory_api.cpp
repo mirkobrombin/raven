@@ -362,6 +362,13 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 			::fstat(mapping->file->descriptor, &metadata);
 			const uint64_t maximum = uint64_t(call.u32(3)) << 32 | call.u32(4);
 			mapping->size = maximum ? maximum : uint64_t(metadata.st_size);
+			// A writable section larger than its file grows the file to its size, as on Windows, so that every view maps the file itself.
+			const auto page_protection = call.u32(2) & 0xffU;
+			if ((page_protection == 0x04 || page_protection == 0x40) && maximum > uint64_t(metadata.st_size) && maximum <= uint64_t(INT64_MAX))
+				if (::ftruncate(mapping->file->descriptor, off_t(maximum))) {
+					call.fail(5);
+					return;
+				}
 		} else {
 			mapping->size = uint64_t(call.u32(3)) << 32 | call.u32(4);
 			if (!mapping->size) {
@@ -657,14 +664,15 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(address);
 			return;
 		}
-		// A view that can only be read is the file itself, as on Windows: a program that maps a library of hundreds of megabytes to
-		// read it would otherwise have the whole file copied into its memory. A view the program may write, or one past the end of the
-		// file, is copied as before.
-		if (mapping->file && !(call.u32(1) & 0x3)) {
+		// A view is the file itself, as on Windows: every view of a file, through any section, shares its pages, and a program that maps
+		// a library of hundreds of megabytes to read it does not get the whole file copied into its memory. A copy-on-write view, or one
+		// past the end of the file, is copied as before.
+		if (mapping->file && !(call.u32(1) & 0x1)) {
 			struct stat status{};
+			const bool write = call.u32(1) & 0x2, execute = call.u32(1) & 0x20;
 			if (::fstat(mapping->file->descriptor, &status) == 0 && offset + size <= uint64_t(status.st_size)) {
 				try {
-					const auto view = memory.map_view(mapping->file->descriptor, offset, size, call.u32(1) & 0x20 ? 0x20 : 0x02);
+					const auto view = memory.map_view(mapping->file->descriptor, offset, size, write ? (execute ? 0x40 : 0x04) : execute ? 0x20 : 0x02);
 					if (!view.status) {
 						views[view.address] = {mapping, offset, size, false};
 						call.ret(view.address);
