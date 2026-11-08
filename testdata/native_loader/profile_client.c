@@ -1,5 +1,6 @@
 /* WritePrivateProfileString keeps a profile's encoding: a Unicode file (UTF-16 after a byte order mark, as the NSIS InstallOptions plugin
-   makes its page files) gets Unicode lines that read back, and an ANSI file gets ANSI ones. */
+   makes its page files) gets Unicode lines that read back, and an ANSI file gets ANSI ones. WritePrivateProfileSection replaces a
+   section's lines where it stands. */
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
@@ -8,6 +9,8 @@ static const char unicode_start[] = "\xff\xfe[\0S\0e\0t\0t\0i\0n\0g\0s\0]\0\r\0\
 	"[\0F\0i\0e\0l\0d\0 \0001\0]\0\r\0\n\0T\0y\0p\0e\0=\0B\0i\0t\0m\0a\0p\0\r\0\n\0";
 static const char ansi_start[] = "[Settings]\r\nNumFields=3\r\n";
 static const char ansi_end[] = "[Settings]\r\nNumFields=3\r\nRect=1044\r\n\r\n[Field 1]\r\nType=Label\r\n";
+static const char sections_start[] = "[First]\r\nOld=1\r\nGone=2\r\n\r\n[Second]\r\nKeep=3\r\n";
+static const char sections_end[] = "[First]\r\nNew=4\r\nPlain line\r\n\r\n[Second]\r\nKeep=3\r\n\r\n[Third]\r\nAdded=5\r\n";
 
 static int put_file(const WCHAR *name, const char *bytes, DWORD size)
 {
@@ -64,7 +67,7 @@ static int all_wide(const WCHAR *name)
 
 int raven_entry(void)
 {
-	WCHAR directory[MAX_PATH], unicode[MAX_PATH], ansi[MAX_PATH], missing[MAX_PATH];
+	WCHAR directory[MAX_PATH], unicode[MAX_PATH], ansi[MAX_PATH], sections[MAX_PATH], missing[MAX_PATH];
 	char bytes[512], path[MAX_PATH];
 	DWORD length = GetTempPathW(MAX_PATH - 32, directory);
 	if (!length)
@@ -73,6 +76,8 @@ int raven_entry(void)
 	lstrcatW(unicode, L"raven-profile-unicode.ini");
 	lstrcpyW(ansi, directory);
 	lstrcatW(ansi, L"raven-profile-ansi.ini");
+	lstrcpyW(sections, directory);
+	lstrcatW(sections, L"raven-profile-sections.ini");
 	lstrcpyW(missing, directory);
 	lstrcatW(missing, L"raven-no-such-directory\\profile.ini");
 
@@ -119,6 +124,21 @@ int raven_entry(void)
 	if (GetPrivateProfileIntW(L"Settings", L"Rect", 1018, ansi) != 1044 || !has_value(L"Field 1", L"Type", L"Label", ansi))
 		return 23;
 
+	/* A section's lines are replaced where it stands, a new one goes at the end, and no lines remove one; Unicode stays Unicode. */
+	if (!put_file(sections, sections_start, sizeof sections_start - 1))
+		return 24;
+	if (!WritePrivateProfileSectionW(L"first", L"New=4\0Plain line\0", sections) || !WritePrivateProfileSectionW(L"Third", L"Added=5\0", sections))
+		return 25;
+	length = get_file(sections, bytes, sizeof bytes);
+	if (length != sizeof sections_end - 1 || !same_bytes(bytes, sections_end, length))
+		return 26;
+	if (!WritePrivateProfileSectionW(L"Second", NULL, sections) || !has_value(L"Second", L"Keep", L"(none)", sections) ||
+		!has_value(L"Third", L"Added", L"5", sections))
+		return 27;
+	if (!WritePrivateProfileSectionW(L"Field 1", L"Type=Groupbox\0Text=\x2192\0", unicode) || !has_value(L"Field 1", L"Type", L"Groupbox", unicode) ||
+		!has_value(L"Field 1", L"Text", L"\x2192", unicode) || !all_wide(unicode))
+		return 28;
+
 	/* A file in a directory that does not exist is not written. */
 	SetLastError(0);
 	if (WritePrivateProfileStringW(L"Settings", L"Rect", L"1044", missing) || GetLastError() != ERROR_PATH_NOT_FOUND)
@@ -126,5 +146,6 @@ int raven_entry(void)
 
 	DeleteFileW(unicode);
 	DeleteFileW(ansi);
+	DeleteFileW(sections);
 	return 0;
 }

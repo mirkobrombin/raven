@@ -159,31 +159,64 @@ std::string narrow_line(std::u16string_view value)
 	return result;
 }
 
-// Sets, replaces or removes a value (or a whole section) in an INI file, keeping every other line as it was. The documentation of
-// WritePrivateProfileString: a file created with Unicode characters gets Unicode characters, any other file ANSI ones.
+// Where a section sits: the line of its header and the line after its last one, or the end of the file twice when it has none.
+struct SectionRange {
+	size_t start;
+	size_t end;
+	bool found = false;
+};
+
+SectionRange find_section(const std::vector<std::u16string> &lines, std::u16string_view section)
+{
+	const auto wanted = fold(section);
+	SectionRange range{lines.size(), lines.size()};
+	for (size_t index = 0; index < lines.size(); ++index) {
+		const auto text = trim(lines[index]);
+		if (text.empty() || text[0] != u'[')
+			continue;
+		const auto close = text.find(u']');
+		const bool match = close != text.npos && fold(trim(text.substr(1, close - 1))) == wanted;
+		if (range.found && !match) {
+			range.end = index;
+			break;
+		}
+		if (match && !range.found) {
+			range.found = true;
+			range.start = index;
+		}
+	}
+	return range;
+}
+
+// The documentation of WritePrivateProfileString: a file created with Unicode characters gets Unicode characters, any other file ANSI
+// ones.
+bool save_file(const std::filesystem::path &file, const ProfileFile &contents)
+{
+	std::string bytes = contents.unicode ? "\xff\xfe" : "";
+	for (const auto &line : contents.lines) {
+		if (contents.unicode) {
+			for (const auto character : line + u"\r\n") {
+				bytes.push_back(char(character & 0xff));
+				bytes.push_back(char(character >> 8));
+			}
+		} else {
+			bytes += narrow_line(line) + "\r\n";
+		}
+	}
+	std::ofstream output(file, std::ios::binary | std::ios::trunc);
+	if (!output)
+		return false;
+	output << bytes;
+	return bool(output);
+}
+
+// Sets, replaces or removes a value (or a whole section) in an INI file, keeping every other line as it was.
 bool write_value(const std::filesystem::path &file, std::u16string_view section, const std::u16string *key, const std::u16string *value)
 {
 	auto contents = read_file(file).value_or(ProfileFile{});
 	auto &lines = contents.lines;
-	const auto wanted_section = fold(section);
 	const auto wanted_key = key ? fold(*key) : std::u16string{};
-	size_t section_start = lines.size(), section_end = lines.size();
-	bool found_section = false;
-	for (size_t index = 0; index < lines.size(); ++index) {
-		const auto text = trim(lines[index]);
-		if (!text.empty() && text[0] == u'[') {
-			const auto close = text.find(u']');
-			const bool match = close != text.npos && fold(trim(text.substr(1, close - 1))) == wanted_section;
-			if (found_section && !match && section_end == lines.size()) {
-				section_end = index;
-				break;
-			}
-			if (match && !found_section) {
-				found_section = true;
-				section_start = index;
-			}
-		}
-	}
+	const auto [section_start, section_end, found_section] = find_section(lines, section);
 	if (!key) {
 		// No key: the whole section goes.
 		if (!found_section)
@@ -223,22 +256,35 @@ bool write_value(const std::filesystem::path &file, std::u16string_view section,
 			}
 		}
 	}
-	std::string bytes = contents.unicode ? "\xff\xfe" : "";
-	for (const auto &line : lines) {
-		if (contents.unicode) {
-			for (const auto character : line + u"\r\n") {
-				bytes.push_back(char(character & 0xff));
-				bytes.push_back(char(character >> 8));
-			}
-		} else {
-			bytes += narrow_line(line) + "\r\n";
-		}
+	return save_file(file, contents);
+}
+
+// Replaces every line of a section with the given ones, where the section stands, or adds it at the end; no lines remove it.
+bool write_section(const std::filesystem::path &file, std::u16string_view section, const std::vector<std::u16string> *entries)
+{
+	auto contents = read_file(file).value_or(ProfileFile{});
+	auto &lines = contents.lines;
+	const auto range = find_section(lines, section);
+	if (!entries) {
+		if (!range.found)
+			return true;
+		lines.erase(lines.begin() + static_cast<ptrdiff_t>(range.start), lines.begin() + static_cast<ptrdiff_t>(range.end));
+		return save_file(file, contents);
 	}
-	std::ofstream output(file, std::ios::binary | std::ios::trunc);
-	if (!output)
-		return false;
-	output << bytes;
-	return bool(output);
+	if (range.found) {
+		// The blank lines that end the section stay, keeping it apart from the next one.
+		size_t last = range.end;
+		while (last > range.start + 1 && trim(lines[last - 1]).empty())
+			--last;
+		lines.erase(lines.begin() + static_cast<ptrdiff_t>(range.start + 1), lines.begin() + static_cast<ptrdiff_t>(last));
+		lines.insert(lines.begin() + static_cast<ptrdiff_t>(range.start + 1), entries->begin(), entries->end());
+	} else {
+		if (!lines.empty() && !trim(lines.back()).empty())
+			lines.push_back(u"");
+		lines.push_back(u"[" + std::u16string(section) + u"]");
+		lines.insert(lines.end(), entries->begin(), entries->end());
+	}
+	return save_file(file, contents);
 }
 
 }
@@ -314,10 +360,11 @@ bool NativeProfile::execute(std::string_view name, const std::vector<uint64_t> &
 		result = put_list(args[1], uint32_t(args[2]), lines);
 		return true;
 	}
-	if (name == "WritePrivateProfileStringW") {
+	if (name == "WritePrivateProfileStringW" || name == "WritePrivateProfileSectionW") {
+		const bool whole = name == "WritePrivateProfileSectionW";
 		result = 0;
 		try {
-			const auto section = text(args[0]), key = text(args[1]), value = text(args[2]), file_name = text(args[3]);
+			const auto section = text(args[0]), file_name = text(args[whole ? 2 : 3]);
 			if (!section || !file_name) {
 				environment.set_last_error(87);
 				return true;
@@ -331,8 +378,27 @@ bool NativeProfile::execute(std::string_view name, const std::vector<uint64_t> &
 				environment.set_last_error(3);
 				return true;
 			}
-			// A missing key removes the section; a missing value removes the key.
-			if (write_value(*path, *section, key ? &*key : nullptr, value ? &*value : nullptr))
+			bool written = false;
+			if (whole) {
+				// The section's new lines, each ended by a zero and the list by one more; no list removes the section.
+				std::optional<std::vector<std::u16string>> entries;
+				if (args[1]) {
+					entries.emplace();
+					for (uint64_t address = args[1]; entries->size() < 32768;) {
+						auto entry = text(address);
+						if (!entry || entry->empty())
+							break;
+						address += (entry->size() + 1) * 2;
+						entries->push_back(std::move(*entry));
+					}
+				}
+				written = write_section(*path, *section, entries ? &*entries : nullptr);
+			} else {
+				// A missing key removes the section; a missing value removes the key.
+				const auto key = text(args[1]), value = text(args[2]);
+				written = write_value(*path, *section, key ? &*key : nullptr, value ? &*value : nullptr);
+			}
+			if (written)
 				result = 1;
 			else
 				environment.set_last_error(5);
@@ -484,10 +550,11 @@ bool NativeProfile::execute(std::string_view name, const std::vector<uint64_t> &
 
 bool NativeProfile::dispatch(std::string_view name)
 {
-	const uint32_t count = name == "GetPrivateProfileSectionNamesW" ? 3 : name == "GetPrivateProfileIntW" || name == "WritePrivateProfileStringW" ||
+	const uint32_t count = name == "GetPrivateProfileSectionNamesW" || name == "WritePrivateProfileSectionW" ? 3 : name == "GetPrivateProfileIntW" || name == "WritePrivateProfileStringW" ||
 		name == "GetPrivateProfileSectionW" ? 4 : name == "GetPrivateProfileStructW" || name == "WritePrivateProfileStructW" ? 5 : 6;
 	if (name != "GetPrivateProfileSectionNamesW" && name != "GetPrivateProfileIntW" && name != "GetPrivateProfileStringW" && name != "WritePrivateProfileStringW" &&
-		name != "GetPrivateProfileSectionW" && name != "GetPrivateProfileStructW" && name != "WritePrivateProfileStructW")
+		name != "GetPrivateProfileSectionW" && name != "WritePrivateProfileSectionW" && name != "GetPrivateProfileStructW" &&
+		name != "WritePrivateProfileStructW")
 		return false;
 	uint64_t result = 0;
 	execute(name, process.api_arguments(count), result);
@@ -513,6 +580,11 @@ void register_profile_api(ApiRegistry &registry, NativeProfile &profile)
 	registry.add("GetPrivateProfileIntW", 4, [&profile](ApiCall &call) {
 		uint64_t result = 0;
 		profile.execute("GetPrivateProfileIntW", {call[0], call[1], call[2], call[3]}, result);
+		call.ret(result);
+	});
+	registry.add("WritePrivateProfileSectionW", 3, [&profile](ApiCall &call) {
+		uint64_t result = 0;
+		profile.execute("WritePrivateProfileSectionW", {call[0], call[1], call[2]}, result);
 		call.ret(result);
 	});
 	registry.add("WritePrivateProfileStringW", 4, [&profile](ApiCall &call) {
