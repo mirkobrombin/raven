@@ -71,6 +71,7 @@ int main(int argc,char **argv)
 		check(result.value!=12,"the window stayed maximized after its restore button");
 		check(restored && restore_asked,"the restore button did not bring the window back to its size");
 		check(result.value!=13,"the restored window is not at its own rectangle");
+		check(result.value!=14,"the presses on the frame did not reach the window as WM_NCLBUTTONDOWN");
 		check(!result.value,"frame restore workflow failed");
 		check(moved!=0,"a press on the caption of the restored window did not start a move");
 	} catch (const std::exception &error) { std::cerr<<error.what()<<'\n'; return 1; }

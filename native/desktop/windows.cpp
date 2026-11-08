@@ -1269,7 +1269,23 @@ void NativeWindows::place_pointer(const DesktopEvent &event,uint32_t message,uin
 	// Scroll bars and the frame may run a loop of their own that waits for the release, so what was held goes in first.
 	if (hit!=1 && placing_press) release_held_input();
 	if ((hit==6 || hit==7) && scroll_pointer(target,hit,message,int32_t(x),int32_t(y))) return;
-	if (hit!=1) { nonclient_pointer(target,hit,message,int32_t(event.x),int32_t(event.y)); return; }
+	// Outside the client area the window hears the WM_NC* form of the message, with the hit code and the screen position; the default
+	// procedure runs the frame from it, so a program that draws its own caption can take the press first.
+	if (hit!=1) {
+		if (messages.size()>=10000) throw std::runtime_error("guest input queue limit reached");
+		const auto nonclient=message-0x200+0xa0;
+		const Message input{target,hit,uint16_t(x)|(uint64_t(uint16_t(y))<<16),nonclient,message_time(),int32_t(x),int32_t(y)};
+		if (nonclient==0xa0 && !messages.empty() && messages.back().message==0xa0 && messages.back().window==target) {
+			const auto thread=messages.back().thread;
+			messages.back()=input;
+			messages.back().thread=thread;
+			messages.back().kinds=2;
+			queue_changed(thread,2);
+			return;
+		}
+		queue(input,nonclient==0xa0 ? 2 : 4);
+		return;
+	}
 	// A second press of the same button on the same window within the double-click time (500 ms) and rectangle (SM_CXDOUBLECLK, 4 by 4)
 	// is a double click when the window's class asks for them (CS_DBLCLKS); the press after a double click starts over.
 	if (message==0x201 || message==0x204 || message==0x207) {
@@ -1704,6 +1720,16 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 		const auto x=uint16_t(int64_t(window->x)+int16_t(uint16_t(args[3])));
 		const auto y=uint16_t(int64_t(window->y)+int16_t(uint16_t(args[3]>>16)));
 		send(args[0],0x7b,args[0],uint32_t(x)|(uint32_t(y)<<16));
+		return 0;
+	}
+	// WM_NCMOUSEMOVE to WM_NCMBUTTONDBLCLK: the frame answers the pointer, given in screen coordinates, as the window's host saw it.
+	if (message>=0xa0 && message<=0xa9) {
+		const auto root=objects.window_root(args[0]);
+		const auto *host=std::as_const(objects).window(root);
+		if (!host) return 0;
+		const auto x=int32_t(int16_t(uint16_t(args[3])))-host->outer.left,y=int32_t(int16_t(uint16_t(args[3]>>16)))-host->outer.top;
+		const auto pointer=message==0xa3 ? 0x201U : message==0xa6 ? 0x204U : message==0xa9 ? 0x207U : message-0xa0+0x200;
+		nonclient_pointer(args[0],args[2],pointer,x,y);
 		return 0;
 	}
 	// WM_WINDOWPOSCHANGED: the window hears where its client area went, unless SWP_NOCLIENTMOVE or SWP_NOCLIENTSIZE say it stayed.
