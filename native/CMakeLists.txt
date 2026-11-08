@@ -1254,6 +1254,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${OUTER_SURFACE_VISIBLE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/outer_surface_client.c -lkernel32 -luser32 -lgdi32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/outer_surface_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/icon_data.h VERBATIM)
             add_custom_target(outer_surface_visible_fixture ALL DEPENDS ${OUTER_SURFACE_VISIBLE})
+            set(DIALOG_FRAME_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/dialog-frame.exe)
+            add_custom_command(OUTPUT ${DIALOG_FRAME_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${DIALOG_FRAME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c VERBATIM)
+            add_custom_target(dialog_frame_fixture ALL DEPENDS ${DIALOG_FRAME_FIXTURE})
+            add_executable(dialog_frame_test desktop/dialog_frame_test.cpp)
+            target_link_libraries(dialog_frame_test PRIVATE raven_cpu)
+            add_dependencies(dialog_frame_test dialog_frame_fixture raven-bootstrap)
+            add_test(NAME native_dialog_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${DIALOG_FRAME_FIXTURE})
+            set_tests_properties(native_dialog_frame PROPERTIES TIMEOUT 15)
+            set(DESTROYED_FRAME_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/destroyed-frame.exe)
+            add_custom_command(OUTPUT ${DESTROYED_FRAME_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -DDESTROYED_FRAME
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${DESTROYED_FRAME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c VERBATIM)
+            add_custom_target(destroyed_frame_fixture ALL DEPENDS ${DESTROYED_FRAME_FIXTURE})
+            add_dependencies(dialog_frame_test destroyed_frame_fixture)
+            add_test(NAME native_destroyed_child_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${DESTROYED_FRAME_FIXTURE} destroyed)
+            set_tests_properties(native_destroyed_child_frame PROPERTIES TIMEOUT 15)
             add_executable(outer_surface_test desktop/outer_surface_test.cpp)
             target_link_libraries(outer_surface_test PRIVATE raven_cpu)
             add_dependencies(outer_surface_test outer_surface_visible_fixture raven-bootstrap)

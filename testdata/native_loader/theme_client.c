@@ -20,6 +20,7 @@
 #define MPI_HOT 2
 #define MPI_DISABLED 3
 #define EBP_HEADERBACKGROUND 1
+#define RP_BACKGROUND 6
 
 #define SURFACE RGB(0xf3, 0xf3, 0xf3)
 #define DIVIDER RGB(0xe0, 0xe0, 0xe0)
@@ -103,6 +104,9 @@ static int parts(void)
 	/* A hot popup item is highlighted; a disabled one is not, though its state number is the one a pushed menu bar item has. */
 	if (drawn_in(L"Menu", MENU_POPUPITEM, MPI_HOT, 20, 10) == RGB(0, 0, 0) || drawn_in(L"Menu", MENU_POPUPITEM, MPI_DISABLED, 20, 10) != RGB(0, 0, 0))
 		return 29;
+	/* A rebar's background, which MFC control bars draw behind their toolbars, is the window surface. */
+	if (drawn(L"Rebar", RP_BACKGROUND, 20, 10) != SURFACE)
+		return 30;
 	theme = OpenThemeData(NULL, L"Tooltip");
 	if (!theme || !IsThemeBackgroundPartiallyTransparent(theme, TTP_STANDARD, 0))
 		return 25;

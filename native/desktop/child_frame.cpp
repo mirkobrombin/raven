@@ -34,6 +34,19 @@ void NativeWindows::paint_child_frames(uint64_t root)
 				self(self, handle);
 				continue;
 			}
+			// A dialog frame or a sizing border without a caption is a raised edge with the rest of the border in the face colour.
+			if ((window->ex_style & 0x1U || window->style & 0x440000U) && (window->style & 0xc00000U) != 0xc00000U) {
+				const DesktopRect client{window->x - top->outer.left, window->y - top->outer.top,
+					window->x - top->outer.left + window->width, window->y - top->outer.top + window->height};
+				const auto face = color(color_button_face);
+				canvas.fill({rect.left, rect.top, rect.right, client.top}, face);
+				canvas.fill({rect.left, client.bottom, rect.right, rect.bottom}, face);
+				canvas.fill({rect.left, client.top, client.left, client.bottom}, face);
+				canvas.fill({client.right, client.top, rect.right, client.bottom}, face);
+				canvas.edge(rect, color(color_light), color(color_dark_shadow), color(color_button_highlight), color(color_button_shadow));
+				self(self, handle);
+				continue;
+			}
 			// With visual styles the sunken edges become the thin light borders of Windows 11 fields and lists, or dark ones for a window
 			// given a dark theme variant.
 			if (themed() && (window->ex_style & 0x20200U || window->style & 0x800000U)) {

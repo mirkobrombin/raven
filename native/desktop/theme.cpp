@@ -263,7 +263,7 @@ void draw_part(Shapes &shapes, const Palette &tone, const std::string &klass, in
 	else if (klass == "rebar") {
 		if (part == 4) // RP_CHEVRON
 			shapes.chevron(box.cx(), box.cy(), 6, 'r', tone.glyph);
-		else if (part == 0 || part == 3)
+		else if (part == 0 || part == 3 || part == 6) // the band and RP_BACKGROUND
 			shapes.fill(box.left, box.top, box.right, box.bottom, tone.surface);
 	} else if (klass == "status") {
 		if (part == 0)

@@ -1662,7 +1662,12 @@ bool NativeWindows::destroy(uint64_t handle)
 	dark_allowed_windows.erase(handle);
 	foreign_content.erase(handle);
 	foreign_black.erase(handle);
-	return objects.erase(handle);
+	// A parent that clips its children draws where this one was again.
+	const auto *leaving=std::as_const(objects).window(handle);
+	const auto parent=leaving ? leaving->parent : 0;
+	const bool erased=objects.erase(handle);
+	if (erased && parent && std::as_const(objects).window(parent)) objects.update_window_dcs(parent);
+	return erased;
 }
 
 uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
