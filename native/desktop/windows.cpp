@@ -26,6 +26,22 @@
 
 namespace raven {
 
+namespace {
+
+// A key's state as Windows keeps it: SHIFT, CONTROL and MENU also have a left and a right key, told apart by the scan code of right
+// SHIFT and the extended bit of the right CONTROL and ALT, and the shared key is down while either side is.
+void record_key(std::array<uint8_t,256> &state,uint32_t code,uint64_t lparam,bool down)
+{
+	const auto set=[&](uint32_t key,bool held) { state[key]=held ? (state[key] | 0x80) : (state[key] & 0x7f); };
+	if (code<0x10 || code>0x12) { set(code & 255,down); return; }
+	const bool right=code==0x10 ? ((lparam>>16) & 0xff)==0x36 : ((lparam>>24) & 1)!=0;
+	const uint32_t left_key=0xa0+(code-0x10)*2;
+	set(left_key+(right ? 1 : 0),down);
+	set(code,(state[left_key] & 0x80) || (state[left_key+1] & 0x80));
+}
+
+}
+
 static uint64_t read(std::span<const uint8_t> bytes,size_t at,size_t width);
 
 NativeWindows::NativeWindows(NativeProcess &process, NativeEnvironment &environment, DesktopObjects &objects)
@@ -1004,9 +1020,10 @@ void NativeWindows::receive(const DesktopEvent &event)
 				const uint32_t code=0x10+index;
 				const bool active=keyboard_map.modifier_active(code),down=(vk_async[code] & 0x80)!=0;
 				if (active==down) continue;
-				const bool system=code==0x12 || (vk_async[0x12] & 0x80);
-				vk_async[code]=active ? (vk_async[code] | 0x80) : (vk_async[code] & 0x7f);
-				queue({focus,code,1 | (uint64_t(scans[index])<<16) | (uint64_t(!active)<<30) | (uint64_t(!active)<<31) | (code==0x12 ? uint64_t(1)<<29 : 0),
+				const bool system=(code==0x12 || (vk_async[0x12] & 0x80)) && (code==0x11 ? !active : !(vk_async[0x11] & 0x80));
+				const uint64_t lparam=1 | (uint64_t(scans[index])<<16) | (uint64_t(!active)<<30) | (uint64_t(!active)<<31) | (system ? uint64_t(1)<<29 : 0);
+				record_key(vk_async,code,lparam,active);
+				queue({focus,code,lparam,
 					active ? (system ? 0x104U : 0x100U) : (system ? 0x105U : 0x101U),message_time(),cursor_x,cursor_y,0},1);
 			}
 		}
@@ -1089,11 +1106,13 @@ void NativeWindows::receive(const DesktopEvent &event)
 		const bool modifier=key.code>=0x10 && key.code<=0x12;
 		// A modifier already reported through the keymap state is not announced twice.
 		if (modifier && ((vk_async[key.code] & 0x80)!=0)==pressed) return;
-		const bool system=key.code==0x12 || (vk_async[0x12] & 0x80);
-		const uint64_t flags=1 | (uint64_t(key.scan)<<16) | (uint64_t(key.extended)<<24) | (system && key.code!=0x12 ? uint64_t(1)<<29 : 0) |
-			(key.code==0x12 ? uint64_t(1)<<29 : 0) | (uint64_t(previous)<<30) | (uint64_t(!pressed)<<31);
+		// ALT makes a key a system key, unless CONTROL is held with it: CTRL+ALT combinations, AltGr among them, are ordinary keys.
+		const bool alt=key.code==0x12 || (vk_async[0x12] & 0x80),control=key.code==0x11 ? pressed : (vk_async[0x11] & 0x80)!=0;
+		const bool system=(alt && !control) || key.code==0x79;
+		const uint64_t flags=1 | (uint64_t(key.scan)<<16) | (uint64_t(key.extended)<<24) | (system && alt ? uint64_t(1)<<29 : 0) |
+			(uint64_t(previous)<<30) | (uint64_t(!pressed)<<31);
 		queue({focus,key.code,flags,system ? (pressed ? 0x104U : 0x105U) : (pressed ? 0x100U : 0x101U),message_time(),cursor_x,cursor_y,pressed ? key.character : 0},1);
-		vk_async[key.code&255]=pressed ? (vk_async[key.code&255] | 0x80) : (vk_async[key.code&255] & 0x7f);
+		record_key(vk_async,key.code&255,flags,pressed);
 		if (pressed && !previous && (key.code==0x14 || key.code==0x90 || key.code==0x91)) vk_async[key.code]^=1;
 		return;
 	}
@@ -1342,7 +1361,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 					const auto code=uint32_t(value.wparam & 255);
 					const bool down=value.message==0x100 || value.message==0x104;
 					const bool repeat=(value.lparam>>30) & 1;
-					vk_state[code]=down ? (vk_state[code] | 0x80) : (vk_state[code] & 0x7f);
+					record_key(vk_state,code,value.lparam,down);
 					if (down && !repeat && (code==0x14 || code==0x90 || code==0x91)) vk_state[code]^=1;
 				}
 			}
