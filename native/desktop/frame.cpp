@@ -66,7 +66,8 @@ uint64_t NativeWindows::nonclient_hit(const DesktopWindow &window,int32_t x,int3
 	if (layout.caption_height && (window.style & 0x80000U) && inside(layout.icon)) return system_menu;
 	if (layout.caption_height && inside({layout.caption.left,layout.caption.top,layout.caption.right,layout.caption.bottom+1})) return caption;
 	if (layout.menu_height && inside(layout.menu_bar)) return menu;
-	if (window.style & 0x40000U) {
+	// A maximized window cannot be sized from its edges: they answer as plain border.
+	if ((window.style & 0x40000U) && !(window.style & 0x01000000U)) {
 		const int32_t width=outer.right-outer.left,height=outer.bottom-outer.top,corner=layout.border*2+8;
 		const bool west=px<layout.border,east=px>=width-layout.border,north=py<layout.border,south=py>=height-layout.border;
 		if (north && px<corner) return top_left;

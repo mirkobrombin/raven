@@ -1330,6 +1330,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(stretch_world_fixture ALL DEPENDS ${STRETCH_WORLD_FIXTURE})
             add_test(NAME native_stretch_dibits_world COMMAND raven --run-process --execution=native ${STRETCH_WORLD_FIXTURE})
             set_tests_properties(native_stretch_dibits_world PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(MAXIMIZED_EDGES_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/maximized-edges.exe)
+            add_custom_command(OUTPUT ${MAXIMIZED_EDGES_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${MAXIMIZED_EDGES_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/maximized_edges_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/maximized_edges_client.c VERBATIM)
+            add_custom_target(maximized_edges_fixture ALL DEPENDS ${MAXIMIZED_EDGES_FIXTURE})
+            add_test(NAME native_maximized_edges COMMAND raven --run-process --execution=native ${MAXIMIZED_EDGES_FIXTURE})
+            set_tests_properties(native_maximized_edges PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
