@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 import zipfile
 
@@ -29,7 +31,11 @@ def main():
     triple = "x86_64-w64-mingw32"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
+    # The tools' temporary files go to a directory of their own, removed on exit, so none of them stays in the output.
+    output.mkdir(parents=True, exist_ok=True)
+    scratch = tempfile.mkdtemp(prefix=".tmp-", dir=output)
+    atexit.register(shutil.rmtree, scratch, True)
+    env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     archive = args.archive.resolve() if args.archive else output / f"sqlite-amalgamation-{VERSION}.zip"
     if not archive.exists():
         urllib.request.urlretrieve(URL, archive)

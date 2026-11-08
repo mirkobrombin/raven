@@ -2,11 +2,14 @@
 """Build test programs and fetch checksum-qualified third-party fixtures outside the source tree."""
 
 import argparse
+import atexit
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -21,6 +24,18 @@ DOWNLOADS = (
 )
 
 
+def download(url, path):
+    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out. A missing file does not come back.
+    for attempt in range(4):
+        try:
+            urllib.request.urlretrieve(url, path)
+            return
+        except urllib.error.URLError as error:
+            if attempt == 3 or (isinstance(error, urllib.error.HTTPError) and error.code < 500):
+                raise
+            time.sleep(15 * (attempt + 1))
+
+
 def fetch(output):
     cache = output / "downloads"
     cache.mkdir(parents=True, exist_ok=True)
@@ -29,7 +44,7 @@ def fetch(output):
         if not archive.exists():
             temporary = archive.with_suffix(archive.suffix + ".part")
             try:
-                urllib.request.urlretrieve(url, temporary)
+                download(url, temporary)
                 if hashlib.sha256(temporary.read_bytes()).hexdigest() != checksum:
                     raise RuntimeError("fixture checksum differs: " + name)
                 temporary.replace(archive)
@@ -68,7 +83,11 @@ def main():
     if output == source or source in output.parents:
         raise RuntimeError("fixture output must be outside testdata")
     output.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
+    # The tools' temporary files go to a directory of their own, removed on exit, so none of them stays in the output.
+    output.mkdir(parents=True, exist_ok=True)
+    scratch = tempfile.mkdtemp(prefix=".tmp-", dir=output)
+    atexit.register(shutil.rmtree, scratch, True)
+    env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     for path in source.rglob("*.hex"):
         target = output / path.relative_to(source).with_suffix("")
         target.parent.mkdir(parents=True, exist_ok=True)

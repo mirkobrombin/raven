@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -9,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 def main():
@@ -33,7 +35,11 @@ def main():
         wanted.discard("uianimation")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
+    # The tools' temporary files go to a directory of their own, removed on exit, so none of them stays in the output.
+    output.mkdir(parents=True, exist_ok=True)
+    scratch = tempfile.mkdtemp(prefix=".tmp-", dir=output)
+    atexit.register(shutil.rmtree, scratch, True)
+    env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     repo = Path(__file__).resolve().parents[1]
     for tool in (triple + "-gcc", triple + "-windres"):
         if not shutil.which(tool):

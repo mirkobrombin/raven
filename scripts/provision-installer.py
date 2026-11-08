@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -10,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
+import time
 import urllib.request
 
 from component_licenses import mark_patched_sources
@@ -20,7 +23,7 @@ from component_licenses import mark_patched_sources
 # as NAME-VERSION-source.tar.gz with the notices listed here, and unpacked to NAME-source.
 UPSTREAM = {
     "zlib": dict(version="1.3.1", sha256="9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
-                 url="https://github.com/madler/zlib/releases/download/v{version}/zlib-{version}.tar.gz", notices=("LICENSE", "README")),
+                 url="https://zlib.net/fossils/zlib-{version}.tar.gz", notices=("LICENSE", "README")),
     "libjpeg": dict(version="10", sha256="8b9eaa13242690ebd03e1728ab1edf97a81a78ed6e83624d493655f31ac95ab5",
                     url="https://www.ijg.org/files/jpegsrc.v{version}.tar.gz", notices=("README",)),
     "libtiff": dict(version="4.7.1", sha256="f698d94f3103da8ca7438d84e0344e453fe0ba3b7486e04c5bf7a9a3fabe9b69",
@@ -89,13 +92,25 @@ def configure_file(template, target, values):
     target.write_text(text)
 
 
+def download(url, path):
+    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out. A missing file does not come back.
+    for attempt in range(4):
+        try:
+            urllib.request.urlretrieve(url, path)
+            return
+        except urllib.error.URLError as error:
+            if attempt == 3 or (isinstance(error, urllib.error.HTTPError) and error.code < 500):
+                raise
+            time.sleep(15 * (attempt + 1))
+
+
 # Downloads an archive beside where it belongs and moves it into place once its checksum matches, so an interrupted download is not kept;
 # one already there is checked the same way.
 def fetch(url, archive, sha256, what):
     if not archive.exists():
         temporary = archive.with_suffix(archive.suffix + ".part")
         try:
-            urllib.request.urlretrieve(url, temporary)
+            download(url, temporary)
             if hashlib.sha256(temporary.read_bytes()).hexdigest() != sha256:
                 raise RuntimeError(f"downloaded {what} checksum differs")
             temporary.replace(archive)
@@ -118,7 +133,11 @@ def main():
         cabinet=0x1e0000000, sxs=0x1e2000000, rpcrt4=0x1d8000000, msi=0x1e4000000, storage=0x1ec000000, xslt=0x1d4000000, msxml=0x1d0000000, atl=0x1cc000000, oleaut=0x1c8000000)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, TMPDIR=str(output), TMP=str(output), TEMP=str(output))
+    # The tools' temporary files go to a directory of their own, removed on exit, so none of them stays in the output.
+    output.mkdir(parents=True, exist_ok=True)
+    scratch = tempfile.mkdtemp(prefix=".tmp-", dir=output)
+    atexit.register(shutil.rmtree, scratch, True)
+    env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     repo = Path(__file__).resolve().parents[1]
     upstream_sources = {}
     for name, release in UPSTREAM.items():
