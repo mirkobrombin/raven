@@ -1496,6 +1496,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_keyboard_client PROPERTIES TIMEOUT 15)
             add_test(NAME native_keyboard_remap COMMAND keyboard_client_test $<TARGET_FILE:raven-bootstrap> ${KEYBOARD_FIXTURE} remap)
             set_tests_properties(native_keyboard_remap PROPERTIES TIMEOUT 15)
+            add_executable(wheel_target_test desktop/wheel_target_test.cpp)
+            target_link_libraries(wheel_target_test PRIVATE raven_cpu)
+            set(WHEEL_TARGET_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/wheel-target.exe)
+            add_custom_command(OUTPUT ${WHEEL_TARGET_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${WHEEL_TARGET_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/wheel_target_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/wheel_target_client.c VERBATIM)
+            add_custom_target(wheel_target_fixture ALL DEPENDS ${WHEEL_TARGET_FIXTURE})
+            add_dependencies(wheel_target_test wheel_target_fixture raven-bootstrap)
+            add_test(NAME native_wheel_target COMMAND wheel_target_test $<TARGET_FILE:raven-bootstrap> ${WHEEL_TARGET_FIXTURE})
+            set_tests_properties(native_wheel_target PROPERTIES TIMEOUT 15)
             add_executable(modifier_keys_test desktop/modifier_keys_test.cpp)
             target_link_libraries(modifier_keys_test PRIVATE raven_cpu)
             set(MODIFIER_KEYS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/modifier-keys.exe)

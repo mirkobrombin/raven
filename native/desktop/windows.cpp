@@ -1135,14 +1135,20 @@ void NativeWindows::receive(const DesktopEvent &event)
 		return;
 	}
 	if (event.kind==DesktopEventKind::pointer_wheel) {
-		// The wheel goes to the focus window with the screen position of the pointer.
+		// The wheel goes to the window under the pointer, as Windows scrolls inactive windows by default, with the screen position of
+		// the pointer; to the focus window when the pointer is over none of the program's.
 		const auto *source=std::as_const(objects).window(event.window);
-		if (!source || !focus || !std::as_const(objects).window(focus) || messages.size()>=10000) return;
+		if (!source || messages.size()>=10000) return;
 		const auto x=int64_t(source->outer.left)+event.x,y=int64_t(source->outer.top)+event.y;
 		if (x<INT16_MIN || x>INT16_MAX || y<INT16_MIN || y>INT16_MAX) return;
+		uint64_t target=capture && std::as_const(objects).window(capture) ? capture : 0;
+		if (!target && source->visible && x>=source->outer.left && y>=source->outer.top && x<source->outer.right && y<source->outer.bottom)
+			target=pointer_child(event.window,int32_t(x),int32_t(y));
+		if (!target || !objects.window_visible(target)) target=focus;
+		if (!target || !std::as_const(objects).window(target)) return;
 		const auto delta=uint64_t(uint16_t(int16_t(int32_t(event.message))));
 		if (raw_mouse.registered) raw_mouse_input(0,0,event.wparam ? 0x800 : 0x400,int16_t(int32_t(event.message)));
-		queue({focus,(delta<<16)|mouse_buttons|keyboard_map.mouse_modifiers(),uint16_t(x)|(uint64_t(uint16_t(y))<<16),event.wparam ? 0x20eU : 0x20aU,message_time(),int32_t(x),int32_t(y)},4);
+		queue({target,(delta<<16)|mouse_buttons|keyboard_map.mouse_modifiers(),uint16_t(x)|(uint64_t(uint16_t(y))<<16),event.wparam ? 0x20eU : 0x20aU,message_time(),int32_t(x),int32_t(y)},4);
 		return;
 	}
 	if (event.x<INT16_MIN || event.x>INT16_MAX || event.y<INT16_MIN || event.y>INT16_MAX)
