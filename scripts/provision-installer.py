@@ -93,12 +93,13 @@ def configure_file(template, target, values):
 
 
 def download(url, path):
-    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out. A missing file does not come back.
+    # Download servers answer with a gateway error or stall now and then; a few spaced attempts ride it out. A missing file does not come
+    # back.
     for attempt in range(4):
         try:
             urllib.request.urlretrieve(url, path)
             return
-        except urllib.error.URLError as error:
+        except OSError as error:
             if attempt == 3 or (isinstance(error, urllib.error.HTTPError) and error.code < 500):
                 raise
             time.sleep(15 * (attempt + 1))

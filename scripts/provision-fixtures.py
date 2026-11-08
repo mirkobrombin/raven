@@ -27,7 +27,7 @@ DOWNLOADS = (
 
 
 def download(urls, path):
-    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out, then the next address is tried.
+    # Download servers answer with a gateway error or stall now and then; a few spaced attempts ride it out, then the next address is tried.
     # A missing file does not come back.
     urls = (urls,) if isinstance(urls, str) else urls
     for index, url in enumerate(urls):
@@ -37,7 +37,7 @@ def download(urls, path):
                 with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as file:
                     shutil.copyfileobj(response, file)
                 return
-            except urllib.error.URLError as error:
+            except OSError as error:
                 if isinstance(error, urllib.error.HTTPError) and error.code < 500:
                     raise
                 if attempt == 3:
