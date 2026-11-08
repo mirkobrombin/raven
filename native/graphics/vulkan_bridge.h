@@ -47,6 +47,15 @@ public:
 	// Brings the guest's view of mapped memory and the driver's in line before and after work the driver does.
 	void synchronize_to_device(uint64_t device) { shadow_to_device(device); }
 	void synchronize_from_device(uint64_t device) { shadow_from_device(device); }
+	// Reading a timeline semaphore makes the work behind a new value visible; the same value again brings nothing the last read did not.
+	void synchronize_after_counter(uint64_t device, uint64_t semaphore, uint64_t value)
+	{
+		const auto [seen, fresh] = counters.try_emplace(semaphore, value);
+		if (!fresh && seen->second == value)
+			return;
+		seen->second = value;
+		shadow_from_device(device);
+	}
 	// How a guest thread waits while the others run: `park` returns once the condition holds, and `wake` may be called from any host
 	// thread to have the scheduler look at the conditions again.
 	void set_blocking(std::function<void(std::function<bool()>)> park_thread, std::function<void()> wake_scheduler)
@@ -93,6 +102,8 @@ private:
 		size_t view_size = 0;
 	};
 	std::unordered_map<uint64_t, Memory> memories;
+	// The last value read from each timeline semaphore.
+	std::unordered_map<uint64_t, uint64_t> counters;
 	struct Buffer { VkBuffer handle; uint64_t device; };
 	std::unordered_map<uint64_t, Buffer> buffers;
 	struct Pool { VkCommandPool handle; uint64_t device; };

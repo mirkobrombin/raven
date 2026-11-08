@@ -1,6 +1,7 @@
 #include "shared_gpu_memory.h"
 #include "cpu/native_cpu.h"
 
+#include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +25,27 @@ bool drm_node(const struct stat &status)
 	return S_ISCHR(status.st_mode) && major(status.st_rdev) == 226;
 }
 
+// NVIDIA's driver maps through its own nodes, /dev/nvidiactl and /dev/nvidia0, one open description for each mapping.
+bool nvidia_node(const struct stat &status)
+{
+	return S_ISCHR(status.st_mode) && major(status.st_rdev) == 195;
+}
+
+// Many descriptions of one NVIDIA node share its inode, and each answers only for the mapping it was set up for: a byte written
+// through the trial mapping must come back through the driver's own.
+bool same_memory(void *alias, void *host)
+{
+	auto *mine = static_cast<volatile uint8_t *>(alias);
+	const auto *theirs = static_cast<volatile const uint8_t *>(host);
+	const uint8_t original = *theirs;
+	*mine = uint8_t(original ^ 0xa5);
+	std::atomic_thread_fence(std::memory_order_seq_cst);
+	const bool same = *theirs == uint8_t(original ^ 0xa5);
+	*mine = original;
+	std::atomic_thread_fence(std::memory_order_seq_cst);
+	return same && *theirs == original;
+}
+
 }
 
 std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, size_t size)
@@ -33,9 +55,9 @@ std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, siz
 		return std::nullopt;
 	std::ifstream maps("/proc/self/maps");
 	std::string line;
-	uint64_t first = 0, backing = 0, inode = 0;
+	uint64_t first = 0, backing = 0, inode = 0, last_of = 0;
 	unsigned device_major = 0, device_minor = 0;
-	bool found = false, drm = false, node = false;
+	bool found = false, drm = false, node = false, nvidia = false;
 	while (std::getline(maps, line)) {
 		uint64_t last = 0;
 		char access[5]{};
@@ -48,6 +70,7 @@ std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, siz
 		if (std::string_view(access) != "rw-s" || (!drm && !inode))
 			return std::nullopt;
 		found = true;
+		last_of = last;
 		break;
 	}
 	if (!found)
@@ -72,12 +95,13 @@ std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, siz
 			if (device && *device != status.st_rdev)
 				return std::nullopt;
 			device = status.st_rdev;
-		} else if ((!S_ISREG(status.st_mode) && !drm_node(status)) || status.st_dev != makedev(device_major, device_minor) || status.st_ino != inode) {
+		} else if ((!S_ISREG(status.st_mode) && !drm_node(status) && !nvidia_node(status)) || status.st_dev != makedev(device_major, device_minor) || status.st_ino != inode) {
 			continue;
 		} else {
 			// Other DRM drivers, amdgpu among them, map through the device node itself. Its offsets too belong to one open description of
 			// it, and only that one maps them in the trial below.
-			node = drm_node(status);
+			nvidia = nvidia_node(status);
+			node = drm_node(status) || nvidia;
 		}
 		candidates.push_back(int(number));
 	}
@@ -86,7 +110,8 @@ std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, siz
 	if (backing > UINT64_MAX - (from - first) || size > SIZE_MAX - delta - 4095)
 		return std::nullopt;
 	const uint64_t offset = backing + (from - first);
-	const size_t length = (size + size_t(delta) + 4095) & ~size_t(4095);
+	// It also checks a mapping against the one it set up, so the guest's view spans the driver's whole mapping.
+	const size_t length = nvidia ? size_t(last_of - first) : (size + size_t(delta) + 4095) & ~size_t(4095);
 	if (offset > INT64_MAX || length > INT64_MAX - offset)
 		return std::nullopt;
 	for (const auto candidate : candidates) {
@@ -96,7 +121,7 @@ std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, siz
 		struct stat status{};
 		// A device node has no size to check the range against; the driver refuses a range its object does not cover.
 		if (fstat(file, &status) != 0 || (drm ? !drm_node(status) || !device || status.st_rdev != *device :
-			status.st_dev != makedev(device_major, device_minor) || status.st_ino != inode || (!drm_node(status) && (!S_ISREG(status.st_mode) ||
+			status.st_dev != makedev(device_major, device_minor) || status.st_ino != inode || (!drm_node(status) && !nvidia_node(status) && (!S_ISREG(status.st_mode) ||
 			status.st_size < 0 || offset > uint64_t(status.st_size) || length > uint64_t(status.st_size) - offset)))) {
 			close(file);
 			continue;
@@ -106,7 +131,12 @@ std::optional<GpuMapping> map_gpu_memory(NativeProcess &process, void *host, siz
 			close(file);
 			continue;
 		}
+		const bool matches = !nvidia || same_memory(static_cast<uint8_t *>(alias) + delta, host);
 		munmap(alias, length);
+		if (!matches) {
+			close(file);
+			continue;
+		}
 		try {
 			const auto base = process.map_descriptor(file, length, offset);
 			close(file);

@@ -526,8 +526,8 @@ def emit(registry, selected, state, output, classify_member, declared):
     counts = {}
     command_code = []
     hooks_pre = {"vkQueueSubmit": "synchronize_to_device", "vkQueueSubmit2": "synchronize_to_device", "vkQueueSubmit2KHR": "synchronize_to_device"}
-    hooks_post = {"vkQueueWaitIdle": "synchronize_from_device", "vkWaitForFences": "synchronize_from_device", "vkGetFenceStatus": "synchronize_from_device","vkWaitSemaphores": "synchronize_from_device", "vkWaitSemaphoresKHR": "synchronize_from_device", "vkGetSemaphoreCounterValue": "synchronize_from_device",
-                  "vkGetSemaphoreCounterValueKHR": "synchronize_from_device", "vkGetQueryPoolResults": "synchronize_from_device"}
+    hooks_post = {"vkQueueWaitIdle": "synchronize_from_device", "vkWaitForFences": "synchronize_from_device", "vkGetFenceStatus": "synchronize_from_device","vkWaitSemaphores": "synchronize_from_device", "vkWaitSemaphoresKHR": "synchronize_from_device", "vkGetSemaphoreCounterValue": "synchronize_after_counter",
+                  "vkGetSemaphoreCounterValueKHR": "synchronize_after_counter"}
     # Commands that can keep the driver busy for long: they run on a host thread while the guest's other threads go on.
     detached = {"vkQueuePresentKHR"}
     # Waits with a timeout: the driver waits in slices so that a process that ends is not held by a wait nothing will satisfy.
@@ -689,7 +689,9 @@ def emit(registry, selected, state, output, classify_member, declared):
             lines.append("\tif (success) m.forget(a[1]);")
         post_hook = hooks_post.get(exported) or hooks_post.get(target)
         if post_hook:
-            lines.append(f"\tif (success) b.{post_hook}(m.device_token);")
+            # A counter that has not moved since it was last read signals nothing new for the host to see.
+            extra = f", a[1], {names_map.get('pValue', 'v_pValue')}" if post_hook == "synchronize_after_counter" else ""
+            lines.append(f"\tif (success) b.{post_hook}(m.device_token{extra});")
         lines.append("\treturn result;")
         command_code.append(f"static uint64_t cmd_{target}(VulkanBridge &b, Marshal &m, const std::vector<uint64_t> &a, const std::array<uint64_t, 4> &x)\n{{\n"
                             + "\n".join(lines) + "\n\t(void)b; (void)x;\n}\n")
