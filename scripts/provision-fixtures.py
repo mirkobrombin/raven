@@ -15,7 +15,9 @@ import zipfile
 
 
 DOWNLOADS = (
-    ("npp.zip", "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.7.6/npp.8.7.6.portable.x64.zip",
+    # The release asset through the API too, which keeps answering when the release download page times out.
+    ("npp.zip", ("https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.7.6/npp.8.7.6.portable.x64.zip",
+                 "https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/assets/224197116"),
      "8947bbdf3b87f466dea39ccab2f992177a132404b3907a669a4483484fc691cc", "npp"),
     ("sqlite.zip", "https://www.sqlite.org/2025/sqlite-tools-win-x64-3500400.zip",
      "8ce18347ea86a1ce65f33b533d2f144d8d1237140529fbf818574ca11fa13ad5", "."),
@@ -24,16 +26,25 @@ DOWNLOADS = (
 )
 
 
-def download(url, path):
-    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out. A missing file does not come back.
-    for attempt in range(4):
-        try:
-            urllib.request.urlretrieve(url, path)
-            return
-        except urllib.error.URLError as error:
-            if attempt == 3 or (isinstance(error, urllib.error.HTTPError) and error.code < 500):
-                raise
-            time.sleep(15 * (attempt + 1))
+def download(urls, path):
+    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out, then the next address is tried.
+    # A missing file does not come back.
+    urls = (urls,) if isinstance(urls, str) else urls
+    for index, url in enumerate(urls):
+        for attempt in range(4):
+            try:
+                request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+                with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as file:
+                    shutil.copyfileobj(response, file)
+                return
+            except urllib.error.URLError as error:
+                if isinstance(error, urllib.error.HTTPError) and error.code < 500:
+                    raise
+                if attempt == 3:
+                    if index == len(urls) - 1:
+                        raise
+                    break
+                time.sleep(15 * (attempt + 1))
 
 
 def fetch(output):

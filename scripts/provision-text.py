@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 
 
@@ -17,7 +18,9 @@ FONTS = {
     "LiberationMono-Regular.ttf": "d18235f1e874771f4eaec3ddd6ddb4db849d334bdc6930c5c2185d9344834e62",
     "LiberationSerif-Regular.ttf": "350f4ffd773cae53560c63dca3d89a5070595614fde12f772bf43feb63d81064",
 }
-DEJAVU_RELEASE = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2"
+# The release asset through the API too, which keeps answering when the release download page times out.
+DEJAVU_RELEASE = ("https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2",
+                  "https://api.github.com/repos/dejavu-fonts/dejavu-fonts/releases/assets/2070169")
 DEJAVU_RELEASE_SHA256 = "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"
 # Raven Sans stands in for the dialog face Tahoma. It is DejaVu Sans Condensed with every advance narrowed so the weighted
 # average width of Latin text matches Tahoma's, and with Tahoma's vertical metrics so a cell has the same height. The
@@ -76,13 +79,34 @@ def ar_member(archive, prefix):
     raise RuntimeError(f"the font package has no {prefix} member")
 
 
+def download(urls, path):
+    # Download servers answer with a gateway error now and then; a few spaced attempts ride it out, then the next address is tried.
+    # A missing file does not come back.
+    urls = (urls,) if isinstance(urls, str) else urls
+    for index, url in enumerate(urls):
+        for attempt in range(4):
+            try:
+                request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+                with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as file:
+                    shutil.copyfileobj(response, file)
+                return
+            except urllib.error.URLError as error:
+                if isinstance(error, urllib.error.HTTPError) and error.code < 500:
+                    raise
+                if attempt == 3:
+                    if index == len(urls) - 1:
+                        raise
+                    break
+                time.sleep(15 * (attempt + 1))
+
+
 def provision_fonts(output):
     fonts = output / "fonts"
     fonts.mkdir(exist_ok=True)
     package = output / "fonts-liberation.deb"
     if not package.exists():
         partial = package.with_suffix(".part")
-        urllib.request.urlretrieve(FONT_PACKAGE, partial)
+        download(FONT_PACKAGE, partial)
         partial.replace(package)
     data = package.read_bytes()
     if hashlib.sha256(data).hexdigest() != FONT_PACKAGE_SHA256:
@@ -138,7 +162,7 @@ def provision_dialog_faces(output, fonts):
     archive = output / "dejavu-fonts-ttf-2.37.tar.bz2"
     if not archive.exists():
         partial = archive.with_suffix(".part")
-        urllib.request.urlretrieve(DEJAVU_RELEASE, partial)
+        download(DEJAVU_RELEASE, partial)
         partial.replace(archive)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != DEJAVU_RELEASE_SHA256:
         raise RuntimeError("DejaVu release checksum differs; delete it to download it again")
