@@ -1,6 +1,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include "access_token.h"
 #include "elevation.h"
 #include "hash.h"
 #include "host_names.h"
@@ -1834,15 +1835,20 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(0);
 	});
 	registry.add("CheckTokenMembership", 3, [](ApiCall &call) {
-		// The groups held are Users (S-1-5-32-545) and Everyone (S-1-1-0); Administrators (S-1-5-32-544) counts only in an elevated
-		// process, since without elevation it is held for denying access alone.
+		// The groups are those of the interactive desktop logon the token reports: the account, Users, Everyone, INTERACTIVE, CONSOLE
+		// LOGON, Authenticated Users, This Organization, LOCAL and the logon session. Administrators (S-1-5-32-544) counts only in an
+		// elevated process, since without elevation it is held for denying access alone.
 		const auto count = call.read(call[1] + 1, 1)[0];
-		const auto authority = call.read(call[1] + 2, 6)[5];
-		const uint32_t first = count ? call.load<uint32_t>(call[1] + 8) : 0, second = count > 1 ? call.load<uint32_t>(call[1] + 12) : 0;
-		const bool users = authority == 5 && count == 2 && first == 32 && second == 545;
-		const bool administrators = authority == 5 && count == 2 && first == 32 && second == 544 && process_elevated();
-		const bool everyone = authority == 1 && count == 1 && first == 0;
-		call.store<uint32_t>(call[2], users || everyone || administrators);
+		if (count > 15) {
+			call.fail(87, 0);
+			return;
+		}
+		const auto wanted = call.read(call[1], 8 + 4 * size_t(count));
+		std::vector<std::vector<uint8_t>> held{user_sid(), make_sid(5, {32, 545}), make_sid(1, {0}), make_sid(5, {4}), make_sid(2, {1}),
+			make_sid(5, {11}), make_sid(5, {15}), make_sid(2, {0}), make_sid(5, {5, 0, 1})};
+		if (process_elevated())
+			held.push_back(make_sid(5, {32, 544}));
+		call.store<uint32_t>(call[2], std::find(held.begin(), held.end(), wanted) != held.end());
 		call.ret(1);
 	});
 	registry.add("IsTextUnicode", 3, [](ApiCall &call) {
