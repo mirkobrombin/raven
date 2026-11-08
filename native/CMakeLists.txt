@@ -1321,6 +1321,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(position_changed_fixture ALL DEPENDS ${POSITION_CHANGED_FIXTURE})
             add_test(NAME native_position_changed_messages COMMAND raven --run-process --execution=native ${POSITION_CHANGED_FIXTURE})
             set_tests_properties(native_position_changed_messages PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(STRETCH_WORLD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/stretch-world.exe)
+            add_custom_command(OUTPUT ${STRETCH_WORLD_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${STRETCH_WORLD_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/stretch_world_client.c -lkernel32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/stretch_world_client.c VERBATIM)
+            add_custom_target(stretch_world_fixture ALL DEPENDS ${STRETCH_WORLD_FIXTURE})
+            add_test(NAME native_stretch_dibits_world COMMAND raven --run-process --execution=native ${STRETCH_WORLD_FIXTURE})
+            set_tests_properties(native_stretch_dibits_world PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector

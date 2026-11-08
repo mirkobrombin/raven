@@ -1481,8 +1481,21 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 	registry.add("StretchDIBits", 13, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
 			auto &dc = require_dc(call, 0);
-			const int32_t dx = call.i32(1), dy = call.i32(2), dw = call.i32(3), dh = call.i32(4);
+			int32_t dx = call.i32(1), dy = call.i32(2), dw = call.i32(3), dh = call.i32(4);
 			const int32_t sx = call.i32(5), sy = call.i32(6), sw = call.i32(7), sh = call.i32(8);
+			// A world transform that scales and moves, without turning, places the destination rectangle in page space.
+			const auto &world = dc.world;
+			if (world != std::array<float, 6>{1, 0, 0, 1, 0, 0}) {
+				if (world[1] != 0 || world[2] != 0)
+					throw uint32_t(120);
+				const auto place = [](float value) { return int32_t(std::lround(std::clamp(value, -1e9f, 1e9f))); };
+				const int32_t left = place(dx * world[0] + world[4]), top = place(dy * world[3] + world[5]);
+				const int32_t right = place((float(dx) + float(dw)) * world[0] + world[4]), bottom = place((float(dy) + float(dh)) * world[3] + world[5]);
+				dx = left;
+				dy = top;
+				dw = right - left;
+				dh = bottom - top;
+			}
 			const auto image = decode_dib(call, call[10], call[9], call.u32(11));
 			Painter painter(objects, dc);
 			if (!dw || !dh || !sw || !sh) {
