@@ -555,20 +555,22 @@ void NativeWindows::register_theme_api(ApiRegistry &registry)
 		}
 		const int32_t dx = window->x - parent->x, dy = window->y - parent->y;
 		const uint64_t parent_handle = window->parent;
-		const auto saved_x = dc->origin_x, saved_y = dc->origin_y;
+		const auto saved_x = dc->origin_x, saved_y = dc->origin_y, saved_user_x = dc->user_dx, saved_user_y = dc->user_dy;
 		const auto saved_clip = dc->application_clip;
 		if (call[2])
 			dc->application_clip = clipped(dc->application_clip, read_box(call, call[2]));
-		// The clip is kept in the control's coordinates, so it moves with the origin.
-		if (dc->application_clip)
-			dc->application_clip->offset(dx, dy);
+		// The viewport moves, as OffsetViewportOrgEx would: every clip stays in the control's device pixels.
 		dc->origin_x -= dx;
 		dc->origin_y -= dy;
+		dc->user_dx -= dx;
+		dc->user_dy -= dy;
 		send(parent_handle, 0x14, call[1], 0);
 		send(parent_handle, 0x318, call[1], 4);
 		if (auto *again = objects.dc(call[1])) {
 			again->origin_x = saved_x;
 			again->origin_y = saved_y;
+			again->user_dx = saved_user_x;
+			again->user_dy = saved_user_y;
 			again->application_clip = saved_clip;
 		}
 		call.ret(s_ok);

@@ -307,8 +307,10 @@ static void paint_push_styled(HWND window, HDC dc, DWORD style, UINT kind, const
 {
 	RECT label = *client;
 	int look = !IsWindowEnabled(window) ? PBS_DISABLED : state->highlighted || state->check == BST_CHECKED ? PBS_PRESSED : state->hot ? PBS_HOT : is_default_kind(kind) ? PBS_DEFAULTED : PBS_NORMAL;
-	/* The corners of the shape show what the parent paints behind the button. */
+	/* The corners of the shape show what the parent paints behind the button: its own background, as a themed button draws it, over
+	 * the brush it answers WM_CTLCOLORBTN with, for a parent that paints nothing there. */
 	FillRect(dc, client, parent_brush(window, dc, WM_CTLCOLORBTN));
+	DrawThemeParentBackground(window, dc, client);
 	DrawThemeBackground(theme, dc, PART_PUSH, look, client, NULL);
 	take_theme_color(theme, dc, PART_PUSH, look);
 	InflateRect(&label, -2, -2);
