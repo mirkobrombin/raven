@@ -271,6 +271,9 @@ void NativeWindows::menu_highlight(size_t level, std::optional<size_t> index)
 {
 	if (level >= popups.size())
 		return;
+	// The item already highlighted keeps the submenu it opened: the release ending a click on it must not close what the press opened.
+	if (popups[level].highlight == index && popups.size() > level + 1)
+		return;
 	// Deeper levels belong to the previously highlighted item.
 	while (popups.size() > level + 1) {
 		const auto handle = popups.back().handle;
@@ -534,8 +537,10 @@ bool NativeWindows::menu_event(const DesktopEvent &event)
 				menu_select(level, *top.highlight);
 		} else if (key.code == 0x27) {
 			if (top.highlight && menu->items[*top.highlight].submenu && is_enabled(menu->items[*top.highlight])) {
+				// Clearing the highlight first opens the submenu again; the item is kept before the reference to it changes.
+				const auto chosen = *top.highlight;
 				menu_highlight(level, std::nullopt);
-				menu_highlight(level, *top.highlight);
+				menu_highlight(level, chosen);
 				if (popups.size() > level + 1)
 					menu_highlight(level + 1, [&]() -> std::optional<size_t> {
 						const auto *child = objects.menu(popups[level + 1].menu);

@@ -1276,6 +1276,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(dialog_frame_test destroyed_frame_fixture)
             add_test(NAME native_destroyed_child_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${DESTROYED_FRAME_FIXTURE} destroyed)
             set_tests_properties(native_destroyed_child_frame PROPERTIES TIMEOUT 15)
+            set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
+            add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${MENU_TRACK_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/menu_track_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/menu_track_client.c VERBATIM)
+            add_custom_target(menu_track_fixture ALL DEPENDS ${MENU_TRACK_FIXTURE})
+            add_executable(menu_track_test desktop/menu_track_test.cpp)
+            target_link_libraries(menu_track_test PRIVATE raven_cpu)
+            add_dependencies(menu_track_test menu_track_fixture raven-bootstrap)
+            add_test(NAME native_menu_submenu_click COMMAND menu_track_test $<TARGET_FILE:raven-bootstrap> ${MENU_TRACK_FIXTURE})
+            set_tests_properties(native_menu_submenu_click PROPERTIES TIMEOUT 15)
             add_executable(outer_surface_test desktop/outer_surface_test.cpp)
             target_link_libraries(outer_surface_test PRIVATE raven_cpu)
             add_dependencies(outer_surface_test outer_surface_visible_fixture raven-bootstrap)

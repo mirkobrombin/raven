@@ -62,6 +62,10 @@ int raven_entry(void)
 	EnableMenuItem(bar, 102, MF_BYCOMMAND | MF_GRAYED);
 	if ((GetMenuState(bar, 102, MF_BYCOMMAND) & MF_GRAYED) != MF_GRAYED || (GetMenuState(popup, 1, MF_BYPOSITION) & MF_GRAYED) != MF_GRAYED)
 		return 18;
+	/* New text for a submenu's item, as a program shows its shortcut, keeps the submenu: without MF_POPUP it is not replaced. */
+	if (!ModifyMenuW(bar, 0, MF_BYPOSITION | MF_STRING, 0, L"&File\tAlt+F") || GetSubMenu(bar, 0) != popup ||
+		GetMenuStringW(bar, 0, text, 64, MF_BYPOSITION) != 11 || !same(text, L"&File\tAlt+F"))
+		return 19;
 	HMENU other = CreatePopupMenu();
 	if (!DestroyMenu(other) || GetMenuItemCount(other) != -1 || GetSubMenu(other, 0))
 		return 12;

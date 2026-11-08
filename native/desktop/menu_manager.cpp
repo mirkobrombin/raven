@@ -233,12 +233,16 @@ void NativeWindows::register_menu_api(ApiRegistry &registry)
 			call.fail(1401);
 			return;
 		}
-		// The previous popup stays alive as a free menu, as it does on Windows.
-		if (menu->items[where.index].submenu)
-			if (auto *old = objects.edit_menu(menu->items[where.index].submenu))
+		// Without MF_POPUP the item keeps its submenu and only its text, look and id change, as on Windows, where programs rewrite a
+		// submenu's title this way. A new popup replaces the old one, which stays alive as a free menu.
+		auto replacement = *item;
+		const auto previous = menu->items[where.index].submenu;
+		if (!(flags & popup_flag))
+			replacement.submenu = previous;
+		else if (previous && previous != replacement.submenu)
+			if (auto *old = objects.edit_menu(previous))
 				old->parent = 0;
 		// Replacing an item's text, bitmap or owner keeps its placement at the right edge of the menu bar; only a new MF_HELP adds it.
-		auto replacement = *item;
 		replacement.type |= menu->items[where.index].type & type_right_justify;
 		menu->items[where.index] = replacement;
 		adopt(where.menu, replacement);
