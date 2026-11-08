@@ -72,7 +72,7 @@ std::vector<InstalledFamily> enumerable_families()
 }
 
 // The LOGFONT of an enumerated family and the NEWTEXTMETRICEX that follows the ENUMLOGFONTEX at metrics: the ANSI forms keep characters
-// in bytes, so their fields after tmLastChar sit four bytes earlier. Sizes are those of a 12-pixel em.
+// in bytes, so their fields after tmLastChar sit four bytes earlier. Sizes are those of a 12-pixel em, and italic is 255, as on Windows.
 void describe_family(std::vector<uint8_t> &record, size_t metrics, const InstalledFamily &family, bool ansi, uint8_t charset)
 {
 	const auto put = [&](size_t at, int32_t value) { std::memcpy(record.data() + at, &value, 4); };
@@ -82,7 +82,7 @@ void describe_family(std::vector<uint8_t> &record, size_t metrics, const Install
 	put(0, 16);
 	put(4, 7);
 	put(16, weight);
-	record[20] = family.italic;
+	record[20] = family.italic ? 0xff : 0;
 	record[23] = charset;
 	record[24] = 3;
 	record[25] = 2;
@@ -109,7 +109,7 @@ void describe_family(std::vector<uint8_t> &record, size_t metrics, const Install
 		std::memcpy(record.data() + at, characters, sizeof characters);
 		at += 8;
 	}
-	record[at] = family.italic;
+	record[at] = family.italic ? 0xff : 0;
 	// TMPF_TRUETYPE | TMPF_VECTOR, and the bit Windows sets for a variable pitch, under the family kind.
 	record[at + 3] = uint8_t((family.fixed ? 0x06 : 0x07) | (family.fixed ? 0x30 : 0x20));
 	record[at + 4] = charset;

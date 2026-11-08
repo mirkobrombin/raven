@@ -1285,6 +1285,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(button_corner_fixture ALL DEPENDS ${BUTTON_CORNER_FIXTURE})
             add_test(NAME native_button_parent_corners COMMAND raven --run-process --execution=native ${BUTTON_CORNER_FIXTURE})
             set_tests_properties(native_button_parent_corners PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(ITALIC_FACE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/italic-face.exe)
+            add_custom_command(OUTPUT ${ITALIC_FACE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${ITALIC_FACE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/italic_face_client.c -lkernel32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/italic_face_client.c VERBATIM)
+            add_custom_target(italic_face_fixture ALL DEPENDS ${ITALIC_FACE_FIXTURE})
+            add_test(NAME native_italic_face_enumeration COMMAND raven --run-process --execution=native ${ITALIC_FACE_FIXTURE})
+            set_tests_properties(native_italic_face_enumeration PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
