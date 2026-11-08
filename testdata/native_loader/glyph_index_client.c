@@ -184,6 +184,43 @@ int raven_entry(void)
 	const int script_ink = ink();
 	if (script_ink * 10 < character_ink * 9 || script_ink * 10 > character_ink * 11)
 		return 54;
+
+	// A surrogate pair is one glyph, which both of its units' clusters name, and positions go through the clusters.
+	WORD pair_shaped[4] = {0}, pair_clusters[4] = {0};
+	int pair_count = 0, pair_advances[4] = {0}, x = 0, position = 0, trailing = 0;
+	if (ScriptShape(dc, &cache, L"A\xd83d\xde00" L"A", 4, 4, &analysis, pair_shaped, pair_clusters, attributes, &pair_count) != S_OK ||
+		pair_count != 3 || pair_shaped[0] != expected || pair_shaped[2] != expected || pair_clusters[0] != 0 || pair_clusters[1] != 1 ||
+		pair_clusters[2] != 1 || pair_clusters[3] != 2)
+		return 55;
+	if (ScriptPlace(dc, &cache, pair_shaped, pair_count, attributes, &analysis, pair_advances, offsets, &run) != S_OK || pair_advances[1] <= 0)
+		return 56;
+	if (ScriptCPtoX(3, FALSE, 4, pair_count, pair_clusters, attributes, pair_advances, &analysis, &x) != S_OK ||
+		x != pair_advances[0] + pair_advances[1])
+		return 57;
+	if (ScriptXtoCP(pair_advances[0] + 1, 4, pair_count, pair_clusters, attributes, pair_advances, &analysis, &position, &trailing) != S_OK ||
+		position != 1 || trailing != 0)
+		return 58;
+
+	// A character the face lacks is drawn as text output draws it, through the fallback faces, not as the face's missing glyph.
+	if (!cmap_glyph(size, 0x2603)) {
+		WORD lacking = 0, lacking_cluster = 0;
+		int lacking_count = 0, lacking_advance = 0;
+		clear();
+		ExtTextOutW(dc, 4, 4, 0, NULL, L"\x2603", 1, NULL);
+		GdiFlush();
+		const int text_ink = ink();
+		if (ScriptShape(dc, &cache, L"\x2603", 1, 1, &analysis, &lacking, &lacking_cluster, attributes, &lacking_count) != S_OK ||
+			lacking_count != 1 || !lacking)
+			return 59;
+		if (ScriptPlace(dc, &cache, &lacking, 1, attributes, &analysis, &lacking_advance, offsets, &run) != S_OK)
+			return 64;
+		clear();
+		if (ScriptTextOut(dc, &cache, 4, 4, 0, NULL, &analysis, NULL, 0, &lacking, 1, &lacking_advance, NULL, offsets) != S_OK)
+			return 65;
+		GdiFlush();
+		if (ink() != text_ink)
+			return 66;
+	}
 	ScriptFreeCache(&cache);
 
 	// A font as large as the em square some programs create to read design metrics measures from the outline.

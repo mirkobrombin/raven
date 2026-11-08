@@ -53,6 +53,8 @@ public:
 	// Glyph identifiers: the indices of the face a logical font uses, as its cmap table maps characters to them and as programs that
 	// read that table themselves compute. A character the face lacks maps to 0, its missing glyph.
 	std::vector<uint16_t> logical_glyph_ids(std::span<const uint8_t,92> definition,std::span<const uint16_t> text);
+	// How many glyphs the face has: identifiers from there up name none of its own.
+	uint32_t logical_glyph_count(std::span<const uint8_t,92> definition);
 	// The pixel advance of each glyph, not cumulative.
 	std::vector<int32_t> logical_glyph_advances(std::span<const uint8_t,92> definition,std::span<const uint16_t> glyphs);
 	// One glyph's black box in whole pixels around its origin on the baseline (y grows downward) and its advance, from the outline's

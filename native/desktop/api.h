@@ -5,6 +5,10 @@
 #include "nt/environment.h"
 #include "nt/resources.h"
 #include <functional>
+#include <map>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #ifdef RAVEN_SKIA
 #include "graphics/text.h"
 #endif
@@ -47,6 +51,15 @@ private:
 	uint64_t oem_module=0;
 	std::function<std::optional<std::pair<int, uint64_t>>(uint64_t)> section_source;
 	std::function<std::optional<ModuleBytes>(std::string_view)> source;
+	// What ScriptShape gave each glyph of a logical font, keyed by its definition: the character behind each of the face's glyphs, and
+	// the characters the face lacks, named by identifiers from the face's glyph count up so that ScriptPlace and ScriptTextOut measure
+	// and draw them by character, through the fallback faces.
+	struct ScriptGlyphs {
+		uint32_t base = 0;
+		std::vector<std::u16string> missing;
+		std::unordered_map<uint16_t, std::u16string> characters;
+	};
+	std::map<std::string, ScriptGlyphs> script_glyphs;
 #ifdef RAVEN_SKIA
 	bool text_dispatch(std::string_view name);
 	uint64_t text_output(std::span<const uint64_t> arguments);

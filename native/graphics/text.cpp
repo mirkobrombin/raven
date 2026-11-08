@@ -471,6 +471,13 @@ std::vector<uint16_t> TextRenderer::logical_glyph_ids(std::span<const uint8_t,92
 	return result;
 }
 
+uint32_t TextRenderer::logical_glyph_count(std::span<const uint8_t,92> definition)
+{
+	if (is_marlett(definition)) return 0x10000;
+	const auto font=state->logical(definition);
+	return font.getTypeface() ? uint32_t(font.getTypeface()->countGlyphs()) : 0;
+}
+
 std::vector<int32_t> TextRenderer::logical_glyph_advances(std::span<const uint8_t,92> definition,std::span<const uint16_t> glyphs)
 {
 	if (is_marlett(definition)) return std::vector<int32_t>(glyphs.size(),marlett_size(definition));

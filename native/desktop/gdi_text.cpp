@@ -1382,6 +1382,18 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		}
 		return cache ? objects.font(call.load_pointer(cache)) : nullptr;
 	};
+	// The characters behind a glyph ScriptShape gave for a font, and whether the face lacks them: none for a glyph it never gave.
+	const auto script_characters = [this](const DesktopFont &font, uint16_t glyph) -> std::pair<const std::u16string *, bool> {
+		const auto table = script_glyphs.find(std::string(font.definition.begin(), font.definition.end()));
+		if (table == script_glyphs.end())
+			return {nullptr, false};
+		if (table->second.base && glyph >= table->second.base) {
+			const size_t index = glyph - table->second.base;
+			return {index < table->second.missing.size() ? &table->second.missing[index] : nullptr, true};
+		}
+		const auto found = table->second.characters.find(glyph);
+		return {found == table->second.characters.end() ? nullptr : &found->second, false};
+	};
 	// ScriptItemize(text, count, item capacity, control, state, SCRIPT_ITEM, item count): one item and the end marker after it.
 	registry.add("ScriptItemize", 7, [](ApiCall &call) {
 		const int32_t count = call.i32(1), capacity = call.i32(2);
@@ -1454,28 +1466,55 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			call.ret(0x8000000aU);
 			return;
 		}
-		if (capacity < count) {
-			call.ret(0x8007000eU);
-			return;
-		}
 		const auto text = call.read(call[2], size_t(count) * 2);
-		std::vector<uint8_t> clusters(size_t(count) * 2), attributes(size_t(count) * 2);
-		for (int32_t index = 0; index < count; ++index) {
-			clusters[size_t(index) * 2] = uint8_t(index);
-			clusters[size_t(index) * 2 + 1] = uint8_t(index >> 8);
-			// SCRIPT_VISATTR: every glyph starts its cluster; a space stretches as a blank when text is justified.
-			const char16_t character = char16_t(text[size_t(index) * 2] | text[size_t(index) * 2 + 1] << 8);
-			attributes[size_t(index) * 2] = uint8_t(0x10 | (character == u' ' ? 4 : 2));
-		}
 		std::vector<uint16_t> units(static_cast<size_t>(count));
 		std::memcpy(units.data(), text.data(), text.size());
 		const auto ids = objects.text().logical_glyph_ids(shaped->definition, units);
-		std::vector<uint8_t> glyph_bytes(ids.size() * 2);
-		std::memcpy(glyph_bytes.data(), ids.data(), glyph_bytes.size());
+		auto &table = script_glyphs[std::string(shaped->definition.begin(), shaped->definition.end())];
+		table.base = objects.text().logical_glyph_count(shaped->definition);
+		// One glyph per character, and one for a surrogate pair, whose two units share its cluster.
+		std::vector<uint16_t> glyphs;
+		std::vector<uint8_t> clusters(size_t(count) * 2), attributes;
+		for (int32_t index = 0; index < count;) {
+			const bool pair = units[size_t(index)] >= 0xd800 && units[size_t(index)] <= 0xdbff && index + 1 < count &&
+				units[size_t(index) + 1] >= 0xdc00 && units[size_t(index) + 1] <= 0xdfff;
+			const int32_t length = pair ? 2 : 1;
+			const std::u16string character(units.begin() + index, units.begin() + index + length);
+			uint16_t glyph = ids[size_t(index)];
+			if (!glyph && units[size_t(index)]) {
+				// A character the face lacks keeps its own identifier past the face's glyphs, while those last.
+				auto found = std::find(table.missing.begin(), table.missing.end(), character);
+				if (found == table.missing.end() && table.missing.size() < 4096) {
+					table.missing.push_back(character);
+					found = table.missing.end() - 1;
+				}
+				const uint64_t named = uint64_t(table.base) + uint64_t(found - table.missing.begin());
+				if (found != table.missing.end() && named < 0xffff)
+					glyph = uint16_t(named);
+			} else if (glyph) {
+				table.characters.emplace(glyph, character);
+			}
+			const auto at = uint16_t(glyphs.size());
+			for (int32_t unit = index; unit < index + length; ++unit) {
+				clusters[size_t(unit) * 2] = uint8_t(at);
+				clusters[size_t(unit) * 2 + 1] = uint8_t(at >> 8);
+			}
+			glyphs.push_back(glyph);
+			// SCRIPT_VISATTR: every glyph starts its cluster; a space stretches as a blank when text is justified.
+			attributes.push_back(uint8_t(0x10 | (character == u" " ? 4 : 2)));
+			attributes.push_back(0);
+			index += length;
+		}
+		if (size_t(capacity) < glyphs.size()) {
+			call.ret(0x8007000eU);
+			return;
+		}
+		std::vector<uint8_t> glyph_bytes(glyphs.size() * 2);
+		std::memcpy(glyph_bytes.data(), glyphs.data(), glyph_bytes.size());
 		call.write(call[6], glyph_bytes);
 		call.write(call[7], clusters);
 		call.write(call[8], attributes);
-		call.store<int32_t>(call[9], count);
+		call.store<int32_t>(call[9], int32_t(glyphs.size()));
 		call.ret(0);
 	});
 	// ScriptPlace(dc, cache, glyphs, count, visual attributes, analysis, advances, offsets, ABC).
@@ -1493,7 +1532,12 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		const auto bytes = call.read(call[2], size_t(count) * 2);
 		std::vector<uint16_t> glyphs(static_cast<size_t>(count));
 		std::memcpy(glyphs.data(), bytes.data(), bytes.size());
-		const auto advances = objects.text().logical_glyph_advances(font->definition, glyphs);
+		auto advances = objects.text().logical_glyph_advances(font->definition, glyphs);
+		for (size_t index = 0; index < glyphs.size(); ++index)
+			if (const auto [characters, missing] = script_characters(*font, glyphs[index]); missing && characters) {
+				const auto cumulative = measured_advances(font->definition, to_units(*characters));
+				advances[index] = cumulative.empty() ? 0 : cumulative.back();
+			}
 		int64_t total = 0;
 		for (int32_t index = 0; index < count; ++index) {
 			call.store<int32_t>(call[6] + uint64_t(index) * 4, advances[size_t(index)]);
@@ -1525,7 +1569,26 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		std::optional<DesktopRect> rect;
 		if (call[5])
 			rect = DesktopRect{call.load<int32_t>(call[5]), call.load<int32_t>(call[5] + 4), call.load<int32_t>(call[5] + 8), call.load<int32_t>(call[5] + 12)};
-		draw_run(*dc, call.i32(2), call.i32(3), call.u32(4) & 6, rect ? &*rect : nullptr, text, deltas, true);
+		// A run with characters the face lacks is drawn by character, as text output draws it, when every glyph's characters are known;
+		// each glyph's advance goes to its first unit.
+		const auto &font = *objects.font(dc->font);
+		bool lacking = false, known = true;
+		std::u16string characters;
+		std::vector<int32_t> character_deltas;
+		for (int32_t index = 0; index < count && known; ++index) {
+			const auto [glyph_characters, missing] = script_characters(font, uint16_t(text[size_t(index)]));
+			lacking = lacking || missing;
+			known = glyph_characters != nullptr;
+			if (!known)
+				break;
+			characters += *glyph_characters;
+			character_deltas.push_back(deltas[size_t(index)]);
+			character_deltas.resize(characters.size(), 0);
+		}
+		if (lacking && known)
+			draw_run(*dc, call.i32(2), call.i32(3), call.u32(4) & 6, rect ? &*rect : nullptr, characters, character_deltas);
+		else
+			draw_run(*dc, call.i32(2), call.i32(3), call.u32(4) & 6, rect ? &*rect : nullptr, text, deltas, true);
 		call.ret(0);
 	});
 	// ScriptCPtoX(position, trailing, characters, glyphs, clusters, visual attributes, advances, analysis, x).
@@ -1535,11 +1598,19 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			call.ret(0x80070057U);
 			return;
 		}
+		// A character's glyph is the one its cluster names, so both units of a surrogate pair sit at their one glyph.
+		const int32_t glyphs = call[4] ? std::max(0, call.i32(3)) : count;
+		const auto glyph_of = [&](int32_t character) {
+			if (character >= count)
+				return glyphs;
+			return call[4] ? int32_t(call.load<uint16_t>(call[4] + uint64_t(character) * 2)) : character;
+		};
 		int32_t x = 0;
-		for (int32_t index = 0; index < std::min(position, count); ++index)
+		const int32_t glyph = position < 0 ? 0 : glyph_of(position);
+		for (int32_t index = 0; index < std::min(glyph, glyphs); ++index)
 			x += call.load<int32_t>(call[6] + uint64_t(index) * 4);
-		if (call.u32(1) && position >= 0 && position < count)
-			x += call.load<int32_t>(call[6] + uint64_t(position) * 4);
+		if (call.u32(1) && position >= 0 && position < count && glyph < glyphs)
+			x += call.load<int32_t>(call[6] + uint64_t(glyph) * 4);
 		call.store<int32_t>(call[8], x);
 		call.ret(0);
 	});
@@ -1550,16 +1621,27 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			call.ret(0x80070057U);
 			return;
 		}
+		// The advances are per glyph; the position is the first character of the glyph's cluster and the trailing count its length.
+		const int32_t glyphs = call[3] ? std::max(0, call.i32(2)) : count;
+		const auto cluster = [&](int32_t character) {
+			return call[3] ? int32_t(call.load<uint16_t>(call[3] + uint64_t(character) * 2)) : character;
+		};
 		int32_t position = count, trailing = 0, start = 0;
 		if (x < 0) {
 			position = -1;
 			trailing = 1;
 		} else {
-			for (int32_t index = 0; index < count; ++index) {
-				const int32_t advance = call.load<int32_t>(call[5] + uint64_t(index) * 4);
+			for (int32_t glyph = 0; glyph < glyphs; ++glyph) {
+				const int32_t advance = call.load<int32_t>(call[5] + uint64_t(glyph) * 4);
 				if (x < start + advance) {
-					position = index;
-					trailing = x - start >= (advance + 1) / 2;
+					int32_t first = 0;
+					while (first < count && cluster(first) < glyph)
+						++first;
+					int32_t length = 0;
+					while (first + length < count && cluster(first + length) == glyph)
+						++length;
+					position = first;
+					trailing = x - start >= (advance + 1) / 2 ? std::max(length, 1) : 0;
 					break;
 				}
 				start += advance;
