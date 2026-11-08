@@ -1312,6 +1312,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(section_views_fixture ALL DEPENDS ${SECTION_VIEWS_FIXTURE})
             add_test(NAME native_section_views_share_pages COMMAND raven --run-process --execution=native ${SECTION_VIEWS_FIXTURE})
             set_tests_properties(native_section_views_share_pages PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(POSITION_CHANGED_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/position-changed.exe)
+            add_custom_command(OUTPUT ${POSITION_CHANGED_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${POSITION_CHANGED_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/position_changed_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/position_changed_client.c VERBATIM)
+            add_custom_target(position_changed_fixture ALL DEPENDS ${POSITION_CHANGED_FIXTURE})
+            add_test(NAME native_position_changed_messages COMMAND raven --run-process --execution=native ${POSITION_CHANGED_FIXTURE})
+            set_tests_properties(native_position_changed_messages PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector

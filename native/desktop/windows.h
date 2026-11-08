@@ -276,6 +276,8 @@ private:
 	struct SpareSurface { std::shared_ptr<SharedPixels> pixels; uint64_t address=0; size_t size=0; };
 	std::map<uint64_t,SpareSurface> spare_surfaces;
 	bool resizing=false;
+	// Windows that SetWindowPos is placing: their WM_MOVE and WM_SIZE come from the default answer to WM_WINDOWPOSCHANGED instead.
+	std::set<uint64_t> placing;
 	void drop_spare_surface(uint64_t handle);
 	// The compositor took the keyboard from the program's windows; applied once no window of the program receives it right after.
 	bool focus_leaving=false;

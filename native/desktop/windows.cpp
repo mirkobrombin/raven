@@ -1687,6 +1687,20 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 		send(args[0],0x7b,args[0],uint32_t(x)|(uint32_t(y)<<16));
 		return 0;
 	}
+	// WM_WINDOWPOSCHANGED: the window hears where its client area went, unless SWP_NOCLIENTMOVE or SWP_NOCLIENTSIZE say it stayed.
+	if (message==0x47 && args[3]) {
+		const bool narrow=process.mode()==NativeMode::x86;
+		uint32_t flags=0;
+		const auto bytes=process.read_memory(args[3]+(narrow ? 24 : 32),4);
+		std::memcpy(&flags,bytes.data(),4);
+		const auto *parent=window->parent ? std::as_const(objects).window(window->parent) : nullptr;
+		const int64_t x=int64_t(window->x)-(parent ? parent->x : 0),y=int64_t(window->y)-(parent ? parent->y : 0);
+		const uint64_t kind=(window->style & 0x01000000U) ? 2 : (window->style & 0x20000000U) ? 1 : 0;
+		const uint64_t size=uint16_t(window->width) | (uint64_t(uint16_t(window->height))<<16);
+		if (!(flags & 0x800U)) send(args[0],3,0,uint16_t(x) | (uint64_t(uint16_t(y))<<16));
+		if (!(flags & 0x1000U) && std::as_const(objects).window(args[0])) send(args[0],5,kind,size);
+		return 0;
+	}
 	if (message==0x210 && (uint16_t(args[2])==1 || uint16_t(args[2])==2 || uint16_t(args[2])==0x201 || uint16_t(args[2])==0x204 || uint16_t(args[2])==0x207)) return 0;
 	if (message==0x86) return 1;
 	// WM_NOTIFYFORMAT: a window of DefWindowProcW takes Unicode notifications (NFR_UNICODE); NF_REQUERY asks the parent again.

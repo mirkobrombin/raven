@@ -156,7 +156,7 @@ void NativeWindows::recalculate_client(uint64_t handle,int32_t previous_width,in
 	objects.update_window_dcs(handle);
 	if (resized)
 		publish_window(handle, uint32_t(std::max(window->width, 0)), uint32_t(std::max(window->height, 0)));
-	if (resized)
+	if (resized && !placing.contains(handle))
 		send(handle, 5, 0, uint16_t(window->width) | (uint64_t(uint16_t(window->height)) << 16));
 	if (std::as_const(objects).window(handle) && objects.window_visible(handle)) {
 		window = objects.window(handle);
@@ -203,7 +203,7 @@ void NativeWindows::reshape(uint64_t handle, DesktopRect outer)
 		recalculate_client(handle, client_width, client_height, laid_out);
 	}
 	window = objects.window(handle);
-	if (window && moved)
+	if (window && moved && !placing.contains(handle))
 		send(handle, 3, 0, uint16_t(window->x) | (uint64_t(uint16_t(window->y)) << 16));
 }
 
