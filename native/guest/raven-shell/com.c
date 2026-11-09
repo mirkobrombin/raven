@@ -99,16 +99,309 @@ static BOOL context_library(REFCLSID clsid, WCHAR *library, DWORD capacity)
 	return TRUE;
 }
 
+/* Class objects a program offers with CoRegisterClassObject. Those it offers to other programs (CLSCTX_LOCAL_SERVER) are also
+ * published: a file named after the class, in a directory every process of the prefix sees, holds the process that serves it and its
+ * class object marshaled for a table, which any number of clients can read. */
+typedef struct offered_class {
+	struct offered_class *next;
+	CLSID clsid;
+	IUnknown *object;
+	DWORD cookie, context, flags;
+	BOOL published, suspended;
+} offered_class;
+
+static offered_class *offered;
+static SRWLOCK offered_lock = SRWLOCK_INIT;
+static DWORD next_cookie = 1;
+static LONG server_references;
+
+typedef struct {
+	DWORD process, context;
+} published_head;
+
+static void published_path(REFCLSID clsid, WCHAR *path)
+{
+	WCHAR text[40];
+	GetWindowsDirectoryW(path, MAX_PATH);
+	lstrcatW(path, L"\\Temp");
+	CreateDirectoryW(path, NULL);
+	lstrcatW(path, L"\\raven-classes");
+	CreateDirectoryW(path, NULL);
+	StringFromGUID2(clsid, text, 40);
+	lstrcatW(path, L"\\");
+	lstrcatW(path, text);
+}
+
+/* The marshaled class object goes to a file of its own first and replaces the published one in a single step, so a reader never sees half
+ * of it. */
+static HRESULT publish(offered_class *entry)
+{
+	WCHAR path[MAX_PATH], staged[MAX_PATH + 16];
+	IStream *stream;
+	HGLOBAL global;
+	DWORD written;
+	HRESULT result = CreateStreamOnHGlobal(NULL, TRUE, &stream);
+	if (FAILED(result))
+		return result;
+	result = CoMarshalInterface(stream, &IID_IUnknown, entry->object, MSHCTX_LOCAL, NULL, MSHLFLAGS_TABLESTRONG);
+	if (SUCCEEDED(result))
+		result = GetHGlobalFromStream(stream, &global);
+	if (SUCCEEDED(result)) {
+		published_head head = {GetCurrentProcessId(), entry->context};
+		const DWORD size = (DWORD)GlobalSize(global);
+		published_path(&entry->clsid, path);
+		wsprintfW(staged, L"%s.%lu", path, GetCurrentProcessId());
+		HANDLE file = CreateFileW(staged, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		BOOL saved = file != INVALID_HANDLE_VALUE && WriteFile(file, &head, sizeof head, &written, NULL) && WriteFile(file, GlobalLock(global), size, &written, NULL);
+		GlobalUnlock(global);
+		if (file != INVALID_HANDLE_VALUE)
+			CloseHandle(file);
+		if (!saved || !MoveFileExW(staged, path, MOVEFILE_REPLACE_EXISTING)) {
+			DeleteFileW(staged);
+			LARGE_INTEGER start = {0};
+			IStream_Seek(stream, start, STREAM_SEEK_SET, NULL);
+			CoReleaseMarshalData(stream);
+			result = CO_E_CLASS_CREATE_FAILED;
+		} else
+			entry->published = TRUE;
+	}
+	IStream_Release(stream);
+	return result;
+}
+
+/* The published class object of another process, or nothing. A file its process left behind when it ended does not answer and goes. */
+static HRESULT published_object(REFCLSID clsid, REFIID iid, void **out)
+{
+	WCHAR path[MAX_PATH];
+	published_head head;
+	BYTE data[1024];
+	DWORD got = 0, size = 0;
+	IStream *stream;
+	published_path(clsid, path);
+	HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return REGDB_E_CLASSNOTREG;
+	BOOL read = ReadFile(file, &head, sizeof head, &got, NULL) && got == sizeof head && ReadFile(file, data, sizeof data, &size, NULL) && size;
+	CloseHandle(file);
+	if (!read || head.process == GetCurrentProcessId() || !(head.context & CLSCTX_LOCAL_SERVER))
+		return REGDB_E_CLASSNOTREG;
+	HRESULT result = CreateStreamOnHGlobal(NULL, TRUE, &stream);
+	if (FAILED(result))
+		return result;
+	LARGE_INTEGER start = {0};
+	IStream_Write(stream, data, size, NULL);
+	IStream_Seek(stream, start, STREAM_SEEK_SET, NULL);
+	result = CoUnmarshalInterface(stream, iid, out);
+	IStream_Release(stream);
+	if (result == RPC_E_SERVER_DIED || result == RPC_E_DISCONNECTED) {
+		HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, head.process);
+		if (!process || WaitForSingleObject(process, 0) == WAIT_OBJECT_0)
+			DeleteFileW(path);
+		if (process)
+			CloseHandle(process);
+		return REGDB_E_CLASSNOTREG;
+	}
+	return result;
+}
+
+/* A class object this process offers for the contexts asked for. */
+static HRESULT offered_object(REFCLSID clsid, DWORD context, REFIID iid, void **out)
+{
+	HRESULT result = REGDB_E_CLASSNOTREG;
+	AcquireSRWLockShared(&offered_lock);
+	for (offered_class *entry = offered; entry; entry = entry->next)
+		if (IsEqualCLSID(&entry->clsid, clsid) && (entry->context & context) && !entry->suspended) {
+			result = IUnknown_QueryInterface(entry->object, iid, out);
+			break;
+		}
+	ReleaseSRWLockShared(&offered_lock);
+	return result;
+}
+
+HRESULT WINAPI CoRegisterClassObject(REFCLSID clsid, IUnknown *object, DWORD context, DWORD flags, DWORD *cookie)
+{
+	if (!clsid || !object || !cookie)
+		return E_INVALIDARG;
+	*cookie = 0;
+	offered_class *entry = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *entry);
+	if (!entry)
+		return E_OUTOFMEMORY;
+	entry->clsid = *clsid;
+	entry->object = object;
+	entry->context = context;
+	entry->flags = flags;
+	entry->suspended = (flags & REGCLS_SUSPENDED) != 0;
+	IUnknown_AddRef(object);
+	if ((context & CLSCTX_LOCAL_SERVER) && !entry->suspended) {
+		const HRESULT result = publish(entry);
+		if (FAILED(result)) {
+			IUnknown_Release(object);
+			HeapFree(GetProcessHeap(), 0, entry);
+			return result;
+		}
+	}
+	AcquireSRWLockExclusive(&offered_lock);
+	entry->cookie = next_cookie++;
+	entry->next = offered;
+	offered = entry;
+	ReleaseSRWLockExclusive(&offered_lock);
+	*cookie = entry->cookie;
+	return S_OK;
+}
+
+/* The published file goes only while it still names this process: a server started later may have replaced it. */
+static void withdraw(offered_class *entry)
+{
+	WCHAR path[MAX_PATH];
+	published_head head;
+	DWORD got = 0;
+	if (!entry->published)
+		return;
+	entry->published = FALSE;
+	published_path(&entry->clsid, path);
+	HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return;
+	const BOOL ours = ReadFile(file, &head, sizeof head, &got, NULL) && got == sizeof head && head.process == GetCurrentProcessId();
+	IStream *stream = NULL;
+	if (ours && SUCCEEDED(CreateStreamOnHGlobal(NULL, TRUE, &stream))) {
+		BYTE data[1024];
+		DWORD size = 0;
+		if (ReadFile(file, data, sizeof data, &size, NULL) && size) {
+			LARGE_INTEGER start = {0};
+			IStream_Write(stream, data, size, NULL);
+			IStream_Seek(stream, start, STREAM_SEEK_SET, NULL);
+			CoReleaseMarshalData(stream);
+		}
+		IStream_Release(stream);
+	}
+	CloseHandle(file);
+	if (ours)
+		DeleteFileW(path);
+}
+
+HRESULT WINAPI CoRevokeClassObject(DWORD cookie)
+{
+	offered_class *entry = NULL;
+	AcquireSRWLockExclusive(&offered_lock);
+	for (offered_class **link = &offered; *link; link = &(*link)->next)
+		if ((*link)->cookie == cookie) {
+			entry = *link;
+			*link = entry->next;
+			break;
+		}
+	ReleaseSRWLockExclusive(&offered_lock);
+	if (!entry)
+		return E_INVALIDARG;
+	withdraw(entry);
+	IUnknown_Release(entry->object);
+	HeapFree(GetProcessHeap(), 0, entry);
+	return S_OK;
+}
+
+/* Classes registered with REGCLS_SUSPENDED become visible together, as a server offers all its classes at once. */
+HRESULT WINAPI CoResumeClassObjects(void)
+{
+	HRESULT result = S_OK;
+	AcquireSRWLockExclusive(&offered_lock);
+	for (offered_class *entry = offered; entry; entry = entry->next)
+		if (entry->suspended) {
+			entry->suspended = FALSE;
+			if ((entry->context & CLSCTX_LOCAL_SERVER) && FAILED(publish(entry)))
+				result = CO_E_CLASS_CREATE_FAILED;
+		}
+	ReleaseSRWLockExclusive(&offered_lock);
+	return result;
+}
+
+HRESULT WINAPI CoSuspendClassObjects(void)
+{
+	AcquireSRWLockExclusive(&offered_lock);
+	for (offered_class *entry = offered; entry; entry = entry->next)
+		if (!entry->suspended) {
+			entry->suspended = TRUE;
+			withdraw(entry);
+		}
+	ReleaseSRWLockExclusive(&offered_lock);
+	return S_OK;
+}
+
+/* A server counts the objects it keeps alive; when the count drops to zero it takes no more activations, as its classes are withdrawn
+ * then. */
+ULONG WINAPI CoAddRefServerProcess(void)
+{
+	return (ULONG)InterlockedIncrement(&server_references);
+}
+
+ULONG WINAPI CoReleaseServerProcess(void)
+{
+	const LONG left = InterlockedDecrement(&server_references);
+	if (!left)
+		CoSuspendClassObjects();
+	return (ULONG)(left < 0 ? 0 : left);
+}
+
+/* The command that starts a class's local server: its LocalServer32 value, which may quote the program and add arguments, followed by
+ * -Embedding as COM starts a server for an activation. */
+static BOOL server_command(REFCLSID clsid, WCHAR *command, DWORD capacity)
+{
+	WCHAR key[MAX_PATH];
+	class_key(clsid, L"\\LocalServer32", key);
+	if (!class_value(key, command, capacity - 16) || !command[0])
+		return FALSE;
+	lstrcatW(command, L" -Embedding");
+	return TRUE;
+}
+
+/* The class object of a local server, started when no process offers it yet. COM waits for the server to register its classes; a server
+ * that ends before that failed to start. */
+static HRESULT local_server_object(REFCLSID clsid, REFIID iid, void **out)
+{
+	WCHAR command[MAX_PATH * 2];
+	HRESULT result = published_object(clsid, iid, out);
+	if (result != REGDB_E_CLASSNOTREG)
+		return result;
+	if (!server_command(clsid, command, ARRAYSIZE(command)))
+		return REGDB_E_CLASSNOTREG;
+	STARTUPINFOW startup = {sizeof startup};
+	PROCESS_INFORMATION process;
+	if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process))
+		return CO_E_SERVER_EXEC_FAILURE;
+	CloseHandle(process.hThread);
+	result = CO_E_SERVER_EXEC_FAILURE;
+	for (DWORD waited = 0; waited < 120000; waited += 20) {
+		const HRESULT found = published_object(clsid, iid, out);
+		if (found != REGDB_E_CLASSNOTREG) {
+			result = found;
+			break;
+		}
+		if (WaitForSingleObject(process.hProcess, 20) == WAIT_OBJECT_0)
+			break;
+	}
+	CloseHandle(process.hProcess);
+	return result;
+}
+
 HRESULT raven_registered_class_object(REFCLSID clsid, DWORD context, REFIID iid, void **out)
 {
 	WCHAR key[MAX_PATH], library[MAX_PATH];
 	*out = NULL;
-	if (!(context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) && !((context & CLSCTX_LOCAL_SERVER) && service_class(clsid)))
-		return unregistered(clsid);
+	/* A class this process offers itself comes first, as COM looks at the classes registered in the process before the registry. */
+	if (SUCCEEDED(offered_object(clsid, context, iid, out)))
+		return S_OK;
+	const BOOL in_process = (context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) != 0;
 	class_key(clsid, L"\\InprocServer32", key);
-	/* The context in effect comes before the registry, as Windows looks there first. */
-	if (!((context & (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER)) && context_library(clsid, library, MAX_PATH)) && !class_value(key, library, MAX_PATH))
+	/* The context in effect comes before the registry, as Windows looks there first. A class of a service that also names a library
+	 * is served from that library in the caller's process. */
+	if (!(in_process && context_library(clsid, library, MAX_PATH)) &&
+		!((in_process || ((context & CLSCTX_LOCAL_SERVER) && service_class(clsid))) && class_value(key, library, MAX_PATH))) {
+		if (context & CLSCTX_LOCAL_SERVER) {
+			const HRESULT result = local_server_object(clsid, iid, out);
+			if (result != REGDB_E_CLASSNOTREG)
+				return result;
+		}
 		return unregistered(clsid);
+	}
 	/* The library stays loaded for the objects it makes, as COM keeps it until CoFreeUnusedLibraries. */
 	HMODULE module = LoadLibraryExW(library, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
 	if (!module)
