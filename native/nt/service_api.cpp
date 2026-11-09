@@ -569,6 +569,21 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 			call.fail(error_service_already_running);
 			return;
 		}
+		// The arguments go to the service's main function after its name; the dispatcher of the program it starts picks them up.
+		const auto argument_path = state_directory() / (key_of(service->name) + ".arguments");
+		std::error_code ignored;
+		std::filesystem::remove(argument_path, ignored);
+		if (call.u32(1) && call[2]) {
+			std::u16string arguments;
+			for (uint32_t index = 0; index < call.u32(1) && index < 64; ++index) {
+				const auto at = call.load_pointer(call[2] + index * call.pointer_width());
+				if (at)
+					arguments += call.wide(at, 32768);
+				arguments.push_back(0);
+			}
+			std::ofstream output(argument_path, std::ios::binary | std::ios::trunc);
+			output.write(reinterpret_cast<const char *>(arguments.data()), std::streamsize(arguments.size() * 2));
+		}
 		const int standard[3] = {0, 1, 2};
 		uint32_t error = 0;
 		const auto child = start_program(context, u"", image, u"", standard, context.environment_block ? context.environment_block() : std::u16string(), nullptr, error);
@@ -629,22 +644,46 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 		auto service = std::make_shared<Running>();
 		service->name = name_address ? call.wide(name_address, 256) : u"";
 		// SERVICE_TABLE_ENTRY for a service of its own process may leave the name empty; the status file is keyed by the name given.
-		const auto name_memory = context.allocator.allocate((service->name.size() + 1) * 2, true);
-		const auto vector = context.allocator.allocate(2 * width, true);
-		if (!name_memory || !vector) {
+		// The main function gets the name and then the arguments StartService passed.
+		std::vector<std::u16string> arguments{service->name};
+		{
+			const auto argument_path = state_directory() / (key_of(service->name) + ".arguments");
+			std::ifstream input(argument_path, std::ios::binary);
+			std::u16string text;
+			for (char16_t unit; input.read(reinterpret_cast<char *>(&unit), 2);) {
+				if (unit) {
+					text.push_back(unit);
+					continue;
+				}
+				arguments.push_back(text);
+				text.clear();
+			}
+			input.close();
+			std::error_code ignored;
+			std::filesystem::remove(argument_path, ignored);
+		}
+		const auto vector = context.allocator.allocate((arguments.size() + 1) * width, true);
+		if (!vector) {
 			call.fail(8);
 			return;
 		}
-		call.put_wide(name_memory, service->name, service->name.size() + 1);
-		call.store_pointer(vector, name_memory);
-		call.store_pointer(vector + width, 0);
+		for (size_t index = 0; index < arguments.size(); ++index) {
+			const auto memory = context.allocator.allocate((arguments[index].size() + 1) * 2, true);
+			if (!memory) {
+				call.fail(8);
+				return;
+			}
+			call.put_wide(memory, arguments[index], arguments[index].size() + 1);
+			call.store_pointer(vector + index * width, memory);
+		}
+		call.store_pointer(vector + arguments.size() * width, 0);
 		running->push_back(service);
 		Status status;
 		status.fields[1] = state_start_pending;
 		status.process = uint32_t(::getpid());
 		write_status(service->name, status);
 		service->main = context.threads.create(procedure, 1, 1024 * 1024, false);
-		service->main->arguments = {1, vector};
+		service->main->arguments = {arguments.size(), vector};
 		HostWait waiting;
 		context.threads.block([service] { return service->stopped || service->main->state == GuestThread::State::done; }, std::nullopt);
 		// A service main function that returned without reporting a stop has stopped all the same.

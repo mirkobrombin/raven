@@ -53,17 +53,27 @@ static BOOL class_value(const WCHAR *key, WCHAR *value, DWORD capacity)
 	return named_value(key, NULL, value, capacity);
 }
 
-/* Whether a class belongs to an application that a Windows service runs, as HKEY_CLASSES_ROOT\AppID\{application} names it with its
- * LocalService value. Raven runs no services, and serves their classes in the process of the program that asks for them. */
-static BOOL service_class(REFCLSID clsid)
+/* The service that serves a class, as HKEY_CLASSES_ROOT\AppID\{application} names it with its LocalService value, and the arguments
+ * COM starts it with, its ServiceParameters. */
+static BOOL class_service(REFCLSID clsid, WCHAR *service, WCHAR *parameters, DWORD capacity)
 {
-	WCHAR key[MAX_PATH], application[64], service[MAX_PATH];
+	WCHAR key[MAX_PATH], application[64];
 	class_key(clsid, L"", key);
 	if (!named_value(key, L"AppID", application, 64))
 		return FALSE;
 	lstrcpyW(key, L"AppID\\");
 	lstrcatW(key, application);
-	return named_value(key, L"LocalService", service, MAX_PATH);
+	if (!named_value(key, L"LocalService", service, MAX_PATH))
+		return FALSE;
+	if (parameters && !named_value(key, L"ServiceParameters", parameters, capacity))
+		parameters[0] = 0;
+	return TRUE;
+}
+
+static BOOL service_class(REFCLSID clsid)
+{
+	WCHAR service[MAX_PATH];
+	return class_service(clsid, service, NULL, 0);
 }
 
 /* A class nobody registered is named in Raven's trace, so the classes a program misses can be found. */
@@ -353,14 +363,58 @@ static BOOL server_command(REFCLSID clsid, WCHAR *command, DWORD capacity)
 	return TRUE;
 }
 
+/* A service started for a class, with the class's ServiceParameters split into its arguments; one already running is left as it is.
+ * The wait for its class ends when the service stops. */
+static HRESULT service_object(REFCLSID clsid, const WCHAR *name, WCHAR *parameters, REFIID iid, void **out)
+{
+	const WCHAR *arguments[32];
+	DWORD count = 0;
+	for (WCHAR *at = parameters; *at && count < ARRAYSIZE(arguments);) {
+		while (*at == L' ' || *at == L'\t')
+			at++;
+		if (!*at)
+			break;
+		const BOOL quoted = *at == L'"';
+		if (quoted)
+			at++;
+		arguments[count++] = at;
+		while (*at && (quoted ? *at != L'"' : *at != L' ' && *at != L'\t'))
+			at++;
+		if (*at)
+			*at++ = 0;
+	}
+	SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+	SC_HANDLE service = manager ? OpenServiceW(manager, name, SERVICE_START | SERVICE_QUERY_STATUS) : NULL;
+	HRESULT result = CO_E_SERVER_EXEC_FAILURE;
+	if (service && (StartServiceW(service, count, count ? arguments : NULL) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING))
+		for (DWORD waited = 0; waited < 120000; waited += 20) {
+			const HRESULT found = published_object(clsid, iid, out);
+			if (found != REGDB_E_CLASSNOTREG) {
+				result = found;
+				break;
+			}
+			SERVICE_STATUS status;
+			if (waited > 1000 && QueryServiceStatus(service, &status) && status.dwCurrentState == SERVICE_STOPPED)
+				break;
+			Sleep(20);
+		}
+	if (service)
+		CloseServiceHandle(service);
+	if (manager)
+		CloseServiceHandle(manager);
+	return result;
+}
+
 /* The class object of a local server, started when no process offers it yet. COM waits for the server to register its classes; a server
  * that ends before that failed to start. */
 static HRESULT local_server_object(REFCLSID clsid, REFIID iid, void **out)
 {
-	WCHAR command[MAX_PATH * 2];
+	WCHAR command[MAX_PATH * 2], service[MAX_PATH];
 	HRESULT result = published_object(clsid, iid, out);
 	if (result != REGDB_E_CLASSNOTREG)
 		return result;
+	if (class_service(clsid, service, command, ARRAYSIZE(command)))
+		return service_object(clsid, service, command, iid, out);
 	if (!server_command(clsid, command, ARRAYSIZE(command)))
 		return REGDB_E_CLASSNOTREG;
 	STARTUPINFOW startup = {sizeof startup};
