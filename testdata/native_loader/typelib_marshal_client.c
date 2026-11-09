@@ -6,7 +6,7 @@
 
 /* An interface known only from a type library crosses to a local server through that description. The client writes the library,
    registers it and asks a server it starts for an object; it calls the object with strings, variants, safe arrays and a callback
-   object of its own, which the server calls back while the client waits. */
+   object of its own, which the server calls back while the client waits. The server sees each call's context. */
 
 #ifdef _WIN64
 #define WIDTH 0x64
@@ -126,9 +126,19 @@ static HRESULT WINAPI object_visit(test_object *self, IUnknown *visitor, LONG *a
 	return hr;
 }
 
+/* A call from another process carries its context, as servers that check their callers ask for it. */
 static HRESULT WINAPI object_process(test_object *self, LONG *process)
 {
+	IServerSecurity *security = NULL;
+	DWORD level = 0;
 	(void)self;
+	*process = 0;
+	if (FAILED(CoGetCallContext(&IID_IServerSecurity, (void **)&security)) || !security)
+		return E_ACCESSDENIED;
+	const HRESULT hr = IServerSecurity_QueryBlanket(security, NULL, NULL, NULL, &level, NULL, NULL, NULL);
+	IServerSecurity_Release(security);
+	if (FAILED(hr) || !level || FAILED(CoImpersonateClient()) || FAILED(CoRevertToSelf()))
+		return E_ACCESSDENIED;
 	*process = (LONG)GetCurrentProcessId();
 	return S_OK;
 }
@@ -330,6 +340,10 @@ int raven_entry(void)
 	RegSetValueExW(handle, NULL, 0, REG_SZ, (const BYTE *)command, (lstrlenW(command) + 1) * sizeof(WCHAR));
 	RegCloseKey(handle);
 
+	/* Outside any call there is no call context. */
+	IServerSecurity *security = NULL;
+	if (CoGetCallContext(&IID_IServerSecurity, (void **)&security) != RPC_E_CALL_COMPLETE)
+		return 13;
 	test_object *remote = NULL;
 	if (FAILED(CoCreateInstance(&test_class, NULL, CLSCTX_LOCAL_SERVER, &test_interface, (void **)&remote)) || !remote)
 		return 3;

@@ -51,11 +51,13 @@ static LONG lock_state;
 static export_entry *exports;
 static LONG listening;
 static ATOM window_class;
+static DWORD context_index = TLS_OUT_OF_INDEXES;
 
 static void lock_ready(void)
 {
 	if (InterlockedCompareExchange(&lock_state, 1, 0) == 0) {
 		InitializeCriticalSection(&lock);
+		context_index = TlsAlloc();
 		InterlockedExchange(&lock_state, 2);
 	}
 	while (lock_state != 2)
@@ -429,7 +431,119 @@ typedef struct {
 	frame_head head;
 	void *payload, *reply;
 	HANDLE done;
+	DWORD caller;
 } pending_call;
+
+/* The call a thread serves for another apartment, which CoGetCallContext describes: its object answers for the client. The client
+ * runs as the same user here, so impersonating it changes nothing. */
+typedef struct {
+	IServerSecurity iface;
+	LONG refs;
+	DWORD caller;
+	BOOL impersonating;
+} call_context;
+
+
+static call_context *current_call(void)
+{
+	return context_index == TLS_OUT_OF_INDEXES ? NULL : TlsGetValue(context_index);
+}
+
+static HRESULT WINAPI context_query(IServerSecurity *iface, REFIID iid, void **out)
+{
+	if (IsEqualIID(iid, &IID_IUnknown) || IsEqualIID(iid, &IID_IServerSecurity)) {
+		*out = iface;
+		IServerSecurity_AddRef(iface);
+		return S_OK;
+	}
+	*out = NULL;
+	return E_NOINTERFACE;
+}
+
+static ULONG WINAPI context_addref(IServerSecurity *iface)
+{
+	return InterlockedIncrement(&CONTAINING_RECORD(iface, call_context, iface)->refs);
+}
+
+static ULONG WINAPI context_release(IServerSecurity *iface)
+{
+	call_context *context = CONTAINING_RECORD(iface, call_context, iface);
+	const LONG left = InterlockedDecrement(&context->refs);
+	if (!left)
+		give(context);
+	return left;
+}
+
+/* Calls between processes of one user are authenticated by the system at packet privacy, the client asking to be identified. */
+static HRESULT WINAPI context_blanket(IServerSecurity *iface, DWORD *authentication, DWORD *authorization, OLECHAR **principal, DWORD *level,
+	DWORD *impersonation, void **privileges, DWORD *capabilities)
+{
+	(void)iface;
+	if (authentication)
+		*authentication = RPC_C_AUTHN_WINNT;
+	if (authorization)
+		*authorization = RPC_C_AUTHZ_NONE;
+	if (principal)
+		*principal = NULL;
+	if (level)
+		*level = RPC_C_AUTHN_LEVEL_PKT_PRIVACY;
+	if (impersonation)
+		*impersonation = RPC_C_IMP_LEVEL_IDENTIFY;
+	if (privileges)
+		*privileges = NULL;
+	if (capabilities)
+		*capabilities = EOAC_NONE;
+	return S_OK;
+}
+
+static HRESULT WINAPI context_impersonate(IServerSecurity *iface)
+{
+	CONTAINING_RECORD(iface, call_context, iface)->impersonating = TRUE;
+	return S_OK;
+}
+
+static HRESULT WINAPI context_revert(IServerSecurity *iface)
+{
+	CONTAINING_RECORD(iface, call_context, iface)->impersonating = FALSE;
+	return S_OK;
+}
+
+static BOOL WINAPI context_impersonating(IServerSecurity *iface)
+{
+	return CONTAINING_RECORD(iface, call_context, iface)->impersonating;
+}
+
+static const IServerSecurityVtbl context_table = {context_query, context_addref, context_release, context_blanket, context_impersonate,
+	context_revert, context_impersonating};
+
+HRESULT WINAPI CoGetCallContext(REFIID iid, void **out)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	call_context *context = current_call();
+	return context ? context_query(&context->iface, iid, out) : RPC_E_CALL_COMPLETE;
+}
+
+HRESULT WINAPI CoImpersonateClient(void)
+{
+	call_context *context = current_call();
+	return context ? context_impersonate(&context->iface) : RPC_E_CALL_COMPLETE;
+}
+
+HRESULT WINAPI CoRevertToSelf(void)
+{
+	call_context *context = current_call();
+	return context ? context_revert(&context->iface) : RPC_E_CALL_COMPLETE;
+}
+
+HRESULT WINAPI CoQueryClientBlanket(DWORD *authentication, DWORD *authorization, OLECHAR **principal, DWORD *level, DWORD *impersonation,
+	void **privileges, DWORD *capabilities)
+{
+	call_context *context = current_call();
+	return context ? context_blanket(&context->iface, authentication, authorization, principal, level, impersonation, privileges, capabilities)
+		: RPC_E_CALL_COMPLETE;
+}
 
 static HRESULT marshal_to_memory(IUnknown *object, REFIID iid, void **data, DWORD *size)
 {
@@ -550,7 +664,24 @@ static HRESULT serve_method(export_entry *entry, DWORD method, const BYTE *in, D
 	return status;
 }
 
+static void serve_call_in_context(pending_call *call);
+
+/* A call runs with its context in effect; one served while another waits nests inside it. */
 static void serve_call(pending_call *call)
+{
+	lock_ready();
+	call_context *context = take(sizeof *context);
+	context->iface.lpVtbl = (IServerSecurityVtbl *)&context_table;
+	context->refs = 1;
+	context->caller = call->caller;
+	call_context *outer = current_call();
+	TlsSetValue(context_index, context);
+	serve_call_in_context(call);
+	TlsSetValue(context_index, outer);
+	context_release(&context->iface);
+}
+
+static void serve_call_in_context(pending_call *call)
 {
 	frame_head *head = &call->head;
 	lock_ready();
@@ -641,6 +772,7 @@ static DWORD WINAPI connection_thread(void *argument)
 {
 	HANDLE pipe = argument;
 	pending_call call = {0};
+	GetNamedPipeClientProcessId(pipe, &call.caller);
 	if (pipe_read(pipe, &call.head, sizeof call.head)) {
 		call.payload = take(call.head.size);
 		if (!call.head.size || pipe_read(pipe, call.payload, call.head.size)) {
