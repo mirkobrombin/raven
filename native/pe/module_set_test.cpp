@@ -4,6 +4,7 @@
 #include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 static void check(bool condition, const char *message)
 {
@@ -169,7 +170,15 @@ int main()
 				check(automatic.bind_imports() == 2 && read(automatic_client.loaded.data(), 0x1380 + width, width) == moved.loaded.base() + 0x1000,
 					"automatic placement left a forwarded IAT at the preferred base");
 				const auto count = automatic.all().size();
-				rejected([&] { automatic.add("fixed", target); });
+				// A module whose relocations were stripped cannot move off an occupied base.
+				auto stripped = target;
+				put(stripped, 0x96, 0x2003, 2);
+				try {
+					automatic.add("fixed", stripped);
+					check(false, "stripped module moved off an occupied base");
+				} catch (const std::runtime_error &error) {
+					check(std::string_view(error.what()).starts_with("fixed"), "placement error does not name the module");
+				}
 				check(automatic.all().size() == count, "failed automatic relocation published a module");
 				rejected([&] { automatic.add("requested", relocated, target_base); });
 				check(automatic.all().size() == count, "explicit colliding base changed the module graph");

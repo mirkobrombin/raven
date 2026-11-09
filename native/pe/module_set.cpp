@@ -146,7 +146,13 @@ PEModule &ModuleSet::add(std::string name, ModuleBytes bytes, uint64_t base)
 	if (modules.contains(name))
 		throw std::runtime_error("duplicate PE module: " + name);
 	named_image(name, bytes);
-	auto module = std::make_unique<PEModule>(name, std::move(bytes), base, !adding_data);
+	// A module that cannot be placed is named in the error, like one that is not a valid image.
+	std::unique_ptr<PEModule> module;
+	try {
+		module = std::make_unique<PEModule>(name, std::move(bytes), base, !adding_data);
+	} catch (const std::runtime_error &error) {
+		throw std::runtime_error(name + ": " + error.what());
+	}
 	for (const auto &[key, previous] : modules) {
 		if (base < previous->loaded.base() + previous->loaded.data().size() &&
 			previous->loaded.base() < base + module->loaded.data().size())

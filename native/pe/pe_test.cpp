@@ -138,6 +138,20 @@ static void delay_import_contracts()
 static void loaded_image_contracts()
 {
 	for (bool is_64 : {false, true}) {
+		// Code without a relocation table loads anywhere unless the image says its relocations were stripped.
+		auto bare = fixture(is_64);
+		const uint64_t preferred = is_64 ? 0x140000000ULL : 0x400000;
+		const raven::PEImage unmarked(bare);
+		raven::LoadedImage moved(unmarked, preferred + 0x10000);
+		check(moved.base() == preferred + 0x10000 && moved.data()[0x1000] == 0xc3 && moved.relocation_count() == 0,
+			"image without relocations was refused or changed at another base");
+		put(bare, 0x96, 3, 2);
+		const raven::PEImage stripped(bare);
+		rejected([&] { raven::LoadedImage(stripped, preferred + 0x10000); });
+		raven::LoadedImage kept(stripped, preferred);
+		check(kept.base() == preferred, "stripped image was refused at its own base");
+	}
+	for (bool is_64 : {false, true}) {
 		auto bytes = fixture(is_64);
 		const size_t width = is_64 ? 8 : 4;
 		const size_t relocation = is_64 ? 0x130 : 0x120;
@@ -199,7 +213,6 @@ static void loaded_image_contracts()
 		errno = 0;
 		check(fcntl(retired_fd, F_GETFD) == -1 && errno == EBADF,
 			"shared image descriptor leaked after destruction");
-		rejected([&] { raven::LoadedImage invalid(fixed, old_base + 0x10000); });
 		if (!is_64)
 			rejected([&] { raven::LoadedImage invalid(fixed, 0x100000000ULL); });
 	}
