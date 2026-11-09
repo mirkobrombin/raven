@@ -60,6 +60,9 @@ struct KernelContext {
 	std::function<uint64_t(uint64_t, bool)> module_named;
 	// The environment variables the program has now, as the block a new process receives (set by the system handlers).
 	std::function<std::u16string()> environment_block;
+	// A certificate context for the first of these encoded certificates, its store a new memory store holding them all, as Schannel
+	// returns the chain a TLS peer sent; zero when it cannot be made (set by the crypt32 handlers).
+	std::function<uint64_t(ApiCall &, const std::vector<std::vector<uint8_t>> &)> certificate_with_store;
 	// Started operations that finish later, such as overlapped socket transfers.
 	std::shared_ptr<Reactor> reactor = std::make_shared<Reactor>();
 	// Named pipes served by this process and the pipe operations that have not finished.

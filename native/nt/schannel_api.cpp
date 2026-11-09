@@ -31,7 +31,7 @@ constexpr uint32_t sec_ok = 0, sec_continue_needed = 0x00090312, sec_context_exp
 	sec_secpkg_not_found = 0x80090305, sec_buffer_too_small = 0x80090321, sec_incomplete_message = 0x80090318,
 	sec_wrong_principal = 0x80090322, sec_untrusted_root = 0x80090325, sec_illegal_message = 0x80090326,
 	sec_insufficient_memory = 0x80090300, sec_invalid_parameter = 0x8009035d, sec_logon_denied = 0x8009030c,
-	sec_message_altered = 0x8009030f, sec_out_of_sequence = 0x80090310;
+	sec_message_altered = 0x8009030f, sec_out_of_sequence = 0x80090310, sec_no_credentials = 0x8009030e;
 constexpr uint32_t buffer_empty = 0, buffer_data = 1, buffer_token = 2, buffer_missing = 4, buffer_extra = 5, buffer_trailer = 6,
 	buffer_header = 7, buffer_stream = 10, buffer_application_protocols = 18;
 // The high bits of a buffer type say how it takes part; the rest is the type.
@@ -40,7 +40,8 @@ constexpr uint32_t qop_wrap_no_encrypt = 0x80000001;
 constexpr uint32_t attribute_sizes = 0, attribute_names = 1, attribute_lifespan = 2, attribute_session_key = 9;
 constexpr uint32_t request_allocate_memory = 0x100, request_manual_validation = 0x80000;
 constexpr uint32_t credentials_no_name_check = 0x4, credentials_manual_validation = 0x8;
-constexpr uint32_t attribute_stream_sizes = 4, attribute_application_protocol = 35, attribute_connection_info = 0x5a;
+constexpr uint32_t attribute_stream_sizes = 4, attribute_application_protocol = 35, attribute_remote_certificate = 0x53,
+	attribute_connection_info = 0x5a, attribute_remote_certificate_chain = 0x67;
 // The record header is the whole fixed part a sender has to leave room for; the trailer covers the largest padding and tag a TLS 1.2
 // block cipher adds.
 constexpr uint32_t record_header = 5, record_trailer = 1024, record_payload = 16384;
@@ -772,8 +773,9 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		const auto found = provider->contexts.find(handle_of(call, call[0]));
 		return found == provider->contexts.end() ? nullptr : found->second;
 	};
-	// What an NTLM context tells of itself: the sizes of its tokens and signatures, the account, its lifespan and the session key.
-	const auto query_ntlm = [&context](ApiCall &call, Context &session) {
+	// What an NTLM context tells of itself: the sizes of its tokens and signatures, the account, its lifespan and the session key. The
+	// account is in the ANSI code page for the narrow entry point.
+	const auto query_ntlm = [&context](ApiCall &call, Context &session, bool wide) {
 		const size_t width = call.pointer_width();
 		switch (call.u32(1)) {
 		case attribute_sizes: {
@@ -784,10 +786,14 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		}
 		case attribute_names: {
 			const std::u16string name = session.ntlm->domain() + u"\\" + session.ntlm->user();
-			const uint64_t text = context.allocator.allocate((name.size() + 1) * 2, true);
+			const auto narrow = wide ? std::string() : to_ansi(name, context.launch.ansi_code_page);
+			const uint64_t text = context.allocator.allocate(wide ? (name.size() + 1) * 2 : narrow.size() + 1, true);
 			if (!text)
 				return sec_insufficient_memory;
-			call.put_wide(text, name, name.size() + 1);
+			if (wide)
+				call.put_wide(text, name, name.size() + 1);
+			else
+				call.put_narrow(text, narrow, narrow.size() + 1);
 			call.store_pointer(call[2], text);
 			return sec_ok;
 		}
@@ -812,14 +818,14 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			return sec_unsupported_function;
 		}
 	};
-	registry.add("QueryContextAttributesW", 3, [session_of, query_ntlm](ApiCall &call) {
+	const auto query = [session_of, query_ntlm, &context](ApiCall &call, bool wide) {
 		const auto session = session_of(call);
 		if (!session) {
 			call.ret(sec_invalid_handle);
 			return;
 		}
 		if (session->ntlm) {
-			call.ret(session->ntlm->established() ? query_ntlm(call, *session) : sec_invalid_handle);
+			call.ret(session->ntlm->established() ? query_ntlm(call, *session, wide) : sec_invalid_handle);
 			return;
 		}
 		switch (call.u32(1)) {
@@ -851,12 +857,52 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			call.write(call[2], {reinterpret_cast<const uint8_t *>(info), sizeof(info)});
 			break;
 		}
+		case attribute_remote_certificate:
+		case attribute_remote_certificate_chain: {
+			// A context for the server's certificate whose store holds the chain it sent, the server's certificate first and each one
+			// once; the caller frees it with CertFreeCertificateContext.
+			if (!session->established || !context.certificate_with_store) {
+				call.ret(sec_invalid_handle);
+				return;
+			}
+			std::vector<std::vector<uint8_t>> chain;
+			const auto add = [&chain](X509 *certificate) {
+				const int length = i2d_X509(certificate, nullptr);
+				if (length <= 0)
+					return;
+				std::vector<uint8_t> bytes(static_cast<size_t>(length));
+				unsigned char *at = bytes.data();
+				i2d_X509(certificate, &at);
+				if (std::find(chain.begin(), chain.end(), bytes) == chain.end())
+					chain.push_back(std::move(bytes));
+			};
+			if (X509 *leaf = SSL_get1_peer_certificate(session->tls.get())) {
+				add(leaf);
+				X509_free(leaf);
+			}
+			if (chain.empty()) {
+				call.ret(sec_no_credentials);
+				return;
+			}
+			if (STACK_OF(X509) *sent = SSL_get_peer_cert_chain(session->tls.get()))
+				for (int index = 0; index < sk_X509_num(sent); ++index)
+					add(sk_X509_value(sent, index));
+			const uint64_t certificate = context.certificate_with_store(call, chain);
+			if (!certificate) {
+				call.ret(sec_insufficient_memory);
+				return;
+			}
+			call.store_pointer(call[2], certificate);
+			break;
+		}
 		default:
 			call.ret(sec_unsupported_function);
 			return;
 		}
 		call.ret(sec_ok);
-	});
+	};
+	registry.add("QueryContextAttributesW", 3, [query](ApiCall &call) { query(call, true); });
+	registry.add("QueryContextAttributesA", 3, [query](ApiCall &call) { query(call, false); });
 	// An NTLM message: its data buffers signed, and sealed unless the caller asked only for integrity, the signature in its token buffer.
 	const auto protect_ntlm = [](ApiCall &call, Context &session, uint64_t description, bool seal) {
 		if (!session.ntlm->established())

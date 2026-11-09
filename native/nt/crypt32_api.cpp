@@ -466,6 +466,27 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		const auto size = call.load<uint32_t>(certificate + (width == 4 ? 8 : 16));
 		return call.read(bytes, size);
 	};
+	// The store made for the certificate a TLS peer sent belongs to that context: freeing the context closes it, as dropping the last
+	// reference to a store does on Windows.
+	struct PeerStores {
+		std::mutex lock;
+		std::map<uint64_t, uint64_t> by_context;
+	};
+	auto peer_stores = std::make_shared<PeerStores>();
+	// Releases a context; an enumeration that moves past it keeps its store open, as the walk still needs it.
+	const auto release_context = [&allocator, &objects, peer_stores](uint64_t certificate, bool close_store) {
+		uint64_t store = 0;
+		{
+			std::lock_guard guard(peer_stores->lock);
+			if (const auto found = peer_stores->by_context.find(certificate); found != peer_stores->by_context.end()) {
+				store = found->second;
+				peer_stores->by_context.erase(found);
+			}
+		}
+		allocator.release(certificate);
+		if (store && close_store)
+			objects.close(store);
+	};
 
 	registry.add("CertOpenStore", 5, [&objects](ApiCall &call) {
 		const uint64_t provider = call[0];
@@ -534,7 +555,8 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("CertAddCertificateContextToStore", 4, [&objects, encoded_of, make_context](ApiCall &call) {
+	// A link is kept as a copy: the stores hold encoded certificates, so the linked one reads the same either way.
+	const auto add_certificate = [&objects, encoded_of, make_context](ApiCall &call) {
 		const auto store = objects.object_as<CertificateStore>(call[0]);
 		if (!store || !call[1]) {
 			call.fail(store ? 87 : 6);
@@ -547,7 +569,9 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 			call.store_pointer(call[3], made);
 		}
 		call.ret(1);
-	});
+	};
+	registry.add("CertAddCertificateContextToStore", 4, add_certificate);
+	registry.add("CertAddCertificateLinkToStore", 4, add_certificate);
 	registry.add("CertDuplicateCertificateContext", 1, [encoded_of, make_context](ApiCall &call) {
 		if (!call[0]) {
 			call.ret(0);
@@ -555,12 +579,31 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(make_context(call, encoded_of(call, call[0]), 0));
 	});
-	registry.add("CertFreeCertificateContext", 1, [&allocator](ApiCall &call) {
+	registry.add("CertFreeCertificateContext", 1, [release_context](ApiCall &call) {
 		if (call[0])
-			allocator.release(call[0]);
+			release_context(call[0], true);
 		call.ret(1);
 	});
-	registry.add("CertEnumCertificatesInStore", 2, [&objects, &allocator, make_context](ApiCall &call) {
+	// The certificate a TLS peer sent, for Schannel: a context for the first certificate of the chain, whose store is a new memory store
+	// holding the whole chain.
+	context.certificate_with_store = [&objects, make_context, peer_stores](ApiCall &call, const std::vector<std::vector<uint8_t>> &chain) -> uint64_t {
+		if (chain.empty() || !parse(chain.front()))
+			return 0;
+		auto store = std::make_shared<CertificateStore>();
+		store->certificates = chain;
+		const auto made = objects.add_object(store);
+		if (made.status)
+			return 0;
+		const auto certificate = make_context(call, chain.front(), made.value);
+		if (!certificate) {
+			objects.close(made.value);
+			return 0;
+		}
+		std::lock_guard guard(peer_stores->lock);
+		peer_stores->by_context[certificate] = made.value;
+		return certificate;
+	};
+	registry.add("CertEnumCertificatesInStore", 2, [&objects, make_context, release_context](ApiCall &call) {
 		const auto store = objects.object_as<CertificateStore>(call[0]);
 		if (!store) {
 			call.fail(6, 0);
@@ -577,7 +620,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 					next = index + 1;
 					break;
 				}
-			allocator.release(call[1]);
+			release_context(call[1], false);
 		}
 		if (next >= store->certificates.size()) {
 			call.fail(0x80092004U, 0);
@@ -1544,7 +1587,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// CertFindCertificateInStore: by issuer and serial number, by SHA-1 hash, by encoded or written subject or issuer name, or any; the
 	// search goes on after the previous context, which it releases.
-	registry.add("CertFindCertificateInStore", 6, [&objects, &allocator, make_context, encoded_of, serial_bytes, cert_info_layout](ApiCall &call) {
+	registry.add("CertFindCertificateInStore", 6, [&objects, make_context, encoded_of, serial_bytes, cert_info_layout, release_context](ApiCall &call) {
 		constexpr uint32_t find_any = 0, find_sha1 = 1 << 16, find_subject_name = (2 << 16) | 7, find_issuer_name = (2 << 16) | 4,
 			find_subject_string = (8 << 16) | 7, find_issuer_string = (8 << 16) | 4, find_subject_cert = 11 << 16, not_found = 0x80092004U;
 		const auto store = objects.object_as<CertificateStore>(call[0]);
@@ -1561,7 +1604,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 					next = index + 1;
 					break;
 				}
-			allocator.release(call[5]);
+			release_context(call[5], false);
 		}
 		const uint32_t type = call.u32(3);
 		const auto blob = [&](uint64_t at) { return call.read(call.load_pointer(at + width), call.load<uint32_t>(at)); };

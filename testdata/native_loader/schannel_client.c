@@ -111,6 +111,20 @@ int raven_entry(void)
 	SecPkgContext_StreamSizes sizes;
 	if (table->QueryContextAttributesW(&context, SECPKG_ATTR_STREAM_SIZES, &sizes) != SEC_E_OK ||
 		!sizes.cbHeader || !sizes.cbMaximumMessage) return 11;
+	/* The server's certificate, whose store holds the chain it sent; a link to it may be added to another store. */
+	PCCERT_CONTEXT remote = NULL;
+	if (table->QueryContextAttributesW(&context, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &remote) != SEC_E_OK || !remote ||
+		!remote->cbCertEncoded || !remote->hCertStore) return 20;
+	PCCERT_CONTEXT walked = CertEnumCertificatesInStore(remote->hCertStore, NULL);
+	if (!walked || walked->cbCertEncoded != remote->cbCertEncoded) return 21;
+	CertFreeCertificateContext(walked);
+	HCERTSTORE linked = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, 0, NULL);
+	if (!linked || !CertAddCertificateLinkToStore(linked, remote, CERT_STORE_ADD_ALWAYS, NULL)) return 22;
+	walked = CertEnumCertificatesInStore(linked, NULL);
+	if (!walked || walked->cbCertEncoded != remote->cbCertEncoded) return 23;
+	CertFreeCertificateContext(walked);
+	CertCloseStore(linked, 0);
+	CertFreeCertificateContext(remote);
 	static char record[32768];
 	copy(record + sizes.cbHeader, "ping", 4);
 	SecBuffer message[4] = {

@@ -83,6 +83,7 @@
 {"CancelIo", 1},
 {"CancelIoEx", 2},
 {"CertAddCertificateContextToStore", 4},
+{"CertAddCertificateLinkToStore", 4},
 {"CertAddEncodedCertificateToStore", 6},
 {"CertCloseStore", 2},
 {"CertCreateCertificateContext", 3},

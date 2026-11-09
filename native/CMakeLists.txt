@@ -2387,7 +2387,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_command(OUTPUT ${SCHANNEL_CLIENT}
                     COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
                         -Wl,--entry,raven_entry,--no-insert-timestamp -o ${SCHANNEL_CLIENT}
-                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/schannel_client.c -lkernel32 -lws2_32 -lsecur32
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/schannel_client.c -lkernel32 -lws2_32 -lsecur32 -lcrypt32
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/schannel_client.c VERBATIM)
                 add_custom_target(schannel_fixture ALL DEPENDS ${SCHANNEL_CLIENT})
                 add_test(NAME native_schannel_x64 COMMAND ${Python3_EXECUTABLE}
