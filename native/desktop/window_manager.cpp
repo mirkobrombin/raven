@@ -67,6 +67,18 @@ void NativeWindows::shift_window(uint64_t handle, int32_t dx, int32_t dy)
 		shift_window(child, dx, dy);
 }
 
+uint64_t NativeWindows::successor(uint64_t leaving) const
+{
+	const auto *window = std::as_const(objects).window(leaving);
+	if (!window || !window->owner)
+		return 0;
+	const auto owner = objects.window_root(window->owner);
+	const auto *record = std::as_const(objects).window(owner);
+	if (!record || owner == leaving || record->destroying || !record->visible || (record->style & ws_disabled))
+		return 0;
+	return owner;
+}
+
 void NativeWindows::expose(uint64_t parent, DesktopRect area, uint64_t leaving)
 {
 	const auto *record = std::as_const(objects).window(parent);
@@ -164,6 +176,13 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 	window = objects.window(handle);
 	window->visible = !hide;
 	window->style = (window->style & ~ws_visible) | (window->visible ? ws_visible : 0);
+	// A hidden active window hands the activation, and with it the keyboard, to its owner.
+	if (hide && previous && !window->parent && active == handle) {
+		activate(successor(handle));
+		window = objects.window(handle);
+		if (!window)
+			throw uint32_t(1400);
+	}
 	objects.update_window_dcs(window->parent ? window->parent : handle);
 	if (!window->parent) {
 		publish_traits(handle);

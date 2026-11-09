@@ -469,6 +469,8 @@ private:
 	// Invalidates what a window going away or moving leaves uncovered: the screen area in the parent and in every other visible child of
 	// it, with their own children, that lies under it.
 	void expose(uint64_t parent,DesktopRect area,uint64_t leaving);
+	// The window that becomes active when the active one closes or hides: its owner, when that can take the keyboard.
+	uint64_t successor(uint64_t leaving) const;
 	void invalidate_tree(uint64_t window,bool erase);
 	// Window messages registered by name (RegisterWindowMessage); ids start at 0xc000 like atoms.
 	std::map<std::u16string,uint32_t> registered_messages;
