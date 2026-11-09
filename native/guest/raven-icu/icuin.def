@@ -22,3 +22,6 @@ EXPORTS
 	uregex_setText = icu.uregex_setText
 	uregex_setUText = icu.uregex_setUText
 	uregex_start = icu.uregex_start
+	utrans_close = icu.utrans_close
+	utrans_openU = icu.utrans_openU
+	utrans_transUChars = icu.utrans_transUChars

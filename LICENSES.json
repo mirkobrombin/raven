@@ -314,6 +314,7 @@
         "native/guest/raven-gdiplus/region.h",
         "native/guest/raven-gdiplus/stroke.c",
         "native/guest/raven-icu/README.md",
+        "native/guest/raven-icu/bidi.c",
         "native/guest/raven-icu/breaks.c",
         "native/guest/raven-icu/common.c",
         "native/guest/raven-icu/dllmain.c",

@@ -56,3 +56,25 @@ EXPORTS
 	uregex_setText
 	uregex_setUText
 	uregex_start
+	ubidi_close
+	ubidi_countRuns
+	ubidi_getBaseDirection
+	ubidi_getDirection
+	ubidi_getLength
+	ubidi_getLevelAt
+	ubidi_getLevels
+	ubidi_getLogicalIndex
+	ubidi_getLogicalMap
+	ubidi_getParaLevel
+	ubidi_getVisualIndex
+	ubidi_getVisualMap
+	ubidi_getVisualRun
+	ubidi_open
+	ubidi_openSized
+	ubidi_reorderLogical
+	ubidi_reorderVisual
+	ubidi_setPara
+	uscript_getScript
+	utrans_close
+	utrans_openU
+	utrans_transUChars

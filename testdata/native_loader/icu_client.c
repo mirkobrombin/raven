@@ -28,6 +28,17 @@ typedef int (__cdecl *text_char_function)(void *, __int64);
 typedef int (__cdecl *text_extract_function)(void *, __int64, __int64, WCHAR *, int, int *);
 typedef int (__cdecl *property_function)(int, int);
 typedef int (__cdecl *convert_function)(const char *, const char *, char *, int, const char *, int, int *);
+typedef int (__cdecl *script_function)(int, int *);
+typedef void *(__cdecl *bidi_open_function)(void);
+typedef void (__cdecl *bidi_para_function)(void *, const WCHAR *, int, unsigned char, unsigned char *, int *);
+typedef const unsigned char *(__cdecl *bidi_levels_function)(void *, int *);
+typedef int (__cdecl *bidi_query_function)(void *);
+typedef int (__cdecl *bidi_base_function)(const WCHAR *, int);
+typedef void (__cdecl *bidi_map_function)(void *, int *, int *);
+typedef int (__cdecl *bidi_count_function)(void *, int *);
+typedef int (__cdecl *bidi_run_function)(void *, int, int *, int *);
+typedef void *(__cdecl *trans_open_function)(const WCHAR *, int, int, const WCHAR *, int, void *, int *);
+typedef void (__cdecl *trans_function)(const void *, WCHAR *, int *, int, int, int *, int *);
 
 static int same(const WCHAR *left, const WCHAR *right, int count)
 {
@@ -197,5 +208,64 @@ int raven_entry(void)
 	if (status != 0x10312) return 56;
 	status = 0;
 	uregex_close(slow);
+
+	// Scripts by character: Latin, Hebrew, Arabic, Han, a combining accent that inherits its base's, and a digit common to all.
+	LOAD(common, script_function, uscript_getScript)
+	if (uscript_getScript('A', &status) != 25 || uscript_getScript(0x5d0, &status) != 19 || uscript_getScript(0x627, &status) != 2 ||
+		uscript_getScript(0x4e00, &status) != 17 || uscript_getScript(0x301, &status) != 1 || uscript_getScript('1', &status) != 0 || status > 0)
+		return 57;
+
+	// "ab", a space, two Hebrew letters, a space and "12": the Hebrew and the space after it are right to left, the number above them.
+	LOAD(common, bidi_open_function, ubidi_open)
+	LOAD(common, bidi_para_function, ubidi_setPara)
+	LOAD(common, bidi_levels_function, ubidi_getLevels)
+	LOAD(common, bidi_query_function, ubidi_getDirection)
+	LOAD(common, bidi_query_function, ubidi_getParaLevel)
+	LOAD(common, bidi_base_function, ubidi_getBaseDirection)
+	LOAD(common, bidi_map_function, ubidi_getVisualMap)
+	LOAD(common, bidi_count_function, ubidi_countRuns)
+	LOAD(common, bidi_run_function, ubidi_getVisualRun)
+	LOAD(common, close_function, ubidi_close)
+	void *bidi = ubidi_open();
+	ubidi_setPara(bidi, L"ab \x05d0\x05d1 12", -1, 0xfe, NULL, &status);
+	const unsigned char *levels = ubidi_getLevels(bidi, &status);
+	static const unsigned char mixed[] = {0, 0, 0, 1, 1, 1, 2, 2};
+	if (!levels || status > 0) return 58;
+	for (int i = 0; i < 8; i++)
+		if (levels[i] != mixed[i]) return 59;
+	if (ubidi_getDirection(bidi) != 2 || ubidi_getParaLevel(bidi) != 0) return 60;
+	int order[8];
+	static const int visual[] = {0, 1, 2, 6, 7, 5, 4, 3};
+	ubidi_getVisualMap(bidi, order, &status);
+	for (int i = 0; i < 8; i++)
+		if (order[i] != visual[i]) return 61;
+	int start = 0, run = 0;
+	if (ubidi_countRuns(bidi, &status) != 3 || ubidi_getVisualRun(bidi, 1, &start, &run) != 0 || start != 6 || run != 2 ||
+		ubidi_getVisualRun(bidi, 2, &start, &run) != 1 || start != 3 || run != 3)
+		return 62;
+	// After Arabic letters a European number is an Arabic one, two levels above the right-to-left paragraph's.
+	ubidi_setPara(bidi, L"\x0627 12", -1, 0xfe, NULL, &status);
+	levels = ubidi_getLevels(bidi, &status);
+	if (!levels || ubidi_getParaLevel(bidi) != 1 || levels[0] != 1 || levels[1] != 1 || levels[2] != 2 || levels[3] != 2 ||
+		ubidi_getDirection(bidi) != 2)
+		return 63;
+	ubidi_close(bidi);
+	if (ubidi_getBaseDirection(L"12 \x05d0" L"a", -1) != 1 || ubidi_getBaseDirection(L"12 !", -1) != 3) return 64;
+
+	// Transliterators: to to_upper case, accents off, and an ID that names none.
+	LOAD(i18n, trans_open_function, utrans_openU)
+	LOAD(i18n, trans_function, utrans_transUChars)
+	LOAD(i18n, close_function, utrans_close)
+	void *to_upper = utrans_openU(L"Any-Upper", -1, 0, NULL, 0, NULL, &status);
+	WCHAR word[16] = L"caf\x00e9 ok";
+	int length = 7, limit = 4;
+	utrans_transUChars(to_upper, word, &length, 16, 0, &limit, &status);
+	if (status > 0 || length != 7 || limit != 4 || !same(word, L"CAF\x00c9 ok", 8)) return 65;
+	utrans_close(to_upper);
+	void *plain = utrans_openU(L"Latin-ASCII", -1, 0, NULL, 0, NULL, &status);
+	utrans_transUChars(plain, word, NULL, 16, 0, NULL, &status);
+	if (status > 0 || !same(word, L"CAFE ok", 8)) return 66;
+	utrans_close(plain);
+	if (utrans_openU(L"Klingon-Latin", -1, 0, NULL, 0, NULL, &status) || status != 0x10021) return 67;
 	return 0;
 }

@@ -21,6 +21,7 @@ typedef signed char UBool;
 #define U_INVALID_CHAR_FOUND 10
 #define U_BUFFER_OVERFLOW_ERROR 15
 #define U_UNSUPPORTED_ERROR 16
+#define U_INVALID_STATE_ERROR 27
 #define U_REGEX_RULE_SYNTAX 0x10301
 #define U_REGEX_INVALID_STATE 0x10302
 #define U_REGEX_BAD_ESCAPE_SEQUENCE 0x10303
@@ -65,4 +66,6 @@ UText *icu_utext_copy(const UText *text);
 
 UText *__cdecl utext_openUChars(UText *reuse, const UChar *text, INT64 length, UErrorCode *status);
 UText *__cdecl utext_close(UText *text);
+INT __cdecl u_strToLower(UChar *dest, INT capacity, const UChar *source, INT length, const char *locale, UErrorCode *status);
+INT __cdecl u_strToUpper(UChar *dest, INT capacity, const UChar *source, INT length, const char *locale, UErrorCode *status);
 #endif
