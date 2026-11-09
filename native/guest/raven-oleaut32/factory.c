@@ -2,12 +2,13 @@
  * Copyright (c) 2026 Mirko Brombin
  * See LICENSES/MIT.txt.
  *
- * Class objects for the standard font and picture.
+ * Class objects for the standard font and picture, and for the marshaler of interfaces a type library describes.
  */
 #include "oa.h"
 
 HRESULT oa_create_std_font(REFIID riid, void **out);
 HRESULT oa_create_std_picture(REFIID riid, void **out);
+HRESULT oa_marshaler_class(REFCLSID clsid, REFIID riid, void **out);
 
 struct factory
 {
@@ -76,7 +77,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void **out)
 		return IClassFactory_QueryInterface(&font_factory.IClassFactory_iface, riid, out);
 	if (IsEqualCLSID(clsid, &CLSID_StdPicture))
 		return IClassFactory_QueryInterface(&picture_factory.IClassFactory_iface, riid, out);
-	return CLASS_E_CLASSNOTAVAILABLE;
+	return oa_marshaler_class(clsid, riid, out);
 }
 
 HRESULT WINAPI DllCanUnloadNow(void)

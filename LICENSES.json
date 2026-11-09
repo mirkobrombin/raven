@@ -181,6 +181,7 @@
         "native/guest/raven-oleaut32/olefont.c",
         "native/guest/raven-oleaut32/olepicture.c",
         "native/guest/raven-oleaut32/ops.c",
+        "native/guest/raven-oleaut32/psoa.c",
         "native/guest/raven-oleaut32/recinfo.c",
         "native/guest/raven-oleaut32/resources.rc",
         "native/guest/raven-oleaut32/safearray.c",

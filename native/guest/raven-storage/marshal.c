@@ -1003,6 +1003,7 @@ static HRESULT manager_add(proxy_manager *manager, REFIID iid, const GUID *ipid,
 	item->ipid = *ipid;
 	item->iid = *iid;
 	HRESULT hr = S_OK;
+	BOOL counted = FALSE;
 	if (IsEqualIID(iid, &IID_IUnknown))
 		item->pointer = &manager->outer;
 	else if (IsEqualIID(iid, &IID_IClassFactory)) {
@@ -1021,12 +1022,16 @@ static HRESULT manager_add(proxy_manager *manager, REFIID iid, const GUID *ipid,
 			hr = IPSFactoryBuffer_CreateProxy(factory, &manager->outer, iid, &item->buffer, &pointer);
 			IPSFactoryBuffer_Release(factory);
 			item->pointer = pointer;
+			/* The interface a proxy hands back already holds a reference on the manager: it is the caller's. */
+			counted = SUCCEEDED(hr) && pointer;
 			if (SUCCEEDED(hr)) {
 				item->channel = channel_create(manager->process, ipid, iid);
 				hr = IRpcProxyBuffer_Connect(item->buffer, &item->channel->iface);
 			}
 		}
 		if (FAILED(hr)) {
+			if (counted)
+				manager_release(&manager->outer);
 			if (item->buffer)
 				IRpcProxyBuffer_Release(item->buffer);
 			if (item->channel)
@@ -1040,7 +1045,8 @@ static HRESULT manager_add(proxy_manager *manager, REFIID iid, const GUID *ipid,
 	manager->interfaces = item;
 	LeaveCriticalSection(&manager->guard);
 	*out = item->pointer;
-	manager_addref(&manager->outer);
+	if (!counted)
+		manager_addref(&manager->outer);
 	return S_OK;
 }
 

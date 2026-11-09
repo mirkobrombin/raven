@@ -132,8 +132,9 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 // programs create for their windows' controls, the MSXML 6.0 classes, which the XML component serves beside its own, the network list,
 // which programs ask whether they are online, the package manager of the Windows Runtime, the factories of the packaging API, which
 // package managers read .appx and .msix packages with, the background transfer manager of each BITS version, which bootstrappers
-// download through, and the locator and object path parser of management instrumentation, which System.Management asks what the
-// machine is made of through, and the WebBrowser control, which Windows Forms and WPF programs embed. A hive that lacks them, a new one or one made before they were registered, gets them.
+// download through, the locator and object path parser of management instrumentation, which System.Management asks what the
+// machine is made of through, the WebBrowser control, which Windows Forms and WPF programs embed, and the marshaler of interfaces a
+// type library describes, which their ProxyStubClsid32 names. A hive that lacks them, a new one or one made before they were registered, gets them.
 void NativeRegistry::register_runtime_classes()
 {
 	static constexpr std::pair<const char16_t *, const char16_t *> classes[] = {{u"{E5CB7A31-7512-11D2-89CE-0080C792E5D8}", u"mscoree.dll"},
@@ -155,7 +156,7 @@ void NativeRegistry::register_runtime_classes()
 		{u"{EE09B103-97E0-11CF-978F-00A02463E06F}", u"scrrun.dll"}, {u"{0D43FE01-F093-11CF-8940-00A0C9054228}", u"scrrun.dll"},
 		{u"{72C24DD5-D70A-438B-8A42-98424B88AFB8}", u"wshom.ocx"}, {u"{093FF999-1EA0-4079-9525-9614C3504B74}", u"wshom.ocx"},
 		{u"{F935DC22-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"}, {u"{F935DC26-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"},
-		{u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}", u"jscript.dll"}};
+		{u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}", u"jscript.dll"}, {u"{00020424-0000-0000-C000-000000000046}", u"oleaut32.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;
