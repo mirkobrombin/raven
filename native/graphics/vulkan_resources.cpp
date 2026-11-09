@@ -119,11 +119,30 @@ void VulkanBridge::shadow_to_device(uint64_t device)
 		if (memory.device != device || !memory.host || !memory.view)
 			continue;
 		auto *host = static_cast<uint8_t *>(memory.host);
+		bool written = false;
 		each_difference(memory.view, memory.snapshot.data(), size_t(memory.mapped), [&](size_t index) {
 			host[index] = memory.view[index];
 			memory.snapshot[index] = memory.view[index];
+			written = true;
 		});
+		// Bytes written through a mapping of memory that is not host-coherent reach the device only after the driver flushes them.
+		if (written && !memory.coherent)
+			mapped_range(memory, false);
 	}
+}
+
+// Makes the device's writes to a mapping of non-coherent memory visible to the host's caches (invalidate), or the host's writes visible
+// to the device (flush). The driver does this for its own mapping only when asked: copying between the guest's shadow and the mapping
+// does not, and without it a host-cached, non-coherent mapping (Intel on i915 exposes one) keeps returning the cache lines it held before
+// the device wrote them.
+void VulkanBridge::mapped_range(const Memory &memory, bool invalidate)
+{
+	const VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory.handle, memory.offset, VK_WHOLE_SIZE};
+	const auto handle = devices.at(memory.device).handle;
+	const auto status = invalidate ? vkInvalidateMappedMemoryRanges(handle, 1, &range) : vkFlushMappedMemoryRanges(handle, 1, &range);
+	if (status != VK_SUCCESS)
+		throw std::runtime_error(std::string(invalidate ? "vkInvalidateMappedMemoryRanges" : "vkFlushMappedMemoryRanges") + " failed: " +
+			std::to_string(int(status)));
 }
 
 void VulkanBridge::shadow_from_device(uint64_t device, ReadBack scope, const std::vector<uint64_t> &named)
@@ -138,6 +157,8 @@ void VulkanBridge::shadow_from_device(uint64_t device, ReadBack scope, const std
 			continue;
 		if (scope == cached_memory ? !memory.cached : std::find(named.begin(), named.end(), token) == named.end())
 			continue;
+		if (!memory.coherent)
+			mapped_range(memory, true);
 		const auto *host = static_cast<const uint8_t *>(memory.host);
 		each_difference(host, memory.snapshot.data(), size_t(memory.mapped), [&](size_t index) {
 			memory.view[index] = host[index];

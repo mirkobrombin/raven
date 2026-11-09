@@ -161,6 +161,8 @@ private:
 	void destroy_device(uint64_t token);
 	// Copies between a guest shadow and the host mapping behind it, moving only the bytes that changed on one side.
 	void shadow_to_device(uint64_t device);
+	// Flushes or invalidates the whole mapping of memory that is not host-coherent, through the host driver.
+	void mapped_range(const Memory &memory, bool invalidate);
 	// Maps a shadow the guest and the host share, or releases one.
 	uint64_t make_shadow(Memory &memory, size_t size);
 	void drop_shadow(Memory &memory);
