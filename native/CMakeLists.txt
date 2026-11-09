@@ -1526,6 +1526,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(wheel_target_test wheel_target_fixture raven-bootstrap)
             add_test(NAME native_wheel_target COMMAND wheel_target_test $<TARGET_FILE:raven-bootstrap> ${WHEEL_TARGET_FIXTURE})
             set_tests_properties(native_wheel_target PROPERTIES TIMEOUT 15)
+            add_executable(input_thread_test desktop/input_thread_test.cpp)
+            target_link_libraries(input_thread_test PRIVATE raven_cpu)
+            set(INPUT_THREAD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/input-thread.exe)
+            add_custom_command(OUTPUT ${INPUT_THREAD_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${INPUT_THREAD_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_thread_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_thread_client.c VERBATIM)
+            add_custom_target(input_thread_fixture ALL DEPENDS ${INPUT_THREAD_FIXTURE})
+            add_dependencies(input_thread_test input_thread_fixture raven-bootstrap)
+            add_test(NAME native_input_thread COMMAND input_thread_test $<TARGET_FILE:raven-bootstrap> ${INPUT_THREAD_FIXTURE})
+            set_tests_properties(native_input_thread PROPERTIES TIMEOUT 20)
             add_executable(modifier_keys_test desktop/modifier_keys_test.cpp)
             target_link_libraries(modifier_keys_test PRIVATE raven_cpu)
             set(MODIFIER_KEYS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/modifier-keys.exe)
