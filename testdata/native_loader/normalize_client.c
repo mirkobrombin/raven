@@ -52,7 +52,8 @@ int raven_entry(void)
 	if (NormalizeString(NormalizationC, L"e\x0301z", 2, out, 8) != 1 || out[0] != 0xe9)
 		return 10;
 	SetLastError(0);
-	if (NormalizeString(NormalizationD, L"\x00e9\x00e9", 2, out, 1) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+	// A destination too small answers with the length it needs, negated.
+	if (NormalizeString(NormalizationD, L"\x00e9\x00e9", 2, out, 1) != -4 || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
 		return 11;
 	SetLastError(0);
 	if (NormalizeString(NormalizationC, L"a\xd800z", -1, out, 8) > 0 || GetLastError() != ERROR_NO_UNICODE_TRANSLATION)

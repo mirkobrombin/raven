@@ -1,5 +1,51 @@
 #include <windows.h>
 
+// The order of two sort keys compared byte by byte, as .NET compares and hashes them.
+static int key_order(const BYTE *left, const BYTE *right, int length)
+{
+	for (int at = 0; at < length; ++at)
+		if (left[at] != right[at])
+			return left[at] < right[at] ? -1 : 1;
+	return 0;
+}
+
+// Sort keys follow CompareString: keys of texts that differ only in case are equal when case is ignored, and order texts as it does.
+static int sort_keys(void)
+{
+	static BYTE first[256], second[256];
+	const DWORD ignore = LCMAP_SORTKEY | NORM_IGNORECASE;
+	int one = LCMapStringEx(LOCALE_NAME_INVARIANT, ignore, L"PassagelistsSyncBaseUri", -1, (LPWSTR)first, sizeof(first), NULL, NULL, 0);
+	int two = LCMapStringEx(LOCALE_NAME_INVARIANT, ignore, L"PassageListsSyncBaseUri", -1, (LPWSTR)second, sizeof(second), NULL, NULL, 0);
+	if (!one || one != two || key_order(first, second, one) || first[one - 1] != 0)
+		return 1;
+	if (LCMapStringEx(LOCALE_NAME_INVARIANT, ignore, L"Passage", -1, NULL, 0, NULL, NULL, 0) <= 0)
+		return 2;
+	one = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_SORTKEY, L"abc", -1, (LPWSTR)first, sizeof(first), NULL, NULL, 0);
+	two = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_SORTKEY, L"ABC", -1, (LPWSTR)second, sizeof(second), NULL, NULL, 0);
+	if (!one || one != two || !key_order(first, second, one))
+		return 3;
+	static const WCHAR *const texts[][2] = {{L"apple", L"Banana"}, {L"Zeta", L"alpha"}, {L"abc", L"ABC"}, {L"a", L"ab"}};
+	for (int index = 0; index < 4; ++index) {
+		one = LCMapStringW(LOCALE_INVARIANT, LCMAP_SORTKEY, texts[index][0], -1, (LPWSTR)first, sizeof(first));
+		two = LCMapStringW(LOCALE_INVARIANT, LCMAP_SORTKEY, texts[index][1], -1, (LPWSTR)second, sizeof(second));
+		const int compared = CompareStringW(LOCALE_INVARIANT, 0, texts[index][0], -1, texts[index][1], -1) - CSTR_EQUAL;
+		int ordered = key_order(first, second, one < two ? one : two);
+		if (!ordered && one != two)
+			ordered = one < two ? -1 : 1;
+		if (!one || !two || ordered != compared)
+			return 4 + index;
+	}
+	// A hyphen only breaks a tie, but the texts stay different.
+	one = LCMapStringW(LOCALE_INVARIANT, LCMAP_SORTKEY | NORM_IGNORECASE, L"co-op", -1, (LPWSTR)first, sizeof(first));
+	two = LCMapStringW(LOCALE_INVARIANT, LCMAP_SORTKEY | NORM_IGNORECASE, L"coop", -1, (LPWSTR)second, sizeof(second));
+	if (!one || !two || (one == two && !key_order(first, second, one)))
+		return 9;
+	SetLastError(0);
+	if (LCMapStringW(LOCALE_INVARIANT, LCMAP_SORTKEY, L"abc", -1, (LPWSTR)first, 2) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+		return 8;
+	return 0;
+}
+
 // LCMapString's lengths, as CPython's ntpath.normcase relies on them: a source given with its length maps to that many characters
 // and nothing is written after them (CPython sizes the buffer from the first call exactly); a source ended by a zero maps, counts
 // and writes the zero too, and a buffer without room for it fails with ERROR_INSUFFICIENT_BUFFER. Returns 0, or the number of the
@@ -27,5 +73,8 @@ int raven_entry(void)
 	if (LCMapStringA(LOCALE_INVARIANT, LCMAP_UPPERCASE, "abc", -1, NULL, 0) != 4 ||
 		LCMapStringA(LOCALE_INVARIANT, LCMAP_UPPERCASE, "abc", -1, narrow, 4) != 4 || narrow[3] != 0)
 		return 7;
+	const int keys = sort_keys();
+	if (keys)
+		return 10 + keys;
 	return 0;
 }
