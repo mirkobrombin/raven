@@ -126,7 +126,12 @@ private:
 	};
 	struct Handle { std::shared_ptr<EventObject> event; uint32_t access; std::shared_ptr<File> file; std::shared_ptr<KernelObject> generic = {}; bool inherit = false; };
 	mutable std::mutex mutex;
-	std::map<uint64_t,Handle> handles;
+	// Handles are multiples of four, and Windows leaves the two low bits to the program, which may tag a handle with them (as SNI does
+	// an event's): lookups ignore those bits.
+	struct UntaggedOrder {
+		bool operator()(uint64_t left, uint64_t right) const { return (left & ~uint64_t(3)) < (right & ~uint64_t(3)); }
+	};
+	std::map<uint64_t,Handle,UntaggedOrder> handles;
 	std::map<std::u16string,std::weak_ptr<EventObject>> named_events;
 	uint64_t next = 0x100;
 	// The next free handle value; the caller holds the mutex. Values that inherited handles occupy are skipped.

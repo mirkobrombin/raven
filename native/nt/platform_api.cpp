@@ -55,7 +55,8 @@ struct CryptState {
 		std::shared_ptr<EVP_CIPHER_CTX> stream;
 #endif
 	};
-	std::map<uint64_t, bool> providers;
+	// Each provider handle with the references CryptAcquireContext and CryptContextAddRef took on it.
+	std::map<uint64_t, uint32_t> providers;
 	std::map<uint64_t, std::unique_ptr<Digest>> hashes;
 	// The values CryptSetHashParam gave hashes in place of what their data computes.
 	std::map<uint64_t, std::vector<uint8_t>> hash_values;
@@ -1876,7 +1877,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	auto crypt = std::make_shared<CryptState>();
 	registry.add("CryptAcquireContextW", 5, [crypt](ApiCall &call) {
 		const auto handle = crypt->next++;
-		crypt->providers[handle] = true;
+		crypt->providers[handle] = 1;
 		call.store_pointer(call[0], handle);
 		call.ret(1);
 	});
@@ -1899,7 +1900,21 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[2], bytes);
 		call.ret(1);
 	});
+	registry.add("CryptContextAddRef", 3, [crypt](ApiCall &call) {
+		const auto found = crypt->providers.find(call[0]);
+		if (call[1] || call.u32(2) || found == crypt->providers.end()) {
+			call.fail(87);
+			return;
+		}
+		++found->second;
+		call.ret(1);
+	});
+	// The provider goes when its last reference is released.
 	registry.add("CryptReleaseContext", 2, [crypt](ApiCall &call) {
+		if (const auto found = crypt->providers.find(call[0]); found != crypt->providers.end() && --found->second) {
+			call.ret(1);
+			return;
+		}
 		crypt->providers.erase(call[0]);
 		std::erase_if(crypt->user_keys, [&](const auto &entry) { return entry.first.first == call[0]; });
 		call.ret(1);
@@ -1959,6 +1974,21 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		crypt->hashes[handle] = std::move(digest);
 		crypt->hash_provider[handle] = call[0];
 		call.store_pointer(call[4], handle);
+		call.ret(1);
+	});
+	// A copy of a hash as it stands: its data so far, a value set on it and its provider.
+	registry.add("CryptDuplicateHash", 4, [crypt](ApiCall &call) {
+		const auto found = crypt->hashes.find(call[0]);
+		if (call[1] || call.u32(2) || !call[3] || found == crypt->hashes.end()) {
+			call.fail(found == crypt->hashes.end() ? 6 : 87);
+			return;
+		}
+		const auto handle = crypt->next++;
+		crypt->hashes[handle] = found->second->clone();
+		if (const auto fixed = crypt->hash_values.find(call[0]); fixed != crypt->hash_values.end())
+			crypt->hash_values[handle] = fixed->second;
+		crypt->hash_provider[handle] = crypt->hash_provider[call[0]];
+		call.store_pointer(call[3], handle);
 		call.ret(1);
 	});
 	registry.add("CryptHashData", 4, [crypt](ApiCall &call) {

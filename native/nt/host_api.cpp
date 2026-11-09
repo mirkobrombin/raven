@@ -1046,7 +1046,8 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	// What the thread's queue holds: the high word the kinds of message waiting, the low word the ones that arrived since the last call.
 	registry.add("GetQueueStatus", 1, [&context](ApiCall &call) {
 		const uint32_t kinds = call.u32(0);
-		if (kinds & ~0x1dffU) { call.fail(87, 0); return; }
+		// QS_EVENT (0x2000) is among the kinds a caller may ask about, though no message here is of that kind.
+		if (kinds & ~0x3dffU) { call.fail(87, 0); return; }
 		const uint32_t status = context.queue_status ? context.queue_status(context.threads.current_id(), kinds, true) : 0;
 		if (!status && context.queue_quiet) context.queue_quiet(context.threads.current_id());
 		call.ret(status);

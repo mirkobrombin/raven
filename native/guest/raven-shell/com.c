@@ -602,6 +602,20 @@ HRESULT WINAPI CoGetObjectContext(REFIID iid, void **out)
 	return FAILED(result) ? result : context_query(&context->callback, iid, out);
 }
 
+/* The default context of an apartment type: the caller's own for APTTYPE_CURRENT, the one context of the multithreaded apartment for
+ * APTTYPE_MTA. The others are not modelled, and E_NOINTERFACE sends the caller back to its current context. */
+HRESULT WINAPI CoGetDefaultContext(APTTYPE type, REFIID iid, void **out)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	if (type == APTTYPE_CURRENT)
+		return CoGetObjectContext(iid, out);
+	if (type == APTTYPE_MTA)
+		return context_query(&multithreaded_context.callback, iid, out);
+	return type == APTTYPE_STA ? E_INVALIDARG : E_NOINTERFACE;
+}
+
 /* A wait of COM: in a single-threaded apartment the thread keeps dispatching the messages that reach it while it waits, as the modal
  * loop of COM does, so a window of the apartment, or a completion posted to it, is served while the thread waits on a task. A quit
  * message seen meanwhile is posted again for the thread's own loop. In the multithreaded apartment it is a plain wait. The result is the

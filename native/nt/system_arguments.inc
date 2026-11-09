@@ -2702,6 +2702,32 @@ static constexpr std::pair<std::string_view, uint8_t> mscms_words[]{
 	{"WcsGetUsePerUserProfiles",3},{"WcsGpCanInstallOrUninstallProfiles",1},{"WcsGpCanModifyDeviceAssociationList",3},{"WcsOpenColorProfileA",7},{"WcsOpenColorProfileW",7},{"WcsSetCalibrationManagementState",1},
 	{"WcsSetDefaultColorProfile",6},{"WcsSetDefaultRenderingIntent",2},{"WcsSetUsePerUserProfiles",3},{"WcsTranslateColors",10},
 };
+static constexpr std::pair<std::string_view, uint8_t> rasapi32_words[]{
+	{"DDMGetPhonebookInfo",8},{"DwCloneEntry",3},{"DwDeleteSubEntry",3},{"DwEnumEntriesForAllUsers",3},{"DwEnumEntryDetails",4},{"FreeSharedAccessApplication",1},
+	{"FreeSharedAccessServer",1},{"RasAutoDialSharedConnection",0},{"RasAutodialAddressToNetwork",3},{"RasAutodialEntryToNetwork",3},{"RasClearConnectionStatistics",1},{"RasClearLinkStatistics",2},
+	{"RasConnectionNotificationA",3},{"RasConnectionNotificationW",3},{"RasCreatePhonebookEntryA",2},{"RasCreatePhonebookEntryW",2},{"RasDeleteEntryA",2},{"RasDeleteEntryW",2},
+	{"RasDialA",6},{"RasDialW",6},{"RasDialWow",5},{"RasEditPhonebookEntryA",3},{"RasEditPhonebookEntryW",3},{"RasEnumAutodialAddressesA",3},
+	{"RasEnumAutodialAddressesW",3},{"RasEnumConnectionsA",3},{"RasEnumConnectionsW",3},{"RasEnumConnectionsWow",3},{"RasEnumDevicesA",3},{"RasEnumDevicesW",3},
+	{"RasEnumEntriesA",5},{"RasEnumEntriesW",5},{"RasEnumEntriesWow",5},{"RasFreeEapUserIdentityA",1},{"RasFreeEapUserIdentityW",1},{"RasFreeLanConnTable",2},
+	{"RasFreeSharedAccessSettings",1},{"RasGetAutodialAddressA",5},{"RasGetAutodialAddressW",5},{"RasGetAutodialEnableA",2},{"RasGetAutodialEnableW",2},{"RasGetAutodialParamA",3},
+	{"RasGetAutodialParamW",3},{"RasGetConnectResponse",2},{"RasGetConnectStatusA",2},{"RasGetConnectStatusW",2},{"RasGetConnectStatusWow",2},{"RasGetConnectionStatistics",2},
+	{"RasGetCountryInfoA",2},{"RasGetCountryInfoW",2},{"RasGetCredentialsA",3},{"RasGetCredentialsW",3},{"RasGetCustomAuthDataA",4},{"RasGetCustomAuthDataW",4},
+	{"RasGetEapUserDataA",5},{"RasGetEapUserDataW",5},{"RasGetEapUserIdentityA",5},{"RasGetEapUserIdentityW",5},{"RasGetEntryDialParamsA",3},{"RasGetEntryDialParamsW",3},
+	{"RasGetEntryHrasconnA",3},{"RasGetEntryHrasconnW",3},{"RasGetEntryPropertiesA",6},{"RasGetEntryPropertiesW",6},{"RasGetErrorStringA",3},{"RasGetErrorStringW",3},
+	{"RasGetErrorStringWow",3},{"RasGetHport",1},{"RasGetLinkStatistics",3},{"RasGetProjectionInfoA",4},{"RasGetProjectionInfoW",4},{"RasGetSubEntryHandleA",3},
+	{"RasGetSubEntryHandleW",3},{"RasGetSubEntryPropertiesA",7},{"RasGetSubEntryPropertiesW",7},{"RasHangUpA",1},{"RasHangUpW",1},{"RasHangUpWow",1},
+	{"RasInvokeEapUI",4},{"RasIsRouterConnection",1},{"RasIsSharedConnection",2},{"RasLoadSharedAccessSettings",1},{"RasNameFromSharedConnection",2},{"RasQueryLanConnTable",3},
+	{"RasQueryRedialOnLinkFailure",3},{"RasQuerySharedAutoDial",1},{"RasQuerySharedConnection",1},{"RasQuerySharedConnectionCredentials",2},{"RasQuerySharedPrivateLan",1},{"RasQuerySharedPrivateLanAddress",1},
+	{"RasRenameEntryA",3},{"RasRenameEntryW",3},{"RasSaveSharedAccessSettings",1},{"RasSetAutodialAddressA",5},{"RasSetAutodialAddressW",5},{"RasSetAutodialEnableA",2},
+	{"RasSetAutodialEnableW",2},{"RasSetAutodialParamA",3},{"RasSetAutodialParamW",3},{"RasSetCredentialsA",4},{"RasSetCredentialsW",4},{"RasSetCustomAuthDataA",4},
+	{"RasSetCustomAuthDataW",4},{"RasSetEapUserDataA",5},{"RasSetEapUserDataW",5},{"RasSetEntryDialParamsA",3},{"RasSetEntryDialParamsW",3},{"RasSetEntryPropertiesA",6},
+	{"RasSetEntryPropertiesW",6},{"RasSetOldPassword",2},{"RasSetSharedAutoDial",1},{"RasSetSharedConnectionCredentials",2},{"RasSetSubEntryPropertiesA",7},{"RasSetSubEntryPropertiesW",7},
+	{"RasShareConnection",2},{"RasUnshareConnection",1},{"RasValidateEntryNameA",2},{"RasValidateEntryNameW",2},{"RasfileClose",1},{"RasfileDeleteLine",1},
+	{"RasfileFindFirstLine",3},{"RasfileFindLastLine",3},{"RasfileFindMarkedLine",2},{"RasfileFindNextKeyLine",3},{"RasfileFindNextLine",3},{"RasfileFindPrevLine",3},
+	{"RasfileFindSectionLine",3},{"RasfileGetKeyValueFields",3},{"RasfileGetLine",1},{"RasfileGetLineMark",1},{"RasfileGetLineText",2},{"RasfileGetLineType",1},
+	{"RasfileGetSectionName",2},{"RasfileInsertLine",3},{"RasfileLoad",4},{"RasfileLoadInfo",2},{"RasfilePutKeyValueFields",3},{"RasfilePutLineMark",2},
+	{"RasfilePutLineText",2},{"RasfilePutSectionName",2},{"RasfileWrite",2},{"SharedAccessResponseListToString",2},{"SharedAccessResponseStringToList",3},{"UnInitializeRAS",0},
+};
 static constexpr std::pair<std::string_view, std::span<const std::pair<std::string_view, uint8_t>>> argument_tables[]{
 	{"advapi32.dll", advapi32_words},
 	{"bcrypt.dll", bcrypt_words},
@@ -2780,4 +2806,5 @@ static constexpr std::pair<std::string_view, std::span<const std::pair<std::stri
 	{"httpapi.dll", httpapi_words},
 	{"msacm32.dll", msacm32_words},
 	{"mscms.dll", mscms_words},
+	{"rasapi32.dll", rasapi32_words},
 };

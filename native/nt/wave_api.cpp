@@ -269,6 +269,11 @@ void register_wave_api(ApiRegistry &registry, KernelContext &context)
 	});
 
 	registry.add("waveOutGetNumDevs", 0, [](ApiCall &call) { call.ret(1); });
+	// System and file sounds are accepted without being played, so a program that beeps or chimes goes on as if it had.
+	for (const auto *name : {"PlaySound", "PlaySoundA", "PlaySoundW"})
+		registry.add(name, 3, [](ApiCall &call) { call.ret(1); });
+	for (const auto *name : {"sndPlaySoundA", "sndPlaySoundW"})
+		registry.add(name, 2, [](ApiCall &call) { call.ret(1); });
 	// There is no capture device: recording programs hear that none exists.
 	registry.add("waveInGetNumDevs", 0, [](ApiCall &call) { call.ret(0); });
 	// There is no capture device and no mixer: their calls report a bad device or no driver, as Windows does on such a machine.

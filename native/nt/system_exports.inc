@@ -2861,6 +2861,32 @@ static constexpr std::string_view mscms_exports[]{
 	"WcsGetUsePerUserProfiles","WcsGpCanInstallOrUninstallProfiles","WcsGpCanModifyDeviceAssociationList","WcsOpenColorProfileA","WcsOpenColorProfileW","WcsSetCalibrationManagementState",
 	"WcsSetDefaultColorProfile","WcsSetDefaultRenderingIntent","WcsSetUsePerUserProfiles","WcsTranslateColors",
 };
+static constexpr std::string_view rasapi32_exports[]{
+	"DDMFreePhonebookContext","DDMGetPhonebookInfo","DwCloneEntry","DwDeleteSubEntry","DwEnumEntriesForAllUsers","DwEnumEntryDetails",
+	"DwRasUninitialize","RasAutoDialSharedConnection","RasAutodialAddressToNetwork","RasAutodialEntryToNetwork","RasClearConnectionStatistics","RasClearLinkStatistics",
+	"RasConnectionNotificationA","RasConnectionNotificationW","RasCreatePhonebookEntryA","RasCreatePhonebookEntryW","RasDeleteEntryA","RasDeleteEntryW",
+	"RasDeleteSubEntryA","RasDeleteSubEntryW","RasDialA","RasDialW","RasDialWow","RasEditPhonebookEntryA",
+	"RasEditPhonebookEntryW","RasEnumAutodialAddressesA","RasEnumAutodialAddressesW","RasEnumConnectionsA","RasEnumConnectionsW","RasEnumConnectionsWow",
+	"RasEnumDevicesA","RasEnumDevicesW","RasEnumEntriesA","RasEnumEntriesW","RasEnumEntriesWow","RasFreeEapUserIdentityA",
+	"RasFreeEapUserIdentityW","RasGetAutodialAddressA","RasGetAutodialAddressW","RasGetAutodialEnableA","RasGetAutodialEnableW","RasGetAutodialParamA",
+	"RasGetAutodialParamW","RasGetConnectResponse","RasGetConnectStatusA","RasGetConnectStatusW","RasGetConnectStatusWow","RasGetConnectionStatistics",
+	"RasGetCountryInfoA","RasGetCountryInfoW","RasGetCredentialsA","RasGetCredentialsW","RasGetCustomAuthDataA","RasGetCustomAuthDataW",
+	"RasGetEapUserDataA","RasGetEapUserDataW","RasGetEapUserIdentityA","RasGetEapUserIdentityW","RasGetEntryDialParamsA","RasGetEntryDialParamsW",
+	"RasGetEntryHrasconnA","RasGetEntryHrasconnW","RasGetEntryPropertiesA","RasGetEntryPropertiesW","RasGetErrorStringA","RasGetErrorStringW",
+	"RasGetErrorStringWow","RasGetHport","RasGetLinkStatistics","RasGetProjectionInfoA","RasGetProjectionInfoW","RasGetSubEntryHandleA",
+	"RasGetSubEntryHandleW","RasGetSubEntryPropertiesA","RasGetSubEntryPropertiesW","RasHangUpA","RasHangUpW","RasHangUpWow",
+	"RasInvokeEapUI","RasIsRouterConnection","RasIsSharedConnection","RasQueryRedialOnLinkFailure","RasQuerySharedAutoDial","RasQuerySharedConnection",
+	"RasRenameEntryA","RasRenameEntryW","RasScriptExecute","RasScriptGetEventCode","RasScriptGetIpAddress","RasScriptInit",
+	"RasScriptReceive","RasScriptSend","RasScriptTerm","RasSetAutodialAddressA","RasSetAutodialAddressW","RasSetAutodialEnableA",
+	"RasSetAutodialEnableW","RasSetAutodialParamA","RasSetAutodialParamW","RasSetCredentialsA","RasSetCredentialsW","RasSetCustomAuthDataA",
+	"RasSetCustomAuthDataW","RasSetEapUserDataA","RasSetEapUserDataW","RasSetEntryDialParamsA","RasSetEntryDialParamsW","RasSetEntryPropertiesA",
+	"RasSetEntryPropertiesW","RasSetOldPassword","RasSetSharedAutoDial","RasSetSubEntryPropertiesA","RasSetSubEntryPropertiesW","RasValidateEntryNameA",
+	"RasValidateEntryNameW","RasfileClose","RasfileDeleteLine","RasfileFindFirstLine","RasfileFindLastLine","RasfileFindMarkedLine",
+	"RasfileFindNextKeyLine","RasfileFindNextLine","RasfileFindPrevLine","RasfileFindSectionLine","RasfileGetKeyValueFields","RasfileGetLine",
+	"RasfileGetLineMark","RasfileGetLineText","RasfileGetLineType","RasfileGetSectionName","RasfileInsertLine","RasfileLoad",
+	"RasfileLoadEx","RasfileLoadInfo","RasfilePutKeyValueFields","RasfilePutLineMark","RasfilePutLineText","RasfilePutSectionName",
+	"RasfileWrite","SharedAccessResponseListToString","SharedAccessResponseStringToList","UnInitializeRAS",
+};
 static constexpr std::pair<std::string_view, std::span<const std::string_view>> libraries[]{
 	{"advapi32.dll", advapi32_exports},
 	{"bcrypt.dll", bcrypt_exports},
@@ -2940,4 +2966,5 @@ static constexpr std::pair<std::string_view, std::span<const std::string_view>> 
 	{"httpapi.dll", httpapi_exports},
 	{"msacm32.dll", msacm32_exports},
 	{"mscms.dll", mscms_exports},
+	{"rasapi32.dll", rasapi32_exports},
 };

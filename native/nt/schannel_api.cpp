@@ -708,6 +708,9 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 				return;
 			}
 			for (;;) {
+				// The thread's OpenSSL error queue is shared with the CryptoAPI code: an error left there by another call would read as
+				// this connection's, so each call starts from an empty queue.
+				ERR_clear_error();
 				const int result = SSL_do_handshake(session->tls.get());
 				if (result == 1) {
 					session->established = true;
@@ -983,6 +986,7 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const auto plain = call.read(data->data, data->size);
+		ERR_clear_error();
 		if (!plain.empty() && SSL_write(session->tls.get(), plain.data(), int(plain.size())) <= 0) {
 			ERR_clear_error();
 			call.ret(sec_internal_error);
@@ -1052,6 +1056,7 @@ void register_schannel_api(ApiRegistry &registry, KernelContext &context)
 		uint32_t status = sec_ok;
 		for (;;) {
 			uint8_t chunk[record_payload];
+			ERR_clear_error();
 			const int read = SSL_read(session->tls.get(), chunk, sizeof(chunk));
 			if (read > 0) {
 				plain.insert(plain.end(), chunk, chunk + read);

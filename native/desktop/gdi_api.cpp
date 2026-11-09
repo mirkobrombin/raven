@@ -1725,6 +1725,25 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 		registry.add(name, 2, [=, this](ApiCall &call) {
 			call.fail(2, 0);
 		});
+	// The list of printers is empty, and a printer named cannot be opened (ERROR_INVALID_PRINTER_NAME): programs that print receipts
+	// or reports carry on without printing, as on a machine with no printer installed.
+	for (const auto *name : {"EnumPrintersA", "EnumPrintersW"})
+		registry.add(name, 7, [](ApiCall &call) {
+			if (call[5]) call.store<uint32_t>(call[5], 0);
+			if (call[6]) call.store<uint32_t>(call[6], 0);
+			call.ret(1);
+		});
+	for (const auto *name : {"OpenPrinterA", "OpenPrinterW"})
+		registry.add(name, 3, [](ApiCall &call) {
+			if (call[1]) call.store_pointer(call[1], 0);
+			call.fail(1801, 0);
+		});
+	for (const auto *name : {"OpenPrinter2A", "OpenPrinter2W"})
+		registry.add(name, 4, [](ApiCall &call) {
+			if (call[1]) call.store_pointer(call[1], 0);
+			call.fail(1801, 0);
+		});
+	registry.add("ClosePrinter", 1, [](ApiCall &call) { call.fail(6, 0); });
 	for (const auto *name : {"StartDocW", "StartDocA", "EndDoc", "StartPage", "EndPage", "AbortDoc"})
 		registry.add(name, 2, [](ApiCall &call) { call.fail(120, 0); });
 	registry.add("GdiGetCodePage", 1, [](ApiCall &call) { call.ret(1252); });

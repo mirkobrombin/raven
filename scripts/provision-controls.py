@@ -157,7 +157,7 @@ def main():
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "clipboard.c", "-o", shell_objects[12]])
     shell_defined = decorated(shell_objects)
     shell_names = ("GetRunningObjectTable", "CreateItemMoniker", "CoCreateInstance", "CoCreateInstanceEx", "CoGetClassObject", "CoGetTreatAsClass", "CoGetMalloc", "SHCreateItemFromParsingName", "SHGetPropertyStoreForWindow", "PropVariantClear", "SHAppBarMessage", "GetOpenFileNameW", "GetSaveFileNameW", "CommDlgExtendedError", "GetFileTitleW", "IUnknown_QueryService", "QISearch", "CLSIDFromProgID",
-                   "SHCreateStreamOnFileA", "SHCreateStreamOnFileW", "SHCreateStreamOnFileEx", "SHCreateMemStream", "PropVariantCopy", "CoGetContextToken", "CoGetObjectContext", "ExtractIconExW", "ExtractIconW", "UiaGetReservedNotSupportedValue", "UiaGetReservedMixedAttributeValue", "SHGetMalloc",
+                   "SHCreateStreamOnFileA", "SHCreateStreamOnFileW", "SHCreateStreamOnFileEx", "SHCreateMemStream", "PropVariantCopy", "CoGetContextToken", "CoGetObjectContext", "CoGetDefaultContext", "ExtractIconExW", "ExtractIconW", "UiaGetReservedNotSupportedValue", "UiaGetReservedMixedAttributeValue", "SHGetMalloc",
                    "OpenRegStream", "SHOpenRegStreamW", "SHOpenRegStreamA", "SHOpenRegStream2W", "SHOpenRegStream2A", "InitNetworkAddressControl",
                    "RoGetActivationFactory", "RoActivateInstance", "CoCreateFreeThreadedMarshaler",
                    "SHGetDesktopFolder", "SHCreateItemFromIDList", "CreateFileMoniker", "SHLoadIndirectString", "SHGetPropertyStoreFromParsingName", "ILGetSize", "ILGetNext", "ILFindLastID", "ILClone", "ILCloneFirst", "ILCombine", "ILFree", "ILCreateFromPathW", "ILIsEqual",
