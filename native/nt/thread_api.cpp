@@ -985,15 +985,33 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(6, 0x7fffffff);
 			return;
 		}
-		call.ret(uint32_t(thread->priority));
+		// A thread in background processing mode runs at idle priority; its own priority returns when it leaves the mode.
+		call.ret(uint32_t(thread->background ? -15 : thread->priority));
 	});
-	registry.add("SetThreadPriority", 2, [thread_from](ApiCall &call) {
+	registry.add("SetThreadPriority", 2, [&threads, thread_from](ApiCall &call) {
 		const auto thread = thread_from(call[0]);
 		if (!thread) {
 			call.fail(6);
 			return;
 		}
-		thread->priority = call.i32(1);
+		const int32_t priority = call.i32(1);
+		// Entering and leaving background processing mode are not priorities: only the thread itself may do either, entering twice or
+		// leaving a mode it is not in fails, and the priority it had stays for when it leaves.
+		if (priority == 0x10000 || priority == 0x20000) {
+			const bool begin = priority == 0x10000;
+			if (thread->id != threads.current_id()) {
+				call.fail(87);
+				return;
+			}
+			if (thread->background == begin) {
+				call.fail(begin ? 400 : 401);
+				return;
+			}
+			thread->background = begin;
+			call.ret(1);
+			return;
+		}
+		thread->priority = priority;
 		call.ret(1);
 	});
 	registry.add("SetThreadAffinityMask", 2, [](ApiCall &call) { call.ret(1); });

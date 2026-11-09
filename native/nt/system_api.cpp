@@ -629,6 +629,42 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.store<uint32_t>(call[2], feature == 0 ? 512 : wide ? 256 : 128);
 		call.ret(feature == 0 ? save_area : save_area + 160);
 	});
+	// A CONTEXT laid out in a caller's buffer: the record itself, aligned as the processor's context must be (16 bytes on x64, 4 on x86),
+	// followed by the CONTEXT_EX that describes its parts. A buffer that is missing or too small learns the length it needs. No extended
+	// state feature lives outside the record, so a request for one is served by the record alone and the extended chunk stays empty.
+	const auto initialize_context = [](ApiCall &call) {
+		const bool wide = call.pointer_width() == 8;
+		const uint32_t record = wide ? 0x4d0 : 0x2cc, alignment = wide ? 16 : 4, extension = 24;
+		const uint32_t required = record + extension + alignment - 1;
+		if (!call[3]) {
+			call.fail(87);
+			return;
+		}
+		if (!call[0] || call.load<uint32_t>(call[3]) < required) {
+			call.store<uint32_t>(call[3], required);
+			call.fail(122);
+			return;
+		}
+		const uint64_t context = (call[0] + alignment - 1) & ~uint64_t(alignment - 1);
+		std::vector<uint8_t> bytes(record + extension);
+		const uint32_t flags = call.u32(1) & ~0x40U;
+		std::memcpy(bytes.data() + (wide ? 0x30 : 0), &flags, 4);
+		const int32_t back = -int32_t(record);
+		const uint32_t whole = record + extension, empty_offset = extension, empty_length = 0;
+		std::memcpy(bytes.data() + record, &back, 4);
+		std::memcpy(bytes.data() + record + 4, &whole, 4);
+		std::memcpy(bytes.data() + record + 8, &back, 4);
+		std::memcpy(bytes.data() + record + 12, &record, 4);
+		std::memcpy(bytes.data() + record + 16, &empty_offset, 4);
+		std::memcpy(bytes.data() + record + 20, &empty_length, 4);
+		call.write(context, bytes);
+		if (call[2])
+			call.store_pointer(call[2], context);
+		call.ret(1);
+	};
+	registry.add("InitializeContext", 4, initialize_context);
+	// The second form also names which extended features to keep compacted; none lives outside the record, so the mask changes nothing.
+	registry.add("InitializeContext2", 5, initialize_context);
 	// The number of file handles a process may have is no longer limited: the request is answered as asked.
 	registry.add("SetHandleCount", 1, [](ApiCall &call) { call.ret(call.u32(0)); });
 	registry.add("GetSystemInfo", 1, system_information);

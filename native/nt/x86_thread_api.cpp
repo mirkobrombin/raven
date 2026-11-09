@@ -151,7 +151,9 @@ bool NativeX86Threads::dispatch(std::string_view name)
 		process.return_api(uint32_t(previous));
 	} else if (name == "SetThreadPriority") {
 		const auto object = objects.object_as<ThreadObject>(args[0]);
-		if (object)
+		// Entering or leaving background processing mode is no priority: the thread keeps the one it has.
+		const bool mode = args[1] == 0x10000 || args[1] == 0x20000;
+		if (object && !mode)
 			object->thread->priority = int32_t(args[1]);
 		process.return_api(object != nullptr);
 	} else if (name == "Sleep") {

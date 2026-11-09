@@ -1357,6 +1357,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(owner_activation_fixture ALL DEPENDS ${OWNER_ACTIVATION_FIXTURE})
             add_test(NAME native_owner_activation COMMAND raven --run-process --execution=native ${OWNER_ACTIVATION_FIXTURE})
             set_tests_properties(native_owner_activation PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(THREAD_BACKGROUND_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/thread-background.exe)
+            add_custom_command(OUTPUT ${THREAD_BACKGROUND_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${THREAD_BACKGROUND_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/thread_background_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/thread_background_client.c VERBATIM)
+            add_custom_target(thread_background_fixture ALL DEPENDS ${THREAD_BACKGROUND_FIXTURE})
+            add_test(NAME native_thread_background_mode COMMAND raven --run-process --execution=native ${THREAD_BACKGROUND_FIXTURE})
+            set_tests_properties(native_thread_background_mode PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
