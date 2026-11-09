@@ -46,6 +46,26 @@ static int sort_keys(void)
 	return 0;
 }
 
+// FindStringOrdinal: the index of a value code unit by code unit, from either end or anchored to one, -1 when it is absent.
+static int ordinal_search(void)
+{
+	if (FindStringOrdinal(FIND_FROMSTART, L"abcabc", -1, L"bc", -1, FALSE) != 1)
+		return 1;
+	if (FindStringOrdinal(FIND_FROMEND, L"abcabc", 6, L"bc", 2, FALSE) != 4)
+		return 2;
+	if (FindStringOrdinal(FIND_STARTSWITH, L"abcabc", -1, L"ABC", -1, TRUE) != 0 ||
+		FindStringOrdinal(FIND_STARTSWITH, L"abcabc", -1, L"ABC", -1, FALSE) != -1)
+		return 3;
+	if (FindStringOrdinal(FIND_ENDSWITH, L"abcabc", -1, L"cabc", -1, FALSE) != 2)
+		return 4;
+	SetLastError(5);
+	if (FindStringOrdinal(FIND_FROMSTART, L"abc", -1, L"x", -1, FALSE) != -1 || GetLastError() != ERROR_SUCCESS)
+		return 5;
+	if (FindStringOrdinal(0, L"abc", -1, L"a", -1, FALSE) != -1 || GetLastError() != ERROR_INVALID_PARAMETER)
+		return 6;
+	return 0;
+}
+
 // LCMapString's lengths, as CPython's ntpath.normcase relies on them: a source given with its length maps to that many characters
 // and nothing is written after them (CPython sizes the buffer from the first call exactly); a source ended by a zero maps, counts
 // and writes the zero too, and a buffer without room for it fails with ERROR_INSUFFICIENT_BUFFER. Returns 0, or the number of the
@@ -76,5 +96,11 @@ int raven_entry(void)
 	const int keys = sort_keys();
 	if (keys)
 		return 10 + keys;
+	const int search = ordinal_search();
+	if (search)
+		return 30 + search;
+	// A thread's message extra information is what it set last, given back by the next set.
+	if (SetMessageExtraInfo(0x5150) != 0 || GetMessageExtraInfo() != 0x5150 || SetMessageExtraInfo(7) != 0x5150)
+		return 40;
 	return 0;
 }

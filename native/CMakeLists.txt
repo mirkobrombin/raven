@@ -2706,7 +2706,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_command(OUTPUT ${LCMAP_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
                     -Wl,--entry,raven_entry,--image-base,0x1eba00000,--no-insert-timestamp
-                    -o ${LCMAP_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/lcmap_client.c -lkernel32
+                    -o ${LCMAP_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/lcmap_client.c -luser32 -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/lcmap_client.c VERBATIM)
             add_custom_target(lcmap_fixture ALL DEPENDS ${LCMAP_CLIENT})
             add_test(NAME native_lcmap_string_lengths COMMAND raven --run-process --execution=native ${LCMAP_CLIENT})
@@ -4035,6 +4035,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(timer_queue_fixture${width} ALL DEPENDS ${timer_queue_client})
                         add_test(NAME native_timer_queue_x${width} COMMAND raven --run-process --execution=native ${timer_queue_client})
                         set_tests_properties(native_timer_queue_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        set(threadpool_timer_client ${CMAKE_CURRENT_BINARY_DIR}/threadpool-timer-client${width}.exe)
+                        add_custom_command(OUTPUT ${threadpool_timer_client}
+                            COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                                -o ${threadpool_timer_client} ${LOADER_SOURCES}/threadpool_timer_client.c -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/threadpool_timer_client.c VERBATIM)
+                        add_custom_target(threadpool_timer_fixture${width} ALL DEPENDS ${threadpool_timer_client})
+                        add_test(NAME native_threadpool_timer_x${width} COMMAND raven --run-process --execution=native ${threadpool_timer_client})
+                        set_tests_properties(native_threadpool_timer_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                         set(restart_client ${CMAKE_CURRENT_BINARY_DIR}/restart-manager-client${width}.exe)
                         add_custom_command(OUTPUT ${restart_client}
                             COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp

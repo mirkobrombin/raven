@@ -964,6 +964,33 @@ void register_text_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(left < right ? 1 : left == right ? 2 : 3);
 	});
+	// Where one text occurs in another code unit by code unit, optionally after upper-casing both: FIND_FROMSTART, FIND_FROMEND,
+	// FIND_STARTSWITH or FIND_ENDSWITH, exactly one of them. The index is the answer, -1 with no error when the value is not there.
+	registry.add("FindStringOrdinal", 6, [](ApiCall &call) {
+		const uint32_t flags = call.u32(0);
+		if (!call[1] || !call[3] || (flags != 0x400000 && flags != 0x800000 && flags != 0x100000 && flags != 0x200000)) {
+			call.fail(87, uint64_t(int64_t(-1)));
+			return;
+		}
+		auto source = counted_wide(call, call[1], call.i32(2)), value = counted_wide(call, call[3], call.i32(4));
+		if (call.u32(5)) {
+			for (auto &character : source)
+				character = upper_case(character);
+			for (auto &character : value)
+				character = upper_case(character);
+		}
+		size_t found = source.npos;
+		if (value.size() <= source.size()) {
+			if (flags == 0x100000)
+				found = source.compare(0, value.size(), value) ? source.npos : 0;
+			else if (flags == 0x200000)
+				found = source.compare(source.size() - value.size(), value.size(), value) ? source.npos : source.size() - value.size();
+			else
+				found = flags == 0x800000 ? source.rfind(value) : source.find(value);
+		}
+		call.set_last_error(0);
+		call.ret(found == source.npos ? uint64_t(int64_t(-1)) : uint64_t(found));
+	});
 	// LCMAP_LOWERCASE and LCMAP_UPPERCASE.
 	const auto map_case = [](uint32_t flags, std::u16string text) {
 		if (flags & 0x100) for (auto &character : text) character = fold_case(character);
