@@ -20,6 +20,7 @@
 #include <string>
 #include <sys/mman.h>
 #include <spawn.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -48,6 +49,37 @@ ProcessObject::~ProcessObject()
 		remove_child_channel(channel.get());
 	if (exit_file >= 0)
 		::close(exit_file);
+	if (process_descriptor >= 0)
+		::close(process_descriptor);
+}
+
+bool describe_process(pid_t pid, int &descriptor, InheritedHandle &record)
+{
+	if (descriptor < 0)
+		descriptor = int(::syscall(SYS_pidfd_open, pid, 0));
+	if (descriptor < 0)
+		return false;
+	::fcntl(descriptor, F_SETFD, FD_CLOEXEC);
+	record.kind = "process";
+	record.descriptor = descriptor;
+	record.size = uint64_t(pid);
+	return true;
+}
+
+bool ProcessObject::describe(InheritedHandle &record) const
+{
+	return describe_process(pid, process_descriptor, record);
+}
+
+SelfProcessObject::~SelfProcessObject()
+{
+	if (process_descriptor >= 0)
+		::close(process_descriptor);
+}
+
+bool SelfProcessObject::describe(InheritedHandle &record) const
+{
+	return describe_process(::getpid(), process_descriptor, record);
 }
 
 bool ProcessObject::exited() const

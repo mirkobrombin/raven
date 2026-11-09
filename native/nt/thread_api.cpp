@@ -1201,7 +1201,15 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 
 	// Named kernel objects are shared with every process of the prefix, through a block of shared memory; unnamed ones stay in the process.
 	const auto fail_shared = [](ApiCall &call, uint32_t error) { call.fail(error == 8 ? 8 : error, 0); };
-	registry.add("CreateEventW", 4, [&objects, fail_shared](ApiCall &call) {
+	// A handle made with SECURITY_ATTRIBUTES whose bInheritHandle is set goes to the children created with handle inheritance.
+	const auto inheriting = [&objects](auto create) {
+		return [&objects, create](ApiCall &call) {
+			create(call);
+			if (call.result && call.result != UINT64_MAX && inheritable_handle(call, call[0]))
+				objects.set_inherit(call.result, true);
+		};
+	};
+	registry.add("CreateEventW", 4, inheriting([&objects, fail_shared](ApiCall &call) {
 		if (!call[3]) {
 			const auto made = objects.create_event(0x1f0003, call.u32(1) ? 0 : 1, call.u32(2) != 0);
 			if (made.status) {
@@ -1234,7 +1242,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.set_last_error(existed ? 183 : 0);
 		call.ret(made.value);
-	});
+	}));
 	registry.add("CreateEventExW", 4, [&objects, create = registry.find("CreateEventW")->second](ApiCall &call) {
 		const auto access = event_access(call.u32(3));
 		if (!access || (call.u32(2) & ~3U)) {
@@ -1355,8 +1363,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		call.set_last_error(existed ? 183 : 0);
 		call.ret(made.value);
 	};
-	registry.add("CreateMutexW", 3, [make_mutex](ApiCall &call) { make_mutex(call, call[2], call.u32(1) != 0); });
-	registry.add("CreateMutexExW", 4, [make_mutex](ApiCall &call) { make_mutex(call, call[1], (call.u32(2) & 1) != 0); });
+	registry.add("CreateMutexW", 3, inheriting([make_mutex](ApiCall &call) { make_mutex(call, call[2], call.u32(1) != 0); }));
+	registry.add("CreateMutexExW", 4, inheriting([make_mutex](ApiCall &call) { make_mutex(call, call[1], (call.u32(2) & 1) != 0); }));
 	registry.add("OpenMutexW", 3, [&objects](ApiCall &call) {
 		if (!call[2]) {
 			call.fail(87);
@@ -1416,8 +1424,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		call.set_last_error(existed ? 183 : 0);
 		call.ret(made.value);
 	};
-	registry.add("CreateSemaphoreW", 4, [make_semaphore](ApiCall &call) { make_semaphore(call, call.i32(1), call.i32(2), call[3]); });
-	registry.add("CreateSemaphoreExW", 6, [make_semaphore](ApiCall &call) { make_semaphore(call, call.i32(1), call.i32(2), call[3]); });
+	registry.add("CreateSemaphoreW", 4, inheriting([make_semaphore](ApiCall &call) { make_semaphore(call, call.i32(1), call.i32(2), call[3]); }));
+	registry.add("CreateSemaphoreExW", 6, inheriting([make_semaphore](ApiCall &call) { make_semaphore(call, call.i32(1), call.i32(2), call[3]); }));
 	registry.add("OpenSemaphoreW", 3, [&objects](ApiCall &call) {
 		if (!call[2]) {
 			call.fail(87);

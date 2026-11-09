@@ -322,6 +322,9 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 				const auto object = objects.object(handle);
 				InheritedHandle record;
 				if (listed && !objects.inherit(handle)) {
+					if (std::getenv("RAVEN_TRACE_API"))
+						std::fprintf(stderr, "raven: listed handle %llx (%s) is not inheritable\n", static_cast<unsigned long long>(handle),
+							object ? std::string(object->type_name().begin(), object->type_name().end()).c_str() : "none");
 					call.fail(87);
 					return;
 				}
@@ -367,6 +370,8 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 		const auto child = start_program(context, application, line, directory, standard, environment, call.u32(5) & create_suspended ? &gate : nullptr, error,
 			std::move(inherited));
 		if (!child) {
+			if (std::getenv("RAVEN_TRACE_API"))
+				std::fprintf(stderr, "raven: child process not started, error %u\n", error);
 			call.fail(error);
 			return;
 		}

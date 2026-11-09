@@ -13,6 +13,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -345,6 +347,39 @@ std::optional<std::u16string> pipe_name_of(std::u16string_view path)
 	return std::nullopt;
 }
 
+namespace {
+
+std::mutex adopted_mutex;
+std::map<std::string, std::weak_ptr<PipeListener>> adopted_listeners;
+
+std::shared_ptr<PipeListener> adopted_listener(const std::string &address)
+{
+	std::lock_guard lock(adopted_mutex);
+	const auto found = adopted_listeners.find(address);
+	return found == adopted_listeners.end() ? nullptr : found->second.lock();
+}
+
+}
+
+std::shared_ptr<PipeListener> adopt_pipe_listener(int descriptor, const std::string &address, int type, uint32_t maximum)
+{
+	std::lock_guard lock(adopted_mutex);
+	if (const auto found = adopted_listeners.find(address); found != adopted_listeners.end())
+		if (const auto known = found->second.lock()) {
+			::close(descriptor);
+			++known->instances;
+			return known;
+		}
+	auto listener = std::make_shared<PipeListener>();
+	listener->descriptor = descriptor;
+	listener->address = address;
+	listener->type = type;
+	listener->maximum = maximum;
+	listener->instances = 1;
+	adopted_listeners[address] = listener;
+	return listener;
+}
+
 bool ensure_pipe_connected(PipeObject &pipe)
 {
 	if (pipe.connected)
@@ -502,6 +537,8 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 		std::shared_ptr<PipeListener> listener;
 		if (const auto found = context.pipes->listeners.find(address); found != context.pipes->listeners.end())
 			listener = found->second.lock();
+		if (!listener)
+			listener = adopted_listener(address);
 		if (listener) {
 			// More instances of a pipe the process already serves.
 			if (mode & file_flag_first_pipe_instance) {

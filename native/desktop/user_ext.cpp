@@ -874,6 +874,14 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		}
 		call.ret(0);
 	});
+	// No window keeps a region, so there is no box to report: ERROR, as for a window that never had one.
+	registry.add("GetWindowRgnBox", 2, [this](ApiCall &call) {
+		if (!std::as_const(objects).window(call[0])) {
+			call.fail(1400);
+			return;
+		}
+		call.ret(0);
+	});
 	registry.add("GetSystemMenu", 2, [this](ApiCall &call) {
 		const auto *window = std::as_const(objects).window(call[0]);
 		if (!window) {

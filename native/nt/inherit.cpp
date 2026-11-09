@@ -1,5 +1,6 @@
 #include "inherit.h"
 #include "access_token.h"
+#include "child_process.h"
 #include "event.h"
 #include "mutex.h"
 
@@ -114,6 +115,17 @@ std::shared_ptr<KernelObject> object_from_record(const InheritedHandle &item)
 		// The creator keeps the duty to delete a file that closes with its last handle.
 		return std::make_shared<FileObject>(item.descriptor, item.access, item.bits & 1, std::filesystem::path(item.path), item.text, item.flags & ~0x04000000U);
 	}
+	if (item.kind == "pipe" && (item.bits & 8)) {
+		// A server end that waits for its client: the listening socket came instead of a connection.
+		auto pipe = std::make_shared<PipeObject>(-1, item.access, item.flags);
+		pipe->listener = adopt_pipe_listener(item.descriptor, item.path, int(item.size >> 32), uint32_t(item.size));
+		pipe->server = true;
+		pipe->message_mode = item.bits & 1;
+		pipe->read_messages = item.bits & 4;
+		pipe->inherit = true;
+		pipe->name = item.text;
+		return pipe;
+	}
 	if (item.kind == "pipe") {
 		auto pipe = std::make_shared<PipeObject>(item.descriptor, item.access, item.flags);
 		pipe->connected = true;
@@ -126,6 +138,11 @@ std::shared_ptr<KernelObject> object_from_record(const InheritedHandle &item)
 	}
 	if (item.kind == "thread")
 		return std::make_shared<RemoteThreadObject>(item.descriptor);
+	if (item.kind == "process") {
+		// The process is named by its id; the pidfd only kept it from being mistaken for another while the handle travelled.
+		::close(item.descriptor);
+		return std::make_shared<ProcessObject>(pid_t(item.size), true);
+	}
 	if (item.kind == "section") {
 		auto section = std::make_shared<SectionObject>();
 		section->descriptor = item.descriptor;

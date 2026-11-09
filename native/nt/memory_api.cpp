@@ -546,6 +546,9 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		objects.set_access(made.value, call.u32(1) ? call.u32(1) : 0xf001f);
+		// OBJ_INHERIT in the object attributes lets children created with handle inheritance receive the section.
+		if (call[2] && (call.load<uint32_t>(call[2] + (call.pointer_width() == 8 ? 24 : 12)) & 0x2))
+			objects.set_inherit(made.value, true);
 		call.store_pointer(call[0], made.value);
 		call.ret(0);
 	});

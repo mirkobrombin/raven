@@ -21,6 +21,7 @@ public:
 	uint32_t default_access() const override { return 0x1fffff; }
 	explicit ProcessObject(pid_t pid, bool foreign = false) : pid(pid), foreign(foreign) {}
 	~ProcessObject() override;
+	bool describe(InheritedHandle &record) const override;
 	// Waiting for a process succeeds once it has ended; the host reports that, not another guest thread.
 	int signaled(uint32_t) const override { return exited() ? 1 : 0; }
 	bool exited() const;
@@ -39,6 +40,8 @@ public:
 	int exit_file = -1;
 
 private:
+	// A host handle to the process, opened when the handle first travels to another process.
+	mutable int process_descriptor = -1;
 	void reap() const;
 	mutable bool done = false;
 	mutable uint32_t code = 259;
@@ -52,7 +55,16 @@ public:
 	std::u16string_view type_name() const override { return u"Process"; }
 	uint32_t default_access() const override { return 0x1fffff; }
 	int signaled(uint32_t) const override { return 0; }
+	~SelfProcessObject() override;
+	// Another process that receives the handle names this one by its process id.
+	bool describe(InheritedHandle &record) const override;
+
+private:
+	mutable int process_descriptor = -1;
 };
+
+// The host handle a process handle carries to another process: a pidfd naming the process, whose id travels beside it.
+bool describe_process(pid_t pid, int &descriptor, InheritedHandle &record);
 
 // Whether the process id belongs to a running instance of this runtime, the only processes a guest may name that it did not start.
 bool runtime_process_alive(pid_t pid);
