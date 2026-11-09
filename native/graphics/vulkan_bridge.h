@@ -46,7 +46,7 @@ public:
 	friend class Marshal;
 	// Brings the guest's view of mapped memory and the driver's in line before and after work the driver does.
 	void synchronize_to_device(uint64_t device) { shadow_to_device(device); }
-	void synchronize_from_device(uint64_t device) { shadow_from_device(device); }
+	void synchronize_from_device(uint64_t device) { shadow_from_device(device, cached_memory); }
 	// Reading a timeline semaphore makes the work behind a new value visible; the same value again brings nothing the last read did not.
 	void synchronize_after_counter(uint64_t device, uint64_t semaphore, uint64_t value)
 	{
@@ -54,7 +54,7 @@ public:
 		if (!fresh && seen->second == value)
 			return;
 		seen->second = value;
-		shadow_from_device(device);
+		shadow_from_device(device, cached_memory);
 	}
 	// How a guest thread waits while the others run: `park` returns once the condition holds, and `wake` may be called from any host
 	// thread to have the scheduler look at the conditions again.
@@ -94,6 +94,8 @@ private:
 		void *host = nullptr; uint64_t shadow = 0; VkDeviceSize offset = 0, mapped = 0;
 		uint64_t mapping_base = 0;
 		bool coherent = false;
+		// Host-cached memory reads back cheaply; the other host-visible kinds are write-combined, where every byte read is slow.
+		bool cached = false;
 		std::vector<uint8_t> snapshot;
 		// The guest's shadow is a memfd the host maps as well, so comparing it with the driver's mapping never goes through the debugger
 		// interface: `view` is the host's window on the same bytes as the guest address `shadow`.
@@ -162,7 +164,11 @@ private:
 	// Maps a shadow the guest and the host share, or releases one.
 	uint64_t make_shadow(Memory &memory, size_t size);
 	void drop_shadow(Memory &memory);
-	void shadow_from_device(uint64_t device);
+	// Which mapped memory a read back covers. Waiting on the device reads back host-cached memory only: write-combined memory is where a
+	// program writes for the device, and reading all of it at every wait costs uncached reads of each mapping. A program that reads such
+	// memory invalidates the ranges it reads, which reads back the memory they name whatever its kind.
+	enum ReadBack { cached_memory, named_memory };
+	void shadow_from_device(uint64_t device, ReadBack scope, const std::vector<uint64_t> &named = {});
 	bool dispatch_resource(std::string_view name);
 	template<typename T> T load(uint64_t address) const;
 	template<typename T> void store(uint64_t address, const T &value) const;

@@ -126,7 +126,7 @@ void VulkanBridge::shadow_to_device(uint64_t device)
 	}
 }
 
-void VulkanBridge::shadow_from_device(uint64_t device)
+void VulkanBridge::shadow_from_device(uint64_t device, ReadBack scope, const std::vector<uint64_t> &named)
 {
 	const auto started = std::chrono::steady_clock::now();
 	struct Timed {
@@ -135,6 +135,8 @@ void VulkanBridge::shadow_from_device(uint64_t device)
 	} timed{started};
 	for (auto &[token, memory] : memories) {
 		if (memory.device != device || !memory.host || !memory.view)
+			continue;
+		if (scope == cached_memory ? !memory.cached : std::find(named.begin(), named.end(), token) == named.end())
 			continue;
 		const auto *host = static_cast<const uint8_t *>(memory.host);
 		each_difference(host, memory.snapshot.data(), size_t(memory.mapped), [&](size_t index) {
@@ -260,17 +262,19 @@ if (name == "vkFreeMemory") {
 		device_of(a[0]);
 		if (a[1] > 64)
 			throw std::runtime_error("too many Vulkan mapped memory ranges");
+		std::vector<uint64_t> named;
 		for (uint64_t index = 0; index < a[1]; ++index) {
 			const auto range = load<VkMappedMemoryRange>(a[2] + index * sizeof(VkMappedMemoryRange));
 			if (range.sType != VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE || range.pNext)
 				throw std::runtime_error("unsupported Vulkan mapped memory range");
 			if (!memory_of(reinterpret_cast<uint64_t>(range.memory), a[0]).host)
 				throw std::runtime_error("Vulkan memory is not mapped");
+			named.push_back(reinterpret_cast<uint64_t>(range.memory));
 		}
 		if (name == "vkFlushMappedMemoryRanges")
 			shadow_to_device(a[0]);
 		else
-			shadow_from_device(a[0]);
+			shadow_from_device(a[0], named_memory, named);
 	} else if (name == "vkDestroyCommandPool") {
 		auto &device = device_of(a[0]);
 		no_allocator(a[2]);

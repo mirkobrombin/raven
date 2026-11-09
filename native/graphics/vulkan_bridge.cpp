@@ -560,7 +560,7 @@ bool VulkanBridge::dispatch(std::string_view name)
 		const auto status = vkDeviceWaitIdle(found->second.handle);
 		result = static_cast<uint32_t>(status);
 		if (status == VK_SUCCESS)
-			shadow_from_device(arguments[0]);
+			shadow_from_device(arguments[0], cached_memory);
 	} else if (name == "vkGetPhysicalDeviceProperties") {
 		const auto found = physical.find(arguments[0]);
 		if (found == physical.end())
