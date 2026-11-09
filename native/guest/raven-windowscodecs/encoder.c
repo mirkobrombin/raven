@@ -936,10 +936,11 @@ HRESULT wic_encoder_create(const wic_codec *codec, IWICBitmapEncoder **out)
 	return S_OK;
 }
 
-/* The exported helper lets an empty rectangle pass as nothing to do, where the method itself refuses it. */
+/* The exported helper takes an empty rectangle for the whole source, as callers that always pass one mean it, where the method
+   itself refuses it. */
 HRESULT WINAPI IWICBitmapFrameEncode_WriteSource_Proxy(IWICBitmapFrameEncode *iface, IWICBitmapSource *source, WICRect *area)
 {
 	if (area && (area->Width <= 0 || area->Height <= 0))
-		return S_OK;
+		area = NULL;
 	return IWICBitmapFrameEncode_WriteSource(iface, source, area);
 }

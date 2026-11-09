@@ -6,7 +6,9 @@
 
 /* Pictures as installer bootstrappers draw their themes: a PNG file decoded through the imaging component, converted to premultiplied
    BGRA and copied out; then the same file opened through GDI+ and turned into a bitmap handle. A picture half red and half blue also
-   goes through the TIFF and JPEG encoders and back, which TIFF keeps exactly and JPEG within the loss of its compression. */
+   goes through the TIFF, JPEG and PNG encoders and back, which TIFF and PNG keep exactly and JPEG within the loss of its compression.
+   Each frame is written through the exported helper: with no rectangle, with the whole one, and with an empty one, which presentation
+   frameworks pass to mean the whole source. */
 
 typedef struct {
 	UINT32 version;
@@ -22,6 +24,7 @@ int WINAPI GdipGetImageWidth(void *image, UINT *width);
 int WINAPI GdipGetImageHeight(void *image, UINT *height);
 int WINAPI GdipCreateHBITMAPFromBitmap(void *bitmap, HBITMAP *handle, DWORD background);
 int WINAPI GdipDisposeImage(void *image);
+HRESULT WINAPI IWICBitmapFrameEncode_WriteSource_Proxy(IWICBitmapFrameEncode *frame, IWICBitmapSource *source, WICRect *area);
 
 /* Three pixels over two rows, RGBA: red, green, blue; white, black and a half transparent dark blue. */
 static const BYTE picture[] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
@@ -29,8 +32,9 @@ static const BYTE picture[] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0
 	0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x0c, 0x19, 0xfe, 0x03, 0x49, 0x20, 0x60, 0x00, 0xb2, 0xb8, 0x44, 0xe4, 0x1a, 0x00, 0xa1, 0x99,
 	0x0b, 0xb2, 0x50, 0xb3, 0xac, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
 
-/* The 16x16 picture encoded in the container and decoded again; 0 when every pixel comes back within the tolerance. */
-static int round_trip(IWICImagingFactory *factory, const GUID *container, int tolerance)
+/* The 16x16 picture written into the container through the rectangle and decoded again; 0 when every pixel comes back within the
+   tolerance. */
+static int round_trip(IWICImagingFactory *factory, const GUID *container, WICRect *area, int tolerance)
 {
 	static BYTE source[16 * 16 * 3], back[16 * 16 * 3];
 	IWICBitmap *bitmap = NULL;
@@ -43,6 +47,7 @@ static int round_trip(IWICImagingFactory *factory, const GUID *container, int to
 	IWICBitmapSource *converted = NULL;
 	WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
 	LARGE_INTEGER start = {0};
+	STATSTG described;
 	UINT width = 0, height = 0;
 	int at;
 	for (at = 0; at < 16 * 16; ++at) {
@@ -59,10 +64,12 @@ static int round_trip(IWICImagingFactory *factory, const GUID *container, int to
 		IWICBitmapEncoder_CreateNewFrame(encoder, &frame, &options) != S_OK || IWICBitmapFrameEncode_Initialize(frame, options) != S_OK)
 		return 3;
 	if (IWICBitmapFrameEncode_SetSize(frame, 16, 16) != S_OK || IWICBitmapFrameEncode_SetPixelFormat(frame, &format) != S_OK ||
-		IWICBitmapFrameEncode_WriteSource(frame, (IWICBitmapSource *)bitmap, NULL) != S_OK)
+		IWICBitmapFrameEncode_WriteSource_Proxy(frame, (IWICBitmapSource *)bitmap, area) != S_OK)
 		return 4;
 	if (IWICBitmapFrameEncode_Commit(frame) != S_OK || IWICBitmapEncoder_Commit(encoder) != S_OK)
 		return 5;
+	if (IStream_Stat(stream, &described, STATFLAG_NONAME) != S_OK || !described.cbSize.QuadPart)
+		return 10;
 	if (IStream_Seek(stream, start, STREAM_SEEK_SET, NULL) != S_OK ||
 		IWICImagingFactory_CreateDecoderFromStream(factory, stream, NULL, WICDecodeMetadataCacheOnDemand, &decoder) != S_OK)
 		return 6;
@@ -125,10 +132,13 @@ int raven_entry(void)
 	IWICBitmapFrameDecode_Release(frame);
 	IWICBitmapDecoder_Release(decoder);
 	int failed;
-	if ((failed = round_trip(factory, &GUID_ContainerFormatTiff, 0)))
+	WICRect whole = {0, 0, 16, 16}, empty = {0, 0, 0, 0};
+	if ((failed = round_trip(factory, &GUID_ContainerFormatTiff, NULL, 0)))
 		return 20 + failed;
-	if ((failed = round_trip(factory, &GUID_ContainerFormatJpeg, 24)))
+	if ((failed = round_trip(factory, &GUID_ContainerFormatJpeg, &whole, 24)))
 		return 30 + failed;
+	if ((failed = round_trip(factory, &GUID_ContainerFormatPng, &empty, 0)))
+		return 40 + failed;
 	IWICImagingFactory_Release(factory);
 	ULONG_PTR token;
 	StartupInput input = {1, NULL, FALSE, FALSE};
