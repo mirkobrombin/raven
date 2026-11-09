@@ -466,6 +466,9 @@ private:
 	std::vector<uint64_t> top_level_windows() const;
 	uint64_t window_at(int32_t x,int32_t y);
 	bool enable_window(uint64_t window,bool enable);
+	// Invalidates what a window going away or moving leaves uncovered: the screen area in the parent and in every other visible child of
+	// it, with their own children, that lies under it.
+	void expose(uint64_t parent,DesktopRect area,uint64_t leaving);
 	void invalidate_tree(uint64_t window,bool erase);
 	// Window messages registered by name (RegisterWindowMessage); ids start at 0xc000 like atoms.
 	std::map<std::u16string,uint32_t> registered_messages;

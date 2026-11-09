@@ -1679,11 +1679,7 @@ bool NativeWindows::destroy(uint64_t handle)
 	window=objects.window(handle);
 	if (window && window->parent) {
 		const auto *parent=std::as_const(objects).window(window->parent);
-		if (parent && !parent->destroying) {
-			const auto relative=[](int64_t value) { return int32_t(std::clamp(value,int64_t(INT32_MIN),int64_t(INT32_MAX))); };
-			if (!objects.invalidate(window->parent,{relative(int64_t(window->outer.left)-parent->x),relative(int64_t(window->outer.top)-parent->y),
-				relative(int64_t(window->outer.right)-parent->x),relative(int64_t(window->outer.bottom)-parent->y)},true)) throw uint32_t(8);
-		}
+		if (parent && !parent->destroying) expose(window->parent,window->outer,handle);
 	}
 	// A driver may still hold the surface of a window going away, which then only stops showing.
 	if (hosted_windows.contains(handle) && presentation.host_surface) {

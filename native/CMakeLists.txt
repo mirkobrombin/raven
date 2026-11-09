@@ -1339,6 +1339,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(maximized_edges_fixture ALL DEPENDS ${MAXIMIZED_EDGES_FIXTURE})
             add_test(NAME native_maximized_edges COMMAND raven --run-process --execution=native ${MAXIMIZED_EDGES_FIXTURE})
             set_tests_properties(native_maximized_edges PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            set(UNCOVERED_SIBLING_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/uncovered-sibling.exe)
+            add_custom_command(OUTPUT ${UNCOVERED_SIBLING_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${UNCOVERED_SIBLING_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/uncovered_sibling_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/uncovered_sibling_client.c VERBATIM)
+            add_custom_target(uncovered_sibling_fixture ALL DEPENDS ${UNCOVERED_SIBLING_FIXTURE})
+            add_test(NAME native_uncovered_sibling_repaint COMMAND raven --run-process --execution=native ${UNCOVERED_SIBLING_FIXTURE})
+            set_tests_properties(native_uncovered_sibling_repaint PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             set(MENU_TRACK_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-track.exe)
             add_custom_command(OUTPUT ${MENU_TRACK_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector

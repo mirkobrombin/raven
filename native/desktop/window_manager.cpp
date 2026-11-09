@@ -67,6 +67,25 @@ void NativeWindows::shift_window(uint64_t handle, int32_t dx, int32_t dy)
 		shift_window(child, dx, dy);
 }
 
+void NativeWindows::expose(uint64_t parent, DesktopRect area, uint64_t leaving)
+{
+	const auto *record = std::as_const(objects).window(parent);
+	if (!record || area.right <= area.left || area.bottom <= area.top)
+		return;
+	const auto inside = [](int64_t value) { return int32_t(std::clamp(value, int64_t(INT32_MIN), int64_t(INT32_MAX))); };
+	if (!objects.invalidate(parent, {inside(int64_t(area.left) - record->x), inside(int64_t(area.top) - record->y), inside(int64_t(area.right) - record->x),
+		inside(int64_t(area.bottom) - record->y)}, true))
+		throw uint32_t(8);
+	for (const auto child : objects.child_windows(parent)) {
+		const auto *other = std::as_const(objects).window(child);
+		if (child == leaving || !other || !other->visible || other->destroying)
+			continue;
+		const DesktopRect under{std::max(area.left, other->outer.left), std::max(area.top, other->outer.top), std::min(area.right, other->outer.right),
+			std::min(area.bottom, other->outer.bottom)};
+		expose(child, under, 0);
+	}
+}
+
 void NativeWindows::invalidate_tree(uint64_t handle, bool erase)
 {
 	const auto *window = std::as_const(objects).window(handle);
@@ -165,11 +184,8 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 	window = objects.window(handle);
 	if (!window)
 		throw uint32_t(1400);
-	if (!window->visible && previous && window->parent) {
-		const auto *parent = std::as_const(objects).window(window->parent);
-		objects.invalidate(window->parent, {window->outer.left - parent->x, window->outer.top - parent->y, window->outer.right - parent->x,
-			window->outer.bottom - parent->y}, true);
-	}
+	if (!window->visible && previous && window->parent)
+		expose(window->parent, window->outer, handle);
 	send(handle, 0x18, window->visible, 0);
 	// The size and position messages an overlapped window did not get while it was created come with its first showing.
 	window = objects.window(handle);
@@ -293,10 +309,8 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 		shift_window(handle, target.left - old.left, target.top - old.top);
 	} else if (shifted || resized) {
 		const auto old_client_x = window->x, old_client_y = window->y;
-		if (window->parent && was_visible) {
-			const auto *parent = std::as_const(objects).window(window->parent);
-			objects.invalidate(window->parent, {old.left - parent->x, old.top - parent->y, old.right - parent->x, old.bottom - parent->y}, true);
-		}
+		if (window->parent && was_visible)
+			expose(window->parent, old, handle);
 		if (window->parent || !resized) {
 			if (shifted)
 				shift_window(handle, target.left - old.left, target.top - old.top);
