@@ -4043,6 +4043,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(threadpool_timer_fixture${width} ALL DEPENDS ${threadpool_timer_client})
                         add_test(NAME native_threadpool_timer_x${width} COMMAND raven --run-process --execution=native ${threadpool_timer_client})
                         set_tests_properties(native_threadpool_timer_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        set(color_profile_client ${CMAKE_CURRENT_BINARY_DIR}/color-profile-client${width}.exe)
+                        add_custom_command(OUTPUT ${color_profile_client}
+                            COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                                -o ${color_profile_client} ${LOADER_SOURCES}/color_profile_client.c -lmscms -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/color_profile_client.c VERBATIM)
+                        add_custom_target(color_profile_fixture${width} ALL DEPENDS ${color_profile_client})
+                        add_test(NAME native_color_profile_x${width} COMMAND raven --run-process --execution=native ${color_profile_client})
+                        set_tests_properties(native_color_profile_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                         set(restart_client ${CMAKE_CURRENT_BINARY_DIR}/restart-manager-client${width}.exe)
                         add_custom_command(OUTPUT ${restart_client}
                             COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp

@@ -452,6 +452,20 @@ int raven_entry(void)
 		if (GetNetworkParams(&fixed, &fixed_size) != NO_ERROR || !fixed.HostName[0])
 			return 65;
 	}
+	{
+		/* The resolvers of an adapter, here the loopback one (index 1); an index no adapter has gives no data. */
+		ULONG per_size = 0;
+		if (GetPerAdapterInfo(1, NULL, NULL) != ERROR_INVALID_PARAMETER || GetPerAdapterInfo(0x7fffffff, NULL, &per_size) != ERROR_NO_DATA)
+			return 66;
+		if (GetPerAdapterInfo(1, NULL, &per_size) != ERROR_BUFFER_OVERFLOW || per_size < sizeof(IP_PER_ADAPTER_INFO))
+			return 67;
+		IP_PER_ADAPTER_INFO *per = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, per_size);
+		if (!per || GetPerAdapterInfo(1, per, &per_size) != NO_ERROR || per->AutoconfigEnabled)
+			return 68;
+		if (per->CurrentDnsServer && per->CurrentDnsServer != &per->DnsServerList)
+			return 69;
+		HeapFree(GetProcessHeap(), 0, per);
+	}
 
 	if (!CryptProtectData(&plain, L"note", &entropy, NULL, NULL, 0, &sealed) || sealed.cbData <= plain.cbData)
 		return 8;

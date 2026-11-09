@@ -30,6 +30,11 @@ class DeviceInfoSet : public KernelObject {};
 
 // An event log query: the log holds no records, so the query only ever reports that nothing more is there.
 class EventQuery : public KernelObject {};
+// An open color profile: the bytes of the ICC profile, read whole from memory or from a file.
+class ColorProfile : public KernelObject {
+public:
+	std::vector<uint8_t> data;
+};
 
 struct Address {
 	std::vector<uint8_t> socket_address;
@@ -333,6 +338,145 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			}
 		block[node_at] = 1;
 		call.write(call[0], std::span<const uint8_t>(block));
+		call.ret(0);
+	});
+	// Color profiles, as an image decoder opens them to read the header: PROFILE names a file (a bare name lives in the system's color
+	// directory) or a block of memory, and the profile is read once, whole. PROFILEHEADER is the ICC header with each 32-bit field turned
+	// from big-endian to the processor's order.
+	const auto open_profile = [&context, &objects](ApiCall &call, bool wide) {
+		if (!call[0]) {
+			call.fail(87, 0);
+			return;
+		}
+		const uint32_t type = call.load<uint32_t>(call[0]), size = call.load<uint32_t>(call[0] + 2 * call.pointer_width());
+		const uint64_t data = call.load_pointer(call[0] + call.pointer_width());
+		auto profile = std::make_shared<ColorProfile>();
+		if (type == 2 && data && size) {
+			const auto bytes = call.read(data, size);
+			profile->data.assign(bytes.begin(), bytes.end());
+		} else if (type == 1 && data) {
+			auto name = wide ? call.wide(data, 260) : widen_ascii(call.narrow(data, 260));
+			if (name.find_first_of(u"\\/:") == name.npos)
+				name = u"C:\\Windows\\System32\\spool\\drivers\\color\\" + name;
+			const auto resolved = context.paths.resolve(name);
+			std::ifstream file;
+			if (resolved && resolved->exists)
+				file.open(resolved->host, std::ios::binary);
+			if (!file.is_open()) {
+				call.fail(2, 0);
+				return;
+			}
+			profile->data.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+		} else {
+			call.fail(87, 0);
+			return;
+		}
+		const auto made = objects.add_object(profile);
+		if (made.status) {
+			call.fail(8, 0);
+			return;
+		}
+		call.ret(made.value);
+	};
+	registry.add("OpenColorProfileW", 4, [open_profile](ApiCall &call) { open_profile(call, true); });
+	registry.add("OpenColorProfileA", 4, [open_profile](ApiCall &call) { open_profile(call, false); });
+	registry.add("CloseColorProfile", 1, [&objects](ApiCall &call) {
+		if (!objects.object_as<ColorProfile>(call[0])) {
+			call.fail(6, 0);
+			return;
+		}
+		objects.close(call[0]);
+		call.ret(1);
+	});
+	// A profile is valid with a whole header that carries the 'acsp' signature and a size the data holds.
+	const auto profile_valid = [](const ColorProfile &profile) {
+		const auto &data = profile.data;
+		if (data.size() < 128 || data[36] != 'a' || data[37] != 'c' || data[38] != 's' || data[39] != 'p')
+			return false;
+		const uint32_t size = uint32_t(data[0]) << 24 | uint32_t(data[1]) << 16 | uint32_t(data[2]) << 8 | data[3];
+		return size >= 128 && size <= data.size();
+	};
+	registry.add("IsColorProfileValid", 2, [&objects, profile_valid](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[1]) {
+			call.fail(87, 0);
+			return;
+		}
+		call.store<uint32_t>(call[1], profile_valid(*profile) ? 1 : 0);
+		call.ret(1);
+	});
+	registry.add("GetColorProfileHeader", 2, [&objects, profile_valid](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[1] || !profile_valid(*profile)) {
+			call.fail(profile && call[1] ? 2015 : 87, 0);
+			return;
+		}
+		std::vector<uint8_t> header(profile->data.begin(), profile->data.begin() + 128);
+		for (size_t at = 0; at < header.size(); at += 4) {
+			std::swap(header[at], header[at + 3]);
+			std::swap(header[at + 1], header[at + 2]);
+		}
+		call.write(call[1], header);
+		call.ret(1);
+	});
+	// The profile's bytes: the size is the answer to a buffer that is missing or too small, which fails.
+	registry.add("GetColorProfileFromHandle", 3, [&objects](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[2]) {
+			call.fail(87, 0);
+			return;
+		}
+		const uint32_t capacity = call.load<uint32_t>(call[2]);
+		call.store<uint32_t>(call[2], uint32_t(profile->data.size()));
+		if (!call[1] || capacity < profile->data.size()) {
+			call.fail(122, 0);
+			return;
+		}
+		call.write(call[1], profile->data);
+		call.ret(1);
+	});
+	// IP_PER_ADAPTER_INFO: autoconfiguration off, then the resolvers of the host's configuration as IP_ADDR_STRING entries, the first
+	// in the record and the others chained after it; every adapter shares them.
+	registry.add("GetPerAdapterInfo", 3, [](ApiCall &call) {
+		if (!call[2]) {
+			call.ret(error_invalid_parameter);
+			return;
+		}
+		const auto adapters = host_adapters(AF_INET);
+		if (std::none_of(adapters.begin(), adapters.end(), [&](const Adapter &adapter) { return adapter.index == call.u32(0); })) {
+			call.ret(error_no_data);
+			return;
+		}
+		std::vector<std::string> servers;
+		std::ifstream configuration("/etc/resolv.conf");
+		for (std::string line; std::getline(configuration, line);)
+			if (line.starts_with("nameserver ") && line.find(':') == line.npos && line.size() - 11 < 16)
+				servers.push_back(line.substr(11));
+		const size_t width = call.pointer_width();
+		const size_t string_size = (width + 36 + width - 1) & ~(width - 1), list_at = 8 + width, record = list_at + string_size;
+		const size_t needed = record + (servers.size() > 1 ? (servers.size() - 1) * string_size : 0);
+		if (!call[1] || call.load<uint32_t>(call[2]) < needed) {
+			call.store<uint32_t>(call[2], uint32_t(needed));
+			call.ret(error_buffer_overflow);
+			return;
+		}
+		std::vector<uint8_t> block(needed, 0);
+		const uint64_t base = call[1];
+		size_t previous = 0;
+		for (size_t which = 0; which < servers.size(); ++which) {
+			const size_t at = which ? record + (which - 1) * string_size : list_at;
+			std::memcpy(block.data() + at + width, servers[which].data(), servers[which].size());
+			if (which) {
+				const uint64_t next = base + at;
+				std::memcpy(block.data() + previous, &next, width);
+			}
+			previous = at;
+		}
+		if (!servers.empty()) {
+			const uint64_t current = base + list_at;
+			std::memcpy(block.data() + 8, &current, width);
+		}
+		call.write(base, block);
 		call.ret(0);
 	});
 	// The IPv4 adapters in IP_ADAPTER_INFO records, loopback left out; addresses past the first of an adapter are chained after the records.
