@@ -190,7 +190,7 @@ static int check_patching(const WCHAR *package, const WCHAR *scratch)
 		return 1;
 	SetFileAttributesW(second, FILE_ATTRIBUTE_NORMAL);
 	MSIHANDLE base = 0, changed = 0;
-	if (MsiOpenDatabaseW(package, MSIDBOPEN_READONLY, &base) || MsiOpenDatabaseW(second, MSIDBOPEN_TRANSACT, &changed))
+	if (MsiOpenDatabaseW(package, (LPCWSTR)MSIDBOPEN_READONLY, &base) || MsiOpenDatabaseW(second, (LPCWSTR)MSIDBOPEN_TRANSACT, &changed))
 		return 2;
 	if (!add_registry_row(changed) || !run_sql(changed, L"INSERT INTO `Media` (`DiskId`, `LastSequence`, `Cabinet`) VALUES (2, 100, '#patchcab')") ||
 		!run_sql(changed, L"UPDATE `File` SET `Sequence` = 100 WHERE `File` = 'Hello'") || MsiDatabaseCommit(changed))
@@ -296,7 +296,7 @@ static int check_searches(const WCHAR *package, const WCHAR *scratch)
 		return 1;
 	SetFileAttributesW(copy, FILE_ATTRIBUTE_NORMAL);
 	MSIHANDLE database = 0, session = 0;
-	if (MsiOpenDatabaseW(copy, MSIDBOPEN_TRANSACT, &database))
+	if (MsiOpenDatabaseW(copy, (LPCWSTR)MSIDBOPEN_TRANSACT, &database))
 		return 2;
 	static const WCHAR *const statements[] = {
 		L"CREATE TABLE `AppSearch` (`Property` CHAR(72) NOT NULL, `Signature_` CHAR(72) NOT NULL PRIMARY KEY `Property`, `Signature_`)",
@@ -373,7 +373,7 @@ static int check_admin_image(const WCHAR *package, const WCHAR *scratch)
 		return 1;
 	SetFileAttributesW(copy, FILE_ATTRIBUTE_NORMAL);
 	MSIHANDLE database = 0;
-	if (MsiOpenDatabaseW(copy, MSIDBOPEN_TRANSACT, &database))
+	if (MsiOpenDatabaseW(copy, (LPCWSTR)MSIDBOPEN_TRANSACT, &database))
 		return 2;
 	static const WCHAR *const rows[] = {
 		L"CREATE TABLE `AdminExecuteSequence` (`Action` CHAR(72) NOT NULL, `Condition` CHAR(255), `Sequence` SHORT PRIMARY KEY `Action`)",

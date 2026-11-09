@@ -219,7 +219,7 @@ int raven_entry(void)
 		return 1;
 	SetFileAttributesW(package, FILE_ATTRIBUTE_NORMAL);
 	MSIHANDLE database = 0;
-	if (MsiOpenDatabaseW(package, MSIDBOPEN_TRANSACT, &database))
+	if (MsiOpenDatabaseW(package, (LPCWSTR)MSIDBOPEN_TRANSACT, &database))
 		return 2;
 	for (unsigned i = 0; i < ARRAYSIZE(tables); i++)
 		if (!run_sql(database, tables[i]))
