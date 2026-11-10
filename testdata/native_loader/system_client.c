@@ -166,7 +166,8 @@ int raven_entry(void)
 		ULONG needed=0;
 		if ((ULONG)NtQuerySystemInformation(5,list,16,&needed)!=0xc0000004UL || needed<0x100+0x50 || needed>sizeof(list))
 			return 40;
-		if (NtQuerySystemInformation(5,list,needed,&length)!=0 || length!=needed)
+		/* Processes start and end between the two calls, as other tests run beside this one: the list is read into the whole buffer. */
+		if (NtQuerySystemInformation(5,list,sizeof(list),&length)!=0 || length<0x100+0x50 || length>sizeof(list))
 			return 41;
 		ULONG offset=0,found=0;
 		for (;;) {
@@ -174,9 +175,9 @@ int raven_entry(void)
 			const ULONG next=*(const ULONG *)entry,threads=*(const ULONG *)(entry+4);
 			const USHORT name_length=*(const USHORT *)(entry+0x38);
 			const WCHAR *name=*(WCHAR *const *)(entry+0x40);
-			if (offset+0x100+threads*0x50>needed) return 42;
+			if (offset+0x100+threads*0x50>length) return 42;
 			if (*(const ULONG_PTR *)(entry+0x50)==GetCurrentProcessId()) {
-				if (!threads || !name_length || (const unsigned char *)name<list || (const unsigned char *)name+name_length>list+needed ||
+				if (!threads || !name_length || (const unsigned char *)name<list || (const unsigned char *)name+name_length>list+length ||
 					*(const ULONG *)(entry+0x64)!=1)
 					return 43;
 				ULONG own=0;
@@ -189,7 +190,7 @@ int raven_entry(void)
 				found=1;
 			}
 			if (!next) break;
-			if (next<0x100 || next>needed-offset) return 46;
+			if (next<0x100 || next>length-offset) return 46;
 			offset+=next;
 		}
 		if (!found) return 47;
