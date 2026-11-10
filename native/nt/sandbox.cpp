@@ -1,7 +1,9 @@
 #include "sandbox.h"
 #include "text.h"
 
+#include <arpa/inet.h>
 #include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <sys/stat.h>
@@ -157,6 +159,31 @@ bool Sandbox::network() const
 {
 	refresh();
 	return network_allowed;
+}
+
+bool Sandbox::reaches(const sockaddr *address, socklen_t length) const
+{
+	if (!address || length < socklen_t(sizeof(sa_family_t)) || network())
+		return true;
+	char text[INET6_ADDRSTRLEN] = {};
+	if (address->sa_family == AF_INET && length >= socklen_t(sizeof(sockaddr_in))) {
+		const auto *ip = reinterpret_cast<const sockaddr_in *>(address);
+		if ((ntohl(ip->sin_addr.s_addr) >> 24) == 127)
+			return true;
+		::inet_ntop(AF_INET, &ip->sin_addr, text, sizeof(text));
+	} else if (address->sa_family == AF_INET6 && length >= socklen_t(sizeof(sockaddr_in6))) {
+		const auto *ip = reinterpret_cast<const sockaddr_in6 *>(address);
+		if (IN6_IS_ADDR_LOOPBACK(&ip->sin6_addr) || (IN6_IS_ADDR_V4MAPPED(&ip->sin6_addr) && ip->sin6_addr.s6_addr[12] == 127))
+			return true;
+		::inet_ntop(AF_INET6, &ip->sin6_addr, text, sizeof(text));
+	} else {
+		// A local socket stays on the computer; any other family is a network.
+		if (address->sa_family == AF_UNIX)
+			return true;
+		std::snprintf(text, sizeof(text), "family %d", int(address->sa_family));
+	}
+	refuse(text, "network");
+	return false;
 }
 
 Sandbox::Access Sandbox::access(const std::filesystem::path &host) const

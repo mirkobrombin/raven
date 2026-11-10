@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ctime>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <filesystem>
 #include <string>
@@ -47,6 +48,9 @@ public:
 	bool record(const std::filesystem::path &host, bool write, std::u16string_view program);
 	std::vector<Grant> grants() const;
 	bool network() const;
+	// Whether a program may send to an address: any address while the network is on, and otherwise only the computer's own (loopback
+	// and local sockets). A refused address is noted in the log.
+	bool reaches(const sockaddr *address, socklen_t length) const;
 	// The access the program has to a host path, its symbolic links followed: a granted path or anything under it, a folder that leads to
 	// a grant, or nothing.
 	Access access(const std::filesystem::path &host) const;

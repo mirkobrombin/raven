@@ -1,4 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <winternl.h>
 #include <shellapi.h>
@@ -48,10 +50,37 @@ static int linux_open(void)
 	return buffer[0] == 'r' && buffer[1] == 'o' && buffer[2] == 'o' && buffer[3] == 't' ? 99 : 0;
 }
 
+// Run in a prefix whose sandbox.conf says "network off": nothing leaves the computer, while the computer itself still answers.
+static int network_off(void)
+{
+	WSADATA data;
+	if (WSAStartup(0x202, &data)) return 30;
+	SOCKET out = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in remote = {0};
+	remote.sin_family = AF_INET;
+	remote.sin_port = htons(80);
+	remote.sin_addr.s_addr = htonl(0x01010101);
+	if (connect(out, (struct sockaddr *)&remote, sizeof(remote)) == 0 || WSAGetLastError() != WSAEACCES) return 31;
+	if (sendto(socket(AF_INET, SOCK_DGRAM, 0), "x", 1, 0, (struct sockaddr *)&remote, sizeof(remote)) >= 0 || WSAGetLastError() != WSAEACCES) return 32;
+	struct addrinfo *found = NULL;
+	if (getaddrinfo("example.org", "80", NULL, &found) == 0) return 33;
+	// A program still listens, to the computer only, and reaches itself.
+	SOCKET listener = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in own = {0};
+	int length = sizeof(own);
+	own.sin_family = AF_INET;
+	if (bind(listener, (struct sockaddr *)&own, sizeof(own)) || listen(listener, 1) || getsockname(listener, (struct sockaddr *)&own, &length)) return 34;
+	if (own.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) return 35;
+	if (connect(socket(AF_INET, SOCK_STREAM, 0), (struct sockaddr *)&own, sizeof(own))) return 36;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	if (contains(GetCommandLineW(), L" linux-open"))
 		ExitProcess(linux_open());
+	if (contains(GetCommandLineW(), L" network-off"))
+		return network_off();
 
 	HANDLE file = CreateFileW(L"Z:\\etc\\passwd", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 	if (file != INVALID_HANDLE_VALUE || GetLastError() != ERROR_ACCESS_DENIED) return 1;

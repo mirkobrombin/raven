@@ -1,8 +1,11 @@
 #include "sandbox.h"
 
+#include <arpa/inet.h>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <netinet/in.h>
+#include <sys/un.h>
 
 static void check(bool condition, const char *message)
 {
@@ -77,6 +80,31 @@ int main()
 	for (; std::getline(log, line); ++lines)
 		last = line;
 	check(lines == 4 && last.ends_with("\topen\t" + (root / "home/user/.ssh/id").string()), "the refusals are not logged");
+
+	// Without the network a program reaches only the computer itself, and a refused address is logged.
+	sockaddr_in outside{}, loopback{};
+	outside.sin_family = loopback.sin_family = AF_INET;
+	outside.sin_addr.s_addr = htonl(0x08080808);
+	loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	sockaddr_in6 own{};
+	own.sin6_family = AF_INET6;
+	own.sin6_addr = in6addr_loopback;
+	sockaddr_un local{};
+	local.sun_family = AF_UNIX;
+	check(!sandbox.reaches(reinterpret_cast<sockaddr *>(&outside), sizeof(outside)), "an address outside the computer is reached");
+	check(sandbox.reaches(reinterpret_cast<sockaddr *>(&loopback), sizeof(loopback)) &&
+		sandbox.reaches(reinterpret_cast<sockaddr *>(&own), sizeof(own)) && sandbox.reaches(reinterpret_cast<sockaddr *>(&local), sizeof(local)),
+		"the computer's own addresses are refused");
+	std::ifstream again(root / "prefix/sandbox.log");
+	for (lines = 0; std::getline(again, line); ++lines)
+		last = line;
+	check(lines == 5 && last.ends_with("\tnetwork\t8.8.8.8"), "the refused address is not logged");
+	// The network taken from one program only.
+	std::ofstream(root / "prefix/sandbox.conf", std::ios::trunc) << "app-network-off C:\\Tools\\Editor.exe\n";
+	check(!editor.network() && other.network(), "the network of one program is not taken away alone");
+	check(editor.reaches(reinterpret_cast<sockaddr *>(&loopback), sizeof(loopback)) &&
+		!editor.reaches(reinterpret_cast<sockaddr *>(&outside), sizeof(outside)) && other.reaches(reinterpret_cast<sockaddr *>(&outside), sizeof(outside)),
+		"one program's network is not kept apart");
 	std::filesystem::remove_all(root);
 	return 0;
 }

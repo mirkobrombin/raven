@@ -4040,11 +4040,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     set(sandbox_client ${CMAKE_CURRENT_BINARY_DIR}/sandbox-client${width}.exe)
                     add_custom_command(OUTPUT ${sandbox_client}
                         COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
-                            -o ${sandbox_client} ${LOADER_SOURCES}/sandbox_client.c -lshell32 -lntdll -lkernel32
+                            -o ${sandbox_client} ${LOADER_SOURCES}/sandbox_client.c -lshell32 -lws2_32 -lntdll -lkernel32
                         DEPENDS ${LOADER_SOURCES}/sandbox_client.c VERBATIM)
                     add_custom_target(sandbox_fixture${width} ALL DEPENDS ${sandbox_client})
                     add_test(NAME native_sandbox_x${width} COMMAND raven --run-process --execution=native ${sandbox_client})
                     set_tests_properties(native_sandbox_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A prefix with the network taken away.
+                    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/offline-prefix${width}/sandbox.conf "network off\n")
+                    add_test(NAME native_network_off_x${width} COMMAND raven --run-process --execution=native ${sandbox_client} -- network-off)
+                    set_tests_properties(native_network_off_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/offline-prefix${width})
                     if(width EQUAL 64)
                         set(timer_queue_client ${CMAKE_CURRENT_BINARY_DIR}/timer-queue-client${width}.exe)
                         add_custom_command(OUTPUT ${timer_queue_client}
