@@ -56,15 +56,34 @@ static std::vector<uint8_t> read_file(const char *path)
 		throw std::runtime_error("cannot read PE file");
 	return bytes;
 }
-#ifdef RAVEN_NATIVE_CPU
-static raven::ModuleBytes read_module(const std::filesystem::path &path)
+// A mapped image may be as large as Windows runs one: its file offsets are 32-bit, and installers carry their payload after the image.
+static raven::ModuleBytes map_module(const std::filesystem::path &path)
 {
 	auto bytes = raven::ModuleBytes::map(path);
 	if (!bytes)
 		throw std::runtime_error("cannot map PE file");
-	if (std::span<const uint8_t>(*bytes).size() > 1024 * 1024 * 1024)
+	if (std::span<const uint8_t>(*bytes).size() > 0xffffffffULL)
 		throw std::runtime_error("PE file exceeds inspection size limit");
 	return std::move(*bytes);
+}
+
+// A program the command line names: read whole when it is small enough to be a .NET image built for any CPU, which may be widened to the
+// form a 64-bit process loads, and mapped otherwise, as such images never come that large.
+static raven::ModuleBytes read_program(const char *path, bool widen)
+{
+	std::error_code error;
+	const auto size = std::filesystem::file_size(path, error);
+	if (!error && size > 256 * 1024 * 1024)
+		return map_module(path);
+	auto bytes = read_file(path);
+	if (widen)
+		raven::widen_il_only_image(bytes);
+	return bytes;
+}
+#ifdef RAVEN_NATIVE_CPU
+static raven::ModuleBytes read_module(const std::filesystem::path &path)
+{
+	return map_module(path);
 }
 
 // A program started by another one leaves its whole exit code here for the parent; the host exit status keeps only its low byte.
@@ -270,9 +289,7 @@ int main(int argc, char **argv)
 			raven::ModuleSet modules;
 			raven::PEModule *entry = nullptr;
 			for (int i = (run_modules || run_process) ? first_file : 2; i < last_file; ++i) {
-				auto bytes = read_file(argv[i]);
-				if (!entry && run_process)
-					raven::widen_il_only_image(bytes);
+				auto bytes = read_program(argv[i], !entry && run_process);
 				auto &module = modules.add(std::filesystem::path(argv[i]).filename().string(), std::move(bytes));
 				if (!entry) {
 					entry = &module;

@@ -1180,6 +1180,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(system_pe_fixture ALL DEPENDS ${SYSTEM_FIXTURE})
         add_test(NAME native_system_cli COMMAND raven --run-process --execution=native ${SYSTEM_FIXTURE})
         set_tests_properties(native_system_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # An installer carries its payload after the image: a program grown past 1 GiB by data after its sections still runs. The copy is
+        # a sparse file, so it takes no room on disk.
+        add_test(NAME native_large_program COMMAND sh -c "cp \"$1\" \"$2\" && truncate -s 1300M \"$2\" && \"$0\" --run-process --execution=native \"$2\"; status=$?; rm -f \"$2\"; exit $status"
+            $<TARGET_FILE:raven> ${SYSTEM_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/large-program.exe)
+        set_tests_properties(native_large_program PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(EVENT_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/event-fixture.exe)
         add_custom_command(OUTPUT ${EVENT_FIXTURE}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
