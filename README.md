@@ -72,7 +72,9 @@ DXVK and vkd3d-proton are only needed for Direct3D programs and games. The Micro
 
 On an X11 session, `--desktop=x11` takes the place of `--desktop=wayland`. The X11 desktop is experimental; `-DRAVEN_DESKTOP_WAYLAND=OFF` builds Raven without Wayland at all.
 
-`RAVEN_PREFIX` is the Windows installation the program sees, with its own `C:` drive and registry; give each application its own. Raven takes a snapshot of the prefix before every installer, and `build/native/raven --restore-prefix` brings it back.
+`RAVEN_PREFIX` is the Windows installation the program sees, with its own `C:` drive and registry. Programs installed in the same prefix see each other, as they would on one Windows machine; a separate prefix is only needed to keep a program fully apart from the others. Raven takes a snapshot of the prefix before every installer, and `build/native/raven --restore-prefix` brings it back.
+
+A program sees none of your Linux files except the ones you hand it: its own folder and the host paths on its command line, which appear under `Z:` at their usual spelling. More can be granted in `sandbox.conf` in the prefix, one `read PATH` or `write PATH` per line; anything else the program asks for is refused and noted in the prefix's `sandbox.log`. Web and mail addresses open in your browser and mail client, and nothing else is handed to a Linux program.
 
 To run the tests:
 

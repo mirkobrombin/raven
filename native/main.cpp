@@ -11,6 +11,7 @@
 #include "nt/elevation.h"
 #include "nt/restart.h"
 #include "nt/snapshot.h"
+#include "nt/sandbox.h"
 #include "nt/handle_channel.h"
 #include "nt/text.h"
 #include "nt/system_exports.h"
@@ -25,6 +26,7 @@
 #endif
 #endif
 
+#include <algorithm>
 #include <set>
 #include <filesystem>
 #include <charconv>
@@ -251,6 +253,9 @@ int main(int argc, char **argv)
 			::fcntl(exit_code_fd,F_SETFD,FD_CLOEXEC);
 		}
 #endif
+		// Host paths the sandbox grants, carried from the runtime that started this one.
+		else if (option.starts_with("--grant-read=")) raven::sandbox().grant(std::string(option.substr(13)),false);
+		else if (option.starts_with("--grant-write=")) raven::sandbox().grant(std::string(option.substr(14)),true);
 		else if (option=="--elevated") elevated=true;
 		else if (option=="--noninteractive") noninteractive=true;
 		else more=false;
@@ -322,6 +327,23 @@ int main(int argc, char **argv)
 				if (run_process) {
 					const auto directory = std::filesystem::absolute(argv[first_file]).parent_path();
 					const raven::NativePrefix prefix=raven::NativePrefix::from_environment();
+					// What the program may reach of the host: the prefix's own grants, and for a program started from the host its folder and the
+					// host paths on its command line, as the person running it handed them over. A program another one started gets no more than
+					// its creator had.
+					raven::sandbox().load(prefix.root());
+					if (handle_channel_fd<0 && !command_line_text) {
+						const auto root=std::filesystem::absolute(prefix.root()).lexically_normal().string()+"/";
+						if (!directory.lexically_normal().string().starts_with(root)) raven::sandbox().grant(directory,true);
+						for (int i=last_file+1;i<argc;++i) {
+							std::string text=argv[i];
+							if (text.size()>2 && (text[0]=='Z' || text[0]=='z') && text[1]==':') {
+								text=text.substr(2);
+								std::replace(text.begin(),text.end(),'\\','/');
+							}
+							std::error_code error;
+							if (text.starts_with("/") && std::filesystem::exists(text,error)) raven::sandbox().grant(text,true);
+						}
+					}
 					// The system's own programs, libraries and tables the runtime ships, in the system directory of each width as Windows has them; a
 					// copy that is missing or differs from the runtime's is put back.
 					{

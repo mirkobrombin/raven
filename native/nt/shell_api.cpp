@@ -1,5 +1,6 @@
 #include "elevation.h"
 #include "child_process.h"
+#include "sandbox.h"
 #include "kernel_context.h"
 #include "text.h"
 
@@ -570,7 +571,6 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 		const std::u16string &directory, std::shared_ptr<ProcessObject> &started) -> uint64_t {
 		if (!equal_fold(operation, u"open") && !equal_fold(operation, u"edit") && !equal_fold(operation, u"explore") && !equal_fold(operation, u"runas"))
 			return 31;
-		std::string argument;
 		const bool url = target.find(u"://") != target.npos || target.starts_with(u"mailto:");
 		if (!url) {
 			const auto candidates = target.find_first_of(u"\\/:") != target.npos ? std::vector<std::u16string>{target} :
@@ -598,17 +598,11 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 				request_child_elevation(false);
 				return started ? 42 : error == 193 ? 11 : error;
 			}
-			argument = resolved->host.string();
-		} else {
-			argument = to_utf8(target);
+			// A document or a folder no program of the prefix opens stays in the sandbox: no host program is handed it.
+			sandbox().refuse(resolved->host, "open-on-host");
+			return 31;
 		}
-		const pid_t child = ::fork();
-		if (child == 0) {
-			::setsid();
-			::execlp("xdg-open", "xdg-open", argument.c_str(), static_cast<char *>(nullptr));
-			::_exit(127);
-		}
-		return child < 0 ? 0 : 42;
+		return sandbox().open_address(to_utf8(target)) ? 42 : 31;
 	};
 	registry.add("ShellExecuteW", 6, [open_target](ApiCall &call) {
 		std::shared_ptr<ProcessObject> started;

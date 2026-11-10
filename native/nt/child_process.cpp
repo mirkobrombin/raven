@@ -2,6 +2,7 @@
 #include "console.h"
 
 #include "elevation.h"
+#include "sandbox.h"
 #include "text.h"
 
 #include <atomic>
@@ -271,6 +272,8 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 		owned.push_back(channel_pair[1]);
 		arguments.push_back("--handle-channel-fd=" + std::to_string(pass(channel_pair[1])));
 	}
+	for (auto &option : sandbox().child_options())
+		arguments.push_back(std::move(option));
 	arguments.push_back("--command-line=" + to_utf8(launch.command_line));
 	arguments.push_back("--directory=" + to_utf8(launch.directory));
 	arguments.push_back(launch.image.string());

@@ -1,5 +1,6 @@
 #include "paths.h"
 #include "actctx.h"
+#include "sandbox.h"
 #include "text.h"
 #include "system_exports.h"
 
@@ -158,8 +159,11 @@ std::optional<std::filesystem::path> NativePaths::drive_root(char16_t letter) co
 		letter = char16_t(letter + 32);
 	if (letter < u'a' || letter > u'z')
 		return std::nullopt;
-	if (letter == u'z')
+	if (letter == u'z') {
+		if (sandbox().grants().empty())
+			return std::nullopt;
 		return std::filesystem::path("/");
+	}
 	auto root = prefix.root() / (std::string("drive_") + char(letter));
 	std::error_code ignored;
 	if (letter != u'c' && !std::filesystem::is_directory(root, ignored))
@@ -333,7 +337,32 @@ std::optional<NativePaths::Resolved> NativePaths::resolve_direct(const std::u16s
 			break;
 		rest = rest.substr(end + 1);
 	}
+	if ((path[0] | 0x20) == u'z') {
+		const auto access = sandbox().access(result.host);
+		if (access == Sandbox::Access::none) {
+			sandbox().refuse(result.host, "open");
+			return Resolved{std::filesystem::path("/proc/raven-denied") / result.host.filename(), false, false, true, false};
+		}
+		result.writable = access == Sandbox::Access::write;
+	}
 	return result;
+}
+
+bool NativePaths::listed(const std::filesystem::path &host) const
+{
+	return in_prefix(host) || sandbox().access(host) != Sandbox::Access::none;
+}
+
+bool NativePaths::changeable(const std::filesystem::path &host) const
+{
+	return in_prefix(host) || sandbox().access(host) == Sandbox::Access::write;
+}
+
+bool NativePaths::in_prefix(const std::filesystem::path &host) const
+{
+	const auto &root = prefix.root().native();
+	const auto &text = host.native();
+	return text.size() > root.size() && text.compare(0, root.size(), root) == 0 && text[root.size()] == '/';
 }
 
 bool NativePaths::set_dll_directory(std::optional<std::u16string> path)

@@ -10,6 +10,7 @@
 #include "kernel_context.h"
 #include "file_objects.h"
 #include "restart.h"
+#include "sandbox.h"
 #include "text.h"
 
 #include <algorithm>
@@ -231,6 +232,20 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		const auto resolved = paths.resolve(name);
 		if (!resolved)
 			call.set_last_error(name.empty() ? 2 : 123);
+		else if (resolved->denied) {
+			call.set_last_error(5);
+			return std::nullopt;
+		}
+		return resolved;
+	};
+	// A path the call is about to change: a host path granted only for reading refuses it.
+	const auto resolve_change = [&, resolve](ApiCall &call, std::u16string_view name) -> std::optional<NativePaths::Resolved> {
+		auto resolved = resolve(call, name);
+		if (resolved && !resolved->writable) {
+			sandbox().refuse(resolved->host, "change");
+			call.set_last_error(5);
+			return std::nullopt;
+		}
 		return resolved;
 	};
 	const auto missing = [&](const NativePaths::Resolved &resolved) { return resolved.parent_exists ? 2U : 3U; };
@@ -258,6 +273,11 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		const bool want_write = access & (0x40000000U | 0x10000000U | 0x2U | 0x4U | 0x10000U);
 		const bool want_read = access & (0x80000000U | 0x10000000U | 0x1U);
+		if (!resolved->writable && (want_write || disposition != 3 || (flags & 0x04000000U))) {
+			sandbox().refuse(resolved->host, "change");
+			call.set_last_error(5);
+			return;
+		}
 		struct stat metadata{};
 		const bool exists = resolved->exists && !::stat(resolved->host.c_str(), &metadata);
 		if (exists && S_ISDIR(metadata.st_mode)) {
@@ -496,7 +516,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("NtWriteFile", 9, [native_transfer](ApiCall &call) { native_transfer(call, false); });
 	registry.add("NtReadFile", 9, [native_transfer](ApiCall &call) { native_transfer(call, true); });
-	const auto query_directory = [&objects, file_of](ApiCall &call) {
+	const auto query_directory = [&objects, &paths, file_of](ApiCall &call) {
 		try {
 			if (!call[4]) { call.ret(0xc000000dU); return; }
 			const auto finish = [&](uint32_t status, size_t count = 0) {
@@ -544,7 +564,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 						break;
 					}
 					const auto name = from_utf8(item->d_name);
-					if (!wildcard(pattern, name)) continue;
+					if (!wildcard(pattern, name) || !paths.listed(file->path / item->d_name)) continue;
 					struct stat metadata{};
 					if (::fstatat(file->descriptor, item->d_name, &metadata, 0)) continue;
 					scan->entries.push_back({name, attributes_of(metadata, item->d_name), filetime(metadata.st_ctim),
@@ -1027,6 +1047,12 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(4391);
 			return;
 		}
+		// A link leads only to a place in the prefix: one out of it would outlast the grant that let the program see the place.
+		if (!paths.changeable(file->path) || !paths.in_prefix((file->path.parent_path() / content).lexically_normal())) {
+			sandbox().refuse(content, "link");
+			call.fail(5);
+			return;
+		}
 		// A mount point goes on an empty directory, a symbolic link on any file or directory that is empty.
 		std::error_code error;
 		const bool directory = S_ISDIR(own.st_mode);
@@ -1108,7 +1134,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	// The information classes programs set on an open file: times, renaming, deletion on close, the file's length and I/O hints.
-	registry.add("SetFileInformationByHandle", 4, [&, resolve, missing, file_of](ApiCall &call) {
+	registry.add("SetFileInformationByHandle", 4, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
 		const auto file = file_of(call[0]);
 		if (!file || !call[2]) {
 			call.fail(file ? 87 : 6);
@@ -1157,9 +1183,12 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			const auto bytes = call.read(call[2] + header, length);
 			std::u16string name(length / 2, u'\0');
 			std::memcpy(name.data(), bytes.data(), length);
-			const auto target = resolve(call, name);
-			if (!target)
+			const auto target = paths.changeable(file->path) ? resolve_change(call, name) : std::nullopt;
+			if (!target) {
+				if (!paths.changeable(file->path))
+					call.fail(5);
 				return;
+			}
 			if (target->exists && !(flags & 1)) {
 				call.fail(183);
 				return;
@@ -1180,6 +1209,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 				return;
 			}
 			const uint32_t flags = call.u32(1) == 21 ? call.load<uint32_t>(call[2]) : call.load<uint8_t>(call[2]) ? 1U : 0U;
+			if ((flags & 1) && !paths.changeable(file->path)) {
+				call.fail(5);
+				return;
+			}
 			if ((flags & 1) && file->directory && !std::filesystem::is_empty(file->path)) {
 				call.fail(145);
 				return;
@@ -1369,8 +1402,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[2], attribute_data(entry_of(resolved->host, u"")));
 		call.ret(1);
 	});
-	registry.add("SetFileAttributesW", 2, [&, resolve, missing, file_of](ApiCall &call) {
-		const auto resolved = resolve(call, call.wide(call[0]));
+	registry.add("SetFileAttributesW", 2, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
+		const auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
 		struct stat metadata{};
@@ -1392,8 +1425,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("CreateDirectoryW", 2, [&, resolve, missing, file_of](ApiCall &call) {
-		const auto resolved = resolve(call, call.wide(call[0]));
+	registry.add("CreateDirectoryW", 2, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
+		const auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
 		if (resolved->exists) {
@@ -1406,8 +1439,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("RemoveDirectoryW", 1, [&, resolve, missing, file_of](ApiCall &call) {
-		const auto resolved = resolve(call, call.wide(call[0]));
+	registry.add("RemoveDirectoryW", 1, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
+		const auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
 		if (::rmdir(resolved->host.c_str())) {
@@ -1416,8 +1449,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("DeleteFileW", 1, [&, resolve, missing, file_of](ApiCall &call) {
-		const auto resolved = resolve(call, call.wide(call[0]));
+	registry.add("DeleteFileW", 1, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
+		const auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
 		if (::unlink(resolved->host.c_str())) {
@@ -1428,10 +1461,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// A symbolic link becomes a host one. A relative target stays relative to the link's directory, so the tree it lives in can move;
 	// the target is spelled as the host names it, since the host lookup through the link does not ignore case.
-	registry.add("CreateSymbolicLinkW", 3, [&, resolve](ApiCall &call) {
+	registry.add("CreateSymbolicLinkW", 3, [&, resolve, resolve_change](ApiCall &call) {
 		const auto link_name = paths.full(call.wide(call[0]));
 		const auto target_name = call.wide(call[1]);
-		const auto link = link_name.empty() ? std::nullopt : resolve(call, link_name);
+		const auto link = link_name.empty() ? std::nullopt : resolve_change(call, link_name);
 		if (!link)
 			return;
 		if (target_name.empty()) {
@@ -1448,17 +1481,27 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const auto content = relative ? target->host.lexically_relative(link->host.parent_path()) : target->host;
+		if (!paths.in_prefix(target->host)) {
+			sandbox().refuse(target->host, "link");
+			call.fail(5);
+			return;
+		}
 		if (::symlink(content.c_str(), link->host.c_str())) {
 			call.fail(error_of(errno, !link->parent_exists));
 			return;
 		}
 		call.ret(1);
 	});
-	registry.add("CreateHardLinkW", 3, [&, resolve, missing](ApiCall &call) {
-		const auto link = resolve(call, call.wide(call[0]));
+	registry.add("CreateHardLinkW", 3, [&, resolve, resolve_change, missing](ApiCall &call) {
+		const auto link = resolve_change(call, call.wide(call[0]));
 		const auto existing = link ? resolve(call, call.wide(call[1])) : std::nullopt;
 		if (!link || !existing)
 			return;
+		if (!paths.in_prefix(existing->host) || !paths.in_prefix(link->host)) {
+			sandbox().refuse(existing->host, "link");
+			call.fail(5);
+			return;
+		}
 		if (!existing->exists) {
 			call.set_last_error(missing(*existing));
 			return;
@@ -1522,19 +1565,19 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	};
-	registry.add("CopyFileW", 3, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
+	registry.add("CopyFileW", 3, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
 		const auto from = resolve(call, call.wide(call[0]));
-		const auto to = from ? resolve(call, call.wide(call[1])) : std::nullopt;
+		const auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
 		if (from && to)
 			copy_file(call, *from, *to, call.u32(2));
 	});
-	registry.add("CopyFileExW", 6, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
+	registry.add("CopyFileExW", 6, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
 		const auto from = resolve(call, call.wide(call[0]));
-		const auto to = from ? resolve(call, call.wide(call[1])) : std::nullopt;
+		const auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
 		if (from && to)
 			copy_file(call, *from, *to, call.u32(5) & 1);
 	});
-	registry.add("MoveFileExW", 3, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
+	registry.add("MoveFileExW", 3, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
 		const auto flags = call.u32(2);
 		// MOVEFILE_DELAY_UNTIL_REBOOT: the move, or the deletion when no target is named, waits for the next start of Windows, which
 		// `raven --reboot` stands for.
@@ -1552,14 +1595,14 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(1);
 			return;
 		}
-		const auto from = resolve(call, call.wide(call[0]));
+		const auto from = resolve_change(call, call.wide(call[0]));
 		if (!from)
 			return;
 		if (!call[1]) {
 			call.fail(87);
 			return;
 		}
-		const auto to = resolve(call, call.wide(call[1]));
+		const auto to = resolve_change(call, call.wide(call[1]));
 		if (!to)
 			return;
 		if (!from->exists) {
@@ -1582,9 +1625,9 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("MoveFileW", 2, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
-		const auto from = resolve(call, call.wide(call[0]));
-		const auto to = from ? resolve(call, call.wide(call[1])) : std::nullopt;
+	registry.add("MoveFileW", 2, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
+		const auto from = resolve_change(call, call.wide(call[0]));
+		const auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
 		if (!from || !to)
 			return;
 		if (!from->exists) {
@@ -1601,9 +1644,9 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("ReplaceFileW", 6, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
-		const auto replaced = resolve(call, call.wide(call[0]));
-		const auto replacement = resolve(call, call.wide(call[1]));
+	registry.add("ReplaceFileW", 6, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
+		const auto replaced = resolve_change(call, call.wide(call[0]));
+		const auto replacement = resolve_change(call, call.wide(call[1]));
 		if (!replaced || !replacement)
 			return;
 		if (!replaced->exists) {
@@ -1615,7 +1658,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (call[2]) {
-			const auto backup = resolve(call, call.wide(call[2]));
+			const auto backup = resolve_change(call, call.wide(call[2]));
 			if (!backup)
 				return;
 			copy_file(call, *replaced, *backup, false);
@@ -2046,7 +2089,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 				const auto name = from_utf8(item->d_name);
 				if (directory.size() <= 3 && (name == u"." || name == u".."))
 					continue;
-				if (wildcard(pattern, name))
+				if (wildcard(pattern, name) && paths.listed(resolved->host / item->d_name))
 					names.push_back(name);
 			}
 			::closedir(handle);
