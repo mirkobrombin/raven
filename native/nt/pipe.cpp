@@ -717,6 +717,22 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("GetNamedPipeClientProcessId", 2, peer_process);
 	registry.add("GetNamedPipeServerProcessId", 2, peer_process);
+	// Both ends of a pipe run in the one session every process here has, the one ProcessIdToSessionId gives.
+	const auto peer_session = [pipe_of](ApiCall &call) {
+		const auto pipe = pipe_of(call[0]);
+		if (!pipe || !call[1]) {
+			call.fail(pipe ? error_invalid_parameter : 6);
+			return;
+		}
+		if (pipe->descriptor < 0) {
+			call.fail(error_not_connected);
+			return;
+		}
+		call.store<uint32_t>(call[1], 1);
+		call.ret(1);
+	};
+	registry.add("GetNamedPipeClientSessionId", 2, peer_session);
+	registry.add("GetNamedPipeServerSessionId", 2, peer_session);
 	// Every client of a Raven pipe runs as the same user, so the server thread takes the identity of its own logon at the impersonation
 	// level a client grants unless it asks otherwise.
 	registry.add("ImpersonateNamedPipeClient", 1, [&context, pipe_of](ApiCall &call) {

@@ -1043,6 +1043,31 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(made.value);
 	});
+	// Firmware tables: the SMBIOS provider ('RSMB') has one table, a header for SMBIOS 3.0 followed by the end-of-table structure alone,
+	// as on a machine whose firmware describes nothing; the ACPI and raw firmware providers have none.
+	constexpr uint32_t provider_smbios = 0x52534d42;
+	registry.add("EnumSystemFirmwareTables", 3, [](ApiCall &call) {
+		if (call.u32(0) != provider_smbios) {
+			call.ret(0);
+			return;
+		}
+		if (call[1] && call.u32(2) >= 4)
+			call.store<uint32_t>(call[1], 0);
+		call.ret(4);
+	});
+	registry.add("GetSystemFirmwareTable", 4, [](ApiCall &call) {
+		if (call.u32(0) != provider_smbios) {
+			call.fail(1168, 0);
+			return;
+		}
+		const std::vector<uint8_t> table{0, 3, 0, 0, 6, 0, 0, 0, 127, 4, 0xff, 0xff, 0, 0};
+		if (call.u32(3) < table.size() || !call[2]) {
+			call.fail(122, table.size());
+			return;
+		}
+		call.write(call[2], table);
+		call.ret(table.size());
+	});
 	// What the thread's queue holds: the high word the kinds of message waiting, the low word the ones that arrived since the last call.
 	registry.add("GetQueueStatus", 1, [&context](ApiCall &call) {
 		const uint32_t kinds = call.u32(0);

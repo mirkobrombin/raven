@@ -126,6 +126,8 @@ int raven_entry(void)
 	char answer=0;
 	DWORD moved=0;
 	if (!ReadFile(client, &answer, 1, &moved, NULL) || moved!=1 || answer!='P') return 18;
+	ULONG session=0;
+	if (!GetNamedPipeServerSessionId(client, &session) || session!=1) return 19;
 	CloseHandle(client);
 	if (WaitForSingleObject(process.hProcess, 30000)) return 12;
 	DWORD code=1;
