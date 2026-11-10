@@ -74,7 +74,11 @@ On an X11 session, `--desktop=x11` takes the place of `--desktop=wayland`. The X
 
 `RAVEN_PREFIX` is the Windows installation the program sees, with its own `C:` drive and registry. Programs installed in the same prefix see each other, as they would on one Windows machine; a separate prefix is only needed to keep a program fully apart from the others. Raven takes a snapshot of the prefix before every installer, and `build/native/raven --restore-prefix` brings it back.
 
-A program sees none of your Linux files except the ones you hand it: its own folder and the host paths on its command line, which appear under `Z:` at their usual spelling. More can be granted in `sandbox.conf` in the prefix, one `read PATH` or `write PATH` per line; anything else the program asks for is refused and noted in the prefix's `sandbox.log`. Web and mail addresses open in your browser and mail client, and nothing else is handed to a Linux program.
+A program sees none of your Linux files except the ones you hand it: its own folder, the host paths on its command line, and what you choose in its file dialogs, which appear under `Z:` at their usual spelling. The file dialog runs apart from the program, sees your whole computer while you choose, and grants the program only the file or folder you chose. Anything else the program asks for is refused and noted in the prefix's `sandbox.log`.
+
+The control panel (`control.exe` in the prefix) manages all of it: the folders programs may open, network access for the prefix, the refusals, snapshots, and the Linux programs the prefix may hand files to. A Linux program you expose appears to Windows programs as `C:\Program Files\Raven\Host\NAME.exe` and receives only the files the calling program reaches; for each kind of file or address you choose a program of the prefix, a Linux program, or to be asked. The settings live in `sandbox.conf` in the prefix.
+
+On kernels with Landlock, Raven also confines itself: it reaches only the prefix, its own files, the system's libraries and devices, and the paths granted to the program, and a small helper started before the confinement opens what is granted later.
 
 To run the tests:
 

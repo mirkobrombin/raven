@@ -1,4 +1,5 @@
 #include "child_process.h"
+#include "confine.h"
 #include "console.h"
 
 #include "elevation.h"
@@ -111,10 +112,27 @@ bool runtime_process_alive(pid_t pid)
 	return mine_length > 0 && mine_length == theirs_length && std::equal(mine, mine + mine_length, theirs);
 }
 
+void ProcessObject::adopt(int process)
+{
+	process_descriptor = process;
+	brokered = true;
+}
+
 void ProcessObject::reap() const
 {
 	if (done)
 		return;
+	// A process the broker started ends when its process descriptor says so; its exit code is in the file both share.
+	if (brokered) {
+		pollfd entry{process_descriptor, POLLIN, 0};
+		if (::poll(&entry, 1, 0) <= 0)
+			return;
+		done = true;
+		--live;
+		uint32_t whole = 0;
+		code = killed ? requested : exit_file >= 0 && ::pread(exit_file, &whole, sizeof whole, 0) == ssize_t(sizeof whole) ? whole : 0;
+		return;
+	}
 	if (foreign) {
 		if (!runtime_process_alive(pid)) {
 			done = true;
@@ -282,6 +300,19 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 		argv.push_back(argument.data());
 	argv.push_back(nullptr);
 
+	pid_t child = 0;
+	int status = 0, brokered_process = -1;
+	// A trusted program sees the whole host: a confined runtime has the broker start it, outside the confinement.
+	if (confined() && trusted_image(launch.image)) {
+		std::vector<std::pair<int, int>> descriptors;
+		for (const auto &item : passes)
+			descriptors.emplace_back(item.source, item.target);
+		const auto started = brokered_spawn(arguments, descriptors);
+		child = started.first;
+		brokered_process = started.second;
+		status = child < 0 ? EACCES : 0;
+		release();
+	} else {
 	posix_spawn_file_actions_t actions;
 	posix_spawn_file_actions_init(&actions);
 	// Duplicating onto a descriptor that still has to be read as a source would lose it: move every source above all the targets first.
@@ -316,13 +347,13 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 	posix_spawnattr_setsigmask(&attributes, &none);
 	posix_spawnattr_setsigdefault(&attributes, &all);
 	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
-	pid_t child = 0;
-	const int status = ::posix_spawn(&child, self, &actions, &attributes, argv.data(), environ);
+	status = ::posix_spawn(&child, self, &actions, &attributes, argv.data(), environ);
 	posix_spawnattr_destroy(&attributes);
 	posix_spawn_file_actions_destroy(&actions);
 	for (const int descriptor : moved)
 		::close(descriptor);
 	release();
+	}
 	if (status) {
 		if (gate_pair[1] >= 0)
 			::close(gate_pair[1]);
@@ -337,6 +368,8 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 		*launch.gate = gate_pair[1];
 	++live;
 	auto object = std::make_shared<ProcessObject>(child);
+	if (brokered_process >= 0)
+		object->adopt(brokered_process);
 	object->exit_file = exit_kept;
 	if (channel_pair[0] >= 0) {
 		object->channel = std::make_unique<HandleChannel>(channel_pair[0]);

@@ -75,8 +75,51 @@ static int network_off(void)
 	return 0;
 }
 
+// Run in a prefix of its own: a document opens with the program the prefix registered for its kind.
+static int associate(const WCHAR *program)
+{
+	WCHAR command[MAX_PATH + 32];
+	int at = 0;
+	command[at++] = L'"';
+	for (const WCHAR *c = program; *c; ++c)
+		command[at++] = *c;
+	for (const WCHAR *c = L"\" opened \"%1\""; *c; ++c)
+		command[at++] = *c;
+	command[at] = 0;
+	if (RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Classes\\.ravtest", NULL, REG_SZ, L"Raven.Test", 22) ||
+		RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.Test\\shell\\open\\command", NULL, REG_SZ, command, (at + 1) * 2)) return 40;
+	CreateDirectoryW(L"C:\\raven-associate", NULL);
+	DeleteFileW(L"C:\\raven-associate\\opened.txt");
+	HANDLE document = CreateFileW(L"C:\\raven-associate\\letter.ravtest", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+	if (document == INVALID_HANDLE_VALUE) return 41;
+	CloseHandle(document);
+	if ((INT_PTR)ShellExecuteW(NULL, L"open", L"C:\\raven-associate\\letter.ravtest", NULL, NULL, SW_SHOWNORMAL) <= 32) return 42;
+	for (int waited = 0; waited < 200; ++waited) {
+		if (GetFileAttributesW(L"C:\\raven-associate\\opened.txt") != INVALID_FILE_ATTRIBUTES)
+			return 0;
+		Sleep(100);
+	}
+	return 43;
+}
+
+// The program registered for the kind: it notes the document it was handed.
+static int opened(void)
+{
+	if (!contains(GetCommandLineW(), L"letter.ravtest")) return 44;
+	HANDLE note = CreateFileW(L"C:\\raven-associate\\opened.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+	if (note == INVALID_HANDLE_VALUE) return 45;
+	CloseHandle(note);
+	return 0;
+}
+
 int raven_entry(void)
 {
+	if (contains(GetCommandLineW(), L" opened "))
+		ExitProcess(opened());
+	if (contains(GetCommandLineW(), L" associate")) {
+		WCHAR self[MAX_PATH];
+		return GetModuleFileNameW(NULL, self, MAX_PATH) ? associate(self) : 46;
+	}
 	if (contains(GetCommandLineW(), L" linux-open"))
 		ExitProcess(linux_open());
 	if (contains(GetCommandLineW(), L" network-off"))

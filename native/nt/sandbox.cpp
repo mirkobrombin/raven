@@ -1,8 +1,11 @@
 #include "sandbox.h"
+#include "confine.h"
 #include "text.h"
 
 #include <arpa/inet.h>
 #include <cctype>
+#include <cerrno>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <mutex>
@@ -75,6 +78,8 @@ void Sandbox::refresh() const
 	configuration_time = present ? status.st_mtim : timespec{};
 	configuration_size = present ? status.st_size : -1;
 	configured.clear();
+	exposed.clear();
+	handlers.clear();
 	network_allowed = true;
 	std::ifstream input(file);
 	for (std::string line; std::getline(input, line);) {
@@ -95,7 +100,113 @@ void Sandbox::refresh() const
 			network_allowed = value != "off";
 		else if (word == "app-network-off")
 			network_allowed = false;
+		else if (word == "host-app" || word == "handler") {
+			const auto tab = value.find('\t');
+			if (tab == value.npos || !tab || tab + 1 == value.size())
+				continue;
+			if (word == "host-app")
+				exposed.push_back({value.substr(0, tab), value.substr(tab + 1)});
+			else
+				handlers.emplace_back(value.substr(0, tab), value.substr(tab + 1));
+		}
 	}
+}
+
+std::vector<Sandbox::HostApp> Sandbox::host_apps() const
+{
+	refresh();
+	std::lock_guard guard(configuration_lock());
+	return exposed;
+}
+
+std::string Sandbox::handler(std::string_view kind) const
+{
+	refresh();
+	std::lock_guard guard(configuration_lock());
+	for (const auto &[which, choice] : handlers)
+		if (equal_fold(from_utf8(which), from_utf8(kind)))
+			return choice;
+	return {};
+}
+
+Sandbox::Access Sandbox::access_as(const std::filesystem::path &host, std::u16string_view other) const
+{
+	Sandbox as;
+	as.session = session;
+	as.system = system;
+	as.set_program(std::u16string(other));
+	as.load(directory);
+	return as.access(host);
+}
+
+bool Sandbox::open_on_host(std::string_view name, const std::vector<std::string> &targets) const
+{
+	// A confined runtime would confine the Linux program too: the broker starts it, after the same checks.
+	if (confined())
+		return brokered_host(name, targets);
+	std::string desktop;
+	for (const auto &app : host_apps())
+		if (equal_fold(from_utf8(app.name), from_utf8(name)))
+			desktop = app.desktop;
+	// The desktop entry is found where the desktop finds it; its name is a plain file name.
+	if (desktop.empty() || desktop.find('/') != desktop.npos)
+		return false;
+	if (!desktop.ends_with(".desktop"))
+		desktop += ".desktop";
+	std::vector<std::string> folders;
+	const char *home = std::getenv("HOME"), *data_home = std::getenv("XDG_DATA_HOME"), *data = std::getenv("XDG_DATA_DIRS");
+	folders.push_back(data_home && *data_home ? std::string(data_home) : std::string(home ? home : "") + "/.local/share");
+	for (std::string_view rest = data && *data ? data : "/usr/local/share:/usr/share"; !rest.empty();) {
+		const auto colon = rest.find(':');
+		folders.emplace_back(rest.substr(0, colon));
+		rest = colon == rest.npos ? std::string_view() : rest.substr(colon + 1);
+	}
+	std::filesystem::path entry;
+	std::error_code error;
+	for (const auto &folder : folders)
+		if (std::filesystem::is_regular_file(std::filesystem::path(folder) / "applications" / desktop, error)) {
+			entry = std::filesystem::path(folder) / "applications" / desktop;
+			break;
+		}
+	if (entry.empty())
+		return false;
+	// Every path must be one the program that asked reaches; an address must be a web or mail one.
+	std::vector<std::string> arguments{"gio", "launch", entry.string()};
+	for (const auto &target : targets) {
+		const auto colon = target.find(':');
+		if (colon != target.npos && colon > 1 && target.front() != '/') {
+			const auto scheme = target.substr(0, colon);
+			if (scheme != "http" && scheme != "https" && scheme != "mailto" && scheme != "ftp")
+				return false;
+		} else {
+			const auto reach = target.empty() || target.front() != '/' ? Access::none : access_as(target, parent_program);
+			const bool in_prefix = !target.empty() && std::string_view(target).starts_with(directory.string() + "/");
+			if (!in_prefix && reach != Access::read && reach != Access::write) {
+				refuse(target, "open-on-host");
+				return false;
+			}
+		}
+		arguments.push_back(target);
+	}
+	// gio starts the program apart from the runtime, as the desktop would.
+	const pid_t child = ::fork();
+	if (child == 0) {
+		if (::fork() == 0) {
+			::setsid();
+			std::vector<char *> argv;
+			for (auto &argument : arguments)
+				argv.push_back(argument.data());
+			argv.push_back(nullptr);
+			::execvp("gio", argv.data());
+			::_exit(127);
+		}
+		::_exit(0);
+	}
+	if (child < 0)
+		return false;
+	int status = 0;
+	while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+	return true;
 }
 
 void Sandbox::grant(const std::filesystem::path &host, bool write)
@@ -226,6 +337,9 @@ void Sandbox::refuse(const std::filesystem::path &host, std::string_view operati
 
 bool Sandbox::open_address(std::string_view address) const
 {
+	// A confined runtime cannot reach the desktop's handlers: the broker opens the address, after the same checks.
+	if (confined())
+		return brokered_address(address);
 	const auto scheme = address.substr(0, address.find(':'));
 	std::string lower(scheme);
 	for (auto &character : lower)

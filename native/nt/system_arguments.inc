@@ -2380,9 +2380,10 @@ static constexpr std::pair<std::string_view, uint8_t> winspool_words[]{
 static constexpr std::pair<std::string_view, uint8_t> ravenhost_words[]{
 	{"RavenCanvasBatch",2},{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},{"RavenCanvasPixels",8},{"RavenCanvasSize",2},
 	{"RavenFontClose",1},{"RavenFontGlyphs",4},{"RavenFontInfo",2},{"RavenFontMetrics",3},{"RavenFontName",4},{"RavenFontOpen",3},
-	{"RavenFontOutline",4},{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},{"RavenGrantPath",2},{"RavenPathCombine",8},
-	{"RavenPathWiden",7},{"RavenSandboxLog",2},{"RavenSandboxRead",2},{"RavenSandboxWrite",1},{"RavenShaderRelease",1},{"RavenShaderRequest",2},
-	{"RavenShaderResult",4},{"RavenSnapshotDelete",1},{"RavenSnapshotList",2},{"RavenSnapshotRestore",1},{"RavenSnapshotTake",1},{"RavenTrace",1},
+	{"RavenFontOutline",4},{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},{"RavenGrantPath",2},{"RavenHostApps",2},
+	{"RavenHostOpen",1},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenSandboxLog",2},{"RavenSandboxRead",2},{"RavenSandboxWrite",1},
+	{"RavenShaderRelease",1},{"RavenShaderRequest",2},{"RavenShaderResult",4},{"RavenSnapshotDelete",1},{"RavenSnapshotList",2},{"RavenSnapshotRestore",1},
+	{"RavenSnapshotTake",1},{"RavenTrace",1},
 };
 static constexpr std::pair<std::string_view, uint8_t> secur32_words[]{
 	{"AcceptSecurityContext",9},{"AcquireCredentialsHandleA",9},{"AcquireCredentialsHandleW",9},{"AddCredentialsA",8},{"AddCredentialsW",8},{"AddSecurityPackageA",2},

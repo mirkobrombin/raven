@@ -83,7 +83,7 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 void apply_registry_settings(NativeRegistry &hive);
 void register_service_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive);
 void register_platform_api(ApiRegistry &registry, KernelContext &context);
-void register_shell_api(ApiRegistry &registry, KernelContext &context);
+void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive);
 void register_version_api(ApiRegistry &registry, KernelContext &context);
 void register_shlwapi_api(ApiRegistry &registry, KernelContext &context);
 void register_file_api(ApiRegistry &registry, KernelContext &context);

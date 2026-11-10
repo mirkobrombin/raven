@@ -10,6 +10,7 @@
 #include "kernel_context.h"
 #include "file_objects.h"
 #include "restart.h"
+#include "confine.h"
 #include "sandbox.h"
 #include "text.h"
 
@@ -43,6 +44,19 @@ FileObject::~FileObject()
 }
 
 namespace {
+
+// Opens a host file. A confined runtime cannot open a host path granted after it started (by the file dialog, while the program runs):
+// the broker opens that one.
+int open_host(const std::filesystem::path &host, int flags, mode_t mode = 0)
+{
+	int descriptor = ::open(host.c_str(), flags | O_CLOEXEC, mode);
+	if (descriptor < 0 && errno == EACCES && confined()) {
+		descriptor = brokered_open(host, flags, mode);
+		if (descriptor < 0)
+			errno = EACCES;
+	}
+	return descriptor;
+}
 
 constexpr uint64_t invalid_handle = UINT64_MAX;
 constexpr uint32_t attribute_readonly = 0x1, attribute_hidden = 0x2, attribute_directory = 0x10, attribute_archive = 0x20,
@@ -285,7 +299,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 				call.set_last_error(disposition == 1 ? 80 : 5);
 				return;
 			}
-			const int descriptor = ::open(resolved->host.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+			const int descriptor = open_host(resolved->host, O_RDONLY | O_DIRECTORY);
 			if (descriptor < 0) {
 				call.set_last_error(error_of(errno));
 				return;
@@ -328,7 +342,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(3);
 			return;
 		}
-		const int descriptor = ::open(resolved->host.c_str(), mode | O_CLOEXEC, 0666);
+		const int descriptor = open_host(resolved->host, mode, 0666);
 		if (descriptor < 0) {
 			call.set_last_error(error_of(errno, !resolved->parent_exists));
 			return;
@@ -1525,14 +1539,14 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(80);
 			return;
 		}
-		const int source = ::open(from.host.c_str(), O_RDONLY | O_CLOEXEC);
+		const int source = open_host(from.host, O_RDONLY);
 		if (source < 0) {
 			call.fail(error_of(errno));
 			return;
 		}
 		struct stat metadata{};
 		::fstat(source, &metadata);
-		const int target = ::open(to.host.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, metadata.st_mode & 0777);
+		const int target = open_host(to.host, O_WRONLY | O_CREAT | O_TRUNC, metadata.st_mode & 0777);
 		if (target < 0) {
 			const int error = errno;
 			::close(source);
@@ -2080,7 +2094,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		const bool wild = pattern.find_first_of(u"*?<>") != pattern.npos;
 		std::vector<std::u16string> names;
 		if (wild) {
-			DIR *handle = ::opendir(resolved->host.c_str());
+			const int listed = open_host(resolved->host, O_RDONLY | O_DIRECTORY);
+			DIR *handle = listed < 0 ? nullptr : ::fdopendir(listed);
+			if (!handle && listed >= 0)
+				::close(listed);
 			if (!handle) {
 				call.set_last_error(error_of(errno));
 				return;

@@ -105,6 +105,22 @@ int main()
 	check(editor.reaches(reinterpret_cast<sockaddr *>(&loopback), sizeof(loopback)) &&
 		!editor.reaches(reinterpret_cast<sockaddr *>(&outside), sizeof(outside)) && other.reaches(reinterpret_cast<sockaddr *>(&outside), sizeof(outside)),
 		"one program's network is not kept apart");
+
+	// The Linux programs the prefix shows its programs, and who opens a kind of file.
+	std::filesystem::create_directories(root / "data/applications");
+	std::ofstream(root / "data/applications/viewer.desktop") << "[Desktop Entry]\nType=Application\nName=Viewer\nExec=true %F\n";
+	::setenv("XDG_DATA_HOME", (root / "data").c_str(), 1);
+	std::ofstream(root / "prefix/sandbox.conf", std::ios::trunc) << "host-app Viewer\tviewer.desktop\nhandler .PDF\tlinux:Viewer\napp-read C:\\Tools\\Editor.exe\t"
+		<< (root / "home/user/Pictures").string() << "\nhost-app broken\n";
+	const auto apps = other.host_apps();
+	check(apps.size() == 1 && apps[0].name == "Viewer" && apps[0].desktop == "viewer.desktop", "the exposed Linux programs differ");
+	check(other.handler(".pdf") == "linux:Viewer" && other.handler(".txt").empty(), "the choice of who opens a kind differs");
+	check(other.access_as(root / "home/user/Pictures/cat.png", u"C:\\Tools\\Editor.exe") == Access::read &&
+		other.access_as(root / "home/user/Pictures/cat.png", u"C:\\Tools\\Other.exe") == Access::none, "another program's access differs");
+	// A bridge hands on only what the program that started it reaches.
+	check(!other.open_on_host("Viewer", {(root / "home/user/.ssh/id").string()}), "a bridge hands a Linux program a file its caller does not reach");
+	check(!other.open_on_host("Missing", {}), "a program the prefix does not expose is started");
+	check(!other.open_on_host("Viewer", {"file:///etc/passwd"}), "a bridge hands a Linux program a file address");
 	std::filesystem::remove_all(root);
 	return 0;
 }

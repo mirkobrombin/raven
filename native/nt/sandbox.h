@@ -33,6 +33,7 @@ public:
 	void load(const std::filesystem::path &prefix);
 	// The program this runtime runs, by the Windows path of its executable, which the grants of one program are matched against.
 	void set_program(std::u16string program);
+	const std::u16string &running() const { return program; }
 	void set_trusted(bool value) { trusted_program = value; }
 	// The program whose runtime started this one, as that runtime names it: the program a trusted file dialog serves.
 	void set_parent(std::u16string value) { parent_program = std::move(value); }
@@ -59,6 +60,20 @@ public:
 	// Opens a web or mail address with the host's handler, through the desktop portal when there is one: the only addresses that leave
 	// the sandbox are http, https, ftp and mailto ones, and only whole, unbroken ones. False when the address is refused or nothing opens it.
 	bool open_address(std::string_view address) const;
+	// The Linux programs the prefix shows its programs, each as C:\Program Files\Raven\Host\NAME.exe: a line "host-app NAME<tab>ID" of
+	// sandbox.conf names the program by its desktop entry.
+	struct HostApp {
+		std::string name, desktop;
+	};
+	std::vector<HostApp> host_apps() const;
+	// Who opens a kind of file (".txt") or of address ("mailto"): a line "handler KIND<tab>windows", "handler KIND<tab>linux:NAME" or
+	// "handler KIND<tab>ask"; empty when no line names it, and a program of the prefix opens it then.
+	std::string handler(std::string_view kind) const;
+	// The access another program of the prefix has: the program that started this one, whose files a bridge to a Linux program passes on.
+	Access access_as(const std::filesystem::path &host, std::u16string_view other) const;
+	// Opens host files and addresses with a Linux program the prefix exposes, for the program that started this one: only what that
+	// program reaches. False when the program is not exposed or a path is refused.
+	bool open_on_host(std::string_view name, const std::vector<std::string> &targets) const;
 	// The launch options a child runtime needs to keep the grants of this run.
 	std::vector<std::string> child_options() const;
 
@@ -70,6 +85,8 @@ private:
 	std::vector<Grant> session, system;
 	mutable std::vector<Grant> configured;
 	mutable bool network_allowed = true;
+	mutable std::vector<HostApp> exposed;
+	mutable std::vector<std::pair<std::string, std::string>> handlers;
 	mutable timespec configuration_time{};
 	mutable off_t configuration_size = -1;
 };

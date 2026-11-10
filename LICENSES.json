@@ -225,6 +225,7 @@
         "native/guest/raven-setupapi/stubs.c",
         "native/guest/raven-setupapi/stubs.inc",
         "native/guest/raven-shell/README.md",
+        "native/guest/raven-shell/bridge.c",
         "native/guest/raven-shell/clipboard.c",
         "native/guest/raven-shell/com.c",
         "native/guest/raven-shell/dialog.c",

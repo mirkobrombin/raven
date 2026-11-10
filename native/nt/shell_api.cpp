@@ -2,11 +2,13 @@
 #include "child_process.h"
 #include "sandbox.h"
 #include "kernel_context.h"
+#include "registry.h"
 #include "text.h"
 
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <iostream>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -136,7 +138,7 @@ std::vector<uint32_t> shell_icon(bool folder, int32_t size)
 
 }
 
-void register_shell_api(ApiRegistry &registry, KernelContext &context)
+void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive)
 {
 	auto &paths = context.paths;
 	registry.add("SHGetFolderPathW", 5, [&paths](ApiCall &call) {
@@ -567,10 +569,94 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("DragAcceptFiles", 2, [](ApiCall &) {});
 	// Opens a program, a folder, a document or a URL the way the shell does. The result is the value ShellExecute reports: above 32 on
 	// success, otherwise the error. A program that is started is handed back through `started`.
-	const auto open_target = [&context, &paths](const std::u16string &operation, std::u16string target, const std::u16string &parameters,
-		const std::u16string &directory, std::shared_ptr<ProcessObject> &started) -> uint64_t {
+	// The command a program of the prefix registered for a kind of file (".txt") or of address ("https") and a verb, as the registry keeps
+	// it under HKEY_CLASSES_ROOT: the kind's own verbs, or those of the class it names.
+	const auto registered_command = [&hive](const std::u16string &kind, const std::u16string &verb) {
+		const auto text = [&hive](const std::u16string &path, const std::u16string &name) {
+			uint64_t key = 0;
+			if (hive.open(0x80000000ULL, path, key))
+				return std::u16string();
+			uint32_t type = 0;
+			std::vector<uint8_t> data;
+			std::u16string value;
+			if (!hive.query(key, name, type, data) && (type == 1 || type == 2))
+				for (size_t at = 0; at + 1 < data.size(); at += 2) {
+					const char16_t character = char16_t(data[at] | data[at + 1] << 8);
+					if (!character)
+						break;
+					value += character;
+				}
+			hive.close(key);
+			return value;
+		};
+		for (const auto &owner : {kind, text(kind, u"")}) {
+			if (owner.empty())
+				continue;
+			if (auto command = text(owner + u"\\shell\\" + verb + u"\\command", u""); !command.empty())
+				return command;
+			if (const auto fallback = text(owner + u"\\shell", u""); !fallback.empty())
+				if (auto command = text(owner + u"\\shell\\" + fallback + u"\\command", u""); !command.empty())
+					return command;
+		}
+		return std::u16string();
+	};
+	// A registered command with the target in it: %1 and %L are the target, %* the parameters; a command that names neither gets the
+	// target at its end.
+	const auto command_for = [](std::u16string command, const std::u16string &target, const std::u16string &parameters) {
+		std::u16string line;
+		bool named = false;
+		for (size_t at = 0; at < command.size(); ++at) {
+			if (command[at] == u'%' && at + 1 < command.size() && (command[at + 1] == u'1' || command[at + 1] == u'L' || command[at + 1] == u'l')) {
+				line += target;
+				named = true;
+				++at;
+			} else if (command[at] == u'%' && at + 1 < command.size() && command[at + 1] == u'*') {
+				line += parameters;
+				++at;
+			} else
+				line += command[at];
+		}
+		return named ? line : line + u" \"" + target + u"\"";
+	};
+	const auto open_target = [&context, &paths, registered_command, command_for](const std::u16string &operation, std::u16string target,
+		const std::u16string &parameters, const std::u16string &directory, std::shared_ptr<ProcessObject> &started) -> uint64_t {
 		if (!equal_fold(operation, u"open") && !equal_fold(operation, u"edit") && !equal_fold(operation, u"explore") && !equal_fold(operation, u"runas"))
 			return 31;
+		// Who opens a document or an address: the choice the person made for its kind in the control panel; otherwise the program of the
+		// prefix registered for it, before any Linux program.
+		const auto open_with = [&](const std::u16string &kind, const std::u16string &argument) -> std::optional<uint64_t> {
+			auto choice = sandbox().handler(to_utf8(kind));
+			uint32_t error = 0;
+			const int standard[3] = {0, 1, 2};
+			const auto environment = context.environment_block ? context.environment_block() : std::u16string();
+			const auto verb = equal_fold(operation, u"edit") ? u"edit" : u"open";
+			// The person chose to be asked: the control panel asks, and its exit code is the answer.
+			if (choice == "ask") {
+				const std::u16string panel_image = u"C:\\Windows\\System32\\control.exe";
+				const bool windows = !registered_command(kind, verb).empty();
+				const auto panel = start_program(context, panel_image, u"\"" + panel_image + u"\" openwith " + kind + (windows ? u" 1 " : u" 0 ") + argument,
+					directory, standard, environment, nullptr, error);
+				if (!panel)
+					return 31;
+				while (!panel->exited())
+					::usleep(50000);
+				const auto answer = panel->exit_code();
+				const auto apps = sandbox().host_apps();
+				if (answer == 0)
+					return 31;
+				choice = answer == 1 ? "windows" : answer - 2 < apps.size() ? "linux:" + apps[answer - 2].name : std::string();
+			}
+			if (choice.starts_with("linux:")) {
+				const auto bridge = u"C:\\Program Files\\Raven\\Host\\" + from_utf8(choice.substr(6)) + u".exe";
+				started = start_program(context, bridge, u"\"" + bridge + u"\" \"" + argument + u"\"", directory, standard, environment, nullptr, error);
+				return started ? 42 : 31;
+			}
+			const auto command = registered_command(kind, verb);
+			if (command.empty())
+				return std::nullopt;
+			started = start_program(context, u"", command_for(command, argument, parameters), directory, standard, environment, nullptr, error);
+			return started ? 42 : error == 2 ? 2 : 31;
+		};
 		const bool url = target.find(u"://") != target.npos || target.starts_with(u"mailto:");
 		if (!url) {
 			const auto candidates = target.find_first_of(u"\\/:") != target.npos ? std::vector<std::u16string>{target} :
@@ -598,10 +684,15 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 				request_child_elevation(false);
 				return started ? 42 : error == 193 ? 11 : error;
 			}
-			// A document or a folder no program of the prefix opens stays in the sandbox: no host program is handed it.
+			if (!std::filesystem::is_directory(resolved->host))
+				if (const auto opened = open_with(from_utf8(std::filesystem::path(resolved->host).extension().string()), paths.dos(resolved->host)))
+					return *opened;
+			// A document or a folder no program opens stays in the sandbox: no host program is handed it.
 			sandbox().refuse(resolved->host, "open-on-host");
 			return 31;
 		}
+		if (const auto opened = open_with(target.substr(0, target.find(u':')), target))
+			return *opened;
 		return sandbox().open_address(to_utf8(target)) ? 42 : 31;
 	};
 	registry.add("ShellExecuteW", 6, [open_target](ApiCall &call) {

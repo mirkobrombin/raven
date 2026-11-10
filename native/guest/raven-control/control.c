@@ -24,7 +24,7 @@
 #define MAX_ROWS 16
 #define ID_FIRST 0x200
 
-enum { PAGE_SYSTEM, PAGE_PERSONALIZATION, PAGE_APPS, PAGE_PRIVACY, PAGE_SNAPSHOTS, PAGE_RAVEN, PAGE_COUNT };
+enum { PAGE_SYSTEM, PAGE_PERSONALIZATION, PAGE_APPS, PAGE_DEFAULTS, PAGE_PRIVACY, PAGE_SNAPSHOTS, PAGE_RAVEN, PAGE_COUNT };
 
 typedef struct {
 	const WCHAR *title, *description;
@@ -38,9 +38,9 @@ typedef struct {
 	const WCHAR *variable;
 } RavenOption;
 
-static const WCHAR *const page_titles[PAGE_COUNT] = {L"System", L"Personalization", L"Apps", L"Privacy & security", L"Snapshots", L"Raven"};
+static const WCHAR *const page_titles[PAGE_COUNT] = {L"System", L"Personalization", L"Apps", L"Default apps", L"Privacy & security", L"Snapshots", L"Raven"};
 /* The names control.exe takes for its pages on the command line. */
-static const WCHAR *const page_names[PAGE_COUNT] = {L"system", L"personalization", L"apps", L"privacy", L"snapshots", L"raven"};
+static const WCHAR *const page_names[PAGE_COUNT] = {L"system", L"personalization", L"apps", L"defaults", L"privacy", L"snapshots", L"raven"};
 
 /* The runtime's private calls (ravenhost.dll): the prefix's sandbox.conf and sandbox.log, and its snapshots. */
 DWORD WINAPI RavenSandboxRead(WCHAR *buffer, DWORD capacity);
@@ -50,6 +50,7 @@ DWORD WINAPI RavenSnapshotList(WCHAR *buffer, DWORD capacity);
 BOOL WINAPI RavenSnapshotTake(const WCHAR *label);
 BOOL WINAPI RavenSnapshotRestore(const WCHAR *name);
 BOOL WINAPI RavenSnapshotDelete(const WCHAR *name);
+DWORD WINAPI RavenHostApps(WCHAR *buffer, DWORD capacity);
 static const RavenOption raven_toggles[] = {
 	{L"Trace system calls", L"RAVEN_TRACE_API"},
 	{L"Trace window messages", L"RAVEN_TRACE_MSG"},
@@ -57,7 +58,7 @@ static const RavenOption raven_toggles[] = {
 	{L"Continue past unimplemented functions", L"RAVEN_CONTINUE_UNIMPLEMENTED"},
 };
 
-static HWND main_window, apps_list, apps_search, grants_list, log_list, snapshots_list, list_buttons[3];
+static HWND main_window, apps_list, apps_search, grants_list, log_list, snapshots_list, list_buttons[4];
 static HFONT body_font, small_font, title_font, header_font;
 static int page = PAGE_SYSTEM, row_count, hover_nav = -1;
 static Row rows[MAX_ROWS];
@@ -160,6 +161,15 @@ static void nav_icon(HDC dc, int which, int x, int y, COLORREF color)
 		Rectangle(dc, x + 9, y, x + 16, y + 7);
 		Rectangle(dc, x, y + 9, x + 7, y + 16);
 		Rectangle(dc, x + 9, y + 9, x + 16, y + 16);
+		break;
+	case PAGE_DEFAULTS:
+		/* A file and an arrow out of it. */
+		Rectangle(dc, x + 1, y, x + 11, y + 16);
+		MoveToEx(dc, x + 6, y + 8, NULL);
+		LineTo(dc, x + 16, y + 8);
+		LineTo(dc, x + 12, y + 4);
+		MoveToEx(dc, x + 16, y + 8, NULL);
+		LineTo(dc, x + 12, y + 12);
 		break;
 	case PAGE_PRIVACY:
 		/* A shield. */
@@ -302,7 +312,7 @@ static void clear_page(void)
 	if (apps_search)
 		DestroyWindow(apps_search);
 	apps_list = apps_search = NULL;
-	for (index = 0; index < 3; ++index)
+	for (index = 0; index < 4; ++index)
 		if (list_buttons[index])
 			DestroyWindow(list_buttons[index]);
 	if (grants_list)
@@ -311,7 +321,7 @@ static void clear_page(void)
 		DestroyWindow(log_list);
 	if (snapshots_list)
 		DestroyWindow(snapshots_list);
-	grants_list = log_list = snapshots_list = list_buttons[0] = list_buttons[1] = list_buttons[2] = NULL;
+	grants_list = log_list = snapshots_list = list_buttons[0] = list_buttons[1] = list_buttons[2] = list_buttons[3] = NULL;
 	row_count = 0;
 	scroll_top = 0;
 }
@@ -907,6 +917,270 @@ static void snapshot_action(int id)
 	fill_snapshots();
 }
 
+/* Default apps ------------------------------------------------------------------------------------------------- */
+
+/* The Linux programs the desktop lists, "ID<tab>Name" a line, as the runtime found them. */
+static WCHAR *host_text, *host_ids[256], *host_names[256];
+static int host_count;
+static HWND host_choice, open_choice;
+
+static void read_host_apps(void)
+{
+	DWORD size = RavenHostApps(NULL, 0);
+	WCHAR *at;
+	host_count = 0;
+	if (host_text)
+		HeapFree(GetProcessHeap(), 0, host_text);
+	host_text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size + 1) * sizeof(WCHAR));
+	if (!host_text)
+		return;
+	if (size)
+		RavenHostApps(host_text, size + 1);
+	for (at = host_text; *at && host_count < 256;) {
+		WCHAR *tab = at, *end;
+		while (*tab && *tab != L'\t' && *tab != L'\n')
+			++tab;
+		for (end = tab; *end && *end != L'\n'; ++end)
+			;
+		if (*tab == L'\t') {
+			*tab = 0;
+			host_ids[host_count] = at;
+			host_names[host_count++] = tab + 1;
+		}
+		at = *end ? end + 1 : end;
+		*end = 0;
+	}
+}
+
+/* The value of a "word NAME<tab>VALUE" line of sandbox.conf, with its name; NULL when the line is not one. */
+static const WCHAR *pair_line(const WCHAR *line, const WCHAR *word, WCHAR *name, int capacity)
+{
+	const WCHAR *tab;
+	if (!starts_with(line, word))
+		return NULL;
+	line += lstrlenW(word);
+	for (tab = line; *tab && *tab != L'\t'; ++tab)
+		;
+	if (!*tab || tab == line)
+		return NULL;
+	lstrcpynW(name, line, (int)(tab - line) + 1 < capacity ? (int)(tab - line) + 1 : capacity);
+	return tab + 1;
+}
+
+static void fill_defaults(void)
+{
+	int index;
+	WCHAR name[128], text[160];
+	SendMessageW(grants_list, LVM_DELETEALLITEMS, 0, 0);
+	SendMessageW(log_list, LVM_DELETEALLITEMS, 0, 0);
+	SendMessageW(open_choice, CB_RESETCONTENT, 0, 0);
+	SendMessageW(open_choice, CB_ADDSTRING, 0, (LPARAM)L"A program of the prefix");
+	SendMessageW(open_choice, CB_ADDSTRING, 0, (LPARAM)L"Ask every time");
+	for (index = 0; index < config_count; ++index) {
+		const WCHAR *value;
+		if ((value = pair_line(config_lines[index], L"host-app ", name, 128))) {
+			const int row = add_list_row(grants_list, name, index);
+			set_cell(grants_list, row, 1, value);
+			SendMessageW(open_choice, CB_ADDSTRING, 0, (LPARAM)name);
+		}
+	}
+	for (index = 0; index < config_count; ++index) {
+		const WCHAR *value;
+		if ((value = pair_line(config_lines[index], L"handler ", name, 128))) {
+			const int row = add_list_row(log_list, name, index);
+			if (starts_with(value, L"linux:"))
+				wsprintfW(text, L"%s, on Linux", value + 6);
+			set_cell(log_list, row, 1, !lstrcmpW(value, L"windows") ? L"A program of the prefix" : !lstrcmpW(value, L"ask") ? L"Ask every time" :
+				starts_with(value, L"linux:") ? text : value);
+		}
+	}
+	SendMessageW(open_choice, CB_SETCURSEL, 0, 0);
+}
+
+static void show_defaults(void)
+{
+	static const WCHAR *const app_titles[] = {L"Linux program", L"Desktop entry"};
+	static const int app_widths[] = {260, 360};
+	static const WCHAR *const open_titles[] = {L"Kind", L"Opened by"};
+	static const int open_widths[] = {200, 420};
+	Row *row;
+	int index;
+	read_config();
+	read_host_apps();
+	row = add_row(L"Show a Linux program to Windows programs", L"It appears as C:\\Program Files\\Raven\\Host\\NAME.exe and gets only the files they reach", 0);
+	row->control = host_choice = add_child(L"ComboBox", L"", CBS_DROPDOWNLIST | WS_VSCROLL, ID_FIRST + 63);
+	for (index = 0; index < host_count; ++index)
+		SendMessageW(host_choice, CB_ADDSTRING, 0, (LPARAM)host_names[index]);
+	SendMessageW(host_choice, CB_SETCURSEL, 0, 0);
+	row = add_row(L"Open a kind of file or address with", L"Type the kind (.pdf, mailto) in the box under this, then choose who opens it", 1);
+	row->control = open_choice = add_child(L"ComboBox", L"", CBS_DROPDOWNLIST | WS_VSCROLL, ID_FIRST + 64);
+	list_buttons[0] = add_child(L"Button", L"Show it", BS_PUSHBUTTON, ID_FIRST + 60);
+	list_buttons[1] = add_child(L"Edit", L".pdf", ES_AUTOHSCROLL | WS_BORDER, ID_FIRST + 65);
+	list_buttons[2] = add_child(L"Button", L"Set", BS_PUSHBUTTON, ID_FIRST + 61);
+	list_buttons[3] = add_child(L"Button", L"Remove", BS_PUSHBUTTON, ID_FIRST + 62);
+	grants_list = make_list(ID_FIRST + 66, app_titles, app_widths, 2);
+	log_list = make_list(ID_FIRST + 67, open_titles, open_widths, 2);
+	fill_defaults();
+}
+
+static void expose_app(void)
+{
+	const int chosen = (int)SendMessageW(host_choice, CB_GETCURSEL, 0, 0);
+	WCHAR name[64], line[400], existing[128];
+	int index, length = 0;
+	const WCHAR *at;
+	if (chosen < 0 || chosen >= host_count)
+		return;
+	/* The bridge's name: the program's name, as a file name can hold it. */
+	for (at = host_names[chosen]; *at && length < 60; ++at)
+		if ((*at >= L'a' && *at <= L'z') || (*at >= L'A' && *at <= L'Z') || (*at >= L'0' && *at <= L'9') || *at == L' ' || *at == L'-' || *at == L'_')
+			name[length++] = *at;
+	name[length] = 0;
+	if (!length)
+		lstrcpyW(name, L"Program");
+	for (index = 0; index < config_count; ++index)
+		if (pair_line(config_lines[index], L"host-app ", existing, 128) && !lstrcmpiW(existing, name))
+			return;
+	wsprintfW(line, L"host-app %s\t%s", name, host_ids[chosen]);
+	add_config_line(line);
+	if (write_config())
+		fill_defaults();
+}
+
+static void set_handler(void)
+{
+	WCHAR kind[32], line[200], name[128];
+	const int chosen = (int)SendMessageW(open_choice, CB_GETCURSEL, 0, 0);
+	int index;
+	const WCHAR *at;
+	GetWindowTextW(list_buttons[1], kind, 32);
+	/* A kind is an extension (".pdf") or the scheme of an address ("mailto"). */
+	for (at = kind[0] == L'.' ? kind + 1 : kind; *at; ++at)
+		if (!((*at >= L'a' && *at <= L'z') || (*at >= L'A' && *at <= L'Z') || (*at >= L'0' && *at <= L'9') || *at == L'-' || *at == L'+'))
+			break;
+	if (!kind[0] || !kind[1] || *at || chosen < 0) {
+		MessageBoxW(main_window, L"Type a kind such as .pdf or mailto first.", L"Default apps", MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	for (index = config_count - 1; index >= 0; --index)
+		if (pair_line(config_lines[index], L"handler ", name, 128) && !lstrcmpiW(name, kind))
+			remove_config_line(index);
+	if (chosen == 0)
+		wsprintfW(line, L"handler %s\twindows", kind);
+	else if (chosen == 1)
+		wsprintfW(line, L"handler %s\task", kind);
+	else {
+		SendMessageW(open_choice, CB_GETLBTEXT, chosen, (LPARAM)name);
+		wsprintfW(line, L"handler %s\tlinux:%s", kind, name);
+	}
+	add_config_line(line);
+	if (write_config())
+		fill_defaults();
+}
+
+static void remove_default(void)
+{
+	HWND list = SendMessageW(log_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED) >= 0 && GetFocus() != grants_list ? log_list : grants_list;
+	const int index = selected_param(list);
+	if (index < 0) {
+		MessageBoxW(main_window, L"Choose a line in a list first.", L"Default apps", MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	remove_config_line(index);
+	if (write_config())
+		fill_defaults();
+}
+
+/* Open with --------------------------------------------------------------------------------------------------- */
+
+/* control.exe openwith KIND WINDOWS NAME: the question a program's runtime asks when the person chose to be asked who opens a kind of
+ * file. The exit code is the answer: 0 for none, 1 for the program of the prefix, 2 and up for the Linux programs the prefix shows, in
+ * the order sandbox.conf names them. With "Always" the choice is kept for the kind. */
+static HWND open_list, open_always;
+static int open_answers[64];
+
+static LRESULT CALLBACK open_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+{
+	if (message == WM_COMMAND && (LOWORD(wparam) == IDOK || LOWORD(wparam) == IDCANCEL || (LOWORD(wparam) == 3 && HIWORD(wparam) == LBN_DBLCLK))) {
+		const int chosen = (int)SendMessageW(open_list, LB_GETCURSEL, 0, 0);
+		const int answer = LOWORD(wparam) == IDCANCEL || chosen < 0 ? 0 : open_answers[chosen];
+		WCHAR kind[32];
+		GetWindowTextW(GetDlgItem(window, 5), kind, 32);
+		if (answer && SendMessageW(open_always, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+			WCHAR line[200] = L"", name[128];
+			int index, exposed = 0;
+			for (index = config_count - 1; index >= 0; --index)
+				if (pair_line(config_lines[index], L"handler ", name, 128) && !lstrcmpiW(name, kind))
+					remove_config_line(index);
+			if (answer == 1)
+				wsprintfW(line, L"handler %s\twindows", kind);
+			for (index = 0; index < config_count && answer > 1; ++index)
+				if (pair_line(config_lines[index], L"host-app ", name, 128) && ++exposed == answer - 1)
+					wsprintfW(line, L"handler %s\tlinux:%s", kind, name);
+			if (line[0]) {
+				add_config_line(line);
+				write_config();
+			}
+		}
+		PostQuitMessage(answer);
+		return 0;
+	}
+	if (message == WM_CLOSE) {
+		PostQuitMessage(0);
+		return 0;
+	}
+	return DefWindowProcW(window, message, wparam, lparam);
+}
+
+static int open_with(HINSTANCE instance, const WCHAR *kind, BOOL windows, const WCHAR *target)
+{
+	WNDCLASSEXW klass = {sizeof klass};
+	WCHAR question[400], name[128];
+	HWND window;
+	MSG message;
+	int index, count = 0, exposed = 0;
+	klass.lpfnWndProc = open_proc;
+	klass.hInstance = instance;
+	klass.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+	klass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+	klass.lpszClassName = L"RavenOpenWith";
+	RegisterClassExW(&klass);
+	read_config();
+	window = CreateWindowExW(WS_EX_DLGMODALFRAME, klass.lpszClassName, L"Open with", WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 440,
+		360, NULL, NULL, instance, NULL);
+	if (!window)
+		return 0;
+	wsprintfW(question, L"Which program opens %.300s?", target);
+	CreateWindowExW(0, L"Static", question, WS_CHILD | WS_VISIBLE, 16, 12, 400, 36, window, (HMENU)4, instance, NULL);
+	CreateWindowExW(0, L"Static", kind, WS_CHILD, 0, 0, 0, 0, window, (HMENU)5, instance, NULL);
+	open_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"ListBox", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | WS_TABSTOP, 16, 52, 392, 180, window,
+		(HMENU)3, instance, NULL);
+	if (windows) {
+		SendMessageW(open_list, LB_ADDSTRING, 0, (LPARAM)L"The program of the prefix for this kind");
+		open_answers[count++] = 1;
+	}
+	for (index = 0; index < config_count && count < 64; ++index)
+		if (pair_line(config_lines[index], L"host-app ", name, 128)) {
+			WCHAR label[160];
+			wsprintfW(label, L"%s, on Linux", name);
+			SendMessageW(open_list, LB_ADDSTRING, 0, (LPARAM)label);
+			open_answers[count++] = 2 + exposed++;
+		}
+	SendMessageW(open_list, LB_SETCURSEL, 0, 0);
+	open_always = CreateWindowExW(0, L"Button", L"Always use this program for this kind", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP, 16, 240,
+		392, 24, window, (HMENU)6, instance, NULL);
+	CreateWindowExW(0, L"Button", L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP, 228, 276, 86, 28, window, (HMENU)IDOK, instance, NULL);
+	CreateWindowExW(0, L"Button", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 322, 276, 86, 28, window, (HMENU)IDCANCEL, instance, NULL);
+	ShowWindow(window, SW_SHOWNORMAL);
+	while (GetMessageW(&message, NULL, 0, 0) > 0) {
+		if (IsDialogMessageW(window, &message))
+			continue;
+		TranslateMessage(&message);
+		DispatchMessageW(&message);
+	}
+	return (int)message.wParam;
+}
+
 static void layout(void)
 {
 	RECT client;
@@ -926,7 +1200,7 @@ static void layout(void)
 		const int top = 96 + row_count * (ROW_HEIGHT + 4) + row_count * 20 - 8, width = client.right - NAV_WIDTH - 56;
 		const int bottom = client.bottom - 24, lists = grants_list ? 2 : 1, height = (bottom - top - 40) / lists;
 		int button;
-		for (button = 0; button < 3; ++button)
+		for (button = 0; button < 4; ++button)
 			if (list_buttons[button])
 				MoveWindow(list_buttons[button], NAV_WIDTH + 24 + button * 150, top, 140, 30, TRUE);
 		MoveWindow(grants_list ? grants_list : snapshots_list, NAV_WIDTH + 24, top + 40, width, height - 12, TRUE);
@@ -950,6 +1224,7 @@ static void show_page(int which)
 	case PAGE_SYSTEM: show_system(); break;
 	case PAGE_PERSONALIZATION: show_personalization(); break;
 	case PAGE_APPS: show_apps(); break;
+	case PAGE_DEFAULTS: show_defaults(); break;
 	case PAGE_PRIVACY: show_privacy(); break;
 	case PAGE_SNAPSHOTS: show_snapshots(); break;
 	default: show_raven(); break;
@@ -1079,6 +1354,12 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
 			uninstall_selected();
 		} else if (page == PAGE_APPS && id == ID_FIRST + 2 && code == EN_CHANGE) {
 			fill_apps();
+		} else if (page == PAGE_DEFAULTS && id == ID_FIRST + 60) {
+			expose_app();
+		} else if (page == PAGE_DEFAULTS && id == ID_FIRST + 61) {
+			set_handler();
+		} else if (page == PAGE_DEFAULTS && id == ID_FIRST + 62) {
+			remove_default();
 		} else if (page == PAGE_PRIVACY && id == ID_FIRST + 40) {
 			toggle_network((HWND)lparam);
 		} else if (page == PAGE_PRIVACY && id == ID_FIRST + 41) {
@@ -1130,7 +1411,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_line,
 	klass.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
 	klass.lpszClassName = L"RavenControlPanel";
 	RegisterClassExW(&klass);
-	/* A page can be named on the command line, as control.exe opens a panel: system, personalization, apps, privacy, snapshots or raven. */
+	/* openwith KIND WINDOWS TARGET asks who opens a file (see open_with). */
+	if (command_line && starts_with(command_line, L"openwith ")) {
+		WCHAR kind[32];
+		const WCHAR *at = command_line + 9;
+		int length = 0;
+		while (*at && *at != L' ' && length < 31)
+			kind[length++] = *at++;
+		kind[length] = 0;
+		while (*at == L' ')
+			++at;
+		return open_with(instance, kind, *at == L'1', at[0] && at[1] ? at + 2 : L"this file");
+	}
+	/* A page can be named on the command line, as control.exe opens a panel: system, personalization, apps, defaults, privacy, snapshots or
+	 * raven. */
 	page = PAGE_SYSTEM;
 	for (which = 0; command_line && which < PAGE_COUNT; ++which) {
 		const WCHAR *name = command_line;

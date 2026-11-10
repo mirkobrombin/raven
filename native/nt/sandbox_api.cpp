@@ -3,7 +3,9 @@
 #include "snapshot.h"
 #include "text.h"
 
+#include <cstdlib>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <unistd.h>
 
@@ -64,6 +66,87 @@ void register_sandbox_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		call.ret(sandbox().record(chosen->host, call.u32(1) != 0, owner) ? 1 : 0);
+	});
+	// RavenHostOpen(targets): a bridge, C:\Program Files\Raven\Host\NAME.exe, hands the files and addresses it was started with, a
+	// list of strings ended by an empty one, to the Linux program the prefix exposes as NAME. Only what the program that started the
+	// bridge reaches is handed over.
+	registry.add("RavenHostOpen", 1, [&paths](ApiCall &call) {
+		const auto &self = sandbox().running();
+		constexpr std::u16string_view folder = u"c:\\program files\\raven\\host\\";
+		std::u16string lower(self);
+		for (auto &character : lower)
+			if (character >= u'A' && character <= u'Z')
+				character = char16_t(character - u'A' + u'a');
+		if (!lower.starts_with(folder) || !lower.ends_with(u".exe") || lower.find(u'\\', folder.size()) != lower.npos) {
+			call.fail(5, 0);
+			return;
+		}
+		const auto name = to_utf8(self.substr(folder.size(), self.size() - folder.size() - 4));
+		std::vector<std::string> targets;
+		for (uint64_t at = call[0]; at;) {
+			const auto text = call.wide(at, 32768);
+			if (text.empty())
+				break;
+			at += (text.size() + 1) * 2;
+			if (text.find(u"://") != text.npos || text.starts_with(u"mailto:")) {
+				targets.push_back(to_utf8(text));
+				continue;
+			}
+			const auto resolved = paths.resolve(text);
+			if (!resolved || resolved->denied) {
+				call.fail(5, 0);
+				return;
+			}
+			targets.push_back(resolved->host.string());
+		}
+		if (!sandbox().open_on_host(name, targets)) {
+			call.fail(5, 0);
+			return;
+		}
+		call.ret(1);
+	});
+	// RavenHostApps(buffer, capacity): the Linux programs the desktop lists, one "ID<tab>Name" a line, for the control panel to expose.
+	registry.add("RavenHostApps", 2, [give](ApiCall &call) {
+		if (!sandbox().trusted()) {
+			call.fail(5, 0);
+			return;
+		}
+		std::vector<std::filesystem::path> folders;
+		const char *home = std::getenv("HOME"), *data_home = std::getenv("XDG_DATA_HOME"), *data = std::getenv("XDG_DATA_DIRS");
+		folders.emplace_back(data_home && *data_home ? std::string(data_home) : std::string(home ? home : "") + "/.local/share");
+		for (std::string_view rest = data && *data ? data : "/usr/local/share:/usr/share"; !rest.empty();) {
+			const auto colon = rest.find(':');
+			folders.emplace_back(rest.substr(0, colon));
+			rest = colon == rest.npos ? std::string_view() : rest.substr(colon + 1);
+		}
+		std::map<std::string, std::string> found;
+		for (const auto &folder : folders) {
+			std::error_code error;
+			for (const auto &entry : std::filesystem::directory_iterator(folder / "applications", error)) {
+				const auto id = entry.path().filename().string();
+				if (entry.path().extension() != ".desktop" || found.contains(id))
+					continue;
+				std::ifstream input(entry.path());
+				std::string line, name;
+				bool hidden = false, application = false;
+				for (bool main = false; std::getline(input, line);) {
+					if (line.starts_with("["))
+						main = line == "[Desktop Entry]";
+					else if (main && line.starts_with("Name=") && name.empty())
+						name = line.substr(5);
+					else if (main && (line == "NoDisplay=true" || line == "Hidden=true"))
+						hidden = true;
+					else if (main && line == "Type=Application")
+						application = true;
+				}
+				found[id] = hidden || !application ? std::string() : name;
+			}
+		}
+		std::string text;
+		for (const auto &[id, name] : found)
+			if (!name.empty())
+				text += id + "\t" + name + "\n";
+		give(call, text);
 	});
 	// RavenSandboxRead(buffer, capacity) and RavenSandboxWrite(text): the prefix's sandbox.conf, which the control panel shows and edits.
 	registry.add("RavenSandboxRead", 2, [prefix, give](ApiCall &call) {

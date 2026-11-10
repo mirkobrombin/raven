@@ -11,6 +11,7 @@
 #include "nt/elevation.h"
 #include "nt/restart.h"
 #include "nt/snapshot.h"
+#include "nt/confine.h"
 #include "nt/sandbox.h"
 #include "nt/handle_channel.h"
 #include "nt/text.h"
@@ -397,6 +398,29 @@ int main(int argc, char **argv)
 									continue;
 								std::filesystem::copy_file(source_file, target, std::filesystem::copy_options::overwrite_existing, error);
 							}
+						// The Linux programs the prefix exposes, each a bridge in C:\Program Files\Raven\Host; a bridge no longer exposed goes.
+						{
+							const auto bridges = prefix.root() / "drive_c" / "Program Files" / "Raven" / "Host";
+							std::vector<std::string> wanted;
+							std::error_code error;
+							for (const auto &app : raven::sandbox().host_apps()) {
+								if (app.name.find_first_of("/\\:*?\"<>|") != std::string::npos || app.name.find_first_not_of(". ") == std::string::npos)
+									continue;
+								std::string name = app.name + ".exe";
+								std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+								wanted.push_back(name);
+								const auto target = bridges / (app.name + ".exe");
+								std::filesystem::create_directories(bridges, error);
+								if (!std::filesystem::exists(target, error) || std::filesystem::file_size(target, error) != std::filesystem::file_size(runtime / "raven-host.exe", error))
+									std::filesystem::copy_file(runtime / "raven-host.exe", target, std::filesystem::copy_options::overwrite_existing, error);
+							}
+							for (const auto &entry : std::filesystem::directory_iterator(bridges, error)) {
+								std::string name = entry.path().filename().string();
+								std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+								if (name.ends_with(".exe") && std::find(wanted.begin(), wanted.end(), name) == wanted.end())
+									std::filesystem::remove(entry.path(), error);
+							}
+						}
 						// The classes the runtime's components serve are registered in the prefix, as Windows ships them registered: regsvr32 runs
 						// for each width when the components changed since the prefix last registered them. The runs themselves skip this step.
 						const char *servers[] = {"oleaut32.dll", "msxml3.dll", "windowscodecs.dll", "mlang.dll", "propsys.dll"};
@@ -455,6 +479,10 @@ int main(int argc, char **argv)
 							std::cerr << "raven: no snapshot of the prefix before the installation: " << failure.what() << '\n';
 						}
 					}
+					// From here on the runtime is confined, with the programs it starts: a program started from the host, unless it is one of the
+					// runtime's trusted programs, which see the whole host.
+					if (started_alone && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP"))
+						raven::confine(std::filesystem::absolute(prefix.root()).lexically_normal());
 					// The libraries installed for every program, in the system directory of the program's width.
 					const auto system_directory = prefix.root() / "drive_c" / "windows" / (entry->image.is_64 ? "system32" : "syswow64");
 					// The program's own manifest names the side-by-side assemblies its libraries come from; it is read from the file, as the
