@@ -8,6 +8,7 @@
 #include <iostream>
 #include <linux/landlock.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static void check(bool condition, const char *message)
@@ -32,8 +33,12 @@ int main()
 		std::cout << "the kernel has no Landlock\n";
 		return 0;
 	}
-	// Beside the runtime's folder, which the confinement leaves readable, not inside it.
-	const auto root = std::filesystem::absolute("..").lexically_normal() / "confine-test-tree";
+	// Beside the runtime's folder, which the confinement leaves readable, not inside it; and in the home when the build itself is under a
+	// system folder the confinement leaves readable too.
+	auto root = std::filesystem::absolute("..").lexically_normal() / "confine-test-tree";
+	for (const char *system : {"/usr/", "/opt/", "/etc/", "/run/", "/tmp/", "/var/cache/"})
+		if (root.string().starts_with(system) && std::getenv("HOME"))
+			root = std::filesystem::path(std::getenv("HOME")) / ".raven-confine-test";
 	std::filesystem::remove_all(root);
 	for (const auto *folder : {"prefix", "granted", "later", "home/.ssh"})
 		std::filesystem::create_directories(root / folder);
@@ -41,6 +46,14 @@ int main()
 	std::ofstream(root / "granted/letter.txt") << "letter";
 	std::ofstream(root / "later/picture.png") << "picture";
 
+	// The confined checks run in a child, so that this process can remove the tree afterwards.
+	const pid_t child = ::fork();
+	if (child > 0) {
+		int status = 0;
+		::waitpid(child, &status, 0);
+		std::filesystem::remove_all(root);
+		return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+	}
 	raven::sandbox().set_program(u"C:\\Tools\\Editor.exe");
 	raven::sandbox().load(root / "prefix");
 	raven::sandbox().grant(root / "granted", false);
