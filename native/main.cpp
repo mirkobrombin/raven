@@ -56,16 +56,16 @@ static std::vector<uint8_t> read_file(const char *path)
 		throw std::runtime_error("cannot read PE file");
 	return bytes;
 }
-#ifdef RAVEN_NATIVE_CPU
+// A program or library is mapped, not read: an installer carries its payload after the image, often more than a gigabyte of it, and
+// only the headers and sections are loaded.
 static raven::ModuleBytes read_module(const std::filesystem::path &path)
 {
 	auto bytes = raven::ModuleBytes::map(path);
 	if (!bytes)
-		throw std::runtime_error("cannot map PE file");
-	if (std::span<const uint8_t>(*bytes).size() > 1024 * 1024 * 1024)
-		throw std::runtime_error("PE file exceeds inspection size limit");
+		throw std::runtime_error("cannot map PE file: " + path.string());
 	return std::move(*bytes);
 }
+#ifdef RAVEN_NATIVE_CPU
 
 // A program started by another one leaves its whole exit code here for the parent; the host exit status keeps only its low byte.
 static int exit_code_fd=-1;
@@ -270,9 +270,19 @@ int main(int argc, char **argv)
 			raven::ModuleSet modules;
 			raven::PEModule *entry = nullptr;
 			for (int i = (run_modules || run_process) ? first_file : 2; i < last_file; ++i) {
-				auto bytes = read_file(argv[i]);
+				auto bytes = read_module(argv[i]);
+				// Only a 32-bit program of managed code alone is widened, in a copy of its file.
 				if (!entry && run_process)
-					raven::widen_il_only_image(bytes);
+					try {
+						if (const raven::PEImage image(bytes); !image.is_64 && image.il_only()) {
+							const std::span<const uint8_t> view = bytes;
+							std::vector<uint8_t> copy(view.begin(), view.end());
+							if (raven::widen_il_only_image(copy))
+								bytes = std::move(copy);
+						}
+					} catch (const std::runtime_error &) {
+						// An image that does not parse is reported, with its name, as it is added.
+					}
 				auto &module = modules.add(std::filesystem::path(argv[i]).filename().string(), std::move(bytes));
 				if (!entry) {
 					entry = &module;
@@ -746,7 +756,7 @@ int main(int argc, char **argv)
 			}
 			return 0;
 		}
-		const auto bytes = read_file(argv[run_entry ? 3 : 2]);
+		const auto bytes = read_module(argv[run_entry ? 3 : 2]);
 		const raven::PEImage image(bytes);
 		const auto imports = image.imports();
 		if (run_entry) {
