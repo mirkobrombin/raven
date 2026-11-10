@@ -954,6 +954,14 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		if (budget.count() <= 0)
 			return NativeResult{NativeStop::timeout, 0, address, 0};
 		auto result = process.active() ? process.callback(address, arguments, budget) : process.call(address, arguments, budget);
+		// ntdll publishes the Zw form of every Nt call for the same service; the handlers are registered under the Nt name, as the
+		// 64-bit traps answer a Zw import with its Nt twin.
+		const auto shared_dispatch = [&](std::string_view name) {
+			if (shared_api.dispatch(process, environment, name, true))
+				return true;
+			return name.starts_with("Zw") &&
+				shared_api.dispatch(process, environment, std::string("Nt").append(name.substr(2)), true);
+		};
 		while (result.stop == NativeStop::api) {
 			const auto found = traps.find(result.value);
 			if (found == traps.end())
@@ -1106,8 +1114,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			// to the runtime. The vectored handler lists live there too, and fibers, which the thread switches by itself.
 			static const std::map<std::string_view, std::string_view> in_runtime{{"RaiseException", "raven_raise_exception"},
 				{"RtlUnwind", "raven_unwind"}, {"AddVectoredExceptionHandler", "raven_add_vectored_exception"},
-				{"AddVectoredContinueHandler", "raven_add_vectored_continue"}, {"RemoveVectoredExceptionHandler", "raven_remove_vectored"},
-				{"RemoveVectoredContinueHandler", "raven_remove_vectored"}, {"CreateFiber", "raven_create_fiber"},
+				{"RtlAddVectoredExceptionHandler", "raven_add_vectored_exception"},
+				{"AddVectoredContinueHandler", "raven_add_vectored_continue"}, {"RtlAddVectoredContinueHandler", "raven_add_vectored_continue"},
+				{"RemoveVectoredExceptionHandler", "raven_remove_vectored"}, {"RtlRemoveVectoredExceptionHandler", "raven_remove_vectored"},
+				{"RemoveVectoredContinueHandler", "raven_remove_vectored"}, {"RtlRemoveVectoredContinueHandler", "raven_remove_vectored"}, {"CreateFiber", "raven_create_fiber"},
 				{"CreateFiberEx", "raven_create_fiber_ex"}, {"ConvertThreadToFiber", "raven_convert_thread_to_fiber"},
 				{"ConvertThreadToFiberEx", "raven_convert_thread_to_fiber_ex"}, {"ConvertFiberToThread", "raven_convert_fiber_to_thread"},
 				{"SwitchToFiber", "raven_switch_to_fiber"}, {"DeleteFiber", "raven_delete_fiber"}, {"IsThreadAFiber", "raven_is_thread_a_fiber"}};
@@ -1211,7 +1221,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 #endif
 				 !object_api.dispatch(api) && !module_api.dispatch(api) && !resources.dispatch(api) &&
 				!memory.dispatch(api) && !kernel_string_api(process, environment, entry, *launch, api) &&
-				!shared_api.dispatch(process, environment, api, true) && !desktop.dispatch(api) && !windows.dispatch(api) && !profile.dispatch(api) &&
+				!shared_dispatch(api) && !desktop.dispatch(api) && !windows.dispatch(api) && !profile.dispatch(api) &&
 				!crt.dispatch(api) && !unsupported_library(process, environment, api)) {
 				std::cerr << "raven: unimplemented native x86 API " << api << '\n';
 				if (api.starts_with("InitCommonControls") || api.starts_with("ImageList_"))

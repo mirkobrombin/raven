@@ -10,9 +10,13 @@ namespace raven {
 
 namespace {
 
-constexpr std::array<std::pair<std::string_view, uint32_t>, 16> thread_exports{{
+constexpr std::array<std::pair<std::string_view, uint32_t>, 23> thread_exports{{
 	{"CreateThread", 6}, {"DeleteCriticalSection", 1}, {"EnterCriticalSection", 1}, {"ExitThread", 1}, {"GetCurrentThreadStackLimits", 2}, {"GetExitCodeThread", 2},
 	{"InitializeCriticalSection", 1}, {"InitializeCriticalSectionAndSpinCount", 2}, {"InitializeCriticalSectionEx", 3}, {"LeaveCriticalSection", 1}, {"ResumeThread", 1}, {"SetThreadPriority", 2},
+	// The ntdll forms of the same calls, which programs that name the RTL directly (vox.dll among them) import: a status instead of the
+	// last error, and the same host-side sections as the kernel32 forms, since a 32-bit section has no guest implementation.
+	{"RtlDeleteCriticalSection", 1}, {"RtlEnterCriticalSection", 1}, {"RtlInitializeCriticalSection", 1}, {"RtlInitializeCriticalSectionAndSpinCount", 2},
+	{"RtlInitializeCriticalSectionEx", 3}, {"RtlLeaveCriticalSection", 1}, {"RtlTryEnterCriticalSection", 1},
 	{"Sleep", 1}, {"SwitchToThread", 0}, {"TryEnterCriticalSection", 1}, {"WaitForSingleObject", 2},
 }};
 
@@ -167,29 +171,35 @@ bool NativeX86Threads::dispatch(std::string_view name)
 			threads.block([] { return false; }, wake);
 		}
 		process.return_api(0);
-	} else if (name == "DeleteCriticalSection") {
+	} else if (name == "DeleteCriticalSection" || name == "RtlDeleteCriticalSection") {
 		sections.erase(args[0]);
 		process.return_api(0);
-	} else if (name == "InitializeCriticalSection" || name == "InitializeCriticalSectionAndSpinCount" || name == "InitializeCriticalSectionEx") {
+	} else if (name == "InitializeCriticalSection" || name == "InitializeCriticalSectionAndSpinCount" || name == "InitializeCriticalSectionEx" ||
+		name == "RtlInitializeCriticalSection" || name == "RtlInitializeCriticalSectionAndSpinCount" || name == "RtlInitializeCriticalSectionEx") {
+		const bool extended = name == "InitializeCriticalSectionEx" || name == "RtlInitializeCriticalSectionEx";
+		const bool rtl = name.starts_with("Rtl");
 		// The high byte contains the flags; lower bits do not affect initialization.
-		if (name == "InitializeCriticalSectionEx" && ((uint32_t(args[2]) & 0xff000000U) & ~0x1f000000U)) {
+		if (extended && ((uint32_t(args[2]) & 0xff000000U) & ~0x1f000000U)) {
 			environment.set_last_error(87);
-			process.return_api(0);
+			process.return_api(rtl ? 0xc000000dU : 0);
 			return true;
 		}
 		sections.erase(args[0]);
-		const bool no_debug = name == "InitializeCriticalSectionEx" && (uint32_t(args[2]) & 0x01000000U);
+		const bool no_debug = extended && (uint32_t(args[2]) & 0x01000000U);
 		if (!no_debug && !section_debug)
 			section_debug = process.map_memory(4096, PROT_READ | PROT_WRITE);
 		// The fields Windows keeps: DebugInfo, LockCount (-1 when free), RecursionCount, OwningThread, LockSemaphore and SpinCount.
-		const uint32_t fields[6] = {no_debug ? UINT32_MAX : uint32_t(section_debug), UINT32_MAX, 0, 0, 0, name == "InitializeCriticalSection" ? 0U : uint32_t(args[1])};
+		const uint32_t spin = name == "InitializeCriticalSection" || name == "RtlInitializeCriticalSection" ? 0U : uint32_t(args[1]);
+		const uint32_t fields[6] = {no_debug ? UINT32_MAX : uint32_t(section_debug), UINT32_MAX, 0, 0, 0, spin};
 		process.write_memory(args[0], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(fields), sizeof fields));
-		process.return_api(name == "InitializeCriticalSection" ? 0 : 1);
-	} else if (name == "EnterCriticalSection" || name == "TryEnterCriticalSection") {
+		process.return_api(rtl ? 0 : name == "InitializeCriticalSection" ? 0 : 1);
+	} else if (name == "EnterCriticalSection" || name == "TryEnterCriticalSection" ||
+		name == "RtlEnterCriticalSection" || name == "RtlTryEnterCriticalSection") {
+		const bool trying = name == "TryEnterCriticalSection" || name == "RtlTryEnterCriticalSection";
 		const uint32_t id = threads.current_id();
 		auto &section = sections[args[0]];
 		const bool free = section.owner == 0 || section.owner == id;
-		if (!free && name == "TryEnterCriticalSection") {
+		if (!free && trying) {
 			process.return_api(0);
 			return true;
 		}
@@ -198,8 +208,8 @@ bool NativeX86Threads::dispatch(std::string_view name)
 		section.owner = id;
 		++section.depth;
 		mirror_section(args[0], section);
-		process.return_api(1);
-	} else if (name == "LeaveCriticalSection") {
+		process.return_api(trying ? 1 : 0);
+	} else if (name == "LeaveCriticalSection" || name == "RtlLeaveCriticalSection") {
 		auto &section = sections[args[0]];
 		if (section.depth > 0 && --section.depth == 0)
 			section.owner = 0;
