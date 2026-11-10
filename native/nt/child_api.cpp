@@ -112,6 +112,19 @@ std::shared_ptr<ProcessObject> start_program(KernelContext &context, const std::
 		return nullptr;
 	}
 	auto program = image->host;
+	// The control panel and the file dialog always run from the runtime's own folder, whatever copy the prefix holds: a copy a program
+	// replaced is never the one that is trusted.
+	{
+		const auto folder = image->host.parent_path(), windows = image->host.parent_path().parent_path();
+		const auto name = image->host.filename().u16string();
+		const bool system = paths.in_prefix(image->host) && equal_fold(windows.filename().u16string(), u"windows") &&
+			(equal_fold(folder.filename().u16string(), u"system32") || equal_fold(folder.filename().u16string(), u"syswow64"));
+		if (system && (equal_fold(name, u"control.exe") || equal_fold(name, u"raven-picker.exe"))) {
+			const auto runtime = std::filesystem::read_symlink("/proc/self/exe").parent_path();
+			const char *own = equal_fold(name, u"control.exe") ? "control.exe" : "raven-picker.exe";
+			program = (equal_fold(folder.filename().u16string(), u"syswow64") ? runtime / "x86" : runtime) / own;
+		}
+	}
 	auto command_line = line.empty() ? u"\"" + names.front() + u"\"" : line;
 	// A batch file runs in the command processor, which CreateProcess starts with the whole command line as `cmd /c "..."`; the
 	// system folder resolves to SysWOW64 for a 32-bit program, as its cmd.exe is the 32-bit one there.

@@ -3,6 +3,7 @@
 #include "windows.h"
 #include "nt/actctx.h"
 #include "nt/text.h"
+#include "nt/sandbox.h"
 #include "brush.h"
 #include "nt/nls.h"
 #include "gdi.h"
@@ -859,6 +860,9 @@ void NativeWindows::import_foreign_posts()
 	posts_stamp=stamp;
 	take_foreign_messages([this](uint64_t window) { return std::as_const(objects).window(window)!=nullptr; },
 		[this](uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam) {
+			// The runtime's control panel and file dialog take no orders from other programs, as Windows keeps a program from driving one
+			// that runs with more rights.
+			if (sandbox().trusted()) return;
 			if (messages.size()<10000) queue({window,wparam,lparam,message,message_time(),cursor_x,cursor_y});
 		});
 }
@@ -871,6 +875,8 @@ void NativeWindows::answer_foreign_sends()
 	take_foreign_sends([this](uint64_t window) { return std::as_const(objects).window(window)!=nullptr; },
 		[this](uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam,const std::vector<uint8_t> &data) -> uint64_t {
 			if (!std::as_const(objects).window(window)) return 0;
+			// A trusted program answers no message other programs send.
+			if (sandbox().trusted()) return 0;
 			if (message!=0x4a) return send(window,message,wparam,lparam);
 			// WM_COPYDATA: the bytes and a COPYDATASTRUCT that points at them live in this process while the window reads them.
 			const bool narrow=process.mode()==NativeMode::x86;

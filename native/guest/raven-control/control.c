@@ -6,12 +6,17 @@
  *
  * A navigation column picks a page; each page is a column of cards whose rows name a setting and hold its control. Every setting is
  * kept where Windows or the runtime reads it: the visual style under ThemeManager, the installed programs under the Uninstall keys, the
- * runtime options as values of HKCU\Software\Raven\Environment, which the runtime applies to the programs it starts afterwards. */
+ * runtime options as values of HKCU\Software\Raven\Environment, which the runtime applies to the programs it starts afterwards.
+ *
+ * The sandbox and the snapshots are the runtime's own: the panel asks for them through ravenhost.dll, which answers only the panel the
+ * runtime trusts, the one started from the runtime's folder. */
 #define WIN32_LEAN_AND_MEAN
 #define WINVER 0x0601
 #define _WIN32_WINNT 0x0601
+#define COBJMACROS
 #include <windows.h>
 #include <commctrl.h>
+#include <shobjidl.h>
 
 #define NAV_WIDTH 280
 #define CARD_RADIUS 8
@@ -19,7 +24,7 @@
 #define MAX_ROWS 16
 #define ID_FIRST 0x200
 
-enum { PAGE_SYSTEM, PAGE_PERSONALIZATION, PAGE_APPS, PAGE_RAVEN, PAGE_COUNT };
+enum { PAGE_SYSTEM, PAGE_PERSONALIZATION, PAGE_APPS, PAGE_PRIVACY, PAGE_SNAPSHOTS, PAGE_RAVEN, PAGE_COUNT };
 
 typedef struct {
 	const WCHAR *title, *description;
@@ -33,7 +38,18 @@ typedef struct {
 	const WCHAR *variable;
 } RavenOption;
 
-static const WCHAR *const page_titles[PAGE_COUNT] = {L"System", L"Personalization", L"Apps", L"Raven"};
+static const WCHAR *const page_titles[PAGE_COUNT] = {L"System", L"Personalization", L"Apps", L"Privacy & security", L"Snapshots", L"Raven"};
+/* The names control.exe takes for its pages on the command line. */
+static const WCHAR *const page_names[PAGE_COUNT] = {L"system", L"personalization", L"apps", L"privacy", L"snapshots", L"raven"};
+
+/* The runtime's private calls (ravenhost.dll): the prefix's sandbox.conf and sandbox.log, and its snapshots. */
+DWORD WINAPI RavenSandboxRead(WCHAR *buffer, DWORD capacity);
+BOOL WINAPI RavenSandboxWrite(const WCHAR *text);
+DWORD WINAPI RavenSandboxLog(WCHAR *buffer, DWORD capacity);
+DWORD WINAPI RavenSnapshotList(WCHAR *buffer, DWORD capacity);
+BOOL WINAPI RavenSnapshotTake(const WCHAR *label);
+BOOL WINAPI RavenSnapshotRestore(const WCHAR *name);
+BOOL WINAPI RavenSnapshotDelete(const WCHAR *name);
 static const RavenOption raven_toggles[] = {
 	{L"Trace system calls", L"RAVEN_TRACE_API"},
 	{L"Trace window messages", L"RAVEN_TRACE_MSG"},
@@ -41,7 +57,7 @@ static const RavenOption raven_toggles[] = {
 	{L"Continue past unimplemented functions", L"RAVEN_CONTINUE_UNIMPLEMENTED"},
 };
 
-static HWND main_window, apps_list, apps_search;
+static HWND main_window, apps_list, apps_search, grants_list, log_list, snapshots_list, list_buttons[3];
 static HFONT body_font, small_font, title_font, header_font;
 static int page = PAGE_SYSTEM, row_count, hover_nav = -1;
 static Row rows[MAX_ROWS];
@@ -144,6 +160,23 @@ static void nav_icon(HDC dc, int which, int x, int y, COLORREF color)
 		Rectangle(dc, x + 9, y, x + 16, y + 7);
 		Rectangle(dc, x, y + 9, x + 7, y + 16);
 		Rectangle(dc, x + 9, y + 9, x + 16, y + 16);
+		break;
+	case PAGE_PRIVACY:
+		/* A shield. */
+		MoveToEx(dc, x + 8, y, NULL);
+		LineTo(dc, x + 15, y + 3);
+		LineTo(dc, x + 14, y + 10);
+		LineTo(dc, x + 8, y + 16);
+		LineTo(dc, x + 2, y + 10);
+		LineTo(dc, x + 1, y + 3);
+		LineTo(dc, x + 8, y);
+		break;
+	case PAGE_SNAPSHOTS:
+		/* A clock. */
+		Ellipse(dc, x, y, x + 16, y + 16);
+		MoveToEx(dc, x + 8, y + 4, NULL);
+		LineTo(dc, x + 8, y + 8);
+		LineTo(dc, x + 11, y + 10);
 		break;
 	default:
 		MoveToEx(dc, x + 2, y + 15, NULL);
@@ -269,6 +302,16 @@ static void clear_page(void)
 	if (apps_search)
 		DestroyWindow(apps_search);
 	apps_list = apps_search = NULL;
+	for (index = 0; index < 3; ++index)
+		if (list_buttons[index])
+			DestroyWindow(list_buttons[index]);
+	if (grants_list)
+		DestroyWindow(grants_list);
+	if (log_list)
+		DestroyWindow(log_list);
+	if (snapshots_list)
+		DestroyWindow(snapshots_list);
+	grants_list = log_list = snapshots_list = list_buttons[0] = list_buttons[1] = list_buttons[2] = NULL;
 	row_count = 0;
 	scroll_top = 0;
 }
@@ -435,6 +478,435 @@ static void show_raven(void)
 	}
 }
 
+/* Privacy & security ------------------------------------------------------------------------------------------- */
+
+/* sandbox.conf as lines: the panel changes the lines it knows and keeps the others as they are. */
+#define MAX_LINES 256
+static WCHAR *config_lines[MAX_LINES];
+static int config_count;
+
+static void read_config(void)
+{
+	DWORD size = RavenSandboxRead(NULL, 0);
+	WCHAR *text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size + 1) * sizeof(WCHAR)), *at, *end;
+	int index;
+	for (index = 0; index < config_count; ++index)
+		HeapFree(GetProcessHeap(), 0, config_lines[index]);
+	config_count = 0;
+	if (!text)
+		return;
+	if (size)
+		RavenSandboxRead(text, size + 1);
+	for (at = text; *at && config_count < MAX_LINES; at = *end ? end + 1 : end) {
+		int length;
+		for (end = at; *end && *end != L'\n'; ++end)
+			;
+		length = (int)(end - at);
+		if (!length)
+			continue;
+		config_lines[config_count] = HeapAlloc(GetProcessHeap(), 0, (length + 1) * sizeof(WCHAR));
+		if (!config_lines[config_count])
+			break;
+		lstrcpynW(config_lines[config_count], at, length + 1);
+		++config_count;
+	}
+	HeapFree(GetProcessHeap(), 0, text);
+}
+
+static BOOL write_config(void)
+{
+	int index, size = 1;
+	WCHAR *text;
+	BOOL done;
+	for (index = 0; index < config_count; ++index)
+		size += lstrlenW(config_lines[index]) + 1;
+	text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size * sizeof(WCHAR));
+	if (!text)
+		return FALSE;
+	for (index = 0; index < config_count; ++index) {
+		lstrcatW(text, config_lines[index]);
+		lstrcatW(text, L"\n");
+	}
+	done = RavenSandboxWrite(text);
+	HeapFree(GetProcessHeap(), 0, text);
+	if (!done)
+		MessageBoxW(main_window, L"The settings could not be saved.", L"Privacy & security", MB_OK | MB_ICONERROR);
+	return done;
+}
+
+static void add_config_line(const WCHAR *line)
+{
+	if (config_count >= MAX_LINES)
+		return;
+	config_lines[config_count] = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(line) + 1) * sizeof(WCHAR));
+	if (config_lines[config_count])
+		lstrcpyW(config_lines[config_count++], line);
+}
+
+static void remove_config_line(int index)
+{
+	if (index < 0 || index >= config_count)
+		return;
+	HeapFree(GetProcessHeap(), 0, config_lines[index]);
+	for (; index + 1 < config_count; ++index)
+		config_lines[index] = config_lines[index + 1];
+	--config_count;
+}
+
+static BOOL starts_with(const WCHAR *text, const WCHAR *start)
+{
+	while (*start)
+		if (*text++ != *start++)
+			return FALSE;
+	return TRUE;
+}
+
+/* A grant line: "read PATH", "write PATH", "app-read PROGRAM<tab>PATH" or "app-write PROGRAM<tab>PATH". */
+static BOOL parse_grant(const WCHAR *line, BOOL *write, WCHAR *program, const WCHAR **path)
+{
+	const WCHAR *rest;
+	program[0] = 0;
+	if (starts_with(line, L"read ") || starts_with(line, L"write ")) {
+		*write = line[0] == L'w';
+		*path = line + (*write ? 6 : 5);
+		return TRUE;
+	}
+	if (!starts_with(line, L"app-read ") && !starts_with(line, L"app-write "))
+		return FALSE;
+	*write = line[4] == L'w';
+	rest = line + (*write ? 10 : 9);
+	{
+		const WCHAR *tab = rest;
+		int length;
+		while (*tab && *tab != L'\t')
+			++tab;
+		if (!*tab)
+			return FALSE;
+		length = (int)(tab - rest) < MAX_PATH - 1 ? (int)(tab - rest) : MAX_PATH - 1;
+		lstrcpynW(program, rest, length + 1);
+		*path = tab + 1;
+	}
+	return TRUE;
+}
+
+static void set_cell(HWND list, int row, int column, const WCHAR *value)
+{
+	LVITEMW item = {0};
+	item.iSubItem = column;
+	item.pszText = (WCHAR *)value;
+	SendMessageW(list, LVM_SETITEMTEXTW, row, (LPARAM)&item);
+}
+
+static int add_list_row(HWND list, const WCHAR *first, LPARAM data)
+{
+	LVITEMW item = {0};
+	item.mask = LVIF_TEXT | LVIF_PARAM;
+	item.iItem = (int)SendMessageW(list, LVM_GETITEMCOUNT, 0, 0);
+	item.pszText = (WCHAR *)first;
+	item.lParam = data;
+	return (int)SendMessageW(list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+}
+
+static HWND make_list(int id, const WCHAR *const *titles, const int *widths, int count)
+{
+	HWND list = add_child(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER, id);
+	int index;
+	SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT);
+	for (index = 0; index < count; ++index) {
+		LVCOLUMNW column = {LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, 0, widths[index], (WCHAR *)titles[index], 0, index};
+		SendMessageW(list, LVM_INSERTCOLUMNW, index, (LPARAM)&column);
+	}
+	return list;
+}
+
+static void fill_grants(void)
+{
+	int index;
+	SendMessageW(grants_list, LVM_DELETEALLITEMS, 0, 0);
+	for (index = 0; index < config_count; ++index) {
+		BOOL write;
+		WCHAR program[MAX_PATH];
+		const WCHAR *path;
+		int row;
+		if (!parse_grant(config_lines[index], &write, program, &path))
+			continue;
+		row = add_list_row(grants_list, path, index);
+		set_cell(grants_list, row, 1, write ? L"Read and change" : L"Read");
+		set_cell(grants_list, row, 2, program[0] ? program : L"Every program");
+	}
+}
+
+/* The refusals the runtime noted, newest first: "time<tab>program<tab>what<tab>path" a line. */
+static void fill_log(void)
+{
+	DWORD size = RavenSandboxLog(NULL, 0);
+	WCHAR *text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size + 1) * sizeof(WCHAR)), *end;
+	int shown = 0;
+	SendMessageW(log_list, LVM_DELETEALLITEMS, 0, 0);
+	if (!text)
+		return;
+	if (size)
+		RavenSandboxLog(text, size + 1);
+	end = text + lstrlenW(text);
+	while (end > text && shown < 300) {
+		WCHAR *line = end, *fields[4];
+		int field = 0;
+		LVITEMW item = {0};
+		int row;
+		if (line > text && line[-1] == L'\n')
+			*--line = 0;
+		while (line > text && line[-1] != L'\n')
+			--line;
+		end = line;
+		if (!*line)
+			continue;
+		fields[0] = line;
+		for (; *line && field < 3; ++line)
+			if (*line == L'\t') {
+				*line = 0;
+				fields[++field] = line + 1;
+			}
+		if (field < 3)
+			continue;
+		item.mask = LVIF_TEXT;
+		item.iItem = shown;
+		item.pszText = fields[0];
+		row = (int)SendMessageW(log_list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+		set_cell(log_list, row, 1, fields[1]);
+		set_cell(log_list, row, 2, !lstrcmpW(fields[2], L"open") ? L"Open" : !lstrcmpW(fields[2], L"change") ? L"Change" :
+			!lstrcmpW(fields[2], L"link") ? L"Link out of the prefix" : !lstrcmpW(fields[2], L"open-on-host") ? L"Hand to a Linux program" :
+			!lstrcmpW(fields[2], L"open-address") ? L"Open an address" : fields[2]);
+		set_cell(log_list, row, 3, fields[3]);
+		++shown;
+	}
+	HeapFree(GetProcessHeap(), 0, text);
+}
+
+static int network_line(void)
+{
+	int index;
+	for (index = 0; index < config_count; ++index)
+		if (starts_with(config_lines[index], L"network "))
+			return index;
+	return -1;
+}
+
+static void show_privacy(void)
+{
+	static const WCHAR *const grant_titles[] = {L"Path", L"Access", L"For"};
+	static const int grant_widths[] = {340, 130, 220};
+	static const WCHAR *const log_titles[] = {L"Time", L"Program", L"Refused", L"Path"};
+	static const int log_widths[] = {150, 220, 160, 300};
+	Row *row;
+	const int network = (read_config(), network_line());
+	row = add_row(L"Internet access", L"Programs of this prefix may reach the network", 0);
+	row->control = add_child(L"Button", L"", BS_OWNERDRAW, ID_FIRST + 40);
+	SetWindowLongPtrW(row->control, GWLP_USERDATA, network < 0 || lstrcmpW(config_lines[network], L"network off"));
+	row = add_row(L"Linux files programs can open", L"Besides these, a program sees only the files you choose in its file dialogs", 1);
+	row->control = add_child(L"Button", L"Add folder", BS_PUSHBUTTON, ID_FIRST + 41);
+	list_buttons[0] = add_child(L"Button", L"Allow changes", BS_PUSHBUTTON, ID_FIRST + 42);
+	list_buttons[1] = add_child(L"Button", L"Remove", BS_PUSHBUTTON, ID_FIRST + 43);
+	grants_list = make_list(ID_FIRST + 44, grant_titles, grant_widths, 3);
+	log_list = make_list(ID_FIRST + 45, log_titles, log_widths, 4);
+	fill_grants();
+	fill_log();
+}
+
+static int selected_param(HWND list)
+{
+	LVITEMW item = {0};
+	item.iItem = (int)SendMessageW(list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+	if (item.iItem < 0)
+		return -1;
+	item.mask = LVIF_PARAM;
+	SendMessageW(list, LVM_GETITEMW, 0, (LPARAM)&item);
+	return (int)item.lParam;
+}
+
+/* A Linux folder for every program: chosen in the file dialog, which shows the whole computer to the panel. */
+static void add_folder(void)
+{
+	IFileOpenDialog *dialog = NULL;
+	IShellItem *item = NULL;
+	WCHAR *chosen = NULL, line[MAX_PATH + 8];
+	DWORD options = 0;
+	int index;
+	if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void **)&dialog)))
+		return;
+	IFileOpenDialog_GetOptions(dialog, &options);
+	IFileOpenDialog_SetOptions(dialog, options | FOS_PICKFOLDERS);
+	IFileOpenDialog_SetTitle(dialog, L"Choose a folder programs can open");
+	if (SUCCEEDED(IFileOpenDialog_Show(dialog, main_window)) && SUCCEEDED(IFileOpenDialog_GetResult(dialog, &item)) &&
+		SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &chosen)) && chosen) {
+		if ((chosen[0] | 0x20) != L'z' || chosen[1] != L':') {
+			MessageBoxW(main_window, L"The folders of the prefix are open to every program already.", L"Add folder", MB_OK | MB_ICONINFORMATION);
+		} else {
+			/* Z: holds the host's files at their own spelling. */
+			lstrcpyW(line, L"read ");
+			lstrcpynW(line + 5, chosen[2] ? chosen + 2 : L"\\", MAX_PATH);
+			for (index = 5; line[index]; ++index)
+				if (line[index] == L'\\')
+					line[index] = L'/';
+			if (!line[6] && line[5] == L'/')
+				line[6] = 0;
+			add_config_line(line);
+			if (write_config())
+				fill_grants();
+		}
+	}
+	if (chosen)
+		CoTaskMemFree(chosen);
+	if (item)
+		IShellItem_Release(item);
+	IFileOpenDialog_Release(dialog);
+}
+
+static void change_grant(BOOL remove)
+{
+	const int index = selected_param(grants_list);
+	BOOL write;
+	WCHAR program[MAX_PATH], *line;
+	const WCHAR *path;
+	if (index < 0 || index >= config_count || !parse_grant(config_lines[index], &write, program, &path)) {
+		MessageBoxW(main_window, L"Choose a path in the list first.", L"Privacy & security", MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	if (remove) {
+		remove_config_line(index);
+	} else {
+		/* Read becomes read and change, and back. */
+		line = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(config_lines[index]) + 8) * sizeof(WCHAR));
+		if (!line)
+			return;
+		lstrcpyW(line, program[0] ? (write ? L"app-read " : L"app-write ") : (write ? L"read " : L"write "));
+		if (program[0]) {
+			lstrcatW(line, program);
+			lstrcatW(line, L"\t");
+		}
+		lstrcatW(line, path);
+		HeapFree(GetProcessHeap(), 0, config_lines[index]);
+		config_lines[index] = line;
+	}
+	if (write_config())
+		fill_grants();
+}
+
+static void toggle_network(HWND toggle)
+{
+	const BOOL on = !GetWindowLongPtrW(toggle, GWLP_USERDATA);
+	const int index = network_line();
+	if (index >= 0)
+		remove_config_line(index);
+	if (!on)
+		add_config_line(L"network off");
+	if (write_config())
+		SetWindowLongPtrW(toggle, GWLP_USERDATA, on);
+	InvalidateRect(toggle, NULL, TRUE);
+}
+
+/* Snapshots ---------------------------------------------------------------------------------------------------- */
+
+/* A snapshot is named by when it was taken and why: "20261110-145012-before-setup.exe". */
+static void fill_snapshots(void)
+{
+	DWORD size = RavenSnapshotList(NULL, 0);
+	WCHAR *text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size + 1) * sizeof(WCHAR)), *at, *end;
+	SendMessageW(snapshots_list, LVM_DELETEALLITEMS, 0, 0);
+	if (!text)
+		return;
+	if (size)
+		RavenSnapshotList(text, size + 1);
+	for (at = text; *at; at = end) {
+		WCHAR when[32] = L"", *name;
+		LVITEMW item = {0};
+		int row;
+		for (end = at; *end && *end != L'\n'; ++end)
+			;
+		if (*end)
+			*end++ = 0;
+		if (!*at)
+			continue;
+		name = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(at) + 1) * sizeof(WCHAR));
+		if (!name)
+			break;
+		lstrcpyW(name, at);
+		if (lstrlenW(at) >= 15 && at[8] == L'-')
+			wsprintfW(when, L"%.4s-%.2s-%.2s %.2s:%.2s:%.2s", at, at + 4, at + 6, at + 9, at + 11, at + 13);
+		/* Newest first. */
+		item.mask = LVIF_TEXT | LVIF_PARAM;
+		item.iItem = 0;
+		item.pszText = when[0] ? when : at;
+		item.lParam = (LPARAM)name;
+		row = (int)SendMessageW(snapshots_list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+		set_cell(snapshots_list, row, 1, lstrlenW(at) > 16 && at[15] == L'-' ? at + 16 : L"");
+	}
+	HeapFree(GetProcessHeap(), 0, text);
+}
+
+static void free_snapshot_names(void)
+{
+	int index, count;
+	if (!snapshots_list)
+		return;
+	count = (int)SendMessageW(snapshots_list, LVM_GETITEMCOUNT, 0, 0);
+	for (index = 0; index < count; ++index) {
+		LVITEMW item = {0};
+		item.mask = LVIF_PARAM;
+		item.iItem = index;
+		if (SendMessageW(snapshots_list, LVM_GETITEMW, 0, (LPARAM)&item) && item.lParam)
+			HeapFree(GetProcessHeap(), 0, (void *)item.lParam);
+	}
+}
+
+static void show_snapshots(void)
+{
+	static const WCHAR *const titles[] = {L"Taken", L"Reason"};
+	static const int widths[] = {200, 420};
+	Row *row = add_row(L"Snapshots of this prefix", L"Raven takes one before every installer; restoring one keeps the prefix as it is now as another", 0);
+	row->control = add_child(L"Button", L"Take snapshot", BS_PUSHBUTTON, ID_FIRST + 50);
+	list_buttons[0] = add_child(L"Button", L"Restore", BS_PUSHBUTTON, ID_FIRST + 51);
+	list_buttons[1] = add_child(L"Button", L"Delete", BS_PUSHBUTTON, ID_FIRST + 52);
+	snapshots_list = make_list(ID_FIRST + 53, titles, widths, 2);
+	fill_snapshots();
+}
+
+static void snapshot_action(int id)
+{
+	const WCHAR *name;
+	LVITEMW item = {0};
+	WCHAR question[400];
+	if (id == ID_FIRST + 50) {
+		if (!RavenSnapshotTake(L"manual"))
+			MessageBoxW(main_window, L"The snapshot could not be taken.", L"Snapshots", MB_OK | MB_ICONERROR);
+		free_snapshot_names();
+		fill_snapshots();
+		return;
+	}
+	item.iItem = (int)SendMessageW(snapshots_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+	item.mask = LVIF_PARAM;
+	if (item.iItem < 0 || !SendMessageW(snapshots_list, LVM_GETITEMW, 0, (LPARAM)&item) || !item.lParam) {
+		MessageBoxW(main_window, L"Choose a snapshot in the list first.", L"Snapshots", MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	name = (const WCHAR *)item.lParam;
+	if (id == ID_FIRST + 51) {
+		wsprintfW(question, L"The prefix goes back to the snapshot %s. Close the programs that run in it first; the prefix as it is now is kept "
+			L"as a snapshot.", name);
+		if (MessageBoxW(main_window, question, L"Restore", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+			return;
+		if (!RavenSnapshotRestore(name))
+			MessageBoxW(main_window, L"The snapshot could not be restored.", L"Snapshots", MB_OK | MB_ICONERROR);
+	} else {
+		wsprintfW(question, L"The snapshot %s will be deleted.", name);
+		if (MessageBoxW(main_window, question, L"Delete", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+			return;
+		if (!RavenSnapshotDelete(name))
+			MessageBoxW(main_window, L"The snapshot could not be deleted.", L"Snapshots", MB_OK | MB_ICONERROR);
+	}
+	free_snapshot_names();
+	fill_snapshots();
+}
+
 static void layout(void)
 {
 	RECT client;
@@ -449,6 +921,18 @@ static void layout(void)
 				(GetWindowLongW(rows[index].control, GWL_STYLE) & CBS_DROPDOWNLIST) == CBS_DROPDOWNLIST ? 120 : 0), TRUE);
 		}
 	}
+	if (grants_list || snapshots_list) {
+		/* Below the page's rows: the buttons of the list, then the list, and on Privacy & security the refusals under it. */
+		const int top = 96 + row_count * (ROW_HEIGHT + 4) + row_count * 20 - 8, width = client.right - NAV_WIDTH - 56;
+		const int bottom = client.bottom - 24, lists = grants_list ? 2 : 1, height = (bottom - top - 40) / lists;
+		int button;
+		for (button = 0; button < 3; ++button)
+			if (list_buttons[button])
+				MoveWindow(list_buttons[button], NAV_WIDTH + 24 + button * 150, top, 140, 30, TRUE);
+		MoveWindow(grants_list ? grants_list : snapshots_list, NAV_WIDTH + 24, top + 40, width, height - 12, TRUE);
+		if (log_list)
+			MoveWindow(log_list, NAV_WIDTH + 24, top + 40 + height, width, height - 12, TRUE);
+	}
 	if (apps_list) {
 		const int top = 96 + ROW_HEIGHT + 12;
 		MoveWindow(apps_search, NAV_WIDTH + 24, top, 320, 30, TRUE);
@@ -459,12 +943,15 @@ static void layout(void)
 
 static void show_page(int which)
 {
+	free_snapshot_names();
 	clear_page();
 	page = which;
 	switch (page) {
 	case PAGE_SYSTEM: show_system(); break;
 	case PAGE_PERSONALIZATION: show_personalization(); break;
 	case PAGE_APPS: show_apps(); break;
+	case PAGE_PRIVACY: show_privacy(); break;
+	case PAGE_SNAPSHOTS: show_snapshots(); break;
 	default: show_raven(); break;
 	}
 	layout();
@@ -592,6 +1079,14 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
 			uninstall_selected();
 		} else if (page == PAGE_APPS && id == ID_FIRST + 2 && code == EN_CHANGE) {
 			fill_apps();
+		} else if (page == PAGE_PRIVACY && id == ID_FIRST + 40) {
+			toggle_network((HWND)lparam);
+		} else if (page == PAGE_PRIVACY && id == ID_FIRST + 41) {
+			add_folder();
+		} else if (page == PAGE_PRIVACY && (id == ID_FIRST + 42 || id == ID_FIRST + 43)) {
+			change_grant(id == ID_FIRST + 43);
+		} else if (page == PAGE_SNAPSHOTS && id >= ID_FIRST + 50 && id <= ID_FIRST + 52) {
+			snapshot_action(id);
 		} else if (page == PAGE_RAVEN && id >= ID_FIRST + 10 && id < ID_FIRST + 10 + (int)ARRAYSIZE(raven_toggles)) {
 			HWND toggle = (HWND)lparam;
 			const BOOL on = !GetWindowLongPtrW(toggle, GWLP_USERDATA);
@@ -625,6 +1120,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_line,
 	MSG message;
 	int which;
 	InitCommonControlsEx(&classes);
+	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	body_font = make_font(14, FW_NORMAL);
 	small_font = make_font(12, FW_NORMAL);
 	header_font = make_font(20, FW_SEMIBOLD);
@@ -634,7 +1130,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_line,
 	klass.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
 	klass.lpszClassName = L"RavenControlPanel";
 	RegisterClassExW(&klass);
-	/* A page can be named on the command line, as control.exe opens a panel: system, personalization, apps or raven. */
+	/* A page can be named on the command line, as control.exe opens a panel: system, personalization, apps, privacy, snapshots or raven. */
 	page = PAGE_SYSTEM;
 	for (which = 0; command_line && which < PAGE_COUNT; ++which) {
 		const WCHAR *name = command_line;
@@ -645,7 +1141,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR command_line,
 		while (name[length] && name[length] != L' ' && name[length] != L'"' && length < 31)
 			word[length] = name[length], ++length;
 		word[length] = 0;
-		if (!lstrcmpiW(word, page_titles[which]))
+		if (!lstrcmpiW(word, page_names[which]))
 			page = which;
 	}
 	main_window = CreateWindowExW(0, klass.lpszClassName, L"Settings", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,

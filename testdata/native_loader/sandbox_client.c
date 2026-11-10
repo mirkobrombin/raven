@@ -69,7 +69,8 @@ int raven_entry(void)
 	if (NT_SUCCESS(NtCreateFile(&native, GENERIC_READ | SYNCHRONIZE, &attributes, &status, NULL, 0, FILE_SHARE_READ, FILE_OPEN,
 			FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0)) || native) return 5;
 
-	// The host drive lists only the way to the program's own folder.
+	// The host drive lists only the ways to granted folders: the program's own, and the system's fonts and the runtime, which every
+	// program reads.
 	WCHAR program[MAX_PATH];
 	if (!GetModuleFileNameW(NULL, program, MAX_PATH) || program[0] != L'Z') return 6;
 	WCHAR first[MAX_PATH];
@@ -84,15 +85,27 @@ int raven_entry(void)
 	do {
 		++listed;
 		way |= same(found.cFileName, first);
-		if (same(found.cFileName, L"etc") || same(found.cFileName, L"proc")) return 8;
+		if (same(found.cFileName, L"etc") || same(found.cFileName, L"proc") || same(found.cFileName, L"root") ||
+			same(found.cFileName, L"boot") || same(found.cFileName, L"dev")) return 8;
 	} while (FindNextFileW(search, &found));
 	FindClose(search);
-	if (!way || listed != 1) return 9;
+	if (!way || listed > 4) return 9;
 
 	// A document no program of the prefix opens is not handed to the host, and neither is a host file.
 	if ((INT_PTR)ShellExecuteW(NULL, L"open", L"C:\\windows\\win.ini", NULL, NULL, SW_SHOWNORMAL) > 32) return 10;
 	if ((INT_PTR)ShellExecuteW(NULL, L"open", L"Z:\\etc\\passwd", NULL, NULL, SW_SHOWNORMAL) > 32) return 11;
 	if ((INT_PTR)ShellExecuteW(NULL, L"open", L"file:///etc/passwd", NULL, NULL, SW_SHOWNORMAL) > 32) return 12;
+
+	// The runtime's private calls answer only its own control panel and file dialog.
+	HMODULE host = LoadLibraryW(L"ravenhost.dll");
+	if (!host) return 16;
+	BOOL (WINAPI *grant)(const WCHAR *, DWORD) = (void *)GetProcAddress(host, "RavenGrantPath");
+	BOOL (WINAPI *configure)(const WCHAR *) = (void *)GetProcAddress(host, "RavenSandboxWrite");
+	if (!grant || !configure) return 17;
+	SetLastError(0);
+	if (grant(L"Z:\\etc\\passwd", TRUE) || GetLastError() != ERROR_ACCESS_DENIED) return 18;
+	if (configure(L"write /\n") || GetLastError() != ERROR_ACCESS_DENIED) return 19;
+	if (GetFileAttributesW(L"Z:\\etc") != INVALID_FILE_ATTRIBUTES) return 20;
 
 	// The Linux system call, made in a child of its own: whatever the runtime does with it, the child must not read the file.
 	WCHAR line[MAX_PATH + 16];

@@ -3,6 +3,7 @@
 #include "elevation.h"
 #include "file_objects.h"
 #include "kernel_context.h"
+#include "sandbox.h"
 #include "text.h"
 
 #include <algorithm>
@@ -192,6 +193,13 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 	};
 	enable_process_requests();
 	objects.process_request = [&context](const InheritedHandle &request) {
+		// No program may change the memory, the threads' tokens or read the memory of the runtime's control panel and file dialog.
+		if (sandbox().trusted() && (request.kind == "process:write" || request.kind == "process:read" || request.kind == "process:allocate" ||
+				request.kind == "process:free" || request.kind == "process:protect" || request.kind == "process:thread-token-set")) {
+			InheritedHandle answer;
+			answer.access = 0xc0000022U;
+			return answer;
+		}
 		if (request.kind == "process:image") {
 			InheritedHandle answer;
 			const auto &path = context.launch.image_path;

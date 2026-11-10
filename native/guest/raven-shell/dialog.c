@@ -1180,7 +1180,7 @@ static INT_PTR CALLBACK dialog_proc(HWND window, UINT message, WPARAM wparam, LP
 	return FALSE;
 }
 
-BOOL run_dialog(HWND owner, DialogState *state)
+BOOL show_dialog(HWND owner, DialogState *state)
 {
 	/* A template with the frame alone: the controls are made in pixels once the dialog exists. */
 	WORD *buffer, *at;

@@ -140,7 +140,7 @@ def main():
     shell_support = repo / "native/guest/raven-shell"
     shell_objects = [objects / "shell.o", objects / "shell_link.o", objects / "shell_com.o", objects / "shell_crt.o", objects / "shell_stream.o", objects / "shell_dialog.o",
                      objects / "shell_netaddress.o", objects / "shell_winrt.o", objects / "shell_knownfolder.o", objects / "shell_rot.o", objects / "shell_folder.o", objects / "shell_errorinfo.o",
-                     objects / "shell_clipboard.o"]
+                     objects / "shell_clipboard.o", objects / "shell_path.o", objects / "shell_request.o"]
     shell_flags = ["-O2", "-w", "-ffreestanding", f"-ffile-prefix-map={repo}=raven"]
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "shell.c", "-o", shell_objects[0]])
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "link.c", "-o", shell_objects[1]])
@@ -155,6 +155,8 @@ def main():
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "folder.c", "-o", shell_objects[10]])
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "errorinfo.c", "-o", shell_objects[11]])
     run([triple + "-gcc", "-c", *shell_flags, shell_support / "clipboard.c", "-o", shell_objects[12]])
+    run([triple + "-gcc", "-c", *shell_flags, shell_support / "path.c", "-o", shell_objects[13]])
+    run([triple + "-gcc", "-c", *shell_flags, shell_support / "request.c", "-o", shell_objects[14]])
     shell_defined = decorated(shell_objects)
     shell_names = ("GetRunningObjectTable", "CreateItemMoniker", "CoCreateInstance", "CoCreateInstanceEx", "CoGetClassObject", "CoGetTreatAsClass", "CoGetMalloc", "SHCreateItemFromParsingName", "SHGetPropertyStoreForWindow", "PropVariantClear", "SHAppBarMessage", "GetOpenFileNameW", "GetSaveFileNameW", "CommDlgExtendedError", "GetFileTitleW", "IUnknown_QueryService", "QISearch", "CLSIDFromProgID",
                    "SHCreateStreamOnFileA", "SHCreateStreamOnFileW", "SHCreateStreamOnFileEx", "SHCreateMemStream", "PropVariantCopy", "CoGetContextToken", "CoGetObjectContext", "CoGetDefaultContext", "ExtractIconExW", "ExtractIconW", "UiaGetReservedNotSupportedValue", "UiaGetReservedMixedAttributeValue", "SHGetMalloc",
@@ -166,13 +168,34 @@ def main():
     (output / "raven-shell.def").write_text("NAME raven-shell.dll\nEXPORTS\n" + "".join(definition_line(name, shell_defined.get(name)) for name in shell_names))
     run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,{bases['shell']:#x},--no-insert-timestamp", *link_extra,
          "-o", output / "raven-shell.dll", *shell_objects, output / "raven-shell.def", "-luser32", "-lgdi32", "-ladvapi32", "-lkernel32", "-lole32", "-loleaut32", "-luuid", "-lruntimeobject", "-lgcc"])
+    # The host services Raven's components call: fonts measured and rasterized with FreeType, surfaces drawn with Skia, and the sandbox
+    # calls of the control panel and the file picker.
+    host_names = ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo", "RavenFontMetrics", "RavenFontName", "RavenFontOpen", "RavenFontOutline",
+                  "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasBatch", "RavenCanvasCreate", "RavenCanvasDestroy", "RavenCanvasDraw",
+                  "RavenCanvasPixels", "RavenCanvasSize", "RavenPathCombine", "RavenPathWiden",
+                  "RavenGrantPath", "RavenSandboxRead", "RavenSandboxWrite", "RavenSandboxLog", "RavenSnapshotList", "RavenSnapshotTake", "RavenSnapshotRestore", "RavenSnapshotDelete"]
+    # A 32-bit program calls them as stdcall functions, named by the bytes of their arguments, which the import names leave out.
+    host_words = {"RavenFontClose": 1, "RavenFontGlyphs": 4, "RavenFontInfo": 2, "RavenFontMetrics": 3, "RavenFontName": 4, "RavenFontOpen": 3,
+                  "RavenFontOutline": 4, "RavenFontRender": 10, "RavenFontScan": 2, "RavenFontTable": 5, "RavenTrace": 1, "RavenCanvasBatch": 2,
+                  "RavenCanvasCreate": 2, "RavenCanvasDestroy": 1, "RavenCanvasDraw": 4, "RavenCanvasPixels": 8, "RavenCanvasSize": 2,
+                  "RavenPathCombine": 8, "RavenPathWiden": 7, "RavenGrantPath": 2, "RavenSandboxRead": 2, "RavenSandboxWrite": 1, "RavenSandboxLog": 2,
+                  "RavenSnapshotList": 2, "RavenSnapshotTake": 1, "RavenSnapshotRestore": 1, "RavenSnapshotDelete": 1}
+    (output / "ravenhost.def").write_text("LIBRARY ravenhost.dll\nEXPORTS\n" + "".join(
+        (f"{name}@{host_words[name] * 4}" if x86 else name) + "\n" for name in host_names))
+    run([triple + "-dlltool", *(["--kill-at"] if x86 else []), "-d", output / "ravenhost.def", "-l", output / "libravenhost.a"])
+    # raven-picker.exe: the file dialog of every program, run apart from it so that the runtime can trust it with the host's files.
+    run([triple + "-gcc", "-c", *shell_flags, shell_support / "picker.c", "-o", objects / "picker.o"])
+    run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp", *link_extra,
+         "-o", output / "raven-picker.exe", objects / "picker.o", shell_objects[5], shell_objects[13], shell_objects[3], "-L" + str(output), "-lravenhost",
+         "-luser32", "-lgdi32", "-ladvapi32", "-lkernel32", "-lgcc"])
     # control.exe: the control panel, a program on the public headers that asks for the common controls 6 in its manifest.
     control_support = repo / "native/guest/raven-control"
     control_objects = [objects / "control.o", objects / "control_res.o"]
     run([triple + "-gcc", "-c", "-O2", "-Wall", "-fno-builtin", f"-ffile-prefix-map={repo}=raven", control_support / "control.c", "-o", control_objects[0]])
     run([triple + "-windres", "-O", "coff", "-I" + str(control_support), "-i", control_support / "control.rc", "-o", control_objects[1]])
     run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp", *link_extra,
-         "-o", output / "control.exe", *control_objects, shell_objects[3], "-luser32", "-lgdi32", "-ladvapi32", "-lcomctl32", "-lkernel32", "-lgcc"])
+         "-o", output / "control.exe", *control_objects, shell_objects[3], output / "libravenhost.a", "-luser32", "-lgdi32", "-ladvapi32", "-lcomctl32",
+         "-lole32", "-luuid", "-lkernel32", "-lgcc"])
     # dism.exe: the feature servicing tool, as far as turning on the .NET Framework 3.5 from a local package; a console program.
     dism_support = repo / "native/guest/raven-dism"
     run([triple + "-gcc", "-c", "-O2", "-Wall", "-fno-builtin", f"-ffile-prefix-map={repo}=raven", dism_support / "dism.c", "-o", objects / "dism.o"])
@@ -188,13 +211,6 @@ def main():
     run([triple + "-gcc", "-c", "-O2", "-Wall", "-fno-builtin", f"-ffile-prefix-map={repo}=raven", dism_support / "regedit.c", "-o", objects / "regedit.o"])
     run([triple + "-gcc", "-nostdlib", "-mwindows", f"-Wl,--entry,{'_raven_program_entry@0' if x86 else 'raven_program_entry'},--no-insert-timestamp", *link_extra,
          "-o", output / "regedit.exe", objects / "regedit.o", shell_objects[3], "-ladvapi32", "-lkernel32", "-lgcc"])
-    if wanted & {"dwrite", "d2d1", "uianimation"}:
-        # The host services the DirectWrite and Direct2D components call: fonts measured and rasterized with FreeType, surfaces drawn with Skia.
-        host_names = ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo", "RavenFontMetrics", "RavenFontName", "RavenFontOpen", "RavenFontOutline",
-                      "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasBatch", "RavenCanvasCreate", "RavenCanvasDestroy", "RavenCanvasDraw",
-                      "RavenCanvasPixels", "RavenCanvasSize", "RavenPathCombine", "RavenPathWiden"]
-        (output / "ravenhost.def").write_text("LIBRARY ravenhost.dll\nEXPORTS\n" + "".join(name + "\n" for name in host_names))
-        run([triple + "-dlltool", "-d", output / "ravenhost.def", "-l", output / "libravenhost.a"])
     if "dwrite" in wanted:
         # The DirectWrite component: Raven code on the public headers, whose fonts come from the host through ravenhost.dll.
         dwrite_support = repo / "native/guest/raven-dwrite"

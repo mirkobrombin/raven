@@ -160,7 +160,7 @@ std::optional<std::filesystem::path> NativePaths::drive_root(char16_t letter) co
 	if (letter < u'a' || letter > u'z')
 		return std::nullopt;
 	if (letter == u'z') {
-		if (sandbox().grants().empty())
+		if (!sandbox().trusted() && sandbox().grants().empty())
 			return std::nullopt;
 		return std::filesystem::path("/");
 	}
