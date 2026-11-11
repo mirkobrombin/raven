@@ -10,7 +10,9 @@
    --base     checks the shared things as every other program sees them;
    --fresh    checks, as the installed program again, that it sees the shared things unchanged once its layer is gone, and what it made
               still there;
-   --portable changes a shared file as a program nothing installed, run from the host, and checks that it sees its change. */
+   --portable changes a shared file as a program nothing installed, run from the host, and checks that it sees its change; then, as a
+              launcher does, it puts a game of its own in the prefix and starts it, and sees the game's change to the game's data;
+   --game     is that game: it updates its data beside it. */
 
 static BOOL write_text(const WCHAR *path, const char *text)
 {
@@ -176,10 +178,31 @@ int raven_entry(void)
 	}
 	if (option(line, L'b'))
 		return check_base();
+	if (option(line, L'g'))
+		return write_text(L"C:\\LayerGame\\data.txt", "v2") ? 0 : 35;
 	if (option(line, L'p')) {
 		if (!write_text(L"C:\\layer-shared.txt", "portable") || !write_text(L"C:\\layer-portable.txt", "mine"))
 			return 33;
-		return holds(L"C:\\layer-shared.txt", "portable") && holds(L"C:\\layer-portable.txt", "mine") ? 0 : 34;
+		if (!holds(L"C:\\layer-shared.txt", "portable") || !holds(L"C:\\layer-portable.txt", "mine"))
+			return 34;
+		/* The game it downloads is its own, so what the game changes beside itself is what it sees too. */
+		WCHAR self[MAX_PATH];
+		if (!GetModuleFileNameW(NULL, self, MAX_PATH) || !CreateDirectoryW(L"C:\\LayerGame", NULL) ||
+			!CopyFileW(self, L"C:\\LayerGame\\layer-game.exe", FALSE) || !write_text(L"C:\\LayerGame\\data.txt", "v1"))
+			return 36;
+		WCHAR command[] = L"C:\\LayerGame\\layer-game.exe --game";
+		STARTUPINFOW startup = {sizeof startup};
+		PROCESS_INFORMATION process;
+		if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process))
+			return 37;
+		WaitForSingleObject(process.hProcess, 120000);
+		DWORD code = 1;
+		GetExitCodeProcess(process.hProcess, &code);
+		CloseHandle(process.hThread);
+		CloseHandle(process.hProcess);
+		if (code)
+			return (int)code;
+		return holds(L"C:\\LayerGame\\data.txt", "v2") ? 0 : 38;
 	}
 	if (option(line, L'f')) {
 		if (!holds(L"C:\\layer-shared.txt", "base") || !present(L"C:\\layer-other.txt") || !present(L"C:\\layer-new.txt"))

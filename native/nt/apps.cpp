@@ -130,6 +130,14 @@ std::optional<InstalledApp> app_of(const std::filesystem::path &prefix, const st
 			if (within(relative, folder))
 				return std::move(app);
 	}
+	// What a program made where nothing was is its own, a program among it too: a game a launcher downloaded belongs to the launcher, so
+	// the files of the game the launcher updates are the ones the game changes.
+	for (auto &app : installed_apps(prefix)) {
+		std::ifstream made(layers_directory(prefix) / (app.id + ".made"));
+		for (std::string line; std::getline(made, line);)
+			if (line.starts_with("path ") && within(relative, std::string_view(line).substr(5)))
+				return std::move(app);
+	}
 	return std::nullopt;
 }
 

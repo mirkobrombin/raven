@@ -30,7 +30,8 @@ struct InstalledApp {
 std::filesystem::path apps_directory(const std::filesystem::path &prefix);
 std::filesystem::path layers_directory(const std::filesystem::path &prefix);
 std::vector<InstalledApp> installed_apps(const std::filesystem::path &prefix);
-// The installed program an executable belongs to; none for one under C:\Windows, which belongs to the system.
+// The program an executable belongs to: the one that installed it, or made it where nothing was, as a launcher makes the games it
+// downloads; none for one under C:\Windows, which belongs to the system.
 std::optional<InstalledApp> app_of(const std::filesystem::path &prefix, const std::filesystem::path &executable);
 // The identity every other program runs with: the installed program its executable belongs to, or else the executable itself, recorded
 // the first time it runs. A program nothing installed owns the folder it runs from when that folder is in the prefix and its own.
