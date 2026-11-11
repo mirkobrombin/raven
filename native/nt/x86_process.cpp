@@ -640,7 +640,17 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			const auto stable = std::find(merged.begin(), merged.end(), exported);
 			if (stable == merged.end())
 				throw std::runtime_error("native x86 provider export is not in its list: " + std::string(dll) + "!" + exported);
-			traps.emplace(provider.loaded.base() + symbol.address, std::pair{*stable, words_of(dll, exported, count(exported)) * 4});
+			// Resolve the user-mode Zw alias once, before any dispatcher, with the original export's argument count.
+			std::string_view name = *stable;
+			if (std::string_view(dll) == "ntdll.dll" && name.starts_with("Zw")) {
+				const auto names = system_export_names(dll);
+				const auto native = std::find_if(names.begin(), names.end(), [&](std::string_view item) {
+					return item.starts_with("Nt") && item.substr(2) == name.substr(2);
+				});
+				if (native != names.end())
+					name = *native;
+			}
+			traps.emplace(provider.loaded.base() + symbol.address, std::pair{name, words_of(dll, exported, count(exported)) * 4});
 		}
 	};
 	std::vector<std::string_view> advapi_names;
@@ -1106,8 +1116,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			// to the runtime. The vectored handler lists live there too, and fibers, which the thread switches by itself.
 			static const std::map<std::string_view, std::string_view> in_runtime{{"RaiseException", "raven_raise_exception"},
 				{"RtlUnwind", "raven_unwind"}, {"AddVectoredExceptionHandler", "raven_add_vectored_exception"},
-				{"AddVectoredContinueHandler", "raven_add_vectored_continue"}, {"RemoveVectoredExceptionHandler", "raven_remove_vectored"},
-				{"RemoveVectoredContinueHandler", "raven_remove_vectored"}, {"CreateFiber", "raven_create_fiber"},
+				{"RtlAddVectoredExceptionHandler", "raven_add_vectored_exception"},
+				{"AddVectoredContinueHandler", "raven_add_vectored_continue"}, {"RtlAddVectoredContinueHandler", "raven_add_vectored_continue"},
+				{"RemoveVectoredExceptionHandler", "raven_remove_vectored"}, {"RtlRemoveVectoredExceptionHandler", "raven_remove_vectored"},
+				{"RemoveVectoredContinueHandler", "raven_remove_vectored"}, {"RtlRemoveVectoredContinueHandler", "raven_remove_vectored"}, {"CreateFiber", "raven_create_fiber"},
 				{"CreateFiberEx", "raven_create_fiber_ex"}, {"ConvertThreadToFiber", "raven_convert_thread_to_fiber"},
 				{"ConvertThreadToFiberEx", "raven_convert_thread_to_fiber_ex"}, {"ConvertFiberToThread", "raven_convert_fiber_to_thread"},
 				{"SwitchToFiber", "raven_switch_to_fiber"}, {"DeleteFiber", "raven_delete_fiber"}, {"IsThreadAFiber", "raven_is_thread_a_fiber"}};

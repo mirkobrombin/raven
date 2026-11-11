@@ -13,8 +13,10 @@ namespace raven {
 
 namespace {
 
-constexpr std::array<std::pair<std::string_view, uint32_t>, 28> compat_exports{{
+constexpr std::array<std::pair<std::string_view, uint32_t>, 34> compat_exports{{
 	{"GetProcessHeap", 0}, {"HeapAlloc", 3}, {"HeapFree", 3}, {"HeapReAlloc", 4}, {"HeapSize", 3},
+	// The ntdll heap names take the same heap handle, flags and block as the kernel32 ones.
+	{"RtlAllocateHeap", 3}, {"RtlCreateHeap", 6}, {"RtlDestroyHeap", 1}, {"RtlFreeHeap", 3}, {"RtlReAllocateHeap", 4}, {"RtlSizeHeap", 3},
 	{"CreateWindowExA", 12}, {"DispatchMessageA", 1}, {"GetMessageA", 4}, {"PeekMessageA", 5},
 	{"RegisterClassA", 1}, {"RegisterClassExA", 1}, {"UnregisterClassA", 2}, {"GetClassInfoA", 3}, {"GetClassInfoExA", 3},
 	{"GlobalHandle", 1}, {"GetVersionExA", 1}, {"WinExec", 2}, {"GetCurrentProcess", 0}, {"SetHandleCount", 1}, {"GetEnvironmentStrings", 0},
@@ -288,28 +290,32 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	const auto known = std::find_if(compat_exports.begin(), compat_exports.end(), [&](const auto &item) { return item.first == name; });
 	if (known == compat_exports.end())
 		return false;
+	// The ntdll heap calls take the same heap handle, flags and block as the kernel32 ones, so they share their handlers.
+	const std::string_view api = name == "RtlAllocateHeap" ? "HeapAlloc" : name == "RtlFreeHeap" ? "HeapFree" :
+		name == "RtlReAllocateHeap" ? "HeapReAlloc" : name == "RtlSizeHeap" ? "HeapSize" :
+		name == "RtlCreateHeap" ? "HeapCreate" : name == "RtlDestroyHeap" ? "HeapDestroy" : name;
 	// The guest-side heap is opt-in: with it, a 32-bit program that starts several threads at once (Bitvise SSH Client given -host)
 	// still crashes now and then on a corrupted block, and without it it does not.
 	static const bool guest_side = std::getenv("RAVEN_GUEST_HEAP") != nullptr;
-	if ((guest_side || guest_heap_wanted.load(std::memory_order_relaxed)) && (name.starts_with("Heap") || name == "GetProcessHeap"))
+	if ((guest_side || guest_heap_wanted.load(std::memory_order_relaxed)) && (api.starts_with("Heap") || api == "GetProcessHeap"))
 		guest_heap();
-	if (name == "GetProcessHeap") {
+	if (api == "GetProcessHeap") {
 		process.api_arguments(0);
 		process.return_api(process_heap_handle);
-	} else if (name == "HeapAlloc") {
+	} else if (api == "HeapAlloc") {
 		const auto args = process.api_arguments(3);
 		process.return_api(heap_alloc(uint32_t(args[2]), args[1] & 0x8, uint32_t(args[0]) == executable_heap_handle));
-	} else if (name == "HeapFree") {
+	} else if (api == "HeapFree") {
 		const auto args = process.api_arguments(3);
 		if (args[2] && global_block(args[2]))
 			global_release(args[2]);
 		else if (args[2])
 			heap_free(args[2]);
 		process.return_api(1);
-	} else if (name == "HeapSize") {
+	} else if (api == "HeapSize") {
 		const auto args = process.api_arguments(3);
 		process.return_api(args[2] && global_block(args[2]) ? uint32_t(global_size(args[2])) : args[2] ? block_size(args[2]) : UINT32_MAX);
-	} else if (name == "HeapReAlloc") {
+	} else if (api == "HeapReAlloc") {
 		const auto args = process.api_arguments(4);
 		const bool global = global_block(args[2]);
 		const uint32_t old_size = global ? uint32_t(global_size(args[2])) : block_size(args[2]), size = uint32_t(args[3]);
@@ -347,13 +353,14 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	} else if (name == "WinExec") {
 		process.api_arguments(2);
 		process.return_api(2);
-	} else if (name == "HeapCreate") {
-		// Every heap shares the process heap's arena, except those whose blocks must run code.
-		const auto args = process.api_arguments(3);
+	} else if (api == "HeapCreate") {
+		// Every heap shares the process heap's arena, except those whose blocks must run code. RtlCreateHeap also names a base address,
+		// a reserve, a commit and a lock, which a shared arena has no use for.
+		const auto args = process.api_arguments(name == "HeapCreate" ? 3 : 6);
 		process.return_api(args[0] & 0x40000 ? executable_heap_handle : process_heap_handle);
-	} else if (name == "HeapDestroy" || name == "FreeEnvironmentStringsA") {
+	} else if (api == "HeapDestroy" || name == "FreeEnvironmentStringsA") {
 		process.api_arguments(1);
-		process.return_api(1);
+		process.return_api(name == "RtlDestroyHeap" ? 0 : 1);
 	} else if (name == "UnhandledExceptionFilter") {
 		// The last chance for an exception nothing handled: it is named, and the process ends as its handler asks.
 		const auto args = process.api_arguments(1);

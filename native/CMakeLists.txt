@@ -3664,6 +3664,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_x86_heap COMMAND raven --run-process --execution=native
                     ${CMAKE_CURRENT_BINARY_DIR}/x86-heap-client.exe)
                 set_tests_properties(native_x86_heap PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_GUEST_HEAP=1 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-rtl-client.exe
+                    COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86-rtl-client.exe ${LOADER_SOURCES}/x86_rtl_client.c -lkernel32 -lntdll
+                    DEPENDS ${LOADER_SOURCES}/x86_rtl_client.c VERBATIM)
+                add_custom_target(x86_rtl_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-rtl-client.exe)
+                add_test(NAME native_x86_rtl COMMAND raven --run-process --execution=native
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86-rtl-client.exe)
+                set_tests_properties(native_x86_rtl PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-version-client.exe
                     COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
                         -Wl,--entry,_raven_entry,--no-insert-timestamp
