@@ -1564,6 +1564,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(wheel_target_test wheel_target_fixture raven-bootstrap)
             add_test(NAME native_wheel_target COMMAND wheel_target_test $<TARGET_FILE:raven-bootstrap> ${WHEEL_TARGET_FIXTURE})
             set_tests_properties(native_wheel_target PROPERTIES TIMEOUT 15)
+            add_executable(pointer_leave_test desktop/pointer_leave_test.cpp)
+            target_link_libraries(pointer_leave_test PRIVATE raven_cpu)
+            set(POINTER_LEAVE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/pointer-leave.exe)
+            add_custom_command(OUTPUT ${POINTER_LEAVE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${POINTER_LEAVE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/pointer_leave_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/pointer_leave_client.c VERBATIM)
+            add_custom_target(pointer_leave_fixture ALL DEPENDS ${POINTER_LEAVE_FIXTURE})
+            add_dependencies(pointer_leave_test pointer_leave_fixture raven-bootstrap)
+            add_test(NAME native_pointer_leave COMMAND pointer_leave_test $<TARGET_FILE:raven-bootstrap> ${POINTER_LEAVE_FIXTURE})
+            set_tests_properties(native_pointer_leave PROPERTIES TIMEOUT 20)
             add_executable(input_thread_test desktop/input_thread_test.cpp)
             target_link_libraries(input_thread_test PRIVATE raven_cpu)
             set(INPUT_THREAD_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/input-thread.exe)
@@ -2857,7 +2869,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_command(OUTPUT ${shell_info_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
                             -Wl,--entry,${crt_entry},--no-insert-timestamp
-                            -o ${shell_info_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/shell_info_client.c -lshell32 -lole32 -luser32 -lgdi32 -lkernel32
+                            -o ${shell_info_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/shell_info_client.c -lshell32 -lcomctl32 -ladvapi32 -lole32 -luser32 -lgdi32 -lkernel32
                         DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/shell_info_client.c VERBATIM)
                     add_custom_target(shell_info_fixture${width} ALL DEPENDS ${shell_info_client})
                     add_test(NAME native_shell_info_x${width} COMMAND raven --run-process --execution=native ${shell_info_client})
@@ -3034,6 +3046,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_desktop_icon_contract PROPERTIES TIMEOUT 120)
             add_test(NAME native_desktop_icon_cli COMMAND raven --run-process --execution=native ${DESKTOP_FIXTURES}/client.exe)
             set_tests_properties(native_desktop_icon_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            add_custom_command(OUTPUT ${DESKTOP_FIXTURES}/extract-icon.exe
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${DESKTOP_FIXTURES}/extract-icon.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/extract_icon_client.c
+                    -lshell32 -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/extract_icon_client.c VERBATIM)
+            add_custom_target(extract_icon_fixture ALL DEPENDS ${DESKTOP_FIXTURES}/extract-icon.exe desktop_pe_fixtures)
+            add_test(NAME native_extract_icon_cli COMMAND raven --run-process --execution=native ${DESKTOP_FIXTURES}/extract-icon.exe)
+            set_tests_properties(native_extract_icon_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             add_custom_command(OUTPUT ${DESKTOP_FIXTURES}/surface.exe
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
                     -Wl,--entry,raven_entry,--image-base,0x195000000
@@ -3549,7 +3569,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-tree-loop-distribute-patterns -fno-stack-protector
                 -Wl,--entry,raven_entry,--no-insert-timestamp
-                -o ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe ${LOADER_SOURCES}/cmd_client.c -lkernel32 -lgcc
+                -o ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe ${LOADER_SOURCES}/cmd_client.c -lkernel32 -ladvapi32 -lgcc
             DEPENDS ${LOADER_SOURCES}/cmd_client.c VERBATIM)
         set(RAVEN_CMD_CLIENTS ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe)
         add_test(NAME native_cmd COMMAND raven --run-process --execution=native --timeout-ms=60000 ${CMAKE_CURRENT_BINARY_DIR}/cmd-client.exe)
@@ -3558,7 +3578,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-cmd-client.exe
                 COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-builtin -fno-tree-loop-distribute-patterns -fno-stack-protector
                     -Wl,--entry,_raven_entry,--no-insert-timestamp
-                    -o ${CMAKE_CURRENT_BINARY_DIR}/x86-cmd-client.exe ${LOADER_SOURCES}/cmd_client.c -lkernel32 -lgcc
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/x86-cmd-client.exe ${LOADER_SOURCES}/cmd_client.c -lkernel32 -ladvapi32 -lgcc
                 DEPENDS ${LOADER_SOURCES}/cmd_client.c VERBATIM)
             list(APPEND RAVEN_CMD_CLIENTS ${CMAKE_CURRENT_BINARY_DIR}/x86-cmd-client.exe)
             add_test(NAME native_cmd_x32 COMMAND raven --run-process --execution=native --timeout-ms=60000
@@ -3878,6 +3898,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(cross_window_fixture${width} ALL DEPENDS ${cross_window_client})
                     add_test(NAME native_cross_window_x${width} COMMAND raven --run-process --execution=native --timeout-ms=30000 ${cross_window_client})
                     set_tests_properties(native_cross_window_x${width} PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(rebar_rows_client ${CMAKE_CURRENT_BINARY_DIR}/rebar-rows${width}.exe)
+                    add_custom_command(OUTPUT ${rebar_rows_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${rebar_rows_client} ${LOADER_SOURCES}/rebar_rows_client.c -lcomctl32 -luser32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/rebar_rows_client.c VERBATIM)
+                    add_custom_target(rebar_rows_fixture${width} ALL DEPENDS ${rebar_rows_client})
+                    add_test(NAME native_rebar_rows_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${rebar_rows_client})
+                    set_tests_properties(native_rebar_rows_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(file_panel_client ${CMAKE_CURRENT_BINARY_DIR}/file-panel${width}.exe)
+                    add_custom_command(OUTPUT ${file_panel_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${file_panel_client} ${LOADER_SOURCES}/file_panel_client.c -lcomctl32 -luser32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/file_panel_client.c VERBATIM)
+                    add_custom_target(file_panel_fixture${width} ALL DEPENDS ${file_panel_client})
+                    add_test(NAME native_file_panel_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${file_panel_client})
+                    set_tests_properties(native_file_panel_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(toolbar_customize_client ${CMAKE_CURRENT_BINARY_DIR}/toolbar-customize${width}.exe)
                     add_custom_command(OUTPUT ${toolbar_customize_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
@@ -4837,6 +4873,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_vlc_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-vlc.py
                         $<TARGET_FILE:raven> ${RAVEN_VLC_INSTALLER} ${CMAKE_CURRENT_BINARY_DIR}/vlc-evidence)
                     set_tests_properties(native_vlc_workflow PROPERTIES TIMEOUT 1200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
+                endif()
+                # 7-Zip 24.09 from the EXE and the MSI Igor Pavlov publishes, checked against their SHA-256 (scripts/native-7zip.py): each
+                # installed in a fresh prefix, then archives made and extracted with a password from the file manager, and .7z files given
+                # to it from its Options and opened through the shell.
+                set(RAVEN_7ZIP_INSTALLER "" CACHE FILEPATH "7z2409-x64.exe as 7-zip.org publishes it")
+                set(RAVEN_7ZIP_PACKAGE "" CACHE FILEPATH "7z2409-x64.msi as 7-zip.org publishes it")
+                if(TARGET raven_wayland AND RAVEN_LABWC AND RAVEN_GRIM AND RAVEN_WLRCTL AND RAVEN_WTYPE AND RAVEN_PIL_PYTHON AND RAVEN_7ZIP_INSTALLER
+                   AND EXISTS ${RAVEN_7ZIP_INSTALLER} AND RAVEN_7ZIP_PACKAGE AND EXISTS ${RAVEN_7ZIP_PACKAGE})
+                    add_test(NAME native_7zip_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-7zip.py
+                        $<TARGET_FILE:raven> ${RAVEN_7ZIP_INSTALLER} ${RAVEN_7ZIP_PACKAGE} ${CMAKE_CURRENT_BINARY_DIR}/7zip-evidence)
+                    set_tests_properties(native_7zip_workflow PROPERTIES TIMEOUT 1200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
                 endif()
                 # A self-contained .NET 8 program, published with the .NET SDK given: the runtime loads its libraries of managed code alone,
                 # built for any CPU, and a managed exception and a runtime one are thrown and caught.

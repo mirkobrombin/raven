@@ -2144,6 +2144,11 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(3);
 			return;
 		}
+		// A name that ends in a backslash names no entry: Windows finds nothing, even when it is a directory.
+		if (pattern.empty()) {
+			call.set_last_error(2);
+			return;
+		}
 		auto found = std::make_shared<FindObject>();
 		const bool wild = pattern.find_first_of(u"*?<>") != pattern.npos;
 		std::vector<std::u16string> names;
@@ -2498,6 +2503,13 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		{"GetFileAttributesTransactedW", "GetFileAttributesExW", 4, {0, 1, 2}},
 		{"SetFileAttributesTransactedW", "SetFileAttributesW", 3, {0, 1}},
 	};
+	// A move that reports its progress is a move: a rename reports nothing on Windows either, and a copy across volumes is done at once.
+	if (const auto plain = registry.find("MoveFileExW"))
+		registry.add("MoveFileWithProgressW", 5, [handler = plain->second](ApiCall &call) {
+			ApiCall inner(call.process, call.environment, {call[0], call[1], call[4]});
+			handler(inner);
+			call.ret(inner.result);
+		});
 	for (const auto &entry : transacted) {
 		const auto plain = registry.find(entry.plain);
 		if (!plain)

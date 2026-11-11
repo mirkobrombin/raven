@@ -25,6 +25,9 @@ static void msvcrt_attach(void)
 {
 	_acmdln = (char *)GetCommandLineA();
 	_wcmdln = GetCommandLineW();
+	/* The standard streams hold the process's standard handles from the start: programs that write to &_iob[1] never ask for it. */
+	for (unsigned index = 0; index < 3; ++index)
+		__acrt_iob_func(index);
 }
 
 /* The startup code of programs built by MinGW-w64 against msvcrt asks the runtime to set up the numeric locale fields; they already are. */

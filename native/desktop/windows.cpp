@@ -972,7 +972,8 @@ void NativeWindows::serve_sent()
 		const auto item=*found;
 		item->taken=true;
 		try {
-			item->result=objects.window(item->window) ? send(item->window,item->message,item->wparam,item->lparam) : 0;
+			const bool stale=item->activation && (item->message==7 ? focus : active)!=item->window;
+			item->result=!stale && objects.window(item->window) ? send(item->window,item->message,item->wparam,item->lparam) : 0;
 		} catch (...) {
 			item->done=true;
 			std::erase(sent,item);
@@ -1151,6 +1152,13 @@ void NativeWindows::receive(const DesktopEvent &event)
 		keep_host_window=false;
 		return;
 	}
+	if (event.kind==DesktopEventKind::pointer_leave) {
+		// The pointer went over another program's window: the window that asked to know gets WM_MOUSELEAVE, and the point under the
+		// cursor is no longer one of this program's windows, so a tooltip polling it hides.
+		pointer_away=true;
+		track_pointer(0);
+		return;
+	}
 	if (event.kind==DesktopEventKind::pointer_relative) {
 		// The mouse's own movement: once the host reports it, raw input uses it rather than the change of the pointer position.
 		raw_mouse.relative=true;
@@ -1176,6 +1184,7 @@ void NativeWindows::receive(const DesktopEvent &event)
 	}
 	if (event.x<INT16_MIN || event.x>INT16_MAX || event.y<INT16_MIN || event.y>INT16_MAX)
 		throw std::runtime_error("pointer coordinates exceed the guest message contract");
+	pointer_away=false;
 	uint32_t message=0x200,buttons=mouse_buttons;
 	if (event.kind==DesktopEventKind::pointer_button) {
 		uint32_t mask=0;
@@ -1646,7 +1655,10 @@ void NativeWindows::notify(uint64_t handle, uint32_t message, uint64_t wparam, u
 	const auto *window=std::as_const(objects).window(handle);
 	if (!window) return;
 	if (const auto me=environment.thread_id(); window->thread && me && window->thread!=me && block_hook) {
-		sent.push_back(std::make_shared<SentMessage>(SentMessage{handle,message,wparam,lparam,0,window->thread}));
+		// Windows sends activation and focus synchronously, so they never reach a window that has lost them again. A queued one that
+		// arrives after another window took them is dropped: a dialog would otherwise take the focus back for its control.
+		const bool activation=((message==0x86 || message==6) && (wparam&0xffff)) || message==7;
+		sent.push_back(std::make_shared<SentMessage>(SentMessage{handle,message,wparam,lparam,0,window->thread,false,false,activation}));
 		queue_changed(window->thread,0x40);
 		return;
 	}

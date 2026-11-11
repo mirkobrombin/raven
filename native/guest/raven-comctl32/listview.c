@@ -424,7 +424,8 @@ static void view_item(list_state *list, int index, int sub, UINT ask, UINT state
 	view->state &= ~list->callback_mask;
 
 	if (ask & LVIF_TEXT) {
-		const WCHAR *text = !item ? LPSTR_TEXTCALLBACKW : sub == 0 ? item->text : cell ? cell->text : NULL;
+		/* A subitem never set is asked for, as one set to LPSTR_TEXTCALLBACK is: 7-Zip fills its columns only that way. */
+		const WCHAR *text = !item || (sub > 0 && !cell) ? LPSTR_TEXTCALLBACKW : sub == 0 ? item->text : cell->text;
 		if (IS_CALLBACK(text))
 			need |= LVIF_TEXT;
 		else if (text)
@@ -2044,7 +2045,7 @@ static BOOL get_item(list_state *list, LVITEMW *target, BOOL wide)
 		return FALSE;
 	if (target->mask & LVIF_NORECOMPUTE) {
 		if (target->mask & LVIF_TEXT) {
-			const WCHAR *text = list->owner_data ? LPSTR_TEXTCALLBACKW : sub == 0 ? list->items[index]->text : (find_cell(list->items[index], sub) ? find_cell(list->items[index], sub)->text : NULL);
+			const WCHAR *text = list->owner_data ? LPSTR_TEXTCALLBACKW : sub == 0 ? list->items[index]->text : (find_cell(list->items[index], sub) ? find_cell(list->items[index], sub)->text : LPSTR_TEXTCALLBACKW);
 			if (IS_CALLBACK(text)) {
 				target->pszText = LPSTR_TEXTCALLBACKW;
 				return TRUE;

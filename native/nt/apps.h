@@ -38,6 +38,8 @@ std::optional<InstalledApp> app_of(const std::filesystem::path &prefix, const st
 std::optional<InstalledApp> identity_of(const std::filesystem::path &prefix, const std::filesystem::path &executable);
 // Records what an installation made: the difference between the prefix now and the snapshot taken before it.
 InstalledApp record_installation(const std::filesystem::path &prefix, const std::filesystem::path &snapshot, std::string_view name);
+// The name an installation is recorded under: the installer's own, or for the Windows Installer the package it was given to install.
+std::string installation_name(std::string_view program, const std::vector<std::string_view> &arguments);
 // Throws an installed program's layer away: the program sees the prefix as its installer left it again.
 bool discard_layer(const std::filesystem::path &prefix, std::string_view id);
 bool remove_app(const std::filesystem::path &prefix, std::string_view id);

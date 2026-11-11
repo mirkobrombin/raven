@@ -248,6 +248,34 @@ InstalledApp record_installation(const std::filesystem::path &prefix, const std:
 	return app;
 }
 
+std::string installation_name(std::string_view program, const std::vector<std::string_view> &arguments)
+{
+	const auto lower = [](std::string_view text) {
+		std::string result(text);
+		for (auto &character : result)
+			character = char(std::tolower(static_cast<unsigned char>(character)));
+		return result;
+	};
+	const auto stem = [](std::string_view file) {
+		const auto slash = file.find_last_of("\\/");
+		auto name = slash == file.npos ? file : file.substr(slash + 1);
+		const auto dot = name.rfind('.');
+		return std::string(dot == name.npos || dot == 0 ? name : name.substr(0, dot));
+	};
+	if (lower(stem(program)) == "msiexec")
+		for (size_t at = 0; at + 1 < arguments.size(); ++at) {
+			const auto option = lower(arguments[at]);
+			if ((option.size() > 1 && (option[0] == '/' || option[0] == '-')) && (option.substr(1) == "i" || option.substr(1) == "package")) {
+				auto package = arguments[at + 1];
+				if (package.size() >= 2 && package.front() == '"' && package.back() == '"')
+					package = package.substr(1, package.size() - 2);
+				if (!stem(package).empty())
+					return stem(package);
+			}
+		}
+	return stem(program);
+}
+
 bool discard_layer(const std::filesystem::path &prefix, std::string_view id)
 {
 	const auto name = safe_name(id);

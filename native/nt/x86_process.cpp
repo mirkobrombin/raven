@@ -168,7 +168,7 @@ constexpr std::string_view shared_allowed[] = {
 	"SetFileAttributesW", "GetLongPathNameA", "GetLongPathNameW", "GetShortPathNameA", "GetShortPathNameW", "SearchPathA", "SearchPathW",
 	"GetModuleFileNameA", "IsDBCSLeadByte", "IsDBCSLeadByteEx", "GetCPInfoExA", "GetThreadLocale", "SetThreadLocale", "VerifyVersionInfoW",
 	"GetUserNameA", "GetUserNameW", "FlsAlloc", "FlsFree", "FlsGetValue", "FlsSetValue", "SetDefaultDllDirectories", "AddDllDirectory", "RemoveDllDirectory", "SetSearchPathMode", "GetLargePageMinimum", "ConvertDefaultLocale", "GetMachineTypeAttributes", "GetShellWindow", "PowerCreateRequest", "PowerSetRequest", "PowerClearRequest", "CreateTransaction", "CommitTransaction", "CommitTransactionAsync",
-	"RollbackTransaction", "RollbackTransactionAsync", "CreateFileTransactedW", "DeleteFileTransactedW", "MoveFileTransactedW", "CopyFileTransactedW",
+	"RollbackTransaction", "RollbackTransactionAsync", "CreateFileTransactedW", "DeleteFileTransactedW", "MoveFileTransactedW", "MoveFileWithProgressW", "MoveFileWithProgressA", "MoveFileExA", "CopyFileTransactedW",
 	"CreateDirectoryTransactedW", "RemoveDirectoryTransactedW", "GetFileAttributesTransactedW", "SetFileAttributesTransactedW", "SHGetFolderPathW", "SHGetFolderPathA", "SHChangeNotify", "SHPathPrepareForWriteW", "ShowOwnedPopups",
 	"UnrealizeObject", "EnableNonClientDpiScaling", "EnumFontsW", "DisableProcessWindowsGhosting", "ShutdownBlockReasonCreate", "ShutdownBlockReasonDestroy", "WNetOpenEnumW", "WNetOpenEnumA", "WNetEnumResourceW", "WNetEnumResourceA", "WNetCloseEnum", "WNetGetConnectionW",
 	"WNetGetConnectionA", "WNetGetUniversalNameW", "WNetGetUniversalNameA", "SetSearchPathMode",
@@ -868,6 +868,17 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	module_api.set_path_lookup([&](const std::string &path) { return library_loader.find(path); });
 	DesktopObjects desktop_objects;
 	NativeDesktop desktop(process, environment, desktop_objects, resources);
+	// LoadImage with LR_LOADFROMFILE reads an icon, cursor or bitmap file the program names, as a 64-bit program's does.
+	desktop.set_host_files([&paths](std::u16string_view path) -> std::optional<std::vector<uint8_t>> {
+		const auto resolved = paths.resolve(path);
+		std::error_code error;
+		if (!resolved || !resolved->exists || !std::filesystem::is_regular_file(resolved->host, error))
+			return std::nullopt;
+		std::ifstream stream(resolved->host, std::ios::binary);
+		if (!stream)
+			return std::nullopt;
+		return std::vector<uint8_t>(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+	});
 	// The built-in bitmaps, icons and cursors of user32 live in the component when it is there.
 	if (const auto component = modules.all().find("raven-user32.dll"); component != modules.all().end() && !component->second->runtime_api)
 		desktop.set_oem_module(component->second->loaded.base());

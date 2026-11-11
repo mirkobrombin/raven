@@ -175,7 +175,7 @@ private:
 	uint32_t owner(uint64_t window) const;
 	bool queued_for(uint32_t thread) const;
 	// A message sent to a window of another thread waits here until that thread retrieves messages; the sender waits for the result.
-	struct SentMessage { uint64_t window; uint32_t message; uint64_t wparam, lparam, result=0; uint32_t thread; bool taken=false, done=false; };
+	struct SentMessage { uint64_t window; uint32_t message; uint64_t wparam, lparam, result=0; uint32_t thread; bool taken=false, done=false, activation=false; };
 	std::deque<std::shared_ptr<SentMessage>> sent;
 	// Runs the messages other threads sent to windows of the calling thread.
 	void serve_sent();
@@ -268,6 +268,8 @@ private:
 	std::function<uint64_t(uint64_t,uint64_t)> menu_loader;
 	uint32_t mouse_buttons=0;
 	int32_t cursor_x=0,cursor_y=0;
+	// The pointer left every window of this program for another program's.
+	bool pointer_away=false;
 	uint64_t focus=0,active=0;
 	bool activating=false,has_queued_activation=false;
 	uint64_t queued_activation=0;

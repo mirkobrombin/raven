@@ -26,8 +26,8 @@ struct Compositor {
 	wl_resource *keyboard=nullptr,*focused=nullptr;
 	std::map<wl_resource *,Shell> surfaces;
 	uint32_t serial=0,pressed=0;
-	// Set by the test: a key is pressed and released.
-	std::atomic<bool> type{false},stop{false};
+	// Set by the test: a key is pressed and released; the next frame committed to a window is answered with a request to close it.
+	std::atomic<bool> type{false},stop{false},close_on_commit{false};
 
 	void focus(wl_resource *surface) {
 		if (!keyboard) return;
@@ -97,6 +97,8 @@ static int dispatch(const void *data,void *target,uint32_t,const wl_message *mes
 		if (compositor.focused==resource) compositor.focused=nullptr;
 	} else if (request=="wl_surface.commit") {
 		const auto found=compositor.surfaces.find(resource);
+		if (found!=compositor.surfaces.end() && found->second.configured && !found->second.popup && compositor.close_on_commit.exchange(false))
+			xdg_toplevel_send_close(found->second.role);
 		if (found!=compositor.surfaces.end() && found->second.role && !found->second.configured) {
 			auto &shell=found->second;
 			shell.configured=true;
@@ -150,6 +152,17 @@ static void exercise(raven::DesktopPresentation &desktop,Compositor &compositor)
 	check(focused(desktop)==3,"the keyboard did not follow the next menu");
 	desktop.remove(3);
 	check(focused(desktop)==1,"the keyboard did not return to the window");
+	// The compositor asks to close the window while a frame of it is being shown, as labwc does for Alt+F4: the frame is shown, the
+	// program gets WM_CLOSE, and the window it keeps goes on showing its frames.
+	const std::vector<uint8_t> changed(64*48*4,0x40);
+	compositor.close_on_commit=true;
+	desktop.present(1,"owner",64,48,changed);
+	bool asked=false;
+	for (int attempt=0;attempt<50 && !asked;++attempt)
+		for (const auto &event : desktop.poll(std::chrono::milliseconds(10)))
+			asked=asked || (event.window==1 && event.message==0x10);
+	check(asked,"the compositor's close did not reach the window");
+	desktop.present(1,"owner",64,48,frame);
 }
 
 int main()

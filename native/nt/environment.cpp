@@ -346,6 +346,20 @@ uint64_t NativeEnvironment::process_heap() const
 	return heap;
 }
 
+bool NativeEnvironment::set_standard_handle(uint32_t selector, uint64_t handle)
+{
+	if (selector<uint32_t(-12) || selector>uint32_t(-10))
+		return false;
+	const bool narrow=process.mode()==NativeMode::x86;
+	const auto parameters=pointer(process_block+(narrow ? 0x10 : 0x20));
+	if (!parameters) throw std::runtime_error("native process parameters are not initialized");
+	const size_t width=narrow ? 4 : 8;
+	std::array<uint8_t,8> bytes{};
+	for (size_t index=0;index<width;++index) bytes[index]=uint8_t(handle>>(index*8));
+	process.write_memory(parameters+(narrow ? 0x18 : 0x20)+(uint32_t(-10)-selector)*width,std::span<const uint8_t>(bytes).first(width));
+	return true;
+}
+
 uint64_t NativeEnvironment::pointer(uint64_t address) const
 {
 	const auto width = process.mode() == NativeMode::x86 ? 4 : 8;

@@ -103,6 +103,10 @@ int raven_entry(void)
 	CHECK(20,MoveFileExW(copy,moved,0));
 	CHECK(21,GetFileAttributesW(copy)==INVALID_FILE_ATTRIBUTES && GetLastError()==ERROR_FILE_NOT_FOUND);
 	CHECK(22,!MoveFileExW(path,moved,0) && GetLastError()==ERROR_ALREADY_EXISTS);
+	// 7-Zip renames the archive it wrote from its temporary name this way: a move with no progress to report.
+	CHECK(56,MoveFileWithProgressW(moved,copy,0,0,0) && GetFileAttributesW(moved)==INVALID_FILE_ATTRIBUTES);
+	CHECK(57,!MoveFileWithProgressW(copy,path,0,0,0) && GetLastError()==ERROR_ALREADY_EXISTS);
+	CHECK(58,MoveFileWithProgressW(copy,moved,0,0,MOVEFILE_REPLACE_EXISTING) && GetFileAttributesW(copy)==INVALID_FILE_ATTRIBUTES);
 
 	join(pattern,work,L"*.txt");
 	WIN32_FIND_DATAW data;
@@ -117,6 +121,10 @@ int raven_entry(void)
 	join(pattern,work,L"nothing*");
 	find=FindFirstFileW(pattern,&data);
 	CHECK(27,find==INVALID_HANDLE_VALUE && GetLastError()==ERROR_FILE_NOT_FOUND);
+	// A directory named with a backslash at its end is not found: 7-Zip then looks again without it, and opens the folder.
+	join(pattern,work,L"");
+	find=FindFirstFileW(pattern,&data);
+	CHECK(59,find==INVALID_HANDLE_VALUE && GetLastError()==ERROR_FILE_NOT_FOUND);
 
 	WCHAR full[260],*part=0;
 	CHECK(28,GetFullPathNameW(L"C:\\a\\b\\..\\c.txt",260,full,&part)==10 && same(full,L"C:\\a\\c.txt") && part==full+5);

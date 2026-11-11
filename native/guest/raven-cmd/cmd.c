@@ -2806,6 +2806,40 @@ static BOOL try_extensions(WCHAR *candidate, DWORD stem)
 	return FALSE;
 }
 
+/* A file cmd runs itself, by an extension PATHEXT lists; any other file opens through its association. */
+static BOOL executable(const WCHAR *path)
+{
+	WCHAR extensions[1024];
+	if (!GetEnvironmentVariableW(L"PATHEXT", extensions, 1024))
+		lstrcpyW(extensions, L".COM;.EXE;.BAT;.CMD");
+	const DWORD size = length(path);
+	for (WCHAR *start = extensions; *start;) {
+		WCHAR *end = start;
+		while (*end && *end != L';')
+			++end;
+		const DWORD extension = (DWORD)(end - start);
+		const WCHAR saved = *end;
+		*end = 0;
+		const BOOL found = extension && size > extension && equal(path + size - extension, start);
+		*end = saved;
+		if (found)
+			return TRUE;
+		start = *end ? end + 1 : end;
+	}
+	return FALSE;
+}
+
+/* Opens a document with the program its type is associated with, as the shell does. */
+static BOOL shell_open(const WCHAR *file, const WCHAR *arguments, const WCHAR *folder)
+{
+	typedef HINSTANCE(WINAPI * Execute)(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
+	HMODULE shell = LoadLibraryW(L"shell32.dll");
+	Execute open = shell ? (Execute)(void (*)(void))GetProcAddress(shell, "ShellExecuteW") : NULL;
+	while (blank(*arguments))
+		++arguments;
+	return open && (INT_PTR)open(NULL, NULL, file, *arguments ? arguments : NULL, folder, SW_SHOWNORMAL) > 32;
+}
+
 /* Finds the program a command names: by its path when it has one, else in the current folder and then the folders of PATH. */
 static BOOL find_program(const WCHAR *name, WCHAR *found)
 {
@@ -3715,7 +3749,7 @@ static DWORD command_start(const WCHAR *rest)
 	first_word(at, program, MAX_PATH, &arguments);
 	HANDLE process = NULL;
 	BOOL started = FALSE;
-	if (find_program(program, path)) {
+	if (find_program(program, path) && executable(path)) {
 		if (batch_file(path)) {
 			struct Text line = {0};
 			text_char(&line, L'"');
@@ -3739,12 +3773,7 @@ static DWORD command_start(const WCHAR *rest)
 		release(folder);
 		return wait ? errorlevel : 0;
 	}
-	typedef HINSTANCE(WINAPI * Execute)(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
-	HMODULE shell = LoadLibraryW(L"shell32.dll");
-	Execute open = shell ? (Execute)(void (*)(void))GetProcAddress(shell, "ShellExecuteW") : NULL;
-	while (blank(*arguments))
-		++arguments;
-	if (open && (INT_PTR)open(NULL, NULL, program, *arguments ? arguments : NULL, folder, SW_SHOWNORMAL) > 32) {
+	if (shell_open(program, arguments, folder)) {
 		release(folder);
 		return 0;
 	}
@@ -5324,6 +5353,12 @@ static DWORD run_simple(const WCHAR *line)
 	}
 	if (batch_file(path))
 		return invoke_batch(path, arguments);
+	if (!executable(path)) {
+		if (shell_open(path, arguments, NULL))
+			return errorlevel = 0;
+		complain(L"The system cannot find the file specified.\r\n");
+		return errorlevel = 1;
+	}
 	return run_program(path, command);
 }
 

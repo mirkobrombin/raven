@@ -348,6 +348,7 @@ struct WaylandPresentation::State {
 				};
 				value.leave=[](void *data,wl_pointer *,uint32_t,wl_surface *) {
 					auto &state=*static_cast<State *>(data); state.pointer_window=0; state.pointer_inside=false;
+					state.pointer_event(DesktopEventKind::pointer_leave);
 				};
 				value.motion=[](void *data,wl_pointer *,uint32_t,wl_fixed_t x,wl_fixed_t y) {
 					auto &state=*static_cast<State *>(data); state.pointer_x=coordinate(x); state.pointer_y=coordinate(y);
@@ -782,8 +783,8 @@ struct WaylandPresentation::State {
 		target->released=false;
 		wl_surface_attach(window.proxy,target->proxy,0,0);
 		wl_surface_damage(window.proxy,damage[0],damage[1],damage[2],damage[3]);
+		// A close the compositor sends meanwhile is a request, which the next poll hands the program as WM_CLOSE: the surface lives on.
 		wl_surface_commit(window.proxy); window.shown=target; sync();
-		if (window.closed) throw std::runtime_error("Wayland surface was closed during presentation");
 	}
 
 	void popup_surface(uint64_t handle,uint64_t parent,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,

@@ -66,6 +66,9 @@ public:
 	}
 	static constexpr uint32_t heap_capacity = 512;
 	bool dispatch(std::string_view name);
+	// SetStdHandle: the handle the process parameters hold for STD_INPUT_HANDLE, STD_OUTPUT_HANDLE or STD_ERROR_HANDLE, which
+	// GetStdHandle and the programs started later read; false for another selector.
+	bool set_standard_handle(uint32_t selector, uint64_t handle);
 	static std::span<const std::string_view> nt_exports();
 
 private:

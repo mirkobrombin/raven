@@ -765,7 +765,7 @@ struct XcbPresentation::State {
 			// Crossing into the driver's child window keeps the pointer on the window itself.
 			if (event.mode!=XCB_NOTIFY_MODE_NORMAL || event.detail==XCB_NOTIFY_DETAIL_INFERIOR) return;
 			const auto handle=handle_of(event.event);
-			if (type==XCB_LEAVE_NOTIFY) { if (pointer_window==handle) pointer_window=0; return; }
+			if (type==XCB_LEAVE_NOTIFY) { if (pointer_window==handle) { pointer_window=0; pointer_event(DesktopEventKind::pointer_leave); } return; }
 			pointer_window=handle;
 			pointer_x=event.event_x; pointer_y=event.event_y;
 			pointer_event(DesktopEventKind::pointer_motion);

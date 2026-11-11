@@ -43,6 +43,8 @@ std::vector<uint64_t> NativeWindows::top_level_windows() const
 
 uint64_t NativeWindows::window_at(int32_t x, int32_t y)
 {
+	if (pointer_away && x == cursor_x && y == cursor_y)
+		return 0;
 	auto roots = top_level_windows();
 	for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
 		const auto *record = std::as_const(objects).window(*root);
@@ -370,8 +372,9 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 		if (!window)
 			return;
 	}
+	// With SWP_NOACTIVATE the window shows where it is put without taking the activation, as a tooltip does (SW_SHOWNA).
 	if (effective & swp_showwindow)
-		show_window(handle, 5);
+		show_window(handle, (effective & swp_noactivate) ? 8 : 5);
 	else if (effective & swp_hidewindow)
 		show_window(handle, 0);
 	if (!std::as_const(objects).window(handle))
@@ -898,7 +901,10 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			return;
 		}
 		const bool minimized = window->style & ws_minimize, maximized = window->style & ws_maximize;
-		const DesktopRect normal = (minimized || maximized) && window->restore.right > window->restore.left ? window->restore : window->outer;
+		DesktopRect normal = (minimized || maximized) && window->restore.right > window->restore.left ? window->restore : window->outer;
+		// A child window's place is in its parent's client coordinates, as MoveWindow takes it.
+		if (const auto *parent = window->parent ? objects.window(window->parent) : nullptr)
+			normal = {normal.left - parent->x, normal.top - parent->y, normal.right - parent->x, normal.bottom - parent->y};
 		std::vector<uint8_t> bytes(44);
 		const uint32_t fields[11] = {44, 0, uint32_t(minimized ? 2 : maximized ? 3 : window->visible ? 1 : 0), UINT32_MAX, UINT32_MAX, UINT32_MAX,
 			UINT32_MAX, uint32_t(normal.left), uint32_t(normal.top), uint32_t(normal.right), uint32_t(normal.bottom)};
@@ -920,7 +926,9 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			return;
 		}
 		try {
-			const DesktopRect normal{int32_t(fields[7]), int32_t(fields[8]), int32_t(fields[9]), int32_t(fields[10])};
+			const auto *parent = window->parent ? objects.window(window->parent) : nullptr;
+			const int32_t ox = parent ? parent->x : 0, oy = parent ? parent->y : 0;
+			const DesktopRect normal{int32_t(fields[7]) + ox, int32_t(fields[8]) + oy, int32_t(fields[9]) + ox, int32_t(fields[10]) + oy};
 			objects.window(call[0])->restore = normal;
 			// The window becomes visible before it is sized, so its size notifications reach a window that is already shown.
 			if (fields[2] != 0)

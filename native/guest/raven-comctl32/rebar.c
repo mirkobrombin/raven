@@ -236,7 +236,9 @@ static void fill_row(rebar_state *state, int first, int after, int room)
 	}
 }
 
-/* Places the bands; the extra stored in area.right by fill_row becomes part of each width here. */
+/* Places the bands; the extra stored in area.right by fill_row becomes part of each width here. A band starts a new row only when
+ * its least width does not fit beside the least widths of the row so far: the row then shrinks its bands towards those, so a band
+ * asking for more than the bar holds still shares the row, as 7-Zip's address band does beside its folder button. */
 static void assign_rows(rebar_state *state, int room)
 {
 	int index, first = 0, used = 0, row = 0;
@@ -251,7 +253,7 @@ static void assign_rows(rebar_state *state, int room)
 		band->row = -1;
 		if (is_hidden(state, band))
 			continue;
-		width = wanted_width(band);
+		width = least_width(band);
 		if (any && ((band->style & RBBS_BREAK) || used + width > room)) {
 			fill_row(state, first, index, room);
 			row++;

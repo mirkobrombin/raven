@@ -4,8 +4,8 @@
 #include <stddef.h>
 
 /* The msvcrt.dll entry points libraries built by MinGW-w64 import, as VLC's plugins do: the secure scans, fscanf, _vsnprintf_s, file
-   searches with 64-bit sizes and a pipe to a command. Each is resolved by name, and answers as msvcrt does. The exit code names the first
-   check that failed; 100 and up names an export msvcrt.dll does not have. */
+   searches with 64-bit sizes, a pipe to a command and the standard streams of the _iob array. Each is resolved by name, and answers as
+   msvcrt does. The exit code names the first check that failed; 100 and up names an export msvcrt.dll does not have. */
 
 static const char *const names[] = {
 	"sscanf_s", "swscanf_s", "fscanf", "_vsnprintf_s", "_findfirst64", "_findnext64", "_popen", "_pclose",
@@ -114,11 +114,47 @@ static int pipes(void)
 	return 0;
 }
 
+/* Programs built against msvcrt, as 7-Zip's console program is, name the standard streams through the _iob array it exports and never
+   ask for them: the streams there already hold the process's standard handles when the runtime is loaded. Its output is sent to a file
+   before msvcrt.dll loads, and what is written through _iob[1] lands there. */
+static int standard_streams(HANDLE file)
+{
+	char *iob = (char *)find("_iob");
+	int (__cdecl *put)(const char *, void *) = (void *)find("fputs");
+	int (__cdecl *flush)(void *) = (void *)find("fflush");
+	if (!iob || !put || !flush)
+		return 40;
+	if (put("iob\n", iob + 48) < 0 || flush(iob + 48) != 0)
+		return 41;
+	char text[8] = {0};
+	DWORD read = 0;
+	SetFilePointer(file, 0, NULL, FILE_BEGIN);
+	if (!ReadFile(file, text, sizeof text - 1, &read, NULL) || read < 4 || text[0] != 'i' || text[1] != 'o' || text[2] != 'b')
+		return 42;
+	return 0;
+}
+
 int raven_entry(void)
 {
+	char directory[MAX_PATH], path[MAX_PATH];
+	HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE), file = INVALID_HANDLE_VALUE;
+	if (GetTempPathA(MAX_PATH, directory)) {
+		lstrcpyA(path, directory);
+		lstrcatA(path, "msvcrt-stdout.txt");
+		file = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
+			FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+	}
+	if (file == INVALID_HANDLE_VALUE)
+		return 2;
+	SetStdHandle(STD_OUTPUT_HANDLE, file);
 	crt = LoadLibraryA("msvcrt.dll");
 	if (!crt)
 		return 1;
+	const int streams = standard_streams(file);
+	SetStdHandle(STD_OUTPUT_HANDLE, output);
+	CloseHandle(file);
+	if (streams)
+		return streams;
 	for (size_t at = 0; at < sizeof names / sizeof names[0]; ++at)
 		if (!find(names[at]))
 			return 100 + (int)at;

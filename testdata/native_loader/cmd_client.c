@@ -2,8 +2,8 @@
 
 /* The command processor in the prefix, through pipes: a batch file started with CreateProcess runs in cmd /c, cmd /c runs built-in
    commands and programs and ends with their ERRORLEVEL, commands piped to its prompt run one by one, and a batch file that uses the
-   parser and the built-ins, and one that uses the command-line tools, give exactly the output they should. Returns the failed step,
-   after the output that failed it. */
+   parser and the built-ins, and one that uses the command-line tools, give exactly the output they should, and a document opens
+   through its association. Returns the failed step, after the output that failed it. */
 
 static WCHAR folder[MAX_PATH];
 
@@ -406,6 +406,50 @@ int raven_entry(void)
 		return 13;
 	}
 	DeleteFileW(tools_path);
+	/* A document, started and named as a command, opens with the program its type is associated with, which here copies it. */
+	HKEY key;
+	static const WCHAR type[] = L"Raven.CmdDocument";
+	static const WCHAR command[] = L"\"C:\\Windows\\System32\\cmd.exe\" /c copy \"%1\" opened.txt";
+	if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\.ravendoc", 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) ||
+		RegSetValueExW(key, NULL, 0, REG_SZ, (const BYTE *)type, sizeof type))
+		return 14;
+	RegCloseKey(key);
+	if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.CmdDocument\\shell\\open\\command", 0, NULL, 0, KEY_WRITE, NULL,
+			&key, NULL) || RegSetValueExW(key, NULL, 0, REG_SZ, (const BYTE *)command, sizeof command))
+		return 14;
+	RegCloseKey(key);
+	WCHAR document[MAX_PATH] = {0}, opened[MAX_PATH] = {0};
+	append(document, folder);
+	append(document, L"\\note.ravendoc");
+	append(opened, folder);
+	append(opened, L"\\opened.txt");
+	file = CreateFileW(document, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+	if (file == INVALID_HANDLE_VALUE || !WriteFile(file, "note", 4, &written, NULL))
+		return 14;
+	CloseHandle(file);
+	static const WCHAR *const opens[] = {L"cmd.exe /c start \"\" note.ravendoc", L"cmd.exe /c note.ravendoc"};
+	for (DWORD index = 0; index < 2; ++index) {
+		DeleteFileW(opened);
+		if (!run(processor, opens[index], NULL, text, sizeof text, &code) || code) {
+			WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), text, length_of(text), &written, NULL);
+			return 15 + index;
+		}
+		DWORD waited = 0;
+		while (GetFileAttributesW(opened) == INVALID_FILE_ATTRIBUTES && waited < 20000) {
+			Sleep(100);
+			waited += 100;
+		}
+		if (GetFileAttributesW(opened) == INVALID_FILE_ATTRIBUTES)
+			return 17 + index;
+	}
+	Sleep(500);
+	DeleteFileW(opened);
+	DeleteFileW(document);
+	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.CmdDocument\\shell\\open\\command");
+	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.CmdDocument\\shell\\open");
+	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.CmdDocument\\shell");
+	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.CmdDocument");
+	RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\.ravendoc");
 	DeleteFileW(path);
 	RemoveDirectoryW(folder);
 	return 0;

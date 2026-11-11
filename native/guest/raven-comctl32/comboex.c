@@ -758,6 +758,13 @@ static LRESULT CALLBACK comboex_proc(HWND window, UINT message, WPARAM wparam, L
 		return (LRESULT)state->combo;
 	case CBEM_GETEDITCONTROL:
 		return (LRESULT)state->edit;
+	/* The text of a box that can be typed in is the text of its edit control: 7-Zip writes its address there with SetWindowText. */
+	case WM_SETTEXT:
+	case WM_GETTEXT:
+	case WM_GETTEXTLENGTH:
+		if (state->edit)
+			return SendMessageW(state->edit, message, wparam, lparam);
+		break;
 	case CBEM_GETIMAGELIST:
 		return (LRESULT)state->images;
 	case CBEM_SETIMAGELIST: {

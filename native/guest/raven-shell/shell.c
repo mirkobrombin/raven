@@ -1312,13 +1312,20 @@ UINT_PTR WINAPI SHAppBarMessage(DWORD message, PAPPBARDATA data)
 struct icon_search {
 	int wanted, seen;
 	LPWSTR found;
+	/* A group named by a string, as 7z.dll's first one is ("0"): the name lasts only while the resources are listed, so it is kept. */
+	WCHAR name[64];
 };
 
 static BOOL CALLBACK icon_group(HMODULE module, LPCWSTR type, LPWSTR name, LONG_PTR context)
 {
 	struct icon_search *search = (struct icon_search *)context;
 	if (search->wanted >= 0 && search->seen++ == search->wanted) {
-		search->found = name;
+		if (IS_INTRESOURCE(name)) {
+			search->found = name;
+		} else if (lstrlenW(name) < (int)(sizeof search->name / sizeof *search->name)) {
+			lstrcpyW(search->name, name);
+			search->found = search->name;
+		}
 		return FALSE;
 	}
 	if (search->wanted < 0)
@@ -1391,6 +1398,11 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 	}
 	FreeLibrary(module);
 	return made;
+}
+
+UINT shell_icons(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)
+{
+	return ExtractIconExW(file, index, large, small, count);
 }
 
 HICON WINAPI ExtractIconW(HINSTANCE instance, LPCWSTR file, UINT index)

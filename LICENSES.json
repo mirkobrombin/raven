@@ -231,6 +231,7 @@
         "native/guest/raven-shell/com.c",
         "native/guest/raven-shell/dialog.c",
         "native/guest/raven-shell/errorinfo.c",
+        "native/guest/raven-shell/fileinfo.c",
         "native/guest/raven-shell/folder.c",
         "native/guest/raven-shell/knownfolder.c",
         "native/guest/raven-shell/link.c",

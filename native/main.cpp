@@ -492,7 +492,8 @@ int main(int argc, char **argv)
 						raven::installer_like(entry->image, program_name);
 					if (installing) {
 						std::filesystem::path before;
-						const auto stem = std::filesystem::path(program_name).stem().string();
+						std::vector<std::string_view> arguments(argv + std::min(last_file + 1, argc), argv + argc);
+						const auto stem = raven::installation_name(program_name, arguments);
 						try {
 							before = raven::take_snapshot(prefix.root(), "install-" + stem);
 							raven::prune_snapshots(prefix.root(), "-install-", 10);

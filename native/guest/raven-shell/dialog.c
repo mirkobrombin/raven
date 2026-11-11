@@ -37,7 +37,6 @@
 #define HISTORY 32
 #define TYPE_CACHE 16
 
-enum { ICON_FOLDER, ICON_FILE, ICON_DRIVE, ICON_COMPUTER, ICON_STAR, ICON_COUNT };
 enum { SHOW_DETAILS, SHOW_LIST, SHOW_ICONS, SHOW_COUNT };
 enum { COLUMN_NAME, COLUMN_DATE, COLUMN_TYPE, COLUMN_SIZE, COLUMN_COUNT };
 
@@ -185,6 +184,21 @@ static HIMAGELIST make_icons(int size)
 	DeleteDC(dc);
 	ReleaseDC(NULL, screen);
 	return list;
+}
+
+/* The shell's image lists, which SHGetFileInfo hands out: the same pictures in the same order, made once and kept, since every caller
+   shares them as programs share the system image list on Windows. */
+HIMAGELIST system_icons(BOOL small)
+{
+	static HIMAGELIST lists[2];
+	const int which = small ? 1 : 0;
+	HIMAGELIST made;
+	if (lists[which] || !load_controls())
+		return lists[which];
+	made = make_icons(small ? 16 : 32);
+	if (made && InterlockedCompareExchangePointer((void **)&lists[which], made, NULL))
+		controls.destroy(made);
+	return lists[which];
 }
 
 /* Text ------------------------------------------------------------------------------------------------------ */
