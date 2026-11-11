@@ -86,6 +86,8 @@ To run the tests:
 ctest --test-dir build --output-on-failure -j1
 ```
 
+For the 32-bit native RTL path, `ctest --test-dir build -R '^native_x86_rtl$'` checks heap interoperability, critical-section status and `LastError`, and `ZwClose` handle lifetimes. Repeat with `RAVEN_GUEST_HEAP=1` to exercise the optional guest heap.
+
 Some tests need software Raven cannot redistribute; point `RAVEN_MINESWEEPER`, `RAVEN_NETFX_INSTALLER`, `RAVEN_NETFX35_PACKAGE`, `RAVEN_XNA_INSTALLER` and `RAVEN_REDIST_DIRECTORY` at your own copies, or those tests are skipped. Each component under [native/upstream](native/upstream) records where it comes from and its license.
 
 ## What works today

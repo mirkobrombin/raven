@@ -360,7 +360,7 @@ bool NativeX86Compat::dispatch(std::string_view name)
 		process.return_api(args[0] & 0x40000 ? executable_heap_handle : process_heap_handle);
 	} else if (api == "HeapDestroy" || name == "FreeEnvironmentStringsA") {
 		process.api_arguments(1);
-		process.return_api(1);
+		process.return_api(name == "RtlDestroyHeap" ? 0 : 1);
 	} else if (name == "UnhandledExceptionFilter") {
 		// The last chance for an exception nothing handled: it is named, and the process ends as its handler asks.
 		const auto args = process.api_arguments(1);

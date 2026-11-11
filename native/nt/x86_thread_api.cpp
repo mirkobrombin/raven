@@ -180,7 +180,8 @@ bool NativeX86Threads::dispatch(std::string_view name)
 		const bool rtl = name.starts_with("Rtl");
 		// The high byte contains the flags; lower bits do not affect initialization.
 		if (extended && ((uint32_t(args[2]) & 0xff000000U) & ~0x1f000000U)) {
-			environment.set_last_error(87);
+			if (!rtl)
+				environment.set_last_error(87);
 			process.return_api(rtl ? 0xc000000dU : 0);
 			return true;
 		}
