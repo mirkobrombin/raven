@@ -915,7 +915,7 @@ static void show_snapshots(void)
 {
 	static const WCHAR *const titles[] = {L"Taken", L"Reason"};
 	static const int widths[] = {200, 420};
-	static const WCHAR *const layer_titles[] = {L"Installed program", L"Its layer"};
+	static const WCHAR *const layer_titles[] = {L"Program", L"Its layer"};
 	static const int layer_widths[] = {300, 320};
 	Row *row = add_row(L"Snapshots of this prefix", L"Raven takes one before every installer; restoring one keeps the prefix as it is now as another", 0);
 	row->control = add_child(L"Button", L"Take snapshot", BS_PUSHBUTTON, ID_FIRST + 50);
