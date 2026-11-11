@@ -1443,6 +1443,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${FRAME_RESTORE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c -lkernel32 -luser32 -lgdi32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c VERBATIM)
             add_custom_target(frame_restore_fixture ALL DEPENDS ${FRAME_RESTORE_FIXTURE})
+            set(PICKER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/picker-client.exe)
+            add_custom_command(OUTPUT ${PICKER_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${PICKER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c -lcomdlg32 -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c VERBATIM)
+            add_custom_target(picker_fixture ALL DEPENDS ${PICKER_FIXTURE})
             add_executable(frame_restore_test desktop/frame_restore_test.cpp)
             target_link_libraries(frame_restore_test PRIVATE raven_cpu)
             add_dependencies(frame_restore_test frame_restore_fixture raven-bootstrap)
@@ -4581,6 +4587,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_host_maximize COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-host-maximize.py
                         $<TARGET_FILE:raven> ${FRAME_RESTORE_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/host-maximize)
                     set_tests_properties(native_host_maximize PROPERTIES TIMEOUT 90 RESOURCE_LOCK raven_compositor)
+                endif()
+                # A host file picked in the file dialog: the program may read what it opened and write what it saved, nothing more.
+                if(TARGET raven_wayland AND TARGET picker_fixture AND RAVEN_CONTROLS_COMPONENT_DIR AND RAVEN_LABWC AND RAVEN_WLRCTL AND RAVEN_WTYPE)
+                    add_test(NAME native_file_picker COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-picker.py
+                        $<TARGET_FILE:raven> ${PICKER_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/file-picker)
+                    set_tests_properties(native_file_picker PROPERTIES TIMEOUT 120 RESOURCE_LOCK raven_compositor)
                 endif()
                 find_program(RAVEN_XCLIP xclip)
                 if(RAVEN_X11_TESTS AND RAVEN_SKIA_LIBRARY AND RAVEN_XCLIP AND RAVEN_CONTROLS_COMPONENT_DIR AND EXISTS ${RAVEN_TESTDATA_DIR}/npp/notepad++.exe)

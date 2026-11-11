@@ -56,13 +56,14 @@ void WINAPI raven_program_entry(void)
 	state->title[127] = state->ok_label[31] = state->name_label[31] = state->dir[MAX_PATH - 1] = state->name[MAX_PATH - 1] = state->defext[15] = 0;
 	start_in_prefix(state);
 	if (show_dialog(NULL, state)) {
-		/* What was chosen is the program's from now on: a file it opens it may also save, a folder it may fill. */
+		/* What was chosen is the program's from now on: a file it opens to read, a file it saves and a folder it picks to write. */
+		const DWORD write = state->save || (state->options & FOS_PICKFOLDERS) != 0;
 		if (state->result_count > MAX_RESULTS)
 			state->result_count = MAX_RESULTS;
 		for (index = 0; index < state->result_count; ++index)
-			RavenGrantPath(state->results[index], TRUE);
+			RavenGrantPath(state->results[index], write);
 		if (!state->result_count && state->result[0])
-			RavenGrantPath(state->result, TRUE);
+			RavenGrantPath(state->result, write);
 	} else {
 		state->has_result = FALSE;
 	}
