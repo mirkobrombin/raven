@@ -2473,12 +2473,12 @@ static constexpr std::string_view winspool_exports[]{
 	"XcvDataW",
 };
 static constexpr std::string_view ravenhost_exports[]{
-	"RavenCanvasBatch","RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw","RavenCanvasPixels","RavenCanvasSize",
-	"RavenFontClose","RavenFontGlyphs","RavenFontInfo","RavenFontMetrics","RavenFontName","RavenFontOpen",
-	"RavenFontOutline","RavenFontRender","RavenFontScan","RavenFontTable","RavenGrantPath","RavenHostApps",
-	"RavenHostOpen","RavenPathCombine","RavenPathWiden","RavenSandboxLog","RavenSandboxRead","RavenSandboxWrite",
-	"RavenShaderRelease","RavenShaderRequest","RavenShaderResult","RavenSnapshotDelete","RavenSnapshotList","RavenSnapshotRestore",
-	"RavenSnapshotTake","RavenTrace",
+	"RavenAppDiscard","RavenAppList","RavenCanvasBatch","RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw",
+	"RavenCanvasPixels","RavenCanvasSize","RavenFontClose","RavenFontGlyphs","RavenFontInfo","RavenFontMetrics",
+	"RavenFontName","RavenFontOpen","RavenFontOutline","RavenFontRender","RavenFontScan","RavenFontTable",
+	"RavenGrantPath","RavenHostApps","RavenHostOpen","RavenPathCombine","RavenPathWiden","RavenSandboxLog",
+	"RavenSandboxRead","RavenSandboxWrite","RavenShaderRelease","RavenShaderRequest","RavenShaderResult","RavenSnapshotDelete",
+	"RavenSnapshotList","RavenSnapshotRestore","RavenSnapshotTake","RavenTrace",
 };
 static constexpr std::string_view secur32_exports[]{
 	"AcceptSecurityContext","AcquireCredentialsHandleA","AcquireCredentialsHandleW","AddCredentialsA","AddCredentialsW","AddSecurityPackageA",

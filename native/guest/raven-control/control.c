@@ -50,6 +50,8 @@ DWORD WINAPI RavenSnapshotList(WCHAR *buffer, DWORD capacity);
 BOOL WINAPI RavenSnapshotTake(const WCHAR *label);
 BOOL WINAPI RavenSnapshotRestore(const WCHAR *name);
 BOOL WINAPI RavenSnapshotDelete(const WCHAR *name);
+DWORD WINAPI RavenAppList(WCHAR *buffer, DWORD capacity);
+BOOL WINAPI RavenAppDiscard(const WCHAR *id);
 DWORD WINAPI RavenHostApps(WCHAR *buffer, DWORD capacity);
 static const RavenOption raven_toggles[] = {
 	{L"Trace system calls", L"RAVEN_TRACE_API"},
@@ -868,16 +870,84 @@ static void free_snapshot_names(void)
 	}
 }
 
+/* The installed programs, "ID<tab>SIZE" a line: what each one changed outside its own files lives in its layer. */
+static void fill_layers(void)
+{
+	DWORD size = RavenAppList(NULL, 0);
+	WCHAR *text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size + 1) * sizeof(WCHAR)), *at, *end;
+	SendMessageW(log_list, LVM_DELETEALLITEMS, 0, 0);
+	if (!text)
+		return;
+	if (size)
+		RavenAppList(text, size + 1);
+	for (at = text; *at; at = end) {
+		WCHAR *tab, held[64];
+		LVITEMW item = {0};
+		int row;
+		DWORD bytes = 0;
+		for (end = at; *end && *end != L'\n'; ++end)
+			;
+		if (*end)
+			*end++ = 0;
+		for (tab = at; *tab && *tab != L'\t'; ++tab)
+			;
+		if (!*tab)
+			continue;
+		*tab++ = 0;
+		for (; *tab >= L'0' && *tab <= L'9'; ++tab)
+			bytes = bytes * 10 + (DWORD)(*tab - L'0');
+		if (!bytes)
+			lstrcpyW(held, L"Nothing changed");
+		else if (bytes < 1024)
+			wsprintfW(held, L"%lu bytes changed", bytes);
+		else
+			wsprintfW(held, L"%lu KB changed", (bytes + 1023) / 1024);
+		item.mask = LVIF_TEXT;
+		item.iItem = 0x7fffffff;
+		item.pszText = at;
+		row = (int)SendMessageW(log_list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+		set_cell(log_list, row, 1, held);
+	}
+	HeapFree(GetProcessHeap(), 0, text);
+}
+
 static void show_snapshots(void)
 {
 	static const WCHAR *const titles[] = {L"Taken", L"Reason"};
 	static const int widths[] = {200, 420};
+	static const WCHAR *const layer_titles[] = {L"Installed program", L"Its layer"};
+	static const int layer_widths[] = {300, 320};
 	Row *row = add_row(L"Snapshots of this prefix", L"Raven takes one before every installer; restoring one keeps the prefix as it is now as another", 0);
 	row->control = add_child(L"Button", L"Take snapshot", BS_PUSHBUTTON, ID_FIRST + 50);
 	list_buttons[0] = add_child(L"Button", L"Restore", BS_PUSHBUTTON, ID_FIRST + 51);
 	list_buttons[1] = add_child(L"Button", L"Delete", BS_PUSHBUTTON, ID_FIRST + 52);
+	list_buttons[2] = add_child(L"Button", L"Discard layer", BS_PUSHBUTTON, ID_FIRST + 54);
 	snapshots_list = make_list(ID_FIRST + 53, titles, widths, 2);
+	log_list = make_list(ID_FIRST + 55, layer_titles, layer_widths, 2);
 	fill_snapshots();
+	fill_layers();
+}
+
+/* Throws away what an installed program changed in the shared prefix: it sees the prefix as its installer left it again. */
+static void discard_layer(void)
+{
+	WCHAR id[260], question[400];
+	const int chosen = (int)SendMessageW(log_list, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+	LVITEMW item = {0};
+	if (chosen < 0) {
+		MessageBoxW(main_window, L"Choose an installed program in the lower list first.", L"Layers", MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	item.iSubItem = 0;
+	item.pszText = id;
+	item.cchTextMax = ARRAYSIZE(id);
+	SendMessageW(log_list, LVM_GETITEMTEXTW, chosen, (LPARAM)&item);
+	wsprintfW(question, L"What %s changed outside its own files will be thrown away. Close it first.", id);
+	if (MessageBoxW(main_window, question, L"Discard layer", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+		return;
+	if (!RavenAppDiscard(id))
+		MessageBoxW(main_window, L"The layer could not be thrown away.", L"Layers", MB_OK | MB_ICONERROR);
+	fill_layers();
 }
 
 static void snapshot_action(int id)
@@ -1198,7 +1268,7 @@ static void layout(void)
 	if (grants_list || snapshots_list) {
 		/* Below the page's rows: the buttons of the list, then the list, and on Privacy & security the refusals under it. */
 		const int top = 96 + row_count * (ROW_HEIGHT + 4) + row_count * 20 - 8, width = client.right - NAV_WIDTH - 56;
-		const int bottom = client.bottom - 24, lists = grants_list ? 2 : 1, height = (bottom - top - 40) / lists;
+		const int bottom = client.bottom - 24, lists = log_list ? 2 : 1, height = (bottom - top - 40) / lists;
 		int button;
 		for (button = 0; button < 4; ++button)
 			if (list_buttons[button])
@@ -1368,6 +1438,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
 			change_grant(id == ID_FIRST + 43);
 		} else if (page == PAGE_SNAPSHOTS && id >= ID_FIRST + 50 && id <= ID_FIRST + 52) {
 			snapshot_action(id);
+		} else if (page == PAGE_SNAPSHOTS && id == ID_FIRST + 54) {
+			discard_layer();
 		} else if (page == PAGE_RAVEN && id >= ID_FIRST + 10 && id < ID_FIRST + 10 + (int)ARRAYSIZE(raven_toggles)) {
 			HWND toggle = (HWND)lparam;
 			const BOOL on = !GetWindowLongPtrW(toggle, GWLP_USERDATA);

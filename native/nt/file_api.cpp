@@ -1,3 +1,4 @@
+#include "apps.h"
 #include "child_process.h"
 #include "console.h"
 #include "event.h"
@@ -36,10 +37,8 @@ FileObject::~FileObject()
 	if (lock_descriptor >= 0)
 		::close(lock_descriptor);
 	if (flags & 0x04000000U) {
-		if (directory)
-			::rmdir(path.c_str());
-		else
-			::unlink(path.c_str());
+		if (directory ? !::rmdir(path.c_str()) : !::unlink(path.c_str()))
+			app_layer().hide(path);
 	}
 }
 
@@ -282,13 +281,22 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			{ if (!made.status && inheritable_handle(call, security)) objects.set_inherit(made.value, true); call.ret(made.status ? invalid_handle : made.value); }
 			return;
 		}
-		const auto resolved = resolve(call, name);
+		auto resolved = resolve(call, name);
 		if (!resolved)
 			return;
 		const bool want_write = access & (0x40000000U | 0x10000000U | 0x2U | 0x4U | 0x10000U);
 		const bool want_read = access & (0x80000000U | 0x10000000U | 0x1U);
 		if (!resolved->writable && (want_write || disposition != 3 || (flags & 0x04000000U))) {
 			sandbox().refuse(resolved->host, "change");
+			call.set_last_error(5);
+			return;
+		}
+		// An installed program changes a file it does not own in its layer: the file is copied there first, unless it is about to be
+		// emptied.
+		std::error_code folder_error;
+		if ((want_write || (access & 0x100U) || disposition != 3 || (flags & 0x04000000U)) && resolved->parent_exists &&
+			!(resolved->exists && std::filesystem::is_directory(resolved->host, folder_error)) &&
+			!paths.prepare_change(*resolved, disposition != 2 && disposition != 5)) {
 			call.set_last_error(5);
 			return;
 		}
@@ -580,8 +588,20 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 					const auto name = from_utf8(item->d_name);
 					if (!wildcard(pattern, name) || !paths.listed(file->path / item->d_name)) continue;
 					struct stat metadata{};
-					if (::fstatat(file->descriptor, item->d_name, &metadata, 0)) continue;
+					// A file an installed program changed is listed as its layer's copy.
+					const auto shown = paths.preferred(file->path / item->d_name);
+					if (shown != file->path / item->d_name ? ::stat(shown.c_str(), &metadata) : ::fstatat(file->descriptor, item->d_name, &metadata, 0)) continue;
 					scan->entries.push_back({name, attributes_of(metadata, item->d_name), filetime(metadata.st_ctim),
+						filetime(metadata.st_atim), filetime(metadata.st_mtim), S_ISDIR(metadata.st_mode) ? 0 : uint64_t(metadata.st_size),
+						uint64_t(metadata.st_blocks) * 512, uint64_t(metadata.st_ino)});
+				}
+				// What the folder holds only in the program's layer, or only in the prefix for a layer's folder.
+				for (const auto &other : paths.other_entries(file->path)) {
+					const auto name = from_utf8(other.filename().string());
+					struct stat metadata{};
+					if (!wildcard(pattern, name) || ::stat(other.c_str(), &metadata))
+						continue;
+					scan->entries.push_back({name, attributes_of(metadata, other), filetime(metadata.st_ctim),
 						filetime(metadata.st_atim), filetime(metadata.st_mtim), S_ISDIR(metadata.st_mode) ? 0 : uint64_t(metadata.st_size),
 						uint64_t(metadata.st_blocks) * 512, uint64_t(metadata.st_ino)});
 				}
@@ -1197,7 +1217,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			const auto bytes = call.read(call[2] + header, length);
 			std::u16string name(length / 2, u'\0');
 			std::memcpy(name.data(), bytes.data(), length);
-			const auto target = paths.changeable(file->path) ? resolve_change(call, name) : std::nullopt;
+			auto target = paths.changeable(file->path) ? resolve_change(call, name) : std::nullopt;
 			if (!target) {
 				if (!paths.changeable(file->path))
 					call.fail(5);
@@ -1207,10 +1227,15 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 				call.fail(183);
 				return;
 			}
+			if (!paths.prepare_change(*target, false)) {
+				call.fail(5);
+				return;
+			}
 			if (::rename(file->path.c_str(), target->host.c_str())) {
 				call.fail(error_of(errno, !target->parent_exists));
 				return;
 			}
+			app_layer().hide(file->path);
 			file->path = target->host;
 			file->dos_path = paths.dos(target->host);
 			call.ret(1);
@@ -1236,6 +1261,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 					call.fail(error_of(errno));
 					return;
 				}
+				app_layer().hide(file->path);
 				file->flags &= ~0x04000000U;
 			} else if (flags & 1) {
 				file->flags |= 0x04000000U;
@@ -1417,11 +1443,11 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("SetFileAttributesW", 2, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
-		const auto resolved = resolve_change(call, call.wide(call[0]));
+		auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
 		struct stat metadata{};
-		if (!resolved->exists || ::stat(resolved->host.c_str(), &metadata)) {
+		if (!resolved->exists || !paths.prepare_change(*resolved) || ::stat(resolved->host.c_str(), &metadata)) {
 			call.set_last_error(missing(*resolved));
 			return;
 		}
@@ -1440,11 +1466,15 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("CreateDirectoryW", 2, [&, resolve, resolve_change, missing, file_of](ApiCall &call) {
-		const auto resolved = resolve_change(call, call.wide(call[0]));
+		auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
 		if (resolved->exists) {
 			call.set_last_error(183);
+			return;
+		}
+		if (resolved->parent_exists && !paths.prepare_change(*resolved, false)) {
+			call.fail(5);
 			return;
 		}
 		if (::mkdir(resolved->host.c_str(), 0777)) {
@@ -1457,8 +1487,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		const auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
-		if (::rmdir(resolved->host.c_str())) {
-			call.fail(error_of(errno, !resolved->parent_exists));
+		if (const int failure = resolved->exists ? paths.remove(resolved->host, true) : ENOENT) {
+			call.fail(error_of(failure, !resolved->parent_exists));
 			return;
 		}
 		call.ret(1);
@@ -1467,8 +1497,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		const auto resolved = resolve_change(call, call.wide(call[0]));
 		if (!resolved)
 			return;
-		if (::unlink(resolved->host.c_str())) {
-			call.fail(errno == EISDIR ? 5 : error_of(errno, !resolved->parent_exists));
+		if (const int failure = resolved->exists ? paths.remove(resolved->host, false) : ENOENT) {
+			call.fail(failure == EISDIR ? 5 : error_of(failure, !resolved->parent_exists));
 			return;
 		}
 		call.ret(1);
@@ -1581,14 +1611,18 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("CopyFileW", 3, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
 		const auto from = resolve(call, call.wide(call[0]));
-		const auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
-		if (from && to)
+		auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
+		if (from && to && to->parent_exists && !paths.prepare_change(*to, false))
+			call.fail(5);
+		else if (from && to)
 			copy_file(call, *from, *to, call.u32(2));
 	});
 	registry.add("CopyFileExW", 6, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
 		const auto from = resolve(call, call.wide(call[0]));
-		const auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
-		if (from && to)
+		auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
+		if (from && to && to->parent_exists && !paths.prepare_change(*to, false))
+			call.fail(5);
+		else if (from && to)
 			copy_file(call, *from, *to, call.u32(5) & 1);
 	});
 	registry.add("MoveFileExW", 3, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
@@ -1609,14 +1643,14 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(1);
 			return;
 		}
-		const auto from = resolve_change(call, call.wide(call[0]));
+		auto from = resolve_change(call, call.wide(call[0]));
 		if (!from)
 			return;
 		if (!call[1]) {
 			call.fail(87);
 			return;
 		}
-		const auto to = resolve_change(call, call.wide(call[1]));
+		auto to = resolve_change(call, call.wide(call[1]));
 		if (!to)
 			return;
 		if (!from->exists) {
@@ -1627,21 +1661,27 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(183);
 			return;
 		}
+		// An installed program moves its own copy of a file it does not own: the prefix's stays, hidden from it.
+		if (!paths.prepare_change(*from, true, true) || (to->parent_exists && !paths.prepare_change(*to, false))) {
+			call.fail(5);
+			return;
+		}
 		if (::rename(from->host.c_str(), to->host.c_str())) {
 			if (errno == EXDEV && (flags & 2)) {
 				copy_file(call, *from, *to, false);
-				if (call.result)
-					::unlink(from->host.c_str());
+				if (call.result && !::unlink(from->host.c_str()))
+					app_layer().hide(from->host);
 				return;
 			}
 			call.fail(error_of(errno, !to->parent_exists));
 			return;
 		}
+		app_layer().hide(from->host);
 		call.ret(1);
 	});
 	registry.add("MoveFileW", 2, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
-		const auto from = resolve_change(call, call.wide(call[0]));
-		const auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
+		auto from = resolve_change(call, call.wide(call[0]));
+		auto to = from ? resolve_change(call, call.wide(call[1])) : std::nullopt;
 		if (!from || !to)
 			return;
 		if (!from->exists) {
@@ -1652,15 +1692,20 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(183);
 			return;
 		}
+		if (!paths.prepare_change(*from, true, true) || (to->parent_exists && !paths.prepare_change(*to, false))) {
+			call.fail(5);
+			return;
+		}
 		if (::rename(from->host.c_str(), to->host.c_str())) {
 			call.fail(error_of(errno, !to->parent_exists));
 			return;
 		}
+		app_layer().hide(from->host);
 		call.ret(1);
 	});
 	registry.add("ReplaceFileW", 6, [&, resolve, resolve_change, missing, file_of, copy_file](ApiCall &call) {
-		const auto replaced = resolve_change(call, call.wide(call[0]));
-		const auto replacement = resolve_change(call, call.wide(call[1]));
+		auto replaced = resolve_change(call, call.wide(call[0]));
+		auto replacement = resolve_change(call, call.wide(call[1]));
 		if (!replaced || !replacement)
 			return;
 		if (!replaced->exists) {
@@ -1671,10 +1716,18 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.set_last_error(1177);
 			return;
 		}
+		if (!paths.prepare_change(*replaced) || !paths.prepare_change(*replacement)) {
+			call.fail(5);
+			return;
+		}
 		if (call[2]) {
-			const auto backup = resolve_change(call, call.wide(call[2]));
+			auto backup = resolve_change(call, call.wide(call[2]));
 			if (!backup)
 				return;
+			if (backup->parent_exists && !paths.prepare_change(*backup, false)) {
+				call.fail(5);
+				return;
+			}
 			copy_file(call, *replaced, *backup, false);
 			if (!call.result) {
 				call.set_last_error(1175);
@@ -1686,6 +1739,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(1175);
 			return;
 		}
+		app_layer().hide(replacement->host);
 		call.ret(1);
 	});
 	registry.add("GetCurrentDirectoryW", 2, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
@@ -2110,14 +2164,24 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 					names.push_back(name);
 			}
 			::closedir(handle);
+			for (const auto &other : paths.other_entries(resolved->host))
+				if (wildcard(pattern, from_utf8(other.filename().string())))
+					names.push_back(from_utf8(other.filename().string()));
 		} else {
 			const auto target = paths.resolve(path);
 			if (target && target->exists)
 				names.push_back(from_utf8(target->host.filename().string()));
 		}
 		std::sort(names.begin(), names.end(), [](const auto &a, const auto &b) { return compare_fold(a, b) < 0; });
-		for (const auto &name : names)
-			found->entries.push_back(entry_of(resolved->host / to_utf8(name), name));
+		for (const auto &name : names) {
+			// A name only the other side of the program's layer holds is read there.
+			auto host = paths.preferred(resolved->host / to_utf8(name));
+			std::error_code error;
+			if (!std::filesystem::exists(std::filesystem::symlink_status(host, error)))
+				if (const auto other = paths.resolve(directory + u"\\" + name))
+					host = other->host;
+			found->entries.push_back(entry_of(host, name));
+		}
 		if (found->entries.empty()) {
 			call.set_last_error(wild ? 2 : (paths.resolve(path) && paths.resolve(path)->parent_exists ? 2 : 3));
 			return;

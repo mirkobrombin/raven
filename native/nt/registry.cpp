@@ -1,5 +1,7 @@
 #include "registry.h"
 
+#include "apps.h"
+
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -124,6 +126,10 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 	register_runtime_classes();
 	register_event_logs();
 	register_system_environment();
+	// The hive of the prefix an installed program runs in: what the program changes outside its own keys goes to its layer.
+	const auto &layer = app_layer();
+	if (layer.active() && std::filesystem::absolute(this->file).lexically_normal() == layer.prefix_root() / "registry.dat")
+		set_layer(layer.registry(), [&layer](std::u16string_view folded) { return layer.owns_key(folded); });
 }
 
 // The classes Windows registers in both registry views whose libraries the runtime brings: the .NET runtime's metadata dispensers, runtime
@@ -566,7 +572,7 @@ uint32_t NativeRegistry::create(uint64_t parent, std::u16string_view path, uint6
 		return 8;
 	open_keys.emplace(key, folded);
 	if (!records.empty())
-		journal(records);
+		journal(records, folded);
 	return 0;
 }
 
@@ -641,7 +647,7 @@ uint32_t NativeRegistry::set(uint64_t key, std::u16string_view name, uint32_t ty
 	auto &target = keys.at(found->second);
 	target.values[fold(name)] = Value{std::u16string(name), type, std::vector<uint8_t>(data.begin(), data.end())};
 	journal("V\t" + escape(target.path) + '\t' + escape(std::u16string(name)) + '\t' + std::to_string(type) + '\t' +
-		hex(std::vector<uint8_t>(data.begin(), data.end())) + '\n');
+		hex(std::vector<uint8_t>(data.begin(), data.end())) + '\n', found->second);
 	return 0;
 }
 
@@ -674,7 +680,7 @@ uint32_t NativeRegistry::remove_key(uint64_t parent, std::u16string_view path)
 	for (auto &[handle, target] : open_keys)
 		if (target == folded)
 			target.clear();
-	journal("X\t" + escape(shown) + "\t1\n");
+	journal("X\t" + escape(shown) + "\t1\n", folded);
 	return 0;
 }
 
@@ -697,7 +703,7 @@ uint32_t NativeRegistry::remove_tree(uint64_t parent, std::u16string_view path)
 	for (auto &[handle, target] : open_keys)
 		if ((target == folded && !path.empty()) || target.starts_with(prefix))
 			target.clear();
-	journal("X\t" + escape(shown) + (path.empty() ? "\t0\n" : "\t1\n"));
+	journal("X\t" + escape(shown) + (path.empty() ? "\t0\n" : "\t1\n"), folded);
 	return 0;
 }
 
@@ -712,7 +718,7 @@ uint32_t NativeRegistry::remove_value(uint64_t key, std::u16string_view name)
 		return key_deleted;
 	if (!entry->second.values.erase(fold(name)))
 		return file_not_found;
-	journal("Y\t" + escape(entry->second.path) + '\t' + escape(std::u16string(name)) + '\n');
+	journal("Y\t" + escape(entry->second.path) + '\t' + escape(std::u16string(name)) + '\n', entry->first);
 	return 0;
 }
 
@@ -789,10 +795,10 @@ uint32_t NativeRegistry::info(uint64_t key, Info &result) const
 	return 0;
 }
 
-NativeRegistry::Stamp NativeRegistry::current_stamp() const
+NativeRegistry::Stamp NativeRegistry::stamp_of(const std::filesystem::path &path)
 {
 	struct stat status{};
-	if (file.empty() || ::stat(file.c_str(), &status))
+	if (path.empty() || ::stat(path.c_str(), &status))
 		return {};
 	return {status.st_mtim.tv_sec, status.st_mtim.tv_nsec, status.st_size, static_cast<long long>(status.st_ino)};
 }
@@ -803,17 +809,21 @@ void NativeRegistry::refresh() const
 	if (file.empty() || seeding)
 		return;
 	const auto now = current_stamp();
-	if (now == stamp)
+	const auto layer_now = stamp_of(layer_file);
+	if (now == stamp && layer_now == layer_stamp)
 		return;
 	auto &self = const_cast<NativeRegistry &>(*this);
-	// Records appended to the same file are read from where reading stopped; a file written again whole is read from its start.
+	// Records appended to the same file are read from where reading stopped; a file written again whole is read from its start. The
+	// layer is read again whole after them, as what it holds stands over everything the shared hive says.
 	if (now.inode == stamp.inode && now.size >= loaded && loaded > 0)
 		self.replay(loaded);
 	else {
 		self.keys.clear();
 		self.load();
 	}
+	self.replay_layer();
 	stamp = now;
+	layer_stamp = layer_now;
 }
 
 void NativeRegistry::save() const
@@ -840,10 +850,30 @@ void NativeRegistry::save() const
 	loaded = compacted = stamp.size;
 }
 
-void NativeRegistry::journal(const std::string &records)
+void NativeRegistry::journal(const std::string &records, std::u16string_view folded)
 {
 	if (file.empty() || seeding)
 		return;
+	if (!layer_file.empty() && !layer_owns(folded)) {
+		// The layer is the program's own; it is read again whole, with whatever another process of the program appended to it.
+		std::filesystem::create_directories(layer_file.parent_path());
+		const int descriptor = ::open(layer_file.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+		if (descriptor < 0)
+			throw std::runtime_error("cannot write the registry layer");
+		::flock(descriptor, LOCK_EX);
+		size_t written = 0;
+		while (written < records.size()) {
+			const auto done = ::write(descriptor, records.data() + written, records.size() - written);
+			if (done <= 0)
+				break;
+			written += size_t(done);
+		}
+		::flock(descriptor, LOCK_UN);
+		::close(descriptor);
+		if (written != records.size())
+			throw std::runtime_error("cannot write the registry layer");
+		return;
+	}
 	// A process that compacts the hive renames a new file over it, so the file locked must still be the one the path names.
 	int descriptor = -1;
 	struct stat opened{};
@@ -874,12 +904,45 @@ void NativeRegistry::journal(const std::string &records)
 	}
 	replay(loaded);
 	stamp = current_stamp();
-	if (written == records.size() && stamp.size > 4 * 1024 * 1024 && stamp.size > 3 * compacted)
+	if (written == records.size() && layer_file.empty() && stamp.size > 4 * 1024 * 1024 && stamp.size > 3 * compacted)
 		save();
 	::flock(descriptor, LOCK_UN);
 	::close(descriptor);
 	if (written != records.size())
 		throw std::runtime_error("cannot write the registry hive");
+}
+
+void NativeRegistry::replay_layer()
+{
+	if (layer_file.empty())
+		return;
+	std::ifstream input(layer_file, std::ios::binary);
+	std::string line;
+	while (std::getline(input, line) && !input.eof())
+		apply(line);
+}
+
+void NativeRegistry::set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns)
+{
+	layer_file = std::move(layer);
+	layer_owns = std::move(owns);
+	replay_layer();
+	layer_stamp = stamp_of(layer_file);
+}
+
+std::map<std::u16string, std::string> NativeRegistry::digest(const std::filesystem::path &file)
+{
+	NativeRegistry hive;
+	hive.file = file;
+	hive.load();
+	std::map<std::u16string, std::string> result;
+	for (const auto &[folded, key] : hive.keys) {
+		std::string values;
+		for (const auto &[name, value] : key.values)
+			values += escape(name) + '\t' + std::to_string(value.type) + '\t' + hex(value.data) + '\n';
+		result.emplace(folded, std::move(values));
+	}
+	return result;
 }
 
 void NativeRegistry::load()

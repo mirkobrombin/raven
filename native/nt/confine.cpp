@@ -1,4 +1,5 @@
 #include "confine.h"
+#include "apps.h"
 #include "sandbox.h"
 
 #include <array>
@@ -339,6 +340,11 @@ bool confine(const std::filesystem::path &prefix)
 	allow(ruleset, "/dev", all, all);
 	// The places the runtime and the libraries it uses keep their work: the prefix, the session's runtime folder, temporary files.
 	allow(ruleset, prefix, all, all);
+	// The installed programs' layers beside it, which each program writes its own changes to, and the records of what each one owns,
+	// which only an installation outside the confinement writes.
+	std::filesystem::create_directories(layers_directory(prefix), error);
+	allow(ruleset, layers_directory(prefix), all, all);
+	allow(ruleset, apps_directory(prefix), read_rights, all);
 	for (const char *work : {"XDG_RUNTIME_DIR", "TMPDIR"})
 		allow(ruleset, environment_path(work), all, all);
 	allow(ruleset, "/tmp", all, all);

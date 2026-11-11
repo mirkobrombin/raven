@@ -11,6 +11,7 @@
 #include "nt/elevation.h"
 #include "nt/restart.h"
 #include "nt/snapshot.h"
+#include "nt/apps.h"
 #include "nt/confine.h"
 #include "nt/sandbox.h"
 #include "nt/handle_channel.h"
@@ -44,6 +45,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <stdexcept>
 
 static std::vector<uint8_t> read_file(const char *path)
@@ -196,6 +198,21 @@ int main(int argc, char **argv)
 			std::cerr << "raven: " << failure.what() << '\n';
 			return 1;
 		}
+		return 0;
+	}
+	// The programs installed in the prefix, each with what it owns; and the layer of one thrown away.
+	if (mode == "--list-apps" || mode == "--discard-layer") {
+		const auto prefix = raven::NativePrefix::from_environment().root();
+		if (mode == "--list-apps") {
+			for (const auto &app : raven::installed_apps(prefix))
+				std::cout << app.id << '\n';
+			return 0;
+		}
+		if (argc < 3 || !raven::discard_layer(prefix, argv[2])) {
+			std::cerr << "raven: no installed program named " << (argc < 3 ? "" : argv[2]) << '\n';
+			return 1;
+		}
+		std::cout << "discarded the layer of " << argv[2] << '\n';
 		return 0;
 	}
 	const bool dump_image = mode == "--dump-image";
@@ -471,14 +488,50 @@ int main(int argc, char **argv)
 					// like an installer and that no other program started. The ten newest of these snapshots are kept.
 					const bool started_alone = !command_line_text && handle_channel_fd < 0;
 					const auto program_name = std::filesystem::path(argv[first_file]).filename().string();
-					if (started_alone && !std::getenv("RAVEN_PREFIX_SETUP") && !std::getenv("RAVEN_NO_SNAPSHOT") && raven::installer_like(entry->image, program_name)) {
+					const bool installing = started_alone && !std::getenv("RAVEN_PREFIX_SETUP") && !std::getenv("RAVEN_NO_SNAPSHOT") &&
+						raven::installer_like(entry->image, program_name);
+					if (installing) {
+						std::filesystem::path before;
+						const auto stem = std::filesystem::path(program_name).stem().string();
 						try {
-							raven::take_snapshot(prefix.root(), "install-" + std::filesystem::path(program_name).stem().string());
+							before = raven::take_snapshot(prefix.root(), "install-" + stem);
 							raven::prune_snapshots(prefix.root(), "-install-", 10);
 						} catch (const std::exception &failure) {
 							std::cerr << "raven: no snapshot of the prefix before the installation: " << failure.what() << '\n';
 						}
+						// What the installation made belongs to the program it installed: once the installer and every program it started have
+						// ended, the prefix is compared with the snapshot. This process waits for them, and the installer runs in a child.
+						if (!before.empty() && ::prctl(PR_SET_CHILD_SUBREAPER, 1) == 0) {
+							const pid_t installer = ::fork();
+							if (installer > 0) {
+								int status = 0, code = 1;
+								for (;;) {
+									const pid_t ended = ::waitpid(-1, &status, 0);
+									if (ended < 0) {
+										if (errno == EINTR)
+											continue;
+										break;
+									}
+									if (ended == installer)
+										code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+								}
+								try {
+									const auto app = raven::record_installation(prefix.root(), before, stem);
+									if (!app.id.empty())
+										std::cerr << "raven: recorded the installation of " << app.id << '\n';
+								} catch (const std::exception &failure) {
+									std::cerr << "raven: the installation was not recorded: " << failure.what() << '\n';
+								}
+								return code;
+							}
+							::prctl(PR_SET_CHILD_SUBREAPER, 0);
+						}
 					}
+					// A program an installation recorded takes the identity of the program its executable belongs to, whoever started it: what
+					// it changes outside what it owns goes to its own layer. An installer installs, and has none.
+					if (!installing && !std::getenv("RAVEN_PREFIX_SETUP"))
+						if (auto app = raven::app_of(prefix.root(), std::filesystem::absolute(argv[first_file])))
+							raven::app_layer().set(prefix.root(), std::move(*app));
 					// From here on the runtime is confined, with the programs it starts: a program started from the host, unless it is one of the
 					// runtime's trusted programs, which see the whole host.
 					if (started_alone && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP"))

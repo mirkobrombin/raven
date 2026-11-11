@@ -173,13 +173,13 @@ def main():
     host_names = ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo", "RavenFontMetrics", "RavenFontName", "RavenFontOpen", "RavenFontOutline",
                   "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasBatch", "RavenCanvasCreate", "RavenCanvasDestroy", "RavenCanvasDraw",
                   "RavenCanvasPixels", "RavenCanvasSize", "RavenPathCombine", "RavenPathWiden",
-                  "RavenGrantPath", "RavenSandboxRead", "RavenSandboxWrite", "RavenSandboxLog", "RavenSnapshotList", "RavenSnapshotTake", "RavenSnapshotRestore", "RavenSnapshotDelete", "RavenHostOpen", "RavenHostApps"]
+                  "RavenGrantPath", "RavenSandboxRead", "RavenSandboxWrite", "RavenSandboxLog", "RavenSnapshotList", "RavenSnapshotTake", "RavenSnapshotRestore", "RavenSnapshotDelete", "RavenHostOpen", "RavenHostApps", "RavenAppList", "RavenAppDiscard"]
     # A 32-bit program calls them as stdcall functions, named by the bytes of their arguments, which the import names leave out.
     host_words = {"RavenFontClose": 1, "RavenFontGlyphs": 4, "RavenFontInfo": 2, "RavenFontMetrics": 3, "RavenFontName": 4, "RavenFontOpen": 3,
                   "RavenFontOutline": 4, "RavenFontRender": 10, "RavenFontScan": 2, "RavenFontTable": 5, "RavenTrace": 1, "RavenCanvasBatch": 2,
                   "RavenCanvasCreate": 2, "RavenCanvasDestroy": 1, "RavenCanvasDraw": 4, "RavenCanvasPixels": 8, "RavenCanvasSize": 2,
                   "RavenPathCombine": 8, "RavenPathWiden": 7, "RavenGrantPath": 2, "RavenSandboxRead": 2, "RavenSandboxWrite": 1, "RavenSandboxLog": 2,
-                  "RavenSnapshotList": 2, "RavenSnapshotTake": 1, "RavenSnapshotRestore": 1, "RavenSnapshotDelete": 1, "RavenHostOpen": 1, "RavenHostApps": 2}
+                  "RavenSnapshotList": 2, "RavenSnapshotTake": 1, "RavenSnapshotRestore": 1, "RavenSnapshotDelete": 1, "RavenHostOpen": 1, "RavenHostApps": 2, "RavenAppList": 2, "RavenAppDiscard": 1}
     (output / "ravenhost.def").write_text("LIBRARY ravenhost.dll\nEXPORTS\n" + "".join(
         (f"{name}@{host_words[name] * 4}" if x86 else name) + "\n" for name in host_names))
     run([triple + "-dlltool", *(["--kill-at"] if x86 else []), "-d", output / "ravenhost.def", "-l", output / "libravenhost.a"])

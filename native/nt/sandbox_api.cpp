@@ -1,5 +1,6 @@
 #include "kernel_context.h"
 #include "sandbox.h"
+#include "apps.h"
 #include "snapshot.h"
 #include "text.h"
 
@@ -236,6 +237,41 @@ void register_sandbox_api(ApiRegistry &registry, KernelContext &context)
 		}
 		std::filesystem::remove_all(snapshot, error);
 		call.ret(error ? 0 : 1);
+	});
+	// RavenAppList(buffer, capacity): the programs installations recorded, "ID<tab>SIZE" a line, SIZE the bytes their layer holds.
+	registry.add("RavenAppList", 2, [prefix, give](ApiCall &call) {
+		if (!sandbox().trusted()) {
+			call.fail(5, 0);
+			return;
+		}
+		std::string text;
+		for (const auto &app : installed_apps(prefix())) {
+			uintmax_t size = 0;
+			std::error_code error;
+			const auto layer = layers_directory(prefix()) / app.id;
+			for (auto walk = std::filesystem::recursive_directory_iterator(layer, error); !error && walk != std::filesystem::recursive_directory_iterator();
+				walk.increment(error))
+				if (walk->is_regular_file(error))
+					size += walk->file_size(error);
+			for (const char *extra : {".reg", ".deleted"})
+				if (const auto bytes = std::filesystem::file_size(layers_directory(prefix()) / (app.id + extra), error); !error)
+					size += bytes;
+			text += app.id + "\t" + std::to_string(size) + "\n";
+		}
+		give(call, text);
+	});
+	// RavenAppDiscard(id): throws an installed program's layer away.
+	registry.add("RavenAppDiscard", 1, [prefix](ApiCall &call) {
+		const auto id = to_utf8(call.wide(call[0], 260));
+		if (!sandbox().trusted()) {
+			call.fail(5, 0);
+			return;
+		}
+		if (!discard_layer(prefix(), id)) {
+			call.fail(2, 0);
+			return;
+		}
+		call.ret(1);
 	});
 }
 
