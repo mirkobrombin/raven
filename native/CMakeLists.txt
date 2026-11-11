@@ -33,6 +33,8 @@ set_tests_properties(native_hlsl_compiler PROPERTIES TIMEOUT 120)
 # The manifest of lavapipe, the software Vulkan driver tests run on: lvp_icd.json on Debian and Ubuntu, lvp_icd.x86_64.json on
 # Fedora and Arch.
 find_file(RAVEN_LAVAPIPE_ICD NAMES lvp_icd.json lvp_icd.x86_64.json PATHS /usr/share/vulkan/icd.d NO_DEFAULT_PATH)
+# The Khronos validation layer: the tests that need the driver's calls checked run only where it is installed.
+find_file(RAVEN_VULKAN_VALIDATION_LAYER VkLayer_khronos_validation.json PATHS /usr/share/vulkan/explicit_layer.d NO_DEFAULT_PATH)
 find_package(PNG 1.6.59 QUIET)
 find_package(OpenSSL QUIET)
 find_package(Freetype QUIET)
@@ -3083,6 +3085,25 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_vulkan_queued_extensions_x64 COMMAND ${Python3_EXECUTABLE}
                     ${PROJECT_SOURCE_DIR}/scripts/native-queued-vulkan.py $<TARGET_FILE:raven> ${VULKAN_FIXTURES}/extensions64.exe)
                 set_tests_properties(native_vulkan_queued_extensions_x64 PROPERTIES TIMEOUT 30)
+                add_custom_command(OUTPUT ${VULKAN_FIXTURES}/mapped-range64.exe
+                    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
+                        -idirafter ${Vulkan_INCLUDE_DIRS}
+                        -Wl,--entry,raven_entry,--image-base,0x18e000000
+                        -o ${VULKAN_FIXTURES}/mapped-range64.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_mapped_range_client.c
+                        ${VULKAN_FIXTURES}/vulkan.a
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_mapped_range_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
+                add_custom_target(vulkan_mapped_range64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/mapped-range64.exe)
+                add_dependencies(vulkan_mapped_range64_fixture vulkan_import64)
+                add_test(NAME native_vulkan_mapped_range_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/mapped-range64.exe)
+                set_tests_properties(native_vulkan_mapped_range_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
+                # Lavapipe's host-visible memory is all coherent: the runtime treats it as not, so the flushes and invalidations it sends
+                # for such memory reach the validation layer.
+                if(RAVEN_LAVAPIPE_ICD AND RAVEN_VULKAN_VALIDATION_LAYER)
+                    add_test(NAME native_vulkan_noncoherent_range_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/mapped-range64.exe)
+                    set_tests_properties(native_vulkan_noncoherent_range_x64 PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                        ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation;RAVEN_VULKAN_NONCOHERENT=1")
+                endif()
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/foreign-present64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                         -idirafter ${Vulkan_INCLUDE_DIRS}
@@ -3159,6 +3180,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_dependencies(vulkan_extensions32_fixture vulkan_import32)
                         add_test(NAME native_vulkan_extensions_x32 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/extensions32.exe)
                         set_tests_properties(native_vulkan_extensions_x32 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
+                        add_custom_command(OUTPUT ${VULKAN_FIXTURES}/mapped-range32.exe
+                            COMMAND ${RAVEN_MINGW32_VULKAN} -minline-all-stringops -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
+                                -I${VULKAN_GENERATED_DIR}/mingw-include
+                                -Wl,--entry,_raven_entry,--image-base,0x400000
+                                -o ${VULKAN_FIXTURES}/mapped-range32.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_mapped_range_client.c
+                                ${VULKAN_FIXTURES}/vulkan32.a
+                            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_mapped_range_client.c ${VULKAN_FIXTURES}/vulkan32.a VERBATIM)
+                        add_custom_target(vulkan_mapped_range32_fixture ALL DEPENDS ${VULKAN_FIXTURES}/mapped-range32.exe)
+                        add_dependencies(vulkan_mapped_range32_fixture vulkan_import32)
+                        add_test(NAME native_vulkan_mapped_range_x32 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/mapped-range32.exe)
+                        set_tests_properties(native_vulkan_mapped_range_x32 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
+                        if(RAVEN_LAVAPIPE_ICD AND RAVEN_VULKAN_VALIDATION_LAYER)
+                            add_test(NAME native_vulkan_noncoherent_range_x32 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/mapped-range32.exe)
+                            set_tests_properties(native_vulkan_noncoherent_range_x32 PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                                FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                                ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation;RAVEN_VULKAN_NONCOHERENT=1")
+                        endif()
                     endif()
                 endif()
             endif()

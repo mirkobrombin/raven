@@ -119,11 +119,30 @@ void VulkanBridge::shadow_to_device(uint64_t device)
 		if (memory.device != device || !memory.host || !memory.view)
 			continue;
 		auto *host = static_cast<uint8_t *>(memory.host);
+		bool written = false;
 		each_difference(memory.view, memory.snapshot.data(), size_t(memory.mapped), [&](size_t index) {
 			host[index] = memory.view[index];
 			memory.snapshot[index] = memory.view[index];
+			written = true;
 		});
+		// Bytes written through a mapping of memory that is not host-coherent reach the device only after the driver flushes them.
+		if (written && !memory.coherent)
+			mapped_range(memory, false);
 	}
+}
+
+// Makes the device's writes to a mapping of non-coherent memory visible to the host's caches (invalidate), or the host's writes visible
+// to the device (flush). The driver does this for its own mapping only when asked: copying between the guest's shadow and the mapping
+// does not, and without it a host-cached, non-coherent mapping (Intel on i915 exposes one) keeps returning the cache lines it held before
+// the device wrote them.
+void VulkanBridge::mapped_range(const Memory &memory, bool invalidate)
+{
+	const VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory.handle, memory.host_offset, memory.host_size};
+	const auto handle = devices.at(memory.device).handle;
+	const auto status = invalidate ? vkInvalidateMappedMemoryRanges(handle, 1, &range) : vkFlushMappedMemoryRanges(handle, 1, &range);
+	if (status != VK_SUCCESS)
+		throw std::runtime_error(std::string(invalidate ? "vkInvalidateMappedMemoryRanges" : "vkFlushMappedMemoryRanges") + " failed: " +
+			std::to_string(int(status)));
 }
 
 void VulkanBridge::shadow_from_device(uint64_t device, ReadBack scope, const std::vector<uint64_t> &named)
@@ -138,6 +157,8 @@ void VulkanBridge::shadow_from_device(uint64_t device, ReadBack scope, const std
 			continue;
 		if (scope == cached_memory ? !memory.cached : std::find(named.begin(), named.end(), token) == named.end())
 			continue;
+		if (!memory.coherent)
+			mapped_range(memory, true);
 		const auto *host = static_cast<const uint8_t *>(memory.host);
 		each_difference(host, memory.snapshot.data(), size_t(memory.mapped), [&](size_t index) {
 			memory.view[index] = host[index];
@@ -221,10 +242,21 @@ if (name == "vkFreeMemory") {
 			throw std::runtime_error("unsupported Vulkan memory mapping (offset " + std::to_string(offset) + ", size " + std::to_string(size) +
 				", memory " + std::to_string(memory.size) + (memory.host ? ", already mapped" : "") + ", flags " + std::to_string(a[4]) + ")");
 		check_writable(a[5], 8);
-		void *host = nullptr;
-		const auto status = vkMapMemory(device.handle, memory.handle, offset, size, 0, &host);
+		// Memory that is not host-coherent is flushed and invalidated in whole atoms, inside what the driver mapped: a guest may map from
+		// any offset, so the driver maps the atoms around the guest's range and the guest sees its own bytes within them.
+		uint64_t host_offset = offset, host_end = offset + size;
+		if (!memory.coherent) {
+			VkPhysicalDeviceProperties properties{};
+			vkGetPhysicalDeviceProperties(physical.at(device.physical).handle, &properties);
+			const uint64_t atom = std::max<uint64_t>(properties.limits.nonCoherentAtomSize, 1);
+			host_offset = offset / atom * atom;
+			host_end = std::min<uint64_t>((host_end + atom - 1) / atom * atom, memory.size);
+		}
+		void *mapped = nullptr;
+		const auto status = vkMapMemory(device.handle, memory.handle, host_offset, host_end - host_offset, 0, &mapped);
 		result = static_cast<uint32_t>(status);
 		if (status == VK_SUCCESS) {
+			void *host = static_cast<uint8_t *>(mapped) + (offset - host_offset);
 			uint64_t shadow = 0;
 			try {
 				if (memory.coherent)
@@ -246,6 +278,8 @@ if (name == "vkFreeMemory") {
 			memory.shadow = shadow;
 			memory.offset = offset;
 			memory.mapped = size;
+			memory.host_offset = host_offset;
+			memory.host_size = host_end - host_offset;
 			store(a[5], shadow);
 		}
 	} else if (name == "vkUnmapMemory") {

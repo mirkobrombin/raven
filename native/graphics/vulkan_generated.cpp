@@ -8,6 +8,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
@@ -43,6 +44,10 @@ uint64_t Marshal::allocate_memory(const std::vector<uint64_t> &a)
 		throw std::runtime_error("invalid Vulkan memory type index");
 	record.coherent = (properties.memoryTypes[info->memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
 	record.cached = (properties.memoryTypes[info->memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
+	// Treats every kind as not host-coherent, so the flushes and invalidations it needs run, and are validated, on a driver whose host-visible
+	// memory is all coherent.
+	if (std::getenv("RAVEN_VULKAN_NONCOHERENT"))
+		record.coherent = false;
 	// Importing host memory would require matching external-memory flags on every bound resource.
 	const auto status = vkAllocateMemory(host_device, info, nullptr, &memory);
 	if (status == VK_SUCCESS) {

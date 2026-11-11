@@ -14,8 +14,9 @@ build=(
     wine-devel mingw64-gcc mingw64-gcc-c++ mingw32-gcc mingw32-gcc-c++ mingw64-winpthreads-static mingw32-winpthreads-static
     wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel
     vulkan-loader-devel vulkan-headers openssl-devel
-    # The configure step registers the software Vulkan tests only when it finds Mesa's driver manifest.
-    mesa-vulkan-drivers
+    # The configure step registers the software Vulkan tests only when it finds Mesa's driver manifest, and the ones that run under
+    # the validation layer only when it finds the layer.
+    mesa-vulkan-drivers vulkan-validation-layers
     # The text component derives the Raven Sans dialog faces from DejaVu with fontTools.
     python3-fonttools
 )
