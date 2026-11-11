@@ -62,6 +62,9 @@ const Adapter adapters[] = {
 	{"GetPrivateProfileIntA", {0, 1, 3}},
 	{"WritePrivateProfileStringA", {0, 1, 2, 3}},
 	{"WritePrivateProfileSectionA", {0, 2}, -1, -1, -1, -1, -1, 0, false, 1},
+	// The structure at argument 2 is raw bytes of the caller's giving, the same in both forms, so only the names are text.
+	{"GetPrivateProfileStructA", {0, 1, 4}},
+	{"WritePrivateProfileStructA", {0, 1, 4}},
 	{"GetDriveTypeA", {0}},
 	{"GetDateFormatA", {3}, 4, 5},
 	{"GetTimeFormatA", {3}, 4, 5},

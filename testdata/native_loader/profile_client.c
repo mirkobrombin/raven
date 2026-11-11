@@ -144,6 +144,29 @@ int raven_entry(void)
 		GetPrivateProfileIntW(L"Fourth", L"Size", 0, sections) != 2)
 		return 29;
 
+	/* A fixed-size structure is stored as hex bytes with a checksum and reads back through the wide and the ANSI calls alike; the
+	   structure's bytes are raw and stay the same across the two, while only the section, key and file names change encoding. */
+	{
+		unsigned char stored[4] = {0x12, 0x34, 0x56, 0x78}, loaded[4] = {0};
+		if (!WritePrivateProfileStructW(L"Struct", L"Wide", stored, sizeof stored, ansi))
+			return 31;
+		if (!GetPrivateProfileStructW(L"Struct", L"Wide", loaded, sizeof loaded, ansi) || !same_bytes((char *)stored, (char *)loaded, sizeof stored))
+			return 32;
+		if (!WideCharToMultiByte(CP_ACP, 0, ansi, -1, path, MAX_PATH, NULL, NULL))
+			return 33;
+		stored[0] = 0xab;
+		stored[3] = 0xcd;
+		if (!WritePrivateProfileStructA("Struct", "Ansi", stored, sizeof stored, path))
+			return 34;
+		loaded[0] = loaded[1] = loaded[2] = loaded[3] = 0;
+		if (!GetPrivateProfileStructA("Struct", "Ansi", loaded, sizeof loaded, path) || !same_bytes((char *)stored, (char *)loaded, sizeof stored))
+			return 35;
+		/* The wide reader sees the same structure the ANSI writer stored. */
+		loaded[0] = loaded[1] = loaded[2] = loaded[3] = 0;
+		if (!GetPrivateProfileStructW(L"Struct", L"Ansi", loaded, sizeof loaded, ansi) || !same_bytes((char *)stored, (char *)loaded, sizeof stored))
+			return 36;
+	}
+
 	/* A file in a directory that does not exist is not written. */
 	SetLastError(0);
 	if (WritePrivateProfileStringW(L"Settings", L"Rect", L"1044", missing) || GetLastError() != ERROR_PATH_NOT_FOUND)
