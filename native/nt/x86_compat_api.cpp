@@ -297,7 +297,7 @@ bool NativeX86Compat::dispatch(std::string_view name)
 	// The guest-side heap is opt-in: with it, a 32-bit program that starts several threads at once (Bitvise SSH Client given -host)
 	// still crashes now and then on a corrupted block, and without it it does not.
 	static const bool guest_side = std::getenv("RAVEN_GUEST_HEAP") != nullptr;
-	if ((guest_side || guest_heap_wanted.load(std::memory_order_relaxed)) && (name.starts_with("Heap") || name == "GetProcessHeap"))
+	if ((guest_side || guest_heap_wanted.load(std::memory_order_relaxed)) && (api.starts_with("Heap") || api == "GetProcessHeap"))
 		guest_heap();
 	if (api == "GetProcessHeap") {
 		process.api_arguments(0);
