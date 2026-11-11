@@ -7,7 +7,11 @@
 #include <fstream>
 #include <iostream>
 #include <linux/landlock.h>
+#include <cstddef>
+#include <cstring>
+#include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -27,6 +31,28 @@ static bool opens(const std::filesystem::path &file, int flags = O_RDONLY)
 	return descriptor >= 0;
 }
 
+// A socket listening outside the confinement, by an abstract name or by a socket file.
+static int listening(const std::string &name, bool abstract, sockaddr_un &address, socklen_t &length)
+{
+	std::memset(&address, 0, sizeof(address));
+	address.sun_family = AF_UNIX;
+	std::memcpy(address.sun_path + (abstract ? 1 : 0), name.data(), name.size());
+	length = socklen_t(offsetof(sockaddr_un, sun_path) + name.size() + (abstract ? 1 : 0));
+	const int descriptor = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (descriptor < 0 || ::bind(descriptor, reinterpret_cast<sockaddr *>(&address), length) || ::listen(descriptor, 4))
+		return -1;
+	return descriptor;
+}
+
+static bool reaches(const sockaddr_un &address, socklen_t length)
+{
+	const int descriptor = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	const bool done = descriptor >= 0 && !::connect(descriptor, reinterpret_cast<const sockaddr *>(&address), length);
+	if (descriptor >= 0)
+		::close(descriptor);
+	return done;
+}
+
 int main()
 {
 	if (::syscall(SYS_landlock_create_ruleset, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION) < 1) {
@@ -40,11 +66,18 @@ int main()
 		if (root.string().starts_with(system) && std::getenv("HOME"))
 			root = std::filesystem::path(std::getenv("HOME")) / ".raven-confine-test";
 	std::filesystem::remove_all(root);
-	for (const auto *folder : {"prefix", "granted", "later", "home/.ssh"})
+	for (const auto *folder : {"prefix", "granted", "later", "drafts", "home/.ssh"})
 		std::filesystem::create_directories(root / folder);
 	std::ofstream(root / "home/.ssh/id") << "key";
 	std::ofstream(root / "granted/letter.txt") << "letter";
 	std::ofstream(root / "later/picture.png") << "picture";
+
+	// A host service on an abstract name, and one on a socket file in a folder the confinement leaves open.
+	sockaddr_un abstract_address{}, file_address{};
+	socklen_t abstract_length = 0, file_length = 0;
+	const int abstract_service = listening("raven-confine-test-" + std::to_string(::getpid()), true, abstract_address, abstract_length);
+	const int file_service = listening((root / "prefix/service").string(), false, file_address, file_length);
+	check(abstract_service >= 0 && file_service >= 0, "the test cannot listen");
 
 	// The confined checks run in a child, so that this process can remove the tree afterwards.
 	const pid_t child = ::fork();
@@ -77,6 +110,21 @@ int main()
 	::close(picture);
 	check(raven::brokered_open(root / "later/picture.png", O_WRONLY, 0) < 0, "the broker opens a file granted for reading to be written");
 	check(raven::brokered_open(root / "home/.ssh/id", O_RDONLY, 0) < 0, "the broker opens the file next to a grant");
+
+	// A folder granted for writing later: the broker makes, renames and removes things in it, and nowhere else.
+	check(raven::host_mkdir(root / "drafts/notes") != 0, "a folder is made where nothing is granted");
+	std::ofstream(root / "prefix/sandbox.conf", std::ios::app) << "app-write C:\\Tools\\Editor.exe\t" << (root / "drafts").string() << "\n";
+	check(raven::host_mkdir(root / "drafts/notes") == 0, "the broker does not make a folder in a folder granted later");
+	check(raven::host_rename(root / "drafts/notes", root / "drafts/kept") == 0, "the broker does not rename in a folder granted later");
+	check(raven::host_remove(root / "drafts/kept", true) == 0, "the broker does not remove from a folder granted later");
+	check(!std::filesystem::exists(root / "drafts/kept"), "the folder the broker removed is still there");
+	check(raven::host_remove(root / "home/.ssh/id", false) != 0, "the broker removes a file nothing grants");
+	check(raven::host_rename(root / "later/picture.png", root / "drafts/picture.png") != 0, "the broker moves a file granted only for reading");
+
+	// Abstract socket names outside are closed where the kernel scopes them; socket files stay reachable.
+	check(reaches(file_address, file_length), "the confined runtime cannot reach a socket file");
+	if (::syscall(SYS_landlock_create_ruleset, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION) >= 6)
+		check(!reaches(abstract_address, abstract_length), "the confined runtime reaches an abstract socket outside");
 
 	// The broker starts only the runtime's trusted programs.
 	char self[4096];

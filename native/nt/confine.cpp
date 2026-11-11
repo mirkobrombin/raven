@@ -39,14 +39,14 @@ std::mutex &broker_lock()
 struct RulesetAttributes {
 	uint64_t handled_access_fs = 0, handled_access_net = 0, scoped = 0;
 };
-constexpr uint64_t scope_signal = 1ull << 1;
+constexpr uint64_t scope_abstract_unix_socket = 1ull << 0, scope_signal = 1ull << 1;
 constexpr uint64_t fs_refer = 1ull << 13, fs_truncate = 1ull << 14, fs_ioctl_dev = 1ull << 15;
 // The rights that apply to a file, rather than to what a folder holds.
 constexpr uint64_t file_rights = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE | LANDLOCK_ACCESS_FS_READ_FILE | fs_truncate | fs_ioctl_dev;
 constexpr uint64_t read_rights = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR;
 constexpr uint64_t run_rights = read_rights | LANDLOCK_ACCESS_FS_EXECUTE;
 
-enum : char { request_open = 'o', request_spawn = 's', request_address = 'a', request_host = 'h' };
+enum : char { request_open = 'o', request_spawn = 's', request_address = 'a', request_host = 'h', request_change = 'c' };
 
 bool send_message(int socket, const std::string &bytes, const std::vector<int> &descriptors)
 {
@@ -159,6 +159,39 @@ void open_for(int socket, const std::string &bytes)
 	::close(descriptor);
 }
 
+// A folder made, a file or folder removed, or one renamed, on host paths the sandbox grants for writing: the operation, then each path
+// ended by a zero.
+void change_for(int socket, const std::string &bytes)
+{
+	const char operation = bytes[1];
+	std::vector<std::filesystem::path> paths;
+	for (size_t at = 2; at < bytes.size();) {
+		const auto end = bytes.find('\0', at);
+		if (end == bytes.npos)
+			break;
+		paths.emplace_back(bytes.substr(at, end - at));
+		at = end + 1;
+	}
+	const size_t wanted = operation == 'm' ? 2 : 1;
+	bool allowed = paths.size() == wanted;
+	for (const auto &path : paths)
+		allowed = allowed && path.is_absolute() && sandbox().access(path) == Sandbox::Access::write &&
+			sandbox().access(path.parent_path()) == Sandbox::Access::write;
+	if (!allowed) {
+		send_message(socket, answer(-1, EACCES), {});
+		return;
+	}
+	int result = -1;
+	switch (operation) {
+	case 'd': result = ::mkdir(paths[0].c_str(), 0777); break;
+	case 'u': result = ::unlink(paths[0].c_str()); break;
+	case 'r': result = ::rmdir(paths[0].c_str()); break;
+	case 'm': result = ::rename(paths[0].c_str(), paths[1].c_str()); break;
+	default: errno = EINVAL; break;
+	}
+	send_message(socket, answer(result, result ? errno : 0), {});
+}
+
 void spawn_for(int socket, const std::string &bytes, std::vector<int> &descriptors)
 {
 	// The arguments, each ended by a zero, then a zero; then the number each descriptor takes in the child.
@@ -241,6 +274,8 @@ void spawn_for(int socket, const std::string &bytes, std::vector<int> &descripto
 			open_for(socket, bytes);
 		else if (bytes.size() >= 2 && bytes[0] == request_spawn)
 			spawn_for(socket, bytes, descriptors);
+		else if (bytes.size() >= 3 && bytes[0] == request_change)
+			change_for(socket, bytes);
 		else if (bytes.size() >= 2 && bytes[0] == request_host) {
 			// The program's name, then each target, each ended by a zero.
 			std::vector<std::string> parts;
@@ -303,7 +338,7 @@ bool confined()
 	return is_confined;
 }
 
-bool confine(const std::filesystem::path &prefix)
+bool confine(const std::filesystem::path &prefix, bool abstract_sockets)
 {
 	if (const char *off = std::getenv("RAVEN_NO_CONFINE"); off && *off == '1')
 		return false;
@@ -318,9 +353,10 @@ bool confine(const std::filesystem::path &prefix)
 		attributes.handled_access_fs |= fs_truncate;
 	if (abi >= 5)
 		attributes.handled_access_fs |= fs_ioctl_dev;
-	// A confined program cannot signal a process outside: not the host's, not another program's runtime.
+	// A confined program cannot signal a process outside, not the host's and not another program's runtime, nor reach a host service
+	// listening on an abstract socket name; the runtime's own pipes are socket files.
 	if (abi >= 6)
-		attributes.scoped = scope_signal;
+		attributes.scoped = scope_signal | (abstract_sockets ? 0 : scope_abstract_unix_socket);
 	const size_t size = abi >= 6 ? sizeof(RulesetAttributes) : abi >= 4 ? 16 : 8;
 	const int ruleset = int(::syscall(SYS_landlock_create_ruleset, &attributes, size, 0));
 	if (ruleset < 0)
@@ -398,6 +434,50 @@ bool confine(const std::filesystem::path &prefix)
 		std::fprintf(stderr, "raven: confined, %zu thread(s) running\n", threads);
 	}
 	return true;
+}
+
+namespace {
+
+// A change the confinement refused, asked of the broker; the host call's result and errno.
+int brokered_change(char operation, const std::filesystem::path &first, const std::filesystem::path &second = {})
+{
+	std::string request{request_change, operation};
+	request += first.string();
+	request += '\0';
+	if (!second.empty()) {
+		request += second.string();
+		request += '\0';
+	}
+	std::vector<int> returned;
+	const auto result = ask(request, {}, returned);
+	for (const int descriptor : returned)
+		::close(descriptor);
+	return result < 0 ? -1 : 0;
+}
+
+bool refused_by_confinement(int result)
+{
+	return result != 0 && (errno == EACCES || errno == EPERM || errno == EXDEV) && confined();
+}
+
+}
+
+int host_mkdir(const std::filesystem::path &host)
+{
+	const int result = ::mkdir(host.c_str(), 0777);
+	return refused_by_confinement(result) ? brokered_change('d', std::filesystem::absolute(host)) : result;
+}
+
+int host_remove(const std::filesystem::path &host, bool directory)
+{
+	const int result = directory ? ::rmdir(host.c_str()) : ::unlink(host.c_str());
+	return refused_by_confinement(result) ? brokered_change(directory ? 'r' : 'u', std::filesystem::absolute(host)) : result;
+}
+
+int host_rename(const std::filesystem::path &from, const std::filesystem::path &to)
+{
+	const int result = ::rename(from.c_str(), to.c_str());
+	return refused_by_confinement(result) ? brokered_change('m', std::filesystem::absolute(from), std::filesystem::absolute(to)) : result;
 }
 
 int brokered_open(const std::filesystem::path &host, int flags, mode_t mode)

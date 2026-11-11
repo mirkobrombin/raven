@@ -3,10 +3,13 @@
 #include "registry.h"
 #include "text.h"
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <stdexcept>
 #include <fstream>
 #include <map>
@@ -76,6 +79,8 @@ std::optional<InstalledApp> read_app(const std::filesystem::path &file)
 			app.keys.push_back(from_utf8(value));
 		else if (kind == "changed-key")
 			app.changed_keys.push_back(from_utf8(value));
+		else if (kind == "exe")
+			app.executable = value;
 	}
 	return app;
 }
@@ -126,6 +131,46 @@ std::optional<InstalledApp> app_of(const std::filesystem::path &prefix, const st
 				return std::move(app);
 	}
 	return std::nullopt;
+}
+
+std::optional<InstalledApp> identity_of(const std::filesystem::path &prefix, const std::filesystem::path &executable)
+{
+	const auto path = std::filesystem::absolute(executable).lexically_normal();
+	const auto relative = relative_text(path, std::filesystem::absolute(prefix));
+	if (!relative.empty() && within(relative, "drive_c/windows"))
+		return std::nullopt;
+	if (auto app = app_of(prefix, path))
+		return app;
+	for (auto &app : installed_apps(prefix))
+		if (app.executable == path.string())
+			return std::move(app);
+	// A program met for the first time: named by its file and a digest of where it is, so two programs of the same name stay apart.
+	uint32_t digest = 2166136261U;
+	for (const char character : path.string())
+		digest = (digest ^ uint8_t(character)) * 16777619U;
+	char suffix[16];
+	std::snprintf(suffix, sizeof suffix, "-%08x", digest);
+	InstalledApp app{safe_name(path.stem().string() + suffix), {}, {}, {}, {}, path.string()};
+	// Its folder, when the prefix holds it and it is not one every program shares: a portable program keeps its settings beside it.
+	const auto folder = std::filesystem::path(relative).parent_path().generic_string();
+	const auto depth = std::count(folder.begin(), folder.end(), '/');
+	if (!relative.empty() && within(folder, "drive_c") && depth >= 2 && !within(folder, "drive_c/users") && !within(folder, "drive_c/programdata"))
+		app.folders.push_back(folder);
+	const auto store = apps_directory(prefix);
+	std::error_code error;
+	std::filesystem::create_directories(store, error);
+	std::filesystem::create_directories(layers_directory(prefix), error);
+	const auto partial = store / (app.id + ".partial");
+	{
+		std::ofstream output(partial, std::ios::trunc);
+		output << "exe " << app.executable << '\n';
+		for (const auto &owned : app.folders)
+			output << "folder " << owned << '\n';
+	}
+	std::filesystem::rename(partial, store / app.id, error);
+	if (error)
+		std::filesystem::remove(partial, error);
+	return app;
 }
 
 InstalledApp record_installation(const std::filesystem::path &prefix, const std::filesystem::path &snapshot, std::string_view name)
@@ -213,6 +258,7 @@ bool remove_app(const std::filesystem::path &prefix, std::string_view id)
 	if (!discard_layer(prefix, id))
 		return false;
 	std::error_code error;
+	std::filesystem::remove(layers_directory(prefix) / (std::string(id) + ".made"), error);
 	return std::filesystem::remove(apps_directory(prefix) / std::string(id), error);
 }
 
@@ -222,7 +268,60 @@ void AppLayer::set(const std::filesystem::path &prefix_root, InstalledApp app)
 	prefix = std::filesystem::absolute(prefix_root).lexically_normal();
 	layer = layers_directory(prefix) / owner.id;
 	removed.clear();
-	removed_stamp = -2;
+	made.clear();
+	made_keys.clear();
+	removed_stamp = made_stamp = -2;
+}
+
+// What the program made, a line each: "path RELATIVE" or "key FOLDED", in <id>.made beside its layer, which the confined runtime writes.
+void AppLayer::read_made() const
+{
+	const auto file = layer.parent_path() / (owner.id + ".made");
+	struct stat status{};
+	const long long stamp = ::stat(file.c_str(), &status) ? -1 : status.st_mtim.tv_sec * 1000000000LL + status.st_mtim.tv_nsec + status.st_size;
+	if (stamp == made_stamp)
+		return;
+	made_stamp = stamp;
+	made.clear();
+	made_keys.clear();
+	std::ifstream input(file);
+	for (std::string line; std::getline(input, line);)
+		if (line.starts_with("path "))
+			made.push_back(lower(line.substr(5)));
+		else if (line.starts_with("key "))
+			made_keys.push_back(from_utf8(line.substr(4)));
+}
+
+void AppLayer::claim(std::string_view relative) const
+{
+	if (!active() || owns(relative))
+		return;
+	const auto file = layer.parent_path() / (owner.id + ".made");
+	std::error_code error;
+	std::filesystem::create_directories(file.parent_path(), error);
+	const auto line = "path " + std::string(relative) + "\n";
+	const int descriptor = ::open(file.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+	if (descriptor >= 0) {
+		[[maybe_unused]] const auto written = ::write(descriptor, line.data(), line.size());
+		::close(descriptor);
+	}
+	made.push_back(lower(relative));
+}
+
+void AppLayer::claim_key(std::u16string_view folded) const
+{
+	if (!active() || owns_key(folded))
+		return;
+	const auto file = layer.parent_path() / (owner.id + ".made");
+	std::error_code error;
+	std::filesystem::create_directories(file.parent_path(), error);
+	const auto line = "key " + to_utf8(folded) + "\n";
+	const int descriptor = ::open(file.c_str(), O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+	if (descriptor >= 0) {
+		[[maybe_unused]] const auto written = ::write(descriptor, line.data(), line.size());
+		::close(descriptor);
+	}
+	made_keys.emplace_back(folded);
 }
 
 bool AppLayer::owns(std::string_view relative) const
@@ -234,6 +333,10 @@ bool AppLayer::owns(std::string_view relative) const
 			return true;
 	for (const auto &file : owner.files)
 		if (lower(file) == lower(relative))
+			return true;
+	read_made();
+	for (const auto &path : made)
+		if (within(relative, path))
 			return true;
 	// The person's documents and the temporary files are everyone's: what one program saves there another opens.
 	const auto text = lower(relative);
@@ -262,7 +365,44 @@ bool AppLayer::owns_key(std::u16string_view folded) const
 	for (const auto &key : owner.changed_keys)
 		if (folded == key)
 			return true;
-	return false;
+	read_made();
+	for (const auto &key : made_keys)
+		if (within_key(folded, key))
+			return true;
+	return registration_key(folded);
+}
+
+// The keys through which a program joins the system: what runs at the next start or logon, what is installed and how to remove it,
+// file types and classes, services and fonts. Windows reads them for every program, so a program writes them where every one sees them.
+bool registration_key(std::u16string_view folded)
+{
+	std::u16string key(folded);
+	// The 32-bit view of a key counts as the key.
+	if (const auto at = key.find(u"\\SOFTWARE\\WOW6432NODE\\"); at != key.npos)
+		key.erase(at + 9, 12);
+	static constexpr std::u16string_view windows = u"\\SOFTWARE\\MICROSOFT\\WINDOWS\\CURRENTVERSION\\";
+	for (const std::u16string_view root : {u"HKEY_LOCAL_MACHINE", u"HKEY_CURRENT_USER"}) {
+		if (!key.starts_with(root))
+			continue;
+		const auto rest = std::u16string_view(key).substr(root.size());
+		if (within_key(rest, u"\\SOFTWARE\\CLASSES"))
+			return true;
+		if (rest.starts_with(windows)) {
+			const auto name = rest.substr(windows.size());
+			for (const std::u16string_view list : {u"RUN", u"RUNONCE", u"RUNONCEEX", u"UNINSTALL", u"APP PATHS", u"INSTALLER", u"SHAREDDLLS"})
+				if (within_key(name, list))
+					return true;
+		}
+	}
+	if (key.starts_with(u"HKEY_CLASSES_ROOT"))
+		return true;
+	for (const std::u16string_view system : {u"HKEY_LOCAL_MACHINE\\SYSTEM\\CURRENTCONTROLSET", u"HKEY_LOCAL_MACHINE\\SYSTEM\\CONTROLSET001"})
+		if (key.starts_with(system)) {
+			const auto rest = std::u16string_view(key).substr(system.size());
+			if (within_key(rest, u"\\CONTROL\\SESSION MANAGER") || within_key(rest, u"\\SERVICES"))
+				return true;
+		}
+	return within_key(key, u"HKEY_LOCAL_MACHINE\\SOFTWARE\\MICROSOFT\\WINDOWS NT\\CURRENTVERSION\\FONTS");
 }
 
 void AppLayer::read_deleted() const

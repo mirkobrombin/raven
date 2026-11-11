@@ -1,13 +1,16 @@
 #include <windows.h>
 
 /* Programs of one prefix that see each other without changing each other. One program plays every part, chosen by its first option:
-   --seed     leaves the files and the value every program shares;
+   --seed     leaves the files and the value every program shares (run as setup-seed.exe, an installation of its own);
    --install  installs (run as setup-layer.exe): itself as C:\Program Files\LayerApp\layer-app.exe, a settings file and a key beside it,
               and a copy of itself as C:\Windows\layer-check.exe, which belongs to the system;
-   --use      runs as the installed program: changes its own things and the shared ones, checks that it sees its changes, and has
-              layer-check.exe, which another identity starts, check that the shared things are unchanged;
+   --use      runs as the installed program: changes its own things and the shared ones and makes new ones, checks that it sees all of
+              it, and has layer-check.exe, which another identity starts, check that the shared things are unchanged and the new ones
+              there;
    --base     checks the shared things as every other program sees them;
-   --fresh    checks, as the installed program again, that it sees the shared things unchanged once its layer is gone. */
+   --fresh    checks, as the installed program again, that it sees the shared things unchanged once its layer is gone, and what it made
+              still there;
+   --portable changes a shared file as a program nothing installed, run from the host, and checks that it sees its change. */
 
 static BOOL write_text(const WCHAR *path, const char *text)
 {
@@ -101,11 +104,12 @@ static int check_base(void)
 		return 20;
 	if (!present(L"C:\\layer-other.txt"))
 		return 21;
-	if (present(L"C:\\layer-new.txt"))
+	/* What the installed program made where nothing was is its own, and every program sees it. */
+	if (!holds(L"C:\\layer-new.txt", "new"))
 		return 22;
-	if (level_of(L"Software\\RavenShared", L"Level") != 1)
+	if (level_of(L"Software\\RavenShared", L"Level") != 1 || level_of(L"Software\\LayerMade", L"Made") != 1)
 		return 23;
-	if (listed() != 3)
+	if (listed() != 7)
 		return 24;
 	/* What the installed program owns it changed in place, for everyone. */
 	if (!holds(L"C:\\Program Files\\LayerApp\\settings.txt", "used"))
@@ -143,7 +147,8 @@ int raven_entry(void)
 			return 9;
 		if (!write_text(L"C:\\layer-new.txt", "new"))
 			return 10;
-		if (!set_level(L"Software\\RavenShared", L"Level", 2) || !set_level(L"Software\\LayerApp", L"Version", 2))
+		if (!set_level(L"Software\\RavenShared", L"Level", 2) || !set_level(L"Software\\LayerApp", L"Version", 2) ||
+			!set_level(L"Software\\LayerMade", L"Made", 1))
 			return 11;
 		/* It sees what it changed. */
 		if (!holds(L"C:\\layer-shared.txt", "app"))
@@ -154,6 +159,8 @@ int raven_entry(void)
 			return 14;
 		if (listed() != 5)
 			return 15;
+		if (level_of(L"Software\\LayerMade", L"Made") != 1)
+			return 17;
 		/* A program it starts takes the identity of its own executable, which belongs to the system. */
 		WCHAR command[] = L"C:\\Windows\\layer-check.exe --base";
 		STARTUPINFOW startup = {sizeof startup};
@@ -169,12 +176,17 @@ int raven_entry(void)
 	}
 	if (option(line, L'b'))
 		return check_base();
+	if (option(line, L'p')) {
+		if (!write_text(L"C:\\layer-shared.txt", "portable") || !write_text(L"C:\\layer-portable.txt", "mine"))
+			return 33;
+		return holds(L"C:\\layer-shared.txt", "portable") && holds(L"C:\\layer-portable.txt", "mine") ? 0 : 34;
+	}
 	if (option(line, L'f')) {
-		if (!holds(L"C:\\layer-shared.txt", "base") || !present(L"C:\\layer-other.txt") || present(L"C:\\layer-new.txt"))
+		if (!holds(L"C:\\layer-shared.txt", "base") || !present(L"C:\\layer-other.txt") || !present(L"C:\\layer-new.txt"))
 			return 30;
-		if (level_of(L"Software\\RavenShared", L"Level") != 1)
+		if (level_of(L"Software\\RavenShared", L"Level") != 1 || level_of(L"Software\\LayerMade", L"Made") != 1)
 			return 31;
-		return listed() == 3 ? 0 : 32;
+		return listed() == 7 ? 0 : 32;
 	}
 	return 40;
 }

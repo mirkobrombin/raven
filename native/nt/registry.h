@@ -51,13 +51,14 @@ public:
 	static std::map<std::u16string, std::string> digest(const std::filesystem::path &file);
 	// A layer over the hive: a change to a key the program does not own goes to a hive file of the program's own, read over the shared
 	// one, so that the program sees it and no other program does. The program an installation recorded gets its layer by itself.
-	void set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns);
+	void set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns, std::function<void(std::u16string_view)> claim);
 
 private:
 	struct Value { std::u16string name; uint32_t type; std::vector<uint8_t> data; };
 	struct Key { std::u16string path; std::map<std::u16string, Value> values; };
 	std::filesystem::path file, layer_file;
 	std::function<bool(std::u16string_view)> layer_owns;
+	std::function<void(std::u16string_view)> layer_claim;
 	// What the hive file looked like when it was last read or written; another process that changed it makes the next call read it again.
 	struct Stamp {
 		long long seconds = -1, nanoseconds = 0;

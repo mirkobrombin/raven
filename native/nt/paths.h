@@ -53,6 +53,11 @@ public:
 	bool prepare_change(Resolved &resolved, bool copy = true, bool tree = false) const;
 	// Removes a file or an empty folder: a prefix one the program does not own is only hidden from it. Zero or the host error.
 	int remove(const std::filesystem::path &host, bool directory) const;
+	// Removes a file or a folder with everything in it, the same way.
+	bool remove_tree(const std::filesystem::path &host) const;
+	// A path a call is about to change: none when the sandbox grants it only for reading, or not at all, which the log notes; otherwise
+	// readied for the change as prepare_change does.
+	std::optional<Resolved> resolve_change(std::u16string_view path, bool copy = true, bool tree = false) const;
 	// DOS spelling of a host path inside a mapped drive.
 	std::u16string dos(const std::filesystem::path &host) const;
 	// User name shown to the guest; the host login name keeps profiles of different accounts apart.

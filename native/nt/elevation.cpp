@@ -63,6 +63,13 @@ bool installer_like(const PEImage &image, std::string_view file_name)
 			return true;
 	if (name == "msiexec.exe")
 		return true;
+	// A program that installs, changes or removes Windows Installer packages itself does what msiexec does.
+	for (const auto &import : image.imports()) {
+		const std::string_view function = import.name;
+		for (const std::string_view installs : {"MsiInstallProduct", "MsiConfigureProduct", "MsiConfigureFeature", "MsiReinstallProduct", "MsiApplyPatch"})
+			if (function.starts_with(installs))
+				return true;
+	}
 	// A WiX bundle keeps its manifest in a section of its own; an IExpress package keeps its cabinet as a resource.
 	if (std::any_of(image.sections.begin(), image.sections.end(), [](const auto &section) { return section.name == ".wixburn"; }))
 		return true;

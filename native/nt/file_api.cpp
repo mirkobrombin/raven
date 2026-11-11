@@ -37,7 +37,7 @@ FileObject::~FileObject()
 	if (lock_descriptor >= 0)
 		::close(lock_descriptor);
 	if (flags & 0x04000000U) {
-		if (directory ? !::rmdir(path.c_str()) : !::unlink(path.c_str()))
+		if (!host_remove(path, directory))
 			app_layer().hide(path);
 	}
 }
@@ -1231,7 +1231,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 				call.fail(5);
 				return;
 			}
-			if (::rename(file->path.c_str(), target->host.c_str())) {
+			if (host_rename(file->path, target->host)) {
 				call.fail(error_of(errno, !target->parent_exists));
 				return;
 			}
@@ -1257,7 +1257,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 				return;
 			}
 			if ((flags & 3) == 3) {
-				if ((file->directory ? ::rmdir(file->path.c_str()) : ::unlink(file->path.c_str())) && errno != ENOENT) {
+				if (host_remove(file->path, file->directory) && errno != ENOENT) {
 					call.fail(error_of(errno));
 					return;
 				}
@@ -1477,7 +1477,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(5);
 			return;
 		}
-		if (::mkdir(resolved->host.c_str(), 0777)) {
+		if (host_mkdir(resolved->host)) {
 			call.fail(error_of(errno, !resolved->parent_exists));
 			return;
 		}
@@ -1666,10 +1666,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(5);
 			return;
 		}
-		if (::rename(from->host.c_str(), to->host.c_str())) {
+		if (host_rename(from->host, to->host)) {
 			if (errno == EXDEV && (flags & 2)) {
 				copy_file(call, *from, *to, false);
-				if (call.result && !::unlink(from->host.c_str()))
+				if (call.result && !host_remove(from->host, false))
 					app_layer().hide(from->host);
 				return;
 			}
@@ -1696,7 +1696,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(5);
 			return;
 		}
-		if (::rename(from->host.c_str(), to->host.c_str())) {
+		if (host_rename(from->host, to->host)) {
 			call.fail(error_of(errno, !to->parent_exists));
 			return;
 		}
@@ -1735,7 +1735,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			}
 			call.result = 0;
 		}
-		if (::rename(replacement->host.c_str(), replaced->host.c_str())) {
+		if (host_rename(replacement->host, replaced->host)) {
 			call.fail(1175);
 			return;
 		}

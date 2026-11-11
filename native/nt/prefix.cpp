@@ -1,4 +1,5 @@
 #include "prefix.h"
+#include "apps.h"
 #include "system_exports.h"
 
 #include <cctype>
@@ -14,6 +15,11 @@ NativePrefix::NativePrefix(std::filesystem::path root) : directory(std::move(roo
 {
 	if (directory.empty())
 		throw std::runtime_error("native prefix requires a directory");
+	// A new prefix starts with no programs: the records and layers left beside its path by a prefix removed before belong to that one.
+	if (std::error_code missing; !std::filesystem::exists(directory / "drive_c", missing)) {
+		std::filesystem::remove_all(apps_directory(directory), missing);
+		std::filesystem::remove_all(layers_directory(directory), missing);
+	}
 	// The folders every Windows installation has, so that programs can put files in the places they expect.
 	for (const char *folder : {"windows", "windows/system32", "windows/syswow64", "Program Files/Common Files", "Program Files (x86)/Common Files",
 			"ProgramData/Microsoft/Windows/Start Menu/Programs",

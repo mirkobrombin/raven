@@ -503,6 +503,9 @@ int main(int argc, char **argv)
 						// ended, the prefix is compared with the snapshot. This process waits for them, and the installer runs in a child.
 						if (!before.empty() && ::prctl(PR_SET_CHILD_SUBREAPER, 1) == 0) {
 							const pid_t installer = ::fork();
+							// The programs the installer starts, the setup it unpacks among them, install with it.
+							if (installer == 0)
+								::setenv("RAVEN_INSTALLATION", "1", 1);
 							if (installer > 0) {
 								int status = 0, code = 1;
 								for (;;) {
@@ -527,15 +530,22 @@ int main(int argc, char **argv)
 							::prctl(PR_SET_CHILD_SUBREAPER, 0);
 						}
 					}
-					// A program an installation recorded takes the identity of the program its executable belongs to, whoever started it: what
-					// it changes outside what it owns goes to its own layer. An installer installs, and has none.
-					if (!installing && !std::getenv("RAVEN_PREFIX_SETUP"))
-						if (auto app = raven::app_of(prefix.root(), std::filesystem::absolute(argv[first_file])))
-							raven::app_layer().set(prefix.root(), std::move(*app));
+					// Every program takes the identity of its own executable, whoever started it: the program an installation recorded, or the
+					// executable itself. What it changes outside what it owns goes to its own layer. An installer and the programs it starts
+					// install, the runtime's own programs and the system's serve every program, and none of them has one.
+					{
+						const auto runtime = std::filesystem::read_symlink("/proc/self/exe").parent_path();
+						std::error_code error;
+						const auto image = std::filesystem::canonical(argv[first_file], error);
+						const bool own = !error && (image.parent_path() == runtime || image.parent_path().parent_path() == runtime);
+						if (!installing && !own && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP") && !std::getenv("RAVEN_INSTALLATION"))
+							if (auto app = raven::identity_of(prefix.root(), std::filesystem::absolute(argv[first_file])))
+								raven::app_layer().set(prefix.root(), std::move(*app));
+					}
 					// From here on the runtime is confined, with the programs it starts: a program started from the host, unless it is one of the
 					// runtime's trusted programs, which see the whole host.
 					if (started_alone && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP"))
-						raven::confine(std::filesystem::absolute(prefix.root()).lexically_normal());
+						raven::confine(std::filesystem::absolute(prefix.root()).lexically_normal(), x11 || (!std::getenv("WAYLAND_DISPLAY") && std::getenv("DISPLAY")));
 					// The libraries installed for every program, in the system directory of the program's width.
 					const auto system_directory = prefix.root() / "drive_c" / "windows" / (entry->image.is_64 ? "system32" : "syswow64");
 					// The program's own manifest names the side-by-side assemblies its libraries come from; it is read from the file, as the

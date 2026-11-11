@@ -1,3 +1,4 @@
+#include "apps.h"
 #include "elevation.h"
 #include "child_process.h"
 #include "sandbox.h"
@@ -348,9 +349,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 			call.ret(1);
 		});
 	registry.add("SHCreateDirectory", 2, [&paths](ApiCall &call) {
-		const auto resolved = paths.resolve(call.wide(call[1]));
+		const auto resolved = paths.resolve_change(call.wide(call[1]), false);
 		if (!resolved) {
-			call.ret(123);
+			call.ret(paths.resolve(call.wide(call[1])) ? 5 : 123);
 			return;
 		}
 		std::error_code error;
@@ -358,9 +359,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		call.ret(error ? 5 : 0);
 	});
 	registry.add("SHCreateDirectoryExW", 3, [&paths](ApiCall &call) {
-		const auto resolved = paths.resolve(call.wide(call[1]));
+		const auto resolved = paths.resolve_change(call.wide(call[1]), false);
 		if (!resolved) {
-			call.ret(123);
+			call.ret(paths.resolve(call.wide(call[1])) ? 5 : 123);
 			return;
 		}
 		std::error_code error;
@@ -371,9 +372,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 	registry.add("SHChangeNotify", 4, [](ApiCall &call) { call.ret(0); });
 	// A folder on a local disk is ready for writing once it exists; SHPPFW_DIRCREATE makes it first.
 	registry.add("SHPathPrepareForWriteW", 4, [&paths](ApiCall &call) {
-		const auto resolved = call[2] ? paths.resolve(call.wide(call[2])) : std::nullopt;
+		const auto resolved = !call[2] ? std::nullopt : (call.u32(3) & 1) ? paths.resolve_change(call.wide(call[2]), false) : paths.resolve(call.wide(call[2]));
 		if (!resolved) {
-			call.ret(0x80070003U);
+			call.ret(call[2] && (call.u32(3) & 1) && paths.resolve(call.wide(call[2])) ? 0x80070005U : 0x80070003U);
 			return;
 		}
 		std::error_code error;
@@ -744,23 +745,34 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		call.store<int32_t>(call[0] + aborted_at, 0);
 		std::error_code error;
 		for (size_t index = 0; index < from.size(); ++index) {
-			const auto source = paths.resolve(from[index]);
+			// A copy only reads its source; a move or a deletion changes it, which a program may only do where it may write.
+			const auto source = function == 2 ? paths.resolve(from[index]) : paths.resolve_change(from[index], true, true);
 			if (!source || !source->exists) {
-				call.ret(0x402);
+				const auto named = paths.resolve(from[index]);
+				call.ret(named && named->exists ? 0x78 : 0x402);
 				return;
 			}
-			const auto destination = function == 3 ? std::nullopt : paths.resolve(to.size() == from.size() ? to[index] : to.empty() ? std::u16string() : to[0]);
+			const auto target_name = to.size() == from.size() ? to[index] : to.empty() ? std::u16string() : to[0];
+			const auto destination = function == 3 ? std::nullopt : paths.resolve_change(target_name, true);
+			if (function != 3 && !destination) {
+				call.ret(paths.resolve(target_name) ? 0x78 : 0x7c);
+				return;
+			}
 			if (function == 3) {
 				if (flags & 0x40) {
 					// FOF_ALLOWUNDO: move into the prefix recycle bin instead of destroying the item.
-					const auto bin = paths.resolve(u"C:\\$Recycle.Bin");
-					std::filesystem::create_directories(bin->host, error);
-					std::filesystem::rename(source->host, bin->host / source->host.filename(), error);
-					if (error) {
-						std::filesystem::remove_all(source->host, error);
+					const auto bin = paths.resolve_change(u"C:\\$Recycle.Bin", false);
+					if (bin) {
+						std::filesystem::create_directories(bin->host, error);
+						std::filesystem::rename(source->host, bin->host / source->host.filename(), error);
 					}
+					if (!bin || error) {
+						error.clear();
+						paths.remove_tree(source->host);
+					} else
+						app_layer().hide(source->host);
 				} else {
-					std::filesystem::remove_all(source->host, error);
+					paths.remove_tree(source->host);
 				}
 			} else if (function == 2 && destination) {
 				auto target = destination->host;
@@ -772,6 +784,8 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 				if (function == 1 && std::filesystem::is_directory(target))
 					target /= source->host.filename();
 				std::filesystem::rename(source->host, target, error);
+				if (!error)
+					app_layer().hide(source->host);
 			}
 			if (error) {
 				call.ret(0x7c);

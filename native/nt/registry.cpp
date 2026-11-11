@@ -129,7 +129,8 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 	// The hive of the prefix an installed program runs in: what the program changes outside its own keys goes to its layer.
 	const auto &layer = app_layer();
 	if (layer.active() && std::filesystem::absolute(this->file).lexically_normal() == layer.prefix_root() / "registry.dat")
-		set_layer(layer.registry(), [&layer](std::u16string_view folded) { return layer.owns_key(folded); });
+		set_layer(layer.registry(), [&layer](std::u16string_view folded) { return layer.owns_key(folded); },
+			[&layer](std::u16string_view folded) { layer.claim_key(folded); });
 }
 
 // The classes Windows registers in both registry views whose libraries the runtime brings: the .NET runtime's metadata dispensers, runtime
@@ -557,10 +558,13 @@ uint32_t NativeRegistry::create(uint64_t parent, std::u16string_view path, uint6
 	// Every ancestor exists once a key does, so enumeration of parents stays consistent.
 	std::string records;
 	size_t end = 0;
+	std::u16string made;
 	while (end != folded.npos) {
 		end = folded.find(u'\\', end + 1);
 		const auto partial = folded.substr(0, end);
 		if (!keys.contains(partial)) {
+			if (made.empty())
+				made = partial;
 			keys.emplace(partial, Key{display.substr(0, end), {}});
 			records += "K\t" + escape(display.substr(0, end)) + '\n';
 			if (partial == folded)
@@ -571,6 +575,9 @@ uint32_t NativeRegistry::create(uint64_t parent, std::u16string_view path, uint6
 	if (!key)
 		return 8;
 	open_keys.emplace(key, folded);
+	// A key made where none was belongs to the program that made it, and goes to the shared hive.
+	if (!made.empty() && layer_claim && !layer_owns(made))
+		layer_claim(made);
 	if (!records.empty())
 		journal(records, folded);
 	return 0;
@@ -922,10 +929,12 @@ void NativeRegistry::replay_layer()
 		apply(line);
 }
 
-void NativeRegistry::set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns)
+void NativeRegistry::set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns,
+	std::function<void(std::u16string_view)> claim)
 {
 	layer_file = std::move(layer);
 	layer_owns = std::move(owns);
+	layer_claim = std::move(claim);
 	replay_layer();
 	layer_stamp = stamp_of(layer_file);
 }
