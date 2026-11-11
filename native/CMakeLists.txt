@@ -73,7 +73,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_compile_options(raven-bootstrap PRIVATE -fno-sanitize=all)
     target_link_options(raven-bootstrap PRIVATE -fno-sanitize=all -nostdlib -static
         -Wl,-no-pie,-Ttext-segment=0x700000000000,-e,_start,--build-id=none)
-    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
+    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/apps.cpp nt/sandbox.cpp nt/sandbox_api.cpp nt/confine.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
     target_include_directories(raven_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     set(NLS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/windows-codepages)
     file(SHA256 ${NLS_SOURCE}/c_1252.txt NLS_TEXT_HASH)
@@ -533,6 +533,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_executable(firmware_test nt/firmware_test.cpp)
     target_link_libraries(firmware_test PRIVATE raven_cpu)
     add_test(NAME native_firmware_memory COMMAND firmware_test)
+    add_executable(sandbox_test nt/sandbox_test.cpp)
+    target_link_libraries(sandbox_test PRIVATE raven_cpu)
+    add_test(NAME native_sandbox_grants COMMAND sandbox_test)
+    add_executable(confine_test nt/confine_test.cpp)
+    target_link_libraries(confine_test PRIVATE raven_cpu)
+    add_test(NAME native_confine COMMAND confine_test)
+    set_tests_properties(native_confine PROPERTIES TIMEOUT 30)
     add_executable(interfaces_test nt/interfaces_test.cpp)
     target_link_libraries(interfaces_test PRIVATE raven_cpu)
     add_test(NAME native_interface_table_contract COMMAND interfaces_test)
@@ -1180,6 +1187,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(system_pe_fixture ALL DEPENDS ${SYSTEM_FIXTURE})
         add_test(NAME native_system_cli COMMAND raven --run-process --execution=native ${SYSTEM_FIXTURE})
         set_tests_properties(native_system_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # An installer carries its payload after the image: a program grown past 1 GiB by data after its sections still runs. The copy is
+        # a sparse file, so it takes no room on disk.
+        add_test(NAME native_large_program COMMAND sh -c "cp \"$1\" \"$2\" && truncate -s 1300M \"$2\" && \"$0\" --run-process --execution=native \"$2\"; status=$?; rm -f \"$2\"; exit $status"
+            $<TARGET_FILE:raven> ${SYSTEM_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/large-program.exe)
+        set_tests_properties(native_large_program PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(EVENT_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/event-fixture.exe)
         add_custom_command(OUTPUT ${EVENT_FIXTURE}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
@@ -1431,6 +1443,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${FRAME_RESTORE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c -lkernel32 -luser32 -lgdi32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c VERBATIM)
             add_custom_target(frame_restore_fixture ALL DEPENDS ${FRAME_RESTORE_FIXTURE})
+            set(PICKER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/picker-client.exe)
+            add_custom_command(OUTPUT ${PICKER_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${PICKER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c -lcomdlg32 -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c VERBATIM)
+            add_custom_target(picker_fixture ALL DEPENDS ${PICKER_FIXTURE})
             add_executable(frame_restore_test desktop/frame_restore_test.cpp)
             target_link_libraries(frame_restore_test PRIVATE raven_cpu)
             add_dependencies(frame_restore_test frame_restore_fixture raven-bootstrap)
@@ -2122,6 +2140,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(snapshot_fixture ALL DEPENDS ${fixture}/snapshot/setup-sample.exe)
                     add_test(NAME native_prefix_snapshot COMMAND sh -c "set -e; rm -rf \"$3\" \"$3.snapshots\"; export RAVEN_PREFIX=\"$3\"; \"$1\" --run-process --execution=native --timeout-ms=60000 \"$2/setup-sample.exe\" -- --install | grep -q \"Native entry returned 0 \"; \"$1\" --list-snapshots | grep -q install-setup-sample; \"$1\" --run-process --execution=native --timeout-ms=60000 \"$2/snapshot-check.exe\" -- --present | grep -q \"Native entry returned 0 \"; \"$1\" --restore-prefix; \"$1\" --run-process --execution=native --timeout-ms=60000 \"$2/snapshot-check.exe\" | grep -q \"Native entry returned 0 \"; echo PASS: snapshot taken before the installation and restored" snapshot $<TARGET_FILE:raven> ${fixture}/snapshot ${fixture}/snapshot-prefix)
                     set_tests_properties(native_prefix_snapshot PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "PASS: snapshot taken")
+                    # Programs of one prefix see each other without changing each other: an installation is recorded, the program it installed
+                    # changes the shared files and values only in its own layer, a program it starts sees them unchanged, and the layer
+                    # thrown away gives the program the shared ones back. A program nothing installed, run from the host, gets a layer too.
+                    add_custom_command(OUTPUT ${fixture}/snapshot/setup-layer.exe ${fixture}/snapshot/layer-seed.exe ${fixture}/snapshot/setup-seed.exe
+                        COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                            -o ${fixture}/snapshot/setup-layer.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/layer_client.c -ladvapi32 -lkernel32
+                        COMMAND ${CMAKE_COMMAND} -E copy ${fixture}/snapshot/setup-layer.exe ${fixture}/snapshot/layer-seed.exe
+                        COMMAND ${CMAKE_COMMAND} -E copy ${fixture}/snapshot/setup-layer.exe ${fixture}/snapshot/setup-seed.exe
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/layer_client.c VERBATIM)
+                    add_custom_target(layer_fixture ALL DEPENDS ${fixture}/snapshot/setup-layer.exe)
+                    add_test(NAME native_app_layers COMMAND sh -c "set -e; rm -rf \"$3\" \"$3.snapshots\" \"$3.apps\" \"$3.layers\"; export RAVEN_PREFIX=\"$3\"; R=\"$1\"; D=\"$2\"; P=\"$3\"; run_as() { \"$R\" --run-process --execution=native --timeout-ms=120000 \"$1\" -- \"$2\" | grep -q \"Native entry returned 0 \" || { echo FAIL: \"$1\" \"$2\"; exit 1; }; }; run_as \"$D/setup-seed.exe\" --seed; run_as \"$D/setup-layer.exe\" --install; \"$R\" --list-apps | grep -qx setup-layer; run_as \"$P/drive_c/Program Files/LayerApp/layer-app.exe\" --use; grep -qx app \"$P.layers/setup-layer/drive_c/layer-shared.txt\"; grep -qx base \"$P/drive_c/layer-shared.txt\"; test -f \"$P/drive_c/layer-other.txt\"; run_as \"$D/layer-seed.exe\" --base; \"$R\" --discard-layer setup-layer | grep -q discarded; run_as \"$P/drive_c/Program Files/LayerApp/layer-app.exe\" --fresh; run_as \"$D/layer-seed.exe\" --portable; \"$R\" --list-apps | grep -q ^layer-seed-; run_as \"$P/drive_c/windows/layer-check.exe\" --base; grep -qx mine \"$P/drive_c/layer-portable.txt\"; grep -qx portable \"$P.layers\"/layer-seed-*/drive_c/layer-shared.txt; grep -qx base \"$P/drive_c/layer-shared.txt\"; grep -qx v2 \"$P/drive_c/LayerGame/data.txt\"; ! \"$R\" --list-apps | grep -q ^layer-game-; echo PASS: each installed program changes the shared prefix only in its own layer" layers $<TARGET_FILE:raven> ${fixture}/snapshot ${fixture}/layer-prefix)
+                    set_tests_properties(native_app_layers PROPERTIES TIMEOUT 600 PASS_REGULAR_EXPRESSION "PASS: each installed program")
                 endif()
                 # Programs built against each Visual C++ runtime from 2005 to 2013: the 2005 and 2008 ones name their side-by-side assembly
                 # in the manifest, the later ones find their library in the system directory.
@@ -2226,6 +2256,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-user32.dll $<TARGET_FILE_DIR:raven>/x86/raven-user32.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-shell.dll $<TARGET_FILE_DIR:raven>/x86/raven-shell.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/control.exe $<TARGET_FILE_DIR:raven>/x86/control.exe
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-picker.exe $<TARGET_FILE_DIR:raven>/x86/raven-picker.exe
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-host.exe $<TARGET_FILE_DIR:raven>/x86/raven-host.exe
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/regedit.exe $<TARGET_FILE_DIR:raven>/x86/regedit.exe)
             # Run at every build, so a component provisioned again reaches the runtime without relinking it.
             add_dependencies(raven raven_controls32_components)
@@ -2239,6 +2271,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-user32.dll $<TARGET_FILE_DIR:raven>/raven-user32.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-shell.dll $<TARGET_FILE_DIR:raven>/raven-shell.dll
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/control.exe $<TARGET_FILE_DIR:raven>/control.exe
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-picker.exe $<TARGET_FILE_DIR:raven>/raven-picker.exe
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/raven-host.exe $<TARGET_FILE_DIR:raven>/raven-host.exe
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/dism.exe $<TARGET_FILE_DIR:raven>/dism.exe
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/fondue.exe $<TARGET_FILE_DIR:raven>/fondue.exe
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/regedit.exe $<TARGET_FILE_DIR:raven>/regedit.exe
@@ -4026,6 +4060,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_test(NAME native_rpc_replace_x${width} COMMAND raven --run-process --execution=native ${rpc_replace_client})
                         set_tests_properties(native_rpc_replace_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     endif()
+                    # The host files the sandbox keeps out of reach, whichever way a program asks for them.
+                    set(sandbox_client ${CMAKE_CURRENT_BINARY_DIR}/sandbox-client${width}.exe)
+                    add_custom_command(OUTPUT ${sandbox_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${sandbox_client} ${LOADER_SOURCES}/sandbox_client.c -lshell32 -lws2_32 -ladvapi32 -lntdll -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/sandbox_client.c VERBATIM)
+                    add_custom_target(sandbox_fixture${width} ALL DEPENDS ${sandbox_client})
+                    add_test(NAME native_sandbox_x${width} COMMAND raven --run-process --execution=native ${sandbox_client})
+                    set_tests_properties(native_sandbox_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A prefix with the network taken away.
+                    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/offline-prefix${width}/sandbox.conf "network off\n")
+                    add_test(NAME native_network_off_x${width} COMMAND raven --run-process --execution=native ${sandbox_client} -- network-off)
+                    set_tests_properties(native_network_off_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/offline-prefix${width})
+                    # A prefix where a program is registered for a kind of document.
+                    add_test(NAME native_associate_x${width} COMMAND raven --run-process --execution=native ${sandbox_client} -- associate)
+                    set_tests_properties(native_associate_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/associate-prefix${width})
                     if(width EQUAL 64)
                         set(timer_queue_client ${CMAKE_CURRENT_BINARY_DIR}/timer-queue-client${width}.exe)
                         add_custom_command(OUTPUT ${timer_queue_client}
@@ -4535,6 +4587,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_host_maximize COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-host-maximize.py
                         $<TARGET_FILE:raven> ${FRAME_RESTORE_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/host-maximize)
                     set_tests_properties(native_host_maximize PROPERTIES TIMEOUT 90 RESOURCE_LOCK raven_compositor)
+                endif()
+                # A host file picked in the file dialog: the program may read what it opened and write what it saved, nothing more.
+                if(TARGET raven_wayland AND TARGET picker_fixture AND RAVEN_CONTROLS_COMPONENT_DIR AND RAVEN_LABWC AND RAVEN_WLRCTL AND RAVEN_WTYPE)
+                    add_test(NAME native_file_picker COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-picker.py
+                        $<TARGET_FILE:raven> ${PICKER_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/file-picker)
+                    set_tests_properties(native_file_picker PROPERTIES TIMEOUT 120 RESOURCE_LOCK raven_compositor)
                 endif()
                 find_program(RAVEN_XCLIP xclip)
                 if(RAVEN_X11_TESTS AND RAVEN_SKIA_LIBRARY AND RAVEN_XCLIP AND RAVEN_CONTROLS_COMPONENT_DIR AND EXISTS ${RAVEN_TESTDATA_DIR}/npp/notepad++.exe)

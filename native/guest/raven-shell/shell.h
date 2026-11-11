@@ -45,5 +45,8 @@ const WCHAR *file_part(const WCHAR *path);
 void parent_directory(WCHAR *dir);
 BOOL match_spec(const WCHAR *spec, const WCHAR *name);
 
-/* Shows the file dialog for the state, which receives the chosen paths; TRUE when the user accepted. */
+/* Shows the file dialog for the state, which receives the chosen paths; TRUE when the user accepted. The dialog runs in the runtime's
+ * file picker, a trusted program of its own that sees the host's files and grants the chosen ones to this program; show_dialog is the
+ * window itself, which the picker shows, and which the program shows in its own process when the picker cannot start. */
 BOOL run_dialog(HWND owner, DialogState *state);
+BOOL show_dialog(HWND owner, DialogState *state);

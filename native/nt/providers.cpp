@@ -3056,6 +3056,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_bcrypt_api(api_registry, kernel);
 	register_process_info_api(api_registry, kernel);
 	register_font_service(api_registry, kernel);
+	register_sandbox_api(api_registry, kernel);
 	register_shader_service(api_registry, kernel);
 	register_canvas_service(api_registry, kernel);
 	register_sync_api(api_registry, kernel);
@@ -3066,7 +3067,6 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_memory_api(api_registry, kernel);
 	register_file_api(api_registry, kernel);
 	register_shlwapi_api(api_registry, kernel);
-	register_shell_api(api_registry, kernel);
 	register_platform_api(api_registry, kernel);
 	register_actctx_api(api_registry, kernel);
 	register_version_api(api_registry, kernel);
@@ -3082,6 +3082,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	paths.set_package_roots([&hive] { return virtual_package_roots(hive); });
 	register_registry_api(api_registry, kernel, hive);
 	register_service_api(api_registry, kernel, hive);
+	register_shell_api(api_registry, kernel, hive);
 	NativeProfile profile(process, environment, prefix);
 	register_profile_api(api_registry, profile);
 	register_ansi_adapters(api_registry);

@@ -195,7 +195,8 @@ def main():
 
 def workflow(raven, source, evidence):
     program_directory = evidence / "notepad"
-    shutil.copytree(source, program_directory)
+    # A portable Notepad++ keeps its session and unsaved tabs beside itself: a copy that was ever started would reopen them.
+    shutil.copytree(source, program_directory, ignore=shutil.ignore_patterns("backup", "session.xml*"))
     program = program_directory / "notepad++.exe"
     prefix = evidence / "prefix"
     saved = prefix / "drive_c" / "persist.txt"

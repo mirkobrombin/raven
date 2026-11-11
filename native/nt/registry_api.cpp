@@ -62,7 +62,11 @@ void apply_registry_settings(NativeRegistry &hive)
 		std::vector<uint8_t> data;
 		for (uint32_t index = 0; !hive.enum_value(key, index, name, type, data); ++index) {
 			const auto variable = to_utf8(name);
-			if ((type == 1 || type == 2) && variable.starts_with("RAVEN_"))
+			// Only the settings the control panel offers: the registry is the program's to write, and a variable that names a host folder
+			// or a prefix would hand the program a way out of the sandbox.
+			const bool offered = variable.starts_with("RAVEN_TRACE_") || variable == "RAVEN_CONTINUE_UNIMPLEMENTED" ||
+				variable == "RAVEN_SLICE_MS" || variable == "RAVEN_COMMIT_LIMIT_MB";
+			if ((type == 1 || type == 2) && offered)
 				::setenv(variable.c_str(), text(data).c_str(), 0);
 		}
 		hive.close(key);

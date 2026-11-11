@@ -66,7 +66,7 @@ def main():
         compositor = start_compositor(log)
         env = os.environ | environment() | {"RAVEN_PREFIX": str(work / "prefix")}
         env["PATH"] = os.environ["PATH"]
-        program = subprocess.Popen([str(raven), "--run-process", "--execution=native", "--timeout-ms=60000", "--desktop=wayland", str(fixture)],
+        program = subprocess.Popen([str(raven), "--run-process", "--execution=native", "--timeout-ms=60000", "--desktop=wayland", str(fixture), "--", "--host"],
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         try:
             deadline = time.monotonic() + 20

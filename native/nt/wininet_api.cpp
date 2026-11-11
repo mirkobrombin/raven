@@ -1,6 +1,7 @@
 #include "authenticode.h"
 #include "child_process.h"
 #include "kernel_context.h"
+#include "sandbox.h"
 #include "text.h"
 
 #include <openssl/err.h>
@@ -189,10 +190,15 @@ struct Exchange {
 	{
 		addrinfo hints{}, *found = nullptr;
 		hints.ai_socktype = SOCK_STREAM;
+		// Without the network only the computer itself answers.
+		if (!sandbox().network() && host != "localhost")
+			hints.ai_flags = AI_NUMERICHOST;
 		if (::getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &found) || !found)
 			return internet_name_not_resolved;
 		uint32_t error = internet_cannot_connect;
 		for (auto *entry = found; entry && descriptor < 0; entry = entry->ai_next) {
+			if (!sandbox().reaches(entry->ai_addr, entry->ai_addrlen))
+				continue;
 			const int attempt = ::socket(entry->ai_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 			if (attempt < 0) continue;
 			if (::connect(attempt, entry->ai_addr, entry->ai_addrlen) && errno != EINPROGRESS) { ::close(attempt); continue; }

@@ -1,14 +1,19 @@
 #include "paths.h"
 #include "actctx.h"
+#include "apps.h"
+#include "confine.h"
+#include "sandbox.h"
 #include "text.h"
 #include "system_exports.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdlib>
 #include <dirent.h>
 #include <mutex>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
@@ -158,8 +163,11 @@ std::optional<std::filesystem::path> NativePaths::drive_root(char16_t letter) co
 		letter = char16_t(letter + 32);
 	if (letter < u'a' || letter > u'z')
 		return std::nullopt;
-	if (letter == u'z')
+	if (letter == u'z') {
+		if (!sandbox().trusted() && sandbox().grants().empty())
+			return std::nullopt;
 		return std::filesystem::path("/");
+	}
 	auto root = prefix.root() / (std::string("drive_") + char(letter));
 	std::error_code ignored;
 	if (letter != u'c' && !std::filesystem::is_directory(root, ignored))
@@ -333,7 +341,249 @@ std::optional<NativePaths::Resolved> NativePaths::resolve_direct(const std::u16s
 			break;
 		rest = rest.substr(end + 1);
 	}
+	if ((path[0] | 0x20) != u'z' && app_layer().active())
+		apply_layer(result);
+	if ((path[0] | 0x20) == u'z') {
+		const auto access = sandbox().access(result.host);
+		if (access == Sandbox::Access::none) {
+			sandbox().refuse(result.host, "open");
+			return Resolved{std::filesystem::path("/proc/raven-denied") / result.host.filename(), false, false, true, false};
+		}
+		result.writable = access == Sandbox::Access::write;
+	}
 	return result;
+}
+
+bool NativePaths::listed(const std::filesystem::path &host) const
+{
+	bool in_layer = false;
+	if (const auto relative = layer_relative(host, in_layer); !relative.empty() && !in_layer && app_layer().deleted(relative))
+		return false;
+	return in_prefix(host) || sandbox().access(host) != Sandbox::Access::none;
+}
+
+bool NativePaths::changeable(const std::filesystem::path &host) const
+{
+	return in_prefix(host) || sandbox().access(host) == Sandbox::Access::write;
+}
+
+bool NativePaths::in_prefix(const std::filesystem::path &host) const
+{
+	const auto within = [&](const std::string &root) {
+		const auto &text = host.native();
+		return text.size() > root.size() && text.compare(0, root.size(), root) == 0 && text[root.size()] == '/';
+	};
+	return within(prefix.root().native()) || (app_layer().active() && within(layer_root().native()));
+}
+
+std::filesystem::path NativePaths::layer_root() const
+{
+	return layers_directory(prefix.root()) / app_layer().app().id;
+}
+
+std::string NativePaths::layer_relative(const std::filesystem::path &host, bool &in_layer) const
+{
+	const auto inside = [&](const std::filesystem::path &root) -> std::string {
+		const auto &base = root.native();
+		const auto &text = host.native();
+		if (text.size() > base.size() && text.compare(0, base.size(), base) == 0 && text[base.size()] == '/')
+			return text.substr(base.size() + 1);
+		return {};
+	};
+	if (!app_layer().active())
+		return {};
+	if (auto relative = inside(layer_root()); !relative.empty()) {
+		in_layer = true;
+		return relative;
+	}
+	in_layer = false;
+	return inside(prefix.root());
+}
+
+// A prefix path as an installed program sees it: its layer's copy stands over the prefix's, a path it deleted is missing, and what it
+// makes where it does not own goes to the layer.
+void NativePaths::apply_layer(Resolved &result) const
+{
+	bool in_layer = false;
+	const auto relative = layer_relative(result.host, in_layer);
+	if (relative.empty() || in_layer)
+		return;
+	const auto &layer = app_layer();
+	// The layer is walked by the prefix's spelling, each name matched without case like the prefix's own.
+	auto copy = layer_root();
+	bool found = std::filesystem::is_directory(copy), parent_found = found;
+	const std::filesystem::path parts(relative);
+	for (const auto &part : parts) {
+		parent_found = found;
+		const auto match = found ? case_match(copy, part.string()) : std::nullopt;
+		copy /= match ? *match : part.string();
+		found = match.has_value();
+	}
+	if (found) {
+		result.host = copy;
+		result.exists = result.parent_exists = true;
+		return;
+	}
+	const bool hidden = layer.deleted(relative), prefix_parent = result.parent_exists;
+	if (hidden)
+		result.exists = false;
+	if (!result.exists) {
+		const auto parent = std::filesystem::path(relative).parent_path().generic_string();
+		if (!parent.empty() && layer.deleted(parent))
+			result.parent_exists = false;
+		else if (parent_found)
+			result.parent_exists = true;
+		// A new name goes where its folder is: into the prefix, where the program makes it its own, unless only its layer holds the
+		// folder; a name it deleted from the prefix comes back in its layer.
+		if (!layer.owns(relative) && (hidden || !prefix_parent))
+			result.host = copy;
+	}
+}
+
+std::filesystem::path NativePaths::preferred(const std::filesystem::path &host) const
+{
+	bool in_layer = false;
+	const auto relative = layer_relative(host, in_layer);
+	if (relative.empty() || in_layer)
+		return host;
+	std::error_code error;
+	const auto copy = layer_root() / relative;
+	return std::filesystem::exists(std::filesystem::symlink_status(copy, error)) ? copy : host;
+}
+
+std::vector<std::filesystem::path> NativePaths::other_entries(const std::filesystem::path &directory) const
+{
+	std::vector<std::filesystem::path> names;
+	bool in_layer = false;
+	const auto relative = layer_relative(directory, in_layer);
+	if (relative.empty())
+		return names;
+	const auto other = in_layer ? prefix.root() / relative : layer_root() / relative;
+	const auto here = in_layer ? layer_root() / relative : prefix.root() / relative;
+	std::error_code error;
+	for (const auto &entry : std::filesystem::directory_iterator(other, error)) {
+		const auto name = entry.path().filename().string();
+		std::error_code missing;
+		if (std::filesystem::exists(std::filesystem::symlink_status(here / name, missing)))
+			continue;
+		// A prefix entry the program deleted stays hidden; a layer entry always shows.
+		if (in_layer && app_layer().deleted(relative + "/" + name))
+			continue;
+		names.push_back(entry.path());
+	}
+	return names;
+}
+
+bool NativePaths::prepare_change(Resolved &resolved, bool copy, bool tree) const
+{
+	bool in_layer = false;
+	const auto relative = layer_relative(resolved.host, in_layer);
+	if (relative.empty())
+		return true;
+	const auto &layer = app_layer();
+	if (!in_layer && layer.owns(relative))
+		return true;
+	// Nothing in the prefix by that name: what the program makes there is its own, and every program sees it.
+	std::error_code missing;
+	if (!in_layer && !std::filesystem::exists(std::filesystem::symlink_status(resolved.host, missing))) {
+		layer.claim(relative);
+		return true;
+	}
+	const auto target = in_layer ? resolved.host : layer_root() / relative;
+	std::error_code error;
+	// The folders above it, as the prefix spells them.
+	auto folder = layer_root();
+	std::filesystem::create_directories(folder, error);
+	const auto parent = std::filesystem::path(relative).parent_path();
+	for (const auto &part : parent) {
+		const auto match = case_match(folder, part.string());
+		folder /= match ? *match : part.string();
+		if (!match && !std::filesystem::create_directory(folder, error) && error)
+			return false;
+	}
+	if (!in_layer && copy && resolved.exists) {
+		const auto status = std::filesystem::symlink_status(resolved.host, error);
+		if (std::filesystem::is_directory(status) && tree)
+			std::filesystem::copy(resolved.host, target, std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks |
+				std::filesystem::copy_options::skip_existing, error);
+		else if (std::filesystem::is_directory(status))
+			std::filesystem::create_directory(target, error);
+		else if (std::filesystem::is_symlink(status))
+			std::filesystem::copy_symlink(resolved.host, target, error);
+		else {
+			std::filesystem::copy_file(resolved.host, target, std::filesystem::copy_options::overwrite_existing, error);
+			if (!error)
+				std::filesystem::last_write_time(target, std::filesystem::last_write_time(resolved.host, error), error);
+		}
+		if (error)
+			return false;
+	}
+	if (layer.deleted(relative))
+		layer.mark_deleted(relative, false);
+	resolved.host = target;
+	resolved.parent_exists = true;
+	return true;
+}
+
+bool NativePaths::remove_tree(const std::filesystem::path &host) const
+{
+	std::error_code error;
+	bool in_layer = false;
+	const auto relative = layer_relative(host, in_layer);
+	if (relative.empty() || (!in_layer && app_layer().owns(relative))) {
+		std::filesystem::remove_all(host, error);
+		return !error;
+	}
+	std::filesystem::remove_all(layer_root() / relative, error);
+	if (std::filesystem::exists(std::filesystem::symlink_status(prefix.root() / relative, error)))
+		app_layer().mark_deleted(relative, true);
+	return true;
+}
+
+std::optional<NativePaths::Resolved> NativePaths::resolve_change(std::u16string_view path, bool copy, bool tree) const
+{
+	auto resolved = resolve(path);
+	if (!resolved)
+		return std::nullopt;
+	if (resolved->denied || !resolved->writable) {
+		if (!resolved->denied)
+			sandbox().refuse(resolved->host, "change");
+		return std::nullopt;
+	}
+	if (!prepare_change(*resolved, copy, tree))
+		return std::nullopt;
+	return resolved;
+}
+
+int NativePaths::remove(const std::filesystem::path &host, bool directory) const
+{
+	const auto plain = [&] { return host_remove(host, directory) ? errno : 0; };
+	bool in_layer = false;
+	const auto relative = layer_relative(host, in_layer);
+	if (relative.empty())
+		return plain();
+	const auto &layer = app_layer();
+	if (!in_layer && layer.owns(relative))
+		return plain();
+	const auto shared = prefix.root() / relative;
+	std::error_code error;
+	const bool in_shared = std::filesystem::exists(std::filesystem::symlink_status(shared, error)) && !layer.deleted(relative);
+	if (!in_layer && !in_shared)
+		return ENOENT;
+	if (in_shared && !in_layer && std::filesystem::is_directory(shared, error) != directory)
+		return directory ? ENOTDIR : EISDIR;
+	if (directory && in_shared) {
+		// A folder that still shows a prefix entry is not empty.
+		for (const auto &entry : std::filesystem::directory_iterator(shared, error))
+			if (!layer.deleted(relative + "/" + entry.path().filename().string()))
+				return ENOTEMPTY;
+	}
+	if (in_layer)
+		if (const int failure = plain(); failure)
+			return failure;
+	if (in_shared)
+		layer.mark_deleted(relative, true);
+	return 0;
 }
 
 bool NativePaths::set_dll_directory(std::optional<std::u16string> path)
@@ -431,6 +681,10 @@ bool NativePaths::set_current(std::u16string_view path)
 
 std::u16string NativePaths::dos(const std::filesystem::path &host) const
 {
+	// A file of the program's layer has the name of the prefix file it stands for.
+	bool in_layer = false;
+	if (const auto relative = layer_relative(host, in_layer); in_layer)
+		return dos(prefix.root() / relative);
 	const auto relative = [&](const std::filesystem::path &root) -> std::optional<std::u16string> {
 		const auto text = host.lexically_normal().string();
 		const auto base = root.lexically_normal().string();

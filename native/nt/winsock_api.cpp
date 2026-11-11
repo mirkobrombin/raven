@@ -1,6 +1,7 @@
 #include "child_process.h"
 #include "completion_port.h"
 #include "kernel_context.h"
+#include "sandbox.h"
 
 #include <algorithm>
 #include "text.h"
@@ -133,6 +134,12 @@ constexpr uint16_t windows_inet6 = 23;
 
 int host_family(int family) { return family == windows_inet6 ? AF_INET6 : family; }
 int windows_family(int family) { return family == AF_INET6 ? windows_inet6 : family; }
+
+// Whether the sandbox lets the program send to an address of the host's layout.
+bool reachable(const std::vector<uint8_t> &address)
+{
+	return address.empty() || sandbox().reaches(reinterpret_cast<const sockaddr *>(address.data()), socklen_t(address.size()));
+}
 
 // A sockaddr as the host wants it: the family number is the only difference from the Windows layout.
 std::vector<uint8_t> host_address(ApiCall &call, uint64_t address, size_t length)
@@ -585,7 +592,12 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			fail(call, socket ? wsaefault : wsaenotsock);
 			return;
 		}
-		const auto address = host_address(call, call[1], size_t(call.i32(2)));
+		auto address = host_address(call, call[1], size_t(call.i32(2)));
+		// Without the network a program still listens, but only to the computer itself.
+		if (!sandbox().network() && address.size() >= sizeof(sockaddr_in) && reinterpret_cast<sockaddr *>(address.data())->sa_family == AF_INET)
+			reinterpret_cast<sockaddr_in *>(address.data())->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		else if (!sandbox().network() && address.size() >= sizeof(sockaddr_in6) && reinterpret_cast<sockaddr *>(address.data())->sa_family == AF_INET6)
+			reinterpret_cast<sockaddr_in6 *>(address.data())->sin6_addr = in6addr_loopback;
 		if (::bind(socket->descriptor, reinterpret_cast<const sockaddr *>(address.data()), socklen_t(address.size()))) {
 			fail(call, wsa_error(errno));
 			return;
@@ -609,6 +621,10 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const auto address = host_address(call, call[1], size_t(call.i32(2)));
+		if (!reachable(address)) {
+			fail(call, wsaeacces);
+			return;
+		}
 		if (std::getenv("RAVEN_TRACE_SOCKETS") && address.size() >= sizeof(sockaddr_in) && reinterpret_cast<const sockaddr *>(address.data())->sa_family == AF_INET) {
 			const auto *target = reinterpret_cast<const sockaddr_in *>(address.data());
 			char text[INET_ADDRSTRLEN] = {};
@@ -789,6 +805,10 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint8_t> to;
 		if (call[4] && call.i32(5) >= 2)
 			to = host_address(call, call[4], size_t(call.i32(5)));
+		if (!reachable(to)) {
+			fail(call, wsaeacces);
+			return;
+		}
 		const auto count = transmit(call, socket, call[1], size_t(std::max(call.i32(2), 0)), call.u32(3),
 			to.empty() ? nullptr : reinterpret_cast<const sockaddr *>(to.data()), socklen_t(to.size()));
 		call.ret(count < 0 ? uint64_t(UINT64_MAX) : uint64_t(count));
@@ -1127,6 +1147,10 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint8_t> to;
 		if (call[5] && call.i32(6) >= 2)
 			to = host_address(call, call[5], size_t(call.i32(6)));
+		if (!reachable(to)) {
+			fail(call, wsaeacces, UINT32_MAX);
+			return;
+		}
 		if (call[7]) {
 			Transfer transfer;
 			transfer.socket = socket;
@@ -1172,6 +1196,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			if (name) {
 				if (name_size < 2) throw wsaefault;
 				transfer.to = host_address(call, name, size_t(name_size));
+				if (!reachable(transfer.to)) throw wsaeacces;
 			}
 			const size_t buffers_at = width == 4 ? 8 : 16, control_at = width == 4 ? 16 : 32;
 			const uint64_t array = call.load_pointer(call[1] + buffers_at);
@@ -1232,6 +1257,10 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		const size_t width = call.pointer_width();
 		const uint64_t overlapped = call[6];
 		const auto address = host_address(call, call[1], size_t(call.i32(2)));
+		if (!reachable(address)) {
+			fail(call, wsaeacces, 0);
+			return;
+		}
 		auto data = call[3] && call.u32(4) ? call.read(call[3], call.u32(4)) : std::vector<uint8_t>{};
 		const auto sent_out = call[5];
 		const auto done = [socket, finish, overlapped, width, data = std::move(data)](uint32_t status, bool at_once) {
@@ -2235,6 +2264,11 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		const auto text = [&](uint64_t address, size_t limit) { return wide ? to_utf8(call.wide(address, limit)) : call.narrow(address, limit); };
 		const auto node = call[0] ? text(call[0], 1025) : std::string();
 		const auto service = call[1] ? text(call[1], 256) : std::string();
+		// Without the network no name leaves the computer: only addresses written as numbers, and the computer's own name, resolve.
+		if (!sandbox().network() && call[0] && node != "localhost") {
+			hints.ai_flags |= AI_NUMERICHOST;
+			use = &hints;
+		}
 		addrinfo *found = nullptr;
 		const int status = ::getaddrinfo(call[0] ? node.c_str() : nullptr, call[1] ? service.c_str() : nullptr, use, &found);
 		if (status) {
@@ -2318,7 +2352,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 	const auto name_of_address = [](ApiCall &call, bool wide) {
 		const auto address = host_address(call, call[0], size_t(call.i32(1)));
 		const uint32_t flags = call.u32(6);
-		const int host_flags = (flags & 0x01 ? NI_NOFQDN : 0) | (flags & 0x02 ? NI_NUMERICHOST : 0) | (flags & 0x04 ? NI_NAMEREQD : 0) |
+		const int host_flags = (flags & 0x01 ? NI_NOFQDN : 0) | ((flags & 0x02) || !sandbox().network() ? NI_NUMERICHOST : 0) | (flags & 0x04 ? NI_NAMEREQD : 0) |
 			(flags & 0x08 ? NI_NUMERICSERV : 0) | (flags & 0x10 ? NI_DGRAM : 0);
 		char host[1025] = {}, service[32] = {};
 		const int status = ::getnameinfo(reinterpret_cast<const sockaddr *>(address.data()), socklen_t(address.size()), call[2] ? host : nullptr,

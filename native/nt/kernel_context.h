@@ -83,7 +83,7 @@ void register_registry_api(ApiRegistry &registry, KernelContext &context, Native
 void apply_registry_settings(NativeRegistry &hive);
 void register_service_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive);
 void register_platform_api(ApiRegistry &registry, KernelContext &context);
-void register_shell_api(ApiRegistry &registry, KernelContext &context);
+void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive);
 void register_version_api(ApiRegistry &registry, KernelContext &context);
 void register_shlwapi_api(ApiRegistry &registry, KernelContext &context);
 void register_file_api(ApiRegistry &registry, KernelContext &context);
@@ -127,6 +127,7 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context);
 void register_crypt32_api(ApiRegistry &registry, KernelContext &context);
 void register_bcrypt_api(ApiRegistry &registry, KernelContext &context);
 void register_font_service(ApiRegistry &registry, KernelContext &context);
+void register_sandbox_api(ApiRegistry &registry, KernelContext &context);
 // The HLSL compiler behind d3dcompiler_47.dll: requests from the guest component, results read back in parts.
 void register_shader_service(ApiRegistry &registry, KernelContext &context);
 // An installed font family as GDI enumerates it: the face closest to regular, and the scripts and code pages its OS/2 table claims.

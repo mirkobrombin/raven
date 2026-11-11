@@ -2,6 +2,7 @@
 
 #include "child_process.h"
 #include "host_names.h"
+#include "local_socket.h"
 #include "kernel_context.h"
 #include "security_attributes.h"
 #include "text.h"
@@ -31,7 +32,7 @@ constexpr uint32_t status_pending = 0x103;
 constexpr uint32_t file_flag_first_pipe_instance = 0x00080000U, pipe_type_message = 4;
 constexpr uint64_t invalid_handle = UINT64_MAX;
 
-// The pipes of one prefix share a namespace of abstract socket names, so processes that run in the same prefix find each other's pipes.
+// The pipes of one prefix share a namespace of socket names, so processes that run in the same prefix find each other's pipes.
 std::string pipe_address(const std::u16string &name)
 {
 	auto lower = to_utf8(name);
@@ -40,13 +41,6 @@ std::string pipe_address(const std::u16string &name)
 	return "raven.pipe." + prefix_tag() + "." + hex_text(name_hash(lower));
 }
 
-socklen_t abstract_address(const std::string &address, sockaddr_un &storage)
-{
-	std::memset(&storage, 0, sizeof(storage));
-	storage.sun_family = AF_UNIX;
-	std::memcpy(storage.sun_path + 1, address.data(), address.size());
-	return socklen_t(offsetof(sockaddr_un, sun_path) + 1 + address.size());
-}
 
 // OVERLAPPED holds NTSTATUS values; the errors the pipe calls report map to the statuses Windows uses for them.
 uint32_t status_of(uint32_t error)
@@ -287,7 +281,7 @@ std::shared_ptr<PipeObject> make_client(int descriptor, uint32_t access, uint32_
 int connect_to(const std::u16string &name, int &type, uint32_t &error)
 {
 	sockaddr_un storage;
-	const auto length = abstract_address(pipe_address(name), storage);
+	const auto length = local_socket_address(pipe_address(name), storage);
 	for (const int candidate : {SOCK_STREAM, SOCK_SEQPACKET}) {
 		const int descriptor = ::socket(AF_UNIX, candidate | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 		if (descriptor < 0) {
@@ -310,19 +304,15 @@ int connect_to(const std::u16string &name, int &type, uint32_t &error)
 	return -1;
 }
 
-// Whether any process of the prefix serves the pipe; the abstract names of the host sockets are listed in /proc/net/unix.
+// Whether any process of the prefix serves the pipe.
 bool pipe_exists(KernelContext &context, const std::u16string &name)
 {
 	const auto address = pipe_address(name);
 	if (const auto found = context.pipes->listeners.find(address); found != context.pipes->listeners.end() && !found->second.expired())
 		return true;
-	std::ifstream list("/proc/net/unix");
-	std::string line;
-	const auto wanted = "@" + address;
-	while (std::getline(list, line))
-		if (line.size() >= wanted.size() && line.compare(line.size() - wanted.size(), wanted.size(), wanted) == 0)
-			return true;
-	return false;
+	sockaddr_un storage;
+	local_socket_address(address, storage);
+	return local_socket_bound(storage.sun_path);
 }
 
 }
@@ -555,9 +545,7 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 			listener->maximum = limit == UINT32_MAX ? 255 : limit;
 			listener->address = address;
 			listener->descriptor = ::socket(AF_UNIX, listener->type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-			sockaddr_un storage;
-			const auto length = abstract_address(address, storage);
-			if (listener->descriptor < 0 || ::bind(listener->descriptor, reinterpret_cast<sockaddr *>(&storage), length) || ::listen(listener->descriptor, 128)) {
+			if (listener->descriptor < 0 || bind_local_socket(listener->descriptor, address) || ::listen(listener->descriptor, 128)) {
 				// A pipe of that name that another process serves has a first instance already.
 				call.set_last_error(errno == EADDRINUSE ? ((mode & file_flag_first_pipe_instance) ? error_access_denied : error_pipe_busy) : error_not_enough_memory);
 				return;
@@ -717,6 +705,22 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("GetNamedPipeClientProcessId", 2, peer_process);
 	registry.add("GetNamedPipeServerProcessId", 2, peer_process);
+	// Both ends of a pipe run in the one session every process here has, the one ProcessIdToSessionId gives.
+	const auto peer_session = [pipe_of](ApiCall &call) {
+		const auto pipe = pipe_of(call[0]);
+		if (!pipe || !call[1]) {
+			call.fail(pipe ? error_invalid_parameter : 6);
+			return;
+		}
+		if (pipe->descriptor < 0) {
+			call.fail(error_not_connected);
+			return;
+		}
+		call.store<uint32_t>(call[1], 1);
+		call.ret(1);
+	};
+	registry.add("GetNamedPipeClientSessionId", 2, peer_session);
+	registry.add("GetNamedPipeServerSessionId", 2, peer_session);
 	// Every client of a Raven pipe runs as the same user, so the server thread takes the identity of its own logon at the impersonation
 	// level a client grants unless it asks otherwise.
 	registry.add("ImpersonateNamedPipeClient", 1, [&context, pipe_of](ApiCall &call) {

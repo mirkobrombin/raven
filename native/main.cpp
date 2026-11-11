@@ -11,6 +11,9 @@
 #include "nt/elevation.h"
 #include "nt/restart.h"
 #include "nt/snapshot.h"
+#include "nt/apps.h"
+#include "nt/confine.h"
+#include "nt/sandbox.h"
 #include "nt/handle_channel.h"
 #include "nt/text.h"
 #include "nt/system_exports.h"
@@ -25,6 +28,8 @@
 #endif
 #endif
 
+#include <algorithm>
+#include <cctype>
 #include <set>
 #include <filesystem>
 #include <charconv>
@@ -40,6 +45,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <stdexcept>
 
 static std::vector<uint8_t> read_file(const char *path)
@@ -56,15 +62,34 @@ static std::vector<uint8_t> read_file(const char *path)
 		throw std::runtime_error("cannot read PE file");
 	return bytes;
 }
-#ifdef RAVEN_NATIVE_CPU
-static raven::ModuleBytes read_module(const std::filesystem::path &path)
+// A mapped image may be as large as Windows runs one: its file offsets are 32-bit, and installers carry their payload after the image.
+static raven::ModuleBytes map_module(const std::filesystem::path &path)
 {
 	auto bytes = raven::ModuleBytes::map(path);
 	if (!bytes)
 		throw std::runtime_error("cannot map PE file");
-	if (std::span<const uint8_t>(*bytes).size() > 1024 * 1024 * 1024)
+	if (std::span<const uint8_t>(*bytes).size() > 0xffffffffULL)
 		throw std::runtime_error("PE file exceeds inspection size limit");
 	return std::move(*bytes);
+}
+
+// A program the command line names: read whole when it is small enough to be a .NET image built for any CPU, which may be widened to the
+// form a 64-bit process loads, and mapped otherwise, as such images never come that large.
+static raven::ModuleBytes read_program(const char *path, bool widen)
+{
+	std::error_code error;
+	const auto size = std::filesystem::file_size(path, error);
+	if (!error && size > 256 * 1024 * 1024)
+		return map_module(path);
+	auto bytes = read_file(path);
+	if (widen)
+		raven::widen_il_only_image(bytes);
+	return bytes;
+}
+#ifdef RAVEN_NATIVE_CPU
+static raven::ModuleBytes read_module(const std::filesystem::path &path)
+{
+	return map_module(path);
 }
 
 // A program started by another one leaves its whole exit code here for the parent; the host exit status keeps only its low byte.
@@ -175,6 +200,21 @@ int main(int argc, char **argv)
 		}
 		return 0;
 	}
+	// The programs installed in the prefix, each with what it owns; and the layer of one thrown away.
+	if (mode == "--list-apps" || mode == "--discard-layer") {
+		const auto prefix = raven::NativePrefix::from_environment().root();
+		if (mode == "--list-apps") {
+			for (const auto &app : raven::installed_apps(prefix))
+				std::cout << app.id << '\n';
+			return 0;
+		}
+		if (argc < 3 || !raven::discard_layer(prefix, argv[2])) {
+			std::cerr << "raven: no installed program named " << (argc < 3 ? "" : argv[2]) << '\n';
+			return 1;
+		}
+		std::cout << "discarded the layer of " << argv[2] << '\n';
+		return 0;
+	}
 	const bool dump_image = mode == "--dump-image";
 	const bool map_image = mode == "--map-image" || dump_image;
 	const bool run_entry = mode == "--run-entry";
@@ -232,6 +272,10 @@ int main(int argc, char **argv)
 			::fcntl(exit_code_fd,F_SETFD,FD_CLOEXEC);
 		}
 #endif
+		// Host paths the sandbox grants, carried from the runtime that started this one.
+		else if (option.starts_with("--grant-read=")) raven::sandbox().grant(std::string(option.substr(13)),false);
+		else if (option.starts_with("--grant-write=")) raven::sandbox().grant(std::string(option.substr(14)),true);
+		else if (option.starts_with("--parent-program=")) raven::sandbox().set_parent(raven::from_utf8(option.substr(17)));
 		else if (option=="--elevated") elevated=true;
 		else if (option=="--noninteractive") noninteractive=true;
 		else more=false;
@@ -270,9 +314,7 @@ int main(int argc, char **argv)
 			raven::ModuleSet modules;
 			raven::PEModule *entry = nullptr;
 			for (int i = (run_modules || run_process) ? first_file : 2; i < last_file; ++i) {
-				auto bytes = read_file(argv[i]);
-				if (!entry && run_process)
-					raven::widen_il_only_image(bytes);
+				auto bytes = read_program(argv[i], !entry && run_process);
 				auto &module = modules.add(std::filesystem::path(argv[i]).filename().string(), std::move(bytes));
 				if (!entry) {
 					entry = &module;
@@ -303,14 +345,61 @@ int main(int argc, char **argv)
 #ifdef RAVEN_NATIVE_CPU
 				const auto bootstrap = std::filesystem::read_symlink("/proc/self/exe").parent_path() / "raven-bootstrap";
 				if (run_process) {
+					// The control panel and the file dialog of the prefix's system folders run from the runtime's own folder, as a program started
+					// by another one does (start_program): the prefix's copy may have been replaced.
+					static std::string runtime_program;
+					{
+						const auto file=std::filesystem::absolute(argv[first_file]).lexically_normal();
+						auto name=file.filename().string(), folder=file.parent_path().filename().string();
+						for (auto *text : {&name,&folder})
+							for (auto &character : *text) character=char(std::tolower(static_cast<unsigned char>(character)));
+						const auto prefix_root=std::filesystem::absolute(raven::NativePrefix::from_environment().root()).lexically_normal();
+						if ((name=="control.exe" || name=="raven-picker.exe") && (folder=="system32" || folder=="syswow64") &&
+							file.string().starts_with(prefix_root.string()+"/")) {
+							const auto runtime=std::filesystem::read_symlink("/proc/self/exe").parent_path();
+							runtime_program=((folder=="syswow64" ? runtime/"x86" : runtime)/name).string();
+							argv[first_file]=runtime_program.data();
+						}
+					}
 					const auto directory = std::filesystem::absolute(argv[first_file]).parent_path();
 					const raven::NativePrefix prefix=raven::NativePrefix::from_environment();
+					// What the program may reach of the host: the prefix's own grants, and for a program started from the host its folder and the
+					// host paths on its command line, as the person running it handed them over. A program another one started gets no more than
+					// its creator had.
+					// The runtime's control panel and file dialog, run from the runtime's own folder, are trusted.
+					{
+						const auto runtime=std::filesystem::read_symlink("/proc/self/exe").parent_path();
+						std::error_code error;
+						const auto image=std::filesystem::canonical(argv[first_file],error);
+						const auto name=image.filename().string();
+						const bool trusted=!error && (image.parent_path()==runtime || image.parent_path()==runtime/"x86") &&
+							(name=="control.exe" || name=="raven-picker.exe");
+						raven::sandbox().set_trusted(trusted);
+						// A trusted program goes by the name it has in the prefix's system folder.
+						raven::sandbox().set_program(trusted ? (image.parent_path()==runtime ? u"C:\\Windows\\System32\\" : u"C:\\Windows\\SysWOW64\\")+raven::from_utf8(name) :
+							raven::NativePaths(prefix).dos(std::filesystem::absolute(argv[first_file])));
+					}
+					raven::sandbox().load(prefix.root());
+					raven::sandbox().allow_system_reading();
+					if (handle_channel_fd<0 && !command_line_text) {
+						const auto root=std::filesystem::absolute(prefix.root()).lexically_normal().string()+"/";
+						if (!directory.lexically_normal().string().starts_with(root)) raven::sandbox().grant(directory,true);
+						for (int i=last_file+1;i<argc;++i) {
+							std::string text=argv[i];
+							if (text.size()>2 && (text[0]=='Z' || text[0]=='z') && text[1]==':') {
+								text=text.substr(2);
+								std::replace(text.begin(),text.end(),'\\','/');
+							}
+							std::error_code error;
+							if (text.starts_with("/") && std::filesystem::exists(text,error)) raven::sandbox().grant(text,true);
+						}
+					}
 					// The system's own programs, libraries and tables the runtime ships, in the system directory of each width as Windows has them; a
 					// copy that is missing or differs from the runtime's is put back.
 					{
 						const auto runtime = std::filesystem::read_symlink("/proc/self/exe").parent_path();
 						for (const auto &[from, folder] : {std::pair{runtime, "system32"}, std::pair{runtime / "x86", "syswow64"}})
-							for (const char *program : {"cmd.exe", "msiexec.exe", "regsvr32.exe", "control.exe", "dism.exe", "fondue.exe", "regedit.exe", "mscoree.dll", "riched20.dll",
+							for (const char *program : {"cmd.exe", "msiexec.exe", "regsvr32.exe", "control.exe", "raven-picker.exe", "dism.exe", "fondue.exe", "regedit.exe", "mscoree.dll", "riched20.dll",
 									"msftedit.dll", "l_intl.nls", "find.exe", "findstr.exe", "more.com", "sort.exe", "where.exe", "xcopy.exe", "attrib.exe",
 									"timeout.exe", "choice.exe", "whoami.exe", "hostname.exe", "tasklist.exe", "taskkill.exe", "reg.exe", "rundll32.exe", "cscript.exe",
 									"wscript.exe"}) {
@@ -326,6 +415,29 @@ int main(int argc, char **argv)
 									continue;
 								std::filesystem::copy_file(source_file, target, std::filesystem::copy_options::overwrite_existing, error);
 							}
+						// The Linux programs the prefix exposes, each a bridge in C:\Program Files\Raven\Host; a bridge no longer exposed goes.
+						{
+							const auto bridges = prefix.root() / "drive_c" / "Program Files" / "Raven" / "Host";
+							std::vector<std::string> wanted;
+							std::error_code error;
+							for (const auto &app : raven::sandbox().host_apps()) {
+								if (app.name.find_first_of("/\\:*?\"<>|") != std::string::npos || app.name.find_first_not_of(". ") == std::string::npos)
+									continue;
+								std::string name = app.name + ".exe";
+								std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+								wanted.push_back(name);
+								const auto target = bridges / (app.name + ".exe");
+								std::filesystem::create_directories(bridges, error);
+								if (!std::filesystem::exists(target, error) || std::filesystem::file_size(target, error) != std::filesystem::file_size(runtime / "raven-host.exe", error))
+									std::filesystem::copy_file(runtime / "raven-host.exe", target, std::filesystem::copy_options::overwrite_existing, error);
+							}
+							for (const auto &entry : std::filesystem::directory_iterator(bridges, error)) {
+								std::string name = entry.path().filename().string();
+								std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+								if (name.ends_with(".exe") && std::find(wanted.begin(), wanted.end(), name) == wanted.end())
+									std::filesystem::remove(entry.path(), error);
+							}
+						}
 						// The classes the runtime's components serve are registered in the prefix, as Windows ships them registered: regsvr32 runs
 						// for each width when the components changed since the prefix last registered them. The runs themselves skip this step.
 						const char *servers[] = {"oleaut32.dll", "msxml3.dll", "windowscodecs.dll", "mlang.dll", "propsys.dll"};
@@ -376,14 +488,64 @@ int main(int argc, char **argv)
 					// like an installer and that no other program started. The ten newest of these snapshots are kept.
 					const bool started_alone = !command_line_text && handle_channel_fd < 0;
 					const auto program_name = std::filesystem::path(argv[first_file]).filename().string();
-					if (started_alone && !std::getenv("RAVEN_PREFIX_SETUP") && !std::getenv("RAVEN_NO_SNAPSHOT") && raven::installer_like(entry->image, program_name)) {
+					const bool installing = started_alone && !std::getenv("RAVEN_PREFIX_SETUP") && !std::getenv("RAVEN_NO_SNAPSHOT") &&
+						raven::installer_like(entry->image, program_name);
+					if (installing) {
+						std::filesystem::path before;
+						const auto stem = std::filesystem::path(program_name).stem().string();
 						try {
-							raven::take_snapshot(prefix.root(), "install-" + std::filesystem::path(program_name).stem().string());
+							before = raven::take_snapshot(prefix.root(), "install-" + stem);
 							raven::prune_snapshots(prefix.root(), "-install-", 10);
 						} catch (const std::exception &failure) {
 							std::cerr << "raven: no snapshot of the prefix before the installation: " << failure.what() << '\n';
 						}
+						// What the installation made belongs to the program it installed: once the installer and every program it started have
+						// ended, the prefix is compared with the snapshot. This process waits for them, and the installer runs in a child.
+						if (!before.empty() && ::prctl(PR_SET_CHILD_SUBREAPER, 1) == 0) {
+							const pid_t installer = ::fork();
+							// The programs the installer starts, the setup it unpacks among them, install with it.
+							if (installer == 0)
+								::setenv("RAVEN_INSTALLATION", "1", 1);
+							if (installer > 0) {
+								int status = 0, code = 1;
+								for (;;) {
+									const pid_t ended = ::waitpid(-1, &status, 0);
+									if (ended < 0) {
+										if (errno == EINTR)
+											continue;
+										break;
+									}
+									if (ended == installer)
+										code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+								}
+								try {
+									const auto app = raven::record_installation(prefix.root(), before, stem);
+									if (!app.id.empty())
+										std::cerr << "raven: recorded the installation of " << app.id << '\n';
+								} catch (const std::exception &failure) {
+									std::cerr << "raven: the installation was not recorded: " << failure.what() << '\n';
+								}
+								return code;
+							}
+							::prctl(PR_SET_CHILD_SUBREAPER, 0);
+						}
 					}
+					// Every program takes the identity of its own executable, whoever started it: the program an installation recorded, or the
+					// executable itself. What it changes outside what it owns goes to its own layer. An installer and the programs it starts
+					// install, the runtime's own programs and the system's serve every program, and none of them has one.
+					{
+						const auto runtime = std::filesystem::read_symlink("/proc/self/exe").parent_path();
+						std::error_code error;
+						const auto image = std::filesystem::canonical(argv[first_file], error);
+						const bool own = !error && (image.parent_path() == runtime || image.parent_path().parent_path() == runtime);
+						if (!installing && !own && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP") && !std::getenv("RAVEN_INSTALLATION"))
+							if (auto app = raven::identity_of(prefix.root(), std::filesystem::absolute(argv[first_file])))
+								raven::app_layer().set(prefix.root(), std::move(*app));
+					}
+					// From here on the runtime is confined, with the programs it starts: a program started from the host, unless it is one of the
+					// runtime's trusted programs, which see the whole host.
+					if (started_alone && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP"))
+						raven::confine(std::filesystem::absolute(prefix.root()).lexically_normal(), x11 || (!std::getenv("WAYLAND_DISPLAY") && std::getenv("DISPLAY")));
 					// The libraries installed for every program, in the system directory of the program's width.
 					const auto system_directory = prefix.root() / "drive_c" / "windows" / (entry->image.is_64 ? "system32" : "syswow64");
 					// The program's own manifest names the side-by-side assemblies its libraries come from; it is read from the file, as the
@@ -668,7 +830,10 @@ int main(int argc, char **argv)
 						for (int i=last_file+1;i<argc;++i) arguments.emplace_back(argv[i]);
 						// The guest sees its own executable by a drive-qualified path, like any Windows process.
 						const raven::NativePaths paths(prefix);
-						const auto image=paths.dos(std::filesystem::absolute(argv[first_file]));
+						// The trusted programs stand in the system directory, where the prefix keeps their copies.
+						const auto runtime_file=std::filesystem::absolute(argv[first_file]);
+						const auto image=raven::sandbox().trusted() ? (runtime_file.parent_path().filename()=="x86" ? u"C:\\Windows\\SysWOW64\\" :
+							u"C:\\Windows\\System32\\")+raven::from_utf8(runtime_file.filename().string()) : paths.dos(runtime_file);
 						launch=raven::NativeLaunch{image,raven::launch_command_line(image,arguments)};
 						launch->suspended_fd = suspended_fd;
 						if (command_line_text) launch->command_line=raven::from_utf8(*command_line_text);

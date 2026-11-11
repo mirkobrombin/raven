@@ -1,11 +1,15 @@
+#include "apps.h"
 #include "elevation.h"
 #include "child_process.h"
+#include "sandbox.h"
 #include "kernel_context.h"
+#include "registry.h"
 #include "text.h"
 
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <iostream>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -135,7 +139,7 @@ std::vector<uint32_t> shell_icon(bool folder, int32_t size)
 
 }
 
-void register_shell_api(ApiRegistry &registry, KernelContext &context)
+void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive)
 {
 	auto &paths = context.paths;
 	registry.add("SHGetFolderPathW", 5, [&paths](ApiCall &call) {
@@ -345,9 +349,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(1);
 		});
 	registry.add("SHCreateDirectory", 2, [&paths](ApiCall &call) {
-		const auto resolved = paths.resolve(call.wide(call[1]));
+		const auto resolved = paths.resolve_change(call.wide(call[1]), false);
 		if (!resolved) {
-			call.ret(123);
+			call.ret(paths.resolve(call.wide(call[1])) ? 5 : 123);
 			return;
 		}
 		std::error_code error;
@@ -355,9 +359,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(error ? 5 : 0);
 	});
 	registry.add("SHCreateDirectoryExW", 3, [&paths](ApiCall &call) {
-		const auto resolved = paths.resolve(call.wide(call[1]));
+		const auto resolved = paths.resolve_change(call.wide(call[1]), false);
 		if (!resolved) {
-			call.ret(123);
+			call.ret(paths.resolve(call.wide(call[1])) ? 5 : 123);
 			return;
 		}
 		std::error_code error;
@@ -368,9 +372,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("SHChangeNotify", 4, [](ApiCall &call) { call.ret(0); });
 	// A folder on a local disk is ready for writing once it exists; SHPPFW_DIRCREATE makes it first.
 	registry.add("SHPathPrepareForWriteW", 4, [&paths](ApiCall &call) {
-		const auto resolved = call[2] ? paths.resolve(call.wide(call[2])) : std::nullopt;
+		const auto resolved = !call[2] ? std::nullopt : (call.u32(3) & 1) ? paths.resolve_change(call.wide(call[2]), false) : paths.resolve(call.wide(call[2]));
 		if (!resolved) {
-			call.ret(0x80070003U);
+			call.ret(call[2] && (call.u32(3) & 1) && paths.resolve(call.wide(call[2])) ? 0x80070005U : 0x80070003U);
 			return;
 		}
 		std::error_code error;
@@ -566,11 +570,94 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("DragAcceptFiles", 2, [](ApiCall &) {});
 	// Opens a program, a folder, a document or a URL the way the shell does. The result is the value ShellExecute reports: above 32 on
 	// success, otherwise the error. A program that is started is handed back through `started`.
-	const auto open_target = [&context, &paths](const std::u16string &operation, std::u16string target, const std::u16string &parameters,
-		const std::u16string &directory, std::shared_ptr<ProcessObject> &started) -> uint64_t {
+	// The command a program of the prefix registered for a kind of file (".txt") or of address ("https") and a verb, as the registry keeps
+	// it under HKEY_CLASSES_ROOT: the kind's own verbs, or those of the class it names.
+	const auto registered_command = [&hive](const std::u16string &kind, const std::u16string &verb) {
+		const auto text = [&hive](const std::u16string &path, const std::u16string &name) {
+			uint64_t key = 0;
+			if (hive.open(0x80000000ULL, path, key))
+				return std::u16string();
+			uint32_t type = 0;
+			std::vector<uint8_t> data;
+			std::u16string value;
+			if (!hive.query(key, name, type, data) && (type == 1 || type == 2))
+				for (size_t at = 0; at + 1 < data.size(); at += 2) {
+					const char16_t character = char16_t(data[at] | data[at + 1] << 8);
+					if (!character)
+						break;
+					value += character;
+				}
+			hive.close(key);
+			return value;
+		};
+		for (const auto &owner : {kind, text(kind, u"")}) {
+			if (owner.empty())
+				continue;
+			if (auto command = text(owner + u"\\shell\\" + verb + u"\\command", u""); !command.empty())
+				return command;
+			if (const auto fallback = text(owner + u"\\shell", u""); !fallback.empty())
+				if (auto command = text(owner + u"\\shell\\" + fallback + u"\\command", u""); !command.empty())
+					return command;
+		}
+		return std::u16string();
+	};
+	// A registered command with the target in it: %1 and %L are the target, %* the parameters; a command that names neither gets the
+	// target at its end.
+	const auto command_for = [](std::u16string command, const std::u16string &target, const std::u16string &parameters) {
+		std::u16string line;
+		bool named = false;
+		for (size_t at = 0; at < command.size(); ++at) {
+			if (command[at] == u'%' && at + 1 < command.size() && (command[at + 1] == u'1' || command[at + 1] == u'L' || command[at + 1] == u'l')) {
+				line += target;
+				named = true;
+				++at;
+			} else if (command[at] == u'%' && at + 1 < command.size() && command[at + 1] == u'*') {
+				line += parameters;
+				++at;
+			} else
+				line += command[at];
+		}
+		return named ? line : line + u" \"" + target + u"\"";
+	};
+	const auto open_target = [&context, &paths, registered_command, command_for](const std::u16string &operation, std::u16string target,
+		const std::u16string &parameters, const std::u16string &directory, std::shared_ptr<ProcessObject> &started) -> uint64_t {
 		if (!equal_fold(operation, u"open") && !equal_fold(operation, u"edit") && !equal_fold(operation, u"explore") && !equal_fold(operation, u"runas"))
 			return 31;
-		std::string argument;
+		// Who opens a document or an address: the choice the person made for its kind in the control panel; otherwise the program of the
+		// prefix registered for it, before any Linux program.
+		const auto open_with = [&](const std::u16string &kind, const std::u16string &argument) -> std::optional<uint64_t> {
+			auto choice = sandbox().handler(to_utf8(kind));
+			uint32_t error = 0;
+			const int standard[3] = {0, 1, 2};
+			const auto environment = context.environment_block ? context.environment_block() : std::u16string();
+			const auto verb = equal_fold(operation, u"edit") ? u"edit" : u"open";
+			// The person chose to be asked: the control panel asks, and its exit code is the answer.
+			if (choice == "ask") {
+				const std::u16string panel_image = u"C:\\Windows\\System32\\control.exe";
+				const bool windows = !registered_command(kind, verb).empty();
+				const auto panel = start_program(context, panel_image, u"\"" + panel_image + u"\" openwith " + kind + (windows ? u" 1 " : u" 0 ") + argument,
+					directory, standard, environment, nullptr, error);
+				if (!panel)
+					return 31;
+				while (!panel->exited())
+					::usleep(50000);
+				const auto answer = panel->exit_code();
+				const auto apps = sandbox().host_apps();
+				if (answer == 0)
+					return 31;
+				choice = answer == 1 ? "windows" : answer - 2 < apps.size() ? "linux:" + apps[answer - 2].name : std::string();
+			}
+			if (choice.starts_with("linux:")) {
+				const auto bridge = u"C:\\Program Files\\Raven\\Host\\" + from_utf8(choice.substr(6)) + u".exe";
+				started = start_program(context, bridge, u"\"" + bridge + u"\" \"" + argument + u"\"", directory, standard, environment, nullptr, error);
+				return started ? 42 : 31;
+			}
+			const auto command = registered_command(kind, verb);
+			if (command.empty())
+				return std::nullopt;
+			started = start_program(context, u"", command_for(command, argument, parameters), directory, standard, environment, nullptr, error);
+			return started ? 42 : error == 2 ? 2 : 31;
+		};
 		const bool url = target.find(u"://") != target.npos || target.starts_with(u"mailto:");
 		if (!url) {
 			const auto candidates = target.find_first_of(u"\\/:") != target.npos ? std::vector<std::u16string>{target} :
@@ -598,17 +685,16 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 				request_child_elevation(false);
 				return started ? 42 : error == 193 ? 11 : error;
 			}
-			argument = resolved->host.string();
-		} else {
-			argument = to_utf8(target);
+			if (!std::filesystem::is_directory(resolved->host))
+				if (const auto opened = open_with(from_utf8(std::filesystem::path(resolved->host).extension().string()), paths.dos(resolved->host)))
+					return *opened;
+			// A document or a folder no program opens stays in the sandbox: no host program is handed it.
+			sandbox().refuse(resolved->host, "open-on-host");
+			return 31;
 		}
-		const pid_t child = ::fork();
-		if (child == 0) {
-			::setsid();
-			::execlp("xdg-open", "xdg-open", argument.c_str(), static_cast<char *>(nullptr));
-			::_exit(127);
-		}
-		return child < 0 ? 0 : 42;
+		if (const auto opened = open_with(target.substr(0, target.find(u':')), target))
+			return *opened;
+		return sandbox().open_address(to_utf8(target)) ? 42 : 31;
 	};
 	registry.add("ShellExecuteW", 6, [open_target](ApiCall &call) {
 		std::shared_ptr<ProcessObject> started;
@@ -659,23 +745,34 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 		call.store<int32_t>(call[0] + aborted_at, 0);
 		std::error_code error;
 		for (size_t index = 0; index < from.size(); ++index) {
-			const auto source = paths.resolve(from[index]);
+			// A copy only reads its source; a move or a deletion changes it, which a program may only do where it may write.
+			const auto source = function == 2 ? paths.resolve(from[index]) : paths.resolve_change(from[index], true, true);
 			if (!source || !source->exists) {
-				call.ret(0x402);
+				const auto named = paths.resolve(from[index]);
+				call.ret(named && named->exists ? 0x78 : 0x402);
 				return;
 			}
-			const auto destination = function == 3 ? std::nullopt : paths.resolve(to.size() == from.size() ? to[index] : to.empty() ? std::u16string() : to[0]);
+			const auto target_name = to.size() == from.size() ? to[index] : to.empty() ? std::u16string() : to[0];
+			const auto destination = function == 3 ? std::nullopt : paths.resolve_change(target_name, true);
+			if (function != 3 && !destination) {
+				call.ret(paths.resolve(target_name) ? 0x78 : 0x7c);
+				return;
+			}
 			if (function == 3) {
 				if (flags & 0x40) {
 					// FOF_ALLOWUNDO: move into the prefix recycle bin instead of destroying the item.
-					const auto bin = paths.resolve(u"C:\\$Recycle.Bin");
-					std::filesystem::create_directories(bin->host, error);
-					std::filesystem::rename(source->host, bin->host / source->host.filename(), error);
-					if (error) {
-						std::filesystem::remove_all(source->host, error);
+					const auto bin = paths.resolve_change(u"C:\\$Recycle.Bin", false);
+					if (bin) {
+						std::filesystem::create_directories(bin->host, error);
+						std::filesystem::rename(source->host, bin->host / source->host.filename(), error);
 					}
+					if (!bin || error) {
+						error.clear();
+						paths.remove_tree(source->host);
+					} else
+						app_layer().hide(source->host);
 				} else {
-					std::filesystem::remove_all(source->host, error);
+					paths.remove_tree(source->host);
 				}
 			} else if (function == 2 && destination) {
 				auto target = destination->host;
@@ -687,6 +784,8 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context)
 				if (function == 1 && std::filesystem::is_directory(target))
 					target /= source->host.filename();
 				std::filesystem::rename(source->host, target, error);
+				if (!error)
+					app_layer().hide(source->host);
 			}
 			if (error) {
 				call.ret(0x7c);

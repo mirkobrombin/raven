@@ -2,6 +2,7 @@
 
 #include "child_process.h"
 #include "host_names.h"
+#include "local_socket.h"
 #include "objects.h"
 #include "threads.h"
 
@@ -38,13 +39,15 @@ struct ProcessChannels {
 
 ProcessChannels process_channels;
 
+std::string process_name(pid_t pid)
+{
+	return "raven-process-" + prefix_tag() + "-" + std::to_string(pid);
+}
+
 sockaddr_un process_address(pid_t pid, socklen_t &length)
 {
-	sockaddr_un address{};
-	address.sun_family = AF_UNIX;
-	const auto name = "raven-process-" + prefix_tag() + "-" + std::to_string(pid);
-	std::memcpy(address.sun_path + 1, name.data(), name.size());
-	length = socklen_t(offsetof(sockaddr_un, sun_path) + 1 + name.size());
+	sockaddr_un address;
+	length = local_socket_address(process_name(pid), address);
 	return address;
 }
 
@@ -65,9 +68,7 @@ void enable_process_requests()
 	const int descriptor = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
 	if (descriptor < 0)
 		return;
-	socklen_t length;
-	const auto address = process_address(::getpid(), length);
-	if (::bind(descriptor, reinterpret_cast<const sockaddr *>(&address), length) || ::listen(descriptor, 64)) {
+	if (bind_local_socket(descriptor, process_name(::getpid())) || ::listen(descriptor, 64)) {
 		::close(descriptor);
 		return;
 	}

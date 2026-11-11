@@ -467,6 +467,20 @@ int raven_entry(void)
 		HeapFree(GetProcessHeap(), 0, per);
 	}
 
+	// The SMBIOS provider has one table: a header and the end-of-table structure. Other providers have none.
+	{
+		const DWORD smbios = 'RSMB';
+		DWORD id = 5;
+		if (EnumSystemFirmwareTables(smbios, &id, sizeof(id)) != 4 || id != 0 || EnumSystemFirmwareTables('ACPI', NULL, 0) != 0)
+			return 282;
+		BYTE table[64];
+		const UINT needed = GetSystemFirmwareTable(smbios, 0, NULL, 0);
+		if (!needed || needed > sizeof(table) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+			return 283;
+		if (GetSystemFirmwareTable(smbios, 0, table, sizeof(table)) != needed || *(DWORD *)(table + 4) != needed - 8 || table[8] != 127)
+			return 284;
+	}
+
 	if (!CryptProtectData(&plain, L"note", &entropy, NULL, NULL, 0, &sealed) || sealed.cbData <= plain.cbData)
 		return 8;
 	if (!CryptUnprotectData(&sealed, &description, &entropy, NULL, NULL, 0, &opened) || opened.cbData != 5 || !same(opened.pbData, "token", 5) ||

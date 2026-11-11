@@ -12,7 +12,8 @@
 
 namespace raven {
 
-// Windows path semantics over a prefix: C: is the prefix drive, Z: is the host root, other letters map to drive_<letter>.
+// Windows path semantics over a prefix: C: is the prefix drive, other letters map to drive_<letter>, and Z: shows the host paths the
+// sandbox grants at their host spelling.
 class NativePaths {
 public:
 	explicit NativePaths(const NativePrefix &prefix);
@@ -28,8 +29,35 @@ public:
 		bool exists = false;
 		// Every directory above the final component exists, so a new file can be created.
 		bool parent_exists = false;
+		// A host path the sandbox does not grant: it reads as missing to every caller and stands for a place nothing can be made in.
+		bool denied = false;
+		// False for a path the sandbox grants only for reading.
+		bool writable = true;
 	};
 	std::optional<Resolved> resolve(std::u16string_view path) const;
+	// Whether a host file or folder appears in the listing of its folder: everything in the prefix's drives, only what the sandbox grants
+	// or leads to on Z:.
+	bool listed(const std::filesystem::path &host) const;
+	// Whether a host file or folder may be changed: everything in the prefix's drives, only what the sandbox grants for writing on Z:.
+	bool changeable(const std::filesystem::path &host) const;
+	// Whether a host path lies in the prefix's drives, or in the layer of the program's own, without following links.
+	bool in_prefix(const std::filesystem::path &host) const;
+	// The layer of an installed program (apps.h): the host path that holds a prefix file or folder for it, its layer's copy when there is one.
+	std::filesystem::path preferred(const std::filesystem::path &host) const;
+	// What a folder holds only on the other side of the layer: in the layer for a prefix folder, in the prefix for a layer folder, less
+	// what the program deleted, by host path. A listing adds them to the folder's own.
+	std::vector<std::filesystem::path> other_entries(const std::filesystem::path &directory) const;
+	// Readies a path for a change: a prefix file or folder the program does not own is copied to its layer first, when `copy` asks for
+	// its content, and the path names the copy from then on; a new one is made in the layer. A folder is copied with what it holds only
+	// for a move (`tree`). False when the copy fails.
+	bool prepare_change(Resolved &resolved, bool copy = true, bool tree = false) const;
+	// Removes a file or an empty folder: a prefix one the program does not own is only hidden from it. Zero or the host error.
+	int remove(const std::filesystem::path &host, bool directory) const;
+	// Removes a file or a folder with everything in it, the same way.
+	bool remove_tree(const std::filesystem::path &host) const;
+	// A path a call is about to change: none when the sandbox grants it only for reading, or not at all, which the log notes; otherwise
+	// readied for the change as prepare_change does.
+	std::optional<Resolved> resolve_change(std::u16string_view path, bool copy = true, bool tree = false) const;
 	// DOS spelling of a host path inside a mapped drive.
 	std::u16string dos(const std::filesystem::path &host) const;
 	// User name shown to the guest; the host login name keeps profiles of different accounts apart.
@@ -68,7 +96,8 @@ public:
 	// A Win32 path in the NT namespace as the object manager names files: a drive path on its volume's device, a UNC path on the
 	// network redirector's (\Device\Mup), a folder without its closing backslash unless it is a volume's root; empty for anything else.
 	static std::u16string device_path(std::u16string_view dos);
-	// The drives the prefix has, one bit for each letter from A: C: and Z: always, and any other letter with a folder behind it.
+	// The drives the prefix has, one bit for each letter from A: C: always, Z: while the sandbox grants a host path, and any other
+	// letter with a folder behind it.
 	uint32_t drives() const;
 
 private:
@@ -80,6 +109,10 @@ private:
 	std::function<std::u16string()> search_path;
 	std::optional<std::filesystem::path> drive_root(char16_t letter) const;
 	std::optional<Resolved> resolve_direct(const std::u16string &path) const;
+	// The path relative to the prefix of a prefix or layer host path, and which of them it is in; empty outside both.
+	std::string layer_relative(const std::filesystem::path &host, bool &in_layer) const;
+	std::filesystem::path layer_root() const;
+	void apply_layer(Resolved &result) const;
 	std::optional<Resolved> resolve_virtual(const std::u16string &path) const;
 	std::u16string redirected(std::u16string path) const;
 };

@@ -25,6 +25,8 @@ public:
 	// Waiting for a process succeeds once it has ended; the host reports that, not another guest thread.
 	int signaled(uint32_t) const override { return exited() ? 1 : 0; }
 	bool exited() const;
+	// Takes a process descriptor of a process this runtime did not start itself: one the broker started for it.
+	void adopt(int process);
 	// STILL_ACTIVE (259) while the process runs.
 	uint32_t exit_code() const;
 	// Ends the process the way TerminateProcess does, with the given exit code.
@@ -47,6 +49,7 @@ private:
 	mutable uint32_t code = 259;
 	uint32_t requested = 0;
 	bool killed = false;
+	bool brokered = false;
 };
 
 // The calling process as an object other calls can name: what OpenProcess returns for the process's own id.

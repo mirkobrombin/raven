@@ -4,9 +4,10 @@
 // An overlapped window the host maximizes with its maximize button and restores with the same button, which a maximized window shows
 // as its restore button. The window hears SC_MAXIMIZE and then SC_RESTORE, and is back at its own rectangle, not maximized. The host
 // then closes the window, and what went wrong comes back as the exit code. The presses on the frame reach the window first as
-// WM_NCLBUTTONDOWN, with the hit code and a screen position on the frame, before the default procedure acts on them.
+// WM_NCLBUTTONDOWN, with the hit code and a screen position on the frame, before the default procedure acts on them. With --host the
+// compositor changes the window's state with its own shortcuts instead, and nothing presses the frame.
 static UINT commands[8];
-static unsigned command_count, frame_presses, wrong_presses;
+static unsigned command_count, frame_presses, wrong_presses, presses_wanted=3;
 static RECT placed;
 
 static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM lparam)
@@ -26,7 +27,7 @@ static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM 
 		else if (command_count<2 || commands[1]!=SC_RESTORE) PostQuitMessage(11);
 		else if (IsZoomed(window)) PostQuitMessage(12);
 		else if (!EqualRect(&now,&placed)) PostQuitMessage(13);
-		else if (frame_presses<3 || wrong_presses) PostQuitMessage(14);
+		else if (frame_presses<presses_wanted || wrong_presses) PostQuitMessage(14);
 		else PostQuitMessage(0);
 		return 0;
 	}
@@ -35,6 +36,8 @@ static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM 
 
 int raven_entry(void)
 {
+	for (const WCHAR *line=GetCommandLineW(); *line; ++line)
+		if (line[0]==L'-' && line[1]==L'-' && line[2]==L'h') presses_wanted=0;
 	WNDCLASSW definition={0};
 	definition.lpfnWndProc=procedure;
 	definition.hInstance=GetModuleHandleW(NULL);

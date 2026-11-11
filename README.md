@@ -72,7 +72,13 @@ DXVK and vkd3d-proton are only needed for Direct3D programs and games. The Micro
 
 On an X11 session, `--desktop=x11` takes the place of `--desktop=wayland`. The X11 desktop is experimental; `-DRAVEN_DESKTOP_WAYLAND=OFF` builds Raven without Wayland at all.
 
-`RAVEN_PREFIX` is the Windows installation the program sees, with its own `C:` drive and registry; give each application its own. Raven takes a snapshot of the prefix before every installer, and `build/native/raven --restore-prefix` brings it back.
+`RAVEN_PREFIX` is the Windows installation the program sees, with its own `C:` drive and registry. Programs installed in the same prefix see each other, as they would on one Windows machine; a separate prefix is only needed to keep a program fully apart from the others. Raven takes a snapshot of the prefix before every installer, and `build/native/raven --restore-prefix` brings it back. When the installer ends, what it made belongs to the program it installed; a program nothing installed is known by its executable, and owns the folder it runs from inside the prefix. Each program writes what it owns, and whatever it makes where nothing was, in place for every program to see; what it changes anywhere else in the prefix goes to a layer only it sees, which `build/native/raven --discard-layer NAME` or the control panel throws away (`--list-apps` names the programs). The person's documents, the temporary folders and the registry keys Windows reads for every program, such as Run, Uninstall and file types, stay shared.
+
+A program sees none of your Linux files except the ones you hand it: its own folder, the host paths on its command line, and what you choose in its file dialogs, which appear under `Z:` at their usual spelling. The file dialog runs apart from the program, sees your whole computer while you choose, and grants the program only the file or folder you chose. Anything else the program asks for is refused and noted in the prefix's `sandbox.log`.
+
+The control panel (`control.exe` in the prefix) manages all of it: the folders programs may open, network access for the prefix, the refusals, snapshots, and the Linux programs the prefix may hand files to. A Linux program you expose appears to Windows programs as `C:\Program Files\Raven\Host\NAME.exe` and receives only the files the calling program reaches; for each kind of file or address you choose a program of the prefix, a Linux program, or to be asked. The settings live in `sandbox.conf` in the prefix.
+
+On kernels with Landlock, Raven also confines itself: it reaches only the prefix, its own files, the system's libraries and devices, and the paths granted to the program, and a small helper started before the confinement opens what is granted later.
 
 To run the tests:
 

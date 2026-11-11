@@ -47,19 +47,28 @@ public:
 	uint32_t info(uint64_t key, Info &result) const;
 	// RegOverridePredefKey: a predefined root of this process stands for an open key until the override is removed with key 0.
 	uint32_t override_root(uint64_t root, uint64_t key);
+	// Every key of a hive file by its full path in upper case, with its values written out, to compare two hives by.
+	static std::map<std::u16string, std::string> digest(const std::filesystem::path &file);
+	// A layer over the hive: a change to a key the program does not own goes to a hive file of the program's own, read over the shared
+	// one, so that the program sees it and no other program does. The program an installation recorded gets its layer by itself.
+	void set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns, std::function<void(std::u16string_view)> claim);
 
 private:
 	struct Value { std::u16string name; uint32_t type; std::vector<uint8_t> data; };
 	struct Key { std::u16string path; std::map<std::u16string, Value> values; };
-	std::filesystem::path file;
+	std::filesystem::path file, layer_file;
+	std::function<bool(std::u16string_view)> layer_owns;
+	std::function<void(std::u16string_view)> layer_claim;
 	// What the hive file looked like when it was last read or written; another process that changed it makes the next call read it again.
 	struct Stamp {
 		long long seconds = -1, nanoseconds = 0;
 		long long size = -1, inode = -1;
 		bool operator==(const Stamp &other) const = default;
 	};
-	mutable Stamp stamp;
-	Stamp current_stamp() const;
+	mutable Stamp stamp, layer_stamp;
+	static Stamp stamp_of(const std::filesystem::path &path);
+	Stamp current_stamp() const { return stamp_of(file); }
+	void replay_layer();
 	void refresh() const;
 	std::map<std::u16string, Key> keys;
 	std::map<uint64_t, std::u16string> open_keys;
@@ -86,7 +95,8 @@ private:
 	long long replay(long long from);
 	void apply(const std::string &record);
 	// Appends the records of one change under the prefix's lock, after reading what other processes appended first.
-	void journal(const std::string &records);
+	// The key the change is to decides which file holds it, when the hive has a layer.
+	void journal(const std::string &records, std::u16string_view folded);
 	mutable long long loaded = 0, compacted = 0;
 	// The values Windows ships in its hive that programs read to learn where they are and what they run on; added when a hive lacks them.
 	void seed();

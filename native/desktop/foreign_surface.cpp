@@ -3,6 +3,7 @@
 #include "shared_pixels.h"
 #include "nt/host_names.h"
 #include "nt/prefix.h"
+#include "nt/sandbox.h"
 
 #include <algorithm>
 #include <atomic>
@@ -95,6 +96,10 @@ static void sweep_windows(const std::filesystem::path &directory)
 
 void publish_window(uint64_t window, uint32_t width, uint32_t height)
 {
+	// The windows of the runtime's control panel and file dialog are not shown to other programs: none can find them, send them a message
+	// or draw into them.
+	if (sandbox().trusted())
+		return;
 	const auto directory = window_directory();
 	static std::once_flag swept;
 	std::call_once(swept, [&] { sweep_windows(directory); });
@@ -119,6 +124,8 @@ void withdraw_window(uint64_t window)
 
 void publish_window_traits(uint64_t window, const ForeignWindowTraits &traits)
 {
+	if (sandbox().trusted())
+		return;
 	const auto directory = window_directory();
 	const auto final_path = directory / (window_name(window) + ".traits");
 	const auto temporary = directory / (window_name(window) + ".traits." + std::to_string(::getpid()));
