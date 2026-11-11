@@ -137,7 +137,7 @@ void VulkanBridge::shadow_to_device(uint64_t device)
 // the device wrote them.
 void VulkanBridge::mapped_range(const Memory &memory, bool invalidate)
 {
-	const VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory.handle, memory.offset, VK_WHOLE_SIZE};
+	const VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, memory.handle, memory.host_offset, memory.host_size};
 	const auto handle = devices.at(memory.device).handle;
 	const auto status = invalidate ? vkInvalidateMappedMemoryRanges(handle, 1, &range) : vkFlushMappedMemoryRanges(handle, 1, &range);
 	if (status != VK_SUCCESS)
@@ -242,10 +242,21 @@ if (name == "vkFreeMemory") {
 			throw std::runtime_error("unsupported Vulkan memory mapping (offset " + std::to_string(offset) + ", size " + std::to_string(size) +
 				", memory " + std::to_string(memory.size) + (memory.host ? ", already mapped" : "") + ", flags " + std::to_string(a[4]) + ")");
 		check_writable(a[5], 8);
-		void *host = nullptr;
-		const auto status = vkMapMemory(device.handle, memory.handle, offset, size, 0, &host);
+		// Memory that is not host-coherent is flushed and invalidated in whole atoms, inside what the driver mapped: a guest may map from
+		// any offset, so the driver maps the atoms around the guest's range and the guest sees its own bytes within them.
+		uint64_t host_offset = offset, host_end = offset + size;
+		if (!memory.coherent) {
+			VkPhysicalDeviceProperties properties{};
+			vkGetPhysicalDeviceProperties(physical.at(device.physical).handle, &properties);
+			const uint64_t atom = std::max<uint64_t>(properties.limits.nonCoherentAtomSize, 1);
+			host_offset = offset / atom * atom;
+			host_end = std::min<uint64_t>((host_end + atom - 1) / atom * atom, memory.size);
+		}
+		void *mapped = nullptr;
+		const auto status = vkMapMemory(device.handle, memory.handle, host_offset, host_end - host_offset, 0, &mapped);
 		result = static_cast<uint32_t>(status);
 		if (status == VK_SUCCESS) {
+			void *host = static_cast<uint8_t *>(mapped) + (offset - host_offset);
 			uint64_t shadow = 0;
 			try {
 				if (memory.coherent)
@@ -267,6 +278,8 @@ if (name == "vkFreeMemory") {
 			memory.shadow = shadow;
 			memory.offset = offset;
 			memory.mapped = size;
+			memory.host_offset = host_offset;
+			memory.host_size = host_end - host_offset;
 			store(a[5], shadow);
 		}
 	} else if (name == "vkUnmapMemory") {
