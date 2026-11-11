@@ -23,7 +23,7 @@ std::span<const std::string_view> NativeDesktop::control_exports()
 
 std::span<const std::string_view> NativeDesktop::user_exports()
 {
-	static constexpr std::array<std::string_view, 89> names{
+	static constexpr std::array<std::string_view, 91> names{
 		"AdjustWindowRect", "AdjustWindowRectEx", "BeginPaint", "CallWindowProcW", "ClientToScreen", "CopyIcon", "CreateIconFromResourceEx", "CreateWindowExW",
 		"DefWindowProcW", "DestroyIcon", "DestroyMenu", "DestroyWindow", "DispatchMessageW", "DrawIcon", "DrawIconEx", "EndPaint", "FillRect",
 		"FrameRect", "GetActiveWindow", "GetClassInfoExW", "GetClassInfoW", "GetClassLongA", "GetClassLongPtrA", "GetClassLongPtrW", "GetClassLongW",
@@ -32,7 +32,7 @@ std::span<const std::string_view> NativeDesktop::user_exports()
 		"GetUpdateRect", "GetWindowDC", "GetWindowLongA", "GetWindowLongPtrA", "GetWindowLongPtrW", "GetWindowLongW", "GetWindowRect", "GetWindowTextLengthW",
 		"GetWindowTextW", "InternalGetWindowText", "InvalidateRect", "IsChild", "IsMenu", "IsWindow", "IsWindowUnicode", "IsWindowVisible",
 		"LoadMenuW", "LoadStringW", "LookupIconIdFromDirectoryEx", "MapWindowPoints", "PeekMessageW", "PostMessageW", "PostQuitMessage", "PostThreadMessageW",
-		"PrivateExtractIconsW", "RegisterClassExW", "RegisterClassW", "ReleaseDC", "ScreenToClient", "SendMessageTimeoutW", "SendMessageW", "SendNotifyMessageW", "SetClassLongA",
+		"PrivateExtractIconsW", "RealGetWindowClassA", "RealGetWindowClassW", "RegisterClassExW", "RegisterClassW", "ReleaseDC", "ScreenToClient", "SendMessageTimeoutW", "SendMessageW", "SendNotifyMessageW", "SetClassLongA",
 		"SetClassLongPtrA", "SetClassLongPtrW", "SetClassLongW", "SetFocus", "SetWindowLongA", "SetWindowLongPtrA", "SetWindowLongPtrW", "SetWindowLongW",
 		"SetWindowTextW", "ShowWindow", "TranslateMessage", "UnregisterClassW", "UpdateWindow", "ValidateRect", "WindowFromDC",
 	};

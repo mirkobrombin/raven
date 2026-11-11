@@ -1448,7 +1448,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(PICKER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/picker-client.exe)
             add_custom_command(OUTPUT ${PICKER_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,raven_entry,--no-insert-timestamp
-                    -o ${PICKER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c -lcomdlg32 -lkernel32
+                    -o ${PICKER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c -lcomdlg32 -lole32 -luuid -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c VERBATIM)
             add_custom_target(picker_fixture ALL DEPENDS ${PICKER_FIXTURE})
             add_executable(frame_restore_test desktop/frame_restore_test.cpp)
@@ -2588,6 +2588,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${UCRT_VC2022_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_vc2022_client.c -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_vc2022_client.c VERBATIM)
             add_custom_target(ucrt_vc2022_fixture ALL DEPENDS ${UCRT_VC2022_CLIENT})
+            # The msvcrt entry points libraries built by MinGW-w64 import, as VLC's plugins do, resolved and called by name.
+            set(MSVCRT_MINGW_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/msvcrt-mingw.exe)
+            add_custom_command(OUTPUT ${MSVCRT_MINGW_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${MSVCRT_MINGW_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/msvcrt_mingw_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/msvcrt_mingw_client.c VERBATIM)
+            add_custom_target(msvcrt_mingw_fixture ALL DEPENDS ${MSVCRT_MINGW_CLIENT})
             # A library loaded by its path is found again by that path, by GetModuleHandleW and by GetModuleHandleExW pinning it.
             set(MODULE_PATH_LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/module-path-library.dll)
             add_custom_command(OUTPUT ${MODULE_PATH_LIBRARY}
@@ -2823,6 +2831,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_ucrt_vc2022_x64 COMMAND raven --run-process --execution=native ${UCRT_VC2022_CLIENT})
             set_tests_properties(native_ucrt_vc2022_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-vc2022-prefix)
+            add_test(NAME native_msvcrt_mingw_x64 COMMAND raven --run-process --execution=native ${MSVCRT_MINGW_CLIENT})
+            set_tests_properties(native_msvcrt_mingw_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/msvcrt-mingw-prefix)
             foreach(width 64 32)
                 if(width EQUAL 64)
                     set(crt_compiler ${RAVEN_MINGW64})
@@ -4472,10 +4483,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     set_tests_properties(native_ieframe_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # avrt.dll and mfplat.dll: the multimedia scheduler a media library registers its threads with, and the Media Foundation
-                # factories it makes its samples, types and buffers with, for each width.
+                # factories it makes its samples, types and buffers with, for each width; mmdevapi.dll, the audio endpoints and the
+                # streams programs play sound with.
                 set(media_source ${PROJECT_SOURCE_DIR}/native/guest/raven-media)
                 set(media_components ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
-                    ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll)
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll)
                 add_custom_command(OUTPUT ${media_components}
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll
@@ -4486,7 +4499,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${media_source}/avrt.c -lkernel32
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
                         ${media_source}/mfplat.c -lkernel32
-                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c VERBATIM)
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll
+                        ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
+                        ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
+                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c VERBATIM)
                 add_custom_target(media_component ALL DEPENDS ${media_components})
                 # A media library imports both, as cri_ware_unity.dll does; the fixture does too, and asks each one for its answers.
                 foreach(width 64 32)
@@ -4506,6 +4523,34 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(media_fixture${width} ALL DEPENDS ${media_client} media_component)
                     add_test(NAME native_media_x${width} COMMAND raven --run-process --execution=native ${media_client})
                     set_tests_properties(native_media_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
+                # winscard.dll, the smart card interface, for each width: with no card service, every context is refused.
+                set(winscard_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winscard)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/winscard.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/winscard.dll
+                        ${winscard_source}/winscard.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll ${winscard_source}/winscard.c -lkernel32
+                    DEPENDS ${winscard_source}/winscard.c VERBATIM)
+                add_custom_target(winscard_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/winscard.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll)
+                foreach(width 64 32)
+                    set(winscard_client ${CMAKE_CURRENT_BINARY_DIR}/winscard-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(winscard_compiler ${RAVEN_MINGW64})
+                        set(winscard_entry raven_entry)
+                    else()
+                        set(winscard_compiler ${RAVEN_MINGW32})
+                        set(winscard_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${winscard_client}
+                        COMMAND ${winscard_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${winscard_entry},--no-insert-timestamp
+                            -o ${winscard_client} ${LOADER_SOURCES}/winscard_client.c -lwinscard -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/winscard_client.c VERBATIM)
+                    add_custom_target(winscard_fixture${width} ALL DEPENDS ${winscard_client} winscard_component)
+                    add_test(NAME native_winscard_x${width} COMMAND raven --run-process --execution=native ${winscard_client})
+                    set_tests_properties(native_winscard_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-client.exe
                     COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
@@ -4783,6 +4828,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_dotnet_setup48 COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-dotnet-setup.py
                         $<TARGET_FILE:raven> ${RAVEN_NETFX_INSTALLER} ${dotnet_fixtures} ${CMAKE_CURRENT_BINARY_DIR}/dotnet-setup-evidence)
                     set_tests_properties(native_dotnet_setup48 PROPERTIES TIMEOUT 3000 PASS_REGULAR_EXPRESSION "PASS: ")
+                endif()
+                # VLC 3.0.21 from the installer VideoLAN publishes, checked against its SHA-256 (scripts/native-vlc.py): installed silent in a
+                # fresh prefix, then a video opened from its Open dialog, played, paused, seeked, made quieter, shown fullscreen and back.
+                set(RAVEN_VLC_INSTALLER "" CACHE FILEPATH "vlc-3.0.21-win64.exe as VideoLAN publishes it")
+                if(TARGET raven_wayland AND RAVEN_LABWC AND RAVEN_GRIM AND RAVEN_WLRCTL AND RAVEN_WTYPE AND RAVEN_PIL_PYTHON AND RAVEN_VLC_INSTALLER
+                   AND EXISTS ${RAVEN_VLC_INSTALLER})
+                    add_test(NAME native_vlc_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-vlc.py
+                        $<TARGET_FILE:raven> ${RAVEN_VLC_INSTALLER} ${CMAKE_CURRENT_BINARY_DIR}/vlc-evidence)
+                    set_tests_properties(native_vlc_workflow PROPERTIES TIMEOUT 1200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
                 endif()
                 # A self-contained .NET 8 program, published with the .NET SDK given: the runtime loads its libraries of managed code alone,
                 # built for any CPU, and a managed exception and a runtime one are thrown and caught.

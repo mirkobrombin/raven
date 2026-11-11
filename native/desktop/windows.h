@@ -150,6 +150,8 @@ private:
 	std::function<NativeResult(uint64_t,std::span<const uint64_t>)> invoke;
 	DesktopPresentation presentation;
 	std::function<void(uint64_t)> surface_cleanup;
+	// Root windows that have a host window now.
+	std::set<uint64_t> host_windows;
 	void remove_host_window(uint64_t handle);
 	struct Message {
 		uint64_t window, wparam, lparam;

@@ -1980,47 +1980,65 @@ void NativeDesktop::register_image_api(ApiRegistry &registry)
 			}
 		});
 	});
-	// CreateIcon(instance, width, height, planes, bits per pixel, AND bits, XOR bits): a monochrome mask whose rows are padded to words,
-	// and the color image in the same top-down rows, at 32 bits per pixel or as a second monochrome plane.
+	// An icon or cursor from its planes: a monochrome mask whose rows are padded to words, and the color image in the same top-down rows,
+	// at 32 bits per pixel or as a second monochrome plane.
+	const auto from_planes = [](ApiCall &call, uint32_t width, uint32_t height, uint32_t depth, uint64_t and_address, uint64_t xor_address) {
+		if (!width || !height || width > 1024 || height > 1024 || !and_address || !xor_address || (depth != 1 && depth != 32))
+			throw uint32_t(87);
+		const size_t mask_stride = ((size_t(width) + 15) / 16) * 2;
+		const auto and_bits = call.read(and_address, mask_stride * height);
+		const auto xor_bits = call.read(xor_address, depth == 32 ? size_t(width) * height * 4 : mask_stride * height);
+		DesktopIcon icon{};
+		icon.monochrome = depth == 1;
+		icon.shared = false;
+		auto &image = icon.image;
+		image.color.width = width;
+		image.color.height = height;
+		image.color.rgba.assign(size_t(width) * height * 4, 0);
+		image.and_mask.assign(size_t(width) * height, 0);
+		bool any_alpha = false;
+		for (uint32_t y = 0; y < height; ++y)
+			for (uint32_t x = 0; x < width; ++x) {
+				const bool transparent = (and_bits[y * mask_stride + x / 8] >> (7 - x % 8)) & 1;
+				const size_t at = (size_t(y) * width + x) * 4;
+				if (depth == 32) {
+					const auto *p = &xor_bits[at];
+					image.color.rgba[at] = p[2];
+					image.color.rgba[at + 1] = p[1];
+					image.color.rgba[at + 2] = p[0];
+					image.color.rgba[at + 3] = p[3];
+					any_alpha = any_alpha || p[3];
+				} else {
+					const uint8_t level = ((xor_bits[y * mask_stride + x / 8] >> (7 - x % 8)) & 1) ? 255 : 0;
+					image.color.rgba[at] = image.color.rgba[at + 1] = image.color.rgba[at + 2] = level;
+				}
+				image.and_mask[size_t(y) * width + x] = transparent;
+			}
+		image.has_alpha = any_alpha;
+		if (!any_alpha)
+			for (size_t i = 0; i < image.and_mask.size(); ++i)
+				image.color.rgba[i * 4 + 3] = image.and_mask[i] ? 0 : 255;
+		return icon;
+	};
+	// CreateIcon(instance, width, height, planes, bits per pixel, AND bits, XOR bits).
 	registry.add("CreateIcon", 7, [=, this](ApiCall &call) {
 		guarded(call, 0, [&] {
-			const uint32_t width = call.u32(1), height = call.u32(2), depth = uint32_t(uint8_t(call.u32(3))) * uint32_t(uint8_t(call.u32(4)));
-			if (!width || !height || width > 1024 || height > 1024 || !call[5] || !call[6] || (depth != 1 && depth != 32))
-				throw uint32_t(87);
-			const size_t mask_stride = ((size_t(width) + 15) / 16) * 2;
-			const auto and_bits = call.read(call[5], mask_stride * height);
-			const auto xor_bits = call.read(call[6], depth == 32 ? size_t(width) * height * 4 : mask_stride * height);
-			DesktopIcon icon{};
-			icon.monochrome = depth == 1;
-			icon.shared = false;
-			auto &image = icon.image;
-			image.color.width = width;
-			image.color.height = height;
-			image.color.rgba.assign(size_t(width) * height * 4, 0);
-			image.and_mask.assign(size_t(width) * height, 0);
-			bool any_alpha = false;
-			for (uint32_t y = 0; y < height; ++y)
-				for (uint32_t x = 0; x < width; ++x) {
-					const bool transparent = (and_bits[y * mask_stride + x / 8] >> (7 - x % 8)) & 1;
-					const size_t at = (size_t(y) * width + x) * 4;
-					if (depth == 32) {
-						const auto *p = &xor_bits[at];
-						image.color.rgba[at] = p[2];
-						image.color.rgba[at + 1] = p[1];
-						image.color.rgba[at + 2] = p[0];
-						image.color.rgba[at + 3] = p[3];
-						any_alpha = any_alpha || p[3];
-					} else {
-						const uint8_t level = ((xor_bits[y * mask_stride + x / 8] >> (7 - x % 8)) & 1) ? 255 : 0;
-						image.color.rgba[at] = image.color.rgba[at + 1] = image.color.rgba[at + 2] = level;
-					}
-					image.and_mask[size_t(y) * width + x] = transparent;
-				}
-			image.has_alpha = any_alpha;
-			if (!any_alpha)
-				for (size_t i = 0; i < image.and_mask.size(); ++i)
-					image.color.rgba[i * 4 + 3] = image.and_mask[i] ? 0 : 255;
-			const auto handle = objects.add(std::move(icon));
+			const uint32_t depth = uint32_t(uint8_t(call.u32(3))) * uint32_t(uint8_t(call.u32(4)));
+			const auto handle = objects.add(from_planes(call, call.u32(1), call.u32(2), depth, call[5], call[6]));
+			if (!handle)
+				throw uint32_t(8);
+			call.ret(handle);
+		});
+	});
+	// CreateCursor(instance, hot spot x, hot spot y, width, height, AND bits, XOR bits): a monochrome cursor. A video player makes one with
+	// the AND plane all set and the XOR plane clear, which shows nothing over its picture.
+	registry.add("CreateCursor", 7, [=, this](ApiCall &call) {
+		guarded(call, 0, [&] {
+			auto cursor = from_planes(call, call.u32(3), call.u32(4), 1, call[5], call[6]);
+			cursor.cursor = true;
+			cursor.hotspot_x = call.u32(1);
+			cursor.hotspot_y = call.u32(2);
+			const auto handle = objects.add(std::move(cursor));
 			if (!handle)
 				throw uint32_t(8);
 			call.ret(handle);

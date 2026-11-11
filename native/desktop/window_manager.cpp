@@ -1009,12 +1009,92 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	});
 	// Layered window attributes are kept per window for GetLayeredWindowAttributes; the compositor draws windows opaque.
 	auto layered = std::make_shared<std::map<uint64_t, std::array<uint32_t, 3>>>();
-	registry.add("UpdateLayeredWindow", 9, [this](ApiCall &call) {
-		if (!std::as_const(objects).window(call[0])) {
+	// A layered window shows what the program hands over: the window moves and takes the size given, and the pixels of the source DC
+	// become its surface. Pixels with per-pixel alpha are premultiplied, as the compositor blends them; the constant alpha scales them
+	// all. Without per-pixel alpha the window is opaque, and the color key shows black.
+	const auto update_layered = [this](ApiCall &call, uint64_t handle, uint64_t destination, uint64_t extent, uint64_t source_dc,
+										  uint64_t source_point, uint32_t key, uint64_t blend, uint32_t flags) {
+		const auto *window = std::as_const(objects).window(handle);
+		if (!window) {
 			call.fail(1400);
 			return;
 		}
-		call.ret(1);
+		DesktopRect outer = window->outer;
+		if (destination) {
+			const int32_t x = call.load<int32_t>(destination), y = call.load<int32_t>(destination + 4);
+			outer = {x, y, x + (outer.right - outer.left), y + (outer.bottom - outer.top)};
+		}
+		if (extent)
+			outer.right = outer.left + std::max(call.load<int32_t>(extent), 0), outer.bottom = outer.top + std::max(call.load<int32_t>(extent + 4), 0);
+		try {
+			if (destination || extent)
+				place_window(handle, outer, 0, swp_nozorder | swp_noactivate);
+			const auto *source = source_dc ? std::as_const(objects).dc(source_dc) : nullptr;
+			const auto *image = source ? std::as_const(objects).bitmap(source->bitmap) : nullptr;
+			if (!image || image->depth != 32 || !objects.window_visible(handle)) {
+				call.ret(1);
+				return;
+			}
+			surface_dc(handle);
+			window = std::as_const(objects).window(handle);
+			auto *surface = objects.bitmap(window->bitmap);
+			if (!surface) {
+				call.ret(1);
+				return;
+			}
+			const int32_t sx = source_point ? call.load<int32_t>(source_point) : 0, sy = source_point ? call.load<int32_t>(source_point + 4) : 0;
+			const uint32_t constant = blend ? call.load<uint8_t>(blend + 2) : 255;
+			const bool alpha = (flags & 2) && blend && (call.load<uint8_t>(blend + 3) & 1);
+			const auto from = image->pixels();
+			auto to = surface->pixels();
+			const size_t source_stride = image->stride ? image->stride : size_t(image->width) * 4;
+			for (uint32_t y = 0; y < surface->height; ++y)
+				for (uint32_t x = 0; x < surface->width; ++x) {
+					uint8_t pixel[4] = {0, 0, 0, 0};
+					const int64_t u = int64_t(sx) + x, v = int64_t(sy) + y;
+					if (u >= 0 && v >= 0 && u < image->width && v < image->height) {
+						const size_t row = image->top_down ? size_t(v) : size_t(image->height - 1 - v);
+						const size_t at = row * source_stride + size_t(u) * 4;
+						if (at + 4 <= from.size())
+							std::memcpy(pixel, from.data() + at, 4);
+						const uint32_t color = pixel[2] | uint32_t(pixel[1]) << 8 | uint32_t(pixel[0]) << 16;
+						if ((flags & 1) && color == (key & 0xffffffU))
+							pixel[0] = pixel[1] = pixel[2] = 0;
+						if (!alpha)
+							pixel[3] = 255;
+						if (constant != 255)
+							for (int channel = 0; channel < 4; ++channel)
+								pixel[channel] = uint8_t(pixel[channel] * constant / 255);
+					}
+					const size_t at = (size_t(y) * surface->width + x) * 4;
+					if (at + 4 <= to.size())
+						std::memcpy(to.data() + at, pixel, 4);
+				}
+			auto *painted = objects.window(handle);
+			painted->painted = true;
+			if (presentation.translucent)
+				presentation.translucent(handle, alpha || constant != 255);
+			present(handle, true);
+			call.ret(1);
+		} catch (const uint32_t &error) {
+			call.fail(error);
+		}
+	};
+	registry.add("UpdateLayeredWindow", 9, [update_layered](ApiCall &call) {
+		update_layered(call, call[0], call[2], call[3], call[4], call[5], call.u32(6), call[7], call.u32(8));
+	});
+	// UPDATELAYEREDWINDOWINFO: its size, the destination DC, the position, the size, the source DC and point, the key, the blend, the
+	// flags and the dirty rectangle, pointers at the width of the program.
+	registry.add("UpdateLayeredWindowIndirect", 2, [update_layered](ApiCall &call) {
+		if (!call[1]) {
+			call.fail(87);
+			return;
+		}
+		const uint64_t info = call[1], word = call.pointer_width();
+		const auto field = [&](uint32_t index) { return call.load_pointer(info + word + index * word); };
+		const uint64_t key_at = info + word * 6, blend_at = key_at + word;
+		update_layered(call, call[0], field(1), field(2), field(3), field(4), call.load<uint32_t>(key_at), call.load_pointer(blend_at),
+			call.load<uint32_t>(blend_at + word));
 	});
 	registry.add("SetLayeredWindowAttributes", 4, [this, layered](ApiCall &call) {
 		if (!std::as_const(objects).window(call[0])) {

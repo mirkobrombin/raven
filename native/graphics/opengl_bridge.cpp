@@ -51,6 +51,7 @@ constexpr std::string_view names[] = {
 	"glGetShaderiv", "glGetTexLevelParameteriv", "glGetUniformLocation", "glNormalPointer", "glShaderSource", "glTexCoordPointer",
 	"glTexGenfv", "glTexImage2D", "glTexImage3D", "glUniformMatrix4fv", "glVertexAttribPointer",
 	"glColor4fv", "glColor4ub", "glIsTexture", "glLineWidth", "glRenderMode", "glTexSubImage2D", "wglShareLists",
+	"glColorMaterial", "glCopyTexSubImage2D", "glInterleavedArrays", "glLightfv", "glLineStipple", "glPointSize", "glRectd",
 	"wglGetExtensionsStringARB", "wglGetExtensionsStringEXT", "wglSwapIntervalEXT", "wglGetSwapIntervalEXT",
 	"wglChoosePixelFormat", "wglCreateContext", "wglDeleteContext", "wglDescribePixelFormat", "wglGetCurrentContext",
 	"wglGetCurrentDC", "wglGetPixelFormat", "wglGetProcAddress", "wglMakeCurrent", "wglSetPixelFormat", "wglSwapBuffers"
@@ -492,13 +493,13 @@ bool OpenGLBridge::served_api(std::string_view name)
 	static constexpr std::string_view scalar[] = {
 		"glActiveTexture", "glAlphaFunc", "glAttachShader", "glBegin", "glBindBuffer", "glBindFramebuffer", "glBindRenderbuffer",
 		"glBindTexture", "glBindVertexArray", "glBlendFunc", "glBlitFramebuffer", "glCallList", "glCheckFramebufferStatus", "glClampColor",
-		"glClear", "glClearColor", "glClearDepth", "glClientActiveTexture", "glColor3f", "glColor4f", "glColor4ub", "glColorMask", "glColorPointer",
-		"glCompileShader", "glCreateProgram", "glCreateShader", "glCullFace", "glDeleteLists", "glDeleteProgram", "glDeleteShader",
+		"glClear", "glClearColor", "glClearDepth", "glClientActiveTexture", "glColor3f", "glColor4f", "glColor4ub", "glColorMask",
+		"glColorMaterial", "glColorPointer", "glCompileShader", "glCopyTexSubImage2D", "glCreateProgram", "glCreateShader", "glCullFace", "glDeleteLists", "glDeleteProgram", "glDeleteShader",
 		"glDepthFunc", "glDepthMask", "glDisable", "glDisableClientState", "glDisableVertexAttribArray", "glDrawArrays", "glDrawBuffer",
 		"glEnable", "glEnableClientState", "glEnableVertexAttribArray", "glEnd", "glEndList", "glFinish", "glFlush",
 		"glFramebufferRenderbuffer", "glFramebufferTexture2D", "glFrontFace", "glFrustum", "glGenLists", "glGetError", "glHint",
-		"glIsTexture", "glLineWidth", "glLinkProgram", "glLoadIdentity", "glMatrixMode", "glNewList", "glNormalPointer", "glOrtho", "glPixelStorei", "glPolygonMode",
-		"glPopMatrix", "glPushMatrix", "glReadBuffer", "glRenderMode", "glRenderbufferStorageMultisample", "glRotatef", "glScalef", "glScissor",
+		"glIsTexture", "glLineStipple", "glLineWidth", "glLinkProgram", "glLoadIdentity", "glMatrixMode", "glNewList", "glNormalPointer", "glOrtho", "glPixelStorei", "glPointSize", "glPolygonMode",
+		"glPopMatrix", "glPushMatrix", "glReadBuffer", "glRectd", "glRenderMode", "glRenderbufferStorageMultisample", "glRotatef", "glScalef", "glScissor",
 		"glShadeModel", "glStencilFunc", "glStencilMask", "glStencilOp", "glTexCoord2f", "glTexCoordPointer", "glTexEnvf", "glTexGeni",
 		"glTexImage2DMultisample", "glTexParameterf", "glTexParameteri", "glTranslatef", "glUniform1f", "glUniform1i", "glUniform2f",
 		"glUniform3f", "glUniform4f", "glUseProgram", "glVertex2f", "glVertex3f", "glVertexAttribPointer", "glVertexPointer", "glViewport"
@@ -635,9 +636,9 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		call.ret(s.modules.resolve({"opengl32.dll", name, 0, false, 0}));
 	});
 	const auto add = [&registry, &s](const char *name, uint32_t count, ApiHandler handler) {
-		static constexpr std::array<std::string_view, 12> array_changes{
+		static constexpr std::array<std::string_view, 13> array_changes{
 			"glBindVertexArray", "glCallList", "glColorPointer", "glDeleteBuffers", "glDisableClientState", "glDisableVertexAttribArray",
-			"glEnableClientState", "glEnableVertexAttribArray", "glNormalPointer", "glTexCoordPointer", "glVertexAttribPointer", "glVertexPointer"};
+			"glEnableClientState", "glInterleavedArrays", "glEnableVertexAttribArray", "glNormalPointer", "glTexCoordPointer", "glVertexAttribPointer", "glVertexPointer"};
 		const bool changed = std::find(array_changes.begin(), array_changes.end(), name) != array_changes.end();
 		const bool elements = std::string_view(name) == "glBindVertexArray" || std::string_view(name) == "glDeleteBuffers";
 		const bool binding = std::string_view(name) == "glBindBuffer";
@@ -716,6 +717,19 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 	scalar("glColor4ub", glColor4ub);
 	scalar("glIsTexture", glIsTexture);
 	scalar("glLineWidth", glLineWidth);
+	scalar("glLineStipple", glLineStipple);
+	scalar("glPointSize", glPointSize);
+	scalar("glRectd", glRectd);
+	scalar("glColorMaterial", glColorMaterial);
+	scalar("glCopyTexSubImage2D", glCopyTexSubImage2D);
+	add("glLightfv", 3, [](ApiCall &call) {
+		// Colours and the position are four values, the spot direction three, every other parameter one.
+		const auto name = call.u32(1);
+		const size_t count = name == GL_AMBIENT || name == GL_DIFFUSE || name == GL_SPECULAR || name == GL_POSITION ? 4 :
+			name == GL_SPOT_DIRECTION ? 3 : 1;
+		const auto values = input<GLfloat>(call, call[2], count);
+		glLightfv(call.u32(0), name, values.data());
+	});
 	scalar("glRenderMode", glRenderMode);
 	add("glColor4fv", 1, [](ApiCall &call) {
 		const auto values = input<GLfloat>(call, call[0], 4);
@@ -959,6 +973,10 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 	add("glVertexPointer", 4, [](ApiCall &call) {
 		require_array_buffer();
 		glVertexPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
+	});
+	add("glInterleavedArrays", 3, [](ApiCall &call) {
+		require_array_buffer();
+		glInterleavedArrays(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2]));
 	});
 	add("glDrawArrays", 3, [&s](ApiCall &call) {
 		s.validate_draw_arrays(call);

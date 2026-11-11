@@ -54,7 +54,7 @@ void NativeWindows::dump_windows()
 		for (const auto handle : objects.window_handles()) {
 			const auto *window=std::as_const(objects).window(handle);
 			const auto *definition=objects.window_class(window->class_id);
-			std::cerr << "window " << std::hex << handle << std::dec << " " << (definition ? definition->name : "?") << " parent=" << std::hex << window->parent << std::dec
+			std::cerr << "window " << std::hex << handle << std::dec << " " << (definition ? definition->name : "?") << " parent=" << std::hex << window->parent << " owner=" << window->owner << std::dec
 				<< " style=" << std::hex << window->style << " ex=" << window->ex_style << std::dec << " visible=" << window->visible
 				<< " outer=" << window->outer.left << "," << window->outer.top << "," << window->outer.right << "," << window->outer.bottom
 				<< " client=" << window->x << "," << window->y << "," << window->width << "x" << window->height
@@ -78,6 +78,7 @@ void NativeWindows::remove_host_window(uint64_t handle)
 {
 	if (surface_cleanup) surface_cleanup(handle);
 	if (presentation.remove) presentation.remove(handle);
+	host_windows.erase(handle);
 }
 
 void NativeWindows::set_deadline(std::chrono::steady_clock::time_point end)
@@ -156,6 +157,8 @@ uint64_t NativeWindows::surface_dc(uint64_t handle)
 		shared=spare->second.pixels;
 		address=spare->second.address;
 		spare_surfaces.erase(spare);
+		// The pixels of the surface it was before, laid out for another size, are not the new surface's: it starts black, as a new one does.
+		std::memset(shared->data(),0,std::min(size,shared->size()));
 	} else {
 		drop_spare_surface(handle);
 		shared=std::make_shared<SharedPixels>(size);
@@ -301,6 +304,18 @@ void NativeWindows::present(uint64_t handle, bool force)
 	presentation.present(handle,encode_utf8(window->title,true),bitmap->width,bitmap->height,pixels);
 	place_host_surface(handle);
 	place_overlays(handle,*bitmap,pixels);
+	// Windows it owns stay above it, as on Windows. A program can show them before their owner, as VLC shows its first-run dialog
+	// before its main window, and a compositor puts a newly shown window on top: the owned windows already shown are shown again, over it.
+	if (!host_windows.insert(handle).second) return;
+	std::vector<uint64_t> owned;
+	for (const auto other : host_windows)
+		if (const auto *candidate=std::as_const(objects).window(other); other!=handle && candidate && host_owner(*candidate)==handle &&
+			!hosts_surface(other))
+			owned.push_back(other);
+	for (const auto other : owned) {
+		remove_host_window(other);
+		present(other,true);
+	}
 }
 
 // A visible child that GDI draws, put by the program on a window a driver renders to, shows over that window's surface with all it holds,
@@ -766,6 +781,8 @@ NativeWindows::PaintStart NativeWindows::start_paint(uint64_t handle)
 void NativeWindows::finish_paint(uint64_t handle)
 {
 	const auto *window=std::as_const(objects).window(handle);
+	// A window whose surface went away while it painted, as when another thread moves it to another root, has no paint left to finish.
+	if (!window || !window->painting) return;
 	// A parent without WS_CLIPCHILDREN, or with WS_EX_COMPOSITED, may have drawn over its children: they draw again on top, as the
 	// children on Windows show.
 	std::optional<DesktopRect> painted;
@@ -1236,7 +1253,23 @@ static bool trace_buttons_enabled()
 
 uint64_t NativeWindows::host_owner(const DesktopWindow &window) const
 {
-	return window.owner ? objects.window_root(window.owner) : window.shown_on ? objects.window_root(window.shown_on) : 0;
+	if (window.owner) return objects.window_root(window.owner);
+	if (window.shown_on) return objects.window_root(window.shown_on);
+	// A tool window that is a popup without a caption and has no owner, as Qt makes its tooltips, opens over the window the program
+	// placed it on: the topmost window shown under its top left corner, or else the active window. A compositor that places windows
+	// itself would put it anywhere.
+	const bool tip=!window.parent && (window.ex_style & 0x80U) && (window.style & 0x80000000U) && (window.style & 0x00c00000U)!=0x00c00000U;
+	if (!tip) return 0;
+	const auto windows=top_level_windows();
+	for (auto candidate=windows.rbegin();candidate!=windows.rend();++candidate) {
+		const auto *other=std::as_const(objects).window(*candidate);
+		if (!other || other==&window || !host_windows.contains(*candidate) || !objects.window_visible(*candidate)) continue;
+		if (window.outer.left>=other->outer.left && window.outer.left<other->outer.right && window.outer.top>=other->outer.top &&
+			window.outer.top<other->outer.bottom)
+			return *candidate;
+	}
+	const auto *focused=std::as_const(objects).window(active);
+	return focused && focused!=&window && host_windows.contains(active) ? active : 0;
 }
 
 bool NativeWindows::shown_on_owner(const DesktopWindow &window) const
@@ -2733,7 +2766,8 @@ bool NativeWindows::dispatch(std::string_view name)
 	// A 32-bit program's window data accessors are served by the shared handlers, which apply style changes.
 	if (process.mode()==NativeMode::x86 && (name=="GetWindowLongW" || name=="SetWindowLongW")) return false;
 	const bool data=(name.starts_with("GetWindowLong") || name.starts_with("SetWindowLong") || name.starts_with("GetClassLong") || name.starts_with("SetClassLong"));
-	const bool info=name=="GetClassInfoW" || name=="GetClassInfoExW" || name=="GetClassNameW" || name=="GetClassNameA";
+	const bool info=name=="GetClassInfoW" || name=="GetClassInfoExW" || name=="GetClassNameW" || name=="GetClassNameA" ||
+		name=="RealGetWindowClassW" || name=="RealGetWindowClassA";
 	const bool registration=name=="RegisterClassExW" || name=="RegisterClassW";
 	const bool creation=name=="CreateWindowExW";
 	const bool coordinate=name=="ClientToScreen" || name=="ScreenToClient";

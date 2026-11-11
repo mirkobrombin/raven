@@ -32,6 +32,6 @@ bool program_may_replace(std::string_view dll);
 inline constexpr std::string_view runtime_components[]{"msi.dll", "cabinet.dll", "sxs.dll", "rpcrt4.dll", "msxml3.dll", "libxslt.dll", "atl100.dll",
 	"libjpeg.dll", "libtiff.dll", "propsys.dll", "mlang.dll", "windowscodecs.dll", "gdiplus.dll", "urlmon.dll", "riched20.dll", "msftedit.dll", "msvfw32.dll", "advpack.dll", "mspatcha.dll", "vbscript.dll", "scrrun.dll", "wshom.ocx", "jscript.dll",
 	"mscoree.dll", "taskschd.dll", "webservices.dll", "hlink.dll", "icu.dll", "icuuc.dll", "icuin.dll", "raven-accprop.dll", "raven-deployment.dll", "raven-netlist.dll", "raven-bits.dll", "raven-uisettings.dll", "raven-twinapi.dll", "xmllite.dll", "d3dcompiler_47.dll",
-	"winsqlite3.dll", "avrt.dll", "mfplat.dll", "raven-web.dll", "raven-appx.dll", "raven-wmi.dll", "raven-ieframe.dll", "raven-webengine.dll"};
+	"winsqlite3.dll", "avrt.dll", "mfplat.dll", "mmdevapi.dll", "winscard.dll", "raven-web.dll", "raven-appx.dll", "raven-wmi.dll", "raven-ieframe.dll", "raven-webengine.dll"};
 
 }

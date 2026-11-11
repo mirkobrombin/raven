@@ -11,15 +11,24 @@ static void put(std::span<uint8_t> bytes,size_t at,uint64_t value,size_t width)
 
 uint64_t NativeWindows::class_info(std::string_view name,std::span<const uint64_t> args)
 {
-	if (name=="GetClassNameW" || name=="GetClassNameA") {
+	const bool real=name=="RealGetWindowClassW" || name=="RealGetWindowClassA";
+	if (name=="GetClassNameW" || name=="GetClassNameA" || real) {
 		const auto *window=std::as_const(objects).window(args[0]);
 		const auto foreign=window ? std::nullopt : foreign_window_traits(args[0]);
 		if (!window && !foreign) throw uint32_t(1400);
 		const auto count=uint32_t(args[2]); if (count<=1) throw uint32_t(122);
 		std::string_view value=window ? std::string_view(objects.window_class(window->class_id)->name) : std::string_view(foreign->class_name);
+		// The real class of a window whose class a program derived from a system control, with that control's procedure, is the control's.
+		if (real && window)
+			for (const std::string_view base : {"Button","ComboBox","ComboLBox","Edit","ListBox","MDIClient","ScrollBar","Static","#32770"})
+				if (const auto *system=objects.window_class(objects.find_class(0,base));
+					system && (system->style & 0x4000) && system->procedure==objects.window_class(window->class_id)->procedure) {
+					value=base;
+					break;
+				}
 		// A class registered inside an activation context keeps its plain name for the program: the version before '!' stays internal.
 		if (const auto mark=value.find('!'); mark!=value.npos && value.find_first_not_of("0123456789.")==mark) value.remove_prefix(mark+1);
-		const auto length=std::min(size_t(count-1),value.size()),width=name=="GetClassNameW" ? size_t(2) : size_t(1);
+		const auto length=std::min(size_t(count-1),value.size()),width=name.ends_with('W') ? size_t(2) : size_t(1);
 		std::vector<uint8_t> bytes((length+1)*width);
 		for (size_t i=0;i<length;++i) bytes[i*width]=uint8_t(value[i]);
 		process.write_memory(args[1],bytes); return length;

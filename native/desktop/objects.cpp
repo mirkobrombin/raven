@@ -503,6 +503,8 @@ void DesktopObjects::abandon_paint(uint64_t handle)
 	if (!record || !record->painting) return;
 	if (auto *device=dc(record->dc); device && device->clip) { used-=device->clip->bytes(); device->clip.reset(); }
 	record->painting=false;
+	// What the paint was to draw was not drawn where it shows: the window is painted again, whole.
+	invalidate(handle,{0,0,record->width,record->height},true);
 }
 
 static bool same_name(std::string_view a,std::string_view b)

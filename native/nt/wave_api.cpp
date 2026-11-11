@@ -80,13 +80,14 @@ std::optional<Format> read_format(ApiCall &call, uint64_t address)
 	std::memcpy(&block, bytes.data() + 12, 2);
 	std::memcpy(&bits, bytes.data() + 14, 2);
 	if (tag == 0xfffe) {
-		const auto extended = call.read(address + 16, 26);
+		// cbSize, the valid bits, the channel mask, then the subformat, whose first word is the format tag it stands for.
+		const auto extended = call.read(address + 16, 24);
 		uint16_t extra;
 		std::memcpy(&extra, extended.data(), 2);
 		if (extra < 22)
 			return std::nullopt;
 		uint32_t subformat;
-		std::memcpy(&subformat, extended.data() + 10, 4);
+		std::memcpy(&subformat, extended.data() + 8, 4);
 		tag = uint16_t(subformat);
 	}
 	Format format{rate, channels, bits, block, tag == 3};
@@ -138,7 +139,7 @@ public:
 		for (const auto &item : queued)
 			finished.push_back(item.header);
 		queued.clear();
-		played = 0;
+		played = reported = held = 0;
 		paused = false;
 		if (stream) {
 			int error = 0;
@@ -164,10 +165,22 @@ public:
 		std::lock_guard lock(mutex);
 		return std::exchange(finished, {});
 	}
+	// Where the speaker is: what was played, less what the sound server still holds, or, without one, the part of the buffer playing
+	// now that its time has reached. It never goes back until the device is reset.
 	uint64_t position()
 	{
 		std::lock_guard lock(mutex);
-		return played;
+		uint64_t at = played;
+		if (stream)
+			at -= std::min(at, held);
+		else if (playing) {
+			const auto left = std::chrono::duration_cast<std::chrono::microseconds>(current_end - std::chrono::steady_clock::now()).count();
+			const uint64_t pending = left > 0 ? uint64_t(left) * format.bytes_per_second() / 1000000 : 0;
+			at += current_size - std::min<uint64_t>(pending, current_size);
+		}
+		at -= at % std::max(format.block, 1U);
+		reported = std::max(reported, at);
+		return reported;
 	}
 
 	const Format format;
@@ -183,22 +196,39 @@ private:
 	void play()
 	{
 		std::unique_lock lock(mutex);
+		// Without a sound server the samples play to nowhere at the pace of the format, against the clock rather than buffer by buffer,
+		// so the time spent between buffers does not add up: a stream that runs on keeps time with the program's clock.
+		auto due = std::chrono::steady_clock::now();
+		bool idle = true;
 		for (;;) {
+			if (paused || queued.empty())
+				idle = true;
 			changed.wait(lock, [&] { return stopping || (!paused && !queued.empty()); });
 			if (stopping)
 				return;
+			if (idle)
+				due = std::chrono::steady_clock::now();
+			idle = false;
 			auto item = std::move(queued.front());
 			queued.pop_front();
 			playing = true;
 			lock.unlock();
+			uint64_t latency = 0;
 			if (stream) {
 				int error = 0;
 				pulse()->write(stream, item.data.data(), item.data.size(), &error);
+				latency = pulse()->latency(stream, &error);
 			} else {
-				// Played to nowhere at the pace of the format.
-				std::this_thread::sleep_for(std::chrono::microseconds(uint64_t(item.data.size()) * 1000000 / std::max(format.bytes_per_second(), 1U)));
+				due += std::chrono::microseconds(uint64_t(item.data.size()) * 1000000 / std::max(format.bytes_per_second(), 1U));
+				{
+					std::lock_guard timing(mutex);
+					current_end = due;
+					current_size = item.data.size();
+				}
+				std::this_thread::sleep_until(due);
 			}
 			lock.lock();
+			held = latency * format.bytes_per_second() / 1000000;
 			playing = false;
 			played += item.data.size();
 			finished.push_back(item.header);
@@ -210,7 +240,8 @@ private:
 	std::condition_variable changed;
 	std::deque<Item> queued;
 	std::vector<uint64_t> finished;
-	uint64_t played = 0;
+	uint64_t played = 0, reported = 0, held = 0, current_size = 0;
+	std::chrono::steady_clock::time_point current_end;
 	bool stopping = false, paused = false, playing = false;
 	std::thread worker;
 };

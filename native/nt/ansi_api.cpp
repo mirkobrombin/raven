@@ -29,11 +29,17 @@ struct Adapter {
 	bool list = false;
 	// An input list at this argument, in the same form, as WritePrivateProfileSection takes a section's lines.
 	int input_list = -1;
+	// A string argument below 0x10000 is an integer atom (MAKEINTATOM), passed on as it is.
+	bool atoms = false;
 };
 
 const Adapter adapters[] = {
-	{"AddAtomA", {0}},
-	{"FindAtomA", {0}},
+	{"AddAtomA", {0}, -1, -1, -1, -1, -1, 0, false, -1, true},
+	{"FindAtomA", {0}, -1, -1, -1, -1, -1, 0, false, -1, true},
+	{"GlobalAddAtomA", {0}, -1, -1, -1, -1, -1, 0, false, -1, true},
+	{"GlobalFindAtomA", {0}, -1, -1, -1, -1, -1, 0, false, -1, true},
+	{"GetAtomNameA", {}, 1, 2},
+	{"GlobalGetAtomNameA", {}, 1, 2},
 	{"CreateFileA", {0}},
 	{"GetFileAttributesA", {0}},
 	{"SetupDiGetClassDevsA", {1}},
@@ -125,7 +131,7 @@ void register_ansi_adapters(ApiRegistry &registry)
 				words.push_back(call[index]);
 			const bool text_arguments = adapter.flag_argument < 0 || !(uint32_t(words[size_t(adapter.flag_argument)]) & adapter.flag_mask);
 			for (const auto index : adapter.strings) {
-				if (!text_arguments || index >= words.size() || !words[index])
+				if (!text_arguments || index >= words.size() || !words[index] || (adapter.atoms && words[index] < 0x10000))
 					continue;
 				const auto text = from_ansi(call.narrow(words[index]), ansi_code_page);
 				const auto at = scratch.block((text.size() + 1) * 2);

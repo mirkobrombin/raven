@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Pick a host file in Raven's file dialog, as a person does, and check what the program may then do with it.
 
-testdata/native_loader/picker_client.c asks for a file to open, and then for a place to save. The dialog shows the host's files; the
-person types the path of one and confirms. The program may read the file it opened but not change it, and may write the one it saves.
+testdata/native_loader/picker_client.c asks for a file to open, once through GetOpenFileName and once through the dialog object whose
+event handler learns the choice, and then for a place to save. The dialog shows the host's files; the person types the path of one and
+confirms. The program may read the file it opened but not change it, and may write the one it saves.
 The exit code of the program says which part went wrong.
 
 usage: native-picker.py RAVEN PICKER_EXE WORKDIR
@@ -19,6 +20,8 @@ RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
 FAILURES = {
     10: "the dialog returned no file",
     11: "the dialog returned a file in the prefix instead of the host file",
+    12: "the file open dialog object could not be created",
+    13: "the dialog did not tell the program's event handler what was chosen",
     20: "the program could not write the file it chose to save",
     30: "the program could not open the file it chose",
     31: "the program read something else than the chosen file",
@@ -94,13 +97,14 @@ def main():
             pick(raven, fixture, work / "prefix", "Open", host / "picked.txt", [])
             if (host / "picked.txt").read_bytes() != b"picked":
                 raise SystemExit("the file the program only opened changed")
+            pick(raven, fixture, work / "prefix", "Open", host / "picked.txt", ["--events"])
             pick(raven, fixture, work / "prefix", "Save As", host / "saved.txt", ["--save"])
             if not (host / "saved.txt").exists() or (host / "saved.txt").read_bytes() != b"saved":
                 raise SystemExit("the file the program saved is not on the host")
         finally:
             if compositor:
                 compositor.terminate()
-    print("a host file picked in the dialog was readable but not writable after Open, and written after Save As")
+    print("a host file picked in the dialog was readable but not writable after Open, also through the event handler, and written after Save As")
 
 
 if __name__ == "__main__":

@@ -2187,6 +2187,23 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				symbols.push_back(item.first);
 		if (library == "kernel32.dll")
 			symbols.push_back("RcConsolidateFrames");
+		// Windows keeps the waits on an address in kernelbase.dll alone. A program that looks for them in kernel32.dll (VLC among them)
+		// takes their absence for an older system and sets up its own waits; finding them there it skips that and calls what it never set.
+		// kernel32.dll lends them only to a program that imports them from it, as some import libraries have it do.
+		if (name == "kernel32.dll")
+			std::erase_if(symbols, [&](std::string_view symbol) {
+				if (symbol != "WaitOnAddress" && symbol != "WakeByAddressAll" && symbol != "WakeByAddressSingle")
+					return false;
+				for (const auto &[module_name, module] : modules.all())
+					for (const auto &import : module->imports) {
+						std::string imported = import.module;
+						for (auto &character : imported)
+							character = char(std::tolower(static_cast<unsigned char>(character)));
+						if ((imported == "kernel32.dll" || imported == "kernel32") && import.name == symbol)
+							return false;
+					}
+				return true;
+			});
 		std::sort(symbols.begin(), symbols.end());
 		symbols.erase(std::unique(symbols.begin(), symbols.end()), symbols.end());
 		if (symbols.empty())

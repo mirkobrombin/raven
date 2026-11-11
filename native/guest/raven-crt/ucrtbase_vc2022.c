@@ -5,7 +5,9 @@
 /* The entry points that large Visual C++ 2019 and 2022 programs and the libraries they ship (Qt 6, OpenCASCADE, OpenCV) import beyond the
  * rest: the exception and type_info helpers the C++ runtime libraries take under their _o_ names, the lock-free stream functions, more
  * conversions under a locale, file searches with 32-bit sizes, wide temporary names, path splitting and the C99 math functions erf, erfc,
- * tgamma and remainder. Included by ucrtbase.c, after the other parts, whose helpers it shares. */
+ * tgamma and remainder. Also the msvcrt names libraries built by MinGW-w64 import (VLC's plugins among them): the secure scans, fscanf,
+ * _vsnprintf_s, file searches with 64-bit sizes and pipes to a command. Included by ucrtbase.c, after the other parts, whose helpers it
+ * shares. */
 
 __asm__(".section .drectve\n\t.ascii \""
 	" -export:_o___std_exception_copy=raven_std_exception_copy -export:_o___std_exception_destroy=raven_std_exception_destroy"
@@ -370,4 +372,202 @@ CRT double tgamma(double x)
 		sum += coefficients[at] / (x + at);
 	const double t = x + 7.5;
 	return 2.5066282746310005024 * pow(t, x + 0.5) * exp(-t) * sum;
+}
+
+/* ---- the msvcrt names of MinGW-w64 libraries ---- */
+
+CRT int sscanf_s(const char *input, const char *format, ...)
+{
+	va_list arguments;
+	va_start(arguments, format);
+	const int result = scan_narrow_text(input, format, arguments, 1);
+	va_end(arguments);
+	return result;
+}
+
+CRT int swscanf_s(const wchar_t *input, const wchar_t *format, ...)
+{
+	va_list arguments;
+	va_start(arguments, format);
+	const int result = scan_wide_text(input, format, arguments, 1);
+	va_end(arguments);
+	return result;
+}
+
+CRT int fscanf(void *stream, const char *format, ...)
+{
+	va_list arguments;
+	va_start(arguments, format);
+	const int result = __stdio_common_vfscanf(0, stream, format, NULL, arguments);
+	va_end(arguments);
+	return result;
+}
+
+/* At most count characters, or with _TRUNCATE as many as the buffer holds; text cut short gives -1. Text that does not fit the buffer at
+ * all when a count was asked for is an error, and the buffer is left empty. */
+CRT int _vsnprintf_s(char *buffer, size_t size, size_t count, const char *text, va_list arguments)
+{
+	const int truncate = count == (size_t)-1;
+	if (!buffer || !size || !text) {
+		if (buffer && size)
+			buffer[0] = 0;
+		set_errno(22);
+		return -1;
+	}
+	const size_t room = truncate || count >= size ? size - 1 : count;
+	const int length = __stdio_common_vsprintf(0, buffer, room + 1, text, NULL, arguments);
+	if (length >= 0 && (size_t)length <= room)
+		return length;
+	if (truncate || room < size - 1)
+		return -1;
+	buffer[0] = 0;
+	set_errno(34);
+	return -1;
+}
+
+/* struct __finddata64_t: attributes, three 64-bit times, a 64-bit size and the name. */
+typedef struct {
+	unsigned attributes;
+	long long created, accessed, written;
+	long long size;
+	char name[260];
+} RavenFind64;
+
+static void fill_found_64(RavenFind64 *out, const WIN32_FIND_DATAA *data)
+{
+	out->attributes = data->dwFileAttributes;
+	out->created = file_time_to_unix(data->ftCreationTime);
+	out->accessed = file_time_to_unix(data->ftLastAccessTime);
+	out->written = file_time_to_unix(data->ftLastWriteTime);
+	out->size = (long long)data->nFileSizeHigh << 32 | data->nFileSizeLow;
+	memcpy(out->name, data->cFileName, sizeof out->name);
+}
+
+CRT intptr_t _findfirst64(const char *pattern, RavenFind64 *out)
+{
+	WIN32_FIND_DATAA data;
+	if (!pattern || !out) {
+		set_errno(22);
+		return -1;
+	}
+	HANDLE search = FindFirstFileA(pattern, &data);
+	if (search == INVALID_HANDLE_VALUE) {
+		windows_failure();
+		return -1;
+	}
+	fill_found_64(out, &data);
+	return (intptr_t)search;
+}
+
+CRT int _findnext64(intptr_t search, RavenFind64 *out)
+{
+	WIN32_FIND_DATAA data;
+	if (!out || !FindNextFileA((HANDLE)search, &data)) {
+		set_errno(out ? 2 : 22);
+		return -1;
+	}
+	fill_found_64(out, &data);
+	return 0;
+}
+
+/* A pipe to a command the command interpreter runs: the stream reads what it writes, or writes what it reads. _pclose waits for it and
+ * gives its exit code. */
+static struct {
+	void *stream;
+	HANDLE process;
+} command_pipes[64];
+static SRWLOCK command_pipes_lock = SRWLOCK_INIT;
+
+CRT void *_popen(const char *command, const char *mode)
+{
+	SECURITY_ATTRIBUTES inherit = {sizeof inherit, NULL, TRUE};
+	STARTUPINFOA startup = {sizeof startup};
+	PROCESS_INFORMATION child;
+	HANDLE read_end, write_end;
+	char shell[MAX_PATH];
+	if (!command || !mode || (mode[0] != 'r' && mode[0] != 'w')) {
+		set_errno(22);
+		return NULL;
+	}
+	const int reading = mode[0] == 'r';
+	const DWORD length = GetEnvironmentVariableA("ComSpec", shell, MAX_PATH);
+	if (!length || length >= MAX_PATH)
+		lstrcpyA(shell, "C:\\Windows\\System32\\cmd.exe");
+	char *line = malloc(strlen(shell) + strlen(command) + 8);
+	if (!line) {
+		set_errno(12);
+		return NULL;
+	}
+	lstrcpyA(line, "\"");
+	lstrcatA(line, shell);
+	lstrcatA(line, "\" /c ");
+	lstrcatA(line, command);
+	if (!CreatePipe(&read_end, &write_end, &inherit, 0)) {
+		free(line);
+		windows_failure();
+		return NULL;
+	}
+	HANDLE ours = reading ? read_end : write_end, theirs = reading ? write_end : read_end;
+	SetHandleInformation(ours, HANDLE_FLAG_INHERIT, 0);
+	startup.dwFlags = STARTF_USESTDHANDLES;
+	startup.hStdInput = reading ? GetStdHandle(STD_INPUT_HANDLE) : theirs;
+	startup.hStdOutput = reading ? theirs : GetStdHandle(STD_OUTPUT_HANDLE);
+	startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	const BOOL started = CreateProcessA(shell, line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child);
+	free(line);
+	CloseHandle(theirs);
+	if (!started) {
+		CloseHandle(ours);
+		windows_failure();
+		return NULL;
+	}
+	CloseHandle(child.hThread);
+	const int fd = _open_osfhandle((intptr_t)ours, (reading ? 0 : 1) | (strchr(mode, 'b') ? 0x8000 : 0x4000));
+	void *stream = fd < 0 ? NULL : _fdopen(fd, mode);
+	if (stream) {
+		AcquireSRWLockExclusive(&command_pipes_lock);
+		size_t at = 0;
+		while (at < sizeof command_pipes / sizeof *command_pipes && command_pipes[at].stream)
+			++at;
+		if (at < sizeof command_pipes / sizeof *command_pipes) {
+			command_pipes[at].stream = stream;
+			command_pipes[at].process = child.hProcess;
+		} else {
+			fclose(stream);
+			stream = NULL;
+		}
+		ReleaseSRWLockExclusive(&command_pipes_lock);
+	} else if (fd >= 0) {
+		_close(fd);
+	} else {
+		CloseHandle(ours);
+	}
+	if (!stream) {
+		CloseHandle(child.hProcess);
+		set_errno(24);
+	}
+	return stream;
+}
+
+CRT int _pclose(void *stream)
+{
+	HANDLE process = NULL;
+	DWORD code = (DWORD)-1;
+	AcquireSRWLockExclusive(&command_pipes_lock);
+	for (size_t at = 0; at < sizeof command_pipes / sizeof *command_pipes; ++at)
+		if (stream && command_pipes[at].stream == stream) {
+			process = command_pipes[at].process;
+			command_pipes[at].stream = NULL;
+			break;
+		}
+	ReleaseSRWLockExclusive(&command_pipes_lock);
+	if (!process) {
+		set_errno(22);
+		return -1;
+	}
+	fclose(stream);
+	WaitForSingleObject(process, INFINITE);
+	GetExitCodeProcess(process, &code);
+	CloseHandle(process);
+	return (int)code;
 }

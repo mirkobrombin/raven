@@ -85,6 +85,8 @@ struct WaylandPresentation::State {
 		// What changed since this buffer last received a frame (left, top, right, bottom): only that part is copied into it again.
 		std::array<int32_t,4> stale{0,0,0,0};
 		bool released=false;
+		// Whether its pixels carry premultiplied alpha (ARGB) or are opaque (XRGB).
+		bool alpha=false;
 		~Buffer() { if (proxy) wl_buffer_destroy(proxy); if (pixels!=MAP_FAILED) munmap(pixels,size); }
 	};
 	struct Surface {
@@ -96,7 +98,7 @@ struct WaylandPresentation::State {
 		// Where a popup sits on its parent, and whether it took a grab.
 		int32_t popup_x=0,popup_y=0;
 		bool grabbed=false;
-		bool configured=false, closed=false, resized=false, close_posted=false, first_frame=false, maximized=false;
+		bool configured=false, closed=false, resized=false, close_posted=false, first_frame=false, maximized=false, mapped=false, alpha=false;
 		// Whether the compositor's last configure shows the window maximized, whether the state Raven asked for is still to come, and
 		// whether the program was told of a state the compositor chose itself.
 		bool shown_maximized=false, state_asked=true, state_reported=false;
@@ -202,6 +204,10 @@ struct WaylandPresentation::State {
 	};
 	std::map<uint64_t,std::unique_ptr<Overlay>> overlays;
 	std::set<uint64_t> maximized;
+	// The top-level window that owns each window, which the compositor keeps it above.
+	std::map<uint64_t,uint64_t> owners;
+	// Windows whose pixels carry premultiplied alpha, which the compositor blends over what lies below.
+	std::set<uint64_t> translucent;
 
 	~State() {
 		release_constraint();
@@ -715,7 +721,7 @@ struct WaylandPresentation::State {
 		events(std::chrono::milliseconds(0));
 		// Released buffers of this size are reused; the compositor only repaints what changed since the shown frame.
 		std::array<int32_t,4> damage{0,0,int32_t(width),int32_t(height)};
-		const bool same_size=window.shown && window.shown->width==width && window.shown->height==height;
+		const bool same_size=window.shown && window.shown->width==width && window.shown->height==height && window.shown->alpha==window.alpha;
 		// Hashes describe the shown frame only after a comparison made them; a frame presented whole leaves none.
 		if (!same_size) window.row_hashes.clear();
 		if (same_size) {
@@ -726,7 +732,7 @@ struct WaylandPresentation::State {
 			}
 		}
 		std::erase_if(window.buffers,[&](const auto &buffer) {
-			return buffer->released && buffer.get()!=window.shown && (buffer->width!=width || buffer->height!=height);
+			return buffer->released && buffer.get()!=window.shown && (buffer->width!=width || buffer->height!=height || buffer->alpha!=window.alpha);
 		});
 		Buffer *target=nullptr;
 		size_t pending=0;
@@ -741,14 +747,15 @@ struct WaylandPresentation::State {
 				for (const auto &buffer : surface->buffers) used+=buffer->size;
 			if (used+pixels.size()>256*1024*1024) throw std::runtime_error("Wayland presentation memory limit reached");
 			auto buffer=std::make_unique<Buffer>(); buffer->size=pixels.size(); buffer->width=width; buffer->height=height;
-			buffer->stale={0,0,int32_t(width),int32_t(height)};
+			buffer->stale={0,0,int32_t(width),int32_t(height)}; buffer->alpha=window.alpha;
 			const int descriptor=int(syscall(SYS_memfd_create,"raven-frame",MFD_CLOEXEC));
 			if (descriptor<0) throw std::runtime_error("Wayland frame descriptor failed");
 			if (ftruncate(descriptor,off_t(buffer->size))<0) { close(descriptor); throw std::runtime_error("Wayland frame sizing failed"); }
 			buffer->pixels=mmap(nullptr,buffer->size,PROT_READ|PROT_WRITE,MAP_SHARED,descriptor,0);
 			if (buffer->pixels==MAP_FAILED) { close(descriptor); throw std::runtime_error("Wayland frame mapping failed"); }
 			wl_shm_pool *pool=wl_shm_create_pool(shm,descriptor,int32_t(buffer->size)); close(descriptor);
-			buffer->proxy=wl_shm_pool_create_buffer(pool,0,int32_t(width),int32_t(height),int32_t(width*4),WL_SHM_FORMAT_XRGB8888);
+			buffer->proxy=wl_shm_pool_create_buffer(pool,0,int32_t(width),int32_t(height),int32_t(width*4),
+				window.alpha ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888);
 			wl_shm_pool_destroy(pool);
 			static const wl_buffer_listener buffer_listener{[](void *data,wl_buffer *) { static_cast<Buffer *>(data)->released=true; }};
 			wl_buffer_add_listener(buffer->proxy,&buffer_listener,buffer.get());
@@ -829,6 +836,7 @@ struct WaylandPresentation::State {
 		auto &window=*found->second;
 		if (!window.is_popup || window.closed || window.width!=width || window.height!=height)
 			throw std::runtime_error("Wayland popup cannot accept this frame");
+		window.alpha=translucent.contains(handle);
 		attach_frame(window,width,height,pixels);
 	}
 
@@ -939,6 +947,24 @@ struct WaylandPresentation::State {
 		wl_display_flush(display);
 	}
 
+	// A window stays above the window that owns it, as on Windows: the compositor learns it as the window's parent once the parent is
+	// mapped, since a parent that is not mapped yet does not count.
+	void apply_owner(uint64_t handle) {
+		const auto found=surfaces.find(handle);
+		if (found==surfaces.end() || !found->second->role) return;
+		const auto owner=owners.find(handle);
+		const auto parent=owner==owners.end() ? surfaces.end() : surfaces.find(owner->second);
+		const bool shown=parent!=surfaces.end() && parent->second->role && parent->second->mapped;
+		xdg_toplevel_set_parent(found->second->role,shown ? parent->second->role : nullptr);
+	}
+
+	void transient_for(uint64_t handle,uint64_t owner) {
+		const auto known=owners.find(handle);
+		if (owner ? known!=owners.end() && known->second==owner : known==owners.end()) return;
+		if (owner) owners[handle]=owner; else owners.erase(handle);
+		apply_owner(handle);
+	}
+
 	void maximize(uint64_t handle,bool wanted) {
 		if (wanted) maximized.insert(handle); else maximized.erase(handle);
 		const auto found=surfaces.find(handle);
@@ -1021,12 +1047,21 @@ struct WaylandPresentation::State {
 		if (window.pending_width==width && window.pending_height==height) window.resized=false;
 		window.width=width; window.height=height;
 		xdg_surface_set_window_geometry(window.shell,0,0,int32_t(width),int32_t(height));
+		window.alpha=translucent.contains(handle);
 		attach_frame(window,width,height,pixels);
 		if (window.first_frame) {
 			window.first_frame=false;
 			xdg_toplevel_set_min_size(window.role,0,0);
 			xdg_toplevel_set_max_size(window.role,0,0);
 			wl_surface_commit(window.proxy);
+		}
+		if (!window.mapped) {
+			// Its first frame maps it: it takes its owner now, and the windows it owns that were shown before it take it.
+			window.mapped=true;
+			apply_owner(handle);
+			for (const auto &[child,owner] : owners)
+				if (owner==handle) apply_owner(child);
+			wl_display_flush(display);
 		}
 	}
 };
@@ -1036,10 +1071,12 @@ WaylandPresentation::~WaylandPresentation()=default;
 
 DesktopPresentation WaylandPresentation::callbacks()
 {
-	return {[this](uint64_t handle,std::string_view title,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
+	DesktopPresentation result{[this](uint64_t handle,std::string_view title,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
 		state->present(handle,title,width,height,pixels);
 	},[this](uint64_t handle) {
 		state->maximized.erase(handle);
+		state->owners.erase(handle);
+		state->translucent.erase(handle);
 		if (state->pointer_window==handle) state->pointer_window=0;
 		if (state->keyboard_window==handle) state->keyboard_window=0;
 		std::erase_if(state->pending,[&](const DesktopEvent &event) { return event.window==handle; });
@@ -1108,6 +1145,12 @@ DesktopPresentation WaylandPresentation::callbacks()
 	[this](uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,size_t stride) {
 		state->overlay(handle,window,x,y,width,height,pixels,stride);
 	}};
+	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.translucent=[this](uint64_t handle,bool alpha) {
+		if (alpha) state->translucent.insert(handle);
+		else state->translucent.erase(handle);
+	};
+	return result;
 }
 
 }

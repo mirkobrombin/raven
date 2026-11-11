@@ -100,12 +100,53 @@ static HRESULT STDMETHODCALLTYPE item_bind(IShellItem *self, IBindCtx *context, 
 
 static HRESULT STDMETHODCALLTYPE item_parent(IShellItem *self, IShellItem **parent);
 
+/* SIGDN_URL: a file URL, file:///C:/folder/name, with the characters a URL does not carry as they are escaped as UTF-8. */
+static WCHAR *file_url(const WCHAR *path)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	const size_t length = lstrlenW(path);
+	WCHAR *url = CoTaskMemAlloc((8 + length * 9 + 1) * sizeof(WCHAR));
+	size_t at = 0, index;
+	if (!url)
+		return NULL;
+	for (index = 0; index < 8; ++index)
+		url[at++] = L"file:///"[index];
+	for (index = 0; index < length; ++index) {
+		const WCHAR c = path[index];
+		unsigned char bytes[4];
+		int count = 0, byte;
+		if (c == L'\\') {
+			url[at++] = L'/';
+			continue;
+		}
+		if ((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'-' || c == L'.' || c == L'_' ||
+			c == L'~' || c == L':' || c == L'/') {
+			url[at++] = c;
+			continue;
+		}
+		count = WideCharToMultiByte(CP_UTF8, 0, path + index, IS_HIGH_SURROGATE(c) && index + 1 < length ? 2 : 1, (char *)bytes, 4, NULL, NULL);
+		if (IS_HIGH_SURROGATE(c) && index + 1 < length)
+			++index;
+		for (byte = 0; byte < count; ++byte) {
+			url[at++] = L'%';
+			url[at++] = hex[bytes[byte] >> 4];
+			url[at++] = hex[bytes[byte] & 15];
+		}
+	}
+	url[at] = 0;
+	return url;
+}
+
 static HRESULT STDMETHODCALLTYPE item_display_name(IShellItem *self, SIGDN kind, LPWSTR *name)
 {
 	const WCHAR *source = ((Item *)self)->path;
 	size_t length;
 	WCHAR *copy;
-	if ((DWORD)kind != 0x80058000 && (DWORD)kind != 0x80028000 && (DWORD)kind != 0x8004c000 && (DWORD)kind != 0x80068000)
+	if ((DWORD)kind == 0x80068000) {
+		*name = file_url(source);
+		return *name ? S_OK : E_OUTOFMEMORY;
+	}
+	if ((DWORD)kind != 0x80058000 && (DWORD)kind != 0x80028000 && (DWORD)kind != 0x8004c000)
 		source = file_part(source);
 	length = lstrlenW(source);
 	copy = CoTaskMemAlloc((length + 1) * sizeof(WCHAR));
@@ -224,6 +265,7 @@ typedef struct {
 	LONG refs;
 	BOOL save;
 	DialogState state;
+	IFileDialogEvents *events; /* the program's handler, told what the person did before Show returns */
 } FileDialog;
 
 static FileDialog *dialog_of(void *self) { return (FileDialog *)self; }
@@ -253,8 +295,11 @@ static ULONG STDMETHODCALLTYPE fd_add_ref(void *self) { return (ULONG)Interlocke
 static ULONG STDMETHODCALLTYPE fd_release(void *self)
 {
 	LONG left = InterlockedDecrement(&dialog_of(self)->refs);
-	if (!left)
+	if (!left) {
+		if (dialog_of(self)->events)
+			IFileDialogEvents_Release(dialog_of(self)->events);
 		HeapFree(GetProcessHeap(), 0, self);
+	}
 	return (ULONG)left;
 }
 
@@ -262,10 +307,19 @@ static HRESULT STDMETHODCALLTYPE fd_show(void *self, HWND owner)
 {
 	FileDialog *dialog = dialog_of(self);
 	trace("dialog Show", NULL);
-	dialog->state.has_result = FALSE;
-	if (!run_dialog(owner, &dialog->state))
-		return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-	return S_OK;
+	for (;;) {
+		dialog->state.has_result = FALSE;
+		if (!run_dialog(owner, &dialog->state))
+			return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+		/* The handler hears of the folder and the selection the person ended in, then of the choice itself: many programs read the
+		 * results there and only there. A handler that refuses the choice keeps the dialog open, so it is shown again. */
+		if (!dialog->events)
+			return S_OK;
+		IFileDialogEvents_OnFolderChange(dialog->events, (IFileDialog *)self);
+		IFileDialogEvents_OnSelectionChange(dialog->events, (IFileDialog *)self);
+		if (IFileDialogEvents_OnFileOk(dialog->events, (IFileDialog *)self) != S_FALSE)
+			return S_OK;
+	}
 }
 
 static HRESULT STDMETHODCALLTYPE fd_set_types(void *self, UINT count, const COMDLG_FILTERSPEC *specs)
@@ -286,8 +340,29 @@ static HRESULT STDMETHODCALLTYPE fd_set_types(void *self, UINT count, const COMD
 
 static HRESULT STDMETHODCALLTYPE fd_set_index(void *self, UINT index) { dialog_of(self)->state.filter_index = index; return S_OK; }
 static HRESULT STDMETHODCALLTYPE fd_get_index(void *self, UINT *index) { *index = dialog_of(self)->state.filter_index; return S_OK; }
-static HRESULT STDMETHODCALLTYPE fd_advise(void *self, IFileDialogEvents *events, DWORD *cookie) { *cookie = 1; return S_OK; }
-static HRESULT STDMETHODCALLTYPE fd_unadvise(void *self, DWORD cookie) { return S_OK; }
+/* One handler at a time, which is all a dialog shown by one program needs; the cookie names it. */
+static HRESULT STDMETHODCALLTYPE fd_advise(void *self, IFileDialogEvents *events, DWORD *cookie)
+{
+	FileDialog *dialog = dialog_of(self);
+	if (!events || !cookie)
+		return E_INVALIDARG;
+	IFileDialogEvents_AddRef(events);
+	if (dialog->events)
+		IFileDialogEvents_Release(dialog->events);
+	dialog->events = events;
+	*cookie = 1;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE fd_unadvise(void *self, DWORD cookie)
+{
+	FileDialog *dialog = dialog_of(self);
+	if (cookie != 1 || !dialog->events)
+		return E_INVALIDARG;
+	IFileDialogEvents_Release(dialog->events);
+	dialog->events = NULL;
+	return S_OK;
+}
 static HRESULT STDMETHODCALLTYPE fd_set_options(void *self, FILEOPENDIALOGOPTIONS options) { dialog_of(self)->state.options = options; return S_OK; }
 static HRESULT STDMETHODCALLTYPE fd_get_options(void *self, FILEOPENDIALOGOPTIONS *options) { *options = dialog_of(self)->state.options; return S_OK; }
 
@@ -899,9 +974,10 @@ static BOOL classic_dialog(OPENFILENAMEW *request, BOOL save)
 			request->nFilterIndex = state->filter_index;
 		}
 	} else if (accepted) {
-		size_t length = lstrlenW(state->result);
-		if (!request->lpstrFile || length + 1 > request->nMaxFile) {
-			request->nMaxFile = (DWORD)(length + 1);
+		/* A dialog that allows several files ends even one with a second null, which ends the list of names after the path. */
+		const size_t length = lstrlenW(state->result), ends = (request->Flags & OFN_ALLOWMULTISELECT) ? 2 : 1;
+		if (!request->lpstrFile || length + ends > request->nMaxFile) {
+			request->nMaxFile = (DWORD)(length + ends);
 			accepted = FALSE;
 			SetLastError(ERROR_INSUFFICIENT_BUFFER);
 		} else {
@@ -909,6 +985,7 @@ static BOOL classic_dialog(OPENFILENAMEW *request, BOOL save)
 			const WCHAR *dot = NULL;
 			const WCHAR *scan;
 			lstrcpyW(request->lpstrFile, state->result);
+			request->lpstrFile[length + ends - 1] = 0;
 			request->nFileOffset = (WORD)(name - state->result);
 			for (scan = name; *scan; ++scan)
 				if (*scan == L'.')

@@ -148,6 +148,9 @@ class QueueTimer : public KernelObject {
 public:
 	uint64_t handle = 0, callback = 0, parameter = 0, instance = 0;
 	uint32_t period = 0, flags = 0;
+	// A multimedia timer of winmm.dll: its number, which its callback receives first; with TIME_CALLBACK_EVENT_SET or _PULSE the
+	// callback is an event the timer sets or pulses.
+	uint32_t multimedia = 0;
 	std::chrono::steady_clock::time_point deadline;
 	bool active = true, closed = false;
 	std::shared_ptr<GuestThread> running;
@@ -1650,8 +1653,20 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		for (const auto &timer : timer_state->timers) {
 			if (!timer->active || now < timer->deadline || !finished(timer))
 				continue;
+			if (timer->multimedia && (timer->flags & 0x30)) {
+				objects.set_event(timer->callback, true);
+				if (timer->flags & 0x20)
+					objects.set_event(timer->callback, false);
+				if (!timer->period)
+					timer->active = false;
+				else
+					timer->deadline = std::max(timer->deadline + std::chrono::milliseconds(timer->period), now);
+				continue;
+			}
 			const auto thread = threads.create(timer->callback, timer->parameter, 1024 * 1024, false);
-			if (timer->instance)
+			if (timer->multimedia)
+				thread->arguments = {timer->multimedia, 0, timer->parameter, 0, 0};
+			else if (timer->instance)
 				thread->arguments = {timer->instance, timer->parameter, timer->handle};
 			else
 				thread->arguments = {timer->parameter, 1};
@@ -1727,6 +1742,41 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		timer_state->timers.push_back(timer);
 		call.store_pointer(call[0], made.value);
 		call.ret(1);
+	});
+	// Multimedia timers: timeSetEvent runs a callback once or periodically after a delay in milliseconds, through the timer pump; the
+	// timer's number, never 0, is what timeKillEvent takes.
+	auto multimedia = std::make_shared<std::map<uint32_t, std::shared_ptr<QueueTimer>>>();
+	registry.add("timeSetEvent", 5, [timer_state, multimedia](ApiCall &call) {
+		if (!call[2] || call.u32(0) == 0) {
+			call.ret(0);
+			return;
+		}
+		static uint32_t next = 1;
+		auto timer = std::make_shared<QueueTimer>();
+		timer->multimedia = next++;
+		timer->callback = call[2];
+		timer->parameter = call[3];
+		timer->flags = call.u32(4);
+		timer->period = (timer->flags & 1) ? call.u32(0) : 0;
+		timer->deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(call.u32(0));
+		timer_state->timers.push_back(timer);
+		(*multimedia)[timer->multimedia] = timer;
+		call.ret(timer->multimedia);
+	});
+	registry.add("timeKillEvent", 1, [timer_state, multimedia, &threads, finished](ApiCall &call) {
+		const auto found = multimedia->find(call.u32(0));
+		if (found == multimedia->end()) {
+			call.ret(97);
+			return;
+		}
+		const auto timer = found->second;
+		multimedia->erase(found);
+		timer->active = false;
+		std::erase(timer_state->timers, timer);
+		// TIME_KILL_SYNCHRONOUS: the call returns once a running callback has.
+		if ((timer->flags & 0x100) && !finished(timer))
+			threads.block([timer, finished] { return finished(timer); }, std::nullopt);
+		call.ret(0);
 	});
 	registry.add("ChangeTimerQueueTimer", 4, [&objects](ApiCall &call) {
 		const auto timer = objects.object_as<QueueTimer>(call[1]);
