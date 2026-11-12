@@ -172,6 +172,16 @@ int raven_entry(void)
 		return 35;
 	CoTaskMemFree(text.pOleStr);
 	IShellFolder_Release(parent);
+	/* What a directory listing says of an item, as Mp3tag reads it of each file it shows. */
+	HRESULT (WINAPI *item_data)(IShellFolder *, PCUITEMID_CHILD, int, void *, int) =
+		(HRESULT (WINAPI *)(IShellFolder *, PCUITEMID_CHILD, int, void *, int))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHGetDataFromIDListW");
+	WIN32_FIND_DATAW data;
+	if (!item_data || item_data(folder, (PCUITEMID_CHILD)child, SHGDFIL_FINDDATA, &data, sizeof data) != S_OK ||
+		lstrcmpiW(data.cFileName, name) || data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		return 36;
+	if (item_data(folder, (PCUITEMID_CHILD)child, SHGDFIL_FINDDATA, &data, sizeof data - 1) != E_INVALIDARG)
+		return 37;
 
 	ILFree((PIDLIST_RELATIVE)first);
 	ILFree(clone);

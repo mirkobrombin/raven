@@ -409,6 +409,27 @@ HRESULT WINAPI SHBindToParent(PCIDLIST_ABSOLUTE list, REFIID iid, void **out, PC
 	return result;
 }
 
+/* What a directory listing says of an item of a folder; the listing is the one form this knows. */
+HRESULT WINAPI SHGetDataFromIDListW(IShellFolder *folder, PCUITEMID_CHILD item, int format, void *out, int size)
+{
+	STRRET name;
+	HANDLE search;
+	HRESULT result;
+	if (!folder || !item || !out || format != SHGDFIL_FINDDATA || size < (int)sizeof(WIN32_FIND_DATAW))
+		return E_INVALIDARG;
+	result = folder->lpVtbl->GetDisplayNameOf(folder, item, SHGDN_FORPARSING, &name);
+	if (FAILED(result))
+		return result;
+	if (name.uType != STRRET_WSTR)
+		return E_FAIL;
+	search = FindFirstFileW(name.pOleStr, (WIN32_FIND_DATAW *)out);
+	result = search == INVALID_HANDLE_VALUE ? HRESULT_FROM_WIN32(GetLastError()) : S_OK;
+	if (search != INVALID_HANDLE_VALUE)
+		FindClose(search);
+	CoTaskMemFree(name.pOleStr);
+	return result;
+}
+
 static HRESULT WINAPI folder_parse(IShellFolder *face, HWND window, IBindCtx *context, LPWSTR name, ULONG *eaten, PIDLIST_RELATIVE *out, ULONG *attributes)
 {
 	shell_folder *self = (shell_folder *)face;
