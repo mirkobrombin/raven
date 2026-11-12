@@ -187,10 +187,16 @@ void NativeThreads::thread_main(GuestThread &thread)
 		if (result.stop != NativeStop::returned)
 			throw result;
 		code = uint32_t(result.value);
-		if (notifier)
-			notifier(3);
+		detach_current();
 	} catch (const ThreadExit &exit) {
 		code = exit.code;
+		if (exit.detach) {
+			try {
+				detach_current();
+			} catch (const ThreadExit &) {
+				// A library that ends the thread again while it is told the thread ends: the thread is ending already.
+			}
+		}
 	} catch (...) {
 		if (!pending)
 			pending = std::current_exception();
@@ -604,13 +610,24 @@ bool NativeThreads::hand_over()
 
 void NativeThreads::exit_current(uint32_t code)
 {
-	throw ThreadExit{code};
+	throw ThreadExit{code, true};
+}
+
+// A thread that ends by returning or by ExitThread runs the destructors of its fiber-local values, then tells the libraries, as Windows
+// does: the .NET runtime learns that a thread is gone from its fiber-local destructor and stops tracking it there.
+void NativeThreads::detach_current()
+{
+	if (exit_hook)
+		exit_hook();
+	if (notifier)
+		notifier(3);
 }
 
 void NativeThreads::terminate(const std::shared_ptr<GuestThread> &thread, uint32_t code)
 {
+	// A thread ended from outside, even by itself, runs no destructors and tells no library.
 	if (thread.get() == running)
-		exit_current(code);
+		throw ThreadExit{code};
 	finish(*thread, code);
 }
 

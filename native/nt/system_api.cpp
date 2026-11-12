@@ -1975,6 +1975,36 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	};
 	bind("Tls", tls, false);
 	bind("Fls", fls, true);
+	// A thread that ends hands each fiber-local value it holds to the destructor its index was allocated with, the value cleared first so
+	// that the destructor finds it gone, as Windows runs them when a thread exits.
+	context.threads.set_exit_hook([&environment, &context, fls]() {
+		const auto thread = environment.thread_id();
+		for (size_t index = 0; index < fls->used.size(); ++index) {
+			const auto found = fls->values.find(thread);
+			if (found == fls->values.end())
+				break;
+			if (index >= found->second.size() || !fls->used[index] || !fls->callbacks[index] || !found->second[index])
+				continue;
+			const uint64_t value = found->second[index];
+			found->second[index] = 0;
+			// The thread block's copy too, which FlsGetValue reads in the guest.
+			if (index < 4080) {
+				const auto block = environment.teb();
+				uint64_t array = 0;
+				const auto bytes = context.process.read_memory(block + 0x17c8, 8);
+				std::memcpy(&array, bytes.data(), 8);
+				if (array) {
+					const uint64_t zero = 0;
+					context.process.write_memory(array + index * 8, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(&zero), 8));
+				}
+			}
+			const uint64_t arguments[] = {value};
+			const auto result = context.call(fls->callbacks[index], arguments);
+			if (result.stop != NativeStop::returned)
+				throw result;
+		}
+		fls->values.erase(thread);
+	});
 	(void)process;
 }
 
