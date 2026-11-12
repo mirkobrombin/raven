@@ -4560,6 +4560,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_media_x${width} COMMAND raven --run-process --execution=native ${media_client})
                     set_tests_properties(native_media_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
+                # What mmdevapi.dll answers to calls out of order and arguments out of range. COM finds its class through raven-shell.dll,
+                # which comes with the controls, and a 32-bit program has no wave output for a stream to play through yet.
+                if(RAVEN_CONTROLS_COMPONENT_DIR)
+                    set(mmdevapi_client ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi-client64.exe)
+                    add_custom_command(OUTPUT ${mmdevapi_client}
+                        COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,raven_entry,--no-insert-timestamp
+                            -o ${mmdevapi_client} ${LOADER_SOURCES}/mmdevapi_client.c -lole32 -luuid -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/mmdevapi_client.c VERBATIM)
+                    add_custom_target(mmdevapi_fixture64 ALL DEPENDS ${mmdevapi_client} media_component)
+                    add_test(NAME native_mmdevapi_x64 COMMAND raven --run-process --execution=native ${mmdevapi_client})
+                    set_tests_properties(native_mmdevapi_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endif()
                 # winscard.dll, the smart card interface, for each width: with no card service, every context is refused.
                 set(winscard_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winscard)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/winscard.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll
