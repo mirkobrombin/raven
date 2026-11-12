@@ -812,6 +812,10 @@ struct WaylandPresentation::State {
 			xdg_positioner_set_anchor_rect(positioner,x,y,1,1);
 			xdg_positioner_set_anchor(positioner,XDG_POSITIONER_ANCHOR_TOP_LEFT);
 			xdg_positioner_set_gravity(positioner,XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+			// A menu that would leave the screen opens on the other side of the point, as Windows opens one near the bottom upwards; with
+			// no room on either side it slides along the edge.
+			xdg_positioner_set_constraint_adjustment(positioner,XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X|XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y|
+				XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X|XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
 			window->popup=xdg_surface_get_popup(window->shell,owner->second->shell,positioner);
 			xdg_positioner_destroy(positioner);
 			static const xdg_surface_listener surface_listener{[](void *data,xdg_surface *surface,uint32_t serial) {

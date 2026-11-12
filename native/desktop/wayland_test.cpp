@@ -21,10 +21,13 @@ static void check(bool value,const char *message)
 // popup otherwise; it gives a grabbing popup the keyboard in the same burst of events as the popup's first configure, and gives it back to
 // the popup's parent when the popup goes. It accepts and ignores every other request.
 struct Compositor {
-	struct Shell { wl_resource *shell=nullptr,*role=nullptr,*parent=nullptr; bool popup=false,grab=false,denied=false,configured=false; };
+	struct Shell { wl_resource *shell=nullptr,*role=nullptr,*parent=nullptr; bool popup=false,grab=false,denied=false,configured=false; uint32_t adjustment=0; };
 	wl_display *display=wl_display_create();
 	wl_resource *keyboard=nullptr,*focused=nullptr;
 	std::map<wl_resource *,Shell> surfaces;
+	// How each positioner lets the compositor move a popup that would not fit, and what the newest popup was given.
+	std::map<wl_resource *,uint32_t> adjustments;
+	std::atomic<uint32_t> popup_adjustment{0};
 	uint32_t serial=0,pressed=0;
 	// Set by the test: a key is pressed and released; the next frame committed to a window is answered with a request to close it.
 	std::atomic<bool> type{false},stop{false},close_on_commit{false};
@@ -85,6 +88,9 @@ static int dispatch(const void *data,void *target,uint32_t,const wl_message *mes
 		shell.role=made;
 		shell.popup=request=="xdg_surface.get_popup";
 		if (shell.popup && object(1)) shell.parent=surface_of(object(1));
+		if (shell.popup) compositor.popup_adjustment=shell.adjustment=compositor.adjustments[object(2)];
+	} else if (request=="xdg_positioner.set_constraint_adjustment") {
+		compositor.adjustments[resource]=arguments[0].u;
 	} else if (request=="xdg_popup.grab") {
 		auto &shell=compositor.surfaces[surface_of(resource)];
 		shell.grab=true;
@@ -145,6 +151,11 @@ static void exercise(raven::DesktopPresentation &desktop,Compositor &compositor)
 	// A menu opened from the window takes the keyboard as it appears.
 	desktop.popup(2,1,4,4,16,16,menu);
 	check(focused(desktop)==2,"the keyboard did not follow the grabbing popup");
+	// A menu that would leave the screen opens on the other side of where it was asked for, as Windows opens one near the bottom upwards,
+	// and slides along an edge when neither side has room.
+	const uint32_t moves=XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X|XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y|
+		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X|XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y;
+	check((compositor.popup_adjustment&moves)==moves,"a menu cannot be moved back onto the screen");
 	desktop.remove(2);
 	check(focused(desktop)==1,"the keyboard did not return to the window");
 	// The next menu of the menu bar, opened as the pointer moves over it, quotes the same press.
