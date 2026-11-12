@@ -27,6 +27,26 @@ static void CALLBACK grouped(PTP_CALLBACK_INSTANCE instance, PVOID context, PTP_
 	InterlockedIncrement(&grouped_count);
 }
 
+static volatile LONG io_count;
+static PVOID io_context, io_overlapped;
+static ULONG io_result;
+static ULONG_PTR io_bytes;
+static PTP_IO io_seen;
+static PTP_CALLBACK_INSTANCE io_instance;
+static HANDLE io_done;
+
+static void CALLBACK finished(PTP_CALLBACK_INSTANCE instance, PVOID context, PVOID overlapped, ULONG result, ULONG_PTR bytes, PTP_IO io)
+{
+	io_instance = instance;
+	io_context = context;
+	io_overlapped = overlapped;
+	io_result = result;
+	io_bytes = bytes;
+	io_seen = io;
+	InterlockedIncrement(&io_count);
+	SetEvent(io_done);
+}
+
 static FILETIME from_now(LONGLONG milliseconds)
 {
 	ULARGE_INTEGER due;
@@ -97,5 +117,27 @@ int raven_entry(void)
 	Sleep(60);
 	if (!closed || grouped_count != closed) return 16;
 	CloseThreadpoolCleanupGroup(group);
+
+	/* An overlapped file bound to the pool: each operation started after StartThreadpoolIo ends in the callback with the context, the
+	   operation, its result and the bytes moved, and the I/O object itself, as .NET's file streams write through it. */
+	io_done = CreateEventW(NULL, FALSE, FALSE, NULL);
+	WCHAR folder[MAX_PATH], path[MAX_PATH];
+	if (!io_done || !GetTempPathW(MAX_PATH, folder) || !GetTempFileNameW(folder, L"tpi", 0, path)) return 17;
+	HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_FLAG_OVERLAPPED | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+	if (file == INVALID_HANDLE_VALUE) return 18;
+	PTP_IO io = CreateThreadpoolIo(file, finished, (PVOID)0x6160, NULL);
+	if (!io) return 19;
+	OVERLAPPED operation = {0};
+	StartThreadpoolIo(io);
+	if (!WriteFile(file, "hello", 5, NULL, &operation) && GetLastError() != ERROR_IO_PENDING) {
+		CancelThreadpoolIo(io);
+		return 20;
+	}
+	if (WaitForSingleObject(io_done, 5000) != WAIT_OBJECT_0) return 21;
+	WaitForThreadpoolIoCallbacks(io, FALSE);
+	if (io_count != 1 || io_context != (PVOID)0x6160 || io_overlapped != &operation || io_result != 0 || io_bytes != 5 || io_seen != io ||
+		!io_instance) return 22;
+	CloseThreadpoolIo(io);
+	CloseHandle(file);
 	return 0;
 }

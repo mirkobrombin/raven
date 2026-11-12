@@ -529,3 +529,32 @@ DWORD WINAPI RavenIoCompletionWorker(struct io_completion_binding *binding)
 		((LPOVERLAPPED_COMPLETION_ROUTINE)key)(done ? ERROR_SUCCESS : LAST_ERROR, bytes, operation);
 	}
 }
+
+/* ---- the I/O completion threads of CreateThreadpoolIo ----
+ * Each file bound to the pool posts to one completion port with its I/O object as the key; threads here hand each finished operation to
+ * the object's callback with its context, the result and the bytes moved, and count the callbacks running so that a wait for them knows
+ * when they are over. The runtime lays the object out and starts the threads. */
+struct thread_pool_io {
+	void (CALLBACK *callback)(void *instance, void *context, void *operation, ULONG result, ULONG_PTR bytes, void *io);
+	void *context;
+	volatile LONG running;
+};
+
+DWORD WINAPI RavenThreadpoolIoWorker(struct io_completion_binding *binding)
+{
+	for (;;) {
+		DWORD bytes = 0;
+		ULONG_PTR key = 0;
+		LPOVERLAPPED operation = NULL;
+		/* A callback instance is opaque to the callback, which only hands it back to the pool's own functions. */
+		ULONG_PTR instance[8] = {0};
+		struct thread_pool_io *io;
+		const BOOL done = binding->dequeue(binding->port, &bytes, &key, &operation, INFINITE);
+		if (!operation || !key)
+			continue;
+		io = (struct thread_pool_io *)key;
+		InterlockedIncrement(&io->running);
+		io->callback(instance, io->context, operation, done ? ERROR_SUCCESS : LAST_ERROR, bytes, io);
+		InterlockedDecrement(&io->running);
+	}
+}

@@ -627,6 +627,72 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		associate->second(bound);
 		call.ret(bound.result ? 1 : 0);
 	});
+	// CreateThreadpoolIo binds a file to the pool in the same way, to a completion port of its own whose key is the I/O object: the callback,
+	// its context and the count of its callbacks running, which the guest RTL's threads keep.
+	auto pool_binding = std::make_shared<IoBinding>();
+	registry.add("CreateThreadpoolIo", 4, [&registry, &context, pool_binding](ApiCall &call) {
+		const auto associate = registry.find("CreateIoCompletionPort");
+		const auto create = registry.find("CreateThread");
+		if (!call[1] || !associate || !create) {
+			call.fail(87, 0);
+			return;
+		}
+		const std::lock_guard guard(pool_binding->lock);
+		if (!pool_binding->port) {
+			uint64_t worker, dequeue;
+			try {
+				worker = context.modules.resolve({"raven-rtl.dll", "RavenThreadpoolIoWorker", 0, false, 0});
+				dequeue = context.modules.resolve({"kernel32.dll", "GetQueuedCompletionStatus", 0, false, 0});
+			} catch (const std::exception &) {
+				call.fail(50, 0);
+				return;
+			}
+			ApiCall made(call.process, call.environment, {UINT64_MAX, 0, 0, 0});
+			associate->second(made);
+			if (!made.result) {
+				call.ret(0);
+				return;
+			}
+			const auto binding = context.allocator.allocate(16);
+			call.store_pointer(binding, dequeue);
+			call.store_pointer(binding + 8, made.result);
+			for (int index = 0; index < 2; ++index) {
+				ApiCall thread(call.process, call.environment, {0, 0, worker, binding, 0, 0});
+				create->second(thread);
+				if (thread.result)
+					context.objects.close(thread.result);
+			}
+			pool_binding->port = made.result;
+		}
+		const auto io = context.allocator.allocate(24);
+		call.store_pointer(io, call[1]);
+		call.store_pointer(io + 8, call[2]);
+		call.store<uint32_t>(io + 16, 0);
+		ApiCall bound(call.process, call.environment, {call[0], pool_binding->port, io, 0});
+		associate->second(bound);
+		if (!bound.result) {
+			call.ret(0);
+			return;
+		}
+		call.ret(io);
+	});
+	// Every finished operation is handed to the callback, so there is nothing to note before one starts or after one fails at once.
+	registry.add("StartThreadpoolIo", 1, [](ApiCall &) {});
+	registry.add("CancelThreadpoolIo", 1, [](ApiCall &) {});
+	// The callbacks already running finish; the object stays where it is, as a packet still queued for it may yet be handed out.
+	registry.add("WaitForThreadpoolIoCallbacks", 2, [&threads](ApiCall &call) {
+		if (!call[0])
+			return;
+		auto &process = call.process;
+		const uint64_t running = call[0] + 16;
+		threads.block([&process, running] {
+			uint32_t count = 0;
+			const auto bytes = process.read_memory(running, 4);
+			std::memcpy(&count, bytes.data(), 4);
+			return count == 0;
+		}, std::nullopt);
+	});
+	registry.add("CloseThreadpoolIo", 1, [](ApiCall &) {});
 	registry.add("GetExitCodeThread", 2, [thread_from, &objects](ApiCall &call) {
 		if (const auto remote = objects.object_as<RemoteThreadObject>(call[0])) {
 			call.store<uint32_t>(call[1], remote->code().value_or(259));
