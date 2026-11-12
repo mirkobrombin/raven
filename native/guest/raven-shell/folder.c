@@ -376,6 +376,39 @@ HRESULT WINAPI SHParseDisplayName(PCWSTR name, IBindCtx *context, PIDLIST_ABSOLU
 	return result;
 }
 
+/* The folder that holds the last item of a list, and that item: the desktop for a list of one. */
+HRESULT WINAPI SHBindToParent(PCIDLIST_ABSOLUTE list, REFIID iid, void **out, PCUITEMID_CHILD *last)
+{
+	IShellFolder *desktop = NULL;
+	PIDLIST_RELATIVE parent;
+	PUITEMID_CHILD final;
+	HRESULT result;
+	if (last)
+		*last = NULL;
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	if (!list)
+		return E_INVALIDARG;
+	result = SHGetDesktopFolder(&desktop);
+	if (FAILED(result))
+		return result;
+	final = ILFindLastID((PCUIDLIST_RELATIVE)list);
+	if ((const BYTE *)final == (const BYTE *)list)
+		result = desktop->lpVtbl->QueryInterface(desktop, iid, out);
+	else if (!(parent = ILClone((PCUIDLIST_RELATIVE)list)))
+		result = E_OUTOFMEMORY;
+	else {
+		((ITEMIDLIST *)((BYTE *)parent + ((const BYTE *)final - (const BYTE *)list)))->mkid.cb = 0;
+		result = desktop->lpVtbl->BindToObject(desktop, parent, NULL, iid, out);
+		ILFree(parent);
+	}
+	desktop->lpVtbl->Release(desktop);
+	if (SUCCEEDED(result) && last)
+		*last = final;
+	return result;
+}
+
 static HRESULT WINAPI folder_parse(IShellFolder *face, HWND window, IBindCtx *context, LPWSTR name, ULONG *eaten, PIDLIST_RELATIVE *out, ULONG *attributes)
 {
 	shell_folder *self = (shell_folder *)face;

@@ -164,7 +164,7 @@ def main():
                    "SHCreateStreamOnFileA", "SHCreateStreamOnFileW", "SHCreateStreamOnFileEx", "SHCreateMemStream", "PropVariantCopy", "CoGetContextToken", "CoGetObjectContext", "CoGetDefaultContext", "ExtractIconExW", "ExtractIconW", "UiaGetReservedNotSupportedValue", "UiaGetReservedMixedAttributeValue", "SHGetMalloc",
                    "OpenRegStream", "SHOpenRegStreamW", "SHOpenRegStreamA", "SHOpenRegStream2W", "SHOpenRegStream2A", "InitNetworkAddressControl",
                    "RoGetActivationFactory", "RoActivateInstance", "CoCreateFreeThreadedMarshaler",
-                   "SHGetDesktopFolder", "SHCreateItemFromIDList", "SHCreateShellItem", "CreateFileMoniker", "SHLoadIndirectString", "SHGetPropertyStoreFromParsingName", "ILGetSize", "ILGetNext", "ILFindLastID", "ILClone", "ILCloneFirst", "ILCombine", "ILFree", "ILCreateFromPathW", "SHILCreateFromPath", "SHParseDisplayName", "ILIsEqual",
+                   "SHGetDesktopFolder", "SHCreateItemFromIDList", "SHCreateShellItem", "CreateFileMoniker", "SHLoadIndirectString", "SHGetPropertyStoreFromParsingName", "ILGetSize", "ILGetNext", "ILFindLastID", "ILClone", "ILCloneFirst", "ILCombine", "ILFree", "ILCreateFromPathW", "SHILCreateFromPath", "SHParseDisplayName", "SHBindToParent", "ILIsEqual",
                    "CreateErrorInfo", "SetErrorInfo", "GetErrorInfo", "CoWaitForMultipleHandles", "OleGetClipboard",
                    "CoRegisterClassObject", "CoRevokeClassObject", "CoResumeClassObjects", "CoSuspendClassObjects", "CoAddRefServerProcess", "CoReleaseServerProcess",
                    "SHGetFileInfoW", "SHGetFileInfoA")

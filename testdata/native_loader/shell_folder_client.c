@@ -160,6 +160,18 @@ int raven_entry(void)
 	created = (PIDLIST_ABSOLUTE)1;
 	if (SUCCEEDED(parse_name(missing, NULL, &created, 0, NULL)) || created)
 		return 33;
+	/* The folder that holds the last item of a list, and that item, which names the file in it. */
+	HRESULT (WINAPI *bind_parent)(PCIDLIST_ABSOLUTE, REFIID, void **, PCUITEMID_CHILD *) =
+		(HRESULT (WINAPI *)(PCIDLIST_ABSOLUTE, REFIID, void **, PCUITEMID_CHILD *))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHBindToParent");
+	IShellFolder *parent = NULL;
+	PCUITEMID_CHILD named = NULL;
+	if (!bind_parent || bind_parent(joined, &IID_IShellFolder, (void **)&parent, &named) != S_OK || !parent || named != last)
+		return 34;
+	if (IShellFolder_GetDisplayNameOf(parent, named, SHGDN_FORPARSING, &text) != S_OK || text.uType != STRRET_WSTR || lstrcmpiW(text.pOleStr, file))
+		return 35;
+	CoTaskMemFree(text.pOleStr);
+	IShellFolder_Release(parent);
 
 	ILFree((PIDLIST_RELATIVE)first);
 	ILFree(clone);
