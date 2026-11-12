@@ -307,7 +307,25 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 		return result;
 	}
 	uint64_t limit = in_prolog ? prolog_offset : UINT64_MAX;
+	// Registers saved with a move are found from the frame base, as Windows finds them: the frame register less its offset once SET_FPREG
+	// has run (a chained part always runs after it), the stack pointer before that. The stack pointer itself may have moved since, as a
+	// function that allocates on the stack as it runs moves it.
 	uint64_t setfp_offset = UINT64_MAX;
+	{
+		const auto header = load(function.unwind, 4);
+		const auto codes = load(function.unwind + 4, size_t(header[2]) * 2);
+		for (size_t slot = 0; slot < header[2];) {
+			const uint8_t op = codes[slot * 2 + 1] & 15, op_info = codes[slot * 2 + 1] >> 4;
+			if (op == 3) {
+				setfp_offset = codes[slot * 2];
+				break;
+			}
+			slot += op == 1 ? (op_info ? 3 : 2) : op == 4 || op == 6 || op == 8 ? 2 : op == 5 || op == 7 || op == 9 ? 3 : 1;
+		}
+	}
+	const bool chained_first = (first[0] >> 3) & 4;
+	const uint64_t frame_base = frame_register && (chained_first || !in_prolog || prolog_offset >= setfp_offset) ?
+		context_register(context, frame_register) - frame_offset : context_rsp(context);
 	uint64_t info_rva = function.unwind;
 	for (int depth = 0; depth < 32; ++depth) {
 		const auto header = load(info_rva, 4);
@@ -348,13 +366,11 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 				if (applies) {
 					set_context_rsp(context, context_register(context, frame_reg) - frame_off);
 				}
-				if (depth == 0)
-					setfp_offset = offset;
 				break;
 			case 4:
 				used = 2;
 				if (applies) {
-					const uint64_t slot = context_rsp(context) + uint64_t(word(1)) * 8;
+					const uint64_t slot = frame_base + uint64_t(word(1)) * 8;
 					set_context_register(context, op_info, read64(process, slot));
 					if (pointers)
 						(*pointers)[16 + op_info] = slot;
@@ -363,7 +379,7 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 			case 5:
 				used = 3;
 				if (applies) {
-					const uint64_t slot = context_rsp(context) + dword(1);
+					const uint64_t slot = frame_base + dword(1);
 					set_context_register(context, op_info, read64(process, slot));
 					if (pointers)
 						(*pointers)[16 + op_info] = slot;
@@ -378,7 +394,7 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 			case 8:
 				used = 2;
 				if (applies) {
-					const uint64_t slot = context_rsp(context) + uint64_t(word(1)) * 16;
+					const uint64_t slot = frame_base + uint64_t(word(1)) * 16;
 					const auto bytes = process.read_memory(slot, 16);
 					std::memcpy(context.data() + xmm_base + op_info * 16, bytes.data(), 16);
 					if (pointers)
@@ -388,7 +404,7 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 			case 9:
 				used = 3;
 				if (applies) {
-					const uint64_t slot = context_rsp(context) + dword(1);
+					const uint64_t slot = frame_base + dword(1);
 					const auto bytes = process.read_memory(slot, 16);
 					std::memcpy(context.data() + xmm_base + op_info * 16, bytes.data(), 16);
 					if (pointers)
@@ -431,9 +447,7 @@ NativeUnwinder::Result NativeUnwinder::unwind(uint32_t handler_type, uint64_t pc
 	}
 	// The establisher is the frame base the function maintains: its frame register once SET_FPREG ran, the stack pointer before that.
 	// A chained part runs after the prolog of the part it chains to, so its frame register is always set.
-	const bool chained = (first[0] >> 3) & 4;
-	const bool established = frame_register && (chained || prolog_offset >= setfp_offset);
-	result.establisher = established ? context_register(original, frame_register) - frame_offset : context_rsp(original);
+	result.establisher = frame_base;
 	unwind_leaf(context);
 	return result;
 }
