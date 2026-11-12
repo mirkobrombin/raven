@@ -18,7 +18,9 @@ static D2D1_PROPERTY_TYPE property_type(void *properties, UINT32 index)
 	return ((D2D1_PROPERTY_TYPE (STDMETHODCALLTYPE *)(void *, UINT32))(*(void ***)properties)[6])(properties, index);
 }
 
-// The object a registered effect's factory makes; nothing here asks more of it than to be an object.
+// The object a registered effect's factory makes, an ID2D1EffectImpl: initialized with a context and a graph, it loads a shader and passes
+// its input straight through, as an effect does that has nothing to change; it counts how often it is asked to prepare.
+static int initialized, prepared;
 static HRESULT STDMETHODCALLTYPE impl_QueryInterface(IUnknown *self, REFIID iid, void **out)
 {
 	*out = self;
@@ -26,11 +28,40 @@ static HRESULT STDMETHODCALLTYPE impl_QueryInterface(IUnknown *self, REFIID iid,
 }
 static ULONG STDMETHODCALLTYPE impl_AddRef(IUnknown *self) { return 1; }
 static ULONG STDMETHODCALLTYPE impl_Release(IUnknown *self) { return 1; }
-static IUnknownVtbl impl_table = {impl_QueryInterface, impl_AddRef, impl_Release};
-static IUnknown impl = {&impl_table};
+static HRESULT STDMETHODCALLTYPE impl_Initialize(IUnknown *self, void *context, void *graph)
+{
+	static const GUID shader = {0x12345678, 0x1234, 0x1234, {1, 2, 3, 4, 5, 6, 7, 8}};
+	static const BYTE code[] = {'D', 'X', 'B', 'C'};
+	typedef HRESULT (STDMETHODCALLTYPE *load_shader)(void *, REFGUID, const BYTE *, UINT32);
+	typedef BOOL (STDMETHODCALLTYPE *shader_loaded)(void *, REFGUID);
+	typedef UINT32 (STDMETHODCALLTYPE *input_count)(void *);
+	typedef HRESULT (STDMETHODCALLTYPE *passthrough)(void *, UINT32);
+	if (FAILED(((load_shader)(*(void ***)context)[11])(context, &shader, code, sizeof code)) || !((shader_loaded)(*(void ***)context)[14])(context, &shader) ||
+		((input_count)(*(void ***)graph)[3])(graph) != 1)
+		return E_FAIL;
+	/* The newest context makes color contexts from a DXGI color space, as paint.net's color output effect asks for one. */
+	static const GUID context2 = {0x577ad2a0, 0x9fc7, 0x4dda, {0x8b, 0x18, 0xda, 0xb8, 0x10, 0x14, 0x00, 0x52}};
+	typedef HRESULT (STDMETHODCALLTYPE *from_dxgi)(void *, DXGI_COLOR_SPACE_TYPE, IUnknown **);
+	IUnknown *newest = NULL, *color = NULL;
+	if (FAILED(IUnknown_QueryInterface((IUnknown *)context, &context2, (void **)&newest)) ||
+		FAILED(((from_dxgi)(*(void ***)newest)[25])(newest, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, &color)) || !color)
+		return E_FAIL;
+	IUnknown_Release(color);
+	IUnknown_Release(newest);
+	++initialized;
+	return ((passthrough)(*(void ***)graph)[11])(graph, 0);
+}
+static HRESULT STDMETHODCALLTYPE impl_PrepareForRender(IUnknown *self, UINT32 change)
+{
+	++prepared;
+	return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE impl_SetGraph(IUnknown *self, void *graph) { return E_NOTIMPL; }
+static void *impl_table[] = {impl_QueryInterface, impl_AddRef, impl_Release, impl_Initialize, impl_PrepareForRender, impl_SetGraph};
+static struct { void **table; } impl = {impl_table};
 static HRESULT CALLBACK make_impl(IUnknown **out)
 {
-	*out = &impl;
+	*out = (IUnknown *)&impl;
 	return S_OK;
 }
 
@@ -136,10 +167,74 @@ int raven_entry(void)
 		FAILED(ID2D1Factory1_GetEffectProperties(factory1, &unknown, &described)) || property_count(described) != 2 ||
 		property_type(described, 0) != D2D1_PROPERTY_TYPE_ENUM || property_type(described, 1) != D2D1_PROPERTY_TYPE_COLOR_CONTEXT)
 		return 19;
+	/* Past its own properties each effect has those that describe it: the registered one the display name its XML gives and its class,
+	   a system effect the category it is listed under, which paint.net reads to group its own effects with the system's. */
+	typedef UINT32 (STDMETHODCALLTYPE *value_size)(void *, UINT32);
+	typedef HRESULT (STDMETHODCALLTYPE *get_value)(void *, UINT32, D2D1_PROPERTY_TYPE, BYTE *, UINT32);
+	WCHAR text[64] = {0};
+	CLSID named = {0};
+	if (property_type(described, D2D1_PROPERTY_DISPLAYNAME) != D2D1_PROPERTY_TYPE_STRING ||
+		((value_size)(*(void ***)described)[12])(described, D2D1_PROPERTY_DISPLAYNAME) != sizeof L"Test" ||
+		FAILED(((get_value)(*(void ***)described)[11])(described, D2D1_PROPERTY_DISPLAYNAME, D2D1_PROPERTY_TYPE_STRING, (BYTE *)text, sizeof text)) ||
+		lstrcmpW(text, L"Test") || FAILED(((get_value)(*(void ***)described)[11])(described, D2D1_PROPERTY_CLSID, D2D1_PROPERTY_TYPE_CLSID,
+		(BYTE *)&named, sizeof named)) || ((UINT64 *)&named)[0] != ((const UINT64 *)&unknown)[0] ||
+		((UINT64 *)&named)[1] != ((const UINT64 *)&unknown)[1])
+		return 25;
 	IUnknown_Release((IUnknown *)described);
+	text[0] = 0;
+	if (FAILED(ID2D1Factory1_GetEffectProperties(factory1, &CLSID_D2D1ColorMatrix, &described)) ||
+		((value_size)(*(void ***)described)[12])(described, D2D1_PROPERTY_CATEGORY) <= sizeof(WCHAR) ||
+		FAILED(((get_value)(*(void ***)described)[11])(described, D2D1_PROPERTY_CATEGORY, D2D1_PROPERTY_TYPE_STRING, (BYTE *)text, sizeof text)) || !text[0])
+		return 26;
+	IUnknown_Release((IUnknown *)described);
+	/* A system effect's properties have their types: color management converts from the color context set as its source, which it
+	   holds and gives back as another reference, as paint.net reads it back when it wraps the effect. The source context is its first
+	   property and the quality its sixth. */
+	typedef HRESULT (STDMETHODCALLTYPE *set_value)(void *, UINT32, D2D1_PROPERTY_TYPE, const BYTE *, UINT32);
+	IUnknown *kept = NULL;
+	if (FAILED(ID2D1DeviceContext_CreateEffect((ID2D1DeviceContext *)context6, &CLSID_D2D1ColorManagement, &effect)) ||
+		property_count(effect) != 6 || property_type(effect, 0) != D2D1_PROPERTY_TYPE_COLOR_CONTEXT ||
+		property_type(effect, 5) != D2D1_PROPERTY_TYPE_ENUM ||
+		FAILED(((get_value)(*(void ***)effect)[11])(effect, 0, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, (BYTE *)&kept, sizeof kept)) || kept)
+		return 27;
+	if (FAILED(create_context(context6, D2D1_COLOR_SPACE_SRGB, NULL, 0, &color)) ||
+		FAILED(((set_value)(*(void ***)effect)[9])(effect, 0, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, (const BYTE *)&color, sizeof color)) ||
+		FAILED(((get_value)(*(void ***)effect)[11])(effect, 0, D2D1_PROPERTY_TYPE_COLOR_CONTEXT, (BYTE *)&kept, sizeof kept)) ||
+		kept != (IUnknown *)color || IUnknown_Release(kept) != 2)
+		return 28;
+	IUnknown_Release((IUnknown *)effect);
+	if (IUnknown_Release((IUnknown *)color) != 0)
+		return 29;
 	if (FAILED(ID2D1DeviceContext_CreateEffect((ID2D1DeviceContext *)context6, &unknown, &effect)) ||
-		property_type(effect, 1) != D2D1_PROPERTY_TYPE_COLOR_CONTEXT)
+		property_type(effect, 1) != D2D1_PROPERTY_TYPE_COLOR_CONTEXT || initialized != 1)
 		return 20;
+	/* Drawn, it is first asked to prepare, and then its graph passes the red bitmap given as its input onto the target. */
+	static const UINT32 red[4] = {0xffff0000, 0xffff0000, 0xffff0000, 0xffff0000};
+	D2D1_BITMAP_PROPERTIES bitmap_properties = {{DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED}, 96, 96};
+	ID2D1Bitmap *source = NULL;
+	D2D1_SIZE_U size = {2, 2};
+	if (FAILED(ID2D1RenderTarget_CreateBitmap(target, size, red, 8, &bitmap_properties, &source)))
+		return 21;
+	typedef void (STDMETHODCALLTYPE *set_input)(void *, UINT32, ID2D1Image *, BOOL);
+	typedef void (STDMETHODCALLTYPE *get_output)(void *, ID2D1Image **);
+	ID2D1Image *output = NULL;
+	((set_input)(*(void ***)effect)[14])(effect, 0, (ID2D1Image *)source, TRUE);
+	((get_output)(*(void ***)effect)[18])(effect, &output);
+	ID2D1RenderTarget_BeginDraw(target);
+	D2D1_COLOR_F white = {1, 1, 1, 1};
+	ID2D1RenderTarget_Clear(target, &white);
+	D2D1_POINT_2F at = {4, 4};
+	ID2D1DeviceContext_DrawImage((ID2D1DeviceContext *)context6, output, &at, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	if (FAILED(ID2D1RenderTarget_EndDraw(target, NULL, NULL)))
+		return 22;
+	UINT32 drawn[16 * 16];
+	WICRect whole = {0, 0, 16, 16};
+	if (FAILED(IWICBitmap_CopyPixels(pixels, &whole, 64, sizeof drawn, (BYTE *)drawn)) || prepared < 1)
+		return 23;
+	if ((drawn[5 * 16 + 5] & 0xffffff) != 0xff0000 || (drawn[0] & 0xffffff) != 0xffffff)
+		return 24;
+	IUnknown_Release((IUnknown *)output);
+	IUnknown_Release((IUnknown *)source);
 	IUnknown_Release((IUnknown *)effect);
 	ID2D1Factory1_Release(factory1);
 	IUnknown_Release((IUnknown *)device6);

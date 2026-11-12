@@ -18,6 +18,7 @@
 #define NTDDI_VERSION NTDDI_WIN10_RS3
 #include <windows.h>
 #include <d2d1_3.h>
+#include <d2d1effectauthor.h>
 #include <d3d11.h>
 #include <dwrite_3.h>
 #include <wincodec.h>
@@ -2646,8 +2647,9 @@ static void STDMETHODCALLTYPE target_DrawBitmap1(void *iface, ID2D1Bitmap *bitma
 
 struct effect;
 static struct effect *effect_of_image(ID2D1Image *image);
+static ID2D1Image *effect_drawn_input(struct effect *effect);
 
-/* DrawImage of a bitmap at an offset; images that are not bitmaps (effects, command lists) draw nothing here. */
+/* DrawImage of a bitmap at an offset; an effect draws the input it passes through, and other images (command lists) draw nothing here. */
 static void STDMETHODCALLTYPE target_DrawImage(void *iface, ID2D1Image *image, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
 	D2D1_INTERPOLATION_MODE interpolation, D2D1_COMPOSITE_MODE mode)
 {
@@ -2656,8 +2658,13 @@ static void STDMETHODCALLTYPE target_DrawImage(void *iface, ID2D1Image *image, c
 	struct bitmap *b;
 	D2D1_RECT_F destination, source;
 	if (!image || FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
-		if (!effect_of_image(image))
+		struct effect *effect = effect_of_image(image);
+		ID2D1Image *input = effect ? effect_drawn_input(effect) : NULL;
+		if (!effect)
 			unimplemented("ID2D1DeviceContext", "DrawImage of an image that is not a bitmap");
+		/* An effect that passes an input through draws that input. */
+		if (input && input != image)
+			target_DrawImage(iface, input, offset, rect, interpolation, mode);
 		return;
 	}
 	b = (struct bitmap *)bitmap;
@@ -3863,8 +3870,12 @@ struct effect_property {
 struct registered_effect {
 	CLSID clsid;
 	PD2D1_EFFECT_FACTORY factory;
+	/* The <Input> elements its XML lists. */
+	UINT32 input_count;
 	struct effect_property properties[EFFECT_PROPERTIES];
 	UINT32 property_count;
+	/* The values its XML gives DisplayName, Author, Category and Description, in the order of their property indexes. */
+	WCHAR *descriptions[4];
 };
 
 static struct registered_effect registered_effects[REGISTERED_EFFECTS];
@@ -3967,6 +3978,8 @@ static void parse_effect_properties(struct registered_effect *effect, const WCHA
 	int depth = 0;
 	const WCHAR *at;
 	for (at = xml; *at; ++at) {
+		if (at[0] == '<' && wide_starts(at + 1, L"Input") && (at[6] == ' ' || at[6] == '/' || at[6] == '\t' || at[6] == '\r' || at[6] == '\n'))
+			++effect->input_count;
 		if (at[0] == '<' && at[1] == '/' && wide_starts(at + 2, L"Property")) {
 			--depth;
 			continue;
@@ -3988,6 +4001,12 @@ static void parse_effect_properties(struct registered_effect *effect, const WCHA
 				int skip = 0;
 				for (index = 0; copy && index < sizeof(described) / sizeof(described[0]); ++index)
 					skip |= wide_equal(copy, described[index]);
+				for (index = 0; copy && index < sizeof(described) / sizeof(described[0]); ++index)
+					if (wide_equal(copy, described[index]) && !effect->descriptions[index]) {
+						size_t value_length = 0;
+						const WCHAR *value = attribute_value(at + 1, end, L"value", &value_length);
+						effect->descriptions[index] = wide_copy(value ? value : L"", value ? value_length : 0);
+					}
 				if (copy && !skip && effect->property_count < EFFECT_PROPERTIES) {
 					effect->properties[effect->property_count].type = type ? property_type_named(type, type_length) : D2D1_PROPERTY_TYPE_UNKNOWN;
 					effect->properties[effect->property_count++].name = copy;
@@ -4062,6 +4081,13 @@ struct effect {
 	/* For a program's own effect: the object its factory made, which the property bindings act on, and the registration. */
 	IUnknown *impl;
 	const struct registered_effect *registered;
+	/* What the program's object set up when it was initialized: its transform graph, and the context it was given. */
+	struct effect_graph *graph;
+	struct effect_context *context;
+	/* Whether its object has been asked to prepare since a property changed. */
+	BOOL prepared;
+	/* The class it was made as, which its D2D1_PROPERTY_CLSID gives. */
+	CLSID clsid;
 };
 
 static const GUID *const effect_iids[] = {&IID_ID2D1Properties, &IID_ID2D1Effect};
@@ -4073,6 +4099,9 @@ static void effect_image_destroy(struct object *base)
 	(void)base;
 }
 
+static void effect_parts_release(struct effect *self);
+static BOOL effect_holds_reference(const struct effect *self, UINT32 index);
+
 static void effect_destroy(struct object *base)
 {
 	struct effect *self = (struct effect *)base;
@@ -4080,14 +4109,19 @@ static void effect_destroy(struct object *base)
 	for (index = 0; index < EFFECT_INPUTS; ++index)
 		if (self->inputs[index])
 			IUnknown_Release((IUnknown *)self->inputs[index]);
-	for (index = 0; index < self->value_count; ++index)
+	for (index = 0; index < self->value_count; ++index) {
+		if (effect_holds_reference(self, self->values[index].index) && self->values[index].size >= sizeof(IUnknown *) &&
+			*(IUnknown **)self->values[index].data)
+			IUnknown_Release(*(IUnknown **)self->values[index].data);
 		FREE(self->values[index].data);
+	}
 	if (self->output) {
 		self->output->effect = NULL;
 		object_Release(self->output);
 	}
 	if (self->impl)
 		IUnknown_Release(self->impl);
+	effect_parts_release(self);
 }
 
 static struct effect_value *effect_value_at(struct effect *self, UINT32 index)
@@ -4105,10 +4139,48 @@ static const struct effect_property *effect_property_at(const struct effect *sel
 	return self->registered && index < self->registered->property_count ? &self->registered->properties[index] : NULL;
 }
 
+static const WCHAR *system_description(REFCLSID clsid, UINT32 which);
+static const D2D1_PROPERTY_TYPE *system_types(REFCLSID clsid, UINT32 *count);
+
+/* The type of one of an effect's own properties: a program's own effect has those its XML gives, a system effect those its table gives. */
+static D2D1_PROPERTY_TYPE effect_own_type(const struct effect *self, UINT32 index)
+{
+	const D2D1_PROPERTY_TYPE *types;
+	UINT32 count;
+	if (self->registered)
+		return index < self->registered->property_count ? self->registered->properties[index].type : D2D1_PROPERTY_TYPE_UNKNOWN;
+	types = system_types(&self->clsid, &count);
+	return index < count ? types[index] : D2D1_PROPERTY_TYPE_UNKNOWN;
+}
+
+/* A property whose value is an interface holds a reference to it, and gives out another each time it is read. */
+static BOOL effect_holds_reference(const struct effect *self, UINT32 index)
+{
+	const D2D1_PROPERTY_TYPE type = effect_own_type(self, index);
+	return type == D2D1_PROPERTY_TYPE_COLOR_CONTEXT || type == D2D1_PROPERTY_TYPE_IUNKNOWN;
+}
+
+/* The strings past an effect's own properties that describe it, D2D1_PROPERTY_DISPLAYNAME to D2D1_PROPERTY_DESCRIPTION: a program's own
+   effect has the values its XML gives, a system effect those of the table of system effects. Any other index has none. */
+static const WCHAR *effect_description(const struct effect *self, UINT32 index)
+{
+	const WCHAR *text;
+	if (index < D2D1_PROPERTY_DISPLAYNAME || index > D2D1_PROPERTY_DESCRIPTION)
+		return NULL;
+	if (!self->registered)
+		return system_description(&self->clsid, index - D2D1_PROPERTY_DISPLAYNAME);
+	text = self->registered->descriptions[index - D2D1_PROPERTY_DISPLAYNAME];
+	return text ? text : L"";
+}
+
 static UINT32 STDMETHODCALLTYPE effect_GetPropertyCount(void *iface)
 {
 	const struct effect *self = iface;
-	return self->registered ? self->registered->property_count : 0;
+	UINT32 count = 0;
+	if (self->registered)
+		return self->registered->property_count;
+	system_types(&self->clsid, &count);
+	return count;
 }
 
 static HRESULT STDMETHODCALLTYPE effect_GetPropertyName(void *iface, UINT32 index, WCHAR *name, UINT32 count)
@@ -4132,11 +4204,22 @@ static UINT32 STDMETHODCALLTYPE effect_GetPropertyNameLength(void *iface, UINT32
 	return property ? (UINT32)wide_length(property->name) : 0;
 }
 
-/* A program's own effect has the types its XML gives; what the properties of the system's effects are is not known here. */
+/* A program's own effect has the types its XML gives, and every effect those of the properties that describe it; what the properties of
+   the system's effects are is not known here. */
 static D2D1_PROPERTY_TYPE STDMETHODCALLTYPE effect_GetType(void *iface, UINT32 index)
 {
-	const struct effect_property *property = effect_property_at(iface, index);
-	return property ? property->type : D2D1_PROPERTY_TYPE_UNKNOWN;
+	const D2D1_PROPERTY_TYPE own = effect_own_type(iface, index);
+	if (own != D2D1_PROPERTY_TYPE_UNKNOWN)
+		return own;
+	if (index == D2D1_PROPERTY_CLSID)
+		return D2D1_PROPERTY_TYPE_CLSID;
+	if (effect_description(iface, index))
+		return D2D1_PROPERTY_TYPE_STRING;
+	if (index == D2D1_PROPERTY_CACHED)
+		return D2D1_PROPERTY_TYPE_BOOL;
+	if (index == D2D1_PROPERTY_PRECISION)
+		return D2D1_PROPERTY_TYPE_ENUM;
+	return D2D1_PROPERTY_TYPE_UNKNOWN;
 }
 
 static UINT32 STDMETHODCALLTYPE effect_GetPropertyIndex(void *iface, const WCHAR *name)
@@ -4166,6 +4249,7 @@ static HRESULT STDMETHODCALLTYPE effect_SetValue(void *iface, UINT32 index, D2D1
 	BYTE *copy;
 	if (size && !data)
 		return E_INVALIDARG;
+	self->prepared = FALSE;
 	if (property && property->set && self->impl)
 		return property->set(self->impl, data, size);
 	if (!value) {
@@ -4180,6 +4264,12 @@ static HRESULT STDMETHODCALLTYPE effect_SetValue(void *iface, UINT32 index, D2D1
 		return E_OUTOFMEMORY;
 	if (size)
 		memcpy(copy, data, size);
+	if (effect_holds_reference(self, index)) {
+		if (size >= sizeof(IUnknown *) && *(IUnknown **)copy)
+			IUnknown_AddRef(*(IUnknown **)copy);
+		if (value->size >= sizeof(IUnknown *) && *(IUnknown **)value->data)
+			IUnknown_Release(*(IUnknown **)value->data);
+	}
 	FREE(value->data);
 	value->data = copy;
 	value->size = size;
@@ -4203,14 +4293,30 @@ static HRESULT STDMETHODCALLTYPE effect_GetValue(void *iface, UINT32 index, D2D1
 	const struct effect_property *property = effect_property_at(self, index);
 	if (size && !data)
 		return E_INVALIDARG;
+	const WCHAR *text = effect_description(self, index);
 	if (property && property->get && self->impl) {
 		UINT32 actual = 0;
 		return property->get(self->impl, data, size, &actual);
+	}
+	if (index == D2D1_PROPERTY_CLSID) {
+		if (size < sizeof(CLSID))
+			return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+		memcpy(data, &self->clsid, sizeof(CLSID));
+		return S_OK;
+	}
+	if (text) {
+		const size_t bytes = (wide_length(text) + 1) * sizeof(WCHAR);
+		if (size < bytes)
+			return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+		memcpy(data, text, bytes);
+		return S_OK;
 	}
 	if (size)
 		memset(data, 0, size);
 	if (value)
 		memcpy(data, value->data, value->size < size ? value->size : size);
+	if (effect_holds_reference(self, index) && size >= sizeof(IUnknown *) && *(IUnknown **)data)
+		IUnknown_AddRef(*(IUnknown **)data);
 	return S_OK;
 }
 
@@ -4224,6 +4330,12 @@ static UINT32 STDMETHODCALLTYPE effect_GetValueSize(void *iface, UINT32 index)
 		property->get(self->impl, NULL, 0, &actual);
 		return actual;
 	}
+	if (index == D2D1_PROPERTY_CLSID)
+		return sizeof(CLSID);
+	if (effect_description(self, index))
+		return (UINT32)((wide_length(effect_description(self, index)) + 1) * sizeof(WCHAR));
+	if (!value && (index == D2D1_PROPERTY_CACHED || index == D2D1_PROPERTY_PRECISION))
+		return sizeof(UINT32);
 	return value ? value->size : 0;
 }
 
@@ -4246,6 +4358,7 @@ static void STDMETHODCALLTYPE effect_SetInput(void *iface, UINT32 index, ID2D1Im
 	self->inputs[index] = input;
 	if (index >= self->input_count)
 		self->input_count = index + 1;
+	self->prepared = FALSE;
 }
 
 static HRESULT STDMETHODCALLTYPE effect_SetInputCount(void *iface, UINT32 count)
@@ -4382,38 +4495,516 @@ static HRESULT make_effect(IUnknown *factory, ID2D1Effect **out)
 DEFINE_GUID(CLSID_D2D1WhiteLevelAdjustment, 0x44a1cadb, 0x6cdd, 0x4818, 0x8f, 0xf4, 0x26, 0xc1, 0xcf, 0xe9, 0x5b, 0xdb);
 DEFINE_GUID(CLSID_D2D1HdrToneMap, 0x7b0b748d, 0x4610, 0x4486, 0xa9, 0x0c, 0x99, 0x9d, 0x9a, 0x2e, 0x2b, 0x11);
 
-/* The effects Direct2D itself provides; any other must be registered first, and a program that has its own registers it on being told so. */
-static const CLSID *const system_effects[] = {
-	&CLSID_D2D12DAffineTransform, &CLSID_D2D13DPerspectiveTransform, &CLSID_D2D13DTransform, &CLSID_D2D1AlphaMask,
-	&CLSID_D2D1ArithmeticComposite, &CLSID_D2D1Atlas, &CLSID_D2D1BitmapSource, &CLSID_D2D1Blend, &CLSID_D2D1Border,
-	&CLSID_D2D1Brightness, &CLSID_D2D1ChromaKey, &CLSID_D2D1ColorManagement, &CLSID_D2D1ColorMatrix, &CLSID_D2D1Composite,
-	&CLSID_D2D1Contrast, &CLSID_D2D1ConvolveMatrix, &CLSID_D2D1Crop, &CLSID_D2D1CrossFade, &CLSID_D2D1DirectionalBlur,
-	&CLSID_D2D1DiscreteTransfer, &CLSID_D2D1DisplacementMap, &CLSID_D2D1DistantDiffuse, &CLSID_D2D1DistantSpecular,
-	&CLSID_D2D1DpiCompensation, &CLSID_D2D1EdgeDetection, &CLSID_D2D1Emboss, &CLSID_D2D1Exposure, &CLSID_D2D1Flood,
-	&CLSID_D2D1GammaTransfer, &CLSID_D2D1GaussianBlur, &CLSID_D2D1Grayscale, &CLSID_D2D1HdrToneMap, &CLSID_D2D1HighlightsShadows,
-	&CLSID_D2D1Histogram, &CLSID_D2D1HueRotation, &CLSID_D2D1HueToRgb, &CLSID_D2D1Invert, &CLSID_D2D1LinearTransfer,
-	&CLSID_D2D1LookupTable3D, &CLSID_D2D1LuminanceToAlpha, &CLSID_D2D1Morphology, &CLSID_D2D1Opacity, &CLSID_D2D1OpacityMetadata,
-	&CLSID_D2D1PointDiffuse, &CLSID_D2D1PointSpecular, &CLSID_D2D1Posterize, &CLSID_D2D1Premultiply, &CLSID_D2D1RgbToHue,
-	&CLSID_D2D1Saturation, &CLSID_D2D1Scale, &CLSID_D2D1Sepia, &CLSID_D2D1Shadow, &CLSID_D2D1Sharpen, &CLSID_D2D1SpotDiffuse,
-	&CLSID_D2D1SpotSpecular, &CLSID_D2D1Straighten, &CLSID_D2D1TableTransfer, &CLSID_D2D1TemperatureTint, &CLSID_D2D1Tile,
-	&CLSID_D2D1Tint, &CLSID_D2D1Turbulence, &CLSID_D2D1UnPremultiply, &CLSID_D2D1Vignette, &CLSID_D2D1WhiteLevelAdjustment,
-	&CLSID_D2D1YCbCr};
+/* Color management's properties: the source context and rendering intent, the same for the destination, the alpha mode and the quality. */
+static const D2D1_PROPERTY_TYPE color_management_types[] = {D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
+	D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_ENUM};
+
+/* The effects Direct2D itself provides, each with its name, the group Direct2D's documentation lists it in and, where a program reads them,
+   the types of its properties; any other must be registered first, and a program that has its own registers it on being told so. */
+static const struct {
+	const CLSID *clsid;
+	const WCHAR *name, *category;
+	const D2D1_PROPERTY_TYPE *types;
+	UINT32 type_count;
+} system_effects[] = {
+	{&CLSID_D2D12DAffineTransform, L"2D Affine Transform", L"Transform"},
+	{&CLSID_D2D13DPerspectiveTransform, L"3D Perspective Transform", L"Transform"},
+	{&CLSID_D2D13DTransform, L"3D Transform", L"Transform"},
+	{&CLSID_D2D1AlphaMask, L"Alpha Mask", L"Composition"},
+	{&CLSID_D2D1ArithmeticComposite, L"Arithmetic Composite", L"Composition"},
+	{&CLSID_D2D1Atlas, L"Atlas", L"Transform"},
+	{&CLSID_D2D1BitmapSource, L"Bitmap Source", L"Source"},
+	{&CLSID_D2D1Blend, L"Blend", L"Composition"},
+	{&CLSID_D2D1Border, L"Border", L"Transform"},
+	{&CLSID_D2D1Brightness, L"Brightness", L"Photo"},
+	{&CLSID_D2D1ChromaKey, L"Chroma Key", L"Transparency"},
+	{&CLSID_D2D1ColorManagement, L"Color Management", L"Color", color_management_types,
+		sizeof(color_management_types) / sizeof(*color_management_types)},
+	{&CLSID_D2D1ColorMatrix, L"Color Matrix", L"Color"},
+	{&CLSID_D2D1Composite, L"Composite", L"Composition"},
+	{&CLSID_D2D1Contrast, L"Contrast", L"Photo"},
+	{&CLSID_D2D1ConvolveMatrix, L"Convolve Matrix", L"Filter"},
+	{&CLSID_D2D1Crop, L"Crop", L"Transform"},
+	{&CLSID_D2D1CrossFade, L"Cross Fade", L"Composition"},
+	{&CLSID_D2D1DirectionalBlur, L"Directional Blur", L"Filter"},
+	{&CLSID_D2D1DiscreteTransfer, L"Discrete Transfer", L"Color"},
+	{&CLSID_D2D1DisplacementMap, L"Displacement Map", L"Lighting and Stylizing"},
+	{&CLSID_D2D1DistantDiffuse, L"Distant-diffuse Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1DistantSpecular, L"Distant-specular Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1DpiCompensation, L"DPI Compensation", L"Transform"},
+	{&CLSID_D2D1EdgeDetection, L"Edge Detection", L"Filter"},
+	{&CLSID_D2D1Emboss, L"Emboss", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Exposure, L"Exposure", L"Photo"},
+	{&CLSID_D2D1Flood, L"Flood", L"Source"},
+	{&CLSID_D2D1GammaTransfer, L"Gamma Transfer", L"Color"},
+	{&CLSID_D2D1GaussianBlur, L"Gaussian Blur", L"Filter"},
+	{&CLSID_D2D1Grayscale, L"Grayscale", L"Photo"},
+	{&CLSID_D2D1HdrToneMap, L"HDR Tone Map", L"Color"},
+	{&CLSID_D2D1HighlightsShadows, L"Highlights and Shadows", L"Photo"},
+	{&CLSID_D2D1Histogram, L"Histogram", L"Photo"},
+	{&CLSID_D2D1HueRotation, L"Hue Rotation", L"Color"},
+	{&CLSID_D2D1HueToRgb, L"Hue to RGB", L"Color"},
+	{&CLSID_D2D1Invert, L"Invert", L"Photo"},
+	{&CLSID_D2D1LinearTransfer, L"Linear Transfer", L"Color"},
+	{&CLSID_D2D1LookupTable3D, L"Lookup Table 3D", L"Color"},
+	{&CLSID_D2D1LuminanceToAlpha, L"Luminance to Alpha", L"Transparency"},
+	{&CLSID_D2D1Morphology, L"Morphology", L"Filter"},
+	{&CLSID_D2D1Opacity, L"Opacity", L"Transparency"},
+	{&CLSID_D2D1OpacityMetadata, L"Opacity Metadata", L"Transparency"},
+	{&CLSID_D2D1PointDiffuse, L"Point-diffuse Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1PointSpecular, L"Point-specular Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Posterize, L"Posterize", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Premultiply, L"Premultiply", L"Transparency"},
+	{&CLSID_D2D1RgbToHue, L"RGB to Hue", L"Color"},
+	{&CLSID_D2D1Saturation, L"Saturation", L"Color"},
+	{&CLSID_D2D1Scale, L"Scale", L"Transform"},
+	{&CLSID_D2D1Sepia, L"Sepia", L"Photo"},
+	{&CLSID_D2D1Shadow, L"Shadow", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Sharpen, L"Sharpen", L"Photo"},
+	{&CLSID_D2D1SpotDiffuse, L"Spot-diffuse Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1SpotSpecular, L"Spot-specular Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Straighten, L"Straighten", L"Photo"},
+	{&CLSID_D2D1TableTransfer, L"Table Transfer", L"Color"},
+	{&CLSID_D2D1TemperatureTint, L"Temperature and Tint", L"Photo"},
+	{&CLSID_D2D1Tile, L"Tile", L"Transform"},
+	{&CLSID_D2D1Tint, L"Tint", L"Color"},
+	{&CLSID_D2D1Turbulence, L"Turbulence", L"Source"},
+	{&CLSID_D2D1UnPremultiply, L"Unpremultiply", L"Transparency"},
+	{&CLSID_D2D1Vignette, L"Vignette", L"Photo"},
+	{&CLSID_D2D1WhiteLevelAdjustment, L"White Level Adjustment", L"Color"},
+	{&CLSID_D2D1YCbCr, L"YCbCr", L"Source"},
+};
 
 static int system_effect(REFCLSID clsid)
 {
 	size_t index;
 	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
-		if (same_guid(system_effects[index], clsid))
+		if (same_guid(system_effects[index].clsid, clsid))
 			return 1;
 	return 0;
 }
 
-static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
+/* The types of a system effect's own properties, as many as the count given. */
+static const D2D1_PROPERTY_TYPE *system_types(REFCLSID clsid, UINT32 *count)
 {
-	struct target *self = target_of(iface);
-	const struct registered_effect *registered;
-	IUnknown *impl = NULL;
+	size_t index;
+	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
+		if (same_guid(system_effects[index].clsid, clsid)) {
+			*count = system_effects[index].type_count;
+			return system_effects[index].types;
+		}
+	*count = 0;
+	return NULL;
+}
+
+/* DisplayName, Author, Category and Description of a system effect, by their order. */
+static const WCHAR *system_description(REFCLSID clsid, UINT32 which)
+{
+	size_t index;
+	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
+		if (same_guid(system_effects[index].clsid, clsid))
+			return which == 0 ? system_effects[index].name : which == 1 ? L"Microsoft Corporation" : which == 2 ? system_effects[index].category : L"";
+	return NULL;
+}
+
+/* ---- what a program's own effect sets up ----
+ * Its object is initialized with an effect context, through which it loads shaders and makes transforms, and a transform graph, in which it
+ * places them. Both are kept: the shaders are not run here, but a graph that passes an input straight through says what the effect draws. */
+struct effect_graph {
+	void **vtbl;
+	LONG refs;
+	/* The effect the graph belongs to, cleared when the effect goes. */
+	struct effect *effect;
+	/* The input a passthrough graph gives out, or -1. */
+	INT32 passthrough;
+};
+
+enum { CONTEXT_SHADERS = 64 };
+
+struct effect_context {
+	void **vtbl;
+	LONG refs;
+	IUnknown *factory;
+	/* The device context that made the effect, which the context answers for, as an effect asks it for that context's resources. */
+	IUnknown *device_context;
+	GUID shaders[CONTEXT_SHADERS];
+	UINT32 shader_count;
+};
+
+/* A transform made by the context: blend, border, offset, bounds adjustment, or one standing for an effect. Each keeps what it is told. */
+struct transform_node {
+	void **vtbl;
+	LONG refs;
+	const GUID *iid;
+	UINT32 inputs;
+	BOOL cached;
+	D2D1_BLEND_DESCRIPTION blend;
+	D2D1_EXTEND_MODE extend_x, extend_y;
+	D2D1_POINT_2L offset;
+	D2D1_RECT_L bounds;
+};
+
+static ULONG STDMETHODCALLTYPE part_AddRef(void *iface) { return (ULONG)InterlockedIncrement(&((struct effect_graph *)iface)->refs); }
+
+static HRESULT STDMETHODCALLTYPE graph_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1TransformGraph)) {
+		part_AddRef(iface);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	return no_interface(riid);
+}
+
+static ULONG STDMETHODCALLTYPE graph_Release(void *iface)
+{
+	struct effect_graph *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs)
+		FREE(self);
+	return (ULONG)refs;
+}
+
+static UINT32 STDMETHODCALLTYPE graph_GetInputCount(void *iface)
+{
+	const struct effect_graph *self = iface;
+	return self->effect ? self->effect->input_count : 0;
+}
+
+/* A graph of the program's own nodes draws what its shaders compute, which is not run here: it no longer passes an input through. */
+static HRESULT STDMETHODCALLTYPE graph_SetNode(void *iface, ID2D1TransformNode *node)
+{
+	if (!node)
+		return E_INVALIDARG;
+	((struct effect_graph *)iface)->passthrough = -1;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE graph_RemoveNode(void *iface, ID2D1TransformNode *node) { return node ? S_OK : E_INVALIDARG; }
+
+static HRESULT STDMETHODCALLTYPE graph_ConnectNode(void *iface, ID2D1TransformNode *from, ID2D1TransformNode *to, UINT32 index)
+{
+	return from && to ? S_OK : E_INVALIDARG;
+}
+
+static HRESULT STDMETHODCALLTYPE graph_ConnectToEffectInput(void *iface, UINT32 input, ID2D1TransformNode *node, UINT32 index)
+{
+	const struct effect_graph *self = iface;
+	if (!node || (self->effect && input >= self->effect->input_count))
+		return E_INVALIDARG;
+	return S_OK;
+}
+
+static void STDMETHODCALLTYPE graph_Clear(void *iface) { ((struct effect_graph *)iface)->passthrough = -1; }
+
+static HRESULT STDMETHODCALLTYPE graph_SetPassthroughGraph(void *iface, UINT32 input)
+{
+	struct effect_graph *self = iface;
+	if (self->effect && input >= self->effect->input_count)
+		return E_INVALIDARG;
+	self->passthrough = (INT32)input;
+	return S_OK;
+}
+
+static void *graph_table[] = {(void *)graph_QueryInterface, (void *)part_AddRef, (void *)graph_Release, (void *)graph_GetInputCount,
+	(void *)graph_SetNode, (void *)graph_SetNode, (void *)graph_RemoveNode, (void *)graph_SetNode, (void *)graph_ConnectNode,
+	(void *)graph_ConnectToEffectInput, (void *)graph_Clear, (void *)graph_SetPassthroughGraph};
+
+static HRESULT STDMETHODCALLTYPE node_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	const struct transform_node *self = iface;
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1TransformNode) || same_guid(riid, self->iid) ||
+		(same_guid(riid, &IID_ID2D1ConcreteTransform) && (self->iid == &IID_ID2D1BlendTransform || self->iid == &IID_ID2D1BorderTransform))) {
+		part_AddRef(iface);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	return no_interface(riid);
+}
+
+static ULONG STDMETHODCALLTYPE node_Release(void *iface)
+{
+	struct transform_node *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs)
+		FREE(self);
+	return (ULONG)refs;
+}
+
+static UINT32 STDMETHODCALLTYPE node_GetInputCount(void *iface) { return ((struct transform_node *)iface)->inputs; }
+static HRESULT STDMETHODCALLTYPE node_SetOutputBuffer(void *iface, D2D1_BUFFER_PRECISION precision, D2D1_CHANNEL_DEPTH depth) { return S_OK; }
+static void STDMETHODCALLTYPE node_SetCached(void *iface, BOOL cached) { ((struct transform_node *)iface)->cached = cached; }
+static void STDMETHODCALLTYPE node_SetBlend(void *iface, const D2D1_BLEND_DESCRIPTION *blend) { if (blend) ((struct transform_node *)iface)->blend = *blend; }
+static void STDMETHODCALLTYPE node_GetBlend(void *iface, D2D1_BLEND_DESCRIPTION *blend) { *blend = ((struct transform_node *)iface)->blend; }
+static void STDMETHODCALLTYPE node_SetExtendX(void *iface, D2D1_EXTEND_MODE mode) { ((struct transform_node *)iface)->extend_x = mode; }
+static void STDMETHODCALLTYPE node_SetExtendY(void *iface, D2D1_EXTEND_MODE mode) { ((struct transform_node *)iface)->extend_y = mode; }
+static D2D1_EXTEND_MODE STDMETHODCALLTYPE node_GetExtendX(void *iface) { return ((struct transform_node *)iface)->extend_x; }
+static D2D1_EXTEND_MODE STDMETHODCALLTYPE node_GetExtendY(void *iface) { return ((struct transform_node *)iface)->extend_y; }
+static void STDMETHODCALLTYPE node_SetOffset(void *iface, D2D1_POINT_2L offset) { ((struct transform_node *)iface)->offset = offset; }
+static D2D1_POINT_2L *STDMETHODCALLTYPE node_GetOffset(void *iface, D2D1_POINT_2L *offset) { *offset = ((struct transform_node *)iface)->offset; return offset; }
+static void STDMETHODCALLTYPE node_SetBounds(void *iface, const D2D1_RECT_L *bounds) { if (bounds) ((struct transform_node *)iface)->bounds = *bounds; }
+static void STDMETHODCALLTYPE node_GetBounds(void *iface, D2D1_RECT_L *bounds) { *bounds = ((struct transform_node *)iface)->bounds; }
+
+/* The slots of each kind after IUnknown and GetInputCount: a concrete transform's two, then a blend's or a border's own; an offset's and a
+   bounds adjustment's own come straight after GetInputCount. */
+static void *blend_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetOutputBuffer, (void *)node_SetCached, (void *)node_SetBlend, (void *)node_GetBlend};
+static void *border_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetOutputBuffer, (void *)node_SetCached, (void *)node_SetExtendX, (void *)node_SetExtendY, (void *)node_GetExtendX,
+	(void *)node_GetExtendY};
+static void *offset_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetOffset, (void *)node_GetOffset};
+static void *bounds_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetBounds, (void *)node_GetBounds};
+static void *effect_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount};
+
+static HRESULT make_node(void **table, const GUID *iid, UINT32 inputs, void **out)
+{
+	struct transform_node *node;
+	if (!out)
+		return E_POINTER;
+	if (!(*out = node = ALLOC(sizeof(*node))))
+		return E_OUTOFMEMORY;
+	node->vtbl = table;
+	node->refs = 1;
+	node->iid = iid;
+	node->inputs = inputs;
+	return S_OK;
+}
+
+static HRESULT create_effect(IUnknown *factory, IUnknown *device_context, REFCLSID clsid, ID2D1Effect **effect);
+
+/* ID2D1EffectImpl's methods after IUnknown's, by slot: the C declaration in the headers leaves IUnknown's out of its table. */
+typedef HRESULT (STDMETHODCALLTYPE *effect_initialize)(IUnknown *, ID2D1EffectContext *, ID2D1TransformGraph *);
+typedef HRESULT (STDMETHODCALLTYPE *effect_prepare)(IUnknown *, D2D1_CHANGE_TYPE);
+
+/* The later contexts the headers here lack: the first adds 3D lookup tables, the second color contexts from DXGI spaces and simple profiles. */
+static const GUID effect_context1_iid = {0x84ab595a, 0xfc81, 0x4546, {0xba, 0xcd, 0xe8, 0xef, 0x4d, 0x8a, 0xbe, 0x7a}};
+static const GUID effect_context2_iid = {0x577ad2a0, 0x9fc7, 0x4dda, {0x8b, 0x18, 0xda, 0xb8, 0x10, 0x14, 0x00, 0x52}};
+
+static HRESULT STDMETHODCALLTYPE effect_context_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1EffectContext) || same_guid(riid, &effect_context1_iid) ||
+		same_guid(riid, &effect_context2_iid)) {
+		part_AddRef(iface);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	if (((struct effect_context *)iface)->device_context && any_guid(riid, context_iids, sizeof(context_iids) / sizeof(*context_iids)))
+		return IUnknown_QueryInterface(((struct effect_context *)iface)->device_context, riid, out);
+	return no_interface(riid);
+}
+
+static ULONG STDMETHODCALLTYPE effect_context_Release(void *iface)
+{
+	struct effect_context *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs) {
+		if (self->factory)
+			IUnknown_Release(self->factory);
+		if (self->device_context)
+			IUnknown_Release(self->device_context);
+		FREE(self);
+	}
+	return (ULONG)refs;
+}
+
+static void STDMETHODCALLTYPE effect_context_GetDpi(void *iface, FLOAT *x, FLOAT *y) { *x = *y = 96.0f; }
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
+{
+	return create_effect(((struct effect_context *)iface)->factory, ((struct effect_context *)iface)->device_context, clsid, effect);
+}
+
+/* The device is Direct3D 11 at feature level 11.0 or below it: the highest of those asked for that it reaches. */
+static HRESULT STDMETHODCALLTYPE effect_context_GetMaximumSupportedFeatureLevel(void *iface, const D3D_FEATURE_LEVEL *levels, UINT32 count,
+	D3D_FEATURE_LEVEL *level)
+{
+	UINT32 index;
+	BOOL found = FALSE;
+	if (!levels || !level)
+		return E_INVALIDARG;
+	for (index = 0; index < count; ++index)
+		if (levels[index] <= D3D_FEATURE_LEVEL_11_0 && (!found || levels[index] > *level)) {
+			*level = levels[index];
+			found = TRUE;
+		}
+	return found ? S_OK : D2DERR_INSUFFICIENT_DEVICE_CAPABILITIES;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateTransformNodeFromEffect(void *iface, ID2D1Effect *effect, ID2D1TransformNode **node)
+{
+	if (!effect)
+		return E_INVALIDARG;
+	return make_node(effect_node_table, &IID_ID2D1TransformNode, ((struct effect *)effect)->input_count, (void **)node);
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateBlendTransform(void *iface, UINT32 inputs, const D2D1_BLEND_DESCRIPTION *blend,
+	ID2D1BlendTransform **out)
+{
 	HRESULT result;
+	if (!blend)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_node(blend_node_table, &IID_ID2D1BlendTransform, inputs, (void **)out)))
+		((struct transform_node *)*out)->blend = *blend;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateBorderTransform(void *iface, D2D1_EXTEND_MODE x, D2D1_EXTEND_MODE y, ID2D1BorderTransform **out)
+{
+	HRESULT result;
+	if (SUCCEEDED(result = make_node(border_node_table, &IID_ID2D1BorderTransform, 1, (void **)out))) {
+		((struct transform_node *)*out)->extend_x = x;
+		((struct transform_node *)*out)->extend_y = y;
+	}
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateOffsetTransform(void *iface, D2D1_POINT_2L offset, ID2D1OffsetTransform **out)
+{
+	HRESULT result;
+	if (SUCCEEDED(result = make_node(offset_node_table, &IID_ID2D1OffsetTransform, 1, (void **)out)))
+		((struct transform_node *)*out)->offset = offset;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateBoundsAdjustmentTransform(void *iface, const D2D1_RECT_L *bounds, ID2D1BoundsAdjustmentTransform **out)
+{
+	HRESULT result;
+	if (!bounds)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_node(bounds_node_table, &IID_ID2D1BoundsAdjustmentTransform, 1, (void **)out)))
+		((struct transform_node *)*out)->bounds = *bounds;
+	return result;
+}
+
+/* A shader is kept by its identifier, which the program's transforms name when they draw; its code is not run here. */
+static HRESULT STDMETHODCALLTYPE effect_context_LoadShader(void *iface, REFGUID id, const BYTE *code, UINT32 size)
+{
+	struct effect_context *self = iface;
+	UINT32 index;
+	if (!id || !code || !size)
+		return E_INVALIDARG;
+	for (index = 0; index < self->shader_count; ++index)
+		if (same_guid(&self->shaders[index], id))
+			return S_OK;
+	if (self->shader_count < CONTEXT_SHADERS)
+		self->shaders[self->shader_count++] = *id;
+	return S_OK;
+}
+
+static BOOL STDMETHODCALLTYPE effect_context_IsShaderLoaded(void *iface, REFGUID id)
+{
+	const struct effect_context *self = iface;
+	UINT32 index;
+	for (index = 0; id && index < self->shader_count; ++index)
+		if (same_guid(&self->shaders[index], id))
+			return TRUE;
+	return FALSE;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateColorContext(void *iface, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size,
+	ID2D1ColorContext **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (space == D2D1_COLOR_SPACE_CUSTOM ? !profile || !size : (space != D2D1_COLOR_SPACE_SRGB && space != D2D1_COLOR_SPACE_SCRGB) || profile || size)
+		return E_INVALIDARG;
+	return make_color_context(((struct effect_context *)iface)->factory, space, profile, size, D2D1_COLOR_CONTEXT_TYPE_ICC,
+		space == D2D1_COLOR_SPACE_SRGB ? DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 : space == D2D1_COLOR_SPACE_SCRGB ?
+		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CheckFeatureSupport(void *iface, D2D1_FEATURE feature, void *data, UINT32 size)
+{
+	if (!data)
+		return E_INVALIDARG;
+	memset(data, 0, size);
+	return S_OK;
+}
+
+static BOOL STDMETHODCALLTYPE effect_context_IsBufferPrecisionSupported(void *iface, D2D1_BUFFER_PRECISION precision)
+{
+	return precision == D2D1_BUFFER_PRECISION_8BPC_UNORM || precision == D2D1_BUFFER_PRECISION_8BPC_UNORM_SRGB;
+}
+
+/* The same color contexts a device context makes, as an effect builds its own for the spaces it converts between. */
+static HRESULT STDMETHODCALLTYPE effect_context_CreateColorContextFromDxgiColorSpace(void *iface, DXGI_COLOR_SPACE_TYPE dxgi,
+	ID2D1ColorContext1 **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (dxgi == DXGI_COLOR_SPACE_CUSTOM)
+		return E_INVALIDARG;
+	return make_color_context(((struct effect_context *)iface)->factory, dxgi == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ? D2D1_COLOR_SPACE_SRGB :
+		dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ? D2D1_COLOR_SPACE_SCRGB : D2D1_COLOR_SPACE_CUSTOM, NULL, 0,
+		D2D1_COLOR_CONTEXT_TYPE_DXGI, dxgi, (ID2D1ColorContext **)out);
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateColorContextFromSimpleColorProfile(void *iface, const D2D1_SIMPLE_COLOR_PROFILE *simple,
+	ID2D1ColorContext1 **out)
+{
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!simple)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_color_context(((struct effect_context *)iface)->factory, D2D1_COLOR_SPACE_CUSTOM, NULL, 0,
+		D2D1_COLOR_CONTEXT_TYPE_SIMPLE, DXGI_COLOR_SPACE_CUSTOM, (ID2D1ColorContext **)out)))
+		((struct color_context *)*out)->simple = *simple;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_unimplemented(void *iface)
+{
+	return unimplemented("ID2D1EffectContext", "resource textures, vertex buffers, lookup tables and color contexts from files");
+}
+
+static void *effect_context_table[] = {(void *)effect_context_QueryInterface, (void *)part_AddRef, (void *)effect_context_Release,
+	(void *)effect_context_GetDpi, (void *)effect_context_CreateEffect, (void *)effect_context_GetMaximumSupportedFeatureLevel,
+	(void *)effect_context_CreateTransformNodeFromEffect, (void *)effect_context_CreateBlendTransform, (void *)effect_context_CreateBorderTransform,
+	(void *)effect_context_CreateOffsetTransform, (void *)effect_context_CreateBoundsAdjustmentTransform, (void *)effect_context_LoadShader,
+	(void *)effect_context_LoadShader, (void *)effect_context_LoadShader, (void *)effect_context_IsShaderLoaded,
+	(void *)effect_context_unimplemented, (void *)effect_context_unimplemented, (void *)effect_context_unimplemented,
+	(void *)effect_context_unimplemented, (void *)effect_context_CreateColorContext, (void *)effect_context_unimplemented,
+	(void *)effect_context_unimplemented, (void *)effect_context_CheckFeatureSupport, (void *)effect_context_IsBufferPrecisionSupported,
+	(void *)effect_context_unimplemented, (void *)effect_context_CreateColorContextFromDxgiColorSpace,
+	(void *)effect_context_CreateColorContextFromSimpleColorProfile};
+
+static void effect_parts_release(struct effect *self)
+{
+	if (self->graph) {
+		self->graph->effect = NULL;
+		graph_Release(self->graph);
+	}
+	if (self->context)
+		effect_context_Release(self->context);
+}
+
+/* A program's own effect: its object is made and initialized with a context and a graph of its own, as Direct2D does before the effect is
+   handed out; the system's effects are made as they are. */
+static HRESULT create_effect(IUnknown *factory, IUnknown *device_context, REFCLSID clsid, ID2D1Effect **effect)
+{
+	const struct registered_effect *registered;
+	struct effect *made;
+	IUnknown *impl = NULL;
+	IUnknown *init = NULL;
+	HRESULT result;
+	if (!effect)
+		return E_POINTER;
+	*effect = NULL;
 	if (!clsid)
 		return E_INVALIDARG;
 	lock_registered();
@@ -4433,21 +5024,69 @@ static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsi
 		text[at] = 0;
 		RavenTrace(text);
 	}
-	if (!registered && !system_effect(clsid)) {
-		*effect = NULL;
+	if (!registered && !system_effect(clsid))
 		return D2DERR_EFFECT_IS_NOT_REGISTERED;
-	}
 	/* A program's own effect starts with the object its factory makes. */
 	if (registered && FAILED(result = registered->factory(&impl)))
 		return result;
-	if (FAILED(result = make_effect(self->factory, effect))) {
+	if (FAILED(result = make_effect(factory, effect))) {
 		if (impl)
 			IUnknown_Release(impl);
 		return result;
 	}
-	((struct effect *)*effect)->impl = impl;
-	((struct effect *)*effect)->registered = registered;
+	made = (struct effect *)*effect;
+	made->clsid = *clsid;
+	made->impl = impl;
+	made->registered = registered;
+	if (!registered)
+		return S_OK;
+	made->input_count = registered->input_count;
+	if (!(made->graph = ALLOC(sizeof(*made->graph))) || !(made->context = ALLOC(sizeof(*made->context)))) {
+		object_Release(made);
+		*effect = NULL;
+		return E_OUTOFMEMORY;
+	}
+	made->graph->vtbl = graph_table;
+	made->graph->refs = 1;
+	made->graph->effect = made;
+	made->graph->passthrough = -1;
+	made->context->vtbl = effect_context_table;
+	made->context->refs = 1;
+	made->context->factory = factory;
+	if (factory)
+		IUnknown_AddRef(factory);
+	if ((made->context->device_context = device_context))
+		IUnknown_AddRef(device_context);
+	if (FAILED(result = IUnknown_QueryInterface(impl, &IID_ID2D1EffectImpl, (void **)&init)) ||
+		FAILED(result = ((effect_initialize)(*(void ***)init)[3])(init, (ID2D1EffectContext *)made->context, (ID2D1TransformGraph *)made->graph))) {
+		if (init)
+			IUnknown_Release(init);
+		object_Release(made);
+		*effect = NULL;
+		return result;
+	}
+	IUnknown_Release(init);
 	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
+{
+	return create_effect(target_of(iface)->factory, (IUnknown *)iface, clsid, effect);
+}
+
+/* What an effect's output draws: a program's own effect is first asked to prepare, then a graph that passes an input through draws that
+   input; anything else draws nothing here. */
+static ID2D1Image *effect_drawn_input(struct effect *effect)
+{
+	IUnknown *init = NULL;
+	if (effect->impl && !effect->prepared && SUCCEEDED(IUnknown_QueryInterface(effect->impl, &IID_ID2D1EffectImpl, (void **)&init))) {
+		effect->prepared = TRUE;
+		((effect_prepare)(*(void ***)init)[4])(init, D2D1_CHANGE_TYPE_PROPERTIES);
+		IUnknown_Release(init);
+	}
+	if (effect->graph && effect->graph->passthrough >= 0 && (UINT32)effect->graph->passthrough < EFFECT_INPUTS)
+		return effect->inputs[effect->graph->passthrough];
+	return NULL;
 }
 
 /* The image an effect gives out, when the image is one: an effect's output reaches back to its effect while the effect lives. */
@@ -4909,6 +5548,7 @@ static HRESULT STDMETHODCALLTYPE factory_GetEffectProperties(void *iface, REFCLS
 	if (FAILED(result = make_effect((IUnknown *)iface, &effect)))
 		return result;
 	((struct effect *)effect)->registered = registered;
+	((struct effect *)effect)->clsid = *clsid;
 	*out = (ID2D1Properties *)effect;
 	return S_OK;
 }
