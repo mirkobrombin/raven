@@ -627,6 +627,25 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	});
 	registry.add("IsClipboardFormatAvailable", 1, [this, import_host](ApiCall &call) { import_host(call); call.ret(clipboard_data.contains(call.u32(0))); });
 	registry.add("CountClipboardFormats", 0, [this, import_host](ApiCall &call) { import_host(call); call.ret(clipboard_data.size()); });
+	// The first of a list of formats that the clipboard has: 0 when it is empty, -1 when it has none of them.
+	registry.add("GetPriorityClipboardFormat", 2, [this, import_host](ApiCall &call) {
+		import_host(call);
+		if (clipboard_data.empty()) {
+			call.ret(0);
+			return;
+		}
+		const int count = int(call.u32(1));
+		const auto list = count > 0 && call[0] ? call.read(call[0], size_t(count) * 4) : std::vector<uint8_t>{};
+		for (size_t at = 0; at + 4 <= list.size(); at += 4) {
+			uint32_t format = 0;
+			std::memcpy(&format, list.data() + at, 4);
+			if (clipboard_data.contains(format)) {
+				call.ret(format);
+				return;
+			}
+		}
+		call.ret(uint32_t(-1));
+	});
 	registry.add("EnumClipboardFormats", 1, [this, import_host](ApiCall &call) {
 		import_host(call);
 		const auto next = clipboard_data.upper_bound(call.u32(0));

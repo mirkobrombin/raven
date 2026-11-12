@@ -41,6 +41,10 @@ unsigned int raven_entry(void)
 		return 6;
 	if (!IsClipboardFormatAvailable(custom) || !IsClipboardFormatAvailable(CF_UNICODETEXT) || IsClipboardFormatAvailable(CF_HDROP))
 		return 7;
+	/* The first format of a list that the clipboard has, as Mp3tag asks whether it can paste a picture; -1 when it has none of them. */
+	UINT preferred[] = {CF_HDROP, CF_UNICODETEXT}, absent[] = {CF_HDROP, CF_DIB};
+	if (GetPriorityClipboardFormat(preferred, 2) != CF_UNICODETEXT || GetPriorityClipboardFormat(absent, 2) != -1)
+		return 20;
 	if (!OpenClipboard(NULL))
 		return 8;
 	HANDLE got = GetClipboardData(custom);
@@ -89,5 +93,8 @@ unsigned int raven_entry(void)
 	if (!EmptyClipboard() || IsClipboardFormatAvailable(custom) || CountClipboardFormats() != 0)
 		return 12;
 	CloseClipboard();
+	/* An empty clipboard answers 0 rather than -1. */
+	if (GetPriorityClipboardFormat(absent, 2) != 0)
+		return 21;
 	return 0;
 }
