@@ -281,15 +281,14 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 			objects.restack(handle, true);
 		else {
 			objects.restack(handle, true);
-			// Insert directly above the named sibling: every sibling above it climbs over this window.
+			// The window goes directly below the named sibling, which precedes it: that sibling and every one above it climb over it.
 			const auto *sibling = std::as_const(objects).window(after);
 			auto *self = objects.window(handle);
 			if (sibling && self) {
 				self->order = sibling->order;
 				for (const auto other : objects.child_windows(window->parent))
-					if (other != handle && std::as_const(objects).window(other)->order >= sibling->order && other != after)
+					if (other != handle && std::as_const(objects).window(other)->order >= self->order)
 						++objects.window(other)->order;
-				++self->order;
 			}
 		}
 		window = objects.window(handle);
