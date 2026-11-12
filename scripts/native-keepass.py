@@ -109,7 +109,7 @@ def create(evidence, origin):
     # The emergency sheet is offered last; it is skipped.
     time.sleep(4)
     desktop.shot(evidence, "emergency-sheet")
-    desktop.click(origin[0] + 249, origin[1] + 329)
+    desktop.click(origin[0] + 249, origin[1] + 357)
     desktop.wait_title("Database.kdbx* - KeePass")
     desktop.shot(evidence, "created")
 
@@ -184,7 +184,7 @@ def main():
                 time.sleep(5)
                 origin = desktop.window_origin(desktop.shot(evidence, "started"))
                 # The first start asks about update checks; they are turned off.
-                desktop.click(origin[0] + 256, origin[1] + 228)
+                desktop.click(origin[0] + 256, origin[1] + 250)
                 time.sleep(2)
                 create(evidence, origin)
 
