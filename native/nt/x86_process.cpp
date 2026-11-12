@@ -868,6 +868,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		return known;
 	});
 	module_api.set_path_lookup([&](const std::string &path) { return library_loader.find(path); });
+	library_loader.set_threads([&guest_threads] { return guest_threads.current_id(); }, [&guest_threads](std::function<bool()> ready) {
+		HostWait waiting;
+		guest_threads.block(std::move(ready), std::nullopt);
+	});
 	DesktopObjects desktop_objects;
 	NativeDesktop desktop(process, environment, desktop_objects, resources);
 	// LoadImage with LR_LOADFROMFILE reads an icon, cursor or bitmap file the program names, as a 64-bit program's does.

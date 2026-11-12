@@ -6,6 +6,7 @@
 #include "system_exports.h"
 
 #include <algorithm>
+#include <utility>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -225,8 +226,28 @@ uint64_t NativeX86Loader::find(const std::string &name) const
 	return found == held.end() ? 0 : found->second.module->loaded.base();
 }
 
+// The loader lock: one thread loads or releases libraries at a time, and another that asks meanwhile waits until it is done, as on
+// Windows; the thread that holds it may load again from an entry point.
+struct NativeX86Loader::LoaderLock {
+	NativeX86Loader &loader;
+	explicit LoaderLock(NativeX86Loader &owner) : loader(owner)
+	{
+		const uint32_t thread = loader.current_thread ? loader.current_thread() : 0;
+		if (loader.lock_depth && loader.lock_owner != thread && loader.wait_for)
+			loader.wait_for([this] { return loader.lock_depth == 0; });
+		loader.lock_owner = thread;
+		++loader.lock_depth;
+	}
+	~LoaderLock()
+	{
+		if (!--loader.lock_depth)
+			loader.lock_owner = 0;
+	}
+};
+
 bool NativeX86Loader::release(uint64_t handle)
 {
+	const LoaderLock locked(*this);
 	const auto found = std::find_if(held.begin(), held.end(), [&](const auto &item) { return item.second.module->loaded.base() == handle; });
 	if (found == held.end())
 		return false;
@@ -248,6 +269,7 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 {
 	if (!call)
 		return 0;
+	const LoaderLock locked(*this);
 	const auto previous_flags = library_flags;
 	library_flags = search_flags;
 	struct RestoreFlags { uint32_t &value; uint32_t previous; ~RestoreFlags() { value = previous; } } restore{library_flags, previous_flags};
@@ -263,18 +285,23 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 	mapping_only = only_map;
 	const auto existing = modules.all().size();
 	bool mapped = false;
+	// What this load brings is its own: an entry point that loads another library starts a list of its own.
+	std::vector<PEModule *> loading;
+	std::map<const PEModule *, uint64_t> starting;
 	try {
 		auto *root = bring(name);
+		loading = std::exchange(staged, {});
+		starting = std::exchange(entry_contexts, {});
 		if (!root) {
-			for (auto item = staged.rbegin(); item != staged.rend(); ++item)
+			for (auto item = loading.rbegin(); item != loading.rend(); ++item)
 				modules.remove(**item);
 			return 0;
 		}
-		if (staged.empty())
+		if (loading.empty())
 			return root->loaded.base();
 		modules.bind_imports();
 		// Dependencies start before the library that needs them: the order the imports were followed, reversed.
-		for (auto item = staged.rbegin(); item != staged.rend(); ++item) {
+		for (auto item = loading.rbegin(); item != loading.rend(); ++item) {
 			process.map_image((*item)->loaded);
 			mapped = true;
 			if (mapped_hook)
@@ -283,7 +310,7 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 				tls->add(**item);
 		}
 		std::vector<PEModule *> attached;
-		for (auto item = staged.rbegin(); item != staged.rend(); ++item) {
+		for (auto item = loading.rbegin(); item != loading.rend(); ++item) {
 			if (tls && !(only_map && *item == root))
 				for (const auto callback : tls->callbacks(**item)) {
 					const uint64_t arguments[] = {(*item)->loaded.base(), 1, 0};
@@ -295,9 +322,9 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 				continue;
 			const uint64_t arguments[] = {(*item)->loaded.base(), 1, 0};
 			auto &contexts = activation_contexts();
-			const auto context = entry_contexts.find(*item);
+			const auto context = starting.find(*item);
 			const uint32_t thread = contexts.current_thread ? contexts.current_thread() : 0;
-			const auto cookie = context == entry_contexts.end() ? 0 : contexts.activate(thread, context->second);
+			const auto cookie = context == starting.end() ? 0 : contexts.activate(thread, context->second);
 			const auto result = call((*item)->loaded.base() + (*item)->image.entry, arguments);
 			if (cookie)
 				contexts.deactivate(thread, cookie);
@@ -312,7 +339,7 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 					if (detached.stop != NativeStop::returned)
 						throw detached;
 				}
-				for (auto gone = staged.rbegin(); gone != staged.rend(); ++gone) {
+				for (auto gone = loading.rbegin(); gone != loading.rend(); ++gone) {
 					if (tls)
 						tls->remove(**gone);
 					if (unmapped_hook)
@@ -331,11 +358,13 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 	} catch (const NativeResult &) {
 		throw;
 	} catch (const std::exception &failure) {
+		if (loading.empty())
+			loading = std::exchange(staged, {});
 		if (trace())
 			std::cerr << "raven: cannot load " << name << ": " << failure.what() << '\n';
 		// An image that never reached the guest must not stay in the set, or every later import binding would trip over it.
 		if (!mapped)
-			for (auto item = staged.rbegin(); item != staged.rend(); ++item)
+			for (auto item = loading.rbegin(); item != loading.rend(); ++item)
 				modules.remove(**item);
 		(void)existing;
 		environment.set_last_error(126);

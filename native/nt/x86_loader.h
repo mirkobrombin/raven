@@ -34,6 +34,12 @@ public:
 	void set_mapped(std::function<void(PEModule &)> hook) { mapped_hook = std::move(hook); }
 	void set_unmapped(std::function<void(PEModule &)> hook) { unmapped_hook = std::move(hook); }
 	void set_application_directory(std::u16string directory) { application_directory = std::move(directory); }
+	// The guest thread asking, and how it waits while another holds the loader lock.
+	void set_threads(std::function<uint32_t()> current, std::function<void(std::function<bool()>)> wait)
+	{
+		current_thread = std::move(current);
+		wait_for = std::move(wait);
+	}
 
 private:
 	NativeProcess &process;
@@ -59,6 +65,11 @@ private:
 	NativeX86Tls *tls = nullptr;
 	std::function<void(PEModule &)> mapped_hook, unmapped_hook;
 	PEModule *bring(const std::string &name);
+	struct LoaderLock;
+	std::function<uint32_t()> current_thread;
+	std::function<void(std::function<bool()>)> wait_for;
+	uint32_t lock_owner = 0;
+	unsigned lock_depth = 0;
 	std::optional<std::vector<uint8_t>> read_library(const std::string &name, std::string &identity, std::filesystem::path &file) const;
 };
 

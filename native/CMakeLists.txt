@@ -4010,6 +4010,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(cert_chain_duplicate_fixture${width} ALL DEPENDS ${cert_chain_duplicate_client})
                     add_test(NAME native_cert_chain_duplicate_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cert_chain_duplicate_client})
                     set_tests_properties(native_cert_chain_duplicate_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(slow_start_dir ${CMAKE_CURRENT_BINARY_DIR}/slow-start-${width})
+                    add_custom_command(OUTPUT ${slow_start_dir}/client.exe ${slow_start_dir}/slow-start.dll
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${slow_start_dir}
+                        COMMAND ${webservices_compiler} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${late_imports_entry},--no-insert-timestamp
+                            -o ${slow_start_dir}/slow-start.dll ${LOADER_SOURCES}/slow_start.c -lkernel32
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${slow_start_dir}/client.exe ${LOADER_SOURCES}/slow_start_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/slow_start.c ${LOADER_SOURCES}/slow_start_client.c VERBATIM)
+                    add_custom_target(slow_start_fixture${width} ALL DEPENDS ${slow_start_dir}/client.exe ${slow_start_dir}/slow-start.dll)
+                    add_test(NAME native_slow_start_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${slow_start_dir}/client.exe)
+                    set_tests_properties(native_slow_start_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
