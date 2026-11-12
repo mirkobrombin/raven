@@ -23,11 +23,11 @@ uint64_t DesktopObjects::window_root(uint64_t handle) const
 	throw std::runtime_error("window ancestry exceeds its owner limit");
 }
 
-std::vector<uint64_t> DesktopObjects::child_windows(uint64_t parent) const
+std::vector<uint64_t> DesktopObjects::child_windows(uint64_t parent, bool unlinked) const
 {
 	std::vector<std::pair<uint64_t,uint64_t>> found;
 	for (const auto handle:window_set)
-		if (const auto *record=window(handle); record && record->parent==parent) found.emplace_back(record->order,handle);
+		if (const auto *record=window(handle); record && record->parent==parent && (record->linked || unlinked)) found.emplace_back(record->order,handle);
 	std::sort(found.begin(),found.end());
 	std::vector<uint64_t> result;
 	for (const auto &item:found) result.push_back(item.second);
@@ -141,7 +141,7 @@ void NativeWindows::parent_notify(uint64_t handle,uint32_t message)
 
 void NativeWindows::discard_tree(uint64_t handle)
 {
-	for (const auto child:objects.child_windows(handle)) discard_tree(child);
+	for (const auto child:objects.child_windows(handle,true)) discard_tree(child);
 	release_surface(handle);objects.erase(handle);
 }
 
