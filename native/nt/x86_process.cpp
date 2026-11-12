@@ -1003,6 +1003,14 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			break;
 		default: status = 0xc000001dU; break;
 		}
+		// RAVEN_TRACE_FAULT names each processor fault as it is handed to the program, with the module it happened in.
+		if (std::getenv("RAVEN_TRACE_FAULT")) {
+			std::cerr << "raven: fault 0x" << std::hex << status << " at 0x" << uint32_t(r.rip);
+			for (const auto &[module_name, module] : modules.all())
+				if (r.rip >= module->loaded.base() && r.rip < module->loaded.base() + module->image.image_size)
+					std::cerr << " (" << module_name << '+' << r.rip - module->loaded.base() << ')';
+			std::cerr << " address 0x" << fault.fault_address << std::dec << '\n';
+		}
 		// CONTEXT_FULL of the i386 layout: segments, integer and control registers, at their offsets in the 716-byte structure.
 		std::vector<uint8_t> context(716, 0), record(80, 0);
 		const auto put = [](std::vector<uint8_t> &bytes, size_t at, uint64_t value) {
