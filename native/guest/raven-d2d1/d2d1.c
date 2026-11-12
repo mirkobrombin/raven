@@ -3408,8 +3408,80 @@ static HRESULT STDMETHODCALLTYPE context_CreateColorContext(void *iface, D2D1_CO
 		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
 }
 
-/* A WIC color context: one with a profile becomes a custom space with those bytes; one that names the sRGB of EXIF data is that space.
-   Adobe RGB, which EXIF can also name, needs a profile Direct2D carries and this one does not. */
+/* An ICC profile (version 2.1, a display's) of the Adobe RGB (1998) space, from the values its specification gives: the primaries
+   adapted to the D50 illuminant of the profile connection space, the D65 white of the space, and one gamma of 563/256 for every channel.
+   The three curves share their bytes. */
+static void put_big(BYTE *at, UINT32 value)
+{
+	at[0] = (BYTE)(value >> 24);
+	at[1] = (BYTE)(value >> 16);
+	at[2] = (BYTE)(value >> 8);
+	at[3] = (BYTE)value;
+}
+
+/* s15Fixed16Number, from a value given in hundred-thousandths. */
+static UINT32 fixed16(UINT32 scaled)
+{
+	return (UINT32)(((UINT64)scaled * 65536 + 50000) / 100000);
+}
+
+/* The header, the tag table, four XYZ tags, the shared curve, the description and the notice, each padded to four bytes. */
+enum { ADOBE_RGB_PROFILE = 128 + 4 + 9 * 12 + 4 * 20 + 16 + 108 + 24 };
+
+static void adobe_rgb_profile(BYTE *profile)
+{
+	static const UINT32 colors[4][3] = {{95045, 100000, 108905}, {60974, 31111, 1947}, {20528, 62567, 6087}, {14919, 6322, 74457}};
+	static const char name[] = "Adobe RGB (1998)", notice[] = "No copyright";
+	static const UINT32 xyz_tags[4] = {0x77747074, 0x7258595a, 0x6758595a, 0x6258595a};
+	UINT32 at = 128 + 4 + 9 * 12, tag = 0, index, axis;
+	BYTE *table = profile + 132;
+	memset(profile, 0, ADOBE_RGB_PROFILE);
+	put_big(profile, ADOBE_RGB_PROFILE);
+	put_big(profile + 8, 0x02100000);
+	put_big(profile + 12, 0x6d6e7472);
+	put_big(profile + 16, 0x52474220);
+	put_big(profile + 20, 0x58595a20);
+	put_big(profile + 36, 0x61637370);
+	put_big(profile + 68, fixed16(96420));
+	put_big(profile + 72, fixed16(100000));
+	put_big(profile + 76, fixed16(82491));
+	put_big(profile + 128, 9);
+	for (index = 0; index < 4; ++index, at += 20) {
+		put_big(table + tag * 12, xyz_tags[index]);
+		put_big(table + tag * 12 + 4, at);
+		put_big(table + tag++ * 12 + 8, 20);
+		put_big(profile + at, 0x58595a20);
+		for (axis = 0; axis < 3; ++axis)
+			put_big(profile + at + 8 + axis * 4, fixed16(colors[index][axis]));
+	}
+	for (index = 0; index < 3; ++index) {
+		static const UINT32 curves[3] = {0x72545243, 0x67545243, 0x62545243};
+		put_big(table + tag * 12, curves[index]);
+		put_big(table + tag * 12 + 4, at);
+		put_big(table + tag++ * 12 + 8, 14);
+	}
+	put_big(profile + at, 0x63757276);
+	put_big(profile + at + 8, 1);
+	profile[at + 12] = 563 >> 8;
+	profile[at + 13] = 563 & 0xff;
+	at += 16;
+	/* textDescriptionType: the ASCII name, then an empty Unicode one and the 67 bytes of an empty ScriptCode one. */
+	put_big(table + tag * 12, 0x64657363);
+	put_big(table + tag * 12 + 4, at);
+	put_big(table + tag++ * 12 + 8, 12 + sizeof name + 8 + 3 + 67);
+	put_big(profile + at, 0x64657363);
+	put_big(profile + at + 8, sizeof name);
+	memcpy(profile + at + 12, name, sizeof name);
+	at += 108;
+	put_big(table + tag * 12, 0x63707274);
+	put_big(table + tag * 12 + 4, at);
+	put_big(table + tag * 12 + 8, 8 + sizeof notice);
+	put_big(profile + at, 0x74657874);
+	memcpy(profile + at + 8, notice, sizeof notice);
+}
+
+/* A WIC color context: one with a profile becomes a custom space with those bytes; one that names the sRGB of EXIF data is that space,
+   and one that names Adobe RGB a custom space with the profile above, as Direct2D supplies one of its own. */
 static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromWicColorContext(void *iface, IWICColorContext *wic, ID2D1ColorContext **out)
 {
 	WICColorContextType type;
@@ -3426,8 +3498,14 @@ static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromWicColorContext(v
 	if (type == WICColorContextExifColorSpace) {
 		if (FAILED(result = IWICColorContext_GetExifColorSpace(wic, &exif)))
 			return result;
+		if (exif == 2) {
+			BYTE adobe[ADOBE_RGB_PROFILE];
+			adobe_rgb_profile(adobe);
+			return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, adobe, sizeof adobe, D2D1_COLOR_CONTEXT_TYPE_ICC,
+				DXGI_COLOR_SPACE_CUSTOM, out);
+		}
 		if (exif != 1)
-			return unimplemented("ID2D1DeviceContext", "color contexts for EXIF color spaces other than sRGB");
+			return E_INVALIDARG;
 		return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_SRGB, NULL, 0, D2D1_COLOR_CONTEXT_TYPE_ICC,
 			DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, out);
 	}

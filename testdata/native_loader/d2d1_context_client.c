@@ -147,6 +147,18 @@ int raven_entry(void)
 		return 31;
 	IUnknown_Release((IUnknown *)converted);
 	IWICColorContext_Release(wic);
+	/* The Adobe RGB that EXIF data can also name is a custom space whose profile, a valid ICC one, Direct2D supplies itself. */
+	static BYTE adobe[2048];
+	UINT32 adobe_size = 0;
+	if (FAILED(IWICImagingFactory_CreateColorContext(imaging, &wic)) || FAILED(IWICColorContext_InitializeFromExifColorSpace(wic, 2)) ||
+		FAILED(((from_wic)(*(void ***)context6)[61])(context6, wic, &converted)) ||
+		((color_space)(*(void ***)converted)[4])(converted) != D2D1_COLOR_SPACE_CUSTOM ||
+		(adobe_size = ((profile_size)(*(void ***)converted)[5])(converted)) <= 132 || adobe_size > sizeof adobe ||
+		FAILED(((get_profile)(*(void ***)converted)[6])(converted, adobe, adobe_size)) || adobe[3] != (BYTE)adobe_size ||
+		adobe[12] != 'm' || adobe[16] != 'R' || adobe[20] != 'X' || adobe[36] != 'a' || adobe[39] != 'p')
+		return 32;
+	IUnknown_Release((IUnknown *)converted);
+	IWICColorContext_Release(wic);
 	/* Its newer interface says what kind of context it is; one made from a DXGI color space names that space. */
 	typedef UINT32 (STDMETHODCALLTYPE *context_type)(void *);
 	void *color1 = NULL;
