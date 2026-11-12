@@ -207,17 +207,16 @@ void NativeWindows::register_menu_api(ApiRegistry &registry)
 			call.fail(1401);
 			return;
 		}
+		// The item goes before the one named, in whichever menu holds it; past the end, or before a command no menu has, it goes last.
+		uint64_t target = call[0];
 		size_t position = menu->items.size();
-		if (call.u32(1) != UINT32_MAX) {
-			const auto where = locate(call[0], call.u32(1), flags);
-			if (!where.found || where.menu != call[0]) {
-				call.fail(1456);
-				return;
-			}
+		if (const auto where = locate(call[0], call.u32(1), flags); where.found) {
+			target = where.menu;
+			menu = objects.edit_menu(target);
 			position = where.index;
 		}
 		menu->items.insert(menu->items.begin() + ptrdiff_t(position), *item);
-		adopt(call[0], *item);
+		adopt(target, *item);
 		call.ret(1);
 	});
 	registry.add("ModifyMenuW", 5, [this, locate, make_item, adopt](ApiCall &call) {
@@ -410,20 +409,16 @@ void NativeWindows::register_menu_api(ApiRegistry &registry)
 			call.fail(87);
 			return;
 		}
-		DesktopMenuItem item{};
-		to_item(call, info, item, call[0]);
+		// As InsertMenu: before the item named, wherever it is, otherwise last.
+		uint64_t target = call[0];
 		size_t position = menu->items.size();
-		if (call.u32(2) ? call.u32(1) != UINT32_MAX : true) {
-			const auto where = locate(call[0], call.u32(1), call.u32(2) ? by_position : 0);
-			if (call.u32(1) != UINT32_MAX && where.found && where.menu == call[0])
-				position = where.index;
-			else if (call.u32(1) != UINT32_MAX && call.u32(2)) {
-				call.fail(1456);
-				return;
-			} else if (where.found && where.menu == call[0]) {
-				position = where.index;
-			}
+		if (const auto where = locate(call[0], call.u32(1), call.u32(2) ? by_position : 0); where.found) {
+			target = where.menu;
+			menu = objects.edit_menu(target);
+			position = where.index;
 		}
+		DesktopMenuItem item{};
+		to_item(call, info, item, target);
 		menu->items.insert(menu->items.begin() + ptrdiff_t(position), item);
 		call.ret(1);
 	});
