@@ -343,7 +343,8 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 				}
 				if (!object || !object->describe(record)) {
 					if (std::getenv("RAVEN_TRACE_API"))
-						std::fprintf(stderr, "raven: handle %llx cannot be inherited\n", static_cast<unsigned long long>(handle));
+						std::fprintf(stderr, "raven: handle %llx (%s) cannot be inherited\n", static_cast<unsigned long long>(handle),
+							object ? std::string(object->type_name().begin(), object->type_name().end()).c_str() : "none");
 					continue;
 				}
 				record.handle = handle;
