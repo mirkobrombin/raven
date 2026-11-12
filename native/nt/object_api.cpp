@@ -47,13 +47,6 @@ void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &obje
 			if (status) call.fail(error(status), 0);
 			else call.ret(1);
 		});
-	// PulseEvent: signalled for whoever waits now, and not signalled after.
-	registry.add("PulseEvent", 1, [&objects](ApiCall &call) {
-		uint32_t status=objects.set_event(call[0], true).status;
-		if (!status) status=objects.set_event(call[0], false).status;
-		if (status) call.fail(error(status), 0);
-		else call.ret(1);
-	});
 }
 
 bool NativeObjectAPI::dispatch(std::string_view name)

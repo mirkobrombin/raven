@@ -15,6 +15,7 @@
 #include "guest_allocator.h"
 #include "heap.h"
 #include "kernel_context.h"
+#include "event_pulse.h"
 #include "actctx.h"
 #include "child_process.h"
 #include "paths.h"
@@ -1325,6 +1326,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_platform_api(shared_api, kernel);
 	register_actctx_api(shared_api, kernel);
 	register_mmio_api(shared_api, kernel);
+	register_pulse_event(shared_api, kernel);
 	register_process_api(shared_api, kernel);
 	register_thread_api(shared_api, kernel);
 	register_sync_api(shared_api, kernel);
