@@ -947,6 +947,7 @@
 {"RavenFontTable", 5},
 {"RavenTrace", 1},
 {"RcConsolidateFrames", 0},
+{"ReOpenFile", 4},
 {"ReadConsoleW", 5},
 {"ReadDirectoryChangesW", 8},
 {"ReadFile", 5},

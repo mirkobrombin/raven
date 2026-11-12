@@ -510,6 +510,16 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		create_file(call, call.wide(call[0]), call.u32(1), call.u32(3), flags, security);
 	});
+	// A file opened again through a handle to it, with its own access, sharing and flags: the new handle names the same file.
+	registry.add("ReOpenFile", 4, [create_file, file_of](ApiCall &call) {
+		const auto file = file_of(call[0]);
+		if (!file) {
+			call.ret(invalid_handle);
+			call.set_last_error(6);
+			return;
+		}
+		create_file(call, file->dos_path, call.u32(1), 3, call.u32(3), 0);
+	});
 	registry.add("ReadFile", 5, [&, resolve, missing, file_of](ApiCall &call) {
 		if (transfer_pipe(context, call, true) || read_console_file(context, call))
 			return;
