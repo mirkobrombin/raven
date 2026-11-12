@@ -124,6 +124,19 @@ int raven_entry(void)
 	if (!first || ILIsEqual((PCIDLIST_ABSOLUTE)first, joined) || first->mkid.cb != folder_list->mkid.cb)
 		return 21;
 
+	/* The list of an existing path by name, as WinForms asks for the folder its file dialogs start in, and a missing path refused. */
+	HRESULT (WINAPI *create_list)(PCWSTR, PIDLIST_ABSOLUTE *, DWORD *) =
+		(HRESULT (WINAPI *)(PCWSTR, PIDLIST_ABSOLUTE *, DWORD *))(void (*)(void))GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SHILCreateFromPath");
+	PIDLIST_ABSOLUTE created = NULL;
+	DWORD wanted = SFGAO_FOLDER | SFGAO_STREAM;
+	if (!create_list || create_list(directory, &created, &wanted) != S_OK || !created || wanted != SFGAO_FOLDER ||
+		!SHGetPathFromIDListW(created, parsed) || lstrcmpiW(parsed, directory) && (lstrlenW(parsed) + 1 != lstrlenW(directory)))
+		return 29;
+	ILFree((PIDLIST_RELATIVE)created);
+	created = (PIDLIST_ABSOLUTE)1;
+	if (create_list(missing, &created, NULL) != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || created)
+		return 30;
+
 	ILFree((PIDLIST_RELATIVE)first);
 	ILFree(clone);
 	ILFree((PIDLIST_RELATIVE)joined);

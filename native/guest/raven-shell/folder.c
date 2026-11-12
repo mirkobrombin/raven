@@ -339,6 +339,20 @@ static ULONG attributes_of_path(const WCHAR *path, ULONG wanted)
 	return result & wanted;
 }
 
+/* The list of a path that exists, with the attributes asked for, as the desktop folder parses it. */
+HRESULT WINAPI SHILCreateFromPath(PCWSTR path, PIDLIST_ABSOLUTE *out, DWORD *attributes)
+{
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	if (!path || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
+		return HRESULT_FROM_WIN32(GetLastError() ? GetLastError() : ERROR_FILE_NOT_FOUND);
+	if (attributes)
+		*attributes = attributes_of_path(path, *attributes);
+	*out = ILCreateFromPathW(path);
+	return *out ? S_OK : E_OUTOFMEMORY;
+}
+
 static HRESULT WINAPI folder_parse(IShellFolder *face, HWND window, IBindCtx *context, LPWSTR name, ULONG *eaten, PIDLIST_RELATIVE *out, ULONG *attributes)
 {
 	shell_folder *self = (shell_folder *)face;
