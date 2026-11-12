@@ -247,7 +247,6 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("EnumResourceNamesW", 4, [enumerate_names](ApiCall &call) { enumerate_names(call, true); });
 	registry.add("EnumResourceNamesA", 4, [enumerate_names](ApiCall &call) { enumerate_names(call, false); });
-	registry.add("ReadDirectoryChangesW", 8, [](ApiCall &call) { call.fail(50, 0); });
 	registry.add("FindFirstStreamW", 4, [](ApiCall &call) { call.fail(38, UINT64_MAX); });
 	const auto directory = [](ApiCall &call, bool wide, const std::string &path) {
 		const size_t capacity = call.u32(1);

@@ -4029,6 +4029,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(busy_deadline_fixture${width} ALL DEPENDS ${busy_deadline_client})
                     add_test(NAME native_busy_deadline_x${width} COMMAND raven --run-process --execution=native --timeout-ms=30000 ${busy_deadline_client})
                     set_tests_properties(native_busy_deadline_x${width} PROPERTIES TIMEOUT 45 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(directory_changes_client ${CMAKE_CURRENT_BINARY_DIR}/directory-changes${width}.exe)
+                    add_custom_command(OUTPUT ${directory_changes_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${directory_changes_client} ${LOADER_SOURCES}/directory_changes_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/directory_changes_client.c VERBATIM)
+                    add_custom_target(directory_changes_fixture${width} ALL DEPENDS ${directory_changes_client})
+                    add_test(NAME native_directory_changes_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${directory_changes_client})
+                    set_tests_properties(native_directory_changes_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
