@@ -238,8 +238,10 @@ void NativeRegistry::register_runtime_classes()
 	// The Windows Runtime classes the runtime brings, in-process (activation type 0) and callable from any apartment (threading 0):
 	// installers ask the package manager whether a packaged version of what they install is present, and Office asks the UI settings
 	// for the theme's colours and the text scale while it starts, along with the network, the device's profile, the system's accounts
-	// and the application model; programs ask the analytics information which Windows they run on and make HTTP requests to the URIs they go to.
+	// and the application model; programs ask the analytics information which Windows they run on and make HTTP requests to the URIs they go to,
+	// and post work to the dispatcher queue of a thread.
 	static constexpr std::pair<const char16_t *, const char16_t *> runtime_classes[] = {
+		{u"Windows.System.DispatcherQueue", u"coremessaging.dll"}, {u"Windows.System.DispatcherQueueController", u"coremessaging.dll"},
 		{u"Windows.Management.Deployment.PackageManager", u"raven-deployment.dll"},
 		{u"Windows.UI.ViewManagement.UISettings", u"raven-uisettings.dll"},
 		{u"Windows.Globalization.Language", u"raven-twinapi.dll"},

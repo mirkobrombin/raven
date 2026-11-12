@@ -4482,6 +4482,35 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(uisettings_fixture ALL DEPENDS ${uisettings_client} uisettings_component)
                 add_test(NAME native_uisettings_x64 COMMAND raven --run-process --execution=native ${uisettings_client})
                 set_tests_properties(native_uisettings_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                # coremessaging.dll, the dispatcher queues of the Windows Runtime and CreateDispatcherQueueController, for each width: Raven code
+                # on the public headers.
+                set(coremessaging_source ${PROJECT_SOURCE_DIR}/native/guest/raven-coremessaging)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/coremessaging.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/coremessaging.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/coremessaging.dll
+                        ${coremessaging_source}/coremessaging.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -luser32 -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/coremessaging.dll
+                        ${coremessaging_source}/coremessaging.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -luser32 -lkernel32 -lgcc
+                    DEPENDS ${coremessaging_source}/coremessaging.c VERBATIM)
+                add_custom_target(coremessaging_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/coremessaging.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/coremessaging.dll)
+                foreach(width 64 32)
+                    set(coremessaging_client ${CMAKE_CURRENT_BINARY_DIR}/coremessaging-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(coremessaging_compiler ${RAVEN_MINGW64})
+                        set(coremessaging_entry raven_entry)
+                    else()
+                        set(coremessaging_compiler ${RAVEN_MINGW32})
+                        set(coremessaging_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${coremessaging_client}
+                        COMMAND ${coremessaging_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${coremessaging_entry},--no-insert-timestamp
+                            -o ${coremessaging_client} ${LOADER_SOURCES}/coremessaging_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                            -lruntimeobject -luser32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/coremessaging_client.c VERBATIM)
+                    add_custom_target(coremessaging_fixture${width} ALL DEPENDS ${coremessaging_client} coremessaging_component)
+                    add_test(NAME native_coremessaging_x${width} COMMAND raven --run-process --execution=native ${coremessaging_client})
+                    set_tests_properties(native_coremessaging_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
                 # raven-twinapi.dll, system classes of the Windows Runtime for each width: Raven code on public metadata.
                 set(twinapi_source ${PROJECT_SOURCE_DIR}/native/guest/raven-twinapi)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll

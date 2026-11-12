@@ -374,6 +374,7 @@
         "native/guest/raven-taskschd/taskschd_tables.h",
         "native/guest/raven-twinapi/twinapi.c",
         "native/guest/raven-uisettings/uisettings.c",
+        "native/guest/raven-coremessaging/coremessaging.c",
         "native/guest/raven-vbscript/README.md",
         "native/guest/raven-vbscript/builtins.c",
         "native/guest/raven-vbscript/engine.c",
