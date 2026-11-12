@@ -95,5 +95,9 @@ int raven_entry(void)
 	CHECK(39,PathRelativePathToW(way,L"C:\\a\\b\\file.txt",FILE_ATTRIBUTE_NORMAL,L"C:\\a\\c\\d.txt",FILE_ATTRIBUTE_NORMAL) && same(way,L"..\\c\\d.txt"));
 	CHECK(40,PathRelativePathToW(way,L"C:\\A\\b",FILE_ATTRIBUTE_DIRECTORY,L"c:\\a\\b\\e",FILE_ATTRIBUTE_NORMAL) && same(way,L".\\e"));
 	CHECK(41,!PathRelativePathToW(way,L"C:\\a",FILE_ATTRIBUTE_DIRECTORY,L"D:\\a",FILE_ATTRIBUTE_NORMAL));
+	/* The ANSI forms point into the string they are given, as the wide ones do. */
+	static const char narrow[]="C:\\a.b\\file.tar.gz";
+	CHECK(42,PathFindExtensionA(narrow)==narrow+15 && PathFindFileNameA(narrow)==narrow+7);
+	CHECK(43,*PathFindExtensionA("C:\\a.b\\file")==0);
 	return 0;
 }

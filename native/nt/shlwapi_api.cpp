@@ -848,6 +848,9 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		const auto path = call.wide(call[0]);
 		call.ret(call[0] + extension_start(path) * 2);
 	});
+	// The ANSI forms point into the bytes they are given, read one byte to a character as single-byte code pages have them.
+	registry.add("PathFindFileNameA", 1, [](ApiCall &call) { call.ret(call[0] + file_name_start(widen_ascii(call.narrow(call[0])))); });
+	registry.add("PathFindExtensionA", 1, [](ApiCall &call) { call.ret(call[0] + extension_start(widen_ascii(call.narrow(call[0])))); });
 	registry.add("PathSkipRootW", 1, [](ApiCall &call) {
 		const auto path = call.wide(call[0]);
 		const size_t root = root_length(path);
