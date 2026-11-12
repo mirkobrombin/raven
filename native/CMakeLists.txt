@@ -4524,7 +4524,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set(media_source ${PROJECT_SOURCE_DIR}/native/guest/raven-media)
                 set(media_components ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
                     ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
-                    ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll)
+                    ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/raven-msacm32.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-msacm32.dll)
                 add_custom_command(OUTPUT ${media_components}
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll
@@ -4539,7 +4540,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
                         ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
-                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c VERBATIM)
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-msacm32.dll
+                        ${media_source}/msacm32.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-msacm32.dll
+                        ${media_source}/msacm32.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lkernel32
+                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c ${media_source}/msacm32.c
+                        ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c VERBATIM)
                 add_custom_target(media_component ALL DEPENDS ${media_components})
                 # A media library imports both, as cri_ware_unity.dll does; the fixture does too, and asks each one for its answers.
                 foreach(width 64 32)
@@ -4559,6 +4565,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(media_fixture${width} ALL DEPENDS ${media_client} media_component)
                     add_test(NAME native_media_x${width} COMMAND raven --run-process --execution=native ${media_client})
                     set_tests_properties(native_media_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # msacm32.dll's conversions between PCM and MS ADPCM.
+                    set(acm_client ${CMAKE_CURRENT_BINARY_DIR}/acm-client${width}.exe)
+                    add_custom_command(OUTPUT ${acm_client}
+                        COMMAND ${media_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${media_entry},--no-insert-timestamp
+                            -o ${acm_client} ${LOADER_SOURCES}/acm_client.c -lmsacm32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/acm_client.c VERBATIM)
+                    add_custom_target(acm_fixture${width} ALL DEPENDS ${acm_client} media_component)
+                    add_test(NAME native_acm_x${width} COMMAND raven --run-process --execution=native ${acm_client})
+                    set_tests_properties(native_acm_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # winscard.dll, the smart card interface, for each width: with no card service, every context is refused.
                 set(winscard_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winscard)
