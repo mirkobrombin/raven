@@ -3078,7 +3078,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_canvas_service(api_registry, kernel);
 	register_sync_api(api_registry, kernel);
 	register_thread_api(api_registry, kernel);
-	NativeObjectAPI::register_served(api_registry, kernel.objects);
+	NativeObjectAPI::register_served(api_registry, kernel.objects, kernel.threads);
 	register_text_api(api_registry, kernel);
 	register_console_api(api_registry, kernel);
 	register_memory_api(api_registry, kernel);

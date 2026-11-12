@@ -77,6 +77,13 @@ void NativeThreads::stop_time_slicing()
 	process.set_time_slicing(std::chrono::milliseconds(0), nullptr, nullptr);
 }
 
+bool NativeThreads::others_waiting() const
+{
+	return std::any_of(threads.begin(), threads.end(), [this](const auto &thread) {
+		return thread.get() != running && thread->state == GuestThread::State::waiting && thread->suspend_count == 0;
+	});
+}
+
 size_t NativeThreads::live() const
 {
 	return size_t(std::count_if(threads.begin(), threads.end(), [](const auto &thread) { return thread->state != GuestThread::State::done; }));
@@ -573,6 +580,26 @@ bool NativeThreads::yield()
 	switch_to(*next);
 	running->state = GuestThread::State::running;
 	return true;
+}
+
+// On Windows a thread whose wait ends wakes at once on another processor while the thread that ended it goes on. Programs count on it
+// having moved on: a dialog that a worker closes through the window's thread asks whether the worker is still alive, and on Windows it
+// has ended by then. Here the woken thread runs first, until it waits again or its time slice ends.
+bool NativeThreads::hand_over()
+{
+	if (tearing_down)
+		return false;
+	for (const auto &thread : threads) {
+		if (thread.get() == running || thread->state != GuestThread::State::waiting || thread->suspend_count > 0)
+			continue;
+		if (thread->ready && thread->ready()) {
+			running->state = GuestThread::State::ready;
+			switch_to(*thread);
+			running->state = GuestThread::State::running;
+			return true;
+		}
+	}
+	return false;
 }
 
 void NativeThreads::exit_current(uint32_t code)

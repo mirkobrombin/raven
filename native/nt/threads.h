@@ -137,6 +137,10 @@ public:
 	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake);
 	// Lets another runnable thread run; false when nothing else is runnable.
 	bool yield();
+	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
+	bool hand_over();
+	// Whether a thread other than the running one waits.
+	bool others_waiting() const;
 	[[noreturn]] void exit_current(uint32_t code);
 	void terminate(const std::shared_ptr<GuestThread> &thread, uint32_t code);
 	// Ends every thread but the running one where it stands, as ExitProcess does before the libraries are told the process detaches.
