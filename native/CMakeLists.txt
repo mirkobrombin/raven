@@ -4021,6 +4021,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(slow_start_fixture${width} ALL DEPENDS ${slow_start_dir}/client.exe ${slow_start_dir}/slow-start.dll)
                     add_test(NAME native_slow_start_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${slow_start_dir}/client.exe)
                     set_tests_properties(native_slow_start_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(busy_deadline_client ${CMAKE_CURRENT_BINARY_DIR}/busy-deadline${width}.exe)
+                    add_custom_command(OUTPUT ${busy_deadline_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${busy_deadline_client} ${LOADER_SOURCES}/busy_deadline_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/busy_deadline_client.c VERBATIM)
+                    add_custom_target(busy_deadline_fixture${width} ALL DEPENDS ${busy_deadline_client})
+                    add_test(NAME native_busy_deadline_x${width} COMMAND raven --run-process --execution=native --timeout-ms=30000 ${busy_deadline_client})
+                    set_tests_properties(native_busy_deadline_x${width} PROPERTIES TIMEOUT 45 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

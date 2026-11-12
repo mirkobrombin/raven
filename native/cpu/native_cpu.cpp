@@ -97,6 +97,7 @@ public:
 	void send_descriptor(int descriptor);
 	int descriptor_socket() const { return guest_channel; }
 	void set_timeout(std::chrono::milliseconds timeout);
+	void set_deadline(std::chrono::steady_clock::time_point end) { deadline = end; }
 	void enable_parallel();
 	pid_t clone_task(uint64_t stack);
 	bool take_stop(pid_t task, int &status);
@@ -1877,6 +1878,9 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		else
 			child.clear_slice();
 		event_info.reset();
+		// The runtime's own short waits, and other threads run while this one yielded, leave the child a deadline of theirs: this call's
+		// comes back before each wait, or a thread that computes long after another ended would be stopped as if its time had run out.
+		child.set_deadline(execution_deadline);
 		if (state->resume_hook)
 			state->resume_hook();
 		trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid);
