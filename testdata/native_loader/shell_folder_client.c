@@ -132,6 +132,18 @@ int raven_entry(void)
 	if (!create_list || create_list(directory, &created, &wanted) != S_OK || !created || wanted != SFGAO_FOLDER ||
 		!SHGetPathFromIDListW(created, parsed) || lstrcmpiW(parsed, directory) && (lstrlenW(parsed) + 1 != lstrlenW(directory)))
 		return 29;
+	/* The item of that list, as the dialog then makes it, gives the folder back. */
+	HRESULT (WINAPI *create_item)(PCIDLIST_ABSOLUTE, IShellFolder *, PCUITEMID_CHILD, IShellItem **) =
+		(HRESULT (WINAPI *)(PCIDLIST_ABSOLUTE, IShellFolder *, PCUITEMID_CHILD, IShellItem **))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHCreateShellItem");
+	IShellItem *shell_item = NULL;
+	WCHAR *item_path = NULL;
+	if (!create_item || create_item(NULL, NULL, (PCUITEMID_CHILD)created, &shell_item) != S_OK || !shell_item ||
+		IShellItem_GetDisplayName(shell_item, SIGDN_FILESYSPATH, &item_path) != S_OK || !SHGetPathFromIDListW(created, parsed) ||
+		lstrcmpiW(item_path, parsed))
+		return 31;
+	CoTaskMemFree(item_path);
+	IShellItem_Release(shell_item);
 	ILFree((PIDLIST_RELATIVE)created);
 	created = (PIDLIST_ABSOLUTE)1;
 	if (create_list(missing, &created, NULL) != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || created)

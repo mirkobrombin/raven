@@ -867,6 +867,37 @@ HRESULT WINAPI SHCreateItemFromIDList(PCIDLIST_ABSOLUTE list, REFIID iid, void *
 	return SHCreateItemFromParsingName(path, NULL, iid, out);
 }
 
+PIDLIST_ABSOLUTE WINAPI ILCombine(PCIDLIST_ABSOLUTE first, PCUIDLIST_RELATIVE second);
+void WINAPI ILFree(PIDLIST_RELATIVE list);
+
+/* The item a list names, relative to a parent list or to a folder that knows its own, or absolute when neither is given. */
+HRESULT WINAPI SHCreateShellItem(PCIDLIST_ABSOLUTE parent, IShellFolder *folder, PCUITEMID_CHILD child, IShellItem **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!child)
+		return E_INVALIDARG;
+	PIDLIST_ABSOLUTE own = NULL;
+	if (!parent && folder) {
+		IPersistFolder2 *persist = NULL;
+		if (FAILED(IShellFolder_QueryInterface(folder, &IID_IPersistFolder2, (void **)&persist)))
+			return E_INVALIDARG;
+		HRESULT result = IPersistFolder2_GetCurFolder(persist, &own);
+		IPersistFolder2_Release(persist);
+		if (FAILED(result))
+			return result;
+		parent = own;
+	}
+	PIDLIST_ABSOLUTE whole = parent ? ILCombine(parent, (PCUIDLIST_RELATIVE)child) : NULL;
+	HRESULT result = SHCreateItemFromIDList(whole ? whole : (PCIDLIST_ABSOLUTE)child, &IID_IShellItem, (void **)out);
+	if (whole)
+		ILFree((PIDLIST_RELATIVE)whole);
+	if (own)
+		ILFree((PIDLIST_RELATIVE)own);
+	return result;
+}
+
 HRESULT WINAPI SHCreateItemFromParsingName(PCWSTR path, IBindCtx *context, REFIID iid, void **out)
 {
 	IShellItem *item;
