@@ -48,6 +48,9 @@ struct KernelContext {
 	bool shutdown_in_progress = false;
 	// Delivers a CPU fault to the guest's handlers; never returns normally (it redirects or ends the process).
 	std::function<void(const NativeResult &)> raise_fault;
+	// At an API call made inside callbacks: ends those the guest has left without returning, and makes the call again at the nesting
+	// its stack belongs to (it then never returns).
+	std::function<void()> leave_abandoned_callbacks;
 	// Walks the guest stack with the unwind tables and names each caller as module+offset (diagnostics only).
 	std::function<std::string()> describe_stack;
 	// Current and new queue categories for a thread; the last argument clears the requested new bits.

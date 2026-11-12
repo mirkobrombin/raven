@@ -4142,6 +4142,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(fls_exit_fixture ALL DEPENDS ${fls_exit_client})
                         add_test(NAME native_fls_exit_x64 COMMAND raven --run-process --execution=native ${fls_exit_client})
                         set_tests_properties(native_fls_exit_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        set(handler_escape_client ${CMAKE_CURRENT_BINARY_DIR}/handler-escape64.exe)
+                        add_custom_command(OUTPUT ${handler_escape_client}
+                            COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                                -o ${handler_escape_client} ${LOADER_SOURCES}/handler_escape_client.c -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/handler_escape_client.c VERBATIM)
+                        add_custom_target(handler_escape_fixture ALL DEPENDS ${handler_escape_client})
+                        add_test(NAME native_handler_escape_x64 COMMAND raven --run-process --execution=native ${handler_escape_client})
+                        set_tests_properties(native_handler_escape_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                         set(system_graphics_client ${CMAKE_CURRENT_BINARY_DIR}/system-graphics64.exe)
                         add_custom_command(OUTPUT ${system_graphics_client}
                             COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

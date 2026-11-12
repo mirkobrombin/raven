@@ -2640,6 +2640,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const auto error_before = trace_failures ? environment.last_error() : 0;
 			const auto failure_arguments = trace_failures ? process.api_arguments(4) : std::vector<uint64_t>{};
 			try {
+				if (kernel_ptr && kernel_ptr->leave_abandoned_callbacks && process.callback_depth() > 0)
+					kernel_ptr->leave_abandoned_callbacks();
 				const WindowCallScope window_scope(windows);
 				// The generalized desktop services come first so that they replace the older narrow ones.
 				dispatched = desktop_api.dispatch(process, environment, api_name) || environment.dispatch(api_name) || module_api.dispatch(api_name) || resources.dispatch(api_name) || memory.dispatch(api_name) || object_api.dispatch(api_name) || heap.dispatch(api_name) || desktop.dispatch(api_name) || windows.dispatch(api_name) || api_registry.dispatch(process, environment, api_name)

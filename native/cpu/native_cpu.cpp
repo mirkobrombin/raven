@@ -1409,6 +1409,14 @@ uint64_t NativeProcess::result_register() const
 	return registers.rax;
 }
 
+user_regs_struct NativeProcess::general_registers() const
+{
+	state->require_stopped();
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, state->child->pid, &registers);
+	return registers;
+}
+
 size_t NativeProcess::callback_depth() const
 {
 	return state->callbacks.size();

@@ -179,8 +179,8 @@ public:
 			ContextBytes next = current;
 			const auto result = unwinder.unwind(1, pc, *function, next);
 			if (trace)
-				std::fprintf(stderr, "seh frame: pc=%llx function=%x..%x unwind=%x handler=%llx\n", (unsigned long long)pc, function->begin, function->end,
-					function->unwind, (unsigned long long)result.handler);
+				std::fprintf(stderr, "seh frame: pc=%llx function=%x..%x unwind=%x handler=%llx rsp=%llx establisher=%llx\n", (unsigned long long)pc, function->begin, function->end,
+					function->unwind, (unsigned long long)result.handler, (unsigned long long)context_rsp(current), (unsigned long long)result.establisher);
 			if (result.handler) {
 				context.process.write_memory(frame_context, next);
 				std::vector<uint8_t> descriptor(dispatcher_size);
@@ -1019,11 +1019,43 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 	});
 	// The context resumes at the callback nesting its stack belongs to: callbacks begun from deeper in the stack than its frame, such as the
 	// handler calls of a dispatch that a runtime leaves this way for a catch block, are abandoned.
+	// A runtime may also leave the handler calls of a dispatch by loading the continuation's registers itself, as the .NET runtime does
+	// after a catch block, so that no RtlRestoreContext tells of it. The guest's next API call then comes from a stack that the
+	// innermost callbacks were started below: they are over, their frames gone, and the call is made again at the nesting its stack
+	// belongs to. A stack pointer outside the stack the TEB describes, as on another fiber's stack, says nothing about the callbacks.
+	context.leave_abandoned_callbacks = [exceptions, &context] {
+		if (context.process.mode() != NativeMode::x64)
+			return;
+		const auto registers = context.process.general_registers();
+		const auto bounds = context.process.read_memory(registers.gs_base + 8, 16);
+		const uint64_t base = load64(bounds, 0), limit = load64(bounds, 8);
+		if (registers.rsp < limit || registers.rsp >= base)
+			return;
+		size_t depth = context.process.callback_depth();
+		while (depth > 0) {
+			const uint64_t origin = context.process.callback_origin(depth - 1).registers.rsp;
+			if (origin < limit || origin > registers.rsp)
+				break;
+			--depth;
+		}
+		if (depth == context.process.callback_depth())
+			return;
+		if (std::getenv("RAVEN_TRACE_SEH"))
+			std::fprintf(stderr, "seh: callbacks %zu..%zu left by a jump to rsp=%llx\n", depth, context.process.callback_depth(),
+				(unsigned long long)registers.rsp);
+		// The trap stopped one byte past the API's entry: execution goes back there to make the call again.
+		auto target = context_from_process(context.process.context());
+		set_context_rip(target, context_rip(target) - 1);
+		exceptions->redirect_to(target, depth);
+	};
 	const auto restore = [exceptions, &context](ApiCall &call) {
 		const auto target = call.read(call[0], x64_context::size);
 		size_t depth = context.process.callback_depth();
 		while (depth > 0 && context.process.callback_origin(depth - 1).registers.rsp <= context_rsp(target))
 			--depth;
+		if (std::getenv("RAVEN_TRACE_SEH"))
+			std::fprintf(stderr, "seh restore: rip=%llx rsp=%llx depth %zu->%zu\n", (unsigned long long)context_rip(target), (unsigned long long)context_rsp(target),
+				context.process.callback_depth(), depth);
 		exceptions->redirect_to(target, depth);
 	};
 	exceptions->trap_gate = 0;
