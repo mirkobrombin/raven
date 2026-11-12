@@ -4966,6 +4966,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         $<TARGET_FILE:raven> ${RAVEN_NETFX_INSTALLER} ${RAVEN_KEEPASS_SETUP} ${CMAKE_CURRENT_BINARY_DIR}/keepass-evidence)
                     set_tests_properties(native_keepass_workflow PROPERTIES TIMEOUT 3600 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
                 endif()
+                # Mp3tag 3.36.1 for x64 as mp3tag.de publishes it (scripts/native-mp3tag.py): a folder of MP3 files opened, one title, the
+                # artist and album of all three and a cover changed and saved, and the files on the host read back.
+                set(RAVEN_MP3TAG_SETUP "" CACHE FILEPATH "mp3tag-v3.36.1-x64-setup.exe as mp3tag.de publishes it")
+                if(TARGET raven_wayland AND RAVEN_LABWC AND RAVEN_GRIM AND RAVEN_WLRCTL AND RAVEN_WTYPE AND RAVEN_PIL_PYTHON
+                   AND RAVEN_MP3TAG_SETUP AND EXISTS "${RAVEN_MP3TAG_SETUP}")
+                    add_test(NAME native_mp3tag_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-mp3tag.py
+                        $<TARGET_FILE:raven> ${RAVEN_MP3TAG_SETUP} ${CMAKE_CURRENT_BINARY_DIR}/mp3tag-evidence)
+                    set_tests_properties(native_mp3tag_workflow PROPERTIES TIMEOUT 1200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
+                endif()
                 # A self-contained .NET 8 program, published with the .NET SDK given: the runtime loads its libraries of managed code alone,
                 # built for any CPU, and a managed exception and a runtime one are thrown and caught.
                 set(RAVEN_DOTNET_SDK "" CACHE FILEPATH "the dotnet command of a .NET 8 SDK, which publishes testdata/dotnet/exceptions for win-x64")
