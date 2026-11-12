@@ -353,6 +353,29 @@ HRESULT WINAPI SHILCreateFromPath(PCWSTR path, PIDLIST_ABSOLUTE *out, DWORD *att
 	return *out ? S_OK : E_OUTOFMEMORY;
 }
 
+/* The list of a name as the desktop folder parses it, with the attributes asked for. */
+HRESULT WINAPI SHParseDisplayName(PCWSTR name, IBindCtx *context, PIDLIST_ABSOLUTE *out, SFGAOF wanted, SFGAOF *attributes)
+{
+	IShellFolder *desktop = NULL;
+	ULONG found = wanted;
+	HRESULT result;
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	if (attributes)
+		*attributes = 0;
+	if (!name)
+		return E_INVALIDARG;
+	result = SHGetDesktopFolder(&desktop);
+	if (FAILED(result))
+		return result;
+	result = desktop->lpVtbl->ParseDisplayName(desktop, NULL, context, (LPWSTR)name, NULL, (PIDLIST_RELATIVE *)out, wanted ? &found : NULL);
+	desktop->lpVtbl->Release(desktop);
+	if (SUCCEEDED(result) && attributes)
+		*attributes = wanted ? found : 0;
+	return result;
+}
+
 static HRESULT WINAPI folder_parse(IShellFolder *face, HWND window, IBindCtx *context, LPWSTR name, ULONG *eaten, PIDLIST_RELATIVE *out, ULONG *attributes)
 {
 	shell_folder *self = (shell_folder *)face;

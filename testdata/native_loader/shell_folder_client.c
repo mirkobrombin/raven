@@ -148,6 +148,18 @@ int raven_entry(void)
 	created = (PIDLIST_ABSOLUTE)1;
 	if (create_list(missing, &created, NULL) != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || created)
 		return 30;
+	/* The same by display name, as Mp3tag finds the folder it starts in, with the attributes asked for; a missing path is refused. */
+	HRESULT (WINAPI *parse_name)(PCWSTR, IBindCtx *, PIDLIST_ABSOLUTE *, SFGAOF, SFGAOF *) =
+		(HRESULT (WINAPI *)(PCWSTR, IBindCtx *, PIDLIST_ABSOLUTE *, SFGAOF, SFGAOF *))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHParseDisplayName");
+	SFGAOF found = 0;
+	if (!parse_name || parse_name(directory, NULL, &created, SFGAO_FOLDER | SFGAO_STREAM, &found) != S_OK || !created ||
+		found != SFGAO_FOLDER || !SHGetPathFromIDListW(created, parsed) || lstrcmpiW(parsed, directory) && (lstrlenW(parsed) + 1 != lstrlenW(directory)))
+		return 32;
+	ILFree((PIDLIST_RELATIVE)created);
+	created = (PIDLIST_ABSOLUTE)1;
+	if (SUCCEEDED(parse_name(missing, NULL, &created, 0, NULL)) || created)
+		return 33;
 
 	ILFree((PIDLIST_RELATIVE)first);
 	ILFree(clone);
