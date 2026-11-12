@@ -4158,6 +4158,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(system_graphics_fixture ALL DEPENDS ${system_graphics_client})
                         add_test(NAME native_system_graphics_x64 COMMAND raven --run-process --execution=native ${system_graphics_client})
                         set_tests_properties(native_system_graphics_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        set(d2d1_context_client ${CMAKE_CURRENT_BINARY_DIR}/d2d1-context64.exe)
+                        add_custom_command(OUTPUT ${d2d1_context_client}
+                            COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                                -o ${d2d1_context_client} ${LOADER_SOURCES}/d2d1_context_client.c -lole32 -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/d2d1_context_client.c VERBATIM)
+                        add_custom_target(d2d1_context_fixture ALL DEPENDS ${d2d1_context_client})
+                        add_test(NAME native_d2d1_context_x64 COMMAND raven --run-process --execution=native ${d2d1_context_client})
+                        set_tests_properties(native_d2d1_context_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     endif()
                     # mlang comes with the installer components, whose import library the client links against.
                     if(width EQUAL 64)

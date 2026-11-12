@@ -1876,6 +1876,73 @@ static D2D1_SIZE_F *STDMETHODCALLTYPE layer_GetSize(void *iface, D2D1_SIZE_F *si
 static void **layer_table;
 static const GUID *const layer_iids[] = {&IID_ID2D1Resource, &IID_ID2D1Layer};
 
+/* ---- color contexts: a color space, and for a custom one the ICC profile that defines it ---- */
+struct color_context {
+	struct object base;
+	D2D1_COLOR_SPACE space;
+	UINT32 size;
+	BYTE *profile;
+	/* What ID2D1ColorContext1 tells: made from a profile, from a DXGI color space, or from a simple profile. */
+	D2D1_COLOR_CONTEXT_TYPE type;
+	DXGI_COLOR_SPACE_TYPE dxgi;
+	D2D1_SIMPLE_COLOR_PROFILE simple;
+};
+
+static void color_context_destroy(struct object *self) { FREE(((struct color_context *)self)->profile); }
+static D2D1_COLOR_SPACE STDMETHODCALLTYPE color_context_GetColorSpace(void *iface) { return ((struct color_context *)iface)->space; }
+static UINT32 STDMETHODCALLTYPE color_context_GetProfileSize(void *iface) { return ((struct color_context *)iface)->size; }
+
+static HRESULT STDMETHODCALLTYPE color_context_GetProfile(void *iface, BYTE *profile, UINT32 size)
+{
+	const struct color_context *self = iface;
+	if (size < self->size)
+		return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+	if (self->size)
+		memcpy(profile, self->profile, self->size);
+	return S_OK;
+}
+
+static D2D1_COLOR_CONTEXT_TYPE STDMETHODCALLTYPE color_context_GetColorContextType(void *iface) { return ((struct color_context *)iface)->type; }
+static DXGI_COLOR_SPACE_TYPE STDMETHODCALLTYPE color_context_GetDXGIColorSpace(void *iface) { return ((struct color_context *)iface)->dxgi; }
+
+static HRESULT STDMETHODCALLTYPE color_context_GetSimpleColorProfile(void *iface, D2D1_SIMPLE_COLOR_PROFILE *profile)
+{
+	const struct color_context *self = iface;
+	if (!profile)
+		return E_INVALIDARG;
+	if (self->type != D2D1_COLOR_CONTEXT_TYPE_SIMPLE)
+		return D2DERR_INVALID_PROPERTY;
+	*profile = self->simple;
+	return S_OK;
+}
+
+/* ID2D1ColorContext1 adds three methods after those of ID2D1ColorContext. */
+enum { color_context_type_slot = ID2D1ColorContext_methods, color_context_dxgi_slot, color_context_simple_slot, color_context_methods };
+static void **color_context_table;
+static const GUID *const color_context_iids[] = {&IID_ID2D1Resource, &IID_ID2D1ColorContext, &IID_ID2D1ColorContext1};
+
+/* A context of this kind and space, with the profile it was given; the caller checks the arguments. */
+static HRESULT make_color_context(IUnknown *factory, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size, D2D1_COLOR_CONTEXT_TYPE type,
+	DXGI_COLOR_SPACE_TYPE dxgi, ID2D1ColorContext **out)
+{
+	struct color_context *color;
+	if (!(color = ALLOC(sizeof(*color))))
+		return E_OUTOFMEMORY;
+	if (size && !(color->profile = ALLOC(size))) {
+		FREE(color);
+		return E_OUTOFMEMORY;
+	}
+	if (size)
+		memcpy(color->profile, profile, size);
+	color->space = space;
+	color->size = size;
+	color->type = type;
+	color->dxgi = dxgi;
+	object_init(&color->base, color_context_table, color_context_destroy, color_context_iids, 3, factory);
+	*out = (ID2D1ColorContext *)color;
+	return S_OK;
+}
+
 /* ---- meshes: the triangles a tessellation sink writes, each a closed figure of one path that a target fills ---- */
 struct mesh {
 	struct object base;
@@ -2047,6 +2114,16 @@ static void build_resource_tables(void)
 	image_brush_table[ID2D1ImageBrush_GetInterpolationMode_slot] = (void *)brush_GetInterpolationMode;
 	image_brush_table[ID2D1ImageBrush_GetSourceRectangle_slot] = (void *)brush_GetSourceRectangle;
 
+	color_context_table = ALLOC(color_context_methods * sizeof(void *));
+	memcpy(color_context_table, ID2D1ColorContext_table, ID2D1ColorContext_methods * sizeof(void *));
+	color_context_table[color_context_type_slot] = (void *)color_context_GetColorContextType;
+	color_context_table[color_context_dxgi_slot] = (void *)color_context_GetDXGIColorSpace;
+	color_context_table[color_context_simple_slot] = (void *)color_context_GetSimpleColorProfile;
+	set_resource(color_context_table);
+	color_context_table[ID2D1ColorContext_GetColorSpace_slot] = (void *)color_context_GetColorSpace;
+	color_context_table[ID2D1ColorContext_GetProfileSize_slot] = (void *)color_context_GetProfileSize;
+	color_context_table[ID2D1ColorContext_GetProfile_slot] = (void *)color_context_GetProfile;
+
 	layer_table = make_table(ID2D1Layer_table, ID2D1Layer_methods);
 	set_resource(layer_table);
 	layer_table[ID2D1Layer_GetSize_slot] = (void *)layer_GetSize;
@@ -2120,7 +2197,7 @@ static struct target *target_of(void *iface)
 }
 
 static const GUID *const context_iids[] = {&IID_ID2D1DeviceContext, &IID_ID2D1DeviceContext1, &IID_ID2D1DeviceContext2, &IID_ID2D1DeviceContext3,
-	&IID_ID2D1DeviceContext4, &IID_ID2D1DeviceContext5};
+	&IID_ID2D1DeviceContext4, &IID_ID2D1DeviceContext5, &IID_ID2D1DeviceContext6};
 
 static HRESULT STDMETHODCALLTYPE target_QueryInterface(void *iface, REFIID riid, void **out)
 {
@@ -2128,7 +2205,7 @@ static HRESULT STDMETHODCALLTYPE target_QueryInterface(void *iface, REFIID riid,
 	void *found = NULL;
 	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1Resource) || same_guid(riid, &IID_ID2D1RenderTarget))
 		found = &self->primary;
-	else if (any_guid(riid, context_iids, 6))
+	else if (any_guid(riid, context_iids, 7))
 		found = self->kind == TARGET_CONTEXT ? (void *)&self->primary : (void *)&self->context;
 	else if (same_guid(riid, &IID_ID2D1HwndRenderTarget) && self->kind == TARGET_HWND)
 		found = &self->primary;
@@ -3309,6 +3386,50 @@ static HRESULT STDMETHODCALLTYPE target_CreateLayer(void *iface, const D2D1_SIZE
 	return S_OK;
 }
 
+/* A standard space takes no profile and a custom one needs its profile, which the context keeps a copy of. Such a context counts as one
+   made from a profile; the standard spaces have DXGI names of their own. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContext(void *iface, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size,
+	ID2D1ColorContext **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (space == D2D1_COLOR_SPACE_CUSTOM ? !profile || !size : (space != D2D1_COLOR_SPACE_SRGB && space != D2D1_COLOR_SPACE_SCRGB) || profile || size)
+		return E_INVALIDARG;
+	return make_color_context(target_of(iface)->factory, space, profile, size, D2D1_COLOR_CONTEXT_TYPE_ICC,
+		space == D2D1_COLOR_SPACE_SRGB ? DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 : space == D2D1_COLOR_SPACE_SCRGB ?
+		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
+}
+
+/* A DXGI color space: the two that sRGB and scRGB are keep those names, any other is a custom space. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromDxgiColorSpace(void *iface, DXGI_COLOR_SPACE_TYPE dxgi, ID2D1ColorContext1 **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (dxgi == DXGI_COLOR_SPACE_CUSTOM)
+		return E_INVALIDARG;
+	return make_color_context(target_of(iface)->factory, dxgi == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ? D2D1_COLOR_SPACE_SRGB :
+		dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ? D2D1_COLOR_SPACE_SCRGB : D2D1_COLOR_SPACE_CUSTOM, NULL, 0,
+		D2D1_COLOR_CONTEXT_TYPE_DXGI, dxgi, (ID2D1ColorContext **)out);
+}
+
+/* A simple profile, its primaries, white point and gamma, which the context gives back as it was given. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromSimpleColorProfile(void *iface, const D2D1_SIMPLE_COLOR_PROFILE *simple,
+	ID2D1ColorContext1 **out)
+{
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!simple)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, NULL, 0, D2D1_COLOR_CONTEXT_TYPE_SIMPLE,
+		DXGI_COLOR_SPACE_CUSTOM, (ID2D1ColorContext **)out)))
+		((struct color_context *)*out)->simple = *simple;
+	return result;
+}
+
 static HRESULT STDMETHODCALLTYPE target_CreateMesh(void *iface, ID2D1Mesh **out)
 {
 	struct mesh *mesh = ALLOC(sizeof(*mesh));
@@ -3736,6 +3857,7 @@ struct effect_property {
 	WCHAR *name;
 	property_setter set;
 	property_getter get;
+	D2D1_PROPERTY_TYPE type;
 };
 
 struct registered_effect {
@@ -3803,6 +3925,41 @@ static WCHAR *wide_copy(const WCHAR *text, size_t length)
 	return copy;
 }
 
+/* A property's type as the XML names it. */
+static D2D1_PROPERTY_TYPE property_type_named(const WCHAR *name, size_t length)
+{
+	static const struct { const WCHAR *name; D2D1_PROPERTY_TYPE type; } types[] = {
+		{L"string", D2D1_PROPERTY_TYPE_STRING}, {L"bool", D2D1_PROPERTY_TYPE_BOOL}, {L"uint32", D2D1_PROPERTY_TYPE_UINT32},
+		{L"int32", D2D1_PROPERTY_TYPE_INT32}, {L"float", D2D1_PROPERTY_TYPE_FLOAT}, {L"vector2", D2D1_PROPERTY_TYPE_VECTOR2},
+		{L"vector3", D2D1_PROPERTY_TYPE_VECTOR3}, {L"vector4", D2D1_PROPERTY_TYPE_VECTOR4}, {L"blob", D2D1_PROPERTY_TYPE_BLOB},
+		{L"iunknown", D2D1_PROPERTY_TYPE_IUNKNOWN}, {L"enum", D2D1_PROPERTY_TYPE_ENUM}, {L"array", D2D1_PROPERTY_TYPE_ARRAY},
+		{L"clsid", D2D1_PROPERTY_TYPE_CLSID}, {L"matrix3x2", D2D1_PROPERTY_TYPE_MATRIX_3X2}, {L"matrix4x3", D2D1_PROPERTY_TYPE_MATRIX_4X3},
+		{L"matrix4x4", D2D1_PROPERTY_TYPE_MATRIX_4X4}, {L"matrix5x4", D2D1_PROPERTY_TYPE_MATRIX_5X4},
+		{L"colorcontext", D2D1_PROPERTY_TYPE_COLOR_CONTEXT}};
+	size_t index;
+	for (index = 0; index < sizeof(types) / sizeof(*types); ++index)
+		if (wide_length(types[index].name) == length && wide_starts(name, types[index].name))
+			return types[index].type;
+	return D2D1_PROPERTY_TYPE_UNKNOWN;
+}
+
+/* The value of an attribute within an element's text up to end, and its length; NULL when the element has none. */
+static const WCHAR *attribute_value(const WCHAR *at, const WCHAR *end, const WCHAR *name, size_t *length)
+{
+	const size_t name_length = wide_length(name);
+	for (; at < end; ++at)
+		if ((at[-1] == ' ' || at[-1] == '\t' || at[-1] == '\r' || at[-1] == '\n') && wide_starts(at, name) && at[name_length] == '=' &&
+			(at[name_length + 1] == '\'' || at[name_length + 1] == '"')) {
+			const WCHAR quote = at[name_length + 1];
+			const WCHAR *value = at + name_length + 2;
+			*length = 0;
+			while (value + *length < end && value[*length] != quote)
+				++*length;
+			return value;
+		}
+	return NULL;
+}
+
 /* The custom properties are the <Property> elements directly inside <Effect>, in order, other than the ones that describe the effect. */
 static void parse_effect_properties(struct registered_effect *effect, const WCHAR *xml)
 {
@@ -3817,29 +3974,24 @@ static void parse_effect_properties(struct registered_effect *effect, const WCHA
 		if (at[0] != '<' || !wide_starts(at + 1, L"Property") || (at[9] != ' ' && at[9] != '\t' && at[9] != '\r' && at[9] != '\n'))
 			continue;
 		{
-			const WCHAR *end = at, *name = NULL;
-			size_t length = 0;
+			const WCHAR *end = at, *name, *type;
+			size_t length = 0, type_length = 0;
 			int closed;
 			while (*end && *end != '>')
 				++end;
 			closed = end > at && end[-1] == '/';
-			for (name = at; name < end; ++name)
-				if (wide_starts(name, L"name=") && (name[5] == '\'' || name[5] == '"')) {
-					const WCHAR quote = name[5];
-					name += 6;
-					while (name + length < end && name[length] != quote)
-						++length;
-					break;
-				}
-			if (depth == 0 && name < end && length) {
+			name = attribute_value(at + 1, end, L"name", &length);
+			type = attribute_value(at + 1, end, L"type", &type_length);
+			if (depth == 0 && name && length) {
 				WCHAR *copy = wide_copy(name, length);
 				UINT32 index;
 				int skip = 0;
 				for (index = 0; copy && index < sizeof(described) / sizeof(described[0]); ++index)
 					skip |= wide_equal(copy, described[index]);
-				if (copy && !skip && effect->property_count < EFFECT_PROPERTIES)
+				if (copy && !skip && effect->property_count < EFFECT_PROPERTIES) {
+					effect->properties[effect->property_count].type = type ? property_type_named(type, type_length) : D2D1_PROPERTY_TYPE_UNKNOWN;
 					effect->properties[effect->property_count++].name = copy;
-				else
+				} else
 					FREE(copy);
 			}
 			if (!closed)
@@ -3980,7 +4132,12 @@ static UINT32 STDMETHODCALLTYPE effect_GetPropertyNameLength(void *iface, UINT32
 	return property ? (UINT32)wide_length(property->name) : 0;
 }
 
-static D2D1_PROPERTY_TYPE STDMETHODCALLTYPE effect_GetType(void *iface, UINT32 index) { return D2D1_PROPERTY_TYPE_UNKNOWN; }
+/* A program's own effect has the types its XML gives; what the properties of the system's effects are is not known here. */
+static D2D1_PROPERTY_TYPE STDMETHODCALLTYPE effect_GetType(void *iface, UINT32 index)
+{
+	const struct effect_property *property = effect_property_at(iface, index);
+	return property ? property->type : D2D1_PROPERTY_TYPE_UNKNOWN;
+}
 
 static UINT32 STDMETHODCALLTYPE effect_GetPropertyIndex(void *iface, const WCHAR *name)
 {
@@ -4221,6 +4378,36 @@ static HRESULT make_effect(IUnknown *factory, ID2D1Effect **out)
 	return S_OK;
 }
 
+/* Two system effects the headers declare only for newer Windows targets than this one is built for. */
+DEFINE_GUID(CLSID_D2D1WhiteLevelAdjustment, 0x44a1cadb, 0x6cdd, 0x4818, 0x8f, 0xf4, 0x26, 0xc1, 0xcf, 0xe9, 0x5b, 0xdb);
+DEFINE_GUID(CLSID_D2D1HdrToneMap, 0x7b0b748d, 0x4610, 0x4486, 0xa9, 0x0c, 0x99, 0x9d, 0x9a, 0x2e, 0x2b, 0x11);
+
+/* The effects Direct2D itself provides; any other must be registered first, and a program that has its own registers it on being told so. */
+static const CLSID *const system_effects[] = {
+	&CLSID_D2D12DAffineTransform, &CLSID_D2D13DPerspectiveTransform, &CLSID_D2D13DTransform, &CLSID_D2D1AlphaMask,
+	&CLSID_D2D1ArithmeticComposite, &CLSID_D2D1Atlas, &CLSID_D2D1BitmapSource, &CLSID_D2D1Blend, &CLSID_D2D1Border,
+	&CLSID_D2D1Brightness, &CLSID_D2D1ChromaKey, &CLSID_D2D1ColorManagement, &CLSID_D2D1ColorMatrix, &CLSID_D2D1Composite,
+	&CLSID_D2D1Contrast, &CLSID_D2D1ConvolveMatrix, &CLSID_D2D1Crop, &CLSID_D2D1CrossFade, &CLSID_D2D1DirectionalBlur,
+	&CLSID_D2D1DiscreteTransfer, &CLSID_D2D1DisplacementMap, &CLSID_D2D1DistantDiffuse, &CLSID_D2D1DistantSpecular,
+	&CLSID_D2D1DpiCompensation, &CLSID_D2D1EdgeDetection, &CLSID_D2D1Emboss, &CLSID_D2D1Exposure, &CLSID_D2D1Flood,
+	&CLSID_D2D1GammaTransfer, &CLSID_D2D1GaussianBlur, &CLSID_D2D1Grayscale, &CLSID_D2D1HdrToneMap, &CLSID_D2D1HighlightsShadows,
+	&CLSID_D2D1Histogram, &CLSID_D2D1HueRotation, &CLSID_D2D1HueToRgb, &CLSID_D2D1Invert, &CLSID_D2D1LinearTransfer,
+	&CLSID_D2D1LookupTable3D, &CLSID_D2D1LuminanceToAlpha, &CLSID_D2D1Morphology, &CLSID_D2D1Opacity, &CLSID_D2D1OpacityMetadata,
+	&CLSID_D2D1PointDiffuse, &CLSID_D2D1PointSpecular, &CLSID_D2D1Posterize, &CLSID_D2D1Premultiply, &CLSID_D2D1RgbToHue,
+	&CLSID_D2D1Saturation, &CLSID_D2D1Scale, &CLSID_D2D1Sepia, &CLSID_D2D1Shadow, &CLSID_D2D1Sharpen, &CLSID_D2D1SpotDiffuse,
+	&CLSID_D2D1SpotSpecular, &CLSID_D2D1Straighten, &CLSID_D2D1TableTransfer, &CLSID_D2D1TemperatureTint, &CLSID_D2D1Tile,
+	&CLSID_D2D1Tint, &CLSID_D2D1Turbulence, &CLSID_D2D1UnPremultiply, &CLSID_D2D1Vignette, &CLSID_D2D1WhiteLevelAdjustment,
+	&CLSID_D2D1YCbCr};
+
+static int system_effect(REFCLSID clsid)
+{
+	size_t index;
+	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
+		if (same_guid(system_effects[index], clsid))
+			return 1;
+	return 0;
+}
+
 static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
 {
 	struct target *self = target_of(iface);
@@ -4245,6 +4432,10 @@ static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsi
 		text[at++] = registered ? '+' : '-';
 		text[at] = 0;
 		RavenTrace(text);
+	}
+	if (!registered && !system_effect(clsid)) {
+		*effect = NULL;
+		return D2DERR_EFFECT_IS_NOT_REGISTERED;
 	}
 	/* A program's own effect starts with the object its factory makes. */
 	if (registered && FAILED(result = registered->factory(&impl)))
@@ -4380,14 +4571,17 @@ static UINT64 STDMETHODCALLTYPE device_GetMaximumColorGlyphCacheMemory(void *ifa
 
 static void **device_table;
 static const GUID *const device_iids[] = {&IID_ID2D1Resource, &IID_ID2D1Device, &IID_ID2D1Device1, &IID_ID2D1Device2, &IID_ID2D1Device3,
-	&IID_ID2D1Device4};
+	&IID_ID2D1Device4, &IID_ID2D1Device5, &IID_ID2D1Device6};
+/* ID2D1Device5 and ID2D1Device6 each add one more CreateDeviceContext after those of ID2D1Device4, for the newer contexts, and the
+   factory's newest CreateDevice hands out an ID2D1Device6. */
+enum { ID2D1Device5_CreateDeviceContext_slot = ID2D1Device4_methods, ID2D1Device6_CreateDeviceContext_slot, device_methods };
 
 static HRESULT make_device(IUnknown *factory, IUnknown *dxgi, ID2D1Device **out)
 {
 	struct device *self = ALLOC(sizeof(*self));
 	if (!self)
 		return E_OUTOFMEMORY;
-	object_init(&self->base, device_table, device_destroy, device_iids, 6, factory);
+	object_init(&self->base, device_table, device_destroy, device_iids, 8, factory);
 	self->dxgi = dxgi;
 	if (dxgi)
 		IUnknown_AddRef(dxgi);
@@ -4696,6 +4890,29 @@ static HRESULT STDMETHODCALLTYPE factory_RegisterEffectFromStream(void *iface, R
 	return result;
 }
 static HRESULT STDMETHODCALLTYPE factory_UnregisterEffect(void *iface, REFCLSID clsid) { return S_OK; }
+/* What an effect is, told by an object that has its properties: an effect made without the program's object behind it. */
+static HRESULT STDMETHODCALLTYPE factory_GetEffectProperties(void *iface, REFCLSID clsid, ID2D1Properties **out)
+{
+	const struct registered_effect *registered;
+	ID2D1Effect *effect;
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!clsid)
+		return E_INVALIDARG;
+	lock_registered();
+	registered = find_registered(clsid);
+	LeaveCriticalSection(&registered_lock);
+	if (!registered && !system_effect(clsid))
+		return D2DERR_EFFECT_IS_NOT_REGISTERED;
+	if (FAILED(result = make_effect((IUnknown *)iface, &effect)))
+		return result;
+	((struct effect *)effect)->registered = registered;
+	*out = (ID2D1Properties *)effect;
+	return S_OK;
+}
+
 static HRESULT STDMETHODCALLTYPE factory_GetRegisteredEffects(void *iface, CLSID *effects, UINT32 capacity, UINT32 *returned, UINT32 *registered)
 {
 	if (returned) *returned = 0;
@@ -4725,6 +4942,9 @@ static void set_target(void **table)
 	table[ID2D1DeviceContext5_CreateRadialGradientBrush_slot] = (void *)target_CreateRadialGradientBrush;
 	table[ID2D1DeviceContext5_CreateCompatibleRenderTarget_slot] = (void *)target_CreateCompatibleRenderTarget;
 	table[ID2D1DeviceContext5_CreateLayer_slot] = (void *)target_CreateLayer;
+	table[ID2D1DeviceContext5_CreateColorContext_slot] = (void *)context_CreateColorContext;
+	table[ID2D1DeviceContext5_CreateColorContextFromDxgiColorSpace_slot] = (void *)context_CreateColorContextFromDxgiColorSpace;
+	table[ID2D1DeviceContext5_CreateColorContextFromSimpleColorProfile_slot] = (void *)context_CreateColorContextFromSimpleColorProfile;
 	table[ID2D1DeviceContext5_CreateMesh_slot] = (void *)target_CreateMesh;
 	table[ID2D1DeviceContext5_FillMesh_slot] = (void *)target_FillMesh;
 	table[ID2D1DeviceContext5_DrawLine_slot] = (void *)target_DrawLine;
@@ -4803,6 +5023,23 @@ static void set_context(void **table)
 	table[ID2D1DeviceContext5_PushLayer_86_slot] = (void *)target_PushLayer1;
 }
 
+/* ID2D1DeviceContext6 adds one method after those of ID2D1DeviceContext5, which programs reach once they find the newer interface. */
+enum { ID2D1DeviceContext6_BlendImage_slot = ID2D1DeviceContext5_methods, context_methods };
+
+static void STDMETHODCALLTYPE context_BlendImage(void *iface, ID2D1Image *image, D2D1_BLEND_MODE mode, const D2D1_POINT_2F *offset,
+	const D2D1_RECT_F *rect, D2D1_INTERPOLATION_MODE interpolation)
+{
+	unimplemented("ID2D1DeviceContext6", "BlendImage");
+}
+
+static void **make_context_table(void)
+{
+	void **table = ALLOC(context_methods * sizeof(void *));
+	memcpy(table, ID2D1DeviceContext5_table, ID2D1DeviceContext5_methods * sizeof(void *));
+	table[ID2D1DeviceContext6_BlendImage_slot] = (void *)context_BlendImage;
+	return table;
+}
+
 /* A render target's table: set_target fills every slot of a device context, so it holds them all, past those of its own interface. */
 static void **make_target_table(void *const *stubs, size_t count)
 {
@@ -4829,9 +5066,9 @@ static void build_tables(void)
 	bitmaprt_table[ID2D1BitmapRenderTarget_GetBitmap_slot] = (void *)bitmaprt_GetBitmap;
 	rt_table = make_target_table(ID2D1DCRenderTarget_table, ID2D1DCRenderTarget_methods);
 	set_target(rt_table);
-	context_table = make_table(ID2D1DeviceContext5_table, ID2D1DeviceContext5_methods);
+	context_table = make_context_table();
 	set_context(context_table);
-	context_secondary_table = make_table(ID2D1DeviceContext5_table, ID2D1DeviceContext5_methods);
+	context_secondary_table = make_context_table();
 	set_context(context_secondary_table);
 	gdi_table = make_table(ID2D1GdiInteropRenderTarget_table, ID2D1GdiInteropRenderTarget_methods);
 	gdi_table[0] = (void *)target_QueryInterface;
@@ -4841,7 +5078,10 @@ static void build_tables(void)
 	gdi_table[ID2D1GdiInteropRenderTarget_ReleaseDC_slot] = (void *)gdi_ReleaseDC;
 	bitmap_table[ID2D1Bitmap1_CopyFromRenderTarget_slot] = (void *)bitmap_CopyFromRenderTarget;
 
-	device_table = make_table(ID2D1Device4_table, ID2D1Device4_methods);
+	device_table = ALLOC(device_methods * sizeof(void *));
+	memcpy(device_table, ID2D1Device4_table, ID2D1Device4_methods * sizeof(void *));
+	device_table[ID2D1Device5_CreateDeviceContext_slot] = (void *)device_CreateDeviceContext;
+	device_table[ID2D1Device6_CreateDeviceContext_slot] = (void *)device_CreateDeviceContext;
 	set_resource(device_table);
 	device_table[ID2D1Device4_CreateDeviceContext_slot] = (void *)device_CreateDeviceContext;
 	device_table[ID2D1Device4_SetMaximumTextureMemory_slot] = (void *)device_SetMaximumTextureMemory;
@@ -4882,6 +5122,7 @@ static void build_tables(void)
 	factory_table[ID2D1Factory7_CreateDrawingStateBlock_20_slot] = (void *)factory_CreateDrawingStateBlock1;
 	factory_table[ID2D1Factory7_RegisterEffectFromStream_slot] = (void *)factory_RegisterEffectFromStream;
 	factory_table[ID2D1Factory7_RegisterEffectFromString_slot] = (void *)factory_RegisterEffectFromString;
+	factory_table[ID2D1Factory7_GetEffectProperties_slot] = (void *)factory_GetEffectProperties;
 	factory_table[ID2D1Factory7_UnregisterEffect_slot] = (void *)factory_UnregisterEffect;
 	factory_table[ID2D1Factory7_GetRegisteredEffects_slot] = (void *)factory_GetRegisteredEffects;
 	factory_table[ID2D1Factory7_CreateDevice_27_slot] = (void *)factory_CreateDevice;
