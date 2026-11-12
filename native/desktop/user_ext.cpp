@@ -280,6 +280,10 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	registry.add("mouse_event", 5, [](ApiCall &call) { call.ret(0); });
 	registry.add("DragDetect", 3, [](ApiCall &call) { call.ret(0); });
 	registry.add("SetWindowContextHelpId", 2, [](ApiCall &call) { call.ret(1); });
+	// No WinHelp viewer comes with Windows any more, nor with Raven: HELP_QUIT, which MFC frames send as they close, finds no help open
+	// and succeeds; asking for a help file fails.
+	for (const auto *name : {"WinHelpW", "WinHelpA"})
+		registry.add(name, 4, [](ApiCall &call) { call.ret(call.u32(2) == 2 ? 1 : 0); });
 	registry.add("SubtractRect", 3, [](ApiCall &call) {
 		const auto minuend = read_rect(call, call[1]), subtrahend = read_rect(call, call[2]);
 		Rect result = minuend;
