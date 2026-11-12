@@ -75,6 +75,11 @@ def install(raven, prefix, netfx, keepass, evidence):
     records = sorted(path.name for path in Path(f"{prefix}.apps").iterdir())
     if "KeePass-2.57-Setup" not in records:
         raise RuntimeError(f"the setup was recorded as {records}, not under its name")
+    # The setup compiles KeePass ahead of time, and mscorlib with it; NGen drops the image again if compiling fails.
+    images = prefix / "drive_c" / "windows" / "assembly" / "NativeImages_v4.0.30319_64"
+    for image in ("mscorlib/*/mscorlib.ni.dll", "KeePass/*/KeePass.ni.exe"):
+        if not any(images.glob(image)):
+            raise RuntimeError(f"the setup left no native image {image}")
     return program
 
 
@@ -103,6 +108,7 @@ def create(evidence, origin):
     desktop.click(origin[0] + 442, origin[1] + 443)
     # The emergency sheet is offered last; it is skipped.
     time.sleep(4)
+    desktop.shot(evidence, "emergency-sheet")
     desktop.click(origin[0] + 249, origin[1] + 329)
     desktop.wait_title("Database.kdbx* - KeePass")
     desktop.shot(evidence, "created")
