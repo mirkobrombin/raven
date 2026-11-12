@@ -107,6 +107,9 @@ static int parts(void)
 	/* A rebar's background, which MFC control bars draw behind their toolbars, is the window surface. */
 	if (drawn(L"Rebar", RP_BACKGROUND, 20, 10) != SURFACE)
 		return 30;
+	/* A progress bar's track (PP_BAR) covers its whole rectangle, which KeePass draws its quality bar over without clearing it first. */
+	if (drawn(L"Progress", 1, 1, 1) == RGB(0, 0, 0) || drawn(L"Progress", 1, 38, 18) == RGB(0, 0, 0))
+		return 31;
 	theme = OpenThemeData(NULL, L"Tooltip");
 	if (!theme || !IsThemeBackgroundPartiallyTransparent(theme, TTP_STANDARD, 0))
 		return 25;

@@ -275,8 +275,10 @@ void draw_part(Shapes &shapes, const Palette &tone, const std::string &klass, in
 				for (int column = 0; column <= row; ++column)
 					shapes.circle(box.right - 3 - column * 4, box.bottom - 3 - (2 - row) * 4, 1, tone.thumb, std::nullopt);
 	} else if (klass == "progress") {
-		if (part == 1 || part == 2) // the track: a thin rounded groove
+		if (part == 1 || part == 2) { // the track: a thin rounded groove on the surface, which covers the whole bar as Windows' does
+			shapes.fill(box.left, box.top, box.right, box.bottom, tone.surface);
 			shapes.rounded(box.left, box.cy() - 2, box.right, box.cy() + 2, 2, rgb(0xd6, 0xd6, 0xd6), std::nullopt);
+		}
 		else if (part == 3 || part == 4 || part == 5 || part == 6)
 			shapes.fill(box.left, std::max(box.top, box.cy() - 2), box.right, std::min(box.bottom, box.cy() + 2), tone.accent);
 	} else if (klass == "trackbar") {
