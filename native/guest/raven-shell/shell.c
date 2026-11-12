@@ -1049,8 +1049,8 @@ short WINAPI GetFileTitleW(LPCWSTR file, LPWSTR title, WORD size)
 	return 0;
 }
 
-/* A window's property store: the values a program sets on it (its application id, for one) kept in memory for as long as the process
-   runs. Strings are copied; other values are kept as they are. */
+/* A property store in memory: a window's, which keeps the values a program sets on it (its application id, for one) for as long as
+   the process runs, or a shell link's (see create_memory_store). Strings are copied; other values are kept as they are. */
 typedef struct {
 	PROPERTYKEY key;
 	PROPVARIANT value;
@@ -1058,6 +1058,7 @@ typedef struct {
 
 typedef struct {
 	IPropertyStore store;
+	LONG refs;
 	HWND window;
 	StoredProperty *items;
 	DWORD count;
@@ -1090,12 +1091,25 @@ static HRESULT WINAPI store_query(IPropertyStore *self, REFIID iid, void **out)
 		return E_POINTER;
 	if (InlineIsEqualGUID(iid, &IID_IUnknown) || InlineIsEqualGUID(iid, &IID_IPropertyStore)) {
 		*out = self;
+		InterlockedIncrement(&((WindowStore *)self)->refs);
 		return S_OK;
 	}
 	*out = NULL;
 	return E_NOINTERFACE;
 }
-static ULONG WINAPI store_reference(IPropertyStore *self) { return 1; }
+static ULONG WINAPI store_reference(IPropertyStore *self) { return (ULONG)InterlockedIncrement(&((WindowStore *)self)->refs); }
+static ULONG WINAPI store_release(IPropertyStore *self)
+{
+	WindowStore *store = (WindowStore *)self;
+	const LONG left = InterlockedDecrement(&store->refs);
+	if (!left) {
+		for (DWORD index = 0; index < store->count; ++index)
+			PropVariantClear(&store->items[index].value);
+		HeapFree(GetProcessHeap(), 0, store->items);
+		HeapFree(GetProcessHeap(), 0, store);
+	}
+	return (ULONG)left;
+}
 static HRESULT WINAPI store_count(IPropertyStore *self, DWORD *count)
 {
 	if (!count)
@@ -1151,7 +1165,19 @@ static HRESULT WINAPI store_set(IPropertyStore *self, REFPROPERTYKEY key, REFPRO
 }
 static HRESULT WINAPI store_commit(IPropertyStore *self) { return S_OK; }
 
-static IPropertyStoreVtbl store_table = {store_query, store_reference, store_reference, store_count, store_at, store_get, store_set, store_commit};
+static IPropertyStoreVtbl store_table = {store_query, store_reference, store_release, store_count, store_at, store_get, store_set, store_commit};
+
+/* An empty store of the process's own, which goes when its last reference does. */
+HRESULT create_memory_store(IPropertyStore **out)
+{
+	WindowStore *store = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WindowStore));
+	if (!store)
+		return E_OUTOFMEMORY;
+	store->store.lpVtbl = &store_table;
+	store->refs = 1;
+	*out = &store->store;
+	return S_OK;
+}
 
 HRESULT WINAPI SHGetPropertyStoreForWindow(HWND window, REFIID iid, void **out)
 {
@@ -1172,6 +1198,8 @@ HRESULT WINAPI SHGetPropertyStoreForWindow(HWND window, REFIID iid, void **out)
 		if (!store || !grown)
 			return E_OUTOFMEMORY;
 		store->store.lpVtbl = &store_table;
+		/* The list of windows holds one reference, so a window's store stays while the process runs. */
+		store->refs = 1;
 		store->window = window;
 		window_stores = grown;
 		window_stores[window_store_count++] = store;
