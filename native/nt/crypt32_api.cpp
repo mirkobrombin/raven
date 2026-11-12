@@ -699,9 +699,32 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		call.write(block, image);
 		return block;
 	};
-	registry.add("CertFreeCertificateChain", 1, [&allocator](ApiCall &call) {
-		if (call[0])
-			allocator.release(call[0]);
+	// A duplicated chain is the same block with one more holder; the block is released when the last holder frees it.
+	struct ChainHolders {
+		std::mutex lock;
+		std::map<uint64_t, uint32_t> extra;
+	};
+	const auto chain_holders = std::make_shared<ChainHolders>();
+	registry.add("CertDuplicateCertificateChain", 1, [chain_holders](ApiCall &call) {
+		if (call[0]) {
+			std::lock_guard<std::mutex> hold(chain_holders->lock);
+			++chain_holders->extra[call[0]];
+		}
+		call.ret(call[0]);
+	});
+	registry.add("CertFreeCertificateChain", 1, [&allocator, chain_holders](ApiCall &call) {
+		if (!call[0])
+			return;
+		{
+			std::lock_guard<std::mutex> hold(chain_holders->lock);
+			const auto held = chain_holders->extra.find(call[0]);
+			if (held != chain_holders->extra.end()) {
+				if (!--held->second)
+					chain_holders->extra.erase(held);
+				return;
+			}
+		}
+		allocator.release(call[0]);
 	});
 	// The chain is built with the host's X.509 verifier against the host's trust anchors; the guest receives the Windows structures:
 	// CERT_CHAIN_CONTEXT, one CERT_SIMPLE_CHAIN and a CERT_CHAIN_ELEMENT for each certificate.
