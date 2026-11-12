@@ -2917,6 +2917,7 @@ typedef struct {
 	FLOAT gamma, contrast, grayscale_contrast, cleartype;
 	DWRITE_PIXEL_GEOMETRY geometry;
 	DWRITE_RENDERING_MODE mode;
+	DWRITE_RENDERING_MODE1 mode1;
 	DWRITE_GRID_FIT_MODE grid_fit;
 } Params;
 
@@ -2927,7 +2928,7 @@ static HRESULT STDMETHODCALLTYPE params_query(IDWriteRenderingParams *self, REFI
 	if (!out)
 		return E_POINTER;
 	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteRenderingParams) || same_guid(iid, &IID_IDWriteRenderingParams1) ||
-		same_guid(iid, &IID_IDWriteRenderingParams2)) {
+		same_guid(iid, &IID_IDWriteRenderingParams2) || same_guid(iid, &IID_IDWriteRenderingParams3)) {
 		InterlockedIncrement(&PARAMS_OF(self)->refs);
 		*out = self;
 		return S_OK;
@@ -2950,15 +2951,19 @@ static DWRITE_PIXEL_GEOMETRY STDMETHODCALLTYPE params_geometry(IDWriteRenderingP
 static DWRITE_RENDERING_MODE STDMETHODCALLTYPE params_mode(IDWriteRenderingParams *self) { return PARAMS_OF(self)->mode; }
 static FLOAT STDMETHODCALLTYPE params_grayscale(IDWriteRenderingParams1 *self) { return PARAMS_OF(self)->grayscale_contrast; }
 static DWRITE_GRID_FIT_MODE STDMETHODCALLTYPE params_grid(IDWriteRenderingParams2 *self) { return PARAMS_OF(self)->grid_fit; }
+static DWRITE_RENDERING_MODE1 STDMETHODCALLTYPE params_mode1(IDWriteRenderingParams2 *self) { return PARAMS_OF(self)->mode1; }
 
-static void *Params_table_[IDWriteRenderingParams2_methods];
+/* IDWriteRenderingParams3 adds GetRenderingMode1 after the methods of IDWriteRenderingParams2. */
+enum { IDWriteRenderingParams3_GetRenderingMode1 = IDWriteRenderingParams2_methods, params_methods };
+static void *Params_table_[params_methods];
 static const IDWriteRenderingParams2Vtbl *params_vtbl;
 
 static Params *make_params(FLOAT gamma, FLOAT contrast, FLOAT grayscale, FLOAT cleartype, DWRITE_PIXEL_GEOMETRY geometry, DWRITE_RENDERING_MODE mode, DWRITE_GRID_FIT_MODE grid)
 {
 	Params *params;
 	if (!params_vtbl) {
-		memcpy(Params_table_, IDWriteRenderingParams2_table, sizeof(Params_table_));
+		memcpy(Params_table_, IDWriteRenderingParams2_table, IDWriteRenderingParams2_methods * sizeof(void *));
+		Params_table_[IDWriteRenderingParams3_GetRenderingMode1] = (void *)params_mode1;
 		Params_table_[IDWriteRenderingParams_QueryInterface] = (void *)params_query;
 		Params_table_[IDWriteRenderingParams_AddRef] = (void *)params_add_ref;
 		Params_table_[IDWriteRenderingParams_Release] = (void *)params_release;
@@ -2982,6 +2987,7 @@ static Params *make_params(FLOAT gamma, FLOAT contrast, FLOAT grayscale, FLOAT c
 	params->cleartype = cleartype;
 	params->geometry = geometry;
 	params->mode = mode;
+	params->mode1 = (DWRITE_RENDERING_MODE1)mode;
 	params->grid_fit = grid;
 	return params;
 }
@@ -3819,7 +3825,8 @@ static HRESULT STDMETHODCALLTYPE factory_query(IDWriteFactory2 *self, REFIID iid
 	if (!out)
 		return E_POINTER;
 	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFactory) || same_guid(iid, &IID_IDWriteFactory1) || same_guid(iid, &IID_IDWriteFactory2) ||
-		same_guid(iid, &IID_IDWriteFactory3)) {
+		same_guid(iid, &IID_IDWriteFactory3) || same_guid(iid, &IID_IDWriteFactory4) || same_guid(iid, &IID_IDWriteFactory5) ||
+		same_guid(iid, &IID_IDWriteFactory6) || same_guid(iid, &IID_IDWriteFactory7)) {
 		InterlockedIncrement(&factory_object.refs);
 		*out = self;
 		return S_OK;
@@ -3951,6 +3958,21 @@ static HRESULT STDMETHODCALLTYPE factory2_custom_params(IDWriteFactory2 *self, F
 	*params = (IDWriteRenderingParams2 *)make_params(gamma, contrast, grayscale, cleartype, geometry, mode, grid);
 	return *params ? S_OK : E_OUTOFMEMORY;
 }
+/* The newest rendering mode, symmetric natural rendering drawn larger and scaled down, reads as symmetric natural rendering to the
+   interfaces that predate it. */
+static HRESULT STDMETHODCALLTYPE factory3_custom_params(IDWriteFactory2 *self, FLOAT gamma, FLOAT contrast, FLOAT grayscale, FLOAT cleartype, DWRITE_PIXEL_GEOMETRY geometry,
+	DWRITE_RENDERING_MODE1 mode, DWRITE_GRID_FIT_MODE grid, IDWriteRenderingParams3 **params)
+{
+	Params *made;
+	if (!params)
+		return E_POINTER;
+	made = make_params(gamma, contrast, grayscale, cleartype, geometry,
+		mode == DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC_DOWNSAMPLED ? DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC : (DWRITE_RENDERING_MODE)mode, grid);
+	if (made)
+		made->mode1 = mode;
+	*params = (IDWriteRenderingParams3 *)made;
+	return made ? S_OK : E_OUTOFMEMORY;
+}
 static HRESULT STDMETHODCALLTYPE factory2_glyph_analysis(IDWriteFactory2 *self, const DWRITE_GLYPH_RUN *run, const DWRITE_MATRIX *transform, DWRITE_RENDERING_MODE mode,
 	DWRITE_MEASURING_MODE measuring, DWRITE_GRID_FIT_MODE grid, DWRITE_TEXT_ANTIALIAS_MODE antialias, FLOAT origin_x, FLOAT origin_y, IDWriteGlyphRunAnalysis **analysis)
 {
@@ -4004,13 +4026,77 @@ static HRESULT STDMETHODCALLTYPE factory_number_substitution(IDWriteFactory2 *se
 	return S_OK;
 }
 
-/* The table is the IDWriteFactory3 one: its first methods are those of the earlier factory interfaces, the rest report themselves unimplemented. */
-static void *Factory_table_[IDWriteFactory3_methods];
+/* IDWriteFactory4 to IDWriteFactory7 add their methods after those of IDWriteFactory3, in the order of the public headers. */
+enum {
+	IDWriteFactory4_TranslateColorGlyphRun = IDWriteFactory3_methods, IDWriteFactory4_ComputeGlyphOrigins, IDWriteFactory4_ComputeGlyphOrigins_2,
+	IDWriteFactory5_CreateFontSetBuilder, IDWriteFactory5_CreateInMemoryFontFileLoader, IDWriteFactory5_CreateHttpFontFileLoader,
+	IDWriteFactory5_AnalyzeContainerType, IDWriteFactory5_UnpackFontFile,
+	IDWriteFactory6_CreateFontFaceReference, IDWriteFactory6_CreateFontResource, IDWriteFactory6_GetSystemFontSet,
+	IDWriteFactory6_GetSystemFontCollection, IDWriteFactory6_CreateFontCollectionFromFontSet, IDWriteFactory6_CreateFontSetBuilder,
+	IDWriteFactory6_CreateTextFormat,
+	IDWriteFactory7_GetSystemFontSet, IDWriteFactory7_GetSystemFontCollection,
+	factory_methods
+};
+
+/* Without color fonts, no run has color layers. */
+static HRESULT STDMETHODCALLTYPE factory4_color_run(IDWriteFactory2 *self, D2D1_POINT_2F origin, const DWRITE_GLYPH_RUN *run,
+	const DWRITE_GLYPH_RUN_DESCRIPTION *description, DWRITE_GLYPH_IMAGE_FORMATS formats, DWRITE_MEASURING_MODE measuring,
+	const DWRITE_MATRIX *transform, UINT32 palette, IDWriteColorGlyphRunEnumerator1 **layers)
+{
+	if (layers)
+		*layers = NULL;
+	return DWRITE_E_NOCOLOR;
+}
+/* Every font here is a plain OpenType file, not a WOFF or WOFF2 container. */
+static DWRITE_CONTAINER_TYPE STDMETHODCALLTYPE factory5_container_type(IDWriteFactory2 *self, const void *data, UINT32 size)
+{
+	return DWRITE_CONTAINER_TYPE_UNKNOWN;
+}
+/* The system font set of the newer interfaces is the same set, which answers as every version of IDWriteFontSet. */
+static HRESULT STDMETHODCALLTYPE factory6_system_set(IDWriteFactory2 *self, WINBOOL downloadable, IDWriteFontSet **set)
+{
+	return factory3_system_set(self, set);
+}
+#define FACTORY_STUB(version, method) \
+	static HRESULT STDMETHODCALLTYPE factory##version##_##method(IDWriteFactory2 *self) { return unimplemented("IDWriteFactory" #version, #method); }
+FACTORY_STUB(4, ComputeGlyphOrigins)
+FACTORY_STUB(5, CreateFontSetBuilder)
+FACTORY_STUB(5, CreateInMemoryFontFileLoader)
+FACTORY_STUB(5, CreateHttpFontFileLoader)
+FACTORY_STUB(5, UnpackFontFile)
+FACTORY_STUB(6, CreateFontFaceReference)
+FACTORY_STUB(6, CreateFontResource)
+FACTORY_STUB(6, GetSystemFontCollection)
+FACTORY_STUB(6, CreateFontCollectionFromFontSet)
+FACTORY_STUB(6, CreateFontSetBuilder)
+FACTORY_STUB(6, CreateTextFormat)
+FACTORY_STUB(7, GetSystemFontCollection)
+#undef FACTORY_STUB
+
+/* The table holds every factory version's methods: the first are those of the earlier interfaces, the rest report themselves unimplemented. */
+static void *Factory_table_[factory_methods];
 
 static HRESULT create_factory(REFIID iid, IUnknown **out)
 {
 	if (!factory_object.vtbl) {
-		memcpy(Factory_table_, IDWriteFactory3_table, sizeof(Factory_table_));
+		memcpy(Factory_table_, IDWriteFactory3_table, IDWriteFactory3_methods * sizeof(void *));
+		Factory_table_[IDWriteFactory4_TranslateColorGlyphRun] = (void *)factory4_color_run;
+		Factory_table_[IDWriteFactory4_ComputeGlyphOrigins] = (void *)factory4_ComputeGlyphOrigins;
+		Factory_table_[IDWriteFactory4_ComputeGlyphOrigins_2] = (void *)factory4_ComputeGlyphOrigins;
+		Factory_table_[IDWriteFactory5_CreateFontSetBuilder] = (void *)factory5_CreateFontSetBuilder;
+		Factory_table_[IDWriteFactory5_CreateInMemoryFontFileLoader] = (void *)factory5_CreateInMemoryFontFileLoader;
+		Factory_table_[IDWriteFactory5_CreateHttpFontFileLoader] = (void *)factory5_CreateHttpFontFileLoader;
+		Factory_table_[IDWriteFactory5_AnalyzeContainerType] = (void *)factory5_container_type;
+		Factory_table_[IDWriteFactory5_UnpackFontFile] = (void *)factory5_UnpackFontFile;
+		Factory_table_[IDWriteFactory6_CreateFontFaceReference] = (void *)factory6_CreateFontFaceReference;
+		Factory_table_[IDWriteFactory6_CreateFontResource] = (void *)factory6_CreateFontResource;
+		Factory_table_[IDWriteFactory6_GetSystemFontSet] = (void *)factory6_system_set;
+		Factory_table_[IDWriteFactory6_GetSystemFontCollection] = (void *)factory6_GetSystemFontCollection;
+		Factory_table_[IDWriteFactory6_CreateFontCollectionFromFontSet] = (void *)factory6_CreateFontCollectionFromFontSet;
+		Factory_table_[IDWriteFactory6_CreateFontSetBuilder] = (void *)factory6_CreateFontSetBuilder;
+		Factory_table_[IDWriteFactory6_CreateTextFormat] = (void *)factory6_CreateTextFormat;
+		Factory_table_[IDWriteFactory7_GetSystemFontSet] = (void *)factory6_system_set;
+		Factory_table_[IDWriteFactory7_GetSystemFontCollection] = (void *)factory7_GetSystemFontCollection;
 		Factory_table_[IDWriteFactory_QueryInterface] = (void *)factory_query;
 		Factory_table_[IDWriteFactory_AddRef] = (void *)factory_add_ref;
 		Factory_table_[IDWriteFactory_Release] = (void *)factory_release;
@@ -4042,6 +4128,7 @@ static HRESULT create_factory(REFIID iid, IUnknown **out)
 		Factory_table_[IDWriteFactory3_IDWriteFactory3_GetSystemFontCollection] = (void *)factory3_system_collection;
 		Factory_table_[IDWriteFactory2_TranslateColorGlyphRun] = (void *)factory2_color_run;
 		Factory_table_[IDWriteFactory2_IDWriteFactory2_CreateCustomRenderingParams] = (void *)factory2_custom_params;
+		Factory_table_[IDWriteFactory3_IDWriteFactory3_CreateCustomRenderingParams] = (void *)factory3_custom_params;
 		Factory_table_[IDWriteFactory2_IDWriteFactory2_CreateGlyphRunAnalysis] = (void *)factory2_glyph_analysis;
 		factory_object.vtbl = (const IDWriteFactory2Vtbl *)Factory_table_;
 	}
