@@ -3970,6 +3970,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(help_quit_fixture${width} ALL DEPENDS ${help_quit_client})
                     add_test(NAME native_help_quit_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${help_quit_client})
                     set_tests_properties(native_help_quit_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(fault_continue_client ${CMAKE_CURRENT_BINARY_DIR}/fault-continue${width}.exe)
+                    add_custom_command(OUTPUT ${fault_continue_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${fault_continue_client} ${LOADER_SOURCES}/fault_continue_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/fault_continue_client.c VERBATIM)
+                    add_custom_target(fault_continue_fixture${width} ALL DEPENDS ${fault_continue_client})
+                    add_test(NAME native_fault_continue_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${fault_continue_client})
+                    set_tests_properties(native_fault_continue_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

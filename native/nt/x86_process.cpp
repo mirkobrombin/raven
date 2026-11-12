@@ -36,6 +36,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <csignal>
+#include <cstring>
 #include <map>
 #include <sstream>
 #include <set>
@@ -969,13 +971,80 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		return true;
 	};
 	const auto remaining = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()); };
+	// A processor fault is a Windows exception: as KiUserExceptionDispatcher finds them, the record and the registers of the faulting
+	// instruction go on the stack below it, and the C runtime component dispatches them in the program, to its vectored handlers and
+	// the frames its threads register. The .NET runtime turns the null check of compiled code into a NullReferenceException there.
+	const auto dispatch_fault = [&](const NativeResult &fault) {
+		if (fault.signal != SIGSEGV && fault.signal != SIGBUS && fault.signal != SIGFPE && fault.signal != SIGILL)
+			return false;
+		const auto component = modules.all().find("ucrtbase.dll");
+		if (component == modules.all().end())
+			return false;
+		const auto &exports = component->second->exports;
+		const auto found = std::find_if(exports.begin(), exports.end(), [](const auto &symbol) {
+			return std::find(symbol.names.begin(), symbol.names.end(), "raven_dispatch_fault") != symbol.names.end();
+		});
+		if (found == exports.end())
+			return false;
+		auto native = process.context();
+		const auto &r = native.registers;
+		uint32_t status = 0xc0000005U;
+		std::vector<uint32_t> parameters;
+		switch (fault.signal) {
+		case SIGSEGV: parameters = {0, uint32_t(fault.fault_address)}; break;
+		case SIGBUS: status = 0xc0000006U; parameters = {0, uint32_t(fault.fault_address), 0xc0000006U}; break;
+		case SIGFPE:
+			status = fault.signal_code == FPE_INTDIV ? 0xc0000094U : fault.signal_code == FPE_INTOVF ? 0xc0000095U :
+				fault.signal_code == FPE_FLTDIV ? 0xc000008eU : fault.signal_code == FPE_FLTOVF ? 0xc0000091U : 0xc000008fU;
+			break;
+		default: status = 0xc000001dU; break;
+		}
+		// CONTEXT_FULL of the i386 layout: segments, integer and control registers, at their offsets in the 716-byte structure.
+		std::vector<uint8_t> context(716, 0), record(80, 0);
+		const auto put = [](std::vector<uint8_t> &bytes, size_t at, uint64_t value) {
+			const auto word = uint32_t(value);
+			std::memcpy(bytes.data() + at, &word, 4);
+		};
+		put(context, 0, 0x10007);
+		put(context, 140, r.gs); put(context, 144, r.fs); put(context, 148, r.es); put(context, 152, r.ds);
+		put(context, 156, r.rdi); put(context, 160, r.rsi); put(context, 164, r.rbx); put(context, 168, r.rdx);
+		put(context, 172, r.rcx); put(context, 176, r.rax); put(context, 180, r.rbp); put(context, 184, r.rip);
+		put(context, 188, r.cs); put(context, 192, r.eflags); put(context, 196, r.rsp); put(context, 200, r.ss);
+		put(record, 0, status); put(record, 12, r.rip); put(record, 16, parameters.size());
+		for (size_t index = 0; index < parameters.size(); ++index)
+			put(record, 20 + index * 4, parameters[index]);
+		// Room is left under the faulting stack pointer: resuming builds its last words there.
+		const uint64_t context_at = (uint32_t(r.rsp) - 0x100 - context.size()) & ~uint64_t(15);
+		const uint64_t record_at = context_at - record.size();
+		std::vector<uint8_t> call(12, 0);
+		put(call, 4, record_at);
+		put(call, 8, context_at);
+		try {
+			process.write_memory(context_at, context);
+			process.write_memory(record_at, record);
+			process.write_memory(record_at - call.size(), call);
+		} catch (const std::runtime_error &) {
+			return false;
+		}
+		native.registers.rsp = record_at - call.size();
+		native.registers.rip = component->second->loaded.base() + found->address;
+		process.set_context(native);
+		return true;
+	};
 	// Runs one guest call, answering every API trap until the call returns or stops for another reason.
 	const auto invoke = [&](uint64_t address, std::span<const uint64_t> arguments) {
 		auto budget = remaining();
 		if (budget.count() <= 0)
 			return NativeResult{NativeStop::timeout, 0, address, 0};
 		auto result = process.active() ? process.callback(address, arguments, budget) : process.call(address, arguments, budget);
-		while (result.stop == NativeStop::api) {
+		while (result.stop == NativeStop::api || (result.stop == NativeStop::fault && dispatch_fault(result))) {
+			if (result.stop == NativeStop::fault) {
+				budget = remaining();
+				if (budget.count() <= 0)
+					return NativeResult{NativeStop::timeout, 0, result.instruction, 0};
+				result = process.resume(budget);
+				continue;
+			}
 			const auto found = traps.find(result.value);
 			if (found == traps.end())
 				return result;
