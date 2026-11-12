@@ -849,7 +849,18 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		[&](uint64_t address, std::span<const uint64_t> arguments) { return call_guest(address, arguments); });
 	library_loader.set_tls(&static_tls);
 	library_loader.set_mapped([&memory](PEModule &module) { register_image(memory, module); });
-	library_loader.set_unmapped([&memory](PEModule &module) { memory.remove_image(module.loaded.base()); });
+	// The libraries that have started and not yet been told their process is done with them: only these hear about threads.
+	std::set<const PEModule *> started_modules;
+	library_loader.set_unmapped([&memory, &started_modules](PEModule &module) {
+		started_modules.erase(&module);
+		memory.remove_image(module.loaded.base());
+	});
+	library_loader.set_started([&started_modules](PEModule &module, bool started) {
+		if (started)
+			started_modules.insert(&module);
+		else
+			started_modules.erase(&module);
+	});
 	if (launch) {
 		const auto separator = launch->image_path.find_last_of(u'\\');
 		if (separator != std::u16string::npos)
@@ -1356,6 +1367,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	// Threads announce themselves to the images that keep per-thread state: TLS callbacks first, then the library entry points.
 	guest_threads.set_notifier([&](uint32_t reason) {
 		const auto notify = [&](const PEModule &module) {
+			if (&module != &entry && !started_modules.contains(&module))
+				return;
 			for (const auto callback : static_tls.callbacks(module)) {
 				const uint64_t arguments[] = {module.loaded.base(), reason, 0};
 				const auto result = invoke(callback, arguments);
@@ -1369,17 +1382,20 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 					throw result;
 			}
 		};
-		if (reason == 2) {
-			notify(entry);
-			for (const auto &[name, module] : modules.all())
-				if (module.get() != &entry)
-					notify(*module);
-		} else {
-			for (const auto &[name, module] : modules.all())
-				if (module.get() != &entry)
-					notify(*module);
-			notify(entry);
-		}
+		// As on Windows the announcements hold the loader lock: a thread that starts while a library is starting waits for it.
+		library_loader.hold([&] {
+			if (reason == 2) {
+				notify(entry);
+				for (const auto &[name, module] : modules.all())
+					if (module.get() != &entry)
+						notify(*module);
+			} else {
+				for (const auto &[name, module] : modules.all())
+					if (module.get() != &entry)
+						notify(*module);
+				notify(entry);
+			}
+		});
 	});
 	call_guest = invoke;
 	// File, memory, text and system handlers of the shared registry take 32-bit words as well; they get the same process services.
@@ -1493,6 +1509,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				if (static_cast<uint32_t>(attached.value) == 0)
 					throw std::runtime_error("DLL_PROCESS_ATTACH failed: " + module->name);
 			}
+			started_modules.insert(module);
 		}
 		start_image(entry);
 		const auto result = invoke(program_start(modules, entry), {});

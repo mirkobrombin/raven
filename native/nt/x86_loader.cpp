@@ -245,6 +245,12 @@ struct NativeX86Loader::LoaderLock {
 	}
 };
 
+void NativeX86Loader::hold(const std::function<void()> &work)
+{
+	const LoaderLock locked(*this);
+	work();
+}
+
 bool NativeX86Loader::release(uint64_t handle)
 {
 	const LoaderLock locked(*this);
@@ -256,6 +262,8 @@ bool NativeX86Loader::release(uint64_t handle)
 	const auto module = found->second.module;
 	const bool mapped_only = found->second.mapped_only;
 	held.erase(found);
+	if (started_hook && !mapped_only)
+		started_hook(*module, false);
 	if (call && module->image.entry && !mapped_only) {
 		const uint64_t arguments[] = {module->loaded.base(), 0, 0};
 		const auto result = call(module->loaded.base() + module->image.entry, arguments);
@@ -318,8 +326,13 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 					if (result.stop != NativeStop::returned)
 						throw result;
 				}
-			if (!(*item)->image.entry || (only_map && *item == root))
+			if (only_map && *item == root)
 				continue;
+			if (!(*item)->image.entry) {
+				if (started_hook)
+					started_hook(**item, true);
+				continue;
+			}
 			const uint64_t arguments[] = {(*item)->loaded.base(), 1, 0};
 			auto &contexts = activation_contexts();
 			const auto context = starting.find(*item);
@@ -334,6 +347,8 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 				// A library that refuses to start leaves the process with what it brought, as on Windows: the ones that started are told
 				// they are detached, then every new image goes, so that the next load of that name starts it again.
 				for (auto done = attached.rbegin(); done != attached.rend(); ++done) {
+					if (started_hook)
+						started_hook(**done, false);
 					const uint64_t detach[] = {(*done)->loaded.base(), 0, 0};
 					const auto detached = call((*done)->loaded.base() + (*done)->image.entry, detach);
 					if (detached.stop != NativeStop::returned)
@@ -351,6 +366,8 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 				return 0;
 			}
 			attached.push_back(*item);
+			if (started_hook)
+				started_hook(**item, true);
 		}
 		if (key)
 			held[*key] = {root, 1, only_map};

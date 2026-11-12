@@ -34,6 +34,11 @@ public:
 	void set_mapped(std::function<void(PEModule &)> hook) { mapped_hook = std::move(hook); }
 	void set_unmapped(std::function<void(PEModule &)> hook) { unmapped_hook = std::move(hook); }
 	void set_application_directory(std::u16string directory) { application_directory = std::move(directory); }
+	// Called when a library has started (true) and when it is told its process is done with it (false): only a library in between hears
+	// about threads, as on Windows.
+	void set_started(std::function<void(PEModule &, bool)> hook) { started_hook = std::move(hook); }
+	// Runs `work` holding the loader lock, as a thread's start and end are announced to the libraries.
+	void hold(const std::function<void()> &work);
 	// The guest thread asking, and how it waits while another holds the loader lock.
 	void set_threads(std::function<uint32_t()> current, std::function<void(std::function<bool()>)> wait)
 	{
@@ -64,6 +69,7 @@ private:
 	std::u16string application_directory;
 	NativeX86Tls *tls = nullptr;
 	std::function<void(PEModule &)> mapped_hook, unmapped_hook;
+	std::function<void(PEModule &, bool)> started_hook;
 	PEModule *bring(const std::string &name);
 	struct LoaderLock;
 	std::function<uint32_t()> current_thread;
