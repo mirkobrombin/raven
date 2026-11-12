@@ -1398,7 +1398,8 @@ static BOOL icon_file(LPCWSTR file)
 	return length > 4 && !lstrcmpiW(file + length - 4, L".ico");
 }
 
-UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)
+/* Icons of the sizes asked for, zero for the system's large and small icon sizes. */
+static UINT extract_sized(LPCWSTR file, int index, HICON *large, HICON *small, UINT count, int large_size, int small_size)
 {
 	HMODULE module;
 	struct icon_search search = {-1, 0, NULL};
@@ -1411,9 +1412,9 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 		if (index != 0 || !count)
 			return 0;
 		if (large)
-			*large = LoadImageW(NULL, file, IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE);
+			*large = LoadImageW(NULL, file, IMAGE_ICON, large_size, large_size, LR_LOADFROMFILE);
 		if (small)
-			*small = LoadImageW(NULL, file, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
+			*small = LoadImageW(NULL, file, IMAGE_ICON, small_size, small_size, LR_LOADFROMFILE);
 		return (large && *large) || (small && *small) ? 1 : 0;
 	}
 	if (!(module = LoadLibraryExW(file, NULL, LOAD_LIBRARY_AS_DATAFILE)))
@@ -1440,9 +1441,9 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 			name = search.found;
 		}
 		if (large)
-			big = LoadImageW(module, name, IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+			big = LoadImageW(module, name, IMAGE_ICON, large_size, large_size, 0);
 		if (small)
-			little = LoadImageW(module, name, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+			little = LoadImageW(module, name, IMAGE_ICON, small_size, small_size, 0);
 		if ((large && !big) || (small && !little)) {
 			if (big)
 				DestroyIcon(big);
@@ -1457,6 +1458,28 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 	}
 	FreeLibrary(module);
 	return made;
+}
+
+UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)
+{
+	return extract_sized(file, index, large, small, count, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CXSMICON));
+}
+
+/* The shell's default icon extraction: one large and one small icon, their sizes in the low and high words of the last argument, zero
+   for the system's sizes; S_FALSE when the file has no icon at that index. */
+HRESULT WINAPI SHDefExtractIconW(LPCWSTR file, int index, UINT flags, HICON *large, HICON *small, UINT sizes)
+{
+	const int large_size = LOWORD(sizes) ? LOWORD(sizes) : GetSystemMetrics(SM_CXICON);
+	const int small_size = HIWORD(sizes) ? HIWORD(sizes) : GetSystemMetrics(SM_CXSMICON);
+	if (!file)
+		return E_INVALIDARG;
+	if (large)
+		*large = NULL;
+	if (small)
+		*small = NULL;
+	if (!large && !small)
+		return extract_sized(file, -1, NULL, NULL, 0, large_size, small_size) > (UINT)(index < 0 ? 0 : index) ? S_OK : S_FALSE;
+	return extract_sized(file, index, large, small, 1, large_size, small_size) ? S_OK : S_FALSE;
 }
 
 UINT shell_icons(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)
