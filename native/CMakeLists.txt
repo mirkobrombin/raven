@@ -4880,7 +4880,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set(RAVEN_7ZIP_INSTALLER "" CACHE FILEPATH "7z2409-x64.exe as 7-zip.org publishes it")
                 set(RAVEN_7ZIP_PACKAGE "" CACHE FILEPATH "7z2409-x64.msi as 7-zip.org publishes it")
                 if(TARGET raven_wayland AND RAVEN_LABWC AND RAVEN_GRIM AND RAVEN_WLRCTL AND RAVEN_WTYPE AND RAVEN_PIL_PYTHON AND RAVEN_7ZIP_INSTALLER
-                   AND EXISTS ${RAVEN_7ZIP_INSTALLER} AND RAVEN_7ZIP_PACKAGE AND EXISTS ${RAVEN_7ZIP_PACKAGE})
+                   AND EXISTS "${RAVEN_7ZIP_INSTALLER}" AND RAVEN_7ZIP_PACKAGE AND EXISTS "${RAVEN_7ZIP_PACKAGE}")
                     add_test(NAME native_7zip_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-7zip.py
                         $<TARGET_FILE:raven> ${RAVEN_7ZIP_INSTALLER} ${RAVEN_7ZIP_PACKAGE} ${CMAKE_CURRENT_BINARY_DIR}/7zip-evidence)
                     set_tests_properties(native_7zip_workflow PROPERTIES TIMEOUT 1200 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
