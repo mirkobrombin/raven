@@ -4002,6 +4002,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(cert_store_duplicate_fixture${width} ALL DEPENDS ${cert_store_duplicate_client})
                     add_test(NAME native_cert_store_duplicate_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cert_store_duplicate_client})
                     set_tests_properties(native_cert_store_duplicate_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(cert_sha256_client ${CMAKE_CURRENT_BINARY_DIR}/cert-sha256${width}.exe)
+                    add_custom_command(OUTPUT ${cert_sha256_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${cert_sha256_client} ${LOADER_SOURCES}/cert_sha256_client.c -lcrypt32 -lbcrypt -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/cert_sha256_client.c VERBATIM)
+                    add_custom_target(cert_sha256_fixture${width} ALL DEPENDS ${cert_sha256_client})
+                    add_test(NAME native_cert_sha256_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cert_sha256_client})
+                    set_tests_properties(native_cert_sha256_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(cert_chain_duplicate_client ${CMAKE_CURRENT_BINARY_DIR}/cert-chain-duplicate${width}.exe)
                     add_custom_command(OUTPUT ${cert_chain_duplicate_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

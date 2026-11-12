@@ -906,8 +906,8 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		call.store<int32_t>(call[3] + 12, -1);
 		call.ret(1);
 	});
-	// Properties a certificate context answers from its encoded certificate: its SHA-1 and MD5 hashes, and its key identifier, which is
-	// the subject key identifier the certificate names or else the SHA-1 of its public key.
+	// Properties a certificate context answers from its encoded certificate: its SHA-1, SHA-256 and MD5 hashes, and its key identifier,
+	// which is the subject key identifier the certificate names or else the SHA-1 of its public key.
 	// CERT_ENHKEY_USAGE with no identifiers and CRYPT_E_NOT_FOUND: the certificate holds no restriction, good for every use.
 	registry.add("CertGetEnhancedKeyUsage", 4, [](ApiCall &call) {
 		const uint32_t size = call.pointer_width() == 4 ? 8 : 16;
@@ -928,7 +928,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		call.fail(0x80092004U, 1);
 	});
 	registry.add("CertGetCertificateContextProperty", 4, [encoded_of](ApiCall &call) {
-		constexpr uint32_t sha1_hash = 3, md5_hash = 4, key_identifier = 20, more_data = 234, not_found = 0x80092004U;
+		constexpr uint32_t sha1_hash = 3, md5_hash = 4, key_identifier = 20, sha256_hash = 107, more_data = 234, not_found = 0x80092004U;
 		if (!call[0] || !call[3]) {
 			call.fail(error_invalid_parameter);
 			return;
@@ -938,6 +938,9 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		if (call.u32(1) == sha1_hash) {
 			value.resize(SHA_DIGEST_LENGTH);
 			SHA1(encoded.data(), encoded.size(), value.data());
+		} else if (call.u32(1) == sha256_hash) {
+			value.resize(SHA256_DIGEST_LENGTH);
+			SHA256(encoded.data(), encoded.size(), value.data());
 		} else if (call.u32(1) == md5_hash) {
 			value.resize(16);
 			unsigned int size = 0;
