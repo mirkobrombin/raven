@@ -280,20 +280,28 @@ void NativeWindows::register_menu_api(ApiRegistry &registry)
 		call.ret(previous);
 	});
 	registry.add("CheckMenuRadioItem", 5, [this, locate](ApiCall &call) {
-		const uint32_t flags = call.u32(4);
-		const auto first = locate(call[0], call.u32(1), flags), last = locate(call[0], call.u32(2), flags), checked = locate(call[0], call.u32(3), flags);
-		if (!first.found || !last.found || !checked.found || first.menu != last.menu) {
+		// The group is the items of the menu holding the first one whose positions, or by command whose ids, lie from first to last; the
+		// call succeeds when the one to check is among them.
+		const uint32_t flags = call.u32(4), from = call.u32(1), to = call.u32(2), wanted = call.u32(3);
+		const auto first = locate(call[0], from, flags);
+		if (!first.found) {
 			call.fail(1456);
 			return;
 		}
 		auto *menu = objects.edit_menu(first.menu);
-		for (size_t index = first.index; index <= last.index && index < menu->items.size(); ++index) {
+		bool done = false;
+		for (size_t index = 0; index < menu->items.size(); ++index) {
 			auto &item = menu->items[index];
-			const bool selected = checked.menu == first.menu && index == checked.index;
+			const uint32_t key = flags & by_position ? uint32_t(index) : item.id;
+			if (key < from || key > to || (!(flags & by_position) && item.submenu))
+				continue;
+			const bool selected = key == wanted;
 			item.state = selected ? item.state | state_checked : item.state & ~state_checked;
-			item.type = selected ? item.type | type_radio : item.type & ~type_radio;
+			if (selected)
+				item.type |= type_radio;
+			done = done || selected;
 		}
-		call.ret(1);
+		call.ret(done ? 1 : 0);
 	});
 	// One item of a menu is its default (MFS_DEFAULT), drawn bold and chosen by a double click; -1 leaves the menu without one.
 	registry.add("SetMenuDefaultItem", 3, [this, locate](ApiCall &call) {
