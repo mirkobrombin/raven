@@ -383,6 +383,26 @@ void NativeChild::send_descriptor(int descriptor)
 		throw std::runtime_error("cannot send native mapping descriptor");
 }
 
+// Whether the guest sleeps inside the kernel while it runs its own code. Its system calls all stop for the runtime, so such a sleep holds
+// it within one instruction: a locked access that splits a cache line, which Linux delays by several milliseconds and drops when a signal
+// arrives meanwhile, to start it over.
+static bool held_in_kernel(pid_t pid)
+{
+	char path[32];
+	std::snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	const int file = ::open(path, O_RDONLY | O_CLOEXEC);
+	if (file < 0)
+		return false;
+	char text[512];
+	const ssize_t length = ::read(file, text, sizeof text - 1);
+	::close(file);
+	if (length <= 0)
+		return false;
+	text[length] = 0;
+	const char *name_end = std::strrchr(text, ')');
+	return name_end && name_end[1] == ' ' && (name_end[2] == 'S' || name_end[2] == 'D');
+}
+
 // The tracer thread's wake-up while it is blocked waiting for the guest: a one-shot timer that interrupts waitpid with a signal whose
 // handler does nothing. The timer is disarmed as soon as the wait returns and the signal is never blocked, so it cannot stay pending and
 // interrupt anything else.
@@ -1921,6 +1941,14 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		}
 		// The slice belongs to this resume only; a later wait for a memory operation of the runtime must not see it expire.
 		child.clear_slice();
+		// A guest the kernel holds within an instruction is let finish it: the interrupt would cut the kernel's delay short and the instruction
+		// would start over, so a thread spinning on a value that splits a cache line, as the .NET Framework's Interlocked.Read can, never
+		// got past it while its slices kept ending. It is waited for a few times, then interrupted all the same.
+		for (int held = 0; status == -2 && held < 20 && held_in_kernel(child.pid); ++held) {
+			child.set_slice(std::chrono::milliseconds(15));
+			status = child.wait(state->poll_served ? &state->poll_served : nullptr);
+			child.clear_slice();
+		}
 		if (status == -2) {
 			++state->slice_interrupts;
 			// The guest ran a whole slice without a stop of its own: interrupt it where it is and let another thread have the processor.
