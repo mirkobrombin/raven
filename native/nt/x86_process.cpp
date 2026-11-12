@@ -1020,7 +1020,15 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			for (const auto &[module_name, module] : modules.all())
 				if (r.rip >= module->loaded.base() && r.rip < module->loaded.base() + module->image.image_size)
 					std::cerr << " (" << module_name << '+' << r.rip - module->loaded.base() << ')';
-			std::cerr << " address 0x" << fault.fault_address << std::dec << '\n';
+			std::cerr << " address 0x" << fault.fault_address << " eax=" << uint32_t(r.rax) << " ebx=" << uint32_t(r.rbx) << " ecx=" << uint32_t(r.rcx)
+				<< " edx=" << uint32_t(r.rdx) << " esi=" << uint32_t(r.rsi) << " edi=" << uint32_t(r.rdi) << " ebp=" << uint32_t(r.rbp) << " esp="
+				<< uint32_t(r.rsp) << " code";
+			try {
+				for (const auto byte : process.read_memory(r.rip, 8))
+					std::cerr << ' ' << unsigned(byte);
+			} catch (const std::runtime_error &) {
+			}
+			std::cerr << std::dec << '\n';
 		}
 		// CONTEXT_FULL of the i386 layout: segments, integer and control registers, at their offsets in the 716-byte structure.
 		std::vector<uint8_t> context(716, 0), record(80, 0);
@@ -1226,6 +1234,21 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				{"CreateFiberEx", "raven_create_fiber_ex"}, {"ConvertThreadToFiber", "raven_convert_thread_to_fiber"},
 				{"ConvertThreadToFiberEx", "raven_convert_thread_to_fiber_ex"}, {"ConvertFiberToThread", "raven_convert_fiber_to_thread"},
 				{"SwitchToFiber", "raven_switch_to_fiber"}, {"DeleteFiber", "raven_delete_fiber"}, {"IsThreadAFiber", "raven_is_thread_a_fiber"}};
+			// RAVEN_TRACE_EXCEPTIONS names each exception a 32-bit program raises, with the thread raising it.
+			if (api == "RaiseException" && std::getenv("RAVEN_TRACE_EXCEPTIONS")) {
+				const auto words = process.api_arguments(4);
+				std::cerr << "raven: thread " << guest_threads.current_id() << " raises 0x" << std::hex << uint32_t(words[0]);
+				const uint32_t count = std::min<uint32_t>(uint32_t(words[2]), 8);
+				if (count && uint32_t(words[3])) {
+					const auto raw = process.read_memory(uint32_t(words[3]), count * 4);
+					for (uint32_t index = 0; index < count; ++index) {
+						uint32_t word;
+						std::memcpy(&word, raw.data() + index * 4, 4);
+						std::cerr << ' ' << word;
+					}
+				}
+				std::cerr << std::dec << '\n';
+			}
 			if (const auto routed = in_runtime.find(api); routed != in_runtime.end())
 				if (const auto component = modules.all().find("ucrtbase.dll"); component != modules.all().end()) {
 					const std::string_view wanted = routed->second;
