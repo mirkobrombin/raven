@@ -4142,6 +4142,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(fls_exit_fixture ALL DEPENDS ${fls_exit_client})
                         add_test(NAME native_fls_exit_x64 COMMAND raven --run-process --execution=native ${fls_exit_client})
                         set_tests_properties(native_fls_exit_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        set(system_graphics_client ${CMAKE_CURRENT_BINARY_DIR}/system-graphics64.exe)
+                        add_custom_command(OUTPUT ${system_graphics_client}
+                            COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                                -o ${system_graphics_client} ${LOADER_SOURCES}/system_graphics_client.c -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/system_graphics_client.c VERBATIM)
+                        add_custom_target(system_graphics_fixture ALL DEPENDS ${system_graphics_client})
+                        add_test(NAME native_system_graphics_x64 COMMAND raven --run-process --execution=native ${system_graphics_client})
+                        set_tests_properties(native_system_graphics_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     endif()
                     # mlang comes with the installer components, whose import library the client links against.
                     if(width EQUAL 64)
