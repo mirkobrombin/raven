@@ -1999,7 +1999,10 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		if (width==INT32_MIN) width=child ? 0 : screen.screen_x*3/4;
 		if (height==INT32_MIN) height=child ? 0 : screen.screen_y*3/4;
 	}
-	if (width<0 || height<0 || width>8192 || height>8192 || int64_t(x)+width>INT32_MAX || int64_t(y)+height>INT32_MAX)
+	// A negative size, as a child sized from a parent not laid out yet gets, makes an empty window: CreateWindowEx does not refuse it.
+	width=std::max(width,0);
+	height=std::max(height,0);
+	if (width>8192 || height>8192 || int64_t(x)+width>INT32_MAX || int64_t(y)+height>INT32_MAX)
 		throw uint32_t(87);
 	// An overlapped window, and any top-level one with a sizing border, starts at least at the minimum tracking size (SM_CXMINTRACK and
 	// SM_CYMINTRACK), as CreateWindowEx makes it: programs that create a window empty and size it later measure its frame from it.

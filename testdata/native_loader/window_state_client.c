@@ -116,6 +116,13 @@ int raven_entry(void)
 	SetLastError(0);
 	if (TranslateAcceleratorW(window, NULL, &message) || GetLastError() != ERROR_INVALID_WINDOW_HANDLE)
 		return 24;
+	/* A child sized from a parent that has no size yet comes out negative; CreateWindowEx makes it empty instead of refusing it, as a
+	   tab page made inside a tab control that is not laid out yet is. */
+	HWND empty = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 4, 4, -8, -6, window, NULL, NULL, NULL);
+	RECT bounds;
+	if (!empty || !GetClientRect(empty, &bounds) || bounds.right || bounds.bottom)
+		return 25;
+	DestroyWindow(empty);
 	DestroyWindow(other);
 	if (!DestroyWindow(window) || IsWindow(window) || GetWindowLongPtrW(window, GWLP_USERDATA) || GetLastError() != ERROR_INVALID_WINDOW_HANDLE)
 		return 14;
