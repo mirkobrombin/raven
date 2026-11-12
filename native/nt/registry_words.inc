@@ -1293,6 +1293,8 @@
 {"VerQueryValueW", 4},
 {"VerSetConditionMask", 3},
 {"VerifyVersionInfoW", 3},
+{"VirtualLock", 2},
+{"VirtualUnlock", 2},
 {"VkKeyScanExW", 2},
 {"VkKeyScanW", 1},
 {"WSACleanup", 0},

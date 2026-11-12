@@ -491,6 +491,10 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	// flush has nothing to do and succeeds.
 	registry.add("FlushInstructionCache", 3, [](ApiCall &call) { call.ret(1); });
 	registry.add("NtFlushInstructionCache", 3, [](ApiCall &call) { call.ret(0); });
+	// Locking keeps pages resident; a guest's memory is never paged out behind its back in a way it could notice, so the request
+	// holds as soon as it is made.
+	registry.add("VirtualLock", 2, [](ApiCall &call) { call.ret(1); });
+	registry.add("VirtualUnlock", 2, [](ApiCall &call) { call.ret(1); });
 	// SectionBasicInformation: the base address, the allocation attributes and the maximum size of the section.
 	// The PE headers of an image section's file: the machine, the subsystem and the rest SectionImageInformation reports.
 	const auto image_headers = [](const SectionObject &mapping) -> std::optional<std::vector<uint8_t>> {
