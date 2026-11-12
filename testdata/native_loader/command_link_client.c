@@ -1,6 +1,6 @@
 // A command link asked for its ideal size at a given width answers the height that shows its whole note, wrapped to that width, and a
-// task dialog makes its links that tall, as KeePass's emergency sheet question shows a note of two lines. The exit code names the first
-// check that failed.
+// task dialog makes its links that tall, as KeePass's emergency sheet question shows a note of two lines; a dialog of links alone has no
+// empty bar of buttons below them. The exit code names the first check that failed.
 #include <windows.h>
 #include <commctrl.h>
 
@@ -38,6 +38,16 @@ static HRESULT CALLBACK dialog_events(HWND dialog, UINT message, WPARAM wparam, 
 			failure = 4;
 		else if (box.bottom - box.top < height_at(link, box.right - box.left))
 			failure = 5;
+		/* With only links, no bar of buttons stays empty along the bottom: the dialog ends a margin below the last link. */
+		HWND last = GetDlgItem(dialog, 101);
+		RECT client;
+		if (!last || !GetWindowRect(last, &box) || !GetClientRect(dialog, &client))
+			failure = failure ? failure : 8;
+		else {
+			MapWindowPoints(NULL, dialog, (POINT *)&box, 2);
+			if (client.bottom - box.bottom > 20)
+				failure = failure ? failure : 9;
+		}
 		SendMessageW(dialog, TDM_CLICK_BUTTON, 100, 0);
 	}
 	return S_OK;

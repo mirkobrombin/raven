@@ -223,11 +223,16 @@ static void lay_out(dialog_state *state)
 	if (state->icon && y < MARGIN + ICON_SIZE + GAP)
 		y = MARGIN + ICON_SIZE + GAP;
 
-	/* The bar along the bottom holds the rest of the buttons, and to their left the expander and the check box. */
+	/* The bar along the bottom holds the rest of the buttons, and to their left the expander and the check box; with none of them, as
+	   when a dialog offers links alone, there is no bar. */
+	BOOL bar = state->expander || state->verify;
+	for (index = 0; index < state->button_count; index++)
+		if (!is_link_slot(state, index))
+			bar = TRUE;
 	state->bar_top = y + GAP;
-	y = state->bar_top + BAR_PADDING;
-	{
-		int left = MARGIN, top = y;
+	y = state->bar_top;
+	if (bar) {
+		int left = MARGIN, top = y + BAR_PADDING;
 		if (state->expander) {
 			int width = button_width(state, state->expander);
 			MoveWindow(state->expander, left, top, width, BUTTON_HEIGHT, FALSE);
