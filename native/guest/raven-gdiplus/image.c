@@ -1919,50 +1919,215 @@ GpStatus GDIPAPI GdipGetImageItemData(GpImage *image, void *item)
 	return image && item ? NotImplemented : InvalidParameter;
 }
 
+/* The effects of GDI+ 1.1 are objects named by a GUID and set through a block of parameters. Only the blur is made here; the others
+   still answer NotImplemented, so a program falls back as it would on a system without them. */
+static const GUID blur_effect = {0x633c80a4, 0x1843, 0x482b, {0x9e, 0xf2, 0xbe, 0x28, 0x34, 0xc5, 0xfd, 0xd4}};
+
+typedef struct
+{
+	float radius;
+	BOOL expand_edge;
+} BlurParams;
+
+typedef struct gp_effect
+{
+	GUID guid;
+	BlurParams blur;
+} GpEffect;
+
 GpStatus GDIPAPI GdipCreateEffect(GUID guid, void **out)
 {
-	(void)guid;
-	return out ? NotImplemented : InvalidParameter;
+	if (!out)
+		return InvalidParameter;
+	*out = NULL;
+	if (!IsEqualGUID(&guid, &blur_effect))
+		return NotImplemented;
+	GpEffect *effect = gp_alloc(sizeof *effect);
+	if (!effect)
+		return OutOfMemory;
+	effect->guid = guid;
+	*out = effect;
+	return Ok;
 }
 
 GpStatus GDIPAPI GdipDeleteEffect(void *effect)
 {
-	return effect ? NotImplemented : InvalidParameter;
+	if (!effect)
+		return InvalidParameter;
+	gp_free(effect);
+	return Ok;
 }
 
 GpStatus GDIPAPI GdipGetEffectParameterSize(void *effect, UINT *out)
 {
-	return effect && out ? NotImplemented : InvalidParameter;
+	if (!effect || !out)
+		return InvalidParameter;
+	*out = sizeof(BlurParams);
+	return Ok;
 }
 
 GpStatus GDIPAPI GdipGetEffectParameters(void *effect, UINT *size, void *out)
 {
-	return effect && size && out ? NotImplemented : InvalidParameter;
+	if (!effect || !size || !out || *size < sizeof(BlurParams))
+		return InvalidParameter;
+	*(BlurParams *)out = ((GpEffect *)effect)->blur;
+	*size = sizeof(BlurParams);
+	return Ok;
 }
 
+// A blur reaches from 0 to 255 pixels around each one.
 GpStatus GDIPAPI GdipSetEffectParameters(void *effect, const void *data, UINT size)
 {
-	(void)size;
-	return effect && data ? NotImplemented : InvalidParameter;
+	if (!effect || !data || size != sizeof(BlurParams))
+		return InvalidParameter;
+	const BlurParams *blur = data;
+	if (!(blur->radius >= 0.0f && blur->radius <= 255.0f))
+		return InvalidParameter;
+	((GpEffect *)effect)->blur = *blur;
+	return Ok;
 }
 
+static REAL exponential(REAL x)
+{
+	return (REAL)pow(2.718281828459045, x);
+}
+
+/* Blurs one line of premultiplied channels through the weights, over what lies inside the line: the weights that fall past its ends
+   are left out and the rest share their place, so an opaque picture keeps opaque edges. An expanded blur fades its edges into the
+   transparent margin, which is part of the line. */
+static void blur_line(const REAL *from, REAL *to, INT count, INT step, const REAL *weights, INT reach)
+{
+	for (INT i = 0; i < count; i++) {
+		REAL sum[4] = {0.0f, 0.0f, 0.0f, 0.0f}, used = 0.0f;
+		for (INT k = -reach; k <= reach; k++) {
+			INT j = i + k;
+			if (j < 0 || j >= count)
+				continue;
+			const REAL *pixel = from + (SSIZE_T)j * step * 4;
+			for (INT c = 0; c < 4; c++)
+				sum[c] += pixel[c] * weights[k + reach];
+			used += weights[k + reach];
+		}
+		for (INT c = 0; c < 4; c++)
+			to[(SSIZE_T)i * step * 4 + c] = used > 0.0f ? sum[c] / used : 0.0f;
+	}
+}
+
+/* Renders the effect over an area of the image into a new 32bpp ARGB bitmap: the area's size, or grown by the radius on every side
+   when the edges expand. The offset is how far the result reaches left of and above the area. */
+GpStatus gp_effect_render(const void *effect, const GpImage *image, const RECT *area, GpImage **out, INT *offset)
+{
+	const GpEffect *blur = effect;
+	INT reach = (INT)gp_ceil(blur->blur.radius), grow = blur->blur.expand_edge ? reach : 0;
+	INT width = area->right - area->left + 2 * grow, height = area->bottom - area->top + 2 * grow;
+	*out = NULL;
+	*offset = grow;
+	if (width <= 0 || height <= 0)
+		return InvalidParameter;
+	REAL *weights = gp_alloc(sizeof(REAL) * (2 * reach + 1));
+	REAL *plane = gp_alloc(sizeof(REAL) * 4 * (SIZE_T)width * height), *spare = gp_alloc(sizeof(REAL) * 4 * (SIZE_T)width * height);
+	GpStatus status = weights && plane && spare ? gp_bitmap_new(width, height, PixelFormat32bppARGB, out) : OutOfMemory;
+	if (status != Ok) {
+		gp_free(weights);
+		gp_free(plane);
+		gp_free(spare);
+		return status;
+	}
+	// A bell whose width is a third of the radius, so the weights all but vanish at its end.
+	REAL sigma = blur->blur.radius / 3.0f;
+	for (INT k = -reach; k <= reach; k++)
+		weights[k + reach] = sigma > 0.0f ? exponential(-(REAL)(k * k) / (2.0f * sigma * sigma)) : (k == 0 ? 1.0f : 0.0f);
+	for (INT y = 0; y < height; y++) {
+		for (INT x = 0; x < width; x++) {
+			INT sx = area->left + x - grow, sy = area->top + y - grow;
+			if (sx < 0 || sy < 0 || sx >= (INT)image->width || sy >= (INT)image->height || sx >= area->right || sy >= area->bottom ||
+				sx < area->left || sy < area->top)
+				continue;
+			ARGB color = gp_pixel_read(image, sx, sy);
+			REAL alpha = (REAL)(color >> 24) / 255.0f, *pixel = plane + ((SIZE_T)y * width + x) * 4;
+			pixel[0] = (REAL)(color >> 24);
+			pixel[1] = ((color >> 16) & 255) * alpha;
+			pixel[2] = ((color >> 8) & 255) * alpha;
+			pixel[3] = (color & 255) * alpha;
+		}
+	}
+	for (INT y = 0; y < height; y++)
+		blur_line(plane + (SIZE_T)y * width * 4, spare + (SIZE_T)y * width * 4, width, 1, weights, reach);
+	for (INT x = 0; x < width; x++)
+		blur_line(spare + (SIZE_T)x * 4, plane + (SIZE_T)x * 4, height, width, weights, reach);
+	for (INT y = 0; y < height; y++) {
+		for (INT x = 0; x < width; x++) {
+			const REAL *pixel = plane + ((SIZE_T)y * width + x) * 4;
+			ARGB color = 0;
+			if (pixel[0] >= 0.5f) {
+				REAL scale = 255.0f / pixel[0];
+				UINT channel[3];
+				for (INT c = 0; c < 3; c++) {
+					REAL value = pixel[c + 1] * scale + 0.5f;
+					channel[c] = value > 255.0f ? 255 : (UINT)value;
+				}
+				color = (ARGB)(pixel[0] > 254.5f ? 255 : (UINT)(pixel[0] + 0.5f)) << 24 | channel[0] << 16 | channel[1] << 8 | channel[2];
+			}
+			gp_pixel_write(*out, x, y, color);
+		}
+	}
+	gp_free(weights);
+	gp_free(plane);
+	gp_free(spare);
+	return Ok;
+}
+
+static void effect_area(const GpImage *image, const RECT *roi, RECT *area)
+{
+	RECT whole = {0, 0, (LONG)image->width, (LONG)image->height};
+	if (!roi || !IntersectRect(area, roi, &whole))
+		*area = whole;
+}
+
+// The image takes the effect in place: an expanding blur still keeps to the area, since the bitmap cannot grow.
 GpStatus GDIPAPI GdipBitmapApplyEffect(GpImage *image, void *effect, RECT *roi, BOOL use_aux, void **aux, INT *aux_size)
 {
-	(void)roi;
 	(void)use_aux;
-	(void)aux;
-	(void)aux_size;
-	return image && effect ? NotImplemented : InvalidParameter;
+	if (!image || !effect)
+		return InvalidParameter;
+	if (aux)
+		*aux = NULL;
+	if (aux_size)
+		*aux_size = 0;
+	if (image->type != ImageTypeBitmap)
+		return InvalidParameter;
+	RECT area;
+	effect_area(image, roi, &area);
+	GpEffect kept = *(GpEffect *)effect;
+	kept.blur.expand_edge = FALSE;
+	GpImage *result;
+	INT offset;
+	GpStatus status = gp_effect_render(&kept, image, &area, &result, &offset);
+	if (status != Ok)
+		return status;
+	for (INT y = area.top; y < area.bottom; y++)
+		for (INT x = area.left; x < area.right; x++)
+			gp_pixel_write(image, x, y, gp_pixel_read(result, x - area.left, y - area.top));
+	GdipDisposeImage(result);
+	return Ok;
 }
 
 GpStatus GDIPAPI GdipBitmapCreateApplyEffect(GpImage **inputs, INT count, void *effect, RECT *roi, RECT *out_rect, GpImage **out, BOOL use_aux, void **aux, INT *aux_size)
 {
-	(void)roi;
-	(void)out_rect;
 	(void)use_aux;
-	(void)aux;
-	(void)aux_size;
-	return inputs && count > 0 && effect && out ? NotImplemented : InvalidParameter;
+	if (!inputs || count <= 0 || !inputs[0] || !effect || !out)
+		return InvalidParameter;
+	if (aux)
+		*aux = NULL;
+	if (aux_size)
+		*aux_size = 0;
+	RECT area;
+	effect_area(inputs[0], roi, &area);
+	INT offset;
+	GpStatus status = gp_effect_render(effect, inputs[0], &area, out, &offset);
+	if (status == Ok && out_rect)
+		SetRect(out_rect, area.left - offset, area.top - offset, area.right + offset, area.bottom + offset);
+	return status;
 }
 
 GpStatus GDIPAPI GdipTestControl(INT control, void *data)

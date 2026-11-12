@@ -4061,6 +4061,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(memory_lock_fixture${width} ALL DEPENDS ${memory_lock_client})
                     add_test(NAME native_memory_lock_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${memory_lock_client})
                     set_tests_properties(native_memory_lock_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(gdiplus_blur_client ${CMAKE_CURRENT_BINARY_DIR}/gdiplus-blur${width}.exe)
+                    add_custom_command(OUTPUT ${gdiplus_blur_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${gdiplus_blur_client} ${LOADER_SOURCES}/gdiplus_blur_client.c -lgdiplus -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/gdiplus_blur_client.c VERBATIM)
+                    add_custom_target(gdiplus_blur_fixture${width} ALL DEPENDS ${gdiplus_blur_client})
+                    add_test(NAME native_gdiplus_blur_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${gdiplus_blur_client})
+                    set_tests_properties(native_gdiplus_blur_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
