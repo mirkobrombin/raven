@@ -1193,12 +1193,13 @@ static const BYTE sig_jpeg[] = {0xff, 0xd8};
 static const BYTE sig_gif[] = {'G', 'I', 'F', '8', '7', 'a'}, mask_six[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static const BYTE sig_tiff[] = {'I', 'I', 0x2a, 0x00}, mask_four[] = {0xff, 0xff, 0xff, 0xff};
 
+/* The codecs are built in, so none names a library, as on Windows: the .NET Framework asks for an absolute path of any that does. */
 static const codec_row codec_rows[] = {
-	{CODEC_CLSID(0x00), &format_bmp, &GUID_ContainerFormatBmp, L"Built-in BMP", L"gdiplus.dll", L"BMP", L"*.BMP;*.DIB;*.RLE", L"image/bmp", sig_bmp, mask_two, 2},
-	{CODEC_CLSID(0x01), &format_jpeg, &GUID_ContainerFormatJpeg, L"Built-in JPEG", L"gdiplus.dll", L"JPEG", L"*.JPG;*.JPEG;*.JPE;*.JFIF", L"image/jpeg", sig_jpeg, mask_two, 2},
-	{CODEC_CLSID(0x02), &format_gif, &GUID_ContainerFormatGif, L"Built-in GIF", L"gdiplus.dll", L"GIF", L"*.GIF", L"image/gif", sig_gif, mask_six, 6},
-	{CODEC_CLSID(0x05), &format_tiff, &GUID_ContainerFormatTiff, L"Built-in TIFF", L"gdiplus.dll", L"TIFF", L"*.TIFF;*.TIF", L"image/tiff", sig_tiff, mask_four, 4},
-	{CODEC_CLSID(0x06), &format_png, &GUID_ContainerFormatPng, L"Built-in PNG", L"gdiplus.dll", L"PNG", L"*.PNG", L"image/png", sig_png, mask_eight, 8},
+	{CODEC_CLSID(0x00), &format_bmp, &GUID_ContainerFormatBmp, L"Built-in BMP", NULL, L"BMP", L"*.BMP;*.DIB;*.RLE", L"image/bmp", sig_bmp, mask_two, 2},
+	{CODEC_CLSID(0x01), &format_jpeg, &GUID_ContainerFormatJpeg, L"Built-in JPEG", NULL, L"JPEG", L"*.JPG;*.JPEG;*.JPE;*.JFIF", L"image/jpeg", sig_jpeg, mask_two, 2},
+	{CODEC_CLSID(0x02), &format_gif, &GUID_ContainerFormatGif, L"Built-in GIF", NULL, L"GIF", L"*.GIF", L"image/gif", sig_gif, mask_six, 6},
+	{CODEC_CLSID(0x05), &format_tiff, &GUID_ContainerFormatTiff, L"Built-in TIFF", NULL, L"TIFF", L"*.TIFF;*.TIF", L"image/tiff", sig_tiff, mask_four, 4},
+	{CODEC_CLSID(0x06), &format_png, &GUID_ContainerFormatPng, L"Built-in PNG", NULL, L"PNG", L"*.PNG", L"image/png", sig_png, mask_eight, 8},
 };
 
 typedef struct
@@ -1212,7 +1213,7 @@ typedef struct
 
 static UINT wide_bytes(const WCHAR *text)
 {
-	return (lstrlenW(text) + 1) * sizeof(WCHAR);
+	return text ? (lstrlenW(text) + 1) * sizeof(WCHAR) : 0;
 }
 
 static UINT codec_list_bytes(void)
@@ -1241,8 +1242,8 @@ static GpStatus codec_list(UINT count, UINT size, ImageCodecInfo *out, DWORD fla
 		const WCHAR **slots[5] = {&info->CodecName, &info->DllName, &info->FormatDescription, &info->FilenameExtension, &info->MimeType};
 		for (int t = 0; t < 5; t++) {
 			UINT bytes = wide_bytes(texts[t]);
+			*slots[t] = bytes ? (const WCHAR *)strings : NULL;
 			memcpy(strings, texts[t], bytes);
-			*slots[t] = (const WCHAR *)strings;
 			strings += bytes;
 		}
 		info->Flags = flags;

@@ -24,6 +24,15 @@ int WINAPI GdipGetImageWidth(void *image, UINT *width);
 int WINAPI GdipGetImageHeight(void *image, UINT *height);
 int WINAPI GdipCreateHBITMAPFromBitmap(void *bitmap, HBITMAP *handle, DWORD background);
 int WINAPI GdipDisposeImage(void *image);
+typedef struct {
+	CLSID clsid;
+	GUID format;
+	const WCHAR *codec, *dll, *description, *extensions, *mime;
+	DWORD flags, version, signatures, signature_size;
+	const BYTE *pattern, *mask;
+} CodecInfo;
+int WINAPI GdipGetImageEncodersSize(UINT *count, UINT *size);
+int WINAPI GdipGetImageEncoders(UINT count, UINT size, CodecInfo *codecs);
 HRESULT WINAPI IWICBitmapFrameEncode_WriteSource_Proxy(IWICBitmapFrameEncode *frame, IWICBitmapSource *source, WICRect *area);
 
 /* Three pixels over two rows, RGBA: red, green, blue; white, black and a half transparent dark blue. */
@@ -157,6 +166,17 @@ int raven_entry(void)
 		return 14;
 	DeleteObject(handle);
 	GdipDisposeImage(bitmap);
+	/* The codecs built into GDI+ name no library: the .NET Framework asks for an absolute path of any that does. */
+	UINT codecs = 0, size = 0;
+	if (GdipGetImageEncodersSize(&codecs, &size) || !codecs)
+		return 15;
+	CodecInfo *list = HeapAlloc(GetProcessHeap(), 0, size);
+	if (!list || GdipGetImageEncoders(codecs, size, list))
+		return 16;
+	for (UINT index = 0; index < codecs; ++index)
+		if (!(list[index].flags & 0x10000) || list[index].dll || !list[index].mime)
+			return 17;
+	HeapFree(GetProcessHeap(), 0, list);
 	GdiplusShutdown(token);
 	DeleteFileW(path);
 	CoUninitialize();
