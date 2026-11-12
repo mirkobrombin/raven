@@ -1088,7 +1088,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				{
 					static const std::map<std::string_view, std::vector<size_t>> wide_strings{{"SetWindowTextW", {1}}, {"SetDlgItemTextW", {2}},
 						{"CreateWindowExW", {1, 2}}, {"RegisterClassW", {}}, {"MessageBoxW", {1, 2}}, {"LoadStringW", {}}, {"CreateProcessW", {0, 1, 7}}, {"ShellExecuteW", {1, 2, 3}}, {"LoadLibraryW", {0}}, {"CreateFileW", {0}}, {"GetFileAttributesW", {0}},
-						{"GetFileAttributesExW", {0}}, {"FindFirstFileExW", {0}}, {"CommandLineToArgvW", {0}},
+						{"GetFileAttributesExW", {0}}, {"FindFirstFileExW", {0}}, {"FindFirstFileW", {0}}, {"CreateDirectoryW", {0}}, {"CommandLineToArgvW", {0}},
 						{"WinHttpAddRequestHeaders", {1}}, {"WinHttpOpenRequest", {1, 2}}, {"WinHttpConnect", {1}},
 						{"PathIsURLW", {0}}, {"PathSearchAndQualifyW", {0}}, {"UrlApplySchemeW", {0}}, {"GetFullPathNameW", {0}}, {"RegOpenKeyExW", {1}},
 						{"RegCreateKeyExW", {1}}, {"RegQueryValueExW", {1}}, {"RegSetValueExW", {1}}, {"lstrcmpiW", {0, 1}}, {"OpenThemeData", {1}},
