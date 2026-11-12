@@ -2131,6 +2131,88 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[2], std::span<const uint8_t>(bytes.data(), written));
 		finish(written < bytes.size() ? buffer_overflow : 0, written);
 	});
+	// What an open file is, by the classes programs ask for: its times and attributes, its sizes, its index on the volume, its name without
+	// the drive, where it is read from, its mode and alignment, all of those at once, its attributes with a reparse tag, its identity on the
+	// volume, and that it is neither case sensitive nor has extended attributes.
+	registry.add("NtQueryInformationFile", 5, [file_of](ApiCall &call) {
+		constexpr uint32_t invalid_handle = 0xc0000008U, length_mismatch = 0xc0000004U, buffer_overflow = 0x80000005U, invalid_class = 0xc0000003U;
+		const size_t width = call.pointer_width();
+		const auto finish = [&](uint32_t status, uint64_t information) {
+			call.store_pointer(call[1], status);
+			call.store_pointer(call[1] + width, information);
+			call.ret(status);
+		};
+		const auto file = file_of(call[0]);
+		struct stat metadata{};
+		if (!file || ::fstat(file->descriptor, &metadata)) {
+			call.ret(invalid_handle);
+			return;
+		}
+		const auto basic = [&](std::vector<uint8_t> &bytes, size_t at) {
+			put64(bytes, at, filetime(metadata.st_ctim));
+			put64(bytes, at + 8, filetime(metadata.st_atim));
+			put64(bytes, at + 16, filetime(metadata.st_mtim));
+			put64(bytes, at + 24, filetime(metadata.st_ctim));
+			put32(bytes, at + 32, attributes_of(metadata, file->path));
+		};
+		const auto standard = [&](std::vector<uint8_t> &bytes, size_t at) {
+			put64(bytes, at, uint64_t(metadata.st_blocks) * 512);
+			put64(bytes, at + 8, uint64_t(metadata.st_size));
+			put32(bytes, at + 16, uint32_t(metadata.st_nlink));
+			bytes[at + 20] = (file->flags & 0x04000000U) ? 1 : 0;
+			bytes[at + 21] = S_ISDIR(metadata.st_mode) ? 1 : 0;
+		};
+		const auto position = [&] {
+			const off_t at = S_ISDIR(metadata.st_mode) ? 0 : ::lseek(file->descriptor, 0, SEEK_CUR);
+			return uint64_t(at < 0 ? 0 : at);
+		};
+		const auto name = file->dos_path.size() >= 2 && file->dos_path[1] == u':' ? file->dos_path.substr(2) : file->dos_path;
+		const auto put_name = [&](std::vector<uint8_t> &bytes, size_t at) {
+			bytes.resize(at + 4 + name.size() * 2);
+			put32(bytes, at, uint32_t(name.size() * 2));
+			std::memcpy(bytes.data() + at + 4, name.data(), name.size() * 2);
+		};
+		std::vector<uint8_t> bytes;
+		size_t fixed = 0;
+		switch (call.u32(4)) {
+		case 4: fixed = 40; bytes.assign(fixed, 0); basic(bytes, 0); break;
+		case 5: fixed = 24; bytes.assign(fixed, 0); standard(bytes, 0); break;
+		case 6: fixed = 8; bytes.assign(fixed, 0); put64(bytes, 0, uint64_t(metadata.st_ino)); break;
+		case 7: case 71: fixed = 4; bytes.assign(fixed, 0); break;
+		case 9: fixed = 4; put_name(bytes, 0); break;
+		case 14: fixed = 8; bytes.assign(fixed, 0); put64(bytes, 0, position()); break;
+		case 16: case 17: fixed = 4; bytes.assign(fixed, 0); break;
+		case 18:
+			// Basic, standard, internal, extended attributes, access, position, mode, alignment, then the name.
+			fixed = 100;
+			bytes.assign(fixed, 0);
+			basic(bytes, 0);
+			standard(bytes, 40);
+			put64(bytes, 64, uint64_t(metadata.st_ino));
+			put64(bytes, 80, position());
+			put_name(bytes, 96);
+			break;
+		case 35: fixed = 8; bytes.assign(fixed, 0); put32(bytes, 0, attributes_of(metadata, file->path)); break;
+		case 59:
+			fixed = 24;
+			bytes.assign(fixed, 0);
+			put64(bytes, 0, 0x52415645);
+			put64(bytes, 8, uint64_t(metadata.st_ino));
+			break;
+		default:
+			call.ret(invalid_class);
+			return;
+		}
+		const uint32_t capacity = call.u32(3);
+		if (capacity < fixed) {
+			finish(length_mismatch, 0);
+			return;
+		}
+		// A name that does not fit is cut at the buffer's end.
+		const size_t written = std::min<size_t>(bytes.size(), capacity);
+		call.write(call[2], std::span<const uint8_t>(bytes.data(), written));
+		finish(written < bytes.size() ? buffer_overflow : 0, written);
+	});
 	// GetTempFileName: a zero unique value picks a free name and creates the file; any other value only forms the name.
 	registry.add("GetTempFileNameW", 4, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
 		const auto directory = call.wide(call[0]);

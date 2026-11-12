@@ -2093,6 +2093,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtCancelIoFileEx",
 		// Opening files by their native names, which Rust's standard library and mio look up at run time.
 		"NtCreateFile", "NtOpenFile",
+		// What an open file and its volume are, which paint.net's file system layer looks up at run time.
+		"NtQueryInformationFile", "NtQueryVolumeInformationFile",
 		// What the runtime's own components import from ntdll, which they need whether a program loads them at start or later.
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
