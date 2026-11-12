@@ -435,6 +435,97 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[1], profile->data);
 		call.ret(1);
 	});
+	// The elements of a valid profile, from its tag table after the header: a count, then a signature, an offset and a size for each, all
+	// big-endian. An element lies within the profile, or it is not one.
+	struct ProfileElement {
+		uint32_t tag, offset, size;
+	};
+	const auto profile_elements = [profile_valid](const ColorProfile &profile) {
+		std::vector<ProfileElement> elements;
+		const auto &data = profile.data;
+		const auto big = [&data](size_t at) {
+			return uint32_t(data[at]) << 24 | uint32_t(data[at + 1]) << 16 | uint32_t(data[at + 2]) << 8 | data[at + 3];
+		};
+		if (!profile_valid(profile) || data.size() < 132)
+			return elements;
+		const uint32_t count = big(128);
+		for (uint32_t index = 0; index < count && 132 + size_t(index + 1) * 12 <= data.size(); ++index) {
+			const size_t at = 132 + size_t(index) * 12;
+			const ProfileElement element{big(at), big(at + 4), big(at + 8)};
+			if (uint64_t(element.offset) + element.size <= data.size())
+				elements.push_back(element);
+		}
+		return elements;
+	};
+	registry.add("GetCountColorProfileElements", 2, [&objects, profile_valid, profile_elements](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[1] || !profile_valid(*profile)) {
+			call.fail(profile && call[1] ? 2015 : 87, 0);
+			return;
+		}
+		call.store<uint32_t>(call[1], uint32_t(profile_elements(*profile).size()));
+		call.ret(1);
+	});
+	// The tag of an element by its index, which counts from one.
+	registry.add("GetColorProfileElementTag", 3, [&objects, profile_elements](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[2]) {
+			call.fail(87, 0);
+			return;
+		}
+		const auto elements = profile_elements(*profile);
+		const uint32_t index = call.u32(1);
+		if (!index || index > elements.size()) {
+			call.fail(87, 0);
+			return;
+		}
+		call.store<uint32_t>(call[2], elements[index - 1].tag);
+		call.ret(1);
+	});
+	registry.add("IsColorProfileTagPresent", 3, [&objects, profile_elements](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[2]) {
+			call.fail(87, 0);
+			return;
+		}
+		const auto elements = profile_elements(*profile);
+		const uint32_t tag = call.u32(1);
+		call.store<uint32_t>(call[2], std::any_of(elements.begin(), elements.end(), [tag](const auto &element) { return element.tag == tag; }));
+		call.ret(1);
+	});
+	// An element's bytes from an offset into it, as many as the buffer takes; without a buffer, the element's size. It is a reference
+	// when another tag names the same bytes.
+	registry.add("GetColorProfileElement", 6, [&objects, profile_elements](ApiCall &call) {
+		const auto profile = objects.object_as<ColorProfile>(call[0]);
+		if (!profile || !call[3]) {
+			call.fail(87, 0);
+			return;
+		}
+		const auto elements = profile_elements(*profile);
+		const uint32_t tag = call.u32(1), offset = call.u32(2);
+		const auto found = std::find_if(elements.begin(), elements.end(), [tag](const auto &element) { return element.tag == tag; });
+		if (found == elements.end()) {
+			call.fail(2302, 0);
+			return;
+		}
+		if (!call[4]) {
+			call.store<uint32_t>(call[3], found->size);
+			call.ret(1);
+			return;
+		}
+		if (offset > found->size) {
+			call.fail(87, 0);
+			return;
+		}
+		const uint32_t count = std::min(call.load<uint32_t>(call[3]), found->size - offset);
+		call.write(call[4], std::span<const uint8_t>(profile->data.data() + found->offset + offset, count));
+		call.store<uint32_t>(call[3], count);
+		if (call[5])
+			call.store<uint32_t>(call[5], std::any_of(elements.begin(), elements.end(), [&](const auto &element) {
+				return element.tag != tag && element.offset == found->offset;
+			}));
+		call.ret(1);
+	});
 	// IP_PER_ADAPTER_INFO: autoconfiguration off, then the resolvers of the host's configuration as IP_ADDR_STRING entries, the first
 	// in the record and the others chained after it; every adapter shares them.
 	registry.add("GetPerAdapterInfo", 3, [](ApiCall &call) {
