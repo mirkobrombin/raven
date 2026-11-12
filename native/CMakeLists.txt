@@ -3922,6 +3922,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(listview_selection_fixture${width} ALL DEPENDS ${listview_selection_client})
                     add_test(NAME native_listview_selection_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${listview_selection_client})
                     set_tests_properties(native_listview_selection_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(draw_text_client ${CMAKE_CURRENT_BINARY_DIR}/draw-text${width}.exe)
+                    add_custom_command(OUTPUT ${draw_text_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${draw_text_client} ${LOADER_SOURCES}/draw_text_client.c -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/draw_text_client.c VERBATIM)
+                    add_custom_target(draw_text_fixture${width} ALL DEPENDS ${draw_text_client})
+                    add_test(NAME native_draw_text_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${draw_text_client})
+                    set_tests_properties(native_draw_text_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(toolbar_customize_client ${CMAKE_CURRENT_BINARY_DIR}/toolbar-customize${width}.exe)
                     add_custom_command(OUTPUT ${toolbar_customize_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
