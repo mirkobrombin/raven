@@ -108,16 +108,22 @@ int raven_entry(void)
 	if (FAILED((*(make_context **)device6)[20](device6, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &made)) || !made)
 		return 10;
 	IUnknown_Release((IUnknown *)made);
-	/* A color context for a standard space carries no profile; a custom one keeps the profile it was given, as paint.net's setup
-	   makes one before drawing its banner. The headers give C no macros for these, so the methods are called by their slots. */
+	/* A color context for a standard space carries the ICC profile of that space, which paint.net reads back; a custom one keeps the
+	   profile it was given, as paint.net's setup makes one before drawing its banner. The headers give C no macros for these, so the
+	   methods are called by their slots. */
 	typedef HRESULT (STDMETHODCALLTYPE *create_color)(void *, D2D1_COLOR_SPACE, const BYTE *, UINT32, void **);
 	typedef D2D1_COLOR_SPACE (STDMETHODCALLTYPE *color_space)(void *);
 	typedef UINT32 (STDMETHODCALLTYPE *profile_size)(void *);
 	typedef HRESULT (STDMETHODCALLTYPE *get_profile)(void *, BYTE *, UINT32);
 	const create_color create_context = (create_color)(*(void ***)context6)[59];
 	void *color = NULL;
+	static BYTE standard[4096];
+	UINT32 standard_size = 0;
 	if (FAILED(create_context(context6, D2D1_COLOR_SPACE_SRGB, NULL, 0, &color)) || !color ||
-		((color_space)(*(void ***)color)[4])(color) != D2D1_COLOR_SPACE_SRGB || ((profile_size)(*(void ***)color)[5])(color) != 0)
+		((color_space)(*(void ***)color)[4])(color) != D2D1_COLOR_SPACE_SRGB ||
+		(standard_size = ((profile_size)(*(void ***)color)[5])(color)) <= 132 || standard_size > sizeof standard ||
+		FAILED(((get_profile)(*(void ***)color)[6])(color, standard, standard_size)) ||
+		standard[2] * 256 + standard[3] != standard_size || standard[12] != 'm' || standard[36] != 'a')
 		return 11;
 	IUnknown_Release((IUnknown *)color);
 	static const BYTE profile[] = {1, 2, 3, 4, 5};

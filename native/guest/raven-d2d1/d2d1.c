@@ -1922,11 +1922,134 @@ enum { color_context_type_slot = ID2D1ColorContext_methods, color_context_dxgi_s
 static void **color_context_table;
 static const GUID *const color_context_iids[] = {&IID_ID2D1Resource, &IID_ID2D1ColorContext, &IID_ID2D1ColorContext1};
 
-/* A context of this kind and space, with the profile it was given; the caller checks the arguments. */
+/* ---- the profiles of the standard spaces ----
+ * Direct2D gives a context of a standard space the ICC profile of that space, which a program can read back. These are display profiles
+ * (version 2.1) built from the values the specifications give: the primaries adapted to the D50 illuminant of the profile connection
+ * space, the D65 white of the space, and its transfer curve, which the three channels share. sRGB has its piecewise curve as a table,
+ * scRGB is linear, and Adobe RGB (1998) has one gamma of 563/256. */
+enum { SRGB_CURVE_ENTRIES = 1024, RGB_PROFILE_ROOM = 128 + 4 + 9 * 12 + 4 * 20 + 12 + 2 * SRGB_CURVE_ENTRIES + 128 + 24 };
+enum rgb_curve { CURVE_LINEAR, CURVE_GAMMA, CURVE_SRGB };
+
+static void put_big(BYTE *at, UINT32 value)
+{
+	at[0] = (BYTE)(value >> 24);
+	at[1] = (BYTE)(value >> 16);
+	at[2] = (BYTE)(value >> 8);
+	at[3] = (BYTE)value;
+}
+
+/* s15Fixed16Number, from a value given in hundred-thousandths. */
+static UINT32 fixed16(UINT32 scaled)
+{
+	return (UINT32)(((UINT64)scaled * 65536 + 50000) / 100000);
+}
+
+/* The fifth root of a value from zero to one, by Newton's method from above. */
+static double fifth_root(double value)
+{
+	double root = 1;
+	int step;
+	if (value <= 0)
+		return 0;
+	for (step = 0; step < 60; ++step) {
+		const double square = root * root;
+		root = (4 * root + value / (square * square)) / 5;
+	}
+	return root;
+}
+
+/* The sRGB transfer function, from an encoded value to a linear one: a line near black, then the power 2.4 of an offset value. */
+static double srgb_linear(double encoded)
+{
+	double offset, square;
+	if (encoded <= 0.04045)
+		return encoded / 12.92;
+	offset = (encoded + 0.055) / 1.055;
+	square = offset * offset;
+	return square * fifth_root(square);
+}
+
+static UINT32 rgb_profile(BYTE *profile, const UINT32 colors[4][3], enum rgb_curve curve, const char *name)
+{
+	static const char notice[] = "No copyright";
+	static const UINT32 xyz_tags[4] = {0x77747074, 0x7258595a, 0x6758595a, 0x6258595a};
+	static const UINT32 curve_tags[3] = {0x72545243, 0x67545243, 0x62545243};
+	const UINT32 entries = curve == CURVE_LINEAR ? 0 : curve == CURVE_GAMMA ? 1 : SRGB_CURVE_ENTRIES;
+	UINT32 name_size = 1;
+	while (name[name_size - 1])
+		++name_size;
+	const UINT32 curve_size = 12 + 2 * entries, description_size = 12 + name_size + 8 + 3 + 67;
+	UINT32 at = 128 + 4 + 9 * 12, tag = 0, index, axis, size;
+	BYTE *table = profile + 132;
+	memset(profile, 0, RGB_PROFILE_ROOM);
+	put_big(profile + 8, 0x02100000);
+	put_big(profile + 12, 0x6d6e7472);
+	put_big(profile + 16, 0x52474220);
+	put_big(profile + 20, 0x58595a20);
+	put_big(profile + 36, 0x61637370);
+	put_big(profile + 68, fixed16(96420));
+	put_big(profile + 72, fixed16(100000));
+	put_big(profile + 76, fixed16(82491));
+	put_big(profile + 128, 9);
+	for (index = 0; index < 4; ++index, at += 20) {
+		put_big(table + tag * 12, xyz_tags[index]);
+		put_big(table + tag * 12 + 4, at);
+		put_big(table + tag++ * 12 + 8, 20);
+		put_big(profile + at, 0x58595a20);
+		for (axis = 0; axis < 3; ++axis)
+			put_big(profile + at + 8 + axis * 4, fixed16(colors[index][axis]));
+	}
+	for (index = 0; index < 3; ++index) {
+		put_big(table + tag * 12, curve_tags[index]);
+		put_big(table + tag * 12 + 4, at);
+		put_big(table + tag++ * 12 + 8, curve_size);
+	}
+	put_big(profile + at, 0x63757276);
+	put_big(profile + at + 8, entries);
+	if (curve == CURVE_GAMMA) {
+		profile[at + 12] = 563 >> 8;
+		profile[at + 13] = 563 & 0xff;
+	}
+	for (index = 0; curve == CURVE_SRGB && index < entries; ++index) {
+		const UINT32 value = (UINT32)(srgb_linear((double)index / (entries - 1)) * 65535 + 0.5);
+		profile[at + 12 + index * 2] = (BYTE)(value >> 8);
+		profile[at + 13 + index * 2] = (BYTE)value;
+	}
+	at += (curve_size + 3) & ~3u;
+	/* textDescriptionType: the ASCII name, then an empty Unicode one and the 67 bytes of an empty ScriptCode one. */
+	put_big(table + tag * 12, 0x64657363);
+	put_big(table + tag * 12 + 4, at);
+	put_big(table + tag++ * 12 + 8, description_size);
+	put_big(profile + at, 0x64657363);
+	put_big(profile + at + 8, name_size);
+	memcpy(profile + at + 12, name, name_size);
+	at += (description_size + 3) & ~3u;
+	put_big(table + tag * 12, 0x63707274);
+	put_big(table + tag * 12 + 4, at);
+	put_big(table + tag * 12 + 8, 8 + sizeof notice);
+	put_big(profile + at, 0x74657874);
+	memcpy(profile + at + 8, notice, sizeof notice);
+	size = at + ((8 + sizeof notice + 3) & ~3u);
+	put_big(profile, size);
+	return size;
+}
+
+/* The white, red, green and blue of the spaces, in hundred-thousandths. sRGB and scRGB share the primaries of BT.709. */
+static const UINT32 srgb_colors[4][3] = {{95045, 100000, 108905}, {43607, 22249, 1392}, {38515, 71687, 9708}, {14307, 6061, 71410}};
+static const UINT32 adobe_colors[4][3] = {{95045, 100000, 108905}, {60974, 31111, 1947}, {20528, 62567, 6087}, {14919, 6322, 74457}};
+
+/* A context of this kind and space, with the profile it was given, or the profile of sRGB or scRGB for those spaces; the caller checks the
+   arguments. */
 static HRESULT make_color_context(IUnknown *factory, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size, D2D1_COLOR_CONTEXT_TYPE type,
 	DXGI_COLOR_SPACE_TYPE dxgi, ID2D1ColorContext **out)
 {
 	struct color_context *color;
+	BYTE standard[RGB_PROFILE_ROOM];
+	if (!size && (space == D2D1_COLOR_SPACE_SRGB || space == D2D1_COLOR_SPACE_SCRGB)) {
+		size = rgb_profile(standard, srgb_colors, space == D2D1_COLOR_SPACE_SRGB ? CURVE_SRGB : CURVE_LINEAR,
+			space == D2D1_COLOR_SPACE_SRGB ? "sRGB" : "scRGB");
+		profile = standard;
+	}
 	if (!(color = ALLOC(sizeof(*color))))
 		return E_OUTOFMEMORY;
 	if (size && !(color->profile = ALLOC(size))) {
@@ -3408,80 +3531,8 @@ static HRESULT STDMETHODCALLTYPE context_CreateColorContext(void *iface, D2D1_CO
 		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
 }
 
-/* An ICC profile (version 2.1, a display's) of the Adobe RGB (1998) space, from the values its specification gives: the primaries
-   adapted to the D50 illuminant of the profile connection space, the D65 white of the space, and one gamma of 563/256 for every channel.
-   The three curves share their bytes. */
-static void put_big(BYTE *at, UINT32 value)
-{
-	at[0] = (BYTE)(value >> 24);
-	at[1] = (BYTE)(value >> 16);
-	at[2] = (BYTE)(value >> 8);
-	at[3] = (BYTE)value;
-}
-
-/* s15Fixed16Number, from a value given in hundred-thousandths. */
-static UINT32 fixed16(UINT32 scaled)
-{
-	return (UINT32)(((UINT64)scaled * 65536 + 50000) / 100000);
-}
-
-/* The header, the tag table, four XYZ tags, the shared curve, the description and the notice, each padded to four bytes. */
-enum { ADOBE_RGB_PROFILE = 128 + 4 + 9 * 12 + 4 * 20 + 16 + 108 + 24 };
-
-static void adobe_rgb_profile(BYTE *profile)
-{
-	static const UINT32 colors[4][3] = {{95045, 100000, 108905}, {60974, 31111, 1947}, {20528, 62567, 6087}, {14919, 6322, 74457}};
-	static const char name[] = "Adobe RGB (1998)", notice[] = "No copyright";
-	static const UINT32 xyz_tags[4] = {0x77747074, 0x7258595a, 0x6758595a, 0x6258595a};
-	UINT32 at = 128 + 4 + 9 * 12, tag = 0, index, axis;
-	BYTE *table = profile + 132;
-	memset(profile, 0, ADOBE_RGB_PROFILE);
-	put_big(profile, ADOBE_RGB_PROFILE);
-	put_big(profile + 8, 0x02100000);
-	put_big(profile + 12, 0x6d6e7472);
-	put_big(profile + 16, 0x52474220);
-	put_big(profile + 20, 0x58595a20);
-	put_big(profile + 36, 0x61637370);
-	put_big(profile + 68, fixed16(96420));
-	put_big(profile + 72, fixed16(100000));
-	put_big(profile + 76, fixed16(82491));
-	put_big(profile + 128, 9);
-	for (index = 0; index < 4; ++index, at += 20) {
-		put_big(table + tag * 12, xyz_tags[index]);
-		put_big(table + tag * 12 + 4, at);
-		put_big(table + tag++ * 12 + 8, 20);
-		put_big(profile + at, 0x58595a20);
-		for (axis = 0; axis < 3; ++axis)
-			put_big(profile + at + 8 + axis * 4, fixed16(colors[index][axis]));
-	}
-	for (index = 0; index < 3; ++index) {
-		static const UINT32 curves[3] = {0x72545243, 0x67545243, 0x62545243};
-		put_big(table + tag * 12, curves[index]);
-		put_big(table + tag * 12 + 4, at);
-		put_big(table + tag++ * 12 + 8, 14);
-	}
-	put_big(profile + at, 0x63757276);
-	put_big(profile + at + 8, 1);
-	profile[at + 12] = 563 >> 8;
-	profile[at + 13] = 563 & 0xff;
-	at += 16;
-	/* textDescriptionType: the ASCII name, then an empty Unicode one and the 67 bytes of an empty ScriptCode one. */
-	put_big(table + tag * 12, 0x64657363);
-	put_big(table + tag * 12 + 4, at);
-	put_big(table + tag++ * 12 + 8, 12 + sizeof name + 8 + 3 + 67);
-	put_big(profile + at, 0x64657363);
-	put_big(profile + at + 8, sizeof name);
-	memcpy(profile + at + 12, name, sizeof name);
-	at += 108;
-	put_big(table + tag * 12, 0x63707274);
-	put_big(table + tag * 12 + 4, at);
-	put_big(table + tag * 12 + 8, 8 + sizeof notice);
-	put_big(profile + at, 0x74657874);
-	memcpy(profile + at + 8, notice, sizeof notice);
-}
-
 /* A WIC color context: one with a profile becomes a custom space with those bytes; one that names the sRGB of EXIF data is that space,
-   and one that names Adobe RGB a custom space with the profile above, as Direct2D supplies one of its own. */
+   and one that names Adobe RGB a custom space with the profile of that space, as Direct2D supplies one of its own. */
 static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromWicColorContext(void *iface, IWICColorContext *wic, ID2D1ColorContext **out)
 {
 	WICColorContextType type;
@@ -3499,9 +3550,9 @@ static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromWicColorContext(v
 		if (FAILED(result = IWICColorContext_GetExifColorSpace(wic, &exif)))
 			return result;
 		if (exif == 2) {
-			BYTE adobe[ADOBE_RGB_PROFILE];
-			adobe_rgb_profile(adobe);
-			return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, adobe, sizeof adobe, D2D1_COLOR_CONTEXT_TYPE_ICC,
+			BYTE adobe[RGB_PROFILE_ROOM];
+			const UINT32 made = rgb_profile(adobe, adobe_colors, CURVE_GAMMA, "Adobe RGB (1998)");
+			return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, adobe, made, D2D1_COLOR_CONTEXT_TYPE_ICC,
 				DXGI_COLOR_SPACE_CUSTOM, out);
 		}
 		if (exif != 1)
