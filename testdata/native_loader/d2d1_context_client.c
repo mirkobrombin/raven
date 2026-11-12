@@ -129,6 +129,24 @@ int raven_entry(void)
 	for (int index = 0; index < 5; ++index)
 		if (copy[index] != profile[index])
 			return 12;
+	/* A context from a WIC one: the sRGB of a photo's EXIF data is that standard space, a profile read from memory a custom space with
+	   those bytes, as paint.net makes them for the images it opens and for the display. */
+	typedef HRESULT (STDMETHODCALLTYPE *from_wic)(void *, IWICColorContext *, void **);
+	IWICColorContext *wic = NULL;
+	void *converted = NULL;
+	if (FAILED(IWICImagingFactory_CreateColorContext(imaging, &wic)) || FAILED(IWICColorContext_InitializeFromExifColorSpace(wic, 1)) ||
+		FAILED(((from_wic)(*(void ***)context6)[61])(context6, wic, &converted)) ||
+		((color_space)(*(void ***)converted)[4])(converted) != D2D1_COLOR_SPACE_SRGB)
+		return 30;
+	IUnknown_Release((IUnknown *)converted);
+	IWICColorContext_Release(wic);
+	if (FAILED(IWICImagingFactory_CreateColorContext(imaging, &wic)) || FAILED(IWICColorContext_InitializeFromMemory(wic, profile, sizeof profile)) ||
+		FAILED(((from_wic)(*(void ***)context6)[61])(context6, wic, &converted)) ||
+		((color_space)(*(void ***)converted)[4])(converted) != D2D1_COLOR_SPACE_CUSTOM ||
+		((profile_size)(*(void ***)converted)[5])(converted) != sizeof profile)
+		return 31;
+	IUnknown_Release((IUnknown *)converted);
+	IWICColorContext_Release(wic);
 	/* Its newer interface says what kind of context it is; one made from a DXGI color space names that space. */
 	typedef UINT32 (STDMETHODCALLTYPE *context_type)(void *);
 	void *color1 = NULL;

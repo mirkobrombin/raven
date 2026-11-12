@@ -3408,6 +3408,42 @@ static HRESULT STDMETHODCALLTYPE context_CreateColorContext(void *iface, D2D1_CO
 		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
 }
 
+/* A WIC color context: one with a profile becomes a custom space with those bytes; one that names the sRGB of EXIF data is that space.
+   Adobe RGB, which EXIF can also name, needs a profile Direct2D carries and this one does not. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromWicColorContext(void *iface, IWICColorContext *wic, ID2D1ColorContext **out)
+{
+	WICColorContextType type;
+	UINT exif = 0, size = 0;
+	BYTE *profile;
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!wic)
+		return E_INVALIDARG;
+	if (FAILED(result = IWICColorContext_GetType(wic, &type)))
+		return result;
+	if (type == WICColorContextExifColorSpace) {
+		if (FAILED(result = IWICColorContext_GetExifColorSpace(wic, &exif)))
+			return result;
+		if (exif != 1)
+			return unimplemented("ID2D1DeviceContext", "color contexts for EXIF color spaces other than sRGB");
+		return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_SRGB, NULL, 0, D2D1_COLOR_CONTEXT_TYPE_ICC,
+			DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, out);
+	}
+	if (FAILED(result = IWICColorContext_GetProfileBytes(wic, 0, NULL, &size)))
+		return result;
+	if (!size)
+		return E_INVALIDARG;
+	if (!(profile = ALLOC(size)))
+		return E_OUTOFMEMORY;
+	if (SUCCEEDED(result = IWICColorContext_GetProfileBytes(wic, size, profile, &size)))
+		result = make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, profile, size, D2D1_COLOR_CONTEXT_TYPE_ICC,
+			DXGI_COLOR_SPACE_CUSTOM, out);
+	FREE(profile);
+	return result;
+}
+
 /* A DXGI color space: the two that sRGB and scRGB are keep those names, any other is a custom space. */
 static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromDxgiColorSpace(void *iface, DXGI_COLOR_SPACE_TYPE dxgi, ID2D1ColorContext1 **out)
 {
@@ -5583,6 +5619,7 @@ static void set_target(void **table)
 	table[ID2D1DeviceContext5_CreateCompatibleRenderTarget_slot] = (void *)target_CreateCompatibleRenderTarget;
 	table[ID2D1DeviceContext5_CreateLayer_slot] = (void *)target_CreateLayer;
 	table[ID2D1DeviceContext5_CreateColorContext_slot] = (void *)context_CreateColorContext;
+	table[ID2D1DeviceContext5_CreateColorContextFromWicColorContext_slot] = (void *)context_CreateColorContextFromWicColorContext;
 	table[ID2D1DeviceContext5_CreateColorContextFromDxgiColorSpace_slot] = (void *)context_CreateColorContextFromDxgiColorSpace;
 	table[ID2D1DeviceContext5_CreateColorContextFromSimpleColorProfile_slot] = (void *)context_CreateColorContextFromSimpleColorProfile;
 	table[ID2D1DeviceContext5_CreateMesh_slot] = (void *)target_CreateMesh;
