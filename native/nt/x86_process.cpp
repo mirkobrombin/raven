@@ -1429,12 +1429,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		paths.redirect((call.u32(0) & 0xff) != 0);
 		call.ret(1);
 	});
-	// Waveform audio for 32-bit programs has no device yet: they hear that none exists, as on a machine without sound, and go on silent.
-	shared_api.add("waveOutGetNumDevs", 0, [](ApiCall &call) { call.ret(0); });
-	shared_api.add("waveInGetNumDevs", 0, [](ApiCall &call) { call.ret(0); });
-	for (const auto *name : {"waveOutGetDevCapsW", "waveOutGetDevCapsA", "waveInGetDevCapsW", "waveInGetDevCapsA"})
-		shared_api.add(name, 3, [](ApiCall &call) { call.ret(2); });
-	register_midi_api(shared_api);
+	// Waveform audio and MIDI as 64-bit programs have them: the headers and structures are read at the widths of a 32-bit program.
+	register_wave_api(shared_api, kernel);
 	register_profile_api(shared_api, profile);
 	register_ansi_adapters(shared_api);
 	register_legacy_file_api(shared_api);

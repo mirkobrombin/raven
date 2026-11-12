@@ -3986,6 +3986,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(shell_link_fixture${width} ALL DEPENDS ${shell_link_client})
                     add_test(NAME native_shell_link_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${shell_link_client})
                     set_tests_properties(native_shell_link_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(wave_out_client ${CMAKE_CURRENT_BINARY_DIR}/wave-out${width}.exe)
+                    add_custom_command(OUTPUT ${wave_out_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${wave_out_client} ${LOADER_SOURCES}/wave_out_client.c -lwinmm -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/wave_out_client.c VERBATIM)
+                    add_custom_target(wave_out_fixture${width} ALL DEPENDS ${wave_out_client})
+                    add_test(NAME native_wave_out_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${wave_out_client})
+                    set_tests_properties(native_wave_out_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
