@@ -4191,7 +4191,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 # icu.dll with icuuc.dll and icuin.dll forwarding to it, for each width: Raven code on the public documentation and the system's text functions.
                 # The 32-bit forwarders have no relocations, and the linker's default base for icuin.dll falls where images cannot be placed: both bases are fixed.
                 set(icu_source ${PROJECT_SOURCE_DIR}/native/guest/raven-icu)
-                set(icu_files ${icu_source}/dllmain.c ${icu_source}/common.c ${icu_source}/text.c ${icu_source}/breaks.c ${icu_source}/regex.c ${icu_source}/bidi.c)
+                set(icu_files ${icu_source}/dllmain.c ${icu_source}/common.c ${icu_source}/text.c ${icu_source}/breaks.c ${icu_source}/regex.c ${icu_source}/bidi.c
+                    ${icu_source}/locale.c ${icu_source}/collation.c ${icu_source}/normalize.c)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icu.dll ${CMAKE_CURRENT_BINARY_DIR}/icuuc.dll ${CMAKE_CURRENT_BINARY_DIR}/icuin.dll
                         ${CMAKE_CURRENT_BINARY_DIR}/x86/icu.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/icuuc.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/icuin.dll
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
@@ -4267,6 +4268,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(icu_fixture${width} ALL DEPENDS ${icu_client} icu_component)
                     add_test(NAME native_icu_x${width} COMMAND raven --run-process --execution=native ${icu_client})
                     set_tests_properties(native_icu_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(icu_globalization_client ${CMAKE_CURRENT_BINARY_DIR}/icu-globalization-client${width}.exe)
+                    add_custom_command(OUTPUT ${icu_globalization_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${icu_globalization_client} ${LOADER_SOURCES}/icu_globalization_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/icu_globalization_client.c VERBATIM)
+                    add_custom_target(icu_globalization_fixture${width} ALL DEPENDS ${icu_globalization_client} icu_component)
+                    add_test(NAME native_icu_globalization_x${width} COMMAND raven --run-process --execution=native ${icu_globalization_client})
+                    set_tests_properties(native_icu_globalization_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(hlink_client ${CMAKE_CURRENT_BINARY_DIR}/hlink-client${width}.exe)
                     add_custom_command(OUTPUT ${hlink_client}
                         COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
