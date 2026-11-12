@@ -1,6 +1,6 @@
 // C++ exceptions as the Microsoft compiler emits them, against the system msvcrt.dll: a catch by reference, a catch by value through the
 // copy constructor, a rethrow caught in the same function and in the caller, catch(...), a new exception thrown from a catch block, and
-// the destructors of the locals the exceptions leave. Built for both widths; the entry returns the number of the first check that failed.
+// the destructors of the locals the exceptions leave, and many rethrows in a row. Built for both widths; the entry returns the number of the first check that failed.
 
 // The table every type descriptor points to, which a program links statically as the Microsoft libraries do.
 extern "C" const void *const type_info_table[1] __asm__("??_7type_info@@6B@") = {nullptr};
@@ -124,5 +124,9 @@ extern "C" int raven_entry()
 		return 7;
 	if (destroyed < 3)
 		return 8;
+	// A rethrow caught outside the catch it left gives back what the exception took, as the .NET runtime rethrows by the thousand.
+	for (int round = 0; round < 1000; ++round)
+		if (rethrown() != 1 || caller_catches() != 9)
+			return 9;
 	return 0;
 }

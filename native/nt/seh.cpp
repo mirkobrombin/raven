@@ -623,6 +623,9 @@ public:
 				// Unwinding past a catch block's callback abandons that catch: its function's frame follows.
 				if (const auto *pending = consolidation_returning_to(pc, current)) {
 					current = pending->target;
+					// What that catch would have given back on returning goes back when this unwind's own catch ends.
+					resume_mark = std::min(resume_mark, pending->mark);
+					mine().unwinds.back().mark = resume_mark;
 					mine().consolidations.erase(mine().consolidations.begin() + (pending - mine().consolidations.data()), mine().consolidations.end());
 					continue;
 				}
