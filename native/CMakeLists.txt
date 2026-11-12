@@ -3994,6 +3994,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(wave_out_fixture${width} ALL DEPENDS ${wave_out_client})
                     add_test(NAME native_wave_out_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${wave_out_client})
                     set_tests_properties(native_wave_out_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(cert_store_duplicate_client ${CMAKE_CURRENT_BINARY_DIR}/cert-store-duplicate${width}.exe)
+                    add_custom_command(OUTPUT ${cert_store_duplicate_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${cert_store_duplicate_client} ${LOADER_SOURCES}/cert_store_duplicate_client.c -lcrypt32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/cert_store_duplicate_client.c VERBATIM)
+                    add_custom_target(cert_store_duplicate_fixture${width} ALL DEPENDS ${cert_store_duplicate_client})
+                    add_test(NAME native_cert_store_duplicate_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cert_store_duplicate_client})
+                    set_tests_properties(native_cert_store_duplicate_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

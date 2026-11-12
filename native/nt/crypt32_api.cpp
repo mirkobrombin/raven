@@ -524,6 +524,19 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		objects.close(call[0]);
 		call.ret(1);
 	});
+	// Each duplicate is closed on its own; the store lives until the last close.
+	registry.add("CertDuplicateStore", 1, [&objects](ApiCall &call) {
+		if (!objects.object_as<CertificateStore>(call[0])) {
+			call.fail(6, 0);
+			return;
+		}
+		const auto made = objects.duplicate(call[0]);
+		if (made.status) {
+			call.fail(8, 0);
+			return;
+		}
+		call.ret(made.value);
+	});
 	registry.add("CertCreateCertificateContext", 3, [make_context](ApiCall &call) {
 		if (!call[1] || !call.u32(2)) {
 			call.fail(87, 0);
