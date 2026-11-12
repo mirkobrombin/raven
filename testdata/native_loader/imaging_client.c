@@ -123,6 +123,16 @@ int raven_entry(void)
 		return 2;
 	if (CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&factory) != S_OK)
 		return 3;
+	{
+		/* The newer imaging factory class is the same factory, which makes bitmaps through its newer interface too. */
+		IWICImagingFactory2 *factory2 = NULL;
+		IWICBitmap *made = NULL;
+		if (CoCreateInstance(&CLSID_WICImagingFactory2, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory2, (void **)&factory2) != S_OK ||
+			IWICImagingFactory2_CreateBitmap(factory2, 4, 4, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &made) != S_OK)
+			return 18;
+		IWICBitmap_Release(made);
+		IWICImagingFactory2_Release(factory2);
+	}
 	if (IWICImagingFactory_CreateDecoderFromFilename(factory, path, NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder) != S_OK)
 		return 4;
 	if (IWICBitmapDecoder_GetFrame(decoder, 0, &frame) != S_OK)
