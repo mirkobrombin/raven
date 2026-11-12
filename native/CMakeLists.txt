@@ -3938,6 +3938,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(tooltip_empty_fixture${width} ALL DEPENDS ${tooltip_empty_client})
                     add_test(NAME native_tooltip_empty_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${tooltip_empty_client})
                     set_tests_properties(native_tooltip_empty_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(command_link_client ${CMAKE_CURRENT_BINARY_DIR}/command-link${width}.exe)
+                    add_custom_command(OUTPUT ${command_link_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${command_link_client} ${LOADER_SOURCES}/command_link_client.c -lcomctl32 -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/command_link_client.c VERBATIM)
+                    add_custom_target(command_link_fixture${width} ALL DEPENDS ${command_link_client})
+                    add_test(NAME native_command_link_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${command_link_client})
+                    set_tests_properties(native_command_link_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(toolbar_customize_client ${CMAKE_CURRENT_BINARY_DIR}/toolbar-customize${width}.exe)
                     add_custom_command(OUTPUT ${toolbar_customize_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

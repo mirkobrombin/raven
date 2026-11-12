@@ -211,8 +211,13 @@ static void lay_out(dialog_state *state)
 		y += GAP;
 	for (index = 0; index < state->button_count; index++) {
 		if (is_link_slot(state, index)) {
-			MoveWindow(state->buttons[index].window, x, y, text_width, LINK_HEIGHT, FALSE);
-			y += LINK_HEIGHT + 2;
+			/* A link is as tall as its note needs at this width, and never shorter than one with a single line. */
+			SIZE ideal = {text_width, 0};
+			int height = LINK_HEIGHT;
+			if (SendMessageW(state->buttons[index].window, BCM_GETIDEALSIZE, 0, (LPARAM)&ideal) && ideal.cy > height)
+				height = ideal.cy;
+			MoveWindow(state->buttons[index].window, x, y, text_width, height, FALSE);
+			y += height + 2;
 		}
 	}
 	if (state->icon && y < MARGIN + ICON_SIZE + GAP)
