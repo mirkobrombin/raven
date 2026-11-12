@@ -99,5 +99,8 @@ int raven_entry(void)
 	static const char narrow[]="C:\\a.b\\file.tar.gz";
 	CHECK(42,PathFindExtensionA(narrow)==narrow+15 && PathFindFileNameA(narrow)==narrow+7);
 	CHECK(43,*PathFindExtensionA("C:\\a.b\\file")==0);
+	/* The order Explorer and Mp3tag sort names in: runs of digits by their value, before other characters, the rest without case. */
+	CHECK(44,StrCmpLogicalW(L"Track 2",L"Track 10")<0 && StrCmpLogicalW(L"track 10",L"Track 9")>0 && StrCmpLogicalW(L"Song",L"sONG")==0);
+	CHECK(45,StrCmpLogicalW(L"7 Days",L"Album")<0 && StrCmpLogicalW(L"a",L"ab")<0 && StrCmpLogicalW(L"disc 12345678901234567890",L"disc 9")>0);
 	return 0;
 }
