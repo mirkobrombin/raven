@@ -437,7 +437,7 @@ std::vector<uint64_t> DesktopObjects::window_handles() const
 uint64_t DesktopObjects::invalid_window(uint64_t filter) const
 {
 	for (const auto handle : window_set)
-		if (const auto *window=this->window(handle); window && window_visible(handle) && !window->update.empty() &&
+		if (const auto *window=this->window(handle); window && window_visible(handle) && window->needs_paint() &&
 			(!filter || filter==handle || is_child(filter,handle))) return handle;
 	return 0;
 }
@@ -461,6 +461,10 @@ bool DesktopObjects::invalidate(uint64_t handle,DesktopRect rect,bool erase)
 	if (record->update.empty() && !update.empty()) ++record->update_generation;
 	record->update=std::move(update); used=used-previous+current;
 	if (!record->update.empty()) record->erase_pending|=erase;
+	if ((record->width<=0 || record->height<=0) && record->outer.right>record->outer.left && record->outer.bottom>record->outer.top &&
+		!record->frame_pending) {
+		record->frame_pending=true; ++record->update_generation;
+	}
 	return true;
 }
 
@@ -472,6 +476,7 @@ bool DesktopObjects::validate(uint64_t handle,DesktopRect rect)
 	if (current>limit-used+previous) return false;
 	record->update=std::move(update); used=used-previous+current;
 	if (record->update.empty()) record->erase_pending=false;
+	if (record->width<=0 || record->height<=0) record->frame_pending=false;
 	return true;
 }
 
@@ -480,7 +485,7 @@ bool DesktopObjects::start_paint(uint64_t handle)
 	auto *record=window(handle);
 	auto *device=record ? dc(record->dc) : nullptr;
 	if (!record || !device || record->painting || device->clip) throw std::runtime_error("invalid paint owner transition");
-	device->clip.emplace(std::move(record->update)); record->painting=true;
+	device->clip.emplace(std::move(record->update)); record->painting=true; record->frame_pending=false;
 	const bool erase=record->erase_pending; record->erase_pending=false;
 	return erase;
 }

@@ -227,11 +227,11 @@ void NativeWindows::present(uint64_t handle, bool force)
 	if (auto *waiting=force ? nullptr : objects.window(handle)) {
 		const auto me=environment.thread_id();
 		// The window itself waiting for its first WM_PAINT is held back the same way: it would show as an unpainted, black surface.
-		bool pending=!waiting->painted && !waiting->update.empty() && (!waiting->thread || waiting->thread==me);
+		bool pending=!waiting->painted && waiting->needs_paint() && (!waiting->thread || waiting->thread==me);
 		for (const auto other : objects.window_handles()) {
 			if (pending) break;
 			const auto *candidate=std::as_const(objects).window(other);
-			if (candidate && other!=handle && !candidate->painted && !candidate->update.empty() && objects.is_child(handle,other) &&
+			if (candidate && other!=handle && !candidate->painted && candidate->needs_paint() && objects.is_child(handle,other) &&
 				objects.window_visible(other) && (!candidate->thread || candidate->thread==me)) {
 				pending=true;
 				break;
@@ -481,7 +481,7 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 	// Read-only: a window handed out for change would be published to the guest again.
 	for (const auto handle : objects.window_handles()) {
 		const auto *window=std::as_const(objects).window(handle);
-		if (!window || window->update.empty() || !objects.window_visible(handle) || (window->thread && window->thread!=thread)) continue;
+		if (!window || !window->needs_paint() || !objects.window_visible(handle) || (window->thread && window->thread!=thread)) continue;
 		current|=0x20;
 		paints[handle]=window->update_generation;
 		const auto previous=state.paints.find(handle);
@@ -804,7 +804,7 @@ void NativeWindows::finish_paint(uint64_t handle)
 		const auto me=environment.thread_id();
 		for (const auto child : objects.child_windows(handle)) {
 			const auto *inner=std::as_const(objects).window(child);
-			if (inner && inner->visible && !inner->update.empty() && !inner->painting && (!inner->thread || inner->thread==me))
+			if (inner && inner->visible && inner->needs_paint() && !inner->painting && (!inner->thread || inner->thread==me))
 				send(child,0x0f,0,0);
 		}
 	}
@@ -994,7 +994,7 @@ uint64_t NativeWindows::invalid_owned(uint64_t filter,uint32_t thread) const
 	std::stable_partition(handles.begin(),handles.end(),[&](uint64_t handle) { return handle>paint_cursor; });
 	for (const auto handle : handles) {
 		const auto *window=std::as_const(objects).window(handle);
-		if (!window || window->update.empty() || !objects.window_visible(handle) || (window->thread && window->thread!=me)) continue;
+		if (!window || !window->needs_paint() || !objects.window_visible(handle) || (window->thread && window->thread!=me)) continue;
 		if (filter && filter!=handle && !objects.is_child(filter,handle)) continue;
 		// Parents paint before their children, as Windows orders WM_PAINT: a child may lie under what its parent draws, and handles
 		// come back in any order once windows are destroyed and made again.
@@ -1002,7 +1002,7 @@ uint64_t NativeWindows::invalid_owned(uint64_t filter,uint32_t thread) const
 		for (auto parent=window->parent;parent && parent!=filter;) {
 			const auto *above=std::as_const(objects).window(parent);
 			if (!above) break;
-			if (!above->update.empty() && objects.window_visible(parent) && (!above->thread || above->thread==me)) chosen=parent;
+			if (above->needs_paint() && objects.window_visible(parent) && (!above->thread || above->thread==me)) chosen=parent;
 			parent=above->parent;
 		}
 		if (filter && chosen!=handle && filter!=chosen && !objects.is_child(filter,chosen)) chosen=handle;
@@ -3097,7 +3097,7 @@ bool NativeWindows::dispatch(std::string_view name)
 			result=show_window(args[0],uint32_t(args[1]));
 		} else if (name=="UpdateWindow") {
 			if (!std::as_const(objects).window(args[0])) throw uint32_t(1400);
-			if (!std::as_const(objects).window(args[0])->update.empty()) send(args[0],0x0f,0,0);
+			if (std::as_const(objects).window(args[0])->needs_paint()) send(args[0],0x0f,0,0);
 			result=1;
 		}
 		else if (name=="UnregisterClassW") {

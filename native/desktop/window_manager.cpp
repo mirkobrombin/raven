@@ -996,7 +996,7 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 				for (const auto root : top_level_windows())
 					apply(apply, root, rect, true);
 			if (flags & 0x100) {
-				if (std::as_const(objects).window(handle) && !std::as_const(objects).window(handle)->update.empty())
+				if (std::as_const(objects).window(handle) && std::as_const(objects).window(handle)->needs_paint())
 					send(handle, 0x0f, 0, 0);
 			}
 			call.ret(1);

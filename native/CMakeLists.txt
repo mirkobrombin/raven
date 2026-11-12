@@ -3946,6 +3946,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(combo_selection_fixture${width} ALL DEPENDS ${combo_selection_client})
                     add_test(NAME native_combo_selection_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${combo_selection_client})
                     set_tests_properties(native_combo_selection_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(frame_only_client ${CMAKE_CURRENT_BINARY_DIR}/frame-only${width}.exe)
+                    add_custom_command(OUTPUT ${frame_only_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${frame_only_client} ${LOADER_SOURCES}/frame_only_client.c -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/frame_only_client.c VERBATIM)
+                    add_custom_target(frame_only_fixture${width} ALL DEPENDS ${frame_only_client})
+                    add_test(NAME native_frame_only_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${frame_only_client})
+                    set_tests_properties(native_frame_only_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
