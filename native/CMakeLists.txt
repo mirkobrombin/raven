@@ -3954,6 +3954,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(frame_only_fixture${width} ALL DEPENDS ${frame_only_client})
                     add_test(NAME native_frame_only_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${frame_only_client})
                     set_tests_properties(native_frame_only_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(opaque_rect_client ${CMAKE_CURRENT_BINARY_DIR}/opaque-rect${width}.exe)
+                    add_custom_command(OUTPUT ${opaque_rect_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${opaque_rect_client} ${LOADER_SOURCES}/opaque_rect_client.c -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/opaque_rect_client.c VERBATIM)
+                    add_custom_target(opaque_rect_fixture${width} ALL DEPENDS ${opaque_rect_client})
+                    add_test(NAME native_opaque_rect_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${opaque_rect_client})
+                    set_tests_properties(native_opaque_rect_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(menu_insert_client ${CMAKE_CURRENT_BINARY_DIR}/menu-insert${width}.exe)
                     add_custom_command(OUTPUT ${menu_insert_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
