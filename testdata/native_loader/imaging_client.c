@@ -167,6 +167,42 @@ static int png_packs(IWICImagingFactory *factory, BOOL noise, ULONGLONG limit)
 	return 0;
 }
 
+/* A palette made from a picture of 1600 by 1200 pixels of many colours, as paint.net makes one before it saves a picture in 8 bits: it
+   holds the colours asked for and is made in a moment, not in the seconds that measuring every box again at every cut took. */
+static int palette_quick(IWICImagingFactory *factory)
+{
+	enum { WIDE = 1600, HIGH = 1200 };
+	IWICBitmap *bitmap = NULL;
+	IWICPalette *palette = NULL;
+	BYTE *pixels = HeapAlloc(GetProcessHeap(), 0, WIDE * HIGH * 4);
+	UINT seed = 99, count = 0;
+	DWORD started;
+	int at;
+	if (!pixels)
+		return 1;
+	for (at = 0; at < WIDE * HIGH; ++at) {
+		seed = seed * 1103515245 + 12345;
+		pixels[at * 4] = (BYTE)(at % WIDE * 255 / WIDE);
+		pixels[at * 4 + 1] = (BYTE)(at / WIDE * 255 / HIGH);
+		pixels[at * 4 + 2] = (BYTE)(seed >> 24);
+		pixels[at * 4 + 3] = 255;
+	}
+	if (IWICImagingFactory_CreateBitmapFromMemory(factory, WIDE, HIGH, &GUID_WICPixelFormat32bppBGRA, WIDE * 4, WIDE * HIGH * 4, pixels,
+			&bitmap) != S_OK || IWICImagingFactory_CreatePalette(factory, &palette) != S_OK)
+		return 2;
+	started = GetTickCount();
+	if (IWICPalette_InitializeFromBitmap(palette, (IWICBitmapSource *)bitmap, 256, FALSE) != S_OK)
+		return 3;
+	if (GetTickCount() - started > 1500)
+		return 4;
+	if (IWICPalette_GetColorCount(palette, &count) != S_OK || count != 256)
+		return 5;
+	IWICPalette_Release(palette);
+	IWICBitmap_Release(bitmap);
+	HeapFree(GetProcessHeap(), 0, pixels);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	WCHAR path[MAX_PATH];
@@ -225,6 +261,8 @@ int raven_entry(void)
 		return 50 + failed;
 	if ((failed = png_packs(factory, TRUE, 256 * 64 * 4 + 1000)))
 		return 60 + failed;
+	if ((failed = palette_quick(factory)))
+		return 70 + failed;
 	IWICImagingFactory_Release(factory);
 	ULONG_PTR token;
 	StartupInput input = {1, NULL, FALSE, FALSE};
