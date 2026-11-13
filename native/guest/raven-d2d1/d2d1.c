@@ -1675,6 +1675,56 @@ static struct bitmap *make_bitmap(IUnknown *factory, D2D1_SIZE_U size, D2D1_PIXE
 	return self;
 }
 
+/* ---- command lists ----
+ * Direct2D records what is drawn while a command list is the target and plays it back wherever the list is drawn. Here the list keeps
+ * the pixels that drawing gives, over the size of the target it replaced: the same pixels as a playback at the transform and
+ * resolution it was recorded at, which is how programs use a list to draw a part of a control once and place it. */
+struct command_list {
+	struct object base;
+	struct bitmap *bitmap;
+	BOOL closed;
+};
+
+static void **command_list_table;
+static const GUID *const command_list_iids[] = {&IID_ID2D1Resource, &IID_ID2D1Image, &IID_ID2D1CommandList};
+
+static void command_list_destroy(struct object *base)
+{
+	struct command_list *self = (struct command_list *)base;
+	if (self->bitmap)
+		object_Release(self->bitmap);
+}
+
+static struct command_list *command_list_of(ID2D1Image *image)
+{
+	return image && command_list_table && *(void ***)image == command_list_table ? (struct command_list *)image : NULL;
+}
+
+/* The bitmap an image is drawn from: the image itself, or the pixels a command list holds; NULL for other images. A reference. */
+static ID2D1Bitmap *image_bitmap(ID2D1Image *image)
+{
+	ID2D1Bitmap *bitmap = NULL;
+	struct command_list *list = command_list_of(image);
+	if (list) {
+		if (list->bitmap)
+			object_AddRef(list->bitmap);
+		return (ID2D1Bitmap *)list->bitmap;
+	}
+	if (!image || FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap)))
+		return NULL;
+	return bitmap;
+}
+
+/* Closing ends the recording: a closed list can be drawn but no longer be a target. */
+static HRESULT STDMETHODCALLTYPE command_list_Close(void *iface)
+{
+	struct command_list *self = iface;
+	if (self->closed)
+		return D2DERR_WRONG_STATE;
+	self->closed = TRUE;
+	return S_OK;
+}
+
 /* ---- brushes ---- */
 enum { KIND_SOLID, KIND_LINEAR, KIND_RADIAL, KIND_BITMAP, KIND_IMAGE };
 
@@ -1751,13 +1801,11 @@ static void STDMETHODCALLTYPE brush_GetBitmap(void *iface, ID2D1Bitmap **bitmap)
 	if (self->bitmap)
 		object_AddRef(self->bitmap);
 }
-/* An image brush draws a bitmap; other images (effects, command lists) are not drawn by this component. */
+/* An image brush draws a bitmap or what a command list drew; effects are not drawn by this component. */
 static void STDMETHODCALLTYPE brush_SetImage(void *iface, ID2D1Image *image)
 {
 	struct brush *self = iface;
-	ID2D1Bitmap *bitmap = NULL;
-	if (image && FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap)))
-		bitmap = NULL;
+	ID2D1Bitmap *bitmap = image_bitmap(image);
 	brush_SetBitmap(iface, bitmap);
 	if (bitmap)
 		object_Release(bitmap);
@@ -2185,6 +2233,10 @@ static void build_resource_tables(void)
 	bitmap_table[ID2D1Bitmap1_Map_slot] = (void *)bitmap_Map;
 	bitmap_table[ID2D1Bitmap1_Unmap_slot] = (void *)bitmap_Unmap;
 
+	command_list_table = make_table(ID2D1CommandList_table, ID2D1CommandList_methods);
+	set_resource(command_list_table);
+	command_list_table[ID2D1CommandList_Close_slot] = (void *)command_list_Close;
+
 	solid_table = make_table(ID2D1SolidColorBrush_table, ID2D1SolidColorBrush_methods);
 	linear_table = make_table(ID2D1LinearGradientBrush_table, ID2D1LinearGradientBrush_methods);
 	radial_table = make_table(ID2D1RadialGradientBrush_table, ID2D1RadialGradientBrush_methods);
@@ -2277,6 +2329,7 @@ struct target {
 	IUnknown *factory;
 	struct device *device;
 	struct bitmap *bitmap; /* what is drawn into */
+	struct command_list *list; /* the command list that is the target, whose pixels `bitmap` is */
 	HWND hwnd;
 	HDC dc;
 	RECT dc_rect;
@@ -2362,6 +2415,8 @@ static ULONG STDMETHODCALLTYPE target_Release(void *iface)
 		flush_queue();
 		if (self->bitmap)
 			object_Release(self->bitmap);
+		if (self->list)
+			object_Release(self->list);
 		if (self->params)
 			IDWriteRenderingParams_Release(self->params);
 		if (self->wic)
@@ -2772,7 +2827,7 @@ struct effect;
 static struct effect *effect_of_image(ID2D1Image *image);
 static ID2D1Image *effect_drawn_input(struct effect *effect);
 
-/* DrawImage of a bitmap at an offset; an effect draws the input it passes through, and other images (command lists) draw nothing here. */
+/* DrawImage of a bitmap, or of what a command list drew, at an offset; an effect draws the input it passes through. */
 static void STDMETHODCALLTYPE target_DrawImage(void *iface, ID2D1Image *image, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
 	D2D1_INTERPOLATION_MODE interpolation, D2D1_COMPOSITE_MODE mode)
 {
@@ -2780,9 +2835,12 @@ static void STDMETHODCALLTYPE target_DrawImage(void *iface, ID2D1Image *image, c
 	ID2D1Bitmap *bitmap = NULL;
 	struct bitmap *b;
 	D2D1_RECT_F destination, source;
-	if (!image || FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
+	if (!(bitmap = image_bitmap(image))) {
 		struct effect *effect = effect_of_image(image);
 		ID2D1Image *input = effect ? effect_drawn_input(effect) : NULL;
+		/* A list nothing was drawn into draws nothing. */
+		if (command_list_of(image))
+			return;
 		if (!effect)
 			unimplemented("ID2D1DeviceContext", "DrawImage of an image that is not a bitmap");
 		/* An effect that passes an input through draws that input. */
@@ -3971,12 +4029,33 @@ static void STDMETHODCALLTYPE context_SetTarget(void *iface, ID2D1Image *image)
 {
 	struct target *self = target_of(iface);
 	ID2D1Bitmap *bitmap = NULL;
-	if (image && FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
-		unimplemented("ID2D1DeviceContext", "SetTarget to an image that is not a bitmap");
+	struct command_list *list = command_list_of(image);
+	if (list) {
+		/* A list records once, over the size of the target it takes the place of. */
+		if (list->closed) {
+			target_failed(self);
+			return;
+		}
+		if (!list->bitmap) {
+			D2D1_SIZE_U size = {1, 1};
+			if (self->bitmap)
+				size = self->bitmap->pixels;
+			if (!(list->bitmap = make_bitmap(self->factory, size, self->format, self->dpi_x, self->dpi_y, D2D1_BITMAP_OPTIONS_TARGET)))
+				return;
+		}
+		object_AddRef(list->bitmap);
+		bitmap = (ID2D1Bitmap *)list->bitmap;
+	} else if (image && FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
+		unimplemented("ID2D1DeviceContext", "SetTarget to an image that is neither a bitmap nor a command list");
 		return;
 	}
 	if (self->bitmap)
 		object_Release(self->bitmap);
+	if (self->list)
+		object_Release(self->list);
+	self->list = list;
+	if (list)
+		object_AddRef(list);
 	self->bitmap = (struct bitmap *)bitmap;
 	if (bitmap) {
 		self->bitmap->targeted = TRUE;
@@ -3989,9 +4068,23 @@ static void STDMETHODCALLTYPE context_SetTarget(void *iface, ID2D1Image *image)
 static void STDMETHODCALLTYPE context_GetTarget(void *iface, ID2D1Image **image)
 {
 	struct target *self = target_of(iface);
-	*image = (ID2D1Image *)self->bitmap;
-	if (self->bitmap)
-		object_AddRef(self->bitmap);
+	*image = self->list ? (ID2D1Image *)self->list : (ID2D1Image *)self->bitmap;
+	if (*image)
+		object_AddRef(*image);
+}
+
+static HRESULT STDMETHODCALLTYPE context_CreateCommandList(void *iface, ID2D1CommandList **out)
+{
+	struct target *self = target_of(iface);
+	struct command_list *list;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!(list = ALLOC(sizeof(*list))))
+		return E_OUTOFMEMORY;
+	object_init(&list->base, command_list_table, command_list_destroy, command_list_iids, 3, self->factory);
+	*out = (ID2D1CommandList *)list;
+	return S_OK;
 }
 
 static void STDMETHODCALLTYPE context_SetRenderingControls(void *iface, const D2D1_RENDERING_CONTROLS *controls) { target_of(iface)->controls = *controls; }
@@ -5273,12 +5366,12 @@ static HRESULT STDMETHODCALLTYPE context_GetImageLocalBounds(void *iface, ID2D1I
 	struct bitmap *b;
 	if (!image || !bounds)
 		return E_INVALIDARG;
-	if (FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
+	if (!(bitmap = image_bitmap(image))) {
 		/* An effect's output covers what its first input covers; with no input, nothing. */
 		const struct effect *effect = effect_of_image(image);
 		if (effect && effect->inputs[0])
 			return context_GetImageLocalBounds(iface, effect->inputs[0], bounds);
-		if (!effect)
+		if (!effect && !command_list_of(image))
 			unimplemented("ID2D1DeviceContext", "GetImageLocalBounds of an image that is neither a bitmap nor an effect's output");
 		/* What draws nothing here covers nothing. */
 		bounds->left = bounds->top = bounds->right = bounds->bottom = 0;
@@ -5817,6 +5910,7 @@ static void set_context(void **table)
 	table[ID2D1DeviceContext5_GetDevice_slot] = (void *)context_GetDevice;
 	table[ID2D1DeviceContext5_SetTarget_slot] = (void *)context_SetTarget;
 	table[ID2D1DeviceContext5_GetTarget_slot] = (void *)context_GetTarget;
+	table[ID2D1DeviceContext5_CreateCommandList_slot] = (void *)context_CreateCommandList;
 	table[ID2D1DeviceContext5_SetRenderingControls_slot] = (void *)context_SetRenderingControls;
 	table[ID2D1DeviceContext5_GetRenderingControls_slot] = (void *)context_GetRenderingControls;
 	table[ID2D1DeviceContext5_SetPrimitiveBlend_slot] = (void *)context_SetPrimitiveBlend;

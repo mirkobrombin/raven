@@ -269,6 +269,40 @@ int raven_entry(void)
 		return 23;
 	if ((drawn[5 * 16 + 5] & 0xffffff) != 0xff0000 || (drawn[0] & 0xffffff) != 0xffffff)
 		return 24;
+	/* A command list keeps what is drawn while it is the target, in place of the target it replaced, and is drawn where it is placed:
+	   paint.net draws the parts of its controls this way. Closed, it cannot be recorded into again. */
+	ID2D1DeviceContext *drawing = (ID2D1DeviceContext *)context6;
+	ID2D1CommandList *list = NULL;
+	ID2D1Image *previous = NULL, *current = NULL;
+	ID2D1SolidColorBrush *brush = NULL;
+	D2D1_COLOR_F blue = {0, 0, 1, 1};
+	D2D1_RECT_F corner = {0, 0, 4, 4};
+	if (FAILED(ID2D1DeviceContext_CreateCommandList(drawing, &list)) || !list ||
+		FAILED(ID2D1RenderTarget_CreateSolidColorBrush(target, &blue, NULL, &brush)))
+		return 33;
+	ID2D1DeviceContext_GetTarget(drawing, &previous);
+	ID2D1RenderTarget_BeginDraw(target);
+	ID2D1DeviceContext_SetTarget(drawing, (ID2D1Image *)list);
+	ID2D1DeviceContext_GetTarget(drawing, &current);
+	if (!previous || current != (ID2D1Image *)list)
+		return 34;
+	IUnknown_Release((IUnknown *)current);
+	ID2D1RenderTarget_FillRectangle(target, &corner, (ID2D1Brush *)brush);
+	ID2D1DeviceContext_SetTarget(drawing, previous);
+	typedef HRESULT (STDMETHODCALLTYPE *close_list)(void *);
+	const close_list close = (close_list)(*(void ***)list)[5];
+	if (FAILED(close(list)) || close(list) != D2DERR_WRONG_STATE)
+		return 35;
+	ID2D1RenderTarget_Clear(target, &white);
+	D2D1_POINT_2F placed = {8, 8};
+	ID2D1DeviceContext_DrawImage(drawing, (ID2D1Image *)list, &placed, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	if (FAILED(ID2D1RenderTarget_EndDraw(target, NULL, NULL)) || FAILED(IWICBitmap_CopyPixels(pixels, &whole, 64, sizeof drawn, (BYTE *)drawn)))
+		return 36;
+	if ((drawn[9 * 16 + 9] & 0xffffff) != 0x0000ff || (drawn[1 * 16 + 1] & 0xffffff) != 0xffffff || (drawn[13 * 16 + 13] & 0xffffff) != 0xffffff)
+		return 37;
+	IUnknown_Release((IUnknown *)previous);
+	IUnknown_Release((IUnknown *)brush);
+	IUnknown_Release((IUnknown *)list);
 	IUnknown_Release((IUnknown *)output);
 	IUnknown_Release((IUnknown *)source);
 	IUnknown_Release((IUnknown *)effect);
