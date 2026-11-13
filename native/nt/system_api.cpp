@@ -161,6 +161,13 @@ std::map<std::u16string, std::pair<std::u16string, std::u16string>> default_envi
 		if (text.starts_with(prefix) && equals != text.npos && equals > prefix.size())
 			add(from_utf8(std::string(text.substr(prefix.size(), equals - prefix.size()))), from_utf8(std::string(text.substr(equals + 1))));
 	}
+	// Swap chains made for composition are drawn by the runtime's compositor from their buffers, so the Direct3D libraries are told to
+	// make them without a window of their own, along with whatever else the host configures for them.
+	constexpr std::u16string_view composition = u"dxgi.enableDummyCompositionSwapchain = True";
+	if (const auto found = result.find(u"DXVK_CONFIG"); found != result.end())
+		found->second.second = std::u16string(composition) + u";" + found->second.second;
+	else
+		add(u"DXVK_CONFIG", std::u16string(composition));
 	return result;
 }
 

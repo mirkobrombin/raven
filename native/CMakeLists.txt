@@ -4535,6 +4535,29 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(uisettings_fixture ALL DEPENDS ${uisettings_client} uisettings_component)
                 add_test(NAME native_uisettings_x64 COMMAND raven --run-process --execution=native ${uisettings_client})
                 set_tests_properties(native_uisettings_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                # dcomp.dll, the visual layer of Windows.UI.Composition and the compositor clock for each width: Raven code on the public headers.
+                set(composition_source ${PROJECT_SOURCE_DIR}/native/guest/raven-composition)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll
+                        ${composition_source}/composition.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lole32 -lgdi32 -lmsimg32
+                        -luser32 -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll
+                        ${composition_source}/composition.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lole32 -lgdi32 -lmsimg32
+                        -luser32 -lkernel32 -lgcc
+                    DEPENDS ${composition_source}/composition.c ${composition_source}/composition_tables.h ${composition_source}/composition_interfaces.h
+                    VERBATIM)
+                add_custom_target(composition_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll)
+                set(composition_client ${CMAKE_CURRENT_BINARY_DIR}/composition-client64.exe)
+                add_custom_command(OUTPUT ${composition_client}
+                    COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                        -o ${composition_client} ${LOADER_SOURCES}/composition_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                        -lgdi32 -luser32 -lkernel32 -lgcc
+                    DEPENDS ${LOADER_SOURCES}/composition_client.c ${composition_source}/composition_interfaces.h VERBATIM)
+                add_custom_target(composition_fixture ALL DEPENDS ${composition_client} composition_component)
+                add_test(NAME native_composition_x64 COMMAND raven --run-process --execution=native ${composition_client})
+                set_tests_properties(native_composition_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-x64-prefix)
                 # coremessaging.dll, the dispatcher queues of the Windows Runtime and CreateDispatcherQueueController, for each width: Raven code
                 # on the public headers.
                 set(coremessaging_source ${PROJECT_SOURCE_DIR}/native/guest/raven-coremessaging)

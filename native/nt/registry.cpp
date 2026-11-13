@@ -244,6 +244,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.System.DispatcherQueue", u"coremessaging.dll"}, {u"Windows.System.DispatcherQueueController", u"coremessaging.dll"},
 		{u"Windows.Management.Deployment.PackageManager", u"raven-deployment.dll"},
 		{u"Windows.UI.ViewManagement.UISettings", u"raven-uisettings.dll"},
+		{u"Windows.UI.Composition.Compositor", u"dcomp.dll"},
+		{u"Windows.UI.Composition.Core.CompositorController", u"dcomp.dll"},
 		{u"Windows.Globalization.Language", u"raven-twinapi.dll"},
 		{u"Windows.System.Profile.RetailInfo", u"raven-twinapi.dll"}, {u"Windows.System.Profile.SharedModeSettings", u"raven-twinapi.dll"},
 		{u"Windows.System.Profile.AnalyticsInfo", u"raven-twinapi.dll"},
