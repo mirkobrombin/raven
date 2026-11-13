@@ -1852,6 +1852,7 @@ static WINBOOL STDMETHODCALLTYPE font3_equals(IDWriteFont *self, IDWriteFont *ot
 
 #define FAMILY_OF(self) ((Family *)(self))
 
+static HRESULT STDMETHODCALLTYPE family2_matching(IDWriteFontFamily *self, const DWRITE_FONT_AXIS_VALUE *values, UINT32 count, IDWriteFontList2 **out);
 static HRESULT STDMETHODCALLTYPE family_query(IDWriteFontFamily *self, REFIID iid, void **out)
 {
 	if (!out)
@@ -1862,6 +1863,9 @@ static HRESULT STDMETHODCALLTYPE family_query(IDWriteFontFamily *self, REFIID ii
 		*out = self;
 		return S_OK;
 	}
+	/* The newer lists have their own methods where a family has its names, so the family answers for them with a list of its fonts. */
+	if (same_guid(iid, &IID_IDWriteFontList1) || same_guid(iid, &IID_IDWriteFontList2))
+		return family2_matching(self, NULL, 0, (IDWriteFontList2 **)out);
 	*out = NULL;
 	return no_interface(iid);
 }
@@ -2014,7 +2018,8 @@ static HRESULT STDMETHODCALLTYPE collection_query(IDWriteFontCollection *self, R
 {
 	if (!out)
 		return E_POINTER;
-	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontCollection) || same_guid(iid, &IID_IDWriteFontCollection1)) {
+	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontCollection) || same_guid(iid, &IID_IDWriteFontCollection1) ||
+		same_guid(iid, &IID_IDWriteFontCollection2) || same_guid(iid, &IID_IDWriteFontCollection3)) {
 		*out = self;
 		return S_OK;
 	}
@@ -2076,12 +2081,51 @@ static HRESULT STDMETHODCALLTYPE collection_set(IDWriteFontCollection *self, IDW
 	return *set ? S_OK : E_OUTOFMEMORY;
 }
 
-static void *Collection_table_[IDWriteFontCollection1_methods];
+/* IDWriteFontCollection2 and IDWriteFontCollection3: the fonts of a family for axis values, as the family itself gives them; the
+ * families grouped by weight, stretch and style, as the collection the older factory call returns groups them; and an expiration
+ * event that never comes, the fonts being the machine's own. paint.net asks a text layout's collection for the newest of these. */
+static HRESULT STDMETHODCALLTYPE collection2_matching(IDWriteFontCollection *self, const WCHAR *name, const DWRITE_FONT_AXIS_VALUE *values,
+	UINT32 count, IDWriteFontList2 **out)
+{
+	FamilyEntry *found = name ? find_family(name) : NULL;
+	IDWriteFontFamily *family;
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!found)
+		return DWRITE_E_NOFONT;
+	if (!(family = make_family(found)))
+		return E_OUTOFMEMORY;
+	result = family2_matching(family, values, count, out);
+	IDWriteFontFamily_Release(family);
+	return result;
+}
+static DWRITE_FONT_FAMILY_MODEL STDMETHODCALLTYPE collection2_model(IDWriteFontCollection *self) { return DWRITE_FONT_FAMILY_MODEL_WEIGHT_STRETCH_STYLE; }
+static HANDLE STDMETHODCALLTYPE collection3_expiration(IDWriteFontCollection *self)
+{
+	static HANDLE never;
+	if (!never) {
+		HANDLE made = CreateEventW(NULL, TRUE, FALSE, NULL);
+		if (InterlockedCompareExchangePointer(&never, made, NULL))
+			CloseHandle(made);
+	}
+	return never;
+}
+
+enum { FontCollection2_GetFontFamily = IDWriteFontCollection1_methods, FontCollection2_GetMatchingFonts, FontCollection2_GetFontFamilyModel,
+	FontCollection2_GetFontSet, FontCollection3_GetExpirationEvent, FontCollection3_methods };
+static void *Collection_table_[FontCollection3_methods];
 
 static IDWriteFontCollection *get_collection(void)
 {
 	if (!system_collection.vtbl) {
-		memcpy(Collection_table_, IDWriteFontCollection1_table, sizeof(Collection_table_));
+		memcpy(Collection_table_, IDWriteFontCollection1_table, sizeof(IDWriteFontCollection1_table));
+		Collection_table_[FontCollection2_GetFontFamily] = (void *)collection_family;
+		Collection_table_[FontCollection2_GetMatchingFonts] = (void *)collection2_matching;
+		Collection_table_[FontCollection2_GetFontFamilyModel] = (void *)collection2_model;
+		Collection_table_[FontCollection2_GetFontSet] = (void *)collection_set;
+		Collection_table_[FontCollection3_GetExpirationEvent] = (void *)collection3_expiration;
 		Collection_table_[IDWriteFontCollection_QueryInterface] = (void *)collection_query;
 		Collection_table_[IDWriteFontCollection_AddRef] = (void *)collection_add_ref;
 		Collection_table_[IDWriteFontCollection_Release] = (void *)collection_release;

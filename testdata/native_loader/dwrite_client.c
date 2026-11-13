@@ -311,6 +311,29 @@ int raven_entry(void)
 		IDWriteFontSet1_GetFontCount(of_family) != IDWriteFontFamily_GetFontCount(named) ||
 		IDWriteFontSet1_GetFontCount(of_list) != IDWriteFontFamily_GetFontCount(named))
 		return 54;
+	/* The family is also a list of the newer kind. */
+	IDWriteFontList2 *as_list = NULL;
+	if (FAILED(IDWriteFontFamily_QueryInterface(named, &IID_IDWriteFontList2, (void **)&as_list)) || !as_list ||
+		IDWriteFontList2_GetFontCount(as_list) != IDWriteFontFamily_GetFontCount(named))
+		return 55;
+	IDWriteFontList2_Release(as_list);
+	/* The system collection answers as the newest collection: a family by name with axis values, how it groups its families, its set
+	   and the event of its expiration. */
+	IDWriteFontCollection3 *newest = NULL;
+	IDWriteFontList2 *by_name = NULL;
+	IDWriteFontSet1 *of_collection = NULL;
+	if (FAILED(IDWriteFontCollection_QueryInterface(collection, &IID_IDWriteFontCollection3, (void **)&newest)))
+		return 56;
+	if (FAILED(IDWriteFontCollection3_GetMatchingFonts(newest, L"Arial", (const DWRITE_FONT_AXIS_VALUE *)NULL, 0, &by_name)) || !by_name ||
+		IDWriteFontList2_GetFontCount(by_name) != IDWriteFontFamily_GetFontCount(named))
+		return 57;
+	if (IDWriteFontCollection3_GetFontFamilyModel(newest) != DWRITE_FONT_FAMILY_MODEL_WEIGHT_STRETCH_STYLE ||
+		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, IDWriteFontSet1 **))(*(void ***)newest)[12])(newest, &of_collection)) || !IDWriteFontSet1_GetFontCount(of_collection) ||
+		!IDWriteFontCollection3_GetExpirationEvent(newest))
+		return 58;
+	IDWriteFontSet1_Release(of_collection);
+	IDWriteFontList2_Release(by_name);
+	IDWriteFontCollection3_Release(newest);
 	IDWriteFont_Release(listed);
 	IDWriteFontSet1_Release(of_list);
 	IDWriteFontSet1_Release(of_family);
