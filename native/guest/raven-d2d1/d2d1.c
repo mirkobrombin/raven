@@ -6132,7 +6132,7 @@ static struct effect *effect_of_image(ID2D1Image *image)
 #define INFINITE_LEFT ((INT32)0x80000000)
 #define INFINITE_RIGHT ((INT32)0x7fffffff)
 /* The most pixels one step holds, sixteen bytes each: more than any screen shows. */
-enum { RENDER_PIXELS = 4096 * 4096 / 2, RENDER_DEPTH = 48 };
+enum { RENDER_PIXELS = 4096 * 4096 / 2, RENDER_DEPTH = 256 };
 
 static const D2D1_RECT_L nothing = {0, 0, 0, 0};
 static const D2D1_RECT_L everything = {INFINITE_LEFT, INFINITE_LEFT, INFINITE_RIGHT, INFINITE_RIGHT};

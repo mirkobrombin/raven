@@ -598,6 +598,32 @@ int raven_entry(void)
 	ID2D1Bitmap1_Unmap(float_bitmap);
 	IUnknown_Release((IUnknown *)output);
 	IUnknown_Release((IUnknown *)blur);
+	/* Effects chained deep still draw: paint.net's blur is dozens of them, each the input of the next. */
+	ID2D1Effect *chained[40];
+	ID2D1Image *last = (ID2D1Image *)opaque;
+	UINT link;
+	for (link = 0; link < 40; ++link) {
+		if (FAILED(ID2D1DeviceContext_CreateEffect(float_context, &CLSID_D2D1Premultiply, &chained[link])))
+			return 50;
+		((set_input)(*(void ***)chained[link])[14])(chained[link], 0, last, TRUE);
+		if (link)
+			IUnknown_Release((IUnknown *)last);
+		last = output_of(chained[link]);
+	}
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &empty);
+	ID2D1DeviceContext_DrawImage(float_context, last, &blur_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+		return 50;
+	corner = (const float *)(float_map.bits + 3 * float_map.pitch) + 3 * 4;
+	if (!(corner[3] >= 0.98f) || !(corner[0] >= 0.98f) || !(corner[1] <= 0.02f))
+		return 51;
+	ID2D1Bitmap1_Unmap(float_bitmap);
+	IUnknown_Release((IUnknown *)last);
+	for (link = 0; link < 40; ++link)
+		IUnknown_Release((IUnknown *)chained[link]);
 	IUnknown_Release((IUnknown *)float_bitmap);
 	IUnknown_Release((IUnknown *)float_image);
 	IUnknown_Release((IUnknown *)float_context);
