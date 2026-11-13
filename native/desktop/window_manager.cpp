@@ -168,6 +168,24 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 		}
 		window = objects.window(handle);
 	}
+	if (window->parent && maximize && !(window->style & ws_maximize)) {
+		// A maximized child covers its parent's client area with its own. Its caption and border lie outside, where the parent clips
+		// them, as a document in an MDI client.
+		const auto *parent = std::as_const(objects).window(window->parent);
+		if (!parent)
+			throw uint32_t(1400);
+		window->restore = window->outer;
+		window->style |= ws_maximize;
+		place_window(handle, adjust_window_rect(objects.nonclient_metrics(), {parent->x, parent->y, parent->x + parent->width, parent->y + parent->height},
+			window->style & ~ws_visible, false, window->ex_style), 0, 0x14);
+		window = objects.window(handle);
+	} else if (window->parent && (command == 9 || command == 1 || command == 10) && (window->style & ws_maximize)) {
+		window->style &= ~ws_maximize;
+		place_window(handle, window->restore, 0, 0x14);
+		window = objects.window(handle);
+	}
+	if (!window)
+		throw uint32_t(1400);
 	const bool show = !hide && !(window->style & ws_minimize && !window->parent);
 	if (show && (!window->parent || objects.window_visible(window->parent)))
 		present(handle);
