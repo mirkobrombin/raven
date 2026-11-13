@@ -1546,6 +1546,9 @@ struct bitmap {
 	IWICBitmapLock *lock;
 	BYTE *shared;
 	UINT shared_stride, shared_size;
+	/* What the memory held when it was last taken in, as a sum of it, while nothing else has changed the bitmap's pixels since. */
+	UINT64 shared_sum;
+	BOOL shared_taken;
 };
 
 static void bitmap_destroy(struct object *base)
@@ -1601,6 +1604,7 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 	D2D1_RECT_U area = {0, 0, self->pixels.width, self->pixels.height};
 	if (rect)
 		area = *rect;
+	self->shared_taken = FALSE;
 	if (area.right <= area.left || area.bottom <= area.top)
 		return S_OK;
 	if (self->format.format == DXGI_FORMAT_A8_UNORM) {
@@ -1718,8 +1722,24 @@ static void share_back(struct bitmap *bitmap);
  * since the program, or a target over the same WIC bitmap, writes there without telling. */
 static void share_in(struct bitmap *bitmap)
 {
-	if (bitmap->shared)
-		bitmap_CopyFromMemory(bitmap, NULL, bitmap->shared, bitmap->shared_stride);
+	UINT64 sum = 0x9e3779b97f4a7c15ull;
+	UINT at;
+	if (!bitmap->shared)
+		return;
+	/* Memory that still holds what was taken in last is not taken in again: paint.net draws every tile of its document from such
+	   bitmaps each frame, and few of them change from one frame to the next. */
+	for (at = 0; at + 8 <= bitmap->shared_size; at += 8) {
+		sum ^= *(const UINT64 *)(bitmap->shared + at);
+		sum *= 0xff51afd7ed558ccdull;
+		sum ^= sum >> 29;
+	}
+	for (; at < bitmap->shared_size; ++at)
+		sum = (sum ^ bitmap->shared[at]) * 0x100000001b3ull;
+	if (bitmap->shared_taken && sum == bitmap->shared_sum)
+		return;
+	bitmap_CopyFromMemory(bitmap, NULL, bitmap->shared, bitmap->shared_stride);
+	bitmap->shared_sum = sum;
+	bitmap->shared_taken = TRUE;
 }
 
 /* What is copied into a bitmap shared from a WIC lock reaches the lock's memory too: paint.net copies each rendered tile into such a
@@ -3406,6 +3426,7 @@ static void share_back(struct bitmap *bitmap)
 	UINT32 row, column;
 	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
+	bitmap->shared_taken = FALSE;
 	flush_queue();
 	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
 	for (row = 0; row < height && (size_t)row * bitmap->shared_stride + (size_t)width * bytes <= bitmap->shared_size; ++row) {
