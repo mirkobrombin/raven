@@ -98,6 +98,24 @@ int raven_entry(void)
 	pump();
 	if (flat_paints)
 		return 10;
+	/* A control that lies beyond its window's edge is painted once the window grows over it, though the control itself neither moved
+	   nor changed: what a larger window uncovers is to be painted, its controls' parts of it too. paint.net's Colors window opens out
+	   this way over the controls it kept beside it. */
+	HWND grown = CreateWindowExW(0, wc.lpszClassName, L"grown", WS_POPUP | WS_CLIPCHILDREN, 300, 100, 64, 48, NULL, NULL, instance, NULL);
+	if (!grown)
+		return 11;
+	HWND beside = CreateWindowExW(0, flat.lpszClassName, L"", WS_CHILD | WS_VISIBLE, 100, 10, 40, 20, grown, NULL, instance, NULL);
+	if (!beside)
+		return 11;
+	ShowWindow(grown, SW_SHOW);
+	pump();
+	flat_paints = 0;
+	if (!SetWindowPos(grown, NULL, 0, 0, 200, 48, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE))
+		return 12;
+	pump();
+	if (!flat_paints)
+		return 13;
+	DestroyWindow(grown);
 	DestroyWindow(window);
 	return 0;
 }
