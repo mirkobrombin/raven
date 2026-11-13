@@ -63,6 +63,11 @@ static struct {
 		ID3D11PixelShader *shader;
 	} kept[KEPT_SHADERS];
 	UINT32 kept_count, kept_next;
+	/* The texture the last run drew into and the one it was read back through, kept for the next run of the same size: an effect
+	   drawn each frame runs over the same area each time. */
+	ID3D11Texture2D *target, *staging;
+	ID3D11RenderTargetView *target_view;
+	UINT32 target_width, target_height;
 } runner = {INIT_ONCE_STATIC_INIT};
 
 static BOOL CALLBACK runner_init(INIT_ONCE *once, void *parameter, void **context)
@@ -151,10 +156,10 @@ static BOOL input_texture(const struct shader_image *image, ID3D11Texture2D **te
 HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 constant_size, const struct shader_image *inputs,
 	UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, float *out)
 {
-	ID3D11Texture2D *textures[SHADER_INPUTS] = {0}, *target = NULL, *staging = NULL;
+	ID3D11Texture2D *textures[SHADER_INPUTS] = {0}, *target, *staging;
 	ID3D11ShaderResourceView *views[SHADER_INPUTS] = {0};
 	ID3D11SamplerState *samplers[SHADER_INPUTS] = {0};
-	ID3D11RenderTargetView *target_view = NULL;
+	ID3D11RenderTargetView *target_view;
 	ID3D11Buffer *constant_buffer = NULL;
 	ID3D11PixelShader *shader;
 	D3D11_TEXTURE2D_DESC target_desc = {width, height, 1, 1, DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
@@ -196,14 +201,29 @@ HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 
 			goto done;
 		result = E_FAIL;
 	}
-	if (FAILED(ID3D11Device_CreateTexture2D(runner.device, &target_desc, NULL, &target)) ||
-		FAILED(ID3D11Device_CreateRenderTargetView(runner.device, (ID3D11Resource *)target, NULL, &target_view)))
-		goto done;
-	target_desc.Usage = D3D11_USAGE_STAGING;
-	target_desc.BindFlags = 0;
-	target_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-	if (FAILED(ID3D11Device_CreateTexture2D(runner.device, &target_desc, NULL, &staging)))
-		goto done;
+	if (!runner.target || runner.target_width != width || runner.target_height != height) {
+		if (runner.target_view)
+			ID3D11RenderTargetView_Release(runner.target_view);
+		if (runner.target)
+			ID3D11Texture2D_Release(runner.target);
+		if (runner.staging)
+			ID3D11Texture2D_Release(runner.staging);
+		runner.target = runner.staging = NULL;
+		runner.target_view = NULL;
+		if (FAILED(ID3D11Device_CreateTexture2D(runner.device, &target_desc, NULL, &runner.target)) ||
+			FAILED(ID3D11Device_CreateRenderTargetView(runner.device, (ID3D11Resource *)runner.target, NULL, &runner.target_view)))
+			goto done;
+		target_desc.Usage = D3D11_USAGE_STAGING;
+		target_desc.BindFlags = 0;
+		target_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(ID3D11Device_CreateTexture2D(runner.device, &target_desc, NULL, &runner.staging)))
+			goto done;
+		runner.target_width = width;
+		runner.target_height = height;
+	}
+	target = runner.target;
+	target_view = runner.target_view;
+	staging = runner.staging;
 	ID3D11DeviceContext_UpdateSubresource(runner.context, (ID3D11Resource *)runner.area, 0, NULL, area, 0, 0);
 	ID3D11DeviceContext_IASetInputLayout(runner.context, NULL);
 	ID3D11DeviceContext_IASetPrimitiveTopology(runner.context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -242,12 +262,6 @@ done:
 	}
 	if (constant_buffer)
 		ID3D11Buffer_Release(constant_buffer);
-	if (target_view)
-		ID3D11RenderTargetView_Release(target_view);
-	if (target)
-		ID3D11Texture2D_Release(target);
-	if (staging)
-		ID3D11Texture2D_Release(staging);
 	LeaveCriticalSection(&runner.lock);
 	return result;
 }

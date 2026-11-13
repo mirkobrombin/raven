@@ -5261,6 +5261,13 @@ struct draw_info {
 	UINT32 constant_size;
 	/* The filter each input is sampled with: linear unless the transform says otherwise. */
 	UINT32 filters[EFFECT_INPUTS];
+	/* What a transform without inputs last drew, with the area, shader and constants it drew it from: it draws the same until one of
+	   them changes, as the checkerboard under paint.net's document does each frame. */
+	float *kept;
+	D2D1_RECT_L kept_area;
+	GUID kept_shader;
+	BYTE *kept_constants;
+	UINT32 kept_size;
 };
 
 static HRESULT STDMETHODCALLTYPE draw_info_QueryInterface(void *iface, REFIID riid, void **out)
@@ -5284,6 +5291,8 @@ static ULONG STDMETHODCALLTYPE draw_info_Release(void *iface)
 	const LONG refs = InterlockedDecrement(&self->refs);
 	if (!refs) {
 		FREE(self->constants);
+		FREE(self->kept);
+		FREE(self->kept_constants);
 		FREE(self);
 	}
 	return (ULONG)refs;
@@ -6313,13 +6322,35 @@ static void draw_node_render(struct effect_graph *graph, INT32 index, const stru
 		images[input].width = rect_width(&wanted[input]);
 		images[input].height = rect_height(&wanted[input]);
 	}
-	if ((result = plane_alloc(&drawn))) {
-		if (SUCCEEDED(shader_run(shader->code, shader->size, node->info->constants, node->info->constant_size, images, count, drawn.left,
-			drawn.top, rect_width(&drawn), rect_height(&drawn), result)))
-			plane_copy(result, &drawn, out, area);
-		else
-			unimplemented("ID2D1DrawTransform", "drawing where no Direct3D 11 device runs its pixel shader");
-		FREE(result);
+	{
+		struct draw_info *info = node->info;
+		const size_t floats = (size_t)rect_width(&drawn) * rect_height(&drawn) * 4;
+		const BOOL same = !count && info->kept && !memcmp(&info->kept_area, &drawn, sizeof(drawn)) &&
+			!memcmp(&info->kept_shader, &info->shader, sizeof(GUID)) && info->kept_size == info->constant_size &&
+			(!info->constant_size || !memcmp(info->kept_constants, info->constants, info->constant_size));
+		if (same) {
+			plane_copy(info->kept, &drawn, out, area);
+		} else if ((result = ALLOC_UNSET(floats * sizeof(float)))) {
+			const BOOL ran = SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left,
+				drawn.top, rect_width(&drawn), rect_height(&drawn), result));
+			if (ran)
+				plane_copy(result, &drawn, out, area);
+			else
+				unimplemented("ID2D1DrawTransform", "drawing where no Direct3D 11 device runs its pixel shader");
+			FREE(info->kept);
+			FREE(info->kept_constants);
+			info->kept = NULL;
+			info->kept_constants = NULL;
+			if (ran && !count && (!info->constant_size || (info->kept_constants = ALLOC_UNSET(info->constant_size)))) {
+				if (info->constant_size)
+					memcpy(info->kept_constants, info->constants, info->constant_size);
+				info->kept_size = info->constant_size;
+				info->kept_shader = info->shader;
+				info->kept_area = drawn;
+				info->kept = result;
+			} else
+				FREE(result);
+		}
 	}
 	for (input = 0; input < count; ++input)
 		FREE(pixels[input]);
