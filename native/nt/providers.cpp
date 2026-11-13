@@ -2434,7 +2434,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	VulkanBridge vulkan(process, modules);
 	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },
 		[&windows](uint64_t window) { windows.release_host_surface(window); },
-		[&windows](uint64_t window) { return windows.client_size(window); }, windows.host_platform()});
+		[&windows](uint64_t window) { return windows.client_size(window); }, [&windows](uint64_t window) { return windows.shown(window); },
+		windows.host_platform()});
 #endif
 	const auto remaining = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()); };
 	size_t debug_bytes=0;

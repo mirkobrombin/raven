@@ -3135,6 +3135,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
                         ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation;RAVEN_VULKAN_NONCOHERENT=1")
                 endif()
+                # A swap chain over a window nobody has shown presents at once and is lost once the window is shown.
+                add_custom_command(OUTPUT ${VULKAN_FIXTURES}/hidden-present64.exe
+                    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
+                        -idirafter ${Vulkan_INCLUDE_DIRS}
+                        -Wl,--entry,raven_entry,--image-base,0x18e000000
+                        -o ${VULKAN_FIXTURES}/hidden-present64.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/hidden_present_client.c
+                        ${VULKAN_FIXTURES}/vulkan.a -luser32 -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/hidden_present_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
+                add_custom_target(vulkan_hidden_present64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/hidden-present64.exe)
+                add_dependencies(vulkan_hidden_present64_fixture vulkan_import64)
+                add_test(NAME native_vulkan_hidden_present_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/hidden-present64.exe)
+                set_tests_properties(native_vulkan_hidden_present_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-" ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-x64-prefix)
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/foreign-present64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                         -idirafter ${Vulkan_INCLUDE_DIRS}

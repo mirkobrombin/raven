@@ -401,6 +401,11 @@ std::optional<std::pair<uint32_t,uint32_t>> NativeWindows::client_size(uint64_t 
 	return std::pair<uint32_t,uint32_t>{uint32_t(std::max(window->width,1)),uint32_t(std::max(window->height,1))};
 }
 
+bool NativeWindows::shown(uint64_t handle)
+{
+	return std::as_const(objects).window(handle) && objects.window_visible(objects.window_root(handle));
+}
+
 void NativeWindows::release_host_surface(uint64_t handle)
 {
 	if (!presentation.release_host_surface) return;

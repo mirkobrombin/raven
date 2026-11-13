@@ -37,6 +37,8 @@ public:
 	void set_surface_cleanup(std::function<void(uint64_t)> cleanup) { surface_cleanup = std::move(cleanup); }
 	// The client area of a window as its swap chains see it; empty for a window that does not exist.
 	std::optional<std::pair<uint32_t,uint32_t>> client_size(uint64_t window);
+	// Whether the window's top-level window is visible, so the host shows what is drawn in it.
+	bool shown(uint64_t window);
 	void set_deadline(std::chrono::steady_clock::time_point deadline);
 	// Parks a message waiter while other guest threads run, until input arrives or the next timer is due.
 	void set_message_wait(std::function<void(std::function<bool()>,std::chrono::steady_clock::time_point)> wait) { message_wait = std::move(wait); }

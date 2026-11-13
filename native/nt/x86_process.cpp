@@ -926,7 +926,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	VulkanBridge vulkan(process, modules);
 	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },
 		[&windows](uint64_t window) { windows.release_host_surface(window); },
-		[&windows](uint64_t window) { return windows.client_size(window); }, presentation.platform});
+		[&windows](uint64_t window) { return windows.client_size(window); }, [&windows](uint64_t window) { return windows.shown(window); },
+		presentation.platform});
 	VulkanThunk32 vulkan32(process, vulkan);
 #endif
 	windows.set_presentation(std::move(presentation));
