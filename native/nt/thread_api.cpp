@@ -589,19 +589,26 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// BindIoCompletionCallback: every bound file posts to one completion port of the process, with its callback as the key, and the guest
 	// RTL's worker threads hand each finished operation to its callback. The threads start with the first binding.
+	// The guest's threads take turns on one thread here, so the first binding is guarded by a flag they wait on in turn: a mutex of the
+	// host would stop them all when a thread is switched out while it makes the port and another comes to bind.
 	struct IoBinding {
 		uint64_t port = 0;
-		std::mutex lock;
+		bool busy = false;
+	};
+	const auto hold = [&threads](const std::shared_ptr<IoBinding> &binding) {
+		threads.block([binding] { return !binding->busy; }, std::nullopt);
+		binding->busy = true;
+		return std::shared_ptr<void>(nullptr, [binding](void *) { binding->busy = false; });
 	};
 	auto io_binding = std::make_shared<IoBinding>();
-	registry.add("BindIoCompletionCallback", 3, [&registry, &context, io_binding](ApiCall &call) {
+	registry.add("BindIoCompletionCallback", 3, [&registry, &context, io_binding, hold](ApiCall &call) {
 		const auto associate = registry.find("CreateIoCompletionPort");
 		const auto create = registry.find("CreateThread");
 		if (!call[1] || !associate || !create) {
 			call.fail(87);
 			return;
 		}
-		const std::lock_guard guard(io_binding->lock);
+		const auto held = hold(io_binding);
 		if (!io_binding->port) {
 			uint64_t worker, dequeue;
 			try {
@@ -635,14 +642,14 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	// CreateThreadpoolIo binds a file to the pool in the same way, to a completion port of its own whose key is the I/O object: the callback,
 	// its context and the count of its callbacks running, which the guest RTL's threads keep.
 	auto pool_binding = std::make_shared<IoBinding>();
-	registry.add("CreateThreadpoolIo", 4, [&registry, &context, pool_binding](ApiCall &call) {
+	registry.add("CreateThreadpoolIo", 4, [&registry, &context, pool_binding, hold](ApiCall &call) {
 		const auto associate = registry.find("CreateIoCompletionPort");
 		const auto create = registry.find("CreateThread");
 		if (!call[1] || !associate || !create) {
 			call.fail(87, 0);
 			return;
 		}
-		const std::lock_guard guard(pool_binding->lock);
+		const auto held = hold(pool_binding);
 		if (!pool_binding->port) {
 			uint64_t worker, dequeue;
 			try {

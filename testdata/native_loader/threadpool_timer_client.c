@@ -74,6 +74,32 @@ static FILETIME from_now(LONGLONG milliseconds)
 
 /* Thread pool timers as runtimes schedule their work with them: a timer starts unset, runs once at a relative or an absolute due
  * time with the context and itself, runs every period until a null due time stops it, and stops with the members of its cleanup group. */
+static HANDLE binders_go;
+static WCHAR binder_folder[MAX_PATH];
+static LONG binder_failures;
+static void CALLBACK finished(PTP_CALLBACK_INSTANCE instance, PVOID context, PVOID overlapped, ULONG result, ULONG_PTR bytes, PTP_IO io);
+
+static DWORD WINAPI binder(void *unused)
+{
+	WCHAR path[MAX_PATH];
+	WaitForSingleObject(binders_go, INFINITE);
+	for (int round = 0; round < 200; ++round) {
+		if (!GetTempFileNameW(binder_folder, L"tpb", 0, path)) {
+			InterlockedIncrement(&binder_failures);
+			continue;
+		}
+		HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_FLAG_OVERLAPPED | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+		PTP_IO io = file != INVALID_HANDLE_VALUE ? CreateThreadpoolIo(file, finished, NULL, NULL) : NULL;
+		if (!io)
+			InterlockedIncrement(&binder_failures);
+		else
+			CloseThreadpoolIo(io);
+		if (file != INVALID_HANDLE_VALUE)
+			CloseHandle(file);
+	}
+	return 0;
+}
+
 int raven_entry(void)
 {
 	once_done = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -134,6 +160,19 @@ int raven_entry(void)
 	Sleep(60);
 	if (!closed || grouped_count != closed) return 16;
 	CloseThreadpoolCleanupGroup(group);
+
+	/* Threads that bind files to the pool at the same time all get their I/O objects, however their turns fall, as the threads of
+	   .NET's pool open their files together. */
+	HANDLE binders[8];
+	binders_go = CreateEventW(NULL, TRUE, FALSE, NULL);
+	if (!binders_go || !GetTempPathW(MAX_PATH, binder_folder)) return 26;
+	for (int index = 0; index < 8; ++index)
+		if (!(binders[index] = CreateThread(NULL, 0, binder, NULL, 0, NULL))) return 26;
+	SetEvent(binders_go);
+	if (WaitForMultipleObjects(8, binders, TRUE, 20000) != WAIT_OBJECT_0 || binder_failures) return 27;
+	for (int index = 0; index < 8; ++index)
+		CloseHandle(binders[index]);
+	CloseHandle(binders_go);
 
 	/* An overlapped file bound to the pool: each operation started after StartThreadpoolIo ends in the callback with the context, the
 	   operation, its result and the bytes moved, and the I/O object itself, as .NET's file streams write through it. */
