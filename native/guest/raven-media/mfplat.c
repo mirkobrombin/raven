@@ -43,6 +43,22 @@ __declspec(dllexport) HRESULT WINAPI MFCreateAlignedMemoryBuffer(DWORD max_lengt
 	return unsupported(buffer);
 }
 
+/* No transform is registered here, so an enumeration finds none: it succeeds with a count of zero and no array, as Media Foundation
+ * answers when nothing matches. paint.net asks this way whether a video codec is installed before it offers a file type. */
+__declspec(dllexport) HRESULT WINAPI MFTEnumEx(GUID category, UINT32 flags, const void *input_type, const void *output_type, void ***activates,
+	UINT32 *count)
+{
+	(void)category;
+	(void)flags;
+	(void)input_type;
+	(void)output_type;
+	if (!activates || !count)
+		return E_INVALIDARG;
+	*activates = NULL;
+	*count = 0;
+	return S_OK;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
 	(void)instance;
