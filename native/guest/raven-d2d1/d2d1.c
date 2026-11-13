@@ -1714,6 +1714,14 @@ static void copy_surface(DWORD to, DWORD from, const D2D1_POINT_2U *point, const
 
 static void share_back(struct bitmap *bitmap);
 
+/* A bitmap shared from a WIC lock shows what the lock's memory holds now: it is taken in again before the bitmap is read as a source,
+ * since the program, or a target over the same WIC bitmap, writes there without telling. */
+static void share_in(struct bitmap *bitmap)
+{
+	if (bitmap->shared)
+		bitmap_CopyFromMemory(bitmap, NULL, bitmap->shared, bitmap->shared_stride);
+}
+
 /* What is copied into a bitmap shared from a WIC lock reaches the lock's memory too: paint.net copies each rendered tile into such a
  * bitmap and reads its own memory. */
 static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_POINT_2U *point, ID2D1Bitmap *source, const D2D1_RECT_U *rect)
@@ -1721,6 +1729,7 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_P
 	struct bitmap *self = iface, *from = (struct bitmap *)source;
 	if (!from)
 		return E_INVALIDARG;
+	share_in(from);
 	copy_surface(self->surface, from->surface, point, rect, from->pixels);
 	if (self->shared)
 		share_back(self);
@@ -3005,6 +3014,7 @@ static void draw_bitmap(struct target *self, struct bitmap *bitmap, const D2D1_R
 	struct command command;
 	if (!bitmap)
 		return;
+	share_in(bitmap);
 	if (bitmap->dxgi) {
 		/* The source in pixels, a pixel wider on each side for the filtering that samples beside it. */
 		RECT wanted;
@@ -6298,6 +6308,7 @@ static void bitmap_render(struct bitmap *bitmap, const D2D1_RECT_L *area, float 
 		const RECT wanted = {read.left, read.top, read.right, read.bottom};
 		read_texture(bitmap, &wanted);
 	}
+	share_in(bitmap);
 	canvas_pixels(bitmap->surface, read.left, read.top, rect_width(&read), rect_height(&read), pixels, rect_width(&read) * 4, 0);
 	for (row = 0; row < rect_height(&read); ++row)
 		for (column = 0; column < rect_width(&read); ++column) {

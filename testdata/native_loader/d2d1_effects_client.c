@@ -522,6 +522,26 @@ int raven_entry(void)
 		return 42;
 	if (!(drawn_floats[0] >= 0.98f) || !(drawn_floats[2] <= 0.02f) || !(drawn_floats[3] >= 0.98f))
 		return 43;
+	/* The memory is shared the other way too: what is written into it shows when the bitmap is drawn, as paint.net draws the bitmap it
+	   shared once after every tile rendered into the WIC bitmap behind it. */
+	UINT float_at;
+	for (float_at = 0; float_at < 8 * 8; ++float_at) {
+		float *written = (float *)tile_data + float_at * 4;
+		written[0] = 0.0f;
+		written[1] = 1.0f;
+		written[2] = 0.0f;
+		written[3] = 1.0f;
+	}
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &blue);
+	ID2D1RenderTarget_DrawBitmap(float_target, tile, NULL, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, NULL);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+		return 44;
+	drawn_floats = (const float *)float_map.bits;
+	if (!(drawn_floats[0] <= 0.02f) || !(drawn_floats[1] >= 0.98f) || !(drawn_floats[2] <= 0.02f) || !(drawn_floats[3] >= 0.98f))
+		return 45;
+	ID2D1Bitmap1_Unmap(float_bitmap);
 	ID2D1Bitmap_Release(tile);
 	IWICBitmapLock_Release(tile_lock);
 	IWICBitmap_Release(tile_pixels);
