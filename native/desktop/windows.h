@@ -313,9 +313,9 @@ private:
 	void activate(uint64_t window);
 	uint64_t set_focus(uint64_t window);
 	void receive(const DesktopEvent &event);
-	// Input that arrives while a button press is being placed in the queue (the program runs during its hit test and parent notifications
-	// and may pump): it is taken in after the press, so the program sees the input in the order it happened.
-	bool placing_press=false;
+	// Input that arrives while a pointer event is being placed in the queue (the program runs during its hit test, cursor request and
+	// parent notifications and may pump): it is taken in after the event, so the program sees the input in the order it happened.
+	bool placing_pointer=false;
 	// A tool window shown as a popup of its owner is moved by the program's side, as the compositor moves only toplevels: the window
 	// whose caption is being dragged, where the pointer started and where the window was then.
 	struct FrameDrag { uint64_t window=0; int32_t start_x=0,start_y=0; DesktopRect origin{}; } frame_drag;

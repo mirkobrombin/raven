@@ -1029,7 +1029,7 @@ void NativeWindows::settle_focus_leave(bool now)
 
 void NativeWindows::receive(const DesktopEvent &event)
 {
-	if (placing_press && (event.kind==DesktopEventKind::pointer_motion || event.kind==DesktopEventKind::pointer_button ||
+	if (placing_pointer && (event.kind==DesktopEventKind::pointer_motion || event.kind==DesktopEventKind::pointer_button ||
 		event.kind==DesktopEventKind::pointer_wheel || event.kind==DesktopEventKind::pointer_relative || event.kind==DesktopEventKind::key)) {
 		held_input.push_back(event);
 		return;
@@ -1242,14 +1242,15 @@ void NativeWindows::receive(const DesktopEvent &event)
 	}
 	if (scroll_drag.window && (message==0x200 || message==0x202 || message==0x201) && scroll_motion(message,int32_t(x),int32_t(y))) return;
 	if (capture && !std::as_const(objects).window(capture)) capture=0;
-	// The press is placed before any input read while the program handles the messages sent for it.
-	const bool press=message==0x201 || message==0x204 || message==0x207;
-	if (press && !placing_press) {
-		placing_press=true;
+	// The event is placed before any input read while the program handles the messages sent for it: the cursor a move asks the window
+	// for, the activation a press brings. A program that reads its queue from there would otherwise find the events that came after
+	// queued ahead of this one, and a move from before a press would reach it after the press, saying no button is held.
+	if (!placing_pointer) {
+		placing_pointer=true;
 		try {
 			place_pointer(event,message,buttons,x,y);
 		} catch (...) {
-			placing_press=false;
+			placing_pointer=false;
 			held_input.clear();
 			throw;
 		}
@@ -1296,7 +1297,7 @@ bool NativeWindows::shown_on_owner(const DesktopWindow &window) const
 
 void NativeWindows::release_held_input()
 {
-	placing_press=false;
+	placing_pointer=false;
 	while (!held_input.empty()) {
 		const auto next=held_input.front();
 		held_input.pop_front();
@@ -1326,7 +1327,7 @@ void NativeWindows::place_pointer(const DesktopEvent &event,uint32_t message,uin
 		if (!window || !objects.window_visible(target)) return;
 	}
 	// Scroll bars and the frame may run a loop of their own that waits for the release, so what was held goes in first.
-	if (hit!=1 && placing_press) release_held_input();
+	if (hit!=1 && placing_pointer) release_held_input();
 	if ((hit==6 || hit==7) && scroll_pointer(target,hit,message,int32_t(x),int32_t(y))) return;
 	// Outside the client area the window hears the WM_NC* form of the message, with the hit code and the screen position; the default
 	// procedure runs the frame from it, so a program that draws its own caption can take the press first.
