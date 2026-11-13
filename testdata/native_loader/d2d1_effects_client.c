@@ -598,6 +598,25 @@ int raven_entry(void)
 	ID2D1Bitmap1_Unmap(float_bitmap);
 	IUnknown_Release((IUnknown *)output);
 	IUnknown_Release((IUnknown *)blur);
+	/* A transform without inputs keeps what it drew for each of a few areas: paint.net draws its document and the four strips around
+	   it from one such transform every frame, and the strips must not cost a run of the shader each. Two hundred frames of four parts of the
+	   generator are drawn in a moment. */
+	const D2D1_RECT_F parts[4] = {{0, 0, 2, 2}, {2, 0, 4, 2}, {0, 2, 2, 4}, {2, 2, 4, 4}};
+	DWORD drawing_began = 0;
+	output = output_of(generator);
+	for (UINT frame = 0; frame < 201; ++frame) {
+		if (frame == 1)
+			drawing_began = GetTickCount();
+		ID2D1RenderTarget_BeginDraw(float_target);
+		for (UINT part = 0; part < 4; ++part)
+			ID2D1DeviceContext_DrawImage(float_context, output, &blur_place, &parts[part], D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+				D2D1_COMPOSITE_MODE_SOURCE_OVER);
+		if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)))
+			return 52;
+	}
+	if (GetTickCount() - drawing_began > 300)
+		return 53;
+	IUnknown_Release((IUnknown *)output);
 	/* Effects chained deep still draw: paint.net's blur is dozens of them, each the input of the next. */
 	ID2D1Effect *chained[40];
 	ID2D1Image *last = (ID2D1Image *)opaque;

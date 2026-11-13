@@ -5416,6 +5416,8 @@ static HRESULT store_shader(REFGUID id, const BYTE *code, UINT32 size)
 }
 
 /* ---- the draw info a draw transform is given ---- */
+enum { KEPT_DRAWINGS = 6 };
+
 struct draw_info {
 	void **vtbl;
 	LONG refs;
@@ -5426,12 +5428,16 @@ struct draw_info {
 	/* The filter each input is sampled with: linear unless the transform says otherwise. */
 	UINT32 filters[EFFECT_INPUTS];
 	/* What a transform without inputs last drew, with the area, shader and constants it drew it from: it draws the same until one of
-	   them changes, as the checkerboard under paint.net's document does each frame. */
-	float *kept;
-	D2D1_RECT_L kept_area;
-	GUID kept_shader;
-	BYTE *kept_constants;
-	UINT32 kept_size;
+	   them changes, as the checkerboard under paint.net's document does each frame. A few areas are kept, since one frame draws the
+	   document and the four strips around it from the same transform. */
+	struct kept_drawing {
+		float *pixels;
+		D2D1_RECT_L area;
+		GUID shader;
+		BYTE *constants;
+		UINT32 size;
+	} kept[KEPT_DRAWINGS];
+	UINT32 kept_next;
 };
 
 static HRESULT STDMETHODCALLTYPE draw_info_QueryInterface(void *iface, REFIID riid, void **out)
@@ -5454,9 +5460,12 @@ static ULONG STDMETHODCALLTYPE draw_info_Release(void *iface)
 	struct draw_info *self = iface;
 	const LONG refs = InterlockedDecrement(&self->refs);
 	if (!refs) {
+		UINT32 index;
 		FREE(self->constants);
-		FREE(self->kept);
-		FREE(self->kept_constants);
+		for (index = 0; index < KEPT_DRAWINGS; ++index) {
+			FREE(self->kept[index].pixels);
+			FREE(self->kept[index].constants);
+		}
 		FREE(self);
 	}
 	return (ULONG)refs;
@@ -6490,11 +6499,15 @@ static void draw_node_render(struct effect_graph *graph, INT32 index, const stru
 	{
 		struct draw_info *info = node->info;
 		const size_t floats = (size_t)rect_width(&drawn) * rect_height(&drawn) * 4;
-		const BOOL same = !count && info->kept && !memcmp(&info->kept_area, &drawn, sizeof(drawn)) &&
-			!memcmp(&info->kept_shader, &info->shader, sizeof(GUID)) && info->kept_size == info->constant_size &&
-			(!info->constant_size || !memcmp(info->kept_constants, info->constants, info->constant_size));
-		if (same) {
-			plane_copy(info->kept, &drawn, out, area);
+		struct kept_drawing *kept = NULL;
+		UINT32 slot;
+		/* The drawing kept for this area, if one is: it is what would be drawn while the shader and its constants are the same. */
+		for (slot = 0; !count && slot < KEPT_DRAWINGS && !kept; ++slot)
+			if (info->kept[slot].pixels && !memcmp(&info->kept[slot].area, &drawn, sizeof(drawn)))
+				kept = &info->kept[slot];
+		if (kept && !memcmp(&kept->shader, &info->shader, sizeof(GUID)) && kept->size == info->constant_size &&
+			(!info->constant_size || !memcmp(kept->constants, info->constants, info->constant_size))) {
+			plane_copy(kept->pixels, &drawn, out, area);
 		} else if ((result = ALLOC_UNSET(floats * sizeof(float)))) {
 			const BOOL ran = SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left,
 				drawn.top, rect_width(&drawn), rect_height(&drawn), result));
@@ -6502,17 +6515,22 @@ static void draw_node_render(struct effect_graph *graph, INT32 index, const stru
 				plane_copy(result, &drawn, out, area);
 			else
 				unimplemented("ID2D1DrawTransform", "drawing where no Direct3D 11 device runs its pixel shader");
-			FREE(info->kept);
-			FREE(info->kept_constants);
-			info->kept = NULL;
-			info->kept_constants = NULL;
-			if (ran && !count && (!info->constant_size || (info->kept_constants = ALLOC_UNSET(info->constant_size)))) {
+			/* The area's own place is drawn over; a new area takes the place of the oldest. */
+			if (!count && !kept)
+				kept = &info->kept[info->kept_next++ % KEPT_DRAWINGS];
+			if (kept) {
+				FREE(kept->pixels);
+				FREE(kept->constants);
+				kept->pixels = NULL;
+				kept->constants = NULL;
+			}
+			if (ran && kept && (!info->constant_size || (kept->constants = ALLOC_UNSET(info->constant_size)))) {
 				if (info->constant_size)
-					memcpy(info->kept_constants, info->constants, info->constant_size);
-				info->kept_size = info->constant_size;
-				info->kept_shader = info->shader;
-				info->kept_area = drawn;
-				info->kept = result;
+					memcpy(kept->constants, info->constants, info->constant_size);
+				kept->size = info->constant_size;
+				kept->shader = info->shader;
+				kept->area = drawn;
+				kept->pixels = result;
 			} else
 				FREE(result);
 		}
