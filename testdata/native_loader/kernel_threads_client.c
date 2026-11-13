@@ -38,6 +38,11 @@ static DWORD WINAPI waiting(LPVOID parameter)
 	return 42;
 }
 
+static DWORD WINAPI parked(LPVOID gate)
+{
+	return WaitForSingleObject(gate,10000)==WAIT_OBJECT_0 ? 0 : 1;
+}
+
 static DWORD WINAPI tls_reader(LPVOID parameter)
 {
 	(void)parameter;
@@ -280,5 +285,19 @@ int raven_entry(void)
 		CloseHandle(worker);
 		CloseHandle(apc_ready);
 	}
+	/* Windows has no small cap on the threads a process keeps alive: the .NET thread pool parks a few hundred idle workers at once. */
+	static HANDLE crowd[400];
+	HANDLE crowd_gate=CreateEventW(0,TRUE,FALSE,0);
+	CHECK(101,crowd_gate!=0);
+	for(unsigned at=0;at<400;++at) {
+		crowd[at]=CreateThread(0,64*1024,parked,crowd_gate,STACK_SIZE_PARAM_IS_A_RESERVATION,0);
+		CHECK(101,crowd[at]!=0);
+	}
+	SetEvent(crowd_gate);
+	for(unsigned at=0;at<400;++at) {
+		CHECK(102,WaitForSingleObject(crowd[at],5000)==WAIT_OBJECT_0);
+		CloseHandle(crowd[at]);
+	}
+	CloseHandle(crowd_gate);
 	return 0;
 }

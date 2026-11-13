@@ -119,7 +119,8 @@ std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t para
 {
 	if (process.parallel())
 		reap();
-	if (live() >= 256)
+	// Windows sets no small limit: the .NET thread pool parks a few hundred idle workers at once. The cap only stops a runaway loop.
+	if (live() >= 8192)
 		throw std::runtime_error("native guest thread limit reached");
 	auto thread = std::make_shared<GuestThread>();
 	const uint64_t size = std::clamp<uint64_t>((stack_size + 0xffff) & ~uint64_t(0xffff), 256 * 1024, 64 * 1024 * 1024);
@@ -553,7 +554,7 @@ void NativeThreads::serve()
 	for (const auto &service : services)
 		service();
 	// RAVEN_DUMP_THREADS_ON names a file: whenever it is touched every process lists its threads with their state and the wait each
-	// is in. A program that stops answering shows which thread waits for what.
+	// is in, and where it started. A program that stops answering shows which thread waits for what.
 	static const char *trigger = std::getenv("RAVEN_DUMP_THREADS_ON");
 	static auto checked = std::chrono::steady_clock::now();
 	static timespec dumped{};
@@ -572,7 +573,8 @@ void NativeThreads::serve()
 				(long long)std::chrono::duration_cast<std::chrono::milliseconds>(checked - thread->waiting_since).count());
 		if (thread->suspend_count)
 			std::fprintf(stderr, " suspended %d", thread->suspend_count);
-		std::fprintf(stderr, " rip %llx rsp %llx\n", (unsigned long long)thread->snapshot.context.registers.rip, (unsigned long long)thread->snapshot.context.registers.rsp);
+		std::fprintf(stderr, " rip %llx rsp %llx start %llx\n", (unsigned long long)thread->snapshot.context.registers.rip,
+			(unsigned long long)thread->snapshot.context.registers.rsp, (unsigned long long)thread->start);
 	}
 }
 
