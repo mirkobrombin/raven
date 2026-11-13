@@ -1650,9 +1650,12 @@ uint64_t NativeWindows::send(uint64_t handle, uint32_t message, uint64_t wparam,
 	static const char *const trace_message=std::getenv("RAVEN_TRACE_MSG");
 	const bool traced=trace_message && (std::string_view(trace_message)=="1" || std::strtoull(trace_message,nullptr,16)==handle);
 	if (traced) fprintf(stderr,"msg %llx %x %llx %llx\n",(unsigned long long)handle,message,(unsigned long long)wparam,(unsigned long long)lparam);
+	const auto began=std::chrono::steady_clock::now();
 	const auto result=invoke(procedure,arguments);
 	if (result.stop!=NativeStop::returned) throw result;
-	if (traced) fprintf(stderr,"msg %llx %x -> %llx\n",(unsigned long long)handle,message,(unsigned long long)result.value);
+	// The trace also says how long the procedure kept the message, to find the ones a program is slow on.
+	if (traced) fprintf(stderr,"msg %llx %x -> %llx in %lld ms\n",(unsigned long long)handle,message,(unsigned long long)result.value,
+		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-began).count());
 	return result.value;
 }
 

@@ -571,6 +571,9 @@ void NativeThreads::serve()
 		if (thread->state == GuestThread::State::waiting && thread->waiting_in)
 			std::fprintf(stderr, " in %s for %lld ms", thread->waiting_in,
 				(long long)std::chrono::duration_cast<std::chrono::milliseconds>(checked - thread->waiting_since).count());
+		// The one that runs is inside the call the dump was asked from.
+		if (thread->state == GuestThread::State::running)
+			std::fprintf(stderr, " in %s", api_in_progress);
 		if (thread->suspend_count)
 			std::fprintf(stderr, " suspended %d", thread->suspend_count);
 		std::fprintf(stderr, " rip %llx rsp %llx start %llx\n", (unsigned long long)thread->snapshot.context.registers.rip,
