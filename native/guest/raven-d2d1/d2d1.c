@@ -3517,7 +3517,9 @@ static HRESULT STDMETHODCALLTYPE target_Flush(void *iface, D2D1_TAG *tag1, D2D1_
 {
 	struct target *self = target_of(iface);
 	flush_queue();
-	if (self->bitmap && self->bitmap->dxgi)
+	/* What was drawn so far reaches the texture or the WIC bitmap behind the target: paint.net flushes and reads its bitmap before it
+	   ends the drawing. */
+	if (self->bitmap && (self->bitmap->dxgi || (self->kind == TARGET_WIC && self->bitmap == self->own)))
 		present(self);
 	if (tag1) *tag1 = self->tag1;
 	if (tag2) *tag2 = self->tag2;

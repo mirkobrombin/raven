@@ -463,6 +463,20 @@ int raven_entry(void)
 		!(drawn_floats[2] >= 0.98f && drawn_floats[2] <= 1.01f) || !(drawn_floats[3] >= 0.98f && drawn_floats[3] <= 1.01f))
 		return 34;
 	IWICBitmapLock_Release(float_lock);
+	/* A flush brings what was drawn into the bitmap before the drawing ends, as paint.net reads its bitmap after one. */
+	const D2D1_COLOR_F green = {0.0f, 1.0f, 0.0f, 1.0f};
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &green);
+	if (FAILED(ID2D1RenderTarget_Flush(float_target, NULL, NULL)) ||
+		FAILED(IWICBitmap_Lock(float_pixels, &float_area, WICBitmapLockRead, &float_lock)) ||
+		FAILED(IWICBitmapLock_GetDataPointer(float_lock, &float_size, &float_data)))
+		return 35;
+	drawn_floats = (const float *)float_data;
+	if (!(drawn_floats[0] <= 0.02f) || !(drawn_floats[1] >= 0.98f))
+		return 36;
+	IWICBitmapLock_Release(float_lock);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)))
+		return 35;
 	ID2D1RenderTarget_Release(float_target);
 	IWICBitmap_Release(float_pixels);
 	IUnknown_Release((IUnknown *)red_brush);
