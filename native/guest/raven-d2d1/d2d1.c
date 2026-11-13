@@ -1541,6 +1541,11 @@ struct bitmap {
 	ID3D11Texture2D *staging;
 	ID3D11DeviceContext *staging_context;
 	D3D11_MAPPED_SUBRESOURCE staging_mapped;
+	/* For a bitmap shared from a WIC lock: the lock, kept while the bitmap lives, and the memory it gave, which what is drawn into the
+	 * bitmap goes back to. */
+	IWICBitmapLock *lock;
+	BYTE *shared;
+	UINT shared_stride, shared_size;
 };
 
 static void bitmap_destroy(struct object *base)
@@ -1556,6 +1561,8 @@ static void bitmap_destroy(struct object *base)
 	}
 	if (self->dxgi)
 		IDXGISurface_Release(self->dxgi);
+	if (self->lock)
+		IWICBitmapLock_Release(self->lock);
 	FREE(self->mapped);
 }
 
@@ -3372,6 +3379,45 @@ static void read_wic(struct target *self)
 	FREE(pixels);
 }
 
+/* The pixels of a bitmap shared from a WIC lock go back to the lock's memory in the bitmap's format. */
+static void share_back(struct bitmap *bitmap)
+{
+	const UINT32 width = bitmap->pixels.width, height = bitmap->pixels.height;
+	const DXGI_FORMAT format = bitmap->format.format;
+	const UINT bytes = format == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16 : format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 :
+		format == DXGI_FORMAT_A8_UNORM ? 1 : 4;
+	BYTE *pixels;
+	UINT32 row, column;
+	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
+		return;
+	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
+	for (row = 0; row < height && (size_t)row * bitmap->shared_stride + (size_t)width * bytes <= bitmap->shared_size; ++row) {
+		const BYTE *from = pixels + (size_t)row * width * 4;
+		BYTE *to = bitmap->shared + (size_t)row * bitmap->shared_stride;
+		if (bytes == 4)
+			memcpy(to, from, (size_t)width * 4);
+		else
+			for (column = 0; column < width; ++column) {
+				const BYTE *pixel = from + column * 4;
+				if (bytes == 16) {
+					float *floats = (float *)to + column * 4;
+					floats[0] = pixel[2] / 255.0f;
+					floats[1] = pixel[1] / 255.0f;
+					floats[2] = pixel[0] / 255.0f;
+					floats[3] = pixel[3] / 255.0f;
+				} else if (bytes == 8) {
+					UINT16 *halves = (UINT16 *)to + column * 4;
+					halves[0] = byte_half[pixel[2]];
+					halves[1] = byte_half[pixel[1]];
+					halves[2] = byte_half[pixel[0]];
+					halves[3] = byte_half[pixel[3]];
+				} else
+					to[column] = pixel[3];
+			}
+	}
+	FREE(pixels);
+}
+
 /* What a finished frame turns into: the window's pixels, the bound device context's, the Direct3D texture's or the WIC bitmap's. */
 static void present(struct target *self)
 {
@@ -3381,6 +3427,12 @@ static void present(struct target *self)
 	/* The window, device context or WIC bitmap takes the frame only while the target draws into its own pixels: a device context given
 	 * another target draws there alone. */
 	const int kind = bitmap && bitmap == self->own ? self->kind : TARGET_CONTEXT;
+	if (bitmap && bitmap->shared && bitmap != self->own) {
+		if (self->drawn)
+			share_back(bitmap);
+		self->drawn = FALSE;
+		return;
+	}
 	if (!bitmap || (kind != TARGET_HWND && kind != TARGET_DC && kind != TARGET_WIC && !bitmap->dxgi))
 		return;
 	/* A WIC bitmap nothing was drawn on keeps what the program wrote into it. */
@@ -3560,7 +3612,7 @@ static HRESULT STDMETHODCALLTYPE target_Flush(void *iface, D2D1_TAG *tag1, D2D1_
 	flush_queue();
 	/* What was drawn so far reaches the texture or the WIC bitmap behind the target: paint.net flushes and reads its bitmap before it
 	   ends the drawing. */
-	if (self->bitmap && (self->bitmap->dxgi || (self->kind == TARGET_WIC && self->bitmap == self->own)))
+	if (self->bitmap && (self->bitmap->dxgi || self->bitmap->shared || (self->kind == TARGET_WIC && self->bitmap == self->own)))
 		present(self);
 	if (tag1) *tag1 = self->tag1;
 	if (tag2) *tag2 = self->tag2;
@@ -3732,7 +3784,8 @@ static HRESULT STDMETHODCALLTYPE target_CreateSharedBitmap(void *iface, REFIID r
 	if (same_guid(riid, &IID_IDXGISurface) || same_guid(riid, &IID_IDXGISurface1))
 		return bitmap_from_dxgi(self, data, NULL, (struct bitmap **)out);
 	if (same_guid(riid, &IID_IWICBitmapLock)) {
-		/* The locked pixels are copied in: the lock's rectangle, stride and format. */
+		/* The bitmap shares the lock's pixels, as Direct2D's software targets do: they are taken in here, and what is drawn into the
+		   bitmap while it is a target goes back to them. paint.net renders each tile of an adjustment into its own memory this way. */
 		UINT width = 0, height = 0, stride = 0, size = 0;
 		BYTE *pixels = NULL;
 		D2D1_SIZE_U bitmap_size;
@@ -3748,15 +3801,24 @@ static HRESULT STDMETHODCALLTYPE target_CreateSharedBitmap(void *iface, REFIID r
 		if (!properties || format.format == DXGI_FORMAT_UNKNOWN) {
 			/* Without a format of its own the bitmap takes the lock's: paint.net shares its thumbnails as premultiplied half floats. */
 			WICPixelFormatGUID locked;
-			if (SUCCEEDED(IWICBitmapLock_GetPixelFormat((IWICBitmapLock *)data, &locked)) && same_guid(&locked, &GUID_WICPixelFormat64bppPRGBAHalf))
-				format.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-			else
-				format.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+			format.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+			if (SUCCEEDED(IWICBitmapLock_GetPixelFormat((IWICBitmapLock *)data, &locked))) {
+				if (same_guid(&locked, &GUID_WICPixelFormat64bppPRGBAHalf))
+					format.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+				else if (same_guid(&locked, &GUID_WICPixelFormat128bppPRGBAFloat))
+					format.format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+			}
 		}
 		if (!(bitmap = make_bitmap(self->factory, bitmap_size, format, properties ? properties->dpiX : 96, properties ? properties->dpiY : 96, 0)))
 			return E_OUTOFMEMORY;
-		if (pixels)
+		if (pixels) {
 			bitmap_CopyFromMemory(bitmap, NULL, pixels, stride);
+			bitmap->lock = (IWICBitmapLock *)data;
+			IWICBitmapLock_AddRef(bitmap->lock);
+			bitmap->shared = pixels;
+			bitmap->shared_stride = stride;
+			bitmap->shared_size = size;
+		}
 		*out = (ID2D1Bitmap *)bitmap;
 		return S_OK;
 	}

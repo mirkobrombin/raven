@@ -493,6 +493,32 @@ int raven_entry(void)
 	if (!(drawn_floats[0] <= 0.02f) || !(drawn_floats[1] >= 0.98f) || !(drawn_floats[3] >= 0.98f))
 		return 39;
 	ID2D1Bitmap1_Unmap(float_bitmap);
+	/* A bitmap shared from a WIC lock shares the lock's memory: drawn into as a target, it leaves what was drawn there, as paint.net
+	   renders each tile of an adjustment into its own bitmap. */
+	IWICBitmap *tile_pixels = NULL;
+	IWICBitmapLock *tile_lock = NULL;
+	ID2D1Bitmap *tile = NULL;
+	UINT tile_size = 0;
+	BYTE *tile_data = NULL;
+	const D2D1_BITMAP_PROPERTIES tile_properties = {{DXGI_FORMAT_R32G32B32A32_FLOAT, D2D1_ALPHA_MODE_PREMULTIPLIED}, 96, 96};
+	const D2D1_COLOR_F blue = {0.0f, 0.0f, 1.0f, 1.0f};
+	if (FAILED(IWICImagingFactory_CreateBitmap(imaging, 8, 8, &GUID_WICPixelFormat128bppPRGBAFloat, WICBitmapCacheOnLoad, &tile_pixels)) ||
+		FAILED(IWICBitmap_Lock(tile_pixels, &float_area, WICBitmapLockWrite | WICBitmapLockRead, &tile_lock)) ||
+		FAILED(IWICBitmapLock_GetDataPointer(tile_lock, &tile_size, &tile_data)) ||
+		FAILED(ID2D1RenderTarget_CreateSharedBitmap(float_target, &IID_IWICBitmapLock, tile_lock, &tile_properties, &tile)))
+		return 40;
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1DeviceContext_SetTarget(float_context, (ID2D1Image *)tile);
+	ID2D1RenderTarget_Clear(float_target, &blue);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)))
+		return 40;
+	drawn_floats = (const float *)tile_data;
+	if (!(drawn_floats[0] <= 0.02f) || !(drawn_floats[2] >= 0.98f) || !(drawn_floats[3] >= 0.98f))
+		return 41;
+	ID2D1DeviceContext_SetTarget(float_context, float_image);
+	ID2D1Bitmap_Release(tile);
+	IWICBitmapLock_Release(tile_lock);
+	IWICBitmap_Release(tile_pixels);
 	IUnknown_Release((IUnknown *)float_bitmap);
 	IUnknown_Release((IUnknown *)float_image);
 	IUnknown_Release((IUnknown *)float_context);
