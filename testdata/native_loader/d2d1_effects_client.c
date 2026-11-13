@@ -166,6 +166,36 @@ static HRESULT CALLBACK make_swap(IUnknown **out) { *out = (IUnknown *)&impls[SW
 static HRESULT CALLBACK make_chain(IUnknown **out) { *out = (IUnknown *)&impls[CHAIN]; return S_OK; }
 
 // Whether a channel is near the value expected, as the conversions round.
+/* A lock over two by two premultiplied half floats, as paint.net hands its own bitmaps to Direct2D. */
+static UINT16 half_pixels[16];
+static HRESULT STDMETHODCALLTYPE lock_QueryInterface(IWICBitmapLock *self, REFIID iid, void **out)
+{
+	if (iid->Data1 == IID_IUnknown.Data1 || iid->Data1 == IID_IWICBitmapLock.Data1) {
+		*out = self;
+		return S_OK;
+	}
+	*out = NULL;
+	return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE lock_AddRef(IWICBitmapLock *self) { return 1; }
+static ULONG STDMETHODCALLTYPE lock_Release(IWICBitmapLock *self) { return 1; }
+static HRESULT STDMETHODCALLTYPE lock_GetSize(IWICBitmapLock *self, UINT *width, UINT *height) { *width = *height = 2; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lock_GetStride(IWICBitmapLock *self, UINT *stride) { *stride = 16; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lock_GetDataPointer(IWICBitmapLock *self, UINT *size, BYTE **data)
+{
+	*size = sizeof half_pixels;
+	*data = (BYTE *)half_pixels;
+	return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE lock_GetPixelFormat(IWICBitmapLock *self, WICPixelFormatGUID *format)
+{
+	*format = GUID_WICPixelFormat64bppPRGBAHalf;
+	return S_OK;
+}
+static IWICBitmapLockVtbl half_lock_table = {lock_QueryInterface, lock_AddRef, lock_Release, lock_GetSize, lock_GetStride, lock_GetDataPointer,
+	lock_GetPixelFormat};
+static struct { IWICBitmapLockVtbl *lpVtbl; } half_lock = {&half_lock_table};
+
 static int near_value(UINT32 pixel, int shift, int expected) { int value = (int)((pixel >> shift) & 255); return value >= expected - 3 && value <= expected + 3; }
 static int pixel_is(UINT32 pixel, int red, int green, int blue)
 {
@@ -260,6 +290,21 @@ int raven_entry(void)
 	ID2D1DeviceContext_DrawImage(context, output, &part_place, &blue_half, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 		D2D1_COMPOSITE_MODE_SOURCE_OVER);
 	IUnknown_Release((IUnknown *)output);
+	/* A bitmap shared from a WIC lock of premultiplied half floats takes the lock's format, as paint.net shares its thumbnails: an
+	   orange of red 1 and green 0.5 at 5, 13. */
+	ID2D1Bitmap *shared = NULL;
+	for (UINT pixel = 0; pixel < 4; ++pixel) {
+		half_pixels[pixel * 4] = 0x3c00;
+		half_pixels[pixel * 4 + 1] = 0x3800;
+		half_pixels[pixel * 4 + 2] = 0;
+		half_pixels[pixel * 4 + 3] = 0x3c00;
+	}
+	IWICBitmapLock *halves_lock = (IWICBitmapLock *)&half_lock;
+	if (FAILED(ID2D1RenderTarget_CreateSharedBitmap(target, &IID_IWICBitmapLock, halves_lock, NULL, &shared)))
+		return 28;
+	const D2D1_RECT_F shared_place = {5, 13, 7, 15};
+	ID2D1RenderTarget_DrawBitmap(target, shared, &shared_place, 1, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, NULL);
+	ID2D1Bitmap_Release(shared);
 	if (FAILED(ID2D1RenderTarget_EndDraw(target, NULL, NULL)))
 		return 10;
 	UINT32 result[16 * 16];
@@ -283,6 +328,8 @@ int raven_entry(void)
 		return 17;
 	if (!pixel_is(result[12 * 16 + 12], 0, 0, 255) || !pixel_is(result[13 * 16 + 13], 0, 0, 255) || !pixel_is(result[12 * 16 + 14], 255, 255, 255))
 		return 27;
+	if (!pixel_is(result[13 * 16 + 5], 255, 128, 0) || !pixel_is(result[14 * 16 + 6], 255, 128, 0))
+		return 29;
 	/* A target over a texture of half floats, as paint.net draws its canvas in linear light, holds what is drawn as those floats: a
 	   clear to 0.5 leaves halves near 0x3800. */
 	HMODULE d3d11 = LoadLibraryW(L"d3d11.dll");

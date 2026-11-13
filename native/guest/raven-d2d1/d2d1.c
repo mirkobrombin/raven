@@ -317,6 +317,22 @@ static void make_byte_half(void)
 		byte_half[value] = float_half(value / 255.0f);
 }
 
+/* A half's value as the 8-bit value the pixels here hold, 0 to 1 taken to 0 to 255. */
+static BYTE half_byte(UINT16 half)
+{
+	const UINT32 exponent = (half >> 10) & 31, mantissa = half & 0x3ff;
+	union { float f; UINT32 u; } bits;
+	if (half & 0x8000 || (!exponent && !mantissa))
+		return 0;
+	if (exponent == 31)
+		return 255;
+	if (!exponent)
+		bits.f = mantissa / 16777216.0f;
+	else
+		bits.u = ((exponent - 15 + 127) << 23) | (mantissa << 13);
+	return bits.f >= 1 ? 255 : (BYTE)(bits.f * 255 + 0.5f);
+}
+
 /* ---- matrices ---- */
 static const D2D1_MATRIX_3X2_F identity = {{{1, 0, 0, 1, 0, 0}}};
 
@@ -1594,6 +1610,28 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 		FREE(copy);
 		return S_OK;
 	}
+	if (self->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+		/* Half floats, red first, eight bytes a pixel: the host keeps them as bytes, a color never past its coverage. */
+		const UINT32 width = area.right - area.left, height = area.bottom - area.top;
+		BYTE *copy = ALLOC((size_t)width * height * 4);
+		UINT32 row, column;
+		if (!copy)
+			return E_OUTOFMEMORY;
+		for (row = 0; row < height; ++row) {
+			const UINT16 *from = (const UINT16 *)((const BYTE *)data + (size_t)row * pitch);
+			BYTE *to = copy + (size_t)row * width * 4;
+			for (column = 0; column < width; ++column) {
+				const BYTE alpha = self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE ? 255 : half_byte(from[column * 4 + 3]);
+				to[column * 4] = min(half_byte(from[column * 4 + 2]), alpha);
+				to[column * 4 + 1] = min(half_byte(from[column * 4 + 1]), alpha);
+				to[column * 4 + 2] = min(half_byte(from[column * 4]), alpha);
+				to[column * 4 + 3] = alpha;
+			}
+		}
+		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
+		FREE(copy);
+		return S_OK;
+	}
 	if (self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE) {
 		/* The alpha byte means nothing: the host keeps the pixels opaque. */
 		const UINT32 width = area.right - area.left, height = area.bottom - area.top;
@@ -1647,12 +1685,12 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_P
 static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS options, D2D1_MAPPED_RECT *mapped)
 {
 	struct bitmap *self = iface;
-	const BOOL alpha = self->format.format == DXGI_FORMAT_A8_UNORM;
+	const BOOL alpha = self->format.format == DXGI_FORMAT_A8_UNORM, halves = self->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 	if (self->mapped)
 		return D2DERR_WRONG_STATE;
-	/* The mapping is laid out as the format is: four bytes a pixel, or one for an alpha-only bitmap. */
-	self->mapped_pitch = self->pixels.width * (alpha ? 1 : 4);
-	if (!(self->mapped = ALLOC((size_t)self->pixels.width * 4 * self->pixels.height)))
+	/* The mapping is laid out as the format is: four bytes a pixel, one for an alpha-only bitmap, eight for half floats. */
+	self->mapped_pitch = self->pixels.width * (alpha ? 1 : halves ? 8 : 4);
+	if (!(self->mapped = ALLOC((size_t)self->pixels.width * (halves ? 8 : 4) * self->pixels.height)))
 		return E_OUTOFMEMORY;
 	if (!(options & D2D1_MAP_OPTIONS_DISCARD)) {
 		canvas_pixels(self->surface, 0, 0, self->pixels.width, self->pixels.height, self->mapped, self->pixels.width * 4, 0);
@@ -1660,6 +1698,18 @@ static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS option
 			UINT32 index;
 			for (index = 0; index < self->pixels.width * self->pixels.height; ++index)
 				self->mapped[index] = self->mapped[index * 4 + 3];
+		} else if (halves) {
+			/* Widened from the last pixel back, so that each is read before its halves are written over it. */
+			UINT32 index = self->pixels.width * self->pixels.height;
+			UINT16 *to = (UINT16 *)self->mapped;
+			while (index--) {
+				const BYTE *from = self->mapped + (size_t)index * 4;
+				const UINT16 blue = byte_half[from[0]], green = byte_half[from[1]], red = byte_half[from[2]], coverage = byte_half[from[3]];
+				to[index * 4] = red;
+				to[index * 4 + 1] = green;
+				to[index * 4 + 2] = blue;
+				to[index * 4 + 3] = coverage;
+			}
 		}
 	}
 	self->map_options = options;
@@ -3612,6 +3662,14 @@ static HRESULT STDMETHODCALLTYPE target_CreateSharedBitmap(void *iface, REFIID r
 		bitmap_size.height = height;
 		if (properties)
 			format = properties->pixelFormat;
+		if (!properties || format.format == DXGI_FORMAT_UNKNOWN) {
+			/* Without a format of its own the bitmap takes the lock's: paint.net shares its thumbnails as premultiplied half floats. */
+			WICPixelFormatGUID locked;
+			if (SUCCEEDED(IWICBitmapLock_GetPixelFormat((IWICBitmapLock *)data, &locked)) && same_guid(&locked, &GUID_WICPixelFormat64bppPRGBAHalf))
+				format.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			else
+				format.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		}
 		if (!(bitmap = make_bitmap(self->factory, bitmap_size, format, properties ? properties->dpiX : 96, properties ? properties->dpiY : 96, 0)))
 			return E_OUTOFMEMORY;
 		if (pixels)
