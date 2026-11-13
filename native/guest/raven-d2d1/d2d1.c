@@ -6662,13 +6662,13 @@ static void effect_render(struct effect *effect, const struct link *inputs, UINT
 }
 
 /* What DrawImage draws of an effect: the part of its output that falls on the target, rendered and then drawn as a bitmap at its place,
- * through the target's transform as any image is. */
+ * through the target's transform as any image is. The corner of the part asked for goes to the offset, as for a bitmap. */
 static void draw_effect(struct target *self, struct effect *effect, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
 	D2D1_INTERPOLATION_MODE interpolation)
 {
 	struct link links[EFFECT_INPUTS];
 	const UINT32 count = effect_links(effect, links);
-	const float x = offset ? offset->x : 0, y = offset ? offset->y : 0;
+	const float x = (offset ? offset->x : 0) - (rect ? rect->left : 0), y = (offset ? offset->y : 0) - (rect ? rect->top : 0);
 	D2D1_MATRIX_3X2_F place = identity, world, back;
 	D2D1_RECT_L covered, area;
 	D2D1_POINT_2F corners[4];

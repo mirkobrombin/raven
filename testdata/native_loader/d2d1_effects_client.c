@@ -253,6 +253,13 @@ int raven_entry(void)
 	ID2D1DeviceContext_DrawImage(context, orphan_output, &orphan_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 		D2D1_COMPOSITE_MODE_SOURCE_OVER);
 	IUnknown_Release((IUnknown *)orphan_output);
+	/* The corner of the part of an image asked for goes to the offset, as paint.net places its canvas: the generator's blue half at 12, 12. */
+	const D2D1_POINT_2F part_place = {12, 12};
+	const D2D1_RECT_F blue_half = {2, 0, 4, 2};
+	output = output_of(generator);
+	ID2D1DeviceContext_DrawImage(context, output, &part_place, &blue_half, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	IUnknown_Release((IUnknown *)output);
 	if (FAILED(ID2D1RenderTarget_EndDraw(target, NULL, NULL)))
 		return 10;
 	UINT32 result[16 * 16];
@@ -274,6 +281,8 @@ int raven_entry(void)
 		return 15;
 	if (!pixel_is(result[5 * 16 + 13], 0, 0, 255))
 		return 17;
+	if (!pixel_is(result[12 * 16 + 12], 0, 0, 255) || !pixel_is(result[13 * 16 + 13], 0, 0, 255) || !pixel_is(result[12 * 16 + 14], 255, 255, 255))
+		return 27;
 	/* A target over a texture of half floats, as paint.net draws its canvas in linear light, holds what is drawn as those floats: a
 	   clear to 0.5 leaves halves near 0x3800. */
 	HMODULE d3d11 = LoadLibraryW(L"d3d11.dll");
