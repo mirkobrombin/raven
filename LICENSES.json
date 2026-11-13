@@ -133,6 +133,7 @@
         "native/guest/raven-media/avrt.c",
         "native/guest/raven-media/mfplat.c",
         "native/guest/raven-media/mmdevapi.c",
+        "native/guest/raven-media/resampledmo.c",
         "native/guest/raven-mscoree/mscoree.c",
         "native/guest/raven-mscoree/mscoree32.def",
         "native/guest/raven-mscoree/mscoree64.def",
