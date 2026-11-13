@@ -11,6 +11,8 @@
 /* One input of the shader: its pixels, row after row, and where its first pixel lies in the transform's space. */
 struct shader_image {
 	const float *pixels;
+	/* The pixels as bytes instead, when there are no floats: blue, green, red and alpha, premultiplied. */
+	const BYTE *bytes;
 	UINT32 width, height;
 	INT32 left, top;
 	/* The D2D1_FILTER the transform asked for this input, which has the value of the Direct3D filter of the same name. */
@@ -18,10 +20,11 @@ struct shader_image {
 };
 
 /* Runs `code` over the width by height pixels whose first lies at (left, top) in the transform's space, with `constants` in its first
- * constant buffer and the inputs in its textures and samplers by their order, and writes what it gives into `out`. Fails when no Direct3D 11
- * device can be had, or the shader is not one Direct3D takes. */
+ * constant buffer and the inputs in its textures and samplers by their order, and writes what it gives into `out`, four floats a pixel, or
+ * into `out_bytes` when that is given instead, four bytes a pixel as the inputs' bytes are. Fails when no Direct3D 11 device can be had,
+ * or the shader is not one Direct3D takes. */
 HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 constant_size, const struct shader_image *inputs,
-	UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, float *out);
+	UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, float *out, BYTE *out_bytes);
 
 /* The most inputs a shader is given, as Direct2D's own vertex stage passes a texture coordinate for each. */
 #define SHADER_INPUTS 8

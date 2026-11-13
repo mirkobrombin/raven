@@ -5452,7 +5452,9 @@ struct draw_info {
 	   them changes, as the checkerboard under paint.net's document does each frame. A few areas are kept, since one frame draws the
 	   document and the four strips around it from the same transform. */
 	struct kept_drawing {
+		/* The drawing as floats, or as bytes where it was drawn as bytes (see effect_bytes). */
 		float *pixels;
+		BYTE *bytes;
 		D2D1_RECT_L area;
 		GUID shader;
 		BYTE *constants;
@@ -5485,6 +5487,7 @@ static ULONG STDMETHODCALLTYPE draw_info_Release(void *iface)
 		FREE(self->constants);
 		for (index = 0; index < KEPT_DRAWINGS; ++index) {
 			FREE(self->kept[index].pixels);
+			FREE(self->kept[index].bytes);
 			FREE(self->kept[index].constants);
 		}
 		FREE(self);
@@ -6531,7 +6534,7 @@ static void draw_node_render(struct effect_graph *graph, INT32 index, const stru
 			plane_copy(kept->pixels, &drawn, out, area);
 		} else if ((result = ALLOC_UNSET(floats * sizeof(float)))) {
 			const BOOL ran = SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left,
-				drawn.top, rect_width(&drawn), rect_height(&drawn), result));
+				drawn.top, rect_width(&drawn), rect_height(&drawn), result, NULL));
 			if (ran)
 				plane_copy(result, &drawn, out, area);
 			else
@@ -6541,8 +6544,10 @@ static void draw_node_render(struct effect_graph *graph, INT32 index, const stru
 				kept = &info->kept[info->kept_next++ % KEPT_DRAWINGS];
 			if (kept) {
 				FREE(kept->pixels);
+				FREE(kept->bytes);
 				FREE(kept->constants);
 				kept->pixels = NULL;
+				kept->bytes = NULL;
 				kept->constants = NULL;
 			}
 			if (ran && kept && (!info->constant_size || (kept->constants = ALLOC_UNSET(info->constant_size)))) {
@@ -7072,6 +7077,126 @@ static void effect_render(struct effect *effect, const struct link *inputs, UINT
 		node_render(effect->graph, effect->graph->output, inputs, count, area, out, depth + 1);
 }
 
+/* An effect whose output is one draw transform over bitmaps is drawn in bytes from end to end: the bitmaps' bytes go to the shader as they
+ * are and what it gives comes back as bytes, where the floats effects pass between them would be made and unmade for every pixel of every
+ * frame, as for the effect paint.net shows its whole document through. The bytes of `area`, blue first and premultiplied, or NULL when the
+ * effect is not of that kind. */
+static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT32 link_count, const D2D1_RECT_L *area)
+{
+	struct effect_graph *graph;
+	struct graph_node *node;
+	struct draw_info *info;
+	const struct stored_shader *shader;
+	struct shader_image images[SHADER_INPUTS];
+	struct bitmap *sources[SHADER_INPUTS] = {0};
+	struct kept_drawing *kept = NULL;
+	BYTE *read[SHADER_INPUTS] = {0}, *out = NULL, *result = NULL;
+	const BYTE *drawing = NULL;
+	D2D1_RECT_L bounds, drawn, wanted[EFFECT_INPUTS];
+	UINT32 input, count, slot, row;
+	BOOL fits = TRUE;
+	effect_prepare_once(effect);
+	graph = effect->graph;
+	if (!effect->registered || !graph || graph->passthrough >= 0 || graph->output < 0 || (UINT32)graph->output >= graph->node_count)
+		return NULL;
+	node = &graph->nodes[graph->output];
+	info = node->info;
+	if (node->kind != NODE_DRAW || !info || !info->shaded || !(shader = find_shader(&info->shader)))
+		return NULL;
+	count = node_input_count(node->node);
+	if (count > SHADER_INPUTS)
+		return NULL;
+	for (input = 0; input < count && fits; ++input) {
+		struct link link;
+		fits = node_link(graph, graph->output, input, links, link_count, &link) && link.image &&
+			(sources[input] = (struct bitmap *)image_bitmap(link.image)) != NULL &&
+			sources[input]->format.format == DXGI_FORMAT_B8G8R8A8_UNORM && sources[input]->format.alphaMode == D2D1_ALPHA_MODE_PREMULTIPLIED;
+	}
+	if (fits && (out = ALLOC((size_t)rect_width(area) * rect_height(area) * 4)) &&
+		node_bounds(graph, graph->output, links, link_count, &bounds, 0)) {
+		drawn = rect_held(rect_intersect(area, &bounds));
+		for (input = 0; input < count; ++input)
+			wanted[input] = nothing;
+		if (!rect_empty(&drawn) && (!count ||
+			SUCCEEDED(((map_output_function)(*(void ***)node->transform)[TRANSFORM_MAP_OUTPUT])(node->transform, &drawn, wanted, count)))) {
+			for (input = 0; input < count; ++input) {
+				struct bitmap *source = sources[input];
+				const D2D1_RECT_L whole = {0, 0, (LONG)source->pixels.width, (LONG)source->pixels.height};
+				D2D1_RECT_L covered = nothing;
+				struct link link;
+				memset(&images[input], 0, sizeof(images[input]));
+				images[input].filter = info->filters[input];
+				node_link(graph, graph->output, input, links, link_count, &link);
+				link_bounds(&link, &covered, 1);
+				wanted[input] = rect_held(rect_intersect(&wanted[input], &covered));
+				wanted[input] = rect_intersect(&wanted[input], &whole);
+				images[input].left = wanted[input].left;
+				images[input].top = wanted[input].top;
+				if (rect_empty(&wanted[input]) || !(read[input] = ALLOC_UNSET((size_t)rect_width(&wanted[input]) * rect_height(&wanted[input]) * 4)))
+					continue;
+				if (source->dxgi) {
+					const RECT texture = {wanted[input].left, wanted[input].top, wanted[input].right, wanted[input].bottom};
+					read_texture(source, &texture);
+				}
+				share_in(source);
+				canvas_pixels(source->surface, wanted[input].left, wanted[input].top, rect_width(&wanted[input]), rect_height(&wanted[input]),
+					read[input], rect_width(&wanted[input]) * 4, 0);
+				images[input].bytes = read[input];
+				images[input].width = rect_width(&wanted[input]);
+				images[input].height = rect_height(&wanted[input]);
+			}
+			/* A transform without inputs draws the same while its shader and constants are (see draw_node_render). */
+			for (slot = 0; !count && slot < KEPT_DRAWINGS && !kept; ++slot)
+				if (info->kept[slot].bytes && !memcmp(&info->kept[slot].area, &drawn, sizeof(drawn)))
+					kept = &info->kept[slot];
+			if (kept && !memcmp(&kept->shader, &info->shader, sizeof(GUID)) && kept->size == info->constant_size &&
+				(!info->constant_size || !memcmp(kept->constants, info->constants, info->constant_size))) {
+				drawing = kept->bytes;
+			} else if ((result = ALLOC_UNSET((size_t)rect_width(&drawn) * rect_height(&drawn) * 4))) {
+				if (SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left, drawn.top,
+						rect_width(&drawn), rect_height(&drawn), NULL, result)))
+					drawing = result;
+				if (!count && !kept)
+					kept = &info->kept[info->kept_next++ % KEPT_DRAWINGS];
+				if (kept) {
+					FREE(kept->pixels);
+					FREE(kept->bytes);
+					FREE(kept->constants);
+					kept->pixels = NULL;
+					kept->bytes = NULL;
+					kept->constants = NULL;
+				}
+			}
+			for (row = 0; drawing && row < rect_height(&drawn); ++row)
+				memcpy(out + (((size_t)(drawn.top - area->top + row) * rect_width(area)) + (drawn.left - area->left)) * 4,
+					drawing + (size_t)row * rect_width(&drawn) * 4, (size_t)rect_width(&drawn) * 4);
+			if (result && !drawing) {
+				/* No device ran the shader: the floats' way says so. */
+				FREE(out);
+				out = NULL;
+			}
+			if (result && drawing && kept && (!info->constant_size || (kept->constants = ALLOC_UNSET(info->constant_size)))) {
+				if (info->constant_size)
+					memcpy(kept->constants, info->constants, info->constant_size);
+				kept->size = info->constant_size;
+				kept->shader = info->shader;
+				kept->area = drawn;
+				kept->bytes = result;
+			} else
+				FREE(result);
+		}
+	} else if (!fits) {
+		FREE(out);
+		out = NULL;
+	}
+	for (input = 0; input < SHADER_INPUTS; ++input) {
+		FREE(read[input]);
+		if (sources[input])
+			object_Release(sources[input]);
+	}
+	return out;
+}
+
 /* What DrawImage draws of an effect: the part of its output that falls on the target, rendered and then drawn as a bitmap at its place,
  * through the target's transform as any image is. The corner of the part asked for goes to the offset, as for a bitmap. */
 static void draw_effect(struct target *self, struct effect *effect, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
@@ -7116,20 +7241,26 @@ static void draw_effect(struct target *self, struct effect *effect, const D2D1_P
 		area = rect_intersect(&area, &asked);
 	}
 	area = rect_held(rect_intersect(&area, &covered));
-	if (rect_empty(&area) || !(pixels = plane_alloc(&area)))
+	if (rect_empty(&area))
 		return;
-	effect_render(effect, links, count, &area, pixels, 0);
 	size = (size_t)rect_width(&area) * rect_height(&area);
-	if ((bytes = ALLOC_UNSET(size * 4))) {
+	if (!(bytes = effect_bytes(effect, links, count, &area))) {
+		if (!(pixels = plane_alloc(&area)))
+			return;
+		effect_render(effect, links, count, &area, pixels, 0);
+		if ((bytes = ALLOC_UNSET(size * 4)))
+			for (at = 0; at < size; ++at) {
+				const float alpha = clamp01(pixels[at * 4 + 3]);
+				bytes[at * 4] = (BYTE)(min(clamp01(pixels[at * 4 + 2]), alpha) * 255 + 0.5f);
+				bytes[at * 4 + 1] = (BYTE)(min(clamp01(pixels[at * 4 + 1]), alpha) * 255 + 0.5f);
+				bytes[at * 4 + 2] = (BYTE)(min(clamp01(pixels[at * 4]), alpha) * 255 + 0.5f);
+				bytes[at * 4 + 3] = (BYTE)(alpha * 255 + 0.5f);
+			}
+		FREE(pixels);
+	}
+	if (bytes) {
 		D2D1_SIZE_U pixel_size = {rect_width(&area), rect_height(&area)};
 		D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
-		for (at = 0; at < size; ++at) {
-			const float alpha = clamp01(pixels[at * 4 + 3]);
-			bytes[at * 4] = (BYTE)(min(clamp01(pixels[at * 4 + 2]), alpha) * 255 + 0.5f);
-			bytes[at * 4 + 1] = (BYTE)(min(clamp01(pixels[at * 4 + 1]), alpha) * 255 + 0.5f);
-			bytes[at * 4 + 2] = (BYTE)(min(clamp01(pixels[at * 4]), alpha) * 255 + 0.5f);
-			bytes[at * 4 + 3] = (BYTE)(alpha * 255 + 0.5f);
-		}
 		if ((drawn = make_bitmap(self->factory, pixel_size, format, 96, 96, D2D1_BITMAP_OPTIONS_NONE))) {
 			const D2D1_RECT_F destination = {area.left + x, area.top + y, area.right + x, area.bottom + y};
 			canvas_pixels(drawn->surface, 0, 0, pixel_size.width, pixel_size.height, bytes, pixel_size.width * 4, 1);
@@ -7138,7 +7269,6 @@ static void draw_effect(struct target *self, struct effect *effect, const D2D1_P
 		}
 		FREE(bytes);
 	}
-	FREE(pixels);
 }
 
 /* The bounds of an image: a bitmap's size in device-independent pixels, then through the transform for the world bounds. */

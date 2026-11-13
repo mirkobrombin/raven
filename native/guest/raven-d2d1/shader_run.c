@@ -68,6 +68,7 @@ static struct {
 	ID3D11Texture2D *target, *staging;
 	ID3D11RenderTargetView *target_view;
 	UINT32 target_width, target_height;
+	BOOL target_bytes;
 } runner = {INIT_ONCE_STATIC_INIT};
 
 static BOOL CALLBACK runner_init(INIT_ONCE *once, void *parameter, void **context)
@@ -133,14 +134,16 @@ static ID3D11PixelShader *pixel_shader(const BYTE *code, UINT32 size)
 	return shader;
 }
 
-/* A texture of floats holding an input's pixels, with its view; an empty input is one transparent pixel. */
+/* A texture holding an input's pixels, of floats or of bytes as the input has them, with its view; an empty input is one transparent
+ * pixel. */
 static BOOL input_texture(const struct shader_image *image, ID3D11Texture2D **texture, ID3D11ShaderResourceView **view)
 {
 	static const float clear[4];
-	const BOOL empty = !image->pixels || !image->width || !image->height;
-	D3D11_TEXTURE2D_DESC desc = {empty ? 1 : image->width, empty ? 1 : image->height, 1, 1, DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0},
-		D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0, 0};
-	D3D11_SUBRESOURCE_DATA data = {empty ? clear : image->pixels, desc.Width * sizeof(float) * 4, 0};
+	const BOOL empty = (!image->pixels && !image->bytes) || !image->width || !image->height, bytes = !empty && !image->pixels;
+	D3D11_TEXTURE2D_DESC desc = {empty ? 1 : image->width, empty ? 1 : image->height, 1, 1,
+		bytes ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0}, D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0, 0};
+	D3D11_SUBRESOURCE_DATA data = {empty ? (const void *)clear : bytes ? (const void *)image->bytes : (const void *)image->pixels,
+		desc.Width * (bytes ? 4 : sizeof(float) * 4), 0};
 	*texture = NULL;
 	*view = NULL;
 	if (FAILED(ID3D11Device_CreateTexture2D(runner.device, &desc, &data, texture)))
@@ -154,7 +157,7 @@ static BOOL input_texture(const struct shader_image *image, ID3D11Texture2D **te
 }
 
 HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 constant_size, const struct shader_image *inputs,
-	UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, float *out)
+	UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, float *out, BYTE *out_bytes)
 {
 	ID3D11Texture2D *textures[SHADER_INPUTS] = {0}, *target, *staging;
 	ID3D11ShaderResourceView *views[SHADER_INPUTS] = {0};
@@ -162,14 +165,16 @@ HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 
 	ID3D11RenderTargetView *target_view;
 	ID3D11Buffer *constant_buffer = NULL;
 	ID3D11PixelShader *shader;
-	D3D11_TEXTURE2D_DESC target_desc = {width, height, 1, 1, DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
-		D3D11_BIND_RENDER_TARGET, 0, 0};
+	const BOOL bytes = !out;
+	const size_t pixel = bytes ? 4 : sizeof(float) * 4;
+	D3D11_TEXTURE2D_DESC target_desc = {width, height, 1, 1, bytes ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0},
+		D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, 0};
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	D3D11_VIEWPORT viewport = {0, 0, (float)width, (float)height, 0, 1};
 	float area[4 * (1 + SHADER_INPUTS)] = {(float)left, (float)top, (float)width, (float)height};
 	HRESULT result = E_FAIL;
 	UINT32 index, row;
-	if (!code || !size || !out || !width || !height || count > SHADER_INPUTS)
+	if (!code || !size || (!out && !out_bytes) || !width || !height || count > SHADER_INPUTS)
 		return E_INVALIDARG;
 	InitOnceExecuteOnce(&runner.once, runner_init, NULL, NULL);
 	EnterCriticalSection(&runner.lock);
@@ -201,7 +206,7 @@ HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 
 			goto done;
 		result = E_FAIL;
 	}
-	if (!runner.target || runner.target_width != width || runner.target_height != height) {
+	if (!runner.target || runner.target_width != width || runner.target_height != height || runner.target_bytes != bytes) {
 		if (runner.target_view)
 			ID3D11RenderTargetView_Release(runner.target_view);
 		if (runner.target)
@@ -220,6 +225,7 @@ HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 
 			goto done;
 		runner.target_width = width;
 		runner.target_height = height;
+		runner.target_bytes = bytes;
 	}
 	target = runner.target;
 	target_view = runner.target_view;
@@ -243,7 +249,8 @@ HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 
 	if (FAILED(ID3D11DeviceContext_Map(runner.context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &mapped)))
 		goto done;
 	for (row = 0; row < height; ++row)
-		memcpy(out + (size_t)row * width * 4, (const BYTE *)mapped.pData + (size_t)row * mapped.RowPitch, (size_t)width * sizeof(float) * 4);
+		memcpy((bytes ? out_bytes : (BYTE *)out) + (size_t)row * width * pixel, (const BYTE *)mapped.pData + (size_t)row * mapped.RowPitch,
+			(size_t)width * pixel);
 	ID3D11DeviceContext_Unmap(runner.context, (ID3D11Resource *)staging, 0);
 	result = S_OK;
 done:

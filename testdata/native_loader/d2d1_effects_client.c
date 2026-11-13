@@ -617,6 +617,63 @@ int raven_entry(void)
 	if (GetTickCount() - drawing_began > 300)
 		return 53;
 	IUnknown_Release((IUnknown *)output);
+	/* An effect that is one transform over a bitmap is drawn from the bitmap's bytes to the target's, with no floats made and unmade
+	   for each pixel: paint.net shows its whole document through such an effect every frame. Twenty frames of a picture of a thousand
+	   pixels a side take well under the time they take over a bitmap whose colours are not premultiplied, which goes through the
+	   floats, and the red comes out the blue the swap makes of it either way. */
+	static UINT32 wide_source[1024 * 1024];
+	IWICBitmap *wide_pixels = NULL;
+	ID2D1RenderTarget *wide_target = NULL;
+	ID2D1DeviceContext *wide_context = NULL;
+	ID2D1Bitmap *wide[2] = {NULL, NULL};
+	ID2D1Effect *wide_swap = NULL;
+	IWICBitmapLock *wide_lock = NULL;
+	WICRect wide_area = {0, 0, 1024, 1024};
+	const D2D1_SIZE_U wide_size = {1024, 1024};
+	const D2D1_BITMAP_PROPERTIES straight_properties = {{DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_STRAIGHT}, 96, 96};
+	UINT wide_bytes = 0;
+	BYTE *wide_drawn = NULL;
+	DWORD wide_took[2] = {0, 0};
+	for (UINT at = 0; at < 1024 * 1024; ++at)
+		wide_source[at] = 0xffff0000;
+	if (FAILED(IWICImagingFactory_CreateBitmap(imaging, 1024, 1024, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &wide_pixels)) ||
+		FAILED(ID2D1Factory_CreateWicBitmapRenderTarget((ID2D1Factory *)factory, wide_pixels, &properties, &wide_target)) ||
+		FAILED(ID2D1RenderTarget_QueryInterface(wide_target, &IID_ID2D1DeviceContext, (void **)&wide_context)) ||
+		FAILED(ID2D1RenderTarget_CreateBitmap(wide_target, wide_size, wide_source, 4096, &bitmap_properties, &wide[0])) ||
+		FAILED(ID2D1RenderTarget_CreateBitmap(wide_target, wide_size, wide_source, 4096, &straight_properties, &wide[1])) ||
+		FAILED(ID2D1DeviceContext_CreateEffect(wide_context, &swap_effect, &wide_swap)))
+		return 54;
+	output = output_of(wide_swap);
+	for (UINT kind = 0; kind < 2; ++kind) {
+		DWORD wide_began = 0;
+		((set_input)(*(void ***)wide_swap)[14])(wide_swap, 0, (ID2D1Image *)wide[kind], TRUE);
+		for (UINT frame = 0; frame < 21; ++frame) {
+			if (frame == 1)
+				wide_began = GetTickCount();
+			ID2D1RenderTarget_BeginDraw(wide_target);
+			ID2D1DeviceContext_DrawImage(wide_context, output, NULL, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+				D2D1_COMPOSITE_MODE_SOURCE_OVER);
+			if (FAILED(ID2D1RenderTarget_EndDraw(wide_target, NULL, NULL)))
+				return 54;
+		}
+		wide_took[kind] = GetTickCount() - wide_began;
+		if (FAILED(IWICBitmap_Lock(wide_pixels, &wide_area, WICBitmapLockRead, &wide_lock)) ||
+			FAILED(IWICBitmapLock_GetDataPointer(wide_lock, &wide_bytes, &wide_drawn)) || wide_bytes < 1024 * 1024 * 4)
+			return 56;
+		if (!pixel_is(((const UINT32 *)wide_drawn)[512 * 1024 + 512], 0, 0, 255) ||
+			!pixel_is(((const UINT32 *)wide_drawn)[1023 * 1024 + 1023], 0, 0, 255))
+			return 57;
+		IWICBitmapLock_Release(wide_lock);
+	}
+	if (wide_took[0] * 4 > wide_took[1] * 3)
+		return 55;
+	IUnknown_Release((IUnknown *)output);
+	IUnknown_Release((IUnknown *)wide_swap);
+	ID2D1Bitmap_Release(wide[0]);
+	ID2D1Bitmap_Release(wide[1]);
+	IUnknown_Release((IUnknown *)wide_context);
+	ID2D1RenderTarget_Release(wide_target);
+	IWICBitmap_Release(wide_pixels);
 	/* Effects chained deep still draw: paint.net's blur is dozens of them, each the input of the next. */
 	ID2D1Effect *chained[40];
 	ID2D1Image *last = (ID2D1Image *)opaque;
