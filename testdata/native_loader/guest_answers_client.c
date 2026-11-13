@@ -72,5 +72,17 @@ int raven_entry(void)
 		return 14;
 	if (GetTickCount64() - unwinding > 700)
 		return 12;
+	/* The same through ntdll, where the .NET runtime takes it from: 15 says it took too long there. */
+	PEXCEPTION_ROUTINE (NTAPI *unwind)(DWORD, DWORD64, DWORD64, PRUNTIME_FUNCTION, PCONTEXT, PVOID *, PDWORD64, PKNONVOLATILE_CONTEXT_POINTERS) =
+		(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlVirtualUnwind");
+	if (!unwind)
+		return 16;
+	const ULONGLONG again = GetTickCount64();
+	for (int index = 0; index < 200000; ++index) {
+		walked = here;
+		unwind(UNW_FLAG_NHANDLER, base, walked.Rip, function, &walked, &handler_data, &establisher, NULL);
+	}
+	if (walked.Rsp <= here.Rsp || GetTickCount64() - again > 700)
+		return 15;
 	return 0;
 }
