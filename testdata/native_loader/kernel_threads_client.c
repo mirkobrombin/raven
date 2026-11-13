@@ -160,6 +160,31 @@ static int critical_options(void)
 	return 0;
 }
 
+/* Two threads that pass a turn between them through a condition variable, beside one that computes and never waits. */
+static SRWLOCK turn_lock=SRWLOCK_INIT;
+static CONDITION_VARIABLE turn_changed=CONDITION_VARIABLE_INIT;
+static volatile LONG turn,computing_ends;
+
+static DWORD WINAPI computing(LPVOID parameter)
+{
+	volatile unsigned count=0;
+	while(!computing_ends) ++count;
+	return 0;
+}
+
+static DWORD WINAPI answering(LPVOID parameter)
+{
+	for(;;) {
+		AcquireSRWLockExclusive(&turn_lock);
+		while(turn==0) SleepConditionVariableSRW(&turn_changed,&turn_lock,INFINITE,0);
+		const LONG asked=turn;
+		turn=0;
+		ReleaseSRWLockExclusive(&turn_lock);
+		WakeAllConditionVariable(&turn_changed);
+		if(asked==2) return 0;
+	}
+}
+
 int raven_entry(void)
 {
 	const int options = critical_options();
@@ -299,5 +324,30 @@ int raven_entry(void)
 		CloseHandle(crowd[at]);
 	}
 	CloseHandle(crowd_gate);
+	/* A thread that waits and wakes finds a free processor on Windows, whatever another thread computes meanwhile: two hundred turns
+	   passed to and fro take a moment, not the time of a slice of the computing thread each. A renderer's workers answer the thread
+	   that draws this way. */
+	HANDLE computes=CreateThread(0,0,computing,0,0,0),answers=CreateThread(0,0,answering,0,0,0);
+	CHECK(103,computes && answers);
+	Sleep(20);
+	const DWORD passing=GetTickCount();
+	for(int round=0;round<200;++round) {
+		AcquireSRWLockExclusive(&turn_lock);
+		turn=1;
+		ReleaseSRWLockExclusive(&turn_lock);
+		WakeAllConditionVariable(&turn_changed);
+		AcquireSRWLockExclusive(&turn_lock);
+		while(turn==1) SleepConditionVariableSRW(&turn_changed,&turn_lock,INFINITE,0);
+		ReleaseSRWLockExclusive(&turn_lock);
+	}
+	CHECK(104,GetTickCount()-passing<500);
+	AcquireSRWLockExclusive(&turn_lock);
+	turn=2;
+	ReleaseSRWLockExclusive(&turn_lock);
+	WakeAllConditionVariable(&turn_changed);
+	computing_ends=1;
+	CHECK(105,WaitForSingleObject(answers,5000)==WAIT_OBJECT_0 && WaitForSingleObject(computes,5000)==WAIT_OBJECT_0);
+	CloseHandle(answers);
+	CloseHandle(computes);
 	return 0;
 }

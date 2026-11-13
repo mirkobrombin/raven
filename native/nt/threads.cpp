@@ -45,7 +45,11 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 	long slice = 5;
 	if (const char *text = std::getenv("RAVEN_SLICE_MS"))
 		slice = std::strtol(text, nullptr, 10);
-	process.set_time_slicing(std::chrono::milliseconds(slice < 0 ? 0 : slice), [this] { return !tearing_down && live() > 1; }, [this] { yield(); });
+	process.set_time_slicing(std::chrono::milliseconds(slice < 0 ? 0 : slice), [this] { return !tearing_down && live() > 1; }, [this] {
+		running->spent_slice = true;
+		running->set_aside = std::chrono::steady_clock::now();
+		yield();
+	});
 	wake = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 	if (wake < 0)
 		throw std::runtime_error("cannot create the scheduler's wake descriptor");
@@ -335,20 +339,29 @@ std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current)
 	for (size_t index = 0; index < count; ++index)
 		if (threads[index].get() == running)
 			start = index;
+	// A thread that computes until its slice is taken away, as a compiler working in the background, shares one processor here with
+	// the threads that draw and answer the pointer. Those go first: the computing thread runs when none of them can, or once it has
+	// been kept waiting for a few slices.
+	std::shared_ptr<GuestThread> computing;
 	for (size_t step = 1; step <= count; ++step) {
 		const auto &thread = threads[(start + step) % count];
 		if (thread.get() == running && !include_current)
 			continue;
 		if (thread->state == GuestThread::State::done || thread->suspend_count > 0)
 			continue;
-		if (thread->state == GuestThread::State::ready)
-			return thread;
+		if (thread->state == GuestThread::State::ready) {
+			if (!thread->spent_slice || now - thread->set_aside >= std::chrono::milliseconds(30))
+				return thread;
+			if (!computing)
+				computing = thread;
+			continue;
+		}
 		if (thread->state == GuestThread::State::waiting) {
 			if ((thread->ready && thread->ready()) || (thread->wake && now >= *thread->wake))
 				return thread;
 		}
 	}
-	return nullptr;
+	return computing;
 }
 
 void NativeThreads::check_pending()
@@ -514,6 +527,7 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	me.ready = std::move(ready);
 	me.wake = wake;
 	me.state = GuestThread::State::waiting;
+	me.spent_slice = false;
 	// The condition reads the waiting frame: it goes with the wait, also when an error or the end of the process leaves the frame. A thread
 	// that leaves it that way runs on, unwinding: left waiting, with nothing that could wake it, the teardown would never come back to it.
 	struct Leave {

@@ -53,6 +53,10 @@ struct GuestThread {
 	// the next one. Each is taken by the wait it ends.
 	bool alerted = false, alerted_by_id = false;
 	int priority = 0;
+	// Whether the thread last gave the processor up only because its time slice ended, and when: such a thread waits behind those
+	// that wait and wake, which on Windows find a free processor at once, but never longer than a few slices.
+	bool spent_slice = false;
+	std::chrono::steady_clock::time_point set_aside;
 	// Background processing mode, which only the thread itself enters and leaves; meanwhile it reports idle priority.
 	bool background = false;
 	std::shared_ptr<AccessToken> impersonation;
