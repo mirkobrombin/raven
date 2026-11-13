@@ -1615,6 +1615,34 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 		FREE(copy);
 		return S_OK;
 	}
+	if (self->format.format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+		/* Floats, red first, sixteen bytes a pixel, kept as bytes like the halves below. */
+		const UINT32 width = area.right - area.left, height = area.bottom - area.top;
+		BYTE *copy = ALLOC((size_t)width * height * 4);
+		UINT32 row, column, channel;
+		if (!copy)
+			return E_OUTOFMEMORY;
+		for (row = 0; row < height; ++row) {
+			const float *from = (const float *)((const BYTE *)data + (size_t)row * pitch);
+			BYTE *to = copy + (size_t)row * width * 4;
+			for (column = 0; column < width; ++column) {
+				BYTE value[4];
+				for (channel = 0; channel < 4; ++channel) {
+					const float part = from[column * 4 + channel];
+					value[channel] = part <= 0 ? 0 : part >= 1 ? 255 : (BYTE)(part * 255 + 0.5f);
+				}
+				if (self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE)
+					value[3] = 255;
+				to[column * 4] = min(value[2], value[3]);
+				to[column * 4 + 1] = min(value[1], value[3]);
+				to[column * 4 + 2] = min(value[0], value[3]);
+				to[column * 4 + 3] = value[3];
+			}
+		}
+		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
+		FREE(copy);
+		return S_OK;
+	}
 	if (self->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
 		/* Half floats, red first, eight bytes a pixel: the host keeps them as bytes, a color never past its coverage. */
 		const UINT32 width = area.right - area.left, height = area.bottom - area.top;
@@ -1691,11 +1719,13 @@ static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS option
 {
 	struct bitmap *self = iface;
 	const BOOL alpha = self->format.format == DXGI_FORMAT_A8_UNORM, halves = self->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+	const BOOL floats = self->format.format == DXGI_FORMAT_R32G32B32A32_FLOAT;
 	if (self->mapped)
 		return D2DERR_WRONG_STATE;
-	/* The mapping is laid out as the format is: four bytes a pixel, one for an alpha-only bitmap, eight for half floats. */
-	self->mapped_pitch = self->pixels.width * (alpha ? 1 : halves ? 8 : 4);
-	if (!(self->mapped = ALLOC((size_t)self->pixels.width * (halves ? 8 : 4) * self->pixels.height)))
+	/* The mapping is laid out as the format is: four bytes a pixel, one for an alpha-only bitmap, eight for half floats, sixteen for
+	   floats. */
+	self->mapped_pitch = self->pixels.width * (alpha ? 1 : halves ? 8 : floats ? 16 : 4);
+	if (!(self->mapped = ALLOC((size_t)self->pixels.width * (floats ? 16 : halves ? 8 : 4) * self->pixels.height)))
 		return E_OUTOFMEMORY;
 	if (!(options & D2D1_MAP_OPTIONS_DISCARD)) {
 		canvas_pixels(self->surface, 0, 0, self->pixels.width, self->pixels.height, self->mapped, self->pixels.width * 4, 0);
@@ -1710,6 +1740,17 @@ static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS option
 			while (index--) {
 				const BYTE *from = self->mapped + (size_t)index * 4;
 				const UINT16 blue = byte_half[from[0]], green = byte_half[from[1]], red = byte_half[from[2]], coverage = byte_half[from[3]];
+				to[index * 4] = red;
+				to[index * 4 + 1] = green;
+				to[index * 4 + 2] = blue;
+				to[index * 4 + 3] = coverage;
+			}
+		} else if (floats) {
+			UINT32 index = self->pixels.width * self->pixels.height;
+			float *to = (float *)self->mapped;
+			while (index--) {
+				const BYTE *from = self->mapped + (size_t)index * 4;
+				const float blue = from[0] / 255.0f, green = from[1] / 255.0f, red = from[2] / 255.0f, coverage = from[3] / 255.0f;
 				to[index * 4] = red;
 				to[index * 4 + 1] = green;
 				to[index * 4 + 2] = blue;
@@ -7237,6 +7278,12 @@ static HRESULT STDMETHODCALLTYPE factory_CreateWicBitmapRenderTarget(void *iface
 	size.height = height;
 	target->wic = wic;
 	IWICBitmap_AddRef(wic);
+	/* A target that names no format takes the WIC bitmap's: floats, halves or alpha alone, else BGRA. */
+	if (!properties || properties->pixelFormat.format == DXGI_FORMAT_UNKNOWN) {
+		const UINT depth = wic_depth(wic);
+		target->format.format = depth == 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : depth == 8 ? DXGI_FORMAT_R16G16B16A16_FLOAT :
+			depth == 1 ? DXGI_FORMAT_A8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+	}
 	if (FAILED(hr = replace_surface(target, size))) {
 		target_Release(target);
 		return hr;

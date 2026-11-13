@@ -477,6 +477,25 @@ int raven_entry(void)
 	IWICBitmapLock_Release(float_lock);
 	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)))
 		return 35;
+	/* The target's own bitmap is of floats too: mapped, it shows the green as sixteen bytes a pixel. */
+	ID2D1DeviceContext *float_context = NULL;
+	ID2D1Image *float_image = NULL;
+	ID2D1Bitmap1 *float_bitmap = NULL;
+	D2D1_MAPPED_RECT float_map = {0, NULL};
+	if (FAILED(ID2D1RenderTarget_QueryInterface(float_target, &IID_ID2D1DeviceContext, (void **)&float_context)))
+		return 37;
+	ID2D1DeviceContext_GetTarget(float_context, &float_image);
+	if (!float_image || FAILED(IUnknown_QueryInterface((IUnknown *)float_image, &IID_ID2D1Bitmap1, (void **)&float_bitmap)))
+		return 37;
+	if (FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || float_map.pitch < 8 * 16 || !float_map.bits)
+		return 38;
+	drawn_floats = (const float *)float_map.bits;
+	if (!(drawn_floats[0] <= 0.02f) || !(drawn_floats[1] >= 0.98f) || !(drawn_floats[3] >= 0.98f))
+		return 39;
+	ID2D1Bitmap1_Unmap(float_bitmap);
+	IUnknown_Release((IUnknown *)float_bitmap);
+	IUnknown_Release((IUnknown *)float_image);
+	IUnknown_Release((IUnknown *)float_context);
 	ID2D1RenderTarget_Release(float_target);
 	IWICBitmap_Release(float_pixels);
 	IUnknown_Release((IUnknown *)red_brush);
