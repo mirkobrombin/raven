@@ -15,6 +15,7 @@ int main(int argc,char **argv)
 	try {
 		check(argc==3 || argc==4,"bootstrap and dialog frame fixture required");
 		const bool destroyed=argc==4 && std::string_view(argv[3])=="destroyed";
+		const bool clipped=argc==4 && std::string_view(argv[3])=="clipped";
 		std::ifstream file(argv[2],std::ios::binary | std::ios::ate);
 		check(bool(file) && file.tellg()>0,"cannot read dialog frame fixture");
 		std::vector<uint8_t> bytes(size_t(file.tellg())); file.seekg(0);
@@ -44,6 +45,17 @@ int main(int argc,char **argv)
 			expect(10,30,0xffffff,"destroyed outer edge");
 			expect(12,30,0xffffff,"destroyed frame band");
 			expect(30,30,0xffffff,"destroyed client area");
+			return 0;
+		}
+		// A frame shows only where its parent's client area is: the parent here ends at 40,30.
+		if (clipped) {
+			expect(10,20,light,"outer left edge inside the parent");
+			expect(30,10,light,"outer top edge inside the parent");
+			expect(12,20,face,"frame band inside the parent");
+			expect(10,40,0xffffff,"outer left edge below the parent");
+			expect(50,10,0xffffff,"outer top edge right of the parent");
+			expect(69,30,0xffffff,"outer right edge");
+			expect(30,49,0xffffff,"outer bottom edge");
 			return 0;
 		}
 		expect(10,30,light,"outer left edge");

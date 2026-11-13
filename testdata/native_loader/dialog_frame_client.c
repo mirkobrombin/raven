@@ -18,6 +18,9 @@ int raven_entry(void)
 #ifdef DESTROYED_FRAME
 	/* Inside a client that clips its children, as an MDI client holds its pages. */
 	HWND holder=CreateWindowExW(0,definition.lpszClassName,L"",WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN,0,0,120,80,window,NULL,definition.hInstance,NULL);
+#elif defined(CLIPPED_FRAME)
+	/* Inside a parent smaller than the child, as a scrolled form holds controls past its edge. */
+	HWND holder=CreateWindowExW(0,definition.lpszClassName,L"",WS_CHILD|WS_VISIBLE,0,0,40,30,window,NULL,definition.hInstance,NULL);
 #else
 	HWND holder=window;
 #endif

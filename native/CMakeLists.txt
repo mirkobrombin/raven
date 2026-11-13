@@ -1294,6 +1294,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(dialog_frame_test destroyed_frame_fixture)
             add_test(NAME native_destroyed_child_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${DESTROYED_FRAME_FIXTURE} destroyed)
             set_tests_properties(native_destroyed_child_frame PROPERTIES TIMEOUT 15)
+            set(CLIPPED_FRAME_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/clipped-frame.exe)
+            add_custom_command(OUTPUT ${CLIPPED_FRAME_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -DCLIPPED_FRAME
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${CLIPPED_FRAME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c VERBATIM)
+            add_custom_target(clipped_frame_fixture ALL DEPENDS ${CLIPPED_FRAME_FIXTURE})
+            add_dependencies(dialog_frame_test clipped_frame_fixture)
+            add_test(NAME native_clipped_child_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${CLIPPED_FRAME_FIXTURE} clipped)
+            set_tests_properties(native_clipped_child_frame PROPERTIES TIMEOUT 15)
             set(BUTTON_CORNER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/button-corner.exe)
             add_custom_command(OUTPUT ${BUTTON_CORNER_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
