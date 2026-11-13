@@ -232,11 +232,12 @@ def main():
         # The Direct2D component: Raven code on the public headers; surfaces live with the host and are drawn with Skia through ravenhost.dll,
         # text comes from the DirectWrite component and pictures from the imaging component.
         d2d1_support = repo / "native/guest/raven-d2d1"
-        d2d1_objects = [objects / "d2d1.o", objects / "d2d1_crt.o"]
+        d2d1_objects = [objects / "d2d1.o", objects / "d2d1_shader_run.o", objects / "d2d1_crt.o"]
         d2d1_flags = ["-O2", "-Wall", "-Wno-unused-function", "-Wno-unused-variable", "-ffreestanding", "-fno-builtin", "-fno-math-errno",
                       f"-ffile-prefix-map={repo}=raven"]
         run([triple + "-gcc", "-c", *d2d1_flags, "-I" + str(d2d1_support), d2d1_support / "d2d1.c", "-o", d2d1_objects[0]])
-        run([triple + "-gcc", "-c", *d2d1_flags, repo / "native/guest/raven-dwrite/crt.c", "-o", d2d1_objects[1]])
+        run([triple + "-gcc", "-c", *d2d1_flags, d2d1_support / "shader_run.c", "-o", d2d1_objects[1]])
+        run([triple + "-gcc", "-c", *d2d1_flags, repo / "native/guest/raven-dwrite/crt.c", "-o", d2d1_objects[2]])
         # Office binds D2D1CreateFactory by number, as ordinal 1 of the system library.
         (output / "raven-d2d1.def").write_text("NAME raven-d2d1.dll\nEXPORTS\nD2D1CreateFactory @1\n" + "".join(name + "\n" for name in (
             "D2D1ComputeMaximumScaleFactor", "D2D1ConvertColorSpace", "D2D1CreateDevice", "D2D1CreateDeviceContext",

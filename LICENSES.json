@@ -95,6 +95,8 @@
         "native/guest/raven-crt/ucrtbase_vc2022.c",
         "native/guest/raven-d2d1/d2d1.c",
         "native/guest/raven-d2d1/d2d1_tables.h",
+        "native/guest/raven-d2d1/shader_run.c",
+        "native/guest/raven-d2d1/shader_run.h",
         "native/guest/raven-d3d10/d3d10_1.c",
         "native/guest/raven-d3dcompiler/d3dcompiler.c",
         "native/guest/raven-d3dcompiler/ravenhost32.def",

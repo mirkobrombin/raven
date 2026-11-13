@@ -4179,6 +4179,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(d2d1_context_fixture ALL DEPENDS ${d2d1_context_client})
                         add_test(NAME native_d2d1_context_x64 COMMAND raven --run-process --execution=native ${d2d1_context_client})
                         set_tests_properties(native_d2d1_context_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        # Effects run their pixel shaders on a Direct3D 11 device, which DXVK gives over a Vulkan driver.
+                        set(d2d1_effects_client ${CMAKE_CURRENT_BINARY_DIR}/d2d1-effects64.exe)
+                        add_custom_command(OUTPUT ${d2d1_effects_client}
+                            COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                                -o ${d2d1_effects_client} ${LOADER_SOURCES}/d2d1_effects_client.c -lole32 -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/d2d1_effects_client.c VERBATIM)
+                        add_custom_target(d2d1_effects_fixture ALL DEPENDS ${d2d1_effects_client})
+                        if(RAVEN_DXVK_PE64_DIR AND EXISTS ${RAVEN_DXVK_PE64_DIR}/d3d11.dll)
+                            set(d2d1_effects_environment RAVEN_D3D_DIRECTORY=${RAVEN_DXVK_PE64_DIR})
+                            if(RAVEN_LAVAPIPE_ICD)
+                                list(APPEND d2d1_effects_environment VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD})
+                            endif()
+                            add_test(NAME native_d2d1_effects_x64 COMMAND raven --run-process --execution=native ${d2d1_effects_client})
+                            set_tests_properties(native_d2d1_effects_x64 PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                                ENVIRONMENT "${d2d1_effects_environment}")
+                        endif()
                     endif()
                     # mlang comes with the installer components, whose import library the client links against.
                     if(width EQUAL 64)
