@@ -40,11 +40,12 @@
 #define E_OUT_OF_ORDER ((HRESULT)0x88890007L)
 #define E_UNSUPPORTED_FORMAT ((HRESULT)0x88890008L)
 #define E_INVALID_SIZE ((HRESULT)0x88890009L)
-#define E_NOT_STOPPED ((HRESULT)0x8889000BL)
-#define E_BUFFER_PENDING ((HRESULT)0x8889000FL)
+#define E_NOT_STOPPED ((HRESULT)0x88890005L)
+#define E_BUFFER_PENDING ((HRESULT)0x8889000BL)
 #define E_EVENTHANDLE_NOT_EXPECTED ((HRESULT)0x88890011L)
 #define E_EXCLUSIVE_NOT_ALLOWED ((HRESULT)0x8889000EL)
 #define E_EVENTHANDLE_NOT_SET ((HRESULT)0x88890014L)
+#define E_INVALID_DEVICE_PERIOD ((HRESULT)0x88890020L)
 #define E_NOT_FOUND ((HRESULT)0x80070490L)
 #define STREAM_EVENTS 0x00040000
 #define STREAM_LOOPBACK 0x00020000
@@ -146,7 +147,8 @@ static int sample_kind(const WAVEFORMATEX *format)
 
 static UINT32 format_size(const WAVEFORMATEX *format)
 {
-	return format->wFormatTag == WAVE_FORMAT_PCM ? sizeof(WAVEFORMATEX) : sizeof(WAVEFORMATEX) + format->cbSize;
+	/* What the tag has, not what cbSize claims, which a program may leave wild. */
+	return format->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? sizeof(WAVEFORMATEXTENSIBLE) : sizeof(WAVEFORMATEX);
 }
 
 /* ---- The volumes: the session's and the endpoint's are shared by every stream of the process. ---- */
@@ -311,7 +313,7 @@ static HRESULT WINAPI session_query(IAudioSessionControl2 *iface, REFIID iid, vo
 
 static HRESULT WINAPI simple_set(ISimpleAudioVolume *iface, float level, LPCGUID context)
 {
-	if (level < 0.0f || level > 1.0f)
+	if (!(level >= 0.0f && level <= 1.0f))
 		return E_INVALIDARG;
 	session_level = level;
 	return S_OK;
@@ -475,7 +477,7 @@ static HRESULT WINAPI endpoint_channels(IAudioEndpointVolume *iface, UINT *count
 
 static HRESULT WINAPI endpoint_set_level(IAudioEndpointVolume *iface, float level, LPCGUID context)
 {
-	if (level < -96.0f || level > 0.0f)
+	if (!(level >= -96.0f && level <= 0.0f))
 		return E_INVALIDARG;
 	endpoint_level = scalar_of(level);
 	return S_OK;
@@ -483,7 +485,7 @@ static HRESULT WINAPI endpoint_set_level(IAudioEndpointVolume *iface, float leve
 
 static HRESULT WINAPI endpoint_set_scalar(IAudioEndpointVolume *iface, float level, LPCGUID context)
 {
-	if (level < 0.0f || level > 1.0f)
+	if (!(level >= 0.0f && level <= 1.0f))
 		return E_INVALIDARG;
 	endpoint_level = level;
 	return S_OK;
@@ -765,11 +767,15 @@ static HRESULT open_stream(struct stream *self, DWORD flags, REFERENCE_TIME dura
 		return E_UNSUPPORTED_FORMAT;
 	if (flags & STREAM_LOOPBACK)
 		return E_WRONG_ENDPOINT_TYPE;
+	/* A minute is more than a program asks for, and keeps the count of frames in 32 bits. */
+	if (duration < 0 || duration > 600000000)
+		return E_INVALIDARG;
 	const UINT32 size = format_size(format);
 	self->format = ALLOC(size);
 	if (!self->format)
 		return E_OUTOFMEMORY;
 	memcpy(self->format, format, size);
+	self->format->cbSize = (WORD)(size - sizeof(WAVEFORMATEX));
 	self->kind = kind;
 	self->flags = flags;
 	/* The buffer holds what was asked for, and at least two periods. */
@@ -981,6 +987,8 @@ static HRESULT WINAPI client_service(IAudioClient3 *iface, REFIID iid, void **ou
 	*out = NULL;
 	if (!self->initialized)
 		return E_NOT_INITIALIZED;
+	if (same(iid, &IID_IAudioCaptureClient))
+		return E_WRONG_ENDPOINT_TYPE;
 	if (same(iid, &IID_IAudioRenderClient))
 		*out = &self->render;
 	else if (same(iid, &IID_IAudioClock))
@@ -1042,6 +1050,10 @@ static HRESULT WINAPI client_current_period(IAudioClient3 *iface, WAVEFORMATEX *
 
 static HRESULT WINAPI client_shared(IAudioClient3 *iface, DWORD flags, UINT32 period, const WAVEFORMATEX *format, LPCGUID session_guid)
 {
+	if (!format)
+		return E_POINTER;
+	if (period != format->nSamplesPerSec / 100)
+		return E_INVALID_DEVICE_PERIOD;
 	return client_initialize(iface, AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, format, session_guid);
 }
 
@@ -1099,7 +1111,7 @@ static HRESULT WINAPI render_commit(IAudioRenderClient *iface, UINT32 frames, DW
 	EnterCriticalSection(&self->lock);
 	HRESULT result = S_OK;
 	if (frames > self->pending)
-		result = E_INVALID_SIZE;
+		result = self->pending ? E_INVALID_SIZE : E_OUT_OF_ORDER;
 	else if (frames) {
 		const UINT32 size = frames * self->format->nBlockAlign;
 		struct block *block = ALLOC(sizeof(*block) + size);
@@ -1127,7 +1139,9 @@ static HRESULT WINAPI render_commit(IAudioRenderClient *iface, UINT32 frames, DW
 			}
 		}
 	}
-	self->pending = 0;
+	/* A size that is too large leaves the buffer with the program, which may release it again. */
+	if (result != E_INVALID_SIZE)
+		self->pending = 0;
 	LeaveCriticalSection(&self->lock);
 	return result;
 }
@@ -1192,7 +1206,7 @@ static HRESULT WINAPI levels_count(IAudioStreamVolume *iface, UINT32 *count)
 static HRESULT WINAPI levels_set(IAudioStreamVolume *iface, UINT32 channel, const float level)
 {
 	struct stream *self = OWNER(struct stream, volume, iface);
-	if (channel >= self->format->nChannels || level < 0.0f || level > 1.0f)
+	if (channel >= self->format->nChannels || !(level >= 0.0f && level <= 1.0f))
 		return E_INVALIDARG;
 	self->channel_levels[channel] = level;
 	return S_OK;
@@ -1217,7 +1231,7 @@ static HRESULT WINAPI levels_set_all(IAudioStreamVolume *iface, UINT32 count, co
 	if (count != self->format->nChannels)
 		return E_INVALIDARG;
 	for (UINT32 channel = 0; channel < count; ++channel)
-		if (levels[channel] < 0.0f || levels[channel] > 1.0f)
+		if (!(levels[channel] >= 0.0f && levels[channel] <= 1.0f))
 			return E_INVALIDARG;
 	for (UINT32 channel = 0; channel < count; ++channel)
 		self->channel_levels[channel] = levels[channel];
@@ -1396,7 +1410,7 @@ static HRESULT WINAPI enumerator_list(IMMDeviceEnumerator *iface, EDataFlow flow
 {
 	if (!out)
 		return E_POINTER;
-	if (flow != eRender && flow != eCapture && flow != eAll)
+	if ((flow != eRender && flow != eCapture && flow != eAll) || (mask & ~DEVICE_STATEMASK_ALL))
 		return E_INVALIDARG;
 	*out = flow != eCapture && (mask & DEVICE_STATE_ACTIVE) ? &outputs.iface : &nothing.iface;
 	return S_OK;
@@ -1407,7 +1421,7 @@ static HRESULT WINAPI enumerator_default(IMMDeviceEnumerator *iface, EDataFlow f
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	if (flow != eRender && flow != eCapture)
+	if ((flow != eRender && flow != eCapture) || (unsigned)role > eCommunications)
 		return E_INVALIDARG;
 	if (flow == eCapture)
 		return E_NOT_FOUND;
