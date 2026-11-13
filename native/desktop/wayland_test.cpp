@@ -28,6 +28,10 @@ struct Compositor {
 	// How each positioner lets the compositor move a popup that would not fit, and what the newest popup was given.
 	std::map<wl_resource *,uint32_t> adjustments;
 	std::atomic<uint32_t> popup_adjustment{0};
+	// The subsurfaces made, how many of them lie on a window of their own, where the newest was last placed, how many popups were made
+	// and whether the newest opened on a window.
+	std::atomic<int> subsurfaces{0},subsurfaces_on_windows{0},placed_x{0},placed_y{0},popups{0};
+	std::atomic<bool> popup_on_window{false};
 	uint32_t serial=0,pressed=0;
 	// Set by the test: a key is pressed and released; the next frame committed to a window is answered with a request to close it.
 	std::atomic<bool> type{false},stop{false},close_on_commit{false};
@@ -88,7 +92,19 @@ static int dispatch(const void *data,void *target,uint32_t,const wl_message *mes
 		shell.role=made;
 		shell.popup=request=="xdg_surface.get_popup";
 		if (shell.popup && object(1)) shell.parent=surface_of(object(1));
+		if (shell.popup) {
+			const auto parent=compositor.surfaces.find(shell.parent);
+			++compositor.popups;
+			compositor.popup_on_window=parent!=compositor.surfaces.end() && parent->second.role && !parent->second.popup;
+		}
 		if (shell.popup) compositor.popup_adjustment=shell.adjustment=compositor.adjustments[object(2)];
+	} else if (request=="wl_subcompositor.get_subsurface") {
+		const auto parent=compositor.surfaces.find(object(2));
+		++compositor.subsurfaces;
+		if (parent!=compositor.surfaces.end() && parent->second.role && !parent->second.popup) ++compositor.subsurfaces_on_windows;
+	} else if (request=="wl_subsurface.set_position") {
+		compositor.placed_x=arguments[0].i;
+		compositor.placed_y=arguments[1].i;
 	} else if (request=="xdg_positioner.set_constraint_adjustment") {
 		compositor.adjustments[resource]=arguments[0].u;
 	} else if (request=="xdg_popup.grab") {
@@ -163,6 +179,21 @@ static void exercise(raven::DesktopPresentation &desktop,Compositor &compositor)
 	check(focused(desktop)==3,"the keyboard did not follow the next menu");
 	desktop.remove(3);
 	check(focused(desktop)==1,"the keyboard did not return to the window");
+	// A window the first owns that takes no grab, as a palette, lies on it as a subsurface: no popup of the shell, which a compositor
+	// keeps over every window. Moved, it is placed again and not made again; a menu it opens is a popup of the window it lies on.
+	const int popups_before=compositor.popups;
+	desktop.owned_popup(5,1,10,12,16,16,menu);
+	desktop.poll(std::chrono::milliseconds(50));
+	check(compositor.subsurfaces==1 && compositor.subsurfaces_on_windows==1 && compositor.popups==popups_before,
+		"an owned window without a grab was not attached to its owner's window");
+	check(compositor.placed_x==10 && compositor.placed_y==12,"the owned window is not where it was put on its owner");
+	desktop.owned_popup(5,1,30,40,16,16,menu);
+	desktop.poll(std::chrono::milliseconds(50));
+	check(compositor.subsurfaces==1 && compositor.placed_x==30 && compositor.placed_y==40,"a moved owned window was not placed again");
+	desktop.popup(6,5,2,3,16,16,menu);
+	check(compositor.popups==popups_before+1 && compositor.popup_on_window,"a menu of an owned window did not open on its owner's window");
+	desktop.remove(6);
+	desktop.remove(5);
 	// The compositor asks to close the window while a frame of it is being shown, as labwc does for Alt+F4: the frame is shown, the
 	// program gets WM_CLOSE, and the window it keeps goes on showing its frames.
 	const std::vector<uint8_t> changed(64*48*4,0x40);
@@ -182,6 +213,7 @@ int main()
 	int sockets[2];
 	if (!compositor.display || wl_display_init_shm(compositor.display) || socketpair(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0,sockets) ||
 		!wl_global_create(compositor.display,&wl_compositor_interface,4,&compositor,bind<&wl_compositor_interface>) ||
+		!wl_global_create(compositor.display,&wl_subcompositor_interface,1,&compositor,bind<&wl_subcompositor_interface>) ||
 		!wl_global_create(compositor.display,&xdg_wm_base_interface,1,&compositor,bind<&xdg_wm_base_interface>) ||
 		!wl_global_create(compositor.display,&wl_seat_interface,1,&compositor,bind<&wl_seat_interface>) ||
 		!wl_client_create(compositor.display,sockets[0])) {
