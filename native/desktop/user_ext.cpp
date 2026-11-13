@@ -276,7 +276,17 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	registry.add("GetDpiForSystem", 0, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetDpiForWindow", 1, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetSystemDpiForProcess", 1, [](ApiCall &call) { call.ret(96); });
-	registry.add("GetMessagePos", 0, [this](ApiCall &call) { call.ret(uint32_t(uint16_t(cursor_x)) | (uint32_t(uint16_t(cursor_y)) << 16)); });
+	// The cursor position and the time of the message the thread last took from its queue, not those of now: a program that handles
+	// its input late still learns where and when each event happened.
+	registry.add("GetMessagePos", 0, [this](ApiCall &call) {
+		const auto last=retrieved.find(environment.thread_id());
+		const int32_t x=last!=retrieved.end() ? last->second.x : cursor_x,y=last!=retrieved.end() ? last->second.y : cursor_y;
+		call.ret(uint32_t(uint16_t(x)) | (uint32_t(uint16_t(y)) << 16));
+	});
+	registry.add("GetMessageTime", 0, [this](ApiCall &call) {
+		const auto last=retrieved.find(environment.thread_id());
+		call.ret(last!=retrieved.end() ? last->second.time : 0);
+	});
 	registry.add("mouse_event", 5, [](ApiCall &call) { call.ret(0); });
 	registry.add("DragDetect", 3, [](ApiCall &call) { call.ret(0); });
 	registry.add("SetWindowContextHelpId", 2, [](ApiCall &call) { call.ret(1); });

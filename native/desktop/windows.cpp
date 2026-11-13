@@ -1443,6 +1443,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			// The buttons seen by GetKeyState likewise follow the pointer messages retrieved.
 			if ((flags & 1U) && ((value.message>=0x200 && value.message<=0x20e) || (value.message>=0x2a0 && value.message<=0x2a3)))
 				mouse_keys(vk_state,value.wparam);
+			if (flags & 1U) retrieved[me]={value.time,value.x,value.y};
 			if (flags & 1U) { if (found!=messages.end()) messages.erase(found); else quits.erase(me); }
 			if (value.message!=0x12) {
 				// Keyboard and mouse hooks may swallow the message; the get-message hook only observes it.

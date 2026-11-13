@@ -257,6 +257,9 @@ private:
 	void deliver_pending();
 	// PostQuitMessage codes by thread.
 	std::map<uint32_t,uint32_t> quits;
+	// The time and cursor position of the message each thread last took from its queue, which GetMessageTime and GetMessagePos answer.
+	struct Retrieved { uint32_t time=0; int32_t x=0,y=0; };
+	std::map<uint32_t,Retrieved> retrieved;
 	std::set<uint64_t> dirty_roots;
 	bool dumped=false;
 	std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();

@@ -194,9 +194,6 @@ void NativeWindows::register_api(ApiRegistry &registry)
 		call.store<uint32_t>(call[0] + 4, uint32_t(now));
 		call.ret(1);
 	});
-	registry.add("GetMessageTime", 0, [](ApiCall &call) {
-		call.ret(uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()));
-	});
 	// The handles a process holds in the window system: windows, device contexts and drawing objects are one table here.
 	registry.add("GetGuiResources", 2, [this](ApiCall &call) {
 		const auto flags = call.u32(1);
