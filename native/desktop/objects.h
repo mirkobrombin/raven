@@ -274,6 +274,8 @@ struct DesktopWindow {
 	// of the root it came from: a host window of its own would be placed by the compositor rather than where the program put it.
 	uint64_t shown_on = 0;
 	uint64_t order = 0;
+	// Windows links a new window into its parent's z-order only after WM_NCCREATE; until then sibling walks do not see it.
+	bool linked = true;
 	// Outer rectangle to return to when a maximized or minimized window is restored.
 	DesktopRect restore{};
 	std::map<std::u16string,uint64_t> properties{};
@@ -361,7 +363,8 @@ public:
 	std::vector<uint64_t> region_handles() const;
 	uint64_t window_root(uint64_t handle) const;
 	// Children of a window in z-order, bottom to top. Top-level windows are the children of window zero.
-	std::vector<uint64_t> child_windows(uint64_t parent) const;
+	// Bottom to top. A window still in WM_NCCREATE is listed only with `unlinked`, for the walks that end its parent.
+	std::vector<uint64_t> child_windows(uint64_t parent, bool unlinked = false) const;
 	// Moves a window to the top or bottom of its siblings.
 	void restack(uint64_t window,bool top);
 	bool is_child(uint64_t parent,uint64_t child) const;

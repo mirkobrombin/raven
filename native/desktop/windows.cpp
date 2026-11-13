@@ -1726,7 +1726,7 @@ bool NativeWindows::destroy(uint64_t handle)
 	if (focus==handle || objects.is_child(handle,focus)) set_focus(0);
 	parent_notify(handle,2);
 	send(handle,2,0,0);
-	for (const auto child:objects.child_windows(handle)) if (std::as_const(objects).window(child)) destroy(child);
+	for (const auto child:objects.child_windows(handle,true)) if (std::as_const(objects).window(child)) destroy(child);
 	if (std::as_const(objects).window(handle)) send(handle,0x82,0,0);
 	window=objects.window(handle);
 	if (window && window->parent) {
@@ -2041,10 +2041,9 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		process.unmap_memory(at);
 	}
 	record.extra.resize(definition->window_extra);
+	record.linked=false;
 	const auto handle=objects.add(std::move(record));
 	if (!handle) throw uint32_t(8);
-	// A new child sits below its siblings, so controls created first stay on top of those created later.
-	if (child) objects.restack(handle,false);
 	uint64_t scratch=0;
 	try {
 		scratch=process.map_memory(4096,PROT_READ | PROT_WRITE);
@@ -2085,6 +2084,9 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 			release_surface(handle);
 			objects.erase(handle); process.unmap_memory(scratch); return 0;
 		}
+		objects.window(handle)->linked=true;
+		// A new child sits below its siblings, so controls created first stay on top of those created later.
+		if (child) objects.restack(handle,false);
 		// WM_NCCREATE may already have moved or sized the window, so the frame calculation starts from its current rectangle.
 		{
 			const auto &outer=objects.window(handle)->outer;

@@ -521,7 +521,8 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 		switch (call.u32(1)) {
 		case 0: call.ret(siblings.empty() ? 0 : siblings.back()); break;
 		case 1: call.ret(siblings.empty() ? 0 : siblings.front()); break;
-		case 2: call.ret(position == siblings.begin() ? 0 : *(position - 1)); break;
+		// A window still in WM_NCCREATE is not among its siblings and has no neighbors.
+		case 2: call.ret(position == siblings.end() || position == siblings.begin() ? 0 : *(position - 1)); break;
 		case 3: call.ret(position == siblings.end() || position + 1 == siblings.end() ? 0 : *(position + 1)); break;
 		case 4: call.ret(window->owner); break;
 		case 5: {
