@@ -1049,8 +1049,8 @@ short WINAPI GetFileTitleW(LPCWSTR file, LPWSTR title, WORD size)
 	return 0;
 }
 
-/* A window's property store: the values a program sets on it (its application id, for one) kept in memory for as long as the process
-   runs. Strings are copied; other values are kept as they are. */
+/* A property store in memory: a window's, which keeps the values a program sets on it (its application id, for one) for as long as
+   the process runs, or a shell link's (see create_memory_store). Strings are copied; other values are kept as they are. */
 typedef struct {
 	PROPERTYKEY key;
 	PROPVARIANT value;
@@ -1058,6 +1058,7 @@ typedef struct {
 
 typedef struct {
 	IPropertyStore store;
+	LONG refs;
 	HWND window;
 	StoredProperty *items;
 	DWORD count;
@@ -1090,12 +1091,25 @@ static HRESULT WINAPI store_query(IPropertyStore *self, REFIID iid, void **out)
 		return E_POINTER;
 	if (InlineIsEqualGUID(iid, &IID_IUnknown) || InlineIsEqualGUID(iid, &IID_IPropertyStore)) {
 		*out = self;
+		InterlockedIncrement(&((WindowStore *)self)->refs);
 		return S_OK;
 	}
 	*out = NULL;
 	return E_NOINTERFACE;
 }
-static ULONG WINAPI store_reference(IPropertyStore *self) { return 1; }
+static ULONG WINAPI store_reference(IPropertyStore *self) { return (ULONG)InterlockedIncrement(&((WindowStore *)self)->refs); }
+static ULONG WINAPI store_release(IPropertyStore *self)
+{
+	WindowStore *store = (WindowStore *)self;
+	const LONG left = InterlockedDecrement(&store->refs);
+	if (!left) {
+		for (DWORD index = 0; index < store->count; ++index)
+			PropVariantClear(&store->items[index].value);
+		HeapFree(GetProcessHeap(), 0, store->items);
+		HeapFree(GetProcessHeap(), 0, store);
+	}
+	return (ULONG)left;
+}
 static HRESULT WINAPI store_count(IPropertyStore *self, DWORD *count)
 {
 	if (!count)
@@ -1151,7 +1165,19 @@ static HRESULT WINAPI store_set(IPropertyStore *self, REFPROPERTYKEY key, REFPRO
 }
 static HRESULT WINAPI store_commit(IPropertyStore *self) { return S_OK; }
 
-static IPropertyStoreVtbl store_table = {store_query, store_reference, store_reference, store_count, store_at, store_get, store_set, store_commit};
+static IPropertyStoreVtbl store_table = {store_query, store_reference, store_release, store_count, store_at, store_get, store_set, store_commit};
+
+/* An empty store of the process's own, which goes when its last reference does. */
+HRESULT create_memory_store(IPropertyStore **out)
+{
+	WindowStore *store = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WindowStore));
+	if (!store)
+		return E_OUTOFMEMORY;
+	store->store.lpVtbl = &store_table;
+	store->refs = 1;
+	*out = &store->store;
+	return S_OK;
+}
 
 HRESULT WINAPI SHGetPropertyStoreForWindow(HWND window, REFIID iid, void **out)
 {
@@ -1172,6 +1198,8 @@ HRESULT WINAPI SHGetPropertyStoreForWindow(HWND window, REFIID iid, void **out)
 		if (!store || !grown)
 			return E_OUTOFMEMORY;
 		store->store.lpVtbl = &store_table;
+		/* The list of windows holds one reference, so a window's store stays while the process runs. */
+		store->refs = 1;
 		store->window = window;
 		window_stores = grown;
 		window_stores[window_store_count++] = store;
@@ -1370,7 +1398,8 @@ static BOOL icon_file(LPCWSTR file)
 	return length > 4 && !lstrcmpiW(file + length - 4, L".ico");
 }
 
-UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)
+/* Icons of the sizes asked for, zero for the system's large and small icon sizes. */
+static UINT extract_sized(LPCWSTR file, int index, HICON *large, HICON *small, UINT count, int large_size, int small_size)
 {
 	HMODULE module;
 	struct icon_search search = {-1, 0, NULL};
@@ -1383,9 +1412,9 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 		if (index != 0 || !count)
 			return 0;
 		if (large)
-			*large = LoadImageW(NULL, file, IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE);
+			*large = LoadImageW(NULL, file, IMAGE_ICON, large_size, large_size, LR_LOADFROMFILE);
 		if (small)
-			*small = LoadImageW(NULL, file, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
+			*small = LoadImageW(NULL, file, IMAGE_ICON, small_size, small_size, LR_LOADFROMFILE);
 		return (large && *large) || (small && *small) ? 1 : 0;
 	}
 	if (!(module = LoadLibraryExW(file, NULL, LOAD_LIBRARY_AS_DATAFILE)))
@@ -1412,9 +1441,9 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 			name = search.found;
 		}
 		if (large)
-			big = LoadImageW(module, name, IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+			big = LoadImageW(module, name, IMAGE_ICON, large_size, large_size, 0);
 		if (small)
-			little = LoadImageW(module, name, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+			little = LoadImageW(module, name, IMAGE_ICON, small_size, small_size, 0);
 		if ((large && !big) || (small && !little)) {
 			if (big)
 				DestroyIcon(big);
@@ -1429,6 +1458,28 @@ UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, 
 	}
 	FreeLibrary(module);
 	return made;
+}
+
+UINT WINAPI ExtractIconExW(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)
+{
+	return extract_sized(file, index, large, small, count, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CXSMICON));
+}
+
+/* The shell's default icon extraction: one large and one small icon, their sizes in the low and high words of the last argument, zero
+   for the system's sizes; S_FALSE when the file has no icon at that index. */
+HRESULT WINAPI SHDefExtractIconW(LPCWSTR file, int index, UINT flags, HICON *large, HICON *small, UINT sizes)
+{
+	const int large_size = LOWORD(sizes) ? LOWORD(sizes) : GetSystemMetrics(SM_CXICON);
+	const int small_size = HIWORD(sizes) ? HIWORD(sizes) : GetSystemMetrics(SM_CXSMICON);
+	if (!file)
+		return E_INVALIDARG;
+	if (large)
+		*large = NULL;
+	if (small)
+		*small = NULL;
+	if (!large && !small)
+		return extract_sized(file, -1, NULL, NULL, 0, large_size, small_size) > (UINT)(index < 0 ? 0 : index) ? S_OK : S_FALSE;
+	return extract_sized(file, index, large, small, 1, large_size, small_size) ? S_OK : S_FALSE;
 }
 
 UINT shell_icons(LPCWSTR file, int index, HICON *large, HICON *small, UINT count)

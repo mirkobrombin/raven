@@ -298,6 +298,21 @@ UBreakIterator *__cdecl ubrk_open(INT type, const char *locale, const UChar *uni
 	return iterator;
 }
 
+// Rules are not compiled. Programs pass the grapheme cluster rules of UAX #29 to find where a search may match, as .NET does, so a
+// rule set opens as the character iterator, which follows them.
+UBreakIterator *__cdecl ubrk_openRules(const UChar *rules, INT rules_length, const UChar *units, INT length, void *parse_error, UErrorCode *status)
+{
+	(void)rules_length;
+	(void)parse_error;
+	if (U_FAILED(*status))
+		return NULL;
+	if (!rules) {
+		*status = U_ILLEGAL_ARGUMENT_ERROR;
+		return NULL;
+	}
+	return ubrk_open(UBRK_CHARACTER, NULL, units, length, status);
+}
+
 void __cdecl ubrk_close(UBreakIterator *iterator)
 {
 	if (!iterator)

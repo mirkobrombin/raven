@@ -36,6 +36,21 @@ int raven_entry(void)
 			return 5;
 	DeleteObject(bitmap);
 	DeleteDC(dc);
+	/* A program's own handling of a press takes the mouse for the combo box once its list has dropped, and lets it go when the button
+	   comes up, as Windows Forms does for every control: the list stays dropped through both, until the combo box is told to close it. */
+	ShowWindow(owner, SW_SHOWNA);
+	SendMessageW(combo, CB_SHOWDROPDOWN, TRUE, 0);
+	if (!SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0))
+		return 6;
+	SetCapture(combo);
+	if (!SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0))
+		return 7;
+	ReleaseCapture();
+	if (!SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0))
+		return 8;
+	SendMessageW(combo, CB_SHOWDROPDOWN, FALSE, 0);
+	if (SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0))
+		return 9;
 	DestroyWindow(owner);
 	return 0;
 }

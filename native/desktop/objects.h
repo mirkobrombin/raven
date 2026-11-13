@@ -240,7 +240,9 @@ struct DesktopWindow {
 	// non-client area, and the WM_PAINT it raises has BeginPaint send WM_NCPAINT, as an empty MFC toolbar draws its gripper then.
 	bool frame_pending = false;
 	uint64_t update_generation=0;
-	bool needs_paint() const { return !update.empty() || frame_pending; }
+	// The update region is part of the client area: a window left with no client area has none to paint, whatever was invalidated
+	// while it had one. paint.net lays a label out to no height and makes a bitmap of its size when it paints.
+	bool needs_paint() const { return (!update.empty() && width>0 && height>0) || frame_pending; }
 	// Since when a top-level window has waited for its controls' paint before the compositor shows it (see NativeWindows::present).
 	std::optional<std::chrono::steady_clock::time_point> present_waiting{};
 	// Whether the window has been shown on the screen once: until then it waits longer for its first paint.

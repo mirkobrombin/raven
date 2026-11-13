@@ -45,7 +45,11 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 	long slice = 5;
 	if (const char *text = std::getenv("RAVEN_SLICE_MS"))
 		slice = std::strtol(text, nullptr, 10);
-	process.set_time_slicing(std::chrono::milliseconds(slice < 0 ? 0 : slice), [this] { return !tearing_down && live() > 1; }, [this] { yield(); });
+	process.set_time_slicing(std::chrono::milliseconds(slice < 0 ? 0 : slice), [this] { return !tearing_down && live() > 1; }, [this] {
+		running->spent_slice = true;
+		running->set_aside = std::chrono::steady_clock::now();
+		yield();
+	});
 	wake = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 	if (wake < 0)
 		throw std::runtime_error("cannot create the scheduler's wake descriptor");
@@ -75,6 +79,13 @@ NativeThreads::~NativeThreads()
 void NativeThreads::stop_time_slicing()
 {
 	process.set_time_slicing(std::chrono::milliseconds(0), nullptr, nullptr);
+}
+
+bool NativeThreads::others_waiting() const
+{
+	return std::any_of(threads.begin(), threads.end(), [this](const auto &thread) {
+		return thread.get() != running && thread->state == GuestThread::State::waiting && thread->suspend_count == 0;
+	});
 }
 
 size_t NativeThreads::live() const
@@ -112,7 +123,8 @@ std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t para
 {
 	if (process.parallel())
 		reap();
-	if (live() >= 256)
+	// Windows sets no small limit: the .NET thread pool parks a few hundred idle workers at once. The cap only stops a runaway loop.
+	if (live() >= 8192)
 		throw std::runtime_error("native guest thread limit reached");
 	auto thread = std::make_shared<GuestThread>();
 	const uint64_t size = std::clamp<uint64_t>((stack_size + 0xffff) & ~uint64_t(0xffff), 256 * 1024, 64 * 1024 * 1024);
@@ -180,10 +192,16 @@ void NativeThreads::thread_main(GuestThread &thread)
 		if (result.stop != NativeStop::returned)
 			throw result;
 		code = uint32_t(result.value);
-		if (notifier)
-			notifier(3);
+		detach_current();
 	} catch (const ThreadExit &exit) {
 		code = exit.code;
+		if (exit.detach) {
+			try {
+				detach_current();
+			} catch (const ThreadExit &) {
+				// A library that ends the thread again while it is told the thread ends: the thread is ending already.
+			}
+		}
 	} catch (...) {
 		if (!pending)
 			pending = std::current_exception();
@@ -321,20 +339,29 @@ std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current)
 	for (size_t index = 0; index < count; ++index)
 		if (threads[index].get() == running)
 			start = index;
+	// A thread that computes until its slice is taken away, as a compiler working in the background, shares one processor here with
+	// the threads that draw and answer the pointer. Those go first: the computing thread runs when none of them can, or once it has
+	// been kept waiting for a few slices.
+	std::shared_ptr<GuestThread> computing;
 	for (size_t step = 1; step <= count; ++step) {
 		const auto &thread = threads[(start + step) % count];
 		if (thread.get() == running && !include_current)
 			continue;
 		if (thread->state == GuestThread::State::done || thread->suspend_count > 0)
 			continue;
-		if (thread->state == GuestThread::State::ready)
-			return thread;
+		if (thread->state == GuestThread::State::ready) {
+			if (!thread->spent_slice || now - thread->set_aside >= std::chrono::milliseconds(30))
+				return thread;
+			if (!computing)
+				computing = thread;
+			continue;
+		}
 		if (thread->state == GuestThread::State::waiting) {
 			if ((thread->ready && thread->ready()) || (thread->wake && now >= *thread->wake))
 				return thread;
 		}
 	}
-	return nullptr;
+	return computing;
 }
 
 void NativeThreads::check_pending()
@@ -500,6 +527,7 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	me.ready = std::move(ready);
 	me.wake = wake;
 	me.state = GuestThread::State::waiting;
+	me.spent_slice = false;
 	// The condition reads the waiting frame: it goes with the wait, also when an error or the end of the process leaves the frame. A thread
 	// that leaves it that way runs on, unwinding: left waiting, with nothing that could wake it, the teardown would never come back to it.
 	struct Leave {
@@ -540,7 +568,7 @@ void NativeThreads::serve()
 	for (const auto &service : services)
 		service();
 	// RAVEN_DUMP_THREADS_ON names a file: whenever it is touched every process lists its threads with their state and the wait each
-	// is in. A program that stops answering shows which thread waits for what.
+	// is in, and where it started. A program that stops answering shows which thread waits for what.
 	static const char *trigger = std::getenv("RAVEN_DUMP_THREADS_ON");
 	static auto checked = std::chrono::steady_clock::now();
 	static timespec dumped{};
@@ -557,9 +585,13 @@ void NativeThreads::serve()
 		if (thread->state == GuestThread::State::waiting && thread->waiting_in)
 			std::fprintf(stderr, " in %s for %lld ms", thread->waiting_in,
 				(long long)std::chrono::duration_cast<std::chrono::milliseconds>(checked - thread->waiting_since).count());
+		// The one that runs is inside the call the dump was asked from.
+		if (thread->state == GuestThread::State::running)
+			std::fprintf(stderr, " in %s", api_in_progress);
 		if (thread->suspend_count)
 			std::fprintf(stderr, " suspended %d", thread->suspend_count);
-		std::fprintf(stderr, " rip %llx rsp %llx\n", (unsigned long long)thread->snapshot.context.registers.rip, (unsigned long long)thread->snapshot.context.registers.rsp);
+		std::fprintf(stderr, " rip %llx rsp %llx start %llx\n", (unsigned long long)thread->snapshot.context.registers.rip,
+			(unsigned long long)thread->snapshot.context.registers.rsp, (unsigned long long)thread->start);
 	}
 }
 
@@ -575,15 +607,46 @@ bool NativeThreads::yield()
 	return true;
 }
 
+// On Windows a thread whose wait ends wakes at once on another processor while the thread that ended it goes on. Programs count on it
+// having moved on: a dialog that a worker closes through the window's thread asks whether the worker is still alive, and on Windows it
+// has ended by then. Here the woken thread runs first, until it waits again or its time slice ends.
+bool NativeThreads::hand_over()
+{
+	if (tearing_down)
+		return false;
+	for (const auto &thread : threads) {
+		if (thread.get() == running || thread->state != GuestThread::State::waiting || thread->suspend_count > 0)
+			continue;
+		if (thread->ready && thread->ready()) {
+			running->state = GuestThread::State::ready;
+			switch_to(*thread);
+			running->state = GuestThread::State::running;
+			return true;
+		}
+	}
+	return false;
+}
+
 void NativeThreads::exit_current(uint32_t code)
 {
-	throw ThreadExit{code};
+	throw ThreadExit{code, true};
+}
+
+// A thread that ends by returning or by ExitThread runs the destructors of its fiber-local values, then tells the libraries, as Windows
+// does: the .NET runtime learns that a thread is gone from its fiber-local destructor and stops tracking it there.
+void NativeThreads::detach_current()
+{
+	if (exit_hook)
+		exit_hook();
+	if (notifier)
+		notifier(3);
 }
 
 void NativeThreads::terminate(const std::shared_ptr<GuestThread> &thread, uint32_t code)
 {
+	// A thread ended from outside, even by itself, runs no destructors and tells no library.
 	if (thread.get() == running)
-		exit_current(code);
+		throw ThreadExit{code};
 	finish(*thread, code);
 }
 

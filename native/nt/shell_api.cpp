@@ -54,6 +54,10 @@ std::optional<std::u16string> folder_for(int csidl, const std::u16string &profil
 	case 0x28: return profile;
 	case 0x2a: return std::u16string(u"C:\\Program Files (x86)");
 	case 0x2c: return std::u16string(u"C:\\Program Files (x86)\\Common Files");
+	case 0x2e: return std::u16string(u"C:\\Users\\Public\\Documents");
+	case 0x35: return std::u16string(u"C:\\Users\\Public\\Music");
+	case 0x36: return std::u16string(u"C:\\Users\\Public\\Pictures");
+	case 0x37: return std::u16string(u"C:\\Users\\Public\\Videos");
 	default: return std::nullopt;
 	}
 }
@@ -75,6 +79,7 @@ constexpr KnownFolder known_folders[] = {
 	{0x352481e8, 0x20, nullptr}, {0x2b0f765d, 0x21, nullptr}, {0xd9dc8a3b, 0x22, nullptr}, {0x4c5c32ff, -1, u"%PROFILE%\\Saved Games"},
 	{0x1777f761, 0x06, nullptr}, {0xa4115719, 0x16, nullptr}, {0x0139d44e, 0x17, nullptr}, {0xae50c081, 0x27, nullptr},
 	{0x6365d5a7, -1, u"C:\\Program Files\\Common Files"}, {0x0762d272, -1, u"C:\\Users"},
+	{0xed4824af, 0x2e, nullptr}, {0x3214fab5, 0x35, nullptr}, {0xb6ebfb86, 0x36, nullptr}, {0x2400183a, 0x37, nullptr},
 	{0x5cd7aee2, -1, u"%PROFILE%\\AppData\\Local\\Programs"}, {0xbcbd3057, -1, u"%PROFILE%\\AppData\\Local\\Programs\\Common"}};
 
 // The double-NUL terminated file lists of SHFileOperation.

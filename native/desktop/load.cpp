@@ -81,10 +81,12 @@ bool NativeDesktop::load_dispatch(std::string_view name)
 			// SHSTOCKICONINFO: size, icon handle, system image list index, icon index in the file, then the file's path.
 			std::vector<uint8_t> info(structure_size - handle, 0);
 			std::memcpy(info.data(), &icon, handle);
-			const int32_t list_index = -1, file_index = -int32_t(system_icon);
+			// The location names the icon group that holds it in the user32 component, so that the shell's extraction finds it there.
+			static constexpr int32_t group[] = {100, 103, 102, 101, 104, 105, 100};
+			const int32_t list_index = -1, file_index = -group[system_icon - 32512];
 			std::memcpy(info.data() + handle, &list_index, 4);
 			std::memcpy(info.data() + handle + 4, &file_index, 4);
-			const std::u16string path = u"C:\\Windows\\System32\\user32.dll";
+			const std::u16string path = u"C:\\Windows\\System32\\raven-user32.dll";
 			std::memcpy(info.data() + handle + 8, path.data(), path.size() * 2);
 			process.write_memory(args[2] + handle, info);
 		} catch (uint32_t error) { result = error; }

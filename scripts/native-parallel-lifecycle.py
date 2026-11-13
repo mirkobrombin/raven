@@ -17,7 +17,10 @@ def main():
         result = subprocess.run([runtime, "--run-process", "--execution=native", f"--timeout-ms={limit}", fixture, "--", mode],
                                 env=os.environ | extra, capture_output=True, text=True, timeout=20)
         output = result.stdout + result.stderr
-        if result.returncode != expected or message not in output or "native process is not stopped" in output:
+        # A 32-bit program is handed the fault as an exception; with nothing to handle it, it ends with the exception's status as on
+        # Windows, which the runtime names.
+        unhandled = mode == "fault" and "unhandled exception 0xc0000005" in output and "exited with status 3221225477" in output
+        if "native process is not stopped" in output or not (unhandled or (result.returncode == expected and message in output)):
             raise SystemExit(f"{mode}: exit {result.returncode}\n{output}")
         print(f"{mode}: expected exit {expected}")
 

@@ -26,6 +26,20 @@ void set_context_rsp(ContextBytes &context, uint64_t value);
 ContextBytes context_from_process(const NativeContext &native);
 // Writes the registers a CONTEXT describes into a native context, keeping its other state.
 void apply_context(NativeContext &native, const ContextBytes &context);
+// The upper halves of the sixteen YMM registers, the AVX part of the processor state, which a CONTEXT keeps apart from its record in
+// the extended area a CONTEXT_EX describes: an XSAVE header of 64 bytes whose first quadword is the mask of the features kept, then
+// the 256 bytes of the halves.
+namespace x64_context {
+inline constexpr size_t extension = 24, extended_header = 64, avx_size = 256;
+inline constexpr uint32_t xstate_flags = 0x100040;
+inline constexpr uint64_t avx_mask = 4;
+}
+// Whether the processor state the host keeps for a thread has an AVX part.
+bool native_has_avx(const NativeContext &native);
+std::array<uint8_t, x64_context::avx_size> native_avx(const NativeContext &native);
+void set_native_avx(NativeContext &native, const uint8_t *halves);
+// Where the extended area of a CONTEXT in guest memory is: zero for one that asks for no extended state or has no room for the AVX part.
+uint64_t context_extended_area(NativeProcess &process, uint64_t context);
 
 struct FunctionEntry {
 	uint64_t address = 0;

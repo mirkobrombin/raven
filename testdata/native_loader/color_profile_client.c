@@ -14,13 +14,20 @@ static void put_big(BYTE *at, DWORD value)
 }
 
 /* Color profiles as an image decoder reads them: opened from memory or from a file, valid with an ICC header, whose fields come back
- * in the processor's order, and whose bytes come back whole. */
+ * in the processor's order, whose elements are read by tag, and whose bytes come back whole. */
 int raven_entry(void)
 {
 	put_big(icc, sizeof(icc));
 	put_big(icc + 12, 0x6d6e7472);
 	put_big(icc + 16, 0x52474220);
 	put_big(icc + 36, 0x61637370);
+	/* One element after the header: a description tag of twelve bytes at offset 144. */
+	put_big(icc + 128, 1);
+	put_big(icc + 132, 0x64657363);
+	put_big(icc + 136, 144);
+	put_big(icc + 140, 12);
+	for (int index = 0; index < 12; ++index)
+		icc[144 + index] = (BYTE)('a' + index);
 	PROFILE memory = {PROFILE_MEMBUFFER, icc, sizeof(icc)};
 	HPROFILE profile = OpenColorProfileW(&memory, PROFILE_READ, FILE_SHARE_READ, OPEN_EXISTING);
 	if (!profile)
@@ -38,6 +45,23 @@ int raven_entry(void)
 		return 4;
 	if (!GetColorProfileFromHandle(profile, copy, &size) || copy[36] != 'a' || copy[39] != 'p')
 		return 5;
+	/* Its elements, as paint.net reads a display's profile: counted, named by a 1-based index, looked for by tag, and read whole or from
+	   an offset, the size of one asked for without a buffer. */
+	DWORD count = 0, tag = 0;
+	BOOL present = FALSE, reference = TRUE;
+	if (!GetCountColorProfileElements(profile, &count) || count != 1)
+		return 12;
+	if (!GetColorProfileElementTag(profile, 1, &tag) || tag != 0x64657363U || GetColorProfileElementTag(profile, 2, &tag))
+		return 13;
+	if (!IsColorProfileTagPresent(profile, 0x64657363U, &present) || !present || !IsColorProfileTagPresent(profile, 0x77747074U, &present) || present)
+		return 14;
+	BYTE element[16] = {0};
+	size = 0;
+	if (!GetColorProfileElement(profile, 0x64657363U, 0, &size, NULL, &reference) || size != 12)
+		return 15;
+	size = 4;
+	if (!GetColorProfileElement(profile, 0x64657363U, 2, &size, element, &reference) || size != 4 || element[0] != 'c' || element[3] != 'f' || reference)
+		return 16;
 	if (!CloseColorProfile(profile))
 		return 6;
 

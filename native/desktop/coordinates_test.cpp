@@ -144,6 +144,38 @@ int main(int argc,char **argv)
 		injected=false;
 		check(call("PeekMessageW",{page+128,0,0x200,0x200,1})==1 &&
 			words(page+128,2)==std::vector<int32_t>{int32_t(window),int32_t(window>>32)},"surviving window lost pointer input");
+		// A move whose cursor request lets the program read its queue is still queued before the press that came after it.
+		raven::DesktopWindow asked{0,1,u"",40,60,40,30}; asked.parent=window; asked.visible=true;
+		check(objects.add(asked),"a child window could not be added");
+		bool reading=false;
+		int step=0;
+		windows.set_call([&](uint64_t,std::span<const uint64_t> args) {
+			if (args[1]==0x84) return raven::NativeResult{raven::NativeStop::returned,1};
+			if (args[1]==0x20 && !reading) {
+				// The program asks from its cursor handler whether input waits, which takes in what the host has.
+				reading=true;
+				step=1;
+				windows.input_ready();
+			}
+			return raven::NativeResult{raven::NativeStop::returned,0};
+		});
+		presentation.poll=[&](std::chrono::milliseconds) {
+			std::vector<raven::DesktopEvent> events;
+			if (step==0) {
+				step=-1;
+				events.push_back({window,0,0,0,raven::DesktopEventKind::pointer_motion,26,36});
+			} else if (step==1) {
+				step=2;
+				events.push_back({window,0x110,1,0,raven::DesktopEventKind::pointer_button,26,36});
+			}
+			return events;
+		};
+		windows.set_presentation(presentation);
+		while (call("PeekMessageW",{page+128,0,0,0,1}) && words(page+128,3)[2]!=0x200 && words(page+128,3)[2]!=0x201) {}
+		check(reading,"a move did not ask its window for the cursor");
+		check(words(page+128,3)[2]==0x200,"a press reached the program before the move that came before it");
+		while (call("PeekMessageW",{page+128,0,0,0,1}) && words(page+128,3)[2]!=0x201) {}
+		check(words(page+128,3)[2]==0x201,"the press that followed a move was lost");
 		process.protect_memory(page,4096,PROT_READ);
 		check(call("ClientToScreen",{window,point})==0 && environment.last_error()==998 && words(point,2)==std::vector<int32_t>{0,0},"readonly point was modified");
 		std::cout<<"Owned outer/client geometry, live mapping and guard-page negatives passed\n";

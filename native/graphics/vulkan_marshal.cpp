@@ -197,10 +197,11 @@ void Marshal::forget(uint64_t token_value)
 		// A program may make several surfaces over one window; they all render to the window's one host surface, which goes with the last.
 		const bool shared = std::any_of(bridge.surface_windows.begin(), bridge.surface_windows.end(),
 			[window](const auto &entry) { return entry.second == window; });
-		if (bridge.surface_source.release && !shared)
+		if (bridge.surface_source.release && !shared && !bridge.hidden_surfaces.contains(token_value))
 			bridge.surface_source.release(window);
 		bridge.surface_instances.erase(token_value);
 		bridge.foreign_surfaces.erase(token_value);
+		bridge.hidden_surfaces.erase(token_value);
 	}
 	bridge.templates.erase(token_value);
 	bridge.foreign_swapchains.erase(token_value);

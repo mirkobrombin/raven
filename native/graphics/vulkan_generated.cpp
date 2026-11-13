@@ -115,7 +115,9 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			throw std::runtime_error("vkCreateWin32SurfaceKHR needs a Win32 surface create info");
 		const auto window = load<uint64_t>(a[1] + 32);
 		uint32_t status = static_cast<uint32_t>(VK_ERROR_INITIALIZATION_FAILED);
-		const auto host = surface_source.create ? surface_source.create(window) : std::nullopt;
+		// A window nobody sees yet has no host surface that shows frames: presenting to it would wait for frames forever.
+		const bool hidden = window && surface_source.shown && !surface_source.shown(window);
+		const auto host = !hidden && surface_source.create ? surface_source.create(window) : std::nullopt;
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		bool foreign=false;
 		if (host) {
@@ -137,18 +139,19 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			if (created != VK_SUCCESS && surface_source.release && !shared) {
 				surface_source.release(window);
 			}
-		} else if (foreign_window_size(window)) {
+		} else if (hidden || foreign_window_size(window)) {
 			const auto create=reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(vkGetInstanceProcAddr(marshal.host_instance,"vkCreateHeadlessSurfaceEXT"));
 			if (create) {
 				VkHeadlessSurfaceCreateInfoEXT info{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
 				status=static_cast<uint32_t>(create(marshal.host_instance,&info,nullptr,&surface));
-				foreign=status==VK_SUCCESS;
+				foreign=!hidden && status==VK_SUCCESS;
 			}
 		}
 		if (status==VK_SUCCESS) {
 			const auto token=marshal.new_token(H::VkSurfaceKHR,reinterpret_cast<uint64_t>(surface));
 			surface_windows.emplace(token,window); surface_instances.emplace(token,a[0]);
 			if (foreign) foreign_surfaces.insert(token);
+			if (hidden) hidden_surfaces.insert(token);
 			store<uint64_t>(a[3],token);
 		}
 		process.return_api(status);
@@ -231,7 +234,8 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			}
 		} else if (name == "vkAcquireNextImageKHR") {
 			const auto swap=swapchains.find(arguments[1]);
-			const bool lost=swap!=swapchains.end() && foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface);
+			const bool lost=swap!=swapchains.end() && ((foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface)) ||
+				hidden_surface_lost(swap->second.surface));
 			result = lost ? static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR) : swapchain_stale(arguments[1]) ? static_cast<uint32_t>(VK_ERROR_OUT_OF_DATE_KHR)
 				: cmd_vkAcquireNextImageKHR(*this, marshal, arguments, floating);
 		} else {
@@ -253,7 +257,8 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 				for (uint32_t index = 0; index < count; ++index) {
 					const auto token=load<uint64_t>(list+uint64_t(index)*8);
 					const auto swap=swapchains.find(token);
-					const bool lost=swap!=swapchains.end() && foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface);
+					const bool lost=swap!=swapchains.end() && ((foreign_surfaces.contains(swap->second.surface) &&
+						!window_size(swap->second.surface)) || hidden_surface_lost(swap->second.surface));
 					if (lost || swapchain_stale(token)) {
 						const auto status=lost ? VK_ERROR_SURFACE_LOST_KHR : VK_SUBOPTIMAL_KHR;
 						result=static_cast<uint32_t>(status);
@@ -327,6 +332,12 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 		return true;
 	}
 	return false;
+}
+
+bool VulkanBridge::hidden_surface_lost(uint64_t surface) const
+{
+	const auto window = surface_windows.find(surface);
+	return hidden_surfaces.contains(surface) && window != surface_windows.end() && surface_source.shown && surface_source.shown(window->second);
 }
 
 bool VulkanBridge::swapchain_stale(uint64_t swapchain) const

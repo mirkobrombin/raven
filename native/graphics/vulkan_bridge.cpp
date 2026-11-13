@@ -202,7 +202,7 @@ VulkanBridge::~VulkanBridge()
 		destroy_device(devices.begin()->first);
 	// Surfaces a program left behind belong to the instance that created them, if that instance still exists here.
 	for (const auto &[token, window] : surface_windows) {
-		if (surface_source.release) surface_source.release(window);
+		if (surface_source.release && !hidden_surfaces.contains(token)) surface_source.release(window);
 		const auto found = generic.find(token);
 		const auto owner = surface_instances.find(token);
 		if (found == generic.end() || owner == surface_instances.end() || !instances.contains(owner->second))

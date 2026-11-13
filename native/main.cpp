@@ -67,7 +67,7 @@ static raven::ModuleBytes map_module(const std::filesystem::path &path)
 {
 	auto bytes = raven::ModuleBytes::map(path);
 	if (!bytes)
-		throw std::runtime_error("cannot map PE file");
+		throw std::runtime_error("cannot map PE file: " + path.string());
 	if (std::span<const uint8_t>(*bytes).size() > 0xffffffffULL)
 		throw std::runtime_error("PE file exceeds inspection size limit");
 	return std::move(*bytes);

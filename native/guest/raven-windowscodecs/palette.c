@@ -181,22 +181,24 @@ static int widest_channel(const BYTE *pixels, const color_box *box, int *spread)
 	return best;
 }
 
+/* The box's pixels in the order of one channel, each moved whole as the four bytes it is. */
 static void sort_box(BYTE *pixels, const color_box *box, int channel)
 {
 	UINT counts[256] = {0}, starts[256], at, total = 0;
+	const UINT shift = (UINT)channel * 8;
+	DWORD *sorted = (DWORD *)pixels + box->first, *copy = wic_alloc((SIZE_T)box->count * 4);
 	int value;
-	BYTE *copy = wic_alloc((SIZE_T)box->count * 4);
 	if (!copy)
 		return;
-	memcpy(copy, pixels + (SIZE_T)box->first * 4, (SIZE_T)box->count * 4);
+	memcpy(copy, sorted, (SIZE_T)box->count * 4);
 	for (at = 0; at < box->count; at++)
-		counts[copy[at * 4 + channel]]++;
+		counts[copy[at] >> shift & 0xff]++;
 	for (value = 0; value < 256; value++) {
 		starts[value] = total;
 		total += counts[value];
 	}
 	for (at = 0; at < box->count; at++)
-		memcpy(pixels + (SIZE_T)(box->first + starts[copy[at * 4 + channel]]++) * 4, copy + (SIZE_T)at * 4, 4);
+		sorted[starts[copy[at] >> shift & 0xff]++] = copy[at];
 	wic_free(copy);
 }
 
@@ -206,6 +208,7 @@ static HRESULT WINAPI palette_InitializeFromBitmap(IWICPalette *iface, IWICBitma
 	UINT width, height, boxes = 1, pixels_total, index;
 	BYTE *pixels;
 	color_box box_list[256];
+	int channels[256], spreads[256];
 	WICColor colors[256];
 	HRESULT result;
 	if (!source || wanted < 2 || wanted > 256)
@@ -228,25 +231,23 @@ static HRESULT WINAPI palette_InitializeFromBitmap(IWICPalette *iface, IWICBitma
 		wanted--;
 	box_list[0].first = 0;
 	box_list[0].count = pixels_total;
+	channels[0] = widest_channel(pixels, &box_list[0], &spreads[0]);
 	while (boxes < wanted) {
-		int best = -1, spread_best = 0, channel_best = 0;
-		for (index = 0; index < boxes; index++) {
-			int spread, channel;
-			if (box_list[index].count < 2)
-				continue;
-			channel = widest_channel(pixels, &box_list[index], &spread);
-			if (spread > spread_best) {
-				spread_best = spread;
+		int best = -1, spread_best = 0;
+		for (index = 0; index < boxes; index++)
+			if (box_list[index].count >= 2 && spreads[index] > spread_best) {
+				spread_best = spreads[index];
 				best = (int)index;
-				channel_best = channel;
 			}
-		}
 		if (best < 0)
 			break;
-		sort_box(pixels, &box_list[best], channel_best);
+		sort_box(pixels, &box_list[best], channels[best]);
 		box_list[boxes].first = box_list[best].first + box_list[best].count / 2;
 		box_list[boxes].count = box_list[best].count - box_list[best].count / 2;
 		box_list[best].count /= 2;
+		/* Only the two halves have changed: every other box keeps the channel and the spread measured for it. */
+		channels[best] = widest_channel(pixels, &box_list[best], &spreads[best]);
+		channels[boxes] = widest_channel(pixels, &box_list[boxes], &spreads[boxes]);
 		boxes++;
 	}
 	for (index = 0; index < boxes; index++) {

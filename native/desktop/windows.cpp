@@ -401,6 +401,12 @@ std::optional<std::pair<uint32_t,uint32_t>> NativeWindows::client_size(uint64_t 
 	return std::pair<uint32_t,uint32_t>{uint32_t(std::max(window->width,1)),uint32_t(std::max(window->height,1))};
 }
 
+bool NativeWindows::shown(uint64_t handle)
+{
+	// A window of another program is not this one's to call hidden: it is drawn into through the surface that program shares.
+	return !std::as_const(objects).window(handle) || objects.window_visible(objects.window_root(handle));
+}
+
 void NativeWindows::release_host_surface(uint64_t handle)
 {
 	if (!presentation.release_host_surface) return;
@@ -1024,7 +1030,7 @@ void NativeWindows::settle_focus_leave(bool now)
 
 void NativeWindows::receive(const DesktopEvent &event)
 {
-	if (placing_press && (event.kind==DesktopEventKind::pointer_motion || event.kind==DesktopEventKind::pointer_button ||
+	if (placing_pointer && (event.kind==DesktopEventKind::pointer_motion || event.kind==DesktopEventKind::pointer_button ||
 		event.kind==DesktopEventKind::pointer_wheel || event.kind==DesktopEventKind::pointer_relative || event.kind==DesktopEventKind::key)) {
 		held_input.push_back(event);
 		return;
@@ -1237,14 +1243,15 @@ void NativeWindows::receive(const DesktopEvent &event)
 	}
 	if (scroll_drag.window && (message==0x200 || message==0x202 || message==0x201) && scroll_motion(message,int32_t(x),int32_t(y))) return;
 	if (capture && !std::as_const(objects).window(capture)) capture=0;
-	// The press is placed before any input read while the program handles the messages sent for it.
-	const bool press=message==0x201 || message==0x204 || message==0x207;
-	if (press && !placing_press) {
-		placing_press=true;
+	// The event is placed before any input read while the program handles the messages sent for it: the cursor a move asks the window
+	// for, the activation a press brings. A program that reads its queue from there would otherwise find the events that came after
+	// queued ahead of this one, and a move from before a press would reach it after the press, saying no button is held.
+	if (!placing_pointer) {
+		placing_pointer=true;
 		try {
 			place_pointer(event,message,buttons,x,y);
 		} catch (...) {
-			placing_press=false;
+			placing_pointer=false;
 			held_input.clear();
 			throw;
 		}
@@ -1291,7 +1298,7 @@ bool NativeWindows::shown_on_owner(const DesktopWindow &window) const
 
 void NativeWindows::release_held_input()
 {
-	placing_press=false;
+	placing_pointer=false;
 	while (!held_input.empty()) {
 		const auto next=held_input.front();
 		held_input.pop_front();
@@ -1321,7 +1328,7 @@ void NativeWindows::place_pointer(const DesktopEvent &event,uint32_t message,uin
 		if (!window || !objects.window_visible(target)) return;
 	}
 	// Scroll bars and the frame may run a loop of their own that waits for the release, so what was held goes in first.
-	if (hit!=1 && placing_press) release_held_input();
+	if (hit!=1 && placing_pointer) release_held_input();
 	if ((hit==6 || hit==7) && scroll_pointer(target,hit,message,int32_t(x),int32_t(y))) return;
 	// Outside the client area the window hears the WM_NC* form of the message, with the hit code and the screen position; the default
 	// procedure runs the frame from it, so a program that draws its own caption can take the press first.
@@ -1438,6 +1445,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			// The buttons seen by GetKeyState likewise follow the pointer messages retrieved.
 			if ((flags & 1U) && ((value.message>=0x200 && value.message<=0x20e) || (value.message>=0x2a0 && value.message<=0x2a3)))
 				mouse_keys(vk_state,value.wparam);
+			if (flags & 1U) retrieved[me]={value.time,value.x,value.y};
 			if (flags & 1U) { if (found!=messages.end()) messages.erase(found); else quits.erase(me); }
 			if (value.message!=0x12) {
 				// Keyboard and mouse hooks may swallow the message; the get-message hook only observes it.
@@ -1644,9 +1652,12 @@ uint64_t NativeWindows::send(uint64_t handle, uint32_t message, uint64_t wparam,
 	static const char *const trace_message=std::getenv("RAVEN_TRACE_MSG");
 	const bool traced=trace_message && (std::string_view(trace_message)=="1" || std::strtoull(trace_message,nullptr,16)==handle);
 	if (traced) fprintf(stderr,"msg %llx %x %llx %llx\n",(unsigned long long)handle,message,(unsigned long long)wparam,(unsigned long long)lparam);
+	const auto began=std::chrono::steady_clock::now();
 	const auto result=invoke(procedure,arguments);
 	if (result.stop!=NativeStop::returned) throw result;
-	if (traced) fprintf(stderr,"msg %llx %x -> %llx\n",(unsigned long long)handle,message,(unsigned long long)result.value);
+	// The trace also says how long the procedure kept the message, to find the ones a program is slow on.
+	if (traced) fprintf(stderr,"msg %llx %x -> %llx in %lld ms\n",(unsigned long long)handle,message,(unsigned long long)result.value,
+		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-began).count());
 	return result.value;
 }
 

@@ -26,7 +26,8 @@ public:
 	NativeMemory &operator=(const NativeMemory &) = delete;
 	NativeMemoryRange allocate(uint64_t address, uint64_t size, uint32_t type, uint32_t protection);
 	// Maps a view of a shared host file (a section) as committed memory with the given PAGE_* access; VirtualFree-style release unmaps it.
-	NativeMemoryRange map_view(int descriptor, uint64_t offset, uint64_t size, uint32_t access);
+	// A nonzero address places the view there, when that range is free.
+	NativeMemoryRange map_view(int descriptor, uint64_t offset, uint64_t size, uint32_t access, uint64_t address = 0);
 	NativeMemoryRange free(uint64_t address, uint64_t size, uint32_t type);
 	NativeMemoryRange protect(uint64_t address, uint64_t size, uint32_t protection);
 	std::optional<std::array<uint8_t,48>> query(uint64_t address) const;

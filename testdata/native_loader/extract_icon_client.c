@@ -27,5 +27,33 @@ int raven_entry(void)
 		DestroyIcon(large);
 		DestroyIcon(small);
 	}
+	/* The shell's default extraction gives both icons at the sizes asked for, large in the low word and small in the high one, as
+	   paint.net asks for its setup's icons; an index past the last finds none. */
+	typedef HRESULT (WINAPI *default_extract)(LPCWSTR, int, UINT, HICON *, HICON *, UINT);
+	default_extract extract = (default_extract)GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SHDefExtractIconW");
+	HICON large = NULL, small = NULL;
+	ICONINFO info;
+	BITMAP bitmap;
+	if (!extract || extract(library, 0, 0, &large, &small, MAKELONG(48, 16)) != S_OK || !large || !small)
+		return 5;
+	if (!GetIconInfo(large, &info) || !GetObjectW(info.hbmColor ? info.hbmColor : info.hbmMask, sizeof bitmap, &bitmap) || bitmap.bmWidth != 48)
+		return 6;
+	if (info.hbmColor)
+		DeleteObject(info.hbmColor);
+	DeleteObject(info.hbmMask);
+	DestroyIcon(large);
+	DestroyIcon(small);
+	if (extract(library, 1000, 0, &large, &small, 0) != S_FALSE || large || small)
+		return 7;
+	/* A stock icon's location is a file and index that the shell's extraction finds, as .NET loads SystemIcons.Error from it. */
+	SHSTOCKICONINFO stock = {sizeof stock};
+	if (SHGetStockIconInfo(SIID_ERROR, SHGSI_ICONLOCATION, &stock) != S_OK || !stock.szPath[0])
+		return 8;
+	large = NULL;
+	if (extract(stock.szPath, stock.iIcon, 0, &large, NULL, 32) != S_OK || !large)
+		return 9;
+	if (!GetIconInfo(large, &info) || !GetObjectW(info.hbmColor ? info.hbmColor : info.hbmMask, sizeof bitmap, &bitmap) || bitmap.bmWidth != 32)
+		return 10;
+	DestroyIcon(large);
 	return 0;
 }

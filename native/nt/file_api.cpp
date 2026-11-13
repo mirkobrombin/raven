@@ -18,8 +18,11 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <deque>
 #include <dirent.h>
 #include <fcntl.h>
+#include <map>
+#include <optional>
 #include <poll.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
@@ -235,6 +238,137 @@ public:
 	const int descriptor;
 };
 
+// The changes a directory handle reports through ReadDirectoryChangesW: an inotify instance on the directory, and on the directories
+// below it when the caller watches the tree, with the changes seen and not yet taken. Changes wait between calls, as on Windows, so
+// none is lost while the program handles the ones before.
+class DirectoryWatch {
+public:
+	DirectoryWatch(int descriptor, std::filesystem::path root) : descriptor(descriptor), root(std::move(root)) {}
+	~DirectoryWatch() { ::close(descriptor); }
+	const int descriptor;
+	const std::filesystem::path root;
+	uint32_t filter = 0;
+	bool tree = false;
+	// Watches a directory given by its path below the root, and with the tree every directory below it.
+	void watch(const std::filesystem::path &relative)
+	{
+		const int watch = ::inotify_add_watch(descriptor, (root / relative).c_str(), IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
+			IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB | IN_ONLYDIR);
+		if (watch < 0)
+			return;
+		folders[watch] = relative;
+		if (!tree)
+			return;
+		std::error_code error;
+		for (std::filesystem::directory_iterator walk(root / relative, std::filesystem::directory_options::skip_permission_denied, error), end;
+			!error && walk != end; walk.increment(error))
+			if (walk->is_directory(error) && !walk->is_symlink(error))
+				this->watch(relative / walk->path().filename());
+	}
+	// Takes in what inotify has seen. A rename inside the watch reads as the old name and the new one; a name moved in or out of it
+	// reads as added or removed.
+	void gather()
+	{
+		alignas(inotify_event) char buffer[8192];
+		ssize_t count;
+		while ((count = ::read(descriptor, buffer, sizeof buffer)) > 0) {
+			for (ssize_t at = 0; at < count;) {
+				const auto *event = reinterpret_cast<const inotify_event *>(buffer + at);
+				at += ssize_t(sizeof(inotify_event) + event->len);
+				if (event->mask & IN_Q_OVERFLOW) {
+					overflowed = true;
+					continue;
+				}
+				if (event->mask & IN_IGNORED) {
+					folders.erase(event->wd);
+					continue;
+				}
+				const auto folder = folders.find(event->wd);
+				if (folder == folders.end() || !event->len)
+					continue;
+				const auto relative = folder->second / event->name;
+				const bool directory = event->mask & IN_ISDIR;
+				if (moved && !((event->mask & IN_MOVED_TO) && event->cookie == moved_cookie))
+					flush_move();
+				if (directory && tree && (event->mask & (IN_CREATE | IN_MOVED_TO)))
+					watch(relative);
+				if (!(filter & (directory ? 2U : 1U)) && (event->mask & (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)))
+					continue;
+				if (event->mask & IN_CREATE)
+					add(1, relative);
+				else if (event->mask & IN_DELETE)
+					add(2, relative);
+				else if (event->mask & IN_MOVED_FROM) {
+					moved = relative;
+					moved_cookie = event->cookie;
+				} else if (event->mask & IN_MOVED_TO) {
+					if (moved) {
+						add(4, *moved);
+						add(5, relative);
+						moved.reset();
+					} else {
+						add(1, relative);
+					}
+				} else if (((event->mask & (IN_MODIFY | IN_CLOSE_WRITE)) && (filter & 0x18)) || ((event->mask & IN_ATTRIB) && (filter & 0x17c)))
+					add(3, relative);
+			}
+		}
+		flush_move();
+	}
+	bool ready() const { return overflowed || !changes.empty(); }
+	// FILE_NOTIFY_INFORMATION records for as many changes as the buffer holds: the offset of the next record, the action, the length
+	// of the name in bytes and the name, each record starting on a 4-byte boundary. Changes that overflowed inotify, or a first change
+	// the buffer cannot hold, come back as no records at all, which tells the program to look at the directory again.
+	std::vector<uint8_t> take(uint32_t capacity)
+	{
+		std::vector<uint8_t> records;
+		size_t last = 0;
+		while (!overflowed && !changes.empty()) {
+			const auto &[action, name] = changes.front();
+			const size_t start = (records.size() + 3) & ~size_t(3), size = 12 + name.size() * 2;
+			if (start + size > capacity)
+				break;
+			if (!records.empty())
+				put32(records, last, uint32_t(start - last));
+			records.resize(start + size, 0);
+			put32(records, start + 4, action);
+			put32(records, start + 8, uint32_t(name.size() * 2));
+			std::memcpy(records.data() + start + 12, name.data(), name.size() * 2);
+			last = start;
+			changes.pop_front();
+		}
+		if (overflowed || (records.empty() && !changes.empty())) {
+			records.clear();
+			changes.clear();
+			overflowed = false;
+		}
+		return records;
+	}
+
+private:
+	void add(uint32_t action, const std::filesystem::path &relative)
+	{
+		auto name = from_utf8(relative.string());
+		std::replace(name.begin(), name.end(), u'/', u'\\');
+		// A file written in several pieces is one change until the program has taken it.
+		if (action == 3 && !changes.empty() && changes.back().first == 3 && changes.back().second == name)
+			return;
+		changes.emplace_back(action, std::move(name));
+	}
+	void flush_move()
+	{
+		if (moved)
+			add(2, *moved);
+		moved.reset();
+	}
+	static void put32(std::vector<uint8_t> &bytes, size_t at, uint32_t value) { std::memcpy(bytes.data() + at, &value, 4); }
+	std::map<int, std::filesystem::path> folders;
+	std::deque<std::pair<uint32_t, std::u16string>> changes;
+	std::optional<std::filesystem::path> moved;
+	uint32_t moved_cookie = 0;
+	bool overflowed = false;
+};
+
 void register_file_api(ApiRegistry &registry, KernelContext &context)
 {
 	auto &paths = context.paths;
@@ -375,6 +509,16 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			security = call.pointer_width() == 8 ? call.load<uint64_t>(call[4] + 16) : call.load<uint32_t>(call[4] + 16);
 		}
 		create_file(call, call.wide(call[0]), call.u32(1), call.u32(3), flags, security);
+	});
+	// A file opened again through a handle to it, with its own access, sharing and flags: the new handle names the same file.
+	registry.add("ReOpenFile", 4, [create_file, file_of](ApiCall &call) {
+		const auto file = file_of(call[0]);
+		if (!file) {
+			call.ret(invalid_handle);
+			call.set_last_error(6);
+			return;
+		}
+		create_file(call, file->dos_path, call.u32(1), 3, call.u32(3), 0);
 	});
 	registry.add("ReadFile", 5, [&, resolve, missing, file_of](ApiCall &call) {
 		if (transfer_pipe(context, call, true) || read_console_file(context, call))
@@ -1987,6 +2131,88 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[2], std::span<const uint8_t>(bytes.data(), written));
 		finish(written < bytes.size() ? buffer_overflow : 0, written);
 	});
+	// What an open file is, by the classes programs ask for: its times and attributes, its sizes, its index on the volume, its name without
+	// the drive, where it is read from, its mode and alignment, all of those at once, its attributes with a reparse tag, its identity on the
+	// volume, and that it is neither case sensitive nor has extended attributes.
+	registry.add("NtQueryInformationFile", 5, [file_of](ApiCall &call) {
+		constexpr uint32_t invalid_handle = 0xc0000008U, length_mismatch = 0xc0000004U, buffer_overflow = 0x80000005U, invalid_class = 0xc0000003U;
+		const size_t width = call.pointer_width();
+		const auto finish = [&](uint32_t status, uint64_t information) {
+			call.store_pointer(call[1], status);
+			call.store_pointer(call[1] + width, information);
+			call.ret(status);
+		};
+		const auto file = file_of(call[0]);
+		struct stat metadata{};
+		if (!file || ::fstat(file->descriptor, &metadata)) {
+			call.ret(invalid_handle);
+			return;
+		}
+		const auto basic = [&](std::vector<uint8_t> &bytes, size_t at) {
+			put64(bytes, at, filetime(metadata.st_ctim));
+			put64(bytes, at + 8, filetime(metadata.st_atim));
+			put64(bytes, at + 16, filetime(metadata.st_mtim));
+			put64(bytes, at + 24, filetime(metadata.st_ctim));
+			put32(bytes, at + 32, attributes_of(metadata, file->path));
+		};
+		const auto standard = [&](std::vector<uint8_t> &bytes, size_t at) {
+			put64(bytes, at, uint64_t(metadata.st_blocks) * 512);
+			put64(bytes, at + 8, uint64_t(metadata.st_size));
+			put32(bytes, at + 16, uint32_t(metadata.st_nlink));
+			bytes[at + 20] = (file->flags & 0x04000000U) ? 1 : 0;
+			bytes[at + 21] = S_ISDIR(metadata.st_mode) ? 1 : 0;
+		};
+		const auto position = [&] {
+			const off_t at = S_ISDIR(metadata.st_mode) ? 0 : ::lseek(file->descriptor, 0, SEEK_CUR);
+			return uint64_t(at < 0 ? 0 : at);
+		};
+		const auto name = file->dos_path.size() >= 2 && file->dos_path[1] == u':' ? file->dos_path.substr(2) : file->dos_path;
+		const auto put_name = [&](std::vector<uint8_t> &bytes, size_t at) {
+			bytes.resize(at + 4 + name.size() * 2);
+			put32(bytes, at, uint32_t(name.size() * 2));
+			std::memcpy(bytes.data() + at + 4, name.data(), name.size() * 2);
+		};
+		std::vector<uint8_t> bytes;
+		size_t fixed = 0;
+		switch (call.u32(4)) {
+		case 4: fixed = 40; bytes.assign(fixed, 0); basic(bytes, 0); break;
+		case 5: fixed = 24; bytes.assign(fixed, 0); standard(bytes, 0); break;
+		case 6: fixed = 8; bytes.assign(fixed, 0); put64(bytes, 0, uint64_t(metadata.st_ino)); break;
+		case 7: case 71: fixed = 4; bytes.assign(fixed, 0); break;
+		case 9: fixed = 4; put_name(bytes, 0); break;
+		case 14: fixed = 8; bytes.assign(fixed, 0); put64(bytes, 0, position()); break;
+		case 16: case 17: fixed = 4; bytes.assign(fixed, 0); break;
+		case 18:
+			// Basic, standard, internal, extended attributes, access, position, mode, alignment, then the name.
+			fixed = 100;
+			bytes.assign(fixed, 0);
+			basic(bytes, 0);
+			standard(bytes, 40);
+			put64(bytes, 64, uint64_t(metadata.st_ino));
+			put64(bytes, 80, position());
+			put_name(bytes, 96);
+			break;
+		case 35: fixed = 8; bytes.assign(fixed, 0); put32(bytes, 0, attributes_of(metadata, file->path)); break;
+		case 59:
+			fixed = 24;
+			bytes.assign(fixed, 0);
+			put64(bytes, 0, 0x52415645);
+			put64(bytes, 8, uint64_t(metadata.st_ino));
+			break;
+		default:
+			call.ret(invalid_class);
+			return;
+		}
+		const uint32_t capacity = call.u32(3);
+		if (capacity < fixed) {
+			finish(length_mismatch, 0);
+			return;
+		}
+		// A name that does not fit is cut at the buffer's end.
+		const size_t written = std::min<size_t>(bytes.size(), capacity);
+		call.write(call[2], std::span<const uint8_t>(bytes.data(), written));
+		finish(written < bytes.size() ? buffer_overflow : 0, written);
+	});
 	// GetTempFileName: a zero unique value picks a free name and creates the file; any other value only forms the name.
 	registry.add("GetTempFileNameW", 4, [&, resolve, missing, file_of, copy_file](ApiCall &call) {
 		const auto directory = call.wide(call[0]);
@@ -2294,6 +2520,72 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		objects.close(call[0]);
+		call.ret(1);
+	});
+	// The changes made in a directory, as FILE_NOTIFY_INFORMATION records. A synchronous handle waits for the first change; an
+	// overlapped call returns at once and reports through the OVERLAPPED and the handle's completion port. Closing the handle ends a
+	// waiting call as aborted. A completion routine is not supported.
+	registry.add("ReadDirectoryChangesW", 8, [&context, file_of](ApiCall &call) {
+		constexpr uint32_t aborted = 995;
+		const auto file = file_of(call[0]);
+		const uint32_t filter = call.u32(4);
+		if (!file) {
+			call.fail(6);
+			return;
+		}
+		if (!file->directory || !filter || (filter & ~0x17fU) || !call[1] || call[7]) {
+			call.fail(call[7] ? 50 : 87);
+			return;
+		}
+		if (!file->directory_watch) {
+			const int descriptor = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+			if (descriptor < 0) {
+				call.fail(8);
+				return;
+			}
+			auto watch = std::make_shared<DirectoryWatch>(descriptor, file->path);
+			watch->tree = uint32_t(call[3]) & 0xff;
+			watch->watch({});
+			file->directory_watch = watch;
+		}
+		const auto watch = file->directory_watch;
+		watch->filter = filter;
+		const uint64_t buffer = call[1], overlapped = call[6];
+		const uint32_t capacity = call.u32(2);
+		if (!overlapped) {
+			HostWait waiting;
+			context.threads.block([watch] {
+				watch->gather();
+				return watch->ready();
+			}, std::nullopt);
+			const auto records = watch->take(capacity);
+			call.write(buffer, records);
+			if (call[5])
+				call.store<uint32_t>(call[5], uint32_t(records.size()));
+			call.ret(1);
+			return;
+		}
+		const size_t width = call.pointer_width();
+		call.store_pointer(overlapped, 0x103);
+		call.store_pointer(overlapped + width, 0);
+		std::weak_ptr<FileObject> handle = file;
+		auto port = file->port;
+		const uint64_t key = file->key;
+		context.reactor->add([&context, handle, watch, port, key, buffer, capacity, overlapped, width]() {
+			const auto file = handle.lock();
+			if (!file || file->directory_watch != watch) {
+				finish_pending_io(context, port, key, overlapped, width, aborted, 0);
+				return true;
+			}
+			watch->gather();
+			if (!watch->ready())
+				return false;
+			const auto records = watch->take(capacity);
+			context.process.write_memory(buffer, records);
+			// The port is the one bound when the change arrives: a program may bind it after starting the wait.
+			finish_pending_io(context, file->port, file->key, overlapped, width, 0, records.size());
+			return true;
+		}, watch->descriptor, short(POLLIN));
 		call.ret(1);
 	});
 	registry.add("GetDriveTypeW", 1, [&, resolve, missing, file_of, copy_file, find_first](ApiCall &call) {

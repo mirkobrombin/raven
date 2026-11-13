@@ -53,6 +53,10 @@ struct GuestThread {
 	// the next one. Each is taken by the wait it ends.
 	bool alerted = false, alerted_by_id = false;
 	int priority = 0;
+	// Whether the thread last gave the processor up only because its time slice ended, and when: such a thread waits behind those
+	// that wait and wake, which on Windows find a free processor at once, but never longer than a few slices.
+	bool spent_slice = false;
+	std::chrono::steady_clock::time_point set_aside;
 	// Background processing mode, which only the thread itself enters and leaves; meanwhile it reports idle priority.
 	bool background = false;
 	std::shared_ptr<AccessToken> impersonation;
@@ -88,6 +92,8 @@ private:
 
 struct ThreadExit {
 	uint32_t code;
+	// ExitThread ends a thread as returning from it does, with the libraries told; TerminateThread and the end of the process do not.
+	bool detach = false;
 };
 
 // Cooperative scheduler over one traced process: guest threads switch only inside API calls.
@@ -101,6 +107,8 @@ public:
 	uint64_t default_stack_reserve = 1024 * 1024;
 	// Called in a new thread before it starts (reason 2) and after it ends (reason 3): TLS callbacks and DllMain notifications.
 	void set_notifier(std::function<void(uint32_t)> notify) { notifier = std::move(notify); }
+	// Called in a thread that is ending, before the libraries are told: the destructors of its fiber-local values.
+	void set_exit_hook(std::function<void()> hook) { exit_hook = std::move(hook); }
 	// From here on a guest runs until it calls the runtime: the process is ending and nothing else should be scheduled behind its back.
 	void stop_time_slicing();
 	// Called with the thread block of a thread that was just made and of one that is being released: static TLS of a 32-bit process.
@@ -137,7 +145,13 @@ public:
 	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake);
 	// Lets another runnable thread run; false when nothing else is runnable.
 	bool yield();
+	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
+	bool hand_over();
+	// Whether a thread other than the running one waits.
+	bool others_waiting() const;
 	[[noreturn]] void exit_current(uint32_t code);
+	// Runs the end of the calling thread: its fiber-local destructors, then the libraries' notifications.
+	void detach_current();
 	void terminate(const std::shared_ptr<GuestThread> &thread, uint32_t code);
 	// Ends every thread but the running one where it stands, as ExitProcess does before the libraries are told the process detaches.
 	void terminate_others(uint32_t code);
@@ -158,6 +172,7 @@ private:
 	std::chrono::steady_clock::time_point deadline;
 	std::function<NativeResult(uint64_t, std::span<const uint64_t>)> run;
 	std::function<void(uint32_t)> notifier;
+	std::function<void()> exit_hook;
 	std::function<void(uint64_t)> block_made, block_released;
 	std::function<void(std::chrono::milliseconds)> poll;
 	std::vector<std::function<bool()>> externals;

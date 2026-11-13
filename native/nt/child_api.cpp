@@ -476,6 +476,14 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 		create->second(inner);
 		call.ret(inner.result);
 	});
+	// The same for a token given with logon flags, which have nothing to load either: the token, the flags, the program and its command
+	// line, the creation flags, the environment, the folder, the startup information and where the process information goes.
+	registry.add("CreateProcessWithTokenW", 9, [&registry](ApiCall &call) {
+		const auto create = registry.find("CreateProcessW");
+		ApiCall inner(call.process, call.environment, {call[2], call[3], 0, 0, 0, call[4], call[5], call[6], call[7], call[8]});
+		create->second(inner);
+		call.ret(inner.result);
+	});
 	// A child has no message queue the parent could watch; it counts as idle from the start.
 	registry.add("WaitForInputIdle", 2, [&objects](ApiCall &call) {
 		if (!objects.object_as<ProcessObject>(call[0])) {

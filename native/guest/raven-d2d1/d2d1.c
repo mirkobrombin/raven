@@ -18,12 +18,16 @@
 #define NTDDI_VERSION NTDDI_WIN10_RS3
 #include <windows.h>
 #include <d2d1_3.h>
+#include <d2d1effectauthor.h>
 #include <d3d11.h>
 #include <dwrite_3.h>
 #include <wincodec.h>
+#include <float.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#include "shader_run.h"
 
 #define ALLOC(size) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size))
 /* A buffer every byte of which is written before it is read, such as the pixels of a whole frame, needs no zeroing. */
@@ -71,6 +75,11 @@ static UINT wic_depth(IWICBitmap *wic)
 		return 1;
 	if (!memcmp(&format, &GUID_WICPixelFormat8bppGray, sizeof(format)))
 		return 2;
+	/* Halves and floats, red first: paint.net renders its adjustments into bitmaps of floats. */
+	if (!memcmp(&format, &GUID_WICPixelFormat64bppPRGBAHalf, sizeof(format)) || !memcmp(&format, &GUID_WICPixelFormat64bppRGBAHalf, sizeof(format)))
+		return 8;
+	if (!memcmp(&format, &GUID_WICPixelFormat128bppPRGBAFloat, sizeof(format)) || !memcmp(&format, &GUID_WICPixelFormat128bppRGBAFloat, sizeof(format)))
+		return 16;
 	return 4;
 }
 
@@ -281,6 +290,52 @@ static BOOL bytes_add(struct bytes *buffer, const void *data, size_t size)
 	memcpy(buffer->data + buffer->size, data, size);
 	buffer->size += size;
 	return TRUE;
+}
+
+/* ---- half floats ----
+ * The 16-bit floats of a half-float texture for each 8-bit value, from 0 to 1: a sign bit, five bits of exponent biased by 15 and ten of
+ * mantissa, made once from the float's own bits. */
+static UINT16 byte_half[256];
+
+static UINT16 float_half(float value)
+{
+	union { float f; UINT32 u; } bits = {value};
+	const UINT32 sign = (bits.u >> 16) & 0x8000;
+	const INT32 exponent = (INT32)((bits.u >> 23) & 255) - 127 + 15;
+	UINT32 mantissa = bits.u & 0x7fffff;
+	if (exponent <= 0) {
+		/* Below the smallest normal half: a subnormal one, or zero. */
+		if (exponent < -10)
+			return (UINT16)sign;
+		mantissa = (mantissa | 0x800000) >> (1 - exponent);
+		return (UINT16)(sign | ((mantissa + 0x1000) >> 13));
+	}
+	if (exponent >= 31)
+		return (UINT16)(sign | 0x7c00);
+	return (UINT16)(sign | ((UINT32)exponent << 10) | ((mantissa + 0x1000) >> 13));
+}
+
+static void make_byte_half(void)
+{
+	UINT32 value;
+	for (value = 0; value < 256; ++value)
+		byte_half[value] = float_half(value / 255.0f);
+}
+
+/* A half's value as the 8-bit value the pixels here hold, 0 to 1 taken to 0 to 255. */
+static BYTE half_byte(UINT16 half)
+{
+	const UINT32 exponent = (half >> 10) & 31, mantissa = half & 0x3ff;
+	union { float f; UINT32 u; } bits;
+	if (half & 0x8000 || (!exponent && !mantissa))
+		return 0;
+	if (exponent == 31)
+		return 255;
+	if (!exponent)
+		bits.f = mantissa / 16777216.0f;
+	else
+		bits.u = ((exponent - 15 + 127) << 23) | (mantissa << 13);
+	return bits.f >= 1 ? 255 : (BYTE)(bits.f * 255 + 0.5f);
 }
 
 /* ---- matrices ---- */
@@ -1486,6 +1541,14 @@ struct bitmap {
 	ID3D11Texture2D *staging;
 	ID3D11DeviceContext *staging_context;
 	D3D11_MAPPED_SUBRESOURCE staging_mapped;
+	/* For a bitmap shared from a WIC lock: the lock, kept while the bitmap lives, and the memory it gave, which what is drawn into the
+	 * bitmap goes back to. */
+	IWICBitmapLock *lock;
+	BYTE *shared;
+	UINT shared_stride, shared_size;
+	/* What the memory held when it was last taken in, as a sum of it, while nothing else has changed the bitmap's pixels since. */
+	UINT64 shared_sum;
+	BOOL shared_taken;
 };
 
 static void bitmap_destroy(struct object *base)
@@ -1501,6 +1564,8 @@ static void bitmap_destroy(struct object *base)
 	}
 	if (self->dxgi)
 		IDXGISurface_Release(self->dxgi);
+	if (self->lock)
+		IWICBitmapLock_Release(self->lock);
 	FREE(self->mapped);
 }
 
@@ -1539,6 +1604,7 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 	D2D1_RECT_U area = {0, 0, self->pixels.width, self->pixels.height};
 	if (rect)
 		area = *rect;
+	self->shared_taken = FALSE;
 	if (area.right <= area.left || area.bottom <= area.top)
 		return S_OK;
 	if (self->format.format == DXGI_FORMAT_A8_UNORM) {
@@ -1554,6 +1620,56 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 			for (column = 0; column < width; ++column) {
 				to[column * 4] = to[column * 4 + 1] = to[column * 4 + 2] = 0;
 				to[column * 4 + 3] = from[column];
+			}
+		}
+		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
+		FREE(copy);
+		return S_OK;
+	}
+	if (self->format.format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+		/* Floats, red first, sixteen bytes a pixel, kept as bytes like the halves below. */
+		const UINT32 width = area.right - area.left, height = area.bottom - area.top;
+		BYTE *copy = ALLOC((size_t)width * height * 4);
+		UINT32 row, column, channel;
+		if (!copy)
+			return E_OUTOFMEMORY;
+		for (row = 0; row < height; ++row) {
+			const float *from = (const float *)((const BYTE *)data + (size_t)row * pitch);
+			BYTE *to = copy + (size_t)row * width * 4;
+			for (column = 0; column < width; ++column) {
+				BYTE value[4];
+				for (channel = 0; channel < 4; ++channel) {
+					const float part = from[column * 4 + channel];
+					value[channel] = part <= 0 ? 0 : part >= 1 ? 255 : (BYTE)(part * 255 + 0.5f);
+				}
+				if (self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE)
+					value[3] = 255;
+				to[column * 4] = min(value[2], value[3]);
+				to[column * 4 + 1] = min(value[1], value[3]);
+				to[column * 4 + 2] = min(value[0], value[3]);
+				to[column * 4 + 3] = value[3];
+			}
+		}
+		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
+		FREE(copy);
+		return S_OK;
+	}
+	if (self->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+		/* Half floats, red first, eight bytes a pixel: the host keeps them as bytes, a color never past its coverage. */
+		const UINT32 width = area.right - area.left, height = area.bottom - area.top;
+		BYTE *copy = ALLOC((size_t)width * height * 4);
+		UINT32 row, column;
+		if (!copy)
+			return E_OUTOFMEMORY;
+		for (row = 0; row < height; ++row) {
+			const UINT16 *from = (const UINT16 *)((const BYTE *)data + (size_t)row * pitch);
+			BYTE *to = copy + (size_t)row * width * 4;
+			for (column = 0; column < width; ++column) {
+				const BYTE alpha = self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE ? 255 : half_byte(from[column * 4 + 3]);
+				to[column * 4] = min(half_byte(from[column * 4 + 2]), alpha);
+				to[column * 4 + 1] = min(half_byte(from[column * 4 + 1]), alpha);
+				to[column * 4 + 2] = min(half_byte(from[column * 4]), alpha);
+				to[column * 4 + 3] = alpha;
 			}
 		}
 		canvas_pixels(self->surface, (INT32)area.left, (INT32)area.top, width, height, copy, width * 4, 1);
@@ -1600,12 +1716,43 @@ static void copy_surface(DWORD to, DWORD from, const D2D1_POINT_2U *point, const
 	queue_command(NULL, to, &command, NULL, 0);
 }
 
+static void share_back(struct bitmap *bitmap);
+
+/* A bitmap shared from a WIC lock shows what the lock's memory holds now: it is taken in again before the bitmap is read as a source,
+ * since the program, or a target over the same WIC bitmap, writes there without telling. */
+static void share_in(struct bitmap *bitmap)
+{
+	UINT64 sum = 0x9e3779b97f4a7c15ull;
+	UINT at;
+	if (!bitmap->shared)
+		return;
+	/* Memory that still holds what was taken in last is not taken in again: paint.net draws every tile of its document from such
+	   bitmaps each frame, and few of them change from one frame to the next. */
+	for (at = 0; at + 8 <= bitmap->shared_size; at += 8) {
+		sum ^= *(const UINT64 *)(bitmap->shared + at);
+		sum *= 0xff51afd7ed558ccdull;
+		sum ^= sum >> 29;
+	}
+	for (; at < bitmap->shared_size; ++at)
+		sum = (sum ^ bitmap->shared[at]) * 0x100000001b3ull;
+	if (bitmap->shared_taken && sum == bitmap->shared_sum)
+		return;
+	bitmap_CopyFromMemory(bitmap, NULL, bitmap->shared, bitmap->shared_stride);
+	bitmap->shared_sum = sum;
+	bitmap->shared_taken = TRUE;
+}
+
+/* What is copied into a bitmap shared from a WIC lock reaches the lock's memory too: paint.net copies each rendered tile into such a
+ * bitmap and reads its own memory. */
 static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_POINT_2U *point, ID2D1Bitmap *source, const D2D1_RECT_U *rect)
 {
 	struct bitmap *self = iface, *from = (struct bitmap *)source;
 	if (!from)
 		return E_INVALIDARG;
+	share_in(from);
 	copy_surface(self->surface, from->surface, point, rect, from->pixels);
+	if (self->shared)
+		share_back(self);
 	return S_OK;
 }
 
@@ -1613,12 +1760,14 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_P
 static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS options, D2D1_MAPPED_RECT *mapped)
 {
 	struct bitmap *self = iface;
-	const BOOL alpha = self->format.format == DXGI_FORMAT_A8_UNORM;
+	const BOOL alpha = self->format.format == DXGI_FORMAT_A8_UNORM, halves = self->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+	const BOOL floats = self->format.format == DXGI_FORMAT_R32G32B32A32_FLOAT;
 	if (self->mapped)
 		return D2DERR_WRONG_STATE;
-	/* The mapping is laid out as the format is: four bytes a pixel, or one for an alpha-only bitmap. */
-	self->mapped_pitch = self->pixels.width * (alpha ? 1 : 4);
-	if (!(self->mapped = ALLOC((size_t)self->pixels.width * 4 * self->pixels.height)))
+	/* The mapping is laid out as the format is: four bytes a pixel, one for an alpha-only bitmap, eight for half floats, sixteen for
+	   floats. */
+	self->mapped_pitch = self->pixels.width * (alpha ? 1 : halves ? 8 : floats ? 16 : 4);
+	if (!(self->mapped = ALLOC((size_t)self->pixels.width * (floats ? 16 : halves ? 8 : 4) * self->pixels.height)))
 		return E_OUTOFMEMORY;
 	if (!(options & D2D1_MAP_OPTIONS_DISCARD)) {
 		canvas_pixels(self->surface, 0, 0, self->pixels.width, self->pixels.height, self->mapped, self->pixels.width * 4, 0);
@@ -1626,6 +1775,29 @@ static HRESULT STDMETHODCALLTYPE bitmap_Map(void *iface, D2D1_MAP_OPTIONS option
 			UINT32 index;
 			for (index = 0; index < self->pixels.width * self->pixels.height; ++index)
 				self->mapped[index] = self->mapped[index * 4 + 3];
+		} else if (halves) {
+			/* Widened from the last pixel back, so that each is read before its halves are written over it. */
+			UINT32 index = self->pixels.width * self->pixels.height;
+			UINT16 *to = (UINT16 *)self->mapped;
+			while (index--) {
+				const BYTE *from = self->mapped + (size_t)index * 4;
+				const UINT16 blue = byte_half[from[0]], green = byte_half[from[1]], red = byte_half[from[2]], coverage = byte_half[from[3]];
+				to[index * 4] = red;
+				to[index * 4 + 1] = green;
+				to[index * 4 + 2] = blue;
+				to[index * 4 + 3] = coverage;
+			}
+		} else if (floats) {
+			UINT32 index = self->pixels.width * self->pixels.height;
+			float *to = (float *)self->mapped;
+			while (index--) {
+				const BYTE *from = self->mapped + (size_t)index * 4;
+				const float blue = from[0] / 255.0f, green = from[1] / 255.0f, red = from[2] / 255.0f, coverage = from[3] / 255.0f;
+				to[index * 4] = red;
+				to[index * 4 + 1] = green;
+				to[index * 4 + 2] = blue;
+				to[index * 4 + 3] = coverage;
+			}
 		}
 	}
 	self->map_options = options;
@@ -1672,6 +1844,92 @@ static struct bitmap *make_bitmap(IUnknown *factory, D2D1_SIZE_U size, D2D1_PIXE
 	self->dpi_y = dpi_y > 0 ? dpi_y : 96;
 	self->options = options;
 	return self;
+}
+
+/* ---- command lists ----
+ * Direct2D records what is drawn while a command list is the target and plays it back wherever the list is drawn. Here the list keeps
+ * the pixels that drawing gives, over the size of the target it replaced: the same pixels as a playback at the transform and
+ * resolution it was recorded at, which is how programs use a list to draw a part of a control once and place it. */
+struct command_list {
+	struct object base;
+	struct bitmap *bitmap;
+	BOOL closed;
+	/* What a closed list covers, once measured. */
+	BOOL measured;
+	D2D1_RECT_L drawn;
+};
+
+static void **command_list_table;
+static const GUID *const command_list_iids[] = {&IID_ID2D1Resource, &IID_ID2D1Image, &IID_ID2D1CommandList};
+
+static void command_list_destroy(struct object *base)
+{
+	struct command_list *self = (struct command_list *)base;
+	if (self->bitmap)
+		object_Release(self->bitmap);
+}
+
+static struct command_list *command_list_of(ID2D1Image *image)
+{
+	return image && command_list_table && *(void ***)image == command_list_table ? (struct command_list *)image : NULL;
+}
+
+/* The bitmap an image is drawn from: the image itself, or the pixels a command list holds; NULL for other images. A reference. */
+static ID2D1Bitmap *image_bitmap(ID2D1Image *image)
+{
+	ID2D1Bitmap *bitmap = NULL;
+	struct command_list *list = command_list_of(image);
+	if (list) {
+		if (list->bitmap)
+			object_AddRef(list->bitmap);
+		return (ID2D1Bitmap *)list->bitmap;
+	}
+	if (!image || FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap)))
+		return NULL;
+	return bitmap;
+}
+
+/* A command list covers what was drawn into it, not the target it was recorded through. The commands are kept as the pixels they drew, so
+ * what they covered is taken as the pixels they changed from the empty start, in pixels of the list; once the list is closed it is
+ * measured only once. */
+static D2D1_RECT_L list_drawn(struct command_list *list)
+{
+	D2D1_RECT_L drawn = {0, 0, 0, 0};
+	const struct bitmap *bitmap = list->bitmap;
+	DWORD *pixels;
+	UINT32 row, column;
+	if (list->measured)
+		return list->drawn;
+	if (!bitmap || !(pixels = ALLOC_UNSET((size_t)bitmap->pixels.width * bitmap->pixels.height * 4)))
+		return drawn;
+	canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
+	drawn.left = drawn.top = LONG_MAX;
+	for (row = 0; row < bitmap->pixels.height; ++row)
+		for (column = 0; column < bitmap->pixels.width; ++column)
+			if (pixels[(size_t)row * bitmap->pixels.width + column]) {
+				drawn.left = min(drawn.left, (LONG)column);
+				drawn.top = min(drawn.top, (LONG)row);
+				drawn.right = max(drawn.right, (LONG)column + 1);
+				drawn.bottom = max(drawn.bottom, (LONG)row + 1);
+			}
+	FREE(pixels);
+	if (drawn.left == LONG_MAX)
+		drawn.left = drawn.top = 0;
+	if (list->closed) {
+		list->drawn = drawn;
+		list->measured = TRUE;
+	}
+	return drawn;
+}
+
+/* Closing ends the recording: a closed list can be drawn but no longer be a target. */
+static HRESULT STDMETHODCALLTYPE command_list_Close(void *iface)
+{
+	struct command_list *self = iface;
+	if (self->closed)
+		return D2DERR_WRONG_STATE;
+	self->closed = TRUE;
+	return S_OK;
 }
 
 /* ---- brushes ---- */
@@ -1750,13 +2008,11 @@ static void STDMETHODCALLTYPE brush_GetBitmap(void *iface, ID2D1Bitmap **bitmap)
 	if (self->bitmap)
 		object_AddRef(self->bitmap);
 }
-/* An image brush draws a bitmap; other images (effects, command lists) are not drawn by this component. */
+/* An image brush draws a bitmap or what a command list drew; effects are not drawn by this component. */
 static void STDMETHODCALLTYPE brush_SetImage(void *iface, ID2D1Image *image)
 {
 	struct brush *self = iface;
-	ID2D1Bitmap *bitmap = NULL;
-	if (image && FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap)))
-		bitmap = NULL;
+	ID2D1Bitmap *bitmap = image_bitmap(image);
 	brush_SetBitmap(iface, bitmap);
 	if (bitmap)
 		object_Release(bitmap);
@@ -1876,6 +2132,196 @@ static D2D1_SIZE_F *STDMETHODCALLTYPE layer_GetSize(void *iface, D2D1_SIZE_F *si
 static void **layer_table;
 static const GUID *const layer_iids[] = {&IID_ID2D1Resource, &IID_ID2D1Layer};
 
+/* ---- color contexts: a color space, and for a custom one the ICC profile that defines it ---- */
+struct color_context {
+	struct object base;
+	D2D1_COLOR_SPACE space;
+	UINT32 size;
+	BYTE *profile;
+	/* What ID2D1ColorContext1 tells: made from a profile, from a DXGI color space, or from a simple profile. */
+	D2D1_COLOR_CONTEXT_TYPE type;
+	DXGI_COLOR_SPACE_TYPE dxgi;
+	D2D1_SIMPLE_COLOR_PROFILE simple;
+};
+
+static void color_context_destroy(struct object *self) { FREE(((struct color_context *)self)->profile); }
+static D2D1_COLOR_SPACE STDMETHODCALLTYPE color_context_GetColorSpace(void *iface) { return ((struct color_context *)iface)->space; }
+static UINT32 STDMETHODCALLTYPE color_context_GetProfileSize(void *iface) { return ((struct color_context *)iface)->size; }
+
+static HRESULT STDMETHODCALLTYPE color_context_GetProfile(void *iface, BYTE *profile, UINT32 size)
+{
+	const struct color_context *self = iface;
+	if (size < self->size)
+		return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+	if (self->size)
+		memcpy(profile, self->profile, self->size);
+	return S_OK;
+}
+
+static D2D1_COLOR_CONTEXT_TYPE STDMETHODCALLTYPE color_context_GetColorContextType(void *iface) { return ((struct color_context *)iface)->type; }
+static DXGI_COLOR_SPACE_TYPE STDMETHODCALLTYPE color_context_GetDXGIColorSpace(void *iface) { return ((struct color_context *)iface)->dxgi; }
+
+static HRESULT STDMETHODCALLTYPE color_context_GetSimpleColorProfile(void *iface, D2D1_SIMPLE_COLOR_PROFILE *profile)
+{
+	const struct color_context *self = iface;
+	if (!profile)
+		return E_INVALIDARG;
+	if (self->type != D2D1_COLOR_CONTEXT_TYPE_SIMPLE)
+		return D2DERR_INVALID_PROPERTY;
+	*profile = self->simple;
+	return S_OK;
+}
+
+/* ID2D1ColorContext1 adds three methods after those of ID2D1ColorContext. */
+enum { color_context_type_slot = ID2D1ColorContext_methods, color_context_dxgi_slot, color_context_simple_slot, color_context_methods };
+static void **color_context_table;
+static const GUID *const color_context_iids[] = {&IID_ID2D1Resource, &IID_ID2D1ColorContext, &IID_ID2D1ColorContext1};
+
+/* ---- the profiles of the standard spaces ----
+ * Direct2D gives a context of a standard space the ICC profile of that space, which a program can read back. These are display profiles
+ * (version 2.1) built from the values the specifications give: the primaries adapted to the D50 illuminant of the profile connection
+ * space, the D65 white of the space, and its transfer curve, which the three channels share. sRGB has its piecewise curve as a table,
+ * scRGB is linear, and Adobe RGB (1998) has one gamma of 563/256. */
+enum { SRGB_CURVE_ENTRIES = 1024, RGB_PROFILE_ROOM = 128 + 4 + 9 * 12 + 4 * 20 + 12 + 2 * SRGB_CURVE_ENTRIES + 128 + 24 };
+enum rgb_curve { CURVE_LINEAR, CURVE_GAMMA, CURVE_SRGB };
+
+static void put_big(BYTE *at, UINT32 value)
+{
+	at[0] = (BYTE)(value >> 24);
+	at[1] = (BYTE)(value >> 16);
+	at[2] = (BYTE)(value >> 8);
+	at[3] = (BYTE)value;
+}
+
+/* s15Fixed16Number, from a value given in hundred-thousandths. */
+static UINT32 fixed16(UINT32 scaled)
+{
+	return (UINT32)(((UINT64)scaled * 65536 + 50000) / 100000);
+}
+
+/* The fifth root of a value from zero to one, by Newton's method from above. */
+static double fifth_root(double value)
+{
+	double root = 1;
+	int step;
+	if (value <= 0)
+		return 0;
+	for (step = 0; step < 60; ++step) {
+		const double square = root * root;
+		root = (4 * root + value / (square * square)) / 5;
+	}
+	return root;
+}
+
+/* The sRGB transfer function, from an encoded value to a linear one: a line near black, then the power 2.4 of an offset value. */
+static double srgb_linear(double encoded)
+{
+	double offset, square;
+	if (encoded <= 0.04045)
+		return encoded / 12.92;
+	offset = (encoded + 0.055) / 1.055;
+	square = offset * offset;
+	return square * fifth_root(square);
+}
+
+static UINT32 rgb_profile(BYTE *profile, const UINT32 colors[4][3], enum rgb_curve curve, const char *name)
+{
+	static const char notice[] = "No copyright";
+	static const UINT32 xyz_tags[4] = {0x77747074, 0x7258595a, 0x6758595a, 0x6258595a};
+	static const UINT32 curve_tags[3] = {0x72545243, 0x67545243, 0x62545243};
+	const UINT32 entries = curve == CURVE_LINEAR ? 0 : curve == CURVE_GAMMA ? 1 : SRGB_CURVE_ENTRIES;
+	UINT32 name_size = 1;
+	while (name[name_size - 1])
+		++name_size;
+	const UINT32 curve_size = 12 + 2 * entries, description_size = 12 + name_size + 8 + 3 + 67;
+	UINT32 at = 128 + 4 + 9 * 12, tag = 0, index, axis, size;
+	BYTE *table = profile + 132;
+	memset(profile, 0, RGB_PROFILE_ROOM);
+	put_big(profile + 8, 0x02100000);
+	put_big(profile + 12, 0x6d6e7472);
+	put_big(profile + 16, 0x52474220);
+	put_big(profile + 20, 0x58595a20);
+	put_big(profile + 36, 0x61637370);
+	put_big(profile + 68, fixed16(96420));
+	put_big(profile + 72, fixed16(100000));
+	put_big(profile + 76, fixed16(82491));
+	put_big(profile + 128, 9);
+	for (index = 0; index < 4; ++index, at += 20) {
+		put_big(table + tag * 12, xyz_tags[index]);
+		put_big(table + tag * 12 + 4, at);
+		put_big(table + tag++ * 12 + 8, 20);
+		put_big(profile + at, 0x58595a20);
+		for (axis = 0; axis < 3; ++axis)
+			put_big(profile + at + 8 + axis * 4, fixed16(colors[index][axis]));
+	}
+	for (index = 0; index < 3; ++index) {
+		put_big(table + tag * 12, curve_tags[index]);
+		put_big(table + tag * 12 + 4, at);
+		put_big(table + tag++ * 12 + 8, curve_size);
+	}
+	put_big(profile + at, 0x63757276);
+	put_big(profile + at + 8, entries);
+	if (curve == CURVE_GAMMA) {
+		profile[at + 12] = 563 >> 8;
+		profile[at + 13] = 563 & 0xff;
+	}
+	for (index = 0; curve == CURVE_SRGB && index < entries; ++index) {
+		const UINT32 value = (UINT32)(srgb_linear((double)index / (entries - 1)) * 65535 + 0.5);
+		profile[at + 12 + index * 2] = (BYTE)(value >> 8);
+		profile[at + 13 + index * 2] = (BYTE)value;
+	}
+	at += (curve_size + 3) & ~3u;
+	/* textDescriptionType: the ASCII name, then an empty Unicode one and the 67 bytes of an empty ScriptCode one. */
+	put_big(table + tag * 12, 0x64657363);
+	put_big(table + tag * 12 + 4, at);
+	put_big(table + tag++ * 12 + 8, description_size);
+	put_big(profile + at, 0x64657363);
+	put_big(profile + at + 8, name_size);
+	memcpy(profile + at + 12, name, name_size);
+	at += (description_size + 3) & ~3u;
+	put_big(table + tag * 12, 0x63707274);
+	put_big(table + tag * 12 + 4, at);
+	put_big(table + tag * 12 + 8, 8 + sizeof notice);
+	put_big(profile + at, 0x74657874);
+	memcpy(profile + at + 8, notice, sizeof notice);
+	size = at + ((8 + sizeof notice + 3) & ~3u);
+	put_big(profile, size);
+	return size;
+}
+
+/* The white, red, green and blue of the spaces, in hundred-thousandths. sRGB and scRGB share the primaries of BT.709. */
+static const UINT32 srgb_colors[4][3] = {{95045, 100000, 108905}, {43607, 22249, 1392}, {38515, 71687, 9708}, {14307, 6061, 71410}};
+static const UINT32 adobe_colors[4][3] = {{95045, 100000, 108905}, {60974, 31111, 1947}, {20528, 62567, 6087}, {14919, 6322, 74457}};
+
+/* A context of this kind and space, with the profile it was given, or the profile of sRGB or scRGB for those spaces; the caller checks the
+   arguments. */
+static HRESULT make_color_context(IUnknown *factory, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size, D2D1_COLOR_CONTEXT_TYPE type,
+	DXGI_COLOR_SPACE_TYPE dxgi, ID2D1ColorContext **out)
+{
+	struct color_context *color;
+	BYTE standard[RGB_PROFILE_ROOM];
+	if (!size && (space == D2D1_COLOR_SPACE_SRGB || space == D2D1_COLOR_SPACE_SCRGB)) {
+		size = rgb_profile(standard, srgb_colors, space == D2D1_COLOR_SPACE_SRGB ? CURVE_SRGB : CURVE_LINEAR,
+			space == D2D1_COLOR_SPACE_SRGB ? "sRGB" : "scRGB");
+		profile = standard;
+	}
+	if (!(color = ALLOC(sizeof(*color))))
+		return E_OUTOFMEMORY;
+	if (size && !(color->profile = ALLOC(size))) {
+		FREE(color);
+		return E_OUTOFMEMORY;
+	}
+	if (size)
+		memcpy(color->profile, profile, size);
+	color->space = space;
+	color->size = size;
+	color->type = type;
+	color->dxgi = dxgi;
+	object_init(&color->base, color_context_table, color_context_destroy, color_context_iids, 3, factory);
+	*out = (ID2D1ColorContext *)color;
+	return S_OK;
+}
+
 /* ---- meshes: the triangles a tessellation sink writes, each a closed figure of one path that a target fills ---- */
 struct mesh {
 	struct object base;
@@ -1994,6 +2440,10 @@ static void build_resource_tables(void)
 	bitmap_table[ID2D1Bitmap1_Map_slot] = (void *)bitmap_Map;
 	bitmap_table[ID2D1Bitmap1_Unmap_slot] = (void *)bitmap_Unmap;
 
+	command_list_table = make_table(ID2D1CommandList_table, ID2D1CommandList_methods);
+	set_resource(command_list_table);
+	command_list_table[ID2D1CommandList_Close_slot] = (void *)command_list_Close;
+
 	solid_table = make_table(ID2D1SolidColorBrush_table, ID2D1SolidColorBrush_methods);
 	linear_table = make_table(ID2D1LinearGradientBrush_table, ID2D1LinearGradientBrush_methods);
 	radial_table = make_table(ID2D1RadialGradientBrush_table, ID2D1RadialGradientBrush_methods);
@@ -2047,6 +2497,16 @@ static void build_resource_tables(void)
 	image_brush_table[ID2D1ImageBrush_GetInterpolationMode_slot] = (void *)brush_GetInterpolationMode;
 	image_brush_table[ID2D1ImageBrush_GetSourceRectangle_slot] = (void *)brush_GetSourceRectangle;
 
+	color_context_table = ALLOC(color_context_methods * sizeof(void *));
+	memcpy(color_context_table, ID2D1ColorContext_table, ID2D1ColorContext_methods * sizeof(void *));
+	color_context_table[color_context_type_slot] = (void *)color_context_GetColorContextType;
+	color_context_table[color_context_dxgi_slot] = (void *)color_context_GetDXGIColorSpace;
+	color_context_table[color_context_simple_slot] = (void *)color_context_GetSimpleColorProfile;
+	set_resource(color_context_table);
+	color_context_table[ID2D1ColorContext_GetColorSpace_slot] = (void *)color_context_GetColorSpace;
+	color_context_table[ID2D1ColorContext_GetProfileSize_slot] = (void *)color_context_GetProfileSize;
+	color_context_table[ID2D1ColorContext_GetProfile_slot] = (void *)color_context_GetProfile;
+
 	layer_table = make_table(ID2D1Layer_table, ID2D1Layer_methods);
 	set_resource(layer_table);
 	layer_table[ID2D1Layer_GetSize_slot] = (void *)layer_GetSize;
@@ -2076,6 +2536,8 @@ struct target {
 	IUnknown *factory;
 	struct device *device;
 	struct bitmap *bitmap; /* what is drawn into */
+	struct bitmap *own; /* the pixels of the window, device context or WIC bitmap the target was made for; weak */
+	struct command_list *list; /* the command list that is the target, whose pixels `bitmap` is */
 	HWND hwnd;
 	HDC dc;
 	RECT dc_rect;
@@ -2094,6 +2556,14 @@ struct target {
 	BOOL drawn;
 	HRESULT error;
 	UINT32 pushed;
+	/* The clips and layers pushed, as they were sent and on the pixels they were pushed on, to push them again on pixels that grow
+	   under them. */
+	struct pushed_state {
+		struct bitmap *on; /* weak, only compared */
+		struct command command;
+		BYTE *data;
+		size_t size;
+	} pushes[32];
 	D2D1_PIXEL_FORMAT format;
 	/* GDI interop: a DIB section the program draws into between GetDC and ReleaseDC. */
 	HDC gdi_dc;
@@ -2120,7 +2590,7 @@ static struct target *target_of(void *iface)
 }
 
 static const GUID *const context_iids[] = {&IID_ID2D1DeviceContext, &IID_ID2D1DeviceContext1, &IID_ID2D1DeviceContext2, &IID_ID2D1DeviceContext3,
-	&IID_ID2D1DeviceContext4, &IID_ID2D1DeviceContext5};
+	&IID_ID2D1DeviceContext4, &IID_ID2D1DeviceContext5, &IID_ID2D1DeviceContext6};
 
 static HRESULT STDMETHODCALLTYPE target_QueryInterface(void *iface, REFIID riid, void **out)
 {
@@ -2128,7 +2598,7 @@ static HRESULT STDMETHODCALLTYPE target_QueryInterface(void *iface, REFIID riid,
 	void *found = NULL;
 	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1Resource) || same_guid(riid, &IID_ID2D1RenderTarget))
 		found = &self->primary;
-	else if (any_guid(riid, context_iids, 6))
+	else if (any_guid(riid, context_iids, 7))
 		found = self->kind == TARGET_CONTEXT ? (void *)&self->primary : (void *)&self->context;
 	else if (same_guid(riid, &IID_ID2D1HwndRenderTarget) && self->kind == TARGET_HWND)
 		found = &self->primary;
@@ -2161,6 +2631,8 @@ static ULONG STDMETHODCALLTYPE target_Release(void *iface)
 		flush_queue();
 		if (self->bitmap)
 			object_Release(self->bitmap);
+		if (self->list)
+			object_Release(self->list);
 		if (self->params)
 			IDWriteRenderingParams_Release(self->params);
 		if (self->wic)
@@ -2512,12 +2984,57 @@ static void read_texture(struct bitmap *bitmap, const RECT *wanted)
 	ID3D11Texture2D_Release(texture);
 }
 
+/* A command list has no size of its own: drawing past the pixels it keeps, as far as a bitmap drawn at a place says, makes them reach
+ * that far, the pixels drawn so far kept where they are and the clips and layers pushed on them pushed again. A clip pushed on the
+ * target the list took the place of stays with that target: paint.net clips its window, then records its whole document. Not under a
+ * layer with an opacity, whose content is held apart from the pixels until it is popped. */
+static void list_reach(struct target *self, const D2D1_RECT_F *destination)
+{
+	const D2D1_MATRIX_3X2_F m = world(self);
+	struct bitmap *bitmap = self->bitmap;
+	float right = 0, bottom = 0;
+	UINT32 width, height;
+	DWORD surface;
+	BYTE *pixels;
+	int corner;
+	UINT32 index;
+	if (!self->list || self->list->closed || !bitmap || self->pushed > ARRAYSIZE(self->pushes))
+		return;
+	for (index = 0; index < self->pushed; ++index)
+		if (self->pushes[index].on == bitmap && self->pushes[index].command.op == OP_PUSH_LAYER && self->pushes[index].command.opacity < 1.0f)
+			return;
+	for (corner = 0; corner < 4; ++corner) {
+		const float x = corner & 1 ? destination->right : destination->left, y = corner & 2 ? destination->bottom : destination->top;
+		right = max(right, x * m._11 + y * m._21 + m._31);
+		bottom = max(bottom, x * m._12 + y * m._22 + m._32);
+	}
+	right = min(right, 16384.0f);
+	bottom = min(bottom, 16384.0f);
+	width = max(bitmap->pixels.width, (UINT32)right + ((float)(UINT32)right < right));
+	height = max(bitmap->pixels.height, (UINT32)bottom + ((float)(UINT32)bottom < bottom));
+	if ((width == bitmap->pixels.width && height == bitmap->pixels.height) || !(surface = RavenCanvasCreate(width, height)))
+		return;
+	if ((pixels = ALLOC_UNSET((size_t)bitmap->pixels.width * bitmap->pixels.height * 4))) {
+		canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
+		canvas_pixels(surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 1);
+		FREE(pixels);
+	}
+	canvas_destroy(bitmap->surface);
+	bitmap->surface = surface;
+	bitmap->pixels.width = width;
+	bitmap->pixels.height = height;
+	for (index = 0; index < self->pushed; ++index)
+		if (self->pushes[index].on == bitmap)
+			queue_command(self, surface, &self->pushes[index].command, self->pushes[index].data, self->pushes[index].size);
+}
+
 static void draw_bitmap(struct target *self, struct bitmap *bitmap, const D2D1_RECT_F *destination, float opacity, UINT32 interpolation,
 	const D2D1_RECT_F *source)
 {
 	struct command command;
 	if (!bitmap)
 		return;
+	share_in(bitmap);
 	if (bitmap->dxgi) {
 		/* The source in pixels, a pixel wider on each side for the filtering that samples beside it. */
 		RECT wanted;
@@ -2530,6 +3047,8 @@ static void draw_bitmap(struct target *self, struct bitmap *bitmap, const D2D1_R
 		wanted.bottom = (LONG)bottom + 2;
 		read_texture(bitmap, &wanted);
 	}
+	if (destination)
+		list_reach(self, destination);
 	command_start(self, &command, OP_DRAW_BITMAP);
 	command.bitmap = bitmap->surface;
 	command.opacity = opacity;
@@ -2569,8 +3088,11 @@ static void STDMETHODCALLTYPE target_DrawBitmap1(void *iface, ID2D1Bitmap *bitma
 
 struct effect;
 static struct effect *effect_of_image(ID2D1Image *image);
+static ID2D1Image *effect_drawn_input(struct effect *effect);
+static void draw_effect(struct target *self, struct effect *effect, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
+	D2D1_INTERPOLATION_MODE interpolation);
 
-/* DrawImage of a bitmap at an offset; images that are not bitmaps (effects, command lists) draw nothing here. */
+/* DrawImage of a bitmap, or of what a command list drew, at an offset; an effect draws the input it passes through. */
 static void STDMETHODCALLTYPE target_DrawImage(void *iface, ID2D1Image *image, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
 	D2D1_INTERPOLATION_MODE interpolation, D2D1_COMPOSITE_MODE mode)
 {
@@ -2578,9 +3100,21 @@ static void STDMETHODCALLTYPE target_DrawImage(void *iface, ID2D1Image *image, c
 	ID2D1Bitmap *bitmap = NULL;
 	struct bitmap *b;
 	D2D1_RECT_F destination, source;
-	if (!image || FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
-		if (!effect_of_image(image))
+	if (!(bitmap = image_bitmap(image))) {
+		struct effect *effect = effect_of_image(image);
+		ID2D1Image *input = effect ? effect_drawn_input(effect) : NULL;
+		/* A list nothing was drawn into draws nothing. */
+		if (command_list_of(image))
+			return;
+		if (!effect) {
 			unimplemented("ID2D1DeviceContext", "DrawImage of an image that is not a bitmap");
+			return;
+		}
+		/* An effect that passes an input through draws that input; any other is rendered. */
+		if (input && input != image)
+			target_DrawImage(iface, input, offset, rect, interpolation, mode);
+		else
+			draw_effect(self, effect, offset, rect, interpolation);
 		return;
 	}
 	b = (struct bitmap *)bitmap;
@@ -2710,6 +3244,21 @@ static void STDMETHODCALLTYPE target_GetTags(void *iface, D2D1_TAG *tag1, D2D1_T
 	if (tag2) *tag2 = target_of(iface)->tag2;
 }
 
+/* A clip or layer pushed is kept as it was sent, its data with it. */
+static void keep_push(struct target *self, const struct command *command, struct bytes *data)
+{
+	if (self->pushed < ARRAYSIZE(self->pushes)) {
+		struct pushed_state *state = &self->pushes[self->pushed];
+		state->on = self->bitmap;
+		state->command = *command;
+		state->data = data ? data->data : NULL;
+		state->size = data ? data->size : 0;
+	} else if (data && data->data) {
+		FREE(data->data);
+	}
+	++self->pushed;
+}
+
 static void push_layer(struct target *self, const D2D1_LAYER_PARAMETERS *parameters)
 {
 	struct command command;
@@ -2734,8 +3283,7 @@ static void push_layer(struct target *self, const D2D1_LAYER_PARAMETERS *paramet
 	if (parameters->opacityBrush)
 		unimplemented("ID2D1RenderTarget", "PushLayer with an opacity brush");
 	send(self, &command, &data);
-	FREE(data.data);
-	++self->pushed;
+	keep_push(self, &command, &data);
 }
 
 static void STDMETHODCALLTYPE target_PushLayer(void *iface, const D2D1_LAYER_PARAMETERS *parameters, ID2D1Layer *layer)
@@ -2755,6 +3303,8 @@ static void pop(struct target *self)
 		return;
 	command_start(self, &command, OP_POP);
 	send(self, &command, NULL);
+	if (self->pushed <= ARRAYSIZE(self->pushes) && self->pushes[self->pushed - 1].data)
+		FREE(self->pushes[self->pushed - 1].data);
 	--self->pushed;
 }
 
@@ -2772,7 +3322,7 @@ static void STDMETHODCALLTYPE target_PushAxisAlignedClip(void *iface, const D2D1
 	command.rect[2] = rect->right;
 	command.rect[3] = rect->bottom;
 	send(self, &command, NULL);
-	++self->pushed;
+	keep_push(self, &command, NULL);
 }
 
 static void STDMETHODCALLTYPE target_Clear(void *iface, const D2D1_COLOR_F *color)
@@ -2828,11 +3378,30 @@ static void read_wic(struct target *self)
 	if (!self->bitmap || width != self->bitmap->pixels.width || height != self->bitmap->pixels.height)
 		return;
 	depth = wic_depth(self->wic);
-	bytes = depth == 4 ? 4 : 1;
-	if (!(pixels = ALLOC((size_t)width * height * 4)))
+	bytes = depth >= 4 ? depth : 1;
+	if (!(pixels = ALLOC((size_t)width * height * max(bytes, 4))))
 		return;
 	if (SUCCEEDED(IWICBitmap_CopyPixels(self->wic, NULL, width * bytes, width * height * bytes, pixels))) {
-		if (depth != 4) {
+		if (depth == 8 || depth == 16) {
+			/* Narrowed in place from the first pixel on, each read whole before the bytes that take its place are written. */
+			UINT index;
+			for (index = 0; index < width * height; ++index) {
+				BYTE value[4];
+				UINT channel;
+				for (channel = 0; channel < 4; ++channel) {
+					if (depth == 8)
+						value[channel] = half_byte(((const UINT16 *)pixels)[index * 4 + channel]);
+					else {
+						const float part = ((const float *)pixels)[index * 4 + channel];
+						value[channel] = part <= 0 ? 0 : part >= 1 ? 255 : (BYTE)(part * 255 + 0.5f);
+					}
+				}
+				pixels[index * 4] = min(value[2], value[3]);
+				pixels[index * 4 + 1] = min(value[1], value[3]);
+				pixels[index * 4 + 2] = min(value[0], value[3]);
+				pixels[index * 4 + 3] = value[3];
+			}
+		} else if (depth != 4) {
 			UINT index = width * height;
 			const BOOL alpha = depth == 1;
 			while (index--) {
@@ -2846,22 +3415,72 @@ static void read_wic(struct target *self)
 	FREE(pixels);
 }
 
+/* The pixels of a bitmap shared from a WIC lock go back to the lock's memory in the bitmap's format. */
+static void share_back(struct bitmap *bitmap)
+{
+	const UINT32 width = bitmap->pixels.width, height = bitmap->pixels.height;
+	const DXGI_FORMAT format = bitmap->format.format;
+	const UINT bytes = format == DXGI_FORMAT_R32G32B32A32_FLOAT ? 16 : format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 :
+		format == DXGI_FORMAT_A8_UNORM ? 1 : 4;
+	BYTE *pixels;
+	UINT32 row, column;
+	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
+		return;
+	bitmap->shared_taken = FALSE;
+	flush_queue();
+	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
+	for (row = 0; row < height && (size_t)row * bitmap->shared_stride + (size_t)width * bytes <= bitmap->shared_size; ++row) {
+		const BYTE *from = pixels + (size_t)row * width * 4;
+		BYTE *to = bitmap->shared + (size_t)row * bitmap->shared_stride;
+		if (bytes == 4)
+			memcpy(to, from, (size_t)width * 4);
+		else
+			for (column = 0; column < width; ++column) {
+				const BYTE *pixel = from + column * 4;
+				if (bytes == 16) {
+					float *floats = (float *)to + column * 4;
+					floats[0] = pixel[2] / 255.0f;
+					floats[1] = pixel[1] / 255.0f;
+					floats[2] = pixel[0] / 255.0f;
+					floats[3] = pixel[3] / 255.0f;
+				} else if (bytes == 8) {
+					UINT16 *halves = (UINT16 *)to + column * 4;
+					halves[0] = byte_half[pixel[2]];
+					halves[1] = byte_half[pixel[1]];
+					halves[2] = byte_half[pixel[0]];
+					halves[3] = byte_half[pixel[3]];
+				} else
+					to[column] = pixel[3];
+			}
+	}
+	FREE(pixels);
+}
+
 /* What a finished frame turns into: the window's pixels, the bound device context's, the Direct3D texture's or the WIC bitmap's. */
 static void present(struct target *self)
 {
 	struct bitmap *bitmap = self->bitmap;
 	BYTE *pixels;
 	const UINT32 width = bitmap ? bitmap->pixels.width : 0, height = bitmap ? bitmap->pixels.height : 0;
-	if (!bitmap || (self->kind != TARGET_HWND && self->kind != TARGET_DC && self->kind != TARGET_WIC && !bitmap->dxgi))
+	/* The window, device context or WIC bitmap takes the frame only while the target draws into its own pixels: a device context given
+	 * another target draws there alone. */
+	const int kind = bitmap && bitmap == self->own ? self->kind : TARGET_CONTEXT;
+	if (bitmap && bitmap->shared && bitmap != self->own) {
+		if (self->drawn)
+			share_back(bitmap);
+		self->drawn = FALSE;
+		return;
+	}
+	if (!bitmap || (kind != TARGET_HWND && kind != TARGET_DC && kind != TARGET_WIC && !bitmap->dxgi))
 		return;
 	/* A WIC bitmap nothing was drawn on keeps what the program wrote into it. */
-	if (self->kind == TARGET_WIC && !self->drawn)
+	if (kind == TARGET_WIC && !self->drawn)
 		return;
 	self->drawn = FALSE;
 	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
 	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
-	if (self->kind == TARGET_HWND || self->kind == TARGET_DC) {
+	if (kind == TARGET_HWND || kind == TARGET_DC) {
 		BITMAPINFO info;
 		HDC dc = self->kind == TARGET_HWND ? GetDC(self->hwnd) : self->dc;
 		memset(&info, 0, sizeof(info));
@@ -2877,7 +3496,7 @@ static void present(struct target *self)
 			if (self->kind == TARGET_HWND)
 				ReleaseDC(self->hwnd, dc);
 		}
-	} else if (self->kind == TARGET_WIC && self->wic) {
+	} else if (kind == TARGET_WIC && self->wic) {
 		WICRect rect = {0, 0, (INT)width, (INT)height};
 		IWICBitmapLock *lock = NULL;
 		const UINT depth = wic_depth(self->wic);
@@ -2886,11 +3505,27 @@ static void present(struct target *self)
 			BYTE *data = NULL;
 			IWICBitmapLock_GetStride(lock, &stride);
 			IWICBitmapLock_GetDataPointer(lock, &size, &data);
-			for (row = 0; data && row < height && (size_t)row * stride + width * (depth == 4 ? 4 : 1) <= size; ++row) {
+			for (row = 0; data && row < height && (size_t)row * stride + width * (depth >= 4 ? depth : 1) <= size; ++row) {
 				const BYTE *from = pixels + (size_t)row * width * 4;
 				BYTE *to = data + (size_t)row * stride;
 				if (depth == 4)
 					memcpy(to, from, width * 4);
+				else if (depth == 8)
+					for (column = 0; column < width; ++column) {
+						UINT16 *halves = (UINT16 *)to + column * 4;
+						halves[0] = byte_half[from[column * 4 + 2]];
+						halves[1] = byte_half[from[column * 4 + 1]];
+						halves[2] = byte_half[from[column * 4]];
+						halves[3] = byte_half[from[column * 4 + 3]];
+					}
+				else if (depth == 16)
+					for (column = 0; column < width; ++column) {
+						float *floats = (float *)to + column * 4;
+						floats[0] = from[column * 4 + 2] / 255.0f;
+						floats[1] = from[column * 4 + 1] / 255.0f;
+						floats[2] = from[column * 4] / 255.0f;
+						floats[3] = from[column * 4 + 3] / 255.0f;
+					}
 				else
 					/* An 8-bit target keeps the alpha (A8, the format of DXGI_FORMAT_A8_UNORM targets) or the grey level. */
 					for (column = 0; column < width; ++column)
@@ -2919,10 +3554,25 @@ static void present(struct target *self)
 			ID3D11Resource_GetDevice(resource, &device);
 			if (device) {
 				ID3D11Device_GetImmediateContext(device, &context);
-				if (context) {
+				if (context && desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+					/* A texture of half floats, the scRGB of a swap chain that shows more than sRGB: each 8-bit value is the linear
+					 * one the program drew, as it draws into such a target in linear light. */
+					UINT16 *halves = ALLOC_UNSET((size_t)width * height * 8);
+					UINT32 index;
+					if (halves) {
+						for (index = 0; index < width * height; ++index) {
+							halves[index * 4] = byte_half[pixels[index * 4 + 2]];
+							halves[index * 4 + 1] = byte_half[pixels[index * 4 + 1]];
+							halves[index * 4 + 2] = byte_half[pixels[index * 4]];
+							halves[index * 4 + 3] = byte_half[pixels[index * 4 + 3]];
+						}
+						ID3D11DeviceContext_UpdateSubresource(context, resource, 0, NULL, halves, width * 8, 0);
+						FREE(halves);
+					}
+				} else if (context)
 					ID3D11DeviceContext_UpdateSubresource(context, resource, 0, NULL, pixels, width * 4, 0);
+				if (context)
 					ID3D11DeviceContext_Release(context);
-				}
 				ID3D11Device_Release(device);
 			}
 			ID3D11Resource_Release(resource);
@@ -2969,9 +3619,10 @@ static void STDMETHODCALLTYPE target_BeginDraw(void *iface)
 	self->drawing = TRUE;
 	self->error = S_OK;
 	InterlockedIncrement(&frame_number);
-	if (self->kind == TARGET_DC && self->dc && self->bitmap)
+	/* What the device context or WIC bitmap already shows is read in only when the target draws into its own pixels. */
+	if (self->kind == TARGET_DC && self->dc && self->bitmap && self->bitmap == self->own)
 		read_bound_dc(self);
-	if (self->kind == TARGET_WIC && self->wic)
+	if (self->kind == TARGET_WIC && self->wic && self->bitmap == self->own)
 		read_wic(self);
 	self->drawn = FALSE;
 }
@@ -2997,7 +3648,9 @@ static HRESULT STDMETHODCALLTYPE target_Flush(void *iface, D2D1_TAG *tag1, D2D1_
 {
 	struct target *self = target_of(iface);
 	flush_queue();
-	if (self->bitmap && self->bitmap->dxgi)
+	/* What was drawn so far reaches the texture or the WIC bitmap behind the target: paint.net flushes and reads its bitmap before it
+	   ends the drawing. */
+	if (self->bitmap && (self->bitmap->dxgi || self->bitmap->shared || (self->kind == TARGET_WIC && self->bitmap == self->own)))
 		present(self);
 	if (tag1) *tag1 = self->tag1;
 	if (tag2) *tag2 = self->tag2;
@@ -3169,7 +3822,8 @@ static HRESULT STDMETHODCALLTYPE target_CreateSharedBitmap(void *iface, REFIID r
 	if (same_guid(riid, &IID_IDXGISurface) || same_guid(riid, &IID_IDXGISurface1))
 		return bitmap_from_dxgi(self, data, NULL, (struct bitmap **)out);
 	if (same_guid(riid, &IID_IWICBitmapLock)) {
-		/* The locked pixels are copied in: the lock's rectangle, stride and format. */
+		/* The bitmap shares the lock's pixels, as Direct2D's software targets do: they are taken in here, and what is drawn into the
+		   bitmap while it is a target goes back to them. paint.net renders each tile of an adjustment into its own memory this way. */
 		UINT width = 0, height = 0, stride = 0, size = 0;
 		BYTE *pixels = NULL;
 		D2D1_SIZE_U bitmap_size;
@@ -3182,10 +3836,27 @@ static HRESULT STDMETHODCALLTYPE target_CreateSharedBitmap(void *iface, REFIID r
 		bitmap_size.height = height;
 		if (properties)
 			format = properties->pixelFormat;
+		if (!properties || format.format == DXGI_FORMAT_UNKNOWN) {
+			/* Without a format of its own the bitmap takes the lock's: paint.net shares its thumbnails as premultiplied half floats. */
+			WICPixelFormatGUID locked;
+			format.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+			if (SUCCEEDED(IWICBitmapLock_GetPixelFormat((IWICBitmapLock *)data, &locked))) {
+				if (same_guid(&locked, &GUID_WICPixelFormat64bppPRGBAHalf))
+					format.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+				else if (same_guid(&locked, &GUID_WICPixelFormat128bppPRGBAFloat))
+					format.format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+			}
+		}
 		if (!(bitmap = make_bitmap(self->factory, bitmap_size, format, properties ? properties->dpiX : 96, properties ? properties->dpiY : 96, 0)))
 			return E_OUTOFMEMORY;
-		if (pixels)
+		if (pixels) {
 			bitmap_CopyFromMemory(bitmap, NULL, pixels, stride);
+			bitmap->lock = (IWICBitmapLock *)data;
+			IWICBitmapLock_AddRef(bitmap->lock);
+			bitmap->shared = pixels;
+			bitmap->shared_stride = stride;
+			bitmap->shared_size = size;
+		}
 		*out = (ID2D1Bitmap *)bitmap;
 		return S_OK;
 	}
@@ -3309,6 +3980,92 @@ static HRESULT STDMETHODCALLTYPE target_CreateLayer(void *iface, const D2D1_SIZE
 	return S_OK;
 }
 
+/* A standard space takes no profile and a custom one needs its profile, which the context keeps a copy of. Such a context counts as one
+   made from a profile; the standard spaces have DXGI names of their own. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContext(void *iface, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size,
+	ID2D1ColorContext **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (space == D2D1_COLOR_SPACE_CUSTOM ? !profile || !size : (space != D2D1_COLOR_SPACE_SRGB && space != D2D1_COLOR_SPACE_SCRGB) || profile || size)
+		return E_INVALIDARG;
+	return make_color_context(target_of(iface)->factory, space, profile, size, D2D1_COLOR_CONTEXT_TYPE_ICC,
+		space == D2D1_COLOR_SPACE_SRGB ? DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 : space == D2D1_COLOR_SPACE_SCRGB ?
+		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
+}
+
+/* A WIC color context: one with a profile becomes a custom space with those bytes; one that names the sRGB of EXIF data is that space,
+   and one that names Adobe RGB a custom space with the profile of that space, as Direct2D supplies one of its own. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromWicColorContext(void *iface, IWICColorContext *wic, ID2D1ColorContext **out)
+{
+	WICColorContextType type;
+	UINT exif = 0, size = 0;
+	BYTE *profile;
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!wic)
+		return E_INVALIDARG;
+	if (FAILED(result = IWICColorContext_GetType(wic, &type)))
+		return result;
+	if (type == WICColorContextExifColorSpace) {
+		if (FAILED(result = IWICColorContext_GetExifColorSpace(wic, &exif)))
+			return result;
+		if (exif == 2) {
+			BYTE adobe[RGB_PROFILE_ROOM];
+			const UINT32 made = rgb_profile(adobe, adobe_colors, CURVE_GAMMA, "Adobe RGB (1998)");
+			return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, adobe, made, D2D1_COLOR_CONTEXT_TYPE_ICC,
+				DXGI_COLOR_SPACE_CUSTOM, out);
+		}
+		if (exif != 1)
+			return E_INVALIDARG;
+		return make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_SRGB, NULL, 0, D2D1_COLOR_CONTEXT_TYPE_ICC,
+			DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, out);
+	}
+	if (FAILED(result = IWICColorContext_GetProfileBytes(wic, 0, NULL, &size)))
+		return result;
+	if (!size)
+		return E_INVALIDARG;
+	if (!(profile = ALLOC(size)))
+		return E_OUTOFMEMORY;
+	if (SUCCEEDED(result = IWICColorContext_GetProfileBytes(wic, size, profile, &size)))
+		result = make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, profile, size, D2D1_COLOR_CONTEXT_TYPE_ICC,
+			DXGI_COLOR_SPACE_CUSTOM, out);
+	FREE(profile);
+	return result;
+}
+
+/* A DXGI color space: the two that sRGB and scRGB are keep those names, any other is a custom space. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromDxgiColorSpace(void *iface, DXGI_COLOR_SPACE_TYPE dxgi, ID2D1ColorContext1 **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (dxgi == DXGI_COLOR_SPACE_CUSTOM)
+		return E_INVALIDARG;
+	return make_color_context(target_of(iface)->factory, dxgi == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ? D2D1_COLOR_SPACE_SRGB :
+		dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ? D2D1_COLOR_SPACE_SCRGB : D2D1_COLOR_SPACE_CUSTOM, NULL, 0,
+		D2D1_COLOR_CONTEXT_TYPE_DXGI, dxgi, (ID2D1ColorContext **)out);
+}
+
+/* A simple profile, its primaries, white point and gamma, which the context gives back as it was given. */
+static HRESULT STDMETHODCALLTYPE context_CreateColorContextFromSimpleColorProfile(void *iface, const D2D1_SIMPLE_COLOR_PROFILE *simple,
+	ID2D1ColorContext1 **out)
+{
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!simple)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_color_context(target_of(iface)->factory, D2D1_COLOR_SPACE_CUSTOM, NULL, 0, D2D1_COLOR_CONTEXT_TYPE_SIMPLE,
+		DXGI_COLOR_SPACE_CUSTOM, (ID2D1ColorContext **)out)))
+		((struct color_context *)*out)->simple = *simple;
+	return result;
+}
+
 static HRESULT STDMETHODCALLTYPE target_CreateMesh(void *iface, ID2D1Mesh **out)
 {
 	struct mesh *mesh = ALLOC(sizeof(*mesh));
@@ -3361,7 +4118,9 @@ static HRESULT STDMETHODCALLTYPE target_CreateCompatibleRenderTarget(void *iface
 	}
 	if (!(compatible = make_target(self->factory, TARGET_BITMAP, &properties)))
 		return E_OUTOFMEMORY;
-	if (!(compatible->bitmap = make_bitmap(self->factory, pixels, properties.pixelFormat, properties.dpiX, properties.dpiY, 0))) {
+	/* What the compatible target draws into is a target bitmap, which a device context can take as its target again. */
+	if (!(compatible->bitmap = make_bitmap(self->factory, pixels, properties.pixelFormat, properties.dpiX, properties.dpiY,
+			D2D1_BITMAP_OPTIONS_TARGET))) {
 		target_Release(compatible);
 		return E_OUTOFMEMORY;
 	}
@@ -3385,6 +4144,8 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromRenderTarget(void *iface, const 
 	if (!from || !from->bitmap)
 		return E_INVALIDARG;
 	copy_surface(self->surface, from->bitmap->surface, point, rect, from->bitmap->pixels);
+	if (self->shared)
+		share_back(self);
 	return S_OK;
 }
 
@@ -3631,7 +4392,7 @@ static HRESULT replace_surface(struct target *self, D2D1_SIZE_U size)
 		return E_OUTOFMEMORY;
 	if (self->bitmap)
 		object_Release(self->bitmap);
-	self->bitmap = bitmap;
+	self->bitmap = self->own = bitmap;
 	return S_OK;
 }
 
@@ -3678,12 +4439,36 @@ static void STDMETHODCALLTYPE context_SetTarget(void *iface, ID2D1Image *image)
 {
 	struct target *self = target_of(iface);
 	ID2D1Bitmap *bitmap = NULL;
-	if (image && FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
-		unimplemented("ID2D1DeviceContext", "SetTarget to an image that is not a bitmap");
+	struct command_list *list = command_list_of(image);
+	if (list) {
+		/* A list records once, over the size of the target it takes the place of. */
+		if (list->closed) {
+			target_failed(self);
+			return;
+		}
+		if (!list->bitmap) {
+			/* A list has no format of its own: what is drawn into it keeps its coverage, even in place of an opaque target as paint.net
+			   records its document in place of its swap chain. */
+			D2D1_SIZE_U size = {1, 1};
+			const D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
+			if (self->bitmap)
+				size = self->bitmap->pixels;
+			if (!(list->bitmap = make_bitmap(self->factory, size, format, self->dpi_x, self->dpi_y, D2D1_BITMAP_OPTIONS_TARGET)))
+				return;
+		}
+		object_AddRef(list->bitmap);
+		bitmap = (ID2D1Bitmap *)list->bitmap;
+	} else if (image && FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
+		unimplemented("ID2D1DeviceContext", "SetTarget to an image that is neither a bitmap nor a command list");
 		return;
 	}
 	if (self->bitmap)
 		object_Release(self->bitmap);
+	if (self->list)
+		object_Release(self->list);
+	self->list = list;
+	if (list)
+		object_AddRef(list);
 	self->bitmap = (struct bitmap *)bitmap;
 	if (bitmap) {
 		self->bitmap->targeted = TRUE;
@@ -3696,9 +4481,23 @@ static void STDMETHODCALLTYPE context_SetTarget(void *iface, ID2D1Image *image)
 static void STDMETHODCALLTYPE context_GetTarget(void *iface, ID2D1Image **image)
 {
 	struct target *self = target_of(iface);
-	*image = (ID2D1Image *)self->bitmap;
-	if (self->bitmap)
-		object_AddRef(self->bitmap);
+	*image = self->list ? (ID2D1Image *)self->list : (ID2D1Image *)self->bitmap;
+	if (*image)
+		object_AddRef(*image);
+}
+
+static HRESULT STDMETHODCALLTYPE context_CreateCommandList(void *iface, ID2D1CommandList **out)
+{
+	struct target *self = target_of(iface);
+	struct command_list *list;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!(list = ALLOC(sizeof(*list))))
+		return E_OUTOFMEMORY;
+	object_init(&list->base, command_list_table, command_list_destroy, command_list_iids, 3, self->factory);
+	*out = (ID2D1CommandList *)list;
+	return S_OK;
 }
 
 static void STDMETHODCALLTYPE context_SetRenderingControls(void *iface, const D2D1_RENDERING_CONTROLS *controls) { target_of(iface)->controls = *controls; }
@@ -3736,13 +4535,18 @@ struct effect_property {
 	WCHAR *name;
 	property_setter set;
 	property_getter get;
+	D2D1_PROPERTY_TYPE type;
 };
 
 struct registered_effect {
 	CLSID clsid;
 	PD2D1_EFFECT_FACTORY factory;
+	/* The <Input> elements its XML lists. */
+	UINT32 input_count;
 	struct effect_property properties[EFFECT_PROPERTIES];
 	UINT32 property_count;
+	/* The values its XML gives DisplayName, Author, Category and Description, in the order of their property indexes. */
+	WCHAR *descriptions[4];
 };
 
 static struct registered_effect registered_effects[REGISTERED_EFFECTS];
@@ -3803,6 +4607,41 @@ static WCHAR *wide_copy(const WCHAR *text, size_t length)
 	return copy;
 }
 
+/* A property's type as the XML names it. */
+static D2D1_PROPERTY_TYPE property_type_named(const WCHAR *name, size_t length)
+{
+	static const struct { const WCHAR *name; D2D1_PROPERTY_TYPE type; } types[] = {
+		{L"string", D2D1_PROPERTY_TYPE_STRING}, {L"bool", D2D1_PROPERTY_TYPE_BOOL}, {L"uint32", D2D1_PROPERTY_TYPE_UINT32},
+		{L"int32", D2D1_PROPERTY_TYPE_INT32}, {L"float", D2D1_PROPERTY_TYPE_FLOAT}, {L"vector2", D2D1_PROPERTY_TYPE_VECTOR2},
+		{L"vector3", D2D1_PROPERTY_TYPE_VECTOR3}, {L"vector4", D2D1_PROPERTY_TYPE_VECTOR4}, {L"blob", D2D1_PROPERTY_TYPE_BLOB},
+		{L"iunknown", D2D1_PROPERTY_TYPE_IUNKNOWN}, {L"enum", D2D1_PROPERTY_TYPE_ENUM}, {L"array", D2D1_PROPERTY_TYPE_ARRAY},
+		{L"clsid", D2D1_PROPERTY_TYPE_CLSID}, {L"matrix3x2", D2D1_PROPERTY_TYPE_MATRIX_3X2}, {L"matrix4x3", D2D1_PROPERTY_TYPE_MATRIX_4X3},
+		{L"matrix4x4", D2D1_PROPERTY_TYPE_MATRIX_4X4}, {L"matrix5x4", D2D1_PROPERTY_TYPE_MATRIX_5X4},
+		{L"colorcontext", D2D1_PROPERTY_TYPE_COLOR_CONTEXT}};
+	size_t index;
+	for (index = 0; index < sizeof(types) / sizeof(*types); ++index)
+		if (wide_length(types[index].name) == length && wide_starts(name, types[index].name))
+			return types[index].type;
+	return D2D1_PROPERTY_TYPE_UNKNOWN;
+}
+
+/* The value of an attribute within an element's text up to end, and its length; NULL when the element has none. */
+static const WCHAR *attribute_value(const WCHAR *at, const WCHAR *end, const WCHAR *name, size_t *length)
+{
+	const size_t name_length = wide_length(name);
+	for (; at < end; ++at)
+		if ((at[-1] == ' ' || at[-1] == '\t' || at[-1] == '\r' || at[-1] == '\n') && wide_starts(at, name) && at[name_length] == '=' &&
+			(at[name_length + 1] == '\'' || at[name_length + 1] == '"')) {
+			const WCHAR quote = at[name_length + 1];
+			const WCHAR *value = at + name_length + 2;
+			*length = 0;
+			while (value + *length < end && value[*length] != quote)
+				++*length;
+			return value;
+		}
+	return NULL;
+}
+
 /* The custom properties are the <Property> elements directly inside <Effect>, in order, other than the ones that describe the effect. */
 static void parse_effect_properties(struct registered_effect *effect, const WCHAR *xml)
 {
@@ -3810,6 +4649,8 @@ static void parse_effect_properties(struct registered_effect *effect, const WCHA
 	int depth = 0;
 	const WCHAR *at;
 	for (at = xml; *at; ++at) {
+		if (at[0] == '<' && wide_starts(at + 1, L"Input") && (at[6] == ' ' || at[6] == '/' || at[6] == '\t' || at[6] == '\r' || at[6] == '\n'))
+			++effect->input_count;
 		if (at[0] == '<' && at[1] == '/' && wide_starts(at + 2, L"Property")) {
 			--depth;
 			continue;
@@ -3817,29 +4658,30 @@ static void parse_effect_properties(struct registered_effect *effect, const WCHA
 		if (at[0] != '<' || !wide_starts(at + 1, L"Property") || (at[9] != ' ' && at[9] != '\t' && at[9] != '\r' && at[9] != '\n'))
 			continue;
 		{
-			const WCHAR *end = at, *name = NULL;
-			size_t length = 0;
+			const WCHAR *end = at, *name, *type;
+			size_t length = 0, type_length = 0;
 			int closed;
 			while (*end && *end != '>')
 				++end;
 			closed = end > at && end[-1] == '/';
-			for (name = at; name < end; ++name)
-				if (wide_starts(name, L"name=") && (name[5] == '\'' || name[5] == '"')) {
-					const WCHAR quote = name[5];
-					name += 6;
-					while (name + length < end && name[length] != quote)
-						++length;
-					break;
-				}
-			if (depth == 0 && name < end && length) {
+			name = attribute_value(at + 1, end, L"name", &length);
+			type = attribute_value(at + 1, end, L"type", &type_length);
+			if (depth == 0 && name && length) {
 				WCHAR *copy = wide_copy(name, length);
 				UINT32 index;
 				int skip = 0;
 				for (index = 0; copy && index < sizeof(described) / sizeof(described[0]); ++index)
 					skip |= wide_equal(copy, described[index]);
-				if (copy && !skip && effect->property_count < EFFECT_PROPERTIES)
+				for (index = 0; copy && index < sizeof(described) / sizeof(described[0]); ++index)
+					if (wide_equal(copy, described[index]) && !effect->descriptions[index]) {
+						size_t value_length = 0;
+						const WCHAR *value = attribute_value(at + 1, end, L"value", &value_length);
+						effect->descriptions[index] = wide_copy(value ? value : L"", value ? value_length : 0);
+					}
+				if (copy && !skip && effect->property_count < EFFECT_PROPERTIES) {
+					effect->properties[effect->property_count].type = type ? property_type_named(type, type_length) : D2D1_PROPERTY_TYPE_UNKNOWN;
 					effect->properties[effect->property_count++].name = copy;
-				else
+				} else
 					FREE(copy);
 			}
 			if (!closed)
@@ -3910,6 +4752,13 @@ struct effect {
 	/* For a program's own effect: the object its factory made, which the property bindings act on, and the registration. */
 	IUnknown *impl;
 	const struct registered_effect *registered;
+	/* What the program's object set up when it was initialized: its transform graph, and the context it was given. */
+	struct effect_graph *graph;
+	struct effect_context *context;
+	/* Whether its object has been asked to prepare since a property changed. */
+	BOOL prepared;
+	/* The class it was made as, which its D2D1_PROPERTY_CLSID gives. */
+	CLSID clsid;
 };
 
 static const GUID *const effect_iids[] = {&IID_ID2D1Properties, &IID_ID2D1Effect};
@@ -3921,6 +4770,38 @@ static void effect_image_destroy(struct object *base)
 	(void)base;
 }
 
+/* The image an effect gives out keeps the effect alive, as in Direct2D: a program may let the effect go and draw its output later. Each
+ * reference to the image is one to its effect too, beside the one the effect holds on the image. */
+static ULONG STDMETHODCALLTYPE effect_image_AddRef(void *iface)
+{
+	struct effect_image *self = iface;
+	if (self->effect)
+		object_AddRef(self->effect);
+	return object_AddRef(self);
+}
+
+static ULONG STDMETHODCALLTYPE effect_image_Release(void *iface)
+{
+	struct effect_image *self = iface;
+	struct effect *effect = self->effect;
+	const ULONG refs = object_Release(self);
+	if (effect)
+		object_Release(effect);
+	return refs;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_image_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	struct effect_image *self = iface;
+	const HRESULT result = object_QueryInterface(iface, riid, out);
+	if (SUCCEEDED(result) && self->effect)
+		object_AddRef(self->effect);
+	return result;
+}
+
+static void effect_parts_release(struct effect *self);
+static BOOL effect_holds_reference(const struct effect *self, UINT32 index);
+
 static void effect_destroy(struct object *base)
 {
 	struct effect *self = (struct effect *)base;
@@ -3928,14 +4809,19 @@ static void effect_destroy(struct object *base)
 	for (index = 0; index < EFFECT_INPUTS; ++index)
 		if (self->inputs[index])
 			IUnknown_Release((IUnknown *)self->inputs[index]);
-	for (index = 0; index < self->value_count; ++index)
+	for (index = 0; index < self->value_count; ++index) {
+		if (effect_holds_reference(self, self->values[index].index) && self->values[index].size >= sizeof(IUnknown *) &&
+			*(IUnknown **)self->values[index].data)
+			IUnknown_Release(*(IUnknown **)self->values[index].data);
 		FREE(self->values[index].data);
+	}
 	if (self->output) {
 		self->output->effect = NULL;
 		object_Release(self->output);
 	}
 	if (self->impl)
 		IUnknown_Release(self->impl);
+	effect_parts_release(self);
 }
 
 static struct effect_value *effect_value_at(struct effect *self, UINT32 index)
@@ -3953,10 +4839,48 @@ static const struct effect_property *effect_property_at(const struct effect *sel
 	return self->registered && index < self->registered->property_count ? &self->registered->properties[index] : NULL;
 }
 
+static const WCHAR *system_description(REFCLSID clsid, UINT32 which);
+static const D2D1_PROPERTY_TYPE *system_types(REFCLSID clsid, UINT32 *count);
+
+/* The type of one of an effect's own properties: a program's own effect has those its XML gives, a system effect those its table gives. */
+static D2D1_PROPERTY_TYPE effect_own_type(const struct effect *self, UINT32 index)
+{
+	const D2D1_PROPERTY_TYPE *types;
+	UINT32 count;
+	if (self->registered)
+		return index < self->registered->property_count ? self->registered->properties[index].type : D2D1_PROPERTY_TYPE_UNKNOWN;
+	types = system_types(&self->clsid, &count);
+	return index < count ? types[index] : D2D1_PROPERTY_TYPE_UNKNOWN;
+}
+
+/* A property whose value is an interface holds a reference to it, and gives out another each time it is read. */
+static BOOL effect_holds_reference(const struct effect *self, UINT32 index)
+{
+	const D2D1_PROPERTY_TYPE type = effect_own_type(self, index);
+	return type == D2D1_PROPERTY_TYPE_COLOR_CONTEXT || type == D2D1_PROPERTY_TYPE_IUNKNOWN;
+}
+
+/* The strings past an effect's own properties that describe it, D2D1_PROPERTY_DISPLAYNAME to D2D1_PROPERTY_DESCRIPTION: a program's own
+   effect has the values its XML gives, a system effect those of the table of system effects. Any other index has none. */
+static const WCHAR *effect_description(const struct effect *self, UINT32 index)
+{
+	const WCHAR *text;
+	if (index < D2D1_PROPERTY_DISPLAYNAME || index > D2D1_PROPERTY_DESCRIPTION)
+		return NULL;
+	if (!self->registered)
+		return system_description(&self->clsid, index - D2D1_PROPERTY_DISPLAYNAME);
+	text = self->registered->descriptions[index - D2D1_PROPERTY_DISPLAYNAME];
+	return text ? text : L"";
+}
+
 static UINT32 STDMETHODCALLTYPE effect_GetPropertyCount(void *iface)
 {
 	const struct effect *self = iface;
-	return self->registered ? self->registered->property_count : 0;
+	UINT32 count = 0;
+	if (self->registered)
+		return self->registered->property_count;
+	system_types(&self->clsid, &count);
+	return count;
 }
 
 static HRESULT STDMETHODCALLTYPE effect_GetPropertyName(void *iface, UINT32 index, WCHAR *name, UINT32 count)
@@ -3980,7 +4904,23 @@ static UINT32 STDMETHODCALLTYPE effect_GetPropertyNameLength(void *iface, UINT32
 	return property ? (UINT32)wide_length(property->name) : 0;
 }
 
-static D2D1_PROPERTY_TYPE STDMETHODCALLTYPE effect_GetType(void *iface, UINT32 index) { return D2D1_PROPERTY_TYPE_UNKNOWN; }
+/* A program's own effect has the types its XML gives, and every effect those of the properties that describe it; what the properties of
+   the system's effects are is not known here. */
+static D2D1_PROPERTY_TYPE STDMETHODCALLTYPE effect_GetType(void *iface, UINT32 index)
+{
+	const D2D1_PROPERTY_TYPE own = effect_own_type(iface, index);
+	if (own != D2D1_PROPERTY_TYPE_UNKNOWN)
+		return own;
+	if (index == D2D1_PROPERTY_CLSID)
+		return D2D1_PROPERTY_TYPE_CLSID;
+	if (effect_description(iface, index))
+		return D2D1_PROPERTY_TYPE_STRING;
+	if (index == D2D1_PROPERTY_CACHED)
+		return D2D1_PROPERTY_TYPE_BOOL;
+	if (index == D2D1_PROPERTY_PRECISION)
+		return D2D1_PROPERTY_TYPE_ENUM;
+	return D2D1_PROPERTY_TYPE_UNKNOWN;
+}
 
 static UINT32 STDMETHODCALLTYPE effect_GetPropertyIndex(void *iface, const WCHAR *name)
 {
@@ -4009,6 +4949,7 @@ static HRESULT STDMETHODCALLTYPE effect_SetValue(void *iface, UINT32 index, D2D1
 	BYTE *copy;
 	if (size && !data)
 		return E_INVALIDARG;
+	self->prepared = FALSE;
 	if (property && property->set && self->impl)
 		return property->set(self->impl, data, size);
 	if (!value) {
@@ -4023,6 +4964,12 @@ static HRESULT STDMETHODCALLTYPE effect_SetValue(void *iface, UINT32 index, D2D1
 		return E_OUTOFMEMORY;
 	if (size)
 		memcpy(copy, data, size);
+	if (effect_holds_reference(self, index)) {
+		if (size >= sizeof(IUnknown *) && *(IUnknown **)copy)
+			IUnknown_AddRef(*(IUnknown **)copy);
+		if (value->size >= sizeof(IUnknown *) && *(IUnknown **)value->data)
+			IUnknown_Release(*(IUnknown **)value->data);
+	}
 	FREE(value->data);
 	value->data = copy;
 	value->size = size;
@@ -4046,14 +4993,30 @@ static HRESULT STDMETHODCALLTYPE effect_GetValue(void *iface, UINT32 index, D2D1
 	const struct effect_property *property = effect_property_at(self, index);
 	if (size && !data)
 		return E_INVALIDARG;
+	const WCHAR *text = effect_description(self, index);
 	if (property && property->get && self->impl) {
 		UINT32 actual = 0;
 		return property->get(self->impl, data, size, &actual);
+	}
+	if (index == D2D1_PROPERTY_CLSID) {
+		if (size < sizeof(CLSID))
+			return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+		memcpy(data, &self->clsid, sizeof(CLSID));
+		return S_OK;
+	}
+	if (text) {
+		const size_t bytes = (wide_length(text) + 1) * sizeof(WCHAR);
+		if (size < bytes)
+			return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+		memcpy(data, text, bytes);
+		return S_OK;
 	}
 	if (size)
 		memset(data, 0, size);
 	if (value)
 		memcpy(data, value->data, value->size < size ? value->size : size);
+	if (effect_holds_reference(self, index) && size >= sizeof(IUnknown *) && *(IUnknown **)data)
+		IUnknown_AddRef(*(IUnknown **)data);
 	return S_OK;
 }
 
@@ -4067,6 +5030,12 @@ static UINT32 STDMETHODCALLTYPE effect_GetValueSize(void *iface, UINT32 index)
 		property->get(self->impl, NULL, 0, &actual);
 		return actual;
 	}
+	if (index == D2D1_PROPERTY_CLSID)
+		return sizeof(CLSID);
+	if (effect_description(self, index))
+		return (UINT32)((wide_length(effect_description(self, index)) + 1) * sizeof(WCHAR));
+	if (!value && (index == D2D1_PROPERTY_CACHED || index == D2D1_PROPERTY_PRECISION))
+		return sizeof(UINT32);
 	return value ? value->size : 0;
 }
 
@@ -4089,6 +5058,7 @@ static void STDMETHODCALLTYPE effect_SetInput(void *iface, UINT32 index, ID2D1Im
 	self->inputs[index] = input;
 	if (index >= self->input_count)
 		self->input_count = index + 1;
+	self->prepared = FALSE;
 }
 
 static HRESULT STDMETHODCALLTYPE effect_SetInputCount(void *iface, UINT32 count)
@@ -4123,7 +5093,7 @@ static void STDMETHODCALLTYPE effect_GetOutput(void *iface, ID2D1Image **output)
 {
 	struct effect *self = iface;
 	*output = (ID2D1Image *)self->output;
-	object_AddRef(self->output);
+	effect_image_AddRef(self->output);
 }
 
 static void **effect_resource_table;
@@ -4145,7 +5115,7 @@ static HRESULT STDMETHODCALLTYPE effect_QueryInterface(void *iface, REFIID riid,
 		found = &self->resource;
 	else if (same_guid(riid, &IID_ID2D1Image)) {
 		/* An effect answers for the image it gives out, as Direct2D's effects do: a program draws the effect where an image goes. */
-		object_AddRef(self->output);
+		effect_image_AddRef(self->output);
 		*out = self->output;
 		return S_OK;
 	}
@@ -4205,6 +5175,9 @@ static HRESULT make_effect(IUnknown *factory, ID2D1Effect **out)
 		effect_table[ID2D1Properties_methods + 4] = (void *)effect_GetOutput;
 		effect_image_table = ALLOC(4 * sizeof(void *));
 		set_resource(effect_image_table);
+		effect_image_table[0] = (void *)effect_image_QueryInterface;
+		effect_image_table[1] = (void *)effect_image_AddRef;
+		effect_image_table[2] = (void *)effect_image_Release;
 	}
 	if (!(self = ALLOC(sizeof(*self))))
 		return E_OUTOFMEMORY;
@@ -4221,12 +5194,873 @@ static HRESULT make_effect(IUnknown *factory, ID2D1Effect **out)
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
+/* Two system effects the headers declare only for newer Windows targets than this one is built for. */
+DEFINE_GUID(CLSID_D2D1WhiteLevelAdjustment, 0x44a1cadb, 0x6cdd, 0x4818, 0x8f, 0xf4, 0x26, 0xc1, 0xcf, 0xe9, 0x5b, 0xdb);
+DEFINE_GUID(CLSID_D2D1HdrToneMap, 0x7b0b748d, 0x4610, 0x4486, 0xa9, 0x0c, 0x99, 0x9d, 0x9a, 0x2e, 0x2b, 0x11);
+
+/* Color management's properties: the source context and rendering intent, the same for the destination, the alpha mode and the quality. */
+static const D2D1_PROPERTY_TYPE color_management_types[] = {D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM,
+	D2D1_PROPERTY_TYPE_COLOR_CONTEXT, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_ENUM};
+
+/* The effects Direct2D itself provides, each with its name, the group Direct2D's documentation lists it in and, where a program reads them,
+   the types of its properties; any other must be registered first, and a program that has its own registers it on being told so. */
+static const struct {
+	const CLSID *clsid;
+	const WCHAR *name, *category;
+	const D2D1_PROPERTY_TYPE *types;
+	UINT32 type_count;
+} system_effects[] = {
+	{&CLSID_D2D12DAffineTransform, L"2D Affine Transform", L"Transform"},
+	{&CLSID_D2D13DPerspectiveTransform, L"3D Perspective Transform", L"Transform"},
+	{&CLSID_D2D13DTransform, L"3D Transform", L"Transform"},
+	{&CLSID_D2D1AlphaMask, L"Alpha Mask", L"Composition"},
+	{&CLSID_D2D1ArithmeticComposite, L"Arithmetic Composite", L"Composition"},
+	{&CLSID_D2D1Atlas, L"Atlas", L"Transform"},
+	{&CLSID_D2D1BitmapSource, L"Bitmap Source", L"Source"},
+	{&CLSID_D2D1Blend, L"Blend", L"Composition"},
+	{&CLSID_D2D1Border, L"Border", L"Transform"},
+	{&CLSID_D2D1Brightness, L"Brightness", L"Photo"},
+	{&CLSID_D2D1ChromaKey, L"Chroma Key", L"Transparency"},
+	{&CLSID_D2D1ColorManagement, L"Color Management", L"Color", color_management_types,
+		sizeof(color_management_types) / sizeof(*color_management_types)},
+	{&CLSID_D2D1ColorMatrix, L"Color Matrix", L"Color"},
+	{&CLSID_D2D1Composite, L"Composite", L"Composition"},
+	{&CLSID_D2D1Contrast, L"Contrast", L"Photo"},
+	{&CLSID_D2D1ConvolveMatrix, L"Convolve Matrix", L"Filter"},
+	{&CLSID_D2D1Crop, L"Crop", L"Transform"},
+	{&CLSID_D2D1CrossFade, L"Cross Fade", L"Composition"},
+	{&CLSID_D2D1DirectionalBlur, L"Directional Blur", L"Filter"},
+	{&CLSID_D2D1DiscreteTransfer, L"Discrete Transfer", L"Color"},
+	{&CLSID_D2D1DisplacementMap, L"Displacement Map", L"Lighting and Stylizing"},
+	{&CLSID_D2D1DistantDiffuse, L"Distant-diffuse Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1DistantSpecular, L"Distant-specular Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1DpiCompensation, L"DPI Compensation", L"Transform"},
+	{&CLSID_D2D1EdgeDetection, L"Edge Detection", L"Filter"},
+	{&CLSID_D2D1Emboss, L"Emboss", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Exposure, L"Exposure", L"Photo"},
+	{&CLSID_D2D1Flood, L"Flood", L"Source"},
+	{&CLSID_D2D1GammaTransfer, L"Gamma Transfer", L"Color"},
+	{&CLSID_D2D1GaussianBlur, L"Gaussian Blur", L"Filter"},
+	{&CLSID_D2D1Grayscale, L"Grayscale", L"Photo"},
+	{&CLSID_D2D1HdrToneMap, L"HDR Tone Map", L"Color"},
+	{&CLSID_D2D1HighlightsShadows, L"Highlights and Shadows", L"Photo"},
+	{&CLSID_D2D1Histogram, L"Histogram", L"Photo"},
+	{&CLSID_D2D1HueRotation, L"Hue Rotation", L"Color"},
+	{&CLSID_D2D1HueToRgb, L"Hue to RGB", L"Color"},
+	{&CLSID_D2D1Invert, L"Invert", L"Photo"},
+	{&CLSID_D2D1LinearTransfer, L"Linear Transfer", L"Color"},
+	{&CLSID_D2D1LookupTable3D, L"Lookup Table 3D", L"Color"},
+	{&CLSID_D2D1LuminanceToAlpha, L"Luminance to Alpha", L"Transparency"},
+	{&CLSID_D2D1Morphology, L"Morphology", L"Filter"},
+	{&CLSID_D2D1Opacity, L"Opacity", L"Transparency"},
+	{&CLSID_D2D1OpacityMetadata, L"Opacity Metadata", L"Transparency"},
+	{&CLSID_D2D1PointDiffuse, L"Point-diffuse Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1PointSpecular, L"Point-specular Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Posterize, L"Posterize", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Premultiply, L"Premultiply", L"Transparency"},
+	{&CLSID_D2D1RgbToHue, L"RGB to Hue", L"Color"},
+	{&CLSID_D2D1Saturation, L"Saturation", L"Color"},
+	{&CLSID_D2D1Scale, L"Scale", L"Transform"},
+	{&CLSID_D2D1Sepia, L"Sepia", L"Photo"},
+	{&CLSID_D2D1Shadow, L"Shadow", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Sharpen, L"Sharpen", L"Photo"},
+	{&CLSID_D2D1SpotDiffuse, L"Spot-diffuse Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1SpotSpecular, L"Spot-specular Lighting", L"Lighting and Stylizing"},
+	{&CLSID_D2D1Straighten, L"Straighten", L"Photo"},
+	{&CLSID_D2D1TableTransfer, L"Table Transfer", L"Color"},
+	{&CLSID_D2D1TemperatureTint, L"Temperature and Tint", L"Photo"},
+	{&CLSID_D2D1Tile, L"Tile", L"Transform"},
+	{&CLSID_D2D1Tint, L"Tint", L"Color"},
+	{&CLSID_D2D1Turbulence, L"Turbulence", L"Source"},
+	{&CLSID_D2D1UnPremultiply, L"Unpremultiply", L"Transparency"},
+	{&CLSID_D2D1Vignette, L"Vignette", L"Photo"},
+	{&CLSID_D2D1WhiteLevelAdjustment, L"White Level Adjustment", L"Color"},
+	{&CLSID_D2D1YCbCr, L"YCbCr", L"Source"},
+};
+
+static int system_effect(REFCLSID clsid)
 {
-	struct target *self = target_of(iface);
-	const struct registered_effect *registered;
-	IUnknown *impl = NULL;
+	size_t index;
+	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
+		if (same_guid(system_effects[index].clsid, clsid))
+			return 1;
+	return 0;
+}
+
+/* How many inputs a system effect has when made, as Direct2D's documentation gives them: none for those that make an image, two for
+   those that combine a pair, one for the rest. */
+static UINT32 system_input_count(REFCLSID clsid)
+{
+	if (same_guid(clsid, &CLSID_D2D1Flood) || same_guid(clsid, &CLSID_D2D1Turbulence) || same_guid(clsid, &CLSID_D2D1BitmapSource))
+		return 0;
+	if (same_guid(clsid, &CLSID_D2D1Composite) || same_guid(clsid, &CLSID_D2D1Blend) || same_guid(clsid, &CLSID_D2D1ArithmeticComposite) ||
+		same_guid(clsid, &CLSID_D2D1CrossFade) || same_guid(clsid, &CLSID_D2D1AlphaMask) || same_guid(clsid, &CLSID_D2D1DisplacementMap) ||
+		same_guid(clsid, &CLSID_D2D1YCbCr))
+		return 2;
+	return 1;
+}
+
+/* The types of a system effect's own properties, as many as the count given. */
+static const D2D1_PROPERTY_TYPE *system_types(REFCLSID clsid, UINT32 *count)
+{
+	size_t index;
+	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
+		if (same_guid(system_effects[index].clsid, clsid)) {
+			*count = system_effects[index].type_count;
+			return system_effects[index].types;
+		}
+	*count = 0;
+	return NULL;
+}
+
+/* DisplayName, Author, Category and Description of a system effect, by their order. */
+static const WCHAR *system_description(REFCLSID clsid, UINT32 which)
+{
+	size_t index;
+	for (index = 0; index < sizeof(system_effects) / sizeof(*system_effects); ++index)
+		if (same_guid(system_effects[index].clsid, clsid))
+			return which == 0 ? system_effects[index].name : which == 1 ? L"Microsoft Corporation" : which == 2 ? system_effects[index].category : L"";
+	return NULL;
+}
+
+/* ---- what a program's own effect sets up ----
+ * Its object is initialized with an effect context, through which it loads shaders and makes transforms, and a transform graph, in which it
+ * places them and joins them to each other and to the effect's inputs. The graph is kept as given, and drawing the effect runs it: each
+ * draw transform of the program's is handed a draw info on being added, which says the pixel shader it draws with and its constants. */
+enum { GRAPH_NODES = 32 };
+
+/* What a node of the graph is: a transform of the program's own that draws with a pixel shader, one standing for an effect, a blend,
+ * border, offset or bounds adjustment made by the context, or a kind that is not run here. */
+enum node_kind { NODE_OTHER, NODE_DRAW, NODE_EFFECT, NODE_BLEND, NODE_BORDER, NODE_OFFSET, NODE_BOUNDS };
+
+/* Where an input of a node comes from: another node of the graph, one of the effect's inputs, or nothing yet (both -1). */
+struct node_source {
+	INT32 node, input;
+};
+
+struct draw_info;
+
+struct graph_node {
+	IUnknown *node;
+	/* For a draw transform, its ID2D1DrawTransform, which a program's object may give as another pointer than the node it added. */
+	IUnknown *transform;
+	enum node_kind kind;
+	struct draw_info *info;
+	struct node_source sources[EFFECT_INPUTS];
+};
+
+struct effect_graph {
+	void **vtbl;
+	LONG refs;
+	/* The effect the graph belongs to, cleared when the effect goes. */
+	struct effect *effect;
+	/* The input a passthrough graph gives out, or -1. */
+	INT32 passthrough;
+	struct graph_node nodes[GRAPH_NODES];
+	UINT32 node_count;
+	/* The node whose output is the effect's, or -1. */
+	INT32 output;
+};
+
+struct effect_context {
+	void **vtbl;
+	LONG refs;
+	IUnknown *factory;
+	/* The device context that made the effect, which the context answers for, as an effect asks it for that context's resources. */
+	IUnknown *device_context;
+};
+
+/* A transform made by the context: blend, border, offset, bounds adjustment, or one standing for an effect. Each keeps what it is told. */
+struct transform_node {
+	void **vtbl;
+	LONG refs;
+	const GUID *iid;
+	UINT32 inputs;
+	BOOL cached;
+	D2D1_BLEND_DESCRIPTION blend;
+	D2D1_EXTEND_MODE extend_x, extend_y;
+	D2D1_POINT_2L offset;
+	D2D1_RECT_L bounds;
+	/* The effect a node made from one draws, held while the node lives. */
+	struct effect *effect;
+};
+
+/* ---- the shaders effects load ----
+ * Direct2D keeps them by the identifiers effects give, for any effect to draw with; a program loads each once and then asks whether it is
+ * there. Their code is kept for as long as the component is loaded, as the shaders made from it are kept by where it lies. */
+struct stored_shader {
+	GUID id;
+	BYTE *code;
+	UINT32 size;
+};
+
+enum { STORED_SHADERS = 256 };
+
+static struct stored_shader stored_shaders[STORED_SHADERS];
+static UINT32 stored_count;
+
+static void lock_registered(void);
+
+static const struct stored_shader *find_shader(REFGUID id)
+{
+	const struct stored_shader *found = NULL;
+	UINT32 index;
+	lock_registered();
+	for (index = 0; index < stored_count && !found; ++index)
+		if (same_guid(&stored_shaders[index].id, id))
+			found = &stored_shaders[index];
+	LeaveCriticalSection(&registered_lock);
+	return found;
+}
+
+static HRESULT store_shader(REFGUID id, const BYTE *code, UINT32 size)
+{
+	HRESULT result = S_OK;
+	BYTE *copy;
+	if (find_shader(id))
+		return S_OK;
+	if (!(copy = ALLOC_UNSET(size)))
+		return E_OUTOFMEMORY;
+	memcpy(copy, code, size);
+	lock_registered();
+	if (stored_count < STORED_SHADERS) {
+		stored_shaders[stored_count].id = *id;
+		stored_shaders[stored_count].code = copy;
+		stored_shaders[stored_count].size = size;
+		++stored_count;
+	} else
+		result = E_OUTOFMEMORY;
+	LeaveCriticalSection(&registered_lock);
+	if (FAILED(result))
+		FREE(copy);
+	return result;
+}
+
+/* ---- the draw info a draw transform is given ---- */
+enum { KEPT_DRAWINGS = 6 };
+
+struct draw_info {
+	void **vtbl;
+	LONG refs;
+	GUID shader;
+	BOOL shaded;
+	BYTE *constants;
+	UINT32 constant_size;
+	/* The filter each input is sampled with: linear unless the transform says otherwise. */
+	UINT32 filters[EFFECT_INPUTS];
+	/* What a transform without inputs last drew, with the area, shader and constants it drew it from: it draws the same until one of
+	   them changes, as the checkerboard under paint.net's document does each frame. A few areas are kept, since one frame draws the
+	   document and the four strips around it from the same transform. */
+	struct kept_drawing {
+		/* The drawing as floats, or as bytes where it was drawn as bytes (see effect_bytes). */
+		float *pixels;
+		BYTE *bytes;
+		D2D1_RECT_L area;
+		GUID shader;
+		BYTE *constants;
+		UINT32 size;
+	} kept[KEPT_DRAWINGS];
+	UINT32 kept_next;
+};
+
+static HRESULT STDMETHODCALLTYPE draw_info_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1RenderInfo) || same_guid(riid, &IID_ID2D1DrawInfo)) {
+		InterlockedIncrement(&((struct draw_info *)iface)->refs);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	return no_interface(riid);
+}
+
+static ULONG STDMETHODCALLTYPE draw_info_AddRef(void *iface) { return (ULONG)InterlockedIncrement(&((struct draw_info *)iface)->refs); }
+
+static ULONG STDMETHODCALLTYPE draw_info_Release(void *iface)
+{
+	struct draw_info *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs) {
+		UINT32 index;
+		FREE(self->constants);
+		for (index = 0; index < KEPT_DRAWINGS; ++index) {
+			FREE(self->kept[index].pixels);
+			FREE(self->kept[index].bytes);
+			FREE(self->kept[index].constants);
+		}
+		FREE(self);
+	}
+	return (ULONG)refs;
+}
+
+static HRESULT STDMETHODCALLTYPE draw_info_SetInputDescription(void *iface, UINT32 index, D2D1_INPUT_DESCRIPTION description)
+{
+	struct draw_info *self = iface;
+	if (index >= EFFECT_INPUTS)
+		return E_INVALIDARG;
+	self->filters[index] = description.filter;
+	return S_OK;
+}
+
+/* The output is kept as floats whatever the precision asked, which holds every precision Direct2D offers. */
+static HRESULT STDMETHODCALLTYPE draw_info_SetOutputBuffer(void *iface, D2D1_BUFFER_PRECISION precision, D2D1_CHANNEL_DEPTH depth) { return S_OK; }
+static void STDMETHODCALLTYPE draw_info_SetCached(void *iface, BOOL cached) {}
+static void STDMETHODCALLTYPE draw_info_SetInstructionCountHint(void *iface, UINT32 count) {}
+
+static HRESULT STDMETHODCALLTYPE draw_info_SetPixelShaderConstantBuffer(void *iface, const BYTE *data, UINT32 size)
+{
+	struct draw_info *self = iface;
+	BYTE *copy = NULL;
+	if (size && !data)
+		return E_INVALIDARG;
+	if (size && !(copy = ALLOC_UNSET(size)))
+		return E_OUTOFMEMORY;
+	if (size)
+		memcpy(copy, data, size);
+	FREE(self->constants);
+	self->constants = copy;
+	self->constant_size = size;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE draw_info_SetResourceTexture(void *iface, UINT32 index, ID2D1ResourceTexture *texture)
+{
+	return unimplemented("ID2D1DrawInfo", "SetResourceTexture");
+}
+
+static HRESULT STDMETHODCALLTYPE draw_info_SetVertexShaderConstantBuffer(void *iface, const BYTE *data, UINT32 size)
+{
+	return unimplemented("ID2D1DrawInfo", "SetVertexShaderConstantBuffer");
+}
+
+static HRESULT STDMETHODCALLTYPE draw_info_SetPixelShader(void *iface, REFGUID id, D2D1_PIXEL_OPTIONS options)
+{
+	struct draw_info *self = iface;
+	if (!id)
+		return E_INVALIDARG;
+	self->shader = *id;
+	self->shaded = TRUE;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE draw_info_SetVertexProcessing(void *iface, ID2D1VertexBuffer *buffer, D2D1_VERTEX_OPTIONS options,
+	const D2D1_BLEND_DESCRIPTION *blend, const D2D1_VERTEX_RANGE *range, const GUID *shader)
+{
+	return unimplemented("ID2D1DrawInfo", "SetVertexProcessing");
+}
+
+static void *draw_info_table[] = {(void *)draw_info_QueryInterface, (void *)draw_info_AddRef, (void *)draw_info_Release,
+	(void *)draw_info_SetInputDescription, (void *)draw_info_SetOutputBuffer, (void *)draw_info_SetCached,
+	(void *)draw_info_SetInstructionCountHint, (void *)draw_info_SetPixelShaderConstantBuffer, (void *)draw_info_SetResourceTexture,
+	(void *)draw_info_SetVertexShaderConstantBuffer, (void *)draw_info_SetPixelShader, (void *)draw_info_SetVertexProcessing};
+
+/* ID2D1Transform's methods after ID2D1TransformNode's, by slot, and ID2D1DrawTransform's own after them. */
+typedef HRESULT (STDMETHODCALLTYPE *map_output_function)(void *, const D2D1_RECT_L *, D2D1_RECT_L *, UINT32);
+typedef HRESULT (STDMETHODCALLTYPE *map_inputs_function)(void *, const D2D1_RECT_L *, const D2D1_RECT_L *, UINT32, D2D1_RECT_L *, D2D1_RECT_L *);
+typedef HRESULT (STDMETHODCALLTYPE *set_draw_info_function)(void *, ID2D1DrawInfo *);
+enum { TRANSFORM_MAP_OUTPUT = 4, TRANSFORM_MAP_INPUTS = 5, DRAW_TRANSFORM_SET_DRAW_INFO = 7 };
+
+static UINT32 node_input_count(IUnknown *node) { return ((UINT32 (STDMETHODCALLTYPE *)(void *))(*(void ***)node)[3])(node); }
+
+static ULONG STDMETHODCALLTYPE part_AddRef(void *iface) { return (ULONG)InterlockedIncrement(&((struct effect_graph *)iface)->refs); }
+
+static HRESULT STDMETHODCALLTYPE graph_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1TransformGraph)) {
+		part_AddRef(iface);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	return no_interface(riid);
+}
+
+static void graph_empty(struct effect_graph *self)
+{
+	UINT32 index;
+	for (index = 0; index < self->node_count; ++index) {
+		if (self->nodes[index].info)
+			draw_info_Release(self->nodes[index].info);
+		if (self->nodes[index].transform)
+			IUnknown_Release(self->nodes[index].transform);
+		IUnknown_Release(self->nodes[index].node);
+	}
+	self->node_count = 0;
+	self->output = -1;
+	self->passthrough = -1;
+}
+
+static ULONG STDMETHODCALLTYPE graph_Release(void *iface)
+{
+	struct effect_graph *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs) {
+		graph_empty(self);
+		FREE(self);
+	}
+	return (ULONG)refs;
+}
+
+static UINT32 STDMETHODCALLTYPE graph_GetInputCount(void *iface)
+{
+	const struct effect_graph *self = iface;
+	return self->effect ? self->effect->input_count : 0;
+}
+
+static INT32 graph_find(const struct effect_graph *self, ID2D1TransformNode *node)
+{
+	UINT32 index;
+	for (index = 0; index < self->node_count; ++index)
+		if (self->nodes[index].node == (IUnknown *)node)
+			return (INT32)index;
+	return -1;
+}
+
+static HRESULT STDMETHODCALLTYPE node_QueryInterface(void *iface, REFIID riid, void **out);
+
+/* A node joins the graph: one the context made is of the kind it was made as, and a draw transform of the program's is handed the draw
+ * info it says how it draws through. */
+static HRESULT STDMETHODCALLTYPE graph_AddNode(void *iface, ID2D1TransformNode *node)
+{
+	struct effect_graph *self = iface;
+	struct graph_node *added;
+	IUnknown *draw = NULL;
+	UINT32 index;
+	if (!node || graph_find(self, node) >= 0)
+		return E_INVALIDARG;
+	if (self->node_count == GRAPH_NODES)
+		return E_OUTOFMEMORY;
+	added = &self->nodes[self->node_count];
+	memset(added, 0, sizeof(*added));
+	for (index = 0; index < EFFECT_INPUTS; ++index)
+		added->sources[index].node = added->sources[index].input = -1;
+	if ((*(void ***)node)[0] == (void *)node_QueryInterface) {
+		const GUID *iid = ((struct transform_node *)node)->iid;
+		added->kind = iid == &IID_ID2D1BlendTransform ? NODE_BLEND : iid == &IID_ID2D1BorderTransform ? NODE_BORDER :
+			iid == &IID_ID2D1OffsetTransform ? NODE_OFFSET : iid == &IID_ID2D1BoundsAdjustmentTransform ? NODE_BOUNDS : NODE_EFFECT;
+	} else if (SUCCEEDED(IUnknown_QueryInterface((IUnknown *)node, &IID_ID2D1DrawTransform, (void **)&draw))) {
+		struct draw_info *info = ALLOC(sizeof(*info));
+		HRESULT result;
+		if (!info) {
+			IUnknown_Release(draw);
+			return E_OUTOFMEMORY;
+		}
+		info->vtbl = draw_info_table;
+		info->refs = 1;
+		for (index = 0; index < EFFECT_INPUTS; ++index)
+			info->filters[index] = D2D1_FILTER_MIN_MAG_MIP_LINEAR;
+		result = ((set_draw_info_function)(*(void ***)draw)[DRAW_TRANSFORM_SET_DRAW_INFO])(draw, (ID2D1DrawInfo *)info);
+		if (FAILED(result)) {
+			IUnknown_Release(draw);
+			draw_info_Release(info);
+			return result;
+		}
+		added->kind = NODE_DRAW;
+		added->info = info;
+		added->transform = draw;
+	} else {
+		unimplemented("ID2D1TransformGraph", "AddNode of a compute or source transform");
+		added->kind = NODE_OTHER;
+	}
+	IUnknown_AddRef((IUnknown *)node);
+	added->node = (IUnknown *)node;
+	++self->node_count;
+	self->passthrough = -1;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE graph_RemoveNode(void *iface, ID2D1TransformNode *node)
+{
+	struct effect_graph *self = iface;
+	const INT32 found = graph_find(self, node);
+	UINT32 index, input;
+	if (found < 0)
+		return E_INVALIDARG;
+	if (self->nodes[found].info)
+		draw_info_Release(self->nodes[found].info);
+	if (self->nodes[found].transform)
+		IUnknown_Release(self->nodes[found].transform);
+	IUnknown_Release(self->nodes[found].node);
+	memmove(&self->nodes[found], &self->nodes[found + 1], (self->node_count - found - 1) * sizeof(*self->nodes));
+	--self->node_count;
+	/* What came from the node comes from nothing now, and the nodes after it move down a place. */
+	for (index = 0; index < self->node_count; ++index)
+		for (input = 0; input < EFFECT_INPUTS; ++input) {
+			struct node_source *source = &self->nodes[index].sources[input];
+			if (source->node == found)
+				source->node = -1;
+			else if (source->node > found)
+				--source->node;
+		}
+	if (self->output == found)
+		self->output = -1;
+	else if (self->output > found)
+		--self->output;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE graph_SetOutputNode(void *iface, ID2D1TransformNode *node)
+{
+	struct effect_graph *self = iface;
+	const INT32 found = graph_find(self, node);
+	if (found < 0)
+		return E_INVALIDARG;
+	self->output = found;
+	return S_OK;
+}
+
+/* The graph of a single node: its inputs are the effect's, by their order, and its output is the effect's. */
+static HRESULT STDMETHODCALLTYPE graph_SetSingleTransformNode(void *iface, ID2D1TransformNode *node)
+{
+	struct effect_graph *self = iface;
+	UINT32 index, count;
 	HRESULT result;
+	if (!node)
+		return E_INVALIDARG;
+	graph_empty(self);
+	if (FAILED(result = graph_AddNode(iface, node)))
+		return result;
+	count = node_input_count((IUnknown *)node);
+	for (index = 0; index < count && index < EFFECT_INPUTS; ++index)
+		self->nodes[0].sources[index].input = (INT32)index;
+	self->output = 0;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE graph_ConnectNode(void *iface, ID2D1TransformNode *from, ID2D1TransformNode *to, UINT32 index)
+{
+	struct effect_graph *self = iface;
+	const INT32 source = graph_find(self, from), target = graph_find(self, to);
+	if (source < 0 || target < 0 || index >= EFFECT_INPUTS)
+		return E_INVALIDARG;
+	self->nodes[target].sources[index].node = source;
+	self->nodes[target].sources[index].input = -1;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE graph_ConnectToEffectInput(void *iface, UINT32 input, ID2D1TransformNode *node, UINT32 index)
+{
+	struct effect_graph *self = iface;
+	const INT32 target = graph_find(self, node);
+	if (target < 0 || index >= EFFECT_INPUTS || (self->effect && input >= self->effect->input_count))
+		return E_INVALIDARG;
+	self->nodes[target].sources[index].node = -1;
+	self->nodes[target].sources[index].input = (INT32)input;
+	return S_OK;
+}
+
+static void STDMETHODCALLTYPE graph_Clear(void *iface) { graph_empty(iface); }
+
+/* A passthrough graph gives out one of the effect's inputs as it is. */
+static HRESULT STDMETHODCALLTYPE graph_SetPassthroughGraph(void *iface, UINT32 input)
+{
+	struct effect_graph *self = iface;
+	if (self->effect && input >= self->effect->input_count)
+		return E_INVALIDARG;
+	graph_empty(self);
+	self->passthrough = (INT32)input;
+	return S_OK;
+}
+
+static void *graph_table[] = {(void *)graph_QueryInterface, (void *)part_AddRef, (void *)graph_Release, (void *)graph_GetInputCount,
+	(void *)graph_SetSingleTransformNode, (void *)graph_AddNode, (void *)graph_RemoveNode, (void *)graph_SetOutputNode, (void *)graph_ConnectNode,
+	(void *)graph_ConnectToEffectInput, (void *)graph_Clear, (void *)graph_SetPassthroughGraph};
+
+static HRESULT STDMETHODCALLTYPE node_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	const struct transform_node *self = iface;
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1TransformNode) || same_guid(riid, self->iid) ||
+		(same_guid(riid, &IID_ID2D1ConcreteTransform) && (self->iid == &IID_ID2D1BlendTransform || self->iid == &IID_ID2D1BorderTransform))) {
+		part_AddRef(iface);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	return no_interface(riid);
+}
+
+static ULONG STDMETHODCALLTYPE node_Release(void *iface)
+{
+	struct transform_node *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs) {
+		if (self->effect)
+			IUnknown_Release((IUnknown *)self->effect);
+		FREE(self);
+	}
+	return (ULONG)refs;
+}
+
+static UINT32 STDMETHODCALLTYPE node_GetInputCount(void *iface) { return ((struct transform_node *)iface)->inputs; }
+static HRESULT STDMETHODCALLTYPE node_SetOutputBuffer(void *iface, D2D1_BUFFER_PRECISION precision, D2D1_CHANNEL_DEPTH depth) { return S_OK; }
+static void STDMETHODCALLTYPE node_SetCached(void *iface, BOOL cached) { ((struct transform_node *)iface)->cached = cached; }
+static void STDMETHODCALLTYPE node_SetBlend(void *iface, const D2D1_BLEND_DESCRIPTION *blend) { if (blend) ((struct transform_node *)iface)->blend = *blend; }
+static void STDMETHODCALLTYPE node_GetBlend(void *iface, D2D1_BLEND_DESCRIPTION *blend) { *blend = ((struct transform_node *)iface)->blend; }
+static void STDMETHODCALLTYPE node_SetExtendX(void *iface, D2D1_EXTEND_MODE mode) { ((struct transform_node *)iface)->extend_x = mode; }
+static void STDMETHODCALLTYPE node_SetExtendY(void *iface, D2D1_EXTEND_MODE mode) { ((struct transform_node *)iface)->extend_y = mode; }
+static D2D1_EXTEND_MODE STDMETHODCALLTYPE node_GetExtendX(void *iface) { return ((struct transform_node *)iface)->extend_x; }
+static D2D1_EXTEND_MODE STDMETHODCALLTYPE node_GetExtendY(void *iface) { return ((struct transform_node *)iface)->extend_y; }
+static void STDMETHODCALLTYPE node_SetOffset(void *iface, D2D1_POINT_2L offset) { ((struct transform_node *)iface)->offset = offset; }
+static D2D1_POINT_2L *STDMETHODCALLTYPE node_GetOffset(void *iface, D2D1_POINT_2L *offset) { *offset = ((struct transform_node *)iface)->offset; return offset; }
+static void STDMETHODCALLTYPE node_SetBounds(void *iface, const D2D1_RECT_L *bounds) { if (bounds) ((struct transform_node *)iface)->bounds = *bounds; }
+static void STDMETHODCALLTYPE node_GetBounds(void *iface, D2D1_RECT_L *bounds) { *bounds = ((struct transform_node *)iface)->bounds; }
+
+/* The slots of each kind after IUnknown and GetInputCount: a concrete transform's two, then a blend's or a border's own; an offset's and a
+   bounds adjustment's own come straight after GetInputCount. */
+static void *blend_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetOutputBuffer, (void *)node_SetCached, (void *)node_SetBlend, (void *)node_GetBlend};
+static void *border_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetOutputBuffer, (void *)node_SetCached, (void *)node_SetExtendX, (void *)node_SetExtendY, (void *)node_GetExtendX,
+	(void *)node_GetExtendY};
+static void *offset_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetOffset, (void *)node_GetOffset};
+static void *bounds_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount,
+	(void *)node_SetBounds, (void *)node_GetBounds};
+static void *effect_node_table[] = {(void *)node_QueryInterface, (void *)part_AddRef, (void *)node_Release, (void *)node_GetInputCount};
+
+static HRESULT make_node(void **table, const GUID *iid, UINT32 inputs, void **out)
+{
+	struct transform_node *node;
+	if (!out)
+		return E_POINTER;
+	if (!(*out = node = ALLOC(sizeof(*node))))
+		return E_OUTOFMEMORY;
+	node->vtbl = table;
+	node->refs = 1;
+	node->iid = iid;
+	node->inputs = inputs;
+	return S_OK;
+}
+
+static HRESULT create_effect(IUnknown *factory, IUnknown *device_context, REFCLSID clsid, ID2D1Effect **effect);
+
+/* ID2D1EffectImpl's methods after IUnknown's, by slot: the C declaration in the headers leaves IUnknown's out of its table. */
+typedef HRESULT (STDMETHODCALLTYPE *effect_initialize)(IUnknown *, ID2D1EffectContext *, ID2D1TransformGraph *);
+typedef HRESULT (STDMETHODCALLTYPE *effect_prepare)(IUnknown *, D2D1_CHANGE_TYPE);
+
+/* The later contexts the headers here lack: the first adds 3D lookup tables, the second color contexts from DXGI spaces and simple profiles. */
+static const GUID effect_context1_iid = {0x84ab595a, 0xfc81, 0x4546, {0xba, 0xcd, 0xe8, 0xef, 0x4d, 0x8a, 0xbe, 0x7a}};
+static const GUID effect_context2_iid = {0x577ad2a0, 0x9fc7, 0x4dda, {0x8b, 0x18, 0xda, 0xb8, 0x10, 0x14, 0x00, 0x52}};
+
+static HRESULT STDMETHODCALLTYPE effect_context_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_guid(riid, &IID_IUnknown) || same_guid(riid, &IID_ID2D1EffectContext) || same_guid(riid, &effect_context1_iid) ||
+		same_guid(riid, &effect_context2_iid)) {
+		part_AddRef(iface);
+		*out = iface;
+		return S_OK;
+	}
+	*out = NULL;
+	if (((struct effect_context *)iface)->device_context && any_guid(riid, context_iids, sizeof(context_iids) / sizeof(*context_iids)))
+		return IUnknown_QueryInterface(((struct effect_context *)iface)->device_context, riid, out);
+	return no_interface(riid);
+}
+
+static ULONG STDMETHODCALLTYPE effect_context_Release(void *iface)
+{
+	struct effect_context *self = iface;
+	const LONG refs = InterlockedDecrement(&self->refs);
+	if (!refs) {
+		if (self->factory)
+			IUnknown_Release(self->factory);
+		if (self->device_context)
+			IUnknown_Release(self->device_context);
+		FREE(self);
+	}
+	return (ULONG)refs;
+}
+
+static void STDMETHODCALLTYPE effect_context_GetDpi(void *iface, FLOAT *x, FLOAT *y) { *x = *y = 96.0f; }
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
+{
+	return create_effect(((struct effect_context *)iface)->factory, ((struct effect_context *)iface)->device_context, clsid, effect);
+}
+
+/* The device is Direct3D 11 at feature level 11.0 or below it: the highest of those asked for that it reaches. */
+static HRESULT STDMETHODCALLTYPE effect_context_GetMaximumSupportedFeatureLevel(void *iface, const D3D_FEATURE_LEVEL *levels, UINT32 count,
+	D3D_FEATURE_LEVEL *level)
+{
+	UINT32 index;
+	BOOL found = FALSE;
+	if (!levels || !level)
+		return E_INVALIDARG;
+	for (index = 0; index < count; ++index)
+		if (levels[index] <= D3D_FEATURE_LEVEL_11_0 && (!found || levels[index] > *level)) {
+			*level = levels[index];
+			found = TRUE;
+		}
+	return found ? S_OK : D2DERR_INSUFFICIENT_DEVICE_CAPABILITIES;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateTransformNodeFromEffect(void *iface, ID2D1Effect *effect, ID2D1TransformNode **node)
+{
+	HRESULT result;
+	if (!effect)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_node(effect_node_table, &IID_ID2D1TransformNode, ((struct effect *)effect)->input_count, (void **)node))) {
+		IUnknown_AddRef((IUnknown *)effect);
+		((struct transform_node *)*node)->effect = (struct effect *)effect;
+	}
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateBlendTransform(void *iface, UINT32 inputs, const D2D1_BLEND_DESCRIPTION *blend,
+	ID2D1BlendTransform **out)
+{
+	HRESULT result;
+	if (!blend)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_node(blend_node_table, &IID_ID2D1BlendTransform, inputs, (void **)out)))
+		((struct transform_node *)*out)->blend = *blend;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateBorderTransform(void *iface, D2D1_EXTEND_MODE x, D2D1_EXTEND_MODE y, ID2D1BorderTransform **out)
+{
+	HRESULT result;
+	if (SUCCEEDED(result = make_node(border_node_table, &IID_ID2D1BorderTransform, 1, (void **)out))) {
+		((struct transform_node *)*out)->extend_x = x;
+		((struct transform_node *)*out)->extend_y = y;
+	}
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateOffsetTransform(void *iface, D2D1_POINT_2L offset, ID2D1OffsetTransform **out)
+{
+	HRESULT result;
+	if (SUCCEEDED(result = make_node(offset_node_table, &IID_ID2D1OffsetTransform, 1, (void **)out)))
+		((struct transform_node *)*out)->offset = offset;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateBoundsAdjustmentTransform(void *iface, const D2D1_RECT_L *bounds, ID2D1BoundsAdjustmentTransform **out)
+{
+	HRESULT result;
+	if (!bounds)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_node(bounds_node_table, &IID_ID2D1BoundsAdjustmentTransform, 1, (void **)out)))
+		((struct transform_node *)*out)->bounds = *bounds;
+	return result;
+}
+
+/* A shader is kept by its identifier, which the program's transforms name when they draw; pixel shaders are run, the vertex and compute
+   shaders only kept. */
+static HRESULT STDMETHODCALLTYPE effect_context_LoadShader(void *iface, REFGUID id, const BYTE *code, UINT32 size)
+{
+	if (!id || !code || !size)
+		return E_INVALIDARG;
+	return store_shader(id, code, size);
+}
+
+static BOOL STDMETHODCALLTYPE effect_context_IsShaderLoaded(void *iface, REFGUID id)
+{
+	return id && find_shader(id);
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateColorContext(void *iface, D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 size,
+	ID2D1ColorContext **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (space == D2D1_COLOR_SPACE_CUSTOM ? !profile || !size : (space != D2D1_COLOR_SPACE_SRGB && space != D2D1_COLOR_SPACE_SCRGB) || profile || size)
+		return E_INVALIDARG;
+	return make_color_context(((struct effect_context *)iface)->factory, space, profile, size, D2D1_COLOR_CONTEXT_TYPE_ICC,
+		space == D2D1_COLOR_SPACE_SRGB ? DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 : space == D2D1_COLOR_SPACE_SCRGB ?
+		DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_CUSTOM, out);
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CheckFeatureSupport(void *iface, D2D1_FEATURE feature, void *data, UINT32 size)
+{
+	if (!data)
+		return E_INVALIDARG;
+	memset(data, 0, size);
+	return S_OK;
+}
+
+static BOOL STDMETHODCALLTYPE effect_context_IsBufferPrecisionSupported(void *iface, D2D1_BUFFER_PRECISION precision)
+{
+	return precision == D2D1_BUFFER_PRECISION_8BPC_UNORM || precision == D2D1_BUFFER_PRECISION_8BPC_UNORM_SRGB;
+}
+
+/* The same color contexts a device context makes, as an effect builds its own for the spaces it converts between. */
+static HRESULT STDMETHODCALLTYPE effect_context_CreateColorContextFromDxgiColorSpace(void *iface, DXGI_COLOR_SPACE_TYPE dxgi,
+	ID2D1ColorContext1 **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (dxgi == DXGI_COLOR_SPACE_CUSTOM)
+		return E_INVALIDARG;
+	return make_color_context(((struct effect_context *)iface)->factory, dxgi == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ? D2D1_COLOR_SPACE_SRGB :
+		dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ? D2D1_COLOR_SPACE_SCRGB : D2D1_COLOR_SPACE_CUSTOM, NULL, 0,
+		D2D1_COLOR_CONTEXT_TYPE_DXGI, dxgi, (ID2D1ColorContext **)out);
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_CreateColorContextFromSimpleColorProfile(void *iface, const D2D1_SIMPLE_COLOR_PROFILE *simple,
+	ID2D1ColorContext1 **out)
+{
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!simple)
+		return E_INVALIDARG;
+	if (SUCCEEDED(result = make_color_context(((struct effect_context *)iface)->factory, D2D1_COLOR_SPACE_CUSTOM, NULL, 0,
+		D2D1_COLOR_CONTEXT_TYPE_SIMPLE, DXGI_COLOR_SPACE_CUSTOM, (ID2D1ColorContext **)out)))
+		((struct color_context *)*out)->simple = *simple;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE effect_context_unimplemented(void *iface)
+{
+	return unimplemented("ID2D1EffectContext", "resource textures, vertex buffers, lookup tables and color contexts from files");
+}
+
+static void *effect_context_table[] = {(void *)effect_context_QueryInterface, (void *)part_AddRef, (void *)effect_context_Release,
+	(void *)effect_context_GetDpi, (void *)effect_context_CreateEffect, (void *)effect_context_GetMaximumSupportedFeatureLevel,
+	(void *)effect_context_CreateTransformNodeFromEffect, (void *)effect_context_CreateBlendTransform, (void *)effect_context_CreateBorderTransform,
+	(void *)effect_context_CreateOffsetTransform, (void *)effect_context_CreateBoundsAdjustmentTransform, (void *)effect_context_LoadShader,
+	(void *)effect_context_LoadShader, (void *)effect_context_LoadShader, (void *)effect_context_IsShaderLoaded,
+	(void *)effect_context_unimplemented, (void *)effect_context_unimplemented, (void *)effect_context_unimplemented,
+	(void *)effect_context_unimplemented, (void *)effect_context_CreateColorContext, (void *)effect_context_unimplemented,
+	(void *)effect_context_unimplemented, (void *)effect_context_CheckFeatureSupport, (void *)effect_context_IsBufferPrecisionSupported,
+	(void *)effect_context_unimplemented, (void *)effect_context_CreateColorContextFromDxgiColorSpace,
+	(void *)effect_context_CreateColorContextFromSimpleColorProfile};
+
+static void effect_parts_release(struct effect *self)
+{
+	if (self->graph) {
+		/* The nodes go with the effect, as they may hold the program's object, which may hold the graph. */
+		self->graph->effect = NULL;
+		graph_empty(self->graph);
+		graph_Release(self->graph);
+	}
+	if (self->context)
+		effect_context_Release(self->context);
+}
+
+/* A program's own effect: its object is made and initialized with a context and a graph of its own, as Direct2D does before the effect is
+   handed out; the system's effects are made as they are. */
+static HRESULT create_effect(IUnknown *factory, IUnknown *device_context, REFCLSID clsid, ID2D1Effect **effect)
+{
+	const struct registered_effect *registered;
+	struct effect *made;
+	IUnknown *impl = NULL;
+	IUnknown *init = NULL;
+	HRESULT result;
+	if (!effect)
+		return E_POINTER;
+	*effect = NULL;
 	if (!clsid)
 		return E_INVALIDARG;
 	lock_registered();
@@ -4246,17 +6080,68 @@ static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsi
 		text[at] = 0;
 		RavenTrace(text);
 	}
+	if (!registered && !system_effect(clsid))
+		return D2DERR_EFFECT_IS_NOT_REGISTERED;
 	/* A program's own effect starts with the object its factory makes. */
 	if (registered && FAILED(result = registered->factory(&impl)))
 		return result;
-	if (FAILED(result = make_effect(self->factory, effect))) {
+	if (FAILED(result = make_effect(factory, effect))) {
 		if (impl)
 			IUnknown_Release(impl);
 		return result;
 	}
-	((struct effect *)*effect)->impl = impl;
-	((struct effect *)*effect)->registered = registered;
+	made = (struct effect *)*effect;
+	made->clsid = *clsid;
+	made->impl = impl;
+	made->registered = registered;
+	if (!registered) {
+		made->input_count = system_input_count(clsid);
+		return S_OK;
+	}
+	made->input_count = registered->input_count;
+	if (!(made->graph = ALLOC(sizeof(*made->graph))) || !(made->context = ALLOC(sizeof(*made->context)))) {
+		object_Release(made);
+		*effect = NULL;
+		return E_OUTOFMEMORY;
+	}
+	made->graph->vtbl = graph_table;
+	made->graph->refs = 1;
+	made->graph->effect = made;
+	made->graph->passthrough = -1;
+	made->graph->output = -1;
+	made->context->vtbl = effect_context_table;
+	made->context->refs = 1;
+	made->context->factory = factory;
+	if (factory)
+		IUnknown_AddRef(factory);
+	if ((made->context->device_context = device_context))
+		IUnknown_AddRef(device_context);
+	if (FAILED(result = IUnknown_QueryInterface(impl, &IID_ID2D1EffectImpl, (void **)&init)) ||
+		FAILED(result = ((effect_initialize)(*(void ***)init)[3])(init, (ID2D1EffectContext *)made->context, (ID2D1TransformGraph *)made->graph))) {
+		if (init)
+			IUnknown_Release(init);
+		object_Release(made);
+		*effect = NULL;
+		return result;
+	}
+	IUnknown_Release(init);
 	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE context_CreateEffect(void *iface, REFCLSID clsid, ID2D1Effect **effect)
+{
+	return create_effect(target_of(iface)->factory, (IUnknown *)iface, clsid, effect);
+}
+
+static void effect_prepare_once(struct effect *effect);
+
+/* The input an effect's output is, when its graph passes one through: a program's own effect is first asked to prepare. */
+static ID2D1Image *effect_drawn_input(struct effect *effect)
+{
+	effect_prepare_once(effect);
+	if (effect->graph && effect->graph->passthrough >= 0 && (UINT32)effect->graph->passthrough < EFFECT_INPUTS)
+		return effect->inputs[effect->graph->passthrough];
+	return NULL;
 }
 
 /* The image an effect gives out, when the image is one: an effect's output reaches back to its effect while the effect lives. */
@@ -4271,6 +6156,1121 @@ static struct effect *effect_of_image(ID2D1Image *image)
 	return effect_image_table && output->base.vtbl == effect_image_table ? output->effect : NULL;
 }
 
+/* ---- drawing what an effect gives ----
+ * An image is rendered over a rectangle of its own space, in pixels, into four floats a pixel, red, green, blue and alpha premultiplied,
+ * the form Direct2D's effects pass between them. A bitmap gives its pixels, an effect what its graph or, for a system effect, its own
+ * step makes of its inputs: a draw transform runs its pixel shader over the inputs it asks for (shader_run.c), the transforms the
+ * context makes are done here. Each asks its inputs only for the pixels it needs, as Direct2D asks a transform which input rectangles an
+ * output rectangle reads. */
+#define INFINITE_LEFT ((INT32)0x80000000)
+#define INFINITE_RIGHT ((INT32)0x7fffffff)
+/* The most pixels one step holds, sixteen bytes each: more than any screen shows. */
+enum { RENDER_PIXELS = 4096 * 4096 / 2, RENDER_DEPTH = 256 };
+
+static const D2D1_RECT_L nothing = {0, 0, 0, 0};
+static const D2D1_RECT_L everything = {INFINITE_LEFT, INFINITE_LEFT, INFINITE_RIGHT, INFINITE_RIGHT};
+
+static BOOL rect_empty(const D2D1_RECT_L *r) { return r->right <= r->left || r->bottom <= r->top; }
+
+static D2D1_RECT_L rect_intersect(const D2D1_RECT_L *a, const D2D1_RECT_L *b)
+{
+	D2D1_RECT_L r = {max(a->left, b->left), max(a->top, b->top), min(a->right, b->right), min(a->bottom, b->bottom)};
+	return rect_empty(&r) ? nothing : r;
+}
+
+static D2D1_RECT_L rect_union(const D2D1_RECT_L *a, const D2D1_RECT_L *b)
+{
+	D2D1_RECT_L r = {min(a->left, b->left), min(a->top, b->top), max(a->right, b->right), max(a->bottom, b->bottom)};
+	if (rect_empty(a))
+		return *b;
+	return rect_empty(b) ? *a : r;
+}
+
+/* Moved by a distance, an infinite edge staying where it is. */
+static LONG edge_moved(LONG edge, LONG by)
+{
+	const INT64 moved = (INT64)edge + by;
+	if (edge == INFINITE_LEFT || edge == INFINITE_RIGHT)
+		return edge;
+	return moved < INFINITE_LEFT ? INFINITE_LEFT : moved > INFINITE_RIGHT ? INFINITE_RIGHT : (LONG)moved;
+}
+
+static D2D1_RECT_L rect_moved(const D2D1_RECT_L *r, LONG x, LONG y)
+{
+	D2D1_RECT_L moved = {edge_moved(r->left, x), edge_moved(r->top, y), edge_moved(r->right, x), edge_moved(r->bottom, y)};
+	return moved;
+}
+
+static UINT32 rect_width(const D2D1_RECT_L *r) { return (UINT32)(r->right - r->left); }
+static UINT32 rect_height(const D2D1_RECT_L *r) { return (UINT32)(r->bottom - r->top); }
+
+/* An area small enough to hold, cut from its right and bottom when it is not. */
+static D2D1_RECT_L rect_held(D2D1_RECT_L r)
+{
+	if (rect_empty(&r))
+		return nothing;
+	if ((INT64)r.right - r.left > 16384)
+		r.right = r.left + 16384;
+	if ((INT64)r.bottom - r.top > 16384)
+		r.bottom = r.top + 16384;
+	while ((UINT64)rect_width(&r) * rect_height(&r) > RENDER_PIXELS)
+		r.bottom = r.top + rect_height(&r) / 2;
+	return r;
+}
+
+/* A coordinate as a whole pixel edge, rounded down or up; one past what a LONG holds is an infinite edge. */
+static LONG float_edge(float value, BOOL up)
+{
+	LONG edge;
+	if (!(value > -2147483520.0f))
+		return INFINITE_LEFT;
+	if (value >= 2147483520.0f)
+		return INFINITE_RIGHT;
+	edge = (LONG)value;
+	if (up && (float)edge < value)
+		++edge;
+	else if (!up && (float)edge > value)
+		--edge;
+	return edge;
+}
+
+static float *plane_alloc(const D2D1_RECT_L *r) { return ALLOC((size_t)rect_width(r) * rect_height(r) * 4 * sizeof(float)); }
+
+/* Copies what lies in both from one area's pixels into another's. */
+static void plane_copy(const float *from, const D2D1_RECT_L *from_rect, float *to, const D2D1_RECT_L *to_rect)
+{
+	const D2D1_RECT_L both = rect_intersect(from_rect, to_rect);
+	UINT32 row;
+	for (row = 0; !rect_empty(&both) && row < rect_height(&both); ++row)
+		memcpy(to + (((size_t)(both.top - to_rect->top + row) * rect_width(to_rect)) + (both.left - to_rect->left)) * 4,
+			from + (((size_t)(both.top - from_rect->top + row) * rect_width(from_rect)) + (both.left - from_rect->left)) * 4,
+			(size_t)rect_width(&both) * 4 * sizeof(float));
+}
+
+/* Where an image to render comes from: an image, or a node of a graph whose effect's inputs are `outer`. */
+struct link {
+	ID2D1Image *image;
+	struct effect_graph *graph;
+	INT32 node;
+	const struct link *outer;
+	UINT32 outer_count;
+};
+
+static BOOL link_bounds(const struct link *link, D2D1_RECT_L *bounds, int depth);
+static void link_render(const struct link *link, const D2D1_RECT_L *area, float *out, int depth);
+static void effect_render(struct effect *effect, const struct link *inputs, UINT32 count, const D2D1_RECT_L *area, float *out, int depth);
+static BOOL effect_bounds(struct effect *effect, const struct link *inputs, UINT32 count, D2D1_RECT_L *bounds, int depth);
+
+/* The links of an effect's own inputs. */
+static UINT32 effect_links(struct effect *effect, struct link *links)
+{
+	UINT32 index, count = min(effect->input_count, EFFECT_INPUTS);
+	for (index = 0; index < count; ++index) {
+		memset(&links[index], 0, sizeof(*links));
+		links[index].image = effect->inputs[index];
+	}
+	return count;
+}
+
+/* The link of a node's input, which is unset when nothing was joined to it. */
+static BOOL node_link(struct effect_graph *graph, INT32 node, UINT32 input, const struct link *outer, UINT32 outer_count, struct link *link)
+{
+	const struct node_source *source = &graph->nodes[node].sources[input];
+	memset(link, 0, sizeof(*link));
+	if (source->node >= 0 && (UINT32)source->node < graph->node_count) {
+		link->graph = graph;
+		link->node = source->node;
+		link->outer = outer;
+		link->outer_count = outer_count;
+		return TRUE;
+	}
+	if (source->input >= 0 && (UINT32)source->input < outer_count) {
+		*link = outer[source->input];
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/* A program's own effect is asked to prepare before it is drawn, after anything about it changed. */
+static void effect_prepare_once(struct effect *effect)
+{
+	IUnknown *init = NULL;
+	if (effect->impl && !effect->prepared && SUCCEEDED(IUnknown_QueryInterface(effect->impl, &IID_ID2D1EffectImpl, (void **)&init))) {
+		effect->prepared = TRUE;
+		((effect_prepare)(*(void ***)init)[4])(init, D2D1_CHANGE_TYPE_PROPERTIES);
+		IUnknown_Release(init);
+	}
+}
+
+static BOOL image_bounds(ID2D1Image *image, D2D1_RECT_L *bounds, int depth)
+{
+	ID2D1Bitmap *bitmap;
+	struct effect *effect;
+	*bounds = nothing;
+	if (!image || depth > RENDER_DEPTH)
+		return FALSE;
+	if (command_list_of(image) && command_list_of(image)->bitmap) {
+		*bounds = list_drawn(command_list_of(image));
+		return TRUE;
+	}
+	if ((bitmap = image_bitmap(image))) {
+		bounds->right = (LONG)((struct bitmap *)bitmap)->pixels.width;
+		bounds->bottom = (LONG)((struct bitmap *)bitmap)->pixels.height;
+		object_Release(bitmap);
+		return TRUE;
+	}
+	if ((effect = effect_of_image(image))) {
+		struct link links[EFFECT_INPUTS];
+		const UINT32 count = effect_links(effect, links);
+		return effect_bounds(effect, links, count, bounds, depth + 1);
+	}
+	return FALSE;
+}
+
+/* A bitmap's pixels as floats, premultiplied whatever the bitmap keeps. */
+static void bitmap_render(struct bitmap *bitmap, const D2D1_RECT_L *area, float *out)
+{
+	const D2D1_RECT_L whole = {0, 0, (LONG)bitmap->pixels.width, (LONG)bitmap->pixels.height};
+	const D2D1_RECT_L read = rect_intersect(area, &whole);
+	const BOOL straight = bitmap->format.alphaMode == D2D1_ALPHA_MODE_STRAIGHT, opaque = bitmap->format.alphaMode == D2D1_ALPHA_MODE_IGNORE;
+	BYTE *pixels;
+	UINT32 row, column;
+	if (rect_empty(&read) || !(pixels = ALLOC_UNSET((size_t)rect_width(&read) * rect_height(&read) * 4)))
+		return;
+	if (bitmap->dxgi) {
+		const RECT wanted = {read.left, read.top, read.right, read.bottom};
+		read_texture(bitmap, &wanted);
+	}
+	share_in(bitmap);
+	canvas_pixels(bitmap->surface, read.left, read.top, rect_width(&read), rect_height(&read), pixels, rect_width(&read) * 4, 0);
+	for (row = 0; row < rect_height(&read); ++row)
+		for (column = 0; column < rect_width(&read); ++column) {
+			const BYTE *from = pixels + ((size_t)row * rect_width(&read) + column) * 4;
+			float *to = out + (((size_t)(read.top - area->top + row) * rect_width(area)) + (read.left - area->left + column)) * 4;
+			const float alpha = opaque ? 1.0f : from[3] / 255.0f, scale = straight ? alpha / 255.0f : 1.0f / 255.0f;
+			to[0] = from[2] * scale;
+			to[1] = from[1] * scale;
+			to[2] = from[0] * scale;
+			to[3] = alpha;
+		}
+	FREE(pixels);
+}
+
+static void image_render(ID2D1Image *image, const D2D1_RECT_L *area, float *out, int depth)
+{
+	ID2D1Bitmap *bitmap;
+	struct effect *effect;
+	if (!image || depth > RENDER_DEPTH)
+		return;
+	if ((bitmap = image_bitmap(image))) {
+		bitmap_render((struct bitmap *)bitmap, area, out);
+		object_Release(bitmap);
+	} else if ((effect = effect_of_image(image))) {
+		struct link links[EFFECT_INPUTS];
+		const UINT32 count = effect_links(effect, links);
+		effect_render(effect, links, count, area, out, depth + 1);
+	} else if (!command_list_of(image))
+		unimplemented("ID2D1Effect", "an input that is neither a bitmap nor an effect's output");
+}
+
+static BOOL node_bounds(struct effect_graph *graph, INT32 index, const struct link *outer, UINT32 outer_count, D2D1_RECT_L *bounds, int depth)
+{
+	struct graph_node *node = &graph->nodes[index];
+	D2D1_RECT_L inputs[EFFECT_INPUTS], opaque[EFFECT_INPUTS], output_opaque;
+	struct link links[EFFECT_INPUTS];
+	UINT32 input, count = min(node_input_count(node->node), EFFECT_INPUTS);
+	*bounds = nothing;
+	if (depth > RENDER_DEPTH)
+		return FALSE;
+	for (input = 0; input < count; ++input) {
+		inputs[input] = opaque[input] = nothing;
+		if (node_link(graph, index, input, outer, outer_count, &links[input]))
+			link_bounds(&links[input], &inputs[input], depth + 1);
+	}
+	switch (node->kind) {
+	case NODE_DRAW:
+		return SUCCEEDED(((map_inputs_function)(*(void ***)node->transform)[TRANSFORM_MAP_INPUTS])(node->transform, inputs, opaque, count, bounds,
+			&output_opaque));
+	case NODE_EFFECT: {
+		struct transform_node *made = (struct transform_node *)node->node;
+		return made->effect && effect_bounds(made->effect, links, count, bounds, depth + 1);
+	}
+	case NODE_OFFSET: {
+		const struct transform_node *made = (struct transform_node *)node->node;
+		*bounds = count ? rect_moved(&inputs[0], made->offset.x, made->offset.y) : nothing;
+		return TRUE;
+	}
+	case NODE_BOUNDS:
+		*bounds = ((struct transform_node *)node->node)->bounds;
+		return TRUE;
+	case NODE_BLEND:
+		for (input = 0; input < count; ++input)
+			*bounds = rect_union(bounds, &inputs[input]);
+		return TRUE;
+	case NODE_BORDER:
+		*bounds = everything;
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+/* Direct3D's blend of a source onto a destination, both premultiplied, with the factors and operations a blend transform gives. */
+static float blend_factor(D2D1_BLEND factor, const float *source, const float *destination, const float *constant, int channel)
+{
+	switch (factor) {
+	case D2D1_BLEND_ZERO: return 0;
+	case D2D1_BLEND_ONE: return 1;
+	case D2D1_BLEND_SRC_COLOR: return source[channel];
+	case D2D1_BLEND_INV_SRC_COLOR: return 1 - source[channel];
+	case D2D1_BLEND_SRC_ALPHA: return source[3];
+	case D2D1_BLEND_INV_SRC_ALPHA: return 1 - source[3];
+	case D2D1_BLEND_DEST_ALPHA: return destination[3];
+	case D2D1_BLEND_INV_DEST_ALPHA: return 1 - destination[3];
+	case D2D1_BLEND_DEST_COLOR: return destination[channel];
+	case D2D1_BLEND_INV_DEST_COLOR: return 1 - destination[channel];
+	case D2D1_BLEND_SRC_ALPHA_SAT: return channel == 3 ? 1 : min(source[3], 1 - destination[3]);
+	case D2D1_BLEND_BLEND_FACTOR: return constant[channel];
+	case D2D1_BLEND_INV_BLEND_FACTOR: return 1 - constant[channel];
+	default: return 1;
+	}
+}
+
+static float blend_operation(D2D1_BLEND_OPERATION operation, float source, float destination)
+{
+	switch (operation) {
+	case D2D1_BLEND_OPERATION_SUBTRACT: return source - destination;
+	case D2D1_BLEND_OPERATION_REV_SUBTRACT: return destination - source;
+	case D2D1_BLEND_OPERATION_MIN: return min(source, destination);
+	case D2D1_BLEND_OPERATION_MAX: return max(source, destination);
+	default: return source + destination;
+	}
+}
+
+static void blend_pixels(const D2D1_BLEND_DESCRIPTION *blend, const float *source, float *destination, size_t count)
+{
+	size_t at;
+	int channel;
+	for (at = 0; at < count; ++at, source += 4, destination += 4) {
+		float result[4];
+		for (channel = 0; channel < 4; ++channel) {
+			const BOOL alpha = channel == 3;
+			const float s = source[channel] * blend_factor(alpha ? blend->sourceBlendAlpha : blend->sourceBlend, source, destination,
+				blend->blendFactor, channel);
+			const float d = destination[channel] * blend_factor(alpha ? blend->destinationBlendAlpha : blend->destinationBlend, source,
+				destination, blend->blendFactor, channel);
+			result[channel] = blend_operation(alpha ? blend->blendOperationAlpha : blend->blendOperation, s, d);
+		}
+		memcpy(destination, result, sizeof(result));
+	}
+}
+
+static void source_over(const float *source, float *destination, size_t count)
+{
+	size_t at;
+	for (at = 0; at < count; ++at, source += 4, destination += 4) {
+		const float keep = 1 - source[3];
+		destination[0] = source[0] + destination[0] * keep;
+		destination[1] = source[1] + destination[1] * keep;
+		destination[2] = source[2] + destination[2] * keep;
+		destination[3] = source[3] + destination[3] * keep;
+	}
+}
+
+/* A draw transform: it says which rectangle of each input the area reads, those are rendered, and its pixel shader runs over them. */
+static void draw_node_render(struct effect_graph *graph, INT32 index, const struct link *outer, UINT32 outer_count, const D2D1_RECT_L *area,
+	float *out, int depth)
+{
+	struct graph_node *node = &graph->nodes[index];
+	const struct stored_shader *shader = node->info->shaded ? find_shader(&node->info->shader) : NULL;
+	struct shader_image images[SHADER_INPUTS];
+	D2D1_RECT_L bounds, drawn, wanted[EFFECT_INPUTS];
+	float *pixels[SHADER_INPUTS] = {0}, *result;
+	UINT32 input, count = min(node_input_count(node->node), SHADER_INPUTS);
+	if (!shader) {
+		unimplemented("ID2D1DrawTransform", "drawing without a loaded pixel shader");
+		return;
+	}
+	/* The transform is told what its inputs cover before it is asked what it needs, as Direct2D asks in that order. */
+	if (!node_bounds(graph, index, outer, outer_count, &bounds, depth))
+		return;
+	drawn = rect_held(rect_intersect(area, &bounds));
+	if (rect_empty(&drawn))
+		return;
+	for (input = 0; input < count; ++input)
+		wanted[input] = nothing;
+	/* A transform without inputs is not asked what it needs, as Direct2D does not ask it: paint.net's generators leave it unimplemented. */
+	if (count && FAILED(((map_output_function)(*(void ***)node->transform)[TRANSFORM_MAP_OUTPUT])(node->transform, &drawn, wanted, count)))
+		return;
+	for (input = 0; input < count; ++input) {
+		struct link link;
+		D2D1_RECT_L covered = nothing;
+		memset(&images[input], 0, sizeof(images[input]));
+		images[input].filter = node->info->filters[input];
+		if (!node_link(graph, index, input, outer, outer_count, &link))
+			continue;
+		link_bounds(&link, &covered, depth + 1);
+		wanted[input] = rect_held(rect_intersect(&wanted[input], &covered));
+		images[input].left = wanted[input].left;
+		images[input].top = wanted[input].top;
+		if (rect_empty(&wanted[input]) || !(pixels[input] = plane_alloc(&wanted[input])))
+			continue;
+		link_render(&link, &wanted[input], pixels[input], depth + 1);
+		images[input].pixels = pixels[input];
+		images[input].width = rect_width(&wanted[input]);
+		images[input].height = rect_height(&wanted[input]);
+	}
+	{
+		struct draw_info *info = node->info;
+		const size_t floats = (size_t)rect_width(&drawn) * rect_height(&drawn) * 4;
+		struct kept_drawing *kept = NULL;
+		UINT32 slot;
+		/* The drawing kept for this area, if one is: it is what would be drawn while the shader and its constants are the same. */
+		for (slot = 0; !count && slot < KEPT_DRAWINGS && !kept; ++slot)
+			if (info->kept[slot].pixels && !memcmp(&info->kept[slot].area, &drawn, sizeof(drawn)))
+				kept = &info->kept[slot];
+		if (kept && !memcmp(&kept->shader, &info->shader, sizeof(GUID)) && kept->size == info->constant_size &&
+			(!info->constant_size || !memcmp(kept->constants, info->constants, info->constant_size))) {
+			plane_copy(kept->pixels, &drawn, out, area);
+		} else if ((result = ALLOC_UNSET(floats * sizeof(float)))) {
+			const BOOL ran = SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left,
+				drawn.top, rect_width(&drawn), rect_height(&drawn), result, NULL));
+			if (ran)
+				plane_copy(result, &drawn, out, area);
+			else
+				unimplemented("ID2D1DrawTransform", "drawing where no Direct3D 11 device runs its pixel shader");
+			/* The area's own place is drawn over; a new area takes the place of the oldest. */
+			if (!count && !kept)
+				kept = &info->kept[info->kept_next++ % KEPT_DRAWINGS];
+			if (kept) {
+				FREE(kept->pixels);
+				FREE(kept->bytes);
+				FREE(kept->constants);
+				kept->pixels = NULL;
+				kept->bytes = NULL;
+				kept->constants = NULL;
+			}
+			if (ran && kept && (!info->constant_size || (kept->constants = ALLOC_UNSET(info->constant_size)))) {
+				if (info->constant_size)
+					memcpy(kept->constants, info->constants, info->constant_size);
+				kept->size = info->constant_size;
+				kept->shader = info->shader;
+				kept->area = drawn;
+				kept->pixels = result;
+			} else
+				FREE(result);
+		}
+	}
+	for (input = 0; input < count; ++input)
+		FREE(pixels[input]);
+}
+
+/* A border transform repeats its input's edge pixels, its tiles or their mirror images beyond the input, as its extend modes say. */
+static LONG border_coordinate(LONG at, LONG start, LONG end, D2D1_EXTEND_MODE mode)
+{
+	const LONG size = end - start;
+	LONG offset = at - start;
+	if (mode == D2D1_EXTEND_MODE_WRAP) {
+		offset %= size;
+		return start + (offset < 0 ? offset + size : offset);
+	}
+	if (mode == D2D1_EXTEND_MODE_MIRROR) {
+		offset %= 2 * size;
+		if (offset < 0)
+			offset += 2 * size;
+		return start + (offset < size ? offset : 2 * size - 1 - offset);
+	}
+	return at < start ? start : at >= end ? end - 1 : at;
+}
+
+static void border_render(const struct transform_node *border, const struct link *link, const D2D1_RECT_L *area, float *out, int depth)
+{
+	D2D1_RECT_L covered, source;
+	float *pixels;
+	LONG x, y;
+	if (!link_bounds(link, &covered, depth) || rect_empty(&covered))
+		return;
+	/* Tiles and mirror images repeat the whole input; edges only the input's pixels nearest the area. */
+	if (border->extend_x == D2D1_EXTEND_MODE_CLAMP && border->extend_y == D2D1_EXTEND_MODE_CLAMP) {
+		source.left = max(min(area->left, covered.right - 1), covered.left);
+		source.top = max(min(area->top, covered.bottom - 1), covered.top);
+		source.right = min(max(area->right, covered.left + 1), covered.right);
+		source.bottom = min(max(area->bottom, covered.top + 1), covered.bottom);
+	} else
+		source = covered;
+	if ((UINT64)rect_width(&source) * rect_height(&source) > RENDER_PIXELS || rect_empty(&source) || !(pixels = plane_alloc(&source)))
+		return;
+	link_render(link, &source, pixels, depth);
+	for (y = area->top; y < area->bottom; ++y)
+		for (x = area->left; x < area->right; ++x) {
+			const LONG sx = border_coordinate(x, source.left, source.right, border->extend_x);
+			const LONG sy = border_coordinate(y, source.top, source.bottom, border->extend_y);
+			memcpy(out + (((size_t)(y - area->top) * rect_width(area)) + (x - area->left)) * 4,
+				pixels + (((size_t)(sy - source.top) * rect_width(&source)) + (sx - source.left)) * 4, 4 * sizeof(float));
+		}
+	FREE(pixels);
+}
+
+static void node_render(struct effect_graph *graph, INT32 index, const struct link *outer, UINT32 outer_count, const D2D1_RECT_L *area,
+	float *out, int depth)
+{
+	struct graph_node *node = &graph->nodes[index];
+	struct transform_node *made = (struct transform_node *)node->node;
+	struct link links[EFFECT_INPUTS];
+	UINT32 input, count = min(node_input_count(node->node), EFFECT_INPUTS);
+	BOOL linked[EFFECT_INPUTS];
+	if (depth > RENDER_DEPTH)
+		return;
+	for (input = 0; input < count; ++input)
+		linked[input] = node_link(graph, index, input, outer, outer_count, &links[input]);
+	switch (node->kind) {
+	case NODE_DRAW:
+		draw_node_render(graph, index, outer, outer_count, area, out, depth + 1);
+		break;
+	case NODE_EFFECT:
+		if (made->effect)
+			effect_render(made->effect, links, count, area, out, depth + 1);
+		break;
+	case NODE_OFFSET:
+		if (count && linked[0]) {
+			const D2D1_RECT_L moved = rect_moved(area, -made->offset.x, -made->offset.y);
+			link_render(&links[0], &moved, out, depth + 1);
+		}
+		break;
+	case NODE_BOUNDS:
+		if (count && linked[0]) {
+			const D2D1_RECT_L kept = rect_intersect(area, &made->bounds);
+			float *pixels;
+			if (!rect_empty(&kept) && (pixels = plane_alloc(&kept))) {
+				link_render(&links[0], &kept, pixels, depth + 1);
+				plane_copy(pixels, &kept, out, area);
+				FREE(pixels);
+			}
+		}
+		break;
+	case NODE_BLEND: {
+		float *pixels = plane_alloc(area);
+		for (input = 0; pixels && input < count; ++input) {
+			if (!linked[input])
+				continue;
+			memset(pixels, 0, (size_t)rect_width(area) * rect_height(area) * 4 * sizeof(float));
+			link_render(&links[input], area, pixels, depth + 1);
+			blend_pixels(&made->blend, pixels, out, (size_t)rect_width(area) * rect_height(area));
+		}
+		FREE(pixels);
+		break;
+	}
+	case NODE_BORDER:
+		if (count && linked[0])
+			border_render(made, &links[0], area, out, depth + 1);
+		break;
+	default:
+		break;
+	}
+}
+
+static BOOL link_bounds(const struct link *link, D2D1_RECT_L *bounds, int depth)
+{
+	if (link->image)
+		return image_bounds(link->image, bounds, depth);
+	if (link->graph && link->node >= 0 && (UINT32)link->node < link->graph->node_count)
+		return node_bounds(link->graph, link->node, link->outer, link->outer_count, bounds, depth);
+	*bounds = nothing;
+	return FALSE;
+}
+
+static void link_render(const struct link *link, const D2D1_RECT_L *area, float *out, int depth)
+{
+	if (rect_empty(area))
+		return;
+	if (link->image)
+		image_render(link->image, area, out, depth);
+	else if (link->graph && link->node >= 0 && (UINT32)link->node < link->graph->node_count)
+		node_render(link->graph, link->node, link->outer, link->outer_count, area, out, depth);
+}
+
+/* ---- the system effects done here ----
+ * Each works on its input's pixels in place. Those that change colors work on them unpremultiplied, as Direct2D's own do. */
+static float fpow(float x, float y);
+
+/* The sRGB curve each way, odd for the negative values extended ranges hold. */
+static float extended_to_linear(float c)
+{
+	const float a = c < 0 ? -c : c, r = a <= 0.04045f ? a / 12.92f : fpow((a + 0.055f) / 1.055f, 2.4f);
+	return c < 0 ? -r : r;
+}
+
+static float extended_to_srgb(float c)
+{
+	const float a = c < 0 ? -c : c, r = a <= 0.0031308f ? a * 12.92f : 1.055f * fpow(a, 1 / 2.4f) - 0.055f;
+	return c < 0 ? -r : r;
+}
+
+/* Properties of system effects the headers here leave out, by their documented indices and values. */
+enum {
+	COLOR_MANAGEMENT_SOURCE = 0, COLOR_MANAGEMENT_DESTINATION = 2, COLOR_MANAGEMENT_ALPHA_MODE = 4,
+	COLOR_MANAGEMENT_PREMULTIPLIED = 1, COLOR_MANAGEMENT_STRAIGHT = 2,
+	WHITE_LEVEL_INPUT = 0, WHITE_LEVEL_OUTPUT = 1
+};
+
+/* A property's value as the effect keeps it, or FALSE when it was not set. */
+static BOOL effect_property(struct effect *effect, UINT32 index, void *data, UINT32 size)
+{
+	const struct effect_value *value = effect_value_at(effect, index);
+	if (!value || value->size < size)
+		return FALSE;
+	memcpy(data, value->data, size);
+	return TRUE;
+}
+
+/* Whether a color context's values are linear light: scRGB, a DXGI space of gamma 1.0, or a simple profile of that gamma. Any other is
+ * taken as sRGB, which is what the profiles programs give for the screen describe. */
+static BOOL linear_context(IUnknown *context)
+{
+	const struct color_context *color = (const struct color_context *)context;
+	if (!color)
+		return FALSE;
+	return color->space == D2D1_COLOR_SPACE_SCRGB || (color->type == D2D1_COLOR_CONTEXT_TYPE_DXGI &&
+		(color->dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)) || (color->type == D2D1_COLOR_CONTEXT_TYPE_SIMPLE &&
+		color->simple.gamma == D2D1_GAMMA1_G10);
+}
+
+static void unpremultiply(float *pixel)
+{
+	if (pixel[3] > 0) {
+		pixel[0] /= pixel[3];
+		pixel[1] /= pixel[3];
+		pixel[2] /= pixel[3];
+	}
+}
+
+static void premultiply(float *pixel)
+{
+	pixel[0] *= pixel[3];
+	pixel[1] *= pixel[3];
+	pixel[2] *= pixel[3];
+}
+
+static float clamp01(float value) { return value < 0 ? 0 : value > 1 ? 1 : value; }
+
+static void system_pixels(struct effect *effect, float *pixels, size_t count)
+{
+	const CLSID *clsid = &effect->clsid;
+	size_t at;
+	if (same_guid(clsid, &CLSID_D2D1Premultiply)) {
+		for (at = 0; at < count; ++at)
+			premultiply(pixels + at * 4);
+	} else if (same_guid(clsid, &CLSID_D2D1UnPremultiply)) {
+		for (at = 0; at < count; ++at)
+			unpremultiply(pixels + at * 4);
+	} else if (same_guid(clsid, &CLSID_D2D1ColorManagement)) {
+		IUnknown *source = NULL, *destination = NULL;
+		UINT32 alpha_mode = COLOR_MANAGEMENT_PREMULTIPLIED;
+		BOOL from_linear, to_linear;
+		effect_property(effect, COLOR_MANAGEMENT_SOURCE, &source, sizeof(source));
+		effect_property(effect, COLOR_MANAGEMENT_DESTINATION, &destination, sizeof(destination));
+		effect_property(effect, COLOR_MANAGEMENT_ALPHA_MODE, &alpha_mode, sizeof(alpha_mode));
+		from_linear = linear_context(source);
+		to_linear = linear_context(destination);
+		if (from_linear == to_linear)
+			return;
+		for (at = 0; at < count; ++at) {
+			float *pixel = pixels + at * 4;
+			int channel;
+			if (alpha_mode != COLOR_MANAGEMENT_STRAIGHT)
+				unpremultiply(pixel);
+			for (channel = 0; channel < 3; ++channel)
+				pixel[channel] = to_linear ? extended_to_linear(pixel[channel]) : extended_to_srgb(pixel[channel]);
+			if (alpha_mode != COLOR_MANAGEMENT_STRAIGHT)
+				premultiply(pixel);
+		}
+	} else if (same_guid(clsid, &CLSID_D2D1WhiteLevelAdjustment)) {
+		/* Values of the input's white level come out at the output's: a white of 80 nits read at 240 is a third as bright. */
+		float input_level = 80, output_level = 80, scale;
+		effect_property(effect, WHITE_LEVEL_INPUT, &input_level, sizeof(input_level));
+		effect_property(effect, WHITE_LEVEL_OUTPUT, &output_level, sizeof(output_level));
+		scale = output_level > 0 ? input_level / output_level : 1;
+		for (at = 0; at < count; ++at) {
+			pixels[at * 4] *= scale;
+			pixels[at * 4 + 1] *= scale;
+			pixels[at * 4 + 2] *= scale;
+		}
+	} else if (same_guid(clsid, &CLSID_D2D1ColorMatrix)) {
+		D2D1_MATRIX_5X4_F m = {{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0}}};
+		UINT32 alpha_mode = D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED;
+		BOOL clamp = FALSE;
+		effect_property(effect, D2D1_COLORMATRIX_PROP_COLOR_MATRIX, &m, sizeof(m));
+		effect_property(effect, D2D1_COLORMATRIX_PROP_ALPHA_MODE, &alpha_mode, sizeof(alpha_mode));
+		effect_property(effect, D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT, &clamp, sizeof(clamp));
+		for (at = 0; at < count; ++at) {
+			float *pixel = pixels + at * 4, in[4];
+			int channel;
+			if (alpha_mode == D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED)
+				unpremultiply(pixel);
+			memcpy(in, pixel, sizeof(in));
+			for (channel = 0; channel < 4; ++channel) {
+				pixel[channel] = in[0] * m.m[0][channel] + in[1] * m.m[1][channel] + in[2] * m.m[2][channel] + in[3] * m.m[3][channel] +
+					m.m[4][channel];
+				if (clamp)
+					pixel[channel] = clamp01(pixel[channel]);
+			}
+			if (alpha_mode == D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED) {
+				pixel[3] = clamp01(pixel[3]);
+				premultiply(pixel);
+			}
+		}
+	} else if (same_guid(clsid, &CLSID_D2D1Opacity)) {
+		float opacity = 1;
+		effect_property(effect, D2D1_OPACITY_PROP_OPACITY, &opacity, sizeof(opacity));
+		for (at = 0; at < count * 4; ++at)
+			pixels[at] *= opacity;
+	} else if (same_guid(clsid, &CLSID_D2D1Crop)) {
+		/* A crop keeps the pixels inside its rectangle as they are; which ones those are, system_bounds says. */
+	} else if (same_guid(clsid, &CLSID_D2D1Invert)) {
+		for (at = 0; at < count; ++at) {
+			float *pixel = pixels + at * 4;
+			unpremultiply(pixel);
+			pixel[0] = 1 - pixel[0];
+			pixel[1] = 1 - pixel[1];
+			pixel[2] = 1 - pixel[2];
+			premultiply(pixel);
+		}
+	} else {
+		/* Each such effect is named once, by the first part of its CLSID. */
+		static DWORD told[16];
+		static LONG told_count;
+		LONG index;
+		char text[120];
+		for (index = 0; index < told_count && told[index] != clsid->Data1; ++index)
+			;
+		if (index == told_count && told_count < ARRAYSIZE(told)) {
+			told[InterlockedIncrement(&told_count) - 1] = clsid->Data1;
+			wsprintfA(text, "system effect %08lx, other than those done here, which draws its input unchanged", (unsigned long)clsid->Data1);
+			unimplemented("ID2D1Effect", text);
+		}
+	}
+}
+
+/* What a system effect covers: a crop its rectangle of its input, a flood everything, a composite all its inputs, any other its input. */
+static float fexp(float x);
+
+/* How far a Gaussian blur reaches, in pixels: three standard deviations each way, as Direct2D documents the effect's output growing by
+ * that much; no deviation is no blur. */
+static LONG blur_reach(struct effect *effect, float *deviation_out, BOOL *hard)
+{
+	float deviation = 3.0f;
+	UINT32 border = D2D1_BORDER_MODE_SOFT;
+	effect_property(effect, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, &deviation, sizeof(deviation));
+	effect_property(effect, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, &border, sizeof(border));
+	if (!(deviation > 0))
+		deviation = 0;
+	if (deviation > 1024)
+		deviation = 1024;
+	if (deviation_out)
+		*deviation_out = deviation;
+	if (hard)
+		*hard = border == D2D1_BORDER_MODE_HARD;
+	return float_edge(deviation * 3, 1);
+}
+
+/* The Gaussian blur: each pixel is the weighted mean of those around it, done along the rows and then along the columns, which gives
+ * the same as weighing the whole square. Beyond the input a soft border reads nothing and a hard one the input's edge. */
+static void blur_render(struct effect *effect, const struct link *inputs, const D2D1_RECT_L *area, float *out, int depth)
+{
+	float deviation, total = 0, *weights, *source, *rows;
+	BOOL hard;
+	const LONG reach = blur_reach(effect, &deviation, &hard);
+	const D2D1_RECT_L needed = {area->left - reach, area->top - reach, area->right + reach, area->bottom + reach};
+	D2D1_RECT_L covered, read;
+	LONG x, y, tap, width, height;
+	int channel;
+	if (!link_bounds(&inputs[0], &covered, depth))
+		return;
+	if (!reach) {
+		link_render(&inputs[0], area, out, depth);
+		return;
+	}
+	read = rect_intersect(&needed, &covered);
+	if (rect_empty(&read) || (UINT64)rect_width(&read) * rect_height(&read) > RENDER_PIXELS)
+		return;
+	width = rect_width(area);
+	height = rect_height(&read);
+	weights = ALLOC_UNSET((size_t)(reach + 1) * sizeof(float));
+	source = plane_alloc(&read);
+	rows = ALLOC_UNSET((size_t)width * height * 4 * sizeof(float));
+	if (weights && source && rows) {
+		for (tap = 0; tap <= reach; ++tap) {
+			weights[tap] = fexp(-(float)(tap * tap) / (2 * deviation * deviation));
+			total += tap ? 2 * weights[tap] : weights[tap];
+		}
+		for (tap = 0; tap <= reach; ++tap)
+			weights[tap] /= total;
+		link_render(&inputs[0], &read, source, depth);
+		for (y = 0; y < height; ++y)
+			for (x = 0; x < width; ++x) {
+				float sum[4] = {0, 0, 0, 0};
+				for (tap = -reach; tap <= reach; ++tap) {
+					LONG at = area->left + x + tap - read.left;
+					const float weight = weights[tap < 0 ? -tap : tap];
+					const float *pixel;
+					if (at < 0 || at >= (LONG)rect_width(&read)) {
+						if (!hard)
+							continue;
+						at = at < 0 ? 0 : (LONG)rect_width(&read) - 1;
+					}
+					pixel = source + ((size_t)y * rect_width(&read) + at) * 4;
+					for (channel = 0; channel < 4; ++channel)
+						sum[channel] += pixel[channel] * weight;
+				}
+				memcpy(rows + ((size_t)y * width + x) * 4, sum, sizeof(sum));
+			}
+		for (y = 0; y < (LONG)rect_height(area); ++y)
+			for (x = 0; x < width; ++x) {
+				float sum[4] = {0, 0, 0, 0};
+				for (tap = -reach; tap <= reach; ++tap) {
+					LONG at = area->top + y + tap - read.top;
+					const float weight = weights[tap < 0 ? -tap : tap];
+					const float *pixel;
+					if (at < 0 || at >= height) {
+						if (!hard)
+							continue;
+						at = at < 0 ? 0 : height - 1;
+					}
+					pixel = rows + ((size_t)at * width + x) * 4;
+					for (channel = 0; channel < 4; ++channel)
+						sum[channel] += pixel[channel] * weight;
+				}
+				memcpy(out + ((size_t)y * width + x) * 4, sum, sizeof(sum));
+			}
+	}
+	FREE(weights);
+	FREE(source);
+	FREE(rows);
+}
+
+static BOOL system_bounds(struct effect *effect, const struct link *inputs, UINT32 count, D2D1_RECT_L *bounds, int depth)
+{
+	UINT32 input;
+	*bounds = nothing;
+	if (same_guid(&effect->clsid, &CLSID_D2D1Flood)) {
+		*bounds = everything;
+		return TRUE;
+	}
+	if (same_guid(&effect->clsid, &CLSID_D2D1Composite)) {
+		for (input = 0; input < count; ++input) {
+			D2D1_RECT_L covered;
+			if (link_bounds(&inputs[input], &covered, depth))
+				*bounds = rect_union(bounds, &covered);
+		}
+		return TRUE;
+	}
+	if (!count || !link_bounds(&inputs[0], bounds, depth))
+		return FALSE;
+	if (same_guid(&effect->clsid, &CLSID_D2D1GaussianBlur)) {
+		/* A soft border lets the blur spread past its input as far as it reaches; a hard one keeps the input's size. */
+		BOOL hard;
+		const LONG reach = blur_reach(effect, NULL, &hard);
+		if (!hard && !rect_empty(bounds)) {
+			if (bounds->left != INFINITE_LEFT)
+				bounds->left -= reach;
+			if (bounds->top != INFINITE_LEFT)
+				bounds->top -= reach;
+			if (bounds->right != INFINITE_RIGHT)
+				bounds->right += reach;
+			if (bounds->bottom != INFINITE_RIGHT)
+				bounds->bottom += reach;
+		}
+	}
+	if (same_guid(&effect->clsid, &CLSID_D2D1Crop)) {
+		D2D1_VECTOR_4F crop;
+		if (effect_property(effect, D2D1_CROP_PROP_RECT, &crop, sizeof(crop))) {
+			const D2D1_RECT_L kept = {crop.x <= -2147483520.0f ? INFINITE_LEFT : (LONG)crop.x, crop.y <= -2147483520.0f ? INFINITE_LEFT : (LONG)crop.y,
+				crop.z >= 2147483520.0f ? INFINITE_RIGHT : (LONG)crop.z, crop.w >= 2147483520.0f ? INFINITE_RIGHT : (LONG)crop.w};
+			*bounds = rect_intersect(bounds, &kept);
+		}
+	}
+	return TRUE;
+}
+
+static void system_render(struct effect *effect, const struct link *inputs, UINT32 count, const D2D1_RECT_L *area, float *out, int depth)
+{
+	const size_t pixels = (size_t)rect_width(area) * rect_height(area);
+	D2D1_RECT_L covered;
+	if (same_guid(&effect->clsid, &CLSID_D2D1Flood)) {
+		D2D1_VECTOR_4F color = {0, 0, 0, 1};
+		size_t at;
+		effect_property(effect, D2D1_FLOOD_PROP_COLOR, &color, sizeof(color));
+		for (at = 0; at < pixels; ++at) {
+			out[at * 4] = color.x * color.w;
+			out[at * 4 + 1] = color.y * color.w;
+			out[at * 4 + 2] = color.z * color.w;
+			out[at * 4 + 3] = color.w;
+		}
+		return;
+	}
+	if (same_guid(&effect->clsid, &CLSID_D2D1Composite)) {
+		/* Each input over the ones before it; the other modes Direct2D has are drawn as that. */
+		UINT32 input, mode = D2D1_COMPOSITE_MODE_SOURCE_OVER;
+		float *layer = plane_alloc(area);
+		effect_property(effect, D2D1_COMPOSITE_PROP_MODE, &mode, sizeof(mode));
+		if (mode != D2D1_COMPOSITE_MODE_SOURCE_OVER)
+			unimplemented("ID2D1Effect", "a composite of a mode other than source over");
+		for (input = 0; layer && input < count; ++input) {
+			memset(layer, 0, pixels * 4 * sizeof(float));
+			link_render(&inputs[input], area, layer, depth);
+			source_over(layer, out, pixels);
+		}
+		FREE(layer);
+		return;
+	}
+	if (!count)
+		return;
+	if (same_guid(&effect->clsid, &CLSID_D2D1GaussianBlur)) {
+		blur_render(effect, inputs, area, out, depth);
+		return;
+	}
+	if (!system_bounds(effect, inputs, count, &covered, depth))
+		return;
+	covered = rect_intersect(&covered, area);
+	if (rect_empty(&covered))
+		return;
+	if (covered.left == area->left && covered.top == area->top && covered.right == area->right && covered.bottom == area->bottom) {
+		link_render(&inputs[0], area, out, depth);
+		system_pixels(effect, out, pixels);
+	} else {
+		float *part = plane_alloc(&covered);
+		if (!part)
+			return;
+		link_render(&inputs[0], &covered, part, depth);
+		system_pixels(effect, part, (size_t)rect_width(&covered) * rect_height(&covered));
+		plane_copy(part, &covered, out, area);
+		FREE(part);
+	}
+}
+
+static BOOL effect_bounds(struct effect *effect, const struct link *inputs, UINT32 count, D2D1_RECT_L *bounds, int depth)
+{
+	*bounds = nothing;
+	if (depth > RENDER_DEPTH)
+		return FALSE;
+	effect_prepare_once(effect);
+	if (!effect->registered)
+		return system_bounds(effect, inputs, count, bounds, depth + 1);
+	if (!effect->graph)
+		return FALSE;
+	if (effect->graph->passthrough >= 0)
+		return (UINT32)effect->graph->passthrough < count && link_bounds(&inputs[effect->graph->passthrough], bounds, depth + 1);
+	return effect->graph->output >= 0 && node_bounds(effect->graph, effect->graph->output, inputs, count, bounds, depth + 1);
+}
+
+static void effect_render(struct effect *effect, const struct link *inputs, UINT32 count, const D2D1_RECT_L *area, float *out, int depth)
+{
+	if (depth > RENDER_DEPTH || rect_empty(area))
+		return;
+	effect_prepare_once(effect);
+	if (!effect->registered)
+		system_render(effect, inputs, count, area, out, depth + 1);
+	else if (effect->graph && effect->graph->passthrough >= 0) {
+		if ((UINT32)effect->graph->passthrough < count)
+			link_render(&inputs[effect->graph->passthrough], area, out, depth + 1);
+	} else if (effect->graph && effect->graph->output >= 0)
+		node_render(effect->graph, effect->graph->output, inputs, count, area, out, depth + 1);
+}
+
+/* An effect whose output is one draw transform over bitmaps is drawn in bytes from end to end: the bitmaps' bytes go to the shader as they
+ * are and what it gives comes back as bytes, where the floats effects pass between them would be made and unmade for every pixel of every
+ * frame, as for the effect paint.net shows its whole document through. The bytes of `area`, blue first and premultiplied, or NULL when the
+ * effect is not of that kind. */
+static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT32 link_count, const D2D1_RECT_L *area)
+{
+	struct effect_graph *graph;
+	struct graph_node *node;
+	struct draw_info *info;
+	const struct stored_shader *shader;
+	struct shader_image images[SHADER_INPUTS];
+	struct bitmap *sources[SHADER_INPUTS] = {0};
+	struct kept_drawing *kept = NULL;
+	BYTE *read[SHADER_INPUTS] = {0}, *out = NULL, *result = NULL;
+	const BYTE *drawing = NULL;
+	D2D1_RECT_L bounds, drawn, wanted[EFFECT_INPUTS];
+	UINT32 input, count, slot, row;
+	BOOL fits = TRUE;
+	effect_prepare_once(effect);
+	graph = effect->graph;
+	if (!effect->registered || !graph || graph->passthrough >= 0 || graph->output < 0 || (UINT32)graph->output >= graph->node_count)
+		return NULL;
+	node = &graph->nodes[graph->output];
+	info = node->info;
+	if (node->kind != NODE_DRAW || !info || !info->shaded || !(shader = find_shader(&info->shader)))
+		return NULL;
+	count = node_input_count(node->node);
+	if (count > SHADER_INPUTS)
+		return NULL;
+	for (input = 0; input < count && fits; ++input) {
+		struct link link;
+		fits = node_link(graph, graph->output, input, links, link_count, &link) && link.image &&
+			(sources[input] = (struct bitmap *)image_bitmap(link.image)) != NULL &&
+			sources[input]->format.format == DXGI_FORMAT_B8G8R8A8_UNORM && sources[input]->format.alphaMode == D2D1_ALPHA_MODE_PREMULTIPLIED;
+	}
+	if (fits && (out = ALLOC((size_t)rect_width(area) * rect_height(area) * 4)) &&
+		node_bounds(graph, graph->output, links, link_count, &bounds, 0)) {
+		drawn = rect_held(rect_intersect(area, &bounds));
+		for (input = 0; input < count; ++input)
+			wanted[input] = nothing;
+		if (!rect_empty(&drawn) && (!count ||
+			SUCCEEDED(((map_output_function)(*(void ***)node->transform)[TRANSFORM_MAP_OUTPUT])(node->transform, &drawn, wanted, count)))) {
+			for (input = 0; input < count; ++input) {
+				struct bitmap *source = sources[input];
+				const D2D1_RECT_L whole = {0, 0, (LONG)source->pixels.width, (LONG)source->pixels.height};
+				D2D1_RECT_L covered = nothing;
+				struct link link;
+				memset(&images[input], 0, sizeof(images[input]));
+				images[input].filter = info->filters[input];
+				node_link(graph, graph->output, input, links, link_count, &link);
+				link_bounds(&link, &covered, 1);
+				wanted[input] = rect_held(rect_intersect(&wanted[input], &covered));
+				wanted[input] = rect_intersect(&wanted[input], &whole);
+				images[input].left = wanted[input].left;
+				images[input].top = wanted[input].top;
+				if (rect_empty(&wanted[input]) || !(read[input] = ALLOC_UNSET((size_t)rect_width(&wanted[input]) * rect_height(&wanted[input]) * 4)))
+					continue;
+				if (source->dxgi) {
+					const RECT texture = {wanted[input].left, wanted[input].top, wanted[input].right, wanted[input].bottom};
+					read_texture(source, &texture);
+				}
+				share_in(source);
+				canvas_pixels(source->surface, wanted[input].left, wanted[input].top, rect_width(&wanted[input]), rect_height(&wanted[input]),
+					read[input], rect_width(&wanted[input]) * 4, 0);
+				images[input].bytes = read[input];
+				images[input].width = rect_width(&wanted[input]);
+				images[input].height = rect_height(&wanted[input]);
+			}
+			/* A transform without inputs draws the same while its shader and constants are (see draw_node_render). */
+			for (slot = 0; !count && slot < KEPT_DRAWINGS && !kept; ++slot)
+				if (info->kept[slot].bytes && !memcmp(&info->kept[slot].area, &drawn, sizeof(drawn)))
+					kept = &info->kept[slot];
+			if (kept && !memcmp(&kept->shader, &info->shader, sizeof(GUID)) && kept->size == info->constant_size &&
+				(!info->constant_size || !memcmp(kept->constants, info->constants, info->constant_size))) {
+				drawing = kept->bytes;
+			} else if ((result = ALLOC_UNSET((size_t)rect_width(&drawn) * rect_height(&drawn) * 4))) {
+				if (SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left, drawn.top,
+						rect_width(&drawn), rect_height(&drawn), NULL, result)))
+					drawing = result;
+				if (!count && !kept)
+					kept = &info->kept[info->kept_next++ % KEPT_DRAWINGS];
+				if (kept) {
+					FREE(kept->pixels);
+					FREE(kept->bytes);
+					FREE(kept->constants);
+					kept->pixels = NULL;
+					kept->bytes = NULL;
+					kept->constants = NULL;
+				}
+			}
+			for (row = 0; drawing && row < rect_height(&drawn); ++row)
+				memcpy(out + (((size_t)(drawn.top - area->top + row) * rect_width(area)) + (drawn.left - area->left)) * 4,
+					drawing + (size_t)row * rect_width(&drawn) * 4, (size_t)rect_width(&drawn) * 4);
+			if (result && !drawing) {
+				/* No device ran the shader: the floats' way says so. */
+				FREE(out);
+				out = NULL;
+			}
+			if (result && drawing && kept && (!info->constant_size || (kept->constants = ALLOC_UNSET(info->constant_size)))) {
+				if (info->constant_size)
+					memcpy(kept->constants, info->constants, info->constant_size);
+				kept->size = info->constant_size;
+				kept->shader = info->shader;
+				kept->area = drawn;
+				kept->bytes = result;
+			} else
+				FREE(result);
+		}
+	} else if (!fits) {
+		FREE(out);
+		out = NULL;
+	}
+	for (input = 0; input < SHADER_INPUTS; ++input) {
+		FREE(read[input]);
+		if (sources[input])
+			object_Release(sources[input]);
+	}
+	return out;
+}
+
+/* What DrawImage draws of an effect: the part of its output that falls on the target, rendered and then drawn as a bitmap at its place,
+ * through the target's transform as any image is. The corner of the part asked for goes to the offset, as for a bitmap. */
+static void draw_effect(struct target *self, struct effect *effect, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
+	D2D1_INTERPOLATION_MODE interpolation)
+{
+	struct link links[EFFECT_INPUTS];
+	const UINT32 count = effect_links(effect, links);
+	const float x = (offset ? offset->x : 0) - (rect ? rect->left : 0), y = (offset ? offset->y : 0) - (rect ? rect->top : 0);
+	D2D1_MATRIX_3X2_F place = identity, world, back;
+	D2D1_RECT_L covered, area;
+	D2D1_POINT_2F corners[4];
+	float left = 1e30f, top = 1e30f, right = -1e30f, bottom = -1e30f, *pixels;
+	struct bitmap *drawn;
+	BYTE *bytes;
+	int corner;
+	size_t at, size;
+	if (!self->bitmap || !effect_bounds(effect, links, count, &covered, 0) || rect_empty(&covered))
+		return;
+	/* The target's pixels, brought back into the image's space, say which part of it can show. */
+	place._31 = x;
+	place._32 = y;
+	world = multiply(&place, &self->transform);
+	if (!invert(&world, &back))
+		return;
+	corners[0].x = corners[3].x = 0;
+	corners[0].y = corners[1].y = 0;
+	corners[1].x = corners[2].x = self->bitmap->pixels.width * 96.0f / self->dpi_x;
+	corners[2].y = corners[3].y = self->bitmap->pixels.height * 96.0f / self->dpi_y;
+	for (corner = 0; corner < 4; ++corner) {
+		const D2D1_POINT_2F p = apply(&back, corners[corner]);
+		left = min(left, p.x);
+		top = min(top, p.y);
+		right = max(right, p.x);
+		bottom = max(bottom, p.y);
+	}
+	area.left = (LONG)max(left - 1, -1e9f);
+	area.top = (LONG)max(top - 1, -1e9f);
+	area.right = (LONG)min(right + 2, 1e9f);
+	area.bottom = (LONG)min(bottom + 2, 1e9f);
+	if (rect) {
+		const D2D1_RECT_L asked = {float_edge(rect->left, 0), float_edge(rect->top, 0), float_edge(rect->right, 1), float_edge(rect->bottom, 1)};
+		area = rect_intersect(&area, &asked);
+	}
+	area = rect_held(rect_intersect(&area, &covered));
+	if (rect_empty(&area))
+		return;
+	size = (size_t)rect_width(&area) * rect_height(&area);
+	if (!(bytes = effect_bytes(effect, links, count, &area))) {
+		if (!(pixels = plane_alloc(&area)))
+			return;
+		effect_render(effect, links, count, &area, pixels, 0);
+		if ((bytes = ALLOC_UNSET(size * 4)))
+			for (at = 0; at < size; ++at) {
+				const float alpha = clamp01(pixels[at * 4 + 3]);
+				bytes[at * 4] = (BYTE)(min(clamp01(pixels[at * 4 + 2]), alpha) * 255 + 0.5f);
+				bytes[at * 4 + 1] = (BYTE)(min(clamp01(pixels[at * 4 + 1]), alpha) * 255 + 0.5f);
+				bytes[at * 4 + 2] = (BYTE)(min(clamp01(pixels[at * 4]), alpha) * 255 + 0.5f);
+				bytes[at * 4 + 3] = (BYTE)(alpha * 255 + 0.5f);
+			}
+		FREE(pixels);
+	}
+	if (bytes) {
+		D2D1_SIZE_U pixel_size = {rect_width(&area), rect_height(&area)};
+		D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
+		if ((drawn = make_bitmap(self->factory, pixel_size, format, 96, 96, D2D1_BITMAP_OPTIONS_NONE))) {
+			const D2D1_RECT_F destination = {area.left + x, area.top + y, area.right + x, area.bottom + y};
+			canvas_pixels(drawn->surface, 0, 0, pixel_size.width, pixel_size.height, bytes, pixel_size.width * 4, 1);
+			draw_bitmap(self, drawn, &destination, 1, interpolation, NULL);
+			object_Release(drawn);
+		}
+		FREE(bytes);
+	}
+}
+
 /* The bounds of an image: a bitmap's size in device-independent pixels, then through the transform for the world bounds. */
 static HRESULT STDMETHODCALLTYPE context_GetImageLocalBounds(void *iface, ID2D1Image *image, D2D1_RECT_F *bounds)
 {
@@ -4278,12 +7278,27 @@ static HRESULT STDMETHODCALLTYPE context_GetImageLocalBounds(void *iface, ID2D1I
 	struct bitmap *b;
 	if (!image || !bounds)
 		return E_INVALIDARG;
-	if (FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap))) {
-		/* An effect's output covers what its first input covers; with no input, nothing. */
-		const struct effect *effect = effect_of_image(image);
-		if (effect && effect->inputs[0])
-			return context_GetImageLocalBounds(iface, effect->inputs[0], bounds);
-		if (!effect)
+	if (command_list_of(image) && command_list_of(image)->bitmap) {
+		const struct command_list *list = command_list_of(image);
+		const D2D1_RECT_L drawn = list_drawn(command_list_of(image));
+		bounds->left = drawn.left * 96.0f / list->bitmap->dpi_x;
+		bounds->top = drawn.top * 96.0f / list->bitmap->dpi_y;
+		bounds->right = drawn.right * 96.0f / list->bitmap->dpi_x;
+		bounds->bottom = drawn.bottom * 96.0f / list->bitmap->dpi_y;
+		return S_OK;
+	}
+	if (!(bitmap = image_bitmap(image))) {
+		/* An effect's output covers what its graph or its own step makes of its inputs' bounds. */
+		struct effect *effect = effect_of_image(image);
+		D2D1_RECT_L covered;
+		if (effect && image_bounds(image, &covered, 0)) {
+			bounds->left = covered.left == INFINITE_LEFT ? -FLT_MAX : (float)covered.left;
+			bounds->top = covered.top == INFINITE_LEFT ? -FLT_MAX : (float)covered.top;
+			bounds->right = covered.right == INFINITE_RIGHT ? FLT_MAX : (float)covered.right;
+			bounds->bottom = covered.bottom == INFINITE_RIGHT ? FLT_MAX : (float)covered.bottom;
+			return S_OK;
+		}
+		if (!effect && !command_list_of(image))
 			unimplemented("ID2D1DeviceContext", "GetImageLocalBounds of an image that is neither a bitmap nor an effect's output");
 		/* What draws nothing here covers nothing. */
 		bounds->left = bounds->top = bounds->right = bounds->bottom = 0;
@@ -4380,14 +7395,17 @@ static UINT64 STDMETHODCALLTYPE device_GetMaximumColorGlyphCacheMemory(void *ifa
 
 static void **device_table;
 static const GUID *const device_iids[] = {&IID_ID2D1Resource, &IID_ID2D1Device, &IID_ID2D1Device1, &IID_ID2D1Device2, &IID_ID2D1Device3,
-	&IID_ID2D1Device4};
+	&IID_ID2D1Device4, &IID_ID2D1Device5, &IID_ID2D1Device6};
+/* ID2D1Device5 and ID2D1Device6 each add one more CreateDeviceContext after those of ID2D1Device4, for the newer contexts, and the
+   factory's newest CreateDevice hands out an ID2D1Device6. */
+enum { ID2D1Device5_CreateDeviceContext_slot = ID2D1Device4_methods, ID2D1Device6_CreateDeviceContext_slot, device_methods };
 
 static HRESULT make_device(IUnknown *factory, IUnknown *dxgi, ID2D1Device **out)
 {
 	struct device *self = ALLOC(sizeof(*self));
 	if (!self)
 		return E_OUTOFMEMORY;
-	object_init(&self->base, device_table, device_destroy, device_iids, 6, factory);
+	object_init(&self->base, device_table, device_destroy, device_iids, 8, factory);
 	self->dxgi = dxgi;
 	if (dxgi)
 		IUnknown_AddRef(dxgi);
@@ -4626,6 +7644,12 @@ static HRESULT STDMETHODCALLTYPE factory_CreateWicBitmapRenderTarget(void *iface
 	size.height = height;
 	target->wic = wic;
 	IWICBitmap_AddRef(wic);
+	/* A target that names no format takes the WIC bitmap's: floats, halves or alpha alone, else BGRA. */
+	if (!properties || properties->pixelFormat.format == DXGI_FORMAT_UNKNOWN) {
+		const UINT depth = wic_depth(wic);
+		target->format.format = depth == 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : depth == 8 ? DXGI_FORMAT_R16G16B16A16_FLOAT :
+			depth == 1 ? DXGI_FORMAT_A8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+	}
 	if (FAILED(hr = replace_surface(target, size))) {
 		target_Release(target);
 		return hr;
@@ -4696,6 +7720,30 @@ static HRESULT STDMETHODCALLTYPE factory_RegisterEffectFromStream(void *iface, R
 	return result;
 }
 static HRESULT STDMETHODCALLTYPE factory_UnregisterEffect(void *iface, REFCLSID clsid) { return S_OK; }
+/* What an effect is, told by an object that has its properties: an effect made without the program's object behind it. */
+static HRESULT STDMETHODCALLTYPE factory_GetEffectProperties(void *iface, REFCLSID clsid, ID2D1Properties **out)
+{
+	const struct registered_effect *registered;
+	ID2D1Effect *effect;
+	HRESULT result;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!clsid)
+		return E_INVALIDARG;
+	lock_registered();
+	registered = find_registered(clsid);
+	LeaveCriticalSection(&registered_lock);
+	if (!registered && !system_effect(clsid))
+		return D2DERR_EFFECT_IS_NOT_REGISTERED;
+	if (FAILED(result = make_effect((IUnknown *)iface, &effect)))
+		return result;
+	((struct effect *)effect)->registered = registered;
+	((struct effect *)effect)->clsid = *clsid;
+	*out = (ID2D1Properties *)effect;
+	return S_OK;
+}
+
 static HRESULT STDMETHODCALLTYPE factory_GetRegisteredEffects(void *iface, CLSID *effects, UINT32 capacity, UINT32 *returned, UINT32 *registered)
 {
 	if (returned) *returned = 0;
@@ -4725,6 +7773,10 @@ static void set_target(void **table)
 	table[ID2D1DeviceContext5_CreateRadialGradientBrush_slot] = (void *)target_CreateRadialGradientBrush;
 	table[ID2D1DeviceContext5_CreateCompatibleRenderTarget_slot] = (void *)target_CreateCompatibleRenderTarget;
 	table[ID2D1DeviceContext5_CreateLayer_slot] = (void *)target_CreateLayer;
+	table[ID2D1DeviceContext5_CreateColorContext_slot] = (void *)context_CreateColorContext;
+	table[ID2D1DeviceContext5_CreateColorContextFromWicColorContext_slot] = (void *)context_CreateColorContextFromWicColorContext;
+	table[ID2D1DeviceContext5_CreateColorContextFromDxgiColorSpace_slot] = (void *)context_CreateColorContextFromDxgiColorSpace;
+	table[ID2D1DeviceContext5_CreateColorContextFromSimpleColorProfile_slot] = (void *)context_CreateColorContextFromSimpleColorProfile;
 	table[ID2D1DeviceContext5_CreateMesh_slot] = (void *)target_CreateMesh;
 	table[ID2D1DeviceContext5_FillMesh_slot] = (void *)target_FillMesh;
 	table[ID2D1DeviceContext5_DrawLine_slot] = (void *)target_DrawLine;
@@ -4791,6 +7843,7 @@ static void set_context(void **table)
 	table[ID2D1DeviceContext5_GetDevice_slot] = (void *)context_GetDevice;
 	table[ID2D1DeviceContext5_SetTarget_slot] = (void *)context_SetTarget;
 	table[ID2D1DeviceContext5_GetTarget_slot] = (void *)context_GetTarget;
+	table[ID2D1DeviceContext5_CreateCommandList_slot] = (void *)context_CreateCommandList;
 	table[ID2D1DeviceContext5_SetRenderingControls_slot] = (void *)context_SetRenderingControls;
 	table[ID2D1DeviceContext5_GetRenderingControls_slot] = (void *)context_GetRenderingControls;
 	table[ID2D1DeviceContext5_SetPrimitiveBlend_slot] = (void *)context_SetPrimitiveBlend;
@@ -4801,6 +7854,23 @@ static void set_context(void **table)
 	table[ID2D1DeviceContext5_DrawImage_slot] = (void *)target_DrawImage;
 	table[ID2D1DeviceContext5_DrawBitmap_85_slot] = (void *)target_DrawBitmap1;
 	table[ID2D1DeviceContext5_PushLayer_86_slot] = (void *)target_PushLayer1;
+}
+
+/* ID2D1DeviceContext6 adds one method after those of ID2D1DeviceContext5, which programs reach once they find the newer interface. */
+enum { ID2D1DeviceContext6_BlendImage_slot = ID2D1DeviceContext5_methods, context_methods };
+
+static void STDMETHODCALLTYPE context_BlendImage(void *iface, ID2D1Image *image, D2D1_BLEND_MODE mode, const D2D1_POINT_2F *offset,
+	const D2D1_RECT_F *rect, D2D1_INTERPOLATION_MODE interpolation)
+{
+	unimplemented("ID2D1DeviceContext6", "BlendImage");
+}
+
+static void **make_context_table(void)
+{
+	void **table = ALLOC(context_methods * sizeof(void *));
+	memcpy(table, ID2D1DeviceContext5_table, ID2D1DeviceContext5_methods * sizeof(void *));
+	table[ID2D1DeviceContext6_BlendImage_slot] = (void *)context_BlendImage;
+	return table;
 }
 
 /* A render target's table: set_target fills every slot of a device context, so it holds them all, past those of its own interface. */
@@ -4816,6 +7886,7 @@ static void build_tables(void)
 {
 	build_geometry_tables();
 	build_resource_tables();
+	make_byte_half();
 	hwnd_table = make_target_table(ID2D1HwndRenderTarget_table, ID2D1HwndRenderTarget_methods);
 	set_target(hwnd_table);
 	hwnd_table[ID2D1HwndRenderTarget_CheckWindowState_slot] = (void *)hwnd_CheckWindowState;
@@ -4829,9 +7900,9 @@ static void build_tables(void)
 	bitmaprt_table[ID2D1BitmapRenderTarget_GetBitmap_slot] = (void *)bitmaprt_GetBitmap;
 	rt_table = make_target_table(ID2D1DCRenderTarget_table, ID2D1DCRenderTarget_methods);
 	set_target(rt_table);
-	context_table = make_table(ID2D1DeviceContext5_table, ID2D1DeviceContext5_methods);
+	context_table = make_context_table();
 	set_context(context_table);
-	context_secondary_table = make_table(ID2D1DeviceContext5_table, ID2D1DeviceContext5_methods);
+	context_secondary_table = make_context_table();
 	set_context(context_secondary_table);
 	gdi_table = make_table(ID2D1GdiInteropRenderTarget_table, ID2D1GdiInteropRenderTarget_methods);
 	gdi_table[0] = (void *)target_QueryInterface;
@@ -4841,7 +7912,10 @@ static void build_tables(void)
 	gdi_table[ID2D1GdiInteropRenderTarget_ReleaseDC_slot] = (void *)gdi_ReleaseDC;
 	bitmap_table[ID2D1Bitmap1_CopyFromRenderTarget_slot] = (void *)bitmap_CopyFromRenderTarget;
 
-	device_table = make_table(ID2D1Device4_table, ID2D1Device4_methods);
+	device_table = ALLOC(device_methods * sizeof(void *));
+	memcpy(device_table, ID2D1Device4_table, ID2D1Device4_methods * sizeof(void *));
+	device_table[ID2D1Device5_CreateDeviceContext_slot] = (void *)device_CreateDeviceContext;
+	device_table[ID2D1Device6_CreateDeviceContext_slot] = (void *)device_CreateDeviceContext;
 	set_resource(device_table);
 	device_table[ID2D1Device4_CreateDeviceContext_slot] = (void *)device_CreateDeviceContext;
 	device_table[ID2D1Device4_SetMaximumTextureMemory_slot] = (void *)device_SetMaximumTextureMemory;
@@ -4882,6 +7956,7 @@ static void build_tables(void)
 	factory_table[ID2D1Factory7_CreateDrawingStateBlock_20_slot] = (void *)factory_CreateDrawingStateBlock1;
 	factory_table[ID2D1Factory7_RegisterEffectFromStream_slot] = (void *)factory_RegisterEffectFromStream;
 	factory_table[ID2D1Factory7_RegisterEffectFromString_slot] = (void *)factory_RegisterEffectFromString;
+	factory_table[ID2D1Factory7_GetEffectProperties_slot] = (void *)factory_GetEffectProperties;
 	factory_table[ID2D1Factory7_UnregisterEffect_slot] = (void *)factory_UnregisterEffect;
 	factory_table[ID2D1Factory7_GetRegisteredEffects_slot] = (void *)factory_GetRegisteredEffects;
 	factory_table[ID2D1Factory7_CreateDevice_27_slot] = (void *)factory_CreateDevice;
