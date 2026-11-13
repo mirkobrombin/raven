@@ -97,6 +97,53 @@ void apply_context(NativeContext &native, const ContextBytes &context)
 	std::memcpy(native.xstate.data(), context.data() + x64_context::float_area, 512);
 }
 
+// The host keeps the state as the processor's XSAVE area in its standard form: the header at 512 with the mask of the parts that are
+// not in their initial state, the AVX part at 576.
+bool native_has_avx(const NativeContext &native)
+{
+	return native.xstate.size() >= 576 + x64_context::avx_size;
+}
+
+std::array<uint8_t, x64_context::avx_size> native_avx(const NativeContext &native)
+{
+	std::array<uint8_t, x64_context::avx_size> halves{};
+	if (native_has_avx(native) && (native.xstate[512] & x64_context::avx_mask))
+		std::memcpy(halves.data(), native.xstate.data() + 576, halves.size());
+	return halves;
+}
+
+void set_native_avx(NativeContext &native, const uint8_t *halves)
+{
+	if (!native_has_avx(native))
+		return;
+	if (halves)
+		std::memcpy(native.xstate.data() + 576, halves, x64_context::avx_size);
+	else
+		std::memset(native.xstate.data() + 576, 0, x64_context::avx_size);
+	native.xstate[512] = uint8_t(native.xstate[512] | x64_context::avx_mask | 3);
+}
+
+uint64_t context_extended_area(NativeProcess &process, uint64_t context)
+{
+	try {
+		const auto flags = process.read_memory(context + x64_context::flags, 4);
+		uint32_t asked;
+		std::memcpy(&asked, flags.data(), 4);
+		if ((asked & x64_context::xstate_flags) != x64_context::xstate_flags)
+			return 0;
+		const auto chunk = process.read_memory(context + x64_context::size + 16, 8);
+		int32_t offset;
+		uint32_t length;
+		std::memcpy(&offset, chunk.data(), 4);
+		std::memcpy(&length, chunk.data() + 4, 4);
+		if (length < x64_context::extended_header + x64_context::avx_size)
+			return 0;
+		return uint64_t(int64_t(context + x64_context::size) + offset);
+	} catch (const std::exception &) {
+		return 0;
+	}
+}
+
 const PEModule *NativeUnwinder::module_at(uint64_t address) const
 {
 	for (const auto &[name, module] : modules.all()) {

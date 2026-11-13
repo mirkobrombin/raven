@@ -3,6 +3,7 @@
 #include "actctx.h"
 #include "text.h"
 #include "x86_compat_api.h"
+#include "unwind.h"
 
 #include <algorithm>
 #include <array>
@@ -620,14 +621,27 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		std::memcpy(bytes.data() + 44, &level, 2);
 		call.write(call[0], bytes);
 	};
-	// The processor state the system saves for threads: the x87 and SSE registers; programs then take the paths that need no more.
-	registry.add("GetEnabledXStateFeatures", 0, [](ApiCall &call) { call.ret(3); });
-	// Where a CONTEXT keeps an extended state feature: of the two features enabled above, the legacy floating-point state is the
-	// FXSAVE area (FltSave on x64, ExtendedRegisters on x86) and the SSE state its XMM registers. No other feature is in a context.
+	// The processor state the system saves for threads: the x87 and SSE registers, and for 64-bit programs on a processor that has
+	// them the YMM registers of AVX. A program asks this before it uses AVX: the .NET runtime runs the code compiled ahead for AVX2,
+	// as paint.net's is, only when the answer has AVX, and compiles every method again otherwise.
+	const auto avx_enabled = [](ApiCall &call) {
+		return call.pointer_width() == 8 && __builtin_cpu_supports("avx") && native_has_avx(call.process.context());
+	};
+	registry.add("GetEnabledXStateFeatures", 0, [avx_enabled](ApiCall &call) { call.ret(avx_enabled(call) ? 7 : 3); });
+	// Where a CONTEXT keeps an extended state feature: the legacy floating-point state is the FXSAVE area (FltSave on x64,
+	// ExtendedRegisters on x86), the SSE state its XMM registers, and the AVX state the upper halves of the YMM registers in the
+	// extended area of a context that was initialized with room for it.
 	registry.add("LocateXStateFeature", 3, [](ApiCall &call) {
 		const bool wide = call.pointer_width() == 8;
 		const uint64_t save_area = call[0] + (wide ? 0x100 : 0xcc);
 		const uint32_t feature = call.u32(1);
+		if (call[0] && feature == 2 && wide) {
+			const uint64_t area = context_extended_area(call.process, call[0]);
+			if (area && call[2])
+				call.store<uint32_t>(call[2], uint32_t(x64_context::avx_size));
+			call.ret(area ? area + x64_context::extended_header : 0);
+			return;
+		}
 		if (!call[0] || feature > 1) {
 			call.ret(0);
 			return;
@@ -637,12 +651,15 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(feature == 0 ? save_area : save_area + 160);
 	});
 	// A CONTEXT laid out in a caller's buffer: the record itself, aligned as the processor's context must be (16 bytes on x64, 4 on x86),
-	// followed by the CONTEXT_EX that describes its parts. A buffer that is missing or too small learns the length it needs. No extended
-	// state feature lives outside the record, so a request for one is served by the record alone and the extended chunk stays empty.
-	const auto initialize_context = [](ApiCall &call) {
+	// followed by the CONTEXT_EX that describes its parts. A buffer that is missing or too small learns the length it needs. A request
+	// for extended state adds, where AVX is enabled, the area for it after the CONTEXT_EX, on a 64-byte boundary as the processor
+	// wants: its header, whose mask starts empty, and the upper halves of the YMM registers. Elsewhere the extended chunk stays empty.
+	const auto initialize_context = [avx_enabled](ApiCall &call) {
 		const bool wide = call.pointer_width() == 8;
 		const uint32_t record = wide ? 0x4d0 : 0x2cc, alignment = wide ? 16 : 4, extension = 24;
-		const uint32_t required = record + extension + alignment - 1;
+		const bool extended = (call.u32(1) & 0x40) && avx_enabled(call);
+		const uint32_t area = uint32_t(x64_context::extended_header + x64_context::avx_size);
+		const uint32_t required = record + extension + alignment - 1 + (extended ? area + 63 : 0);
 		if (!call[3]) {
 			call.fail(87);
 			return;
@@ -653,25 +670,71 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const uint64_t context = (call[0] + alignment - 1) & ~uint64_t(alignment - 1);
-		std::vector<uint8_t> bytes(record + extension);
-		const uint32_t flags = call.u32(1) & ~0x40U;
+		const uint64_t described = context + record;
+		const uint64_t kept = extended ? (described + extension + 63) & ~uint64_t(63) : described + extension;
+		std::vector<uint8_t> bytes(size_t(kept - context) + (extended ? area : 0));
+		const uint32_t flags = extended ? call.u32(1) : call.u32(1) & ~0x40U;
 		std::memcpy(bytes.data() + (wide ? 0x30 : 0), &flags, 4);
 		const int32_t back = -int32_t(record);
-		const uint32_t whole = record + extension, empty_offset = extension, empty_length = 0;
+		const uint32_t whole = uint32_t(bytes.size()), kept_offset = uint32_t(kept - described), kept_length = extended ? area : 0;
 		std::memcpy(bytes.data() + record, &back, 4);
 		std::memcpy(bytes.data() + record + 4, &whole, 4);
 		std::memcpy(bytes.data() + record + 8, &back, 4);
 		std::memcpy(bytes.data() + record + 12, &record, 4);
-		std::memcpy(bytes.data() + record + 16, &empty_offset, 4);
-		std::memcpy(bytes.data() + record + 20, &empty_length, 4);
+		std::memcpy(bytes.data() + record + 16, &kept_offset, 4);
+		std::memcpy(bytes.data() + record + 20, &kept_length, 4);
 		call.write(context, bytes);
 		if (call[2])
 			call.store_pointer(call[2], context);
 		call.ret(1);
 	};
 	registry.add("InitializeContext", 4, initialize_context);
-	// The second form also names which extended features to keep compacted; none lives outside the record, so the mask changes nothing.
+	// The second form also names which extended features to keep compacted; the AVX part is kept where the standard form has it.
 	registry.add("InitializeContext2", 5, initialize_context);
+	// Which extended features a context holds: the legacy two with its floating-point part, and those its extended area's mask names.
+	registry.add("GetXStateFeaturesMask", 2, [](ApiCall &call) {
+		if (!call[0] || !call[1] || call.pointer_width() != 8) {
+			call.ret(0);
+			return;
+		}
+		const uint32_t flags = call.load<uint32_t>(call[0] + x64_context::flags);
+		const uint64_t area = context_extended_area(call.process, call[0]);
+		uint64_t mask = (flags & 0x100008) == 0x100008 ? 3 : 0;
+		if (area)
+			mask |= call.load<uint64_t>(area) & x64_context::avx_mask;
+		call.store<uint64_t>(call[1], mask);
+		call.ret(1);
+	});
+	// The features a context is to carry: only a context with an extended area can carry more than the legacy two.
+	registry.add("SetXStateFeaturesMask", 2, [](ApiCall &call) {
+		const uint64_t area = call[0] && call.pointer_width() == 8 ? context_extended_area(call.process, call[0]) : 0;
+		if (!area) {
+			call.ret(0);
+			return;
+		}
+		call.store<uint64_t>(area, call[1] & x64_context::avx_mask);
+		call.ret(1);
+	});
+	// The parts of one context copied into another: the record, with the flags of the parts named, and the extended area when both
+	// have one and it is asked for.
+	registry.add("CopyContext", 3, [](ApiCall &call) {
+		if (!call[0] || !call[2] || call.pointer_width() != 8) {
+			call.fail(87);
+			return;
+		}
+		const uint32_t wanted = call.u32(1);
+		const uint32_t kept = call.load<uint32_t>(call[0] + x64_context::flags);
+		auto record = call.read(call[2], x64_context::size);
+		const uint32_t flags = kept | (wanted & ~0x40U);
+		std::memcpy(record.data() + x64_context::flags, &flags, 4);
+		call.write(call[0], record);
+		if ((wanted & x64_context::xstate_flags) == x64_context::xstate_flags) {
+			const uint64_t from = context_extended_area(call.process, call[2]), to = context_extended_area(call.process, call[0]);
+			if (from && to)
+				call.write(to, call.read(from, x64_context::extended_header + x64_context::avx_size));
+		}
+		call.ret(1);
+	});
 	// The number of file handles a process may have is no longer limited: the request is answered as asked.
 	registry.add("SetHandleCount", 1, [](ApiCall &call) { call.ret(call.u32(0)); });
 	registry.add("GetSystemInfo", 1, system_information);

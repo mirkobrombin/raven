@@ -1,3 +1,4 @@
+#include "unwind.h"
 #include "child_process.h"
 #include "kernel_context.h"
 #include "mutex.h"
@@ -756,7 +757,9 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			--thread->suspend_count;
 		call.ret(uint32_t(previous));
 	});
-	// The registers of a thread as a CONTEXT (x64): the control and integer groups, from where the thread stopped.
+	// The registers of a thread as a CONTEXT (x64), from where the thread stopped: the control and integer groups, the floating-point
+	// state, and the upper halves of the YMM registers when the context has an extended area whose mask asks for them. The .NET runtime
+	// takes all of it from a thread it interrupts for a collection, and puts it back when the thread goes on.
 	registry.add("GetThreadContext", 2, [thread_from, &threads](ApiCall &call) {
 		if (call.pointer_width() == 4 || !call[1]) {
 			call.fail(call[1] ? 50 : 87);
@@ -784,10 +787,24 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			put(0xb8, registers.r8); put(0xc0, registers.r9); put(0xc8, registers.r10); put(0xd0, registers.r11);
 			put(0xd8, registers.r12); put(0xe0, registers.r13); put(0xe8, registers.r14); put(0xf0, registers.r15);
 		}
+		const auto &state = thread->id == threads.current_id() ? call.process.context() : thread->snapshot.context;
+		if ((flags & 0x8) && state.xstate.size() >= 512) {
+			call.write(call[1] + x64_context::float_area, std::span<const uint8_t>(state.xstate.data(), 512));
+			call.write(call[1] + x64_context::mxcsr, std::span<const uint8_t>(state.xstate.data() + 24, 4));
+		}
+		if (const uint64_t area = context_extended_area(call.process, call[1])) {
+			const uint64_t asked = call.load<uint64_t>(area) & x64_context::avx_mask;
+			call.store<uint64_t>(area, asked);
+			if (asked) {
+				const auto halves = native_avx(state);
+				call.write(area + x64_context::extended_header, halves);
+			}
+		}
 		call.ret(1);
 	});
-	// The registers of a suspended thread from a CONTEXT (x64): the control and integer groups, which it continues with when resumed. A
-	// thread that is not suspended, the caller among them, keeps its registers: Windows leaves the outcome of that undefined.
+	// The registers of a suspended thread from a CONTEXT (x64), which it continues with when resumed: the control and integer groups,
+	// the floating-point state, and the upper halves of the YMM registers from an extended area, which are cleared when its mask leaves
+	// them out. A thread that is not suspended, the caller among them, keeps its registers: Windows leaves the outcome of that undefined.
 	registry.add("SetThreadContext", 2, [thread_from, &threads, &context](ApiCall &call) {
 		if (call.pointer_width() == 4 || !call[1]) {
 			call.fail(call[1] ? 50 : 87);
@@ -819,6 +836,21 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			registers.r12 = get(0xd8); registers.r13 = get(0xe0); registers.r14 = get(0xe8); registers.r15 = get(0xf0);
 		}
 		context.process.set_thread_registers(thread->snapshot, registers);
+		// The floating-point and extended state wait in the thread's saved state for its next turn; a thread that runs on a task of its
+		// own keeps what it has.
+		auto &state = thread->snapshot.context;
+		if (!context.process.parallel()) {
+			if ((flags & 0x8) && state.xstate.size() >= 512) {
+				const auto area = call.read(call[1] + x64_context::float_area, 512);
+				std::memcpy(state.xstate.data(), area.data(), 512);
+			}
+			if (const uint64_t area = context_extended_area(call.process, call[1])) {
+				if (call.load<uint64_t>(area) & x64_context::avx_mask)
+					set_native_avx(state, call.read(area + x64_context::extended_header, x64_context::avx_size).data());
+				else
+					set_native_avx(state, nullptr);
+			}
+		}
 		call.ret(1);
 	});
 	// A thread's description is a name the program gives it; it is kept per thread and handed back in memory the program frees with LocalFree.

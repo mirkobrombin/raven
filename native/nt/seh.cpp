@@ -465,6 +465,9 @@ public:
 	}
 
 	// Execution resumes at the callback nesting where the exception was raised; handler calls above it are abandoned.
+	// The upper halves of the YMM registers a context being restored brings, for the redirect that follows.
+	std::optional<std::array<uint8_t, x64_context::avx_size>> restored_avx;
+
 	[[noreturn]] void redirect_to(const ContextBytes &given, size_t depth, size_t mark = SIZE_MAX)
 	{
 		auto target = given;
@@ -478,6 +481,10 @@ public:
 		}
 		auto native = context.process.context();
 		apply_context(native, target);
+		if (restored_avx) {
+			set_native_avx(native, restored_avx->data());
+			restored_avx.reset();
+		}
 		context.process.redirect(native, depth);
 		if (const char *count = std::getenv("RAVEN_STEP_REDIRECT")) {
 			// Diagnosis aid: log the instructions executed right after execution is redirected.
@@ -1050,6 +1057,14 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 	};
 	const auto restore = [exceptions, &context](ApiCall &call) {
 		const auto target = call.read(call[0], x64_context::size);
+		// A context with an extended area also brings back the upper halves of the YMM registers its mask names, or clears them.
+		if (const uint64_t area = context_extended_area(context.process, call[0])) {
+			exceptions->restored_avx.emplace();
+			if (call.load<uint64_t>(area) & x64_context::avx_mask) {
+				const auto halves = call.read(area + x64_context::extended_header, x64_context::avx_size);
+				std::memcpy(exceptions->restored_avx->data(), halves.data(), halves.size());
+			}
+		}
 		size_t depth = context.process.callback_depth();
 		while (depth > 0 && context.process.callback_origin(depth - 1).registers.rsp <= context_rsp(target))
 			--depth;

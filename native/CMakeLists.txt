@@ -3344,6 +3344,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_served_semaphore_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         raven_kernel_fixture(api-hook api_hook_client.c 0x1b6000000 "-lkernel32;-luser32")
+        # The AVX part of a thread's state in its context, which the .NET runtime asks for before it uses the code compiled ahead for AVX2.
+        raven_kernel_fixture(xstate-context xstate_context_client.c 0x1c0000000 "-lkernel32")
+        add_test(NAME native_xstate_context COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/xstate-context.exe)
+        set_tests_properties(native_xstate_context PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         raven_kernel_fixture(guest-answers guest_answers_client.c 0x1bf000000 "-lkernel32;-luser32;-lole32")
         foreach(mode default parallel)
             add_test(NAME native_guest_answers_${mode} COMMAND raven --run-process --execution=native
