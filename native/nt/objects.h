@@ -142,4 +142,24 @@ private:
 	std::shared_ptr<File> file(uint64_t handle) const;
 };
 
+
+// What a wait holds: the objects its handles named when it began. A wait on Windows references its objects, so a handle closed while
+// a thread waits on it neither fails the wait nor leaves it with nothing to wake it: the wait ends when the object is signaled. A
+// worker that closes its own handle on its way out, as one started with _beginthread does, ends the wait of its creator this way.
+class WaitedObjects {
+public:
+	WaitedObjects(NativeObjects &objects, std::span<const uint64_t> handles) : objects(objects), handles(handles.begin(), handles.end()),
+		held(handles.size()) {}
+	// The state NativeObjects::signaled gives for the handle until the wait has its object, the object's own from then on.
+	int signaled(size_t index, uint32_t thread);
+	bool try_consume(size_t index, uint32_t thread);
+	void consume(size_t index, uint32_t thread);
+	// When the object turns signaled by itself, as a timer does.
+	std::optional<std::chrono::steady_clock::time_point> wakes_at(size_t index) const;
+
+private:
+	NativeObjects &objects;
+	std::vector<uint64_t> handles;
+	std::vector<std::shared_ptr<KernelObject>> held;
+};
 }

@@ -139,6 +139,35 @@ int NativeObjects::signaled(uint64_t handle, uint32_t thread) const
 	return held->signaled(thread);
 }
 
+int WaitedObjects::signaled(size_t index, uint32_t thread)
+{
+	if (held[index])
+		return held[index]->signaled(thread);
+	const int state = objects.signaled(handles[index], thread);
+	if (state >= 0)
+		held[index] = objects.object(handles[index]);
+	return state;
+}
+
+bool WaitedObjects::try_consume(size_t index, uint32_t thread)
+{
+	return held[index] ? held[index]->try_consume(thread) : objects.try_consume(handles[index], thread);
+}
+
+void WaitedObjects::consume(size_t index, uint32_t thread)
+{
+	if (held[index])
+		held[index]->consume(thread);
+	else
+		objects.consume(handles[index], thread);
+}
+
+std::optional<std::chrono::steady_clock::time_point> WaitedObjects::wakes_at(size_t index) const
+{
+	const auto object = held[index] ? held[index] : objects.object(handles[index]);
+	return object ? object->wakes_at() : std::nullopt;
+}
+
 void NativeObjects::consume(uint64_t handle, uint32_t thread)
 {
 	if (const auto held = object(handle)) held->consume(thread);

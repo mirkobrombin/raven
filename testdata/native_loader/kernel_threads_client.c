@@ -185,6 +185,17 @@ static DWORD WINAPI answering(LPVOID parameter)
 	}
 }
 
+/* A thread that closes the handle its creator waits on, then ends, as one started with _beginthread does on its way out. */
+static HANDLE leaving_handle;
+static DWORD WINAPI leaving(LPVOID parameter)
+{
+	(void)parameter;
+	Sleep(100);
+	CloseHandle(leaving_handle);
+	Sleep(100);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	const int options = critical_options();
@@ -349,5 +360,17 @@ int raven_entry(void)
 	CHECK(105,WaitForSingleObject(answers,5000)==WAIT_OBJECT_0 && WaitForSingleObject(computes,5000)==WAIT_OBJECT_0);
 	CloseHandle(answers);
 	CloseHandle(computes);
+	/* A wait holds the object it began on: the handle closed under it, the wait still ends when the thread does, neither failing
+	   nor left with nothing to wake it. An installer waits this way for a worker that closes its own handle. */
+	leaving_handle=CreateThread(0,0,leaving,0,CREATE_SUSPENDED,0);
+	CHECK(106,leaving_handle);
+	ResumeThread(leaving_handle);
+	CHECK(107,WaitForSingleObject(leaving_handle,5000)==WAIT_OBJECT_0);
+	leaving_handle=CreateThread(0,0,leaving,0,CREATE_SUSPENDED,0);
+	CHECK(108,leaving_handle);
+	ResumeThread(leaving_handle);
+	HANDLE both[2]={leaving_handle,CreateEventA(0,TRUE,FALSE,0)};
+	CHECK(109,WaitForMultipleObjects(2,both,FALSE,5000)==WAIT_OBJECT_0);
+	CloseHandle(both[1]);
 	return 0;
 }

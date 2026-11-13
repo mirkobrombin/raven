@@ -228,10 +228,11 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				call.set_last_error(6);
 				return wait_failed;
 			}
+		WaitedObjects waited(objects, resolved);
 		const auto states = [&]() {
 			std::vector<int> result;
-			for (const auto handle : resolved)
-				result.push_back(objects.signaled(handle, id));
+			for (size_t index = 0; index < resolved.size(); ++index)
+				result.push_back(waited.signaled(index, id));
 			return result;
 		};
 		std::optional<std::chrono::steady_clock::time_point> wake;
@@ -255,14 +256,14 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			if (all) {
 				if (std::all_of(current.begin(), current.end(), [](int state) { return state == 1; })) {
 					bool taken = true;
-					for (const auto handle : resolved)
-						taken = objects.try_consume(handle, id) && taken;
+					for (size_t index = 0; index < resolved.size(); ++index)
+						taken = waited.try_consume(index, id) && taken;
 					if (taken)
 						return 0;
 				}
 			} else {
 				for (size_t index = 0; index < current.size(); ++index)
-					if (current[index] == 1 && objects.try_consume(resolved[index], id))
+					if (current[index] == 1 && waited.try_consume(index, id))
 						return uint32_t(index);
 			}
 			if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake)) {
@@ -290,10 +291,9 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				return wait_timeout;
 			// A timer among the handles turns signaled at its due time with nobody announcing it: the wait looks again then.
 			auto until = wake;
-			for (const auto handle : resolved)
-				if (const auto object = objects.object(handle))
-					if (const auto due = object->wakes_at(); due && (!until || *due < *until))
-						until = due;
+			for (size_t index = 0; index < resolved.size(); ++index)
+				if (const auto due = waited.wakes_at(index); due && (!until || *due < *until))
+					until = due;
 			threads.block(ready, until);
 		}
 	};
@@ -403,10 +403,11 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		std::optional<std::chrono::steady_clock::time_point> wake;
 		if (milliseconds != UINT32_MAX)
 			wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+		WaitedObjects waited(objects, handles);
 		for (;;) {
 			std::vector<int> states;
-			for (const auto handle : handles) {
-				const int state = handle == current_thread_pseudo ? -2 : objects.signaled(handle, id);
+			for (size_t index = 0; index < handles.size(); ++index) {
+				const int state = handles[index] == current_thread_pseudo ? -2 : waited.signaled(index, id);
 				if (state < 0) {
 					call.set_last_error(state == -3 ? 5 : 6);
 					return wait_failed;
@@ -416,26 +417,25 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			if (all) {
 				if (std::all_of(states.begin(), states.end(), [](int state) { return state == 1; }) && input()) {
 					bool taken = true;
-					for (const auto handle : handles) taken = objects.try_consume(handle, id) && taken;
+					for (size_t index = 0; index < handles.size(); ++index) taken = waited.try_consume(index, id) && taken;
 					if (taken) return 0;
 				}
 			} else {
 				for (size_t index = 0; index < states.size(); ++index)
-					if (states[index] == 1 && objects.try_consume(handles[index], id)) return uint32_t(index);
+					if (states[index] == 1 && waited.try_consume(index, id)) return uint32_t(index);
 				if (input()) return count;
 			}
 			if (alertable && !me->apcs.empty() && run_apcs()) return wait_io_completion;
 			if (!milliseconds || (wake && std::chrono::steady_clock::now() >= *wake)) return wait_timeout;
 			auto until = wake;
-			for (const auto handle : handles)
-				if (const auto object = objects.object(handle))
-					if (const auto due = object->wakes_at(); due && (!until || *due < *until)) until = due;
+			for (size_t index = 0; index < handles.size(); ++index)
+				if (const auto due = waited.wakes_at(index); due && (!until || *due < *until)) until = due;
 			HostWait waiting;
 			threads.block([&] {
 				if (alertable && !me->apcs.empty()) return true;
 				bool any = false, every = true;
-				for (const auto handle : handles) {
-					const int state = objects.signaled(handle, id);
+				for (size_t index = 0; index < handles.size(); ++index) {
+					const int state = waited.signaled(index, id);
 					if (state < 0) return true;
 					any |= state == 1;
 					every &= state == 1;
