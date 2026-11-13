@@ -294,6 +294,29 @@ int raven_entry(void)
 		IUnknown_Release((IUnknown *)format3);
 		IDWriteTextFormat_Release(format);
 	}
+	/* The family a font names answers as the newer family of Windows 10: its fonts for axis values as a list, and as a set, as
+	   paint.net asks of the font its text tool starts with. */
+	IDWriteFontFamily *named = NULL;
+	IDWriteFontFamily2 *newer = NULL;
+	IDWriteFontList2 *matching = NULL;
+	IDWriteFontSet1 *of_family = NULL, *of_list = NULL;
+	IDWriteFont *listed = NULL;
+	if (FAILED(IDWriteFont_GetFontFamily(font, &named)) || FAILED(IDWriteFontFamily_QueryInterface(named, &IID_IDWriteFontFamily2, (void **)&newer)))
+		return 52;
+	if (FAILED(IDWriteFontFamily2_GetMatchingFonts(newer, (const DWRITE_FONT_AXIS_VALUE *)NULL, 0, &matching)) || !matching ||
+		IDWriteFontList2_GetFontCount(matching) != IDWriteFontFamily_GetFontCount(named) || !IDWriteFontList2_GetFontCount(matching) ||
+		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, UINT32, IDWriteFont **))(*(void ***)matching)[5])(matching, 0, &listed)) || !listed)
+		return 53;
+	if (FAILED(IDWriteFontFamily2_GetFontSet(newer, &of_family)) || FAILED(IDWriteFontList2_GetFontSet(matching, &of_list)) ||
+		IDWriteFontSet1_GetFontCount(of_family) != IDWriteFontFamily_GetFontCount(named) ||
+		IDWriteFontSet1_GetFontCount(of_list) != IDWriteFontFamily_GetFontCount(named))
+		return 54;
+	IDWriteFont_Release(listed);
+	IDWriteFontSet1_Release(of_list);
+	IDWriteFontSet1_Release(of_family);
+	IDWriteFontList2_Release(matching);
+	IDWriteFontFamily2_Release(newer);
+	IDWriteFontFamily_Release(named);
 	IDWriteGlyphRunAnalysis_Release(analysis);
 	IDWriteFontFace_Release(face);
 	IDWriteFont_Release(font);

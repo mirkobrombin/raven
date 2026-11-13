@@ -1857,7 +1857,7 @@ static HRESULT STDMETHODCALLTYPE family_query(IDWriteFontFamily *self, REFIID ii
 	if (!out)
 		return E_POINTER;
 	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontFamily) || same_guid(iid, &IID_IDWriteFontList) ||
-		same_guid(iid, &IID_IDWriteFontFamily1)) {
+		same_guid(iid, &IID_IDWriteFontFamily1) || same_guid(iid, &IID_IDWriteFontFamily2)) {
 		InterlockedIncrement(&FAMILY_OF(self)->refs);
 		*out = self;
 		return S_OK;
@@ -1925,14 +1925,67 @@ static HRESULT STDMETHODCALLTYPE family1_reference(IDWriteFontFamily *self, UINT
 	return *reference ? S_OK : E_OUTOFMEMORY;
 }
 
-static void *Family_table_[IDWriteFontFamily1_methods];
+/* IDWriteFontFamily2: the fonts that match axis values are, as for a weight, stretch and style, the family's own in its order, as a
+ * list of the newer kind, and the family's fonts as a set. paint.net asks a font's family for this interface when its text tool starts. */
+static HRESULT STDMETHODCALLTYPE family2_set(IDWriteFontFamily *self, IDWriteFontSet1 **out);
+
+static HRESULT STDMETHODCALLTYPE fonts_query(IDWriteFontFamily *self, REFIID iid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	if (same_guid(iid, &IID_IUnknown) || same_guid(iid, &IID_IDWriteFontList) || same_guid(iid, &IID_IDWriteFontList1) ||
+		same_guid(iid, &IID_IDWriteFontList2)) {
+		InterlockedIncrement(&FAMILY_OF(self)->refs);
+		*out = self;
+		return S_OK;
+	}
+	*out = NULL;
+	return no_interface(iid);
+}
+
+enum { FontList2_GetFontSet = IDWriteFontList1_methods, FontList2_methods, FontFamily2_GetMatchingFonts = IDWriteFontFamily1_methods,
+	FontFamily2_GetFontSet, FontFamily2_methods };
+static void *Fonts_table_[FontList2_methods];
+
+static HRESULT STDMETHODCALLTYPE family2_matching(IDWriteFontFamily *self, const DWRITE_FONT_AXIS_VALUE *values, UINT32 count, IDWriteFontList2 **out)
+{
+	Family *fonts;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!Fonts_table_[0]) {
+		memcpy(Fonts_table_, IDWriteFontList1_table, sizeof(IDWriteFontList1_table));
+		Fonts_table_[IDWriteFontList1_QueryInterface] = (void *)fonts_query;
+		Fonts_table_[IDWriteFontList1_AddRef] = (void *)family_add_ref;
+		Fonts_table_[IDWriteFontList1_Release] = (void *)family_release;
+		Fonts_table_[IDWriteFontList1_GetFontCollection] = (void *)family_collection;
+		Fonts_table_[IDWriteFontList1_GetFontCount] = (void *)family_count_fonts;
+		Fonts_table_[IDWriteFontList1_GetFont] = (void *)family_font;
+		Fonts_table_[IDWriteFontList1_GetFontLocality] = (void *)family1_locality;
+		Fonts_table_[IDWriteFontList1_IDWriteFontList1_GetFont] = (void *)family_font;
+		Fonts_table_[IDWriteFontList1_GetFontFaceReference] = (void *)family1_reference;
+		Fonts_table_[FontList2_GetFontSet] = (void *)family2_set;
+	}
+	/* The list is laid out as a family is, so the family's own methods serve it. */
+	if (!(fonts = ALLOC(sizeof(*fonts))))
+		return E_OUTOFMEMORY;
+	fonts->vtbl = (const IDWriteFontFamilyVtbl *)Fonts_table_;
+	fonts->refs = 1;
+	fonts->family = FAMILY_OF(self)->family;
+	*out = (IDWriteFontList2 *)fonts;
+	return S_OK;
+}
+
+static void *Family_table_[FontFamily2_methods];
 static const IDWriteFontFamilyVtbl *family_vtbl;
 
 static IDWriteFontFamily *make_family(FamilyEntry *entry)
 {
 	Family *family;
 	if (!family_vtbl) {
-		memcpy(Family_table_, IDWriteFontFamily1_table, sizeof(Family_table_));
+		memcpy(Family_table_, IDWriteFontFamily1_table, sizeof(IDWriteFontFamily1_table));
+		Family_table_[FontFamily2_GetMatchingFonts] = (void *)family2_matching;
+		Family_table_[FontFamily2_GetFontSet] = (void *)family2_set;
 		Family_table_[IDWriteFontFamily_QueryInterface] = (void *)family_query;
 		Family_table_[IDWriteFontFamily_AddRef] = (void *)family_add_ref;
 		Family_table_[IDWriteFontFamily_Release] = (void *)family_release;
@@ -2625,6 +2678,25 @@ static IDWriteFontSet *make_set(const SetFont *fonts, UINT32 count)
 static IDWriteFontSet *system_set;
 
 /* The system set is made once and never released; a caller's Release only takes back its own reference. */
+static HRESULT STDMETHODCALLTYPE family2_set(IDWriteFontFamily *self, IDWriteFontSet1 **out)
+{
+	FamilyEntry *family = FAMILY_OF(self)->family;
+	SetFont *fonts;
+	UINT32 index;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!(fonts = ALLOC((family->count ? family->count : 1) * sizeof(*fonts))))
+		return E_OUTOFMEMORY;
+	for (index = 0; index < family->count; ++index) {
+		fonts[index].entry = family->entries[index];
+		fonts[index].family = family;
+	}
+	*out = (IDWriteFontSet1 *)make_set(fonts, family->count);
+	FREE(fonts);
+	return *out ? S_OK : E_OUTOFMEMORY;
+}
+
 static IDWriteFontSet *get_system_set(void)
 {
 	if (!system_set) {
