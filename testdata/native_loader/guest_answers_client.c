@@ -54,5 +54,23 @@ int raven_entry(void)
 	const ULONGLONG took = GetTickCount64() - began;
 	if (took > 500)
 		return took > 15000 ? 250 : 100 + (int)(took / 100);
+	/* A frame unwound by its unwind data costs a function call, as a runtime that walks the stacks of its threads for each collection
+	   unwinds thousands a second: the caller of this function is found, and 12 says two hundred thousand unwinds took too long. */
+	CONTEXT here, walked;
+	DWORD64 base = 0, establisher = 0;
+	void *handler_data = NULL;
+	RtlCaptureContext(&here);
+	PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(here.Rip, &base, NULL);
+	if (!function)
+		return 13;
+	const ULONGLONG unwinding = GetTickCount64();
+	for (int index = 0; index < 200000; ++index) {
+		walked = here;
+		RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, walked.Rip, function, &walked, &handler_data, &establisher, NULL);
+	}
+	if (walked.Rsp <= here.Rsp || walked.Rip == here.Rip || !establisher)
+		return 14;
+	if (GetTickCount64() - unwinding > 700)
+		return 12;
 	return 0;
 }

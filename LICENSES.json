@@ -204,6 +204,7 @@
         "native/guest/raven-rtl/raven-rtl.def",
         "native/guest/raven-rtl/raven_rtl.h",
         "native/guest/raven-rtl/tables.c",
+        "native/guest/raven-rtl/unwind.c",
         "native/guest/raven-scrrun/README.md",
         "native/guest/raven-scrrun/dictionary.c",
         "native/guest/raven-scrrun/exports.txt",
