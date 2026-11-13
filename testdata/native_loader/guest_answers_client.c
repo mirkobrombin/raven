@@ -1,5 +1,5 @@
 // Answers the guest gives without the runtime: the text of a GUID, a point in a rectangle, the thread's DPI awareness context, the
-// keyboard layout, WinEvent hooks and the depth of a list. The parallel run takes the served forms, which must answer the same.
+// keyboard layout, WinEvent hooks, the depth of a list and a trace nobody reads. The parallel run takes the served forms, which must answer the same.
 #define _WIN32_WINNT 0x0a00
 #include <windows.h>
 #include <objbase.h>
@@ -43,5 +43,16 @@ int raven_entry(void)
 	InterlockedPushEntrySList(&list, &entries[1]);
 	if (QueryDepthSList(&list) != 2 || InterlockedPopEntrySList(&list) != &entries[1] || QueryDepthSList(&list) != 1)
 		return 10;
+	/* With no trace asked for, what the runtime's own libraries report through RavenTrace costs the program nothing, however often
+	   they do: a code over 100 says how many tenths of a second half a million reports took. */
+	void (WINAPI *trace)(const char *) = (void (WINAPI *)(const char *))GetProcAddress(LoadLibraryW(L"ravenhost.dll"), "RavenTrace");
+	if (!trace)
+		return 11;
+	const ULONGLONG began = GetTickCount64();
+	for (int index = 0; index < 500000; ++index)
+		trace("guest answers: nothing to say");
+	const ULONGLONG took = GetTickCount64() - began;
+	if (took > 500)
+		return took > 15000 ? 250 : 100 + (int)(took / 100);
 	return 0;
 }

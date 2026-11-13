@@ -1461,8 +1461,20 @@ static const std::vector<uint8_t> &next_hook_prelude()
 	return code;
 }
 
+// RavenTrace with no trace asked for: the libraries of the runtime name what they lack through it by the thousand while a program
+// draws, and each would stop the program to print nothing.
+static const std::vector<uint8_t> &silent_trace_prelude()
+{
+	static const std::vector<uint8_t> code{0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
 static const std::vector<uint8_t> *block_prelude(std::string_view module, std::string_view name)
 {
+	if (module == "ravenhost.dll" && name == "RavenTrace") {
+		static const bool traced = std::getenv("RAVEN_TRACE_DWRITE") != nullptr;
+		return traced ? nullptr : &silent_trace_prelude();
+	}
 	if (module == "user32.dll" && (name == "PeekMessageA" || name == "PeekMessageW"))
 		return &quiet_peek_prelude();
 	if (module == "user32.dll" && name == "GetInputState")
