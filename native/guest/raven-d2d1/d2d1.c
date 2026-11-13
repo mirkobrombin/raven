@@ -1716,6 +1716,9 @@ struct command_list {
 	struct object base;
 	struct bitmap *bitmap;
 	BOOL closed;
+	/* What a closed list covers, once measured. */
+	BOOL measured;
+	D2D1_RECT_L drawn;
 };
 
 static void **command_list_table;
@@ -1746,6 +1749,39 @@ static ID2D1Bitmap *image_bitmap(ID2D1Image *image)
 	if (!image || FAILED(IUnknown_QueryInterface((IUnknown *)image, &IID_ID2D1Bitmap, (void **)&bitmap)))
 		return NULL;
 	return bitmap;
+}
+
+/* A command list covers what was drawn into it, not the target it was recorded through. The commands are kept as the pixels they drew, so
+ * what they covered is taken as the pixels they changed from the empty start, in pixels of the list; once the list is closed it is
+ * measured only once. */
+static D2D1_RECT_L list_drawn(struct command_list *list)
+{
+	D2D1_RECT_L drawn = {0, 0, 0, 0};
+	const struct bitmap *bitmap = list->bitmap;
+	DWORD *pixels;
+	UINT32 row, column;
+	if (list->measured)
+		return list->drawn;
+	if (!bitmap || !(pixels = ALLOC_UNSET((size_t)bitmap->pixels.width * bitmap->pixels.height * 4)))
+		return drawn;
+	canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
+	drawn.left = drawn.top = LONG_MAX;
+	for (row = 0; row < bitmap->pixels.height; ++row)
+		for (column = 0; column < bitmap->pixels.width; ++column)
+			if (pixels[(size_t)row * bitmap->pixels.width + column]) {
+				drawn.left = min(drawn.left, (LONG)column);
+				drawn.top = min(drawn.top, (LONG)row);
+				drawn.right = max(drawn.right, (LONG)column + 1);
+				drawn.bottom = max(drawn.bottom, (LONG)row + 1);
+			}
+	FREE(pixels);
+	if (drawn.left == LONG_MAX)
+		drawn.left = drawn.top = 0;
+	if (list->closed) {
+		list->drawn = drawn;
+		list->measured = TRUE;
+	}
+	return drawn;
 }
 
 /* Closing ends the recording: a closed list can be drawn but no longer be a target. */
@@ -2362,6 +2398,7 @@ struct target {
 	IUnknown *factory;
 	struct device *device;
 	struct bitmap *bitmap; /* what is drawn into */
+	struct bitmap *own; /* the pixels of the window, device context or WIC bitmap the target was made for; weak */
 	struct command_list *list; /* the command list that is the target, whose pixels `bitmap` is */
 	HWND hwnd;
 	HDC dc;
@@ -2381,6 +2418,14 @@ struct target {
 	BOOL drawn;
 	HRESULT error;
 	UINT32 pushed;
+	/* The clips and layers pushed, as they were sent and on the pixels they were pushed on, to push them again on pixels that grow
+	   under them. */
+	struct pushed_state {
+		struct bitmap *on; /* weak, only compared */
+		struct command command;
+		BYTE *data;
+		size_t size;
+	} pushes[32];
 	D2D1_PIXEL_FORMAT format;
 	/* GDI interop: a DIB section the program draws into between GetDC and ReleaseDC. */
 	HDC gdi_dc;
@@ -2801,6 +2846,50 @@ static void read_texture(struct bitmap *bitmap, const RECT *wanted)
 	ID3D11Texture2D_Release(texture);
 }
 
+/* A command list has no size of its own: drawing past the pixels it keeps, as far as a bitmap drawn at a place says, makes them reach
+ * that far, the pixels drawn so far kept where they are and the clips and layers pushed on them pushed again. A clip pushed on the
+ * target the list took the place of stays with that target: paint.net clips its window, then records its whole document. Not under a
+ * layer with an opacity, whose content is held apart from the pixels until it is popped. */
+static void list_reach(struct target *self, const D2D1_RECT_F *destination)
+{
+	const D2D1_MATRIX_3X2_F m = world(self);
+	struct bitmap *bitmap = self->bitmap;
+	float right = 0, bottom = 0;
+	UINT32 width, height;
+	DWORD surface;
+	BYTE *pixels;
+	int corner;
+	UINT32 index;
+	if (!self->list || self->list->closed || !bitmap || self->pushed > ARRAYSIZE(self->pushes))
+		return;
+	for (index = 0; index < self->pushed; ++index)
+		if (self->pushes[index].on == bitmap && self->pushes[index].command.op == OP_PUSH_LAYER && self->pushes[index].command.opacity < 1.0f)
+			return;
+	for (corner = 0; corner < 4; ++corner) {
+		const float x = corner & 1 ? destination->right : destination->left, y = corner & 2 ? destination->bottom : destination->top;
+		right = max(right, x * m._11 + y * m._21 + m._31);
+		bottom = max(bottom, x * m._12 + y * m._22 + m._32);
+	}
+	right = min(right, 16384.0f);
+	bottom = min(bottom, 16384.0f);
+	width = max(bitmap->pixels.width, (UINT32)right + ((float)(UINT32)right < right));
+	height = max(bitmap->pixels.height, (UINT32)bottom + ((float)(UINT32)bottom < bottom));
+	if ((width == bitmap->pixels.width && height == bitmap->pixels.height) || !(surface = RavenCanvasCreate(width, height)))
+		return;
+	if ((pixels = ALLOC_UNSET((size_t)bitmap->pixels.width * bitmap->pixels.height * 4))) {
+		canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
+		canvas_pixels(surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 1);
+		FREE(pixels);
+	}
+	canvas_destroy(bitmap->surface);
+	bitmap->surface = surface;
+	bitmap->pixels.width = width;
+	bitmap->pixels.height = height;
+	for (index = 0; index < self->pushed; ++index)
+		if (self->pushes[index].on == bitmap)
+			queue_command(self, surface, &self->pushes[index].command, self->pushes[index].data, self->pushes[index].size);
+}
+
 static void draw_bitmap(struct target *self, struct bitmap *bitmap, const D2D1_RECT_F *destination, float opacity, UINT32 interpolation,
 	const D2D1_RECT_F *source)
 {
@@ -2819,6 +2908,8 @@ static void draw_bitmap(struct target *self, struct bitmap *bitmap, const D2D1_R
 		wanted.bottom = (LONG)bottom + 2;
 		read_texture(bitmap, &wanted);
 	}
+	if (destination)
+		list_reach(self, destination);
 	command_start(self, &command, OP_DRAW_BITMAP);
 	command.bitmap = bitmap->surface;
 	command.opacity = opacity;
@@ -3014,6 +3105,21 @@ static void STDMETHODCALLTYPE target_GetTags(void *iface, D2D1_TAG *tag1, D2D1_T
 	if (tag2) *tag2 = target_of(iface)->tag2;
 }
 
+/* A clip or layer pushed is kept as it was sent, its data with it. */
+static void keep_push(struct target *self, const struct command *command, struct bytes *data)
+{
+	if (self->pushed < ARRAYSIZE(self->pushes)) {
+		struct pushed_state *state = &self->pushes[self->pushed];
+		state->on = self->bitmap;
+		state->command = *command;
+		state->data = data ? data->data : NULL;
+		state->size = data ? data->size : 0;
+	} else if (data && data->data) {
+		FREE(data->data);
+	}
+	++self->pushed;
+}
+
 static void push_layer(struct target *self, const D2D1_LAYER_PARAMETERS *parameters)
 {
 	struct command command;
@@ -3038,8 +3144,7 @@ static void push_layer(struct target *self, const D2D1_LAYER_PARAMETERS *paramet
 	if (parameters->opacityBrush)
 		unimplemented("ID2D1RenderTarget", "PushLayer with an opacity brush");
 	send(self, &command, &data);
-	FREE(data.data);
-	++self->pushed;
+	keep_push(self, &command, &data);
 }
 
 static void STDMETHODCALLTYPE target_PushLayer(void *iface, const D2D1_LAYER_PARAMETERS *parameters, ID2D1Layer *layer)
@@ -3059,6 +3164,8 @@ static void pop(struct target *self)
 		return;
 	command_start(self, &command, OP_POP);
 	send(self, &command, NULL);
+	if (self->pushed <= ARRAYSIZE(self->pushes) && self->pushes[self->pushed - 1].data)
+		FREE(self->pushes[self->pushed - 1].data);
 	--self->pushed;
 }
 
@@ -3076,7 +3183,7 @@ static void STDMETHODCALLTYPE target_PushAxisAlignedClip(void *iface, const D2D1
 	command.rect[2] = rect->right;
 	command.rect[3] = rect->bottom;
 	send(self, &command, NULL);
-	++self->pushed;
+	keep_push(self, &command, NULL);
 }
 
 static void STDMETHODCALLTYPE target_Clear(void *iface, const D2D1_COLOR_F *color)
@@ -3156,16 +3263,19 @@ static void present(struct target *self)
 	struct bitmap *bitmap = self->bitmap;
 	BYTE *pixels;
 	const UINT32 width = bitmap ? bitmap->pixels.width : 0, height = bitmap ? bitmap->pixels.height : 0;
-	if (!bitmap || (self->kind != TARGET_HWND && self->kind != TARGET_DC && self->kind != TARGET_WIC && !bitmap->dxgi))
+	/* The window, device context or WIC bitmap takes the frame only while the target draws into its own pixels: a device context given
+	 * another target draws there alone. */
+	const int kind = bitmap && bitmap == self->own ? self->kind : TARGET_CONTEXT;
+	if (!bitmap || (kind != TARGET_HWND && kind != TARGET_DC && kind != TARGET_WIC && !bitmap->dxgi))
 		return;
 	/* A WIC bitmap nothing was drawn on keeps what the program wrote into it. */
-	if (self->kind == TARGET_WIC && !self->drawn)
+	if (kind == TARGET_WIC && !self->drawn)
 		return;
 	self->drawn = FALSE;
 	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
 	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
-	if (self->kind == TARGET_HWND || self->kind == TARGET_DC) {
+	if (kind == TARGET_HWND || kind == TARGET_DC) {
 		BITMAPINFO info;
 		HDC dc = self->kind == TARGET_HWND ? GetDC(self->hwnd) : self->dc;
 		memset(&info, 0, sizeof(info));
@@ -3181,7 +3291,7 @@ static void present(struct target *self)
 			if (self->kind == TARGET_HWND)
 				ReleaseDC(self->hwnd, dc);
 		}
-	} else if (self->kind == TARGET_WIC && self->wic) {
+	} else if (kind == TARGET_WIC && self->wic) {
 		WICRect rect = {0, 0, (INT)width, (INT)height};
 		IWICBitmapLock *lock = NULL;
 		const UINT depth = wic_depth(self->wic);
@@ -3288,9 +3398,10 @@ static void STDMETHODCALLTYPE target_BeginDraw(void *iface)
 	self->drawing = TRUE;
 	self->error = S_OK;
 	InterlockedIncrement(&frame_number);
-	if (self->kind == TARGET_DC && self->dc && self->bitmap)
+	/* What the device context or WIC bitmap already shows is read in only when the target draws into its own pixels. */
+	if (self->kind == TARGET_DC && self->dc && self->bitmap && self->bitmap == self->own)
 		read_bound_dc(self);
-	if (self->kind == TARGET_WIC && self->wic)
+	if (self->kind == TARGET_WIC && self->wic && self->bitmap == self->own)
 		read_wic(self);
 	self->drawn = FALSE;
 }
@@ -4038,7 +4149,7 @@ static HRESULT replace_surface(struct target *self, D2D1_SIZE_U size)
 		return E_OUTOFMEMORY;
 	if (self->bitmap)
 		object_Release(self->bitmap);
-	self->bitmap = bitmap;
+	self->bitmap = self->own = bitmap;
 	return S_OK;
 }
 
@@ -5931,6 +6042,10 @@ static BOOL image_bounds(ID2D1Image *image, D2D1_RECT_L *bounds, int depth)
 	*bounds = nothing;
 	if (!image || depth > RENDER_DEPTH)
 		return FALSE;
+	if (command_list_of(image) && command_list_of(image)->bitmap) {
+		*bounds = list_drawn(command_list_of(image));
+		return TRUE;
+	}
 	if ((bitmap = image_bitmap(image))) {
 		bounds->right = (LONG)((struct bitmap *)bitmap)->pixels.width;
 		bounds->bottom = (LONG)((struct bitmap *)bitmap)->pixels.height;
@@ -6622,6 +6737,15 @@ static HRESULT STDMETHODCALLTYPE context_GetImageLocalBounds(void *iface, ID2D1I
 	struct bitmap *b;
 	if (!image || !bounds)
 		return E_INVALIDARG;
+	if (command_list_of(image) && command_list_of(image)->bitmap) {
+		const struct command_list *list = command_list_of(image);
+		const D2D1_RECT_L drawn = list_drawn(command_list_of(image));
+		bounds->left = drawn.left * 96.0f / list->bitmap->dpi_x;
+		bounds->top = drawn.top * 96.0f / list->bitmap->dpi_y;
+		bounds->right = drawn.right * 96.0f / list->bitmap->dpi_x;
+		bounds->bottom = drawn.bottom * 96.0f / list->bitmap->dpi_y;
+		return S_OK;
+	}
 	if (!(bitmap = image_bitmap(image))) {
 		/* An effect's output covers what its graph or its own step makes of its inputs' bounds. */
 		struct effect *effect = effect_of_image(image);

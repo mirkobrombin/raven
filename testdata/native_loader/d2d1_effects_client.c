@@ -1,6 +1,7 @@
 // Effects drawn through DrawImage give pixels: a program's own effect runs the pixel shader its draw transform names over the inputs it asks
 // for, as paint.net draws its canvas, its checkerboard and its color conversions; a system effect does its own step; a graph of several nodes
-// runs them in order. A target over a half-float texture holds what is drawn as half floats. The exit code names the first check that failed.
+// runs them in order. A target over a half-float texture holds what is drawn as half floats, and a command list covers what was drawn into
+// it. The exit code names the first check that failed.
 #define INITGUID
 #define COBJMACROS
 #include <windows.h>
@@ -318,6 +319,43 @@ int raven_entry(void)
 	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)staging, 0);
 	if (!grey_halves)
 		return 23;
+	/* A command list covers what was drawn into it, however far from the target it was recorded through: paint.net records the tiles
+	   of its document into one and scales it to the window by those bounds. */
+	ID2D1Image *previous_target = NULL;
+	ID2D1CommandList *list = NULL;
+	ID2D1SolidColorBrush *red_brush = NULL;
+	D2D1_COLOR_F red_color = {1, 0, 0, 1};
+	D2D1_RECT_F square = {2, 3, 6, 7};
+	ID2D1DeviceContext_GetTarget(context, &previous_target);
+	if (FAILED(ID2D1DeviceContext_CreateCommandList(context, &list)) ||
+		FAILED(ID2D1RenderTarget_CreateSolidColorBrush((ID2D1RenderTarget *)context, &red_color, NULL, &red_brush)))
+		return 24;
+	/* Past the 16 by 16 target the list was recorded through, inside a clip as paint.net draws its tiles: the clip still holds where
+	   the list grew, so the bitmap stops at it. The clip paint.net pushes on its window before it records stays with the window. */
+	D2D1_RECT_F far_place = {20, 30, 50, 60}, document = {0, 0, 40, 40}, window_clip = {0, 0, 16, 16};
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)context, &window_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1DeviceContext_SetTarget(context, (ID2D1Image *)list);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)context, &document, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)context, &square, (ID2D1Brush *)red_brush);
+	ID2D1RenderTarget_DrawBitmap((ID2D1RenderTarget *)context, opaque, &far_place, 1, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, NULL);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)context);
+	ID2D1DeviceContext_SetTarget(context, previous_target);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)context);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)context, NULL, NULL)) || FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *))(*(void ***)list)[5])(list)))
+		return 24;
+	if (FAILED(ID2D1DeviceContext_GetImageLocalBounds(context, (ID2D1Image *)list, &bounds)) || bounds.left != 2 || bounds.top != 3 ||
+		bounds.right != 40 || bounds.bottom != 40)
+		return 25;
+	((void (STDMETHODCALLTYPE *)(void *, UINT32, ID2D1Image *, BOOL))(*(void ***)swap)[14])(swap, 0, (ID2D1Image *)list, TRUE);
+	output = output_of(swap);
+	if (FAILED(ID2D1DeviceContext_GetImageLocalBounds(context, output, &bounds)) || bounds.left != 2 || bounds.top != 3 || bounds.right != 40 ||
+		bounds.bottom != 40)
+		return 26;
+	IUnknown_Release((IUnknown *)red_brush);
+	IUnknown_Release((IUnknown *)list);
+	if (previous_target)
+		IUnknown_Release((IUnknown *)previous_target);
 	IUnknown_Release((IUnknown *)surface_bitmap);
 	IUnknown_Release((IUnknown *)surface_context);
 	IUnknown_Release((IUnknown *)device2d);
