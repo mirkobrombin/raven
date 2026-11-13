@@ -443,6 +443,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             target_compile_options(raven_wayland PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
             target_link_libraries(raven PRIVATE raven_wayland)
             target_compile_definitions(raven PRIVATE RAVEN_WAYLAND=1)
+            # A pointer that holds its button along a path, for the tests that draw on the isolated compositor.
+            add_executable(raven_virtual_pointer desktop/virtual_pointer.cpp)
+            target_link_libraries(raven_virtual_pointer PRIVATE PkgConfig::WAYLAND_CLIENT)
+            target_compile_options(raven_virtual_pointer PRIVATE -Wall -Wextra -Wpedantic)
             # The presentation against a compositor inside the test, which hands the keyboard to popups the way GNOME's does.
             pkg_check_modules(WAYLAND_SERVER QUIET IMPORTED_TARGET wayland-server)
             if(WAYLAND_SERVER_FOUND)
@@ -5257,6 +5261,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_keepass_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-keepass.py
                         $<TARGET_FILE:raven> ${RAVEN_NETFX_INSTALLER} ${RAVEN_KEEPASS_SETUP} ${CMAKE_CURRENT_BINARY_DIR}/keepass-evidence)
                     set_tests_properties(native_keepass_workflow PROPERTIES TIMEOUT 3600 RESOURCE_LOCK raven_compositor PASS_REGULAR_EXPRESSION "PASS: ")
+                endif()
+                # paint.net 5.2 as dotPDN publishes it (scripts/native-paintnet.py): installed by its own installer, a stroke drawn with the
+                # brush while the mouse is held down along it, saved as PNG, and the pixels of the file read back.
+                set(RAVEN_PAINTNET_INSTALLER "" CACHE FILEPATH "paint.net.5.2.install.x64.zip as dotPDN publishes it")
+                if(TARGET raven_wayland AND TARGET raven_virtual_pointer AND RAVEN_LABWC AND RAVEN_GRIM AND RAVEN_WLRCTL AND RAVEN_WTYPE
+                   AND RAVEN_PIL_PYTHON AND RAVEN_DXVK_PE64_DIR AND EXISTS "${RAVEN_DXVK_PE64_DIR}/d3d11.dll"
+                   AND RAVEN_PAINTNET_INSTALLER AND EXISTS "${RAVEN_PAINTNET_INSTALLER}")
+                    add_test(NAME native_paintnet_workflow COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-paintnet.py
+                        $<TARGET_FILE:raven> ${RAVEN_PAINTNET_INSTALLER} $<TARGET_FILE:raven_virtual_pointer> ${RAVEN_DXVK_PE64_DIR}
+                        ${CMAKE_CURRENT_BINARY_DIR}/paintnet-evidence)
+                    set_tests_properties(native_paintnet_workflow PROPERTIES TIMEOUT 3600 RESOURCE_LOCK raven_compositor
+                        PASS_REGULAR_EXPRESSION "PASS: ")
                 endif()
                 # Mp3tag 3.36.1 for x64 as mp3tag.de publishes it (scripts/native-mp3tag.py): a folder of MP3 files opened, one title, the
                 # artist and album of all three and a cover changed and saved, and the files on the host read back.
