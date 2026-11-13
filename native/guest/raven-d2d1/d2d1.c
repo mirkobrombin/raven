@@ -1712,12 +1712,18 @@ static void copy_surface(DWORD to, DWORD from, const D2D1_POINT_2U *point, const
 	queue_command(NULL, to, &command, NULL, 0);
 }
 
+static void share_back(struct bitmap *bitmap);
+
+/* What is copied into a bitmap shared from a WIC lock reaches the lock's memory too: paint.net copies each rendered tile into such a
+ * bitmap and reads its own memory. */
 static HRESULT STDMETHODCALLTYPE bitmap_CopyFromBitmap(void *iface, const D2D1_POINT_2U *point, ID2D1Bitmap *source, const D2D1_RECT_U *rect)
 {
 	struct bitmap *self = iface, *from = (struct bitmap *)source;
 	if (!from)
 		return E_INVALIDARG;
 	copy_surface(self->surface, from->surface, point, rect, from->pixels);
+	if (self->shared)
+		share_back(self);
 	return S_OK;
 }
 
@@ -3390,6 +3396,7 @@ static void share_back(struct bitmap *bitmap)
 	UINT32 row, column;
 	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
+	flush_queue();
 	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
 	for (row = 0; row < height && (size_t)row * bitmap->shared_stride + (size_t)width * bytes <= bitmap->shared_size; ++row) {
 		const BYTE *from = pixels + (size_t)row * width * 4;
@@ -4106,6 +4113,8 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromRenderTarget(void *iface, const 
 	if (!from || !from->bitmap)
 		return E_INVALIDARG;
 	copy_surface(self->surface, from->bitmap->surface, point, rect, from->bitmap->pixels);
+	if (self->shared)
+		share_back(self);
 	return S_OK;
 }
 

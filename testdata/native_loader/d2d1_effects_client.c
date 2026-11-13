@@ -516,6 +516,12 @@ int raven_entry(void)
 	if (!(drawn_floats[0] <= 0.02f) || !(drawn_floats[2] >= 0.98f) || !(drawn_floats[3] >= 0.98f))
 		return 41;
 	ID2D1DeviceContext_SetTarget(float_context, float_image);
+	/* What is copied into the shared bitmap reaches the lock's memory as well: the red bitmap, as two floats of red and one of alpha. */
+	const D2D1_RECT_U red_part = {0, 0, 2, 2};
+	if (FAILED(ID2D1Bitmap_CopyFromBitmap(tile, NULL, opaque, &red_part)))
+		return 42;
+	if (!(drawn_floats[0] >= 0.98f) || !(drawn_floats[2] <= 0.02f) || !(drawn_floats[3] >= 0.98f))
+		return 43;
 	ID2D1Bitmap_Release(tile);
 	IWICBitmapLock_Release(tile_lock);
 	IWICBitmap_Release(tile_pixels);
