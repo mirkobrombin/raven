@@ -441,6 +441,30 @@ int raven_entry(void)
 		return 31;
 	IUnknown_Release((IUnknown *)clear_list);
 	IUnknown_Release((IUnknown *)opaque_target);
+	/* A target over a WIC bitmap of floats, as paint.net renders its adjustments into: what is drawn comes back as floats, red first. */
+	IWICBitmap *float_pixels = NULL;
+	ID2D1RenderTarget *float_target = NULL;
+	IWICBitmapLock *float_lock = NULL;
+	UINT float_size = 0;
+	BYTE *float_data = NULL;
+	WICRect float_area = {0, 0, 8, 8};
+	const D2D1_COLOR_F mixed = {0.5f, 0.25f, 1.0f, 1.0f};
+	if (FAILED(IWICImagingFactory_CreateBitmap(imaging, 8, 8, &GUID_WICPixelFormat128bppPRGBAFloat, WICBitmapCacheOnLoad, &float_pixels)) ||
+		FAILED(ID2D1Factory_CreateWicBitmapRenderTarget((ID2D1Factory *)factory, float_pixels, &properties, &float_target)))
+		return 32;
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &mixed);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(IWICBitmap_Lock(float_pixels, &float_area, WICBitmapLockRead, &float_lock)) ||
+		FAILED(IWICBitmapLock_GetDataPointer(float_lock, &float_size, &float_data)) || float_size < 8 * 8 * 16)
+		return 33;
+	const float *drawn_floats = (const float *)float_data;
+	if (!(drawn_floats[0] >= 0.48f && drawn_floats[0] <= 0.52f) || !(drawn_floats[1] >= 0.23f && drawn_floats[1] <= 0.27f) ||
+		!(drawn_floats[2] >= 0.98f && drawn_floats[2] <= 1.01f) || !(drawn_floats[3] >= 0.98f && drawn_floats[3] <= 1.01f))
+		return 34;
+	IWICBitmapLock_Release(float_lock);
+	ID2D1RenderTarget_Release(float_target);
+	IWICBitmap_Release(float_pixels);
 	IUnknown_Release((IUnknown *)red_brush);
 	IUnknown_Release((IUnknown *)list);
 	if (previous_target)

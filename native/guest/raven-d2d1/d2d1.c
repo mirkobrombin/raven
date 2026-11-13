@@ -75,6 +75,11 @@ static UINT wic_depth(IWICBitmap *wic)
 		return 1;
 	if (!memcmp(&format, &GUID_WICPixelFormat8bppGray, sizeof(format)))
 		return 2;
+	/* Halves and floats, red first: paint.net renders its adjustments into bitmaps of floats. */
+	if (!memcmp(&format, &GUID_WICPixelFormat64bppPRGBAHalf, sizeof(format)) || !memcmp(&format, &GUID_WICPixelFormat64bppRGBAHalf, sizeof(format)))
+		return 8;
+	if (!memcmp(&format, &GUID_WICPixelFormat128bppPRGBAFloat, sizeof(format)) || !memcmp(&format, &GUID_WICPixelFormat128bppRGBAFloat, sizeof(format)))
+		return 16;
 	return 4;
 }
 
@@ -3289,11 +3294,30 @@ static void read_wic(struct target *self)
 	if (!self->bitmap || width != self->bitmap->pixels.width || height != self->bitmap->pixels.height)
 		return;
 	depth = wic_depth(self->wic);
-	bytes = depth == 4 ? 4 : 1;
-	if (!(pixels = ALLOC((size_t)width * height * 4)))
+	bytes = depth >= 4 ? depth : 1;
+	if (!(pixels = ALLOC((size_t)width * height * max(bytes, 4))))
 		return;
 	if (SUCCEEDED(IWICBitmap_CopyPixels(self->wic, NULL, width * bytes, width * height * bytes, pixels))) {
-		if (depth != 4) {
+		if (depth == 8 || depth == 16) {
+			/* Narrowed in place from the first pixel on, each read whole before the bytes that take its place are written. */
+			UINT index;
+			for (index = 0; index < width * height; ++index) {
+				BYTE value[4];
+				UINT channel;
+				for (channel = 0; channel < 4; ++channel) {
+					if (depth == 8)
+						value[channel] = half_byte(((const UINT16 *)pixels)[index * 4 + channel]);
+					else {
+						const float part = ((const float *)pixels)[index * 4 + channel];
+						value[channel] = part <= 0 ? 0 : part >= 1 ? 255 : (BYTE)(part * 255 + 0.5f);
+					}
+				}
+				pixels[index * 4] = min(value[2], value[3]);
+				pixels[index * 4 + 1] = min(value[1], value[3]);
+				pixels[index * 4 + 2] = min(value[0], value[3]);
+				pixels[index * 4 + 3] = value[3];
+			}
+		} else if (depth != 4) {
 			UINT index = width * height;
 			const BOOL alpha = depth == 1;
 			while (index--) {
@@ -3350,11 +3374,27 @@ static void present(struct target *self)
 			BYTE *data = NULL;
 			IWICBitmapLock_GetStride(lock, &stride);
 			IWICBitmapLock_GetDataPointer(lock, &size, &data);
-			for (row = 0; data && row < height && (size_t)row * stride + width * (depth == 4 ? 4 : 1) <= size; ++row) {
+			for (row = 0; data && row < height && (size_t)row * stride + width * (depth >= 4 ? depth : 1) <= size; ++row) {
 				const BYTE *from = pixels + (size_t)row * width * 4;
 				BYTE *to = data + (size_t)row * stride;
 				if (depth == 4)
 					memcpy(to, from, width * 4);
+				else if (depth == 8)
+					for (column = 0; column < width; ++column) {
+						UINT16 *halves = (UINT16 *)to + column * 4;
+						halves[0] = byte_half[from[column * 4 + 2]];
+						halves[1] = byte_half[from[column * 4 + 1]];
+						halves[2] = byte_half[from[column * 4]];
+						halves[3] = byte_half[from[column * 4 + 3]];
+					}
+				else if (depth == 16)
+					for (column = 0; column < width; ++column) {
+						float *floats = (float *)to + column * 4;
+						floats[0] = from[column * 4 + 2] / 255.0f;
+						floats[1] = from[column * 4 + 1] / 255.0f;
+						floats[2] = from[column * 4] / 255.0f;
+						floats[3] = from[column * 4 + 3] / 255.0f;
+					}
 				else
 					/* An 8-bit target keeps the alpha (A8, the format of DXGI_FORMAT_A8_UNORM targets) or the grey level. */
 					for (column = 0; column < width; ++column)
