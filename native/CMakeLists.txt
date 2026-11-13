@@ -3344,6 +3344,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_served_semaphore_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         raven_kernel_fixture(api-hook api_hook_client.c 0x1b6000000 "-lkernel32;-luser32")
+        # GdiAlphaBlend between 32-bit surfaces, and the time a window-sized blend may take.
+        raven_kernel_fixture(alpha-blend alpha_blend_client.c 0x1c1000000 "-lkernel32;-lgdi32")
+        add_test(NAME native_alpha_blend COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/alpha-blend.exe)
+        set_tests_properties(native_alpha_blend PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         # The AVX part of a thread's state in its context, which the .NET runtime asks for before it uses the code compiled ahead for AVX2.
         raven_kernel_fixture(xstate-context xstate_context_client.c 0x1c0000000 "-lkernel32")
         add_test(NAME native_xstate_context COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/xstate-context.exe)
