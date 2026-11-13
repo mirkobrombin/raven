@@ -255,6 +255,10 @@ private:
 	// Host input collected while threads waited, delivered by the next input_ready.
 	std::deque<DesktopEvent> pending_events;
 	void deliver_pending();
+	// The thread a host event is for, whether any waits for a thread, and the taking in of what the host has.
+	uint32_t input_thread(const DesktopEvent &event) const;
+	bool pending_for(uint32_t thread) const;
+	void collect_input(std::chrono::milliseconds budget);
 	// PostQuitMessage codes by thread.
 	std::map<uint32_t,uint32_t> quits;
 	// The time and cursor position of the message each thread last took from its queue, which GetMessageTime and GetMessagePos answer.

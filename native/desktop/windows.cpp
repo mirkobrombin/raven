@@ -426,10 +426,8 @@ bool NativeWindows::input_ready()
 	flush_dirty();
 	caret_idle();
 	scroll_idle();
+	collect_input(std::chrono::milliseconds(0));
 	deliver_pending();
-	if (presentation.poll)
-		for (const auto &event : presentation.poll(std::chrono::milliseconds(0)))
-			receive(event);
 	serve_sent();
 	const auto me=environment.thread_id();
 	if (queued_for(me) || quits.contains(me))
@@ -438,11 +436,33 @@ bool NativeWindows::input_ready()
 	return queued_for(me) || invalid_owned(0);
 }
 
+// Input belongs to the thread that owns the window it is for, as on Windows, where the hit test, the cursor and the activation a
+// pointer event asks of the window run on that thread as it reads its queue. Another thread of the program that pumps messages of its
+// own leaves such an event where it is: handled from there, every move would wait for the owner to answer what is sent for it, one
+// move for each turn of the owner's loop, and a press would reach the program long after the hand made it.
+uint32_t NativeWindows::input_thread(const DesktopEvent &event) const
+{
+	return owner(event.window ? event.window : focus);
+}
+
+bool NativeWindows::pending_for(uint32_t thread) const
+{
+	return std::any_of(pending_events.begin(),pending_events.end(),[&](const DesktopEvent &event) {
+		const auto owning=input_thread(event);
+		return !owning || !thread || owning==thread;
+	});
+}
+
 void NativeWindows::deliver_pending()
 {
-	while (!pending_events.empty()) {
+	const auto me=environment.thread_id();
+	for (auto remaining=pending_events.size();remaining && !pending_events.empty();--remaining) {
 		const auto event = pending_events.front();
 		pending_events.pop_front();
+		if (const auto owning=input_thread(event); owning && me && owning!=me) {
+			pending_events.push_back(event);
+			continue;
+		}
 		// The window an event was collected for may have been hidden or destroyed before the event could be delivered: such an
 		// event no longer has a target, as one for a surface the host no longer shows. A menu popup is no guest window; the menu
 		// loop decides about its events.
@@ -466,14 +486,20 @@ static uint32_t event_kinds(const DesktopEvent &event)
 	}
 }
 
+// What the host has for the program is taken in for the threads it belongs to, each told that its queue changed.
+void NativeWindows::collect_input(std::chrono::milliseconds budget)
+{
+	if (!presentation.poll) return;
+	for (const auto &event : presentation.poll(budget)) {
+		pending_events.push_back(event);
+		queue_changed(input_thread(event),event_kinds(event));
+	}
+}
+
 uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 {
-	const auto event_thread=[&](const DesktopEvent &event) { return owner(event.window ? event.window : focus); };
-	if (presentation.poll)
-		for (const auto &event : presentation.poll(std::chrono::milliseconds(0))) {
-			pending_events.push_back(event);
-			queue_changed(event_thread(event),event_kinds(event));
-		}
+	const auto event_thread=[&](const DesktopEvent &event) { return input_thread(event); };
+	collect_input(std::chrono::milliseconds(0));
 	post_due_timers();
 	uint32_t current=0;
 	for (const auto &message : messages)
@@ -1408,10 +1434,8 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			(message.message==0x12 || (!minimum && !maximum) || (message.message>=minimum && message.message<=maximum));
 	};
 	for (;;) {
+		collect_input(std::chrono::milliseconds(0));
 		deliver_pending();
-		if (presentation.poll)
-			for (const auto &event : presentation.poll(std::chrono::milliseconds(0)))
-				receive(event);
 		if (kinds & 0x8) import_foreign_posts();
 		if (kinds & 0x40) answer_foreign_sends();
 		// Messages sent from other threads run before anything is retrieved, as they do while a Windows thread pumps its queue.
@@ -1513,7 +1537,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			message_wait([&] {
 				// Collect host input without invoking a guest procedure while the scheduler checks another thread.
 				queue_status(me,0,false);
-				return !pending_events.empty() || ((kinds & 0x40) && sent_for(me)) ||
+				return pending_for(me) || ((kinds & 0x40) && sent_for(me)) ||
 					((kinds & 0x108) && quits.contains(me)) || std::any_of(messages.begin(),messages.end(),matches) ||
 					((kinds & 0x20) && ((!minimum && !maximum) || (minimum<=0x0f && maximum>=0x0f)) && invalid_owned(window,me));
 			},until);
@@ -1523,8 +1547,8 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			wait_idle(deadline);
 		} else if (presentation.poll) {
 			const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-std::chrono::steady_clock::now());
-			for (const auto &event : presentation.poll(std::min(remaining,std::chrono::milliseconds(20))))
-				receive(event);
+			collect_input(std::min(remaining,std::chrono::milliseconds(20)));
+			deliver_pending();
 		} else std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 }
@@ -1539,7 +1563,7 @@ void NativeWindows::wait_idle(std::chrono::steady_clock::time_point deadline)
 	// Windows another process draws into are looked at as often as before; one starting to draw shows in the windows directory.
 	if (std::any_of(foreign_frames.begin(),foreign_frames.end(),[](const auto &frame) { return frame.second!=0; }))
 		until=std::min(until,foreign_checked+std::chrono::milliseconds(8));
-	if (!pending_events.empty() || !dirty_roots.empty()) until=now;
+	if (pending_for(environment.thread_id()) || !dirty_roots.empty()) until=now;
 	until=idle_until(until);
 	if (until>now) {
 		std::vector<pollfd> descriptors{{presentation.descriptor(),POLLIN,0},{foreign_frames_descriptor(),POLLIN,0}};
@@ -1553,8 +1577,8 @@ void NativeWindows::wait_idle(std::chrono::steady_clock::time_point deadline)
 			foreign_checked={};
 		}
 	}
-	for (const auto &event : presentation.poll(std::chrono::milliseconds(0)))
-		receive(event);
+	collect_input(std::chrono::milliseconds(0));
+	deliver_pending();
 }
 
 std::string NativeWindows::text(uint64_t address)
