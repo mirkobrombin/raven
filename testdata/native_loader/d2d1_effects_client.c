@@ -545,6 +545,59 @@ int raven_entry(void)
 	ID2D1Bitmap_Release(tile);
 	IWICBitmapLock_Release(tile_lock);
 	IWICBitmap_Release(tile_pixels);
+	/* The Gaussian blur Direct2D has, which paint.net's blur is built on: with a soft border it spreads three deviations past its
+	   input and fades there, with a hard one it keeps the input's size and reads the input's edge beyond it. */
+	typedef HRESULT (STDMETHODCALLTYPE *set_value)(void *, UINT32, D2D1_PROPERTY_TYPE, const BYTE *, UINT32);
+	ID2D1Effect *blur = NULL;
+	const float deviation = 1.0f;
+	const UINT32 hard_border = D2D1_BORDER_MODE_HARD;
+	const D2D1_COLOR_F empty = {0, 0, 0, 0};
+	const D2D1_POINT_2F blur_place = {3, 3};
+	if (FAILED(ID2D1DeviceContext_CreateEffect(float_context, &CLSID_D2D1GaussianBlur, &blur)) ||
+		FAILED(((set_value)(*(void ***)blur)[9])(blur, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, D2D1_PROPERTY_TYPE_FLOAT,
+			(const BYTE *)&deviation, sizeof(deviation))))
+		return 46;
+	((set_input)(*(void ***)blur)[14])(blur, 0, (ID2D1Image *)opaque, TRUE);
+	output = output_of(blur);
+	if (FAILED(ID2D1DeviceContext_GetImageLocalBounds(float_context, output, &bounds)) || bounds.left != -3 || bounds.top != -3 ||
+		bounds.right != 5 || bounds.bottom != 5)
+		return 46;
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &empty);
+	ID2D1DeviceContext_DrawImage(float_context, output, &blur_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+		return 47;
+	/* The red pixel at the image's corner keeps two fifths of itself, and two pixels to its left a few hundredths have spread. */
+	const float *corner = (const float *)(float_map.bits + 3 * float_map.pitch) + 3 * 4;
+	const float *spread = (const float *)(float_map.bits + 3 * float_map.pitch) + 1 * 4;
+	if (!(corner[3] >= 0.3f && corner[3] <= 0.55f) || !(corner[0] >= corner[3] - 0.02f) || !(corner[1] <= 0.02f) ||
+		!(spread[3] >= 0.01f && spread[3] <= 0.15f))
+		return 47;
+	ID2D1Bitmap1_Unmap(float_bitmap);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(((set_value)(*(void ***)blur)[9])(blur, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_PROPERTY_TYPE_ENUM,
+			(const BYTE *)&hard_border, sizeof(hard_border))))
+		return 48;
+	output = output_of(blur);
+	if (FAILED(ID2D1DeviceContext_GetImageLocalBounds(float_context, output, &bounds)) || bounds.left != 0 || bounds.top != 0 ||
+		bounds.right != 2 || bounds.bottom != 2)
+		return 48;
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &empty);
+	ID2D1DeviceContext_DrawImage(float_context, output, &blur_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+		return 49;
+	corner = (const float *)(float_map.bits + 3 * float_map.pitch) + 3 * 4;
+	spread = (const float *)(float_map.bits + 3 * float_map.pitch) + 2 * 4;
+	if (!(corner[3] >= 0.98f) || !(corner[0] >= 0.98f) || !(spread[3] <= 0.02f))
+		return 49;
+	ID2D1Bitmap1_Unmap(float_bitmap);
+	IUnknown_Release((IUnknown *)output);
+	IUnknown_Release((IUnknown *)blur);
 	IUnknown_Release((IUnknown *)float_bitmap);
 	IUnknown_Release((IUnknown *)float_image);
 	IUnknown_Release((IUnknown *)float_context);

@@ -6808,6 +6808,102 @@ static void system_pixels(struct effect *effect, float *pixels, size_t count)
 }
 
 /* What a system effect covers: a crop its rectangle of its input, a flood everything, a composite all its inputs, any other its input. */
+static float fexp(float x);
+
+/* How far a Gaussian blur reaches, in pixels: three standard deviations each way, as Direct2D documents the effect's output growing by
+ * that much; no deviation is no blur. */
+static LONG blur_reach(struct effect *effect, float *deviation_out, BOOL *hard)
+{
+	float deviation = 3.0f;
+	UINT32 border = D2D1_BORDER_MODE_SOFT;
+	effect_property(effect, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, &deviation, sizeof(deviation));
+	effect_property(effect, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, &border, sizeof(border));
+	if (!(deviation > 0))
+		deviation = 0;
+	if (deviation > 1024)
+		deviation = 1024;
+	if (deviation_out)
+		*deviation_out = deviation;
+	if (hard)
+		*hard = border == D2D1_BORDER_MODE_HARD;
+	return float_edge(deviation * 3, 1);
+}
+
+/* The Gaussian blur: each pixel is the weighted mean of those around it, done along the rows and then along the columns, which gives
+ * the same as weighing the whole square. Beyond the input a soft border reads nothing and a hard one the input's edge. */
+static void blur_render(struct effect *effect, const struct link *inputs, const D2D1_RECT_L *area, float *out, int depth)
+{
+	float deviation, total = 0, *weights, *source, *rows;
+	BOOL hard;
+	const LONG reach = blur_reach(effect, &deviation, &hard);
+	const D2D1_RECT_L needed = {area->left - reach, area->top - reach, area->right + reach, area->bottom + reach};
+	D2D1_RECT_L covered, read;
+	LONG x, y, tap, width, height;
+	int channel;
+	if (!link_bounds(&inputs[0], &covered, depth))
+		return;
+	if (!reach) {
+		link_render(&inputs[0], area, out, depth);
+		return;
+	}
+	read = rect_intersect(&needed, &covered);
+	if (rect_empty(&read) || (UINT64)rect_width(&read) * rect_height(&read) > RENDER_PIXELS)
+		return;
+	width = rect_width(area);
+	height = rect_height(&read);
+	weights = ALLOC_UNSET((size_t)(reach + 1) * sizeof(float));
+	source = plane_alloc(&read);
+	rows = ALLOC_UNSET((size_t)width * height * 4 * sizeof(float));
+	if (weights && source && rows) {
+		for (tap = 0; tap <= reach; ++tap) {
+			weights[tap] = fexp(-(float)(tap * tap) / (2 * deviation * deviation));
+			total += tap ? 2 * weights[tap] : weights[tap];
+		}
+		for (tap = 0; tap <= reach; ++tap)
+			weights[tap] /= total;
+		link_render(&inputs[0], &read, source, depth);
+		for (y = 0; y < height; ++y)
+			for (x = 0; x < width; ++x) {
+				float sum[4] = {0, 0, 0, 0};
+				for (tap = -reach; tap <= reach; ++tap) {
+					LONG at = area->left + x + tap - read.left;
+					const float weight = weights[tap < 0 ? -tap : tap];
+					const float *pixel;
+					if (at < 0 || at >= (LONG)rect_width(&read)) {
+						if (!hard)
+							continue;
+						at = at < 0 ? 0 : (LONG)rect_width(&read) - 1;
+					}
+					pixel = source + ((size_t)y * rect_width(&read) + at) * 4;
+					for (channel = 0; channel < 4; ++channel)
+						sum[channel] += pixel[channel] * weight;
+				}
+				memcpy(rows + ((size_t)y * width + x) * 4, sum, sizeof(sum));
+			}
+		for (y = 0; y < (LONG)rect_height(area); ++y)
+			for (x = 0; x < width; ++x) {
+				float sum[4] = {0, 0, 0, 0};
+				for (tap = -reach; tap <= reach; ++tap) {
+					LONG at = area->top + y + tap - read.top;
+					const float weight = weights[tap < 0 ? -tap : tap];
+					const float *pixel;
+					if (at < 0 || at >= height) {
+						if (!hard)
+							continue;
+						at = at < 0 ? 0 : height - 1;
+					}
+					pixel = rows + ((size_t)at * width + x) * 4;
+					for (channel = 0; channel < 4; ++channel)
+						sum[channel] += pixel[channel] * weight;
+				}
+				memcpy(out + ((size_t)y * width + x) * 4, sum, sizeof(sum));
+			}
+	}
+	FREE(weights);
+	FREE(source);
+	FREE(rows);
+}
+
 static BOOL system_bounds(struct effect *effect, const struct link *inputs, UINT32 count, D2D1_RECT_L *bounds, int depth)
 {
 	UINT32 input;
@@ -6826,6 +6922,21 @@ static BOOL system_bounds(struct effect *effect, const struct link *inputs, UINT
 	}
 	if (!count || !link_bounds(&inputs[0], bounds, depth))
 		return FALSE;
+	if (same_guid(&effect->clsid, &CLSID_D2D1GaussianBlur)) {
+		/* A soft border lets the blur spread past its input as far as it reaches; a hard one keeps the input's size. */
+		BOOL hard;
+		const LONG reach = blur_reach(effect, NULL, &hard);
+		if (!hard && !rect_empty(bounds)) {
+			if (bounds->left != INFINITE_LEFT)
+				bounds->left -= reach;
+			if (bounds->top != INFINITE_LEFT)
+				bounds->top -= reach;
+			if (bounds->right != INFINITE_RIGHT)
+				bounds->right += reach;
+			if (bounds->bottom != INFINITE_RIGHT)
+				bounds->bottom += reach;
+		}
+	}
 	if (same_guid(&effect->clsid, &CLSID_D2D1Crop)) {
 		D2D1_VECTOR_4F crop;
 		if (effect_property(effect, D2D1_CROP_PROP_RECT, &crop, sizeof(crop))) {
@@ -6870,6 +6981,10 @@ static void system_render(struct effect *effect, const struct link *inputs, UINT
 	}
 	if (!count)
 		return;
+	if (same_guid(&effect->clsid, &CLSID_D2D1GaussianBlur)) {
+		blur_render(effect, inputs, area, out, depth);
+		return;
+	}
 	if (!system_bounds(effect, inputs, count, &covered, depth))
 		return;
 	covered = rect_intersect(&covered, area);
