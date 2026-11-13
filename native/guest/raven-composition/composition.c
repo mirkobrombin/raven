@@ -282,6 +282,9 @@ struct surface {
 	ID3D11Texture2D *staging;
 	UINT staging_width, staging_height;
 	struct surface *next_watched;
+	/* The part of the frame presented since the targets were last drawn, or all of it, and the part being drawn now. */
+	RECT changed, drawing;
+	BOOL changed_whole, drawing_whole;
 };
 
 /* The surfaces over swap chains, which see the frames their swap chains present. */
@@ -326,7 +329,7 @@ struct graphics_device {
 };
 
 static void changed(struct compositor *compositor);
-static void render(struct target *target);
+static void render(struct target *target, BOOL frame_only);
 
 /* ---- the compositor's objects share ICompositionObject: their compositor ---- */
 static struct compositor *compositor_of_object(void *iface)
@@ -825,7 +828,7 @@ static LRESULT CALLBACK target_window(HWND window, UINT message, WPARAM wparam, 
 	WNDPROC previous = self ? self->previous : DefWindowProcW;
 	const LRESULT result = CallWindowProcW(previous, window, message, wparam, lparam);
 	if (self && self->compositor->committed && (message == WM_PAINT || message == WM_SIZE))
-		render(self);
+		render(self, FALSE);
 	return result;
 }
 
@@ -843,11 +846,20 @@ static struct compositor *compositor_of(void *iface)
 static void commit(struct compositor *self);
 
 /* Draws every target of the compositor again. */
-static void show(struct compositor *self)
+static void show(struct compositor *self, BOOL frame_only)
 {
 	struct target **targets, *target;
+	struct surface *surface;
 	UINT count = 0, index;
 	EnterCriticalSection(&lock);
+	/* What the frames changed up to here is what this drawing shows; what they change meanwhile waits for the next. */
+	for (surface = watched; surface; surface = surface->next_watched)
+		if (surface->compositor == self) {
+			surface->drawing = surface->changed;
+			surface->drawing_whole = surface->changed_whole;
+			SetRectEmpty(&surface->changed);
+			surface->changed_whole = FALSE;
+		}
 	for (target = self->targets; target; target = target->next)
 		++count;
 	if (!(targets = ALLOC(count * sizeof(*targets) + 1))) {
@@ -860,7 +872,7 @@ static void show(struct compositor *self)
 	}
 	LeaveCriticalSection(&lock);
 	for (index = 0; index < count; ++index) {
-		render(targets[index]);
+		render(targets[index], frame_only);
 		node_release(&targets[index]->node);
 	}
 	FREE(targets);
@@ -872,7 +884,7 @@ static void commit(struct compositor *self)
 	self->pending = FALSE;
 	self->committed = TRUE;
 	LeaveCriticalSection(&lock);
-	show(self);
+	show(self, FALSE);
 }
 
 /* Changes are announced once until the next commit: through the controller's CommitNeeded event when there is a controller, or by a
@@ -893,7 +905,7 @@ static LRESULT CALLBACK messages_window(HWND window, UINT message, WPARAM wparam
 	if (message == WM_RAVEN_FRAME) {
 		struct compositor *self = (struct compositor *)lparam;
 		InterlockedExchange(&self->frame_pending, FALSE);
-		show(self);
+		show(self, TRUE);
 		node_release(&self->node);
 		return 0;
 	}
@@ -1048,13 +1060,14 @@ static void release_device(ID3D10Multithread *guard)
 
 /* The desktop compositor takes the back buffer as the program presents it, so the frame is copied out at that moment: afterwards the
  * Direct3D libraries may hand the same buffer back to the program to draw the next frame into. */
-static void capture_frame(struct surface *surface)
+static void capture_frame(struct surface *surface, const RECT *dirty)
 {
 	ID3D11Texture2D *buffer = NULL;
 	ID3D11Device *device = NULL;
 	ID3D11DeviceContext *context = NULL;
 	ID3D10Multithread *guard;
 	D3D11_TEXTURE2D_DESC desc;
+	BOOL fresh = FALSE;
 	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, 0, &IID_ID3D11Texture2D, (void **)&buffer)))
 		return;
 	ID3D11Texture2D_GetDesc(buffer, &desc);
@@ -1063,6 +1076,7 @@ static void capture_frame(struct surface *surface)
 	guard = hold_device(device);
 	if (!surface->staging || surface->staging_width != desc.Width || surface->staging_height != desc.Height) {
 		D3D11_TEXTURE2D_DESC staging = desc;
+		fresh = TRUE;
 		if (surface->staging)
 			ID3D11Texture2D_Release(surface->staging);
 		surface->staging = NULL;
@@ -1078,8 +1092,24 @@ static void capture_frame(struct surface *surface)
 			surface->staging_height = desc.Height;
 		}
 	}
-	if (surface->staging)
-		ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)surface->staging, (ID3D11Resource *)buffer);
+	if (surface->staging) {
+		/* A present that names what changed leaves the rest of the frame as the copy already has it. */
+		RECT part = {0, 0, (LONG)desc.Width, (LONG)desc.Height};
+		const BOOL whole = !dirty || fresh || !IntersectRect(&part, &part, dirty);
+		if (whole) {
+			ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)surface->staging, (ID3D11Resource *)buffer);
+		} else {
+			const D3D11_BOX box = {(UINT)part.left, (UINT)part.top, 0, (UINT)part.right, (UINT)part.bottom, 1};
+			ID3D11DeviceContext_CopySubresourceRegion(context, (ID3D11Resource *)surface->staging, 0, box.left, box.top, 0, (ID3D11Resource *)buffer, 0,
+				&box);
+		}
+		EnterCriticalSection(&lock);
+		if (whole)
+			surface->changed_whole = TRUE;
+		else
+			UnionRect(&surface->changed, &surface->changed, &part);
+		LeaveCriticalSection(&lock);
+	}
 	release_device(guard);
 	ID3D11DeviceContext_Release(context);
 	ID3D11Device_Release(device);
@@ -1137,7 +1167,7 @@ static HRESULT STDMETHODCALLTYPE surface_present(IDXGISwapChain1 *chain, UINT in
 	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
 	HRESULT hr;
 	if (surface)
-		capture_frame(surface);
+		capture_frame(surface, NULL);
 	hr = presenter->present(chain, interval, flags);
 	if (surface) {
 		if (SUCCEEDED(hr))
@@ -1152,8 +1182,14 @@ static HRESULT STDMETHODCALLTYPE surface_present1(IDXGISwapChain1 *chain, UINT i
 	const struct presenter *presenter = presenter_of(chain);
 	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
 	HRESULT hr;
-	if (surface)
-		capture_frame(surface);
+	if (surface) {
+		/* The rectangles a present names are all of the frame that changed; none named means all of it did. */
+		RECT dirty = {0, 0, 0, 0};
+		UINT index;
+		for (index = 0; parameters && parameters->pDirtyRects && index < parameters->DirtyRectsCount; ++index)
+			UnionRect(&dirty, &dirty, &parameters->pDirtyRects[index]);
+		capture_frame(surface, IsRectEmpty(&dirty) ? NULL : &dirty);
+	}
 	hr = presenter->present1(chain, interval, flags, parameters);
 	if (surface) {
 		if (SUCCEEDED(hr))
@@ -1213,7 +1249,7 @@ static HRESULT STDMETHODCALLTYPE interop_CreateCompositionSurfaceForSwapChain(vo
 	watch_presents(surface);
 	/* A swap chain that presented before the surface was made shows that frame, which buffer 0 still holds. */
 	if (SUCCEEDED(IDXGISwapChain1_GetLastPresentCount(chain, &presented)) && presented)
-		capture_frame(surface);
+		capture_frame(surface, NULL);
 	hr = hand_out(&surface->node, &IID___x_ABI_CWindows_CUI_CComposition_CICompositionSurface, out);
 	node_release(&surface->node);
 	return hr;
@@ -1577,6 +1613,22 @@ static DWORD scrgb_pixel(const UINT16 *halves)
 		(DWORD)scale_byte(srgb_of(half_float(halves[1]) * unpremultiply), a) << 8 | scale_byte(srgb_of(half_float(halves[2]) * unpremultiply), a);
 }
 
+/* Where a frame of a size falls in the window, as the brush places it: stretched to fill the visual, kept to scale inside or over it, or
+ * left at its size. */
+static void place_frame(const struct fill *fill, UINT width, UINT height, float *x0, float *y0, float *sx, float *sy)
+{
+	*sx = fill->width / (float)width;
+	*sy = fill->height / (float)height;
+	if (fill->stretch == CompositionStretch_None)
+		*sx = *sy = 1;
+	else if (fill->stretch == CompositionStretch_Uniform)
+		*sx = *sy = *sx < *sy ? *sx : *sy;
+	else if (fill->stretch == CompositionStretch_UniformToFill)
+		*sx = *sy = *sx > *sy ? *sx : *sy;
+	*x0 = fill->left + (fill->width - width * *sx) * fill->horizontal;
+	*y0 = fill->top + (fill->height - height * *sy) * fill->vertical;
+}
+
 /* The frame the swap chain last presented, read from its staging copy while the device is held, drawn into the visual's rectangle as the brush
  * places it: stretched to fill it, kept to scale inside or over it, or left at its size. */
 static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
@@ -1588,7 +1640,7 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 	ID3D10Multithread *guard;
 	D3D11_TEXTURE2D_DESC desc;
 	D3D11_MAPPED_SUBRESOURCE mapped;
-	float drawn_width, drawn_height, x0, y0, sx, sy;
+	float x0, y0, sx, sy;
 	INT x, y;
 	/* What shows is the frame taken when the program last presented; before its first present nothing does. */
 	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, 0, &IID_ID3D11Texture2D, (void **)&buffer)))
@@ -1613,18 +1665,7 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 	if (surface->staging && surface->staging_width == desc.Width && surface->staging_height == desc.Height) {
 		if (SUCCEEDED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)surface->staging, 0, D3D11_MAP_READ, 0, &mapped))) {
 			const UINT alpha = (UINT)(fill->opacity * 255 + 0.5f);
-			sx = fill->width / (float)desc.Width;
-			sy = fill->height / (float)desc.Height;
-			if (fill->stretch == CompositionStretch_None)
-				sx = sy = 1;
-			else if (fill->stretch == CompositionStretch_Uniform)
-				sx = sy = sx < sy ? sx : sy;
-			else if (fill->stretch == CompositionStretch_UniformToFill)
-				sx = sy = sx > sy ? sx : sy;
-			drawn_width = desc.Width * sx;
-			drawn_height = desc.Height * sy;
-			x0 = fill->left + (fill->width - drawn_width) * fill->horizontal;
-			y0 = fill->top + (fill->height - drawn_height) * fill->vertical;
+			place_frame(fill, desc.Width, desc.Height, &x0, &y0, &sx, &sy);
 			for (y = fill->area.top; y < fill->area.bottom; ++y) {
 				const INT source_y = (INT)((y + 0.5f - y0) / sy);
 				const BYTE *row;
@@ -1648,7 +1689,9 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 	ID3D11Texture2D_Release(buffer);
 }
 
-static void render(struct target *target)
+/* Draws a target's visuals into its window. For a frame presented with nothing else changed only the part of the window the changed part
+ * of each frame falls on is drawn again, as the desktop compositor takes the rectangles a present names. */
+static void render(struct target *target, BOOL frame_only)
 {
 	struct fills fills = {0};
 	struct canvas canvas;
@@ -1665,6 +1708,30 @@ static void render(struct target *target)
 	EnterCriticalSection(&lock);
 	if (target->root)
 		collect(&fills, target->root, 0, 0, 1, 1, &everything, 1);
+	if (frame_only) {
+		RECT fresh = {0, 0, 0, 0};
+		for (index = 0; index < fills.count; ++index) {
+			const struct fill *fill = &fills.items[index];
+			const struct surface *surface = fill->surface;
+			RECT part = fill->area;
+			float x0, y0, sx, sy;
+			if (!surface || (!surface->drawing_whole && IsRectEmpty(&surface->drawing)))
+				continue;
+			if (!surface->drawing_whole && surface->staging_width && surface->staging_height) {
+				place_frame(fill, surface->staging_width, surface->staging_height, &x0, &y0, &sx, &sy);
+				part.left = (LONG)(x0 + surface->drawing.left * sx) - 1;
+				part.top = (LONG)(y0 + surface->drawing.top * sy) - 1;
+				part.right = (LONG)(x0 + surface->drawing.right * sx) + 2;
+				part.bottom = (LONG)(y0 + surface->drawing.bottom * sy) + 2;
+				IntersectRect(&part, &part, &fill->area);
+			}
+			UnionRect(&fresh, &fresh, &part);
+		}
+		/* Every visual is drawn over that part, in its order, so what lies under and over the frame shows as before. */
+		for (index = 0; index < fills.count; ++index)
+			IntersectRect(&fills.items[index].area, &fills.items[index].area, &fresh);
+		IntersectRect(&fills.drawn, &fills.drawn, &fresh);
+	}
 	LeaveCriticalSection(&lock);
 	if (!IsRectEmpty(&fills.drawn)) {
 		info.bmiHeader.biWidth = client.right;

@@ -51,8 +51,8 @@ static BOOL matches(COLORREF value, BYTE red, BYTE green, BYTE blue)
 }
 
 /* A swap chain of half floats made for composition holds scRGB, linear light, as paint.net draws its canvas into one: shown in a sprite
- * visual, a linear 0.214 is the middle grey of sRGB on the screen, and each frame presented after shows without a commit. The exit code
- * names the first check that failed. */
+ * visual, a linear 0.214 is the middle grey of sRGB on the screen, and each frame presented after shows without a commit, the part of it
+ * the present names when it names one. The exit code names the first check that failed. */
 int raven_entry(void)
 {
 	static const WCHAR compositor_name[] = L"Windows.UI.Composition.Compositor";
@@ -163,6 +163,18 @@ int raven_entry(void)
 		ReleaseDC(window, dc);
 		if (!matches(now, frame % 2 ? 0 : 255, frame % 2 ? 0 : 255, frame % 2 ? 0 : 255)) return 19;
 	}
+	/* A present that names the part of the frame it changed shows that part alone: the rest of the window keeps the frame before, as
+	   paint.net presents the rectangle a stroke touched. */
+	ID3D11DeviceContext_ClearRenderTargetView(context, view, black);
+	RECT left_half = {0, 0, 8, 16};
+	DXGI_PRESENT_PARAMETERS part = {1, &left_half, NULL, NULL};
+	if (FAILED(IDXGISwapChain1_Present1(swap_chain, 1, 0, &part)))
+		return 20;
+	pump(300);
+	dc = GetDC(window);
+	const COLORREF changed = GetPixel(dc, 12, 12), kept = GetPixel(dc, 20, 12);
+	ReleaseDC(window, dc);
+	if (!matches(changed, 0, 0, 0) || !matches(kept, 255, 255, 255)) return 21;
 
 	visual->lpVtbl->Release(visual);
 	sprite->lpVtbl->Release(sprite);
