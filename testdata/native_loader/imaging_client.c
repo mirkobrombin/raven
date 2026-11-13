@@ -104,6 +104,69 @@ static int round_trip(IWICImagingFactory *factory, const GUID *container, WICRec
 	return 0;
 }
 
+/* A picture of 256 by 64 pixels written as PNG and decoded again; 0 when every pixel comes back and the file is no larger than the
+   limit. PNG deflates its rows: a flat picture comes out a small part of its pixels, one of noise no larger than them. */
+static int png_packs(IWICImagingFactory *factory, BOOL noise, ULONGLONG limit)
+{
+	enum { WIDE = 256, HIGH = 64 };
+	static BYTE source[WIDE * HIGH * 4], back[WIDE * HIGH * 4];
+	IWICBitmap *bitmap = NULL;
+	IStream *stream = NULL;
+	IWICBitmapEncoder *encoder = NULL;
+	IWICBitmapFrameEncode *frame = NULL;
+	IWICBitmapDecoder *decoder = NULL;
+	IWICBitmapFrameDecode *decoded = NULL;
+	IWICBitmapSource *converted = NULL;
+	WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+	LARGE_INTEGER start = {0};
+	STATSTG described;
+	UINT seed = 12345;
+	int at;
+	for (at = 0; at < WIDE * HIGH; ++at) {
+		/* A red stroke across a white picture, or noise all over it with stretches that repeat. */
+		const BOOL stroke = at / WIDE > 20 && at / WIDE < 30 && at % WIDE > 40 && at % WIDE < 200;
+		seed = seed * 1103515245 + 12345;
+		source[at * 4] = noise ? (BYTE)(seed >> 16) : stroke ? 0 : 255;
+		source[at * 4 + 1] = noise ? (BYTE)(seed >> 8) : stroke ? 0 : 255;
+		source[at * 4 + 2] = noise && at % 1024 > 100 ? (BYTE)(seed >> 24) : 255;
+		source[at * 4 + 3] = 255;
+	}
+	if (IWICImagingFactory_CreateBitmapFromMemory(factory, WIDE, HIGH, &GUID_WICPixelFormat32bppBGRA, WIDE * 4, sizeof source, source,
+			&bitmap) != S_OK)
+		return 1;
+	if (CreateStreamOnHGlobal(NULL, TRUE, &stream) != S_OK ||
+		IWICImagingFactory_CreateEncoder(factory, &GUID_ContainerFormatPng, NULL, &encoder) != S_OK)
+		return 2;
+	if (IWICBitmapEncoder_Initialize(encoder, stream, WICBitmapEncoderNoCache) != S_OK ||
+		IWICBitmapEncoder_CreateNewFrame(encoder, &frame, NULL) != S_OK || IWICBitmapFrameEncode_Initialize(frame, NULL) != S_OK)
+		return 3;
+	if (IWICBitmapFrameEncode_SetSize(frame, WIDE, HIGH) != S_OK || IWICBitmapFrameEncode_SetPixelFormat(frame, &format) != S_OK ||
+		IWICBitmapFrameEncode_WriteSource_Proxy(frame, (IWICBitmapSource *)bitmap, NULL) != S_OK)
+		return 4;
+	if (IWICBitmapFrameEncode_Commit(frame) != S_OK || IWICBitmapEncoder_Commit(encoder) != S_OK)
+		return 5;
+	if (IStream_Stat(stream, &described, STATFLAG_NONAME) != S_OK || !described.cbSize.QuadPart || described.cbSize.QuadPart > limit)
+		return 6;
+	if (IStream_Seek(stream, start, STREAM_SEEK_SET, NULL) != S_OK ||
+		IWICImagingFactory_CreateDecoderFromStream(factory, stream, NULL, WICDecodeMetadataCacheOnDemand, &decoder) != S_OK)
+		return 7;
+	if (IWICBitmapDecoder_GetFrame(decoder, 0, &decoded) != S_OK ||
+		WICConvertBitmapSource(&GUID_WICPixelFormat32bppBGRA, (IWICBitmapSource *)decoded, &converted) != S_OK ||
+		IWICBitmapSource_CopyPixels(converted, NULL, WIDE * 4, sizeof back, back) != S_OK)
+		return 8;
+	for (at = 0; at < (int)sizeof back; ++at)
+		if (back[at] != source[at])
+			return 9;
+	IWICBitmapSource_Release(converted);
+	IWICBitmapFrameDecode_Release(decoded);
+	IWICBitmapDecoder_Release(decoder);
+	IWICBitmapFrameEncode_Release(frame);
+	IWICBitmapEncoder_Release(encoder);
+	IStream_Release(stream);
+	IWICBitmap_Release(bitmap);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	WCHAR path[MAX_PATH];
@@ -158,6 +221,10 @@ int raven_entry(void)
 		return 30 + failed;
 	if ((failed = round_trip(factory, &GUID_ContainerFormatPng, &empty, 0)))
 		return 40 + failed;
+	if ((failed = png_packs(factory, FALSE, 2000)))
+		return 50 + failed;
+	if ((failed = png_packs(factory, TRUE, 256 * 64 * 4 + 1000)))
+		return 60 + failed;
 	IWICImagingFactory_Release(factory);
 	ULONG_PTR token;
 	StartupInput input = {1, NULL, FALSE, FALSE};
