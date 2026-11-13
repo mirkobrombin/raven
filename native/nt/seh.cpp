@@ -116,8 +116,9 @@ public:
 		mine().active.push_back({origin, context.process.callback_depth(), mark});
 		if (trace)
 		{
-			std::fprintf(stderr, "seh dispatch begin: code=%x active=%zu depth=%zu scratch=%zx params=%x info1=%llx info2=%llx rsp=%llx\n", le32(record, 0), mine().active.size(),
-				context.process.callback_depth(), mine().scratch.mark(), le32(record, 0x18), (unsigned long long)load64(record, 0x28), (unsigned long long)load64(record, 0x30),
+			std::fprintf(stderr, "seh dispatch begin: code=%x active=%zu depth=%zu scratch=%zx params=%x info0=%llx info1=%llx info2=%llx rsp=%llx\n", le32(record, 0),
+				mine().active.size(), context.process.callback_depth(), mine().scratch.mark(), le32(record, 0x18), (unsigned long long)load64(record, 0x20),
+				(unsigned long long)load64(record, 0x28), (unsigned long long)load64(record, 0x30),
 				(unsigned long long)context_rsp(origin));
 			if (le32(record, 0x18) >= 2) {
 				try {
