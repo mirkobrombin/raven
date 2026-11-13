@@ -47,6 +47,23 @@ static void CALLBACK finished(PTP_CALLBACK_INSTANCE instance, PVOID context, PVO
 	SetEvent(io_done);
 }
 
+static volatile LONG work_count, work_chained, work_threads[128], work_overflow;
+
+/* The first three hundred callbacks each ask for one more run, as .NET's dispatcher asks for another thread before it takes an item
+   from its queue. Each notes the thread it runs on. */
+static void CALLBACK counted(PTP_CALLBACK_INSTANCE instance, PVOID context, PTP_WORK work)
+{
+	const LONG self = (LONG)GetCurrentThreadId();
+	int slot = 0;
+	while (slot < 128 && work_threads[slot] != self && InterlockedCompareExchange(&work_threads[slot], self, 0) != 0)
+		++slot;
+	if (slot == 128)
+		work_overflow = 1;
+	if (InterlockedIncrement(&work_chained) <= 300)
+		SubmitThreadpoolWork(work);
+	InterlockedIncrement(&work_count);
+}
+
 static FILETIME from_now(LONGLONG milliseconds)
 {
 	ULARGE_INTEGER due;
@@ -139,5 +156,17 @@ int raven_entry(void)
 		!io_instance) return 22;
 	CloseThreadpoolIo(io);
 	CloseHandle(file);
+
+	/* Submitted work waits in the pool's queue for a free worker, as on Windows, rather than starting a thread each: three hundred
+	   submissions in a row and three hundred more from the callbacks all run, on workers the pool reuses, and the wait sees every one of
+	   them finished. */
+	PTP_WORK work = CreateThreadpoolWork(counted, NULL, NULL);
+	if (!work) return 23;
+	for (int index = 0; index < 300; ++index)
+		SubmitThreadpoolWork(work);
+	WaitForThreadpoolWorkCallbacks(work, FALSE);
+	if (work_count != 600) return 24;
+	if (work_overflow) return 25;
+	CloseThreadpoolWork(work);
 	return 0;
 }

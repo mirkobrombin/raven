@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <map>
 #include <mutex>
+#include <thread>
 
 namespace raven {
 
@@ -165,6 +167,9 @@ class WorkObject : public KernelObject {
 public:
 	uint64_t callback = 0, parameter = 0;
 	std::vector<std::shared_ptr<GuestThread>> running;
+	// The guest RTL's thread_pool_work for this item once the pool's workers run it: callback, context, handle and the submissions not
+	// yet finished.
+	uint64_t block = 0;
 };
 
 // A private pool only bounds its threads; work items run on guest threads whichever pool they name.
@@ -1543,7 +1548,71 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	});
 
 
-	// Thread pool work items run on short-lived guest threads; waiting on them joins those threads.
+	// Submitted work is queued for the pool's worker threads, which the guest RTL runs: each takes one item after another from the pool's
+	// completion port. Windows keeps as many workers running as there are processors and adds one when every running worker waits, or
+	// when the queue has not moved for a while; a program that submits a request for a thread every time it takes an item, as .NET's
+	// dispatcher does, would otherwise start a thread for each of them, all contending for the same work. Without the guest RTL (a 32-bit
+	// process) every submission runs on a thread of its own.
+	struct WorkPool {
+		uint64_t queue = 0, worker = 0;
+		bool unavailable = false;
+		std::vector<std::shared_ptr<GuestThread>> workers;
+		int32_t taken = 0;
+		std::chrono::steady_clock::time_point progress{};
+	};
+	auto pool = std::make_shared<WorkPool>();
+	const auto load32 = [&context](uint64_t address) {
+		int32_t value = 0;
+		const auto bytes = context.process.read_memory(address, 4);
+		std::memcpy(&value, bytes.data(), 4);
+		return value;
+	};
+	const auto add32 = [&context](uint64_t address, int32_t delta) {
+		for (;;) {
+			int32_t value = 0;
+			const auto bytes = context.process.read_memory(address, 4);
+			std::memcpy(&value, bytes.data(), 4);
+			if (context.process.compare_exchange(address, uint32_t(value), uint32_t(value + delta), 4) == uint32_t(value))
+				return;
+		}
+	};
+	const auto work_finished = [load32](const std::shared_ptr<WorkObject> &work) {
+		return std::all_of(work->running.begin(), work->running.end(), [](const auto &thread) { return thread->state == GuestThread::State::done; }) &&
+			(!work->block || load32(work->block + 24) <= 0);
+	};
+	const auto grow = [pool, load32, &context, &threads] {
+		if (!pool->queue)
+			return;
+		const int32_t free = load32(pool->queue + 16), queued = load32(pool->queue + 20), taken = load32(pool->queue + 24);
+		const auto now = std::chrono::steady_clock::now();
+		if (taken != pool->taken || queued <= 0) {
+			pool->taken = taken;
+			pool->progress = now;
+		}
+		if (queued <= free)
+			return;
+		std::erase_if(pool->workers, [](const auto &thread) { return thread->state == GuestThread::State::done; });
+		static const size_t processors = std::max(1U, std::min(64U, std::thread::hardware_concurrency()));
+		const auto running = size_t(std::count_if(pool->workers.begin(), pool->workers.end(), [](const auto &thread) {
+			return thread->state == GuestThread::State::ready || thread->state == GuestThread::State::running;
+		}));
+		// The limit leaves room for the program's own threads under the runtime's limit on guest threads.
+		const bool stalled = now - pool->progress >= std::chrono::milliseconds(500);
+		if ((running >= processors && !stalled) || pool->workers.size() >= 192)
+			return;
+		// A new thread maps its stack, which a serial guest answered without stopping cannot have done: the next decision adds it.
+		if (context.process.serving() && !context.process.parallel())
+			return;
+		try {
+			pool->workers.push_back(threads.create(pool->worker, pool->queue, 1024 * 1024, false));
+		} catch (const std::runtime_error &) {
+			return;
+		}
+		pool->progress = now;
+	};
+	threads.add_service(grow);
+	threads.add_pump(grow);
+	threads.add_external([pool, load32] { return pool->queue && load32(pool->queue + 20) > 0; });
 	registry.add("CreateThreadpoolWork", 3, [&objects](ApiCall &call) {
 		auto work = std::make_shared<WorkObject>();
 		work->callback = call[0];
@@ -1555,23 +1624,71 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			if (const auto group = objects.object_as<CleanupGroupObject>(call.load_pointer(call[2] + 2 * call.pointer_width())))
 				group->members.push_back(made.value);
 	});
-	registry.add("SubmitThreadpoolWork", 1, [&objects, &threads, &context](ApiCall &call) {
+	registry.add("SubmitThreadpoolWork", 1, [&registry, &objects, &threads, &context, pool, add32, grow](ApiCall &call) {
+		// A submission wakes a worker and may start one, which needs the thread stopped: answered without stopping, a call that gave up
+		// half way would run again and queue its work twice.
+		if (call.process.serving()) {
+			call.process.decline_served();
+			return;
+		}
 		const auto work = objects.object_as<WorkObject>(call[0]);
 		if (!work)
 			return;
-		// TP_CALLBACK_INSTANCE is opaque to callbacks; the work handle itself stands in for it.
-		const auto instance = context.allocator.allocate(64);
-		const auto thread = threads.create(work->callback, work->parameter, 1024 * 1024, false);
-		thread->arguments = {instance, work->parameter, call[0]};
-		work->running.push_back(thread);
+		const auto associate = registry.find("CreateIoCompletionPort");
+		const auto post = registry.find("PostQueuedCompletionStatus");
+		if (!pool->queue && !pool->unavailable) {
+			pool->unavailable = true;
+			uint64_t dequeue = 0;
+			try {
+				if (call.pointer_width() == 8 && associate && post) {
+					pool->worker = context.modules.resolve({"raven-rtl.dll", "RavenThreadpoolWorker", 0, false, 0});
+					dequeue = context.modules.resolve({"kernel32.dll", "GetQueuedCompletionStatus", 0, false, 0});
+				}
+			} catch (const std::exception &) {
+				dequeue = 0;
+			}
+			if (dequeue) {
+				ApiCall made(call.process, call.environment, {UINT64_MAX, 0, 0, 0});
+				associate->second(made);
+				if (made.result) {
+					const auto queue = context.allocator.allocate(32);
+					call.store_pointer(queue, dequeue);
+					call.store_pointer(queue + 8, made.result);
+					call.store<uint32_t>(queue + 16, 0);
+					call.store<uint32_t>(queue + 20, 0);
+					call.store<uint32_t>(queue + 24, 0);
+					pool->queue = queue;
+					pool->unavailable = false;
+				}
+			}
+		}
+		if (!pool->queue) {
+			// TP_CALLBACK_INSTANCE is opaque to callbacks; the work handle itself stands in for it.
+			const auto instance = context.allocator.allocate(64);
+			const auto thread = threads.create(work->callback, work->parameter, 1024 * 1024, false);
+			thread->arguments = {instance, work->parameter, call[0]};
+			work->running.push_back(thread);
+			return;
+		}
+		if (!work->block) {
+			work->block = context.allocator.allocate(32);
+			call.store_pointer(work->block, work->callback);
+			call.store_pointer(work->block + 8, work->parameter);
+			call.store_pointer(work->block + 16, call[0]);
+			call.store<uint32_t>(work->block + 24, 0);
+		}
+		add32(work->block + 24, 1);
+		add32(pool->queue + 20, 1);
+		ApiCall posted(call.process, call.environment, {call.load_pointer(pool->queue + 8), 0, work->block, 0});
+		post->second(posted);
+		grow();
 	});
-	registry.add("WaitForThreadpoolWorkCallbacks", 2, [&objects, &threads](ApiCall &call) {
+	// Callbacks still queued run too: the completion port they wait in keeps them, so only waiting for every submission is exact here.
+	registry.add("WaitForThreadpoolWorkCallbacks", 2, [&objects, &threads, work_finished](ApiCall &call) {
 		const auto work = objects.object_as<WorkObject>(call[0]);
 		if (!work)
 			return;
-		threads.block([work] {
-			return std::all_of(work->running.begin(), work->running.end(), [](const auto &thread) { return thread->state == GuestThread::State::done; });
-		}, std::nullopt);
+		threads.block([work, work_finished] { return work_finished(work); }, std::nullopt);
 	});
 	registry.add("CloseThreadpoolWork", 1, [&objects](ApiCall &call) { objects.close(call[0]); });
 	registry.add("CreateThreadpool", 1, [&objects](ApiCall &call) {
@@ -1602,8 +1719,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		else
 			call.ret(made.value);
 	});
-	// The members' timers stop and their callbacks finish (pending ones run too, since submitted work starts at once), then their handles close.
-	registry.add("CloseThreadpoolCleanupGroupMembers", 3, [&objects, &threads](ApiCall &call) {
+	// The members' timers stop and their callbacks finish (queued ones run too: the pool's completion port keeps them), then their handles close.
+	registry.add("CloseThreadpoolCleanupGroupMembers", 3, [&objects, &threads, work_finished](ApiCall &call) {
 		const auto group = objects.object_as<CleanupGroupObject>(call[0]);
 		if (!group)
 			return;
@@ -1618,18 +1735,17 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				timers.push_back(timer);
 			}
 		}
-		threads.block([works, timers] {
+		threads.block([works, timers, work_finished] {
 			const auto done = [](const auto &thread) { return !thread || thread->state == GuestThread::State::done; };
-			return std::all_of(works.begin(), works.end(), [done](const auto &work) {
-				return std::all_of(work->running.begin(), work->running.end(), done);
-			}) && std::all_of(timers.begin(), timers.end(), [done](const auto &timer) { return done(timer->running); });
+			return std::all_of(works.begin(), works.end(), work_finished) &&
+				std::all_of(timers.begin(), timers.end(), [done](const auto &timer) { return done(timer->running); });
 		}, std::nullopt);
 		for (const auto member : group->members)
 			objects.close(member);
 		group->members.clear();
 	});
 	registry.add("CloseThreadpoolCleanupGroup", 1, [&objects](ApiCall &call) { objects.close(call[0]); });
-	// The pool grows as callbacks need threads, so a long callback needs no notice; another thread is always available.
+	// The pool adds a thread when its queue stops moving, so a long callback needs no notice.
 	registry.add("CallbackMayRunLong", 1, [](ApiCall &call) { call.ret(1); });
 
 	// Registered waits are checked whenever every thread waits; a satisfied one starts its callback on a new guest thread.

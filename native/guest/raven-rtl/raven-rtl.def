@@ -58,3 +58,4 @@ EXPORTS
  RtlDeleteElementGenericTableAvl
  RavenIoCompletionWorker
  RavenThreadpoolIoWorker
+ RavenThreadpoolWorker

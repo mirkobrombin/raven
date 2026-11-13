@@ -558,3 +558,44 @@ DWORD WINAPI RavenThreadpoolIoWorker(struct io_completion_binding *binding)
 		InterlockedDecrement(&io->running);
 	}
 }
+
+/* ---- the worker threads of SubmitThreadpoolWork ----
+ * Windows queues submitted work and hands it to the pool's threads, which take one item after another; it adds a thread only when none
+ * is free to take the next. Each submission is posted to the pool's completion port with its work item as the key. The workers count
+ * themselves free while they wait, and the items taken, so that the runtime knows when the queue needs another thread; a work item
+ * counts its submissions not yet finished, which a wait for its callbacks looks at. The runtime lays both out and starts the threads. */
+struct thread_pool_work {
+	void (CALLBACK *callback)(void *instance, void *context, void *work);
+	void *context;
+	void *handle;
+	volatile LONG pending;
+};
+
+struct thread_pool_queue {
+	BOOL (WINAPI *dequeue)(HANDLE port, DWORD *bytes, ULONG_PTR *key, LPOVERLAPPED *operation, DWORD timeout);
+	HANDLE port;
+	volatile LONG free;
+	volatile LONG queued;
+	volatile LONG taken;
+};
+
+DWORD WINAPI RavenThreadpoolWorker(struct thread_pool_queue *pool)
+{
+	for (;;) {
+		DWORD bytes = 0;
+		ULONG_PTR key = 0;
+		LPOVERLAPPED operation = NULL;
+		ULONG_PTR instance[8] = {0};
+		struct thread_pool_work *work;
+		InterlockedIncrement(&pool->free);
+		pool->dequeue(pool->port, &bytes, &key, &operation, INFINITE);
+		InterlockedDecrement(&pool->free);
+		if (!key)
+			continue;
+		InterlockedDecrement(&pool->queued);
+		InterlockedIncrement(&pool->taken);
+		work = (struct thread_pool_work *)key;
+		work->callback(instance, work->context, work->handle);
+		InterlockedDecrement(&work->pending);
+	}
+}
