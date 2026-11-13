@@ -5,7 +5,8 @@
 /* Raven shell component: the shell link object (CLSID_ShellLink).
  *
  * A link is created in memory through IShellLinkW and written or read through IPersistFile in the binary format of
- * [MS-SHLLINK]: the header, the local base path in a link information block, and the string data in UTF-16. */
+ * [MS-SHLLINK]: the header, the local base path in a link information block, and the string data in UTF-16. Its IPropertyStore keeps
+ * properties in memory, as a jump list gives each task its title. */
 #define CINTERFACE
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -13,6 +14,7 @@
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
 #include <shobjidl.h>
+#include <propsys.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -30,6 +32,8 @@
 typedef struct {
 	const IShellLinkWVtbl *link_vtbl;
 	const IPersistFileVtbl *file_vtbl;
+	const IPropertyStoreVtbl *store_vtbl;
+	IPropertyStore *properties;
 	LONG refs;
 	WCHAR path[MAX_PATH], relative[MAX_PATH], directory[MAX_PATH], icon[MAX_PATH], current[MAX_PATH];
 	WCHAR arguments[TEXT_MAX], description[TEXT_MAX];
@@ -77,6 +81,9 @@ static HRESULT get_text(const WCHAR *from, WCHAR *to, int capacity)
 
 #define LINK_OF_LINK(self) ((LinkObject *)(self))
 #define LINK_OF_FILE(self) ((LinkObject *)((char *)(self) - offsetof(LinkObject, file_vtbl)))
+#define LINK_OF_STORE(self) ((LinkObject *)((char *)(self) - offsetof(LinkObject, store_vtbl)))
+
+HRESULT create_memory_store(IPropertyStore **out);
 
 /* IUnknown -------------------------------------------------------------------------------------------------- */
 
@@ -89,6 +96,10 @@ static HRESULT link_query(LinkObject *link, REFIID iid, void **out)
 		*out = &link->link_vtbl;
 	} else if (same_guid(iid, &IID_IPersistFile) || same_guid(iid, &IID_IPersist)) {
 		*out = &link->file_vtbl;
+	} else if (same_guid(iid, &IID_IPropertyStore)) {
+		if (!link->properties && FAILED(create_memory_store(&link->properties)))
+			return E_OUTOFMEMORY;
+		*out = &link->store_vtbl;
 	} else {
 		return E_NOINTERFACE;
 	}
@@ -104,8 +115,11 @@ static ULONG link_add_ref(LinkObject *link)
 static ULONG link_release(LinkObject *link)
 {
 	LONG left = InterlockedDecrement(&link->refs);
-	if (!left)
+	if (!left) {
+		if (link->properties)
+			IPropertyStore_Release(link->properties);
 		HeapFree(GetProcessHeap(), 0, link);
+	}
 	return (ULONG)left;
 }
 
@@ -590,6 +604,28 @@ static const IPersistFileVtbl file_vtbl = {
 	pf_query, pf_add_ref, pf_release, pf_class_id, pf_is_dirty, pf_load, pf_save, pf_save_completed, pf_current_file,
 };
 
+/* IPropertyStore: the link's own store answers. */
+static HRESULT WINAPI ps_query(IPropertyStore *self, REFIID iid, void **out) { return link_query(LINK_OF_STORE(self), iid, out); }
+static ULONG WINAPI ps_add_ref(IPropertyStore *self) { return link_add_ref(LINK_OF_STORE(self)); }
+static ULONG WINAPI ps_release(IPropertyStore *self) { return link_release(LINK_OF_STORE(self)); }
+static HRESULT WINAPI ps_count(IPropertyStore *self, DWORD *count) { return IPropertyStore_GetCount(LINK_OF_STORE(self)->properties, count); }
+static HRESULT WINAPI ps_at(IPropertyStore *self, DWORD index, PROPERTYKEY *key)
+{
+	return IPropertyStore_GetAt(LINK_OF_STORE(self)->properties, index, key);
+}
+static HRESULT WINAPI ps_get(IPropertyStore *self, REFPROPERTYKEY key, PROPVARIANT *value)
+{
+	return IPropertyStore_GetValue(LINK_OF_STORE(self)->properties, key, value);
+}
+static HRESULT WINAPI ps_set(IPropertyStore *self, REFPROPERTYKEY key, REFPROPVARIANT value)
+{
+	LINK_OF_STORE(self)->dirty = TRUE;
+	return IPropertyStore_SetValue(LINK_OF_STORE(self)->properties, key, value);
+}
+static HRESULT WINAPI ps_commit(IPropertyStore *self) { return IPropertyStore_Commit(LINK_OF_STORE(self)->properties); }
+
+static const IPropertyStoreVtbl store_vtbl = {ps_query, ps_add_ref, ps_release, ps_count, ps_at, ps_get, ps_set, ps_commit};
+
 HRESULT raven_make_shell_link(REFIID iid, void **out)
 {
 	LinkObject *link = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(LinkObject));
@@ -598,6 +634,7 @@ HRESULT raven_make_shell_link(REFIID iid, void **out)
 		return E_OUTOFMEMORY;
 	link->link_vtbl = &link_vtbl;
 	link->file_vtbl = &file_vtbl;
+	link->store_vtbl = &store_vtbl;
 	link->refs = 1;
 	link->show = SW_SHOWNORMAL;
 	result = link_query(link, iid, out);

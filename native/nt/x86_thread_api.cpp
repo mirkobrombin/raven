@@ -41,16 +41,17 @@ uint32_t NativeX86Threads::wait(uint64_t handle, uint32_t milliseconds)
 	if (milliseconds != UINT32_MAX)
 		wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
 	bool looked = false;
+	WaitedObjects waited(objects, std::span<const uint64_t>(&handle, 1));
 	for (;;) {
-		const int state = objects.signaled(handle, id);
+		const int state = waited.signaled(0, id);
 		if (state < 0) {
 			environment.set_last_error(state == -3 ? 5 : 6);
 			return wait_failed;
 		}
-		if (state == 1 && objects.try_consume(handle, id)) {
+		if (state == 1 && waited.try_consume(0, id)) {
 			return 0;
 		}
-		const auto ready = [&] { return objects.signaled(handle, id) == 1; };
+		const auto ready = [&] { return waited.signaled(0, id) == 1; };
 		if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake)) {
 			// Once, a wait that has run out still takes in what the host finished meanwhile.
 			if (!looked) {
@@ -62,9 +63,8 @@ uint32_t NativeX86Threads::wait(uint64_t handle, uint32_t milliseconds)
 		}
 		// An object that turns signaled by itself, such as a timer, is looked at again when it says.
 		auto until = wake;
-		if (const auto object = objects.object(handle))
-			if (const auto due = object->wakes_at(); due && (!until || *due < *until))
-				until = due;
+		if (const auto due = waited.wakes_at(0); due && (!until || *due < *until))
+			until = due;
 		threads.block(ready, until);
 	}
 }

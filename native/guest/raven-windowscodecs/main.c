@@ -60,7 +60,7 @@ static HRESULT WINAPI class_CreateInstance(IClassFactory *iface, IUnknown *outer
 	*out = NULL;
 	if (outer)
 		return CLASS_E_NOAGGREGATION;
-	if (IsEqualGUID(clsid, &CLSID_WICImagingFactory))
+	if (IsEqualGUID(clsid, &CLSID_WICImagingFactory) || IsEqualGUID(clsid, &CLSID_WICImagingFactory2))
 		return wic_factory_create(riid, out);
 	if (IsEqualGUID(clsid, &CLSID_WICDefaultFormatConverter))
 		return create_converter(riid, out);
@@ -96,6 +96,7 @@ static const IClassFactoryVtbl class_vtbl = {
 
 static class_factory factories[] = {
 	{{&class_vtbl}, &CLSID_WICImagingFactory},
+	{{&class_vtbl}, &CLSID_WICImagingFactory2},
 	{{&class_vtbl}, &CLSID_WICDefaultFormatConverter},
 	{{&class_vtbl}, &CLSID_WICBmpDecoder},
 	{{&class_vtbl}, &CLSID_WICBmpEncoder},

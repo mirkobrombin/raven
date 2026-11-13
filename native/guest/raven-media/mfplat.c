@@ -1350,6 +1350,23 @@ __declspec(dllexport) HRESULT WINAPI MFCreateWaveFormatExFromMFMediaType(IMFMedi
 	return S_OK;
 }
 
+/* No transform is registered here, so an enumeration finds none: it succeeds with a count of zero and no array, as Media Foundation
+ * answers when nothing matches. paint.net asks this way whether a video codec is installed before it offers a file type. */
+__declspec(dllexport) HRESULT WINAPI MFTEnumEx(GUID category, UINT32 flags, const MFT_REGISTER_TYPE_INFO *input_type, const MFT_REGISTER_TYPE_INFO *output_type,
+	IMFActivate ***activates,
+	UINT32 *count)
+{
+	(void)category;
+	(void)flags;
+	(void)input_type;
+	(void)output_type;
+	if (!activates || !count)
+		return E_INVALIDARG;
+	*activates = NULL;
+	*count = 0;
+	return S_OK;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
 	(void)instance;

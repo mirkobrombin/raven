@@ -275,8 +275,10 @@ void draw_part(Shapes &shapes, const Palette &tone, const std::string &klass, in
 				for (int column = 0; column <= row; ++column)
 					shapes.circle(box.right - 3 - column * 4, box.bottom - 3 - (2 - row) * 4, 1, tone.thumb, std::nullopt);
 	} else if (klass == "progress") {
-		if (part == 1 || part == 2) // the track: a thin rounded groove
+		if (part == 1 || part == 2) { // the track: a thin rounded groove on the surface, which covers the whole bar as Windows' does
+			shapes.fill(box.left, box.top, box.right, box.bottom, tone.surface);
 			shapes.rounded(box.left, box.cy() - 2, box.right, box.cy() + 2, 2, rgb(0xd6, 0xd6, 0xd6), std::nullopt);
+		}
 		else if (part == 3 || part == 4 || part == 5 || part == 6)
 			shapes.fill(box.left, std::max(box.top, box.cy() - 2), box.right, std::min(box.bottom, box.cy() + 2), tone.accent);
 	} else if (klass == "trackbar") {
@@ -291,8 +293,8 @@ void draw_part(Shapes &shapes, const Palette &tone, const std::string &klass, in
 				std::nullopt);
 		}
 	} else if (klass == "spin") {
-		if (state == 2 || state == 3)
-			shapes.rounded(box.left, box.top, box.right, box.bottom, 3, state == 3 ? tone.subtle_pressed : tone.subtle_hot, std::nullopt);
+		// The button covers its whole rectangle, as the one of Windows does: Windows Forms draws it over a surface it has not cleared.
+		shapes.fill(box.left, box.top, box.right, box.bottom, state == 3 ? tone.control_pressed : state == 2 ? tone.control_hot : tone.white);
 		const char direction = part == 1 ? 'u' : part == 2 ? 'd' : part == 3 ? 'r' : 'l';
 		shapes.chevron(box.cx(), box.cy(), std::min(box.width(), box.height()) * 0.45, direction, state == 4 ? tone.text_disabled : tone.glyph);
 	} else if (klass == "taskdialog") {
@@ -358,7 +360,7 @@ std::optional<DesktopRegion> clipped(const std::optional<DesktopRegion> &clip, c
 
 bool rounded_part(const std::string &klass, int part)
 {
-	return klass == "button" || (klass == "tab" && part != 9 && part != 10) || klass == "combobox" || klass == "edit" || klass == "spin"
+	return klass == "button" || (klass == "tab" && part != 9 && part != 10) || klass == "combobox" || klass == "edit"
 		|| klass == "datepicker" || klass == "tooltip" || (klass == "menu" && part != 7) || (klass == "taskdialog" && part == 11);
 }
 

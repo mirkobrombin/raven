@@ -1,5 +1,5 @@
 // Answers the guest gives without the runtime: the text of a GUID, a point in a rectangle, the thread's DPI awareness context, the
-// keyboard layout, WinEvent hooks and the depth of a list. The parallel run takes the served forms, which must answer the same.
+// keyboard layout, WinEvent hooks, the depth of a list and a trace nobody reads. The parallel run takes the served forms, which must answer the same.
 #define _WIN32_WINNT 0x0a00
 #include <windows.h>
 #include <objbase.h>
@@ -43,5 +43,46 @@ int raven_entry(void)
 	InterlockedPushEntrySList(&list, &entries[1]);
 	if (QueryDepthSList(&list) != 2 || InterlockedPopEntrySList(&list) != &entries[1] || QueryDepthSList(&list) != 1)
 		return 10;
+	/* With no trace asked for, what the runtime's own libraries report through RavenTrace costs the program nothing, however often
+	   they do: a code over 100 says how many tenths of a second half a million reports took. */
+	void (WINAPI *trace)(const char *) = (void (WINAPI *)(const char *))GetProcAddress(LoadLibraryW(L"ravenhost.dll"), "RavenTrace");
+	if (!trace)
+		return 11;
+	const ULONGLONG began = GetTickCount64();
+	for (int index = 0; index < 500000; ++index)
+		trace("guest answers: nothing to say");
+	const ULONGLONG took = GetTickCount64() - began;
+	if (took > 500)
+		return took > 15000 ? 250 : 100 + (int)(took / 100);
+	/* A frame unwound by its unwind data costs a function call, as a runtime that walks the stacks of its threads for each collection
+	   unwinds thousands a second: the caller of this function is found, and 12 says two hundred thousand unwinds took too long. */
+	CONTEXT here, walked;
+	DWORD64 base = 0, establisher = 0;
+	void *handler_data = NULL;
+	RtlCaptureContext(&here);
+	PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(here.Rip, &base, NULL);
+	if (!function)
+		return 13;
+	const ULONGLONG unwinding = GetTickCount64();
+	for (int index = 0; index < 200000; ++index) {
+		walked = here;
+		RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, walked.Rip, function, &walked, &handler_data, &establisher, NULL);
+	}
+	if (walked.Rsp <= here.Rsp || walked.Rip == here.Rip || !establisher)
+		return 14;
+	if (GetTickCount64() - unwinding > 700)
+		return 12;
+	/* The same through ntdll, where the .NET runtime takes it from: 15 says it took too long there. */
+	PEXCEPTION_ROUTINE (NTAPI *unwind)(DWORD, DWORD64, DWORD64, PRUNTIME_FUNCTION, PCONTEXT, PVOID *, PDWORD64, PKNONVOLATILE_CONTEXT_POINTERS) =
+		(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlVirtualUnwind");
+	if (!unwind)
+		return 16;
+	const ULONGLONG again = GetTickCount64();
+	for (int index = 0; index < 200000; ++index) {
+		walked = here;
+		unwind(UNW_FLAG_NHANDLER, base, walked.Rip, function, &walked, &handler_data, &establisher, NULL);
+	}
+	if (walked.Rsp <= here.Rsp || GetTickCount64() - again > 700)
+		return 15;
 	return 0;
 }

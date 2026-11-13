@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 
-SOURCES = ("heap", "kernel", "memory", "tables")
+SOURCES = ("heap", "kernel", "memory", "tables", "unwind")
 
 
 def main():

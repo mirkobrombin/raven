@@ -48,7 +48,9 @@ IconBitmap decode_icon_dib(std::span<const uint8_t> bytes)
 	const size_t mask_stride = ((size_t(width) + 31) / 32) * 4;
 	const size_t color_offset = 40 + size_t(colors) * 4;
 	const size_t mask_offset = color_offset + color_stride * height;
-	if (mask_offset + mask_stride * height > bytes.size())
+	// A 32-bit icon may end after its pixels, as Windows accepts: its alpha then says which pixels are transparent.
+	const bool alpha_mask = depth == 32 && mask_offset == bytes.size();
+	if (!alpha_mask && mask_offset + mask_stride * height > bytes.size())
 		throw std::runtime_error("truncated icon DIB palette, pixels or AND mask");
 	const size_t count = size_t(width) * height;
 	IconBitmap icon{{width, height, std::vector<uint8_t>(count * 4)},
@@ -62,7 +64,8 @@ IconBitmap decode_icon_dib(std::span<const uint8_t> bytes)
 		for (size_t x = 0; x < width; ++x) {
 			const size_t pixel = y * width + x;
 			const size_t output = pixel * 4;
-			icon.and_mask[pixel] = uint8_t((bytes[mask_row + x / 8] >> (7 - x % 8)) & 1);
+			if (!alpha_mask)
+				icon.and_mask[pixel] = uint8_t((bytes[mask_row + x / 8] >> (7 - x % 8)) & 1);
 			if (depth <= 8) {
 				const size_t bit = x * depth;
 				const auto index = (bytes[color_row + bit / 8] >> (8 - depth - bit % 8)) & ((1U << depth) - 1);
@@ -87,6 +90,8 @@ IconBitmap decode_icon_dib(std::span<const uint8_t> bytes)
 					icon.color.rgba[output + channel] = bytes[source + 2 - channel];
 				const uint8_t alpha = depth == 32 ? bytes[source + 3] : uint8_t(255);
 				icon.color.rgba[output + 3] = alpha;
+				if (alpha_mask)
+					icon.and_mask[pixel] = alpha == 0;
 				if (depth == 32 && alpha)
 					icon.has_alpha = true;
 			}

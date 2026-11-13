@@ -111,6 +111,7 @@ void gp_pixel_write(GpImage *image, INT x, INT y, ARGB color);
 ARGB gp_attributes_apply(const GpImageAttributes *attributes, ARGB color);
 GpStatus gp_bitmap_new(INT width, INT height, PixelFormat format, GpImage **out);
 void gp_image_release(GpImage *image);
+GpStatus gp_effect_render(const void *effect, const GpImage *image, const RECT *area, GpImage **out, INT *offset);
 
 GpStatus GDIPAPI GdipDisposeImage(GpImage *image);
 GpStatus GDIPAPI GdipCloneImage(GpImage *image, GpImage **out);

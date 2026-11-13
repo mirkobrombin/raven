@@ -91,6 +91,7 @@ const Adapter adapters[] = {
 	{"GetPrivateProfileStructA", {0, 1, 4}},
 	{"WritePrivateProfileStructA", {0, 1, 4}},
 	{"GetDriveTypeA", {0}},
+	{"FindActCtxSectionStringA", {3}},
 	{"GetDateFormatA", {3}, 4, 5},
 	{"GetTimeFormatA", {3}, 4, 5},
 	{"GetDiskFreeSpaceA", {0}},

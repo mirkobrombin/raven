@@ -22,6 +22,10 @@ ROOTS = (
      "df545bf919a2439c36983b54cdfc903dfa4f37d3996d8d84b4c31eec6f3c163e"),
     ("MicRooCerAut2011_2011_03_22.crt", "http://www.microsoft.com/pki/certs/MicRooCerAut2011_2011_03_22.crt",
      "847df6a78497943f27fc72eb93f9a637320a02b561d0a91b09e87a7807ed7c61"),
+    # The root of Microsoft's signing service for other publishers, whose signatures paint.net's setup checks on its own files.
+    ("MicrosoftIdentityVerificationRootCA2020.crt",
+     "http://www.microsoft.com/pkiops/certs/Microsoft%20Identity%20Verification%20Root%20Certificate%20Authority%202020.crt",
+     "5367f20c7ade0e2bca790915056d086b720c33c1fa2a2661acf787e3292e1270"),
 )
 
 

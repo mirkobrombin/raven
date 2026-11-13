@@ -1,8 +1,8 @@
 #include <windows.h>
 
 // The basic information of a child that has ended: NtQueryInformationProcess answers its exit status, its id and this process as
-// its parent once it is gone. The child (started with "child" on its command line) exits with 7. Returns 0, or the number of the
-// check that failed.
+// its parent once it is gone; a child started for a token ends the same way. The child (started with "child" on its command line)
+// exits with 7. Returns 0, or the number of the check that failed.
 typedef LONG NTSTATUS;
 __declspec(dllimport) NTSTATUS NTAPI NtQueryInformationProcess(HANDLE, int, void *, ULONG, ULONG *);
 
@@ -37,5 +37,20 @@ int raven_entry(void)
 		return 5;
 	CloseHandle(child.hThread);
 	CloseHandle(child.hProcess);
+	// The same child started for a primary token taken from this process, as a setup program that runs elevated starts the program it
+	// installed for the user.
+	HANDLE token = NULL, primary = NULL;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &token) ||
+		!DuplicateTokenEx(token, MAXIMUM_ALLOWED, NULL, SecurityImpersonation, TokenPrimary, &primary))
+		return 6;
+	if (!CreateProcessWithTokenW(primary, 0, path, line, 0, NULL, NULL, &startup, &child))
+		return 7;
+	DWORD code = 0;
+	if (WaitForSingleObject(child.hProcess, 30000) != WAIT_OBJECT_0 || !GetExitCodeProcess(child.hProcess, &code) || code != 7)
+		return 8;
+	CloseHandle(child.hThread);
+	CloseHandle(child.hProcess);
+	CloseHandle(primary);
+	CloseHandle(token);
 	return 0;
 }

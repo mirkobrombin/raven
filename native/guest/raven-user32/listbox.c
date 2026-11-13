@@ -1179,10 +1179,22 @@ LRESULT WINAPI RavenListBoxProcW(HWND window, UINT message, WPARAM wparam, LPARA
 		mouse_up(window, state, (short)LOWORD(lparam), (short)HIWORD(lparam));
 		return 0;
 	case WM_CAPTURECHANGED:
-		/* Something else took the mouse from an open drop-down, which then has no way to close but this. */
 		if (state->in_combo) {
-			if (!state->tracking_bar && (HWND)lparam != window && IsWindowVisible(window))
-				notify(window, state, LBN_SELCANCEL);
+			HWND taker = (HWND)lparam;
+			if (state->tracking_bar || taker == window || !IsWindowVisible(window))
+				return 0;
+			/* The combo box the list dropped from may hold the mouse while its button is down, as a program's own handling of the
+			   press does for it, and let it go when the button comes up: the list stays open, and takes the mouse back while it is
+			   still dropped. */
+			if (taker == state->owner || (taker && IsChild(state->owner, taker)))
+				return 0;
+			if (!taker) {
+				if (SendMessageW(state->owner, CB_GETDROPPEDSTATE, 0, 0))
+					SetCapture(window);
+				return 0;
+			}
+			/* Something else took the mouse from an open drop-down, which then has no way to close but this. */
+			notify(window, state, LBN_SELCANCEL);
 		} else if (state->captured) {
 			state->captured = FALSE;
 			KillTimer(window, SCROLL_TIMER);

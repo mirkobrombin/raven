@@ -4,7 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d2d1.h>
-#include <dwrite_2.h>
+#include <dwrite_3.h>
 
 static int outline_segments, outline_figures;
 
@@ -213,6 +213,133 @@ int raven_entry(void)
 		IDWriteFont_Release(dialog_font);
 		IDWriteFontFamily_Release(dialog_family);
 	}
+	{
+		/* The newest factory, as paint.net asks for it, and its system font set; the headers declare it for C++ alone, and its
+		   GetSystemFontSet is the method after the fifty-five of IDWriteFactory6. */
+		typedef HRESULT (STDMETHODCALLTYPE *set_function)(void *, WINBOOL, IDWriteFontSet **);
+		IUnknown *factory7;
+		IDWriteFontSet *set = NULL;
+		if (FAILED(IDWriteFactory_QueryInterface(factory, &IID_IDWriteFactory7, (void **)&factory7)))
+			return 41;
+		if (FAILED((*(set_function **)factory7)[55](factory7, FALSE, &set)) || !set || IDWriteFontSet_GetFontCount(set) == 0)
+			return 42;
+		IDWriteFontSet_Release(set);
+		IUnknown_Release(factory7);
+	}
+	{
+		/* Rendering parameters of the newest kind, with a mode only that kind names, which the older interfaces read as its nearest. */
+		IDWriteFactory3 *factory3;
+		IDWriteRenderingParams3 *params3;
+		IDWriteRenderingParams *params0;
+		if (FAILED(IDWriteFactory_QueryInterface(factory, &IID_IDWriteFactory3, (void **)&factory3)) ||
+			FAILED(IDWriteFactory3_CreateCustomRenderingParams(factory3, 2.2f, 1.0f, 1.0f, 0.0f, DWRITE_PIXEL_GEOMETRY_FLAT,
+				DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC_DOWNSAMPLED, DWRITE_GRID_FIT_MODE_DEFAULT, &params3)))
+			return 43;
+		if (IDWriteRenderingParams3_GetRenderingMode1(params3) != DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC_DOWNSAMPLED ||
+			FAILED(IDWriteRenderingParams3_QueryInterface(params3, &IID_IDWriteRenderingParams, (void **)&params0)) ||
+			IDWriteRenderingParams_GetRenderingMode(params0) != DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC)
+			return 44;
+		IDWriteRenderingParams_Release(params0);
+		IDWriteRenderingParams3_Release(params3);
+		IDWriteFactory3_Release(factory3);
+	}
+	{
+		/* A text format of the newest kind: the line spacing as one structure and font axis values, the methods after the
+		   thirty-six of IDWriteTextFormat1, which the headers declare for C++ alone. */
+		typedef HRESULT (STDMETHODCALLTYPE *spacing_function)(void *, DWRITE_LINE_SPACING *);
+		typedef HRESULT (STDMETHODCALLTYPE *axes_function)(void *, const DWRITE_FONT_AXIS_VALUE *, UINT32);
+		typedef UINT32 (STDMETHODCALLTYPE *count_function)(void *);
+		IDWriteTextFormat *format;
+		void **format3;
+		DWRITE_LINE_SPACING spacing = {DWRITE_LINE_SPACING_METHOD_UNIFORM, 20.0f, 16.0f, 0.5f, DWRITE_FONT_LINE_GAP_USAGE_ENABLED}, read = {0};
+		DWRITE_FONT_AXIS_VALUE weight = {DWRITE_FONT_AXIS_TAG_WEIGHT, 600.0f};
+		if (FAILED(IDWriteFactory_CreateTextFormat(factory, L"Arial", NULL, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+				DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"en-us", &format)) ||
+			FAILED(IDWriteTextFormat_QueryInterface(format, &IID_IDWriteTextFormat3, (void **)&format3)))
+			return 45;
+		if (FAILED(((spacing_function)(*(void ***)format3)[36])(format3, &spacing)) || FAILED(((spacing_function)(*(void ***)format3)[37])(format3, &read)) ||
+			read.method != spacing.method || read.height != 20.0f || read.baseline != 16.0f || read.leadingBefore != 0.5f ||
+			read.fontLineGapUsage != DWRITE_FONT_LINE_GAP_USAGE_ENABLED)
+			return 46;
+		if (FAILED(((axes_function)(*(void ***)format3)[38])(format3, &weight, 1)) || ((count_function)(*(void ***)format3)[39])(format3) != 1)
+			return 47;
+		{
+			/* A layout of that format is of the newest kind too and keeps its settings: the spacing, the axis values, and the line
+			   metrics with leading, the fourth method of IDWriteTextLayout3 after the eighty of IDWriteTextLayout2. */
+			typedef HRESULT (STDMETHODCALLTYPE *lines_function)(void *, DWRITE_LINE_METRICS1 *, UINT32, UINT32 *);
+			IDWriteTextLayout *layout;
+			void **layout4;
+			DWRITE_LINE_METRICS1 lines[2];
+			UINT32 line_count = 0;
+			if (FAILED(IDWriteFactory_CreateTextLayout(factory, L"Wide", 4, format, 200.0f, 100.0f, &layout)) ||
+				FAILED(IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout4, (void **)&layout4)))
+				return 48;
+			if (FAILED(((spacing_function)(*(void ***)layout4)[82])(layout4, &read)) || read.leadingBefore != 0.5f ||
+				((count_function)(*(void ***)layout4)[85])(layout4) != 1)
+				return 49;
+			if (FAILED(((lines_function)(*(void ***)layout4)[83])(layout4, lines, 2, &line_count)) || line_count != 1 || lines[0].length != 4)
+				return 50;
+			{
+				/* The layout is a text format of the newest kind as well, which reads the layout's own settings. */
+				void **layout_format;
+				if (FAILED(IUnknown_QueryInterface((IUnknown *)layout4, &IID_IDWriteTextFormat3, (void **)&layout_format)) ||
+					FAILED(((spacing_function)(*(void ***)layout_format)[37])(layout_format, &read)) || read.leadingBefore != 0.5f ||
+					IDWriteTextFormat_GetFontSize((IDWriteTextFormat *)layout_format) != 12.0f)
+					return 51;
+				IUnknown_Release((IUnknown *)layout_format);
+			}
+			IUnknown_Release((IUnknown *)layout4);
+			IDWriteTextLayout_Release(layout);
+		}
+		IUnknown_Release((IUnknown *)format3);
+		IDWriteTextFormat_Release(format);
+	}
+	/* The family a font names answers as the newer family of Windows 10: its fonts for axis values as a list, and as a set, as
+	   paint.net asks of the font its text tool starts with. */
+	IDWriteFontFamily *named = NULL;
+	IDWriteFontFamily2 *newer = NULL;
+	IDWriteFontList2 *matching = NULL;
+	IDWriteFontSet1 *of_family = NULL, *of_list = NULL;
+	IDWriteFont *listed = NULL;
+	if (FAILED(IDWriteFont_GetFontFamily(font, &named)) || FAILED(IDWriteFontFamily_QueryInterface(named, &IID_IDWriteFontFamily2, (void **)&newer)))
+		return 52;
+	if (FAILED(IDWriteFontFamily2_GetMatchingFonts(newer, (const DWRITE_FONT_AXIS_VALUE *)NULL, 0, &matching)) || !matching ||
+		IDWriteFontList2_GetFontCount(matching) != IDWriteFontFamily_GetFontCount(named) || !IDWriteFontList2_GetFontCount(matching) ||
+		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, UINT32, IDWriteFont **))(*(void ***)matching)[5])(matching, 0, &listed)) || !listed)
+		return 53;
+	if (FAILED(IDWriteFontFamily2_GetFontSet(newer, &of_family)) || FAILED(IDWriteFontList2_GetFontSet(matching, &of_list)) ||
+		IDWriteFontSet1_GetFontCount(of_family) != IDWriteFontFamily_GetFontCount(named) ||
+		IDWriteFontSet1_GetFontCount(of_list) != IDWriteFontFamily_GetFontCount(named))
+		return 54;
+	/* The family is also a list of the newer kind. */
+	IDWriteFontList2 *as_list = NULL;
+	if (FAILED(IDWriteFontFamily_QueryInterface(named, &IID_IDWriteFontList2, (void **)&as_list)) || !as_list ||
+		IDWriteFontList2_GetFontCount(as_list) != IDWriteFontFamily_GetFontCount(named))
+		return 55;
+	IDWriteFontList2_Release(as_list);
+	/* The system collection answers as the newest collection: a family by name with axis values, how it groups its families, its set
+	   and the event of its expiration. */
+	IDWriteFontCollection3 *newest = NULL;
+	IDWriteFontList2 *by_name = NULL;
+	IDWriteFontSet1 *of_collection = NULL;
+	if (FAILED(IDWriteFontCollection_QueryInterface(collection, &IID_IDWriteFontCollection3, (void **)&newest)))
+		return 56;
+	if (FAILED(IDWriteFontCollection3_GetMatchingFonts(newest, L"Arial", (const DWRITE_FONT_AXIS_VALUE *)NULL, 0, &by_name)) || !by_name ||
+		IDWriteFontList2_GetFontCount(by_name) != IDWriteFontFamily_GetFontCount(named))
+		return 57;
+	if (IDWriteFontCollection3_GetFontFamilyModel(newest) != DWRITE_FONT_FAMILY_MODEL_WEIGHT_STRETCH_STYLE ||
+		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, IDWriteFontSet1 **))(*(void ***)newest)[12])(newest, &of_collection)) || !IDWriteFontSet1_GetFontCount(of_collection) ||
+		!IDWriteFontCollection3_GetExpirationEvent(newest))
+		return 58;
+	IDWriteFontSet1_Release(of_collection);
+	IDWriteFontList2_Release(by_name);
+	IDWriteFontCollection3_Release(newest);
+	IDWriteFont_Release(listed);
+	IDWriteFontSet1_Release(of_list);
+	IDWriteFontSet1_Release(of_family);
+	IDWriteFontList2_Release(matching);
+	IDWriteFontFamily2_Release(newer);
+	IDWriteFontFamily_Release(named);
 	IDWriteGlyphRunAnalysis_Release(analysis);
 	IDWriteFontFace_Release(face);
 	IDWriteFont_Release(font);

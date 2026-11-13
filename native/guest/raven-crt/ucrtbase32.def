@@ -23,6 +23,7 @@ EXPORTS
 	??_7exception@@6B@ = raven_exception_vtable DATA
 	raven_raise_exception = raven_raise_exception@16
 	raven_unwind = raven_unwind@16
+	raven_dispatch_fault = raven_dispatch_fault@8
 	raven_create_fiber = raven_create_fiber@12
 	raven_create_fiber_ex = raven_create_fiber_ex@20
 	raven_convert_thread_to_fiber = raven_convert_thread_to_fiber@4

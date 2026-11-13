@@ -23,7 +23,7 @@ NativePrefix::NativePrefix(std::filesystem::path root) : directory(std::move(roo
 	// The folders every Windows installation has, so that programs can put files in the places they expect.
 	for (const char *folder : {"windows", "windows/system32", "windows/syswow64", "Program Files/Common Files", "Program Files (x86)/Common Files",
 			"ProgramData/Microsoft/Windows/Start Menu/Programs",
-			"Users/Public/Desktop", "Users/Public/Documents"})
+			"Users/Public/Desktop", "Users/Public/Documents", "Users/Public/Music", "Users/Public/Pictures", "Users/Public/Videos"})
 		std::filesystem::create_directories(directory / "drive_c" / folder);
 	// The Fonts folder holds the installed fonts, as on Windows: links to the host's font files, made once when the folder is new.
 	const auto fonts = directory / "drive_c" / "windows" / "Fonts";

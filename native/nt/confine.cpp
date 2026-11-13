@@ -369,6 +369,14 @@ bool confine(const std::filesystem::path &prefix, bool abstract_sockets)
 		allow(ruleset, system, run_rights, all);
 	allow(ruleset, runtime, run_rights, all);
 	allow(ruleset, environment_path("RAVEN_OPENGL_DIRECTORY"), run_rights, all);
+	// The Direct3D libraries come from each folder RAVEN_D3D_DIRECTORY lists, separated by colons.
+	if (const char *directories = std::getenv("RAVEN_D3D_DIRECTORY"))
+		for (std::string_view rest = directories; !rest.empty();) {
+			const auto colon = rest.find(':');
+			if (const auto part = rest.substr(0, colon); !part.empty())
+				allow(ruleset, std::filesystem::path(std::string(part)), run_rights, all);
+			rest = colon == rest.npos ? std::string_view() : rest.substr(colon + 1);
+		}
 	allow(ruleset, "/run", read_rights, all);
 	allow(ruleset, "/var/cache", read_rights, all);
 	allow(ruleset, "/sys", read_rights, all);

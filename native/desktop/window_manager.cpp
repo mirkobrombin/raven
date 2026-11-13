@@ -281,15 +281,14 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 			objects.restack(handle, true);
 		else {
 			objects.restack(handle, true);
-			// Insert directly above the named sibling: every sibling above it climbs over this window.
+			// The window goes directly below the named sibling, which precedes it: that sibling and every one above it climb over it.
 			const auto *sibling = std::as_const(objects).window(after);
 			auto *self = objects.window(handle);
 			if (sibling && self) {
 				self->order = sibling->order;
 				for (const auto other : objects.child_windows(window->parent))
-					if (other != handle && std::as_const(objects).window(other)->order >= sibling->order && other != after)
+					if (other != handle && std::as_const(objects).window(other)->order >= self->order)
 						++objects.window(other)->order;
-				++self->order;
 			}
 		}
 		window = objects.window(handle);
@@ -522,7 +521,8 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 		switch (call.u32(1)) {
 		case 0: call.ret(siblings.empty() ? 0 : siblings.back()); break;
 		case 1: call.ret(siblings.empty() ? 0 : siblings.front()); break;
-		case 2: call.ret(position == siblings.begin() ? 0 : *(position - 1)); break;
+		// A window still in WM_NCCREATE is not among its siblings and has no neighbors.
+		case 2: call.ret(position == siblings.end() || position == siblings.begin() ? 0 : *(position - 1)); break;
 		case 3: call.ret(position == siblings.end() || position + 1 == siblings.end() ? 0 : *(position + 1)); break;
 		case 4: call.ret(window->owner); break;
 		case 5: {
@@ -997,7 +997,7 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 				for (const auto root : top_level_windows())
 					apply(apply, root, rect, true);
 			if (flags & 0x100) {
-				if (std::as_const(objects).window(handle) && !std::as_const(objects).window(handle)->update.empty())
+				if (std::as_const(objects).window(handle) && std::as_const(objects).window(handle)->needs_paint())
 					send(handle, 0x0f, 0, 0);
 			}
 			call.ret(1);

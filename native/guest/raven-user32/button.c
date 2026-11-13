@@ -226,6 +226,49 @@ static void ideal_size(HWND window, DWORD style, UINT kind, const button_state *
 	out->cy = height;
 }
 
+/* A command link's title is a quarter larger than its font. */
+static HFONT link_title_font(HDC dc)
+{
+	LOGFONTW description;
+	if (!GetObjectW(GetCurrentObject(dc, OBJ_FONT), sizeof(description), &description))
+		return NULL;
+	description.lfHeight = description.lfHeight * 5 / 4;
+	return CreateFontIndirectW(&description);
+}
+
+/* Where a command link's title and note begin: right of the arrow, unless BS_BITMAP without an image asks for none. */
+static int link_text_left(DWORD style, const button_state *state)
+{
+	return !(style & BS_BITMAP) || state->image ? 32 : 10;
+}
+
+/* The height a command link of the given width needs to show its title and its whole note wrapped, as paint_link lays them out. */
+static int link_height(HWND window, DWORD style, const button_state *state, int width)
+{
+	HDC dc = GetDC(window);
+	HGDIOBJ previous = state->font ? SelectObject(dc, state->font) : NULL;
+	HFONT large = link_title_font(dc);
+	HGDIOBJ plain = large ? SelectObject(dc, large) : NULL;
+	TEXTMETRICW metrics;
+	RECT note = {0, 0, width - link_text_left(style, state) - 6, 0};
+	int height;
+	GetTextMetricsW(dc, &metrics);
+	if (large) {
+		SelectObject(dc, plain);
+		DeleteObject(large);
+	}
+	height = 5 + metrics.tmHeight + 1;
+	if (state->note && note.right > 0) {
+		DrawTextW(dc, state->note, -1, &note, DT_CALCRECT | DT_WORDBREAK | DT_LEFT | DT_NOPREFIX);
+		height += note.bottom + 5;
+	} else
+		height += 10;
+	if (previous)
+		SelectObject(dc, previous);
+	ReleaseDC(window, dc);
+	return height;
+}
+
 static void draw_label(HWND window, HDC dc, DWORD style, UINT kind, const RECT *area, button_state *state)
 {
 	RECT text_area = *area;
@@ -357,7 +400,6 @@ static void paint_link(HWND window, HDC dc, DWORD style, UINT kind, const RECT *
 	const COLORREF title_color = IsWindowEnabled(window) ? RGB(0, 51, 153) : GetSysColor(COLOR_GRAYTEXT);
 	int left = 10, length = GetWindowTextLengthW(window);
 	WCHAR *text = HeapAlloc(GetProcessHeap(), 0, (length + 1) * sizeof(WCHAR));
-	LOGFONTW description;
 	HFONT large = NULL;
 	HGDIOBJ old_font = NULL;
 	TEXTMETRICW metrics;
@@ -378,12 +420,9 @@ static void paint_link(HWND window, HDC dc, DWORD style, UINT kind, const RECT *
 		LineTo(dc, left + 9, middle + 5);
 		SelectObject(dc, old_pen);
 		DeleteObject(pen);
-		left += 22;
 	}
-	if (GetObjectW(GetCurrentObject(dc, OBJ_FONT), sizeof(description), &description)) {
-		description.lfHeight = description.lfHeight * 5 / 4;
-		large = CreateFontIndirectW(&description);
-	}
+	left = link_text_left(style, state);
+	large = link_title_font(dc);
 	if (large)
 		old_font = SelectObject(dc, large);
 	GetTextMetricsW(dc, &metrics);
@@ -895,11 +934,18 @@ LRESULT WINAPI RavenButtonProcW(HWND window, UINT message, WPARAM wparam, LPARAM
 			InvalidateRect(window, NULL, TRUE);
 		return 0;
 	}
-	case BCM_GETIDEALSIZE:
-		if (!lparam)
+	case BCM_GETIDEALSIZE: {
+		SIZE *size = (SIZE *)lparam;
+		if (!size)
 			return FALSE;
-		ideal_size(window, style, kind, state, (SIZE *)lparam);
+		/* A command link given a width answers the height it needs at that width. */
+		if (is_link_kind(kind) && size->cx > 0) {
+			size->cy = link_height(window, style, state, size->cx);
+			return TRUE;
+		}
+		ideal_size(window, style, kind, state, size);
 		return TRUE;
+	}
 	case BCM_SETNOTE: {
 		const WCHAR *given = (const WCHAR *)lparam;
 		if (!is_link_kind(kind)) {

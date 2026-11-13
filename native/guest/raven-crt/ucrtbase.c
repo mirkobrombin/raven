@@ -589,9 +589,56 @@ CRT int _crt_atexit(void (__cdecl *function)(void))
 }
 
 CRT int atexit(void (__cdecl *function)(void)) { return _crt_atexit(function); }
-CRT int _register_onexit_function(void *table, void (__cdecl *function)(void)) { return _crt_atexit(function); }
-CRT int _initialize_onexit_table(void *table) { return 0; }
-CRT int _execute_onexit_table(void *table) { return 0; }
+
+/* A module's own exit functions: the three pointers the module keeps, to the first function, past the last one and past the room made
+ * for them. A library registers here what is to run when it is unloaded and runs the table as it detaches, so that nothing of it is
+ * called once it is gone, as the functions of the program itself are at the end of the process. */
+struct onexit_table {
+	void (__cdecl **first)(void);
+	void (__cdecl **last)(void);
+	void (__cdecl **end)(void);
+};
+
+CRT int _initialize_onexit_table(struct onexit_table *table)
+{
+	if (!table)
+		return -1;
+	/* A table that already holds functions keeps them. */
+	if (table->first == table->end)
+		table->first = table->last = table->end = NULL;
+	return 0;
+}
+
+CRT int _register_onexit_function(struct onexit_table *table, void (__cdecl *function)(void))
+{
+	if (!table)
+		return -1;
+	if (table->last == table->end) {
+		const size_t count = (size_t)(table->last - table->first), room = count ? count * 2 : 8;
+		void (__cdecl **grown)(void) = realloc(table->first, room * sizeof(*grown));
+		if (!grown)
+			return -1;
+		table->first = grown;
+		table->last = grown + count;
+		table->end = grown + room;
+	}
+	*table->last++ = function;
+	return 0;
+}
+
+CRT int _execute_onexit_table(struct onexit_table *table)
+{
+	if (!table)
+		return -1;
+	/* Last registered, first run; a function may register more, which run before those registered earlier. */
+	while (table->first && table->last != table->first) {
+		void (__cdecl *function)(void) = *--table->last;
+		function();
+	}
+	free(table->first);
+	table->first = table->last = table->end = NULL;
+	return 0;
+}
 
 CRT void _cexit(void)
 {

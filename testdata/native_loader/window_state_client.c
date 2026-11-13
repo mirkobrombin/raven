@@ -116,6 +116,28 @@ int raven_entry(void)
 	SetLastError(0);
 	if (TranslateAcceleratorW(window, NULL, &message) || GetLastError() != ERROR_INVALID_WINDOW_HANDLE)
 		return 24;
+	/* A child sized from a parent that has no size yet comes out negative; CreateWindowEx makes it empty instead of refusing it, as a
+	   tab page made inside a tab control that is not laid out yet is. */
+	HWND empty = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 4, 4, -8, -6, window, NULL, NULL, NULL);
+	RECT bounds;
+	if (!empty || !GetClientRect(empty, &bounds) || bounds.right || bounds.bottom)
+		return 25;
+	DestroyWindow(empty);
+	/* SetWindowPos puts a window right below the one it is inserted after, the way WinForms orders a form's children by their index:
+	   the first child goes to the top, each next one after the one before it. */
+	HWND menu = CreateWindowExW(0, L"STATIC", L"menu", WS_CHILD, 0, 0, 10, 10, window, NULL, NULL, NULL);
+	HWND tools = CreateWindowExW(0, L"STATIC", L"tools", WS_CHILD, 0, 0, 10, 10, window, NULL, NULL, NULL);
+	HWND list = CreateWindowExW(0, L"STATIC", L"list", WS_CHILD, 0, 0, 10, 10, window, NULL, NULL, NULL);
+	const UINT keep = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+	if (!list || !SetWindowPos(list, HWND_TOP, 0, 0, 0, 0, keep) || !SetWindowPos(menu, list, 0, 0, 0, 0, keep)
+		|| !SetWindowPos(tools, menu, 0, 0, 0, 0, keep))
+		return 26;
+	if (GetWindow(window, GW_CHILD) != list || GetWindow(list, GW_HWNDNEXT) != menu || GetWindow(menu, GW_HWNDNEXT) != tools
+		|| GetWindow(tools, GW_HWNDPREV) != menu)
+		return 27;
+	DestroyWindow(menu);
+	DestroyWindow(tools);
+	DestroyWindow(list);
 	DestroyWindow(other);
 	if (!DestroyWindow(window) || IsWindow(window) || GetWindowLongPtrW(window, GWLP_USERDATA) || GetLastError() != ERROR_INVALID_WINDOW_HANDLE)
 		return 14;

@@ -201,14 +201,19 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 			sub.store<int32_t>(section + recursion_count, saved);
 		}, call.u32(2));
 	});
-	const auto wake = [variables](ApiCall &call, bool all) {
+	const auto wake = [variables, &threads](ApiCall &call, bool all) {
 		auto &list = (*variables)[call[0]];
+		bool woke = false;
 		for (auto &waiter : list)
 			if (!waiter->woken) {
-				waiter->woken = true;
+				waiter->woken = woke = true;
 				if (!all)
 					break;
 			}
+		// The thread woken runs before the waker goes on, as it would on another processor: a renderer's worker answers the thread
+		// that waits for its frame without first waiting for every other thread's turn.
+		if (woke && !call.process.serving())
+			threads.hand_over();
 	};
 	registry.add("WakeConditionVariable", 1, [wake](ApiCall &call) { wake(call, false); });
 	registry.add("WakeAllConditionVariable", 1, [wake](ApiCall &call) { wake(call, true); });
@@ -305,8 +310,13 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(1);
 	});
-	registry.add("WakeByAddressSingle", 1, [](ApiCall &) {});
-	registry.add("WakeByAddressAll", 1, [](ApiCall &) {});
+	// A thread whose address changed meanwhile runs before the waker goes on, as for a condition variable.
+	const auto wake_address = [&threads](ApiCall &call) {
+		if (!call.process.serving())
+			threads.hand_over();
+	};
+	registry.add("WakeByAddressSingle", 1, wake_address);
+	registry.add("WakeByAddressAll", 1, wake_address);
 
 	// An NT timeout: none waits for ever, a negative one is relative and a positive one absolute, both in 100 ns units.
 	const auto nt_timeout = [](ApiCall &call, uint64_t address) -> std::optional<std::chrono::steady_clock::time_point> {
@@ -336,8 +346,8 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 			nt_timeout(call, call[3]));
 		call.ret(changed ? 0 : 0x102);
 	});
-	registry.add("RtlWakeAddressSingle", 1, [](ApiCall &) {});
-	registry.add("RtlWakeAddressAll", 1, [](ApiCall &) {});
+	registry.add("RtlWakeAddressSingle", 1, wake_address);
+	registry.add("RtlWakeAddressAll", 1, wake_address);
 
 	// Keyed events: a release meets one wait on the same key, whichever comes first waiting for the other. A null handle names the
 	// process-wide keyed event that critical sections and slim locks use; a key is an address within the event it is used on.

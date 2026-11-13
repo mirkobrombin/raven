@@ -227,11 +227,11 @@ void NativeWindows::present(uint64_t handle, bool force)
 	if (auto *waiting=force ? nullptr : objects.window(handle)) {
 		const auto me=environment.thread_id();
 		// The window itself waiting for its first WM_PAINT is held back the same way: it would show as an unpainted, black surface.
-		bool pending=!waiting->painted && !waiting->update.empty() && (!waiting->thread || waiting->thread==me);
+		bool pending=!waiting->painted && waiting->needs_paint() && (!waiting->thread || waiting->thread==me);
 		for (const auto other : objects.window_handles()) {
 			if (pending) break;
 			const auto *candidate=std::as_const(objects).window(other);
-			if (candidate && other!=handle && !candidate->painted && !candidate->update.empty() && objects.is_child(handle,other) &&
+			if (candidate && other!=handle && !candidate->painted && candidate->needs_paint() && objects.is_child(handle,other) &&
 				objects.window_visible(other) && (!candidate->thread || candidate->thread==me)) {
 				pending=true;
 				break;
@@ -401,6 +401,12 @@ std::optional<std::pair<uint32_t,uint32_t>> NativeWindows::client_size(uint64_t 
 	return std::pair<uint32_t,uint32_t>{uint32_t(std::max(window->width,1)),uint32_t(std::max(window->height,1))};
 }
 
+bool NativeWindows::shown(uint64_t handle)
+{
+	// A window of another program is not this one's to call hidden: it is drawn into through the surface that program shares.
+	return !std::as_const(objects).window(handle) || objects.window_visible(objects.window_root(handle));
+}
+
 void NativeWindows::release_host_surface(uint64_t handle)
 {
 	if (!presentation.release_host_surface) return;
@@ -481,7 +487,7 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 	// Read-only: a window handed out for change would be published to the guest again.
 	for (const auto handle : objects.window_handles()) {
 		const auto *window=std::as_const(objects).window(handle);
-		if (!window || window->update.empty() || !objects.window_visible(handle) || (window->thread && window->thread!=thread)) continue;
+		if (!window || !window->needs_paint() || !objects.window_visible(handle) || (window->thread && window->thread!=thread)) continue;
 		current|=0x20;
 		paints[handle]=window->update_generation;
 		const auto previous=state.paints.find(handle);
@@ -804,7 +810,7 @@ void NativeWindows::finish_paint(uint64_t handle)
 		const auto me=environment.thread_id();
 		for (const auto child : objects.child_windows(handle)) {
 			const auto *inner=std::as_const(objects).window(child);
-			if (inner && inner->visible && !inner->update.empty() && !inner->painting && (!inner->thread || inner->thread==me))
+			if (inner && inner->visible && inner->needs_paint() && !inner->painting && (!inner->thread || inner->thread==me))
 				send(child,0x0f,0,0);
 		}
 	}
@@ -994,7 +1000,7 @@ uint64_t NativeWindows::invalid_owned(uint64_t filter,uint32_t thread) const
 	std::stable_partition(handles.begin(),handles.end(),[&](uint64_t handle) { return handle>paint_cursor; });
 	for (const auto handle : handles) {
 		const auto *window=std::as_const(objects).window(handle);
-		if (!window || window->update.empty() || !objects.window_visible(handle) || (window->thread && window->thread!=me)) continue;
+		if (!window || !window->needs_paint() || !objects.window_visible(handle) || (window->thread && window->thread!=me)) continue;
 		if (filter && filter!=handle && !objects.is_child(filter,handle)) continue;
 		// Parents paint before their children, as Windows orders WM_PAINT: a child may lie under what its parent draws, and handles
 		// come back in any order once windows are destroyed and made again.
@@ -1002,7 +1008,7 @@ uint64_t NativeWindows::invalid_owned(uint64_t filter,uint32_t thread) const
 		for (auto parent=window->parent;parent && parent!=filter;) {
 			const auto *above=std::as_const(objects).window(parent);
 			if (!above) break;
-			if (!above->update.empty() && objects.window_visible(parent) && (!above->thread || above->thread==me)) chosen=parent;
+			if (above->needs_paint() && objects.window_visible(parent) && (!above->thread || above->thread==me)) chosen=parent;
 			parent=above->parent;
 		}
 		if (filter && chosen!=handle && filter!=chosen && !objects.is_child(filter,chosen)) chosen=handle;
@@ -1024,7 +1030,7 @@ void NativeWindows::settle_focus_leave(bool now)
 
 void NativeWindows::receive(const DesktopEvent &event)
 {
-	if (placing_press && (event.kind==DesktopEventKind::pointer_motion || event.kind==DesktopEventKind::pointer_button ||
+	if (placing_pointer && (event.kind==DesktopEventKind::pointer_motion || event.kind==DesktopEventKind::pointer_button ||
 		event.kind==DesktopEventKind::pointer_wheel || event.kind==DesktopEventKind::pointer_relative || event.kind==DesktopEventKind::key)) {
 		held_input.push_back(event);
 		return;
@@ -1237,14 +1243,15 @@ void NativeWindows::receive(const DesktopEvent &event)
 	}
 	if (scroll_drag.window && (message==0x200 || message==0x202 || message==0x201) && scroll_motion(message,int32_t(x),int32_t(y))) return;
 	if (capture && !std::as_const(objects).window(capture)) capture=0;
-	// The press is placed before any input read while the program handles the messages sent for it.
-	const bool press=message==0x201 || message==0x204 || message==0x207;
-	if (press && !placing_press) {
-		placing_press=true;
+	// The event is placed before any input read while the program handles the messages sent for it: the cursor a move asks the window
+	// for, the activation a press brings. A program that reads its queue from there would otherwise find the events that came after
+	// queued ahead of this one, and a move from before a press would reach it after the press, saying no button is held.
+	if (!placing_pointer) {
+		placing_pointer=true;
 		try {
 			place_pointer(event,message,buttons,x,y);
 		} catch (...) {
-			placing_press=false;
+			placing_pointer=false;
 			held_input.clear();
 			throw;
 		}
@@ -1291,7 +1298,7 @@ bool NativeWindows::shown_on_owner(const DesktopWindow &window) const
 
 void NativeWindows::release_held_input()
 {
-	placing_press=false;
+	placing_pointer=false;
 	while (!held_input.empty()) {
 		const auto next=held_input.front();
 		held_input.pop_front();
@@ -1321,7 +1328,7 @@ void NativeWindows::place_pointer(const DesktopEvent &event,uint32_t message,uin
 		if (!window || !objects.window_visible(target)) return;
 	}
 	// Scroll bars and the frame may run a loop of their own that waits for the release, so what was held goes in first.
-	if (hit!=1 && placing_press) release_held_input();
+	if (hit!=1 && placing_pointer) release_held_input();
 	if ((hit==6 || hit==7) && scroll_pointer(target,hit,message,int32_t(x),int32_t(y))) return;
 	// Outside the client area the window hears the WM_NC* form of the message, with the hit code and the screen position; the default
 	// procedure runs the frame from it, so a program that draws its own caption can take the press first.
@@ -1438,6 +1445,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			// The buttons seen by GetKeyState likewise follow the pointer messages retrieved.
 			if ((flags & 1U) && ((value.message>=0x200 && value.message<=0x20e) || (value.message>=0x2a0 && value.message<=0x2a3)))
 				mouse_keys(vk_state,value.wparam);
+			if (flags & 1U) retrieved[me]={value.time,value.x,value.y};
 			if (flags & 1U) { if (found!=messages.end()) messages.erase(found); else quits.erase(me); }
 			if (value.message!=0x12) {
 				// Keyboard and mouse hooks may swallow the message; the get-message hook only observes it.
@@ -1644,9 +1652,12 @@ uint64_t NativeWindows::send(uint64_t handle, uint32_t message, uint64_t wparam,
 	static const char *const trace_message=std::getenv("RAVEN_TRACE_MSG");
 	const bool traced=trace_message && (std::string_view(trace_message)=="1" || std::strtoull(trace_message,nullptr,16)==handle);
 	if (traced) fprintf(stderr,"msg %llx %x %llx %llx\n",(unsigned long long)handle,message,(unsigned long long)wparam,(unsigned long long)lparam);
+	const auto began=std::chrono::steady_clock::now();
 	const auto result=invoke(procedure,arguments);
 	if (result.stop!=NativeStop::returned) throw result;
-	if (traced) fprintf(stderr,"msg %llx %x -> %llx\n",(unsigned long long)handle,message,(unsigned long long)result.value);
+	// The trace also says how long the procedure kept the message, to find the ones a program is slow on.
+	if (traced) fprintf(stderr,"msg %llx %x -> %llx in %lld ms\n",(unsigned long long)handle,message,(unsigned long long)result.value,
+		(long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-began).count());
 	return result.value;
 }
 
@@ -1726,7 +1737,7 @@ bool NativeWindows::destroy(uint64_t handle)
 	if (focus==handle || objects.is_child(handle,focus)) set_focus(0);
 	parent_notify(handle,2);
 	send(handle,2,0,0);
-	for (const auto child:objects.child_windows(handle)) if (std::as_const(objects).window(child)) destroy(child);
+	for (const auto child:objects.child_windows(handle,true)) if (std::as_const(objects).window(child)) destroy(child);
 	if (std::as_const(objects).window(handle)) send(handle,0x82,0,0);
 	window=objects.window(handle);
 	if (window && window->parent) {
@@ -1999,7 +2010,10 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		if (width==INT32_MIN) width=child ? 0 : screen.screen_x*3/4;
 		if (height==INT32_MIN) height=child ? 0 : screen.screen_y*3/4;
 	}
-	if (width<0 || height<0 || width>8192 || height>8192 || int64_t(x)+width>INT32_MAX || int64_t(y)+height>INT32_MAX)
+	// A negative size, as a child sized from a parent not laid out yet gets, makes an empty window: CreateWindowEx does not refuse it.
+	width=std::max(width,0);
+	height=std::max(height,0);
+	if (width>8192 || height>8192 || int64_t(x)+width>INT32_MAX || int64_t(y)+height>INT32_MAX)
 		throw uint32_t(87);
 	// An overlapped window, and any top-level one with a sizing border, starts at least at the minimum tracking size (SM_CXMINTRACK and
 	// SM_CYMINTRACK), as CreateWindowEx makes it: programs that create a window empty and size it later measure its frame from it.
@@ -2038,10 +2052,9 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		process.unmap_memory(at);
 	}
 	record.extra.resize(definition->window_extra);
+	record.linked=false;
 	const auto handle=objects.add(std::move(record));
 	if (!handle) throw uint32_t(8);
-	// A new child sits below its siblings, so controls created first stay on top of those created later.
-	if (child) objects.restack(handle,false);
 	uint64_t scratch=0;
 	try {
 		scratch=process.map_memory(4096,PROT_READ | PROT_WRITE);
@@ -2082,6 +2095,9 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 			release_surface(handle);
 			objects.erase(handle); process.unmap_memory(scratch); return 0;
 		}
+		objects.window(handle)->linked=true;
+		// A new child sits below its siblings, so controls created first stay on top of those created later.
+		if (child) objects.restack(handle,false);
 		// WM_NCCREATE may already have moved or sized the window, so the frame calculation starts from its current rectangle.
 		{
 			const auto &outer=objects.window(handle)->outer;
@@ -3094,7 +3110,7 @@ bool NativeWindows::dispatch(std::string_view name)
 			result=show_window(args[0],uint32_t(args[1]));
 		} else if (name=="UpdateWindow") {
 			if (!std::as_const(objects).window(args[0])) throw uint32_t(1400);
-			if (!std::as_const(objects).window(args[0])->update.empty()) send(args[0],0x0f,0,0);
+			if (std::as_const(objects).window(args[0])->needs_paint()) send(args[0],0x0f,0,0);
 			result=1;
 		}
 		else if (name=="UnregisterClassW") {

@@ -130,6 +130,15 @@ int raven_entry(void)
 	if (WaitForSingleObject(pump, 1000) != 0 || !GetExitCodeThread(pump, &code) || code) return 73;
 	if (WaitForSingleObject(waking, 1000) != 0 || !GetExitCodeThread(waking, &code) || code) return 74;
 	if (!CloseHandle(pump) || !CloseHandle(waking) || !CloseHandle(pump_ready)) return 75;
+	/* The time and the cursor position of a message are those of the one last taken from the queue, however late it is handled. */
+	if (!PostMessageW(target, WM_APP + 20, 0, 0)) return 80;
+	Sleep(40);
+	if (!PeekMessageW(&message, target, WM_APP + 20, WM_APP + 20, PM_REMOVE)) return 80;
+	const LONG taken = GetMessageTime();
+	const DWORD place = GetMessagePos();
+	Sleep(40);
+	if ((DWORD)taken != message.time || GetMessageTime() != taken) return 81;
+	if (place != (DWORD)MAKELONG(message.pt.x, message.pt.y)) return 82;
 	if (!DestroyWindow(target) || !UnregisterClassW(definition.lpszClassName, definition.hInstance)) return 69;
 	return 0;
 }
