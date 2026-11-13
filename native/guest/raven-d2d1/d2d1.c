@@ -4262,10 +4262,13 @@ static void STDMETHODCALLTYPE context_SetTarget(void *iface, ID2D1Image *image)
 			return;
 		}
 		if (!list->bitmap) {
+			/* A list has no format of its own: what is drawn into it keeps its coverage, even in place of an opaque target as paint.net
+			   records its document in place of its swap chain. */
 			D2D1_SIZE_U size = {1, 1};
+			const D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
 			if (self->bitmap)
 				size = self->bitmap->pixels;
-			if (!(list->bitmap = make_bitmap(self->factory, size, self->format, self->dpi_x, self->dpi_y, D2D1_BITMAP_OPTIONS_TARGET)))
+			if (!(list->bitmap = make_bitmap(self->factory, size, format, self->dpi_x, self->dpi_y, D2D1_BITMAP_OPTIONS_TARGET)))
 				return;
 		}
 		object_AddRef(list->bitmap);

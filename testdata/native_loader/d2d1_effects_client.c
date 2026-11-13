@@ -408,6 +408,39 @@ int raven_entry(void)
 	if (FAILED(ID2D1DeviceContext_GetImageLocalBounds(context, output, &bounds)) || bounds.left != 2 || bounds.top != 3 || bounds.right != 40 ||
 		bounds.bottom != 40)
 		return 26;
+	/* A list recorded in place of an opaque target keeps the coverage of what is drawn into it, a clear to nothing included, as paint.net
+	   records its document in place of a swap chain that ignores alpha: drawn on white, the red square shows blue through the swap and the
+	   rest stays white. */
+	D2D1_BITMAP_PROPERTIES1 opaque_properties = {{DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE}, 96, 96, D2D1_BITMAP_OPTIONS_TARGET, NULL};
+	D2D1_SIZE_U opaque_size = {16, 16};
+	ID2D1Bitmap1 *opaque_target = NULL;
+	ID2D1CommandList *clear_list = NULL;
+	if (FAILED(context->lpVtbl->CreateBitmap(context, opaque_size, NULL, 0, &opaque_properties, &opaque_target)) ||
+		FAILED(ID2D1DeviceContext_CreateCommandList(context, &clear_list)))
+		return 30;
+	ID2D1DeviceContext_SetTarget(context, (ID2D1Image *)opaque_target);
+	ID2D1DeviceContext_SetTarget(context, (ID2D1Image *)clear_list);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)context);
+	const D2D1_COLOR_F nothing = {0, 0, 0, 0};
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)context, &nothing);
+	const D2D1_RECT_F red_square = {2, 2, 4, 4};
+	ID2D1RenderTarget_DrawBitmap((ID2D1RenderTarget *)context, opaque, &red_square, 1, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, NULL);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)context, NULL, NULL)) ||
+		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *))(*(void ***)clear_list)[5])(clear_list)))
+		return 30;
+	ID2D1DeviceContext_SetTarget(context, previous_target);
+	((void (STDMETHODCALLTYPE *)(void *, UINT32, ID2D1Image *, BOOL))(*(void ***)swap)[14])(swap, 0, (ID2D1Image *)clear_list, TRUE);
+	ID2D1RenderTarget_BeginDraw(target);
+	ID2D1RenderTarget_Clear(target, &white);
+	output = output_of(swap);
+	ID2D1DeviceContext_DrawImage(context, output, NULL, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw(target, NULL, NULL)) || FAILED(IWICBitmap_CopyPixels(pixels, &whole, 64, sizeof result, (BYTE *)result)))
+		return 30;
+	if (!pixel_is(result[3 * 16 + 3], 0, 0, 255) || !pixel_is(result[2 * 16 + 6], 255, 255, 255))
+		return 31;
+	IUnknown_Release((IUnknown *)clear_list);
+	IUnknown_Release((IUnknown *)opaque_target);
 	IUnknown_Release((IUnknown *)red_brush);
 	IUnknown_Release((IUnknown *)list);
 	if (previous_target)
