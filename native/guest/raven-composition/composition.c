@@ -259,6 +259,7 @@ struct compositor {
 	HWND messages;
 	BOOL pending;
 	BOOL committed; /* nothing shows before the first commit */
+	LONG frame_pending; /* a swap chain presented and the targets are not drawn again yet */
 };
 
 enum { BRUSH_COLOR, BRUSH_SURFACE };
@@ -280,7 +281,11 @@ struct surface {
 	IDXGISwapChain1 *swap_chain;
 	ID3D11Texture2D *staging;
 	UINT staging_width, staging_height;
+	struct surface *next_watched;
 };
+
+/* The surfaces over swap chains, which see the frames their swap chains present. */
+static struct surface *watched;
 
 struct clip {
 	struct node node;
@@ -736,7 +741,14 @@ CLIP_PROPERTY(BottomInset, bottom)
 
 static void surface_destroy(struct node *base)
 {
-	struct surface *self = (struct surface *)base;
+	struct surface *self = (struct surface *)base, **link;
+	EnterCriticalSection(&lock);
+	for (link = &watched; *link; link = &(*link)->next_watched)
+		if (*link == self) {
+			*link = self->next_watched;
+			break;
+		}
+	LeaveCriticalSection(&lock);
 	if (self->staging)
 		ID3D11Texture2D_Release(self->staging);
 	if (self->swap_chain)
@@ -821,19 +833,21 @@ static LRESULT CALLBACK target_window(HWND window, UINT message, WPARAM wparam, 
 static const WCHAR compositor_name[] = L"Windows.UI.Composition.Compositor";
 static const WCHAR messages_class[] = L"RavenCompositionMessages";
 #define WM_RAVEN_COMMIT (WM_APP + 0x5a1)
+#define WM_RAVEN_FRAME (WM_APP + 0x5a2)
 
 static struct compositor *compositor_of(void *iface)
 {
 	return (struct compositor *)node_of(iface);
 }
 
-static void commit(struct compositor *self)
+static void commit(struct compositor *self);
+
+/* Draws every target of the compositor again. */
+static void show(struct compositor *self)
 {
 	struct target **targets, *target;
 	UINT count = 0, index;
 	EnterCriticalSection(&lock);
-	self->pending = FALSE;
-	self->committed = TRUE;
 	for (target = self->targets; target; target = target->next)
 		++count;
 	if (!(targets = ALLOC(count * sizeof(*targets) + 1))) {
@@ -852,6 +866,15 @@ static void commit(struct compositor *self)
 	FREE(targets);
 }
 
+static void commit(struct compositor *self)
+{
+	EnterCriticalSection(&lock);
+	self->pending = FALSE;
+	self->committed = TRUE;
+	LeaveCriticalSection(&lock);
+	show(self);
+}
+
 /* Changes are announced once until the next commit: through the controller's CommitNeeded event when there is a controller, or by a
  * commit of their own once the thread is back at its messages. */
 static void raise_commit_needed(struct controller *controller);
@@ -864,6 +887,13 @@ static LRESULT CALLBACK messages_window(HWND window, UINT message, WPARAM wparam
 			raise_commit_needed(self->controller);
 		else
 			commit(self);
+		node_release(&self->node);
+		return 0;
+	}
+	if (message == WM_RAVEN_FRAME) {
+		struct compositor *self = (struct compositor *)lparam;
+		InterlockedExchange(&self->frame_pending, FALSE);
+		show(self);
 		node_release(&self->node);
 		return 0;
 	}
@@ -996,11 +1026,174 @@ static HRESULT STDMETHODCALLTYPE compositor_CreateInsetClip(void *iface, void **
 	return compositor_CreateInsetClipWithInsets(iface, 0, 0, 0, 0, out);
 }
 
+/* The program's lock on its device's immediate context, which its own threads share with this one; null when the device has none. */
+static ID3D10Multithread *hold_device(ID3D11Device *device)
+{
+	ID3D10Multithread *guard = NULL;
+	if (FAILED(ID3D11Device_QueryInterface(device, &IID_ID3D10Multithread, (void **)&guard)))
+		return NULL;
+	if (!ID3D10Multithread_GetMultithreadProtected(guard))
+		ID3D10Multithread_SetMultithreadProtected(guard, TRUE);
+	ID3D10Multithread_Enter(guard);
+	return guard;
+}
+
+static void release_device(ID3D10Multithread *guard)
+{
+	if (guard) {
+		ID3D10Multithread_Leave(guard);
+		ID3D10Multithread_Release(guard);
+	}
+}
+
+/* The desktop compositor takes the back buffer as the program presents it, so the frame is copied out at that moment: afterwards the
+ * Direct3D libraries may hand the same buffer back to the program to draw the next frame into. */
+static void capture_frame(struct surface *surface)
+{
+	ID3D11Texture2D *buffer = NULL;
+	ID3D11Device *device = NULL;
+	ID3D11DeviceContext *context = NULL;
+	ID3D10Multithread *guard;
+	D3D11_TEXTURE2D_DESC desc;
+	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, 0, &IID_ID3D11Texture2D, (void **)&buffer)))
+		return;
+	ID3D11Texture2D_GetDesc(buffer, &desc);
+	ID3D11Texture2D_GetDevice(buffer, &device);
+	ID3D11Device_GetImmediateContext(device, &context);
+	guard = hold_device(device);
+	if (!surface->staging || surface->staging_width != desc.Width || surface->staging_height != desc.Height) {
+		D3D11_TEXTURE2D_DESC staging = desc;
+		if (surface->staging)
+			ID3D11Texture2D_Release(surface->staging);
+		surface->staging = NULL;
+		staging.Usage = D3D11_USAGE_STAGING;
+		staging.BindFlags = 0;
+		staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		staging.MiscFlags = 0;
+		staging.MipLevels = staging.ArraySize = 1;
+		staging.SampleDesc.Count = 1;
+		staging.SampleDesc.Quality = 0;
+		if (SUCCEEDED(ID3D11Device_CreateTexture2D(device, &staging, NULL, &surface->staging))) {
+			surface->staging_width = desc.Width;
+			surface->staging_height = desc.Height;
+		}
+	}
+	if (surface->staging)
+		ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)surface->staging, (ID3D11Resource *)buffer);
+	release_device(guard);
+	ID3D11DeviceContext_Release(context);
+	ID3D11Device_Release(device);
+	ID3D11Texture2D_Release(buffer);
+}
+
+/* The surface over a swap chain, with a reference, or null. */
+static struct surface *surface_of_chain(IDXGISwapChain1 *chain)
+{
+	struct surface *surface;
+	EnterCriticalSection(&lock);
+	for (surface = watched; surface && surface->swap_chain != chain; surface = surface->next_watched)
+		;
+	if (surface)
+		node_addref(&surface->node);
+	LeaveCriticalSection(&lock);
+	return surface;
+}
+
+/* A frame presented shows without a commit: the compositor that shows the surface draws its targets again on its own thread. */
+static void show_frame(struct surface *surface)
+{
+	struct compositor *compositor = surface->compositor;
+	if (!compositor->committed || !compositor->messages || InterlockedCompareExchange(&compositor->frame_pending, TRUE, FALSE))
+		return;
+	node_addref(&compositor->node);
+	if (!PostMessageW(compositor->messages, WM_RAVEN_FRAME, 0, (LPARAM)compositor)) {
+		InterlockedExchange(&compositor->frame_pending, FALSE);
+		node_release(&compositor->node);
+	}
+}
+
+typedef HRESULT (STDMETHODCALLTYPE *present_function)(IDXGISwapChain1 *, UINT, UINT);
+typedef HRESULT (STDMETHODCALLTYPE *present1_function)(IDXGISwapChain1 *, UINT, UINT, const DXGI_PRESENT_PARAMETERS *);
+
+/* The present calls of each kind of swap chain shown in a surface, as they were before they were taken over. */
+static struct presenter {
+	void **table;
+	present_function present;
+	present1_function present1;
+} presenters[8];
+
+static const struct presenter *presenter_of(IDXGISwapChain1 *chain)
+{
+	UINT index;
+	for (index = 0; index < ARRAYSIZE(presenters) && presenters[index].table; ++index)
+		if (presenters[index].table == *(void ***)chain)
+			return &presenters[index];
+	return NULL;
+}
+
+static HRESULT STDMETHODCALLTYPE surface_present(IDXGISwapChain1 *chain, UINT interval, UINT flags)
+{
+	const struct presenter *presenter = presenter_of(chain);
+	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
+	HRESULT hr;
+	if (surface)
+		capture_frame(surface);
+	hr = presenter->present(chain, interval, flags);
+	if (surface) {
+		if (SUCCEEDED(hr))
+			show_frame(surface);
+		node_release(&surface->node);
+	}
+	return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE surface_present1(IDXGISwapChain1 *chain, UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS *parameters)
+{
+	const struct presenter *presenter = presenter_of(chain);
+	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
+	HRESULT hr;
+	if (surface)
+		capture_frame(surface);
+	hr = presenter->present1(chain, interval, flags, parameters);
+	if (surface) {
+		if (SUCCEEDED(hr))
+			show_frame(surface);
+		node_release(&surface->node);
+	}
+	return hr;
+}
+
+/* The swap chain's present calls are taken over once per kind of swap chain, to see each frame the program presents. */
+static void watch_presents(struct surface *surface)
+{
+	const UINT present_slot = offsetof(IDXGISwapChain1Vtbl, Present) / sizeof(void *);
+	const UINT present1_slot = offsetof(IDXGISwapChain1Vtbl, Present1) / sizeof(void *);
+	void **table = *(void ***)surface->swap_chain;
+	UINT index;
+	DWORD old;
+	EnterCriticalSection(&lock);
+	surface->next_watched = watched;
+	watched = surface;
+	for (index = 0; index < ARRAYSIZE(presenters) && presenters[index].table && presenters[index].table != table; ++index)
+		;
+	if (index < ARRAYSIZE(presenters) && !presenters[index].table &&
+		VirtualProtect(&table[present_slot], (present1_slot - present_slot + 1) * sizeof(void *), PAGE_READWRITE, &old)) {
+		presenters[index].present = (present_function)table[present_slot];
+		presenters[index].present1 = (present1_function)table[present1_slot];
+		presenters[index].table = table;
+		table[present_slot] = (void *)surface_present;
+		table[present1_slot] = (void *)surface_present1;
+		VirtualProtect(&table[present_slot], (present1_slot - present_slot + 1) * sizeof(void *), old, &old);
+	}
+	LeaveCriticalSection(&lock);
+}
+
 static HRESULT STDMETHODCALLTYPE interop_CreateCompositionSurfaceForSwapChain(void *iface, IUnknown *swap_chain, void **out)
 {
 	struct compositor *compositor = compositor_of(iface);
 	struct surface *surface;
 	IDXGISwapChain1 *chain = NULL;
+	UINT presented = 0;
 	HRESULT hr;
 	if (!out)
 		return E_POINTER;
@@ -1017,6 +1210,10 @@ static HRESULT STDMETHODCALLTYPE interop_CreateCompositionSurfaceForSwapChain(vo
 	surface->compositor = compositor;
 	node_addref(&compositor->node);
 	surface->swap_chain = chain;
+	watch_presents(surface);
+	/* A swap chain that presented before the surface was made shows that frame, which buffer 0 still holds. */
+	if (SUCCEEDED(IDXGISwapChain1_GetLastPresentCount(chain, &presented)) && presented)
+		capture_frame(surface);
 	hr = hand_out(&surface->node, &IID___x_ABI_CWindows_CUI_CComposition_CICompositionSurface, out);
 	node_release(&surface->node);
 	return hr;
@@ -1310,7 +1507,77 @@ static void fill_color(struct canvas *canvas, const struct fill *fill)
 			blend_pixel(&canvas->pixels[y * canvas->width + x], pixel);
 }
 
-/* The swap chain's first buffer, read through a staging copy while the device is held, drawn into the visual's rectangle as the brush
+/* ---- half-float swap chains ----
+ * A swap chain of half floats holds scRGB: linear light, premultiplied, where 1 is the white of sRGB. The screen shows sRGB, so each value is
+ * brought through the sRGB curve, from a table of 4096 steps of linear light; what lies above white is shown as white. */
+enum { LINEAR_STEPS = 4096 };
+static BYTE linear_srgb[LINEAR_STEPS + 1];
+static LONG linear_srgb_ready;
+
+static float half_float(UINT16 half)
+{
+	union { UINT32 u; float f; } bits;
+	const UINT32 sign = (UINT32)(half & 0x8000) << 16, exponent = (half >> 10) & 31, mantissa = half & 0x3ff;
+	if (!exponent) {
+		/* A subnormal half is its mantissa times 2^-24. */
+		bits.f = mantissa * (1.0f / 16777216.0f);
+		bits.u |= sign;
+		return bits.f;
+	}
+	bits.u = exponent == 31 ? sign | 0x7f800000 | (mantissa << 13) : sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
+	return bits.f;
+}
+
+/* x to the power 1/2.4 for x in (0, 1], from the logarithm and exponential by their series. */
+static float root_2_4(float x)
+{
+	union { float f; UINT32 u; } bits = {x}, scale;
+	const int exponent = (int)((bits.u >> 23) & 255) - 127;
+	float t, t2, ln, y, fraction, term = 1, sum = 1;
+	int whole, step;
+	bits.u = (bits.u & 0x7fffff) | 0x3f800000;
+	t = (bits.f - 1) / (bits.f + 1);
+	t2 = t * t;
+	ln = 2 * t * (1 + t2 * (1.0f / 3 + t2 * (1.0f / 5 + t2 * (1.0f / 7 + t2 * (1.0f / 9 + t2 / 11)))));
+	y = (exponent + ln * 1.44269504f) / 2.4f;
+	whole = (int)y - (y < (int)y);
+	fraction = (y - whole) * 0.69314718f;
+	for (step = 1; step < 9; ++step) {
+		term *= fraction / step;
+		sum += term;
+	}
+	scale.u = (UINT32)(whole + 127) << 23;
+	return sum * scale.f;
+}
+
+static void make_linear_srgb(void)
+{
+	UINT index;
+	for (index = 0; index <= LINEAR_STEPS; ++index) {
+		const float linear = (float)index / LINEAR_STEPS;
+		const float srgb = linear <= 0.0031308f ? linear * 12.92f : 1.055f * root_2_4(linear) - 0.055f;
+		linear_srgb[index] = (BYTE)(srgb * 255 + 0.5f);
+	}
+}
+
+static BYTE srgb_of(float linear)
+{
+	return linear <= 0 ? 0 : linear >= 1 ? 255 : linear_srgb[(UINT)(linear * LINEAR_STEPS + 0.5f)];
+}
+
+/* A premultiplied scRGB pixel as a premultiplied 8-bit sRGB one. */
+static DWORD scrgb_pixel(const UINT16 *halves)
+{
+	const float alpha = half_float(halves[3]);
+	const UINT a = alpha <= 0 ? 0 : alpha >= 1 ? 255 : (UINT)(alpha * 255 + 0.5f);
+	const float unpremultiply = alpha > 0 ? 1 / alpha : 0;
+	if (!a)
+		return 0;
+	return (DWORD)a << 24 | (DWORD)scale_byte(srgb_of(half_float(halves[0]) * unpremultiply), a) << 16 |
+		(DWORD)scale_byte(srgb_of(half_float(halves[1]) * unpremultiply), a) << 8 | scale_byte(srgb_of(half_float(halves[2]) * unpremultiply), a);
+}
+
+/* The frame the swap chain last presented, read from its staging copy while the device is held, drawn into the visual's rectangle as the brush
  * places it: stretched to fill it, kept to scale inside or over it, or left at its size. */
 static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 {
@@ -1318,54 +1585,32 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 	ID3D11Texture2D *buffer = NULL;
 	ID3D11Device *device = NULL;
 	ID3D11DeviceContext *context = NULL;
-	ID3D10Multithread *guard = NULL;
+	ID3D10Multithread *guard;
 	D3D11_TEXTURE2D_DESC desc;
 	D3D11_MAPPED_SUBRESOURCE mapped;
 	float drawn_width, drawn_height, x0, y0, sx, sy;
 	INT x, y;
-	DXGI_SWAP_CHAIN_DESC1 chain;
-	UINT shown = 0;
-	/* Presenting a flip swap chain moves its buffers along: the one presented last is the last buffer, and buffer 0 is the next to draw. */
-	if (SUCCEEDED(IDXGISwapChain1_GetDesc1(surface->swap_chain, &chain)) && chain.BufferCount > 1 &&
-		(chain.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || chain.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD))
-		shown = chain.BufferCount - 1;
-	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, shown, &IID_ID3D11Texture2D, (void **)&buffer)))
+	/* What shows is the frame taken when the program last presented; before its first present nothing does. */
+	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, 0, &IID_ID3D11Texture2D, (void **)&buffer)))
 		return;
 	ID3D11Texture2D_GetDesc(buffer, &desc);
-	if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+	if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
 		static LONG reported;
 		if (!InterlockedExchange(&reported, 1))
-			unimplemented("ICompositionSurface", "drawing a swap chain that is not 8-bit BGRA");
+			unimplemented("ICompositionSurface", "drawing a swap chain that is neither 8-bit BGRA nor half-float RGBA");
 		ID3D11Texture2D_Release(buffer);
 		return;
+	}
+	/* Two threads making the table at once write the same values. */
+	if (desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && !linear_srgb_ready) {
+		make_linear_srgb();
+		InterlockedExchange(&linear_srgb_ready, 1);
 	}
 	ID3D11Texture2D_GetDevice(buffer, &device);
 	ID3D11Device_GetImmediateContext(device, &context);
 	/* The program's own threads use the same immediate context, so it is used here only while the device's lock is held. */
-	if (SUCCEEDED(ID3D11Device_QueryInterface(device, &IID_ID3D10Multithread, (void **)&guard))) {
-		if (!ID3D10Multithread_GetMultithreadProtected(guard))
-			ID3D10Multithread_SetMultithreadProtected(guard, TRUE);
-		ID3D10Multithread_Enter(guard);
-	}
-	if (!surface->staging || surface->staging_width != desc.Width || surface->staging_height != desc.Height) {
-		D3D11_TEXTURE2D_DESC staging = desc;
-		if (surface->staging)
-			ID3D11Texture2D_Release(surface->staging);
-		surface->staging = NULL;
-		staging.Usage = D3D11_USAGE_STAGING;
-		staging.BindFlags = 0;
-		staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		staging.MiscFlags = 0;
-		staging.MipLevels = staging.ArraySize = 1;
-		staging.SampleDesc.Count = 1;
-		staging.SampleDesc.Quality = 0;
-		if (SUCCEEDED(ID3D11Device_CreateTexture2D(device, &staging, NULL, &surface->staging))) {
-			surface->staging_width = desc.Width;
-			surface->staging_height = desc.Height;
-		}
-	}
-	if (surface->staging) {
-		ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)surface->staging, (ID3D11Resource *)buffer);
+	guard = hold_device(device);
+	if (surface->staging && surface->staging_width == desc.Width && surface->staging_height == desc.Height) {
 		if (SUCCEEDED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)surface->staging, 0, D3D11_MAP_READ, 0, &mapped))) {
 			const UINT alpha = (UINT)(fill->opacity * 255 + 0.5f);
 			sx = fill->width / (float)desc.Width;
@@ -1382,23 +1627,22 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 			y0 = fill->top + (fill->height - drawn_height) * fill->vertical;
 			for (y = fill->area.top; y < fill->area.bottom; ++y) {
 				const INT source_y = (INT)((y + 0.5f - y0) / sy);
-				const DWORD *row;
+				const BYTE *row;
 				if (source_y < 0 || source_y >= (INT)desc.Height)
 					continue;
-				row = (const DWORD *)((const BYTE *)mapped.pData + (size_t)source_y * mapped.RowPitch);
+				row = (const BYTE *)mapped.pData + (size_t)source_y * mapped.RowPitch;
 				for (x = fill->area.left; x < fill->area.right; ++x) {
 					const INT source_x = (INT)((x + 0.5f - x0) / sx);
-					if (source_x >= 0 && source_x < (INT)desc.Width)
-						blend_pixel(&canvas->pixels[y * canvas->width + x], fade(row[source_x], alpha));
+					if (source_x < 0 || source_x >= (INT)desc.Width)
+						continue;
+					blend_pixel(&canvas->pixels[y * canvas->width + x], fade(desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ?
+						scrgb_pixel((const UINT16 *)row + (size_t)source_x * 4) : ((const DWORD *)row)[source_x], alpha));
 				}
 			}
 				ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)surface->staging, 0);
 		}
 	}
-	if (guard) {
-		ID3D10Multithread_Leave(guard);
-		ID3D10Multithread_Release(guard);
-	}
+	release_device(guard);
 	ID3D11DeviceContext_Release(context);
 	ID3D11Device_Release(device);
 	ID3D11Texture2D_Release(buffer);

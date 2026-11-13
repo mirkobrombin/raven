@@ -4574,6 +4574,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_composition_x64 COMMAND raven --run-process --execution=native ${composition_client})
                 set_tests_properties(native_composition_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-x64-prefix)
+                # A swap chain of half floats shown by a visual, through DXVK over a Vulkan driver.
+                set(composition_swapchain_client ${CMAKE_CURRENT_BINARY_DIR}/composition-swapchain64.exe)
+                add_custom_command(OUTPUT ${composition_swapchain_client}
+                    COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+                        -o ${composition_swapchain_client} ${LOADER_SOURCES}/composition_swapchain_client.c
+                        ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lgdi32 -luser32 -lkernel32 -lgcc
+                    DEPENDS ${LOADER_SOURCES}/composition_swapchain_client.c ${composition_source}/composition_interfaces.h VERBATIM)
+                add_custom_target(composition_swapchain_fixture ALL DEPENDS ${composition_swapchain_client} composition_component)
+                if(RAVEN_DXVK_PE64_DIR AND EXISTS ${RAVEN_DXVK_PE64_DIR}/d3d11.dll)
+                    set(composition_swapchain_environment RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-swapchain-x64-prefix
+                        RAVEN_D3D_DIRECTORY=${RAVEN_DXVK_PE64_DIR})
+                    if(RAVEN_LAVAPIPE_ICD)
+                        list(APPEND composition_swapchain_environment VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD})
+                    endif()
+                    add_test(NAME native_composition_swapchain_x64 COMMAND raven --run-process --execution=native ${composition_swapchain_client})
+                    set_tests_properties(native_composition_swapchain_x64 PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT "${composition_swapchain_environment}")
+                endif()
                 # coremessaging.dll, the dispatcher queues of the Windows Runtime and CreateDispatcherQueueController, for each width: Raven code
                 # on the public headers.
                 set(coremessaging_source ${PROJECT_SOURCE_DIR}/native/guest/raven-coremessaging)
