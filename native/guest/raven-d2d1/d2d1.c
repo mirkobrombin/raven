@@ -3712,7 +3712,9 @@ static HRESULT STDMETHODCALLTYPE target_CreateCompatibleRenderTarget(void *iface
 	}
 	if (!(compatible = make_target(self->factory, TARGET_BITMAP, &properties)))
 		return E_OUTOFMEMORY;
-	if (!(compatible->bitmap = make_bitmap(self->factory, pixels, properties.pixelFormat, properties.dpiX, properties.dpiY, 0))) {
+	/* What the compatible target draws into is a target bitmap, which a device context can take as its target again. */
+	if (!(compatible->bitmap = make_bitmap(self->factory, pixels, properties.pixelFormat, properties.dpiX, properties.dpiY,
+			D2D1_BITMAP_OPTIONS_TARGET))) {
 		target_Release(compatible);
 		return E_OUTOFMEMORY;
 	}

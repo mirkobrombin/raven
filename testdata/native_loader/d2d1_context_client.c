@@ -303,6 +303,18 @@ int raven_entry(void)
 	IUnknown_Release((IUnknown *)previous);
 	IUnknown_Release((IUnknown *)brush);
 	IUnknown_Release((IUnknown *)list);
+	/* The bitmap a compatible target draws into is a target bitmap, which paint.net sets as the target again after a list. */
+	ID2D1BitmapRenderTarget *compatible = NULL;
+	ID2D1Bitmap *compatible_bitmap = NULL;
+	ID2D1Bitmap1 *compatible_bitmap1 = NULL;
+	if (FAILED(ID2D1RenderTarget_CreateCompatibleRenderTarget(target, NULL, NULL, NULL, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &compatible)) ||
+		FAILED(ID2D1BitmapRenderTarget_GetBitmap(compatible, &compatible_bitmap)) ||
+		FAILED(IUnknown_QueryInterface((IUnknown *)compatible_bitmap, &IID_ID2D1Bitmap1, (void **)&compatible_bitmap1)) ||
+		!(ID2D1Bitmap1_GetOptions(compatible_bitmap1) & D2D1_BITMAP_OPTIONS_TARGET))
+		return 38;
+	IUnknown_Release((IUnknown *)compatible_bitmap1);
+	IUnknown_Release((IUnknown *)compatible_bitmap);
+	IUnknown_Release((IUnknown *)compatible);
 	IUnknown_Release((IUnknown *)output);
 	IUnknown_Release((IUnknown *)source);
 	IUnknown_Release((IUnknown *)effect);
