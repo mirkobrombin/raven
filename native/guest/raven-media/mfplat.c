@@ -1082,7 +1082,8 @@ static volatile LONG startup_count;
 
 __declspec(dllexport) HRESULT WINAPI MFStartup(ULONG version, DWORD flags)
 {
-	if (version != MF_VERSION)
+	// Windows Vista's version, which Windows still takes beside its own.
+	if (version != MF_VERSION && version != 0x00010070)
 		return MF_E_BAD_STARTUP_VERSION;
 	if (flags != MFSTARTUP_FULL && flags != MFSTARTUP_NOSOCKET)
 		return E_INVALIDARG;

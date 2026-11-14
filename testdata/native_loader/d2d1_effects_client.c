@@ -202,6 +202,54 @@ static int pixel_is(UINT32 pixel, int red, int green, int blue)
 	return near_value(pixel, 16, red) && near_value(pixel, 8, green) && near_value(pixel, 0, blue);
 }
 
+/* A display profile of the matrix and curve kind, as ICC.1 lays one out: the header, the three colorants of sRGB adapted to D50 and one
+   curve the three channels share, which holds `count` entries: none for linear light, or one, a gamma as 8.8 fixed point. */
+static UINT32 icc_profile(BYTE *profile, UINT32 count, UINT16 gamma)
+{
+	static const INT32 colorants[3][3] = {{0x6fa2, 0x38f5, 0x0390}, {0x6299, 0xb785, 0x18da}, {0x24a0, 0x0f84, 0xb6cf}};
+	static const char names[6][5] = {"rXYZ", "gXYZ", "bXYZ", "rTRC", "gTRC", "bTRC"};
+	const UINT32 curve_size = 12 + count * 2, curve_at = 132 + 6 * 12 + 3 * 20, size = (curve_at + curve_size + 3) & ~3U;
+	UINT32 tag, index;
+#define PUT32(at, value) do { profile[at] = (BYTE)((value) >> 24); profile[(at) + 1] = (BYTE)((value) >> 16); \
+	profile[(at) + 2] = (BYTE)((value) >> 8); profile[(at) + 3] = (BYTE)(value); } while (0)
+	for (index = 0; index < size; ++index)
+		profile[index] = 0;
+	PUT32(0, size);
+	PUT32(8, 0x02100000);
+	for (index = 0; index < 4; ++index) {
+		profile[12 + index] = "mntr"[index];
+		profile[16 + index] = "RGB "[index];
+		profile[20 + index] = "XYZ "[index];
+		profile[36 + index] = "acsp"[index];
+	}
+	PUT32(68, 0xf6d6);
+	PUT32(72, 0x10000);
+	PUT32(76, 0xd32d);
+	PUT32(128, 6);
+	for (tag = 0; tag < 6; ++tag) {
+		const UINT32 entry = 132 + tag * 12, at = tag < 3 ? 132 + 6 * 12 + tag * 20 : curve_at;
+		for (index = 0; index < 4; ++index)
+			profile[entry + index] = names[tag][index];
+		PUT32(entry + 4, at);
+		PUT32(entry + 8, tag < 3 ? 20 : curve_size);
+		if (tag < 3) {
+			for (index = 0; index < 4; ++index)
+				profile[at + index] = "XYZ "[index];
+			for (index = 0; index < 3; ++index)
+				PUT32(at + 8 + index * 4, (UINT32)colorants[tag][index]);
+		}
+	}
+	for (index = 0; index < 4; ++index)
+		profile[curve_at + index] = "curv"[index];
+	PUT32(curve_at + 8, count);
+	if (count) {
+		profile[curve_at + 12] = (BYTE)(gamma >> 8);
+		profile[curve_at + 13] = (BYTE)gamma;
+	}
+#undef PUT32
+	return size;
+}
+
 int raven_entry(void)
 {
 	if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)))
@@ -697,6 +745,79 @@ int raven_entry(void)
 	if (!(corner[3] >= 0.98f) || !(corner[0] >= 0.98f) || !(corner[1] <= 0.02f))
 		return 51;
 	ID2D1Bitmap1_Unmap(float_bitmap);
+	/* Color management follows the profiles it is given: from sRGB to a profile whose curves are linear the middle grey becomes the
+	   fifth of white it is in light, and back again the grey it was; to a profile of gamma 2 its square root. paint.net keeps its
+	   pictures in such a linear profile of its own and has Direct2D convert between it and sRGB. */
+	static BYTE linear_profile[512], gamma_profile[512];
+	const UINT32 linear_size = icc_profile(linear_profile, 0, 0), gamma_size = icc_profile(gamma_profile, 1, 0x0200);
+	static const UINT32 grey[4] = {0xff808080, 0xff808080, 0xff808080, 0xff808080}, dark[4] = {0xff373737, 0xff373737, 0xff373737, 0xff373737};
+	ID2D1ColorContext *standard_space = NULL, *linear_space = NULL, *gamma_space = NULL;
+	ID2D1Bitmap *grey_bitmap = NULL, *dark_bitmap = NULL;
+	ID2D1Effect *managed = NULL;
+	if (FAILED(ID2D1DeviceContext_CreateColorContext(float_context, D2D1_COLOR_SPACE_SRGB, NULL, 0, &standard_space)) ||
+		FAILED(ID2D1DeviceContext_CreateColorContext(float_context, D2D1_COLOR_SPACE_CUSTOM, linear_profile, linear_size, &linear_space)) ||
+		FAILED(ID2D1DeviceContext_CreateColorContext(float_context, D2D1_COLOR_SPACE_CUSTOM, gamma_profile, gamma_size, &gamma_space)) ||
+		FAILED(ID2D1RenderTarget_CreateBitmap(target, size, grey, 8, &bitmap_properties, &grey_bitmap)) ||
+		FAILED(ID2D1RenderTarget_CreateBitmap(target, size, dark, 8, &bitmap_properties, &dark_bitmap)) ||
+		FAILED(ID2D1DeviceContext_CreateEffect(float_context, &CLSID_D2D1ColorManagement, &managed)))
+		return 58;
+	struct { ID2D1Bitmap *input; ID2D1ColorContext *from, *to; float low, high; } const conversions[3] = {
+		{grey_bitmap, standard_space, linear_space, 0.19f, 0.24f}, {dark_bitmap, linear_space, standard_space, 0.47f, 0.53f},
+		{grey_bitmap, standard_space, gamma_space, 0.44f, 0.49f}};
+	for (int conversion = 0; conversion < 3; ++conversion) {
+		if (FAILED(((set_value)(*(void ***)managed)[9])(managed, 0 /* D2D1_COLORMANAGEMENT_PROP_SOURCE_COLOR_CONTEXT */, D2D1_PROPERTY_TYPE_IUNKNOWN,
+				(const BYTE *)&conversions[conversion].from, sizeof(void *))) ||
+			FAILED(((set_value)(*(void ***)managed)[9])(managed, 2 /* D2D1_COLORMANAGEMENT_PROP_DESTINATION_COLOR_CONTEXT */, D2D1_PROPERTY_TYPE_IUNKNOWN,
+				(const BYTE *)&conversions[conversion].to, sizeof(void *))))
+			return 59;
+		((set_input)(*(void ***)managed)[14])(managed, 0, (ID2D1Image *)conversions[conversion].input, TRUE);
+		output = output_of(managed);
+		ID2D1RenderTarget_BeginDraw(float_target);
+		ID2D1RenderTarget_Clear(float_target, &empty);
+		ID2D1DeviceContext_DrawImage(float_context, output, &blur_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+			D2D1_COMPOSITE_MODE_SOURCE_OVER);
+		IUnknown_Release((IUnknown *)output);
+		if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+			FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+			return 60;
+		corner = (const float *)(float_map.bits + 3 * float_map.pitch) + 3 * 4;
+		if (!(corner[3] >= 0.98f) || !(corner[0] >= conversions[conversion].low && corner[0] <= conversions[conversion].high) ||
+			!(corner[2] >= conversions[conversion].low && corner[2] <= conversions[conversion].high))
+			return 61 + conversion;
+		ID2D1Bitmap1_Unmap(float_bitmap);
+	}
+	/* A target of floats keeps the values drawn into it as they are, a color above its alpha among them: paint.net ends its blur with
+	   colors no longer multiplied by their alpha and reads them back from such a target. Half a red, unmultiplied, stays a whole red
+	   of half alpha. */
+	static const GUID unpremultiply_effect = {0xfb9ac489, 0xad8d, 0x41ed, {0x99, 0x99, 0xbb, 0x63, 0x47, 0xd1, 0x10, 0xf7}};
+	static const UINT32 half_red[4] = {0x80800000, 0x80800000, 0x80800000, 0x80800000};
+	ID2D1Bitmap *half_bitmap = NULL;
+	ID2D1Effect *unmultiplied = NULL;
+	if (FAILED(ID2D1RenderTarget_CreateBitmap(target, size, half_red, 8, &bitmap_properties, &half_bitmap)) ||
+		FAILED(ID2D1DeviceContext_CreateEffect(float_context, &unpremultiply_effect, &unmultiplied)))
+		return 64;
+	((set_input)(*(void ***)unmultiplied)[14])(unmultiplied, 0, (ID2D1Image *)half_bitmap, TRUE);
+	output = output_of(unmultiplied);
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &empty);
+	ID2D1DeviceContext_DrawImage(float_context, output, &blur_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+		return 64;
+	corner = (const float *)(float_map.bits + 3 * float_map.pitch) + 3 * 4;
+	if (!(corner[3] >= 0.45f && corner[3] <= 0.55f) || !(corner[0] >= 0.95f) || !(corner[1] <= 0.02f))
+		return 65;
+	ID2D1Bitmap1_Unmap(float_bitmap);
+	IUnknown_Release((IUnknown *)unmultiplied);
+	ID2D1Bitmap_Release(half_bitmap);
+	IUnknown_Release((IUnknown *)managed);
+	ID2D1Bitmap_Release(dark_bitmap);
+	ID2D1Bitmap_Release(grey_bitmap);
+	IUnknown_Release((IUnknown *)gamma_space);
+	IUnknown_Release((IUnknown *)linear_space);
+	IUnknown_Release((IUnknown *)standard_space);
 	IUnknown_Release((IUnknown *)last);
 	for (link = 0; link < 40; ++link)
 		IUnknown_Release((IUnknown *)chained[link]);
