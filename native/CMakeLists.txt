@@ -4909,22 +4909,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set(media_source ${PROJECT_SOURCE_DIR}/native/guest/raven-media)
                 set(media_components ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
                     ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
-                    ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll)
+                    ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/resampledmo.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/resampledmo.dll)
                 add_custom_command(OUTPUT ${media_components}
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll
                         ${media_source}/avrt.c -lkernel32
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
-                        ${media_source}/mfplat.c -lkernel32
+                        ${media_source}/mfplat.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -luuid -lkernel32
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll
                         ${media_source}/avrt.c -lkernel32
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
-                        ${media_source}/mfplat.c -lkernel32
+                        ${media_source}/mfplat.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -luuid -lkernel32
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll
                         ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
                         ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
-                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c VERBATIM)
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/resampledmo.dll
+                        ${media_source}/resampledmo.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lmfplat -luuid -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/resampledmo.dll
+                        ${media_source}/resampledmo.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lmfplat -luuid -lkernel32 -lgcc
+                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c ${media_source}/resampledmo.c
+                        ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c VERBATIM)
                 add_custom_target(media_component ALL DEPENDS ${media_components})
                 # A media library imports both, as cri_ware_unity.dll does; the fixture does too, and asks each one for its answers.
                 foreach(width 64 32)
@@ -4939,7 +4945,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_command(OUTPUT ${media_client}
                         COMMAND ${media_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
                             -Wl,--entry,${media_entry},--no-insert-timestamp
-                            -o ${media_client} ${LOADER_SOURCES}/media_client.c -lavrt -lmfplat -lkernel32
+                            -o ${media_client} ${LOADER_SOURCES}/media_client.c -lavrt -lmfplat -lole32 -luuid -lkernel32 -lgcc
                         DEPENDS ${LOADER_SOURCES}/media_client.c VERBATIM)
                     add_custom_target(media_fixture${width} ALL DEPENDS ${media_client} media_component)
                     add_test(NAME native_media_x${width} COMMAND raven --run-process --execution=native ${media_client})
@@ -4957,6 +4963,27 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(mmdevapi_fixture64 ALL DEPENDS ${mmdevapi_client} media_component)
                     add_test(NAME native_mmdevapi_x64 COMMAND raven --run-process --execution=native ${mmdevapi_client})
                     set_tests_properties(native_mmdevapi_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endif()
+                # What resampledmo.dll makes of sound at another rate. COM finds its class through raven-shell.dll, as above.
+                if(RAVEN_CONTROLS_COMPONENT_DIR)
+                    foreach(width 64 32)
+                        set(resampler_client ${CMAKE_CURRENT_BINARY_DIR}/resampler-client${width}.exe)
+                        if(width EQUAL 64)
+                            set(resampler_compiler ${RAVEN_MINGW64})
+                            set(resampler_entry raven_entry)
+                        else()
+                            set(resampler_compiler ${RAVEN_MINGW32})
+                            set(resampler_entry _raven_entry)
+                        endif()
+                        add_custom_command(OUTPUT ${resampler_client}
+                            COMMAND ${resampler_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                                -Wl,--entry,${resampler_entry},--no-insert-timestamp
+                                -o ${resampler_client} ${LOADER_SOURCES}/resampler_client.c -lmfplat -lole32 -luuid -lkernel32 -lgcc
+                            DEPENDS ${LOADER_SOURCES}/resampler_client.c VERBATIM)
+                        add_custom_target(resampler_fixture${width} ALL DEPENDS ${resampler_client} media_component)
+                        add_test(NAME native_resampler_x${width} COMMAND raven --run-process --execution=native ${resampler_client})
+                        set_tests_properties(native_resampler_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endforeach()
                 endif()
                 # winscard.dll, the smart card interface, for each width: with no card service, every context is refused.
                 set(winscard_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winscard)
