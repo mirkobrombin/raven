@@ -7464,6 +7464,63 @@ static void effect_render(struct effect *effect, const struct link *inputs, UINT
 		node_render(effect->graph, effect->graph->output, inputs, count, area, out, depth + 1);
 }
 
+/* An effect whose output is a bitmap moved by an offset, as a program shows a picture at its own size: the bitmap's bytes are its
+ * output, with nothing to work out. With `held` given, a part of some size is left there for the texture, as effect_bytes leaves a
+ * drawing, and nothing is returned; what is held then draws its first input as it is. */
+static BYTE *offset_bytes(struct effect_graph *graph, const struct link *links, UINT32 link_count, const D2D1_RECT_L *area,
+	struct held_draw *held)
+{
+	const struct transform_node *made = (const struct transform_node *)graph->nodes[graph->output].node;
+	struct link link;
+	struct bitmap *source;
+	D2D1_RECT_L whole, covered = nothing, wanted, drawn;
+	BYTE *out, *read = NULL;
+	UINT32 row;
+	if (!node_link(graph, graph->output, 0, links, link_count, &link) || !link.image ||
+		!(source = (struct bitmap *)image_bitmap(link.image)))
+		return NULL;
+	if (source->format.format != DXGI_FORMAT_B8G8R8A8_UNORM || source->format.alphaMode != D2D1_ALPHA_MODE_PREMULTIPLIED ||
+		!(out = ALLOC((size_t)rect_width(area) * rect_height(area) * 4))) {
+		object_Release(source);
+		return NULL;
+	}
+	whole.left = whole.top = 0;
+	whole.right = (LONG)source->pixels.width;
+	whole.bottom = (LONG)source->pixels.height;
+	link_bounds(&link, &covered, 1);
+	wanted = rect_moved(area, -made->offset.x, -made->offset.y);
+	wanted = rect_intersect(&wanted, &covered);
+	wanted = rect_intersect(&wanted, &whole);
+	drawn = rect_moved(&wanted, made->offset.x, made->offset.y);
+	if (!rect_empty(&wanted) && (read = ALLOC_UNSET((size_t)rect_width(&wanted) * rect_height(&wanted) * 4))) {
+		if (source->dxgi) {
+			const RECT texture = {wanted.left, wanted.top, wanted.right, wanted.bottom};
+			read_texture(source, &texture);
+		}
+		share_in(source);
+		canvas_pixels(source->surface, wanted.left, wanted.top, rect_width(&wanted), rect_height(&wanted), read, rect_width(&wanted) * 4, 0);
+		if (held && (UINT64)rect_width(&drawn) * rect_height(&drawn) >= 200 * 200) {
+			memset(&held->images[0], 0, sizeof(held->images[0]));
+			held->images[0].left = drawn.left;
+			held->images[0].top = drawn.top;
+			held->images[0].width = rect_width(&drawn);
+			held->images[0].height = rect_height(&drawn);
+			held->bytes[0] = read;
+			held->count = 1;
+			held->drawn = drawn;
+			read = NULL;
+			FREE(out);
+			out = NULL;
+		} else
+			for (row = 0; row < rect_height(&drawn); ++row)
+				memcpy(out + (((size_t)(drawn.top - area->top + row) * rect_width(area)) + (drawn.left - area->left)) * 4,
+					read + (size_t)row * rect_width(&drawn) * 4, (size_t)rect_width(&drawn) * 4);
+	}
+	FREE(read);
+	object_Release(source);
+	return out;
+}
+
 /* An effect whose output is one draw transform over bitmaps is drawn in bytes from end to end: the bitmaps' bytes go to the shader as they
  * are and what it gives comes back as bytes, where the floats effects pass between them would be made and unmade for every pixel of every
  * frame, as for the effect paint.net shows its whole document through. The bytes of `area`, blue first and premultiplied, or NULL when the
@@ -7490,6 +7547,8 @@ static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT3
 		return NULL;
 	node = &graph->nodes[graph->output];
 	info = node->info;
+	if (node->kind == NODE_OFFSET)
+		return offset_bytes(graph, links, link_count, area, held);
 	if (node->kind != NODE_DRAW || !info || !info->shaded || !(shader = find_shader(&info->shader)))
 		return NULL;
 	count = node_input_count(node->node);
@@ -7711,7 +7770,7 @@ static void draw_effect(struct target *self, struct effect *effect, const D2D1_P
 		struct held_draw held;
 		memset(&held, 0, sizeof(held));
 		bytes = effect_bytes(effect, links, count, &area, holds ? &held : NULL);
-		if (held.code) {
+		if (held.count) {
 			held.x = held.drawn.left + (INT32)world._31;
 			held.y = held.drawn.top + (INT32)world._32;
 			if (!onto->held_count) {

@@ -30,6 +30,7 @@ static const GUID swap_shader = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 
 static const CLSID generator_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x01}};
 static const CLSID swap_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x02}};
 static const CLSID chain_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x03}};
+static const CLSID moved_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x04}};
 
 // Green left of x = 2 and blue from there, by the position Direct2D gives each pixel and the two colors the transform sets.
 static const char generator_source[] =
@@ -115,7 +116,7 @@ struct impl {
 	void **table;
 	int kind;
 };
-enum { GENERATOR, SWAP, CHAIN };
+enum { GENERATOR, SWAP, CHAIN, MOVED };
 
 static HRESULT STDMETHODCALLTYPE impl_QueryInterface(void *self, REFIID iid, void **out)
 {
@@ -141,6 +142,18 @@ static HRESULT STDMETHODCALLTYPE impl_Initialize(void *self, void *context, void
 		return ((one_node)(*(void ***)graph)[4])(graph, &generator_face);
 	case SWAP:
 		return ((one_node)(*(void ***)graph)[4])(graph, &swap_face);
+	case MOVED: {
+		// Its input as it is, moved twenty pixels right and ten down: the transform a program shows a picture at its own size with.
+		typedef HRESULT (STDMETHODCALLTYPE *offset_node)(void *, D2D1_POINT_2L, void **);
+		const D2D1_POINT_2L by = {20, 10};
+		void *node = NULL;
+		HRESULT made;
+		if (FAILED(((offset_node)(*(void ***)context)[9])(context, by, &node)))
+			return E_FAIL;
+		made = ((one_node)(*(void ***)graph)[4])(graph, node);
+		IUnknown_Release((IUnknown *)node);
+		return made;
+	}
 	default: {
 		ID2D1Effect *premultiply = NULL;
 		void *node = NULL;
@@ -160,10 +173,11 @@ static HRESULT STDMETHODCALLTYPE impl_Initialize(void *self, void *context, void
 static HRESULT STDMETHODCALLTYPE impl_PrepareForRender(void *self, UINT32 change) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE impl_SetGraph(void *self, void *graph) { return E_NOTIMPL; }
 static void *impl_table[] = {impl_QueryInterface, impl_AddRef, impl_Release, impl_Initialize, impl_PrepareForRender, impl_SetGraph};
-static struct impl impls[3] = {{impl_table, GENERATOR}, {impl_table, SWAP}, {impl_table, CHAIN}};
+static struct impl impls[4] = {{impl_table, GENERATOR}, {impl_table, SWAP}, {impl_table, CHAIN}, {impl_table, MOVED}};
 static HRESULT CALLBACK make_generator(IUnknown **out) { *out = (IUnknown *)&impls[GENERATOR]; return S_OK; }
 static HRESULT CALLBACK make_swap(IUnknown **out) { *out = (IUnknown *)&impls[SWAP]; return S_OK; }
 static HRESULT CALLBACK make_chain(IUnknown **out) { *out = (IUnknown *)&impls[CHAIN]; return S_OK; }
+static HRESULT CALLBACK make_moved(IUnknown **out) { *out = (IUnknown *)&impls[MOVED]; return S_OK; }
 
 // Whether a channel is near the value expected, as the conversions round.
 /* A lock over two by two premultiplied half floats, as paint.net hands its own bitmaps to Direct2D. */
@@ -282,7 +296,8 @@ int raven_entry(void)
 		L"<Inputs><Input name='Source'/></Inputs></Effect>";
 	if (FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &generator_effect, generator_xml, NULL, 0, make_generator)) ||
 		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &swap_effect, one_input_xml, NULL, 0, make_swap)) ||
-		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &chain_effect, one_input_xml, NULL, 0, make_chain)))
+		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &chain_effect, one_input_xml, NULL, 0, make_chain)) ||
+		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &moved_effect, one_input_xml, NULL, 0, make_moved)))
 		return 6;
 	ID2D1Effect *generator = NULL, *swap = NULL, *premultiply = NULL, *chain = NULL;
 	if (FAILED(ID2D1DeviceContext_CreateEffect(context, &generator_effect, &generator)) ||
@@ -929,6 +944,33 @@ int raven_entry(void)
 		return 77;
 	if (!rest_left)
 		return 78;
+	/* An effect that only moves its picture shows it moved, over what the frame drew before it and nowhere else. */
+	ID2D1Effect *shown_moved = NULL;
+	if (FAILED(ID2D1DeviceContext_CreateEffect(surface_context, &moved_effect, &shown_moved)))
+		return 79;
+	((set_input)(*(void ***)shown_moved)[14])(shown_moved, 0, (ID2D1Image *)shown_source, TRUE);
+	output = output_of(shown_moved);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &half_grey);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 80;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 80;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL moved_shown = pixel_is(SHOWN(25, 15), 255, 0, 0) && pixel_is(SHOWN(270, 250), 255, 0, 0);
+	const BOOL moved_around = pixel_is(SHOWN(10, 100), 127, 127, 127) && pixel_is(SHOWN(100, 5), 127, 127, 127) &&
+		pixel_is(SHOWN(285, 100), 127, 127, 127);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	IUnknown_Release((IUnknown *)shown_moved);
+	if (!moved_shown)
+		return 81;
+	if (!moved_around)
+		return 82;
 	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)surface_bitmap);
 	IUnknown_Release((IUnknown *)green_brush);
 	IUnknown_Release((IUnknown *)shown_swap);
