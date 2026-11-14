@@ -2789,11 +2789,14 @@ void NativeWindows::publish_dc(uint64_t handle,const DesktopDC *device)
 		return;
 	if (deferred(handle))
 		return;
-	const uint32_t fields[5]={device->text_color,device->background_color,device->background_mode,device->text_align,device->window ? 1U : 0U};
-	if (occupant==handle && !std::memcmp(slot+8,fields,20))
+	// Where the logical origin lies on the context's pixels, as two 16-bit numbers; an origin they cannot hold is left to the runtime.
+	const bool near_origin=device->user_dx>=INT16_MIN && device->user_dx<=INT16_MAX && device->user_dy>=INT16_MIN && device->user_dy<=INT16_MAX;
+	const uint32_t origin=near_origin ? uint32_t(uint16_t(device->user_dx)) | uint32_t(uint16_t(device->user_dy))<<16 : 0x80008000U;
+	const uint32_t fields[6]={device->text_color,device->background_color,device->background_mode,device->text_align,device->window ? 1U : 0U,origin};
+	if (occupant==handle && !std::memcmp(slot+8,fields,24))
 		return;
 	std::memset(slot,0,8);
-	std::memcpy(slot+8,fields,20);
+	std::memcpy(slot+8,fields,24);
 	std::memcpy(slot,&handle,8);
 }
 
