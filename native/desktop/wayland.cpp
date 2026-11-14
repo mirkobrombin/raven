@@ -329,6 +329,7 @@ struct WaylandPresentation::State {
 			close(descriptor); input_failed=true; return;
 		}
 		const auto *mapping=static_cast<const char *>(mmap(nullptr,size,PROT_READ,MAP_PRIVATE,descriptor,0)); close(descriptor);
+		if (std::getenv("RAVEN_TRACE_KEYS")) fprintf(stderr,"keymap of %u bytes\n",size);
 		if (mapping==MAP_FAILED) { input_failed=true; return; }
 		try {
 			size_t bytes=0; for (const auto &event : pending) bytes+=event.keymap.size();
@@ -445,6 +446,7 @@ struct WaylandPresentation::State {
 					state.keyboard_event({state.keyboard_window,key,pressed,0,DesktopEventKind::key});
 				};
 				value.modifiers=[](void *data,wl_keyboard *,uint32_t,uint32_t depressed,uint32_t latched,uint32_t locked,uint32_t group) {
+					if (std::getenv("RAVEN_TRACE_KEYS")) fprintf(stderr,"modifiers %x %x %x group %u\n",depressed,latched,locked,group);
 					static_cast<State *>(data)->keyboard_event({0,depressed,latched,uint64_t(locked)|(uint64_t(group)<<32),DesktopEventKind::modifiers});
 				};
 				return value;

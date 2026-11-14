@@ -535,11 +535,17 @@ bool NativeWindows::pending_for(uint32_t thread) const
 void NativeWindows::deliver_pending()
 {
 	const auto me=environment.thread_id();
+	// What the keyboard sent stays in the order it came: a key left for the thread that owns its window is read with the layout and
+	// the modifiers that came before it, so those that came after it wait behind it, whichever thread they would otherwise go to. A
+	// virtual keyboard sends its own layout, a modifier, a key and the layout that was there before in one go.
+	bool keyboard_left=false;
 	for (auto remaining=pending_events.size();remaining && !pending_events.empty();--remaining) {
 		const auto event = pending_events.front();
 		pending_events.pop_front();
-		if (const auto owning=input_thread(event); owning && me && owning!=me) {
+		const bool keyboard=event.kind==DesktopEventKind::key || event.kind==DesktopEventKind::modifiers || event.kind==DesktopEventKind::keymap;
+		if (const auto owning=input_thread(event); (owning && me && owning!=me) || (keyboard && keyboard_left)) {
 			pending_events.push_back(event);
+			keyboard_left=keyboard_left || keyboard;
 			continue;
 		}
 		// The window an event was collected for may have been hidden or destroyed before the event could be delivered: such an
@@ -1168,6 +1174,9 @@ void NativeWindows::receive(const DesktopEvent &event)
 	if (event.kind==DesktopEventKind::keymap) { keyboard_map.load(event.keymap); key_translation.reset(); return; }
 	if (event.kind==DesktopEventKind::modifiers) {
 		keyboard_map.modifiers(event.message,uint32_t(event.wparam),uint32_t(event.lparam),uint32_t(event.lparam>>32));
+		if (std::getenv("RAVEN_TRACE_KEYS"))
+			fprintf(stderr,"modifiers taken: focus %llx shift %d control %d alt %d\n",(unsigned long long)focus,int(keyboard_map.modifier_active(0x10)),
+				int(keyboard_map.modifier_active(0x11)),int(keyboard_map.modifier_active(0x12)));
 		// A virtual keyboard reports modifiers without key events; the guest still sees them go down and up.
 		if (focus && std::as_const(objects).window(focus) && messages.size()<9990) {
 			static constexpr uint32_t scans[3]{0x2a,0x1d,0x38};
