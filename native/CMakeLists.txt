@@ -3985,6 +3985,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(tooltip_empty_fixture${width} ALL DEPENDS ${tooltip_empty_client})
                     add_test(NAME native_tooltip_empty_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${tooltip_empty_client})
                     set_tests_properties(native_tooltip_empty_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(mdi_maximize_client ${CMAKE_CURRENT_BINARY_DIR}/mdi-maximize${width}.exe)
+                    add_custom_command(OUTPUT ${mdi_maximize_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${mdi_maximize_client} ${LOADER_SOURCES}/mdi_maximize_client.c -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/mdi_maximize_client.c VERBATIM)
+                    add_custom_target(mdi_maximize_fixture${width} ALL DEPENDS ${mdi_maximize_client})
+                    add_test(NAME native_mdi_maximize_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${mdi_maximize_client})
+                    set_tests_properties(native_mdi_maximize_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(combo_selection_client ${CMAKE_CURRENT_BINARY_DIR}/combo-selection${width}.exe)
                     add_custom_command(OUTPUT ${combo_selection_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
