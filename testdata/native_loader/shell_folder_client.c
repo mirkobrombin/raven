@@ -132,10 +132,56 @@ int raven_entry(void)
 	if (!create_list || create_list(directory, &created, &wanted) != S_OK || !created || wanted != SFGAO_FOLDER ||
 		!SHGetPathFromIDListW(created, parsed) || lstrcmpiW(parsed, directory) && (lstrlenW(parsed) + 1 != lstrlenW(directory)))
 		return 29;
+	/* The item of that list, as the dialog then makes it, gives the folder back. */
+	HRESULT (WINAPI *create_item)(PCIDLIST_ABSOLUTE, IShellFolder *, PCUITEMID_CHILD, IShellItem **) =
+		(HRESULT (WINAPI *)(PCIDLIST_ABSOLUTE, IShellFolder *, PCUITEMID_CHILD, IShellItem **))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHCreateShellItem");
+	IShellItem *shell_item = NULL;
+	WCHAR *item_path = NULL;
+	if (!create_item || create_item(NULL, NULL, (PCUITEMID_CHILD)created, &shell_item) != S_OK || !shell_item ||
+		IShellItem_GetDisplayName(shell_item, SIGDN_FILESYSPATH, &item_path) != S_OK || !SHGetPathFromIDListW(created, parsed) ||
+		lstrcmpiW(item_path, parsed))
+		return 31;
+	CoTaskMemFree(item_path);
+	IShellItem_Release(shell_item);
 	ILFree((PIDLIST_RELATIVE)created);
 	created = (PIDLIST_ABSOLUTE)1;
 	if (create_list(missing, &created, NULL) != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || created)
 		return 30;
+	/* The same by display name, as Mp3tag finds the folder it starts in, with the attributes asked for; a missing path is refused. */
+	HRESULT (WINAPI *parse_name)(PCWSTR, IBindCtx *, PIDLIST_ABSOLUTE *, SFGAOF, SFGAOF *) =
+		(HRESULT (WINAPI *)(PCWSTR, IBindCtx *, PIDLIST_ABSOLUTE *, SFGAOF, SFGAOF *))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHParseDisplayName");
+	SFGAOF found = 0;
+	if (!parse_name || parse_name(directory, NULL, &created, SFGAO_FOLDER | SFGAO_STREAM, &found) != S_OK || !created ||
+		found != SFGAO_FOLDER || !SHGetPathFromIDListW(created, parsed) || lstrcmpiW(parsed, directory) && (lstrlenW(parsed) + 1 != lstrlenW(directory)))
+		return 32;
+	ILFree((PIDLIST_RELATIVE)created);
+	created = (PIDLIST_ABSOLUTE)1;
+	if (SUCCEEDED(parse_name(missing, NULL, &created, 0, NULL)) || created)
+		return 33;
+	/* The folder that holds the last item of a list, and that item, which names the file in it. */
+	HRESULT (WINAPI *bind_parent)(PCIDLIST_ABSOLUTE, REFIID, void **, PCUITEMID_CHILD *) =
+		(HRESULT (WINAPI *)(PCIDLIST_ABSOLUTE, REFIID, void **, PCUITEMID_CHILD *))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHBindToParent");
+	IShellFolder *parent = NULL;
+	PCUITEMID_CHILD named = NULL;
+	if (!bind_parent || bind_parent(joined, &IID_IShellFolder, (void **)&parent, &named) != S_OK || !parent || named != last)
+		return 34;
+	if (IShellFolder_GetDisplayNameOf(parent, named, SHGDN_FORPARSING, &text) != S_OK || text.uType != STRRET_WSTR || lstrcmpiW(text.pOleStr, file))
+		return 35;
+	CoTaskMemFree(text.pOleStr);
+	IShellFolder_Release(parent);
+	/* What a directory listing says of an item, as Mp3tag reads it of each file it shows. */
+	HRESULT (WINAPI *item_data)(IShellFolder *, PCUITEMID_CHILD, int, void *, int) =
+		(HRESULT (WINAPI *)(IShellFolder *, PCUITEMID_CHILD, int, void *, int))(void (*)(void))GetProcAddress(
+			GetModuleHandleW(L"shell32.dll"), "SHGetDataFromIDListW");
+	WIN32_FIND_DATAW data;
+	if (!item_data || item_data(folder, (PCUITEMID_CHILD)child, SHGDFIL_FINDDATA, &data, sizeof data) != S_OK ||
+		lstrcmpiW(data.cFileName, name) || data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		return 36;
+	if (item_data(folder, (PCUITEMID_CHILD)child, SHGDFIL_FINDDATA, &data, sizeof data - 1) != E_INVALIDARG)
+		return 37;
 
 	ILFree((PIDLIST_RELATIVE)first);
 	ILFree(clone);

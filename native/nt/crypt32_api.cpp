@@ -524,6 +524,19 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		objects.close(call[0]);
 		call.ret(1);
 	});
+	// Each duplicate is closed on its own; the store lives until the last close.
+	registry.add("CertDuplicateStore", 1, [&objects](ApiCall &call) {
+		if (!objects.object_as<CertificateStore>(call[0])) {
+			call.fail(6, 0);
+			return;
+		}
+		const auto made = objects.duplicate(call[0]);
+		if (made.status) {
+			call.fail(8, 0);
+			return;
+		}
+		call.ret(made.value);
+	});
 	registry.add("CertCreateCertificateContext", 3, [make_context](ApiCall &call) {
 		if (!call[1] || !call.u32(2)) {
 			call.fail(87, 0);
@@ -686,9 +699,32 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		call.write(block, image);
 		return block;
 	};
-	registry.add("CertFreeCertificateChain", 1, [&allocator](ApiCall &call) {
-		if (call[0])
-			allocator.release(call[0]);
+	// A duplicated chain is the same block with one more holder; the block is released when the last holder frees it.
+	struct ChainHolders {
+		std::mutex lock;
+		std::map<uint64_t, uint32_t> extra;
+	};
+	const auto chain_holders = std::make_shared<ChainHolders>();
+	registry.add("CertDuplicateCertificateChain", 1, [chain_holders](ApiCall &call) {
+		if (call[0]) {
+			std::lock_guard<std::mutex> hold(chain_holders->lock);
+			++chain_holders->extra[call[0]];
+		}
+		call.ret(call[0]);
+	});
+	registry.add("CertFreeCertificateChain", 1, [&allocator, chain_holders](ApiCall &call) {
+		if (!call[0])
+			return;
+		{
+			std::lock_guard<std::mutex> hold(chain_holders->lock);
+			const auto held = chain_holders->extra.find(call[0]);
+			if (held != chain_holders->extra.end()) {
+				if (!--held->second)
+					chain_holders->extra.erase(held);
+				return;
+			}
+		}
+		allocator.release(call[0]);
 	});
 	// The chain is built with the host's X.509 verifier against the host's trust anchors; the guest receives the Windows structures:
 	// CERT_CHAIN_CONTEXT, one CERT_SIMPLE_CHAIN and a CERT_CHAIN_ELEMENT for each certificate.
@@ -870,8 +906,8 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		call.store<int32_t>(call[3] + 12, -1);
 		call.ret(1);
 	});
-	// Properties a certificate context answers from its encoded certificate: its SHA-1 and MD5 hashes, and its key identifier, which is
-	// the subject key identifier the certificate names or else the SHA-1 of its public key.
+	// Properties a certificate context answers from its encoded certificate: its SHA-1, SHA-256 and MD5 hashes, and its key identifier,
+	// which is the subject key identifier the certificate names or else the SHA-1 of its public key.
 	// CERT_ENHKEY_USAGE with no identifiers and CRYPT_E_NOT_FOUND: the certificate holds no restriction, good for every use.
 	registry.add("CertGetEnhancedKeyUsage", 4, [](ApiCall &call) {
 		const uint32_t size = call.pointer_width() == 4 ? 8 : 16;
@@ -892,7 +928,7 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		call.fail(0x80092004U, 1);
 	});
 	registry.add("CertGetCertificateContextProperty", 4, [encoded_of](ApiCall &call) {
-		constexpr uint32_t sha1_hash = 3, md5_hash = 4, key_identifier = 20, more_data = 234, not_found = 0x80092004U;
+		constexpr uint32_t sha1_hash = 3, md5_hash = 4, key_identifier = 20, sha256_hash = 107, more_data = 234, not_found = 0x80092004U;
 		if (!call[0] || !call[3]) {
 			call.fail(error_invalid_parameter);
 			return;
@@ -902,6 +938,9 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		if (call.u32(1) == sha1_hash) {
 			value.resize(SHA_DIGEST_LENGTH);
 			SHA1(encoded.data(), encoded.size(), value.data());
+		} else if (call.u32(1) == sha256_hash) {
+			value.resize(SHA256_DIGEST_LENGTH);
+			SHA256(encoded.data(), encoded.size(), value.data());
 		} else if (call.u32(1) == md5_hash) {
 			value.resize(16);
 			unsigned int size = 0;

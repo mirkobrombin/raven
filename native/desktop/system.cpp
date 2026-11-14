@@ -202,6 +202,11 @@ void NativeWindows::reshape(uint64_t handle, DesktopRect outer)
 		window->height = outer.bottom - outer.top;
 		recalculate_client(handle, client_width, client_height, laid_out);
 	}
+	// A window of another size is uncovered anew, and what it uncovers is to be painted: its controls too, those that neither moved
+	// nor changed among them, as a control that lay beyond the edge of a window which then grew over it.
+	if (resized && std::as_const(objects).window(handle) && objects.window_visible(handle))
+		for (const auto child : objects.child_windows(handle))
+			invalidate_tree(child, true);
 	window = objects.window(handle);
 	if (window && moved && !placing.contains(handle))
 		send(handle, 3, 0, uint16_t(window->x) | (uint64_t(uint16_t(window->y)) << 16));

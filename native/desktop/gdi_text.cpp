@@ -389,6 +389,11 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 			std::optional<DesktopRect> rect;
 			if (call[4] && (options & 6))
 				rect = DesktopRect{call.load<int32_t>(call[4]), call.load<int32_t>(call[4] + 4), call.load<int32_t>(call[4] + 8), call.load<int32_t>(call[4] + 12)};
+			// A rectangle given with its edges the wrong way round is taken in order, as MFC's FillSolidRect with a negative extent draws.
+			if (rect && rect->left > rect->right)
+				std::swap(rect->left, rect->right);
+			if (rect && rect->top > rect->bottom)
+				std::swap(rect->top, rect->bottom);
 			if ((options & 2) && !rect)
 				throw uint32_t(87);
 			if (count < 0)

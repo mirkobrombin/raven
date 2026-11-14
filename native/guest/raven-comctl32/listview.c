@@ -2660,8 +2660,14 @@ static void draw_item(list_state *list, HDC dc, int index, const RECT *clip, DWO
 		draw.clrTextBk = GetSysColor(COLOR_3DFACE);
 	}
 
-	if (pre_answer & CDRF_NOTIFYITEMDRAW)
+	if (pre_answer & CDRF_NOTIFYITEMDRAW) {
 		answer = (DWORD)custom_draw(list, &draw, CDDS_ITEMPREPAINT);
+		/* The colours a parent gives a selected item do not hide the selection: WinForms hands every row its BackColor. */
+		if (selected && show && !(state & LVIS_DROPHILITED)) {
+			draw.clrText = GetSysColor(focused_window ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
+			draw.clrTextBk = GetSysColor(focused_window ? COLOR_HIGHLIGHT : COLOR_3DFACE);
+		}
+	}
 	if (list->dead || (!list->owner_data && index >= list->count))
 		return;
 	if (answer & CDRF_NEWFONT)

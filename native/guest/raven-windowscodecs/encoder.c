@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "wic.h"
 
-/* Encoders keep a frame's rows in memory and write the file when the frame commits. PNG is written with stored deflate blocks. */
+/* Encoders keep a frame's rows in memory and write the file when the frame commits. PNG is deflated with the fixed Huffman codes, or
+ * written in stored blocks where that would come out larger. */
 typedef struct
 {
 	IPropertyBag2 iface;
@@ -276,16 +277,142 @@ static HRESULT png_chunk(IStream *stream, const char *name, const BYTE *body, SI
 	return put(stream, tail, 4);
 }
 
+/* ---- deflate, from RFC 1951 ----
+ * One block of the fixed Huffman codes: each run of three bytes or more that occurred within the last 32768 is written as its length
+ * and how far back it lies, every other byte as itself. */
+static const UINT16 length_base[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195,
+	227, 258};
+static const BYTE length_extra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+static const UINT16 distance_base[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073,
+	4097, 6145, 8193, 12289, 16385, 24577};
+static const BYTE distance_extra[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+
+enum { DEFLATE_WINDOW = 32768, DEFLATE_HASHES = 1 << 15, DEFLATE_TRIES = 32, DEFLATE_LONGEST = 258 };
+
+struct packer {
+	BYTE *to;
+	UINT hold, held;
+};
+
+/* Bits go out from the lowest of each byte up. */
+static void pack_bits(struct packer *out, UINT value, UINT count)
+{
+	out->hold |= value << out->held;
+	out->held += count;
+	while (out->held >= 8) {
+		*out->to++ = (BYTE)out->hold;
+		out->hold >>= 8;
+		out->held -= 8;
+	}
+}
+
+/* A Huffman code goes out from its top bit down. */
+static void pack_code(struct packer *out, UINT code, UINT length)
+{
+	UINT turned = 0, bit;
+	for (bit = 0; bit < length; bit++)
+		turned |= ((code >> bit) & 1) << (length - 1 - bit);
+	pack_bits(out, turned, length);
+}
+
+/* A byte, the end of the block (256) or a length code (257 and up), in the fixed codes. */
+static void pack_symbol(struct packer *out, UINT symbol)
+{
+	if (symbol < 144)
+		pack_code(out, 0x30 + symbol, 8);
+	else if (symbol < 256)
+		pack_code(out, 0x190 + symbol - 144, 9);
+	else if (symbol < 280)
+		pack_code(out, symbol - 256, 7);
+	else
+		pack_code(out, 0xc0 + symbol - 280, 8);
+}
+
+static UINT deflate_hash(const BYTE *at)
+{
+	return ((UINT)at[0] << 10 ^ (UINT)at[1] << 5 ^ at[2]) & (DEFLATE_HASHES - 1);
+}
+
+/* Deflates the data into room for nine bits a byte and a few more; the size written, or 0 without memory. */
+static SIZE_T deflate_fixed(const BYTE *data, SIZE_T size, BYTE *to)
+{
+	struct packer out = {to, 0, 0};
+	/* The last place each hash was seen, plus one, and for each place in the window the one before it with the same hash. */
+	UINT *last = wic_alloc(DEFLATE_HASHES * sizeof(UINT)), *before = wic_alloc(DEFLATE_WINDOW * sizeof(UINT));
+	SIZE_T at = 0, step;
+	UINT code;
+	if (!last || !before) {
+		wic_free(last);
+		wic_free(before);
+		return 0;
+	}
+	memset(last, 0, DEFLATE_HASHES * sizeof(UINT));
+	memset(before, 0, DEFLATE_WINDOW * sizeof(UINT));
+	pack_bits(&out, 1, 1);
+	pack_bits(&out, 1, 2);
+	while (at < size) {
+		UINT longest = 0, back = 0;
+		if (at + 3 <= size) {
+			const UINT hash = deflate_hash(data + at), most = (UINT)min(size - at, DEFLATE_LONGEST);
+			UINT seen = last[hash], tries = DEFLATE_TRIES;
+			while (seen && tries-- && at - (seen - 1) <= DEFLATE_WINDOW) {
+				const SIZE_T from = seen - 1;
+				UINT length = 0, earlier;
+				while (length < most && data[from + length] == data[at + length])
+					length++;
+				if (length > longest) {
+					longest = length;
+					back = (UINT)(at - from);
+					if (length == most)
+						break;
+				}
+				/* A place the window has since written over names a later one: the chain ends there. */
+				earlier = before[from & (DEFLATE_WINDOW - 1)];
+				if (earlier >= seen)
+					break;
+				seen = earlier;
+			}
+			before[at & (DEFLATE_WINDOW - 1)] = last[hash];
+			last[hash] = (UINT)at + 1;
+		}
+		if (longest < 3) {
+			pack_symbol(&out, data[at++]);
+			continue;
+		}
+		for (code = 28; length_base[code] > longest; code--)
+			;
+		pack_symbol(&out, 257 + code);
+		pack_bits(&out, longest - length_base[code], length_extra[code]);
+		for (code = 29; distance_base[code] > back; code--)
+			;
+		pack_code(&out, code, 5);
+		pack_bits(&out, back - distance_base[code], distance_extra[code]);
+		for (step = 1; step < longest; step++)
+			if (at + step + 3 <= size) {
+				const UINT hash = deflate_hash(data + at + step);
+				before[(at + step) & (DEFLATE_WINDOW - 1)] = last[hash];
+				last[hash] = (UINT)(at + step) + 1;
+			}
+		at += longest;
+	}
+	pack_symbol(&out, 256);
+	if (out.held)
+		pack_bits(&out, 0, 8 - out.held);
+	wic_free(last);
+	wic_free(before);
+	return (SIZE_T)(out.to - to);
+}
+
 static HRESULT write_png(frame *self, IStream *stream)
 {
 	static const BYTE signature[8] = {0x89, 'P', 'N', 'G', 13, 10, 26, 10};
 	const UINT bits = wic_format_bits(&self->format), row = (self->width * bits + 7) / 8;
 	const SIZE_T raw_size = (SIZE_T)(row + 1) * self->height;
-	const SIZE_T blocks = raw_size / 65535 + 1, packed_size = 2 + raw_size + blocks * 5 + 4;
+	const SIZE_T blocks = raw_size / 65535 + 1, stored_size = raw_size + blocks * 5, packed_size = 2 + raw_size + raw_size / 8 + blocks * 5 + 16 + 4;
 	BYTE header[13], physical[9];
 	BYTE *raw, *packed, *to;
 	UINT depth = 8, kind = 6, y, x, a = 1, b = 0;
-	SIZE_T at;
+	SIZE_T at, deflated;
 	HRESULT result;
 	if (IsEqualGUID(&self->format, &GUID_WICPixelFormat24bppBGR))
 		kind = 2;
@@ -337,18 +464,23 @@ static HRESULT write_png(frame *self, IStream *stream)
 	to = packed;
 	*to++ = 0x78;
 	*to++ = 1;
-	for (at = 0; at < raw_size || at == 0;) {
-		const UINT count = (UINT)min(raw_size - at, 65535);
-		*to++ = at + count >= raw_size;
-		set_u16(to, count);
-		set_u16(to + 2, ~count & 0xffff);
-		to += 4;
-		memcpy(to, raw + at, count);
-		to += count;
-		at += count;
-		if (!count)
-			break;
-	}
+	/* What deflating does not make smaller, as pictures of noise, goes out in stored blocks. */
+	deflated = deflate_fixed(raw, raw_size, to);
+	if (deflated && deflated < stored_size)
+		to += deflated;
+	else
+		for (at = 0; at < raw_size || at == 0;) {
+			const UINT count = (UINT)min(raw_size - at, 65535);
+			*to++ = at + count >= raw_size;
+			set_u16(to, count);
+			set_u16(to + 2, ~count & 0xffff);
+			to += 4;
+			memcpy(to, raw + at, count);
+			to += count;
+			at += count;
+			if (!count)
+				break;
+		}
 	for (at = 0; at < raw_size; at++) {
 		a = (a + raw[at]) % 65521;
 		b = (b + a) % 65521;

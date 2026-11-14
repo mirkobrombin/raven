@@ -38,6 +38,8 @@ public:
 		std::function<void(uint64_t window)> release;
 		// The client area of the window: what a Windows surface reports as its extent.
 		std::function<std::optional<std::pair<uint32_t, uint32_t>>(uint64_t window)> size;
+		// Whether the window's top-level window is on the screen.
+		std::function<bool(uint64_t window)> shown;
 		// The window system whose surface extension serves the Windows one.
 		HostPlatform platform = HostPlatform::wayland;
 	};
@@ -129,6 +131,10 @@ private:
 	// The instance token each of those surfaces was created from.
 	std::map<uint64_t, uint64_t> surface_instances;
 	std::set<uint64_t> foreign_surfaces;
+	// Surfaces over windows whose top-level window was hidden when they were made: they present nowhere, as on Windows, until the
+	// window is shown and they are lost, so the program makes them again over what the host shows.
+	std::set<uint64_t> hidden_surfaces;
+	bool hidden_surface_lost(uint64_t surface) const;
 	struct ForeignSwapchain;
 	std::map<uint64_t, std::shared_ptr<ForeignSwapchain>> foreign_swapchains;
 	VkResult prepare_foreign_swapchain(uint64_t token,uint64_t device,VkSwapchainKHR swapchain,

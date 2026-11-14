@@ -18,6 +18,8 @@ struct Canvas {
 	std::vector<uint8_t> owned{};
 	uint8_t *pixels;
 	int32_t width, height;
+	// Nothing is drawn outside it. A caller keeps it inside the canvas.
+	DesktopRect clip{0, 0, width, height};
 
 	Canvas(std::vector<uint8_t> storage, int32_t width, int32_t height) : owned(std::move(storage)), pixels(owned.data()), width(width), height(height) {}
 	Canvas(uint8_t *view, int32_t width, int32_t height) : pixels(view), width(width), height(height) {}
@@ -26,7 +28,7 @@ struct Canvas {
 
 	void set(int32_t x, int32_t y, uint32_t rgb)
 	{
-		if (x < 0 || y < 0 || x >= width || y >= height)
+		if (x < clip.left || y < clip.top || x >= clip.right || y >= clip.bottom)
 			return;
 		const auto at = (size_t(y) * size_t(width) + size_t(x)) * 4;
 		pixels[at] = uint8_t(rgb >> 16);
@@ -37,8 +39,8 @@ struct Canvas {
 
 	void fill(DesktopRect rect, uint32_t rgb)
 	{
-		for (int32_t y = std::max(rect.top, 0); y < std::min(rect.bottom, height); ++y)
-			for (int32_t x = std::max(rect.left, 0); x < std::min(rect.right, width); ++x)
+		for (int32_t y = std::max(rect.top, clip.top); y < std::min(rect.bottom, clip.bottom); ++y)
+			for (int32_t x = std::max(rect.left, clip.left); x < std::min(rect.right, clip.right); ++x)
 				set(x, y, rgb);
 	}
 

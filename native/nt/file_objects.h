@@ -12,6 +12,7 @@ namespace raven {
 
 class CompletionPort;
 class FindObject;
+class DirectoryWatch;
 
 // An open file or directory; the host descriptor carries the Windows file pointer.
 class FileObject : public KernelObject {
@@ -53,6 +54,8 @@ public:
 	std::shared_ptr<CompletionPort> port;
 	uint64_t key = 0;
 	bool skip_port_on_success = false, skip_event_on_success = false;
+	// The changes ReadDirectoryChangesW reports on a directory handle, from its first call on.
+	std::shared_ptr<DirectoryWatch> directory_watch;
 	bool writable() const { return access & (0x40000000U | 0x10000000U | 0x2U | 0x4U); }
 };
 

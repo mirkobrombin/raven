@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 #include "wic.h"
 
+/* The newer imaging factory adds an encoder of Direct2D images where the component factory adds its metadata methods, so it is a second
+   interface of the same object, whose other methods are the imaging factory's. */
 typedef struct
 {
 	IWICImagingFactory iface;
+	struct { const void *lpVtbl; } iface2;
 	LONG references;
 } factory;
 
@@ -256,6 +259,11 @@ static HRESULT WINAPI factory_QueryInterface(IWICImagingFactory *iface, REFIID r
 		return E_INVALIDARG;
 	if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IWICImagingFactory) || IsEqualGUID(riid, &IID_IWICComponentFactory)) {
 		*out = iface;
+		IWICImagingFactory_AddRef(iface);
+		return S_OK;
+	}
+	if (IsEqualGUID(riid, &IID_IWICImagingFactory2)) {
+		*out = &WIC_CONTAINING(iface, factory, iface)->iface2;
 		IWICImagingFactory_AddRef(iface);
 		return S_OK;
 	}
@@ -776,13 +784,50 @@ static const struct
 }, {(void *)factory_CreateMetadataReader, (void *)factory_CreateMetadataReaderFromContainer, (void *)factory_CreateMetadataWriter, (void *)factory_CreateMetadataWriterFromReader,
 	(void *)factory_CreateQueryReaderFromBlockReader, (void *)factory_CreateQueryWriterFromBlockWriter, (void *)factory_CreateEncoderPropertyBag}};
 
+static HRESULT WINAPI factory2_QueryInterface(void *iface, REFIID riid, void **out)
+{
+	return factory_QueryInterface(&WIC_CONTAINING(iface, factory, iface2)->iface, riid, out);
+}
+
+static ULONG WINAPI factory2_AddRef(void *iface)
+{
+	return factory_AddRef(&WIC_CONTAINING(iface, factory, iface2)->iface);
+}
+
+static ULONG WINAPI factory2_Release(void *iface)
+{
+	return factory_Release(&WIC_CONTAINING(iface, factory, iface2)->iface);
+}
+
+/* Encoding Direct2D images needs a Direct2D device whose images this library can read back, which it does not have. */
+static HRESULT WINAPI factory2_CreateImageEncoder(void *iface, void *device, void **out)
+{
+	if (out)
+		*out = NULL;
+	return E_NOTIMPL;
+}
+
+static struct
+{
+	IWICImagingFactoryVtbl base;
+	void *added[1];
+} factory2_table;
+
 HRESULT wic_factory_create(REFIID riid, void **out)
 {
 	factory *self = wic_alloc(sizeof(*self));
 	HRESULT result;
 	if (!self)
 		return E_OUTOFMEMORY;
+	if (!factory2_table.added[0]) {
+		factory2_table.base = factory_table.base;
+		factory2_table.base.QueryInterface = (void *)factory2_QueryInterface;
+		factory2_table.base.AddRef = (void *)factory2_AddRef;
+		factory2_table.base.Release = (void *)factory2_Release;
+		factory2_table.added[0] = (void *)factory2_CreateImageEncoder;
+	}
 	self->iface.lpVtbl = &factory_table.base;
+	self->iface2.lpVtbl = &factory2_table.base;
 	self->references = 1;
 	result = IWICImagingFactory_QueryInterface(&self->iface, riid, out);
 	IWICImagingFactory_Release(&self->iface);

@@ -32,5 +32,11 @@ int raven_entry(void)
 	buffer = (IMFMediaBuffer *)0xdead;
 	if (MFCreateAlignedMemoryBuffer(4096, 16, &buffer) != E_NOTIMPL || buffer)
 		return 8;
+	/* No transform is registered, so an enumeration succeeds and finds none, as paint.net asks whether a video codec is installed. */
+	static const GUID video_decoders = {0xd6c02d4b, 0x6833, 0x45b4, {0x97, 0x1a, 0x05, 0xa4, 0xb0, 0x4b, 0xab, 0x91}};
+	IMFActivate **activates = (IMFActivate **)0xdead;
+	UINT32 count = 0xdead;
+	if (MFTEnumEx(video_decoders, MFT_ENUM_FLAG_ALL, NULL, NULL, &activates, &count) != S_OK || activates || count)
+		return 9;
 	return 0;
 }

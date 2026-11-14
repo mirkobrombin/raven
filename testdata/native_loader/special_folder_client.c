@@ -37,5 +37,15 @@ int raven_entry(void)
 	if (SHGetSpecialFolderPathA(NULL, ansi, CSIDL_TEMPLATES, TRUE) || SHGetSpecialFolderPathW(NULL, wide, CSIDL_TEMPLATES, TRUE))
 		return 9;
 	DeleteFileW(expected);
+	/* The public folders every user shares are there from the start, as MusicBee looks for shared music in them. */
+	const int shared[] = {CSIDL_COMMON_DOCUMENTS, CSIDL_COMMON_MUSIC, CSIDL_COMMON_PICTURES, CSIDL_COMMON_VIDEO};
+	for (unsigned index = 0; index < sizeof(shared) / sizeof(shared[0]); ++index) {
+		if (SHGetFolderPathW(NULL, shared[index], NULL, 0, expected) != S_OK ||
+			CompareStringOrdinal(expected, 16, L"C:\\Users\\Public\\", 16, TRUE) != CSTR_EQUAL)
+			return 10;
+		const DWORD attributes = GetFileAttributesW(expected);
+		if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+			return 11;
+	}
 	return 0;
 }

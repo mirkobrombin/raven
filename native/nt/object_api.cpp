@@ -34,7 +34,7 @@ static uint32_t error(uint32_t status)
 	return 87;
 }
 
-void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &objects)
+void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &objects, NativeThreads &threads)
 {
 	registry.add("CloseHandle", 1, [&objects](ApiCall &call) {
 		const uint32_t status=objects.close(call[0]);
@@ -42,8 +42,14 @@ void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &obje
 		else call.ret(1);
 	});
 	for (const bool set : {true, false})
-		registry.add(set ? "SetEvent" : "ResetEvent", 1, [&objects, set](ApiCall &call) {
+		registry.add(set ? "SetEvent" : "ResetEvent", 1, [&objects, &threads, set](ApiCall &call) {
+			if (set && call.process.serving() && !call.process.serving_queued() && threads.others_waiting()) {
+				call.process.decline_served();
+				return;
+			}
 			const uint32_t status=objects.set_event(call[0], set).status;
+			// The thread the event wakes runs before the setter goes on, as it would on another processor.
+			if (set && !status && !call.process.serving()) threads.hand_over();
 			if (status) call.fail(error(status), 0);
 			else call.ret(1);
 		});
@@ -99,8 +105,11 @@ bool NativeObjectAPI::dispatch(std::string_view name)
 			status=objects.close(args[0]); result=1;
 		} else if (set) {
 			if (nt && args[1]) writable(args[1],4);
-			const auto changed=objects.set_event(args[0],name=="NtSetEvent" || name=="SetEvent");
+			const bool signal=name=="NtSetEvent" || name=="SetEvent";
+			const auto changed=objects.set_event(args[0],signal);
 			status=changed.status; result=1;
+			// The thread the event wakes runs before the setter goes on, as it would on another processor.
+			if (signal && !status && threads) threads->hand_over();
 			if (nt && args[1] && !status) { std::array<uint8_t,4> output{}; put(output,0,changed.value,4); process.write_memory(args[1],output); }
 		} else if (query) {
 			if (uint32_t(args[1])!=0) status=0xc00000bbU;

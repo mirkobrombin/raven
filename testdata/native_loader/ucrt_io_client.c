@@ -309,6 +309,32 @@ static int runtime_helpers(void)
 	return 0;
 }
 
+/* A library keeps the functions to run when it is unloaded in a table of its own and runs the table as it detaches: last registered
+   first, once, and never among the program's own at the end of the process, when a library unloaded before then is gone. The host of
+   the .NET runtime, which paint.net unloads before it ends, registers its own this way. */
+typedef struct { void (__cdecl **first)(void), (__cdecl **last)(void), (__cdecl **end)(void); } OnexitTable;
+extern int _initialize_onexit_table(OnexitTable *);
+extern int _register_onexit_function(OnexitTable *, void (__cdecl *)(void));
+extern int _execute_onexit_table(OnexitTable *);
+extern void _cexit(void);
+static int leaving[4], left;
+static void __cdecl leave_first(void) { if (left < 4) leaving[left++] = 1; }
+static void __cdecl leave_second(void) { if (left < 4) leaving[left++] = 2; }
+
+static int own_exit_functions(void)
+{
+	OnexitTable own = {0}, kept = {0};
+	if (_initialize_onexit_table(&own) || _initialize_onexit_table(&kept)) return 1;
+	if (_register_onexit_function(&own, leave_first) || _register_onexit_function(&own, leave_second) ||
+		_register_onexit_function(&kept, leave_first)) return 2;
+	if (left) return 3;
+	if (_execute_onexit_table(&own) || left != 2 || leaving[0] != 2 || leaving[1] != 1) return 4;
+	if (_execute_onexit_table(&own) || left != 2) return 5;
+	_cexit();
+	if (left != 2) return 6;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	char line[64], big[64];
@@ -373,5 +399,7 @@ int raven_entry(void)
 		return 300 + (int)count;
 	if ((count = float_conversions()))
 		return 400 + (int)count;
+	if ((count = own_exit_functions()))
+		return 500 + (int)count;
 	return temp_names();
 }

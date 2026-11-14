@@ -491,6 +491,10 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	// flush has nothing to do and succeeds.
 	registry.add("FlushInstructionCache", 3, [](ApiCall &call) { call.ret(1); });
 	registry.add("NtFlushInstructionCache", 3, [](ApiCall &call) { call.ret(0); });
+	// Locking keeps pages resident; a guest's memory is never paged out behind its back in a way it could notice, so the request
+	// holds as soon as it is made.
+	registry.add("VirtualLock", 2, [](ApiCall &call) { call.ret(1); });
+	registry.add("VirtualUnlock", 2, [](ApiCall &call) { call.ret(1); });
 	// SectionBasicInformation: the base address, the allocation attributes and the maximum size of the section.
 	// The PE headers of an image section's file: the machine, the subsystem and the rest SectionImageInformation reports.
 	const auto image_headers = [](const SectionObject &mapping) -> std::optional<std::vector<uint8_t>> {
@@ -623,7 +627,14 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	});
 	const auto views_owner = std::make_shared<std::map<uint64_t, View>>();
 	auto &views = *views_owner;
-	registry.add("MapViewOfFile", 5, [&, views_owner](ApiCall &call) {
+	// The view goes where the caller asks when `base` is not zero: an address that is not a multiple of the allocation granularity
+	// fails with ERROR_MAPPED_ALIGNMENT and one already taken with ERROR_INVALID_ADDRESS, as on Windows. The .NET runtime places the
+	// views it writes and runs its code through within reach of its own library this way.
+	const auto map_view = [&, views_owner](ApiCall &call, uint64_t base) {
+		if (base & 65535) {
+			call.fail(1132);
+			return;
+		}
 		const auto mapping = objects.object_as<SectionObject>(call[0]);
 		if (!mapping) {
 			call.fail(6);
@@ -647,9 +658,9 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 		if (mapping->descriptor >= 0) {
 			const uint32_t rights = call.u32(1);
 			const uint32_t access = rights & 0x2 ? ((rights & 0x20) ? 0x40 : 0x04) : rights & 0x1 ? 0x08 : (rights & 0x20) ? 0x20 : 0x02;
-			const auto view = memory.map_view(mapping->descriptor, offset, size, access);
+			const auto view = memory.map_view(mapping->descriptor, offset, size, access, base);
 			if (view.status) {
-				call.fail(view.status == 0xc0000017U ? 8 : 87);
+				call.fail(view.status == 0xc0000017U ? 8 : view.status == 0xc0000018U ? 487 : 87);
 				return;
 			}
 			views[view.address] = {mapping, offset, size, bool(rights & 2)};
@@ -657,6 +668,10 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (mapping->file && (mapping->protection & 0x1000000U)) {
+			if (base) {
+				call.fail(487);
+				return;
+			}
 			uint64_t address = 0;
 			const uint64_t image_size = map_image(call, memory, mapping->file->descriptor, address);
 			if (!image_size) {
@@ -675,7 +690,7 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 			const bool write = call.u32(1) & 0x2, execute = call.u32(1) & 0x20;
 			if (::fstat(mapping->file->descriptor, &status) == 0 && offset + size <= uint64_t(status.st_size)) {
 				try {
-					const auto view = memory.map_view(mapping->file->descriptor, offset, size, write ? (execute ? 0x40 : 0x04) : execute ? 0x20 : 0x02);
+					const auto view = memory.map_view(mapping->file->descriptor, offset, size, write ? (execute ? 0x40 : 0x04) : execute ? 0x20 : 0x02, base);
 					if (!view.status) {
 						views[view.address] = {mapping, offset, size, false};
 						call.ret(view.address);
@@ -685,9 +700,9 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 				}
 			}
 		}
-		const auto range = memory.allocate(0, (size + 4095) & ~uint64_t(4095), 0x3000, 4);
+		const auto range = memory.allocate(base, (size + 4095) & ~uint64_t(4095), 0x3000, 4);
 		if (range.status) {
-			call.fail(8);
+			call.fail(base && range.status != 0xc0000017U ? 487 : 8);
 			return;
 		}
 		if (mapping->file) {
@@ -698,19 +713,9 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 		}
 		views[range.address] = {mapping, offset, size, bool(call.u32(1) & 2)};
 		call.ret(range.address);
-	});
-	// A view at an address of the caller's choosing is not offered, as NtMapViewOfSection below: the request fails as on Windows when
-	// the address is taken (ERROR_INVALID_ADDRESS), and a program that asked for a preferred address maps the view anywhere instead.
-	registry.add("MapViewOfFileEx", 6, [&registry](ApiCall &call) {
-		if (call[5]) {
-			call.fail(487);
-			return;
-		}
-		const auto map = registry.find("MapViewOfFile");
-		ApiCall inner(call.process, call.environment, {call[0], call[1], call[2], call[3], call[4]});
-		map->second(inner);
-		call.ret(inner.result);
-	});
+	};
+	registry.add("MapViewOfFile", 5, [map_view](ApiCall &call) { map_view(call, 0); });
+	registry.add("MapViewOfFileEx", 6, [map_view](ApiCall &call) { map_view(call, call[5]); });
 	const auto write_back = [&](uint64_t address, ApiCall &call) {
 		const auto found = views.find(address);
 		if (found == views.end() || !found->second.writable || !found->second.mapping->file)

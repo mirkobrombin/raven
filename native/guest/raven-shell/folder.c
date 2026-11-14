@@ -353,6 +353,83 @@ HRESULT WINAPI SHILCreateFromPath(PCWSTR path, PIDLIST_ABSOLUTE *out, DWORD *att
 	return *out ? S_OK : E_OUTOFMEMORY;
 }
 
+/* The list of a name as the desktop folder parses it, with the attributes asked for. */
+HRESULT WINAPI SHParseDisplayName(PCWSTR name, IBindCtx *context, PIDLIST_ABSOLUTE *out, SFGAOF wanted, SFGAOF *attributes)
+{
+	IShellFolder *desktop = NULL;
+	ULONG found = wanted;
+	HRESULT result;
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	if (attributes)
+		*attributes = 0;
+	if (!name)
+		return E_INVALIDARG;
+	result = SHGetDesktopFolder(&desktop);
+	if (FAILED(result))
+		return result;
+	result = desktop->lpVtbl->ParseDisplayName(desktop, NULL, context, (LPWSTR)name, NULL, (PIDLIST_RELATIVE *)out, wanted ? &found : NULL);
+	desktop->lpVtbl->Release(desktop);
+	if (SUCCEEDED(result) && attributes)
+		*attributes = wanted ? found : 0;
+	return result;
+}
+
+/* The folder that holds the last item of a list, and that item: the desktop for a list of one. */
+HRESULT WINAPI SHBindToParent(PCIDLIST_ABSOLUTE list, REFIID iid, void **out, PCUITEMID_CHILD *last)
+{
+	IShellFolder *desktop = NULL;
+	PIDLIST_RELATIVE parent;
+	PUITEMID_CHILD final;
+	HRESULT result;
+	if (last)
+		*last = NULL;
+	if (!out)
+		return E_INVALIDARG;
+	*out = NULL;
+	if (!list)
+		return E_INVALIDARG;
+	result = SHGetDesktopFolder(&desktop);
+	if (FAILED(result))
+		return result;
+	final = ILFindLastID((PCUIDLIST_RELATIVE)list);
+	if ((const BYTE *)final == (const BYTE *)list)
+		result = desktop->lpVtbl->QueryInterface(desktop, iid, out);
+	else if (!(parent = ILClone((PCUIDLIST_RELATIVE)list)))
+		result = E_OUTOFMEMORY;
+	else {
+		((ITEMIDLIST *)((BYTE *)parent + ((const BYTE *)final - (const BYTE *)list)))->mkid.cb = 0;
+		result = desktop->lpVtbl->BindToObject(desktop, parent, NULL, iid, out);
+		ILFree(parent);
+	}
+	desktop->lpVtbl->Release(desktop);
+	if (SUCCEEDED(result) && last)
+		*last = final;
+	return result;
+}
+
+/* What a directory listing says of an item of a folder; the listing is the one form this knows. */
+HRESULT WINAPI SHGetDataFromIDListW(IShellFolder *folder, PCUITEMID_CHILD item, int format, void *out, int size)
+{
+	STRRET name;
+	HANDLE search;
+	HRESULT result;
+	if (!folder || !item || !out || format != SHGDFIL_FINDDATA || size < (int)sizeof(WIN32_FIND_DATAW))
+		return E_INVALIDARG;
+	result = folder->lpVtbl->GetDisplayNameOf(folder, item, SHGDN_FORPARSING, &name);
+	if (FAILED(result))
+		return result;
+	if (name.uType != STRRET_WSTR)
+		return E_FAIL;
+	search = FindFirstFileW(name.pOleStr, (WIN32_FIND_DATAW *)out);
+	result = search == INVALID_HANDLE_VALUE ? HRESULT_FROM_WIN32(GetLastError()) : S_OK;
+	if (search != INVALID_HANDLE_VALUE)
+		FindClose(search);
+	CoTaskMemFree(name.pOleStr);
+	return result;
+}
+
 static HRESULT WINAPI folder_parse(IShellFolder *face, HWND window, IBindCtx *context, LPWSTR name, ULONG *eaten, PIDLIST_RELATIVE *out, ULONG *attributes)
 {
 	shell_folder *self = (shell_folder *)face;

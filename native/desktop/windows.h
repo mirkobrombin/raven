@@ -37,6 +37,8 @@ public:
 	void set_surface_cleanup(std::function<void(uint64_t)> cleanup) { surface_cleanup = std::move(cleanup); }
 	// The client area of a window as its swap chains see it; empty for a window that does not exist.
 	std::optional<std::pair<uint32_t,uint32_t>> client_size(uint64_t window);
+	// Whether the window's top-level window is visible, so the host shows what is drawn in it.
+	bool shown(uint64_t window);
 	void set_deadline(std::chrono::steady_clock::time_point deadline);
 	// Parks a message waiter while other guest threads run, until input arrives or the next timer is due.
 	void set_message_wait(std::function<void(std::function<bool()>,std::chrono::steady_clock::time_point)> wait) { message_wait = std::move(wait); }
@@ -253,8 +255,15 @@ private:
 	// Host input collected while threads waited, delivered by the next input_ready.
 	std::deque<DesktopEvent> pending_events;
 	void deliver_pending();
+	// The thread a host event is for, whether any waits for a thread, and the taking in of what the host has.
+	uint32_t input_thread(const DesktopEvent &event) const;
+	bool pending_for(uint32_t thread) const;
+	void collect_input(std::chrono::milliseconds budget);
 	// PostQuitMessage codes by thread.
 	std::map<uint32_t,uint32_t> quits;
+	// The time and cursor position of the message each thread last took from its queue, which GetMessageTime and GetMessagePos answer.
+	struct Retrieved { uint32_t time=0; int32_t x=0,y=0; };
+	std::map<uint32_t,Retrieved> retrieved;
 	std::set<uint64_t> dirty_roots;
 	bool dumped=false;
 	std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();
@@ -308,9 +317,9 @@ private:
 	void activate(uint64_t window);
 	uint64_t set_focus(uint64_t window);
 	void receive(const DesktopEvent &event);
-	// Input that arrives while a button press is being placed in the queue (the program runs during its hit test and parent notifications
-	// and may pump): it is taken in after the press, so the program sees the input in the order it happened.
-	bool placing_press=false;
+	// Input that arrives while a pointer event is being placed in the queue (the program runs during its hit test, cursor request and
+	// parent notifications and may pump): it is taken in after the event, so the program sees the input in the order it happened.
+	bool placing_pointer=false;
 	// A tool window shown as a popup of its owner is moved by the program's side, as the compositor moves only toplevels: the window
 	// whose caption is being dragged, where the pointer started and where the window was then.
 	struct FrameDrag { uint64_t window=0; int32_t start_x=0,start_y=0; DesktopRect origin{}; } frame_drag;

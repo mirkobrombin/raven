@@ -38,6 +38,14 @@ void *memset(void *target, int value, size_t count)
 }
 
 typedef struct test_object test_object;
+/* A record with a string in it, as NGen hands its worker the attributes of a compilation. A library made with CreateTypeLib2 lays
+   records out on four bytes, so the structure here does too. */
+#pragma pack(push, 4)
+struct test_settings {
+	LONG flags;
+	BSTR folder;
+};
+#pragma pack(pop)
 typedef struct {
 	HRESULT (WINAPI *query)(test_object *, REFIID, void **);
 	ULONG (WINAPI *addref)(test_object *);
@@ -47,6 +55,8 @@ typedef struct {
 	HRESULT (WINAPI *visit)(test_object *, IUnknown *, LONG *);
 	HRESULT (WINAPI *process)(test_object *, LONG *);
 	HRESULT (WINAPI *strings)(test_object *, SAFEARRAY *, LONG *);
+	HRESULT (WINAPI *settings)(test_object *, struct test_settings *, LONG *);
+	HRESULT (WINAPI *settings_value)(test_object *, struct test_settings, LONG *);
 } test_table;
 struct test_object {
 	const test_table *table;
@@ -160,8 +170,24 @@ static HRESULT WINAPI object_strings(test_object *self, SAFEARRAY *list, LONG *c
 	return S_OK;
 }
 
+static HRESULT WINAPI object_settings(test_object *self, struct test_settings *settings, LONG *answer)
+{
+	(void)self;
+	*answer = 0;
+	if (!settings || !settings->folder || lstrcmpW(settings->folder, L"C:\\Debug"))
+		return E_INVALIDARG;
+	*answer = settings->flags + (LONG)SysStringLen(settings->folder);
+	return S_OK;
+}
+
+/* The record by value, which x64 passes as a pointer to a copy. */
+static HRESULT WINAPI object_settings_value(test_object *self, struct test_settings settings, LONG *answer)
+{
+	return object_settings(self, &settings, answer);
+}
+
 static const test_table object_table = {object_query, object_addref, object_release, object_echo, object_twice, object_visit, object_process,
-	object_strings};
+	object_strings, object_settings, object_settings_value};
 
 static test_object served = {&object_table, 0, TRUE};
 static test_object visitor = {&object_table, 1, FALSE};
@@ -228,7 +254,7 @@ static int serve(void)
 	return 0;
 }
 
-/* The description: IRavenTest, derived from IUnknown, with its five methods. */
+/* The description: IRavenTest, derived from IUnknown, with its seven methods. */
 static HRESULT add_method(ICreateTypeInfo *info, UINT index, const WCHAR *name, const VARTYPE *types, const USHORT *flags, const WCHAR **names,
 	UINT count, ITypeInfo *unknown)
 {
@@ -271,6 +297,64 @@ static HRESULT add_method(ICreateTypeInfo *info, UINT index, const WCHAR *name, 
 	return hr;
 }
 
+/* The record RavenSettings {LONG flags; BSTR folder;} and the methods Settings([in] RavenSettings *settings, [out, retval] LONG *answer)
+   and SettingsByValue([in] RavenSettings settings, [out, retval] LONG *answer). */
+static int add_settings(ICreateTypeLib2 *library, ICreateTypeInfo *info, UINT index)
+{
+	ICreateTypeInfo *record;
+	ITypeInfo *described;
+	HREFTYPE reference;
+	if (FAILED(ICreateTypeLib2_CreateTypeInfo(library, L"RavenSettings", TKIND_RECORD, &record)))
+		return 1;
+	VARDESC field = {0};
+	field.varkind = VAR_PERINSTANCE;
+	field.memid = 0x40000000;
+	field.elemdescVar.tdesc.vt = VT_I4;
+	if (FAILED(ICreateTypeInfo_AddVarDesc(record, 0, &field)) || FAILED(ICreateTypeInfo_SetVarName(record, 0, L"flags")))
+		return 2;
+	field.memid = 0x40000001;
+	field.elemdescVar.tdesc.vt = VT_BSTR;
+	if (FAILED(ICreateTypeInfo_AddVarDesc(record, 1, &field)) || FAILED(ICreateTypeInfo_SetVarName(record, 1, L"folder")))
+		return 3;
+	if (FAILED(ICreateTypeInfo_LayOut(record)) || FAILED(ICreateTypeInfo_QueryInterface(record, &IID_ITypeInfo, (void **)&described)))
+		return 4;
+	if (FAILED(ICreateTypeInfo_AddRefTypeInfo(info, described, &reference)))
+		return 5;
+	ITypeInfo_Release(described);
+	ICreateTypeInfo_Release(record);
+
+	ELEMDESC parameters[2];
+	TYPEDESC pointed = {0}, answer = {0};
+	ZeroMemory(parameters, sizeof parameters);
+	pointed.vt = VT_USERDEFINED;
+	pointed.hreftype = reference;
+	parameters[0].tdesc.vt = VT_PTR;
+	parameters[0].tdesc.lptdesc = &pointed;
+	parameters[0].paramdesc.wParamFlags = PARAMFLAG_FIN;
+	answer.vt = VT_I4;
+	parameters[1].tdesc.vt = VT_PTR;
+	parameters[1].tdesc.lptdesc = &answer;
+	parameters[1].paramdesc.wParamFlags = PARAMFLAG_FOUT | PARAMFLAG_FRETVAL;
+	FUNCDESC desc = {0};
+	desc.memid = (MEMBERID)(index + 1);
+	desc.funckind = FUNC_PUREVIRTUAL;
+	desc.invkind = INVOKE_FUNC;
+	desc.callconv = CC_STDCALL;
+	desc.cParams = 2;
+	desc.lprgelemdescParam = parameters;
+	desc.elemdescFunc.tdesc.vt = VT_HRESULT;
+	const WCHAR *names[] = {L"Settings", L"settings", L"answer"};
+	if (FAILED(ICreateTypeInfo_AddFuncDesc(info, index, &desc)) || FAILED(ICreateTypeInfo_SetFuncAndParamNames(info, index, (LPOLESTR *)names, 3)))
+		return 6;
+	parameters[0].tdesc = pointed;
+	desc.memid = (MEMBERID)(index + 2);
+	const WCHAR *value_names[] = {L"SettingsByValue", L"settings", L"answer"};
+	if (FAILED(ICreateTypeInfo_AddFuncDesc(info, index + 1, &desc)) ||
+		FAILED(ICreateTypeInfo_SetFuncAndParamNames(info, index + 1, (LPOLESTR *)value_names, 3)))
+		return 7;
+	return 0;
+}
+
 static int describe(const WCHAR *path)
 {
 	ICreateTypeLib2 *library;
@@ -304,6 +388,8 @@ static int describe(const WCHAR *path)
 		FAILED(add_method(info, 3, L"Process", process_types, process_flags, process_names, 1, unknown)) ||
 		FAILED(add_method(info, 4, L"Strings", strings_types, strings_flags, strings_names, 2, unknown)))
 		return 24;
+	if (add_settings(library, info, 5))
+		return 28;
 	if (FAILED(ICreateTypeInfo_LayOut(info)))
 		return 25;
 	ICreateTypeInfo_Release(info);
@@ -384,6 +470,14 @@ int raven_entry(void)
 	if (FAILED(remote->table->strings(remote, list, &count)) || count != 5)
 		return 11;
 	SafeArrayDestroy(list);
+	struct test_settings settings = {3, SysAllocString(L"C:\\Debug")};
+	answer = 0;
+	if (FAILED(remote->table->settings(remote, &settings, &answer)) || answer != 11)
+		return 14;
+	answer = 0;
+	if (FAILED(remote->table->settings_value(remote, settings, &answer)) || answer != 11)
+		return 15;
+	SysFreeString(settings.folder);
 	SysFreeString(word);
 	remote->table->release(remote);
 	/* The server ends once its object is released. */

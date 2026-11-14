@@ -28,5 +28,19 @@ int raven_entry(void)
 	third[100]=77;
 	if (first[100]!=77) return 8;
 	if (SetFilePointer(file,100,NULL,FILE_BEGIN)!=100 || !ReadFile(file,&byte,1,&count,NULL) || count!=1 || byte!=77) return 9;
+
+	// A view goes where the caller asks when that range is free, as the .NET runtime maps the memory it writes code through and the
+	// memory it runs it from near its own library: both are views of one section and share their pages. An address already taken
+	// fails with ERROR_INVALID_ADDRESS, one off the allocation granularity with ERROR_MAPPED_ALIGNMENT.
+	HANDLE code=CreateFileMappingA(INVALID_HANDLE_VALUE,NULL,PAGE_EXECUTE_READWRITE,0,0x10000,NULL);
+	char *base=VirtualAlloc(NULL,0x20000,MEM_RESERVE,PAGE_NOACCESS);
+	if (!code || !base || !VirtualFree(base,0,MEM_RELEASE)) return 10;
+	char *runs=MapViewOfFileEx(code,FILE_MAP_READ|FILE_MAP_EXECUTE,0,0,0x10000,base);
+	char *writes=MapViewOfFile(code,FILE_MAP_WRITE,0,0,0x10000);
+	if (runs!=base || !writes) return 11;
+	writes[0x123]=(char)0xc3;
+	if (runs[0x123]!=(char)0xc3) return 12;
+	if (MapViewOfFileEx(code,FILE_MAP_READ,0,0,0x10000,base) || GetLastError()!=ERROR_INVALID_ADDRESS) return 13;
+	if (MapViewOfFileEx(code,FILE_MAP_READ,0,0,0x10000,base+0x11000) || GetLastError()!=ERROR_MAPPED_ALIGNMENT) return 14;
 	return 0;
 }

@@ -23,15 +23,24 @@ void NativeWindows::paint_child_frames(uint64_t root)
 		canvas.fill({rect.left, rect.bottom - 1, rect.right, rect.bottom}, bottom_right);
 		canvas.fill({rect.right - 1, rect.top, rect.right, rect.bottom}, bottom_right);
 	};
-	const auto walk = [&](auto &&self, uint64_t parent) -> void {
+	// A child shows inside the client areas of all its ancestors only, and so does its frame.
+	const auto walk = [&](auto &&self, uint64_t parent, DesktopRect clip) -> void {
+		const auto *owner = std::as_const(objects).window(parent);
+		if (!owner)
+			return;
+		clip = {std::max(clip.left, owner->x - top->outer.left), std::max(clip.top, owner->y - top->outer.top),
+			std::min(clip.right, owner->x - top->outer.left + owner->width), std::min(clip.bottom, owner->y - top->outer.top + owner->height)};
+		if (clip.left >= clip.right || clip.top >= clip.bottom)
+			return;
 		for (const auto handle : objects.child_windows(parent)) {
 			const auto *window = std::as_const(objects).window(handle);
 			if (!window || !window->visible)
 				continue;
+			canvas.clip = clip;
 			const DesktopRect rect{window->outer.left - top->outer.left, window->outer.top - top->outer.top,
 				window->outer.right - top->outer.left, window->outer.bottom - top->outer.top};
 			if (window->own_frame) {
-				self(self, handle);
+				self(self, handle, clip);
 				continue;
 			}
 			// A dialog frame or a sizing border without a caption is a raised edge with the rest of the border in the face colour.
@@ -44,7 +53,7 @@ void NativeWindows::paint_child_frames(uint64_t root)
 				canvas.fill({rect.left, client.top, client.left, client.bottom}, face);
 				canvas.fill({client.right, client.top, rect.right, client.bottom}, face);
 				canvas.edge(rect, color(color_light), color(color_dark_shadow), color(color_button_highlight), color(color_button_shadow));
-				self(self, handle);
+				self(self, handle, clip);
 				continue;
 			}
 			// With visual styles the sunken edges become the thin light borders of Windows 11 fields and lists, or dark ones for a window
@@ -60,10 +69,10 @@ void NativeWindows::paint_child_frames(uint64_t root)
 				ring(rect, color(color_button_shadow), color(color_button_highlight));
 			else if (window->style & 0x800000U)
 				ring(rect, color(color_window_frame), color(color_window_frame));
-			self(self, handle);
+			self(self, handle, clip);
 		}
 	};
-	walk(walk, root);
+	walk(walk, root, canvas.clip);
 }
 
 }

@@ -1462,8 +1462,20 @@ static const std::vector<uint8_t> &next_hook_prelude()
 	return code;
 }
 
+// RavenTrace with no trace asked for: the libraries of the runtime name what they lack through it by the thousand while a program
+// draws, and each would stop the program to print nothing.
+static const std::vector<uint8_t> &silent_trace_prelude()
+{
+	static const std::vector<uint8_t> code{0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
 static const std::vector<uint8_t> *block_prelude(std::string_view module, std::string_view name)
 {
+	if (module == "ravenhost.dll" && name == "RavenTrace") {
+		static const bool traced = std::getenv("RAVEN_TRACE_DWRITE") != nullptr;
+		return traced ? nullptr : &silent_trace_prelude();
+	}
 	if (module == "user32.dll" && (name == "PeekMessageA" || name == "PeekMessageW"))
 		return &quiet_peek_prelude();
 	if (module == "user32.dll" && name == "GetInputState")
@@ -2094,6 +2106,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtCancelIoFileEx",
 		// Opening files by their native names, which Rust's standard library and mio look up at run time.
 		"NtCreateFile", "NtOpenFile",
+		// What an open file and its volume are, which paint.net's file system layer looks up at run time.
+		"NtQueryInformationFile", "NtQueryVolumeInformationFile",
 		// What the runtime's own components import from ntdll, which they need whether a program loads them at start or later.
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
@@ -2266,7 +2280,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				{"api-ms-win-core-winrt-l1-1-0.dll", "raven-shell.dll", "raven-shell."},
 				// The heap, critical sections and the free paths of SRW locks and condition variables run in the guest RTL.
 				{"kernel32.dll", "raven-rtl.dll", "raven-rtl."}, {"kernelbase.dll", "raven-rtl.dll", "raven-rtl."},
-				// The generic AVL tables and critical sections of ntdll; its heap stays with the host, which calls the guest RTL itself.
+				// The generic AVL tables, critical sections and frame unwinding of ntdll; its heap stays with the host, which calls the
+				// guest RTL itself.
 				{"ntdll.dll", "raven-rtl.dll", "raven-rtl."}};
 			for (const auto &overlay_rule : overlays) {
 				if (name != overlay_rule.library)
@@ -2276,7 +2291,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (overlay == modules.all().end() || overlay->second->runtime_api)
 					continue;
 				for (auto &symbol : provider->exports)
-					if (!symbol.names.empty() && (!nt_only || symbol.names.at(0).find("GenericTable") != std::string::npos || symbol.names.at(0).find("CriticalSection") != std::string::npos) && std::any_of(overlay->second->exports.begin(), overlay->second->exports.end(), [&](const auto &candidate) {
+					if (!symbol.names.empty() && (!nt_only || symbol.names.at(0).find("GenericTable") != std::string::npos || symbol.names.at(0).find("CriticalSection") != std::string::npos || symbol.names.at(0) == "RtlVirtualUnwind") && std::any_of(overlay->second->exports.begin(), overlay->second->exports.end(), [&](const auto &candidate) {
 							return candidate.forwarder.empty() && std::find(candidate.names.begin(), candidate.names.end(), symbol.names.at(0)) != candidate.names.end();
 						}))
 						symbol.forwarder = overlay_rule.prefix + symbol.names.at(0);
@@ -2433,7 +2448,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	VulkanBridge vulkan(process, modules);
 	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },
 		[&windows](uint64_t window) { windows.release_host_surface(window); },
-		[&windows](uint64_t window) { return windows.client_size(window); }, windows.host_platform()});
+		[&windows](uint64_t window) { return windows.client_size(window); }, [&windows](uint64_t window) { return windows.shown(window); },
+		windows.host_platform()});
 #endif
 	const auto remaining = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()); };
 	size_t debug_bytes=0;
@@ -2641,6 +2657,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const auto error_before = trace_failures ? environment.last_error() : 0;
 			const auto failure_arguments = trace_failures ? process.api_arguments(4) : std::vector<uint64_t>{};
 			try {
+				if (kernel_ptr && kernel_ptr->leave_abandoned_callbacks && process.callback_depth() > 0)
+					kernel_ptr->leave_abandoned_callbacks();
 				const WindowCallScope window_scope(windows);
 				// The generalized desktop services come first so that they replace the older narrow ones.
 				dispatched = desktop_api.dispatch(process, environment, api_name) || environment.dispatch(api_name) || module_api.dispatch(api_name) || resources.dispatch(api_name) || memory.dispatch(api_name) || object_api.dispatch(api_name) || heap.dispatch(api_name) || desktop.dispatch(api_name) || windows.dispatch(api_name) || api_registry.dispatch(process, environment, api_name)
@@ -3080,7 +3098,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_canvas_service(api_registry, kernel);
 	register_sync_api(api_registry, kernel);
 	register_thread_api(api_registry, kernel);
-	NativeObjectAPI::register_served(api_registry, kernel.objects);
+	NativeObjectAPI::register_served(api_registry, kernel.objects, kernel.threads);
 	register_text_api(api_registry, kernel);
 	register_console_api(api_registry, kernel);
 	register_memory_api(api_registry, kernel);
@@ -3340,8 +3358,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 							bytes = ModuleBytes::map(found->host);
 							origin = found->host;
 						}
-					// A search of the system directory also finds what the runtime provides as part of it, DirectWrite among them.
-					} else if ((flags & 0x1f00) && !(flags & 0x800) && !system) {
+					// A search of the system directory, alone or among the default directories, also finds what the runtime provides as
+					// part of it, DirectWrite and Direct2D among them.
+					} else if ((flags & 0x1f00) && !(flags & 0x1800) && !system) {
 						throw LoadFailure{126};
 					}
 				}

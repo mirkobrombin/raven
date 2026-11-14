@@ -66,8 +66,10 @@ int main()
 		if (root.string().starts_with(system) && std::getenv("HOME"))
 			root = std::filesystem::path(std::getenv("HOME")) / ".raven-confine-test";
 	std::filesystem::remove_all(root);
-	for (const auto *folder : {"prefix", "granted", "later", "drafts", "home/.ssh"})
+	for (const auto *folder : {"prefix", "granted", "later", "drafts", "home/.ssh", "dxvk", "vkd3d"})
 		std::filesystem::create_directories(root / folder);
+	std::ofstream(root / "dxvk/dxgi.dll") << "MZ";
+	std::ofstream(root / "vkd3d/d3d12.dll") << "MZ";
 	std::ofstream(root / "home/.ssh/id") << "key";
 	std::ofstream(root / "granted/letter.txt") << "letter";
 	std::ofstream(root / "later/picture.png") << "picture";
@@ -90,6 +92,8 @@ int main()
 	raven::sandbox().set_program(u"C:\\Tools\\Editor.exe");
 	raven::sandbox().load(root / "prefix");
 	raven::sandbox().grant(root / "granted", false);
+	// The Direct3D libraries come from the folders RAVEN_D3D_DIRECTORY lists, each of which the confined runtime still reads.
+	::setenv("RAVEN_D3D_DIRECTORY", ((root / "dxvk").string() + ":" + (root / "vkd3d").string()).c_str(), 1);
 	check(raven::confine(root / "prefix"), "the runtime is not confined");
 	check(raven::confined(), "the runtime does not know it is confined");
 
@@ -98,6 +102,7 @@ int main()
 	check(!opens(root / "granted/new.txt", O_WRONLY | O_CREAT), "the confined runtime writes into a folder granted for reading");
 	check(opens(root / "prefix/settings.ini", O_WRONLY | O_CREAT), "the confined runtime cannot write into its prefix");
 	check(opens("/usr"), "the confined runtime cannot read the system");
+	check(opens(root / "dxvk/dxgi.dll") && opens(root / "vkd3d/d3d12.dll"), "the confined runtime cannot read the Direct3D libraries");
 
 	// A grant recorded while the program runs reaches it through the broker, which refuses anything else.
 	check(!opens(root / "later/picture.png"), "a folder granted later is open before the grant");

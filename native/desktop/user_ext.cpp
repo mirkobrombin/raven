@@ -276,10 +276,24 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	registry.add("GetDpiForSystem", 0, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetDpiForWindow", 1, [](ApiCall &call) { call.ret(96); });
 	registry.add("GetSystemDpiForProcess", 1, [](ApiCall &call) { call.ret(96); });
-	registry.add("GetMessagePos", 0, [this](ApiCall &call) { call.ret(uint32_t(uint16_t(cursor_x)) | (uint32_t(uint16_t(cursor_y)) << 16)); });
+	// The cursor position and the time of the message the thread last took from its queue, not those of now: a program that handles
+	// its input late still learns where and when each event happened.
+	registry.add("GetMessagePos", 0, [this](ApiCall &call) {
+		const auto last=retrieved.find(environment.thread_id());
+		const int32_t x=last!=retrieved.end() ? last->second.x : cursor_x,y=last!=retrieved.end() ? last->second.y : cursor_y;
+		call.ret(uint32_t(uint16_t(x)) | (uint32_t(uint16_t(y)) << 16));
+	});
+	registry.add("GetMessageTime", 0, [this](ApiCall &call) {
+		const auto last=retrieved.find(environment.thread_id());
+		call.ret(last!=retrieved.end() ? last->second.time : 0);
+	});
 	registry.add("mouse_event", 5, [](ApiCall &call) { call.ret(0); });
 	registry.add("DragDetect", 3, [](ApiCall &call) { call.ret(0); });
 	registry.add("SetWindowContextHelpId", 2, [](ApiCall &call) { call.ret(1); });
+	// No WinHelp viewer comes with Windows any more, nor with Raven: HELP_QUIT, which MFC frames send as they close, finds no help open
+	// and succeeds; asking for a help file fails.
+	for (const auto *name : {"WinHelpW", "WinHelpA"})
+		registry.add(name, 4, [](ApiCall &call) { call.ret(call.u32(2) == 2 ? 1 : 0); });
 	registry.add("SubtractRect", 3, [](ApiCall &call) {
 		const auto minuend = read_rect(call, call[1]), subtrahend = read_rect(call, call[2]);
 		Rect result = minuend;
@@ -627,6 +641,25 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	});
 	registry.add("IsClipboardFormatAvailable", 1, [this, import_host](ApiCall &call) { import_host(call); call.ret(clipboard_data.contains(call.u32(0))); });
 	registry.add("CountClipboardFormats", 0, [this, import_host](ApiCall &call) { import_host(call); call.ret(clipboard_data.size()); });
+	// The first of a list of formats that the clipboard has: 0 when it is empty, -1 when it has none of them.
+	registry.add("GetPriorityClipboardFormat", 2, [this, import_host](ApiCall &call) {
+		import_host(call);
+		if (clipboard_data.empty()) {
+			call.ret(0);
+			return;
+		}
+		const int count = int(call.u32(1));
+		const auto list = count > 0 && call[0] ? call.read(call[0], size_t(count) * 4) : std::vector<uint8_t>{};
+		for (size_t at = 0; at + 4 <= list.size(); at += 4) {
+			uint32_t format = 0;
+			std::memcpy(&format, list.data() + at, 4);
+			if (clipboard_data.contains(format)) {
+				call.ret(format);
+				return;
+			}
+		}
+		call.ret(uint32_t(-1));
+	});
 	registry.add("EnumClipboardFormats", 1, [this, import_host](ApiCall &call) {
 		import_host(call);
 		const auto next = clipboard_data.upper_bound(call.u32(0));

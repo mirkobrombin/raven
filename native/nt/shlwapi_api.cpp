@@ -848,6 +848,9 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		const auto path = call.wide(call[0]);
 		call.ret(call[0] + extension_start(path) * 2);
 	});
+	// The ANSI forms point into the bytes they are given, read one byte to a character as single-byte code pages have them.
+	registry.add("PathFindFileNameA", 1, [](ApiCall &call) { call.ret(call[0] + file_name_start(widen_ascii(call.narrow(call[0])))); });
+	registry.add("PathFindExtensionA", 1, [](ApiCall &call) { call.ret(call[0] + extension_start(widen_ascii(call.narrow(call[0])))); });
 	registry.add("PathSkipRootW", 1, [](ApiCall &call) {
 		const auto path = call.wide(call[0]);
 		const size_t root = root_length(path);
@@ -1103,6 +1106,38 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(uint32_t(a < b ? -1 : a > b ? 1 : 0));
 	});
 	registry.add("StrCmpIW", 2, [](ApiCall &call) { call.ret(uint32_t(compare_fold(call.wide(call[0]), call.wide(call[1])))); });
+	// Names as Explorer sorts them: a run of digits goes by its value and before any other character, the rest without case.
+	registry.add("StrCmpLogicalW", 2, [](ApiCall &call) {
+		const auto left = call.wide(call[0]), right = call.wide(call[1]);
+		const auto digit = [](char16_t c) { return c >= u'0' && c <= u'9'; };
+		size_t a = 0, b = 0;
+		int order = 0;
+		while (!order && a < left.size() && b < right.size()) {
+			if (digit(left[a]) && digit(right[b])) {
+				size_t end_a = a, end_b = b;
+				while (end_a < left.size() && digit(left[end_a]))
+					++end_a;
+				while (end_b < right.size() && digit(right[end_b]))
+					++end_b;
+				// Leading zeros aside, the longer run is the larger number; runs as long compare digit by digit.
+				auto first_a = a, first_b = b;
+				while (first_a + 1 < end_a && left[first_a] == u'0')
+					++first_a;
+				while (first_b + 1 < end_b && right[first_b] == u'0')
+					++first_b;
+				const auto run_a = left.substr(first_a, end_a - first_a), run_b = right.substr(first_b, end_b - first_b);
+				order = run_a.size() != run_b.size() ? (run_a.size() < run_b.size() ? -1 : 1) : run_a.compare(run_b) < 0 ? -1 : run_a.compare(run_b) > 0 ? 1 : 0;
+				a = end_a;
+				b = end_b;
+			} else if (digit(left[a]) || digit(right[b]))
+				order = digit(left[a]) ? -1 : 1;
+			else
+				order = compare_fold(left.substr(a++, 1), right.substr(b++, 1));
+		}
+		if (!order)
+			order = a < left.size() ? 1 : b < right.size() ? -1 : 0;
+		call.ret(uint32_t(order < 0 ? -1 : order > 0 ? 1 : 0));
+	});
 	registry.add("StrCmpNW", 3, [](ApiCall &call) {
 		const size_t count = call.u32(2);
 		const auto a = call.wide(call[0]).substr(0, count), b = call.wide(call[1]).substr(0, count);

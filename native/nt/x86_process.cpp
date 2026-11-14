@@ -37,6 +37,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <csignal>
+#include <cstring>
 #include <map>
 #include <sstream>
 #include <set>
@@ -848,7 +850,18 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		[&](uint64_t address, std::span<const uint64_t> arguments) { return call_guest(address, arguments); });
 	library_loader.set_tls(&static_tls);
 	library_loader.set_mapped([&memory](PEModule &module) { register_image(memory, module); });
-	library_loader.set_unmapped([&memory](PEModule &module) { memory.remove_image(module.loaded.base()); });
+	// The libraries that have started and not yet been told their process is done with them: only these hear about threads.
+	std::set<const PEModule *> started_modules;
+	library_loader.set_unmapped([&memory, &started_modules](PEModule &module) {
+		started_modules.erase(&module);
+		memory.remove_image(module.loaded.base());
+	});
+	library_loader.set_started([&started_modules](PEModule &module, bool started) {
+		if (started)
+			started_modules.insert(&module);
+		else
+			started_modules.erase(&module);
+	});
 	if (launch) {
 		const auto separator = launch->image_path.find_last_of(u'\\');
 		if (separator != std::u16string::npos)
@@ -867,6 +880,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		return known;
 	});
 	module_api.set_path_lookup([&](const std::string &path) { return library_loader.find(path); });
+	library_loader.set_threads([&guest_threads] { return guest_threads.current_id(); }, [&guest_threads](std::function<bool()> ready) {
+		HostWait waiting;
+		guest_threads.block(std::move(ready), std::nullopt);
+	});
 	DesktopObjects desktop_objects;
 	NativeDesktop desktop(process, environment, desktop_objects, resources);
 	// LoadImage with LR_LOADFROMFILE reads an icon, cursor or bitmap file the program names, as a 64-bit program's does.
@@ -910,7 +927,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	VulkanBridge vulkan(process, modules);
 	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },
 		[&windows](uint64_t window) { windows.release_host_surface(window); },
-		[&windows](uint64_t window) { return windows.client_size(window); }, presentation.platform});
+		[&windows](uint64_t window) { return windows.client_size(window); }, [&windows](uint64_t window) { return windows.shown(window); },
+		presentation.platform});
 	VulkanThunk32 vulkan32(process, vulkan);
 #endif
 	windows.set_presentation(std::move(presentation));
@@ -970,13 +988,96 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		return true;
 	};
 	const auto remaining = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()); };
+	// A processor fault is a Windows exception: as KiUserExceptionDispatcher finds them, the record and the registers of the faulting
+	// instruction go on the stack below it, and the C runtime component dispatches them in the program, to its vectored handlers and
+	// the frames its threads register. The .NET runtime turns the null check of compiled code into a NullReferenceException there.
+	const auto dispatch_fault = [&](const NativeResult &fault) {
+		if (fault.signal != SIGSEGV && fault.signal != SIGBUS && fault.signal != SIGFPE && fault.signal != SIGILL)
+			return false;
+		const auto component = modules.all().find("ucrtbase.dll");
+		if (component == modules.all().end())
+			return false;
+		const auto &exports = component->second->exports;
+		const auto found = std::find_if(exports.begin(), exports.end(), [](const auto &symbol) {
+			return std::find(symbol.names.begin(), symbol.names.end(), "raven_dispatch_fault") != symbol.names.end();
+		});
+		if (found == exports.end())
+			return false;
+		auto native = process.context();
+		const auto &r = native.registers;
+		uint32_t status = 0xc0000005U;
+		std::vector<uint32_t> parameters;
+		switch (fault.signal) {
+		case SIGSEGV: parameters = {0, uint32_t(fault.fault_address)}; break;
+		case SIGBUS: status = 0xc0000006U; parameters = {0, uint32_t(fault.fault_address), 0xc0000006U}; break;
+		case SIGFPE:
+			status = fault.signal_code == FPE_INTDIV ? 0xc0000094U : fault.signal_code == FPE_INTOVF ? 0xc0000095U :
+				fault.signal_code == FPE_FLTDIV ? 0xc000008eU : fault.signal_code == FPE_FLTOVF ? 0xc0000091U : 0xc000008fU;
+			break;
+		default: status = 0xc000001dU; break;
+		}
+		// RAVEN_TRACE_FAULT names each processor fault as it is handed to the program, with the module it happened in.
+		if (std::getenv("RAVEN_TRACE_FAULT")) {
+			std::cerr << "raven: fault 0x" << std::hex << status << " at 0x" << uint32_t(r.rip);
+			for (const auto &[module_name, module] : modules.all())
+				if (r.rip >= module->loaded.base() && r.rip < module->loaded.base() + module->image.image_size)
+					std::cerr << " (" << module_name << '+' << r.rip - module->loaded.base() << ')';
+			std::cerr << " address 0x" << fault.fault_address << " eax=" << uint32_t(r.rax) << " ebx=" << uint32_t(r.rbx) << " ecx=" << uint32_t(r.rcx)
+				<< " edx=" << uint32_t(r.rdx) << " esi=" << uint32_t(r.rsi) << " edi=" << uint32_t(r.rdi) << " ebp=" << uint32_t(r.rbp) << " esp="
+				<< uint32_t(r.rsp) << " code";
+			try {
+				for (const auto byte : process.read_memory(r.rip, 8))
+					std::cerr << ' ' << unsigned(byte);
+			} catch (const std::runtime_error &) {
+			}
+			std::cerr << std::dec << '\n';
+		}
+		// CONTEXT_FULL of the i386 layout: segments, integer and control registers, at their offsets in the 716-byte structure.
+		std::vector<uint8_t> context(716, 0), record(80, 0);
+		const auto put = [](std::vector<uint8_t> &bytes, size_t at, uint64_t value) {
+			const auto word = uint32_t(value);
+			std::memcpy(bytes.data() + at, &word, 4);
+		};
+		put(context, 0, 0x10007);
+		put(context, 140, r.gs); put(context, 144, r.fs); put(context, 148, r.es); put(context, 152, r.ds);
+		put(context, 156, r.rdi); put(context, 160, r.rsi); put(context, 164, r.rbx); put(context, 168, r.rdx);
+		put(context, 172, r.rcx); put(context, 176, r.rax); put(context, 180, r.rbp); put(context, 184, r.rip);
+		put(context, 188, r.cs); put(context, 192, r.eflags); put(context, 196, r.rsp); put(context, 200, r.ss);
+		put(record, 0, status); put(record, 12, r.rip); put(record, 16, parameters.size());
+		for (size_t index = 0; index < parameters.size(); ++index)
+			put(record, 20 + index * 4, parameters[index]);
+		// Room is left under the faulting stack pointer: resuming builds its last words there.
+		const uint64_t context_at = (uint32_t(r.rsp) - 0x100 - context.size()) & ~uint64_t(15);
+		const uint64_t record_at = context_at - record.size();
+		std::vector<uint8_t> call(12, 0);
+		put(call, 4, record_at);
+		put(call, 8, context_at);
+		try {
+			process.write_memory(context_at, context);
+			process.write_memory(record_at, record);
+			process.write_memory(record_at - call.size(), call);
+		} catch (const std::runtime_error &) {
+			return false;
+		}
+		native.registers.rsp = record_at - call.size();
+		native.registers.rip = component->second->loaded.base() + found->address;
+		process.set_context(native);
+		return true;
+	};
 	// Runs one guest call, answering every API trap until the call returns or stops for another reason.
 	const auto invoke = [&](uint64_t address, std::span<const uint64_t> arguments) {
 		auto budget = remaining();
 		if (budget.count() <= 0)
 			return NativeResult{NativeStop::timeout, 0, address, 0};
 		auto result = process.active() ? process.callback(address, arguments, budget) : process.call(address, arguments, budget);
-		while (result.stop == NativeStop::api) {
+		while (result.stop == NativeStop::api || (result.stop == NativeStop::fault && dispatch_fault(result))) {
+			if (result.stop == NativeStop::fault) {
+				budget = remaining();
+				if (budget.count() <= 0)
+					return NativeResult{NativeStop::timeout, 0, result.instruction, 0};
+				result = process.resume(budget);
+				continue;
+			}
 			const auto found = traps.find(result.value);
 			if (found == traps.end())
 				return result;
@@ -1020,7 +1121,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				{
 					static const std::map<std::string_view, std::vector<size_t>> wide_strings{{"SetWindowTextW", {1}}, {"SetDlgItemTextW", {2}},
 						{"CreateWindowExW", {1, 2}}, {"RegisterClassW", {}}, {"MessageBoxW", {1, 2}}, {"LoadStringW", {}}, {"CreateProcessW", {0, 1, 7}}, {"ShellExecuteW", {1, 2, 3}}, {"LoadLibraryW", {0}}, {"CreateFileW", {0}}, {"GetFileAttributesW", {0}},
-						{"GetFileAttributesExW", {0}}, {"FindFirstFileExW", {0}}, {"CommandLineToArgvW", {0}},
+						{"GetFileAttributesExW", {0}}, {"FindFirstFileExW", {0}}, {"FindFirstFileW", {0}}, {"CreateDirectoryW", {0}}, {"CommandLineToArgvW", {0}},
 						{"WinHttpAddRequestHeaders", {1}}, {"WinHttpOpenRequest", {1, 2}}, {"WinHttpConnect", {1}},
 						{"PathIsURLW", {0}}, {"PathSearchAndQualifyW", {0}}, {"UrlApplySchemeW", {0}}, {"GetFullPathNameW", {0}}, {"RegOpenKeyExW", {1}},
 						{"RegCreateKeyExW", {1}}, {"RegQueryValueExW", {1}}, {"RegSetValueExW", {1}}, {"lstrcmpiW", {0, 1}}, {"OpenThemeData", {1}},
@@ -1135,6 +1236,21 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				{"CreateFiberEx", "raven_create_fiber_ex"}, {"ConvertThreadToFiber", "raven_convert_thread_to_fiber"},
 				{"ConvertThreadToFiberEx", "raven_convert_thread_to_fiber_ex"}, {"ConvertFiberToThread", "raven_convert_fiber_to_thread"},
 				{"SwitchToFiber", "raven_switch_to_fiber"}, {"DeleteFiber", "raven_delete_fiber"}, {"IsThreadAFiber", "raven_is_thread_a_fiber"}};
+			// RAVEN_TRACE_EXCEPTIONS names each exception a 32-bit program raises, with the thread raising it.
+			if (api == "RaiseException" && std::getenv("RAVEN_TRACE_EXCEPTIONS")) {
+				const auto words = process.api_arguments(4);
+				std::cerr << "raven: thread " << guest_threads.current_id() << " raises 0x" << std::hex << uint32_t(words[0]);
+				const uint32_t count = std::min<uint32_t>(uint32_t(words[2]), 8);
+				if (count && uint32_t(words[3])) {
+					const auto raw = process.read_memory(uint32_t(words[3]), count * 4);
+					for (uint32_t index = 0; index < count; ++index) {
+						uint32_t word;
+						std::memcpy(&word, raw.data() + index * 4, 4);
+						std::cerr << ' ' << word;
+					}
+				}
+				std::cerr << std::dec << '\n';
+			}
 			if (const auto routed = in_runtime.find(api); routed != in_runtime.end())
 				if (const auto component = modules.all().find("ucrtbase.dll"); component != modules.all().end()) {
 					const std::string_view wanted = routed->second;
@@ -1276,6 +1392,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	// Threads announce themselves to the images that keep per-thread state: TLS callbacks first, then the library entry points.
 	guest_threads.set_notifier([&](uint32_t reason) {
 		const auto notify = [&](const PEModule &module) {
+			if (&module != &entry && !started_modules.contains(&module))
+				return;
 			for (const auto callback : static_tls.callbacks(module)) {
 				const uint64_t arguments[] = {module.loaded.base(), reason, 0};
 				const auto result = invoke(callback, arguments);
@@ -1289,17 +1407,20 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 					throw result;
 			}
 		};
-		if (reason == 2) {
-			notify(entry);
-			for (const auto &[name, module] : modules.all())
-				if (module.get() != &entry)
-					notify(*module);
-		} else {
-			for (const auto &[name, module] : modules.all())
-				if (module.get() != &entry)
-					notify(*module);
-			notify(entry);
-		}
+		// As on Windows the announcements hold the loader lock: a thread that starts while a library is starting waits for it.
+		library_loader.hold([&] {
+			if (reason == 2) {
+				notify(entry);
+				for (const auto &[name, module] : modules.all())
+					if (module.get() != &entry)
+						notify(*module);
+			} else {
+				for (const auto &[name, module] : modules.all())
+					if (module.get() != &entry)
+						notify(*module);
+				notify(entry);
+			}
+		});
 	});
 	call_guest = invoke;
 	// File, memory, text and system handlers of the shared registry take 32-bit words as well; they get the same process services.
@@ -1362,12 +1483,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		paths.redirect((call.u32(0) & 0xff) != 0);
 		call.ret(1);
 	});
-	// Waveform audio for 32-bit programs has no device yet: they hear that none exists, as on a machine without sound, and go on silent.
-	shared_api.add("waveOutGetNumDevs", 0, [](ApiCall &call) { call.ret(0); });
-	shared_api.add("waveInGetNumDevs", 0, [](ApiCall &call) { call.ret(0); });
-	for (const auto *name : {"waveOutGetDevCapsW", "waveOutGetDevCapsA", "waveInGetDevCapsW", "waveInGetDevCapsA"})
-		shared_api.add(name, 3, [](ApiCall &call) { call.ret(2); });
-	register_midi_api(shared_api);
+	// Waveform audio and MIDI as 64-bit programs have them: the headers and structures are read at the widths of a 32-bit program.
+	register_wave_api(shared_api, kernel);
 	register_profile_api(shared_api, profile);
 	register_ansi_adapters(shared_api);
 	register_legacy_file_api(shared_api);
@@ -1418,6 +1535,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				if (static_cast<uint32_t>(attached.value) == 0)
 					throw std::runtime_error("DLL_PROCESS_ATTACH failed: " + module->name);
 			}
+			started_modules.insert(module);
 		}
 		start_image(entry);
 		const auto result = invoke(program_start(modules, entry), {});

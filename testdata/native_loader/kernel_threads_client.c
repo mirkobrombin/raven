@@ -38,6 +38,11 @@ static DWORD WINAPI waiting(LPVOID parameter)
 	return 42;
 }
 
+static DWORD WINAPI parked(LPVOID gate)
+{
+	return WaitForSingleObject(gate,10000)==WAIT_OBJECT_0 ? 0 : 1;
+}
+
 static DWORD WINAPI tls_reader(LPVOID parameter)
 {
 	(void)parameter;
@@ -152,6 +157,42 @@ static int critical_options(void)
 	for (unsigned at = 0; at < sizeof(option); ++at) ((BYTE *)&option)[at] = 0xa5;
 	if (InitializeCriticalSectionEx(&option, 0, 0x20000001) || GetLastError() != ERROR_INVALID_PARAMETER) return 83;
 	for (unsigned at = 0; at < sizeof(option); ++at) if (((BYTE *)&option)[at] != 0xa5) return 84;
+	return 0;
+}
+
+/* Two threads that pass a turn between them through a condition variable, beside one that computes and never waits. */
+static SRWLOCK turn_lock=SRWLOCK_INIT;
+static CONDITION_VARIABLE turn_changed=CONDITION_VARIABLE_INIT;
+static volatile LONG turn,computing_ends;
+
+static DWORD WINAPI computing(LPVOID parameter)
+{
+	volatile unsigned count=0;
+	while(!computing_ends) ++count;
+	return 0;
+}
+
+static DWORD WINAPI answering(LPVOID parameter)
+{
+	for(;;) {
+		AcquireSRWLockExclusive(&turn_lock);
+		while(turn==0) SleepConditionVariableSRW(&turn_changed,&turn_lock,INFINITE,0);
+		const LONG asked=turn;
+		turn=0;
+		ReleaseSRWLockExclusive(&turn_lock);
+		WakeAllConditionVariable(&turn_changed);
+		if(asked==2) return 0;
+	}
+}
+
+/* A thread that closes the handle its creator waits on, then ends, as one started with _beginthread does on its way out. */
+static HANDLE leaving_handle;
+static DWORD WINAPI leaving(LPVOID parameter)
+{
+	(void)parameter;
+	Sleep(100);
+	CloseHandle(leaving_handle);
+	Sleep(100);
 	return 0;
 }
 
@@ -280,5 +321,56 @@ int raven_entry(void)
 		CloseHandle(worker);
 		CloseHandle(apc_ready);
 	}
+	/* Windows has no small cap on the threads a process keeps alive: the .NET thread pool parks a few hundred idle workers at once. */
+	static HANDLE crowd[400];
+	HANDLE crowd_gate=CreateEventW(0,TRUE,FALSE,0);
+	CHECK(101,crowd_gate!=0);
+	for(unsigned at=0;at<400;++at) {
+		crowd[at]=CreateThread(0,64*1024,parked,crowd_gate,STACK_SIZE_PARAM_IS_A_RESERVATION,0);
+		CHECK(101,crowd[at]!=0);
+	}
+	SetEvent(crowd_gate);
+	for(unsigned at=0;at<400;++at) {
+		CHECK(102,WaitForSingleObject(crowd[at],5000)==WAIT_OBJECT_0);
+		CloseHandle(crowd[at]);
+	}
+	CloseHandle(crowd_gate);
+	/* A thread that waits and wakes finds a free processor on Windows, whatever another thread computes meanwhile: two hundred turns
+	   passed to and fro take a moment, not the time of a slice of the computing thread each. A renderer's workers answer the thread
+	   that draws this way. */
+	HANDLE computes=CreateThread(0,0,computing,0,0,0),answers=CreateThread(0,0,answering,0,0,0);
+	CHECK(103,computes && answers);
+	Sleep(20);
+	const DWORD passing=GetTickCount();
+	for(int round=0;round<200;++round) {
+		AcquireSRWLockExclusive(&turn_lock);
+		turn=1;
+		ReleaseSRWLockExclusive(&turn_lock);
+		WakeAllConditionVariable(&turn_changed);
+		AcquireSRWLockExclusive(&turn_lock);
+		while(turn==1) SleepConditionVariableSRW(&turn_changed,&turn_lock,INFINITE,0);
+		ReleaseSRWLockExclusive(&turn_lock);
+	}
+	CHECK(104,GetTickCount()-passing<500);
+	AcquireSRWLockExclusive(&turn_lock);
+	turn=2;
+	ReleaseSRWLockExclusive(&turn_lock);
+	WakeAllConditionVariable(&turn_changed);
+	computing_ends=1;
+	CHECK(105,WaitForSingleObject(answers,5000)==WAIT_OBJECT_0 && WaitForSingleObject(computes,5000)==WAIT_OBJECT_0);
+	CloseHandle(answers);
+	CloseHandle(computes);
+	/* A wait holds the object it began on: the handle closed under it, the wait still ends when the thread does, neither failing
+	   nor left with nothing to wake it. An installer waits this way for a worker that closes its own handle. */
+	leaving_handle=CreateThread(0,0,leaving,0,CREATE_SUSPENDED,0);
+	CHECK(106,leaving_handle);
+	ResumeThread(leaving_handle);
+	CHECK(107,WaitForSingleObject(leaving_handle,5000)==WAIT_OBJECT_0);
+	leaving_handle=CreateThread(0,0,leaving,0,CREATE_SUSPENDED,0);
+	CHECK(108,leaving_handle);
+	ResumeThread(leaving_handle);
+	HANDLE both[2]={leaving_handle,CreateEventA(0,TRUE,FALSE,0)};
+	CHECK(109,WaitForMultipleObjects(2,both,FALSE,5000)==WAIT_OBJECT_0);
+	CloseHandle(both[1]);
 	return 0;
 }

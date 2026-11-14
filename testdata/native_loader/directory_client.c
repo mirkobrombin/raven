@@ -89,6 +89,10 @@ int raven_entry(void)
 	CHECK(24, query(handle,0,0,0,(IoStatus *)1,output.bytes,1024,2,0,0,1) == (LONG)0xc0000005);
 	CHECK(25, query((HANDLE)0x123,0,0,0,&io,output.bytes,1024,2,0,0,0) == (LONG)0xc0000008);
 	CHECK(26, query(handle,0,(void *)1,0,&io,output.bytes,1024,2,0,0,0) == (LONG)0xc00000bb);
+	// The file's own information is found by name as .NET's platform calls find it: the standard class says the handle is a directory.
+	typedef LONG (WINAPI *QueryFile)(HANDLE,IoStatus *,void *,ULONG,ULONG);
+	QueryFile query_file = (QueryFile)GetProcAddress(ntdll,"NtQueryInformationFile");
+	CHECK(34, query_file && query_file(handle,&io,output.bytes,24,5) == 0 && io.information == 24 && output.bytes[21] == 1);
 	CHECK(27, CloseHandle(alias) && CloseHandle(handle));
 	handle = CreateFileW(root,FILE_LIST_DIRECTORY,FILE_SHARE_READ,0,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,0);
 	UnicodeString missing = {14,14,L"missing"};

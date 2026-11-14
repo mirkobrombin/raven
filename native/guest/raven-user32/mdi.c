@@ -21,11 +21,17 @@ static mdi_client *client_of(HWND window)
 	return (mdi_client *)GetWindowLongPtrW(window, 0);
 }
 
+/* A maximized document covers the client area with its own, so its caption and border lie outside it. */
 static void fill_client(HWND client, HWND child)
 {
 	RECT area;
+	if (!IsZoomed(child)) {
+		ShowWindow(child, SW_MAXIMIZE);
+		return;
+	}
 	GetClientRect(client, &area);
-	MoveWindow(child, 0, 0, area.right, area.bottom, TRUE);
+	AdjustWindowRectEx(&area, GetWindowLongW(child, GWL_STYLE), FALSE, GetWindowLongW(child, GWL_EXSTYLE));
+	MoveWindow(child, area.left, area.top, area.right - area.left, area.bottom - area.top, TRUE);
 }
 
 static void activate_child(HWND client, mdi_client *data, HWND child)
@@ -250,6 +256,14 @@ LRESULT WINAPI DefMDIChildProcW(HWND child, UINT message, WPARAM wparam, LPARAM 
 		if (client) {
 			SendMessageW(client, WM_MDIDESTROY, (WPARAM)child, 0);
 			return 0;
+		}
+		break;
+	case WM_SIZE:
+		/* A document that ShowWindow maximized or restored sets the state the client keeps for all its documents. */
+		if (client && (GetWindowLongW(child, GWL_EXSTYLE) & WS_EX_MDICHILD) && (wparam == SIZE_MAXIMIZED || wparam == SIZE_RESTORED)) {
+			mdi_client *data = client_of(client);
+			if (data && (wparam == SIZE_MAXIMIZED || data->active == child))
+				data->maximized = wparam == SIZE_MAXIMIZED;
 		}
 		break;
 	default:

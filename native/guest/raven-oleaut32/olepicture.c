@@ -570,7 +570,20 @@ static HRESULT load_icon(struct picture *picture, const BYTE *data, ULONG size)
 		}
 	if (best->offset > size || best->size > size - best->offset)
 		return E_FAIL;
-	icon = CreateIconFromResourceEx((BYTE *)data + best->offset, best->size, header->type == 1, 0x30000, best->width, best->height, 0);
+	if (header->type == 1)
+		icon = CreateIconFromResourceEx((BYTE *)data + best->offset, best->size, TRUE, 0x30000, best->width, best->height, 0);
+	else
+	{
+		/* A cursor file keeps the hot spot in its directory; a cursor resource carries it in two words before the bitmap. */
+		BYTE *resource = HeapAlloc(GetProcessHeap(), 0, best->size + 4);
+		if (!resource)
+			return E_OUTOFMEMORY;
+		memcpy(resource, &best->x_hotspot, 2);
+		memcpy(resource + 2, &best->y_hotspot, 2);
+		memcpy(resource + 4, data + best->offset, best->size);
+		icon = CreateIconFromResourceEx(resource, best->size + 4, FALSE, 0x30000, best->width, best->height, 0);
+		HeapFree(GetProcessHeap(), 0, resource);
+	}
 	if (!icon)
 		return E_FAIL;
 	picture->desc.picType = PICTYPE_ICON;

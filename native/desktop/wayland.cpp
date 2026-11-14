@@ -94,8 +94,12 @@ struct WaylandPresentation::State {
 		xdg_surface *shell=nullptr;
 		xdg_toplevel *role=nullptr;
 		xdg_popup *popup=nullptr;
+		// A window another owns that takes no grab is a subsurface of the owner's host window: this is its role, the window it lies on
+		// and the surface of that window it was made for.
+		wl_subsurface *attached=nullptr;
+		uint64_t attached_to=0,attached_serial=0;
 		bool is_popup=false;
-		// Where a popup sits on its parent, and whether it took a grab.
+		// Where a popup or an attached window sits on its parent, and whether it took a grab.
 		int32_t popup_x=0,popup_y=0;
 		bool grabbed=false;
 		bool configured=false, closed=false, resized=false, close_posted=false, first_frame=false, maximized=false, mapped=false, alpha=false;
@@ -111,6 +115,7 @@ struct WaylandPresentation::State {
 		static inline uint64_t made=0;
 		const uint64_t serial=++made;
 		~Surface() {
+			if (attached) wl_subsurface_destroy(attached);
 			if (popup) xdg_popup_destroy(popup);
 			if (role) xdg_toplevel_destroy(role);
 			if (shell) xdg_surface_destroy(shell);
@@ -792,6 +797,10 @@ struct WaylandPresentation::State {
 		if (!handle || !width || !height || width>4096 || height>4096 || pixels.size()!=size_t(width)*height*4)
 			throw std::runtime_error("invalid native Wayland popup frame");
 		connect();
+		if (!grab && subcompositor) {
+			attach_surface(handle,parent,x,y,width,height,pixels);
+			return;
+		}
 		auto found=surfaces.find(handle);
 		// A popup that moved or changed size is made again where it now is; one that was a window before becomes a popup.
 		if (found!=surfaces.end() && !grab && (!found->second->is_popup || found->second->popup_x!=x || found->second->popup_y!=y ||
@@ -800,8 +809,13 @@ struct WaylandPresentation::State {
 			found=surfaces.end();
 		}
 		if (found==surfaces.end()) {
-			const auto owner=surfaces.find(parent);
-			if (owner==surfaces.end()) throw std::runtime_error("Wayland popup has no presented parent surface");
+			auto owner=surfaces.find(parent);
+			// A popup of an attached window opens on the host window that one lies on, as far in as it lies.
+			if (owner!=surfaces.end() && owner->second->attached) {
+				x+=owner->second->popup_x; y+=owner->second->popup_y;
+				owner=surfaces.find(owner->second->attached_to);
+			}
+			if (owner==surfaces.end() || !owner->second->shell) throw std::runtime_error("Wayland popup has no presented parent surface");
 			auto window=std::make_unique<Surface>();
 			window->width=width; window->height=height; window->is_popup=true;
 			window->popup_x=x; window->popup_y=y; window->grabbed=grab;
@@ -812,6 +826,10 @@ struct WaylandPresentation::State {
 			xdg_positioner_set_anchor_rect(positioner,x,y,1,1);
 			xdg_positioner_set_anchor(positioner,XDG_POSITIONER_ANCHOR_TOP_LEFT);
 			xdg_positioner_set_gravity(positioner,XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+			// A menu that would leave the screen opens on the other side of the point, as Windows opens one near the bottom upwards; with
+			// no room on either side it slides along the edge.
+			xdg_positioner_set_constraint_adjustment(positioner,XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X|XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y|
+				XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X|XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
 			window->popup=xdg_surface_get_popup(window->shell,owner->second->shell,positioner);
 			xdg_positioner_destroy(positioner);
 			static const xdg_surface_listener surface_listener{[](void *data,xdg_surface *surface,uint32_t serial) {
@@ -839,6 +857,50 @@ struct WaylandPresentation::State {
 			throw std::runtime_error("Wayland popup cannot accept this frame");
 		window.alpha=translucent.contains(handle);
 		attach_frame(window,width,height,pixels);
+	}
+
+	// A window another owns that takes no grab (a palette, a tool window, a drop-down list) is shown as a subsurface of the owner's host
+	// window: it stays where the program put it on the owner, moves with the owner and lies under whatever the compositor stacks over
+	// the owner, as an owned window does on Windows. A popup of the shell stays over every window, a dialog of the owner among them, and
+	// not every compositor moves it along with its parent.
+	void attach_surface(uint64_t handle,uint64_t parent,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
+		auto owner=surfaces.find(parent);
+		if (owner!=surfaces.end() && owner->second->attached) {
+			x+=owner->second->popup_x; y+=owner->second->popup_y;
+			owner=surfaces.find(owner->second->attached_to);
+		}
+		if (owner==surfaces.end() || owner->second->closed || owner->second->attached)
+			throw std::runtime_error("Wayland owned window has no presented owner surface");
+		auto &root=*owner->second;
+		auto found=surfaces.find(handle);
+		// One that was a window or a popup before, or lay on a surface since made again, is attached anew.
+		if (found!=surfaces.end() && (!found->second->attached || found->second->attached_serial!=root.serial)) {
+			surfaces.erase(found);
+			found=surfaces.end();
+		}
+		bool placed=false;
+		if (found==surfaces.end()) {
+			auto window=std::make_unique<Surface>();
+			window->is_popup=true; window->configured=true;
+			window->proxy=wl_compositor_create_surface(compositor);
+			window->attached=wl_subcompositor_get_subsurface(subcompositor,window->proxy,root.proxy);
+			wl_subsurface_set_desync(window->attached);
+			window->attached_to=owner->first; window->attached_serial=root.serial;
+			found=surfaces.emplace(handle,std::move(window)).first;
+			placed=true;
+		}
+		auto &window=*found->second;
+		if (placed || window.popup_x!=x || window.popup_y!=y) {
+			wl_subsurface_set_position(window.attached,x,y);
+			window.popup_x=x; window.popup_y=y;
+			placed=true;
+		}
+		window.width=width; window.height=height;
+		window.alpha=translucent.contains(handle);
+		attach_frame(window,width,height,pixels);
+		// Where a subsurface lies takes effect with the next commit of its parent.
+		if (placed) wl_surface_commit(root.proxy);
+		wl_display_flush(display);
 	}
 
 	std::optional<HostSurface> host_surface(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown) {
