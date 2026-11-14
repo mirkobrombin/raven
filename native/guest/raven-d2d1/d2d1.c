@@ -7688,6 +7688,21 @@ static void draw_effect(struct target *self, struct effect *effect, const D2D1_P
 		area = rect_intersect(&area, &asked);
 	}
 	area = rect_held(rect_intersect(&area, &covered));
+	/* The clips pushed on the target bound what of the image can show, and so what of it is made: a program that draws its whole
+	   picture through an effect, inside a clip around the part that changed, has that part alone worked out. */
+	if (self->pushed <= ARRAYSIZE(self->pushes) && world._11 == 1 && world._22 == 1 && world._12 == 0 && world._21 == 0) {
+		static const float still[6] = {1, 0, 0, 1, 0, 0};
+		UINT32 pushed;
+		for (pushed = 0; pushed < self->pushed; ++pushed) {
+			const struct command *clip = &self->pushes[pushed].command;
+			if (clip->op == OP_PUSH_CLIP && !memcmp(clip->transform, still, sizeof(still))) {
+				const D2D1_RECT_L inside = {float_edge(clip->rect[0] - world._31, 0), float_edge(clip->rect[1] - world._32, 0),
+					float_edge(clip->rect[2] - world._31, 1), float_edge(clip->rect[3] - world._32, 1)};
+				area = rect_intersect(&area, &inside);
+			}
+		}
+		area = rect_held(area);
+	}
 	if (rect_empty(&area))
 		return;
 	size = (size_t)rect_width(&area) * rect_height(&area);
