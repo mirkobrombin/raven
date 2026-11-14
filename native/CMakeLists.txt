@@ -1492,6 +1492,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(owned_place_test owned_place_fixture raven-bootstrap)
             add_test(NAME native_owned_place COMMAND owned_place_test $<TARGET_FILE:raven-bootstrap> ${OWNED_PLACE_FIXTURE})
             set_tests_properties(native_owned_place PROPERTIES TIMEOUT 30)
+            set(HOST_RESIZE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/host-resize.exe)
+            add_custom_command(OUTPUT ${HOST_RESIZE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${HOST_RESIZE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/host_resize_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/host_resize_client.c VERBATIM)
+            add_custom_target(host_resize_fixture ALL DEPENDS ${HOST_RESIZE_FIXTURE})
+            add_executable(host_resize_test desktop/host_resize_test.cpp)
+            target_link_libraries(host_resize_test PRIVATE raven_cpu)
+            add_dependencies(host_resize_test host_resize_fixture raven-bootstrap)
+            add_test(NAME native_host_resize COMMAND host_resize_test $<TARGET_FILE:raven-bootstrap> ${HOST_RESIZE_FIXTURE})
+            set_tests_properties(native_host_resize PROPERTIES TIMEOUT 40)
         endif()
         set(INITIAL_MESSAGE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/initial-message-fixtures)
         add_custom_command(OUTPUT ${INITIAL_MESSAGE_FIXTURES}/client.exe ${INITIAL_MESSAGE_FIXTURES}/exit.exe
