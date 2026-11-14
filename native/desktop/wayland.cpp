@@ -182,6 +182,8 @@ struct WaylandPresentation::State {
 		uint64_t parent=0;
 		int32_t x=0,y=0;
 		bool placed=false,above=false;
+		// When its role was made, among the driver's surfaces: a later one lies over an earlier.
+		uint64_t order=0;
 		// The window's client size, which the surface is shown at: a driver's buffers keep the size of the swap chain, which a program
 		// resizes after its window or not at all, and Windows shows them stretched over the client area rather than past its edges.
 		uint32_t width=0,height=0;
@@ -198,6 +200,9 @@ struct WaylandPresentation::State {
 		}
 	};
 	std::map<uint64_t,std::unique_ptr<Hosted>> hosted;
+	// The rectangle the next frame of a window differs from its last in, when its presenter said so.
+	std::map<uint64_t,std::array<int32_t,4>> within;
+	uint64_t hosted_order=0;
 	// Child windows drawn by GDI shown over the driver's surfaces of their root (see overlay).
 	struct Overlay {
 		wl_surface *proxy=nullptr;
@@ -925,6 +930,16 @@ struct WaylandPresentation::State {
 			wl_subsurface_set_desync(entry->role);
 			entry->parent=parent->serial;
 			entry->above=true;
+			// A subsurface made later stacks over those made before it. The driver's surface belongs under the windows the root owns
+			// that lie on it and under what its children draw over it: over the driver's surfaces made before it, or else the root.
+			const Hosted *under=nullptr;
+			for (const auto &[other,earlier] : hosted)
+				if (earlier.get()!=entry.get() && earlier->role && earlier->parent==parent->serial && earlier->above &&
+					(!under || earlier->order>under->order))
+					under=earlier.get();
+			wl_subsurface_place_above(entry->role,under ? under->proxy : parent->proxy);
+			entry->order=++hosted_order;
+			changed=true;
 		}
 		if (parent && (!entry->placed || entry->x!=x || entry->y!=y)) {
 			wl_subsurface_set_position(entry->role,x,y);

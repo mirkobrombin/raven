@@ -67,6 +67,8 @@ struct node {
 };
 
 static CRITICAL_SECTION lock;
+/* Held while a surface's frames go to the swap chain of the window they cover, or while that swap chain is made or let go. */
+static CRITICAL_SECTION onto_lock;
 static LONG live;
 
 static struct node *node_of(void *iface)
@@ -285,6 +287,16 @@ struct surface {
 	/* The part of the frame presented since the targets were last drawn, or all of it, and the part being drawn now. */
 	RECT changed, drawing;
 	BOOL changed_whole, drawing_whole;
+	/* The window whose whole client area the frames cover alone, opaque and at their size, when its target was last drawn, and
+	 * whether that drawing found the surface there. Such frames reach the window on the graphics card, through a swap chain made for
+	 * the window that takes each as it is presented: no pixel of them is read back. */
+	HWND covers;
+	BOOL found;
+	IDXGISwapChain1 *onto;
+	HWND onto_window;
+	UINT onto_width, onto_height;
+	UINT onto_refused;
+	BOOL onto_failed;
 };
 
 /* The surfaces over swap chains, which see the frames their swap chains present. */
@@ -330,6 +342,7 @@ struct graphics_device {
 
 static void changed(struct compositor *compositor);
 static void render(struct target *target, BOOL frame_only);
+static void uncover(struct compositor *compositor);
 
 /* ---- the compositor's objects share ICompositionObject: their compositor ---- */
 static struct compositor *compositor_of_object(void *iface)
@@ -754,6 +767,8 @@ static void surface_destroy(struct node *base)
 	LeaveCriticalSection(&lock);
 	if (self->staging)
 		ID3D11Texture2D_Release(self->staging);
+	if (self->onto)
+		IDXGISwapChain1_Release(self->onto);
 	if (self->swap_chain)
 		IDXGISwapChain1_Release(self->swap_chain);
 	node_release(&self->compositor->node);
@@ -827,8 +842,10 @@ static LRESULT CALLBACK target_window(HWND window, UINT message, WPARAM wparam, 
 	struct target *self = GetPropW(window, target_property);
 	WNDPROC previous = self ? self->previous : DefWindowProcW;
 	const LRESULT result = CallWindowProcW(previous, window, message, wparam, lparam);
-	if (self && self->compositor->committed && (message == WM_PAINT || message == WM_SIZE))
+	if (self && self->compositor->committed && (message == WM_PAINT || message == WM_SIZE)) {
 		render(self, FALSE);
+		uncover(self->compositor);
+	}
 	return result;
 }
 
@@ -859,6 +876,7 @@ static void show(struct compositor *self, BOOL frame_only)
 			surface->drawing_whole = surface->changed_whole;
 			SetRectEmpty(&surface->changed);
 			surface->changed_whole = FALSE;
+			surface->found = FALSE;
 		}
 	for (target = self->targets; target; target = target->next)
 		++count;
@@ -876,6 +894,7 @@ static void show(struct compositor *self, BOOL frame_only)
 		node_release(&targets[index]->node);
 	}
 	FREE(targets);
+	uncover(self);
 }
 
 static void commit(struct compositor *self)
@@ -1116,6 +1135,109 @@ static void capture_frame(struct surface *surface, const RECT *dirty)
 	ID3D11Texture2D_Release(buffer);
 }
 
+/* A frame goes from the swap chain's buffer to the swap chain of the window it covers, which is made or brought to the frame's size
+ * first, and shows there. False when the window cannot take it so; the frame then shows as any other does. */
+static BOOL present_onto(struct surface *surface)
+{
+	ID3D11Texture2D *buffer = NULL, *shown = NULL;
+	ID3D11Device *device = NULL;
+	ID3D11DeviceContext *context = NULL;
+	ID3D10Multithread *guard;
+	D3D11_TEXTURE2D_DESC desc;
+	HWND window;
+	BOOL done = FALSE;
+	EnterCriticalSection(&lock);
+	window = surface->onto_failed ? NULL : surface->covers;
+	LeaveCriticalSection(&lock);
+	if (!window || FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, 0, &IID_ID3D11Texture2D, (void **)&buffer)))
+		return FALSE;
+	ID3D11Texture2D_GetDesc(buffer, &desc);
+	ID3D11Texture2D_GetDevice(buffer, &device);
+	EnterCriticalSection(&onto_lock);
+	if (surface->onto && surface->onto_window != window) {
+		IDXGISwapChain1_Release(surface->onto);
+		surface->onto = NULL;
+	}
+	if (surface->onto && (surface->onto_width != desc.Width || surface->onto_height != desc.Height)) {
+		if (SUCCEEDED(IDXGISwapChain1_ResizeBuffers(surface->onto, 0, desc.Width, desc.Height, DXGI_FORMAT_UNKNOWN, 0))) {
+			surface->onto_width = desc.Width;
+			surface->onto_height = desc.Height;
+		} else {
+			IDXGISwapChain1_Release(surface->onto);
+			surface->onto = NULL;
+		}
+	}
+	if (!surface->onto) {
+		DXGI_SWAP_CHAIN_DESC1 made = {desc.Width, desc.Height, desc.Format, FALSE, {1, 0}, DXGI_USAGE_RENDER_TARGET_OUTPUT, 2,
+			DXGI_SCALING_STRETCH, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_ALPHA_MODE_IGNORE, 0};
+		IDXGIFactory2 *factory = NULL;
+		if (SUCCEEDED(IDXGISwapChain1_GetParent(surface->swap_chain, &IID_IDXGIFactory2, (void **)&factory))) {
+			if (SUCCEEDED(IDXGIFactory2_CreateSwapChainForHwnd(factory, (IUnknown *)device, window, &made, NULL, NULL, &surface->onto))) {
+				surface->onto_window = window;
+				surface->onto_width = desc.Width;
+				surface->onto_height = desc.Height;
+			} else
+				surface->onto = NULL;
+			IDXGIFactory2_Release(factory);
+		}
+		if (!surface->onto) {
+			EnterCriticalSection(&lock);
+			surface->onto_failed = TRUE;
+			LeaveCriticalSection(&lock);
+		}
+	}
+	if (surface->onto && SUCCEEDED(IDXGISwapChain1_GetBuffer(surface->onto, 0, &IID_ID3D11Texture2D, (void **)&shown))) {
+		ID3D11Device_GetImmediateContext(device, &context);
+		guard = hold_device(device);
+		ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)shown, (ID3D11Resource *)buffer);
+		release_device(guard);
+		ID3D11DeviceContext_Release(context);
+		ID3D11Texture2D_Release(shown);
+		/* A swap chain whose window the screen cannot show a graphics card's frames in says so with a status that is no failure:
+		 * the frame did not show, and after a few such the window is left to the frames drawn into it. */
+		done = IDXGISwapChain1_Present(surface->onto, 0, 0) == S_OK;
+		if (!done) {
+			IDXGISwapChain1_Release(surface->onto);
+			surface->onto = NULL;
+			if (++surface->onto_refused >= 3) {
+				EnterCriticalSection(&lock);
+				surface->onto_failed = TRUE;
+				LeaveCriticalSection(&lock);
+			}
+		} else
+			surface->onto_refused = 0;
+	}
+	LeaveCriticalSection(&onto_lock);
+	ID3D11Device_Release(device);
+	ID3D11Texture2D_Release(buffer);
+	return done;
+}
+
+/* The surfaces the last drawing of the compositor's targets did not find covering a window let go of the swap chain made for the one
+ * they covered, so that the window shows what is drawn into it again. */
+static void uncover(struct compositor *self)
+{
+	struct surface *surface;
+	IDXGISwapChain1 *gone[16];
+	UINT count = 0;
+	EnterCriticalSection(&onto_lock);
+	EnterCriticalSection(&lock);
+	for (surface = watched; surface; surface = surface->next_watched)
+		if (surface->compositor == self && !surface->found) {
+			surface->covers = NULL;
+			if (surface->onto && count < ARRAYSIZE(gone)) {
+				gone[count++] = surface->onto;
+				surface->onto = NULL;
+			}
+		}
+	LeaveCriticalSection(&lock);
+	while (count) {
+		IDXGISwapChain1 *chain = gone[--count];
+		IDXGISwapChain1_Release(chain);
+	}
+	LeaveCriticalSection(&onto_lock);
+}
+
 /* The surface over a swap chain, with a reference, or null. */
 static struct surface *surface_of_chain(IDXGISwapChain1 *chain)
 {
@@ -1165,12 +1287,13 @@ static HRESULT STDMETHODCALLTYPE surface_present(IDXGISwapChain1 *chain, UINT in
 {
 	const struct presenter *presenter = presenter_of(chain);
 	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
+	const BOOL onto = surface && present_onto(surface);
 	HRESULT hr;
-	if (surface)
+	if (surface && !onto)
 		capture_frame(surface, NULL);
 	hr = presenter->present(chain, interval, flags);
 	if (surface) {
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr) && !onto)
 			show_frame(surface);
 		node_release(&surface->node);
 	}
@@ -1181,8 +1304,9 @@ static HRESULT STDMETHODCALLTYPE surface_present1(IDXGISwapChain1 *chain, UINT i
 {
 	const struct presenter *presenter = presenter_of(chain);
 	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
+	const BOOL onto = surface && present_onto(surface);
 	HRESULT hr;
-	if (surface) {
+	if (surface && !onto) {
 		/* The rectangles a present names are all of the frame that changed; none named means all of it did. */
 		RECT dirty = {0, 0, 0, 0};
 		UINT index;
@@ -1192,7 +1316,7 @@ static HRESULT STDMETHODCALLTYPE surface_present1(IDXGISwapChain1 *chain, UINT i
 	}
 	hr = presenter->present1(chain, interval, flags, parameters);
 	if (surface) {
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(hr) && !onto)
 			show_frame(surface);
 		node_release(&surface->node);
 	}
@@ -1689,6 +1813,16 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 	ID3D11Texture2D_Release(buffer);
 }
 
+/* Whether a swap chain's frames are all the window shows: opaque pixels of 8 bits, at their size, over the whole client area. */
+static BOOL covers_alone(const struct fill *fill, const RECT *client)
+{
+	DXGI_SWAP_CHAIN_DESC1 desc;
+	return fill->opacity >= 1 && EqualRect(&fill->area, client) && fill->left == 0 && fill->top == 0 &&
+		SUCCEEDED(IDXGISwapChain1_GetDesc1(fill->surface->swap_chain, &desc)) && desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
+		desc.AlphaMode == DXGI_ALPHA_MODE_IGNORE && desc.SampleDesc.Count == 1 && desc.Width == (UINT)client->right &&
+		desc.Height == (UINT)client->bottom && fill->width == (float)desc.Width && fill->height == (float)desc.Height;
+}
+
 /* Draws a target's visuals into its window. For a frame presented with nothing else changed only the part of the window the changed part
  * of each frame falls on is drawn again, as the desktop compositor takes the rectangles a present names. */
 static void render(struct target *target, BOOL frame_only)
@@ -1700,6 +1834,8 @@ static void render(struct target *target, BOOL frame_only)
 	HDC window_dc, memory_dc;
 	HBITMAP bitmap, previous;
 	BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+	struct surface *covering = NULL;
+	BOOL first = FALSE;
 	void *bits = NULL;
 	UINT index;
 	if (!IsWindow(target->window) || !GetClientRect(target->window, &client) || client.right <= 0 || client.bottom <= 0)
@@ -1708,6 +1844,16 @@ static void render(struct target *target, BOOL frame_only)
 	EnterCriticalSection(&lock);
 	if (target->root)
 		collect(&fills, target->root, 0, 0, 1, 1, &everything, 1);
+	for (index = 0; index < fills.count; ++index)
+		if (fills.items[index].surface)
+			fills.items[index].surface->found = FALSE;
+	if (fills.count == 1 && fills.items[0].surface && !fills.items[0].surface->onto_failed && covers_alone(&fills.items[0], &client)) {
+		covering = fills.items[0].surface;
+		first = covering->covers != target->window;
+		covering->covers = target->window;
+		covering->found = TRUE;
+		node_addref(&covering->node);
+	}
 	if (frame_only) {
 		RECT fresh = {0, 0, 0, 0};
 		for (index = 0; index < fills.count; ++index) {
@@ -1733,6 +1879,16 @@ static void render(struct target *target, BOOL frame_only)
 		IntersectRect(&fills.drawn, &fills.drawn, &fresh);
 	}
 	LeaveCriticalSection(&lock);
+	/* Frames that cover the window alone go to it as they are presented; the one the swap chain holds goes now when the window has
+	 * only just been found covered, or changed its size. */
+	if (covering) {
+		EnterCriticalSection(&onto_lock);
+		first = first || !covering->onto || covering->onto_width != (UINT)client.right || covering->onto_height != (UINT)client.bottom;
+		LeaveCriticalSection(&onto_lock);
+		if (!first || present_onto(covering))
+			SetRectEmpty(&fills.drawn);
+		node_release(&covering->node);
+	}
 	if (!IsRectEmpty(&fills.drawn)) {
 		info.bmiHeader.biWidth = client.right;
 		info.bmiHeader.biHeight = -client.bottom;
@@ -1998,6 +2154,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 	if (reason == DLL_PROCESS_ATTACH) {
 		DisableThreadLibraryCalls(instance);
 		InitializeCriticalSection(&lock);
+		InitializeCriticalSection(&onto_lock);
 		build_tables();
 	}
 	return TRUE;
