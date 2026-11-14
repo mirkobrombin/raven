@@ -1,6 +1,7 @@
 #include "event.h"
 #include "shared_file.h"
 
+#include <algorithm>
 #include <new>
 #include <stdexcept>
 #include <sys/stat.h>
@@ -101,10 +102,10 @@ bool EventObject::take()
 	return previous;
 }
 
-int EventObject::signaled(uint32_t) const
+int EventObject::signaled(uint32_t thread) const
 {
 	std::lock_guard lock(mutex);
-	return is_set();
+	return is_set() || std::find(pulses.begin(), pulses.end(), thread) != pulses.end();
 }
 
 void EventObject::consume(uint32_t thread)
@@ -112,10 +113,50 @@ void EventObject::consume(uint32_t thread)
 	try_consume(thread);
 }
 
-bool EventObject::try_consume(uint32_t)
+bool EventObject::try_consume(uint32_t thread)
 {
 	std::lock_guard lock(mutex);
-	return take();
+	if (take())
+		return true;
+	return std::erase(pulses, thread) != 0;
+}
+
+void EventObject::grant_pulse(uint32_t thread)
+{
+	std::lock_guard lock(mutex);
+	if (std::find(pulses.begin(), pulses.end(), thread) == pulses.end())
+		pulses.push_back(thread);
+}
+
+void EventObject::revoke_pulse(uint32_t thread)
+{
+	std::lock_guard lock(mutex);
+	std::erase(pulses, thread);
+}
+
+bool EventObject::pulse_host_waiters()
+{
+	std::lock_guard lock(mutex);
+	if (waiters.empty())
+		return false;
+	if (type == 0) {
+		for (const auto &waiter : waiters) waiter->ready = true;
+		waiters.clear();
+	} else {
+		waiters.front()->ready = true;
+		waiters.pop_front();
+	}
+	changed.notify_all();
+	return type != 0;
+}
+
+void EventObject::pulse_other_processes()
+{
+	std::lock_guard lock(mutex);
+	if (!shared)
+		return;
+	shared->signaled.store(1);
+	announce_shared_change();
 }
 
 int EventObject::set_state(bool signaled)
