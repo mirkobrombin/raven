@@ -4,6 +4,8 @@
 
 __declspec(dllexport) uint64_t target_window;
 __declspec(dllexport) volatile uint32_t control;
+// The count of presents that have returned: the owner changes the window only after the present it saw has its result.
+__declspec(dllexport) volatile uint32_t presented_frames;
 static VkPhysicalDevice physical[16];
 static VkSurfaceFormatKHR formats[32];
 static VkQueueFamilyProperties families[32];
@@ -93,6 +95,7 @@ unsigned int raven_entry(void)
 		VkResult presented=VK_ERROR_UNKNOWN;
 		VkPresentInfoKHR present={VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,0,1,&finished,1,&swap,&index,&presented};
 		if (vkQueuePresentKHR(queue,&present)!=VK_SUCCESS || presented!=VK_SUCCESS || vkQueueWaitIdle(queue)!=VK_SUCCESS) return 18;
+		presented_frames=frame+1;
 	}
 	for (uint32_t wait=0;control!=2 && wait<20000;++wait) Sleep(1);
 	if (control!=2) return 23;
