@@ -1813,14 +1813,17 @@ static void draw_swap_chain(struct canvas *canvas, const struct fill *fill)
 	ID3D11Texture2D_Release(buffer);
 }
 
-/* Whether a swap chain's frames are all the window shows: opaque pixels of 8 bits, at their size, over the whole client area. */
-static BOOL covers_alone(const struct fill *fill, const RECT *client)
+/* Whether a swap chain's frames are all the window shows: opaque pixels of 8 bits, at their size, over the whole client area. A window
+ * already shown so stays so while its size and the swap chain's differ, as they do between the moment a window is given a size and
+ * the frame the program presents at it: the last frame shows meanwhile, as Windows shows it. */
+static BOOL covers_alone(const struct fill *fill, const RECT *client, BOOL covered)
 {
 	DXGI_SWAP_CHAIN_DESC1 desc;
-	return fill->opacity >= 1 && EqualRect(&fill->area, client) && fill->left == 0 && fill->top == 0 &&
+	return fill->opacity >= 1 && fill->left == 0 && fill->top == 0 &&
 		SUCCEEDED(IDXGISwapChain1_GetDesc1(fill->surface->swap_chain, &desc)) && desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
-		desc.AlphaMode == DXGI_ALPHA_MODE_IGNORE && desc.SampleDesc.Count == 1 && desc.Width == (UINT)client->right &&
-		desc.Height == (UINT)client->bottom && fill->width == (float)desc.Width && fill->height == (float)desc.Height;
+		desc.AlphaMode == DXGI_ALPHA_MODE_IGNORE && desc.SampleDesc.Count == 1 &&
+		(covered || (EqualRect(&fill->area, client) && desc.Width == (UINT)client->right && desc.Height == (UINT)client->bottom &&
+			fill->width == (float)desc.Width && fill->height == (float)desc.Height));
 }
 
 /* Draws a target's visuals into its window. For a frame presented with nothing else changed only the part of the window the changed part
@@ -1847,7 +1850,8 @@ static void render(struct target *target, BOOL frame_only)
 	for (index = 0; index < fills.count; ++index)
 		if (fills.items[index].surface)
 			fills.items[index].surface->found = FALSE;
-	if (fills.count == 1 && fills.items[0].surface && !fills.items[0].surface->onto_failed && covers_alone(&fills.items[0], &client)) {
+	if (fills.count == 1 && fills.items[0].surface && !fills.items[0].surface->onto_failed &&
+		covers_alone(&fills.items[0], &client, fills.items[0].surface->covers == target->window)) {
 		covering = fills.items[0].surface;
 		first = covering->covers != target->window;
 		covering->covers = target->window;
@@ -1880,10 +1884,11 @@ static void render(struct target *target, BOOL frame_only)
 	}
 	LeaveCriticalSection(&lock);
 	/* Frames that cover the window alone go to it as they are presented; the one the swap chain holds goes now when the window has
-	 * only just been found covered, or changed its size. */
+	 * only just been found covered. A swap chain given another size holds nothing until the program draws its next frame, and the
+	 * last one presented shows until then. */
 	if (covering) {
 		EnterCriticalSection(&onto_lock);
-		first = first || !covering->onto || covering->onto_width != (UINT)client.right || covering->onto_height != (UINT)client.bottom;
+		first = first || !covering->onto;
 		LeaveCriticalSection(&onto_lock);
 		if (!first || present_onto(covering))
 			SetRectEmpty(&fills.drawn);
