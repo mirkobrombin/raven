@@ -204,5 +204,7 @@ int raven_entry(void)
 		return 59;
 	if (MFShutdown() != S_OK || MFShutdown() != MF_E_SHUTDOWN)
 		return 60;
+	if (MFStartup(0x00010070, MFSTARTUP_FULL) != S_OK || MFShutdown() != S_OK)
+		return 61;
 	return 0;
 }
