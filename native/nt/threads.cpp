@@ -48,6 +48,10 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 	process.set_time_slicing(std::chrono::milliseconds(slice < 0 ? 0 : slice), [this] { return !tearing_down && live() > 1; }, [this] {
 		running->spent_slice = true;
 		running->set_aside = std::chrono::steady_clock::now();
+		// The thread that has just read the user's input keeps the processor unless another is due it: one that woke, or one kept
+		// waiting long enough (see took_input).
+		if (running->set_aside < running->input_until && !pick(false, true))
+			return;
 		yield();
 	});
 	wake = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
@@ -331,7 +335,7 @@ void NativeThreads::reap()
 		}
 }
 
-std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current)
+std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current, bool only_due)
 {
 	const auto now = std::chrono::steady_clock::now();
 	const size_t count = threads.size();
@@ -350,7 +354,7 @@ std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current)
 		if (thread->state == GuestThread::State::done || thread->suspend_count > 0)
 			continue;
 		if (thread->state == GuestThread::State::ready) {
-			if (!thread->spent_slice || now - thread->set_aside >= std::chrono::milliseconds(30))
+			if (!thread->spent_slice || now < thread->input_until || now - thread->set_aside >= std::chrono::milliseconds(30))
 				return thread;
 			if (!computing)
 				computing = thread;
@@ -361,7 +365,13 @@ std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current)
 				return thread;
 		}
 	}
-	return computing;
+	return only_due ? nullptr : computing;
+}
+
+void NativeThreads::took_input()
+{
+	if (running)
+		running->input_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
 }
 
 void NativeThreads::check_pending()

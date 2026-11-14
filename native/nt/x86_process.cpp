@@ -1490,6 +1490,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		guest_threads.block(std::move(ready),until);
 	});
+	windows.set_input_taken([&guest_threads] { guest_threads.took_input(); });
 	// A message sent to a window of another thread waits for that thread to run its procedure.
 	windows.set_block([&guest_threads](std::function<bool()> ready) {
 		HostWait waiting;

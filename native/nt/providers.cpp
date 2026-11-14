@@ -2802,6 +2802,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		threads.block(std::move(ready),until);
 	});
+	windows.set_input_taken([&threads] { threads.took_input(); });
 	windows.set_idle_sources([&threads](std::chrono::steady_clock::time_point limit) { return threads.idle_until(limit); },
 		[&threads](std::vector<pollfd> &descriptors) { threads.idle_descriptors(descriptors); }, [&threads] { threads.drain_wake(); });
 	KernelContext kernel{process, environment, memory, allocator, kernel_objects, threads, paths, modules, entry, *launch, invoke};

@@ -57,6 +57,8 @@ struct GuestThread {
 	// that wait and wake, which on Windows find a free processor at once, but never longer than a few slices.
 	bool spent_slice = false;
 	std::chrono::steady_clock::time_point set_aside;
+	// Until when the thread goes before those that only compute, because it has just read the user's input (see took_input).
+	std::chrono::steady_clock::time_point input_until;
 	// Background processing mode, which only the thread itself enters and leaves; meanwhile it reports idle priority.
 	bool background = false;
 	std::shared_ptr<AccessToken> impersonation;
@@ -147,6 +149,11 @@ public:
 	bool yield();
 	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
 	bool hand_over();
+	// The running thread read a message of the mouse or the keyboard. Windows raises the priority of a thread whose window takes
+	// input, and its threads have a processor each: a thread that follows the pointer is not slowed by a compiler or a renderer at
+	// work in the background. Here, where the program's threads take turns, such a thread is for a moment not set aside when its
+	// slice ends; the others run while it waits, and once in a few slices besides.
+	void took_input();
 	// Whether a thread other than the running one waits.
 	bool others_waiting() const;
 	[[noreturn]] void exit_current(uint32_t code);
@@ -190,7 +197,8 @@ private:
 	uint32_t next_id = 2;
 	// An exception from a non-main thread is carried to the main thread, which owns the process result.
 	std::exception_ptr pending;
-	std::shared_ptr<GuestThread> pick(bool include_current);
+	// `only_due` leaves out the threads that only compute and have not been kept waiting: what is left is due the processor at once.
+	std::shared_ptr<GuestThread> pick(bool include_current, bool only_due = false);
 	void schedule();
 	void switch_to(GuestThread &next);
 	void reap();

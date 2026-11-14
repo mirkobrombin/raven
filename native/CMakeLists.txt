@@ -684,6 +684,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(clip_pe_fixtures ALL DEPENDS ${CLIP_CLIENT} ${CLIP_PAINT_CLIENT} ${PAINT_RESIZE_CLIENT})
         add_test(NAME native_paint_resize COMMAND raven --run-process --execution=native --timeout-ms=30000 ${PAINT_RESIZE_CLIENT})
         set_tests_properties(native_paint_resize PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # The thread that reads the user's input is not slowed by threads that only compute.
+        set(INPUT_PRIORITY_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/input-priority-client.exe)
+        add_custom_command(OUTPUT ${INPUT_PRIORITY_CLIENT}
+            COMMAND ${RAVEN_MINGW64} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                -Wl,--entry,raven_entry,--image-base,0x1d0000000,--no-insert-timestamp
+                -o ${INPUT_PRIORITY_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_priority_client.c -luser32 -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_priority_client.c VERBATIM)
+        add_custom_target(input_priority_fixture ALL DEPENDS ${INPUT_PRIORITY_CLIENT})
+        add_test(NAME native_input_priority COMMAND raven --run-process --execution=native --timeout-ms=30000 ${INPUT_PRIORITY_CLIENT})
+        set_tests_properties(native_input_priority PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         add_executable(clip_test desktop/clip_test.cpp)
         target_link_libraries(clip_test PRIVATE raven_cpu)
         add_dependencies(clip_test clip_pe_fixtures raven-bootstrap)

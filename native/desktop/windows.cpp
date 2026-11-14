@@ -1450,6 +1450,8 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			put(bytes,layout.time,value.time,4);
 			put(bytes,layout.x,uint32_t(value.x),4); put(bytes,layout.y,uint32_t(value.y),4);
 			process.write_memory(args[0],bytes);
+			if ((flags & 1U) && input_taken && ((value.message>=0x200 && value.message<=0x20e) || (value.message>=0x100 && value.message<=0x109)))
+				input_taken();
 			// RAVEN_TRACE_MSG also follows what each retrieval returns, with the filter it was asked with.
 			static const char *const trace_retrieval=std::getenv("RAVEN_TRACE_MSG");
 			if (trace_retrieval)

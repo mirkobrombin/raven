@@ -42,6 +42,8 @@ public:
 	void set_deadline(std::chrono::steady_clock::time_point deadline);
 	// Parks a message waiter while other guest threads run, until input arrives or the next timer is due.
 	void set_message_wait(std::function<void(std::function<bool()>,std::chrono::steady_clock::time_point)> wait) { message_wait = std::move(wait); }
+	// Told when a thread takes a message of the mouse or the keyboard from its queue, for the scheduler to favor that thread.
+	void set_input_taken(std::function<void()> taken) { input_taken = std::move(taken); }
 	// How a thread waiting for messages sleeps when every other thread waits too: until the time `until` allows for the other threads,
 	// on their descriptors besides the display's, then `drain` takes back what woke it (see NativeThreads::idle_until).
 	void set_idle_sources(std::function<std::chrono::steady_clock::time_point(std::chrono::steady_clock::time_point)> until,
@@ -269,6 +271,7 @@ private:
 	std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();
 	std::chrono::steady_clock::time_point deadline;
 	std::function<void(std::function<bool()>,std::chrono::steady_clock::time_point)> message_wait;
+	std::function<void()> input_taken;
 	std::function<std::chrono::steady_clock::time_point(std::chrono::steady_clock::time_point)> idle_until;
 	std::function<void(std::vector<pollfd> &)> idle_descriptors;
 	std::function<void()> idle_drain;
