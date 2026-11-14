@@ -3,9 +3,9 @@
 
 In a fresh prefix the installer from the archive dotPDN publishes runs with /auto. On an isolated headless compositor paint.net starts
 on the Direct3D libraries of the directory given, the blue of its palette is chosen and a stroke is drawn across the canvas with the
-brush, the mouse held down from its first point to its last, and the picture is saved as PNG through the Save As dialog and the save
-options that follow it. The file on the host is then read: its size, the white the canvas began with and the stroke where it was drawn,
-in the blue that was chosen.
+brush, the mouse held down from its first point to its last, the screen is looked at for the stroke, and the picture is saved as PNG
+through the Save As dialog and the save options that follow it. The file on the host is then read: its size, the white the canvas began
+with and the stroke where it was drawn, in the blue that was chosen.
 
 usage: native-paintnet.py RAVEN INSTALLER_ZIP VIRTUAL_POINTER DXVK_DIRECTORY EVIDENCE_DIR
 """
@@ -90,6 +90,17 @@ def draw(pointer, screen, origin):
     subprocess.run([str(pointer), str(screen[0]), str(screen[1]), *points], env=native_redist.environment(), check=True, timeout=60)
 
 
+def shown(picture, origin):
+    """The stroke shows on the screen where it was drawn, in its blue: the canvas reaches the window, not only the file saved from it."""
+    pixels = picture.load()
+    left, right = origin[0] + min(x for x, _ in STROKE) - 10, origin[0] + max(x for x, _ in STROKE) + 10
+    top, bottom = origin[1] + min(y for _, y in STROKE) - 10, origin[1] + max(y for _, y in STROKE) + 10
+    # The stroke is two pixels wide and smoothed into the white around it: its pixels are those the blue outweighs.
+    blue = sum(1 for y in range(top, bottom) for x in range(left, right) if pixels[x, y][2] > 200 and max(pixels[x, y][:2]) < 150)
+    if blue < 200:
+        raise RuntimeError(f"the screen shows {blue} pixels of the stroke's blue where it was drawn, too few for the stroke")
+
+
 def save(prefix, evidence):
     """The picture saved as PNG where the Save As dialog is told, with the options the dialog after it offers."""
     desktop.press(DRAWN, "-M", "ctrl", "-k", "s", "-m", "ctrl")
@@ -162,7 +173,7 @@ def main():
                 time.sleep(2)
                 draw(pointer, started.size, origin)
                 desktop.wait_title(DRAWN, process, timeout=60)
-                desktop.shot(evidence, "drawn")
+                shown(desktop.shot(evidence, "drawn"), origin)
                 saved = save(prefix, evidence)
                 desktop.shot(evidence, "saved")
                 check(saved)
