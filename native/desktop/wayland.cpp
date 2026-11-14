@@ -914,6 +914,9 @@ struct WaylandPresentation::State {
 
 	std::optional<HostSurface> host_surface(uint64_t handle,uint64_t window,int32_t x,int32_t y,uint32_t width,uint32_t height,bool shown) {
 		if (!subcompositor) return std::nullopt;
+		// The surface of a hidden window goes under the root's own, and a root smaller than it would leave it showing past its edges,
+		// as a window that folds away a part of itself with the controls on it: hidden, it is a point under the root's corner.
+		if (!shown) { x=y=0; width=height=1; }
 		const auto found=surfaces.find(handle);
 		auto *parent=found!=surfaces.end() && !found->second->closed ? found->second.get() : nullptr;
 		auto &entry=hosted[window];

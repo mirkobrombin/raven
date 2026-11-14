@@ -403,10 +403,22 @@ std::optional<HostSurface> NativeWindows::place_hosted(uint64_t handle)
 	const auto *window=std::as_const(objects).window(handle);
 	if (!top || !window) return std::nullopt;
 	hosted_windows[handle]=root;
+	// A child shows inside the client areas of the windows that hold it, and a driver's surface is not cut to them as its pixels in the
+	// root's frame are: one that lies wholly outside, as the controls of a part a window has folded away, does not show.
+	bool inside=objects.window_visible(handle);
+	DesktopRect seen{window->x,window->y,window->x+window->width,window->y+window->height};
+	for (auto above=window->parent;inside && above;) {
+		const auto *holder=std::as_const(objects).window(above);
+		if (!holder) break;
+		seen={std::max(seen.left,holder->x),std::max(seen.top,holder->y),std::min(seen.right,holder->x+holder->width),
+			std::min(seen.bottom,holder->y+holder->height)};
+		inside=seen.right>seen.left && seen.bottom>seen.top;
+		above=holder->parent;
+	}
 	// Window positions are on the screen, children's included, so the client origin inside the frame the host window shows is the
 	// window's position less the frame's.
 	return presentation.host_surface(root,handle,window->x-top->outer.left,window->y-top->outer.top,uint32_t(std::max(window->width,1)),
-		uint32_t(std::max(window->height,1)),objects.window_visible(handle));
+		uint32_t(std::max(window->height,1)),inside);
 }
 
 void NativeWindows::place_host_surface(uint64_t root)
