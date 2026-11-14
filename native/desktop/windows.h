@@ -110,6 +110,8 @@ public:
 	// send or draw, and so does a message queued for it. Input arriving clears every slot (see watch_input).
 	static constexpr size_t quiet_slots=64, quiet_slot=16;
 	void set_quiet_table(uint8_t *table) { quiet_table=table; publish_hooks(); }
+	// The page the key states GetKeyState answers from are published in, as the program reads them between its stops.
+	void set_key_table(uint8_t *table) { key_table=table; publish_keys(); }
 	// After the slots, in the same page: the hook chain in calling order, a count (above hook_entries when it does not fit) and then
 	// each hook's handle, kind and thread (0 for every thread), for CallNextHookEx to see in the guest that no hook follows.
 	static constexpr size_t hook_table_at=quiet_slots*quiet_slot, hook_entries=64, hook_entry=16;
@@ -239,6 +241,8 @@ private:
 	void publish_icons();
 	uint8_t *region_table=nullptr;
 	uint8_t *quiet_table=nullptr;
+	uint8_t *key_table=nullptr;
+	void publish_keys() { if (key_table && std::memcmp(key_table,vk_state.data(),vk_state.size())) std::memcpy(key_table,vk_state.data(),vk_state.size()); }
 	void publish_region(uint64_t handle);
 	void publish_regions();
 	// The accelerator tables, the loop flags, the desktop and focus windows.

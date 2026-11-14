@@ -2883,6 +2883,7 @@ void NativeWindows::publish_icons()
 
 void NativeWindows::publish_words()
 {
+	publish_keys();
 	if (system_table && published_accelerators!=objects.accelerators_version()) {
 		published_accelerators=objects.accelerators_version();
 		const auto tables=objects.accelerator_handles();

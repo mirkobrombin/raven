@@ -1425,6 +1425,20 @@ static const std::vector<uint8_t> &quiet_status_prelude()
 // answered in the guest with a cookie of its own, which DeactivateActCtx takes back there; Office brackets most of its window calls so.
 static constexpr size_t current_context_pointer = 0x780;
 
+// GetKeyState, from the key states the runtime publishes whenever the program runs on (see NativeWindows::set_key_table): they
+// change only as the program reads its messages, which stops it.
+static constexpr size_t key_pointer = 0x788;
+
+static const std::vector<uint8_t> &key_state_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x26, 0x4d, 0x8b, 0x9a, 0x88, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x1a,
+		0x0f, 0xb6, 0xc1, 0x41, 0x0f, 0xb6, 0x04, 0x03, 0x89, 0xc2, 0x83, 0xe2, 0x01, 0xa8, 0x80, 0x74, 0x06, 0x81, 0xca, 0x80, 0xff, 0x00, 0x00, 0x89,
+		0xd0, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(key_pointer == 0x788, "the key state prelude's offset is written into its code");
+	return code;
+}
+
 static const std::vector<uint8_t> &context_activate_prelude()
 {
 	static const std::vector<uint8_t> code{
@@ -1728,6 +1742,8 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		return &window_exists_prelude();
 	if (name == "GetWindowThreadProcessId")
 		return &window_thread_prelude();
+	if (name == "GetKeyState")
+		return &key_state_prelude();
 	if (name == "GetClientRect")
 		return &window_client_prelude();
 	if (name == "GetWindowRect")
@@ -3034,7 +3050,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	// The window table the window preludes read, mapped into the guest and published in the served block.
 	const size_t windows_size = NativeWindows::window_records * NativeWindows::window_record, table_size = windows_size + 8192 +
 		NativeWindows::menu_area + NativeWindows::bitmap_records * NativeWindows::bitmap_record + 4096 + NativeWindows::dc_table_size + 4096 +
-		NativeWindows::icon_slots * 8 + NativeWindows::region_records * NativeWindows::region_record + 4096 + 4096;
+		NativeWindows::icon_slots * 8 + NativeWindows::region_records * NativeWindows::region_record + 4096 + 4096 + 4096;
 	const int table_file = memfd_create("raven-window-table", MFD_CLOEXEC);
 	if (table_file < 0 || ftruncate(table_file, off_t(table_size)) != 0)
 		throw std::runtime_error("cannot create the window table");
@@ -3088,6 +3104,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const size_t current_at = quiet_at + 4096;
 	activation_contexts().set_current_table(table + current_at);
 	__atomic_store_n(&served_block[current_context_pointer / 8], table_guest + current_at, __ATOMIC_RELEASE);
+	// The key states follow, in a page of their own.
+	const size_t keys_at = current_at + 4096;
+	windows.set_key_table(table + keys_at);
+	__atomic_store_n(&served_block[key_pointer / 8], table_guest + keys_at, __ATOMIC_RELEASE);
 	process.set_served_calls(served_block, std::move(served_stubs), served_trap, served_wait, std::move(yield_traps), [&, served_names = std::move(served_names)](uint64_t stub) {
 		const auto found = served_names.find(stub);
 		if (found == served_names.end())
