@@ -1,8 +1,13 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+static int placed;
+static WPARAM sized=99;
+
 static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM lparam)
 {
+	if (message==WM_WINDOWPOSCHANGED) ++placed;
+	if (message==WM_SIZE) sized=wparam;
 	return DefWindowProcW(window,message,wparam,lparam);
 }
 
@@ -12,6 +17,7 @@ static LRESULT hit(HWND window,int x,int y)
 }
 
 // The edges of a sizable window size it, until it is maximized: then they answer HTBORDER, and the window can only be restored.
+// Maximized and restored, it hears of its new place as of any other, WM_WINDOWPOSCHANGED, and of the kind of its size in WM_SIZE.
 int raven_entry(void)
 {
 	WNDCLASSW definition={0};
@@ -26,11 +32,19 @@ int raven_entry(void)
 	GetWindowRect(window,&outer);
 	if (hit(window,outer.left,(outer.top+outer.bottom)/2)!=HTLEFT) return 3;
 	if (hit(window,outer.right-1,outer.bottom-1)!=HTBOTTOMRIGHT) return 4;
+	placed=0;
 	ShowWindow(window,SW_SHOWMAXIMIZED);
 	GetWindowRect(window,&outer);
 	if (!IsZoomed(window)) return 5;
 	if (hit(window,outer.left,(outer.top+outer.bottom)/2)!=HTBORDER) return 6;
 	if (hit(window,outer.right-1,outer.bottom-1)!=HTBORDER) return 7;
 	if (hit(window,(outer.left+outer.right)/2,outer.bottom-1)!=HTBORDER) return 8;
+	if (!placed) return 9;
+	if (sized!=SIZE_MAXIMIZED) return 10;
+	placed=0;
+	ShowWindow(window,SW_RESTORE);
+	if (IsZoomed(window)) return 11;
+	if (!placed) return 12;
+	if (sized!=SIZE_RESTORED) return 13;
 	return 0;
 }

@@ -153,9 +153,8 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 			if (!is_min)
 				window->restore = window->outer;
 			window->style = (window->style & ~ws_minimize) | ws_maximize;
-			const auto frame = adjust_window_rect(objects.nonclient_metrics(), {0, 0, 0, 0}, window->style & ~ws_visible, window->menu != 0, window->ex_style);
-			(void)frame;
-			reshape(handle, {0, 0, screen.screen_x, screen.screen_y});
+			// The window hears of its new place as of any other: WM_WINDOWPOSCHANGED, which a program may lay its content out from.
+			place_window(handle, {0, 0, screen.screen_x, screen.screen_y}, 0, 0x14);
 		} else if (minimize && !is_min) {
 			if (!is_max)
 				window->restore = window->outer;
@@ -164,7 +163,7 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 			window->style &= ~(ws_maximize | ws_minimize);
 			const auto target = window->restore.right > window->restore.left ? window->restore : window->outer;
 			if (is_max)
-				reshape(handle, target);
+				place_window(handle, target, 0, 0x14);
 		}
 		window = objects.window(handle);
 	}
