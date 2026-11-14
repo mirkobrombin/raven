@@ -56,7 +56,7 @@ DIRECTORY32 = Path("/usr/i686-w64-mingw32/lib")
 # Libraries whose names are listed here rather than read from an import library: the host services Raven's own components import, and
 # Windows libraries mingw-w64 ships no import library for.
 NAMES_ONLY = {"ravenhost": ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo", "RavenFontMetrics", "RavenFontName", "RavenFontOpen",
-                            "RavenFontOutline", "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasBatch", "RavenCanvasCreate",
+                            "RavenFontOutline", "RavenFontRender", "RavenFontScan", "RavenFontTable", "RavenTrace", "RavenCanvasBatch", "RavenCanvasChanged", "RavenCanvasCreate",
                             "RavenCanvasDestroy", "RavenCanvasDraw", "RavenCanvasPixels", "RavenCanvasSize", "RavenPathCombine", "RavenPathWiden",
                             "RavenShaderRequest", "RavenShaderResult", "RavenShaderRelease",
                             "RavenGrantPath", "RavenSandboxRead", "RavenSandboxWrite", "RavenSandboxLog", "RavenSnapshotList", "RavenSnapshotTake", "RavenSnapshotRestore", "RavenSnapshotDelete", "RavenHostOpen", "RavenHostApps", "RavenAppList", "RavenAppDiscard"]}
@@ -94,7 +94,7 @@ WINTYPES_WORDS = {"RoGetMetaDataFile": 5, "RoIsApiContractMajorVersionPresent": 
 NAMES_ONLY["wintypes"] = sorted(WINTYPES_WORDS)
 NAMES_ONLY_WORDS = {**COMBASE_WORDS, **WINTYPES_WORDS, **SLC_WORDS, **SPPC_WORDS, "AtlThunk_AllocateData": 0, "AtlThunk_DataToCode": 1, "AtlThunk_FreeData": 1, "AtlThunk_InitData": 3, "RavenFontClose": 1, "RavenFontGlyphs": 4, "RavenFontInfo": 2, "RavenFontMetrics": 3, "RavenFontName": 4, "RavenFontOpen": 3,
                     "RavenFontOutline": 4, "RavenFontRender": 10, "RavenFontScan": 2, "RavenFontTable": 5, "RavenTrace": 1,
-                    "RavenCanvasBatch": 2, "RavenCanvasCreate": 2, "RavenCanvasDestroy": 1, "RavenCanvasDraw": 4, "RavenCanvasPixels": 8, "RavenCanvasSize": 2, "RavenPathCombine": 8, "RavenPathWiden": 7,
+                    "RavenCanvasBatch": 2, "RavenCanvasChanged": 3, "RavenCanvasCreate": 2, "RavenCanvasDestroy": 1, "RavenCanvasDraw": 4, "RavenCanvasPixels": 8, "RavenCanvasSize": 2, "RavenPathCombine": 8, "RavenPathWiden": 7,
                     "RavenShaderRequest": 2, "RavenShaderResult": 4, "RavenShaderRelease": 1,
                     "RavenGrantPath": 2, "RavenSandboxRead": 2, "RavenSandboxWrite": 1, "RavenSandboxLog": 2, "RavenSnapshotList": 2, "RavenSnapshotTake": 1, "RavenSnapshotRestore": 1, "RavenSnapshotDelete": 1, "RavenHostOpen": 1, "RavenHostApps": 2, "RavenAppList": 2, "RavenAppDiscard": 1}
 

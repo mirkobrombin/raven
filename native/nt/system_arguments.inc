@@ -2378,7 +2378,7 @@ static constexpr std::pair<std::string_view, uint8_t> winspool_words[]{
 	{"XcvDataW",8},
 };
 static constexpr std::pair<std::string_view, uint8_t> ravenhost_words[]{
-	{"RavenAppDiscard",1},{"RavenAppList",2},{"RavenCanvasBatch",2},{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},
+	{"RavenAppDiscard",1},{"RavenAppList",2},{"RavenCanvasBatch",2},{"RavenCanvasChanged",3},{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},
 	{"RavenCanvasPixels",8},{"RavenCanvasSize",2},{"RavenFontClose",1},{"RavenFontGlyphs",4},{"RavenFontInfo",2},{"RavenFontMetrics",3},
 	{"RavenFontName",4},{"RavenFontOpen",3},{"RavenFontOutline",4},{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},
 	{"RavenGrantPath",2},{"RavenHostApps",2},{"RavenHostOpen",1},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenSandboxLog",2},

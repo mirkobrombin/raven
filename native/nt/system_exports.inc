@@ -2473,7 +2473,7 @@ static constexpr std::string_view winspool_exports[]{
 	"XcvDataW",
 };
 static constexpr std::string_view ravenhost_exports[]{
-	"RavenAppDiscard","RavenAppList","RavenCanvasBatch","RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw",
+	"RavenAppDiscard","RavenAppList","RavenCanvasBatch","RavenCanvasChanged","RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw",
 	"RavenCanvasPixels","RavenCanvasSize","RavenFontClose","RavenFontGlyphs","RavenFontInfo","RavenFontMetrics",
 	"RavenFontName","RavenFontOpen","RavenFontOutline","RavenFontRender","RavenFontScan","RavenFontTable",
 	"RavenGrantPath","RavenHostApps","RavenHostOpen","RavenPathCombine","RavenPathWiden","RavenSandboxLog",

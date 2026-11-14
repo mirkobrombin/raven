@@ -33,5 +33,16 @@ HRESULT shader_run(const BYTE *code, UINT32 size, const BYTE *constants, UINT32 
 HRESULT shader_draw(void *target, const BYTE *code, UINT32 size, const BYTE *constants, UINT32 constant_size,
 	const struct shader_image *inputs, UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, INT32 x, INT32 y);
 
+/* A picture kept on the program's device beside one of its textures, of the texture's size: the width by height pixels of `bytes`,
+ * blue, green, red and alpha, go to (x, y) of it, and the rest of it stays as it was. Without `layer` one is made first. Gives the
+ * layer, or NULL when it cannot be made, and the one given is then no more. */
+void *shader_layer(void *target, void *layer, UINT32 x, UINT32 y, UINT32 width, UINT32 height, const BYTE *bytes);
+
+/* Draws the whole layer into the texture it was made beside: over what the texture holds, as a premultiplied source goes over a
+ * destination, or in its place. */
+HRESULT shader_layer_draw(void *target, void *layer, BOOL over);
+
+void shader_layer_release(void *layer);
+
 /* The most inputs a shader is given, as Direct2D's own vertex stage passes a texture coordinate for each. */
 #define SHADER_INPUTS 8

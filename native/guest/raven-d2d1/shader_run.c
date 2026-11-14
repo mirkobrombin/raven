@@ -575,3 +575,109 @@ done:
 	LeaveCriticalSection(&runner.lock);
 	return result;
 }
+
+void *shader_layer(void *target, void *layer, UINT32 x, UINT32 y, UINT32 width, UINT32 height, const BYTE *bytes)
+{
+	ID3D11Texture2D *texture = target, *kept = layer;
+	ID3D11Device *device = NULL;
+	ID3D11DeviceContext *context = NULL;
+	D3D11_TEXTURE2D_DESC desc;
+	D3D11_BOX box = {x, y, 0, x + width, y + height, 1};
+	if (!texture || !bytes || !width || !height)
+		return kept;
+	ID3D11Texture2D_GetDesc(texture, &desc);
+	ID3D11Texture2D_GetDevice(texture, &device);
+	if (device)
+		ID3D11Device_GetImmediateContext(device, &context);
+	if (!context || x + width > desc.Width || y + height > desc.Height) {
+		if (kept)
+			ID3D11Texture2D_Release(kept);
+		kept = NULL;
+	} else if (!kept) {
+		D3D11_TEXTURE2D_DESC made = {desc.Width, desc.Height, 1, 1, DXGI_FORMAT_B8G8R8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+			D3D11_BIND_SHADER_RESOURCE, 0, 0};
+		if (FAILED(ID3D11Device_CreateTexture2D(device, &made, NULL, &kept)))
+			kept = NULL;
+	}
+	if (kept)
+		ID3D11DeviceContext_UpdateSubresource(context, (ID3D11Resource *)kept, 0, &box, bytes, width * 4, 0);
+	if (context)
+		ID3D11DeviceContext_Release(context);
+	if (device)
+		ID3D11Device_Release(device);
+	return kept;
+}
+
+HRESULT shader_layer_draw(void *target, void *layer, BOOL over)
+{
+	static const float no_factor[4];
+	static const D3D11_SAMPLER_DESC point = {D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_CLAMP,
+		D3D11_TEXTURE_ADDRESS_CLAMP, 0, 1, D3D11_COMPARISON_NEVER, {0, 0, 0, 0}, 0, D3D11_FLOAT32_MAX};
+	ID3D11Texture2D *texture = target;
+	ID3D11Device *device = NULL;
+	ID3D11DeviceContext *context = NULL;
+	ID3D11ShaderResourceView *picture = NULL;
+	ID3D11SamplerState *sampler = NULL;
+	ID3D11RenderTargetView *view = NULL;
+	ID3D11Buffer *none = NULL;
+	struct painter *painter;
+	struct context_state state;
+	D3D11_TEXTURE2D_DESC desc;
+	D3D11_VIEWPORT viewport = {0, 0, 0, 0, 0, 1};
+	float area[4 * (1 + SHADER_INPUTS)] = {0};
+	HRESULT result = E_FAIL;
+	if (!texture || !layer)
+		return E_INVALIDARG;
+	InitOnceExecuteOnce(&runner.once, runner_init, NULL, NULL);
+	EnterCriticalSection(&runner.lock);
+	ID3D11Texture2D_GetDesc(texture, &desc);
+	ID3D11Texture2D_GetDevice(texture, &device);
+	if (!device || !(painter = painter_of(device)) ||
+		FAILED(ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)texture, NULL, &view)) ||
+		FAILED(ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)layer, NULL, &picture)) ||
+		FAILED(ID3D11Device_CreateSamplerState(device, &point, &sampler)))
+		goto done;
+	ID3D11Device_GetImmediateContext(device, &context);
+	if (!context)
+		goto done;
+	viewport.Width = area[2] = (float)desc.Width;
+	viewport.Height = area[3] = (float)desc.Height;
+	area[6] = 1.0f / (float)desc.Width;
+	area[7] = 1.0f / (float)desc.Height;
+	state_take(context, &state);
+	ID3D11DeviceContext_UpdateSubresource(context, (ID3D11Resource *)painter->area, 0, NULL, area, 0, 0);
+	ID3D11DeviceContext_IASetInputLayout(context, NULL);
+	ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	ID3D11DeviceContext_VSSetShader(context, painter->vertex, NULL, 0);
+	ID3D11DeviceContext_VSSetConstantBuffers(context, 0, 1, &painter->area);
+	ID3D11DeviceContext_PSSetShader(context, painter->copy, NULL, 0);
+	ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &none);
+	ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &picture);
+	ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &sampler);
+	ID3D11DeviceContext_RSSetState(context, painter->whole);
+	ID3D11DeviceContext_RSSetViewports(context, 1, &viewport);
+	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &view, NULL);
+	ID3D11DeviceContext_OMSetBlendState(context, over ? painter->over : NULL, no_factor, 0xffffffffU);
+	ID3D11DeviceContext_Draw(context, 4, 0);
+	state_put(context, &state);
+	result = S_OK;
+done:
+	if (sampler)
+		ID3D11SamplerState_Release(sampler);
+	if (picture)
+		ID3D11ShaderResourceView_Release(picture);
+	if (view)
+		ID3D11RenderTargetView_Release(view);
+	if (context)
+		ID3D11DeviceContext_Release(context);
+	if (device)
+		ID3D11Device_Release(device);
+	LeaveCriticalSection(&runner.lock);
+	return result;
+}
+
+void shader_layer_release(void *layer)
+{
+	if (layer)
+		ID3D11Texture2D_Release((ID3D11Texture2D *)layer);
+}

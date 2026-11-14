@@ -27,6 +27,14 @@ void register_canvas_service(ApiRegistry &registry, KernelContext &)
 		}
 		call.ret(found);
 	});
+	// RavenCanvasChanged(surface, whole, rect): the rectangle that differs from what was last taken this way, as four words.
+	registry.add("RavenCanvasChanged", 3, [](ApiCall &call) {
+		int32_t rect[4] = {};
+		const bool differs = call[2] && canvas::changed(call.u32(0), call.u32(1) != 0, rect);
+		if (differs)
+			call.write(call[2], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(rect), sizeof rect));
+		call.ret(differs);
+	});
 	// RavenCanvasPixels(surface, x, y, width, height, buffer, pitch, write).
 	registry.add("RavenCanvasPixels", 8, [](ApiCall &call) {
 		const uint32_t width = call.u32(3), height = call.u32(4), pitch = call.u32(6);

@@ -873,6 +873,35 @@ int raven_entry(void)
 		return 70;
 	if (!around)
 		return 71;
+	/* The next frame differs in a corner: the square on the picture has moved and the one beside it is gone. The surface shows the
+	   new frame whole, the picture again where the squares were. */
+	const D2D1_RECT_F moved_square = {40, 40, 48, 48};
+	output = output_of(shown_swap);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)surface_context, &whole_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &half_grey);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)surface_context, &moved_square, (ID2D1Brush *)green_brush);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)surface_context);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 72;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 72;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL moved = pixel_is(SHOWN(44, 44), 0, 255, 0);
+	const BOOL left_behind = pixel_is(SHOWN(8, 8), 0, 0, 255) && pixel_is(SHOWN(275, 8), 127, 127, 127);
+	const BOOL kept = pixel_is(SHOWN(100, 100), 0, 0, 255) && pixel_is(SHOWN(290, 100), 127, 127, 127) && pixel_is(SHOWN(260, 250), 127, 127, 127);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	if (!moved)
+		return 73;
+	if (!left_behind)
+		return 74;
+	if (!kept)
+		return 75;
 	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)surface_bitmap);
 	IUnknown_Release((IUnknown *)green_brush);
 	IUnknown_Release((IUnknown *)shown_swap);

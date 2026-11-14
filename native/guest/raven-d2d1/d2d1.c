@@ -37,6 +37,7 @@
 #define CONTAINER(pointer, type, field) ((type *)((char *)(pointer) - offsetof(type, field)))
 
 /* ---- the host services ---- */
+__declspec(dllimport) DWORD WINAPI RavenCanvasChanged(DWORD surface, DWORD whole, INT32 *rect);
 __declspec(dllimport) DWORD WINAPI RavenCanvasCreate(DWORD width, DWORD height);
 __declspec(dllimport) void WINAPI RavenCanvasDestroy(DWORD surface);
 __declspec(dllimport) DWORD WINAPI RavenCanvasSize(DWORD surface, DWORD *size);
@@ -1559,6 +1560,8 @@ struct bitmap {
 	BOOL over_drawn;
 	/* How many of the clips pushed on the target were pushed before the first drawing waited, and so lie on both sets of pixels. */
 	UINT32 over_shared;
+	/* The two sets of pixels as the texture's device last took them (see shader_layer): a frame sends it what changed in them. */
+	void *shown, *over_shown;
 	/* For a bitmap over a Direct3D texture: whether Direct2D draws into it, so that its own pixels are the newer ones, the frame in
 	 * which the texture's pixels were last read and the areas read in it. */
 	BOOL targeted;
@@ -1598,6 +1601,8 @@ static void bitmap_destroy(struct object *base)
 {
 	struct bitmap *self = (struct bitmap *)base;
 	held_forget(self);
+	shader_layer_release(self->shown);
+	shader_layer_release(self->over_shown);
 	if (self->over)
 		canvas_destroy(self->over);
 	if (self->surface)
@@ -3517,26 +3522,31 @@ static void share_back(struct bitmap *bitmap)
 /* What a finished frame turns into: the window's pixels, the bound device context's, the Direct3D texture's or the WIC bitmap's. */
 /* The drawings kept for a texture are made in it, in their order, over the pixels that have just gone there; then what was drawn
  * after them is laid over, clear where nothing was (see held_draw). */
+static void held_draw_each(struct bitmap *bitmap, ID3D11Texture2D *texture)
+{
+	UINT32 index;
+	for (index = 0; index < bitmap->held_count; ++index) {
+		const struct held_draw *held = &bitmap->held[index];
+		struct shader_image images[SHADER_INPUTS];
+		UINT32 input;
+		for (input = 0; input < held->count; ++input) {
+			images[input] = held->images[input];
+			images[input].bytes = held->bytes[input];
+		}
+		if (FAILED(shader_draw(texture, held->code, held->size, held->constants, held->constant_size, images, held->count,
+				held->drawn.left, held->drawn.top, (UINT32)(held->drawn.right - held->drawn.left),
+				(UINT32)(held->drawn.bottom - held->drawn.top), held->x, held->y)))
+			unimplemented("ID2D1DeviceContext", "an effect drawn into its target's texture");
+	}
+}
+
 static void held_draw_all(struct bitmap *bitmap, ID3D11Resource *resource)
 {
 	ID3D11Texture2D *texture = NULL;
-	UINT32 index;
 	if (!bitmap->held_count)
 		return;
 	if (SUCCEEDED(ID3D11Resource_QueryInterface(resource, &IID_ID3D11Texture2D, (void **)&texture))) {
-		for (index = 0; index < bitmap->held_count; ++index) {
-			const struct held_draw *held = &bitmap->held[index];
-			struct shader_image images[SHADER_INPUTS];
-			UINT32 input;
-			for (input = 0; input < held->count; ++input) {
-				images[input] = held->images[input];
-				images[input].bytes = held->bytes[input];
-			}
-			if (FAILED(shader_draw(texture, held->code, held->size, held->constants, held->constant_size, images, held->count,
-					held->drawn.left, held->drawn.top, (UINT32)(held->drawn.right - held->drawn.left),
-					(UINT32)(held->drawn.bottom - held->drawn.top), held->x, held->y)))
-				unimplemented("ID2D1DeviceContext", "an effect drawn into its target's texture");
-		}
+		held_draw_each(bitmap, texture);
 		if (bitmap->over_drawn) {
 			const UINT32 width = bitmap->pixels.width, height = bitmap->pixels.height;
 			BYTE *over = ALLOC_UNSET((size_t)width * height * 4);
@@ -3555,6 +3565,50 @@ static void held_draw_all(struct bitmap *bitmap, ID3D11Resource *resource)
 		ID3D11Texture2D_Release(texture);
 	}
 	held_forget(bitmap);
+}
+
+static BOOL texture_drawable(struct bitmap *bitmap);
+
+/* The device of a texture is sent what changed in one set of a bitmap's pixels since it last took them, into the layer it keeps of
+ * them. False when it holds no such layer after that. */
+static BOOL layer_take(DWORD surface, void **layer, ID3D11Texture2D *texture)
+{
+	INT32 rect[4];
+	flush_queue();
+	if (RavenCanvasChanged(surface, !*layer, rect)) {
+		const UINT32 width = (UINT32)(rect[2] - rect[0]), height = (UINT32)(rect[3] - rect[1]);
+		BYTE *bytes = ALLOC_UNSET((size_t)width * height * 4);
+		void *made = NULL;
+		if (bytes && RavenCanvasPixels(surface, rect[0], rect[1], width, height, bytes, width * 4, 0))
+			made = shader_layer(texture, *layer, (UINT32)rect[0], (UINT32)rect[1], width, height, bytes);
+		else
+			shader_layer_release(*layer);
+		FREE(bytes);
+		*layer = made;
+	}
+	return *layer != NULL;
+}
+
+/* A frame goes to a texture that can be drawn into as its changes: the texture's device keeps both sets of the bitmap's pixels, takes
+ * what changed in each, and draws the first, the drawings kept for the texture and then the second over them. A frame that changed a
+ * corner of a large surface costs what the corner costs. False when the texture cannot take it so. */
+static BOOL present_layers(struct bitmap *bitmap)
+{
+	ID3D11Texture2D *texture = NULL;
+	BOOL shown = FALSE;
+	if (!texture_drawable(bitmap) || FAILED(IDXGISurface_QueryInterface(bitmap->dxgi, &IID_ID3D11Texture2D, (void **)&texture)))
+		return FALSE;
+	if (layer_take(bitmap->surface, &bitmap->shown, texture) && SUCCEEDED(shader_layer_draw(texture, bitmap->shown, FALSE))) {
+		shown = TRUE;
+		held_draw_each(bitmap, texture);
+		if (bitmap->held_count && bitmap->over_drawn) {
+			if (!layer_take(bitmap->over, &bitmap->over_shown, texture) || FAILED(shader_layer_draw(texture, bitmap->over_shown, TRUE)))
+				unimplemented("ID2D1DeviceContext", "what is drawn after an effect kept for its target's texture");
+		}
+		held_forget(bitmap);
+	}
+	ID3D11Texture2D_Release(texture);
+	return shown;
 }
 
 static void present(struct target *self)
@@ -3577,6 +3631,8 @@ static void present(struct target *self)
 	if (kind == TARGET_WIC && !self->drawn)
 		return;
 	self->drawn = FALSE;
+	if (kind != TARGET_HWND && kind != TARGET_DC && kind != TARGET_WIC && present_layers(bitmap))
+		return;
 	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
 	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
