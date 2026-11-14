@@ -810,6 +810,10 @@ int main(int argc, char **argv)
 					// as the XML component, use it as much as the program does.
 					if (const auto automation = component_directory / "oleaut32.dll"; !modules.all().contains("oleaut32.dll") && std::filesystem::exists(automation))
 						modules.add("oleaut32.dll", read_file(automation.c_str()));
+					// The compression manager answers for msacm32.dll in every program, as libraries load it later as often as programs import it.
+					if (const auto acm = component_directory / "raven-msacm32.dll"; !modules.all().contains("raven-msacm32.dll") &&
+						std::filesystem::exists(acm))
+						modules.add("raven-msacm32.dll", read_file(acm.c_str()));
 					if (entry->image.is_64)
 						load_component("ucrtbase.dll", {"ucrtbase.dll", "api-ms-win-crt-*"});
 					raven::DesktopPresentation presentation;

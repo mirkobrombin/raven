@@ -2277,6 +2277,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				{"ole32.dll", "raven-storage.dll", "raven-storage."}, {"combase.dll", "raven-shell.dll", "raven-shell."},
 				{"uiautomationcore.dll", "raven-shell.dll", "raven-shell."}, {"runtimeobject.dll", "raven-shell.dll", "raven-shell."},
 				{"api-ms-win-core-winrt-l1-1-0.dll", "raven-shell.dll", "raven-shell."},
+				{"msacm32.dll", "raven-msacm32.dll", "raven-msacm32."},
 				// The heap, critical sections and the free paths of SRW locks and condition variables run in the guest RTL.
 				{"kernel32.dll", "raven-rtl.dll", "raven-rtl."}, {"kernelbase.dll", "raven-rtl.dll", "raven-rtl."},
 				// The generic AVL tables, critical sections and frame unwinding of ntdll; its heap stays with the host, which calls the

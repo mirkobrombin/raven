@@ -60,7 +60,7 @@ def runtime_paths(build):
         cmd.exe control.exe regedit.exe dism.exe fondue.exe msiexec.exe regsvr32.exe
         find.exe findstr.exe more.com sort.exe where.exe xcopy.exe attrib.exe cscript.exe wscript.exe
         timeout.exe choice.exe whoami.exe hostname.exe tasklist.exe taskkill.exe reg.exe rundll32.exe
-        mscoree.dll ucrtbase32.dll l_intl.nls""".split()
+        mscoree.dll ucrtbase32.dll l_intl.nls raven-msacm32.dll""".split()
     for root in (native, native / "x86"):
         files += [root / name for name in names if (root / name).exists()]
     files += sorted((native / "roots").glob("*.crt"))
