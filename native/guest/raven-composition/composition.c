@@ -785,6 +785,39 @@ static void device_destroy(struct node *base)
 /* ---- desktop window targets ---- */
 static const WCHAR target_name[] = L"Windows.UI.Composition.Desktop.DesktopWindowTarget";
 static const WCHAR target_property[] = L"RavenCompositionTarget";
+/* The targets by their windows, which the windows' procedure finds its own in for every message it gets. */
+static struct {
+	HWND window;
+	struct target *target;
+} windowed[64];
+
+static struct target *target_of_window(HWND window)
+{
+	struct target *found = NULL;
+	UINT index;
+	EnterCriticalSection(&lock);
+	for (index = 0; index < ARRAYSIZE(windowed) && !found; ++index)
+		if (windowed[index].window == window)
+			found = windowed[index].target;
+	LeaveCriticalSection(&lock);
+	return found;
+}
+
+/* Sets or, with no target, forgets the target of a window. False when there is no room for one more. */
+static BOOL window_target(HWND window, struct target *target)
+{
+	UINT index, at = ARRAYSIZE(windowed);
+	for (index = 0; index < ARRAYSIZE(windowed); ++index)
+		if (windowed[index].window == window)
+			at = index;
+		else if (!windowed[index].window && at == ARRAYSIZE(windowed) && target)
+			at = index;
+	if (at == ARRAYSIZE(windowed))
+		return !target;
+	windowed[at].window = target ? window : NULL;
+	windowed[at].target = target;
+	return TRUE;
+}
 
 static void target_destroy(struct node *base)
 {
@@ -796,6 +829,8 @@ static void target_destroy(struct node *base)
 			*link = self->next;
 			break;
 		}
+	if (self->window && target_of_window(self->window) == self)
+		window_target(self->window, NULL);
 	if (self->window && IsWindow(self->window) && GetPropW(self->window, target_property) == self) {
 		RemovePropW(self->window, target_property);
 		if (self->previous)
@@ -839,7 +874,7 @@ static HRESULT STDMETHODCALLTYPE target_get_IsTopmost(void *iface, boolean *topm
 /* What the window paints itself goes under the visuals: once it has painted, they are drawn over it again. */
 static LRESULT CALLBACK target_window(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	struct target *self = GetPropW(window, target_property);
+	struct target *self = target_of_window(window);
 	WNDPROC previous = self ? self->previous : DefWindowProcW;
 	const LRESULT result = CallWindowProcW(previous, window, message, wparam, lparam);
 	if (self && self->compositor->committed && (message == WM_PAINT || message == WM_SIZE)) {
@@ -1425,6 +1460,12 @@ static HRESULT STDMETHODCALLTYPE desktop_CreateDesktopWindowTarget(void *iface, 
 	target->window = window;
 	target->topmost = topmost;
 	EnterCriticalSection(&lock);
+	if (!window_target(window, target)) {
+		LeaveCriticalSection(&lock);
+		node_release(&compositor->node);
+		FREE(target);
+		return E_OUTOFMEMORY;
+	}
 	SetPropW(window, target_property, target);
 	target->previous = (WNDPROC)SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)target_window);
 	target->next = compositor->targets;
