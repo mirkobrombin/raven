@@ -31,3 +31,4 @@ components/
 testdata/npp/backup/
 *.inCaseOfCorruption.bak
 /1.7
+result
