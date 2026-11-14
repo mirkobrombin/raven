@@ -136,7 +136,7 @@ public:
 	// user32 entry points that follow the shared registry conventions; every handler runs on the calling guest thread.
 	void register_api(ApiRegistry &registry);
 	// Drawing marks the surface dirty; the next message retrieval presents it, so a burst of primitives costs one frame.
-	void drawing(uint64_t window);
+	void drawing(uint64_t window, const DesktopRect *area = nullptr);
 	void flush_dirty(bool force = false);
 	// Whether a message, paint request or due timer waits for the guest; host input is delivered to the windows on the way, so this
 	// runs only inside a call of the guest thread.
@@ -267,6 +267,13 @@ private:
 	struct Retrieved { uint32_t time=0; int32_t x=0,y=0; };
 	std::map<uint32_t,Retrieved> retrieved;
 	std::set<uint64_t> dirty_roots;
+	// What is known of a dirty root's changes: a rectangle of its surface that holds them all, while every drawing since its last frame
+	// said where it could reach, or the root among those something changed without saying where. The rectangle of the frame being
+	// presented, when it has one, and the frames of the windows whose frame shows through their client area, as they were presented.
+	std::map<uint64_t, DesktopRect> dirty_areas;
+	std::set<uint64_t> dirty_whole;
+	std::optional<DesktopRect> presenting;
+	std::map<uint64_t, std::vector<uint8_t>> glazed_frames;
 	bool dumped=false;
 	std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();
 	std::chrono::steady_clock::time_point deadline;

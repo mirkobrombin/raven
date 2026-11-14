@@ -323,7 +323,7 @@ bool NativeDesktop::draw(std::span<const uint64_t> args)
 			}
 		}
 	if (!changed) return true;
-	if (dc->window && dc->leased && updated) updated(dc->window);
+	if (dc->window && dc->leased && updated) drew(*dc);
 	return true;
 }
 

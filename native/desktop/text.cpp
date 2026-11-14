@@ -119,7 +119,7 @@ uint64_t NativeDesktop::text_output(std::span<const uint64_t> args)
 		pixels[at]=uint8_t(color>>16);pixels[at+1]=uint8_t(color>>8);pixels[at+2]=uint8_t(color);pixels[at+3]=0;changed=true;
 	}
 	if(changed){
-		if(dc->window && dc->leased && updated)updated(dc->window);
+		if(dc->window && dc->leased && updated)drew(*dc);
 	}
 	return 1;
 }

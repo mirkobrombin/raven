@@ -931,7 +931,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	VulkanThunk32 vulkan32(process, vulkan);
 #endif
 	windows.set_presentation(std::move(presentation));
-	desktop.set_updated([&](uint64_t window) { windows.drawing(window); });
+	desktop.set_updated([&](uint64_t window,const DesktopRect *area) { windows.drawing(window,area); });
 	struct ProcessExit { uint32_t code; uint64_t instruction; };
 	// CoGetMalloc hands out one allocator object, whose methods are the task allocator's handlers.
 	uint64_t malloc_object = 0;

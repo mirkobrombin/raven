@@ -183,7 +183,7 @@ bool NativeDesktop::caps_dispatch(std::string_view name)
 		result = pixel ? UINT32_MAX : 0;
 	}
 	if (changed && window && leased && updated)
-		updated(window);
+		updated(window,nullptr);
 	process.return_api(result);
 	return true;
 }

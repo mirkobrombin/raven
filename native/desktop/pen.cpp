@@ -111,7 +111,7 @@ bool NativeDesktop::pen_dispatch(std::string_view name)
 					}
 				}
 				dc->position_x=target_x;dc->position_y=target_y;result=1;
-				if(changed && dc->window && dc->leased && updated)updated(dc->window);
+				if(changed && dc->window && dc->leased && updated)drew(*dc);
 			}
 		}
 	}catch(uint32_t error){environment.set_last_error(error);}

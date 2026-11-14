@@ -2515,7 +2515,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	std::unique_ptr<OpenGLBridge> opengl;
 	if (native_opengl) opengl = std::make_unique<OpenGLBridge>(process, modules, desktop_objects, windows);
 #endif
-	desktop.set_updated([&](uint64_t window) { windows.drawing(window); });
+	desktop.set_updated([&](uint64_t window,const DesktopRect *area) { windows.drawing(window,area); });
 #ifdef RAVEN_VULKAN
 	VulkanBridge vulkan(process, modules);
 	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },

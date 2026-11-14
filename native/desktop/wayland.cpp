@@ -702,13 +702,17 @@ struct WaylandPresentation::State {
 
 	// The rectangle of a frame that differs from the one shown, empty when they match. The rows whose hash changed since the shown
 	// frame are the only ones compared, so the shown frame is read only where something changed; the hashes then describe the new frame.
-	static std::array<int32_t,4> changed_area(Surface &window,const Buffer &shown,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
+	static std::array<int32_t,4> changed_area(Surface &window,const Buffer &shown,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,
+		const std::array<int32_t,4> *within) {
 		const size_t stride=size_t(width)*4;
 		const auto *old=static_cast<const uint8_t *>(shown.pixels);
 		const bool known=window.row_hashes.size()==height;
 		window.row_hashes.resize(height);
 		uint32_t top=height,bottom=0,left=width,right=0;
-		for (uint32_t y=0;y<height;++y) {
+		// Rows the caller knows unchanged keep the hashes they have.
+		const uint32_t first=known && within ? uint32_t(std::clamp<int32_t>((*within)[1],0,int32_t(height))) : 0;
+		const uint32_t last=known && within ? uint32_t(std::clamp<int32_t>((*within)[3],0,int32_t(height))) : height;
+		for (uint32_t y=first;y<last;++y) {
 			const auto *row=pixels.data()+y*stride;
 			const auto hash=row_hash(row,stride);
 			const bool same=known && window.row_hashes[y]==hash;
@@ -728,7 +732,7 @@ struct WaylandPresentation::State {
 		return {int32_t(left),int32_t(top),int32_t(right-left),int32_t(bottom-top)};
 	}
 
-	void attach_frame(Surface &window,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
+	void attach_frame(Surface &window,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,const std::array<int32_t,4> *within=nullptr) {
 		events(std::chrono::milliseconds(0));
 		// Released buffers of this size are reused; the compositor only repaints what changed since the shown frame.
 		std::array<int32_t,4> damage{0,0,int32_t(width),int32_t(height)};
@@ -736,7 +740,7 @@ struct WaylandPresentation::State {
 		// Hashes describe the shown frame only after a comparison made them; a frame presented whole leaves none.
 		if (!same_size) window.row_hashes.clear();
 		if (same_size) {
-			damage=changed_area(window,*window.shown,width,height,pixels);
+			damage=changed_area(window,*window.shown,width,height,pixels,within);
 			if (!damage[2]) {
 				wl_surface_commit(window.proxy);
 				return;
@@ -1065,6 +1069,7 @@ struct WaylandPresentation::State {
 		if (!handle || !width || !height || width>8192 || height>8192 || uint64_t(width)*height>16*1024*1024 || pixels.size()!=size_t(width)*height*4)
 			throw std::runtime_error("invalid native Wayland frame");
 		connect();
+		const auto area=within.extract(handle);
 		auto found=surfaces.find(handle);
 		// A window shown as a popup until now becomes a window of its own.
 		if (found!=surfaces.end() && found->second->is_popup) {
@@ -1126,7 +1131,7 @@ struct WaylandPresentation::State {
 		window.width=width; window.height=height;
 		xdg_surface_set_window_geometry(window.shell,0,0,int32_t(width),int32_t(height));
 		window.alpha=translucent.contains(handle);
-		attach_frame(window,width,height,pixels);
+		attach_frame(window,width,height,pixels,area ? &area.mapped() : nullptr);
 		if (window.first_frame) {
 			window.first_frame=false;
 			xdg_toplevel_set_min_size(window.role,0,0);
@@ -1224,6 +1229,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->overlay(handle,window,x,y,width,height,pixels,stride);
 	}};
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.changed_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->within[handle]=area; };
 	result.translucent=[this](uint64_t handle,bool alpha) {
 		if (alpha) state->translucent.insert(handle);
 		else state->translucent.erase(handle);

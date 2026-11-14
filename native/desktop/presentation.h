@@ -92,6 +92,9 @@ struct DesktopPresentation {
 	// Whether the window's pixels carry premultiplied alpha, as those a layered window hands over do: the compositor blends them over
 	// what lies below instead of showing them opaque. Given before the frame.
 	std::function<void(uint64_t handle,bool alpha)> translucent;
+	// Said before a frame is presented: it differs from the window's last one inside this rectangle alone (left, top, right, bottom),
+	// so the rest of it need not be looked at.
+	std::function<void(uint64_t handle,std::array<int32_t,4> area)> changed_within;
 };
 
 }

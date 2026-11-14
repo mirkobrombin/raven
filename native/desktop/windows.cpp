@@ -79,6 +79,7 @@ void NativeWindows::remove_host_window(uint64_t handle)
 	if (surface_cleanup) surface_cleanup(handle);
 	if (presentation.remove) presentation.remove(handle);
 	host_windows.erase(handle);
+	glazed_frames.erase(handle);
 }
 
 void NativeWindows::set_deadline(std::chrono::steady_clock::time_point end)
@@ -207,9 +208,14 @@ void NativeWindows::present(uint64_t handle, bool force)
 {
 	// The desktop is the screen itself; guest drawing on it never becomes a host window.
 	if (handle==desktop) return;
+	// The part of the surface this frame can differ from the last in, when the drawings since said where they reached. It is this
+	// frame's alone: one presented while this one is made, as a handler shows another window, shows all of its surface.
+	const auto part=std::exchange(presenting,std::nullopt);
 	handle=objects.window_root(handle);
 	if (!handle) throw uint32_t(1400);
 	dirty_roots.erase(handle);
+	dirty_areas.erase(handle);
+	dirty_whole.erase(handle);
 	// Without a display the frame has nowhere to go and is dropped; the window lives on as on a screen that is switched off.
 	if (!presentation.present) return;
 	// A window without area shows nothing, as on Windows. Office sizes the shadows of its dialogs and menus only through
@@ -245,7 +251,10 @@ void NativeWindows::present(uint64_t handle, bool force)
 		if (pending || blank) {
 			if (!waiting->present_waiting) waiting->present_waiting=now;
 			if (now-*waiting->present_waiting<std::chrono::milliseconds(blank ? 1000 : waiting->presented ? 250 : 2000)) {
+				// The frame put off is still owed all that this one would have shown.
 				dirty_roots.insert(handle);
+				if (part) drawing(handle,&*part);
+				else dirty_whole.insert(handle);
 				return;
 			}
 		}
@@ -264,29 +273,43 @@ void NativeWindows::present(uint64_t handle, bool force)
 	auto pixels=std::span<const uint8_t>(bitmap->pixels().data(),size_t(bitmap->width)*bitmap->height*4);
 	// The frame extended into the client area shows through what the program painted black there, black with no alpha to GDI, as the
 	// Windows compositor shows its frame, and the compositor draws the caption buttons over it when the client area covers the caption.
-	std::vector<uint8_t> glazed;
 	if (window->glass) {
-		glazed.assign(pixels.begin(),pixels.end());
 		const int32_t width=int32_t(bitmap->width),height=int32_t(bitmap->height);
 		const int32_t left=std::max(window->x-window->outer.left,0),top=std::max(window->y-window->outer.top,0);
 		const int32_t right=std::min(width,left+window->width),bottom=std::min(height,top+window->height);
 		const auto &margins=*window->glass;
 		const bool whole=margins[0]<0 || margins[1]<0 || margins[2]<0 || margins[3]<0;
+		// The frame kept from the last time is brought up to the surface where the surface can have changed, and the frame is laid
+		// there again: what a frame costs follows what changed in it, not the size of the window.
+		auto &glazed=glazed_frames[handle];
+		const bool kept=part && glazed.size()==pixels.size();
+		const int32_t x0=kept ? std::clamp(part->left,0,width) : 0,y0=kept ? std::clamp(part->top,0,height) : 0;
+		const int32_t x1=kept ? std::clamp(part->right,x0,width) : width,y1=kept ? std::clamp(part->bottom,y0,height) : height;
+		if (!kept) glazed.resize(pixels.size());
+		for (int32_t y=y0;y<y1 && x0<x1;++y)
+			std::memcpy(glazed.data()+(size_t(y)*width+x0)*4,pixels.data()+(size_t(y)*width+x0)*4,size_t(x1-x0)*4);
 		paint::Canvas canvas{glazed.data(),width,height};
 		const uint32_t title=caption_color(*window,active==handle);
-		for (int32_t y=top;y<bottom;++y)
-			for (int32_t x=left;x<right;++x) {
-				if (!whole && x>=left+margins[0] && x<right-margins[1] && y>=top+margins[2] && y<bottom-margins[3])
-					continue;
+		const auto glaze=[&](int32_t y,int32_t from,int32_t to) {
+			from=std::max(from,x0); to=std::min(to,x1);
+			for (int32_t x=from;x<to;++x) {
 				const auto *pixel=glazed.data()+(size_t(y)*width+x)*4;
 				if (!pixel[0] && !pixel[1] && !pixel[2])
 					canvas.set(x,y,title);
 			}
+		};
+		for (int32_t y=std::max(top,y0);y<std::min(bottom,y1);++y) {
+			if (whole || y<top+margins[2] || y>=bottom-margins[3]) glaze(y,left,right);
+			else {
+				glaze(y,left,std::min(left+margins[0],right));
+				glaze(y,std::max(right-margins[1],left),right);
+			}
+		}
 		const auto layout=frame_layout(*window);
 		if (themed() && layout.close.right>layout.close.left && top<=layout.close.top)
 			paint_caption_buttons(handle,*window,layout,canvas,active==handle);
 		pixels=glazed;
-	}
+	} else glazed_frames.erase(handle);
 	// A popup without a caption that another window owns (a menu, a drop-down list), or an owned tool window (a palette), opens where the
 	// program placed it: as a popup of the owner's host window, since a host window of its own would be placed by the compositor.
 	const auto owner=host_owner(*window);
@@ -301,6 +324,7 @@ void NativeWindows::present(uint64_t handle, bool force)
 	// Host titles use replacement characters; the guest retains every UTF-16 code unit.
 	if (presentation.maximize) presentation.maximize(handle,(window->style & 0x01000000U)!=0);
 	if (presentation.transient_for) presentation.transient_for(handle,owning ? owner : 0);
+	if (part && presentation.changed_within) presentation.changed_within(handle,{part->left,part->top,part->right,part->bottom});
 	presentation.present(handle,encode_utf8(window->title,true),bitmap->width,bitmap->height,pixels);
 	place_host_surface(handle);
 	place_overlays(handle,*bitmap,pixels);
@@ -414,11 +438,19 @@ void NativeWindows::release_host_surface(uint64_t handle)
 	presentation.release_host_surface(handle);
 }
 
-void NativeWindows::drawing(uint64_t handle)
+void NativeWindows::drawing(uint64_t handle, const DesktopRect *area)
 {
 	if (handle==desktop) return;
 	const auto *window=std::as_const(objects).window(handle);
-	if (window && objects.window_visible(handle)) dirty_roots.insert(objects.window_root(handle));
+	if (!window || !objects.window_visible(handle)) return;
+	const auto root=objects.window_root(handle);
+	dirty_roots.insert(root);
+	if (!area) { dirty_whole.insert(root); return; }
+	const auto [known,first]=dirty_areas.try_emplace(root,*area);
+	if (!first) {
+		auto &held=known->second;
+		held={std::min(held.left,area->left),std::min(held.top,area->top),std::max(held.right,area->right),std::max(held.bottom,area->bottom)};
+	}
 }
 
 bool NativeWindows::input_ready()
@@ -666,6 +698,7 @@ void NativeWindows::import_foreign_frames()
 				for (int64_t column=0; column<columns; ++column) line[column*4+3]=0xff;
 			}
 			dirty_roots.insert(root);
+			dirty_whole.insert(root);
 		});
 	}
 }
@@ -703,10 +736,23 @@ void NativeWindows::flush_dirty(bool force)
 	settle_focus_leave(false);
 	import_foreign_frames();
 	const auto roots=std::move(dirty_roots);
+	const auto areas=std::move(dirty_areas);
+	const auto whole=std::move(dirty_whole);
 	dirty_roots.clear();
+	dirty_areas.clear();
+	dirty_whole.clear();
 	if (!presentation.present) return;
+	struct Presenting {
+		std::optional<DesktopRect> &area;
+		~Presenting() { area.reset(); }
+	} guard{presenting};
 	for (const auto root:roots)
-		if (std::as_const(objects).window(root) && objects.window_visible(root)) present(root, force);
+		if (std::as_const(objects).window(root) && objects.window_visible(root)) {
+			const auto area=areas.find(root);
+			presenting=area!=areas.end() && !whole.contains(root) ? std::optional<DesktopRect>(area->second) : std::nullopt;
+			present(root, force);
+			presenting.reset();
+		}
 }
 
 void NativeWindows::release_surface(uint64_t handle)

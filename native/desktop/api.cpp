@@ -530,7 +530,7 @@ bool NativeDesktop::dispatch(std::string_view name)
 		try {
 			const bool changed=bit_blt(process,objects,args);
 			const auto *dc=objects.dc(args[0]);
-			if (changed && dc->window && dc->leased && updated) updated(dc->window);
+			if (changed && dc->window && dc->leased && updated) drew(*dc);
 			result=1;
 		} catch (uint32_t error) { environment.set_last_error(error); }
 	} else if (name == "DrawIconEx") {
