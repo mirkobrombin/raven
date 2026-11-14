@@ -26,6 +26,13 @@ typedef struct gp_graphics
 	BOOL own_dc;
 	GpImage *image;		// drawing on a bitmap
 	HDC held_dc;		// GetDC handed out
+	// The section the pixels of a device context are worked on in, kept from one drawing to the next: a window's paint is many small
+	// drawings, and a section made and thrown away for each cost more than the drawing did.
+	HDC work_dc;
+	HBITMAP work_bitmap, work_old;
+	void *work_bits;
+	INT work_width, work_height;
+	BOOL work_busy;
 	HBITMAP held_bitmap, held_old;
 	void *held_bits;
 	GpUnit unit;
@@ -50,6 +57,7 @@ typedef struct
 	BOOL premultiplied, opaque;
 	HDC temp_dc;
 	HBITMAP temp_bitmap, temp_old;
+	BOOL kept;		// the section is the graphics' own and stays
 	INT dc_x, dc_y, logical_x, logical_y;
 	RECT area;
 } gp_surface;

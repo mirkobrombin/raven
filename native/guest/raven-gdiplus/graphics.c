@@ -114,12 +114,15 @@ GpStatus GDIPAPI GdipGetImageGraphicsContext(GpImage *image, GpGraphics **out)
 	return Ok;
 }
 
+static void gp_work_release(GpGraphics *graphics);
+
 GpStatus GDIPAPI GdipDeleteGraphics(GpGraphics *graphics)
 {
 	if (!graphics)
 		return InvalidParameter;
 	if (graphics->held_dc)
 		return ObjectBusy;
+	gp_work_release(graphics);
 	if (graphics->own_dc)
 		ReleaseDC(graphics->window, graphics->dc);
 	while (graphics->states) {
@@ -537,7 +540,21 @@ BYTE *gp_clip_mask(const GpGraphics *graphics, const RECT *area)
 	return mask;
 }
 
-// Direct 32 bit access when the target allows it; otherwise pixels go through a temporary section copied back at the end.
+static void gp_work_release(GpGraphics *graphics)
+{
+	if (!graphics->work_dc)
+		return;
+	SelectObject(graphics->work_dc, graphics->work_old);
+	DeleteObject(graphics->work_bitmap);
+	DeleteDC(graphics->work_dc);
+	graphics->work_dc = NULL;
+	graphics->work_bitmap = NULL;
+	graphics->work_bits = NULL;
+	graphics->work_width = graphics->work_height = 0;
+}
+
+// Direct 32 bit access when the target allows it; otherwise pixels go through a section copied back at the end, the graphics' own
+// where it can be.
 GpStatus gp_surface_begin(GpGraphics *graphics, gp_surface *surface, const RECT *area)
 {
 	memset(surface, 0, sizeof(*surface));
@@ -557,24 +574,51 @@ GpStatus gp_surface_begin(GpGraphics *graphics, gp_surface *surface, const RECT 
 		return Ok;
 	}
 	INT width = area->right - area->left, height = area->bottom - area->top;
-	BITMAPINFO header = {{sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB}};
 	void *bits;
-	surface->temp_dc = CreateCompatibleDC(graphics->dc);
-	surface->temp_bitmap = CreateDIBSection(graphics->dc, &header, DIB_RGB_COLORS, &bits, NULL, 0);
-	if (!surface->temp_dc || !surface->temp_bitmap) {
-		if (surface->temp_dc)
-			DeleteDC(surface->temp_dc);
-		if (surface->temp_bitmap)
-			DeleteObject(surface->temp_bitmap);
-		return OutOfMemory;
+	INT row = width;
+	if (!graphics->work_busy && (!graphics->work_dc || graphics->work_width < width || graphics->work_height < height)) {
+		// The graphics' own section grows to the largest area asked of it so far.
+		const INT wide = max(width, graphics->work_width), high = max(height, graphics->work_height);
+		BITMAPINFO kept = {{sizeof(BITMAPINFOHEADER), wide, -high, 1, 32, BI_RGB}};
+		HDC dc = CreateCompatibleDC(graphics->dc);
+		HBITMAP bitmap = dc ? CreateDIBSection(graphics->dc, &kept, DIB_RGB_COLORS, &bits, NULL, 0) : NULL;
+		if (dc && bitmap) {
+			gp_work_release(graphics);
+			graphics->work_dc = dc;
+			graphics->work_bitmap = bitmap;
+			graphics->work_old = SelectObject(dc, bitmap);
+			graphics->work_bits = bits;
+			graphics->work_width = wide;
+			graphics->work_height = high;
+		} else if (dc)
+			DeleteDC(dc);
 	}
-	surface->temp_old = SelectObject(surface->temp_dc, surface->temp_bitmap);
+	if (!graphics->work_busy && graphics->work_dc && graphics->work_width >= width && graphics->work_height >= height) {
+		graphics->work_busy = TRUE;
+		surface->kept = TRUE;
+		surface->temp_dc = graphics->work_dc;
+		bits = graphics->work_bits;
+		row = graphics->work_width;
+	} else {
+		// A drawing begun inside another, or a section that could not be kept, takes one of its own for its length.
+		BITMAPINFO header = {{sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB}};
+		surface->temp_dc = CreateCompatibleDC(graphics->dc);
+		surface->temp_bitmap = CreateDIBSection(graphics->dc, &header, DIB_RGB_COLORS, &bits, NULL, 0);
+		if (!surface->temp_dc || !surface->temp_bitmap) {
+			if (surface->temp_dc)
+				DeleteDC(surface->temp_dc);
+			if (surface->temp_bitmap)
+				DeleteObject(surface->temp_bitmap);
+			return OutOfMemory;
+		}
+		surface->temp_old = SelectObject(surface->temp_dc, surface->temp_bitmap);
+	}
 	POINT origin = dc_origin(graphics);
 	surface->logical_x = area->left - origin.x;
 	surface->logical_y = area->top - origin.y;
 	BitBlt(surface->temp_dc, 0, 0, width, height, graphics->dc, surface->logical_x, surface->logical_y, SRCCOPY);
 	surface->pixels = bits;
-	surface->stride = width * 4;
+	surface->stride = row * 4;
 	surface->width = width;
 	surface->height = height;
 	surface->dc_x = area->left;
@@ -587,8 +631,11 @@ void gp_surface_end(gp_surface *surface)
 {
 	if (!surface->temp_dc)
 		return;
-	GdiFlush();
 	BitBlt(surface->graphics->dc, surface->logical_x, surface->logical_y, surface->width, surface->height, surface->temp_dc, 0, 0, SRCCOPY);
+	if (surface->kept) {
+		surface->graphics->work_busy = FALSE;
+		return;
+	}
 	SelectObject(surface->temp_dc, surface->temp_old);
 	DeleteObject(surface->temp_bitmap);
 	DeleteDC(surface->temp_dc);
