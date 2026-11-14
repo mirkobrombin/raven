@@ -33,6 +33,10 @@ typedef struct gp_graphics
 	void *work_bits;
 	INT work_width, work_height;
 	BOOL work_busy;
+	// A memory context holding a 32 bit section is drawn on in place, within the clip it had when the graphics was made.
+	BYTE *direct_bits;
+	INT direct_stride, direct_width, direct_height;
+	RECT direct_clip;
 	HBITMAP held_bitmap, held_old;
 	void *held_bits;
 	GpUnit unit;

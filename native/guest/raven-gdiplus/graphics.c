@@ -46,6 +46,67 @@ static GpGraphics *new_graphics(void)
 	return graphics;
 }
 
+static POINT dc_origin(const GpGraphics *graphics);
+
+// The section selected into a memory context, when its pixels are plain 32 bit ones and its clip is at most one rectangle.
+static void find_direct(GpGraphics *graphics)
+{
+	DIBSECTION section;
+	HBITMAP bitmap = GetCurrentObject(graphics->dc, OBJ_BITMAP);
+	if (!bitmap || GetObjectW(bitmap, sizeof(section), &section) != sizeof(section) || !section.dsBm.bmBits || section.dsBm.bmBitsPixel != 32)
+		return;
+	if (section.dsBmih.biCompression != BI_RGB && !(section.dsBmih.biCompression == BI_BITFIELDS && section.dsBitfields[0] == 0xff0000
+		&& section.dsBitfields[1] == 0xff00 && section.dsBitfields[2] == 0xff))
+		return;
+	RECT clip = {0, 0, section.dsBm.bmWidth, section.dsBm.bmHeight};
+	HRGN region = CreateRectRgn(0, 0, 0, 0);
+	if (!region)
+		return;
+	const int clipped = GetClipRgn(graphics->dc, region);
+	RECT box;
+	const int shape = clipped == 1 ? GetRgnBox(region, &box) : NULLREGION;
+	DeleteObject(region);
+	if (clipped < 0 || (clipped == 1 && shape != SIMPLEREGION && shape != NULLREGION))
+		return;
+	if (clipped == 1 && !IntersectRect(&clip, &clip, &box))
+		SetRectEmpty(&clip);
+	const INT stride = section.dsBm.bmWidthBytes, height = section.dsBm.bmHeight;
+	BYTE *bits = section.dsBm.bmBits;
+	// The header a section reports always has a positive height, whichever way its rows run. One pixel set through the context
+	// inside its clip shows which row of memory it lands in, and is put back as it was.
+	BOOL rows_up = FALSE;
+	INT y = clip.top;
+	if (y == height - 1 - y)
+		y++;
+	if (height > 1 && y < clip.bottom && clip.left < clip.right) {
+		const INT x = clip.left;
+		DWORD *down = (DWORD *)(bits + (SSIZE_T)y * stride) + x, *up = (DWORD *)(bits + (SSIZE_T)(height - 1 - y) * stride) + x;
+		const DWORD kept_down = *down, kept_up = *up;
+		DWORD mark = 0x000000;
+		while (mark == (kept_down & 0xffffff) || mark == (kept_up & 0xffffff))
+			mark += 0x404040;
+		const POINT origin = dc_origin(graphics);
+		SetPixel(graphics->dc, x - origin.x, y - origin.y, RGB(mark >> 16, mark >> 8 & 0xff, mark & 0xff));
+		const BOOL in_down = (*down & 0xffffff) == mark, in_up = (*up & 0xffffff) == mark;
+		*down = kept_down;
+		*up = kept_up;
+		if (in_down == in_up)
+			return;
+		rows_up = in_up;
+	}
+	if (rows_up) {
+		// Bottom-up rows: the first row on screen is the last in memory.
+		graphics->direct_bits = bits + (SSIZE_T)(section.dsBm.bmHeight - 1) * stride;
+		graphics->direct_stride = -stride;
+	} else {
+		graphics->direct_bits = bits;
+		graphics->direct_stride = stride;
+	}
+	graphics->direct_width = section.dsBm.bmWidth;
+	graphics->direct_height = section.dsBm.bmHeight;
+	graphics->direct_clip = clip;
+}
+
 GpStatus GDIPAPI GdipCreateFromHDC2(HDC dc, HANDLE device, GpGraphics **out)
 {
 	if (!out)
@@ -59,6 +120,8 @@ GpStatus GDIPAPI GdipCreateFromHDC2(HDC dc, HANDLE device, GpGraphics **out)
 		return OutOfMemory;
 	graphics->dc = dc;
 	graphics->window = WindowFromDC(dc);
+	if (!graphics->window)
+		find_direct(graphics);
 	graphics->dpi_x = (REAL)GetDeviceCaps(dc, LOGPIXELSX);
 	graphics->dpi_y = (REAL)GetDeviceCaps(dc, LOGPIXELSY);
 	if (graphics->dpi_x <= 0.0f)
@@ -488,6 +551,11 @@ static void surface_size(const GpGraphics *graphics, INT *width, INT *height)
 		*height = graphics->image->height;
 		return;
 	}
+	if (graphics->direct_bits) {
+		*width = graphics->direct_width;
+		*height = graphics->direct_height;
+		return;
+	}
 	RECT box = {0, 0, 0, 0};
 	if (graphics->window && GetClientRect(graphics->window, &box)) {
 		*width = box.right;
@@ -511,6 +579,8 @@ BOOL gp_clip_bounds(const GpGraphics *graphics, RECT *out)
 	INT width, height;
 	surface_size(graphics, &width, &height);
 	RECT box = {0, 0, width, height};
+	if (graphics->direct_bits && !IntersectRect(&box, &box, &graphics->direct_clip))
+		return FALSE;
 	if (!gp_region_is_infinite(graphics->clip)) {
 		GpRectF bounds;
 		if (!gp_region_bounds(graphics->clip, &bounds))
@@ -574,6 +644,17 @@ GpStatus gp_surface_begin(GpGraphics *graphics, gp_surface *surface, const RECT 
 		return Ok;
 	}
 	INT width = area->right - area->left, height = area->bottom - area->top;
+	RECT inside;
+	if (graphics->direct_bits && IntersectRect(&inside, area, &graphics->direct_clip) && EqualRect(&inside, area)) {
+		surface->pixels = (DWORD *)(graphics->direct_bits + (SSIZE_T)area->top * graphics->direct_stride + area->left * 4);
+		surface->stride = graphics->direct_stride;
+		surface->width = width;
+		surface->height = height;
+		surface->dc_x = area->left;
+		surface->dc_y = area->top;
+		surface->opaque = TRUE;
+		return Ok;
+	}
 	void *bits;
 	INT row = width;
 	if (!graphics->work_busy && (!graphics->work_dc || graphics->work_width < width || graphics->work_height < height)) {
