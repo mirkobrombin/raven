@@ -84,10 +84,11 @@ uint32_t NativeX86System::wait(const std::vector<uint64_t> &handles, bool all, u
 	std::optional<std::chrono::steady_clock::time_point> wake;
 	if (milliseconds != UINT32_MAX)
 		wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+	WaitedObjects waited(objects, handles);
 	const auto states = [&] {
 		std::vector<int> result;
-		for (const auto handle : handles)
-			result.push_back(objects.signaled(handle, id));
+		for (size_t index = 0; index < handles.size(); ++index)
+			result.push_back(waited.signaled(index, id));
 		return result;
 	};
 	bool looked = false;
@@ -99,14 +100,14 @@ uint32_t NativeX86System::wait(const std::vector<uint64_t> &handles, bool all, u
 		}
 		if (all) {
 			if (std::all_of(current.begin(), current.end(), [](int state) { return state == 1; })) {
-				for (const auto handle : handles)
-					objects.consume(handle, id);
+				for (size_t index = 0; index < handles.size(); ++index)
+					waited.consume(index, id);
 				return 0;
 			}
 		} else {
 			for (size_t index = 0; index < current.size(); ++index)
 				if (current[index] == 1) {
-					objects.consume(handles[index], id);
+					waited.consume(index, id);
 					return uint32_t(index);
 				}
 		}
@@ -126,10 +127,9 @@ uint32_t NativeX86System::wait(const std::vector<uint64_t> &handles, bool all, u
 		}
 		// An object that turns signaled by itself, such as a timer, is looked at again when it says.
 		auto until = wake;
-		for (const auto handle : handles)
-			if (const auto object = objects.object(handle))
-				if (const auto due = object->wakes_at(); due && (!until || *due < *until))
-					until = due;
+		for (size_t index = 0; index < handles.size(); ++index)
+			if (const auto due = waited.wakes_at(index); due && (!until || *due < *until))
+				until = due;
 		threads.block(ready, until);
 	}
 }

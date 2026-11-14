@@ -116,8 +116,9 @@ public:
 		mine().active.push_back({origin, context.process.callback_depth(), mark});
 		if (trace)
 		{
-			std::fprintf(stderr, "seh dispatch begin: code=%x active=%zu depth=%zu scratch=%zx params=%x info1=%llx info2=%llx rsp=%llx\n", le32(record, 0), mine().active.size(),
-				context.process.callback_depth(), mine().scratch.mark(), le32(record, 0x18), (unsigned long long)load64(record, 0x28), (unsigned long long)load64(record, 0x30),
+			std::fprintf(stderr, "seh dispatch begin: code=%x active=%zu depth=%zu scratch=%zx params=%x info0=%llx info1=%llx info2=%llx rsp=%llx\n", le32(record, 0),
+				mine().active.size(), context.process.callback_depth(), mine().scratch.mark(), le32(record, 0x18), (unsigned long long)load64(record, 0x20),
+				(unsigned long long)load64(record, 0x28), (unsigned long long)load64(record, 0x30),
 				(unsigned long long)context_rsp(origin));
 			if (le32(record, 0x18) >= 2) {
 				try {
@@ -179,8 +180,8 @@ public:
 			ContextBytes next = current;
 			const auto result = unwinder.unwind(1, pc, *function, next);
 			if (trace)
-				std::fprintf(stderr, "seh frame: pc=%llx function=%x..%x unwind=%x handler=%llx\n", (unsigned long long)pc, function->begin, function->end,
-					function->unwind, (unsigned long long)result.handler);
+				std::fprintf(stderr, "seh frame: pc=%llx function=%x..%x unwind=%x handler=%llx rsp=%llx establisher=%llx\n", (unsigned long long)pc, function->begin, function->end,
+					function->unwind, (unsigned long long)result.handler, (unsigned long long)context_rsp(current), (unsigned long long)result.establisher);
 			if (result.handler) {
 				context.process.write_memory(frame_context, next);
 				std::vector<uint8_t> descriptor(dispatcher_size);
@@ -465,6 +466,9 @@ public:
 	}
 
 	// Execution resumes at the callback nesting where the exception was raised; handler calls above it are abandoned.
+	// The upper halves of the YMM registers a context being restored brings, for the redirect that follows.
+	std::optional<std::array<uint8_t, x64_context::avx_size>> restored_avx;
+
 	[[noreturn]] void redirect_to(const ContextBytes &given, size_t depth, size_t mark = SIZE_MAX)
 	{
 		auto target = given;
@@ -478,6 +482,10 @@ public:
 		}
 		auto native = context.process.context();
 		apply_context(native, target);
+		if (restored_avx) {
+			set_native_avx(native, restored_avx->data());
+			restored_avx.reset();
+		}
 		context.process.redirect(native, depth);
 		if (const char *count = std::getenv("RAVEN_STEP_REDIRECT")) {
 			// Diagnosis aid: log the instructions executed right after execution is redirected.
@@ -623,6 +631,9 @@ public:
 				// Unwinding past a catch block's callback abandons that catch: its function's frame follows.
 				if (const auto *pending = consolidation_returning_to(pc, current)) {
 					current = pending->target;
+					// What that catch would have given back on returning goes back when this unwind's own catch ends.
+					resume_mark = std::min(resume_mark, pending->mark);
+					mine().unwinds.back().mark = resume_mark;
 					mine().consolidations.erase(mine().consolidations.begin() + (pending - mine().consolidations.data()), mine().consolidations.end());
 					continue;
 				}
@@ -1016,11 +1027,51 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 	});
 	// The context resumes at the callback nesting its stack belongs to: callbacks begun from deeper in the stack than its frame, such as the
 	// handler calls of a dispatch that a runtime leaves this way for a catch block, are abandoned.
+	// A runtime may also leave the handler calls of a dispatch by loading the continuation's registers itself, as the .NET runtime does
+	// after a catch block, so that no RtlRestoreContext tells of it. The guest's next API call then comes from a stack that the
+	// innermost callbacks were started below: they are over, their frames gone, and the call is made again at the nesting its stack
+	// belongs to. A stack pointer outside the stack the TEB describes, as on another fiber's stack, says nothing about the callbacks.
+	context.leave_abandoned_callbacks = [exceptions, &context] {
+		if (context.process.mode() != NativeMode::x64)
+			return;
+		const auto registers = context.process.general_registers();
+		const auto bounds = context.process.read_memory(registers.gs_base + 8, 16);
+		const uint64_t base = load64(bounds, 0), limit = load64(bounds, 8);
+		if (registers.rsp < limit || registers.rsp >= base)
+			return;
+		size_t depth = context.process.callback_depth();
+		while (depth > 0) {
+			const uint64_t origin = context.process.callback_origin(depth - 1).registers.rsp;
+			if (origin < limit || origin > registers.rsp)
+				break;
+			--depth;
+		}
+		if (depth == context.process.callback_depth())
+			return;
+		if (std::getenv("RAVEN_TRACE_SEH"))
+			std::fprintf(stderr, "seh: callbacks %zu..%zu left by a jump to rsp=%llx\n", depth, context.process.callback_depth(),
+				(unsigned long long)registers.rsp);
+		// The trap stopped one byte past the API's entry: execution goes back there to make the call again.
+		auto target = context_from_process(context.process.context());
+		set_context_rip(target, context_rip(target) - 1);
+		exceptions->redirect_to(target, depth);
+	};
 	const auto restore = [exceptions, &context](ApiCall &call) {
 		const auto target = call.read(call[0], x64_context::size);
+		// A context with an extended area also brings back the upper halves of the YMM registers its mask names, or clears them.
+		if (const uint64_t area = context_extended_area(context.process, call[0])) {
+			exceptions->restored_avx.emplace();
+			if (call.load<uint64_t>(area) & x64_context::avx_mask) {
+				const auto halves = call.read(area + x64_context::extended_header, x64_context::avx_size);
+				std::memcpy(exceptions->restored_avx->data(), halves.data(), halves.size());
+			}
+		}
 		size_t depth = context.process.callback_depth();
 		while (depth > 0 && context.process.callback_origin(depth - 1).registers.rsp <= context_rsp(target))
 			--depth;
+		if (std::getenv("RAVEN_TRACE_SEH"))
+			std::fprintf(stderr, "seh restore: rip=%llx rsp=%llx depth %zu->%zu\n", (unsigned long long)context_rip(target), (unsigned long long)context_rsp(target),
+				context.process.callback_depth(), depth);
 		exceptions->redirect_to(target, depth);
 	};
 	exceptions->trap_gate = 0;

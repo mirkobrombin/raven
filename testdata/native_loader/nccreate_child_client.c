@@ -5,6 +5,25 @@
 static HWND early;
 static unsigned bad;
 
+static BOOL CALLBACK count_child(HWND window,LPARAM lparam)
+{
+	if (window==*(HWND *)lparam) ++bad;
+	return TRUE;
+}
+
+/* A window joins its parent's children only after WM_NCCREATE: a parent that lays out its children meanwhile does not find it. */
+static LRESULT CALLBACK unlinked_procedure(HWND window,UINT message,WPARAM wparam,LPARAM lparam)
+{
+	if (message==WM_NCCREATE) {
+		const CREATESTRUCTW *create=(const CREATESTRUCTW *)lparam;
+		if (create->lpCreateParams) return DestroyWindow(create->hwndParent);
+		if (GetParent(window)!=create->hwndParent || GetTopWindow(create->hwndParent)==window ||
+			GetWindow(create->hwndParent,GW_CHILD)==window || GetWindow(window,GW_HWNDNEXT) || GetWindow(window,GW_HWNDPREV)) ++bad;
+		EnumChildWindows(create->hwndParent,count_child,(LPARAM)&window);
+	}
+	return DefWindowProcW(window,message,wparam,lparam);
+}
+
 static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM lparam)
 {
 	/* A window may build its children while it is still being created, before its frame is measured. */
@@ -35,5 +54,15 @@ int raven_entry(void)
 	HWND moved=CreateWindowExW(0,L"RavenEarlyChild",L"moved",WS_OVERLAPPED,0,0,50,50,NULL,NULL,NULL,NULL);
 	if (!moved || GetParent(moved) || !SetParent(moved,HWND_MESSAGE) && GetLastError()) return 8;
 	if (IsWindowVisible(moved) || !DestroyWindow(moved) || !DestroyWindow(message_child)) return 9;
+	definition.lpfnWndProc=unlinked_procedure; definition.lpszClassName=L"RavenUnlinkedChild";
+	if (!RegisterClassW(&definition)) return 10;
+	parent=CreateWindowExW(0,L"RavenEarlyChild",L"parent",WS_OVERLAPPEDWINDOW,100,200,300,200,NULL,NULL,definition.hInstance,NULL);
+	HWND first=CreateWindowExW(0,L"RavenUnlinkedChild",L"first",WS_CHILD,0,0,10,10,parent,NULL,NULL,NULL);
+	HWND second=CreateWindowExW(0,L"RavenUnlinkedChild",L"second",WS_CHILD,0,0,10,10,parent,NULL,NULL,NULL);
+	if (!parent || !first || !second || bad) return 11;
+	if (GetTopWindow(parent)!=first || GetWindow(first,GW_HWNDNEXT)!=second) return 12;
+	/* A parent destroyed by its child's WM_NCCREATE takes the child with it. */
+	if (CreateWindowExW(0,L"RavenUnlinkedChild",L"last",WS_CHILD,0,0,10,10,parent,NULL,NULL,(void *)1)) return 13;
+	if (IsWindow(parent) || IsWindow(first) || IsWindow(second)) return 14;
 	return 0;
 }

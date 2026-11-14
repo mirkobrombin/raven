@@ -318,6 +318,13 @@ static void place_and_show(tooltip_state *state)
 	SIZE size;
 	POINT at;
 	resolve_text(state, tool, state->shown, ARRAYSIZE(state->shown));
+	/* A tool with no text shows nothing: owners answer an empty text to keep a tip from coming up. */
+	if (!state->shown[0]) {
+		ShowWindow(state->window, SW_HIDE);
+		if (!state->tracking)
+			state->current = -1;
+		return;
+	}
 	size = bubble_size(state);
 	if (tool->flags & TTF_TRACK) {
 		at = state->track_at;

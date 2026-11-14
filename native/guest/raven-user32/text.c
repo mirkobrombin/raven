@@ -237,8 +237,9 @@ static int draw_text(HDC dc, WCHAR *text, int count, RECT *rect, UINT flags, DRA
 	if (params) {
 		if (params->iTabLength > 0 && (flags & DT_TABSTOP))
 			tab_characters = params->iTabLength;
-		left_margin = params->iLeftMargin * average;
-		right_margin = params->iRightMargin * average;
+		/* The margins are pixels, whatever the documentation says of character widths: WinForms pads its text measures with them. */
+		left_margin = params->iLeftMargin;
+		right_margin = params->iRightMargin;
 		params->uiLengthDrawn = 0;
 	}
 	state.tab_pixels = tab_characters * average;

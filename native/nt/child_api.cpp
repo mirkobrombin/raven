@@ -343,7 +343,8 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 				}
 				if (!object || !object->describe(record)) {
 					if (std::getenv("RAVEN_TRACE_API"))
-						std::fprintf(stderr, "raven: handle %llx cannot be inherited\n", static_cast<unsigned long long>(handle));
+						std::fprintf(stderr, "raven: handle %llx (%s) cannot be inherited\n", static_cast<unsigned long long>(handle),
+							object ? std::string(object->type_name().begin(), object->type_name().end()).c_str() : "none");
 					continue;
 				}
 				record.handle = handle;
@@ -472,6 +473,14 @@ void register_child_process_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("CreateProcessAsUserW", 11, [&registry](ApiCall &call) {
 		const auto create = registry.find("CreateProcessW");
 		ApiCall inner(call.process, call.environment, {call[1], call[2], call[3], call[4], call[5], call[6], call[7], call[8], call[9], call[10]});
+		create->second(inner);
+		call.ret(inner.result);
+	});
+	// The same for a token given with logon flags, which have nothing to load either: the token, the flags, the program and its command
+	// line, the creation flags, the environment, the folder, the startup information and where the process information goes.
+	registry.add("CreateProcessWithTokenW", 9, [&registry](ApiCall &call) {
+		const auto create = registry.find("CreateProcessW");
+		ApiCall inner(call.process, call.environment, {call[2], call[3], 0, 0, 0, call[4], call[5], call[6], call[7], call[8]});
 		create->second(inner);
 		call.ret(inner.result);
 	});

@@ -57,6 +57,15 @@ int raven_entry(void)
 	if (GetFileAttributesA("ansi-dir")!=INVALID_FILE_ATTRIBUTES) return 13;
 	count=GetModuleFileNameA(NULL,path,MAX_PATH);
 	if (!count || count>=MAX_PATH || length(path)!=count || path[length(path)-1]!='e') return 14;
+	/* A name looked up in the activation context, as the .NET runtime does before it loads a library: the ANSI form answers as the
+	   wide one does. */
+	ACTCTX_SECTION_KEYED_DATA wide_data={sizeof wide_data},narrow_data={sizeof narrow_data};
+	SetLastError(0);
+	const BOOL wide_found=FindActCtxSectionStringW(0,NULL,ACTIVATION_CONTEXT_SECTION_DLL_REDIRECTION,L"comctl32.dll",&wide_data);
+	const DWORD wide_error=GetLastError();
+	SetLastError(0);
+	if (FindActCtxSectionStringA(0,NULL,ACTIVATION_CONTEXT_SECTION_DLL_REDIRECTION,"comctl32.dll",&narrow_data)!=wide_found ||
+		GetLastError()!=wide_error || narrow_data.ulDataFormatVersion!=wide_data.ulDataFormatVersion) return 95;
 	(void)copy;
 	return 0;
 }

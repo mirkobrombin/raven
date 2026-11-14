@@ -17,7 +17,7 @@ import time
 
 from PIL import Image
 
-RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
+RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
 
 
 def environment():
@@ -49,9 +49,10 @@ def visible_area(path):
     return sum(image.histogram()[255:])
 
 
-def run(raven, prefix, program, arguments, output, watch=None, timeout=600):
-    """Runs a program in the prefix; with watch set, the screen is captured every second and the fullest capture kept there."""
-    env = environment() | {"RAVEN_PREFIX": str(prefix)}
+def run(raven, prefix, program, arguments, output, watch=None, timeout=600, more=None):
+    """Runs a program in the prefix; with watch set, the screen is captured every second and the fullest capture kept there. What `more`
+    holds is added to the program's environment."""
+    env = environment() | {"RAVEN_PREFIX": str(prefix)} | (more or {})
     if "RAVEN_THEME" in os.environ:
         env["RAVEN_THEME"] = os.environ["RAVEN_THEME"]
     with output.open("wb") as log:

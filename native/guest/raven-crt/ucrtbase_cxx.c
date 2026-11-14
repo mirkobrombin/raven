@@ -443,6 +443,41 @@ void __stdcall raven_raise_exception(DWORD code, DWORD flags, DWORD count, const
 	dispatch(&record, &context);
 }
 
+/* Goes on with the registers of a context, as NtContinue does: its last words, the instruction, the flags and the two registers the
+ * switch needs, are put just below its stack, which leaves the dispatcher's own frames far under it. */
+static void __attribute__((noreturn)) resume_context(const CONTEXT *context)
+{
+	DWORD *frame = (DWORD *)context->Esp - 4;
+	frame[0] = context->Ecx;
+	frame[1] = context->Eax;
+	frame[2] = context->EFlags;
+	frame[3] = context->Eip;
+	__asm__ volatile("movl %c[edi](%%eax), %%edi\n\t"
+		"movl %c[esi](%%eax), %%esi\n\t"
+		"movl %c[ebx](%%eax), %%ebx\n\t"
+		"movl %c[edx](%%eax), %%edx\n\t"
+		"movl %c[ebp](%%eax), %%ebp\n\t"
+		"movl %%ecx, %%esp\n\t"
+		"popl %%ecx\n\t"
+		"popl %%eax\n\t"
+		"popfl\n\t"
+		"ret"
+		:
+		: "a"(context), "c"(frame), [edi] "i"(offsetof(CONTEXT, Edi)), [esi] "i"(offsetof(CONTEXT, Esi)),
+		  [ebx] "i"(offsetof(CONTEXT, Ebx)), [edx] "i"(offsetof(CONTEXT, Edx)), [ebp] "i"(offsetof(CONTEXT, Ebp))
+		: "memory");
+	__builtin_unreachable();
+}
+
+/* A processor fault in a 32-bit program: Raven puts the record and the registers of the faulting instruction on the stack and sends
+ * the thread here, as KiUserExceptionDispatcher is entered on Windows. A handler that continues execution resumes at the context,
+ * which it may have changed. */
+void __stdcall raven_dispatch_fault(EXCEPTION_RECORD *record, CONTEXT *context)
+{
+	dispatch(record, context);
+	resume_context(context);
+}
+
 /* RtlUnwind for 32-bit programs: the frames above the target hear that they are being unwound and leave the chain. The compiled code
  * that calls it continues right after the call, which is where it returns. */
 void __stdcall raven_unwind(cxx_registration *target, void *target_ip, EXCEPTION_RECORD *record, void *value)

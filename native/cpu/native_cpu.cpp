@@ -97,6 +97,7 @@ public:
 	void send_descriptor(int descriptor);
 	int descriptor_socket() const { return guest_channel; }
 	void set_timeout(std::chrono::milliseconds timeout);
+	void set_deadline(std::chrono::steady_clock::time_point end) { deadline = end; }
 	void enable_parallel();
 	pid_t clone_task(uint64_t stack);
 	bool take_stop(pid_t task, int &status);
@@ -380,6 +381,26 @@ void NativeChild::send_descriptor(int descriptor)
 	do { sent = sendmsg(host_channel, &message, MSG_NOSIGNAL | MSG_DONTWAIT); } while (sent == -1 && errno == EINTR);
 	if (sent != 1)
 		throw std::runtime_error("cannot send native mapping descriptor");
+}
+
+// Whether the guest sleeps inside the kernel while it runs its own code. Its system calls all stop for the runtime, so such a sleep holds
+// it within one instruction: a locked access that splits a cache line, which Linux delays by several milliseconds and drops when a signal
+// arrives meanwhile, to start it over.
+static bool held_in_kernel(pid_t pid)
+{
+	char path[32];
+	std::snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	const int file = ::open(path, O_RDONLY | O_CLOEXEC);
+	if (file < 0)
+		return false;
+	char text[512];
+	const ssize_t length = ::read(file, text, sizeof text - 1);
+	::close(file);
+	if (length <= 0)
+		return false;
+	text[length] = 0;
+	const char *name_end = std::strrchr(text, ')');
+	return name_end && name_end[1] == ' ' && (name_end[2] == 'S' || name_end[2] == 'D');
 }
 
 // The tracer thread's wake-up while it is blocked waiting for the guest: a one-shot timer that interrupts waitpid with a signal whose
@@ -1388,6 +1409,14 @@ uint64_t NativeProcess::result_register() const
 	return registers.rax;
 }
 
+user_regs_struct NativeProcess::general_registers() const
+{
+	state->require_stopped();
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, state->child->pid, &registers);
+	return registers;
+}
+
 size_t NativeProcess::callback_depth() const
 {
 	return state->callbacks.size();
@@ -1877,6 +1906,9 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		else
 			child.clear_slice();
 		event_info.reset();
+		// The runtime's own short waits, and other threads run while this one yielded, leave the child a deadline of theirs: this call's
+		// comes back before each wait, or a thread that computes long after another ended would be stopped as if its time had run out.
+		child.set_deadline(execution_deadline);
 		if (state->resume_hook)
 			state->resume_hook();
 		trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid);
@@ -1917,6 +1949,14 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		}
 		// The slice belongs to this resume only; a later wait for a memory operation of the runtime must not see it expire.
 		child.clear_slice();
+		// A guest the kernel holds within an instruction is let finish it: the interrupt would cut the kernel's delay short and the instruction
+		// would start over, so a thread spinning on a value that splits a cache line, as the .NET Framework's Interlocked.Read can, never
+		// got past it while its slices kept ending. It is waited for a few times, then interrupted all the same.
+		for (int held = 0; status == -2 && held < 20 && held_in_kernel(child.pid); ++held) {
+			child.set_slice(std::chrono::milliseconds(15));
+			status = child.wait(state->poll_served ? &state->poll_served : nullptr);
+			child.clear_slice();
+		}
 		if (status == -2) {
 			++state->slice_interrupts;
 			// The guest ran a whole slice without a stop of its own: interrupt it where it is and let another thread have the processor.

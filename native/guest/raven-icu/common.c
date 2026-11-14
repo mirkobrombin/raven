@@ -185,10 +185,67 @@ INT __cdecl u_strlen(const UChar *text)
 	return icu_length(text, -1);
 }
 
+INT __cdecl u_strcmp(const UChar *left, const UChar *right)
+{
+	while (*left && *left == *right) {
+		left++;
+		right++;
+	}
+	return (INT)*left - (INT)*right;
+}
+
+UChar *__cdecl u_strcpy(UChar *dest, const UChar *source)
+{
+	UChar *at = dest;
+	while ((*at++ = *source++))
+		;
+	return dest;
+}
+
+// Up to count units, stopping after a terminator; a source as long as count leaves dest unterminated, as strncpy does.
+UChar *__cdecl u_strncpy(UChar *dest, const UChar *source, INT count)
+{
+	INT at = 0;
+	for (; at < count && source[at]; at++)
+		dest[at] = source[at];
+	if (at < count)
+		dest[at] = 0;
+	return dest;
+}
+
+// The invariant characters, ASCII here, widened one for one.
+void __cdecl u_charsToUChars(const char *source, UChar *dest, INT length)
+{
+	for (INT at = 0; at < length; at++)
+		dest[at] = (UChar)(BYTE)source[at];
+}
+
+UChar *__cdecl u_uastrncpy(UChar *dest, const char *source, INT count)
+{
+	INT at = 0;
+	for (; at < count && source[at]; at++)
+		dest[at] = (UChar)(BYTE)source[at];
+	if (at < count)
+		dest[at] = 0;
+	return dest;
+}
+
+// The ICU release whose interface this follows.
+void __cdecl u_getVersion(BYTE version[4])
+{
+	version[0] = 72;
+	version[1] = 1;
+	version[2] = 0;
+	version[3] = 0;
+}
+
 const char *__cdecl u_errorName(UErrorCode code)
 {
 	switch (code) {
 	case U_ZERO_ERROR: return "U_ZERO_ERROR";
+	case U_USING_FALLBACK_WARNING: return "U_USING_FALLBACK_WARNING";
+	case U_USING_DEFAULT_WARNING: return "U_USING_DEFAULT_WARNING";
+	case U_MISSING_RESOURCE_ERROR: return "U_MISSING_RESOURCE_ERROR";
 	case U_STRING_NOT_TERMINATED_WARNING: return "U_STRING_NOT_TERMINATED_WARNING";
 	case U_ILLEGAL_ARGUMENT_ERROR: return "U_ILLEGAL_ARGUMENT_ERROR";
 	case U_MEMORY_ALLOCATION_ERROR: return "U_MEMORY_ALLOCATION_ERROR";
@@ -433,44 +490,4 @@ INT __cdecl ucnv_convert(const char *to_name, const char *from_name, char *targe
 		target[bytes] = 0;
 	icu_free(wide);
 	return icu_finish(bytes, capacity, status);
-}
-
-/* Collation is the system's: the order of a locale is what CompareStringEx gives. */
-
-typedef struct UCollator {
-	WCHAR locale[LOCALE_NAME_MAX_LENGTH];
-	DWORD flags;
-} UCollator;
-
-enum { UCOL_PRIMARY = 0, UCOL_SECONDARY = 1, UCOL_TERTIARY = 2 };
-
-UCollator *__cdecl ucol_open(const char *locale, UErrorCode *status)
-{
-	if (U_FAILED(*status))
-		return NULL;
-	UCollator *collator = icu_alloc(sizeof *collator);
-	if (!collator) {
-		*status = U_MEMORY_ALLOCATION_ERROR;
-		return NULL;
-	}
-	UINT at = 0;
-	for (; locale && locale[at] && at + 1 < LOCALE_NAME_MAX_LENGTH; at++)
-		collator->locale[at] = locale[at] == '_' ? '-' : locale[at];
-	return collator;
-}
-
-void __cdecl ucol_close(UCollator *collator)
-{
-	icu_free(collator);
-}
-
-void __cdecl ucol_setStrength(UCollator *collator, INT strength)
-{
-	collator->flags = strength == UCOL_PRIMARY ? NORM_IGNORECASE | NORM_IGNORENONSPACE : strength == UCOL_SECONDARY ? NORM_IGNORECASE : 0;
-}
-
-INT __cdecl ucol_strcoll(const UCollator *collator, const UChar *left, INT left_length, const UChar *right, INT right_length)
-{
-	INT order = CompareStringEx(collator->locale, collator->flags, left, left_length, right, right_length, NULL, NULL, 0);
-	return order == CSTR_LESS_THAN ? -1 : order == CSTR_GREATER_THAN ? 1 : 0;
 }

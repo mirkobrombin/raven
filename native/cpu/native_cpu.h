@@ -115,6 +115,8 @@ public:
 	NativeContext callback_origin(size_t index) const;
 	// Diagnostics: RAX after an API result was delivered, without fetching the extended state.
 	uint64_t result_register() const;
+	// The general registers alone, without the extended state that context() also reads.
+	user_regs_struct general_registers() const;
 	// Diagnostics: a hardware write watchpoint (eight bytes) that reports as a fault with si_code TRAP_HWBKPT; address zero clears it.
 	void watch_write(uint64_t address);
 	// Diagnostics: single-step the next count instructions of the guest, reporting each instruction pointer to the sink.

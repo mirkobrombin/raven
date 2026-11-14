@@ -136,6 +136,12 @@ int main(int argc, char **argv)
 			"zero-alpha DIB lost AND mask");
 		save(directory / "known-zero-alpha.dib", zero_alpha);
 		save_icon(directory / "known-zero-alpha.icon", legacy);
+		// A 32-bit icon may end after its pixels, as the icons Windows Forms carries do: its alpha says which pixels are transparent.
+		const auto alpha_only = make_dib(32);
+		const auto unmasked = raven::decode_icon_dib(std::span(alpha_only).first(alpha_only.size() - 8));
+		for (size_t pixel = 0; pixel < alphas.size(); ++pixel)
+			check(unmasked.and_mask[pixel] == (alphas[pixel] == 0) && unmasked.color.rgba[pixel * 4 + 3] == alphas[pixel],
+				"32-bit DIB without an AND mask differs");
 		const auto valid = make_dib(8);
 		rejected([&] { raven::decode_icon_dib({}); }, "truncated");
 		for (size_t size : {4U, 39U, 40U, 1063U, 1079U})

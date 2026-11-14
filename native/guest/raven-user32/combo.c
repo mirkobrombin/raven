@@ -466,7 +466,8 @@ static LRESULT create_children(HWND window, combo_state *state, const CREATESTRU
 	/* For a popup that parameter would name a menu, so its identifier is set apart. */
 	SetWindowLongPtrW(state->list, GWLP_ID, LIST_ID);
 	if (kind != CBS_DROPDOWNLIST) {
-		DWORD edit_style = WS_CHILD | WS_VISIBLE | ES_COMBO | ES_LEFT | ES_NOHIDESEL;
+		/* The field shows its selection only while it has the focus: programs select its text whether or not it does. */
+		DWORD edit_style = WS_CHILD | WS_VISIBLE | ES_COMBO | ES_LEFT;
 		if (style & CBS_AUTOHSCROLL)
 			edit_style |= ES_AUTOHSCROLL;
 		if (style & CBS_OEMCONVERT)

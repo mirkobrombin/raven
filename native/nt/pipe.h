@@ -98,5 +98,9 @@ bool native_pipe_transfer(KernelContext &context, ApiCall &call, bool reading);
 // Reports an overlapped transfer on a file handle that finished inside the call: the OVERLAPPED gets the status and count, its event is
 // set, and the file's completion port receives a packet unless the handle skips packets for transfers that succeed at once.
 void complete_file_io(KernelContext &context, FileObject &file, uint64_t overlapped, size_t width, uint32_t error, uint64_t bytes);
+// Reports an overlapped operation that finished after its call returned: the OVERLAPPED gets the status and count, its event is set and
+// the port, when there is one, receives a packet.
+void finish_pending_io(KernelContext &context, const std::shared_ptr<CompletionPort> &port, uint64_t key, uint64_t overlapped, size_t width,
+	uint32_t error, uint64_t bytes);
 
 }

@@ -633,6 +633,10 @@ std::u16string NativePaths::library_location(std::u16string_view image_path, std
 		lower.push_back(character >= u'A' && character <= u'Z' ? char(character + 32) : char(character));
 	if (std::find(std::begin(runtime_components), std::end(runtime_components), lower) != std::end(runtime_components))
 		return system_directory(wide) + u"\\" + std::u16string(name);
+	// So are Direct2D, DirectWrite and Windows Animation for 64-bit programs, served by files of other names, with or without the extension.
+	const auto bare = lower.ends_with(".dll") ? lower.substr(0, lower.size() - 4) : lower;
+	if (wide && (bare == "d2d1" || bare == "dwrite" || bare == "uianimation"))
+		return system_directory(wide) + u"\\" + std::u16string(bare.begin(), bare.end()) + u".dll";
 	// A library a side-by-side assembly of the program's context declares comes from the assembly's folder.
 	if (const auto folder = activation_contexts().library_folder(lower))
 		return dos(*folder) + u"\\" + std::u16string(name);

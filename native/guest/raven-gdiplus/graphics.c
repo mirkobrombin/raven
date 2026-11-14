@@ -2144,18 +2144,40 @@ GpStatus GDIPAPI GdipDrawImagePointRectI(GpGraphics *graphics, GpImage *image, I
 	return GdipDrawImagePointRect(graphics, image, (REAL)x, (REAL)y, (REAL)sx, (REAL)sy, (REAL)sw, (REAL)sh, unit);
 }
 
+// The image is drawn as the effect leaves it: its source rectangle rendered through the effect first, then placed by the transform.
 GpStatus GDIPAPI GdipDrawImageFX(GpGraphics *graphics, GpImage *image, GpRectF *source, GpMatrix *matrix, void *effect, GpImageAttributes *attributes, GpUnit unit)
 {
-	// Effects themselves cannot be created here, so only the image, its source rectangle and the transform remain.
-	(void)effect;
 	if (!graphics || !image)
 		return InvalidParameter;
 	GpRectF whole = {0.0f, 0.0f, (REAL)image->width, (REAL)image->height};
-	const GpRectF *from = source ? source : &whole;
-	GpPointF points[3] = {{0.0f, 0.0f}, {from->Width, 0.0f}, {0.0f, from->Height}};
+	GpRectF from = source ? *source : whole;
+	if (source && unit != UnitPixel) {
+		REAL factor = gp_unit_scale(graphics, unit, image->dpi_x);
+		from.X *= factor;
+		from.Y *= factor;
+		from.Width *= factor;
+		from.Height *= factor;
+	}
+	GpPointF points[3] = {{0.0f, 0.0f}, {from.Width, 0.0f}, {0.0f, from.Height}};
+	if (!effect || image->type != ImageTypeBitmap) {
+		if (matrix)
+			gp_matrix_apply(matrix, points, 3);
+		return GdipDrawImagePointsRect(graphics, image, points, 3, from.X, from.Y, from.Width, from.Height, UnitPixel, attributes, NULL, NULL);
+	}
+	RECT area = {(LONG)gp_floor(from.X), (LONG)gp_floor(from.Y), (LONG)gp_ceil(from.X + from.Width), (LONG)gp_ceil(from.Y + from.Height)};
+	GpImage *rendered;
+	INT grow;
+	GpStatus status = gp_effect_render(effect, image, &area, &rendered, &grow);
+	if (status != Ok)
+		return status;
+	// Edges the effect expanded reach past the source rectangle on every side.
+	REAL width = (REAL)rendered->width, height = (REAL)rendered->height;
+	GpPointF placed[3] = {{(REAL)-grow, (REAL)-grow}, {width - grow, (REAL)-grow}, {(REAL)-grow, height - grow}};
 	if (matrix)
-		gp_matrix_apply(matrix, points, 3);
-	return GdipDrawImagePointsRect(graphics, image, points, 3, from->X, from->Y, from->Width, from->Height, source ? unit : UnitPixel, attributes, NULL, NULL);
+		gp_matrix_apply(matrix, placed, 3);
+	status = GdipDrawImagePointsRect(graphics, rendered, placed, 3, 0.0f, 0.0f, width, height, UnitPixel, attributes, NULL, NULL);
+	GdipDisposeImage(rendered);
+	return status;
 }
 
 GpStatus GDIPAPI GdipCreateBitmapFromGraphics(INT width, INT height, GpGraphics *graphics, GpImage **out)

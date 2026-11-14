@@ -236,7 +236,13 @@ struct DesktopWindow {
 	bool visible = false;
 	bool painting = false, erase_pending = false;
 	DesktopRegion update{};
+	// A window with no client area still has its frame to paint once invalidated: on Windows the update region takes in the
+	// non-client area, and the WM_PAINT it raises has BeginPaint send WM_NCPAINT, as an empty MFC toolbar draws its gripper then.
+	bool frame_pending = false;
 	uint64_t update_generation=0;
+	// The update region is part of the client area: a window left with no client area has none to paint, whatever was invalidated
+	// while it had one. paint.net lays a label out to no height and makes a bitmap of its size when it paints.
+	bool needs_paint() const { return (!update.empty() && width>0 && height>0) || frame_pending; }
 	// Since when a top-level window has waited for its controls' paint before the compositor shows it (see NativeWindows::present).
 	std::optional<std::chrono::steady_clock::time_point> present_waiting{};
 	// Whether the window has been shown on the screen once: until then it waits longer for its first paint.
@@ -270,6 +276,8 @@ struct DesktopWindow {
 	// of the root it came from: a host window of its own would be placed by the compositor rather than where the program put it.
 	uint64_t shown_on = 0;
 	uint64_t order = 0;
+	// Windows links a new window into its parent's z-order only after WM_NCCREATE; until then sibling walks do not see it.
+	bool linked = true;
 	// Outer rectangle to return to when a maximized or minimized window is restored.
 	DesktopRect restore{};
 	std::map<std::u16string,uint64_t> properties{};
@@ -357,7 +365,8 @@ public:
 	std::vector<uint64_t> region_handles() const;
 	uint64_t window_root(uint64_t handle) const;
 	// Children of a window in z-order, bottom to top. Top-level windows are the children of window zero.
-	std::vector<uint64_t> child_windows(uint64_t parent) const;
+	// Bottom to top. A window still in WM_NCCREATE is listed only with `unlinked`, for the walks that end its parent.
+	std::vector<uint64_t> child_windows(uint64_t parent, bool unlinked = false) const;
 	// Moves a window to the top or bottom of its siblings.
 	void restack(uint64_t window,bool top);
 	bool is_child(uint64_t parent,uint64_t child) const;

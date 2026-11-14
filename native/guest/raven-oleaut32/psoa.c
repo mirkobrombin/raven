@@ -573,6 +573,28 @@ static BOOL plain_record(ITypeInfo *info)
 	return plain;
 }
 
+/* A record that holds strings, pointers or interfaces crosses field by field, each as the value it is: NGen hands its worker one. */
+typedef void (*field_action)(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data);
+
+static void each_field(ITypeInfo *info, void *record, field_action action, void *context)
+{
+	TYPEATTR *attr;
+	if (FAILED(ITypeInfo_GetTypeAttr(info, &attr)))
+		return;
+	for (WORD index = 0; index < attr->cVars; index++) {
+		VARDESC *desc;
+		if (FAILED(ITypeInfo_GetVarDesc(info, index, &desc)))
+			continue;
+		action(context, info, &desc->elemdescVar.tdesc, (BYTE *)record + desc->oInst);
+		ITypeInfo_ReleaseVarDesc(info, desc);
+	}
+	ITypeInfo_ReleaseTypeAttr(info, attr);
+}
+
+static void put_field(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data);
+static void get_field(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data);
+static void free_field(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data);
+
 /* One value of a described type, read from where it lies in memory. A pointer crosses as what it points to. */
 static void put_value(writer *out, ITypeInfo *info, const TYPEDESC *desc, const void *data)
 {
@@ -637,7 +659,7 @@ static void put_value(writer *out, ITypeInfo *info, const TYPEDESC *desc, const 
 		if (plain_record(type.info))
 			put(out, data, type.size);
 		else
-			out->failed = DISP_E_BADVARTYPE;
+			each_field(type.info, (void *)data, put_field, out);
 		break;
 	case VT_VOID: case VT_CARRAY: case VT_USERDEFINED:
 		out->failed = DISP_E_BADVARTYPE;
@@ -741,12 +763,16 @@ static void get_value(reader *in, ITypeInfo *info, const TYPEDESC *desc, void *d
 	case VT_DISPATCH:
 		*(IUnknown **)data = get_interface(in, &IID_IDispatch);
 		break;
-	case VT_RECORD: {
-		const void *source = get(in, type.size);
-		if (source)
-			CopyMemory(data, source, type.size);
+	case VT_RECORD:
+		if (plain_record(type.info)) {
+			const void *source = get(in, type.size);
+			if (source)
+				CopyMemory(data, source, type.size);
+		} else {
+			ZeroMemory(data, type.size);
+			each_field(type.info, data, get_field, in);
+		}
 		break;
-	}
 	default: {
 		const ULONG size = value_size(type.vt, 0);
 		const void *source = get(in, size);
@@ -799,8 +825,28 @@ static void free_value(ITypeInfo *info, const TYPEDESC *desc, void *data)
 			IUnknown_Release(*(IUnknown **)data);
 		*(IUnknown **)data = NULL;
 		break;
+	case VT_RECORD:
+		if (!plain_record(type.info))
+			each_field(type.info, data, free_field, NULL);
+		break;
 	}
 	resolved_clear(&type);
+}
+
+static void put_field(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data)
+{
+	put_value(context, info, desc, data);
+}
+
+static void get_field(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data)
+{
+	get_value(context, info, desc, data);
+}
+
+static void free_field(void *context, ITypeInfo *info, const TYPEDESC *desc, void *data)
+{
+	(void)context;
+	free_value(info, desc, data);
 }
 
 /* The proxy. Its interface is a table of thunks, one per slot, that hand the arguments as they lie on the stack to proxy_call. */
@@ -840,7 +886,7 @@ static void *argument_at(ITypeInfo *info, const TYPEDESC *desc, ULONG_PTR *argum
 			const VARTYPE vt = type.vt;
 			const ULONG size = value_size(vt, type.size);
 			resolved_clear(&type);
-			if (vt == VT_VARIANT || vt == VT_DECIMAL || (vt == VT_RECORD && size > 8))
+			if (vt == VT_VARIANT || vt == VT_DECIMAL || (vt == VT_RECORD && size != 1 && size != 2 && size != 4 && size != 8))
 				return (void *)arguments[position];
 		}
 		if (position >= 1 && position <= 3 && is_float(info, desc))
@@ -1189,8 +1235,26 @@ static void WINAPI stub_disconnect(IRpcStubBuffer *iface)
 }
 
 /* How the raw call passes each argument. */
+/* A record passed by value that x64 hands over as a pointer to a copy: one whose size is not that of a register's piece. */
+static BOOL record_by_pointer(ITypeInfo *info, const TYPEDESC *desc)
+{
+#ifdef _WIN64
+	resolved type;
+	if (desc->vt == VT_PTR || FAILED(resolve(info, desc, &type)))
+		return FALSE;
+	const BOOL record = type.vt == VT_RECORD, sized = type.size == 1 || type.size == 2 || type.size == 4 || type.size == 8;
+	resolved_clear(&type);
+	return record && !sized;
+#else
+	(void)info, (void)desc;
+	return FALSE;
+#endif
+}
+
 static VARTYPE passed_as(ITypeInfo *info, const TYPEDESC *desc)
 {
+	if (record_by_pointer(info, desc))
+		return VT_UI8;
 	resolved type;
 	if (desc->vt == VT_PTR || FAILED(resolve(info, desc, &type)))
 		return sizeof(void *) == 8 ? VT_UI8 : VT_UI4;
@@ -1227,6 +1291,7 @@ static HRESULT WINAPI stub_invoke(IRpcStubBuffer *iface, RPCOLEMESSAGE *message,
 	VARIANTARG values[64], *pointers[64];
 	VARTYPE types[64];
 	void *storage[64];
+	BOOL copied[64];
 	block *saved = call_blocks;
 	call_blocks = NULL;
 	reader request = {message->Buffer, message->cbBuffer, 0, S_OK};
@@ -1238,6 +1303,22 @@ static HRESULT WINAPI stub_invoke(IRpcStubBuffer *iface, RPCOLEMESSAGE *message,
 		VariantInit(&values[index]);
 		V_VT(&values[index]) = types[index];
 		storage[index] = NULL;
+		copied[index] = record_by_pointer(info, &element->tdesc);
+		if (copied[index]) {
+			/* The callee gets the record as x64 passes one by value: a pointer to a copy of the caller's. */
+			resolved record;
+			void *copy = NULL;
+			if (SUCCEEDED(resolve(info, &element->tdesc, &record))) {
+				copy = block_take(&call_blocks, record.size);
+				resolved_clear(&record);
+			}
+			if (copy)
+				get_value(&request, info, &element->tdesc, copy);
+			else
+				request.failed = E_OUTOFMEMORY;
+			*(void **)&V_UI8(&values[index]) = copy;
+			continue;
+		}
 		if (types[index] == VT_VARIANT || types[index] == VT_DECIMAL) {
 			if ((flags & PARAMFLAG_FIN) || !(flags & PARAMFLAG_FOUT))
 				get_value(&request, info, &element->tdesc, &values[index]);
@@ -1282,6 +1363,11 @@ static HRESULT WINAPI stub_invoke(IRpcStubBuffer *iface, RPCOLEMESSAGE *message,
 		const ELEMDESC *element = &desc->lprgelemdescParam[index];
 		if (types[index] == VT_VARIANT || types[index] == VT_DECIMAL) {
 			VariantClear(&values[index]);
+			continue;
+		}
+		if (copied[index]) {
+			if (*(void **)&V_UI8(&values[index]))
+				free_value(info, &element->tdesc, *(void **)&V_UI8(&values[index]));
 			continue;
 		}
 		if (element->tdesc.vt == VT_PTR) {

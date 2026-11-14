@@ -1440,6 +1440,50 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 			if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0)
 				throw uint32_t(87);
 			const auto pixels = source->pixels();
+			if (painter.bitmap.depth == 32) {
+				// The usual case, a surface of 32 bits: the rectangles the clip leaves are blended row by row, straight between the two
+				// surfaces. Windows redraw themselves through this call many times a second.
+				const int64_t left = int64_t(dx) + destination.origin_x, top = int64_t(dy) + destination.origin_y;
+				const int64_t x0 = std::max<int64_t>(left, 0), y0 = std::max<int64_t>(top, 0);
+				const int64_t x1 = std::min<int64_t>(left + dw, painter.bitmap.width), y1 = std::min<int64_t>(top + dh, painter.bitmap.height);
+				const bool per_pixel = format & 1;
+				bool drawn = false;
+				if (x0 < x1 && y0 < y1)
+					for (const auto &area : destination.paintable(x0, y0, x1, y1))
+						for (int64_t device_y = area.top; device_y < area.bottom; ++device_y) {
+							const int64_t source_y = sy + (device_y - top) * sh / dh;
+							if (source_y < 0 || source_y >= source->height)
+								continue;
+							const size_t row = source->top_down ? size_t(source_y) : source->height - 1 - size_t(source_y);
+							const uint8_t *from = &pixels[row * source->width * 4];
+							uint8_t *to = painter.pixel_pointer(area.left, device_y);
+							for (int64_t device_x = area.left; device_x < area.right; ++device_x, to += 4) {
+								const int64_t source_x = sw == dw ? sx + (device_x - left) : sx + (device_x - left) * sw / dw;
+								if (source_x < 0 || source_x >= source->width)
+									continue;
+								const uint8_t *p = from + size_t(source_x) * 4;
+								if (per_pixel) {
+									// Premultiplied source: scaled by the constant alpha, then composed with the pixel's own alpha.
+									const uint32_t keep = 255 - p[3] * constant / 255;
+									to[0] = uint8_t(std::min(p[0] * constant / 255 + to[0] * keep / 255, 255u));
+									to[1] = uint8_t(std::min(p[1] * constant / 255 + to[1] * keep / 255, 255u));
+									to[2] = uint8_t(std::min(p[2] * constant / 255 + to[2] * keep / 255, 255u));
+								} else {
+									to[0] = uint8_t((p[0] * constant + to[0] * (255 - constant)) / 255);
+									to[1] = uint8_t((p[1] * constant + to[1] * (255 - constant)) / 255);
+									to[2] = uint8_t((p[2] * constant + to[2] * (255 - constant)) / 255);
+								}
+								to[3] = 0;
+								drawn = true;
+							}
+						}
+				if (drawn) {
+					painter.mark();
+					touched(destination);
+				}
+				call.ret(1);
+				return;
+			}
 			for (int32_t y = 0; y < dh; ++y)
 				for (int32_t x = 0; x < dw; ++x) {
 					const int64_t device_x = int64_t(dx) + x + destination.origin_x, device_y = int64_t(dy) + y + destination.origin_y;

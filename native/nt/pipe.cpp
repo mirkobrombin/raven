@@ -322,6 +322,12 @@ void complete_file_io(KernelContext &context, FileObject &file, uint64_t overlap
 	finish_io(context, file.port, file.key, overlapped, width, error, bytes, !(file.skip_port_on_success && !error));
 }
 
+void finish_pending_io(KernelContext &context, const std::shared_ptr<CompletionPort> &port, uint64_t key, uint64_t overlapped, size_t width,
+	uint32_t error, uint64_t bytes)
+{
+	finish_io(context, port, key, overlapped, width, error, bytes);
+}
+
 PipeObject::~PipeObject()
 {
 	if (listener && listener->instances)

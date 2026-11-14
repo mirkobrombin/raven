@@ -2,7 +2,8 @@
 #include <windows.h>
 #include <winternl.h>
 
-// FoldStringW's mappings and the volume of an open file through NtQueryVolumeInformationFile, as setup programs call them.
+// FoldStringW's mappings, and the volume of an open file and the file itself through NtQueryVolumeInformationFile and
+// NtQueryInformationFile, as setup programs call them.
 
 typedef struct {
 	ULONG FileSystemAttributes;
@@ -49,6 +50,19 @@ int raven_entry(void)
 	if (NtQueryVolumeInformationFile(file, &status, &buffer, sizeof(buffer), (FS_INFORMATION_CLASS)3) || status.Information != 24 ||
 		buffer.sizes.BytesPerSector != 512 || !buffer.sizes.TotalAllocationUnits.QuadPart) return 14;
 	if (NtQueryVolumeInformationFile(file, &status, &buffer, sizeof(buffer), (FS_INFORMATION_CLASS)99) != (NTSTATUS)0xc0000003) return 15;
+	// The file: its times and attributes, its sizes and that it is a directory, its name on the volume, where it is read from; an
+	// unknown class is refused.
+	union { FILE_BASIC_INFORMATION basic; FILE_STANDARD_INFORMATION standard; FILE_POSITION_INFORMATION position; BYTE bytes[128]; } file_buffer;
+	if (NtQueryInformationFile(file, &status, &file_buffer, sizeof(file_buffer), FileBasicInformation) || status.Information != 40 ||
+		!(file_buffer.basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !file_buffer.basic.LastWriteTime.QuadPart) return 16;
+	if (NtQueryInformationFile(file, &status, &file_buffer, sizeof(file_buffer), FileStandardInformation) || status.Information != 24 ||
+		!file_buffer.standard.Directory) return 17;
+	if (NtQueryInformationFile(file, &status, &file_buffer, sizeof(file_buffer), (FILE_INFORMATION_CLASS)9) || status.Information != 4 + 16 ||
+		*(ULONG *)file_buffer.bytes != 16 || !same((WCHAR *)(file_buffer.bytes + 4), L"\\Windows", 8)) return 18;
+	if (NtQueryInformationFile(file, &status, &file_buffer, sizeof(file_buffer), (FILE_INFORMATION_CLASS)14) || status.Information != 8 ||
+		file_buffer.position.CurrentByteOffset.QuadPart) return 19;
+	if (NtQueryInformationFile(file, &status, &file_buffer, 8, FileBasicInformation) != (NTSTATUS)0xc0000004) return 20;
+	if (NtQueryInformationFile(file, &status, &file_buffer, sizeof(file_buffer), (FILE_INFORMATION_CLASS)999) != (NTSTATUS)0xc0000003) return 21;
 	CloseHandle(file);
 	return 0;
 }

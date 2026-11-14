@@ -107,6 +107,17 @@ static int parts(void)
 	/* A rebar's background, which MFC control bars draw behind their toolbars, is the window surface. */
 	if (drawn(L"Rebar", RP_BACKGROUND, 20, 10) != SURFACE)
 		return 30;
+	/* A progress bar's track (PP_BAR) covers its whole rectangle, which KeePass draws its quality bar over without clearing it first. */
+	if (drawn(L"Progress", 1, 1, 1) == RGB(0, 0, 0) || drawn(L"Progress", 1, 38, 18) == RGB(0, 0, 0))
+		return 31;
+	/* A spin button, up (1) or down (2), covers its whole rectangle, which Windows Forms draws it over without clearing it first, as
+	   the number boxes of paint.net do. */
+	if (drawn(L"Spin", 1, 0, 0) == RGB(0, 0, 0) || drawn(L"Spin", 2, 39, 19) == RGB(0, 0, 0))
+		return 32;
+	theme = OpenThemeData(NULL, L"Spin");
+	if (!theme || IsThemeBackgroundPartiallyTransparent(theme, 1, 0))
+		return 33;
+	CloseThemeData(theme);
 	theme = OpenThemeData(NULL, L"Tooltip");
 	if (!theme || !IsThemeBackgroundPartiallyTransparent(theme, TTP_STANDARD, 0))
 		return 25;
