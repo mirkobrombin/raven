@@ -871,6 +871,30 @@ static const std::vector<uint8_t> &window_theme_prelude()
 	return code;
 }
 
+// Whether visual styles are off is settled as the process starts, from the environment or the prefix registry, and holds for its life.
+static bool classic_theme()
+{
+	const char *chosen = std::getenv("RAVEN_THEME");
+	return chosen && std::string_view(chosen) == "classic";
+}
+
+// Whether visual styles are on, published once the prefix registry has had its say as the process starts: 1 without them, 2 with
+// them, nothing before. IsThemeActive, IsAppThemed and IsCompositionActive answer it; GetThemeAppProperties gives every style flag
+// when they are on, none otherwise.
+static constexpr size_t theme_state = 0x790;
+
+static const std::vector<uint8_t> &theme_state_prelude(bool properties)
+{
+	static const std::vector<uint8_t> state{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x0e, 0x41, 0x8b, 0x82, 0x90, 0x07, 0x00, 0x00, 0x85, 0xc0, 0x74, 0x03,
+		0xff, 0xc8, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static const std::vector<uint8_t> flags{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x11, 0x41, 0x8b, 0x82, 0x90, 0x07, 0x00, 0x00, 0x85, 0xc0, 0x74, 0x06,
+		0xff, 0xc8, 0x6b, 0xc0, 0x07, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(theme_state == 0x790, "the theme state preludes' offset is written into their code");
+	return properties ? flags : state;
+}
+
 static const std::vector<uint8_t> &file_name_prelude()
 {
 	static const std::vector<uint8_t> code{
@@ -1681,11 +1705,10 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 	if ((module == "shlwapi.dll" || module == "kernelbase.dll") && name == "PathFindFileNameW")
 		return &file_name_prelude();
 	// Without visual styles no window has a theme, and the answer needs no trip to the runtime.
-	if (module == "uxtheme.dll" && name == "GetWindowTheme" && [] {
-			const char *chosen = std::getenv("RAVEN_THEME");
-			return chosen && std::string_view(chosen) == "classic";
-		}())
+	if (module == "uxtheme.dll" && name == "GetWindowTheme" && classic_theme())
 		return &window_theme_prelude();
+	if (module == "uxtheme.dll" && (name == "IsThemeActive" || name == "IsAppThemed" || name == "IsCompositionActive" || name == "GetThemeAppProperties"))
+		return &theme_state_prelude(name == "GetThemeAppProperties");
 	if (module == "user32.dll" && name == "TranslateMessage")
 		return &translate_message_prelude();
 	if (module == "user32.dll" && name == "CallMsgFilterW")
@@ -3250,6 +3273,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	desktop.register_image_api(desktop_api);
 	NativeRegistry hive(prefix.registry_file());
 	apply_registry_settings(hive);
+	__atomic_store_n(&served_block[theme_state / 8], classic_theme() ? 1 : 2, __ATOMIC_RELEASE);
 	paths.set_package_roots([&hive] { return virtual_package_roots(hive); });
 	register_registry_api(api_registry, kernel, hive);
 	register_service_api(api_registry, kernel, hive);
