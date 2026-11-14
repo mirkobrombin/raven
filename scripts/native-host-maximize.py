@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
+RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
 WINDOW = "title:frame restore"
 FAILURES = {
     10: "the compositor maximized the window and the program did not hear SC_MAXIMIZE",

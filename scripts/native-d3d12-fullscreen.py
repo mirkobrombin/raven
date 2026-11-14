@@ -22,7 +22,7 @@ from lavapipe import icd as lavapipe_icd
 
 SIZE = 256
 GPU = len(sys.argv) > 6 and sys.argv[6] == "gpu"
-RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-{'gpu' if GPU else 'runtime'}")
+RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / f"raven-labwc-{'gpu' if GPU else 'runtime'}"
 
 
 def environment():
