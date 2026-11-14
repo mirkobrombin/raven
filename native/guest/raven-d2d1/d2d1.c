@@ -6693,19 +6693,6 @@ static void link_render(const struct link *link, const D2D1_RECT_L *area, float 
  * Each works on its input's pixels in place. Those that change colors work on them unpremultiplied, as Direct2D's own do. */
 static float fpow(float x, float y);
 
-/* The sRGB curve each way, odd for the negative values extended ranges hold. */
-static float extended_to_linear(float c)
-{
-	const float a = c < 0 ? -c : c, r = a <= 0.04045f ? a / 12.92f : fpow((a + 0.055f) / 1.055f, 2.4f);
-	return c < 0 ? -r : r;
-}
-
-static float extended_to_srgb(float c)
-{
-	const float a = c < 0 ? -c : c, r = a <= 0.0031308f ? a * 12.92f : 1.055f * fpow(a, 1 / 2.4f) - 0.055f;
-	return c < 0 ? -r : r;
-}
-
 /* Properties of system effects the headers here leave out, by their documented indices and values. */
 enum {
 	COLOR_MANAGEMENT_SOURCE = 0, COLOR_MANAGEMENT_DESTINATION = 2, COLOR_MANAGEMENT_ALPHA_MODE = 4,
@@ -6723,16 +6710,250 @@ static BOOL effect_property(struct effect *effect, UINT32 index, void *data, UIN
 	return TRUE;
 }
 
-/* Whether a color context's values are linear light: scRGB, a DXGI space of gamma 1.0, or a simple profile of that gamma. Any other is
- * taken as sRGB, which is what the profiles programs give for the screen describe. */
-static BOOL linear_context(IUnknown *context)
+/* What a color context says of its values: the curve of each channel, from the value stored to light and back, and the colorants,
+ * which place its red, green and blue in the profile connection space. sRGB and scRGB, the DXGI spaces and the simple profiles say it
+ * outright; a profile is read for the tags a display profile of the matrix and curve kind has (ICC.1, clause 8.3): the colorants, and
+ * for each channel a curve that is linear, a gamma, a table or a parametric function. A profile of any other kind is taken as sRGB. */
+enum { CURVE_OF_SRGB, CURVE_OF_LIGHT, CURVE_OF_GAMMA, CURVE_OF_FUNCTION, CURVE_OF_TABLE };
+
+struct channel_curve {
+	int kind;
+	UINT32 function, entries;
+	/* The parameters of a parametric curve in the order the profile gives them: g, a, b, c, d, e, f. */
+	float g, a, b, c, d, e, f;
+	const BYTE *table;
+};
+
+struct color_model {
+	struct channel_curve curves[3];
+	/* A column for each of red, green and blue. */
+	float colorants[9];
+};
+
+static const float srgb_colorants[9] = {0.4360f, 0.3851f, 0.1431f, 0.2225f, 0.7169f, 0.0606f, 0.0139f, 0.0971f, 0.7141f};
+
+static UINT32 profile_u32(const BYTE *at)
+{
+	return (UINT32)at[0] << 24 | (UINT32)at[1] << 16 | (UINT32)at[2] << 8 | at[3];
+}
+
+static float profile_fixed(const BYTE *at)
+{
+	return (float)(INT32)profile_u32(at) / 65536.0f;
+}
+
+/* The element a tag of the profile names, or NULL when the profile has none that fits in it. */
+static const BYTE *profile_tag(const BYTE *profile, UINT32 size, const char *name, UINT32 *length)
+{
+	UINT32 count, index;
+	if (size < 132)
+		return NULL;
+	count = profile_u32(profile + 128);
+	for (index = 0; index < count && 132 + (index + 1) * 12 <= size; ++index) {
+		const BYTE *entry = profile + 132 + index * 12;
+		const UINT32 at = profile_u32(entry + 4), bytes = profile_u32(entry + 8);
+		if (memcmp(entry, name, 4))
+			continue;
+		if (at > size || bytes > size - at)
+			return NULL;
+		*length = bytes;
+		return profile + at;
+	}
+	return NULL;
+}
+
+static BOOL profile_curve(const BYTE *profile, UINT32 size, const char *name, struct channel_curve *curve)
+{
+	static const UINT32 parameters[5] = {1, 3, 4, 5, 7};
+	UINT32 length = 0, index;
+	const BYTE *element = profile_tag(profile, size, name, &length);
+	float *values = &curve->g;
+	memset(curve, 0, sizeof(*curve));
+	if (!element || length < 12)
+		return FALSE;
+	if (!memcmp(element, "curv", 4)) {
+		const UINT32 entries = profile_u32(element + 8);
+		if (entries > (length - 12) / 2)
+			return FALSE;
+		if (!entries)
+			curve->kind = CURVE_OF_LIGHT;
+		else if (entries == 1) {
+			curve->kind = CURVE_OF_GAMMA;
+			curve->g = (float)(element[12] << 8 | element[13]) / 256.0f;
+		} else {
+			curve->kind = CURVE_OF_TABLE;
+			curve->entries = entries;
+			curve->table = element + 12;
+		}
+		return curve->kind != CURVE_OF_GAMMA || curve->g > 0;
+	}
+	if (memcmp(element, "para", 4))
+		return FALSE;
+	curve->kind = CURVE_OF_FUNCTION;
+	curve->function = (UINT32)(element[8] << 8 | element[9]);
+	if (curve->function > 4 || length < 12 + parameters[curve->function] * 4)
+		return FALSE;
+	curve->a = 1;
+	for (index = 0; index < parameters[curve->function]; ++index)
+		values[index] = profile_fixed(element + 12 + index * 4);
+	if (curve->function < 3)
+		curve->c = curve->function == 2 ? curve->c : 0;
+	return curve->g > 0 && curve->a != 0 && (curve->function < 3 || curve->c != 0);
+}
+
+static void color_model_of(IUnknown *context, struct color_model *model)
 {
 	const struct color_context *color = (const struct color_context *)context;
-	if (!color)
+	static const char *const curves[3] = {"rTRC", "gTRC", "bTRC"}, *const colorants[3] = {"rXYZ", "gXYZ", "bXYZ"};
+	struct color_model read;
+	int channel, row;
+	memset(model, 0, sizeof(*model));
+	memcpy(model->colorants, srgb_colorants, sizeof(srgb_colorants));
+	if (!color || color->space == D2D1_COLOR_SPACE_SRGB)
+		return;
+	if (color->space == D2D1_COLOR_SPACE_SCRGB || (color->type == D2D1_COLOR_CONTEXT_TYPE_DXGI &&
+		color->dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709) || (color->type == D2D1_COLOR_CONTEXT_TYPE_SIMPLE &&
+		color->simple.gamma == D2D1_GAMMA1_G10)) {
+		for (channel = 0; channel < 3; ++channel)
+			model->curves[channel].kind = CURVE_OF_LIGHT;
+		return;
+	}
+	if (color->type != D2D1_COLOR_CONTEXT_TYPE_ICC || !color->profile || color->size < 132 || memcmp(color->profile + 16, "RGB ", 4) ||
+		memcmp(color->profile + 20, "XYZ ", 4))
+		return;
+	read = *model;
+	for (channel = 0; channel < 3; ++channel) {
+		UINT32 length = 0;
+		const BYTE *colorant = profile_tag(color->profile, color->size, colorants[channel], &length);
+		if (!colorant || length < 20 || !profile_curve(color->profile, color->size, curves[channel], &read.curves[channel]))
+			return;
+		for (row = 0; row < 3; ++row)
+			read.colorants[row * 3 + channel] = profile_fixed(colorant + 8 + row * 4);
+	}
+	*model = read;
+}
+
+/* A stored value as light. Values below zero, which the extended spaces hold, mirror those above it. */
+static float curve_light(const struct channel_curve *curve, float value)
+{
+	const float v = value < 0 ? -value : value;
+	float light = v;
+	switch (curve->kind) {
+	case CURVE_OF_SRGB: light = v <= 0.04045f ? v / 12.92f : fpow((v + 0.055f) / 1.055f, 2.4f); break;
+	case CURVE_OF_GAMMA: light = fpow(v, curve->g); break;
+	case CURVE_OF_FUNCTION:
+		if (curve->function >= 3 && v < curve->d)
+			light = curve->c * v + curve->f;
+		else if (curve->function < 3 && curve->function > 0 && v < -curve->b / curve->a)
+			light = curve->c;
+		else
+			light = fpow(curve->a * v + curve->b, curve->g) + (curve->function == 4 ? curve->e : curve->function == 2 ? curve->c : 0);
+		break;
+	case CURVE_OF_TABLE: {
+		const float place = (v > 1 ? 1 : v) * (curve->entries - 1);
+		const UINT32 low = (UINT32)place, high = low + 1 < curve->entries ? low + 1 : low;
+		const float first = (float)(curve->table[low * 2] << 8 | curve->table[low * 2 + 1]) / 65535.0f;
+		const float second = (float)(curve->table[high * 2] << 8 | curve->table[high * 2 + 1]) / 65535.0f;
+		light = first + (second - first) * (place - low);
+		break;
+	}
+	default: break;
+	}
+	return value < 0 ? -light : light;
+}
+
+/* Light as the value the curve stores for it: the curve read the other way. */
+static float curve_stored(const struct channel_curve *curve, float value)
+{
+	const float l = value < 0 ? -value : value;
+	float stored = l;
+	switch (curve->kind) {
+	case CURVE_OF_SRGB: stored = l <= 0.0031308f ? l * 12.92f : 1.055f * fpow(l, 1 / 2.4f) - 0.055f; break;
+	case CURVE_OF_GAMMA: stored = fpow(l, 1 / curve->g); break;
+	case CURVE_OF_FUNCTION: {
+		const float offset = curve->function == 4 ? curve->e : curve->function == 2 ? curve->c : 0;
+		if (curve->function >= 3 && l < curve->c * curve->d + curve->f)
+			stored = (l - curve->f) / curve->c;
+		else if (l <= offset)
+			stored = -curve->b / curve->a;
+		else
+			stored = (fpow(l - offset, 1 / curve->g) - curve->b) / curve->a;
+		break;
+	}
+	case CURVE_OF_TABLE: {
+		/* The table rises, so the place of a value in it is found by halving. */
+		UINT32 low = 0, high = curve->entries - 1;
+		const float wanted = (l > 1 ? 1 : l) * 65535.0f;
+		float first, second;
+		while (high - low > 1) {
+			const UINT32 middle = (low + high) / 2;
+			if ((float)(curve->table[middle * 2] << 8 | curve->table[middle * 2 + 1]) <= wanted)
+				low = middle;
+			else
+				high = middle;
+		}
+		first = (float)(curve->table[low * 2] << 8 | curve->table[low * 2 + 1]);
+		second = (float)(curve->table[high * 2] << 8 | curve->table[high * 2 + 1]);
+		stored = ((float)low + (second > first ? (wanted - first) / (second - first) : 0)) / (float)(curve->entries - 1);
+		break;
+	}
+	default: break;
+	}
+	return value < 0 ? -stored : stored;
+}
+
+/* The matrix that takes light in the first model's colorants to light in the second's, or FALSE when the two share their colorants,
+ * as sRGB and scRGB do, or the second's cannot be inverted. */
+static BOOL colorant_change(const struct color_model *from, const struct color_model *to, float *change)
+{
+	const float *m = to->colorants;
+	float inverse[9], determinant, difference = 0;
+	int row, column, index;
+	for (index = 0; index < 9; ++index) {
+		const float apart = from->colorants[index] - to->colorants[index];
+		difference += apart < 0 ? -apart : apart;
+	}
+	if (difference < 0.002f)
 		return FALSE;
-	return color->space == D2D1_COLOR_SPACE_SCRGB || (color->type == D2D1_COLOR_CONTEXT_TYPE_DXGI &&
-		(color->dxgi == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)) || (color->type == D2D1_COLOR_CONTEXT_TYPE_SIMPLE &&
-		color->simple.gamma == D2D1_GAMMA1_G10);
+	determinant = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+	if (determinant > -1e-6f && determinant < 1e-6f)
+		return FALSE;
+	inverse[0] = (m[4] * m[8] - m[5] * m[7]) / determinant;
+	inverse[1] = (m[2] * m[7] - m[1] * m[8]) / determinant;
+	inverse[2] = (m[1] * m[5] - m[2] * m[4]) / determinant;
+	inverse[3] = (m[5] * m[6] - m[3] * m[8]) / determinant;
+	inverse[4] = (m[0] * m[8] - m[2] * m[6]) / determinant;
+	inverse[5] = (m[2] * m[3] - m[0] * m[5]) / determinant;
+	inverse[6] = (m[3] * m[7] - m[4] * m[6]) / determinant;
+	inverse[7] = (m[1] * m[6] - m[0] * m[7]) / determinant;
+	inverse[8] = (m[0] * m[4] - m[1] * m[3]) / determinant;
+	for (row = 0; row < 3; ++row)
+		for (column = 0; column < 3; ++column)
+			change[row * 3 + column] = inverse[row * 3] * from->colorants[column] + inverse[row * 3 + 1] * from->colorants[3 + column] +
+				inverse[row * 3 + 2] * from->colorants[6 + column];
+	return TRUE;
+}
+
+/* Whether two curves store light the same way, a parametric curve that spells out sRGB's counting as sRGB. */
+static BOOL same_curve(const struct channel_curve *a, const struct channel_curve *b)
+{
+	const struct channel_curve *both[2] = {a, b};
+	int kinds[2], index;
+	for (index = 0; index < 2; ++index) {
+		const struct channel_curve *curve = both[index];
+		kinds[index] = curve->kind;
+		if (curve->kind == CURVE_OF_FUNCTION && curve->function == 3 && curve->g > 2.39f && curve->g < 2.41f && curve->a > 0.947f &&
+			curve->a < 0.949f && curve->b > 0.051f && curve->b < 0.053f && curve->c > 0.0773f && curve->c < 0.0775f && curve->d > 0.040f &&
+			curve->d < 0.041f)
+			kinds[index] = CURVE_OF_SRGB;
+	}
+	if (kinds[0] != kinds[1])
+		return FALSE;
+	if (kinds[0] == CURVE_OF_SRGB || kinds[0] == CURVE_OF_LIGHT)
+		return TRUE;
+	if (kinds[0] == CURVE_OF_TABLE)
+		return a->entries == b->entries && !memcmp(a->table, b->table, (size_t)a->entries * 2);
+	return a->function == b->function && !memcmp(&a->g, &b->g, 7 * sizeof(float));
 }
 
 static void unpremultiply(float *pixel)
@@ -6766,21 +6987,33 @@ static void system_pixels(struct effect *effect, float *pixels, size_t count)
 	} else if (same_guid(clsid, &CLSID_D2D1ColorManagement)) {
 		IUnknown *source = NULL, *destination = NULL;
 		UINT32 alpha_mode = COLOR_MANAGEMENT_PREMULTIPLIED;
-		BOOL from_linear, to_linear;
+		struct color_model from, to;
+		float change[9];
+		BOOL mixed, curved;
 		effect_property(effect, COLOR_MANAGEMENT_SOURCE, &source, sizeof(source));
 		effect_property(effect, COLOR_MANAGEMENT_DESTINATION, &destination, sizeof(destination));
 		effect_property(effect, COLOR_MANAGEMENT_ALPHA_MODE, &alpha_mode, sizeof(alpha_mode));
-		from_linear = linear_context(source);
-		to_linear = linear_context(destination);
-		if (from_linear == to_linear)
+		color_model_of(source, &from);
+		color_model_of(destination, &to);
+		mixed = colorant_change(&from, &to, change);
+		curved = !same_curve(&from.curves[0], &to.curves[0]) || !same_curve(&from.curves[1], &to.curves[1]) ||
+			!same_curve(&from.curves[2], &to.curves[2]);
+		if (!mixed && !curved)
 			return;
 		for (at = 0; at < count; ++at) {
-			float *pixel = pixels + at * 4;
+			float *pixel = pixels + at * 4, light[3];
 			int channel;
 			if (alpha_mode != COLOR_MANAGEMENT_STRAIGHT)
 				unpremultiply(pixel);
 			for (channel = 0; channel < 3; ++channel)
-				pixel[channel] = to_linear ? extended_to_linear(pixel[channel]) : extended_to_srgb(pixel[channel]);
+				light[channel] = curve_light(&from.curves[channel], pixel[channel]);
+			if (mixed) {
+				const float red = light[0], green = light[1], blue = light[2];
+				for (channel = 0; channel < 3; ++channel)
+					light[channel] = change[channel * 3] * red + change[channel * 3 + 1] * green + change[channel * 3 + 2] * blue;
+			}
+			for (channel = 0; channel < 3; ++channel)
+				pixel[channel] = curve_stored(&to.curves[channel], light[channel]);
 			if (alpha_mode != COLOR_MANAGEMENT_STRAIGHT)
 				premultiply(pixel);
 		}
