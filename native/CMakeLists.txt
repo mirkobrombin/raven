@@ -1480,6 +1480,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(frame_restore_test frame_restore_fixture raven-bootstrap)
             add_test(NAME native_frame_restore COMMAND frame_restore_test $<TARGET_FILE:raven-bootstrap> ${FRAME_RESTORE_FIXTURE})
             set_tests_properties(native_frame_restore PROPERTIES TIMEOUT 30)
+            set(OWNED_PLACE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/owned-place.exe)
+            add_custom_command(OUTPUT ${OWNED_PLACE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${OWNED_PLACE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/owned_place_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/owned_place_client.c VERBATIM)
+            add_custom_target(owned_place_fixture ALL DEPENDS ${OWNED_PLACE_FIXTURE})
+            add_executable(owned_place_test desktop/owned_place_test.cpp)
+            target_link_libraries(owned_place_test PRIVATE raven_cpu)
+            add_dependencies(owned_place_test owned_place_fixture raven-bootstrap)
+            add_test(NAME native_owned_place COMMAND owned_place_test $<TARGET_FILE:raven-bootstrap> ${OWNED_PLACE_FIXTURE})
+            set_tests_properties(native_owned_place PROPERTIES TIMEOUT 30)
         endif()
         set(INITIAL_MESSAGE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/initial-message-fixtures)
         add_custom_command(OUTPUT ${INITIAL_MESSAGE_FIXTURES}/client.exe ${INITIAL_MESSAGE_FIXTURES}/exit.exe
