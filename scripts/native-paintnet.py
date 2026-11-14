@@ -2,9 +2,10 @@
 """Install paint.net 5.2 through Raven from its own installer, and draw and save a picture in it as a person does.
 
 In a fresh prefix the installer from the archive dotPDN publishes runs with /auto. On an isolated headless compositor paint.net starts
-on the Direct3D libraries of the directory given, a stroke is drawn across the canvas with the brush, the mouse held down from its first
-point to its last, and the picture is saved as PNG through the Save As dialog and the save options that follow it. The file on the host is
-then read: its size, the white the canvas began with and the stroke where it was drawn.
+on the Direct3D libraries of the directory given, the blue of its palette is chosen and a stroke is drawn across the canvas with the
+brush, the mouse held down from its first point to its last, and the picture is saved as PNG through the Save As dialog and the save
+options that follow it. The file on the host is then read: its size, the white the canvas began with and the stroke where it was drawn,
+in the blue that was chosen.
 
 usage: native-paintnet.py RAVEN INSTALLER_ZIP VIRTUAL_POINTER DXVK_DIRECTORY EVIDENCE_DIR
 """
@@ -40,6 +41,10 @@ DRAWN = "*Untitled - Paint.NET 5.2"
 SAVED = "stroke.png - Paint.NET 5.2"
 # The stroke, from the window's corner: down to the right across the canvas and back to the left, clear of the tool windows.
 STROKE = ((260, 180), (520, 300), (380, 400))
+# The blue of the palette at the foot of the Colors window, from the window's corner, and the color it is. A color between black and
+# white shows whether paint.net keeps the color chosen: it works in linear light and brings its pictures back from it.
+PALETTE_BLUE = (150, 665)
+BLUE = (0, 38, 255)
 
 
 def install(raven, prefix, archive, directx, evidence):
@@ -73,6 +78,12 @@ def start(raven, prefix, program, directx, log):
                             env=env, stdout=log, stderr=log)
 
 
+def choose(pointer, screen, origin):
+    """A click on the palette's blue, which makes it the color the brush draws with."""
+    place = [str(origin[0] + PALETTE_BLUE[0]), str(origin[1] + PALETTE_BLUE[1])]
+    subprocess.run([str(pointer), str(screen[0]), str(screen[1]), *place], env=native_redist.environment(), check=True, timeout=60)
+
+
 def draw(pointer, screen, origin):
     """The brush pressed at the stroke's first point, dragged through the others and let go at the last."""
     points = [str(value) for x, y in STROKE for value in (origin[0] + x, origin[1] + y)]
@@ -99,15 +110,20 @@ def save(prefix, evidence):
 
 
 def check(saved):
-    """The file holds the white picture paint.net began with, 800 by 600, and the black stroke across it where it was drawn."""
+    """The file holds the white picture paint.net began with, 800 by 600, and the stroke across it where it was drawn, in its blue."""
     picture = Image.open(saved).convert("RGB")
     if picture.size != (800, 600):
         raise RuntimeError(f"the saved picture is {picture.size[0]} by {picture.size[1]}, not 800 by 600")
     pixels = picture.load()
-    dark = [(x, y) for y in range(600) for x in range(800) if sum(pixels[x, y]) < 200]
+    # The stroke's edge is smoothed into the white around it; its core is the blue alone.
+    dark = [(x, y) for y in range(600) for x in range(800) if pixels[x, y][0] < 200]
+    core = sum(1 for x, y in dark if all(abs(a - b) <= 8 for a, b in zip(pixels[x, y], BLUE)))
     white = sum(1 for y in range(600) for x in range(800) if pixels[x, y] == (255, 255, 255))
     if len(dark) < 400:
         raise RuntimeError(f"the saved picture holds {len(dark)} pixels of the stroke, too few for the stroke drawn")
+    if core < len(dark) // 4:
+        strongest = min((pixels[x, y] for x, y in dark), key=lambda color: color[0] + color[1])
+        raise RuntimeError(f"{core} of the stroke's {len(dark)} pixels are the blue chosen, {BLUE}; its strongest is {strongest}")
     if white < 800 * 600 - 6 * len(dark):
         raise RuntimeError(f"only {white} pixels of the saved picture are the white of the canvas")
     left, right = min(x for x, _ in dark), max(x for x, _ in dark)
@@ -142,6 +158,8 @@ def main():
                 time.sleep(30)
                 started = desktop.shot(evidence, "started")
                 origin = desktop.window_origin(started)
+                choose(pointer, started.size, origin)
+                time.sleep(2)
                 draw(pointer, started.size, origin)
                 desktop.wait_title(DRAWN, process, timeout=60)
                 desktop.shot(evidence, "drawn")
@@ -162,7 +180,7 @@ def main():
         finally:
             if compositor:
                 compositor.terminate()
-    print("PASS: paint.net 5.2 installed, drew a stroke with the brush and saved it as a PNG that holds it")
+    print("PASS: paint.net 5.2 installed, drew a stroke in the blue chosen and saved it as a PNG that holds it")
 
 
 if __name__ == "__main__":
