@@ -608,7 +608,7 @@ void *shader_layer(void *target, void *layer, UINT32 x, UINT32 y, UINT32 width, 
 	return kept;
 }
 
-HRESULT shader_layer_draw(void *target, void *layer, BOOL over)
+HRESULT shader_layer_draw(void *target, void *layer, BOOL over, UINT32 x, UINT32 y, UINT32 width, UINT32 height)
 {
 	static const float no_factor[4];
 	static const D3D11_SAMPLER_DESC point = {D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -623,10 +623,10 @@ HRESULT shader_layer_draw(void *target, void *layer, BOOL over)
 	struct painter *painter;
 	struct context_state state;
 	D3D11_TEXTURE2D_DESC desc;
-	D3D11_VIEWPORT viewport = {0, 0, 0, 0, 0, 1};
-	float area[4 * (1 + SHADER_INPUTS)] = {0};
+	D3D11_VIEWPORT viewport = {(float)x, (float)y, (float)width, (float)height, 0, 1};
+	float area[4 * (1 + SHADER_INPUTS)] = {(float)x, (float)y, (float)width, (float)height};
 	HRESULT result = E_FAIL;
-	if (!texture || !layer)
+	if (!texture || !layer || !width || !height)
 		return E_INVALIDARG;
 	InitOnceExecuteOnce(&runner.once, runner_init, NULL, NULL);
 	EnterCriticalSection(&runner.lock);
@@ -640,8 +640,6 @@ HRESULT shader_layer_draw(void *target, void *layer, BOOL over)
 	ID3D11Device_GetImmediateContext(device, &context);
 	if (!context)
 		goto done;
-	viewport.Width = area[2] = (float)desc.Width;
-	viewport.Height = area[3] = (float)desc.Height;
 	area[6] = 1.0f / (float)desc.Width;
 	area[7] = 1.0f / (float)desc.Height;
 	state_take(context, &state);

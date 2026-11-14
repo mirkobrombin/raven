@@ -38,9 +38,9 @@ HRESULT shader_draw(void *target, const BYTE *code, UINT32 size, const BYTE *con
  * layer, or NULL when it cannot be made, and the one given is then no more. */
 void *shader_layer(void *target, void *layer, UINT32 x, UINT32 y, UINT32 width, UINT32 height, const BYTE *bytes);
 
-/* Draws the whole layer into the texture it was made beside: over what the texture holds, as a premultiplied source goes over a
- * destination, or in its place. */
-HRESULT shader_layer_draw(void *target, void *layer, BOOL over);
+/* Draws the width by height pixels of the layer at (x, y) into the same place of the texture it was made beside: over what the
+ * texture holds, as a premultiplied source goes over a destination, or in its place. The rest of the texture stays as it was. */
+HRESULT shader_layer_draw(void *target, void *layer, BOOL over, UINT32 x, UINT32 y, UINT32 width, UINT32 height);
 
 void shader_layer_release(void *layer);
 

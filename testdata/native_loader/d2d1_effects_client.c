@@ -902,6 +902,33 @@ int raven_entry(void)
 		return 74;
 	if (!kept)
 		return 75;
+	/* A frame that draws part of the surface, inside a clip, leaves the rest as the last frame showed it: a program whose picture is
+	   larger than its window draws again only what changed. The part is cleared to white and the picture drawn in it; the square the
+	   last frame drew outside it is still there, on the picture. */
+	const D2D1_RECT_F part_clip = {60, 60, 300, 256};
+	const D2D1_COLOR_F white_color = {1, 1, 1, 1};
+	output = output_of(shown_swap);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)surface_context, &part_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &white_color);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)surface_context);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 76;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 76;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL part_drawn = pixel_is(SHOWN(100, 100), 0, 0, 255) && pixel_is(SHOWN(290, 100), 255, 255, 255);
+	const BOOL rest_left = pixel_is(SHOWN(44, 44), 0, 255, 0) && pixel_is(SHOWN(8, 8), 0, 0, 255) && pixel_is(SHOWN(20, 200), 0, 0, 255);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	if (!part_drawn)
+		return 77;
+	if (!rest_left)
+		return 78;
 	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)surface_bitmap);
 	IUnknown_Release((IUnknown *)green_brush);
 	IUnknown_Release((IUnknown *)shown_swap);

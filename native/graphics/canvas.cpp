@@ -25,9 +25,10 @@ struct Surface {
 	std::unique_ptr<SkCanvas> canvas;
 	// How many canvas saves each pushed clip or layer took, so that one pop undoes one push.
 	std::vector<int> pushes;
-	// The pixels a caller last took through changed(), and whether anything was drawn since.
+	// The pixels a caller last took through changed(), and the part of the surface the drawings since could reach: what the clips in
+	// force let each of them draw on.
 	std::vector<uint8_t> taken;
-	bool touched = true;
+	SkIRect reached = SkIRect::MakeEmpty();
 };
 
 std::mutex surfaces_mutex;
@@ -295,11 +296,12 @@ bool pixels(uint32_t handle, int32_t x, int32_t y, uint32_t width, uint32_t heig
 	if (!surface || pitch < width * 4)
 		return false;
 	const auto info = SkImageInfo::Make(int(width), int(height), kBGRA_8888_SkColorType, kPremul_SkAlphaType);
-	surface->touched = surface->touched || write;
+	if (write)
+		surface->reached.join(SkIRect::MakeXYWH(x, y, int(width), int(height)));
 	return write ? surface->bitmap.writePixels(SkPixmap(info, data, pitch), x, y) : surface->bitmap.readPixels(info, data, pitch, x, y);
 }
 
-bool changed(uint32_t handle, bool whole, int32_t rect[4])
+bool changed(uint32_t handle, bool whole, int32_t rect[8])
 {
 	std::lock_guard lock(surfaces_mutex);
 	auto *surface = find(handle);
@@ -307,43 +309,53 @@ bool changed(uint32_t handle, bool whole, int32_t rect[4])
 		return false;
 	const size_t width = size_t(surface->bitmap.width()), height = size_t(surface->bitmap.height()), stride = surface->bitmap.rowBytes();
 	const auto *now = static_cast<const uint8_t *>(surface->bitmap.getPixels());
+	const SkIRect all = SkIRect::MakeWH(int(width), int(height));
+	SkIRect reached = surface->reached;
+	surface->reached.setEmpty();
 	if (whole || surface->taken.size() != width * height * 4) {
 		surface->taken.resize(width * height * 4);
 		for (size_t y = 0; y < height; ++y)
 			std::memcpy(surface->taken.data() + y * width * 4, now + y * stride, width * 4);
-		surface->touched = false;
-		rect[0] = rect[1] = 0;
-		rect[2] = int32_t(width);
-		rect[3] = int32_t(height);
+		for (int half = 0; half < 2; ++half) {
+			rect[half * 4] = rect[half * 4 + 1] = 0;
+			rect[half * 4 + 2] = int32_t(width);
+			rect[half * 4 + 3] = int32_t(height);
+		}
 		return true;
 	}
-	if (!surface->touched)
+	if (!reached.intersect(all))
 		return false;
-	surface->touched = false;
-	size_t top = height, bottom = 0, left = width, right = 0;
-	for (size_t y = 0; y < height; ++y) {
+	rect[0] = reached.left();
+	rect[1] = reached.top();
+	rect[2] = reached.right();
+	rect[3] = reached.bottom();
+	const size_t first = size_t(reached.left()), last = size_t(reached.right());
+	size_t top = height, bottom = 0, left = last, right = first;
+	for (size_t y = size_t(reached.top()); y < size_t(reached.bottom()); ++y) {
 		const uint8_t *row = now + y * stride, *before = surface->taken.data() + y * width * 4;
-		if (!std::memcmp(row, before, width * 4))
+		if (!std::memcmp(row + first * 4, before + first * 4, (last - first) * 4))
 			continue;
 		top = std::min(top, y);
 		bottom = y + 1;
-		size_t x = 0;
+		size_t x = first;
 		while (x < left && !std::memcmp(row + x * 4, before + x * 4, 4))
 			++x;
 		left = std::min(left, x);
-		x = width;
+		x = last;
 		while (x > right && !std::memcmp(row + (x - 1) * 4, before + (x - 1) * 4, 4))
 			--x;
 		right = std::max(right, x);
 	}
-	if (top >= bottom)
-		return false;
+	if (top >= bottom) {
+		rect[4] = rect[5] = rect[6] = rect[7] = 0;
+		return true;
+	}
 	for (size_t y = top; y < bottom; ++y)
 		std::memcpy(surface->taken.data() + (y * width + left) * 4, now + y * stride + left * 4, (right - left) * 4);
-	rect[0] = int32_t(left);
-	rect[1] = int32_t(top);
-	rect[2] = int32_t(right);
-	rect[3] = int32_t(bottom);
+	rect[4] = int32_t(left);
+	rect[5] = int32_t(top);
+	rect[6] = int32_t(right);
+	rect[7] = int32_t(bottom);
 	return true;
 }
 
@@ -359,8 +371,13 @@ bool draw(uint32_t handle, const Command &command, std::span<const uint8_t> data
 	}
 	if (!surface)
 		return false;
-	surface->touched = true;
 	auto &canvas = *surface->canvas;
+	// What a command that draws can reach is what the clips in force let through; pushing a clip or a layer draws nothing, and the
+	// layer a pop lays down was bounded by the clips it was pushed under, as its drawings were. A copy of pixels goes past the clips.
+	if (Op(command.op) != Op::push_clip && Op(command.op) != Op::push_layer && Op(command.op) != Op::pop)
+		surface->reached.join(canvas.getDeviceClipBounds());
+	if (Op(command.op) == Op::copy)
+		surface->reached.join(SkIRect::MakeWH(surface->bitmap.width(), surface->bitmap.height()));
 	const SkMatrix transform = matrix(command.transform);
 	const SkRect rect = SkRect::MakeLTRB(command.rect[0], command.rect[1], command.rect[2], command.rect[3]);
 	switch (Op(command.op)) {

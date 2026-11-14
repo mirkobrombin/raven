@@ -3570,23 +3570,28 @@ static void held_draw_all(struct bitmap *bitmap, ID3D11Resource *resource)
 static BOOL texture_drawable(struct bitmap *bitmap);
 
 /* The device of a texture is sent what changed in one set of a bitmap's pixels since it last took them, into the layer it keeps of
- * them. False when it holds no such layer after that. */
-static BOOL layer_take(DWORD surface, void **layer, ID3D11Texture2D *texture)
+ * them, and that part of the layer the drawings since could reach goes into the texture: in place of what it holds, or over it. What
+ * they could not reach stays in the texture as the last frame left it, as a program that draws part of a frame expects. False when
+ * the texture's device holds no such layer after that. */
+static BOOL layer_show(DWORD surface, void **layer, ID3D11Texture2D *texture, BOOL over)
 {
-	INT32 rect[4];
+	INT32 rect[8];
 	flush_queue();
-	if (RavenCanvasChanged(surface, !*layer, rect)) {
-		const UINT32 width = (UINT32)(rect[2] - rect[0]), height = (UINT32)(rect[3] - rect[1]);
+	if (!RavenCanvasChanged(surface, !*layer, rect))
+		return *layer != NULL;
+	if (rect[6] > rect[4] && rect[7] > rect[5]) {
+		const UINT32 width = (UINT32)(rect[6] - rect[4]), height = (UINT32)(rect[7] - rect[5]);
 		BYTE *bytes = ALLOC_UNSET((size_t)width * height * 4);
 		void *made = NULL;
-		if (bytes && RavenCanvasPixels(surface, rect[0], rect[1], width, height, bytes, width * 4, 0))
-			made = shader_layer(texture, *layer, (UINT32)rect[0], (UINT32)rect[1], width, height, bytes);
+		if (bytes && RavenCanvasPixels(surface, rect[4], rect[5], width, height, bytes, width * 4, 0))
+			made = shader_layer(texture, *layer, (UINT32)rect[4], (UINT32)rect[5], width, height, bytes);
 		else
 			shader_layer_release(*layer);
 		FREE(bytes);
 		*layer = made;
 	}
-	return *layer != NULL;
+	return *layer && SUCCEEDED(shader_layer_draw(texture, *layer, over, (UINT32)rect[0], (UINT32)rect[1], (UINT32)(rect[2] - rect[0]),
+		(UINT32)(rect[3] - rect[1])));
 }
 
 /* A frame goes to a texture that can be drawn into as its changes: the texture's device keeps both sets of the bitmap's pixels, takes
@@ -3598,13 +3603,11 @@ static BOOL present_layers(struct bitmap *bitmap)
 	BOOL shown = FALSE;
 	if (!texture_drawable(bitmap) || FAILED(IDXGISurface_QueryInterface(bitmap->dxgi, &IID_ID3D11Texture2D, (void **)&texture)))
 		return FALSE;
-	if (layer_take(bitmap->surface, &bitmap->shown, texture) && SUCCEEDED(shader_layer_draw(texture, bitmap->shown, FALSE))) {
+	if (layer_show(bitmap->surface, &bitmap->shown, texture, FALSE)) {
 		shown = TRUE;
 		held_draw_each(bitmap, texture);
-		if (bitmap->held_count && bitmap->over_drawn) {
-			if (!layer_take(bitmap->over, &bitmap->over_shown, texture) || FAILED(shader_layer_draw(texture, bitmap->over_shown, TRUE)))
-				unimplemented("ID2D1DeviceContext", "what is drawn after an effect kept for its target's texture");
-		}
+		if (bitmap->held_count && bitmap->over_drawn && !layer_show(bitmap->over, &bitmap->over_shown, texture, TRUE))
+			unimplemented("ID2D1DeviceContext", "what is drawn after an effect kept for its target's texture");
 		held_forget(bitmap);
 	}
 	ID3D11Texture2D_Release(texture);
