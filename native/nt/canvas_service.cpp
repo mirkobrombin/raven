@@ -27,6 +27,14 @@ void register_canvas_service(ApiRegistry &registry, KernelContext &)
 		}
 		call.ret(found);
 	});
+	// RavenCanvasBounds(surface, rect): the rectangle that holds every pixel that is not clear, as four words.
+	registry.add("RavenCanvasBounds", 2, [](ApiCall &call) {
+		int32_t rect[4] = {};
+		const bool found = call[1] && canvas::bounds(call.u32(0), rect);
+		if (found)
+			call.write(call[1], std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(rect), sizeof rect));
+		call.ret(found);
+	});
 	// RavenCanvasChanged(surface, whole, rects): the part drawn on since this was last asked and, inside it, the part that differs from
 	// what was last taken this way, as four words each.
 	registry.add("RavenCanvasChanged", 3, [](ApiCall &call) {

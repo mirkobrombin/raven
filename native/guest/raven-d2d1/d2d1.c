@@ -37,6 +37,7 @@
 #define CONTAINER(pointer, type, field) ((type *)((char *)(pointer) - offsetof(type, field)))
 
 /* ---- the host services ---- */
+__declspec(dllimport) DWORD WINAPI RavenCanvasBounds(DWORD surface, INT32 *rect);
 __declspec(dllimport) DWORD WINAPI RavenCanvasChanged(DWORD surface, DWORD whole, INT32 *rect);
 __declspec(dllimport) DWORD WINAPI RavenCanvasCreate(DWORD width, DWORD height);
 __declspec(dllimport) void WINAPI RavenCanvasDestroy(DWORD surface);
@@ -1948,25 +1949,18 @@ static D2D1_RECT_L list_drawn(struct command_list *list)
 {
 	D2D1_RECT_L drawn = {0, 0, 0, 0};
 	const struct bitmap *bitmap = list->bitmap;
-	DWORD *pixels;
-	UINT32 row, column;
+	INT32 found[4];
 	if (list->measured)
 		return list->drawn;
-	if (!bitmap || !(pixels = ALLOC_UNSET((size_t)bitmap->pixels.width * bitmap->pixels.height * 4)))
+	if (!bitmap)
 		return drawn;
-	canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
-	drawn.left = drawn.top = LONG_MAX;
-	for (row = 0; row < bitmap->pixels.height; ++row)
-		for (column = 0; column < bitmap->pixels.width; ++column)
-			if (pixels[(size_t)row * bitmap->pixels.width + column]) {
-				drawn.left = min(drawn.left, (LONG)column);
-				drawn.top = min(drawn.top, (LONG)row);
-				drawn.right = max(drawn.right, (LONG)column + 1);
-				drawn.bottom = max(drawn.bottom, (LONG)row + 1);
-			}
-	FREE(pixels);
-	if (drawn.left == LONG_MAX)
-		drawn.left = drawn.top = 0;
+	flush_queue();
+	if (RavenCanvasBounds(bitmap->surface, found)) {
+		drawn.left = found[0];
+		drawn.top = found[1];
+		drawn.right = found[2];
+		drawn.bottom = found[3];
+	}
 	if (list->closed) {
 		list->drawn = drawn;
 		list->measured = TRUE;

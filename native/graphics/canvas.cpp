@@ -301,6 +301,47 @@ bool pixels(uint32_t handle, int32_t x, int32_t y, uint32_t width, uint32_t heig
 	return write ? surface->bitmap.writePixels(SkPixmap(info, data, pitch), x, y) : surface->bitmap.readPixels(info, data, pitch, x, y);
 }
 
+bool bounds(uint32_t handle, int32_t rect[4])
+{
+	std::lock_guard lock(surfaces_mutex);
+	const auto *surface = find(handle);
+	if (!surface)
+		return false;
+	const int width = surface->bitmap.width(), height = surface->bitmap.height();
+	const size_t stride = surface->bitmap.rowBytes();
+	const auto *pixels = static_cast<const uint8_t *>(surface->bitmap.getPixels());
+	const auto clear = [&](int y, int from, int to) {
+		const auto *row = reinterpret_cast<const uint32_t *>(pixels + size_t(y) * stride);
+		for (int x = from; x < to; ++x)
+			if (row[x])
+				return false;
+		return true;
+	};
+	int top = 0, bottom = height, left = width, right = 0;
+	while (top < bottom && clear(top, 0, width))
+		++top;
+	while (bottom > top && clear(bottom - 1, 0, width))
+		--bottom;
+	for (int y = top; y < bottom; ++y) {
+		const auto *row = reinterpret_cast<const uint32_t *>(pixels + size_t(y) * stride);
+		int x = 0;
+		while (x < left && !row[x])
+			++x;
+		left = std::min(left, x);
+		x = width;
+		while (x > right && !row[x - 1])
+			--x;
+		right = std::max(right, x);
+	}
+	if (top >= bottom)
+		top = bottom = left = right = 0;
+	rect[0] = left;
+	rect[1] = top;
+	rect[2] = right;
+	rect[3] = bottom;
+	return true;
+}
+
 bool changed(uint32_t handle, bool whole, int32_t rect[8])
 {
 	std::lock_guard lock(surfaces_mutex);
