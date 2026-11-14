@@ -450,6 +450,29 @@ void NativeWindows::release_host_surface(uint64_t handle)
 	presentation.release_host_surface(handle);
 }
 
+// A frame for what one window has just drawn or changed of itself: a child's reaches its own rectangle of the root's surface, with
+// what the drawings before it reached, and the rest of the surface is as the last frame showed it.
+void NativeWindows::present_drawn(uint64_t handle)
+{
+	const auto root=objects.window_root(handle);
+	const auto *window=std::as_const(objects).window(handle);
+	const auto *top=std::as_const(objects).window(root);
+	const auto known=dirty_areas.find(root);
+	if (window && top && root!=handle && !dirty_whole.contains(root) && (known!=dirty_areas.end() || !dirty_roots.contains(root))) {
+		DesktopRect area{window->outer.left-top->outer.left,window->outer.top-top->outer.top,window->outer.right-top->outer.left,
+			window->outer.bottom-top->outer.top};
+		if (known!=dirty_areas.end())
+			area={std::min(area.left,known->second.left),std::min(area.top,known->second.top),std::max(area.right,known->second.right),
+				std::max(area.bottom,known->second.bottom)};
+		presenting=area;
+	}
+	struct Presenting {
+		std::optional<DesktopRect> &area;
+		~Presenting() { area.reset(); }
+	} guard{presenting};
+	present(handle);
+}
+
 void NativeWindows::drawing(uint64_t handle, const DesktopRect *area)
 {
 	if (handle==desktop) return;
@@ -1912,7 +1935,7 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 		if (!objects.set_title(args[0],window_text(address))) throw uint32_t(8);
 		// Other processes look top-level windows up by title; a control's text changing often stays out of the shared directory.
 		if (!window->parent) publish_traits(args[0]);
-		if (objects.window_visible(args[0])) present(args[0]);
+		if (objects.window_visible(args[0])) present_drawn(args[0]);
 		return 1;
 	}
 	if (message==0x0e) return window->title.size();
@@ -1990,7 +2013,7 @@ uint64_t NativeWindows::default_message(std::span<const uint64_t> args)
 		// Inside a paint the window already began, the update is taken: nothing is left for the default procedure to paint.
 		if (window->painting) return 0;
 		start_paint(args[0]); finish_paint(args[0]);
-		if (std::as_const(objects).window(args[0])->visible) present(args[0]);
+		if (std::as_const(objects).window(args[0])->visible) present_drawn(args[0]);
 		return 0;
 	}
 	if (message==0x83) {
@@ -3160,7 +3183,7 @@ bool NativeWindows::dispatch(std::string_view name)
 				return true;
 			}
 			if (window->painting) finish_paint(args[0]);
-			if (objects.window_visible(args[0])) present(args[0]);
+			if (objects.window_visible(args[0])) present_drawn(args[0]);
 			result=1;
 		}
 		else if (name=="ReleaseDC") {

@@ -137,6 +137,7 @@ public:
 	void register_api(ApiRegistry &registry);
 	// Drawing marks the surface dirty; the next message retrieval presents it, so a burst of primitives costs one frame.
 	void drawing(uint64_t window, const DesktopRect *area = nullptr);
+	void present_drawn(uint64_t window);
 	void flush_dirty(bool force = false);
 	// Whether a message, paint request or due timer waits for the guest; host input is delivered to the windows on the way, so this
 	// runs only inside a call of the guest thread.
