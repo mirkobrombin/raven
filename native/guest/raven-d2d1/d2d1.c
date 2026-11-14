@@ -1644,9 +1644,10 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 				}
 				if (self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE)
 					value[3] = 255;
-				to[column * 4] = min(value[2], value[3]);
-				to[column * 4 + 1] = min(value[1], value[3]);
-				to[column * 4 + 2] = min(value[0], value[3]);
+				/* A color above its alpha is kept, as the floats held it. */
+				to[column * 4] = value[2];
+				to[column * 4 + 1] = value[1];
+				to[column * 4 + 2] = value[0];
 				to[column * 4 + 3] = value[3];
 			}
 		}
@@ -1666,9 +1667,9 @@ static HRESULT STDMETHODCALLTYPE bitmap_CopyFromMemory(void *iface, const D2D1_R
 			BYTE *to = copy + (size_t)row * width * 4;
 			for (column = 0; column < width; ++column) {
 				const BYTE alpha = self->format.alphaMode == D2D1_ALPHA_MODE_IGNORE ? 255 : half_byte(from[column * 4 + 3]);
-				to[column * 4] = min(half_byte(from[column * 4 + 2]), alpha);
-				to[column * 4 + 1] = min(half_byte(from[column * 4 + 1]), alpha);
-				to[column * 4 + 2] = min(half_byte(from[column * 4]), alpha);
+				to[column * 4] = half_byte(from[column * 4 + 2]);
+				to[column * 4 + 1] = half_byte(from[column * 4 + 1]);
+				to[column * 4 + 2] = half_byte(from[column * 4]);
 				to[column * 4 + 3] = alpha;
 			}
 		}
@@ -3396,9 +3397,9 @@ static void read_wic(struct target *self)
 						value[channel] = part <= 0 ? 0 : part >= 1 ? 255 : (BYTE)(part * 255 + 0.5f);
 					}
 				}
-				pixels[index * 4] = min(value[2], value[3]);
-				pixels[index * 4 + 1] = min(value[1], value[3]);
-				pixels[index * 4 + 2] = min(value[0], value[3]);
+				pixels[index * 4] = value[2];
+				pixels[index * 4 + 1] = value[1];
+				pixels[index * 4 + 2] = value[0];
 				pixels[index * 4 + 3] = value[3];
 			}
 		} else if (depth != 4) {
@@ -7480,13 +7481,17 @@ static void draw_effect(struct target *self, struct effect *effect, const D2D1_P
 	if (!(bytes = effect_bytes(effect, links, count, &area))) {
 		if (!(pixels = plane_alloc(&area)))
 			return;
+		/* A target of floats keeps a color above its alpha, as Direct2D's own keeps whatever is drawn into it: a program that ends its
+		   effects with colors no longer multiplied by their alpha reads them back so. One of bytes holds colors multiplied by theirs. */
+		const BOOL kept = self->bitmap->format.format == DXGI_FORMAT_R32G32B32A32_FLOAT ||
+			self->bitmap->format.format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 		effect_render(effect, links, count, &area, pixels, 0);
 		if ((bytes = ALLOC_UNSET(size * 4)))
 			for (at = 0; at < size; ++at) {
-				const float alpha = clamp01(pixels[at * 4 + 3]);
-				bytes[at * 4] = (BYTE)(min(clamp01(pixels[at * 4 + 2]), alpha) * 255 + 0.5f);
-				bytes[at * 4 + 1] = (BYTE)(min(clamp01(pixels[at * 4 + 1]), alpha) * 255 + 0.5f);
-				bytes[at * 4 + 2] = (BYTE)(min(clamp01(pixels[at * 4]), alpha) * 255 + 0.5f);
+				const float alpha = clamp01(pixels[at * 4 + 3]), most = kept ? 1 : alpha;
+				bytes[at * 4] = (BYTE)(min(clamp01(pixels[at * 4 + 2]), most) * 255 + 0.5f);
+				bytes[at * 4 + 1] = (BYTE)(min(clamp01(pixels[at * 4 + 1]), most) * 255 + 0.5f);
+				bytes[at * 4 + 2] = (BYTE)(min(clamp01(pixels[at * 4]), most) * 255 + 0.5f);
 				bytes[at * 4 + 3] = (BYTE)(alpha * 255 + 0.5f);
 			}
 		FREE(pixels);

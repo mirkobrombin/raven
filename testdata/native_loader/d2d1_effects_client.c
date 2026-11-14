@@ -786,6 +786,32 @@ int raven_entry(void)
 			return 61 + conversion;
 		ID2D1Bitmap1_Unmap(float_bitmap);
 	}
+	/* A target of floats keeps the values drawn into it as they are, a color above its alpha among them: paint.net ends its blur with
+	   colors no longer multiplied by their alpha and reads them back from such a target. Half a red, unmultiplied, stays a whole red
+	   of half alpha. */
+	static const GUID unpremultiply_effect = {0xfb9ac489, 0xad8d, 0x41ed, {0x99, 0x99, 0xbb, 0x63, 0x47, 0xd1, 0x10, 0xf7}};
+	static const UINT32 half_red[4] = {0x80800000, 0x80800000, 0x80800000, 0x80800000};
+	ID2D1Bitmap *half_bitmap = NULL;
+	ID2D1Effect *unmultiplied = NULL;
+	if (FAILED(ID2D1RenderTarget_CreateBitmap(target, size, half_red, 8, &bitmap_properties, &half_bitmap)) ||
+		FAILED(ID2D1DeviceContext_CreateEffect(float_context, &unpremultiply_effect, &unmultiplied)))
+		return 64;
+	((set_input)(*(void ***)unmultiplied)[14])(unmultiplied, 0, (ID2D1Image *)half_bitmap, TRUE);
+	output = output_of(unmultiplied);
+	ID2D1RenderTarget_BeginDraw(float_target);
+	ID2D1RenderTarget_Clear(float_target, &empty);
+	ID2D1DeviceContext_DrawImage(float_context, output, &blur_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw(float_target, NULL, NULL)) ||
+		FAILED(ID2D1Bitmap1_Map(float_bitmap, D2D1_MAP_OPTIONS_READ, &float_map)) || !float_map.bits)
+		return 64;
+	corner = (const float *)(float_map.bits + 3 * float_map.pitch) + 3 * 4;
+	if (!(corner[3] >= 0.45f && corner[3] <= 0.55f) || !(corner[0] >= 0.95f) || !(corner[1] <= 0.02f))
+		return 65;
+	ID2D1Bitmap1_Unmap(float_bitmap);
+	IUnknown_Release((IUnknown *)unmultiplied);
+	ID2D1Bitmap_Release(half_bitmap);
 	IUnknown_Release((IUnknown *)managed);
 	ID2D1Bitmap_Release(dark_bitmap);
 	ID2D1Bitmap_Release(grey_bitmap);
