@@ -730,6 +730,28 @@ static const std::vector<uint8_t> &focus_prelude()
 	return code;
 }
 
+// GetForegroundWindow and GetCursorPos read what the runtime publishes beside the focus as every call returns: the pointer moves for
+// the program only as it reads its messages, which is a call. A null point goes to the runtime.
+static constexpr size_t foreground_window = 0x798, cursor_position = 0x7a0;
+
+static const std::vector<uint8_t> &foreground_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x12, 0x49, 0x83, 0xba, 0x10, 0x07, 0x00, 0x00, 0x00, 0x74, 0x08, 0x49, 0x8b,
+		0x82, 0x98, 0x07, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(foreground_window == 0x798, "the foreground prelude's offset is written into its code");
+	return code;
+}
+
+static const std::vector<uint8_t> &cursor_position_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x1f, 0x49, 0x83, 0xba, 0x10, 0x07, 0x00, 0x00, 0x00, 0x74, 0x15, 0x48, 0x85,
+		0xc9, 0x74, 0x10, 0x49, 0x8b, 0x82, 0xa0, 0x07, 0x00, 0x00, 0x48, 0x89, 0x01, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(cursor_position == 0x7a0, "the pointer position prelude's offset is written into its code");
+	return code;
+}
+
 // Menus by position, read from the menu table the runtime keeps (see NativeWindows::publish_menus): GetMenuItemCount, GetSubMenu,
 // GetMenuItemID and GetMenuStringW with MF_BYPOSITION. A menu without a slot goes to the runtime.
 static constexpr size_t menu_pointer = 0x720;
@@ -1777,6 +1799,10 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		return &window_dpi_prelude();
 	if (name == "GetFocus")
 		return &focus_prelude();
+	if (name == "GetForegroundWindow")
+		return &foreground_prelude();
+	if (name == "GetCursorPos")
+		return &cursor_position_prelude();
 	if (name == "GetMenuItemCount")
 		return &menu_count_prelude();
 	if (name == "GetSubMenu")
@@ -3068,8 +3094,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		}
 	memory.set_commit_block(served_block);
 	windows.set_screen_block(served_block);
-	static_assert(focus_published == NativeWindows::focus_published && focus_window == NativeWindows::focus_window,
-		"the focus prelude reads what NativeWindows publishes");
+	static_assert(focus_published == NativeWindows::focus_published && focus_window == NativeWindows::focus_window &&
+		foreground_window == NativeWindows::foreground_window && cursor_position == NativeWindows::cursor_position,
+		"the focus, foreground and pointer preludes read what NativeWindows publishes");
 	// The window table the window preludes read, mapped into the guest and published in the served block.
 	const size_t windows_size = NativeWindows::window_records * NativeWindows::window_record, table_size = windows_size + 8192 +
 		NativeWindows::menu_area + NativeWindows::bitmap_records * NativeWindows::bitmap_record + 4096 + NativeWindows::dc_table_size + 4096 +

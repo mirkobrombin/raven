@@ -74,8 +74,9 @@ public:
 	// window changed by a call stays touched until the outermost call in progress returns, as the call may change it after a callback.
 	// The last eight bytes of a record hold the client area's origin on the screen.
 	static constexpr size_t window_records=512, window_record=256, window_extra_bytes=80, window_owner=240, window_origin=248;
-	// The focus window, published in the served block with the table: a flag, then the handle.
-	static constexpr size_t focus_published=0x710, focus_window=0x718;
+	// The focus window, published in the served block with the table: a flag, then the handle. The foreground window and the pointer's
+	// screen position go beside it, under the same flag.
+	static constexpr size_t focus_published=0x710, focus_window=0x718, foreground_window=0x798, cursor_position=0x7a0;
 	void set_window_table(uint8_t *table);
 	// The menu table the guest's menu preludes read: 1024 slots of 16 bytes (handle, block offset, item count) at the handle's low ten
 	// bits, then the blocks: an item of 32 bytes each (type, state, identifier, text length, submenu, text offset) and their texts.

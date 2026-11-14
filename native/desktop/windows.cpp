@@ -2898,6 +2898,9 @@ void NativeWindows::publish_words()
 		const uint64_t shown_desktop=desktop && std::as_const(objects).window(desktop) ? desktop : 0;
 		std::memcpy(screen_block+desktop_handle,&shown_desktop,8);
 		__atomic_store_n(reinterpret_cast<uint64_t *>(screen_block+focus_window),focus,__ATOMIC_RELEASE);
+		__atomic_store_n(reinterpret_cast<uint64_t *>(screen_block+foreground_window),active,__ATOMIC_RELEASE);
+		const uint64_t position=uint64_t(uint32_t(cursor_x)) | uint64_t(uint32_t(cursor_y))<<32;
+		__atomic_store_n(reinterpret_cast<uint64_t *>(screen_block+cursor_position),position,__ATOMIC_RELEASE);
 		__atomic_store_n(reinterpret_cast<uint64_t *>(screen_block+focus_published),uint64_t(1),__ATOMIC_RELEASE);
 	}
 }
