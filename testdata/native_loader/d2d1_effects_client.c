@@ -812,6 +812,75 @@ int raven_entry(void)
 	ID2D1Bitmap1_Unmap(float_bitmap);
 	IUnknown_Release((IUnknown *)unmultiplied);
 	ID2D1Bitmap_Release(half_bitmap);
+	/* An effect of some size drawn on a surface of the program's own device, inside a clip that holds it, as paint.net shows its
+	   picture: it lies over what was drawn before it and under what is drawn after, there and beside it. A red picture with its red
+	   and blue swapped, on grey, with a green square on it and another beside it. */
+	static UINT32 shown_red[256 * 256];
+	D3D11_TEXTURE2D_DESC shown_desc = {300, 256, 1, 1, DXGI_FORMAT_B8G8R8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+		D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+	D2D1_BITMAP_PROPERTIES1 shown_properties = {{DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED}, 96, 96,
+		D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, NULL};
+	const D2D1_SIZE_U shown_source_size = {256, 256};
+	const D2D1_RECT_F whole_clip = {0, 0, 300, 256}, on_square = {4, 4, 12, 12}, beside_square = {270, 4, 280, 12};
+	const D2D1_COLOR_F green_color = {0, 1, 0, 1};
+	const D2D1_POINT_2F corner_place = {0, 0};
+	ID3D11Texture2D *shown = NULL, *shown_staging = NULL;
+	IDXGISurface *shown_surface = NULL;
+	ID2D1Bitmap1 *shown_bitmap = NULL;
+	ID2D1Bitmap *shown_source = NULL;
+	ID2D1Effect *shown_swap = NULL;
+	ID2D1SolidColorBrush *green_brush = NULL;
+	for (UINT pixel = 0; pixel < 256 * 256; ++pixel)
+		shown_red[pixel] = 0xffff0000;
+	if (FAILED(ID3D11Device_CreateTexture2D(device3d, &shown_desc, NULL, &shown)) ||
+		FAILED(ID3D11Texture2D_QueryInterface(shown, &IID_IDXGISurface, (void **)&shown_surface)) ||
+		FAILED(ID2D1DeviceContext_CreateBitmapFromDxgiSurface(surface_context, shown_surface, &shown_properties, &shown_bitmap)) ||
+		FAILED(ID2D1RenderTarget_CreateBitmap((ID2D1RenderTarget *)surface_context, shown_source_size, shown_red, 256 * 4, &bitmap_properties, &shown_source)) ||
+		FAILED(ID2D1DeviceContext_CreateEffect(surface_context, &swap_effect, &shown_swap)) ||
+		FAILED(ID2D1RenderTarget_CreateSolidColorBrush((ID2D1RenderTarget *)surface_context, &green_color, NULL, &green_brush)))
+		return 66;
+	((set_input)(*(void ***)shown_swap)[14])(shown_swap, 0, (ID2D1Image *)shown_source, TRUE);
+	output = output_of(shown_swap);
+	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)shown_bitmap);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)surface_context, &whole_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &half_grey);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)surface_context, &on_square, (ID2D1Brush *)green_brush);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)surface_context, &beside_square, (ID2D1Brush *)green_brush);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)surface_context);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 67;
+	shown_desc.Usage = D3D11_USAGE_STAGING;
+	shown_desc.BindFlags = 0;
+	shown_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	if (FAILED(ID3D11Device_CreateTexture2D(device3d, &shown_desc, NULL, &shown_staging)))
+		return 68;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 68;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL swapped = pixel_is(SHOWN(100, 100), 0, 0, 255) && pixel_is(SHOWN(250, 250), 0, 0, 255);
+	const BOOL squares = pixel_is(SHOWN(8, 8), 0, 255, 0) && pixel_is(SHOWN(275, 8), 0, 255, 0);
+	const BOOL around = pixel_is(SHOWN(290, 100), 127, 127, 127) && pixel_is(SHOWN(260, 250), 127, 127, 127);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	if (!swapped)
+		return 69;
+	if (!squares)
+		return 70;
+	if (!around)
+		return 71;
+	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)surface_bitmap);
+	IUnknown_Release((IUnknown *)green_brush);
+	IUnknown_Release((IUnknown *)shown_swap);
+	ID2D1Bitmap_Release(shown_source);
+	IUnknown_Release((IUnknown *)shown_bitmap);
+	IUnknown_Release((IUnknown *)shown_surface);
+	ID3D11Texture2D_Release(shown_staging);
+	ID3D11Texture2D_Release(shown);
 	IUnknown_Release((IUnknown *)managed);
 	ID2D1Bitmap_Release(dark_bitmap);
 	ID2D1Bitmap_Release(grey_bitmap);

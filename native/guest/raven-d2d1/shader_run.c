@@ -272,3 +272,306 @@ done:
 	LeaveCriticalSection(&runner.lock);
 	return result;
 }
+
+/* ---- drawing into a program's own texture ----
+ * A program that hands Direct2D a surface of its swap chain shows what is drawn there each frame. Its pixels stay on the graphics card:
+ * the shader runs on the device the texture belongs to and writes into it, with nothing read back. Each such device keeps the stages
+ * made for it. */
+enum { PAINTERS = 4 };
+
+static const char copy_source[] =
+	"Texture2D image : register(t0);\n"
+	"SamplerState point_sampler : register(s0);\n"
+	"float4 main(float4 position : SV_POSITION, float4 scene : SCENE_POSITION, float4 texel : TEXCOORD0) : SV_TARGET\n"
+	"{\n"
+	"	return image.Sample(point_sampler, texel.xy);\n"
+	"}\n";
+
+static struct painter {
+	ID3D11Device *device;
+	ID3D11VertexShader *vertex;
+	ID3D11PixelShader *copy;
+	ID3D11Buffer *area;
+	ID3D11BlendState *over;
+	ID3D11RasterizerState *whole;
+	struct {
+		const BYTE *code;
+		UINT32 size;
+		ID3D11PixelShader *shader;
+	} kept[KEPT_SHADERS];
+	UINT32 kept_count, kept_next;
+} painters[PAINTERS];
+static UINT32 painter_next;
+
+static void painter_release(struct painter *painter)
+{
+	UINT32 index;
+	for (index = 0; index < painter->kept_count; ++index)
+		if (painter->kept[index].shader)
+			ID3D11PixelShader_Release(painter->kept[index].shader);
+	if (painter->whole)
+		ID3D11RasterizerState_Release(painter->whole);
+	if (painter->over)
+		ID3D11BlendState_Release(painter->over);
+	if (painter->area)
+		ID3D11Buffer_Release(painter->area);
+	if (painter->copy)
+		ID3D11PixelShader_Release(painter->copy);
+	if (painter->vertex)
+		ID3D11VertexShader_Release(painter->vertex);
+	if (painter->device)
+		ID3D11Device_Release(painter->device);
+	memset(painter, 0, sizeof(*painter));
+}
+
+/* The stages a device draws with, made the first time one of its textures is drawn into. */
+static struct painter *painter_of(ID3D11Device *device)
+{
+	static const D3D11_BUFFER_DESC area_desc = {sizeof(float) * 4 * (1 + SHADER_INPUTS), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+	D3D11_BLEND_DESC blend;
+	D3D11_RASTERIZER_DESC raster;
+	compile_function compile;
+	HMODULE compiler;
+	ID3DBlob *vertex = NULL, *copy = NULL;
+	struct painter *painter;
+	UINT32 index;
+	for (index = 0; index < PAINTERS; ++index)
+		if (painters[index].device == device)
+			return &painters[index];
+	if (!(compiler = LoadLibraryA("d3dcompiler_47.dll")) || !(compile = (compile_function)GetProcAddress(compiler, "D3DCompile")))
+		return NULL;
+	painter = &painters[painter_next++ % PAINTERS];
+	painter_release(painter);
+	memset(&blend, 0, sizeof(blend));
+	blend.RenderTarget[0].BlendEnable = TRUE;
+	blend.RenderTarget[0].SrcBlend = blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+	blend.RenderTarget[0].DestBlend = blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+	blend.RenderTarget[0].BlendOp = blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+	memset(&raster, 0, sizeof(raster));
+	raster.FillMode = D3D11_FILL_SOLID;
+	raster.CullMode = D3D11_CULL_NONE;
+	raster.DepthClipEnable = TRUE;
+	if (SUCCEEDED(compile(vertex_source, sizeof(vertex_source) - 1, "effects", NULL, NULL, "main", "vs_4_0", 0, 0, &vertex, NULL)) &&
+		SUCCEEDED(compile(copy_source, sizeof(copy_source) - 1, "copy", NULL, NULL, "main", "ps_4_0", 0, 0, &copy, NULL)) &&
+		SUCCEEDED(ID3D11Device_CreateVertexShader(device, ID3D10Blob_GetBufferPointer(vertex), ID3D10Blob_GetBufferSize(vertex), NULL,
+			&painter->vertex)) &&
+		SUCCEEDED(ID3D11Device_CreatePixelShader(device, ID3D10Blob_GetBufferPointer(copy), ID3D10Blob_GetBufferSize(copy), NULL,
+			&painter->copy)) &&
+		SUCCEEDED(ID3D11Device_CreateBuffer(device, &area_desc, NULL, &painter->area)) &&
+		SUCCEEDED(ID3D11Device_CreateBlendState(device, &blend, &painter->over)) &&
+		SUCCEEDED(ID3D11Device_CreateRasterizerState(device, &raster, &painter->whole))) {
+		painter->device = device;
+		ID3D11Device_AddRef(device);
+	} else {
+		painter_release(painter);
+		painter = NULL;
+	}
+	if (vertex)
+		ID3D10Blob_Release(vertex);
+	if (copy)
+		ID3D10Blob_Release(copy);
+	return painter;
+}
+
+static ID3D11PixelShader *painter_shader(struct painter *painter, const BYTE *code, UINT32 size)
+{
+	ID3D11PixelShader *shader = NULL;
+	UINT32 index;
+	if (!code)
+		return painter->copy;
+	for (index = 0; index < painter->kept_count; ++index)
+		if (painter->kept[index].code == code && painter->kept[index].size == size)
+			return painter->kept[index].shader;
+	if (FAILED(ID3D11Device_CreatePixelShader(painter->device, code, size, NULL, &shader)))
+		return NULL;
+	index = painter->kept_count < KEPT_SHADERS ? painter->kept_count++ : painter->kept_next++ % KEPT_SHADERS;
+	if (painter->kept[index].shader)
+		ID3D11PixelShader_Release(painter->kept[index].shader);
+	painter->kept[index].code = code;
+	painter->kept[index].size = size;
+	painter->kept[index].shader = shader;
+	return shader;
+}
+
+/* What the program's context was set to, in the stages a drawing here sets, taken before it and put back after. */
+struct context_state {
+	ID3D11InputLayout *layout;
+	D3D11_PRIMITIVE_TOPOLOGY topology;
+	ID3D11VertexShader *vertex;
+	ID3D11PixelShader *pixel;
+	ID3D11Buffer *vertex_constants, *pixel_constants;
+	ID3D11ShaderResourceView *views[SHADER_INPUTS];
+	ID3D11SamplerState *samplers[SHADER_INPUTS];
+	ID3D11RasterizerState *raster;
+	D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+	UINT viewport_count;
+	ID3D11RenderTargetView *targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+	ID3D11DepthStencilView *depth;
+	ID3D11BlendState *blend;
+	FLOAT blend_factor[4];
+	UINT sample_mask;
+};
+
+static void state_take(ID3D11DeviceContext *context, struct context_state *state)
+{
+	memset(state, 0, sizeof(*state));
+	ID3D11DeviceContext_IAGetInputLayout(context, &state->layout);
+	ID3D11DeviceContext_IAGetPrimitiveTopology(context, &state->topology);
+	ID3D11DeviceContext_VSGetShader(context, &state->vertex, NULL, NULL);
+	ID3D11DeviceContext_PSGetShader(context, &state->pixel, NULL, NULL);
+	ID3D11DeviceContext_VSGetConstantBuffers(context, 0, 1, &state->vertex_constants);
+	ID3D11DeviceContext_PSGetConstantBuffers(context, 0, 1, &state->pixel_constants);
+	ID3D11DeviceContext_PSGetShaderResources(context, 0, SHADER_INPUTS, state->views);
+	ID3D11DeviceContext_PSGetSamplers(context, 0, SHADER_INPUTS, state->samplers);
+	ID3D11DeviceContext_RSGetState(context, &state->raster);
+	state->viewport_count = ARRAYSIZE(state->viewports);
+	ID3D11DeviceContext_RSGetViewports(context, &state->viewport_count, state->viewports);
+	ID3D11DeviceContext_OMGetRenderTargets(context, ARRAYSIZE(state->targets), state->targets, &state->depth);
+	ID3D11DeviceContext_OMGetBlendState(context, &state->blend, state->blend_factor, &state->sample_mask);
+}
+
+static void state_put(ID3D11DeviceContext *context, struct context_state *state)
+{
+	UINT32 index;
+	ID3D11DeviceContext_IASetInputLayout(context, state->layout);
+	ID3D11DeviceContext_IASetPrimitiveTopology(context, state->topology);
+	ID3D11DeviceContext_VSSetShader(context, state->vertex, NULL, 0);
+	ID3D11DeviceContext_PSSetShader(context, state->pixel, NULL, 0);
+	ID3D11DeviceContext_VSSetConstantBuffers(context, 0, 1, &state->vertex_constants);
+	ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &state->pixel_constants);
+	ID3D11DeviceContext_PSSetShaderResources(context, 0, SHADER_INPUTS, state->views);
+	ID3D11DeviceContext_PSSetSamplers(context, 0, SHADER_INPUTS, state->samplers);
+	ID3D11DeviceContext_RSSetState(context, state->raster);
+	if (state->viewport_count)
+		ID3D11DeviceContext_RSSetViewports(context, state->viewport_count, state->viewports);
+	ID3D11DeviceContext_OMSetRenderTargets(context, ARRAYSIZE(state->targets), state->targets, state->depth);
+	ID3D11DeviceContext_OMSetBlendState(context, state->blend, state->blend_factor, state->sample_mask);
+	if (state->layout)
+		ID3D11InputLayout_Release(state->layout);
+	if (state->vertex)
+		ID3D11VertexShader_Release(state->vertex);
+	if (state->pixel)
+		ID3D11PixelShader_Release(state->pixel);
+	if (state->vertex_constants)
+		ID3D11Buffer_Release(state->vertex_constants);
+	if (state->pixel_constants)
+		ID3D11Buffer_Release(state->pixel_constants);
+	for (index = 0; index < SHADER_INPUTS; ++index) {
+		if (state->views[index])
+			ID3D11ShaderResourceView_Release(state->views[index]);
+		if (state->samplers[index])
+			ID3D11SamplerState_Release(state->samplers[index]);
+	}
+	if (state->raster)
+		ID3D11RasterizerState_Release(state->raster);
+	for (index = 0; index < ARRAYSIZE(state->targets); ++index)
+		if (state->targets[index])
+			ID3D11RenderTargetView_Release(state->targets[index]);
+	if (state->depth)
+		ID3D11DepthStencilView_Release(state->depth);
+	if (state->blend)
+		ID3D11BlendState_Release(state->blend);
+}
+
+HRESULT shader_draw(void *target, const BYTE *code, UINT32 size, const BYTE *constants, UINT32 constant_size,
+	const struct shader_image *inputs, UINT32 count, INT32 left, INT32 top, UINT32 width, UINT32 height, INT32 x, INT32 y)
+{
+	static const float no_factor[4];
+	ID3D11Texture2D *texture = target;
+	ID3D11Device *device = NULL;
+	ID3D11DeviceContext *context = NULL;
+	ID3D11Texture2D *textures[SHADER_INPUTS] = {0};
+	ID3D11ShaderResourceView *views[SHADER_INPUTS] = {0};
+	ID3D11SamplerState *samplers[SHADER_INPUTS] = {0};
+	ID3D11RenderTargetView *view = NULL;
+	ID3D11Buffer *constant_buffer = NULL;
+	ID3D11PixelShader *shader;
+	struct painter *painter;
+	struct context_state state;
+	D3D11_VIEWPORT viewport = {(float)x, (float)y, (float)width, (float)height, 0, 1};
+	float area[4 * (1 + SHADER_INPUTS)] = {(float)left, (float)top, (float)width, (float)height};
+	HRESULT result = E_FAIL;
+	UINT32 index;
+	if (!texture || !width || !height || count > SHADER_INPUTS || (!code && !count))
+		return E_INVALIDARG;
+	InitOnceExecuteOnce(&runner.once, runner_init, NULL, NULL);
+	EnterCriticalSection(&runner.lock);
+	ID3D11Texture2D_GetDevice(texture, &device);
+	if (!device || !(painter = painter_of(device)) || !(shader = painter_shader(painter, code, size)) ||
+		FAILED(ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)texture, NULL, &view)))
+		goto done;
+	for (index = 0; index < count; ++index) {
+		D3D11_SAMPLER_DESC sampler = {(D3D11_FILTER)inputs[index].filter, D3D11_TEXTURE_ADDRESS_BORDER, D3D11_TEXTURE_ADDRESS_BORDER,
+			D3D11_TEXTURE_ADDRESS_BORDER, 0, 1, D3D11_COMPARISON_NEVER, {0, 0, 0, 0}, 0, D3D11_FLOAT32_MAX};
+		const BOOL empty = (!inputs[index].pixels && !inputs[index].bytes) || !inputs[index].width || !inputs[index].height;
+		const BOOL bytes = !empty && !inputs[index].pixels;
+		static const float clear[4];
+		D3D11_TEXTURE2D_DESC desc = {empty ? 1 : inputs[index].width, empty ? 1 : inputs[index].height, 1, 1,
+			bytes ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_R32G32B32A32_FLOAT, {1, 0}, D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0, 0};
+		D3D11_SUBRESOURCE_DATA data = {empty ? (const void *)clear : bytes ? (const void *)inputs[index].bytes : (const void *)inputs[index].pixels,
+			desc.Width * (bytes ? 4 : sizeof(float) * 4), 0};
+		if (FAILED(ID3D11Device_CreateTexture2D(device, &desc, &data, &textures[index])) ||
+			FAILED(ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)textures[index], NULL, &views[index])) ||
+			FAILED(ID3D11Device_CreateSamplerState(device, &sampler, &samplers[index])))
+			goto done;
+		area[4 * (1 + index)] = (float)inputs[index].left;
+		area[4 * (1 + index) + 1] = (float)inputs[index].top;
+		area[4 * (1 + index) + 2] = 1.0f / (float)(inputs[index].width ? inputs[index].width : 1);
+		area[4 * (1 + index) + 3] = 1.0f / (float)(inputs[index].height ? inputs[index].height : 1);
+	}
+	if (constant_size) {
+		D3D11_BUFFER_DESC desc = {(constant_size + 15) & ~15u, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+		BYTE *padded = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, desc.ByteWidth);
+		D3D11_SUBRESOURCE_DATA data = {padded, 0, 0};
+		HRESULT made;
+		if (!padded)
+			goto done;
+		memcpy(padded, constants, constant_size);
+		made = ID3D11Device_CreateBuffer(device, &desc, &data, &constant_buffer);
+		HeapFree(GetProcessHeap(), 0, padded);
+		if (FAILED(made))
+			goto done;
+	}
+	ID3D11Device_GetImmediateContext(device, &context);
+	if (!context)
+		goto done;
+	state_take(context, &state);
+	ID3D11DeviceContext_UpdateSubresource(context, (ID3D11Resource *)painter->area, 0, NULL, area, 0, 0);
+	ID3D11DeviceContext_IASetInputLayout(context, NULL);
+	ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	ID3D11DeviceContext_VSSetShader(context, painter->vertex, NULL, 0);
+	ID3D11DeviceContext_VSSetConstantBuffers(context, 0, 1, &painter->area);
+	ID3D11DeviceContext_PSSetShader(context, shader, NULL, 0);
+	ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &constant_buffer);
+	if (count) {
+		ID3D11DeviceContext_PSSetShaderResources(context, 0, count, views);
+		ID3D11DeviceContext_PSSetSamplers(context, 0, count, samplers);
+	}
+	ID3D11DeviceContext_RSSetState(context, painter->whole);
+	ID3D11DeviceContext_RSSetViewports(context, 1, &viewport);
+	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &view, NULL);
+	ID3D11DeviceContext_OMSetBlendState(context, painter->over, no_factor, 0xffffffffU);
+	ID3D11DeviceContext_Draw(context, 4, 0);
+	state_put(context, &state);
+	result = S_OK;
+done:
+	for (index = 0; index < SHADER_INPUTS; ++index) {
+		if (views[index])
+			ID3D11ShaderResourceView_Release(views[index]);
+		if (textures[index])
+			ID3D11Texture2D_Release(textures[index]);
+		if (samplers[index])
+			ID3D11SamplerState_Release(samplers[index]);
+	}
+	if (constant_buffer)
+		ID3D11Buffer_Release(constant_buffer);
+	if (view)
+		ID3D11RenderTargetView_Release(view);
+	if (context)
+		ID3D11DeviceContext_Release(context);
+	if (device)
+		ID3D11Device_Release(device);
+	LeaveCriticalSection(&runner.lock);
+	return result;
+}
