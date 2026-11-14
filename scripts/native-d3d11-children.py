@@ -20,7 +20,7 @@ from PIL import Image
 from lavapipe import icd as lavapipe_icd
 
 SIDE = 160
-RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
+RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
 
 
 def environment():

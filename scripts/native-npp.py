@@ -21,7 +21,7 @@ from PIL import Image, ImageChops
 
 from x11_session import X11Session
 
-RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
+RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
 FIRST = b"Session one line\r\nsecond line, saved by session 1"
 SECOND = FIRST + b"\r\nappended by session 2"
 # The X server of an x11 run; None on Wayland.

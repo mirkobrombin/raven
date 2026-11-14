@@ -86,6 +86,8 @@ To run the tests:
 ctest --test-dir build --output-on-failure -j1
 ```
 
+The display tests start a headless labwc in `/run/user/<uid>/raven-labwc-runtime`, or `raven-labwc-gpu` for the hardware variants. Set `RAVEN_TEST_RUNTIME` to another directory to put them there, so that two runs on one machine do not share a compositor.
+
 Some tests need software Raven cannot redistribute; point `RAVEN_MINESWEEPER`, `RAVEN_NETFX_INSTALLER`, `RAVEN_NETFX35_PACKAGE`, `RAVEN_XNA_INSTALLER` and `RAVEN_REDIST_DIRECTORY` at your own copies, or those tests are skipped. Each component under [native/upstream](native/upstream) records where it comes from and its license.
 
 ## What works today
