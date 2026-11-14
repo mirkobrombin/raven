@@ -73,7 +73,7 @@ public:
 	// the offsets in a record. The runtime brings the records of the windows it touched up to date before the guest runs again; a
 	// window changed by a call stays touched until the outermost call in progress returns, as the call may change it after a callback.
 	// The last eight bytes of a record hold the client area's origin on the screen.
-	static constexpr size_t window_records=512, window_record=256, window_extra_bytes=88, window_origin=248;
+	static constexpr size_t window_records=512, window_record=256, window_extra_bytes=80, window_owner=240, window_origin=248;
 	// The focus window, published in the served block with the table: a flag, then the handle.
 	static constexpr size_t focus_published=0x710, focus_window=0x718;
 	void set_window_table(uint8_t *table);

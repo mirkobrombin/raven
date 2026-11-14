@@ -2373,6 +2373,8 @@ static void window_fields(const DesktopWindow &window,uint8_t *record)
 	put(64,window.outer.left); put(68,window.outer.top); put(72,window.outer.right); put(76,window.outer.bottom);
 	put(88,window.parent);
 	put(NativeWindows::window_origin,window.x); put(NativeWindows::window_origin+4,window.y);
+	// The thread that made the window, zero while the runtime has to say which it is, and the process.
+	put(NativeWindows::window_owner,window.thread); put(NativeWindows::window_owner+4,uint32_t(::getpid()));
 	// Extra bytes beyond the record are read by the runtime.
 	const bool extra=window.extra.size()<=NativeWindows::window_extra_bytes;
 	put(80,uint32_t(extra ? window.extra.size() : 0));
@@ -2473,7 +2475,7 @@ void NativeWindows::publish_windows()
 		window_fields(*window,fields);
 		const size_t extra=window->extra.size()<=window_extra_bytes ? window->extra.size() : 0;
 		if (std::memcmp(fields+8,record+8,76) || std::memcmp(fields+88,record+88,8) || (extra && std::memcmp(fields+160,record+160,extra)) ||
-			std::memcmp(fields+window_origin,record+window_origin,8))
+			std::memcmp(fields+window_owner,record+window_owner,16))
 			publish_window_record(handle,window);
 	}
 	publish_menus();

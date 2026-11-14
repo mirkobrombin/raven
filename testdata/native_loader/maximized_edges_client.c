@@ -46,5 +46,10 @@ int raven_entry(void)
 	if (IsZoomed(window)) return 11;
 	if (!placed) return 12;
 	if (sized!=SIZE_RESTORED) return 13;
+	// The window names the thread and the process that made it, with or without a place for the process.
+	DWORD process=0;
+	if (GetWindowThreadProcessId(window,&process)!=GetCurrentThreadId() || process!=GetCurrentProcessId()) return 14;
+	if (GetWindowThreadProcessId(window,NULL)!=GetCurrentThreadId()) return 15;
+	if (GetWindowThreadProcessId((HWND)(ULONG_PTR)0x7654321,&process)) return 16;
 	return 0;
 }
