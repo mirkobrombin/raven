@@ -1294,6 +1294,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(dialog_frame_test destroyed_frame_fixture)
             add_test(NAME native_destroyed_child_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${DESTROYED_FRAME_FIXTURE} destroyed)
             set_tests_properties(native_destroyed_child_frame PROPERTIES TIMEOUT 15)
+            set(CLIPPED_FRAME_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/clipped-frame.exe)
+            add_custom_command(OUTPUT ${CLIPPED_FRAME_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -DCLIPPED_FRAME
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${CLIPPED_FRAME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/dialog_frame_client.c VERBATIM)
+            add_custom_target(clipped_frame_fixture ALL DEPENDS ${CLIPPED_FRAME_FIXTURE})
+            add_dependencies(dialog_frame_test clipped_frame_fixture)
+            add_test(NAME native_clipped_child_frame COMMAND dialog_frame_test $<TARGET_FILE:raven-bootstrap> ${CLIPPED_FRAME_FIXTURE} clipped)
+            set_tests_properties(native_clipped_child_frame PROPERTIES TIMEOUT 15)
             set(BUTTON_CORNER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/button-corner.exe)
             add_custom_command(OUTPUT ${BUTTON_CORNER_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
@@ -1592,6 +1602,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(input_thread_test input_thread_fixture raven-bootstrap)
             add_test(NAME native_input_thread COMMAND input_thread_test $<TARGET_FILE:raven-bootstrap> ${INPUT_THREAD_FIXTURE})
             set_tests_properties(native_input_thread PROPERTIES TIMEOUT 20)
+            add_executable(input_owner_test desktop/input_owner_test.cpp)
+            target_link_libraries(input_owner_test PRIVATE raven_cpu)
+            set(INPUT_OWNER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/input-owner.exe)
+            add_custom_command(OUTPUT ${INPUT_OWNER_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${INPUT_OWNER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_owner_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_owner_client.c VERBATIM)
+            add_custom_target(input_owner_fixture ALL DEPENDS ${INPUT_OWNER_FIXTURE})
+            add_dependencies(input_owner_test input_owner_fixture raven-bootstrap)
+            add_test(NAME native_input_owner COMMAND input_owner_test $<TARGET_FILE:raven-bootstrap> ${INPUT_OWNER_FIXTURE})
+            set_tests_properties(native_input_owner PROPERTIES TIMEOUT 20)
             add_executable(modifier_keys_test desktop/modifier_keys_test.cpp)
             target_link_libraries(modifier_keys_test PRIVATE raven_cpu)
             set(MODIFIER_KEYS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/modifier-keys.exe)
@@ -3963,6 +3985,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(tooltip_empty_fixture${width} ALL DEPENDS ${tooltip_empty_client})
                     add_test(NAME native_tooltip_empty_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${tooltip_empty_client})
                     set_tests_properties(native_tooltip_empty_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(mdi_maximize_client ${CMAKE_CURRENT_BINARY_DIR}/mdi-maximize${width}.exe)
+                    add_custom_command(OUTPUT ${mdi_maximize_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${mdi_maximize_client} ${LOADER_SOURCES}/mdi_maximize_client.c -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/mdi_maximize_client.c VERBATIM)
+                    add_custom_target(mdi_maximize_fixture${width} ALL DEPENDS ${mdi_maximize_client})
+                    add_test(NAME native_mdi_maximize_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${mdi_maximize_client})
+                    set_tests_properties(native_mdi_maximize_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(combo_selection_client ${CMAKE_CURRENT_BINARY_DIR}/combo-selection${width}.exe)
                     add_custom_command(OUTPUT ${combo_selection_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

@@ -57,7 +57,10 @@ int raven_entry(void)
 		return 14;
 	BYTE element[16] = {0};
 	size = 0;
-	if (!GetColorProfileElement(profile, 0x64657363U, 0, &size, NULL, &reference) || size != 12)
+	/* Without a buffer the element is not read: the call fails for want of room and says how much the element takes, which is how a
+	   program sizes its buffer before the call that reads. paint.net reads a profile's curves this way to know a linear one. */
+	SetLastError(0);
+	if (GetColorProfileElement(profile, 0x64657363U, 0, &size, NULL, &reference) || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size != 12)
 		return 15;
 	size = 4;
 	if (!GetColorProfileElement(profile, 0x64657363U, 2, &size, element, &reference) || size != 4 || element[0] != 'c' || element[3] != 'f' || reference)

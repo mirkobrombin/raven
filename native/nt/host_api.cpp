@@ -493,8 +493,9 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.store<uint32_t>(call[2], std::any_of(elements.begin(), elements.end(), [tag](const auto &element) { return element.tag == tag; }));
 		call.ret(1);
 	});
-	// An element's bytes from an offset into it, as many as the buffer takes; without a buffer, the element's size. It is a reference
-	// when another tag names the same bytes.
+	// An element's bytes from an offset into it, as many as the buffer takes. Without a buffer nothing is read: the call fails for want
+	// of room and leaves the element's size, which is how a program sizes the buffer for the call that reads. It is a reference when
+	// another tag names the same bytes.
 	registry.add("GetColorProfileElement", 6, [&objects, profile_elements](ApiCall &call) {
 		const auto profile = objects.object_as<ColorProfile>(call[0]);
 		if (!profile || !call[3]) {
@@ -510,7 +511,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		}
 		if (!call[4]) {
 			call.store<uint32_t>(call[3], found->size);
-			call.ret(1);
+			call.fail(122, 0);
 			return;
 		}
 		if (offset > found->size) {

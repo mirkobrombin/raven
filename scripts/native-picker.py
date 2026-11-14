@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-RUNTIME = Path(f"/run/user/{os.getuid()}/raven-labwc-runtime")
+RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
 FAILURES = {
     10: "the dialog returned no file",
     11: "the dialog returned a file in the prefix instead of the host file",
