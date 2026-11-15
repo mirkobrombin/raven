@@ -167,12 +167,18 @@ uint64_t NativeWindows::surface_dc(uint64_t handle)
 		shared=spare->second.pixels;
 		address=spare->second.address;
 		spare_surfaces.erase(spare);
-		// The pixels of the surface it was before are laid out for another size: the new one starts black where nothing is kept.
-		std::memset(shared->data(),0,std::min(size,shared->size()));
 	} else {
 		drop_spare_surface(handle);
 		shared=std::make_shared<SharedPixels>(size);
 		address=process.map_shared(shared->descriptor(),size);
+	}
+	// What nothing has drawn on yet shows the window's background, not black: a program that takes seconds over its first paint, or
+	// over controls that a graphics driver draws, shows them as empty panels while they load. The pixels of a surface the window had
+	// before are laid out for another size; only what is kept from its corner stays.
+	{
+		const uint32_t pixel=unpainted_pixel(*window);
+		auto *words=reinterpret_cast<uint32_t *>(shared->data());
+		std::fill(words,words+std::min(size,shared->size())/4,pixel);
 	}
 	for (uint32_t row=0;row<std::min<uint32_t>(before_height,uint32_t(height));++row)
 		std::memcpy(shared->data()+size_t(row)*size_t(width)*4,before.data()+size_t(row)*before_width*4,
@@ -189,6 +195,21 @@ uint64_t NativeWindows::surface_dc(uint64_t handle)
 		objects.attach_window_dcs(handle,bitmap);
 		return dc;
 	} catch (...) { if (dc) objects.erase(dc); if (bitmap) objects.erase(bitmap); process.unmap_memory(address); throw; }
+}
+
+uint32_t NativeWindows::unpainted_pixel(const DesktopWindow &window) const
+{
+	// A window that composes its own alpha or lets the frame show through what it leaves black starts transparent, as before.
+	if ((window.ex_style & 0x00280000U) || window.glass) return 0;
+	uint32_t color=objects.system_color(5);
+	// The class background as a system color index plus one, or a brush of one color; a class without one shows the window color, as
+	// what a program paints over it later is all that differs.
+	if (const auto *type=objects.window_class(window.class_id); type && type->background) {
+		if (type->background<=31) color=objects.system_color(int32_t(type->background)-1);
+		else if (const auto *brush=objects.brush(type->background); brush && !brush->hollow && !brush->style) color=brush->color;
+	}
+	// COLORREF is red in the low byte; the surface holds blue, green, red and an alpha that GDI leaves at zero.
+	return ((color & 0xff)<<16) | (color & 0xff00) | ((color>>16) & 0xff);
 }
 
 bool NativeWindows::blank_client(uint64_t handle) const
@@ -208,10 +229,15 @@ bool NativeWindows::blank_client(uint64_t handle) const
 	const int64_t left=std::max<int64_t>(int64_t(window->x)-window->outer.left,0),top=std::max<int64_t>(int64_t(window->y)-window->outer.top,0);
 	const int64_t right=std::min<int64_t>(left+window->width,bitmap->width),bottom=std::min<int64_t>(top+window->height,bitmap->height);
 	if (pixels.size()<size_t(bitmap->width)*bitmap->height*4) return false;
+	const auto *root=std::as_const(objects).window(objects.window_root(handle));
+	const uint32_t empty=root ? unpainted_pixel(*root) : 0;
 	for (int64_t y=top;y<bottom;++y) {
 		const auto *row=pixels.data()+(size_t(y)*bitmap->width+size_t(left))*4;
-		for (int64_t x=left;x<right;++x,row+=4)
-			if (row[0] | row[1] | row[2] | row[3]) return false;
+		for (int64_t x=left;x<right;++x,row+=4) {
+			uint32_t pixel;
+			std::memcpy(&pixel,row,4);
+			if (pixel!=empty && (row[0] | row[1] | row[2] | row[3])) return false;
+		}
 	}
 	return true;
 }

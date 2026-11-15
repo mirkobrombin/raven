@@ -325,6 +325,8 @@ private:
 	// Whether nothing has been drawn into the window's client area yet: its surface still holds only zeros or what erasing it left,
 	// or there is none.
 	bool blank_client(uint64_t handle) const;
+	// The pixel a top-level window's surface holds where nothing was drawn yet (see surface_dc).
+	uint32_t unpainted_pixel(const DesktopWindow &window) const;
 	KeyboardMap keyboard_map;
 	std::array<bool,256> key_down{};
 	// The key each held key went down as, so its release matches its press after a keymap change.
