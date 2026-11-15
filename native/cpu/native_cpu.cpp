@@ -1835,27 +1835,37 @@ int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point d
 		const bool polls = polling.fetch_add(1, std::memory_order_relaxed) < pollers;
 		~Poller() { polling.fetch_sub(1, std::memory_order_relaxed); }
 	} poller;
-	for (unsigned polls = poller.polls ? 0 : 199;; ++polls) {
+	// A thread whose guest went on by itself the last times polls less before it sleeps, down to a few looks, and one whose guest
+	// called or stopped while it polled goes back to polling for long: the polls of a guest that computes are processor time taken
+	// from the guests that run.
+	static thread_local unsigned patience = 200;
+	const auto came = [&](int result) {
+		patience = std::min(200u, patience * 2);
+		return result;
+	};
+	for (unsigned polls = poller.polls ? 200 - patience : 199;; ++polls) {
 		if (block && polls < 200)
 			for (unsigned looks = 0; looks < 64; ++looks) {
 				if (__atomic_load_n(&block[0], __ATOMIC_ACQUIRE))
-					return -4;
+					return came(-4);
 				__builtin_ia32_pause();
 			}
 		int status = 0;
 		const pid_t result = waitpid(task, &status, polls < 200 ? WNOHANG | __WALL : __WALL);
 		if (result == task)
-			return status;
+			return polls < 200 ? came(status) : status;
 		if (result == -1 && errno != EINTR)
 			throw std::runtime_error("cannot wait for a native guest task");
 		if (block && __atomic_load_n(&block[0], __ATOMIC_ACQUIRE))
-			return -4;
+			return came(-4);
 		if (interrupted && interrupted())
 			return -3;
 		if (std::chrono::steady_clock::now() >= deadline)
 			return -1;
 		if (polls == 199) {
 			// The next wait sleeps: an alarm ends it at the deadline.
+			if (poller.polls)
+				patience = std::max(4u, patience / 2);
 			const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - std::chrono::steady_clock::now()).count();
 			itimerspec alarm{};
 			alarm.it_value.tv_sec = left / 1000000000;
