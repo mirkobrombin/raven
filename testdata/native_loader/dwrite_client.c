@@ -381,7 +381,8 @@ int raven_entry(void)
 			if (FAILED(IDWriteFontCollection_FindFamilyName(collection, scripts[index].windows, &at, &present)) || !present)
 				return 62;
 			if (FAILED(IDWriteFontCollection_GetFontFamily(collection, at, &named_family)) ||
-				FAILED(IDWriteFontFamily_GetFont(named_family, 0, &first)) || FAILED(IDWriteFont_HasCharacter(first, scripts[index].character, &covered)) ||
+				FAILED(IDWriteFontFamily_GetFirstMatchingFont(named_family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+					DWRITE_FONT_STYLE_NORMAL, &first)) || FAILED(IDWriteFont_HasCharacter(first, scripts[index].character, &covered)) ||
 				!covered)
 				return 63;
 			IDWriteFont_Release(first);
