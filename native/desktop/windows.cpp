@@ -602,9 +602,9 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 	auto &state=queues[thread];
 	std::map<uint64_t,uint64_t> paints;
 	// Read-only: a window handed out for change would be published to the guest again.
-	for (const auto handle : objects.window_handles()) {
+	for (const auto handle : std::as_const(objects).waiting_paint()) {
 		const auto *window=std::as_const(objects).window(handle);
-		if (!window || !window->needs_paint() || !objects.window_visible(handle) || (window->thread && window->thread!=thread)) continue;
+		if (!window || (window->thread && window->thread!=thread)) continue;
 		current|=0x20;
 		paints[handle]=window->update_generation;
 		const auto previous=state.paints.find(handle);
@@ -1127,11 +1127,11 @@ uint64_t NativeWindows::invalid_owned(uint64_t filter,uint32_t thread) const
 	// The search starts after the window painted last and goes round: a window invalidated with every pointer move (a status bar
 	// showing the position) would otherwise be found first each time, and the others, the canvas the pointer draws on among them,
 	// would wait for as long as the moves go on.
-	auto handles=objects.window_handles();
+	auto handles=std::as_const(objects).waiting_paint();
 	std::stable_partition(handles.begin(),handles.end(),[&](uint64_t handle) { return handle>paint_cursor; });
 	for (const auto handle : handles) {
 		const auto *window=std::as_const(objects).window(handle);
-		if (!window || !window->needs_paint() || !objects.window_visible(handle) || (window->thread && window->thread!=me)) continue;
+		if (!window || (window->thread && window->thread!=me)) continue;
 		if (filter && filter!=handle && !objects.is_child(filter,handle)) continue;
 		// Parents paint before their children, as Windows orders WM_PAINT: a child may lie under what its parent draws, and handles
 		// come back in any order once windows are destroyed and made again.
@@ -2429,6 +2429,7 @@ void NativeWindows::publish_windows()
 		publish_words();
 		return;
 	}
+	if (!idle(objects.touched_windows()) || !watched.empty()) objects.windows_changed();
 	// Handles the guest released in a call still in progress keep out of its tables until the runtime carries the release out.
 	deferred_pending.clear();
 	if (deferred_log) {

@@ -374,6 +374,11 @@ public:
 	void configure_window_dc(uint64_t window,DesktopDC &device,bool frame) const;
 	uint64_t invalid_window(uint64_t filter) const;
 	std::vector<uint64_t> window_handles() const;
+	// The visible windows waiting to be painted, in handle order. A message loop asks at every call; the list is worked out again
+	// only after a window was handed out for change, added or erased, or the runtime said one may have changed (windows_changed).
+	const std::vector<uint64_t> &waiting_paint() const;
+	// A window handed out earlier can still be changed through the pointer kept: what the guest reads is brought up to date then.
+	void windows_changed() { ++window_generation; }
 	bool set_title(uint64_t window,std::u16string title);
 	bool invalidate(uint64_t window,DesktopRect rect,bool erase);
 	bool validate(uint64_t window,DesktopRect rect);
@@ -407,6 +412,9 @@ private:
 	std::map<uint64_t,uint32_t> selections;
 	// The windows among the objects, in handle order.
 	std::set<uint64_t> window_set;
+	uint64_t window_generation=0;
+	mutable uint64_t waiting_generation=~uint64_t(0);
+	mutable std::vector<uint64_t> waiting{};
 	void count_selection(uint64_t bitmap, int change)
 	{
 		if (!bitmap) return;
