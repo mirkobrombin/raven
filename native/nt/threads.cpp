@@ -680,8 +680,10 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 				thread.state = GuestThread::State::waiting;
 		}
 	} leave{me, outer_ready, outer_wake, outer_state};
-	// RAVEN_TRACE_WAITS names the waits that last longer than a quarter of a second: the API and how long it kept its thread.
+	// RAVEN_TRACE_WAITS names the waits that last longer than a quarter of a second, or than the milliseconds it gives when more than
+	// one: the API and how long it kept its thread.
 	static const bool traced = std::getenv("RAVEN_TRACE_WAITS") != nullptr;
+	static const long traced_from = traced && std::atol(std::getenv("RAVEN_TRACE_WAITS")) > 1 ? std::atol(std::getenv("RAVEN_TRACE_WAITS")) : 250;
 	const auto began = std::chrono::steady_clock::now();
 	const char *api = api_in_progress;
 	me.waiting_in = api;
@@ -698,7 +700,7 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	me.state = GuestThread::State::running;
 	if (traced) {
 		const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
-		if (waited >= 250)
+		if (waited >= traced_from)
 		{
 			static const auto started = began;
 			std::fprintf(stderr, "raven: at %lld ms thread %u waited %lld ms in %s (%s)\n",
