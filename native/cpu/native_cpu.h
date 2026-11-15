@@ -35,6 +35,9 @@ struct NativeContext {
 };
 
 // Everything that distinguishes one guest thread from another while the process is stopped between API calls.
+// Whether a parallel guest gets a host thread for each of its threads (see native_cpu.cpp).
+bool threaded_host();
+
 struct NativeThreadState {
 	NativeContext context;
 	std::vector<NativeContext> callbacks;
@@ -129,9 +132,30 @@ public:
 	NativeThreadState new_thread(uint64_t stack_top, uint64_t teb);
 	bool parallel() const;
 	bool stopped() const;
+	// Whether the guest process has ended, so no thread can be served any more.
+	bool gone() const;
 	int execution_descriptor() const;
 	void drain_execution();
 	void set_execution_wait(std::function<void(std::function<bool()>, std::chrono::steady_clock::time_point)> wait);
+	// Lets the threads whose tasks stopped have the runtime first, this one waiting until `ready`.
+	void set_execution_turn(std::function<void(std::function<bool()>)> turn);
+	// With a host thread for each guest thread: called while the thread's own guest runs, to wait for the guest's stop; it returns the wait
+	// status, or -1 at the deadline.
+	void set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point)> park);
+	// Waits for a stop of a task the calling host thread traces: the status, -1 at the deadline, -3 when `interrupted` says so after the
+	// wait was broken by interrupt_host. It reads no state of the process, so a thread may call it while others serve their calls.
+	static int wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted);
+	static void interrupt_host(pid_t host_thread);
+	// Moves the tracing of a stopped task from the calling host thread to the one that adopts it.
+	void hand_task(pid_t task);
+	static void adopt_task(pid_t task);
+	pid_t administrative_task() const;
+	// Work a host thread does on the task it traces: stop it where it runs (the wait status of the stop it was found in, a trap of its own
+	// or the interrupt), read its whole context, set its general registers. arm_host_thread prepares a host thread to be interrupted.
+	static int pause_own_task(pid_t task);
+	static NativeContext task_context(pid_t task);
+	static void set_task_registers(pid_t task, const user_regs_struct &registers);
+	static void arm_host_thread();
 	void stop_thread(const NativeThreadState &thread);
 	void pause_thread(NativeThreadState &thread);
 	// The general registers a thread that is not running continues with: a thread paused in its own task gets them there, a saved

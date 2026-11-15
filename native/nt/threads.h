@@ -14,6 +14,8 @@
 #include <optional>
 #include <ucontext.h>
 #include <poll.h>
+#include <pthread.h>
+#include <thread>
 #include <vector>
 
 namespace raven {
@@ -64,6 +66,17 @@ struct GuestThread {
 	std::shared_ptr<AccessToken> impersonation;
 	// Pipes to the processes that hold a handle to this thread: each gets the exit code when the thread ends.
 	std::vector<int> exit_reports;
+	// With a host thread for each guest thread (see NativeThreads): the host thread, its Linux id, and its place in the line for the
+	// runtime. `parked` while its guest runs; `paused` while another thread holds that guest stopped; `held` a stop that came before the
+	// pause took hold. `job` is work another thread has it do on its own task, which only it may trace.
+	pthread_t host{};
+	bool hosted = false;
+	pid_t host_tid = 0;
+	std::condition_variable turn;
+	bool queued = false, parked = false, paused = false;
+	int held = -2;
+	std::function<void()> job;
+	bool job_done = false;
 };
 
 class ThreadObject : public KernelObject {
@@ -144,7 +157,7 @@ public:
 	std::shared_ptr<GuestThread> find(uint32_t id) const;
 	uint32_t current_id() const { return running->id; }
 	// Blocks the current thread until ready() holds (true) or the wake time passes (false).
-	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake);
+	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn = false);
 	// Lets another runnable thread run; false when nothing else is runnable.
 	bool yield();
 	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
@@ -207,6 +220,44 @@ private:
 	void thread_main(GuestThread &thread);
 	void release_resources(GuestThread &thread);
 	void check_pending();
+	// The host thread for each guest thread: one thread holds the runtime at a time (`holder`), the others wait in line or for their guest.
+	bool threaded = false;
+	std::mutex gate;
+	std::condition_variable jobs_done;
+	GuestThread *holder = nullptr;
+	std::deque<GuestThread *> line;
+	std::function<void()> host_end;
+	// The administrative thread: it traces the task the runtime uses for memory work while every guest runs, and does the host's own work
+	// (services, pumps, timeouts) when no guest thread asks for it.
+	GuestThread admin;
+	pthread_t admin_host{};
+	bool admin_hosted = false;
+	bool stopping = false;
+	std::chrono::steady_clock::time_point admin_due = std::chrono::steady_clock::time_point::max();
+	void enter(GuestThread &me);
+	void leave(GuestThread &me, bool save = true);
+	void wait_turn(GuestThread &me, std::optional<std::chrono::steady_clock::time_point> wake);
+	void install(GuestThread &me);
+	void enqueue(GuestThread &thread);
+	void wake_ready(GuestThread *except);
+	void run_job(GuestThread &me, std::unique_lock<std::mutex> &lock);
+	void send_job(GuestThread &thread, std::function<void()> work);
+	int park(pid_t task, std::chrono::steady_clock::time_point deadline);
+	void host_main(GuestThread &thread);
+	void admin_main();
+	void end_host(GuestThread &thread);
+	bool threaded_block(std::function<bool()> &ready, std::optional<std::chrono::steady_clock::time_point> wake);
+	void threaded_unwind();
+	void pause_task_of(GuestThread &thread);
+	void resume_task_of(GuestThread &thread);
+public:
+	// Sets the registers a paused thread continues with, in its own task.
+	void set_registers(GuestThread &thread, const user_regs_struct &registers);
+	bool host_threads() const { return threaded; }
+	// Has the host thread with this id do `work` on itself; nothing is done when it serves no guest thread any more.
+	void on_host(pid_t host, std::function<void()> work);
+	// What each host thread does last, on itself, before it ends.
+	void set_host_end(std::function<void()> end);
 };
 
 }

@@ -44,6 +44,14 @@
 
 namespace raven {
 
+// Parallel guests are served by one host thread per guest thread, each tracing its own task; RAVEN_COROUTINE_HOST=1 keeps the older
+// host, where one thread serves every task and switches between coroutines.
+bool threaded_host()
+{
+	static const bool threaded = !std::getenv("RAVEN_COROUTINE_HOST");
+	return threaded;
+}
+
 // The API the runtime handled last, named when a call is left without its answer.
 extern const char *api_in_progress;
 
@@ -104,6 +112,8 @@ public:
 	void stop_task(pid_t task);
 	void pause_task();
 	int execution_descriptor() const { return execution_wake; }
+	// Whether any task has a stop the runtime has not taken yet.
+	bool stops_queued() const { return queued_stops.load(std::memory_order_acquire) > 0; }
 	void drain_execution();
 	// While a slice is set, wait() returns -2 once it has passed without the guest stopping.
 	void set_slice(std::chrono::steady_clock::duration slice) { slice_end = std::chrono::steady_clock::now() + slice; }
@@ -126,6 +136,7 @@ private:
 	std::condition_variable events_ready;
 	std::map<pid_t, std::deque<int>> stops;
 	std::atomic<uint64_t> stops_generation{0};
+	std::atomic<int64_t> queued_stops{0};
 	uint64_t missed_generation = UINT64_MAX;
 	pid_t missed_task = -1;
 	std::set<pid_t> tasks;
@@ -205,6 +216,9 @@ void NativeChild::enable_parallel()
 	if (execution_wake < 0)
 		throw std::runtime_error("cannot create native execution wake descriptor");
 	tasks.insert(pid);
+	// Each host thread waits for the stops of its own task: a thread reaping every task's stops would take them from their tracers.
+	if (threaded_host())
+		return;
 	// Only this guest's process group is reaped here; host processes launched for other Windows processes keep their own waiters.
 	events = std::thread([this] {
 		for (;;) {
@@ -216,6 +230,7 @@ void NativeChild::enable_parallel()
 				std::lock_guard lock(events_mutex);
 				if (task > 0) {
 					stops[task].push_back(status);
+					queued_stops.fetch_add(1, std::memory_order_release);
 					if (WIFEXITED(status) || WIFSIGNALED(status))
 						tasks.erase(task);
 				} else
@@ -247,6 +262,7 @@ bool NativeChild::take_stop(pid_t task, int &status)
 	}
 	status = found->second.front();
 	found->second.pop_front();
+	queued_stops.fetch_sub(1, std::memory_order_release);
 	if (found->second.empty())
 		stops.erase(found);
 	return true;
@@ -287,7 +303,8 @@ pid_t NativeChild::clone_task(uint64_t stack)
 	pid = pid_t(task);
 	const int created = wait();
 	pid = caller;
-	if (!WIFSTOPPED(created) || WSTOPSIG(created) != SIGSTOP)
+	// A task that was seized, as one a host thread took over, starts its clones in an event stop rather than with a SIGSTOP.
+	if (!WIFSTOPPED(created) || (WSTOPSIG(created) != SIGSTOP && (created >> 16) != PTRACE_EVENT_STOP))
 		throw std::runtime_error("new native task was not stopped before execution");
 	trace(PTRACE_CONT, pid);
 	const int finished = wait();
@@ -295,6 +312,19 @@ pid_t NativeChild::clone_task(uint64_t stack)
 	if (!WIFSTOPPED(finished) || WSTOPSIG(finished) != SIGTRAP || registers.rip != gate + 4)
 		throw std::runtime_error("native thread creation did not finish at its gate");
 	trace(PTRACE_SETREGS, pid, &saved);
+	// The task outlives the process it was cloned from, so it is no longer a descendant of the runtime: it names the runtime as the one
+	// allowed to trace it, which the host thread that serves it needs to take it over.
+	if (threaded_host()) {
+		const pid_t caller = pid;
+		pid = pid_t(task);
+		try {
+			syscall(SYS_prctl, PR_SET_PTRACER, uint64_t(getpid()));
+		} catch (...) {
+			pid = caller;
+			throw;
+		}
+		pid = caller;
+	}
 	return pid_t(task);
 }
 
@@ -302,11 +332,18 @@ void NativeChild::stop_task(pid_t task)
 {
 	if (task <= 0)
 		return;
+	// The host thread that traces the task reaps it.
+	if (!events.joinable()) {
+		kill(task, SIGKILL);
+		return;
+	}
 	std::unique_lock lock(events_mutex);
 	if (tasks.contains(task)) {
 		kill(task, SIGKILL);
 		events_ready.wait(lock, [&] { return events_ended || !tasks.contains(task); });
 	}
+	if (const auto found = stops.find(task); found != stops.end())
+		queued_stops.fetch_sub(int64_t(found->second.size()), std::memory_order_release);
 	stops.erase(task);
 }
 
@@ -335,6 +372,7 @@ void NativeChild::pause_task()
 	}
 	std::lock_guard lock(events_mutex);
 	stops[pid].push_front(status);
+	queued_stops.fetch_add(1, std::memory_order_release);
 	stops_generation.fetch_add(1, std::memory_order_release);
 }
 
@@ -355,6 +393,9 @@ void NativeChild::stop()
 	}
 	if (pid == -1)
 		return;
+	// Each task has a host thread of its own then: they all go with the process, and each host thread reaps its own.
+	if (threaded_host() && group > 0)
+		kill(-group, SIGKILL);
 	kill(pid, SIGKILL);
 	int status = 0;
 	while (waitpid(pid, &status, 0) == -1 && errno == EINTR) {}
@@ -443,6 +484,7 @@ int NativeChild::wait(const std::function<bool()> *served)
 			throw std::runtime_error("native execution event stream ended");
 		const int status = found->second.front();
 		found->second.pop_front();
+		queued_stops.fetch_sub(1, std::memory_order_release);
 		if (found->second.empty())
 			stops.erase(found);
 		forget_registers();
@@ -612,6 +654,8 @@ struct NativeProcess::State {
 	std::function<void(uint64_t)> served_handler;
 	std::function<void()> resume_hook;
 	std::function<void(std::function<bool()>, std::chrono::steady_clock::time_point)> execution_wait;
+	std::function<void(std::function<bool()>)> execution_turn;
+	std::function<int(pid_t, std::chrono::steady_clock::time_point)> execution_park;
 	std::function<bool()> poll_served;
 	bool serving = false, serving_queued = false;
 	// Diagnostics: where the guest is found running, every sample_period.
@@ -906,7 +950,9 @@ uint64_t NativeProcess::compare_exchange(uint64_t address, uint64_t expected, ui
 	}
 	auto &child = *state->child;
 	const pid_t caller = child.pid;
-	child.pid = state->memory_task;
+	// A host thread for each guest thread runs the gate in its own stopped task: only the administrative thread traces the other one.
+	if (!threaded_host() || !state->stopped)
+		child.pid = state->memory_task;
 	user_regs_struct saved{}, registers{};
 	try {
 		trace(PTRACE_GETREGS, child.pid, &saved);
@@ -1550,8 +1596,12 @@ NativeThreadState NativeProcess::new_thread(uint64_t stack_top, uint64_t teb)
 		make_served_block(teb, thread.served_guest, thread.served_block);
 	if (parallel())
 		thread.task = state->child->clone_task(stack_top);
+	// The task goes to the host thread that will serve it, which takes over its tracing.
+	if (parallel() && threaded_host())
+		hand_task(thread.task);
 	return thread;
 }
+
 
 bool NativeProcess::parallel() const
 {
@@ -1561,6 +1611,11 @@ bool NativeProcess::parallel() const
 bool NativeProcess::stopped() const
 {
 	return state->stopped;
+}
+
+bool NativeProcess::gone() const
+{
+	return !state->child || state->child->pid == -1;
 }
 
 int NativeProcess::execution_descriptor() const
@@ -1576,6 +1631,162 @@ void NativeProcess::drain_execution()
 void NativeProcess::set_execution_wait(std::function<void(std::function<bool()>, std::chrono::steady_clock::time_point)> wait)
 {
 	state->execution_wait = std::move(wait);
+}
+
+void NativeProcess::set_execution_turn(std::function<void(std::function<bool()>)> turn)
+{
+	state->execution_turn = std::move(turn);
+}
+
+void NativeProcess::set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point)> park)
+{
+	state->execution_park = std::move(park);
+}
+
+int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted)
+{
+	// The calling host thread traces the task. A stop usually comes within microseconds, so the task is polled a little before the thread
+	// sleeps; the sleep ends at the stop, at the deadline, or when another thread interrupts it to have something done to the task.
+	for (unsigned polls = 0;; ++polls) {
+		int status = 0;
+		const pid_t result = waitpid(task, &status, polls < 200 ? WNOHANG | __WALL : __WALL);
+		if (result == task)
+			return status;
+		if (result == -1 && errno != EINTR)
+			throw std::runtime_error("cannot wait for a native guest task");
+		if (interrupted && interrupted())
+			return -3;
+		if (std::chrono::steady_clock::now() >= deadline)
+			return -1;
+		if (polls == 199) {
+			// The next wait sleeps: an alarm ends it at the deadline.
+			const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - std::chrono::steady_clock::now()).count();
+			itimerspec alarm{};
+			alarm.it_value.tv_sec = left / 1000000000;
+			alarm.it_value.tv_nsec = std::max<long long>(left % 1000000000, 1);
+			timer_settime(wait_timer(), 0, &alarm, nullptr);
+		}
+	}
+}
+
+void NativeProcess::interrupt_host(pid_t host_thread)
+{
+	if (host_thread > 0)
+		::syscall(SYS_tgkill, ::getpid(), host_thread, SIGRTMIN + 5);
+}
+
+void NativeProcess::hand_task(pid_t task)
+{
+	// The task waits in pause() at the runtime's gate, without a tracer, until the host thread that will serve it takes it. A task handed
+	// over stopped by a signal would be left in a group stop, which a tracer that seized it cannot resume reliably.
+	const uint64_t gate = state->child->gate;
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, task, &registers);
+	registers.rip = gate + 1;
+	registers.cs = 0x33;
+	registers.ss = 0x2b;
+	registers.rax = SYS_pause;
+	registers.orig_rax = uint64_t(-1);
+	trace(PTRACE_SETREGS, task, &registers);
+	trace(PTRACE_SYSCALL, task);
+	for (;;) {
+		int status = 0;
+		const pid_t result = waitpid(task, &status, __WALL);
+		if (result == -1 && errno == EINTR)
+			continue;
+		if (result != task || !WIFSTOPPED(status) || WSTOPSIG(status) != (SIGTRAP | 0x80))
+			throw std::runtime_error("a native guest task did not enter its handover wait");
+		break;
+	}
+	if (ptrace(PTRACE_DETACH, task, nullptr, nullptr) == -1)
+		throw std::runtime_error("cannot hand a native guest task to its host thread: " + std::string(std::strerror(errno)));
+	forget_registers();
+}
+
+void NativeProcess::adopt_task(pid_t task)
+{
+	if (ptrace(PTRACE_SEIZE, task, nullptr,
+			reinterpret_cast<void *>(PTRACE_O_EXITKILL | PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACECLONE | PTRACE_O_TRACESECCOMP)) == -1)
+		throw std::runtime_error("cannot take a native guest task: " + std::string(std::strerror(errno)));
+	if (ptrace(PTRACE_INTERRUPT, task, nullptr, nullptr) == -1)
+		throw std::runtime_error("cannot stop a native guest task");
+	for (;;) {
+		int status = 0;
+		const pid_t result = waitpid(task, &status, __WALL);
+		if (result == -1 && errno == EINTR)
+			continue;
+		if (result != task || !WIFSTOPPED(status))
+			throw std::runtime_error("a native guest task did not stop for its host thread");
+		if ((status >> 16) == PTRACE_EVENT_STOP)
+			break;
+	}
+	// The interrupted pause() is not taken up again: the task stands after the gate's system call, as after any other.
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, task, &registers);
+	registers.orig_rax = uint64_t(-1);
+	registers.rax = 0;
+	trace(PTRACE_SETREGS, task, &registers);
+	forget_registers();
+}
+
+static int wait_own_task(pid_t task)
+{
+	for (;;) {
+		int status = 0;
+		const pid_t result = waitpid(task, &status, __WALL);
+		if (result == task)
+			return status;
+		if (result == -1 && errno != EINTR)
+			throw std::runtime_error("cannot wait for a native guest task");
+	}
+}
+
+int NativeProcess::pause_own_task(pid_t task)
+{
+	if (kill(task, SIGSTOP) != 0)
+		throw std::runtime_error("cannot interrupt native task");
+	const int status = wait_own_task(task);
+	if (!WIFSTOPPED(status))
+		throw std::runtime_error("native task ended while being suspended");
+	if (WSTOPSIG(status) != SIGSTOP) {
+		// Its own trap won the race. Drain the pending signal without losing the trap or its fault information.
+		siginfo_t info{};
+		trace(PTRACE_GETSIGINFO, task, &info);
+		trace(PTRACE_SYSEMU, task);
+		const int interrupted = wait_own_task(task);
+		if (!WIFSTOPPED(interrupted) || WSTOPSIG(interrupted) != SIGSTOP)
+			throw std::runtime_error("native task did not receive its suspend interrupt");
+		trace(PTRACE_SETSIGINFO, task, &info);
+	}
+	forget_registers();
+	return status;
+}
+
+NativeContext NativeProcess::task_context(pid_t task)
+{
+	NativeContext result{};
+	trace(PTRACE_GETREGS, task, &result.registers);
+	result.xstate.resize(65536);
+	iovec buffer{result.xstate.data(), result.xstate.size()};
+	if (ptrace(PTRACE_GETREGSET, task, reinterpret_cast<void *>(NT_X86_XSTATE), &buffer) == -1)
+		throw std::runtime_error("host cannot expose native XSTATE");
+	result.xstate.resize(buffer.iov_len);
+	return result;
+}
+
+void NativeProcess::set_task_registers(pid_t task, const user_regs_struct &registers)
+{
+	trace(PTRACE_SETREGS, task, const_cast<user_regs_struct *>(&registers));
+}
+
+void NativeProcess::arm_host_thread()
+{
+	wait_timer();
+}
+
+pid_t NativeProcess::administrative_task() const
+{
+	return state->memory_task;
 }
 
 void NativeProcess::stop_thread(const NativeThreadState &thread)
@@ -1914,13 +2125,28 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid);
 		state->stopped = false;
 		bool sampled_stop = false;
-		if (parallel() && state->execution_wait) {
+		if (parallel() && state->execution_park) {
+			// The host thread lets the others serve their calls while this guest runs, and waits for the guest's stop by itself.
+			const auto until = sampling ? std::min(execution_deadline, std::chrono::steady_clock::now() + state->sample_period) : execution_deadline;
+			status = state->execution_park(child.pid, until);
+			forget_registers();
+			// The sampler looks at where the guest is at each period: it is stopped there, then goes on.
+			if (status == -1 && sampling && std::chrono::steady_clock::now() < execution_deadline) {
+				status = pause_own_task(child.pid);
+				sampled_stop = true;
+			}
+		} else if (parallel() && state->execution_wait) {
 			const pid_t task = child.pid;
 			bool observed = false;
 			uint64_t *const block = state->thread_served_block;
 			const auto command = [block] { return block && __atomic_load_n(&block[0], __ATOMIC_ACQUIRE); };
 			const auto ready = [&] { return command() || queued_pending() || observed || (observed = child.take_stop(task, status)); };
 			const auto until = sampling ? std::min(execution_deadline, std::chrono::steady_clock::now() + state->sample_period) : execution_deadline;
+			// Other threads that stopped for the runtime are served before this one is looked at again, as a thread that calls the runtime
+			// every few microseconds would otherwise be found stopped again at each look and keep the runtime to itself while the calls of
+			// the others waited for seconds.
+			if (state->execution_turn && child.stops_queued())
+				state->execution_turn(ready);
 			while (!observed && std::chrono::steady_clock::now() < until) {
 				// A fixed count parks too early when an empty event probe avoids the mutex; leave a short window for a guest reply.
 				const auto spin_until = std::min(until, std::chrono::steady_clock::now() + std::chrono::microseconds(5));
