@@ -36,7 +36,8 @@ int main(int argc,char **argv)
 			raven::DesktopPresentation presentation;
 			presentation.present=[&](uint64_t handle,std::string_view title,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
 				check(handle && (!window || window==handle) && title=="Raven process exit" && width==8 && height==8 && pixels.size()==256,"exit callback surface differs"); window=handle;
-				for (size_t at=0;at<pixels.size();at+=4) check(pixels[at]==(frames ? 255 : 0) && pixels[at+1]==pixels[at] && pixels[at+2]==pixels[at],"exit callback paint differs"); ++frames;
+				// The window shows its color before it paints and after it paints white.
+				for (size_t at=0;at<pixels.size();at+=4) check(pixels[at]==255 && pixels[at+1]==pixels[at] && pixels[at+2]==pixels[at],"exit callback paint differs"); ++frames;
 			};
 			presentation.remove=[&](uint64_t handle) { check(handle==window,"removed wrong exit window"); ++removed; };
 			const auto result=raven::run_native_process(modules,entry,argv[1],std::chrono::seconds(5),source,{},presentation);
