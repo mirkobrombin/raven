@@ -67,7 +67,10 @@ private:
 				<< " us/call=" << rows[index].second.second / 1000 / std::max<uint64_t>(rows[index].second.first, 1) << '\n';
 		// Each call stops and restarts the guest, which costs more than most calls themselves: the most frequent come next.
 		std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.second.first > b.second.first; });
-		for (size_t index = 0; index < rows.size() && index < 15; ++index)
+		// RAVEN_PROFILE_ROWS sets how many of them are listed.
+		const char *wanted = std::getenv("RAVEN_PROFILE_ROWS");
+		const size_t shown = wanted ? size_t(std::strtoul(wanted, nullptr, 10)) : 15;
+		for (size_t index = 0; index < rows.size() && index < shown; ++index)
 			std::cerr << "profile: frequent " << rows[index].first << " calls=" << rows[index].second.first << '\n';
 		size_t stops = 0;
 		for (const auto &row : rows)
