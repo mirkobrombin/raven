@@ -1859,6 +1859,55 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 	return nullptr;
 }
 
+// The answers a guest thread takes from the runtime's tables while other threads run and the runtime changes them: those that only
+// read, or compute from their arguments alone. Each goes through a wrapper that looks at the count of changes before and after
+// (NativeWindows::table_version) and asks the runtime when a change came in between; the others, which write a log the runtime
+// takes or keep a state of their own, are left to the runtime while threads run at once. So is one that takes an argument from the
+// stack, as SetRect does its fifth: the wrapper keeps its own words there.
+static bool answered_api(std::string_view module, std::string_view name)
+{
+	static const std::unordered_set<std::string_view> user{"IsWindow", "IsWindowUnicode", "GetWindowThreadProcessId", "GetClientRect",
+		"GetWindowRect", "GetWindowLongPtrW", "GetWindowLongPtrA", "GetWindowLongW", "GetWindowLongA", "GetParent", "IsWindowVisible",
+		"IsIconic", "IsChild", "GetKeyState", "GetSystemMetrics", "GetSysColor", "GetForegroundWindow", "GetCursorPos", "GetDesktopWindow",
+		"MapWindowPoints", "GetDpiForWindow", "OffsetRect", "IntersectRect", "EqualRect", "IsRectEmpty", "SetRectEmpty",
+		"CopyRect", "InflateRect", "UnionRect", "PtInRect"};
+	static const std::unordered_set<std::string_view> gdi{"LPtoDP", "DPtoLP", "GetTextColor", "GetBkColor", "GetBkMode", "GetTextAlign"};
+	static const std::unordered_set<std::string_view> theme{"IsThemeActive", "IsAppThemed", "IsCompositionActive", "GetThemeAppProperties"};
+	return (module == "user32.dll" && user.contains(name)) || (module == "gdi32.dll" && gdi.contains(name)) ||
+		(module == "uxtheme.dll" && theme.contains(name));
+}
+
+// The wrapper: mov r11,[pointer]; test r11,r11; jz slow; mov r11,[r11+0x7b0]; test r11b,1; jnz slow; push r9; push r8; push rdx;
+// push rcx; push r11; call answer; mov r11,[pointer]; mov r11,[r11+0x7b0]; cmp r11,[rsp]; jne again; add rsp,40; ret;
+// again: add rsp,8; pop rcx; pop rdx; pop r8; pop r9; slow: jmp stub; then where the answer itself gives up, with the wrapper's
+// return address and the five words still on the stack: add rsp,48; jmp stub.
+static constexpr size_t answer_wrapper_size = 87, answer_wrapper_slot = 128, answer_gives_up = 78;
+
+static std::vector<uint8_t> answer_wrapper(int32_t to_pointer, int32_t to_answer, int32_t to_stub)
+{
+	std::vector<uint8_t> code{0x4c, 0x8b, 0x1d, 0, 0, 0, 0, 0x4d, 0x85, 0xdb, 0x74, 0x3d, 0x4d, 0x8b, 0x9b, 0xb0, 0x07, 0x00, 0x00, 0x41,
+		0xf6, 0xc3, 0x01, 0x75, 0x30, 0x41, 0x51, 0x41, 0x50, 0x52, 0x51, 0x41, 0x53, 0xe8, 0, 0, 0, 0, 0x4c, 0x8b, 0x1d, 0, 0, 0, 0, 0x4d,
+		0x8b, 0x9b, 0xb0, 0x07, 0x00, 0x00, 0x4c, 0x3b, 0x1c, 0x24, 0x75, 0x05, 0x48, 0x83, 0xc4, 0x28, 0xc3, 0x48, 0x83, 0xc4, 0x08, 0x59,
+		0x5a, 0x41, 0x58, 0x41, 0x59, 0xe9, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x30, 0xe9, 0, 0, 0, 0};
+	static_assert(NativeWindows::table_version == 0x7b0, "the answer wrapper's offset is written into its code");
+	const auto put = [&](size_t at, int32_t target) {
+		const int32_t relative = target - int32_t(at + 4);
+		std::memcpy(code.data() + at, &relative, 4);
+	};
+	put(3, to_pointer);
+	put(41, to_pointer);
+	put(34, to_answer);
+	put(74, to_stub);
+	put(83, to_stub);
+	return code;
+}
+
+static bool answer_wrapper_at(std::span<const uint8_t> image, uint32_t rva)
+{
+	return size_t(rva) + answer_wrapper_size <= image.size() && image[rva] == 0x4c && image[rva + 1] == 0x8b && image[rva + 2] == 0x1d &&
+		image[rva + 33] == 0xe8 && image[rva + 73] == 0xe9 && image[rva + 82] == 0xe9;
+}
+
 static size_t string_prelude_slot(const GuestPrelude &prelude)
 {
 	return (prelude.code.size() + 63) & ~size_t(63);
@@ -1903,6 +1952,11 @@ static uint32_t served_stub_rva(std::span<const uint8_t> image, std::string_view
 	// A plain provider has no guest-side prelude in front of its trap.
 	if (rva < image.size() && (image[rva] == 0xcc || (image[rva] == 0x90 && size_t(rva) + 15 < image.size() && image[rva + 14] == 0xcc)))
 		return rva;
+	if (answer_wrapper_at(image, rva)) {
+		int32_t relative = 0;
+		std::memcpy(&relative, image.data() + rva + 74, 4);
+		return uint32_t(int64_t(rva) + 78 + relative);
+	}
 	if (const auto *prelude = block_prelude(module, name)) {
 		int32_t relative = 0;
 		std::memcpy(&relative, image.data() + rva + prelude->size() - 4, 4);
@@ -2052,7 +2106,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	if (fast_paths && !x86)
 		for (const auto symbol : exports)
 			if (const auto *prelude = block_prelude(name, symbol))
-				block_size += (prelude->size() + 63) & ~size_t(63);
+				block_size += ((prelude->size() + 63) & ~size_t(63)) + (call_stubs() && answered_api(name, symbol) ? answer_wrapper_slot : 0);
 	// The block pointer of the served stubs and the block preludes, then the stubs, then the clock preludes, then the commit preludes.
 	const size_t served_start = fast_start + fast_count * 64;
 	const size_t clock_start = served_start + (served_count || call_count || block_size ? 64 + (served_count + call_count) * served_stub_size : 0);
@@ -2162,11 +2216,23 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 			code = blocks_next;
 			blocks_next += (prelude->size() + 63) & ~size_t(63);
 			auto bytes_of = *prelude;
-			const int32_t displacement = int32_t(served_start) - int32_t(code) - 7;
+			// An answer taken while other threads run reads a pointer of its own, which the runtime gives only then, and is entered
+			// through its wrapper, to which it also gives up.
+			const bool wrapped = calls && answered_api(name, exports[index]);
+			const size_t answer = code, wrapper = blocks_next;
+			if (wrapped)
+				blocks_next += answer_wrapper_slot;
+			const int32_t displacement = int32_t(served_start + (wrapped ? 24 : 0)) - int32_t(code) - 7;
 			std::memcpy(bytes_of.data() + 3, &displacement, 4);
-			const int32_t relative = int32_t(trap) - int32_t(code + bytes_of.size());
+			const int32_t relative = int32_t(wrapped ? wrapper + answer_gives_up : trap) - int32_t(code + bytes_of.size());
 			std::memcpy(bytes_of.data() + bytes_of.size() - 4, &relative, 4);
 			std::copy(bytes_of.begin(), bytes_of.end(), bytes.begin() + ptrdiff_t(code));
+			if (wrapped) {
+				const auto entry = answer_wrapper(int32_t(served_start + 24) - int32_t(wrapper), int32_t(answer) - int32_t(wrapper),
+					int32_t(trap) - int32_t(wrapper));
+				std::copy(entry.begin(), entry.end(), bytes.begin() + ptrdiff_t(wrapper));
+				code = wrapper;
+			}
 		}
 		if (const auto *prelude = kernel_module ? string_prelude(name, exports[index]) : nullptr) {
 			const size_t trap = code;
@@ -3115,7 +3181,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			// The clock and the tick counts only read calibration; their pointers are safe while other threads run.
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() &&
 				(guest_clock_api(module_name, symbol.names.at(0)) || block_prelude(module_name, symbol.names.at(0)) == &tick_prelude() ||
-					(!process.parallel() && block_prelude(module_name, symbol.names.at(0)))) &&
+					(!process.parallel() && block_prelude(module_name, symbol.names.at(0))) ||
+					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address))) &&
 				served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address) {
 				auto image = module->loaded.data();
 				int32_t displacement = 0;

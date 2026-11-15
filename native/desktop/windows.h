@@ -133,6 +133,9 @@ public:
 	void take_deferred(const std::function<void(uint32_t,uint64_t)> &apply);
 	// In the served block: bit 0 when the flags are published, bit 1 while a message filter hook is installed; then the desktop window.
 	static constexpr size_t loop_flags=0x738, desktop_handle=0x740;
+	// Counts the changes to the tables the guest reads, in the served block: odd while one is being made. The threads of a guest that
+	// run while the runtime serves another read a table only between two looks at an even count that did not change.
+	static constexpr size_t table_version=0x7b0;
 	void publish_windows();
 	void api_entered() { ++api_depth; }
 	void api_left();

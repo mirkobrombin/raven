@@ -2455,6 +2455,14 @@ void NativeWindows::publish_windows()
 		publish_words();
 		return;
 	}
+	struct Change {
+		uint64_t *version;
+		explicit Change(uint8_t *block) : version(block ? reinterpret_cast<uint64_t *>(block+table_version) : nullptr)
+		{
+			if (version) __atomic_fetch_add(version,1,__ATOMIC_SEQ_CST);
+		}
+		~Change() { if (version) __atomic_fetch_add(version,1,__ATOMIC_SEQ_CST); }
+	} change{screen_block};
 	if (!idle(objects.touched_windows()) || !watched.empty()) objects.windows_changed();
 	// Handles the guest released in a call still in progress keep out of its tables until the runtime carries the release out.
 	deferred_pending.clear();
