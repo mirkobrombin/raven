@@ -864,20 +864,9 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 			context.process.abandon_call();
 			throw ProcessExit{0xc0000409U, rip, true};
 		}
-		uint32_t status = 0xc0000005U;
-		std::vector<uint64_t> parameters;
-		switch (fault.signal) {
-		case SIGSEGV: parameters = {0, fault.fault_address}; break;
-		case SIGBUS: status = 0xc0000006U; parameters = {0, fault.fault_address, 0xc0000006U}; break;
-		case SIGFPE:
-			status = fault.signal_code == FPE_INTDIV ? 0xc0000094U : fault.signal_code == FPE_INTOVF ? 0xc0000095U :
-				fault.signal_code == FPE_FLTDIV ? 0xc000008eU : fault.signal_code == FPE_FLTOVF ? 0xc0000091U : 0xc000008fU;
-			break;
-		case SIGILL: status = 0xc000001dU; break;
-		case SIGTRAP: status = 0x80000003U; break;
-		default: break;
-		}
-		auto record = exceptions->new_record(status, 0, rip, parameters);
+		const auto raised = processor_exception(context.process, fault, rip);
+		set_context_rip(origin, raised.address);
+		auto record = exceptions->new_record(raised.status, 0, raised.address, raised.parameters);
 		// As KiUserExceptionDispatcher finds them: the CONTEXT on a 16-byte boundary below the faulting stack pointer and the record above
 		// it, and the handlers' calls below both. The .NET runtime turns a fault in managed code into an exception from these.
 		const uint64_t frame = (context_rsp(origin) - 0x40 - x64_context::size - ((record_size + 15) & ~size_t(15))) & ~uint64_t(15);
