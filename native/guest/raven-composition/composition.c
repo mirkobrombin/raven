@@ -297,6 +297,7 @@ struct surface {
 	UINT onto_width, onto_height;
 	UINT onto_refused;
 	BOOL onto_failed;
+	BOOL presented; /* the program presented a frame: before that, as on Windows, the surface shows nothing */
 };
 
 /* The surfaces over swap chains, which see the frames their swap chains present. */
@@ -1318,11 +1319,21 @@ static const struct presenter *presenter_of(IDXGISwapChain1 *chain)
 	return NULL;
 }
 
+static void mark_presented(struct surface *surface)
+{
+	EnterCriticalSection(&lock);
+	surface->presented = TRUE;
+	LeaveCriticalSection(&lock);
+}
+
 static HRESULT STDMETHODCALLTYPE surface_present(IDXGISwapChain1 *chain, UINT interval, UINT flags)
 {
 	const struct presenter *presenter = presenter_of(chain);
 	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
-	const BOOL onto = surface && present_onto(surface);
+	BOOL onto;
+	if (surface)
+		mark_presented(surface);
+	onto = surface && present_onto(surface);
 	HRESULT hr;
 	if (surface && !onto)
 		capture_frame(surface, NULL);
@@ -1339,7 +1350,10 @@ static HRESULT STDMETHODCALLTYPE surface_present1(IDXGISwapChain1 *chain, UINT i
 {
 	const struct presenter *presenter = presenter_of(chain);
 	struct surface *surface = flags & DXGI_PRESENT_TEST ? NULL : surface_of_chain(chain);
-	const BOOL onto = surface && present_onto(surface);
+	BOOL onto;
+	if (surface)
+		mark_presented(surface);
+	onto = surface && present_onto(surface);
 	HRESULT hr;
 	if (surface && !onto) {
 		/* The rectangles a present names are all of the frame that changed; none named means all of it did. */
@@ -1879,7 +1893,7 @@ static void render(struct target *target, BOOL frame_only)
 	HBITMAP bitmap, previous;
 	BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
 	struct surface *covering = NULL;
-	BOOL first = FALSE;
+	BOOL first = FALSE, presented = FALSE;
 	void *bits = NULL;
 	UINT index;
 	if (!IsWindow(target->window) || !GetClientRect(target->window, &client) || client.right <= 0 || client.bottom <= 0)
@@ -1895,6 +1909,7 @@ static void render(struct target *target, BOOL frame_only)
 		covers_alone(&fills.items[0], &client, fills.items[0].surface->covers == target->window)) {
 		covering = fills.items[0].surface;
 		first = covering->covers != target->window;
+		presented = covering->presented;
 		covering->covers = target->window;
 		covering->found = TRUE;
 		node_addref(&covering->node);
@@ -1926,12 +1941,12 @@ static void render(struct target *target, BOOL frame_only)
 	LeaveCriticalSection(&lock);
 	/* Frames that cover the window alone go to it as they are presented; the one the swap chain holds goes now when the window has
 	 * only just been found covered. A swap chain given another size holds nothing until the program draws its next frame, and the
-	 * last one presented shows until then. */
+	 * last one presented shows until then. One the program never presented holds nothing to show: what the window painted stays. */
 	if (covering) {
 		EnterCriticalSection(&onto_lock);
 		first = first || !covering->onto;
 		LeaveCriticalSection(&onto_lock);
-		if (!first || present_onto(covering))
+		if (!first || !presented || present_onto(covering))
 			SetRectEmpty(&fills.drawn);
 		node_release(&covering->node);
 	}
