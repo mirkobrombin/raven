@@ -24,7 +24,8 @@ int main(int argc,char **argv)
 			check(title==(frames<4 ? "Raven class background" : "Background: ready"),"class background presentation sequence differs");
 			for (unsigned y=0;y<24;++y) for (unsigned x=0;x<32;++x) {
 				const auto at=(y*32+x)*4;
-				if (!frames) { check(!pixels[at] && !pixels[at+1] && !pixels[at+2] && !pixels[at+3],"initial class background is not zeroed"); continue; }
+				// Before the first paint the surface already shows the class background, never black.
+				if (!frames) { check(pixels[at]==173 && pixels[at+1]==91 && pixels[at+2]==37 && !pixels[at+3],"initial surface does not show the class background"); continue; }
 				const bool mark=x>=4 && x<12 && y>=4 && y<12;
 				const bool hole=frames>=2 && x>=6 && x<10 && y>=6 && y<10;
 				const bool red=mark && !hole;

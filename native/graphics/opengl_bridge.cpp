@@ -19,12 +19,14 @@
 #endif
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <stdexcept>
 #include <type_traits>
 #include <sys/mman.h>
+#include <unistd.h>
 
 namespace raven {
 
@@ -240,6 +242,8 @@ struct OpenGLBridge::State {
 		uint32_t width = 0, height = 0;
 	};
 	std::map<uint64_t, Context> contexts;
+	// With a host thread for each guest thread, the host thread whose binding of a context and a surface stands; 0 when none does.
+	std::atomic<pid_t> bound{0};
 	std::map<uint32_t, Current> current;
 	std::map<uint64_t, Surface> surfaces;
 	std::map<uint64_t, uint32_t> formats;
@@ -248,6 +252,7 @@ struct OpenGLBridge::State {
 
 	~State()
 	{
+		if (threads) threads->set_host_end({});
 		windows.set_surface_cleanup({});
 		if (display == EGL_NO_DISPLAY) return;
 		eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -308,10 +313,27 @@ struct OpenGLBridge::State {
 		return true;
 	}
 
+	// The host keeps a binding for the thread that made it, and a surface or a context bound in one thread cannot be bound in another.
+	// The guest's threads take turns at the one binding the runtime keeps, so the host thread that holds it lets go of it first.
+	void claim()
+	{
+		if (!threads || !threads->host_threads()) return;
+		// The host also keeps for each thread which API its contexts are made for, and a new thread starts with another one.
+		if (thread_local bool chosen = false; !chosen) {
+			if (!eglBindAPI(EGL_OPENGL_API)) throw std::runtime_error("cannot select OpenGL for a host thread");
+			chosen = true;
+		}
+		const pid_t self = pid_t(::gettid());
+		const pid_t holder = bound.exchange(self);
+		if (holder && holder != self)
+			threads->on_host(holder, [display = display] { eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT); });
+	}
+
 	void drop_surface(uint64_t handle)
 	{
 		const auto found = surfaces.find(handle);
 		if (found == surfaces.end()) return;
+		claim();
 		if (found->second.host != EGL_NO_SURFACE &&
 			(eglGetCurrentSurface(EGL_DRAW) == found->second.host || eglGetCurrentSurface(EGL_READ) == found->second.host))
 			eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -332,6 +354,7 @@ struct OpenGLBridge::State {
 		if (!size) throw std::runtime_error("OpenGL device context no longer has a window");
 		if (size->first > 8192 || size->second > 8192 || uint64_t(size->first) * size->second > 16 * 1024 * 1024)
 			throw std::runtime_error("OpenGL drawing surface exceeds bounds");
+		claim();
 		auto &target = surfaces[handle];
 		if (target.host != EGL_NO_SURFACE && (target.width != size->first || target.height != size->second)) {
 			if ((eglGetCurrentSurface(EGL_DRAW) == target.host || eglGetCurrentSurface(EGL_READ) == target.host) &&
@@ -521,6 +544,13 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 {
 	auto &s = *state;
 	s.threads = &threads;
+	// A host thread that ends with a binding would keep its context and surface from every other thread.
+	threads.set_host_end([&s] {
+		if (s.display == EGL_NO_DISPLAY || eglGetCurrentContext() == EGL_NO_CONTEXT) return;
+		eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		pid_t self = pid_t(::gettid());
+		s.bound.compare_exchange_strong(self, 0);
+	});
 	const auto choose = [&s](ApiCall &call) {
 		if (!s.dc_window(call[0])) { call.fail(6); return; }
 		if (!call[1] || call.load<uint16_t>(call[1]) < 40 || call.load<uint16_t>(call[1] + 2) != 1 ||
@@ -567,6 +597,7 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 	registry.add("wglCreateContext", 1, [&s](ApiCall &call) {
 		const auto window = s.dc_window(call[0]);
 		if (!window || !s.formats.contains(window)) { call.fail(2000); return; }
+		s.claim();
 		const auto context = eglCreateContext(s.display, s.config, EGL_NO_CONTEXT, nullptr);
 		if (context == EGL_NO_CONTEXT) { call.fail(50); return; }
 		const auto token = s.next_context++;
@@ -576,6 +607,7 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 	registry.add("wglMakeCurrent", 2, [&s](ApiCall &call) {
 		const auto thread = call.environment.thread_id();
 		const auto previous = s.selected(call);
+		s.claim();
 		if (!call[1]) {
 			if (!previous.context) { s.process.set_queued_gl_elements(false); call.ret(1); return; }
 			if (!eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) { call.fail(50); return; }
@@ -605,6 +637,7 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		if (found == s.contexts.end()) { call.fail(6); return; }
 		s.release_finished_owner(found->second);
 		if (found->second.owner && found->second.owner != call.environment.thread_id()) { call.fail(170); return; }
+		s.claim();
 		if (found->second.owner || eglGetCurrentContext() == found->second.host) {
 			if (!eglMakeCurrent(s.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) { call.fail(50); return; }
 			s.current.erase(found->second.owner);
@@ -619,6 +652,7 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		const auto source = s.contexts.find(call[0]), destination = s.contexts.find(call[1]);
 		if (source == s.contexts.end() || destination == s.contexts.end() || source == destination) { call.fail(6); return; }
 		if (destination->second.used) { call.fail(50); return; }
+		s.claim();
 		const auto shared = eglCreateContext(s.display, s.config, source->second.host, nullptr);
 		if (shared == EGL_NO_CONTEXT) { call.fail(50); return; }
 		if (!eglDestroyContext(s.display, destination->second.host)) { eglDestroyContext(s.display, shared); call.fail(50); return; }

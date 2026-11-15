@@ -41,6 +41,37 @@ int raven_entry(void)
 	SetRect(&second, 5, 5, 15, 60);
 	if (!IntersectRect(&first, &first, &second) || !rect_is(&first, 5, 7, 15, 45))
 		return 25;
+	/* The other arithmetic on rectangles: empty ones, copies, sides moved apart, and the rectangle that holds two, where an empty one
+	   counts for nothing and the result may be one of the two. */
+	SetRect(&second, 5, 5, 5, 60);
+	if (IsRectEmpty(&first) || !IsRectEmpty(&second))
+		return 200;
+	SetRect(&second, 5, 60, 15, 60);
+	if (!IsRectEmpty(&second))
+		return 201;
+	SetRect(&second, 9, 9, 3, 12);
+	if (!IsRectEmpty(&second))
+		return 202;
+	if (!CopyRect(&result, &first) || !rect_is(&result, 5, 7, 15, 45))
+		return 203;
+	if (!InflateRect(&result, 2, -3) || !rect_is(&result, 3, 10, 17, 42))
+		return 204;
+	if (!SetRectEmpty(&result) || !rect_is(&result, 0, 0, 0, 0) || !IsRectEmpty(&result))
+		return 205;
+	SetRect(&second, -4, 20, 9, 70);
+	if (!UnionRect(&result, &first, &second) || !rect_is(&result, -4, 7, 15, 70))
+		return 206;
+	SetRect(&second, 100, 100, 100, 200);
+	if (!UnionRect(&result, &first, &second) || !rect_is(&result, 5, 7, 15, 45))
+		return 207;
+	if (!UnionRect(&result, &second, &first) || !rect_is(&result, 5, 7, 15, 45))
+		return 208;
+	SetRect(&result, 1, 1, 2, 2);
+	if (UnionRect(&result, &second, &second) || !rect_is(&result, 0, 0, 0, 0))
+		return 209;
+	SetRect(&second, 0, 0, 8, 8);
+	if (!UnionRect(&second, &second, &first) || !rect_is(&second, 0, 0, 15, 45))
+		return 210;
 	static const struct { const WCHAR *path; unsigned skip; } names[] = {{L"C:\\dir\\file.txt", 7}, {L"a/b", 2}, {L"C:file", 2},
 		{L"file", 0}, {L"dir\\", 0}, {L"ab:c", 3}, {L"\\\\server\\share\\x", 15}, {L"", 0}, {L"C:", 0}, {L"C:\\", 0}};
 	for (unsigned index = 0; index < sizeof names / sizeof names[0]; ++index)

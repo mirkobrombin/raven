@@ -33,6 +33,8 @@ int main(int argc,char **argv)
 		std::memcpy(entry.loaded.data().data()+target,&window,sizeof window);
 		const auto control=modules.resolve({"foreign-present.exe","control",0,false,0})-entry.loaded.base();
 		auto &command=*reinterpret_cast<uint32_t *>(entry.loaded.data().data()+control);
+		const auto presented=modules.resolve({"foreign-present.exe","presented_frames",0,false,0})-entry.loaded.base();
+		auto &returned=*reinterpret_cast<uint32_t *>(entry.loaded.data().data()+presented);
 		child=::fork();
 		check(child>=0,"foreign-present fork failed");
 		if (!child) {
@@ -48,14 +50,17 @@ int main(int argc,char **argv)
 		// Generous: in a parallel suite the software Vulkan driver shares the processors with other GPU tests.
 		const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
 		for (uint32_t frame=0;frame<2;++frame) {
-			bool received=false;
+			bool received=false,received_frame=false;
 			while (!received && std::chrono::steady_clock::now()<deadline) {
-				received=raven::take_foreign_frame(window,seen,[&](const uint8_t *pixels,uint32_t width,uint32_t height) {
+				received=received_frame || raven::take_foreign_frame(window,seen,[&](const uint8_t *pixels,uint32_t width,uint32_t height) {
 					check(width==(frame ? 80U : 64U) && height==(frame ? 40U : 48U),"foreign frame extent differs");
 					for (size_t i=0;i<size_t(width)*height;++i)
 						check(pixels[i*4]==(frame ? 0 : 191) && pixels[i*4+1]==(frame ? 32 : 128) &&
 							pixels[i*4+2]==(frame ? 255 : 64) && pixels[i*4+3]==255,"foreign GPU texels differ");
 				});
+				// A present reports the window as it is when the present returns, so the window stays as it is until then.
+				received_frame=received;
+				received=received && std::atomic_ref<uint32_t>(returned).load()==frame+1;
 				if (!received) {
 					int status=0;
 					const auto ended=::waitpid(child,&status,WNOHANG);
@@ -63,7 +68,8 @@ int main(int argc,char **argv)
 					::usleep(1000);
 				}
 			}
-			check(received,"foreign GPU frame was not published");
+			check(received_frame,"foreign GPU frame was not published");
+			check(received,"foreign present did not return");
 			if (!frame) raven::publish_window(window,80,40);
 			else raven::withdraw_window(window);
 			std::atomic_ref<uint32_t>(command).store(frame+1,std::memory_order_release);

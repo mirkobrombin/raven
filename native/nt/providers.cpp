@@ -15,6 +15,7 @@
 #include "apiset.h"
 #include "text.h"
 #include "kernel_context.h"
+#include "event_pulse.h"
 #include "actctx.h"
 #include "unwind.h"
 #include "prefix.h"
@@ -185,12 +186,39 @@ static bool served_api(std::string_view module, std::string_view name)
 	return name.starts_with("vkCmd") || std::find(recording.begin(), recording.end(), name) != recording.end();
 }
 
+// With a host thread for each guest thread, every other call of a 64-bit provider has a stub of the same kind: the thread's host
+// thread answers it in the thread's block, and the guest stops only when the host thread was not looking or the call needs it stopped.
+// RAVEN_TRAPPED_CALLS=1 keeps those calls on their breakpoints, for comparing the two.
+static bool call_stubs()
+{
+	static const bool enabled = std::getenv("RAVEN_PARALLEL") && threaded_host() && !std::getenv("RAVEN_TRAPPED_CALLS");
+	return enabled;
+}
+
+// Whether a served stub's code stands at `rva`, as generated or with its block taken from the thread (see run_native_process).
+static bool stub_at(std::span<const uint8_t> image, uint32_t rva)
+{
+	if (size_t(rva) + 0x72 > image.size() || image[rva + 0x70] != 0xcc || image[rva + 0x71] != 0xc3)
+		return false;
+	static constexpr std::array<uint8_t, 3> shared{0x4c, 0x8b, 0x15};
+	static constexpr std::array<uint8_t, 9> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0};
+	static constexpr std::array<uint8_t, 4> store{0x49, 0x89, 0x4a, 0x08};
+	return (std::equal(shared.begin(), shared.end(), image.begin() + rva) || std::equal(local.begin(), local.end(), image.begin() + rva)) &&
+		std::equal(store.begin(), store.end(), image.begin() + rva + 12);
+}
+
 // A served stub: it loads the block address from the provider's own pointer, which stays zero until the runtime maps the block, stores
 // RCX, RDX, R8, R9, RSP and the low halves of XMM0 to XMM3, publishes its own address and spins until the runtime clears it. After a
 // thousand rounds it stops at a breakpoint instead, which gives the processor to the runtime when the two compete for it.
 static constexpr size_t served_stub_size = 128, served_trap = 0x70, served_wait = 85, served_yield = 109;
 
-static std::vector<uint8_t> served_stub(int32_t to_pointer)
+// What a stub does with an answer that is not plain, from `served_tail` on: the served ones stop for the runtime, or take their
+// breakpoint when the call was declined; those a host thread answers go to the routine that runs what the host thread asks of the
+// guest meanwhile (jmp [r10+2560], see NativeProcess::run_in_stub).
+static constexpr size_t served_tail = 103;
+static constexpr std::array<uint8_t, 7> asked_tail{0x41, 0xff, 0xa2, 0x00, 0x0a, 0x00, 0x00};
+
+static std::vector<uint8_t> served_stub(int32_t to_pointer, bool asked = false)
 {
 	std::vector<uint8_t> code{0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0x4d, 0x85, 0xd2, 0x74, uint8_t(served_trap - 12),
 		0x49, 0x89, 0x4a, 0x08, 0x49, 0x89, 0x52, 0x10, 0x4d, 0x89, 0x42, 0x18, 0x4d, 0x89, 0x4a, 0x20, 0x49, 0x89, 0x62, 0x28,
@@ -204,6 +232,8 @@ static std::vector<uint8_t> served_stub(int32_t to_pointer)
 		0x49, 0x8b, 0x42, 0x50, 0x4d, 0x8b, 0x5a, 0x58, 0x4d, 0x85, 0xdb, 0x74, 0x07, 0x41, 0x83, 0xfb, 0x02, 0x74, 0x03, 0xcc, 0xc3};
 	const int32_t displacement = to_pointer - 7;
 	std::memcpy(code.data() + 3, &displacement, 4);
+	if (asked)
+		std::copy(asked_tail.begin(), asked_tail.end(), code.begin() + served_tail);
 	code.resize(served_trap + 2);
 	code[served_trap] = 0xcc;
 	code[served_trap + 1] = 0xc3;
@@ -609,6 +639,18 @@ static const std::vector<uint8_t> &window_exists_prelude()
 	return code;
 }
 
+// GetWindowThreadProcessId, from the thread and the process the record of the window names; a window without a record, or one whose
+// thread the runtime has to say, goes to the runtime.
+static const std::vector<uint8_t> &window_thread_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x3e, 0x4d, 0x8b, 0x9a, 0x00, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x32,
+		0x48, 0x85, 0xc9, 0x74, 0x2d, 0x89, 0xc8, 0x25, 0xff, 0x01, 0x00, 0x00, 0xc1, 0xe0, 0x08, 0x49, 0x01, 0xc3, 0x49, 0x3b, 0x0b, 0x75, 0x1b, 0x41,
+		0x8b, 0x83, 0xf0, 0x00, 0x00, 0x00, 0x85, 0xc0, 0x74, 0x10, 0x48, 0x85, 0xd2, 0x74, 0x0a, 0x45, 0x8b, 0x93, 0xf4, 0x00, 0x00, 0x00, 0x44, 0x89,
+		0x12, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
 static const std::vector<uint8_t> &window_client_prelude()
 {
 	static const std::vector<uint8_t> code{
@@ -715,6 +757,40 @@ static const std::vector<uint8_t> &focus_prelude()
 	static const std::vector<uint8_t> code{
 		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x12, 0x49, 0x83, 0xba, 0x10, 0x07, 0x00, 0x00, 0x00, 0x74, 0x08, 0x49, 0x8b,
 		0x82, 0x18, 0x07, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+// GetForegroundWindow and GetCursorPos read what the runtime publishes beside the focus as every call returns: the pointer moves for
+// the program only as it reads its messages, which is a call. A null point goes to the runtime.
+static constexpr size_t foreground_window = 0x798, cursor_position = 0x7a0;
+
+static const std::vector<uint8_t> &foreground_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x12, 0x49, 0x83, 0xba, 0x10, 0x07, 0x00, 0x00, 0x00, 0x74, 0x08, 0x49, 0x8b,
+		0x82, 0x98, 0x07, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(foreground_window == 0x798, "the foreground prelude's offset is written into its code");
+	return code;
+}
+
+// DefWindowProcW of a message it does nothing with but answer zero, for a window the table holds: a registered message, the pointer
+// moving and the plain button messages. Everything else goes to the runtime.
+static const std::vector<uint8_t> &default_procedure_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x49, 0x4d, 0x8b, 0x9a, 0x00, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x3d,
+		0x89, 0xc8, 0x25, 0xff, 0x01, 0x00, 0x00, 0xc1, 0xe0, 0x08, 0x49, 0x3b, 0x0c, 0x03, 0x75, 0x2d, 0x81, 0xfa, 0x00, 0xc0, 0x00, 0x00, 0x72, 0x0b,
+		0x81, 0xfa, 0xff, 0xff, 0x00, 0x00, 0x77, 0x1d, 0x31, 0xc0, 0xc3, 0x8d, 0x82, 0x00, 0xfe, 0xff, 0xff, 0x83, 0xf8, 0x08, 0x77, 0x0f, 0x41, 0xbb,
+		0x97, 0x01, 0x00, 0x00, 0x41, 0x0f, 0xa3, 0xc3, 0x73, 0x03, 0x31, 0xc0, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+static const std::vector<uint8_t> &cursor_position_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x1f, 0x49, 0x83, 0xba, 0x10, 0x07, 0x00, 0x00, 0x00, 0x74, 0x15, 0x48, 0x85,
+		0xc9, 0x74, 0x10, 0x49, 0x8b, 0x82, 0xa0, 0x07, 0x00, 0x00, 0x48, 0x89, 0x01, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(cursor_position == 0x7a0, "the pointer position prelude's offset is written into its code");
 	return code;
 }
 
@@ -859,6 +935,30 @@ static const std::vector<uint8_t> &window_theme_prelude()
 	return code;
 }
 
+// Whether visual styles are off is settled as the process starts, from the environment or the prefix registry, and holds for its life.
+static bool classic_theme()
+{
+	const char *chosen = std::getenv("RAVEN_THEME");
+	return chosen && std::string_view(chosen) == "classic";
+}
+
+// Whether visual styles are on, published once the prefix registry has had its say as the process starts: 1 without them, 2 with
+// them, nothing before. IsThemeActive, IsAppThemed and IsCompositionActive answer it; GetThemeAppProperties gives every style flag
+// when they are on, none otherwise.
+static constexpr size_t theme_state = 0x790;
+
+static const std::vector<uint8_t> &theme_state_prelude(bool properties)
+{
+	static const std::vector<uint8_t> state{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x0e, 0x41, 0x8b, 0x82, 0x90, 0x07, 0x00, 0x00, 0x85, 0xc0, 0x74, 0x03,
+		0xff, 0xc8, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static const std::vector<uint8_t> flags{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x11, 0x41, 0x8b, 0x82, 0x90, 0x07, 0x00, 0x00, 0x85, 0xc0, 0x74, 0x06,
+		0xff, 0xc8, 0x6b, 0xc0, 0x07, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(theme_state == 0x790, "the theme state preludes' offset is written into their code");
+	return properties ? flags : state;
+}
+
 static const std::vector<uint8_t> &file_name_prelude()
 {
 	static const std::vector<uint8_t> code{
@@ -986,6 +1086,33 @@ static const std::vector<uint8_t> &dc_text_align_prelude()
 	return code;
 }
 
+// LPtoDP and DPtoLP, which move points by where the context's logical origin lies on its pixels: the attribute table holds that as
+// two 16-bit numbers at the end of the context's slot, or 0x80008000 for an origin they cannot hold. A context without a slot, the
+// published screen context, no points, more than 64 of them or such an origin goes to the runtime.
+static const std::vector<uint8_t> &dc_to_device_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x6e, 0x4d, 0x8b, 0x9a, 0x48, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x62,
+		0x48, 0x85, 0xc9, 0x74, 0x5d, 0x49, 0x3b, 0x8a, 0x00, 0x06, 0x00, 0x00, 0x74, 0x54, 0x89, 0xc8, 0x25, 0xff, 0x03, 0x00, 0x00, 0xc1, 0xe0, 0x05,
+		0x49, 0x8d, 0x84, 0x03, 0x00, 0x10, 0x00, 0x00, 0x48, 0x3b, 0x08, 0x75, 0x3d, 0x48, 0x85, 0xd2, 0x74, 0x38, 0x45, 0x85, 0xc0, 0x7e, 0x33, 0x41,
+		0x83, 0xf8, 0x40, 0x77, 0x2d, 0x44, 0x8b, 0x58, 0x1c, 0x41, 0x81, 0xfb, 0x00, 0x80, 0x00, 0x80, 0x74, 0x20, 0x45, 0x0f, 0xbf, 0xd3, 0x41, 0xc1,
+		0xfb, 0x10, 0x44, 0x89, 0xc0, 0x44, 0x01, 0x12, 0x44, 0x01, 0x5a, 0x04, 0x48, 0x83, 0xc2, 0x08, 0xff, 0xc8, 0x75, 0xf1, 0xb8, 0x01, 0x00, 0x00,
+		0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+static const std::vector<uint8_t> &dc_to_logical_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x6e, 0x4d, 0x8b, 0x9a, 0x48, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x62,
+		0x48, 0x85, 0xc9, 0x74, 0x5d, 0x49, 0x3b, 0x8a, 0x00, 0x06, 0x00, 0x00, 0x74, 0x54, 0x89, 0xc8, 0x25, 0xff, 0x03, 0x00, 0x00, 0xc1, 0xe0, 0x05,
+		0x49, 0x8d, 0x84, 0x03, 0x00, 0x10, 0x00, 0x00, 0x48, 0x3b, 0x08, 0x75, 0x3d, 0x48, 0x85, 0xd2, 0x74, 0x38, 0x45, 0x85, 0xc0, 0x7e, 0x33, 0x41,
+		0x83, 0xf8, 0x40, 0x77, 0x2d, 0x44, 0x8b, 0x58, 0x1c, 0x41, 0x81, 0xfb, 0x00, 0x80, 0x00, 0x80, 0x74, 0x20, 0x45, 0x0f, 0xbf, 0xd3, 0x41, 0xc1,
+		0xfb, 0x10, 0x44, 0x89, 0xc0, 0x44, 0x29, 0x12, 0x44, 0x29, 0x5a, 0x04, 0x48, 0x83, 0xc2, 0x08, 0xff, 0xc8, 0x75, 0xf1, 0xb8, 0x01, 0x00, 0x00,
+		0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
 static const std::vector<uint8_t> &dc_get_text_color_prelude()
 {
 	static const std::vector<uint8_t> code{
@@ -1077,6 +1204,69 @@ static const std::vector<uint8_t> &init_once_begin_prelude()
 		0xeb, 0xdf,
 		// slow: jmp trap
 		0xe9, 0, 0, 0, 0};
+	return code;
+}
+
+// A rectangle is empty when it has no width or no height; a missing one is served.
+static const std::vector<uint8_t> &is_rect_empty_prelude()
+{
+	static const std::vector<uint8_t> code{
+		// lea r11,[rip+block]; test rcx,rcx; jz slow; mov eax,[rcx]; cmp eax,[rcx+8]; jge empty; mov eax,[rcx+4]; cmp eax,[rcx+12]; jge empty;
+		// xor eax,eax; ret; empty: mov eax,1; ret; slow: jmp trap
+		0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x18, 0x8b, 0x01, 0x3b, 0x41, 0x08, 0x7d, 0x0b, 0x8b, 0x41, 0x04, 0x3b, 0x41,
+		0x0c, 0x7d, 0x03, 0x31, 0xc0, 0xc3, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+// SetRectEmpty clears the sixteen bytes; a missing rectangle is served.
+static const std::vector<uint8_t> &set_rect_empty_prelude()
+{
+	static const std::vector<uint8_t> code{
+		// lea r11,[rip+block]; test rcx,rcx; jz slow; xor eax,eax; mov [rcx],rax; mov [rcx+8],rax; mov eax,1; ret; slow: jmp trap
+		0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x0f, 0x31, 0xc0, 0x48, 0x89, 0x01, 0x48, 0x89, 0x41, 0x08, 0xb8, 0x01, 0x00,
+		0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+// CopyRect moves the sixteen bytes; a missing rectangle is served.
+static const std::vector<uint8_t> &copy_rect_prelude()
+{
+	static const std::vector<uint8_t> code{
+		// lea r11,[rip+block]; test rcx,rcx; jz slow; test rdx,rdx; jz slow; mov rax,[rdx]; mov r10,[rdx+8]; mov [rcx],rax; mov [rcx+8],r10;
+		// mov eax,1; ret; slow: jmp trap
+		0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x19, 0x48, 0x85, 0xd2, 0x74, 0x14, 0x48, 0x8b, 0x02, 0x4c, 0x8b, 0x52, 0x08,
+		0x48, 0x89, 0x01, 0x4c, 0x89, 0x51, 0x08, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+// InflateRect moves each pair of sides apart by the amounts given; a missing rectangle is served.
+static const std::vector<uint8_t> &inflate_rect_prelude()
+{
+	static const std::vector<uint8_t> code{
+		// lea r11,[rip+block]; test rcx,rcx; jz slow; sub [rcx],edx; add [rcx+8],edx; sub [rcx+4],r8d; add [rcx+12],r8d; mov eax,1; ret;
+		// slow: jmp trap
+		0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x13, 0x29, 0x11, 0x01, 0x51, 0x08, 0x44, 0x29, 0x41, 0x04, 0x44, 0x01, 0x41,
+		0x0c, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	return code;
+}
+
+// UnionRect gives the rectangle that holds both, an empty one counting for nothing: the other alone when one is empty, zeros and
+// FALSE when both are. The four sides are worked out before any is written, as the result may be one of the two. A missing rectangle
+// is served.
+static const std::vector<uint8_t> &union_rect_prelude()
+{
+	static const std::vector<uint8_t> code{
+		// lea r11,[rip+block]; the three pointers tested, slow when one is missing; a empty: b, or zeros when b is empty too; b empty: a;
+		// else the lesser left and top and the greater right and bottom in eax, r9d, r10d, r11d, stored; mov eax,1; ret; slow: jmp trap
+		0x4c, 0x8d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x0f, 0x84, 0xbd, 0x00, 0x00, 0x00, 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xb4, 0x00, 0x00,
+		0x00, 0x4d, 0x85, 0xc0, 0x0f, 0x84, 0xab, 0x00, 0x00, 0x00, 0x8b, 0x02, 0x3b, 0x42, 0x08, 0x7d, 0x5f, 0x8b, 0x42, 0x04, 0x3b, 0x42, 0x0c, 0x7d,
+		0x57, 0x41, 0x8b, 0x00, 0x41, 0x3b, 0x40, 0x08, 0x7d, 0x75, 0x41, 0x8b, 0x40, 0x04, 0x41, 0x3b, 0x40, 0x0c, 0x7d, 0x6b, 0x8b, 0x02, 0x41, 0x3b,
+		0x00, 0x41, 0x0f, 0x4f, 0x00, 0x44, 0x8b, 0x4a, 0x04, 0x45, 0x3b, 0x48, 0x04, 0x45, 0x0f, 0x4f, 0x48, 0x04, 0x44, 0x8b, 0x52, 0x08, 0x45, 0x3b,
+		0x50, 0x08, 0x45, 0x0f, 0x4c, 0x50, 0x08, 0x44, 0x8b, 0x5a, 0x0c, 0x45, 0x3b, 0x58, 0x0c, 0x45, 0x0f, 0x4c, 0x58, 0x0c, 0x89, 0x01, 0x44, 0x89,
+		0x49, 0x04, 0x44, 0x89, 0x51, 0x08, 0x44, 0x89, 0x59, 0x0c, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0x41, 0x8b, 0x00, 0x41, 0x3b, 0x40, 0x08, 0x7d,
+		0x32, 0x41, 0x8b, 0x40, 0x04, 0x41, 0x3b, 0x40, 0x0c, 0x7d, 0x28, 0x49, 0x8b, 0x00, 0x4d, 0x8b, 0x48, 0x08, 0x48, 0x89, 0x01, 0x4c, 0x89, 0x49,
+		0x08, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0x48, 0x8b, 0x02, 0x4c, 0x8b, 0x4a, 0x08, 0x48, 0x89, 0x01, 0x4c, 0x89, 0x49, 0x08, 0xb8, 0x01, 0x00,
+		0x00, 0x00, 0xc3, 0x31, 0xc0, 0x48, 0x89, 0x01, 0x48, 0x89, 0x41, 0x08, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
 	return code;
 }
 
@@ -1323,6 +1513,20 @@ static const std::vector<uint8_t> &quiet_status_prelude()
 // answered in the guest with a cookie of its own, which DeactivateActCtx takes back there; Office brackets most of its window calls so.
 static constexpr size_t current_context_pointer = 0x780;
 
+// GetKeyState, from the key states the runtime publishes whenever the program runs on (see NativeWindows::set_key_table): they
+// change only as the program reads its messages, which stops it.
+static constexpr size_t key_pointer = 0x788;
+
+static const std::vector<uint8_t> &key_state_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x26, 0x4d, 0x8b, 0x9a, 0x88, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x1a,
+		0x0f, 0xb6, 0xc1, 0x41, 0x0f, 0xb6, 0x04, 0x03, 0x89, 0xc2, 0x83, 0xe2, 0x01, 0xa8, 0x80, 0x74, 0x06, 0x81, 0xca, 0x80, 0xff, 0x00, 0x00, 0x89,
+		0xd0, 0xc3, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(key_pointer == 0x788, "the key state prelude's offset is written into its code");
+	return code;
+}
+
 static const std::vector<uint8_t> &context_activate_prelude()
 {
 	static const std::vector<uint8_t> code{
@@ -1535,6 +1739,16 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		return &init_once_begin_prelude();
 	if (module == "user32.dll" && name == "EqualRect")
 		return &equal_rect_prelude();
+	if (module == "user32.dll" && name == "IsRectEmpty")
+		return &is_rect_empty_prelude();
+	if (module == "user32.dll" && name == "SetRectEmpty")
+		return &set_rect_empty_prelude();
+	if (module == "user32.dll" && name == "CopyRect")
+		return &copy_rect_prelude();
+	if (module == "user32.dll" && name == "InflateRect")
+		return &inflate_rect_prelude();
+	if (module == "user32.dll" && name == "UnionRect")
+		return &union_rect_prelude();
 	if (module == "user32.dll" && (name == "MonitorFromPoint" || name == "MonitorFromRect" || name == "MonitorFromWindow"))
 		return &monitor_prelude();
 	if (module == "user32.dll" && name == "GetWindowDpiAwarenessContext")
@@ -1555,11 +1769,10 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 	if ((module == "shlwapi.dll" || module == "kernelbase.dll") && name == "PathFindFileNameW")
 		return &file_name_prelude();
 	// Without visual styles no window has a theme, and the answer needs no trip to the runtime.
-	if (module == "uxtheme.dll" && name == "GetWindowTheme" && [] {
-			const char *chosen = std::getenv("RAVEN_THEME");
-			return chosen && std::string_view(chosen) == "classic";
-		}())
+	if (module == "uxtheme.dll" && name == "GetWindowTheme" && classic_theme())
 		return &window_theme_prelude();
+	if (module == "uxtheme.dll" && (name == "IsThemeActive" || name == "IsAppThemed" || name == "IsCompositionActive" || name == "GetThemeAppProperties"))
+		return &theme_state_prelude(name == "GetThemeAppProperties");
 	if (module == "user32.dll" && name == "TranslateMessage")
 		return &translate_message_prelude();
 	if (module == "user32.dll" && name == "CallMsgFilterW")
@@ -1581,10 +1794,11 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 	if (module == "user32.dll" && name == "IntersectRect")
 		return &intersect_rect_prelude();
 	if (module == "gdi32.dll") {
-		static constexpr std::array<std::pair<std::string_view, const std::vector<uint8_t> &(*)()>, 8> attributes{{
+		static constexpr std::array<std::pair<std::string_view, const std::vector<uint8_t> &(*)()>, 10> attributes{{
 			{"SetTextColor", dc_text_color_prelude}, {"SetBkColor", dc_background_color_prelude}, {"SetBkMode", dc_background_mode_prelude},
 			{"SetTextAlign", dc_text_align_prelude}, {"GetTextColor", dc_get_text_color_prelude}, {"GetBkColor", dc_get_background_color_prelude},
-			{"GetBkMode", dc_get_background_mode_prelude}, {"GetTextAlign", dc_get_text_align_prelude}}};
+			{"GetBkMode", dc_get_background_mode_prelude}, {"GetTextAlign", dc_get_text_align_prelude},
+			{"LPtoDP", dc_to_device_prelude}, {"DPtoLP", dc_to_logical_prelude}}};
 		for (const auto &[attribute, prelude] : attributes)
 			if (name == attribute)
 				return &prelude();
@@ -1613,6 +1827,10 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		return &window_property_prelude();
 	if (name == "IsWindow" || name == "IsWindowUnicode")
 		return &window_exists_prelude();
+	if (name == "GetWindowThreadProcessId")
+		return &window_thread_prelude();
+	if (name == "GetKeyState")
+		return &key_state_prelude();
 	if (name == "GetClientRect")
 		return &window_client_prelude();
 	if (name == "GetWindowRect")
@@ -1623,6 +1841,12 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		return &window_dpi_prelude();
 	if (name == "GetFocus")
 		return &focus_prelude();
+	if (name == "GetForegroundWindow")
+		return &foreground_prelude();
+	if (name == "GetCursorPos")
+		return &cursor_position_prelude();
+	if (name == "DefWindowProcW")
+		return &default_procedure_prelude();
 	if (name == "GetMenuItemCount")
 		return &menu_count_prelude();
 	if (name == "GetSubMenu")
@@ -1634,6 +1858,55 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 	if (name == "GetMenuState")
 		return &menu_state_prelude();
 	return nullptr;
+}
+
+// The answers a guest thread takes from the runtime's tables while other threads run and the runtime changes them: those that only
+// read, or compute from their arguments alone. Each goes through a wrapper that looks at the count of changes before and after
+// (NativeWindows::table_version) and asks the runtime when a change came in between; the others, which write a log the runtime
+// takes or keep a state of their own, are left to the runtime while threads run at once. So is one that takes an argument from the
+// stack, as SetRect does its fifth: the wrapper keeps its own words there.
+static bool answered_api(std::string_view module, std::string_view name)
+{
+	static const std::unordered_set<std::string_view> user{"IsWindow", "IsWindowUnicode", "GetWindowThreadProcessId", "GetClientRect",
+		"GetWindowRect", "GetWindowLongPtrW", "GetWindowLongPtrA", "GetWindowLongW", "GetWindowLongA", "GetParent", "IsWindowVisible",
+		"IsIconic", "IsChild", "GetKeyState", "GetSystemMetrics", "GetSysColor", "GetForegroundWindow", "GetCursorPos", "GetDesktopWindow",
+		"MapWindowPoints", "GetDpiForWindow", "OffsetRect", "IntersectRect", "EqualRect", "IsRectEmpty", "SetRectEmpty",
+		"CopyRect", "InflateRect", "UnionRect", "PtInRect"};
+	static const std::unordered_set<std::string_view> gdi{"LPtoDP", "DPtoLP", "GetTextColor", "GetBkColor", "GetBkMode", "GetTextAlign"};
+	static const std::unordered_set<std::string_view> theme{"IsThemeActive", "IsAppThemed", "IsCompositionActive", "GetThemeAppProperties"};
+	return (module == "user32.dll" && user.contains(name)) || (module == "gdi32.dll" && gdi.contains(name)) ||
+		(module == "uxtheme.dll" && theme.contains(name));
+}
+
+// The wrapper: mov r11,[pointer]; test r11,r11; jz slow; mov r11,[r11+0x7b0]; test r11b,1; jnz slow; push r9; push r8; push rdx;
+// push rcx; push r11; call answer; mov r11,[pointer]; mov r11,[r11+0x7b0]; cmp r11,[rsp]; jne again; add rsp,40; ret;
+// again: add rsp,8; pop rcx; pop rdx; pop r8; pop r9; slow: jmp stub; then where the answer itself gives up, with the wrapper's
+// return address and the five words still on the stack: add rsp,48; jmp stub.
+static constexpr size_t answer_wrapper_size = 87, answer_wrapper_slot = 128, answer_gives_up = 78;
+
+static std::vector<uint8_t> answer_wrapper(int32_t to_pointer, int32_t to_answer, int32_t to_stub)
+{
+	std::vector<uint8_t> code{0x4c, 0x8b, 0x1d, 0, 0, 0, 0, 0x4d, 0x85, 0xdb, 0x74, 0x3d, 0x4d, 0x8b, 0x9b, 0xb0, 0x07, 0x00, 0x00, 0x41,
+		0xf6, 0xc3, 0x01, 0x75, 0x30, 0x41, 0x51, 0x41, 0x50, 0x52, 0x51, 0x41, 0x53, 0xe8, 0, 0, 0, 0, 0x4c, 0x8b, 0x1d, 0, 0, 0, 0, 0x4d,
+		0x8b, 0x9b, 0xb0, 0x07, 0x00, 0x00, 0x4c, 0x3b, 0x1c, 0x24, 0x75, 0x05, 0x48, 0x83, 0xc4, 0x28, 0xc3, 0x48, 0x83, 0xc4, 0x08, 0x59,
+		0x5a, 0x41, 0x58, 0x41, 0x59, 0xe9, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x30, 0xe9, 0, 0, 0, 0};
+	static_assert(NativeWindows::table_version == 0x7b0, "the answer wrapper's offset is written into its code");
+	const auto put = [&](size_t at, int32_t target) {
+		const int32_t relative = target - int32_t(at + 4);
+		std::memcpy(code.data() + at, &relative, 4);
+	};
+	put(3, to_pointer);
+	put(41, to_pointer);
+	put(34, to_answer);
+	put(74, to_stub);
+	put(83, to_stub);
+	return code;
+}
+
+static bool answer_wrapper_at(std::span<const uint8_t> image, uint32_t rva)
+{
+	return size_t(rva) + answer_wrapper_size <= image.size() && image[rva] == 0x4c && image[rva + 1] == 0x8b && image[rva + 2] == 0x1d &&
+		image[rva + 33] == 0xe8 && image[rva + 73] == 0xe9 && image[rva + 82] == 0xe9;
 }
 
 static size_t string_prelude_slot(const GuestPrelude &prelude)
@@ -1680,6 +1953,11 @@ static uint32_t served_stub_rva(std::span<const uint8_t> image, std::string_view
 	// A plain provider has no guest-side prelude in front of its trap.
 	if (rva < image.size() && (image[rva] == 0xcc || (image[rva] == 0x90 && size_t(rva) + 15 < image.size() && image[rva + 14] == 0xcc)))
 		return rva;
+	if (answer_wrapper_at(image, rva)) {
+		int32_t relative = 0;
+		std::memcpy(&relative, image.data() + rva + 74, 4);
+		return uint32_t(int64_t(rva) + 78 + relative);
+	}
 	if (const auto *prelude = block_prelude(module, name)) {
 		int32_t relative = 0;
 		std::memcpy(&relative, image.data() + rva + prelude->size() - 4, 4);
@@ -1723,6 +2001,8 @@ uint64_t api_trap_address(const PEModule &provider, std::string_view module, std
 	// A plain x64 slot keeps its breakpoint past the space hooking libraries overwrite.
 	if (!served_api(module, name) && size_t(stub) + 15 < image.size() && image[stub] == 0x90 && image[stub + 14] == 0xcc)
 		return provider.loaded.base() + stub + 14;
+	if (!served_api(module, name) && call_stubs() && stub_at(image, stub))
+		return provider.loaded.base() + stub + served_trap;
 	return provider.loaded.base() + stub + fast_stub_trap_offset(module, name);
 }
 
@@ -1807,9 +2087,14 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				fast_count += stub.name == symbol;
 	const size_t fast_start = (data_start + data_exports.size() * 16 + 63) & ~size_t(63);
 	size_t served_count = 0;
+	// The calls the host threads answer have stubs of the same kind, after the served ones; a system service keeps its own entry.
+	const bool calls = fast_paths && !x86 && call_stubs();
+	size_t call_count = 0;
 	if (!x86)
-		for (const auto symbol : exports)
+		for (const auto symbol : exports) {
 			served_count += served_api(name, symbol);
+			call_count += calls && !served_api(name, symbol) && !nt_service_number(name, symbol);
+		}
 	size_t clock_count = 0;
 	if (!x86)
 		for (const auto symbol : exports)
@@ -1822,10 +2107,10 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	if (fast_paths && !x86)
 		for (const auto symbol : exports)
 			if (const auto *prelude = block_prelude(name, symbol))
-				block_size += (prelude->size() + 63) & ~size_t(63);
+				block_size += ((prelude->size() + 63) & ~size_t(63)) + (call_stubs() && answered_api(name, symbol) ? answer_wrapper_slot : 0);
 	// The block pointer of the served stubs and the block preludes, then the stubs, then the clock preludes, then the commit preludes.
 	const size_t served_start = fast_start + fast_count * 64;
-	const size_t clock_start = served_start + (served_count || block_size ? 64 + served_count * served_stub_size : 0);
+	const size_t clock_start = served_start + (served_count || call_count || block_size ? 64 + (served_count + call_count) * served_stub_size : 0);
 	const size_t commit_start = clock_start + clock_count * clock_prelude_size;
 	const size_t strings_start = commit_start + commit_count * commit_prelude_size;
 	size_t strings_size = 0;
@@ -1920,17 +2205,35 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				const auto prelude = clock_prelude(int32_t(served_start + 8) - int32_t(code), int32_t(served) - int32_t(code));
 				std::copy(prelude.begin(), prelude.end(), bytes.begin() + ptrdiff_t(code));
 			}
+		} else if (calls && !service) {
+			// The stub reads a pointer of its own that stays zero, so it falls to its breakpoint until the runtime has it take the
+			// thread's block instead.
+			code = served_start + 64 + served_next++ * served_stub_size;
+			const auto stub = served_stub(int32_t(served_start + 16) - int32_t(code), true);
+			std::copy(stub.begin(), stub.end(), bytes.begin() + ptrdiff_t(code));
 		}
 		if (const auto *prelude = fast_paths && !x86 && !service ? block_prelude(name, exports[index]) : nullptr) {
 			const size_t trap = code;
 			code = blocks_next;
 			blocks_next += (prelude->size() + 63) & ~size_t(63);
 			auto bytes_of = *prelude;
-			const int32_t displacement = int32_t(served_start) - int32_t(code) - 7;
+			// An answer taken while other threads run reads a pointer of its own, which the runtime gives only then, and is entered
+			// through its wrapper, to which it also gives up.
+			const bool wrapped = calls && answered_api(name, exports[index]);
+			const size_t answer = code, wrapper = blocks_next;
+			if (wrapped)
+				blocks_next += answer_wrapper_slot;
+			const int32_t displacement = int32_t(served_start + (wrapped ? 24 : 0)) - int32_t(code) - 7;
 			std::memcpy(bytes_of.data() + 3, &displacement, 4);
-			const int32_t relative = int32_t(trap) - int32_t(code + bytes_of.size());
+			const int32_t relative = int32_t(wrapped ? wrapper + answer_gives_up : trap) - int32_t(code + bytes_of.size());
 			std::memcpy(bytes_of.data() + bytes_of.size() - 4, &relative, 4);
 			std::copy(bytes_of.begin(), bytes_of.end(), bytes.begin() + ptrdiff_t(code));
+			if (wrapped) {
+				const auto entry = answer_wrapper(int32_t(served_start + 24) - int32_t(wrapper), int32_t(answer) - int32_t(wrapper),
+					int32_t(trap) - int32_t(wrapper));
+				std::copy(entry.begin(), entry.end(), bytes.begin() + ptrdiff_t(wrapper));
+				code = wrapper;
+			}
 		}
 		if (const auto *prelude = kernel_module ? string_prelude(name, exports[index]) : nullptr) {
 			const size_t trap = code;
@@ -2443,7 +2746,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	std::unique_ptr<OpenGLBridge> opengl;
 	if (native_opengl) opengl = std::make_unique<OpenGLBridge>(process, modules, desktop_objects, windows);
 #endif
-	desktop.set_updated([&](uint64_t window) { windows.drawing(window); });
+	desktop.set_updated([&](uint64_t window,const DesktopRect *area) { windows.drawing(window,area); });
 #ifdef RAVEN_VULKAN
 	VulkanBridge vulkan(process, modules);
 	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },
@@ -2564,6 +2867,29 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				"GetCurrentInputMessageSource", "GetWindowThreadProcessId", "GetClassNameW", "GetClassLongPtrW", "GetClassLongW"};
 			if (!keep_quiet.contains(api_name))
 				windows.wake(environment.thread_id());
+			// A waiting thread's condition is looked at again after any call but those that end no wait, which say so here: they ask for
+			// state, draw, or work on memory, and they are most of what a program calls.
+			static const std::unordered_set<std::string_view> inert{"GetWindowThreadProcessId", "GetKeyState", "GetAsyncKeyState", "LPtoDP",
+				"DPtoLP", "GetSystemMetrics", "GetSysColor", "GetClientRect", "GetWindowRect", "IsWindow", "IsWindowVisible", "IsWindowUnicode",
+				"IsChild", "IsIconic", "GetParent", "GetAncestor", "GetWindowLongPtrW", "GetWindowLongPtrA", "GetWindowLongW", "GetWindowLongA",
+				"GetClassLongPtrW", "GetClassLongW", "GetClassNameW", "GetPropW", "GetDeviceCaps", "SelectObject", "GetStockObject", "GetObjectW",
+				"GetObjectA", "GetCurrentObject", "FlsGetValue", "FlsSetValue", "TlsGetValue", "TlsSetValue", "RtlGrowFunctionTable",
+				"LocateXStateFeature", "RtlDllShutdownInProgress", "GetSystemTimePreciseAsFileTime", "GetSystemTimeAsFileTime",
+				"QueryPerformanceCounter", "QueryPerformanceFrequency", "GetTickCount", "GetTickCount64", "MapWindowPoints", "ScreenToClient",
+				"ClientToScreen", "GetFocus", "GetCapture", "GetActiveWindow", "GetForegroundWindow", "GetCursorPos", "GetDesktopWindow",
+				"GetDpiForWindow", "GetTextMetricsW", "GetTextExtentPoint32W", "IsAppThemed",
+				"IsThemeActive", "GetThemeAppProperties", "VirtualAlloc", "VirtualFree", "VirtualQuery", "VirtualProtect",
+				"NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtQueryVirtualMemory", "NtProtectVirtualMemory", "MapViewOfFile",
+				"BitBlt", "StretchBlt", "PatBlt", "FillRect", "MoveToEx", "LineTo", "SaveDC", "RestoreDC", "SetBkMode", "SetBkColor",
+				"SetTextColor", "GetTextColor", "GetBkColor", "CreateRectRgn", "CombineRgn", "SetRectRgn", "GetRgnBox", "SelectClipRgn",
+				"CreateCompatibleDC", "CreateCompatibleBitmap", "CreateSolidBrush", "CreatePen", "GdiFlush", "GetLastError", "SetLastError",
+				"GetProcAddress", "GetModuleHandleW", "GetModuleHandleExW", "EventProviderEnabled", "MultiByteToWideChar",
+				"WideCharToMultiByte", "lstrcmpiW", "lstrlenW", "CompareStringOrdinal", "GetCurrentThreadId", "GetCurrentProcessId",
+				"IsProcessorFeaturePresent", "RavenCanvasPixels", "RavenCanvasCreate", "RavenCanvasSize", "RavenCanvasBounds",
+				"RavenCanvasBatch", "GetKeyboardState", "GetQueueStatus", "GetInputState", "GetMessageTime", "GetMessagePos",
+				"GetDoubleClickTime", "GetMonitorInfoW", "MonitorFromWindow", "MonitorFromPoint", "MonitorFromRect"};
+			if (threads_ptr && (inert.contains(api_name) || api_name.starts_with("vkCmd") || api_name.starts_with("gl")))
+				threads_ptr->quiet_call();
 			// ntdll's RtlExitUserProcess is the ExitProcess of programs that do without kernel32.
 			if (api_name == "ExitProcess" || api_name == "RtlExitUserProcess") {
 				const auto code=uint32_t(process.api_arguments(1)[0]);
@@ -2676,7 +3002,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 			// Calls that stopped the guest are counted apart from served ones: a stop costs far more than the call.
 			if (RuntimeProfile::instance().enabled() && profile_start != std::chrono::steady_clock::time_point{})
-				RuntimeProfile::instance().api("(stop) " + api_name, std::chrono::steady_clock::now() - profile_start);
+				RuntimeProfile::instance().api((process.call_waiting() ? "(call) " : "(stop) ") + api_name, std::chrono::steady_clock::now() - profile_start);
 			if (!dispatched && std::getenv("RAVEN_SURVEY_MISSING")) {
 				// Survey aid: report each missing API once and fail it, so one run lists every API a program reaches.
 				static std::set<std::string> reported;
@@ -2803,6 +3129,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		threads.block(std::move(ready),until);
 	});
+	windows.set_input_taken([&threads] { threads.took_input(); });
 	windows.set_idle_sources([&threads](std::chrono::steady_clock::time_point limit) { return threads.idle_until(limit); },
 		[&threads](std::vector<pollfd> &descriptors) { threads.idle_descriptors(descriptors); }, [&threads] { threads.drain_wake(); });
 	KernelContext kernel{process, environment, memory, allocator, kernel_objects, threads, paths, modules, entry, *launch, invoke};
@@ -2836,14 +3163,18 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	struct ServedPointers {
 		std::vector<uint8_t *> places;
 		std::vector<std::pair<uint8_t *, std::array<uint8_t, 12>>> entries;
+		std::vector<std::pair<uint8_t *, std::array<uint8_t, 7>>> tails;
 		~ServedPointers()
 		{
 			for (auto *place : places)
 				std::memset(place, 0, 8);
 			for (const auto &[place, bytes] : entries)
 				std::copy(bytes.begin(), bytes.end(), place);
+			for (const auto &[place, bytes] : tails)
+				std::copy(bytes.begin(), bytes.end(), place);
 		}
 	} served_pointers;
+	std::vector<uint64_t> called_stubs;
 	for (const auto &[module_key, module] : modules.all()) {
 		if (!module->runtime_api)
 			continue;
@@ -2852,7 +3183,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			// The clock and the tick counts only read calibration; their pointers are safe while other threads run.
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() &&
 				(guest_clock_api(module_name, symbol.names.at(0)) || block_prelude(module_name, symbol.names.at(0)) == &tick_prelude() ||
-					(!process.parallel() && block_prelude(module_name, symbol.names.at(0)))) &&
+					(!process.parallel() && block_prelude(module_name, symbol.names.at(0))) ||
+					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address))) &&
 				served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address) {
 				auto image = module->loaded.data();
 				int32_t displacement = 0;
@@ -2860,10 +3192,22 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::memcpy(image.data() + symbol.address + 7 + displacement, &served_guest, 8);
 				served_pointers.places.push_back(image.data() + symbol.address + 7 + displacement);
 			}
-			if (!symbol.address || symbol.names.empty() || !symbol.forwarder.empty() || !served_api(module_name, symbol.names.at(0)))
+			if (!symbol.address || symbol.names.empty() || !symbol.forwarder.empty())
 				continue;
 			auto image = module->loaded.data();
 			const uint32_t stub = served_stub_rva(image, module_name, symbol.names.at(0), symbol.address);
+			if (!served_api(module_name, symbol.names.at(0))) {
+				// A call the thread's host thread answers: its stub takes the thread's block as the served ones do.
+				if (!call_stubs() || !process.parallel() || !stub_at(image, stub) || image[stub] != 0x4c)
+					continue;
+				std::array<uint8_t, 12> previous{};
+				std::copy_n(image.data() + stub, previous.size(), previous.begin());
+				served_pointers.entries.emplace_back(image.data() + stub, previous);
+				const std::array<uint8_t, 12> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0, 0x90, 0x90, 0x90};
+				std::copy(local.begin(), local.end(), image.data() + stub);
+				called_stubs.push_back(module->loaded.base() + stub);
+				continue;
+			}
 			if (process.parallel()) {
 				std::array<uint8_t, 12> previous{};
 				std::copy_n(image.data() + stub, previous.size(), previous.begin());
@@ -2878,6 +3222,15 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				served_pointers.places.push_back(image.data() + stub + 7 + displacement);
 			}
 			served_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
+			// With a host thread for each guest thread these calls are answered as the others are: their handlers may need the guest
+			// stopped, which only the thread's own host thread can do.
+			if (call_stubs() && process.parallel()) {
+				called_stubs.push_back(module->loaded.base() + stub);
+				std::array<uint8_t, 7> previous{};
+				std::copy_n(image.data() + stub + served_tail, previous.size(), previous.begin());
+				served_pointers.tails.emplace_back(image.data() + stub + served_tail, previous);
+				std::copy(asked_tail.begin(), asked_tail.end(), image.data() + stub + served_tail);
+			}
 		}
 	}
 	std::vector<uint64_t> served_stubs, yield_traps, queued_stubs;
@@ -2914,12 +3267,13 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		}
 	memory.set_commit_block(served_block);
 	windows.set_screen_block(served_block);
-	static_assert(focus_published == NativeWindows::focus_published && focus_window == NativeWindows::focus_window,
-		"the focus prelude reads what NativeWindows publishes");
+	static_assert(focus_published == NativeWindows::focus_published && focus_window == NativeWindows::focus_window &&
+		foreground_window == NativeWindows::foreground_window && cursor_position == NativeWindows::cursor_position,
+		"the focus, foreground and pointer preludes read what NativeWindows publishes");
 	// The window table the window preludes read, mapped into the guest and published in the served block.
 	const size_t windows_size = NativeWindows::window_records * NativeWindows::window_record, table_size = windows_size + 8192 +
 		NativeWindows::menu_area + NativeWindows::bitmap_records * NativeWindows::bitmap_record + 4096 + NativeWindows::dc_table_size + 4096 +
-		NativeWindows::icon_slots * 8 + NativeWindows::region_records * NativeWindows::region_record + 4096 + 4096;
+		NativeWindows::icon_slots * 8 + NativeWindows::region_records * NativeWindows::region_record + 4096 + 4096 + 4096;
 	const int table_file = memfd_create("raven-window-table", MFD_CLOEXEC);
 	if (table_file < 0 || ftruncate(table_file, off_t(table_size)) != 0)
 		throw std::runtime_error("cannot create the window table");
@@ -2973,6 +3327,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const size_t current_at = quiet_at + 4096;
 	activation_contexts().set_current_table(table + current_at);
 	__atomic_store_n(&served_block[current_context_pointer / 8], table_guest + current_at, __ATOMIC_RELEASE);
+	// The key states follow, in a page of their own.
+	const size_t keys_at = current_at + 4096;
+	windows.set_key_table(table + keys_at);
+	__atomic_store_n(&served_block[key_pointer / 8], table_guest + keys_at, __ATOMIC_RELEASE);
+	process.set_call_stubs(std::move(called_stubs));
 	process.set_served_calls(served_block, std::move(served_stubs), served_trap, served_wait, std::move(yield_traps), [&, served_names = std::move(served_names)](uint64_t stub) {
 		const auto found = served_names.find(stub);
 		if (found == served_names.end())
@@ -3088,6 +3447,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_job_api(api_registry, kernel);
 	register_wave_api(api_registry, kernel);
 	register_mmio_api(api_registry, kernel);
+	register_pulse_event(api_registry, kernel);
 	register_crypt32_api(api_registry, kernel);
 	register_bcrypt_api(api_registry, kernel);
 	register_process_info_api(api_registry, kernel);
@@ -3115,6 +3475,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	desktop.register_image_api(desktop_api);
 	NativeRegistry hive(prefix.registry_file());
 	apply_registry_settings(hive);
+	__atomic_store_n(&served_block[theme_state / 8], classic_theme() ? 1 : 2, __ATOMIC_RELEASE);
 	paths.set_package_roots([&hive] { return virtual_package_roots(hive); });
 	register_registry_api(api_registry, kernel, hive);
 	register_service_api(api_registry, kernel, hive);

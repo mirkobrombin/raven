@@ -42,6 +42,14 @@ void destroy(uint32_t surface);
 bool size(uint32_t surface, uint32_t &width, uint32_t &height);
 // Copies a rectangle of pixels out of the surface (`write` false) or into it, `pitch` bytes apart.
 bool pixels(uint32_t surface, int32_t x, int32_t y, uint32_t width, uint32_t height, uint8_t *data, uint32_t pitch, bool write);
+// The smallest rectangle that holds every pixel of the surface that is not clear, as left, top, right and bottom; all zero for a
+// surface that is clear all over. False when there is no such surface.
+bool bounds(uint32_t surface, int32_t rect[4]);
+// What became of the surface since the caller last asked, as two rectangles of left, top, right and bottom: the part the drawings
+// since could reach, through the clips in force for each, and inside it the part whose pixels differ from those the caller last took,
+// which it then holds as taken (all zero when none differ). A program that draws part of a frame leaves the rest as it was, and a
+// frame is shown by its changes alone. `whole` forgets what was taken, so both are the whole surface. False when nothing was reached.
+bool changed(uint32_t surface, bool whole, int32_t rect[8]);
 // Runs one command; the bytes after the record are the variable parts it names. False when the command or its data is not valid.
 bool draw(uint32_t surface, const Command &command, std::span<const uint8_t> data);
 // Combines two paths of the command's float form (each with its fill mode, 0 alternate and 1 winding) by a Direct2D combine mode:

@@ -15,6 +15,7 @@
 #include "guest_allocator.h"
 #include "heap.h"
 #include "kernel_context.h"
+#include "event_pulse.h"
 #include "actctx.h"
 #include "child_process.h"
 #include "paths.h"
@@ -932,7 +933,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	VulkanThunk32 vulkan32(process, vulkan);
 #endif
 	windows.set_presentation(std::move(presentation));
-	desktop.set_updated([&](uint64_t window) { windows.drawing(window); });
+	desktop.set_updated([&](uint64_t window,const DesktopRect *area) { windows.drawing(window,area); });
 	struct ProcessExit { uint32_t code; uint64_t instruction; };
 	// CoGetMalloc hands out one allocator object, whose methods are the task allocator's handlers.
 	uint64_t malloc_object = 0;
@@ -1447,6 +1448,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_platform_api(shared_api, kernel);
 	register_actctx_api(shared_api, kernel);
 	register_mmio_api(shared_api, kernel);
+	register_pulse_event(shared_api, kernel);
 	register_process_api(shared_api, kernel);
 	register_thread_api(shared_api, kernel);
 	register_sync_api(shared_api, kernel);
@@ -1491,6 +1493,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		guest_threads.block(std::move(ready),until);
 	});
+	windows.set_input_taken([&guest_threads] { guest_threads.took_input(); });
 	// A message sent to a window of another thread waits for that thread to run its procedure.
 	windows.set_block([&guest_threads](std::function<bool()> ready) {
 		HostWait waiting;

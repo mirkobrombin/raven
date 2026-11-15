@@ -153,9 +153,8 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 			if (!is_min)
 				window->restore = window->outer;
 			window->style = (window->style & ~ws_minimize) | ws_maximize;
-			const auto frame = adjust_window_rect(objects.nonclient_metrics(), {0, 0, 0, 0}, window->style & ~ws_visible, window->menu != 0, window->ex_style);
-			(void)frame;
-			reshape(handle, {0, 0, screen.screen_x, screen.screen_y});
+			// The window hears of its new place as of any other: WM_WINDOWPOSCHANGED, which a program may lay its content out from.
+			place_window(handle, {0, 0, screen.screen_x, screen.screen_y}, 0, 0x14);
 		} else if (minimize && !is_min) {
 			if (!is_max)
 				window->restore = window->outer;
@@ -164,7 +163,7 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 			window->style &= ~(ws_maximize | ws_minimize);
 			const auto target = window->restore.right > window->restore.left ? window->restore : window->outer;
 			if (is_max)
-				reshape(handle, target);
+				place_window(handle, target, 0, 0x14);
 		}
 		window = objects.window(handle);
 	}
@@ -345,6 +344,11 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 	} placing_guard{placing, handle, placing.insert(handle).second};
 	if (shifted && !resized && !window->parent) {
 		shift_window(handle, target.left - old.left, target.top - old.top);
+		// A window shown on its owner's lies there by where it is from the owner: moved, it is shown again in its new place.
+		if (was_visible) {
+			dirty_roots.insert(handle);
+			dirty_whole.insert(handle);
+		}
 	} else if (shifted || resized) {
 		const auto old_client_x = window->x, old_client_y = window->y;
 		if (window->parent && was_visible)
@@ -382,6 +386,16 @@ void NativeWindows::place_window(uint64_t handle, DesktopRect outer, uint64_t in
 	window = objects.window(handle);
 	if (!window)
 		return;
+	// The windows shown on this one's, the ones it owns, lie there by where they are from it: they are shown again where that puts
+	// them now.
+	if (!window->parent && (shifted || resized))
+		for (const auto other : objects.window_handles()) {
+			const auto *owned = std::as_const(objects).window(other);
+			if (owned && other != handle && owned->visible && host_owner(*owned) == handle && shown_on_owner(*owned)) {
+				dirty_roots.insert(other);
+				dirty_whole.insert(other);
+			}
+		}
 	// SWP_FRAMECHANGED asks the window for its client area again, as a program that draws its own frame does after it changes.
 	if ((effective & 0x20) && !(shifted || resized)) {
 		recalculate_client(handle);

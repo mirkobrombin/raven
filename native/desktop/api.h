@@ -29,7 +29,18 @@ public:
 	static std::span<const std::string_view> control_exports();
 	// Loads an RT_MENU resource of a module by integer identifier; zero when the resource does not exist.
 	uint64_t menu_resource(uint64_t instance,uint64_t identifier);
-	void set_updated(std::function<void(uint64_t)> notify) { updated=std::move(notify); }
+	// What tells the windows that a window's context was drawn into, with the part of the surface the context reaches when it is
+	// bounded: all a drawing through it can have changed.
+	void set_updated(std::function<void(uint64_t,const DesktopRect *)> notify) { updated=std::move(notify); }
+	void drew(const DesktopDC &dc) const
+	{
+		if (!dc.window || !updated) return;
+		if (!dc.bounds) { updated(dc.window,nullptr); return; }
+		const int64_t dx=int64_t(dc.origin_x)-dc.user_dx,dy=int64_t(dc.origin_y)-dc.user_dy;
+		const auto edge=[](int64_t value) { return int32_t(std::clamp<int64_t>(value,INT32_MIN,INT32_MAX)); };
+		const DesktopRect area{edge(dc.bounds->left+dx),edge(dc.bounds->top+dy),edge(dc.bounds->right+dx),edge(dc.bounds->bottom+dy)};
+		updated(dc.window,&area);
+	}
 	// Lets GDI services call guest callbacks such as font enumeration procedures.
 	void set_call(std::function<NativeResult(uint64_t,std::span<const uint64_t>)> call) { invoke=std::move(call); }
 	// Module whose resources answer LoadBitmap/LoadImage requests that name no module (the OEM bitmaps).
@@ -45,7 +56,7 @@ private:
 	NativeEnvironment &environment;
 	DesktopObjects &objects;
 	NativeResources &resources;
-	std::function<void(uint64_t)> updated;
+	std::function<void(uint64_t,const DesktopRect *)> updated;
 	std::function<NativeResult(uint64_t,std::span<const uint64_t>)> invoke;
 	std::function<std::optional<std::vector<uint8_t>>(std::u16string_view)> read_host_file;
 	uint64_t oem_module=0;

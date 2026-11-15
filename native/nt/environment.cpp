@@ -289,7 +289,7 @@ void NativeEnvironment::require_current() const
 	if (process.mode() == NativeMode::x86)
 		return;
 	const auto serving = process.serving_teb();
-	if ((serving ? serving : process.context().registers.gs_base) != thread_block)
+	if ((serving ? serving : process.thread_base()) != thread_block)
 		throw std::runtime_error("native environment is not the current guest thread");
 }
 

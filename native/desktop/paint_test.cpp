@@ -31,7 +31,10 @@ int main(int argc,char **argv)
 						const auto at=(y*32+x)*4;
 						check(pixels[at]==x*7 && pixels[at+1]==(31-y)*7 && pixels[at+2]==192,"guest paint pixel differs");
 					}
-				} else for (const auto pixel : pixels) check(!pixel,"initial window surface is not zeroed");
+				} else
+					// A class without a background shows the window color until the program paints, never black.
+					for (size_t at=0;at<pixels.size();at+=4) check(pixels[at]==255 && pixels[at+1]==255 && pixels[at+2]==255 && !pixels[at+3],
+						"initial window surface does not show the window color");
 				++frames;
 			};
 			presentation.remove=[&](uint64_t handle) { check(handle==window,"removed wrong surface"); ++removed; };
