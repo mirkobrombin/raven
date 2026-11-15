@@ -1531,14 +1531,20 @@ void NativeWindows::place_pointer(const DesktopEvent &event,uint32_t message,uin
 		int32_t(x),int32_t(y)};
 	// As on Windows, a move the program has not retrieved yet is replaced by the newer one rather than queued after it: a program slow
 	// to handle each move (a paint program drawing along the pointer) would otherwise fall ever further behind and never reach WM_PAINT.
-	if (message==0x200 && !messages.empty() && messages.back().message==0x200 && messages.back().window==target &&
-		messages.back().wparam==input.wparam) {
-		const auto thread=messages.back().thread;
-		messages.back()=input;
-		messages.back().thread=thread;
-		messages.back().kinds=2;
-		queue_changed(thread,2);
-		return;
+	// The messages the program posted meanwhile do not stand between the two, as Windows keeps the pending move apart from the posted
+	// messages: only another input message of the same thread, a button or a key, keeps the older move as it is.
+	if (message==0x200) {
+		const uint32_t owner_thread=owner(target);
+		for (auto pending=messages.rbegin();pending!=messages.rend();++pending) {
+			if (pending->thread!=owner_thread || !(pending->kinds & 7U)) continue;
+			if (pending->message!=0x200 || pending->window!=target || pending->wparam!=input.wparam) break;
+			const auto thread=pending->thread;
+			*pending=input;
+			pending->thread=thread;
+			pending->kinds=2;
+			queue_changed(thread,2);
+			return;
+		}
 	}
 	queue(input,message==0x200 || message==0xa0 ? 2 : 4);
 }

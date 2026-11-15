@@ -1648,6 +1648,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(input_owner_test input_owner_fixture raven-bootstrap)
             add_test(NAME native_input_owner COMMAND input_owner_test $<TARGET_FILE:raven-bootstrap> ${INPUT_OWNER_FIXTURE})
             set_tests_properties(native_input_owner PROPERTIES TIMEOUT 20)
+            add_executable(move_merge_test desktop/move_merge_test.cpp)
+            target_link_libraries(move_merge_test PRIVATE raven_cpu)
+            set(MOVE_MERGE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/move-merge.exe)
+            add_custom_command(OUTPUT ${MOVE_MERGE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${MOVE_MERGE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/move_merge_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/move_merge_client.c VERBATIM)
+            add_custom_target(move_merge_fixture ALL DEPENDS ${MOVE_MERGE_FIXTURE})
+            add_dependencies(move_merge_test move_merge_fixture raven-bootstrap)
+            add_test(NAME native_move_merge COMMAND move_merge_test $<TARGET_FILE:raven-bootstrap> ${MOVE_MERGE_FIXTURE})
+            set_tests_properties(native_move_merge PROPERTIES TIMEOUT 30)
             add_executable(modifier_keys_test desktop/modifier_keys_test.cpp)
             target_link_libraries(modifier_keys_test PRIVATE raven_cpu)
             set(MODIFIER_KEYS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/modifier-keys.exe)
