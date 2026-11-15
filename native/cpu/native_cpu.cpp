@@ -65,8 +65,43 @@ static void forget_registers()
 	registers_of = -1;
 }
 
+// A call the guest left in its thread's block and waits for inside its stub, without having stopped: the host thread that serves it
+// answers in the block. The task is stopped only for work that needs it stopped, and then stands at the stub's own breakpoint, as if
+// it had made the call without the block (see NativeProcess::settle_call). `held` tells that the task is stopped inside the stub.
+struct WaitingCall {
+	NativeProcess *process = nullptr;
+	pid_t task = 0;
+	uint64_t *block = nullptr;
+	uint64_t trap = 0, stack = 0;
+	std::array<uint64_t, 4> words{}, floats{};
+	bool answered = false, held = false;
+	// A function the guest ran inside the stub meanwhile left the argument registers changed.
+	bool ran = false;
+};
+static thread_local WaitingCall waiting;
+
+// A guest that waits in a stub runs a function for the runtime there and goes back to waiting: a callback of the call it waits for, or a
+// short routine of the runtime's own. The request is left in the thread's block from `request_slot` on (the stub, the function and then
+// its result, twelve arguments), with the address of the routine that carries it out at `request_routine`; the stub goes there when
+// it finds 3 where it finds 0 for an answer. The calls whose callbacks run are kept here, innermost last, each with the nesting of the
+// callbacks it made.
+static constexpr size_t request_slot = 300, request_routine = 320, request_arguments = 12;
+static constexpr uint64_t request_return = 0xaa, request_exchange64 = 0xe0, request_exchange32 = 0xf0;
+static constexpr uint64_t stub_callback = 0x5256535455424342ULL;
+struct OuterCall {
+	WaitingCall call;
+	size_t depth = 0;
+};
+static thread_local std::vector<OuterCall> outer_calls;
+// Whether the next resumption gives the block up for a request rather than an answer.
+static thread_local bool requesting = false;
+// A task stopped inside its stub before its host thread took the call up.
+static thread_local bool held_in_stub = false;
+
 static void trace(enum __ptrace_request operation, pid_t child, void *data = nullptr)
 {
+	if (waiting.task && waiting.task == child)
+		waiting.process->settle_call();
 	if (operation == PTRACE_GETREGS && registers_of == child) {
 		std::memcpy(data, &cached_registers, sizeof cached_registers);
 		return;
@@ -579,6 +614,8 @@ struct NativeProcess::State {
 	std::unique_ptr<NativeChild> child;
 	pid_t memory_task = 0;
 	uint64_t atomic_gate = 0;
+	// The routine that carries out what a host thread asks of its guest waiting in a stub; zero when stubs cannot be asked.
+	uint64_t request_gate = 0;
 	struct SharedView {
 		void *host = MAP_FAILED;
 		size_t size = 0;
@@ -633,6 +670,9 @@ struct NativeProcess::State {
 	// The guest's own system calls stop it through a seccomp filter instead of system call emulation: only those of the runtime's gate
 	// run, every other one stops the guest before it runs, as emulation did.
 	bool seccomp = false;
+	// How a guest task is let run its own code: a system call it makes then stops it for the runtime instead of reaching the host,
+	// by the filter where there is one. A task resumed any other way would make the host's system calls with the guest's numbers.
+	__ptrace_request guest_resume() const { return seccomp ? PTRACE_CONT : PTRACE_SYSEMU; }
 	bool debug_print_fault = false;
 	size_t steps_left = 0;
 	std::function<void(uint64_t)> step_sink;
@@ -651,11 +691,14 @@ struct NativeProcess::State {
 	size_t served_stub_size = 0;
 	// The breakpoint a stub reaches when it has waited too long for its answer.
 	size_t served_wait_offset = 0;
+	// The stubs of the calls a host thread answers for its own guest thread, in order; they are laid out as the served ones.
+	std::vector<uint64_t> call_stubs;
+	uint64_t call_answers = 0, call_settles = 0, call_waits = 0;
 	std::function<void(uint64_t)> served_handler;
 	std::function<void()> resume_hook;
 	std::function<void(std::function<bool()>, std::chrono::steady_clock::time_point)> execution_wait;
 	std::function<void(std::function<bool()>)> execution_turn;
-	std::function<int(pid_t, std::chrono::steady_clock::time_point)> execution_park;
+	std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> execution_park;
 	std::function<bool()> poll_served;
 	bool serving = false, serving_queued = false;
 	// Diagnostics: where the guest is found running, every sample_period.
@@ -688,9 +731,14 @@ uint8_t *NativeProcess::State::shared_memory(uint64_t address, size_t &size) con
 
 void NativeProcess::State::require_stopped() const
 {
-	if (!child || child->pid == -1)
+	if (!child || child->pid == -1) {
+		if (std::getenv("RAVEN_BACKTRACE")) {
+			void *frames[32];
+			backtrace_symbols_fd(frames, backtrace(frames, 32), 2);
+		}
 		throw std::runtime_error("native process is not stopped and alive (the guest process is gone)");
-	if (!stopped && !serving) {
+	}
+	if (!stopped && !serving && !waiting.task && !requesting) {
 		if (std::getenv("RAVEN_BACKTRACE")) {
 			void *frames[32];
 			backtrace_symbols_fd(frames, backtrace(frames, 32), 2);
@@ -796,6 +844,31 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 		// Locked 32-bit and 64-bit CMPXCHG, each followed by its owned completion trap.
 		write_memory(state->atomic_gate, std::vector<uint8_t>{0xf0, 0x0f, 0xb1, 0x11, 0xcc, 0xc3,
 			0xf0, 0x48, 0x0f, 0xb1, 0x11, 0xcc, 0xc3});
+		if (mode == NativeMode::x64 && threaded_host()) {
+			// request: cmp r11d,2; jne run; mov r11,[r10+2400]; add r11,0x70; jmp r11 (a declined call takes its stub's breakpoint)
+			// run: mov r11,[r10+2400]; push r11; push rcx; push rdx; push r8; push r9; sub rsp,0x60; the eight stack arguments from
+			//   [r10+2448] on to [rsp+32] on; mov rcx,[r10+2416]; mov rdx,[r10+2424]; mov r8,[r10+2432]; mov r9,[r10+2440];
+			//   call [r10+2408]; add rsp,0x60; pop r9; pop r8; pop rdx; pop rcx; pop r11; mov r10,gs:[0x1ff0]; mov [r10+2408],rax;
+			//   lea rax,[r11+1]; mov [r10],rax; add r11,66; jmp r11 (the argument registers come back as the caller of the stub left them,
+			//   as they do from a call that stops: code of the guest's own components counts on it)
+			// then, each on a 16-byte boundary: mov rax,rdx; lock cmpxchg [rcx],r8; ret and mov eax,edx; lock cmpxchg [rcx],r8d; ret
+			static_assert(request_slot * 8 == 2400 && request_routine * 8 == 2560, "the request routine's offsets are written into its code");
+			state->request_gate = state->atomic_gate + 0x40;
+			write_memory(state->request_gate, std::vector<uint8_t>{
+				0x41, 0x83, 0xfb, 0x02, 0x75, 0x0e, 0x4d, 0x8b, 0x9a, 0x60, 0x09, 0x00, 0x00, 0x49, 0x83, 0xc3, 0x70, 0x41, 0xff, 0xe3,
+				0x4d, 0x8b, 0x9a, 0x60, 0x09, 0x00, 0x00, 0x41, 0x53, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x48, 0x83, 0xec, 0x60, 0x49,
+				0x8b, 0x82, 0x90, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x20, 0x49, 0x8b, 0x82, 0x98, 0x09, 0x00, 0x00, 0x48, 0x89,
+				0x44, 0x24, 0x28, 0x49, 0x8b, 0x82, 0xa0, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x30, 0x49, 0x8b, 0x82, 0xa8, 0x09,
+				0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x38, 0x49, 0x8b, 0x82, 0xb0, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x40, 0x49,
+				0x8b, 0x82, 0xb8, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x48, 0x49, 0x8b, 0x82, 0xc0, 0x09, 0x00, 0x00, 0x48, 0x89,
+				0x44, 0x24, 0x50, 0x49, 0x8b, 0x82, 0xc8, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x58, 0x49, 0x8b, 0x8a, 0x70, 0x09,
+				0x00, 0x00, 0x49, 0x8b, 0x92, 0x78, 0x09, 0x00, 0x00, 0x4d, 0x8b, 0x82, 0x80, 0x09, 0x00, 0x00, 0x4d, 0x8b, 0x8a, 0x88,
+				0x09, 0x00, 0x00, 0x41, 0xff, 0x92, 0x68, 0x09, 0x00, 0x00, 0x48, 0x83, 0xc4, 0x60, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x59,
+				0x41, 0x5b, 0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0x00, 0x00, 0x49, 0x89, 0x82, 0x68, 0x09, 0x00, 0x00, 0x49, 0x8d,
+				0x43, 0x01, 0x49, 0x89, 0x02, 0x49, 0x83, 0xc3, 0x42, 0x41, 0xff, 0xe3, 0x90, 0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00,
+				0x00, 0x00, 0x00, 0x00, 0x48, 0x89, 0xd0, 0xf0, 0x4c, 0x0f, 0xb1, 0x01, 0xc3, 0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00,
+				0x89, 0xd0, 0xf0, 0x44, 0x0f, 0xb1, 0x01, 0xc3});
+		}
 		protect_memory(state->atomic_gate, 4096, PROT_READ | PROT_EXEC);
 	}
 }
@@ -948,6 +1021,13 @@ uint64_t NativeProcess::compare_exchange(uint64_t address, uint64_t expected, ui
 			write_memory(address, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(&desired), size));
 		return previous;
 	}
+	// A guest that waits in a stub does the exchange itself.
+	if (waiting.task && state->request_gate && !waiting.answered) {
+		const uint64_t arguments[] = {address, expected, desired};
+		const uint64_t previous = run_in_stub(state->request_gate + (size == 8 ? request_exchange64 : request_exchange32), arguments);
+		return size == 4 ? uint32_t(previous) : previous;
+	}
+	settle_call();
 	auto &child = *state->child;
 	const pid_t caller = child.pid;
 	// A host thread for each guest thread runs the gate in its own stopped task: only the administrative thread traces the other one.
@@ -982,6 +1062,7 @@ uint64_t NativeProcess::memory_syscall(uint64_t number, uint64_t a1, uint64_t a2
 	uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
 	state->require_memory();
+	settle_call();
 	// A Linux system call leaves the extended processor state alone, so only the general registers the gate uses are kept.
 	auto &child = *state->child;
 	struct SelectedTask {
@@ -1424,6 +1505,8 @@ void NativeProcess::abandon_call()
 
 void NativeProcess::end_call()
 {
+	if (!gone())
+		settle_call();
 	if (parallel() && !state->stopped) {
 		auto &child = *state->child;
 		child.pause_task();
@@ -1447,9 +1530,96 @@ uint64_t NativeProcess::return_gate() const
 	return state->mode == NativeMode::x86 ? state->return_gate : state->child->gate;
 }
 
+bool NativeProcess::callback_boundary(uint64_t address) const
+{
+	return address == return_gate() || (state->request_gate && address == state->request_gate + request_return);
+}
+
+bool NativeProcess::callback_in_stub(size_t index) const
+{
+	if (index >= state->callbacks.size())
+		throw std::runtime_error("native callback origin beyond the nesting");
+	return state->callbacks[index].registers.orig_rax == stub_callback;
+}
+
+// Leaves a request for the guest that waits for `call` in its stub.
+static void leave_request(const WaitingCall &call, uint64_t stub, uint64_t function, std::span<const uint64_t> arguments)
+{
+	uint64_t *const slots = call.block + request_slot;
+	slots[0] = stub;
+	slots[1] = function;
+	for (size_t index = 0; index < request_arguments; ++index)
+		slots[2 + index] = index < arguments.size() ? arguments[index] : 0;
+	call.block[11] = 3;
+}
+
+uint64_t NativeProcess::run_in_stub(uint64_t function, std::span<const uint64_t> arguments)
+{
+	// A routine of the runtime's own, which calls nothing: the guest runs it and waits again, and this thread waits for it meanwhile.
+	const uint64_t stub = waiting.trap - state->served_stub_size;
+	leave_request(waiting, stub, function, arguments);
+	__atomic_store_n(&waiting.block[0], uint64_t(0), __ATOMIC_RELEASE);
+	if (waiting.held) {
+		if (ptrace(state->guest_resume(), waiting.task, nullptr, nullptr) == -1)
+			throw std::runtime_error("cannot resume a native guest task for a request");
+		forget_registers();
+		waiting.held = false;
+		state->stopped = false;
+	}
+	waiting.ran = true;
+	const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	for (unsigned spins = 1; __atomic_load_n(&waiting.block[0], __ATOMIC_ACQUIRE) != stub + 1; ++spins) {
+		__builtin_ia32_pause();
+		if (spins % 256)
+			continue;
+		// A stub that had waited too long before the request came stands at its own breakpoint, and goes on from there.
+		int status = 0;
+		if (waitpid(waiting.task, &status, WNOHANG | __WALL) == waiting.task) {
+			if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP || ptrace(state->guest_resume(), waiting.task, nullptr, nullptr) == -1)
+				throw std::runtime_error("a native guest stopped while it carried out a request of the runtime");
+		} else if (spins % 4096 == 0 && std::chrono::steady_clock::now() >= limit) {
+			throw std::runtime_error("a native guest did not carry out a request of the runtime");
+		}
+	}
+	return waiting.block[request_slot + 1];
+}
+
+uint64_t NativeProcess::thread_base() const
+{
+	state->require_stopped();
+	if (waiting.task) {
+		// The block a call waits in belongs to one thread, whose block of the environment was recorded with it.
+		static thread_local const uint64_t *block = nullptr;
+		static thread_local uint64_t base = 0;
+		if (block != waiting.block) {
+			const auto found = state->served_owners.find(waiting.block);
+			if (found == state->served_owners.end())
+				throw std::runtime_error("a waiting call has no thread-block owner");
+			block = waiting.block;
+			base = found->second;
+		}
+		return base;
+	}
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, state->child->pid, &registers);
+	return registers.gs_base;
+}
+
+uint64_t NativeProcess::api_stack_pointer() const
+{
+	state->require_stopped();
+	if (waiting.task)
+		return waiting.stack;
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, state->child->pid, &registers);
+	return registers.rsp;
+}
+
 uint64_t NativeProcess::result_register() const
 {
 	state->require_stopped();
+	if (waiting.task && waiting.answered)
+		return waiting.block[10];
 	user_regs_struct registers{};
 	trace(PTRACE_GETREGS, state->child->pid, &registers);
 	return registers.rax;
@@ -1476,6 +1646,13 @@ NativeContext NativeProcess::callback_origin(size_t index) const
 	NativeContext origin = state->callbacks[index];
 	origin.xstate = context().xstate;
 	return origin;
+}
+
+uint64_t NativeProcess::callback_stack(size_t index) const
+{
+	if (index >= state->callbacks.size())
+		throw std::runtime_error("native callback origin beyond the nesting");
+	return state->callbacks[index].registers.rsp;
 }
 
 void NativeProcess::trace_instructions(size_t count, std::function<void(uint64_t)> sink)
@@ -1562,6 +1739,7 @@ void NativeProcess::load_thread(const NativeThreadState &thread)
 
 NativeThreadState NativeProcess::new_thread(uint64_t stack_top, uint64_t teb)
 {
+	settle_call();
 	struct SelectedTask {
 		State &state;
 		pid_t previous;
@@ -1638,22 +1816,40 @@ void NativeProcess::set_execution_turn(std::function<void(std::function<bool()>)
 	state->execution_turn = std::move(turn);
 }
 
-void NativeProcess::set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point)> park)
+void NativeProcess::set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> park)
 {
 	state->execution_park = std::move(park);
 }
 
-int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted)
+int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted,
+	const uint64_t *block)
 {
 	// The calling host thread traces the task. A stop usually comes within microseconds, so the task is polled a little before the thread
 	// sleeps; the sleep ends at the stop, at the deadline, or when another thread interrupts it to have something done to the task.
-	for (unsigned polls = 0;; ++polls) {
+	// A call the guest leaves in its block comes sooner still and stops nothing: the block is looked at between the polls.
+	// Only a few threads poll at a time, half as many as there are processors: a program with hundreds of threads would otherwise
+	// keep every processor polling, and the guests they wait for would not get to run.
+	static std::atomic<unsigned> polling{0};
+	static const unsigned pollers = std::max(1u, std::thread::hardware_concurrency() / 2);
+	struct Poller {
+		const bool polls = polling.fetch_add(1, std::memory_order_relaxed) < pollers;
+		~Poller() { polling.fetch_sub(1, std::memory_order_relaxed); }
+	} poller;
+	for (unsigned polls = poller.polls ? 0 : 199;; ++polls) {
+		if (block && polls < 200)
+			for (unsigned looks = 0; looks < 64; ++looks) {
+				if (__atomic_load_n(&block[0], __ATOMIC_ACQUIRE))
+					return -4;
+				__builtin_ia32_pause();
+			}
 		int status = 0;
 		const pid_t result = waitpid(task, &status, polls < 200 ? WNOHANG | __WALL : __WALL);
 		if (result == task)
 			return status;
 		if (result == -1 && errno != EINTR)
 			throw std::runtime_error("cannot wait for a native guest task");
+		if (block && __atomic_load_n(&block[0], __ATOMIC_ACQUIRE))
+			return -4;
 		if (interrupted && interrupted())
 			return -3;
 		if (std::chrono::steady_clock::now() >= deadline)
@@ -1762,8 +1958,71 @@ int NativeProcess::pause_own_task(pid_t task)
 	return status;
 }
 
+// Whoever works on a task from outside its call, as a pause does, sees it where it is and does not settle the call it waits for.
+struct LeaveWaiting {
+	pid_t task = std::exchange(waiting.task, 0);
+	~LeaveWaiting() { waiting.task = task; }
+};
+
+void NativeProcess::hold_call(pid_t task)
+{
+	if (waiting.task) {
+		if (!waiting.held) {
+			const LeaveWaiting leave;
+			pause_own_task(leave.task);
+			waiting.held = true;
+		}
+		return;
+	}
+	// The host thread may have seen the call in the block and not taken it up yet: the task then runs in its stub all the same.
+	user_regs_struct registers{};
+	if (held_in_stub || ptrace(PTRACE_GETREGS, task, nullptr, &registers) == 0)
+		return;
+	pause_own_task(task);
+	held_in_stub = true;
+}
+
+void NativeProcess::settle_call()
+{
+	if (!waiting.task)
+		return;
+	const WaitingCall call = waiting;
+	waiting.task = 0;
+	if (!call.held)
+		pause_own_task(call.task);
+	// The task stands at the breakpoint its stub falls back to, with the registers the caller left: the call goes on as one that
+	// stopped there. One answered already returns from there with its answer.
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, call.task, &registers);
+	registers.rip = call.trap + 1;
+	registers.orig_rax = uint64_t(-1);
+	if (call.answered)
+		registers.rax = call.block[10];
+	if (call.ran) {
+		registers.rcx = call.words[0];
+		registers.rdx = call.words[1];
+		registers.r8 = call.words[2];
+		registers.r9 = call.words[3];
+		user_fpregs_struct vectors{};
+		trace(PTRACE_GETFPREGS, call.task, &vectors);
+		for (size_t index = 0; index < 4; ++index)
+			std::memcpy(reinterpret_cast<uint8_t *>(vectors.xmm_space) + index * 16, &call.floats[index], 8);
+		trace(PTRACE_SETFPREGS, call.task, &vectors);
+	}
+	trace(PTRACE_SETREGS, call.task, &registers);
+	__atomic_store_n(&call.block[0], uint64_t(0), __ATOMIC_RELEASE);
+	state->stopped = true;
+	++state->call_settles;
+}
+
+bool NativeProcess::call_waiting() const
+{
+	return waiting.task != 0;
+}
+
 NativeContext NativeProcess::task_context(pid_t task)
 {
+	const LeaveWaiting leave;
 	NativeContext result{};
 	trace(PTRACE_GETREGS, task, &result.registers);
 	result.xstate.resize(65536);
@@ -1776,6 +2035,7 @@ NativeContext NativeProcess::task_context(pid_t task)
 
 void NativeProcess::set_task_registers(pid_t task, const user_regs_struct &registers)
 {
+	const LeaveWaiting leave;
 	trace(PTRACE_SETREGS, task, const_cast<user_regs_struct *>(&registers));
 }
 
@@ -1959,6 +2219,38 @@ NativeResult NativeProcess::callback(uint64_t address, std::span<const uint64_t>
 	}
 	if (state->callbacks.size() >= 64)
 		throw std::runtime_error(std::string("native callback exceeds initial nesting limit (last API ") + api_in_progress + ")");
+	if (waiting.task && state->request_gate && !waiting.answered && arguments.size() <= request_arguments) {
+		// The guest waits in the stub of the call that makes the callback: it runs the procedure from there and waits again. What is
+		// kept of the call is where its frames go on, for an exception that searches or unwinds past the callback; the nonvolatile
+		// registers are those the procedure's frames give back.
+		if (!state->covers(address, 1, PROT_EXEC))
+			throw std::runtime_error("native entry is outside executable image memory");
+		NativeContext origin{};
+		origin.registers.rip = waiting.trap + 1;
+		origin.registers.rsp = waiting.stack;
+		origin.registers.rcx = waiting.words[0];
+		origin.registers.rdx = waiting.words[1];
+		origin.registers.r8 = waiting.words[2];
+		origin.registers.r9 = waiting.words[3];
+		origin.registers.gs_base = thread_base();
+		origin.registers.cs = 0x33;
+		origin.registers.ss = 0x2b;
+		origin.registers.eflags = 0x202;
+		origin.registers.orig_rax = stub_callback;
+		state->callbacks.push_back(origin);
+		state->callback_cleanups.push_back(state->pending_cleanup);
+		leave_request(waiting, waiting.trap - state->served_stub_size, address, arguments);
+		while (!outer_calls.empty() && outer_calls.back().depth >= state->callbacks.size())
+			outer_calls.pop_back();
+		outer_calls.push_back({waiting, state->callbacks.size()});
+		waiting.task = 0;
+		requesting = true;
+		state->child->set_timeout(timeout);
+		state->awaiting_api = false;
+		state->awaiting_syscall = false;
+		state->debug_print_fault = false;
+		return resume(timeout);
+	}
 	// The procedure called keeps the nonvolatile vector and control registers, as the calling convention requires, and the volatile
 	// ones are the API call's to change: the general registers are all that has to come back.
 	NativeContext saved{};
@@ -2093,6 +2385,53 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 	user_regs_struct registers{};
 	int signal;
 	std::optional<siginfo_t> event_info;
+	// A call answered in the guest's block is given up there: the guest, which did not stop for it, takes the answer and goes on.
+	bool runs = false;
+	if (waiting.task) {
+		if (state->resume_hook)
+			state->resume_hook();
+		const WaitingCall call = waiting;
+		waiting.task = 0;
+		call.block[11] = 0;
+		__atomic_store_n(&call.block[0], uint64_t(0), __ATOMIC_RELEASE);
+		if (call.held && ptrace(state->guest_resume(), call.task, nullptr, nullptr) == -1)
+			throw std::runtime_error("cannot resume a native guest task after its call");
+		forget_registers();
+		state->stopped = false;
+		++state->call_answers;
+		runs = true;
+	} else if (requesting) {
+		// The guest goes from its stub to the procedure asked of it.
+		requesting = false;
+		if (state->resume_hook)
+			state->resume_hook();
+		WaitingCall &call = outer_calls.back().call;
+		__atomic_store_n(&call.block[0], uint64_t(0), __ATOMIC_RELEASE);
+		if (call.held && ptrace(state->guest_resume(), call.task, nullptr, nullptr) == -1)
+			throw std::runtime_error("cannot resume a native guest task for its callback");
+		call.held = false;
+		forget_registers();
+		state->stopped = false;
+		runs = true;
+	}
+	// The procedure a guest ran inside a stub returned: the call that asked for it is the one in progress again.
+	const auto returned = [&](uint64_t *block, uint64_t marker, bool held) {
+		while (!outer_calls.empty() && outer_calls.back().depth > state->callbacks.size())
+			outer_calls.pop_back();
+		if (outer_calls.empty() || outer_calls.back().depth != state->callbacks.size() || outer_calls.back().call.block != block ||
+			outer_calls.back().call.trap != marker - 1 + state->served_stub_size)
+			throw std::runtime_error("a native callback returned to no call of the runtime");
+		waiting = outer_calls.back().call;
+		outer_calls.pop_back();
+		waiting.held = held;
+		waiting.ran = true;
+		state->callbacks.pop_back();
+		state->pending_cleanup = state->callback_cleanups.back();
+		state->callback_cleanups.pop_back();
+		state->awaiting_api = true;
+		state->awaiting_syscall = false;
+		return NativeResult{NativeStop::returned, block[request_slot + 1], state->child->gate + 1, SIGTRAP};
+	};
 	for (;;) {
 		// SYSEMU blocks host syscall dispatch; invalid syscall gates can fault first. Diagnostics may single-step instead.
 		const bool slicing = !parallel() && state->slice.count() > 0 && state->slice_yield && state->slice_wanted && state->slice_wanted();
@@ -2120,16 +2459,42 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		// The runtime's own short waits, and other threads run while this one yielded, leave the child a deadline of theirs: this call's
 		// comes back before each wait, or a thread that computes long after another ended would be stopped as if its time had run out.
 		child.set_deadline(execution_deadline);
-		if (state->resume_hook)
-			state->resume_hook();
-		trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid);
+		if (runs) {
+			runs = false;
+		} else {
+			if (state->resume_hook)
+				state->resume_hook();
+			trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid);
+		}
 		state->stopped = false;
 		bool sampled_stop = false;
 		if (parallel() && state->execution_park) {
 			// The host thread lets the others serve their calls while this guest runs, and waits for the guest's stop by itself.
 			const auto until = sampling ? std::min(execution_deadline, std::chrono::steady_clock::now() + state->sample_period) : execution_deadline;
-			status = state->execution_park(child.pid, until);
+			uint64_t *const block = state->thread_served_block;
+			status = state->execution_park(child.pid, until, block);
 			forget_registers();
+			if (status == -4) {
+				// The guest left a call in its block and waits for the answer without having stopped.
+				const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
+				if (stub & 1)
+					return returned(block, stub, std::exchange(held_in_stub, false));
+				if (!std::binary_search(state->call_stubs.begin(), state->call_stubs.end(), stub)) {
+					serve_pending();
+					if (std::exchange(held_in_stub, false) && ptrace(state->guest_resume(), child.pid, nullptr, nullptr) == -1)
+						throw std::runtime_error("cannot resume a native guest task after its served call");
+					runs = true;
+					continue;
+				}
+				drain_queued_calls(true);
+				waiting = WaitingCall{this, child.pid, block, stub + state->served_stub_size, block[5], {block[1], block[2], block[3], block[4]},
+					{block[6], block[7], block[8], block[9]}, false, std::exchange(held_in_stub, false)};
+				state->awaiting_api = true;
+				state->awaiting_syscall = false;
+				state->debug_print_fault = false;
+				state->pending_cleanup = 0;
+				return {NativeStop::api, waiting.trap, waiting.trap + 1, SIGTRAP};
+			}
 			// The sampler looks at where the guest is at each period: it is stopped there, then goes on.
 			if (status == -1 && sampling && std::chrono::steady_clock::now() < execution_deadline) {
 				status = pause_own_task(child.pid);
@@ -2253,6 +2618,25 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		}
 		if (state->seccomp && signal == SIGTRAP && (status >> 16) == PTRACE_EVENT_SECCOMP)
 			signal = SIGTRAP | 0x80;
+		// A stub that waited too long for the host thread stops on its own breakpoint. A call still in the block is taken there, the task
+		// held in its stub; one answered meanwhile has nothing left to wait for.
+		if (signal == SIGTRAP && registers.rip - 1 >= state->served_wait_offset && std::binary_search(state->call_stubs.begin(),
+				state->call_stubs.end(), registers.rip - 1 - state->served_wait_offset)) {
+			const uint64_t stub = registers.rip - 1 - state->served_wait_offset;
+			uint64_t *const block = state->thread_served_block;
+			if (block && __atomic_load_n(&block[0], __ATOMIC_ACQUIRE) == stub + 1 && !outer_calls.empty())
+				return returned(block, stub + 1, true);
+			if (!block || __atomic_load_n(&block[0], __ATOMIC_ACQUIRE) != stub)
+				continue;
+			++state->call_waits;
+			waiting = WaitingCall{this, child.pid, block, stub + state->served_stub_size, block[5], {block[1], block[2], block[3], block[4]},
+				{block[6], block[7], block[8], block[9]}, false, true};
+			state->awaiting_api = true;
+			state->awaiting_syscall = false;
+			state->debug_print_fault = false;
+			state->pending_cleanup = 0;
+			return {NativeStop::api, waiting.trap, waiting.trap + 1, SIGTRAP};
+		}
 		// A served stub that waited too long stops on its own breakpoint: its call is answered and it goes on where it stopped.
 		if (signal == SIGTRAP && served_wait_trap(registers.rip - 1)) {
 			++state->served_waits;
@@ -2365,6 +2749,7 @@ void NativeProcess::make_served_block(uint64_t teb, uint64_t &guest, uint64_t *&
 		write_memory(teb + 0x1ff0, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(&guest), 8));
 		host = static_cast<uint64_t *>(state->shared_views.at(guest)->host);
 		state->served_owners.emplace(host, teb);
+		host[request_routine] = state->request_gate;
 		if (state->mode == NativeMode::x64 && std::getenv("RAVEN_QUEUED_GRAPHICS")) {
 			host[ServedQueue::enabled] = 1;
 			state->queued_blocks.emplace_back(guest, host);
@@ -2436,6 +2821,17 @@ void NativeProcess::set_served_calls(uint64_t *block, std::vector<uint64_t> stub
 			state->child->ensure_slice(state->slice_started + state->slice);
 		return true;
 	};
+}
+
+void NativeProcess::set_call_stubs(std::vector<uint64_t> stubs)
+{
+	std::sort(stubs.begin(), stubs.end());
+	state->call_stubs = std::move(stubs);
+}
+
+std::array<uint64_t, 3> NativeProcess::call_counts() const
+{
+	return {state->call_answers, state->call_waits, state->call_settles};
 }
 
 bool NativeProcess::served_wait_trap(uint64_t address) const
@@ -2615,6 +3011,18 @@ std::vector<uint64_t> NativeProcess::api_arguments(size_t count) const
 	}
 	if (!state->awaiting_api || count > 128)
 		throw std::runtime_error("native process is not at an API or exceeds argument limit");
+	if (waiting.task) {
+		// The stub left the register arguments in the block; the others are on the stack it was called with.
+		std::vector<uint64_t> arguments(waiting.words.begin(), waiting.words.end());
+		arguments.resize(count);
+		if (count > 4) {
+			if (waiting.stack > UINT64_MAX - 40)
+				throw std::runtime_error("native API stack address overflows");
+			const auto stack = read_memory(waiting.stack + 40, (count - 4) * 8);
+			std::memcpy(arguments.data() + 4, stack.data(), stack.size());
+		}
+		return arguments;
+	}
 	user_regs_struct registers{};
 	trace(PTRACE_GETREGS, state->child->pid, &registers);
 	if (state->mode == NativeMode::x86) {
@@ -2650,6 +3058,8 @@ std::array<uint64_t, 4> NativeProcess::api_float_arguments() const
 		return state->translated_floats;
 	if (!state->awaiting_api || state->mode != NativeMode::x64)
 		throw std::runtime_error("native process is not at an x64 API call");
+	if (waiting.task)
+		return waiting.floats;
 	user_fpregs_struct registers{};
 	trace(PTRACE_GETFPREGS, state->child->pid, &registers);
 	std::array<uint64_t, 4> result{};
@@ -2702,6 +3112,13 @@ void NativeProcess::return_api(uint64_t value)
 	}
 	if (!state->awaiting_api)
 		throw std::runtime_error("native process is not awaiting an API result");
+	if (waiting.task) {
+		// The stub takes the answer from the block once the call is given up (see resume).
+		waiting.block[10] = value;
+		waiting.answered = true;
+		state->awaiting_api = false;
+		return;
+	}
 	user_regs_struct registers{};
 	trace(PTRACE_GETREGS, state->child->pid, &registers);
 	if (state->mode == NativeMode::x86) {

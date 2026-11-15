@@ -112,6 +112,11 @@ public:
 	void complete_debug_print(uint64_t instruction);
 	// Address the guest returns to when a host-initiated call finishes.
 	uint64_t return_gate() const;
+	// Whether `address` is where a callback returns to the runtime: the return gate, or the routine a guest runs a callback from
+	// while it waits in a stub. A callback of the second kind keeps no registers of the call that made it but its instruction and
+	// stack pointers and its arguments (callback_in_stub): the others are those its frames give back.
+	bool callback_boundary(uint64_t address) const;
+	bool callback_in_stub(size_t index) const;
 	size_t callback_depth() const;
 	// The guest's registers at the API call that started the callback at this nesting index (0 is the outermost), with the current
 	// extended state: where a stack walk continues past the callback's return gate.
@@ -141,10 +146,25 @@ public:
 	void set_execution_turn(std::function<void(std::function<bool()>)> turn);
 	// With a host thread for each guest thread: called while the thread's own guest runs, to wait for the guest's stop; it returns the wait
 	// status, or -1 at the deadline.
-	void set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point)> park);
+	void set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> park);
 	// Waits for a stop of a task the calling host thread traces: the status, -1 at the deadline, -3 when `interrupted` says so after the
 	// wait was broken by interrupt_host. It reads no state of the process, so a thread may call it while others serve their calls.
-	static int wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted);
+	// With `block`, the block the task's guest thread leaves its calls in, it returns -4 as soon as a call is there.
+	static int wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted,
+		const uint64_t *block = nullptr);
+	// The calls a host thread answers in its guest thread's block without the guest stopping: `stubs` are their stubs, laid out as the
+	// served ones. Such a call reaches the runtime as one that stopped at its stub's breakpoint, and is answered the same way.
+	void set_call_stubs(std::vector<uint64_t> stubs);
+	// Whether the call in progress waits in its stub, its task not stopped for it.
+	bool call_waiting() const;
+	// Stops the task of the call that waits in its stub at the stub's breakpoint, for work that needs the task stopped.
+	void settle_call();
+	// Has the guest that waits in a stub run a short routine of the runtime's own there, and returns its result.
+	uint64_t run_in_stub(uint64_t function, std::span<const uint64_t> arguments);
+	// Stops a task of the calling host thread that waits in a stub for its call's answer where it is, for a pause.
+	static void hold_call(pid_t task);
+	// Calls answered in the block, of which those whose stub had stopped waiting, and calls whose task had to be stopped.
+	std::array<uint64_t, 3> call_counts() const;
 	static void interrupt_host(pid_t host_thread);
 	// Moves the tracing of a stopped task from the calling host thread to the one that adopts it.
 	void hand_task(pid_t task);
@@ -178,6 +198,12 @@ public:
 	// Low 64 bits of XMM0 to XMM3, where an x64 caller passes the first four floating-point arguments.
 	std::array<uint64_t, 4> api_float_arguments() const;
 	void return_api(uint64_t value);
+	// The stack pointer the call in progress was made with.
+	uint64_t api_stack_pointer() const;
+	// The 64-bit thread whose call is in progress, as its GS base tells.
+	uint64_t thread_base() const;
+	// The stack pointer the guest had when the callback at this nesting level was entered.
+	uint64_t callback_stack(size_t index) const;
 	// Calls the guest makes without stopping: a stub leaves its address and arguments in `block`, which host and guest share, and spins
 	// until the result is there. The handler runs while the guest waits, and answers through api_arguments, api_float_arguments and
 	// return_api as for a trap; it may only read and write guest memory. `stubs` are the addresses of the stubs, each `stub_size` bytes up

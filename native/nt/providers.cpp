@@ -185,12 +185,39 @@ static bool served_api(std::string_view module, std::string_view name)
 	return name.starts_with("vkCmd") || std::find(recording.begin(), recording.end(), name) != recording.end();
 }
 
+// With a host thread for each guest thread, every other call of a 64-bit provider has a stub of the same kind: the thread's host
+// thread answers it in the thread's block, and the guest stops only when the host thread was not looking or the call needs it stopped.
+// RAVEN_TRAPPED_CALLS=1 keeps those calls on their breakpoints, for comparing the two.
+static bool call_stubs()
+{
+	static const bool enabled = std::getenv("RAVEN_PARALLEL") && threaded_host() && !std::getenv("RAVEN_TRAPPED_CALLS");
+	return enabled;
+}
+
+// Whether a served stub's code stands at `rva`, as generated or with its block taken from the thread (see run_native_process).
+static bool stub_at(std::span<const uint8_t> image, uint32_t rva)
+{
+	if (size_t(rva) + 0x72 > image.size() || image[rva + 0x70] != 0xcc || image[rva + 0x71] != 0xc3)
+		return false;
+	static constexpr std::array<uint8_t, 3> shared{0x4c, 0x8b, 0x15};
+	static constexpr std::array<uint8_t, 9> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0};
+	static constexpr std::array<uint8_t, 4> store{0x49, 0x89, 0x4a, 0x08};
+	return (std::equal(shared.begin(), shared.end(), image.begin() + rva) || std::equal(local.begin(), local.end(), image.begin() + rva)) &&
+		std::equal(store.begin(), store.end(), image.begin() + rva + 12);
+}
+
 // A served stub: it loads the block address from the provider's own pointer, which stays zero until the runtime maps the block, stores
 // RCX, RDX, R8, R9, RSP and the low halves of XMM0 to XMM3, publishes its own address and spins until the runtime clears it. After a
 // thousand rounds it stops at a breakpoint instead, which gives the processor to the runtime when the two compete for it.
 static constexpr size_t served_stub_size = 128, served_trap = 0x70, served_wait = 85, served_yield = 109;
 
-static std::vector<uint8_t> served_stub(int32_t to_pointer)
+// What a stub does with an answer that is not plain, from `served_tail` on: the served ones stop for the runtime, or take their
+// breakpoint when the call was declined; those a host thread answers go to the routine that runs what the host thread asks of the
+// guest meanwhile (jmp [r10+2560], see NativeProcess::run_in_stub).
+static constexpr size_t served_tail = 103;
+static constexpr std::array<uint8_t, 7> asked_tail{0x41, 0xff, 0xa2, 0x00, 0x0a, 0x00, 0x00};
+
+static std::vector<uint8_t> served_stub(int32_t to_pointer, bool asked = false)
 {
 	std::vector<uint8_t> code{0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0x4d, 0x85, 0xd2, 0x74, uint8_t(served_trap - 12),
 		0x49, 0x89, 0x4a, 0x08, 0x49, 0x89, 0x52, 0x10, 0x4d, 0x89, 0x42, 0x18, 0x4d, 0x89, 0x4a, 0x20, 0x49, 0x89, 0x62, 0x28,
@@ -204,6 +231,8 @@ static std::vector<uint8_t> served_stub(int32_t to_pointer)
 		0x49, 0x8b, 0x42, 0x50, 0x4d, 0x8b, 0x5a, 0x58, 0x4d, 0x85, 0xdb, 0x74, 0x07, 0x41, 0x83, 0xfb, 0x02, 0x74, 0x03, 0xcc, 0xc3};
 	const int32_t displacement = to_pointer - 7;
 	std::memcpy(code.data() + 3, &displacement, 4);
+	if (asked)
+		std::copy(asked_tail.begin(), asked_tail.end(), code.begin() + served_tail);
 	code.resize(served_trap + 2);
 	code[served_trap] = 0xcc;
 	code[served_trap + 1] = 0xc3;
@@ -1917,6 +1946,8 @@ uint64_t api_trap_address(const PEModule &provider, std::string_view module, std
 	// A plain x64 slot keeps its breakpoint past the space hooking libraries overwrite.
 	if (!served_api(module, name) && size_t(stub) + 15 < image.size() && image[stub] == 0x90 && image[stub + 14] == 0xcc)
 		return provider.loaded.base() + stub + 14;
+	if (!served_api(module, name) && call_stubs() && stub_at(image, stub))
+		return provider.loaded.base() + stub + served_trap;
 	return provider.loaded.base() + stub + fast_stub_trap_offset(module, name);
 }
 
@@ -2001,9 +2032,14 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				fast_count += stub.name == symbol;
 	const size_t fast_start = (data_start + data_exports.size() * 16 + 63) & ~size_t(63);
 	size_t served_count = 0;
+	// The calls the host threads answer have stubs of the same kind, after the served ones; a system service keeps its own entry.
+	const bool calls = fast_paths && !x86 && call_stubs();
+	size_t call_count = 0;
 	if (!x86)
-		for (const auto symbol : exports)
+		for (const auto symbol : exports) {
 			served_count += served_api(name, symbol);
+			call_count += calls && !served_api(name, symbol) && !nt_service_number(name, symbol);
+		}
 	size_t clock_count = 0;
 	if (!x86)
 		for (const auto symbol : exports)
@@ -2019,7 +2055,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				block_size += (prelude->size() + 63) & ~size_t(63);
 	// The block pointer of the served stubs and the block preludes, then the stubs, then the clock preludes, then the commit preludes.
 	const size_t served_start = fast_start + fast_count * 64;
-	const size_t clock_start = served_start + (served_count || block_size ? 64 + served_count * served_stub_size : 0);
+	const size_t clock_start = served_start + (served_count || call_count || block_size ? 64 + (served_count + call_count) * served_stub_size : 0);
 	const size_t commit_start = clock_start + clock_count * clock_prelude_size;
 	const size_t strings_start = commit_start + commit_count * commit_prelude_size;
 	size_t strings_size = 0;
@@ -2114,6 +2150,12 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				const auto prelude = clock_prelude(int32_t(served_start + 8) - int32_t(code), int32_t(served) - int32_t(code));
 				std::copy(prelude.begin(), prelude.end(), bytes.begin() + ptrdiff_t(code));
 			}
+		} else if (calls && !service) {
+			// The stub reads a pointer of its own that stays zero, so it falls to its breakpoint until the runtime has it take the
+			// thread's block instead.
+			code = served_start + 64 + served_next++ * served_stub_size;
+			const auto stub = served_stub(int32_t(served_start + 16) - int32_t(code), true);
+			std::copy(stub.begin(), stub.end(), bytes.begin() + ptrdiff_t(code));
 		}
 		if (const auto *prelude = fast_paths && !x86 && !service ? block_prelude(name, exports[index]) : nullptr) {
 			const size_t trap = code;
@@ -2757,6 +2799,29 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				"GetCurrentInputMessageSource", "GetWindowThreadProcessId", "GetClassNameW", "GetClassLongPtrW", "GetClassLongW"};
 			if (!keep_quiet.contains(api_name))
 				windows.wake(environment.thread_id());
+			// A waiting thread's condition is looked at again after any call but those that end no wait, which say so here: they ask for
+			// state, draw, or work on memory, and they are most of what a program calls.
+			static const std::unordered_set<std::string_view> inert{"GetWindowThreadProcessId", "GetKeyState", "GetAsyncKeyState", "LPtoDP",
+				"DPtoLP", "GetSystemMetrics", "GetSysColor", "GetClientRect", "GetWindowRect", "IsWindow", "IsWindowVisible", "IsWindowUnicode",
+				"IsChild", "IsIconic", "GetParent", "GetAncestor", "GetWindowLongPtrW", "GetWindowLongPtrA", "GetWindowLongW", "GetWindowLongA",
+				"GetClassLongPtrW", "GetClassLongW", "GetClassNameW", "GetPropW", "GetDeviceCaps", "SelectObject", "GetStockObject", "GetObjectW",
+				"GetObjectA", "GetCurrentObject", "FlsGetValue", "FlsSetValue", "TlsGetValue", "TlsSetValue", "RtlGrowFunctionTable",
+				"LocateXStateFeature", "RtlDllShutdownInProgress", "GetSystemTimePreciseAsFileTime", "GetSystemTimeAsFileTime",
+				"QueryPerformanceCounter", "QueryPerformanceFrequency", "GetTickCount", "GetTickCount64", "MapWindowPoints", "ScreenToClient",
+				"ClientToScreen", "GetFocus", "GetCapture", "GetActiveWindow", "GetForegroundWindow", "GetCursorPos", "GetDesktopWindow",
+				"GetDpiForWindow", "GetTextMetricsW", "GetTextExtentPoint32W", "IsAppThemed",
+				"IsThemeActive", "GetThemeAppProperties", "VirtualAlloc", "VirtualFree", "VirtualQuery", "VirtualProtect",
+				"NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtQueryVirtualMemory", "NtProtectVirtualMemory", "MapViewOfFile",
+				"BitBlt", "StretchBlt", "PatBlt", "FillRect", "MoveToEx", "LineTo", "SaveDC", "RestoreDC", "SetBkMode", "SetBkColor",
+				"SetTextColor", "GetTextColor", "GetBkColor", "CreateRectRgn", "CombineRgn", "SetRectRgn", "GetRgnBox", "SelectClipRgn",
+				"CreateCompatibleDC", "CreateCompatibleBitmap", "CreateSolidBrush", "CreatePen", "GdiFlush", "GetLastError", "SetLastError",
+				"GetProcAddress", "GetModuleHandleW", "GetModuleHandleExW", "EventProviderEnabled", "MultiByteToWideChar",
+				"WideCharToMultiByte", "lstrcmpiW", "lstrlenW", "CompareStringOrdinal", "GetCurrentThreadId", "GetCurrentProcessId",
+				"IsProcessorFeaturePresent", "RavenCanvasPixels", "RavenCanvasCreate", "RavenCanvasSize", "RavenCanvasBounds",
+				"RavenCanvasBatch", "GetKeyboardState", "GetQueueStatus", "GetInputState", "GetMessageTime", "GetMessagePos",
+				"GetDoubleClickTime", "GetMonitorInfoW", "MonitorFromWindow", "MonitorFromPoint", "MonitorFromRect"};
+			if (threads_ptr && (inert.contains(api_name) || api_name.starts_with("vkCmd") || api_name.starts_with("gl")))
+				threads_ptr->quiet_call();
 			// ntdll's RtlExitUserProcess is the ExitProcess of programs that do without kernel32.
 			if (api_name == "ExitProcess" || api_name == "RtlExitUserProcess") {
 				const auto code=uint32_t(process.api_arguments(1)[0]);
@@ -2869,7 +2934,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 			// Calls that stopped the guest are counted apart from served ones: a stop costs far more than the call.
 			if (RuntimeProfile::instance().enabled() && profile_start != std::chrono::steady_clock::time_point{})
-				RuntimeProfile::instance().api("(stop) " + api_name, std::chrono::steady_clock::now() - profile_start);
+				RuntimeProfile::instance().api((process.call_waiting() ? "(call) " : "(stop) ") + api_name, std::chrono::steady_clock::now() - profile_start);
 			if (!dispatched && std::getenv("RAVEN_SURVEY_MISSING")) {
 				// Survey aid: report each missing API once and fail it, so one run lists every API a program reaches.
 				static std::set<std::string> reported;
@@ -3030,14 +3095,18 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	struct ServedPointers {
 		std::vector<uint8_t *> places;
 		std::vector<std::pair<uint8_t *, std::array<uint8_t, 12>>> entries;
+		std::vector<std::pair<uint8_t *, std::array<uint8_t, 7>>> tails;
 		~ServedPointers()
 		{
 			for (auto *place : places)
 				std::memset(place, 0, 8);
 			for (const auto &[place, bytes] : entries)
 				std::copy(bytes.begin(), bytes.end(), place);
+			for (const auto &[place, bytes] : tails)
+				std::copy(bytes.begin(), bytes.end(), place);
 		}
 	} served_pointers;
+	std::vector<uint64_t> called_stubs;
 	for (const auto &[module_key, module] : modules.all()) {
 		if (!module->runtime_api)
 			continue;
@@ -3054,10 +3123,22 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::memcpy(image.data() + symbol.address + 7 + displacement, &served_guest, 8);
 				served_pointers.places.push_back(image.data() + symbol.address + 7 + displacement);
 			}
-			if (!symbol.address || symbol.names.empty() || !symbol.forwarder.empty() || !served_api(module_name, symbol.names.at(0)))
+			if (!symbol.address || symbol.names.empty() || !symbol.forwarder.empty())
 				continue;
 			auto image = module->loaded.data();
 			const uint32_t stub = served_stub_rva(image, module_name, symbol.names.at(0), symbol.address);
+			if (!served_api(module_name, symbol.names.at(0))) {
+				// A call the thread's host thread answers: its stub takes the thread's block as the served ones do.
+				if (!call_stubs() || !process.parallel() || !stub_at(image, stub) || image[stub] != 0x4c)
+					continue;
+				std::array<uint8_t, 12> previous{};
+				std::copy_n(image.data() + stub, previous.size(), previous.begin());
+				served_pointers.entries.emplace_back(image.data() + stub, previous);
+				const std::array<uint8_t, 12> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0, 0x90, 0x90, 0x90};
+				std::copy(local.begin(), local.end(), image.data() + stub);
+				called_stubs.push_back(module->loaded.base() + stub);
+				continue;
+			}
 			if (process.parallel()) {
 				std::array<uint8_t, 12> previous{};
 				std::copy_n(image.data() + stub, previous.size(), previous.begin());
@@ -3072,6 +3153,15 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				served_pointers.places.push_back(image.data() + stub + 7 + displacement);
 			}
 			served_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
+			// With a host thread for each guest thread these calls are answered as the others are: their handlers may need the guest
+			// stopped, which only the thread's own host thread can do.
+			if (call_stubs() && process.parallel()) {
+				called_stubs.push_back(module->loaded.base() + stub);
+				std::array<uint8_t, 7> previous{};
+				std::copy_n(image.data() + stub + served_tail, previous.size(), previous.begin());
+				served_pointers.tails.emplace_back(image.data() + stub + served_tail, previous);
+				std::copy(asked_tail.begin(), asked_tail.end(), image.data() + stub + served_tail);
+			}
 		}
 	}
 	std::vector<uint64_t> served_stubs, yield_traps, queued_stubs;
@@ -3172,6 +3262,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const size_t keys_at = current_at + 4096;
 	windows.set_key_table(table + keys_at);
 	__atomic_store_n(&served_block[key_pointer / 8], table_guest + keys_at, __ATOMIC_RELEASE);
+	process.set_call_stubs(std::move(called_stubs));
 	process.set_served_calls(served_block, std::move(served_stubs), served_trap, served_wait, std::move(yield_traps), [&, served_names = std::move(served_names)](uint64_t stub) {
 		const auto found = served_names.find(stub);
 		if (found == served_names.end())

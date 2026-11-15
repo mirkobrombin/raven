@@ -5,6 +5,7 @@
 #include "objects.h"
 #include "tls.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -72,6 +73,11 @@ struct GuestThread {
 	pthread_t host{};
 	bool hosted = false;
 	pid_t host_tid = 0;
+	// The count of signals at which the wait's condition was last found not to hold, and whether it is looked at whatever the count.
+	uint64_t seen_signals = 0;
+	bool polled = false;
+	// Whether the thread stands in line only because its wait's condition held when it was last looked at.
+	bool conditional = false;
 	std::condition_variable turn;
 	bool queued = false, parked = false, paused = false;
 	int held = -2;
@@ -157,7 +163,13 @@ public:
 	std::shared_ptr<GuestThread> find(uint32_t id) const;
 	uint32_t current_id() const { return running->id; }
 	// Blocks the current thread until ready() holds (true) or the wake time passes (false).
-	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn = false);
+	// `polled` tells that the condition reads what the guest changes by itself, as the word of a lock it releases without a call: it is
+	// looked at whenever a thread gives the runtime up, where another is looked at again only after a call that may have ended a wait.
+	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn = false, bool polled = false);
+	// Tells that something may have ended a wait: an object signaled, a message posted, a thread ended.
+	void signaled() { signals.fetch_add(1, std::memory_order_relaxed); }
+	// Every stop and call of a guest counts as such unless the runtime says, while it serves it, that it ends no wait.
+	void quiet_call() { told = false; }
 	// Lets another runnable thread run; false when nothing else is runnable.
 	bool yield();
 	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
@@ -226,6 +238,15 @@ private:
 	std::condition_variable jobs_done;
 	GuestThread *holder = nullptr;
 	std::deque<GuestThread *> line;
+	// How many threads stand in the line, for a look without the gate.
+	std::atomic<unsigned> lined{0};
+	// Counts what may have ended a wait, and when every waiting thread's condition was last looked at whatever the count.
+	std::atomic<uint64_t> signals{1};
+	// Whether what the thread that holds the runtime is serving still has to be counted.
+	bool told = true;
+	std::chrono::steady_clock::time_point scanned{};
+	// Where the next look at the waiting threads starts, when the last could not take them all.
+	size_t scan_from = 0;
 	std::function<void()> host_end;
 	// The administrative thread: it traces the task the runtime uses for memory work while every guest runs, and does the host's own work
 	// (services, pumps, timeouts) when no guest thread asks for it.
@@ -239,10 +260,10 @@ private:
 	void wait_turn(GuestThread &me, std::optional<std::chrono::steady_clock::time_point> wake);
 	void install(GuestThread &me);
 	void enqueue(GuestThread &thread);
-	void wake_ready(GuestThread *except);
+	void wake_ready(GuestThread *except, bool all = false);
 	void run_job(GuestThread &me, std::unique_lock<std::mutex> &lock);
 	void send_job(GuestThread &thread, std::function<void()> work);
-	int park(pid_t task, std::chrono::steady_clock::time_point deadline);
+	int park(pid_t task, std::chrono::steady_clock::time_point deadline, const uint64_t *block);
 	void host_main(GuestThread &thread);
 	void admin_main();
 	void end_host(GuestThread &thread);

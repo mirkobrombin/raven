@@ -239,7 +239,7 @@ bool NativeX86System::dispatch(std::string_view name)
 		std::optional<std::chrono::steady_clock::time_point> wake;
 		if (uint32_t(args[3]) != UINT32_MAX)
 			wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(uint32_t(args[3]));
-		if (!threads.block([this, address, size, expected] { return process.read_memory(address, size) != expected; }, wake)) {
+		if (!threads.block([this, address, size, expected] { return process.read_memory(address, size) != expected; }, wake, false, true)) {
 			fail(1460);
 			return true;
 		}
