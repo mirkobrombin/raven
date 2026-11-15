@@ -1283,6 +1283,30 @@ void NativeThreads::admin_main()
 			serve();
 			for (const auto &pump : pumps)
 				pump();
+			// When every thread waits without a timeout for what only another of them could give, and no other process, host source
+			// or window system can end a wait either, the run is over: the main thread is told so.
+			bool stuck = !tearing_down && !pending && !poll && !shared_object_count.load() &&
+				!std::any_of(externals.begin(), externals.end(), [](const auto &external) { return external(); });
+			bool waits = false;
+			for (const auto &thread : threads) {
+				if (!stuck || thread->state == GuestThread::State::done)
+					continue;
+				if (thread->state != GuestThread::State::waiting || thread->wake || thread->queued || !thread->ready) {
+					stuck = false;
+					continue;
+				}
+				waits = true;
+				try {
+					stuck = !thread->ready();
+				} catch (...) {
+					stuck = false;
+				}
+			}
+			if (stuck && waits) {
+				pending = std::make_exception_ptr(std::runtime_error("native guest threads deadlocked: every thread waits without a timeout"));
+				std::lock_guard lock(gate);
+				enqueue(*threads.front());
+			}
 		} catch (const ThreadExit &) {
 		} catch (...) {
 			if (!pending)

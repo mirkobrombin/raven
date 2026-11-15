@@ -3436,7 +3436,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         raven_kernel_fixture(queued-calls queued_calls_client.c 0x1b7000000 "")
         add_test(NAME native_queued_served_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap>
             --queued-served ${CMAKE_CURRENT_BINARY_DIR}/queued-calls.exe)
-        set_tests_properties(native_queued_served_contract PROPERTIES TIMEOUT 30 ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_QUEUED_GRAPHICS=1;RAVEN_QUEUED_OPENGL=1")
+        set_tests_properties(native_queued_served_contract PROPERTIES TIMEOUT 30
+            ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_QUEUED_GRAPHICS=1;RAVEN_QUEUED_OPENGL=1;RAVEN_COROUTINE_HOST=1")
         foreach(mode default parallel)
             add_test(NAME native_apc_nonalertable_${mode} COMMAND providers_test $<TARGET_FILE:raven-bootstrap> --apc-wait)
             set_tests_properties(native_apc_nonalertable_${mode} PROPERTIES TIMEOUT 10)
