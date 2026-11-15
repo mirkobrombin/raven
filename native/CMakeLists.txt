@@ -5555,6 +5555,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics32.exe metrics ${CMAKE_CURRENT_BINARY_DIR}/x11-metrics-x32)
                         set_tests_properties(native_x11_metrics_x32 PROPERTIES TIMEOUT 60 ENVIRONMENT RAVEN_PARALLEL=1)
                     endif()
+                    # Two monitors side by side, the primary one not at the root's origin: the program sees the primary monitor as the
+                    # screen, as on Windows, not the root that spans both.
+                    add_executable(x11_monitors_tool desktop/x11_monitors_tool.cpp)
+                    target_link_libraries(x11_monitors_tool PRIVATE PkgConfig::XCB_CLIENT)
+                    add_test(NAME native_x11_primary_monitor COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11.py
+                        $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics.exe monitors ${CMAKE_CURRENT_BINARY_DIR}/x11-monitors
+                        $<TARGET_FILE:x11_monitors_tool>)
+                    set_tests_properties(native_x11_primary_monitor PROPERTIES TIMEOUT 60)
                 endif()
             endif()
             if(RAVEN_WAYLAND_SCREEN_TESTS)

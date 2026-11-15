@@ -1,6 +1,7 @@
 #include "xcb.h"
 
 #include <xcb/xcb.h>
+#include <xcb/xcbext.h>
 #include <xcb/xfixes.h>
 #include <xcb/xinput.h>
 // The keyboard extension names a structure member after a C++ keyword.
@@ -22,12 +23,15 @@
 #include <stdexcept>
 #include <string>
 #include <sys/eventfd.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <vector>
 
 namespace raven {
 
 namespace {
+
+xcb_extension_t randr_extension{"RANDR",0};
 
 template <typename T> struct Reply {
 	T *value=nullptr;
@@ -107,6 +111,54 @@ struct XcbPresentation::State {
 	// The cursor the program shows, by its IDC_ identifier or 0 for none, and the server cursors made for each so far.
 	uint32_t cursor=32512;
 	std::map<uint32_t,xcb_cursor_t> cursors;
+	std::optional<std::pair<int32_t,int32_t>> primary;
+
+	// The screen as Windows reports it is the primary monitor, not the root that spans all of them: a program that fills the screen
+	// or lays out for it would stretch across every monitor. RandR 1.5 lists the monitors and marks the primary one, else the one at
+	// the root's origin stands for it; a server without the extension, or that answers otherwise, gives the root.
+	std::pair<int32_t,int32_t> primary_size() {
+		if (primary) return *primary;
+		primary=std::pair{int32_t(screen->width_in_pixels),int32_t(screen->height_in_pixels)};
+		const auto *extension=xcb_get_extension_data(connection,&randr_extension);
+		if (!extension || !extension->present) return *primary;
+		const auto ask=[&](uint8_t opcode,void *request,size_t size) -> uint8_t * {
+			iovec parts[3]{};
+			parts[2].iov_base=request; parts[2].iov_len=size;
+			xcb_protocol_request_t description{1,&randr_extension,opcode,0};
+			xcb_generic_error_t *error=nullptr;
+			auto *reply=static_cast<uint8_t *>(xcb_wait_for_reply(connection,xcb_send_request(connection,0,parts+2,&description),&error));
+			std::free(error);
+			return reply;
+		};
+		// RRQueryVersion first: the server answers RRGetMonitors only to a client that announced 1.5.
+		struct { uint8_t major,minor; uint16_t length; uint32_t want_major,want_minor; } version{0,0,3,1,5};
+		Reply<uint8_t> agreed(ask(0,&version,sizeof version));
+		if (!agreed) return *primary;
+		uint32_t major=0,minor=0;
+		std::memcpy(&major,agreed.value+8,4); std::memcpy(&minor,agreed.value+12,4);
+		if (major<1 || (major==1 && minor<5)) return *primary;
+		struct { uint8_t major,minor; uint16_t length; uint32_t window; uint8_t active,pad[3]; } request{0,42,3,screen->root,1,{}};
+		Reply<uint8_t> monitors(ask(42,&request,sizeof request));
+		if (!monitors) return *primary;
+		uint32_t count=0,words=0;
+		std::memcpy(&words,monitors.value+4,4); std::memcpy(&count,monitors.value+12,4);
+		const size_t end=32+size_t(words)*4;
+		std::optional<std::pair<int32_t,int32_t>> marked,at_origin;
+		for (size_t at=32;count-- && at+24<=end;) {
+			uint16_t outputs=0,width=0,height=0;
+			int16_t x=0,y=0;
+			std::memcpy(&outputs,monitors.value+at+6,2); std::memcpy(&x,monitors.value+at+8,2); std::memcpy(&y,monitors.value+at+10,2);
+			std::memcpy(&width,monitors.value+at+12,2); std::memcpy(&height,monitors.value+at+14,2);
+			if (width && height) {
+				if (monitors.value[at+4] && !marked) marked=std::pair{int32_t(width),int32_t(height)};
+				if (!x && !y && !at_origin) at_origin=std::pair{int32_t(width),int32_t(height)};
+			}
+			at+=24+size_t(outputs)*4;
+		}
+		if (marked) primary=marked;
+		else if (at_origin) primary=at_origin;
+		return *primary;
+	}
 	xcb_font_t cursor_font=0;
 
 	~State() {
@@ -1010,7 +1062,7 @@ DesktopPresentation XcbPresentation::callbacks()
 	[this]() -> void * { state->connect(); return state->connection; },
 	[this]() -> std::optional<std::pair<int32_t,int32_t>> {
 		state->connect();
-		return std::pair{int32_t(state->screen->width_in_pixels),int32_t(state->screen->height_in_pixels)};
+		return state->primary_size();
 	},
 	[this](uint64_t handle,bool maximized) { state->maximize(handle,maximized); },
 	[this](uint32_t shape) {

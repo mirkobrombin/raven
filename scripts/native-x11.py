@@ -6,12 +6,14 @@ Modes:
 - metrics: screen-metrics.exe maximizes a window painted green with red corners; the window must cover the screen and keep its corners.
 - opengl, opengl-maximized: opengl-host.exe draws a red frame through the native OpenGL bridge on an EGL XCB surface; the frame must
   reach the screen, and when maximized cover it with its green corners in place.
+- monitors: the server spans two monitors side by side, the primary one on the right; screen-metrics.exe must see the primary monitor
+  as the screen, in its metrics, its monitor and its display mode, not the root that spans both.
 - present: window.exe presents a Direct3D 11 swap chain through DXVK and Raven's Vulkan bridge on an XCB surface; the captured screen
   must hold the last frame the GPU read back, pixel for pixel, before and after the program resizes its window.
 
 Xvfb renders in software and Vulkan uses lavapipe when available: these checks cover correctness, not speed.
 
-usage: native-x11.py RAVEN CLIENT_EXE metrics|opengl|opengl-maximized|present WORKDIR [DXVK_PE64_DIRECTORY]
+usage: native-x11.py RAVEN CLIENT_EXE metrics|opengl|opengl-maximized|present|monitors WORKDIR [DXVK_PE64_DIRECTORY|MONITORS_TOOL]
 """
 
 from pathlib import Path
@@ -26,6 +28,8 @@ from x11_session import X11Session
 from lavapipe import icd as lavapipe_icd
 
 SIZE = (1280, 720)
+# The monitors mode: a root of both monitors, the primary one right of the other and not at the root's origin.
+SPAN, MONITORS, PRIMARY = (3200, 1080), ("1280x1024+0+0", "1920x1080+1280+0*"), (1920, 1080)
 
 
 def wait_for(predicate, process, timeout, failure):
@@ -67,10 +71,15 @@ def main():
         env["VK_DRIVER_FILES"] = str(lavapipe)
     if mode.startswith("opengl"):
         env |= {"RAVEN_NATIVE_OPENGL": "1", "LIBGL_ALWAYS_SOFTWARE": "1"}
-    arguments = {"metrics": ["--", *map(str, SIZE), "0", "0"], "opengl": [], "opengl-maximized": ["--", "--maximize"], "present": []}[mode]
-    guest = None
-    with X11Session(work / "x11", SIZE) as session, (work / "guest.log").open("wb") as log:
+    arguments = {"metrics": ["--", *map(str, SIZE), "0", "0"], "opengl": [], "opengl-maximized": ["--", "--maximize"], "present": [],
+                 "monitors": ["--", *map(str, PRIMARY), "0", "0"]}[mode]
+    guest = monitors = None
+    with X11Session(work / "x11", SPAN if mode == "monitors" else SIZE) as session, (work / "guest.log").open("wb") as log:
         env |= session.environment()
+        if mode == "monitors":
+            monitors = subprocess.Popen([sys.argv[5], *MONITORS], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            if monitors.stdout.readline().strip() != "ready":
+                raise SystemExit("the X server did not take the two monitors")
         guest = subprocess.Popen([str(raven), "--run-process", "--execution=native", "--timeout-ms=100000", "--desktop=x11", "--stdio=inherit",
                                   str(run / client.name), *arguments], env=env, stdout=log, stderr=subprocess.STDOUT)
         text = lambda: (work / "guest.log").read_text(errors="replace")
@@ -85,6 +94,11 @@ def main():
                 if guest.wait(timeout=20):
                     raise SystemExit(f"screen workload failed: {text()[-1500:]}")
                 print("X11: display metrics and maximized corners verified")
+            elif mode == "monitors":
+                wait_for(lambda: "Screen metrics frame presented" in text(), guest, 30, "the window was not presented")
+                if guest.wait(timeout=20):
+                    raise SystemExit(f"the program did not see the primary monitor as the screen: {text()[-1500:]}")
+                print("X11: the primary monitor is the screen the program sees")
             elif mode.startswith("opengl"):
                 wait_for(lambda: "OpenGL frame presented" in text(), guest, 30, "the OpenGL frame was not presented")
                 time.sleep(0.5)
@@ -108,6 +122,9 @@ def main():
                 time.sleep(1)
                 session.capture(work / "capture-resized.png")
         finally:
+            if monitors:
+                monitors.stdin.close()
+                monitors.wait(timeout=10)
             if guest.poll() is None:
                 guest.terminate()
                 try:
