@@ -382,7 +382,14 @@ static const WCHAR *aliases[][2] = {
 	{L"Verdana", L"DejaVu Sans"}, {L"Microsoft Sans Serif", L"Liberation Sans"}, {L"MS Shell Dlg", L"DejaVu Sans"}, {L"MS Shell Dlg 2", L"Raven Sans"},
 	{L"Calibri", L"Noto Sans"}, {L"Consolas", L"DejaVu Sans Mono"}, {L"Lucida Console", L"DejaVu Sans Mono"}, {L"Georgia", L"DejaVu Serif"},
 	{L"Trebuchet MS", L"Noto Sans"}, {L"Segoe UI Emoji", L"Noto Sans"}, {L"Segoe UI Symbol", L"DejaVu Sans"}, {L"Cambria", L"DejaVu Serif"},
-	{L"Palatino Linotype", L"DejaVu Serif"}, {L"Symbol", L"DejaVu Sans"}, {L"MS Gothic", L"DejaVu Sans Mono"},
+	{L"Palatino Linotype", L"DejaVu Serif"}, {L"Symbol", L"DejaVu Sans"}, {L"MS Gothic", L"Noto Sans Mono CJK JP"},
+	/* The families a WPF composite font names for the scripts Arial lacks: Chinese, Japanese and Korean, and the wide Unicode fonts. */
+	{L"Meiryo", L"Noto Sans CJK JP"}, {L"Meiryo UI", L"Noto Sans CJK JP"}, {L"Yu Gothic", L"Noto Sans CJK JP"}, {L"Yu Gothic UI", L"Noto Sans CJK JP"},
+	{L"MS PGothic", L"Noto Sans CJK JP"}, {L"MS UI Gothic", L"Noto Sans CJK JP"}, {L"Microsoft YaHei", L"Noto Sans CJK SC"},
+	{L"Microsoft YaHei UI", L"Noto Sans CJK SC"}, {L"SimHei", L"Noto Sans CJK SC"}, {L"SimSun", L"Noto Serif CJK SC"}, {L"NSimSun", L"Noto Serif CJK SC"},
+	{L"Microsoft JhengHei", L"Noto Sans CJK TC"}, {L"Microsoft JhengHei UI", L"Noto Sans CJK TC"}, {L"PMingLiU", L"Noto Serif CJK TC"},
+	{L"Malgun Gothic", L"Noto Sans CJK KR"}, {L"Gulim", L"Noto Sans CJK KR"}, {L"Batang", L"Noto Serif CJK KR"},
+	{L"Lucida Sans Unicode", L"DejaVu Sans"}, {L"Arial Unicode MS", L"DejaVu Sans"},
 };
 
 /* The free families that stand for one another when the host lacks one, so an alias still lands on a font of the same kind. */
@@ -390,13 +397,17 @@ static const WCHAR *stand_ins[][2] = {
 	{L"Raven Sans", L"DejaVu Sans"}, {L"Noto Sans", L"Liberation Sans"}, {L"Liberation Sans", L"DejaVu Sans"}, {L"DejaVu Sans", L"Liberation Sans"},
 	{L"Liberation Serif", L"DejaVu Serif"}, {L"DejaVu Serif", L"Liberation Serif"},
 	{L"Liberation Mono", L"DejaVu Sans Mono"}, {L"DejaVu Sans Mono", L"Liberation Mono"},
+	{L"Noto Sans Mono CJK JP", L"Noto Sans Mono CJK SC"}, {L"Noto Sans Mono CJK SC", L"DejaVu Sans Mono"},
+	{L"Noto Sans CJK SC", L"Noto Sans CJK JP"}, {L"Noto Sans CJK TC", L"Noto Sans CJK SC"}, {L"Noto Sans CJK KR", L"Noto Sans CJK SC"},
+	{L"Noto Sans CJK JP", L"Droid Sans Fallback"}, {L"Noto Serif CJK SC", L"Noto Sans CJK SC"}, {L"Noto Serif CJK TC", L"Noto Serif CJK SC"},
+	{L"Noto Serif CJK KR", L"Noto Serif CJK SC"},
 };
 
 /* The family an alias names, or the first stand-in for it the host has. */
 static FamilyEntry *alias_target(const WCHAR *name)
 {
 	int hop;
-	for (hop = 0; hop < 3 && name; ++hop) {
+	for (hop = 0; hop < 5 && name; ++hop) {
 		FamilyEntry *found = find_family(name);
 		size_t index;
 		const WCHAR *next = NULL;

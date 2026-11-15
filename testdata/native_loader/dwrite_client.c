@@ -365,6 +365,29 @@ int raven_entry(void)
 		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, IDWriteFontSet1 **))(*(void ***)newest)[12])(newest, &of_collection)) || !IDWriteFontSet1_GetFontCount(of_collection) ||
 		!IDWriteFontCollection3_GetExpirationEvent(newest))
 		return 58;
+	/* The families a WPF composite font names for other scripts answer with a host font that has them, when the host has one. */
+	{
+		static const struct { const WCHAR *host, *windows; UINT32 character; } scripts[] = {
+			{L"Noto Sans CJK SC", L"Microsoft YaHei", 0x4e00}, {L"Noto Sans CJK JP", L"Meiryo", 0x4e00},
+			{L"DejaVu Sans", L"Lucida Sans Unicode", 0x0627},
+		};
+		for (index = 0; index < sizeof(scripts) / sizeof(scripts[0]); ++index) {
+			UINT32 at;
+			WINBOOL present = FALSE, covered = FALSE;
+			IDWriteFontFamily *named_family;
+			IDWriteFont *first;
+			if (FAILED(IDWriteFontCollection_FindFamilyName(collection, scripts[index].host, &at, &present)) || !present)
+				continue;
+			if (FAILED(IDWriteFontCollection_FindFamilyName(collection, scripts[index].windows, &at, &present)) || !present)
+				return 62;
+			if (FAILED(IDWriteFontCollection_GetFontFamily(collection, at, &named_family)) ||
+				FAILED(IDWriteFontFamily_GetFont(named_family, 0, &first)) || FAILED(IDWriteFont_HasCharacter(first, scripts[index].character, &covered)) ||
+				!covered)
+				return 63;
+			IDWriteFont_Release(first);
+			IDWriteFontFamily_Release(named_family);
+		}
+	}
 	IDWriteFontSet1_Release(of_collection);
 	IDWriteFontList2_Release(by_name);
 	IDWriteFontCollection3_Release(newest);
