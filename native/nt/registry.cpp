@@ -165,7 +165,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"{72C24DD5-D70A-438B-8A42-98424B88AFB8}", u"wshom.ocx"}, {u"{093FF999-1EA0-4079-9525-9614C3504B74}", u"wshom.ocx"},
 		{u"{F935DC22-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"}, {u"{F935DC26-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"},
 		{u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}", u"jscript.dll"}, {u"{00020424-0000-0000-C000-000000000046}", u"oleaut32.dll"},
-		{u"{BCDE0395-E52F-467C-8E3D-C4579291692E}", u"mmdevapi.dll"}, {u"{47D4D946-62E8-11CF-93BC-444553540000}", u"dsound.dll"},
+		{u"{BCDE0395-E52F-467C-8E3D-C4579291692E}", u"mmdevapi.dll"}, {u"{F447B69E-1884-4A7E-8055-346F74D6EDB3}", u"resampledmo.dll"},
+		{u"{47D4D946-62E8-11CF-93BC-444553540000}", u"dsound.dll"},
 		{u"{3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}", u"dsound.dll"}, {u"{B0210780-89CD-11D0-AF08-00A0C925CD16}", u"dsound.dll"},
 		{u"{E4BCAC13-7F99-4908-9A8E-74E3BF24B6E1}", u"dsound.dll"}, {u"{FEA4300C-7959-4147-B26A-2377B9E7A91D}", u"dsound.dll"}};
 	register_animation_classes();
