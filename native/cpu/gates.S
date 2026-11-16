@@ -24,6 +24,8 @@ raven_served_stub:
 	mov r10, qword ptr [rip + 0]
 	test r10, r10
 	jz short .Ltrap
+	/* The first instruction boundary after the fourteen bytes a program hooking the function copies out and jumps back past. */
+	xchg ax, ax
 raven_served_stub_store:
 	mov qword ptr [r10 + 8], rcx
 	mov qword ptr [r10 + 16], rdx
