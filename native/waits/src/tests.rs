@@ -95,6 +95,26 @@ fn a_wait_that_only_looks_does_not_block() {
     assert!(started.elapsed() < Duration::from_millis(1), "an interrupted wait took {:?}", started.elapsed());
 }
 
+/// A thread the program ends while it waits is called away right after: its wait ends however the two reach it.
+#[test]
+fn a_wait_ended_with_its_thread_and_called_away_returns() {
+    for _ in 0..20 {
+        let waits = waits();
+        let event = waits.create(Kind::AutoEvent, 0).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiter = {
+            let waits = waits.clone();
+            std::thread::spawn(move || sender.send(waits.wait(1, &[event], false, false, None)).unwrap())
+        };
+        waiting(&waits, 1);
+        waits.thread_ended(1);
+        waits.interrupt(1);
+        let outcome = receiver.recv_timeout(Duration::from_secs(2)).expect("the wait of an ended thread went on");
+        assert!(matches!(outcome, Ok(Outcome::Ended | Outcome::Interrupted)), "{outcome:?}");
+        waiter.join().unwrap();
+    }
+}
+
 #[test]
 fn wait_for_any_reports_the_lowest_free_index() {
     let waits = waits();

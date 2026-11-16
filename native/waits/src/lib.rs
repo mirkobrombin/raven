@@ -333,6 +333,11 @@ impl Waits {
             if let Some(outcome) = me.outcome.take() {
                 return Ok(outcome);
             }
+            // Forgotten, and known again only because it was called away before it woke: the wait ended with the thread.
+            if me.wait.is_none() {
+                me.interrupted = false;
+                return Ok(Outcome::Ended);
+            }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 state.end(thread, Outcome::Timeout);
                 state.threads.get_mut(&thread).expect("the thread waited").outcome = None;
