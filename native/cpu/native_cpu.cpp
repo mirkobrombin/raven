@@ -2103,6 +2103,14 @@ void NativeProcess::set_task_registers(pid_t task, const user_regs_struct &regis
 	trace(PTRACE_SETREGS, task, const_cast<user_regs_struct *>(&registers));
 }
 
+void NativeProcess::set_task_xstate(pid_t task, std::span<const uint8_t> xstate)
+{
+	const LeaveWaiting leave;
+	iovec buffer{const_cast<uint8_t *>(xstate.data()), xstate.size()};
+	if (ptrace(PTRACE_SETREGSET, task, reinterpret_cast<void *>(NT_X86_XSTATE), &buffer) == -1)
+		throw std::runtime_error("host cannot set native XSTATE");
+}
+
 void NativeProcess::arm_host_thread()
 {
 	wait_timer();

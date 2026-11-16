@@ -996,9 +996,9 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		}
 		context.threads.set_registers(*thread, registers);
 		// The floating-point and extended state wait in the thread's saved state for its next turn; a thread that runs on a task of its
-		// own keeps what it has.
+		// own has them written into its task, which holds them while the thread is paused.
 		auto &state = thread->snapshot.context;
-		if (!context.process.parallel()) {
+		if (!context.process.parallel() || thread->paused) {
 			if ((flags & 0x8) && state.xstate.size() >= 512) {
 				const auto area = call.read(call[1] + x64_context::float_area, 512);
 				std::memcpy(state.xstate.data(), area.data(), 512);
@@ -1009,6 +1009,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				else
 					set_native_avx(state, nullptr);
 			}
+			if (context.process.parallel())
+				context.threads.set_xstate(*thread);
 		}
 		call.ret(1);
 	});

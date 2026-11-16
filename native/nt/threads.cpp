@@ -1226,6 +1226,13 @@ void NativeThreads::set_registers(GuestThread &thread, const user_regs_struct &r
 		send_job(thread, [&thread, registers] { NativeProcess::set_task_registers(thread.snapshot.task, registers); });
 }
 
+void NativeThreads::set_xstate(GuestThread &thread)
+{
+	if (!threaded || &thread == running || !(thread.paused || thread.snapshot.context_in_task) || thread.snapshot.context.xstate.size() < 512)
+		return;
+	send_job(thread, [&thread] { NativeProcess::set_task_xstate(thread.snapshot.task, thread.snapshot.context.xstate); });
+}
+
 void NativeThreads::end_host(GuestThread &thread)
 {
 	// The guest task of a thread that ended goes with it: its host thread is the one that can reap it.

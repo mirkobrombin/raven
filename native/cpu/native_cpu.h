@@ -185,6 +185,8 @@ public:
 	static int pause_own_task(pid_t task);
 	static NativeContext task_context(pid_t task);
 	static void set_task_registers(pid_t task, const user_regs_struct &registers);
+	// Writes the floating-point and extended state of a paused task, as PTRACE_GETREGSET with NT_X86_XSTATE gives it.
+	static void set_task_xstate(pid_t task, std::span<const uint8_t> xstate);
 	static void arm_host_thread();
 	void stop_thread(const NativeThreadState &thread);
 	void pause_thread(NativeThreadState &thread);

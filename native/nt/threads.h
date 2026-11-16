@@ -306,6 +306,8 @@ private:
 public:
 	// Sets the registers a paused thread continues with, in its own task.
 	void set_registers(GuestThread &thread, const user_regs_struct &registers);
+	// Writes the thread's saved floating-point and extended state into its task, where the task holds its state (see set_registers).
+	void set_xstate(GuestThread &thread);
 	bool host_threads() const { return threaded; }
 	// Has the host thread with this id do `work` on itself; nothing is done when it serves no guest thread any more.
 	void on_host(pid_t host, std::function<void()> work);
