@@ -6436,6 +6436,44 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_initial_dependency_contract PROPERTIES TIMEOUT 15)
         set_tests_properties(native_initial_dependency_prefer_local PROPERTIES TIMEOUT 15 ENVIRONMENT RAVEN_PREFER_LOCAL_DLLS=1)
         set_tests_properties(native_initial_dependency_cli native_initial_forwarder_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # Libraries a program loads start after the libraries they import, for 64-bit and 32-bit programs.
+        foreach(width "" _x32)
+            if(width STREQUAL "")
+                set(order_compiler ${RAVEN_MINGW64})
+                set(order_entry raven_entry)
+                set(order_dll_entry DllMain)
+            else()
+                set(order_compiler ${RAVEN_MINGW32})
+                set(order_entry _raven_entry)
+                set(order_dll_entry _DllMain@12)
+            endif()
+            if(order_compiler)
+                set(order_directory ${CMAKE_CURRENT_BINARY_DIR}/attach-order${width})
+                set(order_flags -O2 -nostdlib -fno-stack-protector)
+                add_custom_command(OUTPUT ${order_directory}/order-a.dll ${order_directory}/order-b.dll ${order_directory}/order-f.dll
+                        ${order_directory}/order-root.dll ${order_directory}/client.exe
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${order_directory}
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_A
+                        -Wl,--entry,${order_dll_entry},--no-insert-timestamp,--out-implib,${order_directory}/order-a.a
+                        -o ${order_directory}/order-a.dll ${LOADER_SOURCES}/attach_order.c
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_B
+                        -Wl,--entry,${order_dll_entry},--no-insert-timestamp,--out-implib,${order_directory}/order-b.a
+                        -o ${order_directory}/order-b.dll ${LOADER_SOURCES}/attach_order.c ${order_directory}/order-a.a
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_F
+                        -Wl,--entry,${order_dll_entry},--no-insert-timestamp,--out-implib,${order_directory}/order-f.a
+                        -o ${order_directory}/order-f.dll ${LOADER_SOURCES}/attach_order.c ${LOADER_SOURCES}/attach_order_forward.def -lkernel32
+                    # order-a.a, order-b.a, order-f.a: the root's import table names the libraries in that order.
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_ROOT -Wl,--entry,${order_dll_entry},--no-insert-timestamp
+                        -o ${order_directory}/order-root.dll ${LOADER_SOURCES}/attach_order.c ${order_directory}/order-a.a ${order_directory}/order-b.a
+                        ${order_directory}/order-f.a
+                    COMMAND ${order_compiler} ${order_flags} -Wl,--entry,${order_entry},--no-insert-timestamp
+                        -o ${order_directory}/client.exe ${LOADER_SOURCES}/attach_order.c -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/attach_order.c ${LOADER_SOURCES}/attach_order_forward.def VERBATIM)
+                add_custom_target(attach_order${width}_fixture ALL DEPENDS ${order_directory}/order-root.dll ${order_directory}/client.exe)
+                add_test(NAME native_attach_order${width} COMMAND raven --run-process --execution=native ${order_directory}/client.exe)
+                set_tests_properties(native_attach_order${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            endif()
+        endforeach()
     endif()
 endif()
 
