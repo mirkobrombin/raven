@@ -177,11 +177,18 @@ static int selected_events(void)
 	int size = sizeof(address);
 	HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
 	if (!event || listener == INVALID_SOCKET || client == INVALID_SOCKET || bind(listener, (SOCKADDR *)&address, size) ||
-		getsockname(listener, (SOCKADDR *)&address, &size) || listen(listener, 2) || WSAEventSelect(listener, event, FD_ACCEPT) ||
+		getsockname(listener, (SOCKADDR *)&address, &size) || listen(listener, 2) || WSAEventSelect(listener, event, FD_ACCEPT | FD_READ | FD_WRITE) ||
 		connect(client, (SOCKADDR *)&address, size) || !network_event(listener, event, FD_ACCEPT)) return 40;
+	/* The accepted socket inherits the listener's selection and its non-blocking mode, without a WSAEventSelect of its own: it reports
+	 * FD_WRITE first and FD_READ when data comes. FD_READ and FD_WRITE are selected on the listener only for this; a listening socket
+	 * reports neither. */
 	SOCKET server = accept(listener, NULL, NULL);
 	closesocket(listener);
-	if (server == INVALID_SOCKET || WSAEventSelect(server, event, FD_READ | FD_WRITE | FD_CLOSE) ||
+	if (server == INVALID_SOCKET || !network_event(server, event, FD_WRITE)) return 34;
+	char empty;
+	if (recv(server, &empty, 1, 0) != SOCKET_ERROR || WSAGetLastError() != WSAEWOULDBLOCK) return 35;
+	if (send(client, "x", 1, 0) != 1 || !network_event(server, event, FD_READ) || recv(server, &empty, 1, 0) != 1 || empty != 'x') return 36;
+	if (WSAEventSelect(server, event, FD_READ | FD_WRITE | FD_CLOSE) ||
 		!network_event(server, event, FD_WRITE)) return 41;
 	WSANETWORKEVENTS events;
 	for (unsigned index = 0; index < 1000; ++index) {
@@ -202,6 +209,56 @@ static int selected_events(void)
 	if (closesocket(client) || !network_event(server, event, FD_CLOSE) ||
 		WSAEnumNetworkEvents(server, event, &events) || events.lNetworkEvents ||
 		WaitForSingleObject(event, 0) != WAIT_TIMEOUT) return 47;
+	closesocket(server);
+	CloseHandle(event);
+	return 0;
+}
+
+/* A listener made non-blocking with FIONBIO alone, with no selection, still hands its mode to the sockets it accepts. */
+static int nonblocking_accept(void)
+{
+	SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP), client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	SOCKADDR_IN address;
+	zero(&address, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	int size = sizeof(address);
+	u_long on = 1;
+	if (listener == INVALID_SOCKET || client == INVALID_SOCKET || bind(listener, (SOCKADDR *)&address, size) ||
+		getsockname(listener, (SOCKADDR *)&address, &size) || listen(listener, 1) || ioctlsocket(listener, FIONBIO, &on) ||
+		connect(client, (SOCKADDR *)&address, size)) return 37;
+	SOCKET server = INVALID_SOCKET;
+	for (unsigned attempt = 0; attempt < 500 && server == INVALID_SOCKET; ++attempt) {
+		server = accept(listener, NULL, NULL);
+		if (server == INVALID_SOCKET && WSAGetLastError() != WSAEWOULDBLOCK) return 38;
+		if (server == INVALID_SOCKET) Sleep(10);
+	}
+	if (server == INVALID_SOCKET) return 48;
+	/* Without the inherited mode this recv blocks, so a regression shows as the test's timeout rather than a code. */
+	char byte;
+	if (recv(server, &byte, 1, 0) != SOCKET_ERROR || WSAGetLastError() != WSAEWOULDBLOCK) return 39;
+	closesocket(server);
+	closesocket(client);
+	closesocket(listener);
+	return 0;
+}
+
+/* An accepted socket reports FD_CLOSE through the selection it inherits, with no WSAEventSelect of its own. */
+static int inherited_close(void)
+{
+	SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP), client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	SOCKADDR_IN address;
+	zero(&address, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	int size = sizeof(address);
+	HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
+	if (!event || listener == INVALID_SOCKET || client == INVALID_SOCKET || bind(listener, (SOCKADDR *)&address, size) ||
+		getsockname(listener, (SOCKADDR *)&address, &size) || listen(listener, 1) || WSAEventSelect(listener, event, FD_ACCEPT | FD_CLOSE) ||
+		connect(client, (SOCKADDR *)&address, size) || !network_event(listener, event, FD_ACCEPT)) return 49;
+	SOCKET server = accept(listener, NULL, NULL);
+	closesocket(listener);
+	if (server == INVALID_SOCKET || closesocket(client) || !network_event(server, event, FD_CLOSE)) return 57;
 	closesocket(server);
 	CloseHandle(event);
 	return 0;
@@ -354,6 +411,10 @@ int raven_entry(void)
 	result = datagrams(AF_INET6);
 	if (result) return result + 100;
 	result = selected_events();
+	if (result) return result;
+	result = nonblocking_accept();
+	if (result) return result;
+	result = inherited_close();
 	if (result) return result;
 	result = selected_batch();
 	if (result) return result;
