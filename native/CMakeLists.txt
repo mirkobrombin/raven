@@ -180,6 +180,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     set_tests_properties(native_ansi_code_page PROPERTIES TIMEOUT 15)
     target_sources(raven_cpu PRIVATE desktop/brush.cpp desktop/bitblt.cpp)
     target_link_libraries(raven_cpu PUBLIC raven_pe raven_pixels raven_shader)
+    # The waits on kernel objects (native/waits), in Rust: cargo builds the static library the host links.
+    find_program(RAVEN_CARGO cargo REQUIRED)
+    file(GLOB RAVEN_WAITS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/waits/src/*.rs)
+    set(RAVEN_WAITS_LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/waits/release/libraven_waits.a)
+    add_custom_command(OUTPUT ${RAVEN_WAITS_LIBRARY}
+        COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/waits
+            ${RAVEN_CARGO} build --locked --release --lib --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/waits/Cargo.toml
+        DEPENDS ${RAVEN_WAITS_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/waits/Cargo.toml ${CMAKE_CURRENT_SOURCE_DIR}/waits/Cargo.lock
+        VERBATIM)
+    add_custom_target(raven_waits_library DEPENDS ${RAVEN_WAITS_LIBRARY})
+    add_library(raven_waits STATIC IMPORTED)
+    set_target_properties(raven_waits PROPERTIES IMPORTED_LOCATION ${RAVEN_WAITS_LIBRARY}
+        INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/waits INTERFACE_LINK_LIBRARIES "pthread;dl;m")
+    add_dependencies(raven_waits raven_waits_library)
+    add_dependencies(raven_cpu raven_waits_library)
+    target_link_libraries(raven_cpu PUBLIC raven_waits)
     # The certificate chain functions of crypt32 are answered by the host's X.509 verifier when OpenSSL is there.
     if(OPENSSL_FOUND)
         target_link_libraries(raven_cpu PUBLIC OpenSSL::Crypto)
@@ -3443,6 +3459,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/call-bench-prefix-${mode}")
         endforeach()
         set_property(TEST native_call_bench_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
+        raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
+        foreach(mode default parallel)
+            add_test(NAME native_abandoned_mutex_${mode} COMMAND raven --run-process --execution=native
+                ${CMAKE_CURRENT_BINARY_DIR}/abandoned-mutex.exe)
+            set_tests_properties(native_abandoned_mutex_${mode} PROPERTIES TIMEOUT 30
+                PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/abandoned-mutex-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_abandoned_mutex_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         raven_kernel_fixture(queued-calls queued_calls_client.c 0x1b7000000 "")
         add_test(NAME native_queued_served_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap>
             --queued-served ${CMAKE_CURRENT_BINARY_DIR}/queued-calls.exe)

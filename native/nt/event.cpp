@@ -1,10 +1,12 @@
 #include "event.h"
+#include "kernel_waits.h"
 #include "shared_file.h"
 
 #include <algorithm>
 #include <new>
 #include <stdexcept>
 #include <sys/stat.h>
+#include <utility>
 
 namespace raven {
 
@@ -26,6 +28,12 @@ struct EventObject::Shared {
 };
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
+
+// A private event's state is the process's table's, where its waits are handed the event as it is set.
+EventObject::EventObject(uint32_t type, bool signaled) : type(type), local_signaled(signaled),
+	waits_object(raven_waits_create(kernel_waits(), type == 0 ? raven_manual_event : raven_auto_event, signaled, 0))
+{
+}
 
 EventObject::EventObject(int descriptor) : type(0), local_signaled(false), descriptor(descriptor)
 {
@@ -51,6 +59,8 @@ EventObject::EventObject(int descriptor) : type(0), local_signaled(false), descr
 
 EventObject::~EventObject()
 {
+	if (waits_object)
+		raven_waits_close(kernel_waits(), waits_object);
 	if (shared) {
 		::munmap(shared, sizeof(Shared));
 		--shared_object_count;
@@ -75,6 +85,12 @@ bool EventObject::describe(InheritedHandle &record) const
 			::close(created);
 			return false;
 		}
+		// The event leaves the table with its state; the waits there for it end, to wait again on the shared one.
+		if (waits_object) {
+			uint32_t state = 0;
+			raven_waits_detach(kernel_waits(), std::exchange(waits_object, 0), &state, nullptr, nullptr);
+			local_signaled = state != 0;
+		}
 		shared = new (mapped) Shared{{uint32_t(local_signaled)}, type};
 		descriptor = created;
 		listen_shared_changes();
@@ -88,13 +104,18 @@ bool EventObject::describe(InheritedHandle &record) const
 
 bool EventObject::is_set() const
 {
+	uint32_t state = 0;
+	if (waits_object)
+		return raven_waits_query(kernel_waits(), waits_object, &state) == 0 && state;
 	return shared ? shared->signaled.load() != 0 : local_signaled;
 }
 
-bool EventObject::take()
+bool EventObject::take(uint32_t thread)
 {
 	if (type == 0)
 		return is_set();
+	if (waits_object)
+		return raven_waits_wait(kernel_waits(), thread, &waits_object, 1, 0, 0, 0) == 0;
 	if (shared)
 		return shared->signaled.exchange(0) != 0;
 	const bool previous = local_signaled;
@@ -116,7 +137,7 @@ void EventObject::consume(uint32_t thread)
 bool EventObject::try_consume(uint32_t thread)
 {
 	std::lock_guard lock(mutex);
-	if (take())
+	if (take(thread))
 		return true;
 	return std::erase(pulses, thread) != 0;
 }
@@ -150,6 +171,19 @@ bool EventObject::pulse_host_waiters()
 	return type != 0;
 }
 
+bool EventObject::pulse_table_waiters()
+{
+	std::lock_guard lock(mutex);
+	uint32_t granted = 0;
+	return waits_object && raven_waits_pulse(kernel_waits(), waits_object, nullptr, &granted) == 0 && granted && type != 0;
+}
+
+uint32_t EventObject::table_object() const
+{
+	std::lock_guard lock(mutex);
+	return waits_object;
+}
+
 void EventObject::pulse_other_processes()
 {
 	std::lock_guard lock(mutex);
@@ -162,13 +196,26 @@ void EventObject::pulse_other_processes()
 int EventObject::set_state(bool signaled)
 {
 	std::lock_guard lock(mutex);
-	const bool previous = shared ? shared->signaled.exchange(uint32_t(signaled)) != 0 : local_signaled;
+	bool previous = shared ? shared->signaled.exchange(uint32_t(signaled)) != 0 : local_signaled;
 	local_signaled = signaled;
+	if (waits_object) {
+		// The host's own waiters (see waiters) look first, as they did before the event was set in the table.
+		uint32_t before = 0;
+		if (signaled && type != 0 && !waiters.empty()) {
+			previous = is_set();
+			waiters.front()->ready = true;
+			waiters.pop_front();
+			changed.notify_all();
+			return previous;
+		}
+		signaled ? raven_waits_set(kernel_waits(), waits_object, &before) : raven_waits_reset(kernel_waits(), waits_object, &before);
+		previous = before != 0;
+	}
 	if (signaled) {
 		if (type == 0) {
 			for (const auto &waiter : waiters) waiter->ready = true;
 			waiters.clear();
-		} else if (!waiters.empty() && take()) {
+		} else if (!waiters.empty() && take(0)) {
 			waiters.front()->ready = true;
 			waiters.pop_front();
 		}

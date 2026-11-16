@@ -1,4 +1,5 @@
 #include "threads.h"
+#include "kernel_waits.h"
 
 #include <cstdlib>
 #include <fcntl.h>
@@ -346,13 +347,15 @@ void NativeThreads::thread_main(GuestThread &thread)
 void NativeThreads::finish(GuestThread &thread, uint32_t code)
 {
 	signaled();
+	// The mutexes the thread holds in the table are abandoned to their waiters, and a wait of its own there ends.
+	raven_waits_thread_ended(kernel_waits(), thread.id);
 	if (&thread != running && threaded) {
 		// Its host thread reaps the task and leaves through the thread's frames once it has its turn.
 		if (thread.snapshot.task > 0)
 			::kill(thread.snapshot.task, SIGKILL);
 		std::lock_guard lock(gate);
 		thread.paused = false;
-		if (!thread.parked && thread.hosted)
+		if (!thread.parked && thread.hosted && !thread.outside)
 			enqueue(thread);
 		thread.turn.notify_one();
 	} else if (&thread != running) {
@@ -834,8 +837,8 @@ void NativeThreads::unwind_all()
 
 void NativeThreads::resume(GuestThread &thread)
 {
-	if (thread.suspend_count > 0)
-		--thread.suspend_count;
+	if (thread.suspend_count > 0 && --thread.suspend_count == 0)
+		raven_waits_resume(kernel_waits(), thread.id);
 	if (threaded && thread.suspend_count == 0)
 		resume_task_of(thread);
 }
@@ -849,6 +852,8 @@ uint32_t NativeThreads::suspend(GuestThread &thread)
 	else if (&thread != running)
 		process.pause_thread(thread.snapshot);
 	const uint32_t previous = thread.suspend_count++;
+	if (!previous)
+		raven_waits_suspend(kernel_waits(), thread.id);
 	if (&thread == running)
 		block([&thread] { return thread.suspend_count == 0; }, std::nullopt);
 	return previous;
@@ -868,7 +873,7 @@ namespace raven {
 
 void NativeThreads::enqueue(GuestThread &thread)
 {
-	if (!thread.queued && holder != &thread) {
+	if (!thread.queued && holder != &thread && !thread.outside) {
 		// The thread that reads the user's input goes before those that only compute, as Windows favours the foreground thread: a window
 		// that answers its input thousands of calls a frame would otherwise wait behind every worker's call for each of its own.
 		if (thread.input_until > std::chrono::steady_clock::now()) {
@@ -1056,6 +1061,7 @@ void NativeThreads::send_job(GuestThread &thread, std::function<void()> work)
 		thread.job_done = false;
 		thread.turn.notify_one();
 	}
+	raven_waits_interrupt(kernel_waits(), thread.id);
 	// A host thread that waits for its guest is asleep in the kernel: the interrupt wakes it to look at the job.
 	NativeProcess::interrupt_host(thread.host_tid);
 	std::unique_lock lock(gate);
@@ -1331,6 +1337,12 @@ void NativeThreads::admin_main()
 			for (const auto &thread : threads) {
 				if (!stuck || thread->state == GuestThread::State::done)
 					continue;
+				// A wait in the process's table is stuck while it stands in line there with no time-out of its own.
+				if (const bool outside = (std::lock_guard(gate), thread->outside); outside && thread->state == GuestThread::State::waiting) {
+					waits = true;
+					stuck = thread->outside_endless && raven_waits_waiting(kernel_waits(), thread->id);
+					continue;
+				}
 				if (thread->state != GuestThread::State::waiting || thread->wake || thread->queued || !thread->ready) {
 					stuck = false;
 					continue;
@@ -1344,6 +1356,7 @@ void NativeThreads::admin_main()
 			}
 			if (stuck && waits) {
 				pending = std::make_exception_ptr(std::runtime_error("native guest threads deadlocked: every thread waits without a timeout"));
+				raven_waits_interrupt(kernel_waits(), threads.front()->id);
 				std::lock_guard lock(gate);
 				enqueue(*threads.front());
 			}
@@ -1389,6 +1402,67 @@ bool NativeThreads::threaded_block(std::function<bool()> &ready, std::optional<s
 	}
 }
 
+uint32_t NativeThreads::wait_outside(const std::function<uint32_t(std::optional<std::chrono::steady_clock::time_point>)> &wait,
+	std::optional<std::chrono::steady_clock::time_point> wake)
+{
+	auto &me = *running;
+	// As in block: a wait inside another (a callback that waits) puts the outer one back when it ends.
+	auto outer_ready = std::move(me.ready);
+	const auto outer_wake = me.wake;
+	const auto outer_state = me.state;
+	me.ready = nullptr;
+	me.wake.reset();
+	me.state = GuestThread::State::waiting;
+	me.waiting_in = api_in_progress;
+	me.waiting_since = std::chrono::steady_clock::now();
+	{
+		std::lock_guard lock(gate);
+		me.outside = true;
+		me.outside_endless = !wake;
+	}
+	leave(me);
+	// The time the run may last ends a wait that would outlast it: the main thread wakes for it and ends the run.
+	const bool limited = me.main && !tearing_down && (!wake || deadline < *wake);
+	uint32_t result = raven_wait_interrupted;
+	for (;;) {
+		result = wait(limited ? std::optional(deadline) : wake);
+		if (result != raven_wait_interrupted)
+			break;
+		// Called away for a job, the thread waits again after it; for anything else (its end, the end of the process, an error the main
+		// thread must carry) it takes its turn and finds out there.
+		std::unique_lock lock(gate);
+		if (!me.job)
+			break;
+		run_job(me, lock);
+		if (me.unwinding || me.state == GuestThread::State::done)
+			break;
+	}
+	{
+		std::lock_guard lock(gate);
+		me.outside = false;
+		enqueue(me);
+	}
+	wait_turn(me, std::nullopt);
+	me.waiting_in = nullptr;
+	const bool nested = outer_state == GuestThread::State::waiting && outer_ready;
+	me.ready = nested ? std::move(outer_ready) : nullptr;
+	me.wake = nested ? outer_wake : std::nullopt;
+	if (me.state != GuestThread::State::done)
+		me.state = nested ? GuestThread::State::waiting : GuestThread::State::running;
+	install(me);
+	// What the call does once its wait is over counts as the rest of it did.
+	told = true;
+	if (limited && std::chrono::steady_clock::now() >= deadline)
+		throw NativeResult{NativeStop::timeout, 0, 0, 0};
+	return result;
+}
+
+void NativeThreads::queue_apc(GuestThread &thread, GuestThread::Apc apc)
+{
+	thread.apcs.push_back(std::move(apc));
+	raven_waits_queue_apc(kernel_waits(), thread.id);
+}
+
 void NativeThreads::threaded_unwind()
 {
 	tearing_down = true;
@@ -1404,6 +1478,7 @@ void NativeThreads::threaded_unwind()
 			thread->wake.reset();
 			thread->apcs.clear();
 			thread->suspend_count = 0;
+			raven_waits_interrupt(kernel_waits(), thread->id);
 			// A thread whose guest runs leaves when the guest is gone; one that waits goes through its frames when its turn comes.
 			if (thread->parked && thread->snapshot.task > 0)
 				::kill(thread->snapshot.task, SIGKILL);

@@ -64,7 +64,7 @@ fn pulse_releases_only_the_waits_there_are() {
         std::thread::spawn(move || waits.wait(1, &[event], false, false, LONG).unwrap())
     };
     waiting(&waits, 1);
-    assert_eq!(waits.pulse(event), Ok(0));
+    assert_eq!(waits.pulse(event), Ok((0, 1)));
     assert_eq!(first.join().unwrap(), Outcome::Object(0));
     assert_eq!(waits.query(event), Ok(0));
     assert_eq!(waits.wait(2, &[event], false, false, SHORT), Ok(Outcome::Timeout), "a later wait does not see the pulse");
@@ -207,6 +207,49 @@ fn terminated_waiter_ends_its_wait() {
     assert_eq!(waiter.join().unwrap(), Outcome::Ended);
     waits.set(event).unwrap();
     assert_eq!(waits.query(event), Ok(1), "an ended wait takes nothing");
+}
+
+#[test]
+fn interrupted_wait_takes_nothing_and_leaves_the_line() {
+    let waits = waits();
+    let event = waits.create(Kind::AutoEvent, 0).unwrap();
+    let waiter = {
+        let waits = waits.clone();
+        std::thread::spawn(move || waits.wait(1, &[event], false, false, None).unwrap())
+    };
+    waiting(&waits, 1);
+    waits.interrupt(1);
+    assert_eq!(waiter.join().unwrap(), Outcome::Interrupted);
+    waits.set(event).unwrap();
+    assert_eq!(waits.query(event), Ok(1));
+}
+
+#[test]
+fn interruption_before_the_wait_ends_the_next_wait_that_blocks() {
+    let waits = waits();
+    let event = waits.create(Kind::AutoEvent, 0).unwrap();
+    waits.interrupt(1);
+    assert_eq!(waits.wait(1, &[event], false, false, Some(Duration::ZERO)), Ok(Outcome::Timeout), "a wait that only looks keeps it");
+    assert!(!waits.waiting(1));
+    assert_eq!(waits.wait(1, &[event], false, false, None), Ok(Outcome::Interrupted));
+    assert_eq!(waits.wait(1, &[event], false, false, SHORT), Ok(Outcome::Timeout), "it is taken once");
+}
+
+#[test]
+fn detached_object_ends_the_waits_for_it() {
+    let waits = waits();
+    let event = waits.create(Kind::ManualEvent, 0).unwrap();
+    let other = waits.create(Kind::ManualEvent, 0).unwrap();
+    let waiter = {
+        let waits = waits.clone();
+        std::thread::spawn(move || waits.wait(1, &[other, event], false, false, None).unwrap())
+    };
+    waiting(&waits, 1);
+    assert_eq!(waits.detach(event), Ok((0, 0, 0)));
+    assert_eq!(waiter.join().unwrap(), Outcome::Interrupted);
+    assert_eq!(waits.set(event), Err(Error::Invalid));
+    let mutex = waits.create(Kind::Mutex, 4).unwrap();
+    assert_eq!(waits.detach(mutex), Ok((0, 4, 1)));
 }
 
 #[test]

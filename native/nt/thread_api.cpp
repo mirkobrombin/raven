@@ -3,6 +3,7 @@
 #include "kernel_context.h"
 #include "mutex.h"
 #include "event.h"
+#include "kernel_waits.h"
 #include "security_attributes.h"
 #include "shared_file.h"
 #include "text.h"
@@ -53,12 +54,26 @@ struct SemaphoreState {
 	int32_t maximum = 0;
 };
 
+// A semaphore without a name lives in the process's table (kernel_waits.h); a named one in the memory the processes share.
 class SemaphoreObject : public KernelObject {
 public:
-	std::u16string_view type_name() const override { return u"Semaphore"; }
-	int signaled(uint32_t) const override { return state->count.load() > 0; }
-	bool try_consume(uint32_t) override
+	~SemaphoreObject() override
 	{
+		if (waits_object)
+			raven_waits_close(kernel_waits(), waits_object);
+	}
+	std::u16string_view type_name() const override { return u"Semaphore"; }
+	int signaled(uint32_t) const override
+	{
+		uint32_t count = 0;
+		if (waits_object)
+			return raven_waits_query(kernel_waits(), waits_object, &count) == 0 && count > 0;
+		return state->count.load() > 0;
+	}
+	bool try_consume(uint32_t thread) override
+	{
+		if (waits_object)
+			return raven_waits_wait(kernel_waits(), thread, &waits_object, 1, 0, 0, 0) == 0;
 		auto current = state->count.load();
 		while (current > 0)
 			if (state->count.compare_exchange_weak(current, current - 1))
@@ -69,6 +84,7 @@ public:
 	SemaphoreState local;
 	SemaphoreState *state = &local;
 	std::shared_ptr<SharedFile> shared;
+	uint32_t waits_object = 0;
 };
 
 // A named event: its state is shared memory, so a program in another process of the prefix sees it set.
@@ -214,8 +230,25 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		}
 		return ran;
 	};
+	// The objects of the process's table the handles stand for, in their order; empty when one of them is not in the table.
+	const auto table_objects = [](NativeObjects &objects, const std::vector<uint64_t> &handles) {
+		std::vector<uint32_t> table;
+		for (const auto handle : handles) {
+			uint32_t object = 0;
+			if (const auto event = objects.object_as<EventObject>(handle))
+				object = event->table_object();
+			else if (const auto mutex = objects.object_as<MutexObject>(handle))
+				object = mutex->table_object();
+			else if (const auto semaphore = objects.object_as<SemaphoreObject>(handle))
+				object = semaphore->waits_object;
+			if (!object)
+				return std::vector<uint32_t>{};
+			table.push_back(object);
+		}
+		return table;
+	};
 	// Waits for any or all of the handles; returns the Windows wait code.
-	const auto wait = [&objects, &threads, run_apcs](ApiCall &call, const std::vector<uint64_t> &handles, bool all, uint32_t milliseconds, bool alertable) -> uint32_t {
+	const auto wait = [&objects, &threads, run_apcs, table_objects](ApiCall &call, const std::vector<uint64_t> &handles, bool all, uint32_t milliseconds, bool alertable) -> uint32_t {
 		const uint32_t id = threads.current_id();
 		const auto *me = &threads.current();
 		if (handles.empty() || handles.size() > 64) {
@@ -246,6 +279,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				std::any_of(now.begin(), now.end(), [](int state) { return state == 1; });
 		};
 		bool looked = false;
+		// Objects of the process's table are taken there, all at once for a wait for all, and an abandoned mutex is reported as such.
+		const auto table = table_objects(objects, resolved);
 		for (;;) {
 			const auto current = states();
 			for (const auto state : current)
@@ -253,7 +288,15 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 					call.set_last_error(state == -3 ? 5 : 6);
 					return wait_failed;
 				}
-			if (all) {
+			if (!table.empty()) {
+				if (const uint32_t taken = raven_waits_wait(kernel_waits(), id, table.data(), uint32_t(table.size()), all, 0, 0); taken != wait_timeout)
+					return taken;
+				// A pulse granted to this thread alone (see EventPulses) is not in the table: the event shows it to its wait.
+				if (!all)
+					for (size_t index = 0; index < current.size(); ++index)
+						if (current[index] == 1 && waited.try_consume(index, id))
+							return uint32_t(index);
+			} else if (all) {
 				if (std::all_of(current.begin(), current.end(), [](int state) { return state == 1; })) {
 					bool taken = true;
 					for (size_t index = 0; index < resolved.size(); ++index)
@@ -289,6 +332,29 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				return wait_io_completion;
 			if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake))
 				return wait_timeout;
+			// A wait on objects of the process's table alone blocks its host thread there, outside the runtime, until whoever sets what
+			// it waits for wakes it with what it took (see native/waits). The others are looked at again when something may have ended them.
+			if (threads.waits_outside() && !table.empty()) {
+				raven_waits_take_apcs(kernel_waits(), id);
+				if (alertable && !threads.current().apcs.empty())
+					continue;
+				const uint32_t result = threads.wait_outside([&](std::optional<std::chrono::steady_clock::time_point> until) {
+					uint64_t timeout = raven_wait_infinite;
+					if (until)
+						timeout = uint64_t(std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(*until - std::chrono::steady_clock::now()).count()));
+					return raven_waits_wait(kernel_waits(), id, table.data(), uint32_t(table.size()), all, alertable, timeout);
+				}, wake);
+				if (result < 64 || (result >= wait_abandoned && result < wait_abandoned + 64))
+					return result;
+				if (result == wait_io_completion) {
+					raven_waits_take_apcs(kernel_waits(), id);
+					if (run_apcs())
+						return wait_io_completion;
+				}
+				if (result == wait_timeout)
+					return wait_timeout;
+				continue;
+			}
 			// A timer among the handles turns signaled at its due time with nobody announcing it: the wait looks again then.
 			auto until = wake;
 			for (size_t index = 0; index < resolved.size(); ++index)
@@ -1192,7 +1258,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0xc0000005U);
 		}
 	});
-	registry.add("QueueUserAPC", 3, [thread_from](ApiCall &call) {
+	registry.add("QueueUserAPC", 3, [thread_from, &threads](ApiCall &call) {
 		const auto thread = thread_from(call[1]);
 		if (!thread) {
 			call.fail(6);
@@ -1204,13 +1270,13 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(31);
 			return;
 		}
-		thread->apcs.push_back({call[0], call[2]});
+		threads.queue_apc(*thread, {call[0], call[2]});
 		call.ret(1);
 	});
 	// QueueUserAPC2 with no flags queues the APC QueueUserAPC queues. Special user-mode APCs, which interrupt a thread that is not in
 	// an alertable wait (QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC, with or without the interrupted context), are not delivered here, so
 	// those flags are refused, as callers that test for them expect from a system without them.
-	registry.add("QueueUserAPC2", 4, [thread_from](ApiCall &call) {
+	registry.add("QueueUserAPC2", 4, [thread_from, &threads](ApiCall &call) {
 		if (call.u32(3)) {
 			call.fail(87);
 			return;
@@ -1225,7 +1291,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(31);
 			return;
 		}
-		thread->apcs.push_back({call[0], call[2]});
+		threads.queue_apc(*thread, {call[0], call[2]});
 		call.ret(1);
 	});
 
@@ -1469,6 +1535,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		auto mutex = std::make_shared<MutexObject>();
 		bool existed = false;
 		if (name_address) {
+			mutex->leave_table();
 			uint32_t error = 0;
 			mutex->shared = SharedFile::open("mutex", call.wide(name_address, 259), sizeof(MutexState), true, existed, error, [](void *memory) { new (memory) MutexState(); });
 			if (!mutex->shared) {
@@ -1495,6 +1562,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		auto mutex = std::make_shared<MutexObject>();
+		mutex->leave_table();
 		bool existed = false;
 		uint32_t error = 0;
 		mutex->shared = SharedFile::open("mutex", call.wide(call[2], 259), sizeof(MutexState), false, existed, error);
@@ -1539,6 +1607,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		} else {
 			semaphore->state->count = int32_t(initial);
 			semaphore->state->maximum = int32_t(maximum);
+			semaphore->waits_object = raven_waits_create(kernel_waits(), raven_semaphore, uint32_t(initial), uint32_t(maximum));
 		}
 		const auto made = objects.add_object(semaphore);
 		if (made.status) {
@@ -1580,6 +1649,16 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				call.fail(998);
 				return;
 			}
+		}
+		if (semaphore->waits_object) {
+			uint32_t previous = 0;
+			if (amount <= 0 || raven_waits_release_semaphore(kernel_waits(), semaphore->waits_object, uint32_t(amount), &previous)) {
+				call.fail(298);
+				return;
+			}
+			if (call[2]) call.store<int32_t>(call[2], int32_t(previous));
+			call.ret(1);
+			return;
 		}
 		auto current = semaphore->state->count.load();
 		for (;;) {

@@ -42,6 +42,8 @@ pub enum Outcome {
     Timeout,
     /// The thread was terminated while it waited.
     Ended,
+    /// The host called the thread away to do something for it (see Waits::interrupt); the wait took nothing and begins again after.
+    Interrupted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,6 +78,8 @@ struct ThreadState {
     wait: Option<Pending>,
     outcome: Option<Outcome>,
     parked: Option<thread::Thread>,
+    /// An interruption that came while the thread did not wait: its next wait that would block ends at once.
+    interrupted: bool,
 }
 
 #[derive(Default)]
@@ -146,7 +150,8 @@ impl State {
 
     /// Hands the objects to the waits in the line that they satisfy, oldest first. A grant only takes, so one pass is enough. A
     /// suspended thread is passed over: it takes nothing until it runs again.
-    fn grant(&mut self) {
+    fn grant(&mut self) -> u32 {
+        let mut granted = 0;
         let line: Vec<ThreadId> = self.line.iter().copied().collect();
         for thread in line {
             let state = &self.threads[&thread];
@@ -160,7 +165,9 @@ impl State {
             let (objects, all) = (pending.objects.clone(), pending.all);
             let outcome = self.take(thread, &objects, all);
             self.end(thread, outcome);
+            granted += 1;
         }
+        granted
     }
 
     fn object(&mut self, object: ObjectId) -> Result<&mut Object, Error> {
@@ -223,13 +230,31 @@ impl Waits {
         Ok(std::mem::replace(&mut state.event(object)?.count, 0))
     }
 
-    /// PulseEvent: the event is set for the waits there are now, and reset.
-    pub fn pulse(&self, object: ObjectId) -> Result<u32, Error> {
+    /// PulseEvent: the event is set for the waits there are now, and reset. Gives back the state before and how many waits it ended.
+    pub fn pulse(&self, object: ObjectId) -> Result<(u32, u32), Error> {
         let mut state = self.lock();
         let previous = std::mem::replace(&mut state.event(object)?.count, 1);
-        state.grant();
+        let granted = state.grant();
         state.event(object)?.count = 0;
-        Ok(previous)
+        Ok((previous, granted))
+    }
+
+    /// Takes an object out of the table, for an object that goes to memory other processes share: it gives back what the object holds
+    /// (an event's state or a semaphore's count, a mutex's owner and depth), and the waits for it end interrupted, to wait again where
+    /// the object is now.
+    pub fn detach(&self, object: ObjectId) -> Result<(u32, ThreadId, u32), Error> {
+        let mut state = self.lock();
+        let removed = state.objects.remove(&object).ok_or(Error::Invalid)?;
+        let waiting: Vec<ThreadId> = state
+            .line
+            .iter()
+            .copied()
+            .filter(|thread| state.threads[thread].wait.as_ref().is_some_and(|pending| pending.objects.contains(&object)))
+            .collect();
+        for thread in waiting {
+            state.end(thread, Outcome::Interrupted);
+        }
+        Ok((removed.count, removed.owner, removed.depth))
     }
 
     /// Whether an event is set, a semaphore's count, or a mutex's owner.
@@ -291,6 +316,9 @@ impl Waits {
                 return Ok(Outcome::Timeout);
             }
             let me = state.threads.get_mut(&thread).expect("the thread was added above");
+            if std::mem::take(&mut me.interrupted) {
+                return Ok(Outcome::Interrupted);
+            }
             me.wait = Some(Pending { objects: objects.to_vec(), all, alertable });
             me.outcome = None;
             me.parked = Some(thread::current());
@@ -325,6 +353,23 @@ impl Waits {
     /// The host ran the APCs queued to `thread`; gives back how many there were.
     pub fn take_apcs(&self, thread: ThreadId) -> u32 {
         self.lock().threads.get_mut(&thread).map_or(0, |me| std::mem::take(&mut me.apcs))
+    }
+
+    /// Ends the wait of `thread` without its taking anything, so that its host thread can do work only it can do (ptrace answers
+    /// only the thread that traces); the host waits again after. As for a time-out, the model has the wait leave the line.
+    pub fn interrupt(&self, thread: ThreadId) {
+        let mut state = self.lock();
+        let me = state.threads.entry(thread).or_default();
+        if me.wait.is_some() {
+            state.end(thread, Outcome::Interrupted);
+        } else {
+            me.interrupted = true;
+        }
+    }
+
+    /// Whether `thread` stands in the line, its wait not yet ended.
+    pub fn waiting(&self, thread: ThreadId) -> bool {
+        self.lock().line.contains(&thread)
     }
 
     pub fn suspend(&self, thread: ThreadId) {

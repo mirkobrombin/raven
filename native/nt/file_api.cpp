@@ -621,7 +621,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const auto bytes = call.load_pointer(call[3] + call.pointer_width());
-		context.threads.current().apcs.push_back({call[4], 0, {0, bytes, call[3]}});
+		context.threads.queue_apc(context.threads.current(), {call[4], 0, {0, bytes, call[3]}});
 		call.set_last_error(0);
 		call.ret(1);
 	};

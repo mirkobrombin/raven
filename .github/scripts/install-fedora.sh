@@ -10,7 +10,7 @@ set -euo pipefail
 
 policy=(git python3)
 build=(
-    "${policy[@]}" cmake make ccache gcc-c++ clang lld bison patch tar xz zstd openssl
+    "${policy[@]}" cmake make ccache gcc-c++ clang lld bison patch tar xz zstd openssl cargo rust
     wine-devel mingw64-gcc mingw64-gcc-c++ mingw32-gcc mingw32-gcc-c++ mingw64-winpthreads-static mingw32-winpthreads-static
     wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel
     vulkan-loader-devel vulkan-headers openssl-devel

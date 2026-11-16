@@ -5,6 +5,7 @@
 #include "objects.h"
 #include "tls.h"
 
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -83,6 +84,11 @@ struct GuestThread {
 	int held = -2;
 	std::function<void()> job;
 	bool job_done = false;
+	// Whether the host thread waits outside the runtime, in the process's table of waits (see NativeThreads::wait_outside): nobody
+	// puts it in line meanwhile, and it is called away from there for a job, a termination or the end of the process.
+	bool outside = false;
+	// Whether that wait has no time-out of its own, so that only another thread can end it (see the check for a deadlock).
+	bool outside_endless = false;
 };
 
 class ThreadObject : public KernelObject {
@@ -166,6 +172,21 @@ public:
 	// `polled` tells that the condition reads what the guest changes by itself, as the word of a lock it releases without a call: it is
 	// looked at whenever a thread gives the runtime up, where another is looked at again only after a call that may have ended a wait.
 	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn = false, bool polled = false);
+	// Whether waits on the objects of the process's table (kernel_waits.h) block their host thread there, as they do with a host thread
+	// for each guest thread. RAVEN_POLLED_WAITS=1 has them looked at by the scheduler instead, as the waits on other objects are, to
+	// compare the two.
+	bool waits_outside() const
+	{
+		static const bool polled = std::getenv("RAVEN_POLLED_WAITS") != nullptr;
+		return threaded && !polled;
+	}
+	// Waits outside the runtime: the running thread gives the runtime up, `wait` blocks its host thread in the table of waits until
+	// whoever signals what it waits for wakes it, and the thread takes its turn again. `wait` gets the time to wait until (the run's
+	// limit shortens it for the main thread), and is called again after the thread was called away for a job.
+	uint32_t wait_outside(const std::function<uint32_t(std::optional<std::chrono::steady_clock::time_point>)> &wait,
+		std::optional<std::chrono::steady_clock::time_point> wake);
+	// Queues an APC to a thread, which ends its alertable wait.
+	void queue_apc(GuestThread &thread, GuestThread::Apc apc);
 	// Tells that something may have ended a wait: an object signaled, a message posted, a thread ended.
 	void signaled() { signals.fetch_add(1, std::memory_order_relaxed); }
 	// Every stop and call of a guest counts as such unless the runtime says, while it serves it, that it ends no wait.

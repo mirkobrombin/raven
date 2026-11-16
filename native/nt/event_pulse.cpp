@@ -11,7 +11,8 @@ bool EventPulses::pulse(uint64_t handle)
 	const auto event = context.objects.object_as<EventObject>(handle);
 	if (!event)
 		return false;
-	bool used = event->pulse_host_waiters();
+	// The host's own waiters first, then the waits blocked in the process's table, then those that look for themselves.
+	bool used = event->pulse_host_waiters() || event->pulse_table_waiters();
 	for (const auto id : context.threads.thread_ids()) {
 		if (used)
 			break;

@@ -1,6 +1,6 @@
 //! The interface the host's C++ calls (waits.h). Objects and threads are numbers; results are the values Windows gives: a wait returns
-//! WAIT_OBJECT_0 + index, WAIT_ABANDONED_0 + index, WAIT_IO_COMPLETION, WAIT_TIMEOUT, or RAVEN_WAIT_ENDED for a thread terminated while
-//! it waited; the others return 0 or a Windows error code, with the value they give back through a pointer.
+//! WAIT_OBJECT_0 + index, WAIT_ABANDONED_0 + index, WAIT_IO_COMPLETION, WAIT_TIMEOUT, raven_wait_ended for a thread terminated while
+//! it waited or raven_wait_interrupted for one the host called away; the others return 0 or a Windows error code, with the value they give back through a pointer.
 
 use crate::{Error, Kind, Outcome, Waits};
 use std::time::Duration;
@@ -9,6 +9,7 @@ const WAIT_ABANDONED_0: u32 = 0x80;
 const WAIT_IO_COMPLETION: u32 = 0xc0;
 const WAIT_TIMEOUT: u32 = 0x102;
 const WAIT_ENDED: u32 = 0xffff_fffe;
+const WAIT_INTERRUPTED: u32 = 0xffff_fffd;
 const WAIT_FAILED: u32 = 0xffff_ffff;
 /// No time-out.
 const INFINITE: u64 = u64::MAX;
@@ -89,11 +90,17 @@ pub unsafe extern "C" fn raven_waits_reset(waits: *const Waits, object: u32, pre
     give((*waits).reset(object), previous)
 }
 
+/// Gives back the state before through `previous`, and through `granted` how many waits the pulse ended.
+///
 /// # Safety
-/// As raven_waits_set.
+/// As raven_waits_set; `granted` is null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_pulse(waits: *const Waits, object: u32, previous: *mut u32) -> u32 {
-    give((*waits).pulse(object), previous)
+pub unsafe extern "C" fn raven_waits_pulse(waits: *const Waits, object: u32, previous: *mut u32, granted: *mut u32) -> u32 {
+    let result = (*waits).pulse(object);
+    if let (Ok((_, ended)), false) = (result, granted.is_null()) {
+        *granted = ended;
+    }
+    give(result.map(|(before, _)| before), previous)
 }
 
 /// # Safety
@@ -101,6 +108,25 @@ pub unsafe extern "C" fn raven_waits_pulse(waits: *const Waits, object: u32, pre
 #[no_mangle]
 pub unsafe extern "C" fn raven_waits_query(waits: *const Waits, object: u32, value: *mut u32) -> u32 {
     give((*waits).query(object), value)
+}
+
+/// Takes `object` out of the table (see Waits::detach), giving back its state or count, and a mutex's owner and depth.
+///
+/// # Safety
+/// `waits` came from raven_waits_new; the pointers are null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn raven_waits_detach(waits: *const Waits, object: u32, value: *mut u32, owner: *mut u32, depth: *mut u32) -> u32 {
+    match (*waits).detach(object) {
+        Ok((count, holder, held)) => {
+            for (out, item) in [(value, count), (owner, holder), (depth, held)] {
+                if !out.is_null() {
+                    *out = item;
+                }
+            }
+            0
+        }
+        Err(error) => code(error),
+    }
 }
 
 /// # Safety
@@ -135,6 +161,7 @@ pub unsafe extern "C" fn raven_waits_wait(waits: *const Waits, thread: u32, obje
         Ok(Outcome::IoCompletion) => WAIT_IO_COMPLETION,
         Ok(Outcome::Timeout) => WAIT_TIMEOUT,
         Ok(Outcome::Ended) => WAIT_ENDED,
+        Ok(Outcome::Interrupted) => WAIT_INTERRUPTED,
         Err(_) => WAIT_FAILED,
     }
 }
@@ -151,6 +178,20 @@ pub unsafe extern "C" fn raven_waits_queue_apc(waits: *const Waits, thread: u32)
 #[no_mangle]
 pub unsafe extern "C" fn raven_waits_take_apcs(waits: *const Waits, thread: u32) -> u32 {
     (*waits).take_apcs(thread)
+}
+
+/// # Safety
+/// `waits` came from raven_waits_new.
+#[no_mangle]
+pub unsafe extern "C" fn raven_waits_interrupt(waits: *const Waits, thread: u32) {
+    (*waits).interrupt(thread);
+}
+
+/// # Safety
+/// `waits` came from raven_waits_new.
+#[no_mangle]
+pub unsafe extern "C" fn raven_waits_waiting(waits: *const Waits, thread: u32) -> u32 {
+    u32::from((*waits).waiting(thread))
 }
 
 /// # Safety

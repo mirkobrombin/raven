@@ -10,7 +10,7 @@ std::optional<uint32_t> event_access(uint32_t requested);
 
 class EventObject : public KernelObject {
 public:
-	EventObject(uint32_t type, bool signaled) : type(type), local_signaled(signaled) {}
+	EventObject(uint32_t type, bool signaled);
 	explicit EventObject(int descriptor);
 	~EventObject() override;
 	int signaled(uint32_t thread) const override;
@@ -29,6 +29,10 @@ public:
 	bool pulse_host_waiters();
 	// Shows the event set to the processes that share it. The caller resets it; a waiter there is released only if it looks before that.
 	void pulse_other_processes();
+	// Pulses the waits of the process's table (kernel_waits.h); true when that used up the pulse of an auto-reset event.
+	bool pulse_table_waiters();
+	// The event in the process's table, or 0 once it is shared with other processes.
+	uint32_t table_object() const;
 
 private:
 	friend class NativeObjects;
@@ -37,13 +41,14 @@ private:
 	mutable std::mutex mutex;
 	mutable std::condition_variable changed;
 	uint32_t type;
-	bool local_signaled;
+	mutable bool local_signaled;
 	std::deque<std::shared_ptr<Waiter>> waiters;
 	std::vector<uint32_t> pulses;
 	mutable int descriptor = -1;
 	mutable Shared *shared = nullptr;
+	mutable uint32_t waits_object = 0;
 	bool is_set() const;
-	bool take();
+	bool take(uint32_t thread);
 };
 
 }

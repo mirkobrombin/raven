@@ -325,7 +325,7 @@ NativeObjectResult NativeObjects::wait(uint64_t handle, std::optional<int64_t> t
 	if (status) return {0,status};
 	if (timeout && *timeout>0) return {0,0xc00000bbU};
 	std::unique_lock lock(object->mutex);
-	if (!object->take()) {
+	if (!object->take(0)) {
 		if (timeout && !*timeout) return {0,0x102};
 		if (object->waiters.size()>=10000) return {0,0xc000009aU};
 		const auto now=std::chrono::steady_clock::now();
@@ -340,7 +340,7 @@ NativeObjectResult NativeObjects::wait(uint64_t handle, std::optional<int64_t> t
 		object->waiters.push_back(waiter);
 		const auto until = std::min(expires,deadline);
 		while (!waiter->ready) {
-			if (object->shared && object->take()) {
+			if (object->shared && object->take(0)) {
 				std::erase(object->waiters,waiter);
 				return {};
 			}
