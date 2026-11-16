@@ -869,17 +869,32 @@ namespace raven {
 void NativeThreads::enqueue(GuestThread &thread)
 {
 	if (!thread.queued && holder != &thread) {
-		line.push_back(&thread);
+		// The thread that reads the user's input goes before those that only compute, as Windows favours the foreground thread: a window
+		// that answers its input thousands of calls a frame would otherwise wait behind every worker's call for each of its own.
+		if (thread.input_until > std::chrono::steady_clock::now()) {
+			auto place = line.begin();
+			while (place != line.end() && (*place)->input_until > std::chrono::steady_clock::now())
+				++place;
+			line.insert(place, &thread);
+		} else {
+			line.push_back(&thread);
+		}
 		lined.store(unsigned(line.size()), std::memory_order_relaxed);
 		thread.queued = true;
+		// A thread that went to the front is woken to wait for its turn awake (see wait_turn).
+		if (line.front() == &thread)
+			thread.turn.notify_one();
 	}
 	// The runtime goes to the first in line when nobody holds it.
 	if (!holder && !line.empty()) {
-		holder = line.front();
+		GuestThread *next = line.front();
 		line.pop_front();
 		lined.store(unsigned(line.size()), std::memory_order_relaxed);
-		holder->queued = false;
-		holder->turn.notify_one();
+		next->queued = false;
+		holder = next;
+		next->turn.notify_one();
+		if (!line.empty())
+			line.front()->turn.notify_one();
 	}
 }
 
@@ -962,12 +977,18 @@ void NativeThreads::wake_ready(GuestThread *except, bool all)
 
 void NativeThreads::leave(GuestThread &me, bool save)
 {
+	const auto now = std::chrono::steady_clock::now();
 	if (save && !process.gone())
 		me.snapshot = process.save_thread(false);
 	if (std::exchange(told, false))
 		signaled();
-	// The threads whose waits ended meanwhile join the line before the runtime is given on.
-	wake_ready(&me);
+	// The threads whose waits ended meanwhile join the line before the runtime is given on. While others wait in line for the runtime
+	// they are not looked for again but once a millisecond: looking took more of the runtime than the calls it served, and the threads
+	// in line keep it busy until then anyway. The runtime looks when it is left with nobody in line.
+	if (!lined.load(std::memory_order_relaxed) || now - leave_scanned >= std::chrono::milliseconds(1)) {
+		leave_scanned = now;
+		wake_ready(&me);
+	}
 	for (;;) {
 		GuestThread *next = nullptr;
 		{
@@ -1001,7 +1022,9 @@ void NativeThreads::leave(GuestThread &me, bool save)
 			continue;
 		}
 		holder = next;
-		holder->turn.notify_one();
+		next->turn.notify_one();
+		if (!line.empty())
+			line.front()->turn.notify_one();
 		return;
 	}
 }
@@ -1049,6 +1072,23 @@ void NativeThreads::wait_turn(GuestThread &me, std::optional<std::chrono::steady
 		if (holder == &me) {
 			me.conditional = false;
 			return;
+		}
+		// The runtime goes from thread to thread thousands of times a second, mostly for a few microseconds each: waking a sleeping host
+		// thread for its turn costs more than the turn. The first in line is woken as the turn before it begins (see enqueue, leave) and waits
+		// for its own awake, briefly.
+		if (me.queued && !me.job && !line.empty() && line.front() == &me) {
+			lock.unlock();
+			const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
+			for (unsigned looks = 0; holder.load(std::memory_order_acquire) != &me; ++looks) {
+				__builtin_ia32_pause();
+				if ((looks & 63) == 63 && std::chrono::steady_clock::now() >= until)
+					break;
+			}
+			lock.lock();
+			if (holder == &me) {
+				me.conditional = false;
+				return;
+			}
 		}
 		if (me.job) {
 			run_job(me, lock);

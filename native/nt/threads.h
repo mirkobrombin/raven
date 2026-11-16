@@ -236,7 +236,7 @@ private:
 	bool threaded = false;
 	std::mutex gate;
 	std::condition_variable jobs_done;
-	GuestThread *holder = nullptr;
+	std::atomic<GuestThread *> holder{nullptr};
 	std::deque<GuestThread *> line;
 	// How many threads stand in the line, for a look without the gate.
 	std::atomic<unsigned> lined{0};
@@ -244,6 +244,8 @@ private:
 	std::atomic<uint64_t> signals{1};
 	// Whether what the thread that holds the runtime is serving still has to be counted.
 	bool told = true;
+	// When a thread that left the runtime last looked for the waits that ended (see leave).
+	std::chrono::steady_clock::time_point leave_scanned;
 	std::chrono::steady_clock::time_point scanned{};
 	// Where the next look at the waiting threads starts, when the last could not take them all.
 	size_t scan_from = 0;
