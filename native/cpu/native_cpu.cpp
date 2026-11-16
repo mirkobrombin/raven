@@ -135,11 +135,14 @@ public:
 	NativeChild(const NativeChild &) = delete;
 	NativeChild &operator=(const NativeChild &) = delete;
 	pid_t pid = -1;
-	uint64_t gate = 0;
+	uint64_t gate = 0, batch_gate = 0;
 	// `served` is polled while the guest runs: calls the guest makes without stopping are answered there.
 	int wait(const std::function<bool()> *served = nullptr);
 	uint64_t syscall(uint64_t number, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0,
 		uint64_t a4 = 0, uint64_t a5 = 0, uint64_t a6 = 0);
+	// System calls made one after the other in a single stop of the guest, through the batch gate of the bootstrap: each the number and
+	// six arguments. Their results, in order; the first that fails throws, and none after it is made.
+	std::vector<uint64_t> syscalls(std::span<const std::array<uint64_t, 7>> calls);
 	void stop();
 	void send_descriptor(int descriptor);
 	int descriptor_socket() const { return guest_channel; }
@@ -230,6 +233,11 @@ NativeChild::NativeChild(std::span<const int> image_fds, const std::string &boot
 		const long code = ptrace(PTRACE_PEEKTEXT, pid, reinterpret_cast<void *>(gate), nullptr);
 		if ((code == -1 && errno != 0) || (static_cast<uint64_t>(code) & 0xffffffff) != 0xcc050fcc)
 			throw std::runtime_error("native bootstrap syscall gate is invalid");
+		// The batch gate follows the gate's UD2 and begins with mov %rdi, %rbx.
+		errno = 0;
+		const long batch_code = ptrace(PTRACE_PEEKTEXT, pid, reinterpret_cast<void *>(gate + 6), nullptr);
+		if ((batch_code != -1 || errno == 0) && (static_cast<uint64_t>(batch_code) & 0xffffff) == 0xfb8948)
+			batch_gate = gate + 6;
 	} catch (...) {
 		stop();
 		throw;
@@ -614,6 +622,54 @@ uint64_t NativeChild::syscall(uint64_t number, uint64_t a1, uint64_t a2, uint64_
 	return registers.rax;
 }
 
+std::vector<uint64_t> NativeChild::syscalls(std::span<const std::array<uint64_t, 7>> calls)
+{
+	std::vector<uint64_t> results;
+	results.reserve(calls.size());
+	// A bootstrap without the batch gate, or a call or two, makes them one by one.
+	if (!batch_gate || calls.size() < 3) {
+		for (const auto &call : calls)
+			results.push_back(syscall(call[0], call[1], call[2], call[3], call[4], call[5], call[6]));
+		return results;
+	}
+	const size_t bytes = calls.size() * sizeof calls[0];
+	const size_t length = (bytes + 4095) & ~size_t(4095);
+	const auto table = syscall(SYS_mmap, 0, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, uint64_t(-1));
+	std::vector<std::array<uint64_t, 7>> done(calls.begin(), calls.end());
+	const auto move = [&](bool write) {
+		iovec local{done.data(), bytes}, remote{reinterpret_cast<void *>(table), bytes};
+		const auto moved = write ? process_vm_writev(pid, &local, 1, &remote, 1, 0) : process_vm_readv(pid, &local, 1, &remote, 1, 0);
+		if (moved != ssize_t(bytes))
+			throw std::runtime_error("native syscall batch could not reach its table");
+	};
+	move(true);
+	user_regs_struct registers{};
+	trace(PTRACE_GETREGS, pid, &registers);
+	registers.rip = batch_gate;
+	registers.cs = 0x33;
+	registers.ss = 0x2b;
+	registers.orig_rax = uint64_t(-1);
+	registers.rdi = table;
+	registers.rsi = calls.size();
+	trace(PTRACE_SETREGS, pid, &registers);
+	clear_slice();
+	trace(PTRACE_CONT, pid);
+	const int status = wait();
+	if (status == -1 || !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP)
+		throw std::runtime_error("native syscall batch did not reach its trap");
+	trace(PTRACE_GETREGS, pid, &registers);
+	if (registers.rip <= batch_gate || registers.rip > batch_gate + 64)
+		throw std::runtime_error("native syscall batch stopped outside its gate");
+	move(false);
+	syscall(SYS_munmap, table, length);
+	for (const auto &call : done) {
+		if (call[0] >= uint64_t(-4095))
+			throw std::runtime_error("native syscall: " + std::string(std::strerror(static_cast<int>(-call[0]))));
+		results.push_back(call[0]);
+	}
+	return results;
+}
+
 struct NativeProcess::State {
 	std::unique_ptr<NativeChild> child;
 	pid_t memory_task = 0;
@@ -795,13 +851,21 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 	}
 	state->child = std::make_unique<NativeChild>(descriptors, bootstrap, setup_timeout);
 	auto &child = *state->child;
+	// Every image is mapped, and each of its sections given its protection, in one stop of the guest.
+	std::vector<std::array<uint64_t, 7>> calls;
+	std::vector<size_t> image_calls;
 	for (auto *mapped_image : images) {
-		const auto mapped = child.syscall(SYS_mmap, mapped_image->base(), mapped_image->data().size(), PROT_NONE,
-			MAP_SHARED | MAP_FIXED_NOREPLACE, static_cast<uint64_t>(mapped_image->descriptor()));
-		if (mapped != mapped_image->base())
+		image_calls.push_back(calls.size());
+		calls.push_back({SYS_mmap, mapped_image->base(), mapped_image->data().size(), PROT_NONE, MAP_SHARED | MAP_FIXED_NOREPLACE,
+			static_cast<uint64_t>(mapped_image->descriptor()), 0});
+		for (const auto &mapping : mapped_image->mappings())
+			calls.push_back({SYS_mprotect, mapping.address, mapping.size, static_cast<uint64_t>(mapping.protection), 0, 0, 0});
+	}
+	const auto results = child.syscalls(calls);
+	for (size_t index = 0; index < images.size(); ++index) {
+		if (results[image_calls[index]] != images[index]->base())
 			throw std::runtime_error("host does not support exact non-replacing guest mappings");
-		for (const auto &mapping : mapped_image->mappings()) {
-			child.syscall(SYS_mprotect, mapping.address, mapping.size, static_cast<uint64_t>(mapping.protection));
+		for (const auto &mapping : images[index]->mappings()) {
 			state->mappings.insert_or_assign(mapping.address, mapping);
 			++state->mapping_changes;
 		}
