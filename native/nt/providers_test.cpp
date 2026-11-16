@@ -557,6 +557,21 @@ int main(int argc, char **argv)
 		check(std::ranges::equal(service, smaller_image.file_span(smaller_image.exports()[0].address, 11)),
 			"NT service identity depends on the process import graph");
 		check(nt_image.file_span(nt_exports[2].address, 1)[0] == 0xcc, "unknown NT function received a service identity");
+		// A provider is made once at a base of its own and moved where its size fits: what it is moved to must be the provider made there.
+		for (const auto library : {"kernel32.dll", "user32.dll", "gdi32.dll", "ntdll.dll", "uxtheme.dll", "ole32.dll"}) {
+			const auto listed = raven::system_export_names(library);
+			std::vector<std::string_view> names(listed.begin(), listed.end());
+			std::sort(names.begin(), names.end());
+			names.erase(std::unique(names.begin(), names.end()), names.end());
+			check(!names.empty(), "a library to move has no published exports");
+			const auto ordinals = raven::system_export_ordinals(library);
+			for (const bool fast : {false, true}) {
+				const auto made = raven::runtime_provider(library, 0x7ff812340000ULL, names, false, {}, ordinals, fast);
+				check(raven::moved_provider(raven::runtime_provider(library, base, names, false, {}, ordinals, fast), 0x7ff812340000ULL) == made,
+					"a moved provider differs from the one made at its base");
+			}
+		}
+		rejected([&] { raven::moved_provider(raven::runtime_provider("gdi32.dll", 0x50000000, raven::system_export_names("gdi32.dll"), true), base); });
 		std::vector<std::string> storage;
 		for (size_t index = 0; index < 128; ++index)
 			storage.push_back("A" + std::string(3 - std::to_string(index).size(), '0') + std::to_string(index));

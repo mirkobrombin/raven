@@ -1937,6 +1937,14 @@ size_t fast_stub_trap_offset(std::string_view module, std::string_view name)
 	return 0;
 }
 
+std::vector<uint8_t> moved_provider(std::vector<uint8_t> bytes, uint64_t base)
+{
+	if (bytes.size() < 0xb8 || bytes[0x98] != 0x0b || bytes[0x99] != 0x02)
+		throw std::runtime_error("only a 64-bit provider can be moved");
+	std::memcpy(bytes.data() + 0xb0, &base, 8);
+	return bytes;
+}
+
 std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	std::span<const std::string_view> exports, bool x86, std::span<const std::string_view> data_exports,
 	std::span<const std::pair<std::string_view, uint16_t>> ordinal_exports, bool fast_paths)
@@ -2019,11 +2027,13 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	if (!x86 && served_count)
 		for (const auto symbol : exports)
 			commit_count += guest_commit_api(name, symbol);
+	// The block prelude of each export, looked up once for both the sizes and the code.
+	std::vector<const std::vector<uint8_t> *> block_preludes(exports.size());
 	size_t block_size = 0;
 	if (fast_paths && !x86)
-		for (const auto symbol : exports)
-			if (const auto *prelude = block_prelude(name, symbol))
-				block_size += ((prelude->size() + 63) & ~size_t(63)) + (call_stubs() && answered_api(name, symbol) ? answer_wrapper_slot : 0);
+		for (size_t index = 0; index < exports.size(); ++index)
+			if (const auto *prelude = block_preludes[index] = block_prelude(name, exports[index]))
+				block_size += ((prelude->size() + 63) & ~size_t(63)) + (call_stubs() && answered_api(name, exports[index]) ? answer_wrapper_slot : 0);
 	// The block pointer of the served stubs and the block preludes, then the stubs, then the clock preludes, then the commit preludes.
 	const size_t served_start = fast_start + fast_count * 64;
 	const size_t clock_start = served_start + (served_count || call_count || block_size ? 64 + (served_count + call_count) * served_stub_size : 0);
@@ -2128,7 +2138,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 			const auto stub = served_stub_code(int32_t(served_start + 16) - int32_t(code), true);
 			std::copy(stub.begin(), stub.end(), bytes.begin() + ptrdiff_t(code));
 		}
-		if (const auto *prelude = fast_paths && !x86 && !service ? block_prelude(name, exports[index]) : nullptr) {
+		if (const auto *prelude = !service ? block_preludes[index] : nullptr) {
 			const size_t trap = code;
 			code = blocks_next;
 			blocks_next += (prelude->size() + 63) & ~size_t(63);
@@ -2288,9 +2298,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	if (native_opengl) {
 		if (modules.all().contains("opengl32.dll")) throw std::runtime_error("native OpenGL cannot share a supplied opengl32.dll");
 		const auto symbols = OpenGLBridge::exports();
-		const auto bytes = runtime_provider("opengl32.dll", 0x180000000ULL, symbols, false, {}, {}, guest_paths());
+		auto bytes = runtime_provider("opengl32.dll", 0x180000000ULL, symbols, false, {}, {}, guest_paths());
 		const auto base = provider_base(modules, PEImage(bytes).image_size);
-		auto &provider = modules.add("opengl32.dll", runtime_provider("opengl32.dll", base, symbols, false, {}, {}, guest_paths()), base);
+		auto &provider = modules.add("opengl32.dll", moved_provider(std::move(bytes), base), base);
 		provider.runtime_api = true;
 		for (const auto &symbol : provider.exports)
 			traps.emplace(api_trap_address(provider, "opengl32.dll", symbol.names.at(0), symbol.address), symbol.names.at(0));
@@ -2454,9 +2464,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				continue;
 			const auto fallback = "system32-" + name;
 			if (!modules.all().contains(fallback)) {
-				const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
+				auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
 				const auto base = provider_base(modules, PEImage(bytes).image_size);
-				provider = &modules.add(fallback, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
+				provider = &modules.add(fallback, moved_provider(std::move(bytes), base), base);
 				provider->runtime_api = true;
 			}
 		} else {
@@ -2478,9 +2488,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (!provider->runtime_api)
 					continue;
 			} else {
-				const auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
+				auto bytes = runtime_provider(name, 0x180000000ULL, symbols, false, {}, ordinals, guest_paths());
 				const auto base = provider_base(modules, PEImage(bytes).image_size, name);
-				provider = &modules.add(provider_key, runtime_provider(name, base, symbols, false, {}, ordinals, guest_paths()), base);
+				provider = &modules.add(provider_key, moved_provider(std::move(bytes), base), base);
 				provider->runtime_api = true;
 			}
 		}
@@ -2541,9 +2551,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		});
 	});
 	if (nt==modules.all().end() && needs_nt) {
-		const auto bytes=runtime_provider("ntdll.dll",0x180000000ULL,nt_names,false,{},{},guest_paths());
+		auto bytes=runtime_provider("ntdll.dll",0x180000000ULL,nt_names,false,{},{},guest_paths());
 		const auto base=provider_base(modules,PEImage(bytes).image_size,"ntdll.dll");
-		auto &provider=modules.add("ntdll.dll",runtime_provider("ntdll.dll",base,nt_names,false,{},{},guest_paths()),base);
+		auto &provider=modules.add("ntdll.dll",moved_provider(std::move(bytes),base),base);
 		provider.runtime_api=true;
 	}
 	if (modules.all().contains("ntdll.dll"))
@@ -2571,9 +2581,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 #ifdef RAVEN_VULKAN
 	const auto found_vulkan = modules.all().find("vulkan-1.dll");
 	if (found_vulkan == modules.all().end()) {
-		const auto bytes = runtime_provider("vulkan-1.dll", 0x180000000ULL, VulkanBridge::exports(), false, {}, {}, guest_paths());
+		auto bytes = runtime_provider("vulkan-1.dll", 0x180000000ULL, VulkanBridge::exports(), false, {}, {}, guest_paths());
 		const auto base = provider_base(modules, PEImage(bytes).image_size);
-		auto &provider = modules.add("vulkan-1.dll", runtime_provider("vulkan-1.dll", base, VulkanBridge::exports(), false, {}, {}, guest_paths()), base);
+		auto &provider = modules.add("vulkan-1.dll", moved_provider(std::move(bytes), base), base);
 		provider.runtime_api = true;
 	}
 	if (modules.all().at("vulkan-1.dll")->runtime_api)
@@ -3099,9 +3109,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
 		for (const auto &symbol : module->exports) {
 			// The clock and the tick counts only read calibration; their pointers are safe while other threads run.
+			const auto *prelude = symbol.address && !symbol.names.empty() && symbol.forwarder.empty() ? block_prelude(module_name, symbol.names.at(0)) : nullptr;
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() &&
-				(guest_clock_api(module_name, symbol.names.at(0)) || block_prelude(module_name, symbol.names.at(0)) == &tick_prelude() ||
-					(!process.parallel() && block_prelude(module_name, symbol.names.at(0))) ||
+				(guest_clock_api(module_name, symbol.names.at(0)) || prelude == &tick_prelude() || (!process.parallel() && prelude) ||
 					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address))) &&
 				served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address) {
 				auto image = module->loaded.data();

@@ -15,6 +15,9 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	std::span<const std::pair<std::string_view, uint16_t>> ordinal_exports = {},
 	// Gives hot kernel32 services guest-side fast paths; their slow-path trap sits at a fixed offset inside the stub.
 	bool fast_paths = false);
+// A 64-bit provider made for one base, moved to another: its code and tables are relative to the image and only the header names the base,
+// so a provider is made once even though its size decides where it goes.
+std::vector<uint8_t> moved_provider(std::vector<uint8_t> bytes, uint64_t base);
 // Where the breakpoint of a 64-bit provider export sits inside its stub: past the guest-side path of a fast or served stub, at its start
 // otherwise.
 size_t fast_stub_trap_offset(std::string_view module, std::string_view name);
