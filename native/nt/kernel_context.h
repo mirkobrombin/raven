@@ -133,6 +133,8 @@ void register_font_service(ApiRegistry &registry, KernelContext &context);
 void register_sandbox_api(ApiRegistry &registry, KernelContext &context);
 // The HLSL compiler behind d3dcompiler_47.dll: requests from the guest component, results read back in parts.
 void register_shader_service(ApiRegistry &registry, KernelContext &context);
+// The sound engine for the guest's audio components: streams whose samples and counters live in a page the guest maps (raven_audio.h).
+void register_audio_service(ApiRegistry &registry, KernelContext &context);
 // An installed font family as GDI enumerates it: the face closest to regular, and the scripts and code pages its OS/2 table claims.
 struct InstalledFamily {
 	std::u16string name;

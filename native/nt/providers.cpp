@@ -3454,6 +3454,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_font_service(api_registry, kernel);
 	register_sandbox_api(api_registry, kernel);
 	register_shader_service(api_registry, kernel);
+	register_audio_service(api_registry, kernel);
 	register_canvas_service(api_registry, kernel);
 	register_sync_api(api_registry, kernel);
 	register_thread_api(api_registry, kernel);
