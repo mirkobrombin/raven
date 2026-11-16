@@ -314,7 +314,10 @@ int main(int argc, char **argv)
 	}
 	try {
 		if (bind_imports || run_modules || run_process) {
-			raven::ModuleSet modules;
+			// The modules live until the process ends: freeing their tens of thousands of export names one by one only delays the exit,
+			// and the system takes the memory back at once. Held by a static pointer, they stay reachable for leak checks.
+			static raven::ModuleSet *const kept_modules = new raven::ModuleSet;
+			auto &modules = *kept_modules;
 			raven::PEModule *entry = nullptr;
 			for (int i = (run_modules || run_process) ? first_file : 2; i < last_file; ++i) {
 				auto bytes = read_program(argv[i], !entry && run_process);
