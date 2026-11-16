@@ -199,6 +199,11 @@ public:
 	static void call_away(GuestThread &thread);
 	// Tells that something may have ended a wait: an object signaled, a message posted, a thread ended.
 	void signaled() { signals.fetch_add(1, std::memory_order_relaxed); }
+	// Whether no thread waits outside the runtime for `object` of the process's table (or for one that shares its slot): a call answered
+	// outside the runtime's turn (see NativeProcess::serve_alone) may then change the object without handing the turn to whom it wakes.
+	bool quiet_for(uint32_t object) const { return table_waited[object % table_waited.size()].load(std::memory_order_acquire) == 0; }
+	// Whether a thread waits in the runtime: one a change outside the turn may concern is looked at again after a nudge.
+	bool waiting_in_runtime() const { return waiting_threads.load(std::memory_order_acquire) != 0; }
 	// Every stop and call of a guest counts as such unless the runtime says, while it serves it, that it ends no wait.
 	void quiet_call() { told = false; }
 	// Lets another runnable thread run; false when nothing else is runnable.
@@ -211,6 +216,10 @@ public:
 	bool hand_over_to(uint32_t object);
 	// How many threads wait outside for objects of the process's table, so that a set nobody waits for looks no further.
 	std::atomic<int> table_waiters{0};
+	// The threads in block, counted on entry before they look at what they wait for (see waiting_in_runtime), and those that wait
+	// outside for each object of the table, by slot (see quiet_for).
+	std::atomic<int> waiting_threads{0};
+	std::array<std::atomic<uint32_t>, 1024> table_waited{};
 	// The running thread read a message of the mouse or the keyboard. Windows raises the priority of a thread whose window takes
 	// input, and its threads have a processor each: a thread that follows the pointer is not slowed by a compiler or a renderer at
 	// work in the background. Here, where the program's threads take turns, such a thread is for a moment not set aside when its

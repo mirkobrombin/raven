@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <sys/user.h>
 #include <utility>
@@ -185,6 +186,11 @@ public:
 	static int pause_own_task(pid_t task);
 	static NativeContext task_context(pid_t task);
 	static void set_task_registers(pid_t task, const user_regs_struct &registers);
+	// Calls a parallel guest leaves in its block that the host thread may answer outside the runtime's turn: `alone` gets the stub and
+	// the four argument words and gives the result, or nothing when the call needs the runtime after all.
+	void set_concurrent_served(std::function<std::optional<uint64_t>(uint64_t, const uint64_t *)> alone);
+	// Answers the call in `block` that way; false when it is not one or needs the runtime.
+	bool serve_alone(uint64_t *block);
 	// Writes the floating-point and extended state of a paused task, as PTRACE_GETREGSET with NT_X86_XSTATE gives it.
 	static void set_task_xstate(pid_t task, std::span<const uint8_t> xstate);
 	static void arm_host_thread();

@@ -760,6 +760,7 @@ struct NativeProcess::State {
 	std::function<void(std::function<bool()>, std::chrono::steady_clock::time_point)> execution_wait;
 	std::function<void(std::function<bool()>)> execution_turn;
 	std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> execution_park;
+	std::function<std::optional<uint64_t>(uint64_t, const uint64_t *)> concurrent_served;
 	std::function<bool()> poll_served;
 	bool serving = false, serving_queued = false;
 	// Diagnostics: where the guest is found running, every sample_period.
@@ -1869,6 +1870,28 @@ void NativeProcess::set_execution_turn(std::function<void(std::function<bool()>)
 	state->execution_turn = std::move(turn);
 }
 
+void NativeProcess::set_concurrent_served(std::function<std::optional<uint64_t>(uint64_t, const uint64_t *)> alone)
+{
+	state->concurrent_served = std::move(alone);
+}
+
+bool NativeProcess::serve_alone(uint64_t *block)
+{
+	if (!block || !state->concurrent_served)
+		return false;
+	const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
+	// A completion (the low bit) goes the usual way. The guest spins in its stub, served or called, and takes the answer as from any.
+	if (!stub || (stub & 1))
+		return false;
+	const auto result = state->concurrent_served(stub, block + 1);
+	if (!result)
+		return false;
+	block[10] = *result;
+	block[11] = 0;
+	__atomic_store_n(&block[0], 0, __ATOMIC_RELEASE);
+	return true;
+}
+
 void NativeProcess::set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> park)
 {
 	state->execution_park = std::move(park);
@@ -2565,6 +2588,10 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 				const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
 				if (stub & 1)
 					return returned(block, stub, std::exchange(held_in_stub, false));
+				if (!held_in_stub && serve_alone(block)) {
+					runs = true;
+					continue;
+				}
 				if (!std::binary_search(state->call_stubs.begin(), state->call_stubs.end(), stub)) {
 					serve_pending();
 					if (std::exchange(held_in_stub, false) && ptrace(state->guest_resume(), child.pid, nullptr, nullptr) == -1)

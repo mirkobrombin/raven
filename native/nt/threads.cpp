@@ -633,6 +633,13 @@ void NativeThreads::nudge()
 	[[maybe_unused]] const auto written = ::write(wake, &one, sizeof one);
 }
 
+// Counts a thread among those that wait in the runtime for as long as its wait lasts, however it ends.
+struct CountedWait {
+	std::atomic<int> &count;
+	explicit CountedWait(std::atomic<int> &count) : count(count) { count.fetch_add(1, std::memory_order_acq_rel); }
+	~CountedWait() { count.fetch_sub(1, std::memory_order_release); }
+};
+
 bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn, bool polled)
 {
 	// A thread that gives its turn waits even when it could go on: the others that can run go first.
@@ -657,6 +664,7 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 		return ready();
 	}
 	auto &me = *running;
+	const CountedWait counted(waiting_threads);
 	// A wait can begin inside another: guest code the scheduler runs for this thread while it waits (a callback) comes back here. The
 	// wait outside is put back when this one ends, or its thread would be left waiting for nothing and never run again.
 	auto outer_ready = std::move(me.ready);
@@ -1216,6 +1224,9 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 			std::lock_guard lock(gate);
 			return bool(me.job);
 		}, block);
+		// A call that needs nothing of the runtime is answered here, outside its turn, and the guest goes on.
+		if (status == -4 && process.serve_alone(const_cast<uint64_t *>(block)))
+			continue;
 		if (status != -3)
 			break;
 		std::unique_lock lock(gate);

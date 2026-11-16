@@ -425,9 +425,13 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 					{
 						self.waits_on = table;
 						threads.table_waiters.fetch_add(1, std::memory_order_release);
+						for (const uint32_t object : table)
+							threads.table_waited[object % threads.table_waited.size()].fetch_add(1, std::memory_order_acq_rel);
 					}
 					~Announced()
 					{
+						for (const uint32_t object : self.waits_on)
+							threads.table_waited[object % threads.table_waited.size()].fetch_sub(1, std::memory_order_release);
 						threads.table_waiters.fetch_sub(1, std::memory_order_release);
 						self.waits_on.clear();
 					}

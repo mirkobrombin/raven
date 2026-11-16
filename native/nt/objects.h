@@ -116,6 +116,9 @@ public:
 	// Process requests share the handle channel, but the process owner validates and serves them.
 	std::function<InheritedHandle(const InheritedHandle &)> process_request;
 	NativeObjectResult set_event(uint64_t handle, bool signaled);
+	// For a call answered beside the others, outside the runtime's turn: the event of this process the handle may set; nothing when
+	// the call needs the runtime (any other handle, or an error to report).
+	std::shared_ptr<EventObject> event_alone(uint64_t handle) const;
 	NativeObjectResult query_event(uint64_t handle);
 	// The object manager type of the object behind a handle; nullopt when the handle does not exist.
 	std::optional<std::u16string> type_name(uint64_t handle) const;

@@ -16,6 +16,7 @@
 #include "apiset.h"
 #include "text.h"
 #include "kernel_context.h"
+#include "event.h"
 #include "event_pulse.h"
 #include "actctx.h"
 #include "unwind.h"
@@ -3318,6 +3319,29 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	windows.set_key_table(table + keys_at);
 	__atomic_store_n(&served_block[key_pointer / 8], table_guest + keys_at, __ATOMIC_RELEASE);
 	process.set_call_stubs(std::move(called_stubs));
+	// Setting or resetting an event no thread waits for in the table needs nothing of the runtime: the host thread answers it outside the
+	// turn, and threads that set events of their own go side by side. The threads that wait in the runtime, and one that began to wait
+	// meanwhile, are looked at again as after any other change.
+	std::vector<std::pair<uint64_t, bool>> event_stubs;
+	for (const auto &[stub, name] : served_names)
+		if (name == "SetEvent" || name == "ResetEvent")
+			event_stubs.emplace_back(stub, name == "SetEvent");
+	if (process.parallel() && !event_stubs.empty())
+		process.set_concurrent_served([&threads, &kernel_objects, event_stubs](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			const auto found = std::find_if(event_stubs.begin(), event_stubs.end(), [stub](const auto &entry) { return entry.first == stub; });
+			if (found == event_stubs.end())
+				return std::nullopt;
+			const auto event = kernel_objects.event_alone(arguments[0]);
+			if (!event)
+				return std::nullopt;
+			const uint32_t object = event->table_object();
+			if (!object || !threads.quiet_for(object) || event->set_state(found->second) < 0)
+				return std::nullopt;
+			threads.signaled();
+			if (threads.waiting_in_runtime() || !threads.quiet_for(object))
+				threads.nudge();
+			return 1;
+		});
 	process.set_served_calls(served_block, std::move(served_stubs), served_trap, served_wait, std::move(yield_traps), [&, served_names = std::move(served_names)](uint64_t stub) {
 		const auto found = served_names.find(stub);
 		if (found == served_names.end())
