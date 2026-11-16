@@ -5,14 +5,22 @@ use std::time::Duration;
 const SHORT: Option<Duration> = Some(Duration::from_millis(20));
 const LONG: Option<Duration> = Some(Duration::from_secs(5));
 
-fn waits() -> Arc<Waits> {
-    Arc::new(Waits::new())
+/// The table the cases run on: the kernel's objects with RAVEN_TEST_NTSYNC=1, which needs /dev/ntsync, and the locked table otherwise.
+fn waits() -> Arc<Table> {
+    if std::env::var_os("RAVEN_TEST_NTSYNC").is_some() {
+        return Arc::new(Table::Kernel(ntsync::Waits::open().expect("RAVEN_TEST_NTSYNC=1 needs /dev/ntsync")));
+    }
+    Arc::new(Table::Locked(Waits::new()))
 }
 
-/// Waits until `thread` stands in the line, so that what follows happens to a wait in progress.
-fn waiting(waits: &Waits, thread: ThreadId) {
-    while !waits.lock().line.contains(&thread) {
+/// Waits until `thread` waits, so that what follows happens to a wait in progress. A thread on the kernel's objects is marked waiting
+/// just before it enters the kernel, and is given a moment to get there.
+fn waiting(waits: &Table, thread: ThreadId) {
+    while !waits.waiting(thread) {
         std::thread::yield_now();
+    }
+    if waits.kernel() {
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -68,6 +76,23 @@ fn pulse_releases_only_the_waits_there_are() {
     assert_eq!(first.join().unwrap(), Outcome::Object(0));
     assert_eq!(waits.query(event), Ok(0));
     assert_eq!(waits.wait(2, &[event], false, false, SHORT), Ok(Outcome::Timeout), "a later wait does not see the pulse");
+}
+
+#[test]
+fn a_wait_that_only_looks_does_not_block() {
+    let waits = waits();
+    let event = waits.create(Kind::AutoEvent, 0).unwrap();
+    let mutex = waits.create(Kind::Mutex, 2).unwrap();
+    for _ in 0..20 {
+        let started = std::time::Instant::now();
+        assert_eq!(waits.wait(1, &[event, mutex], false, false, Some(Duration::ZERO)), Ok(Outcome::Timeout));
+        assert_eq!(waits.wait(1, &[event, mutex], true, false, Some(Duration::ZERO)), Ok(Outcome::Timeout));
+        assert!(started.elapsed() < Duration::from_millis(1), "a look took {:?}", started.elapsed());
+    }
+    waits.interrupt(1);
+    let started = std::time::Instant::now();
+    assert_eq!(waits.wait(1, &[event], false, false, None), Ok(Outcome::Interrupted));
+    assert!(started.elapsed() < Duration::from_millis(1), "an interrupted wait took {:?}", started.elapsed());
 }
 
 #[test]

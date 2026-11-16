@@ -15,6 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 pub mod ffi;
+pub mod ntsync;
 
 pub type ObjectId = u32;
 pub type ThreadId = u32;
@@ -403,6 +404,93 @@ impl Waits {
         }
         state.grant();
         state.threads.remove(&thread);
+    }
+}
+
+/// The table the host uses: the kernel's objects where /dev/ntsync opens, unless RAVEN_NTSYNC=0, and the table above otherwise. Both
+/// answer the same calls the same way (see tests.rs, which RAVEN_TEST_NTSYNC=1 runs on the kernel's objects).
+pub enum Table {
+    Locked(Waits),
+    Kernel(ntsync::Waits),
+}
+
+macro_rules! either {
+    ($table:expr, $waits:ident => $call:expr) => {
+        match $table {
+            Table::Locked($waits) => $call,
+            Table::Kernel($waits) => $call,
+        }
+    };
+}
+
+impl Table {
+    pub fn new() -> Self {
+        if std::env::var_os("RAVEN_NTSYNC").is_some_and(|value| value == "0") {
+            return Self::Locked(Waits::new());
+        }
+        ntsync::Waits::open().map_or_else(|| Self::Locked(Waits::new()), Self::Kernel)
+    }
+
+    pub fn kernel(&self) -> bool {
+        matches!(self, Self::Kernel(_))
+    }
+
+    pub fn create(&self, kind: Kind, initial: u32) -> Result<ObjectId, Error> {
+        either!(self, waits => waits.create(kind, initial))
+    }
+    pub fn close(&self, object: ObjectId) {
+        either!(self, waits => waits.close(object))
+    }
+    pub fn set(&self, object: ObjectId) -> Result<u32, Error> {
+        either!(self, waits => waits.set(object))
+    }
+    pub fn reset(&self, object: ObjectId) -> Result<u32, Error> {
+        either!(self, waits => waits.reset(object))
+    }
+    pub fn pulse(&self, object: ObjectId) -> Result<(u32, u32), Error> {
+        either!(self, waits => waits.pulse(object))
+    }
+    pub fn detach(&self, object: ObjectId) -> Result<(u32, ThreadId, u32), Error> {
+        either!(self, waits => waits.detach(object))
+    }
+    pub fn query(&self, object: ObjectId) -> Result<u32, Error> {
+        either!(self, waits => waits.query(object))
+    }
+    pub fn release_mutex(&self, object: ObjectId, thread: ThreadId) -> Result<u32, Error> {
+        either!(self, waits => waits.release_mutex(object, thread))
+    }
+    pub fn release_semaphore(&self, object: ObjectId, count: u32) -> Result<u32, Error> {
+        either!(self, waits => waits.release_semaphore(object, count))
+    }
+    pub fn wait(&self, thread: ThreadId, objects: &[ObjectId], all: bool, alertable: bool, timeout: Option<Duration>) -> Result<Outcome, Error> {
+        either!(self, waits => waits.wait(thread, objects, all, alertable, timeout))
+    }
+    pub fn queue_apc(&self, thread: ThreadId) {
+        either!(self, waits => waits.queue_apc(thread))
+    }
+    pub fn take_apcs(&self, thread: ThreadId) -> u32 {
+        either!(self, waits => waits.take_apcs(thread))
+    }
+    pub fn interrupt(&self, thread: ThreadId) {
+        either!(self, waits => waits.interrupt(thread))
+    }
+    pub fn waiting(&self, thread: ThreadId) -> bool {
+        either!(self, waits => waits.waiting(thread))
+    }
+    pub fn suspend(&self, thread: ThreadId) {
+        either!(self, waits => waits.suspend(thread))
+    }
+    pub fn resume(&self, thread: ThreadId) {
+        either!(self, waits => waits.resume(thread))
+    }
+    pub fn thread_ended(&self, thread: ThreadId) {
+        either!(self, waits => waits.thread_ended(thread))
+    }
+}
+
+impl Default for Table {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

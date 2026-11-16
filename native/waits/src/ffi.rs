@@ -2,7 +2,7 @@
 //! WAIT_OBJECT_0 + index, WAIT_ABANDONED_0 + index, WAIT_IO_COMPLETION, WAIT_TIMEOUT, raven_wait_ended for a thread terminated while
 //! it waited or raven_wait_interrupted for one the host called away; the others return 0 or a Windows error code, with the value they give back through a pointer.
 
-use crate::{Error, Kind, Outcome, Waits};
+use crate::{Error, Kind, Outcome, Table};
 use std::time::Duration;
 
 const WAIT_ABANDONED_0: u32 = 0x80;
@@ -40,14 +40,14 @@ unsafe fn give(result: Result<u32, Error>, out: *mut u32) -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn raven_waits_new() -> *mut Waits {
-    Box::into_raw(Box::new(Waits::new()))
+pub extern "C" fn raven_waits_new() -> *mut Table {
+    Box::into_raw(Box::new(Table::new()))
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new and no other call uses it any more.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_free(waits: *mut Waits) {
+pub unsafe extern "C" fn raven_waits_free(waits: *mut Table) {
     if !waits.is_null() {
         drop(Box::from_raw(waits));
     }
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn raven_waits_free(waits: *mut Waits) {
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_create(waits: *const Waits, kind: u32, initial: u32, max: u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_create(waits: *const Table, kind: u32, initial: u32, max: u32) -> u32 {
     let kind = match kind {
         0 => Kind::AutoEvent,
         1 => Kind::ManualEvent,
@@ -72,21 +72,21 @@ pub unsafe extern "C" fn raven_waits_create(waits: *const Waits, kind: u32, init
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_close(waits: *const Waits, object: u32) {
+pub unsafe extern "C" fn raven_waits_close(waits: *const Table, object: u32) {
     (*waits).close(object);
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new; `previous` is null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_set(waits: *const Waits, object: u32, previous: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_set(waits: *const Table, object: u32, previous: *mut u32) -> u32 {
     give((*waits).set(object), previous)
 }
 
 /// # Safety
 /// As raven_waits_set.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_reset(waits: *const Waits, object: u32, previous: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_reset(waits: *const Table, object: u32, previous: *mut u32) -> u32 {
     give((*waits).reset(object), previous)
 }
 
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn raven_waits_reset(waits: *const Waits, object: u32, pre
 /// # Safety
 /// As raven_waits_set; `granted` is null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_pulse(waits: *const Waits, object: u32, previous: *mut u32, granted: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_pulse(waits: *const Table, object: u32, previous: *mut u32, granted: *mut u32) -> u32 {
     let result = (*waits).pulse(object);
     if let (Ok((_, ended)), false) = (result, granted.is_null()) {
         *granted = ended;
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn raven_waits_pulse(waits: *const Waits, object: u32, pre
 /// # Safety
 /// As raven_waits_set.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_query(waits: *const Waits, object: u32, value: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_query(waits: *const Table, object: u32, value: *mut u32) -> u32 {
     give((*waits).query(object), value)
 }
 
@@ -115,7 +115,7 @@ pub unsafe extern "C" fn raven_waits_query(waits: *const Waits, object: u32, val
 /// # Safety
 /// `waits` came from raven_waits_new; the pointers are null or writable.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_detach(waits: *const Waits, object: u32, value: *mut u32, owner: *mut u32, depth: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_detach(waits: *const Table, object: u32, value: *mut u32, owner: *mut u32, depth: *mut u32) -> u32 {
     match (*waits).detach(object) {
         Ok((count, holder, held)) => {
             for (out, item) in [(value, count), (owner, holder), (depth, held)] {
@@ -132,14 +132,14 @@ pub unsafe extern "C" fn raven_waits_detach(waits: *const Waits, object: u32, va
 /// # Safety
 /// As raven_waits_set.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_release_mutex(waits: *const Waits, object: u32, thread: u32, previous: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_release_mutex(waits: *const Table, object: u32, thread: u32, previous: *mut u32) -> u32 {
     give((*waits).release_mutex(object, thread), previous)
 }
 
 /// # Safety
 /// As raven_waits_set.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_release_semaphore(waits: *const Waits, object: u32, count: u32, previous: *mut u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_release_semaphore(waits: *const Table, object: u32, count: u32, previous: *mut u32) -> u32 {
     give((*waits).release_semaphore(object, count), previous)
 }
 
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn raven_waits_release_semaphore(waits: *const Waits, obje
 /// # Safety
 /// `waits` came from raven_waits_new; `objects` holds `count` objects.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_wait(waits: *const Waits, thread: u32, objects: *const u32, count: u32, all: u32, alertable: u32,
+pub unsafe extern "C" fn raven_waits_wait(waits: *const Table, thread: u32, objects: *const u32, count: u32, all: u32, alertable: u32,
     timeout_ns: u64) -> u32 {
     if objects.is_null() || count == 0 {
         return WAIT_FAILED;
@@ -169,48 +169,48 @@ pub unsafe extern "C" fn raven_waits_wait(waits: *const Waits, thread: u32, obje
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_queue_apc(waits: *const Waits, thread: u32) {
+pub unsafe extern "C" fn raven_waits_queue_apc(waits: *const Table, thread: u32) {
     (*waits).queue_apc(thread);
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_take_apcs(waits: *const Waits, thread: u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_take_apcs(waits: *const Table, thread: u32) -> u32 {
     (*waits).take_apcs(thread)
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_interrupt(waits: *const Waits, thread: u32) {
+pub unsafe extern "C" fn raven_waits_interrupt(waits: *const Table, thread: u32) {
     (*waits).interrupt(thread);
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_waiting(waits: *const Waits, thread: u32) -> u32 {
+pub unsafe extern "C" fn raven_waits_waiting(waits: *const Table, thread: u32) -> u32 {
     u32::from((*waits).waiting(thread))
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_suspend(waits: *const Waits, thread: u32) {
+pub unsafe extern "C" fn raven_waits_suspend(waits: *const Table, thread: u32) {
     (*waits).suspend(thread);
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_resume(waits: *const Waits, thread: u32) {
+pub unsafe extern "C" fn raven_waits_resume(waits: *const Table, thread: u32) {
     (*waits).resume(thread);
 }
 
 /// # Safety
 /// `waits` came from raven_waits_new.
 #[no_mangle]
-pub unsafe extern "C" fn raven_waits_thread_ended(waits: *const Waits, thread: u32) {
+pub unsafe extern "C" fn raven_waits_thread_ended(waits: *const Table, thread: u32) {
     (*waits).thread_ended(thread);
 }
