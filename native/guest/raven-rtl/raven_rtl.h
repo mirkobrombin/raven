@@ -31,8 +31,12 @@ NTSYSAPI NTSTATUS NTAPI ZwAllocateVirtualMemory(HANDLE process, PVOID *base, ULO
 NTSYSAPI NTSTATUS NTAPI ZwFreeVirtualMemory(HANDLE process, PVOID *base, PSIZE_T size, ULONG type);
 NTSYSAPI NTSTATUS NTAPI NtTerminateThread(HANDLE thread, NTSTATUS status);
 NTSYSAPI VOID NTAPI RtlRaiseStatus(NTSTATUS status);
-VOID NTAPI RtlAcquireSRWLockExclusive(PRTL_SRWLOCK lock);
-VOID NTAPI RtlAcquireSRWLockShared(PRTL_SRWLOCK lock);
+/* The runtime's waits on an address, served by its scheduler: a waiter wakes when another thread calls a wake on the address. */
+NTSTATUS NTAPI RtlWaitOnAddress(volatile VOID *address, PVOID compare, SIZE_T size, PLARGE_INTEGER timeout);
+VOID NTAPI RtlWakeAddressSingle(PVOID address);
+VOID NTAPI RtlWakeAddressAll(PVOID address);
+VOID WINAPI RavenAcquireSRWLockExclusive(PRTL_SRWLOCK lock);
+VOID WINAPI RavenReleaseSRWLockExclusive(PRTL_SRWLOCK lock);
 
 PVOID NTAPI RtlAllocateHeap(PVOID handle, ULONG flags, SIZE_T size);
 PVOID NTAPI RtlReAllocateHeap(PVOID handle, ULONG flags, PVOID block, SIZE_T size);

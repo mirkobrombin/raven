@@ -6,8 +6,8 @@
 
 /* The kernel32 functions a program calls most often, run in the guest as Windows runs them in user mode: the process heap, critical
  * sections, SRW locks and the waking of condition variables. The runtime forwards kernel32's exports of these names here, so a call
- * costs what a function call costs. Waiting stays with the runtime's scheduler: a lock that is held, and a condition variable with
- * sleepers, go to the runtime's implementation through ntdll. */
+ * costs what a function call costs. Waiting stays with the runtime's scheduler: a thread waits for a held lock on the lock's word,
+ * and the release that frees it wakes the word, both through ntdll; a condition variable with sleepers goes to the runtime. */
 
 #define LAST_ERROR (*(volatile ULONG *)((PUCHAR)NtCurrentTeb() + 0x68))
 #define THREAD_ID ((ULONG)(ULONG_PTR)TEB_THREAD_ID)
@@ -15,7 +15,6 @@
 /* The runtime's waits, served by its scheduler. */
 VOID NTAPI RtlWakeConditionVariable(PRTL_CONDITION_VARIABLE variable);
 VOID NTAPI RtlWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable);
-NTSTATUS NTAPI RtlWaitOnAddress(volatile VOID *address, PVOID compare, SIZE_T size, PLARGE_INTEGER timeout);
 
 /* ---- the heap: the flags kernel32 accepts, and the error it reports when the heap fails ---- */
 PVOID WINAPI RavenHeapAlloc(HANDLE heap, ULONG flags, SIZE_T size)
@@ -192,22 +191,26 @@ VOID WINAPI RavenDeleteCriticalSection(PRTL_CRITICAL_SECTION section)
 	section->OwningThread = NULL;
 }
 
-/* Entering takes LockCount from -1 to 0 with one exchange; a section that is held is waited for on that word, which the runtime's
-   scheduler looks at again on every round. Leaving puts -1 back and hands the section to nobody, so a thread that releases it and asks
-   again gets it back at once, as Windows has done since Vista: handing it to the next waiter would make the threads that share one
-   processor here take turns through the scheduler on every entry. */
+/* LockCount is -1 when the section is free, 0 when it is held and 1 when it is held and a thread waits for it, as a futex keeps a
+   mutex. A thread that finds it held marks it so and waits on the word; leaving puts -1 back and wakes one waiter only when one was
+   marked. The section goes to nobody in particular, so a thread that releases it and asks again gets it back at once, as Windows has
+   done since Vista: handing it to the next waiter would make the threads take turns through the scheduler on every entry. */
 VOID WINAPI RavenEnterCriticalSection(PRTL_CRITICAL_SECTION section)
 {
 	HANDLE self = TEB_THREAD_ID;
-	LONG held;
+	LONG state, contended = 1;
 	if (section->OwningThread == self) {
 		section->RecursionCount++;
 		return;
 	}
-	while (InterlockedCompareExchange(&section->LockCount, 0, -1) != -1) {
-		held = section->LockCount;
-		if (held != -1)
-			RtlWaitOnAddress(&section->LockCount, &held, sizeof(held), NULL);
+	state = InterlockedCompareExchange(&section->LockCount, 0, -1);
+	if (state != -1) {
+		if (state != 1)
+			state = InterlockedExchange(&section->LockCount, 1);
+		while (state != -1) {
+			RtlWaitOnAddress(&section->LockCount, &contended, sizeof(contended), NULL);
+			state = InterlockedExchange(&section->LockCount, 1);
+		}
 	}
 	section->OwningThread = self;
 	section->RecursionCount = 1;
@@ -218,7 +221,8 @@ VOID WINAPI RavenLeaveCriticalSection(PRTL_CRITICAL_SECTION section)
 	if (--section->RecursionCount)
 		return;
 	section->OwningThread = NULL;
-	InterlockedExchange(&section->LockCount, -1);
+	if (InterlockedExchange(&section->LockCount, -1) == 1)
+		RtlWakeAddressSingle((PVOID)&section->LockCount);
 }
 
 /* ntdll's forms of the same, which programs that call ntdll directly (Zig's standard library) use; they answer an NTSTATUS. */
@@ -277,33 +281,61 @@ BOOL WINAPI RavenTryEnterCriticalSection(PRTL_CRITICAL_SECTION section)
 	return TRUE;
 }
 
-/* ---- SRW locks: one word, 1 when held exclusively, shared holders counting in steps of 2, as the runtime keeps them; a lock that is
-   busy is waited for by the runtime, which sees it become free when the scheduler looks again ---- */
+/* ---- SRW locks: one word, 1 when held exclusively, shared holders counting in steps of 2, and its top bit set while a thread waits
+   for it. A thread that finds the lock busy sets that bit and waits on the word; the release that frees the lock clears the word and
+   wakes every waiter, which then tries again, as a futex-based lock does ---- */
+#define SRW_WAITING ((ULONG_PTR)1 << (sizeof(ULONG_PTR) * 8 - 1))
+
+/* Waits until the word is no longer the busy value it was seen as, after marking that a thread waits. */
+static void srw_wait(PRTL_SRWLOCK lock, ULONG_PTR value)
+{
+	if (!(value & SRW_WAITING) &&
+		InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)(value | SRW_WAITING), (PVOID)value) != (PVOID)value)
+		return;
+	value |= SRW_WAITING;
+	RtlWaitOnAddress(&lock->Ptr, &value, sizeof(value), NULL);
+}
+
 VOID WINAPI RavenInitializeSRWLock(PRTL_SRWLOCK lock) { lock->Ptr = NULL; }
 
 VOID WINAPI RavenAcquireSRWLockExclusive(PRTL_SRWLOCK lock)
 {
-	if (!InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)1, NULL))
-		return;
-	RtlAcquireSRWLockExclusive(lock);
+	for (;;) {
+		ULONG_PTR value = (ULONG_PTR)lock->Ptr;
+		if (!(value & ~SRW_WAITING)) {
+			if (InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)(value | 1), (PVOID)value) == (PVOID)value)
+				return;
+			continue;
+		}
+		srw_wait(lock, value);
+	}
 }
 
 BOOLEAN WINAPI RavenTryAcquireSRWLockExclusive(PRTL_SRWLOCK lock)
 {
-	return InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)1, NULL) == NULL;
+	ULONG_PTR value = (ULONG_PTR)lock->Ptr;
+	if (value & ~SRW_WAITING)
+		return FALSE;
+	return InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)(value | 1), (PVOID)value) == (PVOID)value;
 }
 
 VOID WINAPI RavenReleaseSRWLockExclusive(PRTL_SRWLOCK lock)
 {
-	InterlockedExchangePointer(&lock->Ptr, NULL);
+	if ((ULONG_PTR)InterlockedExchangePointer(&lock->Ptr, NULL) & SRW_WAITING)
+		RtlWakeAddressAll(&lock->Ptr);
 }
 
 VOID WINAPI RavenAcquireSRWLockShared(PRTL_SRWLOCK lock)
 {
-	ULONG_PTR value = (ULONG_PTR)lock->Ptr;
-	if (!(value & 1) && InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)(value + 2), (PVOID)value) == (PVOID)value)
-		return;
-	RtlAcquireSRWLockShared(lock);
+	for (;;) {
+		ULONG_PTR value = (ULONG_PTR)lock->Ptr;
+		if (!(value & 1)) {
+			if (InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)(value + 2), (PVOID)value) == (PVOID)value)
+				return;
+			continue;
+		}
+		srw_wait(lock, value);
+	}
 }
 
 BOOLEAN WINAPI RavenTryAcquireSRWLockShared(PRTL_SRWLOCK lock)
@@ -317,18 +349,22 @@ BOOLEAN WINAPI RavenTryAcquireSRWLockShared(PRTL_SRWLOCK lock)
 	}
 }
 
+/* The last shared holder frees the lock: it clears the word, and wakes the waiters if any were marked. */
 VOID WINAPI RavenReleaseSRWLockShared(PRTL_SRWLOCK lock)
 {
 	for (;;) {
-		ULONG_PTR value = (ULONG_PTR)lock->Ptr;
-		if (value < 2)
+		ULONG_PTR value = (ULONG_PTR)lock->Ptr, holders = value & ~SRW_WAITING;
+		if (holders < 2)
 			return;
-		if (InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)(value - 2), (PVOID)value) == (PVOID)value)
+		ULONG_PTR next = holders == 2 ? 0 : value - 2;
+		if (InterlockedCompareExchangePointer(&lock->Ptr, (PVOID)next, (PVOID)value) == (PVOID)value) {
+			if (!next && (value & SRW_WAITING))
+				RtlWakeAddressAll(&lock->Ptr);
 			return;
+		}
 	}
 }
 
-/* ---- condition variables: the runtime keeps the number of sleepers in the variable, so waking one that nobody waits on is free ---- */
 VOID WINAPI RavenInitializeConditionVariable(PRTL_CONDITION_VARIABLE variable) { variable->Ptr = NULL; }
 
 VOID WINAPI RavenWakeConditionVariable(PRTL_CONDITION_VARIABLE variable)

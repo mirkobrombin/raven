@@ -73,15 +73,14 @@ static void heap_lock(heap *owner, ULONG flags)
 {
 	if ((flags | owner->flags) & HEAP_NO_SERIALIZE)
 		return;
-	if (InterlockedCompareExchangePointer(&owner->lock_word, (PVOID)1, NULL))
-		RtlAcquireSRWLockExclusive((PRTL_SRWLOCK)&owner->lock_word);
+	RavenAcquireSRWLockExclusive((PRTL_SRWLOCK)&owner->lock_word);
 }
 
 static void heap_unlock(heap *owner, ULONG flags)
 {
 	if ((flags | owner->flags) & HEAP_NO_SERIALIZE)
 		return;
-	InterlockedExchangePointer(&owner->lock_word, NULL);
+	RavenReleaseSRWLockExclusive((PRTL_SRWLOCK)&owner->lock_word);
 }
 
 static unsigned bin_of(SIZE_T units)
@@ -512,20 +511,18 @@ PVOID NTAPI RtlReAllocateHeap(PVOID handle, ULONG flags, PVOID block, SIZE_T siz
 static BOOLEAN register_heap(PVOID handle)
 {
 	BOOLEAN done = FALSE;
-	if (InterlockedCompareExchangePointer(&process_heaps_lock, (PVOID)1, NULL))
-		RtlAcquireSRWLockExclusive((PRTL_SRWLOCK)&process_heaps_lock);
+	RavenAcquireSRWLockExclusive((PRTL_SRWLOCK)&process_heaps_lock);
 	if (PEB_NUMBER_OF_HEAPS < PEB_MAXIMUM_HEAPS) {
 		PEB_PROCESS_HEAPS[PEB_NUMBER_OF_HEAPS++] = handle;
 		done = TRUE;
 	}
-	InterlockedExchangePointer(&process_heaps_lock, NULL);
+	RavenReleaseSRWLockExclusive((PRTL_SRWLOCK)&process_heaps_lock);
 	return done;
 }
 
 static void unregister_heap(PVOID handle)
 {
-	if (InterlockedCompareExchangePointer(&process_heaps_lock, (PVOID)1, NULL))
-		RtlAcquireSRWLockExclusive((PRTL_SRWLOCK)&process_heaps_lock);
+	RavenAcquireSRWLockExclusive((PRTL_SRWLOCK)&process_heaps_lock);
 	for (ULONG index = 0; index < PEB_NUMBER_OF_HEAPS; index++) {
 		if (PEB_PROCESS_HEAPS[index] != handle)
 			continue;
@@ -533,7 +530,7 @@ static void unregister_heap(PVOID handle)
 		PEB_PROCESS_HEAPS[PEB_NUMBER_OF_HEAPS] = NULL;
 		break;
 	}
-	InterlockedExchangePointer(&process_heaps_lock, NULL);
+	RavenReleaseSRWLockExclusive((PRTL_SRWLOCK)&process_heaps_lock);
 }
 
 PVOID NTAPI RtlCreateHeap(ULONG flags, PVOID base, SIZE_T reserve, SIZE_T commit, PVOID lock, PRTL_HEAP_PARAMETERS parameters)
