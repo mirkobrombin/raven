@@ -349,7 +349,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 						blend(device_px, device_py, color, uint8_t(std::min<uint32_t>(alpha, 255)));
 				}
 			if (painter.changed() && dc.window && dc.leased && updated)
-				updated(dc.window);
+				drew(dc);
 			return advance;
 		}
 		for (uint32_t row = 0; row < box_height; ++row)
@@ -377,7 +377,7 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 		if (strike)
 			line_across(metrics.ascent * 3 / 5);
 		if (painter.changed() && dc.window && dc.leased && updated)
-			updated(dc.window);
+			drew(dc);
 		return advance;
 	};
 	const auto extended_text_out = [=, this](ApiCall &call, bool ansi) {

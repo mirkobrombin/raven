@@ -36,7 +36,7 @@ bool NativeDesktop::fill(std::span<const uint64_t> args)
 		};
 		const auto changed=fill_rect(process,objects,args[0],{coordinate(0),coordinate(4),coordinate(8),coordinate(12)},args[2]);
 		const auto *dc=objects.dc(args[0]);
-		if (changed && dc->window && dc->leased && updated) updated(dc->window);
+		if (changed && dc->window && dc->leased && updated) drew(*dc);
 		return true;
 	} catch (uint32_t error) { environment.set_last_error(error); return false; }
 }
@@ -56,7 +56,7 @@ bool NativeDesktop::frame(std::span<const uint64_t> args)
 			{left,top+1,left+1,bottom-1},{right-1,top+1,right,bottom-1}}})
 			changed=fill_rect(process,objects,args[0],rect,args[2]) || changed;
 		const auto *dc=objects.dc(args[0]);
-		if (changed && dc->window && dc->leased && updated) updated(dc->window);
+		if (changed && dc->window && dc->leased && updated) drew(*dc);
 		return true;
 	} catch (uint32_t error) { environment.set_last_error(error);return false; }
 }

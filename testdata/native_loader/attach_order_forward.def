@@ -1,0 +1,4 @@
+LIBRARY order-f.dll
+EXPORTS
+	RavenOrderForwarderSaw
+	RavenOrderForwarded = order-a.RavenOrderStarted

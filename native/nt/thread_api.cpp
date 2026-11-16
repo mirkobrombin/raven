@@ -741,7 +741,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		else
 			call.ret(previous);
 	});
-	registry.add("ResumeThread", 1, [thread_from, &objects](ApiCall &call) {
+	registry.add("ResumeThread", 1, [thread_from, &objects, &threads](ApiCall &call) {
 		// The main thread of a child that was started suspended runs when this opens its gate.
 		if (const auto child = objects.object_as<ChildThreadObject>(call[0])) {
 			call.ret(child->resume());
@@ -753,8 +753,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const auto previous = thread->suspend_count;
-		if (thread->suspend_count > 0)
-			--thread->suspend_count;
+		threads.resume(*thread);
 		call.ret(uint32_t(previous));
 	});
 	// The registers of a thread as a CONTEXT (x64), from where the thread stopped: the control and integer groups, the floating-point
@@ -835,7 +834,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			registers.r8 = get(0xb8); registers.r9 = get(0xc0); registers.r10 = get(0xc8); registers.r11 = get(0xd0);
 			registers.r12 = get(0xd8); registers.r13 = get(0xe0); registers.r14 = get(0xe8); registers.r15 = get(0xf0);
 		}
-		context.process.set_thread_registers(thread->snapshot, registers);
+		context.threads.set_registers(*thread, registers);
 		// The floating-point and extended state wait in the thread's saved state for its next turn; a thread that runs on a task of its
 		// own keeps what it has.
 		auto &state = thread->snapshot.context;
@@ -1199,6 +1198,12 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(6);
 			return;
 		}
+		// A thread that has ended runs no more APCs. QueueUserAPC's documentation: "When the thread is in the process of being terminated,
+		// calling QueueUserAPC to add to the thread's APC queue will fail with (31) ERROR_GEN_FAILURE."
+		if (thread->state == GuestThread::State::done) {
+			call.fail(31);
+			return;
+		}
 		thread->apcs.push_back({call[0], call[2]});
 		call.ret(1);
 	});
@@ -1213,6 +1218,11 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		const auto thread = thread_from(call[1]);
 		if (!thread) {
 			call.fail(6);
+			return;
+		}
+		// As in QueueUserAPC.
+		if (thread->state == GuestThread::State::done) {
+			call.fail(31);
 			return;
 		}
 		thread->apcs.push_back({call[0], call[2]});

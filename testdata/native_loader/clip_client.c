@@ -94,6 +94,12 @@ int raven_entry(void)
 	SetLastError(71);if(GetRgnBox(ring,&rbox) || GetLastError()!=71)return 26;
 	POINT points[3]={{-3,7},{0,0},{14,-9}};
 	if(!DPtoLP(dc,points,3) || !LPtoDP(dc,points,3) || points[0].x!=-3 || points[0].y!=7 || points[2].x!=14 || points[2].y!=-9 || !DPtoLP(dc,NULL,0))return 14;
+	// Points follow the origins set on the context: the viewport's moves them one way, the window's the other.
+	POINT moved[2]={{1,2},{-7,40}},was;
+	if(!SetViewportOrgEx(dc,5,9,&was) || !LPtoDP(dc,moved,2) || moved[0].x!=6 || moved[0].y!=11 || moved[1].x!=-2 || moved[1].y!=49)return 27;
+	if(!DPtoLP(dc,moved,2) || moved[0].x!=1 || moved[0].y!=2 || moved[1].x!=-7 || moved[1].y!=40)return 28;
+	if(!SetWindowOrgEx(dc,2,3,NULL) || !LPtoDP(dc,moved,1) || moved[0].x!=4 || moved[0].y!=8)return 29;
+	if(!SetWindowOrgEx(dc,0,0,NULL) || !SetViewportOrgEx(dc,was.x,was.y,NULL) || !DPtoLP(dc,moved,1) || moved[0].x!=4 || moved[0].y!=8)return 30;
 	unsigned negative=0;
 #define NEGATIVE(expr,want,err) do {SetLastError(71);DWORD result=(DWORD)(expr),error=GetLastError();clip_errors[negative][0]=result;clip_errors[negative++][1]=error;if(result!=(DWORD)(want) || error!=(err))++errors;}while(0)
 	NEGATIVE(GetClipRgn(dc,NULL),0,71);

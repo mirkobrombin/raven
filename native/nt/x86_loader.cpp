@@ -1,5 +1,6 @@
 #include "x86_loader.h"
 #include "actctx.h"
+#include "loader.h"
 
 #include "apiset.h"
 #include "text.h"
@@ -308,7 +309,6 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 		if (loading.empty())
 			return root->loaded.base();
 		modules.bind_imports();
-		// Dependencies start before the library that needs them: the order the imports were followed, reversed.
 		for (auto item = loading.rbegin(); item != loading.rend(); ++item) {
 			process.map_image((*item)->loaded);
 			mapped = true;
@@ -317,8 +317,15 @@ uint64_t NativeX86Loader::load(std::string name, bool only_map, uint32_t search_
 			if (tls)
 				tls->add(**item);
 		}
+		// The new images start in dependency order, from the walk the 64-bit loader and a 32-bit program's first start use. The reversed
+		// order the imports were followed in is not one: when the library imports A and then B, and B imports A too, A was found first
+		// and B would start before it. Images loaded earlier have started already and are left out.
+		std::vector<PEModule *> order;
+		for (const auto *image : initialization_order(modules, *root))
+			if (const auto found = std::find(loading.begin(), loading.end(), image); found != loading.end())
+				order.push_back(*found);
 		std::vector<PEModule *> attached;
-		for (auto item = loading.rbegin(); item != loading.rend(); ++item) {
+		for (auto item = order.begin(); item != order.end(); ++item) {
 			if (tls && !(only_map && *item == root))
 				for (const auto callback : tls->callbacks(**item)) {
 					const uint64_t arguments[] = {(*item)->loaded.base(), 1, 0};

@@ -21,7 +21,7 @@ int main(int argc,char **argv)
 			check(title==(frames<6 ? "Raven native paint" : "Repaint: ready"),"repaint caption differs");
 			for (unsigned y=0;y<32;++y) for (unsigned x=0;x<32;++x) {
 				const auto at=(y*32+x)*4;
-				if (!frames) { check(!pixels[at] && !pixels[at+1] && !pixels[at+2],"initial repaint surface is not zeroed"); continue; }
+				if (!frames) { check(pixels[at]==255 && pixels[at+1]==255 && pixels[at+2]==255,"initial repaint surface does not show the window color"); continue; }
 				const bool a=x>=2 && x<10 && y>=3 && y<11,b=x>=20 && x<28 && y>=21 && y<29,hole=x>=4 && x<6 && y>=5 && y<7;
 				bool red=frames>=2 && ((a || b) && !hole);
 				red|=frames>=3 && x>=12 && x<14 && y>=13 && y<15;

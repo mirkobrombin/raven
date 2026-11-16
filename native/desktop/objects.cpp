@@ -180,6 +180,7 @@ uint64_t DesktopObjects::add(Object object)
 	if (auto *record=std::get_if<DesktopWindow>(&objects.at(handle))) {
 		record->order=++next_order;
 		window_set.insert(handle);
+		++window_generation;
 		windows_touched.touch(handle);
 	}
 	if (std::holds_alternative<DesktopMenu>(objects.at(handle))) menus_touched.touch(handle);
@@ -202,6 +203,7 @@ bool DesktopObjects::erase(uint64_t handle)
 	if (std::holds_alternative<DesktopWindow>(found->second)) {
 		windows_touched.touch(handle);
 		window_set.erase(handle);
+		++window_generation;
 	}
 	if (std::holds_alternative<DesktopMenu>(found->second)) menus_touched.touch(handle);
 	if (std::holds_alternative<DesktopBitmap>(found->second)) bitmaps_touched.touch(handle);
@@ -425,7 +427,10 @@ DesktopWindow *DesktopObjects::window(uint64_t handle)
 {
 	const auto found=objects.find(handle);
 	auto *record=found==objects.end() ? nullptr : std::get_if<DesktopWindow>(&found->second);
-	if (record) windows_touched.touch(handle);
+	if (record) {
+		windows_touched.touch(handle);
+		++window_generation;
+	}
 	return record;
 }
 
@@ -434,11 +439,20 @@ std::vector<uint64_t> DesktopObjects::window_handles() const
 	return std::vector<uint64_t>(window_set.begin(),window_set.end());
 }
 
+const std::vector<uint64_t> &DesktopObjects::waiting_paint() const
+{
+	if (waiting_generation==window_generation) return waiting;
+	waiting.clear();
+	for (const auto handle : window_set)
+		if (const auto *window=this->window(handle); window && window->needs_paint() && window_visible(handle)) waiting.push_back(handle);
+	waiting_generation=window_generation;
+	return waiting;
+}
+
 uint64_t DesktopObjects::invalid_window(uint64_t filter) const
 {
-	for (const auto handle : window_set)
-		if (const auto *window=this->window(handle); window && window_visible(handle) && window->needs_paint() &&
-			(!filter || filter==handle || is_child(filter,handle))) return handle;
+	for (const auto handle : waiting_paint())
+		if (!filter || filter==handle || is_child(filter,handle)) return handle;
 	return 0;
 }
 

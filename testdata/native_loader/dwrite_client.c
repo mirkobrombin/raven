@@ -1,4 +1,5 @@
-/* Exercises DirectWrite through its public interfaces: the system fonts, a face, glyph metrics, an outline and a rendered glyph run. */
+/* Exercises DirectWrite through its public interfaces: the system fonts, a face, glyph metrics, an outline and a rendered glyph run,
+   left to right and, as a run of odd bidi level, right to left from its origin. */
 #define INITGUID
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -7,14 +8,29 @@
 #include <dwrite_3.h>
 
 static int outline_segments, outline_figures;
+static float outline_right = -1e9f;
 
 static HRESULT STDMETHODCALLTYPE sink_query(IUnknown *self, REFIID iid, void **out) { *out = self; return S_OK; }
 static ULONG STDMETHODCALLTYPE sink_ref(IUnknown *self) { return 1; }
 static void STDMETHODCALLTYPE sink_fill(ID2D1SimplifiedGeometrySink *self, D2D1_FILL_MODE mode) {}
 static void STDMETHODCALLTYPE sink_flags(ID2D1SimplifiedGeometrySink *self, D2D1_PATH_SEGMENT flags) {}
 static void STDMETHODCALLTYPE sink_begin(ID2D1SimplifiedGeometrySink *self, D2D1_POINT_2F start, D2D1_FIGURE_BEGIN begin) { ++outline_figures; }
-static void STDMETHODCALLTYPE sink_lines(ID2D1SimplifiedGeometrySink *self, const D2D1_POINT_2F *points, UINT32 count) { outline_segments += (int)count; }
-static void STDMETHODCALLTYPE sink_beziers(ID2D1SimplifiedGeometrySink *self, const D2D1_BEZIER_SEGMENT *segments, UINT32 count) { outline_segments += (int)count; }
+static void STDMETHODCALLTYPE sink_lines(ID2D1SimplifiedGeometrySink *self, const D2D1_POINT_2F *points, UINT32 count)
+{
+	UINT32 index;
+	outline_segments += (int)count;
+	for (index = 0; index < count; ++index)
+		if (points[index].x > outline_right)
+			outline_right = points[index].x;
+}
+static void STDMETHODCALLTYPE sink_beziers(ID2D1SimplifiedGeometrySink *self, const D2D1_BEZIER_SEGMENT *segments, UINT32 count)
+{
+	UINT32 index;
+	outline_segments += (int)count;
+	for (index = 0; index < count; ++index)
+		if (segments[index].point3.x > outline_right)
+			outline_right = segments[index].point3.x;
+}
 static void STDMETHODCALLTYPE sink_end(ID2D1SimplifiedGeometrySink *self, D2D1_FIGURE_END end) {}
 static HRESULT STDMETHODCALLTYPE sink_close(ID2D1SimplifiedGeometrySink *self) { return S_OK; }
 
@@ -110,6 +126,24 @@ int raven_entry(void)
 			++lit;
 	if (lit < 40)
 		return 18;
+	{
+		/* Right to left the run ends at its origin: the glyphs and their outline lie to its left. */
+		IDWriteGlyphRunAnalysis *backward = NULL;
+		RECT reversed;
+		run.bidiLevel = 1;
+		if (FAILED(IDWriteFactory_CreateGlyphRunAnalysis(factory, &run, 1.0f, NULL, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, DWRITE_MEASURING_MODE_NATURAL,
+			60.0f, 30.0f, &backward)))
+			return 59;
+		if (FAILED(IDWriteGlyphRunAnalysis_GetAlphaTextureBounds(backward, DWRITE_TEXTURE_CLEARTYPE_3x1, &reversed)) || reversed.right > 62 ||
+			reversed.left < 60 - 40 || reversed.right - reversed.left != bounds.right - bounds.left)
+			return 60;
+		IDWriteGlyphRunAnalysis_Release(backward);
+		run.bidiLevel = 0;
+		outline_right = -1e9f;
+		if (FAILED(IDWriteFontFace_GetGlyphRunOutline(face, 20.0f, glyphs, advances, NULL, 2, FALSE, TRUE, &sink)) || outline_right > 4.0f ||
+			outline_right < -40.0f)
+			return 61;
+	}
 	{
 		/* A text format and an empty layout made from it answer with the settings they were given. */
 		IDWriteTextFormat *format;
@@ -331,6 +365,30 @@ int raven_entry(void)
 		FAILED(((HRESULT (STDMETHODCALLTYPE *)(void *, IDWriteFontSet1 **))(*(void ***)newest)[12])(newest, &of_collection)) || !IDWriteFontSet1_GetFontCount(of_collection) ||
 		!IDWriteFontCollection3_GetExpirationEvent(newest))
 		return 58;
+	/* The families a WPF composite font names for other scripts answer with a host font that has them, when the host has one. */
+	{
+		static const struct { const WCHAR *host, *windows; UINT32 character; } scripts[] = {
+			{L"Noto Sans CJK SC", L"Microsoft YaHei", 0x4e00}, {L"Noto Sans CJK JP", L"Meiryo", 0x4e00},
+			{L"DejaVu Sans", L"Lucida Sans Unicode", 0x0627},
+		};
+		for (index = 0; index < sizeof(scripts) / sizeof(scripts[0]); ++index) {
+			UINT32 at;
+			WINBOOL present = FALSE, covered = FALSE;
+			IDWriteFontFamily *named_family;
+			IDWriteFont *first;
+			if (FAILED(IDWriteFontCollection_FindFamilyName(collection, scripts[index].host, &at, &present)) || !present)
+				continue;
+			if (FAILED(IDWriteFontCollection_FindFamilyName(collection, scripts[index].windows, &at, &present)) || !present)
+				return 62;
+			if (FAILED(IDWriteFontCollection_GetFontFamily(collection, at, &named_family)) ||
+				FAILED(IDWriteFontFamily_GetFirstMatchingFont(named_family, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+					DWRITE_FONT_STYLE_NORMAL, &first)) || FAILED(IDWriteFont_HasCharacter(first, scripts[index].character, &covered)) ||
+				!covered)
+				return 63;
+			IDWriteFont_Release(first);
+			IDWriteFontFamily_Release(named_family);
+		}
+	}
 	IDWriteFontSet1_Release(of_collection);
 	IDWriteFontList2_Release(by_name);
 	IDWriteFontCollection3_Release(newest);

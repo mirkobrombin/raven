@@ -37,6 +37,8 @@
 #define CONTAINER(pointer, type, field) ((type *)((char *)(pointer) - offsetof(type, field)))
 
 /* ---- the host services ---- */
+__declspec(dllimport) DWORD WINAPI RavenCanvasBounds(DWORD surface, INT32 *rect);
+__declspec(dllimport) DWORD WINAPI RavenCanvasChanged(DWORD surface, DWORD whole, INT32 *rect);
 __declspec(dllimport) DWORD WINAPI RavenCanvasCreate(DWORD width, DWORD height);
 __declspec(dllimport) void WINAPI RavenCanvasDestroy(DWORD surface);
 __declspec(dllimport) DWORD WINAPI RavenCanvasSize(DWORD surface, DWORD *size);
@@ -1518,6 +1520,27 @@ static HRESULT make_stops(IUnknown *factory, const D2D1_GRADIENT_STOP *stops, UI
 }
 
 /* ---- bitmaps: a host surface, its size in pixels and its resolution ---- */
+/* A drawing an effect made that waits for the texture behind a bitmap. A program that shows its picture through an effect on a surface
+ * of its swap chain draws it every frame: run aside, read back, written into the pixels kept here and sent to the texture again when
+ * the frame ends, the picture crosses between the graphics card and memory three times. Kept instead, the drawing is made in the
+ * texture itself when the frame ends, after the pixels drawn before it have gone there; what is drawn after it goes to pixels of its
+ * own, clear where nothing was drawn, which are laid over the texture last. The pixels kept here then lack the drawing: a program
+ * that draws on such a surface draws the whole of it each frame, as the buffers of a swap chain do not keep the last one. */
+enum { HELD_DRAWS = 4 };
+
+struct held_draw {
+	const BYTE *code;
+	UINT32 size;
+	BYTE *constants;
+	UINT32 constant_size;
+	struct shader_image images[SHADER_INPUTS];
+	BYTE *bytes[SHADER_INPUTS];
+	UINT32 count;
+	/* The pixels drawn, in the transform's space, and where the first of them goes in the texture. */
+	D2D1_RECT_L drawn;
+	INT32 x, y;
+};
+
 struct bitmap {
 	struct object base;
 	DWORD surface;
@@ -1530,6 +1553,16 @@ struct bitmap {
 	UINT32 mapped_pitch;
 	D2D1_MAP_OPTIONS map_options;
 	ID2D1ColorContext *color_context;
+	/* For a bitmap over a Direct3D texture: the drawings that wait for the texture, the pixels what is drawn after them goes to and
+	   whether anything was (see held_draw). */
+	struct held_draw held[HELD_DRAWS];
+	UINT32 held_count;
+	DWORD over;
+	BOOL over_drawn;
+	/* How many of the clips pushed on the target were pushed before the first drawing waited, and so lie on both sets of pixels. */
+	UINT32 over_shared;
+	/* The two sets of pixels as the texture's device last took them (see shader_layer): a frame sends it what changed in them. */
+	void *shown, *over_shown;
 	/* For a bitmap over a Direct3D texture: whether Direct2D draws into it, so that its own pixels are the newer ones, the frame in
 	 * which the texture's pixels were last read and the areas read in it. */
 	BOOL targeted;
@@ -1551,9 +1584,28 @@ struct bitmap {
 	BOOL shared_taken;
 };
 
+static void held_forget(struct bitmap *bitmap)
+{
+	UINT32 index, input;
+	for (index = 0; index < bitmap->held_count; ++index) {
+		FREE(bitmap->held[index].constants);
+		for (input = 0; input < SHADER_INPUTS; ++input)
+			FREE(bitmap->held[index].bytes[input]);
+	}
+	memset(bitmap->held, 0, sizeof(bitmap->held));
+	bitmap->held_count = 0;
+	bitmap->over_drawn = FALSE;
+	bitmap->over_shared = 0;
+}
+
 static void bitmap_destroy(struct object *base)
 {
 	struct bitmap *self = (struct bitmap *)base;
+	held_forget(self);
+	shader_layer_release(self->shown);
+	shader_layer_release(self->over_shown);
+	if (self->over)
+		canvas_destroy(self->over);
 	if (self->surface)
 		canvas_destroy(self->surface);
 	if (self->staging) {
@@ -1897,25 +1949,18 @@ static D2D1_RECT_L list_drawn(struct command_list *list)
 {
 	D2D1_RECT_L drawn = {0, 0, 0, 0};
 	const struct bitmap *bitmap = list->bitmap;
-	DWORD *pixels;
-	UINT32 row, column;
+	INT32 found[4];
 	if (list->measured)
 		return list->drawn;
-	if (!bitmap || !(pixels = ALLOC_UNSET((size_t)bitmap->pixels.width * bitmap->pixels.height * 4)))
+	if (!bitmap)
 		return drawn;
-	canvas_pixels(bitmap->surface, 0, 0, bitmap->pixels.width, bitmap->pixels.height, pixels, bitmap->pixels.width * 4, 0);
-	drawn.left = drawn.top = LONG_MAX;
-	for (row = 0; row < bitmap->pixels.height; ++row)
-		for (column = 0; column < bitmap->pixels.width; ++column)
-			if (pixels[(size_t)row * bitmap->pixels.width + column]) {
-				drawn.left = min(drawn.left, (LONG)column);
-				drawn.top = min(drawn.top, (LONG)row);
-				drawn.right = max(drawn.right, (LONG)column + 1);
-				drawn.bottom = max(drawn.bottom, (LONG)row + 1);
-			}
-	FREE(pixels);
-	if (drawn.left == LONG_MAX)
-		drawn.left = drawn.top = 0;
+	flush_queue();
+	if (RavenCanvasBounds(bitmap->surface, found)) {
+		drawn.left = found[0];
+		drawn.top = found[1];
+		drawn.right = found[2];
+		drawn.bottom = found[3];
+	}
 	if (list->closed) {
 		list->drawn = drawn;
 		list->measured = TRUE;
@@ -2680,7 +2725,18 @@ static void send(struct target *self, const struct command *command, const struc
 	if (!self->bitmap)
 		return;
 	self->drawn = TRUE;
-	if (!queue_command(self, self->bitmap->surface, command, data ? data->data : NULL, data ? data->size : 0) && !self->error)
+	/* A clear of the whole target does away with the drawings that wait for its texture; anything else drawn after them goes to the
+	   pixels laid over them. */
+	if (self->bitmap->held_count && command->op == OP_CLEAR && !self->pushed)
+		held_forget(self->bitmap);
+	if (self->bitmap->held_count && command->op == OP_POP && self->pushed <= self->bitmap->over_shared) {
+		/* A clip pushed before the first drawing waited is popped where it was pushed too. */
+		queue_command(self, self->bitmap->surface, command, NULL, 0);
+		self->bitmap->over_shared = self->pushed - 1;
+	} else if (self->bitmap->held_count)
+		self->bitmap->over_drawn = TRUE;
+	if (!queue_command(self, self->bitmap->held_count ? self->bitmap->over : self->bitmap->surface, command, data ? data->data : NULL,
+			data ? data->size : 0) && !self->error)
 		self->error = D2DERR_INVALID_CALL;
 }
 
@@ -3458,6 +3514,100 @@ static void share_back(struct bitmap *bitmap)
 }
 
 /* What a finished frame turns into: the window's pixels, the bound device context's, the Direct3D texture's or the WIC bitmap's. */
+/* The drawings kept for a texture are made in it, in their order, over the pixels that have just gone there; then what was drawn
+ * after them is laid over, clear where nothing was (see held_draw). */
+static void held_draw_each(struct bitmap *bitmap, ID3D11Texture2D *texture)
+{
+	UINT32 index;
+	for (index = 0; index < bitmap->held_count; ++index) {
+		const struct held_draw *held = &bitmap->held[index];
+		struct shader_image images[SHADER_INPUTS];
+		UINT32 input;
+		for (input = 0; input < held->count; ++input) {
+			images[input] = held->images[input];
+			images[input].bytes = held->bytes[input];
+		}
+		if (FAILED(shader_draw(texture, held->code, held->size, held->constants, held->constant_size, images, held->count,
+				held->drawn.left, held->drawn.top, (UINT32)(held->drawn.right - held->drawn.left),
+				(UINT32)(held->drawn.bottom - held->drawn.top), held->x, held->y)))
+			unimplemented("ID2D1DeviceContext", "an effect drawn into its target's texture");
+	}
+}
+
+static void held_draw_all(struct bitmap *bitmap, ID3D11Resource *resource)
+{
+	ID3D11Texture2D *texture = NULL;
+	if (!bitmap->held_count)
+		return;
+	if (SUCCEEDED(ID3D11Resource_QueryInterface(resource, &IID_ID3D11Texture2D, (void **)&texture))) {
+		held_draw_each(bitmap, texture);
+		if (bitmap->over_drawn) {
+			const UINT32 width = bitmap->pixels.width, height = bitmap->pixels.height;
+			BYTE *over = ALLOC_UNSET((size_t)width * height * 4);
+			if (over) {
+				struct shader_image image;
+				memset(&image, 0, sizeof(image));
+				flush_queue();
+				canvas_pixels(bitmap->over, 0, 0, width, height, over, width * 4, 0);
+				image.bytes = over;
+				image.width = width;
+				image.height = height;
+				shader_draw(texture, NULL, 0, NULL, 0, &image, 1, 0, 0, width, height, 0, 0);
+				FREE(over);
+			}
+		}
+		ID3D11Texture2D_Release(texture);
+	}
+	held_forget(bitmap);
+}
+
+static BOOL texture_drawable(struct bitmap *bitmap);
+
+/* The device of a texture is sent what changed in one set of a bitmap's pixels since it last took them, into the layer it keeps of
+ * them, and that part of the layer the drawings since could reach goes into the texture: in place of what it holds, or over it. What
+ * they could not reach stays in the texture as the last frame left it, as a program that draws part of a frame expects. False when
+ * the texture's device holds no such layer after that. */
+static BOOL layer_show(DWORD surface, void **layer, ID3D11Texture2D *texture, BOOL over)
+{
+	INT32 rect[8];
+	flush_queue();
+	if (!RavenCanvasChanged(surface, !*layer, rect))
+		return *layer != NULL;
+	if (rect[6] > rect[4] && rect[7] > rect[5]) {
+		const UINT32 width = (UINT32)(rect[6] - rect[4]), height = (UINT32)(rect[7] - rect[5]);
+		BYTE *bytes = ALLOC_UNSET((size_t)width * height * 4);
+		void *made = NULL;
+		if (bytes && RavenCanvasPixels(surface, rect[4], rect[5], width, height, bytes, width * 4, 0))
+			made = shader_layer(texture, *layer, (UINT32)rect[4], (UINT32)rect[5], width, height, bytes);
+		else
+			shader_layer_release(*layer);
+		FREE(bytes);
+		*layer = made;
+	}
+	return *layer && SUCCEEDED(shader_layer_draw(texture, *layer, over, (UINT32)rect[0], (UINT32)rect[1], (UINT32)(rect[2] - rect[0]),
+		(UINT32)(rect[3] - rect[1])));
+}
+
+/* A frame goes to a texture that can be drawn into as its changes: the texture's device keeps both sets of the bitmap's pixels, takes
+ * what changed in each, and draws the first, the drawings kept for the texture and then the second over them. A frame that changed a
+ * corner of a large surface costs what the corner costs. False when the texture cannot take it so. */
+static BOOL present_layers(struct bitmap *bitmap)
+{
+	ID3D11Texture2D *texture = NULL;
+	BOOL shown = FALSE;
+	if (!texture_drawable(bitmap) || FAILED(IDXGISurface_QueryInterface(bitmap->dxgi, &IID_ID3D11Texture2D, (void **)&texture)))
+		return FALSE;
+	if (layer_show(bitmap->surface, &bitmap->shown, texture, FALSE)) {
+		shown = TRUE;
+		held_draw_each(bitmap, texture);
+		if (bitmap->held_count && bitmap->over_drawn && !layer_show(bitmap->over, &bitmap->over_shown, texture, TRUE))
+			unimplemented("ID2D1DeviceContext", "what is drawn after an effect kept for its target's texture");
+		held_forget(bitmap);
+	}
+	ID3D11Texture2D_Release(texture);
+	return shown;
+}
+
 static void present(struct target *self)
 {
 	struct bitmap *bitmap = self->bitmap;
@@ -3478,6 +3628,8 @@ static void present(struct target *self)
 	if (kind == TARGET_WIC && !self->drawn)
 		return;
 	self->drawn = FALSE;
+	if (kind != TARGET_HWND && kind != TARGET_DC && kind != TARGET_WIC && present_layers(bitmap))
+		return;
 	if (!(pixels = ALLOC_UNSET((size_t)width * height * 4)))
 		return;
 	canvas_pixels(bitmap->surface, 0, 0, width, height, pixels, width * 4, 0);
@@ -3576,6 +3728,7 @@ static void present(struct target *self)
 					ID3D11DeviceContext_Release(context);
 				ID3D11Device_Release(device);
 			}
+			held_draw_all(bitmap, resource);
 			ID3D11Resource_Release(resource);
 		}
 	}
@@ -7311,11 +7464,70 @@ static void effect_render(struct effect *effect, const struct link *inputs, UINT
 		node_render(effect->graph, effect->graph->output, inputs, count, area, out, depth + 1);
 }
 
+/* An effect whose output is a bitmap moved by an offset, as a program shows a picture at its own size: the bitmap's bytes are its
+ * output, with nothing to work out. With `held` given, a part of some size is left there for the texture, as effect_bytes leaves a
+ * drawing, and nothing is returned; what is held then draws its first input as it is. */
+static BYTE *offset_bytes(struct effect_graph *graph, const struct link *links, UINT32 link_count, const D2D1_RECT_L *area,
+	struct held_draw *held)
+{
+	const struct transform_node *made = (const struct transform_node *)graph->nodes[graph->output].node;
+	struct link link;
+	struct bitmap *source;
+	D2D1_RECT_L whole, covered = nothing, wanted, drawn;
+	BYTE *out, *read = NULL;
+	UINT32 row;
+	if (!node_link(graph, graph->output, 0, links, link_count, &link) || !link.image ||
+		!(source = (struct bitmap *)image_bitmap(link.image)))
+		return NULL;
+	if (source->format.format != DXGI_FORMAT_B8G8R8A8_UNORM || source->format.alphaMode != D2D1_ALPHA_MODE_PREMULTIPLIED ||
+		!(out = ALLOC((size_t)rect_width(area) * rect_height(area) * 4))) {
+		object_Release(source);
+		return NULL;
+	}
+	whole.left = whole.top = 0;
+	whole.right = (LONG)source->pixels.width;
+	whole.bottom = (LONG)source->pixels.height;
+	link_bounds(&link, &covered, 1);
+	wanted = rect_moved(area, -made->offset.x, -made->offset.y);
+	wanted = rect_intersect(&wanted, &covered);
+	wanted = rect_intersect(&wanted, &whole);
+	drawn = rect_moved(&wanted, made->offset.x, made->offset.y);
+	if (!rect_empty(&wanted) && (read = ALLOC_UNSET((size_t)rect_width(&wanted) * rect_height(&wanted) * 4))) {
+		if (source->dxgi) {
+			const RECT texture = {wanted.left, wanted.top, wanted.right, wanted.bottom};
+			read_texture(source, &texture);
+		}
+		share_in(source);
+		canvas_pixels(source->surface, wanted.left, wanted.top, rect_width(&wanted), rect_height(&wanted), read, rect_width(&wanted) * 4, 0);
+		if (held && (UINT64)rect_width(&drawn) * rect_height(&drawn) >= 200 * 200) {
+			memset(&held->images[0], 0, sizeof(held->images[0]));
+			held->images[0].left = drawn.left;
+			held->images[0].top = drawn.top;
+			held->images[0].width = rect_width(&drawn);
+			held->images[0].height = rect_height(&drawn);
+			held->bytes[0] = read;
+			held->count = 1;
+			held->drawn = drawn;
+			read = NULL;
+			FREE(out);
+			out = NULL;
+		} else
+			for (row = 0; row < rect_height(&drawn); ++row)
+				memcpy(out + (((size_t)(drawn.top - area->top + row) * rect_width(area)) + (drawn.left - area->left)) * 4,
+					read + (size_t)row * rect_width(&drawn) * 4, (size_t)rect_width(&drawn) * 4);
+	}
+	FREE(read);
+	object_Release(source);
+	return out;
+}
+
 /* An effect whose output is one draw transform over bitmaps is drawn in bytes from end to end: the bitmaps' bytes go to the shader as they
  * are and what it gives comes back as bytes, where the floats effects pass between them would be made and unmade for every pixel of every
  * frame, as for the effect paint.net shows its whole document through. The bytes of `area`, blue first and premultiplied, or NULL when the
  * effect is not of that kind. */
-static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT32 link_count, const D2D1_RECT_L *area)
+/* With `held` given, a drawing of some size with inputs is not run: what it takes to run it is left there for the texture (see
+ * held_draw), and nothing is returned. */
+static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT32 link_count, const D2D1_RECT_L *area, struct held_draw *held)
 {
 	struct effect_graph *graph;
 	struct graph_node *node;
@@ -7335,6 +7547,8 @@ static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT3
 		return NULL;
 	node = &graph->nodes[graph->output];
 	info = node->info;
+	if (node->kind == NODE_OFFSET)
+		return offset_bytes(graph, links, link_count, area, held);
 	if (node->kind != NODE_DRAW || !info || !info->shaded || !(shader = find_shader(&info->shader)))
 		return NULL;
 	count = node_input_count(node->node);
@@ -7386,6 +7600,22 @@ static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT3
 			if (kept && !memcmp(&kept->shader, &info->shader, sizeof(GUID)) && kept->size == info->constant_size &&
 				(!info->constant_size || !memcmp(kept->constants, info->constants, info->constant_size))) {
 				drawing = kept->bytes;
+			} else if (held && count && (UINT64)rect_width(&drawn) * rect_height(&drawn) >= 200 * 200 &&
+				(!info->constant_size || (held->constants = ALLOC_UNSET(info->constant_size)))) {
+				if (info->constant_size)
+					memcpy(held->constants, info->constants, info->constant_size);
+				held->constant_size = info->constant_size;
+				held->code = shader->code;
+				held->size = shader->size;
+				held->count = count;
+				held->drawn = drawn;
+				for (input = 0; input < count; ++input) {
+					held->images[input] = images[input];
+					held->bytes[input] = read[input];
+					read[input] = NULL;
+				}
+				FREE(out);
+				out = NULL;
 			} else if ((result = ALLOC_UNSET((size_t)rect_width(&drawn) * rect_height(&drawn) * 4))) {
 				if (SUCCEEDED(shader_run(shader->code, shader->size, info->constants, info->constant_size, images, count, drawn.left, drawn.top,
 						rect_width(&drawn), rect_height(&drawn), NULL, result)))
@@ -7429,6 +7659,42 @@ static BYTE *effect_bytes(struct effect *effect, const struct link *links, UINT3
 			object_Release(sources[input]);
 	}
 	return out;
+}
+
+/* Whether what is pushed on a target leaves a drawing over `area`, moved by `world`, as it is: nothing but clips along the axes, set
+ * in pixels, that hold all of it. */
+static BOOL clips_hold(const struct target *self, const D2D1_RECT_L *area, const D2D1_MATRIX_3X2_F *world)
+{
+	static const float still[6] = {1, 0, 0, 1, 0, 0};
+	const float left = area->left + world->_31, top = area->top + world->_32, right = area->right + world->_31,
+		bottom = area->bottom + world->_32;
+	UINT32 index;
+	if (self->pushed > ARRAYSIZE(self->pushes))
+		return FALSE;
+	for (index = 0; index < self->pushed; ++index) {
+		const struct command *pushed = &self->pushes[index].command;
+		if (pushed->op != OP_PUSH_CLIP || memcmp(pushed->transform, still, sizeof(still)) || pushed->rect[0] > left || pushed->rect[1] > top ||
+			pushed->rect[2] < right || pushed->rect[3] < bottom)
+			return FALSE;
+	}
+	return TRUE;
+}
+
+/* Whether the texture behind a bitmap can be drawn into as it is: one sample a pixel, bound as a render target, in a format the
+ * drawings kept for it are written in. */
+static BOOL texture_drawable(struct bitmap *bitmap)
+{
+	ID3D11Texture2D *texture = NULL;
+	D3D11_TEXTURE2D_DESC desc;
+	BOOL fits = FALSE;
+	if (!bitmap->dxgi || FAILED(IDXGISurface_QueryInterface(bitmap->dxgi, &IID_ID3D11Texture2D, (void **)&texture)))
+		return FALSE;
+	ID3D11Texture2D_GetDesc(texture, &desc);
+	fits = (desc.BindFlags & D3D11_BIND_RENDER_TARGET) && desc.SampleDesc.Count == 1 && desc.Width == bitmap->pixels.width &&
+		desc.Height == bitmap->pixels.height && (desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+		desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+	ID3D11Texture2D_Release(texture);
+	return fits;
 }
 
 /* What DrawImage draws of an effect: the part of its output that falls on the target, rendered and then drawn as a bitmap at its place,
@@ -7475,10 +7741,65 @@ static void draw_effect(struct target *self, struct effect *effect, const D2D1_P
 		area = rect_intersect(&area, &asked);
 	}
 	area = rect_held(rect_intersect(&area, &covered));
+	/* The clips pushed on the target bound what of the image can show, and so what of it is made: a program that draws its whole
+	   picture through an effect, inside a clip around the part that changed, has that part alone worked out. */
+	if (self->pushed <= ARRAYSIZE(self->pushes) && world._11 == 1 && world._22 == 1 && world._12 == 0 && world._21 == 0) {
+		static const float still[6] = {1, 0, 0, 1, 0, 0};
+		UINT32 pushed;
+		for (pushed = 0; pushed < self->pushed; ++pushed) {
+			const struct command *clip = &self->pushes[pushed].command;
+			if (clip->op == OP_PUSH_CLIP && !memcmp(clip->transform, still, sizeof(still))) {
+				const D2D1_RECT_L inside = {float_edge(clip->rect[0] - world._31, 0), float_edge(clip->rect[1] - world._32, 0),
+					float_edge(clip->rect[2] - world._31, 1), float_edge(clip->rect[3] - world._32, 1)};
+				area = rect_intersect(&area, &inside);
+			}
+		}
+		area = rect_held(area);
+	}
 	if (rect_empty(&area))
 		return;
 	size = (size_t)rect_width(&area) * rect_height(&area);
-	if (!(bytes = effect_bytes(effect, links, count, &area))) {
+	{
+		/* A target over a texture that can be drawn into, with nothing pushed on it and nothing but a whole-pixel move between the
+		   image and its pixels, has the drawing made in the texture when the frame ends (see held_draw). */
+		struct bitmap *onto = self->bitmap;
+		const BOOL holds = onto->dxgi && clips_hold(self, &area, &world) && self->blend == D2D1_PRIMITIVE_BLEND_SOURCE_OVER &&
+			onto->held_count < HELD_DRAWS &&
+			world._11 == 1 && world._22 == 1 && world._12 == 0 && world._21 == 0 && world._31 == (float)(INT32)world._31 &&
+			world._32 == (float)(INT32)world._32 && self->dpi_x == 96 && self->dpi_y == 96 && texture_drawable(onto);
+		struct held_draw held;
+		memset(&held, 0, sizeof(held));
+		bytes = effect_bytes(effect, links, count, &area, holds ? &held : NULL);
+		if (held.count) {
+			held.x = held.drawn.left + (INT32)world._31;
+			held.y = held.drawn.top + (INT32)world._32;
+			if (!onto->held_count) {
+				/* What is drawn from here on starts on clear pixels of the target's size. */
+				struct command clear;
+				if (!onto->over && !(onto->over = RavenCanvasCreate(onto->pixels.width, onto->pixels.height))) {
+					FREE(held.constants);
+					for (at = 0; at < SHADER_INPUTS; ++at)
+						FREE(held.bytes[at]);
+					memset(&held, 0, sizeof(held));
+					bytes = effect_bytes(effect, links, count, &area, NULL);
+					goto drawn_aside;
+				}
+				command_start(self, &clear, OP_CLEAR);
+				put_matrix(clear.transform, &identity);
+				queue_command(self, onto->over, &clear, NULL, 0);
+				/* The clips in force hold for what is drawn from here on as well. */
+				for (at = 0; at < self->pushed; ++at)
+					queue_command(self, onto->over, &self->pushes[at].command, self->pushes[at].data, self->pushes[at].size);
+				onto->over_shared = self->pushed;
+				onto->over_drawn = FALSE;
+			}
+			onto->held[onto->held_count++] = held;
+			self->drawn = TRUE;
+			return;
+		}
+	}
+drawn_aside:
+	if (!bytes) {
 		if (!(pixels = plane_alloc(&area)))
 			return;
 		/* A target of floats keeps a color above its alpha, as Direct2D's own keeps whatever is drawn into it: a program that ends its

@@ -783,8 +783,10 @@ GpStatus GDIPAPI GdipGetRegionHRgn(GpRegion *region, const GpGraphics *graphics,
 	GpStatus status = gp_region_pixels(region, graphics ? &to_device : NULL, &rects, &count);
 	if (status != Ok)
 		return status;
-	HRGN result = CreateRectRgn(0, 0, 0, 0);
-	for (INT i = 0; result && i < count; i++) {
+	// A single rectangle, the usual case, is made as it is.
+	HRGN result = count == 1 ? CreateRectRgn((INT)gp_floor(rects[0].X + 0.5f), (INT)gp_floor(rects[0].Y + 0.5f),
+		(INT)gp_floor(rects[0].X + rects[0].Width + 0.5f), (INT)gp_floor(rects[0].Y + rects[0].Height + 0.5f)) : CreateRectRgn(0, 0, 0, 0);
+	for (INT i = 0; result && count > 1 && i < count; i++) {
 		HRGN part = CreateRectRgn((INT)gp_floor(rects[i].X + 0.5f), (INT)gp_floor(rects[i].Y + 0.5f),
 			(INT)gp_floor(rects[i].X + rects[i].Width + 0.5f), (INT)gp_floor(rects[i].Y + rects[i].Height + 0.5f));
 		if (part) {

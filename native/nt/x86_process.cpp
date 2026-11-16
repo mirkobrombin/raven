@@ -15,6 +15,7 @@
 #include "guest_allocator.h"
 #include "heap.h"
 #include "kernel_context.h"
+#include "event_pulse.h"
 #include "actctx.h"
 #include "child_process.h"
 #include "paths.h"
@@ -31,6 +32,7 @@
 #include "x86_d3d9.h"
 #include "x86_dsound.h"
 #include "x86_thread_api.h"
+#include "exceptions.h"
 
 #include <unistd.h>
 #include <algorithm>
@@ -505,7 +507,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		static constexpr Rule rules[] = {{"user32.dll", "raven-user32.dll", "raven-user32."}, {"comdlg32.dll", "raven-shell.dll", "raven-shell."},
 			{"ole32.dll", "raven-shell.dll", "raven-shell."}, {"shell32.dll", "raven-shell.dll", "raven-shell."}, {"msvcrt.dll", "ucrtbase.dll", "ucrtbase."}, {"shlwapi.dll", "raven-shell.dll", "raven-shell."}, {"setupapi.dll", "raven-setupapi.dll", "raven-setupapi."},
 			{"ole32.dll", "raven-storage.dll", "raven-storage."}, {"combase.dll", "raven-shell.dll", "raven-shell."}, {"runtimeobject.dll", "raven-shell.dll", "raven-shell."},
-			{"api-ms-win-core-winrt-l1-1-0.dll", "raven-shell.dll", "raven-shell."}};
+			{"api-ms-win-core-winrt-l1-1-0.dll", "raven-shell.dll", "raven-shell."},
+			{"msacm32.dll", "raven-msacm32.dll", "raven-msacm32."}};
 		for (const auto &rule : rules) {
 			if (library != rule.library)
 				continue;
@@ -931,7 +934,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	VulkanThunk32 vulkan32(process, vulkan);
 #endif
 	windows.set_presentation(std::move(presentation));
-	desktop.set_updated([&](uint64_t window) { windows.drawing(window); });
+	desktop.set_updated([&](uint64_t window,const DesktopRect *area) { windows.drawing(window,area); });
 	struct ProcessExit { uint32_t code; uint64_t instruction; };
 	// CoGetMalloc hands out one allocator object, whose methods are the task allocator's handlers.
 	uint64_t malloc_object = 0;
@@ -991,7 +994,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	// instruction go on the stack below it, and the C runtime component dispatches them in the program, to its vectored handlers and
 	// the frames its threads register. The .NET runtime turns the null check of compiled code into a NullReferenceException there.
 	const auto dispatch_fault = [&](const NativeResult &fault) {
-		if (fault.signal != SIGSEGV && fault.signal != SIGBUS && fault.signal != SIGFPE && fault.signal != SIGILL)
+		if (fault.signal != SIGSEGV && fault.signal != SIGBUS && fault.signal != SIGFPE && fault.signal != SIGILL && fault.signal != SIGTRAP)
 			return false;
 		const auto component = modules.all().find("ucrtbase.dll");
 		if (component == modules.all().end())
@@ -1004,17 +1007,9 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			return false;
 		auto native = process.context();
 		const auto &r = native.registers;
-		uint32_t status = 0xc0000005U;
-		std::vector<uint32_t> parameters;
-		switch (fault.signal) {
-		case SIGSEGV: parameters = {0, uint32_t(fault.fault_address)}; break;
-		case SIGBUS: status = 0xc0000006U; parameters = {0, uint32_t(fault.fault_address), 0xc0000006U}; break;
-		case SIGFPE:
-			status = fault.signal_code == FPE_INTDIV ? 0xc0000094U : fault.signal_code == FPE_INTOVF ? 0xc0000095U :
-				fault.signal_code == FPE_FLTDIV ? 0xc000008eU : fault.signal_code == FPE_FLTOVF ? 0xc0000091U : 0xc000008fU;
-			break;
-		default: status = 0xc000001dU; break;
-		}
+		const auto raised = processor_exception(process, fault, uint32_t(r.rip));
+		const uint32_t status = raised.status, address = uint32_t(raised.address);
+		const auto &parameters = raised.parameters;
 		// RAVEN_TRACE_FAULT names each processor fault as it is handed to the program, with the module it happened in.
 		if (std::getenv("RAVEN_TRACE_FAULT")) {
 			std::cerr << "raven: fault 0x" << std::hex << status << " at 0x" << uint32_t(r.rip);
@@ -1040,9 +1035,9 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		put(context, 0, 0x10007);
 		put(context, 140, r.gs); put(context, 144, r.fs); put(context, 148, r.es); put(context, 152, r.ds);
 		put(context, 156, r.rdi); put(context, 160, r.rsi); put(context, 164, r.rbx); put(context, 168, r.rdx);
-		put(context, 172, r.rcx); put(context, 176, r.rax); put(context, 180, r.rbp); put(context, 184, r.rip);
+		put(context, 172, r.rcx); put(context, 176, r.rax); put(context, 180, r.rbp); put(context, 184, address);
 		put(context, 188, r.cs); put(context, 192, r.eflags); put(context, 196, r.rsp); put(context, 200, r.ss);
-		put(record, 0, status); put(record, 12, r.rip); put(record, 16, parameters.size());
+		put(record, 0, status); put(record, 12, address); put(record, 16, parameters.size());
 		for (size_t index = 0; index < parameters.size(); ++index)
 			put(record, 20 + index * 4, parameters[index]);
 		// Room is left under the faulting stack pointer: resuming builds its last words there.
@@ -1446,6 +1441,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_platform_api(shared_api, kernel);
 	register_actctx_api(shared_api, kernel);
 	register_mmio_api(shared_api, kernel);
+	register_pulse_event(shared_api, kernel);
 	register_process_api(shared_api, kernel);
 	register_thread_api(shared_api, kernel);
 	register_sync_api(shared_api, kernel);
@@ -1490,6 +1486,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		guest_threads.block(std::move(ready),until);
 	});
+	windows.set_input_taken([&guest_threads] { guest_threads.took_input(); });
 	// A message sent to a window of another thread waits for that thread to run its procedure.
 	windows.set_block([&guest_threads](std::function<bool()> ready) {
 		HostWait waiting;

@@ -30,6 +30,7 @@ static const GUID swap_shader = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 
 static const CLSID generator_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x01}};
 static const CLSID swap_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x02}};
 static const CLSID chain_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x03}};
+static const CLSID moved_effect = {0x6e2f0c11, 0x1d2a, 0x4b4e, {0x9a, 0x51, 0x2b, 0x70, 0x0c, 0x3d, 0x22, 0x04}};
 
 // Green left of x = 2 and blue from there, by the position Direct2D gives each pixel and the two colors the transform sets.
 static const char generator_source[] =
@@ -115,7 +116,7 @@ struct impl {
 	void **table;
 	int kind;
 };
-enum { GENERATOR, SWAP, CHAIN };
+enum { GENERATOR, SWAP, CHAIN, MOVED };
 
 static HRESULT STDMETHODCALLTYPE impl_QueryInterface(void *self, REFIID iid, void **out)
 {
@@ -141,6 +142,18 @@ static HRESULT STDMETHODCALLTYPE impl_Initialize(void *self, void *context, void
 		return ((one_node)(*(void ***)graph)[4])(graph, &generator_face);
 	case SWAP:
 		return ((one_node)(*(void ***)graph)[4])(graph, &swap_face);
+	case MOVED: {
+		// Its input as it is, moved twenty pixels right and ten down: the transform a program shows a picture at its own size with.
+		typedef HRESULT (STDMETHODCALLTYPE *offset_node)(void *, D2D1_POINT_2L, void **);
+		const D2D1_POINT_2L by = {20, 10};
+		void *node = NULL;
+		HRESULT made;
+		if (FAILED(((offset_node)(*(void ***)context)[9])(context, by, &node)))
+			return E_FAIL;
+		made = ((one_node)(*(void ***)graph)[4])(graph, node);
+		IUnknown_Release((IUnknown *)node);
+		return made;
+	}
 	default: {
 		ID2D1Effect *premultiply = NULL;
 		void *node = NULL;
@@ -160,10 +173,11 @@ static HRESULT STDMETHODCALLTYPE impl_Initialize(void *self, void *context, void
 static HRESULT STDMETHODCALLTYPE impl_PrepareForRender(void *self, UINT32 change) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE impl_SetGraph(void *self, void *graph) { return E_NOTIMPL; }
 static void *impl_table[] = {impl_QueryInterface, impl_AddRef, impl_Release, impl_Initialize, impl_PrepareForRender, impl_SetGraph};
-static struct impl impls[3] = {{impl_table, GENERATOR}, {impl_table, SWAP}, {impl_table, CHAIN}};
+static struct impl impls[4] = {{impl_table, GENERATOR}, {impl_table, SWAP}, {impl_table, CHAIN}, {impl_table, MOVED}};
 static HRESULT CALLBACK make_generator(IUnknown **out) { *out = (IUnknown *)&impls[GENERATOR]; return S_OK; }
 static HRESULT CALLBACK make_swap(IUnknown **out) { *out = (IUnknown *)&impls[SWAP]; return S_OK; }
 static HRESULT CALLBACK make_chain(IUnknown **out) { *out = (IUnknown *)&impls[CHAIN]; return S_OK; }
+static HRESULT CALLBACK make_moved(IUnknown **out) { *out = (IUnknown *)&impls[MOVED]; return S_OK; }
 
 // Whether a channel is near the value expected, as the conversions round.
 /* A lock over two by two premultiplied half floats, as paint.net hands its own bitmaps to Direct2D. */
@@ -282,7 +296,8 @@ int raven_entry(void)
 		L"<Inputs><Input name='Source'/></Inputs></Effect>";
 	if (FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &generator_effect, generator_xml, NULL, 0, make_generator)) ||
 		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &swap_effect, one_input_xml, NULL, 0, make_swap)) ||
-		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &chain_effect, one_input_xml, NULL, 0, make_chain)))
+		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &chain_effect, one_input_xml, NULL, 0, make_chain)) ||
+		FAILED(ID2D1Factory1_RegisterEffectFromString(factory, &moved_effect, one_input_xml, NULL, 0, make_moved)))
 		return 6;
 	ID2D1Effect *generator = NULL, *swap = NULL, *premultiply = NULL, *chain = NULL;
 	if (FAILED(ID2D1DeviceContext_CreateEffect(context, &generator_effect, &generator)) ||
@@ -812,6 +827,158 @@ int raven_entry(void)
 	ID2D1Bitmap1_Unmap(float_bitmap);
 	IUnknown_Release((IUnknown *)unmultiplied);
 	ID2D1Bitmap_Release(half_bitmap);
+	/* An effect of some size drawn on a surface of the program's own device, inside a clip that holds it, as paint.net shows its
+	   picture: it lies over what was drawn before it and under what is drawn after, there and beside it. A red picture with its red
+	   and blue swapped, on grey, with a green square on it and another beside it. */
+	static UINT32 shown_red[256 * 256];
+	D3D11_TEXTURE2D_DESC shown_desc = {300, 256, 1, 1, DXGI_FORMAT_B8G8R8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+		D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+	D2D1_BITMAP_PROPERTIES1 shown_properties = {{DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED}, 96, 96,
+		D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, NULL};
+	const D2D1_SIZE_U shown_source_size = {256, 256};
+	const D2D1_RECT_F whole_clip = {0, 0, 300, 256}, on_square = {4, 4, 12, 12}, beside_square = {270, 4, 280, 12};
+	const D2D1_COLOR_F green_color = {0, 1, 0, 1};
+	const D2D1_POINT_2F corner_place = {0, 0};
+	ID3D11Texture2D *shown = NULL, *shown_staging = NULL;
+	IDXGISurface *shown_surface = NULL;
+	ID2D1Bitmap1 *shown_bitmap = NULL;
+	ID2D1Bitmap *shown_source = NULL;
+	ID2D1Effect *shown_swap = NULL;
+	ID2D1SolidColorBrush *green_brush = NULL;
+	for (UINT pixel = 0; pixel < 256 * 256; ++pixel)
+		shown_red[pixel] = 0xffff0000;
+	if (FAILED(ID3D11Device_CreateTexture2D(device3d, &shown_desc, NULL, &shown)) ||
+		FAILED(ID3D11Texture2D_QueryInterface(shown, &IID_IDXGISurface, (void **)&shown_surface)) ||
+		FAILED(ID2D1DeviceContext_CreateBitmapFromDxgiSurface(surface_context, shown_surface, &shown_properties, &shown_bitmap)) ||
+		FAILED(ID2D1RenderTarget_CreateBitmap((ID2D1RenderTarget *)surface_context, shown_source_size, shown_red, 256 * 4, &bitmap_properties, &shown_source)) ||
+		FAILED(ID2D1DeviceContext_CreateEffect(surface_context, &swap_effect, &shown_swap)) ||
+		FAILED(ID2D1RenderTarget_CreateSolidColorBrush((ID2D1RenderTarget *)surface_context, &green_color, NULL, &green_brush)))
+		return 66;
+	((set_input)(*(void ***)shown_swap)[14])(shown_swap, 0, (ID2D1Image *)shown_source, TRUE);
+	output = output_of(shown_swap);
+	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)shown_bitmap);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)surface_context, &whole_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &half_grey);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)surface_context, &on_square, (ID2D1Brush *)green_brush);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)surface_context, &beside_square, (ID2D1Brush *)green_brush);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)surface_context);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 67;
+	shown_desc.Usage = D3D11_USAGE_STAGING;
+	shown_desc.BindFlags = 0;
+	shown_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	if (FAILED(ID3D11Device_CreateTexture2D(device3d, &shown_desc, NULL, &shown_staging)))
+		return 68;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 68;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL swapped = pixel_is(SHOWN(100, 100), 0, 0, 255) && pixel_is(SHOWN(250, 250), 0, 0, 255);
+	const BOOL squares = pixel_is(SHOWN(8, 8), 0, 255, 0) && pixel_is(SHOWN(275, 8), 0, 255, 0);
+	const BOOL around = pixel_is(SHOWN(290, 100), 127, 127, 127) && pixel_is(SHOWN(260, 250), 127, 127, 127);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	if (!swapped)
+		return 69;
+	if (!squares)
+		return 70;
+	if (!around)
+		return 71;
+	/* The next frame differs in a corner: the square on the picture has moved and the one beside it is gone. The surface shows the
+	   new frame whole, the picture again where the squares were. */
+	const D2D1_RECT_F moved_square = {40, 40, 48, 48};
+	output = output_of(shown_swap);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)surface_context, &whole_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &half_grey);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	ID2D1RenderTarget_FillRectangle((ID2D1RenderTarget *)surface_context, &moved_square, (ID2D1Brush *)green_brush);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)surface_context);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 72;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 72;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL moved = pixel_is(SHOWN(44, 44), 0, 255, 0);
+	const BOOL left_behind = pixel_is(SHOWN(8, 8), 0, 0, 255) && pixel_is(SHOWN(275, 8), 127, 127, 127);
+	const BOOL kept = pixel_is(SHOWN(100, 100), 0, 0, 255) && pixel_is(SHOWN(290, 100), 127, 127, 127) && pixel_is(SHOWN(260, 250), 127, 127, 127);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	if (!moved)
+		return 73;
+	if (!left_behind)
+		return 74;
+	if (!kept)
+		return 75;
+	/* A frame that draws part of the surface, inside a clip, leaves the rest as the last frame showed it: a program whose picture is
+	   larger than its window draws again only what changed. The part is cleared to white and the picture drawn in it; the square the
+	   last frame drew outside it is still there, on the picture. */
+	const D2D1_RECT_F part_clip = {60, 60, 300, 256};
+	const D2D1_COLOR_F white_color = {1, 1, 1, 1};
+	output = output_of(shown_swap);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_PushAxisAlignedClip((ID2D1RenderTarget *)surface_context, &part_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &white_color);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	ID2D1RenderTarget_PopAxisAlignedClip((ID2D1RenderTarget *)surface_context);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 76;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 76;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL part_drawn = pixel_is(SHOWN(100, 100), 0, 0, 255) && pixel_is(SHOWN(290, 100), 255, 255, 255);
+	const BOOL rest_left = pixel_is(SHOWN(44, 44), 0, 255, 0) && pixel_is(SHOWN(8, 8), 0, 0, 255) && pixel_is(SHOWN(20, 200), 0, 0, 255);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	if (!part_drawn)
+		return 77;
+	if (!rest_left)
+		return 78;
+	/* An effect that only moves its picture shows it moved, over what the frame drew before it and nowhere else. */
+	ID2D1Effect *shown_moved = NULL;
+	if (FAILED(ID2D1DeviceContext_CreateEffect(surface_context, &moved_effect, &shown_moved)))
+		return 79;
+	((set_input)(*(void ***)shown_moved)[14])(shown_moved, 0, (ID2D1Image *)shown_source, TRUE);
+	output = output_of(shown_moved);
+	ID2D1RenderTarget_BeginDraw((ID2D1RenderTarget *)surface_context);
+	ID2D1RenderTarget_Clear((ID2D1RenderTarget *)surface_context, &half_grey);
+	ID2D1DeviceContext_DrawImage(surface_context, output, &corner_place, NULL, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+		D2D1_COMPOSITE_MODE_SOURCE_OVER);
+	IUnknown_Release((IUnknown *)output);
+	if (FAILED(ID2D1RenderTarget_EndDraw((ID2D1RenderTarget *)surface_context, NULL, NULL)))
+		return 80;
+	ID3D11DeviceContext_CopyResource(immediate, (ID3D11Resource *)shown_staging, (ID3D11Resource *)shown);
+	if (FAILED(ID3D11DeviceContext_Map(immediate, (ID3D11Resource *)shown_staging, 0, D3D11_MAP_READ, 0, &mapped)))
+		return 80;
+#define SHOWN(x, y) (*(const UINT32 *)((const BYTE *)mapped.pData + (y) * mapped.RowPitch + (x) * 4))
+	const BOOL moved_shown = pixel_is(SHOWN(25, 15), 255, 0, 0) && pixel_is(SHOWN(270, 250), 255, 0, 0);
+	const BOOL moved_around = pixel_is(SHOWN(10, 100), 127, 127, 127) && pixel_is(SHOWN(100, 5), 127, 127, 127) &&
+		pixel_is(SHOWN(285, 100), 127, 127, 127);
+#undef SHOWN
+	ID3D11DeviceContext_Unmap(immediate, (ID3D11Resource *)shown_staging, 0);
+	IUnknown_Release((IUnknown *)shown_moved);
+	if (!moved_shown)
+		return 81;
+	if (!moved_around)
+		return 82;
+	ID2D1DeviceContext_SetTarget(surface_context, (ID2D1Image *)surface_bitmap);
+	IUnknown_Release((IUnknown *)green_brush);
+	IUnknown_Release((IUnknown *)shown_swap);
+	ID2D1Bitmap_Release(shown_source);
+	IUnknown_Release((IUnknown *)shown_bitmap);
+	IUnknown_Release((IUnknown *)shown_surface);
+	ID3D11Texture2D_Release(shown_staging);
+	ID3D11Texture2D_Release(shown);
 	IUnknown_Release((IUnknown *)managed);
 	ID2D1Bitmap_Release(dark_bitmap);
 	ID2D1Bitmap_Release(grey_bitmap);

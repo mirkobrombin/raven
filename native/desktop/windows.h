@@ -42,6 +42,8 @@ public:
 	void set_deadline(std::chrono::steady_clock::time_point deadline);
 	// Parks a message waiter while other guest threads run, until input arrives or the next timer is due.
 	void set_message_wait(std::function<void(std::function<bool()>,std::chrono::steady_clock::time_point)> wait) { message_wait = std::move(wait); }
+	// Told when a thread takes a message of the mouse or the keyboard from its queue, for the scheduler to favor that thread.
+	void set_input_taken(std::function<void()> taken) { input_taken = std::move(taken); }
 	// How a thread waiting for messages sleeps when every other thread waits too: until the time `until` allows for the other threads,
 	// on their descriptors besides the display's, then `drain` takes back what woke it (see NativeThreads::idle_until).
 	void set_idle_sources(std::function<std::chrono::steady_clock::time_point(std::chrono::steady_clock::time_point)> until,
@@ -71,9 +73,10 @@ public:
 	// the offsets in a record. The runtime brings the records of the windows it touched up to date before the guest runs again; a
 	// window changed by a call stays touched until the outermost call in progress returns, as the call may change it after a callback.
 	// The last eight bytes of a record hold the client area's origin on the screen.
-	static constexpr size_t window_records=512, window_record=256, window_extra_bytes=88, window_origin=248;
-	// The focus window, published in the served block with the table: a flag, then the handle.
-	static constexpr size_t focus_published=0x710, focus_window=0x718;
+	static constexpr size_t window_records=512, window_record=256, window_extra_bytes=80, window_owner=240, window_origin=248;
+	// The focus window, published in the served block with the table: a flag, then the handle. The foreground window and the pointer's
+	// screen position go beside it, under the same flag.
+	static constexpr size_t focus_published=0x710, focus_window=0x718, foreground_window=0x798, cursor_position=0x7a0;
 	void set_window_table(uint8_t *table);
 	// The menu table the guest's menu preludes read: 1024 slots of 16 bytes (handle, block offset, item count) at the handle's low ten
 	// bits, then the blocks: an item of 32 bytes each (type, state, identifier, text length, submenu, text offset) and their texts.
@@ -108,6 +111,8 @@ public:
 	// send or draw, and so does a message queued for it. Input arriving clears every slot (see watch_input).
 	static constexpr size_t quiet_slots=64, quiet_slot=16;
 	void set_quiet_table(uint8_t *table) { quiet_table=table; publish_hooks(); }
+	// The page the key states GetKeyState answers from are published in, as the program reads them between its stops.
+	void set_key_table(uint8_t *table) { key_table=table; publish_keys(); }
 	// After the slots, in the same page: the hook chain in calling order, a count (above hook_entries when it does not fit) and then
 	// each hook's handle, kind and thread (0 for every thread), for CallNextHookEx to see in the guest that no hook follows.
 	static constexpr size_t hook_table_at=quiet_slots*quiet_slot, hook_entries=64, hook_entry=16;
@@ -128,13 +133,17 @@ public:
 	void take_deferred(const std::function<void(uint32_t,uint64_t)> &apply);
 	// In the served block: bit 0 when the flags are published, bit 1 while a message filter hook is installed; then the desktop window.
 	static constexpr size_t loop_flags=0x738, desktop_handle=0x740;
+	// Counts the changes to the tables the guest reads, in the served block: odd while one is being made. The threads of a guest that
+	// run while the runtime serves another read a table only between two looks at an even count that did not change.
+	static constexpr size_t table_version=0x7b0;
 	void publish_windows();
 	void api_entered() { ++api_depth; }
 	void api_left();
 	// user32 entry points that follow the shared registry conventions; every handler runs on the calling guest thread.
 	void register_api(ApiRegistry &registry);
 	// Drawing marks the surface dirty; the next message retrieval presents it, so a burst of primitives costs one frame.
-	void drawing(uint64_t window);
+	void drawing(uint64_t window, const DesktopRect *area = nullptr);
+	void present_drawn(uint64_t window);
 	void flush_dirty(bool force = false);
 	// Whether a message, paint request or due timer waits for the guest; host input is delivered to the windows on the way, so this
 	// runs only inside a call of the guest thread.
@@ -236,6 +245,8 @@ private:
 	void publish_icons();
 	uint8_t *region_table=nullptr;
 	uint8_t *quiet_table=nullptr;
+	uint8_t *key_table=nullptr;
+	void publish_keys() { if (key_table && std::memcmp(key_table,vk_state.data(),vk_state.size())) std::memcpy(key_table,vk_state.data(),vk_state.size()); }
 	void publish_region(uint64_t handle);
 	void publish_regions();
 	// The accelerator tables, the loop flags, the desktop and focus windows.
@@ -265,10 +276,18 @@ private:
 	struct Retrieved { uint32_t time=0; int32_t x=0,y=0; };
 	std::map<uint32_t,Retrieved> retrieved;
 	std::set<uint64_t> dirty_roots;
+	// What is known of a dirty root's changes: a rectangle of its surface that holds them all, while every drawing since its last frame
+	// said where it could reach, or the root among those something changed without saying where. The rectangle of the frame being
+	// presented, when it has one, and the frames of the windows whose frame shows through their client area, as they were presented.
+	std::map<uint64_t, DesktopRect> dirty_areas;
+	std::set<uint64_t> dirty_whole;
+	std::optional<DesktopRect> presenting;
+	std::map<uint64_t, std::vector<uint8_t>> glazed_frames;
 	bool dumped=false;
 	std::chrono::steady_clock::time_point started=std::chrono::steady_clock::now();
 	std::chrono::steady_clock::time_point deadline;
 	std::function<void(std::function<bool()>,std::chrono::steady_clock::time_point)> message_wait;
+	std::function<void()> input_taken;
 	std::function<std::chrono::steady_clock::time_point(std::chrono::steady_clock::time_point)> idle_until;
 	std::function<void(std::vector<pollfd> &)> idle_descriptors;
 	std::function<void()> idle_drain;
@@ -286,7 +305,7 @@ private:
 	bool keep_host_window=false;
 	// A top-level window's surface released while it is resized, kept for the new size when it fits: making a surface maps fresh pages
 	// into both processes.
-	struct SpareSurface { std::shared_ptr<SharedPixels> pixels; uint64_t address=0; size_t size=0; };
+	struct SpareSurface { std::shared_ptr<SharedPixels> pixels; uint64_t address=0; size_t size=0; uint32_t width=0,height=0; };
 	std::map<uint64_t,SpareSurface> spare_surfaces;
 	bool resizing=false;
 	// Windows that SetWindowPos is placing: their WM_MOVE and WM_SIZE come from the default answer to WM_WINDOWPOSCHANGED instead.
@@ -309,6 +328,8 @@ private:
 	// Whether nothing has been drawn into the window's client area yet: its surface still holds only zeros or what erasing it left,
 	// or there is none.
 	bool blank_client(uint64_t handle) const;
+	// The pixel a top-level window's surface holds where nothing was drawn yet (see surface_dc).
+	uint32_t unpainted_pixel(const DesktopWindow &window) const;
 	KeyboardMap keyboard_map;
 	std::array<bool,256> key_down{};
 	// The key each held key went down as, so its release matches its press after a keymap change.

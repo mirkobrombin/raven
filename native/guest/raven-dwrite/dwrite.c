@@ -382,7 +382,14 @@ static const WCHAR *aliases[][2] = {
 	{L"Verdana", L"DejaVu Sans"}, {L"Microsoft Sans Serif", L"Liberation Sans"}, {L"MS Shell Dlg", L"DejaVu Sans"}, {L"MS Shell Dlg 2", L"Raven Sans"},
 	{L"Calibri", L"Noto Sans"}, {L"Consolas", L"DejaVu Sans Mono"}, {L"Lucida Console", L"DejaVu Sans Mono"}, {L"Georgia", L"DejaVu Serif"},
 	{L"Trebuchet MS", L"Noto Sans"}, {L"Segoe UI Emoji", L"Noto Sans"}, {L"Segoe UI Symbol", L"DejaVu Sans"}, {L"Cambria", L"DejaVu Serif"},
-	{L"Palatino Linotype", L"DejaVu Serif"}, {L"Symbol", L"DejaVu Sans"}, {L"MS Gothic", L"DejaVu Sans Mono"},
+	{L"Palatino Linotype", L"DejaVu Serif"}, {L"Symbol", L"DejaVu Sans"}, {L"MS Gothic", L"Noto Sans Mono CJK JP"},
+	/* The families a WPF composite font names for the scripts Arial lacks: Chinese, Japanese and Korean, and the wide Unicode fonts. */
+	{L"Meiryo", L"Noto Sans CJK JP"}, {L"Meiryo UI", L"Noto Sans CJK JP"}, {L"Yu Gothic", L"Noto Sans CJK JP"}, {L"Yu Gothic UI", L"Noto Sans CJK JP"},
+	{L"MS PGothic", L"Noto Sans CJK JP"}, {L"MS UI Gothic", L"Noto Sans CJK JP"}, {L"Microsoft YaHei", L"Noto Sans CJK SC"},
+	{L"Microsoft YaHei UI", L"Noto Sans CJK SC"}, {L"SimHei", L"Noto Sans CJK SC"}, {L"SimSun", L"Noto Serif CJK SC"}, {L"NSimSun", L"Noto Serif CJK SC"},
+	{L"Microsoft JhengHei", L"Noto Sans CJK TC"}, {L"Microsoft JhengHei UI", L"Noto Sans CJK TC"}, {L"PMingLiU", L"Noto Serif CJK TC"},
+	{L"Malgun Gothic", L"Noto Sans CJK KR"}, {L"Gulim", L"Noto Sans CJK KR"}, {L"Batang", L"Noto Serif CJK KR"},
+	{L"Lucida Sans Unicode", L"DejaVu Sans"}, {L"Arial Unicode MS", L"DejaVu Sans"},
 };
 
 /* The free families that stand for one another when the host lacks one, so an alias still lands on a font of the same kind. */
@@ -390,13 +397,17 @@ static const WCHAR *stand_ins[][2] = {
 	{L"Raven Sans", L"DejaVu Sans"}, {L"Noto Sans", L"Liberation Sans"}, {L"Liberation Sans", L"DejaVu Sans"}, {L"DejaVu Sans", L"Liberation Sans"},
 	{L"Liberation Serif", L"DejaVu Serif"}, {L"DejaVu Serif", L"Liberation Serif"},
 	{L"Liberation Mono", L"DejaVu Sans Mono"}, {L"DejaVu Sans Mono", L"Liberation Mono"},
+	{L"Noto Sans Mono CJK JP", L"Noto Sans Mono CJK SC"}, {L"Noto Sans Mono CJK SC", L"DejaVu Sans Mono"},
+	{L"Noto Sans CJK SC", L"Noto Sans CJK JP"}, {L"Noto Sans CJK TC", L"Noto Sans CJK SC"}, {L"Noto Sans CJK KR", L"Noto Sans CJK SC"},
+	{L"Noto Sans CJK JP", L"Droid Sans Fallback"}, {L"Noto Serif CJK SC", L"Noto Sans CJK SC"}, {L"Noto Serif CJK TC", L"Noto Serif CJK SC"},
+	{L"Noto Serif CJK KR", L"Noto Serif CJK SC"},
 };
 
 /* The family an alias names, or the first stand-in for it the host has. */
 static FamilyEntry *alias_target(const WCHAR *name)
 {
 	int hop;
-	for (hop = 0; hop < 3 && name; ++hop) {
+	for (hop = 0; hop < 5 && name; ++hop) {
 		FamilyEntry *found = find_family(name);
 		size_t index;
 		const WCHAR *next = NULL;
@@ -1245,7 +1256,16 @@ static HRESULT STDMETHODCALLTYPE face_outline(IDWriteFontFace *self, FLOAT em, c
 	ID2D1SimplifiedGeometrySink_SetFillMode(sink, D2D1_FILL_MODE_WINDING);
 	for (index = 0; index < count; ++index) {
 		DWORD size = RavenFontOutline(face->data->host, glyphs[index], NULL, 0);
-		float shift_x = pen + (offsets ? offsets[index].advanceOffset : 0), shift_y = offsets ? -offsets[index].ascenderOffset : 0;
+		float advance = advances ? advances[index] : 0, shift_x, shift_y = offsets ? -offsets[index].ascenderOffset : 0;
+		if (!advances) {
+			INT32 raw[7] = {0};
+			if (cached_metrics(face->data->host, glyphs[index], raw))
+				advance = (float)raw[1] * scale;
+		}
+		/* Right to left, as a run of odd bidi level: each glyph sits left of the one before it. */
+		if (rtl)
+			pen -= advance;
+		shift_x = rtl ? pen - (offsets ? offsets[index].advanceOffset : 0) : pen + (offsets ? offsets[index].advanceOffset : 0);
 		if (size) {
 			BYTE *records = ALLOC(size);
 			if (records && RavenFontOutline(face->data->host, glyphs[index], records, size) == size) {
@@ -1292,13 +1312,8 @@ static HRESULT STDMETHODCALLTYPE face_outline(IDWriteFontFace *self, FLOAT em, c
 			if (records)
 				FREE(records);
 		}
-		if (advances)
-			pen += advances[index];
-		else {
-			INT32 raw[7] = {0};
-			if (cached_metrics(face->data->host, glyphs[index], raw))
-				pen += (float)raw[1] * scale;
-		}
+		if (!rtl)
+			pen += advance;
 	}
 	return S_OK;
 }
@@ -3282,6 +3297,7 @@ static HRESULT create_analysis(const DWRITE_GLYPH_RUN *run, const DWRITE_MATRIX 
 	Face *face;
 	UINT32 index;
 	float pen = 0;
+	BOOL rtl;
 	*result = NULL;
 	if (!run || !run->fontFace || !run->fontEmSize || (run->glyphCount && !run->glyphIndices))
 		return E_INVALIDARG;
@@ -3321,9 +3337,22 @@ static HRESULT create_analysis(const DWRITE_GLYPH_RUN *run, const DWRITE_MATRIX 
 		analysis->matrix[2] = fixed(transform->m21);
 		analysis->matrix[3] = fixed(transform->m22);
 	}
+	/* A run of odd bidi level reads right to left: the origin is its right end, each glyph sits left of the one before it and an
+	 * advance offset moves a glyph further left. */
+	rtl = run->bidiLevel & 1;
 	for (index = 0; index < run->glyphCount; ++index) {
 		float dx = run->glyphOffsets ? run->glyphOffsets[index].advanceOffset : 0, dy = run->glyphOffsets ? -run->glyphOffsets[index].ascenderOffset : 0;
-		float x = pen + dx, y = dy;
+		float advance = 0, x, y = dy;
+		if (run->glyphAdvances)
+			advance = run->glyphAdvances[index];
+		else {
+			INT32 raw[7] = {0};
+			if (cached_metrics(face->data->host, run->glyphIndices[index], raw))
+				advance = (float)raw[1] * run->fontEmSize / (float)face->data->info[0];
+		}
+		if (rtl)
+			pen -= advance;
+		x = rtl ? pen - dx : pen + dx;
 		/* The transform moves the pen as well as the glyph. */
 		if (transform) {
 			float tx = x * transform->m11 + y * transform->m21 + transform->dx, ty = x * transform->m12 + y * transform->m22 + transform->dy;
@@ -3332,13 +3361,8 @@ static HRESULT create_analysis(const DWRITE_GLYPH_RUN *run, const DWRITE_MATRIX 
 		}
 		analysis->positions[index * 2] = origin_x + x;
 		analysis->positions[index * 2 + 1] = origin_y + y;
-		if (run->glyphAdvances)
-			pen += run->glyphAdvances[index];
-		else {
-			INT32 raw[7] = {0};
-			if (cached_metrics(face->data->host, run->glyphIndices[index], raw))
-				pen += (float)raw[1] * run->fontEmSize / (float)face->data->info[0];
-		}
+		if (!rtl)
+			pen += advance;
 	}
 	*result = (IDWriteGlyphRunAnalysis *)analysis;
 	return S_OK;

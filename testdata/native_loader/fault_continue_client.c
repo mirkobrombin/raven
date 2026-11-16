@@ -1,6 +1,8 @@
 // A read through a null pointer is an access violation the program's handlers hear, and one that changes the registers and continues
 // execution resumes where it says, as the .NET runtime turns the null check of compiled code into a NullReferenceException; a 32-bit
-// program also hears it in the frames it registers. The exit code names the first check that failed.
+// program also hears it in the frames it registers. An instruction user mode may not run and an int3 are the exceptions Windows
+// raises for them, PRIV_INSTRUCTION and BREAKPOINT, both naming the instruction itself, as the virtual machine and debugger checks of
+// protected programs expect. The exit code names the first check that failed.
 #include <windows.h>
 
 static DWORD handled;
@@ -44,6 +46,43 @@ static LONG CALLBACK vectored(EXCEPTION_POINTERS *pointers)
 	return skip_load(pointers->ExceptionRecord, pointers->ContextRecord, 0x1234) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* Skips the faulting instruction of `length` bytes when the exception is `code` and both the record and the context name it. */
+static DWORD expected_code, expected_length;
+static ULONG_PTR expected_address;
+
+static LONG CALLBACK skip_instruction(EXCEPTION_POINTERS *pointers)
+{
+	EXCEPTION_RECORD *record = pointers->ExceptionRecord;
+	CONTEXT *context = pointers->ContextRecord;
+#ifdef __x86_64__
+	ULONG_PTR *ip = (ULONG_PTR *)&context->Rip;
+#else
+	DWORD *ip = &context->Eip;
+#endif
+	if (record->ExceptionCode != expected_code || (ULONG_PTR)record->ExceptionAddress != expected_address || *ip != expected_address)
+		return EXCEPTION_CONTINUE_SEARCH;
+	*ip += expected_length;
+	++handled;
+	return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+/* Runs `in eax, dx` or `int3` at a label whose address the handler checks against. */
+static void port_read(void)
+{
+	__asm__ volatile(".globl port_read_at\nport_read_at:\n\tin %%dx, %%eax" : : "d"(0x5658) : "eax", "memory");
+}
+
+static void breakpoint(void)
+{
+	__asm__ volatile(".globl breakpoint_at\nbreakpoint_at:\n\tint3" : : : "memory");
+}
+
+#ifdef __x86_64__
+extern char port_read_at[], breakpoint_at[];
+#else
+extern char port_read_at[] __asm__("port_read_at"), breakpoint_at[] __asm__("breakpoint_at");
+#endif
+
 #ifndef __x86_64__
 typedef struct registration {
 	struct registration *next;
@@ -80,5 +119,22 @@ int raven_entry(void)
 	if (first != 0x11111111 || second != 0x22222222)
 		return 5;
 #endif
+	cookie = AddVectoredExceptionHandler(1, skip_instruction);
+	if (!cookie)
+		return 6;
+	const DWORD before = handled;
+	expected_code = EXCEPTION_PRIV_INSTRUCTION;
+	expected_address = (ULONG_PTR)port_read_at;
+	expected_length = 1;
+	port_read();
+	if (handled != before + 1)
+		return 7;
+	expected_code = EXCEPTION_BREAKPOINT;
+	expected_address = (ULONG_PTR)breakpoint_at;
+	expected_length = 1;
+	breakpoint();
+	if (handled != before + 2)
+		return 8;
+	RemoveVectoredExceptionHandler(cookie);
 	return 0;
 }

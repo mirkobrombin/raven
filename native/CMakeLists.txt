@@ -75,7 +75,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_compile_options(raven-bootstrap PRIVATE -fno-sanitize=all)
     target_link_options(raven-bootstrap PRIVATE -fno-sanitize=all -nostdlib -static
         -Wl,-no-pie,-Ttext-segment=0x700000000000,-e,_start,--build-id=none)
-    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/apps.cpp nt/sandbox.cpp nt/sandbox_api.cpp nt/confine.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
+    add_library(raven_cpu STATIC cpu/native_cpu.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/event_pulse.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/apps.cpp nt/sandbox.cpp nt/sandbox_api.cpp nt/confine.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
     target_include_directories(raven_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     set(NLS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/windows-codepages)
     file(SHA256 ${NLS_SOURCE}/c_1252.txt NLS_TEXT_HASH)
@@ -471,9 +471,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_test(NAME native_memory_contracts COMMAND native_cpu_test $<TARGET_FILE:raven-bootstrap> --memory)
     add_test(NAME native_parallel_memory_contracts COMMAND native_cpu_test $<TARGET_FILE:raven-bootstrap> --memory)
     set_tests_properties(native_memory_contracts native_parallel_memory_contracts PROPERTIES TIMEOUT 15)
-    set_tests_properties(native_parallel_memory_contracts PROPERTIES ENVIRONMENT RAVEN_PARALLEL=1)
+    set_tests_properties(native_parallel_memory_contracts PROPERTIES ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_COROUTINE_HOST=1")
     add_test(NAME native_parallel_stop_contract COMMAND native_cpu_test $<TARGET_FILE:raven-bootstrap> --parallel-stops)
-    set_tests_properties(native_parallel_stop_contract PROPERTIES TIMEOUT 15 ENVIRONMENT RAVEN_PARALLEL=1)
+    set_tests_properties(native_parallel_stop_contract PROPERTIES TIMEOUT 15 ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_COROUTINE_HOST=1")
     add_executable(native_x86_test cpu/native_x86_test.cpp)
     target_link_libraries(native_x86_test PRIVATE raven_cpu)
     add_dependencies(native_x86_test raven-bootstrap)
@@ -503,7 +503,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_test(NAME native_provider_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap>)
     set_tests_properties(native_provider_contract PROPERTIES TIMEOUT 15)
     add_test(NAME native_parallel_served_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap> --parallel-served)
-    set_tests_properties(native_parallel_served_contract PROPERTIES TIMEOUT 15 ENVIRONMENT RAVEN_PARALLEL=1)
+    set_tests_properties(native_parallel_served_contract PROPERTIES TIMEOUT 15 ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_COROUTINE_HOST=1")
     add_executable(font_test desktop/font_test.cpp)
     target_link_libraries(font_test PRIVATE raven_cpu)
     add_test(NAME native_font_ownership COMMAND font_test)
@@ -684,6 +684,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(clip_pe_fixtures ALL DEPENDS ${CLIP_CLIENT} ${CLIP_PAINT_CLIENT} ${PAINT_RESIZE_CLIENT})
         add_test(NAME native_paint_resize COMMAND raven --run-process --execution=native --timeout-ms=30000 ${PAINT_RESIZE_CLIENT})
         set_tests_properties(native_paint_resize PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # The thread that reads the user's input is not slowed by threads that only compute.
+        set(INPUT_PRIORITY_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/input-priority-client.exe)
+        add_custom_command(OUTPUT ${INPUT_PRIORITY_CLIENT}
+            COMMAND ${RAVEN_MINGW64} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                -Wl,--entry,raven_entry,--image-base,0x1d0000000,--no-insert-timestamp
+                -o ${INPUT_PRIORITY_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_priority_client.c -luser32 -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/input_priority_client.c VERBATIM)
+        add_custom_target(input_priority_fixture ALL DEPENDS ${INPUT_PRIORITY_CLIENT})
+        add_test(NAME native_input_priority COMMAND raven --run-process --execution=native --timeout-ms=30000 ${INPUT_PRIORITY_CLIENT})
+        set_tests_properties(native_input_priority PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         add_executable(clip_test desktop/clip_test.cpp)
         target_link_libraries(clip_test PRIVATE raven_cpu)
         add_dependencies(clip_test clip_pe_fixtures raven-bootstrap)
@@ -1470,6 +1480,30 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(frame_restore_test frame_restore_fixture raven-bootstrap)
             add_test(NAME native_frame_restore COMMAND frame_restore_test $<TARGET_FILE:raven-bootstrap> ${FRAME_RESTORE_FIXTURE})
             set_tests_properties(native_frame_restore PROPERTIES TIMEOUT 30)
+            set(OWNED_PLACE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/owned-place.exe)
+            add_custom_command(OUTPUT ${OWNED_PLACE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${OWNED_PLACE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/owned_place_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/owned_place_client.c VERBATIM)
+            add_custom_target(owned_place_fixture ALL DEPENDS ${OWNED_PLACE_FIXTURE})
+            add_executable(owned_place_test desktop/owned_place_test.cpp)
+            target_link_libraries(owned_place_test PRIVATE raven_cpu)
+            add_dependencies(owned_place_test owned_place_fixture raven-bootstrap)
+            add_test(NAME native_owned_place COMMAND owned_place_test $<TARGET_FILE:raven-bootstrap> ${OWNED_PLACE_FIXTURE})
+            set_tests_properties(native_owned_place PROPERTIES TIMEOUT 30)
+            set(HOST_RESIZE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/host-resize.exe)
+            add_custom_command(OUTPUT ${HOST_RESIZE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${HOST_RESIZE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/host_resize_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/host_resize_client.c VERBATIM)
+            add_custom_target(host_resize_fixture ALL DEPENDS ${HOST_RESIZE_FIXTURE})
+            add_executable(host_resize_test desktop/host_resize_test.cpp)
+            target_link_libraries(host_resize_test PRIVATE raven_cpu)
+            add_dependencies(host_resize_test host_resize_fixture raven-bootstrap)
+            add_test(NAME native_host_resize COMMAND host_resize_test $<TARGET_FILE:raven-bootstrap> ${HOST_RESIZE_FIXTURE})
+            set_tests_properties(native_host_resize PROPERTIES TIMEOUT 40)
         endif()
         set(INITIAL_MESSAGE_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/initial-message-fixtures)
         add_custom_command(OUTPUT ${INITIAL_MESSAGE_FIXTURES}/client.exe ${INITIAL_MESSAGE_FIXTURES}/exit.exe
@@ -1614,6 +1648,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(input_owner_test input_owner_fixture raven-bootstrap)
             add_test(NAME native_input_owner COMMAND input_owner_test $<TARGET_FILE:raven-bootstrap> ${INPUT_OWNER_FIXTURE})
             set_tests_properties(native_input_owner PROPERTIES TIMEOUT 20)
+            add_executable(move_merge_test desktop/move_merge_test.cpp)
+            target_link_libraries(move_merge_test PRIVATE raven_cpu)
+            set(MOVE_MERGE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/move-merge.exe)
+            add_custom_command(OUTPUT ${MOVE_MERGE_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${MOVE_MERGE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/move_merge_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/move_merge_client.c VERBATIM)
+            add_custom_target(move_merge_fixture ALL DEPENDS ${MOVE_MERGE_FIXTURE})
+            add_dependencies(move_merge_test move_merge_fixture raven-bootstrap)
+            add_test(NAME native_move_merge COMMAND move_merge_test $<TARGET_FILE:raven-bootstrap> ${MOVE_MERGE_FIXTURE})
+            set_tests_properties(native_move_merge PROPERTIES TIMEOUT 30)
             add_executable(modifier_keys_test desktop/modifier_keys_test.cpp)
             target_link_libraries(modifier_keys_test PRIVATE raven_cpu)
             set(MODIFIER_KEYS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/modifier-keys.exe)
@@ -3390,12 +3436,40 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         raven_kernel_fixture(queued-calls queued_calls_client.c 0x1b7000000 "")
         add_test(NAME native_queued_served_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap>
             --queued-served ${CMAKE_CURRENT_BINARY_DIR}/queued-calls.exe)
-        set_tests_properties(native_queued_served_contract PROPERTIES TIMEOUT 30 ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_QUEUED_GRAPHICS=1;RAVEN_QUEUED_OPENGL=1")
+        set_tests_properties(native_queued_served_contract PROPERTIES TIMEOUT 30
+            ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_QUEUED_GRAPHICS=1;RAVEN_QUEUED_OPENGL=1;RAVEN_COROUTINE_HOST=1")
         foreach(mode default parallel)
             add_test(NAME native_apc_nonalertable_${mode} COMMAND providers_test $<TARGET_FILE:raven-bootstrap> --apc-wait)
             set_tests_properties(native_apc_nonalertable_${mode} PROPERTIES TIMEOUT 10)
         endforeach()
         set_tests_properties(native_apc_nonalertable_parallel PROPERTIES ENVIRONMENT RAVEN_PARALLEL=1)
+        # An APC queued to a thread that has ended, from 64-bit and 32-bit callers.
+        raven_kernel_fixture(finished-apc finished_apc_client.c 0x1c3000000 "-lkernel32")
+        add_test(NAME native_finished_apc COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/finished-apc.exe)
+        set_tests_properties(native_finished_apc PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        if(RAVEN_MINGW32)
+            add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe
+                COMMAND ${RAVEN_MINGW32} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                    -Wl,--entry,_raven_entry,--no-insert-timestamp
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe ${LOADER_SOURCES}/finished_apc_client.c -lkernel32
+                DEPENDS ${LOADER_SOURCES}/finished_apc_client.c VERBATIM)
+            add_custom_target(finished_apc32_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe)
+            add_test(NAME native_finished_apc_x32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe)
+            set_tests_properties(native_finished_apc_x32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        endif()
+        # The same with each guest thread on a host thread of its own (RAVEN_PARALLEL), where the ended thread's state is read from another host thread.
+        foreach(width "" _x32)
+            if(width STREQUAL "" OR RAVEN_MINGW32)
+                if(width STREQUAL "")
+                    set(finished_apc_client ${CMAKE_CURRENT_BINARY_DIR}/finished-apc.exe)
+                else()
+                    set(finished_apc_client ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe)
+                endif()
+                add_test(NAME native_finished_apc${width}_parallel COMMAND raven --run-process --execution=native ${finished_apc_client})
+                set_tests_properties(native_finished_apc${width}_parallel PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/finished-apc${width}-parallel-prefix")
+            endif()
+        endforeach()
         add_test(NAME native_api_hook COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/api-hook.exe)
         set_tests_properties(native_api_hook PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(PARALLEL_CLIENTS)
@@ -4132,6 +4206,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(gdiplus_blur_fixture${width} ALL DEPENDS ${gdiplus_blur_client})
                     add_test(NAME native_gdiplus_blur_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${gdiplus_blur_client})
                     set_tests_properties(native_gdiplus_blur_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(gdiplus_dc_client ${CMAKE_CURRENT_BINARY_DIR}/gdiplus-dc${width}.exe)
+                    add_custom_command(OUTPUT ${gdiplus_dc_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${gdiplus_dc_client} ${LOADER_SOURCES}/gdiplus_dc_client.c -lgdiplus -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/gdiplus_dc_client.c VERBATIM)
+                    add_custom_target(gdiplus_dc_fixture${width} ALL DEPENDS ${gdiplus_dc_client})
+                    add_test(NAME native_gdiplus_dc_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${gdiplus_dc_client})
+                    set_tests_properties(native_gdiplus_dc_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(split_lock_client ${CMAKE_CURRENT_BINARY_DIR}/split-lock${width}.exe)
                     add_custom_command(OUTPUT ${split_lock_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
@@ -4487,6 +4569,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_associate_x${width} COMMAND raven --run-process --execution=native ${sandbox_client} -- associate)
                     set_tests_properties(native_associate_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/associate-prefix${width})
+                    # PulseEvent releases threads of the same process that wait on the event.
+                    set(pulse_event_client ${CMAKE_CURRENT_BINARY_DIR}/pulse-event-client${width}.exe)
+                    add_custom_command(OUTPUT ${pulse_event_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${pulse_event_client} ${LOADER_SOURCES}/pulse_event_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/pulse_event_client.c VERBATIM)
+                    add_custom_target(pulse_event_fixture${width} ALL DEPENDS ${pulse_event_client})
+                    add_test(NAME native_pulse_event_x${width} COMMAND raven --run-process --execution=native ${pulse_event_client})
+                    set_tests_properties(native_pulse_event_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     if(width EQUAL 64)
                         set(timer_queue_client ${CMAKE_CURRENT_BINARY_DIR}/timer-queue-client${width}.exe)
                         add_custom_command(OUTPUT ${timer_queue_client}
@@ -4910,6 +5001,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set(media_components ${CMAKE_CURRENT_BINARY_DIR}/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/mfplat.dll
                     ${CMAKE_CURRENT_BINARY_DIR}/x86/avrt.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mfplat.dll
                     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/raven-msacm32.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-msacm32.dll
                     ${CMAKE_CURRENT_BINARY_DIR}/resampledmo.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/resampledmo.dll)
                 add_custom_command(OUTPUT ${media_components}
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
@@ -4925,11 +5017,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mmdevapi.dll
                         ${media_source}/mmdevapi.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lwinmm -luuid -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-msacm32.dll
+                        ${media_source}/msacm32.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-msacm32.dll
+                        ${media_source}/msacm32.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lkernel32
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/resampledmo.dll
                         ${media_source}/resampledmo.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lmfplat -luuid -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/resampledmo.dll
                         ${media_source}/resampledmo.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lmfplat -luuid -lkernel32 -lgcc
-                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c ${media_source}/resampledmo.c
+                    DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c ${media_source}/msacm32.c ${media_source}/resampledmo.c
                         ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c VERBATIM)
                 add_custom_target(media_component ALL DEPENDS ${media_components})
                 # A media library imports both, as cri_ware_unity.dll does; the fixture does too, and asks each one for its answers.
@@ -4950,6 +5046,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(media_fixture${width} ALL DEPENDS ${media_client} media_component)
                     add_test(NAME native_media_x${width} COMMAND raven --run-process --execution=native ${media_client})
                     set_tests_properties(native_media_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # msacm32.dll's conversions between PCM and MS ADPCM.
+                    set(acm_client ${CMAKE_CURRENT_BINARY_DIR}/acm-client${width}.exe)
+                    add_custom_command(OUTPUT ${acm_client}
+                        COMMAND ${media_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${media_entry},--no-insert-timestamp
+                            -o ${acm_client} ${LOADER_SOURCES}/acm_client.c -lmsacm32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/acm_client.c VERBATIM)
+                    add_custom_target(acm_fixture${width} ALL DEPENDS ${acm_client} media_component)
+                    add_test(NAME native_acm_x${width} COMMAND raven --run-process --execution=native ${acm_client})
+                    set_tests_properties(native_acm_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 # What mmdevapi.dll answers to calls out of order and arguments out of range. COM finds its class through raven-shell.dll,
                 # which comes with the controls, and a 32-bit program has no wave output for a stream to play through yet.
@@ -5502,6 +5608,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics32.exe metrics ${CMAKE_CURRENT_BINARY_DIR}/x11-metrics-x32)
                         set_tests_properties(native_x11_metrics_x32 PROPERTIES TIMEOUT 60 ENVIRONMENT RAVEN_PARALLEL=1)
                     endif()
+                    # Two monitors side by side, the primary one not at the root's origin: the program sees the primary monitor as the
+                    # screen, as on Windows, not the root that spans both.
+                    add_executable(x11_monitors_tool desktop/x11_monitors_tool.cpp)
+                    target_link_libraries(x11_monitors_tool PRIVATE PkgConfig::XCB_CLIENT)
+                    add_test(NAME native_x11_primary_monitor COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11.py
+                        $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics.exe monitors ${CMAKE_CURRENT_BINARY_DIR}/x11-monitors
+                        $<TARGET_FILE:x11_monitors_tool>)
+                    set_tests_properties(native_x11_primary_monitor PROPERTIES TIMEOUT 60)
                 endif()
             endif()
             if(RAVEN_WAYLAND_SCREEN_TESTS)
@@ -6348,6 +6462,44 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_initial_dependency_contract PROPERTIES TIMEOUT 15)
         set_tests_properties(native_initial_dependency_prefer_local PROPERTIES TIMEOUT 15 ENVIRONMENT RAVEN_PREFER_LOCAL_DLLS=1)
         set_tests_properties(native_initial_dependency_cli native_initial_forwarder_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        # Libraries a program loads start after the libraries they import, for 64-bit and 32-bit programs.
+        foreach(width "" _x32)
+            if(width STREQUAL "")
+                set(order_compiler ${RAVEN_MINGW64})
+                set(order_entry raven_entry)
+                set(order_dll_entry DllMain)
+            else()
+                set(order_compiler ${RAVEN_MINGW32})
+                set(order_entry _raven_entry)
+                set(order_dll_entry _DllMain@12)
+            endif()
+            if(order_compiler)
+                set(order_directory ${CMAKE_CURRENT_BINARY_DIR}/attach-order${width})
+                set(order_flags -O2 -nostdlib -fno-stack-protector)
+                add_custom_command(OUTPUT ${order_directory}/order-a.dll ${order_directory}/order-b.dll ${order_directory}/order-f.dll
+                        ${order_directory}/order-root.dll ${order_directory}/client.exe
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${order_directory}
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_A
+                        -Wl,--entry,${order_dll_entry},--no-insert-timestamp,--out-implib,${order_directory}/order-a.a
+                        -o ${order_directory}/order-a.dll ${LOADER_SOURCES}/attach_order.c
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_B
+                        -Wl,--entry,${order_dll_entry},--no-insert-timestamp,--out-implib,${order_directory}/order-b.a
+                        -o ${order_directory}/order-b.dll ${LOADER_SOURCES}/attach_order.c ${order_directory}/order-a.a
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_F
+                        -Wl,--entry,${order_dll_entry},--no-insert-timestamp,--out-implib,${order_directory}/order-f.a
+                        -o ${order_directory}/order-f.dll ${LOADER_SOURCES}/attach_order.c ${LOADER_SOURCES}/attach_order_forward.def -lkernel32
+                    # order-a.a, order-b.a, order-f.a: the root's import table names the libraries in that order.
+                    COMMAND ${order_compiler} ${order_flags} -shared -DRAVEN_ORDER_ROOT -Wl,--entry,${order_dll_entry},--no-insert-timestamp
+                        -o ${order_directory}/order-root.dll ${LOADER_SOURCES}/attach_order.c ${order_directory}/order-a.a ${order_directory}/order-b.a
+                        ${order_directory}/order-f.a
+                    COMMAND ${order_compiler} ${order_flags} -Wl,--entry,${order_entry},--no-insert-timestamp
+                        -o ${order_directory}/client.exe ${LOADER_SOURCES}/attach_order.c -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/attach_order.c ${LOADER_SOURCES}/attach_order_forward.def VERBATIM)
+                add_custom_target(attach_order${width}_fixture ALL DEPENDS ${order_directory}/order-root.dll ${order_directory}/client.exe)
+                add_test(NAME native_attach_order${width} COMMAND raven --run-process --execution=native ${order_directory}/client.exe)
+                set_tests_properties(native_attach_order${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            endif()
+        endforeach()
     endif()
 endif()
 

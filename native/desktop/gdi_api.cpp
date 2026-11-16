@@ -126,7 +126,7 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 	// Marks the window behind a leased DC as changed so the next message retrieval presents it.
 	const auto touched = [this](const DesktopDC &dc) {
 		if (dc.window && dc.leased && updated)
-			updated(dc.window);
+			drew(dc);
 	};
 	const auto require_dc = [this](const ApiCall &call, size_t index) -> DesktopDC & {
 		auto *dc = objects.dc(call[index]);
