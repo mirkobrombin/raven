@@ -1,4 +1,5 @@
 #include "object_api.h"
+#include "event.h"
 #include "threads.h"
 
 #include <array>
@@ -21,6 +22,13 @@ std::span<const std::string_view> NativeObjectAPI::nt_exports()
 static void put(std::span<uint8_t> bytes, size_t at, uint64_t value, size_t width)
 {
 	for (size_t byte=0; byte<width; ++byte) bytes[at+byte]=uint8_t(value>>(byte*8));
+}
+
+// With a host thread for each guest thread, the threads that waited for the event in the process's table take their turn first.
+static void hand_over_event(NativeObjects &objects, NativeThreads &threads, uint64_t handle)
+{
+	const auto event = objects.object_as<EventObject>(handle);
+	threads.hand_over_to(event ? event->table_object() : 0);
 }
 
 static uint32_t error(uint32_t status)
@@ -49,7 +57,10 @@ void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &obje
 			}
 			const uint32_t status=objects.set_event(call[0], set).status;
 			// The thread the event wakes runs before the setter goes on, as it would on another processor.
-			if (set && !status && !call.process.serving()) threads.hand_over();
+			if (set && !status && threads.host_threads())
+				hand_over_event(objects, threads, call[0]);
+			else if (set && !status && !call.process.serving())
+				threads.hand_over();
 			if (status) call.fail(error(status), 0);
 			else call.ret(1);
 		});
@@ -109,7 +120,10 @@ bool NativeObjectAPI::dispatch(std::string_view name)
 			const auto changed=objects.set_event(args[0],signal);
 			status=changed.status; result=1;
 			// The thread the event wakes runs before the setter goes on, as it would on another processor.
-			if (signal && !status && threads) threads->hand_over();
+			if (signal && !status && threads && threads->host_threads())
+				hand_over_event(objects, *threads, args[0]);
+			else if (signal && !status && threads)
+				threads->hand_over();
 			if (nt && args[1] && !status) { std::array<uint8_t,4> output{}; put(output,0,changed.value,4); process.write_memory(args[1],output); }
 		} else if (query) {
 			if (uint32_t(args[1])!=0) status=0xc00000bbU;

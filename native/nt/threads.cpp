@@ -782,6 +782,71 @@ bool NativeThreads::hand_over()
 	return false;
 }
 
+bool NativeThreads::hand_over_to(uint32_t object)
+{
+	if (!threaded || tearing_down || !running)
+		return false;
+	GuestThread &me = *running;
+	struct Woken {
+		GuestThread *thread;
+		uint64_t turns;
+		std::chrono::steady_clock::time_point changed;
+		uint64_t first;
+	};
+	std::vector<Woken> waiting;
+	const auto started = std::chrono::steady_clock::now();
+	if (object && table_waiters.load(std::memory_order_acquire) > 0) {
+		std::lock_guard lock(gate);
+		for (const auto &thread : threads)
+			if (thread.get() != &me && thread->outside && thread->state == GuestThread::State::waiting &&
+				std::find(thread->waits_on.begin(), thread->waits_on.end(), object) != thread->waits_on.end())
+				waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->turns.load(std::memory_order_relaxed)});
+	}
+	// The waits that block in the runtime (those of a 32-bit guest, or on objects outside the table) are looked at as the serial
+	// hand_over does, with the turn still held.
+	for (const auto &thread : threads)
+		if (thread.get() != &me && !thread->outside && thread->state == GuestThread::State::waiting && thread->suspend_count == 0 &&
+			thread->ready && thread->ready())
+			waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->turns.load(std::memory_order_relaxed)});
+	if (waiting.empty())
+		return false;
+	leave(me);
+	// Those the set woke come back for their turn within microseconds; each then runs, as on Windows, until it waits again or ends, or
+	// until it has gone a millisecond without a call (ending a thread takes about that), when the setter goes on beside it. One the set
+	// did not wake (an event reset on its own wakes one waiter) is not waited for.
+	for (;;) {
+		const auto now = std::chrono::steady_clock::now();
+		bool any = false, settled = true;
+		{
+			std::lock_guard lock(gate);
+			for (auto &woken : waiting) {
+				const uint64_t turns = woken.thread->turns.load(std::memory_order_relaxed);
+				if (turns == woken.turns && woken.changed == started)
+					continue;
+				any = true;
+				if (turns != woken.turns) {
+					woken.turns = turns;
+					woken.changed = now;
+				}
+				// A thread that woke in the runtime is still in its old wait when it takes the turn: only a later call can be a new one.
+				const bool waits = woken.thread->outside || (woken.thread->state == GuestThread::State::waiting && turns >= woken.first + 2);
+				if (!(woken.thread->state == GuestThread::State::done || waits || now - woken.changed >= std::chrono::milliseconds(1)))
+					settled = false;
+			}
+		}
+		if ((any && settled) || (!any && now - started >= std::chrono::microseconds(300)) || now - started >= std::chrono::milliseconds(5))
+			break;
+		std::this_thread::yield();
+	}
+	{
+		std::lock_guard lock(gate);
+		enqueue(me);
+	}
+	wait_turn(me, std::nullopt);
+	install(me);
+	return true;
+}
+
 void NativeThreads::exit_current(uint32_t code)
 {
 	throw ThreadExit{code, true};
@@ -906,6 +971,7 @@ void NativeThreads::enqueue(GuestThread &thread)
 
 void NativeThreads::install(GuestThread &me)
 {
+	me.turns.fetch_add(1, std::memory_order_relaxed);
 	running = &me;
 	active_scheduler = this;
 	// The process ended while this thread waited: nothing of it can be served any more. The main thread carries the error that ended it.

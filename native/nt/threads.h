@@ -93,6 +93,10 @@ struct GuestThread {
 	// NativeThreads::call_away); `calls_seen` is how many of those the thread has answered.
 	std::atomic<uint32_t> calls{0};
 	uint32_t calls_seen = 0;
+	// The objects of the process's table that wait outside is for, which the thread that sets one of them looks at (see hand_over_to),
+	// and how many turns the thread has taken in the runtime.
+	std::vector<uint32_t> waits_on;
+	std::atomic<uint64_t> turns{0};
 };
 
 class ThreadObject : public KernelObject {
@@ -201,6 +205,12 @@ public:
 	bool yield();
 	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
 	bool hand_over();
+	// The same with a host thread for each guest thread: the threads waiting outside for `object` of the process's table (0 for none),
+	// which setting it may have woken, and those waiting in the runtime whose wait now holds, take their turn before the setter goes on, until each calls again, waits again or ends (a few milliseconds at
+	// most). False when no thread was waiting for it.
+	bool hand_over_to(uint32_t object);
+	// How many threads wait outside for objects of the process's table, so that a set nobody waits for looks no further.
+	std::atomic<int> table_waiters{0};
 	// The running thread read a message of the mouse or the keyboard. Windows raises the priority of a thread whose window takes
 	// input, and its threads have a processor each: a thread that follows the pointer is not slowed by a compiler or a renderer at
 	// work in the background. Here, where the program's threads take turns, such a thread is for a moment not set aside when its

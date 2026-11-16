@@ -417,6 +417,21 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				raven_waits_take_apcs(kernel_waits(), id);
 				if (alertable && !threads.current().apcs.empty())
 					continue;
+				// The thread that sets one of them lets this one run first (see NativeThreads::hand_over_to).
+				struct Announced {
+					NativeThreads &threads;
+					GuestThread &self;
+					Announced(NativeThreads &threads, GuestThread &self, const std::vector<uint32_t> &table) : threads(threads), self(self)
+					{
+						self.waits_on = table;
+						threads.table_waiters.fetch_add(1, std::memory_order_release);
+					}
+					~Announced()
+					{
+						threads.table_waiters.fetch_sub(1, std::memory_order_release);
+						self.waits_on.clear();
+					}
+				} announced(threads, threads.current(), table);
 				const uint32_t result = threads.wait_outside([&](std::optional<std::chrono::steady_clock::time_point> until) {
 					uint64_t timeout = raven_wait_infinite;
 					if (until)
