@@ -1,5 +1,7 @@
 #include "native_cpu.h"
 #include "served_queue.h"
+#include "served_stub.h"
+#include "call_cycles.h"
 #include <cstddef>
 
 #include <algorithm>
@@ -77,6 +79,8 @@ struct WaitingCall {
 	bool answered = false, held = false;
 	// A function the guest ran inside the stub meanwhile left the argument registers changed.
 	bool ran = false;
+	// When the runtime saw the call (see CallCycles).
+	uint64_t seen = 0;
 };
 static thread_local WaitingCall waiting;
 
@@ -86,7 +90,6 @@ static thread_local WaitingCall waiting;
 // it finds 3 where it finds 0 for an answer. The calls whose callbacks run are kept here, innermost last, each with the nesting of the
 // callbacks it made.
 static constexpr size_t request_slot = 300, request_routine = 320, request_arguments = 12;
-static constexpr uint64_t request_return = 0xaa, request_exchange64 = 0xe0, request_exchange32 = 0xf0;
 static constexpr uint64_t stub_callback = 0x5256535455424342ULL;
 struct OuterCall {
 	WaitingCall call;
@@ -841,33 +844,12 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 		// This task only executes owned memory gates, including while every Windows thread is running.
 		state->memory_task = child.clone_task(state->stack_top);
 		state->atomic_gate = map_memory(4096, PROT_READ | PROT_WRITE);
-		// Locked 32-bit and 64-bit CMPXCHG, each followed by its owned completion trap.
-		write_memory(state->atomic_gate, std::vector<uint8_t>{0xf0, 0x0f, 0xb1, 0x11, 0xcc, 0xc3,
-			0xf0, 0x48, 0x0f, 0xb1, 0x11, 0xcc, 0xc3});
+		// The page of gates (gates.S): the locked exchanges, and the routine a stub runs what the runtime asks of the guest with.
+		const auto gates = served_stub::gate_page();
+		write_memory(state->atomic_gate, gates);
 		if (mode == NativeMode::x64 && threaded_host()) {
-			// request: cmp r11d,2; jne run; mov r11,[r10+2400]; add r11,0x70; jmp r11 (a declined call takes its stub's breakpoint)
-			// run: mov r11,[r10+2400]; push r11; push rcx; push rdx; push r8; push r9; sub rsp,0x60; the eight stack arguments from
-			//   [r10+2448] on to [rsp+32] on; mov rcx,[r10+2416]; mov rdx,[r10+2424]; mov r8,[r10+2432]; mov r9,[r10+2440];
-			//   call [r10+2408]; add rsp,0x60; pop r9; pop r8; pop rdx; pop rcx; pop r11; mov r10,gs:[0x1ff0]; mov [r10+2408],rax;
-			//   lea rax,[r11+1]; mov [r10],rax; add r11,66; jmp r11 (the argument registers come back as the caller of the stub left them,
-			//   as they do from a call that stops: code of the guest's own components counts on it)
-			// then, each on a 16-byte boundary: mov rax,rdx; lock cmpxchg [rcx],r8; ret and mov eax,edx; lock cmpxchg [rcx],r8d; ret
 			static_assert(request_slot * 8 == 2400 && request_routine * 8 == 2560, "the request routine's offsets are written into its code");
-			state->request_gate = state->atomic_gate + 0x40;
-			write_memory(state->request_gate, std::vector<uint8_t>{
-				0x41, 0x83, 0xfb, 0x02, 0x75, 0x0e, 0x4d, 0x8b, 0x9a, 0x60, 0x09, 0x00, 0x00, 0x49, 0x83, 0xc3, 0x70, 0x41, 0xff, 0xe3,
-				0x4d, 0x8b, 0x9a, 0x60, 0x09, 0x00, 0x00, 0x41, 0x53, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x48, 0x83, 0xec, 0x60, 0x49,
-				0x8b, 0x82, 0x90, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x20, 0x49, 0x8b, 0x82, 0x98, 0x09, 0x00, 0x00, 0x48, 0x89,
-				0x44, 0x24, 0x28, 0x49, 0x8b, 0x82, 0xa0, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x30, 0x49, 0x8b, 0x82, 0xa8, 0x09,
-				0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x38, 0x49, 0x8b, 0x82, 0xb0, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x40, 0x49,
-				0x8b, 0x82, 0xb8, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x48, 0x49, 0x8b, 0x82, 0xc0, 0x09, 0x00, 0x00, 0x48, 0x89,
-				0x44, 0x24, 0x50, 0x49, 0x8b, 0x82, 0xc8, 0x09, 0x00, 0x00, 0x48, 0x89, 0x44, 0x24, 0x58, 0x49, 0x8b, 0x8a, 0x70, 0x09,
-				0x00, 0x00, 0x49, 0x8b, 0x92, 0x78, 0x09, 0x00, 0x00, 0x4d, 0x8b, 0x82, 0x80, 0x09, 0x00, 0x00, 0x4d, 0x8b, 0x8a, 0x88,
-				0x09, 0x00, 0x00, 0x41, 0xff, 0x92, 0x68, 0x09, 0x00, 0x00, 0x48, 0x83, 0xc4, 0x60, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x59,
-				0x41, 0x5b, 0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0x00, 0x00, 0x49, 0x89, 0x82, 0x68, 0x09, 0x00, 0x00, 0x49, 0x8d,
-				0x43, 0x01, 0x49, 0x89, 0x02, 0x49, 0x83, 0xc3, 0x42, 0x41, 0xff, 0xe3, 0x90, 0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00,
-				0x00, 0x00, 0x00, 0x00, 0x48, 0x89, 0xd0, 0xf0, 0x4c, 0x0f, 0xb1, 0x01, 0xc3, 0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00,
-				0x89, 0xd0, 0xf0, 0x44, 0x0f, 0xb1, 0x01, 0xc3});
+			state->request_gate = state->atomic_gate + served_stub::gate_offset(raven_gate_request);
 		}
 		protect_memory(state->atomic_gate, 4096, PROT_READ | PROT_EXEC);
 	}
@@ -1024,7 +1006,7 @@ uint64_t NativeProcess::compare_exchange(uint64_t address, uint64_t expected, ui
 	// A guest that waits in a stub does the exchange itself.
 	if (waiting.task && state->request_gate && !waiting.answered) {
 		const uint64_t arguments[] = {address, expected, desired};
-		const uint64_t previous = run_in_stub(state->request_gate + (size == 8 ? request_exchange64 : request_exchange32), arguments);
+		const uint64_t previous = run_in_stub(state->atomic_gate + served_stub::gate_offset(size == 8 ? raven_gate_request_exchange64 : raven_gate_request_exchange32), arguments);
 		return size == 4 ? uint32_t(previous) : previous;
 	}
 	settle_call();
@@ -1037,7 +1019,7 @@ uint64_t NativeProcess::compare_exchange(uint64_t address, uint64_t expected, ui
 	try {
 		trace(PTRACE_GETREGS, child.pid, &saved);
 		registers = saved;
-		registers.rip = state->atomic_gate + (size == 8 ? 6 : 0);
+		registers.rip = state->atomic_gate + served_stub::gate_offset(size == 8 ? raven_gate_exchange64 : raven_gate_exchange32);
 		registers.rax = expected;
 		registers.rcx = address;
 		registers.rdx = desired;
@@ -1046,7 +1028,7 @@ uint64_t NativeProcess::compare_exchange(uint64_t address, uint64_t expected, ui
 		trace(PTRACE_CONT, child.pid);
 		const int status = child.wait();
 		trace(PTRACE_GETREGS, child.pid, &registers);
-		if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP || registers.rip != state->atomic_gate + (size == 8 ? 12 : 5))
+		if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP || registers.rip != state->atomic_gate + served_stub::gate_offset(size == 8 ? raven_gate_exchange64_done : raven_gate_exchange32_done) + 1)
 			throw std::runtime_error("native atomic operation lost its gate");
 		trace(PTRACE_SETREGS, child.pid, &saved);
 	} catch (...) {
@@ -1535,7 +1517,7 @@ uint64_t NativeProcess::return_gate() const
 
 bool NativeProcess::callback_boundary(uint64_t address) const
 {
-	return address == return_gate() || (state->request_gate && address == state->request_gate + request_return);
+	return address == return_gate() || (state->request_gate && address == state->atomic_gate + served_stub::gate_offset(raven_gate_request_return));
 }
 
 bool NativeProcess::callback_in_stub(size_t index) const
@@ -2023,6 +2005,7 @@ void NativeProcess::settle_call()
 		trace(PTRACE_SETFPREGS, call.task, &vectors);
 	}
 	trace(PTRACE_SETREGS, call.task, &registers);
+	CallCycles::instance().answered(call.block, call.trap - state->served_stub_size, call.seen);
 	__atomic_store_n(&call.block[0], uint64_t(0), __ATOMIC_RELEASE);
 	state->stopped = true;
 	++state->call_settles;
@@ -2406,6 +2389,7 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		const WaitingCall call = waiting;
 		waiting.task = 0;
 		call.block[11] = 0;
+		CallCycles::instance().answered(call.block, call.trap - state->served_stub_size, call.seen);
 		__atomic_store_n(&call.block[0], uint64_t(0), __ATOMIC_RELEASE);
 		if (call.held && ptrace(state->guest_resume(), call.task, nullptr, nullptr) == -1)
 			throw std::runtime_error("cannot resume a native guest task after its call");
@@ -2499,9 +2483,10 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 					runs = true;
 					continue;
 				}
+				const uint64_t seen = CallCycles::instance().seen(block, stub);
 				drain_queued_calls(true);
 				waiting = WaitingCall{this, child.pid, block, stub + state->served_stub_size, block[5], {block[1], block[2], block[3], block[4]},
-					{block[6], block[7], block[8], block[9]}, false, std::exchange(held_in_stub, false)};
+					{block[6], block[7], block[8], block[9]}, false, std::exchange(held_in_stub, false), false, seen};
 				state->awaiting_api = true;
 				state->awaiting_syscall = false;
 				state->debug_print_fault = false;
@@ -2642,8 +2627,9 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 			if (!block || __atomic_load_n(&block[0], __ATOMIC_ACQUIRE) != stub)
 				continue;
 			++state->call_waits;
+			const uint64_t seen = CallCycles::instance().seen(block, stub);
 			waiting = WaitingCall{this, child.pid, block, stub + state->served_stub_size, block[5], {block[1], block[2], block[3], block[4]},
-				{block[6], block[7], block[8], block[9]}, false, true};
+				{block[6], block[7], block[8], block[9]}, false, true, false, seen};
 			state->awaiting_api = true;
 			state->awaiting_syscall = false;
 			state->debug_print_fault = false;
@@ -2962,6 +2948,7 @@ bool NativeProcess::serve_pending()
 		return false;
 	// A synchronous call observes every earlier queued record on this thread.
 	bool declined = false;
+	const uint64_t seen = stub ? CallCycles::instance().seen(block, stub) : 0;
 	if (stub) {
 		drain_queued_calls(true);
 		state->served_declined = false;
@@ -2974,8 +2961,10 @@ bool NativeProcess::serve_pending()
 	const bool due = state->slice.count() > 0 && state->slice_yield &&
 		std::chrono::steady_clock::now() - state->slice_started >= state->slice;
 	block[11] = declined ? 2 : !parallel() && !state->served_yield_traps.empty() && due;
-	if (stub)
+	if (stub) {
+		CallCycles::instance().answered(block, stub, seen);
 		__atomic_store_n(&block[0], 0, __ATOMIC_RELEASE);
+	}
 	// Parallel threads own their results, so another host frame can run as soon as this reply is published.
 	if (parallel() && due) {
 		state->slice_started = std::chrono::steady_clock::now();
