@@ -92,6 +92,47 @@ jobs:
           done
           echo "${#shells[@]} shell scripts parsed"
 
+  # The waits on kernel objects: native/model/Waits.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
+  # which tries every interleaving of its cases.
+  models:
+    name: Models
+    needs: [commits, files, licenses, scripts]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    container:
+      image: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
+    env:
+      TLA_TOOLS_URL: https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+      TLA_TOOLS_SHA256: 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+    steps:
+      - name: Install packages
+        run: dnf install -y --setopt=install_weak_deps=False git cargo rust gcc java-latest-openjdk-headless
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the model
+        run: |
+          curl -fsSL -o /tmp/tla2tools.jar "${TLA_TOOLS_URL}"
+          echo "${TLA_TOOLS_SHA256}  /tmp/tla2tools.jar" | sha256sum -c -
+          cd native/model
+          for config in MCWaits.cfg MCWaitsThree.cfg; do
+            java -XX:+UseParallelGC -cp /tmp/tla2tools.jar tlc2.TLC -workers auto -metadir /tmp/tlc -config "${config}" MCWaits.tla
+          done
+
+      - name: Test the implementation
+        working-directory: native/waits
+        run: cargo test --locked --release
+
+      - name: Check every interleaving
+        working-directory: native/waits
+        env:
+          RUSTFLAGS: --cfg loom
+          CARGO_TARGET_DIR: target-loom
+        run: cargo test --locked --release --test loom
+
   # Provision: the pinned external inputs, each in its own job because they share nothing and some take long. A component is
   # rebuilt only when its recipe or its sources change.
 
@@ -409,7 +450,7 @@ jobs:
 
   report:
     name: Report
-    needs: [commits, files, licenses, scripts, provision, compliance, build, test]
+    needs: [commits, files, licenses, scripts, models, provision, compliance, build, test]
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5

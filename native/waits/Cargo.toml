@@ -1,0 +1,19 @@
+[package]
+name = "raven-waits"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[target.'cfg(loom)'.dependencies]
+loom = "=0.7.3"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
+[profile.release]
+panic = "abort"
+debug = 1
