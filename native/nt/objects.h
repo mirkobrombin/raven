@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -38,6 +39,9 @@ public:
 	virtual uint32_t default_access() const { return 0x1f0003; }
 	// When the object turns signaled by itself, as a timer does at its due time; a waiter wakes then to look again.
 	virtual std::optional<std::chrono::steady_clock::time_point> wakes_at() const { return std::nullopt; }
+	// For an object other processes share: a word of the memory they share that changes, and is woken with a futex, whenever the object
+	// may have turned signaled. A wait on such objects alone sleeps on their words (see wait_words in shared_file.h).
+	virtual std::atomic<uint32_t> *wait_word() const { return nullptr; }
 };
 
 class NativeObjects;

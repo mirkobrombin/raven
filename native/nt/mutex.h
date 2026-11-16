@@ -27,6 +27,8 @@ public:
 	// Leaves the table for shared memory a name gives: the caller points `state` there.
 	void leave_table();
 	uint32_t table_object() const { std::lock_guard lock(mutex); return waits_object; }
+	// The low half of the owner, which holds the thread: it changes when the mutex is released or taken.
+	std::atomic<uint32_t> *wait_word() const override;
 	bool describe(InheritedHandle &record) const override;
 	MutexState local;
 	mutable MutexState *state = &local;

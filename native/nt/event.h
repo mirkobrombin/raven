@@ -33,6 +33,7 @@ public:
 	bool pulse_table_waiters();
 	// The event in the process's table, or 0 once it is shared with other processes.
 	uint32_t table_object() const;
+	std::atomic<uint32_t> *wait_word() const override;
 
 private:
 	friend class NativeObjects;

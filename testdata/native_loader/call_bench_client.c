@@ -3,7 +3,7 @@
 // A fixed measure of what crossing into the system costs: one line per case with the nanoseconds each operation took, the same program
 // under any runtime. The cases: a call that does next to nothing (SetEvent on an event nobody waits for), a wake handed back and forth
 // between two threads, WaitForMultipleObjects for any and for all of eight signalled events, and four threads contending for a critical
-// section and for an SRW lock. A command line of "short" runs each case a hundredth as many times, to check that it runs at all; one of
+// section and for an SRW lock, and a wake handed back and forth between two processes through named events. A command line of "short" runs each case a hundredth as many times, to check that it runs at all; one of
 // "start" ends at once, for the time a process takes to start and end.
 
 static HANDLE out;
@@ -102,18 +102,75 @@ static int contend(const char *name, LPTHREAD_START_ROUTINE worker, LONG each)
 	return shared == each * 4;
 }
 
+// The other side of process_ping_pong: a copy of this program started with "child" on its command line.
+static int answer(LONG count)
+{
+	HANDLE named_ping = OpenEventA(SYNCHRONIZE, FALSE, "RavenCallBenchPing");
+	HANDLE named_pong = OpenEventA(EVENT_MODIFY_STATE, FALSE, "RavenCallBenchPong");
+	if (!named_ping || !named_pong)
+		return 20;
+	for (LONG round = 0; round < count; ++round) {
+		if (WaitForSingleObject(named_ping, 5000) != WAIT_OBJECT_0)
+			return 21;
+		SetEvent(named_pong);
+	}
+	return 0;
+}
+
+static int process_ping_pong(LONG count, int scale)
+{
+	char path[MAX_PATH], command[MAX_PATH + 32];
+	const DWORD length = GetModuleFileNameA(0, path, MAX_PATH);
+	if (!length || length >= MAX_PATH)
+		return 0;
+	int at = 0;
+	command[at++] = '"';
+	for (DWORD index = 0; index < length; ++index)
+		command[at++] = path[index];
+	const char *rest = scale > 1 ? "\" child short" : "\" child";
+	while (*rest)
+		command[at++] = *rest++;
+	command[at] = 0;
+	HANDLE named_ping = CreateEventA(0, FALSE, FALSE, "RavenCallBenchPing");
+	HANDLE named_pong = CreateEventA(0, FALSE, FALSE, "RavenCallBenchPong");
+	STARTUPINFOA startup = {sizeof startup};
+	PROCESS_INFORMATION child;
+	if (!named_ping || !named_pong || !CreateProcessA(path, command, 0, 0, FALSE, 0, 0, 0, &startup, &child))
+		return 0;
+	// The first round also waits for the child to start; it is not counted.
+	SetEvent(named_ping);
+	if (WaitForSingleObject(named_pong, 30000) != WAIT_OBJECT_0)
+		return 0;
+	const unsigned long long started = now();
+	for (LONG round = 1; round < count; ++round) {
+		SetEvent(named_ping);
+		if (WaitForSingleObject(named_pong, 5000) != WAIT_OBJECT_0)
+			return 0;
+	}
+	report("process_ping_pong", started, count - 1);
+	DWORD code = 1;
+	WaitForSingleObject(child.hProcess, 30000);
+	GetExitCodeProcess(child.hProcess, &code);
+	return code == 0;
+}
+
 int raven_entry(void)
 {
 	out = GetStdHandle(STD_OUTPUT_HANDLE);
 	QueryPerformanceFrequency(&frequency);
 	const char *line = GetCommandLineA();
-	int scale = 1;
+	int scale = 1, child = 0;
 	for (const char *at = line; *at; ++at) {
 		if (at[0] == 's' && at[1] == 'h' && at[2] == 'o' && at[3] == 'r' && at[4] == 't')
 			scale = 100;
 		if (at[0] == 's' && at[1] == 't' && at[2] == 'a' && at[3] == 'r' && at[4] == 't')
 			return 0;
+		if (at[0] == 'c' && at[1] == 'h' && at[2] == 'i' && at[3] == 'l' && at[4] == 'd')
+			child = 1;
 	}
+	const LONG crossings = 5000 / scale + 1;
+	if (child)
+		return answer(crossings);
 
 	HANDLE event = CreateEventA(0, TRUE, FALSE, 0);
 	const LONG calls = 200000 / scale;
@@ -155,5 +212,7 @@ int raven_entry(void)
 		return 5;
 	if (!contend("srw_4_threads", lock_worker, 200000 / scale))
 		return 6;
+	if (!process_ping_pong(crossings, scale))
+		return 7;
 	return 0;
 }

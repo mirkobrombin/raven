@@ -347,8 +347,9 @@ void NativeThreads::thread_main(GuestThread &thread)
 void NativeThreads::finish(GuestThread &thread, uint32_t code)
 {
 	signaled();
-	// The mutexes the thread holds in the table are abandoned to their waiters, and a wait of its own there ends.
+	// The mutexes the thread holds in the table are abandoned to their waiters, and a wait of its own there, or on shared objects, ends.
 	raven_waits_thread_ended(kernel_waits(), thread.id);
+	call_away(thread);
 	if (&thread != running && threaded) {
 		// Its host thread reaps the task and leaves through the thread's frames once it has its turn.
 		if (thread.snapshot.task > 0)
@@ -1061,7 +1062,7 @@ void NativeThreads::send_job(GuestThread &thread, std::function<void()> work)
 		thread.job_done = false;
 		thread.turn.notify_one();
 	}
-	raven_waits_interrupt(kernel_waits(), thread.id);
+	call_away(thread);
 	// A host thread that waits for its guest is asleep in the kernel: the interrupt wakes it to look at the job.
 	NativeProcess::interrupt_host(thread.host_tid);
 	std::unique_lock lock(gate);
@@ -1356,7 +1357,7 @@ void NativeThreads::admin_main()
 			}
 			if (stuck && waits) {
 				pending = std::make_exception_ptr(std::runtime_error("native guest threads deadlocked: every thread waits without a timeout"));
-				raven_waits_interrupt(kernel_waits(), threads.front()->id);
+				call_away(*threads.front());
 				std::lock_guard lock(gate);
 				enqueue(*threads.front());
 			}
@@ -1461,6 +1462,16 @@ void NativeThreads::queue_apc(GuestThread &thread, GuestThread::Apc apc)
 {
 	thread.apcs.push_back(std::move(apc));
 	raven_waits_queue_apc(kernel_waits(), thread.id);
+	// A wait on shared objects has no table to tell: it looks at the APC in the runtime, and waits again if it is not alertable.
+	thread.calls.fetch_add(1);
+	::syscall(SYS_futex, &thread.calls, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+}
+
+void NativeThreads::call_away(GuestThread &thread)
+{
+	raven_waits_interrupt(kernel_waits(), thread.id);
+	thread.calls.fetch_add(1);
+	::syscall(SYS_futex, &thread.calls, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
 }
 
 void NativeThreads::threaded_unwind()
@@ -1478,7 +1489,7 @@ void NativeThreads::threaded_unwind()
 			thread->wake.reset();
 			thread->apcs.clear();
 			thread->suspend_count = 0;
-			raven_waits_interrupt(kernel_waits(), thread->id);
+			call_away(*thread);
 			// A thread whose guest runs leaves when the guest is gone; one that waits goes through its frames when its turn comes.
 			if (thread->parked && thread->snapshot.task > 0)
 				::kill(thread->snapshot.task, SIGKILL);

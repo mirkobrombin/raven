@@ -1,4 +1,5 @@
 #include "mutex.h"
+#include <bit>
 #include "kernel_waits.h"
 
 #include <new>
@@ -95,6 +96,15 @@ bool MutexObject::try_consume(uint32_t thread)
 	return true;
 }
 
+std::atomic<uint32_t> *MutexObject::wait_word() const
+{
+	std::lock_guard lock(mutex);
+	if (!shared && descriptor < 0)
+		return nullptr;
+	static_assert(sizeof(std::atomic<uint64_t>) == 8 && std::endian::native == std::endian::little);
+	return reinterpret_cast<std::atomic<uint32_t> *>(&state->owner);
+}
+
 bool MutexObject::release(uint32_t thread)
 {
 	std::lock_guard lock(mutex);
@@ -104,8 +114,10 @@ bool MutexObject::release(uint32_t thread)
 		return false;
 	if (--state->recursion == 0) {
 		state->owner = 0;
-		if (shared || descriptor >= 0)
+		if (shared || descriptor >= 0) {
+			wake_word(reinterpret_cast<std::atomic<uint32_t> *>(&state->owner));
 			announce_shared_change();
+		}
 	}
 	return true;
 }

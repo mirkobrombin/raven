@@ -58,6 +58,27 @@ inline std::atomic<uint32_t> *shared_changes()
 	return word;
 }
 
+// Wakes the processes that sleep on a shared object's word (KernelObject::wait_word).
+inline void wake_word(std::atomic<uint32_t> *word)
+{
+	if (word)
+		::syscall(SYS_futex, word, FUTEX_WAKE, INT32_MAX, nullptr, nullptr, 0);
+}
+
+// Sleeps until one of the shared words, or the process's own `call` word, differs from the value it had, or until `until` (on the
+// monotonic clock). False when the kernel has no futex_waitv (before Linux 5.16).
+inline bool wait_words(const std::vector<std::atomic<uint32_t> *> &words, const std::vector<uint32_t> &seen, std::atomic<uint32_t> &call,
+	uint32_t call_seen, const timespec *until)
+{
+	struct futex_waitv entries[65]{};
+	size_t count = 0;
+	for (size_t index = 0; index < words.size() && index < 64; ++index)
+		entries[count++] = {seen[index], uint64_t(reinterpret_cast<uintptr_t>(words[index])), FUTEX_32, 0};
+	entries[count++] = {call_seen, uint64_t(reinterpret_cast<uintptr_t>(&call)), FUTEX_32 | FUTEX_PRIVATE_FLAG, 0};
+	const long result = ::syscall(SYS_futex_waitv, entries, count, 0, until, CLOCK_MONOTONIC);
+	return result >= 0 || errno != ENOSYS;
+}
+
 inline void announce_shared_change()
 {
 	if (auto *word = shared_changes()) {

@@ -178,6 +178,12 @@ bool EventObject::pulse_table_waiters()
 	return waits_object && raven_waits_pulse(kernel_waits(), waits_object, nullptr, &granted) == 0 && granted && type != 0;
 }
 
+std::atomic<uint32_t> *EventObject::wait_word() const
+{
+	std::lock_guard lock(mutex);
+	return shared ? &shared->signaled : nullptr;
+}
+
 uint32_t EventObject::table_object() const
 {
 	std::lock_guard lock(mutex);
@@ -190,6 +196,7 @@ void EventObject::pulse_other_processes()
 	if (!shared)
 		return;
 	shared->signaled.store(1);
+	wake_word(&shared->signaled);
 	announce_shared_change();
 }
 
@@ -221,8 +228,11 @@ int EventObject::set_state(bool signaled)
 		}
 		changed.notify_all();
 	}
-	if (shared)
+	if (shared) {
+		if (signaled)
+			wake_word(&shared->signaled);
 		announce_shared_change();
+	}
 	return previous;
 }
 

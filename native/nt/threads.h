@@ -89,6 +89,10 @@ struct GuestThread {
 	bool outside = false;
 	// Whether that wait has no time-out of its own, so that only another thread can end it (see the check for a deadlock).
 	bool outside_endless = false;
+	// A wait outside on shared objects sleeps on their words and on `calls`, which grows each time the host calls the thread away (see
+	// NativeThreads::call_away); `calls_seen` is how many of those the thread has answered.
+	std::atomic<uint32_t> calls{0};
+	uint32_t calls_seen = 0;
 };
 
 class ThreadObject : public KernelObject {
@@ -187,6 +191,8 @@ public:
 		std::optional<std::chrono::steady_clock::time_point> wake);
 	// Queues an APC to a thread, which ends its alertable wait.
 	void queue_apc(GuestThread &thread, GuestThread::Apc apc);
+	// Ends the thread's wait outside the runtime, or the next one it begins, so that it takes its turn and looks at why.
+	static void call_away(GuestThread &thread);
 	// Tells that something may have ended a wait: an object signaled, a message posted, a thread ended.
 	void signaled() { signals.fetch_add(1, std::memory_order_relaxed); }
 	// Every stop and call of a guest counts as such unless the runtime says, while it serves it, that it ends no wait.
