@@ -35,7 +35,6 @@
 #include "graphics/vulkan_bridge.h"
 #endif
 
-#include <mutex>
 #include <unordered_map>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -516,10 +515,6 @@ static const GuestPrelude *string_prelude(std::string_view module, std::string_v
 // Services the guest answers from what the runtime publishes in the served block. The millisecond clocks are the performance counter
 // divided by 10000, read from the time stamp counter once the runtime has published its calibration, as QueryPerformanceCounter is.
 // Each loads the block pointer first, as the served stubs do, and ends in a jump to the export's breakpoint.
-struct BlockPrelude {
-	std::string_view module, name;
-};
-
 static const std::vector<uint8_t> &tick_prelude()
 {
 	// mov r10,[pointer]; test r10,r10; jz slow; mov r11,[r10+multiplier]; test r11,r11; jz slow; rdtsc; the count as in the clock
@@ -1661,218 +1656,124 @@ static const std::vector<uint8_t> &silent_trace_prelude()
 	return code;
 }
 
-static const std::vector<uint8_t> *find_block_prelude(std::string_view module, std::string_view name)
+static const std::vector<uint8_t> *block_prelude(std::string_view module, std::string_view name)
 {
-	// The libraries the rules below name; an export of any other has no prelude. A rule for a new library names it here too.
-	static constexpr std::array<std::string_view, 11> libraries{"combase.dll", "gdi32.dll", "kernel32.dll", "kernelbase.dll", "ntdll.dll",
-		"ole32.dll", "ravenhost.dll", "shlwapi.dll", "user32.dll", "uxtheme.dll", "winmm.dll"};
-	if (std::find(libraries.begin(), libraries.end(), module) == libraries.end())
-		return nullptr;
 	if (module == "ravenhost.dll" && name == "RavenTrace") {
 		static const bool traced = std::getenv("RAVEN_TRACE_DWRITE") != nullptr;
 		return traced ? nullptr : &silent_trace_prelude();
 	}
-	if (module == "user32.dll" && (name == "PeekMessageA" || name == "PeekMessageW"))
-		return &quiet_peek_prelude();
-	if (module == "user32.dll" && name == "GetInputState")
-		return &quiet_input_prelude();
-	if (module == "user32.dll" && name == "GetQueueStatus")
-		return &quiet_status_prelude();
-	if (module == "user32.dll" && name == "CallNextHookEx")
-		return &next_hook_prelude();
-	if (module == "user32.dll" && name == "MapWindowPoints")
-		return &map_points_prelude();
-	if (module == "user32.dll" && name == "GetParent")
-		return &window_parent_prelude();
-	if (module == "user32.dll" && name == "GetAncestor")
-		return &window_ancestor_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "LocaleNameToLCID")
-		return &locale_number_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "GetLocaleInfoW")
-		return &locale_names_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "ActivateActCtx")
-		return &context_activate_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "DeactivateActCtx")
-		return &context_deactivate_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "LoadResource")
-		return &resource_load_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "SizeofResource")
-		return &resource_size_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "LockResource")
-		return &resource_lock_prelude();
-	if (module == "gdi32.dll" && name == "RectInRegion")
-		return &rect_in_region_prelude();
-	if (module == "gdi32.dll" && name == "GetRgnBox")
-		return &region_box_prelude();
-	if (module == "gdi32.dll" && name == "PtInRegion")
-		return &point_in_region_prelude();
-	if (module == "user32.dll" && name == "SetThreadDpiAwarenessContext")
-		return &dpi_set_prelude();
-	if (module == "user32.dll" && name == "GetThreadDpiAwarenessContext")
-		return &dpi_get_prelude();
-	if (module == "user32.dll" && name == "GetKeyboardLayout")
-		return &keyboard_layout_prelude();
-	if (module == "user32.dll" && name == "IsWinEventHookInstalled")
-		return &win_event_hook_prelude();
-	if (module == "user32.dll" && name == "PtInRect")
-		return &point_in_rect_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "QueryDepthSList")
-		return &slist_depth_prelude();
-	if (module == "ntdll.dll" && name == "RtlQueryDepthSList")
-		return &slist_depth_prelude();
-	if ((module == "ole32.dll" || module == "combase.dll") && name == "StringFromGUID2")
-		return &guid_text_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "GetLocalTime")
-		return &local_time_prelude();
-	if (module == "user32.dll" && name == "IsWindowVisible")
-		return &window_visible_prelude();
-	if (module == "user32.dll" && name == "IsIconic")
-		return &window_iconic_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "InitOnceBeginInitialize")
-		return &init_once_begin_prelude();
-	if (module == "user32.dll" && name == "EqualRect")
-		return &equal_rect_prelude();
-	if (module == "user32.dll" && name == "IsRectEmpty")
-		return &is_rect_empty_prelude();
-	if (module == "user32.dll" && name == "SetRectEmpty")
-		return &set_rect_empty_prelude();
-	if (module == "user32.dll" && name == "CopyRect")
-		return &copy_rect_prelude();
-	if (module == "user32.dll" && name == "InflateRect")
-		return &inflate_rect_prelude();
-	if (module == "user32.dll" && name == "UnionRect")
-		return &union_rect_prelude();
-	if (module == "user32.dll" && (name == "MonitorFromPoint" || name == "MonitorFromRect" || name == "MonitorFromWindow"))
-		return &monitor_prelude();
-	if (module == "user32.dll" && name == "GetWindowDpiAwarenessContext")
-		return &window_dpi_context_prelude();
-	static constexpr std::array<BlockPrelude, 5> ticks{{{"kernel32.dll", "GetTickCount"}, {"kernel32.dll", "GetTickCount64"},
-		{"kernelbase.dll", "GetTickCount"}, {"kernelbase.dll", "GetTickCount64"}, {"winmm.dll", "timeGetTime"}}};
-	for (const auto &prelude : ticks)
-		if (prelude.module == module && prelude.name == name)
-			return &tick_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "GetLocaleInfoEx")
-		return &locale_prelude();
-	if (module == "ntdll.dll" && (name == "NtAllocateVirtualMemory" || name == "ZwAllocateVirtualMemory"))
-		return &nt_commit_prelude();
-	if (module == "ntdll.dll" && (name == "NtFreeVirtualMemory" || name == "ZwFreeVirtualMemory"))
-		return &nt_decommit_prelude();
-	if ((module == "kernel32.dll" || module == "kernelbase.dll") && name == "MulDiv")
-		return &muldiv_prelude();
-	if ((module == "shlwapi.dll" || module == "kernelbase.dll") && name == "PathFindFileNameW")
-		return &file_name_prelude();
 	// Without visual styles no window has a theme, and the answer needs no trip to the runtime.
 	if (module == "uxtheme.dll" && name == "GetWindowTheme" && classic_theme())
 		return &window_theme_prelude();
 	if (module == "uxtheme.dll" && (name == "IsThemeActive" || name == "IsAppThemed" || name == "IsCompositionActive" || name == "GetThemeAppProperties"))
 		return &theme_state_prelude(name == "GetThemeAppProperties");
-	if (module == "user32.dll" && name == "TranslateMessage")
-		return &translate_message_prelude();
-	if (module == "user32.dll" && name == "CallMsgFilterW")
-		return &message_filter_prelude();
-	if (module == "user32.dll" && name == "GetDesktopWindow")
-		return &desktop_window_prelude();
-	if (module == "user32.dll" && name == "TranslateAcceleratorW")
-		return &accelerator_prelude();
-	if (module == "user32.dll" && name == "GetSystemMetrics")
-		return &system_metrics_prelude();
-	if (module == "user32.dll" && name == "GetSysColor")
-		return &system_colors_prelude();
-	if (module == "user32.dll" && (name == "CallWindowProcW" || name == "CallWindowProcA"))
-		return &call_procedure_prelude();
-	if (module == "user32.dll" && name == "OffsetRect")
-		return &offset_rect_prelude();
-	if (module == "user32.dll" && name == "SetRect")
-		return &set_rect_prelude();
-	if (module == "user32.dll" && name == "IntersectRect")
-		return &intersect_rect_prelude();
-	if (module == "gdi32.dll") {
-		static constexpr std::array<std::pair<std::string_view, const std::vector<uint8_t> &(*)()>, 10> attributes{{
-			{"SetTextColor", dc_text_color_prelude}, {"SetBkColor", dc_background_color_prelude}, {"SetBkMode", dc_background_mode_prelude},
-			{"SetTextAlign", dc_text_align_prelude}, {"GetTextColor", dc_get_text_color_prelude}, {"GetBkColor", dc_get_background_color_prelude},
-			{"GetBkMode", dc_get_background_mode_prelude}, {"GetTextAlign", dc_get_text_align_prelude},
-			{"LPtoDP", dc_to_device_prelude}, {"DPtoLP", dc_to_logical_prelude}}};
-		for (const auto &[attribute, prelude] : attributes)
-			if (name == attribute)
-				return &prelude();
-	}
-	if (module == "user32.dll" && name == "DestroyIcon")
-		return &destroy_icon_prelude();
-	if (module == "gdi32.dll" && name == "DeleteDC")
-		return &delete_dc_prelude();
-	if (module == "gdi32.dll" && name == "DeleteObject")
-		return &delete_object_prelude();
-	if (module == "gdi32.dll" && (name == "GetObjectW" || name == "GetObjectA"))
-		return &bitmap_object_prelude();
-	if (module == "user32.dll" && name == "GetDC")
-		return &screen_get_dc_prelude();
-	if (module == "user32.dll" && name == "ReleaseDC")
-		return &screen_release_dc_prelude();
-	if (module == "gdi32.dll" && name == "GetDeviceCaps")
-		return &screen_device_caps_prelude();
-	if (module != "user32.dll")
+	// The others belong to a library and an export name each, in a table made once: a long list of names is otherwise compared
+	// with each of the thousands of exports of the system libraries.
+	using Prelude = const std::vector<uint8_t> &(*)();
+	static const auto table = [] {
+		std::unordered_map<std::string_view, std::unordered_map<std::string_view, Prelude>> made;
+		const auto add = [&](std::initializer_list<std::string_view> libraries, std::initializer_list<std::string_view> names, Prelude prelude) {
+			for (const auto library : libraries)
+				for (const auto export_name : names)
+					made[library].emplace(export_name, prelude);
+		};
+		add({"user32.dll"}, {"PeekMessageA", "PeekMessageW"}, quiet_peek_prelude);
+		add({"user32.dll"}, {"GetInputState"}, quiet_input_prelude);
+		add({"user32.dll"}, {"GetQueueStatus"}, quiet_status_prelude);
+		add({"user32.dll"}, {"CallNextHookEx"}, next_hook_prelude);
+		add({"user32.dll"}, {"MapWindowPoints"}, map_points_prelude);
+		add({"user32.dll"}, {"GetParent"}, window_parent_prelude);
+		add({"user32.dll"}, {"GetAncestor"}, window_ancestor_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"LocaleNameToLCID"}, locale_number_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"GetLocaleInfoW"}, locale_names_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"ActivateActCtx"}, context_activate_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"DeactivateActCtx"}, context_deactivate_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"LoadResource"}, resource_load_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"SizeofResource"}, resource_size_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"LockResource"}, resource_lock_prelude);
+		add({"gdi32.dll"}, {"RectInRegion"}, rect_in_region_prelude);
+		add({"gdi32.dll"}, {"GetRgnBox"}, region_box_prelude);
+		add({"gdi32.dll"}, {"PtInRegion"}, point_in_region_prelude);
+		add({"user32.dll"}, {"SetThreadDpiAwarenessContext"}, dpi_set_prelude);
+		add({"user32.dll"}, {"GetThreadDpiAwarenessContext"}, dpi_get_prelude);
+		add({"user32.dll"}, {"GetKeyboardLayout"}, keyboard_layout_prelude);
+		add({"user32.dll"}, {"IsWinEventHookInstalled"}, win_event_hook_prelude);
+		add({"user32.dll"}, {"PtInRect"}, point_in_rect_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"QueryDepthSList"}, slist_depth_prelude);
+		add({"ntdll.dll"}, {"RtlQueryDepthSList"}, slist_depth_prelude);
+		add({"ole32.dll", "combase.dll"}, {"StringFromGUID2"}, guid_text_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"GetLocalTime"}, local_time_prelude);
+		add({"user32.dll"}, {"IsWindowVisible"}, window_visible_prelude);
+		add({"user32.dll"}, {"IsIconic"}, window_iconic_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"InitOnceBeginInitialize"}, init_once_begin_prelude);
+		add({"user32.dll"}, {"EqualRect"}, equal_rect_prelude);
+		add({"user32.dll"}, {"IsRectEmpty"}, is_rect_empty_prelude);
+		add({"user32.dll"}, {"SetRectEmpty"}, set_rect_empty_prelude);
+		add({"user32.dll"}, {"CopyRect"}, copy_rect_prelude);
+		add({"user32.dll"}, {"InflateRect"}, inflate_rect_prelude);
+		add({"user32.dll"}, {"UnionRect"}, union_rect_prelude);
+		add({"user32.dll"}, {"MonitorFromPoint", "MonitorFromRect", "MonitorFromWindow"}, monitor_prelude);
+		add({"user32.dll"}, {"GetWindowDpiAwarenessContext"}, window_dpi_context_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"GetTickCount", "GetTickCount64"}, tick_prelude);
+		add({"winmm.dll"}, {"timeGetTime"}, tick_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"GetLocaleInfoEx"}, locale_prelude);
+		add({"ntdll.dll"}, {"NtAllocateVirtualMemory", "ZwAllocateVirtualMemory"}, nt_commit_prelude);
+		add({"ntdll.dll"}, {"NtFreeVirtualMemory", "ZwFreeVirtualMemory"}, nt_decommit_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"MulDiv"}, muldiv_prelude);
+		add({"shlwapi.dll", "kernelbase.dll"}, {"PathFindFileNameW"}, file_name_prelude);
+		add({"user32.dll"}, {"TranslateMessage"}, translate_message_prelude);
+		add({"user32.dll"}, {"CallMsgFilterW"}, message_filter_prelude);
+		add({"user32.dll"}, {"GetDesktopWindow"}, desktop_window_prelude);
+		add({"user32.dll"}, {"TranslateAcceleratorW"}, accelerator_prelude);
+		add({"user32.dll"}, {"GetSystemMetrics"}, system_metrics_prelude);
+		add({"user32.dll"}, {"GetSysColor"}, system_colors_prelude);
+		add({"user32.dll"}, {"CallWindowProcW", "CallWindowProcA"}, call_procedure_prelude);
+		add({"user32.dll"}, {"OffsetRect"}, offset_rect_prelude);
+		add({"user32.dll"}, {"SetRect"}, set_rect_prelude);
+		add({"user32.dll"}, {"IntersectRect"}, intersect_rect_prelude);
+		add({"gdi32.dll"}, {"SetTextColor"}, dc_text_color_prelude);
+		add({"gdi32.dll"}, {"SetBkColor"}, dc_background_color_prelude);
+		add({"gdi32.dll"}, {"SetBkMode"}, dc_background_mode_prelude);
+		add({"gdi32.dll"}, {"SetTextAlign"}, dc_text_align_prelude);
+		add({"gdi32.dll"}, {"GetTextColor"}, dc_get_text_color_prelude);
+		add({"gdi32.dll"}, {"GetBkColor"}, dc_get_background_color_prelude);
+		add({"gdi32.dll"}, {"GetBkMode"}, dc_get_background_mode_prelude);
+		add({"gdi32.dll"}, {"GetTextAlign"}, dc_get_text_align_prelude);
+		add({"gdi32.dll"}, {"LPtoDP"}, dc_to_device_prelude);
+		add({"gdi32.dll"}, {"DPtoLP"}, dc_to_logical_prelude);
+		add({"user32.dll"}, {"DestroyIcon"}, destroy_icon_prelude);
+		add({"gdi32.dll"}, {"DeleteDC"}, delete_dc_prelude);
+		add({"gdi32.dll"}, {"DeleteObject"}, delete_object_prelude);
+		add({"gdi32.dll"}, {"GetObjectW", "GetObjectA"}, bitmap_object_prelude);
+		add({"user32.dll"}, {"GetDC"}, screen_get_dc_prelude);
+		add({"user32.dll"}, {"ReleaseDC"}, screen_release_dc_prelude);
+		add({"gdi32.dll"}, {"GetDeviceCaps"}, screen_device_caps_prelude);
+		add({"user32.dll"}, {"GetWindowLongPtrW", "GetWindowLongPtrA"}, window_long_ptr_prelude);
+		add({"user32.dll"}, {"GetWindowLongW", "GetWindowLongA"}, window_long_prelude);
+		add({"user32.dll"}, {"GetPropW"}, window_property_prelude);
+		add({"user32.dll"}, {"IsWindow", "IsWindowUnicode"}, window_exists_prelude);
+		add({"user32.dll"}, {"GetWindowThreadProcessId"}, window_thread_prelude);
+		add({"user32.dll"}, {"GetKeyState"}, key_state_prelude);
+		add({"user32.dll"}, {"GetClientRect"}, window_client_prelude);
+		add({"user32.dll"}, {"GetWindowRect"}, window_outer_prelude);
+		add({"user32.dll"}, {"IsChild"}, window_child_prelude);
+		add({"user32.dll"}, {"GetDpiForWindow"}, window_dpi_prelude);
+		add({"user32.dll"}, {"GetFocus"}, focus_prelude);
+		add({"user32.dll"}, {"GetForegroundWindow"}, foreground_prelude);
+		add({"user32.dll"}, {"GetCursorPos"}, cursor_position_prelude);
+		add({"user32.dll"}, {"DefWindowProcW"}, default_procedure_prelude);
+		add({"user32.dll"}, {"GetMenuItemCount"}, menu_count_prelude);
+		add({"user32.dll"}, {"GetSubMenu"}, menu_submenu_prelude);
+		add({"user32.dll"}, {"GetMenuItemID"}, menu_id_prelude);
+		add({"user32.dll"}, {"GetMenuStringW"}, menu_string_prelude);
+		add({"user32.dll"}, {"GetMenuState"}, menu_state_prelude);
+		return made;
+	}();
+	const auto library = table.find(module);
+	if (library == table.end())
 		return nullptr;
-	if (name == "GetWindowLongPtrW" || name == "GetWindowLongPtrA")
-		return &window_long_ptr_prelude();
-	if (name == "GetWindowLongW" || name == "GetWindowLongA")
-		return &window_long_prelude();
-	if (name == "GetPropW")
-		return &window_property_prelude();
-	if (name == "IsWindow" || name == "IsWindowUnicode")
-		return &window_exists_prelude();
-	if (name == "GetWindowThreadProcessId")
-		return &window_thread_prelude();
-	if (name == "GetKeyState")
-		return &key_state_prelude();
-	if (name == "GetClientRect")
-		return &window_client_prelude();
-	if (name == "GetWindowRect")
-		return &window_outer_prelude();
-	if (name == "IsChild")
-		return &window_child_prelude();
-	if (name == "GetDpiForWindow")
-		return &window_dpi_prelude();
-	if (name == "GetFocus")
-		return &focus_prelude();
-	if (name == "GetForegroundWindow")
-		return &foreground_prelude();
-	if (name == "GetCursorPos")
-		return &cursor_position_prelude();
-	if (name == "DefWindowProcW")
-		return &default_procedure_prelude();
-	if (name == "GetMenuItemCount")
-		return &menu_count_prelude();
-	if (name == "GetSubMenu")
-		return &menu_submenu_prelude();
-	if (name == "GetMenuItemID")
-		return &menu_id_prelude();
-	if (name == "GetMenuStringW")
-		return &menu_string_prelude();
-	if (name == "GetMenuState")
-		return &menu_state_prelude();
-	return nullptr;
-}
-
-// The prelude of an export, remembered: each export of every system library is looked up several times as the process starts, and the
-// rules above are a long list of names. What they depend on besides the names (the environment) does not change in a process.
-static const std::vector<uint8_t> *block_prelude(std::string_view module, std::string_view name)
-{
-	struct Hash {
-		using is_transparent = void;
-		size_t operator()(std::string_view text) const { return std::hash<std::string_view>{}(text); }
-	};
-	using Names = std::unordered_map<std::string, const std::vector<uint8_t> *, Hash, std::equal_to<>>;
-	static std::mutex lock;
-	static std::unordered_map<std::string, Names, Hash, std::equal_to<>> known;
-	std::lock_guard guard(lock);
-	auto library = known.find(module);
-	if (library == known.end())
-		library = known.emplace(std::string(module), Names{}).first;
-	if (const auto found = library->second.find(name); found != library->second.end())
-		return found->second;
-	const auto *prelude = find_block_prelude(module, name);
-	library->second.emplace(std::string(name), prelude);
-	return prelude;
+	const auto found = library->second.find(name);
+	return found == library->second.end() ? nullptr : &found->second();
 }
 
 // The answers a guest thread takes from the runtime's tables while other threads run and the runtime changes them: those that only
