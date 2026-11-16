@@ -3443,6 +3443,33 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_apc_nonalertable_${mode} PROPERTIES TIMEOUT 10)
         endforeach()
         set_tests_properties(native_apc_nonalertable_parallel PROPERTIES ENVIRONMENT RAVEN_PARALLEL=1)
+        # An APC queued to a thread that has ended, from 64-bit and 32-bit callers.
+        raven_kernel_fixture(finished-apc finished_apc_client.c 0x1c3000000 "-lkernel32")
+        add_test(NAME native_finished_apc COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/finished-apc.exe)
+        set_tests_properties(native_finished_apc PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        if(RAVEN_MINGW32)
+            add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe
+                COMMAND ${RAVEN_MINGW32} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                    -Wl,--entry,_raven_entry,--no-insert-timestamp
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe ${LOADER_SOURCES}/finished_apc_client.c -lkernel32
+                DEPENDS ${LOADER_SOURCES}/finished_apc_client.c VERBATIM)
+            add_custom_target(finished_apc32_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe)
+            add_test(NAME native_finished_apc_x32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe)
+            set_tests_properties(native_finished_apc_x32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        endif()
+        # The same with each guest thread on a host thread of its own (RAVEN_PARALLEL), where the ended thread's state is read from another host thread.
+        foreach(width "" _x32)
+            if(width STREQUAL "" OR RAVEN_MINGW32)
+                if(width STREQUAL "")
+                    set(finished_apc_client ${CMAKE_CURRENT_BINARY_DIR}/finished-apc.exe)
+                else()
+                    set(finished_apc_client ${CMAKE_CURRENT_BINARY_DIR}/finished-apc32.exe)
+                endif()
+                add_test(NAME native_finished_apc${width}_parallel COMMAND raven --run-process --execution=native ${finished_apc_client})
+                set_tests_properties(native_finished_apc${width}_parallel PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/finished-apc${width}-parallel-prefix")
+            endif()
+        endforeach()
         add_test(NAME native_api_hook COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/api-hook.exe)
         set_tests_properties(native_api_hook PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(PARALLEL_CLIENTS)

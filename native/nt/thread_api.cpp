@@ -1198,6 +1198,12 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(6);
 			return;
 		}
+		// A thread that has ended runs no more APCs. QueueUserAPC's documentation: "When the thread is in the process of being terminated,
+		// calling QueueUserAPC to add to the thread's APC queue will fail with (31) ERROR_GEN_FAILURE."
+		if (thread->state == GuestThread::State::done) {
+			call.fail(31);
+			return;
+		}
 		thread->apcs.push_back({call[0], call[2]});
 		call.ret(1);
 	});
@@ -1212,6 +1218,11 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		const auto thread = thread_from(call[1]);
 		if (!thread) {
 			call.fail(6);
+			return;
+		}
+		// As in QueueUserAPC.
+		if (thread->state == GuestThread::State::done) {
+			call.fail(31);
 			return;
 		}
 		thread->apcs.push_back({call[0], call[2]});
