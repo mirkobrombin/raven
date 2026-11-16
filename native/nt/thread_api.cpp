@@ -348,20 +348,33 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				words.push_back(word);
 			}
 		for (;;) {
-			const auto current = states();
-			for (const auto state : current)
-				if (state < 0) {
-					call.set_last_error(state == -3 ? 5 : 6);
-					return wait_failed;
-				}
+			// Objects of the process's table are taken there, and only whether their handles may be waited for is looked at first: reading
+			// each one's state cost more than the wait, a call into the kernel each where its objects are the kernel's (native/waits).
+			std::vector<int> current;
+			if (!table.empty()) {
+				for (size_t index = 0; index < resolved.size(); ++index)
+					if (const int state = waited.usable(index); state < 0) {
+						call.set_last_error(state == -3 ? 5 : 6);
+						return wait_failed;
+					}
+			} else {
+				current = states();
+				for (const auto state : current)
+					if (state < 0) {
+						call.set_last_error(state == -3 ? 5 : 6);
+						return wait_failed;
+					}
+			}
 			if (!table.empty()) {
 				if (const uint32_t taken = raven_waits_wait(kernel_waits(), id, table.data(), uint32_t(table.size()), all, 0, 0); taken != wait_timeout)
 					return taken;
 				// A pulse granted to this thread alone (see EventPulses) is not in the table: the event shows it to its wait.
-				if (!all)
+				if (!all) {
+					current = states();
 					for (size_t index = 0; index < current.size(); ++index)
 						if (current[index] == 1 && waited.try_consume(index, id))
 							return uint32_t(index);
+				}
 			} else if (all) {
 				if (std::all_of(current.begin(), current.end(), [](int state) { return state == 1; })) {
 					bool taken = true;

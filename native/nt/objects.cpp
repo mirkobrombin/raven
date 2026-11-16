@@ -139,11 +139,34 @@ int NativeObjects::signaled(uint64_t handle, uint32_t thread) const
 	return held->signaled(thread);
 }
 
+int NativeObjects::usable(uint64_t handle) const
+{
+	const auto held = object(handle);
+	if (!held) {
+		arrive(handle);
+		std::lock_guard lock(mutex);
+		return handles.contains(handle) ? -1 : -2;
+	}
+	if ((held->type_name() == u"Event" || held->type_name() == u"Mutant") && !(access_of(handle) & 0x100000))
+		return -3;
+	return 0;
+}
+
 int WaitedObjects::signaled(size_t index, uint32_t thread)
 {
 	if (held[index])
 		return held[index]->signaled(thread);
 	const int state = objects.signaled(handles[index], thread);
+	if (state >= 0)
+		held[index] = objects.object(handles[index]);
+	return state;
+}
+
+int WaitedObjects::usable(size_t index)
+{
+	if (held[index])
+		return 0;
+	const int state = objects.usable(handles[index]);
 	if (state >= 0)
 		held[index] = objects.object(handles[index]);
 	return state;

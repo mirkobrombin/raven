@@ -96,6 +96,8 @@ public:
 	template<typename T> std::shared_ptr<T> object_as(uint64_t handle) const { return std::dynamic_pointer_cast<T>(object(handle)); }
 	// Waiting state of any handle kind (see KernelObject::signaled); -2 when the handle does not exist.
 	int signaled(uint64_t handle, uint32_t thread) const;
+	// What signaled gives for a handle that cannot be waited for, and 0 for one that can, without looking at its object's state.
+	int usable(uint64_t handle) const;
 	void consume(uint64_t handle, uint32_t thread);
 	// Takes what a satisfied wait takes; false when another process took it first.
 	bool try_consume(uint64_t handle, uint32_t thread);
@@ -158,6 +160,8 @@ public:
 		held(handles.size()) {}
 	// The state NativeObjects::signaled gives for the handle until the wait has its object, the object's own from then on.
 	int signaled(size_t index, uint32_t thread);
+	// As NativeObjects::usable, for the handle at `index`.
+	int usable(size_t index);
 	bool try_consume(size_t index, uint32_t thread);
 	void consume(size_t index, uint32_t thread);
 	// When the object turns signaled by itself, as a timer does.
