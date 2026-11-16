@@ -61,6 +61,7 @@ endif()
 add_executable(raven-runtime main.cpp)
 target_link_libraries(raven-runtime PRIVATE raven_pe)
 add_executable(raven launcher.cpp nt/warm_client.cpp)
+target_link_options(raven PRIVATE -static)
 add_dependencies(raven raven-runtime)
 
 add_executable(pe_test pe/pe_test.cpp)

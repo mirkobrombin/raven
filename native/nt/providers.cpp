@@ -2645,9 +2645,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		for (const auto &[name, module] : modules.all())
 			module->loaded.detach();
 	});
-	const auto deadline = std::chrono::steady_clock::now() + timeout;
 	NativeProcess process(images, bootstrap, timeout, NativeMode::x64, entry.image.stack_reserve);
 	process.add_api_traps(std::move(api_traps));
+	// A start a warm host forked ahead waits here for its request, which its standard handles and its time limit belong to.
+	warm_ready();
+	const auto deadline = std::chrono::steady_clock::now() + timeout;
 	NativeEnvironment environment(process, entry.loaded.base(), uint32_t(::getpid()), 1);
 	const bool has_launch = launch.has_value();
 	if (!launch) {

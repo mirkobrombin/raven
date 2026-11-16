@@ -35,6 +35,8 @@ std::string identity;
 bool preparing = false;
 int listener_channel = -1, request = -1;
 std::vector<Stamp> stamps;
+// In a start forked ahead of its request, where the request's standard streams come from.
+int ready_channel = -1;
 // What waits for the process of the start itself.
 std::vector<std::function<void()>> deferred;
 
@@ -86,6 +88,50 @@ bool take_request(int connection, int (&streams)[3])
 			::close(stream);
 		return false;
 	}
+	return true;
+}
+
+// Sends a request's standard streams to the start that takes it, or takes them there.
+bool send_streams(int channel, const int (&streams)[3])
+{
+	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 3)]{};
+	char byte = 'S';
+	iovec part{&byte, 1};
+	msghdr message{};
+	message.msg_iov = &part;
+	message.msg_iovlen = 1;
+	message.msg_control = control;
+	message.msg_controllen = sizeof control;
+	cmsghdr *header = CMSG_FIRSTHDR(&message);
+	header->cmsg_level = SOL_SOCKET;
+	header->cmsg_type = SCM_RIGHTS;
+	header->cmsg_len = CMSG_LEN(sizeof(int) * 3);
+	std::memcpy(CMSG_DATA(header), streams, sizeof streams);
+	ssize_t sent;
+	do
+		sent = ::sendmsg(channel, &message, MSG_NOSIGNAL);
+	while (sent < 0 && errno == EINTR);
+	return sent == 1;
+}
+
+bool receive_streams(int channel, int (&streams)[3])
+{
+	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 3)]{};
+	char byte = 0;
+	iovec part{&byte, 1};
+	msghdr message{};
+	message.msg_iov = &part;
+	message.msg_iovlen = 1;
+	message.msg_control = control;
+	message.msg_controllen = sizeof control;
+	ssize_t got;
+	do
+		got = ::recvmsg(channel, &message, MSG_CMSG_CLOEXEC);
+	while (got < 0 && errno == EINTR);
+	const cmsghdr *header = CMSG_FIRSTHDR(&message);
+	if (got != 1 || !header || header->cmsg_type != SCM_RIGHTS || header->cmsg_len != CMSG_LEN(sizeof(int) * 3))
+		return false;
+	std::memcpy(streams, CMSG_DATA(header), sizeof streams);
 	return true;
 }
 
@@ -282,8 +328,24 @@ void warm_point(const std::function<void()> &detach)
 	::sigprocmask(SIG_BLOCK, &children, &previous);
 	const int ended = ::signalfd(-1, &children, SFD_CLOEXEC);
 	std::map<pid_t, int> serving;
-	// Forks the process of a start; true in it, which goes on with the start.
-	const auto serve = [&](int connection) {
+	// The next start is forked before its request comes: it makes its guest process and waits at warm_ready for the request's standard
+	// streams, so a request finds a start already made. It runs while the host waits, with the host's quiet streams.
+	pid_t spare = -1;
+	int spare_channel = -1;
+	bool stale = false;
+	// The request being given out, which a start forked meanwhile must not keep.
+	int streams[3]{-1, -1, -1}, pending = -1;
+	const auto drop_spare = [&] {
+		if (spare_channel >= 0)
+			::close(spare_channel);
+		spare_channel = -1;
+		spare = -1;
+	};
+	// Forks the next start; true in it, which goes on with the start.
+	const auto prepare_spare = [&] {
+		int pair[2];
+		if (stale || ::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) != 0)
+			return false;
 		flush_streams();
 		const pid_t child = ::fork();
 		if (child == 0) {
@@ -292,29 +354,58 @@ void warm_point(const std::function<void()> &detach)
 			::close(ended);
 			for (const auto &[process, other] : serving)
 				::close(other);
-			::close(connection);
+			for (const int stream : streams)
+				if (stream >= 0)
+					::close(stream);
+			if (pending >= 0)
+				::close(pending);
+			::close(pair[0]);
+			ready_channel = pair[1];
 			::sigprocmask(SIG_SETMASK, &previous, nullptr);
 			detach();
 			run_deferred();
 			return true;
 		}
+		::close(pair[1]);
 		if (child < 0) {
-			reply(connection, reply_status, 1 << 8);
-			::close(connection);
+			::close(pair[0]);
 			return false;
 		}
-		serving[child] = connection;
-		reply(connection, reply_process, child);
+		spare = child;
+		spare_channel = pair[0];
 		return false;
 	};
-	const int first = request;
-	request = -1;
-	if (serve(first))
-		return;
+	// Gives a request to the start forked for it, with its standard streams.
+	const auto dispatch = [&](int connection) {
+		const bool sent = spare >= 0 && send_streams(spare_channel, streams);
+		for (int &stream : streams) {
+			::close(stream);
+			stream = -1;
+		}
+		pending = -1;
+		if (!sent) {
+			drop_spare();
+			reply(connection, reply_refused, 0);
+			::close(connection);
+			return;
+		}
+		serving[spare] = connection;
+		reply(connection, reply_process, spare);
+		drop_spare();
+	};
+	// The request this process was prepared for goes to the first start; the host itself keeps quiet streams.
+	for (int stream = 0; stream <= 2; ++stream)
+		streams[stream] = ::fcntl(stream, F_DUPFD_CLOEXEC, 3);
 	quiet_streams();
+	pending = request;
+	request = -1;
+	if (prepare_spare())
+		return;
+	dispatch(pending);
 	if (listener < 0 || ended < 0)
 		::_exit(0);
-	bool stale = false;
+	if (prepare_spare())
+		return;
 	for (;;) {
 		pollfd waiting[2]{{ended, POLLIN, 0}, {listener, stale ? short(0) : short(POLLIN), 0}};
 		const int ready_count = ::poll(waiting, 2, serving.empty() ? waiting_milliseconds() : -1);
@@ -326,12 +417,15 @@ void warm_point(const std::function<void()> &detach)
 			signalfd_siginfo information{};
 			[[maybe_unused]] const auto got = ::read(ended, &information, sizeof information);
 			int status = 0;
-			for (pid_t process; (process = ::waitpid(-1, &status, WNOHANG)) > 0;)
+			for (pid_t process; (process = ::waitpid(-1, &status, WNOHANG)) > 0;) {
 				if (const auto found = serving.find(process); found != serving.end()) {
 					reply(found->second, reply_status, status);
 					::close(found->second);
 					serving.erase(found);
-				}
+				} else if (process == spare)
+					// A start that ended before its request: the next request has one forked for it.
+					drop_spare();
+			}
 			if (stale && serving.empty())
 				::_exit(0);
 		}
@@ -340,29 +434,48 @@ void warm_point(const std::function<void()> &detach)
 		const int connection = ::accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
 		if (connection < 0)
 			continue;
-		int streams[3];
 		if (!take_request(connection, streams)) {
 			::close(connection);
 			continue;
 		}
+		pending = connection;
 		// A library or folder the host read changed: the start runs on its own, and the host ends once its starts did.
 		if (std::any_of(stamps.begin(), stamps.end(), [](const Stamp &stamp) { return !same(stamp, stamp_of(stamp.path)); })) {
-			for (const int stream : streams)
+			for (int &stream : streams) {
 				::close(stream);
+				stream = -1;
+			}
+			pending = -1;
 			reply(connection, reply_refused, 0);
 			::close(connection);
 			stale = true;
+			drop_spare();
 			::close(listener);
 			listener = -1;
 			if (serving.empty())
 				::_exit(0);
 			continue;
 		}
-		put_streams(streams);
-		if (serve(connection))
+		if (spare < 0 && prepare_spare())
 			return;
-		quiet_streams();
+		dispatch(connection);
+		if (prepare_spare())
+			return;
 	}
+}
+
+void warm_ready()
+{
+	if (ready_channel < 0)
+		return;
+	int streams[3];
+	const bool taken = receive_streams(ready_channel, streams);
+	::close(ready_channel);
+	ready_channel = -1;
+	// The host ended without a request for this start: nothing ran in it yet.
+	if (!taken)
+		::_exit(0);
+	put_streams(streams);
 }
 
 void warm_defer(std::function<void()> work)
