@@ -35,6 +35,25 @@ NativeObjectResult NativeObjects::inherit_file(int descriptor)
 	return {handle};
 }
 
+uint32_t NativeObjects::refresh_file(uint64_t handle, int descriptor)
+{
+	const auto copy=fcntl(descriptor,F_DUPFD_CLOEXEC,3);
+	if (copy<0) return errno==EBADF ? 0xc0000008U : 0xc000009aU;
+	struct stat metadata{};
+	if (fstat(copy,&metadata)) { ::close(copy);return 0xc0000008U; }
+	const uint32_t type=S_ISREG(metadata.st_mode) || S_ISDIR(metadata.st_mode) ? 1 :
+		S_ISCHR(metadata.st_mode) ? 2 : S_ISFIFO(metadata.st_mode) || S_ISSOCK(metadata.st_mode) ? 3 : 0;
+	if (!type) { ::close(copy);return 0xc00000bbU; }
+	std::shared_ptr<File> object;
+	try { object=std::make_shared<File>(copy,type); }
+	catch (...) { ::close(copy);throw; }
+	std::lock_guard lock(mutex);
+	const auto found=handles.find(handle);
+	if (found==handles.end() || !found->second.file) return 0xc0000008U;
+	found->second.file=std::move(object);
+	return 0;
+}
+
 std::shared_ptr<NativeObjects::File> NativeObjects::file(uint64_t handle) const
 {
 	std::lock_guard lock(mutex);

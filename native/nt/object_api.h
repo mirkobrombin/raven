@@ -21,6 +21,8 @@ public:
 	// run first.
 	static void register_served(ApiRegistry &registry, NativeObjects &objects, class NativeThreads &threads);
 
+	void set_deadline(std::chrono::steady_clock::time_point end) { deadline = end; }
+
 private:
 	NativeProcess &process;
 	NativeEnvironment &environment;

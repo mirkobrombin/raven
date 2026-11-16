@@ -37,6 +37,8 @@ int listener_channel = -1, request = -1;
 std::vector<Stamp> stamps;
 // In a start forked ahead of its request, where the request's standard streams come from.
 int ready_channel = -1;
+// What waits for the request's standard streams in a start forked ahead.
+std::vector<std::function<void()>> when_ready;
 // What waits for the process of the start itself.
 std::vector<std::function<void()>> deferred;
 
@@ -464,10 +466,10 @@ void warm_point(const std::function<void()> &detach)
 	}
 }
 
-void warm_ready()
+bool warm_ready()
 {
 	if (ready_channel < 0)
-		return;
+		return false;
 	int streams[3];
 	const bool taken = receive_streams(ready_channel, streams);
 	::close(ready_channel);
@@ -476,6 +478,24 @@ void warm_ready()
 	if (!taken)
 		::_exit(0);
 	put_streams(streams);
+	auto work = std::move(when_ready);
+	when_ready.clear();
+	for (const auto &step : work)
+		step();
+	return true;
+}
+
+bool warm_waiting()
+{
+	return ready_channel >= 0;
+}
+
+void warm_when_ready(std::function<void()> work)
+{
+	if (ready_channel >= 0)
+		when_ready.push_back(std::move(work));
+	else
+		work();
 }
 
 void warm_defer(std::function<void()> work)

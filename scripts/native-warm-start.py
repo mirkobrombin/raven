@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Starts the same program three times: the first leaves a warm host behind, the second prepares it, and the third must be a process
 forked from it, not the raven command itself. Each start must still read the standard input it was given, write to its own standard
-output and end with the program's exit status."""
+output and end with the program's exit status. The host forks each start before its request, so the third comes later than the time a
+start may take, which must count from the request."""
 
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 raven, program = sys.argv[1], sys.argv[2]
 command = [raven, "--run-process", "--execution=native", "--stdio=inherit", program]
@@ -51,9 +54,28 @@ def start(name, check_host):
 
 with tempfile.TemporaryDirectory() as prefix:
 	os.environ["RAVEN_PREFIX"] = prefix
-	os.environ["RAVEN_WARM_SECONDS"] = "5"
+	os.environ["RAVEN_WARM_SECONDS"] = "30"
 	os.environ.pop("RAVEN_WARM", None)
 	start("first", False)
 	start("second", False)
+	time.sleep(6)
 	start("third", True)
+	# The host and the start it forked ahead outlive the test; they are this prefix's, and end before it is removed.
+	marker = f"RAVEN_PREFIX={prefix}".encode()
+	host = []
+	for entry in os.listdir("/proc"):
+		try:
+			if entry.isdigit() and marker in open(f"/proc/{entry}/environ", "rb").read().split(b"\0"):
+				host.append(int(entry))
+		except OSError:
+			pass
+	for process in host:
+		try:
+			os.kill(process, signal.SIGKILL)
+		except OSError:
+			pass
+	for _ in range(100):
+		if not any(os.path.exists(f"/proc/{process}") for process in host):
+			break
+		time.sleep(0.05)
 print("PASS")

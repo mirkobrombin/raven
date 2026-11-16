@@ -223,6 +223,9 @@ public:
 	// Thread blocks of every thread that has not finished.
 	std::vector<uint64_t> thread_blocks() const;
 
+	// The process's time limit, which a start forked ahead learns only when its request comes.
+	void set_deadline(std::chrono::steady_clock::time_point end) { deadline = end; }
+
 private:
 	NativeProcess &process;
 	NativeEnvironment &environment;

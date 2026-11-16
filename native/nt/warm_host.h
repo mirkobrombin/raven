@@ -22,9 +22,14 @@ void start_warm_host(int argc, char **argv);
 // Where a prepared host stops: in an ordinary start it returns at once. In the host it returns only in each process forked for a start,
 // after `detach` gave that process its own copies of what it will write to. The host forks each start before its request comes.
 void warm_point(const std::function<void()> &detach);
-// Where a start forked ahead waits for its request, before anything of its process depends on the standard streams: it returns with the
-// request's streams in place, or ends the process when the host ended without one. In any other start it returns at once.
-void warm_ready();
+// Where a start forked ahead waits for its request, just before its guest runs: it returns true with the request's streams in place, after
+// the work warm_when_ready put off until then, or ends the process when the host ended without one. In any other start it returns false
+// at once.
+bool warm_ready();
+// Whether this is a start forked ahead that has not had its request yet.
+bool warm_waiting();
+// Work that needs a start's own standard streams: done at once, or in a start forked ahead, once its request's streams are in place.
+void warm_when_ready(std::function<void()> work);
 // Work each start must do in its own process, as confining it: done at once in an ordinary start, and in a process that prepares a host,
 // in each start forked from it at the warm point.
 void warm_defer(std::function<void()> work);

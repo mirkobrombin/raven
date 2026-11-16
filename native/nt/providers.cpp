@@ -2647,9 +2647,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	});
 	NativeProcess process(images, bootstrap, timeout, NativeMode::x64, entry.image.stack_reserve);
 	process.add_api_traps(std::move(api_traps));
-	// A start a warm host forked ahead waits here for its request, which its standard handles and its time limit belong to.
-	warm_ready();
-	const auto deadline = std::chrono::steady_clock::now() + timeout;
+	// A start a warm host forked ahead has no time limit until its request comes (warm_ready below).
+	auto deadline = std::chrono::steady_clock::now() + (warm_waiting() ? std::chrono::milliseconds(86400000) : timeout);
 	NativeEnvironment environment(process, entry.loaded.base(), uint32_t(::getpid()), 1);
 	const bool has_launch = launch.has_value();
 	if (!launch) {
@@ -2678,6 +2677,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		// handle list (PROC_THREAD_ATTRIBUTE_HANDLE_LIST) require.
 		kernel_objects.set_inherit(inherited.value,true);
 		standard_handles[i]=inherited.value;
+		// A start a warm host forked ahead holds the host's streams until its request's come: the handle then names those.
+		warm_when_ready([&kernel_objects,handle=inherited.value,descriptor=launch->standard_fds[i]] {
+			if (kernel_objects.refresh_file(handle,descriptor)) throw std::runtime_error("cannot inherit native standard file");
+		});
 	}
 	environment.prepare_parameters(*launch,standard_handles);
 	ApiRegistry api_registry, desktop_api;
@@ -4002,6 +4005,14 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		windows.shutdown();
 		return NativeResult{NativeStop::exited,request.code,request.instruction,0};
 	};
+	// A start a warm host forked ahead waits here for its request, before its guest runs: its standard streams and its time limit are the
+	// request's.
+	if (warm_ready()) {
+		deadline = std::chrono::steady_clock::now() + timeout;
+		object_api.set_deadline(deadline);
+		windows.set_deadline(deadline);
+		threads.set_deadline(deadline);
+	}
 	// Declared last, so the first thing done when the process ends.
 	struct Ending {
 		~Ending()

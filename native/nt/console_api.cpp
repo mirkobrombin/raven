@@ -9,6 +9,7 @@
 #include "kernel_context.h"
 #include "nls.h"
 #include "text.h"
+#include "warm_host.h"
 
 #include <algorithm>
 #include <atomic>
@@ -620,64 +621,67 @@ void register_console_api(ApiRegistry &registry, KernelContext &context)
 		handlers.routines.erase(std::next(found).base());
 		call.ret(1);
 	});
-	const bool terminal = ::isatty(0) || ::isatty(1) || ::isatty(2);
-	// The window changing size: the cursor must be asked for again, and programs that asked for window input get an event.
-	if (terminal) {
-		struct sigaction resized{};
-		resized.sa_handler = [](int) { TerminalConsole::instance().note_resize(); };
-		resized.sa_flags = SA_RESTART;
-		sigemptyset(&resized.sa_mask);
-		::sigaction(SIGWINCH, &resized, nullptr);
-	}
-	// Ctrl+C reaches 64-bit programs only: a 32-bit one keeps the host's default, which ends it.
-	if (!terminal || context.process.mode() == NativeMode::x86 || control_handlers)
-		return;
-	control_handlers = &handlers;
-	struct sigaction action{};
-	action.sa_handler = interrupted;
-	action.sa_flags = SA_RESTART;
-	sigemptyset(&action.sa_mask);
-	::sigaction(SIGINT, &action, nullptr);
-	context.threads.add_service([&context] {
-		auto &state = handlers;
-		const auto start = [&context, &state](uint64_t routine, uint64_t parameter) {
-			state.running = context.threads.create(routine, parameter, 64 * 1024, false);
-		};
-		// Nobody handled the press: ExitProcess runs on a thread of its own, as the default handler calls it.
-		const auto end_process = [&context, start]() {
-			const auto exit = context.modules.resolve(PEImport{"kernel32.dll", "ExitProcess", 0, false, 0});
-			if (!exit) {
-				TerminalConsole::instance().restore();
-				::_exit(int(status_control_c_exit & 0xff));
-			}
-			start(exit, status_control_c_exit);
-		};
-		if (state.running) {
-			if (state.running->state != GuestThread::State::done)
+	// Whether the standard streams are a terminal is known once they are the request's, in a start a warm host forked ahead.
+	warm_when_ready([&context] {
+		const bool terminal = ::isatty(0) || ::isatty(1) || ::isatty(2);
+		// The window changing size: the cursor must be asked for again, and programs that asked for window input get an event.
+		if (terminal) {
+			struct sigaction resized{};
+			resized.sa_handler = [](int) { TerminalConsole::instance().note_resize(); };
+			resized.sa_flags = SA_RESTART;
+			sigemptyset(&resized.sa_mask);
+			::sigaction(SIGWINCH, &resized, nullptr);
+		}
+		// Ctrl+C reaches 64-bit programs only: a 32-bit one keeps the host's default, which ends it.
+		if (!terminal || context.process.mode() == NativeMode::x86 || control_handlers)
+			return;
+		control_handlers = &handlers;
+		struct sigaction action{};
+		action.sa_handler = interrupted;
+		action.sa_flags = SA_RESTART;
+		sigemptyset(&action.sa_mask);
+		::sigaction(SIGINT, &action, nullptr);
+		context.threads.add_service([&context] {
+			auto &state = handlers;
+			const auto start = [&context, &state](uint64_t routine, uint64_t parameter) {
+				state.running = context.threads.create(routine, parameter, 64 * 1024, false);
+			};
+			// Nobody handled the press: ExitProcess runs on a thread of its own, as the default handler calls it.
+			const auto end_process = [&context, start]() {
+				const auto exit = context.modules.resolve(PEImport{"kernel32.dll", "ExitProcess", 0, false, 0});
+				if (!exit) {
+					TerminalConsole::instance().restore();
+					::_exit(int(status_control_c_exit & 0xff));
+				}
+				start(exit, status_control_c_exit);
+			};
+			if (state.running) {
+				if (state.running->state != GuestThread::State::done)
+					return;
+				const bool handled = state.running->exit_code != 0;
+				state.running.reset();
+				if (handled) {
+					state.asking.clear();
+					return;
+				}
+				if (state.asking.empty()) {
+					end_process();
+					return;
+				}
+				start(state.asking.back(), 0);
+				state.asking.pop_back();
 				return;
-			const bool handled = state.running->exit_code != 0;
-			state.running.reset();
-			if (handled) {
-				state.asking.clear();
-				return;
 			}
+			if (!state.presses.exchange(0) || state.ignore)
+				return;
+			state.asking = state.routines;
 			if (state.asking.empty()) {
 				end_process();
 				return;
 			}
 			start(state.asking.back(), 0);
 			state.asking.pop_back();
-			return;
-		}
-		if (!state.presses.exchange(0) || state.ignore)
-			return;
-		state.asking = state.routines;
-		if (state.asking.empty()) {
-			end_process();
-			return;
-		}
-		start(state.asking.back(), 0);
-		state.asking.pop_back();
+		});
 	});
 }
 
