@@ -86,6 +86,19 @@ static DWORD WINAPI lock_worker(void *unused)
 	return 0;
 }
 
+// Each thread sets an event of its own: nothing is shared, so the calls go as fast side by side as alone unless the system serves them
+// one at a time.
+static DWORD WINAPI setter_worker(void *unused)
+{
+	(void)unused;
+	HANDLE own = CreateEventA(0, TRUE, FALSE, 0);
+	for (LONG turn = 0; turn < turns; ++turn)
+		SetEvent(own);
+	CloseHandle(own);
+	InterlockedAdd(&shared, turns);
+	return 0;
+}
+
 static int contend(const char *name, LPTHREAD_START_ROUTINE worker, LONG each)
 {
 	HANDLE threads[4];
@@ -212,6 +225,8 @@ int raven_entry(void)
 		return 5;
 	if (!contend("srw_4_threads", lock_worker, 200000 / scale))
 		return 6;
+	if (!contend("set_event_4_threads", setter_worker, 50000 / scale))
+		return 8;
 	if (!process_ping_pong(crossings, scale))
 		return 7;
 	return 0;
