@@ -203,6 +203,15 @@ static bool call_stubs()
 	return enabled;
 }
 
+// The calls that raise an exception or go on from another context: the thread's registers are what they act on, so they stop the guest
+// on their breakpoint rather than wait in their stub for the host thread.
+static bool changes_context(std::string_view name)
+{
+	static constexpr std::array<std::string_view, 9> calls{"RaiseException", "RtlRaiseException", "NtRaiseException", "RtlRaiseStatus",
+		"RtlUnwind", "RtlUnwindEx", "RtlRestoreContext", "NtContinue", "RcConsolidateFrames"};
+	return std::find(calls.begin(), calls.end(), name) != calls.end();
+}
+
 // Whether a served stub's code stands at `rva`, as generated or with its block taken from the thread (see run_native_process).
 static bool stub_at(std::span<const uint8_t> image, uint32_t rva)
 {
@@ -3171,7 +3180,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const uint32_t stub = served_stub_rva(image, module_name, symbol.names.at(0), symbol.address);
 			if (!served_api(module_name, symbol.names.at(0))) {
 				// A call the thread's host thread answers: its stub takes the thread's block as the served ones do.
-				if (!call_stubs() || !process.parallel() || !stub_at(image, stub) || image[stub] != 0x4c)
+				if (!call_stubs() || !process.parallel() || !stub_at(image, stub) || image[stub] != 0x4c || changes_context(symbol.names.at(0)))
 					continue;
 				std::array<uint8_t, 12> previous{};
 				std::copy_n(image.data() + stub, previous.size(), previous.begin());
