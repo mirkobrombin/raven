@@ -3084,7 +3084,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const uint64_t served_guest = process.map_shared(served_file, 4096);
 	close(served_file);
 	std::map<uint64_t, std::string> served_names;
-	// Every stub by the API it serves, for what RAVEN_CYCLES reports.
+	// Every stub by the API it serves, for what RAVEN_CYCLES reports; made only when it reports, as it copies thousands of names.
+	const bool cycles_named = CallCycles::instance().enabled();
 	std::map<uint64_t, std::string> stub_names;
 	// The pointers live in the module images, which outlast this process: they are cleared when it ends so that another process mapping
 	// the same images starts with its stubs trapping.
@@ -3133,7 +3134,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				served_pointers.entries.emplace_back(image.data() + stub, previous);
 				std::copy(served_stub::local_block().begin(), served_stub::local_block().end(), image.data() + stub);
 				called_stubs.push_back(module->loaded.base() + stub);
-				stub_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
+				if (cycles_named)
+					stub_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
 				continue;
 			}
 			if (process.parallel()) {
@@ -3160,8 +3162,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 		}
 	}
-	stub_names.insert(served_names.begin(), served_names.end());
-	CallCycles::instance().set_names(std::move(stub_names));
+	if (cycles_named) {
+		stub_names.insert(served_names.begin(), served_names.end());
+		CallCycles::instance().set_names(std::move(stub_names));
+	}
 	std::vector<uint64_t> served_stubs, yield_traps, queued_stubs;
 	for (const auto &[stub, name] : served_names) {
 		served_stubs.push_back(stub);
