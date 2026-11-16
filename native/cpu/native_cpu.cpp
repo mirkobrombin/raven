@@ -1380,9 +1380,12 @@ bool NativeProcess::memory_available(uint64_t address, size_t size) const
 	const auto stack = state->initial_stack_top-state->initial_stack_size-4096;
 	if (address < state->initial_stack_top+4096 && stack < end)
 		return false;
-	for (const auto &[start, mapping] : state->mappings)
-		if (address < mapping.address+mapping.size && mapping.address < end)
-			return false;
+	// Mappings do not overlap, so only the one starting at or before the range and the first one after its start can meet it.
+	auto after = state->mappings.upper_bound(address);
+	if (after != state->mappings.end() && after->second.address < end)
+		return false;
+	if (after != state->mappings.begin() && address < std::prev(after)->second.address+std::prev(after)->second.size)
+		return false;
 	// The host maps a few things of its own into the guest near the top of the address space (the loader, vdso, its stack); the
 	// runtime does not track those, so a range up there is checked against the guest's own map.
 	if (end > 0x700000000000ULL) {
