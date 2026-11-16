@@ -161,6 +161,7 @@ static int native_result(const raven::NativeResult &result,bool process_exit=fal
 #include <csignal>
 #include <exception>
 #include <execinfo.h>
+#include <sched.h>
 
 // With RAVEN_BACKTRACE set, an exception nothing catches shows where it came from.
 static void show_backtrace()
@@ -196,6 +197,11 @@ int main(int argc, char **argv)
 		// A file is fully buffered once opened; diagnostics are read while the process runs, a line at a time.
 		std::setvbuf(stderr, nullptr, _IOLBF, 0);
 	}
+	// The threads of a guest run in parallel unless RAVEN_SERIAL asks for one at a time, or the process may use only one processor: a
+	// thread waiting in a served stub would then spin away the time of the host thread that answers it.
+	if (cpu_set_t usable; !std::getenv("RAVEN_PARALLEL") && !std::getenv("RAVEN_SERIAL") &&
+		(::sched_getaffinity(0, sizeof usable, &usable) != 0 || CPU_COUNT(&usable) > 1))
+		::setenv("RAVEN_PARALLEL", "1", 1);
 	const std::string mode = argc > 1 ? argv[1] : "";
 	// A restart of Windows: the moves and deletions installers left for it, then the programs that run once at the next logon.
 	if (mode == "--reboot") {

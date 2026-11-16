@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sched.h>
 #include <string>
 #include <unistd.h>
 
@@ -21,6 +22,10 @@ int main(int argc, char **argv)
 	}
 	std::string host(self, size_t(length));
 	host = host.substr(0, host.rfind('/') + 1) + "raven-runtime";
+	// As the runtime does (main.cpp), before the environment names the start to a warm host.
+	if (cpu_set_t usable; !std::getenv("RAVEN_PARALLEL") && !std::getenv("RAVEN_SERIAL") &&
+		(::sched_getaffinity(0, sizeof usable, &usable) != 0 || CPU_COUNT(&usable) > 1))
+		::setenv("RAVEN_PARALLEL", "1", 1);
 	if (argc > 1 && std::strcmp(argv[1], "--run-process") == 0 && raven::warm::eligible()) {
 		if (const auto status = raven::run_on_warm_host(raven::warm::identity_of(host, argc, argv)))
 			return *status;
