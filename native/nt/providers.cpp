@@ -1,6 +1,7 @@
 #include "providers.h"
 #include "child_process.h"
 #include "handle_channel.h"
+#include "warm_host.h"
 #include "section.h"
 #include "ansi_api.h"
 #include "module_api.h"
@@ -2605,6 +2606,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	std::vector<LoadedImage *> images;
 	for (const auto &[name, module] : modules.all())
 		images.push_back(&module->loaded);
+	// A warm host stops here, before the guest process exists: each start forked from it goes on with images of its own.
+	warm_point([&] {
+		for (const auto &[name, module] : modules.all())
+			module->loaded.detach();
+	});
 	const auto deadline = std::chrono::steady_clock::now() + timeout;
 	NativeProcess process(images, bootstrap, timeout, NativeMode::x64, entry.image.stack_reserve);
 	for (const auto &[address, name] : traps)

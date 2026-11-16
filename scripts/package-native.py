@@ -50,7 +50,7 @@ def write_record(path, record):
 
 def runtime_paths(build):
     native = build / "native"
-    files = [native / "raven", native / "raven-bootstrap"]
+    files = [native / "raven", native / "raven-runtime", native / "raven-bootstrap"]
     names = """comctl32.dll raven-user32.dll raven-shell.dll raven-dwrite.dll raven-d2d1.dll
         raven-uianimation.dll ucrtbase.dll raven-rtl.dll raven-storage.dll
         msi.dll cabinet.dll sxs.dll rpcrt4.dll msxml3.dll atl100.dll oleaut32.dll
@@ -269,7 +269,7 @@ def main():
             inputs = json.loads(prepared.read_text())
             if inputs != snapshot(source, build):
                 raise RuntimeError("source or configuration changed during the build")
-            if (build / "native/raven").stat().st_mtime < prepared.stat().st_mtime:
+            if (build / "native/raven-runtime").stat().st_mtime < prepared.stat().st_mtime:
                 raise RuntimeError("runtime predates its source record; rebuild first")
             record = dict(inputs=inputs, binaries=runtime_files(build), finished=time.time())
             write_record(build / "native-distribution-build.json", record)

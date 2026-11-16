@@ -2,6 +2,7 @@
 #include "served_queue.h"
 #include "served_stub.h"
 #include "call_cycles.h"
+#include "nt/warm_host.h"
 #include <cstddef>
 
 #include <algorithm>
@@ -786,6 +787,8 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 {
 	if (setup_timeout.count() <= 0)
 		throw std::runtime_error("native execution requires a positive timeout");
+	// Whatever a start put off until its own process is done before the guest exists.
+	warm_settle();
 	state->mode = mode;
 	std::vector<int> descriptors;
 	for (auto *mapped_image : images) {

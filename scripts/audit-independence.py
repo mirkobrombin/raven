@@ -18,7 +18,7 @@ import tempfile
 import time
 
 FORBIDDEN = re.compile(r"wine|proton|wineserver|ntdll\.so|winebus|/\.wine", re.IGNORECASE)
-ALLOWED_COMM = {"raven", "raven-bootstrap"}
+ALLOWED_COMM = {"raven", "raven-runtime", "raven-bootstrap"}
 QUERY = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<12000000) SELECT count(*) FROM c;"
 
 

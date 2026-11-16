@@ -27,6 +27,9 @@ public:
 	int descriptor() const;
 	uint64_t base() const;
 	size_t relocation_count() const;
+	// Gives the image storage of its own at the same host address, with the same contents: a process forked from a warm host writes to
+	// its images, and the host's must stay as they were for the next process.
+	void detach();
 
 private:
 	int fd = -1;

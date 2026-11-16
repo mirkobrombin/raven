@@ -16,6 +16,7 @@ def main():
         runtime = work / "runtime"
         runtime.mkdir()
         shutil.copy2(raven, runtime / "raven")
+        shutil.copy2(raven.parent / "raven-runtime", runtime / "raven-runtime")
         (runtime / "raven-bootstrap").symlink_to(raven.parent / "raven-bootstrap")
         (runtime / "regsvr32.exe").symlink_to(client)
         for name in ("msxml3.dll", "windowscodecs.dll", "mlang.dll", "propsys.dll"):

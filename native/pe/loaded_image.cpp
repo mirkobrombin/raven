@@ -224,6 +224,42 @@ std::vector<ImageMapping> LoadedImage::mappings() const
 	return result;
 }
 
+void LoadedImage::detach()
+{
+	if (fd < 0)
+		return;
+	const int copy = memfd_create("raven-image", MFD_CLOEXEC);
+	if (copy < 0)
+		throw std::system_error(errno, std::generic_category(), "create PE backing file");
+	try {
+		if (ftruncate(copy, static_cast<off_t>(size)) != 0)
+			throw std::system_error(errno, std::generic_category(), "size PE backing file");
+		// Only what was written is copied: the rest of an image is holes that read as zeros, which a copy of every byte would fill.
+		for (off_t at = 0; at < off_t(size);) {
+			const off_t data = lseek(fd, at, SEEK_DATA);
+			if (data < 0)
+				break;
+			const off_t hole = std::min<off_t>(lseek(fd, data, SEEK_HOLE), off_t(size));
+			for (off_t done = data; done < hole;) {
+				const auto written = pwrite(copy, storage + done, size_t(hole - done), done);
+				if (written < 0 && errno == EINTR)
+					continue;
+				if (written <= 0)
+					throw std::system_error(errno, std::generic_category(), "fill PE backing file");
+				done += written;
+			}
+			at = hole;
+		}
+		if (mmap(storage, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, copy, 0) == MAP_FAILED)
+			throw std::system_error(errno, std::generic_category(), "map PE backing file");
+	} catch (...) {
+		close(copy);
+		throw;
+	}
+	close(fd);
+	fd = copy;
+}
+
 int LoadedImage::descriptor() const { return fd; }
 uint64_t LoadedImage::base() const { return address; }
 size_t LoadedImage::relocation_count() const { return relocated; }

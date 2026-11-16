@@ -17,6 +17,7 @@
 #include "nt/handle_channel.h"
 #include "nt/text.h"
 #include "nt/system_exports.h"
+#include "nt/warm_host.h"
 #ifdef RAVEN_OPENGL
 #include "graphics/opengl_bridge.h"
 #endif
@@ -68,6 +69,9 @@ static std::vector<uint8_t> read_file(const char *path)
 // A mapped image may be as large as Windows runs one: its file offsets are 32-bit, and installers carry their payload after the image.
 static raven::ModuleBytes map_module(const std::filesystem::path &path)
 {
+#ifdef RAVEN_NATIVE_CPU
+	raven::warm_watch(path);
+#endif
 	auto bytes = raven::ModuleBytes::map(path);
 	if (!bytes)
 		throw std::runtime_error("cannot map PE file: " + path.string());
@@ -223,6 +227,11 @@ int main(int argc, char **argv)
 	const bool run_entry = mode == "--run-entry";
 	const bool run_modules = mode == "--run-modules";
 	const bool run_process = mode == "--run-process";
+#ifdef RAVEN_NATIVE_CPU
+	// The launcher asked a warm host for this start already; none listened, so one is left behind for the next.
+	if (run_process)
+		raven::start_warm_host(argc, argv);
+#endif
 	int first_file=3;
 	auto timeout=std::chrono::milliseconds(5000);
 	bool timeout_given=false;
@@ -549,10 +558,12 @@ int main(int argc, char **argv)
 							if (auto app = raven::identity_of(prefix.root(), std::filesystem::absolute(argv[first_file])))
 								raven::app_layer().set(prefix.root(), std::move(*app));
 					}
-					// From here on the runtime is confined, with the programs it starts: a program started from the host, unless it is one of the
-					// runtime's trusted programs, which see the whole host.
+					// The runtime is confined, with the programs it starts, before the guest process exists: a program started from the host,
+					// unless it is one of the runtime's trusted programs, which see the whole host. A host kept warm for the next start is not:
+					// each start forked from it confines itself, with a broker of its own.
 					if (started_alone && !raven::sandbox().trusted() && !std::getenv("RAVEN_PREFIX_SETUP"))
-						raven::confine(std::filesystem::absolute(prefix.root()).lexically_normal(), x11 || (!std::getenv("WAYLAND_DISPLAY") && std::getenv("DISPLAY")));
+						raven::warm_defer([root = std::filesystem::absolute(prefix.root()).lexically_normal(),
+							abstract = x11 || (!std::getenv("WAYLAND_DISPLAY") && std::getenv("DISPLAY"))] { raven::confine(root, abstract); });
 					// The libraries installed for every program, in the system directory of the program's width.
 					const auto system_directory = prefix.root() / "drive_c" / "windows" / (entry->image.is_64 ? "system32" : "syswow64");
 					// The program's own manifest names the side-by-side assemblies its libraries come from; it is read from the file, as the
@@ -579,6 +590,7 @@ int main(int argc, char **argv)
 					const auto find_file = [&, listings](const std::filesystem::path &folder, std::string_view name) {
 						std::optional<std::filesystem::path> selected;
 						std::vector<std::filesystem::path> matches;
+						raven::warm_watch(folder);
 						struct stat status{};
 						if (::stat(folder.c_str(), &status) != 0)
 							return selected;
