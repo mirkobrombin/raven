@@ -632,9 +632,15 @@ struct NativeProcess::State {
 	uint64_t mapping_changes = 0;
 	std::vector<std::pair<uint64_t, uint64_t>> allocations;
 	std::vector<std::pair<uint64_t, uint64_t>> image_allocations;
-	std::map<uint64_t, uint32_t> api_traps;
-	// 64-bit API breakpoints followed by RET: their calls return through it, without the runtime popping the return address.
-	std::set<uint64_t> returning_traps;
+	// The API breakpoints, with the bytes the callee pops; a 64-bit one that a RET follows returns through it, without the runtime popping
+	// the return address.
+	struct ApiTrap {
+		uint32_t cleanup = 0;
+		bool returns = false;
+	};
+	std::map<uint64_t, ApiTrap> api_traps;
+	// Where add_api_trap put the last one: traps come by the thousand in rising order, and the next goes right after it.
+	std::map<uint64_t, ApiTrap>::iterator last_trap = api_traps.end();
 	// The guest page add_api_trap last read, for the traps next to each other that follow; cleared whenever guest memory changes.
 	std::vector<uint8_t> trap_page;
 	uint64_t trap_page_address = 0;
@@ -1350,7 +1356,7 @@ void NativeProcess::unmap_memory(uint64_t address)
 	state->mappings.erase(state->mappings.lower_bound(address), state->mappings.lower_bound(end));
 	++state->mapping_changes;
 	state->api_traps.erase(state->api_traps.lower_bound(address), state->api_traps.lower_bound(end));
-	state->returning_traps.erase(state->returning_traps.lower_bound(address), state->returning_traps.lower_bound(end));
+	state->last_trap = state->api_traps.end();
 	state->allocations.erase(owned);
 }
 
@@ -1459,7 +1465,7 @@ void NativeProcess::unmap_image(uint64_t address)
 	state->mappings.erase(state->mappings.lower_bound(address), state->mappings.lower_bound(end));
 	++state->mapping_changes;
 	state->api_traps.erase(state->api_traps.lower_bound(address), state->api_traps.lower_bound(end));
-	state->returning_traps.erase(state->returning_traps.lower_bound(address), state->returning_traps.lower_bound(end));
+	state->last_trap = state->api_traps.end();
 	state->image_allocations.erase(owned);
 }
 
@@ -2185,11 +2191,13 @@ void NativeProcess::add_api_trap(uint64_t address, uint32_t callee_cleanup)
 	}
 	if (state->mode == NativeMode::x86 && (address >= state->limit() || callee_cleanup % 4))
 		throw std::runtime_error("native x86 API trap requires a 32-bit address and dword-aligned cleanup");
-	state->api_traps[address] = callee_cleanup;
-	if (state->mode != NativeMode::x86 && state->covers(address + 1, 1, PROT_EXEC) && byte_at(address + 1) == 0xc3)
-		state->returning_traps.insert(address);
+	const bool returns = state->mode != NativeMode::x86 && state->covers(address + 1, 1, PROT_EXEC) && byte_at(address + 1) == 0xc3;
+	auto hint = state->last_trap == state->api_traps.end() ? state->api_traps.end() : std::next(state->last_trap);
+	if (hint != state->api_traps.end() && hint->first == address)
+		hint->second = {callee_cleanup, returns};
 	else
-		state->returning_traps.erase(address);
+		hint = state->api_traps.insert_or_assign(hint, address, State::ApiTrap{callee_cleanup, returns});
+	state->last_trap = hint;
 }
 
 NativeResult NativeProcess::call(uint64_t address, std::span<const uint64_t> arguments,
@@ -2703,7 +2711,7 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 	}
 	if (breakpoint && state->api_traps.contains(registers.rip - 1)) {
 		state->awaiting_api = true;
-		state->pending_cleanup = state->api_traps.at(registers.rip - 1);
+		state->pending_cleanup = state->api_traps.at(registers.rip - 1).cleanup;
 		return {NativeStop::api, registers.rip - 1, registers.rip, signal};
 	}
 	const uint64_t fault_address = signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE ?
@@ -3139,7 +3147,7 @@ void NativeProcess::return_api(uint64_t value)
 		return;
 	}
 	// Stopped right after a breakpoint that a RET follows: the guest returns by itself.
-	if (state->returning_traps.contains(registers.rip - 1)) {
+	if (const auto trap = state->api_traps.find(registers.rip - 1); trap != state->api_traps.end() && trap->second.returns) {
 		registers.rax = value;
 		registers.orig_rax = uint64_t(-1);
 		trace(PTRACE_SETREGS, state->child->pid, &registers);
