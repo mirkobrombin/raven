@@ -3,6 +3,7 @@
 #include "child_process.h"
 #include "objects.h"
 
+#include <chrono>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -68,6 +69,16 @@ public:
 		added.clear();
 		return finished;
 	}
+	// The same for a waiting thread's condition, which is looked at after every call another thread makes: trying every operation again,
+	// each a system call, then cost more than the calls themselves. A descriptor that became ready waits a fraction of a millisecond.
+	bool look()
+	{
+		const auto now = std::chrono::steady_clock::now();
+		if (operations.empty() || now - looked < std::chrono::microseconds(200))
+			return false;
+		looked = now;
+		return poll();
+	}
 	size_t pending() const { return operations.size() + added.size(); }
 	// The descriptors pending operations wait on.
 	void watch(std::vector<pollfd> &descriptors) const
@@ -85,6 +96,7 @@ private:
 	};
 	std::vector<std::pair<Pending, std::unique_ptr<HostWait>>> operations, added;
 	bool polling = false;
+	std::chrono::steady_clock::time_point looked;
 };
 
 }

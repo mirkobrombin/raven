@@ -814,7 +814,7 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 			}
 			HostWait waiting;
 			context.threads.block([&] {
-				context.reactor->poll();
+				context.reactor->look();
 				return uint32_t(get_word(context.process, overlapped, width)) != status_pending;
 			}, std::nullopt);
 			status = get_word(context.process, overlapped, width);
@@ -836,7 +836,7 @@ void register_pipe_api(ApiRegistry &registry, KernelContext &context)
 			const auto wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
 			HostWait waiting;
 			context.threads.block([&] {
-				context.reactor->poll();
+				context.reactor->look();
 				return uint32_t(get_word(context.process, call[1], call.pointer_width())) != status_pending;
 			}, wake);
 			if (uint32_t(get_word(context.process, call[1], call.pointer_width())) == status_pending) {

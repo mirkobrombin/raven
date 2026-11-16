@@ -1512,7 +1512,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake))
 				return std::nullopt;
 			HostWait waiting;
-			threads.block([&] { reactor.poll(); return !port->empty(); }, wake);
+			threads.block([&] { return !port->empty() || (reactor.look(), !port->empty()); }, wake);
 		}
 	};
 	registry.add("GetQueuedCompletionStatus", 5, [&objects, wait_packet](ApiCall &call) {
@@ -1897,7 +1897,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			}
 			HostWait waiting;
 			threads.block([&] {
-				reactor.poll();
+				reactor.look();
 				return word(call[1]) != status_pending;
 			}, std::nullopt);
 		}
