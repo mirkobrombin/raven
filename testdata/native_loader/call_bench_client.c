@@ -3,7 +3,8 @@
 // A fixed measure of what crossing into the system costs: one line per case with the nanoseconds each operation took, the same program
 // under any runtime. The cases: a call that does next to nothing (SetEvent on an event nobody waits for), a wake handed back and forth
 // between two threads, WaitForMultipleObjects for any and for all of eight signalled events, and four threads contending for a critical
-// section and for an SRW lock. A command line of "short" runs each case a hundredth as many times, to check that it runs at all.
+// section and for an SRW lock. A command line of "short" runs each case a hundredth as many times, to check that it runs at all; one of
+// "start" ends at once, for the time a process takes to start and end.
 
 static HANDLE out;
 static LARGE_INTEGER frequency;
@@ -107,9 +108,12 @@ int raven_entry(void)
 	QueryPerformanceFrequency(&frequency);
 	const char *line = GetCommandLineA();
 	int scale = 1;
-	for (const char *at = line; *at; ++at)
+	for (const char *at = line; *at; ++at) {
 		if (at[0] == 's' && at[1] == 'h' && at[2] == 'o' && at[3] == 'r' && at[4] == 't')
 			scale = 100;
+		if (at[0] == 's' && at[1] == 't' && at[2] == 'a' && at[3] == 'r' && at[4] == 't')
+			return 0;
+	}
 
 	HANDLE event = CreateEventA(0, TRUE, FALSE, 0);
 	const LONG calls = 200000 / scale;
