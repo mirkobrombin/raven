@@ -26,6 +26,8 @@
 #include "desktop/api.h"
 #include "desktop/windows.h"
 #include "cpu/served_queue.h"
+#include "cpu/served_stub.h"
+#include "cpu/call_cycles.h"
 #ifdef RAVEN_OPENGL
 #include "graphics/opengl_bridge.h"
 #endif
@@ -198,45 +200,29 @@ static bool call_stubs()
 // Whether a served stub's code stands at `rva`, as generated or with its block taken from the thread (see run_native_process).
 static bool stub_at(std::span<const uint8_t> image, uint32_t rva)
 {
-	if (size_t(rva) + 0x72 > image.size() || image[rva + 0x70] != 0xcc || image[rva + 0x71] != 0xc3)
+	const auto code = served_stub::code(), local = served_stub::local_block();
+	const size_t trap = served_stub::trap(), store = served_stub::store();
+	if (size_t(rva) + trap + 2 > image.size() || image[rva + trap] != 0xcc || image[rva + trap + 1] != 0xc3)
 		return false;
-	static constexpr std::array<uint8_t, 3> shared{0x4c, 0x8b, 0x15};
-	static constexpr std::array<uint8_t, 9> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0};
-	static constexpr std::array<uint8_t, 4> store{0x49, 0x89, 0x4a, 0x08};
-	return (std::equal(shared.begin(), shared.end(), image.begin() + rva) || std::equal(local.begin(), local.end(), image.begin() + rva)) &&
-		std::equal(store.begin(), store.end(), image.begin() + rva + 12);
+	const auto at = image.begin() + rva;
+	return (std::equal(code.begin(), code.begin() + 3, at) || std::equal(local.begin(), local.end() - 3, at)) &&
+		std::equal(code.begin() + store, code.begin() + store + 4, at + store);
 }
 
-// A served stub: it loads the block address from the provider's own pointer, which stays zero until the runtime maps the block, stores
-// RCX, RDX, R8, R9, RSP and the low halves of XMM0 to XMM3, publishes its own address and spins until the runtime clears it. After a
-// thousand rounds it stops at a breakpoint instead, which gives the processor to the runtime when the two compete for it.
-static constexpr size_t served_stub_size = 128, served_trap = 0x70, served_wait = 85, served_yield = 109;
+// A served stub (gates.S): the provider's own pointer to the block sits `to_pointer` bytes from the stub. Each stub has a room of
+// served_stub_size bytes; the offsets within it are the ones served_stub.h names.
+static constexpr size_t served_stub_size = served_stub::size;
+static const size_t served_trap = served_stub::trap(), served_wait = served_stub::wait(), served_yield = served_stub::yield(),
+	served_tail = served_stub::tail();
 
-// What a stub does with an answer that is not plain, from `served_tail` on: the served ones stop for the runtime, or take their
-// breakpoint when the call was declined; those a host thread answers go to the routine that runs what the host thread asks of the
-// guest meanwhile (jmp [r10+2560], see NativeProcess::run_in_stub).
-static constexpr size_t served_tail = 103;
-static constexpr std::array<uint8_t, 7> asked_tail{0x41, 0xff, 0xa2, 0x00, 0x0a, 0x00, 0x00};
-
-static std::vector<uint8_t> served_stub(int32_t to_pointer, bool asked = false)
+static std::vector<uint8_t> served_stub_code(int32_t to_pointer, bool asked = false)
 {
-	std::vector<uint8_t> code{0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0x4d, 0x85, 0xd2, 0x74, uint8_t(served_trap - 12),
-		0x49, 0x89, 0x4a, 0x08, 0x49, 0x89, 0x52, 0x10, 0x4d, 0x89, 0x42, 0x18, 0x4d, 0x89, 0x4a, 0x20, 0x49, 0x89, 0x62, 0x28,
-		0x66, 0x49, 0x0f, 0x7e, 0x42, 0x30, 0x66, 0x49, 0x0f, 0x7e, 0x4a, 0x38, 0x66, 0x49, 0x0f, 0x7e, 0x52, 0x40, 0x66, 0x49, 0x0f, 0x7e, 0x5a, 0x48,
-		0x4c, 0x8d, 0x1d, 0xc1, 0xff, 0xff, 0xff, 0x4d, 0x89, 0x1a,
-		// mov r11d, 1000; spin: pause; cmp qword [r10], 0; je done; dec r11d; jnz spin; int3; jmp to the compare; nop
-		0x41, 0xbb, 0xe8, 0x03, 0x00, 0x00, 0xf3, 0x90, 0x49, 0x83, 0x3a, 0x00, 0x74, 0x0a, 0x41, 0xff, 0xcb, 0x75, 0xf3, 0xcc, 0xeb, 0xf2,
-		0x66, 0x90,
-		// done: mov rax, [r10+80]; mov r11, [r10+88]; test r11, r11; je return; cmp r11d, 2; je fallback; int3; return: ret
-		// A declined call (2) takes the fallback trap that follows, with the argument registers as the caller left them.
-		0x49, 0x8b, 0x42, 0x50, 0x4d, 0x8b, 0x5a, 0x58, 0x4d, 0x85, 0xdb, 0x74, 0x07, 0x41, 0x83, 0xfb, 0x02, 0x74, 0x03, 0xcc, 0xc3};
+	const auto stub = served_stub::code();
+	std::vector<uint8_t> code(stub.begin(), stub.end());
 	const int32_t displacement = to_pointer - 7;
 	std::memcpy(code.data() + 3, &displacement, 4);
 	if (asked)
-		std::copy(asked_tail.begin(), asked_tail.end(), code.begin() + served_tail);
-	code.resize(served_trap + 2);
-	code[served_trap] = 0xcc;
-	code[served_trap + 1] = 0xc3;
+		std::copy(served_stub::asked_tail().begin(), served_stub::asked_tail().end(), code.begin() + served_tail);
 	return code;
 }
 
@@ -2197,7 +2183,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 		}
 		if (!x86 && served_api(name, exports[index])) {
 			code = served_start + 64 + served_next++ * served_stub_size;
-			const auto stub = served_stub(int32_t(served_start) - int32_t(code));
+			const auto stub = served_stub_code(int32_t(served_start) - int32_t(code));
 			std::copy(stub.begin(), stub.end(), bytes.begin() + ptrdiff_t(code));
 			if (guest_clock_api(name, exports[index])) {
 				const size_t served = code;
@@ -2209,7 +2195,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 			// The stub reads a pointer of its own that stays zero, so it falls to its breakpoint until the runtime has it take the
 			// thread's block instead.
 			code = served_start + 64 + served_next++ * served_stub_size;
-			const auto stub = served_stub(int32_t(served_start + 16) - int32_t(code), true);
+			const auto stub = served_stub_code(int32_t(served_start + 16) - int32_t(code), true);
 			std::copy(stub.begin(), stub.end(), bytes.begin() + ptrdiff_t(code));
 		}
 		if (const auto *prelude = fast_paths && !x86 && !service ? block_prelude(name, exports[index]) : nullptr) {
@@ -3160,6 +3146,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const uint64_t served_guest = process.map_shared(served_file, 4096);
 	close(served_file);
 	std::map<uint64_t, std::string> served_names;
+	// Every stub by the API it serves, for what RAVEN_CYCLES reports.
+	std::map<uint64_t, std::string> stub_names;
 	// The pointers live in the module images, which outlast this process: they are cleared when it ends so that another process mapping
 	// the same images starts with its stubs trapping.
 	struct ServedPointers {
@@ -3205,9 +3193,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::array<uint8_t, 12> previous{};
 				std::copy_n(image.data() + stub, previous.size(), previous.begin());
 				served_pointers.entries.emplace_back(image.data() + stub, previous);
-				const std::array<uint8_t, 12> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0, 0x90, 0x90, 0x90};
-				std::copy(local.begin(), local.end(), image.data() + stub);
+				std::copy(served_stub::local_block().begin(), served_stub::local_block().end(), image.data() + stub);
 				called_stubs.push_back(module->loaded.base() + stub);
+				stub_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
 				continue;
 			}
 			if (process.parallel()) {
@@ -3215,8 +3203,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::copy_n(image.data() + stub, previous.size(), previous.begin());
 				served_pointers.entries.emplace_back(image.data() + stub, previous);
 				// Load this thread's block through GS; keep every completion trap at its original offset.
-				const std::array<uint8_t, 12> local{0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0, 0x90, 0x90, 0x90};
-				std::copy(local.begin(), local.end(), image.data() + stub);
+				std::copy(served_stub::local_block().begin(), served_stub::local_block().end(), image.data() + stub);
 			} else {
 				int32_t displacement = 0;
 				std::memcpy(&displacement, image.data() + stub + 3, 4);
@@ -3231,10 +3218,12 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::array<uint8_t, 7> previous{};
 				std::copy_n(image.data() + stub + served_tail, previous.size(), previous.begin());
 				served_pointers.tails.emplace_back(image.data() + stub + served_tail, previous);
-				std::copy(asked_tail.begin(), asked_tail.end(), image.data() + stub + served_tail);
+				std::copy(served_stub::asked_tail().begin(), served_stub::asked_tail().end(), image.data() + stub + served_tail);
 			}
 		}
 	}
+	stub_names.insert(served_names.begin(), served_names.end());
+	CallCycles::instance().set_names(std::move(stub_names));
 	std::vector<uint64_t> served_stubs, yield_traps, queued_stubs;
 	for (const auto &[stub, name] : served_names) {
 		served_stubs.push_back(stub);
@@ -3264,7 +3253,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						symbol.names.at(0) == "PtInRegion" || symbol.names.at(0) == "GetRgnBox"))))
 					if (const auto *prelude = block_prelude(module_name, symbol.names.at(0)); prelude && prelude != &screen_release_dc_prelude() &&
 						served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address)
-						for (uint64_t piece = 0; piece < prelude->size(); piece += served_stub_size)
+						for (uint64_t piece = 0; piece < prelude->size(); piece += served_trap)
 							served_stubs.push_back(module->loaded.base() + symbol.address + piece);
 		}
 	memory.set_commit_block(served_block);
