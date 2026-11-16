@@ -130,5 +130,22 @@ int raven_entry(void)
 	if (FAILED(IAudioClient3_InitializeSharedAudioStream(shared, 0, 480, &stereo, NULL)))
 		return 72;
 	IAudioClient3_Release(shared);
+
+	/* A single block leaves room in the buffer as it plays, not only once it has played. */
+	IAudioClient *playing = activate(device);
+	IAudioRenderClient *writer = NULL;
+	UINT32 frames = 0, before = 0, after = 0;
+	if (!playing || FAILED(IAudioClient_Initialize(playing, AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, &stereo, NULL)) ||
+		FAILED(IAudioClient_GetService(playing, &IID_IAudioRenderClient, (void **)&writer)) || FAILED(IAudioClient_GetBufferSize(playing, &frames)))
+		return 80;
+	if (FAILED(IAudioRenderClient_GetBuffer(writer, frames, &data)) || FAILED(IAudioRenderClient_ReleaseBuffer(writer, frames, AUDCLNT_BUFFERFLAGS_SILENT)) ||
+		FAILED(IAudioClient_GetCurrentPadding(playing, &before)) || FAILED(IAudioClient_Start(playing)))
+		return 81;
+	Sleep(200);
+	if (FAILED(IAudioClient_GetCurrentPadding(playing, &after)) || !after || after >= before)
+		return 82;
+	IAudioClient_Stop(playing);
+	IAudioRenderClient_Release(writer);
+	IAudioClient_Release(playing);
 	return 0;
 }

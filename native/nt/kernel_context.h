@@ -123,7 +123,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context);
 void register_job_api(ApiRegistry &registry, KernelContext &context);
 // winmm wave output through the host sound server.
 void register_wave_api(ApiRegistry &registry, KernelContext &context);
-// MIDI as on a machine with no MIDI ports, for programs of either width.
+// MIDI and auxiliary devices as on a machine with none, for programs of either width.
 void register_midi_api(ApiRegistry &registry);
 void register_mmio_api(ApiRegistry &registry, KernelContext &context);
 void register_process_info_api(ApiRegistry &registry, KernelContext &context);

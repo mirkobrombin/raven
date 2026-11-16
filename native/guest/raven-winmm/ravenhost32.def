@@ -1,0 +1,8 @@
+LIBRARY ravenhost.dll
+EXPORTS
+	RavenAudioOpen@24
+	RavenAudioSetEvent@8
+	RavenAudioStart@4
+	RavenAudioStop@4
+	RavenAudioReset@4
+	RavenAudioClose@4
