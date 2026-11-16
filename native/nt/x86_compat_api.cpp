@@ -67,7 +67,8 @@ void code_land(std::vector<uint8_t> &code, std::initializer_list<size_t> jumps)
 // The two calls that a C runtime makes for every malloc and free answer from free lists in guest memory, as a trap costs far more than
 // the allocation. The bitmap names the pages of the arena, so that a block from anywhere else, which has no header, goes to the runtime
 // and so does a heap whose blocks run code. The lock is only tried: a thread that finds it held takes the runtime's path, whose own lists
-// and bump region do not depend on it. Free lists link through the third word of the block header, not the payload, so that a write
+// and bump region do not depend on it, though only after a short spin: with threads that run in parallel the lock is often held for the
+// few instructions of another thread's call, and the runtime's path stops the guest. Free lists link through the third word of the block header, not the payload, so that a write
 // through a stale pointer after HeapFree, which the Windows heap survives, cannot redirect the next allocation.
 std::vector<uint8_t> alloc_prelude(uint32_t lock, uint32_t lists, uint32_t executable)
 {
@@ -78,10 +79,14 @@ std::vector<uint8_t> alloc_prelude(uint32_t lock, uint32_t lists, uint32_t execu
 	code_bytes(code, {0x8b, 0x44, 0x24, 0x0c, 0x8d, 0x48, 0xff, 0x81, 0xf9}); // mov eax,[esp+12]; lea ecx,[eax-1]; cmp ecx,limit
 	code_word(code, uint32_t(large_block) - 1);
 	const auto sized = code_jump(code, 0x77);
-	code_bytes(code, {0x83, 0xc0, 0x0f, 0xc1, 0xe8, 0x04, 0xb9, 1, 0, 0, 0, 0x87, 0x0d}); // add eax,15; shr eax,4; mov ecx,1; xchg [lock],ecx
+	code_bytes(code, {0x83, 0xc0, 0x0f, 0xc1, 0xe8, 0x04, 0xba, 64, 0, 0, 0}); // add eax,15; shr eax,4; mov edx,64
+	code_bytes(code, {0xb9, 1, 0, 0, 0, 0x87, 0x0d}); // retry: mov ecx,1; xchg [lock],ecx
 	code_word(code, lock);
 	code_bytes(code, {0x85, 0xc9}); // test ecx,ecx
-	const auto held = code_jump(code, 0x75);
+	const auto taken = code_jump(code, 0x74);
+	code_bytes(code, {0xf3, 0x90, 0x4a, 0x75, uint8_t(-20)}); // pause; dec edx; jnz retry
+	const auto held = code_jump(code, 0xeb);
+	code_land(code, {taken});
 	code_bytes(code, {0x89, 0xc1, 0x8b, 0x04, 0x8d}); // mov ecx,eax; mov eax,[lists+ecx*4]
 	code_word(code, lists);
 	code_bytes(code, {0x85, 0xc0}); // test eax,eax
@@ -113,10 +118,14 @@ std::vector<uint8_t> free_prelude(uint32_t lock, uint32_t lists, uint32_t pages)
 	code_bytes(code, {0x8b, 0x48, 0xf0, 0xc1, 0xe9, 0x04, 0x81, 0xf9}); // mov ecx,[eax-16]; shr ecx,4; cmp ecx,classes
 	code_word(code, guest_heap_classes);
 	const auto sized = code_jump(code, 0x73);
-	code_bytes(code, {0xba, 1, 0, 0, 0, 0x87, 0x15}); // mov edx,1; xchg [lock],edx
+	code_bytes(code, {0x6a, 64, 0xba, 1, 0, 0, 0, 0x87, 0x15}); // push 64; retry: mov edx,1; xchg [lock],edx
 	code_word(code, lock);
 	code_bytes(code, {0x85, 0xd2}); // test edx,edx
-	const auto held = code_jump(code, 0x75);
+	const auto taken = code_jump(code, 0x74);
+	code_bytes(code, {0xf3, 0x90, 0xff, 0x0c, 0x24, 0x75, uint8_t(-22), 0x83, 0xc4, 0x04}); // pause; dec dword [esp]; jnz retry; add esp,4
+	const auto held = code_jump(code, 0xeb);
+	code_land(code, {taken});
+	code_bytes(code, {0x83, 0xc4, 0x04}); // add esp,4
 	code_bytes(code, {0x8b, 0x14, 0x8d}); // mov edx,[lists+ecx*4]
 	code_word(code, lists);
 	code_bytes(code, {0x89, 0x50, 0xf8, 0x89, 0x04, 0x8d}); // mov [eax-8],edx; mov [lists+ecx*4],eax

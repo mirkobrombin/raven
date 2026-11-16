@@ -3871,7 +3871,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/x86-heap-client.exe ${LOADER_SOURCES}/x86_heap_client.c -lkernel32
                     DEPENDS ${LOADER_SOURCES}/x86_heap_client.c VERBATIM)
                 add_custom_target(x86_heap_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-heap-client.exe)
-                add_test(NAME native_x86_heap COMMAND raven --run-process --execution=native
+                # A stop in the runtime for each call would take tens of seconds for the two million pairs; with threads in parallel
+                # on a shared runner they take several, as both threads contend for the one lock of the guest-side lists.
+                add_test(NAME native_x86_heap COMMAND raven --run-process --execution=native --timeout-ms=16000
                     ${CMAKE_CURRENT_BINARY_DIR}/x86-heap-client.exe)
                 set_tests_properties(native_x86_heap PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_GUEST_HEAP=1 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-rtl-client.exe
