@@ -94,6 +94,10 @@ private:
 	// The hive file's records from `from` on: each applies to the keys in the order the file holds them. The size read is returned.
 	long long replay(long long from);
 	void apply(const std::string &record);
+	// The key the last record named, by its path as the file spells it: a key's values follow it in the file, and each would otherwise
+	// look the same long path up again. Forgotten as a replay begins and when a record deletes keys.
+	std::string recent_path;
+	std::map<std::u16string, Key>::iterator recent_key;
 	// Appends the records of one change under the prefix's lock, after reading what other processes appended first.
 	// The key the change is to decides which file holds it, when the hive has a layer.
 	void journal(const std::string &records, std::u16string_view folded);

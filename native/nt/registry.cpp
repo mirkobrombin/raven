@@ -9,6 +9,8 @@
 #include "nls.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <fstream>
 #include <initializer_list>
 #include <stdexcept>
@@ -41,6 +43,7 @@ std::u16string fold(std::u16string_view text)
 std::u16string decode_utf8(std::string_view text)
 {
 	std::u16string result;
+	result.reserve(text.size());
 	for (size_t index = 0; index < text.size();) {
 		const auto lead = static_cast<unsigned char>(text[index]);
 		const size_t extra = lead < 0x80 ? 0 : lead < 0xe0 ? 1 : lead < 0xf0 ? 2 : 3;
@@ -81,9 +84,9 @@ std::vector<uint8_t> unhex(std::string_view text)
 		if (c >= 'a' && c <= 'f') return uint8_t(c - 'a' + 10);
 		throw std::runtime_error("registry hive contains invalid hexadecimal data");
 	};
-	std::vector<uint8_t> result;
+	std::vector<uint8_t> result(text.size() / 2);
 	for (size_t index = 0; index < text.size(); index += 2)
-		result.push_back(uint8_t(nibble(text[index]) << 4 | nibble(text[index + 1])));
+		result[index / 2] = uint8_t(nibble(text[index]) << 4 | nibble(text[index + 1]));
 	return result;
 }
 
@@ -104,6 +107,7 @@ std::string escape(std::u16string_view text)
 std::string unescape(std::string_view text)
 {
 	std::string result;
+	result.reserve(text.size());
 	for (size_t index = 0; index < text.size(); ++index) {
 		if (text[index] != '\\') {
 			result.push_back(text[index]);
@@ -931,6 +935,7 @@ void NativeRegistry::replay_layer()
 		return;
 	std::ifstream input(layer_file, std::ios::binary);
 	std::string line;
+	recent_path.clear();
 	while (std::getline(input, line) && !input.eof())
 		apply(line);
 }
@@ -973,6 +978,7 @@ long long NativeRegistry::replay(long long from)
 	input.seekg(from);
 	std::string line;
 	long long position = from;
+	recent_path.clear();
 	// Only whole lines count: a record another process is still writing is read the next time.
 	while (std::getline(input, line) && !input.eof()) {
 		position += (long long)line.size() + 1;
@@ -984,26 +990,40 @@ long long NativeRegistry::replay(long long from)
 
 void NativeRegistry::apply(const std::string &line)
 {
-	std::vector<std::string> fields;
+	// The fields of the record, without copies; a record of more fields than any kind has is unknown.
+	std::array<std::string_view, 6> fields{};
+	size_t count = 0;
+	const std::string_view text(line);
 	size_t start = 0;
-	for (size_t tab; (tab = line.find('\t', start)) != line.npos; start = tab + 1)
-		fields.push_back(line.substr(start, tab - start));
-	fields.push_back(line.substr(start));
-	if (fields[0] == "K" && fields.size() == 2) {
+	for (size_t tab; count < fields.size() - 1 && (tab = text.find('\t', start)) != text.npos; start = tab + 1)
+		fields[count++] = text.substr(start, tab - start);
+	fields[count++] = text.substr(start);
+	const auto number = [](std::string_view digits) {
+		unsigned long value = 0;
+		if (std::from_chars(digits.data(), digits.data() + digits.size(), value).ec != std::errc())
+			throw std::runtime_error("registry hive contains an invalid value type");
+		return uint32_t(value);
+	};
+	if (fields[0] == "K" && count == 2) {
 		const auto path = decode_utf8(unescape(fields[1]));
-		keys.emplace(fold(path), Key{path, {}});
-	} else if (fields[0] == "V" && fields.size() == 5) {
-		const auto path = decode_utf8(unescape(fields[1]));
+		recent_key = keys.emplace(fold(path), Key{path, {}}).first;
+		recent_path = fields[1];
+	} else if (fields[0] == "V" && count == 5) {
 		const auto name = decode_utf8(unescape(fields[2]));
-		const auto found = keys.find(fold(path));
+		if (recent_path.empty() || recent_path != fields[1]) {
+			recent_key = keys.find(fold(decode_utf8(unescape(fields[1]))));
+			recent_path = fields[1];
+		}
+		const auto found = recent_key;
 		// A value set by a process that had not yet read another one's deletion of the key is lost with the key, as on Windows.
 		if (found != keys.end())
-			found->second.values[fold(name)] = Value{name, uint32_t(std::stoul(fields[3])), unhex(fields[4])};
-	} else if (fields[0] == "Y" && fields.size() == 3) {
+			found->second.values[fold(name)] = Value{name, number(fields[3]), unhex(fields[4])};
+	} else if (fields[0] == "Y" && count == 3) {
 		// A value deleted.
 		if (const auto found = keys.find(fold(decode_utf8(unescape(fields[1])))); found != keys.end())
 			found->second.values.erase(fold(decode_utf8(unescape(fields[2]))));
-	} else if (fields[0] == "X" && fields.size() == 3) {
+	} else if (fields[0] == "X" && count == 3) {
+		recent_path.clear();
 		// A key deleted with everything below it, or emptied ("0") when it stays.
 		const auto folded = fold(decode_utf8(unescape(fields[1])));
 		const auto prefix = folded + u'\\';
