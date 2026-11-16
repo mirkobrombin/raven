@@ -1,6 +1,7 @@
 #include "pe.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -153,16 +154,21 @@ std::span<const uint8_t> PEImage::file_span(uint32_t rva, size_t size) const
 
 std::string PEImage::string_at(uint32_t rva) const
 {
+	return std::string(text_at(rva));
+}
+
+std::string_view PEImage::text_at(uint32_t rva) const
+{
 	size_t remaining = rva < headers_size ? headers_size - rva : 0;
 	for (const auto &section : sections) {
 		if (rva >= section.address && uint64_t(rva) < uint64_t(section.address) + section.file_size)
 			remaining = section.file_size - (rva - section.address);
 	}
 	const auto data = file_span(rva, remaining);
-	const auto end = std::find(data.begin(), data.end(), uint8_t(0));
-	if (end == data.end())
+	const auto *end = static_cast<const uint8_t *>(std::memchr(data.data(), 0, data.size()));
+	if (!end)
 		throw std::runtime_error("unterminated PE string");
-	return std::string(data.begin(), end);
+	return {reinterpret_cast<const char *>(data.data()), size_t(end - data.data())};
 }
 
 bool PEImage::il_only() const
@@ -346,19 +352,19 @@ std::vector<PEExport> PEImage::exports() const
 		}
 		result.push_back(std::move(symbol));
 	}
-	std::string previous;
+	std::string_view previous;
 	for (uint32_t index = 0; index < name_count; ++index) {
 		const size_t ordinal = read_le(ordinals, size_t(index) * 2, 2);
 		if (ordinal >= result.size())
 			throw std::runtime_error("PE export name ordinal exceeds address table");
-		auto name = string_at(read32(names, size_t(index) * 4));
+		const auto name = text_at(read32(names, size_t(index) * 4));
 		// Tools that fill the table after linking leave placeholder slots with no name, which no lookup can reach; they sort first.
 		if (name.empty())
 			continue;
 		if (!previous.empty() && name <= previous)
 			throw std::runtime_error("PE export names are empty, duplicated or unsorted");
 		previous = name;
-		result[ordinal].names.push_back(std::move(name));
+		result[ordinal].names.emplace_back(name);
 	}
 	return result;
 }

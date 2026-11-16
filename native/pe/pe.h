@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace raven {
@@ -84,6 +85,8 @@ public:
 private:
 	std::span<const uint8_t> bytes;
 	std::string string_at(uint32_t rva) const;
+	// The same string seen where the file holds it, for reading a table of names without a copy of each.
+	std::string_view text_at(uint32_t rva) const;
 };
 
 // A .NET program built for any CPU (a PE32 file with only IL code, neither 32BITREQUIRED nor 32BITPREFERRED) runs as a 64-bit process,
