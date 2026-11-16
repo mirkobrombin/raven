@@ -151,7 +151,8 @@ void start_warm_host(int argc, char **argv)
 	::unsetenv("RAVEN_WARM_ASKED");
 	if (!asked || !eligible())
 		return;
-	identity = identity_of("/proc/self/exe", argc, argv);
+	std::error_code error;
+	identity = identity_of(std::filesystem::read_symlink("/proc/self/exe", error), argc, argv);
 	flush_streams();
 	const pid_t first = ::fork();
 	if (first < 0)

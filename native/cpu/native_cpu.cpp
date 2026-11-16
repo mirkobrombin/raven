@@ -633,12 +633,7 @@ struct NativeProcess::State {
 	uint64_t mapping_changes = 0;
 	std::vector<std::pair<uint64_t, uint64_t>> allocations;
 	std::vector<std::pair<uint64_t, uint64_t>> image_allocations;
-	// The API breakpoints, with the bytes the callee pops; a 64-bit one that a RET follows returns through it, without the runtime popping
-	// the return address.
-	struct ApiTrap {
-		uint32_t cleanup = 0;
-		bool returns = false;
-	};
+	// The API breakpoints (see ApiTrap).
 	std::map<uint64_t, ApiTrap> api_traps;
 	// Where add_api_trap put the last one: traps come by the thousand in rising order, and the next goes right after it.
 	std::map<uint64_t, ApiTrap>::iterator last_trap = api_traps.end();
@@ -2199,8 +2194,19 @@ void NativeProcess::add_api_trap(uint64_t address, uint32_t callee_cleanup)
 	if (hint != state->api_traps.end() && hint->first == address)
 		hint->second = {callee_cleanup, returns};
 	else
-		hint = state->api_traps.insert_or_assign(hint, address, State::ApiTrap{callee_cleanup, returns});
+		hint = state->api_traps.insert_or_assign(hint, address, ApiTrap{callee_cleanup, returns});
 	state->last_trap = hint;
+}
+
+void NativeProcess::add_api_traps(std::map<uint64_t, ApiTrap> traps)
+{
+	state->require_stopped();
+	if (state->api_traps.empty())
+		state->api_traps = std::move(traps);
+	else
+		for (auto &[address, trap] : traps)
+			state->api_traps.insert_or_assign(address, trap);
+	state->last_trap = state->api_traps.end();
 }
 
 NativeResult NativeProcess::call(uint64_t address, std::span<const uint64_t> arguments,

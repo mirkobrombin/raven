@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <sys/user.h>
@@ -105,6 +106,15 @@ public:
 	void end_call();
 	// callee_cleanup is the stdcall argument byte count an x86 API pops on return; x64 ignores it.
 	void add_api_trap(uint64_t address, uint32_t callee_cleanup = 0);
+	// An API breakpoint, with the bytes the callee pops; a 64-bit one that a RET follows returns through it, without the runtime popping
+	// the return address.
+	struct ApiTrap {
+		uint32_t cleanup = 0;
+		bool returns = false;
+	};
+	// Traps made before the process from the bytes of the images it maps, as a warm host makes them once for every start: a process
+	// that has none yet takes them whole.
+	void add_api_traps(std::map<uint64_t, ApiTrap> traps);
 	NativeMode mode() const;
 	// x86 only: FS addresses the 4 KiB TEB at base through a host LDT descriptor.
 	void set_teb(uint64_t base);

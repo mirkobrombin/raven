@@ -240,8 +240,12 @@ void LoadedImage::detach()
 			if (data < 0)
 				break;
 			const off_t hole = std::min<off_t>(lseek(fd, data, SEEK_HOLE), off_t(size));
+			// The kernel copies file to file without the pages being faulted into this process; a kernel that cannot copies through it.
 			for (off_t done = data; done < hole;) {
-				const auto written = pwrite(copy, storage + done, size_t(hole - done), done);
+				loff_t from = done, to = done;
+				auto written = copy_file_range(fd, &from, copy, &to, size_t(hole - done), 0);
+				if (written <= 0 && errno != EINTR)
+					written = pwrite(copy, storage + done, size_t(hole - done), done);
 				if (written < 0 && errno == EINTR)
 					continue;
 				if (written <= 0)

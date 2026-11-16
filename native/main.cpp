@@ -52,6 +52,21 @@
 #include <sys/prctl.h>
 #include <stdexcept>
 
+#ifdef RAVEN_NATIVE_CPU
+// What the runtime frees once its process ended stays allocated: the kernel takes the memory back whole (raven::end_with_process).
+void operator delete(void *block) noexcept
+{
+	if (raven::releasing_memory())
+		std::free(block);
+}
+
+void operator delete(void *block, size_t) noexcept
+{
+	if (raven::releasing_memory())
+		std::free(block);
+}
+#endif
+
 static std::vector<uint8_t> read_file(const char *path)
 {
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -936,6 +951,7 @@ int main(int argc, char **argv)
 					}
 					if (!entry->image.is_64)
 						return native_result(raven::run_native_process_x86(modules, *entry, bootstrap.string(), timeout, launch, presentation, source),true,inherited_stdio);
+					raven::end_with_process();
 					return native_result(raven::run_native_process(modules, *entry, bootstrap.string(), timeout, source, debug,presentation,launch),true,inherited_stdio);
 				}
 				return native_result(raven::run_native_modules(modules, *entry, bootstrap.string(), std::chrono::seconds(5)));

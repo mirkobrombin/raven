@@ -41,6 +41,7 @@
 #include <sys/mman.h>
 #include <x86intrin.h>
 #include <algorithm>
+#include <atomic>
 #include <fstream>
 #include <iostream>
 #include <array>
@@ -85,6 +86,9 @@ std::vector<uint8_t> environment_provider(std::string_view name, uint64_t base)
 }
 
 namespace {
+
+bool ends_with_process = false;
+std::atomic<bool> releasing{true};
 
 // Hot kernel32 services that run as guest machine code on the thread block; the slow path traps at offset 0x30.
 struct FastStub {
@@ -2270,6 +2274,16 @@ static uint64_t provider_base(const ModuleSet &modules, uint32_t size, std::stri
 	}
 }
 
+void end_with_process()
+{
+	ends_with_process = true;
+}
+
+bool releasing_memory()
+{
+	return releasing.load(std::memory_order_relaxed);
+}
+
 NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const std::string &bootstrap, std::chrono::milliseconds timeout,
 	std::function<std::optional<ModuleBytes>(std::string_view)> source,
@@ -2606,6 +2620,26 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	std::vector<LoadedImage *> images;
 	for (const auto &[name, module] : modules.all())
 		images.push_back(&module->loaded);
+	// The API traps, from the images' own bytes: each is an INT3, which a RET follows when the call returns through it.
+	std::map<uint64_t, NativeProcess::ApiTrap> api_traps;
+	{
+		std::map<uint64_t, std::span<const uint8_t>> spans;
+		for (const auto *image : images)
+			spans.emplace(image->base(), image->data());
+		for (const auto &[address, name] : traps) {
+			const auto found = spans.upper_bound(address);
+			const auto *bytes = found == spans.begin() ? nullptr : &std::prev(found)->second;
+			const auto offset = bytes ? address - std::prev(found)->first : 0;
+			if (!bytes || offset >= bytes->size() || (*bytes)[offset] != 0xcc) {
+				char text[96];
+				std::snprintf(text, sizeof text, "native API trap must be an executable INT3: %llx", static_cast<unsigned long long>(address));
+				throw std::runtime_error(text);
+			}
+			api_traps.emplace_hint(api_traps.end(), address, NativeProcess::ApiTrap{0, offset + 1 < bytes->size() && (*bytes)[offset + 1] == 0xc3});
+		}
+	}
+	// The prefix's registry is read before a warm host stops: each start forked from it reads only what changed since.
+	NativeRegistry hive(NativePrefix::from_environment().registry_file());
 	// A warm host stops here, before the guest process exists: each start forked from it goes on with images of its own.
 	warm_point([&] {
 		for (const auto &[name, module] : modules.all())
@@ -2613,8 +2647,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	});
 	const auto deadline = std::chrono::steady_clock::now() + timeout;
 	NativeProcess process(images, bootstrap, timeout, NativeMode::x64, entry.image.stack_reserve);
-	for (const auto &[address, name] : traps)
-		process.add_api_trap(address);
+	process.add_api_traps(std::move(api_traps));
 	NativeEnvironment environment(process, entry.loaded.base(), uint32_t(::getpid()), 1);
 	const bool has_launch = launch.has_value();
 	if (!launch) {
@@ -3412,7 +3445,6 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	desktop.register_gdi_api(desktop_api);
 	desktop.register_text_api(desktop_api);
 	desktop.register_image_api(desktop_api);
-	NativeRegistry hive(prefix.registry_file());
 	apply_registry_settings(hive);
 	__atomic_store_n(&served_block[theme_state / 8], classic_theme() ? 1 : 2, __ATOMIC_RELEASE);
 	paths.set_package_roots([&hive] { return virtual_package_roots(hive); });
@@ -3968,6 +4000,14 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		windows.shutdown();
 		return NativeResult{NativeStop::exited,request.code,request.instruction,0};
 	};
+	// Declared last, so the first thing done when the process ends.
+	struct Ending {
+		~Ending()
+		{
+			if (ends_with_process)
+				releasing.store(false, std::memory_order_relaxed);
+		}
+	} ending;
 	try {
 		windows.set_call(invoke);
 		desktop.set_call(invoke);

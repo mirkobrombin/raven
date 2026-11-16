@@ -35,5 +35,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	std::function<std::optional<ModuleBytes>(std::string_view)> source = {},
 	std::function<void(std::span<const uint8_t>)> debug = {}, DesktopPresentation presentation = {},
 	std::optional<NativeLaunch> launch = {});
+// A runtime that ends with the one process it runs says so before it runs it: what the process leaves is then not freed block by block
+// once the guest ended, as the kernel takes it back whole, and in a start forked from a warm host freeing would first copy every page it
+// shares with the host. releasing_memory() tells the runtime's operator delete whether to free.
+void end_with_process();
+bool releasing_memory();
 
 }
