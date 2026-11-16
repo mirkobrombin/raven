@@ -39,11 +39,14 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <stdexcept>
@@ -563,19 +566,44 @@ int main(int argc, char **argv)
 							std::filesystem::absolute(argv[first_file]).parent_path());
 					}
 					// A library of the other width is passed over, as the Windows loader goes on searching past it.
-					const auto find_file = [&](const std::filesystem::path &folder, std::string_view name) {
+					// The files of a folder by their lowercase names, read again only when the folder changes (its modification time moves with
+					// every file made, removed or renamed in it): a program's folder full of libraries is otherwise read once for each of them.
+					struct Listing {
+						timespec changed{};
+						std::map<std::string, std::vector<std::filesystem::path>, std::less<>> files;
+					};
+					auto listings = std::make_shared<std::pair<std::mutex, std::map<std::filesystem::path, Listing>>>();
+					const auto find_file = [&, listings](const std::filesystem::path &folder, std::string_view name) {
 						std::optional<std::filesystem::path> selected;
-						std::error_code error;
-						for (std::filesystem::directory_iterator walk(folder, error), end; walk != end; walk.increment(error)) {
-							auto filename = walk->path().filename().string();
-							for (auto &character : filename)
-								if (character >= 'A' && character <= 'Z')
-									character = static_cast<char>(character + ('a' - 'A'));
-							if (filename != name || !walk->is_regular_file())
+						std::vector<std::filesystem::path> matches;
+						struct stat status{};
+						if (::stat(folder.c_str(), &status) != 0)
+							return selected;
+						{
+							std::lock_guard lock(listings->first);
+							auto &listing = listings->second[folder];
+							if (listing.files.empty() || listing.changed.tv_sec != status.st_mtim.tv_sec || listing.changed.tv_nsec != status.st_mtim.tv_nsec) {
+								listing.files.clear();
+								listing.changed = status.st_mtim;
+								std::error_code error;
+								for (std::filesystem::directory_iterator walk(folder, error), end; walk != end; walk.increment(error)) {
+									auto filename = walk->path().filename().string();
+									for (auto &character : filename)
+										if (character >= 'A' && character <= 'Z')
+											character = static_cast<char>(character + ('a' - 'A'));
+									listing.files[std::move(filename)].push_back(walk->path());
+								}
+							}
+							if (const auto found = listing.files.find(name); found != listing.files.end())
+								matches = found->second;
+						}
+						for (const auto &path : matches) {
+							std::error_code error;
+							if (!std::filesystem::is_regular_file(path, error))
 								continue;
 							if (selected)
 								throw std::runtime_error("ambiguous case-insensitive DLL filename");
-							selected = walk->path();
+							selected = path;
 						}
 						if (selected) {
 							try {

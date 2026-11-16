@@ -35,6 +35,8 @@
 #include "graphics/vulkan_bridge.h"
 #endif
 
+#include <mutex>
+#include <unordered_map>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <x86intrin.h>
@@ -1659,8 +1661,13 @@ static const std::vector<uint8_t> &silent_trace_prelude()
 	return code;
 }
 
-static const std::vector<uint8_t> *block_prelude(std::string_view module, std::string_view name)
+static const std::vector<uint8_t> *find_block_prelude(std::string_view module, std::string_view name)
 {
+	// The libraries the rules below name; an export of any other has no prelude. A rule for a new library names it here too.
+	static constexpr std::array<std::string_view, 11> libraries{"combase.dll", "gdi32.dll", "kernel32.dll", "kernelbase.dll", "ntdll.dll",
+		"ole32.dll", "ravenhost.dll", "shlwapi.dll", "user32.dll", "uxtheme.dll", "winmm.dll"};
+	if (std::find(libraries.begin(), libraries.end(), module) == libraries.end())
+		return nullptr;
 	if (module == "ravenhost.dll" && name == "RavenTrace") {
 		static const bool traced = std::getenv("RAVEN_TRACE_DWRITE") != nullptr;
 		return traced ? nullptr : &silent_trace_prelude();
@@ -1844,6 +1851,28 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 	if (name == "GetMenuState")
 		return &menu_state_prelude();
 	return nullptr;
+}
+
+// The prelude of an export, remembered: each export of every system library is looked up several times as the process starts, and the
+// rules above are a long list of names. What they depend on besides the names (the environment) does not change in a process.
+static const std::vector<uint8_t> *block_prelude(std::string_view module, std::string_view name)
+{
+	struct Hash {
+		using is_transparent = void;
+		size_t operator()(std::string_view text) const { return std::hash<std::string_view>{}(text); }
+	};
+	using Names = std::unordered_map<std::string, const std::vector<uint8_t> *, Hash, std::equal_to<>>;
+	static std::mutex lock;
+	static std::unordered_map<std::string, Names, Hash, std::equal_to<>> known;
+	std::lock_guard guard(lock);
+	auto library = known.find(module);
+	if (library == known.end())
+		library = known.emplace(std::string(module), Names{}).first;
+	if (const auto found = library->second.find(name); found != library->second.end())
+		return found->second;
+	const auto *prelude = find_block_prelude(module, name);
+	library->second.emplace(std::string(name), prelude);
+	return prelude;
 }
 
 // The answers a guest thread takes from the runtime's tables while other threads run and the runtime changes them: those that only
