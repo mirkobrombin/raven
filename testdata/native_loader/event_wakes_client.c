@@ -3,12 +3,13 @@
 // asks whether that thread is still alive. The exit code names the first check that failed.
 #include <windows.h>
 
-static HANDLE go;
+static HANDLE go, started;
 static volatile LONG woke;
 
 static DWORD WINAPI worker(void *parameter)
 {
 	(void)parameter;
+	SetEvent(started);
 	WaitForSingleObject(go, INFINITE);
 	InterlockedExchange(&woke, 1);
 	return 0;
@@ -17,12 +18,15 @@ static DWORD WINAPI worker(void *parameter)
 int raven_entry(void)
 {
 	go = CreateEventW(NULL, FALSE, FALSE, NULL);
-	if (!go)
+	started = CreateEventW(NULL, TRUE, FALSE, NULL);
+	if (!go || !started)
 		return 1;
 	HANDLE thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
 	if (!thread)
 		return 2;
-	// The worker reaches its wait.
+	// The worker reaches its wait, however long a loaded machine takes to start it.
+	if (WaitForSingleObject(started, 10000) != WAIT_OBJECT_0)
+		return 7;
 	Sleep(100);
 	if (woke)
 		return 3;
@@ -37,5 +41,6 @@ int raven_entry(void)
 		return 6;
 	CloseHandle(thread);
 	CloseHandle(go);
+	CloseHandle(started);
 	return 0;
 }
