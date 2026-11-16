@@ -3861,15 +3861,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/x86-d3d9-client.exe ${LOADER_SOURCES}/x86_d3d9_client.c -lkernel32
                     DEPENDS ${LOADER_SOURCES}/x86_d3d9_client.c VERBATIM)
                 add_custom_target(x86_d3d9_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-d3d9-client.exe)
-                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-dsound-client.exe
+                # In a folder of its own: the build tree beside the runtime holds the 64-bit DirectSound component as dsound.dll.
+                set(x86_dsound_client ${CMAKE_CURRENT_BINARY_DIR}/x86-dsound/client.exe)
+                add_custom_command(OUTPUT ${x86_dsound_client}
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86-dsound
                     COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
                         -Wl,--entry,_raven_entry,--no-insert-timestamp
-                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86-dsound-client.exe ${LOADER_SOURCES}/x86_dsound_client.c -lkernel32 -luser32 -ldxguid
+                        -o ${x86_dsound_client} ${LOADER_SOURCES}/x86_dsound_client.c -lkernel32 -luser32 -ldxguid
                     DEPENDS ${LOADER_SOURCES}/x86_dsound_client.c VERBATIM)
-                add_custom_target(x86_dsound_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-dsound-client.exe)
-                add_test(NAME native_x86_dsound COMMAND raven --run-process --execution=native
-                    ${CMAKE_CURRENT_BINARY_DIR}/x86-dsound-client.exe)
-                set_tests_properties(native_x86_dsound PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_target(x86_dsound_fixture ALL DEPENDS ${x86_dsound_client})
+                add_test(NAME native_x86_dsound COMMAND raven --run-process --execution=native ${x86_dsound_client})
+                set_tests_properties(native_x86_dsound PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_AUDIO=null PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 # The 32-bit C runtime component sits beside the runtime and is loaded when a 32-bit library imports ucrtbase or an API set.
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ucrtbase32.dll
                     COMMAND ${RAVEN_MINGW32} -c -O2 -w -ffreestanding -fno-builtin -ffile-prefix-map=${PROJECT_SOURCE_DIR}=raven
@@ -5133,6 +5135,21 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${winmm_files} ${winmm_source}/winmm_private.h ${PROJECT_SOURCE_DIR}/native/nt/raven_audio.h audio_imports
                     VERBATIM)
                 add_custom_target(winmm_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-winmm.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-winmm.dll)
+                # dsound.dll for each width: DirectSound's devices, buffers and capture, mixed by a guest thread into one stream of the engine.
+                set(dsound_source ${PROJECT_SOURCE_DIR}/native/guest/raven-dsound)
+                set(dsound_files ${dsound_source}/device.c ${dsound_source}/buffer.c ${dsound_source}/mixer.c ${dsound_source}/capture.c)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/dsound.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dsound.dll
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/dsound.dll
+                        ${dsound_source}/dsound.def ${dsound_files} ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio64.a -luuid -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--enable-stdcall-fixup,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86/dsound.dll
+                        ${dsound_source}/dsound.def ${dsound_files} ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio32.a -luuid -lkernel32 -lgcc
+                    DEPENDS ${dsound_files} ${dsound_source}/dsound_private.h ${dsound_source}/dsound.def
+                        ${PROJECT_SOURCE_DIR}/native/nt/raven_audio.h audio_imports
+                    VERBATIM)
+                add_custom_target(dsound_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dsound.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dsound.dll)
                 # The fixture plays and records on the null device, so the pace of its buffers is the engine's alone.
                 foreach(width 64 32)
                     if(width EQUAL 64)
@@ -5149,9 +5166,61 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             -o ${wave_client} ${LOADER_SOURCES}/wave_client.c -lwinmm -luser32 -lkernel32 -lgcc
                         DEPENDS ${LOADER_SOURCES}/wave_client.c VERBATIM)
                     add_custom_target(wave_fixture${width} ALL DEPENDS ${wave_client} winmm_component)
+                    # In a folder of its own: the build tree beside the runtime holds the component as dsound.dll, which counts as the program's.
+                    set(dsound_client ${CMAKE_CURRENT_BINARY_DIR}/dsound-x${width}/client.exe)
+                    add_custom_command(OUTPUT ${dsound_client}
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/dsound-x${width}
+                        COMMAND ${audio_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${audio_entry},--no-insert-timestamp
+                            -o ${dsound_client} ${LOADER_SOURCES}/dsound_client.c -ldsound -lole32 -luser32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/dsound_client.c VERBATIM)
+                    add_custom_target(dsound_fixture${width} ALL DEPENDS ${dsound_client} dsound_component)
+                    set(dsound_load_dir ${CMAKE_CURRENT_BINARY_DIR}/dsound-load-x${width})
+                    set(dsound_local_dir ${CMAKE_CURRENT_BINARY_DIR}/dsound-local-x${width})
+                    set(dsound_load_client ${dsound_load_dir}/dsound-load-client.exe)
+                    set(dsound_local_client ${dsound_local_dir}/dsound-local-client.exe)
+                    set(dsound_local_stub ${dsound_local_dir}/dsound.dll)
+                    if(width EQUAL 32)
+                        set(dsound_stub_flags -Wl,--kill-at)
+                        set(dsound_stub_entry _DllMain@12)
+                    else()
+                        set(dsound_stub_flags)
+                        set(dsound_stub_entry DllMain)
+                    endif()
+                    add_custom_command(OUTPUT ${dsound_load_client} ${dsound_local_client} ${dsound_local_stub}
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${dsound_load_dir} ${dsound_local_dir}
+                        COMMAND ${audio_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${audio_entry},--no-insert-timestamp
+                            -o ${dsound_load_client} ${LOADER_SOURCES}/dsound_load_client.c -lkernel32 -lgcc
+                        COMMAND ${audio_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin -DEXPECT_LOCAL_DSOUND
+                            -Wl,--entry,${audio_entry},--no-insert-timestamp
+                            -o ${dsound_local_client} ${LOADER_SOURCES}/dsound_load_client.c -ldsound -lkernel32 -lgcc
+                        COMMAND ${audio_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin -shared
+                            -Wl,--entry,${dsound_stub_entry},--no-insert-timestamp ${dsound_stub_flags}
+                            -o ${dsound_local_stub} ${LOADER_SOURCES}/dsound_local_stub.c -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/dsound_load_client.c ${LOADER_SOURCES}/dsound_local_stub.c VERBATIM)
+                    add_custom_target(dsound_load_fixture${width} ALL
+                        DEPENDS ${dsound_load_client} ${dsound_local_client} ${dsound_local_stub})
                     add_test(NAME native_wave_x${width} COMMAND raven --run-process --execution=native ${wave_client})
                     set_tests_properties(native_wave_x${width} PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_AUDIO=null
                         PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    add_test(NAME native_dsound_load_x${width} COMMAND raven --run-process --execution=native ${dsound_load_client})
+                    set_tests_properties(native_dsound_load_x${width} PROPERTIES TIMEOUT 30
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    add_test(NAME native_dsound_local_x${width} COMMAND raven --run-process --execution=native ${dsound_local_client})
+                    set_tests_properties(native_dsound_local_x${width} PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_AUDIO=null
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # COM finds the class through raven-shell.dll, which comes with the controls.
+                    if(width EQUAL 64)
+                        set(dsound_shell "${RAVEN_CONTROLS_COMPONENT_DIR}")
+                    else()
+                        set(dsound_shell "${RAVEN_CONTROLS32_COMPONENT_DIR}")
+                    endif()
+                    if(dsound_shell)
+                        add_test(NAME native_dsound_x${width} COMMAND raven --run-process --execution=native ${dsound_client})
+                        set_tests_properties(native_dsound_x${width} PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_AUDIO=null
+                            PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endif()
                 endforeach()
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-client.exe
                     COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin

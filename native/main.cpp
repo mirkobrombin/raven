@@ -622,6 +622,10 @@ int main(int argc, char **argv)
 						if (!selected && name=="comctl32.dll")
 							if (const auto component = component_directory / "comctl32.dll"; std::filesystem::exists(component))
 								return read_module(component.c_str());
+						// DirectSound resolves to the runtime component only when the program does not ship its own.
+						if (!selected && name=="dsound.dll")
+							if (const auto component = component_directory / "dsound.dll"; std::filesystem::exists(component))
+								return read_module(component.c_str());
 						if (!selected && name=="ucrtbase.dll") {
 							// A 32-bit program gets the 32-bit build of the component.
 							const auto component = std::filesystem::read_symlink("/proc/self/exe").parent_path() / (entry->image.is_64 ? "ucrtbase.dll" : "ucrtbase32.dll");

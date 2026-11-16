@@ -602,8 +602,14 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			});
 		});
 	};
+	// The DirectSound component is the system's dsound.dll by any name, path or search; the runtime's own answers only beside a copy the
+	// program ships, or without the component.
+	const bool dsound_component = !program_libraries.contains("dsound.dll") &&
+		std::filesystem::exists(std::filesystem::read_symlink("/proc/self/exe").parent_path() / "x86" / "dsound.dll");
 	const auto add_library = [&](const char *dll, std::span<const std::string_view> exports, std::span<const std::string_view> data,
 		const std::function<uint32_t(std::string_view)> &count, std::span<const std::pair<std::string_view, uint16_t>> ordinals = {}) {
+		if (dsound_component && std::string_view(dll) == "dsound.dll")
+			return;
 		std::string provider_key = dll;
 		if (modules.all().contains(dll)) {
 			if (!program_may_replace(dll) || modules.all().at(dll)->runtime_api)

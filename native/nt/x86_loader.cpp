@@ -90,6 +90,15 @@ std::optional<std::vector<uint8_t>> NativeX86Loader::read_library(const std::str
 				return read_all(component);
 			}
 		}
+		// DirectSound resolves to the runtime component only when the program does not ship its own.
+		if (name == "dsound.dll") {
+			const auto component = std::filesystem::read_symlink("/proc/self/exe").parent_path() / "x86" / name;
+			if (std::filesystem::exists(component)) {
+				identity = name;
+				file = component;
+				return read_all(component);
+			}
+		}
 		// Direct3D 10.1 is the runtime's own library over d3d10core.dll, unless the Direct3D build the runtime is given carries one.
 		if (name == "d3d10_1.dll") {
 			std::vector<std::filesystem::path> places;
