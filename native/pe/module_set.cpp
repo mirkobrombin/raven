@@ -48,11 +48,23 @@ PEModule::PEModule(std::string name, ModuleBytes bytes, uint64_t base, bool relo
 	: name(std::move(name)), bytes(std::move(bytes)), image(std::span<const uint8_t>(this->bytes)), loaded(image, base, relocated),
 	imports(image.il_only() ? std::vector<PEImport>{} : image.imports()), exports(image.exports())
 {
-	for (size_t index = 0; index < exports.size(); ++index) {
-		export_ordinals.emplace(exports[index].ordinal, index);
-		for (const auto &export_name : exports[index].names)
-			export_names.emplace(export_name, index);
-	}
+	size_t text_size = 0;
+	for (const auto &symbol : exports)
+		for (const auto &export_name : symbol.names)
+			text_size += export_name.size();
+	// The text is whole before the index views it: it must not move once viewed.
+	export_text.reserve(text_size);
+	for (const auto &symbol : exports)
+		for (const auto &export_name : symbol.names)
+			export_text += export_name;
+	export_names.reserve(exports.size());
+	const std::string_view text(export_text);
+	size_t at = 0;
+	for (size_t index = 0; index < exports.size(); ++index)
+		for (const auto &export_name : exports[index].names) {
+			export_names.emplace(text.substr(at, export_name.size()), index);
+			at += export_name.size();
+		}
 	indexed_exports = exports.size();
 }
 
@@ -230,10 +242,11 @@ uint64_t ModuleSet::resolve(std::string module, std::string name, uint32_t ordin
 	// An index entry still names its export, and an export added after the module was built is found by a scan of the table.
 	const bool complete = target.indexed_exports == target.exports.size();
 	if (by_ordinal) {
-		if (const auto numbered = target.export_ordinals.find(ordinal);
-			complete && numbered != target.export_ordinals.end() && target.exports[numbered->second].ordinal == ordinal)
-			exported = target.exports.begin() + std::ptrdiff_t(numbered->second);
-		else if (!complete)
+		const uint64_t slot = target.exports.empty() ? 0 : uint64_t(ordinal) - target.exports.front().ordinal;
+		if (!target.exports.empty() && ordinal >= target.exports.front().ordinal && slot < target.exports.size() &&
+			target.exports[size_t(slot)].ordinal == ordinal)
+			exported = target.exports.begin() + std::ptrdiff_t(slot);
+		else
 			exported = std::find_if(target.exports.begin(), target.exports.end(), [&](const auto &entry) { return entry.ordinal == ordinal; });
 	} else if (const auto named = target.export_names.find(name); complete && named != target.export_names.end())
 		exported = target.exports.begin() + std::ptrdiff_t(named->second);

@@ -8,6 +8,8 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace raven {
@@ -34,16 +36,21 @@ private:
 
 struct PEModule {
 	PEModule(std::string name, ModuleBytes bytes, uint64_t base, bool relocated = true);
+	// The index of export names views text the module holds, which a copy would not carry along.
+	PEModule(const PEModule &) = delete;
+	PEModule &operator=(const PEModule &) = delete;
 	std::string name;
 	ModuleBytes bytes;
 	PEImage image;
 	LoadedImage loaded;
 	std::vector<PEImport> imports;
 	std::vector<PEExport> exports;
-	// The first export that carries each name: imports are resolved by name, thousands of them for a large library.
-	std::unordered_map<std::string, size_t> export_names;
-	// The exports by ordinal, and how many exports both indexes cover: a lookup that misses them scans only when exports came after.
-	std::unordered_map<uint32_t, size_t> export_ordinals;
+	// The names of the exports one after another, and the first export that carries each name, viewed in that text: imports are resolved by
+	// name, thousands of them for a large library, and the index is made without a copy of each name.
+	std::string export_text;
+	std::unordered_map<std::string_view, size_t> export_names;
+	// How many exports the index covers: a lookup that misses it scans only when exports came after. Exports stand at their ordinal less
+	// the first one's, as the address table holds them, and need no index of their own.
 	size_t indexed_exports = 0;
 	bool runtime_api = false;
 	// The host file a library loaded from a folder of the program's came from; empty for the runtime's own and for libraries found by name.
