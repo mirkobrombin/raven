@@ -443,11 +443,21 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("WaitForSingleObject", 2, [wait](ApiCall &call) { call.ret(wait(call, {call[0]}, false, call.u32(1), false)); });
 	registry.add("WaitForSingleObjectEx", 3, [wait](ApiCall &call) { call.ret(wait(call, {call[0]}, false, call.u32(1), call.u32(2))); });
 	// A handle array holds handles of the program's width; the 32-bit pseudo handles widen to the values the 64-bit side knows them by.
-	const auto handle_at = [](ApiCall &call, uint64_t array, uint32_t index) -> uint64_t {
-		if (call.pointer_width() == 8)
-			return call.load<uint64_t>(array + index * 8ULL);
-		const uint32_t value = call.load<uint32_t>(array + index * 4ULL);
-		return value >= 0xfffffffaU ? uint64_t(int64_t(int32_t(value))) : value;
+	// The array of handles a wait is given, in one read of the guest's memory: one read for each handle cost more than the wait itself.
+	const auto handles_at = [](ApiCall &call, uint64_t array, uint32_t count) {
+		const size_t width = call.pointer_width();
+		const auto bytes = call.read(array, count * width);
+		std::vector<uint64_t> handles(count);
+		for (uint32_t index = 0; index < count; ++index) {
+			if (width == 8) {
+				std::memcpy(&handles[index], bytes.data() + index * 8, 8);
+				continue;
+			}
+			uint32_t value = 0;
+			std::memcpy(&value, bytes.data() + index * 4, 4);
+			handles[index] = value >= 0xfffffffaU ? uint64_t(int64_t(int32_t(value))) : value;
+		}
+		return handles;
 	};
 	// The end of a native timeout: a LARGE_INTEGER in 100-nanosecond units, negative for a time from now and positive for a system time.
 	// Without one, or with one too far away to count, there is none.
@@ -468,15 +478,13 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			return std::nullopt;
 		return std::chrono::steady_clock::now() + std::chrono::nanoseconds(from_now * 100);
 	};
-	const auto multiple = [wait, handle_at, &objects, &threads](ApiCall &call, bool alertable) {
+	const auto multiple = [wait, handles_at, &objects, &threads](ApiCall &call, bool alertable) {
 		const uint32_t count = call.u32(0);
 		if (count > 64 || !call[1]) {
 			call.fail(87, wait_failed);
 			return;
 		}
-		std::vector<uint64_t> handles(count);
-		for (uint32_t index = 0; index < count; ++index)
-			handles[index] = handle_at(call, call[1], index);
+		const auto handles = handles_at(call, call[1], count);
 		// RAVEN_TRACE_WAITS also names what a wait for several objects is given: each handle, its type and whether it is signaled.
 		static const bool traced = std::getenv("RAVEN_TRACE_WAITS") != nullptr;
 		if (traced && call.u32(3)) {
@@ -509,28 +517,24 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("NtWaitForSingleObject", 3, [native_wait](ApiCall &call) { native_wait(call, {call[0]}, false, call.u32(1) & 0xff, call[2]); });
 	// NtWaitForMultipleObjects: wait type 0 waits for all of the handles, 1 for any.
-	registry.add("NtWaitForMultipleObjects", 5, [native_wait, handle_at](ApiCall &call) {
+	registry.add("NtWaitForMultipleObjects", 5, [native_wait, handles_at](ApiCall &call) {
 		const uint32_t count = call.u32(0);
 		if (!count || count > 64 || !call[1] || call.u32(2) > 1) {
 			call.ret(0xc000000dU);
 			return;
 		}
-		std::vector<uint64_t> handles(count);
-		for (uint32_t index = 0; index < count; ++index)
-			handles[index] = handle_at(call, call[1], index);
-		native_wait(call, handles, call.u32(2) == 0, call.u32(3) & 0xff, call[4]);
+		native_wait(call, handles_at(call, call[1], count), call.u32(2) == 0, call.u32(3) & 0xff, call[4]);
 	});
 	// The input event follows the explicit handles, so a signaled handle wins a wait-any tie.
-	const auto message_wait = [&context, &objects, &threads, handle_at, run_apcs](ApiCall &call, uint32_t count, uint64_t array,
+	const auto message_wait = [&context, &objects, &threads, handles_at, run_apcs](ApiCall &call, uint32_t count, uint64_t array,
 			uint32_t milliseconds, uint32_t mask, uint32_t flags) -> uint32_t {
 		// 0x2000 is the bit WPF's dispatcher asks for with the input ones; nothing here raises it.
 		if (count > 63 || (count && !array) || (flags & ~7U) || (mask & ~0x3dffU)) {
 			call.set_last_error(87);
 			return wait_failed;
 		}
-		std::vector<uint64_t> handles(count);
+		const auto handles = count ? handles_at(call, array, count) : std::vector<uint64_t>{};
 		for (uint32_t index = 0; index < count; ++index) {
-			handles[index] = handle_at(call, array, index);
 			if (std::find(handles.begin(), handles.begin() + index, handles[index]) != handles.begin() + index) {
 				call.set_last_error(87);
 				return wait_failed;
