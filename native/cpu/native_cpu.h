@@ -77,6 +77,9 @@ public:
 	NativeContext context() const;
 	void set_context(const NativeContext &context);
 	std::vector<uint8_t> read_memory(uint64_t address, size_t size) const;
+	// Reads guest memory from a host thread that does not hold the turn: straight from the child, without the tables of regions the
+	// turn guards. False when any of it cannot be read.
+	bool read_alone(uint64_t address, void *into, size_t size) const;
 	void write_memory(uint64_t address, std::span<const uint8_t> bytes);
 	void validate_write_memory(uint64_t address,size_t size) const;
 	uint64_t compare_exchange(uint64_t address, uint64_t expected, uint64_t desired, size_t size);
