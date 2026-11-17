@@ -559,6 +559,7 @@ bool NativeRegistry::resolve(uint64_t parent, std::u16string_view path, std::u16
 
 uint32_t NativeRegistry::create(uint64_t parent, std::u16string_view path, uint64_t &key, uint32_t &disposition)
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	std::u16string folded, display;
 	if (!resolve(parent, path, folded, display))
@@ -598,6 +599,7 @@ uint32_t NativeRegistry::create(uint64_t parent, std::u16string_view path, uint6
 
 uint32_t NativeRegistry::open(uint64_t parent, std::u16string_view path, uint64_t &key)
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	std::u16string folded, display;
 	if (!resolve(parent, path, folded, display))
@@ -615,6 +617,7 @@ uint32_t NativeRegistry::open(uint64_t parent, std::u16string_view path, uint64_
 
 uint32_t NativeRegistry::override_root(uint64_t root, uint64_t key)
 {
+	const std::lock_guard guarded(guard);
 	if (!predefined(root))
 		return bad_handle;
 	if (!key) {
@@ -630,6 +633,7 @@ uint32_t NativeRegistry::override_root(uint64_t root, uint64_t key)
 
 uint32_t NativeRegistry::close(uint64_t key)
 {
+	const std::lock_guard guarded(guard);
 	if (predefined(key))
 		return 0;
 	if (!open_keys.erase(key))
@@ -641,6 +645,7 @@ uint32_t NativeRegistry::close(uint64_t key)
 
 uint32_t NativeRegistry::query(uint64_t key, std::u16string_view name, uint32_t &type, std::vector<uint8_t> &data) const
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	const auto found = open_keys.find(key);
 	if (found == open_keys.end())
@@ -656,6 +661,7 @@ uint32_t NativeRegistry::query(uint64_t key, std::u16string_view name, uint32_t 
 
 uint32_t NativeRegistry::set(uint64_t key, std::u16string_view name, uint32_t type, std::span<const uint8_t> data)
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	const auto found = open_keys.find(key);
 	if (found == open_keys.end())
@@ -683,6 +689,7 @@ std::vector<std::u16string> NativeRegistry::children(const std::u16string &folde
 
 uint32_t NativeRegistry::remove_key(uint64_t parent, std::u16string_view path)
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	std::u16string folded, display;
 	if (!resolve(parent, path, folded, display))
@@ -706,6 +713,7 @@ uint32_t NativeRegistry::remove_key(uint64_t parent, std::u16string_view path)
 
 uint32_t NativeRegistry::remove_tree(uint64_t parent, std::u16string_view path)
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	std::u16string folded, display;
 	if (!resolve(parent, path, folded, display))
@@ -729,6 +737,7 @@ uint32_t NativeRegistry::remove_tree(uint64_t parent, std::u16string_view path)
 
 uint32_t NativeRegistry::remove_value(uint64_t key, std::u16string_view name)
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	const auto found = open_keys.find(key);
 	if (found == open_keys.end())
@@ -744,6 +753,7 @@ uint32_t NativeRegistry::remove_value(uint64_t key, std::u16string_view name)
 
 uint32_t NativeRegistry::enum_key(uint64_t key, uint32_t index, std::u16string &name) const
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	std::u16string folded;
 	if (predefined(key)) {
@@ -767,6 +777,7 @@ uint32_t NativeRegistry::enum_key(uint64_t key, uint32_t index, std::u16string &
 
 uint32_t NativeRegistry::enum_value(uint64_t key, uint32_t index, std::u16string &name, uint32_t &type, std::vector<uint8_t> &data) const
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	const auto found = open_keys.find(key);
 	if (found == open_keys.end())
@@ -786,6 +797,7 @@ uint32_t NativeRegistry::enum_value(uint64_t key, uint32_t index, std::u16string
 
 uint32_t NativeRegistry::info(uint64_t key, Info &result) const
 {
+	const std::lock_guard guarded(guard);
 	refresh();
 	std::u16string folded, shown;
 	if (predefined(key)) {
@@ -946,6 +958,7 @@ void NativeRegistry::replay_layer()
 void NativeRegistry::set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns,
 	std::function<void(std::u16string_view)> claim)
 {
+	const std::lock_guard guarded(guard);
 	layer_file = std::move(layer);
 	layer_owns = std::move(owns);
 	layer_claim = std::move(claim);

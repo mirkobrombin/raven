@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -31,7 +32,7 @@ public:
 	}
 	uint32_t query(uint64_t key, std::u16string_view name, uint32_t &type, std::vector<uint8_t> &data) const;
 	uint32_t set(uint64_t key, std::u16string_view name, uint32_t type, std::span<const uint8_t> data);
-	size_t handles() const { return open_keys.size(); }
+	size_t handles() const { const std::lock_guard guarded(guard); return open_keys.size(); }
 	// Enumeration, deletion and statistics for the advapi32 surface; names sort case-insensitively like the real hive.
 	uint32_t remove_key(uint64_t parent, std::u16string_view path);
 	uint32_t remove_value(uint64_t key, std::u16string_view name);
@@ -54,6 +55,9 @@ public:
 	void set_layer(std::filesystem::path layer, std::function<bool(std::u16string_view)> owns, std::function<void(std::u16string_view)> claim);
 
 private:
+	// Every call holds it, so the host serves registry calls of several threads at once, beside the turn as well. It is taken again by a
+	// call made from inside another (seeding, the layer), and before the handle space's own lock, never after it.
+	mutable std::recursive_mutex guard;
 	struct Value { std::u16string name; uint32_t type; std::vector<uint8_t> data; };
 	struct Key { std::u16string path; std::map<std::u16string, Value> values; };
 	std::filesystem::path file, layer_file;

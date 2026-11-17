@@ -3537,6 +3537,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_property(TEST native_multiple_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
             "profile: \\(call\\) WaitForMultipleObjects(Ex)? calls=[0-9][0-9][0-9]")
         set_property(TEST native_multiple_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # Registry calls go beside the turn in parallel mode, under the registry's own lock (registry_beside_client.c).
+        raven_kernel_fixture(registry-beside registry_beside_client.c 0x1ee000000 "-ladvapi32;-lkernel32")
+        foreach(mode default parallel)
+            add_test(NAME native_registry_beside_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/registry-beside.exe)
+            set_tests_properties(native_registry_beside_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/registry-beside-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_registry_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        set_property(TEST native_registry_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
+            "profile: \\(call\\) Reg(SetValueEx|QueryValueEx)W calls=[0-9][0-9][0-9]")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel table)

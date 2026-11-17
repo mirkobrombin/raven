@@ -1058,6 +1058,21 @@ bool NativeProcess::read_alone(uint64_t address, void *into, size_t size) const
 	return true;
 }
 
+bool NativeProcess::write_alone(uint64_t address, const void *from, size_t size)
+{
+	for (size_t offset = 0; offset < size;) {
+		const iovec local{const_cast<uint8_t *>(static_cast<const uint8_t *>(from)) + offset, size - offset};
+		const iovec remote{reinterpret_cast<void *>(address + offset), size - offset};
+		const auto copied = process_vm_writev(state->child->pid, &local, 1, &remote, 1, 0);
+		if (copied < 0 && errno == EINTR)
+			continue;
+		if (copied <= 0)
+			return false;
+		offset += size_t(copied);
+	}
+	return true;
+}
+
 void NativeProcess::write_memory(uint64_t address, std::span<const uint8_t> bytes)
 {
 	state->trap_page.clear();

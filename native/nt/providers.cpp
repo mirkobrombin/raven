@@ -199,6 +199,20 @@ static bool served_api(std::string_view module, std::string_view name)
 	return name.starts_with("vkCmd") || std::find(recording.begin(), recording.end(), name) != recording.end();
 }
 
+// Calls of the registry, which keeps its own lock: with a host thread for each guest thread they are answered beside the turn, by the
+// handler the usual way runs, unless they need the turn after all (see ApiCall::alone).
+static bool beside_api(std::string_view module, std::string_view name)
+{
+	if (module != "advapi32.dll" && module != "kernelbase.dll")
+		return false;
+	static constexpr std::array<std::string_view, 10> registry{"RegOpenKeyEx", "RegCreateKeyEx", "RegQueryValueEx", "RegSetValueEx", "RegCloseKey",
+		"RegEnumKeyEx", "RegEnumValue", "RegQueryInfoKey", "RegGetValue", "RegDeleteValue"};
+	for (const auto call : registry)
+		if (name.starts_with(call) && (name.size() == call.size() || name.substr(call.size()) == "W" || name.substr(call.size()) == "A"))
+			return true;
+	return false;
+}
+
 // With a host thread for each guest thread, every other call of a 64-bit provider has a stub of the same kind: the thread's host
 // thread answers it in the thread's block, and the guest stops only when the host thread was not looking or the call needs it stopped.
 // RAVEN_TRAPPED_CALLS=1 keeps those calls on their breakpoints, for comparing the two.
@@ -3168,6 +3182,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		}
 	} served_pointers;
 	std::vector<uint64_t> called_stubs;
+	std::map<uint64_t, std::string> beside_names;
 	for (const auto &[module_key, module] : modules.all()) {
 		if (!module->runtime_api)
 			continue;
@@ -3200,6 +3215,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				called_stubs.push_back(module->loaded.base() + stub);
 				if (cycles_named)
 					stub_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
+				if (beside_api(module_name, symbol.names.at(0)))
+					beside_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
 				continue;
 			}
 			if (process.parallel()) {
@@ -3360,9 +3377,33 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (name == "WaitForMultipleObjects" || name == "WaitForMultipleObjectsEx")
 			multiple_stubs.emplace_back(stub, name == "WaitForMultipleObjectsEx");
 	}
-	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty()))
-		process.set_concurrent_served([&process, &threads, &kernel_objects, &kernel, event_stubs, address_stubs, semaphore_stubs, mutex_stubs,
-			multiple_stubs](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty() ||
+		!beside_names.empty()))
+		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, event_stubs, address_stubs,
+			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			// A call of a subsystem with a lock of its own runs its usual handler here; the arguments past the four in registers are on the
+			// guest's stack above their home space.
+			if (const auto named = beside_names.find(stub); named != beside_names.end()) {
+				const auto entry = api_registry.find(named->second);
+				if (!entry)
+					return std::nullopt;
+				const uint32_t count = entry->first;
+				std::vector<uint64_t> words(arguments, arguments + 4);
+				if (count > 4) {
+					words.resize(count);
+					if (!process.read_alone(arguments[4] + 40, words.data() + 4, (count - 4) * sizeof(uint64_t)))
+						return std::nullopt;
+				}
+				words.resize(count);
+				ApiCall call(process, environment, std::move(words));
+				call.alone = true;
+				try {
+					entry->second(call);
+				} catch (...) {
+					return std::nullopt;
+				}
+				return call.result;
+			}
 			// The object of the process's table behind a handle the thread may wait on: an event, a semaphore or a mutex. 0 for any
 			// other, which the usual way waits for.
 			const auto table_of = [&](uint64_t handle) -> uint32_t {

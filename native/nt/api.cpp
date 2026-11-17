@@ -22,12 +22,16 @@ ApiCall::ApiCall(NativeProcess &process, NativeEnvironment &environment, std::ve
 
 void ApiCall::fail(uint32_t error, uint64_t value)
 {
+	if (alone)
+		throw ApiNeedsTurn{};
 	environment.set_last_error(error);
 	result = value;
 }
 
 uint32_t ApiCall::last_error() const
 {
+	if (alone)
+		throw ApiNeedsTurn{};
 	return environment.last_error();
 }
 
@@ -79,6 +83,8 @@ size_t ApiCall::pointer_width() const
 
 void ApiCall::set_last_error(uint32_t error)
 {
+	if (alone)
+		throw ApiNeedsTurn{};
 	environment.set_last_error(error);
 }
 
@@ -86,6 +92,12 @@ std::vector<uint8_t> ApiCall::read(uint64_t address, size_t size) const
 {
 	if (!size)
 		return {};
+	if (alone) {
+		std::vector<uint8_t> bytes(size);
+		if (!process.read_alone(address, bytes.data(), size))
+			throw ApiNeedsTurn{};
+		return bytes;
+	}
 	try {
 		return process.read_memory(address, size);
 	} catch (const std::runtime_error &failure) {
@@ -102,6 +114,11 @@ void ApiCall::write(uint64_t address, std::span<const uint8_t> bytes) const
 {
 	if (bytes.empty())
 		return;
+	if (alone) {
+		if (!process.write_alone(address, bytes.data(), bytes.size()))
+			throw ApiNeedsTurn{};
+		return;
+	}
 	try {
 		process.write_memory(address, bytes);
 	} catch (const std::runtime_error &failure) {
