@@ -250,12 +250,15 @@ private:
 
 void register_midi_api(ApiRegistry &registry)
 {
-	// No MIDI port, in or out: a program lists none, and opening one finds no such device; the mapper finds no device behind it.
+	// No MIDI port, in or out, and no auxiliary device: a program lists none, and opening one finds no such device; the mapper finds no
+	// device behind it.
 	constexpr uint32_t midierr_nodevice = 68, midi_mapper = 0xffffffffU;
-	for (const char *name : {"midiInGetNumDevs", "midiOutGetNumDevs"})
+	for (const char *name : {"midiInGetNumDevs", "midiOutGetNumDevs", "auxGetNumDevs"})
 		registry.add(name, 0, [](ApiCall &call) { call.ret(0); });
-	for (const char *name : {"midiInGetDevCapsW", "midiInGetDevCapsA", "midiOutGetDevCapsW", "midiOutGetDevCapsA"})
+	for (const char *name : {"midiInGetDevCapsW", "midiInGetDevCapsA", "midiOutGetDevCapsW", "midiOutGetDevCapsA", "auxGetDevCapsA", "auxGetDevCapsW"})
 		registry.add(name, 3, [](ApiCall &call) { call.ret(mmsyserr_baddeviceid); });
+	// Windows 95 onwards answer version 3.10.
+	registry.add("mmsystemGetVersion", 0, [](ApiCall &call) { call.ret(0x030a); });
 	for (const char *name : {"midiInOpen", "midiOutOpen"})
 		registry.add(name, 5, [](ApiCall &call) {
 			if (call[0])

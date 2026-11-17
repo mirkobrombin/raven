@@ -634,16 +634,39 @@ static void stream_reap(struct stream *self)
 	}
 }
 
+/* The frames the device has taken: the buffers that are done, or where the wave output stands in the buffer that plays, whichever
+ * is further. A program that fills what the padding leaves free then writes before the last buffer ends, not after. */
+static UINT64 stream_taken(struct stream *self)
+{
+	stream_reap(self);
+	MMTIME time = {TIME_SAMPLES};
+	if (waveOutGetPosition(self->wave, &time, sizeof(time)) == MMSYSERR_NOERROR) {
+		const DWORD sample = time.wType == TIME_SAMPLES ? time.u.sample : time.u.cb / self->format->nBlockAlign;
+		/* The wave output counts in 32 bits: the clock adds what moved since it last asked. */
+		self->speaker += (DWORD)(sample - self->last_sample);
+		self->last_sample = sample;
+	}
+	if (self->speaker > self->written)
+		self->speaker = self->written;
+	return self->speaker > self->played ? self->speaker : self->played;
+}
+
 /* While the stream lives: buffers that played are freed, and a stream driven by an event is told every period that it may write. */
 static DWORD WINAPI stream_worker(void *parameter)
 {
 	struct stream *self = parameter;
+	/* The wave output's event can come just before or after a period ends: the program is told once for each period, not for both. */
+	DWORD due = GetTickCount() + PERIOD / 10000;
 	for (;;) {
-		WaitForSingleObject(self->wave_event, PERIOD / 10000);
+		const LONG left = (LONG)(due - GetTickCount());
+		WaitForSingleObject(self->wave_event, left > 0 ? (DWORD)left : 0);
+		const BOOL period = (LONG)(GetTickCount() - due) >= 0;
+		if (period)
+			due = (LONG)(GetTickCount() - due) > PERIOD / 10000 ? GetTickCount() + PERIOD / 10000 : due + PERIOD / 10000;
 		EnterCriticalSection(&self->lock);
 		const BOOL closing = self->closing;
 		stream_reap(self);
-		if (self->started && self->event)
+		if (period && self->started && self->event)
 			SetEvent(self->event);
 		LeaveCriticalSection(&self->lock);
 		if (closing)
@@ -711,12 +734,7 @@ static void stream_close(struct stream *self)
 	}
 	if (self->wave) {
 		waveOutReset(self->wave);
-		/* The buffers the reset returned are marked done when the scheduler runs. */
-		for (int tries = 0; self->blocks && tries < 200; ++tries) {
-			stream_reap(self);
-			if (self->blocks)
-				Sleep(5);
-		}
+		stream_reap(self);
 		waveOutClose(self->wave);
 	}
 	if (self->wave_event)
@@ -851,8 +869,7 @@ static HRESULT WINAPI client_padding(IAudioClient3 *iface, UINT32 *padding)
 	if (!self->initialized)
 		return E_NOT_INITIALIZED;
 	EnterCriticalSection(&self->lock);
-	stream_reap(self);
-	*padding = (UINT32)(self->written - self->played);
+	*padding = (UINT32)(self->written - stream_taken(self));
 	LeaveCriticalSection(&self->lock);
 	return S_OK;
 }
@@ -1095,7 +1112,7 @@ static HRESULT WINAPI render_buffer(IAudioRenderClient *iface, UINT32 frames, BY
 	stream_reap(self);
 	if (self->pending)
 		result = E_OUT_OF_ORDER;
-	else if (frames > self->frames - (UINT32)(self->written - self->played))
+	else if (frames > self->frames - (UINT32)(self->written - stream_taken(self)))
 		result = E_BUFFER_TOO_LARGE;
 	else if (frames) {
 		self->pending = frames;
@@ -1164,15 +1181,7 @@ static HRESULT WINAPI clock_position(IAudioClock *iface, UINT64 *position, UINT6
 	if (!position)
 		return E_POINTER;
 	EnterCriticalSection(&self->lock);
-	MMTIME time = {TIME_SAMPLES};
-	if (waveOutGetPosition(self->wave, &time, sizeof(time)) == MMSYSERR_NOERROR) {
-		const DWORD sample = time.wType == TIME_SAMPLES ? time.u.sample : time.u.cb / self->format->nBlockAlign;
-		/* The wave output counts in 32 bits: the clock adds what moved since it last asked. */
-		self->speaker += (DWORD)(sample - self->last_sample);
-		self->last_sample = sample;
-	}
-	if (self->speaker > self->written)
-		self->speaker = self->written;
+	stream_taken(self);
 	*position = self->speaker * self->format->nBlockAlign;
 	LeaveCriticalSection(&self->lock);
 	if (counter) {

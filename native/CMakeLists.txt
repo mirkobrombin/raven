@@ -4667,6 +4667,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_associate_x${width} COMMAND raven --run-process --execution=native ${sandbox_client} -- associate)
                     set_tests_properties(native_associate_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/associate-prefix${width})
+                    set(winmm_client ${CMAKE_CURRENT_BINARY_DIR}/winmm-client${width}.exe)
+                    add_custom_command(OUTPUT ${winmm_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${winmm_client} ${LOADER_SOURCES}/winmm_client.c -lwinmm -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/winmm_client.c VERBATIM)
+                    add_custom_target(winmm_fixture${width} ALL DEPENDS ${winmm_client} winmm_component)
+                    add_test(NAME native_winmm_x${width} COMMAND raven --run-process --execution=native ${winmm_client})
+                    set_tests_properties(native_winmm_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(audio_client ${CMAKE_CURRENT_BINARY_DIR}/audio-client${width}.exe)
                     add_custom_command(OUTPUT ${audio_client}
                         COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
@@ -5176,7 +5184,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         DEPENDS ${LOADER_SOURCES}/mmdevapi_client.c VERBATIM)
                     add_custom_target(mmdevapi_fixture64 ALL DEPENDS ${mmdevapi_client} media_component)
                     add_test(NAME native_mmdevapi_x64 COMMAND raven --run-process --execution=native ${mmdevapi_client})
-                    set_tests_properties(native_mmdevapi_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set_tests_properties(native_mmdevapi_x64 PROPERTIES TIMEOUT 20 ENVIRONMENT RAVEN_AUDIO=null
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
                 # What resampledmo.dll makes of sound at another rate. COM finds its class through raven-shell.dll, as above.
                 if(RAVEN_CONTROLS_COMPONENT_DIR)
@@ -5226,6 +5235,47 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(winscard_fixture${width} ALL DEPENDS ${winscard_client} winscard_component)
                     add_test(NAME native_winscard_x${width} COMMAND raven --run-process --execution=native ${winscard_client})
                     set_tests_properties(native_winscard_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                endforeach()
+                # The import libraries of ravenhost.dll's sound calls, which the guest audio components link against.
+                set(winmm_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winmm)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio64.a ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio32.a
+                    COMMAND ${RAVEN_DLLTOOL} -d ${winmm_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio64.a
+                    COMMAND ${RAVEN_DLLTOOL32} -k -d ${winmm_source}/ravenhost32.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio32.a
+                    DEPENDS ${winmm_source}/ravenhost64.def ${winmm_source}/ravenhost32.def VERBATIM)
+                add_custom_target(audio_imports ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio64.a ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio32.a)
+                # raven-winmm.dll for each width: the timers, wave devices, mixer and PlaySound that winmm.dll forwards, on guest threads
+                # over the same streams.
+                set(winmm_files ${winmm_source}/main.c ${winmm_source}/timer.c ${winmm_source}/wave.c ${winmm_source}/mixer.c
+                    ${winmm_source}/sound.c)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-winmm.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-winmm.dll
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-winmm.dll
+                        ${winmm_files} ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio64.a -lkernel32 -lgcc
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-winmm.dll
+                        ${winmm_files} ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-audio32.a -lkernel32 -lgcc
+                    DEPENDS ${winmm_files} ${winmm_source}/winmm_private.h ${PROJECT_SOURCE_DIR}/native/nt/raven_audio.h audio_imports
+                    VERBATIM)
+                add_custom_target(winmm_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-winmm.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-winmm.dll)
+                # The fixture plays and records on the null device, so the pace of its buffers is the engine's alone.
+                foreach(width 64 32)
+                    if(width EQUAL 64)
+                        set(audio_compiler ${RAVEN_MINGW64})
+                        set(audio_entry raven_entry)
+                    else()
+                        set(audio_compiler ${RAVEN_MINGW32})
+                        set(audio_entry _raven_entry)
+                    endif()
+                    set(wave_client ${CMAKE_CURRENT_BINARY_DIR}/wave-client${width}.exe)
+                    add_custom_command(OUTPUT ${wave_client}
+                        COMMAND ${audio_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${audio_entry},--no-insert-timestamp
+                            -o ${wave_client} ${LOADER_SOURCES}/wave_client.c -lwinmm -luser32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/wave_client.c VERBATIM)
+                    add_custom_target(wave_fixture${width} ALL DEPENDS ${wave_client} winmm_component)
+                    add_test(NAME native_wave_x${width} COMMAND raven --run-process --execution=native ${wave_client})
+                    set_tests_properties(native_wave_x${width} PROPERTIES TIMEOUT 30 ENVIRONMENT RAVEN_AUDIO=null
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endforeach()
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-client.exe
                     COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin

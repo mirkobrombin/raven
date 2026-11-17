@@ -874,6 +874,11 @@ int main(int argc, char **argv)
 					// as the XML component, use it as much as the program does.
 					if (const auto automation = component_directory / "oleaut32.dll"; !modules.all().contains("oleaut32.dll") && std::filesystem::exists(automation))
 						modules.add("oleaut32.dll", read_file(automation.c_str()));
+					// The multimedia component answers for winmm.dll's callbacks and sound in every program, as libraries that play sound load
+					// winmm.dll later as often as programs import it.
+					if (const auto multimedia = component_directory / "raven-winmm.dll"; !modules.all().contains("raven-winmm.dll") &&
+						std::filesystem::exists(multimedia))
+						modules.add("raven-winmm.dll", read_file(multimedia.c_str()));
 					// The compression manager answers for msacm32.dll in every program, as libraries load it later as often as programs import it.
 					if (const auto acm = component_directory / "raven-msacm32.dll"; !modules.all().contains("raven-msacm32.dll") &&
 						std::filesystem::exists(acm))
