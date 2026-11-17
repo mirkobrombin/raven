@@ -3334,11 +3334,12 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const auto event = kernel_objects.event_alone(arguments[0]);
 			if (!event)
 				return std::nullopt;
+			// An event outside the table (one shared with other processes) has its waiters on its word or in the runtime.
 			const uint32_t object = event->table_object();
-			if (!object || !threads.quiet_for(object) || event->set_state(found->second) < 0)
+			if ((object && !threads.quiet_for(object)) || event->set_state(found->second) < 0)
 				return std::nullopt;
 			threads.signaled();
-			if (threads.waiting_in_runtime() || !threads.quiet_for(object))
+			if (threads.waiting_in_runtime() || (object && !threads.quiet_for(object)))
 				threads.nudge();
 			return 1;
 		});

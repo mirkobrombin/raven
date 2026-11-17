@@ -365,6 +365,7 @@ void NativeThreads::finish(GuestThread &thread, uint32_t code)
 	}
 	thread.exit_code = code;
 	thread.state = GuestThread::State::done;
+	moved();
 	thread.impersonation.reset();
 	thread.ready = nullptr;
 	for (const int report : thread.exit_reports) {
@@ -821,8 +822,11 @@ bool NativeThreads::hand_over_to(uint32_t object)
 	leave(me);
 	// Those the set woke come back for their turn within microseconds; each then runs, as on Windows, until it waits again or ends, or
 	// until it has gone a millisecond without a call (ending a thread takes about that), when the setter goes on beside it. One the set
-	// did not wake (an event reset on its own wakes one waiter) is not waited for.
+	// did not wake (an event reset on its own wakes one waiter) is not waited for. The setter sleeps between looks: on two processors,
+	// spinning took the one the woken thread needed and made each round trip a hundred times slower.
+	handing.fetch_add(1, std::memory_order_acq_rel);
 	for (;;) {
+		const uint32_t seen = moves.load(std::memory_order_acquire);
 		const auto now = std::chrono::steady_clock::now();
 		bool any = false, settled = true;
 		{
@@ -844,8 +848,10 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		}
 		if ((any && settled) || (!any && now - started >= std::chrono::microseconds(300)) || now - started >= std::chrono::milliseconds(5))
 			break;
-		std::this_thread::yield();
+		const timespec nap{0, 100000};
+		::syscall(SYS_futex, &moves, FUTEX_WAIT_PRIVATE, seen, &nap, nullptr, 0);
 	}
+	handing.fetch_sub(1, std::memory_order_acq_rel);
 	{
 		std::lock_guard lock(gate);
 		enqueue(me);
@@ -977,9 +983,17 @@ void NativeThreads::enqueue(GuestThread &thread)
 	}
 }
 
+void NativeThreads::moved()
+{
+	moves.fetch_add(1, std::memory_order_release);
+	if (handing.load(std::memory_order_acquire))
+		::syscall(SYS_futex, &moves, FUTEX_WAKE_PRIVATE, INT32_MAX, nullptr, nullptr, 0);
+}
+
 void NativeThreads::install(GuestThread &me)
 {
 	me.turns.fetch_add(1, std::memory_order_relaxed);
+	moved();
 	running = &me;
 	active_scheduler = this;
 	// The process ended while this thread waited: nothing of it can be served any more. The main thread carries the error that ended it.
@@ -1505,6 +1519,7 @@ uint32_t NativeThreads::wait_outside(const std::function<uint32_t(std::optional<
 		me.outside = true;
 		me.outside_endless = !wake;
 	}
+	moved();
 	leave(me);
 	// The time the run may last ends a wait that would outlast it: the main thread wakes for it and ends the run.
 	const bool limited = me.main && !tearing_down && (!wake || deadline < *wake);

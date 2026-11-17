@@ -216,6 +216,11 @@ public:
 	bool hand_over_to(uint32_t object);
 	// How many threads wait outside for objects of the process's table, so that a set nobody waits for looks no further.
 	std::atomic<int> table_waiters{0};
+	// Moves on each time a thread takes its turn, goes to wait outside or ends; a setter handing over sleeps on it instead of keeping
+	// the processor the threads it woke need (see moved).
+	std::atomic<uint32_t> moves{0};
+	std::atomic<int> handing{0};
+	void moved();
 	// The threads in block, counted on entry before they look at what they wait for (see waiting_in_runtime), and those that wait
 	// outside for each object of the table, by slot (see quiet_for).
 	std::atomic<int> waiting_threads{0};
