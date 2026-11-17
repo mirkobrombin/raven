@@ -42,6 +42,9 @@ public:
 	// For an object other processes share: a word of the memory they share that changes, and is woken with a futex, whenever the object
 	// may have turned signaled. A wait on such objects alone sleeps on their words (see wait_words in shared_file.h).
 	virtual std::atomic<uint32_t> *wait_word() const { return nullptr; }
+	// For a semaphore whose count the process's table of waits keeps (kernel_waits.h): its object there, which may be released from any
+	// host thread. 0 for every other object.
+	virtual uint32_t table_semaphore() const { return 0; }
 };
 
 class NativeObjects;
@@ -119,6 +122,8 @@ public:
 	// For a call answered beside the others, outside the runtime's turn: the event of this process the handle gives the access to (to
 	// set it, unless asked otherwise); nothing when the call needs the runtime (any other handle, or an error to report).
 	std::shared_ptr<EventObject> event_alone(uint64_t handle, uint32_t access = 2) const;
+	// The object behind a handle of this process that grants `access`, for a host thread that does not hold the turn; null otherwise.
+	std::shared_ptr<KernelObject> object_alone(uint64_t handle, uint32_t access) const;
 	NativeObjectResult query_event(uint64_t handle);
 	// The object manager type of the object behind a handle; nullopt when the handle does not exist.
 	std::optional<std::u16string> type_name(uint64_t handle) const;

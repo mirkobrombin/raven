@@ -331,6 +331,17 @@ std::shared_ptr<EventObject> NativeObjects::event_alone(uint64_t handle, uint32_
 	return found->second.event;
 }
 
+std::shared_ptr<KernelObject> NativeObjects::object_alone(uint64_t handle, uint32_t access) const
+{
+	if (handle >= handle_range_to_child)
+		return nullptr;
+	std::lock_guard lock(mutex);
+	const auto found = handles.find(handle);
+	if (found == handles.end() || (found->second.access & access) != access)
+		return nullptr;
+	return found->second.generic;
+}
+
 std::optional<std::u16string> NativeObjects::type_name(uint64_t handle) const
 {
 	arrive(handle);

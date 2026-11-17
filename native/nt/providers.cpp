@@ -3343,8 +3343,27 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto &[stub, name] : served_names)
 		if (name == "WakeByAddressSingle" || name == "WakeByAddressAll" || name == "RtlWakeAddressSingle" || name == "RtlWakeAddressAll")
 			address_stubs.emplace_back(stub, name.ends_with("All"));
-	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty()))
-		process.set_concurrent_served([&threads, &kernel_objects, &kernel, event_stubs, address_stubs](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+	// Releasing a semaphore the table keeps goes beside the others too, when no previous count is asked for: the table has a lock of its
+	// own, and a release it refuses changed nothing, so the usual way answers it with the error.
+	std::vector<uint64_t> semaphore_stubs;
+	for (const auto &[stub, name] : served_names)
+		if (name == "ReleaseSemaphore")
+			semaphore_stubs.push_back(stub);
+	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty()))
+		process.set_concurrent_served([&threads, &kernel_objects, &kernel, event_stubs, address_stubs, semaphore_stubs](uint64_t stub,
+			const uint64_t *arguments) -> std::optional<uint64_t> {
+			if (std::find(semaphore_stubs.begin(), semaphore_stubs.end(), stub) != semaphore_stubs.end()) {
+				const auto semaphore = kernel_objects.object_alone(arguments[0], 0x2);
+				const uint32_t object = semaphore ? semaphore->table_semaphore() : 0;
+				const auto amount = int32_t(arguments[1]);
+				uint32_t previous = 0;
+				if (!object || amount <= 0 || arguments[2] || raven_waits_release_semaphore(kernel_waits(), object, uint32_t(amount), &previous))
+					return std::nullopt;
+				threads.signaled();
+				if (threads.waiting_in_runtime())
+					threads.nudge();
+				return 1;
+			}
 			if (const auto address = std::find_if(address_stubs.begin(), address_stubs.end(), [stub](const auto &entry) { return entry.first == stub; });
 				address != address_stubs.end()) {
 				if (!kernel.wake_address_beside)
@@ -3358,7 +3377,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			if (found->second == EventCall::wait || found->second == EventCall::wait_ex) {
 				const uint32_t thread = NativeThreads::own_id();
 				const auto event = kernel_objects.event_alone(arguments[0], 0x100000);
-				const uint32_t object = event ? event->table_object() : 0;
+				uint32_t object = event ? event->table_object() : 0;
+				// A semaphore of the table with a count is taken the same way.
+				if (!event)
+					if (const auto other = kernel_objects.object_alone(arguments[0], 0x100000))
+						object = other->table_semaphore();
 				if (!thread || !object || (found->second == EventCall::wait_ex && uint32_t(arguments[2])) ||
 					raven_waits_wait(kernel_waits(), thread, &object, 1, 0, 0, 0) != 0)
 					return std::nullopt;
