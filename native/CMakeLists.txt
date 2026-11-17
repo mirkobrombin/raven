@@ -3510,7 +3510,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/semaphore-beside-prefix-${mode}")
         endforeach()
         set_property(TEST native_semaphore_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
-        set_property(TEST native_semaphore_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: \\(call\\) ReleaseSemaphore calls=[0-9][0-9][0-9]")
+        # The partner's waits block beside the turn too; only the main thread's go the usual way.
+        set_property(TEST native_semaphore_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
+            "profile: \\(call\\) (ReleaseSemaphore calls=[0-9][0-9][0-9]|WaitForSingleObject calls=(3[5-9]|[4-9])[0-9][0-9][0-9])")
         set_property(TEST native_semaphore_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")

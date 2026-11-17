@@ -3382,10 +3382,15 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (!event)
 					if (const auto other = kernel_objects.object_alone(arguments[0], 0x100000))
 						object = other->table_semaphore();
-				if (!thread || !object || (found->second == EventCall::wait_ex && uint32_t(arguments[2])) ||
-					raven_waits_wait(kernel_waits(), thread, &object, 1, 0, 0, 0) != 0)
+				if (!thread || !object || (found->second == EventCall::wait_ex && uint32_t(arguments[2])))
 					return std::nullopt;
-				return 0;
+				const uint32_t taken = raven_waits_wait(kernel_waits(), thread, &object, 1, 0, 0, 0);
+				if (taken == 0)
+					return 0;
+				// One that would block is waited for here as well, by a host thread whose guest spins in its stub.
+				if (taken != 0x102 || !uint32_t(arguments[1]))
+					return std::nullopt;
+				return threads.wait_beside(object, uint32_t(arguments[1]));
 			}
 			const auto event = kernel_objects.event_alone(arguments[0]);
 			if (!event)

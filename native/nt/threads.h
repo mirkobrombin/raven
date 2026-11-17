@@ -194,6 +194,10 @@ public:
 	// Puts a thread in a wait that block was given `told` for in line for the runtime, after whatever ends its wait has changed. Any host
 	// thread may call it, holding the runtime or not.
 	void tell(GuestThread &thread);
+	// A wait for one object of the process's table that the host thread of a guest takes while its guest spins in its stub, without the
+	// turn: the result of raven_waits_wait (an index, an abandoned one or a time-out), or nothing when the wait has to go the usual way,
+	// which then finds the object as this left it. Only the host thread of a parked guest other than the main one waits here.
+	std::optional<uint32_t> wait_beside(uint32_t object, uint32_t milliseconds);
 	// Whether waits on the objects of the process's table (kernel_waits.h) block their host thread there, as they do with a host thread
 	// for each guest thread. RAVEN_POLLED_WAITS=1 has them looked at by the scheduler instead, as the waits on other objects are, to
 	// compare the two.

@@ -27,6 +27,8 @@ namespace raven {
 
 // Each host thread serves one guest thread for its whole life (see host_main), and the first one the main thread.
 static thread_local uint32_t own_thread = 0;
+// The guest thread whose host thread is parked in NativeThreads::park, and so holds no turn, while it answers calls there.
+static thread_local GuestThread *parked_here = nullptr;
 
 namespace {
 
@@ -1064,6 +1066,64 @@ void NativeThreads::install(GuestThread &me)
 	check_pending();
 }
 
+std::optional<uint32_t> NativeThreads::wait_beside(uint32_t object, uint32_t milliseconds)
+{
+	GuestThread *const me = parked_here;
+	if (!me || me->main || !waits_outside() || !object)
+		return std::nullopt;
+	std::optional<std::chrono::steady_clock::time_point> until;
+	if (milliseconds != UINT32_MAX)
+		until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+	{
+		std::lock_guard lock(gate);
+		if (me->unwinding || me->state == GuestThread::State::done || me->paused || me->job || tearing_down)
+			return std::nullopt;
+		// As for a wait outside the runtime: another thread calls it away from the table for a job or its end (see wait_outside), and
+		// the check for a deadlock counts it.
+		me->outside = true;
+		me->outside_endless = !until;
+		// It waits as one in wait_outside does, so a setter handing over (hand_over_to) finds it and waits for it to go on.
+		me->state = GuestThread::State::waiting;
+		me->waits.fetch_add(1, std::memory_order_release);
+	}
+	me->waits_on = {object};
+	table_waiters.fetch_add(1, std::memory_order_release);
+	table_waited[object % table_waited.size()].fetch_add(1, std::memory_order_acq_rel);
+	// Going to wait counts as a move, as for a wait outside; waking does not, so a setter handing over waits for the guest to go on.
+	moved();
+	uint32_t result = raven_wait_interrupted;
+	for (;;) {
+		uint64_t timeout = raven_wait_infinite;
+		if (until)
+			timeout = uint64_t(std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(*until - std::chrono::steady_clock::now()).count()));
+		result = raven_waits_wait(kernel_waits(), me->id, &object, 1, 0, 0, timeout);
+		if (result != raven_wait_interrupted)
+			break;
+		std::unique_lock lock(gate);
+		if (!me->job)
+			break;
+		run_job(*me, lock);
+		if (me->unwinding || me->state == GuestThread::State::done)
+			break;
+	}
+	table_waited[object % table_waited.size()].fetch_sub(1, std::memory_order_release);
+	table_waiters.fetch_sub(1, std::memory_order_release);
+	me->waits_on.clear();
+	{
+		std::lock_guard lock(gate);
+		me->outside = false;
+		if (me->state == GuestThread::State::waiting)
+			me->state = GuestThread::State::running;
+	}
+	// Woken, it runs again as if it had taken a turn: the setter sees it move and waits until it calls, waits again or ends.
+	me->turns.fetch_add(1, std::memory_order_relaxed);
+	moved();
+	// Interrupted for anything but a job, or failed, the wait took nothing: the usual way waits again and finds out why.
+	if (result == raven_wait_interrupted || result == raven_wait_failed || result == raven_wait_ended)
+		return std::nullopt;
+	return result;
+}
+
 void NativeThreads::tell(GuestThread &thread)
 {
 	if (!threaded)
@@ -1296,7 +1356,12 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 	}
 	leave(me);
 	int status = 0;
+	struct Parked {
+		explicit Parked(GuestThread &thread) { parked_here = &thread; }
+		~Parked() { parked_here = nullptr; }
+	};
 	for (;;) {
+		const Parked parked(me);
 		status = NativeProcess::wait_task(task, limit, [&] {
 			std::lock_guard lock(gate);
 			return bool(me.job);
