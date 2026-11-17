@@ -3,31 +3,70 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # The nightly build: main as it is each night, published as the nightly pre-release, when main moved since the last one.
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to build, such as v0.1.0
+        description: Existing tag to build, such as v0.1.0, or nightly for main as it is now
         required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag || (github.event_name == 'schedule' && 'nightly') || github.ref_name }}
   cancel-in-progress: false
 
 env:
   COMPONENTS: /opt/ci/components
   BUILD: /opt/ci/build
   ARCHIVES: /opt/ci/archives
-  TAG: ${{ inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag || (github.event_name == 'schedule' && 'nightly') || github.ref_name }}
 
 jobs:
+  # Revision: the commit every later job checks out, so a nightly build stays on one commit even when main moves meanwhile.
+  # A scheduled night with no new commit on main since the published nightly builds nothing.
+
+  revision:
+    name: Resolve the revision
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      build: ${{ steps.resolve.outputs.build }}
+    steps:
+      - name: Resolve
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          build=true
+          if [ "${TAG}" = nightly ]; then
+            sha=$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)
+            published=$(gh api "repos/${GH_REPO}/commits/nightly" --jq .sha 2>/dev/null || true)
+            if [ "${EVENT}" = schedule ] && [ "${sha}" = "${published}" ]; then
+              build=false
+            fi
+          else
+            sha=$(gh api "repos/${GH_REPO}/commits/${TAG}" --jq .sha)
+          fi
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+          echo "build=${build}" >> "${GITHUB_OUTPUT}"
+          echo "${TAG}: ${sha}, build ${build}"
+
   # Provision: a release ships only components whose corresponding source travels with it (docs/packaging.md), so it
   # provisions those afresh, with their source archives, instead of reusing the trimmed CI caches.
 
   provision:
     name: Provision ${{ matrix.component }}
+    needs: revision
+    if: needs.revision.outputs.build == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     container:
@@ -68,7 +107,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.revision.outputs.sha }}
           persist-credentials: false
 
       - name: Install build packages
@@ -101,7 +140,7 @@ jobs:
 
   package:
     name: Build, test and bundle
-    needs: provision
+    needs: [revision, provision]
     runs-on: ubuntu-26.04
     timeout-minutes: 360
     container:
@@ -126,7 +165,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.revision.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -207,11 +246,12 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
-  # Publish: a draft, so a maintainer reads the notes and publishes it by hand.
+  # Publish: a tag becomes a draft, so a maintainer reads the notes and publishes it by hand. The nightly build replaces the
+  # previous nightly pre-release at once, tag included, so its link always gives the newest build that passed the suite.
 
   publish:
-    name: Draft release
-    needs: package
+    name: Publish release
+    needs: [revision, package]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -230,7 +270,22 @@ jobs:
         with:
           subject-path: dist/*.tar.gz
 
+      - name: Replace the nightly pre-release
+        if: env.TAG == 'nightly'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ needs.revision.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          notes="Built from main at ${SHA} on $(date -u +%Y-%m-%d), after the complete test suite passed on it. "
+          notes+="This pre-release is replaced by the next night's build whenever main has changed."
+          gh release create nightly dist/* --prerelease --latest=false --target "${SHA}" --title "Nightly ${SHA:0:7}" --notes "${notes}"
+
       - name: Create the draft
+        if: env.TAG != 'nightly'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
