@@ -60,8 +60,8 @@ jobs:
           echo "build=${build}" >> "${GITHUB_OUTPUT}"
           echo "${TAG}: ${sha}, build ${build}"
 
-  # Provision: a release ships only components whose corresponding source travels with it (docs/packaging.md), so it
-  # provisions those afresh, with their source archives, instead of reusing the trimmed CI caches.
+  # Provision: every component the complete suite builds with, afresh instead of from the trimmed CI caches. Those the
+  # release ships under terms that ask for their source come with it (docs/packaging.md).
 
   provision:
     name: Provision ${{ matrix.component }}
@@ -90,6 +90,21 @@ jobs:
           - component: installer32
             arguments: --arch x86 --output
             recipe: scripts/provision-installer.py
+          - component: sqlite
+            arguments: --output
+            recipe: scripts/provision-sqlite.py
+          - component: graphics
+            arguments: --destination
+            recipe: scripts/provision-graphics.py
+          - component: roots
+            arguments: --output
+            recipe: scripts/provision-roots.py
+          - component: libpng
+            arguments: --output
+            recipe: scripts/provision-libpng.py
+          - component: text
+            arguments: --jobs 4 --output
+            recipe: scripts/provision-text.py
           - component: testdata
             arguments: --output
             recipe: scripts/provision-fixtures.py
@@ -190,14 +205,11 @@ jobs:
         run: python3 .github/scripts/release_materials.py "${COMPONENTS}" /opt/ci/materials.json
 
       - name: Configure
-        run: >
-          cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DRAVEN_RTL_COMPONENT_PATH="${COMPONENTS}/rtl/raven-rtl.dll"
-          -DRAVEN_CONTROLS_COMPONENT_DIR="${COMPONENTS}/controls"
-          -DRAVEN_CONTROLS32_COMPONENT_DIR="${COMPONENTS}/controls32"
-          -DRAVEN_INSTALLER_COMPONENT_DIR="${COMPONENTS}/installer"
-          -DRAVEN_INSTALLER32_COMPONENT_DIR="${COMPONENTS}/installer32"
-          -DRAVEN_TESTDATA_DIR="${COMPONENTS}/testdata"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t options < <(.github/scripts/components.sh options)
+          cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=RelWithDebInfo "${options[@]}"
 
       - name: Prepare
         run: python3 scripts/package-native.py prepare --source "${GITHUB_WORKSPACE}" --build "${BUILD}"

@@ -63,10 +63,17 @@ def runtime_paths(build):
         mscoree.dll ucrtbase32.dll l_intl.nls dsound.dll raven-winmm.dll raven-msacm32.dll""".split()
     for root in (native, native / "x86"):
         files += [root / name for name in names if (root / name).exists()]
-    files += sorted((native / "roots").glob("*.crt"))
     files += sorted((native / "WinMetadata").glob("*.winmd"))
     paths = {path.relative_to(native).as_posix(): path for path in files}
-    font_directory = cache_values(build).get("RAVEN_FONT_DIRECTORY")
+    # Microsoft's code signing roots are not distributed: the runtime downloads them the first time it checks a signature. The 64-bit
+    # Direct3D libraries of DXVK and vkd3d-proton go beside the runtime, where it finds them for 64-bit programs.
+    cache = cache_values(build)
+    for key, names in (("RAVEN_DXVK_PE64_DIR", ("d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll")),
+                       ("RAVEN_VKD3D_PE64_DIR", ("d3d12.dll", "d3d12core.dll"))):
+        directory = cache.get(key)
+        if directory and not directory.endswith("-NOTFOUND"):
+            paths.update({name: Path(directory) / name for name in names})
+    font_directory = cache.get("RAVEN_FONT_DIRECTORY")
     if font_directory and not font_directory.endswith("-NOTFOUND"):
         fonts = Path(font_directory)
         for face in ("Sans", "Mono", "Serif"):
@@ -93,11 +100,13 @@ def cache_values(build):
     return values
 
 
+# The configured inputs whose source a release carries: the guest components built from upstream releases, and the Direct3D libraries
+# it ships, vkd3d-proton under the LGPL among them. Skia and libpng linked into the runtime, the fonts and SQLite come under permissive
+# terms whose notices LICENSES/ carries; the code signing roots are not shipped.
 def required_materials(cache):
-    keys = [key for key in cache if key.startswith("RAVEN_") and
-            ("COMPONENT_DIR" in key or key.endswith(("_COMPONENT_PATH", "_PE32_DIR", "_PE64_DIR", "_FONT_DIRECTORY", "_SKIA_LIBRARY")))]
-    keys += [key for key, value in cache.items() if key.endswith("_LIBRARY_RELEASE") and value.endswith(".a")]
-    keys += [key for key in ("RAVEN_ROOT_CERTIFICATE_DIRECTORY",) if key in cache]
+    permissive = {"RAVEN_SQLITE_COMPONENT_DIR"}
+    keys = [key for key in cache if key.startswith("RAVEN_") and key not in permissive and
+            ("COMPONENT_DIR" in key or key.endswith(("_COMPONENT_PATH", "_PE32_DIR", "_PE64_DIR")))]
     return {key for key in keys if cache[key] and not cache[key].endswith("-NOTFOUND")}
 
 

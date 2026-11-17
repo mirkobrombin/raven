@@ -66,16 +66,26 @@ and modifications. Include generated files too when the recipe cannot recreate
 them. The provisioners retain upstream root and module notices in `licenses/`
 and record their hashes. Modified source copies carry a dated modification notice.
 
-Static Skia requires its exact source, actual GN arguments and compiled dependency
-sources/notices. The libpng recipe and sources must match the linked library.
+Which inputs need source material follows from their terms. Guest components built
+from upstream releases (the RTL, controls and installer components) and
+vkd3d-proton, which is LGPL-2.1-or-later, need it: `scripts/provision-graphics.py`
+keeps vkd3d-proton's source at the pinned commit with every submodule it builds
+with, and DXVK's source archive, beside their notices. Inputs under permissive
+terms ship with their notices in `LICENSES/` and need no source archive: Skia and
+libpng linked into the runtime, SQLite, and the fonts.
+
 Configured Liberation fonts are included in `runtime/fonts`, which the executable
 finds beside itself. Their copyright and OFL terms are included in `LICENSES/`.
 The Raven Sans dialog faces that `scripts/provision-text.py` derives from DejaVu
 Sans Condensed 2.37 go in the same directory, with the Bitstream Vera and Arev
-terms beside them in `RavenSans-LICENSE.txt` and in `LICENSES/`.
-Graphics backends need the matching source and
-build configuration, not just downloaded PE binaries. Certificate bundles retain
-their own provenance and notices. Unmodified compiler tools and system libraries
+terms beside them in `RavenSans-LICENSE.txt` and in `LICENSES/`. The 64-bit DXVK
+and vkd3d-proton libraries go in `runtime/`, where the executable finds them.
+
+Microsoft's code signing roots are not distributed. The runtime downloads the ones
+the host certificate bundle lacks from Microsoft the first time it checks a
+signature, verifies each against the SHA-256 in
+`native/nt/code_signing_roots.inc`, and keeps them in `~/.cache/raven-roots`.
+Unmodified compiler tools and system libraries
 need not be copied into this source inventory solely because they build or run
 Raven. Added static dependencies or bundled shared libraries need their own review.
 

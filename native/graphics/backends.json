@@ -7,7 +7,9 @@
     "sha256": "40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608",
     "archive_root": "dxvk-3.1.1",
     "architectures": {"pe32": "x32", "pe64": "x64"},
-    "dlls": ["d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"]
+    "dlls": ["d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"],
+    "source": {"url": "https://github.com/doitsujin/dxvk/archive/refs/tags/v3.1.1.tar.gz",
+               "sha256": "ef4944134f6c39d0937f265391db2d08bca33cd3a2f0ee9133e1eb55f1cc657c"}
   },
   "vkd3d-proton": {
     "version": "3.1",
@@ -17,6 +19,8 @@
     "sha256": "b85ea8219b71093a3924913dd7aae6172333dc0c069983ed510816d67f02120b",
     "archive_root": "vkd3d-proton-3.1",
     "architectures": {"pe32": "x86", "pe64": "x64"},
-    "dlls": ["d3d12.dll", "d3d12core.dll"]
+    "dlls": ["d3d12.dll", "d3d12core.dll"],
+    "source": {"repository": "https://github.com/HansKristian-Work/vkd3d-proton",
+               "commit": "4522cc1a8b1347f1ab1b0f7b14a23ed9444d95d1"}
   }
 }
