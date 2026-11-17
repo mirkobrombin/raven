@@ -11,6 +11,7 @@
 #include <iostream>
 #include <vector>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -170,7 +171,7 @@ std::optional<int> run_on_warm_host(const std::string &identity)
 		return std::nullopt;
 	}
 	uint32_t size = uint32_t(identity.size());
-	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 3)]{};
+	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * handed_count)]{};
 	iovec part{&size, sizeof size};
 	msghdr message{};
 	message.msg_iov = &part;
@@ -180,22 +181,32 @@ std::optional<int> run_on_warm_host(const std::string &identity)
 	cmsghdr *header = CMSG_FIRSTHDR(&message);
 	header->cmsg_level = SOL_SOCKET;
 	header->cmsg_type = SCM_RIGHTS;
-	header->cmsg_len = CMSG_LEN(sizeof(int) * 3);
-	const int streams[3]{0, 1, 2};
+	header->cmsg_len = CMSG_LEN(sizeof(int) * handed_count);
+	// The host runs in a session of its own: the terminal this start has for its console goes along, which the host cannot open itself.
+	int console = ::open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+	if (console < 0)
+		console = ::open("/dev/null", O_RDWR | O_CLOEXEC);
+	if (console < 0) {
+		::close(connection);
+		return std::nullopt;
+	}
+	const int streams[handed_count]{0, 1, 2, console};
 	std::memcpy(CMSG_DATA(header), streams, sizeof streams);
 	ssize_t sent;
 	do
 		sent = ::sendmsg(connection, &message, MSG_NOSIGNAL);
 	while (sent < 0 && errno == EINTR);
+	::close(console);
 	if (sent != sizeof size || !write_all(connection, identity.data(), identity.size())) {
 		::close(connection);
 		return std::nullopt;
 	}
-	// The start runs in another process; what the terminal or a parent sends this one goes on to it.
+	// The start runs in another process; what the terminal or a parent sends this one goes on to it. A new window size is told only to
+	// the terminal's foreground, which a start in the host's session is not.
 	struct sigaction forward{};
 	forward.sa_handler = pass_signal;
 	sigemptyset(&forward.sa_mask);
-	for (const int number : {SIGINT, SIGTERM, SIGHUP, SIGQUIT})
+	for (const int number : {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGWINCH})
 		::sigaction(number, &forward, nullptr);
 	bool started = false;
 	for (Reply answer{}; read_all(connection, &answer, sizeof answer);) {
@@ -204,7 +215,7 @@ std::optional<int> run_on_warm_host(const std::string &identity)
 			signalled = answer.value;
 		} else if (answer.type == reply_refused && !started) {
 			::close(connection);
-			for (const int number : {SIGINT, SIGTERM, SIGHUP, SIGQUIT})
+			for (const int number : {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGWINCH})
 				std::signal(number, SIG_DFL);
 			return std::nullopt;
 		} else if (answer.type == reply_status) {

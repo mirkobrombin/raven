@@ -70,6 +70,17 @@ private:
 // The cells a character takes on a terminal: none for combining marks, two for wide East Asian characters and emoji.
 int character_cells(char32_t character);
 
+// The terminal that is the process's console, opened anew for reading and writing: the controlling terminal, or the one the start that
+// asked a warm host for this process handed over with its standard streams (see set_console_terminal). -1 without a console.
+int open_console_terminal();
+// Whether the process has a console terminal to open.
+bool has_console_terminal();
+// Makes a descriptor the start of this process handed over its console terminal: a warm host runs in a session of its own, without
+// the terminal its client was started from. A descriptor that is no terminal leaves the process without a console.
+void set_console_terminal(int descriptor);
+// Gives up the terminal handed over, to pass on: -1 when there is none. The process is left with the controlling terminal, if any.
+int take_console_terminal();
+
 // The console: the host terminal behind the standard handles. A process has one, so its state lives here; the input modes live in the
 // terminal itself, so every process sharing the terminal sees the same ones, as processes sharing a Windows console do.
 class TerminalConsole {

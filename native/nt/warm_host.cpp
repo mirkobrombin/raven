@@ -1,5 +1,6 @@
 #include "warm_host.h"
 #include "warm_wire.h"
+#include "console.h"
 
 #include <algorithm>
 #include <atomic>
@@ -57,14 +58,14 @@ void reply(int connection, uint32_t type, int32_t value)
 }
 
 // Takes a start's request: the client is this user's and starts the same thing, and its standard streams come with it.
-bool take_request(int connection, int (&streams)[3])
+bool take_request(int connection, int (&streams)[handed_count])
 {
 	ucred peer{};
 	socklen_t size = sizeof peer;
 	if (::getsockopt(connection, SOL_SOCKET, SO_PEERCRED, &peer, &size) != 0 || peer.uid != ::getuid())
 		return false;
 	uint32_t length = 0;
-	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 3)]{};
+	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * handed_count)]{};
 	iovec part{&length, sizeof length};
 	msghdr message{};
 	message.msg_iov = &part;
@@ -77,13 +78,13 @@ bool take_request(int connection, int (&streams)[3])
 	while (got < 0 && errno == EINTR);
 	const cmsghdr *header = CMSG_FIRSTHDR(&message);
 	if (got != sizeof length || !header || header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
-		header->cmsg_len != CMSG_LEN(sizeof(int) * 3)) {
+		header->cmsg_len != CMSG_LEN(sizeof(int) * handed_count)) {
 		if (header && header->cmsg_type == SCM_RIGHTS)
 			for (size_t index = 0; index < (header->cmsg_len - CMSG_LEN(0)) / sizeof(int); ++index)
 				::close(reinterpret_cast<const int *>(CMSG_DATA(header))[index]);
 		return false;
 	}
-	std::memcpy(streams, CMSG_DATA(header), sizeof(int) * 3);
+	std::memcpy(streams, CMSG_DATA(header), sizeof(int) * handed_count);
 	std::string text(length < (1u << 20) ? length : 0, '\0');
 	if (length >= (1u << 20) || !read_all(connection, text.data(), text.size()) || text != identity) {
 		for (const int stream : streams)
@@ -94,9 +95,9 @@ bool take_request(int connection, int (&streams)[3])
 }
 
 // Sends a request's standard streams to the start that takes it, or takes them there.
-bool send_streams(int channel, const int (&streams)[3])
+bool send_streams(int channel, const int (&streams)[handed_count])
 {
-	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 3)]{};
+	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * handed_count)]{};
 	char byte = 'S';
 	iovec part{&byte, 1};
 	msghdr message{};
@@ -107,7 +108,7 @@ bool send_streams(int channel, const int (&streams)[3])
 	cmsghdr *header = CMSG_FIRSTHDR(&message);
 	header->cmsg_level = SOL_SOCKET;
 	header->cmsg_type = SCM_RIGHTS;
-	header->cmsg_len = CMSG_LEN(sizeof(int) * 3);
+	header->cmsg_len = CMSG_LEN(sizeof(int) * handed_count);
 	std::memcpy(CMSG_DATA(header), streams, sizeof streams);
 	ssize_t sent;
 	do
@@ -116,9 +117,9 @@ bool send_streams(int channel, const int (&streams)[3])
 	return sent == 1;
 }
 
-bool receive_streams(int channel, int (&streams)[3])
+bool receive_streams(int channel, int (&streams)[handed_count])
 {
-	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 3)]{};
+	alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * handed_count)]{};
 	char byte = 0;
 	iovec part{&byte, 1};
 	msghdr message{};
@@ -131,18 +132,19 @@ bool receive_streams(int channel, int (&streams)[3])
 		got = ::recvmsg(channel, &message, MSG_CMSG_CLOEXEC);
 	while (got < 0 && errno == EINTR);
 	const cmsghdr *header = CMSG_FIRSTHDR(&message);
-	if (got != 1 || !header || header->cmsg_type != SCM_RIGHTS || header->cmsg_len != CMSG_LEN(sizeof(int) * 3))
+	if (got != 1 || !header || header->cmsg_type != SCM_RIGHTS || header->cmsg_len != CMSG_LEN(sizeof(int) * handed_count))
 		return false;
 	std::memcpy(streams, CMSG_DATA(header), sizeof streams);
 	return true;
 }
 
-void put_streams(const int (&streams)[3])
+void put_streams(const int (&streams)[handed_count])
 {
 	for (int stream = 0; stream <= 2; ++stream) {
 		::dup2(streams[stream], stream);
 		::close(streams[stream]);
 	}
+	set_console_terminal(streams[3]);
 }
 
 void quiet_streams()
@@ -222,7 +224,7 @@ void start_warm_host(int argc, char **argv)
 		const int connection = next_connection(listener);
 		if (connection < 0)
 			continue;
-		int streams[3];
+		int streams[handed_count];
 		if (!take_request(connection, streams)) {
 			::close(connection);
 			continue;
@@ -336,7 +338,7 @@ void warm_point(const std::function<void()> &detach)
 	int spare_channel = -1;
 	bool stale = false;
 	// The request being given out, which a start forked meanwhile must not keep.
-	int streams[3]{-1, -1, -1}, pending = -1;
+	int streams[handed_count]{-1, -1, -1, -1}, pending = -1;
 	const auto drop_spare = [&] {
 		if (spare_channel >= 0)
 			::close(spare_channel);
@@ -398,6 +400,10 @@ void warm_point(const std::function<void()> &detach)
 	// The request this process was prepared for goes to the first start; the host itself keeps quiet streams.
 	for (int stream = 0; stream <= 2; ++stream)
 		streams[stream] = ::fcntl(stream, F_DUPFD_CLOEXEC, 3);
+	// The console the request was started from goes with it; the host itself keeps none.
+	streams[3] = take_console_terminal();
+	if (streams[3] < 0)
+		streams[3] = ::open("/dev/null", O_RDWR | O_CLOEXEC);
 	quiet_streams();
 	pending = request;
 	request = -1;
@@ -470,7 +476,7 @@ bool warm_ready()
 {
 	if (ready_channel < 0)
 		return false;
-	int streams[3];
+	int streams[handed_count];
 	const bool taken = receive_streams(ready_channel, streams);
 	::close(ready_channel);
 	ready_channel = -1;

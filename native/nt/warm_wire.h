@@ -13,6 +13,10 @@ namespace raven::warm {
 // What the host tells a client: the process its signals go to, the start's wait status, or that it must run the start itself.
 enum : uint32_t { reply_process = 'P', reply_status = 'S', reply_refused = 'R' };
 
+// The descriptors a request hands over: the standard input, output and error, and the terminal the client was started from (its console),
+// or /dev/null when it has none.
+constexpr int handed_count = 4;
+
 struct Reply {
 	uint32_t type;
 	int32_t value;

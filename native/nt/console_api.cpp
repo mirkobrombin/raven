@@ -176,7 +176,7 @@ bool open_console_device(KernelContext &context, ApiCall &call, std::u16string_v
 	const bool conin = equal_fold(device, u"CONIN$"), conout = equal_fold(device, u"CONOUT$");
 	if (!conin && !conout && !equal_fold(device, u"CON"))
 		return false;
-	const int descriptor = ::open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+	const int descriptor = open_console_terminal();
 	if (descriptor < 0)
 		return false;
 	// CON is the input when it is opened only for reading, and the screen buffer otherwise.
@@ -589,7 +589,7 @@ void register_console_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("GetConsoleWindow", 0, [](ApiCall &call) { call.ret(0); });
 	// A process stays attached to the terminal it started on: attaching to another fails with ERROR_ACCESS_DENIED, as for a process that
 	// already has a console, and without a terminal there is no console to attach to.
-	registry.add("AttachConsole", 1, [](ApiCall &call) { call.fail(::access("/dev/tty", R_OK | W_OK) ? 6 : 5); });
+	registry.add("AttachConsole", 1, [](ApiCall &call) { call.fail(has_console_terminal() ? 5 : 6); });
 	registry.add("FreeConsole", 0, [](ApiCall &call) { call.ret(1); });
 	// The processes on the console are counted per terminal by the host, so each process lists itself.
 	registry.add("GetConsoleProcessList", 2, [](ApiCall &call) {

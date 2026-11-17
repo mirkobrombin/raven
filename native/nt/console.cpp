@@ -794,12 +794,48 @@ std::pair<int16_t, int16_t> TerminalConsole::cursor(int descriptor)
 	return {tracker.column(), tracker.row()};
 }
 
+namespace {
+
+int handed_terminal = -1;
+
+}
+
+void set_console_terminal(int descriptor)
+{
+	if (handed_terminal >= 0)
+		::close(handed_terminal);
+	handed_terminal = descriptor;
+}
+
+int open_console_terminal()
+{
+	if (handed_terminal < 0)
+		return ::open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+	// A copy of the one handed over: what the client opened is /dev/tty, which opened again here would name this process's own
+	// controlling terminal, and the console keeps no flags of its own on the file.
+	return ::isatty(handed_terminal) ? ::fcntl(handed_terminal, F_DUPFD_CLOEXEC, 3) : -1;
+}
+
+int take_console_terminal()
+{
+	const int descriptor = handed_terminal;
+	handed_terminal = -1;
+	return descriptor;
+}
+
+bool has_console_terminal()
+{
+	if (handed_terminal >= 0)
+		return ::isatty(handed_terminal);
+	return !::access("/dev/tty", R_OK | W_OK);
+}
+
 std::optional<std::pair<int16_t, int16_t>> TerminalConsole::query_cursor(int descriptor)
 {
 	if (!cursor_answers)
 		return std::nullopt;
 	// The answer comes back on the terminal's input: the controlling terminal, else the output descriptor when it reads as well.
-	int input = ::open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+	int input = open_console_terminal();
 	const bool opened = input >= 0;
 	if (!opened)
 		input = descriptor;

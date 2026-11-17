@@ -3664,7 +3664,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_kernel_heap_stress_repeat PROPERTIES TIMEOUT 400 PASS_REGULAR_EXPRESSION "20 runs passed"
             ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/heap-stress-repeat-prefix)
         add_test(NAME native_kernel_file_persistence COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check-file-persistence.py ${KERNEL_PREFIX})
-        set_tests_properties(native_kernel_file_persistence PROPERTIES TIMEOUT 15 DEPENDS native_kernel_files)
+        # A fixture rather than an order: a shard that runs the check runs the test that leaves the file too.
+        set_tests_properties(native_kernel_files PROPERTIES FIXTURES_SETUP kernel_files)
+        set_tests_properties(native_kernel_file_persistence PROPERTIES TIMEOUT 15 FIXTURES_REQUIRED kernel_files)
         set(RAVEN_CLANG_MINGW_INCLUDE)
         if(RAVEN_CLANG)
             # Some distributions' clang does not search the MinGW headers the MinGW gcc uses: hand it the directory that holds windows.h.

@@ -1495,21 +1495,32 @@ void NativeThreads::host_main(GuestThread &thread)
 	thread.host_tid = pid_t(::gettid());
 	own_thread = thread.id;
 	NativeProcess::arm_host_thread();
-	NativeProcess::adopt_task(thread.snapshot.task);
-	// A thread created suspended starts once it is resumed: until then nothing puts it in line.
-	wait_turn(thread, std::nullopt);
+	bool adopted = true;
 	try {
-		install(thread);
-		thread.state = GuestThread::State::running;
-		thread_main(thread);
-	} catch (const ThreadExit &) {
+		NativeProcess::adopt_task(thread.snapshot.task);
+	} catch (const std::runtime_error &) {
+		// A thread ended before its host thread took its task, as the threads ExitProcess ends right after one was created: it has
+		// nothing left to run, and its host thread only cleans up after it.
 		if (thread.state != GuestThread::State::done)
-			finish(thread, thread.exit_code);
-	} catch (...) {
-		if (!pending)
-			pending = std::current_exception();
-		if (thread.state != GuestThread::State::done)
-			finish(thread, 1);
+			throw;
+		adopted = false;
+	}
+	if (adopted) {
+		// A thread created suspended starts once it is resumed: until then nothing puts it in line.
+		wait_turn(thread, std::nullopt);
+		try {
+			install(thread);
+			thread.state = GuestThread::State::running;
+			thread_main(thread);
+		} catch (const ThreadExit &) {
+			if (thread.state != GuestThread::State::done)
+				finish(thread, thread.exit_code);
+		} catch (...) {
+			if (!pending)
+				pending = std::current_exception();
+			if (thread.state != GuestThread::State::done)
+				finish(thread, 1);
+		}
 	}
 	// The runtime is given on while the task is still there: the waits it ends (for this thread, say) are looked at through it.
 	if (holder == &thread)
