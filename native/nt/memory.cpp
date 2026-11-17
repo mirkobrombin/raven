@@ -42,6 +42,7 @@ static bool range(uint64_t address, uint64_t size, uint64_t user_limit)
 
 void NativeMemory::clear(uint64_t address, uint64_t size)
 {
+	std::lock_guard lock(guard);
 	process.write_memory(address, std::vector<uint8_t>(size));
 }
 
@@ -148,6 +149,7 @@ std::map<uint64_t,NativeMemory::Region>::iterator NativeMemory::region(uint64_t 
 
 NativeMemoryRange NativeMemory::allocate(uint64_t address, uint64_t size, uint32_t type, uint32_t access)
 {
+	std::lock_guard lock(guard);
 	settle();
 	if (!range(address,size,user_limit))
 		return {0,0,invalid};
@@ -261,6 +263,7 @@ NativeMemoryRange NativeMemory::allocate(uint64_t address, uint64_t size, uint32
 
 NativeMemoryRange NativeMemory::map_view(int descriptor, uint64_t offset, uint64_t size, uint32_t access, uint64_t requested)
 {
+	std::lock_guard lock(guard);
 	settle();
 	const auto permissions=protection(access);
 	if (permissions<0 || !size || (offset & 4095) || (requested & 65535))
@@ -281,6 +284,7 @@ NativeMemoryRange NativeMemory::map_view(int descriptor, uint64_t offset, uint64
 
 NativeMemoryRange NativeMemory::free(uint64_t address, uint64_t size, uint32_t type)
 {
+	std::lock_guard lock(guard);
 	settle();
 	if (type!=0x4000 && type!=0x8000)
 		return {0,0,unsupported};
@@ -324,6 +328,7 @@ NativeMemoryRange NativeMemory::free(uint64_t address, uint64_t size, uint32_t t
 
 void NativeMemory::add_image(uint64_t base, uint64_t size, std::span<const std::pair<std::pair<uint64_t,uint64_t>,uint32_t>> sections)
 {
+	std::lock_guard lock(guard);
 	images[base]=Image{size,std::vector<std::pair<std::pair<uint64_t,uint64_t>,uint32_t>>(sections.begin(),sections.end()),{}};
 }
 
@@ -350,6 +355,7 @@ std::map<uint64_t,NativeMemory::Image>::iterator NativeMemory::image_of(uint64_t
 
 NativeMemoryRange NativeMemory::protect(uint64_t address, uint64_t size, uint32_t access)
 {
+	std::lock_guard lock(guard);
 	settle();
 	if (!range(address,size,user_limit))
 		return {0,0,invalid};
@@ -384,6 +390,7 @@ NativeMemoryRange NativeMemory::protect(uint64_t address, uint64_t size, uint32_
 
 std::optional<std::array<uint8_t,48>> NativeMemory::query(uint64_t address) const
 {
+	std::lock_guard lock(guard);
 	// The guest's own commits count before anything is reported; the accounting is the only thing that changes.
 	const_cast<NativeMemory *>(this)->settle();
 	if (regions.upper_bound(address)==regions.begin() || [&]{ auto it=regions.upper_bound(address); --it; return address-it->first>=it->second.size; }()) {
@@ -453,11 +460,14 @@ static uint32_t error(uint32_t status)
 	if (status==no_memory) return 8;
 	if (status==conflict || status==0xc000002dU) return 487;
 	if (status==0xc0000005U) return 998;
+	// A buffer too small for the record, as RtlNtStatusToDosError maps STATUS_INFO_LENGTH_MISMATCH.
+	if (status==0xc0000004U) return 24;
 	return 87;
 }
 
 bool NativeMemory::dispatch(std::string_view name)
 {
+	std::lock_guard lock(guard);
 	const bool nt=name.starts_with("Nt");
 	const bool alloc=name=="VirtualAlloc" || name=="NtAllocateVirtualMemory";
 	const bool release=name=="VirtualFree" || name=="NtFreeVirtualMemory";

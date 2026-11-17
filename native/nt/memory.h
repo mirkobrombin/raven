@@ -5,6 +5,7 @@
 #include <map>
 #include <array>
 #include <iterator>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <vector>
@@ -33,7 +34,7 @@ public:
 	std::optional<std::array<uint8_t,48>> query(uint64_t address) const;
 	// A mapped program image: its pages can be protected and queried although the program never allocated them. Each section starts with
 	// the access its flags give, and every later change is remembered.
-	void remove_image(uint64_t base) { images.erase(base); }
+	void remove_image(uint64_t base) { std::lock_guard lock(guard); images.erase(base); }
 	void add_image(uint64_t base, uint64_t size, std::span<const std::pair<std::pair<uint64_t,uint64_t>,uint32_t>> sections);
 	bool dispatch(std::string_view name);
 	static std::span<const std::string_view> nt_exports();
@@ -123,6 +124,8 @@ private:
 	void close_windows(uint64_t from, uint64_t to);
 	bool window_holds(uint64_t from, uint64_t to) const;
 	uint64_t *commit_block = nullptr;
+	// Held by every public call: VirtualQuery is answered beside the turn, while the turn's calls change the regions (see dispatch).
+	mutable std::recursive_mutex guard;
 	size_t window_next = 0;
 };
 

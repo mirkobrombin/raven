@@ -200,12 +200,12 @@ static bool served_api(std::string_view module, std::string_view name)
 }
 
 // Calls of subsystems that keep their own lock: with a host thread for each guest thread they are answered beside the turn, by the
-// handler the usual way runs, unless they need the turn after all (see ApiCall::alone). The registry, and the transfers of plain files
-// under each file's lock (see read_beside).
+// handler the usual way runs, unless they need the turn after all (see ApiCall::alone). The registry, the transfers of plain files
+// under each file's lock (see read_beside), and VirtualQuery under the memory accounting's lock.
 static bool beside_api(std::string_view module, std::string_view name)
 {
-	static constexpr std::array<std::string_view, 6> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
-		"GetFileSizeEx"};
+	static constexpr std::array<std::string_view, 7> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
+		"GetFileSizeEx", "VirtualQuery"};
 	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
 		return true;
 	if (module != "advapi32.dll" && module != "kernelbase.dll")
@@ -3384,11 +3384,21 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	}
 	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty() ||
 		!beside_names.empty()))
-		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, event_stubs, address_stubs,
+		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, &memory, event_stubs, address_stubs,
 			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
 			// A call of a subsystem with a lock of its own runs its usual handler here; the arguments past the four in registers are on the
 			// guest's stack above their home space.
 			if (const auto named = beside_names.find(stub); named != beside_names.end()) {
+				// The page record of an address, written where the guest asked; any other case (a short buffer, an address the accounting
+				// does not answer for, a buffer it cannot write) goes the usual way, which reports the error.
+				if (named->second == "VirtualQuery") {
+					if (arguments[2] < 48)
+						return std::nullopt;
+					const auto info = memory.query(arguments[0]);
+					if (!info || !process.write_alone(arguments[1], info->data(), info->size()))
+						return std::nullopt;
+					return 48;
+				}
 				const auto entry = api_registry.find(named->second);
 				if (!entry)
 					return std::nullopt;
