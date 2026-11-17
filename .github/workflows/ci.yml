@@ -357,8 +357,15 @@ jobs:
           cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${options[@]}"
 
+      # The build is recorded as docs/packaging.md asks, so the nightly can bundle this very tree once the shards passed on it.
+      - name: Prepare
+        run: python3 scripts/package-native.py prepare --source "${GITHUB_WORKSPACE}" --build "${BUILD}"
+
       - name: Build
         run: cmake --build "${BUILD}" -j "$(nproc)"
+
+      - name: Seal
+        run: python3 scripts/package-native.py seal --source "${GITHUB_WORKSPACE}" --build "${BUILD}"
 
       - name: Compiler cache statistics
         run: ccache --show-stats

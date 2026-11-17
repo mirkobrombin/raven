@@ -3,9 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # The nightly build: main as it is each night, published as the nightly pre-release, when main moved since the last one.
-  schedule:
-    - cron: "17 3 * * *"
+  # The nightly pre-release comes from nightly.yml, out of the tree its CI built and tested. Asked for by hand, "nightly" here
+  # rebuilds main afresh instead.
   workflow_dispatch:
     inputs:
       tag:
