@@ -45,6 +45,8 @@ public:
 	// For a semaphore whose count the process's table of waits keeps (kernel_waits.h): its object there, which may be released from any
 	// host thread. 0 for every other object.
 	virtual uint32_t table_semaphore() const { return 0; }
+	// The same for a mutex the table keeps.
+	virtual uint32_t table_mutex() const { return 0; }
 };
 
 class NativeObjects;

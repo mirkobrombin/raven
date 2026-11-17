@@ -3514,6 +3514,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_property(TEST native_semaphore_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
             "profile: \\(call\\) (ReleaseSemaphore calls=[0-9][0-9][0-9]|WaitForSingleObject calls=(3[5-9]|[4-9])[0-9][0-9][0-9])")
         set_property(TEST native_semaphore_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # Taking and releasing a mutex goes beside the turn in parallel mode (mutex_beside_client.c).
+        raven_kernel_fixture(mutex-beside mutex_beside_client.c 0x1ec000000 "-lkernel32")
+        foreach(mode default parallel table)
+            add_test(NAME native_mutex_beside_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/mutex-beside.exe)
+            set_tests_properties(native_mutex_beside_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/mutex-beside-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_mutex_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        set_property(TEST native_mutex_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: \\(call\\) ReleaseMutex calls=[0-9][0-9][0-9]")
+        set_property(TEST native_mutex_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel table)

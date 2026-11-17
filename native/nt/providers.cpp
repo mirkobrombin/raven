@@ -173,7 +173,7 @@ static bool served_api(std::string_view module, std::string_view name)
 	if (module == "kernel32.dll" || module == "kernelbase.dll")
 		return name == "QueryPerformanceCounter" || name == "QueryPerformanceFrequency" || name == "QueryUnbiasedInterruptTime" ||
 			name == "QueryUnbiasedInterruptTimePrecise" || name == "WakeConditionVariable" ||
-			name == "WakeAllConditionVariable" || name == "ReleaseSemaphore" || name == "CreateSemaphoreExW" ||
+			name == "WakeAllConditionVariable" || name == "ReleaseSemaphore" || name == "ReleaseMutex" || name == "CreateSemaphoreExW" ||
 			name == "WaitForSingleObject" || name == "WaitForSingleObjectEx" || name == "SetEvent" || name == "ResetEvent" || name == "CloseHandle" ||
 			name == "WakeByAddressSingle" || name == "WakeByAddressAll";
 	// Reading a socket's recorded events polls the host sockets and never blocks.
@@ -3349,9 +3349,25 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto &[stub, name] : served_names)
 		if (name == "ReleaseSemaphore")
 			semaphore_stubs.push_back(stub);
-	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty()))
-		process.set_concurrent_served([&threads, &kernel_objects, &kernel, event_stubs, address_stubs, semaphore_stubs](uint64_t stub,
-			const uint64_t *arguments) -> std::optional<uint64_t> {
+	// And releasing a mutex of the table by the thread that owns it; one it does not own goes the usual way, which fails it.
+	std::vector<uint64_t> mutex_stubs;
+	for (const auto &[stub, name] : served_names)
+		if (name == "ReleaseMutex")
+			mutex_stubs.push_back(stub);
+	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty()))
+		process.set_concurrent_served([&threads, &kernel_objects, &kernel, event_stubs, address_stubs, semaphore_stubs, mutex_stubs](
+			uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			if (std::find(mutex_stubs.begin(), mutex_stubs.end(), stub) != mutex_stubs.end()) {
+				const auto mutex = kernel_objects.object_alone(arguments[0], 0);
+				const uint32_t object = mutex ? mutex->table_mutex() : 0;
+				const uint32_t thread = NativeThreads::own_id();
+				if (!object || !thread || raven_waits_release_mutex(kernel_waits(), object, thread, nullptr))
+					return std::nullopt;
+				threads.signaled();
+				if (threads.waiting_in_runtime())
+					threads.nudge();
+				return 1;
+			}
 			if (std::find(semaphore_stubs.begin(), semaphore_stubs.end(), stub) != semaphore_stubs.end()) {
 				const auto semaphore = kernel_objects.object_alone(arguments[0], 0x2);
 				const uint32_t object = semaphore ? semaphore->table_semaphore() : 0;
@@ -3378,15 +3394,16 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				const uint32_t thread = NativeThreads::own_id();
 				const auto event = kernel_objects.event_alone(arguments[0], 0x100000);
 				uint32_t object = event ? event->table_object() : 0;
-				// A semaphore of the table with a count is taken the same way.
+				// A semaphore of the table with a count, or a mutex, is taken the same way.
 				if (!event)
 					if (const auto other = kernel_objects.object_alone(arguments[0], 0x100000))
-						object = other->table_semaphore();
+						object = other->table_semaphore() ? other->table_semaphore() : other->table_mutex();
 				if (!thread || !object || (found->second == EventCall::wait_ex && uint32_t(arguments[2])))
 					return std::nullopt;
 				const uint32_t taken = raven_waits_wait(kernel_waits(), thread, &object, 1, 0, 0, 0);
-				if (taken == 0)
-					return 0;
+				// An abandoned mutex is taken too, and the wait says so.
+				if (taken == 0 || taken == 0x80)
+					return taken;
 				// One that would block is waited for here as well, by a host thread whose guest spins in its stub.
 				if (taken != 0x102 || !uint32_t(arguments[1]))
 					return std::nullopt;
