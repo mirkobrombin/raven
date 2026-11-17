@@ -318,9 +318,89 @@ jobs:
   # Build: one Release tree with every provisioned component configured, so the tests below exercise the same inputs a
   # release is made from.
 
+  # The host binaries a release ships, raven and raven-runtime, are built on the oldest glibc a release supports (2.34: Ubuntu 22.04,
+  # Debian 12, RHEL 9), with the static libraries they link built there too; the build job takes them in place of its own before it
+  # records the build, so the tests run the very binaries a release ships. The guest libraries are Windows code and need no such care.
+  portable:
+    name: Portable host
+    needs: [commits, files, licenses, scripts]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    container:
+      image: quay.io/pypa/manylinux_2_34_x86_64@sha256:eaf34dc7cfdff5db7109a92c87b4f797b8bbd1f9ed8da48c02c4025b6ea76650
+    env:
+      CCACHE_DIR: /opt/ci/ccache
+      CCACHE_MAXSIZE: 1G
+    steps:
+      - name: Install packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False git python3 python3-fonttools cmake make ccache clang lld bison patch \
+            tar xz zstd cargo rust wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel \
+            vulkan-loader-devel vulkan-headers openssl-devel zlib-devel binutils
+          dnf clean all
+          git config --global --add safe.directory "*"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore linked components
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /opt/ci/components/text
+            /opt/ci/components/libpng
+          key: portable-components-${{ hashFiles('scripts/provision-text.py', 'scripts/provision-libpng.py') }}
+
+      - name: Provision linked components
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/provision-libpng.py --output "${COMPONENTS}/libpng"
+          python3 scripts/provision-text.py --jobs 4 --output "${COMPONENTS}/text"
+          cd "${COMPONENTS}/text/skia"
+          find . -mindepth 1 -maxdepth 1 ! -name include ! -name src ! -name modules ! -name LICENSE -exec rm -rf {} +
+          find "${COMPONENTS}/text/cpu-fonts" -mindepth 1 ! -name libskia.a -exec rm -rf {} +
+
+      - name: Restore compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /opt/ci/ccache
+          key: portable-ccache-${{ github.sha }}
+          restore-keys: portable-ccache-
+
+      # The same options as the build job, so the binaries are configured as the ones they stand in for.
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t options < <(.github/scripts/components.sh options)
+          cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${options[@]}"
+
+      - name: Build
+        run: cmake --build "${BUILD}" -j "$(nproc)" --target raven raven-runtime
+
+      - name: Check portability
+        run: python3 .github/scripts/check_portable.py 2.34 "${BUILD}/native/raven" "${BUILD}/native/raven-runtime"
+
+      - name: Pack host binaries
+        run: tar -C "${BUILD}/native" -cf /opt/ci/portable.tar raven raven-runtime
+
+      - name: Upload host binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: portable-host
+          path: /opt/ci/portable.tar
+          retention-days: 3
+          if-no-files-found: error
+
   build:
     name: Build
-    needs: provision
+    needs: [provision, portable]
     runs-on: ubuntu-26.04
     timeout-minutes: 180
     container:
@@ -373,6 +453,18 @@ jobs:
 
       - name: Build
         run: cmake --build "${BUILD}" -j "$(nproc)"
+
+      - name: Download portable host binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: portable-host
+          path: /opt/ci/portable
+
+      # The tests run, and a release ships, the host binaries built on the oldest supported glibc.
+      - name: Take the portable host binaries
+        run: |
+          tar -C "${BUILD}/native" -m -xf /opt/ci/portable/portable.tar
+          python3 .github/scripts/check_portable.py 2.34 "${BUILD}/native/raven" "${BUILD}/native/raven-runtime"
 
       - name: Seal
         run: python3 scripts/package-native.py seal --source "${GITHUB_WORKSPACE}" --build "${BUILD}"
@@ -470,7 +562,7 @@ jobs:
 
   report:
     name: Report
-    needs: [commits, files, licenses, scripts, models, provision, compliance, build, test]
+    needs: [commits, files, licenses, scripts, models, provision, portable, compliance, build, test]
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
