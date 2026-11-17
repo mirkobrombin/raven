@@ -3480,6 +3480,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             PASS_REGULAR_EXPRESSION "profile: frequent [(]call[)] VirtualAlloc "
             FAIL_REGULAR_EXPRESSION "Native entry returned [1-9]|unhandled exception|[(]stop[)] VirtualAlloc "
             ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_SECCOMP=1;RAVEN_PROFILE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/memory-beside-prefix")
+        # Calls Windows answers in user mode are answered by the guest RTL and never reach the runtime (guest_rtl_calls_client.c).
+        raven_kernel_fixture(guest-rtl-calls guest_rtl_calls_client.c 0x1e7000000 "-lkernel32;-lntdll")
+        add_test(NAME native_guest_rtl_calls COMMAND raven --run-process --execution=native --timeout-ms=30000
+            ${CMAKE_CURRENT_BINARY_DIR}/guest-rtl-calls.exe)
+        set_tests_properties(native_guest_rtl_calls PROPERTIES TIMEOUT 45
+            PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            FAIL_REGULAR_EXPRESSION "profile: [^\n]*(LocateXStateFeature|RtlGrowFunctionTable)"
+            ENVIRONMENT "RAVEN_PROFILE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-rtl-calls-prefix")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel)

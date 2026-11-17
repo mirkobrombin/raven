@@ -248,3 +248,39 @@ BOOL WINAPI RavenFlushInstructionCache(HANDLE process, const VOID *address, SIZE
 	(void)size;
 	return TRUE;
 }
+
+/* A code generator that adds entries to a growable table it registered tells the system the new end; the tables of generated code are
+ * not consulted when frames are unwound here, so there is nothing to record, and the call stays in the process as it does on Windows. */
+VOID NTAPI RavenGrowFunctionTable(PVOID table, DWORD count)
+{
+	(void)table;
+	(void)count;
+}
+
+/* Where a CONTEXT keeps an extended state feature: the legacy floating-point state is the FXSAVE area, the SSE state its XMM registers,
+ * and the AVX state the upper halves of the YMM registers, which follow the XSAVE header of the extended area a context initialized
+ * with room for it describes in its CONTEXT_EX (as InitializeContext lays it out). A feature the context does not carry has no place. */
+PVOID WINAPI RavenLocateXStateFeature(PCONTEXT context, DWORD feature, PDWORD length)
+{
+	enum { xstate_flags = 0x100040, extended_header = 64, avx_size = 256 };
+	if (!context)
+		return NULL;
+	BYTE *const save_area = (BYTE *)&context->FltSave;
+	if (feature == 0 || feature == 1) {
+		if (length)
+			*length = feature == 0 ? 512 : 256;
+		return feature == 0 ? save_area : save_area + 160;
+	}
+	if (feature != 2 || (context->ContextFlags & xstate_flags) != xstate_flags)
+		return NULL;
+	/* The CONTEXT_EX follows the record: its third chunk, after All and Legacy, is the extended area, an offset from the record's end
+	 * and a length. */
+	const LONG *chunks = (const LONG *)(context + 1);
+	const LONG offset = chunks[4];
+	const DWORD size = (DWORD)chunks[5];
+	if (size < extended_header + avx_size)
+		return NULL;
+	if (length)
+		*length = avx_size;
+	return (BYTE *)(context + 1) + offset + extended_header;
+}

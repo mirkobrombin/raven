@@ -65,6 +65,8 @@ EXPORTS
  RtlDeleteElementGenericTableAvl
  RtlVirtualUnwind=RavenVirtualUnwind
  FlushInstructionCache=RavenFlushInstructionCache
+ RtlGrowFunctionTable=RavenGrowFunctionTable
+ LocateXStateFeature=RavenLocateXStateFeature
  RavenIoCompletionWorker
  RavenThreadpoolIoWorker
  RavenThreadpoolWorker
