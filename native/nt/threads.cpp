@@ -645,6 +645,21 @@ struct CountedWait {
 	~CountedWait() { count.fetch_sub(1, std::memory_order_release); }
 };
 
+std::function<void()> NativeThreads::remote_nudge() const
+{
+	const int copy = ::fcntl(wake, F_DUPFD_CLOEXEC, 0);
+	if (copy < 0)
+		return [] {};
+	const auto descriptor = std::shared_ptr<int>(new int(copy), [](int *held) {
+		::close(*held);
+		delete held;
+	});
+	return [descriptor] {
+		const uint64_t one = 1;
+		[[maybe_unused]] const auto written = ::write(*descriptor, &one, sizeof one);
+	};
+}
+
 bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn, bool polled)
 {
 	// A thread that gives its turn waits even when it could go on: the others that can run go first.

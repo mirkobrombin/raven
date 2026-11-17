@@ -167,6 +167,8 @@ public:
 	void serve();
 	// Ends the scheduler's idle wait early: called from a host thread that finished work a waiting guest thread looks for.
 	void nudge();
+	// The same for a host thread that may outlive the scheduler: the function holds its own copy of the wake descriptor.
+	std::function<void()> remote_nudge() const;
 	// For a wait outside the scheduler, such as a thread waiting for window messages while the others wait too: the latest time it may
 	// sleep to, no later than `limit`, and the descriptors that end it early. A waiting thread whose condition nothing announces keeps
 	// it short, as the scheduler's own wait is. drain_wake() takes back what ended it.
