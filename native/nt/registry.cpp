@@ -145,8 +145,8 @@ NativeRegistry::NativeRegistry(std::filesystem::path file) : file(std::move(file
 // package managers read .appx and .msix packages with, the background transfer manager of each BITS version, which bootstrappers
 // download through, the locator and object path parser of management instrumentation, which System.Management asks what the
 // machine is made of through, the WebBrowser control, which Windows Forms and WPF programs embed, the marshaler of interfaces a
-// type library describes, which their ProxyStubClsid32 names, and the audio device enumerator programs play sound through. A hive
-// that lacks them, a new one or one made before they were registered, gets them.
+// type library describes, which their ProxyStubClsid32 names, and the audio device enumerator and the DirectSound classes programs
+// play sound through. A hive that lacks them, a new one or one made before they were registered, gets them.
 void NativeRegistry::register_runtime_classes()
 {
 	static constexpr std::pair<const char16_t *, const char16_t *> classes[] = {{u"{E5CB7A31-7512-11D2-89CE-0080C792E5D8}", u"mscoree.dll"},
@@ -169,7 +169,10 @@ void NativeRegistry::register_runtime_classes()
 		{u"{72C24DD5-D70A-438B-8A42-98424B88AFB8}", u"wshom.ocx"}, {u"{093FF999-1EA0-4079-9525-9614C3504B74}", u"wshom.ocx"},
 		{u"{F935DC22-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"}, {u"{F935DC26-1CF0-11D0-ADB9-00C04FD58A0B}", u"wshom.ocx"},
 		{u"{F414C260-6AC0-11CF-B6D1-00AA00BBBB58}", u"jscript.dll"}, {u"{00020424-0000-0000-C000-000000000046}", u"oleaut32.dll"},
-		{u"{BCDE0395-E52F-467C-8E3D-C4579291692E}", u"mmdevapi.dll"}, {u"{F447B69E-1884-4A7E-8055-346F74D6EDB3}", u"resampledmo.dll"}};
+		{u"{BCDE0395-E52F-467C-8E3D-C4579291692E}", u"mmdevapi.dll"}, {u"{F447B69E-1884-4A7E-8055-346F74D6EDB3}", u"resampledmo.dll"},
+		{u"{47D4D946-62E8-11CF-93BC-444553540000}", u"dsound.dll"},
+		{u"{3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}", u"dsound.dll"}, {u"{B0210780-89CD-11D0-AF08-00A0C925CD16}", u"dsound.dll"},
+		{u"{E4BCAC13-7F99-4908-9A8E-74E3BF24B6E1}", u"dsound.dll"}, {u"{FEA4300C-7959-4147-B26A-2377B9E7A91D}", u"dsound.dll"}};
 	register_animation_classes();
 	const auto store = [&](uint64_t key, const char16_t *name, std::u16string_view value) {
 		std::vector<uint8_t> data;

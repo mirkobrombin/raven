@@ -2431,6 +2431,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			unknown_ordinals[library].emplace_back(unknown_storage.emplace_back(text), symbol.ordinal);
 		}
 	for (const auto &name : system_modules) {
+		// The DirectSound component is the system's dsound.dll by any name, path or search; the runtime's own answers only beside a
+		// copy the program ships, or without the component.
+		if (name == "dsound.dll" && !program_libraries.contains(name) && std::filesystem::exists(std::filesystem::read_symlink("/proc/self/exe").parent_path() / name))
+			continue;
 		const auto base_symbols = name == "ntdll.dll" ? std::span<const std::string_view>(nt_names) : name == "user32.dll" ? NativeDesktop::user_exports() :
 			name == "gdi32.dll" ? NativeDesktop::gdi_exports() :
 			name == "comctl32.dll" ? NativeDesktop::control_exports() :
@@ -3750,7 +3754,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						throw LoadFailure{126};
 					}
 				}
-				if (!bytes && !(system && (flags & 0x1f00)))
+				// The DirectSound component is what a search of the system directory finds for dsound.dll.
+				if (!bytes && (!(system && (flags & 0x1f00)) || identity == "dsound.dll"))
 					if (auto read = source(identity)) bytes.emplace(std::move(*read));
 				if (!bytes && system) {
 					if (const auto fallback = modules.all().find("system32-" + identity); fallback != modules.all().end())
