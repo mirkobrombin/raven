@@ -1,9 +1,10 @@
-// Setting an event goes on beside the other calls of the process: a thread that waits for it among other objects still wakes, and
-// threads that set events of their own leave each the state it set. The exit code names the first check that failed.
+// Setting an event, and waiting for one that is already set, go on beside the other calls of the process: a thread that waits for it
+// among other objects still wakes, threads that set events of their own leave each the state it set, and an event that resets on its
+// own is taken once for each time it was set, however many threads look. The exit code names the first check that failed.
 #include <windows.h>
 
-static HANDLE event, sleeper;
-static volatile LONG woke;
+static HANDLE event, sleeper, single;
+static volatile LONG woke, taken, finished;
 
 static DWORD WINAPI sleeping(void *parameter)
 {
@@ -29,6 +30,15 @@ static DWORD WINAPI toggler(void *own)
 		ResetEvent((HANDLE)own);
 	}
 	SetEvent((HANDLE)own);
+	return 0;
+}
+
+static DWORD WINAPI taker(void *parameter)
+{
+	(void)parameter;
+	while (!finished)
+		if (WaitForSingleObject(single, 0) == WAIT_OBJECT_0)
+			InterlockedIncrement(&taken);
 	return 0;
 }
 
@@ -67,6 +77,28 @@ int raven_entry(void)
 	// A handle that is not an event is refused as the runtime refuses it.
 	if (SetEvent(sleeper) || GetLastError() != ERROR_INVALID_HANDLE)
 		return 10;
+
+	HANDLE takers[4];
+	if (!(single = CreateEventW(NULL, FALSE, FALSE, NULL)))
+		return 11;
+	for (int index = 0; index < 4; ++index)
+		if (!(takers[index] = CreateThread(NULL, 0, taker, NULL, 0, NULL)))
+			return 12;
+	// The setter gives its turn up while it looks: in a process whose threads take turns, the takers run only then.
+	for (LONG round = 1; round <= 300; ++round) {
+		SetEvent(single);
+		const DWORD began = GetTickCount();
+		while (taken < round) {
+			if (GetTickCount() - began > 5000)
+				return 13;
+			SwitchToThread();
+		}
+		if (taken != round)
+			return 14;
+	}
+	finished = 1;
+	if (WaitForMultipleObjects(4, takers, TRUE, 5000) != WAIT_OBJECT_0 || taken != 300)
+		return 15;
 	WaitForSingleObject(sleeper, 5000);
 	return 0;
 }

@@ -25,6 +25,9 @@
 
 namespace raven {
 
+// Each host thread serves one guest thread for its whole life (see host_main), and the first one the main thread.
+static thread_local uint32_t own_thread = 0;
+
 namespace {
 
 // A guest thread runs its API handlers on this stack, drivers included: shader compilation needs far more than a megabyte.
@@ -69,6 +72,7 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 		threaded = true;
 		holder = main.get();
 		main->host_tid = pid_t(::gettid());
+		own_thread = main->id;
 		NativeProcess::arm_host_thread();
 		process.set_execution_park([this](pid_t task, std::chrono::steady_clock::time_point limit, const uint64_t *block) {
 			return park(task, limit, block);
@@ -983,6 +987,11 @@ void NativeThreads::enqueue(GuestThread &thread)
 	}
 }
 
+uint32_t NativeThreads::own_id()
+{
+	return own_thread;
+}
+
 void NativeThreads::moved()
 {
 	moves.fetch_add(1, std::memory_order_release);
@@ -1339,6 +1348,7 @@ void NativeThreads::end_host(GuestThread &thread)
 void NativeThreads::host_main(GuestThread &thread)
 {
 	thread.host_tid = pid_t(::gettid());
+	own_thread = thread.id;
 	NativeProcess::arm_host_thread();
 	NativeProcess::adopt_task(thread.snapshot.task);
 	// A thread created suspended starts once it is resumed: until then nothing puts it in line.

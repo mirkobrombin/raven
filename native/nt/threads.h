@@ -176,6 +176,8 @@ public:
 	GuestThread &current() { return *running; }
 	std::shared_ptr<GuestThread> find(uint32_t id) const;
 	uint32_t current_id() const { return running->id; }
+	// The id of the guest thread the calling host thread serves, whether it holds the turn or not; zero on a thread that serves none.
+	static uint32_t own_id();
 	// Blocks the current thread until ready() holds (true) or the wake time passes (false).
 	// `polled` tells that the condition reads what the guest changes by itself, as the word of a lock it releases without a call: it is
 	// looked at whenever a thread gives the runtime up, where another is looked at again only after a call that may have ended a wait.

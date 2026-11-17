@@ -99,6 +99,17 @@ static DWORD WINAPI setter_worker(void *unused)
 	return 0;
 }
 
+static DWORD WINAPI waiter_worker(void *unused)
+{
+	(void)unused;
+	HANDLE own = CreateEventA(0, TRUE, TRUE, 0);
+	for (LONG turn = 0; turn < turns; ++turn)
+		if (WaitForSingleObject(own, INFINITE) == WAIT_OBJECT_0)
+			InterlockedIncrement(&shared);
+	CloseHandle(own);
+	return 0;
+}
+
 static int contend(const char *name, LPTHREAD_START_ROUTINE worker, LONG each)
 {
 	HANDLE threads[4];
@@ -191,6 +202,10 @@ int raven_entry(void)
 	for (LONG index = 0; index < calls; ++index)
 		SetEvent(event);
 	report("set_event", started, calls);
+	started = now();
+	for (LONG index = 0; index < calls; ++index)
+		WaitForSingleObject(event, INFINITE);
+	report("wait_signaled", started, calls);
 
 	ping = CreateEventA(0, FALSE, FALSE, 0);
 	pong = CreateEventA(0, FALSE, FALSE, 0);
@@ -227,6 +242,8 @@ int raven_entry(void)
 		return 6;
 	if (!contend("set_event_4_threads", setter_worker, 50000 / scale))
 		return 8;
+	if (!contend("wait_signaled_4_threads", waiter_worker, 50000 / scale))
+		return 9;
 	if (!process_ping_pong(crossings, scale))
 		return 7;
 	return 0;

@@ -320,13 +320,13 @@ NativeObjectResult NativeObjects::set_event(uint64_t handle, bool signaled)
 	return previous >= 0 ? NativeObjectResult{uint64_t(previous)} : NativeObjectResult{0,0xc0000024U};
 }
 
-std::shared_ptr<EventObject> NativeObjects::event_alone(uint64_t handle) const
+std::shared_ptr<EventObject> NativeObjects::event_alone(uint64_t handle, uint32_t access) const
 {
 	if (handle >= handle_range_to_child)
 		return nullptr;
 	std::lock_guard lock(mutex);
 	const auto found = handles.find(handle);
-	if (found == handles.end() || !(found->second.access & 2))
+	if (found == handles.end() || (found->second.access & access) != access)
 		return nullptr;
 	return found->second.event;
 }
