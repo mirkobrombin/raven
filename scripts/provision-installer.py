@@ -189,6 +189,22 @@ def main():
                 return directory
         raise RuntimeError(f"the {triple} compiler has no {header}")
 
+    def idl_include():
+        """The directory that holds the platform's interface definitions widl imports (oaidl.idl and the files it imports): beside the
+        cross compiler's headers on Fedora, and only in Wine's development headers on Debian, Devuan and Ubuntu, whose MinGW-w64 packages
+        carry the .h files alone."""
+        candidates = [mingw_include("objidl.h")]
+        widl_path = shutil.which("widl")
+        if widl_path:
+            prefix = Path(widl_path).resolve().parent.parent
+            candidates += [prefix / "include/wine/wine/windows", prefix / "include/wine/windows"]
+        candidates += [Path("/usr/include/wine/wine/windows"), Path("/usr/include/wine/windows"), Path("/usr/share/mingw-w64/include")]
+        for directory in candidates:
+            if (directory / "oaidl.idl").exists():
+                return directory
+        raise RuntimeError("widl needs oaidl.idl, which neither the MinGW-w64 headers nor Wine's development headers provide here: install "
+                           "mingw64-headers on Fedora, or libwine-dev on Debian, Devuan and Ubuntu")
+
     def decorated(object_files):
         """Defined global functions of the objects by plain name, with their stdcall argument bytes on 32 bits (None for the others)."""
         names = {}
@@ -366,7 +382,7 @@ def main():
     own_msxml = repo / "native/guest/raven-msxml3"
     headers = mingw_include("msxml2.h")
     run([sys.executable, own_msxml / "make_idl.py", headers / "msxml2.h", headers / "msxml2did.h", headers / "msxml.h", generated / "msxml3.idl"])
-    run([*widl, "-I", headers, "-L", generated, "-t", "-o", generated / "msxml3.tlb", generated / "msxml3.idl"])
+    run([*widl, "-I", headers, "-I", idl_include(), "-L", generated, "-t", "-o", generated / "msxml3.tlb", generated / "msxml3.idl"])
     run([triple + "-windres", "-O", "coff", "-I", generated, "-i", own_msxml / "resources.rc", "-o", objects / "msxml3_resources.o"])
     msxml_flags = ["-O2", "-std=gnu11", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-DLIBXML_STATIC", "-DLIBXSLT_STATIC", "-DCONST_VTABLE", "-I" + str(own_msxml),
                    "-I" + str(xml_root / "include"), "-I" + str(xml_root), "-I" + str(xslt_root)]
@@ -545,7 +561,7 @@ def main():
          "-o", output / "urlmon.dll", *urlmon_objects, output / "urlmon.def", "-luuid", "-lole32", "-loleaut32", "-lshlwapi", "-ladvapi32", "-lwininet", "-luser32", "-lshell32", "-lkernel32", "-lgcc"])
     # riched20.dll: Raven's own rich edit control, with the type library of its text object model that its resources carry.
     own_riched = repo / "native/guest/raven-riched20"
-    run([*widl, "-L", generated, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
+    run([*widl, "-I", idl_include(), "-L", generated, "-t", "-T", generated / "tom_library.tlb", own_riched / "tom_library.idl"])
     run([triple + "-windres", "-I", generated, own_riched / "resources.rc", "-o", objects / "riched20.res.o"])
     riched_objects = [objects / "riched20.res.o"]
     for path in [*sorted(own_riched.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
