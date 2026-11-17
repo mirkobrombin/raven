@@ -79,6 +79,9 @@ struct GuestThread {
 	bool polled = false;
 	// Whether the thread stands in line only because its wait's condition held when it was last looked at.
 	bool conditional = false;
+	// Whether its wait ends only when another thread tells it (NativeThreads::tell) or its time runs out: the scheduler does not look at
+	// its condition. `told_holding` keeps a tell that came while it still held the runtime, for when it gives the runtime up.
+	bool told_only = false, told_holding = false;
 	std::condition_variable turn;
 	bool queued = false, parked = false, paused = false;
 	int held = -2;
@@ -185,7 +188,12 @@ public:
 	// Blocks the current thread until ready() holds (true) or the wake time passes (false).
 	// `polled` tells that the condition reads what the guest changes by itself, as the word of a lock it releases without a call: it is
 	// looked at whenever a thread gives the runtime up, where another is looked at again only after a call that may have ended a wait.
-	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn = false, bool polled = false);
+	// `told` is for a wait that only another thread ends, which then calls tell: the scheduler does not look at its condition.
+	bool block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn = false, bool polled = false,
+		bool told = false);
+	// Puts a thread in a wait that block was given `told` for in line for the runtime, after whatever ends its wait has changed. Any host
+	// thread may call it, holding the runtime or not.
+	void tell(GuestThread &thread);
 	// Whether waits on the objects of the process's table (kernel_waits.h) block their host thread there, as they do with a host thread
 	// for each guest thread. RAVEN_POLLED_WAITS=1 has them looked at by the scheduler instead, as the waits on other objects are, to
 	// compare the two.

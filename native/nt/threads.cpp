@@ -660,7 +660,8 @@ std::function<void()> NativeThreads::remote_nudge() const
 	};
 }
 
-bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn, bool polled)
+bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn, bool polled,
+	bool told)
 {
 	// A thread that gives its turn waits even when it could go on: the others that can run go first.
 	if (!turn && ready())
@@ -712,6 +713,22 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 				thread.state = GuestThread::State::waiting;
 		}
 	} leave{me, outer_ready, outer_wake, outer_state};
+	// A wait only another thread ends: whoever tells it changes what it waits for and then looks at its state under the gate, so the
+	// condition looked at once more after the gate sees a tell that came before the thread was marked as waiting.
+	const bool outer_told = me.told_only;
+	struct Told {
+		GuestThread &thread;
+		bool outer;
+		~Told() { thread.told_only = outer; thread.told_holding = false; }
+	} told_back{me, outer_told};
+	if (threaded) {
+		{
+			std::lock_guard lock(gate);
+			me.told_only = told;
+		}
+		if (told && me.ready())
+			return true;
+	}
 	// RAVEN_TRACE_WAITS names the waits that last longer than a quarter of a second, or than the milliseconds it gives when more than
 	// one: the API and how long it kept its thread.
 	static const bool traced = std::getenv("RAVEN_TRACE_WAITS") != nullptr;
@@ -1047,6 +1064,19 @@ void NativeThreads::install(GuestThread &me)
 	check_pending();
 }
 
+void NativeThreads::tell(GuestThread &thread)
+{
+	if (!threaded)
+		return;
+	std::lock_guard lock(gate);
+	if (thread.state != GuestThread::State::waiting || !thread.told_only)
+		return;
+	if (holder == &thread)
+		thread.told_holding = true;
+	else
+		enqueue(thread);
+}
+
 void NativeThreads::wake_ready(GuestThread *except, bool all)
 {
 	// A program keeps a hundred threads waiting, and their conditions took most of the time a call was answered in when each was
@@ -1070,7 +1100,7 @@ void NativeThreads::wake_ready(GuestThread *except, bool all)
 		if (candidate->state == GuestThread::State::waiting) {
 			// A condition that cannot be looked at from here is looked at by its own thread, which then sees why.
 			bool ready = candidate->wake && now >= *candidate->wake;
-			if (!ready && candidate->ready && (all || candidate->polled || (candidate->seen_signals != told && looks))) {
+			if (!ready && candidate->ready && !candidate->told_only && (all || candidate->polled || (candidate->seen_signals != told && looks))) {
 				if (!all && !candidate->polled && !--looks)
 					scan_from = first + step + 1;
 				ready = true;
@@ -1116,6 +1146,12 @@ void NativeThreads::leave(GuestThread &me, bool save)
 			std::lock_guard lock(gate);
 			if (holder != &me)
 				return;
+			// Told while it still held the runtime, the thread goes in line behind those already there.
+			if (std::exchange(me.told_holding, false) && !me.queued) {
+				line.push_back(&me);
+				lined.store(unsigned(line.size()), std::memory_order_relaxed);
+				me.queued = true;
+			}
 			if (line.empty()) {
 				holder = nullptr;
 				return;

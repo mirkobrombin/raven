@@ -19,6 +19,8 @@ constexpr uint64_t lock_count = 8, recursion_count = 12, owning_thread = 16, spi
 
 struct Waiter {
 	bool woken = false;
+	// The thread that waits, told when the wait ends (NativeThreads::tell).
+	GuestThread *thread = nullptr;
 };
 
 // A keyed event a program created for itself; its keys are apart from those of the process-wide one and of any other.
@@ -154,13 +156,14 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 	auto variables = std::make_shared<std::map<uint64_t, std::vector<std::shared_ptr<Waiter>>>>();
 	const auto sleep_on = [&threads, variables](ApiCall &call, std::function<void()> release, std::function<void()> reacquire, uint32_t milliseconds) {
 		auto waiter = std::make_shared<Waiter>();
+		waiter->thread = &threads.current();
 		(*variables)[call[0]].push_back(waiter);
 		call.store_pointer(call[0], (*variables)[call[0]].size());
 		release();
 		std::optional<std::chrono::steady_clock::time_point> wake;
 		if (milliseconds != UINT32_MAX)
 			wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
-		threads.block([waiter] { return waiter->woken; }, wake);
+		threads.block([waiter] { return waiter->woken; }, wake, false, false, true);
 		auto &list = (*variables)[call[0]];
 		list.erase(std::remove(list.begin(), list.end(), waiter), list.end());
 		call.store_pointer(call[0], list.size());
@@ -217,6 +220,7 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 		for (auto &waiter : list)
 			if (!waiter->woken) {
 				waiter->woken = woke = true;
+				threads.tell(*waiter->thread);
 				if (!all)
 					break;
 			}
@@ -308,6 +312,7 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 	// finds nobody came before the comparison, which then sees the new value.
 	struct AddressWaiter {
 		std::atomic<bool> woken{false};
+		GuestThread *thread = nullptr;
 	};
 	struct AddressWaits {
 		std::mutex lock;
@@ -317,13 +322,14 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 	const auto wait_on = [&context, &threads, addressed](uint64_t address, const std::vector<uint8_t> &expected,
 		std::optional<std::chrono::steady_clock::time_point> wake) {
 		auto waiter = std::make_shared<AddressWaiter>();
+		waiter->thread = &threads.current();
 		{
 			const std::lock_guard guard(addressed->lock);
 			if (context.process.read_memory(address, expected.size()) != expected)
 				return true;
 			addressed->waiting[address].push_back(waiter);
 		}
-		threads.block([waiter] { return waiter->woken.load(std::memory_order_acquire); }, wake);
+		threads.block([waiter] { return waiter->woken.load(std::memory_order_acquire); }, wake, false, false, true);
 		const std::lock_guard guard(addressed->lock);
 		const auto found = addressed->waiting.find(address);
 		if (found != addressed->waiting.end()) {
@@ -333,7 +339,8 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 		}
 		return waiter->woken.load(std::memory_order_acquire);
 	};
-	const auto wake_waiters = [addressed](uint64_t address, bool all) {
+	// Each thread woken is told while the list is held, so it cannot leave its wait and end meanwhile.
+	const auto wake_waiters = [&threads, addressed](uint64_t address, bool all) {
 		const std::lock_guard guard(addressed->lock);
 		const auto found = addressed->waiting.find(address);
 		bool woke = false;
@@ -341,6 +348,7 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 			for (auto &waiter : found->second)
 				if (!waiter->woken.load(std::memory_order_relaxed)) {
 					waiter->woken.store(true, std::memory_order_release);
+					threads.tell(*waiter->thread);
 					woke = true;
 					if (!all)
 						break;
