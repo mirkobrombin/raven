@@ -12,7 +12,9 @@ policy=(git python3)
 build=(
     "${policy[@]}" cmake make ccache gcc-c++ clang lld bison patch tar xz zstd openssl cargo rust
     wine-devel mingw64-gcc mingw64-gcc-c++ mingw32-gcc mingw32-gcc-c++ mingw64-winpthreads-static mingw32-winpthreads-static
-    wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel
+    wayland-devel wayland-protocols-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel
+    # The Wayland desktop is generated from wayland-protocols, and the OpenGL bridge links EGL, GL and GLU.
+    mesa-libEGL-devel mesa-libGL-devel mesa-libGLU-devel
     vulkan-loader-devel vulkan-headers openssl-devel
     # The configure step registers the software Vulkan tests only when it finds Mesa's driver manifest, and the ones that run under
     # the validation layer only when it finds the layer.
