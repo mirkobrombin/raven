@@ -225,25 +225,26 @@ jobs:
           ctest --test-dir "${BUILD}" --output-on-failure -j1 --timeout 1800
           --output-junit "${BUILD}/ctest-results.xml"
 
+      # package-native.py refuses to write inside the source tree it packages.
       - name: Bundle
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p /opt/ci/dist
           python3 scripts/package-native.py bundle \
             --source "${GITHUB_WORKSPACE}" --build "${BUILD}" \
             --test-report "${BUILD}/ctest-results.xml" \
             --materials /opt/ci/materials.json \
-            --output "dist/raven-${TAG}-linux-x86_64.tar.gz" \
-            --source-output "dist/raven-${TAG}-source.tar.gz"
-          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
-          cat dist/SHA256SUMS
+            --output "/opt/ci/dist/raven-${TAG}-linux-x86_64.tar.gz" \
+            --source-output "/opt/ci/dist/raven-${TAG}-source.tar.gz"
+          (cd /opt/ci/dist && sha256sum ./*.tar.gz > SHA256SUMS)
+          cat /opt/ci/dist/SHA256SUMS
 
       - name: Upload bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
-          path: dist/
+          path: /opt/ci/dist/
           retention-days: 30
           if-no-files-found: error
 
