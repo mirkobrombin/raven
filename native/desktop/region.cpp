@@ -57,8 +57,8 @@ void DesktopRegion::combine(const DesktopRegion &first,const DesktopRegion &seco
 	if (mode<1 || mode>5) throw std::runtime_error("invalid region operation");
 #ifdef RAVEN_PIXMAN
 	DesktopRegion next;next.state=std::make_unique<State>();State empty;
-	const auto *a=first.state ? &first.state->region : &empty.region;
-	const auto *b=second.state ? &second.state->region : &empty.region;
+	auto *a=first.state ? &first.state->region : &empty.region;
+	auto *b=second.state ? &second.state->region : &empty.region;
 	bool changed=false;
 	if (mode==1) changed=pixman_region32_intersect(&next.state->region,a,b);
 	else if (mode==2) changed=pixman_region32_union(&next.state->region,a,b);

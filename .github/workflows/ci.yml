@@ -382,7 +382,8 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${options[@]}"
 
       - name: Build
-        run: cmake --build "${BUILD}" -j "$(nproc)" --target raven raven-runtime
+        # Every file that does not build is listed in one run: the older libraries here are where these binaries break first.
+        run: cmake --build "${BUILD}" -j "$(nproc)" --target raven raven-runtime -- -k
 
       - name: Check portability
         run: python3 .github/scripts/check_portable.py 2.34 "${BUILD}/native/raven" "${BUILD}/native/raven-runtime"
