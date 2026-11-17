@@ -17,6 +17,8 @@ namespace raven::served_stub {
 constexpr size_t size = 160;
 // The words of a thread's block the stubs and the runtime stamp a call's times in (see gates.S).
 constexpr size_t entered = 12, last_stub = 13, answered = 14, resumed = 15;
+// The entry time of the last call a host thread answered beside the turn: the one call its stop may be let go on from.
+constexpr size_t answered_call = 20;
 
 inline std::span<const uint8_t> code() { return {raven_served_stub, size_t(raven_served_stub_end - raven_served_stub)}; }
 inline std::span<const uint8_t> local_block() { return {raven_local_block, size_t(raven_local_block_end - raven_local_block)}; }

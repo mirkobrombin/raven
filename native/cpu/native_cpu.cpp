@@ -1935,11 +1935,19 @@ bool NativeProcess::serve_alone(uint64_t *block)
 	// A completion (the low bit) goes the usual way. The guest spins in its stub, served or called, and takes the answer as from any.
 	if (!stub || (stub & 1))
 		return false;
+	const uint64_t since = __rdtsc();
 	const auto result = state->concurrent_served(stub, block + 1);
 	if (!result)
 		return false;
 	block[10] = *result;
 	block[11] = 0;
+	auto &cycles = CallCycles::instance();
+	if (cycles.enabled())
+		cycles.answered(block, stub, cycles.seen(block, stub, since));
+	// The call answered stays named in the block, by its stub and its entry time: a guest that went on to its breakpoint meanwhile is let
+	// go on by its host thread, and only for this call, not for a later one of the same stub that another thread answers.
+	__atomic_store_n(&block[served_stub::last_stub], stub, __ATOMIC_RELAXED);
+	__atomic_store_n(&block[served_stub::answered_call], __atomic_load_n(&block[served_stub::entered], __ATOMIC_RELAXED), __ATOMIC_RELAXED);
 	__atomic_store_n(&block[0], 0, __ATOMIC_RELEASE);
 	return true;
 }
@@ -1952,7 +1960,19 @@ bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block)
 		return false;
 	const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
 	user_regs_struct registers{};
-	if (!stub || (stub & 1) || ptrace(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip != stub + served_stub::wait() + 1 ||
+	if (!stub) {
+		// The call was answered beside the turn while the guest went on from spinning to its breakpoint: it finds the answer once let go
+		// on, without the turn the usual way would take only to resume it.
+		const uint64_t last = __atomic_load_n(&block[served_stub::last_stub], __ATOMIC_RELAXED),
+			call = __atomic_load_n(&block[served_stub::answered_call], __ATOMIC_RELAXED);
+		if (!last || call != __atomic_load_n(&block[served_stub::entered], __ATOMIC_RELAXED) ||
+			ptrace(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip != last + served_stub::wait() + 1)
+			return false;
+		if (ptrace(state->guest_resume(), task, nullptr, nullptr) == -1)
+			throw std::runtime_error("cannot resume a native guest task after a call answered beside the turn");
+		return true;
+	}
+	if ((stub & 1) || ptrace(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip != stub + served_stub::wait() + 1 ||
 		!serve_alone(block))
 		return false;
 	if (ptrace(state->guest_resume(), task, nullptr, nullptr) == -1)

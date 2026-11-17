@@ -31,10 +31,10 @@ public:
 		std::lock_guard lock(mutex);
 		names = std::move(stubs);
 	}
-	// The runtime sees the call `stub` in `block`: the cycles it returns are the time it was seen, for answered().
-	uint64_t seen(const uint64_t *block, uint64_t stub)
+	// The runtime sees the call `stub` in `block` at `now`: the cycles it returns are the time it was seen, for answered(). A call answered
+	// beside the turn is counted once it is known to be answered there, with the time it was seen.
+	uint64_t seen(const uint64_t *block, uint64_t stub, uint64_t now = __rdtsc())
 	{
-		const uint64_t now = __rdtsc();
 		if (!enabled())
 			return now;
 		const uint64_t entered = block[served_stub::entered], last = block[served_stub::last_stub],
