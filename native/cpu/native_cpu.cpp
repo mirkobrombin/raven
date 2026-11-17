@@ -897,8 +897,6 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 		state->mappings.at(page).protection = PROT_READ | PROT_EXEC;
 		state->return_gate = page;
 	}
-	if (mode == NativeMode::x64 && std::getenv("RAVEN_SECCOMP"))
-		install_seccomp();
 	user_regs_struct registers{};
 	trace(PTRACE_GETREGS, child.pid, &registers);
 	registers.rax = registers.rbx = registers.rcx = registers.rdx = registers.rsi = registers.rdi = registers.rbp = 0;
@@ -922,6 +920,9 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 		}
 		protect_memory(state->atomic_gate, 4096, PROT_READ | PROT_EXEC);
 	}
+	// The filter goes in once the page of gates is there, since a guest waiting in its stub makes the runtime's system calls from it.
+	if (mode == NativeMode::x64 && std::getenv("RAVEN_SECCOMP"))
+		install_seccomp();
 }
 
 NativeProcess::~NativeProcess()
@@ -935,14 +936,21 @@ void NativeProcess::install_seccomp()
 	auto &child = *state->child;
 	// The filter: an x86-64 system call whose instruction pointer is the one after the gate's SYSCALL runs; any other stops the guest
 	// for the runtime (SECCOMP_RET_TRACE), which then skips it as it skipped emulated ones.
+	// A guest waiting in its stub makes the runtime's calls from the page of gates (raven_gate_request_syscall): that instruction
+	// pointer runs as well, or the gate's again when there is no such page. Both lie in pages only the runtime writes.
 	const uint64_t after_gate = child.gate + 3;
+	const uint64_t after_request = state->request_gate ? state->atomic_gate + served_stub::gate_offset(raven_gate_request_syscall_done) : after_gate;
 	const sock_filter program[] = {
 		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, arch)),
-		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 0, 4),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 0, 8),
 		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, instruction_pointer)),
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, uint32_t(after_gate), 0, 2),
 		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, instruction_pointer) + 4),
-		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, uint32_t(after_gate >> 32), 1, 0),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, uint32_t(after_gate >> 32), 5, 0),
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, instruction_pointer)),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, uint32_t(after_request), 0, 2),
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, instruction_pointer) + 4),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, uint32_t(after_request >> 32), 1, 0),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 	};
@@ -958,9 +966,12 @@ void NativeProcess::install_seccomp()
 	if (process_vm_writev(child.pid, &local, 1, &remote, 1, 0) != ssize_t(bytes.size()))
 		throw std::runtime_error("cannot write the native seccomp filter");
 	child.syscall(SYS_prctl, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-	child.syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, page);
+	// Every task of the guest takes the filter, the memory task as well, as tasks cloned after it would.
+	child.syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC, page);
 	child.syscall(SYS_munmap, page, 4096);
-	trace(PTRACE_SETOPTIONS, child.pid, reinterpret_cast<void *>(PTRACE_O_EXITKILL | PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACESECCOMP));
+	// A guest that runs in parallel keeps following its new threads.
+	const long clones = state->memory_task > 0 ? PTRACE_O_TRACECLONE : 0;
+	trace(PTRACE_SETOPTIONS, child.pid, reinterpret_cast<void *>(PTRACE_O_EXITKILL | PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACESECCOMP | clones));
 	state->seccomp = true;
 }
 
@@ -1113,6 +1124,16 @@ uint64_t NativeProcess::memory_syscall(uint64_t number, uint64_t a1, uint64_t a2
 	uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
 	state->require_memory();
+	// A guest that waits in its stub makes the call itself, from the page of gates, and goes back to waiting: neither it nor the memory
+	// task stops, which a traced call needs four exchanges with the kernel for. Only a filtered guest can: without the filter, a system
+	// call of the guest stops it for the runtime wherever it is made.
+	if (waiting.task && state->request_gate && !waiting.answered && state->seccomp) {
+		const uint64_t arguments[] = {number, a1, a2, a3, a4, a5, a6};
+		const uint64_t result = run_in_stub(state->atomic_gate + served_stub::gate_offset(raven_gate_request_syscall), arguments);
+		if (result >= uint64_t(-4095))
+			throw std::runtime_error("native syscall: " + std::string(std::strerror(static_cast<int>(-result))));
+		return result;
+	}
 	settle_call();
 	// A Linux system call leaves the extended processor state alone, so only the general registers the gate uses are kept.
 	auto &child = *state->child;

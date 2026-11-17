@@ -9,7 +9,7 @@ extern "C" const uint8_t raven_served_stub[], raven_served_stub_end[], raven_ser
 	raven_served_stub_wait[], raven_served_stub_tail[], raven_served_stub_yield[], raven_served_stub_trap[], raven_local_block[],
 	raven_local_block_end[], raven_asked_tail[], raven_asked_tail_end[], raven_gate_page[], raven_gate_page_end[],
 	raven_gate_exchange32[], raven_gate_exchange64[], raven_gate_exchange32_done[], raven_gate_exchange64_done[], raven_gate_request[],
-	raven_gate_request_return[], raven_gate_request_exchange64[], raven_gate_request_exchange32[];
+	raven_gate_request_return[], raven_gate_request_exchange64[], raven_gate_request_exchange32[], raven_gate_request_syscall[], raven_gate_request_syscall_done[];
 
 namespace raven::served_stub {
 

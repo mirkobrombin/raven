@@ -97,7 +97,7 @@ raven_asked_tail_end:
  * the stub left them, as they do from a call that stops: code of the guest's own components counts on it. */
 	.global raven_gate_page, raven_gate_page_end, raven_gate_exchange32, raven_gate_exchange64, raven_gate_exchange32_done
 	.global raven_gate_exchange64_done, raven_gate_request, raven_gate_request_return, raven_gate_request_exchange64
-	.global raven_gate_request_exchange32
+	.global raven_gate_request_exchange32, raven_gate_request_syscall, raven_gate_request_syscall_done
 	.balign 64
 raven_gate_page:
 raven_gate_exchange32:
@@ -155,6 +155,24 @@ raven_gate_request_exchange64:
 raven_gate_request_exchange32:
 	mov eax, edx
 	lock cmpxchg dword ptr [rcx], r8d
+	ret
+/* A Linux system call a guest waiting in its stub makes for the runtime (see NativeProcess::memory_syscall): the number in RCX, the
+ * arguments in RDX, R8, R9 and then on the stack, as the request routine passes them. RDI and RSI are the caller's to keep. */
+	.balign 16, 0xcc
+raven_gate_request_syscall:
+	push rdi
+	push rsi
+	mov rax, rcx
+	mov rdi, rdx
+	mov rsi, r8
+	mov rdx, r9
+	mov r10, qword ptr [rsp + 56]
+	mov r8, qword ptr [rsp + 64]
+	mov r9, qword ptr [rsp + 72]
+	syscall
+raven_gate_request_syscall_done:
+	pop rsi
+	pop rdi
 	ret
 raven_gate_page_end:
 

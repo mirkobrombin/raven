@@ -3471,6 +3471,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/call-bench-prefix-${mode}")
         endforeach()
         set_property(TEST native_call_bench_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        # With the guest's system calls filtered, a parallel guest waiting in its stub maps memory for the runtime itself, so VirtualAlloc
+        # is answered without stopping it (memory_beside_client.c).
+        raven_kernel_fixture(memory-beside memory_beside_client.c 0x1e6000000 "-lkernel32")
+        add_test(NAME native_memory_beside COMMAND raven --run-process --execution=native --timeout-ms=30000
+            ${CMAKE_CURRENT_BINARY_DIR}/memory-beside.exe)
+        set_tests_properties(native_memory_beside PROPERTIES TIMEOUT 45
+            PASS_REGULAR_EXPRESSION "profile: frequent [(]call[)] VirtualAlloc "
+            FAIL_REGULAR_EXPRESSION "Native entry returned [1-9]|unhandled exception|[(]stop[)] VirtualAlloc "
+            ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_SECCOMP=1;RAVEN_PROFILE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/memory-beside-prefix")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel)
