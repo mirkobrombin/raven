@@ -20,8 +20,8 @@ env:
   COMPONENTS: /opt/ci/components
   BUILD: /opt/ci/build
   ARCHIVES: /opt/ci/archives
-  EUPROVGUARD_VERSION: "v1.2.1"
-  GO_VERSION: "1.25.13"
+  EUPROVGUARD_VERSION: "v1.3.0"
+  EUPROVGUARD_SHA256: "a054edeae1d9b8cac0bfd2cdb43562c606a8292e9c4c72fe54667b972e6f23d5"
 
 jobs:
   # Policy: cheap checks of what is being proposed, before any runner time is spent compiling it.
@@ -273,14 +273,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
+      # The release binary, checked against the digest pinned above.
       - name: Install EUProvGuard
-        run: go install "github.com/fabricatorsltd/euprovguard@${EUPROVGUARD_VERSION}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -fsSL -o "${RUNNER_TEMP}/bin/euprovguard" \
+            "https://github.com/fabricatorsltd/euprovguard/releases/download/${EUPROVGUARD_VERSION}/euprovguard-linux-amd64"
+          echo "${EUPROVGUARD_SHA256}  ${RUNNER_TEMP}/bin/euprovguard" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/bin/euprovguard"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Scan the tree
         shell: bash
@@ -292,10 +295,9 @@ jobs:
             -name raven \
             -version-tag "0.0.0-${GITHUB_SHA:0:7}" \
             -output compliance/sbom.json \
-            -bundle compliance/report 2>&1 | tee compliance/scan.log
-
-      - name: Gate the findings
-        run: python3 .github/scripts/check_compliance.py compliance/sbom.json compliance/scan.log
+            -bundle compliance/report \
+            -baseline .github/compliance/accepted.json \
+            -fail-on-findings 2>&1 | tee compliance/scan.log
 
       - name: Upload compliance artifacts
         if: always()

@@ -1,124 +1,40 @@
 {
-  "accepted": [
+  "sast": [
     {
       "rule": "MEM-001",
-      "path": "native/guest/raven-comctl32/crt.c",
-      "text": "char *strcpy(char *destination, const char *source)",
+      "file": "native/guest/raven-comctl32/crt.c",
+      "line": "char *strcpy(char *destination, const char *source)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "MEM-001",
-      "path": "native/guest/raven-comctl32/crt.c",
-      "text": "strcpy(destination + strlen(destination), source);",
+      "file": "native/guest/raven-comctl32/crt.c",
+      "line": "strcpy(destination + strlen(destination), source);",
       "reason": "The guest C runtime's strcat, which has the same unbounded contract as the function it implements."
     },
     {
       "rule": "MEM-002",
-      "path": "native/guest/raven-comctl32/crt.c",
-      "text": "int sprintf(char *buffer, const char *format, ...)",
+      "file": "native/guest/raven-comctl32/crt.c",
+      "line": "int sprintf(char *buffer, const char *format, ...)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "MEM-001",
-      "path": "native/guest/raven-crt/ucrtbase.c",
-      "text": "CRT char *strcpy(char *to, const char *from)",
+      "file": "native/guest/raven-crt/ucrtbase.c",
+      "line": "CRT char *strcpy(char *to, const char *from)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
     },
     {
       "rule": "MEM-001",
-      "path": "native/guest/raven-crt/ucrtbase.c",
-      "text": "strcpy(to + strlen(to), from);",
+      "file": "native/guest/raven-crt/ucrtbase.c",
+      "line": "strcpy(to + strlen(to), from);",
       "reason": "The guest C runtime's strcat, which has the same unbounded contract as the function it implements."
     },
     {
       "rule": "MEM-002",
-      "path": "native/guest/raven-crt/ucrtbase_legacy.c",
-      "text": "CRT int sprintf(char *buffer, const char *text, ...)",
+      "file": "native/guest/raven-crt/ucrtbase_legacy.c",
+      "line": "CRT int sprintf(char *buffer, const char *text, ...)",
       "reason": "The guest C runtime's own definition of this function, which Windows programs import from it."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "native/guest/raven-msxml3/make_idl.py",
-      "text": "ENUM = re.compile(r'typedef\\s+enum\\s+(\\w+)\\s*\\{(.*?)\\}\\s*(\\w+)\\s*;', re.S)",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "native/guest/raven-msxml3/make_idl.py",
-      "text": "INTERFACE = re.compile(r'MIDL_INTERFACE\\(\"([0-9a-fA-F-]+)\"\\)\\s*(\\w+)\\s*:\\s*public\\s+(\\w+)\\s*\\{(.*?)\\n\\};', re.S)",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "native/guest/raven-msxml3/make_idl.py",
-      "text": "METHOD = re.compile(r'virtual\\s+HRESULT\\s+STDMETHODCALLTYPE\\s+(\\w+)\\(\\s*(.*?)\\)\\s*=\\s*0;', re.S)",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "native/guest/raven-propsys/make_schema.py",
-      "text": "LISTS = re.compile(r\"(Authors|Keywords|Ids|Addresses|Names|Categories|Artists|Composers|Contributors|Genre|Tags|Participants|Recipients|Conductors|Publishers)$\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "native/guest/raven-propsys/make_schema.py",
-      "text": "pattern = re.compile(r\"DEFINE_PROPERTYKEY\\(PKEY_(\\w+),\\s*0x([0-9a-f]+),\\s*0x([0-9a-f]+),\\s*0x([0-9a-f]+),\\s*((?:0x[0-9a-f]+,\\s*){8})(\\d+)\\)\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/audit-independence.py",
-      "text": "FORBIDDEN = re.compile(r\"wine|proton|wineserver|ntdll\\.so|winebus|/\\.wine\", re.IGNORECASE)",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-com-tables.py",
-      "text": "METHOD = re.compile(r\"STDMETHOD_?\\(\\s*(?:[^,()]+,\\s*)?(\\w+)\\s*\\)|\\(STDMETHODCALLTYPE\\s*\\*\\s*(\\w+)\\)\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-com-vtables.py",
-      "text": "DECLARATION = re.compile(r\"DECLARE_INTERFACE(?:_IID)?_\\(\\s*(\\w+)\\s*,\\s*(\\w+)\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-registry-words.py",
-      "text": "pattern = re.compile(r'registry\\.add\\(\\s*\"(\\w+)\"\\s*,\\s*(\\d+)\\s*,')",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-registry-words.py",
-      "text": "suffixed = re.compile(r'registry\\.add\\(\\s*\"(\\w+)\"\\s*\\+\\s*suffix\\s*,\\s*(\\d+)\\s*,')",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-winmd.py",
-      "text": "match = re.compile(r'\\s*([A-Za-z_][\\w.]*(?:`\\d+)?)').match(text, at)",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-locale-identifiers.py",
-      "text": "SUBTABLE = re.compile(r\"ILCID_POSIX_SUBTABLE\\((\\w+)\\)\\s*\\{(.*?)\\};\", re.S)",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-locale-identifiers.py",
-      "text": "ENTRY = re.compile(r\"\\{\\s*(0x[0-9a-fA-F]+)\\s*,\\s*\\\"([^\\\"]+)\\\"\\s*\\}\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/generate-locale-identifiers.py",
-      "text": "ELEMENT = re.compile(r\"ILCID_POSIX_ELEMENT_ARRAY\\(\\s*(0x[0-9a-fA-F]+)\\s*,\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     }
   ]
 }
