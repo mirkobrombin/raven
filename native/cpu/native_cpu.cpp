@@ -1913,6 +1913,22 @@ bool NativeProcess::serve_alone(uint64_t *block)
 	return true;
 }
 
+bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block)
+{
+	// A guest whose host thread was asleep spins in its stub until it stops at the breakpoint of a long wait, and goes back to looking at
+	// its block when let go on: a call that needs nothing of the runtime is answered there as well, without the turn.
+	if (!block || status < 0 || !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP)
+		return false;
+	const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
+	user_regs_struct registers{};
+	if (!stub || (stub & 1) || ptrace(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip != stub + served_stub::wait() + 1 ||
+		!serve_alone(block))
+		return false;
+	if (ptrace(state->guest_resume(), task, nullptr, nullptr) == -1)
+		throw std::runtime_error("cannot resume a native guest task after a call answered beside the turn");
+	return true;
+}
+
 void NativeProcess::set_execution_park(std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> park)
 {
 	state->execution_park = std::move(park);

@@ -1265,8 +1265,10 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 			std::lock_guard lock(gate);
 			return bool(me.job);
 		}, block);
-		// A call that needs nothing of the runtime is answered here, outside its turn, and the guest goes on.
-		if (status == -4 && process.serve_alone(const_cast<uint64_t *>(block)))
+		// A call that needs nothing of the runtime is answered here, outside its turn, and the guest goes on, whether it still spins in
+		// its stub or stopped there.
+		auto *const served = const_cast<uint64_t *>(block);
+		if (status == -4 ? process.serve_alone(served) : process.serve_stopped_alone(task, status, served))
 			continue;
 		if (status != -3)
 			break;
