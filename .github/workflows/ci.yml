@@ -336,7 +336,8 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False git python3 python3-fonttools cmake make ccache clang lld bison patch \
             tar xz zstd cargo rust wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel \
-            vulkan-loader-devel vulkan-headers openssl-devel zlib-devel binutils
+            vulkan-loader-devel vulkan-headers openssl-devel zlib-devel binutils perl-IPC-Cmd perl-FindBin perl-Time-Piece perl-File-Compare \
+            perl-File-Copy
           dnf clean all
           git config --global --add safe.directory "*"
 

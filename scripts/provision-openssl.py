@@ -41,12 +41,18 @@ def main():
     with tarfile.open(archive) as source:
         source.extractall(scratch, filter="data")
     tree = Path(scratch) / f"openssl-{VERSION}"
+
+    # A step that fails shows what it printed: the build's own output says which tool or Perl module it is missing.
+    def run(*arguments):
+        result = subprocess.run(arguments, cwd=tree, env=env, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(f"{' '.join(arguments)} failed:\n{result.stdout[-4000:]}{result.stderr[-4000:]}")
+
     install = output / "install"
-    subprocess.run(["./Configure", "linux-x86_64", "no-shared", "no-module", "no-tests", "no-docs", "no-autoload-config",
-                    f"--prefix={install}", "--libdir=lib", f"--openssldir={install}/ssl"],
-                   cwd=tree, env=env, check=True, capture_output=True)
-    subprocess.run(["make", f"-j{args.jobs}", "build_libs"], cwd=tree, env=env, check=True, capture_output=True)
-    subprocess.run(["make", "install_dev"], cwd=tree, env=env, check=True, capture_output=True)
+    run("./Configure", "linux-x86_64", "no-shared", "no-module", "no-tests", "no-docs", "no-autoload-config", f"--prefix={install}",
+        "--libdir=lib", f"--openssldir={install}/ssl")
+    run("make", f"-j{args.jobs}", "build_libs")
+    run("make", "install_dev")
     licenses = output / "licenses" / "openssl"
     licenses.mkdir(parents=True, exist_ok=True)
     shutil.copy(tree / "LICENSE.txt", licenses / "LICENSE.txt")
