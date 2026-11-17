@@ -809,8 +809,8 @@ __declspec(dllexport) MMRESULT WINAPI acmStreamSize(HACMSTREAM handle, DWORD inp
 
 __declspec(dllexport) BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
-	(void)instance;
-	(void)reason;
 	(void)reserved;
+	if (reason == DLL_PROCESS_ATTACH)
+		DisableThreadLibraryCalls(instance);
 	return TRUE;
 }

@@ -53,6 +53,8 @@ struct PEModule {
 	// the first one's, as the address table holds them, and need no index of their own.
 	size_t indexed_exports = 0;
 	bool runtime_api = false;
+	// Whether the library asked not to be told when threads start and end (DisableThreadLibraryCalls).
+	bool quiet_threads = false;
 	// The host file a library loaded from a folder of the program's came from; empty for the runtime's own and for libraries found by name.
 	std::filesystem::path file;
 };

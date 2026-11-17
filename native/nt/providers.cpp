@@ -4004,7 +4004,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		const auto notify = [&](const PEModule &module) {
 			if (const auto stopped = notify_tls(module, reason); stopped.stop != NativeStop::returned)
 				throw stopped;
-			if ((module.image.characteristics & 0x2000) && module.image.entry && !module.runtime_api && !module.image.il_only()) {
+			if ((module.image.characteristics & 0x2000) && module.image.entry && !module.runtime_api && !module.image.il_only() && !module.quiet_threads) {
 				const uint64_t arguments[] = {module.loaded.base(), reason, 0};
 				const auto result = invoke(module.loaded.base() + module.image.entry, arguments);
 				if (result.stop != NativeStop::returned)

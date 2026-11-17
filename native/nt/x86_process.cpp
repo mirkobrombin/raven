@@ -1394,7 +1394,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				if (result.stop != NativeStop::returned)
 					throw result;
 			}
-			if ((module.image.characteristics & 0x2000) && module.image.entry && !module.runtime_api && &module != &entry) {
+			if ((module.image.characteristics & 0x2000) && module.image.entry && !module.runtime_api && !module.quiet_threads && &module != &entry) {
 				const uint64_t arguments[] = {module.loaded.base(), reason, 0};
 				const auto result = invoke(module.loaded.base() + module.image.entry, arguments);
 				if (result.stop != NativeStop::returned)

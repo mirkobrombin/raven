@@ -178,7 +178,18 @@ void register_process_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("DbgPrintEx", 0, [](ApiCall &call) { call.ret(0); });
 	// No kernel debugger answers a prompt: nothing is read.
 	registry.add("DbgPrompt", 3, [](ApiCall &call) { call.ret(0); });
-	registry.add("DisableThreadLibraryCalls", 1, [](ApiCall &call) { call.ret(1); });
+	// A library that asks is no longer told when threads start and end, unless it has thread-local storage of its own, as on Windows:
+	// each thread that ends would otherwise call into every such library, for nothing.
+	registry.add("DisableThreadLibraryCalls", 1, [&context](ApiCall &call) {
+		for (const auto &[name, module] : context.modules.all())
+			if (module->loaded.base() == call[0]) {
+				if (!module->image.directories[9].address)
+					module->quiet_threads = true;
+				call.ret(1);
+				return;
+			}
+		call.fail(126);
+	});
 	registry.add("FreeLibraryWhenCallbackReturns", 2, [](ApiCall &call) { call.ret(0); });
 	registry.add("GetProcessVersion", 1, [](ApiCall &call) { call.ret(0x0006000a); });
 	registry.add("FreeResource", 1, [](ApiCall &call) { call.ret(0); });

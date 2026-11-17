@@ -4218,6 +4218,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(slow_start_fixture${width} ALL DEPENDS ${slow_start_dir}/client.exe ${slow_start_dir}/slow-start.dll)
                     add_test(NAME native_slow_start_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${slow_start_dir}/client.exe)
                     set_tests_properties(native_slow_start_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(quiet_threads_dir ${CMAKE_CURRENT_BINARY_DIR}/quiet-threads-${width})
+                    add_custom_command(OUTPUT ${quiet_threads_dir}/client.exe ${quiet_threads_dir}/quiet-threads.dll ${quiet_threads_dir}/loud-threads.dll
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${quiet_threads_dir}
+                        COMMAND ${webservices_compiler} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector -DQUIET -Wl,--entry,${late_imports_entry},--no-insert-timestamp
+                            -o ${quiet_threads_dir}/quiet-threads.dll ${LOADER_SOURCES}/quiet_threads.c -lkernel32
+                        COMMAND ${webservices_compiler} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${late_imports_entry},--no-insert-timestamp
+                            -o ${quiet_threads_dir}/loud-threads.dll ${LOADER_SOURCES}/quiet_threads.c -lkernel32
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${quiet_threads_dir}/client.exe ${LOADER_SOURCES}/quiet_threads_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/quiet_threads.c ${LOADER_SOURCES}/quiet_threads_client.c VERBATIM)
+                    add_custom_target(quiet_threads_fixture${width} ALL DEPENDS ${quiet_threads_dir}/client.exe)
+                    add_test(NAME native_quiet_threads_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${quiet_threads_dir}/client.exe)
+                    set_tests_properties(native_quiet_threads_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(busy_deadline_client ${CMAKE_CURRENT_BINARY_DIR}/busy-deadline${width}.exe)
                     add_custom_command(OUTPUT ${busy_deadline_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
