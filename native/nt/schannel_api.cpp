@@ -1,4 +1,5 @@
 #include "access_token.h"
+#include "authenticode.h"
 #include "kernel_context.h"
 #include "ntlm.h"
 #include "text.h"
@@ -134,7 +135,11 @@ std::shared_ptr<Credential> make_credential(uint32_t flags, bool manual)
 	credential->tls.reset(SSL_CTX_new(TLS_client_method()));
 	if (!credential->tls)
 		return nullptr;
-	SSL_CTX_set_default_verify_paths(credential->tls.get());
+	// The roots Windows trusts, as WinINet has them: the host's bundle and the Microsoft roots beside the runtime.
+	if (X509_STORE *roots = trust_anchors())
+		SSL_CTX_set1_cert_store(credential->tls.get(), roots);
+	else
+		SSL_CTX_set_default_verify_paths(credential->tls.get());
 	credential->verify = !manual && !(flags & credentials_manual_validation);
 	credential->check_name = !(flags & credentials_no_name_check);
 	return credential;

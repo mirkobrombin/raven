@@ -491,9 +491,17 @@ X509_STORE *trust_anchors()
 		auto *created = X509_STORE_new();
 		if (!created)
 			return created;
-		for (const char *path : {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"})
-			if (X509_STORE_load_file(created, path))
-				break;
+		// The host's bundle where the distribution keeps it (SSL_CERT_FILE first, as OpenSSL reads it), else where this OpenSSL was
+		// built to look: a runtime linked with its own OpenSSL finds no bundle there.
+		bool loaded = false;
+		if (const char *named = std::getenv("SSL_CERT_FILE"); named && *named)
+			loaded = X509_STORE_load_file(created, named);
+		for (const char *path : {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+				"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"})
+			if (!loaded)
+				loaded = X509_STORE_load_file(created, path);
+		if (!loaded)
+			X509_STORE_set_default_paths(created);
 		// The code signing roots every Windows installation has: those a build put beside the runtime, else the ones downloaded before,
 		// and any still missing are fetched from Microsoft now, once, and kept when their digest matches the table.
 		std::error_code error;
