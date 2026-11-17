@@ -97,6 +97,8 @@ struct GuestThread {
 	// and how many turns the thread has taken in the runtime.
 	std::vector<uint32_t> waits_on;
 	std::atomic<uint64_t> turns{0};
+	// How many waits the thread has begun, in the runtime or outside: one that grew since a set woke it waits again.
+	std::atomic<uint64_t> waits{0};
 };
 
 class ThreadObject : public KernelObject {

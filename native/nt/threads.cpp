@@ -705,6 +705,8 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	const char *api = api_in_progress;
 	me.waiting_in = api;
 	me.waiting_since = began;
+	me.waits.fetch_add(1, std::memory_order_release);
+	moved();
 	const bool outer_polled = std::exchange(me.polled, polled);
 	me.seen_signals = 0;
 	if (threaded)
@@ -804,7 +806,7 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		GuestThread *thread;
 		uint64_t turns;
 		std::chrono::steady_clock::time_point changed;
-		uint64_t first;
+		uint64_t waits;
 	};
 	std::vector<Woken> waiting;
 	const auto started = std::chrono::steady_clock::now();
@@ -813,14 +815,14 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		for (const auto &thread : threads)
 			if (thread.get() != &me && thread->outside && thread->state == GuestThread::State::waiting &&
 				std::find(thread->waits_on.begin(), thread->waits_on.end(), object) != thread->waits_on.end())
-				waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->turns.load(std::memory_order_relaxed)});
+				waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->waits.load(std::memory_order_acquire)});
 	}
 	// The waits that block in the runtime (those of a 32-bit guest, or on objects outside the table) are looked at as the serial
 	// hand_over does, with the turn still held.
 	for (const auto &thread : threads)
 		if (thread.get() != &me && !thread->outside && thread->state == GuestThread::State::waiting && thread->suspend_count == 0 &&
 			thread->ready && thread->ready())
-			waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->turns.load(std::memory_order_relaxed)});
+			waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->waits.load(std::memory_order_acquire)});
 	if (waiting.empty())
 		return false;
 	leave(me);
@@ -844,8 +846,9 @@ bool NativeThreads::hand_over_to(uint32_t object)
 					woken.turns = turns;
 					woken.changed = now;
 				}
-				// A thread that woke in the runtime is still in its old wait when it takes the turn: only a later call can be a new one.
-				const bool waits = woken.thread->outside || (woken.thread->state == GuestThread::State::waiting && turns >= woken.first + 2);
+				// A thread that woke is still in its old wait when it takes the turn, and its next call may be served in that same turn:
+				// only a wait it began since is a new one.
+				const bool waits = woken.thread->waits.load(std::memory_order_acquire) != woken.waits;
 				if (!(woken.thread->state == GuestThread::State::done || waits || now - woken.changed >= std::chrono::milliseconds(1)))
 					settled = false;
 			}
@@ -1524,6 +1527,7 @@ uint32_t NativeThreads::wait_outside(const std::function<uint32_t(std::optional<
 	me.state = GuestThread::State::waiting;
 	me.waiting_in = api_in_progress;
 	me.waiting_since = std::chrono::steady_clock::now();
+	me.waits.fetch_add(1, std::memory_order_release);
 	{
 		std::lock_guard lock(gate);
 		me.outside = true;
