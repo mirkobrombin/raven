@@ -166,10 +166,12 @@ jobs:
             arguments: --arch x64 --output
             recipe: scripts/provision-installer.py
             sources: native/guest/**
+            materials: true
           - component: installer32
             arguments: --arch x86 --output
             recipe: scripts/provision-installer.py
             sources: native/guest/**
+            materials: true
           - component: sqlite
             arguments: --output
             recipe: scripts/provision-sqlite.py
@@ -177,6 +179,7 @@ jobs:
             arguments: --destination
             recipe: scripts/provision-graphics.py
             sources: native/graphics/backends.json
+            materials: true
           - component: roots
             arguments: --output
             recipe: scripts/provision-roots.py
@@ -214,7 +217,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TARGET }}
-          key: component-${{ matrix.component }}-${{ hashFiles(matrix.recipe, matrix.sources || matrix.recipe) }}
+          key: component-${{ matrix.component }}-${{ matrix.materials && 'materials-' || '' }}${{ hashFiles(matrix.recipe, matrix.sources || matrix.recipe) }}
 
       - name: Provision ${{ matrix.component }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -236,14 +239,19 @@ jobs:
           find . -mindepth 1 -maxdepth 1 ! -name include ! -name src ! -name modules ! -name LICENSE -exec rm -rf {} +
           find "${TARGET}/cpu-fonts" -mindepth 1 ! -name libskia.a -exec rm -rf {} +
 
-      # The upstream source archives and their extracted trees are the corresponding source of a release, which provisions its own; tests only
-      # load the built components.
+      # Tests only load the built components. The upstream source archives of those a release ships with their source stay, as the
+      # nightly bundles this very build with them (see release_materials.py); the trees extracted from them go.
       - name: Trim the upstream sources
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
+        env:
+          MATERIALS: ${{ matrix.materials && 'keep' || '' }}
         run: |
           set -euo pipefail
-          rm -rf "${TARGET}"/*-source.tar.* "${TARGET}"/*-source
+          rm -rf "${TARGET}"/*-source
+          if [ -z "${MATERIALS}" ]; then
+            rm -rf "${TARGET}"/*-source.tar.*
+          fi
 
       # Artifacts drop file modes, so the component travels as an archive.
       - name: Pack component
