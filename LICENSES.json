@@ -4,7 +4,7 @@
   "original_code_license": "GPL-3.0-or-later with MIT guest-adapter exceptions",
   "license_references": {
     "LicenseRef-Configuration-Dependent": "Inventory depends on configured binary inputs.",
-    "LicenseRef-Installer-Upstream": "zlib (Zlib), IJG JPEG (IJG), LibTIFF (libtiff), libxml2 and libxslt (MIT) under the notices kept with each pinned release; Raven's own code in the components is MIT."
+    "LicenseRef-Installer-Upstream": "zlib (Zlib), IJG JPEG (IJG), LibTIFF (libtiff), libxml2 and libxslt (MIT), Wuffs (MIT OR Apache-2.0) under the notices kept with each pinned release; Raven's own code in the components is MIT."
   },
   "components": [
     {
@@ -438,6 +438,7 @@
         "native/guest/raven-windowscodecs/tiff.c",
         "native/guest/raven-windowscodecs/transform.c",
         "native/guest/raven-windowscodecs/wic.h",
+        "native/guest/raven-windowscodecs/wuffs.c",
         "native/guest/raven-winmm/main.c",
         "native/guest/raven-winmm/mixer.c",
         "native/guest/raven-winmm/ravenhost32.def",

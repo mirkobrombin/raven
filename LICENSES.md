@@ -12,7 +12,7 @@ GPLv3 license applied to every file.
 | --- | --- |
 | Linux `raven` and `raven-bootstrap` | GPL-3.0-or-later; root LICENSE |
 | Original Raven PE adapters | MIT; exact file list in LICENSES.json and terms in LICENSES/MIT.txt |
-| PE installer components | Raven code under MIT with zlib, libxml2, libxslt, IJG JPEG and LibTIFF under their own notices; pinned releases, recipe and patches in `scripts/provision-installer.py` and `native/guest/raven-installer` |
+| PE installer components | Raven code under MIT with zlib, libxml2, libxslt, IJG JPEG, LibTIFF and Wuffs under their own notices; pinned releases, recipe and patches in `scripts/provision-installer.py` and `native/guest/raven-installer` |
 | CP1252 mapping data | Unicode-3.0; `native/upstream/windows-codepages/data-provenance.json` |
 | Code pages 1250, 1251 and 1253-1258 mapping data | Unicode-3.0; `native/upstream/windows-codepages/single-byte-provenance.json` |
 | Unicode decomposition data | Unicode terms; `native/upstream/unicode/LICENSE` and provenance.json |

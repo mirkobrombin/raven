@@ -19,8 +19,8 @@ from component_licenses import mark_patched_sources
 
 
 # Libraries taken from their own releases: zlib, which cabinet.dll, msxml3.dll, the image libraries and raven-appx.dll compress and
-# inflate with, and the Independent JPEG Group's library the codecs read and write JPEG through. Each is kept beside the components
-# as NAME-VERSION-source.tar.gz with the notices listed here, and unpacked to NAME-source.
+# inflate with, the Independent JPEG Group's library the codecs read and write JPEG through, and Wuffs, whose decoders the codecs read
+# PNG with. Each is kept beside the components as NAME-VERSION-source.tar.gz with the notices listed here, and unpacked to NAME-source.
 UPSTREAM = {
     "zlib": dict(version="1.3.1", sha256="9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
                  url="https://zlib.net/fossils/zlib-{version}.tar.gz", notices=("LICENSE", "README")),
@@ -32,6 +32,8 @@ UPSTREAM = {
                     url="https://download.gnome.org/sources/libxml2/2.12/libxml2-{version}.tar.xz", notices=("Copyright", "README.md")),
     "libxslt": dict(version="1.1.42", sha256="85ca62cac0d41fc77d3f6033da9df6fd73d20ea2fc18b0a3609ffb4110e1baeb",
                     url="https://download.gnome.org/sources/libxslt/1.1/libxslt-{version}.tar.xz", notices=("Copyright", "README.md")),
+    "wuffs": dict(version="0.4.0-alpha.12", sha256="0c1c84aa93fcaeda523ed517848b1555e72e679c37780aaa2db8d7e5b8ff78f1",
+                  url="https://github.com/google/wuffs/archive/refs/tags/v{version}.tar.gz", notices=("LICENSE", "LICENSE-APACHE", "LICENSE-MIT")),
 }
 # The parts of libxml2 msxml3.dll is built with, and the features its configuration turns on for them.
 XML_SOURCES = ("buf.c", "catalog.c", "chvalid.c", "debugXML.c", "dict.c", "encoding.c", "entities.c", "error.c", "globals.c", "hash.c",
@@ -503,13 +505,16 @@ def main():
     (output / "mlang_import.def").write_text("LIBRARY mlang.dll\nEXPORTS\n" + "".join(f" {name}\n" for name in mlang_names))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "mlang_import.def", "-l", output / "libmlang.a"])
     # windowscodecs.dll: Raven's own imaging component; JPEG and TIFF go through the libraries built above, named by path so
-    # no export of the component can resolve to one of the installer's own import libraries.
+    # no export of the component can resolve to one of the installer's own import libraries, and PNG through the Wuffs release's single
+    # C file, which wuffs.c builds in.
     own_codecs = repo / "native/guest/raven-windowscodecs"
     codecs_objects = []
     for path in [*sorted(own_codecs.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("codecs_" + path.stem + ".o")
-        run([triple + "-gcc", "-c", "-O2", "-std=gnu11", "-fno-builtin", "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
-             "-I" + str(jpeg_source), "-I" + str(tiff_source), "-w", path, "-o", target])
+        # Wuffs reads unaligned words through small copies of a fixed size, which only the compiler's own memcpy turns into loads.
+        builtins = [] if path.name == "wuffs.c" else ["-fno-builtin"]
+        run([triple + "-gcc", "-c", "-O2", "-std=gnu11", *builtins, "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
+             "-I" + str(jpeg_source), "-I" + str(tiff_source), "-I" + str(upstream_sources["wuffs"] / "release" / "c"), "-w", path, "-o", target])
         codecs_objects.append(target)
     codecs_exports = (own_codecs / "exports.txt").read_text()
     (output / "windowscodecs.def").write_text("LIBRARY windowscodecs.dll\nEXPORTS\n" + codecs_exports)
