@@ -1585,7 +1585,7 @@ void NativeProcess::unmap_image(uint64_t address)
 
 std::pair<uint64_t, uint64_t> NativeProcess::stack_bounds() const
 {
-	state->require_stopped();
+	// Set once when the process is made, so a guest that runs on may be asked about them, as VirtualQuery beside the turn does.
 	return {state->initial_stack_top - state->initial_stack_size, state->initial_stack_top};
 }
 

@@ -3394,9 +3394,13 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (named->second == "VirtualQuery") {
 					if (arguments[2] < 48)
 						return std::nullopt;
-					const auto info = memory.query(arguments[0]);
-					if (!info || !process.write_alone(arguments[1], info->data(), info->size()))
+					try {
+						const auto info = memory.query(arguments[0]);
+						if (!info || !process.write_alone(arguments[1], info->data(), info->size()))
+							return std::nullopt;
+					} catch (...) {
 						return std::nullopt;
+					}
 					return 48;
 				}
 				const auto entry = api_registry.find(named->second);
