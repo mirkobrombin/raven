@@ -45,6 +45,13 @@ pub extern "C" fn raven_waits_new() -> *mut Table {
 }
 
 /// # Safety
+/// `waits` came from raven_waits_new.
+#[no_mangle]
+pub unsafe extern "C" fn raven_waits_kernel(waits: *const Table) -> u32 {
+    u32::from((*waits).kernel())
+}
+
+/// # Safety
 /// `waits` came from raven_waits_new and no other call uses it any more.
 #[no_mangle]
 pub unsafe extern "C" fn raven_waits_free(waits: *mut Table) {

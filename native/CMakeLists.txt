@@ -3433,7 +3433,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             ${CMAKE_CURRENT_BINARY_DIR}/timeout-waits.exe)
         set_tests_properties(native_timeout_waits PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "native entry timed out"
             ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/timeout-waits-prefix")
-        foreach(mode default parallel)
+        foreach(mode default parallel table)
             add_test(NAME native_served_semaphore_${mode} COMMAND raven --run-process --execution=native
                 ${CMAKE_CURRENT_BINARY_DIR}/served-semaphore.exe)
             set_tests_properties(native_served_semaphore_${mode} PROPERTIES TIMEOUT 30
@@ -3441,6 +3441,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/served-semaphore-prefix-${mode}")
         endforeach()
         set_property(TEST native_served_semaphore_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        set_property(TEST native_served_semaphore_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         raven_kernel_fixture(api-hook api_hook_client.c 0x1b6000000 "-lkernel32;-luser32")
         # GdiAlphaBlend between 32-bit surfaces, and the time a window-sized blend may take.
         raven_kernel_fixture(alpha-blend alpha_blend_client.c 0x1c1000000 "-lkernel32;-lgdi32")
@@ -3486,20 +3487,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             PASS_REGULAR_EXPRESSION "Native entry returned 0 "
             FAIL_REGULAR_EXPRESSION "profile: [^\n]*(LocateXStateFeature|RtlGrowFunctionTable)"
             ENVIRONMENT "RAVEN_PROFILE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-rtl-calls-prefix")
+        # The tests of waits run in a third mode, table, on the host's own table of objects even where /dev/ntsync opens, so both ways of
+        # keeping kernel objects are tested on a machine that has the kernel's.
         # Waking the threads that wait on an address goes beside the turn in parallel mode, and no wake is lost (address_beside_client.c).
         raven_kernel_fixture(address-beside address_beside_client.c 0x1e8000000 "-lkernel32;-lsynchronization")
-        foreach(mode default parallel)
+        foreach(mode default parallel table)
             add_test(NAME native_address_beside_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
                 ${CMAKE_CURRENT_BINARY_DIR}/address-beside.exe)
             set_tests_properties(native_address_beside_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/address-beside-prefix-${mode}")
         endforeach()
         set_property(TEST native_address_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        set_property(TEST native_address_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         # Of its 6000 wakes, the few a thread makes while it holds the turn anyway are served there; taking the turn for each made hundreds.
         set_property(TEST native_address_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: \\(call\\) WakeByAddress[A-Za-z]* calls=[0-9][0-9][0-9]")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
-        foreach(mode default parallel)
+        foreach(mode default parallel table)
             add_test(NAME native_abandoned_mutex_${mode} COMMAND raven --run-process --execution=native
                 ${CMAKE_CURRENT_BINARY_DIR}/abandoned-mutex.exe)
             set_tests_properties(native_abandoned_mutex_${mode} PROPERTIES TIMEOUT 30
@@ -3507,16 +3511,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/abandoned-mutex-prefix-${mode}")
         endforeach()
         set_property(TEST native_abandoned_mutex_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        set_property(TEST native_abandoned_mutex_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         raven_kernel_fixture(queued-calls queued_calls_client.c 0x1b7000000 "")
         add_test(NAME native_queued_served_contract COMMAND providers_test $<TARGET_FILE:raven-bootstrap>
             --queued-served ${CMAKE_CURRENT_BINARY_DIR}/queued-calls.exe)
         set_tests_properties(native_queued_served_contract PROPERTIES TIMEOUT 30
             ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_QUEUED_GRAPHICS=1;RAVEN_QUEUED_OPENGL=1;RAVEN_COROUTINE_HOST=1")
-        foreach(mode default parallel)
+        foreach(mode default parallel table)
             add_test(NAME native_apc_nonalertable_${mode} COMMAND providers_test $<TARGET_FILE:raven-bootstrap> --apc-wait)
             set_tests_properties(native_apc_nonalertable_${mode} PROPERTIES TIMEOUT 10)
         endforeach()
         set_tests_properties(native_apc_nonalertable_parallel PROPERTIES ENVIRONMENT RAVEN_PARALLEL=1)
+        set_tests_properties(native_apc_nonalertable_table PROPERTIES ENVIRONMENT RAVEN_NTSYNC=0)
         # An APC queued to a thread that has ended, from 64-bit and 32-bit callers.
         raven_kernel_fixture(finished-apc finished_apc_client.c 0x1c3000000 "-lkernel32")
         add_test(NAME native_finished_apc COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/finished-apc.exe)
@@ -4283,6 +4289,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(event_wakes_fixture${width} ALL DEPENDS ${event_wakes_client})
                     add_test(NAME native_event_wakes_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${event_wakes_client})
                     set_tests_properties(native_event_wakes_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    add_test(NAME native_event_wakes_table_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${event_wakes_client})
+                    set_tests_properties(native_event_wakes_table_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_NTSYNC=0)
                     set(event_beside_client ${CMAKE_CURRENT_BINARY_DIR}/event-beside${width}.exe)
                     add_custom_command(OUTPUT ${event_beside_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

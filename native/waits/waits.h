@@ -16,6 +16,8 @@ enum RavenWaitKind : uint32_t { raven_auto_event, raven_manual_event, raven_mute
 
 RavenWaits *raven_waits_new();
 void raven_waits_free(RavenWaits *waits);
+// 1 when the table keeps its objects in the kernel's /dev/ntsync, 0 when it keeps them itself.
+uint32_t raven_waits_kernel(const RavenWaits *waits);
 uint32_t raven_waits_create(const RavenWaits *waits, uint32_t kind, uint32_t initial, uint32_t max);
 void raven_waits_close(const RavenWaits *waits, uint32_t object);
 uint32_t raven_waits_set(const RavenWaits *waits, uint32_t object, uint32_t *previous);
