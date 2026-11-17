@@ -334,10 +334,12 @@ jobs:
     steps:
       - name: Install packages
         run: |
-          dnf install -y --setopt=install_weak_deps=False git python3 python3-fonttools cmake make ccache clang lld bison patch \
-            tar xz zstd cargo rust wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel pixman-devel freetype-devel \
-            vulkan-loader-devel vulkan-headers openssl-devel zlib-devel binutils perl-IPC-Cmd perl-FindBin perl-Time-Piece perl-File-Compare \
-            perl-File-Copy
+          dnf install -y --setopt=install_weak_deps=False dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf install -y --setopt=install_weak_deps=False git python3 python3-fonttools cmake make ccache clang llvm lld bison patch \
+            tar xz zstd cargo rust wayland-devel wayland-protocols-devel libxkbcommon-devel libxkbcommon-x11-devel libxcb-devel \
+            pixman-devel freetype-devel mesa-libEGL-devel mesa-libGL-devel mesa-libGLU-devel vulkan-loader-devel vulkan-headers \
+            openssl-devel zlib-devel binutils perl-IPC-Cmd perl-FindBin perl-Time-Piece perl-File-Compare perl-File-Copy
           dnf clean all
           git config --global --add safe.directory "*"
 
@@ -354,7 +356,9 @@ jobs:
             /opt/ci/components/text
             /opt/ci/components/libpng
             /opt/ci/components/openssl
-          key: portable-components-${{ hashFiles('scripts/provision-text.py', 'scripts/provision-libpng.py', 'scripts/provision-openssl.py') }}
+            /opt/ci/components/mingw32
+          key: portable-components-${{ hashFiles('scripts/provision-text.py', 'scripts/provision-libpng.py', 'scripts/provision-openssl.py',
+            'scripts/provision-mingw32-layout.py') }}
 
       - name: Provision linked components
         if: steps.cache.outputs.cache-hit != 'true'
@@ -363,6 +367,7 @@ jobs:
           set -euo pipefail
           python3 scripts/provision-libpng.py --output "${COMPONENTS}/libpng"
           python3 scripts/provision-openssl.py --jobs 4 --output "${COMPONENTS}/openssl"
+          python3 scripts/provision-mingw32-layout.py --output "${COMPONENTS}/mingw32"
           python3 scripts/provision-text.py --jobs 4 --output "${COMPONENTS}/text"
           cd "${COMPONENTS}/text/skia"
           find . -mindepth 1 -maxdepth 1 ! -name include ! -name src ! -name modules ! -name LICENSE -exec rm -rf {} +
@@ -375,8 +380,8 @@ jobs:
           key: portable-ccache-${{ github.sha }}
           restore-keys: portable-ccache-
 
-      # The same options as the build job, so the binaries are configured as the ones they stand in for, with OpenSSL linked in:
-      # distributions name its libraries by major version.
+      # The same options as the build job, so the binaries are configured as the ones they stand in for, with OpenSSL linked in
+      # (distributions name its libraries by major version) and 32-bit Vulkan layouts taken from clang, as no MinGW is packaged here.
       - name: Configure
         shell: bash
         run: |
@@ -384,7 +389,8 @@ jobs:
           mapfile -t options < <(.github/scripts/components.sh options)
           cmake -S . -B "${BUILD}" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${options[@]}" \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_ROOT_DIR="${COMPONENTS}/openssl/install"
+            -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_ROOT_DIR="${COMPONENTS}/openssl/install" \
+            -DRAVEN_MINGW32_VULKAN="${COMPONENTS}/mingw32/bin/i686-w64-mingw32-gcc"
 
       - name: Build
         # Every file that does not build is listed in one run: the older libraries here are where these binaries break first.
@@ -394,7 +400,9 @@ jobs:
         run: python3 .github/scripts/check_portable.py 2.34 "${BUILD}/native/raven" "${BUILD}/native/raven-runtime"
 
       - name: Pack host binaries
-        run: tar -C "${BUILD}/native" -cf /opt/ci/portable.tar raven raven-runtime
+        run: |
+          tar -C "${BUILD}/native" -cf /opt/ci/portable.tar --transform 's/^host-features.txt$/portable-features.txt/' raven raven-runtime \
+            host-features.txt
 
       - name: Upload host binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -466,10 +474,11 @@ jobs:
           name: portable-host
           path: /opt/ci/portable
 
-      # The tests run, and a release ships, the host binaries built on the oldest supported glibc.
+      # The tests run, and a release ships, the host binaries built on the oldest supported glibc, with every feature built here.
       - name: Take the portable host binaries
         run: |
           tar -C "${BUILD}/native" -m -xf /opt/ci/portable/portable.tar
+          diff -u "${BUILD}/native/host-features.txt" "${BUILD}/native/portable-features.txt"
           python3 .github/scripts/check_portable.py 2.34 "${BUILD}/native/raven" "${BUILD}/native/raven-runtime"
 
       - name: Seal
