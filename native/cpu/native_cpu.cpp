@@ -3,6 +3,7 @@
 #include "served_stub.h"
 #include "call_cycles.h"
 #include "nt/warm_host.h"
+#include "nt/runtime_profile.h"
 #include <cstddef>
 
 #include <algorithm>
@@ -2590,6 +2591,12 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		state->stopped = false;
 		runs = true;
 	}
+	// A stub that stopped at its breakpoint after its call was answered only has to go on. RAVEN_PROFILE counts the times the turn was
+	// taken for that, which a host thread answering beside the turn spares (see serve_stopped_alone).
+	const auto answered_stop = [](const uint64_t *block) {
+		if (block && !__atomic_load_n(&block[0], __ATOMIC_ACQUIRE) && RuntimeProfile::instance().enabled())
+			RuntimeProfile::instance().api("(turn) resume after an answer", std::chrono::nanoseconds(0));
+	};
 	// The procedure a guest ran inside a stub returned: the call that asked for it is the one in progress again.
 	const auto returned = [&](uint64_t *block, uint64_t marker, bool held) {
 		while (!outer_calls.empty() && outer_calls.back().depth > state->callbacks.size())
@@ -2807,8 +2814,10 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 			uint64_t *const block = state->thread_served_block;
 			if (block && __atomic_load_n(&block[0], __ATOMIC_ACQUIRE) == stub + 1 && !outer_calls.empty())
 				return returned(block, stub + 1, true);
-			if (!block || __atomic_load_n(&block[0], __ATOMIC_ACQUIRE) != stub)
+			if (!block || __atomic_load_n(&block[0], __ATOMIC_ACQUIRE) != stub) {
+				answered_stop(block);
 				continue;
+			}
 			++state->call_waits;
 			const uint64_t seen = CallCycles::instance().seen(block, stub);
 			waiting = WaitingCall{this, child.pid, block, stub + state->served_stub_size, block[5], {block[1], block[2], block[3], block[4]},
@@ -2822,6 +2831,7 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 		// A served stub that waited too long stops on its own breakpoint: its call is answered and it goes on where it stopped.
 		if (signal == SIGTRAP && served_wait_trap(registers.rip - 1)) {
 			++state->served_waits;
+			answered_stop(state->thread_served_block);
 			serve_pending();
 			continue;
 		}
