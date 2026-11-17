@@ -34,12 +34,12 @@ def main():
         if result.returncode:
             raise RuntimeError(result.stderr or "RTL build command failed")
 
-    def compile(name):
+    def compile_object(name):
         run(["x86_64-w64-mingw32-gcc", "-c", "-O2", "-ffreestanding", "-ffunction-sections", "-fdata-sections", "-mcx16", "-D_NTSYSTEM_",
              f"-ffile-prefix-map={repo}=raven", "-I" + str(root), str(root / (name + ".c")), "-o", str(objects / (name + ".o"))])
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(compile, SOURCES))
+        list(pool.map(compile_object, SOURCES))
     run(["x86_64-w64-mingw32-gcc", "-shared", "-nostdlib", "-Wl,--exclude-all-symbols,--gc-sections,--entry,0,--image-base,0x1a1000000",
          "-Wl,--out-implib," + str(output / "raven-rtl.lib"), "-o", str(output / "raven-rtl.dll"),
          *[str(objects / (name + ".o")) for name in SOURCES], str(root / "raven-rtl.def"), "-lntdll", "-lgcc"])

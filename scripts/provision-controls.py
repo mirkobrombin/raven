@@ -81,14 +81,14 @@ def main():
     own_user32 = repo / "native/guest/raven-user32"
     sources = sorted(own_comctl32.glob("*.c"))
 
-    def compile(path):
+    def compile_object(path):
         name = "comctl32_" + path.stem
         run([triple + "-gcc", "-c", "-O2", "-w", "-fno-builtin", "-D_COMCTL32_", "-D_WIN32_WINNT=0x600", "-D_WIN32_IE=0x0600", "-DUNICODE", "-D_UNICODE",
              f"-ffile-prefix-map={repo}=raven", path, "-o", objects / (name + ".o")])
         return objects / (name + ".o")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        compiled = list(pool.map(compile, sources))
+        compiled = list(pool.map(compile_object, sources))
     # The exports with their public numbers, including the unnamed ones and those that forward to the system.
     functions = decorated(compiled)
 

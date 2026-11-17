@@ -98,42 +98,6 @@
     },
     {
       "rule": "INJ-001",
-      "path": "scripts/provision-controls.py",
-      "text": "def compile(path):",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "cabinet = list(pool.map(lambda name: compile(cabinet_root / name, \"cabinet_\" + Path(name).stem,",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "compile(support / \"support.c\", \"installer_support\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "entry_object = compile(support / \"dllmain.c\", \"plain_dllmain\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "zlib = [compile(zlib_source / name, \"zlib_\" + Path(name).stem, [\"-I\" + str(zlib_include)]) for name in ZLIB]",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-rtl.py",
-      "text": "def compile(name):",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
       "path": "scripts/generate-winmd.py",
       "text": "match = re.compile(r'\\s*([A-Za-z_][\\w.]*(?:`\\d+)?)').match(text, at)",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
@@ -154,36 +118,6 @@
       "rule": "INJ-001",
       "path": "scripts/generate-locale-identifiers.py",
       "text": "ELEMENT = re.compile(r\"ILCID_POSIX_ELEMENT_ARRAY\\(\\s*(0x[0-9a-fA-F]+)\\s*,\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\")",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "def compile(path, name, extra=()):",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "xml = list(pool.map(lambda path: compile(path, \"libxml2_\" + path.stem, xml_flags), xml_sources))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "xslt = list(pool.map(lambda path: compile(path, \"libxslt_\" + path.stem, xslt_flags), sorted((xslt_root / \"libxslt\").glob(\"*.c\"))))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "built = list(pool.map(lambda path: compile(path, stem + \"_\" + path.stem.replace(\".\", \"_\"), flags_here), sources))",
-      "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
-    },
-    {
-      "rule": "INJ-001",
-      "path": "scripts/provision-installer.py",
-      "text": "link(\"msftedit.dll\", next_base[0], [compile(support / \"msftedit.c\", \"msftedit\", plain)], output / \"msftedit.def\",",
       "reason": "No eval: the line compiles a regular expression or calls the script's own compile() helper for C sources."
     }
   ]

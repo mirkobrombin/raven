@@ -250,7 +250,7 @@ def main():
     shutil.rmtree(objects, ignore_errors=True)
     objects.mkdir()
 
-    def compile(path, name, extra=()):
+    def compile_object(path, name, extra=()):
         target = objects / (name + ".o")
         run([triple + "-gcc", "-c", *flags, *extra, "-I" + str(generated), path, "-o", target])
         return target
@@ -279,10 +279,10 @@ def main():
     run([triple + "-dlltool", "-d", expansion, "-l", output / "liblzimports.a", *(["-k"] if x86 else [])])
     # cabinet.dll: cabinet files, their compression and extraction, on zlib.
     zlib_include = zlib_source
-    zlib = [compile(zlib_source / name, "zlib_" + Path(name).stem, ["-I" + str(zlib_include)]) for name in ZLIB]
+    zlib = [compile_object(zlib_source / name, "zlib_" + Path(name).stem, ["-I" + str(zlib_include)]) for name in ZLIB]
     cabinet_root = repo / "native/guest/raven-cabinet"
     with ThreadPoolExecutor(max_workers=2) as pool:
-        cabinet = list(pool.map(lambda name: compile(cabinet_root / name, "cabinet_" + Path(name).stem,
+        cabinet = list(pool.map(lambda name: compile_object(cabinet_root / name, "cabinet_" + Path(name).stem,
                                                      ["-I" + str(cabinet_root), "-I" + str(zlib_include)]),
                                 ("compose.c", "extract.c", "lzx.c", "quantum.c", "session.c")))
     (output / "cabinet.def").write_text(spec_exports(cabinet_root / "cabinet.spec", "cabinet.dll", x86))
@@ -298,7 +298,7 @@ def main():
     (output / "sxs_import.def").write_text("LIBRARY sxs.dll\nEXPORTS\n" + "".join(f" {name}{'@' + str(size) if x86 else ''}\n" for name, size in
                                            (("CreateAssemblyCache", 8), ("CreateAssemblyNameObject", 16), ("SxsLookupClrGuid", 24), ("SxspGenerateManifestPathOnAssemblyIdentity", 16))))
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "sxs_import.def", "-l", output / "libsxs.a"])
-    compile(support / "support.c", "installer_support")
+    compile_object(support / "support.c", "installer_support")
     # rpcrt4.dll: Raven's own remote procedure calls, which the installer's custom action server speaks over local pipes.
     own_rpc = repo / "native/guest/raven-rpcrt4"
     rpc_objects = []
@@ -366,7 +366,7 @@ def main():
     run([triple + "-dlltool", "-d", output / "crtmath.def", "-l", output / "libcrtmath.a"])
     xml_sources = [xml_root / name for name in XML_SOURCES]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        xml = list(pool.map(lambda path: compile(path, "libxml2_" + path.stem, xml_flags), xml_sources))
+        xml = list(pool.map(lambda path: compile_object(path, "libxml2_" + path.stem, xml_flags), xml_sources))
     # libxslt's configuration: its own one for Windows, which its internal header reads as config.h under mingw, and a version header
     # with the debugger, profiler, plugins and trio left out.
     shutil.copyfile(xslt_root / "libxslt/win32config.h", xslt_root / "libxslt/config.h")
@@ -376,7 +376,7 @@ def main():
         WITH_XSLT_DEBUG=0, WITH_TRIO=0, WITH_DEBUGGER=0, WITH_PROFILER=0, WITH_MODULES=0, LIBXSLT_DEFAULT_PLUGINS_PATH=""))
     xslt_flags = [*xml_flags, "-DHAVE_WIN32_THREADS", "-I" + str(xslt_root), "-I" + str(xslt_root / "libxslt")]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        xslt = list(pool.map(lambda path: compile(path, "libxslt_" + path.stem, xslt_flags), sorted((xslt_root / "libxslt").glob("*.c"))))
+        xslt = list(pool.map(lambda path: compile_object(path, "libxslt_" + path.stem, xslt_flags), sorted((xslt_root / "libxslt").glob("*.c"))))
     # Its registration scripts' type library comes from the public headers, and stays with stdole2's for what else needs it.
     run([*widl, "-t", "-T", generated / "stdole2.tlb", repo / "native/guest/raven-oleaut32/stdole2.idl"])
     own_msxml = repo / "native/guest/raven-msxml3"
@@ -434,14 +434,14 @@ def main():
         (output / (stem + ".def")).write_text(spec_exports(spec, name, x86))
         flags_here = [*extra_flags, "-I" + str(root)]
         with ThreadPoolExecutor(max_workers=2) as pool:
-            built = list(pool.map(lambda path: compile(path, stem + "_" + path.stem.replace(".", "_"), flags_here), sources))
+            built = list(pool.map(lambda path: compile_object(path, stem + "_" + path.stem.replace(".", "_"), flags_here), sources))
         next_base[0] -= 0x400000 if x86 else 0x4000000
         link(name, next_base[0], [*built, *objects_more, objects / "installer_support.o"], output / (stem + ".def"),
              ["-L" + str(output), "-lcrtmath", *[f"-l{library}" for library in (*libraries, "msvcrt", "mingwex", "kernel32", "ntdll", "uuid", "gcc", "kernel32", "msvcrt", "kernel32")]],
              output / ("lib" + stem + ".a"))
 
     plain = ["-D_CRT_DECLARE_NONSTDC_NAMES=1", "-D_DLL", "-DWIN32", "-D_WINDOWS"]
-    entry_object = compile(support / "dllmain.c", "plain_dllmain")
+    entry_object = compile_object(support / "dllmain.c", "plain_dllmain")
     # libjpeg.dll: the library's sources as its makefile lists them, with the memory manager that needs no temporary files, exporting the
     # whole interface jpeglib.h declares.
     jpeg_sources = re.search(r"^LIBSOURCES *=(.*?)\n\n", (jpeg_source / "Makefile.am").read_text(), re.S | re.M).group(1)
@@ -581,7 +581,7 @@ def main():
         "IID_IRichEditOleCallback", "IID_ITextHost", "IID_ITextHost2", "IID_ITextServices", "REExtendedRegisterClass", "RichEdit10ANSIWndProc",
         "RichEditANSIWndProc")))
     next_base[0] -= 0x400000 if x86 else 0x4000000
-    link("msftedit.dll", next_base[0], [compile(support / "msftedit.c", "msftedit", plain)], output / "msftedit.def",
+    link("msftedit.dll", next_base[0], [compile_object(support / "msftedit.c", "msftedit", plain)], output / "msftedit.def",
          ["-L" + str(output), *[f"-l{library}" for library in ("riched20", "kernel32", "gcc")]])
     # msvfw32.dll: Raven's own video for Windows: the codec manager, DrawDib and the MCI window.
     own_vfw = repo / "native/guest/raven-msvfw32"
