@@ -3569,6 +3569,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_property(TEST native_query_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
         set_property(TEST native_query_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
             "profile: \\(call\\) VirtualQuery calls=[0-9][0-9][0-9]")
+        # Waits for events other processes share go beside the turn in parallel mode, sleeping on the events' words
+        # (shared_wait_beside_client.c): a thread here and one of a child process play ping-pong.
+        raven_kernel_fixture(shared-wait-beside shared_wait_beside_client.c 0x1c9000000 "-lkernel32")
+        foreach(mode default parallel)
+            add_test(NAME native_shared_wait_beside_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/shared-wait-beside.exe)
+            set_tests_properties(native_shared_wait_beside_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/shared-wait-beside-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_shared_wait_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        set_property(TEST native_shared_wait_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
+            "profile: \\(call\\) WaitFor(SingleObject|MultipleObjects) calls=[0-9][0-9][0-9]")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel table)
