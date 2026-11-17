@@ -11,6 +11,10 @@ on:
         description: Also compare with Wine
         type: boolean
         default: false
+      from_run:
+        description: Publish the tree of this passed CI run instead of running the CI again
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -29,6 +33,7 @@ jobs:
   # change in the runner image show up here even on days nobody pushes.
   ci:
     name: CI
+    if: inputs.from_run == ''
     # The ./ form works with every tool that reads these files; the newer $/ form does not yet.
     uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
 
@@ -144,9 +149,11 @@ jobs:
   publish:
     name: Publish nightly
     needs: ci
+    if: always() && (needs.ci.result == 'success' || (inputs.from_run != '' && needs.ci.result == 'skipped'))
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
+      actions: read # the artifacts of the run published
       contents: write # the nightly pre-release and its assets
       id-token: write # signing the provenance attestation
       attestations: write # storing the provenance attestation
@@ -158,25 +165,40 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False git python3 gh
           git config --global --add safe.directory "*"
 
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
+      # The run whose tree is published: this one, or a CI run given by hand that passed, on the commit it built.
       - name: Look at the published nightly
         id: published
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
+          FROM_RUN: ${{ inputs.from_run }}
         shell: bash
         run: |
           set -euo pipefail
+          run="${GITHUB_RUN_ID}" sha="${GITHUB_SHA}"
+          if [ -n "${FROM_RUN}" ]; then
+            run="${FROM_RUN}"
+            read -r sha conclusion < <(gh api "repos/${GH_REPO}/actions/runs/${run}" --jq '"\(.head_sha) \(.conclusion)"')
+            if [ "${conclusion}" != success ]; then
+              echo "::error::run ${run} did not pass (${conclusion})"
+              exit 1
+            fi
+          fi
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
           published=$(gh api "repos/${GH_REPO}/commits/nightly" --jq .sha 2>/dev/null || true)
-          if [ "${EVENT}" = schedule ] && [ "${GITHUB_SHA}" = "${published}" ]; then
+          if [ "${EVENT}" = schedule ] && [ "${sha}" = "${published}" ]; then
             echo "main has not moved since the published nightly ${published}"
             echo "skip=true" >> "${GITHUB_OUTPUT}"
           fi
+
+      - name: Checkout
+        if: steps.published.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.published.outputs.sha }}
+          persist-credentials: false
 
       - name: Install test packages
         if: steps.published.outputs.skip != 'true'
@@ -186,6 +208,8 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          run-id: ${{ steps.published.outputs.run }}
+          github-token: ${{ github.token }}
           pattern: component-*
           path: /opt/ci/archives
           merge-multiple: true
@@ -194,6 +218,8 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          run-id: ${{ steps.published.outputs.run }}
+          github-token: ${{ github.token }}
           name: build
           path: /opt/ci
 
@@ -201,6 +227,8 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          run-id: ${{ steps.published.outputs.run }}
+          github-token: ${{ github.token }}
           pattern: tests-*
           path: /opt/ci/results
 
@@ -234,14 +262,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          SHA: ${{ steps.published.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
-          notes="Built from main at ${GITHUB_SHA} on $(date -u +%Y-%m-%d), after the complete test suite passed on it. "
+          notes="Built from main at ${SHA} on $(date -u +%Y-%m-%d), after the complete test suite passed on it. "
           notes+="This pre-release is replaced by the next night's build whenever main has changed."
-          gh release create nightly /opt/ci/dist/* --prerelease --latest=false --target "${GITHUB_SHA}" \
-            --title "Nightly ${GITHUB_SHA:0:7}" --notes "${notes}"
+          gh release create nightly /opt/ci/dist/* --prerelease --latest=false --target "${SHA}" \
+            --title "Nightly ${SHA:0:7}" --notes "${notes}"
 
   alert:
     name: Report failure
