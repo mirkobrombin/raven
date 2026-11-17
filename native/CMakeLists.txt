@@ -2113,6 +2113,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_imaging_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/imaging.exe)
                 set_tests_properties(native_imaging_${installer_arch} PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/imaging-prefix)
+                # PNG files of every kind the format allows keep their pixel format, palette and pixels; a 32-bit program gets an error
+                # for a picture larger than its address space (png_formats_client.c).
+                add_custom_command(OUTPUT ${fixture}/png-formats.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/png-formats.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/png_formats_client.c -lwindowscodecs -lole32 -luuid
+                        -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/png_formats_client.c VERBATIM)
+                add_custom_target(png_formats_fixture_${installer_arch} ALL DEPENDS ${fixture}/png-formats.exe)
+                add_test(NAME native_png_formats_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                    ${fixture}/png-formats.exe)
+                set_tests_properties(native_png_formats_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${fixture}/png-formats-prefix)
                 # Rich edit labels made transparent paint only their text over the parent, and ordinary ones their own background.
                 add_custom_command(OUTPUT ${fixture}/richedit.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
