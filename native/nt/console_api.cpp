@@ -76,6 +76,9 @@ struct ControlHandlers {
 	NativeThreads *threads = nullptr;
 	std::vector<uint64_t> asking;
 	std::shared_ptr<GuestThread> running;
+	// ExitProcess was started for a press nobody handled: the process is ending, and the thread that ends it leaves no exit code to
+	// read as a handler's answer.
+	bool ending = false;
 };
 
 ControlHandlers *control_handlers = nullptr;
@@ -647,7 +650,8 @@ void register_console_api(ApiRegistry &registry, KernelContext &context)
 				state.running = context.threads.create(routine, parameter, 64 * 1024, false);
 			};
 			// Nobody handled the press: ExitProcess runs on a thread of its own, as the default handler calls it.
-			const auto end_process = [&context, start]() {
+			const auto end_process = [&context, &state, start]() {
+				state.ending = true;
 				const auto exit = context.modules.resolve(PEImport{"kernel32.dll", "ExitProcess", 0, false, 0});
 				if (!exit) {
 					TerminalConsole::instance().restore();
@@ -655,6 +659,8 @@ void register_console_api(ApiRegistry &registry, KernelContext &context)
 				}
 				start(exit, status_control_c_exit);
 			};
+			if (state.ending)
+				return;
 			if (state.running) {
 				if (state.running->state != GuestThread::State::done)
 					return;
