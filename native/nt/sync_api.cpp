@@ -1,6 +1,8 @@
 #include "kernel_context.h"
 
 #include <algorithm>
+#include <mutex>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -301,21 +303,57 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 
 	// WaitOnAddress waits until another thread wakes the address, as on Windows: a value that changes without a wake wakes nobody, so
 	// nothing is looked at while the waiter sleeps. A value that differs already when the wait begins returns at once.
-	auto addressed = std::make_shared<std::map<uint64_t, std::deque<std::shared_ptr<Waiter>>>>();
+	// A wake may come from a host thread that does not hold the turn (see wake_address_beside), so the waiters have a lock of their own:
+	// a wait compares the value and enters the list under it, and a waker changes the value before it takes the lock, so a wake that
+	// finds nobody came before the comparison, which then sees the new value.
+	struct AddressWaiter {
+		std::atomic<bool> woken{false};
+	};
+	struct AddressWaits {
+		std::mutex lock;
+		std::map<uint64_t, std::deque<std::shared_ptr<AddressWaiter>>> waiting;
+	};
+	auto addressed = std::make_shared<AddressWaits>();
 	const auto wait_on = [&context, &threads, addressed](uint64_t address, const std::vector<uint8_t> &expected,
 		std::optional<std::chrono::steady_clock::time_point> wake) {
-		if (context.process.read_memory(address, expected.size()) != expected)
-			return true;
-		auto waiter = std::make_shared<Waiter>();
-		(*addressed)[address].push_back(waiter);
-		threads.block([waiter] { return waiter->woken; }, wake);
-		const auto found = addressed->find(address);
-		if (found != addressed->end()) {
+		auto waiter = std::make_shared<AddressWaiter>();
+		{
+			const std::lock_guard guard(addressed->lock);
+			if (context.process.read_memory(address, expected.size()) != expected)
+				return true;
+			addressed->waiting[address].push_back(waiter);
+		}
+		threads.block([waiter] { return waiter->woken.load(std::memory_order_acquire); }, wake);
+		const std::lock_guard guard(addressed->lock);
+		const auto found = addressed->waiting.find(address);
+		if (found != addressed->waiting.end()) {
 			std::erase(found->second, waiter);
 			if (found->second.empty())
-				addressed->erase(found);
+				addressed->waiting.erase(found);
 		}
-		return waiter->woken;
+		return waiter->woken.load(std::memory_order_acquire);
+	};
+	const auto wake_waiters = [addressed](uint64_t address, bool all) {
+		const std::lock_guard guard(addressed->lock);
+		const auto found = addressed->waiting.find(address);
+		bool woke = false;
+		if (found != addressed->waiting.end())
+			for (auto &waiter : found->second)
+				if (!waiter->woken.load(std::memory_order_relaxed)) {
+					waiter->woken.store(true, std::memory_order_release);
+					woke = true;
+					if (!all)
+						break;
+				}
+		return woke;
+	};
+	context.wake_address_beside = [&threads, wake_waiters](uint64_t address, bool all) {
+		if (!wake_waiters(address, all))
+			return false;
+		threads.signaled();
+		if (threads.waiting_in_runtime())
+			threads.nudge();
+		return true;
 	};
 	registry.add("WaitOnAddress", 4, [wait_on](ApiCall &call) {
 		const size_t size = call[2];
@@ -333,16 +371,8 @@ void register_sync_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	// The thread woken runs before the waker goes on, as for a condition variable.
-	const auto wake_address = [&threads, addressed](ApiCall &call, bool all) {
-		const auto found = addressed->find(call[0]);
-		bool woke = false;
-		if (found != addressed->end())
-			for (auto &waiter : found->second)
-				if (!waiter->woken) {
-					waiter->woken = woke = true;
-					if (!all)
-						break;
-				}
+	const auto wake_address = [&threads, wake_waiters](ApiCall &call, bool all) {
+		const bool woke = wake_waiters(call[0], all);
 		if (woke && !call.process.serving())
 			threads.hand_over();
 	};

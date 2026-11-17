@@ -3488,6 +3488,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             PASS_REGULAR_EXPRESSION "Native entry returned 0 "
             FAIL_REGULAR_EXPRESSION "profile: [^\n]*(LocateXStateFeature|RtlGrowFunctionTable)"
             ENVIRONMENT "RAVEN_PROFILE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-rtl-calls-prefix")
+        # Waking the threads that wait on an address goes beside the turn in parallel mode, and no wake is lost (address_beside_client.c).
+        raven_kernel_fixture(address-beside address_beside_client.c 0x1e8000000 "-lkernel32;-lsynchronization")
+        foreach(mode default parallel)
+            add_test(NAME native_address_beside_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/address-beside.exe)
+            set_tests_properties(native_address_beside_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/address-beside-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_address_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        set_property(TEST native_address_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: [^\\n]*WakeByAddress")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel)

@@ -174,13 +174,15 @@ static bool served_api(std::string_view module, std::string_view name)
 		return name == "QueryPerformanceCounter" || name == "QueryPerformanceFrequency" || name == "QueryUnbiasedInterruptTime" ||
 			name == "QueryUnbiasedInterruptTimePrecise" || name == "WakeConditionVariable" ||
 			name == "WakeAllConditionVariable" || name == "ReleaseSemaphore" || name == "CreateSemaphoreExW" ||
-			name == "WaitForSingleObject" || name == "WaitForSingleObjectEx" || name == "SetEvent" || name == "ResetEvent" || name == "CloseHandle";
+			name == "WaitForSingleObject" || name == "WaitForSingleObjectEx" || name == "SetEvent" || name == "ResetEvent" || name == "CloseHandle" ||
+			name == "WakeByAddressSingle" || name == "WakeByAddressAll";
 	// Reading a socket's recorded events polls the host sockets and never blocks.
 	if (module == "ws2_32.dll")
 		return name == "WSAEnumNetworkEvents";
 	// Waking marks the sleepers; they run when the scheduler next picks a thread.
 	if (module == "ntdll.dll")
-		return name == "RtlWakeConditionVariable" || name == "RtlWakeAllConditionVariable";
+		return name == "RtlWakeConditionVariable" || name == "RtlWakeAllConditionVariable" || name == "RtlWakeAddressSingle" ||
+			name == "RtlWakeAddressAll";
 #ifdef RAVEN_OPENGL
 	if (module == "opengl32.dll")
 		return OpenGLBridge::served_api(name);
@@ -3336,8 +3338,20 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (name == "SetEvent" || name == "ResetEvent" || name == "WaitForSingleObject" || name == "WaitForSingleObjectEx")
 			event_stubs.emplace_back(stub, name == "SetEvent" ? EventCall::set : name == "ResetEvent" ? EventCall::reset :
 				name == "WaitForSingleObject" ? EventCall::wait : EventCall::wait_ex);
-	if (process.parallel() && !event_stubs.empty())
-		process.set_concurrent_served([&threads, &kernel_objects, event_stubs](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+	// Waking the threads that wait on an address goes beside the others as well, the woken threads looked at again as for an event.
+	std::vector<std::pair<uint64_t, bool>> address_stubs;
+	for (const auto &[stub, name] : served_names)
+		if (name == "WakeByAddressSingle" || name == "WakeByAddressAll" || name == "RtlWakeAddressSingle" || name == "RtlWakeAddressAll")
+			address_stubs.emplace_back(stub, name.ends_with("All"));
+	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty()))
+		process.set_concurrent_served([&threads, &kernel_objects, &kernel, event_stubs, address_stubs](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			if (const auto address = std::find_if(address_stubs.begin(), address_stubs.end(), [stub](const auto &entry) { return entry.first == stub; });
+				address != address_stubs.end()) {
+				if (!kernel.wake_address_beside)
+					return std::nullopt;
+				kernel.wake_address_beside(arguments[0], address->second);
+				return 0;
+			}
 			const auto found = std::find_if(event_stubs.begin(), event_stubs.end(), [stub](const auto &entry) { return entry.first == stub; });
 			if (found == event_stubs.end())
 				return std::nullopt;

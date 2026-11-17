@@ -46,6 +46,9 @@ struct KernelContext {
 	// Top-level exception filter installed by the program (SetUnhandledExceptionFilter).
 	uint64_t unhandled_filter = 0;
 	bool shutdown_in_progress = false;
+	// Wakes the threads that wait on an address (WakeByAddressSingle with all false, WakeByAddressAll with it true) from a host thread
+	// that does not hold the turn, and tells whether one woke; the waiters are looked at again (set by the synchronization handlers).
+	std::function<bool(uint64_t, bool)> wake_address_beside;
 	// Delivers a CPU fault to the guest's handlers; never returns normally (it redirects or ends the process).
 	std::function<void(const NativeResult &)> raise_fault;
 	// At an API call made inside callbacks: ends those the guest has left without returning, and makes the call again at the nesting
