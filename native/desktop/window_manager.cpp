@@ -1051,7 +1051,8 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	auto layered = std::make_shared<std::map<uint64_t, std::array<uint32_t, 3>>>();
 	// A layered window shows what the program hands over: the window moves and takes the size given, and the pixels of the source DC
 	// become its surface. Pixels with per-pixel alpha are premultiplied, as the compositor blends them; the constant alpha scales them
-	// all. Without per-pixel alpha the window is opaque, and the color key shows black.
+	// all. Without per-pixel alpha the window is opaque, and the color key shows black. A hidden window keeps the pixels for when it is
+	// shown, as a program can hand them over before it shows the window.
 	const auto update_layered = [this](ApiCall &call, uint64_t handle, uint64_t destination, uint64_t extent, uint64_t source_dc,
 										  uint64_t source_point, uint32_t key, uint64_t blend, uint32_t flags) {
 		const auto *window = std::as_const(objects).window(handle);
@@ -1071,7 +1072,7 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 				place_window(handle, outer, 0, swp_nozorder | swp_noactivate);
 			const auto *source = source_dc ? std::as_const(objects).dc(source_dc) : nullptr;
 			const auto *image = source ? std::as_const(objects).bitmap(source->bitmap) : nullptr;
-			if (!image || image->depth != 32 || !objects.window_visible(handle)) {
+			if (!image || image->depth != 32) {
 				call.ret(1);
 				return;
 			}
@@ -1114,7 +1115,8 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			painted->painted = true;
 			if (presentation.translucent)
 				presentation.translucent(handle, alpha || constant != 255);
-			present(handle, true);
+			if (objects.window_visible(handle))
+				present(handle, true);
 			call.ret(1);
 		} catch (const uint32_t &error) {
 			call.fail(error);

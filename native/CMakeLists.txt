@@ -5846,6 +5846,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 endif()
             endif()
             if(RAVEN_WAYLAND_SCREEN_TESTS)
+                # A layered popup drawn only through UpdateLayeredWindow, with alpha per pixel, as WPF draws its popups and message boxes.
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/layered-window.exe
+                    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-stack-protector
+                        -Wl,--entry,raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/layered-window.exe ${LOADER_SOURCES}/layered_window_client.c
+                        -lgdi32 -luser32 -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/layered_window_client.c VERBATIM)
+                add_custom_target(layered_window_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/layered-window.exe)
+                foreach(mode shown hidden)
+                    add_test(NAME native_layered_window_${mode} COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-layered-window.py
+                        $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/layered-window.exe ${CMAKE_CURRENT_BINARY_DIR}/layered-window-${mode} ${mode})
+                    set_tests_properties(native_layered_window_${mode} PROPERTIES TIMEOUT 45)
+                endforeach()
                 foreach(mode normal scaled rotated resize dark frames)
                     add_test(NAME native_screen_metrics_${mode} COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-screen-metrics.py
                         $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics.exe ${mode}

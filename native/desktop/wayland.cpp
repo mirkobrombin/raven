@@ -103,6 +103,8 @@ struct WaylandPresentation::State {
 		int32_t popup_x=0,popup_y=0;
 		bool grabbed=false;
 		bool configured=false, closed=false, resized=false, close_posted=false, first_frame=false, maximized=false, mapped=false, alpha=false;
+		// What the compositor was last told of the surface's opaque area: all of it, none of it, or nothing yet.
+		std::optional<bool> opaque;
 		// Whether the compositor's last configure shows the window maximized, whether the state Raven asked for is still to come, and
 		// whether the program was told of a state the compositor chose itself.
 		bool shown_maximized=false, state_asked=true, state_reported=false;
@@ -800,7 +802,23 @@ struct WaylandPresentation::State {
 		wl_surface_attach(window.proxy,target->proxy,0,0);
 		wl_surface_damage(window.proxy,damage[0],damage[1],damage[2],damage[3]);
 		// A close the compositor sends meanwhile is a request, which the next poll hands the program as WM_CLOSE: the surface lives on.
-		wl_surface_commit(window.proxy); window.shown=target; sync();
+		wl_surface_commit(window.proxy); window.shown=target;
+		// The compositor learns which surfaces hide what lies below them from the opaque region, and finds again what shows through a
+		// window only when that region changes, judged with the buffer already there: a layered window shown first opaque, then given
+		// alpha by UpdateLayeredWindow, otherwise keeps the windows under it hidden and shows black where it is transparent. So the region
+		// follows the new buffer in a commit of its own.
+		if (window.opaque!=!window.alpha) {
+			wl_region *region=nullptr;
+			if (!window.alpha) {
+				region=wl_compositor_create_region(compositor);
+				wl_region_add(region,0,0,INT32_MAX,INT32_MAX);
+			}
+			wl_surface_set_opaque_region(window.proxy,region);
+			if (region) wl_region_destroy(region);
+			window.opaque=!window.alpha;
+			wl_surface_commit(window.proxy);
+		}
+		sync();
 	}
 
 	void popup_surface(uint64_t handle,uint64_t parent,int32_t x,int32_t y,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,
