@@ -33,6 +33,8 @@ public:
 	std::u16string dos_path;
 	uint32_t flags;
 	std::mutex directory_mutex;
+	// Held while the file pointer is read or moved, which calls served beside the turn and in it both do (see read_beside).
+	std::mutex transfer;
 	std::shared_ptr<FindObject> directory_scan;
 	std::u16string directory_pattern;
 	bool describe(InheritedHandle &record) const override

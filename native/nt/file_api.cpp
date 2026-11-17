@@ -369,6 +369,92 @@ private:
 	bool overflowed = false;
 };
 
+// ReadFile and WriteFile of a plain file served beside the turn (ApiCall::alone): a regular file opened for synchronous transfers, no
+// OVERLAPPED, a count to report. Anything else (a pipe, a console, an overlapped handle, an error to report) is served in the turn. The
+// file pointer moves only once the guest holds what was read, so a read that needs the turn after all is served again from where it began.
+static std::shared_ptr<FileObject> plain_file(NativeObjects &objects, ApiCall &call)
+{
+	if (call[4] || !call[3] || call.u32(2) > (16U << 20))
+		throw ApiNeedsTurn{};
+	auto file = std::dynamic_pointer_cast<FileObject>(objects.object_alone(call[0], 0));
+	struct stat status{};
+	if (!file || file->directory || (file->flags & 0x40000000U) || ::fstat(file->descriptor, &status) || !S_ISREG(status.st_mode))
+		throw ApiNeedsTurn{};
+	return file;
+}
+
+static void read_beside(NativeObjects &objects, ApiCall &call)
+{
+	const auto file = plain_file(objects, call);
+	if (!file->readable())
+		throw ApiNeedsTurn{};
+	std::vector<uint8_t> buffer(call.u32(2));
+	std::lock_guard lock(file->transfer);
+	const off_t position = ::lseek(file->descriptor, 0, SEEK_CUR);
+	if (position < 0)
+		throw ApiNeedsTurn{};
+	ssize_t count;
+	do count = ::pread(file->descriptor, buffer.data(), buffer.size(), position); while (count < 0 && errno == EINTR);
+	if (count < 0)
+		throw ApiNeedsTurn{};
+	call.write(call[1], std::span<const uint8_t>(buffer.data(), size_t(count)));
+	call.store<uint32_t>(call[3], uint32_t(count));
+	::lseek(file->descriptor, position + off_t(count), SEEK_SET);
+	call.ret(1);
+}
+
+static void write_beside(NativeObjects &objects, ApiCall &call)
+{
+	const auto file = plain_file(objects, call);
+	if (!file->writable())
+		throw ApiNeedsTurn{};
+	const auto bytes = call.read(call[1], call.u32(2));
+	// The count is cleared first, as Windows does: once the bytes are written the call cannot be served again, and the count's word is
+	// known to take a store.
+	call.store<uint32_t>(call[3], 0);
+	std::lock_guard lock(file->transfer);
+	ssize_t count;
+	do count = ::write(file->descriptor, bytes.data(), bytes.size()); while (count < 0 && errno == EINTR);
+	if (count < 0)
+		throw ApiNeedsTurn{};
+	try {
+		call.store<uint32_t>(call[3], uint32_t(count));
+	} catch (const ApiNeedsTurn &) {
+		// The guest took the count's page away since the store above; the bytes stay written, as they would on Windows.
+	}
+	call.ret(1);
+}
+
+// SetFilePointer and SetFilePointerEx beside the turn: `answer` stores what the call reports, and when it needs the turn after all the
+// pointer goes back to where it was, so the call is served again from there.
+template<typename Answer> static void seek_beside(NativeObjects &objects, ApiCall &call, int64_t distance, uint32_t method, Answer answer)
+{
+	auto file = std::dynamic_pointer_cast<FileObject>(objects.object_alone(call[0], 0));
+	if (!file || method > 2)
+		throw ApiNeedsTurn{};
+	std::lock_guard lock(file->transfer);
+	const off_t before = ::lseek(file->descriptor, 0, SEEK_CUR);
+	const off_t position = before < 0 ? -1 : ::lseek(file->descriptor, off_t(distance), method == 0 ? SEEK_SET : method == 1 ? SEEK_CUR : SEEK_END);
+	if (position < 0)
+		throw ApiNeedsTurn{};
+	try {
+		answer(position);
+	} catch (const ApiNeedsTurn &) {
+		::lseek(file->descriptor, before, SEEK_SET);
+		throw;
+	}
+}
+
+// GetFileSize and GetFileSizeEx beside the turn: the size of a file the handle names, nothing for any other handle.
+static int64_t size_beside(NativeObjects &objects, ApiCall &call)
+{
+	const auto file = std::dynamic_pointer_cast<FileObject>(objects.object_alone(call[0], 0));
+	struct stat metadata{};
+	if (!file || ::fstat(file->descriptor, &metadata))
+		throw ApiNeedsTurn{};
+	return metadata.st_size;
+}
+
 void register_file_api(ApiRegistry &registry, KernelContext &context)
 {
 	auto &paths = context.paths;
@@ -521,6 +607,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		create_file(call, file->dos_path, call.u32(1), 3, call.u32(3), 0);
 	});
 	registry.add("ReadFile", 5, [&, resolve, missing, file_of](ApiCall &call) {
+		if (call.alone) {
+			read_beside(objects, call);
+			return;
+		}
 		if (transfer_pipe(context, call, true) || read_console_file(context, call))
 			return;
 		// The standard handles inherited from the host read straight from their descriptors.
@@ -549,10 +639,12 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		if (call[4]) {
 			// An OVERLAPPED offset applies to synchronous handles too, and moves their file pointer after the transfer.
 			const auto offset = call.load<uint64_t>(call[4] + 2 * call.pointer_width());
+			std::lock_guard lock(file->transfer);
 			count = ::pread(file->descriptor, buffer.data(), buffer.size(), off_t(offset));
 			if (count >= 0 && !(file->flags & 0x40000000U))
 				::lseek(file->descriptor, off_t(offset + uint64_t(count)), SEEK_SET);
 		} else {
+			std::lock_guard lock(file->transfer);
 			do count = ::read(file->descriptor, buffer.data(), buffer.size()); while (count < 0 && errno == EINTR);
 		}
 		if (count < 0) {
@@ -571,6 +663,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("WriteFile", 5, [&, resolve, missing, file_of](ApiCall &call) {
+		if (call.alone) {
+			write_beside(objects, call);
+			return;
+		}
 		if (transfer_pipe(context, call, false))
 			return;
 		const auto file = file_of(call[0]);
@@ -587,6 +683,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		ssize_t count;
 		if (call[4]) {
 			const auto offset = call.load<uint64_t>(call[4] + 2 * call.pointer_width());
+			std::lock_guard lock(file->transfer);
 			count = offset == UINT64_MAX ? ::write(file->descriptor, bytes.data(), bytes.size())
 				: ::pwrite(file->descriptor, bytes.data(), bytes.size(), off_t(offset));
 			if (count >= 0 && offset != UINT64_MAX && !(file->flags & 0x40000000U))
@@ -595,6 +692,7 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			count = TerminalConsole::instance().write_text(file->descriptor, std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size())) ?
 				ssize_t(bytes.size()) : -1;
 		} else {
+			std::lock_guard lock(file->transfer);
 			do count = ::write(file->descriptor, bytes.data(), bytes.size()); while (count < 0 && errno == EINTR);
 		}
 		if (count < 0) {
@@ -947,6 +1045,13 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("EncryptFileW", 1, [](ApiCall &call) { call.fail(50); });
 	registry.add("EncryptFileA", 1, [](ApiCall &call) { call.fail(50); });
 	registry.add("SetFilePointerEx", 4, [&, resolve, missing, file_of](ApiCall &call) {
+		if (call.alone) {
+			seek_beside(objects, call, int64_t(call[1]), call.u32(3), [&call](off_t position) {
+				if (call[2]) call.store<int64_t>(call[2], position);
+				call.ret(1);
+			});
+			return;
+		}
 		const auto file = file_of(call[0]);
 		if (!file) {
 			call.fail(6);
@@ -957,16 +1062,30 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87);
 			return;
 		}
+		std::unique_lock lock(file->transfer);
 		const off_t position = ::lseek(file->descriptor, off_t(int64_t(call[1])), method == 0 ? SEEK_SET : method == 1 ? SEEK_CUR : SEEK_END);
+		const int error = errno;
+		lock.unlock();
 		if (position < 0) {
-			call.fail(errno == EINVAL ? 131 : error_of(errno));
+			call.fail(error == EINVAL ? 131 : error_of(error));
 			return;
 		}
 		if (call[2]) call.store<int64_t>(call[2], position);
 		call.ret(1);
 	});
-	// The older form splits the distance in two words; the answer is the low word of the position, and 0xffffffff with a last error on failure.
+	// The older form splits the distance in two words; the answer is the low word of the position, and 0xffffffff with a last error on
+	// failure. A position whose low word is 0xffffffff reads the same, so that success clears the last error; any other leaves it alone.
 	registry.add("SetFilePointer", 4, [&, resolve, missing, file_of](ApiCall &call) {
+		if (call.alone) {
+			const int64_t distance = call[2] ? int64_t(uint64_t(uint32_t(call.load<int32_t>(call[2]))) << 32 | call.u32(1)) : int64_t(call.i32(1));
+			seek_beside(objects, call, distance, call.u32(3), [&call](off_t position) {
+				if (call[2]) call.store<int32_t>(call[2], int32_t(uint64_t(position) >> 32));
+				if (uint32_t(position) == 0xffffffffU)
+					call.set_last_error(0);
+				call.ret(uint32_t(position));
+			});
+			return;
+		}
 		const auto file = file_of(call[0]);
 		if (!file) {
 			call.fail(6, 0xffffffffU);
@@ -978,13 +1097,17 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		const int64_t distance = call[2] ? int64_t(uint64_t(uint32_t(call.load<int32_t>(call[2]))) << 32 | call.u32(1)) : int64_t(call.i32(1));
+		std::unique_lock lock(file->transfer);
 		const off_t position = ::lseek(file->descriptor, off_t(distance), method == 0 ? SEEK_SET : method == 1 ? SEEK_CUR : SEEK_END);
+		const int error = errno;
+		lock.unlock();
 		if (position < 0) {
-			call.fail(errno == EINVAL ? 131 : error_of(errno), 0xffffffffU);
+			call.fail(error == EINVAL ? 131 : error_of(error), 0xffffffffU);
 			return;
 		}
 		if (call[2]) call.store<int32_t>(call[2], int32_t(uint64_t(position) >> 32));
-		call.set_last_error(0);
+		if (uint32_t(position) == 0xffffffffU)
+			call.set_last_error(0);
 		call.ret(uint32_t(position));
 	});
 	// Byte-range locks map to open-file-description locks, so they conflict between handles the way Windows locks do.
@@ -1042,6 +1165,11 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		lock_range(call, F_UNLCK, call.u32(1) | (uint64_t(call.u32(2)) << 32), call.u32(3) | (uint64_t(call.u32(4)) << 32), false);
 	});
 	registry.add("GetFileSizeEx", 2, [&, resolve, missing, file_of](ApiCall &call) {
+		if (call.alone) {
+			call.store<int64_t>(call[1], size_beside(objects, call));
+			call.ret(1);
+			return;
+		}
 		const auto file = file_of(call[0]);
 		struct stat metadata{};
 		if (!file || ::fstat(file->descriptor, &metadata)) {
@@ -1051,7 +1179,16 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.store<int64_t>(call[1], metadata.st_size);
 		call.ret(1);
 	});
+	// As SetFilePointer, a size whose low word is 0xffffffff clears the last error, which tells it from a failure; any other leaves it alone.
 	registry.add("GetFileSize", 2, [&, resolve, missing, file_of](ApiCall &call) {
+		if (call.alone) {
+			const auto size = uint64_t(size_beside(objects, call));
+			if (call[1]) call.store<uint32_t>(call[1], uint32_t(size >> 32));
+			if (uint32_t(size) == 0xffffffffU)
+				call.set_last_error(0);
+			call.ret(uint32_t(size));
+			return;
+		}
 		const auto file = file_of(call[0]);
 		struct stat metadata{};
 		if (!file || ::fstat(file->descriptor, &metadata)) {
@@ -1059,7 +1196,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		if (call[1]) call.store<uint32_t>(call[1], uint32_t(uint64_t(metadata.st_size) >> 32));
-		call.set_last_error(0);
+		if (uint32_t(metadata.st_size) == 0xffffffffU)
+			call.set_last_error(0);
 		call.ret(uint32_t(metadata.st_size));
 	});
 	registry.add("GetFileType", 1, [&, resolve, missing, file_of](ApiCall &call) {

@@ -199,10 +199,15 @@ static bool served_api(std::string_view module, std::string_view name)
 	return name.starts_with("vkCmd") || std::find(recording.begin(), recording.end(), name) != recording.end();
 }
 
-// Calls of the registry, which keeps its own lock: with a host thread for each guest thread they are answered beside the turn, by the
-// handler the usual way runs, unless they need the turn after all (see ApiCall::alone).
+// Calls of subsystems that keep their own lock: with a host thread for each guest thread they are answered beside the turn, by the
+// handler the usual way runs, unless they need the turn after all (see ApiCall::alone). The registry, and the transfers of plain files
+// under each file's lock (see read_beside).
 static bool beside_api(std::string_view module, std::string_view name)
 {
+	static constexpr std::array<std::string_view, 6> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
+		"GetFileSizeEx"};
+	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
+		return true;
 	if (module != "advapi32.dll" && module != "kernelbase.dll")
 		return false;
 	static constexpr std::array<std::string_view, 10> registry{"RegOpenKeyEx", "RegCreateKeyEx", "RegQueryValueEx", "RegSetValueEx", "RegCloseKey",
