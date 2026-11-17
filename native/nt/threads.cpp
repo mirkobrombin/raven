@@ -1138,6 +1138,108 @@ std::optional<uint32_t> NativeThreads::wait_beside(std::span<const uint32_t> obj
 	return result;
 }
 
+// Takes what a wait on objects other processes share can take, or sleeps on their words until one of them changes, the host calls the
+// thread away (wait_outside waits again after a job) or `until` passes. A pulse reaches such a wait only if it looks before the event
+// is reset, as it does in another process.
+uint32_t NativeThreads::sleep_on_words(GuestThread &me, const std::vector<std::shared_ptr<KernelObject>> &held,
+	const std::vector<std::atomic<uint32_t> *> &words, bool all, std::optional<std::chrono::steady_clock::time_point> until)
+{
+	std::vector<uint32_t> seen(words.size());
+	for (;;) {
+		const uint32_t calls = me.calls.load();
+		if (calls != me.calls_seen) {
+			me.calls_seen = calls;
+			return raven_wait_interrupted;
+		}
+		for (size_t index = 0; index < words.size(); ++index)
+			seen[index] = words[index]->load();
+		if (all) {
+			if (std::all_of(held.begin(), held.end(), [&](const auto &object) { return object->signaled(me.id) == 1; })) {
+				bool taken = true;
+				for (const auto &object : held)
+					taken = object->try_consume(me.id) && taken;
+				if (taken)
+					return 0;
+			}
+		} else {
+			for (size_t index = 0; index < held.size(); ++index)
+				if (held[index]->signaled(me.id) == 1 && held[index]->try_consume(me.id))
+					return uint32_t(index);
+		}
+		timespec deadline{};
+		if (until) {
+			const auto left = until->time_since_epoch();
+			if (std::chrono::steady_clock::now() >= *until)
+				return 0x102;
+			deadline.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(left).count();
+			deadline.tv_nsec = (std::chrono::duration_cast<std::chrono::nanoseconds>(left) % std::chrono::seconds(1)).count();
+		}
+		wait_words(words, seen, me.calls, calls, until ? &deadline : nullptr);
+	}
+}
+
+// Whether the kernel can sleep on several words at once (futex_waitv, Linux 5.16): an empty list is refused as invalid where it can.
+bool NativeThreads::can_wait_words()
+{
+	static const bool supported = ::syscall(SYS_futex_waitv, nullptr, 0, 0, nullptr, CLOCK_MONOTONIC) < 0 && errno != ENOSYS;
+	return supported;
+}
+
+std::optional<uint32_t> NativeThreads::wait_shared_beside(const std::vector<std::shared_ptr<KernelObject>> &held,
+	const std::vector<std::atomic<uint32_t> *> &words, bool all, uint32_t milliseconds)
+{
+	GuestThread *const me = parked_here;
+	if (!me) {
+		beside_wanted = true;
+		return std::nullopt;
+	}
+	if (!waits_outside() || held.empty() || held.size() != words.size() || !can_wait_words())
+		return std::nullopt;
+	std::optional<std::chrono::steady_clock::time_point> until;
+	if (milliseconds != UINT32_MAX)
+		until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+	// As in wait_beside: the main thread waits no longer than the run may last, and a wait without a time-out counts as endless.
+	const bool endless = !until;
+	const bool limited = me->main && (!until || deadline < *until);
+	if (limited)
+		until = deadline;
+	{
+		std::lock_guard lock(gate);
+		if (me->unwinding || me->state == GuestThread::State::done || me->paused || me->job || tearing_down)
+			return std::nullopt;
+		me->outside = true;
+		me->outside_endless = endless;
+		me->state = GuestThread::State::waiting;
+		me->waits.fetch_add(1, std::memory_order_release);
+	}
+	moved();
+	uint32_t result = raven_wait_interrupted;
+	for (;;) {
+		result = sleep_on_words(*me, held, words, all, until);
+		if (result != raven_wait_interrupted)
+			break;
+		std::unique_lock lock(gate);
+		if (!me->job)
+			break;
+		run_job(*me, lock);
+		if (me->unwinding || me->state == GuestThread::State::done)
+			break;
+	}
+	{
+		std::lock_guard lock(gate);
+		me->outside = false;
+		if (me->state == GuestThread::State::waiting)
+			me->state = GuestThread::State::running;
+	}
+	me->turns.fetch_add(1, std::memory_order_relaxed);
+	moved();
+	// Called away for anything but a job, the wait took nothing: the usual way waits again and finds out why (an APC, a suspension, the
+	// thread's end). A time-out of the main thread's limit is the run's, which the usual way ends.
+	if (result == raven_wait_interrupted || (limited && result == 0x102))
+		return std::nullopt;
+	return result;
+}
+
 void NativeThreads::tell(GuestThread &thread)
 {
 	if (!threaded)

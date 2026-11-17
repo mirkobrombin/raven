@@ -3441,6 +3441,23 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					return std::nullopt;
 				return threads.wait_beside(objects, all, milliseconds);
 			};
+			// Objects other processes share (named events, mutexes and semaphores) keep their state in words the processes map: a wait
+			// for those alone sleeps on the words beside the turn too, as the usual way does once it has the turn.
+			const auto wait_shared = [&](std::span<const uint64_t> handles, bool all, uint32_t milliseconds) -> std::optional<uint64_t> {
+				std::vector<std::shared_ptr<KernelObject>> held;
+				std::vector<std::atomic<uint32_t> *> words;
+				for (const uint64_t handle : handles) {
+					std::shared_ptr<KernelObject> object = kernel_objects.event_alone(handle, 0x100000);
+					if (!object)
+						object = kernel_objects.object_alone(handle, 0x100000);
+					auto *word = object ? object->wait_word() : nullptr;
+					if (!word)
+						return std::nullopt;
+					held.push_back(std::move(object));
+					words.push_back(word);
+				}
+				return threads.wait_shared_beside(held, words, all, milliseconds);
+			};
 			if (const auto multiple = std::find_if(multiple_stubs.begin(), multiple_stubs.end(), [stub](const auto &entry) { return entry.first == stub; });
 				multiple != multiple_stubs.end()) {
 				const auto count = uint32_t(arguments[0]);
@@ -3456,7 +3473,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				uint32_t objects[64];
 				for (uint32_t index = 0; index < count; ++index)
 					if (!(objects[index] = table_of(handles[index])))
-						return std::nullopt;
+						return wait_shared(std::span(handles, count), uint32_t(arguments[2]) != 0, uint32_t(arguments[3]));
 				return wait_table(std::span(objects, count), uint32_t(arguments[2]) != 0, uint32_t(arguments[3]));
 			}
 			if (std::find(mutex_stubs.begin(), mutex_stubs.end(), stub) != mutex_stubs.end()) {
@@ -3495,9 +3512,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			if (found->second == EventCall::wait || found->second == EventCall::wait_ex) {
 				// An event, a semaphore with a count or a mutex is taken here; one that would block is waited for here as well, by a host
 				// thread whose guest spins in its stub.
-				const uint32_t object = table_of(arguments[0]);
-				if (!object || (found->second == EventCall::wait_ex && uint32_t(arguments[2])))
+				if (found->second == EventCall::wait_ex && uint32_t(arguments[2]))
 					return std::nullopt;
+				const uint32_t object = table_of(arguments[0]);
+				if (!object)
+					return wait_shared(std::span(&arguments[0], 1), false, uint32_t(arguments[1]));
 				return wait_table(std::span(&object, 1), false, uint32_t(arguments[1]));
 			}
 			const auto event = kernel_objects.event_alone(arguments[0]);

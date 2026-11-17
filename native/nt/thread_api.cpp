@@ -54,53 +54,6 @@ struct SemaphoreState {
 	int32_t maximum = 0;
 };
 
-// Takes what a wait on objects other processes share can take, or sleeps on their words until one of them changes, the host calls the
-// thread away (wait_outside waits again after a job) or `until` passes. A pulse reaches such a wait only if it looks before the event
-// is reset, as it does in another process.
-static uint32_t sleep_on_words(GuestThread &me, const std::vector<std::shared_ptr<KernelObject>> &held,
-	const std::vector<std::atomic<uint32_t> *> &words, bool all, std::optional<std::chrono::steady_clock::time_point> until)
-{
-	std::vector<uint32_t> seen(words.size());
-	for (;;) {
-		const uint32_t calls = me.calls.load();
-		if (calls != me.calls_seen) {
-			me.calls_seen = calls;
-			return raven_wait_interrupted;
-		}
-		for (size_t index = 0; index < words.size(); ++index)
-			seen[index] = words[index]->load();
-		if (all) {
-			if (std::all_of(held.begin(), held.end(), [&](const auto &object) { return object->signaled(me.id) == 1; })) {
-				bool taken = true;
-				for (const auto &object : held)
-					taken = object->try_consume(me.id) && taken;
-				if (taken)
-					return 0;
-			}
-		} else {
-			for (size_t index = 0; index < held.size(); ++index)
-				if (held[index]->signaled(me.id) == 1 && held[index]->try_consume(me.id))
-					return uint32_t(index);
-		}
-		timespec deadline{};
-		if (until) {
-			const auto left = until->time_since_epoch();
-			if (std::chrono::steady_clock::now() >= *until)
-				return 0x102;
-			deadline.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(left).count();
-			deadline.tv_nsec = (std::chrono::duration_cast<std::chrono::nanoseconds>(left) % std::chrono::seconds(1)).count();
-		}
-		wait_words(words, seen, me.calls, calls, until ? &deadline : nullptr);
-	}
-}
-
-// Whether the kernel can sleep on several words at once (futex_waitv, Linux 5.16): an empty list is refused as invalid where it can.
-static bool can_wait_words()
-{
-	static const bool supported = ::syscall(SYS_futex_waitv, nullptr, 0, 0, nullptr, CLOCK_MONOTONIC) < 0 && errno != ENOSYS;
-	return supported;
-}
-
 // A semaphore without a name lives in the process's table (kernel_waits.h); a named one in the memory the processes share.
 class SemaphoreObject : public KernelObject {
 public:
@@ -336,7 +289,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		// Objects other processes share, when the wait is for them alone, with the words they change.
 		std::vector<std::shared_ptr<KernelObject>> held;
 		std::vector<std::atomic<uint32_t> *> words;
-		if (table.empty() && threads.waits_outside() && can_wait_words())
+		if (table.empty() && threads.waits_outside() && NativeThreads::can_wait_words())
 			for (const auto handle : resolved) {
 				auto object = objects.object(handle);
 				auto *word = object ? object->wait_word() : nullptr;
@@ -459,7 +412,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			if (!held.empty()) {
 				auto &self = threads.current();
 				const uint32_t result = threads.wait_outside([&](std::optional<std::chrono::steady_clock::time_point> until) {
-					return sleep_on_words(self, held, words, all, until);
+					return NativeThreads::sleep_on_words(self, held, words, all, until);
 				}, wake);
 				if (result < 64 || result == wait_timeout)
 					return result;

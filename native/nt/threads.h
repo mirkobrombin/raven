@@ -198,6 +198,16 @@ public:
 	// turn: the result of raven_waits_wait (an index, an abandoned one or a time-out), or nothing when the wait has to go the usual way,
 	// which then finds the object as this left it. Only a parked host thread waits here; the main one no longer than the run may last.
 	std::optional<uint32_t> wait_beside(std::span<const uint32_t> objects, bool all, uint32_t milliseconds);
+	// The same for objects other processes share, whose waits sleep on their words (KernelObject::wait_word): an index or a time-out,
+	// or nothing for the usual way. `held` and `words` go together, one word for each object.
+	std::optional<uint32_t> wait_shared_beside(const std::vector<std::shared_ptr<KernelObject>> &held,
+		const std::vector<std::atomic<uint32_t> *> &words, bool all, uint32_t milliseconds);
+	// Takes what a wait on shared objects can take, or sleeps on their words until one changes, the thread is called away or `until`
+	// passes: an index, 0x102, or raven_wait_interrupted.
+	static uint32_t sleep_on_words(GuestThread &me, const std::vector<std::shared_ptr<KernelObject>> &held,
+		const std::vector<std::atomic<uint32_t> *> &words, bool all, std::optional<std::chrono::steady_clock::time_point> until);
+	// Whether the kernel can sleep on several words at once (futex_waitv, Linux 5.16).
+	static bool can_wait_words();
 	// Whether waits on the objects of the process's table (kernel_waits.h) block their host thread there, as they do with a host thread
 	// for each guest thread. RAVEN_POLLED_WAITS=1 has them looked at by the scheduler instead, as the waits on other objects are, to
 	// compare the two.
