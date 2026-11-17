@@ -693,7 +693,7 @@
       "license": "LicenseRef-Configuration-Dependent",
       "review": "requires-release-inventory",
       "provenance": "LICENSES.md and docs/packaging.md",
-      "boundary": "Skia, libpng and the fonts ship with their notices in LICENSES/; DXVK and vkd3d-proton ship with their notices and the source they were built from; Microsoft's code signing roots are not shipped and the runtime downloads them."
+      "boundary": "Skia, libpng, OpenSSL and the fonts ship with their notices in LICENSES/; DXVK and vkd3d-proton ship with their notices and the source they were built from; Microsoft's code signing roots are not shipped and the runtime downloads them."
     }
   ]
 }

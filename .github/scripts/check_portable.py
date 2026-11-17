@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check that host binaries start on the oldest system a release supports.
 
-A binary may ask for no glibc symbol version newer than the one given, and may need only shared libraries whose names that system
-has as well: libssl.so.3 and not libssl.so.4, say.
+A binary may ask for no glibc symbol version newer than the one given, and may need only shared libraries whose names every supported
+system has: not OpenSSL's, which is libssl.so.3 on one and libssl.so.4 on another.
 
 usage: check_portable.py GLIBC_VERSION BINARY...
 """
@@ -11,8 +11,8 @@ import re
 import subprocess
 import sys
 
-# Shared libraries a supported system may lack under these names.
-UNAVAILABLE = re.compile(r"^lib(ssl|crypto)\.so\.([4-9]|\d\d)")
+# Shared libraries a supported system may lack under these names: each distribution has OpenSSL under its own major version.
+UNAVAILABLE = re.compile(r"^lib(ssl|crypto)\.so")
 
 
 def version(text):
