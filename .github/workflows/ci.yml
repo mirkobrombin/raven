@@ -92,7 +92,7 @@ jobs:
           done
           echo "${#shells[@]} shell scripts parsed"
 
-  # The waits on kernel objects: native/model/Waits.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
+  # The waits on kernel objects: native/model/Waits.tla and Address.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
   # which tries every interleaving of its cases.
   models:
     name: Models
@@ -120,6 +120,9 @@ jobs:
           cd native/model
           for config in MCWaits.cfg MCWaitsThree.cfg; do
             java -XX:+UseParallelGC -cp /tmp/tla2tools.jar tlc2.TLC -workers auto -metadir /tmp/tlc -config "${config}" MCWaits.tla
+          done
+          for config in MCAddressSections.cfg MCAddressSrw.cfg; do
+            java -XX:+UseParallelGC -cp /tmp/tla2tools.jar tlc2.TLC -workers auto -metadir /tmp/tlc -config "${config}" MCAddress.tla
           done
 
       - name: Test the implementation
