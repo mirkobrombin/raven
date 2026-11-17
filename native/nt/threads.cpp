@@ -1174,7 +1174,9 @@ void NativeThreads::wake_ready(GuestThread *except, bool all)
 		if (candidate->state == GuestThread::State::waiting) {
 			// A condition that cannot be looked at from here is looked at by its own thread, which then sees why.
 			bool ready = candidate->wake && now >= *candidate->wake;
-			if (!ready && candidate->ready && !candidate->told_only && (all || candidate->polled || (candidate->seen_signals != told && looks))) {
+			// A wait its waker lines up (see tell) is left out of the frequent looks, not of the whole one each millisecond: a tell that came
+			// in a gap of the hand-over costs that millisecond instead of the thread.
+			if (!ready && candidate->ready && (!candidate->told_only || all) && (all || candidate->polled || (candidate->seen_signals != told && looks))) {
 				if (!all && !candidate->polled && !--looks)
 					scan_from = first + step + 1;
 				ready = true;

@@ -3647,6 +3647,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_test(NAME native_kernel_heap_stress COMMAND raven --run-process --execution=native --timeout-ms=120000 ${CMAKE_CURRENT_BINARY_DIR}/kernel-heap-stress.exe)
         set_tests_properties(native_kernel_files native_kernel_ansi native_kernel_threads native_kernel_shlwapi native_kernel_heap_stress PROPERTIES TIMEOUT 150
             PASS_REGULAR_EXPRESSION "Native entry returned 0 " ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+        # Twenty runs of the heap stress: a thread whose wake from WaitOnAddress was lost hung about one run in thirteen.
+        add_test(NAME native_kernel_heap_stress_repeat COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-repeat.py
+            $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/kernel-heap-stress.exe 20 8)
+        set_tests_properties(native_kernel_heap_stress_repeat PROPERTIES TIMEOUT 400 PASS_REGULAR_EXPRESSION "20 runs passed"
+            ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/heap-stress-repeat-prefix)
         add_test(NAME native_kernel_file_persistence COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check-file-persistence.py ${KERNEL_PREFIX})
         set_tests_properties(native_kernel_file_persistence PROPERTIES TIMEOUT 15 DEPENDS native_kernel_files)
         set(RAVEN_CLANG_MINGW_INCLUDE)
