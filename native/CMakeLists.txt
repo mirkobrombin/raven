@@ -1823,8 +1823,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(geometry_negative_fixture ALL DEPENDS ${GEOMETRY_NEGATIVE})
         add_test(NAME native_geometry_boundary COMMAND raven --run-process --execution=native ${GEOMETRY_NEGATIVE})
         set_tests_properties(native_geometry_boundary PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
-        # The code signing roots Windows trusts (scripts/provision-roots.py), beside the runtime in roots/: signatures of installers and
-        # their packages are checked against them.
+        # The code signing roots Windows trusts (scripts/provision-roots.py), beside the runtime in roots/ for the tests, which then
+        # need no network. A release does not ship them: the runtime downloads them the first time it checks a signature.
         set(RAVEN_ROOT_CERTIFICATE_DIRECTORY "" CACHE PATH "Directory holding the root certificates downloaded by scripts/provision-roots.py")
         if(RAVEN_ROOT_CERTIFICATE_DIRECTORY)
             file(GLOB root_certificates ${RAVEN_ROOT_CERTIFICATE_DIRECTORY}/*.crt)
@@ -1838,8 +1838,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 list(APPEND root_copies ${CMAKE_CURRENT_BINARY_DIR}/roots/${certificate_name})
             endforeach()
             add_custom_target(root_certificates ALL DEPENDS ${root_copies})
-        else()
-            message(WARNING "RAVEN_ROOT_CERTIFICATE_DIRECTORY is not set: installers that check the signatures of Microsoft packages fail with 0x800b010a. Run scripts/provision-roots.py and configure again with its output directory.")
         endif()
         # The Windows Installer components (scripts/provision-installer.py): msi, cabinet, sxs and structured storage, for each program width.
         set(RAVEN_INSTALLER_COMPONENT_DIR "" CACHE PATH "Directory holding the installer components built by scripts/provision-installer.py")

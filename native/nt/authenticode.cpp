@@ -10,6 +10,7 @@
 #endif
 
 #include <algorithm>
+#include <cerrno>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -22,6 +23,11 @@
 #include <memory>
 #include <optional>
 #include <string>
+
+#include <netdb.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace raven {
 
@@ -389,6 +395,96 @@ std::vector<uint8_t> der_of(X509 *certificate)
 
 }
 
+namespace {
+
+struct CodeSigningRoot {
+	const char *name, *url, *sha256;
+};
+
+constexpr CodeSigningRoot code_signing_roots[] = {
+#include "code_signing_roots.inc"
+};
+
+std::string hex_sha256(const std::string &bytes)
+{
+	unsigned char digest[32];
+	unsigned int length = 0;
+	EVP_Digest(bytes.data(), bytes.size(), digest, &length, EVP_sha256(), nullptr);
+	std::string text;
+	for (unsigned int index = 0; index < length; ++index) {
+		char pair[3];
+		std::snprintf(pair, sizeof pair, "%02x", digest[index]);
+		text += pair;
+	}
+	return text;
+}
+
+// The body of a plain HTTP GET, or nothing when the server is out of reach within a few seconds or does not answer 200. The table's
+// digest, not the transport, vouches for what arrives.
+std::optional<std::string> http_get(std::string_view url)
+{
+	constexpr std::string_view scheme = "http://";
+	if (!url.starts_with(scheme))
+		return std::nullopt;
+	const auto rest = url.substr(scheme.size());
+	const auto slash = rest.find('/');
+	const std::string host(rest.substr(0, slash)), path(slash == rest.npos ? "/" : rest.substr(slash));
+	addrinfo hints{}, *found = nullptr;
+	hints.ai_socktype = SOCK_STREAM;
+	if (::getaddrinfo(host.c_str(), "80", &hints, &found) || !found)
+		return std::nullopt;
+	const std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)> addresses(found, ::freeaddrinfo);
+	const int descriptor = ::socket(found->ai_family, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+	if (descriptor < 0)
+		return std::nullopt;
+	const std::unique_ptr<int, void (*)(int *)> closing(new int(descriptor), [](int *held) { ::close(*held); delete held; });
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	const auto wait = [&](short events) {
+		const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+		pollfd poll_for{descriptor, events, 0};
+		return left > 0 && ::poll(&poll_for, 1, int(left)) == 1;
+	};
+	if (::connect(descriptor, found->ai_addr, found->ai_addrlen) && (errno != EINPROGRESS || !wait(POLLOUT)))
+		return std::nullopt;
+	const std::string request = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: raven\r\nConnection: close\r\n\r\n";
+	for (size_t sent = 0; sent < request.size();) {
+		const auto written = ::send(descriptor, request.data() + sent, request.size() - sent, MSG_NOSIGNAL);
+		if (written > 0)
+			sent += size_t(written);
+		else if (written < 0 && errno == EAGAIN && wait(POLLOUT))
+			continue;
+		else
+			return std::nullopt;
+	}
+	std::string response;
+	for (char buffer[16384];;) {
+		const auto got = ::recv(descriptor, buffer, sizeof buffer, 0);
+		if (got > 0) {
+			response.append(buffer, size_t(got));
+			if (response.size() > (1 << 20))
+				return std::nullopt;
+		} else if (got == 0)
+			break;
+		else if (errno != EAGAIN || !wait(POLLIN))
+			return std::nullopt;
+	}
+	const auto header_end = response.find("\r\n\r\n");
+	if (header_end == response.npos || !(response.starts_with("HTTP/1.0 200") || response.starts_with("HTTP/1.1 200")))
+		return std::nullopt;
+	return response.substr(header_end + 4);
+}
+
+// Where the runtime keeps the code signing roots it downloaded: a cache, since it can always fetch them again.
+std::filesystem::path downloaded_roots()
+{
+	const char *cache = std::getenv("XDG_CACHE_HOME"), *home = std::getenv("HOME");
+	if (cache && *cache)
+		return std::filesystem::path(cache) / "raven-roots";
+	return home && *home ? std::filesystem::path(home) / ".cache" / "raven-roots" : std::filesystem::path();
+}
+
+}
+
 X509_STORE *trust_anchors()
 {
 	static X509_STORE *store = [] {
@@ -398,13 +494,35 @@ X509_STORE *trust_anchors()
 		for (const char *path : {"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"})
 			if (X509_STORE_load_file(created, path))
 				break;
+		// The code signing roots every Windows installation has: those a build put beside the runtime, else the ones downloaded before,
+		// and any still missing are fetched from Microsoft now, once, and kept when their digest matches the table.
 		std::error_code error;
-		const auto roots = std::filesystem::read_symlink("/proc/self/exe", error).parent_path() / "roots";
-		for (const auto &entry : std::filesystem::directory_iterator(roots, error)) {
-			std::ifstream input(entry.path(), std::ios::binary);
-			const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+		const auto beside = std::filesystem::read_symlink("/proc/self/exe", error).parent_path() / "roots";
+		const auto cached = downloaded_roots();
+		// Without a network the first failed download stops the others, so a computer offline waits for one attempt only.
+		bool reachable = !cached.empty() && !std::getenv("RAVEN_NO_ROOT_DOWNLOAD");
+		for (const auto &root : code_signing_roots) {
+			std::string bytes;
+			for (const auto &directory : {beside, cached}) {
+				std::ifstream input(directory / root.name, std::ios::binary);
+				bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+				if (!bytes.empty() && hex_sha256(bytes) == root.sha256)
+					break;
+				bytes.clear();
+			}
+			if (bytes.empty() && reachable) {
+				const auto fetched = http_get(root.url);
+				reachable = fetched.has_value();
+				if (fetched && hex_sha256(*fetched) == root.sha256) {
+					bytes = *fetched;
+					std::filesystem::create_directories(cached, error);
+					const auto partial = cached / (std::string(root.name) + ".partial");
+					if (std::ofstream(partial, std::ios::binary).write(bytes.data(), std::streamsize(bytes.size())))
+						std::filesystem::rename(partial, cached / root.name, error);
+				}
+			}
 			const auto *at = reinterpret_cast<const unsigned char *>(bytes.data());
-			if (X509 *certificate = d2i_X509(nullptr, &at, long(bytes.size()))) {
+			if (X509 *certificate = bytes.empty() ? nullptr : d2i_X509(nullptr, &at, long(bytes.size()))) {
 				X509_STORE_add_cert(created, certificate);
 				X509_free(certificate);
 			}

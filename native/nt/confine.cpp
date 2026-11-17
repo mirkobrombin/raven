@@ -396,7 +396,8 @@ bool confine(const std::filesystem::path &prefix, bool abstract_sockets)
 	const auto home = environment_path("HOME");
 	if (!home.empty()) {
 		const auto cache = environment_path("XDG_CACHE_HOME").empty() ? home / ".cache" : environment_path("XDG_CACHE_HOME");
-		for (const char *kept : {"mesa_shader_cache", "mesa_shader_cache_db", "fontconfig"}) {
+		// raven-roots holds the code signing roots the runtime downloads from Microsoft the first time it checks a signature.
+		for (const char *kept : {"mesa_shader_cache", "mesa_shader_cache_db", "fontconfig", "raven-roots"}) {
 			std::filesystem::create_directories(cache / kept, error);
 			allow(ruleset, cache / kept, all, all);
 		}
