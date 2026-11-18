@@ -109,6 +109,9 @@ public:
 	const RuntimeStats &stats() const { return counters; }
 	// The runtime whose guest code is running on this thread, for native functions that need it.
 	static Runtime *current();
+	// Whether this CPU has FEAT_AFP (host::alternate_floating_point); a runtime without a runner refuses to start without it. Tests
+	// replace it to simulate a CPU that lacks it.
+	static bool (*host_has_afp)();
 
 	// Makes a guest call to address run function, taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
 	// Only without a runner: the thunk calls function in this process.

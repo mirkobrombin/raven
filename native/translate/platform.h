@@ -24,5 +24,7 @@ size_t page_size();
 // Whether the CPU orders memory as x86 does for this thread (TSO). False on macOS for native processes; true inside a VM whose vCPU has
 // ACTLR_EL1.TSOEN set.
 bool hardware_tso();
+// Whether the CPU has FEAT_AFP: FPCR.AH and FIZ, on which translated SSE code relies for x86's NaNs, min and max and DAZ.
+bool alternate_floating_point();
 
 }

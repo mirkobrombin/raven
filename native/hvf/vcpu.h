@@ -21,6 +21,9 @@ public:
 	~Vcpu() override;
 	Vcpu(const Vcpu &) = delete;
 	Vcpu &operator=(const Vcpu &) = delete;
+	// Test seam: replaces ID_AA64MMFR1_EL1 as the vCPU reports it, to simulate a CPU without FEAT_AFP. The constructor refuses a vCPU
+	// whose AFP field (bits 47:44) is zero: translated SSE code needs FPCR.AH.
+	static std::function<uint64_t(uint64_t)> id_aa64mmfr1_override;
 
 	// Resumes the dispatcher, which enters code through trampoline with the CpuState at state; returns once translated code exits.
 	uint32_t enter(uint64_t trampoline, uint64_t state, uint64_t code) override;

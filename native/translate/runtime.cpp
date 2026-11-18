@@ -58,10 +58,16 @@ Runtime::Thread::Thread(Runtime &runtime, CodeRunner *runner)
 	cpu.exit_trampoline = reinterpret_cast<uint64_t>(runtime.exit);
 }
 
+bool (*Runtime::host_has_afp)() = host::alternate_floating_point;
+
 Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options, CodeRunner *runner)
 	: memory(memory), cache(cache), options(options), lookup_memory(cache, sizeof(LookupEntry) << lookup_bits),
 	  lookup(static_cast<LookupEntry *>(lookup_memory.data.host), size_t(1) << lookup_bits)
 {
+	// Translated code runs with FPCR.AH set; without FEAT_AFP the bit reads as zero and SSE would quietly follow Arm instead of x86.
+	// A runner (a vCPU) checks its own CPU.
+	if (!runner && !host_has_afp())
+		throw std::runtime_error("this CPU lacks FEAT_AFP (FPCR.AH), which translated SSE code needs for x86's NaN, min and max");
 	std::fill(lookup.begin(), lookup.end(), LookupEntry{});
 	place_fixed_code();
 	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));

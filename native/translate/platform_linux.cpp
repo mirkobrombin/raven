@@ -1,6 +1,7 @@
 #include "platform.h"
 
 #include <stdexcept>
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -50,6 +51,12 @@ void flush_instruction_cache(void *start, size_t size)
 size_t page_size()
 {
 	return static_cast<size_t>(sysconf(_SC_PAGESIZE));
+}
+
+bool alternate_floating_point()
+{
+	// HWCAP2_AFP (arch/arm64/include/uapi/asm/hwcap.h).
+	return (getauxval(AT_HWCAP2) & (1ul << 20)) != 0;
 }
 
 bool hardware_tso()

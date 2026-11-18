@@ -59,6 +59,8 @@ constexpr uint64_t actlr_tso = 1 << 1;
 
 }
 
+std::function<uint64_t(uint64_t)> Vcpu::id_aa64mmfr1_override;
+
 Vcpu::Vcpu(Vm &vm, bool tso) : vm(vm)
 {
 	static_assert(offsetof(Mailbox, invalidate_instruction_cache) == 24);
@@ -67,6 +69,12 @@ Vcpu::Vcpu(Vm &vm, bool tso) : vm(vm)
 		mailbox_address = vm.map_anywhere(sizeof(Mailbox), Access::read_write);
 		mailbox = reinterpret_cast<Mailbox *>(vm.host(mailbox_address));
 		stack_top = vm.map_anywhere(stack_size, Access::read_write) + stack_size;
+		uint64_t mmfr1 = 0;
+		check(hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ID_AA64MMFR1_EL1, &mmfr1), "hv_vcpu_get_sys_reg");
+		if (id_aa64mmfr1_override)
+			mmfr1 = id_aa64mmfr1_override(mmfr1);
+		if (((mmfr1 >> 44) & 15) == 0)
+			throw std::runtime_error("the vCPU lacks FEAT_AFP (FPCR.AH), which translated SSE code needs for x86's NaN, min and max");
 		check(hv_vcpu_set_vtimer_mask(vcpu, true), "hv_vcpu_set_vtimer_mask");
 		const std::pair<hv_sys_reg_t, uint64_t> registers[] = {
 			{HV_SYS_REG_MAIR_EL1, 0xff},

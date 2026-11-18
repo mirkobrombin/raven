@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 // Apple silicon allows writable and executable memory only as MAP_JIT, switched between the two per thread
@@ -45,6 +46,13 @@ void flush_instruction_cache(void *start, size_t size)
 size_t page_size()
 {
 	return static_cast<size_t>(getpagesize());
+}
+
+bool alternate_floating_point()
+{
+	int value = 0;
+	size_t size = sizeof value;
+	return sysctlbyname("hw.optional.arm.FEAT_AFP", &value, &size, nullptr, 0) == 0 && value != 0;
 }
 
 bool hardware_tso()
