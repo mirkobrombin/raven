@@ -150,6 +150,48 @@ static int far_summary_section(void)
 	return result;
 }
 
+/* A transform deleting the row of T whose key is 5000 characters long, applied only to view what it changes: the row shows in the
+   view whole, however long its key. */
+static int long_transform_key(void)
+{
+	static const GUID transform = {0x000c1082, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+	static const WORD package_pool[] = {0, 0, 1, 1, 1, 1, 0, 0, 3, 1}, pool[] = {0, 0, 5000, 1}, change[] = {0, 1};
+	static char key[5000];
+	static WCHAR row[5040];
+	WCHAR package[MAX_PATH], path[MAX_PATH], directory[MAX_PATH];
+	IStorage *storage;
+	for (int i = 0; i < 5000; ++i)
+		key[i] = 'k';
+	if (!write_package(package, package_pool, sizeof package_pool, NULL, 0))
+		return 103;
+	GetTempPathW(MAX_PATH, directory);
+	GetTempFileNameW(directory, L"rvn", 0, path);
+	if (FAILED(StgCreateDocfile(path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0, &storage)))
+		return 103;
+	BOOL written = SUCCEEDED(IStorage_SetClass(storage, &transform)) && put_stream(storage, L"_StringPool", pool, sizeof pool) &&
+		put_stream(storage, L"_StringData", key, sizeof key) && put_stream(storage, L"T", change, sizeof change);
+	IStorage_Release(storage);
+	if (!written)
+		return 103;
+	MSIHANDLE database = 0, view = 0, record = 0;
+	DWORD size = 5040;
+	int result = 0;
+	if (MsiOpenDatabaseW(package, (LPCWSTR)MSIDBOPEN_READONLY, &database) != ERROR_SUCCESS ||
+		MsiDatabaseApplyTransformW(database, path, 0x100 /* MSITRANSFORM_ERROR_VIEWTRANSFORM */) != ERROR_SUCCESS)
+		result = 104;
+	else if (MsiDatabaseOpenViewW(database, L"SELECT `Row` FROM `_TransformView` WHERE `Column` = 'DELETE'", &view) != ERROR_SUCCESS ||
+		MsiViewExecute(view, 0) != ERROR_SUCCESS || MsiViewFetch(view, &record) != ERROR_SUCCESS)
+		result = 105;
+	else if (MsiRecordGetStringW(record, 1, row, &size) != ERROR_SUCCESS || size != 5000 || row[0] != L'k' || row[4999] != L'k')
+		result = 106;
+	MsiCloseHandle(record);
+	MsiCloseHandle(view);
+	MsiCloseHandle(database);
+	DeleteFileW(path);
+	DeleteFileW(package);
+	return result;
+}
+
 int raven_entry(void)
 {
 	WCHAR package[MAX_PATH], text[64];
@@ -245,5 +287,7 @@ int raven_entry(void)
 		MsiCloseHandle(record);
 	}
 	int result = long_pool_entry();
-	return result ? result : far_summary_section();
+	if (!result)
+		result = far_summary_section();
+	return result ? result : long_transform_key();
 }
