@@ -25,8 +25,17 @@ constexpr uint64_t stack_size = 64 << 10;
 
 // ESR exception classes.
 constexpr uint64_t hvc_class = 0x16, lower_data_abort_class = 0x24;
-// ISS of a data abort: WnR, FnV.
-constexpr uint64_t write_not_read = 1 << 6, far_not_valid = 1 << 10;
+// ISS of a data abort: WnR, S1PTW (the fault came from a stage-1 table walk), FnV, and the DFSC. A store to a page hv_vm_protect made
+// read-only arrives as a translation fault at level 3 (DFSC 0b000111, syndrome 0x93880047 here), not as a permission fault
+// (0b0011xx), so both count.
+constexpr uint64_t write_not_read = 1 << 6, table_walk = 1 << 7, far_not_valid = 1 << 10;
+
+bool stage2_store_fault(uint64_t syndrome)
+{
+	const uint64_t status = syndrome & 0x3c;
+	return syndrome >> 26 == lower_data_abort_class && syndrome & write_not_read && !(syndrome & (table_walk | far_not_valid)) &&
+		(status == 0x04 || status == 0x0c);
+}
 
 void check(hv_return_t result, const char *what)
 {
@@ -150,8 +159,7 @@ uint32_t Vcpu::enter(uint64_t trampoline, uint64_t state, uint64_t code)
 		if (syndrome >> 26 == hvc_class && (syndrome & 0xffff) == 0)
 			return static_cast<uint32_t>(reg(HV_REG_X0));
 		// A store to a page the host protected at stage 2: the PC still names the store, which runs again on resume.
-		if (syndrome >> 26 == lower_data_abort_class && syndrome & write_not_read && !(syndrome & far_not_valid) && vm.write_fault &&
-			vm.write_fault(exit->exception.virtual_address)) {
+		if (stage2_store_fault(syndrome) && vm.write_fault && vm.write_fault(exit->exception.virtual_address)) {
 			++counters.write_faults;
 			continue;
 		}

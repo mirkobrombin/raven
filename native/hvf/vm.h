@@ -51,7 +51,8 @@ public:
 	// Takes write permission away from the guest page holding address at stage 2 (writable false), or gives it back. A guest store to a
 	// page without it exits to the host on the storing vCPU's thread, which calls write_fault.
 	void protect(uint64_t address, bool writable);
-	// Handles such a store at address; true when the store can be retried.
+	// Handles such a store at address; true when the store can be retried. Called for stage-2 store faults only (translation or
+	// permission, not from a table walk).
 	std::function<bool(uint64_t address)> write_fault;
 	// Copies between guest memory and the host; throws when the range is not mapped.
 	void read(uint64_t address, void *into, size_t size) const;

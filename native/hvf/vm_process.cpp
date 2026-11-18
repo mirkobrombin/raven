@@ -38,10 +38,13 @@ void VmProcess::watch_code(uint64_t address, size_t size, bool watch)
 bool VmProcess::code_write(uint64_t address)
 {
 	const uint64_t page = address & ~(Vm::page_size - 1);
+	if (!vm.host(address))
+		return false;
 	{
 		std::lock_guard guard(lock);
+		// Another store's fault on this page was handled first and unwatched it: this store just runs again.
 		if (!watched.count(page))
-			return false;
+			return true;
 	}
 	// Outside the lock: code_written takes the runtime's lock and calls watch_code.
 	if (attached)
