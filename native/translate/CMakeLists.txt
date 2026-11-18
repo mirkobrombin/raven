@@ -11,7 +11,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(RAVEN_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(RAVEN_TESTDATA ${CMAKE_CURRENT_SOURCE_DIR}/../../testdata)
 
-add_library(raven_translate STATIC x86_decoder.cpp)
+add_library(raven_translate STATIC x86_decoder.cpp a64_emitter.cpp)
 target_include_directories(raven_translate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(raven_translate PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
 
@@ -57,3 +57,16 @@ target_link_libraries(x86_decoder_test PRIVATE raven_translate)
 add_dependencies(x86_decoder_test x86_corpus)
 add_test(NAME translate_x86_decoder COMMAND x86_decoder_test ${CMAKE_CURRENT_BINARY_DIR}/x86_corpus.txt)
 set_tests_properties(translate_x86_decoder PROPERTIES TIMEOUT 120)
+
+# The emitter's oracle: the host assembler and LLVM's disassembler read the same instructions the emitter encodes.
+add_executable(a64_emitter_test a64_emitter_test.cpp)
+target_link_libraries(a64_emitter_test PRIVATE raven_translate)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt
+    COMMAND a64_emitter_test --assembly ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.S
+    COMMAND ${CMAKE_C_COMPILER} -c -march=armv8.4-a+lse+rcpc+flagm -o ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.o
+        ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.S
+    COMMAND ${RAVEN_OBJDUMP} -d ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.o > ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt
+    DEPENDS a64_emitter_test VERBATIM)
+add_custom_target(a64_cases ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt)
+add_test(NAME translate_a64_emitter COMMAND a64_emitter_test ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt)
+set_tests_properties(translate_a64_emitter PROPERTIES TIMEOUT 30)
