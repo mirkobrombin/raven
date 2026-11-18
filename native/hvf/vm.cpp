@@ -78,7 +78,7 @@ Vm::Vm(size_t size) : ram_size(round_up(size))
 		const size_t vectors_size = static_cast<size_t>(raven_hvf_vectors_end - raven_hvf_vectors);
 		const uint64_t vectors_ipa = allocate_physical(vectors_size);
 		std::memcpy(ram + (vectors_ipa - ram_ipa), raven_hvf_vectors, vectors_size);
-		sys_dcache_flush(ram + (vectors_ipa - ram_ipa), vectors_size);
+		sys_icache_invalidate(ram + (vectors_ipa - ram_ipa), vectors_size);
 		kernel_vectors = kernel_base + vectors_ipa;
 		kernel_resume = kernel_vectors + static_cast<uint64_t>(raven_hvf_resume - raven_hvf_vectors);
 		kernel_stack_top = kernel_base + allocate_physical(kernel_stack_size) + kernel_stack_size;
