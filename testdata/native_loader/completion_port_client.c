@@ -1,6 +1,7 @@
 // An I/O completion port hands out the packets posted to it in order, reports a wait that runs out of time with WAIT_TIMEOUT and no
 // OVERLAPPED, and, when its last handle is closed while a thread waits on it, ends that wait with ERROR_ABANDONED_WAIT_0 and no
-// OVERLAPPED. A handle duplicated from it keeps it open: closing the other one does not end the wait. The exit code names the first
+// OVERLAPPED. A handle duplicated from it keeps it open: closing the other one does not end the wait. A thread that waits for several
+// packets alertably runs the APCs queued to it and comes back with WAIT_IO_COMPLETION. The exit code names the first
 // check that failed.
 #include <windows.h>
 
@@ -9,6 +10,24 @@ static volatile LONG returned;
 static DWORD waited_error;
 static ULONG_PTR waited_key;
 static OVERLAPPED *waited_overlapped;
+static volatile LONG apc_ran;
+static DWORD alerted_error;
+static ULONG alerted_removed;
+
+static void CALLBACK apc(ULONG_PTR parameter)
+{
+	InterlockedExchange(&apc_ran, (LONG)parameter);
+}
+
+static DWORD WINAPI alertable_waiter(void *parameter)
+{
+	(void)parameter;
+	OVERLAPPED_ENTRY entries[2];
+	SetLastError(0);
+	const BOOL got = GetQueuedCompletionStatusEx(port, entries, 2, &alerted_removed, INFINITE, TRUE);
+	alerted_error = GetLastError();
+	return got ? 1 : 0;
+}
 
 static DWORD WINAPI waiter(void *parameter)
 {
@@ -43,6 +62,19 @@ int raven_entry(void)
 	SetLastError(0);
 	if (GetQueuedCompletionStatus(port, &bytes, &key, &overlapped, 10) || GetLastError() != WAIT_TIMEOUT || overlapped)
 		return 5;
+	// An alertable wait for several packets ends for an APC, which runs on the waiting thread.
+	HANDLE alerted = CreateThread(NULL, 0, alertable_waiter, NULL, 0, NULL);
+	if (!alerted)
+		return 15;
+	Sleep(100);
+	if (!QueueUserAPC(apc, alerted, 7))
+		return 16;
+	if (WaitForSingleObject(alerted, 5000) != WAIT_OBJECT_0)
+		return 17;
+	DWORD alerted_code = 2;
+	if (!GetExitCodeThread(alerted, &alerted_code) || alerted_code || alerted_error != WAIT_IO_COMPLETION || apc_ran != 7)
+		return 18;
+	CloseHandle(alerted);
 	// A thread waits on the port; a second handle to it is closed and the wait goes on.
 	HANDLE copy = NULL;
 	if (!DuplicateHandle(GetCurrentProcess(), port, GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
