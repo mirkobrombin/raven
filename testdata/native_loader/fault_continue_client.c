@@ -1,8 +1,8 @@
 // A read through a null pointer is an access violation the program's handlers hear, and one that changes the registers and continues
 // execution resumes where it says, as the .NET runtime turns the null check of compiled code into a NullReferenceException; a 32-bit
-// program also hears it in the frames it registers. An instruction user mode may not run and an int3 are the exceptions Windows
-// raises for them, PRIV_INSTRUCTION and BREAKPOINT, both naming the instruction itself, as the virtual machine and debugger checks of
-// protected programs expect. The exit code names the first check that failed.
+// program also hears it in the frames it registers. An instruction user mode may not run, an int3, and an illegal instruction are the
+// exceptions Windows raises for them, PRIV_INSTRUCTION, BREAKPOINT and ILLEGAL_INSTRUCTION, all naming the instruction itself, and
+// changing general registers and flags in the handler takes effect on resume. The exit code names the first check that failed.
 #include <windows.h>
 
 static DWORD handled;
@@ -46,9 +46,11 @@ static LONG CALLBACK vectored(EXCEPTION_POINTERS *pointers)
 	return skip_load(pointers->ExceptionRecord, pointers->ContextRecord, 0x1234) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
 }
 
-/* Skips the faulting instruction of `length` bytes when the exception is `code` and both the record and the context name it. */
+/* Skips the faulting instruction of `length` bytes when the exception is `code` and both the record and the context name it.
+ * When `rewrite_state` is set, also updates the general registers and flags to verify resume applies handler edits. */
 static DWORD expected_code, expected_length;
 static ULONG_PTR expected_address;
+static BOOL rewrite_state;
 
 static LONG CALLBACK skip_instruction(EXCEPTION_POINTERS *pointers)
 {
@@ -62,11 +64,29 @@ static LONG CALLBACK skip_instruction(EXCEPTION_POINTERS *pointers)
 	if (record->ExceptionCode != expected_code || (ULONG_PTR)record->ExceptionAddress != expected_address || *ip != expected_address)
 		return EXCEPTION_CONTINUE_SEARCH;
 	*ip += expected_length;
+	if (rewrite_state) {
+#ifdef __x86_64__
+		context->Rax = 0x10101010;
+		context->Rbx = 0x20202020;
+		context->Rcx = 0x30303030;
+		context->Rdx = 0x40404040;
+		context->Rsi = 0x50505050;
+		context->Rdi = 0x60606060;
+#else
+		context->Eax = 0x10101010;
+		context->Ebx = 0x20202020;
+		context->Ecx = 0x30303030;
+		context->Edx = 0x40404040;
+		context->Esi = 0x50505050;
+		context->Edi = 0x60606060;
+#endif
+		context->EFlags |= 0x41; /* CF | ZF */
+	}
 	++handled;
 	return EXCEPTION_CONTINUE_EXECUTION;
 }
 
-/* Runs `in eax, dx` or `int3` at a label whose address the handler checks against. */
+/* Runs `in eax, dx`, `int3`, or `ud2` at a label whose address the handler checks against. */
 static void port_read(void)
 {
 	__asm__ volatile(".globl port_read_at\nport_read_at:\n\tin %%dx, %%eax" : : "d"(0x5658) : "eax", "memory");
@@ -77,10 +97,57 @@ static void breakpoint(void)
 	__asm__ volatile(".globl breakpoint_at\nbreakpoint_at:\n\tint3" : : : "memory");
 }
 
+static DWORD resumed_state[7] __attribute__((used));
+
+static void illegal_instruction(void)
+{
 #ifdef __x86_64__
-extern char port_read_at[], breakpoint_at[];
+	__asm__ volatile(
+		"movl $1, %%eax\n\t"
+		"testl %%eax, %%eax\n\t"
+		"clc\n\t"
+		".globl illegal_at\n"
+		"illegal_at:\n\t"
+		"ud2\n\t"
+		"movl %%eax, resumed_state+0(%%rip)\n\t"
+		"movl %%ebx, resumed_state+4(%%rip)\n\t"
+		"movl %%ecx, resumed_state+8(%%rip)\n\t"
+		"movl %%edx, resumed_state+12(%%rip)\n\t"
+		"movl %%esi, resumed_state+16(%%rip)\n\t"
+		"movl %%edi, resumed_state+20(%%rip)\n\t"
+		"pushfq\n\t"
+		"popq %%rax\n\t"
+		"movl %%eax, resumed_state+24(%%rip)"
+		:
+		:
+		: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "cc", "memory");
 #else
-extern char port_read_at[] __asm__("port_read_at"), breakpoint_at[] __asm__("breakpoint_at");
+	__asm__ volatile(
+		"movl $1, %%eax\n\t"
+		"testl %%eax, %%eax\n\t"
+		"clc\n\t"
+		".globl illegal_at\n"
+		"illegal_at:\n\t"
+		"ud2\n\t"
+		"movl %%eax, _resumed_state+0\n\t"
+		"movl %%ebx, _resumed_state+4\n\t"
+		"movl %%ecx, _resumed_state+8\n\t"
+		"movl %%edx, _resumed_state+12\n\t"
+		"movl %%esi, _resumed_state+16\n\t"
+		"movl %%edi, _resumed_state+20\n\t"
+		"pushfl\n\t"
+		"popl %%eax\n\t"
+		"movl %%eax, _resumed_state+24"
+		:
+		:
+		: "eax", "ebx", "ecx", "edx", "esi", "edi", "cc", "memory");
+#endif
+}
+
+#ifdef __x86_64__
+extern char port_read_at[], breakpoint_at[], illegal_at[];
+#else
+extern char port_read_at[] __asm__("port_read_at"), breakpoint_at[] __asm__("breakpoint_at"), illegal_at[] __asm__("illegal_at");
 #endif
 
 #ifndef __x86_64__
@@ -135,6 +202,18 @@ int raven_entry(void)
 	breakpoint();
 	if (handled != before + 2)
 		return 8;
+	expected_code = EXCEPTION_ILLEGAL_INSTRUCTION;
+	expected_address = (ULONG_PTR)illegal_at;
+	expected_length = 2;
+	rewrite_state = TRUE;
+	illegal_instruction();
+	rewrite_state = FALSE;
+	if (handled != before + 3)
+		return 9;
+	if (resumed_state[0] != 0x10101010 || resumed_state[1] != 0x20202020 || resumed_state[2] != 0x30303030 ||
+		resumed_state[3] != 0x40404040 || resumed_state[4] != 0x50505050 || resumed_state[5] != 0x60606060 ||
+		(resumed_state[6] & 0x41) != 0x41)
+		return 10;
 	RemoveVectoredExceptionHandler(cookie);
 	return 0;
 }

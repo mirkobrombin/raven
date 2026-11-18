@@ -581,6 +581,7 @@ public:
 	// exception again in the second pass by that record's address.
 	[[noreturn]] void unwind(uint64_t target_frame, uint64_t target_ip, std::vector<uint8_t> record, uint64_t return_value, uint64_t caller_record = 0)
 	{
+		mine().fault_rounds = 0;
 		put32(record, 4, le32(record, 4) | flag_unwinding | (target_frame ? 0 : flag_exit_unwind));
 		// Crossing a host callback boundary consumes the dispatch it belongs to; the last one consumed says where execution resumes.
 		size_t depth = context.process.callback_depth();
@@ -772,6 +773,9 @@ public:
 		size_t continuation_start = 0;
 		std::vector<Consolidation> consolidations;
 		Scratch scratch;
+		uint64_t last_fault_address = 0;
+		uint32_t last_fault_status = 0;
+		uint32_t fault_rounds = 0;
 	};
 
 	ThreadState &mine() const
@@ -838,7 +842,6 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 		auto native = context.process.context();
 		auto origin = context_from_process(native);
 		const uint64_t rip = context_rip(origin);
-		context.process.enter_fault_dispatch();
 		// A jump to unreadable memory faults where no instruction can be read: it is an ordinary access violation, never a fast fail.
 		std::vector<uint8_t> code(2, 0);
 		try {
@@ -846,6 +849,7 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 		} catch (const std::runtime_error &) {
 		}
 		if (fault.signal == SIGSEGV && code[0] == 0xcd && code[1] == 0x29) {
+			context.process.enter_fault_dispatch();
 			const auto *module = unwinder.module_at(rip);
 			std::fprintf(stderr, "raven: fast fail %llu at %s+%llx\n", (unsigned long long)context_register(origin, 1),
 				module ? module->name.c_str() : "unknown", module ? (unsigned long long)(rip - module->loaded.base()) : (unsigned long long)rip);
@@ -865,6 +869,15 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 			throw ProcessExit{0xc0000409U, rip, true};
 		}
 		const auto raised = processor_exception(context.process, fault, rip);
+		// A handler that keeps returning to the same instruction ends the run after a few rounds instead of spinning.
+		auto &state = exceptions->mine();
+		state.fault_rounds = state.last_fault_address == raised.address && state.last_fault_status == raised.status ?
+			state.fault_rounds + 1 : 1;
+		state.last_fault_address = raised.address;
+		state.last_fault_status = raised.status;
+		if (state.fault_rounds > 8)
+			return;
+		context.process.enter_fault_dispatch();
 		set_context_rip(origin, raised.address);
 		auto record = exceptions->new_record(raised.status, 0, raised.address, raised.parameters);
 		// As KiUserExceptionDispatcher finds them: the CONTEXT on a 16-byte boundary below the faulting stack pointer and the record above
