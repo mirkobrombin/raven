@@ -67,7 +67,9 @@ The share of SSE and SSE2 instructions on XMM registers in `notepad++.exe` (x64,
 | After conversions (050c8f4d) | 40832 | 40831 | 39983 (97.9%) |
 | After packs and shuffles (23520cae) | 40832 | 40831 | 40831 (99.998%): only `pinsrw` (1) is not |
 
-PROVEN: `x86_decoder_test build-macos-hvf/translate/x86_corpus.txt` prints
+The "Before" row is measured at 892a4aaa, where the decoder already knew SSE and `translates()` took only movq between general and XMM
+registers (PROVEN there); that 211decc0 translated none by default and those 515 with the option is INFERRED from its `supported()`,
+since the tally did not exist then. PROVEN at the end: `x86_decoder_test build-macos-hvf/translate/x86_corpus.txt` prints
 `notepad++.exe: 40832 SSE and SSE2 instructions, 40831 with semantics (100.0%), 40831 translated (100.0%); without: pinsrw 1`, and
 for the 8000 random instances of `x86_corpus.py`: `8000 SSE and SSE2 instructions, 8000 with semantics (100.0%), 8000 translated`.
 The decoder prints every one of them as LLVM's disassembler does (0 failures over the corpus, Notepad++ included).
@@ -251,14 +253,16 @@ its checksum differs from x86's; with it, the native and both translated checksu
 
 - **copy below native:** that measures how the native build compiled the loop, not a translator gain.
 - **vCPU per call:** every call is a host exit and a resume, and each now stores and loads sixteen q registers and converts MXCSR.
-  That costs more for the shorter calls.
+  That this is what makes the shorter calls cost more is INFERRED: no run compared the same calls before the change.
 - No optimisation was done here; that belongs to the later generator work.
 
 ## Open items
 
 - **FEAT_AFP is assumed.** The translator writes FPCR.AH without checking that the host has it. On a core without FEAT_AFP the bit
   is RES0 and the write is dropped silently. NaN propagation, the default NaN's sign and min and max with a NaN or a zero pair would
-  then follow Arm. The M5 and its vCPUs have it (PROVEN above); older cores were not checked (NOT verified).
+  then follow Arm. The M5 and its vCPUs have it (PROVEN above); older cores were not checked (NOT verified). Without it the
+  translator would give wrong results instead of exiting as unsupported, against the rule the core keeps for everything else, which
+  is why this item comes first.
   - The plan: the runtime reads `hw.optional.arm.FEAT_AFP`, and in a VM the vCPU's ID_AA64MMFR1_EL1.AFP, and refuses or falls back
     to software sequences for those instructions without it.
 - **The host's FPSR** is replaced by the guest's flags on entry, and only FPCR is restored on exit. The host's cumulative flags are
