@@ -44,7 +44,9 @@ constexpr uint8_t s0 = 9, s1 = 10, s2 = 11, s3 = 12, s4 = 15, address_register =
 // Holds the last RIP-relative address the block computed, so a loop over one global computes it once.
 constexpr uint8_t constant_register = 7;
 // XMMn is vn; v16-v31 are scratch.
-constexpr uint8_t vs0 = 16, vs1 = 17, vs2 = 18;
+constexpr uint8_t vs0 = 16, vs1 = 17, vs2 = 18, vs3 = 19;
+// Scratch outside s0-s5, for a value kept across code that uses those.
+constexpr uint8_t s6 = 6;
 
 constexpr uint32_t CF = 1, PF = 4, AF = 16, ZF = 64, SF = 128, OF = 2048;
 constexpr uint32_t all_flags = CF | PF | AF | ZF | SF | OF;
@@ -138,7 +140,10 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::minpd: case Mnemonic::minss: case Mnemonic::minsd: case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss:
 	case Mnemonic::maxsd: case Mnemonic::ldmxcsr: case Mnemonic::stmxcsr: case Mnemonic::cmpps: case Mnemonic::cmppd:
 	case Mnemonic::cmpss: case Mnemonic::cmpsd: case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss:
-	case Mnemonic::ucomisd:
+	case Mnemonic::ucomisd: case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: case Mnemonic::cvtss2si: case Mnemonic::cvttss2si:
+	case Mnemonic::cvtsd2si: case Mnemonic::cvttsd2si: case Mnemonic::cvtss2sd: case Mnemonic::cvtsd2ss: case Mnemonic::cvtdq2ps:
+	case Mnemonic::cvtdq2pd: case Mnemonic::cvtps2dq: case Mnemonic::cvttps2dq: case Mnemonic::cvtpd2dq: case Mnemonic::cvttpd2dq:
+	case Mnemonic::cvtps2pd: case Mnemonic::cvtpd2ps:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -301,6 +306,9 @@ private:
 	void sse_arithmetic(const Instruction &instruction);
 	void sse_compare(const Instruction &instruction);
 	void sse_ordered_compare(const Instruction &instruction);
+	// Element 0 of source (a double or a single) to a signed integer of size bytes in result (s0), truncated or rounded as MXCSR says.
+	void convert_to_integer(uint8_t source, bool doubles, bool truncate, unsigned size);
+	void sse_convert(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -1249,6 +1257,108 @@ void BlockTranslator::sse_ordered_compare(const Instruction &instruction)
 	}
 }
 
+void BlockTranslator::convert_to_integer(uint8_t source, bool doubles, bool truncate, unsigned size)
+{
+	// Out of range or NaN, x86 gives the integer indefinite (the lowest integer of the width) where fcvtzs saturates and gives 0 for
+	// NaN. frintx rounds as FPCR says (MXCSR.RC) and reports inexact, so fcvtzs then converts an integer. The fix-up compares, so NZCV
+	// is kept when a later instruction reads it.
+	const uint32_t sz = doubles ? simd::sz : 0;
+	uint8_t value = source;
+	if (!truncate) {
+		a.simd(simd::frintx_s | sz, vs1, source);
+		value = vs1;
+	}
+	const bool keep = flags_wanted(all_flags);
+	if (keep)
+		a.mrs_nzcv(s4);
+	const bool is64 = size == 8;
+	a.simd(simd::fcvtzs_w_s | (is64 ? simd::sf : 0) | sz, s0, value);
+	a.simd(simd::fcmp_s | sz, 0, value, value);
+	a.mov_imm(s1, is64 ? 0x8000000000000000ull : 0x80000000ull, is64);
+	a.csel(s0, s1, s0, Cond::vs, is64);
+	if (doubles && !is64) {
+		// 2147483647.5 truncates to the highest int32, which saturation also gives: compare with 2^31 instead.
+		a.mov_imm(s2, 0x41e0000000000000ull);
+		a.simd(simd::fmov_d_x, vs2, s2);
+		a.simd(simd::fcmp_s | sz, 0, value, vs2);
+		a.csel(s0, s1, s0, Cond::ge, false);
+	} else {
+		// No single (nor double, for int64) converts to the highest integer exactly: only saturation gives it. V: it plus one overflows.
+		a.add_imm(a64::zr, s0, 1, false, is64, true);
+		a.csel(s0, s1, s0, Cond::vs, is64);
+	}
+	if (keep)
+		a.msr_nzcv(s4);
+}
+
+void BlockTranslator::sse_convert(const Instruction &instruction)
+{
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const Operand &target_operand = instruction.operands[0], &source_operand = instruction.operands[1];
+	const uint8_t target = target_operand.reg;
+	switch (mnemonic) {
+	case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: {
+		const bool doubles = mnemonic == Mnemonic::cvtsi2sd;
+		const uint8_t value = read(source_operand, s0);
+		a.simd(simd::scvtf_s_w | (source_operand.size == 8 ? simd::sf : 0) | (doubles ? simd::sz : 0), vs1, value);
+		a.ins(target, 0, vs1, 0, doubles ? 8 : 4);
+		return;
+	}
+	case Mnemonic::cvtss2si: case Mnemonic::cvttss2si: case Mnemonic::cvtsd2si: case Mnemonic::cvttsd2si: {
+		const bool doubles = mnemonic == Mnemonic::cvtsd2si || mnemonic == Mnemonic::cvttsd2si;
+		const bool truncate = mnemonic == Mnemonic::cvttss2si || mnemonic == Mnemonic::cvttsd2si;
+		convert_to_integer(vector_source(source_operand, vs0), doubles, truncate, target_operand.size);
+		write(target_operand, s0);
+		return;
+	}
+	case Mnemonic::cvtpd2dq: case Mnemonic::cvttpd2dq: {
+		// Two doubles to two int32 in the low quadword, the rest cleared: element by element, for the indefinite and the flags.
+		const bool truncate = mnemonic == Mnemonic::cvttpd2dq;
+		const uint8_t source = vector_source(source_operand, vs0);
+		a.ins(vs3, 0, source, 1, 8);
+		convert_to_integer(source, true, truncate, 4);
+		a.mov(s6, s0, false);
+		convert_to_integer(vs3, true, truncate, 4);
+		a.orr(s0, s6, s0, Shift::lsl, 32);
+		a.simd(simd::fmov_d_x, target, s0);
+		return;
+	}
+	case Mnemonic::cvtps2dq: case Mnemonic::cvttps2dq: {
+		// fcvtzs saturates; where the value is not below 2^31 (a NaN is not either) x86 gives 0x80000000, as fcvtzs already does below
+		// -2^31.
+		uint8_t value = vector_source(source_operand, vs0);
+		if (mnemonic == Mnemonic::cvtps2dq) {
+			a.simd(simd::frintx_4s, vs1, value);
+			value = vs1;
+		}
+		a.simd(simd::fcvtzs_4s, vs2, value);
+		a.mov_imm(s0, 0x4f000000, false);
+		a.simd(simd::dup_4s_w, vs3, s0);
+		a.simd(simd::fcmgt_4s, vs3, vs3, value);
+		a.simd(simd::and_16b, vs2, vs2, vs3);
+		a.simd(simd::not_16b, vs3, vs3);
+		a.shift_imm(simd::shl, vs3, vs3, 32, 31);
+		a.simd(simd::orr_16b, target, vs2, vs3);
+		return;
+	}
+	default: break;
+	}
+	const uint8_t source = vector_source(source_operand, vs0);
+	switch (mnemonic) {
+	case Mnemonic::cvtss2sd: a.simd(simd::fcvt_d_s, vs1, source); a.ins(target, 0, vs1, 0, 8); return;
+	case Mnemonic::cvtsd2ss: a.simd(simd::fcvt_s_d, vs1, source); a.ins(target, 0, vs1, 0, 4); return;
+	case Mnemonic::cvtps2pd: a.simd(simd::fcvtl_2d, target, source); return;
+	// The two singles go to the low quadword and the rest clears, as a 64-bit vector write does.
+	case Mnemonic::cvtpd2ps: a.simd(simd::fcvtn_2s, target, source); return;
+	case Mnemonic::cvtdq2ps: a.simd(simd::scvtf_4s, target, source); return;
+	case Mnemonic::cvtdq2pd:
+		a.simd(simd::sxtl_2d, vs1, source);
+		a.simd(simd::scvtf_4s | simd::sz, target, vs1);
+		return;
+	default: throw std::logic_error("not an SSE conversion");
+	}
+}
+
 void BlockTranslator::exit_with(ExitReason reason, uint64_t rip)
 {
 	a.mov_imm(s4, rip);
@@ -1343,6 +1453,12 @@ void BlockTranslator::translate(const Instruction &instruction)
 		return;
 	case Mnemonic::cmpps: case Mnemonic::cmppd: case Mnemonic::cmpss: case Mnemonic::cmpsd: sse_compare(instruction); return;
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: sse_ordered_compare(instruction); return;
+	case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: case Mnemonic::cvtss2si: case Mnemonic::cvttss2si: case Mnemonic::cvtsd2si:
+	case Mnemonic::cvttsd2si: case Mnemonic::cvtss2sd: case Mnemonic::cvtsd2ss: case Mnemonic::cvtdq2ps: case Mnemonic::cvtdq2pd:
+	case Mnemonic::cvtps2dq: case Mnemonic::cvttps2dq: case Mnemonic::cvtpd2dq: case Mnemonic::cvttpd2dq: case Mnemonic::cvtps2pd:
+	case Mnemonic::cvtpd2ps:
+		sse_convert(instruction);
+		return;
 	case Mnemonic::ldmxcsr:
 		// The whole value is MXCSR; FPCR and FPSR follow it.
 		load_memory(s0, operands[0], 4);

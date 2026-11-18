@@ -36,6 +36,12 @@ constexpr uint32_t fcmeq_4s = 0x4e20e400, fcmge_4s = 0x6e20e400, fcmgt_4s = 0x6e
 constexpr uint32_t fcmeq_s = 0x5e20e400, fcmge_s = 0x7e20e400, fcmgt_s = 0x7ea0e400;
 // fcmp and, with signal_any (or in), fcmpe of Rn with Rm, Rd zero.
 constexpr uint32_t fcmp_s = 0x1e202000, signal_any = 0x10;
+// Conversions. The scalar ones between general and SIMD&FP registers take sf (bit 31) for an X register and sz for a double.
+constexpr uint32_t sf = 0x80000000;
+constexpr uint32_t scvtf_s_w = 0x1e220000, fcvtzs_w_s = 0x1e380000, fcvt_d_s = 0x1e22c000, fcvt_s_d = 0x1e624000,
+	frintx_s = 0x1e274000;
+constexpr uint32_t frintx_4s = 0x6e219800, fcvtzs_4s = 0x4ea1b800, scvtf_4s = 0x4e21d800, fcvtl_2d = 0x0e617800,
+	fcvtn_2s = 0x0e616800, sxtl_2d = 0x0f20a400, dup_4s_w = 0x4e040c00;
 constexpr uint32_t fadd_s = 0x1e202800, fsub_s = 0x1e203800, fmul_s = 0x1e200800, fdiv_s = 0x1e201800, fmax_s = 0x1e204800,
 	fmin_s = 0x1e205800, fsqrt_s = 0x1e21c000;
 // For Assembler::shift_imm.
