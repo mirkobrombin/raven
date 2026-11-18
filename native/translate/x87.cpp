@@ -732,8 +732,11 @@ void Core::store_float()
 		const Format format = target.size == 8 ? double_format : single_format;
 		Flags converted = flags;
 		const uint64_t bits = to_narrow(value, format, rc(), masks(), converted);
+		// Unmasked, these leave memory as it was; an overflow or underflow then reports itself without PE.
 		if ((converted.bits & ~masks() & (IE | DE | OE | UE)) != 0) {
-			report(converted, converted.up);
+			if (converted.bits & ~masks() & (OE | UE))
+				converted.bits = static_cast<uint16_t>(converted.bits & ~PE);
+			report(converted, false);
 			return;
 		}
 		flags = converted;
