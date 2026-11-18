@@ -17,9 +17,11 @@ enum class Access : uint8_t { read_write, read_execute };
 // cache clean needed), DIC = 0 (instruction cache invalidation needed) and a PIPT instruction cache, so invalidating by the host
 // alias reaches the lines the guest fetched through its own address (hvf_code_write_test). Tests switch parts off as controls.
 struct CodeMaintenance {
-	// DC CIVAC on the host alias.
+	// sys_dcache_flush on the host alias, which on macOS 27.2.1 is only DSB ISH (disassembled): with CTR_EL0.IDC = 1 there is no line
+	// to clean.
 	bool host_clean = false;
-	// DC CVAU and IC IVAU on the host alias, broadcast to the inner shareable domain.
+	// sys_icache_invalidate on the host alias: on macOS 27.2.1, DSB ISH, IC IVAU per 64-byte line, DSB ISH, ISB (disassembled); IC
+	// IVAU is broadcast to the inner shareable domain.
 	bool host_invalidate = true;
 	// IC IALLUIS in the guest kernel before a vCPU returns to EL0 after code was written: for a CPU whose instruction cache is not
 	// PIPT, where the host's alias would not name the guest's lines. Only the vCPU that next enters invalidates, so with several

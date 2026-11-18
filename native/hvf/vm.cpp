@@ -190,8 +190,7 @@ void Vm::write(uint64_t address, const void *from, size_t size)
 
 void Vm::code_written(const uint8_t *alias, size_t size)
 {
-	// libkern's calls know the line sizes, which EL0 cannot read on macOS: sys_dcache_flush cleans (and invalidates) to the point of
-	// coherency, past the point of unification instruction fetch needs; sys_icache_invalidate cleans and invalidates both caches.
+	// libkern's calls, which know the CPU's line sizes and errata; EL0 cannot read CTR_EL0 on macOS. vm.h says what they do here.
 	auto *bytes = const_cast<uint8_t *>(alias);
 	if (maintenance.host_clean)
 		sys_dcache_flush(bytes, size);

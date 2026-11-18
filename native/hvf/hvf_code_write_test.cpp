@@ -48,9 +48,9 @@ int main(int argc, char **argv)
 		bool control;
 	};
 	const Mode modes[] = {
-		{"host DC CVAU + IC IVAU on the alias (default)", {false, true, false}, false},
-		{"host DC CIVAC + guest IC IALLUIS", {true, false, true}, false},
-		{"control: host DC CIVAC only", {true, false, false}, true},
+		{"host sys_icache_invalidate on the alias (default)", {false, true, false}, false},
+		{"host sys_dcache_flush + guest IC IALLUIS", {true, false, true}, false},
+		{"control: host sys_dcache_flush only", {true, false, false}, true},
 		{"control: none", {false, false, false}, true},
 	};
 	int failures = 0;
