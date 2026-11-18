@@ -67,25 +67,42 @@ static BOOL put_stream(IStorage *storage, const WCHAR *name, const void *data, U
 	return SUCCEEDED(hr) && done == size;
 }
 
-/* A package with one table T of one string column A holding "abc", whose string pool has a long entry claiming 4 GB between "A"
-   and "abc". The entry is refused alone: the strings after it still come from where they are. */
-static int long_pool_entry(void)
+/* A package with one table T of one string column A whose one row is the fourth string of the pool given, and the summary
+   information stream given, if any. */
+static BOOL write_package(WCHAR *path, const WORD *pool, ULONG pool_size, const BYTE *summary, ULONG summary_size)
 {
 	static const GUID database = {0x000c1084, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
-	static const WORD pool[] = {0, 0, 1, 1, 1, 1, 0, 0xffff, 0xffff, 0, 3, 1};
 	static const char data[] = "TAabc";
 	static const WORD tables[] = {1}, columns[] = {1, 0x8001, 2, 0x8000 | 0x2d08}, rows[] = {4};
-	WCHAR directory[MAX_PATH], path[MAX_PATH], text[16];
+	WCHAR directory[MAX_PATH];
 	IStorage *storage;
+	IStream *stream;
+	ULONG done = 0;
 	GetTempPathW(MAX_PATH, directory);
 	GetTempFileNameW(directory, L"rvn", 0, path);
 	if (FAILED(StgCreateDocfile(path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0, &storage)))
-		return 97;
-	BOOL written = SUCCEEDED(IStorage_SetClass(storage, &database)) && put_stream(storage, L"_StringPool", pool, sizeof pool) &&
+		return FALSE;
+	BOOL written = SUCCEEDED(IStorage_SetClass(storage, &database)) && put_stream(storage, L"_StringPool", pool, pool_size) &&
 		put_stream(storage, L"_StringData", data, 5) && put_stream(storage, L"_Tables", tables, sizeof tables) &&
 		put_stream(storage, L"_Columns", columns, sizeof columns) && put_stream(storage, L"T", rows, sizeof rows);
+	if (written && summary) {
+		written = SUCCEEDED(IStorage_CreateStream(storage, L"\005SummaryInformation", STGM_CREATE | STGM_WRITE | STGM_SHARE_EXCLUSIVE, 0, 0, &stream));
+		if (written) {
+			written = SUCCEEDED(IStream_Write(stream, summary, summary_size, &done)) && done == summary_size;
+			IStream_Release(stream);
+		}
+	}
 	IStorage_Release(storage);
-	if (!written)
+	return written;
+}
+
+/* A string pool with a long entry claiming 4 GB between "A" and "abc". The entry is refused alone: the strings after it still come
+   from where they are. */
+static int long_pool_entry(void)
+{
+	static const WORD pool[] = {0, 0, 1, 1, 1, 1, 0, 0xffff, 0xffff, 0, 3, 1};
+	WCHAR path[MAX_PATH], text[16];
+	if (!write_package(path, pool, sizeof pool, NULL, 0))
 		return 97;
 	MSIHANDLE database_handle = 0, view = 0, record = 0;
 	DWORD size = 16;
@@ -99,6 +116,36 @@ static int long_pool_entry(void)
 	MsiCloseHandle(record);
 	MsiCloseHandle(view);
 	MsiCloseHandle(database_handle);
+	DeleteFileW(path);
+	return result;
+}
+
+/* A summary information stream whose section offset is near 4 GB, so that adding the section header to it wraps: the section is
+   refused and the summary reads as empty. */
+static int far_summary_section(void)
+{
+	static const WORD pool[] = {0, 0, 1, 1, 1, 1, 0, 0, 3, 1};
+	static BYTE summary[48];
+	static const BYTE format[16] = {0xe0, 0x85, 0x9f, 0xf2, 0xf9, 0x4f, 0x68, 0x10, 0xab, 0x91, 0x08, 0x00, 0x2b, 0x27, 0xb3, 0xd9};
+	WCHAR path[MAX_PATH];
+	summary[0] = 0xfe;
+	summary[1] = 0xff;
+	for (int i = 0; i < 16; ++i)
+		summary[28 + i] = format[i];
+	summary[44] = 0xfc;
+	summary[45] = summary[46] = summary[47] = 0xff;
+	if (!write_package(path, pool, sizeof pool, summary, sizeof summary))
+		return 100;
+	MSIHANDLE database = 0, handle = 0;
+	UINT count = 1;
+	int result = 0;
+	if (MsiOpenDatabaseW(path, (LPCWSTR)MSIDBOPEN_READONLY, &database) != ERROR_SUCCESS ||
+		MsiGetSummaryInformationW(database, NULL, 0, &handle) != ERROR_SUCCESS || MsiSummaryInfoGetPropertyCount(handle, &count) != ERROR_SUCCESS)
+		result = 101;
+	else if (count)
+		result = 102;
+	MsiCloseHandle(handle);
+	MsiCloseHandle(database);
 	DeleteFileW(path);
 	return result;
 }
@@ -197,5 +244,6 @@ int raven_entry(void)
 			return 96;
 		MsiCloseHandle(record);
 	}
-	return long_pool_entry();
+	int result = long_pool_entry();
+	return result ? result : far_summary_section();
 }
