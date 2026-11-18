@@ -109,7 +109,17 @@ std::span<const uint8_t> VmProcess::code(uint64_t address) const
 
 void VmProcess::write(uint64_t address, const void *bytes, size_t size)
 {
+	// Through the alias, past stage 2: a write the runtime makes to watched code drops its translations as a guest store would.
 	vm.write(address, bytes, size);
+	for (uint64_t page = address & ~(Vm::page_size - 1); page < address + size; page += Vm::page_size) {
+		bool code;
+		{
+			std::lock_guard guard(lock);
+			code = watched.count(page) != 0;
+		}
+		if (code && attached)
+			attached->code_written(page);
+	}
 }
 
 VmCodeCache::VmCodeCache(Vm &vm, size_t code_capacity, size_t data_capacity)
