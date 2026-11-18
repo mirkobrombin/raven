@@ -124,6 +124,10 @@ void Assembler::mov_imm(uint8_t rd, uint64_t value, bool is64)
 		return;
 	}
 	const bool inverted = ones > zeros;
+	if (value == (inverted ? (is64 ? ~0ull : 0xffffffffull) : 0)) {
+		emit(sf(is64) | (inverted ? 0x12800000u : 0x52800000u) | reg(rd, 0));
+		return;
+	}
 	bool first = true;
 	for (unsigned i = 0; i < halves; ++i) {
 		const uint16_t half = static_cast<uint16_t>(value >> (16 * i));
