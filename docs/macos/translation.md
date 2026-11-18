@@ -227,8 +227,8 @@ What it says:
     same kernels were 3.2, 1.16 and 4.36 times native on this machine. The same change on the M5 moved entry.c from 1.65 to 1.15
     times native. A wide core like the M5 hides extra instructions that the N2 does not.
 - **Memory ordering.**
-  - With LRCPC, both engines pay little for TSO on these kernels. Ours: plain against LDAPR/STLR within 1%. FEX: TSO on against off
-    within 2%.
+  - With LRCPC, both engines pay little for TSO on these kernels. Ours: plain against LDAPR/STLR within 2% (largest: FNV-1a, 1.7%).
+    FEX: TSO on against off within 2%. Both are inside the run-to-run spread.
   - Without LRCPC, both fall back to barriers and lose a lot where memory traffic is dense: entry.c 7.6 (ours) and 10.6 (FEX), the
     histogram 2.4 (ours) and 4.3 (FEX).
   - On the M5 the same LDAPR/STLR cost is 38% on entry.c (macOS table above), so the N2 and M5 differ here: NOT verified why.
@@ -240,11 +240,149 @@ Weighed on the same path, roadmap item 8:
 - FEX would bring complete x86 coverage today and better code on compute kernels.
 - FEX would also bring an ARM64EC loader and ntdll to write (path A), or a Darwin port of 92k lines (path B). Either way it needs a
   maintained W^X and 16 KiB-page fork for in-process macOS.
-- Our translator matches FEX's JIT cost and the TSO cost with LRCPC, and beats it on memory-bound loops. It is 15 to 25% behind on
-  compute kernels, by 16 to 26%. A register allocator and multi-block translation are the known next steps there.
+- Our translator matches FEX's JIT cost and the TSO cost with LRCPC, and beats it on memory-bound loops. On the compute kernels it
+  takes 16 to 26% longer than FEX. The next subsection breaks that gap down by source.
 
 The decision stays with our own translator. The measured gap is in code generation, which is ours to improve. FEX's gap is
 integration work that Raven would carry forever.
+
+#### Where the gap comes from: the code each engine emits
+
+Static analysis only, no timing. One iteration of each workload's hot loop was counted instruction by instruction and each host
+instruction was put in one category. The listings:
+
+- **Ours:** `translate_bench --dump-block` on the PE's loop block, LDAPR/STLR and plain modes. Only the steady path is counted: the
+  block up to its conditional branch, plus the chained back-edge `b`. Exit stubs and the out-of-line misaligned paths are left out.
+- **FEX:** `FEX_DISASSEMBLE=blocks` and `FEX_DUMPIR` at 1cc4b93e, TSO on and off. FEX compiles each workload function as one
+  multiblock.
+- **Native:** `llvm-objdump` of the arm64 build.
+
+Ours was dumped at b3c86a62. Its translator, emitter and decoder sources are identical to the copy timed in run 44287829572
+(PROVEN, file comparison). FEX's and native's listings come from workflow run 44291036149 on the same runner type. All listings and the counts
+(`breakdown.csv`) are in `build-translate/results/linux-arm64/fex-dump-44291036149/`.
+
+The categories:
+
+| Category | Instructions counted |
+|---|---|
+| memory | Guest loads and stores |
+| ordering | Ours: the alignment `and` and `cbnz` before an ordered access wider than a byte. FEX: the `nop` it places beside each such access, which it patches when the access faults misaligned |
+| address | Instructions whose result is only used as a memory address, including rebuilding a constant address |
+| flags | Flag state the loop never reads: ours' PF and AF sources (x13, x14) with their constant, and `cfinv`; FEX's AF copy (`mov x27`) |
+| exit | The branches that close the iteration |
+| moves | Register-to-register copies |
+| constants | `mov`/`movk` of an immediate inside the loop |
+| work | Everything else |
+
+Loads and stores to the CPU state (x23 for ours, x28 for FEX) are zero in every loop for both engines. Every guest register stays in
+a host register, so nothing spills (PROVEN, listings).
+
+**Confound.** Ours runs the mingw PE (llvm-mingw clang 23). FEX runs the ELF built by Ubuntu's clang. The entry.c, FNV-1a and
+histogram loops are the same instructions in both builds. The CRC-32 loop is 49 x86 instructions in the PE and 48 in the ELF,
+scheduled differently (PROVEN, by diffing the two disassemblies).
+
+**How the table counts.** Native's loops are not unrolled. Every count is therefore per x86 loop iteration: 5 entry.c steps, 1 CRC-32
+byte, 4 FNV-1a bytes, or 2 histogram steps. Ours is in LDAPR/STLR mode and FEX has TSO on, the configurations timed in the table
+above.
+
+Host instructions per x86 loop iteration (host instructions per guest instruction in parentheses):
+
+| Loop (guest instructions) | Engine | Total | memory | ordering | address | flags | exit | moves | constants | work | Instructions vs native | Time vs native |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| entry.c (17) | native | 30 | 10 | 0 | 0 | 0 | 5 | 0 | 0 | 15 | 1.00 | 1.00 |
+| | ours | 37 (2.2) | 10 | 0 | 3 | 3 | 2 | 8 | 0 | 11 | 1.23 | 1.06 |
+| | FEX | 57 (3.4) | 10 | 10 | 20 | 1 | 1 | 4 | 0 | 11 | 1.90 | 1.29 |
+| CRC-32 (49 PE, 48 ELF) | native | 29 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 27 | 1.00 | 1.00 |
+| | ours | 73 (1.5) | 1 | 0 | 1 | 2 | 2 | 10 | 18 | 39 | 2.52 | 1.77 |
+| | FEX | 54 (1.1) | 1 | 0 | 1 | 1 | 1 | 0 | 12 | 38 | 1.86 | 1.41 |
+| FNV-1a (15) | native | 24 | 4 | 0 | 0 | 0 | 4 | 0 | 0 | 16 | 1.00 | 1.00 |
+| | ours | 30 (2.0) | 4 | 0 | 7 | 2 | 2 | 4 | 1 | 10 | 1.25 | 1.16 |
+| | FEX | 19 (1.3) | 4 | 0 | 4 | 0 | 1 | 0 | 0 | 10 | 0.79 | 1.00 |
+| Histogram (24) | native | 20 | 4 | 0 | 2 | 0 | 2 | 0 | 0 | 12 | 1.00 | 1.00 |
+| | ours | 44 (1.8) | 4 | 8 | 4 | 3 | 2 | 6 | 0 | 17 | 2.20 | 2.15 |
+| | FEX | 30 (1.3) | 4 | 4 | 4 | 0 | 1 | 0 | 0 | 17 | 1.50 | 1.81 |
+
+Without ordering, the totals are:
+
+- **Ours, plain:** entry.c 37, CRC-32 73, FNV-1a 27 (LDRB takes the offset that LDAPRB cannot), histogram 36.
+- **FEX, TSO off:** entry.c 47, CRC-32 53, FNV-1a 18, histogram 22.
+
+**Counts are not time.**
+
+- **Where the counts agree with the timings.** On every loop the instruction ratio puts the two engines in the same order as the
+  measured time.
+- **Where they do not.** FEX's histogram loop is 22 instructions with TSO off and 30 with TSO on, and the two timings are within
+  2%. Ours is 36 plain and 44 with LDAPR/STLR, and the timings are within 1%. On the N2 the alignment checks and FEX's `nop`s cost
+  close to nothing, and loops like these are bound by dependency chains more than by instruction count (PROVEN for the counts and
+  timings, INFERRED for the reason).
+
+What each loop says:
+
+- **Histogram (ours 2.15, FEX 1.81 times native).** The loop-carried path is the xorshift: three shift-and-xor pairs per step.
+  - Native folds each pair into one `eor w, w, w, lsl #n`: 3 dependent instructions per step.
+  - FEX emits a `lsl` and then an `eor`: 6.
+  - Ours emits the x86 `mov`, the shift, then the `eor`: 9, of which 3 are copies that x86's two-operand form asks for.
+  - The rest of our overhead is off that chain: the flag sources and `cfinv` (3), the second branch, and `inc dword ptr
+    [rcx+4*rdx]` computing its address and alignment check twice, once for the load and once for the store.
+  - So the gap to FEX is the 3 copies on the chain (INFERRED). Whether the N2 renames those copies away at no cost is NOT
+    verified.
+  - The gap to native would be the shifted-operand folding that neither translator does, but only if an `eor` with a shifted
+    operand has the latency of a plain `eor` on the N2. That latency is NOT verified, so this half of the explanation is open.
+- **CRC-32 (1.77 against 1.41).** This loop has no long serial chain, so the instruction count shows: 73 against FEX's 54 and
+  native's 29.
+  - **Constants (18).** 16 of them rebuild the 8 table constants every iteration; those values are not logical immediates. The
+    other 2 are `and r9d, 1` and `cmp rcx, 0x1000`, which go through a scratch register although both encode as immediates.
+  - **Copies (10).** 8 come from x86's `mov`-then-operate form. 2 come from results written to a scratch and copied back (`neg`,
+    `inc`).
+  - **FEX** also rebuilds constants inside the loop (12), but builds a repeated one only once.
+  - **Native** hoists all of them and folds every `shl`/`sar 31` pair into `sbfx` or a shifted operand.
+- **FNV-1a (1.16 against 1.00).** 30 against 19 and native's 24.
+  - **Addresses (7).** Ours recomputes `r8 + rdx` before every load and adds the offset separately; FEX has 4, using LDAPURB's
+    offset.
+  - **Copies (4).** Each `imul` writes a scratch that is then copied back. Those copies sit on the `eor`-`mul` chain that bounds
+    the loop.
+  - **Flags and exit (4).** The flag sources and the second branch.
+  - FEX's 19 instructions run at native's time with fewer instructions than native's 24. That points at the chain, not the count:
+    our chain copies are the likely difference (INFERRED).
+- **entry.c (1.06 against 1.29).** Ours is ahead.
+  - **FEX** rebuilds the constant address of `observed` with `mov` and `movk` before each of the 10 accesses (20 instructions) and
+    places a `nop` beside each.
+  - **Ours** builds the address once per iteration into x7 (3 instructions). It spends 8 copies on the four `lea edx, [rcx+k]`,
+    which go through the address register x16, and 3 on PF and AF sources that only the `ret` path after the loop could read.
+  - For all three, store-to-load forwarding on `observed` likely sets the pace (INFERRED).
+
+Which planned change removes what, counted in instructions per iteration from the table above. The effects are static counts, not
+times, and are INFERRED:
+
+| Change | What it removes | entry.c | CRC-32 | FNV-1a | Histogram |
+|---|---|---|---|---|---|
+| Register allocator, with SSA values and copy coalescing | The copies, including x86's `mov`-then-operate pairs, which become one three-operand instruction. Constants kept in spare registers across the loop, once the loop is translated as a unit | 0 | -10 copies, -16 constants | -4 | -6 |
+| Multi-block translation, a loop or function as one unit | The second branch: a self back-edge becomes one `b.ne` to the loop head. x7 is built once before the loop. It also gives the other changes the loop to work on | -4 | -1 | -1 | -1 |
+| Flag elimination with liveness across blocks | PF/AF sources and `cfinv`. They are dropped where the next block redefines the flags (FNV-1a and histogram: the code after the loop starts with `xor`). Where the loop exits to `ret` (entry.c, CRC-32), they move onto the exit edge | -3 | -2 | -2 | -3 |
+| Address-mode folding | Histogram: one address and one alignment check for the read-modify-write. FNV-1a: one base `add`, then LDAPURB with an immediate offset (FEAT_LRCPC2: on the M5, PROVEN by `sysctl hw.optional.arm.FEAT_LRCPC2`, and on the N2, `ilrcpc`). entry.c: `lea` lowered to one `add w1, w0, #k` | -8 | 0 | -6 | -4 |
+
+What none of the four removes:
+
+- **Immediates the emitter misses.** `and #1` and `cmp #1, lsl #12` in CRC-32, and the `cmp` in FNV-1a: 3 instructions. This is a
+  local fix in the emitter.
+- **Results routed through a scratch.** 6 copies in CRC-32 and FNV-1a can be removed by writing to the destination directly, a
+  local fix that needs no allocator. The table counts them under the register allocator.
+- **Instruction combining:** shifted operands, and `lsl` with `asr #31` into `sbfx`. This is what native has and FEX does not. It
+  shortens the histogram chain from 6 to 3 and removes 7 pairs in CRC-32. It belongs on the list after the allocator.
+- **A block that loops to itself** can already chain its back-edge straight to its own head, past the x7 setup, with no
+  multi-block translation: the same 4, 1, 1 and 1 instructions the table credits to multi-block translation.
+
+With the four changes and the two local fixes, the counts would be (INFERRED):
+
+| Loop | Ours now | Ours after | FEX | Native |
+|---|---|---|---|---|
+| entry.c | 37 | 22 | 57 | 30 |
+| CRC-32 | 73 | 42 | 54 | 29 |
+| FNV-1a | 30 | 16 | 19 | 24 |
+| Histogram | 44 | 30 | 30 | 20 |
+
+In the histogram and FNV-1a, the loop-carried chain would then match FEX's. In CRC-32, the count would fall below FEX's. Whether
+the time follows is NOT verified until the quiet re-measure.
 
 ### Box64
 
@@ -307,7 +445,8 @@ What the numbers say:
 - **Memory ordering is now the visible cost on this loop.** LDAPR/STLR cost 38% over plain accesses (`entry.c` stores and reloads one
   global every step).
 - **DMB barriers cost 5.3 times LDAPR/STLR.** LDAPR/STLR is the mode to use wherever the CPU has FEAT_LRCPC, as the M5 does.
-- **Hardware TSO in a VM** would take the "plain" row: 28% faster than LDAPR/STLR on this loop. Notepad++'s sweep emits 474,933
+- **Hardware TSO in a VM** would take the "plain" row: 28% faster than LDAPR/STLR on this loop in this run. On the N2 the two are
+  within 2%, and the M5 figure awaits a quiet re-measure, so the hardware TSO bit is not planned (see Memory ordering). Notepad++'s sweep emits 474,933
   ordered accesses and 278,734 alignment checks out of 8.6 million host instructions, so real code pays the same kind of cost.
 - **Translation emits 7.3 host instructions per guest instruction**, and the translator itself is unoptimized: it decodes the
   instruction after a block twice and allocates per block (INFERRED from the code, not profiled).
@@ -415,6 +554,15 @@ The spikes in `spikes/results/litmus_*` give two branches:
 - **In a Hypervisor.framework VM.** A vCPU with ACTLR_EL1.EnTSO set shows zero reorderings in the same litmus (PROVEN by the spike,
   `litmus_vm_tso1`). Code translated with `hardware` ordering is then correct and as fast as the plain row. Translation itself does
   not change: the mode is one option.
+
+**The hardware TSO bit is not needed.**
+
+- On the N2, LDAPR/STLR runs within 2% of plain accesses on all four workloads (PROVEN, run 44287829572). The largest
+  difference is FNV-1a at 1.7%, inside the run-to-run spread.
+- `rcpc` therefore stays the default, both in-process and in a VM.
+- On the M5, the earlier macOS run measured 38% on entry.c. A quiet re-measure is pending, so the M5 cost is NOT verified as final.
+- The cross-architecture entitlement is kept for mapping guest memory below 4 GB, not for TSO. That is the project's position for
+  this work. The below-4 GB mapping itself is NOT verified here.
 
 ## The native and translated boundary
 
