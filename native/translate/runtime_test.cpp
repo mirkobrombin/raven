@@ -1,6 +1,7 @@
 #include "runtime.h"
 #include "test_process.h"
 
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -346,6 +347,55 @@ static void keeps_xmm6_across_native_calls()
 		"XMM6 across a native function gave " + describe(result));
 }
 
+// What a native function saw of the guest: FPCR, XMM1 and MXCSR in CpuState.
+static uint64_t seen_fpcr = 0, seen_xmm1 = 0, seen_mxcsr = 0;
+static uint64_t observe_and_clobber()
+{
+	__asm__ volatile("mrs %0, fpcr" : "=r"(seen_fpcr));
+	seen_xmm1 = Runtime::current()->state().xmm[1][0];
+	seen_mxcsr = Runtime::current()->state().mxcsr;
+	return clobber_vectors();
+}
+
+// A native function runs with the host's FPCR and finds the guest's XMM registers and MXCSR in CpuState; afterwards the guest has its
+// MXCSR (rounding up here) and all 128 bits of XMM8 back.
+static void gives_native_functions_the_guest_state()
+{
+	RawCode memory;
+	const uint64_t n = memory.native;
+	const uint64_t data = reinterpret_cast<uint64_t>(memory.bytes) + 1024;
+	const uint32_t mxcsr = 0x5f80;
+	std::memcpy(reinterpret_cast<void *>(data), &mxcsr, 4);
+	for (unsigned i = 0; i < 16; ++i)
+		memory.bytes[1024 + 16 + i] = static_cast<uint8_t>(0xa0 + i);
+	auto bytes = [](uint64_t value) {
+		return std::array<uint8_t, 8>{uint8_t(value), uint8_t(value >> 8), uint8_t(value >> 16), uint8_t(value >> 24),
+			uint8_t(value >> 32), uint8_t(value >> 40), uint8_t(value >> 48), uint8_t(value >> 56)};
+	};
+	const auto d = bytes(data), f = bytes(n);
+	// mov rax, data; ldmxcsr [rax]; movups xmm8, [rax + 16]; movq xmm1, rcx; sub rsp, 40; mov rax, native; call rax; add rsp, 40;
+	// mov rcx, data; stmxcsr [rcx + 4]; movups [rcx + 32], xmm8; ret
+	const uint64_t entry = memory.add({0x48, 0xb8, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], 0x0f, 0xae, 0x10, 0x44, 0x0f, 0x10,
+		0x40, 0x10, 0x66, 0x48, 0x0f, 0x6e, 0xc9, 0x48, 0x83, 0xec, 0x28, 0x48, 0xb8, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], 0xff,
+		0xd0, 0x48, 0x83, 0xc4, 0x28, 0x48, 0xb9, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], 0x0f, 0xae, 0x59, 0x04, 0x44, 0x0f,
+		0x11, 0x41, 0x20, 0xc3});
+	JitCodeCache cache(1 << 20);
+	Runtime runtime(memory, cache);
+	runtime.bind_native(n, reinterpret_cast<const void *>(&observe_and_clobber), 0);
+	std::vector<uint64_t> stack(512);
+	runtime.state().gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
+	uint64_t host_fpcr;
+	__asm__ volatile("mrs %0, fpcr" : "=r"(host_fpcr));
+	const RunResult result = runtime.call(entry, {0x0123456789abcdef});
+	check(result.reason == ExitReason::returned, "the call gave " + describe(result));
+	check(seen_fpcr == host_fpcr, "the native function ran with FPCR " + std::to_string(seen_fpcr));
+	check(seen_xmm1 == 0x0123456789abcdef && seen_mxcsr == mxcsr, "the native function did not see XMM1 or MXCSR in CpuState");
+	uint32_t stored;
+	std::memcpy(&stored, reinterpret_cast<const void *>(data + 4), 4);
+	check(stored == mxcsr, "MXCSR after the native function: " + std::to_string(stored));
+	check(std::memcmp(memory.bytes + 1024 + 16, memory.bytes + 1024 + 32, 16) == 0, "XMM8 changed across the native function");
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
@@ -371,6 +421,7 @@ int main(int argc, char **argv)
 		{"one guest thread in this process", stays_single_threaded},
 		{"XMM registers across exits", keeps_xmm_across_exits},
 		{"XMM6 across native calls", keeps_xmm6_across_native_calls},
+		{"guest state in native functions", gives_native_functions_the_guest_state},
 	};
 	for (const auto &[name, run] : cases) {
 		const int before = failures;
