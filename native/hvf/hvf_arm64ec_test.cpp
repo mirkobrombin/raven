@@ -31,6 +31,10 @@ int64_t ec_sum8(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f
 uint64_t ec_hash(const char *text);
 int64_t ec_call(int64_t (*callback)(int64_t, int64_t), int64_t a, int64_t b);
 double ec_scale(int64_t a, double b);
+double ec_keep(int64_t (*callback)(int64_t, int64_t), double x, int64_t a);
+int64_t ec_call6(int64_t (*callback)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t), int64_t a);
+int64_t ec_call_double(int64_t (*callback)(int64_t, double), int64_t a, double x);
+int64_t ec_call_checked(int64_t (*callback)(int64_t, int64_t), int64_t a, int64_t b);
 }
 
 namespace {
@@ -43,6 +47,27 @@ void check(bool condition, const std::string &message)
 		std::fprintf(stderr, "FAIL: %s\n", message.c_str());
 		++failures;
 	}
+}
+
+// The client's callbacks, as the oracle calls them.
+int64_t keep(int64_t a, int64_t b)
+{
+	return a * 5 + b;
+}
+
+int64_t checked(int64_t a, int64_t b)
+{
+	return a * 1000 - b;
+}
+
+int64_t sum6(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f)
+{
+	return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f;
+}
+
+int64_t double_callback(int64_t a, double x)
+{
+	return std::bit_cast<int64_t>(x) + a;
 }
 
 int64_t combine(int64_t a, int64_t b)
@@ -106,15 +131,31 @@ int main(int argc, char **argv)
 			{"a string", 3, 0, 0, static_cast<int64_t>(ec_hash("translated x64 hands native code a string"))},
 			{"an integer and a double", 8, 6, std::bit_cast<int64_t>(1.5), std::bit_cast<int64_t>(ec_scale(6, 1.5))},
 			{"a callback into x64", 4, 7, 4, ec_call(combine, 7, 4)},
+			{"a double kept in d8 across a cold callback", 16, 7, std::bit_cast<int64_t>(1.5),
+				std::bit_cast<int64_t>(ec_keep(keep, 1.5, 7))},
+			{"a callback with six arguments, two on the stack", 21, 3, 0, ec_call6(sum6, 3)},
+			{"a callback with an integer and a double", 22, 5, std::bit_cast<int64_t>(2.5), ec_call_double(double_callback, 5, 2.5)},
+			{"__os_arm64x_check_call to x64", 17, 9, 4, ec_call_checked(checked, 9, 4)},
+			{"__os_arm64x_check_call to native code", 18, 9, 4, ec_call_checked(nullptr, 9, 4)},
+			{"XMM6 and XMM7 across native code that writes v6 and v7", 23, 0x1234, 0x34, 0x1200},
 			{"x18 at the TEB", 5, 0, 0, 1},
 		};
 		// Each case runs cold: its runs of the dispatcher count the host exits it took (lookup misses and chains included).
 		for (const Case &c : cases) {
 			const uint64_t runs = runtime.stats().runs;
-			const int64_t got = call(c.role, c.a, c.b);
+			int64_t got;
+			try {
+				got = call(c.role, c.a, c.b);
+			} catch (const std::exception &) {
+				// A guest exception leaves the vCPU unusable: name the case and end the test.
+				std::fprintf(stderr, "FAIL: %s threw\n", c.name);
+				throw;
+			}
 			check(got == c.expected, std::string(c.name) + ": " + std::to_string(got) + ", native " + std::to_string(c.expected));
+			const uint64_t took = runtime.stats().runs - runs;
+			check(took >= 2, std::string(c.name) + ": ran warm, in " + std::to_string(took) + " run");
 			std::printf("%s: %lld (native %lld), %llu runs\n", c.name, static_cast<long long>(got), static_cast<long long>(c.expected),
-				static_cast<unsigned long long>(runtime.stats().runs - runs));
+				static_cast<unsigned long long>(took));
 		}
 
 		// x18 across forced exits: a watcher kicks the vCPU while it reads the TEB through x18 again and again.
@@ -219,6 +260,35 @@ int main(int argc, char **argv)
 		check(native_sum == x64_sum && native_sum == n * (n - 1) / 2 + 3 * n, "the call loops disagree");
 		std::printf("per call, x64 -> native ARM64EC -> x64: %.2f ns; x64 -> x64 through a function pointer: %.2f ns\n", native_ns,
 			x64_ns);
+
+		// The callback warm: x64 -> native -> x64 -> native -> x64 without leaving the vCPU.
+		{
+			const uint64_t runs_before = runtime.stats().runs;
+			const hvf::Vcpu::Stats entered = vcpu.stats();
+			const int64_t got = call(4, 7, 4);
+			check(got == ec_call(combine, 7, 4) && runtime.stats().runs - runs_before == 1 &&
+					vcpu.stats().entries - entered.entries == 1 && vcpu.stats().cancels == entered.cancels,
+				"a warm callback left the vCPU");
+		}
+
+		// Native code x64 must not reach: with no entry thunk, and at the start of the code map with no word before it. Both must stop
+		// the call as unsupported at that address, not run it. Last, since a guest exception leaves the thread's stack as it was.
+		auto stops_at = [&](const char *name, uint64_t address) {
+			std::string outcome;
+			try {
+				const translate::RunResult result = runtime.call(entry, {20, address, 0});
+				outcome = "reason " + std::to_string(static_cast<unsigned>(result.reason)) + " at " + std::to_string(result.value);
+				check(result.reason == translate::ExitReason::unsupported && result.value == address,
+					std::string(name) + ": " + outcome + ", expected unsupported at " + std::to_string(address));
+			} catch (const std::exception &error) {
+				outcome = error.what();
+				check(false, std::string(name) + ": " + outcome);
+			}
+			std::printf("x64 calling %s %#llx: %s\n", name, static_cast<unsigned long long>(address), outcome.c_str());
+		};
+		stops_at("native code without an entry thunk", static_cast<uint64_t>(call(19, 0, 0)));
+		// ec_library.dll's image base (CMakeLists.txt) plus its .text RVA, where its ARM64EC code map range starts.
+		stops_at("the first word of the ARM64EC code", 0x190001000);
 	} catch (const std::exception &error) {
 		check(false, error.what());
 	}
