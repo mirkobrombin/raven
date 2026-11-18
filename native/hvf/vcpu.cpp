@@ -101,10 +101,14 @@ void Vcpu::quiesce()
 {
 	if (!in_guest.load())
 		return;
+	// hv_vcpus_exit on a vCPU that is not running yet makes its next hv_vcpu_run return at once (Hypervisor/hv_vcpu.h), which covers
+	// a thread between in_guest and hv_vcpu_run. The request is sent again while waiting, in case that is ever not so.
 	const uint64_t seen = exits.load();
-	hv_vcpus_exit(&vcpu, 1);
-	while (in_guest.load() && exits.load() == seen)
+	for (unsigned round = 0; in_guest.load() && exits.load() == seen; ++round) {
+		if (round % 1024 == 0)
+			hv_vcpus_exit(&vcpu, 1);
 		std::this_thread::yield();
+	}
 }
 
 uint64_t Vcpu::actlr() const
