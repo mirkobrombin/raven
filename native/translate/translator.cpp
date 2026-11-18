@@ -2042,9 +2042,34 @@ std::vector<uint32_t> native_thunk(uint64_t function, unsigned integer_arguments
 	return a.words;
 }
 
+// Native ARM64EC code shares FPCR with the x64 code around it: the rounding mode and FZ are the one state that MXCSR and FPCR are on
+// Windows. AH and FIZ are this translator's own, for x86's NaNs, min and max and DAZ; Arm code expects them clear, so they are cleared
+// on the way into native code and set again (FIZ from MXCSR.DAZ) on the way back.
+namespace {
+
+void clear_x86_fpcr(Assembler &a)
+{
+	a.mrs_fpcr(s5);
+	a.and_imm(s5, s5, ~uint64_t(3));
+	a.msr_fpcr(s5);
+}
+
+void set_x86_fpcr(Assembler &a)
+{
+	a.mrs_fpcr(s5);
+	a.orr_imm(s5, s5, 2);
+	a.ldr(s1, state_register, state_offset::mxcsr, 4);
+	a.ubfx(s1, s1, 6, 1, false);
+	a.bfi(s5, s1, 0, 1);
+	a.msr_fpcr(s5);
+}
+
+}
+
 std::vector<uint32_t> arm64ec_entry(uint64_t function, uint64_t thunk)
 {
 	Assembler a;
+	clear_x86_fpcr(a);
 	// As Windows enters an entry thunk: the x64 return address in x30, where the thunk keeps it for __os_arm64x_dispatch_ret, RSP past
 	// it in sp and in x4, from which the thunk reads stack arguments, and the function in x9.
 	a.ldr_post(30, host_register[rsp], 8);
@@ -2061,6 +2086,7 @@ std::vector<uint32_t> arm64ec_resume(uint64_t address)
 {
 	Assembler a;
 	// The x64 ret popped the address; native code finds its stack where it left it, RSP past the address, and RAX in x8.
+	clear_x86_fpcr(a);
 	a.mov_sp(a64::sp, host_register[rsp]);
 	a.mov_imm(address_register, address);
 	a.br(address_register);
@@ -2074,6 +2100,7 @@ std::vector<uint32_t> arm64ec_dispatch_ret()
 	// sp, not x28: a callback in between moved RSP, and only sp comes back through native code.
 	a.mov_sp(host_register[rsp], a64::sp);
 	a.mov(address_register, 30);
+	set_x86_fpcr(a);
 	branch_to_guest(a);
 	a.finish();
 	return a.words;
@@ -2086,6 +2113,7 @@ std::vector<uint32_t> arm64ec_dispatch_call()
 	a.sub_imm(host_register[rsp], a64::sp, 8);
 	a.str(30, host_register[rsp], 0, 8);
 	a.mov(address_register, 9);
+	set_x86_fpcr(a);
 	branch_to_guest(a);
 	a.finish();
 	return a.words;
