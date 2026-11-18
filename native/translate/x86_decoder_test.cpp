@@ -75,6 +75,14 @@ static bool sse_or_sse2(const std::vector<uint8_t> &bytes, const std::string &te
 	return true;
 }
 
+// x87: D8-DF and wait (9B), as LLVM prints them.
+static bool x87(const std::vector<uint8_t> &bytes)
+{
+	size_t at = 0;
+	const uint8_t opcode = first_opcode(bytes, at).first;
+	return (opcode >= 0xd8 && opcode <= 0xdf) || opcode == 0x9b;
+}
+
 struct Tally {
 	size_t instructions = 0;
 	size_t semantic = 0;
@@ -85,10 +93,16 @@ struct Tally {
 	size_t sse_translated = 0;
 	// SSE and SSE2 instructions the translator has no code for, by LLVM's mnemonic.
 	std::map<std::string, size_t> sse_missing;
+	size_t x87 = 0;
+	size_t x87_semantic = 0;
+	size_t x87_translated = 0;
+	std::map<std::string, size_t> x87_missing;
 };
 
 // The source of random SSE and SSE2 instances: each must have semantics.
 static const std::string sse_instances = "sse_instances.o";
+// The same for x87.
+static const std::string x87_instances = "x87_instances.o";
 
 // Checks the decoder against the corpus x86_corpus.py wrote from LLVM's disassembler. Every instruction LLVM decodes must decode to the
 // same length; those the translator gives semantics to must also print as LLVM prints them; bytes LLVM rejects must not decode to an
@@ -174,6 +188,17 @@ int main(int argc, char **argv)
 				else
 					++tally.sse_missing[expected.substr(0, expected.find(' '))];
 			}
+			if (x87(bytes)) {
+				++tally.x87;
+				if (instruction.mnemonic != Mnemonic::invalid && instruction.mnemonic != Mnemonic::other)
+					++tally.x87_semantic;
+				else if (source == x87_instances && problem.empty())
+					problem = "no semantics";
+				if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
+					++tally.x87_translated;
+				else
+					++tally.x87_missing[expected.substr(0, expected.find(' '))];
+			}
 		}
 		if (!problem.empty() && !expected.empty())
 			if (const char *reason = divergence(bytes, expected, instruction)) {
@@ -193,6 +218,18 @@ int main(int argc, char **argv)
 		std::printf("%s: %zu instructions, %zu with semantics (%.1f%%), %zu rejected by LLVM, %zu failures\n", name.c_str(),
 			tally.instructions, tally.semantic, tally.instructions ? 100.0 * double(tally.semantic) / double(tally.instructions) : 0.0,
 			tally.invalid_seen, tally.failures);
+		if (tally.x87) {
+			std::printf("%s: %zu x87 instructions, %zu with semantics (%.1f%%), %zu translated (%.1f%%)", name.c_str(), tally.x87,
+				tally.x87_semantic, 100.0 * double(tally.x87_semantic) / double(tally.x87), tally.x87_translated,
+				100.0 * double(tally.x87_translated) / double(tally.x87));
+			std::vector<std::pair<size_t, std::string>> missing;
+			for (const auto &[mnemonic, count] : tally.x87_missing)
+				missing.push_back({count, mnemonic});
+			std::sort(missing.rbegin(), missing.rend());
+			for (size_t i = 0; i < missing.size() && i < 12; ++i)
+				std::printf("%s %s %zu", i ? "," : "; without:", missing[i].second.c_str(), missing[i].first);
+			std::printf("\n");
+		}
 		if (!tally.sse)
 			continue;
 		std::printf("%s: %zu SSE and SSE2 instructions, %zu with semantics (%.1f%%), %zu translated (%.1f%%)", name.c_str(), tally.sse,

@@ -3,7 +3,7 @@
 usage: x86_corpus.py CLANG OBJDUMP OUTPUT [PE_OR_OBJECT...]
 
 Writes one line per instruction, "hex bytes<TAB>address<TAB>Intel text", from four sources: random instances of the instructions the
-translator handles and of SSE and SSE2 (assembled by CLANG), a stream of random bytes, and the code sections of every PE given. The
+translator handles, of SSE and SSE2 and of x87 (assembled by CLANG), a stream of random bytes, and the code sections of every PE given. The
 seeds are fixed, so the corpus is the same on every build.
 """
 
@@ -21,7 +21,7 @@ GPR = {
     64: ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"] + [f"r{i}" for i in range(8, 16)],
 }
 HIGH = ["ah", "ch", "dh", "bh"]
-PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword", 128: "xmmword"}
+PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword", 80: "tbyte", 128: "xmmword"}
 CONDITIONS = ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"]
 ARITHMETIC = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"]
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sar"]
@@ -215,6 +215,36 @@ def sse_instance(rng):
     return f"{name} {', '.join(operands)}"
 
 
+X87_MEMORY = {
+    4: "fadd fmul fcom fcomp fsub fsubr fdiv fdivr fld fst fstp fiadd fimul ficom ficomp fisub fisubr fidiv fidivr fild fisttp fist "
+       "fistp",
+    8: "fadd fmul fcom fcomp fsub fsubr fdiv fdivr fld fst fstp fild fisttp fistp",
+    2: "fiadd fimul ficom ficomp fisub fisubr fidiv fidivr fild fisttp fist fistp fldcw fnstcw fnstsw",
+    10: "fld fstp fbld fbstp",
+    0: "fldenv fnstenv frstor fnsave",
+}
+X87_REGISTER = {
+    "st, st(i)": "fadd fmul fsub fsubr fdiv fdivr fcmovb fcmove fcmovbe fcmovu fcmovnb fcmovne fcmovnbe fcmovnu fucomi fcomi fucompi "
+                 "fcompi",
+    "st(i), st": "fadd fmul fsub fsubr fdiv fdivr faddp fmulp fsubp fsubrp fdivp fdivrp",
+    "st(i)": "fcom fcomp fld fxch ffree fst fstp fucom fucomp ffreep",
+}
+X87_NULLARY = ("fnop fchs fabs ftst fxam fld1 fldl2t fldl2e fldpi fldlg2 fldln2 fldz f2xm1 fyl2x fptan fpatan fxtract fprem1 fdecstp "
+               "fincstp fprem fyl2xp1 fsqrt fsincos frndint fscale fsin fcos fucompp fnclex fninit fcompp wait").split() + ["fnstsw ax"]
+
+
+def x87_instance(rng):
+    roll = rng.random()
+    if roll < 0.45:
+        size = rng.choice(list(X87_MEMORY))
+        name = rng.choice(X87_MEMORY[size].split())
+        return f"{name} {memory(rng, size * 8, sized=size != 0)}"
+    if roll < 0.85:
+        form = rng.choice(list(X87_REGISTER))
+        return f"{rng.choice(X87_REGISTER[form].split())} {form.replace('i', str(rng.randrange(8)))}"
+    return rng.choice(X87_NULLARY)
+
+
 def disassemble(objdump, path):
     """Yields (bytes, address, text) for every instruction LLVM decodes in the code sections of path."""
     output =subprocess.run([objdump, "-d", "-M", "intel", path], check=True, capture_output=True, text=True).stdout
@@ -245,11 +275,16 @@ def main():
         sse_source.write_text(".intel_syntax noprefix\n.text\n" + "".join(sse_instance(sse_rng) + "\n" for _ in range(8000)))
         sse_obj = Path(scratch) / "sse_instances.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(sse_obj), str(sse_source)], check=True)
+        x87_rng = random.Random(20261125)
+        x87_source = Path(scratch) / "x87_instances.s"
+        x87_source.write_text(".intel_syntax noprefix\n.text\n" + "".join(x87_instance(x87_rng) + "\n" for _ in range(4000)))
+        x87_obj = Path(scratch) / "x87_instances.o"
+        subprocess.run([clang, "-c", "-x", "assembler", "-o", str(x87_obj), str(x87_source)], check=True)
         noise = Path(scratch) / "noise.s"
         noise.write_text(".text\n" + "".join(f".byte {', '.join(str(rng.randrange(256)) for _ in range(16))}\n" for _ in range(8192)))
         noise_obj = Path(scratch) / "noise.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(noise_obj), str(noise)], check=True)
-        for path in [obj, sse_obj, noise_obj] + [Path(image) for image in images]:
+        for path in [obj, sse_obj, x87_obj, noise_obj] + [Path(image) for image in images]:
             source_name = path.name
             lines.append(f"# {source_name}")
             for raw, address, text in disassemble(objdump, str(path)):
