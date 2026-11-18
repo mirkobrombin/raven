@@ -2130,7 +2130,7 @@ static int wait_own_task(pid_t task)
 int NativeProcess::pause_own_task(pid_t task)
 {
 	if (kill(task, SIGSTOP) != 0)
-		throw std::runtime_error("cannot interrupt native task");
+		throw std::runtime_error("cannot interrupt own native task " + std::to_string(task) + ": " + std::strerror(errno));
 	const int status = wait_own_task(task);
 	if (!WIFSTOPPED(status))
 		throw std::runtime_error("native task ended while being suspended");

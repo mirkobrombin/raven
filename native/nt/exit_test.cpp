@@ -28,7 +28,7 @@ int main(int argc,char **argv)
 	try {
 		check(argc==3,"bootstrap and exit fixture directory required");
 		const std::filesystem::path directory(argv[2]);
-		for (unsigned mode=0;mode<9;++mode) {
+		for (unsigned mode=0;mode<9;++mode) try {
 			raven::ModuleSet modules;
 			auto &entry=modules.add("client.exe",read_file(directory/("exit-"+std::to_string(mode)+".exe")));
 			unsigned loads=0,frames=0,removed=0; uint64_t window=0;
@@ -49,6 +49,8 @@ int main(int argc,char **argv)
 			check(mode==1 ? frames==2 && removed==1 : !frames && !removed,"process exit retained presentation resources");
 			std::ifstream children("/proc/self/task/"+std::to_string(getpid())+"/children"); long child=0;
 			check(!(children>>child),"process exit retained native child");
+		} catch (const std::exception &error) {
+			throw std::runtime_error("exit mode "+std::to_string(mode)+": "+error.what());
 		}
 	} catch (const std::exception &error) { std::cerr<<error.what()<<'\n'; return 1; }
 	return 0;
