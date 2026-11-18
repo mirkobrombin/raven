@@ -53,7 +53,7 @@ public:
 
 	CpuState &state() { return cpu; }
 	// Where translated code sees the CpuState.
-	uint64_t state_address() const { return state_memory.address; }
+	uint64_t state_address() const { return state_memory.data.address; }
 	const TranslationStats &translation_stats() const { return translation; }
 	const RuntimeStats &stats() const { return counters; }
 	// The runtime whose guest code is running on this thread, for native functions that need it.
@@ -97,7 +97,16 @@ private:
 	CodeAllocator &cache;
 	TranslatorOptions options;
 	CodeRunner *runner;
-	CodeAllocator::Data state_memory, lookup_memory;
+	// Runtime data that goes back to the allocator with the runtime, also when its constructor throws.
+	struct OwnedData {
+		CodeAllocator &cache;
+		CodeAllocator::Data data;
+		OwnedData(CodeAllocator &cache, size_t size) : cache(cache), data(cache.allocate_data(size)) {}
+		~OwnedData() { cache.free_data(data); }
+		OwnedData(const OwnedData &) = delete;
+		OwnedData &operator=(const OwnedData &) = delete;
+	};
+	OwnedData state_memory, lookup_memory;
 	CpuState &cpu;
 	std::span<LookupEntry> lookup;
 	TranslationStats translation;

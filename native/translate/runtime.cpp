@@ -39,13 +39,13 @@ uint64_t fnv(uint64_t hash, const void *bytes, size_t size)
 }
 
 Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options, CodeRunner *runner)
-	: memory(memory), cache(cache), options(options), runner(runner), state_memory(cache.allocate_data(sizeof(CpuState))),
-	  lookup_memory(cache.allocate_data(sizeof(LookupEntry) << lookup_bits)), cpu(*new (state_memory.host) CpuState{}),
-	  lookup(static_cast<LookupEntry *>(lookup_memory.host), size_t(1) << lookup_bits)
+	: memory(memory), cache(cache), options(options), runner(runner), state_memory(cache, sizeof(CpuState)),
+	  lookup_memory(cache, sizeof(LookupEntry) << lookup_bits), cpu(*new (state_memory.data.host) CpuState{}),
+	  lookup(static_cast<LookupEntry *>(lookup_memory.data.host), size_t(1) << lookup_bits)
 {
 	std::fill(lookup.begin(), lookup.end(), LookupEntry{});
 	// Translated code reads the table at the address it sees, which is not the runtime's pointer in a VM.
-	cpu.lookup_table = reinterpret_cast<LookupEntry *>(lookup_memory.address);
+	cpu.lookup_table = reinterpret_cast<LookupEntry *>(lookup_memory.data.address);
 	place_fixed_code();
 }
 
@@ -53,8 +53,6 @@ Runtime::~Runtime()
 {
 	for (const auto &[guest, block] : blocks)
 		memory.watch_code(block->guest_start, block->guest_size, false);
-	cache.free_data(lookup_memory);
-	cache.free_data(state_memory);
 }
 
 Runtime *Runtime::current()
@@ -174,7 +172,7 @@ void Runtime::chain(uint8_t *site, uint64_t target)
 uint32_t Runtime::enter_code(const uint8_t *code)
 {
 	if (runner)
-		return runner->enter(reinterpret_cast<uint64_t>(enter), state_memory.address, reinterpret_cast<uint64_t>(code));
+		return runner->enter(reinterpret_cast<uint64_t>(enter), state_memory.data.address, reinterpret_cast<uint64_t>(code));
 	return reinterpret_cast<EnterFunction>(enter)(&cpu, code);
 }
 
