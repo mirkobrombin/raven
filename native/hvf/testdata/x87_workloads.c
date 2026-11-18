@@ -9,11 +9,12 @@
 
 static double xs[COUNT], ys[COUNT];
 
+// The significand and the sign and exponent; the 6 bytes of padding after the 80 bits are not the value's.
 static uint64_t bits_of(long double value)
 {
 	uint64_t bits[2] = {0, 0};
 	memcpy(bits, &value, sizeof value < sizeof bits ? sizeof value : sizeof bits);
-	return bits[0] ^ bits[1] << 48;
+	return bits[0] ^ (bits[1] & 0xffff) << 48;
 }
 
 // A dot product of 512 doubles in long double, 8 times, in order: fld, fmul, faddp per element.

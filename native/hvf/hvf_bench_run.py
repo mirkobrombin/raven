@@ -25,8 +25,9 @@ WORKLOADS = {"entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}
 # The SSE workloads (testdata/sse_workloads.c), run when named.
 SSE_WORKLOADS = {"saxpy": 60000, "dot": 10000, "copy": 40000}
 # The x87 workloads (testdata/x87_workloads.c), run when named. The native build's long double is a double: its checksum differs from
-# x86's, and only the translated configurations must agree.
-X87_WORKLOADS = {"ldot": 4000, "lpoly": 8000}
+# x86's, and only the translated configurations must agree. Fewer calls than the others: translated they take 50 ms or more; natively
+# they do not.
+X87_WORKLOADS = {"ldot": 100, "lpoly": 200}
 RUNS = 6
 CONFIGURATIONS = ["native", "process-loop", "process-call", "vm-loop", "vm-call"]
 
