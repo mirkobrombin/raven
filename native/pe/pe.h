@@ -1,5 +1,7 @@
 #pragma once
 
+#include "peparse/peparse.h"
+
 #include <array>
 #include <cstdint>
 #include <span>
@@ -52,7 +54,8 @@ struct PEDelayImport {
 	std::vector<PEImport> imports;
 };
 
-// The caller owns the file bytes for the lifetime of this view.
+// The caller owns the file bytes for the lifetime of this view. The file is read by the Rust reader in native/peparse; every read
+// checks its offsets against the bytes and throws std::runtime_error with the reason a file is refused.
 class PEImage {
 public:
 	explicit PEImage(std::span<const uint8_t> bytes);
@@ -84,6 +87,7 @@ public:
 
 private:
 	std::span<const uint8_t> bytes;
+	raven_pe_headers parsed;
 	std::string string_at(uint32_t rva) const;
 	// The same string seen where the file holds it, for reading a table of names without a copy of each.
 	std::string_view text_at(uint32_t rva) const;

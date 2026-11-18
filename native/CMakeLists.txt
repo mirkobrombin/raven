@@ -1,6 +1,22 @@
+# The PE reader (native/peparse), in Rust: cargo builds the static library raven_pe reads files through.
+find_program(RAVEN_CARGO cargo REQUIRED)
+file(GLOB RAVEN_PEPARSE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/peparse/src/*.rs)
+set(RAVEN_PEPARSE_LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/peparse/release/libraven_peparse.a)
+add_custom_command(OUTPUT ${RAVEN_PEPARSE_LIBRARY}
+    COMMAND ${CMAKE_COMMAND} -E env CARGO_TARGET_DIR=${CMAKE_CURRENT_BINARY_DIR}/peparse
+        ${RAVEN_CARGO} build --locked --release --lib --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/peparse/Cargo.toml
+    DEPENDS ${RAVEN_PEPARSE_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/peparse/Cargo.toml ${CMAKE_CURRENT_SOURCE_DIR}/peparse/Cargo.lock
+    VERBATIM)
+add_custom_target(raven_peparse_library DEPENDS ${RAVEN_PEPARSE_LIBRARY})
+add_library(raven_peparse STATIC IMPORTED)
+set_target_properties(raven_peparse PROPERTIES IMPORTED_LOCATION ${RAVEN_PEPARSE_LIBRARY} INTERFACE_LINK_LIBRARIES "pthread;dl;m")
+add_dependencies(raven_peparse raven_peparse_library)
+
 add_library(raven_pe STATIC pe/pe.cpp pe/loaded_image.cpp pe/module_set.cpp pe/resources.cpp)
 target_include_directories(raven_pe PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(raven_pe PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
+add_dependencies(raven_pe raven_peparse_library)
+target_link_libraries(raven_pe PUBLIC raven_peparse)
 
 add_library(raven_pixels STATIC graphics/icon_bitmap.cpp graphics/icon_group.cpp graphics/stretch.cpp)
 target_include_directories(raven_pixels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -193,7 +209,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_sources(raven_cpu PRIVATE desktop/brush.cpp desktop/bitblt.cpp)
     target_link_libraries(raven_cpu PUBLIC raven_pe raven_pixels raven_shader)
     # The waits on kernel objects (native/waits), in Rust: cargo builds the static library the host links.
-    find_program(RAVEN_CARGO cargo REQUIRED)
     file(GLOB RAVEN_WAITS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/waits/src/*.rs)
     set(RAVEN_WAITS_LIBRARY ${CMAKE_CURRENT_BINARY_DIR}/waits/release/libraven_waits.a)
     add_custom_command(OUTPUT ${RAVEN_WAITS_LIBRARY}

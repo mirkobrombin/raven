@@ -93,7 +93,7 @@ jobs:
           echo "${#shells[@]} shell scripts parsed"
 
   # The waits on kernel objects: native/model/Waits.tla and Address.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
-  # which tries every interleaving of its cases.
+  # which tries every interleaving of its cases. The PE reader in native/peparse runs its tests too, which change a file at random and read it again.
   models:
     name: Models
     needs: [commits, files, licenses, scripts]
@@ -135,6 +135,10 @@ jobs:
           RUSTFLAGS: --cfg loom
           CARGO_TARGET_DIR: target-loom
         run: cargo test --locked --release --test loom
+
+      - name: Test the PE reader
+        working-directory: native/peparse
+        run: cargo test --locked --release
 
   # Provision: the pinned external inputs, each in its own job because they share nothing and some take long. A component is
   # rebuilt only when its recipe or its sources change.
