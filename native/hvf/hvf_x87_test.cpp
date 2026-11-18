@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 			if (item.output.signal) {
 				// SIGFPE is #MF: the runtime stops at an instruction of the case with a fault.
 				if (item.output.signal == 8 ? result.reason != translate::ExitReason::fault || result.value < address ||
-						result.value >= address + item.code.size()
+						result.value >= address + item.code.size() || state.exit_info != uint64_t(translate::FaultKind::x87)
 											: result.reason == translate::ExitReason::returned)
 					problem = "exit " + std::to_string(static_cast<unsigned>(result.reason)) + ", x86 raised signal " +
 						std::to_string(item.output.signal);

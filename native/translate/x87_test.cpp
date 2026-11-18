@@ -139,6 +139,21 @@ int main(int argc, char **argv)
 		return 2;
 #endif
 	}
+	// A fault from translated code (ud2) says so in exit_info, apart from the x87 core's #MF the cases check.
+	{
+		Snippets memory;
+		JitCodeCache cache(1 << 20);
+		Runtime runtime(memory, cache, TranslatorOptions{});
+		std::vector<uint8_t> stack(1 << 12);
+		runtime.state().gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
+		runtime.state().exit_info = ~uint64_t(0);
+		const RunResult result = runtime.call(memory.add({0x0f, 0x0b}));
+		if (result.reason != ExitReason::fault || runtime.state().exit_info != uint64_t(FaultKind::instruction)) {
+			std::fprintf(stderr, "FAIL: ud2 gave exit %u, exit_info %#llx\n", static_cast<unsigned>(result.reason),
+				static_cast<unsigned long long>(runtime.state().exit_info));
+			return 1;
+		}
+	}
 	// Both orderings this process can run.
 	size_t failures = 0, run = 0;
 	for (const MemoryOrdering ordering : {MemoryOrdering::rcpc, MemoryOrdering::barriers}) {
@@ -166,7 +181,7 @@ int main(int argc, char **argv)
 			if (item.output.signal) {
 				// SIGFPE is #MF: the runtime stops at an instruction of the case with a fault.
 				if (item.output.signal == 8 ? result.reason != ExitReason::fault || result.value < address ||
-						result.value >= address + item.code.size()
+						result.value >= address + item.code.size() || state.exit_info != uint64_t(FaultKind::x87)
 											: result.reason == ExitReason::returned)
 					problem = "exit " + std::to_string(static_cast<unsigned>(result.reason)) + ", x86 raised signal " +
 						std::to_string(item.output.signal);
