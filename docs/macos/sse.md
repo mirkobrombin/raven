@@ -256,6 +256,14 @@ its checksum differs from x86's; with it, the native and both translated checksu
 
 ## Open items
 
+- **FEAT_AFP is assumed.** The translator writes FPCR.AH without checking that the host has it. On a core without FEAT_AFP the bit
+  is RES0 and the write is dropped silently. NaN propagation, the default NaN's sign and min and max with a NaN or a zero pair would
+  then follow Arm. The M5 and its vCPUs have it (PROVEN above); older cores were not checked (NOT verified).
+  - The plan: the runtime reads `hw.optional.arm.FEAT_AFP`, and in a VM the vCPU's ID_AA64MMFR1_EL1.AFP, and refuses or falls back
+    to software sequences for those instructions without it.
+- **The host's FPSR** is replaced by the guest's flags on entry, and only FPCR is restored on exit. The host's cumulative flags are
+  lost across a run. This matters only to host code that tests floating-point exceptions.
+- **ldmxcsr** stores reserved bits instead of raising #GP.
 - **DE** is never set.
 - **Unmasked exceptions:** MXCSR's masks are ignored, so an unmasked exception does not raise #XM. Arm traps them only with FPCR's
   trap enables, which are left clear.
