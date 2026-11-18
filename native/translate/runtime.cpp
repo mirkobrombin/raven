@@ -312,8 +312,10 @@ RunResult Runtime::Thread::run()
 					break;
 				}
 				const uint64_t next = cpu.rip + instruction.length;
-				if (x87_execute(cpu, runtime.memory, instruction, next) == X87Result::fault)
+				if (x87_execute(cpu, runtime.memory, instruction, next) == X87Result::fault) {
+					cpu.exit_info = uint64_t(FaultKind::x87);
 					return {ExitReason::fault, cpu.rip};
+				}
 				cpu.rip = next;
 			}
 			break;
@@ -322,6 +324,9 @@ RunResult Runtime::Thread::run()
 			cpu.stop_requested = 0;
 			return {reason, cpu.stop_code};
 		}
+		case ExitReason::fault:
+			cpu.exit_info = uint64_t(FaultKind::instruction);
+			return {reason, cpu.rip};
 		default: return {reason, cpu.rip};
 		}
 	}

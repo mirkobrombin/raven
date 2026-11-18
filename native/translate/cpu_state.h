@@ -30,6 +30,14 @@ enum class ExitReason : uint32_t {
 	x87,
 };
 
+// What CpuState::exit_info holds after ExitReason::fault.
+enum class FaultKind : uint64_t {
+	// hlt or ud2 in translated code.
+	instruction,
+	// #MF: an x87 instruction found an unmasked exception pending; FSW and FCW in CpuState::x87 say which.
+	x87,
+};
+
 // The x87 FPU, kept in CpuState only: the host's x87 core (x87.h) reads and writes it, translated code never does. The order is that
 // of the FXSAVE image's first 32 bytes (with ftw the abridged tag byte, and mxcsr's place unused: CpuState::mxcsr holds it), but st
 // holds the physical registers R0-R7, not ST(0)-ST(7): ST(i) is R((TOP + i) mod 8), TOP being FSW bits 13:11. Each register is the
