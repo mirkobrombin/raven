@@ -777,6 +777,26 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	NativeProcess process(images, bootstrap, timeout, NativeMode::x86, entry.image.stack_reserve);
 	for (const auto &[address, api] : traps)
 		process.add_api_trap(address, api.second);
+	// Stubs of exports forwarded to a component keep their breakpoint; trapping them lets callers that read the export table directly
+	// reach the component's implementation with their own stack frame intact.
+	std::unordered_map<uint64_t, uint64_t> forwarded_traps;
+	for (const auto &[name, module] : modules.all()) {
+		if (!module->runtime_api)
+			continue;
+		const auto &bytes = module->loaded.data();
+		for (const auto &symbol : module->exports) {
+			if (symbol.forwarder.empty() || !symbol.address || symbol.names.empty())
+				continue;
+			const uint64_t stub = module->loaded.base() + symbol.address;
+			if (traps.contains(stub) || symbol.address >= bytes.size() || bytes[symbol.address] != 0xcc)
+				continue;
+			try {
+				forwarded_traps.emplace(stub, modules.resolve({name, symbol.names.front(), 0, false, 0}));
+				process.add_api_trap(stub, 0);
+			} catch (const std::runtime_error &) {
+			}
+		}
+	}
 	NativeEnvironment environment(process, entry.loaded.base(), uint32_t(::getpid()), 1);
 	NativeX86D3D9 direct3d9(process);
 	NativeX86DirectSound directsound(process);
@@ -1072,6 +1092,17 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		auto result = process.active() ? process.callback(address, arguments, budget) : process.call(address, arguments, budget);
 		while (result.stop == NativeStop::api || (result.stop == NativeStop::fault && dispatch_fault(result))) {
 			if (result.stop == NativeStop::fault) {
+				budget = remaining();
+				if (budget.count() <= 0)
+					return NativeResult{NativeStop::timeout, 0, result.instruction, 0};
+				result = process.resume(budget);
+				continue;
+			}
+			if (const auto forwarded = forwarded_traps.find(result.value); forwarded != forwarded_traps.end()) {
+				auto native = process.context();
+				native.registers.rip = forwarded->second;
+				native.registers.orig_rax = uint64_t(-1);
+				process.redirect(native, process.callback_depth());
 				budget = remaining();
 				if (budget.count() <= 0)
 					return NativeResult{NativeStop::timeout, 0, result.instruction, 0};

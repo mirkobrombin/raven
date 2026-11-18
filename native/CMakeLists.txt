@@ -4362,6 +4362,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(fault_continue_fixture${width} ALL DEPENDS ${fault_continue_client})
                     add_test(NAME native_fault_continue_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${fault_continue_client})
                     set_tests_properties(native_fault_continue_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(forwarded_stub_client ${CMAKE_CURRENT_BINARY_DIR}/forwarded-stub${width}.exe)
+                    add_custom_command(OUTPUT ${forwarded_stub_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${forwarded_stub_client} ${LOADER_SOURCES}/forwarded_stub_client.c -luser32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/forwarded_stub_client.c VERBATIM)
+                    add_custom_target(forwarded_stub_fixture${width} ALL DEPENDS ${forwarded_stub_client})
+                    add_test(NAME native_forwarded_stub_x${width} COMMAND raven --run-process --execution=native --timeout-ms=5000 ${forwarded_stub_client})
+                    set_tests_properties(native_forwarded_stub_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(shell_link_client ${CMAKE_CURRENT_BINARY_DIR}/shell-link${width}.exe)
                     add_custom_command(OUTPUT ${shell_link_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
