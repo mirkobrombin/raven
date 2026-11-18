@@ -6,6 +6,7 @@
 #include "vm.h"
 #include "vm_process.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <exception>
@@ -81,7 +82,7 @@ int main(int argc, char **argv)
 		}).join();
 
 		// vCPU A runs patch_target in a chained loop while vCPU B rewrites it.
-		uint64_t worst_ns = 0;
+		uint64_t worst_ns = 0, kicks = 0, faults = 0;
 		for (int trial = 0; trial < trials; ++trial) {
 			words[48] = 0;
 			words[50] = 1000 + uint64_t(trial);
@@ -95,6 +96,7 @@ int main(int argc, char **argv)
 					const translate::RunResult result = thread.call(entry, {4, shared, bound});
 					seen = now_ns();
 					count = result.value;
+					kicks += vcpu.stats().cancels;
 				} catch (const std::exception &error) {
 					check(false, error.what());
 				}
@@ -107,6 +109,7 @@ int main(int argc, char **argv)
 					process.prepare_thread(thread.state());
 					thread.call(entry, {5, shared, 1000000});
 					written = now_ns();
+					faults += vcpu.stats().write_faults;
 				} catch (const std::exception &error) {
 					check(false, error.what());
 				}
@@ -120,8 +123,56 @@ int main(int argc, char **argv)
 			check(latency < 100000000, "two vCPUs, trial " + std::to_string(trial) + ": A saw B's store " +
 				std::to_string(latency / 1000) + " us after it");
 		}
-		std::printf("two vCPUs: A saw B's store within %.1f us of B's call returning, worst of %d trials\n", double(worst_ns) / 1e3,
-			trials);
+		std::printf("two vCPUs: A saw B's store within %.1f us of B's call returning, worst of %d trials; B took %llu write faults, A "
+			"was kicked %llu times\n", double(worst_ns) / 1e3, trials, static_cast<unsigned long long>(faults),
+			static_cast<unsigned long long>(kicks));
+		// The kick itself, which the trials above may not need: A is usually out of the guest already, through the undone chain. Here
+		// a vCPU spins in translated code that no write touches, and quiesce must make it exit and return.
+		{
+			std::atomic<hvf::Vcpu *> spinning{nullptr};
+			std::atomic<bool> stop{false}, released{false};
+			uint64_t cancels = 0;
+			std::thread spinner([&] {
+				try {
+					hvf::Vcpu vcpu(vm, true);
+					translate::Runtime::Thread &thread = runtime.add_thread(&vcpu);
+					Leave leave{runtime, thread};
+					process.prepare_thread(thread.state());
+					vcpu.on_cancel = [&](hvf::Vcpu &) {
+						if (stop)
+							throw std::runtime_error("stopped");
+					};
+					spinning = &vcpu;
+					try {
+						thread.call(entry, {2, 0, ~uint64_t(0) >> 8});
+					} catch (const std::runtime_error &) {
+					}
+					cancels = vcpu.stats().cancels;
+					// The main thread may still be in quiesce on this vCPU.
+					while (!released)
+						std::this_thread::yield();
+				} catch (const std::exception &error) {
+					check(false, error.what());
+				}
+			});
+			while (!spinning)
+				std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			uint64_t worst = 0;
+			for (int i = 0; i < 100; ++i) {
+				const uint64_t start = now_ns();
+				spinning.load()->quiesce();
+				worst = std::max(worst, now_ns() - start);
+			}
+			stop = true;
+			spinning.load()->quiesce();
+			released = true;
+			spinner.join();
+			std::printf("quiesce of a spinning vCPU: 100 calls, %llu forced exits, slowest %.1f us\n",
+				static_cast<unsigned long long>(cancels), double(worst) / 1e3);
+			// A call that finds the vCPU between two exits, in the host, returns without a kick: there is nothing to synchronize.
+			check(cancels >= 50 && worst < 100000000, "quiesce rarely made the spinning vCPU exit, or took 100 ms");
+		}
 		std::printf("runtime: %llu blocks translated, %llu invalidated\n",
 			static_cast<unsigned long long>(runtime.translation_stats().blocks),
 			static_cast<unsigned long long>(runtime.stats().invalidated_blocks));
