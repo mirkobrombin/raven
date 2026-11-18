@@ -482,6 +482,49 @@ def main():
                 cases.append(("tininess", [0] * 16, 0, state.image(), bytes(256), insn.text))
                 lines += [f".globl _case_{len(cases) - 1}", f".globl _case_{len(cases) - 1}_end", f"_case_{len(cases) - 1}:",
                           ".byte " + ", ".join(str(byte) for byte in insn.code), "ret", f"_case_{len(cases) - 1}_end:"]
+    def emit(family, state, registers, memory, body):
+        number = len(cases)
+        cases.append((family, registers, 0, state.image(), bytes(memory), "; ".join(insn.text for insn in body)))
+        lines.extend([f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:",
+                      ".byte " + ", ".join(str(byte) for insn in body for byte in insn.code), "ret", f"_case_{number}_end:"])
+
+    # Exact results below the smallest normal stored with UE unmasked: x86 signals underflow on tininess alone, and memory stays.
+    for size, value in [(8, (0x3BCD, ONE)), (4, (0x3F6A, ONE))]:
+        for masks in (0x3F, 0x2F):
+            state = State(rng, False)
+            state.depth, state.fcw, state.fsw, state.top = 1, 0x40 | masks | 3 << 8, 0, 0
+            state.regs[0] = value
+            emit("tininess", state, [0] * 16, bytes(256), [memory_insn("fst", size, 0)])
+    # Address forms the random cases do not use: RIP-relative operands reading the case's own code, and an index register.
+    rip_forms = [("fadd qword ptr [rip - 0xa]", bytes([0xDC, 0x05]), 10), ("fmul dword ptr [rip - 0xa]", bytes([0xD8, 0x0D]), 10),
+                 ("fld tbyte ptr [rip - 0xa]", bytes([0xDB, 0x2D]), 10)]
+    for text, opcode, back in rip_forms:
+        for _ in range(8):
+            state = State(rng, False)
+            state.depth = rng.randint(0, 5)
+            body = [nullary("fldz"), nullary("fld1"), Insn(text, opcode + struct.pack("<i", -back))]
+            emit("addressing", state, [0] * 16, bytes(rng.getrandbits(8) for _ in range(256)), body)
+    index_forms = [("fld qword ptr [r15 + 8*rcx + {d}]", 1, bytes([0x41, 0xDD, 0x44, 0xCF])),
+                   ("fstp tbyte ptr [r15 + 2*rdx + {d}]", 2, bytes([0x41, 0xDB, 0x7C, 0x57])),
+                   ("fild word ptr [r15 + rax + {d}]", 0, bytes([0x41, 0xDF, 0x44, 0x07]))]
+    for text, index, prefix in index_forms:
+        for _ in range(10):
+            state = State(rng, False)
+            registers = [rng.getrandbits(64) for _ in range(16)]
+            registers[index] = rng.randrange(8)
+            displacement = rng.randrange(0, 48)
+            memory = bytearray(rng.getrandbits(8) for _ in range(256))
+            emit("addressing", state, registers, memory, [Insn(text.format(d=displacement), prefix + bytes([displacement]))])
+    # An unmasked exception pending (FSW.ES): x86 raises #MF on a waiting instruction and runs the others.
+    pending = [nullary("fnop"), nullary("fld1"), register_insn("fadd", 1), nullary("wait"), nullary("fnstsw ax"), nullary("fnclex"),
+               nullary("fninit"), memory_insn("fnstcw", 2, 8)]
+    for insn in pending:
+        for flag in (1, 4):
+            state = State(rng, False)
+            state.depth, state.top = 2, 0
+            state.fcw = 0x37F & ~flag
+            state.fsw = flag | 0x80 | 0x8000
+            emit("pending", state, [0] * 16, bytes(256), [insn])
     lines += [".data", ".balign 16", ".globl _host_fx", "_host_fx: .zero 512", "saved_io: .quad 0", "saved_code: .quad 0", ""]
     with open(assembly, "w") as out:
         out.write("\n".join(lines))

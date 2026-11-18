@@ -156,8 +156,11 @@ int main(int argc, char **argv)
 			const RunResult result = runtime.call(address);
 			std::string problem;
 			if (item.output.signal) {
-				if (result.reason == ExitReason::returned)
-					problem = "returned, x86 raised signal " + std::to_string(item.output.signal);
+				// SIGFPE is #MF: the runtime stops at that instruction with a fault.
+				if (item.output.signal == 8 ? result.reason != ExitReason::fault || result.value != address
+											: result.reason == ExitReason::returned)
+					problem = "exit " + std::to_string(static_cast<unsigned>(result.reason)) + ", x86 raised signal " +
+						std::to_string(item.output.signal);
 			} else if (result.reason != ExitReason::returned)
 				problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
 			else
