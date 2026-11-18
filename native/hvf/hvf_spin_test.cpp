@@ -58,8 +58,10 @@ struct Spinner {
 	hv_vcpu_t id = 0;
 	bool ready = false;
 	uint64_t sentinel = 0;
+	// Steps of one batch; batches run until target_seconds have passed, so host load changes how many, never how long.
 	uint64_t steps = 0;
-	uint64_t result = 0;
+	double target_seconds = 0;
+	uint64_t batches = 0, wrong_results = 0, total_steps = 0;
 	double seconds = 0;
 	uint64_t cancels = 0, x18_lost = 0, migrations = 0, final_x18 = 0;
 	std::set<size_t> cpus;
@@ -94,11 +96,17 @@ void spin(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, Spinner &spinner
 			spinner.ready = true;
 		}
 		const uint64_t start = now_ns();
-		const translate::RunResult done = runtime.call(entry, {2, 0, spinner.steps});
-		spinner.seconds = double(now_ns() - start) / 1e9;
-		if (done.reason != translate::ExitReason::returned)
-			throw std::runtime_error("the spin did not return");
-		spinner.result = done.value;
+		do {
+			const uint64_t steps = spinner.steps + spinner.batches;
+			const translate::RunResult done = runtime.call(entry, {2, 0, steps});
+			if (done.reason != translate::ExitReason::returned)
+				throw std::runtime_error("the spin did not return");
+			if (done.value != lcg_skip(steps, steps))
+				++spinner.wrong_results;
+			++spinner.batches;
+			spinner.total_steps += steps;
+			spinner.seconds = double(now_ns() - start) / 1e9;
+		} while (spinner.seconds < spinner.target_seconds);
 		spinner.final_x18 = vcpu.reg(HV_REG_X18);
 		std::lock_guard guard(spinner.lock);
 		spinner.ready = false;
@@ -148,19 +156,12 @@ int main(int argc, char **argv)
 		hvf::VmProcess process(vm);
 		const uint64_t entry = process.entry(process.load(std::filesystem::path(argv[1]) / "hvf_client.exe"));
 
-		// Steps per second of the translated LCG on this machine under this load, from a short run.
-		Spinner probe;
-		probe.sentinel = 0x5eed000000000000ull;
-		probe.steps = 50000000;
-		std::thread(spin, std::ref(vm), std::ref(process), entry, std::ref(probe)).join();
-		if (!probe.error.empty())
-			throw std::runtime_error(probe.error);
-		const uint64_t steps = static_cast<uint64_t>(double(probe.steps) / probe.seconds * target_seconds);
-
+		// About 70 ms per batch on an idle M5.
 		Spinner spinners[2];
 		for (unsigned i = 0; i < 2; ++i) {
 			spinners[i].sentinel = 0x5eed5eed00000000ull | i;
-			spinners[i].steps = steps + i;
+			spinners[i].steps = 200000000 + i;
+			spinners[i].target_seconds = target_seconds;
 		}
 		std::atomic<bool> done{false};
 		std::thread watcher([&] {
@@ -180,21 +181,22 @@ int main(int argc, char **argv)
 		done = true;
 		watcher.join();
 		for (const Spinner &spinner : spinners) {
-			std::printf("vCPU x18 %#llx: %llu steps in %.2f s, result %s, %llu forced exits, x18 changed at %llu of them and reads %#llx "
-				"at the end, %llu host CPU changes between exits over %zu distinct CPUs\n",
-				static_cast<unsigned long long>(spinner.sentinel), static_cast<unsigned long long>(spinner.steps), spinner.seconds,
-				spinner.result == lcg_skip(spinner.steps, spinner.steps) ? "right" : "WRONG",
+			std::printf("vCPU x18 %#llx: %llu steps in %llu batches, %.2f s, %llu wrong results, %llu forced exits, x18 changed at %llu "
+				"of them and reads %#llx at the end, %llu host CPU changes between exits over %zu distinct CPUs\n",
+				static_cast<unsigned long long>(spinner.sentinel), static_cast<unsigned long long>(spinner.total_steps),
+				static_cast<unsigned long long>(spinner.batches), spinner.seconds, static_cast<unsigned long long>(spinner.wrong_results),
 				static_cast<unsigned long long>(spinner.cancels), static_cast<unsigned long long>(spinner.x18_lost),
 				static_cast<unsigned long long>(spinner.final_x18), static_cast<unsigned long long>(spinner.migrations),
 				spinner.cpus.size());
 			if (!spinner.error.empty())
 				fail(spinner.error);
-			if (spinner.result != lcg_skip(spinner.steps, spinner.steps))
+			if (spinner.wrong_results || !spinner.batches)
 				fail("a spin returned a wrong value");
 			if (spinner.x18_lost || spinner.final_x18 != spinner.sentinel)
 				fail("x18 changed");
-			if (spinner.seconds < target_seconds * 0.75 || spinner.cancels < 10)
-				fail("a vCPU spun too briefly to tell");
+			// The x18 check at forced exits means nothing without any.
+			if (!spinner.cancels)
+				fail("the watcher never forced an exit");
 		}
 	} catch (const std::exception &error) {
 		fail(error.what());

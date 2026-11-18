@@ -201,9 +201,10 @@ hvf spin: PASS
   sampled at the exits).
 - Preemptions: 3337 involuntary context switches for the whole process (PROVEN); how many fell on the two vCPU threads is not
   observable per thread here (NOT verified).
-- The spin length is calibrated from a short run under the same load, and the test fails under three quarters of the target; the real
-  length varies with contention (3.5 s here, 5.8 s in an earlier run with a 2 s target).
-- The result of each spin matches the LCG computed on the host by squaring (PROVEN).
+- Each vCPU spins in batches of about 200 million LCG steps until the target time has passed, so host load changes how many batches
+  run, never whether the spin lasts long enough; every batch's result is checked. The test fails only on a wrong result, a changed x18,
+  or no forced exit at all. 10 consecutive runs passed with 20 more `yes` processes loading the host (load average 39 to 86).
+- The result of each batch matches the LCG computed on the host by squaring (PROVEN).
 
 ### Failing first
 
