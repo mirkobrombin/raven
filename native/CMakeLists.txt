@@ -2140,6 +2140,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${fixture}/png-formats.exe)
                 set_tests_properties(native_png_formats_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/png-formats-prefix)
+                # BMP files whose pixel offset or rows run past their end are refused, also where the offset would wrap round a 32-bit
+                # address space (bmp_offsets_client.c).
+                add_custom_command(OUTPUT ${fixture}/bmp-offsets.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/bmp-offsets.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/bmp_offsets_client.c -lwindowscodecs -lole32 -luuid
+                        -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/bmp_offsets_client.c VERBATIM)
+                add_custom_target(bmp_offsets_fixture_${installer_arch} ALL DEPENDS ${fixture}/bmp-offsets.exe)
+                add_test(NAME native_bmp_offsets_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                    ${fixture}/bmp-offsets.exe)
+                set_tests_properties(native_bmp_offsets_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${fixture}/bmp-offsets-prefix)
                 # Rich edit labels made transparent paint only their text over the parent, and ordinary ones their own background.
                 add_custom_command(OUTPUT ${fixture}/richedit.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
