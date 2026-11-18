@@ -6,7 +6,8 @@
 
 /* A BMP file whose pixel offset points past its end is refused, however far past: in a 32-bit program an offset near four gigabytes
    wraps the address of the pixels round to below the file, where they must not be read from. A file whose offset and rows fit is read
-   whole. The exit code names the first check that failed. */
+   whole. A run-length compression that does not match the depth (RLE8 of 1-bit pixels, whose rows are an eighth as long as what the
+   runs fill) is refused too. The exit code names the first check that failed. */
 
 #define PLAIN __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
@@ -40,6 +41,59 @@ PLAIN static void write_bmp(UINT offset)
 	put16(28, 24);
 	for (UINT at = 0; at < 16; ++at)
 		file[54 + at] = (BYTE)(at * 13 + 1);
+}
+
+/* One row of 1 << 20 pixels of one bit, its compression RLE8: runs of 255 pixels of color 1 fill it, then the end of the bitmap. */
+static BYTE runs[14 + 40 + 8 + 2 * 4112 + 2];
+
+PLAIN static UINT write_runs(void)
+{
+	UINT at = 0;
+	for (; at < sizeof runs; ++at)
+		runs[at] = 0;
+	runs[0] = 'B';
+	runs[1] = 'M';
+	runs[2] = (BYTE)sizeof runs;
+	runs[3] = (BYTE)(sizeof runs >> 8);
+	runs[10] = 14 + 40 + 8;
+	runs[14] = 40;
+	runs[20] = 0x10;
+	runs[22] = 1;
+	runs[26] = 1;
+	runs[28] = 1;
+	runs[30] = 1;
+	runs[54 + 4] = 0xff;
+	runs[54 + 5] = 0xff;
+	runs[54 + 6] = 0xff;
+	for (at = 62; at + 4 <= sizeof runs; at += 2) {
+		runs[at] = 255;
+		runs[at + 1] = 1;
+	}
+	runs[at] = 0;
+	runs[at + 1] = 1;
+	return at + 2;
+}
+
+/* 1 when a file is refused anywhere on the way to its pixels, 0 when they come back. */
+static int refused(IWICImagingFactory *factory, BYTE *data, UINT size)
+{
+	IWICStream *stream = NULL;
+	IWICBitmapDecoder *decoder = NULL;
+	IWICBitmapFrameDecode *frame = NULL;
+	BYTE row[64];
+	WICRect first = {0, 0, 16, 1};
+	int outcome = 1;
+	if (IWICImagingFactory_CreateStream(factory, &stream) != S_OK || IWICStream_InitializeFromMemory(stream, data, size) != S_OK)
+		return 3;
+	if (IWICImagingFactory_CreateDecoderFromStream(factory, (IStream *)stream, NULL, WICDecodeMetadataCacheOnDemand, &decoder) == S_OK &&
+		IWICBitmapDecoder_GetFrame(decoder, 0, &frame) == S_OK && IWICBitmapFrameDecode_CopyPixels(frame, &first, sizeof row, sizeof row, row) == S_OK)
+		outcome = 0;
+	if (frame)
+		IWICBitmapFrameDecode_Release(frame);
+	if (decoder)
+		IWICBitmapDecoder_Release(decoder);
+	IWICStream_Release(stream);
+	return outcome;
 }
 
 /* 0 when the file decodes and its pixels come back, 1 when it is refused anywhere on the way, 2 when its pixels differ. */
@@ -89,6 +143,8 @@ int raven_entry(void)
 	write_bmp(sizeof file - 8);
 	if ((outcome = decode(factory)) != 1)
 		return 70 + outcome;
+	if ((outcome = refused(factory, runs, write_runs())) != 1)
+		return 80 + outcome;
 	IWICImagingFactory_Release(factory);
 	CoUninitialize();
 	return 0;
