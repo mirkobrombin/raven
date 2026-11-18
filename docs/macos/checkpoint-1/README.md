@@ -121,14 +121,14 @@ Wake latency for blocking waits, two threads (PROVEN, `data/spikes/waits.jsonl`)
 
 ## Recommendation
 
-Keep the Rosetta stage (2) as the working stage. For the final model, use HVF (4); models 1 and 3 are not recommended.
+Use HVF (4), with no Rosetta stage in between; models 1 and 3 are not recommended. Decided after this checkpoint: the port goes straight to HVF, and the Rosetta stage on `e3-stage-draft` stays only as a measurement reference.
 
 - The three properties that separate HVF from models 1 and 3 are now PROVEN: 4 KiB pages; hardware TSO that is correct and costs nothing measurable on a single-thread loop, against 88% for LDAPR/STLR on the same loop and 39% on entry.c; and x18 preserved at EL1 and EL0 across exits and host migration. The timed checks ran with the machine in use and should be repeated quietly, and TSO under contention is not measured yet.
 - Low addresses are not a differentiator: models 1 and 3 get them through the cross-architecture entitlement (PROVEN), HVF through its own page tables with the hypervisor entitlement (PROVEN).
 - Faults resolved in the guest cost 68 ns, a data-abort exit to the host 755 ns and a hypercall 672 ns, against 8.2 µs for a Mach exception in process.
 - HVF is the only model that runs third-party ARM64 and ARM64EC programs and avoids the ordering cost. Models 1 and 3 cannot run ARM64 PE code with x18 on this macOS build (PROVEN) and pay LDAPR/STLR on memory-dense loops. Model 1 also gives up process isolation.
 - This conflicts with the stated preference to avoid a VM, and the costs are real: a guest kernel at EL1 that we write and verify (exception vectors, page tables, an M:N scheduler on 64 vCPUs, waits), one host process per Windows process because a process holds one VM, vCPU creation up to milliseconds, every host service crossing an exit or the shared-memory channel, and harder debugging. The waits crate and the TLA+ models (`native/waits`, `native/model`) are the natural base for the in-guest scheduler.
-- Everything built for the stage stays: the channel, the served block protocol, the D3D command ring, the AppKit and Metal backends and the translator are independent of how guest code executes.
+- Everything built around the stage stays: the channel, the served block protocol, the D3D command ring, the AppKit and Metal backends and the translator are independent of how guest code executes.
 
 Checks 1 to 4 and 6 of the first version of this report are done (section "Checks of the HVF model"). Still open:
 
