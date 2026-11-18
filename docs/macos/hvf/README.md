@@ -647,8 +647,9 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   returning). `blraaz` and the other pointer-authenticated forms are not accepted (ARM64EC code here does not use them). The
   deterministic version: dispatch_call pushes a fixed marker return address instead of x30 and keeps x30 on a per-thread LIFO in the
   TEB; a `ret` to the marker pops it. Not done: it changes what x64 sees as its return address.
-- **ARM64EC, what is not there.** Native code runs with the guest's FPCR (FPCR.AH, FIZ and the MXCSR rounding mode), since the
-  transitions do not leave translated code ([../sse.md](../sse.md), open items). check_icall is generated once with the ranges known at `link_arm64ec` (a later call with other
+- **ARM64EC, what is not there.** Native code shares FPCR.RMode and FZ with x64 code; the transitions clear FPCR.AH and FIZ into
+  native code and set them back out of it, and a native change of the rounding mode is not seen by stmxcsr until the next ldmxcsr
+  ([../sse.md](../sse.md)). check_icall is generated once with the ranges known at `link_arm64ec` (a later call with other
   ranges throws); a DLL loaded later needs it generated again, or Windows' EC bitmap (one bit per page, a sparse two-level table in
   guest memory). `Vm::set_access` must run before any vCPU uses the pages; loading while vCPUs run needs TLB maintenance. No `dispatch_fptr`, `Get`/`SetX64Information`, auxiliary IAT (native code
   calling x64 imports directly), RedirectionMetadata, CFG, DllMain, relocation, or unwinding across transitions. Native code calling
