@@ -54,6 +54,9 @@ public:
 	// From a native function: ends the current call with ExitReason::stopped once the function returns.
 	void request_stop(uint64_t code);
 
+	// Translates the block at address now, as an ahead-of-time pass over an image does; returns its guest size, 0 when there is none.
+	uint32_t translate_ahead(uint64_t address);
+
 	// A guest write reached guest code at address: drops every translation of the granule holding it.
 	void code_written(uint64_t address);
 

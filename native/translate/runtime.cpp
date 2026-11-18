@@ -130,6 +130,14 @@ uint8_t *Runtime::host_code(uint64_t guest)
 	return host;
 }
 
+uint32_t Runtime::translate_ahead(uint64_t address)
+{
+	if (const auto found = blocks.find(address); found != blocks.end())
+		return found->second->guest_size;
+	const Block *block = translate(address);
+	return block ? block->guest_size : 0;
+}
+
 void Runtime::chain(uint8_t *site, uint64_t target)
 {
 	uint8_t *host = host_code(target);

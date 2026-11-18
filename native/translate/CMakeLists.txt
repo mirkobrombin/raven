@@ -109,4 +109,17 @@ if(APPLE)
     add_dependencies(x86_semantics_test x86_semantics_oracle)
     add_test(NAME translate_x86_semantics COMMAND x86_semantics_test ${SEMANTICS}/oracle.bin)
     set_tests_properties(translate_x86_semantics PROPERTIES TIMEOUT 120)
+
+    # entry.c's loop as a native arm64 program and as an x86-64 one Rosetta runs, for translate_bench to be compared with.
+    add_executable(bench_entry_native bench_entry_host.c ${RAVEN_TESTDATA}/native_cpu/entry.c)
+    target_compile_options(bench_entry_native PRIVATE -O2)
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/bench_entry_rosetta
+        COMMAND ${CMAKE_C_COMPILER} -arch x86_64 -O2 -o ${CMAKE_CURRENT_BINARY_DIR}/bench_entry_rosetta
+            ${CMAKE_CURRENT_SOURCE_DIR}/bench_entry_host.c ${RAVEN_TESTDATA}/native_cpu/entry.c
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/bench_entry_host.c ${RAVEN_TESTDATA}/native_cpu/entry.c VERBATIM)
+    add_custom_target(bench_entry_rosetta_program ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/bench_entry_rosetta)
 endif()
+
+add_executable(translate_bench translate_bench.cpp)
+target_link_libraries(translate_bench PRIVATE raven_translate_test_process)
+add_dependencies(translate_bench translate_guests)
