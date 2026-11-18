@@ -156,5 +156,8 @@ std::shared_ptr<class ProcessObject> start_program(KernelContext &context, const
 	std::vector<InheritedHandle> inherited = {});
 // Puts a child process into a job; false with the Windows error otherwise.
 bool assign_to_job(KernelContext &context, uint64_t job, const std::shared_ptr<class ProcessObject> &process, uint32_t &error);
+// Runs the user APCs queued to the current thread, oldest first, as an alertable wait does before it ends with WAIT_IO_COMPLETION; true
+// when any ran. A stop inside one propagates as the NativeResult.
+bool run_user_apcs(KernelContext &context);
 
 }

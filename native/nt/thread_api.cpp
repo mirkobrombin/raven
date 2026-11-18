@@ -208,6 +208,22 @@ public:
 
 }
 
+bool run_user_apcs(KernelContext &context)
+{
+	auto &me = context.threads.current();
+	bool ran = false;
+	while (!me.apcs.empty()) {
+		const auto apc = me.apcs.front();
+		me.apcs.pop_front();
+		const auto arguments = apc.arguments.empty() ? std::vector<uint64_t>{apc.parameter} : apc.arguments;
+		const auto result = context.call(apc.routine, arguments);
+		if (result.stop != NativeStop::returned)
+			throw result;
+		ran = true;
+	}
+	return ran;
+}
+
 void register_thread_api(ApiRegistry &registry, KernelContext &context)
 {
 	auto &threads = context.threads;
@@ -221,20 +237,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		return object ? object->thread : nullptr;
 	};
 
-	const auto run_apcs = [&context, &threads]() {
-		auto &me = threads.current();
-		bool ran = false;
-		while (!me.apcs.empty()) {
-			const auto apc = me.apcs.front();
-			me.apcs.pop_front();
-			const auto arguments = apc.arguments.empty() ? std::vector<uint64_t>{apc.parameter} : apc.arguments;
-			const auto result = context.call(apc.routine, arguments);
-			if (result.stop != NativeStop::returned)
-				throw result;
-			ran = true;
-		}
-		return ran;
-	};
+	const auto run_apcs = [&context]() { return run_user_apcs(context); };
 	// The objects of the process's table the handles stand for, in their order; empty when one of them is not in the table.
 	const auto table_objects = [](NativeObjects &objects, const std::vector<uint64_t> &handles) {
 		std::vector<uint32_t> table;
