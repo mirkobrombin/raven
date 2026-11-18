@@ -3789,6 +3789,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         set_tests_properties(native_parallel_${kind}_x${width} PROPERTIES TIMEOUT 30
                             ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-${kind}-prefix${width}")
                     endif()
+                    # The lifecycle script runs its deadline case eight times.
+                    if(kind STREQUAL lifecycle AND Python3_Interpreter_FOUND)
+                        set_tests_properties(native_parallel_${kind}_x${width} PROPERTIES TIMEOUT 90)
+                    endif()
                 endforeach()
             endif()
         endforeach()
