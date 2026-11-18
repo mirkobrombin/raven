@@ -26,6 +26,8 @@ public:
 	// Maps the image at its preferred base; returns it.
 	uint64_t load(const std::filesystem::path &path);
 	uint64_t entry(uint64_t base) const;
+	// The runtime whose translations guest writes to watched code invalidate.
+	void attach(translate::Runtime &runtime) { attached = &runtime; }
 	// A guest stack with RSP at its top and a TEB whose address gs: reads, for the thread runtime runs.
 	void prepare_thread(translate::Runtime &runtime);
 	void prepare_thread(translate::CpuState &state);
@@ -45,6 +47,7 @@ private:
 	};
 	Vm &vm;
 	std::vector<Image> images;
+	translate::Runtime *attached = nullptr;
 };
 
 // Translated code in guest memory: EL0 runs it at its guest address, the host writes it through its alias.
