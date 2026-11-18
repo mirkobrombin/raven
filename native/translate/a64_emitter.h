@@ -44,6 +44,9 @@ constexpr uint32_t add_16b = 0x4e208400, sub_16b = 0x6e208400, sqadd_16b = 0x4e2
 	smax_16b = 0x4e206400, umax_16b = 0x6e206400, smin_16b = 0x4e206c00, umin_16b = 0x6e206c00, urhadd_16b = 0x6e201400,
 	uabd_16b = 0x6e207400, sshl_16b = 0x4e204400, ushl_16b = 0x6e204400, addp_16b = 0x4e20bc00, uzp2_16b = 0x4e005800,
 	uaddlp_16b = 0x6e202800;
+constexpr uint32_t zip1_16b = 0x4e003800, zip2_16b = 0x4e007800;
+// Saturating narrows into the low half (writing the 64-bit register), or with q into the high half: elements of the result's size.
+constexpr uint32_t sqxtn_8b = 0x0e214800, sqxtun_8b = 0x2e212800;
 constexpr uint32_t smull_8h = 0x0e20c000, umull_8h = 0x2e20c000, xtn_8b = 0x0e212800;
 // dup of a general register into every element of size bytes: or in size << 16.
 constexpr uint32_t dup_w = 0x4e000c00;

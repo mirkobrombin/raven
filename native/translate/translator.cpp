@@ -151,7 +151,11 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::pcmpgtb: case Mnemonic::pcmpgtw: case Mnemonic::pcmpgtd: case Mnemonic::pavgb: case Mnemonic::pavgw:
 	case Mnemonic::pminub: case Mnemonic::pmaxub: case Mnemonic::pminsw: case Mnemonic::pmaxsw: case Mnemonic::psadbw:
 	case Mnemonic::psllw: case Mnemonic::pslld: case Mnemonic::psllq: case Mnemonic::psrlw: case Mnemonic::psrld: case Mnemonic::psrlq:
-	case Mnemonic::psraw: case Mnemonic::psrad: case Mnemonic::psrldq: case Mnemonic::pslldq:
+	case Mnemonic::psraw: case Mnemonic::psrad: case Mnemonic::psrldq: case Mnemonic::pslldq: case Mnemonic::packsswb:
+	case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd: case Mnemonic::punpckldq:
+	case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq: case Mnemonic::punpckhqdq:
+	case Mnemonic::unpcklps: case Mnemonic::unpcklpd: case Mnemonic::unpckhps: case Mnemonic::unpckhpd: case Mnemonic::pshufd:
+	case Mnemonic::pshuflw: case Mnemonic::pshufhw: case Mnemonic::shufps: case Mnemonic::shufpd:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -319,6 +323,7 @@ private:
 	void sse_convert(const Instruction &instruction);
 	void sse_integer(const Instruction &instruction);
 	void sse_shift(const Instruction &instruction);
+	void sse_shuffle(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -1483,6 +1488,62 @@ void BlockTranslator::sse_shift(const Instruction &instruction)
 	a.simd((arithmetic ? simd::sshl_16b : simd::ushl_16b) | size, target, target, vs1);
 }
 
+void BlockTranslator::sse_shuffle(const Instruction &instruction)
+{
+	using enum Mnemonic;
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const uint8_t target = instruction.operands[0].reg;
+	const uint8_t source = vector_source(instruction.operands[1], vs0);
+	struct Interleave {
+		Mnemonic mnemonic;
+		uint32_t opcode;
+	};
+	static constexpr Interleave interleaves[] = {
+		{punpcklbw, simd::zip1_16b}, {punpcklwd, simd::zip1_16b | simd::size_h}, {punpckldq, simd::zip1_16b | simd::size_s},
+		{punpcklqdq, simd::zip1_16b | simd::size_d}, {punpckhbw, simd::zip2_16b}, {punpckhwd, simd::zip2_16b | simd::size_h},
+		{punpckhdq, simd::zip2_16b | simd::size_s}, {punpckhqdq, simd::zip2_16b | simd::size_d}, {unpcklps, simd::zip1_16b | simd::size_s},
+		{unpcklpd, simd::zip1_16b | simd::size_d}, {unpckhps, simd::zip2_16b | simd::size_s}, {unpckhpd, simd::zip2_16b | simd::size_d},
+	};
+	for (const Interleave &interleave : interleaves)
+		if (interleave.mnemonic == mnemonic) {
+			a.simd(interleave.opcode, target, target, source);
+			return;
+		}
+	const unsigned order = static_cast<unsigned>(instruction.count == 3 ? instruction.operands[2].value : 0) & 0xff;
+	switch (mnemonic) {
+	case packsswb: case packssdw: case packuswb: {
+		// The destination's elements narrowed to the low half, the source's to the high half.
+		const uint32_t narrow = (mnemonic == packuswb ? simd::sqxtun_8b : simd::sqxtn_8b) | (mnemonic == packssdw ? simd::size_h : 0);
+		a.simd(narrow, vs1, target);
+		a.simd(narrow | simd::q, vs1, source);
+		break;
+	}
+	case pshufd:
+		for (unsigned i = 0; i < 4; ++i)
+			a.ins(vs1, i, source, order >> (2 * i) & 3, 4);
+		break;
+	case pshuflw: case pshufhw: {
+		// Four words of one half chosen from that half, the other half as it is.
+		const unsigned half = mnemonic == pshufhw ? 4 : 0;
+		a.simd(simd::orr_16b, vs1, source, source);
+		for (unsigned i = 0; i < 4; ++i)
+			a.ins(vs1, half + i, source, half + (order >> (2 * i) & 3), 2);
+		break;
+	}
+	case shufps:
+		// Two singles from the destination, then two from the source.
+		for (unsigned i = 0; i < 4; ++i)
+			a.ins(vs1, i, i < 2 ? target : source, order >> (2 * i) & 3, 4);
+		break;
+	case shufpd:
+		a.ins(vs1, 0, target, order & 1, 8);
+		a.ins(vs1, 1, source, order >> 1 & 1, 8);
+		break;
+	default: throw std::logic_error("not an SSE shuffle");
+	}
+	a.simd(simd::orr_16b, target, vs1, vs1);
+}
+
 void BlockTranslator::exit_with(ExitReason reason, uint64_t rip)
 {
 	a.mov_imm(s4, rip);
@@ -1595,6 +1656,12 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::psllw: case Mnemonic::pslld: case Mnemonic::psllq: case Mnemonic::psrlw: case Mnemonic::psrld: case Mnemonic::psrlq:
 	case Mnemonic::psraw: case Mnemonic::psrad: case Mnemonic::psrldq: case Mnemonic::pslldq:
 		sse_shift(instruction);
+		return;
+	case Mnemonic::packsswb: case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd:
+	case Mnemonic::punpckldq: case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq:
+	case Mnemonic::punpckhqdq: case Mnemonic::unpcklps: case Mnemonic::unpcklpd: case Mnemonic::unpckhps: case Mnemonic::unpckhpd:
+	case Mnemonic::pshufd: case Mnemonic::pshuflw: case Mnemonic::pshufhw: case Mnemonic::shufps: case Mnemonic::shufpd:
+		sse_shuffle(instruction);
 		return;
 	case Mnemonic::ldmxcsr:
 		// The whole value is MXCSR; FPCR and FPSR follow it.
