@@ -249,6 +249,7 @@ public:
 	void set_guest_sampler(std::chrono::milliseconds period, std::function<void(uint64_t rip)> sampler);
 
 private:
+	NativeResult resume_task(std::chrono::milliseconds timeout);
 	void make_served_block(uint64_t teb, uint64_t &guest, uint64_t *&host);
 	uint64_t map_file(int descriptor, size_t size, uint64_t offset, bool transfer, uint64_t address = 0);
 	uint64_t receive_descriptor(int descriptor, uint64_t scratch);

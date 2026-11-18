@@ -736,6 +736,9 @@ struct NativeProcess::State {
 	uint64_t initial_stack_top = 0;
 	uint64_t initial_stack_size = 1024 * 1024;
 	bool stopped = true;
+	// How the run ended when a host thread ended it for all (its time ran out): the others, finding their tasks gone, end with it.
+	std::mutex ended_lock;
+	std::optional<NativeResult> ended;
 	bool active_call = false;
 	bool awaiting_api = false;
 	bool awaiting_syscall = false;
@@ -2591,6 +2594,19 @@ NativeResult NativeProcess::begin_x86_call(uint64_t address, std::span<const uin
 
 NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 {
+	try {
+		return resume_task(timeout);
+	} catch (const std::runtime_error &) {
+		// Another host thread ended the process while this one waited for its task, which is gone: the run ends as that thread said.
+		std::lock_guard lock(state->ended_lock);
+		if (state->ended)
+			return *state->ended;
+		throw;
+	}
+}
+
+NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
+{
 	state->require_stopped();
 	if (!state->active_call || state->awaiting_api) {
 		if (std::getenv("RAVEN_BACKTRACE")) {
@@ -2825,6 +2841,11 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 				throw std::runtime_error("native guest did not stop for the pending interrupt");
 		}
 		if (status == -1) {
+			{
+				std::lock_guard lock(state->ended_lock);
+				if (!state->ended)
+					state->ended = NativeResult{NativeStop::timeout, 0, 0, 0};
+			}
 			if (std::getenv("RAVEN_TRACE_API")) {
 				user_regs_struct where{};
 				if (parallel()) {
