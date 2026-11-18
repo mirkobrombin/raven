@@ -185,3 +185,11 @@ add_dependencies(hvf_arm64ec_test hvf_guests)
 raven_hvf_sign(hvf_arm64ec_test)
 add_test(NAME hvf_arm64ec COMMAND hvf_arm64ec_test ${GUEST})
 set_tests_properties(hvf_arm64ec PROPERTIES TIMEOUT 60)
+
+# The SSE oracle's cases in a vCPU, against the results the translate build recorded under Rosetta.
+add_executable(hvf_sse_test hvf_sse_test.cpp)
+target_link_libraries(hvf_sse_test PRIVATE raven_hvf)
+add_dependencies(hvf_sse_test x86_sse_oracle)
+raven_hvf_sign(hvf_sse_test)
+add_test(NAME hvf_sse COMMAND hvf_sse_test ${CMAKE_CURRENT_BINARY_DIR}/translate/semantics/sse_oracle.bin)
+set_tests_properties(hvf_sse PROPERTIES TIMEOUT 120)

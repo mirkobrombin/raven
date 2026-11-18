@@ -125,6 +125,22 @@ if(APPLE)
     add_test(NAME translate_x86_semantics COMMAND x86_semantics_test ${SEMANTICS}/oracle.bin)
     set_tests_properties(translate_x86_semantics PROPERTIES TIMEOUT 120)
 
+    # The same for SSE and SSE2 (x86_sse.py): also run in a vCPU by native/hvf's hvf_sse_test, which reads sse_oracle.bin.
+    add_custom_command(OUTPUT ${SEMANTICS}/x86_sse_cases.s ${SEMANTICS}/x86_sse_cases.h
+        COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/x86_sse.py ${SEMANTICS}/x86_sse_cases.s ${SEMANTICS}/x86_sse_cases.h
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x86_sse.py VERBATIM)
+    add_custom_command(OUTPUT ${SEMANTICS}/sse_oracle.bin
+        COMMAND ${CMAKE_C_COMPILER} -arch x86_64 -O1 -I ${SEMANTICS} -o ${SEMANTICS}/x86_sse_oracle
+            ${CMAKE_CURRENT_SOURCE_DIR}/x86_sse_oracle.c ${SEMANTICS}/x86_sse_cases.s
+        COMMAND ${SEMANTICS}/x86_sse_oracle ${SEMANTICS}/sse_oracle.bin
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x86_sse_oracle.c ${SEMANTICS}/x86_sse_cases.s ${SEMANTICS}/x86_sse_cases.h VERBATIM)
+    add_custom_target(x86_sse_oracle ALL DEPENDS ${SEMANTICS}/sse_oracle.bin)
+    add_executable(x86_sse_test x86_sse_test.cpp)
+    target_link_libraries(x86_sse_test PRIVATE raven_translate)
+    add_dependencies(x86_sse_test x86_sse_oracle)
+    add_test(NAME translate_x86_sse COMMAND x86_sse_test ${SEMANTICS}/sse_oracle.bin)
+    set_tests_properties(translate_x86_sse PROPERTIES TIMEOUT 120)
+
     # entry.c's loop as a native arm64 program and as an x86-64 one Rosetta runs, for translate_bench to be compared with.
     add_executable(bench_entry_native bench_entry_host.c ${RAVEN_TESTDATA}/native_cpu/entry.c)
     target_compile_options(bench_entry_native PRIVATE -O2)
