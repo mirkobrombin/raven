@@ -56,6 +56,8 @@ public:
 
 	// Translates the block at address now, as an ahead-of-time pass over an image does; returns its guest size, 0 when there is none.
 	uint32_t translate_ahead(uint64_t address);
+	// Where the translation of the block at address sits in the code cache, or nullptr.
+	const void *translated_code(uint64_t address) const;
 
 	// A guest write reached guest code at address: drops every translation of the granule holding it.
 	void code_written(uint64_t address);

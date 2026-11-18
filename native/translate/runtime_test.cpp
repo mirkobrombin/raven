@@ -174,20 +174,34 @@ static void sees_its_code_rewritten()
 	check(fixture.runtime.stats().invalidated_blocks > 0, "no translation was dropped");
 }
 
+static void rewrites_its_own_code()
+{
+	Fixture fixture;
+	const uint64_t base = fixture.load("rewrite.exe");
+	const RunResult result = fixture.runtime.call(fixture.process.entry(base));
+	check(result.reason == ExitReason::returned && result.value == 12, "rewrite.exe returned " + describe(result));
+	check(fixture.runtime.stats().invalidated_blocks > 0, "the guest's own write dropped no translation");
+}
+
 static void reuses_a_saved_translation()
 {
 	const std::filesystem::path path = std::filesystem::temp_directory_path() / "raven-translate-test.cache";
-	uint64_t key = 0;
+	uint64_t key = 0, first_placement = 0;
 	{
 		Fixture fixture;
 		const uint64_t base = fixture.load("entry.exe");
 		key = Runtime::cache_key(fixture.process.file(base), base, {});
 		check(fixture.runtime.call(fixture.process.entry(base)).value == 500500, "first run");
+		first_placement = reinterpret_cast<uint64_t>(fixture.runtime.translated_code(fixture.process.entry(base)));
 		fixture.runtime.save_cache(path, key);
 	}
 	Fixture fixture;
 	const uint64_t base = fixture.load("entry.exe");
+	// Move everything the cache places, so code that held an absolute address of its first placement would break.
+	fixture.cache.allocate(4096 + 16);
 	const size_t loaded = fixture.runtime.load_cache(path, key);
+	const uint64_t placement = reinterpret_cast<uint64_t>(fixture.runtime.translated_code(fixture.process.entry(base)));
+	check(placement && placement != first_placement, "the cached block landed where it was first placed");
 	const RunResult result = fixture.runtime.call(fixture.process.entry(base));
 	check(loaded > 0, "nothing loaded from the cache");
 	check(result.reason == ExitReason::returned && result.value == 500500, "cached entry.exe returned " + describe(result));
@@ -213,7 +227,8 @@ int main(int argc, char **argv)
 		{"api_loop", loops_on_a_native_function},
 		{"callback", calls_back_into_the_guest},
 		{"arguments_client", reads_its_command_line},
-		{"self-modifying code", sees_its_code_rewritten},
+		{"self-modifying code, native write", sees_its_code_rewritten},
+		{"self-modifying code, guest write", rewrites_its_own_code},
 		{"ahead-of-time cache", reuses_a_saved_translation},
 	};
 	for (const auto &[name, run] : cases) {

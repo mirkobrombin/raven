@@ -19,7 +19,8 @@
 //   rax x8   rcx x0   rdx x1   rbx x27  rsp x28  rbp x24  rsi x25  rdi x26
 //   r8  x2   r9  x3   r10 x4   r11 x5   r12 x19  r13 x20  r14 x21  r15 x22
 //
-// x23 points at the CpuState. x13 and x14 hold the sources of PF and AF. x6, x7, x9-x12, x15-x17 are scratch. x18 is never touched: it
+// x23 points at the CpuState. x13 and x14 hold the sources of PF and AF. x7 holds the block's last RIP-relative address. x6, x9-x12
+// and x15-x17 are scratch. x18 is never touched: it
 // belongs to macOS, and translated code has no use for it since gs: and fs: come from CpuState. x29 and x30 stay the host's.
 //
 // Flags. SF, ZF and OF are N, Z and V. CF is C, but whether as is or inverted depends on the last operation (SUBS leaves C as the

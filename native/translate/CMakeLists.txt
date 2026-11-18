@@ -51,7 +51,12 @@ add_custom_command(OUTPUT ${GUEST}/api_loop.exe
     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--image-base,0x187000000
         -o ${GUEST}/api_loop.exe ${RAVEN_TESTDATA}/native_cpu/api_loop.c -lkernel32
     DEPENDS ${RAVEN_TESTDATA}/native_cpu/api_loop.c VERBATIM)
-set(GUEST_PROGRAMS ${GUEST}/return-73.exe ${GUEST}/entry.exe ${GUEST}/startup.exe ${GUEST}/arguments.exe ${GUEST}/api_loop.exe)
+add_custom_command(OUTPUT ${GUEST}/rewrite.exe
+    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
+        -o ${GUEST}/rewrite.exe ${CMAKE_CURRENT_SOURCE_DIR}/testdata/rewrite_client.c
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/rewrite_client.c VERBATIM)
+set(GUEST_PROGRAMS ${GUEST}/return-73.exe ${GUEST}/entry.exe ${GUEST}/startup.exe ${GUEST}/arguments.exe ${GUEST}/api_loop.exe
+    ${GUEST}/rewrite.exe)
 add_custom_target(translate_guests ALL DEPENDS ${GUEST_PROGRAMS})
 
 # The decoder's oracle: LLVM's disassembly of random instances, random bytes, the guest programs and, where it is installed, the
