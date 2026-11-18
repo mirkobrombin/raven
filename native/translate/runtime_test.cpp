@@ -396,6 +396,24 @@ static void gives_native_functions_the_guest_state()
 	check(std::memcmp(memory.bytes + 1024 + 16, memory.bytes + 1024 + 32, 16) == 0, "XMM8 changed across the native function");
 }
 
+// Translated SSE code relies on FEAT_AFP (FPCR.AH): a runtime in this process refuses to start on a CPU without it.
+static void refuses_a_cpu_without_afp()
+{
+	RawCode memory;
+	JitCodeCache cache(1 << 20);
+	const auto real = Runtime::host_has_afp;
+	Runtime::host_has_afp = [] { return false; };
+	bool refused = false;
+	try {
+		Runtime runtime(memory, cache);
+	} catch (const std::runtime_error &error) {
+		refused = std::string(error.what()).find("FEAT_AFP") != std::string::npos;
+	}
+	Runtime::host_has_afp = real;
+	check(refused, "a runtime started on a CPU without FEAT_AFP");
+	check(Runtime::host_has_afp(), "this CPU reports no FEAT_AFP");
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
@@ -422,6 +440,7 @@ int main(int argc, char **argv)
 		{"XMM registers across exits", keeps_xmm_across_exits},
 		{"XMM6 across native calls", keeps_xmm6_across_native_calls},
 		{"guest state in native functions", gives_native_functions_the_guest_state},
+		{"no FEAT_AFP, no runtime", refuses_a_cpu_without_afp},
 	};
 	for (const auto &[name, run] : cases) {
 		const int before = failures;

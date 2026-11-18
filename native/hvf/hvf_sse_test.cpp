@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <stdexcept>
 #include <string>
 
 using namespace raven;
@@ -61,6 +62,19 @@ int main(int argc, char **argv)
 	translate::sse_oracle::Report report;
 	try {
 		hvf::Vm vm(256 << 20);
+		// A vCPU whose CPU lacks FEAT_AFP (ID_AA64MMFR1_EL1.AFP, bits 47:44, zero) must not be created: SSE code needs FPCR.AH.
+		hvf::Vcpu::id_aa64mmfr1_override = [](uint64_t value) { return value & ~(uint64_t(15) << 44); };
+		bool refused = false;
+		try {
+			hvf::Vcpu without(vm, true);
+		} catch (const std::runtime_error &error) {
+			refused = std::string(error.what()).find("FEAT_AFP") != std::string::npos;
+		}
+		hvf::Vcpu::id_aa64mmfr1_override = nullptr;
+		if (!refused) {
+			std::fprintf(stderr, "FAIL: a vCPU without FEAT_AFP was created\n");
+			return 1;
+		}
 		Snippets memory(vm);
 		const uint64_t buffer = vm.map_anywhere(hvf::Vm::page_size, hvf::Access::read_write);
 		uint8_t *buffer_alias = vm.host(buffer);
