@@ -31,6 +31,7 @@ int64_t ec_sum8(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f
 uint64_t ec_hash(const char *text);
 int64_t ec_call(int64_t (*callback)(int64_t, int64_t), int64_t a, int64_t b);
 double ec_scale(int64_t a, double b);
+double ec_fmax(double a, double b);
 double ec_keep(int64_t (*callback)(int64_t, int64_t), double x, int64_t a);
 int64_t ec_call6(int64_t (*callback)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t), int64_t a);
 int64_t ec_call_double(int64_t (*callback)(int64_t, double), int64_t a, double x);
@@ -137,6 +138,10 @@ int main(int argc, char **argv)
 			{"__os_arm64x_check_call to x64", 17, 9, 4, ec_call_checked(checked, 9, 4)},
 			{"__os_arm64x_check_call to native code", 18, 9, 4, ec_call_checked(nullptr, 9, 4)},
 			{"XMM6 and XMM7 across native code that writes v6 and v7", 23, 0x1234, 0x34, 0x1200},
+			{"fmax with a NaN in native code, as Arm without FPCR.AH", 24, 0x7ff8000000000000, 0x3ff0000000000000,
+				std::bit_cast<int64_t>(ec_fmax(std::bit_cast<double>(int64_t(0x7ff8000000000000)), 1.0))},
+			{"maxsd with a NaN in x64 code after native code, as x86", 25, 0x7ff8000000000000, 0x3ff0000000000000,
+				0x3ff0000000000000},
 			{"x18 at the TEB", 5, 0, 0, 1},
 		};
 		// Each case runs cold: its runs of the dispatcher count the host exits it took (lookup misses and chains included).

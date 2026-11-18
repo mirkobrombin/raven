@@ -133,6 +133,15 @@ EXPORT int64_t ec_clobber_v6v7(void)
 	return 0;
 }
 
+// fmax as Arm code compiled for Windows expects it, with FPCR.AH clear: a NaN operand gives that NaN (x86's maxsd gives the second
+// operand).
+EXPORT double ec_fmax(double a, double b)
+{
+	double result;
+	__asm__ volatile("fmax %d0, %d1, %d2" : "=w"(result) : "w"(a), "w"(b));
+	return result;
+}
+
 static int64_t native_combine(int64_t a, int64_t b)
 {
 	return a * 100 + b;

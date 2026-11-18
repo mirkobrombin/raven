@@ -9,6 +9,7 @@
 //   19 ec_raw_address()     20 calls the address a as a function of no arguments
 //   21 ec_call6(x64 callback of six arguments, a)    22 ec_call_double(x64 callback, a, the double whose bits are b)
 //   23 XMM6 = a and XMM7 = b across ec_clobber_v6v7(); returns XMM6 - XMM7
+//   24 the bits of ec_fmax(the doubles whose bits are a and b)    25 then maxsd of the same in x64 code, after the call
 //   8 ec_scale(a, the double whose bits are b), returning the bits of the double result
 //   6 a calls of ec_add(i, b), summed        7 the same through an x64 function pointer to x64 code
 #include <stdint.h>
@@ -58,14 +59,19 @@ __attribute__((noinline)) static int64_t x64_sum6(int64_t a, int64_t b, int64_t 
 	return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f;
 }
 
-// The callbacks and the XMM6/XMM7 check in assembly, so that XMM registers only move through movq. x64_xmm_keep breaks the ABI towards
-// raven_entry, which keeps nothing in XMM registers.
+// The callbacks, the XMM6/XMM7 check and the fmax check in assembly, so that the XMM registers they use are exactly the ones named.
+// x64_xmm_keep breaks the ABI towards raven_entry, which keeps nothing in XMM registers.
 int64_t x64_double_callback(int64_t a, double x);
 int64_t x64_xmm_keep(int64_t a, int64_t b);
+int64_t x64_fmax(int64_t a, int64_t b, int64_t after);
 __asm__(".text\n"
 		"x64_double_callback:\n\tmovq %xmm1, %rax\n\taddq %rcx, %rax\n\tret\n"
 		"x64_xmm_keep:\n\tmovq %rcx, %xmm6\n\tmovq %rdx, %xmm7\n\tsubq $40, %rsp\n\tcallq *__imp_ec_clobber_v6v7(%rip)\n"
-		"\taddq $40, %rsp\n\tmovq %xmm6, %rax\n\tmovq %xmm7, %rcx\n\tsubq %rcx, %rax\n\tret\n");
+		"\taddq $40, %rsp\n\tmovq %xmm6, %rax\n\tmovq %xmm7, %rcx\n\tsubq %rcx, %rax\n\tret\n"
+		"x64_fmax:\n\tpushq %rbx\n\tpushq %rsi\n\tpushq %rdi\n\tsubq $32, %rsp\n\tmovq %rcx, %rbx\n\tmovq %rdx, %rsi\n\tmovq %r8, %rdi\n"
+		"\tmovq %rcx, %xmm0\n\tmovq %rdx, %xmm1\n\tcallq *__imp_ec_fmax(%rip)\n\tmovq %xmm0, %rax\n\ttestq %rdi, %rdi\n\tjz 1f\n"
+		"\tmovq %rbx, %xmm2\n\tmovq %rsi, %xmm3\n\tmaxsd %xmm3, %xmm2\n\tmovq %xmm2, %rax\n"
+		"1:\taddq $32, %rsp\n\tpopq %rdi\n\tpopq %rsi\n\tpopq %rbx\n\tret\n");
 
 static int64_t (*volatile x64_function)(int64_t, int64_t) = x64_add;
 
@@ -95,7 +101,7 @@ int64_t raven_entry(int64_t role, int64_t a, int64_t b)
 		return sum;
 	}
 	case 8: {
-		// The translator moves doubles between general and XMM registers with movq only: keep the compiler to that.
+		// The double in XMM1 and the result in XMM0, as the call passes them.
 		register double x asm("xmm1");
 		__asm__ volatile("movq %1, %0" : "=x"(x) : "r"(b));
 		register double result asm("xmm0") = ec_scale(a, x);
@@ -133,6 +139,8 @@ int64_t raven_entry(int64_t role, int64_t a, int64_t b)
 		return ec_call_double(x64_double_callback, a, x);
 	}
 	case 23: return x64_xmm_keep(a, b);
+	case 24: return x64_fmax(a, b, 0);
+	case 25: return x64_fmax(a, b, 1);
 	default: return -1;
 	}
 }
