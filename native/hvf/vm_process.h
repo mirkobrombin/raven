@@ -31,6 +31,11 @@ public:
 	uint64_t entry(uint64_t base) const;
 	// The runtime whose translations guest writes to watched code invalidate.
 	void attach(translate::Runtime &runtime) { attached = &runtime; }
+	void detach(translate::Runtime &runtime)
+	{
+		if (attached == &runtime)
+			attached = nullptr;
+	}
 	// Test seam: runs on the storing vCPU's thread after a write fault's code_written and before the store is retried, where another
 	// vCPU may translate the page again.
 	std::function<void(uint64_t address)> after_code_written;
