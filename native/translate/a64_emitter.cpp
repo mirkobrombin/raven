@@ -381,6 +381,63 @@ void Assembler::memory_offset(uint8_t rt, uint8_t rn, int64_t offset, unsigned s
 		throw std::logic_error("memory offset out of range");
 }
 
+void Assembler::vector_offset(uint8_t rt, uint8_t rn, int64_t offset, unsigned size, bool load)
+{
+	// The size field, then opc: bit 1 of opc selects the 16-byte form, bit 0 a load.
+	const unsigned scale = size == 16 ? 4 : size_log2(size);
+	const uint32_t opc = (size == 16 ? 2u : 0u) | (load ? 1u : 0u);
+	const uint32_t base = (uint32_t(scale & 3) << 30) | 0x3c000000u | (opc << 22);
+	if (offset >= 0 && (offset & int64_t((1u << scale) - 1)) == 0 && (offset >> scale) < 4096)
+		emit(base | 0x01000000u | (uint32_t(offset >> scale) << 10) | reg(rn, 5) | reg(rt, 0));
+	else if (offset >= -256 && offset < 256)
+		emit(base | ((uint32_t(offset) & 0x1ff) << 12) | reg(rn, 5) | reg(rt, 0));
+	else
+		throw std::logic_error("memory offset out of range");
+}
+
+void Assembler::ldr_v(uint8_t rt, uint8_t rn, int64_t offset, unsigned size)
+{
+	vector_offset(rt, rn, offset, size, true);
+}
+
+void Assembler::str_v(uint8_t rt, uint8_t rn, int64_t offset, unsigned size)
+{
+	vector_offset(rt, rn, offset, size, false);
+}
+
+void Assembler::ins(uint8_t rd, unsigned to, uint8_t rn, unsigned from, unsigned size)
+{
+	const unsigned scale = size_log2(size);
+	const uint32_t imm5 = (uint32_t(to) << (scale + 1)) | (1u << scale);
+	emit(0x6e000400u | (imm5 << 16) | (uint32_t(from << scale) << 11) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::umov(uint8_t rd, uint8_t rn, unsigned index, unsigned size)
+{
+	const unsigned scale = size_log2(size);
+	const uint32_t imm5 = (uint32_t(index) << (scale + 1)) | (1u << scale);
+	emit((size == 8 ? 0x4e003c00u : 0x0e003c00u) | (imm5 << 16) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::dup(uint8_t rd, uint8_t rn, unsigned size)
+{
+	const unsigned scale = size_log2(size);
+	emit(0x4e000400u | ((1u << scale) << 16) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::shift_imm(uint32_t opcode, uint8_t rd, uint8_t rn, unsigned element_bits, unsigned shift)
+{
+	// immh:immb is the element size plus the shift for a left shift, twice the element size minus it for a right one.
+	const bool left = (opcode & 0xf800u) == 0x5000u;
+	const uint32_t field = left ? element_bits + shift : 2 * element_bits - shift;
+	emit(opcode | (field << 16) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::ext(uint8_t rd, uint8_t rn, uint8_t rm, unsigned index)
+{
+	emit(0x6e000000u | reg(rm, 16) | (uint32_t(index & 15) << 11) | reg(rn, 5) | reg(rd, 0));
+}
+
 void Assembler::ldr(uint8_t rt, uint8_t rn, int64_t offset, unsigned size)
 {
 	memory_offset(rt, rn, offset, size, 1, false, false);

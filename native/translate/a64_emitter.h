@@ -20,6 +20,18 @@ inline Cond invert(Cond cond)
 	return static_cast<Cond>(static_cast<uint8_t>(cond) ^ 1);
 }
 
+// Advanced SIMD and scalar floating-point instructions as words with their register fields zero, for Assembler::simd: Rd at 0, Rn at 5,
+// Rm at 16. Vector forms are on 128 bits (q) unless the name says otherwise.
+namespace simd {
+constexpr uint32_t and_16b = 0x4e201c00, bic_16b = 0x4e601c00, orr_16b = 0x4ea01c00, eor_16b = 0x6e201c00;
+// fmov between general and SIMD&FP registers, and of a whole d register (which clears the rest of the vector).
+constexpr uint32_t fmov_s_w = 0x1e270000, fmov_w_s = 0x1e260000, fmov_d_x = 0x9e670000, fmov_x_d = 0x9e660000;
+constexpr uint32_t fmov_d_d = 0x1e604000;
+constexpr uint32_t movi_zero_2d = 0x6f00e400;
+// For Assembler::shift_imm.
+constexpr uint32_t shl = 0x4f005400, ushr = 0x6f000400, sshr = 0x4f000400, usra = 0x6f001400;
+}
+
 // The N:immr:imms fields of a logical immediate, when value is one.
 std::optional<uint32_t> logical_immediate(uint64_t value, bool is64);
 
@@ -105,6 +117,9 @@ public:
 	void stp_pre(uint8_t rt, uint8_t rt2, uint8_t rn, int16_t offset);
 	void ldp_q(uint8_t rt, uint8_t rt2, uint8_t rn, int16_t offset);
 	void stp_q(uint8_t rt, uint8_t rt2, uint8_t rn, int16_t offset);
+	// SIMD&FP registers: b, h, s, d or q for a size of 1, 2, 4, 8 or 16.
+	void ldr_v(uint8_t rt, uint8_t rn, int64_t offset, unsigned size);
+	void str_v(uint8_t rt, uint8_t rn, int64_t offset, unsigned size);
 	// Ordered accesses: ldapr (FEAT_LRCPC) and stlr, on a base register alone.
 	void ldapr(uint8_t rt, uint8_t rn, unsigned size);
 	void stlr(uint8_t rt, uint8_t rn, unsigned size);
@@ -113,6 +128,16 @@ public:
 	void casal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
 	void ldaddal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
 	void swpal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
+
+	// Advanced SIMD and floating point. simd: any word of a64::simd with its registers. ins (mov element): element to of rd from
+	// element from of rn; umov: element index of rn into general register rd; dup: element 0 of rn into every element of rd; elements
+	// of size bytes. shift_imm: a64::simd::shl, ushr, sshr or usra by shift on elements of element_bits. ext: bytes index.. of rn:rm.
+	void simd(uint32_t opcode, uint8_t rd, uint8_t rn, uint8_t rm = 0) { emit(opcode | uint32_t(rm & 31) << 16 | uint32_t(rn & 31) << 5 | (rd & 31u)); }
+	void ins(uint8_t rd, unsigned to, uint8_t rn, unsigned from, unsigned size);
+	void umov(uint8_t rd, uint8_t rn, unsigned index, unsigned size);
+	void dup(uint8_t rd, uint8_t rn, unsigned size);
+	void shift_imm(uint32_t opcode, uint8_t rd, uint8_t rn, unsigned element_bits, unsigned shift);
+	void ext(uint8_t rd, uint8_t rn, uint8_t rm, unsigned index);
 
 	// Branches.
 	void b(Label target);
@@ -143,6 +168,7 @@ private:
 	std::vector<Fixup> fixups;
 	void branch_to(Label target, uint32_t word, FixupKind kind);
 	void memory_offset(uint8_t rt, uint8_t rn, int64_t offset, unsigned size, uint32_t opc, bool is_signed_load, bool is64);
+	void vector_offset(uint8_t rt, uint8_t rn, int64_t offset, unsigned size, bool load);
 };
 
 }

@@ -34,6 +34,7 @@ namespace {
 using a64::Assembler;
 using a64::Cond;
 using a64::Shift;
+namespace simd = a64::simd;
 
 constexpr std::array<uint8_t, 16> host_register = {8, 0, 1, 27, 28, 24, 25, 26, 2, 3, 4, 5, 19, 20, 21, 22};
 constexpr uint8_t state_register = 23;
@@ -42,6 +43,8 @@ constexpr uint8_t adjust_register = 14;
 constexpr uint8_t s0 = 9, s1 = 10, s2 = 11, s3 = 12, s4 = 15, address_register = 16, s5 = 17;
 // Holds the last RIP-relative address the block computed, so a loop over one global computes it once.
 constexpr uint8_t constant_register = 7;
+// XMMn is vn; v16-v31 are scratch.
+constexpr uint8_t vs0 = 16;
 
 constexpr uint32_t CF = 1, PF = 4, AF = 16, ZF = 64, SF = 128, OF = 2048;
 constexpr uint32_t all_flags = CF | PF | AF | ZF | SF | OF;
@@ -120,8 +123,15 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::cmovcc: return (instruction.condition >> 1) != 5;
 	case Mnemonic::push: case Mnemonic::pop: return instruction.operand_size == 8;
 	case Mnemonic::xchg: return true;
-	case Mnemonic::movq: return instruction.operands[0].kind != OperandKind::mem && instruction.operands[1].kind != OperandKind::mem &&
-		(instruction.operands[0].kind == OperandKind::reg || instruction.operands[1].kind == OperandKind::reg);
+	case Mnemonic::movq: return !instruction.lock;
+	case Mnemonic::movd: case Mnemonic::movups: case Mnemonic::movupd: case Mnemonic::movaps: case Mnemonic::movapd:
+	case Mnemonic::movdqa: case Mnemonic::movdqu: case Mnemonic::movntps: case Mnemonic::movntpd: case Mnemonic::movntdq:
+	case Mnemonic::movss: case Mnemonic::movsd: case Mnemonic::movlps: case Mnemonic::movlpd: case Mnemonic::movhps:
+	case Mnemonic::movhpd: case Mnemonic::movhlps: case Mnemonic::movlhps: case Mnemonic::movmskps: case Mnemonic::movmskpd:
+	case Mnemonic::pmovmskb: case Mnemonic::andps: case Mnemonic::andpd: case Mnemonic::andnps: case Mnemonic::andnpd:
+	case Mnemonic::orps: case Mnemonic::orpd: case Mnemonic::xorps: case Mnemonic::xorpd: case Mnemonic::pand: case Mnemonic::pandn:
+	case Mnemonic::por: case Mnemonic::pxor:
+		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -271,6 +281,15 @@ private:
 	void exchange(const Instruction &instruction);
 	void push_value(uint8_t value);
 	void pop_value(uint8_t target);
+
+	// SSE: XMMn is vn.
+	void load_vector(uint8_t target, const Operand &memory, unsigned size);
+	void store_vector(uint8_t source, const Operand &memory, unsigned size);
+	// An XMM operand's register, or the register its memory was loaded into (scratch).
+	uint8_t vector_source(const Operand &operand, uint8_t scratch);
+	void sse_move(const Instruction &instruction);
+	void sse_mask(const Instruction &instruction);
+	void sse_logic(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -964,6 +983,158 @@ void BlockTranslator::pop_value(uint8_t target)
 	}
 }
 
+void BlockTranslator::load_vector(uint8_t target, const Operand &memory, unsigned size)
+{
+	// LDAPR has no SIMD&FP form: an ordered load is a plain one followed by DMB ISHLD, a store DMB ISHST and a plain one, as with
+	// MemoryOrdering::barriers. A misaligned address needs no other path.
+	const bool order = ordered(memory);
+	Address at = address(memory, false);
+	if (!fits_offset(at.offset, size)) {
+		a.mov_imm(s5, static_cast<uint64_t>(at.offset));
+		a.add(address_register, at.base, s5);
+		at = {address_register, 0};
+	}
+	a.ldr_v(target, at.base, at.offset, size);
+	if (order) {
+		a.dmb(a64::Barrier::ishld);
+		++stats.barriers;
+	} else
+		++stats.plain_accesses;
+}
+
+void BlockTranslator::store_vector(uint8_t source, const Operand &memory, unsigned size)
+{
+	const bool order = ordered(memory);
+	Address at = address(memory, false);
+	if (!fits_offset(at.offset, size)) {
+		a.mov_imm(s5, static_cast<uint64_t>(at.offset));
+		a.add(address_register, at.base, s5);
+		at = {address_register, 0};
+	}
+	if (order) {
+		a.dmb(a64::Barrier::ishst);
+		++stats.barriers;
+	} else
+		++stats.plain_accesses;
+	a.str_v(source, at.base, at.offset, size);
+}
+
+uint8_t BlockTranslator::vector_source(const Operand &operand, uint8_t scratch)
+{
+	if (operand.kind == OperandKind::xmm)
+		return operand.reg;
+	load_vector(scratch, operand, operand.size);
+	return scratch;
+}
+
+void BlockTranslator::sse_move(const Instruction &instruction)
+{
+	const Operand &target = instruction.operands[0], &source = instruction.operands[1];
+	const auto kind = [](const Operand &operand) { return operand.kind; };
+	switch (instruction.mnemonic) {
+	case Mnemonic::movss: case Mnemonic::movsd: {
+		const unsigned size = instruction.mnemonic == Mnemonic::movss ? 4 : 8;
+		// Between registers only the low element moves; from memory the rest of the register clears, as ldr s and ldr d do.
+		if (kind(target) == OperandKind::xmm && kind(source) == OperandKind::xmm)
+			a.ins(target.reg, 0, source.reg, 0, size);
+		else if (kind(target) == OperandKind::xmm)
+			load_vector(target.reg, source, size);
+		else
+			store_vector(source.reg, target, size);
+		return;
+	}
+	case Mnemonic::movd: case Mnemonic::movq: {
+		const bool quad = instruction.mnemonic == Mnemonic::movq;
+		if (kind(target) == OperandKind::xmm && kind(source) == OperandKind::xmm)
+			a.simd(simd::fmov_d_d, target.reg, source.reg);
+		else if (kind(target) == OperandKind::xmm && kind(source) == OperandKind::reg)
+			a.simd(quad ? simd::fmov_d_x : simd::fmov_s_w, target.reg, host_register[source.reg]);
+		else if (kind(target) == OperandKind::reg)
+			a.simd(quad ? simd::fmov_x_d : simd::fmov_w_s, host_register[target.reg], source.reg);
+		else if (kind(target) == OperandKind::xmm)
+			load_vector(target.reg, source, quad ? 8 : 4);
+		else
+			store_vector(source.reg, target, quad ? 8 : 4);
+		return;
+	}
+	case Mnemonic::movlps: case Mnemonic::movlpd: case Mnemonic::movhps: case Mnemonic::movhpd: {
+		const unsigned half = instruction.mnemonic == Mnemonic::movhps || instruction.mnemonic == Mnemonic::movhpd ? 1 : 0;
+		if (kind(target) == OperandKind::xmm) {
+			load_vector(vs0, source, 8);
+			a.ins(target.reg, half, vs0, 0, 8);
+		} else if (half) {
+			a.ins(vs0, 0, source.reg, 1, 8);
+			store_vector(vs0, target, 8);
+		} else
+			store_vector(source.reg, target, 8);
+		return;
+	}
+	case Mnemonic::movhlps: a.ins(target.reg, 0, source.reg, 1, 8); return;
+	case Mnemonic::movlhps: a.ins(target.reg, 1, source.reg, 0, 8); return;
+	default:
+		// The whole register: movaps, movups, movapd, movupd, movdqa, movdqu and the non-temporal stores.
+		if (kind(target) == OperandKind::xmm && kind(source) == OperandKind::xmm) {
+			if (target.reg != source.reg)
+				a.simd(simd::orr_16b, target.reg, source.reg, source.reg);
+		} else if (kind(target) == OperandKind::xmm)
+			load_vector(target.reg, source, 16);
+		else
+			store_vector(source.reg, target, 16);
+		return;
+	}
+}
+
+void BlockTranslator::sse_mask(const Instruction &instruction)
+{
+	// The sign bit of each element, gathered into the low byte of each doubleword with shifts and accumulates, then both bytes.
+	const uint8_t source = instruction.operands[1].reg;
+	switch (instruction.mnemonic) {
+	case Mnemonic::movmskps:
+		a.shift_imm(simd::ushr, vs0, source, 32, 31);
+		a.shift_imm(simd::usra, vs0, vs0, 64, 31);
+		a.umov(s0, vs0, 0, 1);
+		a.umov(s1, vs0, 8, 1);
+		a.orr(s0, s0, s1, Shift::lsl, 2, false);
+		break;
+	case Mnemonic::movmskpd:
+		a.shift_imm(simd::ushr, vs0, source, 64, 63);
+		a.umov(s0, vs0, 0, 1);
+		a.umov(s1, vs0, 8, 1);
+		a.orr(s0, s0, s1, Shift::lsl, 1, false);
+		break;
+	default:
+		a.shift_imm(simd::ushr, vs0, source, 8, 7);
+		a.shift_imm(simd::usra, vs0, vs0, 16, 7);
+		a.shift_imm(simd::usra, vs0, vs0, 32, 14);
+		a.shift_imm(simd::usra, vs0, vs0, 64, 28);
+		a.umov(s0, vs0, 0, 1);
+		a.umov(s1, vs0, 8, 1);
+		a.orr(s0, s0, s1, Shift::lsl, 8, false);
+		break;
+	}
+	write(instruction.operands[0], s0);
+}
+
+void BlockTranslator::sse_logic(const Instruction &instruction)
+{
+	const uint8_t target = instruction.operands[0].reg;
+	const Operand &source_operand = instruction.operands[1];
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const bool exclusive = mnemonic == Mnemonic::xorps || mnemonic == Mnemonic::xorpd || mnemonic == Mnemonic::pxor;
+	if (exclusive && source_operand.kind == OperandKind::xmm && source_operand.reg == target) {
+		a.simd(simd::movi_zero_2d, target, 0);
+		return;
+	}
+	const uint8_t source = vector_source(source_operand, vs0);
+	switch (mnemonic) {
+	case Mnemonic::andps: case Mnemonic::andpd: case Mnemonic::pand: a.simd(simd::and_16b, target, target, source); break;
+	// andn: the source and not the destination.
+	case Mnemonic::andnps: case Mnemonic::andnpd: case Mnemonic::pandn: a.simd(simd::bic_16b, target, source, target); break;
+	case Mnemonic::orps: case Mnemonic::orpd: case Mnemonic::por: a.simd(simd::orr_16b, target, target, source); break;
+	default: a.simd(simd::eor_16b, target, target, source); break;
+	}
+}
+
 void BlockTranslator::exit_with(ExitReason reason, uint64_t rip)
 {
 	a.mov_imm(s4, rip);
@@ -1038,12 +1209,16 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar: shift(instruction); return;
 	case Mnemonic::imul: multiply(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
-	case Mnemonic::movq:
-		// XMMn lives in vn, ARM64EC's map. FMOV Dd, Xn clears the rest of the vector, as movq to XMM does.
-		if (operands[0].kind == OperandKind::xmm)
-			a.emit(0x9e670000u | uint32_t(host_register[operands[1].reg]) << 5 | operands[0].reg);
-		else
-			a.emit(0x9e660000u | uint32_t(operands[1].reg) << 5 | host_register[operands[0].reg]);
+	case Mnemonic::movq: case Mnemonic::movd: case Mnemonic::movups: case Mnemonic::movupd: case Mnemonic::movaps:
+	case Mnemonic::movapd: case Mnemonic::movdqa: case Mnemonic::movdqu: case Mnemonic::movntps: case Mnemonic::movntpd:
+	case Mnemonic::movntdq: case Mnemonic::movss: case Mnemonic::movsd: case Mnemonic::movlps: case Mnemonic::movlpd:
+	case Mnemonic::movhps: case Mnemonic::movhpd: case Mnemonic::movhlps: case Mnemonic::movlhps:
+		sse_move(instruction);
+		return;
+	case Mnemonic::movmskps: case Mnemonic::movmskpd: case Mnemonic::pmovmskb: sse_mask(instruction); return;
+	case Mnemonic::andps: case Mnemonic::andpd: case Mnemonic::andnps: case Mnemonic::andnpd: case Mnemonic::orps: case Mnemonic::orpd:
+	case Mnemonic::xorps: case Mnemonic::xorpd: case Mnemonic::pand: case Mnemonic::pandn: case Mnemonic::por: case Mnemonic::pxor:
+		sse_logic(instruction);
 		return;
 	case Mnemonic::mov: {
 		const Operand &target = operands[0], &source = operands[1];
