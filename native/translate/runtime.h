@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -32,22 +33,33 @@ struct RuntimeStats {
 	uint64_t cache_load_ns = 0;
 };
 
+// Enters translated code at code, with the CpuState translated code sees at state, through the enter trampoline at trampoline, and
+// returns the exit reason. Every address is one translated code uses. Without a runner the runtime calls the trampoline in this
+// process; a VM's runner resumes a vCPU instead.
+class CodeRunner {
+public:
+	virtual ~CodeRunner() = default;
+	virtual uint32_t enter(uint64_t trampoline, uint64_t state, uint64_t code) = 0;
+};
+
 // Runs x64 code by translating it block by block: dispatch, the lookup table for indirect branches, chaining of direct branches,
 // native functions behind thunks, and invalidation when guest code is written. One guest thread; nothing here is thread-safe yet.
 class Runtime {
 public:
-	Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options = {});
+	Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options = {}, CodeRunner *runner = nullptr);
 	~Runtime();
 	Runtime(const Runtime &) = delete;
 	Runtime &operator=(const Runtime &) = delete;
 
 	CpuState &state() { return cpu; }
+	// Where translated code sees the CpuState.
+	uint64_t state_address() const { return state_memory.address; }
 	const TranslationStats &translation_stats() const { return translation; }
 	const RuntimeStats &stats() const { return counters; }
 	// The runtime whose guest code is running on this thread, for native functions that need it.
 	static Runtime *current();
 
-	// Makes a guest call to address run function, taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
+	// Makes a guest call to address run function (only where translated code runs in this process), taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
 	void bind_native(uint64_t address, const void *function, unsigned integer_arguments);
 	// Calls the guest function at address from native code, with up to four integer arguments, on the guest stack the state's RSP names.
 	RunResult call(uint64_t address, std::initializer_list<uint64_t> arguments = {});
@@ -83,10 +95,12 @@ private:
 	GuestMemory &memory;
 	CodeAllocator &cache;
 	TranslatorOptions options;
-	CpuState cpu;
+	CodeRunner *runner;
+	CodeAllocator::Data state_memory, lookup_memory;
+	CpuState &cpu;
+	std::span<LookupEntry> lookup;
 	TranslationStats translation;
 	RuntimeStats counters;
-	std::vector<LookupEntry> lookup;
 	std::unordered_map<uint64_t, std::unique_ptr<Block>> blocks;
 	std::map<uint64_t, std::vector<uint64_t>> blocks_by_granule;
 	std::unordered_map<uint64_t, uint8_t *> natives;
@@ -104,6 +118,7 @@ private:
 	void remember(uint64_t guest, uint8_t *host);
 	void chain(uint8_t *site, uint64_t target);
 	void invalidate(Block &block);
+	uint32_t enter_code(const uint8_t *code);
 	RunResult run();
 };
 

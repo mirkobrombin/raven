@@ -2,6 +2,8 @@
 
 #include "guest_memory.h"
 
+#include "pe/pe.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -11,6 +13,10 @@
 namespace raven::translate {
 
 class Runtime;
+
+// Copies the headers and sections of an x64 image to bytes, laid out as the loader lays it out; returns its code sections as
+// [start, end) guest addresses for an image based at base.
+std::vector<std::pair<uint64_t, uint64_t>> lay_out_image(const PEImage &pe, std::span<const uint8_t> file, uint8_t *bytes, uint64_t base);
 
 // Test-only process model: x64 images mapped into this process at their guest addresses, imports bound to native functions of this
 // process, and code pages write-protected so writes to them reach the runtime. It stands in for the loader until the process model is
@@ -39,6 +45,7 @@ public:
 
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t address) const override;
+	void write(uint64_t address, const void *bytes, size_t size) override;
 	void watch_code(uint64_t address, size_t size, bool watch) override;
 	size_t watch_granule() const override;
 

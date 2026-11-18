@@ -45,6 +45,22 @@ uint32_t read32(const uint8_t *at)
 
 }
 
+std::vector<std::pair<uint64_t, uint64_t>> lay_out_image(const PEImage &pe, std::span<const uint8_t> file, uint8_t *bytes, uint64_t base)
+{
+	std::vector<std::pair<uint64_t, uint64_t>> code_ranges;
+	std::memcpy(bytes, file.data(), std::min<size_t>(pe.headers_size, file.size()));
+	for (const PESection &section : pe.sections) {
+		const uint32_t size = std::min(section.file_size, section.virtual_size ? section.virtual_size : section.file_size);
+		if (size) {
+			const auto data = pe.file_span(section.address, size);
+			std::memcpy(bytes + section.address, data.data(), data.size());
+		}
+		if (section.characteristics & 0x20000000u)
+			code_ranges.emplace_back(base + section.address, base + section.address + section.virtual_size);
+	}
+	return code_ranges;
+}
+
 TestProcess::TestProcess()
 {
 	if (active)
@@ -89,16 +105,7 @@ uint64_t TestProcess::load(const std::filesystem::path &path)
 		throw std::runtime_error("cannot map " + path.string());
 	image.base = reinterpret_cast<uint64_t>(memory);
 	auto *bytes = static_cast<uint8_t *>(memory);
-	std::memcpy(bytes, image.file.data(), std::min<size_t>(pe.headers_size, image.file.size()));
-	for (const PESection &section : pe.sections) {
-		const uint32_t size = std::min(section.file_size, section.virtual_size ? section.virtual_size : section.file_size);
-		if (size) {
-			const auto data = pe.file_span(section.address, size);
-			std::memcpy(bytes + section.address, data.data(), data.size());
-		}
-		if (section.characteristics & 0x20000000u)
-			image.code_ranges.emplace_back(image.base + section.address, image.base + section.address + section.virtual_size);
-	}
+	image.code_ranges = lay_out_image(pe, image.file, bytes, image.base);
 	if (image.base != pe.image_base) {
 		// IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE, at offset 70 of the optional header: the image may move, and its base relocations, if
 		// any, say what to fix. IMAGE_FILE_RELOCS_STRIPPED says it cannot.
@@ -205,6 +212,11 @@ std::span<const uint8_t> TestProcess::code(uint64_t address) const
 bool TestProcess::is_native(uint64_t address) const
 {
 	return natives.count(address) != 0;
+}
+
+void TestProcess::write(uint64_t address, const void *bytes, size_t size)
+{
+	std::memcpy(reinterpret_cast<void *>(address), bytes, size);
 }
 
 void TestProcess::watch_code(uint64_t address, size_t size, bool watch)

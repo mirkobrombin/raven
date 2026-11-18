@@ -45,6 +45,7 @@ public:
 		return {reinterpret_cast<const uint8_t *>(address), static_cast<size_t>(start + used - address)};
 	}
 	bool is_native(uint64_t) const override { return false; }
+	void write(uint64_t address, const void *from, size_t size) override { std::memcpy(reinterpret_cast<void *>(address), from, size); }
 	void watch_code(uint64_t, size_t, bool) override {}
 	size_t watch_granule() const override { return 4096; }
 };

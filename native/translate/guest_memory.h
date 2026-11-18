@@ -18,6 +18,8 @@ public:
 	virtual bool is_native(uint64_t address) const = 0;
 	// Makes writes to the guest pages holding [address, address + size) reach Runtime::code_written (true), or plain again (false).
 	virtual void watch_code(uint64_t address, size_t size, bool watch) = 0;
+	// Writes guest memory as a guest store would, for the runtime's own stores such as the return address a call pushes.
+	virtual void write(uint64_t address, const void *bytes, size_t size) = 0;
 	// The granule watch_code works in: the host page size in a process, 4 KiB in a VM with a 4 KiB stage-2 granule.
 	virtual size_t watch_granule() const = 0;
 };

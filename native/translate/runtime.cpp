@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <new>
 #include <stdexcept>
 
 namespace raven::translate {
@@ -37,10 +38,14 @@ uint64_t fnv(uint64_t hash, const void *bytes, size_t size)
 
 }
 
-Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options)
-	: memory(memory), cache(cache), options(options), lookup(size_t(1) << lookup_bits)
+Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options, CodeRunner *runner)
+	: memory(memory), cache(cache), options(options), runner(runner), state_memory(cache.allocate_data(sizeof(CpuState))),
+	  lookup_memory(cache.allocate_data(sizeof(LookupEntry) << lookup_bits)), cpu(*new (state_memory.host) CpuState{}),
+	  lookup(static_cast<LookupEntry *>(lookup_memory.host), size_t(1) << lookup_bits)
 {
-	cpu.lookup_table = lookup.data();
+	std::fill(lookup.begin(), lookup.end(), LookupEntry{});
+	// Translated code reads the table at the address it sees, which is not the runtime's pointer in a VM.
+	cpu.lookup_table = reinterpret_cast<LookupEntry *>(lookup_memory.address);
 	place_fixed_code();
 }
 
@@ -77,6 +82,9 @@ void Runtime::bind_native(uint64_t address, const void *function, unsigned integ
 {
 	if (!memory.is_native(address))
 		throw std::invalid_argument("the code map does not call that address native");
+	// A thunk calls the function at its address in this process, which code running elsewhere cannot reach.
+	if (runner)
+		throw std::logic_error("native functions need translated code that runs in this process");
 	natives[address] = place(native_thunk(reinterpret_cast<uint64_t>(function), integer_arguments));
 }
 
@@ -153,7 +161,7 @@ void Runtime::chain(uint8_t *site, uint64_t target)
 	if (!cache.contains(site) || !cache.contains(host) || !a64::Assembler::b_reaches(words))
 		return;
 	uint32_t original;
-	std::memcpy(&original, site, 4);
+	cache.read(site, &original, 4);
 	const uint32_t branch = a64::Assembler::encode_b(words);
 	cache.write(site, &branch, 4);
 	if (const auto found = blocks.find(target); found != blocks.end())
@@ -161,15 +169,21 @@ void Runtime::chain(uint8_t *site, uint64_t target)
 	++counters.chains;
 }
 
+uint32_t Runtime::enter_code(const uint8_t *code)
+{
+	if (runner)
+		return runner->enter(reinterpret_cast<uint64_t>(enter), state_memory.address, reinterpret_cast<uint64_t>(code));
+	return reinterpret_cast<EnterFunction>(enter)(&cpu, code);
+}
+
 RunResult Runtime::run()
 {
-	auto enter_code = reinterpret_cast<EnterFunction>(enter);
 	for (;;) {
 		uint8_t *code = host_code(cpu.rip);
 		if (!code)
 			return {ExitReason::unsupported, cpu.rip};
 		++counters.runs;
-		const auto reason = static_cast<ExitReason>(enter_code(&cpu, code));
+		const auto reason = static_cast<ExitReason>(enter_code(code));
 		switch (reason) {
 		case ExitReason::lookup_miss: ++counters.lookup_misses; break;
 		case ExitReason::chain: chain(reinterpret_cast<uint8_t *>(cpu.exit_info), cpu.rip); break;
@@ -193,7 +207,7 @@ RunResult Runtime::call(uint64_t address, std::initializer_list<uint64_t> argume
 	// A call made while guest code waits in a native function: keep what the outer run needs when it resumes.
 	const uint64_t saved_rip = cpu.rip, saved_frame = cpu.host_frame, saved_rsp = cpu.gpr[rsp];
 	uint64_t stack = (saved_rsp & ~uint64_t(15)) - 32 - 8;
-	std::memcpy(reinterpret_cast<void *>(stack), &return_guest, 8);
+	memory.write(stack, &return_guest, 8);
 	cpu.gpr[rsp] = stack;
 	static constexpr Gpr argument_registers[] = {rcx, rdx, r8, r9};
 	size_t index = 0;

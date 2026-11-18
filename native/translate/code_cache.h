@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 namespace raven::translate {
 
@@ -16,6 +18,16 @@ public:
 	virtual uint8_t *allocate(size_t size) = 0;
 	// Copies bytes to the code at execute address at and makes them visible to instruction fetch.
 	virtual void write(uint8_t *at, const void *bytes, size_t size) = 0;
+	// Copies size bytes of the code at execute address at into bytes.
+	virtual void read(const uint8_t *at, void *bytes, size_t size) const = 0;
+	// Memory translated code reads and writes besides guest memory: the CpuState and the lookup table. host is where the runtime
+	// reaches it, address where translated code does; the two are the same in this process and differ in a VM. Zeroed, 16-byte
+	// aligned, and kept until the allocator goes, whatever reset does.
+	struct Data {
+		void *host;
+		uint64_t address;
+	};
+	virtual Data allocate_data(size_t size) = 0;
 	virtual void reset() = 0;
 	virtual size_t used() const = 0;
 	virtual size_t capacity() const = 0;
@@ -31,6 +43,8 @@ public:
 	JitCodeCache &operator=(const JitCodeCache &) = delete;
 	uint8_t *allocate(size_t size) override;
 	void write(uint8_t *at, const void *bytes, size_t size) override;
+	void read(const uint8_t *at, void *bytes, size_t size) const override;
+	Data allocate_data(size_t size) override;
 	void reset() override;
 	size_t used() const override { return next; }
 	size_t capacity() const override { return region.size; }
@@ -39,6 +53,7 @@ public:
 private:
 	host::CodeRegion region;
 	size_t next = 0;
+	std::vector<std::unique_ptr<uint64_t[]>> data;
 };
 
 }
