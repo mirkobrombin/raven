@@ -1,0 +1,600 @@
+{"round": 0, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1334.0, "warm_ns_per_call": 310.938, "checksum": 1001500500}
+{"round": 0, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25667.0, "warm_ns_per_call": 285.646, "entries": 3, "checksum": 1001500500}
+{"round": 0, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 26500.0, "warm_ns_per_call": 261.625, "entries": 2000, "checksum": 1001500500}
+{"round": 0, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 67167.0, "warm_ns_per_call": 282.688, "entries": 3, "checksum": 1001500500}
+{"round": 0, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 62375.0, "warm_ns_per_call": 1180.667, "entries": 2000, "checksum": 1001500500}
+{"round": 0, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 81916.0, "warm_ns_per_call": 13087.5, "checksum": 17280605916}
+{"round": 0, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 65583.0, "warm_ns_per_call": 17318.75, "entries": 5, "checksum": 17280605916}
+{"round": 0, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 60584.0, "warm_ns_per_call": 17258.35, "entries": 22, "checksum": 17280605916}
+{"round": 0, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 104792.0, "warm_ns_per_call": 17668.75, "entries": 5, "checksum": 17280605916}
+{"round": 0, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 169625.0, "warm_ns_per_call": 29362.5, "entries": 22, "checksum": 17280605916}
+{"round": 0, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37833.0, "warm_ns_per_call": 34121.66, "checksum": 7551386038240402271}
+{"round": 0, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 110208.0, "warm_ns_per_call": 34981.68, "entries": 5, "checksum": 7551386038240402271}
+{"round": 0, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 112000.0, "warm_ns_per_call": 32645.84, "entries": 52, "checksum": 7551386038240402271}
+{"round": 0, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 168291.0, "warm_ns_per_call": 32854.18, "entries": 5, "checksum": 7551386038240402271}
+{"round": 0, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 288000.0, "warm_ns_per_call": 33718.32, "entries": 52, "checksum": 7551386038240402271}
+{"round": 0, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51541.0, "warm_ns_per_call": 51107.5, "checksum": 2657680802922303478}
+{"round": 0, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 112000.0, "warm_ns_per_call": 79685.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 0, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 114458.0, "warm_ns_per_call": 79148.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 0, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 159583.0, "warm_ns_per_call": 77297.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 0, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 154375.0, "warm_ns_per_call": 78067.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 1, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1125.0, "warm_ns_per_call": 310.604, "checksum": 1001500500}
+{"round": 1, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 24042.0, "warm_ns_per_call": 264.875, "entries": 3, "checksum": 1001500500}
+{"round": 1, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 36583.0, "warm_ns_per_call": 261.938, "entries": 2000, "checksum": 1001500500}
+{"round": 1, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 58542.0, "warm_ns_per_call": 249.417, "entries": 3, "checksum": 1001500500}
+{"round": 1, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 56250.0, "warm_ns_per_call": 1086.396, "entries": 2000, "checksum": 1001500500}
+{"round": 1, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17042.0, "warm_ns_per_call": 12458.3, "checksum": 17280605916}
+{"round": 1, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 60833.0, "warm_ns_per_call": 17281.25, "entries": 5, "checksum": 17280605916}
+{"round": 1, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 58458.0, "warm_ns_per_call": 16470.85, "entries": 22, "checksum": 17280605916}
+{"round": 1, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 98750.0, "warm_ns_per_call": 16593.75, "entries": 5, "checksum": 17280605916}
+{"round": 1, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 97750.0, "warm_ns_per_call": 18220.8, "entries": 22, "checksum": 17280605916}
+{"round": 1, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 35958.0, "warm_ns_per_call": 30865.0, "checksum": 7551386038240402271}
+{"round": 1, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 108583.0, "warm_ns_per_call": 32681.68, "entries": 5, "checksum": 7551386038240402271}
+{"round": 1, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 104042.0, "warm_ns_per_call": 30904.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 1, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 158000.0, "warm_ns_per_call": 31057.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 1, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 170583.0, "warm_ns_per_call": 32100.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 1, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 48209.0, "warm_ns_per_call": 48149.18, "checksum": 2657680802922303478}
+{"round": 1, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 109125.0, "warm_ns_per_call": 74247.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 1, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 104500.0, "warm_ns_per_call": 72702.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 1, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 168334.0, "warm_ns_per_call": 81830.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 1, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 145125.0, "warm_ns_per_call": 84324.18, "entries": 52, "checksum": 2657680802922303478}
+{"round": 2, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1000.0, "warm_ns_per_call": 310.875, "checksum": 1001500500}
+{"round": 2, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 23500.0, "warm_ns_per_call": 248.417, "entries": 3, "checksum": 1001500500}
+{"round": 2, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 36167.0, "warm_ns_per_call": 252.542, "entries": 2000, "checksum": 1001500500}
+{"round": 2, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 61291.0, "warm_ns_per_call": 259.0, "entries": 3, "checksum": 1001500500}
+{"round": 2, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 58333.0, "warm_ns_per_call": 1078.625, "entries": 2000, "checksum": 1001500500}
+{"round": 2, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17666.0, "warm_ns_per_call": 12950.0, "checksum": 17280605916}
+{"round": 2, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 63917.0, "warm_ns_per_call": 17293.75, "entries": 5, "checksum": 17280605916}
+{"round": 2, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 60083.0, "warm_ns_per_call": 17275.0, "entries": 22, "checksum": 17280605916}
+{"round": 2, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 99667.0, "warm_ns_per_call": 17177.1, "entries": 5, "checksum": 17280605916}
+{"round": 2, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 97709.0, "warm_ns_per_call": 17158.35, "entries": 22, "checksum": 17280605916}
+{"round": 2, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 38458.0, "warm_ns_per_call": 31214.16, "checksum": 7551386038240402271}
+{"round": 2, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 109167.0, "warm_ns_per_call": 31265.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 2, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 124000.0, "warm_ns_per_call": 33606.68, "entries": 52, "checksum": 7551386038240402271}
+{"round": 2, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 157042.0, "warm_ns_per_call": 31722.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 2, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 160125.0, "warm_ns_per_call": 32040.82, "entries": 52, "checksum": 7551386038240402271}
+{"round": 2, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 53667.0, "warm_ns_per_call": 50928.34, "checksum": 2657680802922303478}
+{"round": 2, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 112792.0, "warm_ns_per_call": 79520.82, "entries": 5, "checksum": 2657680802922303478}
+{"round": 2, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 111917.0, "warm_ns_per_call": 74081.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 2, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 189208.0, "warm_ns_per_call": 76825.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 2, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 144625.0, "warm_ns_per_call": 74080.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 3, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1000.0, "warm_ns_per_call": 306.729, "checksum": 1001500500}
+{"round": 3, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 22416.0, "warm_ns_per_call": 260.521, "entries": 3, "checksum": 1001500500}
+{"round": 3, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 24000.0, "warm_ns_per_call": 265.938, "entries": 2000, "checksum": 1001500500}
+{"round": 3, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 59083.0, "warm_ns_per_call": 249.375, "entries": 3, "checksum": 1001500500}
+{"round": 3, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 60083.0, "warm_ns_per_call": 1089.417, "entries": 2000, "checksum": 1001500500}
+{"round": 3, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17959.0, "warm_ns_per_call": 12945.8, "checksum": 17280605916}
+{"round": 3, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 70875.0, "warm_ns_per_call": 17781.25, "entries": 5, "checksum": 17280605916}
+{"round": 3, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 59459.0, "warm_ns_per_call": 17200.0, "entries": 22, "checksum": 17280605916}
+{"round": 3, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 103584.0, "warm_ns_per_call": 17541.65, "entries": 5, "checksum": 17280605916}
+{"round": 3, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 98750.0, "warm_ns_per_call": 18235.45, "entries": 22, "checksum": 17280605916}
+{"round": 3, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 35500.0, "warm_ns_per_call": 30697.5, "checksum": 7551386038240402271}
+{"round": 3, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 110625.0, "warm_ns_per_call": 32698.34, "entries": 5, "checksum": 7551386038240402271}
+{"round": 3, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 132584.0, "warm_ns_per_call": 32647.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 3, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 173625.0, "warm_ns_per_call": 31460.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 3, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 167292.0, "warm_ns_per_call": 34647.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 3, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 50917.0, "warm_ns_per_call": 50509.18, "checksum": 2657680802922303478}
+{"round": 3, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 106542.0, "warm_ns_per_call": 73685.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 3, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 114417.0, "warm_ns_per_call": 74461.68, "entries": 52, "checksum": 2657680802922303478}
+{"round": 3, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 156291.0, "warm_ns_per_call": 77066.68, "entries": 5, "checksum": 2657680802922303478}
+{"round": 3, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 142708.0, "warm_ns_per_call": 78135.84, "entries": 52, "checksum": 2657680802922303478}
+{"round": 4, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1208.0, "warm_ns_per_call": 310.416, "checksum": 1001500500}
+{"round": 4, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25625.0, "warm_ns_per_call": 253.25, "entries": 3, "checksum": 1001500500}
+{"round": 4, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 21417.0, "warm_ns_per_call": 246.355, "entries": 2000, "checksum": 1001500500}
+{"round": 4, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 62750.0, "warm_ns_per_call": 260.0, "entries": 3, "checksum": 1001500500}
+{"round": 4, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 55625.0, "warm_ns_per_call": 1068.583, "entries": 2000, "checksum": 1001500500}
+{"round": 4, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18500.0, "warm_ns_per_call": 13427.1, "checksum": 17280605916}
+{"round": 4, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 61833.0, "warm_ns_per_call": 16272.9, "entries": 5, "checksum": 17280605916}
+{"round": 4, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 64625.0, "warm_ns_per_call": 17906.25, "entries": 22, "checksum": 17280605916}
+{"round": 4, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 104125.0, "warm_ns_per_call": 18293.75, "entries": 5, "checksum": 17280605916}
+{"round": 4, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 100167.0, "warm_ns_per_call": 18152.05, "entries": 22, "checksum": 17280605916}
+{"round": 4, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37625.0, "warm_ns_per_call": 32627.5, "checksum": 7551386038240402271}
+{"round": 4, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 108709.0, "warm_ns_per_call": 30908.32, "entries": 5, "checksum": 7551386038240402271}
+{"round": 4, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 103958.0, "warm_ns_per_call": 31658.34, "entries": 52, "checksum": 7551386038240402271}
+{"round": 4, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 171834.0, "warm_ns_per_call": 31528.32, "entries": 5, "checksum": 7551386038240402271}
+{"round": 4, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 168583.0, "warm_ns_per_call": 34100.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 4, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51209.0, "warm_ns_per_call": 50345.0, "checksum": 2657680802922303478}
+{"round": 4, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 110584.0, "warm_ns_per_call": 89192.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 4, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 111042.0, "warm_ns_per_call": 76870.82, "entries": 52, "checksum": 2657680802922303478}
+{"round": 4, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 262375.0, "warm_ns_per_call": 126952.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 4, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 159375.0, "warm_ns_per_call": 80446.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 5, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1500.0, "warm_ns_per_call": 322.062, "checksum": 1001500500}
+{"round": 5, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 27250.0, "warm_ns_per_call": 257.25, "entries": 3, "checksum": 1001500500}
+{"round": 5, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25500.0, "warm_ns_per_call": 271.062, "entries": 2000, "checksum": 1001500500}
+{"round": 5, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 74625.0, "warm_ns_per_call": 310.479, "entries": 3, "checksum": 1001500500}
+{"round": 5, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 63292.0, "warm_ns_per_call": 1158.625, "entries": 2000, "checksum": 1001500500}
+{"round": 5, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18125.0, "warm_ns_per_call": 13783.3, "checksum": 17280605916}
+{"round": 5, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 58042.0, "warm_ns_per_call": 16483.3, "entries": 5, "checksum": 17280605916}
+{"round": 5, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 57208.0, "warm_ns_per_call": 16322.95, "entries": 22, "checksum": 17280605916}
+{"round": 5, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 104167.0, "warm_ns_per_call": 17620.85, "entries": 5, "checksum": 17280605916}
+{"round": 5, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 99042.0, "warm_ns_per_call": 18302.1, "entries": 22, "checksum": 17280605916}
+{"round": 5, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37417.0, "warm_ns_per_call": 32860.0, "checksum": 7551386038240402271}
+{"round": 5, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 112084.0, "warm_ns_per_call": 33954.18, "entries": 5, "checksum": 7551386038240402271}
+{"round": 5, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 111125.0, "warm_ns_per_call": 33262.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 5, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 173375.0, "warm_ns_per_call": 32775.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 5, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 170458.0, "warm_ns_per_call": 33597.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 5, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51208.0, "warm_ns_per_call": 50547.5, "checksum": 2657680802922303478}
+{"round": 5, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 108250.0, "warm_ns_per_call": 73940.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 5, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 109625.0, "warm_ns_per_call": 76885.84, "entries": 52, "checksum": 2657680802922303478}
+{"round": 5, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 155667.0, "warm_ns_per_call": 77850.82, "entries": 5, "checksum": 2657680802922303478}
+{"round": 5, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 148417.0, "warm_ns_per_call": 76079.16, "entries": 52, "checksum": 2657680802922303478}
+{"round": 6, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1166.0, "warm_ns_per_call": 310.667, "checksum": 1001500500}
+{"round": 6, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25542.0, "warm_ns_per_call": 257.188, "entries": 3, "checksum": 1001500500}
+{"round": 6, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 24834.0, "warm_ns_per_call": 247.479, "entries": 2000, "checksum": 1001500500}
+{"round": 6, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 58042.0, "warm_ns_per_call": 246.896, "entries": 3, "checksum": 1001500500}
+{"round": 6, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 54667.0, "warm_ns_per_call": 1138.458, "entries": 2000, "checksum": 1001500500}
+{"round": 6, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17875.0, "warm_ns_per_call": 13025.0, "checksum": 17280605916}
+{"round": 6, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 61292.0, "warm_ns_per_call": 17310.45, "entries": 5, "checksum": 17280605916}
+{"round": 6, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 60458.0, "warm_ns_per_call": 17345.85, "entries": 22, "checksum": 17280605916}
+{"round": 6, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 101125.0, "warm_ns_per_call": 18229.2, "entries": 5, "checksum": 17280605916}
+{"round": 6, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 97458.0, "warm_ns_per_call": 18383.35, "entries": 22, "checksum": 17280605916}
+{"round": 6, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37667.0, "warm_ns_per_call": 32566.68, "checksum": 7551386038240402271}
+{"round": 6, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 109208.0, "warm_ns_per_call": 33129.18, "entries": 5, "checksum": 7551386038240402271}
+{"round": 6, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 103584.0, "warm_ns_per_call": 31224.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 6, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 170667.0, "warm_ns_per_call": 33889.16, "entries": 5, "checksum": 7551386038240402271}
+{"round": 6, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 166292.0, "warm_ns_per_call": 32189.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 6, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 47875.0, "warm_ns_per_call": 47967.5, "checksum": 2657680802922303478}
+{"round": 6, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 114708.0, "warm_ns_per_call": 77185.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 6, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 112209.0, "warm_ns_per_call": 76459.16, "entries": 52, "checksum": 2657680802922303478}
+{"round": 6, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 186291.0, "warm_ns_per_call": 79158.34, "entries": 5, "checksum": 2657680802922303478}
+{"round": 6, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 152250.0, "warm_ns_per_call": 77532.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 7, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 958.0, "warm_ns_per_call": 310.416, "checksum": 1001500500}
+{"round": 7, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25333.0, "warm_ns_per_call": 248.375, "entries": 3, "checksum": 1001500500}
+{"round": 7, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 24584.0, "warm_ns_per_call": 271.042, "entries": 2000, "checksum": 1001500500}
+{"round": 7, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 65375.0, "warm_ns_per_call": 258.938, "entries": 3, "checksum": 1001500500}
+{"round": 7, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 61958.0, "warm_ns_per_call": 1128.938, "entries": 2000, "checksum": 1001500500}
+{"round": 7, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18583.0, "warm_ns_per_call": 13547.9, "checksum": 17280605916}
+{"round": 7, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 65375.0, "warm_ns_per_call": 18254.15, "entries": 5, "checksum": 17280605916}
+{"round": 7, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 64042.0, "warm_ns_per_call": 17877.1, "entries": 22, "checksum": 17280605916}
+{"round": 7, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 101125.0, "warm_ns_per_call": 17683.35, "entries": 5, "checksum": 17280605916}
+{"round": 7, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 106667.0, "warm_ns_per_call": 19689.55, "entries": 22, "checksum": 17280605916}
+{"round": 7, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 38875.0, "warm_ns_per_call": 33879.18, "checksum": 7551386038240402271}
+{"round": 7, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 110208.0, "warm_ns_per_call": 30910.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 7, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 110250.0, "warm_ns_per_call": 32695.84, "entries": 52, "checksum": 7551386038240402271}
+{"round": 7, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 168209.0, "warm_ns_per_call": 32960.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 7, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 170417.0, "warm_ns_per_call": 34848.34, "entries": 52, "checksum": 7551386038240402271}
+{"round": 7, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 52875.0, "warm_ns_per_call": 52148.34, "checksum": 2657680802922303478}
+{"round": 7, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 115750.0, "warm_ns_per_call": 79616.66, "entries": 5, "checksum": 2657680802922303478}
+{"round": 7, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 113625.0, "warm_ns_per_call": 77066.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 7, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 145500.0, "warm_ns_per_call": 73867.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 7, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 155583.0, "warm_ns_per_call": 78017.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 8, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1250.0, "warm_ns_per_call": 323.354, "checksum": 1001500500}
+{"round": 8, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 24500.0, "warm_ns_per_call": 257.125, "entries": 3, "checksum": 1001500500}
+{"round": 8, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 24542.0, "warm_ns_per_call": 284.584, "entries": 2000, "checksum": 1001500500}
+{"round": 8, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 62292.0, "warm_ns_per_call": 259.396, "entries": 3, "checksum": 1001500500}
+{"round": 8, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 66166.0, "warm_ns_per_call": 1158.812, "entries": 2000, "checksum": 1001500500}
+{"round": 8, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17792.0, "warm_ns_per_call": 12935.45, "checksum": 17280605916}
+{"round": 8, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 61417.0, "warm_ns_per_call": 17702.05, "entries": 5, "checksum": 17280605916}
+{"round": 8, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 61334.0, "warm_ns_per_call": 17402.1, "entries": 22, "checksum": 17280605916}
+{"round": 8, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 107125.0, "warm_ns_per_call": 17468.75, "entries": 5, "checksum": 17280605916}
+{"round": 8, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 97625.0, "warm_ns_per_call": 18197.9, "entries": 22, "checksum": 17280605916}
+{"round": 8, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37708.0, "warm_ns_per_call": 32597.5, "checksum": 7551386038240402271}
+{"round": 8, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 110000.0, "warm_ns_per_call": 32692.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 8, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 113750.0, "warm_ns_per_call": 33854.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 8, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 174584.0, "warm_ns_per_call": 34516.68, "entries": 5, "checksum": 7551386038240402271}
+{"round": 8, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 168333.0, "warm_ns_per_call": 34934.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 8, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 53208.0, "warm_ns_per_call": 53433.34, "checksum": 2657680802922303478}
+{"round": 8, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 110083.0, "warm_ns_per_call": 76699.16, "entries": 5, "checksum": 2657680802922303478}
+{"round": 8, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 109916.0, "warm_ns_per_call": 74091.68, "entries": 52, "checksum": 2657680802922303478}
+{"round": 8, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 154375.0, "warm_ns_per_call": 78353.34, "entries": 5, "checksum": 2657680802922303478}
+{"round": 8, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 161667.0, "warm_ns_per_call": 116708.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 9, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1250.0, "warm_ns_per_call": 317.854, "checksum": 1001500500}
+{"round": 9, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 26667.0, "warm_ns_per_call": 257.625, "entries": 3, "checksum": 1001500500}
+{"round": 9, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 117292.0, "warm_ns_per_call": 1209.083, "entries": 2000, "checksum": 1001500500}
+{"round": 9, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 235833.0, "warm_ns_per_call": 860.562, "entries": 3, "checksum": 1001500500}
+{"round": 9, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 208791.0, "warm_ns_per_call": 2595.479, "entries": 2000, "checksum": 1001500500}
+{"round": 9, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 75250.0, "warm_ns_per_call": 47245.85, "checksum": 17280605916}
+{"round": 9, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 154417.0, "warm_ns_per_call": 70800.0, "entries": 5, "checksum": 17280605916}
+{"round": 9, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 63750.0, "warm_ns_per_call": 18570.85, "entries": 22, "checksum": 17280605916}
+{"round": 9, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 114750.0, "warm_ns_per_call": 18037.5, "entries": 5, "checksum": 17280605916}
+{"round": 9, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 105625.0, "warm_ns_per_call": 18275.0, "entries": 22, "checksum": 17280605916}
+{"round": 9, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 50209.0, "warm_ns_per_call": 33434.16, "checksum": 7551386038240402271}
+{"round": 9, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 171625.0, "warm_ns_per_call": 34153.32, "entries": 5, "checksum": 7551386038240402271}
+{"round": 9, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 115625.0, "warm_ns_per_call": 33886.68, "entries": 52, "checksum": 7551386038240402271}
+{"round": 9, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 181709.0, "warm_ns_per_call": 33271.68, "entries": 5, "checksum": 7551386038240402271}
+{"round": 9, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 184500.0, "warm_ns_per_call": 34400.84, "entries": 52, "checksum": 7551386038240402271}
+{"round": 9, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51958.0, "warm_ns_per_call": 52015.0, "checksum": 2657680802922303478}
+{"round": 9, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 115959.0, "warm_ns_per_call": 80056.66, "entries": 5, "checksum": 2657680802922303478}
+{"round": 9, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 112000.0, "warm_ns_per_call": 76652.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 9, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 158750.0, "warm_ns_per_call": 77234.18, "entries": 5, "checksum": 2657680802922303478}
+{"round": 9, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 154042.0, "warm_ns_per_call": 80405.84, "entries": 52, "checksum": 2657680802922303478}
+{"round": 10, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1292.0, "warm_ns_per_call": 310.5, "checksum": 1001500500}
+{"round": 10, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 27792.0, "warm_ns_per_call": 267.5, "entries": 3, "checksum": 1001500500}
+{"round": 10, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 56041.0, "warm_ns_per_call": 263.521, "entries": 2000, "checksum": 1001500500}
+{"round": 10, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 66292.0, "warm_ns_per_call": 268.896, "entries": 3, "checksum": 1001500500}
+{"round": 10, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 62917.0, "warm_ns_per_call": 1067.312, "entries": 2000, "checksum": 1001500500}
+{"round": 10, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18542.0, "warm_ns_per_call": 13383.35, "checksum": 17280605916}
+{"round": 10, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 61291.0, "warm_ns_per_call": 17270.85, "entries": 5, "checksum": 17280605916}
+{"round": 10, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 59125.0, "warm_ns_per_call": 17285.4, "entries": 22, "checksum": 17280605916}
+{"round": 10, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 106625.0, "warm_ns_per_call": 17493.75, "entries": 5, "checksum": 17280605916}
+{"round": 10, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 99916.0, "warm_ns_per_call": 18195.8, "entries": 22, "checksum": 17280605916}
+{"round": 10, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37584.0, "warm_ns_per_call": 32830.84, "checksum": 7551386038240402271}
+{"round": 10, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 108500.0, "warm_ns_per_call": 32769.18, "entries": 5, "checksum": 7551386038240402271}
+{"round": 10, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 110375.0, "warm_ns_per_call": 33858.34, "entries": 52, "checksum": 7551386038240402271}
+{"round": 10, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 189333.0, "warm_ns_per_call": 36395.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 10, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 175792.0, "warm_ns_per_call": 33586.66, "entries": 52, "checksum": 7551386038240402271}
+{"round": 10, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 104167.0, "warm_ns_per_call": 67855.0, "checksum": 2657680802922303478}
+{"round": 10, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 114667.0, "warm_ns_per_call": 78206.66, "entries": 5, "checksum": 2657680802922303478}
+{"round": 10, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 116708.0, "warm_ns_per_call": 79535.82, "entries": 52, "checksum": 2657680802922303478}
+{"round": 10, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 181500.0, "warm_ns_per_call": 76795.84, "entries": 5, "checksum": 2657680802922303478}
+{"round": 10, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 142625.0, "warm_ns_per_call": 78790.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 11, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1292.0, "warm_ns_per_call": 319.688, "checksum": 1001500500}
+{"round": 11, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 24042.0, "warm_ns_per_call": 257.062, "entries": 3, "checksum": 1001500500}
+{"round": 11, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25667.0, "warm_ns_per_call": 271.625, "entries": 2000, "checksum": 1001500500}
+{"round": 11, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 56083.0, "warm_ns_per_call": 250.958, "entries": 3, "checksum": 1001500500}
+{"round": 11, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 164959.0, "warm_ns_per_call": 1165.458, "entries": 2000, "checksum": 1001500500}
+{"round": 11, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 16875.0, "warm_ns_per_call": 12245.85, "checksum": 17280605916}
+{"round": 11, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 61750.0, "warm_ns_per_call": 17264.6, "entries": 5, "checksum": 17280605916}
+{"round": 11, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 58041.0, "warm_ns_per_call": 18345.85, "entries": 22, "checksum": 17280605916}
+{"round": 11, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 105125.0, "warm_ns_per_call": 18135.4, "entries": 5, "checksum": 17280605916}
+{"round": 11, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 96959.0, "warm_ns_per_call": 18206.25, "entries": 22, "checksum": 17280605916}
+{"round": 11, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37583.0, "warm_ns_per_call": 32628.34, "checksum": 7551386038240402271}
+{"round": 11, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 117292.0, "warm_ns_per_call": 33876.66, "entries": 5, "checksum": 7551386038240402271}
+{"round": 11, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 115041.0, "warm_ns_per_call": 33883.34, "entries": 52, "checksum": 7551386038240402271}
+{"round": 11, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 167041.0, "warm_ns_per_call": 33265.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 11, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 167125.0, "warm_ns_per_call": 32124.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 11, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 48791.0, "warm_ns_per_call": 48932.5, "checksum": 2657680802922303478}
+{"round": 11, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 113292.0, "warm_ns_per_call": 76670.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 11, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 112458.0, "warm_ns_per_call": 80220.84, "entries": 52, "checksum": 2657680802922303478}
+{"round": 11, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 142333.0, "warm_ns_per_call": 72455.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 11, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 148500.0, "warm_ns_per_call": 74737.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 12, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1208.0, "warm_ns_per_call": 562.354, "checksum": 1001500500}
+{"round": 12, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 27542.0, "warm_ns_per_call": 266.688, "entries": 3, "checksum": 1001500500}
+{"round": 12, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25667.0, "warm_ns_per_call": 271.166, "entries": 2000, "checksum": 1001500500}
+{"round": 12, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 65542.0, "warm_ns_per_call": 259.375, "entries": 3, "checksum": 1001500500}
+{"round": 12, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 63208.0, "warm_ns_per_call": 1121.458, "entries": 2000, "checksum": 1001500500}
+{"round": 12, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18083.0, "warm_ns_per_call": 13231.25, "checksum": 17280605916}
+{"round": 12, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 62375.0, "warm_ns_per_call": 17643.75, "entries": 5, "checksum": 17280605916}
+{"round": 12, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 72708.0, "warm_ns_per_call": 17497.95, "entries": 22, "checksum": 17280605916}
+{"round": 12, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 104000.0, "warm_ns_per_call": 17543.75, "entries": 5, "checksum": 17280605916}
+{"round": 12, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 101292.0, "warm_ns_per_call": 22070.8, "entries": 22, "checksum": 17280605916}
+{"round": 12, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 36084.0, "warm_ns_per_call": 31346.66, "checksum": 7551386038240402271}
+{"round": 12, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 113750.0, "warm_ns_per_call": 35117.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 12, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 112084.0, "warm_ns_per_call": 33077.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 12, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 167750.0, "warm_ns_per_call": 33020.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 12, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 167209.0, "warm_ns_per_call": 33664.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 12, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 58000.0, "warm_ns_per_call": 52653.34, "checksum": 2657680802922303478}
+{"round": 12, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 136083.0, "warm_ns_per_call": 90656.68, "entries": 5, "checksum": 2657680802922303478}
+{"round": 12, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 111917.0, "warm_ns_per_call": 77010.84, "entries": 52, "checksum": 2657680802922303478}
+{"round": 12, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 156417.0, "warm_ns_per_call": 76754.16, "entries": 5, "checksum": 2657680802922303478}
+{"round": 12, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 150167.0, "warm_ns_per_call": 77739.18, "entries": 52, "checksum": 2657680802922303478}
+{"round": 13, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1084.0, "warm_ns_per_call": 314.104, "checksum": 1001500500}
+{"round": 13, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 26625.0, "warm_ns_per_call": 263.875, "entries": 3, "checksum": 1001500500}
+{"round": 13, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25000.0, "warm_ns_per_call": 262.062, "entries": 2000, "checksum": 1001500500}
+{"round": 13, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 61583.0, "warm_ns_per_call": 268.854, "entries": 3, "checksum": 1001500500}
+{"round": 13, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 274125.0, "warm_ns_per_call": 1290.625, "entries": 2000, "checksum": 1001500500}
+{"round": 13, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17792.0, "warm_ns_per_call": 16658.35, "checksum": 17280605916}
+{"round": 13, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 67125.0, "warm_ns_per_call": 24381.25, "entries": 5, "checksum": 17280605916}
+{"round": 13, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 60958.0, "warm_ns_per_call": 17339.6, "entries": 22, "checksum": 17280605916}
+{"round": 13, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 213500.0, "warm_ns_per_call": 17547.9, "entries": 5, "checksum": 17280605916}
+{"round": 13, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 109708.0, "warm_ns_per_call": 18897.9, "entries": 22, "checksum": 17280605916}
+{"round": 13, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37708.0, "warm_ns_per_call": 32567.5, "checksum": 7551386038240402271}
+{"round": 13, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 117375.0, "warm_ns_per_call": 34395.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 13, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 116166.0, "warm_ns_per_call": 33519.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 13, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 184584.0, "warm_ns_per_call": 33833.34, "entries": 5, "checksum": 7551386038240402271}
+{"round": 13, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 220541.0, "warm_ns_per_call": 33677.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 13, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51583.0, "warm_ns_per_call": 50256.66, "checksum": 2657680802922303478}
+{"round": 13, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 127792.0, "warm_ns_per_call": 79837.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 13, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 115084.0, "warm_ns_per_call": 79738.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 13, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 160208.0, "warm_ns_per_call": 87699.18, "entries": 5, "checksum": 2657680802922303478}
+{"round": 13, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 227250.0, "warm_ns_per_call": 83640.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 14, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1291.0, "warm_ns_per_call": 323.75, "checksum": 1001500500}
+{"round": 14, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25959.0, "warm_ns_per_call": 266.708, "entries": 3, "checksum": 1001500500}
+{"round": 14, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25834.0, "warm_ns_per_call": 300.959, "entries": 2000, "checksum": 1001500500}
+{"round": 14, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 64417.0, "warm_ns_per_call": 268.166, "entries": 3, "checksum": 1001500500}
+{"round": 14, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 63083.0, "warm_ns_per_call": 1166.417, "entries": 2000, "checksum": 1001500500}
+{"round": 14, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18292.0, "warm_ns_per_call": 13383.35, "checksum": 17280605916}
+{"round": 14, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 68250.0, "warm_ns_per_call": 18660.45, "entries": 5, "checksum": 17280605916}
+{"round": 14, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 61459.0, "warm_ns_per_call": 17889.6, "entries": 22, "checksum": 17280605916}
+{"round": 14, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 106166.0, "warm_ns_per_call": 18168.75, "entries": 5, "checksum": 17280605916}
+{"round": 14, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 116542.0, "warm_ns_per_call": 19025.0, "entries": 22, "checksum": 17280605916}
+{"round": 14, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 38833.0, "warm_ns_per_call": 33769.16, "checksum": 7551386038240402271}
+{"round": 14, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 217542.0, "warm_ns_per_call": 34466.66, "entries": 5, "checksum": 7551386038240402271}
+{"round": 14, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 114084.0, "warm_ns_per_call": 33885.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 14, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 195625.0, "warm_ns_per_call": 34274.18, "entries": 5, "checksum": 7551386038240402271}
+{"round": 14, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 175959.0, "warm_ns_per_call": 35130.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 14, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 52959.0, "warm_ns_per_call": 52210.0, "checksum": 2657680802922303478}
+{"round": 14, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 122333.0, "warm_ns_per_call": 78700.84, "entries": 5, "checksum": 2657680802922303478}
+{"round": 14, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 114167.0, "warm_ns_per_call": 79948.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 14, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 153542.0, "warm_ns_per_call": 79815.82, "entries": 5, "checksum": 2657680802922303478}
+{"round": 14, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 155458.0, "warm_ns_per_call": 80726.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 15, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1208.0, "warm_ns_per_call": 320.229, "checksum": 1001500500}
+{"round": 15, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 23834.0, "warm_ns_per_call": 257.25, "entries": 3, "checksum": 1001500500}
+{"round": 15, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 24834.0, "warm_ns_per_call": 283.021, "entries": 2000, "checksum": 1001500500}
+{"round": 15, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 64292.0, "warm_ns_per_call": 268.084, "entries": 3, "checksum": 1001500500}
+{"round": 15, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 59792.0, "warm_ns_per_call": 1171.5, "entries": 2000, "checksum": 1001500500}
+{"round": 15, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18250.0, "warm_ns_per_call": 13422.9, "checksum": 17280605916}
+{"round": 15, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 62916.0, "warm_ns_per_call": 17262.5, "entries": 5, "checksum": 17280605916}
+{"round": 15, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 63375.0, "warm_ns_per_call": 18262.5, "entries": 22, "checksum": 17280605916}
+{"round": 15, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 108167.0, "warm_ns_per_call": 18185.45, "entries": 5, "checksum": 17280605916}
+{"round": 15, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 139667.0, "warm_ns_per_call": 18922.9, "entries": 22, "checksum": 17280605916}
+{"round": 15, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 38875.0, "warm_ns_per_call": 35201.66, "checksum": 7551386038240402271}
+{"round": 15, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 115375.0, "warm_ns_per_call": 32678.34, "entries": 5, "checksum": 7551386038240402271}
+{"round": 15, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 115708.0, "warm_ns_per_call": 33816.66, "entries": 52, "checksum": 7551386038240402271}
+{"round": 15, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 171584.0, "warm_ns_per_call": 33213.34, "entries": 5, "checksum": 7551386038240402271}
+{"round": 15, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 184625.0, "warm_ns_per_call": 34189.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 15, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 53083.0, "warm_ns_per_call": 52137.5, "checksum": 2657680802922303478}
+{"round": 15, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 120333.0, "warm_ns_per_call": 77169.16, "entries": 5, "checksum": 2657680802922303478}
+{"round": 15, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 115375.0, "warm_ns_per_call": 79894.18, "entries": 52, "checksum": 2657680802922303478}
+{"round": 15, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 159916.0, "warm_ns_per_call": 80132.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 15, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 156791.0, "warm_ns_per_call": 73803.32, "entries": 52, "checksum": 2657680802922303478}
+{"round": 16, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 875.0, "warm_ns_per_call": 336.375, "checksum": 1001500500}
+{"round": 16, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25125.0, "warm_ns_per_call": 257.354, "entries": 3, "checksum": 1001500500}
+{"round": 16, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 28417.0, "warm_ns_per_call": 288.625, "entries": 2000, "checksum": 1001500500}
+{"round": 16, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 67000.0, "warm_ns_per_call": 268.334, "entries": 3, "checksum": 1001500500}
+{"round": 16, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 61500.0, "warm_ns_per_call": 1134.979, "entries": 2000, "checksum": 1001500500}
+{"round": 16, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18750.0, "warm_ns_per_call": 13714.6, "checksum": 17280605916}
+{"round": 16, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 65625.0, "warm_ns_per_call": 17897.95, "entries": 5, "checksum": 17280605916}
+{"round": 16, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 62459.0, "warm_ns_per_call": 17239.6, "entries": 22, "checksum": 17280605916}
+{"round": 16, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 103500.0, "warm_ns_per_call": 17897.95, "entries": 5, "checksum": 17280605916}
+{"round": 16, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 111083.0, "warm_ns_per_call": 18250.0, "entries": 22, "checksum": 17280605916}
+{"round": 16, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 38250.0, "warm_ns_per_call": 32586.66, "checksum": 7551386038240402271}
+{"round": 16, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 110083.0, "warm_ns_per_call": 32660.82, "entries": 5, "checksum": 7551386038240402271}
+{"round": 16, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 126209.0, "warm_ns_per_call": 31979.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 16, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 181209.0, "warm_ns_per_call": 33961.68, "entries": 5, "checksum": 7551386038240402271}
+{"round": 16, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 173500.0, "warm_ns_per_call": 33581.66, "entries": 52, "checksum": 7551386038240402271}
+{"round": 16, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51084.0, "warm_ns_per_call": 51074.16, "checksum": 2657680802922303478}
+{"round": 16, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 113000.0, "warm_ns_per_call": 77085.82, "entries": 5, "checksum": 2657680802922303478}
+{"round": 16, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 113917.0, "warm_ns_per_call": 76683.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 16, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 150084.0, "warm_ns_per_call": 76788.34, "entries": 5, "checksum": 2657680802922303478}
+{"round": 16, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 150458.0, "warm_ns_per_call": 80956.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 17, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1125.0, "warm_ns_per_call": 354.833, "checksum": 1001500500}
+{"round": 17, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 27500.0, "warm_ns_per_call": 254.27, "entries": 3, "checksum": 1001500500}
+{"round": 17, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25583.0, "warm_ns_per_call": 284.708, "entries": 2000, "checksum": 1001500500}
+{"round": 17, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 127375.0, "warm_ns_per_call": 259.062, "entries": 3, "checksum": 1001500500}
+{"round": 17, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 69459.0, "warm_ns_per_call": 1189.229, "entries": 2000, "checksum": 1001500500}
+{"round": 17, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 17833.0, "warm_ns_per_call": 12881.25, "checksum": 17280605916}
+{"round": 17, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 63500.0, "warm_ns_per_call": 17281.25, "entries": 5, "checksum": 17280605916}
+{"round": 17, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 109958.0, "warm_ns_per_call": 17266.65, "entries": 22, "checksum": 17280605916}
+{"round": 17, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 102042.0, "warm_ns_per_call": 17656.25, "entries": 5, "checksum": 17280605916}
+{"round": 17, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 102292.0, "warm_ns_per_call": 18316.65, "entries": 22, "checksum": 17280605916}
+{"round": 17, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37875.0, "warm_ns_per_call": 35228.34, "checksum": 7551386038240402271}
+{"round": 17, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 134583.0, "warm_ns_per_call": 32936.66, "entries": 5, "checksum": 7551386038240402271}
+{"round": 17, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 114084.0, "warm_ns_per_call": 33156.66, "entries": 52, "checksum": 7551386038240402271}
+{"round": 17, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 174791.0, "warm_ns_per_call": 33464.16, "entries": 5, "checksum": 7551386038240402271}
+{"round": 17, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 263625.0, "warm_ns_per_call": 33642.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 17, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 51459.0, "warm_ns_per_call": 50349.16, "checksum": 2657680802922303478}
+{"round": 17, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 107417.0, "warm_ns_per_call": 74632.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 17, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 111792.0, "warm_ns_per_call": 76769.16, "entries": 52, "checksum": 2657680802922303478}
+{"round": 17, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 153459.0, "warm_ns_per_call": 76791.68, "entries": 5, "checksum": 2657680802922303478}
+{"round": 17, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 149250.0, "warm_ns_per_call": 77733.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 18, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1166.0, "warm_ns_per_call": 320.688, "checksum": 1001500500}
+{"round": 18, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 24542.0, "warm_ns_per_call": 257.333, "entries": 3, "checksum": 1001500500}
+{"round": 18, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25250.0, "warm_ns_per_call": 271.959, "entries": 2000, "checksum": 1001500500}
+{"round": 18, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 54875.0, "warm_ns_per_call": 247.479, "entries": 3, "checksum": 1001500500}
+{"round": 18, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 61042.0, "warm_ns_per_call": 1125.458, "entries": 2000, "checksum": 1001500500}
+{"round": 18, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18584.0, "warm_ns_per_call": 13372.95, "checksum": 17280605916}
+{"round": 18, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 59542.0, "warm_ns_per_call": 16670.85, "entries": 5, "checksum": 17280605916}
+{"round": 18, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 57500.0, "warm_ns_per_call": 16677.05, "entries": 22, "checksum": 17280605916}
+{"round": 18, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 106541.0, "warm_ns_per_call": 18441.65, "entries": 5, "checksum": 17280605916}
+{"round": 18, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 98625.0, "warm_ns_per_call": 18785.4, "entries": 22, "checksum": 17280605916}
+{"round": 18, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 39000.0, "warm_ns_per_call": 33785.0, "checksum": 7551386038240402271}
+{"round": 18, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 107958.0, "warm_ns_per_call": 31444.16, "entries": 5, "checksum": 7551386038240402271}
+{"round": 18, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 113667.0, "warm_ns_per_call": 33898.34, "entries": 52, "checksum": 7551386038240402271}
+{"round": 18, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 173333.0, "warm_ns_per_call": 33985.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 18, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 156500.0, "warm_ns_per_call": 32509.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 18, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 49584.0, "warm_ns_per_call": 50202.5, "checksum": 2657680802922303478}
+{"round": 18, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 115042.0, "warm_ns_per_call": 79502.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 18, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 115667.0, "warm_ns_per_call": 79853.32, "entries": 52, "checksum": 2657680802922303478}
+{"round": 18, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 152542.0, "warm_ns_per_call": 76916.66, "entries": 5, "checksum": 2657680802922303478}
+{"round": 18, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 153458.0, "warm_ns_per_call": 77540.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 19, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1208.0, "warm_ns_per_call": 322.312, "checksum": 1001500500}
+{"round": 19, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 25125.0, "warm_ns_per_call": 266.958, "entries": 3, "checksum": 1001500500}
+{"round": 19, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 25959.0, "warm_ns_per_call": 253.52, "entries": 2000, "checksum": 1001500500}
+{"round": 19, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 70292.0, "warm_ns_per_call": 271.584, "entries": 3, "checksum": 1001500500}
+{"round": 19, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 59958.0, "warm_ns_per_call": 1097.646, "entries": 2000, "checksum": 1001500500}
+{"round": 19, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 16875.0, "warm_ns_per_call": 12239.6, "checksum": 17280605916}
+{"round": 19, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 63250.0, "warm_ns_per_call": 17322.9, "entries": 5, "checksum": 17280605916}
+{"round": 19, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 60417.0, "warm_ns_per_call": 17350.0, "entries": 22, "checksum": 17280605916}
+{"round": 19, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 100833.0, "warm_ns_per_call": 17514.6, "entries": 5, "checksum": 17280605916}
+{"round": 19, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 146875.0, "warm_ns_per_call": 18225.0, "entries": 22, "checksum": 17280605916}
+{"round": 19, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 37625.0, "warm_ns_per_call": 32686.66, "checksum": 7551386038240402271}
+{"round": 19, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 110292.0, "warm_ns_per_call": 32672.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 19, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 113833.0, "warm_ns_per_call": 33859.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 19, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 181125.0, "warm_ns_per_call": 33990.82, "entries": 5, "checksum": 7551386038240402271}
+{"round": 19, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 173667.0, "warm_ns_per_call": 33600.82, "entries": 52, "checksum": 7551386038240402271}
+{"round": 19, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 55958.0, "warm_ns_per_call": 52123.34, "checksum": 2657680802922303478}
+{"round": 19, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 118042.0, "warm_ns_per_call": 79490.84, "entries": 5, "checksum": 2657680802922303478}
+{"round": 19, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 117416.0, "warm_ns_per_call": 77228.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 19, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 153917.0, "warm_ns_per_call": 76735.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 19, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 151542.0, "warm_ns_per_call": 77827.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 20, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1250.0, "warm_ns_per_call": 326.667, "checksum": 1001500500}
+{"round": 20, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 26459.0, "warm_ns_per_call": 288.125, "entries": 3, "checksum": 1001500500}
+{"round": 20, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 28500.0, "warm_ns_per_call": 271.708, "entries": 2000, "checksum": 1001500500}
+{"round": 20, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 64708.0, "warm_ns_per_call": 261.334, "entries": 3, "checksum": 1001500500}
+{"round": 20, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 67125.0, "warm_ns_per_call": 1169.521, "entries": 2000, "checksum": 1001500500}
+{"round": 20, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 18333.0, "warm_ns_per_call": 13375.0, "checksum": 17280605916}
+{"round": 20, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 62000.0, "warm_ns_per_call": 17356.25, "entries": 5, "checksum": 17280605916}
+{"round": 20, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 67834.0, "warm_ns_per_call": 17266.7, "entries": 22, "checksum": 17280605916}
+{"round": 20, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 112250.0, "warm_ns_per_call": 17566.65, "entries": 5, "checksum": 17280605916}
+{"round": 20, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 2546792.0, "warm_ns_per_call": 52145.85, "entries": 22, "checksum": 17280605916}
+{"round": 20, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 40333.0, "warm_ns_per_call": 65558.34, "checksum": 7551386038240402271}
+{"round": 20, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 282750.0, "warm_ns_per_call": 56072.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 20, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 122917.0, "warm_ns_per_call": 63169.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 20, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 1175791.0, "warm_ns_per_call": 156343.34, "entries": 5, "checksum": 7551386038240402271}
+{"round": 20, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 1063667.0, "warm_ns_per_call": 108765.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 20, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 80209.0, "warm_ns_per_call": 121929.16, "checksum": 2657680802922303478}
+{"round": 20, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 286167.0, "warm_ns_per_call": 119847.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 20, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 183167.0, "warm_ns_per_call": 127801.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 20, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 512500.0, "warm_ns_per_call": 215669.16, "entries": 5, "checksum": 2657680802922303478}
+{"round": 20, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 887084.0, "warm_ns_per_call": 383525.82, "entries": 52, "checksum": 2657680802922303478}
+{"round": 21, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1666.0, "warm_ns_per_call": 4286.375, "checksum": 1001500500}
+{"round": 21, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 42334.0, "warm_ns_per_call": 583.042, "entries": 3, "checksum": 1001500500}
+{"round": 21, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 60583.0, "warm_ns_per_call": 650.542, "entries": 2000, "checksum": 1001500500}
+{"round": 21, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 108250.0, "warm_ns_per_call": 472.896, "entries": 3, "checksum": 1001500500}
+{"round": 21, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 94250.0, "warm_ns_per_call": 1522.542, "entries": 2000, "checksum": 1001500500}
+{"round": 21, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 27875.0, "warm_ns_per_call": 22391.65, "checksum": 17280605916}
+{"round": 21, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 578334.0, "warm_ns_per_call": 31735.4, "entries": 5, "checksum": 17280605916}
+{"round": 21, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 109667.0, "warm_ns_per_call": 21754.2, "entries": 22, "checksum": 17280605916}
+{"round": 21, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 160500.0, "warm_ns_per_call": 26750.0, "entries": 5, "checksum": 17280605916}
+{"round": 21, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 156542.0, "warm_ns_per_call": 23875.0, "entries": 22, "checksum": 17280605916}
+{"round": 21, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 49333.0, "warm_ns_per_call": 45345.82, "checksum": 7551386038240402271}
+{"round": 21, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 145583.0, "warm_ns_per_call": 85732.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 21, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 217750.0, "warm_ns_per_call": 47700.82, "entries": 52, "checksum": 7551386038240402271}
+{"round": 21, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 299375.0, "warm_ns_per_call": 47092.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 21, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 263167.0, "warm_ns_per_call": 49742.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 21, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 73792.0, "warm_ns_per_call": 73370.0, "checksum": 2657680802922303478}
+{"round": 21, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 180583.0, "warm_ns_per_call": 127895.82, "entries": 5, "checksum": 2657680802922303478}
+{"round": 21, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 161416.0, "warm_ns_per_call": 124001.68, "entries": 52, "checksum": 2657680802922303478}
+{"round": 21, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 242792.0, "warm_ns_per_call": 131375.82, "entries": 5, "checksum": 2657680802922303478}
+{"round": 21, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 340833.0, "warm_ns_per_call": 167746.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 22, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1917.0, "warm_ns_per_call": 541.083, "checksum": 1001500500}
+{"round": 22, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 39542.0, "warm_ns_per_call": 412.229, "entries": 3, "checksum": 1001500500}
+{"round": 22, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 37750.0, "warm_ns_per_call": 454.375, "entries": 2000, "checksum": 1001500500}
+{"round": 22, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 102541.0, "warm_ns_per_call": 440.438, "entries": 3, "checksum": 1001500500}
+{"round": 22, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 266416.0, "warm_ns_per_call": 1878.604, "entries": 2000, "checksum": 1001500500}
+{"round": 22, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 29291.0, "warm_ns_per_call": 24335.4, "checksum": 17280605916}
+{"round": 22, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 146291.0, "warm_ns_per_call": 29172.9, "entries": 5, "checksum": 17280605916}
+{"round": 22, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 95708.0, "warm_ns_per_call": 27587.5, "entries": 22, "checksum": 17280605916}
+{"round": 22, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 188042.0, "warm_ns_per_call": 29145.85, "entries": 5, "checksum": 17280605916}
+{"round": 22, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 170000.0, "warm_ns_per_call": 26833.35, "entries": 22, "checksum": 17280605916}
+{"round": 22, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 606292.0, "warm_ns_per_call": 73777.5, "checksum": 7551386038240402271}
+{"round": 22, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 192541.0, "warm_ns_per_call": 52055.82, "entries": 5, "checksum": 7551386038240402271}
+{"round": 22, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 182208.0, "warm_ns_per_call": 55197.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 22, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 317000.0, "warm_ns_per_call": 53674.16, "entries": 5, "checksum": 7551386038240402271}
+{"round": 22, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 323625.0, "warm_ns_per_call": 53829.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 22, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 82291.0, "warm_ns_per_call": 82026.66, "checksum": 2657680802922303478}
+{"round": 22, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 178709.0, "warm_ns_per_call": 125449.18, "entries": 5, "checksum": 2657680802922303478}
+{"round": 22, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 184250.0, "warm_ns_per_call": 129565.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 22, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 425083.0, "warm_ns_per_call": 226482.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 22, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 905500.0, "warm_ns_per_call": 142029.16, "entries": 52, "checksum": 2657680802922303478}
+{"round": 23, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1500.0, "warm_ns_per_call": 534.917, "checksum": 1001500500}
+{"round": 23, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 41916.0, "warm_ns_per_call": 532.958, "entries": 3, "checksum": 1001500500}
+{"round": 23, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 44375.0, "warm_ns_per_call": 589.917, "entries": 2000, "checksum": 1001500500}
+{"round": 23, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 99917.0, "warm_ns_per_call": 416.771, "entries": 3, "checksum": 1001500500}
+{"round": 23, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 102750.0, "warm_ns_per_call": 1850.188, "entries": 2000, "checksum": 1001500500}
+{"round": 23, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 28500.0, "warm_ns_per_call": 20700.0, "checksum": 17280605916}
+{"round": 23, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 99750.0, "warm_ns_per_call": 27739.55, "entries": 5, "checksum": 17280605916}
+{"round": 23, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 103167.0, "warm_ns_per_call": 31312.5, "entries": 22, "checksum": 17280605916}
+{"round": 23, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 158792.0, "warm_ns_per_call": 30118.75, "entries": 5, "checksum": 17280605916}
+{"round": 23, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 190250.0, "warm_ns_per_call": 30479.15, "entries": 22, "checksum": 17280605916}
+{"round": 23, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 63750.0, "warm_ns_per_call": 52253.34, "checksum": 7551386038240402271}
+{"round": 23, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 184375.0, "warm_ns_per_call": 53080.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 23, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 175000.0, "warm_ns_per_call": 52941.68, "entries": 52, "checksum": 7551386038240402271}
+{"round": 23, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 272458.0, "warm_ns_per_call": 56680.82, "entries": 5, "checksum": 7551386038240402271}
+{"round": 23, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 266500.0, "warm_ns_per_call": 54470.84, "entries": 52, "checksum": 7551386038240402271}
+{"round": 23, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 82167.0, "warm_ns_per_call": 82277.5, "checksum": 2657680802922303478}
+{"round": 23, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 179375.0, "warm_ns_per_call": 123142.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 23, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 175834.0, "warm_ns_per_call": 124265.82, "entries": 52, "checksum": 2657680802922303478}
+{"round": 23, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 239250.0, "warm_ns_per_call": 123265.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 23, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 251125.0, "warm_ns_per_call": 127113.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 24, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1750.0, "warm_ns_per_call": 512.354, "checksum": 1001500500}
+{"round": 24, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 44333.0, "warm_ns_per_call": 413.0, "entries": 3, "checksum": 1001500500}
+{"round": 24, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 37541.0, "warm_ns_per_call": 441.5, "entries": 2000, "checksum": 1001500500}
+{"round": 24, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 98208.0, "warm_ns_per_call": 414.5, "entries": 3, "checksum": 1001500500}
+{"round": 24, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 101334.0, "warm_ns_per_call": 1867.708, "entries": 2000, "checksum": 1001500500}
+{"round": 24, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 37208.0, "warm_ns_per_call": 23227.1, "checksum": 17280605916}
+{"round": 24, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 168334.0, "warm_ns_per_call": 32520.85, "entries": 5, "checksum": 17280605916}
+{"round": 24, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 104000.0, "warm_ns_per_call": 27922.9, "entries": 22, "checksum": 17280605916}
+{"round": 24, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 525667.0, "warm_ns_per_call": 32750.0, "entries": 5, "checksum": 17280605916}
+{"round": 24, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 210833.0, "warm_ns_per_call": 30168.75, "entries": 22, "checksum": 17280605916}
+{"round": 24, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 639750.0, "warm_ns_per_call": 68755.84, "checksum": 7551386038240402271}
+{"round": 24, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 178833.0, "warm_ns_per_call": 53671.66, "entries": 5, "checksum": 7551386038240402271}
+{"round": 24, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 230666.0, "warm_ns_per_call": 52549.18, "entries": 52, "checksum": 7551386038240402271}
+{"round": 24, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 268083.0, "warm_ns_per_call": 60845.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 24, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 316958.0, "warm_ns_per_call": 53874.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 24, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 92834.0, "warm_ns_per_call": 81600.0, "checksum": 2657680802922303478}
+{"round": 24, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 184583.0, "warm_ns_per_call": 126485.84, "entries": 5, "checksum": 2657680802922303478}
+{"round": 24, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 179166.0, "warm_ns_per_call": 124778.32, "entries": 52, "checksum": 2657680802922303478}
+{"round": 24, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 239959.0, "warm_ns_per_call": 139361.68, "entries": 5, "checksum": 2657680802922303478}
+{"round": 24, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 248750.0, "warm_ns_per_call": 128242.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 25, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1375.0, "warm_ns_per_call": 498.25, "checksum": 1001500500}
+{"round": 25, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 41833.0, "warm_ns_per_call": 412.416, "entries": 3, "checksum": 1001500500}
+{"round": 25, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 36250.0, "warm_ns_per_call": 420.125, "entries": 2000, "checksum": 1001500500}
+{"round": 25, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 94792.0, "warm_ns_per_call": 414.271, "entries": 3, "checksum": 1001500500}
+{"round": 25, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 291375.0, "warm_ns_per_call": 2043.917, "entries": 2000, "checksum": 1001500500}
+{"round": 25, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 28458.0, "warm_ns_per_call": 20752.1, "checksum": 17280605916}
+{"round": 25, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 97459.0, "warm_ns_per_call": 27687.5, "entries": 5, "checksum": 17280605916}
+{"round": 25, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 98541.0, "warm_ns_per_call": 27589.55, "entries": 22, "checksum": 17280605916}
+{"round": 25, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 193750.0, "warm_ns_per_call": 28187.5, "entries": 5, "checksum": 17280605916}
+{"round": 25, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 176750.0, "warm_ns_per_call": 77979.15, "entries": 22, "checksum": 17280605916}
+{"round": 25, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 57542.0, "warm_ns_per_call": 71638.34, "checksum": 7551386038240402271}
+{"round": 25, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 353166.0, "warm_ns_per_call": 54545.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 25, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 235042.0, "warm_ns_per_call": 53095.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 25, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 277542.0, "warm_ns_per_call": 54423.32, "entries": 5, "checksum": 7551386038240402271}
+{"round": 25, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 288375.0, "warm_ns_per_call": 58596.66, "entries": 52, "checksum": 7551386038240402271}
+{"round": 25, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 93958.0, "warm_ns_per_call": 85702.5, "checksum": 2657680802922303478}
+{"round": 25, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 178000.0, "warm_ns_per_call": 132751.66, "entries": 5, "checksum": 2657680802922303478}
+{"round": 25, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 178416.0, "warm_ns_per_call": 153925.84, "entries": 52, "checksum": 2657680802922303478}
+{"round": 25, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 429875.0, "warm_ns_per_call": 173772.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 25, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 281083.0, "warm_ns_per_call": 160858.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 26, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1875.0, "warm_ns_per_call": 416.459, "checksum": 1001500500}
+{"round": 26, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 72667.0, "warm_ns_per_call": 471.021, "entries": 3, "checksum": 1001500500}
+{"round": 26, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 41708.0, "warm_ns_per_call": 498.562, "entries": 2000, "checksum": 1001500500}
+{"round": 26, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 114458.0, "warm_ns_per_call": 497.75, "entries": 3, "checksum": 1001500500}
+{"round": 26, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 112125.0, "warm_ns_per_call": 2232.375, "entries": 2000, "checksum": 1001500500}
+{"round": 26, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 43500.0, "warm_ns_per_call": 23418.75, "checksum": 17280605916}
+{"round": 26, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 111625.0, "warm_ns_per_call": 58354.2, "entries": 5, "checksum": 17280605916}
+{"round": 26, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 1144542.0, "warm_ns_per_call": 35500.0, "entries": 22, "checksum": 17280605916}
+{"round": 26, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 243084.0, "warm_ns_per_call": 39145.85, "entries": 5, "checksum": 17280605916}
+{"round": 26, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 221042.0, "warm_ns_per_call": 29062.5, "entries": 22, "checksum": 17280605916}
+{"round": 26, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 78208.0, "warm_ns_per_call": 70610.82, "checksum": 7551386038240402271}
+{"round": 26, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 229958.0, "warm_ns_per_call": 68189.18, "entries": 5, "checksum": 7551386038240402271}
+{"round": 26, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 226917.0, "warm_ns_per_call": 62922.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 26, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 353625.0, "warm_ns_per_call": 69062.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 26, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 353750.0, "warm_ns_per_call": 71489.16, "entries": 52, "checksum": 7551386038240402271}
+{"round": 26, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 108750.0, "warm_ns_per_call": 104733.32, "checksum": 2657680802922303478}
+{"round": 26, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 197041.0, "warm_ns_per_call": 139640.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 26, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 197042.0, "warm_ns_per_call": 140955.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 26, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 265792.0, "warm_ns_per_call": 139115.0, "entries": 5, "checksum": 2657680802922303478}
+{"round": 26, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 274250.0, "warm_ns_per_call": 140730.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 27, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1666.0, "warm_ns_per_call": 565.312, "checksum": 1001500500}
+{"round": 27, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 62291.0, "warm_ns_per_call": 472.104, "entries": 3, "checksum": 1001500500}
+{"round": 27, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 42167.0, "warm_ns_per_call": 486.958, "entries": 2000, "checksum": 1001500500}
+{"round": 27, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 117500.0, "warm_ns_per_call": 537.52, "entries": 3, "checksum": 1001500500}
+{"round": 27, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 111625.0, "warm_ns_per_call": 1878.354, "entries": 2000, "checksum": 1001500500}
+{"round": 27, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 32291.0, "warm_ns_per_call": 23393.75, "checksum": 17280605916}
+{"round": 27, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 111250.0, "warm_ns_per_call": 31514.55, "entries": 5, "checksum": 17280605916}
+{"round": 27, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 113292.0, "warm_ns_per_call": 31256.25, "entries": 22, "checksum": 17280605916}
+{"round": 27, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 227458.0, "warm_ns_per_call": 31941.7, "entries": 5, "checksum": 17280605916}
+{"round": 27, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 317583.0, "warm_ns_per_call": 33895.85, "entries": 22, "checksum": 17280605916}
+{"round": 27, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 68500.0, "warm_ns_per_call": 59381.66, "checksum": 7551386038240402271}
+{"round": 27, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 429125.0, "warm_ns_per_call": 60587.5, "entries": 5, "checksum": 7551386038240402271}
+{"round": 27, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 192000.0, "warm_ns_per_call": 57543.32, "entries": 52, "checksum": 7551386038240402271}
+{"round": 27, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 304583.0, "warm_ns_per_call": 59293.34, "entries": 5, "checksum": 7551386038240402271}
+{"round": 27, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 303750.0, "warm_ns_per_call": 61131.66, "entries": 52, "checksum": 7551386038240402271}
+{"round": 27, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 92333.0, "warm_ns_per_call": 93543.34, "checksum": 2657680802922303478}
+{"round": 27, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 198083.0, "warm_ns_per_call": 144857.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 27, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 201583.0, "warm_ns_per_call": 134304.18, "entries": 52, "checksum": 2657680802922303478}
+{"round": 27, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 370791.0, "warm_ns_per_call": 127386.66, "entries": 5, "checksum": 2657680802922303478}
+{"round": 27, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 299916.0, "warm_ns_per_call": 134721.66, "entries": 52, "checksum": 2657680802922303478}
+{"round": 28, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1792.0, "warm_ns_per_call": 498.541, "checksum": 1001500500}
+{"round": 28, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 41625.0, "warm_ns_per_call": 515.438, "entries": 3, "checksum": 1001500500}
+{"round": 28, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 45417.0, "warm_ns_per_call": 493.375, "entries": 2000, "checksum": 1001500500}
+{"round": 28, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 114000.0, "warm_ns_per_call": 476.041, "entries": 3, "checksum": 1001500500}
+{"round": 28, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 96583.0, "warm_ns_per_call": 1822.125, "entries": 2000, "checksum": 1001500500}
+{"round": 28, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 28292.0, "warm_ns_per_call": 20747.95, "checksum": 17280605916}
+{"round": 28, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 95583.0, "warm_ns_per_call": 27725.0, "entries": 5, "checksum": 17280605916}
+{"round": 28, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 135458.0, "warm_ns_per_call": 28345.85, "entries": 22, "checksum": 17280605916}
+{"round": 28, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 160333.0, "warm_ns_per_call": 28285.4, "entries": 5, "checksum": 17280605916}
+{"round": 28, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 199791.0, "warm_ns_per_call": 29197.9, "entries": 22, "checksum": 17280605916}
+{"round": 28, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 60666.0, "warm_ns_per_call": 52795.0, "checksum": 7551386038240402271}
+{"round": 28, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 174959.0, "warm_ns_per_call": 54175.84, "entries": 5, "checksum": 7551386038240402271}
+{"round": 28, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 178167.0, "warm_ns_per_call": 52435.82, "entries": 52, "checksum": 7551386038240402271}
+{"round": 28, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 293000.0, "warm_ns_per_call": 52565.0, "entries": 5, "checksum": 7551386038240402271}
+{"round": 28, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 267791.0, "warm_ns_per_call": 53880.0, "entries": 52, "checksum": 7551386038240402271}
+{"round": 28, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 82416.0, "warm_ns_per_call": 80602.5, "checksum": 2657680802922303478}
+{"round": 28, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 183375.0, "warm_ns_per_call": 127392.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 28, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 178625.0, "warm_ns_per_call": 124653.34, "entries": 52, "checksum": 2657680802922303478}
+{"round": 28, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 244333.0, "warm_ns_per_call": 126308.32, "entries": 5, "checksum": 2657680802922303478}
+{"round": 28, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 273583.0, "warm_ns_per_call": 130220.0, "entries": 52, "checksum": 2657680802922303478}
+{"round": 29, "workload": "entry", "configuration": "native", "calls": 2000, "first_ns": 1667.0, "warm_ns_per_call": 498.0, "checksum": 1001500500}
+{"round": 29, "workload": "entry", "configuration": "process-loop", "calls": 2000, "first_ns": 38667.0, "warm_ns_per_call": 412.562, "entries": 3, "checksum": 1001500500}
+{"round": 29, "workload": "entry", "configuration": "process-call", "calls": 2000, "first_ns": 38083.0, "warm_ns_per_call": 2961.75, "entries": 2000, "checksum": 1001500500}
+{"round": 29, "workload": "entry", "configuration": "vm-loop", "calls": 2000, "first_ns": 96208.0, "warm_ns_per_call": 414.396, "entries": 3, "checksum": 1001500500}
+{"round": 29, "workload": "entry", "configuration": "vm-call", "calls": 2000, "first_ns": 94000.0, "warm_ns_per_call": 1835.354, "entries": 2000, "checksum": 1001500500}
+{"round": 29, "workload": "crc32", "configuration": "native", "calls": 20, "first_ns": 28292.0, "warm_ns_per_call": 20733.35, "checksum": 17280605916}
+{"round": 29, "workload": "crc32", "configuration": "process-loop", "calls": 20, "first_ns": 97625.0, "warm_ns_per_call": 27795.8, "entries": 5, "checksum": 17280605916}
+{"round": 29, "workload": "crc32", "configuration": "process-call", "calls": 20, "first_ns": 96167.0, "warm_ns_per_call": 27777.1, "entries": 22, "checksum": 17280605916}
+{"round": 29, "workload": "crc32", "configuration": "vm-loop", "calls": 20, "first_ns": 167917.0, "warm_ns_per_call": 24795.8, "entries": 5, "checksum": 17280605916}
+{"round": 29, "workload": "crc32", "configuration": "vm-call", "calls": 20, "first_ns": 167500.0, "warm_ns_per_call": 29312.5, "entries": 22, "checksum": 17280605916}
+{"round": 29, "workload": "fnv", "configuration": "native", "calls": 50, "first_ns": 60208.0, "warm_ns_per_call": 52555.84, "checksum": 7551386038240402271}
+{"round": 29, "workload": "fnv", "configuration": "process-loop", "calls": 50, "first_ns": 176333.0, "warm_ns_per_call": 52698.32, "entries": 5, "checksum": 7551386038240402271}
+{"round": 29, "workload": "fnv", "configuration": "process-call", "calls": 50, "first_ns": 273208.0, "warm_ns_per_call": 52381.68, "entries": 52, "checksum": 7551386038240402271}
+{"round": 29, "workload": "fnv", "configuration": "vm-loop", "calls": 50, "first_ns": 292500.0, "warm_ns_per_call": 52651.68, "entries": 5, "checksum": 7551386038240402271}
+{"round": 29, "workload": "fnv", "configuration": "vm-call", "calls": 50, "first_ns": 269666.0, "warm_ns_per_call": 53847.5, "entries": 52, "checksum": 7551386038240402271}
+{"round": 29, "workload": "histogram", "configuration": "native", "calls": 50, "first_ns": 84834.0, "warm_ns_per_call": 80940.0, "checksum": 2657680802922303478}
+{"round": 29, "workload": "histogram", "configuration": "process-loop", "calls": 50, "first_ns": 178791.0, "warm_ns_per_call": 123767.5, "entries": 5, "checksum": 2657680802922303478}
+{"round": 29, "workload": "histogram", "configuration": "process-call", "calls": 50, "first_ns": 177292.0, "warm_ns_per_call": 123712.5, "entries": 52, "checksum": 2657680802922303478}
+{"round": 29, "workload": "histogram", "configuration": "vm-loop", "calls": 50, "first_ns": 242625.0, "warm_ns_per_call": 118904.18, "entries": 5, "checksum": 2657680802922303478}
+{"round": 29, "workload": "histogram", "configuration": "vm-call", "calls": 50, "first_ns": 221416.0, "warm_ns_per_call": 110695.84, "entries": 52, "checksum": 2657680802922303478}
