@@ -36,6 +36,17 @@ constexpr uint32_t fcmeq_4s = 0x4e20e400, fcmge_4s = 0x6e20e400, fcmgt_4s = 0x6e
 constexpr uint32_t fcmeq_s = 0x5e20e400, fcmge_s = 0x7e20e400, fcmgt_s = 0x7ea0e400;
 // fcmp and, with signal_any (or in), fcmpe of Rn with Rm, Rd zero.
 constexpr uint32_t fcmp_s = 0x1e202000, signal_any = 0x10;
+// Integer vectors on 16 bytes; or in size_h, size_s or size_d for elements of 2, 4 or 8 bytes. The long multiplies take the low
+// halves of their sources as written and the high halves with q (bit 30) in.
+constexpr uint32_t size_h = 0x00400000, size_s = 0x00800000, size_d = 0x00c00000, q = 0x40000000;
+constexpr uint32_t add_16b = 0x4e208400, sub_16b = 0x6e208400, sqadd_16b = 0x4e200c00, uqadd_16b = 0x6e200c00,
+	sqsub_16b = 0x4e202c00, uqsub_16b = 0x6e202c00, cmeq_16b = 0x6e208c00, cmgt_16b = 0x4e203400, mul_16b = 0x4e209c00,
+	smax_16b = 0x4e206400, umax_16b = 0x6e206400, smin_16b = 0x4e206c00, umin_16b = 0x6e206c00, urhadd_16b = 0x6e201400,
+	uabd_16b = 0x6e207400, sshl_16b = 0x4e204400, ushl_16b = 0x6e204400, addp_16b = 0x4e20bc00, uzp2_16b = 0x4e005800,
+	uaddlp_16b = 0x6e202800;
+constexpr uint32_t smull_8h = 0x0e20c000, umull_8h = 0x2e20c000, xtn_8b = 0x0e212800;
+// dup of a general register into every element of size bytes: or in size << 16.
+constexpr uint32_t dup_w = 0x4e000c00;
 // Conversions. The scalar ones between general and SIMD&FP registers take sf (bit 31) for an X register and sz for a double.
 constexpr uint32_t sf = 0x80000000;
 constexpr uint32_t scvtf_s_w = 0x1e220000, fcvtzs_w_s = 0x1e380000, fcvt_d_s = 0x1e22c000, fcvt_s_d = 0x1e624000,

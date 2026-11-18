@@ -143,7 +143,15 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::ucomisd: case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: case Mnemonic::cvtss2si: case Mnemonic::cvttss2si:
 	case Mnemonic::cvtsd2si: case Mnemonic::cvttsd2si: case Mnemonic::cvtss2sd: case Mnemonic::cvtsd2ss: case Mnemonic::cvtdq2ps:
 	case Mnemonic::cvtdq2pd: case Mnemonic::cvtps2dq: case Mnemonic::cvttps2dq: case Mnemonic::cvtpd2dq: case Mnemonic::cvttpd2dq:
-	case Mnemonic::cvtps2pd: case Mnemonic::cvtpd2ps:
+	case Mnemonic::cvtps2pd: case Mnemonic::cvtpd2ps: case Mnemonic::paddb: case Mnemonic::paddw: case Mnemonic::paddd:
+	case Mnemonic::paddq: case Mnemonic::psubb: case Mnemonic::psubw: case Mnemonic::psubd: case Mnemonic::psubq: case Mnemonic::paddsb:
+	case Mnemonic::paddsw: case Mnemonic::paddusb: case Mnemonic::paddusw: case Mnemonic::psubsb: case Mnemonic::psubsw:
+	case Mnemonic::psubusb: case Mnemonic::psubusw: case Mnemonic::pmullw: case Mnemonic::pmulhw: case Mnemonic::pmulhuw:
+	case Mnemonic::pmuludq: case Mnemonic::pmaddwd: case Mnemonic::pcmpeqb: case Mnemonic::pcmpeqw: case Mnemonic::pcmpeqd:
+	case Mnemonic::pcmpgtb: case Mnemonic::pcmpgtw: case Mnemonic::pcmpgtd: case Mnemonic::pavgb: case Mnemonic::pavgw:
+	case Mnemonic::pminub: case Mnemonic::pmaxub: case Mnemonic::pminsw: case Mnemonic::pmaxsw: case Mnemonic::psadbw:
+	case Mnemonic::psllw: case Mnemonic::pslld: case Mnemonic::psllq: case Mnemonic::psrlw: case Mnemonic::psrld: case Mnemonic::psrlq:
+	case Mnemonic::psraw: case Mnemonic::psrad: case Mnemonic::psrldq: case Mnemonic::pslldq:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -309,6 +317,8 @@ private:
 	// Element 0 of source (a double or a single) to a signed integer of size bytes in result (s0), truncated or rounded as MXCSR says.
 	void convert_to_integer(uint8_t source, bool doubles, bool truncate, unsigned size);
 	void sse_convert(const Instruction &instruction);
+	void sse_integer(const Instruction &instruction);
+	void sse_shift(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -1359,6 +1369,120 @@ void BlockTranslator::sse_convert(const Instruction &instruction)
 	}
 }
 
+void BlockTranslator::sse_integer(const Instruction &instruction)
+{
+	struct Operation {
+		Mnemonic mnemonic;
+		uint32_t opcode;
+	};
+	using enum Mnemonic;
+	static constexpr Operation elementwise[] = {
+		{paddb, simd::add_16b}, {paddw, simd::add_16b | simd::size_h}, {paddd, simd::add_16b | simd::size_s},
+		{paddq, simd::add_16b | simd::size_d}, {psubb, simd::sub_16b}, {psubw, simd::sub_16b | simd::size_h},
+		{psubd, simd::sub_16b | simd::size_s}, {psubq, simd::sub_16b | simd::size_d}, {paddsb, simd::sqadd_16b},
+		{paddsw, simd::sqadd_16b | simd::size_h}, {paddusb, simd::uqadd_16b}, {paddusw, simd::uqadd_16b | simd::size_h},
+		{psubsb, simd::sqsub_16b}, {psubsw, simd::sqsub_16b | simd::size_h}, {psubusb, simd::uqsub_16b},
+		{psubusw, simd::uqsub_16b | simd::size_h}, {pmullw, simd::mul_16b | simd::size_h}, {pcmpeqb, simd::cmeq_16b},
+		{pcmpeqw, simd::cmeq_16b | simd::size_h}, {pcmpeqd, simd::cmeq_16b | simd::size_s}, {pcmpgtb, simd::cmgt_16b},
+		{pcmpgtw, simd::cmgt_16b | simd::size_h}, {pcmpgtd, simd::cmgt_16b | simd::size_s}, {pavgb, simd::urhadd_16b},
+		{pavgw, simd::urhadd_16b | simd::size_h}, {pminub, simd::umin_16b}, {pmaxub, simd::umax_16b},
+		{pminsw, simd::smin_16b | simd::size_h}, {pmaxsw, simd::smax_16b | simd::size_h},
+	};
+	const uint8_t target = instruction.operands[0].reg;
+	const uint8_t source = vector_source(instruction.operands[1], vs0);
+	for (const Operation &operation : elementwise)
+		if (operation.mnemonic == instruction.mnemonic) {
+			a.simd(operation.opcode, target, target, source);
+			return;
+		}
+	switch (instruction.mnemonic) {
+	case pmulhw: case pmulhuw: {
+		// The high halves of the 32-bit products.
+		const uint32_t multiply = (instruction.mnemonic == pmulhw ? simd::smull_8h : simd::umull_8h) | simd::size_h;
+		a.simd(multiply, vs1, target, source);
+		a.simd(multiply | simd::q, vs2, target, source);
+		a.simd(simd::uzp2_16b | simd::size_h, target, vs1, vs2);
+		return;
+	}
+	case pmuludq:
+		// The low doublewords of both quadwords, multiplied to quadwords.
+		a.simd(simd::xtn_8b | simd::size_s, vs1, target);
+		a.simd(simd::xtn_8b | simd::size_s, vs2, source);
+		a.simd(simd::umull_8h | simd::size_s, target, vs1, vs2);
+		return;
+	case pmaddwd:
+		a.simd(simd::smull_8h | simd::size_h, vs1, target, source);
+		a.simd(simd::smull_8h | simd::size_h | simd::q, vs2, target, source);
+		a.simd(simd::addp_16b | simd::size_s, target, vs1, vs2);
+		return;
+	case psadbw:
+		// The sum of the absolute differences of each eight bytes, in the low word of their quadword.
+		a.simd(simd::uabd_16b, vs1, target, source);
+		a.simd(simd::uaddlp_16b, vs1, vs1);
+		a.simd(simd::uaddlp_16b | simd::size_h, vs1, vs1);
+		a.simd(simd::uaddlp_16b | simd::size_s, target, vs1);
+		return;
+	default: throw std::logic_error("not an SSE integer instruction");
+	}
+}
+
+void BlockTranslator::sse_shift(const Instruction &instruction)
+{
+	using enum Mnemonic;
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const uint8_t target = instruction.operands[0].reg;
+	const Operand &count_operand = instruction.operands[1];
+	if (mnemonic == psrldq || mnemonic == pslldq) {
+		// Whole bytes, zeros shifted in: ext with a zero register.
+		const unsigned count = static_cast<unsigned>(count_operand.value) & 0xff;
+		if (count == 0)
+			return;
+		a.simd(simd::movi_zero_2d, count > 15 ? target : vs1, 0);
+		if (count > 15)
+			return;
+		if (mnemonic == psrldq)
+			a.ext(target, target, vs1, count);
+		else
+			a.ext(target, vs1, target, 16 - count);
+		return;
+	}
+	const bool left = mnemonic == psllw || mnemonic == pslld || mnemonic == psllq;
+	const bool arithmetic = mnemonic == psraw || mnemonic == psrad;
+	const unsigned bits = mnemonic == psllw || mnemonic == psrlw || mnemonic == psraw ? 16 :
+		mnemonic == pslld || mnemonic == psrld || mnemonic == psrad ? 32 : 64;
+	const uint32_t size = bits == 16 ? simd::size_h : bits == 32 ? simd::size_s : simd::size_d;
+	if (count_operand.kind == OperandKind::imm) {
+		// A count beyond the width clears the elements, or fills them with their sign.
+		unsigned count = static_cast<unsigned>(count_operand.value) & 0xff;
+		if (count >= bits) {
+			if (!arithmetic) {
+				a.simd(simd::movi_zero_2d, target, 0);
+				return;
+			}
+			count = bits - 1;
+		}
+		if (count)
+			a.shift_imm(left ? simd::shl : arithmetic ? simd::sshr : simd::ushr, target, target, bits, count);
+		return;
+	}
+	// By the unsigned low quadword of an XMM register or of memory: ushl and sshl take a signed byte per element, and clear or fill
+	// for any count from the width on, so the count is limited to the width.
+	const uint8_t source = vector_source(count_operand, vs0);
+	a.simd(simd::fmov_x_d, s0, source);
+	const bool keep = flags_wanted(all_flags);
+	if (keep)
+		a.mrs_nzcv(s4);
+	a.mov_imm(s1, bits);
+	a.sub(a64::zr, s0, s1, Shift::lsl, 0, true, true);
+	a.csel(s0, s1, s0, Cond::hi);
+	if (keep)
+		a.msr_nzcv(s4);
+	if (!left)
+		a.sub(s0, a64::zr, s0);
+	a.simd(simd::dup_w | (bits / 8) << 16, vs1, s0);
+	a.simd((arithmetic ? simd::sshl_16b : simd::ushl_16b) | size, target, target, vs1);
+}
+
 void BlockTranslator::exit_with(ExitReason reason, uint64_t rip)
 {
 	a.mov_imm(s4, rip);
@@ -1458,6 +1582,19 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::cvtps2dq: case Mnemonic::cvttps2dq: case Mnemonic::cvtpd2dq: case Mnemonic::cvttpd2dq: case Mnemonic::cvtps2pd:
 	case Mnemonic::cvtpd2ps:
 		sse_convert(instruction);
+		return;
+	case Mnemonic::paddb: case Mnemonic::paddw: case Mnemonic::paddd: case Mnemonic::paddq: case Mnemonic::psubb: case Mnemonic::psubw:
+	case Mnemonic::psubd: case Mnemonic::psubq: case Mnemonic::paddsb: case Mnemonic::paddsw: case Mnemonic::paddusb:
+	case Mnemonic::paddusw: case Mnemonic::psubsb: case Mnemonic::psubsw: case Mnemonic::psubusb: case Mnemonic::psubusw:
+	case Mnemonic::pmullw: case Mnemonic::pmulhw: case Mnemonic::pmulhuw: case Mnemonic::pmuludq: case Mnemonic::pmaddwd:
+	case Mnemonic::pcmpeqb: case Mnemonic::pcmpeqw: case Mnemonic::pcmpeqd: case Mnemonic::pcmpgtb: case Mnemonic::pcmpgtw:
+	case Mnemonic::pcmpgtd: case Mnemonic::pavgb: case Mnemonic::pavgw: case Mnemonic::pminub: case Mnemonic::pmaxub:
+	case Mnemonic::pminsw: case Mnemonic::pmaxsw: case Mnemonic::psadbw:
+		sse_integer(instruction);
+		return;
+	case Mnemonic::psllw: case Mnemonic::pslld: case Mnemonic::psllq: case Mnemonic::psrlw: case Mnemonic::psrld: case Mnemonic::psrlq:
+	case Mnemonic::psraw: case Mnemonic::psrad: case Mnemonic::psrldq: case Mnemonic::pslldq:
+		sse_shift(instruction);
 		return;
 	case Mnemonic::ldmxcsr:
 		// The whole value is MXCSR; FPCR and FPSR follow it.
