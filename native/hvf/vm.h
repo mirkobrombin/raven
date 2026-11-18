@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 
@@ -47,6 +48,11 @@ public:
 	uint64_t map_anywhere(size_t size, Access access);
 	// The host alias of a guest address, or nullptr when it is not mapped. Valid up to the end of the mapping holding it.
 	uint8_t *host(uint64_t address) const;
+	// Takes write permission away from the guest page holding address at stage 2 (writable false), or gives it back. A guest store to a
+	// page without it exits to the host on the storing vCPU's thread, which calls write_fault.
+	void protect(uint64_t address, bool writable);
+	// Handles such a store at address; true when the store can be retried.
+	std::function<bool(uint64_t address)> write_fault;
 	// Copies between guest memory and the host; throws when the range is not mapped.
 	void read(uint64_t address, void *into, size_t size) const;
 	void write(uint64_t address, const void *from, size_t size);

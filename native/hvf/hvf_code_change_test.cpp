@@ -27,6 +27,13 @@ void check(bool condition, const std::string &message)
 	}
 }
 
+// A guest thread leaves the runtime before its vCPU is destroyed, so that code_written never quiesces a vCPU that is gone.
+struct Leave {
+	translate::Runtime &runtime;
+	translate::Runtime::Thread &thread;
+	~Leave() { runtime.remove_thread(thread); }
+};
+
 uint64_t now_ns()
 {
 	return static_cast<uint64_t>(
@@ -60,6 +67,7 @@ int main(int argc, char **argv)
 			try {
 				hvf::Vcpu vcpu(vm, true);
 				translate::Runtime::Thread &thread = runtime.add_thread(&vcpu);
+				Leave leave{runtime, thread};
 				process.prepare_thread(thread.state());
 				for (uint64_t value = 10; value < 10 + uint64_t(trials); ++value) {
 					const translate::RunResult result = thread.call(entry, {3, shared, value});
@@ -82,6 +90,7 @@ int main(int argc, char **argv)
 				try {
 					hvf::Vcpu vcpu(vm, true);
 					translate::Runtime::Thread &thread = runtime.add_thread(&vcpu);
+					Leave leave{runtime, thread};
 					process.prepare_thread(thread.state());
 					const translate::RunResult result = thread.call(entry, {4, shared, bound});
 					seen = now_ns();
@@ -94,6 +103,7 @@ int main(int argc, char **argv)
 				try {
 					hvf::Vcpu vcpu(vm, true);
 					translate::Runtime::Thread &thread = runtime.add_thread(&vcpu);
+					Leave leave{runtime, thread};
 					process.prepare_thread(thread.state());
 					thread.call(entry, {5, shared, 1000000});
 					written = now_ns();

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -53,8 +54,10 @@ uint64_t run(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, unsigned n, b
 				std::unique_ptr<hvf::VmCodeCache> own_cache;
 				std::unique_ptr<translate::Runtime> own_runtime;
 				translate::Runtime::Thread *thread;
+				std::unique_ptr<void, std::function<void(void *)>> leave;
 				if (shared) {
 					thread = &shared_runtime.add_thread(&vcpu);
+					leave = {thread, [&](void *added) { shared_runtime.remove_thread(*static_cast<translate::Runtime::Thread *>(added)); }};
 				} else {
 					own_cache = std::make_unique<hvf::VmCodeCache>(vm, 4 << 20, 1 << 20);
 					own_runtime = std::make_unique<translate::Runtime>(process, *own_cache, options, &vcpu);

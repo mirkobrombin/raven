@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -21,7 +22,8 @@ namespace raven::hvf {
 // memory, a stack and a TEB per thread. Images keep no imports, since native thunks cannot run in a vCPU yet.
 class VmProcess final : public translate::GuestMemory {
 public:
-	explicit VmProcess(Vm &vm) : vm(vm) {}
+	explicit VmProcess(Vm &vm);
+	~VmProcess() override;
 
 	// Maps the image at its preferred base; returns it.
 	uint64_t load(const std::filesystem::path &path);
@@ -35,8 +37,8 @@ public:
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t) const override { return false; }
 	void write(uint64_t address, const void *bytes, size_t size) override;
-	// Not watched yet: the translated code would need the image's pages read-only to EL0 and the kernel to pass the fault on.
-	void watch_code(uint64_t, size_t, bool) override {}
+	// A watched page loses write permission at stage 2; a guest store there reaches the attached runtime's code_written.
+	void watch_code(uint64_t address, size_t size, bool watch) override;
 	size_t watch_granule() const override { return Vm::page_size; }
 
 private:
@@ -48,6 +50,10 @@ private:
 	Vm &vm;
 	std::vector<Image> images;
 	translate::Runtime *attached = nullptr;
+	std::mutex lock;
+	std::map<uint64_t, unsigned> watched;
+
+	bool code_write(uint64_t address);
 };
 
 // Translated code in guest memory: EL0 runs it at its guest address, the host writes it through its alias.

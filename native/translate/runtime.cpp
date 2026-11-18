@@ -74,6 +74,14 @@ Runtime::Thread &Runtime::add_thread(CodeRunner *runner)
 	return *threads.back();
 }
 
+void Runtime::remove_thread(Thread &thread)
+{
+	std::lock_guard guard(lock);
+	if (&thread == threads.front().get())
+		throw std::invalid_argument("the first guest thread stays with its runtime");
+	std::erase_if(threads, [&](const auto &owned) { return owned.get() == &thread; });
+}
+
 Runtime::~Runtime()
 {
 	for (const auto &[guest, block] : blocks)
@@ -138,13 +146,24 @@ Runtime::Block *Runtime::install(TranslatedBlock &&translated)
 
 Runtime::Block *Runtime::translate(uint64_t guest)
 {
-	const auto code = memory.code(guest);
-	if (code.empty())
-		return nullptr;
-	const uint64_t start = now_ns();
-	TranslatedBlock translated = translate_block(code, guest, options, translation);
-	counters.translate_ns += now_ns() - start;
-	return install(std::move(translated));
+	for (;;) {
+		const auto code = memory.code(guest);
+		if (code.empty())
+			return nullptr;
+		// Translated from a copy, checked against guest memory once install has watched it: a guest store that landed between the
+		// copy and the watch reached no translation, so a changed byte means translating again.
+		const size_t most = std::min<size_t>(code.size(), size_t(options.max_instructions) * 15);
+		const std::vector<uint8_t> copy(code.begin(), code.begin() + static_cast<std::ptrdiff_t>(most));
+		const uint64_t start = now_ns();
+		TranslatedBlock translated = translate_block(copy, guest, options, translation);
+		counters.translate_ns += now_ns() - start;
+		Block *block = install(std::move(translated));
+		const auto now = memory.code(guest);
+		if (now.size() >= block->guest_size && std::equal(copy.begin(), copy.begin() + block->guest_size, now.begin()))
+			return block;
+		invalidate(*block);
+		blocks.erase(guest);
+	}
 }
 
 uint8_t *Runtime::host_code(uint64_t guest)
@@ -323,6 +342,7 @@ void Runtime::code_written(uint64_t address)
 		return;
 	const std::vector<uint64_t> starts = std::move(found->second);
 	blocks_by_granule.erase(found);
+	bool dropped = false;
 	for (uint64_t start : starts) {
 		const auto block = blocks.find(start);
 		if (block == blocks.end())
@@ -330,7 +350,14 @@ void Runtime::code_written(uint64_t address)
 		invalidate(*block->second);
 		// The code stays in the cache until it is reset: the guest may still be running it on its way out.
 		blocks.erase(block);
+		dropped = true;
 	}
+	// A guest thread spinning in a chain that was just undone may go on fetching the old branch until a context synchronization
+	// event; the thread that wrote is in the host already.
+	if (dropped)
+		for (const auto &thread : threads)
+			if (thread->runner && thread.get() != running)
+				thread->runner->quiesce();
 }
 
 uint64_t Runtime::cache_key(std::span<const uint8_t> image, uint64_t base, const TranslatorOptions &options)

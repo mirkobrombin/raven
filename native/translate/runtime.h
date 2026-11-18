@@ -41,6 +41,9 @@ class CodeRunner {
 public:
 	virtual ~CodeRunner() = default;
 	virtual uint32_t enter(uint64_t trampoline, uint64_t state, uint64_t code) = 0;
+	// Called from another host thread after the runtime unlinked and unpublished code: returns once code this runner is running has
+	// passed a context synchronization event since the call, or at once when it runs none. Then it can no longer enter that code.
+	virtual void quiesce() {}
 };
 
 // Runs x64 code by translating it block by block: dispatch, the lookup table for indirect branches, chaining of direct branches,
@@ -92,8 +95,10 @@ public:
 	Runtime(const Runtime &) = delete;
 	Runtime &operator=(const Runtime &) = delete;
 
-	// Another guest thread, running on runner; it lives as long as the runtime.
+	// Another guest thread, running on runner, until remove_thread or the runtime's end.
 	Thread &add_thread(CodeRunner *runner);
+	// Before its runner goes. Not the first thread.
+	void remove_thread(Thread &thread);
 	Thread &main_thread() { return *threads.front(); }
 	// The first thread's.
 	CpuState &state() { return main_thread().state(); }
@@ -115,7 +120,9 @@ public:
 	// Where the translation of the block at address sits in the code cache, or nullptr.
 	const void *translated_code(uint64_t address) const;
 
-	// A guest write reached guest code at address: drops every translation of the granule holding it.
+	// A guest write reached guest code at address: drops every translation of the granule holding it. On return no guest thread can
+	// enter them: chains into them are undone, the lookup table no longer names them and every other guest thread's runner has been
+	// quiesced. A guest thread inside one finishes that block, which has no backward branch of its own, and leaves it.
 	void code_written(uint64_t address);
 
 	// The ahead-of-time cache: every block translated so far, keyed by key (the image hash, its base and the options).

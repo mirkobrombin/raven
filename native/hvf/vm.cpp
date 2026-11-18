@@ -172,6 +172,16 @@ uint8_t *Vm::host(uint64_t address) const
 	return found->second.host + (address - found->first);
 }
 
+void Vm::protect(uint64_t address, bool writable)
+{
+	const uint8_t *alias = host(address & ~(page_size - 1));
+	if (!alias)
+		throw std::invalid_argument("protecting an unmapped guest page");
+	const uint64_t ipa = ram_ipa + static_cast<uint64_t>(alias - ram);
+	check(hv_vm_protect(ipa, page_size, writable ? HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC : HV_MEMORY_READ | HV_MEMORY_EXEC),
+		"hv_vm_protect");
+}
+
 void Vm::read(uint64_t address, void *into, size_t size) const
 {
 	const uint8_t *alias = host(address);

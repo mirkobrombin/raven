@@ -10,6 +10,49 @@
 
 namespace raven::hvf {
 
+VmProcess::VmProcess(Vm &vm) : vm(vm)
+{
+	vm.write_fault = [this](uint64_t address) { return code_write(address); };
+}
+
+VmProcess::~VmProcess()
+{
+	vm.write_fault = nullptr;
+}
+
+void VmProcess::watch_code(uint64_t address, size_t size, bool watch)
+{
+	std::lock_guard guard(lock);
+	for (uint64_t at = address & ~(Vm::page_size - 1); at < address + size; at += Vm::page_size) {
+		unsigned &count = watched[at];
+		if (watch && count++ == 0)
+			vm.protect(at, false);
+		else if (!watch && count && --count == 0) {
+			vm.protect(at, true);
+			watched.erase(at);
+		} else if (!count)
+			watched.erase(at);
+	}
+}
+
+bool VmProcess::code_write(uint64_t address)
+{
+	const uint64_t page = address & ~(Vm::page_size - 1);
+	{
+		std::lock_guard guard(lock);
+		if (!watched.count(page))
+			return false;
+	}
+	// Outside the lock: code_written takes the runtime's lock and calls watch_code.
+	if (attached)
+		attached->code_written(address);
+	// Every translation of the page is gone; make sure the store can go through, even if a translation of another runtime held it.
+	std::lock_guard guard(lock);
+	if (watched.erase(page))
+		vm.protect(page, true);
+	return true;
+}
+
 uint64_t VmProcess::load(const std::filesystem::path &path)
 {
 	std::ifstream input(path, std::ios::binary);

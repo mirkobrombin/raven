@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace raven::hvf {
 
@@ -23,7 +24,9 @@ namespace {
 constexpr uint64_t stack_size = 64 << 10;
 
 // ESR exception classes.
-constexpr uint64_t hvc_class = 0x16;
+constexpr uint64_t hvc_class = 0x16, lower_data_abort_class = 0x24;
+// ISS of a data abort: WnR, FnV.
+constexpr uint64_t write_not_read = 1 << 6, far_not_valid = 1 << 10;
 
 void check(hv_return_t result, const char *what)
 {
@@ -85,6 +88,16 @@ Vcpu::~Vcpu()
 	hv_vcpu_destroy(vcpu);
 }
 
+void Vcpu::quiesce()
+{
+	if (!in_guest.load())
+		return;
+	const uint64_t seen = exits.load();
+	hv_vcpus_exit(&vcpu, 1);
+	while (in_guest.load() && exits.load() == seen)
+		std::this_thread::yield();
+}
+
 uint64_t Vcpu::actlr() const
 {
 	uint64_t value = 0;
@@ -120,7 +133,11 @@ uint32_t Vcpu::enter(uint64_t trampoline, uint64_t state, uint64_t code)
 	started = true;
 	++counters.entries;
 	for (;;) {
-		check(hv_vcpu_run(vcpu), "hv_vcpu_run");
+		in_guest.store(true);
+		const hv_return_t ran = hv_vcpu_run(vcpu);
+		exits.fetch_add(1);
+		in_guest.store(false);
+		check(ran, "hv_vcpu_run");
 		if (exit->reason == HV_EXIT_REASON_CANCELED) {
 			++counters.cancels;
 			if (on_cancel)
@@ -132,6 +149,12 @@ uint32_t Vcpu::enter(uint64_t trampoline, uint64_t state, uint64_t code)
 		const uint64_t syndrome = exit->exception.syndrome;
 		if (syndrome >> 26 == hvc_class && (syndrome & 0xffff) == 0)
 			return static_cast<uint32_t>(reg(HV_REG_X0));
+		// A store to a page the host protected at stage 2: the PC still names the store, which runs again on resume.
+		if (syndrome >> 26 == lower_data_abort_class && syndrome & write_not_read && !(syndrome & far_not_valid) && vm.write_fault &&
+			vm.write_fault(exit->exception.virtual_address)) {
+			++counters.write_faults;
+			continue;
+		}
 		uint64_t esr = 0, far = 0, elr = 0;
 		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ESR_EL1, &esr);
 		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_FAR_EL1, &far);
