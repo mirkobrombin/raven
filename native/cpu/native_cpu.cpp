@@ -441,9 +441,16 @@ void NativeChild::stop()
 	}
 	if (pid == -1)
 		return;
-	// Each task has a host thread of its own then: they all go with the process, and each host thread reaps its own.
-	if (threaded_host() && group > 0)
+	// Each task has a host thread of its own then: they all go with the process. A host thread reaps its task when its thread ends, but
+	// the memory task and those of threads still running at the end have none left to: all that remain of the group are reaped here.
+	if (threaded_host() && group > 0) {
 		kill(-group, SIGKILL);
+		int status = 0;
+		while (waitpid(-group, &status, __WALL) != -1 || errno == EINTR) {}
+		forget_registers();
+		pid = -1;
+		return;
+	}
 	kill(pid, SIGKILL);
 	int status = 0;
 	while (waitpid(pid, &status, 0) == -1 && errno == EINTR) {}
