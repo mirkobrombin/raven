@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <stdexcept>
 #include <poll.h>
@@ -835,6 +836,56 @@ bool NativeThreads::hand_over()
 	return false;
 }
 
+// The nanoseconds a task has run on a processor, from the scheduler's own count; zero when it cannot be read (the task is gone).
+static uint64_t run_time(const char *path)
+{
+	const int file = ::open(path, O_RDONLY | O_CLOEXEC);
+	if (file < 0)
+		return 0;
+	char text[64];
+	const auto length = ::read(file, text, sizeof text - 1);
+	::close(file);
+	if (length <= 0)
+		return 0;
+	text[length] = 0;
+	return std::strtoull(text, nullptr, 10);
+}
+
+// What a guest thread has run: its guest code in its task and the runtime's part in its host thread.
+static uint64_t thread_run_time(pid_t host, pid_t task)
+{
+	char path[64];
+	uint64_t total = 0;
+	if (host > 0) {
+		std::snprintf(path, sizeof path, "/proc/self/task/%d/schedstat", int(host));
+		total += run_time(path);
+	}
+	if (task > 0) {
+		std::snprintf(path, sizeof path, "/proc/%d/schedstat", int(task));
+		total += run_time(path);
+	}
+	return total;
+}
+
+// Whether a host thread of this process stands ready for a processor, or runs: woken, it has not yet had its turn only for want of one.
+static bool runnable(pid_t host)
+{
+	if (host <= 0)
+		return false;
+	char path[64], text[256];
+	std::snprintf(path, sizeof path, "/proc/self/task/%d/stat", int(host));
+	const int file = ::open(path, O_RDONLY | O_CLOEXEC);
+	if (file < 0)
+		return false;
+	const auto length = ::read(file, text, sizeof text - 1);
+	::close(file);
+	if (length <= 0)
+		return false;
+	text[length] = 0;
+	const char *state = std::strrchr(text, ')');
+	return state && state[1] == ' ' && state[2] == 'R';
+}
+
 bool NativeThreads::hand_over_to(uint32_t object)
 {
 	if (!threaded || tearing_down || !running)
@@ -845,6 +896,8 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		uint64_t turns;
 		std::chrono::steady_clock::time_point changed;
 		uint64_t waits;
+		// The processor time it had run when its turns last changed, and when it woke.
+		uint64_t ran = 0, woke = 0;
 	};
 	std::vector<Woken> waiting;
 	const auto started = std::chrono::steady_clock::now();
@@ -865,9 +918,11 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		return false;
 	leave(me);
 	// Those the set woke come back for their turn within microseconds; each then runs, as on Windows, until it waits again or ends, or
-	// until it has gone a millisecond without a call (ending a thread takes about that), when the setter goes on beside it. One the set
-	// did not wake (an event reset on its own wakes one waiter) is not waited for. The setter sleeps between looks: on two processors,
-	// spinning took the one the woken thread needed and made each round trip a hundred times slower.
+	// until it has run a millisecond of processor time without a call (ending a thread takes about that), or five in all, when the setter
+	// goes on beside it. Processor time, not time on the clock: on a loaded machine a thread that is ending may wait for a processor for
+	// longer than that, and the setter would go on before it ended. A wait on the clock of a tenth of a second bounds a thread that gets
+	// no processor at all. One the set did not wake (an event reset on its own wakes one waiter) is not waited for. The setter sleeps
+	// between looks: on two processors, spinning took the one the woken thread needed and made each round trip a hundred times slower.
 	handing.fetch_add(1, std::memory_order_acq_rel);
 	for (;;) {
 		const uint32_t seen = moves.load(std::memory_order_acquire);
@@ -880,18 +935,28 @@ bool NativeThreads::hand_over_to(uint32_t object)
 				if (turns == woken.turns && woken.changed == started)
 					continue;
 				any = true;
+				const uint64_t ran = thread_run_time(woken.thread->host_tid, woken.thread->snapshot.task);
+				if (woken.changed == started)
+					woken.woke = ran;
 				if (turns != woken.turns) {
 					woken.turns = turns;
 					woken.changed = now;
+					woken.ran = ran;
 				}
 				// A thread that woke is still in its old wait when it takes the turn, and its next call may be served in that same turn:
 				// only a wait it began since is a new one.
 				const bool waits = woken.thread->waits.load(std::memory_order_acquire) != woken.waits;
-				if (!(woken.thread->state == GuestThread::State::done || waits || now - woken.changed >= std::chrono::milliseconds(1)))
+				// Where the scheduler keeps no count, the clock stands in for it.
+				const bool spent = ran ? ran - woken.ran >= 1000000 || ran - woken.woke >= 5000000 :
+					now - woken.changed >= std::chrono::milliseconds(1) || now - started >= std::chrono::milliseconds(5);
+				if (!(woken.thread->state == GuestThread::State::done || waits || spent))
 					settled = false;
 			}
 		}
-		if ((any && settled) || (!any && now - started >= std::chrono::microseconds(300)) || now - started >= std::chrono::milliseconds(5))
+		// None came yet: the set woke none of them, unless one stands woken and waits for a processor.
+		const bool none = !any && now - started >= std::chrono::microseconds(300) &&
+			std::none_of(waiting.begin(), waiting.end(), [](const Woken &woken) { return runnable(woken.thread->host_tid); });
+		if ((any && settled) || none || now - started >= std::chrono::milliseconds(100))
 			break;
 		const timespec nap{0, 100000};
 		::syscall(SYS_futex, &moves, FUTEX_WAIT_PRIVATE, seen, &nap, nullptr, 0);
