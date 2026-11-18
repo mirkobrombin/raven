@@ -1913,7 +1913,7 @@ TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address,
 	return translator.run(code, address);
 }
 
-std::vector<uint32_t> enter_trampoline()
+std::vector<uint32_t> enter_trampoline(bool restore_host_fpcr)
 {
 	Assembler a;
 	// enter(x0 = state, x1 = code). The frame keeps the host's callee-saved registers: x19-x28, x29, x30 and the low halves of v8-v15
@@ -1930,9 +1930,24 @@ std::vector<uint32_t> enter_trampoline()
 	a.stp_q(12, 13, a64::sp, 160);
 	a.stp_q(14, 15, a64::sp, 192);
 	a.mov(state_register, 0);
+	// MSR FPCR costs more than the rest of the entry: it is skipped when FPCR already holds what MXCSR asks for, as it does in a vCPU
+	// from the second run on. NZCV is free here: it is loaded below.
 	a.mrs_fpcr(s0);
-	a.str(s0, state_register, state_offset::host_fpcr, 8);
-	load_mxcsr(a, s0, s2, s3);
+	if (restore_host_fpcr)
+		a.str(s0, state_register, state_offset::host_fpcr, 8);
+	a.ldr(s1, state_register, state_offset::mxcsr, 4);
+	fpcr_from_mxcsr(a, s2, s1, s3);
+	const Assembler::Label same_fpcr = a.label(), same_fpsr = a.label();
+	a.sub(a64::zr, s0, s2, Shift::lsl, 0, true, true);
+	a.b(Cond::eq, same_fpcr);
+	a.msr_fpcr(s2);
+	a.bind(same_fpcr);
+	fpsr_from_mxcsr(a, s2, s1, s3);
+	a.mrs_fpsr(s0);
+	a.sub(a64::zr, s0, s2, Shift::lsl, 0, true, true);
+	a.b(Cond::eq, same_fpsr);
+	a.msr_fpsr(s2);
+	a.bind(same_fpsr);
 	load_vectors(a);
 	a.mov_sp(s0, a64::sp);
 	a.str(s0, state_register, state_offset::host_frame, 8);
@@ -1948,7 +1963,7 @@ std::vector<uint32_t> enter_trampoline()
 	return a.words;
 }
 
-std::vector<uint32_t> exit_trampoline()
+std::vector<uint32_t> exit_trampoline(bool restore_host_fpcr)
 {
 	Assembler a;
 	// w9: the reason; x10: the exit's detail.
@@ -1962,8 +1977,10 @@ std::vector<uint32_t> exit_trampoline()
 	a.str(adjust_register, state_register, state_offset::adjust_source, 8);
 	store_vectors(a);
 	store_mxcsr_flags(a, s0, s2, s3);
-	a.ldr(s0, state_register, state_offset::host_fpcr, 8);
-	a.msr_fpcr(s0);
+	if (restore_host_fpcr) {
+		a.ldr(s0, state_register, state_offset::host_fpcr, 8);
+		a.msr_fpcr(s0);
+	}
 	a.ldr(s0, state_register, state_offset::host_frame, 8);
 	a.mov_sp(a64::sp, s0);
 	a.ldr(0, state_register, state_offset::exit_reason, 4);

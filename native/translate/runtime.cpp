@@ -69,6 +69,7 @@ Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions op
 	if (!runner && !host_has_afp())
 		throw std::runtime_error("this CPU lacks FEAT_AFP (FPCR.AH), which translated SSE code needs for x86's NaN, min and max");
 	std::fill(lookup.begin(), lookup.end(), LookupEntry{});
+	restore_host_fpcr = !runner || runner->restores_host_fpcr();
 	place_fixed_code();
 	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
 	first = threads.front().get();
@@ -81,6 +82,9 @@ Runtime::Thread &Runtime::add_thread(CodeRunner *runner)
 		throw std::invalid_argument("a guest thread in this process is the runtime's only one");
 	if (!natives.empty())
 		throw std::logic_error("native functions are bound: the runtime runs its first thread alone");
+	// Giving back an FPCR the runner does not need costs time only; not giving back one it needs would leave the guest's to the host.
+	if (runner->restores_host_fpcr() && !restore_host_fpcr)
+		throw std::invalid_argument("this runtime's trampolines leave the guest's FPCR, which this runner's host code cannot have");
 	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
 	return *threads.back();
 }
@@ -115,8 +119,8 @@ uint8_t *Runtime::place(const std::vector<uint32_t> &code)
 
 void Runtime::place_fixed_code()
 {
-	enter = place(enter_trampoline());
-	exit = place(exit_trampoline());
+	enter = place(enter_trampoline(restore_host_fpcr));
+	exit = place(exit_trampoline(restore_host_fpcr));
 	return_address = place(return_stub());
 	return_guest = reinterpret_cast<uint64_t>(return_address);
 }

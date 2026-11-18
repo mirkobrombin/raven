@@ -44,6 +44,9 @@ public:
 	// Called from another host thread after the runtime unlinked and unpublished code: returns once code this runner is running has
 	// passed a context synchronization event since the call, or at once when it runs none. Then it can no longer enter that code.
 	virtual void quiesce() {}
+	// Whether the host code an exit returns to needs its own FPCR back. A vCPU's dispatcher does no floating point, so there FPCR can
+	// keep the guest's from one run to the next and entry skips setting it again.
+	virtual bool restores_host_fpcr() const { return true; }
 };
 
 // Runs x64 code by translating it block by block: dispatch, the lookup table for indirect branches, chaining of direct branches,
@@ -181,6 +184,8 @@ private:
 	mutable std::mutex lock;
 
 	void place_fixed_code();
+	// Whether the trampolines give the host its FPCR back on exit (CodeRunner::restores_host_fpcr of the first thread's runner).
+	bool restore_host_fpcr = true;
 	uint8_t *place(const std::vector<uint32_t> &code);
 	uint8_t *host_code(uint64_t guest);
 	Block *translate(uint64_t guest);

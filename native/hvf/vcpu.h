@@ -32,6 +32,7 @@ public:
 	static constexpr unsigned store_retries = 8;
 	// From another thread: forces an exit with hv_vcpus_exit and waits for it, unless the vCPU is not in the guest.
 	void quiesce() override;
+	bool restores_host_fpcr() const override { return false; }
 
 	hv_vcpu_t id() const { return vcpu; }
 	// ACTLR_EL1 as the vCPU reads it back.
