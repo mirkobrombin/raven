@@ -12,11 +12,11 @@ Labels: **PROVEN** (command and output below), **INFERRED** (from what, and the 
 |---|---|
 | `native/hvf/vm.h`, `vm.cpp` | `Vm`: the process's VM (`hv_vm_create` with a 4 KiB IPA granule), guest RAM at IPA 1 GiB mapped once at stage 2, 4 KiB stage-1 tables for EL0 (TTBR0, 39-bit VA), the kernel in the upper half (TTBR1, all guest RAM in one 1 GiB block), EL0 mappings with host aliases, code maintenance |
 | `native/hvf/kernel.S` | EL1 vectors and the EL0 dispatcher |
-| `native/hvf/vcpu.h`, `vcpu.cpp` | `Vcpu`: a `translate::CodeRunner` that resumes a vCPU instead of calling the enter trampoline; system registers, mailbox, exits |
-| `native/hvf/vm_process.h`, `vm_process.cpp` | `VmProcess` (a `GuestMemory`: images at their preferred base in guest memory, stacks and TEBs) and `VmCodeCache` (a `CodeAllocator` in guest memory) |
-| `native/hvf/hvf_*_test.cpp` | The exit criteria below, plus the instruction cache test |
+| `native/hvf/vcpu.h`, `vcpu.cpp` | `Vcpu`: a `translate::CodeRunner` that resumes a vCPU instead of calling the enter trampoline; system registers, mailbox, exits, write faults, `quiesce` |
+| `native/hvf/vm_process.h`, `vm_process.cpp` | `VmProcess` (a `GuestMemory`: images at their preferred base in guest memory, stacks and TEBs, code watched at stage 2) and `VmCodeCache` (a `CodeAllocator` in guest memory) |
+| `native/hvf/hvf_*_test.cpp` | The exit criteria below, the instruction cache test, the shared cache and code change tests |
 | `native/hvf/hvf_bench.cpp`, `hvf_bench_run.py`, `testdata/bench_native.c`, `testdata/bench_loop.c` | The benchmark |
-| `native/hvf/testdata/hvf_client.c` | x64 guest code of the litmus and the spin |
+| `native/hvf/testdata/hvf_client.c` | x64 guest code of the litmus, the spin and the code changes (`patch_target`) |
 | `native/hvf/CMakeLists.txt`, `hypervisor.entitlements` | Builds on Darwin arm64 only, adds `native/translate` as a subdirectory, signs every binary that creates a VM ad hoc with `com.apple.security.hypervisor` (`RAVEN_HVF_SIGN_IDENTITY` names a keychain identity instead). No provisioning profile: the guest's low addresses come from its own page tables |
 
 ## The split
@@ -111,6 +111,41 @@ control: none: 19988 stale of 20000, 0 wrong exits, 0 guest invalidations
 - The kernel vectors are copied once at VM creation into pages no vCPU has run, and invalidated like any other code. That
   invalidation is defensive: no test removes it.
 
+## One translation cache per VM
+
+A Windows process is one VM and one `Runtime`; each vCPU is a `Runtime::Thread` with its own CpuState in guest RAM and its `Vcpu` as
+runner. Blocks, the lookup table, chains and the granule index are shared.
+
+- **Who translates.** The host thread of the vCPU that missed, under the runtime's mutex. A vCPU that misses the same block meanwhile
+  waits on the mutex and then finds the block, so each block is translated once (hvf_shared_test, below). No translator thread: a miss
+  needs its block before its vCPU can go on anyway, and the mutex is held only for host work, never while a vCPU runs.
+- **Publishing.** The block's code is written through the alias and `sys_icache_invalidate`d (DSB ISH, IC IVAU, DSB ISH, ISB) first;
+  then a DMB ISH and one 16-byte STP write the lookup entry. With FEAT_LSE2 (PROVEN present: `sysctl hw.optional.arm.FEAT_LSE2` gives
+  1) a 16-byte aligned STP and the translated code's LDP of the entry are single-copy atomic, so a vCPU reads the whole old or the whole
+  new entry, and the code an entry names is complete before the entry. INFERRED from the Arm ARM; no test tears an entry on purpose.
+  Entries are cleared the same way. A host without FEAT_LSE2 needs another publication scheme (open item).
+- **Chains.** Patching replaces one aligned `b` with another, which the Arm ARM allows while other PEs execute it, followed by the same
+  instruction cache invalidation. Two vCPUs taking the same chain exit patch it once: the second finds the branch already there.
+- **Guest stores to translated code: stage 2.** A watched 4 KiB page loses write permission with `hv_vm_protect` (the VM's stage 2 uses
+  4 KiB pages). Chosen over the guest's own page tables because the host changes stage 2 synchronously while vCPUs run, and
+  Hypervisor.framework does the TLB maintenance; a stage-1 change would need TLBI from inside the guest on some vCPU before the block
+  could be published. The fault also exits straight to the host, without the guest kernel. A protect and unprotect pair costs about
+  0.8 us (below).
+- **The write path.** The store's stage-2 permission fault exits on the storing vCPU's thread (ESR class 0x24, WnR). `VmProcess` passes
+  it to `Runtime::code_written`, which drops every block of that granule: chains into them are restored to their stubs, lookup entries
+  naming them are cleared, the pages are unwatched; then every other vCPU of the runtime is quiesced. The page is made writable and the
+  vCPU resumes at the store, which now completes. The store is retried, not emulated.
+- **Translation against concurrent stores.** A block is translated from a copy of the guest bytes, then watched, then the bytes are
+  compared again: a store that landed between the copy and the watch faulted nowhere, so a difference means translating again.
+- **The guarantee.** When `code_written` returns, no vCPU can enter a dropped block: nothing chains to it, the lookup table does not name
+  it, and every other vCPU that was in the guest has taken an exit (a context synchronization event) since the chains were undone.
+  `Vcpu::quiesce` does that with `hv_vcpus_exit` and waits for the exit, or returns at once if the vCPU is in the host. A vCPU inside a
+  dropped block finishes that block (straight-line code: the translator's blocks have no backward branch of their own) and leaves at
+  its next exit, as an x86 CPU running cross-modified code may until it serializes. Dropped code stays in the cache until a reset.
+- **Limits.** A page holding code and data written often will fault and translate again on every round. A vCPU that translates the page
+  again between the invalidation and the retried store re-protects it, and the store faults again; it converges when the store wins
+  the race (B took exactly one fault per trial in hvf_code_change_test). `Runtime::Thread`s must be removed before their `Vcpu` goes.
+
 ## Results
 
 MacBook Air M5 (Mac17,3), macOS 27.2.1, Xcode 27.2, llvm-mingw 20261104. The machine was in use (load average 5 to 86 across the runs below, thermal state
@@ -145,26 +180,30 @@ makes it so.
 - **call**: CALLS guest calls of `bench_loop(1)`, one entry into translated code per workload call, which is how `translate_bench
   --workload` measured the in-process numbers in the brief. In the vCPU every call is a host exit and a resume.
 
-Median ns per workload call over the 30 processes and the ratio to native's median of the same session (PROVEN:
-`docs/macos/hvf/data/summary.csv`, every run of every process in `measurements.jsonl`, machine state in `state.json`: load average 6.93
-at the start and 11.19 at the end, thermal state 1 at both; the machine was in use):
+Median ns per workload call over the 30 processes and the ratio to native's median of the same session, measured after the shared
+cache and stage-2 watching landed (PROVEN: `docs/macos/hvf/data/summary.csv`, every run of every process in `measurements.jsonl`,
+machine state in `state.json`: load average 3.78 at the start and 5.00 at the end, thermal state 1 at both; the machine was in use).
+The vCPU-loop column of the pass before those changes is in parentheses:
 
-| Workload, CALLS | native ns | in-process loop | in-process call | **vCPU loop** | vCPU call | brief: in-process | brief: Rosetta |
+| Workload, CALLS | native ns | in-process loop | in-process call | **vCPU loop** (before) | vCPU call | brief: in-process | brief: Rosetta |
 |---|---|---|---|---|---|---|---|
-| entry, 200000 | 292.6 | 0.825 | 0.845 | **0.832** | 3.615 | 0.829 | 0.830 |
-| crc32, 4000 | 12188.7 | 1.313 | 1.311 | **1.311** | 1.375 | 1.326 | 1.158 |
-| fnv, 1500 | 30709.3 | 1.000 | 1.005 | **1.002** | 1.033 | 1.005 | 0.996 |
-| histogram, 1000 | 47828.5 | 1.512 | 1.510 | **1.510** | 1.532 | 1.526 | 1.478 |
+| entry, 200000 | 294.8 | 0.837 | 0.861 | **0.825** (0.832) | 3.641 | 0.829 | 0.830 |
+| crc32, 4000 | 12329.8 | 1.305 | 1.328 | **1.312** (1.311) | 1.375 | 1.326 | 1.158 |
+| fnv, 1500 | 31041.4 | 1.015 | 1.000 | **0.996** (1.002) | 1.025 | 1.005 | 0.996 |
+| histogram, 1000 | 47799.8 | 1.520 | 1.532 | **1.522** (1.510) | 1.543 | 1.526 | 1.478 |
 
-p95 and standard deviation of the vCPU loop configuration, ns: entry 413.1 / 109.2, crc32 20873.2 / 9225.7, fnv 74385.6 / 15148.9,
-histogram 132295.3 / 17686.2. Native entry's standard deviation is 20.0 ns on a 292.6 ns median (it was 707 on 323 with one short run
+p95 and standard deviation of the vCPU loop configuration, ns: entry 468.7 / 92.0, crc32 24718.6 / 3226.9, fnv 52462.4 / 8144.9,
+histogram 117019.6 / 16197.1. Native entry's standard deviation is 61.7 ns on a 294.8 ns median (it was 707 on 323 with one short run
 per process, before the warm-up was added).
 
-- Translated code runs in the vCPU at the speed it runs in this process: every vCPU-loop ratio is within 1% of the in-process loop
+- The shared cache and the watching cost the workloads nothing measurable: every vCPU-loop ratio is within 1% of the pass before them
+  (PROVEN for the two sessions' medians; the differences are inside the spread). Hot loops never take the runtime's lock, and the
+  workloads write no code.
+- Translated code runs in the vCPU at the speed it runs in this process: every vCPU-loop ratio is within 2% of the in-process loop
   ratio of the same session (PROVEN for this session's medians; no ranking between the two is claimed).
 - Translated entry.c stays faster than native (0.83) with equal warm-up and 60 ms windows, so it is not an artifact of native timing a
   cold core. Why is NOT verified.
-- The host exit and resume cost about 0.8 us per call: entry's call method is 1057.7 ns per call in the vCPU against 247.2 ns in this
+- The host exit and resume cost about 0.8 us per call: entry's call method is 1073.4 ns per call in the vCPU against 253.7 ns in this
   process. INFERRED: a difference of two medians, which also differ in where the runtime's per-call work runs; no exit was timed alone.
   Code that leaves translated code once per microsecond or so will feel it; hot loops do not.
 - The first call (translation included) is 1.4 to 2.5 times slower in the vCPU than in this process (summary.csv, `first_ns`): the
@@ -235,19 +274,89 @@ That is run 10 of the 10 below, with 20 `yes` processes added to the test's own 
 
   (forced exits / host CPU changes of the first vCPU, then of the second.)
 
+### 4. One translation cache shared by 2 and 4 vCPUs
+
+PROVEN (`ctest --test-dir build-macos-hvf -V -R hvf_shared`). The crc32 image runs `bench_loop(20)` on N vCPUs started together through
+a barrier, all from one runtime, 20 trials per N; every vCPU must return 20 times native's value, and the runtime must have translated
+what one vCPU translates alone. Then N separate runtimes, one per vCPU:
+
+```
+one vCPU: 10 blocks
+2 vCPUs: shared runtime, most blocks in 20 trials 10; 2 separate runtimes 20 blocks
+4 vCPUs: shared runtime, most blocks in 20 trials 10; 4 separate runtimes 40 blocks
+hvf shared: PASS
+```
+
+Translation count: N separate runtimes translate N times what one does; a shared one translates it once, however many vCPUs miss a block
+together. The test fails on any duplicate translation; how often vCPUs actually missed the same block at the same moment is not counted
+(NOT verified), only that the runs overlapped in time by construction.
+
+### 5. Guest stores to translated code, on one vCPU and across vCPUs
+
+PROVEN (`ctest --test-dir build-macos-hvf -V -R hvf_code_change`). `patch_target` (`mov eax, imm32; ret`, alone on its 4 KiB page):
+
+- One vCPU calls it, stores a new immediate into its code, calls it again: the second call must return the new value, 10 times with 10
+  values.
+- vCPU A calls it in a loop the runtime has chained (the call site branches straight into the translation) until it returns something
+  new, at most 300 million times; vCPU B waits for A to run, spins, and stores a new immediate. A must stop, and within 100 ms of B's
+  call returning. 10 trials.
+- `quiesce` of a vCPU spinning in translated code no write touches: 100 calls must force exits and return.
+
+```
+two vCPUs: A saw B's store within 18.2 us of B's call returning, worst of 10 trials; B took 10 write faults, A was kicked 0 times
+quiesce of a spinning vCPU: 100 calls, 101 forced exits, slowest 34.9 us
+runtime: 48 blocks translated, 26 invalidated
+hvf code change: PASS
+```
+
+- Every store to translated code reached the runtime: one stage-2 write fault per store (PROVEN, B's count).
+- A's loop left the old code within 18.2 us of B's call returning, worst of 10 (PROVEN). A was never kicked: undoing the chain sends A
+  to a stub and out of the guest before `quiesce` looks, so A is already in the host. The kick is what the guarantee rests on when a
+  vCPU does not leave by itself; that it is needed on this CPU is NOT PROVEN (with `quiesce` disabled the two-vCPU trials still pass),
+  and that it works is PROVEN by the spinning-vCPU check, which fails when `quiesce` does nothing (Failing runs).
+- Undoing chains is necessary (PROVEN: without it A never sees the store and one vCPU gets the old value 9 times of 10; Failing runs).
+
+### Cost of a guest store to translated code
+
+`hvf_bench write` in the same pass (PROVEN: `docs/macos/hvf/data/write_fault.txt`, 10 runs of 20 000 iterations): one call of
+`patch_target` plus one store to its code per iteration, so each iteration takes the write fault, the invalidation, a lookup miss and a
+translation of the block again:
+
+| Per iteration | median ns | min | max | sd |
+|---|---|---|---|---|
+| call, store, fault, invalidate, translate again | 11793.5 | 10065.0 | 12738.6 | 680.1 |
+| the same call without the store | 2.3 | 1.9 | 2.4 | 0.2 |
+| `hv_vm_protect` read-only and back, one page (alone) | 1136.6 | 1111.7 | 1158.1 | 13.5 |
+
+200 000 write faults for 200 000 stores (PROVEN). An earlier interactive run gave 7600 ns per iteration and 800 ns per protect pair,
+so the absolute figures move with the machine's state; about 12 us per store-and-retranslate round is the order to plan with. How the
+12 us divide between the fault exit, `code_written`, two `hv_vm_protect` calls, the miss exit and translation is NOT verified. Code
+that writes its own code page often (or data that shares a page with code) pays this on every write after a translation.
+
 ### Failing runs
 
 Exit criterion 1 and the two runtime data checks have failing-first commits: before the VM, `FAIL: the VM is not implemented`; before
 `CodeAllocator::free_data`, and before the runtime owned its data across a throwing constructor, `FAIL: the VM's runtime data is
 full`; each exit 1. The VM commit that made criterion 1 pass already set EnTSO, handled forced exits and did instruction cache
 maintenance, so the litmus, spin and code write tests passed when they were written. Their failing runs are against the current code
-with the one-line mutation below, then restored; the restored build passes (PROVEN, outputs as printed, exit 1 each):
+with the one-line mutation below, then restored; the restored build passes (PROVEN, outputs as printed, exit 1 each).
+
+The shared cache and code change tests have failing-first commits (exit 1 each, PROVEN):
+
+- `hvf_shared_test`, before guest threads could share a runtime: `FAIL: guest threads cannot share a runtime yet` (120 times) and
+  `FAIL: 2 vCPUs sharing a runtime translated 0 blocks, one translates 10` (20 times, and the same for 4).
+- `hvf_code_change_test`, before stage-2 watching: `FAIL: one vCPU: rewrote patch_target to return 10, it returned 1` (10 times, one
+  per value) and `FAIL: two vCPUs, trial 0: A ran the old patch_target 300000000 times and never saw B's store` (10 trials).
+
+The parts that landed with their implementation fail under these mutations:
 
 | Test | Mutation | Command | Output |
 |---|---|---|---|
 | litmus | `vcpu.cpp`: `-{HV_SYS_REG_ACTLR_EL1, tso ? actlr_tso : 0},` `+{HV_SYS_REG_ACTLR_EL1, 0},` | `hvf_litmus_test build-macos-hvf/guest 30 2000000` | `FAIL: ACTLR_EL1.EnTSO does not read back as set`, `FAIL: x86 ordering broken with EnTSO set`; `EnTSO 1 (ACTLR_EL1 read back 0, 0): 229720312 violations in 30 trials` |
 | spin | `kernel.S`: `+mov x18, xzr` before the lower-EL handler's `hvc #0` | `hvf_spin_test build-macos-hvf/guest 3` | `FAIL: x18 changed` (twice); `x18 changed at 436 of them and reads 0 at the end` for each vCPU |
 | code write | `vm.cpp` `Vm::code_written`: `-sys_icache_invalidate(bytes, size);` `+;` | `hvf_code_write_test 20000` | `FAIL: host sys_icache_invalidate on the alias (default) ran stale code`; `19976 stale of 20000` |
+| code change, unlink | `runtime.cpp` `Runtime::invalidate`: `-cache.write(site, &original, 4);` `+(void)site, (void)original;` | `hvf_code_change_test build-macos-hvf/guest 10` | `FAIL: one vCPU: rewrote patch_target to return 11, it returned 10` (9 of 10); `FAIL: two vCPUs, trial 0: A ran the old patch_target 300000000 times and never saw B's store` (10 of 10) |
+| code change, quiesce | `vcpu.cpp` `Vcpu::quiesce`: `+return;` as its first line | `hvf_code_change_test build-macos-hvf/guest 10` | `FAIL: quiesce rarely made the spinning vCPU exit, or took 100 ms`; `100 calls, 1 forced exits`. The two-vCPU trials pass under this mutation (above) |
 
 ## Reproduction
 
@@ -267,13 +376,17 @@ The last argument is optional: a program that prints the thermal state (`NSProce
 - **Native thunks.** `bind_native` refuses to work with a runner. In the VM a call to native code has to become an exit (an `svc`
   from a thunk in guest code, the host calling the function, the result written to the CpuState), which is the design of section 4's
   `GuestStop::api`. Not needed by these workloads.
-- **Code writes from the guest.** `VmProcess::watch_code` does nothing: images are EL0-writable. The plan: map watched pages read-only
-  to EL0, let the kernel's vector pass the permission fault to the host (`hvc` with FAR), call `Runtime::code_written`, make the page
-  writable, and return to the faulting store. Or stage-2 write protection, which the 4 KiB IPA granule now allows.
+- **Code writes, further.** Stores are retried, not emulated, so a vCPU translating the page again between the invalidation and the
+  retry makes the store fault again (converges; not observed to repeat). A page mixing code and hot data pays about 12 us per write
+  after each translation; a per-page policy (stop watching and translate without chaining, or emulate the store) is open. A write to
+  a page of several runtimes' code reaches only the attached runtime: one runtime per VM is the model, and `attach` takes one.
+- **Lookup publication without FEAT_LSE2.** The 16-byte STP and LDP are single-copy atomic only with FEAT_LSE2 (present on the M5); a
+  Linux arm64 host without it needs a sequence number or acquire loads in the lookup path.
 - **Page faults from translated code** in general: any fault at EL0 ends the run with an exception today. They should become
   `GuestStop::fault` with FaultKind and access, from ESR_EL1 and FAR_EL1.
-- **Multithreading.** One Runtime per vCPU and thread here; a Windows process needs one translation cache and lookup table shared by
-  its threads (locks on the host side, or a per-thread table), and invalidation that reaches the other vCPUs.
+- **Multithreading, further.** One mutex serializes all host-side runtime work: misses on different blocks wait for each other. Fine at
+  these miss rates; a startup with many threads translating at once would want finer locking. Threads are added and removed by hand
+  (`add_thread`, `remove_thread` before the `Vcpu` goes); the engine's `new_thread` (section 4) will own that.
 - **Scheduler and waits.** One host thread per vCPU, always running. No M:N scheduling, no blocking waits (a wait would leave the vCPU
   exited and the host thread asleep).
 - **Mapping while vCPUs run.** `Vm::map` only adds entries, which needs no TLB invalidation; unmapping or changing a mapping will need
@@ -281,7 +394,8 @@ The last argument is optional: a program that prints the thermal state (`NSProce
 - **Address space.** 39-bit EL0 addresses are enough for these images at 0x140000000-0x180000000; Windows' 47-bit user space needs
   T0SZ = 16 and a fourth table level.
 - **Guest RAM** is one bump allocation (up to 1 GiB) that is never freed.
-- **Concurrent chain patching** is INFERRED safe (instruction cache section), not exercised.
+- **Concurrent chain patching** runs in hvf_shared_test (vCPUs chain the same sites at once) and passes; that it is safe in general
+  rests on the Arm ARM's concurrent modification rules (INFERRED).
 - **Instructions that trap at EL0.** SCTLR_EL1 leaves nTWE, nTWI, DZE and UCI clear and CNTKCTL_EL1 is not set, so WFE, WFI, DC ZVA,
   EL0 cache maintenance and CNTVCT_EL0 reads trap to the kernel, which reports them as a fatal guest exception. The translator emits
   none of them today; an `rdtsc` translated to a counter read will need CNTKCTL_EL1.EL0VCTEN.
@@ -296,6 +410,11 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   own tests pass before the change and after every commit (`ctest --test-dir build-macos-translate` before the change and
   `ctest --test-dir build-macos-hvf` after: `100% tests passed out of 4` and `out of 8`, the four `translate_*` among them); NOT
   verified on Linux, where the standalone translate build was not run.
+- `Runtime` is now shared by guest threads: `Runtime::Thread` holds a thread's CpuState and runner, `add_thread` and `remove_thread`
+  manage them, a mutex covers translation, chaining and invalidation, lookup entries are written with one 16-byte STP, and translation
+  rechecks the guest bytes after watching them. `CodeRunner` gained `quiesce`, which `code_written` calls on every other thread's
+  runner. Single-thread callers keep the old API (`Runtime::call`, `state`), which goes to the first thread; translate's own tests pass
+  unchanged (PROVEN, `ctest --test-dir build-macos-hvf`, 10 of 10).
 - `CpuState::lookup_table` stays a `LookupEntry *` but holds the address translated code uses, which is not a host pointer in a VM: it
   could become a `uint64_t`.
 - `native/hvf` reuses `test_process.h`'s `lay_out_image`, which lives in a test-only library; the real loader should provide it.
