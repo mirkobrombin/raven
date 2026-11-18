@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -30,6 +31,9 @@ public:
 	uint64_t entry(uint64_t base) const;
 	// The runtime whose translations guest writes to watched code invalidate.
 	void attach(translate::Runtime &runtime) { attached = &runtime; }
+	// Test seam: runs on the storing vCPU's thread after a write fault's code_written and before the store is retried, where another
+	// vCPU may translate the page again.
+	std::function<void(uint64_t address)> after_code_written;
 	// A guest stack with RSP at its top and a TEB whose address gs: reads, for the thread runtime runs.
 	void prepare_thread(translate::Runtime &runtime);
 	void prepare_thread(translate::CpuState &state);

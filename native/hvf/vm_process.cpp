@@ -46,6 +46,8 @@ bool VmProcess::code_write(uint64_t address)
 	// Outside the lock: code_written takes the runtime's lock and calls watch_code.
 	if (attached)
 		attached->code_written(address);
+	if (after_code_written)
+		after_code_written(address);
 	// Every translation of the page is gone; make sure the store can go through, even if a translation of another runtime held it.
 	std::lock_guard guard(lock);
 	if (watched.erase(page))
