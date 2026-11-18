@@ -1,0 +1,26 @@
+x18 sanity: initial x18 in main thread = 0x0
+(0) controls
+  x18_call(no-op function, no kernel entry)  [control]           x18=0x5eed5eed12345678 PRESERVED
+  x18_spin 1e6 iterations, no kernel entry  [control]            x18=0x5eed5eed12345678 PRESERVED
+  raw svc getpid (no libc, non-blocking syscall)                 x18=0x0000000000000000 ZEROED
+(a) voluntary context switches
+  x18_call(sched_yield x 10000)                                  x18=0x0000000000000000 ZEROED
+  x18_call(usleep(1ms) x 100)                                    x18=0x0000000000000000 ZEROED
+  x18_call(blocking read() on pipe x 200)                        x18=0x0000000000000000 ZEROED
+(b) preemption under load: 3x ncpu threads spinning with x18=sentinel for ~3 s
+  threads=30 wall=5.13s involuntary_ctx_switches(process)=31283 voluntary=0; iterations where x18!=sentinel: 37652; threads ending with wrong x18: 1
+  preemption                                                     x18 NOT preserved
+(c) POSIX signals
+    handler saw uc x18=0x5eed5eed12345678
+  brk -> SIGTRAP handler -> return                               x18=0x0000000000000000 ZEROED
+    handler saw uc x18=0x5eed5eed12345678
+  PROT_NONE load -> SIGBUS/SEGV handler -> return                x18=0x0000000000000000 ZEROED
+  brk; handler writes uc x18=S2 (expect S2 if honoured)          x18=0x0000000000000000 ZEROED
+  async SIGUSR1 x473 delivered to spinning thread: changes=11016 final=0x0000000000000000 last uc x18=0x5eed5eed12345678 NOT preserved
+(d) Mach exception round-trip (thread exception port, EXCEPTION_STATE_IDENTITY)
+    server saw x18=0x5eed5eed12345678
+  brk -> Mach exception -> reply                                 x18=0x0000000000000000 ZEROED
+    server saw x18=0x5eed5eed12345678
+  PROT_NONE load -> Mach exception -> reply                      x18=0x0000000000000000 ZEROED
+  brk; server writes new_state x18=S2 (expect S2 if honoured)    x18=0x0000000000000000 ZEROED
+RESULT x18: FAIL (12 failing checks)

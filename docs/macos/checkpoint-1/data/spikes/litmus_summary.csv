@@ -1,0 +1,9 @@
+name,mp_violations,trials,writes_per_trial,sb_both_zero,sb_iters
+litmus_native_arm64,11115318,30,2000000,223,200000
+litmus_native_x86_64_rosetta,0,30,2000000,44,200000
+litmus_vm_tso0,72781015,30,2000000,167,200000
+litmus_vm_tso1,0,30,2000000,104,200000
+litmus_native_arm64,8012749,30,2000000,198,200000
+litmus_native_x86_64_rosetta,0,30,2000000,67,200000
+litmus_vm_tso0,17732895,30,2000000,373,200000
+litmus_vm_tso1,0,30,2000000,185,200000

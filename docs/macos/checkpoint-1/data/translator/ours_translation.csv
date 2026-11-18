@@ -1,0 +1,13 @@
+workload,engine,guest_instructions,blocks,translate_ns
+crc32,ours-dmb,154,7,23665
+crc32,ours-ldapr,154,7,22499
+crc32,ours-plain,154,7,23751
+entry,ours-dmb,38,3,8125
+entry,ours-ldapr,38,3,9500
+entry,ours-plain,38,3,9251
+fnv,ours-dmb,308,21,47416
+fnv,ours-ldapr,308,21,49249
+fnv,ours-plain,308,21,46083
+histogram,ours-dmb,87,6,15916
+histogram,ours-ldapr,87,6,17291
+histogram,ours-plain,87,6,15502

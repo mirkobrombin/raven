@@ -1,0 +1,1 @@
+{"bench":"x18c","metric":"toggle_pair","unit":"ns_per_pair","n":30,"min":3.2346,"median":3.3544,"p95":3.4992,"mean":3.3675,"stddev":0.0831,"max":3.5000,"qos":"USER_INTERACTIVE","translated":0,"note":"1e5 enable+disable pairs per run"}

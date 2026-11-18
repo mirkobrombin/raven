@@ -1,0 +1,1 @@
+{"bench":"hvf_shmspin","metric":"guest_host_spin_roundtrip","unit":"ns","n":30,"min":104.8137,"median":115.1410,"p95":126.4242,"mean":116.2642,"stddev":5.6456,"max":134.0871,"qos":"USER_INTERACTIVE","translated":0,"note":"vCPU stlr req / host thread spins and answers / vCPU ldar spin; 1e5 per run incl. one hv_vcpu_run entry+exit"}
