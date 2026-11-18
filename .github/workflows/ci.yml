@@ -100,7 +100,7 @@ jobs:
           done
           echo "${#shells[@]} shell scripts parsed"
 
-  # The waits on kernel objects: native/model/Waits.tla, Address.tla and Completion.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
+  # The waits on kernel objects: native/model/Waits.tla, Address.tla, Completion.tla and Messages.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
   # which tries every interleaving of its cases. The PE reader in native/peparse runs its tests too, which change a file at random and read it again.
   models:
     name: Models
@@ -133,6 +133,7 @@ jobs:
             java -XX:+UseParallelGC -cp /tmp/tla2tools.jar tlc2.TLC -workers auto -metadir /tmp/tlc -config "${config}" MCAddress.tla
           done
           java -XX:+UseParallelGC -cp /tmp/tla2tools.jar tlc2.TLC -workers auto -metadir /tmp/tlc -config MCCompletion.cfg MCCompletion.tla
+          java -XX:+UseParallelGC -cp /tmp/tla2tools.jar tlc2.TLC -workers auto -metadir /tmp/tlc -config MCMessages.cfg MCMessages.tla
 
       - name: Test the implementation
         working-directory: native/waits
