@@ -33,7 +33,7 @@ On the entry.c loop, x86-correct ordering without hardware TSO costs about 39% o
 1. **Hardware TSO is reachable only inside a Hypervisor.framework guest.** A message-passing litmus test (`spikes/litmus.c`, `spikes/hvf.c`, `data/spikes/litmus_summary.csv`) gives 0 violations with ACTLR_EL1.TSO set in the vCPU, and millions with it clear, against 8 to 11 million natively and 0 under Rosetta (PROVEN). The cross-architecture entitlement does not enable TSO for a process (PROVEN, `data/entitlement/RESULTS.md`).
 2. **x18 cannot be relied on in a macOS process.** `os_set_custom_x18_abi_enabled` (macOS 26.4+) toggles in user space for 3.35 ns per pair (p95 3.50, sd 0.08, PROVEN, `data/spikes/x18c.jsonl`; the 2.93 ns in `x18_custom_abi.md` is an earlier unquiet run). The mode lives in bit 48 of TPIDR_EL0 next to the CPU number. When the kernel moves the thread to another CPU the mode is dropped and x18 is zeroed: 3 of 3 pure-preemption runs, 13 of 16 trap-loop runs, with or without the entitlement (PROVEN, `data/spikes/x18_custom_abi.md`, `data/spikes/x18_custom_cases.txt`). A brk handled by a POSIX signal keeps the mode (3 of 3). Calls into macOS code while the mode is on (malloc, printf, getpid) return normally with no error (3 of 3 each), so a mistake is silent, not loud. Enabling twice aborts with a brk. The Mach exception case crashed the test child with SIGBUS in all three runs; whether that is the probe or the mode is NOT verified. Without the API, x18 is zeroed by every kernel entry (`data/spikes/x18.txt`). Consequence: native Windows ARM64 and ARM64EC code, which keeps the TEB in x18, does not run reliably in a macOS process on this build. Raven's own ARM64 DLLs can avoid x18 because we compile them; third-party ARM64 programs such as Notepad++ ARM64 cannot.
 3. **4 KiB pages and low addresses.** A Hypervisor.framework guest maps 4 KiB stage-1 pages from one 16 KiB host page and runs code from 4 KiB L3 pages; a 4 KiB IPA granule maps a single 4 KiB page and faults on its neighbour (PROVEN, `data/spikes/hvf_functional.txt`). A macOS process cannot do either. Below 4 GB, an arm64 process maps 0x10000, 0x400000 and 0x7ffe0000 only with the cross-architecture entitlement; the exact test and its negative controls follow.
-4. **Hypercalls from a VM are cheap; Mach exceptions are not.** A guest HVC to the host and back takes 672 ns, a Mach exception in the same process 8.2 µs, and a breakpoint in a Rosetta guest caught by the host 25.8 µs (PROVEN, table below). Only the HVC exit is timed; a data-abort exit is NOT measured.
+4. **Hypercalls from a VM are cheap; Mach exceptions are not.** A guest HVC to the host and back takes 672 ns, a Mach exception in the same process 8.2 µs, and a breakpoint in a Rosetta guest caught by the host 25.8 µs (PROVEN, table below). A data-abort exit costs 755 ns and a fault resolved inside the guest 68 ns (PROVEN, not quiet, next section).
 5. **A VM has 64 vCPUs.** `hv_vm_get_max_vcpu_count` returns 64 and the 65th creation fails with 0xfae94005; each vCPU costs about 91 KiB including its 64 KiB thread stack (PROVEN, `data/spikes/hvf_functional.txt`). Creating a vCPU and setting its registers takes 22.6 µs median, p95 36.5 µs, with outliers up to about 1.7 ms (PROVEN, `hvf_roundtrip.jsonl`). Whether one host process can hold more than one VM is NOT verified. Windows programs routinely run more threads, so a VM model needs an M:N scheduler in the guest.
 
 ### The cross-architecture entitlement, exact test
@@ -51,6 +51,21 @@ Probe: `data/entitlement/probe.c`, built for arm64 and signed either ad hoc or w
 | entitled, bare Mach-O without bundle or profile | 4 GB (default) | killed, status 137 | | | | |
 
 The entitlement is necessary as well as sufficient for addresses below 4 GB in an arm64 process (PROVEN). The linker rounds a 0x1000 page zero up to 0x4000. `os_cross_arch_is_supported(OS_CROSS_ARCH_X86_64)` returns 1 with or without the entitlement.
+
+### Checks of the HVF model
+
+Run after the first version of this report, with `spikes/hvf2.c` and `spikes/hvf2_guest.S` (MMU on, 4 KiB guest pages). These ran while the machine was in normal use: 1-minute load 1.9 to 3.7, thermal state nominal, AC power. They are not quiet measurements; the timed ones should be repeated in a quiet pass.
+
+| Check | Result | Label and data |
+|---|---|---|
+| Speed of x86 ordering in a vCPU | loop of 5 load/store pairs: host plain 1.673 ns per iteration, vCPU plain with ACTLR.TSO clear 1.685, vCPU plain with ACTLR.TSO set 1.679, LDAPR/STLR 3.17 on host and in the vCPU | PROVEN for this single-thread loop, `data/spikes/hvf_tso_speed.jsonl`; hardware TSO costs nothing here, LDAPR/STLR cost 88%. A contended multi-thread loop under TSO is NOT measured |
+| x18 in a vCPU, EL1 | preserved across 200000 host exits with 3125 host yields and 20 busy host threads forcing preemption and migration | PROVEN, `data/spikes/hvf2_functional.txt` |
+| x18 in a vCPU, EL0 | preserved across 2000000 svc round trips to the EL1 vector and a brk | PROVEN, same file; this phase ran 0.07 s, so preemption during it is not shown |
+| Fault resolved by the guest's EL1 vector | 68.1 ns median, p95 70.2, sd 0.8 per translation fault and eret, no host exit | PROVEN, `data/spikes/hvf_guest_fault.jsonl` |
+| Data-abort exit to the host | 755 ns median, p95 762, sd 3.1 (stage-2 fault, host skips the load, resume) | PROVEN, `data/spikes/hvf_stage2_exit.jsonl` |
+| Low virtual addresses | VA 0x10000 (4 KiB page) and 0x400000 written and read through the guest's own tables, host sees the frames | PROVEN, `hvf2_functional.txt` |
+| More than one VM per host process | second `hv_vm_create` fails with 0xfae94002; after `hv_vm_destroy` a new VM can be created | PROVEN, `hvf2_functional.txt`: one VM per host process |
+| Translator inside a vCPU | not run | NOT verified. The plain loop runs at host speed in a vCPU (row 1), so translated code is expected to as well (INFERRED) |
 
 ## Boundary costs
 
@@ -88,39 +103,38 @@ Wake latency for blocking waits, two threads (PROVEN, `data/spikes/waits.jsonl`)
 |---|---|---|---|---|
 | API call served by the host, host spinning | 1.75 to 8.8 ns gate (PROVEN) | 1.11 µs (PROVEN) | 144 ns channel (PROVEN); translator exit on top NOT measured | 115 ns (PROVEN) |
 | Same, both sides asleep | n/a, direct call | 7.42 µs (PROVEN) | 6.86 µs (PROVEN) | NOT measured; HVC 672 ns plus two wakes, about 5.5 µs (INFERRED) |
-| Fault or breakpoint | 1.6 µs signal, 8.2 µs Mach (PROVEN) | 25.8 µs (PROVEN) | cross-process Mach exception NOT measured, at least 8.2 µs (INFERRED) | handled in the guest kernel: NOT measured; a data-abort exit to the host NOT measured (HVC exit 672 ns, PROVEN) |
+| Fault or breakpoint | 1.6 µs signal, 8.2 µs Mach (PROVEN) | 25.8 µs (PROVEN) | cross-process Mach exception NOT measured, at least 8.2 µs (INFERRED) | 68 ns in the guest kernel, 755 ns as a data-abort exit to the host (PROVEN, not quiet) |
 | Isolation from the host | none; Raven loses the separation it has on Linux (INFERRED from the design) | separate process (PROVEN, stage) | separate process (INFERRED from the design) | separate VM inside the host process (INFERRED from the design) |
-| x86 memory order | LDAPR/STLR, +39% on entry.c (PROVEN) | hardware, Rosetta (PROVEN) | LDAPR/STLR, +39% on entry.c (PROVEN) | hardware ACTLR.TSO: correctness PROVEN, speed NOT measured |
+| x86 memory order | LDAPR/STLR, +39% on entry.c (PROVEN) | hardware, Rosetta (PROVEN) | LDAPR/STLR, +39% on entry.c (PROVEN) | hardware ACTLR.TSO: correct, and no measurable cost on a single-thread loop (PROVEN, not quiet) |
 | 4 KiB page semantics | no; emulated for translated code only | 4 KiB mappings into the guest (PROVEN on `e3-stage-draft`, `docs/macos/process-model.md`) | no | yes (PROVEN) |
-| Addresses below 4 GB | cross-architecture entitlement (PROVEN) | page zero 0x1000 under Rosetta (PROVEN on `e3-stage-draft`) | cross-architecture entitlement (PROVEN) | own page tables (INFERRED; 0x50000000 mapped, low addresses not tried) |
+| Addresses below 4 GB | cross-architecture entitlement (PROVEN) | page zero 0x1000 under Rosetta (PROVEN on `e3-stage-draft`) | cross-architecture entitlement (PROVEN) | own page tables, 0x10000 and 0x400000 mapped (PROVEN) |
 | Entitlements | cross-architecture | none beyond signing | cross-architecture | hypervisor (`com.apple.security.hypervisor`), cross-architecture not needed (INFERRED) |
-| x18 for native ARM64 PE code | lost on CPU migration (PROVEN) | n/a, x64 only | lost on CPU migration (PROVEN) | ordinary register under our kernel (INFERRED, not tested) |
+| x18 for native ARM64 PE code | lost on CPU migration (PROVEN) | n/a, x64 only | lost on CPU migration (PROVEN) | preserved at EL1 and EL0 across exits, svc and host migration (PROVEN) |
 | Guest threads | host threads | host threads | host threads | 64 vCPUs per VM (PROVEN); needs an M:N scheduler |
+| Processes | one host process for many guests possible | one guest process per Windows process | same as 2 | one VM per host process (PROVEN): one host process per Windows process |
 | Thread creation | host thread | host thread | host thread | vCPU creation 22.6 µs median, up to about 1.7 ms (PROVEN); guest threads beyond 64 cost a guest context switch instead (INFERRED) |
 | Every host service | function call | channel or trap | channel or trap | channel (115 ns spin) or exit; nothing reaches the host without one (INFERRED from the design) |
 | JIT and W^X for the translator | one MAP_JIT region, per-thread toggle; RWX refused (PROVEN, `data/spikes/jit_probes.txt`) | Rosetta's own | same as 1 | guest page tables of our own (INFERRED) |
-| Translator speed | measured in a process (table below) | n/a, Rosetta | as model 1 | NOT measured inside a vCPU |
+| Translator speed | measured in a process (table below) | n/a, Rosetta | as model 1 | NOT measured inside a vCPU; plain code runs at host speed there (PROVEN), so expected the same (INFERRED) |
 | Lifetime | ours | Rosetta general use through macOS 27, only a games subset from macOS 28 (Apple, support.apple.com/en-us/102527, 2026-09-21) | ours | ours |
 | Main new code | translator, signal and exception plumbing | done as a stage | translator, guest process, Mach control | translator, EL1 guest kernel (traps, page tables, M:N scheduler), host device side |
 
 ## Recommendation
 
-Keep the Rosetta stage (2) as the working stage. For the final model, the data point to the HVF model (4), conditional on the checks below; models 1 and 3 are not recommended.
+Keep the Rosetta stage (2) as the working stage. For the final model, use HVF (4); models 1 and 3 are not recommended.
 
-- Of the three properties that separate HVF from models 1 and 3, one is PROVEN (4 KiB pages) and two are not yet: hardware TSO is proven correct but its speed is not measured (ACTLR.TSO may cost something of its own), and x18 in a vCPU is not tested. Low addresses are not a differentiator: models 1 and 3 get them through the cross-architecture entitlement (PROVEN), HVF needs the hypervisor entitlement instead.
-- HVF hypercalls cost a twelfth of an in-process Mach exception (PROVEN for HVC); data-abort exits are not measured.
-- If the checks hold, HVF is the only model that runs third-party ARM64 and ARM64EC programs and avoids the +39% ordering cost seen on entry.c. Models 1 and 3 cannot run ARM64 PE code with x18 on this macOS build (PROVEN) and pay LDAPR/STLR on memory-dense loops (PROVEN on entry.c). Model 1 also gives up process isolation.
-- This conflicts with the stated preference to avoid a VM, and the costs are real: a guest kernel at EL1 that we write and verify (exception vectors, page tables, an M:N scheduler on 64 vCPUs, waits), vCPU creation up to milliseconds, every host service crossing an exit or the shared-memory channel, and harder debugging. The waits crate and the TLA+ models (`native/waits`, `native/model`) are the natural base for the in-guest scheduler.
+- The three properties that separate HVF from models 1 and 3 are now PROVEN: 4 KiB pages; hardware TSO that is correct and costs nothing measurable on a single-thread loop, against 88% for LDAPR/STLR on the same loop and 39% on entry.c; and x18 preserved at EL1 and EL0 across exits and host migration. The timed checks ran with the machine in use and should be repeated quietly, and TSO under contention is not measured yet.
+- Low addresses are not a differentiator: models 1 and 3 get them through the cross-architecture entitlement (PROVEN), HVF through its own page tables with the hypervisor entitlement (PROVEN).
+- Faults resolved in the guest cost 68 ns, a data-abort exit to the host 755 ns and a hypercall 672 ns, against 8.2 µs for a Mach exception in process.
+- HVF is the only model that runs third-party ARM64 and ARM64EC programs and avoids the ordering cost. Models 1 and 3 cannot run ARM64 PE code with x18 on this macOS build (PROVEN) and pay LDAPR/STLR on memory-dense loops. Model 1 also gives up process isolation.
+- This conflicts with the stated preference to avoid a VM, and the costs are real: a guest kernel at EL1 that we write and verify (exception vectors, page tables, an M:N scheduler on 64 vCPUs, waits), one host process per Windows process because a process holds one VM, vCPU creation up to milliseconds, every host service crossing an exit or the shared-memory channel, and harder debugging. The waits crate and the TLA+ models (`native/waits`, `native/model`) are the natural base for the in-guest scheduler.
 - Everything built for the stage stays: the channel, the served block protocol, the D3D command ring, the AppKit and Metal backends and the translator are independent of how guest code executes.
 
-The recommendation stands or falls with these checks (none needs a large build):
+Checks 1 to 4 and 6 of the first version of this report are done (section "Checks of the HVF model"). Still open:
 
-1. Speed of plain loads and stores in a vCPU with ACTLR.TSO set against clear.
-2. x18 preserved across guest exceptions and host exits in a vCPU.
-3. A fault taken and resolved by an EL1 handler in the guest, timed.
-4. A VA below 0x10000 and at 0x400000 mapped through the guest's own tables.
-5. The translator running inside a vCPU on the four workloads.
-6. A data-abort exit to the host, timed, and more than one VM in one host process.
+1. The translator running inside a vCPU on the four workloads.
+2. TSO cost under contention (two vCPUs on one line), and the timed checks repeated on a quiet machine.
+3. Preemption of a vCPU while it runs at EL0 for seconds, with x18 checked.
 
 ## Spin then park
 

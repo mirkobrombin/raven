@@ -1,0 +1,9 @@
+$ hvf2 lowva  (14:24:58 load { 3.71 2.78 2.42 } thermal 0)
+guest wrote VA 0x10000 and 0x400000 and read back 0x68ac; host frames 0x1234 0x5678
+RESULT lowva: PASS
+$ hvf2 multivm  (14:24:58 load { 3.71 2.78 2.42 } thermal 0)
+first hv_vm_create -> 0x0, second in the same process -> 0xfae94002
+destroy -> 0x0, create again -> 0x0
+$ hvf2 x18  (14:24:58 load { 3.71 2.78 2.42 } thermal 0)
+EL1: x18 after 200000 host exits (3125 host yields, 3.32 s, 20 burner threads): 0x5eed5eed12345678 -> PRESERVED
+EL0: x18 after 2000000 svc round trips to the EL1 vector and a brk (0.07 s, host loaded): 0x5eed5eed12345678 -> PRESERVED (report imm=2)

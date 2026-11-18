@@ -1,0 +1,1 @@
+{"bench":"hvf_stage2_exit","metric":"data_abort_exit_roundtrip","unit":"ns","n":30,"min":751.3587,"median":754.6465,"p95":762.1788,"mean":755.3440,"stddev":3.0891,"max":762.2117,"qos":"USER_INTERACTIVE","translated":0,"note":"load from IPA without stage-2 mapping -> host advances PC -> resume, 1e5 per run"}
