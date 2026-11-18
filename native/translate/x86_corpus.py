@@ -2,9 +2,9 @@
 
 usage: x86_corpus.py CLANG OBJDUMP OUTPUT [PE_OR_OBJECT...]
 
-Writes one line per instruction, "hex bytes<TAB>address<TAB>Intel text", from three sources: random instances of the instructions the
-translator handles (assembled by CLANG), a stream of random bytes, and the code sections of every PE given. The seed is fixed, so the
-corpus is the same on every build.
+Writes one line per instruction, "hex bytes<TAB>address<TAB>Intel text", from four sources: random instances of the instructions the
+translator handles and of SSE and SSE2 (assembled by CLANG), a stream of random bytes, and the code sections of every PE given. The
+seeds are fixed, so the corpus is the same on every build.
 """
 
 import random
@@ -21,7 +21,7 @@ GPR = {
     64: ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"] + [f"r{i}" for i in range(8, 16)],
 }
 HIGH = ["ah", "ch", "dh", "bh"]
-PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword"}
+PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword", 128: "xmmword"}
 CONDITIONS = ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"]
 ARITHMETIC = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"]
 SHIFTS = ["rol", "ror", "rcl", "rcr", "shl", "shr", "sar"]
@@ -155,6 +155,66 @@ def instance(rng):
     return f"{rng.choice(['j' + c for c in CONDITIONS] + ['jmp', 'call'])} label{rng.randrange(100)}"
 
 
+# SSE and SSE2 on XMM registers, by operand form: V an XMM register, W an XMM register or memory of the size given (in bits), U an XMM
+# register alone, M memory alone, E a general register or memory, G a general register, I an immediate.
+SSE_FORMS = {
+    "V,W128": "unpcklps unpcklpd unpckhps unpckhpd sqrtps sqrtpd andps andpd andnps andnpd orps orpd xorps xorpd addps addpd mulps "
+              "mulpd subps subpd minps minpd divps divpd maxps maxpd cvtpd2ps cvtdq2ps cvtps2dq cvttps2dq punpcklbw punpcklwd "
+              "punpckldq packsswb pcmpgtb pcmpgtw pcmpgtd packuswb punpckhbw punpckhwd punpckhdq packssdw punpcklqdq punpckhqdq "
+              "psrlw psraw psllw psrld psrad pslld psrlq psllq pcmpeqb pcmpeqw pcmpeqd paddq pmullw psubusb psubusw pminub pand "
+              "paddusb paddusw pmaxub pandn pavgb pavgw pmulhuw pmulhw cvttpd2dq cvtpd2dq psubsb psubsw pminsw por paddsb paddsw "
+              "pmaxsw pxor pmuludq pmaddwd psadbw psubb psubw psubd psubq paddb paddw paddd movups movupd movaps movapd movdqa "
+              "movdqu",
+    "W128,V": "movups movupd movaps movapd movdqa movdqu",
+    "M128,V": "movntps movntpd movntdq",
+    "V,W32": "movss sqrtss addss mulss subss minss divss maxss ucomiss comiss cvtss2sd",
+    "V,W64": "movsd sqrtsd addsd mulsd subsd minsd divsd maxsd ucomisd comisd cvtps2pd cvtsd2ss cvtdq2pd movq",
+    "M32,V": "movss movd",
+    "M64,V": "movsd movlps movhps movlpd movhpd movq",
+    "V,M64": "movlps movhps movlpd movhpd",
+    "V,U": "movhlps movlhps",
+    "V,E32": "cvtsi2ss cvtsi2sd movd",
+    "V,E64": "cvtsi2ss cvtsi2sd movq",
+    "E32,V": "movd",
+    "E64,V": "movq",
+    "G32,W32": "cvttss2si cvtss2si",
+    "G64,W32": "cvttss2si cvtss2si",
+    "G32,W64": "cvttsd2si cvtsd2si",
+    "G64,W64": "cvttsd2si cvtsd2si",
+    "G32,U": "movmskps movmskpd pmovmskb",
+    "V,W128,I": "pshufd pshufhw pshuflw shufps shufpd",
+    "U,I": "psrlw psraw psllw psrld psrad pslld psrlq psllq psrldq pslldq",
+    "M32": "ldmxcsr stmxcsr",
+    "C128": "ps pd",
+    "C32": "ss",
+    "C64": "sd",
+}
+SSE_PREDICATES = ["eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"]
+
+
+def sse_instance(rng):
+    form, names = rng.choice(list(SSE_FORMS.items()))
+    name = rng.choice(names.split())
+    xmm = lambda: f"xmm{rng.randrange(16)}"
+    if form.startswith("C"):
+        source = xmm() if rng.random() < 0.5 else memory(rng, int(form[1:]))
+        return f"cmp{rng.choice(SSE_PREDICATES)}{name} {xmm()}, {source}"
+    operands = []
+    for part in form.split(","):
+        kind, bits = part[0], int(part[1:]) if len(part) > 1 else 0
+        if kind == "V" or kind == "U" or (kind == "W" and rng.random() < 0.5):
+            operands.append(xmm())
+        elif kind in "WM":
+            operands.append(memory(rng, bits))
+        elif kind == "E":
+            operands.append(rm(rng, bits))
+        elif kind == "G":
+            operands.append(register(rng, bits))
+        else:
+            operands.append(str(rng.randrange(256)))
+    return f"{name} {', '.join(operands)}"
+
+
 def disassemble(objdump, path):
     """Yields (bytes, address, text) for every instruction LLVM decodes in the code sections of path."""
     output =subprocess.run([objdump, "-d", "-M", "intel", path], check=True, capture_output=True, text=True).stdout
@@ -180,11 +240,16 @@ def main():
             instance(rng) + "\n" + (f"label{n // 200}:\n" if n % 200 == 0 else "") for n in range(20000)))
         obj = Path(scratch) / "instances.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(obj), str(source)], check=True)
+        sse_rng = random.Random(20261119)
+        sse_source = Path(scratch) / "sse_instances.s"
+        sse_source.write_text(".intel_syntax noprefix\n.text\n" + "".join(sse_instance(sse_rng) + "\n" for _ in range(8000)))
+        sse_obj = Path(scratch) / "sse_instances.o"
+        subprocess.run([clang, "-c", "-x", "assembler", "-o", str(sse_obj), str(sse_source)], check=True)
         noise = Path(scratch) / "noise.s"
         noise.write_text(".text\n" + "".join(f".byte {', '.join(str(rng.randrange(256)) for _ in range(16))}\n" for _ in range(8192)))
         noise_obj = Path(scratch) / "noise.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(noise_obj), str(noise)], check=True)
-        for path in [obj, noise_obj] + [Path(image) for image in images]:
+        for path in [obj, sse_obj, noise_obj] + [Path(image) for image in images]:
             source_name = path.name
             lines.append(f"# {source_name}")
             for raw, address, text in disassemble(objdump, str(path)):

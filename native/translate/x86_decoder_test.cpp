@@ -1,9 +1,11 @@
 #include "x86_decoder.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -51,12 +53,40 @@ static const char *divergence(const std::vector<uint8_t> &bytes, const std::stri
 	return nullptr;
 }
 
+// SSE and SSE2: the legacy 0F map (no VEX, EVEX, 0F 38 or 0F 3A) on XMM registers or MXCSR, without SSE3's few 0F opcodes and the
+// forms with an MMX register.
+static bool sse_or_sse2(const std::vector<uint8_t> &bytes, const std::string &text)
+{
+	size_t at = 0;
+	const uint8_t opcode = first_opcode(bytes, at).first;
+	if (opcode != 0x0f || at + 1 >= bytes.size() || bytes[at + 1] == 0x38 || bytes[at + 1] == 0x3a)
+		return false;
+	const std::string name = text.substr(0, text.find(' '));
+	const bool to_general = name == "cvtss2si" || name == "cvttss2si" || name == "cvtsd2si" || name == "cvttsd2si";
+	if (text.find("xmm") == std::string::npos && text.find("mxcsr") == std::string::npos && !to_general)
+		return false;
+	static const std::regex mmx(R"(\bmm[0-7]\b)");
+	if (std::regex_search(text, mmx))
+		return false;
+	for (const char *sse3 : {"movddup", "movshdup", "movsldup", "addsubps", "addsubpd", "haddps", "haddpd", "hsubps", "hsubpd", "lddqu"})
+		if (name == sse3)
+			return false;
+	return true;
+}
+
 struct Tally {
 	size_t instructions = 0;
 	size_t semantic = 0;
 	size_t invalid_seen = 0;
 	size_t failures = 0;
+	size_t sse = 0;
+	size_t sse_semantic = 0;
+	// SSE and SSE2 instructions without semantics, by LLVM's mnemonic.
+	std::map<std::string, size_t> sse_missing;
 };
+
+// The source of random SSE and SSE2 instances: each must have semantics.
+static const std::string sse_instances = "sse_instances.o";
 
 // Checks the decoder against the corpus x86_corpus.py wrote from LLVM's disassembler. Every instruction LLVM decodes must decode to the
 // same length; those the translator gives semantics to must also print as LLVM prints them; bytes LLVM rejects must not decode to an
@@ -131,6 +161,16 @@ int main(int argc, char **argv)
 				if (text != expected)
 					problem = "printed '" + text + "'";
 			}
+			if (sse_or_sse2(bytes, expected)) {
+				++tally.sse;
+				if (instruction.mnemonic != Mnemonic::invalid && instruction.mnemonic != Mnemonic::other)
+					++tally.sse_semantic;
+				else {
+					++tally.sse_missing[expected.substr(0, expected.find(' '))];
+					if (source == sse_instances && problem.empty())
+						problem = "no semantics";
+				}
+			}
 		}
 		if (!problem.empty() && !expected.empty())
 			if (const char *reason = divergence(bytes, expected, instruction)) {
@@ -150,6 +190,17 @@ int main(int argc, char **argv)
 		std::printf("%s: %zu instructions, %zu with semantics (%.1f%%), %zu rejected by LLVM, %zu failures\n", name.c_str(),
 			tally.instructions, tally.semantic, tally.instructions ? 100.0 * double(tally.semantic) / double(tally.instructions) : 0.0,
 			tally.invalid_seen, tally.failures);
+		if (!tally.sse)
+			continue;
+		std::printf("%s: %zu SSE and SSE2 instructions, %zu with semantics (%.1f%%)", name.c_str(), tally.sse, tally.sse_semantic,
+			100.0 * double(tally.sse_semantic) / double(tally.sse));
+		std::vector<std::pair<size_t, std::string>> missing;
+		for (const auto &[mnemonic, count] : tally.sse_missing)
+			missing.push_back({count, mnemonic});
+		std::sort(missing.rbegin(), missing.rend());
+		for (size_t i = 0; i < missing.size() && i < 12; ++i)
+			std::printf("%s %s %zu", i ? "," : "; without:", missing[i].second.c_str(), missing[i].first);
+		std::printf("\n");
 	}
 	for (const auto &[reason, count] : divergences)
 		std::printf("known divergence from LLVM, %s: %zu\n", reason.c_str(), count);
