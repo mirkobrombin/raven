@@ -142,6 +142,23 @@ if(APPLE)
     add_test(NAME translate_x86_sse COMMAND x86_sse_test ${SEMANTICS}/sse_oracle.bin)
     set_tests_properties(translate_x86_sse PROPERTIES TIMEOUT 120)
 
+    # The same for x87 (x87.py), held to an x86 CPU where Rosetta differs (testdata/x87_silicon.txt); also run in a vCPU by
+    # native/hvf's hvf_x87_test.
+    add_custom_command(OUTPUT ${SEMANTICS}/x87_cases.s ${SEMANTICS}/x87_cases.h
+        COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/x87.py ${SEMANTICS}/x87_cases.s ${SEMANTICS}/x87_cases.h
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x87.py VERBATIM)
+    add_custom_command(OUTPUT ${SEMANTICS}/x87_oracle.bin
+        COMMAND ${CMAKE_C_COMPILER} -arch x86_64 -O1 -I ${SEMANTICS} -o ${SEMANTICS}/x87_oracle ${CMAKE_CURRENT_SOURCE_DIR}/x87_oracle.c
+            ${SEMANTICS}/x87_cases.s
+        COMMAND ${SEMANTICS}/x87_oracle ${SEMANTICS}/x87_oracle.bin
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x87_oracle.c ${SEMANTICS}/x87_cases.s ${SEMANTICS}/x87_cases.h VERBATIM)
+    add_custom_target(x87_oracle ALL DEPENDS ${SEMANTICS}/x87_oracle.bin)
+    add_executable(x87_test x87_test.cpp)
+    target_link_libraries(x87_test PRIVATE raven_translate)
+    add_dependencies(x87_test x87_oracle)
+    add_test(NAME translate_x87 COMMAND x87_test ${SEMANTICS}/x87_oracle.bin ${CMAKE_CURRENT_SOURCE_DIR}/testdata/x87_silicon.txt)
+    set_tests_properties(translate_x87 PROPERTIES TIMEOUT 120)
+
     # entry.c's loop as a native arm64 program and as an x86-64 one Rosetta runs, for translate_bench to be compared with.
     add_executable(bench_entry_native bench_entry_host.c ${RAVEN_TESTDATA}/native_cpu/entry.c)
     target_compile_options(bench_entry_native PRIVATE -O2)
