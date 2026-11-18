@@ -373,6 +373,8 @@ void NativeThreads::finish(GuestThread &thread, uint32_t code)
 	}
 	thread.exit_code = code;
 	thread.state = GuestThread::State::done;
+	for (const auto &listener : end_listeners)
+		listener(thread.id);
 	moved();
 	thread.impersonation.reset();
 	thread.ready = nullptr;

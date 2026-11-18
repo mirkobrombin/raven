@@ -3151,6 +3151,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		threads.block(std::move(ready), std::nullopt);
 	});
+	threads.add_end_listener([&windows](uint32_t thread) { windows.thread_ended(thread); });
 #ifdef RAVEN_VULKAN
 	vulkan.set_blocking([&threads](std::function<bool()> ready) {
 		HostWait waiting;

@@ -1499,6 +1499,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		guest_threads.block(std::move(ready), std::nullopt);
 	});
+	guest_threads.add_end_listener([&windows](uint32_t thread) { windows.thread_ended(thread); });
 	crt.set_call(invoke);
 	try {
 		wait_suspended_process(launch->suspended_fd, kernel_objects);

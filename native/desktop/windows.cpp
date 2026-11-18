@@ -1126,6 +1126,16 @@ bool NativeWindows::sent_for(uint32_t thread) const
 	return std::any_of(sent.begin(),sent.end(),[&](const auto &item) { return item->thread==thread && !item->taken; });
 }
 
+void NativeWindows::thread_ended(uint32_t thread)
+{
+	std::erase_if(sent,[&](const auto &item) {
+		if (item->thread!=thread || item->taken) return false;
+		item->result=0;
+		item->done=true;
+		return true;
+	});
+}
+
 void NativeWindows::serve_sent()
 {
 	const auto me=environment.thread_id();

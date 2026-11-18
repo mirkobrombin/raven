@@ -190,6 +190,10 @@ private:
 	std::deque<std::shared_ptr<SentMessage>> sent;
 	// Runs the messages other threads sent to windows of the calling thread.
 	void serve_sent();
+public:
+	// A thread ended: the messages sent to its windows that it never took are answered with 0, as Windows releases their senders.
+	void thread_ended(uint32_t thread);
+private:
 	bool sent_for(uint32_t thread) const;
 	std::function<void(std::function<bool()>)> block_hook;
 	// A window of the calling thread that needs painting, under the filter window when one is given.
