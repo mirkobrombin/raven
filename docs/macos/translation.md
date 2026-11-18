@@ -33,9 +33,9 @@ addresses guest memory at guest virtual addresses.
 | Licence | Raven's | MIT (PROVEN, `fex/LICENSE`) | MIT (PROVEN, `box64/LICENSE`) | Proprietary OS component |
 | Builds for the port | Yes, standalone CMake project, all 4 tests pass (PROVEN) | Windows DLLs: yes (PROVEN, see below). Unix side: no, `sys/prctl.h` (PROVEN). A native macOS build of FEX: configure refuses Darwin (PROVEN) | No: 577 compile errors on macOS, starting with `elf.h` and Linux `mcontext` (PROVEN) | Not a library |
 | Runs part of an arm64 process | Yes, by design | Only under an ARM64EC ntdll that Raven would have to write | No (Linux userspace) | No (PROVEN, see below) |
-| Translation speed | 365 ns per guest instruction, median (PROVEN) | NOT verified: no host can run it here (see below) | n/a | n/a |
-| entry.c loop, steady state | 819 ns per call with LDAPR/STLR, 1.65 times native (PROVEN) | NOT verified | n/a | 414 ns, whole process translated (PROVEN) |
-| Guest to native call | 2.3 ns (PROVEN) | NOT verified | n/a | No boundary |
+| Translation speed | 487 ns per guest instruction, median (PROVEN) | First call minus a warm call: 33 to 90 µs per workload on Neoverse N2, ours 26 to 86 µs (PROVEN, Linux arm64 below) | n/a | n/a |
+| entry.c loop, steady state | 371 ns per call with LDAPR/STLR, 1.15 times native (PROVEN) | Linux arm64: 1.29 times native; ours 1.06 there (PROVEN) | n/a | 268 ns, whole process translated (PROVEN) |
+| Guest to native call | 1.5 ns (PROVEN) | NOT verified | n/a | No boundary |
 | Lifetime on macOS | Raven's | Raven's, as a fork | n/a | General use ends with macOS 27; macOS 28 keeps a subset for older games (INFERRED from Apple's Rosetta page and Support 102527) |
 
 ### FEX
@@ -131,6 +131,29 @@ Raven has its own loader and its own ntdll, so it would not use FEX the way Wine
   Darwin"). A native port means porting FEXCore's Linux host code (signals, `mmap` with 4 KiB pages, `/proc`) to macOS, as a fork.
   The maintainers have no macOS plans (external-facts, section 3).
 
+**In-process on macOS: the W^X patch.** Either path in a macOS process needs FEX to keep its code in `MAP_JIT` memory and to switch the
+current thread with `pthread_jit_write_protect_np` around every write to it. At FEX-2607 those writes sit in four places (INFERRED from
+the instruction-cache flushes that follow them, `grep ClearICache|__builtin___clear_cache` in FEXCore, 13 sites):
+
+| File | Sites | What it writes |
+|---|---|---|
+| `Interface/Core/JIT/JIT.cpp` | 5 | Emitting blocks and linking them |
+| `Utils/ArchHelpers/Arm64.cpp` | 6 | Patching an unaligned atomic into a half-barrier sequence, from the SIGBUS handler |
+| `Interface/Core/Dispatcher/Dispatcher.cpp` | 1 | The dispatcher |
+| `Interface/Core/CodeCache.cpp` | 1 | Loading the code cache |
+
+The allocation itself goes through `AllocatorHooks.h` (`PAGE_EXECUTE_READWRITE` on Windows, `mmap` on Linux) and would take
+`MAP_JIT`.
+
+- **Per thread works.** The switch is per thread, and FEX writes code on the thread that runs it, so this fits. The same holds for the
+  backpatching, which runs in the faulting thread's signal handler.
+- **The patch is small.** Wrap the 13 sites and change the one allocation.
+- **The fork is the cost.** It has to follow every upstream change to those files, and upstream's AGENTS.md policy means the patch
+  stays Raven's own.
+- **16 KiB host pages.** FEX tracks code pages in 4 KiB units (`FEX_PAGE_SIZE`), but macOS protects 16 KiB at a time. That needs a
+  second, larger change in its invalidation tracking (`InvalidationTracker` in the Windows layer, `mprotect` granules in FEXCore),
+  NOT verified.
+
 **How it weighs against our own translator on the same path (roadmap item 8):**
 
 | | FEX path A | FEX path B | Own translator |
@@ -138,17 +161,90 @@ Raven has its own loader and its own ntdll, so it would not use FEX the way Wine
 | Code Raven maintains | An ARM64EC loader and ntdll (new), plus a fork patch | Glue in the size of FEX's 7.3k-line Windows layer, plus a fork of 92k lines of FEXCore | About 5k lines today, growing with SSE/AVX/x87 |
 | x86 coverage | Complete (SSE to AVX2, x87) | Complete | The integer subset (see the limits) |
 | Effort to first app | Large: the ARM64EC loader and ntdll come before anything runs | Large: the Darwin port of FEXCore | Done for Raven's five simplest clients. SSE/AVX and x87 are the large remaining items |
-| Performance on the same workloads | NOT verified | NOT verified | Measured below |
+| Performance on the same workloads | Linux arm64 table below: 1.0 to 1.8 times native | Same engine as path A | Linux arm64 table below: 1.06 to 2.15 times native |
 
-FEX's speed could not be measured on this machine:
+#### FEX against our translator on Linux arm64
 
-- `which docker container colima limactl podman orb multipass` finds none of them (PROVEN), so there is no Linux arm64 guest to run
-  FEX in.
-- The macOS build is refused at configure.
-- The DLLs need a host ntdll.
+FEX runs only on Linux and Windows, so the two engines were compared on GitHub's `ubuntu-24.04-arm` runners, in the private repository
+`fabricatorsltd/raven-macos-bench`. Workflow run 44287829572 is PROVEN; its raw CSVs, `cpu.txt` and logs are in
+`build-translate/results/linux-arm64/run-44287829572/`.
 
-The decision below is therefore provisional on that one number. The next step is a Linux arm64 VM (Hypervisor.framework, 4 KiB
-granule), running FEXInterpreter on bench_entry_host.c built as an x86-64 ELF next to a native build.
+**The machine.** Azure Neoverse N2, 2 vCPUs, kernel 7.0 (`cpu.txt`). It has `lrcpc`, `ilrcpc` (LRCPC2), `atomics` (LSE) and `flagm`.
+It is not an M5, so only ratios to native count.
+
+**The engines.**
+
+- **FEX** at 1cc4b93e (FEX-2607, the Proton/Soda commit), built natively with its defaults (LTO, `TUNE_CPU=native`). Its `FEX` binary
+  runs each workload as a freestanding static x86-64 ELF, with no root filesystem (PROVEN, `fex-smoke.txt`).
+- **Raven's translator**, built for Linux arm64. Its tests pass there: decoder, emitter and all 14 runtime cases (PROVEN,
+  `ours-ctest.log`). That also proves `platform_linux.cpp`, with the memfd mapped twice.
+- **Native**, the baseline: the same C built by the system clang for arm64.
+
+**The workloads** come from one source, `bench_harness.c` plus `testdata/workloads.c` and Raven's `testdata/native_cpu/entry.c`:
+
+- entry.c's loop;
+- bitwise CRC-32 over 4 KiB;
+- FNV-1a over 32 KiB;
+- an xorshift histogram (a load and a store per step).
+
+**Method.**
+
+- **Modes compared.** Ours: plain, LDAPR/STLR, DMB. FEX: `FEX_TSOENABLED=0`; TSO on, its default (LRCPC and LRCPC2 used); TSO on with
+  `FEX_HOSTFEATURES=disablelrcpc,disablelrcpc2` (barriers).
+- **Rounds.** 30 rounds. Each round runs every workload under every configuration once, interleaved. Each run records one first call,
+  which includes translation or JIT, then one timed run of 20 to 2,000 calls.
+
+Medians, as ratios to native (warm). Every warm row's stddev is under 6% of its median (largest: ours DMB on CRC-32, 5.8%); the
+CSVs have p95 and stddev for every row.
+
+| Workload | native ns | ours plain | ours LDAPR/STLR | ours DMB | FEX TSO off | FEX TSO on (LRCPC) | FEX TSO, no LRCPC |
+|---|---|---|---|---|---|---|---|
+| entry.c loop (per 1,000 steps) | 450 | 1.05 | **1.06** | 7.55 | 1.27 | **1.29** | 10.63 |
+| CRC-32, 4 KiB | 13,456 | 1.79 | **1.77** | 1.77 | 1.39 | **1.41** | 1.40 |
+| FNV-1a, 32 KiB | 29,441 | 1.14 | **1.16** | 2.57 | 1.00 | **1.00** | 1.00 |
+| Histogram, 32,768 steps | 38,153 | 2.16 | **2.15** | 2.38 | 1.81 | **1.81** | 4.32 |
+
+First call, translation or JIT included, as a ratio to native's first call (whose own stddev is large: page faults):
+
+| Workload | ours LDAPR/STLR | FEX TSO on |
+|---|---|---|
+| entry.c | 2.18 (26.7 µs) | 2.72 (33.3 µs) |
+| CRC-32 | 2.69 (77.4 µs) | 2.90 (83.4 µs) |
+| FNV-1a | 2.70 (120.0 µs) | 2.69 (119.1 µs) |
+| Histogram | 2.50 (120.7 µs) | 2.33 (112.4 µs) |
+
+Our translator's own counter puts translation at 12.8 µs for entry's 38 guest instructions (338 ns each) and 54.8 µs for FNV's 308
+(178 ns each) (`ours_translation.csv`).
+
+What it says:
+
+- **Steady state.**
+  - On the store-and-reload loop (entry.c) ours is ahead: 1.06 against 1.29.
+  - On the three compute kernels FEX is ahead: CRC-32 1.41 against 1.77, FNV 1.00 against 1.16, histogram 1.81 against 2.15.
+  - FEX's multiblock JIT with register allocation produces tighter code than our block-at-a-time translator. Our gap on those kernels
+    is code quality, not memory ordering: our plain and LDAPR/STLR rows match.
+  - **Before** the register-copy removal (commit "use 32-bit registers in place...", run 44285513934 in `run-44285513934-before-copy-removal/`) the
+    same kernels were 3.2, 1.16 and 4.36 times native on this machine. The same change on the M5 moved entry.c from 1.65 to 1.15
+    times native. A wide core like the M5 hides extra instructions that the N2 does not.
+- **Memory ordering.**
+  - With LRCPC, both engines pay little for TSO on these kernels. Ours: plain against LDAPR/STLR within 1%. FEX: TSO on against off
+    within 2%.
+  - Without LRCPC, both fall back to barriers and lose a lot where memory traffic is dense: entry.c 7.6 (ours) and 10.6 (FEX), the
+    histogram 2.4 (ours) and 4.3 (FEX).
+  - On the M5 the same LDAPR/STLR cost is 38% on entry.c (macOS table above), so the N2 and M5 differ here: NOT verified why.
+- **First-call cost** (translation or JIT) is about the same for both engines. Ours is 20% lower on entry.c, and the two are within
+  8% of each other on the other three.
+
+Weighed on the same path, roadmap item 8:
+
+- FEX would bring complete x86 coverage today and better code on compute kernels.
+- FEX would also bring an ARM64EC loader and ntdll to write (path A), or a Darwin port of 92k lines (path B). Either way it needs a
+  maintained W^X and 16 KiB-page fork for in-process macOS.
+- Our translator matches FEX's JIT cost and the TSO cost with LRCPC, and beats it on memory-bound loops. It is 15 to 25% behind on
+  compute kernels, by 16 to 26%. A register allocator and multi-block translation are the known next steps there.
+
+The decision stays with our own translator. The measured gap is in code generation, which is ours to improve. FEX's gap is
+integration work that Raven would carry forever.
 
 ### Box64
 
@@ -181,55 +277,51 @@ compatibility layer needs are present. It is no translator (PROVEN from `<os/arc
 The machine is a MacBook Air M5 on macOS 27.2.1. Each metric has 30 runs. The raw values are in `build-translate/results/*.csv` and
 the summary is in `summary.csv`.
 
-Run with `python3 native/translate/bench_run.py BUILD RESULTS notepad++.exe 30`, on AC power. `pmset` and `uptime` before and after
-the run are in `bench_conditions.txt`: AC attached both times. The machine was shared with other work (load average 8 to 9 over one
-minute), so the entry.c rows interleave every configuration within each round. The benchmark threads ask for
-`QOS_CLASS_USER_INTERACTIVE`. An earlier run under a load average of 28 to 38 gave the same ordering with medians 1.3 to 2 times
-higher. It was discarded.
+Run with `python3 native/translate/bench_run.py BUILD RESULTS notepad++.exe 30`, on AC power, after the register-copy removal
+that the Linux runs prompted. `pmset` and `uptime` before and after the run are in `bench_conditions.txt`: AC attached both times,
+load average 9 to 10 from other work. The entry.c rows interleave every configuration within each round. The benchmark threads ask
+for `QOS_CLASS_USER_INTERACTIVE`. The previous run, before that change, is in `results/macos-prev/`: entry.c translated was 1.65
+times native there.
 
 | Metric | Median | p95 | Stddev |
 |---|---|---|---|
-| Translation, ns per guest instruction (linear sweep of Notepad++'s code, 1,176,498 instructions in 403,423 blocks; the time includes attempts that translate nothing and the decoding that skips them) | 365 | 460 | 59 |
-| Translation, ns per block | 1,065 | 1,341 | 172 |
-| Translate and place one block in the runtime, ns (cache write, W^X switch, icache flush, page watch) | 1,105 | 1,781 | 311 |
-| Load one block from the ahead-of-time cache, ns | 515 | 924 | 193 |
-| Whole Notepad++ image: translate, ms | 446 | 718 | 125 |
-| Whole Notepad++ image: load from cache (45 MiB file), ms | 208 | 373 | 78 |
-| entry.c, one call of 1,000 iterations, native arm64, ns | 497 | 522 | 27 |
-| entry.c, x86_64 Mach-O under Rosetta, ns | 414 | 417 | 17 |
-| entry.c translated, plain accesses (correct only with hardware TSO), ns | 814 | 827 | 39 |
-| entry.c translated, LDAPR/STLR, ns | 819 | 839 | 39 |
-| entry.c translated, DMB barriers, ns | 3,136 | 3,246 | 392 |
-| Guest calls a native function and returns (api_loop: call through the IAT, thunk, native, ret), ns | 2.27 | 2.64 | 0.14 |
-| Native code calls a guest function and returns (`Runtime::call`), ns | 14.8 | 15.1 | 0.16 |
+| Translation, ns per guest instruction (linear sweep of Notepad++'s code, 1,176,615 instructions in 403,307 blocks; the time includes attempts that translate nothing and the decoding that skips them) | 487 | 826 | 135 |
+| Translation, ns per block | 1,422 | 2,411 | 393 |
+| Translate and place one block in the runtime, ns (cache write, W^X switch, icache flush, page watch) | 1,246 | 1,956 | 712 |
+| Load one block from the ahead-of-time cache, ns | 591 | 924 | 213 |
+| Whole Notepad++ image: translate, ms | 503 | 789 | 287 |
+| Whole Notepad++ image: load from cache (44 MiB file), ms | 238 | 373 | 86 |
+| entry.c, one call of 1,000 iterations, native arm64, ns | 322 | 330 | 5 |
+| entry.c, x86_64 Mach-O under Rosetta, ns | 268 | 270 | 12 |
+| entry.c translated, plain accesses (correct only with hardware TSO), ns | 268 | 270 | 3 |
+| entry.c translated, LDAPR/STLR, ns | 371 | 376 | 5 |
+| entry.c translated, DMB barriers, ns | 1,948 | 1,953 | 17 |
+| Guest calls a native function and returns (api_loop: call through the IAT, thunk, native, ret), ns | 1.50 | 1.56 | 0.02 |
+| Native code calls a guest function and returns (`Runtime::call`), ns | 9.6 | 15.7 | 2.6 |
 
 What the numbers say:
 
-- **Steady state is 1.65 times native and 2.0 times Rosetta** on entry.c's loop. Rosetta beating the native arm64 build is itself
-  PROVEN here. Why is NOT verified: the two compilers emit different loops.
-- **Memory ordering is not the gap on this loop.** LDAPR/STLR cost under 1% over plain accesses here, because the alignment checks
-  drop out for constant addresses. The gap is code quality, INFERRED from reading the emitted code (no per-instruction profile was
-  taken):
-  - `lea` takes three instructions where one would do;
-  - the block's last compare keeps the PF and AF sources;
-  - every exit normalizes the carry.
-- **DMB barriers cost 3.8 times LDAPR/STLR.** The spike measured 1.8 to 2.0 ns per `dmb` (`spikes/results/barriers_1t.jsonl`).
-  LDAPR/STLR is the mode to use wherever the CPU has FEAT_LRCPC, as the M5 does.
-- **Hardware TSO in a VM** would take the "plain" row, under 1% faster on this loop. Real code may gain more (NOT verified):
-  Notepad++'s sweep emits 474,706 ordered accesses and 278,679 alignment checks of two instructions each, out of 8.8 million host
-  instructions.
-- **Translation emits 7.5 host instructions per guest instruction**, and the translator itself is unoptimized: it decodes the
+- **Steady state with LDAPR/STLR is 1.15 times native and 1.38 times Rosetta** on entry.c's loop.
+  - With plain accesses, which hardware TSO makes correct, the translated loop runs as fast as Rosetta's.
+  - Rosetta and the plain translation both beat the native arm64 build. Why is NOT verified: the compilers emit different loops.
+- **Memory ordering is now the visible cost on this loop.** LDAPR/STLR cost 38% over plain accesses (`entry.c` stores and reloads one
+  global every step).
+- **DMB barriers cost 5.3 times LDAPR/STLR.** LDAPR/STLR is the mode to use wherever the CPU has FEAT_LRCPC, as the M5 does.
+- **Hardware TSO in a VM** would take the "plain" row: 28% faster than LDAPR/STLR on this loop. Notepad++'s sweep emits 474,933
+  ordered accesses and 278,734 alignment checks out of 8.6 million host instructions, so real code pays the same kind of cost.
+- **Translation emits 7.3 host instructions per guest instruction**, and the translator itself is unoptimized: it decodes the
   instruction after a block twice and allocates per block (INFERRED from the code, not profiled).
 - **The ahead-of-time cache loads blocks 2.1 times faster than translating them.** Placing a block takes one W^X switch, one icache
   flush and one `mprotect`, likely the bulk of the load time (INFERRED, not profiled). Batching those per cache load is the next
   step.
-- **Crossing into native code costs 2.3 ns** per call and return, including the loop around it and the native function. The
-  register mapping is why no argument moves.
-- **Calling into the guest costs 15 ns**: the C++ dispatcher, the enter and exit trampolines, and saving 20 callee-saved registers.
+- **Crossing into native code costs 1.5 ns** per call and return, including the loop around it and the native function. The register
+  mapping is why no argument moves.
+- **Calling into the guest costs about 10 ns**: the C++ dispatcher, the enter and exit trampolines, and saving 20 callee-saved
+  registers.
 
 ## Decision
 
-Write the translator, and keep FEX as the fallback to compare against. The reasons:
+Write the translator, and keep FEX as the engine to measure against. The reasons, with the Linux arm64 comparison above:
 
 1. **FEX is a bigger porting job.** Hosting FEX's DLLs means writing an ARM64X ntdll, the ARM64EC dispatcher, Wine's unix-call ABI
    or a substitute, and keeping a FEX fork for W^X and 16 KiB pages. Our own core is about 5,000 lines with its tests today:
@@ -242,9 +334,9 @@ Write the translator, and keep FEX as the fallback to compare against. The reaso
    register mapping allows.
 3. **The core is OS-neutral C++20**, so it serves Linux ARM64 as well (roadmap item 8).
 
-FEX is better today at breadth: SSE/AVX, x87, a mature JIT and a code cache. Its numbers could not be measured here because it does
-not run without a host ntdll (NOT verified). The translator therefore keeps FEX's model (`BTCpu*`-style notifications,
-`ProcessInit`/`ThreadInit`) at its outer interface, so swapping engines stays possible.
+FEX is better today at breadth (SSE/AVX, x87, a code cache) and on compute kernels. Its first-call cost matches ours, and our
+translator is ahead on the memory-bound loop. The runtime's outer interface should follow FEX's emulator interface (`BTCpu*`-style
+notifications, `ProcessInit`/`ThreadInit`), so swapping engines stays possible. That is planned, not done.
 
 ## Register mapping
 
@@ -422,7 +514,8 @@ x87 needs a soft-float or F64-based path. It is the largest missing piece for bo
 - **Unchanged:** the decoder, the emitter, the translator, the runtime (dispatch, chaining, lookup table, thunks, invalidation, AOT
   cache), the tests' oracles for the decoder and emitter, and the `GuestMemory`/`CodeAllocator` interfaces.
 - **Per-OS:** only `platform_*.cpp`. Linux uses one memfd mapped twice, writable and executable, so no switch is needed.
-  `platform_linux.cpp` is written but not compiled here (NOT verified).
+  On a Linux arm64 runner the whole project builds and its decoder, emitter and runtime tests pass (PROVEN, run 44287829572,
+  `ours-ctest.log`).
 - **x18:** it is free on Linux, which removes the custom-ABI toggle question.
 - **TSO:** upstream Linux has no TSO switch, so `rcpc` stays the default. Apple's kernel patch adds `PR_SET_MEM_MODEL` on Apple
   hardware.
