@@ -1,11 +1,14 @@
 // Transfers of plain files go on beside the other calls of the process: two threads each write records to a file of their own, read
 // them back and ask for the file pointer and size many times, and both append records to one shared handle, whose file pointer must hand each write a place of its own. A
 // read at the end of a file still succeeds with no bytes, and a read without a count or an OVERLAPPED still fails with
-// ERROR_INVALID_PARAMETER. The exit code names the first check that failed.
+// ERROR_INVALID_PARAMETER. All of it runs several times over, so that threads end while the others' transfers are served: a transfer
+// answered beside the turn reaches the guest's memory whichever thread the turn has just switched to. The exit code names the first
+// check that failed.
 #include <windows.h>
 
 #define ROUNDS 1200
 #define RECORD 512
+#define PASSES 8
 
 static HANDLE shared;
 
@@ -75,6 +78,8 @@ static DWORD WINAPI check(void *unused)
 		return 3;
 	static BYTE seen[2][ROUNDS];
 	BYTE record[RECORD], expected[RECORD];
+	for (DWORD round = 0; round < ROUNDS; ++round)
+		seen[0][round] = seen[1][round] = 0;
 	for (DWORD index = 0; index < 2 * ROUNDS; ++index) {
 		DWORD done = 0;
 		if (!ReadFile(shared, record, RECORD, &done, NULL) || done != RECORD)
@@ -89,7 +94,7 @@ static DWORD WINAPI check(void *unused)
 	return 0;
 }
 
-int raven_entry(void)
+static int pass(void)
 {
 	shared = CreateFileW(L"beside-shared.bin", GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (shared == INVALID_HANDLE_VALUE)
@@ -109,6 +114,19 @@ int raven_entry(void)
 	DWORD code = 1;
 	if (!checker || WaitForSingleObject(checker, 60000) != WAIT_OBJECT_0 || !GetExitCodeThread(checker, &code) || code)
 		return 40 + (int)code;
+	CloseHandle(checker);
+	CloseHandle(threads[0]);
+	CloseHandle(threads[1]);
 	CloseHandle(shared);
 	return DeleteFileW(L"beside-shared.bin") ? 0 : 17;
+}
+
+int raven_entry(void)
+{
+	for (int round = 0; round < PASSES; ++round) {
+		const int outcome = pass();
+		if (outcome)
+			return outcome;
+	}
+	return 0;
 }
