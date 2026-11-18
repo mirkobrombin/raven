@@ -43,6 +43,11 @@ CodeAllocator::Data JitCodeCache::allocate_data(size_t size)
 	return {host, reinterpret_cast<uint64_t>(host)};
 }
 
+void JitCodeCache::free_data(Data freed)
+{
+	std::erase_if(data, [&](const auto &block) { return block.get() == freed.host; });
+}
+
 void JitCodeCache::reset()
 {
 	next = 0;

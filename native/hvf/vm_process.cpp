@@ -95,11 +95,29 @@ void VmCodeCache::read(const uint8_t *at, void *bytes, size_t size) const
 
 translate::CodeAllocator::Data VmCodeCache::allocate_data(size_t size)
 {
-	const size_t start = (data_next + 15) & ~size_t(15);
-	if (start + size > data_size)
-		throw std::runtime_error("the VM's runtime data is full");
-	data_next = start + size;
+	size = (size + 15) & ~size_t(15);
+	size_t start;
+	if (const auto reused = data_free.find(size); reused != data_free.end()) {
+		start = reused->second;
+		data_free.erase(reused);
+		std::memset(data_alias + start, 0, size);
+	} else {
+		if (size > data_size - data_next)
+			throw std::runtime_error("the VM's runtime data is full");
+		start = data_next;
+		data_next += size;
+	}
+	data_used[start] = size;
 	return {data_alias + start, data_base + start};
+}
+
+void VmCodeCache::free_data(Data data)
+{
+	const auto used = data_used.find(data.address - data_base);
+	if (used == data_used.end())
+		return;
+	data_free.emplace(used->second, used->first);
+	data_used.erase(used);
 }
 
 bool VmCodeCache::contains(const uint8_t *address) const

@@ -53,6 +53,8 @@ Runtime::~Runtime()
 {
 	for (const auto &[guest, block] : blocks)
 		memory.watch_code(block->guest_start, block->guest_size, false);
+	cache.free_data(lookup_memory);
+	cache.free_data(state_memory);
 }
 
 Runtime *Runtime::current()

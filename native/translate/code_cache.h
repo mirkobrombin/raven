@@ -28,6 +28,8 @@ public:
 		uint64_t address;
 	};
 	virtual Data allocate_data(size_t size) = 0;
+	// Gives back what allocate_data gave.
+	virtual void free_data(Data data) = 0;
 	virtual void reset() = 0;
 	virtual size_t used() const = 0;
 	virtual size_t capacity() const = 0;
@@ -45,6 +47,7 @@ public:
 	void write(uint8_t *at, const void *bytes, size_t size) override;
 	void read(const uint8_t *at, void *bytes, size_t size) const override;
 	Data allocate_data(size_t size) override;
+	void free_data(Data data) override;
 	void reset() override;
 	size_t used() const override { return next; }
 	size_t capacity() const override { return region.size; }

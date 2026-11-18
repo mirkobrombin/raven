@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -53,6 +54,7 @@ public:
 	void write(uint8_t *at, const void *bytes, size_t size) override;
 	void read(const uint8_t *at, void *bytes, size_t size) const override;
 	Data allocate_data(size_t size) override;
+	void free_data(Data data) override;
 	void reset() override { next = 0; }
 	size_t used() const override { return next; }
 	size_t capacity() const override { return code_size; }
@@ -68,6 +70,9 @@ private:
 	uint8_t *data_alias;
 	size_t data_size;
 	size_t data_next = 0;
+	// Offsets of the blocks in use and their sizes, and of those given back by size: a runtime asks for the same two sizes each time.
+	std::map<size_t, size_t> data_used;
+	std::multimap<size_t, size_t> data_free;
 
 	uint8_t *alias(const uint8_t *at) const;
 };
