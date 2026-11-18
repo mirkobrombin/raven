@@ -485,7 +485,8 @@ uint64_t to_narrow(F80 f, Format format, unsigned rc, uint16_t masks, Flags &fla
 	if (k == Kind::zero)
 		return is_double ? sign << 63 : sign << 31;
 	const Unpacked u = unpack(f);
-	const Rounded r = round(u.sign, u.exp, u128(u.sig) << 64, format, rc, masks | OE | UE, flags);
+	// With UE unmasked, a tiny result signals even when exact; the caller then stores nothing.
+	const Rounded r = round(u.sign, u.exp, u128(u.sig) << 64, format, rc, masks, flags);
 	return is_double ? pack64(r) : pack32(r);
 }
 
