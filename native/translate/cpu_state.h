@@ -55,6 +55,8 @@ struct CpuState {
 	uint32_t exit_reason = 0;
 	uint32_t stop_requested = 0;
 	uint64_t host_frame = 0;
+	// The code a native function stopped the guest with.
+	uint64_t stop_code = 0;
 };
 
 namespace state_offset {
