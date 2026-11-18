@@ -24,6 +24,9 @@ from pathlib import Path
 WORKLOADS = {"entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}
 # The SSE workloads (testdata/sse_workloads.c), run when named.
 SSE_WORKLOADS = {"saxpy": 60000, "dot": 10000, "copy": 40000}
+# The x87 workloads (testdata/x87_workloads.c), run when named. The native build's long double is a double: its checksum differs from
+# x86's, and only the translated configurations must agree.
+X87_WORKLOADS = {"ldot": 4000, "lpoly": 8000}
 RUNS = 6
 CONFIGURATIONS = ["native", "process-loop", "process-call", "vm-loop", "vm-call"]
 
@@ -70,7 +73,7 @@ def main():
     if len(sys.argv) > 5:
         chosen = sys.argv[5].split(",")
         WORKLOADS.clear()
-        WORKLOADS.update({name: {**SSE_WORKLOADS, "entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}[name]
+        WORKLOADS.update({name: {**SSE_WORKLOADS, **X87_WORKLOADS, "entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}[name]
                           for name in chosen})
     results.mkdir(parents=True, exist_ok=True)
     state = {"machine": subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True, text=True).stdout.strip(),
@@ -97,7 +100,8 @@ def main():
     state["end"] = machine_state(thermal)
     (results / "state.json").write_text(json.dumps(state, indent=2) + "\n")
     for workload in WORKLOADS:
-        checksums = {configuration: set(series[(workload, configuration, "checksum")]) for configuration in CONFIGURATIONS}
+        checksums = {configuration: set(series[(workload, configuration, "checksum")]) for configuration in CONFIGURATIONS
+                     if not (workload in X87_WORKLOADS and configuration == "native")}
         if len(set().union(*checksums.values())) != 1:
             raise RuntimeError(f"{workload}: the engines disagree on the checksum: {checksums}")
     with (results / "summary.csv").open("w", newline="") as out:

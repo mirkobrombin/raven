@@ -1,6 +1,9 @@
 #include "runtime.h"
 #include "x87_check.h"
 
+#include <array>
+#include <chrono>
+#include <map>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -40,12 +43,81 @@ public:
 
 }
 
+// The measurements of docs/macos/x87.md, not tests: --doubles runs every case once with add, sub, mul, div and sqrt done in doubles
+// (option b) and counts the failures by family and by precision control; --core-time times the core alone on the single-instruction
+// arithmetic cases, exact and in doubles.
+static int measure(std::vector<x87_oracle::Case> &cases, const std::string &what)
+{
+	if (what == "--core-time") {
+		for (const bool doubles : {false, true}) {
+			x87_double_arithmetic = doubles;
+			Snippets memory;
+			CpuState state;
+			size_t instructions = 0;
+			const auto start = std::chrono::steady_clock::now();
+			for (const x87_oracle::Case &item : cases) {
+				const Instruction instruction = decode(item.code, 0);
+				if (item.family != "arithmetic" || instruction.length + 1u != item.code.size() || !x87_supported(instruction) ||
+					instruction.operands[0].kind == OperandKind::mem)
+					continue;
+				for (int i = 0; i < 2000; ++i) {
+					x87_oracle::load(state, item.input);
+					x87_execute(state, memory, instruction, instruction.length);
+				}
+				instructions += 2000;
+			}
+			const double ns = double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+			std::printf("core, %s: %zu instructions, %.1f ns each (the state reload included)\n", doubles ? "doubles" : "exact",
+				instructions, ns / double(instructions));
+		}
+		x87_double_arithmetic = false;
+		return 0;
+	}
+	x87_double_arithmetic = true;
+	Snippets memory;
+	JitCodeCache cache(64 << 20);
+	Runtime runtime(memory, cache, TranslatorOptions{});
+	std::vector<uint8_t> stack(1 << 16);
+	alignas(16) uint8_t buffer[256];
+	// Cases, those that differ, and those that differ in a value (a register or memory) rather than in the status word alone.
+	std::map<std::string, std::array<size_t, 3>> by_precision;
+	x87_oracle::Report report;
+	for (const x87_oracle::Case &item : cases) {
+		if (!x87_oracle::runs(item))
+			continue;
+		const uint64_t address = memory.add(item.code);
+		CpuState &state = runtime.state();
+		x87_oracle::load(state, item.input);
+		std::memcpy(buffer, item.input.buffer, sizeof buffer);
+		state.gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
+		state.gpr[r15] = reinterpret_cast<uint64_t>(buffer);
+		const RunResult result = runtime.call(address);
+		const std::string problem = item.output.signal || result.reason != ExitReason::returned ? std::string() :
+			x87_oracle::compare(item, state, buffer);
+		report.add(item, problem);
+		// The same with the status word taken as x86's: what differs in a register, memory or EFLAGS.
+		CpuState values = state;
+		values.x87.fsw = x87_oracle::word(item.output.fx + 2);
+		const bool value_differs = !problem.empty() && !x87_oracle::compare(item, values, buffer).empty();
+		static const char *const precisions[] = {"PC 24", "PC reserved", "PC 53", "PC 64"};
+		auto &counts = by_precision[item.family + ", " + precisions[x87_oracle::word(item.input.fx) >> 8 & 3]];
+		++counts[0];
+		counts[1] += !problem.empty();
+		counts[2] += value_differs;
+	}
+	x87_double_arithmetic = false;
+	report.print("doubles");
+	for (const auto &[key, counts] : by_precision)
+		std::printf("doubles, %s: %zu cases, %zu differ from x86, %zu in a value\n", key.c_str(), counts[0], counts[1], counts[2]);
+	return 0;
+}
+
 // Every case runs under the translator in this process and, through x87_oracle, on an x86-64 CPU or Rosetta; both must leave the same
 // registers, flags, x87 state and memory.
 int main(int argc, char **argv)
 {
-	if (argc != 3) {
-		std::fprintf(stderr, "usage: x87_test ORACLE_RESULTS SILICON_RESULTS\n");
+	if (argc != 3 && argc != 4) {
+		std::fprintf(stderr, "usage: x87_test ORACLE_RESULTS SILICON_RESULTS [--doubles|--core-time]\n");
 		return 2;
 	}
 	std::vector<x87_oracle::Case> cases = x87_oracle::read_cases(argv[1]);
@@ -57,6 +129,8 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "%s does not match the cases in %s\n", argv[2], argv[1]);
 		return 2;
 	}
+	if (argc == 4)
+		return measure(cases, argv[3]);
 	// Both orderings this process can run.
 	size_t failures = 0, run = 0;
 	for (const MemoryOrdering ordering : {MemoryOrdering::rcpc, MemoryOrdering::barriers}) {
