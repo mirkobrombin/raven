@@ -3602,8 +3602,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_answered_stop_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         endforeach()
         set_property(TEST native_answered_stop_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        # Only the client's own profile, printed after its entry returns, counts: the programs that make the prefix print theirs first.
         set_property(TEST native_answered_stop_parallel PROPERTY FAIL_REGULAR_EXPRESSION
-            "\\(turn\\) resume after an answer calls=[0-9][0-9]")
+            "Native entry returned 0 [^~]*\\(turn\\) resume after an answer calls=[0-9][0-9]")
         # A mutex its owner ends holding is abandoned to the next wait, and a pulse releases the wait there is (abandoned_mutex_client.c).
         raven_kernel_fixture(abandoned-mutex abandoned_mutex_client.c 0x1e5000000 "-lkernel32")
         foreach(mode default parallel table)
