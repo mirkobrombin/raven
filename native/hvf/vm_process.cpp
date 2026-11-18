@@ -48,10 +48,8 @@ bool VmProcess::code_write(uint64_t address)
 		attached->code_written(address);
 	if (after_code_written)
 		after_code_written(address);
-	// Every translation of the page is gone; make sure the store can go through, even if a translation of another runtime held it.
-	std::lock_guard guard(lock);
-	if (watched.erase(page))
-		vm.protect(page, true);
+	// code_written unwatched the page through watch_code. If a vCPU translated it again meanwhile, it is watched again and the retried
+	// store faults again, dropping that translation too: making the page writable here would let the store miss it.
 	return true;
 }
 
