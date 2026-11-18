@@ -39,6 +39,8 @@ constexpr uint8_t state_register = 23;
 constexpr uint8_t parity_register = 13;
 constexpr uint8_t adjust_register = 14;
 constexpr uint8_t s0 = 9, s1 = 10, s2 = 11, s3 = 12, s4 = 15, address_register = 16, s5 = 17;
+// Holds the last RIP-relative address the block computed, so a loop over one global computes it once.
+constexpr uint8_t constant_register = 7;
 
 constexpr uint32_t CF = 1, PF = 4, AF = 16, ZF = 64, SF = 128, OF = 2048;
 constexpr uint32_t all_flags = CF | PF | AF | ZF | SF | OF;
@@ -128,7 +130,8 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
-		return size >= 4 || instruction.operands[1].kind == OperandKind::imm;
+		// Narrow shifts only by a count inside their width: beyond it CF is undefined and the result needs its own code.
+		return size >= 4 || (instruction.operands[1].kind == OperandKind::imm && shift_count(instruction) < size * 8u);
 	default: return false;
 	}
 }
@@ -161,6 +164,11 @@ private:
 	const Instruction *current = nullptr;
 	uint64_t next_address = 0;
 	uint32_t live_after = all_flags;
+	bool constant_valid = false;
+	uint64_t constant_value = 0;
+	// Set by address(): the access goes to a constant address, whose alignment the translator knows.
+	bool constant_address = false;
+	uint64_t constant_address_value = 0;
 
 	struct PendingExit {
 		Assembler::Label stub;
@@ -228,9 +236,17 @@ Address BlockTranslator::address(const Operand &memory, bool plain_base)
 	const bool truncate = current->address_size == 4;
 	uint8_t base = a64::zr;
 	int64_t offset = memory.value;
+	constant_address = false;
 	if (memory.rip_relative) {
-		a.mov_imm(address_register, next_address + static_cast<uint64_t>(memory.value));
-		base = address_register;
+		const uint64_t value = next_address + static_cast<uint64_t>(memory.value);
+		if (!constant_valid || constant_value != value) {
+			a.mov_imm(constant_register, value);
+			constant_valid = true;
+			constant_value = value;
+		}
+		constant_address = !truncate && memory.index == no_register && memory.segment == Segment::none;
+		constant_address_value = value;
+		base = constant_register;
 		offset = 0;
 	} else if (memory.base != no_register)
 		base = host_register[memory.base];
@@ -319,7 +335,8 @@ void BlockTranslator::store_memory(uint8_t source, const Operand &memory, unsign
 
 void BlockTranslator::ordered_access(uint8_t reg, uint8_t base, unsigned size, bool store)
 {
-	if (size > 1) {
+	const bool check = size > 1 && !(constant_address && base == constant_register && constant_address_value % size == 0);
+	if (check) {
 		// An address that is not a multiple of the size takes the out-of-line path: a plain access and a barrier. The test leaves
 		// NZCV alone.
 		Unaligned path{a.label(), a.label(), reg, base, size, store};
@@ -335,7 +352,7 @@ void BlockTranslator::ordered_access(uint8_t reg, uint8_t base, unsigned size, b
 		a.ldapr(reg, base, size);
 		++stats.ordered_loads;
 	}
-	if (size > 1)
+	if (check)
 		a.bind(unaligned.back().back);
 }
 
