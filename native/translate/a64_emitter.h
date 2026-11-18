@@ -32,6 +32,10 @@ constexpr uint32_t movi_zero_2d = 0x6f00e400;
 constexpr uint32_t sz = 0x00400000;
 constexpr uint32_t fadd_4s = 0x4e20d400, fsub_4s = 0x4ea0d400, fmul_4s = 0x6e20dc00, fdiv_4s = 0x6e20fc00, fmax_4s = 0x4e20f400,
 	fmin_4s = 0x4ea0f400, fsqrt_4s = 0x6ea1f800;
+constexpr uint32_t fcmeq_4s = 0x4e20e400, fcmge_4s = 0x6e20e400, fcmgt_4s = 0x6ea0e400, not_16b = 0x6e205800;
+constexpr uint32_t fcmeq_s = 0x5e20e400, fcmge_s = 0x7e20e400, fcmgt_s = 0x7ea0e400;
+// fcmp and, with signal_any (or in), fcmpe of Rn with Rm, Rd zero.
+constexpr uint32_t fcmp_s = 0x1e202000, signal_any = 0x10;
 constexpr uint32_t fadd_s = 0x1e202800, fsub_s = 0x1e203800, fmul_s = 0x1e200800, fdiv_s = 0x1e201800, fmax_s = 0x1e204800,
 	fmin_s = 0x1e205800, fsqrt_s = 0x1e21c000;
 // For Assembler::shift_imm.

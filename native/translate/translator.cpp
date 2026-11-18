@@ -44,7 +44,7 @@ constexpr uint8_t s0 = 9, s1 = 10, s2 = 11, s3 = 12, s4 = 15, address_register =
 // Holds the last RIP-relative address the block computed, so a loop over one global computes it once.
 constexpr uint8_t constant_register = 7;
 // XMMn is vn; v16-v31 are scratch.
-constexpr uint8_t vs0 = 16, vs1 = 17;
+constexpr uint8_t vs0 = 16, vs1 = 17, vs2 = 18;
 
 constexpr uint32_t CF = 1, PF = 4, AF = 16, ZF = 64, SF = 128, OF = 2048;
 constexpr uint32_t all_flags = CF | PF | AF | ZF | SF | OF;
@@ -88,6 +88,7 @@ FlagEffect flag_effect(const Instruction &instruction)
 		// A count of zero leaves every flag as it was.
 		return {0, all_flags};
 	case Mnemonic::jcc: case Mnemonic::setcc: case Mnemonic::cmovcc: return {0, condition_flags(instruction.condition)};
+	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: return {all_flags, 0};
 	default: return {};
 	}
 }
@@ -135,7 +136,9 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::mulss: case Mnemonic::mulsd: case Mnemonic::divps: case Mnemonic::divpd: case Mnemonic::divss: case Mnemonic::divsd:
 	case Mnemonic::sqrtps: case Mnemonic::sqrtpd: case Mnemonic::sqrtss: case Mnemonic::sqrtsd: case Mnemonic::minps:
 	case Mnemonic::minpd: case Mnemonic::minss: case Mnemonic::minsd: case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss:
-	case Mnemonic::maxsd: case Mnemonic::ldmxcsr: case Mnemonic::stmxcsr:
+	case Mnemonic::maxsd: case Mnemonic::ldmxcsr: case Mnemonic::stmxcsr: case Mnemonic::cmpps: case Mnemonic::cmppd:
+	case Mnemonic::cmpss: case Mnemonic::cmpsd: case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss:
+	case Mnemonic::ucomisd:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -296,6 +299,8 @@ private:
 	void sse_mask(const Instruction &instruction);
 	void sse_logic(const Instruction &instruction);
 	void sse_arithmetic(const Instruction &instruction);
+	void sse_compare(const Instruction &instruction);
+	void sse_ordered_compare(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -1181,6 +1186,69 @@ void BlockTranslator::sse_arithmetic(const Instruction &instruction)
 	throw std::logic_error("not an SSE arithmetic instruction");
 }
 
+void BlockTranslator::sse_compare(const Instruction &instruction)
+{
+	// cmpps, cmppd, cmpss and cmpsd: all ones where the predicate holds. lt, le, nlt and nle signal on a quiet NaN as fcmgt and fcmge do;
+	// eq, neq, unord and ord only on a signaling one, as fcmeq.
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const bool doubles = mnemonic == Mnemonic::cmppd || mnemonic == Mnemonic::cmpsd;
+	const bool scalar = mnemonic == Mnemonic::cmpss || mnemonic == Mnemonic::cmpsd;
+	const uint32_t sz = doubles ? simd::sz : 0;
+	const uint32_t eq = (scalar ? simd::fcmeq_s : simd::fcmeq_4s) | sz, ge = (scalar ? simd::fcmge_s : simd::fcmge_4s) | sz,
+		gt = (scalar ? simd::fcmgt_s : simd::fcmgt_4s) | sz;
+	const uint8_t target = instruction.operands[0].reg;
+	const uint8_t source = vector_source(instruction.operands[1], vs0);
+	const unsigned predicate = static_cast<unsigned>(instruction.operands[2].value) & 7;
+	switch (predicate & 3) {
+	case 0: a.simd(eq, vs1, target, source); break;
+	case 1: a.simd(gt, vs1, source, target); break;
+	case 2: a.simd(ge, vs1, source, target); break;
+	default:
+		// ord: both are numbers; unord: not.
+		a.simd(eq, vs1, target, target);
+		a.simd(eq, vs2, source, source);
+		a.simd(simd::and_16b, vs1, vs1, vs2);
+		if (predicate == 3)
+			a.simd(simd::not_16b, vs1, vs1);
+		break;
+	}
+	// Predicates 4 to 6 are the negations of 0 to 2.
+	if (predicate >= 4 && predicate <= 6)
+		a.simd(simd::not_16b, vs1, vs1);
+	if (scalar)
+		a.ins(target, 0, vs1, 0, doubles ? 8 : 4);
+	else
+		a.simd(simd::orr_16b, target, vs1, vs1);
+}
+
+void BlockTranslator::sse_ordered_compare(const Instruction &instruction)
+{
+	// comis and ucomis: ZF, PF and CF are 111 unordered, 000 greater, 001 less, 100 equal; OF, SF and AF are cleared. fcmp leaves
+	// unordered as V, so ZF is EQ or VS and CF is LT (N != V, which unordered also satisfies). comis signals on a quiet NaN, as fcmpe.
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const bool doubles = mnemonic == Mnemonic::comisd || mnemonic == Mnemonic::ucomisd;
+	const bool signaling = mnemonic == Mnemonic::comiss || mnemonic == Mnemonic::comisd;
+	const uint8_t target = instruction.operands[0].reg;
+	const uint8_t source = vector_source(instruction.operands[1], vs0);
+	a.simd(simd::fcmp_s | (doubles ? simd::sz : 0) | (signaling ? simd::signal_any : 0), 0, target, source);
+	if (!flags_wanted(all_flags))
+		return;
+	a.cset(s0, Cond::vs);
+	a.cset(s1, Cond::eq);
+	a.orr(s1, s1, s0, Shift::lsl, 0, false);
+	// C holds the inverse of CF, the form block boundaries keep.
+	a.cset(s2, Cond::ge);
+	a.lsl_imm(s1, s1, 30, false);
+	a.orr(s1, s1, s2, Shift::lsl, 29, false);
+	a.msr_nzcv(s1);
+	carry_inverted = true;
+	if (flags_wanted(PF | AF)) {
+		// An even low byte (0) when unordered, an odd one otherwise; the same value for AF's source leaves AF clear.
+		a.eor_imm(parity_register, s0, 1, false);
+		a.mov(adjust_register, parity_register);
+	}
+}
+
 void BlockTranslator::exit_with(ExitReason reason, uint64_t rip)
 {
 	a.mov_imm(s4, rip);
@@ -1273,6 +1341,8 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss: case Mnemonic::maxsd:
 		sse_arithmetic(instruction);
 		return;
+	case Mnemonic::cmpps: case Mnemonic::cmppd: case Mnemonic::cmpss: case Mnemonic::cmpsd: sse_compare(instruction); return;
+	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: sse_ordered_compare(instruction); return;
 	case Mnemonic::ldmxcsr:
 		// The whole value is MXCSR; FPCR and FPSR follow it.
 		load_memory(s0, operands[0], 4);
