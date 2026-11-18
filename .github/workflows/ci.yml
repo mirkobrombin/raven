@@ -101,7 +101,8 @@ jobs:
           echo "${#shells[@]} shell scripts parsed"
 
   # The waits on kernel objects: native/model/Waits.tla, Address.tla, Completion.tla and Messages.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
-  # which tries every interleaving of its cases. The PE reader in native/peparse runs its tests too, which change a file at random and read it again.
+  # which tries every interleaving of its cases. The PE reader in native/peparse runs its tests too, which change a file at random and read it again,
+  # and the cabinet decoders, the image decoders and the compound file reader are fed changed input under the sanitizers.
   models:
     name: Models
     needs: [commits, files, licenses, scripts]
@@ -158,6 +159,12 @@ jobs:
 
       - name: Change the image decoders at random
         run: python3 native/fuzz/image_decoders.py --rounds 40000
+
+      - name: Change compound files at random
+        run: |
+          gcc -O1 -g -fshort-wchar -fsanitize=address,undefined -fno-sanitize-recover=all -Inative/fuzz/storage -Inative/guest/raven-storage \
+            -o /tmp/storage-container native/fuzz/storage_container.c native/guest/raven-storage/container.c
+          /tmp/storage-container 40000
 
   # Provision: the pinned external inputs, each in its own job because they share nothing and some take long. A component is
   # rebuilt only when its recipe or its sources change.

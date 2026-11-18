@@ -11,4 +11,7 @@ An open file is a tree of elements that each carry their whole sector chain as a
 allocation tables are read to fill those arrays and written anew at every flush, and a
 transaction keeps a copy of the tree while sectors it can still see are copied on write.
 
+`native/fuzz/storage_container.c` builds the reader on the host and feeds it changed files
+under the address and undefined behaviour sanitizers; the CI runs it on every change.
+
 `exports.txt` lists what the component exports. See [LICENSES.md](../../../LICENSES.md).
