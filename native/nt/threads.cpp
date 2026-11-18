@@ -867,13 +867,10 @@ static uint64_t thread_run_time(pid_t host, pid_t task)
 	return total;
 }
 
-// Whether a host thread of this process stands ready for a processor, or runs: woken, it has not yet had its turn only for want of one.
-static bool runnable(pid_t host)
+// Whether the task of a stat file stands ready for a processor, or runs.
+static bool runnable_at(const char *path)
 {
-	if (host <= 0)
-		return false;
-	char path[64], text[256];
-	std::snprintf(path, sizeof path, "/proc/self/task/%d/stat", int(host));
+	char text[256];
 	const int file = ::open(path, O_RDONLY | O_CLOEXEC);
 	if (file < 0)
 		return false;
@@ -884,6 +881,24 @@ static bool runnable(pid_t host)
 	text[length] = 0;
 	const char *state = std::strrchr(text, ')');
 	return state && state[1] == ' ' && state[2] == 'R';
+}
+
+// Whether a woken thread has not yet had its turn only for want of a processor: its host thread, or its guest task, which a wait
+// outside the runtime wakes by itself while the host thread sleeps, stands ready or runs.
+static bool runnable(pid_t host, pid_t task)
+{
+	char path[64];
+	if (host > 0) {
+		std::snprintf(path, sizeof path, "/proc/self/task/%d/stat", int(host));
+		if (runnable_at(path))
+			return true;
+	}
+	if (task > 0) {
+		std::snprintf(path, sizeof path, "/proc/%d/stat", int(task));
+		if (runnable_at(path))
+			return true;
+	}
+	return false;
 }
 
 bool NativeThreads::hand_over_to(uint32_t object)
@@ -955,7 +970,7 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		}
 		// None came yet: the set woke none of them, unless one stands woken and waits for a processor.
 		const bool none = !any && now - started >= std::chrono::microseconds(300) &&
-			std::none_of(waiting.begin(), waiting.end(), [](const Woken &woken) { return runnable(woken.thread->host_tid); });
+			std::none_of(waiting.begin(), waiting.end(), [](const Woken &woken) { return runnable(woken.thread->host_tid, woken.thread->snapshot.task); });
 		if ((any && settled) || none || now - started >= std::chrono::milliseconds(100))
 			break;
 		const timespec nap{0, 100000};
