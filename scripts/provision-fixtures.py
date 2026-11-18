@@ -3,15 +3,14 @@
 
 import argparse
 import atexit
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import time
-import urllib.request
 import zipfile
+
+import downloads
 
 
 DOWNLOADS = (
@@ -26,43 +25,11 @@ DOWNLOADS = (
 )
 
 
-def download(urls, path):
-    # Download servers answer with a gateway error or stall now and then; a few spaced attempts ride it out, then the next address is tried.
-    # A missing file does not come back.
-    urls = (urls,) if isinstance(urls, str) else urls
-    for index, url in enumerate(urls):
-        for attempt in range(4):
-            try:
-                request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
-                with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as file:
-                    shutil.copyfileobj(response, file)
-                return
-            except OSError as error:
-                if isinstance(error, urllib.error.HTTPError) and error.code < 500:
-                    raise
-                if attempt == 3:
-                    if index == len(urls) - 1:
-                        raise
-                    break
-                time.sleep(15 * (attempt + 1))
-
-
 def fetch(output):
     cache = output / "downloads"
     cache.mkdir(parents=True, exist_ok=True)
     for name, url, checksum, destination in DOWNLOADS:
-        archive = cache / name
-        if not archive.exists():
-            temporary = archive.with_suffix(archive.suffix + ".part")
-            try:
-                download(url, temporary)
-                if hashlib.sha256(temporary.read_bytes()).hexdigest() != checksum:
-                    raise RuntimeError("fixture checksum differs: " + name)
-                temporary.replace(archive)
-            finally:
-                temporary.unlink(missing_ok=True)
-        if hashlib.sha256(archive.read_bytes()).hexdigest() != checksum:
-            raise RuntimeError("fixture checksum differs: " + name)
+        archive = downloads.fetch(url, cache / name, checksum, "fixture " + name)
         if destination is None:
             shutil.copyfile(archive, output / name)
             (output / name).chmod(0o755)

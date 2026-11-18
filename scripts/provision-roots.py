@@ -8,10 +8,10 @@ usage: provision-roots.py --output DIRECTORY
 """
 
 import argparse
-import hashlib
 import re
 from pathlib import Path
-import urllib.request
+
+import downloads
 
 # The certificates, where Microsoft publishes each and the SHA-256 of its DER bytes, from the table the runtime downloads them by.
 TABLE = Path(__file__).resolve().parent.parent / "native/nt/code_signing_roots.inc"
@@ -24,13 +24,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     for name, url, digest in ROOTS:
-        target = args.output / name
-        if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
-            with urllib.request.urlopen(url) as response:
-                data = response.read()
-            if hashlib.sha256(data).hexdigest() != digest:
-                raise RuntimeError(f"{name} differs from the pinned certificate")
-            target.write_bytes(data)
+        downloads.fetch(url, args.output / name, digest, f"certificate {name}", replace=True)
     print(f"roots in {args.output}")
 
 

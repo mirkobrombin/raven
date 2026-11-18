@@ -5,48 +5,18 @@ Only the C headers that define the WebView2 interfaces and the package's license
 loader and managed assemblies are left out."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import shutil
-import urllib.request
 import zipfile
 
-
-def digest(path):
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def fetch(package, archive):
-    if archive.exists():
-        return
-    partial = archive.with_suffix(archive.suffix + ".partial")
-    created = False
-    try:
-        with partial.open("xb") as output:
-            created = True
-            received = 0
-            with urllib.request.urlopen(package["url"], timeout=45) as response:
-                while chunk := response.read(1024 * 1024):
-                    received += len(chunk)
-                    if received > package["size"]:
-                        raise RuntimeError("package exceeds pinned size")
-                    output.write(chunk)
-        if digest(partial) != package["sha256"]:
-            raise RuntimeError("package checksum mismatch")
-        partial.rename(archive)
-    finally:
-        if created:
-            partial.unlink(missing_ok=True)
+import downloads
 
 
 def provision(destination, package):
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / package["archive"]
-    fetch(package, archive)
-    if digest(archive) != package["sha256"]:
-        raise RuntimeError("cached package checksum mismatch")
+    downloads.fetch(package["url"], archive, package["sha256"], "WebView2 SDK package", size=package["size"])
     output = destination / "webview2"
     if output.exists():
         shutil.rmtree(output)

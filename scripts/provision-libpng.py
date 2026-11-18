@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import atexit
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tarfile
 import tempfile
-import urllib.request
+
+import downloads
 
 
 URL = "https://download.sourceforge.net/libpng/libpng-1.6.59.tar.xz"
@@ -27,10 +27,7 @@ def main():
     atexit.register(shutil.rmtree, scratch, True)
     env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     archive = output / "libpng.tar.xz"
-    if not archive.exists():
-        urllib.request.urlretrieve(URL, archive)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != SHA256:
-        raise RuntimeError("libpng archive checksum differs")
+    downloads.fetch(URL, archive, SHA256, "libpng archive")
     with tarfile.open(archive) as source:
         source.extractall(output, filter="data")
     build = output / "build"

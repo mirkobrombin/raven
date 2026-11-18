@@ -82,6 +82,9 @@ jobs:
       - name: Compile Python tools
         run: python3 -m py_compile scripts/*.py .github/scripts/*.py
 
+      - name: Test the downloads of pinned files
+        run: python3 scripts/test_downloads.py
+
       - name: Parse shell tools
         shell: bash
         run: |

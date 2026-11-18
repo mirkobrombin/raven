@@ -8,8 +8,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import urllib.request
 import zipfile
+
+import downloads
 
 
 # The SQLite release winsqlite3.dll is built from: the amalgamation, public domain. sqlite.org publishes SHA3-256 hashes.
@@ -37,10 +38,7 @@ def main():
     atexit.register(shutil.rmtree, scratch, True)
     env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     archive = args.archive.resolve() if args.archive else output / f"sqlite-amalgamation-{VERSION}.zip"
-    if not archive.exists():
-        urllib.request.urlretrieve(URL, archive)
-    if hashlib.sha3_256(archive.read_bytes()).hexdigest() != SHA3_256:
-        raise RuntimeError("SQLite amalgamation checksum differs")
+    downloads.fetch(URL, archive, SHA3_256, "SQLite amalgamation", algorithm="sha3_256")
     source = output / "source"
     shutil.rmtree(source, ignore_errors=True)
     source.mkdir()

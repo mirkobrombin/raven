@@ -8,7 +8,8 @@ import subprocess
 import sys
 import tarfile
 import time
-import urllib.request
+
+import downloads
 
 
 FONT_PACKAGE = "http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-liberation/fonts-liberation_2.1.5-3build1_all.deb"
@@ -79,38 +80,12 @@ def ar_member(archive, prefix):
     raise RuntimeError(f"the font package has no {prefix} member")
 
 
-def download(urls, path):
-    # Download servers answer with a gateway error or stall now and then; a few spaced attempts ride it out, then the next address is tried.
-    # A missing file does not come back.
-    urls = (urls,) if isinstance(urls, str) else urls
-    for index, url in enumerate(urls):
-        for attempt in range(4):
-            try:
-                request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
-                with urllib.request.urlopen(request, timeout=120) as response, open(path, "wb") as file:
-                    shutil.copyfileobj(response, file)
-                return
-            except OSError as error:
-                if isinstance(error, urllib.error.HTTPError) and error.code < 500:
-                    raise
-                if attempt == 3:
-                    if index == len(urls) - 1:
-                        raise
-                    break
-                time.sleep(15 * (attempt + 1))
-
-
 def provision_fonts(output):
     fonts = output / "fonts"
     fonts.mkdir(exist_ok=True)
     package = output / "fonts-liberation.deb"
-    if not package.exists():
-        partial = package.with_suffix(".part")
-        download(FONT_PACKAGE, partial)
-        partial.replace(package)
+    downloads.fetch(FONT_PACKAGE, package, FONT_PACKAGE_SHA256, "font package")
     data = package.read_bytes()
-    if hashlib.sha256(data).hexdigest() != FONT_PACKAGE_SHA256:
-        raise RuntimeError("font package checksum differs; delete it to download it again")
     name, payload = ar_member(data, "data.tar")
     tarball = output / name
     tarball.write_bytes(payload)
@@ -159,13 +134,7 @@ def dialog_face(source, target, style, ratio):
 
 
 def provision_dialog_faces(output, fonts):
-    archive = output / "dejavu-fonts-ttf-2.37.tar.bz2"
-    if not archive.exists():
-        partial = archive.with_suffix(".part")
-        download(DEJAVU_RELEASE, partial)
-        partial.replace(archive)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != DEJAVU_RELEASE_SHA256:
-        raise RuntimeError("DejaVu release checksum differs; delete it to download it again")
+    archive = downloads.fetch(DEJAVU_RELEASE, output / "dejavu-fonts-ttf-2.37.tar.bz2", DEJAVU_RELEASE_SHA256, "DejaVu release")
     source = output / "dejavu"
     source.mkdir(exist_ok=True)
     # Python reads the bzip2 archive itself, so the host needs no bzip2 program.

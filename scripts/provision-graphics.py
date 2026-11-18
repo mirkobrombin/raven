@@ -9,34 +9,11 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import urllib.request
+
+import downloads
 
 # The files that carry a project's license terms, which a release keeps with the libraries built from it.
 NOTICES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "AUTHORS", "COPYRIGHT")
-
-
-def digest(path):
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def fetch(url, target, size=None):
-    partial = target.with_suffix(target.suffix + ".partial")
-    created = False
-    try:
-        with partial.open("xb") as output:
-            created = True
-            received = 0
-            with urllib.request.urlopen(url, timeout=45) as response:
-                while chunk := response.read(1024 * 1024):
-                    received += len(chunk)
-                    if size is not None and received > size:
-                        raise RuntimeError(f"download exceeds its pinned size: {url}")
-                    output.write(chunk)
-        partial.rename(target)
-    finally:
-        if created:
-            partial.unlink(missing_ok=True)
 
 
 def pack(tree, root, archive):
@@ -71,10 +48,7 @@ def source_material(destination, component, package):
     archive = destination / f'{component}-{package["version"]}-source.tar.gz'
     notices = destination / "licenses" / component
     if "url" in pinned:
-        if not archive.exists():
-            fetch(pinned["url"], archive)
-        if digest(archive) != pinned["sha256"]:
-            raise RuntimeError(f"source archive checksum mismatch: {component}")
+        downloads.fetch(pinned["url"], archive, pinned["sha256"], f"source archive of {component}")
     elif not archive.exists():
         work = Path(tempfile.mkdtemp(prefix=".tmp-", dir=destination))
         try:
@@ -99,7 +73,7 @@ def source_material(destination, component, package):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with source.extractfile(member) as data:
                         target.write_bytes(data.read())
-    return {"component": component, "version": package["version"], "archive": archive.name, "sha256": digest(archive),
+    return {"component": component, "version": package["version"], "archive": archive.name, "sha256": downloads.digest(archive),
             **pinned}
 
 
@@ -107,28 +81,8 @@ def provision(destination, manifest):
     destination.mkdir(parents=True, exist_ok=True)
     installed = []
     for component, package in manifest.items():
-        archive = destination / package["archive"]
-        if not archive.exists():
-            partial = archive.with_suffix(archive.suffix + ".partial")
-            created = False
-            try:
-                with partial.open("xb") as output:
-                    created = True
-                    received = 0
-                    with urllib.request.urlopen(package["url"], timeout=45) as response:
-                        while chunk := response.read(1024 * 1024):
-                            received += len(chunk)
-                            if received > package["size"]:
-                                raise RuntimeError(f"archive exceeds pinned size: {component}")
-                            output.write(chunk)
-                if digest(partial) != package["sha256"]:
-                    raise RuntimeError(f"archive checksum mismatch: {component}")
-                partial.rename(archive)
-            finally:
-                if created:
-                    partial.unlink(missing_ok=True)
-        if digest(archive) != package["sha256"]:
-            raise RuntimeError(f"cached archive checksum mismatch: {component}")
+        archive = downloads.fetch(package["url"], destination / package["archive"], package["sha256"], f"archive of {component}",
+                                  size=package["size"])
 
         expected = {
             f'{package["archive_root"]}/{folder}/{dll}': (architecture, dll)
@@ -154,7 +108,7 @@ def provision(destination, manifest):
                 target = destination / component / architecture / dll
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists():
-                    if digest(target) != actual:
+                    if downloads.digest(target) != actual:
                         raise RuntimeError(f"cached DLL differs: {target}")
                 else:
                     with target.open("xb") as output:

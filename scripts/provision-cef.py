@@ -6,40 +6,12 @@ headers and the license texts. The distribution's Direct3D shader compiler and V
 component, the second would hide Raven's own Vulkan bridge."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
-import urllib.request
 
-
-def digest(path):
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def fetch(package, archive):
-    if archive.exists():
-        return
-    partial = archive.with_suffix(archive.suffix + ".partial")
-    created = False
-    try:
-        with partial.open("xb") as output:
-            created = True
-            received = 0
-            with urllib.request.urlopen(package["url"], timeout=45) as response:
-                while chunk := response.read(1024 * 1024):
-                    received += len(chunk)
-                    if received > package["size"]:
-                        raise RuntimeError("archive exceeds pinned size")
-                    output.write(chunk)
-        if digest(partial) != package["sha256"]:
-            raise RuntimeError("archive checksum mismatch")
-        partial.rename(archive)
-    finally:
-        if created:
-            partial.unlink(missing_ok=True)
+import downloads
 
 
 def wanted(name, package):
@@ -61,9 +33,7 @@ def wanted(name, package):
 def provision(destination, package):
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / package["archive"]
-    fetch(package, archive)
-    if digest(archive) != package["sha256"]:
-        raise RuntimeError("cached archive checksum mismatch")
+    downloads.fetch(package["url"], archive, package["sha256"], "CEF archive", size=package["size"])
     output = destination / "cef"
     if output.exists():
         shutil.rmtree(output)

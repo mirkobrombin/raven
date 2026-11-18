@@ -7,14 +7,14 @@ for another OpenSSL. Trust comes from the runtime's own roots (trust_anchors), n
 """
 import argparse
 import atexit
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tarfile
 import tempfile
-import urllib.request
+
+import downloads
 
 
 VERSION = "3.5.9"
@@ -34,10 +34,7 @@ def main():
     atexit.register(shutil.rmtree, scratch, True)
     env = dict(os.environ, TMPDIR=scratch, TMP=scratch, TEMP=scratch)
     archive = output / f"openssl-{VERSION}-source.tar.gz"
-    if not archive.exists():
-        urllib.request.urlretrieve(URL, archive)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != SHA256:
-        raise RuntimeError("OpenSSL archive checksum differs")
+    downloads.fetch(URL, archive, SHA256, "OpenSSL archive")
     with tarfile.open(archive) as source:
         source.extractall(scratch, filter="data")
     tree = Path(scratch) / f"openssl-{VERSION}"

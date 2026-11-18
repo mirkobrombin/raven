@@ -8,13 +8,13 @@ newer libstdc++ than the oldest supported systems have, so only its headers are 
 """
 import argparse
 import atexit
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import tarfile
 import tempfile
-import urllib.request
+
+import downloads
 
 
 RELEASE = "20261104"
@@ -36,9 +36,7 @@ def main():
     scratch = tempfile.mkdtemp(prefix=".tmp-", dir=output)
     atexit.register(shutil.rmtree, scratch, True)
     archive = Path(scratch) / f"{ARCHIVE}.tar.xz"
-    urllib.request.urlretrieve(URL, archive)
-    if hashlib.sha256(archive.read_bytes()).hexdigest() != SHA256:
-        raise RuntimeError("llvm-mingw archive checksum differs")
+    downloads.fetch(URL, archive, SHA256, "llvm-mingw archive")
     headers = f"{ARCHIVE}/generic-w64-mingw32/include/"
     with tarfile.open(archive) as source:
         source.extractall(scratch, members=[member for member in source if member.name.startswith(headers)], filter="data")
