@@ -38,12 +38,18 @@ static UINT read_u32(const BYTE *at)
 	return at[0] | (at[1] << 8) | (at[2] << 16) | ((UINT)at[3] << 24);
 }
 
+// TRUE when need bytes from offset within the section lie inside the stream, counted wide enough that no sum wraps.
+static BOOL within(SIZE_T size, UINT section, UINT offset, ULONGLONG need)
+{
+	return (ULONGLONG)section + offset + need <= size;
+}
+
 static void parse_property_set(msi_summary *summary, const BYTE *data, SIZE_T size)
 {
 	if (size < 48 || data[0] != 0xfe || data[1] != 0xff)
 		return;
 	UINT section = read_u32(data + 44);
-	if (section + 8 > size || memcmp(data + 28, &format_summary, sizeof(GUID)))
+	if (!within(size, section, 0, 8) || memcmp(data + 28, &format_summary, sizeof(GUID)))
 		return;
 	const BYTE *base = data + section;
 	UINT count = read_u32(base + 4);
@@ -51,10 +57,12 @@ static void parse_property_set(msi_summary *summary, const BYTE *data, SIZE_T si
 		return;
 	for (UINT i = 0; i < count; i++) {
 		UINT id = read_u32(base + 8 + i * 8), offset = read_u32(base + 12 + i * 8);
-		if (id >= MAX_PROPERTY || (SIZE_T)section + offset + 8 > size)
+		if (id >= MAX_PROPERTY || !within(size, section, offset, 8))
 			continue;
 		const BYTE *value = base + offset;
 		summary_value *out = &summary->values[id];
+		msi_free(out->text);
+		out->text = NULL;
 		out->type = (USHORT)read_u32(value);
 		switch (out->type) {
 		case VT_I2:
@@ -64,13 +72,19 @@ static void parse_property_set(msi_summary *summary, const BYTE *data, SIZE_T si
 			out->number = (INT)read_u32(value + 4);
 			break;
 		case VT_FILETIME:
+			if (!within(size, section, offset, 12)) {
+				out->type = VT_EMPTY;
+				break;
+			}
 			out->time.dwLowDateTime = read_u32(value + 4);
 			out->time.dwHighDateTime = read_u32(value + 8);
 			break;
 		case VT_LPSTR: {
 			UINT length = read_u32(value + 4);
-			if ((SIZE_T)section + offset + 8 + length > size)
+			if (!within(size, section, offset, 8 + (ULONGLONG)length)) {
+				out->type = VT_EMPTY;
 				break;
+			}
 			out->text = msi_alloc(length + 1);
 			memcpy(out->text, value + 8, length);
 			break;
