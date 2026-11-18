@@ -295,12 +295,16 @@ RunResult Runtime::Thread::run()
 			break;
 		}
 		case ExitReason::x87:
-			// The x87 instructions from rip on, until the first that is not one; then translated code again.
-			for (;;) {
+			// The x87 instructions from rip on, until the first that is not one; then translated code again. If not even the first runs
+			// (its code went away), translated code would exit here again: stop instead.
+			for (bool ran = false;; ran = true) {
 				const std::span<const uint8_t> bytes = runtime.memory.code(cpu.rip);
 				const Instruction instruction = decode(bytes, cpu.rip);
-				if (bytes.empty() || instruction.mnemonic == Mnemonic::invalid || !x87_supported(instruction))
+				if (bytes.empty() || instruction.mnemonic == Mnemonic::invalid || !x87_supported(instruction)) {
+					if (!ran)
+						return {ExitReason::unsupported, cpu.rip};
 					break;
+				}
 				const uint64_t next = cpu.rip + instruction.length;
 				if (x87_execute(cpu, runtime.memory, instruction, next) == X87Result::fault)
 					return {ExitReason::fault, cpu.rip};
