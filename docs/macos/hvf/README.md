@@ -175,8 +175,7 @@ runner. Blocks, the lookup table, chains and the granule index are shared.
 An x64 program translated at EL0 calls an ARM64EC DLL whose code runs as it is, at EL0 in the same vCPU, and the DLL calls x64 code
 back. No host exit on the call path once warm, and no host function involved: the transitions are guest code. ARM64EC was chosen over
 plain ARM64 because the compiler already emits what each side needs (entry thunks for x64 callers, exit thunks for x64 callees) and the
-translator's register map is already Microsoft's ARM64EC map; the 60-minute fallback to plain ARM64 was not needed (the first call
-worked about 20 minutes in).
+translator's register map is already Microsoft's ARM64EC map. The fallback to plain ARM64 was not needed.
 
 ### What the DLL looks like
 
@@ -184,11 +183,12 @@ worked about 20 minutes in).
 `__os_arm64x_*` variables its thunks load. Its header says x64 (machine 0x8664); its load config points at the CHPE metadata. PROVEN
 (`llvm-readobj --coff-load-config`, `--coff-exports`, `llvm-objdump -d` on `build-macos-hvf/guest/ec_library.dll`):
 
-- the code map: 0x1000-0x1334 ARM64EC (`.text`), 0x2000-0x3070 x64;
+- the code map: 0x1000-0x15b4 ARM64EC (`.text`), 0x2000-0x30f0 x64;
 - the exports point into `.hexpthk`, x64 export thunks (`mov rax, rsp; mov [rax+0x20], rbx; push rbp; pop rbp; jmp <native>`), and
   RedirectionMetadata maps each to its native function;
-- the word before each native function x64 may call holds the offset to its entry thunk with bit 0 set: `0x179` before `ec_zero` at
-  0x1004 names `$ientry_thunk$cdecl$i8$v` at 0x117c (0x1004 + 0x178); likewise 0x1010 + 0x1b4 = 0x11c4 and 0x101c + 0x1f0 = 0x120c;
+- the word before each native function x64 may call holds the offset to its entry thunk with bit 0 set: `0x279` before `ec_zero` at
+  0x1004 names `$ientry_thunk$cdecl$i8$v` at 0x127c (0x1004 + 0x278); likewise `ec_add` 0x1010 + 0x2b4 = 0x12c4
+  (`$i8$i8i8`) and `ec_sum8` 0x10d0 + 0x404 = 0x14d4 (`$i8$i8i8i8i8i8i8i8i8`);
 - an entry thunk saves q6-q15, x29 and x30, reads stack arguments from x4 (`ldp x8, x5, [x4, #0x20]`), calls x9, moves x0 to x8 and
   branches to the address in the `__os_arm64x_dispatch_ret` slot with x30 restored;
 - an exit thunk reserves 0x30 bytes (home area and frame), saves x29 and x30 and calls the `__os_arm64x_dispatch_call_no_redirect`
@@ -206,11 +206,13 @@ worked about 20 minutes in).
   `dispatch_ret` its dispatch_ret, `dispatch_icall` (the code's `__os_arm64x_check_icall`) and `dispatch_icall_cfg` its check_icall,
   and `GetX64Information`, `SetX64Information` and `dispatch_fptr` a `brk #0xec`, so an unimplemented slot stops the guest with an
   exception instead of branching to 0.
-- `entry_thunk(address)` reads the word before a native address: bit 0 set and the offset landing in native code means an entry
-  thunk; otherwise the address is one x64 returns to.
+- `entry_thunk(address)` reads the word before a native address: bit 0 set and the offset (signed 32 bits) landing in native code
+  means an entry thunk; otherwise the address is one x64 returns to.
+- Every RVA read from the load config and the CHPE metadata is checked against the image size.
 - `prepare_thread(state, vcpu)` also sets x18 of the vCPU to the TEB, as Windows ARM64 code expects; nothing in the guest writes x18
   afterwards (section 3).
-- The DLL's entry point is not called and nothing is relocated (every image gets its preferred base, as before).
+- The DLL's entry point is not called and nothing is relocated (every image gets its preferred base, as before). Images are loaded
+  before any vCPU exists: `Vm::set_access` does no TLB maintenance and does not check that.
 
 ### The transitions
 
@@ -238,7 +240,7 @@ The translator's register map is ARM64EC's except for RSP and RBP, which are bri
 | RCX, RDX, R8, R9 (arguments 1-4) | x0, x1, x2, x3 | x0, x1, x2, x3 | nothing to move |
 | arguments 5+ | x64 stack at RSP + 0x28 (above the return address and home area) | same | the entry thunk loads them into x4-x7 from x4 + 0x20; x4 = RSP after the return address is popped |
 | RAX (result) | x8 (the entry thunk moves x0 there; the exit thunk moves it back) | x8 | nothing to move |
-| XMM0-XMM3 (FP arguments, by position) | v0-v3; the entry thunk moves what AAPCS64 wants (`ec_scale(int64_t, double)`: XMM1 to d0) | v0-v15 (`movq` only) | nothing to move |
+| XMM0-XMM3 (FP arguments, by position) | v0-v3; the entry thunk moves what AAPCS64 wants (`ec_scale(int64_t, double)`: XMM1 to d0) | v0-v7 (`movq` only, with `vector_registers`) | nothing to move |
 | RSP | sp | x28 | sp = x28 into native code; x28 = sp out of it |
 | RBP | x29 | x24 | none: native code never writes x24, x29 is native code's own |
 | RBX, RSI, RDI, R12-R15 (callee-saved) | x27, x25, x26, x19-x22 | same | nothing to move |
@@ -247,9 +249,14 @@ The translator's register map is ARM64EC's except for RSP and RBP, which are bri
 | return address | x30 | on the x64 stack | popped into x30 on entry; pushed from x30 on calls back |
 
 `movq xmm, r64` and `movq r64, xmm` (66 REX.W 0F 6E/7E, register forms) are the only SSE instructions the translator knows: FMOV
-between the general register and dN, with XMMn in vn. Their decoding matches LLVM on 517 instances in Notepad++ x64 (PROVEN:
-`x86_corpus.py` run once with `notepad++.exe` and `ec_client.exe` added, `x86_decoder_test` on it: `notepad++.exe: 1224528
-instructions, 1179633 with semantics (96.3%), 3584 rejected by LLVM, 0 failures`); the shipped corpus has none.
+between the general register and dN, with XMMn in vn. They are translated only with `TranslatorOptions::vector_registers` and for
+XMM0-XMM7: CpuState has no XMM registers, so values live in v0-v7 across exits, which holds in a vCPU (nothing on the exit path
+writes v0-v7; the enter and exit trampolines replace v8-v15) and not in this process, where the host code an exit returns to uses them.
+Otherwise the block ends before them as before. The option is part of the ahead-of-time cache key, and the translator version is 2.
+Decoding matches LLVM: the corpus generator now emits register-form `movq` (192 instances, 0 failures; a mutation printing `movd`
+gives 192 failures), and a one-off run with Notepad++ x64 added matched 517 instances (PROVEN: `x86_corpus.py` with `notepad++.exe`
+and `ec_client.exe`, then `x86_decoder_test`: `notepad++.exe: 1224528 instructions, 1179633 with semantics (96.3%), 3584 rejected by
+LLVM, 0 failures`).
 
 ## Results
 
@@ -468,37 +475,55 @@ translated again after every fault: 8 faults, 1 stores emulated, the call return
 ### 9. x64 and an ARM64EC DLL in one vCPU
 
 PROVEN (`build-macos-hvf/hvf_arm64ec_test build-macos-hvf/guest`, exit 0). Each value is the x64 client's result of a call into the
-DLL, compared with the same library built for this host:
+DLL, compared with the same library built for this host, and the runs of the dispatcher the call took:
 
 ```
-no arguments: 24301 (native 24301)
-two arguments: 42 (native 42)
-eight arguments, four on the stack: 222 (native 222)
-a string: 2959517845112299773 (native 2959517845112299773)
-an integer and a double: 4621396905123905536 (native 4621396905123905536)
-a callback into x64: 231 (native 231)
-x18 at the TEB: 1 (native 1)
-x18 at the TEB in 2000 native calls across 12 forced exits: 2000 right; in 200000000 reads of one native loop across 247 forced exits: 200000000 right; x18 0x4001261000, TEB 0x4001261000
-per call, x64 -> native ARM64EC -> x64: 4.31 ns; x64 -> x64 through a function pointer: 1.19 ns
+no arguments: 24301 (native 24301), 6 runs
+one argument: 22 (native 22), 4 runs
+two arguments: 42 (native 42), 4 runs
+three arguments: 25 (native 25), 4 runs
+four arguments: 49 (native 49), 4 runs
+five arguments, one on the stack: 74 (native 74), 6 runs
+six arguments, two on the stack: 116 (native 116), 6 runs
+seven arguments, three on the stack: 158 (native 158), 6 runs
+eight arguments, four on the stack: 222 (native 222), 6 runs
+a string: 2959517845112299773 (native 2959517845112299773), 4 runs
+an integer and a double: 4621396905123905536 (native 4621396905123905536), 6 runs
+a callback into x64: 231 (native 231), 6 runs
+x18 at the TEB: 1 (native 1), 6 runs
+x18 at the TEB in 2000 native calls across 12 forced exits (0 in native code): 2000 right; in 200000000 reads of one native loop across 336 forced exits (336 in native code): 200000000 right; x18 0x4001261000, TEB 0x4001261000
+second thread: TEB 0x40013b3000, x18 0x40013b3000, NT_TIB.Self through x18 matches gs:[0x30]: 1, 1000000 of 1000000 reads right; first thread still 1
+per call, x64 -> native ARM64EC -> x64: 6.68 ns; x64 -> x64 through a function pointer: 1.78 ns
 hvf arm64ec: PASS
 ```
 
-- The string is x64 memory the native code reads through the pointer in RCX; the double goes in XMM1 and comes back in XMM0 (the result
-  is the bits of 6 * 1.5 + 0.25); the callback is `ec_call` calling an x64 function twice through `check_icall`, its exit thunk and
-  dispatch_call, and the x64 `ret` into the exit thunk through a resume stub. These first calls run cold: every one takes lookup misses
-  and chain exits in the middle, including inside the callback, so the transitions survive host exits.
-- x18: native code compares NT_TIB.Self read through x18 with gs:[0x30] read by translated x64 code, after translated code ran; then
-  a watcher forces exits (`hv_vcpus_exit` every 200 us) during 2000 such calls and during one native loop of 2*10^8 reads, and every
-  read must match. The test requires at least 10 forced exits inside the loop.
-- Warm: a loop of 10^6 calls of `ec_add` from x64 must take exactly one run of the dispatcher and no lookup miss (checked); the same
-  loop calling an x64 function through a function pointer is the comparison.
+- Arguments: one to four in registers, five to eight with one to four on the x64 stack (the entry thunk reads them from x4 + 0x20).
+  The string is x64 memory the native code reads through the pointer in RCX; the double goes in XMM1 and comes back in XMM0 (the result
+  is the bits of 6 * 1.5 + 0.25).
+- Every case runs cold: each run after the first is a host exit (lookup miss or chain). The callback is `ec_call` calling an x64
+  function twice through `check_icall`, its exit thunk and dispatch_call, and the x64 `ret` into the exit thunk through a resume stub.
+  `x64_combine` had never run before that case, and only the host translates, so at least one exit happened while `ec_call`'s native
+  frame was live (follows from the above; the test does not record where each exit happened).
+- x18: native code compares NT_TIB.Self read through x18 with gs:[0x30] read by translated x64 code, after translated code ran. Then
+  a watcher forces exits (`hv_vcpus_exit` every 200 us) during 2000 such calls and during one native loop of 2*10^8 reads; every read
+  must match, and at least 10 forced exits must stop the vCPU with its PC in native code (the test reads the PC at each one: 336 of
+  336 in the loop). A second guest thread on its own vCPU gets its own TEB and x18, and the first keeps its own.
+- Warm: a loop of 10^6 calls of `ec_add` from x64 must take one entry of the vCPU, one run of the dispatcher, no lookup miss, no
+  forced exit and no write fault (checked through `Runtime::stats` and `Vcpu::stats`): no host exit on the warm path. The same loop
+  calling an x64 function through a function pointer is the comparison.
 
-Cost, a short pass: 15 runs of the test back to back, load average 8.72 (1 min) before and after, thermal state 0 (nominal) before and
-after (`/Users/pietrodc/dev/tools/raven-mac/quiet/thermal`). Per call, x64 -> ARM64EC -> x64: median 4.33 ns (4.22-4.55); x64 -> x64
-through a function pointer: median 1.17 ns (1.16-1.43). PROVEN for this machine state; not a quiet benchmark. The native path runs the
-translated x64 export thunk (five instructions and a chained branch), the entry stub, the entry thunk (which saves and restores q6-q15)
-and one lookup for the return; the x64 path is an indirect call and a return, one lookup each. INFERRED, not measured apart:
-RedirectionMetadata would skip the export thunk.
+Cost, two short passes of 15 runs each, back to back, on a machine in use (`sysctl vm.loadavg`, thermal state from
+`/Users/pietrodc/dev/tools/raven-mac/quiet/thermal`, before and after each pass):
+
+| Pass | Load average (1, 5, 15 min) | Thermal | x64 -> ARM64EC -> x64, median (min-max) | x64 -> x64 through a pointer |
+|---|---|---|---|---|
+| at `2477b0de` | 8.72, 6.43, 4.61 | 0 (nominal) | 4.33 ns (4.22-4.55) | 1.17 ns (1.16-1.43) |
+| at `e09c62b0` | 10.51, 8.86, 6.82 | 1 (fair) | 6.05 ns (4.95-7.54) | 1.54 ns (1.36-1.86) |
+
+PROVEN for these machine states, not a quiet benchmark: a call into native code costs about 3.7 to 3.9 times an x64 indirect call
+and return. The native path runs the translated x64 export thunk (five instructions and a chained branch), the entry stub, the entry
+thunk (which saves and restores q6-q15) and one lookup for the return; the x64 path is an indirect call and a return, one lookup
+each. INFERRED, not measured apart: RedirectionMetadata would skip the export thunk.
 
 ### Cost of a guest store to translated code
 
@@ -547,10 +572,11 @@ The second review's tests have failing-first commits too (exit 1 each, PROVEN):
 - `hvf_code_race_test`'s bound part, before the bound: `FAIL: the code cache is full` (every retry translated the page again until
   the 16 MiB cache ran out).
 
-`hvf_arm64ec_test` has a failing-first commit (exit 1, PROVEN): before the loader, `FAIL: imports are not bound yet`. After the
-ARM64EC commit and before `movq`, the double alone failed: `FAIL: role 8 stopped with reason 6 at 6979326278` (0x1a0001146, the
-client's `movq xmm1, rdi`, reason 6 = unsupported), exit 1. The native x18 loop landed with the loader; under the mutation below it
-fails.
+`hvf_arm64ec_test` has a failing-first commit (`0c9214b4`, exit 1, PROVEN): before the loader, `FAIL: imports are not bound yet`.
+After the ARM64EC commit and before `movq`, the double alone failed: `FAIL: role 8 stopped with reason 6 at 6979326278`
+(0x1a0001146, the client's `movq xmm1, rdi`, reason 6 = unsupported), exit 1. The native x18 loop, the one to seven argument cases,
+the second thread and the stricter warm check came after the implementation and passed when written; the x18 parts fail under the
+mutation below.
 
 The parts that landed with their implementation fail under these mutations:
 
@@ -586,16 +612,16 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   (an `svc` from a thunk in guest code, the host calling the function, the result written to the CpuState), which is the design of
   section 4's `GuestStop::api`. Native guest code is ARM64EC code in guest memory (above).
 - **ARM64EC, telling a call from a return.** A native address x64 reaches is a function if the word before it carries an entry thunk
-  offset with bit 0 set, a return address otherwise. Return addresses into native code follow the exit thunk's `blr x16` or a
-  `blr x11`, whose bit 0 is clear (`blr` encodes Rn at bits 5-9), so the rule holds for compiler output (INFERRED from the encoding
-  and the thunks above; a hand-written native caller ending a `bl` with an odd offset would break it). The deterministic version:
+  offset with bit 0 set, a return address otherwise. x64 returns into native code only after an exit thunk's `blr x16` to
+  dispatch_call, whose bit 0 is clear (`blr` encodes Rn at bits 5-9), so the rule holds for compiler output (INFERRED from the
+  encoding and the thunks above; a hand-written caller of dispatch_call ending in a `bl` with an odd offset would break it). The deterministic version:
   dispatch_call pushes a fixed marker return address instead of x30 and keeps x30 on a per-thread LIFO in the TEB; a `ret` to the
   marker pops it. Not done: it changes what x64 sees as its return address.
 - **ARM64EC, what is not there.** XMM registers are not in CpuState, and the enter and exit trampolines replace v8-v15 with the host
-  frame's values on every exit, so XMM8-15 (and native v8-v15 during a callback) do not survive a host exit; XMM0-3 do (the vCPU's
-  registers persist and nothing on the exit path writes them: the double case above, run cold). No SSE beyond `movq`. check_icall is
-  generated once with the ranges known at `link_arm64ec`; a DLL loaded later needs it generated again, or Windows' EC bitmap (one bit
-  per page, a sparse two-level table in guest memory). No `dispatch_fptr`, `Get`/`SetX64Information`, auxiliary IAT (native code
+  frame's values on every exit, so native v8-v15 do not survive a host exit during a callback, and `movq` is limited to XMM0-XMM7 in a
+  vCPU (above). No SSE beyond `movq`. check_icall is generated once with the ranges known at `link_arm64ec` (a later call with other
+  ranges throws); a DLL loaded later needs it generated again, or Windows' EC bitmap (one bit per page, a sparse two-level table in
+  guest memory). `Vm::set_access` must run before any vCPU uses the pages; loading while vCPUs run needs TLB maintenance. No `dispatch_fptr`, `Get`/`SetX64Information`, auxiliary IAT (native code
   calling x64 imports directly), RedirectionMetadata, CFG, DllMain, relocation, or unwinding across transitions. Native code calling
   native code through check_icall, and `dispatch_call` with redirection, are NOT verified (no test reaches them). In-process
   (`TestProcess`) the stubs are never reached: no image there has ARM64EC code, and macOS owns x18.
