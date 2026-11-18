@@ -1275,6 +1275,16 @@ void Core::extract()
 		summary();
 		return;
 	}
+	if (x.ftw >> ((top() + 7) & 7) & 1) {
+		flags.bits = IE | SF;
+		if (!aborts(flags.bits)) {
+			set_st(0, indefinite);
+			set_top(top() + 7);
+			set_st(0, indefinite);
+		}
+		report(flags, true);
+		return;
+	}
 	const F80 a = st(0);
 	const Kind k = kind(a);
 	F80 exponent, significand;
@@ -1302,15 +1312,7 @@ void Core::extract()
 		return;
 	}
 	set_st(0, exponent);
-	const unsigned slot = (top() + 7) & 7;
-	if (x.ftw >> slot & 1) {
-		flags.bits |= IE | SF;
-		set_top(slot);
-		set_st(0, indefinite);
-		report(flags, true);
-		return;
-	}
-	set_top(slot);
+	set_top(top() + 7);
 	set_st(0, significand);
 	report(flags, false);
 }
@@ -1321,7 +1323,9 @@ void Core::remainder(bool nearest)
 {
 	Flags flags;
 	F80 result;
-	uint16_t codes = 0;
+	// Without a quotient (a fault, an invalid operand, a NaN) C0 and C3 stay as they were; C1 and C2 are cleared.
+	const uint16_t unchanged = static_cast<uint16_t>(x.fsw & (C0 | C3));
+	uint16_t codes = unchanged;
 	if (empty(0) || empty(1)) {
 		flags.bits = IE | SF;
 		result = indefinite;
@@ -1337,9 +1341,11 @@ void Core::remainder(bool nearest)
 			flags.bits = static_cast<uint16_t>(IE | ((ka == Kind::denormal || kb == Kind::denormal) ? DE : 0));
 			result = indefinite;
 		} else if (ka == Kind::zero || kb == Kind::infinity) {
-			if (ka == Kind::denormal || kb == Kind::denormal)
+			// The quotient is 0; a pseudo-denormal comes back normalized.
+			if (ka == Kind::denormal)
 				flags.bits |= DE;
-			result = a;
+			result = ka == Kind::zero ? a : pack80(round(a.sign(), unpack(a).exp, u128(unpack(a).sig) << 64, extended, rc(), masks(), flags));
+			codes = 0;
 		} else {
 			if (ka == Kind::denormal || kb == Kind::denormal)
 				flags.bits |= DE;
@@ -1359,9 +1365,10 @@ void Core::remainder(bool nearest)
 				const u128 r = numerator % ub.sig;
 				// a - q * b * 2^(d - n): units of 2^(eb - 63 + d - n).
 				result = pack_remainder(ua.sign, r, ub.exp - 63 + d - n);
-				codes = static_cast<uint16_t>(C2 | (x.fsw & (C0 | C1 | C3)));
+				codes = C2;
 			} else if (d < -1 || (d == -1 && !nearest)) {
-				result = a;
+				result = pack80(round(ua.sign, ua.exp, u128(ua.sig) << 64, extended, rc(), masks(), flags));
+				codes = 0;
 			} else {
 				// Units of 2^(eb - 64): a is sig_a * 2^(d + 1), b is 2 * sig_b.
 				const u128 numerator = u128(ua.sig) << (d + 1), divisor = u128(ub.sig) << 1;
@@ -1379,6 +1386,7 @@ void Core::remainder(bool nearest)
 	}
 	if (aborts(flags.bits)) {
 		report(flags, false);
+		set_conditions(unchanged);
 		return;
 	}
 	set_st(0, result);

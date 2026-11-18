@@ -36,6 +36,7 @@ struct Case {
 	Io input;
 	Io output;
 	bool silicon = false;
+	size_t number = 0;
 };
 
 constexpr uint64_t CF = 1, PF = 4, AF = 16, ZF = 64, SF = 128, OF = 2048;
@@ -55,6 +56,7 @@ inline std::vector<Case> read_cases(const char *path)
 	get(&count, 4);
 	std::vector<Case> cases(in ? count : 0);
 	for (Case &item : cases) {
+		item.number = static_cast<size_t>(&item - cases.data());
 		uint32_t length = 0;
 		get(&length, 4);
 		item.code.resize(length);
@@ -246,7 +248,7 @@ struct Report {
 		++failed;
 		++failures;
 		if (failed <= 12)
-			std::fprintf(stderr, "%s: %s: %s\n", item.family.c_str(), item.text.c_str(), problem.c_str());
+			std::fprintf(stderr, "%s: #%zu %s: %s\n", item.family.c_str(), item.number, item.text.c_str(), problem.c_str());
 	}
 	void print(const char *where) const
 	{
