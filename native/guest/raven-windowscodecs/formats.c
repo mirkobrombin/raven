@@ -146,6 +146,9 @@ HRESULT parse_dib(image_list *list, const BYTE *data, SIZE_T size, const BYTE *b
 		return WINCODEC_ERR_BADIMAGE;
 	}
 	rle = compression == BI_RLE8 || compression == BI_RLE4;
+	/* RLE8 runs fill 8-bit pixels and RLE4 runs 4-bit ones; with another depth the rows the runs fill are longer than the rows kept. */
+	if ((compression == BI_RLE8 && depth != 8) || (compression == BI_RLE4 && depth != 4))
+		return WINCODEC_ERR_BADIMAGE;
 	if (rle)
 		format = &GUID_WICPixelFormat32bppBGR;
 	if (!(pixels = image_add(list, width, (UINT)height, format, &stride)))
