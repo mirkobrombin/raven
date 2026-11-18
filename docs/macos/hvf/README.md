@@ -53,13 +53,13 @@ memory rather than VM-specific code:
 | Place | Before | After |
 |---|---|---|
 | `Runtime::cpu` (CpuState) and `Runtime::lookup` | members and a `std::vector` in host memory | `CodeAllocator::allocate_data` gives the host pointer and the address translated code uses; `cpu.lookup_table` holds the latter |
-| `exit_trampoline`, `return_guest` (runtime.cpp:72-73) | execute addresses from `CodeAllocator::allocate` | unchanged: `VmCodeCache` hands out guest addresses as execute addresses, so these already are guest addresses |
+| `exit_trampoline`, `return_guest` (`Runtime::place_fixed_code`) | execute addresses from `CodeAllocator::allocate` | unchanged: `VmCodeCache` hands out guest addresses as execute addresses, so these already are guest addresses |
 | lookup entries, `Block::host`, chained-branch `incoming` | execute addresses | unchanged, same reason; every write goes through `CodeAllocator::write`, which writes the alias |
 | `Runtime::chain` reading the original word | `memcpy` from the execute address (a guest address in the VM) | `CodeAllocator::read` |
 | `Runtime::call` pushing the return address | `memcpy` to the guest stack address | `GuestMemory::write` |
 | `Runtime::run` entering code | call of the enter trampoline as a host function | `CodeRunner::enter` when a runner is given; the in-process path is unchanged |
-| native thunks (runtime.cpp:80) | `mov` of a host function address | `bind_native` throws when a runner is given (open item below) |
-| the emitter (`translator.cpp`) | | no host address: exits load `exit_trampoline` and `lookup_table` from the CpuState (x23); chain sites come from `adr`; RIP-relative operands are guest addresses. The only absolute host address is in `native_thunk` |
+| native thunks (`Runtime::bind_native`) | `mov` of a host function address | `bind_native` throws when a runner is given (open item below) |
+| the emitter (`translator.cpp`) | | no host address: exits load `exit_trampoline` and `lookup_table` from the CpuState (x23); chain sites come from `adr`; RIP-relative operands are guest addresses. The only absolute host address is in `native_thunk`. INFERRED from reading the emitter (`grep -n "reinterpret_cast\|memcpy" translator.cpp` finds nothing); every test above runs its code in the vCPU, but no test scans emitted words for host addresses |
 
 The workload images import nothing, so no native thunk is needed on this path. PROVEN, in `build-macos-hvf`:
 
@@ -86,14 +86,17 @@ at an address the vCPU has just executed, 20 000 times, each time to return a ne
 
 ```
 CTR_EL0 at EL0 in the vCPU: 0x99444c004 (IDC 1, DIC 0, L1Ip 3)
-host DC CVAU + IC IVAU on the alias (default): 0 stale of 20000, 0 wrong exits, 0 guest invalidations
-host DC CIVAC + guest IC IALLUIS: 0 stale of 20000, 0 wrong exits, 20000 guest invalidations
-control: host DC CIVAC only: 19948 stale of 20000, 0 wrong exits, 0 guest invalidations
-control: none: 19939 stale of 20000, 0 wrong exits, 0 guest invalidations
+host sys_icache_invalidate on the alias (default): 0 stale of 20000, 0 wrong exits, 0 guest invalidations
+host sys_dcache_flush + guest IC IALLUIS: 0 stale of 20000, 0 wrong exits, 20000 guest invalidations
+control: host sys_dcache_flush only: 19991 stale of 20000, 0 wrong exits, 0 guest invalidations
+control: none: 19988 stale of 20000, 0 wrong exits, 0 guest invalidations
 ```
 
 - An instruction cache invalidation is necessary (PROVEN: without one, about 99.7% of rewritten blocks run their old code), as
   CTR_EL0.DIC = 0 says. A data cache clean is not (IDC = 1).
+- What the libkern calls execute on macOS 27.2.1 (PROVEN, `lldb` `disassemble -n` in a running process): `sys_icache_invalidate` is
+  DSB ISH, IC IVAU per 64-byte line, DSB ISH, ISB, with no DC; `sys_dcache_flush` is DSB ISH and `ret`, nothing else. So the
+  "sys_dcache_flush" control is a barrier only.
 - `sys_icache_invalidate` on the host alias suffices (PROVEN, 20 000 rewrites, one vCPU): the instruction cache is PIPT (L1Ip = 3),
   so invalidating by the host's address reaches what the guest fetched through its own, and IC IVAU is broadcast to the inner
   shareable domain. That is the default (`CodeMaintenance`); the guest-side IC IALLUIS in the kernel's return path also suffices
@@ -110,7 +113,7 @@ control: none: 19939 stale of 20000, 0 wrong exits, 0 guest invalidations
 
 ## Results
 
-MacBook Air M5 (Mac17,3), macOS 27.2.1, Xcode 27.2, llvm-mingw 20261104. The machine was in use (load average 5 to 10, thermal state
+MacBook Air M5 (Mac17,3), macOS 27.2.1, Xcode 27.2, llvm-mingw 20261104. The machine was in use (load average 5 to 86 across the runs below, thermal state
 1, i.e. not nominal) for all of these.
 
 ### 1. The workloads at EL0 with correct results
@@ -131,38 +134,42 @@ implemented`, exit 1.
 
 ### Speed against native
 
-`hvf_bench_run.py`, 30 interleaved rounds (each configuration once per round, its own process, one first call, then one timed run),
-about 5 s in all. Native is the same `bench_loop` and workload built for arm64 (`hvf_native_*`), so the caller loop is native code
-there and translated code in the others. Translation is plain mode (`MemoryOrdering::hardware`) everywhere; in this process that is
-not x86 ordering, in the vCPU EnTSO makes it so.
+`hvf_bench_run.py`, 30 interleaved rounds (each configuration once per round, as its own process), about 4.5 minutes in all. Every
+process makes one first call (translation included), then 6 timed runs of CALLS workload calls, each run 50 ms or longer natively; the
+first timed run is a warm-up dropped in every configuration alike, and the process's value is the median of the other 5. Native is the
+same `bench_loop` and workload built for arm64 (`hvf_native_*`), so the caller loop is native code there and translated code in the
+others. Translation is plain mode (`MemoryOrdering::hardware`) everywhere; in this process that is not x86 ordering, in the vCPU EnTSO
+makes it so.
 
-- **loop**: one guest call of `bench_loop(CALLS)` per run, so the vCPU is entered once per run (plus up to 4 chain exits the first
-  timed run still takes).
+- **loop**: one guest call of `bench_loop(CALLS)` per run, so the vCPU is entered once per run.
 - **call**: CALLS guest calls of `bench_loop(1)`, one entry into translated code per workload call, which is how `translate_bench
   --workload` measured the in-process numbers in the brief. In the vCPU every call is a host exit and a resume.
 
-Median ns per workload call and the ratio to native's median of the same session (PROVEN: `docs/macos/hvf/data/summary.csv`, raw
-per-process values in `measurements.jsonl`, machine state in `state.json`: load average 5.35 at the start and 5.24 at the end, thermal
-state 1 at both):
+Median ns per workload call over the 30 processes and the ratio to native's median of the same session (PROVEN:
+`docs/macos/hvf/data/summary.csv`, every run of every process in `measurements.jsonl`, machine state in `state.json`: load average 6.93
+at the start and 11.19 at the end, thermal state 1 at both; the machine was in use):
 
 | Workload, CALLS | native ns | in-process loop | in-process call | **vCPU loop** | vCPU call | brief: in-process | brief: Rosetta |
 |---|---|---|---|---|---|---|---|
-| entry, 2000 | 322.8 | 0.823 | 0.860 | **0.832** | 3.618 | 0.829 | 0.830 |
-| crc32, 20 | 13425.0 | 1.322 | 1.318 | **1.347** | 1.409 | 1.326 | 1.158 |
-| fnv, 50 | 33777.1 | 1.008 | 1.002 | **1.006** | 1.015 | 1.005 | 0.996 |
-| histogram, 50 | 52142.9 | 1.528 | 1.527 | **1.524** | 1.545 | 1.526 | 1.478 |
+| entry, 200000 | 292.6 | 0.825 | 0.845 | **0.832** | 3.615 | 0.829 | 0.830 |
+| crc32, 4000 | 12188.7 | 1.313 | 1.311 | **1.311** | 1.375 | 1.326 | 1.158 |
+| fnv, 1500 | 30709.3 | 1.000 | 1.005 | **1.002** | 1.033 | 1.005 | 0.996 |
+| histogram, 1000 | 47828.5 | 1.512 | 1.510 | **1.510** | 1.532 | 1.526 | 1.478 |
 
-p95 and standard deviation of the vCPU loop configuration, ns: entry 537.5 / 132.3, crc32 32750.0 / 6082.6, fnv 69062.5 / 23534.4,
-histogram 215669.2 / 41167.1. The spread is wide in every configuration, native included (summary.csv); medians only are compared.
+p95 and standard deviation of the vCPU loop configuration, ns: entry 413.1 / 109.2, crc32 20873.2 / 9225.7, fnv 74385.6 / 15148.9,
+histogram 132295.3 / 17686.2. Native entry's standard deviation is 20.0 ns on a 292.6 ns median (it was 707 on 323 with one short run
+per process, before the warm-up was added).
 
-- Translated code runs in the vCPU at the speed it runs in this process: every vCPU-loop ratio is within 2% of the in-process loop
-  ratio of the same session (PROVEN for this session's medians; the differences are inside the spread, so no ranking between the two is
-  claimed).
-- One host exit and resume costs about 0.9 us: entry's call method is 1168 ns per call in the vCPU against 277 ns in this process
-  (PROVEN, same table). Code that leaves translated code once per microsecond or so will feel it; hot loops do not.
+- Translated code runs in the vCPU at the speed it runs in this process: every vCPU-loop ratio is within 1% of the in-process loop
+  ratio of the same session (PROVEN for this session's medians; no ranking between the two is claimed).
+- Translated entry.c stays faster than native (0.83) with equal warm-up and 60 ms windows, so it is not an artifact of native timing a
+  cold core. Why is NOT verified.
+- The host exit and resume cost about 0.8 us per call: entry's call method is 1057.7 ns per call in the vCPU against 247.2 ns in this
+  process. INFERRED: a difference of two medians, which also differ in where the runtime's per-call work runs; no exit was timed alone.
+  Code that leaves translated code once per microsecond or so will feel it; hot loops do not.
 - The first call (translation included) is 1.4 to 2.5 times slower in the vCPU than in this process (summary.csv, `first_ns`): the
   first vCPU entry and cold guest TLB. INFERRED; not broken down.
-- The brief's columns come from another session and the differences are within its noise, so they are context, not a comparison.
+- The brief's columns come from another session, so they are context, not a comparison.
 
 ### 2. Message passing on two vCPUs
 
@@ -187,50 +194,60 @@ whole test. Two vCPUs each run a translated 64-bit LCG for seconds with x18 set 
 vCPU every 5 ms (`hv_vcpus_exit`), at which the host checks x18 and records the host CPU it runs on.
 
 ```
-vCPU x18 0x5eed5eed00000000: 4868924495 steps in 3.53 s, result right, 402 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000000 at the end, 321 host CPU changes between exits over 10 distinct CPUs
-vCPU x18 0x5eed5eed00000001: 4868924496 steps in 3.50 s, result right, 381 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000001 at the end, 294 host CPU changes between exits over 10 distinct CPUs
-host load: 20 spinning threads; this process: 3337 involuntary and 2 voluntary context switches
+vCPU x18 0x5eed5eed00000000: 3600000153 steps in 18 batches of 169 ms, 3.05 s, 0 wrong results, 331 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000000 at the end, 264 host CPU changes between exits over 10 distinct CPUs
+vCPU x18 0x5eed5eed00000001: 3600000171 steps in 18 batches of 173 ms, 3.11 s, 0 wrong results, 332 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000001 at the end, 282 host CPU changes between exits over 10 distinct CPUs
+host load: 20 spinning threads; this process: 2337 involuntary and 1 voluntary context switches
 hvf spin: PASS
 ```
 
+That is run 10 of the 10 below, with 20 `yes` processes added to the test's own 20 spinning threads.
+
 - Nothing on the guest side writes x18: not the translated code, the dispatcher, the enter and exit trampolines or the kernel, across
-  host exits, preemption and migration (PROVEN for these runs: 0 changes over 783 checks; an earlier run gave 0 over about 1470).
-  Hypervisor.framework itself keeps guest registers across host scheduling, so the host side could not have changed it; what the test
-  guards is the guest's own code, and a kernel that clears x18 makes it fail (Failing first, below).
-- Host migrations: each vCPU thread was seen on all 10 CPUs and on a different CPU at about 78% of consecutive forced exits (PROVEN as
+  host exits, preemption and migration (PROVEN for these runs: 0 changes at 663 forced exits and at the end). Hypervisor.framework
+  itself keeps guest registers across host scheduling, so the host side could not have changed it; what the test guards is the guest's
+  own code, and a kernel that clears x18 makes it fail (Failing runs, below).
+- Host migrations: each vCPU thread was seen on all 10 CPUs and on a different CPU at about 82% of consecutive forced exits (PROVEN as
   sampled at the exits).
-- Preemptions: 3337 involuntary context switches for the whole process (PROVEN); how many fell on the two vCPU threads is not
+- Preemptions: 2337 involuntary context switches for the whole process (PROVEN); how many fell on the two vCPU threads is not
   observable per thread here (NOT verified).
-- Each vCPU spins in batches of about 200 million LCG steps until the target time has passed, so host load changes how many batches
-  run, never whether the spin lasts long enough; every batch's result is checked. The test fails only on a wrong result, a changed x18,
-  or no forced exit at all. 10 consecutive runs passed with 20 more `yes` processes loading the host (load average 39 to 86).
-- The result of each batch matches the LCG computed on the host by squaring (PROVEN).
-
-### Failing first
-
-Exit criterion 1 and the runtime data reuse check have failing-first commits with failing runs. The VM commit that made criterion 1
-pass already set EnTSO, handled forced exits and did instruction cache maintenance, so the litmus, spin and code write tests passed
-when they were written. For those, the failing runs below are against a build mutated on purpose and then restored (PROVEN, outputs as
-printed; the restored build passes):
-
-- Litmus, with `Vcpu` writing ACTLR_EL1 = 0 whatever it is asked:
+- Each vCPU spins in batches of 200 million LCG steps (80 to 260 ms each as measured, depending on load) until the target time has
+  passed, so host load changes how many batches run, never whether the spin lasts long enough; every batch's result is checked against
+  the LCG computed on the host by squaring. The test fails on a wrong result, a changed x18, fewer than 50 forced exits, no host CPU
+  change between exits, or a load process that ended early.
+- 10 consecutive runs under extra load passed (PROVEN):
 
   ```
-  FAIL: ACTLR_EL1.EnTSO does not read back as set
-  FAIL: x86 ordering broken with EnTSO set
-  EnTSO 1 (ACTLR_EL1 read back 0, 0): 11587135 violations in 30 trials of 2000000 writes, median 358301 per trial, median reader loops 2252639
-  EnTSO 0 (ACTLR_EL1 read back 0, 0): 11442044 violations in 30 trials of 2000000 writes, median 312552 per trial, median reader loops 2690053
+  $ for i in $(seq 20); do (yes > /dev/null) & done
+  $ for r in $(seq 10); do ./build-macos-hvf/hvf_spin_test build-macos-hvf/guest 3 > run$r.txt 2>&1; echo "run $r exit $? ..."; done
+  load before: { 11.18 14.01 19.76 }
+  run 1 exit 0 0 FAIL lines; exits/changes: 361/306/350/297
+  run 2 exit 0 0 FAIL lines; exits/changes: 355/304/376/326
+  run 3 exit 0 0 FAIL lines; exits/changes: 313/265/327/285
+  run 4 exit 0 0 FAIL lines; exits/changes: 296/250/309/246
+  run 5 exit 0 0 FAIL lines; exits/changes: 345/279/340/272
+  run 6 exit 0 0 FAIL lines; exits/changes: 349/285/334/259
+  run 7 exit 0 0 FAIL lines; exits/changes: 329/254/325/251
+  run 8 exit 0 0 FAIL lines; exits/changes: 328/259/326/256
+  run 9 exit 0 0 FAIL lines; exits/changes: 361/300/361/308
+  run 10 exit 0 0 FAIL lines; exits/changes: 331/264/332/282
+  load after: { 31.66 18.69 21.26 }
   ```
-- Spin, with `mov x18, xzr` before the kernel's `hvc #0`:
 
-  ```
-  FAIL: x18 changed
-  FAIL: x18 changed
-  vCPU x18 0x5eed5eed00000000: 2194494347 steps in 2.82 s, result right, 293 forced exits, x18 changed at 293 of them and reads 0 at the end, ...
-  ```
-- Code write: its controls fail the test whenever they do not run stale code, on every run (Instruction cache, above).
-- Runtime data reuse (`hvf_workloads_test` builds 64 runtimes on one code cache with 1 MiB of runtime data): before
-  `CodeAllocator::free_data`, `FAIL: the VM's runtime data is full`, exit 1.
+  (forced exits / host CPU changes of the first vCPU, then of the second.)
+
+### Failing runs
+
+Exit criterion 1 and the two runtime data checks have failing-first commits: before the VM, `FAIL: the VM is not implemented`; before
+`CodeAllocator::free_data`, and before the runtime owned its data across a throwing constructor, `FAIL: the VM's runtime data is
+full`; each exit 1. The VM commit that made criterion 1 pass already set EnTSO, handled forced exits and did instruction cache
+maintenance, so the litmus, spin and code write tests passed when they were written. Their failing runs are against the current code
+with the one-line mutation below, then restored; the restored build passes (PROVEN, outputs as printed, exit 1 each):
+
+| Test | Mutation | Command | Output |
+|---|---|---|---|
+| litmus | `vcpu.cpp`: `-{HV_SYS_REG_ACTLR_EL1, tso ? actlr_tso : 0},` `+{HV_SYS_REG_ACTLR_EL1, 0},` | `hvf_litmus_test build-macos-hvf/guest 30 2000000` | `FAIL: ACTLR_EL1.EnTSO does not read back as set`, `FAIL: x86 ordering broken with EnTSO set`; `EnTSO 1 (ACTLR_EL1 read back 0, 0): 229720312 violations in 30 trials` |
+| spin | `kernel.S`: `+mov x18, xzr` before the lower-EL handler's `hvc #0` | `hvf_spin_test build-macos-hvf/guest 3` | `FAIL: x18 changed` (twice); `x18 changed at 436 of them and reads 0 at the end` for each vCPU |
+| code write | `vm.cpp` `Vm::code_written`: `-sys_icache_invalidate(bytes, size);` `+;` | `hvf_code_write_test 20000` | `FAIL: host sys_icache_invalidate on the alias (default) ran stale code`; `19976 stale of 20000` |
 
 ## Reproduction
 
@@ -243,7 +260,7 @@ python3 -I native/hvf/hvf_bench_run.py build-macos-hvf docs/macos/hvf/data 30 /p
 ```
 
 The last argument is optional: a program that prints the thermal state (`NSProcessInfo.thermalState`, 0 nominal to 3 critical).
-`hvf_spin` loads every core for 3 to 6 s.
+`hvf_spin` loads every core for about 3.5 s.
 
 ## Open items
 
