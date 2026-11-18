@@ -64,6 +64,11 @@ foreach(WORKLOAD entry crc32 fnv histogram)
     target_compile_definitions(hvf_native_${WORKLOAD} PRIVATE ${NATIVE_DEFINES})
     target_compile_options(hvf_native_${WORKLOAD} PRIVATE -O2)
 endforeach()
+add_custom_command(OUTPUT ${GUEST}/hvf_client.exe
+    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--image-base,0x180000000,--no-insert-timestamp
+        -o ${GUEST}/hvf_client.exe ${CMAKE_CURRENT_SOURCE_DIR}/testdata/hvf_client.c
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/hvf_client.c VERBATIM)
+list(APPEND HVF_GUESTS ${GUEST}/hvf_client.exe)
 add_custom_target(hvf_guests ALL DEPENDS ${HVF_GUESTS})
 
 # What the workloads return natively, for the test to compare with.
@@ -89,3 +94,10 @@ target_link_libraries(hvf_code_write_test PRIVATE raven_hvf)
 raven_hvf_sign(hvf_code_write_test)
 add_test(NAME hvf_code_write COMMAND hvf_code_write_test 20000)
 set_tests_properties(hvf_code_write PROPERTIES TIMEOUT 60)
+
+add_executable(hvf_litmus_test hvf_litmus_test.cpp)
+target_link_libraries(hvf_litmus_test PRIVATE raven_hvf)
+add_dependencies(hvf_litmus_test hvf_guests)
+raven_hvf_sign(hvf_litmus_test)
+add_test(NAME hvf_litmus COMMAND hvf_litmus_test ${GUEST} 30 2000000)
+set_tests_properties(hvf_litmus PROPERTIES TIMEOUT 120)
