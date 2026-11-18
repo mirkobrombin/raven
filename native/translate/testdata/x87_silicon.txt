@@ -1,4 +1,4 @@
-# x87.py cases where Rosetta and an AMD EPYC 9V45 differ (raven-macos-bench run 44415784342): what the EPYC left
+# x87.py cases where Rosetta and an AMD EPYC 9V45 differ (raven-macos-bench run 44420484491): what the EPYC left
 2	fstp st(3)	st7=00000000000000801ec0
 4	fstp st(1)	st7=00085a392e21529bea3f
 5	fstp st(7)	st7=00000000000000003412
@@ -2031,3 +2031,31 @@
 7997	fld qword ptr [r15 + 48]; fld qword ptr [r15 + 1]; fld qword ptr [r15 + 31]; fsubrp st(1), st; fdivrp st(1), st; fistp qword ptr [r15 + 42]	st5=00000000000000a00040	st6=00000000000000a00040
 7998	fld qword ptr [r15 + 80]; fld qword ptr [r15 + 45]; faddp st(1), st; fdivp st(1), st; fstp tbyte ptr [r15 + 15]	st5=00f0837c1409469e81bc	st6=ffbf6821a2da0fc90040
 7999	fld qword ptr [r15 + 73]; fld tbyte ptr [r15 + 85]; fld qword ptr [r15 + 28]; fsubp st(1), st; fstp tbyte ptr [r15 + 57]	st6=00205872571435c7ea3d
+8003	fmul st, st(1)	fsw=b080	st0=0000000000ffffff0060
+8007	fmul st, st(1)	fsw=b080	st0=0000000000ffffff0060
+8011	fmul st, st(1)	fsw=b080	st0=00f8ffffffffffff0060
+8015	fmul st, st(1)	fsw=b080	st0=00f8ffffffffffff0060
+8017	fmul st, st(1)	fsw=9080	st0=f0ffffffffffffff0060
+8019	fmul st, st(1)	fsw=9080	st0=f0ffffffffffffff0060
+8021	fmul st, st(1)	fsw=9080	st0=f0ffffffffffffff0060
+8023	fmul st, st(1)	fsw=9080	st0=f0ffffffffffffff0060
+8027	fdiv st, st(1)	fsw=b080	st0=0000000000ffffff0060
+8031	fdiv st, st(1)	fsw=b080	st0=0000000000ffffff0060
+8035	fdiv st, st(1)	fsw=b080	st0=00f8ffffffffffff0060
+8039	fdiv st, st(1)	fsw=b080	st0=00f8ffffffffffff0060
+8041	fdiv st, st(1)	fsw=b080	st0=e0ffffffffffffff0060
+8043	fdiv st, st(1)	fsw=b080	st0=e0ffffffffffffff0060
+8045	fdiv st, st(1)	fsw=b082	st0=e1ffffffffffffff0060
+8047	fdiv st, st(1)	fsw=b080	st0=e0ffffffffffffff0060
+8051	fst qword ptr [r15]	fsw=9080	b0=00000000000000
+8055	fst qword ptr [r15]	fsw=9080	b0=00000000000000
+8059	fst dword ptr [r15]	fsw=9080	b0=000000
+8063	fst dword ptr [r15]	fsw=9080	b0=000000
+8065	fst qword ptr [r15]	fsw=9080	b6=00
+8067	fst qword ptr [r15]	fsw=9080	b0=00000000000000
+8069	fst qword ptr [r15]	fsw=9080	b6=00
+8071	fst qword ptr [r15]	fsw=9080	b0=00000000000000
+8073	fst dword ptr [r15]	fsw=9080	b2=00
+8075	fst dword ptr [r15]	fsw=9080	b0=000000
+8077	fst dword ptr [r15]	fsw=9080	b2=00
+8079	fst dword ptr [r15]	fsw=9080	b0=000000

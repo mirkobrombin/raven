@@ -455,6 +455,33 @@ def main():
                       ".byte " + ", ".join(str(byte) for byte in code), "ret", f"_case_{number}_end:"]
             cases.append((family, registers, rng.getrandbits(12) & ALL_FLAGS, state.image(), bytes(memory),
                           "; ".join(insn.text for insn in body)))
+    # Tininess: results just below the smallest normal number that rounding at the precision takes to it, so x86's choice between
+    # detecting tininess before and after rounding shows in UE. Deterministic, after the random cases.
+    tiny = (0x0001, ONE)
+    just_below = (0x3FFE, 0xFFFFFFFFFFFFFFF0)
+    just_above_one = (0x3FFF, ONE | 0x10)
+    for name, second, pcs in [("fmul", just_below, [0, 2, 3]), ("fdiv", just_above_one, [0, 2, 3])]:
+        for pc in pcs:
+            for rc in range(4):
+                for masks in (0x3F, 0x2F):
+                    insn = register_insn(name, 1)
+                    state = State(rng, False)
+                    state.depth, state.fcw, state.fsw, state.top = 2, 0x40 | masks | pc << 8 | rc << 10, 0, 0
+                    state.regs[0], state.regs[1] = tiny, second
+                    cases.append(("tininess", [0] * 16, 0, state.image(), bytes(256), insn.text))
+                    lines += [f".globl _case_{len(cases) - 1}", f".globl _case_{len(cases) - 1}_end", f"_case_{len(cases) - 1}:",
+                              ".byte " + ", ".join(str(byte) for byte in insn.code), "ret", f"_case_{len(cases) - 1}_end:"]
+    for size, value in [(8, (0x3C00, 0xFFFFFFFFFFFFFFF0)), (4, (0x3F80, 0xFFFFFFFFFFFFFFF0)), (8, (0x3C00, 0xFFFFFFFFFFFFF800)),
+                        (4, (0x3F80, 0xFFFFFF0000000000))]:
+        for rc in range(4):
+            for masks in (0x3F, 0x2F):
+                insn = memory_insn("fst", size, 0)
+                state = State(rng, False)
+                state.depth, state.fcw, state.fsw, state.top = 1, 0x40 | masks | 3 << 8 | rc << 10, 0, 0
+                state.regs[0] = value
+                cases.append(("tininess", [0] * 16, 0, state.image(), bytes(256), insn.text))
+                lines += [f".globl _case_{len(cases) - 1}", f".globl _case_{len(cases) - 1}_end", f"_case_{len(cases) - 1}:",
+                          ".byte " + ", ".join(str(byte) for byte in insn.code), "ret", f"_case_{len(cases) - 1}_end:"]
     lines += [".data", ".balign 16", ".globl _host_fx", "_host_fx: .zero 512", "saved_io: .quad 0", "saved_code: .quad 0", ""]
     with open(assembly, "w") as out:
         out.write("\n".join(lines))
