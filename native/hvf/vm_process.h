@@ -64,9 +64,10 @@ public:
 
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t address) const override;
-	// The entry thunk the compiler names in the word before an ARM64EC function: an offset from the function, bit 0 set. A return
-	// address into native code follows a blr, whose bit 0 is clear.
+	// The entry thunk the compiler names in the word before an ARM64EC function: an offset from the function, bit 0 set.
 	uint64_t entry_thunk(uint64_t address) const override;
+	// A return address into native code: the word before it is a blr, as in every exit thunk.
+	bool native_return(uint64_t address) const override;
 	void write(uint64_t address, const void *bytes, size_t size) override;
 	// A watched page loses write permission at stage 2; a guest store there reaches every attached runtime's code_written. Refuses to
 	// watch with no runtime attached.

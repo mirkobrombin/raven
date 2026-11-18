@@ -200,8 +200,11 @@ uint8_t *Runtime::host_code(uint64_t guest)
 	else if (const auto stub = native_stubs.find(guest); stub != native_stubs.end())
 		host = stub->second;
 	else if (memory.is_native(guest)) {
-		const uint64_t thunk = memory.entry_thunk(guest);
-		host = native_stubs[guest] = place(thunk ? arm64ec_entry(guest, thunk) : arm64ec_resume(guest));
+		// Neither a function with an entry thunk nor a return address: the run stops as unsupported there.
+		if (const uint64_t thunk = memory.entry_thunk(guest))
+			host = native_stubs[guest] = place(arm64ec_entry(guest, thunk));
+		else if (memory.native_return(guest))
+			host = native_stubs[guest] = place(arm64ec_resume(guest));
 	} else if (const auto found = blocks.find(guest); found != blocks.end())
 		host = found->second->host;
 	else if (Block *block = translate(guest))

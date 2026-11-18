@@ -223,6 +223,15 @@ bool VmProcess::is_native(uint64_t address) const
 	return false;
 }
 
+bool VmProcess::native_return(uint64_t address) const
+{
+	if (!is_native(address) || !is_native(address - 4))
+		return false;
+	uint32_t word;
+	vm.read(address - 4, &word, 4);
+	return (word & 0xfffffc1fu) == 0xd63f0000u;
+}
+
 uint64_t VmProcess::entry_thunk(uint64_t address) const
 {
 	if (!is_native(address - 4))

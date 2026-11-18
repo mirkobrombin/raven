@@ -16,9 +16,11 @@ public:
 	virtual std::span<const uint8_t> code(uint64_t address) const = 0;
 	// Whether address is native code, as the code map of an ARM64EC process says (the EC bitmap): a call there takes a native thunk.
 	virtual bool is_native(uint64_t address) const = 0;
-	// For native code x64 may call at address: the ARM64EC entry thunk that adapts an x64 call to it. 0 when address is native code
-	// x64 returns to instead, or with no ARM64EC code.
+	// For native code x64 may call at address: the ARM64EC entry thunk that adapts an x64 call to it, 0 otherwise.
 	virtual uint64_t entry_thunk(uint64_t) const { return 0; }
+	// Whether address is native code x64 returns to: right after a call that went to x64 code. Native code that is neither this nor
+	// has an entry thunk is not something x64 can reach.
+	virtual bool native_return(uint64_t) const { return false; }
 	// Makes writes to the guest pages holding [address, address + size) reach Runtime::code_written (true), or plain again (false).
 	virtual void watch_code(uint64_t address, size_t size, bool watch) = 0;
 	// Writes guest memory as a guest store would, for the runtime's own stores such as the return address a call pushes.
