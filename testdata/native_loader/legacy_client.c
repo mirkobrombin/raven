@@ -6,7 +6,8 @@
    takes new files, the ANSI event log calls answer, the 64-bit .NET switch keeps the value it was given, a program whose path has
    spaces starts from a command line that does not quote it, a service's optional settings read back as they were set, a critical
    section shows its owner where code that tests it inline looks, a program of either width loads as a data file, wnsprintf stops at
-   the size it is given, regedit /s imports registration entries in both of their formats, lodctr's library takes counter names, and
+   the size it is given, regedit /s imports registration entries in both of their formats and
+   value names as long as the registry allows, refusing longer ones without harm, lodctr's library takes counter names, and
    a process of the services' session sees its window station is not visible. */
 
 static int run_from_heap(void)
@@ -299,6 +300,53 @@ static int registration_entries(void)
 	return 0;
 }
 
+/* The names in a file of registration entries are the file's to choose: one of 4000 characters is stored whole, one past the registry's
+   16383 is refused, and the import goes on to the next line either way. */
+__attribute__((optimize("no-tree-loop-distribute-patterns"))) static int long_names(void)
+{
+	static WCHAR folder[MAX_PATH], path[MAX_PATH], line[2 * MAX_PATH], text[32768], name[4001], value[16];
+	static const WCHAR head[] = L"\xfeffWindows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Software\\RavenRegeditLong]\r\n";
+	UINT length = 0;
+	if (!GetTempPathW(MAX_PATH, folder))
+		return 140;
+	lstrcpyW(path, folder);
+	lstrcatW(path, L"raven-long.reg");
+	for (const WCHAR *at = head; *at; ++at)
+		text[length++] = *at;
+	/* "NNN...N"="long", then a name of 20000 characters, then "After"="ok". */
+	const UINT names[2] = {4000, 20000};
+	for (UINT which = 0; which < 2; ++which) {
+		text[length++] = L'"';
+		for (UINT index = 0; index < names[which]; ++index)
+			text[length++] = L'N';
+		for (const WCHAR *at = L"\"=\"long\"\r\n"; *at; ++at)
+			text[length++] = *at;
+	}
+	for (const WCHAR *at = L"\"After\"=\"ok\"\r\n"; *at; ++at)
+		text[length++] = *at;
+	if (!write_file(path, text, length * sizeof(WCHAR)))
+		return 141;
+	lstrcpyW(line, L"regedit /s \"");
+	lstrcatW(line, path);
+	lstrcatW(line, L"\"");
+	/* Whether the refused line counts as a failure is regedit's; a crash is not. */
+	const int code = run_and_wait(line);
+	if (code != 0 && code != 1)
+		return 142;
+	for (UINT index = 0; index < 4000; ++index)
+		name[index] = L'N';
+	name[4000] = 0;
+	DWORD size = sizeof value;
+	if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\RavenRegeditLong", name, RRF_RT_REG_SZ, NULL, value, &size) || lstrcmpW(value, L"long"))
+		return 143;
+	size = sizeof value;
+	if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\RavenRegeditLong", L"After", RRF_RT_REG_SZ, NULL, value, &size) || lstrcmpW(value, L"ok"))
+		return 144;
+	RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\RavenRegeditLong");
+	DeleteFileW(path);
+	return 0;
+}
+
 static int counter_names(void)
 {
 	HMODULE library = LoadLibraryW(L"loadperf.dll");
@@ -359,7 +407,7 @@ int raven_entry(void)
 	int result;
 	if ((result = run_from_heap()) || (result = read_only_folder()) || (result = event_log()) || (result = complus_switch()) ||
 		(result = unquoted_path()) || (result = service_settings()) || (result = section_fields()) || (result = data_files()) ||
-		(result = bounded_format()) || (result = registration_entries()) || (result = counter_names()) ||
+		(result = bounded_format()) || (result = registration_entries()) || (result = long_names()) || (result = counter_names()) ||
 		(result = system_numbers()))
 		return result;
 	return 0;
