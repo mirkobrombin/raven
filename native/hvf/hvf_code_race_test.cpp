@@ -2,6 +2,8 @@
 //   Retranslation in the window: after the store's fault has dropped patch_target's translation and before the store is retried, the
 //   page is translated again from its old bytes (test seam VmProcess::after_code_written, standing in for another vCPU). The store must
 //   still reach that translation: the vCPU's next call must return the new value.
+//   A second store to the same page: its permission fault reaches the host after the first store's handler unwatched the page. The
+//   handler must have it retried (true), not report a guest exception; an address outside guest memory stays unhandled.
 #include "runtime.h"
 #include "vcpu.h"
 #include "vm.h"
@@ -71,6 +73,10 @@ int main(int argc, char **argv)
 				}
 				process.after_code_written = nullptr;
 				runtime.remove_thread(thread);
+				// patch_target is translated and watched: the first store's handler drops it, the second finds the page unwatched.
+				check(vm.write_fault && vm.write_fault(patch_target + 1), "the first store's write fault is not retried");
+				check(vm.write_fault(patch_target + 2), "a write fault on a guest page that is no longer watched is not retried");
+				check(vm.write_fault && !vm.write_fault(uint64_t(1) << 37), "a write fault outside guest memory is retried");
 			} catch (const std::exception &error) {
 				check(false, error.what());
 			}
