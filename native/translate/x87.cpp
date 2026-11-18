@@ -1459,6 +1459,8 @@ void Core::load_environment(bool restore)
 			set_st(i, load80(source, 28 + 10 * i));
 		x.ftw = tags_now;
 	}
+	// ES and B are not taken as stored: x86 sets them from the loaded flags and masks, as after fldcw.
+	summary();
 }
 
 X87Result Core::run()
