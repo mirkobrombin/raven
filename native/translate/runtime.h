@@ -122,9 +122,10 @@ public:
 	// Where the translation of the block at address sits in the code cache, or nullptr.
 	const void *translated_code(uint64_t address) const;
 
-	// A guest write reached guest code at address: drops every translation of the granule holding it. On return no guest thread can
-	// enter them: chains into them are undone, the lookup table no longer names them and every other guest thread's runner has been
-	// quiesced. A guest thread inside one finishes that block, which has no backward branch of its own, and leaves it.
+	// A guest write reached guest code at address: drops every translation of the granule holding it. On return no guest thread reaches
+	// them through a chain or the lookup table, and every other guest thread's runner has been quiesced. A thread inside one, or one
+	// that got its address from the runtime just before and is about to enter it, runs that block once to its end (it has no backward
+	// branch of its own) and leaves it.
 	void code_written(uint64_t address);
 
 	// The ahead-of-time cache: every block translated so far, keyed by key (the image hash, its base and the options).
