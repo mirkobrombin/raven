@@ -1,6 +1,7 @@
 // Translated x64 spins at EL0 for seconds on two vCPUs while spinning host threads fill every core, so the host preempts and moves
-// the vCPU threads. x18, which the translator never touches, holds a sentinel per vCPU: it must read back unchanged at every forced
-// exit and at the end, and each spin must return the value the same LCG gives on the host.
+// the vCPU threads. x18 holds a sentinel per vCPU: it must read back unchanged at every forced exit and at the end, which fails if the
+// translated code, the dispatcher or the kernel ever writes it (Hypervisor.framework keeps guest registers across host scheduling).
+// Each spin must return the value the same LCG gives on the host.
 #include "runtime.h"
 #include "vcpu.h"
 #include "vm.h"
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <mutex>
 #include <pthread.h>
 #include <set>
 #include <string>
@@ -51,8 +53,10 @@ uint64_t now_ns()
 }
 
 struct Spinner {
-	std::atomic<hv_vcpu_t> id{0};
-	std::atomic<bool> ready{false};
+	// Held by the watcher while it forces an exit, and by the spinner while its vCPU comes and goes.
+	std::mutex lock;
+	hv_vcpu_t id = 0;
+	bool ready = false;
 	uint64_t sentinel = 0;
 	uint64_t steps = 0;
 	uint64_t result = 0;
@@ -84,8 +88,11 @@ void spin(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, Spinner &spinner
 			last_cpu = cpu;
 			spinner.cpus.insert(cpu);
 		};
-		spinner.id = vcpu.id();
-		spinner.ready = true;
+		{
+			std::lock_guard guard(spinner.lock);
+			spinner.id = vcpu.id();
+			spinner.ready = true;
+		}
 		const uint64_t start = now_ns();
 		const translate::RunResult done = runtime.call(entry, {2, 0, spinner.steps});
 		spinner.seconds = double(now_ns() - start) / 1e9;
@@ -93,9 +100,11 @@ void spin(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, Spinner &spinner
 			throw std::runtime_error("the spin did not return");
 		spinner.result = done.value;
 		spinner.final_x18 = vcpu.reg(HV_REG_X18);
+		std::lock_guard guard(spinner.lock);
 		spinner.ready = false;
 	} catch (const std::exception &error) {
 		spinner.error = error.what();
+		std::lock_guard guard(spinner.lock);
 		spinner.ready = false;
 	}
 }
@@ -157,11 +166,11 @@ int main(int argc, char **argv)
 		std::thread watcher([&] {
 			while (!done) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
-				for (Spinner &spinner : spinners)
-					if (spinner.ready) {
-						hv_vcpu_t id = spinner.id;
-						hv_vcpus_exit(&id, 1);
-					}
+				for (Spinner &spinner : spinners) {
+					std::lock_guard guard(spinner.lock);
+					if (spinner.ready)
+						hv_vcpus_exit(&spinner.id, 1);
+				}
 			}
 		});
 		std::thread first(spin, std::ref(vm), std::ref(process), entry, std::ref(spinners[0]));
@@ -184,7 +193,7 @@ int main(int argc, char **argv)
 				fail("a spin returned a wrong value");
 			if (spinner.x18_lost || spinner.final_x18 != spinner.sentinel)
 				fail("x18 changed");
-			if (spinner.seconds < target_seconds / 2 || spinner.cancels < 10)
+			if (spinner.seconds < target_seconds * 0.75 || spinner.cancels < 10)
 				fail("a vCPU spun too briefly to tell");
 		}
 	} catch (const std::exception &error) {

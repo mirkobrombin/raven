@@ -106,7 +106,7 @@ add_executable(hvf_spin_test hvf_spin_test.cpp)
 target_link_libraries(hvf_spin_test PRIVATE raven_hvf)
 add_dependencies(hvf_spin_test hvf_guests)
 raven_hvf_sign(hvf_spin_test)
-add_test(NAME hvf_spin COMMAND hvf_spin_test ${GUEST} 2)
+add_test(NAME hvf_spin COMMAND hvf_spin_test ${GUEST} 3)
 set_tests_properties(hvf_spin PROPERTIES TIMEOUT 60)
 
 add_executable(hvf_bench hvf_bench.cpp)
