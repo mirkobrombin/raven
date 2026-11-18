@@ -65,11 +65,16 @@ Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions op
 	std::fill(lookup.begin(), lookup.end(), LookupEntry{});
 	place_fixed_code();
 	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
+	first = threads.front().get();
 }
 
 Runtime::Thread &Runtime::add_thread(CodeRunner *runner)
 {
 	std::lock_guard guard(lock);
+	if (!runner)
+		throw std::invalid_argument("a guest thread in this process is the runtime's only one");
+	if (!natives.empty())
+		throw std::logic_error("native functions are bound: the runtime runs its first thread alone");
 	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
 	return *threads.back();
 }
@@ -77,7 +82,7 @@ Runtime::Thread &Runtime::add_thread(CodeRunner *runner)
 void Runtime::remove_thread(Thread &thread)
 {
 	std::lock_guard guard(lock);
-	if (&thread == threads.front().get())
+	if (&thread == first)
 		throw std::invalid_argument("the first guest thread stays with its runtime");
 	std::erase_if(threads, [&](const auto &owned) { return owned.get() == &thread; });
 }
@@ -85,7 +90,7 @@ void Runtime::remove_thread(Thread &thread)
 Runtime::~Runtime()
 {
 	for (const auto &[guest, block] : blocks)
-		memory.watch_code(block->guest_start, block->guest_size, false);
+		memory.watch_code(block->guest_start, std::max<uint32_t>(block->guest_size, 1), false);
 }
 
 Runtime *Runtime::current()
@@ -161,8 +166,11 @@ Runtime::Block *Runtime::translate(uint64_t guest)
 		const auto now = memory.code(guest);
 		if (now.size() >= block->guest_size && std::equal(copy.begin(), copy.begin() + block->guest_size, now.begin()))
 			return block;
+		// The dropped code stays in the cache until a reset, as code_written leaves it.
 		invalidate(*block);
 		blocks.erase(guest);
+		for (auto &[granule, starts] : blocks_by_granule)
+			std::erase(starts, guest);
 	}
 }
 

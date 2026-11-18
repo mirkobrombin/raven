@@ -95,14 +95,16 @@ public:
 	Runtime(const Runtime &) = delete;
 	Runtime &operator=(const Runtime &) = delete;
 
-	// Another guest thread, running on runner, until remove_thread or the runtime's end.
+	// Another guest thread, running on runner, until remove_thread or the runtime's end. Only threads with a runner can be added, and
+	// not once native functions are bound: in this process the runtime runs its first thread alone (the fault handler's state and the
+	// natives' stops are not per thread).
 	Thread &add_thread(CodeRunner *runner);
 	// Before its runner goes. Not the first thread.
 	void remove_thread(Thread &thread);
-	Thread &main_thread() { return *threads.front(); }
+	Thread &main_thread() { return *first; }
 	// The first thread's.
-	CpuState &state() { return main_thread().state(); }
-	uint64_t state_address() const { return threads.front()->state_address(); }
+	CpuState &state() { return first->state(); }
+	uint64_t state_address() const { return first->state_address(); }
 	const TranslationStats &translation_stats() const { return translation; }
 	const RuntimeStats &stats() const { return counters; }
 	// The runtime whose guest code is running on this thread, for native functions that need it.
@@ -158,6 +160,8 @@ private:
 	uint8_t *return_address = nullptr;
 	uint64_t return_guest = 0;
 	std::vector<std::unique_ptr<Thread>> threads;
+	// threads.front(), kept apart: add_thread may move the vector while another thread reads it.
+	Thread *first = nullptr;
 	mutable std::mutex lock;
 
 	void place_fixed_code();

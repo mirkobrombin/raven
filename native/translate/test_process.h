@@ -21,7 +21,9 @@ class Runtime;
 std::vector<std::pair<uint64_t, uint64_t>> lay_out_image(const PEImage &pe, std::span<const uint8_t> file, uint8_t *bytes, uint64_t base);
 
 // Test-only process model: x64 images mapped into this process at their guest addresses, imports bound to native functions of this
-// process, and code pages write-protected so writes to them reach the runtime. It stands in for the loader until the process model is
+// process, and code pages write-protected so writes to them reach the runtime. One guest thread: the fault handler's state is not
+// synchronized, and the runtime's code_written, which takes a std::mutex, runs in a SIGSEGV handler (not async-signal-safe; it runs
+// on the thread whose guest store faulted, which holds no runtime lock then). It stands in for the loader until the process model is
 // chosen; it is not how Raven will load programs.
 class TestProcess final : public GuestMemory {
 public:
