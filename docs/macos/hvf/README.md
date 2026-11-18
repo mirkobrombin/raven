@@ -47,7 +47,7 @@ ACTLR_EL1.EnTSO as asked; vtimer masked, DAIF masked.
 ### Absolute addresses: the audit
 
 Everything translated code reads as an address must be a guest address in the vCPU. What the audit found and what changed in
-`native/translate` (commit `refactor: let the runtime place its state ...`), all of it through the allocator's two views of the same
+`native/translate` (commit `refactor: keep the runtime's state where translated code sees it ...`), all of it through the allocator's two views of the same
 memory rather than VM-specific code:
 
 | Place | Before | After |
@@ -61,9 +61,22 @@ memory rather than VM-specific code:
 | native thunks (runtime.cpp:80) | `mov` of a host function address | `bind_native` throws when a runner is given (open item below) |
 | the emitter (`translator.cpp`) | | no host address: exits load `exit_trampoline` and `lookup_table` from the CpuState (x23); chain sites come from `adr`; RIP-relative operands are guest addresses. The only absolute host address is in `native_thunk` |
 
-The workload images import nothing (PROVEN: `llvm-readobj --coff-imports` lists 0 import descriptors for `hvf_entry.exe`,
-`hvf_crc32.exe`, `hvf_fnv.exe`, `hvf_histogram.exe` and translate's `entry/crc32/fnv/histogram.exe`, and 1 (`KERNEL32.dll`) for
-`api_loop.exe` as a check that the command sees imports), so no native thunk is needed on this path.
+The workload images import nothing, so no native thunk is needed on this path. PROVEN, in `build-macos-hvf`:
+
+```
+$ for e in guest/hvf_*.exe translate/guest/{entry,crc32,fnv,histogram}.exe; do printf "%s " $e; llvm-readobj --coff-imports $e | grep -c "Import {"; done
+guest/hvf_crc32.exe 0
+guest/hvf_entry.exe 0
+guest/hvf_fnv.exe 0
+guest/hvf_histogram.exe 0
+translate/guest/entry.exe 0
+translate/guest/crc32.exe 0
+translate/guest/fnv.exe 0
+translate/guest/histogram.exe 0
+$ llvm-readobj --coff-imports translate/guest/api_loop.exe | grep -E "Import \{|Name:" | head -2    # the command does see imports
+Import {
+  Name: KERNEL32.dll
+```
 
 ### Instruction cache
 
@@ -86,9 +99,14 @@ control: none: 19939 stale of 20000, 0 wrong exits, 0 guest invalidations
   shareable domain. That is the default (`CodeMaintenance`); the guest-side IC IALLUIS in the kernel's return path also suffices
   (PROVEN) and stays as an option for a CPU whose instruction cache is not PIPT.
 - The test fails if a control ever shows no stale run while CTR_EL0.DIC = 0, so it proves its own sensitivity on every run.
+- The test writes and enters on the same host thread. That the host's IC IVAU also reaches a vCPU on another core, or one whose
+  thread moved between the write and the resume, is INFERRED from IC IVAU being broadcast to the inner shareable domain; no test
+  writes from one thread and runs on another.
 - A vCPU running other code while the host patches a chained branch it may reach: the patch replaces one `b` with another, which the
-  architecture allows to be modified concurrently, and the host's broadcast invalidation reaches every core. INFERRED from the Arm
-  ARM's concurrent modification rules; not exercised, since one vCPU runs per Runtime here.
+  architecture allows to be modified concurrently. INFERRED from the Arm ARM's concurrent modification rules; not exercised, since one
+  vCPU runs per Runtime here.
+- The kernel vectors are copied once at VM creation into pages no vCPU has run, and invalidated like any other code. That
+  invalidation is defensive: no test removes it.
 
 ## Results
 
@@ -164,31 +182,54 @@ shows none, or if the median reader loop count is under 1000.
 
 ### 3. EL0 spinning under host load, x18
 
-PROVEN (`ctest --test-dir build-macos-hvf -V -R hvf_spin`). A child process spins 20 threads (two per core) for the whole test. Two
-vCPUs each run a translated 64-bit LCG for seconds with x18 set to a sentinel; a watcher thread forces an exit of each vCPU every 5 ms
-(`hv_vcpus_exit`), at which the host checks x18 and records the host CPU it runs on.
+PROVEN (`ctest --test-dir build-macos-hvf -V -R hvf_spin`, a 3 s target). A child process spins 20 threads (two per core) for the
+whole test. Two vCPUs each run a translated 64-bit LCG for seconds with x18 set to a sentinel; a watcher thread forces an exit of each
+vCPU every 5 ms (`hv_vcpus_exit`), at which the host checks x18 and records the host CPU it runs on.
 
 ```
-vCPU x18 0x5eed5eed00000000: 5150192488 steps in 5.76 s, result right, 733 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000000 at the end, 620 host CPU changes between exits over 10 distinct CPUs
-vCPU x18 0x5eed5eed00000001: 5150192489 steps in 5.77 s, result right, 739 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000001 at the end, 641 host CPU changes between exits over 10 distinct CPUs
-host load: 20 spinning threads; this process: 8212 involuntary and 1 voluntary context switches
+vCPU x18 0x5eed5eed00000000: 4868924495 steps in 3.53 s, result right, 402 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000000 at the end, 321 host CPU changes between exits over 10 distinct CPUs
+vCPU x18 0x5eed5eed00000001: 4868924496 steps in 3.50 s, result right, 381 forced exits, x18 changed at 0 of them and reads 0x5eed5eed00000001 at the end, 294 host CPU changes between exits over 10 distinct CPUs
+host load: 20 spinning threads; this process: 3337 involuntary and 2 voluntary context switches
 hvf spin: PASS
 ```
 
-- x18 survives at EL0 across host exits, host preemption and migration (PROVEN for these runs: 0 changes over about 1470 checks).
-- Host migrations: each vCPU thread was seen on all 10 CPUs and on a different CPU at about 85% of consecutive forced exits (PROVEN as
+- Nothing on the guest side writes x18: not the translated code, the dispatcher, the enter and exit trampolines or the kernel, across
+  host exits, preemption and migration (PROVEN for these runs: 0 changes over 783 checks; an earlier run gave 0 over about 1470).
+  Hypervisor.framework itself keeps guest registers across host scheduling, so the host side could not have changed it; what the test
+  guards is the guest's own code, and a kernel that clears x18 makes it fail (Failing first, below).
+- Host migrations: each vCPU thread was seen on all 10 CPUs and on a different CPU at about 78% of consecutive forced exits (PROVEN as
   sampled at the exits).
-- Preemptions: 8212 involuntary context switches for the whole process (PROVEN); how many fell on the two vCPU threads is not
+- Preemptions: 3337 involuntary context switches for the whole process (PROVEN); how many fell on the two vCPU threads is not
   observable per thread here (NOT verified).
-- The spin length is calibrated from a short run; it came out 5.8 s for a 2 s target because the calibration run met less contention.
+- The spin length is calibrated from a short run under the same load, and the test fails under three quarters of the target; the real
+  length varies with contention (3.5 s here, 5.8 s in an earlier run with a 2 s target).
 - The result of each spin matches the LCG computed on the host by squaring (PROVEN).
 
 ### Failing first
 
-Only exit criterion 1 has a failing-first commit with a failing run (above). The VM commit that made it pass already set EnTSO, handled
-forced exits and did instruction cache maintenance, so the litmus, spin and code write tests passed when they were written. In their
-place, each carries a control that must fail without the property it checks (EnTSO clear must reorder; no instruction cache
-invalidation must run stale code) and fails the test if it does not.
+Exit criterion 1 and the runtime data reuse check have failing-first commits with failing runs. The VM commit that made criterion 1
+pass already set EnTSO, handled forced exits and did instruction cache maintenance, so the litmus, spin and code write tests passed
+when they were written. For those, the failing runs below are against a build mutated on purpose and then restored (PROVEN, outputs as
+printed; the restored build passes):
+
+- Litmus, with `Vcpu` writing ACTLR_EL1 = 0 whatever it is asked:
+
+  ```
+  FAIL: ACTLR_EL1.EnTSO does not read back as set
+  FAIL: x86 ordering broken with EnTSO set
+  EnTSO 1 (ACTLR_EL1 read back 0, 0): 11587135 violations in 30 trials of 2000000 writes, median 358301 per trial, median reader loops 2252639
+  EnTSO 0 (ACTLR_EL1 read back 0, 0): 11442044 violations in 30 trials of 2000000 writes, median 312552 per trial, median reader loops 2690053
+  ```
+- Spin, with `mov x18, xzr` before the kernel's `hvc #0`:
+
+  ```
+  FAIL: x18 changed
+  FAIL: x18 changed
+  vCPU x18 0x5eed5eed00000000: 2194494347 steps in 2.82 s, result right, 293 forced exits, x18 changed at 293 of them and reads 0 at the end, ...
+  ```
+- Code write: its controls fail the test whenever they do not run stale code, on every run (Instruction cache, above).
+- Runtime data reuse (`hvf_workloads_test` builds 64 runtimes on one code cache with 1 MiB of runtime data): before
+  `CodeAllocator::free_data`, `FAIL: the VM's runtime data is full`, exit 1.
 
 ## Reproduction
 
@@ -201,7 +242,7 @@ python3 -I native/hvf/hvf_bench_run.py build-macos-hvf docs/macos/hvf/data 30 /p
 ```
 
 The last argument is optional: a program that prints the thermal state (`NSProcessInfo.thermalState`, 0 nominal to 3 critical).
-`hvf_spin` loads every core for about 6 s.
+`hvf_spin` loads every core for 3 to 6 s.
 
 ## Open items
 
@@ -223,17 +264,32 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   T0SZ = 16 and a fourth table level.
 - **Guest RAM** is one bump allocation (up to 1 GiB) that is never freed.
 - **Concurrent chain patching** is INFERRED safe (instruction cache section), not exercised.
+- **Instructions that trap at EL0.** SCTLR_EL1 leaves nTWE, nTWI, DZE and UCI clear and CNTKCTL_EL1 is not set, so WFE, WFI, DC ZVA,
+  EL0 cache maintenance and CNTVCT_EL0 reads trap to the kernel, which reports them as a fatal guest exception. The translator emits
+  none of them today; an `rdtsc` translated to a counter read will need CNTKCTL_EL1.EL0VCTEN.
+- **Kernel.** One kernel stack for every vCPU (the kernel never uses sp); any `svc` from EL0 counts as the dispatcher's exit, since
+  translated x64 cannot emit one; the guest-side invalidation mode only reaches the vCPU that next enters.
 
 ## What shared code must settle before merge
 
-- `native/translate` gained `CodeRunner`, `CodeAllocator::read` and `allocate_data`, `GuestMemory::write` and `lay_out_image`; the
-  `Runtime` constructor takes an optional runner. In-process behavior is unchanged (PROVEN on macOS: `translate_*` tests pass before and
-  after; NOT verified on Linux, where the standalone translate build was not run).
+- `native/translate` gained `CodeRunner`, `CodeAllocator::read`, `allocate_data` and `free_data`, `GuestMemory::write` and
+  `lay_out_image`; the `Runtime` constructor takes an optional runner, and its CpuState and lookup table now come from the allocator
+  (heap blocks in `JitCodeCache`, given back when the runtime goes). The emitted code is unchanged. PROVEN on macOS that translate's
+  own tests pass before the change and after every commit (`ctest --test-dir build-macos-translate` before the change and
+  `ctest --test-dir build-macos-hvf` after: `100% tests passed out of 4` and `out of 8`, the four `translate_*` among them); NOT
+  verified on Linux, where the standalone translate build was not run.
 - `CpuState::lookup_table` stays a `LookupEntry *` but holds the address translated code uses, which is not a host pointer in a VM: it
   could become a `uint64_t`.
 - `native/hvf` reuses `test_process.h`'s `lay_out_image`, which lives in a test-only library; the real loader should provide it.
-- Neither `native/translate` nor `native/hvf` is part of the top-level build (PROVEN: `native/CMakeLists.txt` names neither). Configured
-  as a cross build for Linux x86-64, `native/hvf` prints that it needs Darwin on arm64 and generates nothing (PROVEN); a real Linux
-  configure was not run (NOT verified).
+- Neither `native/translate` nor `native/hvf` is part of the top-level build (PROVEN: `grep -n "translate\|hvf" native/CMakeLists.txt
+  CMakeLists.txt` prints nothing). Configured as a cross build for Linux, `native/hvf` generates nothing (PROVEN):
+
+  ```
+  $ cmake -S native/hvf -B linuxcfg -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=x86_64 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+  -- native/hvf needs Darwin on arm64; nothing to build here
+  -- Configuring done (4.3s)
+  ```
+
+  A real Linux configure was not run (NOT verified).
 - No change to `native/nt` or `native/cpu`. The engine interface of section 4 fits this engine as it is: `resume` and `call` map to
   `Runtime::call` and `CodeRunner::enter`, and `Thread` to a `Vcpu` with its host thread. No interface change is proposed.

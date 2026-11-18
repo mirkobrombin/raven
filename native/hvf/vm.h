@@ -22,7 +22,8 @@ struct CodeMaintenance {
 	// DC CVAU and IC IVAU on the host alias, broadcast to the inner shareable domain.
 	bool host_invalidate = true;
 	// IC IALLUIS in the guest kernel before a vCPU returns to EL0 after code was written: for a CPU whose instruction cache is not
-	// PIPT, where the host's alias would not name the guest's lines.
+	// PIPT, where the host's alias would not name the guest's lines. Only the vCPU that next enters invalidates, so with several
+	// vCPUs one that keeps running may fetch stale code until its next exit.
 	bool guest_invalidate = false;
 };
 

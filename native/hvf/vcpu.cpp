@@ -59,6 +59,7 @@ Vcpu::Vcpu(Vm &vm, bool tso) : vm(vm)
 			{HV_SYS_REG_TTBR0_EL1, vm.user_tables()},
 			{HV_SYS_REG_TTBR1_EL1, vm.kernel_tables()},
 			{HV_SYS_REG_VBAR_EL1, vm.vectors()},
+			// One kernel stack for every vCPU: the kernel never touches sp yet. A handler that does needs one stack per vCPU.
 			{HV_SYS_REG_SP_EL1, vm.kernel_stack()},
 			{HV_SYS_REG_SP_EL0, stack_top},
 			{HV_SYS_REG_CPACR_EL1, cpacr},
