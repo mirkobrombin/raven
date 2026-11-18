@@ -17,7 +17,7 @@ namespace {
 constexpr uint64_t translator_version = 1;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
-thread_local Runtime *running = nullptr;
+thread_local Runtime::Thread *running = nullptr;
 
 using EnterFunction = uint32_t (*)(CpuState *, const void *);
 
@@ -38,15 +38,26 @@ uint64_t fnv(uint64_t hash, const void *bytes, size_t size)
 
 }
 
+Runtime::Thread::Thread(Runtime &runtime, CodeRunner *runner)
+	: runtime(runtime), runner(runner), state_memory(runtime.cache, sizeof(CpuState)), cpu(*new (state_memory.data.host) CpuState{})
+{
+	// Translated code reads the table and the trampoline at the addresses it sees, which are not the runtime's pointers in a VM.
+	cpu.lookup_table = reinterpret_cast<LookupEntry *>(runtime.lookup_memory.data.address);
+	cpu.exit_trampoline = reinterpret_cast<uint64_t>(runtime.exit);
+}
+
 Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options, CodeRunner *runner)
-	: memory(memory), cache(cache), options(options), runner(runner), state_memory(cache, sizeof(CpuState)),
-	  lookup_memory(cache, sizeof(LookupEntry) << lookup_bits), cpu(*new (state_memory.data.host) CpuState{}),
+	: memory(memory), cache(cache), options(options), lookup_memory(cache, sizeof(LookupEntry) << lookup_bits),
 	  lookup(static_cast<LookupEntry *>(lookup_memory.data.host), size_t(1) << lookup_bits)
 {
 	std::fill(lookup.begin(), lookup.end(), LookupEntry{});
-	// Translated code reads the table at the address it sees, which is not the runtime's pointer in a VM.
-	cpu.lookup_table = reinterpret_cast<LookupEntry *>(lookup_memory.data.address);
 	place_fixed_code();
+	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
+}
+
+Runtime::Thread &Runtime::add_thread(CodeRunner *)
+{
+	throw std::logic_error("guest threads cannot share a runtime yet");
 }
 
 Runtime::~Runtime()
@@ -57,7 +68,7 @@ Runtime::~Runtime()
 
 Runtime *Runtime::current()
 {
-	return running;
+	return running ? &running->runtime : nullptr;
 }
 
 uint8_t *Runtime::place(const std::vector<uint32_t> &code)
@@ -75,7 +86,6 @@ void Runtime::place_fixed_code()
 	exit = place(exit_trampoline());
 	return_address = place(return_stub());
 	return_guest = reinterpret_cast<uint64_t>(return_address);
-	cpu.exit_trampoline = reinterpret_cast<uint64_t>(exit);
 }
 
 void Runtime::bind_native(uint64_t address, const void *function, unsigned integer_arguments)
@@ -83,7 +93,7 @@ void Runtime::bind_native(uint64_t address, const void *function, unsigned integ
 	if (!memory.is_native(address))
 		throw std::invalid_argument("the code map does not call that address native");
 	// A thunk calls the function at its address in this process, which code running elsewhere cannot reach.
-	if (runner)
+	if (std::any_of(threads.begin(), threads.end(), [](const auto &thread) { return thread->runner; }))
 		throw std::logic_error("native functions need translated code that runs in this process");
 	natives[address] = place(native_thunk(reinterpret_cast<uint64_t>(function), integer_arguments));
 }
@@ -169,24 +179,24 @@ void Runtime::chain(uint8_t *site, uint64_t target)
 	++counters.chains;
 }
 
-uint32_t Runtime::enter_code(const uint8_t *code)
+uint32_t Runtime::Thread::enter_code(const uint8_t *code)
 {
 	if (runner)
-		return runner->enter(reinterpret_cast<uint64_t>(enter), state_memory.data.address, reinterpret_cast<uint64_t>(code));
-	return reinterpret_cast<EnterFunction>(enter)(&cpu, code);
+		return runner->enter(reinterpret_cast<uint64_t>(runtime.enter), state_memory.data.address, reinterpret_cast<uint64_t>(code));
+	return reinterpret_cast<EnterFunction>(runtime.enter)(&cpu, code);
 }
 
-RunResult Runtime::run()
+RunResult Runtime::Thread::run()
 {
 	for (;;) {
-		uint8_t *code = host_code(cpu.rip);
+		uint8_t *code = runtime.host_code(cpu.rip);
 		if (!code)
 			return {ExitReason::unsupported, cpu.rip};
-		++counters.runs;
+		++runtime.counters.runs;
 		const auto reason = static_cast<ExitReason>(enter_code(code));
 		switch (reason) {
-		case ExitReason::lookup_miss: ++counters.lookup_misses; break;
-		case ExitReason::chain: chain(reinterpret_cast<uint8_t *>(cpu.exit_info), cpu.rip); break;
+		case ExitReason::lookup_miss: ++runtime.counters.lookup_misses; break;
+		case ExitReason::chain: runtime.chain(reinterpret_cast<uint8_t *>(cpu.exit_info), cpu.rip); break;
 		case ExitReason::returned: return {reason, cpu.gpr[rax]};
 		case ExitReason::stopped: {
 			cpu.stop_requested = 0;
@@ -197,17 +207,32 @@ RunResult Runtime::run()
 	}
 }
 
+Runtime::Thread &Runtime::calling_thread()
+{
+	return running && &running->runtime == this ? *running : main_thread();
+}
+
 RunResult Runtime::call(uint64_t address, std::initializer_list<uint64_t> arguments)
+{
+	return calling_thread().call(address, arguments);
+}
+
+void Runtime::request_stop(uint64_t code)
+{
+	calling_thread().request_stop(code);
+}
+
+RunResult Runtime::Thread::call(uint64_t address, std::initializer_list<uint64_t> arguments)
 {
 	if (arguments.size() > 4)
 		throw std::invalid_argument("guest calls take up to four arguments here");
-	Runtime *outer = running;
+	Thread *outer = running;
 	running = this;
 	++depth;
 	// A call made while guest code waits in a native function: keep what the outer run needs when it resumes.
 	const uint64_t saved_rip = cpu.rip, saved_frame = cpu.host_frame, saved_rsp = cpu.gpr[rsp];
 	uint64_t stack = (saved_rsp & ~uint64_t(15)) - 32 - 8;
-	memory.write(stack, &return_guest, 8);
+	runtime.memory.write(stack, &runtime.return_guest, 8);
 	cpu.gpr[rsp] = stack;
 	static constexpr Gpr argument_registers[] = {rcx, rdx, r8, r9};
 	size_t index = 0;
@@ -230,7 +255,7 @@ RunResult Runtime::call(uint64_t address, std::initializer_list<uint64_t> argume
 	return result;
 }
 
-void Runtime::request_stop(uint64_t code)
+void Runtime::Thread::request_stop(uint64_t code)
 {
 	cpu.stop_requested = 1;
 	cpu.stop_code = code;

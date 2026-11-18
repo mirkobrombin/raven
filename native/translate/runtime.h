@@ -43,17 +43,58 @@ public:
 };
 
 // Runs x64 code by translating it block by block: dispatch, the lookup table for indirect branches, chaining of direct branches,
-// native functions behind thunks, and invalidation when guest code is written. One guest thread; nothing here is thread-safe yet.
+// native functions behind thunks, and invalidation when guest code is written. The translations, the lookup table and the chains are
+// shared by every guest thread of the runtime; each thread has its own CpuState and runner.
 class Runtime {
+	// Runtime data that goes back to the allocator with its owner, also when the owner's constructor throws.
+	struct OwnedData {
+		CodeAllocator &cache;
+		CodeAllocator::Data data;
+		OwnedData(CodeAllocator &cache, size_t size) : cache(cache), data(cache.allocate_data(size)) {}
+		~OwnedData() { cache.free_data(data); }
+		OwnedData(const OwnedData &) = delete;
+		OwnedData &operator=(const OwnedData &) = delete;
+	};
+
 public:
+	// One guest thread: its CpuState, which translated code sees at state_address(), and the runner that enters its code (none: this
+	// process's own thread). Use it from one host thread at a time.
+	class Thread {
+	public:
+		Thread(const Thread &) = delete;
+		Thread &operator=(const Thread &) = delete;
+		CpuState &state() { return cpu; }
+		uint64_t state_address() const { return state_memory.data.address; }
+		// Calls the guest function at address from native code, with up to four integer arguments, on the guest stack the state's RSP
+		// names.
+		RunResult call(uint64_t address, std::initializer_list<uint64_t> arguments = {});
+		// From a native function: ends the current call with ExitReason::stopped once the function returns.
+		void request_stop(uint64_t code);
+
+	private:
+		friend class Runtime;
+		Thread(Runtime &runtime, CodeRunner *runner);
+		Runtime &runtime;
+		CodeRunner *runner;
+		OwnedData state_memory;
+		CpuState &cpu;
+		unsigned depth = 0;
+		uint32_t enter_code(const uint8_t *code);
+		RunResult run();
+	};
+
+	// The first guest thread runs on runner.
 	Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions options = {}, CodeRunner *runner = nullptr);
 	~Runtime();
 	Runtime(const Runtime &) = delete;
 	Runtime &operator=(const Runtime &) = delete;
 
-	CpuState &state() { return cpu; }
-	// Where translated code sees the CpuState.
-	uint64_t state_address() const { return state_memory.data.address; }
+	// Another guest thread, running on runner; it lives as long as the runtime.
+	Thread &add_thread(CodeRunner *runner);
+	Thread &main_thread() { return *threads.front(); }
+	// The first thread's.
+	CpuState &state() { return main_thread().state(); }
+	uint64_t state_address() const { return threads.front()->state_address(); }
 	const TranslationStats &translation_stats() const { return translation; }
 	const RuntimeStats &stats() const { return counters; }
 	// The runtime whose guest code is running on this thread, for native functions that need it.
@@ -62,9 +103,8 @@ public:
 	// Makes a guest call to address run function, taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
 	// Only without a runner: the thunk calls function in this process.
 	void bind_native(uint64_t address, const void *function, unsigned integer_arguments);
-	// Calls the guest function at address from native code, with up to four integer arguments, on the guest stack the state's RSP names.
+	// Thread::call on the guest thread running on this host thread, or on the first thread.
 	RunResult call(uint64_t address, std::initializer_list<uint64_t> arguments = {});
-	// From a native function: ends the current call with ExitReason::stopped once the function returns.
 	void request_stop(uint64_t code);
 
 	// Translates the block at address now, as an ahead-of-time pass over an image does; returns its guest size, 0 when there is none.
@@ -96,18 +136,7 @@ private:
 	GuestMemory &memory;
 	CodeAllocator &cache;
 	TranslatorOptions options;
-	CodeRunner *runner;
-	// Runtime data that goes back to the allocator with the runtime, also when its constructor throws.
-	struct OwnedData {
-		CodeAllocator &cache;
-		CodeAllocator::Data data;
-		OwnedData(CodeAllocator &cache, size_t size) : cache(cache), data(cache.allocate_data(size)) {}
-		~OwnedData() { cache.free_data(data); }
-		OwnedData(const OwnedData &) = delete;
-		OwnedData &operator=(const OwnedData &) = delete;
-	};
-	OwnedData state_memory, lookup_memory;
-	CpuState &cpu;
+	OwnedData lookup_memory;
 	std::span<LookupEntry> lookup;
 	TranslationStats translation;
 	RuntimeStats counters;
@@ -118,7 +147,7 @@ private:
 	uint8_t *exit = nullptr;
 	uint8_t *return_address = nullptr;
 	uint64_t return_guest = 0;
-	unsigned depth = 0;
+	std::vector<std::unique_ptr<Thread>> threads;
 
 	void place_fixed_code();
 	uint8_t *place(const std::vector<uint32_t> &code);
@@ -128,8 +157,7 @@ private:
 	void remember(uint64_t guest, uint8_t *host);
 	void chain(uint8_t *site, uint64_t target);
 	void invalidate(Block &block);
-	uint32_t enter_code(const uint8_t *code);
-	RunResult run();
+	Thread &calling_thread();
 };
 
 }
