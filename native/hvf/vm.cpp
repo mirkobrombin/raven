@@ -133,8 +133,16 @@ uint8_t *Vm::map(uint64_t address, size_t size, Access access)
 		(after != mappings.begin() && std::prev(after)->first + std::prev(after)->second.size > address))
 		throw std::runtime_error("guest address range already mapped");
 	const uint64_t ipa = allocate_physical(length);
-	for (uint64_t offset = 0; offset < length; offset += page_size)
-		*table_entry(address + offset) = (ipa + offset) | page_bits(access);
+	uint64_t offset = 0;
+	try {
+		for (; offset < length; offset += page_size)
+			*table_entry(address + offset) = (ipa + offset) | page_bits(access);
+	} catch (...) {
+		// No room for a table: take back the pages already entered. The RAM and the tables stay allocated, as all guest RAM does.
+		for (uint64_t entered = 0; entered < offset; entered += page_size)
+			*table_entry(address + entered) = 0;
+		throw;
+	}
 	uint8_t *alias = ram + (ipa - ram_ipa);
 	mappings[address] = {length, alias};
 	return alias;
