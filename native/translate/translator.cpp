@@ -99,19 +99,11 @@ bool ends_block(Mnemonic mnemonic)
 	}
 }
 
-bool all_registers_or_memory(const Instruction &instruction)
-{
-	for (uint8_t i = 0; i < instruction.count; ++i)
-		if (instruction.operands[i].kind == OperandKind::mem && instruction.operands[i].segment != Segment::none &&
-			instruction.operands[i].segment != Segment::gs && instruction.operands[i].segment != Segment::fs)
-			return false;
-	return true;
-}
-
 // Whether the translator has code for the instruction; the block ends before any it has not.
 bool supported(const Instruction &instruction)
 {
-	if (instruction.rep || instruction.repne || !all_registers_or_memory(instruction))
+	// cs:, ds:, es: and ss: change nothing in 64-bit mode (compilers pad with cs: nops); fs: and gs: add their base.
+	if (instruction.rep || instruction.repne)
 		return false;
 	const Operand &first = instruction.operands[0];
 	const uint8_t size = first.size;
