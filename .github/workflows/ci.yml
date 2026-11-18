@@ -109,7 +109,7 @@ jobs:
       TLA_TOOLS_SHA256: 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
     steps:
       - name: Install packages
-        run: dnf install -y --setopt=install_weak_deps=False git cargo rust gcc libasan libubsan java-latest-openjdk-headless
+        run: dnf install -y --setopt=install_weak_deps=False git cargo rust gcc libasan libubsan python3 java-latest-openjdk-headless
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,6 +148,9 @@ jobs:
           gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Inative/guest/raven-cabinet -o /tmp/cabinet-decoders \
             native/fuzz/cabinet_decoders.c native/guest/raven-cabinet/lzx.c native/guest/raven-cabinet/quantum.c
           /tmp/cabinet-decoders 40000
+
+      - name: Change the image decoders at random
+        run: python3 native/fuzz/image_decoders.py --rounds 40000
 
   # Provision: the pinned external inputs, each in its own job because they share nothing and some take long. A component is
   # rebuilt only when its recipe or its sources change.
