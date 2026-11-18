@@ -64,13 +64,18 @@ int main(int argc, char **argv)
 			check(once.reason == translate::ExitReason::returned, name + ": one call did not return");
 			check(once.value == workload.expected, name + ": one call returned " + std::to_string(once.value) + ", native returns " +
 				std::to_string(workload.expected));
+			// The exit came through the dispatcher's svc: the state it saved says EL0t, and the exception class is SVC from AArch64.
+			uint64_t spsr = ~0ull, esr = 0;
+			hv_vcpu_get_sys_reg(vcpu.id(), HV_SYS_REG_SPSR_EL1, &spsr);
+			hv_vcpu_get_sys_reg(vcpu.id(), HV_SYS_REG_ESR_EL1, &esr);
+			check((spsr & 0xf) == 0 && esr >> 26 == 0x15, name + ": the last exit did not come from EL0");
 			const translate::RunResult loop = runtime.call(entry, {7});
 			check(loop.reason == translate::ExitReason::returned && loop.value == 7 * workload.expected,
 				name + ": seven calls in the translated loop returned " + std::to_string(loop.value));
-			std::printf("%s: %llu (native %llu), %llu runs, %llu lookup misses, %llu chains, %llu blocks\n", name.c_str(),
-				static_cast<unsigned long long>(once.value), static_cast<unsigned long long>(workload.expected),
-				static_cast<unsigned long long>(runtime.stats().runs), static_cast<unsigned long long>(runtime.stats().lookup_misses),
-				static_cast<unsigned long long>(runtime.stats().chains),
+			std::printf("%s: %llu (native %llu), SPSR_EL1 %#llx, %llu runs, %llu lookup misses, %llu chains, %llu blocks\n",
+				name.c_str(), static_cast<unsigned long long>(once.value), static_cast<unsigned long long>(workload.expected),
+				static_cast<unsigned long long>(spsr), static_cast<unsigned long long>(runtime.stats().runs),
+				static_cast<unsigned long long>(runtime.stats().lookup_misses), static_cast<unsigned long long>(runtime.stats().chains),
 				static_cast<unsigned long long>(runtime.translation_stats().blocks));
 		}
 	} catch (const std::exception &error) {

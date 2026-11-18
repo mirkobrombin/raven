@@ -59,7 +59,8 @@ public:
 	// The runtime whose guest code is running on this thread, for native functions that need it.
 	static Runtime *current();
 
-	// Makes a guest call to address run function (only where translated code runs in this process), taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
+	// Makes a guest call to address run function, taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
+	// Only without a runner: the thunk calls function in this process.
 	void bind_native(uint64_t address, const void *function, unsigned integer_arguments);
 	// Calls the guest function at address from native code, with up to four integer arguments, on the guest stack the state's RSP names.
 	RunResult call(uint64_t address, std::initializer_list<uint64_t> arguments = {});

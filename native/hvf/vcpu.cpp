@@ -1,33 +1,146 @@
 #include "vcpu.h"
 
+#include "vm.h"
+
+#include <cstddef>
+#include <cstdio>
 #include <stdexcept>
+#include <string>
 
 namespace raven::hvf {
 
-Vcpu::Vcpu(Vm &vm, bool) : vm(vm)
+// One page of EL0 memory per vCPU that the dispatcher reads before entering code. kernel.S knows the offsets.
+struct Vcpu::Mailbox {
+	uint64_t state;
+	uint64_t code;
+	uint64_t trampoline;
+	uint32_t invalidate_instruction_cache;
+	uint32_t reserved;
+};
+
+namespace {
+
+constexpr uint64_t stack_size = 64 << 10;
+
+// ESR exception classes.
+constexpr uint64_t hvc_class = 0x16;
+
+void check(hv_return_t result, const char *what)
 {
-	throw std::runtime_error("the vCPU is not implemented");
+	if (result != HV_SUCCESS)
+		throw std::runtime_error(std::string(what) + " failed: " + std::to_string(static_cast<uint32_t>(result)));
 }
 
-Vcpu::~Vcpu() = default;
+// TCR_EL1: 39-bit halves (T0SZ = T1SZ = 25), 4 KiB granules, walks write-back and inner shareable, 36-bit IPA.
+constexpr uint64_t tcr = 25 | (1 << 8) | (1 << 10) | (3 << 12) | (0 << 14) | (25 << 16) | (1 << 24) | (1 << 26) | (3ull << 28) |
+	(2ull << 30) | (1ull << 32);
+// SCTLR_EL1: RES1 bits, the MMU, data and instruction caches, and EL0 reads of CTR_EL0.
+constexpr uint64_t sctlr = 0x30d00800ull | 1 | (1 << 2) | (1 << 12) | (1 << 15);
+// CPACR_EL1.FPEN: FP and SIMD at EL0 and EL1, which the enter and exit trampolines use for v8-v15.
+constexpr uint64_t cpacr = 3 << 20;
+// EL0t and EL1h with D, A, I and F masked.
+constexpr uint64_t el0t = 0x3c0, el1h = 0x3c5;
+constexpr uint64_t actlr_tso = 1 << 1;
 
-uint32_t Vcpu::enter(uint64_t, uint64_t, uint64_t)
+}
+
+Vcpu::Vcpu(Vm &vm, bool tso) : vm(vm)
 {
-	throw std::runtime_error("the vCPU is not implemented");
+	static_assert(offsetof(Mailbox, invalidate_instruction_cache) == 24);
+	check(hv_vcpu_create(&vcpu, &exit, nullptr), "hv_vcpu_create");
+	try {
+		mailbox_address = vm.map_anywhere(sizeof(Mailbox), Access::read_write);
+		mailbox = reinterpret_cast<Mailbox *>(vm.host(mailbox_address));
+		stack_top = vm.map_anywhere(stack_size, Access::read_write) + stack_size;
+		check(hv_vcpu_set_vtimer_mask(vcpu, true), "hv_vcpu_set_vtimer_mask");
+		const std::pair<hv_sys_reg_t, uint64_t> registers[] = {
+			{HV_SYS_REG_MAIR_EL1, 0xff},
+			{HV_SYS_REG_TCR_EL1, tcr},
+			{HV_SYS_REG_TTBR0_EL1, vm.user_tables()},
+			{HV_SYS_REG_TTBR1_EL1, vm.kernel_tables()},
+			{HV_SYS_REG_VBAR_EL1, vm.vectors()},
+			{HV_SYS_REG_SP_EL1, vm.kernel_stack()},
+			{HV_SYS_REG_SP_EL0, stack_top},
+			{HV_SYS_REG_CPACR_EL1, cpacr},
+			{HV_SYS_REG_SCTLR_EL1, sctlr},
+			{HV_SYS_REG_ACTLR_EL1, tso ? actlr_tso : 0},
+			// The first run starts in the kernel's return path, which drops to the dispatcher at EL0.
+			{HV_SYS_REG_ELR_EL1, vm.dispatcher()},
+			{HV_SYS_REG_SPSR_EL1, el0t},
+		};
+		for (const auto &[reg, value] : registers)
+			check(hv_vcpu_set_sys_reg(vcpu, reg, value), "hv_vcpu_set_sys_reg");
+		check(hv_vcpu_set_reg(vcpu, HV_REG_CPSR, el1h), "hv_vcpu_set_reg");
+		check(hv_vcpu_set_reg(vcpu, HV_REG_PC, vm.resume()), "hv_vcpu_set_reg");
+		check(hv_vcpu_set_reg(vcpu, HV_REG_X19, mailbox_address), "hv_vcpu_set_reg");
+	} catch (...) {
+		hv_vcpu_destroy(vcpu);
+		throw;
+	}
+}
+
+Vcpu::~Vcpu()
+{
+	hv_vcpu_destroy(vcpu);
 }
 
 uint64_t Vcpu::actlr() const
 {
-	return 0;
+	uint64_t value = 0;
+	check(hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ACTLR_EL1, &value), "hv_vcpu_get_sys_reg");
+	return value;
 }
 
-uint64_t Vcpu::reg(hv_reg_t) const
+uint64_t Vcpu::reg(hv_reg_t reg) const
 {
-	return 0;
+	uint64_t value = 0;
+	check(hv_vcpu_get_reg(vcpu, reg, &value), "hv_vcpu_get_reg");
+	return value;
 }
 
-void Vcpu::set_reg(hv_reg_t, uint64_t)
+void Vcpu::set_reg(hv_reg_t reg, uint64_t value)
 {
+	check(hv_vcpu_set_reg(vcpu, reg, value), "hv_vcpu_set_reg");
+}
+
+uint32_t Vcpu::enter(uint64_t trampoline, uint64_t state, uint64_t code)
+{
+	mailbox->state = state;
+	mailbox->code = code;
+	mailbox->trampoline = trampoline;
+	const uint64_t generation = vm.code_generation();
+	if (generation != seen_generation || !started) {
+		seen_generation = generation;
+		if (vm.maintenance.guest_invalidate) {
+			mailbox->invalidate_instruction_cache = 1;
+			++counters.instruction_cache_invalidations;
+		}
+	}
+	started = true;
+	++counters.entries;
+	for (;;) {
+		check(hv_vcpu_run(vcpu), "hv_vcpu_run");
+		if (exit->reason == HV_EXIT_REASON_CANCELED) {
+			++counters.cancels;
+			if (on_cancel)
+				on_cancel(*this);
+			continue;
+		}
+		if (exit->reason != HV_EXIT_REASON_EXCEPTION)
+			throw std::runtime_error("vCPU exit " + std::to_string(static_cast<unsigned>(exit->reason)));
+		const uint64_t syndrome = exit->exception.syndrome;
+		if (syndrome >> 26 == hvc_class && (syndrome & 0xffff) == 0)
+			return static_cast<uint32_t>(reg(HV_REG_X0));
+		uint64_t esr = 0, far = 0, elr = 0;
+		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ESR_EL1, &esr);
+		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_FAR_EL1, &far);
+		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ELR_EL1, &elr);
+		char message[192];
+		std::snprintf(message, sizeof message, "guest exception: exit syndrome %#llx, ESR_EL1 %#llx, FAR_EL1 %#llx, ELR_EL1 %#llx",
+			static_cast<unsigned long long>(syndrome), static_cast<unsigned long long>(esr), static_cast<unsigned long long>(far),
+			static_cast<unsigned long long>(elr));
+		throw std::runtime_error(message);
+	}
 }
 
 }

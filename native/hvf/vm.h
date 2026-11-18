@@ -52,6 +52,8 @@ public:
 
 	// What a vCPU starts with: the kernel's vectors and stack, the page table roots, the EL0 dispatcher.
 	uint64_t vectors() const { return kernel_vectors; }
+	// Where the kernel returns to EL0 after an exit, invalidating the instruction cache first when asked to.
+	uint64_t resume() const { return kernel_resume; }
 	uint64_t kernel_stack() const { return kernel_stack_top; }
 	uint64_t user_tables() const { return ttbr0; }
 	uint64_t kernel_tables() const { return ttbr1; }
@@ -68,7 +70,7 @@ private:
 	uint64_t next_physical = 0;
 	uint64_t next_anywhere = 0;
 	uint64_t ttbr0 = 0, ttbr1 = 0;
-	uint64_t kernel_vectors = 0, kernel_stack_top = 0, dispatcher_address = 0;
+	uint64_t kernel_vectors = 0, kernel_resume = 0, kernel_stack_top = 0, dispatcher_address = 0;
 	std::map<uint64_t, Mapping> mappings;
 	mutable std::mutex lock;
 	std::atomic<uint64_t> generation{0};
