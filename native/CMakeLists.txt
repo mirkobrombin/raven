@@ -2152,6 +2152,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${fixture}/bmp-offsets.exe)
                 set_tests_properties(native_bmp_offsets_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/bmp-offsets-prefix)
+                # Icon entries: the core header's depth and mask, an offset and size that wrap a 32-bit address, and more colors than the
+                # entry holds (icon_entries_client.c).
+                add_custom_command(OUTPUT ${fixture}/icon-entries.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/icon-entries.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/icon_entries_client.c -lwindowscodecs -lole32 -luuid
+                        -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/icon_entries_client.c VERBATIM)
+                add_custom_target(icon_entries_fixture_${installer_arch} ALL DEPENDS ${fixture}/icon-entries.exe)
+                add_test(NAME native_icon_entries_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                    ${fixture}/icon-entries.exe)
+                set_tests_properties(native_icon_entries_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${fixture}/icon-entries-prefix)
                 # Rich edit labels made transparent paint only their text over the parent, and ordinary ones their own background.
                 add_custom_command(OUTPUT ${fixture}/richedit.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
