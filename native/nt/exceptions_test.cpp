@@ -66,7 +66,10 @@ int main(int argc, char **argv)
 			};
 			put(0,0xe0123456,4); put(4,1,4); put(16,0x190001234ULL,8); put(24,mode==2 ? 16 : 2,4);
 			put(32,0x1122334455667788ULL,8); put(40,0x8877665544332211ULL,8);
-			const auto data=process.map_memory(4096,PROT_READ | PROT_WRITE);
+			// The page after the record's is kept unreadable, so the record that crosses into it (mode 3) cannot be read whatever the
+			// host maps next to it, as the page of gates of a parallel guest.
+			const auto data=process.map_memory(8192,PROT_READ | PROT_WRITE);
+			process.protect_memory(data+4096,4096,PROT_NONE);
 			process.write_memory(data,record);
 			const uint64_t arguments[]{mode==0 ? 0x12345678e0123456ULL : mode==3 ? data+4096-128 : data};
 			check(process.call(api,arguments,std::chrono::seconds(1)).stop==raven::NativeStop::api,"RTL exception did not reach API boundary");
