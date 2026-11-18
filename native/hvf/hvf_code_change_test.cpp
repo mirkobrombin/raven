@@ -164,8 +164,10 @@ int main(int argc, char **argv)
 				spinning.load()->quiesce();
 				worst = std::max(worst, now_ns() - start);
 			}
+			// Stopped with a plain hv_vcpus_exit, so that a broken quiesce fails the check instead of spinning forever.
 			stop = true;
-			spinning.load()->quiesce();
+			hv_vcpu_t id = spinning.load()->id();
+			hv_vcpus_exit(&id, 1);
 			released = true;
 			spinner.join();
 			std::printf("quiesce of a spinning vCPU: 100 calls, %llu forced exits, slowest %.1f us\n",
