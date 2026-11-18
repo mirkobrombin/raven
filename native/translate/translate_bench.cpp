@@ -249,6 +249,20 @@ int main(int argc, char **argv)
 #endif
 	guests = argv[1];
 	output = argv[2];
+	if (output == "--dump-block" && argc == 6) {
+		// The AArch64 words of the block at an RVA of a PE, as .inst lines an assembler turns back into code for llvm-objdump.
+		const std::string mode = argv[5];
+		TranslatorOptions options;
+		options.ordering = mode == "plain" ? MemoryOrdering::hardware : mode == "dmb" ? MemoryOrdering::barriers : MemoryOrdering::rcpc;
+		Fixture fixture(options);
+		const uint64_t address = fixture.load(argv[3], false) + std::strtoull(argv[4], nullptr, 16);
+		TranslationStats stats;
+		const TranslatedBlock block = translate_block(fixture.process.code(address), address, options, stats);
+		std::printf("// %u guest instructions, %u guest bytes, %zu words\n.text\n", block.instructions, block.guest_size, block.code.size());
+		for (uint32_t word : block.code)
+			std::printf(".inst 0x%08x\n", word);
+		return 0;
+	}
 	if (output == "--workload" && argc == 7) {
 		// One workload as bench_harness.c times it natively and under FEX: the first call (translation included), then runs.
 		const int workload_runs = std::atoi(argv[4]), calls = std::atoi(argv[5]);
