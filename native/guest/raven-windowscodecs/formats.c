@@ -182,7 +182,8 @@ HRESULT parse_dib(image_list *list, const BYTE *data, SIZE_T size, const BYTE *b
 		wic_free(buffer);
 		return S_OK;
 	}
-	if (bits_at + (SIZE_T)source_stride * height > data + size)
+	/* The rows that fit between the pixels and the end, counted without forming an address past it. */
+	if (!source_stride || (SIZE_T)(data + size - bits_at) / source_stride < (UINT)height)
 		return WINCODEC_ERR_BADIMAGE;
 	for (y = 0; y < (UINT)height; y++)
 		memcpy(pixels + (SIZE_T)y * stride, bits_at + (SIZE_T)(flipped ? (UINT)height - 1 - y : y) * source_stride, source_stride);
@@ -201,9 +202,15 @@ HRESULT parse_dib(image_list *list, const BYTE *data, SIZE_T size, const BYTE *b
 
 HRESULT parse_bmp(image_list *list, const BYTE *data, SIZE_T size)
 {
+	UINT offset;
 	if (size < 18 || data[0] != 'B' || data[1] != 'M')
 		return WINCODEC_ERR_UNKNOWNIMAGEFORMAT;
-	return parse_dib(list, data + 14, size - 14, read_u32(data + 10) ? data + read_u32(data + 10) : NULL, FALSE);
+	/* The pixel offset is checked as a number before it becomes an address: in a 32-bit program one near four gigabytes would wrap round
+	   to below the file. */
+	offset = read_u32(data + 10);
+	if (offset > size)
+		return WINCODEC_ERR_BADIMAGE;
+	return parse_dib(list, data + 14, size - 14, offset ? data + offset : NULL, FALSE);
 }
 
 /* The codes of one image: LSB first, with the table growing until 4096 entries. */
