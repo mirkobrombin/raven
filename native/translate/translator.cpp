@@ -358,11 +358,12 @@ uint8_t BlockTranslator::read(const Operand &operand, uint8_t target, bool may_a
 			return target;
 		}
 		const uint8_t reg = host_register[operand.reg];
-		if (operand.size == 8) {
-			if (may_alias)
-				return reg;
+		// A 4-byte value is used only by W-form instructions, which ignore the upper half: no copy is needed for those either.
+		if (operand.size >= 4 && may_alias)
+			return reg;
+		if (operand.size == 8)
 			a.mov(target, reg);
-		} else if (operand.size == 4)
+		else if (operand.size == 4)
 			a.mov(target, reg, false);
 		else
 			a.ubfx(target, reg, 0, static_cast<uint8_t>(operand.size * 8), false);
@@ -447,10 +448,42 @@ void BlockTranslator::arithmetic(const Instruction &instruction)
 	const bool logical = mnemonic == Mnemonic::and_ || mnemonic == Mnemonic::or_ || mnemonic == Mnemonic::xor_ ||
 		mnemonic == Mnemonic::test;
 	const uint8_t left = read(target, s0);
-	const uint8_t right = read(source, s1);
 	// The result goes straight to a full-width destination register.
 	const bool direct = writes && target.kind == OperandKind::reg && size >= 4 && target.reg < high_byte_base;
 	const uint8_t result = direct ? host_register[target.reg] : s2;
+	if (size >= 4 && source.kind == OperandKind::imm && source.value > -4096 && source.value < 4096 &&
+		(mnemonic == Mnemonic::add || mnemonic == Mnemonic::sub || mnemonic == Mnemonic::cmp)) {
+		// add, sub or cmp with a small immediate: one instruction, the opposite one for a negative immediate. Adding -n and
+		// subtracting n give the same result, N, Z and V, and C keeps the sense of the x86 instruction either way: CF for add,
+		// its inverse for sub and cmp (adding 2^w - n carries exactly when a >= n).
+		const bool subtract = (mnemonic != Mnemonic::add) != (source.value < 0);
+		const uint32_t amount = static_cast<uint32_t>(source.value < 0 ? -source.value : source.value);
+		if (flags && flags_wanted(AF)) {
+			const uint64_t operand = static_cast<uint64_t>(source.value);
+			if (!a.eor_imm(adjust_register, left, operand)) {
+				a.mov_imm(s1, operand);
+				a.eor(adjust_register, left, s1);
+			}
+		}
+		const uint8_t destination = writes ? result : a64::zr;
+		if (subtract)
+			a.sub_imm(destination, left, amount, false, is64, flags);
+		else
+			a.add_imm(destination, left, amount, false, is64, flags);
+		if (flags) {
+			carry_inverted = mnemonic != Mnemonic::add;
+			if (flags_wanted(PF)) {
+				if (!writes)
+					subtract ? a.sub_imm(parity_register, left, amount, false, is64) : a.add_imm(parity_register, left, amount, false, is64);
+				else
+					a.mov(parity_register, result);
+			}
+		}
+		if (writes && !direct)
+			write(target, result);
+		return;
+	}
+	const uint8_t right = read(source, s1);
 	if (size >= 4) {
 		if (flags && !logical && flags_wanted(AF))
 			a.eor(adjust_register, left, right);
@@ -627,11 +660,16 @@ void BlockTranslator::shift(const Instruction &instruction)
 			value = s0;
 		}
 		const bool w = !is64;
+		// Without flags to compute from the operand afterwards, a full-width register takes the result directly.
+		const bool direct = !flags_wanted(all_flags) && target.kind == OperandKind::reg && size >= 4 && target.reg < high_byte_base;
+		const uint8_t result = direct ? host_register[target.reg] : s2;
 		switch (mnemonic) {
-		case Mnemonic::shl: a.lsl_imm(s2, value, static_cast<uint8_t>(count), !w); break;
-		case Mnemonic::shr: a.lsr_imm(s2, value, static_cast<uint8_t>(count), !w); break;
-		default: a.asr_imm(s2, value, static_cast<uint8_t>(count), !w); break;
+		case Mnemonic::shl: a.lsl_imm(result, value, static_cast<uint8_t>(count), !w); break;
+		case Mnemonic::shr: a.lsr_imm(result, value, static_cast<uint8_t>(count), !w); break;
+		default: a.asr_imm(result, value, static_cast<uint8_t>(count), !w); break;
 		}
+		if (direct)
+			return;
 		if (flags_wanted(all_flags)) {
 			// N and Z from the result at the top of the register; C is the last bit shifted out, V is defined for a count of one.
 			const uint8_t top = static_cast<uint8_t>((is64 ? 64 : 32) - bits);
@@ -954,8 +992,21 @@ void BlockTranslator::translate(const Instruction &instruction)
 		write(target, read(source, s0));
 		return;
 	}
-	case Mnemonic::movzx: write(operands[0], read(operands[1], s0, false)); return;
-	case Mnemonic::movsx: case Mnemonic::movsxd: read_signed(operands[1], s0, operands[0].size); write(operands[0], s0); return;
+	case Mnemonic::movzx: case Mnemonic::movsx: case Mnemonic::movsxd: {
+		// Into a full-width register directly: the W or X form of the extension writes all of it.
+		const Operand &target = operands[0];
+		const bool direct = target.size >= 4 && target.reg < high_byte_base;
+		const uint8_t value = direct ? host_register[target.reg] : s0;
+		if (instruction.mnemonic == Mnemonic::movzx) {
+			const uint8_t read_into = read(operands[1], value, false);
+			if (direct && read_into != value)
+				a.mov(value, read_into, false);
+		} else
+			read_signed(operands[1], value, target.size);
+		if (!direct)
+			write(target, value);
+		return;
+	}
 	case Mnemonic::lea: effective_address(s0, operands[1], operands[0].size == 8); write(operands[0], s0); return;
 	case Mnemonic::push: push_value(read(operands[0], s0)); return;
 	case Mnemonic::pop: pop_value(s0); write(operands[0], s0); return;
