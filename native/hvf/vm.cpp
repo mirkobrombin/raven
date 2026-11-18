@@ -148,6 +148,17 @@ uint8_t *Vm::map(uint64_t address, size_t size, Access access)
 	return alias;
 }
 
+void Vm::set_access(uint64_t address, size_t size, Access access)
+{
+	std::lock_guard guard(lock);
+	for (uint64_t page = address & ~(page_size - 1); page < address + size; page += page_size) {
+		uint64_t &entry = *table_entry(page);
+		if (!entry)
+			throw std::runtime_error("changing the access of an unmapped guest page");
+		entry = (entry & 0x0000fffffffff000ull) | page_bits(access);
+	}
+}
+
 uint64_t Vm::map_anywhere(size_t size, Access access)
 {
 	uint64_t address;

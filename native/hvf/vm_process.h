@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <utility>
+#include <string>
 #include <vector>
 
 namespace raven::translate {
@@ -21,8 +22,9 @@ namespace raven::hvf {
 
 class Vcpu;
 
-// Test-only process model inside the VM, as TestProcess is in this process: x64 images mapped at their preferred base in guest
-// memory, a stack and a TEB per thread. Images keep no imports, since native thunks cannot run in a vCPU yet.
+// Test-only process model inside the VM, as TestProcess is in this process: x64 and ARM64EC images mapped at their preferred base in
+// guest memory, a stack and a TEB per thread. Imports bind to exports of loaded images only. An ARM64EC image's native code (its CHPE
+// code map) is executable at EL0 and runs there as it is; its x64 code is translated like any other.
 class VmProcess final : public translate::GuestMemory {
 public:
 	explicit VmProcess(Vm &vm);
@@ -61,7 +63,10 @@ public:
 	void link_arm64ec(translate::Runtime &runtime);
 
 	std::span<const uint8_t> code(uint64_t address) const override;
-	bool is_native(uint64_t) const override { return false; }
+	bool is_native(uint64_t address) const override;
+	// The entry thunk the compiler names in the word before an ARM64EC function: an offset from the function, bit 0 set. A return
+	// address into native code follows a blr, whose bit 0 is clear.
+	uint64_t entry_thunk(uint64_t address) const override;
 	void write(uint64_t address, const void *bytes, size_t size) override;
 	// A watched page loses write permission at stage 2; a guest store there reaches every attached runtime's code_written. Refuses to
 	// watch with no runtime attached.
@@ -70,9 +75,14 @@ public:
 
 private:
 	struct Image {
+		std::string name;
+		std::vector<uint8_t> file;
 		uint64_t base;
 		uint32_t entry;
 		std::vector<std::pair<uint64_t, uint64_t>> code_ranges;
+		std::vector<std::pair<uint64_t, uint64_t>> native_ranges;
+		// The CHPE metadata (IMAGE_ARM64EC_METADATA), 0 for an x64 image.
+		uint64_t arm64ec_metadata = 0;
 	};
 	Vm &vm;
 	std::vector<Image> images;

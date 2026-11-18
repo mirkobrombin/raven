@@ -126,6 +126,19 @@ void Runtime::bind_native(uint64_t address, const void *function, unsigned integ
 	natives[address] = place(native_thunk(reinterpret_cast<uint64_t>(function), integer_arguments));
 }
 
+Runtime::Arm64ecRoutines Runtime::arm64ec_routines(std::span<const std::pair<uint64_t, uint64_t>> native)
+{
+	std::lock_guard guard(lock);
+	if (!arm64ec.dispatch_ret) {
+		const auto at = [](const uint8_t *code) { return reinterpret_cast<uint64_t>(code); };
+		arm64ec.dispatch_call = at(place(arm64ec_dispatch_call()));
+		arm64ec.dispatch_ret = at(place(arm64ec_dispatch_ret()));
+		arm64ec.check_icall = at(place(arm64ec_check_icall(native)));
+		arm64ec.unsupported = at(place(arm64ec_unsupported()));
+	}
+	return arm64ec;
+}
+
 void Runtime::remember(uint64_t guest, uint8_t *host)
 {
 	store_entry(lookup[guest & ((1u << lookup_bits) - 1)], guest, reinterpret_cast<uint64_t>(host));
@@ -181,7 +194,12 @@ uint8_t *Runtime::host_code(uint64_t guest)
 		host = return_address;
 	else if (const auto native = natives.find(guest); native != natives.end())
 		host = native->second;
-	else if (const auto found = blocks.find(guest); found != blocks.end())
+	else if (const auto stub = native_stubs.find(guest); stub != native_stubs.end())
+		host = stub->second;
+	else if (memory.is_native(guest)) {
+		const uint64_t thunk = memory.entry_thunk(guest);
+		host = native_stubs[guest] = place(thunk ? arm64ec_entry(guest, thunk) : arm64ec_resume(guest));
+	} else if (const auto found = blocks.find(guest); found != blocks.end())
 		host = found->second->host;
 	else if (Block *block = translate(guest))
 		host = block->host;

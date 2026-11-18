@@ -1257,6 +1257,28 @@ std::vector<uint32_t> exit_trampoline()
 	return a.words;
 }
 
+namespace {
+
+// Goes on with translated code at the guest address in address_register through the lookup table, or exits with a lookup miss.
+void branch_to_guest(Assembler &a)
+{
+	const Assembler::Label miss = a.label();
+	a.ldr(s5, state_register, state_offset::lookup_table, 8);
+	a.ubfx(s0, address_register, 0, lookup_bits);
+	a.add(s5, s5, s0, Shift::lsl, 4);
+	a.ldp(s1, s2, s5, 0);
+	a.eor(s1, s1, address_register);
+	a.cbnz(s1, miss);
+	a.br(s2);
+	a.bind(miss);
+	a.str(address_register, state_register, state_offset::rip, 8);
+	a.mov_imm(s0, static_cast<uint32_t>(ExitReason::lookup_miss), false);
+	a.ldr(address_register, state_register, state_offset::exit_trampoline, 8);
+	a.br(address_register);
+}
+
+}
+
 std::vector<uint32_t> native_thunk(uint64_t function, unsigned integer_arguments)
 {
 	if (integer_arguments > 8)
@@ -1275,27 +1297,93 @@ std::vector<uint32_t> native_thunk(uint64_t function, unsigned integer_arguments
 	a.ldr(s0, state_register, state_offset::stop_requested, 4);
 	a.cbnz(s0, stop, false);
 	a.ldr_post(address_register, host_register[rsp], 8);
-	{
-		const Assembler::Label miss = a.label();
-		a.ldr(s5, state_register, state_offset::lookup_table, 8);
-		a.ubfx(s0, address_register, 0, lookup_bits);
-		a.add(s5, s5, s0, Shift::lsl, 4);
-		a.ldp(s1, s2, s5, 0);
-		a.eor(s1, s1, address_register);
-		a.cbnz(s1, miss);
-		a.br(s2);
-		a.bind(miss);
-		a.str(address_register, state_register, state_offset::rip, 8);
-		a.mov_imm(s0, static_cast<uint32_t>(ExitReason::lookup_miss), false);
-		a.ldr(address_register, state_register, state_offset::exit_trampoline, 8);
-		a.br(address_register);
-	}
+	branch_to_guest(a);
 	a.bind(stop);
 	a.ldr_post(address_register, host_register[rsp], 8);
 	a.str(address_register, state_register, state_offset::rip, 8);
 	a.mov_imm(s0, static_cast<uint32_t>(ExitReason::stopped), false);
 	a.ldr(address_register, state_register, state_offset::exit_trampoline, 8);
 	a.br(address_register);
+	a.finish();
+	return a.words;
+}
+
+std::vector<uint32_t> arm64ec_entry(uint64_t function, uint64_t thunk)
+{
+	Assembler a;
+	// As Windows enters an entry thunk: the x64 return address in x30, where the thunk keeps it for __os_arm64x_dispatch_ret, RSP past
+	// it in sp and in x4, from which the thunk reads stack arguments, and the function in x9.
+	a.ldr_post(30, host_register[rsp], 8);
+	a.mov_sp(a64::sp, host_register[rsp]);
+	a.mov(4, host_register[rsp]);
+	a.mov_imm(9, function);
+	a.mov_imm(address_register, thunk);
+	a.br(address_register);
+	a.finish();
+	return a.words;
+}
+
+std::vector<uint32_t> arm64ec_resume(uint64_t address)
+{
+	Assembler a;
+	// The x64 ret popped the address; native code finds its stack where it left it, RSP past the address, and RAX in x8.
+	a.mov_sp(a64::sp, host_register[rsp]);
+	a.mov_imm(address_register, address);
+	a.br(address_register);
+	a.finish();
+	return a.words;
+}
+
+std::vector<uint32_t> arm64ec_dispatch_ret()
+{
+	Assembler a;
+	// sp, not x28: a callback in between moved RSP, and only sp comes back through native code.
+	a.mov_sp(host_register[rsp], a64::sp);
+	a.mov(address_register, 30);
+	branch_to_guest(a);
+	a.finish();
+	return a.words;
+}
+
+std::vector<uint32_t> arm64ec_dispatch_call()
+{
+	Assembler a;
+	// One word, the native return address, pushed below sp: the exit thunk's home area and stack arguments start right above it.
+	a.sub_imm(host_register[rsp], a64::sp, 8);
+	a.str(30, host_register[rsp], 0, 8);
+	a.mov(address_register, 9);
+	branch_to_guest(a);
+	a.finish();
+	return a.words;
+}
+
+std::vector<uint32_t> arm64ec_check_icall(std::span<const std::pair<uint64_t, uint64_t>> native)
+{
+	Assembler a;
+	const Assembler::Label is_native = a.label();
+	for (const auto &[start, end] : native) {
+		const Assembler::Label next = a.label();
+		a.mov_imm(16, start);
+		a.sub(a64::zr, 11, 16, Shift::lsl, 0, true, true);
+		a.b(Cond::cc, next);
+		a.mov_imm(16, end);
+		a.sub(a64::zr, 11, 16, Shift::lsl, 0, true, true);
+		a.b(Cond::cc, is_native);
+		a.bind(next);
+	}
+	// x64 code: the caller calls the exit thunk, which finds the target in x9.
+	a.mov(9, 11);
+	a.mov(11, 10);
+	a.bind(is_native);
+	a.ret();
+	a.finish();
+	return a.words;
+}
+
+std::vector<uint32_t> arm64ec_unsupported()
+{
+	Assembler a;
+	a.brk(0xec);
 	a.finish();
 	return a.words;
 }

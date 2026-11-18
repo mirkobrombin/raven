@@ -113,6 +113,13 @@ public:
 	// Makes a guest call to address run function, taking integer_arguments x64 integer arguments; GuestMemory::is_native must agree.
 	// Only without a runner: the thunk calls function in this process.
 	void bind_native(uint64_t address, const void *function, unsigned integer_arguments);
+	// The routines ARM64EC code reaches through the __os_arm64x_* slots of its CHPE metadata, placed once; native is every range of
+	// ARM64EC code in the process (indirect calls from native code check their target against it). Calls between x64 and native code
+	// then stay in translated and native code: x64 calls and returns into native code go through stubs placed when first reached.
+	struct Arm64ecRoutines {
+		uint64_t dispatch_call = 0, dispatch_ret = 0, check_icall = 0, unsupported = 0;
+	};
+	Arm64ecRoutines arm64ec_routines(std::span<const std::pair<uint64_t, uint64_t>> native);
 	// Thread::call on the guest thread running on this host thread, or on the first thread.
 	RunResult call(uint64_t address, std::initializer_list<uint64_t> arguments = {});
 	void request_stop(uint64_t code);
@@ -156,6 +163,9 @@ private:
 	std::unordered_map<uint64_t, std::unique_ptr<Block>> blocks;
 	std::map<uint64_t, std::vector<uint64_t>> blocks_by_granule;
 	std::unordered_map<uint64_t, uint8_t *> natives;
+	// Stubs into ARM64EC code, by native address.
+	std::unordered_map<uint64_t, uint8_t *> native_stubs;
+	Arm64ecRoutines arm64ec;
 	uint8_t *enter = nullptr;
 	uint8_t *exit = nullptr;
 	uint8_t *return_address = nullptr;

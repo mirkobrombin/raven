@@ -44,6 +44,9 @@ public:
 
 	// Maps [address, address + size) for EL0 to fresh zeroed guest RAM; returns the host alias of address. The range must be free.
 	uint8_t *map(uint64_t address, size_t size, Access access);
+	// Changes how EL0 may use mapped pages: for parts of a mapping, such as an image's native code. No TLB maintenance, so only before
+	// any vCPU has used them.
+	void set_access(uint64_t address, size_t size, Access access);
 	// The same at an address the VM picks; returns that address.
 	uint64_t map_anywhere(size_t size, Access access);
 	// The guest physical address (IPA) behind a mapped guest address.
