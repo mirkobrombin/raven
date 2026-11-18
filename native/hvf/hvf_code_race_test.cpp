@@ -4,6 +4,7 @@
 //   still reach that translation: the vCPU's next call must return the new value.
 //   A second store to the same page: its permission fault reaches the host after the first store's handler unwatched the page. The
 //   handler must have it retried (true), not report a guest exception; an address outside guest memory stays unhandled.
+//   A write by the host through VmProcess::write, past stage 2, must drop the translations of the code it changes.
 //   The kick: a guest thread whose runner only records calls stands for a vCPU elsewhere; every store that drops translations must
 //   quiesce it, and the storing vCPU's own thread is not.
 #include "runtime.h"
@@ -83,6 +84,12 @@ int main(int argc, char **argv)
 						", it returned " + std::to_string(result.value));
 				}
 				process.after_code_written = nullptr;
+				thread.call(entry, {7, 0, 1});
+				const uint32_t host_value = 77;
+				process.write(patch_target + 1, &host_value, 4);
+				const uint64_t after_host_write = thread.call(entry, {7, 0, 1}).value;
+				check(after_host_write == host_value,
+					"after the host wrote patch_target to return 77, it returned " + std::to_string(after_host_write));
 				check(elsewhere.quiesced >= vcpu.stats().write_faults && vcpu.stats().write_faults >= 5,
 					"code_written quiesced the other guest thread " + std::to_string(elsewhere.quiesced) + " times for " +
 						std::to_string(vcpu.stats().write_faults) + " write faults");
