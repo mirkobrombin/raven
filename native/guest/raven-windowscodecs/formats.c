@@ -418,22 +418,26 @@ HRESULT parse_ico(image_list *list, const BYTE *data, SIZE_T size)
 	for (index = 0; index < count; index++) {
 		const BYTE *entry = data + 6 + index * 16;
 		const UINT bytes = read_u32(entry + 8), offset = read_u32(entry + 12);
-		const BYTE *body = data + offset;
+		const BYTE *body;
 		BYTE *pixels;
 		image_list part;
-		UINT stride, width, height, y, x, part_stride, mask_stride;
-		const BYTE *mask, *mask_rows;
+		UINT stride, width, height, y, x;
 		IWICBitmapSource *converted;
 		HRESULT result;
-		image_list_init(&part);
-		if ((SIZE_T)offset + bytes > size)
+		/* The entry's place is checked as numbers before it becomes an address: in a 32-bit program an offset and a size near four
+		   gigabytes would add up round to a small number, and the address of the entry to below the file. */
+		if (offset > size || bytes > size - offset)
 			return WINCODEC_ERR_BADIMAGE;
-		if (bytes >= 8 && body[0] == 0x89) {
-			if (FAILED(result = parse_png(&part, body, bytes)))
-				return result;
-		}
-		else if (FAILED(result = parse_dib(&part, body, bytes, NULL, TRUE)))
+		body = data + offset;
+		image_list_init(&part);
+		if (bytes >= 8 && body[0] == 0x89)
+			result = parse_png(&part, body, bytes);
+		else
+			result = parse_dib(&part, body, bytes, NULL, TRUE);
+		if (FAILED(result)) {
+			image_list_clear(&part);
 			return result;
+		}
 		result = image_list_first_as_bgra(&part, &converted);
 		if (SUCCEEDED(result)) {
 			IWICBitmapSource_GetSize(converted, &width, &height);
@@ -441,17 +445,20 @@ HRESULT parse_ico(image_list *list, const BYTE *data, SIZE_T size)
 				result = E_OUTOFMEMORY;
 			else {
 				result = IWICBitmapSource_CopyPixels(converted, NULL, stride, stride * height, pixels);
-				/* A DIB entry keeps its transparency in the mask that follows the colors, unless the colors carry alpha themselves. */
-				if (SUCCEEDED(result) && body[0] != 0x89 && read_u16(body + 14) < 32) {
-					const UINT depth = read_u16(body + 14), colors = read_u32(body + 32) ? read_u32(body + 32) : depth <= 8 ? 1U << depth : 0;
-					part_stride = wic_stride(width, depth);
-					mask_stride = wic_stride(width, 1);
-					mask = body + read_u32(body) + (SIZE_T)colors * 4 + (SIZE_T)part_stride * height;
-					if (mask + (SIZE_T)mask_stride * height <= body + bytes)
+				/* A DIB entry keeps its transparency in the mask that follows the colors, unless the colors carry alpha themselves. The
+				   header gives the depth and the colors: a core header of 12 bytes with entries of three bytes, a longer one with entries of
+				   four. Where the mask lies is counted in 64 bits, and it is read only when the entry holds all of it. */
+				if (SUCCEEDED(result) && body[0] != 0x89) {
+					const UINT header = read_u32(body), core = header == 12;
+					const UINT depth = core ? read_u16(body + 10) : read_u16(body + 14);
+					const UINT used = core ? 0 : read_u32(body + 32), colors = used ? used : depth <= 8 ? 1U << depth : 0;
+					const UINT64 mask_stride = wic_stride(width, 1);
+					const UINT64 mask_at = (UINT64)header + (UINT64)colors * (core ? 3 : 4) + (UINT64)wic_stride(width, depth) * height;
+					if (depth < 32 && mask_at <= bytes && mask_stride * height <= bytes - mask_at)
 						for (y = 0; y < height; y++) {
-							mask_rows = mask + (SIZE_T)(height - 1 - y) * mask_stride;
+							const BYTE *mask_row = body + (SIZE_T)(mask_at + (UINT64)(height - 1 - y) * mask_stride);
 							for (x = 0; x < width; x++)
-								pixels[(SIZE_T)y * stride + x * 4 + 3] = mask_rows[x / 8] & (0x80 >> (x % 8)) ? 0 : 255;
+								pixels[(SIZE_T)y * stride + x * 4 + 3] = mask_row[x / 8] & (0x80 >> (x % 8)) ? 0 : 255;
 						}
 				}
 			}
