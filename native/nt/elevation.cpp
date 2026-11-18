@@ -3,6 +3,7 @@
 #include "pe/resources.h"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <string_view>
 
@@ -61,6 +62,18 @@ bool installer_like(const PEImage &image, std::string_view file_name)
 	for (const std::string_view word : {"setup", "install", "uninst", "update", "patch", "redist"})
 		if (name.find(word) != name.npos)
 			return true;
+	// Some vendors abbreviate "installer" as a distinct `-Inst` filename token, as in BvSshClient-Inst.exe. Match that token without
+	// treating unrelated names such as `instance.exe` as installers.
+	for (size_t begin = 0; begin < name.size();) {
+		while (begin < name.size() && !std::isalnum(static_cast<unsigned char>(name[begin])))
+			++begin;
+		size_t end = begin;
+		while (end < name.size() && std::isalnum(static_cast<unsigned char>(name[end])))
+			++end;
+		if (std::string_view(name).substr(begin, end - begin) == "inst")
+			return true;
+		begin = end;
+	}
 	if (name == "msiexec.exe")
 		return true;
 	// A program that installs, changes or removes Windows Installer packages itself does what msiexec does.
