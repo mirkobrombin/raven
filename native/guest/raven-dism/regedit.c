@@ -50,17 +50,21 @@ static HKEY root_of(const WCHAR *path, const WCHAR **rest)
 	return NULL;
 }
 
-/* A quoted string at text, its escapes undone, into out; the position after the closing quote, or NULL. */
-static const WCHAR *quoted(const WCHAR *text, WCHAR *out)
+/* A quoted string at text, its escapes undone, into out of room characters with its terminator; the position after the closing quote,
+   or NULL when there is none or the string does not fit. */
+static const WCHAR *quoted(const WCHAR *text, WCHAR *out, size_t room)
 {
+	size_t length = 0;
 	if (*text++ != L'"')
 		return NULL;
 	while (*text && *text != L'"') {
 		if (*text == L'\\' && text[1])
 			++text;
-		*out++ = *text++;
+		if (length + 1 >= room)
+			return NULL;
+		out[length++] = *text++;
 	}
-	*out = 0;
+	out[length] = 0;
 	return *text == L'"' ? text + 1 : NULL;
 }
 
@@ -110,11 +114,13 @@ static BOOL delete_key(const WCHAR *path)
 /* One value line of the current key: "name"=data, @=data, or either with - to delete it. */
 static BOOL value_line(HKEY key, const WCHAR *line, BYTE *buffer, int capacity)
 {
-	WCHAR name[1024], *text = (WCHAR *)buffer;
+	/* The longest name the registry takes is 16383 characters; a longer one is refused here, as the registry would. */
+	static WCHAR name[16384];
+	WCHAR *text = (WCHAR *)buffer;
 	if (*line == L'@') {
 		name[0] = 0;
 		++line;
-	} else if (!(line = quoted(line, name)))
+	} else if (!(line = quoted(line, name, sizeof(name) / sizeof(name[0]))))
 		return FALSE;
 	while (*line == L' ' || *line == L'\t')
 		++line;
@@ -127,7 +133,7 @@ static BOOL value_line(HKEY key, const WCHAR *line, BYTE *buffer, int capacity)
 		return !status || status == ERROR_FILE_NOT_FOUND;
 	}
 	if (*line == L'"') {
-		if (!quoted(line, text))
+		if (!quoted(line, text, (size_t)capacity / sizeof(WCHAR)))
 			return FALSE;
 		return !RegSetValueExW(key, name, 0, REG_SZ, buffer, (DWORD)(lstrlenW(text) + 1) * sizeof(WCHAR));
 	}
@@ -154,8 +160,9 @@ static BOOL value_line(HKEY key, const WCHAR *line, BYTE *buffer, int capacity)
 			return FALSE;
 		/* The string types of a REGEDIT4 file hold ANSI bytes, which the ANSI call widens as Windows stores them. */
 		if (ansi_file && (type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ)) {
-			char narrow[1024];
-			WideCharToMultiByte(CP_ACP, 0, name, -1, narrow, sizeof(narrow), NULL, NULL);
+			static char narrow[2 * 16384];
+			if (!WideCharToMultiByte(CP_ACP, 0, name, -1, narrow, sizeof(narrow), NULL, NULL))
+				return FALSE;
 			return !RegSetValueExA(key, narrow, 0, type, buffer, (DWORD)count);
 		}
 		return !RegSetValueExW(key, name, 0, type, buffer, (DWORD)count);
