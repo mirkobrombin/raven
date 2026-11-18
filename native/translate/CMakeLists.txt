@@ -87,3 +87,26 @@ target_link_libraries(runtime_test PRIVATE raven_translate_test_process)
 add_dependencies(runtime_test translate_guests)
 add_test(NAME translate_runtime COMMAND runtime_test ${GUEST})
 set_tests_properties(translate_runtime PROPERTIES TIMEOUT 60)
+
+# The translator's semantics against an x86-64 CPU: on a Mac, Rosetta runs the x86-64 build of the oracle. Elsewhere this needs an
+# x86-64 machine or emulator to produce the results file, and is not built.
+if(APPLE)
+    set(SEMANTICS ${CMAKE_CURRENT_BINARY_DIR}/semantics)
+    file(MAKE_DIRECTORY ${SEMANTICS})
+    add_custom_command(OUTPUT ${SEMANTICS}/x86_semantics_cases.s ${SEMANTICS}/x86_semantics_cases.h
+        COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/x86_semantics.py ${SEMANTICS}/x86_semantics_cases.s
+            ${SEMANTICS}/x86_semantics_cases.h
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x86_semantics.py VERBATIM)
+    add_custom_command(OUTPUT ${SEMANTICS}/oracle.bin
+        COMMAND ${CMAKE_C_COMPILER} -arch x86_64 -O1 -I ${SEMANTICS} -o ${SEMANTICS}/x86_semantics_oracle
+            ${CMAKE_CURRENT_SOURCE_DIR}/x86_semantics_oracle.c ${SEMANTICS}/x86_semantics_cases.s
+        COMMAND ${SEMANTICS}/x86_semantics_oracle ${SEMANTICS}/oracle.bin
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x86_semantics_oracle.c ${SEMANTICS}/x86_semantics_cases.s ${SEMANTICS}/x86_semantics_cases.h
+        VERBATIM)
+    add_custom_target(x86_semantics_oracle ALL DEPENDS ${SEMANTICS}/oracle.bin)
+    add_executable(x86_semantics_test x86_semantics_test.cpp)
+    target_link_libraries(x86_semantics_test PRIVATE raven_translate)
+    add_dependencies(x86_semantics_test x86_semantics_oracle)
+    add_test(NAME translate_x86_semantics COMMAND x86_semantics_test ${SEMANTICS}/oracle.bin)
+    set_tests_properties(translate_x86_semantics PROPERTIES TIMEOUT 120)
+endif()
