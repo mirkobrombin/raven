@@ -332,6 +332,57 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	auto &environment = context.environment;
 	auto &paths = context.paths;
 	auto &modules = context.modules;
+	// Convert DOS paths to the counted NT spelling used by ntdll callers. The returned buffer is process-heap memory and is released by
+	// RtlFreeUnicodeString; RelativeName is empty because Raven does not expose a host directory handle as a guest handle.
+	const auto dos_path_to_nt = [&context](ApiCall &call, bool with_status) {
+		if (!call[0] || !call[1]) {
+			call.ret(with_status ? 0xc0000005U : 0);
+			return;
+		}
+		std::u16string path = context.paths.full(call.wide(call[0]));
+		if (path.empty()) {
+			call.ret(with_status ? 0xc0000033U : 0);
+			return;
+		}
+		if (path.starts_with(u"\\\\?\\"))
+			path = u"\\??\\" + path.substr(4);
+		else if (path.starts_with(u"\\\\"))
+			path = u"\\??\\UNC\\" + path.substr(2);
+		else if (path.size() >= 3 && path[1] == u':' && (path[2] == u'\\' || path[2] == u'/'))
+			path = u"\\??\\" + path;
+		else if (!path.starts_with(u"\\??\\")) {
+			call.ret(with_status ? 0xc0000033U : 0);
+			return;
+		}
+		if (path.size() >= 32767) {
+			call.ret(with_status ? 0xc0000106U : 0);
+			return;
+		}
+		const size_t width = call.pointer_width();
+		const size_t length = path.size() * sizeof(char16_t);
+		const uint64_t buffer = context.allocator.allocate(length + sizeof(char16_t), true);
+		if (!buffer) {
+			call.ret(with_status ? 0xc0000017U : 0);
+			return;
+		}
+		call.write(buffer, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(path.data()), length));
+		std::vector<uint8_t> counted(width == 4 ? 8 : 16, 0);
+		const uint16_t bytes = uint16_t(length), maximum = uint16_t(length + sizeof(char16_t));
+		std::memcpy(counted.data(), &bytes, sizeof(bytes));
+		std::memcpy(counted.data() + 2, &maximum, sizeof(maximum));
+		std::memcpy(counted.data() + (width == 4 ? 4 : 8), &buffer, width);
+		call.write(call[1], counted);
+		if (call[2]) {
+			size_t file_part = path.find_last_of(u"\\/");
+			file_part = file_part == path.npos ? 0 : file_part + 1;
+			call.store_pointer(call[2], buffer + file_part * sizeof(char16_t));
+		}
+		if (call[3])
+			call.write(call[3], std::vector<uint8_t>(width * 3, 0));
+		call.ret(with_status ? 0 : 1);
+	};
+	registry.add("RtlDosPathNameToNtPathName_U_WithStatus", 4, [dos_path_to_nt](ApiCall &call) { dos_path_to_nt(call, true); });
+	registry.add("RtlDosPathNameToNtPathName_U", 4, [dos_path_to_nt](ApiCall &call) { dos_path_to_nt(call, false); });
 
 	registry.add("GetSystemTimeAsFileTime", 1, [](ApiCall &call) { call.store<uint64_t>(call[0], now_ticks()); });
 	registry.add("GetSystemTimePreciseAsFileTime", 1, [](ApiCall &call) { call.store<uint64_t>(call[0], now_ticks()); });
