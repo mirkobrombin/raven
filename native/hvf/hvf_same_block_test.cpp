@@ -1,6 +1,7 @@
 // x64 code that stores into a later instruction of its own basic block (hvf_client.c role 8, patch_next) must run the stored
 // instruction, as an x86 CPU does. Here the storing vCPU resumes inside the translation the store dropped and runs the old
-// instruction: a known gap, so ctest expects this test to fail (WILL_FAIL) until the store ends its block.
+// instruction: a known gap. The test reports exactly that gap with its own line and exit code 3, which ctest requires; any other
+// outcome, an error or the gap closed, fails it.
 #include "runtime.h"
 #include "vcpu.h"
 #include "vm.h"
@@ -35,6 +36,10 @@ int main(int argc, char **argv)
 	} catch (const std::exception &error) {
 		std::fprintf(stderr, "FAIL: %s\n", error.what());
 		return 1;
+	}
+	if (value == 1) {
+		std::printf("known gap: patch_next stored 2 into its own next instruction and ran the old one, returning 1\n");
+		return 3;
 	}
 	if (value != 2) {
 		std::fprintf(stderr, "FAIL: patch_next stored 2 into its own next instruction and returned %llu\n",

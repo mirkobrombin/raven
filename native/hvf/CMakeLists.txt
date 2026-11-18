@@ -135,13 +135,15 @@ raven_hvf_sign(hvf_code_race_test)
 add_test(NAME hvf_code_race COMMAND hvf_code_race_test ${GUEST})
 set_tests_properties(hvf_code_race PROPERTIES TIMEOUT 60)
 
-# A known gap (docs/macos/hvf/README.md, open items): expected to fail until a store to code ends its block.
+# A known gap (docs/macos/hvf/README.md, open items): passes only on the line that reports it, so an error fails it and so does the gap
+# being closed, which should then make this an ordinary test.
 add_executable(hvf_same_block_test hvf_same_block_test.cpp)
 target_link_libraries(hvf_same_block_test PRIVATE raven_hvf)
 add_dependencies(hvf_same_block_test hvf_guests)
 raven_hvf_sign(hvf_same_block_test)
 add_test(NAME hvf_same_block COMMAND hvf_same_block_test ${GUEST})
-set_tests_properties(hvf_same_block PROPERTIES TIMEOUT 60 WILL_FAIL TRUE)
+set_tests_properties(hvf_same_block PROPERTIES TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "known gap: patch_next stored 2 into its own next instruction and ran the old one")
 
 add_executable(hvf_granule_test hvf_granule_test.cpp)
 target_link_libraries(hvf_granule_test PRIVATE raven_hvf)
