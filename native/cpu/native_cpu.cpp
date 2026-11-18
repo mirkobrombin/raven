@@ -402,8 +402,11 @@ void NativeChild::pause_task()
 	user_regs_struct registers{};
 	if (ptrace(PTRACE_GETREGS, pid, nullptr, &registers) == 0)
 		return;
-	if (errno != ESRCH || kill(pid, SIGSTOP) != 0)
-		throw std::runtime_error("cannot interrupt native task");
+	// A task that is not stopped for this process reads as ESRCH; any other failure, or a task that is gone, is named with its cause.
+	if (errno != ESRCH)
+		throw std::runtime_error("cannot interrupt native task " + std::to_string(pid) + ": " + std::strerror(errno));
+	if (kill(pid, SIGSTOP) != 0)
+		throw std::runtime_error("cannot interrupt native task " + std::to_string(pid) + ", which is gone: " + std::strerror(errno));
 	set_timeout(std::chrono::seconds(2));
 	const int status = wait();
 	if (!WIFSTOPPED(status))
