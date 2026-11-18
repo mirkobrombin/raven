@@ -17,3 +17,6 @@ functions (`GetFilePatchSignature*`, `NormalizeFileForPatchSignature`) fail with
 `ERROR_CALL_NOT_IMPLEMENTED`.
 
 `exports.txt` lists the exports. See [LICENSES.md](../../../LICENSES.md).
+
+`native/fuzz/patch_apply.c` builds the reader and the decoder on the host and applies changed patches made from the fixtures of
+`testdata/native_loader/mspatcha_fixtures.py` under the address and undefined behaviour sanitizers; the CI runs it on every change.
