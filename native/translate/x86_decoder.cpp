@@ -296,6 +296,97 @@ constexpr Map make_two_byte()
 	return map;
 }
 
+// SSE and SSE2 in the 0F map, by mandatory prefix: none, 66, F3, F2 (F2 and F3 take precedence over 66). The form says where the
+// operands come from: V is the XMM register of ModRM.reg, W the XMM register or memory of ModRM.rm, U that register alone, M that
+// memory alone, E a general register or memory of four bytes (eight with REX.W), G the general register of ModRM.reg, I an imm8.
+enum class SseForm : uint8_t { none, vw, wv, vw_ib, vm, mv, vu, ve, ev, gw, gu, ui, m };
+
+struct SseEntry {
+	Mnemonic mnemonic = Mnemonic::invalid;
+	SseForm form = SseForm::none;
+	// The size of the memory operand.
+	uint8_t size = 0;
+};
+
+using SseMap = std::array<std::array<SseEntry, 256>, 4>;
+
+constexpr SseMap make_sse_map()
+{
+	SseMap map{};
+	using enum Mnemonic;
+	using F = SseForm;
+	auto set = [&](unsigned prefix, unsigned opcode, Mnemonic mnemonic, SseForm form, uint8_t size) {
+		map[prefix][opcode] = SseEntry{mnemonic, form, size};
+	};
+	set(0, 0x10, movups, F::vw, 16); set(1, 0x10, movupd, F::vw, 16); set(2, 0x10, movss, F::vw, 4); set(3, 0x10, movsd, F::vw, 8);
+	set(0, 0x11, movups, F::wv, 16); set(1, 0x11, movupd, F::wv, 16); set(2, 0x11, movss, F::wv, 4); set(3, 0x11, movsd, F::wv, 8);
+	set(0, 0x12, movlps, F::vm, 8); set(1, 0x12, movlpd, F::vm, 8);
+	set(0, 0x13, movlps, F::mv, 8); set(1, 0x13, movlpd, F::mv, 8);
+	set(0, 0x14, unpcklps, F::vw, 16); set(1, 0x14, unpcklpd, F::vw, 16);
+	set(0, 0x15, unpckhps, F::vw, 16); set(1, 0x15, unpckhpd, F::vw, 16);
+	set(0, 0x16, movhps, F::vm, 8); set(1, 0x16, movhpd, F::vm, 8);
+	set(0, 0x17, movhps, F::mv, 8); set(1, 0x17, movhpd, F::mv, 8);
+	set(0, 0x28, movaps, F::vw, 16); set(1, 0x28, movapd, F::vw, 16);
+	set(0, 0x29, movaps, F::wv, 16); set(1, 0x29, movapd, F::wv, 16);
+	set(2, 0x2a, cvtsi2ss, F::ve, 4); set(3, 0x2a, cvtsi2sd, F::ve, 4);
+	set(0, 0x2b, movntps, F::mv, 16); set(1, 0x2b, movntpd, F::mv, 16);
+	set(2, 0x2c, cvttss2si, F::gw, 4); set(3, 0x2c, cvttsd2si, F::gw, 8);
+	set(2, 0x2d, cvtss2si, F::gw, 4); set(3, 0x2d, cvtsd2si, F::gw, 8);
+	set(0, 0x2e, ucomiss, F::vw, 4); set(1, 0x2e, ucomisd, F::vw, 8);
+	set(0, 0x2f, comiss, F::vw, 4); set(1, 0x2f, comisd, F::vw, 8);
+	set(0, 0x50, movmskps, F::gu, 16); set(1, 0x50, movmskpd, F::gu, 16);
+	// The arithmetic rows 51 and 54-5F: ps, pd, ss, sd.
+	const Mnemonic arithmetic[][4] = {{sqrtps, sqrtpd, sqrtss, sqrtsd}, {invalid, invalid, invalid, invalid},
+		{invalid, invalid, invalid, invalid}, {andps, andpd, invalid, invalid}, {andnps, andnpd, invalid, invalid},
+		{orps, orpd, invalid, invalid}, {xorps, xorpd, invalid, invalid}, {addps, addpd, addss, addsd}, {mulps, mulpd, mulss, mulsd},
+		{cvtps2pd, cvtpd2ps, cvtss2sd, cvtsd2ss}, {cvtdq2ps, cvtps2dq, cvttps2dq, invalid}, {subps, subpd, subss, subsd},
+		{minps, minpd, minss, minsd}, {divps, divpd, divss, divsd}, {maxps, maxpd, maxss, maxsd}};
+	const uint8_t sizes[] = {16, 16, 4, 8};
+	for (unsigned row = 0; row < 15; ++row)
+		for (unsigned prefix = 0; prefix < 4; ++prefix)
+			if (arithmetic[row][prefix] != invalid)
+				set(prefix, 0x51 + row, arithmetic[row][prefix], F::vw, sizes[prefix]);
+	set(0, 0x5a, cvtps2pd, F::vw, 8);
+	set(2, 0x5b, cvttps2dq, F::vw, 16);
+	// The integer rows with 66.
+	const Mnemonic integer[] = {punpcklbw, punpcklwd, punpckldq, packsswb, pcmpgtb, pcmpgtw, pcmpgtd, packuswb, punpckhbw, punpckhwd,
+		punpckhdq, packssdw, punpcklqdq, punpckhqdq};
+	for (unsigned i = 0; i < 14; ++i)
+		set(1, 0x60 + i, integer[i], F::vw, 16);
+	set(1, 0x6e, movd, F::ve, 4);
+	set(1, 0x6f, movdqa, F::vw, 16); set(2, 0x6f, movdqu, F::vw, 16);
+	set(1, 0x70, pshufd, F::vw_ib, 16); set(2, 0x70, pshufhw, F::vw_ib, 16); set(3, 0x70, pshuflw, F::vw_ib, 16);
+	set(1, 0x74, pcmpeqb, F::vw, 16); set(1, 0x75, pcmpeqw, F::vw, 16); set(1, 0x76, pcmpeqd, F::vw, 16);
+	set(1, 0x7e, movd, F::ev, 4); set(2, 0x7e, movq, F::vw, 8);
+	set(1, 0x7f, movdqa, F::wv, 16); set(2, 0x7f, movdqu, F::wv, 16);
+	set(0, 0xc2, cmpps, F::vw_ib, 16); set(1, 0xc2, cmppd, F::vw_ib, 16); set(2, 0xc2, cmpss, F::vw_ib, 4); set(3, 0xc2, cmpsd, F::vw_ib, 8);
+	set(0, 0xc6, shufps, F::vw_ib, 16); set(1, 0xc6, shufpd, F::vw_ib, 16);
+	set(1, 0xd6, movq, F::wv, 8);
+	set(1, 0xd7, pmovmskb, F::gu, 16);
+	set(1, 0xe6, cvttpd2dq, F::vw, 16); set(2, 0xe6, cvtdq2pd, F::vw, 8); set(3, 0xe6, cvtpd2dq, F::vw, 16);
+	set(1, 0xe7, movntdq, F::mv, 16);
+	const Mnemonic high[] = {invalid, psrlw, psrld, psrlq, paddq, pmullw, invalid, invalid, psubusb, psubusw, pminub, pand, paddusb,
+		paddusw, pmaxub, pandn, pavgb, psraw, psrad, pavgw, pmulhuw, pmulhw, invalid, invalid, psubsb, psubsw, pminsw, por, paddsb,
+		paddsw, pmaxsw, pxor, invalid, psllw, pslld, psllq, pmuludq, pmaddwd, psadbw, invalid, psubb, psubw, psubd, psubq, paddb,
+		paddw, paddd, invalid};
+	for (unsigned i = 0; i < 48; ++i)
+		if (high[i] != invalid)
+			set(1, 0xd0 + i, high[i], F::vw, 16);
+	return map;
+}
+
+constexpr SseMap sse_map = make_sse_map();
+
+// 66 0F 71, 72 and 73 by ModRM.reg.
+constexpr Mnemonic sse_shifts[3][8] = {
+	{Mnemonic::invalid, Mnemonic::invalid, Mnemonic::psrlw, Mnemonic::invalid, Mnemonic::psraw, Mnemonic::invalid, Mnemonic::psllw,
+		Mnemonic::invalid},
+	{Mnemonic::invalid, Mnemonic::invalid, Mnemonic::psrld, Mnemonic::invalid, Mnemonic::psrad, Mnemonic::invalid, Mnemonic::pslld,
+		Mnemonic::invalid},
+	{Mnemonic::invalid, Mnemonic::invalid, Mnemonic::psrlq, Mnemonic::psrldq, Mnemonic::invalid, Mnemonic::invalid, Mnemonic::psllq,
+		Mnemonic::pslldq},
+};
+
 constexpr Map one_byte = make_one_byte();
 constexpr Map two_byte = make_two_byte();
 
@@ -414,6 +505,8 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 	uint8_t opcode = static_cast<uint8_t>(reader.take(1));
 	Entry entry;
 	uint32_t full_opcode = opcode;
+	// The 0F map without VEX, EVEX or REX2: where SSE and SSE2 live.
+	bool legacy_map = false;
 	// VEX, EVEX and XOP carry their own map: the length of what follows is all the decoder needs from them.
 	if (opcode == 0xc4 || opcode == 0xc5 || opcode == 0x62 || opcode == 0x8f) {
 		size_t payload = opcode == 0xc5 ? 1 : opcode == 0x62 ? 3 : 2;
@@ -469,8 +562,10 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			const uint8_t third = static_cast<uint8_t>(reader.take(1));
 			full_opcode = (second == 0x38 ? 0x0f3800u : 0x0f3a00u) | third;
 			entry = other_modrm(second == 0x3a ? Ib : None);
-		} else
+		} else {
 			entry = two_byte[second];
+			legacy_map = true;
+		}
 		opcode = second;
 	} else
 		entry = one_byte[opcode];
@@ -598,17 +693,64 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			result.operands[count++] = operand;
 	}
 	result.count = count;
-	if ((full_opcode == 0x0f6e || full_opcode == 0x0f7e) && prefixes.operand16 && rex_w && modrm.mod == 3 && !prefixes.rep &&
-		!prefixes.repne) {
-		Operand xmm;
-		xmm.kind = OperandKind::xmm;
-		xmm.size = 8;
-		xmm.reg = static_cast<uint8_t>(modrm.reg | (rex_r ? 8 : 0));
-		const Operand general = gpr(modrm.rm, 8, rex_b);
-		result.mnemonic = Mnemonic::movq;
-		result.operands[0] = full_opcode == 0x0f6e ? xmm : general;
-		result.operands[1] = full_opcode == 0x0f6e ? general : xmm;
-		result.count = 2;
+	if (legacy_map && result.mnemonic == Mnemonic::other) {
+		const unsigned prefix = prefixes.rep ? 2 : prefixes.repne ? 3 : prefixes.operand16 ? 1 : 0;
+		SseEntry sse = sse_map[prefix][opcode];
+		const bool memory = modrm.mod != 3;
+		if (prefix == 0 && (opcode == 0x12 || opcode == 0x16) && !memory)
+			sse = {opcode == 0x12 ? Mnemonic::movhlps : Mnemonic::movlhps, SseForm::vu, 16};
+		else if (prefix == 1 && opcode >= 0x71 && opcode <= 0x73)
+			sse = {sse_shifts[opcode - 0x71][modrm.reg], SseForm::ui, 0};
+		else if (prefix == 0 && opcode == 0xae && (modrm.reg == 2 || modrm.reg == 3))
+			sse = {modrm.reg == 2 ? Mnemonic::ldmxcsr : Mnemonic::stmxcsr, SseForm::m, 4};
+		const SseForm form = sse.form;
+		const bool fits = sse.mnemonic != Mnemonic::invalid &&
+			!(memory && (form == SseForm::vu || form == SseForm::gu || form == SseForm::ui)) &&
+			!(!memory && (form == SseForm::vm || form == SseForm::mv || form == SseForm::m));
+		if (fits) {
+			// The generic pass read ModRM.rm into the first operand and the imm8 into the second.
+			const Operand rm = result.operands[0];
+			const Operand imm = result.operands[1];
+			const uint8_t wide = rex_w ? 8 : 4;
+			Operand xmm_reg;
+			xmm_reg.kind = OperandKind::xmm;
+			xmm_reg.reg = static_cast<uint8_t>(modrm.reg | (rex_r ? 8 : 0));
+			xmm_reg.size = 16;
+			Operand xmm_rm = rm;
+			if (memory)
+				xmm_rm.size = sse.size;
+			else {
+				xmm_rm = Operand{};
+				xmm_rm.kind = OperandKind::xmm;
+				xmm_rm.reg = rm.reg;
+				xmm_rm.size = 16;
+			}
+			Operand general_rm = rm;
+			general_rm.size = wide;
+			result.mnemonic = sse.mnemonic;
+			result.count = 2;
+			switch (form) {
+			case SseForm::vw: case SseForm::vm: case SseForm::vu: result.operands = {xmm_reg, xmm_rm}; break;
+			case SseForm::vw_ib: result.operands = {xmm_reg, xmm_rm, imm}; result.count = 3; break;
+			case SseForm::wv: case SseForm::mv: result.operands = {xmm_rm, xmm_reg}; break;
+			case SseForm::ve: result.operands = {xmm_reg, general_rm}; break;
+			case SseForm::ev: result.operands = {general_rm, xmm_reg}; break;
+			case SseForm::gw: result.operands = {gpr(modrm.reg, wide, rex_r), xmm_rm}; break;
+			// The masks are 32-bit writes whatever REX.W says, as LLVM prints them.
+			case SseForm::gu: result.operands = {gpr(modrm.reg, 4, rex_r), xmm_rm}; break;
+			case SseForm::ui: result.operands = {xmm_rm, imm}; break;
+			case SseForm::m: result.operands = {xmm_rm}; result.count = 1; break;
+			case SseForm::none: break;
+			}
+			// movd and its REX.W form, movq.
+			if (sse.mnemonic == Mnemonic::movd && rex_w) {
+				result.mnemonic = Mnemonic::movq;
+				for (Operand &operand : result.operands)
+					if (operand.kind == OperandKind::mem)
+						operand.size = 8;
+			}
+			result.rep = result.repne = false;
+		}
 	}
 	// 90 is xchg eax, eax only with REX.B; without it, and as F3 90 (pause), it does nothing to registers.
 	if (full_opcode == 0x90 && !rex_b) {
@@ -684,7 +826,8 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 		return buffer;
 	}
 	case OperandKind::mem: {
-		static const char *const sizes[] = {"", "byte ptr ", "word ptr ", "", "dword ptr ", "", "", "", "qword ptr "};
+		static const char *const sizes[] = {"", "byte ptr ", "word ptr ", "", "dword ptr ", "", "", "", "qword ptr ", "", "", "", "", "",
+			"", "", "xmmword ptr "};
 		static const char *const segments[] = {"", "es:", "cs:", "ss:", "ds:", "fs:", "gs:"};
 		std::string text = sizes[operand.size];
 		text += segments[static_cast<int>(operand.segment)];
@@ -723,6 +866,22 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 	default: return {};
 	}
 }
+
+static const char *const sse_names[] = {
+	"movq", "movd", "movups", "movupd", "movss", "movsd", "movlps", "movlpd", "movhlps", "movhps", "movhpd", "movlhps", "unpcklps",
+	"unpcklpd", "unpckhps", "unpckhpd", "movaps", "movapd", "movntps", "movntpd", "cvtsi2ss", "cvtsi2sd", "cvttss2si", "cvttsd2si",
+	"cvtss2si", "cvtsd2si", "ucomiss", "ucomisd", "comiss", "comisd", "movmskps", "movmskpd", "sqrtps", "sqrtpd", "sqrtss", "sqrtsd",
+	"andps", "andpd", "andnps", "andnpd", "orps", "orpd", "xorps", "xorpd", "addps", "addpd", "addss", "addsd", "mulps", "mulpd",
+	"mulss", "mulsd", "cvtps2pd", "cvtpd2ps", "cvtss2sd", "cvtsd2ss", "cvtdq2ps", "cvtps2dq", "cvttps2dq", "subps", "subpd", "subss",
+	"subsd", "minps", "minpd", "minss", "minsd", "divps", "divpd", "divss", "divsd", "maxps", "maxpd", "maxss", "maxsd", "punpcklbw",
+	"punpcklwd", "punpckldq", "packsswb", "pcmpgtb", "pcmpgtw", "pcmpgtd", "packuswb", "punpckhbw", "punpckhwd", "punpckhdq",
+	"packssdw", "punpcklqdq", "punpckhqdq", "movdqa", "movdqu", "pshufd", "pshufhw", "pshuflw", "psrlw", "psraw", "psllw", "psrld",
+	"psrad", "pslld", "psrlq", "psrldq", "psllq", "pslldq", "pcmpeqb", "pcmpeqw", "pcmpeqd", "ldmxcsr", "stmxcsr", "cmpps", "cmppd",
+	"cmpss", "cmpsd", "shufps", "shufpd", "paddq", "pmullw", "pmovmskb", "psubusb", "psubusw", "pminub", "pand", "paddusb", "paddusw",
+	"pmaxub", "pandn", "pavgb", "pavgw", "pmulhuw", "pmulhw", "cvttpd2dq", "cvtdq2pd", "cvtpd2dq", "movntdq", "psubsb", "psubsw",
+	"pminsw", "por", "paddsb", "paddsw", "pmaxsw", "pxor", "pmuludq", "pmaddwd", "psadbw", "psubb", "psubw", "psubd", "psubq",
+	"paddb", "paddw", "paddd"};
+static_assert(std::size(sse_names) == static_cast<size_t>(sse_last) - static_cast<size_t>(sse_first) + 1);
 
 std::string format_intel(const Instruction &instruction)
 {
@@ -778,7 +937,23 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::syscall: name = "syscall"; break;
 	case Mnemonic::ud2: name = "ud2"; break;
 	case Mnemonic::hlt: name = "hlt"; break;
-	case Mnemonic::movq: name = "movq"; break;
+	default: {
+		static const char *const predicates[] = {"eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"};
+		static const char *const suffixes[] = {"ps", "pd", "ss", "sd"};
+		const auto index = static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(sse_first);
+		name = sse_names[index];
+		// cmpps, cmppd, cmpss and cmpsd with a predicate SSE defines print as LLVM's pseudo-instructions.
+		if (instruction.mnemonic >= Mnemonic::cmpps && instruction.mnemonic <= Mnemonic::cmpsd && instruction.operands[2].value < 8) {
+			const auto kind = static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(Mnemonic::cmpps);
+			name = std::string("cmp") + predicates[instruction.operands[2].value] + suffixes[kind];
+			Instruction shown = instruction;
+			shown.count = 2;
+			shown.mnemonic = Mnemonic::movaps;
+			std::string text = format_intel(shown);
+			return name + text.substr(text.find(' '));
+		}
+		break;
+	}
 	}
 	std::string text;
 	if (instruction.lock)

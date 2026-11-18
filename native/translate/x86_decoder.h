@@ -60,9 +60,25 @@ enum class Mnemonic : uint8_t {
 	syscall,
 	ud2,
 	hlt,
-	// Only between a general and an XMM register (66 REX.W 0F 6E and 7E), what calls pass doubles with.
+	// SSE and SSE2 on XMM registers, from movq to the end (sse_first to sse_last). movq and movd move between XMM and general
+	// registers or memory; movq also between XMM registers and the low quadword. A memory operand has the size the instruction
+	// accesses: 16 for a whole register, 8, 4 or 2 for a part.
 	movq,
+	movd,
+	movups, movupd, movss, movsd, movlps, movlpd, movhlps, movhps, movhpd, movlhps, unpcklps, unpcklpd, unpckhps, unpckhpd, movaps,
+	movapd, movntps, movntpd, cvtsi2ss, cvtsi2sd, cvttss2si, cvttsd2si, cvtss2si, cvtsd2si, ucomiss, ucomisd, comiss, comisd,
+	movmskps, movmskpd, sqrtps, sqrtpd, sqrtss, sqrtsd, andps, andpd, andnps, andnpd, orps, orpd, xorps, xorpd, addps, addpd, addss,
+	addsd, mulps, mulpd, mulss, mulsd, cvtps2pd, cvtpd2ps, cvtss2sd, cvtsd2ss, cvtdq2ps, cvtps2dq, cvttps2dq, subps, subpd, subss,
+	subsd, minps, minpd, minss, minsd, divps, divpd, divss, divsd, maxps, maxpd, maxss, maxsd, punpcklbw, punpcklwd, punpckldq,
+	packsswb, pcmpgtb, pcmpgtw, pcmpgtd, packuswb, punpckhbw, punpckhwd, punpckhdq, packssdw, punpcklqdq, punpckhqdq, movdqa, movdqu,
+	pshufd, pshufhw, pshuflw, psrlw, psraw, psllw, psrld, psrad, pslld, psrlq, psrldq, psllq, pslldq, pcmpeqb, pcmpeqw, pcmpeqd,
+	ldmxcsr, stmxcsr, cmpps, cmppd, cmpss, cmpsd, shufps, shufpd, paddq, pmullw, pmovmskb, psubusb, psubusw, pminub, pand, paddusb,
+	paddusw, pmaxub, pandn, pavgb, pavgw, pmulhuw, pmulhw, cvttpd2dq, cvtdq2pd, cvtpd2dq, movntdq, psubsb, psubsw, pminsw, por,
+	paddsb, paddsw, pmaxsw, pxor, pmuludq, pmaddwd, psadbw, psubb, psubw, psubd, psubq, paddb, paddw, paddd,
 };
+
+constexpr Mnemonic sse_first = Mnemonic::movq;
+constexpr Mnemonic sse_last = Mnemonic::paddd;
 
 // xmm: an XMM register, reg 0-15.
 enum class OperandKind : uint8_t { none, reg, mem, imm, rel, xmm };

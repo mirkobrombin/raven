@@ -50,6 +50,10 @@ struct TranslatedBlock {
 	std::vector<BlockExit> exits;
 };
 
+struct Instruction;
+// Whether the translator has code for the instruction; a block ends before one it has not.
+bool translates(const Instruction &instruction);
+
 // Translates the x64 basic block at address, whose bytes start code. The code reaches the runtime only through CpuState (x23) and the
 // exit protocol, so it can be copied anywhere: into the code cache now, or into an ahead-of-time cache file.
 TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address, const TranslatorOptions &options,

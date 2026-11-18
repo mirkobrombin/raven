@@ -120,7 +120,8 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::cmovcc: return (instruction.condition >> 1) != 5;
 	case Mnemonic::push: case Mnemonic::pop: return instruction.operand_size == 8;
 	case Mnemonic::xchg: return true;
-	case Mnemonic::movq: return true;
+	case Mnemonic::movq: return instruction.operands[0].kind != OperandKind::mem && instruction.operands[1].kind != OperandKind::mem &&
+		(instruction.operands[0].kind == OperandKind::reg || instruction.operands[1].kind == OperandKind::reg);
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -1257,6 +1258,11 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 	return std::move(block);
 }
 
+}
+
+bool translates(const Instruction &instruction)
+{
+	return supported(instruction);
 }
 
 TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address, const TranslatorOptions &options,

@@ -1,3 +1,4 @@
+#include "translator.h"
 #include "x86_decoder.h"
 
 #include <algorithm>
@@ -81,7 +82,8 @@ struct Tally {
 	size_t failures = 0;
 	size_t sse = 0;
 	size_t sse_semantic = 0;
-	// SSE and SSE2 instructions without semantics, by LLVM's mnemonic.
+	size_t sse_translated = 0;
+	// SSE and SSE2 instructions the translator has no code for, by LLVM's mnemonic.
 	std::map<std::string, size_t> sse_missing;
 };
 
@@ -165,11 +167,12 @@ int main(int argc, char **argv)
 				++tally.sse;
 				if (instruction.mnemonic != Mnemonic::invalid && instruction.mnemonic != Mnemonic::other)
 					++tally.sse_semantic;
-				else {
+				else if (source == sse_instances && problem.empty())
+					problem = "no semantics";
+				if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
+					++tally.sse_translated;
+				else
 					++tally.sse_missing[expected.substr(0, expected.find(' '))];
-					if (source == sse_instances && problem.empty())
-						problem = "no semantics";
-				}
 			}
 		}
 		if (!problem.empty() && !expected.empty())
@@ -192,8 +195,9 @@ int main(int argc, char **argv)
 			tally.invalid_seen, tally.failures);
 		if (!tally.sse)
 			continue;
-		std::printf("%s: %zu SSE and SSE2 instructions, %zu with semantics (%.1f%%)", name.c_str(), tally.sse, tally.sse_semantic,
-			100.0 * double(tally.sse_semantic) / double(tally.sse));
+		std::printf("%s: %zu SSE and SSE2 instructions, %zu with semantics (%.1f%%), %zu translated (%.1f%%)", name.c_str(), tally.sse,
+			tally.sse_semantic, 100.0 * double(tally.sse_semantic) / double(tally.sse), tally.sse_translated,
+			100.0 * double(tally.sse_translated) / double(tally.sse));
 		std::vector<std::pair<size_t, std::string>> missing;
 		for (const auto &[mnemonic, count] : tally.sse_missing)
 			missing.push_back({count, mnemonic});
