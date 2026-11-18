@@ -200,6 +200,32 @@ def convert(rng):
     return [f"{name} {xmm(rng)}, {source}"]
 
 
+def integer(rng):
+    roll = rng.randrange(10)
+    if roll < 6:
+        names = ["paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd", "psubq", "paddsb", "paddsw", "paddusb", "paddusw",
+                 "psubsb", "psubsw", "psubusb", "psubusw", "pmullw", "pmulhw", "pmulhuw", "pmuludq", "pmaddwd", "pcmpeqb", "pcmpeqw",
+                 "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd", "pavgb", "pavgw", "pminub", "pmaxub", "pminsw", "pmaxsw", "psadbw"]
+        return [packed(rng, names)]
+    if roll < 8:
+        name = rng.choice(["psllw", "pslld", "psllq", "psrlw", "psrld", "psrlq", "psraw", "psrad", "psrldq", "pslldq"])
+        return [f"{name} {xmm(rng)}, {rng.choice([0, 1, rng.randrange(80), rng.randrange(256)])}"]
+    # By the count in the low quadword of an XMM register or of memory, which main makes small most of the time.
+    return [packed(rng, ["psllw", "pslld", "psllq", "psrlw", "psrld", "psrlq", "psraw", "psrad"])]
+
+
+def small_counts(rng, body, vectors, memory):
+    """Shift counts that leave something of the value: an XMM register or 16 bytes of memory whose low quadword is the count."""
+    parts = body[-1].replace(",", "").split()
+    if len(parts) not in (3, 7) or parts[0][:4] not in ("psll", "psrl", "psra") or parts[0].endswith("dq"):
+        return
+    count = rng.choice([0, 1, rng.randrange(70), rng.randrange(70), 1 << rng.randrange(64)])
+    if parts[2].startswith("xmm") and parts[2] != parts[1]:
+        vectors[int(parts[2][3:])][0] = count
+    elif parts[2] == "xmmword":
+        memory[int(parts[-1].rstrip("]")) // 8] = count
+
+
 # Each family: how its cases are made and what its lanes hold (by default; an instruction ending in ps or ss reads floats, in pd or
 # sd doubles).
 FAMILIES = [
@@ -208,6 +234,7 @@ FAMILIES = [
     ("arithmetic", arithmetic, "mixed", 1500),
     ("compare", compare, "mixed", 1200),
     ("convert", convert, "mixed", 1500),
+    ("integer", integer, "int", 1500),
 ]
 
 
@@ -273,6 +300,7 @@ def main():
             lanes = lanes_of(body, kind)
             vectors = [[quadword(rng, lanes), quadword(rng, lanes)] for _ in range(16)]
             memory = [quadword(rng, lanes) for _ in range(16)]
+            small_counts(rng, body, vectors, memory)
             if any(line.startswith("ldmxcsr") for line in body):
                 memory[15] = mxcsr(rng, True) | rng.getrandbits(32) << 32
             lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret",
