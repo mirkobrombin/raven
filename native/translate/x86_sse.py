@@ -214,6 +214,15 @@ def integer(rng):
     return [packed(rng, ["psllw", "pslld", "psllq", "psrlw", "psrld", "psrlq", "psraw", "psrad"])]
 
 
+def shuffle(rng):
+    if rng.random() < 0.6:
+        return [packed(rng, ["packsswb", "packssdw", "packuswb", "punpcklbw", "punpcklwd", "punpckldq", "punpcklqdq", "punpckhbw",
+                             "punpckhwd", "punpckhdq", "punpckhqdq", "unpcklps", "unpcklpd", "unpckhps", "unpckhpd"])]
+    name = rng.choice(["pshufd", "pshuflw", "pshufhw", "shufps", "shufpd"])
+    source = xmm(rng) if rng.random() < 0.6 else mem(rng, 16, True)
+    return [f"{name} {xmm(rng)}, {source}, {rng.randrange(256)}"]
+
+
 def small_counts(rng, body, vectors, memory):
     """Shift counts that leave something of the value: an XMM register or 16 bytes of memory whose low quadword is the count."""
     parts = body[-1].replace(",", "").split()
@@ -235,6 +244,7 @@ FAMILIES = [
     ("compare", compare, "mixed", 1200),
     ("convert", convert, "mixed", 1500),
     ("integer", integer, "int", 1500),
+    ("shuffle", shuffle, "int", 800),
 ]
 
 
