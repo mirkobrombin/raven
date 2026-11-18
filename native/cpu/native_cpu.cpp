@@ -1944,10 +1944,6 @@ bool NativeProcess::serve_alone(uint64_t *block)
 	auto &cycles = CallCycles::instance();
 	if (cycles.enabled())
 		cycles.answered(block, stub, cycles.seen(block, stub, since));
-	// The call answered stays named in the block, by its stub and its entry time: a guest that went on to its breakpoint meanwhile is let
-	// go on by its host thread, and only for this call, not for a later one of the same stub that another thread answers.
-	__atomic_store_n(&block[served_stub::last_stub], stub, __ATOMIC_RELAXED);
-	__atomic_store_n(&block[served_stub::answered_call], __atomic_load_n(&block[served_stub::entered], __ATOMIC_RELAXED), __ATOMIC_RELAXED);
 	__atomic_store_n(&block[0], 0, __ATOMIC_RELEASE);
 	return true;
 }
@@ -1961,12 +1957,11 @@ bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block)
 	const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
 	user_regs_struct registers{};
 	if (!stub) {
-		// The call was answered beside the turn while the guest went on from spinning to its breakpoint: it finds the answer once let go
-		// on, without the turn the usual way would take only to resume it.
-		const uint64_t last = __atomic_load_n(&block[served_stub::last_stub], __ATOMIC_RELAXED),
-			call = __atomic_load_n(&block[served_stub::answered_call], __ATOMIC_RELAXED);
-		if (!last || call != __atomic_load_n(&block[served_stub::entered], __ATOMIC_RELAXED) ||
-			ptrace(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip != last + served_stub::wait() + 1)
+		// The call was answered while the guest went on from spinning to the breakpoint of its stub's wait. Only this thread answers its
+		// block, beside the turn or in it, so nothing of the call is left: the turn would only let the guest go on (see the stop at a stub's
+		// wait in resume), and the host thread does that here without it. The stubs are set once, before any guest thread runs.
+		if (ptrace(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip - 1 < state->served_wait_offset ||
+			!std::binary_search(state->call_stubs.begin(), state->call_stubs.end(), registers.rip - 1 - state->served_wait_offset))
 			return false;
 		if (ptrace(state->guest_resume(), task, nullptr, nullptr) == -1)
 			throw std::runtime_error("cannot resume a native guest task after a call answered beside the turn");
