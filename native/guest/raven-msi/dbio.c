@@ -495,6 +495,12 @@ static UINT file_bytes(UINT type, UINT ref_size)
 	return (type & TYPE_SIZE) <= 2 ? 2 : 4;
 }
 
+// TRUE when an entry whose mask is even names column c: the mask is 16 bits wide, one for each of the first columns.
+static BOOL mask_names(UINT mask, UINT c)
+{
+	return c < 16 && (mask & (1u << c));
+}
+
 static BYTE *read_transform_table(IStorage *storage, const WCHAR *name, ULONG *size)
 {
 	WCHAR encoded[64];
@@ -558,7 +564,7 @@ static UINT apply_table(transform_source *source, const WCHAR *name, const BYTE 
 		memset(present, 0, columns * sizeof(BOOL));
 		for (UINT c = 0; c < count; c++) {
 			UINT type = table->columns[c].type;
-			if (!(mask & 1) && !(type & TYPE_KEY) && !(mask & (1u << c)))
+			if (!(mask & 1) && !(type & TYPE_KEY) && !mask_names(mask, c))
 				continue;
 			UINT bytes = file_bytes(type, source->ref_size);
 			if (cursor + bytes > size) {
@@ -618,7 +624,7 @@ static void apply_columns_catalog(transform_source *source, const BYTE *data, UL
 	UINT ref = source->ref_size;
 	WCHAR *last = NULL;
 	UINT counter = 0;
-	for (ULONG at = 0; at + 2 <= size; ) {
+	for (ULONG at = 0; at + 2 + ref + 2 <= size; ) {
 		UINT mask = data[at] | (data[at + 1] << 8);
 		ULONG cursor = at + 2;
 		UINT table_id = raw_value(data + cursor, ref);
@@ -630,6 +636,8 @@ static void apply_columns_catalog(transform_source *source, const BYTE *data, UL
 			at = cursor;
 			continue;
 		}
+		if (cursor + ref + 2 > size)
+			break;
 		UINT name_id = raw_value(data + cursor, ref);
 		cursor += ref;
 		UINT type = raw_value(data + cursor, 2) - 0x8000;
@@ -786,7 +794,7 @@ static void view_table_changes(transform_source *source, db_table *view, const v
 		memset(cells, 0, sizeof(cells));
 		for (UINT c = 0; c < count; c++) {
 			UINT type = shape[c].type;
-			if (!(mask & 1) && !(type & TYPE_KEY) && !(mask & (1u << c)))
+			if (!(mask & 1) && !(type & TYPE_KEY) && !mask_names(mask, c))
 				continue;
 			UINT bytes = file_bytes(type, source->ref_size);
 			UINT value = cursor + bytes <= size ? raw_value(data + cursor, bytes) : 0;
@@ -798,14 +806,20 @@ static void view_table_changes(transform_source *source, db_table *view, const v
 			cells[c] = value;
 			present[c] = TRUE;
 		}
-		WCHAR row_text[512] = L"", stream_text[600];
+		// The keys joined by tabs, as long as they come.
+		WCHAR *row_text = msi_alloc(sizeof(WCHAR));
+		SIZE_T row_length = 0;
 		for (UINT c = 0; c < columns; c++)
 			if (shape[c].type & TYPE_KEY) {
 				WCHAR *text = cell_text(db, db, shape[c].type, cells[c]);
-				if (*row_text)
-					lstrcatW(row_text, L"\t");
-				if (text)
-					lstrcatW(row_text, text);
+				SIZE_T length = text ? lstrlenW(text) : 0;
+				row_text = msi_grow(row_text, (row_length + length + 2) * sizeof(WCHAR));
+				if (row_length)
+					row_text[row_length++] = L'\t';
+				if (length)
+					memcpy(row_text + row_length, text, length * sizeof(WCHAR));
+				row_length += length;
+				row_text[row_length] = 0;
 				msi_free(text);
 			}
 		db_row *current = table && columns == table->column_count ? table_find_key(db, table, cells) : NULL;
@@ -822,8 +836,13 @@ static void view_table_changes(transform_source *source, db_table *view, const v
 				if (!present[c] || (shape[c].type & TYPE_KEY))
 					continue;
 				if (TYPE_IS_BINARY(shape[c].type)) {
-					wsprintfW(stream_text, L"%s.%s", name, row_text);
+					SIZE_T name_length = lstrlenW(name);
+					WCHAR *stream_text = msi_alloc((name_length + row_length + 2) * sizeof(WCHAR));
+					memcpy(stream_text, name, name_length * sizeof(WCHAR));
+					stream_text[name_length] = L'.';
+					memcpy(stream_text + name_length + 1, row_text, (row_length + 1) * sizeof(WCHAR));
 					transform_view_add(db, view, name, shape[c].name, row_text, stream_text, NULL);
+					msi_free(stream_text);
 					continue;
 				}
 				WCHAR *text = cell_text(db, db, shape[c].type, cells[c]);
@@ -833,6 +852,7 @@ static void view_table_changes(transform_source *source, db_table *view, const v
 				msi_free(old);
 			}
 		}
+		msi_free(row_text);
 		at = cursor;
 	}
 }
@@ -895,8 +915,10 @@ UINT db_apply_transform(msi_db *db, const WCHAR *path, INT conditions)
 	IStorage *storage = NULL;
 	HRESULT hr;
 	if (path[0] == L':') {
-		// Inside the package itself, under the name after the colon.
+		// Inside the package itself, under the name after the colon, which has to fit the encoded name.
 		WCHAR encoded[64];
+		if (lstrlenW(path + 1) > 61)
+			return ERROR_OPEN_FAILED;
 		name_encode(path + 1, FALSE, encoded);
 		hr = IStorage_OpenStorage(db->storage, encoded, NULL, STGM_DIRECT | STGM_READ | STGM_SHARE_EXCLUSIVE, NULL, 0, &storage);
 		if (FAILED(hr))
