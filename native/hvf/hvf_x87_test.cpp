@@ -91,8 +91,9 @@ int main(int argc, char **argv)
 			const translate::RunResult result = runtime.call(address);
 			std::string problem;
 			if (item.output.signal) {
-				// SIGFPE is #MF: the runtime stops at that instruction with a fault.
-				if (item.output.signal == 8 ? result.reason != translate::ExitReason::fault || result.value != address
+				// SIGFPE is #MF: the runtime stops at an instruction of the case with a fault.
+				if (item.output.signal == 8 ? result.reason != translate::ExitReason::fault || result.value < address ||
+						result.value >= address + item.code.size()
 											: result.reason == translate::ExitReason::returned)
 					problem = "exit " + std::to_string(static_cast<unsigned>(result.reason)) + ", x86 raised signal " +
 						std::to_string(item.output.signal);
