@@ -4,6 +4,8 @@
 //   still reach that translation: the vCPU's next call must return the new value.
 //   A second store to the same page: its permission fault reaches the host after the first store's handler unwatched the page. The
 //   handler must have it retried (true), not report a guest exception; an address outside guest memory stays unhandled.
+//   Translation again after every fault (the seam on every call): retrying the store can never win, so the store must still end, within
+//   a bounded number of faults, and take effect. A watchdog fails the test after 10 s.
 //   A write by the host through VmProcess::write, past stage 2, must drop the translations of the code it changes.
 //   The kick: a guest thread whose runner only records calls stands for a vCPU elsewhere; every store that drops translations must
 //   quiesce it, and the storing vCPU's own thread is not.
@@ -13,6 +15,7 @@
 #include "vm_process.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -83,7 +86,25 @@ int main(int argc, char **argv)
 					check(result.value == value, "retranslated in the window: rewrote patch_target to return " + std::to_string(value) +
 						", it returned " + std::to_string(result.value));
 				}
+				// Every fault translates the page again.
+				std::atomic<bool> ended{false};
+				std::thread([&] {
+					for (int i = 0; i < 1000 && !ended; ++i)
+						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					if (!ended) {
+						std::fprintf(stderr, "FAIL: a store whose page is translated again after every fault did not end in 10 s\n");
+						std::_Exit(1);
+					}
+				}).detach();
+				process.after_code_written = [&](uint64_t) { runtime.translate_ahead(patch_target); };
+				const uint64_t faults_before = vcpu.stats().write_faults;
+				const uint64_t always = thread.call(entry, {3, 0, 30}).value;
+				ended = true;
 				process.after_code_written = nullptr;
+				std::printf("translated again after every fault: the store ended after %llu faults, the call returned %llu\n",
+					static_cast<unsigned long long>(vcpu.stats().write_faults - faults_before), static_cast<unsigned long long>(always));
+				check(always == 30, "translated again after every fault: rewrote patch_target to return 30, it returned " +
+					std::to_string(always));
 				thread.call(entry, {7, 0, 1});
 				const uint32_t host_value = 77;
 				process.write(patch_target + 1, &host_value, 4);
