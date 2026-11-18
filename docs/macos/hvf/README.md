@@ -132,33 +132,39 @@ runner. Blocks, the lookup table, chains and the granule index are shared.
   for indirect branches at a cost on every one; not measured, not added. No test has shown a stale fetch.
 - **Chains.** Patching replaces one aligned `b` with another, which the Arm ARM allows while other PEs execute it, followed by the same
   instruction cache invalidation. Two vCPUs taking the same chain exit patch it once: the second finds the branch already there.
-- **Guest stores to translated code: stage 2.** A watched 4 KiB page loses write permission with `hv_vm_protect` (the VM's stage 2 uses
-  4 KiB pages). Chosen over the guest's own page tables because the host changes stage 2 synchronously while vCPUs run, and
+- **Guest stores to translated code: stage 2.** A watched 4 KiB page loses write permission with `hv_vm_protect`. The VM asks for a
+  4 KiB IPA granule, and protection really works in 4 KiB pages: hvf_granule_test makes one page read-only inside a 16 KiB-aligned IPA
+  block, and a store to the next 4 KiB page takes no fault while a store to the page itself takes one (PROVEN, output below; with the
+  16 KiB granule, `hv_vm_protect` of a 4 KiB page fails). PE sections are 4 KiB-aligned, so code and data never share a watched page,
+  and `watch_granule` is 4 KiB, matching. Chosen over the guest's own page tables because the host changes stage 2 synchronously while vCPUs run, and
   Hypervisor.framework does the TLB maintenance; a stage-1 change would need TLBI from inside the guest on some vCPU before the block
   could be published. The fault also exits straight to the host, without the guest kernel. A protect and unprotect pair costs about
   0.8 us (below).
 - **The write path.** The store's stage-2 fault exits on the storing vCPU's thread: ESR class 0x24 with WnR, not from a table walk.
   Hypervisor.framework reports it as a translation fault at level 3 (DFSC 0b000111, exit syndrome 0x93880047; PROVEN by the run that
   checked for permission faults only and failed), so translation and permission faults both count. `VmProcess` passes it to
-  `Runtime::code_written`, which drops every block of that granule: chains into them are restored to their stubs, lookup entries naming
+  `Runtime::code_written` of every runtime attached to it (every runtime that translates its code must be: `watch_code` refuses with
+  none attached), which drops every block of that granule: chains into them are restored to their stubs, lookup entries naming
   them are cleared, the pages are unwatched through their counts; then every other vCPU of the runtime is quiesced. The vCPU resumes at
-  the store, which is retried, not emulated. If another vCPU translated the page again meanwhile, the page is watched again and the
-  store faults again, dropping that translation too (hvf_code_race_test). A store whose fault arrives after another store's handler
-  unwatched the page is simply retried. A write the runtime makes through the alias (`VmProcess::write`) drops translations the same way.
+  the store, which is retried. If another vCPU translated the page again meanwhile, the page is watched again and the store faults
+  again, dropping that translation too (hvf_code_race_test). The retry is bounded: after `Vcpu::store_retries` (8) faults in a row of
+  one execution of a store, the host performs it, writing through `VmProcess::write` (which drops translations again) and stepping
+  over it. That needs the syndrome to describe the store (ISV: one register, no writeback), as it does for the translator's `str`
+  forms; `stp`, writeback and atomic stores are retried without bound (INFERRED to end, open item). A store whose fault arrives after
+  another store's handler unwatched the page is simply retried. A write the runtime makes through the alias (`VmProcess::write`) drops translations the same way.
 - **Translation against concurrent stores.** A block is translated from a copy of the guest bytes, then watched, then the bytes are
   compared again: a store that landed between the copy and the watch faulted nowhere, so a difference means translating again.
 - **The guarantee.** When `code_written` returns, no vCPU reaches a dropped block through a chain or the lookup table: nothing chains to
   it, the lookup table does not name it, and every other vCPU that was in the guest has taken an exit (a context synchronization event)
   since the chains were undone. `Vcpu::quiesce` does that with `hv_vcpus_exit` (latched for a vCPU about to run, per the header; the
-  request is also sent again while waiting) and waits for the exit, or returns at once if the vCPU is in the host. A vCPU can still run
+  request is also sent again while waiting, a fallback no test or mutation exercises: NOT verified) and waits for the exit, or returns at once if the vCPU is in the host. A vCPU can still run
   a dropped block once to its end: one that was inside it, or one that got its address from the runtime just before (the address is
   read under the lock, the vCPU entered after). Blocks are straight-line code with no backward branch of their own, so that is bounded.
   It matches what x86 promises another processor that runs code being modified: the Intel SDM's cross-modifying code rules make the
   executing processor see the new code only after it serializes, so it may run the old code meanwhile (INFERRED; no x86 comparison
   was run). Dropped code stays in the cache until a reset.
-- **Limits.** A page holding code and data written often will fault and translate again on every round. A vCPU that translates the page
-  again between the invalidation and the retried store re-protects it, and the store faults again; it converges when the store wins
-  the race (B took exactly one fault per trial in hvf_code_change_test). `Runtime::Thread`s must be removed before their `Vcpu` goes.
+- **Limits.** A page holding code written often will fault and translate again on every round. `Runtime::Thread`s must be removed
+  before their `Vcpu` goes, and runtimes detached (`VmProcess::Attachment` does it) before they go.
 - **In this process** the runtime stays single-threaded: `add_thread` refuses a thread without a runner and any thread once native
   functions are bound (runtime_test), since `TestProcess`'s fault state is not synchronized and its SIGSEGV path calls `code_written`.
 
@@ -354,8 +360,27 @@ hvf code race: PASS
 
 `hvf_same_block_test` runs `patch_next`, `mov dword [rip + x], 2; mov eax, 1; ret` where the store hits the second instruction's
 immediate, in one translated block. x86 returns 2. Here the storing vCPU resumes inside the translation its store dropped and runs the
-old `mov eax, 1` (PROVEN, `FAIL: patch_next stored 2 into its own next instruction and returned 1`). ctest marks the test WILL_FAIL,
-so it passes while the gap exists and fails once it is closed. Open item.
+old `mov eax, 1` (PROVEN: `known gap: patch_next stored 2 into its own next instruction and ran the old one, returning 1`, exit 3).
+ctest passes it only when that line appears (PASS_REGULAR_EXPRESSION): any error fails it (a missing guest directory gives `Required
+regular expression not found`), and so does the gap closing, which should then turn it into an ordinary test. Open item.
+
+### 8. Stage-2 granule, and several runtimes on one process
+
+PROVEN (`ctest --test-dir build-macos-hvf -V -R "hvf_granule|hvf_two_runtimes"`):
+
+```
+first page IPA 0x40014000 read-only: store to the next 4 KiB page took 0 faults, store to the page itself 1
+hvf granule: PASS
+store from the first runtime: it returned 55, the second runtime then 55, 1 write faults
+hvf two runtimes: PASS
+```
+
+Two runtimes on one VmProcess both translate patch_target; a store from one must end (a 10 s watchdog) and both must then run the new
+code; with no runtime attached, translating is refused. hvf_code_race_test's bound part translates the page again after every fault:
+
+```
+translated again after every fault: 8 faults, 1 stores emulated, the call returned 30
+```
 
 ### Cost of a guest store to translated code
 
@@ -397,6 +422,13 @@ The shared cache and code change tests have failing-first commits (exit 1 each, 
 - Before `add_thread` checked: `FAIL: a second guest thread without a runner was accepted` and `FAIL: a guest thread was added to a
   runtime with native functions bound`.
 
+The second review's tests have failing-first commits too (exit 1 each, PROVEN):
+
+- `hvf_two_runtimes_test`, while only one runtime could be attached: `FAIL: the store to a page two runtimes watch did not end within
+  10 s` (the store faulted forever on the other runtime's watch).
+- `hvf_code_race_test`'s bound part, before the bound: `FAIL: the code cache is full` (every retry translated the page again until
+  the 16 MiB cache ran out).
+
 The parts that landed with their implementation fail under these mutations:
 
 | Test | Mutation | Command | Output |
@@ -407,6 +439,8 @@ The parts that landed with their implementation fail under these mutations:
 | code change, unlink | `runtime.cpp` `Runtime::invalidate`: `-cache.write(site, &original, 4);` `+(void)site, (void)original;` | `hvf_code_change_test build-macos-hvf/guest 10` | `FAIL: one vCPU: rewrote patch_target to return 11, it returned 10` (9 of 10); `FAIL: two vCPUs, trial 0: A ran the old patch_target 300000000 times and never saw B's store` (10 of 10) |
 | code race, kick | `runtime.cpp` `Runtime::code_written`: `-thread->runner->quiesce();` `+(void)thread;` | `hvf_code_race_test build-macos-hvf/guest` | `FAIL: code_written quiesced the other guest thread 0 times for 10 write faults` |
 | code race, host write | `vm_process.cpp` `VmProcess::write`: `-if (code && attached) attached->code_written(page);` `+(void)code;` | `hvf_code_race_test build-macos-hvf/guest` | `FAIL: after the host wrote patch_target to return 77, it returned 24` |
+| granule | `vm.cpp`: `-hv_vm_config_set_ipa_granule(config, HV_IPA_GRANULE_4KB)` `+...HV_IPA_GRANULE_16KB)` | `hvf_granule_test build-macos-hvf/guest` | `FAIL: hv_vm_protect failed: 4209590275` |
+| same block, error | `CMakeLists.txt`: the test's guest directory `/nonexistent` | `ctest -R hvf_same_block` | `***Failed  Required regular expression not found` |
 | code change, quiesce | `vcpu.cpp` `Vcpu::quiesce`: `+return;` as its first line | `hvf_code_change_test build-macos-hvf/guest 10` | `FAIL: quiesce rarely made the spinning vCPU exit, or took 100 ms`; `100 calls, 1 forced exits`. The two-vCPU trials pass under this mutation (above) |
 
 ## Reproduction
@@ -427,16 +461,16 @@ The last argument is optional: a program that prints the thermal state (`NSProce
 - **Native thunks.** `bind_native` refuses to work with a runner. In the VM a call to native code has to become an exit (an `svc`
   from a thunk in guest code, the host calling the function, the result written to the CpuState), which is the design of section 4's
   `GuestStop::api`. Not needed by these workloads.
-- **Code writes, further.** Stores are retried, not emulated, so a vCPU translating the page again between the invalidation and the
-  retry makes the store fault again (converges; not observed to repeat). A page mixing code and hot data pays about 12 us per write
-  after each translation; a per-page policy (stop watching and translate without chaining, or emulate the store) is open. A write to
-  a page of several runtimes' code reaches only the attached runtime: one runtime per VM is the model, and `attach` takes one.
-- **A store into its own block.** The storing vCPU runs the rest of the dropped block (hvf_same_block_test, WILL_FAIL). Closing it
+- **Code writes, further.** A store the syndrome does not describe (`stp`, writeback, LSE atomics on code) is retried without bound
+  if other vCPUs keep translating its page again; emulating those needs decoding the instruction. Code written often pays about 12 us
+  per write after each translation; a per-page policy (stop translating a page that keeps being written, or emulate its stores
+  always) is open.
+- **A store into its own block.** The storing vCPU runs the rest of the dropped block (hvf_same_block_test, which passes only on the gap's line). Closing it
   means ending the block at such a store: emulate the store in the host and resume through the dispatcher at the next x64
   instruction, which needs a map from host PCs back to guest addresses the translator does not keep yet.
 - **Smaller gaps in the write path.** Faults are keyed on the guest virtual address, so a page mapped at two addresses would be watched
   under one only (no aliases exist here). A translation retried after a concurrent store leaves its first copy in the cache until a
-  reset. `VmProcess::attach` holds a plain pointer: detach (attach another runtime) before the runtime goes. Kicks from `quiesce` call
+  reset. `VmProcess` holds plain pointers to attached runtimes: detach before a runtime goes. Kicks from `quiesce` call
   the kicked vCPU's `on_cancel`, which is meant for forced exits of any origin.
 - **Lookup publication without FEAT_LSE2.** The 16-byte STP and LDP are single-copy atomic only with FEAT_LSE2 (present on the M5); a
   Linux arm64 host without it needs a sequence number or acquire loads in the lookup path.
