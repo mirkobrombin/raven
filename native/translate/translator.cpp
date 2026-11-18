@@ -953,9 +953,16 @@ void BlockTranslator::exchange(const Instruction &instruction)
 			a.sub(parity_register, s3, s0);
 		if (flags_wanted(AF))
 			a.eor(adjust_register, s3, s0);
-		// The accumulator takes the old value, which equals it when the exchange happened: written either way, so a 32-bit
-		// accumulator clears the upper half of RAX either way, as Rosetta does.
-		write(accumulator, s0);
+		// The accumulator takes the old value only when the compare failed. A 32-bit exchange that succeeds leaves all of RAX as it
+		// was, as x86 silicon does (Rosetta clears the upper half), so pick the whole register on equal before the flags change.
+		if (size == 4) {
+			const Operand whole{OperandKind::reg, 8, rax};
+			const uint8_t before = read(whole, s2, false);
+			a.mov(s4, s0, false);
+			a.csel(s4, before, s4, Cond::eq);
+			write(whole, s4);
+		} else
+			write(accumulator, s0);
 		return;
 	}
 	// xadd: memory gets the sum, the register the old value; flags as for add.
