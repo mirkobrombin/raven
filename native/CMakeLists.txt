@@ -2164,6 +2164,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${fixture}/icon-entries.exe)
                 set_tests_properties(native_icon_entries_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/icon-entries-prefix)
+                # GIF frames found by their blocks' lengths after codes that break off inside a block (gif_frames_client.c).
+                add_custom_command(OUTPUT ${fixture}/gif-frames.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/gif-frames.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/gif_frames_client.c -lwindowscodecs -lole32 -luuid
+                        -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/gif_frames_client.c VERBATIM)
+                add_custom_target(gif_frames_fixture_${installer_arch} ALL DEPENDS ${fixture}/gif-frames.exe)
+                add_test(NAME native_gif_frames_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                    ${fixture}/gif-frames.exe)
+                set_tests_properties(native_gif_frames_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${fixture}/gif-frames-prefix)
                 # Rich edit labels made transparent paint only their text over the parent, and ordinary ones their own background.
                 add_custom_command(OUTPUT ${fixture}/richedit.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
