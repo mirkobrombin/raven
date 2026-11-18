@@ -32,6 +32,7 @@ struct TranslationStats {
 	uint64_t ordered_loads = 0;
 	uint64_t ordered_stores = 0;
 	uint64_t plain_accesses = 0;
+	uint64_t alignment_checks = 0;
 };
 
 // A branch the runtime may chain: word is the index of the b that leaves the block for target.

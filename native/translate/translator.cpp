@@ -169,6 +169,16 @@ private:
 		size_t word;
 	};
 	std::vector<PendingExit> pending;
+	// Out-of-line code for an ordered access whose address is not aligned: LDAPR and STLR fault on those, x86 does not.
+	struct Unaligned {
+		Assembler::Label start;
+		Assembler::Label back;
+		uint8_t reg;
+		uint8_t base;
+		unsigned size;
+		bool store;
+	};
+	std::vector<Unaligned> unaligned;
 
 	void translate(const Instruction &instruction);
 	bool flags_wanted(uint32_t flags) const { return (live_after & flags) != 0; }
@@ -202,6 +212,7 @@ private:
 	void exit_to(uint64_t target);
 	void exit_indirect();
 	void finish_exits();
+	void ordered_access(uint8_t reg, uint8_t base, unsigned size, bool store);
 };
 
 bool BlockTranslator::ordered(const Operand &memory) const
@@ -267,8 +278,7 @@ void BlockTranslator::load_memory(uint8_t target, const Operand &memory, unsigne
 	const bool order = ordered(memory);
 	if (order && options.ordering == MemoryOrdering::rcpc) {
 		const Address at = address(memory, true);
-		a.ldapr(target, at.base, size);
-		++stats.ordered_loads;
+		ordered_access(target, at.base, size, false);
 		return;
 	}
 	Address at = address(memory, false);
@@ -290,8 +300,7 @@ void BlockTranslator::store_memory(uint8_t source, const Operand &memory, unsign
 	const bool order = ordered(memory);
 	if (order && options.ordering == MemoryOrdering::rcpc) {
 		const Address at = address(memory, true);
-		a.stlr(source, at.base, size);
-		++stats.ordered_stores;
+		ordered_access(source, at.base, size, true);
 		return;
 	}
 	Address at = address(memory, false);
@@ -306,6 +315,28 @@ void BlockTranslator::store_memory(uint8_t source, const Operand &memory, unsign
 	} else
 		++stats.plain_accesses;
 	a.str(source, at.base, at.offset, size);
+}
+
+void BlockTranslator::ordered_access(uint8_t reg, uint8_t base, unsigned size, bool store)
+{
+	if (size > 1) {
+		// An address that is not a multiple of the size takes the out-of-line path: a plain access and a barrier. The test leaves
+		// NZCV alone.
+		Unaligned path{a.label(), a.label(), reg, base, size, store};
+		a.and_imm(s5, base, size - 1);
+		a.cbnz(s5, path.start);
+		unaligned.push_back(path);
+		++stats.alignment_checks;
+	}
+	if (store) {
+		a.stlr(reg, base, size);
+		++stats.ordered_stores;
+	} else {
+		a.ldapr(reg, base, size);
+		++stats.ordered_loads;
+	}
+	if (size > 1)
+		a.bind(unaligned.back().back);
 }
 
 uint8_t BlockTranslator::read(const Operand &operand, uint8_t target, bool may_alias)
@@ -572,8 +603,12 @@ void BlockTranslator::shift(const Instruction &instruction)
 	const Mnemonic mnemonic = instruction.mnemonic;
 	if (count_operand.kind == OperandKind::imm) {
 		const unsigned count = shift_count(instruction);
-		if (count == 0)
+		if (count == 0) {
+			// Nothing shifts and no flag changes, but a 32-bit register is still written, so its upper half clears.
+			if (target.kind == OperandKind::reg && size == 4)
+				a.mov(host_register[target.reg], host_register[target.reg], false);
 			return;
+		}
 		if (count >= bits)
 			throw std::logic_error("narrow shift beyond its width");
 		uint8_t value = read(target, s0);
@@ -617,6 +652,8 @@ void BlockTranslator::shift(const Instruction &instruction)
 	if (flags_wanted(all_flags))
 		normalize_carry();
 	const Assembler::Label skip = a.label();
+	if (target.kind == OperandKind::reg && size == 4)
+		a.mov(host_register[target.reg], host_register[target.reg], false);
 	a.and_imm(s1, host_register[rcx], is64 ? 63 : 31, false);
 	a.cbz(s1, skip, false);
 	const uint8_t value = read(target, s0);
@@ -636,7 +673,14 @@ void BlockTranslator::shift(const Instruction &instruction)
 			a.lsrv(s3, value, s3, true);
 		}
 		a.and_imm(s3, s3, 1);
-		a.lsl_imm(s3, s3, 1);
+		// V as for a count of one, the only count that defines it: shl, top bit of the result xor CF; shr, top bit of the operand.
+		if (mnemonic != Mnemonic::sar) {
+			a.ubfx(s4, mnemonic == Mnemonic::shl ? s2 : value, static_cast<uint8_t>(bits - 1), 1, true);
+			if (mnemonic == Mnemonic::shl)
+				a.eor(s4, s4, s3);
+			a.orr(s3, s4, s3, Shift::lsl, 1);
+		} else
+			a.lsl_imm(s3, s3, 1);
 		a.and_(a64::zr, s2, s2, is64, true);
 		a.rmif(s3, 0, 0b0011);
 		carry_inverted = false;
@@ -744,11 +788,9 @@ void BlockTranslator::exchange(const Instruction &instruction)
 			a.sub(parity_register, s3, s0);
 		if (flags_wanted(AF))
 			a.eor(adjust_register, s3, s0);
-		// The accumulator takes the old value only when they differed.
-		const Assembler::Label equal = a.label();
-		a.b(Cond::eq, equal);
+		// The accumulator takes the old value, which equals it when the exchange happened: written either way, so a 32-bit
+		// accumulator clears the upper half of RAX either way, as Rosetta does.
 		write(accumulator, s0);
-		a.bind(equal);
 		return;
 	}
 	// xadd: memory gets the sum, the register the old value; flags as for add.
@@ -848,6 +890,17 @@ void BlockTranslator::exit_indirect()
 
 void BlockTranslator::finish_exits()
 {
+	for (const Unaligned &path : unaligned) {
+		a.bind(path.start);
+		if (path.store) {
+			a.dmb(a64::Barrier::ish);
+			a.str(path.reg, path.base, 0, path.size);
+		} else {
+			a.ldr(path.reg, path.base, 0, path.size);
+			a.dmb(a64::Barrier::ishld);
+		}
+		a.b(path.back);
+	}
 	for (const PendingExit &exit : pending) {
 		a.bind(exit.stub);
 		a.mov_imm(s4, exit.target);
