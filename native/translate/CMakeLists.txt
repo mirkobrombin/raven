@@ -16,7 +16,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else()
     set(RAVEN_TRANSLATE_PLATFORM platform_linux.cpp)
 endif()
-add_library(raven_translate STATIC x86_decoder.cpp a64_emitter.cpp translator.cpp x87.cpp code_cache.cpp runtime.cpp ${RAVEN_TRANSLATE_PLATFORM})
+set(RAVEN_TRANSLATE_SOURCES x86_decoder.cpp a64_emitter.cpp translator.cpp x87.cpp code_cache.cpp runtime.cpp ${RAVEN_TRANSLATE_PLATFORM})
+add_library(raven_translate STATIC ${RAVEN_TRANSLATE_SOURCES})
 target_include_directories(raven_translate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(raven_translate PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
 
@@ -158,6 +159,13 @@ if(APPLE)
     add_dependencies(x87_test x87_oracle)
     add_test(NAME translate_x87 COMMAND x87_test ${SEMANTICS}/x87_oracle.bin ${CMAKE_CURRENT_SOURCE_DIR}/testdata/x87_silicon.txt)
     set_tests_properties(translate_x87 PROPERTIES TIMEOUT 120)
+    # The measurements of docs/macos/x87.md (x87_measure ORACLE SILICON --doubles or --core-time): a build of the library whose x87
+    # core can do its arithmetic in doubles. Not a test, and not what the runtime links.
+    add_library(raven_translate_x87_doubles STATIC EXCLUDE_FROM_ALL ${RAVEN_TRANSLATE_SOURCES})
+    target_include_directories(raven_translate_x87_doubles PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(raven_translate_x87_doubles PUBLIC RAVEN_X87_DOUBLES=1)
+    add_executable(x87_measure EXCLUDE_FROM_ALL x87_test.cpp)
+    target_link_libraries(x87_measure PRIVATE raven_translate_x87_doubles)
 
     # entry.c's loop as a native arm64 program and as an x86-64 one Rosetta runs, for translate_bench to be compared with.
     add_executable(bench_entry_native bench_entry_host.c ${RAVEN_TESTDATA}/native_cpu/entry.c)

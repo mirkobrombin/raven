@@ -26,8 +26,10 @@ enum class X87Result : uint8_t {
 // Memory operands are read and written through memory.
 X87Result x87_execute(CpuState &state, GuestMemory &memory, const Instruction &instruction, uint64_t next);
 
-// For measuring option (b) of docs/macos/x87.md only: add, sub, mul, div and sqrt round their operands to double and compute in the
-// host's double arithmetic instead. Never set outside that measurement: results are then not x86's.
+#if RAVEN_X87_DOUBLES
+// For measuring option (b) of docs/macos/x87.md only, in the separate build that defines RAVEN_X87_DOUBLES (x87_measure): add, sub,
+// mul, div and sqrt round their operands to double and compute in the host's double arithmetic instead. Results are then not x86's.
 extern bool x87_double_arithmetic;
+#endif
 
 }

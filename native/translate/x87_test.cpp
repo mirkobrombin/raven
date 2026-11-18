@@ -43,9 +43,10 @@ public:
 
 }
 
-// The measurements of docs/macos/x87.md, not tests: --doubles runs every case once with add, sub, mul, div and sqrt done in doubles
-// (option b) and counts the failures by family and by precision control; --core-time times the core alone on the single-instruction
-// arithmetic cases, exact and in doubles.
+// The measurements of docs/macos/x87.md, not tests, in the x87_measure build (RAVEN_X87_DOUBLES): --doubles runs every case once with
+// add, sub, mul, div and sqrt done in doubles (option b) and counts the failures by family and by precision control; --core-time
+// times the core alone on the single-instruction arithmetic cases, exact and in doubles.
+#if RAVEN_X87_DOUBLES
 static int measure(std::vector<x87_oracle::Case> &cases, const std::string &what)
 {
 	if (what == "--core-time") {
@@ -111,6 +112,7 @@ static int measure(std::vector<x87_oracle::Case> &cases, const std::string &what
 		std::printf("doubles, %s: %zu cases, %zu differ from x86, %zu in a value\n", key.c_str(), counts[0], counts[1], counts[2]);
 	return 0;
 }
+#endif
 
 // Every case runs under the translator in this process and, through x87_oracle, on an x86-64 CPU or Rosetta; both must leave the same
 // registers, flags, x87 state and memory.
@@ -129,8 +131,14 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "%s does not match the cases in %s\n", argv[2], argv[1]);
 		return 2;
 	}
-	if (argc == 4)
+	if (argc == 4) {
+#if RAVEN_X87_DOUBLES
 		return measure(cases, argv[3]);
+#else
+		std::fprintf(stderr, "%s: the measurements are in x87_measure (RAVEN_X87_DOUBLES)\n", argv[3]);
+		return 2;
+#endif
+	}
 	// Both orderings this process can run.
 	size_t failures = 0, run = 0;
 	for (const MemoryOrdering ordering : {MemoryOrdering::rcpc, MemoryOrdering::barriers}) {

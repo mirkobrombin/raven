@@ -7,9 +7,16 @@
 
 namespace raven::translate {
 
+#if RAVEN_X87_DOUBLES
 bool x87_double_arithmetic = false;
+#endif
 
 namespace {
+
+#if !RAVEN_X87_DOUBLES
+// The runtime's build: the double paths below are never taken.
+constexpr bool x87_double_arithmetic = false;
+#endif
 
 __extension__ typedef unsigned __int128 u128;
 
