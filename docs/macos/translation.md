@@ -159,8 +159,8 @@ The allocation itself goes through `AllocatorHooks.h` (`PAGE_EXECUTE_READWRITE` 
 | | FEX path A | FEX path B | Own translator |
 |---|---|---|---|
 | Code Raven maintains | An ARM64EC loader and ntdll (new), plus a fork patch | Glue in the size of FEX's 7.3k-line Windows layer, plus a fork of 92k lines of FEXCore | About 5k lines today, growing with SSE/AVX/x87 |
-| x86 coverage | Complete (SSE to AVX2, x87) | Complete | The integer subset, SSE and SSE2 ([sse.md](sse.md); see the limits) |
-| Effort to first app | Large: the ARM64EC loader and ntdll come before anything runs | Large: the Darwin port of FEXCore | Done for Raven's five simplest clients. x87 and AVX are the large remaining items |
+| x86 coverage | Complete (SSE to AVX2, x87) | Complete | The integer subset, SSE and SSE2 ([sse.md](sse.md)), x87 without the transcendental instructions ([x87.md](x87.md)); see the limits |
+| Effort to first app | Large: the ARM64EC loader and ntdll come before anything runs | Large: the Darwin port of FEXCore | Done for Raven's five simplest clients. AVX is the large remaining item; x87 runs in a host core ([x87.md](x87.md)) |
 | Performance on the same workloads | Linux arm64 table below: 1.0 to 1.8 times native | Same engine as path A | Linux arm64 table below: 1.06 to 2.15 times native |
 
 #### FEX against our translator on Linux arm64
@@ -655,7 +655,8 @@ The decoder handles 64-bit mode only today. The plan:
 4. Add a WoW64-style CPU interface: `BTCpuSimulate`, `BTCpuGetContext`/`SetContext` and the `Wow64SystemServiceEx` call-out, so that
    32-bit code reaches Raven's 64-bit native thunks through the same boundary.
 
-x87 needs a soft-float or F64-based path. It is the largest missing piece for both modes.
+x87 runs in an exact 80-bit host core ([x87.md](x87.md)); 32-bit code uses it for every `float` and `double`, so its per-exit cost
+matters far more there than for x64.
 
 ## What runs on Linux ARM64 unchanged
 
@@ -672,7 +673,8 @@ x87 needs a soft-float or F64-based path. It is the largest missing piece for bo
 ## Limits of the current core
 
 - **Not translated yet:**
-  - AVX, x87, and SSE3 and later (SSE and SSE2 on XMM registers are translated: [sse.md](sse.md));
+  - AVX, and SSE3 and later (SSE and SSE2 on XMM registers are translated: [sse.md](sse.md));
+  - the x87 transcendental instructions, fbld and fbstp (the rest of x87 runs in the host core: [x87.md](x87.md));
   - string instructions and `rep`;
   - `mul`/`div`, `bt*`, rotates, `pushf`/`popf`;
   - 16-bit push and pop;
