@@ -108,3 +108,8 @@ add_dependencies(hvf_spin_test hvf_guests)
 raven_hvf_sign(hvf_spin_test)
 add_test(NAME hvf_spin COMMAND hvf_spin_test ${GUEST} 2)
 set_tests_properties(hvf_spin PROPERTIES TIMEOUT 60)
+
+add_executable(hvf_bench hvf_bench.cpp)
+target_link_libraries(hvf_bench PRIVATE raven_hvf)
+add_dependencies(hvf_bench hvf_guests)
+raven_hvf_sign(hvf_bench)
