@@ -1,5 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
 #include <windows.h>
+#include <objbase.h>
 #include <msi.h>
 #include <msiquery.h>
 
@@ -15,11 +17,90 @@ static void beside(WCHAR *target, const WCHAR *name)
 	target[cut] = 0;
 }
 
+static int name_digit(WCHAR c)
+{
+	if (c >= L'0' && c <= L'9')
+		return c - L'0';
+	if (c >= L'A' && c <= L'Z')
+		return c - L'A' + 10;
+	if (c >= L'a' && c <= L'z')
+		return c - L'a' + 36;
+	return c == L'.' ? 62 : c == L'_' ? 63 : -1;
+}
+
 static BOOL same(const WCHAR *a, const WCHAR *b)
 {
 	while (*a && *a == *b)
 		++a, ++b;
 	return *a == *b;
+}
+
+/* A stream name of a table as packages store it: a marker, then the name packed two characters to a unit. */
+static void table_stream(const WCHAR *name, WCHAR *out)
+{
+	*out++ = 0x4840;
+	while (*name) {
+		int first = name_digit(*name), second = name[1] ? name_digit(name[1]) : -1;
+		if (first < 0)
+			*out++ = *name++;
+		else if (second >= 0) {
+			*out++ = 0x3800 + first + (second << 6);
+			name += 2;
+		} else {
+			*out++ = 0x4800 + first;
+			++name;
+		}
+	}
+	*out = 0;
+}
+
+static BOOL put_stream(IStorage *storage, const WCHAR *name, const void *data, ULONG size)
+{
+	WCHAR encoded[32];
+	IStream *stream;
+	ULONG done = 0;
+	table_stream(name, encoded);
+	if (FAILED(IStorage_CreateStream(storage, encoded, STGM_CREATE | STGM_WRITE | STGM_SHARE_EXCLUSIVE, 0, 0, &stream)))
+		return FALSE;
+	HRESULT hr = IStream_Write(stream, data, size, &done);
+	IStream_Release(stream);
+	return SUCCEEDED(hr) && done == size;
+}
+
+/* A package with one table T of one string column A holding "abc", whose string pool has a long entry claiming 4 GB between "A"
+   and "abc". The entry is refused alone: the strings after it still come from where they are. */
+static int long_pool_entry(void)
+{
+	static const GUID database = {0x000c1084, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+	static const WORD pool[] = {0, 0, 1, 1, 1, 1, 0, 0xffff, 0xffff, 0, 3, 1};
+	static const char data[] = "TAabc";
+	static const WORD tables[] = {1}, columns[] = {1, 0x8001, 2, 0x8000 | 0x2d08}, rows[] = {4};
+	WCHAR directory[MAX_PATH], path[MAX_PATH], text[16];
+	IStorage *storage;
+	GetTempPathW(MAX_PATH, directory);
+	GetTempFileNameW(directory, L"rvn", 0, path);
+	if (FAILED(StgCreateDocfile(path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0, &storage)))
+		return 97;
+	BOOL written = SUCCEEDED(IStorage_SetClass(storage, &database)) && put_stream(storage, L"_StringPool", pool, sizeof pool) &&
+		put_stream(storage, L"_StringData", data, 5) && put_stream(storage, L"_Tables", tables, sizeof tables) &&
+		put_stream(storage, L"_Columns", columns, sizeof columns) && put_stream(storage, L"T", rows, sizeof rows);
+	IStorage_Release(storage);
+	if (!written)
+		return 97;
+	MSIHANDLE database_handle = 0, view = 0, record = 0;
+	DWORD size = 16;
+	int result = 0;
+	if (MsiOpenDatabaseW(path, (LPCWSTR)MSIDBOPEN_READONLY, &database_handle) != ERROR_SUCCESS ||
+		MsiDatabaseOpenViewW(database_handle, L"SELECT `A` FROM `T`", &view) != ERROR_SUCCESS || MsiViewExecute(view, 0) != ERROR_SUCCESS ||
+		MsiViewFetch(view, &record) != ERROR_SUCCESS)
+		result = 98;
+	else if (MsiRecordGetStringW(record, 1, text, &size) != ERROR_SUCCESS || !same(text, L"abc"))
+		result = 99;
+	MsiCloseHandle(record);
+	MsiCloseHandle(view);
+	MsiCloseHandle(database_handle);
+	DeleteFileW(path);
+	return result;
 }
 
 int raven_entry(void)
@@ -116,5 +197,5 @@ int raven_entry(void)
 			return 96;
 		MsiCloseHandle(record);
 	}
-	return 0;
+	return long_pool_entry();
 }
