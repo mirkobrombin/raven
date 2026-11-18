@@ -109,8 +109,8 @@ uint8_t *Runtime::place(const std::vector<uint32_t> &code)
 
 void Runtime::place_fixed_code()
 {
-	enter = place(enter_trampoline());
-	exit = place(exit_trampoline());
+	enter = place(enter_trampoline(options.vector_registers));
+	exit = place(exit_trampoline(options.vector_registers));
 	return_address = place(return_stub());
 	return_guest = reinterpret_cast<uint64_t>(return_address);
 }

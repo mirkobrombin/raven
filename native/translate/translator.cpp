@@ -121,8 +121,7 @@ bool supported(const Instruction &instruction, const TranslatorOptions &options)
 	case Mnemonic::push: case Mnemonic::pop: return instruction.operand_size == 8;
 	case Mnemonic::xchg: return true;
 	case Mnemonic::movq:
-		return options.vector_registers &&
-			(first.kind == OperandKind::xmm ? first : instruction.operands[1]).reg < 8;
+		return options.vector_registers;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -978,8 +977,7 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::imul: multiply(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
 	case Mnemonic::movq:
-		// XMMn lives in vn, ARM64EC's map; only XMM0-XMM7 here, since the trampolines restore v8-v15 at every exit. FMOV Dd, Xn
-		// clears the rest of the vector, as movq to XMM does.
+		// XMMn lives in vn, ARM64EC's map. FMOV Dd, Xn clears the rest of the vector, as movq to XMM does.
 		if (operands[0].kind == OperandKind::xmm)
 			a.emit(0x9e670000u | uint32_t(host_register[operands[1].reg]) << 5 | operands[0].reg);
 		else
@@ -1207,7 +1205,7 @@ TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address,
 	return translator.run(code, address);
 }
 
-std::vector<uint32_t> enter_trampoline()
+std::vector<uint32_t> enter_trampoline(bool vector_registers)
 {
 	Assembler a;
 	// enter(x0 = state, x1 = code). The frame keeps the host's callee-saved registers: x19-x28, x29, x30 and the low halves of v8-v15
@@ -1224,6 +1222,9 @@ std::vector<uint32_t> enter_trampoline()
 	a.stp_q(12, 13, a64::sp, 160);
 	a.stp_q(14, 15, a64::sp, 192);
 	a.mov(state_register, 0);
+	if (vector_registers)
+		for (uint8_t reg = 8; reg < 16; reg += 2)
+			a.ldp_q(reg, uint8_t(reg + 1), state_register, static_cast<int16_t>(state_offset::vector_high + 16 * (reg - 8)));
 	a.mov_sp(s0, a64::sp);
 	a.str(s0, state_register, state_offset::host_frame, 8);
 	a.mov(address_register, 1);
@@ -1238,7 +1239,7 @@ std::vector<uint32_t> enter_trampoline()
 	return a.words;
 }
 
-std::vector<uint32_t> exit_trampoline()
+std::vector<uint32_t> exit_trampoline(bool vector_registers)
 {
 	Assembler a;
 	// w9: the reason; x10: the exit's detail.
@@ -1250,6 +1251,9 @@ std::vector<uint32_t> exit_trampoline()
 	a.str(s0, state_register, state_offset::nzcv, 8);
 	a.str(parity_register, state_register, state_offset::parity_source, 8);
 	a.str(adjust_register, state_register, state_offset::adjust_source, 8);
+	if (vector_registers)
+		for (uint8_t reg = 8; reg < 16; reg += 2)
+			a.stp_q(reg, uint8_t(reg + 1), state_register, static_cast<int16_t>(state_offset::vector_high + 16 * (reg - 8)));
 	a.ldr(s0, state_register, state_offset::host_frame, 8);
 	a.mov_sp(a64::sp, s0);
 	a.ldr(0, state_register, state_offset::exit_reason, 4);

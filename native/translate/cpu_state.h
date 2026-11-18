@@ -57,6 +57,9 @@ struct CpuState {
 	uint64_t host_frame = 0;
 	// The code a native function stopped the guest with.
 	uint64_t stop_code = 0;
+	// XMM8-XMM15 (v8-v15) between runs, kept by the trampolines when the translator keeps XMM registers (vector_registers): the
+	// trampolines give v8-v15 back to the host on every exit.
+	alignas(16) uint64_t vector_high[16] = {};
 };
 
 namespace state_offset {
@@ -73,6 +76,7 @@ constexpr size_t lookup_table = offsetof(CpuState, lookup_table);
 constexpr size_t exit_reason = offsetof(CpuState, exit_reason);
 constexpr size_t stop_requested = offsetof(CpuState, stop_requested);
 constexpr size_t host_frame = offsetof(CpuState, host_frame);
+constexpr size_t vector_high = offsetof(CpuState, vector_high);
 }
 
 }
