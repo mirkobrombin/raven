@@ -47,6 +47,10 @@ public:
 	virtual uint32_t table_semaphore() const { return 0; }
 	// The same for a mutex the table keeps.
 	virtual uint32_t table_mutex() const { return 0; }
+	// Objects that act when their last handle is closed say so here, and only they are looked for among the other handles then;
+	// last_handle_closed runs once that last handle is gone, as a completion port ends the waits on it.
+	virtual bool watches_last_handle() const { return false; }
+	virtual void last_handle_closed() {}
 };
 
 class NativeObjects;

@@ -1499,7 +1499,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		port->post({call.u32(1), call[2], call[3], 0});
 		call.ret(1);
 	});
-	// Waits for one packet; empty when the time ran out.
+	// Waits for one packet; empty when the time ran out or the port's last handle was closed meanwhile (see CompletionPort::closed).
 	const auto wait_packet = [&reactor, &threads](const std::shared_ptr<CompletionPort> &port, uint32_t milliseconds) -> std::optional<CompletionPacket> {
 		std::optional<std::chrono::steady_clock::time_point> wake;
 		if (milliseconds != UINT32_MAX)
@@ -1507,12 +1507,14 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		for (;;) {
 			reactor.poll();
 			CompletionPacket packet;
+			if (port->closed())
+				return std::nullopt;
 			if (port->take(packet))
 				return packet;
 			if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake))
 				return std::nullopt;
 			HostWait waiting;
-			threads.block([&] { return !port->empty() || (reactor.look(), !port->empty()); }, wake);
+			threads.block([&] { return port->closed() || !port->empty() || (reactor.look(), !port->empty()); }, wake);
 		}
 	};
 	registry.add("GetQueuedCompletionStatus", 5, [&objects, wait_packet](ApiCall &call) {
@@ -1525,7 +1527,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		if (!packet) {
 			if (call[3])
 				call.store_pointer(call[3], 0);
-			call.fail(258);
+			call.fail(port->closed() ? 735 : 258);
 			return;
 		}
 		if (call[1])
@@ -1562,7 +1564,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 				packet = wait_packet(port, 0);
 		}
 		if (!removed) {
-			call.fail(258);
+			call.fail(port->closed() ? 735 : 258);
 			return;
 		}
 		call.store<uint32_t>(call[3], removed);

@@ -280,15 +280,20 @@ uint32_t NativeObjects::close(uint64_t handle)
 	static const bool traced = std::getenv("RAVEN_TRACE_HANDLES") != nullptr;
 	if (traced) std::fprintf(stderr, "handle %llx closed by %s\n", static_cast<unsigned long long>(handle), api_in_progress);
 	std::shared_ptr<KernelObject> generic;
+	bool last=false;
 	{
 		std::lock_guard lock(mutex);
 		const auto found=handles.find(handle);
 		if (found==handles.end()) return invalid_handle;
 		generic=std::move(found->second.generic);
 		handles.erase(found);
+		last=generic && generic->watches_last_handle() &&
+			std::none_of(handles.begin(),handles.end(),[&](const auto &entry) { return entry.second.generic==generic; });
 	}
 	if (const auto reserved=std::dynamic_pointer_cast<ReservedObject>(generic); reserved && reserved->on_close)
 		reserved->on_close(handle);
+	if (last)
+		generic->last_handle_closed();
 	return 0;
 }
 

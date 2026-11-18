@@ -32,9 +32,14 @@ public:
 		return true;
 	}
 	bool empty() const { return packets.empty(); }
+	// Its last handle closed: the threads that wait on it give up (ERROR_ABANDONED_WAIT_0), and the packets still queued are gone.
+	bool watches_last_handle() const override { return true; }
+	void last_handle_closed() override { abandoned = true; packets.clear(); }
+	bool closed() const { return abandoned; }
 
 private:
 	std::deque<CompletionPacket> packets;
+	bool abandoned = false;
 };
 
 // Operations that were started and cannot finish yet. Each one is asked again whenever the process looks for completions, and drops out
