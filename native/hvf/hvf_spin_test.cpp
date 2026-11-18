@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <mutex>
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <set>
 #include <string>
 #include <sys/resource.h>
@@ -72,6 +73,15 @@ void spin(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, Spinner &spinner
 {
 	try {
 		hvf::Vcpu vcpu(vm, true);
+		// Destroyed before vcpu, on every path: the watcher stops naming the vCPU before its id can be reused.
+		struct Retire {
+			Spinner &spinner;
+			~Retire()
+			{
+				std::lock_guard guard(spinner.lock);
+				spinner.ready = false;
+			}
+		} retire{spinner};
 		hvf::VmCodeCache cache(vm, 4 << 20, 1 << 20);
 		translate::TranslatorOptions options;
 		options.ordering = translate::MemoryOrdering::hardware;
@@ -108,12 +118,8 @@ void spin(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, Spinner &spinner
 			spinner.seconds = double(now_ns() - start) / 1e9;
 		} while (spinner.seconds < spinner.target_seconds);
 		spinner.final_x18 = vcpu.reg(HV_REG_X18);
-		std::lock_guard guard(spinner.lock);
-		spinner.ready = false;
 	} catch (const std::exception &error) {
 		spinner.error = error.what();
-		std::lock_guard guard(spinner.lock);
-		spinner.ready = false;
 	}
 }
 
@@ -141,6 +147,10 @@ int main(int argc, char **argv)
 	sysctlbyname("hw.ncpu", &cores, &length, nullptr, 0);
 	const pid_t parent = getpid();
 	const pid_t load = fork();
+	if (load < 0) {
+		std::perror("FAIL: fork");
+		return 1;
+	}
 	if (load == 0) {
 		alarm(60);
 		for (int i = 0; i < 2 * cores; ++i)
@@ -156,7 +166,6 @@ int main(int argc, char **argv)
 		hvf::VmProcess process(vm);
 		const uint64_t entry = process.entry(process.load(std::filesystem::path(argv[1]) / "hvf_client.exe"));
 
-		// About 70 ms per batch on an idle M5.
 		Spinner spinners[2];
 		for (unsigned i = 0; i < 2; ++i) {
 			spinners[i].sentinel = 0x5eed5eed00000000ull | i;
@@ -165,6 +174,7 @@ int main(int argc, char **argv)
 		}
 		std::atomic<bool> done{false};
 		std::thread watcher([&] {
+			pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 			while (!done) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
 				for (Spinner &spinner : spinners) {
@@ -181,10 +191,10 @@ int main(int argc, char **argv)
 		done = true;
 		watcher.join();
 		for (const Spinner &spinner : spinners) {
-			std::printf("vCPU x18 %#llx: %llu steps in %llu batches, %.2f s, %llu wrong results, %llu forced exits, x18 changed at %llu "
+			std::printf("vCPU x18 %#llx: %llu steps in %llu batches of %.0f ms, %.2f s, %llu wrong results, %llu forced exits, x18 changed at %llu "
 				"of them and reads %#llx at the end, %llu host CPU changes between exits over %zu distinct CPUs\n",
 				static_cast<unsigned long long>(spinner.sentinel), static_cast<unsigned long long>(spinner.total_steps),
-				static_cast<unsigned long long>(spinner.batches), spinner.seconds, static_cast<unsigned long long>(spinner.wrong_results),
+				static_cast<unsigned long long>(spinner.batches), spinner.seconds * 1000 / double(spinner.batches), spinner.seconds, static_cast<unsigned long long>(spinner.wrong_results),
 				static_cast<unsigned long long>(spinner.cancels), static_cast<unsigned long long>(spinner.x18_lost),
 				static_cast<unsigned long long>(spinner.final_x18), static_cast<unsigned long long>(spinner.migrations),
 				spinner.cpus.size());
@@ -194,13 +204,17 @@ int main(int argc, char **argv)
 				fail("a spin returned a wrong value");
 			if (spinner.x18_lost || spinner.final_x18 != spinner.sentinel)
 				fail("x18 changed");
-			// The x18 check at forced exits means nothing without any.
-			if (!spinner.cancels)
-				fail("the watcher never forced an exit");
+			// The x18 check at forced exits means little without many, and "under host load" nothing without the host moving the vCPU.
+			if (spinner.cancels < 50)
+				fail("fewer than 50 forced exits");
+			if (!spinner.migrations)
+				fail("the vCPU thread never changed host CPU between forced exits");
 		}
 	} catch (const std::exception &error) {
 		fail(error.what());
 	}
+	if (waitpid(load, nullptr, WNOHANG) != 0)
+		fail("the load process ended before the spins did");
 	kill(load, SIGKILL);
 	waitpid(load, nullptr, 0);
 	rusage after{};
