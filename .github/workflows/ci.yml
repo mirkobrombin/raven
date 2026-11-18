@@ -5,6 +5,11 @@ on:
     branches: ["main"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      parallel:
+        description: Run every test with a host thread for each guest thread (RAVEN_PARALLEL=1)
+        type: boolean
+        default: false
   workflow_call:
 
 permissions:
@@ -538,6 +543,7 @@ jobs:
     env:
       SHARD: ${{ matrix.shard }}
       XDG_RUNTIME_DIR: /run/ci-runtime
+      PARALLEL: ${{ inputs.parallel && 'yes' || '' }}
     steps:
       - name: Install packages
         run: |
@@ -573,10 +579,12 @@ jobs:
           zstd -d -q -c /opt/ci/build.tar.zst | tar -C /opt/ci -xf -
           install -d -m 0700 "${XDG_RUNTIME_DIR}"
 
+      # The runtime turns parallel mode on when RAVEN_PARALLEL is set at all, so it is only exported when asked for.
       - name: Run shard ${{ matrix.shard }}
-        run: >
-          ctest --test-dir "${BUILD}" -I "${SHARD},,6" -j 2 --timeout 1200
-          --output-on-failure --output-junit "${BUILD}/junit-${SHARD}.xml"
+        run: |
+          if [ -n "${PARALLEL}" ]; then export RAVEN_PARALLEL=1; fi
+          ctest --test-dir "${BUILD}" -I "${SHARD},,6" -j 2 --timeout 1200 \
+            --output-on-failure --output-junit "${BUILD}/junit-${SHARD}.xml"
 
       - name: Upload results
         if: always()
