@@ -164,17 +164,37 @@ def arithmetic(rng):
     return body
 
 
+PREDICATES = ["eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"]
+CONDITIONS = ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"]
+
+
+def compare(rng):
+    if rng.random() < 0.5:
+        suffix = rng.choice(["ps", "pd", "ss", "sd"])
+        size = {"ss": 4, "sd": 8}.get(suffix, 16)
+        source = xmm(rng) if rng.random() < 0.6 else mem(rng, size, True)
+        return [f"cmp{rng.choice(PREDICATES)}{suffix} {xmm(rng)}, {source}"]
+    name = rng.choice(["comiss", "ucomiss", "comisd", "ucomisd"])
+    source = xmm(rng) if rng.random() < 0.6 else mem(rng, 4 if name.endswith("ss") else 8, False)
+    body = [f"{name} {xmm(rng)}, {source}"]
+    # Readers of the flags in the same block, as compilers place them.
+    if rng.random() < 0.4:
+        body.append(f"set{rng.choice(CONDITIONS)} {rng.choice(['al', 'cl', 'dl', 'bl', 'sil', 'r8b'])}")
+    return body
+
+
 # Each family: how its cases are made and what its lanes hold (by default; an instruction ending in ps or ss reads floats, in pd or
 # sd doubles).
 FAMILIES = [
     ("moves", moves, "mixed", 600),
     ("logic", logic, "mixed", 300),
     ("arithmetic", arithmetic, "mixed", 1500),
+    ("compare", compare, "mixed", 1200),
 ]
 
 
 def lanes_of(body, kind):
-    name = body[-1].split()[0] if not body[-1].startswith("stmxcsr") else body[0].split()[0]
+    name = body[-1].split()[0] if not body[-1].startswith(("stmxcsr", "set")) else body[0].split()[0]
     if kind != "mixed" or name.startswith(("mov", "pmov")):
         return kind
     if name.endswith(("ps", "ss")):
