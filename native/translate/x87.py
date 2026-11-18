@@ -525,6 +525,24 @@ def main():
             state.fcw = 0x37F & ~flag
             state.fsw = flag | 0x80 | 0x8000
             emit("pending", state, [0] * 16, bytes(256), [insn])
+    # fldenv and frstor loading a status word whose ES and B disagree with its flags and masks, then a waiting instruction (or
+    # fnstsw, which does not wait): whether x86 takes ES as loaded or as the flags and masks say.
+    statuses = [(0x37E, 0x0001, "flag unmasked, ES clear"), (0x37F, 0x8081, "ES set, flags masked"),
+                (0x37F, 0x0080, "ES alone"), (0x37F, 0x8000, "B alone"), (0x37E, 0x8081, "flag unmasked, ES set"),
+                (0x37F, 0x0001, "flag masked, ES clear")]
+    followers = [nullary("wait"), register_insn("fadd", 1), nullary("fnstsw ax")]
+    for control, status, _ in statuses:
+        for size in (28, 108):
+            for follower in followers:
+                state = State(rng, False)
+                state.depth, state.top, state.fcw, state.fsw = 2, 0, 0x37F, 0
+                image = bytearray(struct.pack("<IIIIIII", 0xFFFF0000 | control, 0xFFFF0000 | status, 0xFFFF0FFF, 0, 0, 0, 0xFFFF0000))
+                # Tags: R0 and R1 valid (TOP 0), the others empty.
+                if size == 108:
+                    image += struct.pack("<QH", ONE, 0x3FFF) + struct.pack("<QH", ONE | 1 << 62, 0x4000) + bytes(60)
+                memory = bytearray(256)
+                memory[0:size] = image
+                emit("environment", state, [0] * 16, memory, [memory_insn("fldenv" if size == 28 else "frstor", size, 0), follower])
     lines += [".data", ".balign 16", ".globl _host_fx", "_host_fx: .zero 512", "saved_io: .quad 0", "saved_code: .quad 0", ""]
     with open(assembly, "w") as out:
         out.write("\n".join(lines))

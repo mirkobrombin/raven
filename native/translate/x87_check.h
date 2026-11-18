@@ -73,8 +73,32 @@ inline std::vector<Case> read_cases(const char *path)
 	return cases;
 }
 
-// Applies the silicon results: one line per case, its number, its text and field=hex pairs (docs/macos/x87-data/silicon_overrides.py
-// says which). Returns how many cases changed, or -1 when a line does not match the cases.
+// silicon_overrides.py's fingerprint of an output: FNV-1a 64 over the compared bytes, the others zeroed.
+inline uint64_t fingerprint(const Case &item)
+{
+	Io io = item.output;
+	io.registers[rsp] = io.registers[r15] = 0;
+	io.flags &= 0x8d5;
+	std::memset(io.fx + 6, 0, 18);
+	for (unsigned i = 0; i < 8; ++i)
+		std::memset(io.fx + 42 + 16 * i, 0, 6);
+	std::memset(io.fx + 160, 0, sizeof io.fx - 160);
+	static const std::regex image(R"((fnstenv|fnsave) \[r15(?: \+ (\d+))?\])");
+	std::smatch match;
+	if (std::regex_search(item.text, match, image)) {
+		const size_t at = match[2].matched ? std::stoul(match[2]) : 0;
+		std::memset(io.buffer + at + 12, 0, 14);
+	}
+	const auto *bytes = reinterpret_cast<const uint8_t *>(&io);
+	uint64_t value = 0xcbf29ce484222325;
+	for (size_t i = 0; i < sizeof io; ++i)
+		value = (value ^ bytes[i]) * 0x100000001b3;
+	return value;
+}
+
+// Applies the silicon results: one line per case, its number, its text, the fingerprint of Rosetta's result it was written against and
+// field=hex pairs (docs/macos/x87-data/silicon_overrides.py says which). Returns how many cases changed, or -1 when a line does not
+// match the cases or Rosetta's result for its case is no longer the one the line was written against (the file is then stale).
 inline long apply_silicon(std::vector<Case> &cases, const char *path)
 {
 	std::ifstream in(path);
@@ -100,8 +124,13 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		const size_t number = std::stoul(parts[0]);
 		if (number >= cases.size() || cases[number].text != parts[1])
 			return -1;
+		if (parts[2].rfind("rosetta=", 0) != 0 || std::stoull(parts[2].substr(8), nullptr, 16) != fingerprint(cases[number])) {
+			std::fprintf(stderr, "case %zu (%s): Rosetta's result is not the one the silicon results were written against\n", number,
+				parts[1].c_str());
+			return -1;
+		}
 		Io &io = cases[number].output;
-		for (size_t i = 2; i < parts.size(); ++i) {
+		for (size_t i = 3; i < parts.size(); ++i) {
 			const size_t equals = parts[i].find('=');
 			const std::string name = parts[i].substr(0, equals);
 			const std::vector<uint8_t> value = bytes_of(parts[i].substr(equals + 1));
