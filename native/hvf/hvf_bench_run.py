@@ -2,8 +2,9 @@
 
 usage: hvf_bench_run.py BUILD_DIRECTORY RESULTS_DIRECTORY [ROUNDS] [THERMAL_PROGRAM]
 
-Each round runs each configuration once as its own process: one first call (translation included) and one timed run of CALLS
-workload calls. Configurations: native (bench_native.c), process-loop and process-call (Raven's translator in this process, plain
+Each round runs each configuration once as its own process: one first call (translation included), then RUNS timed runs of CALLS
+workload calls, each at least 50 ms long on this machine. The first timed run warms the core up and is dropped in every configuration
+alike; the process's value is the median of the others. Configurations: native (bench_native.c), process-loop and process-call (Raven's translator in this process, plain
 mode), vm-loop and vm-call (the same in a Hypervisor.framework vCPU with ACTLR_EL1.EnTSO); hvf_bench.cpp says what loop and call
 mean. Writes measurements.jsonl (one line per process), summary.csv (ratios to native's median of the same session) and state.json
 (vm.loadavg and the thermal state before and after).
@@ -18,7 +19,9 @@ import sys
 import time
 from pathlib import Path
 
-WORKLOADS = {"entry": 2000, "crc32": 20, "fnv": 50, "histogram": 50}
+# Calls per timed run: at least 50 ms natively (entry about 330 ns per call, crc32 13 us, fnv 34 us, histogram 52 us).
+WORKLOADS = {"entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}
+RUNS = 6
 CONFIGURATIONS = ["native", "process-loop", "process-call", "vm-loop", "vm-call"]
 
 
@@ -34,25 +37,26 @@ def machine_state(thermal):
 def command(build, workload, calls, configuration):
     image = str(build / "guest" / f"hvf_{workload}.exe")
     if configuration == "native":
-        return [str(build / f"hvf_native_{workload}"), "1", str(calls)]
+        return [str(build / f"hvf_native_{workload}"), str(RUNS), str(calls)]
     engine, method = configuration.split("-")
-    return [str(build / "hvf_bench"), engine, image, "1", str(calls), method]
+    return [str(build / "hvf_bench"), engine, image, str(RUNS), str(calls), method]
 
 
 def parse(output):
-    values = {}
+    values = {"runs_ns_per_call": []}
     for line in output.splitlines():
         parts = line.split()
         if parts[0] == "first":
             values["first_ns"] = float(parts[1])
         elif parts[0] == "run":
-            values["warm_ns_per_call"] = float(parts[2])
+            values["runs_ns_per_call"].append(float(parts[2]))
         elif parts[0] == "entries":
             values["entries"] = int(parts[1])
         elif parts[0] == "checksum":
             values["checksum"] = int(parts[1])
-    if "first_ns" not in values or "warm_ns_per_call" not in values:
+    if "first_ns" not in values or len(values["runs_ns_per_call"]) != RUNS:
         raise RuntimeError("no timing in output:\n" + output)
+    values["warm_ns_per_call"] = statistics.median(values["runs_ns_per_call"][1:])
     return values
 
 
@@ -62,7 +66,7 @@ def main():
     thermal = sys.argv[4] if len(sys.argv) > 4 else None
     results.mkdir(parents=True, exist_ok=True)
     state = {"machine": subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True, text=True).stdout.strip(),
-             "os": platform.mac_ver()[0], "rounds": rounds, "calls": WORKLOADS, "start": machine_state(thermal)}
+             "os": platform.mac_ver()[0], "rounds": rounds, "calls": WORKLOADS, "runs": RUNS, "start": machine_state(thermal)}
     series = {}
     with (results / "measurements.jsonl").open("w") as log:
         for round_index in range(rounds):
