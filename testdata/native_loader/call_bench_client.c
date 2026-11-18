@@ -1,7 +1,8 @@
 #include <windows.h>
 
 // A fixed measure of what crossing into the system costs: one line per case with the nanoseconds each operation took, the same program
-// under any runtime. The cases: a call that does next to nothing (SetEvent on an event nobody waits for), a wake handed back and forth
+// under any runtime. The cases: a call that does next to nothing (SetEvent on an event nobody waits for), the same while another thread
+// waits for its messages in GetMessage, a wake handed back and forth
 // between two threads, WaitForMultipleObjects for any and for all of eight signalled events, and four threads contending for a critical
 // section and for an SRW lock, and a wake handed back and forth between two processes through named events. A command line of "short" runs each case a hundredth as many times, to check that it runs at all; one of
 // "start" ends at once, for the time a process takes to start and end.
@@ -45,6 +46,22 @@ static void report(const char *name, unsigned long long started, unsigned long l
 	write_text(" ns/op ");
 	write_number(operations);
 	write_text(" ops\r\n");
+}
+
+static HANDLE pumping;
+
+// A thread with a window that waits for its messages until it is told to quit.
+static DWORD WINAPI message_loop(void *unused)
+{
+	(void)unused;
+	MSG message;
+	HWND window = CreateWindowExA(0, "STATIC", "", 0, 0, 0, 10, 10, 0, 0, 0, 0);
+	PeekMessageA(&message, 0, 0, 0, PM_NOREMOVE);
+	SetEvent(pumping);
+	while (GetMessageA(&message, 0, 0, 0) > 0)
+		DispatchMessageA(&message);
+	DestroyWindow(window);
+	return 0;
 }
 
 static HANDLE ping, pong;
@@ -202,6 +219,19 @@ int raven_entry(void)
 	for (LONG index = 0; index < calls; ++index)
 		SetEvent(event);
 	report("set_event", started, calls);
+	pumping = CreateEventA(0, FALSE, FALSE, 0);
+	DWORD loop_id = 0;
+	HANDLE loop = CreateThread(0, 0, message_loop, 0, 0, &loop_id);
+	if (!loop || WaitForSingleObject(pumping, 5000) != WAIT_OBJECT_0)
+		return 10;
+	Sleep(10);
+	started = now();
+	for (LONG index = 0; index < calls; ++index)
+		SetEvent(event);
+	report("set_event_gui_waiting", started, calls);
+	if (!PostThreadMessageA(loop_id, WM_QUIT, 0, 0) || WaitForSingleObject(loop, 5000) != WAIT_OBJECT_0)
+		return 11;
+	CloseHandle(loop);
 	started = now();
 	for (LONG index = 0; index < calls; ++index)
 		WaitForSingleObject(event, INFINITE);

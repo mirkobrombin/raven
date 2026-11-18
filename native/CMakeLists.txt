@@ -3535,7 +3535,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_guest_answers_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         # The fixed measure of calls into the system (see call_bench_client.c); the test runs it short, to check that it runs at all.
-        raven_kernel_fixture(call-bench call_bench_client.c 0x1e4000000 "-lkernel32")
+        raven_kernel_fixture(call-bench call_bench_client.c 0x1e4000000 "-lkernel32;-luser32")
         foreach(mode default parallel)
             add_test(NAME native_call_bench_${mode} COMMAND raven --run-process --execution=native
                 "--command-line=call-bench.exe short" ${CMAKE_CURRENT_BINARY_DIR}/call-bench.exe)
