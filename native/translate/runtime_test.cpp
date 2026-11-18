@@ -220,6 +220,31 @@ static void reuses_a_saved_translation()
 	std::filesystem::remove(path);
 }
 
+// In this process the runtime runs one guest thread: a second would share the fault handler's unsynchronized state and natives
+// would need per-thread stops. Adding one without a runner, or any once natives are bound, must be refused.
+static void stays_single_threaded()
+{
+	Fixture fixture;
+	bool refused = false;
+	try {
+		fixture.runtime.add_thread(nullptr);
+	} catch (const std::invalid_argument &) {
+		refused = true;
+	}
+	check(refused, "a second guest thread without a runner was accepted");
+	fixture.load("startup.exe");
+	struct Idle final : CodeRunner {
+		uint32_t enter(uint64_t, uint64_t, uint64_t) override { return 0; }
+	} idle;
+	refused = false;
+	try {
+		fixture.runtime.add_thread(&idle);
+	} catch (const std::logic_error &) {
+		refused = true;
+	}
+	check(refused, "a guest thread was added to a runtime with native functions bound");
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
@@ -242,6 +267,7 @@ int main(int argc, char **argv)
 		{"crc32 workload", [] { runs_a_workload("crc32.exe", 0x310c3e6c); }},
 		{"fnv workload", [] { runs_a_workload("fnv.exe", 0xacb8b4443b0adc25); }},
 		{"histogram workload", [] { runs_a_workload("histogram.exe", 0x28e14b303c16e232); }},
+		{"one guest thread in this process", stays_single_threaded},
 	};
 	for (const auto &[name, run] : cases) {
 		const int before = failures;
