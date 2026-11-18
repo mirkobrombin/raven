@@ -200,7 +200,7 @@ void VmProcess::link_arm64ec(translate::Runtime &runtime)
 		const Slot slots[] = {
 			{20, routines.dispatch_call}, // __os_arm64x_dispatch_call_no_redirect
 			{24, routines.dispatch_ret},
-			{28, routines.dispatch_call}, // with redirection, which only skips the x64 export thunk
+			{28, routines.check_icall}, // __os_arm64x_dispatch_call, the code's __os_arm64x_check_call: x11 and x10 as check_icall
 			{32, routines.check_icall}, // __os_arm64x_dispatch_icall, the code's __os_arm64x_check_icall
 			{36, routines.check_icall}, // the same with a CFG check
 			{56, routines.unsupported}, // GetX64InformationFunctionPointer
