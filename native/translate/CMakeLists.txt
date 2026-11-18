@@ -122,7 +122,8 @@ if(APPLE)
     add_executable(x86_semantics_test x86_semantics_test.cpp)
     target_link_libraries(x86_semantics_test PRIVATE raven_translate)
     add_dependencies(x86_semantics_test x86_semantics_oracle)
-    add_test(NAME translate_x86_semantics COMMAND x86_semantics_test ${SEMANTICS}/oracle.bin)
+    add_test(NAME translate_x86_semantics COMMAND x86_semantics_test ${SEMANTICS}/oracle.bin
+        ${CMAKE_CURRENT_SOURCE_DIR}/testdata/x86_silicon.txt)
     set_tests_properties(translate_x86_semantics PROPERTIES TIMEOUT 120)
 
     # The same for SSE and SSE2 (x86_sse.py): also run in a vCPU by native/hvf's hvf_sse_test, which reads sse_oracle.bin.

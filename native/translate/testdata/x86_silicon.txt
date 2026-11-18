@@ -1,0 +1,2 @@
+# Cases where Rosetta and x86 silicon disagree: case text, register number, value an AMD EPYC 9V45 left (raven-macos-bench run 44411803673).
+lea r12, [r8 + 2*rbx + -9550]; cmpxchg qword ptr [r15 + 0], r14; lock cmpxchg dword ptr [r15 + 0], r14d; not r9d	0	7f5a3510ebc6a17c

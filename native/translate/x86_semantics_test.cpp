@@ -78,8 +78,8 @@ uint64_t get_flags(const CpuState &state)
 // registers, memory and defined flags.
 int main(int argc, char **argv)
 {
-	if (argc != 2) {
-		std::fprintf(stderr, "usage: x86_semantics_test ORACLE_RESULTS\n");
+	if (argc != 2 && argc != 3) {
+		std::fprintf(stderr, "usage: x86_semantics_test ORACLE_RESULTS [X86_SILICON]\n");
 		return 2;
 	}
 	std::ifstream in(argv[1], std::ios::binary);
@@ -102,6 +102,30 @@ int main(int argc, char **argv)
 	if (!in || cases.empty()) {
 		std::fprintf(stderr, "cannot read %s\n", argv[1]);
 		return 2;
+	}
+	// Where Rosetta and x86 silicon disagree, the silicon wins: lines of case text, register number and the value x86 hardware left
+	// (testdata/x86_silicon.txt, from the oracle run on an x86-64 CPU). Every line must name a case, so a stale one fails.
+	if (argc == 3) {
+		std::ifstream overrides(argv[2]);
+		std::string line;
+		while (std::getline(overrides, line)) {
+			if (line.empty() || line[0] == '#')
+				continue;
+			const size_t first = line.find('\t'), second = line.find('\t', first + 1);
+			const std::string text = line.substr(0, first);
+			const unsigned r = static_cast<unsigned>(std::stoul(line.substr(first + 1, second - first - 1)));
+			const uint64_t value = std::stoull(line.substr(second + 1), nullptr, 16);
+			bool found = false;
+			for (Case &item : cases)
+				if (item.text == text && r < 16) {
+					item.output.registers[r] = value;
+					found = true;
+				}
+			if (!found) {
+				std::fprintf(stderr, "x86 silicon line names no case: %s\n", text.c_str());
+				return 2;
+			}
+		}
 	}
 	Snippets memory;
 	JitCodeCache cache(64 << 20);
