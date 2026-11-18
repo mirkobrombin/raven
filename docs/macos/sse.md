@@ -7,7 +7,9 @@ open items. x87 comes next, then AVX; neither is here.
 Labels are those of [translation.md](translation.md): **PROVEN** (a command produced the result), **INFERRED** (derived; the missing
 check is named), **NOT verified**. MacBook Air M5 (Mac17,3), macOS 27.2.1, Xcode 27.2, llvm-mingw 20261104. The x86 reference is
 Rosetta, not an x86 CPU: a result the oracle shows is said to **agree with Rosetta** (PROVEN as such), and agreement with x86 silicon
-is INFERRED until `native/translate/testdata/sse_flags_probe.c` or `x86_sse_oracle` runs on x86 hardware.
+is INFERRED, except for the conversion flags below: `native/translate/testdata/sse_flags_probe.c` ran on an AMD EPYC 9V45
+(GitHub Linux x86_64 runner) and printed the same 360 lines as under Rosetta (PROVEN: `diff docs/macos/sse-data/flags_probe_rosetta.txt
+docs/macos/sse-data/flags_probe_x86.txt` is empty).
 
 ## Guest state
 
@@ -153,8 +155,8 @@ which proves agreement with Rosetta; agreement with x86 silicon is INFERRED wher
   - **Flags when rounding makes a value out of range** (2147483647.5 to nearest): frintx reports inexact and fcvtzs then invalid, but
     x86 raises IE alone. FPSR is cleared before frintx and merged back without IXC when IOC was raised. Agrees with Rosetta (the
     boundaries family: 20 values, 10 forms, 4 rounding modes, 800 cases; before the fix 14 of them failed with `mxcsr 0x1fa1, x86 left
-    0x1f81`); that x86 silicon does the same is INFERRED from SoftFloat and QEMU, which raise only invalid there. The probe
-    `native/translate/testdata/sse_flags_probe.c` prints these flags for x86 hardware to settle it.
+    0x1f81`); x86 silicon does the same, PROVEN by the probe on an AMD EPYC 9V45: `rc=0 cvtsd2si r32 41dfffffffe00000 -> 80000000 flags 01`
+    (IE alone), identical to Rosetta on all 360 lines (`docs/macos/sse-data/flags_probe_x86.txt`).
   - Agrees with Rosetta: 78 conversions of a NaN and 552 out of the int32 range (333, 79, 87 and 53 under RC 0 to 3), with the
     flags matching.
 - **Rounding mode.** RC goes to RMode with the two directed modes swapped.
