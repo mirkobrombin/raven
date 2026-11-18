@@ -4,11 +4,14 @@
 //   still reach that translation: the vCPU's next call must return the new value.
 //   A second store to the same page: its permission fault reaches the host after the first store's handler unwatched the page. The
 //   handler must have it retried (true), not report a guest exception; an address outside guest memory stays unhandled.
+//   The kick: a guest thread whose runner only records calls stands for a vCPU elsewhere; every store that drops translations must
+//   quiesce it, and the storing vCPU's own thread is not.
 #include "runtime.h"
 #include "vcpu.h"
 #include "vm.h"
 #include "vm_process.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -21,6 +24,12 @@ using namespace raven;
 namespace {
 
 int failures = 0;
+
+struct Recorder final : translate::CodeRunner {
+	std::atomic<uint64_t> quiesced{0};
+	uint32_t enter(uint64_t, uint64_t, uint64_t) override { throw std::logic_error("the recorder runs no code"); }
+	void quiesce() override { ++quiesced; }
+};
 
 void check(bool condition, const std::string &message)
 {
@@ -54,6 +63,8 @@ int main(int argc, char **argv)
 		hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
 		translate::Runtime runtime(process, cache, options);
 		process.attach(runtime);
+		Recorder elsewhere;
+		translate::Runtime::Thread &elsewhere_thread = runtime.add_thread(&elsewhere);
 		std::thread([&] {
 			try {
 				hvf::Vcpu vcpu(vm, true);
@@ -72,6 +83,12 @@ int main(int argc, char **argv)
 						", it returned " + std::to_string(result.value));
 				}
 				process.after_code_written = nullptr;
+				check(elsewhere.quiesced >= vcpu.stats().write_faults && vcpu.stats().write_faults >= 5,
+					"code_written quiesced the other guest thread " + std::to_string(elsewhere.quiesced) + " times for " +
+						std::to_string(vcpu.stats().write_faults) + " write faults");
+				std::printf("kick: %llu quiesce calls on the other guest thread for %llu write faults\n",
+					static_cast<unsigned long long>(elsewhere.quiesced.load()),
+					static_cast<unsigned long long>(vcpu.stats().write_faults));
 				runtime.remove_thread(thread);
 				// patch_target is translated and watched: the first store's handler drops it, the second finds the page unwatched.
 				check(vm.write_fault && vm.write_fault(patch_target + 1), "the first store's write fault is not retried");
@@ -81,6 +98,7 @@ int main(int argc, char **argv)
 				check(false, error.what());
 			}
 		}).join();
+		runtime.remove_thread(elsewhere_thread);
 	} catch (const std::exception &error) {
 		check(false, error.what());
 	}
