@@ -245,6 +245,19 @@ static void stays_single_threaded()
 	check(refused, "a guest thread was added to a runtime with native functions bound");
 }
 
+// movq between general and XMM registers keeps its value in v0-v7 across blocks only where nothing between them writes those
+// registers: not in this process, so without TranslatorOptions::vector_registers the block must end before it.
+static void translates_movq_only_where_vectors_persist()
+{
+	const uint8_t code[] = {0x66, 0x48, 0x0f, 0x6e, 0xcf, 0x66, 0x4c, 0x0f, 0x7e, 0xc8, 0xc3}; // movq xmm1, rdi; movq rax, xmm9; ret
+	TranslationStats stats;
+	TranslatorOptions options;
+	check(translate_block(code, 0x1000, options, stats).instructions == 0, "movq was translated without vector_registers");
+	options.vector_registers = true;
+	const uint32_t translated = translate_block(code, 0x1000, options, stats).instructions;
+	check(translated == 1, "with vector_registers, movq to XMM1 and not from XMM9 should translate: " + std::to_string(translated));
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
@@ -268,6 +281,7 @@ int main(int argc, char **argv)
 		{"fnv workload", [] { runs_a_workload("fnv.exe", 0xacb8b4443b0adc25); }},
 		{"histogram workload", [] { runs_a_workload("histogram.exe", 0x28e14b303c16e232); }},
 		{"one guest thread in this process", stays_single_threaded},
+		{"movq only with vector_registers", translates_movq_only_where_vectors_persist},
 	};
 	for (const auto &[name, run] : cases) {
 		const int before = failures;
