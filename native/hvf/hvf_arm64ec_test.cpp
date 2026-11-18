@@ -173,12 +173,17 @@ int main(int argc, char **argv)
 				try {
 					hvf::Vcpu other(vm, true);
 					translate::Runtime::Thread &thread = runtime.add_thread(&other);
+					// The thread goes before its runner, also when a call throws.
+					struct Remove {
+						translate::Runtime &runtime;
+						translate::Runtime::Thread &thread;
+						~Remove() { runtime.remove_thread(thread); }
+					} remove{runtime, thread};
 					process.prepare_thread(thread.state(), other);
 					second_teb = thread.state().gs_base;
 					second_self = static_cast<int64_t>(thread.call(entry, {5, 0, 0}).value);
 					second_count = static_cast<int64_t>(thread.call(entry, {9, 1000000, 0}).value);
 					second_x18 = other.reg(HV_REG_X18);
-					runtime.remove_thread(thread);
 				} catch (const std::exception &error) {
 					second_error = error.what();
 				}

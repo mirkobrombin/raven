@@ -978,7 +978,8 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::imul: multiply(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
 	case Mnemonic::movq:
-		// XMM registers live in v0-v7, as ARM64EC keeps them. FMOV Dd, Xn clears the rest of the vector, as movq to XMM does.
+		// XMMn lives in vn, ARM64EC's map; only XMM0-XMM7 here, since the trampolines restore v8-v15 at every exit. FMOV Dd, Xn
+		// clears the rest of the vector, as movq to XMM does.
 		if (operands[0].kind == OperandKind::xmm)
 			a.emit(0x9e670000u | uint32_t(host_register[operands[1].reg]) << 5 | operands[0].reg);
 		else

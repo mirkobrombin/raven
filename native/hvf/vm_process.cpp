@@ -167,7 +167,8 @@ void VmProcess::bind_imports()
 	for (const Image &image : images) {
 		const PEImage pe(image.file);
 		for (const PEImport &import : pe.imports()) {
-			const auto from = std::find_if(images.begin(), images.end(), [&](const Image &loaded) { return same_name(loaded.name, import.module); });
+			const auto from = std::find_if(images.begin(), images.end(),
+				[&](const Image &loaded) { return same_name(loaded.name, import.module); });
 			if (from == images.end())
 				throw std::runtime_error("no loaded image for " + import.module);
 			uint64_t address = 0;
