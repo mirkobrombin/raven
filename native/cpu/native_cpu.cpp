@@ -2172,12 +2172,23 @@ void NativeProcess::hold_call(pid_t task)
 	held_in_stub = true;
 }
 
+// A task reaped already: the process ended under its call (ExitProcess from a callback the call ran, as a TLS callback during
+// LoadLibrary does), so there is no call left to settle or hold.
+static bool task_reaped(pid_t task)
+{
+	return ::kill(task, 0) != 0 && errno == ESRCH;
+}
+
 void NativeProcess::settle_call()
 {
 	if (!waiting.task)
 		return;
 	const WaitingCall call = waiting;
 	waiting.task = 0;
+	if (!call.held && task_reaped(call.task)) {
+		forget_registers();
+		return;
+	}
 	if (!call.held)
 		pause_own_task(call.task);
 	// The task stands at the breakpoint its stub falls back to, with the registers the caller left: the call goes on as one that
