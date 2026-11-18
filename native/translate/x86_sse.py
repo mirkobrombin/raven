@@ -401,6 +401,23 @@ def main():
             lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret",
                                                                                                          f"_case_{number}_end:"]
             cases.append((family, registers, rng.getrandbits(12) & ALL_FLAGS, mxcsr(rng, floating), vectors, memory, body))
+    # The boundaries of the conversions to integers, each in every rounding mode, with no flag set before: which of IE and PE x86
+    # raises where rounding first makes a value inexact and then out of range (2147483647.5 to nearest).
+    boundaries = [0x41DFFFFFFFE00000, 0xC1DFFFFFFFE00000, 0x41E0000000100000, 0xC1E0000000100000, 0x41DFFFFFFFC00000,
+                  0x41E0000000000000, 0xC1E0000000000000, 0xC1E0000000200000, 0x41DFFFFFFFA00000, 0x3FE0000000000000,
+                  0x4004000000000000, 0x43E0000000000000, 0x43DFFFFFFFFFFFFF, 0xC3E0000000000000, 0x7FF0000000000000,
+                  0xFFF0000000000000, 0x7FF8000000000000, 0x7FF0000000000001, 0x43E0000000000400, 0xC3E0000000000400]
+    singles = [struct.unpack("<I", struct.pack("<f", struct.unpack("<d", struct.pack("<Q", bits))[0]))[0] for bits in boundaries]
+    forms = ["cvtsd2si eax, xmm1", "cvtsd2si rax, xmm1", "cvttsd2si eax, xmm1", "cvttsd2si rax, xmm1", "cvtpd2dq xmm2, xmm1",
+             "cvttpd2dq xmm2, xmm1", "cvtss2si eax, xmm1", "cvtss2si rax, xmm1", "cvtps2dq xmm2, xmm1", "cvttps2dq xmm2, xmm1"]
+    for form in forms:
+        for index, bits in enumerate(boundaries):
+            for rc in range(4):
+                number = len(cases)
+                vectors = [[0, 0] for _ in range(16)]
+                vectors[1] = [singles[index] if "ss2" in form or "ps2" in form else bits, 0]
+                lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:", form, "ret", f"_case_{number}_end:"]
+                cases.append(("boundaries", [0] * 16, 0, 0x1F80 | rc << 13, vectors, [0] * 16, [form]))
     lines += [".data", "saved_io: .quad 0", "saved_code: .quad 0", "host_mxcsr: .long 0", ""]
     with open(assembly, "w") as out:
         out.write("\n".join(lines))
