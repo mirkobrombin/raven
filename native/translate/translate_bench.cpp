@@ -249,6 +249,29 @@ int main(int argc, char **argv)
 #endif
 	guests = argv[1];
 	output = argv[2];
+	if (output == "--workload" && argc == 7) {
+		// One workload as bench_harness.c times it natively and under FEX: the first call (translation included), then runs.
+		const int workload_runs = std::atoi(argv[4]), calls = std::atoi(argv[5]);
+		const std::string mode = argv[6];
+		TranslatorOptions options;
+		options.ordering = mode == "plain" ? MemoryOrdering::hardware : mode == "dmb" ? MemoryOrdering::barriers : MemoryOrdering::rcpc;
+		Fixture fixture(options);
+		const uint64_t entry = fixture.process.entry(fixture.load(argv[3]));
+		uint64_t start = now_ns();
+		uint64_t sink = fixture.runtime.call(entry).value;
+		std::printf("first %.3f\n", double(now_ns() - start));
+		const TranslationStats &stats = fixture.runtime.translation_stats();
+		std::printf("translated %llu %llu %llu\n", static_cast<unsigned long long>(stats.guest_instructions),
+			static_cast<unsigned long long>(stats.blocks), static_cast<unsigned long long>(fixture.runtime.stats().translate_ns));
+		for (int run = 0; run < workload_runs; ++run) {
+			start = now_ns();
+			for (int i = 0; i < calls; ++i)
+				sink += fixture.runtime.call(entry).value;
+			std::printf("run %d %.3f\n", run, double(now_ns() - start) / calls);
+		}
+		std::printf("checksum %llu\n", static_cast<unsigned long long>(sink));
+		return 0;
+	}
 	if (output == "--entry-round") {
 		// One run of each entry configuration, for bench_run.py to interleave with the native and Rosetta builds.
 		runs = 1;
