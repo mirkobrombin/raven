@@ -231,11 +231,10 @@ inline std::string compare(const Case &item, const CpuState &state, const uint8_
 	return {};
 }
 
-// Failures by family, and the first few in full.
+// Failures by family, and the first few of each in full.
 struct Report {
 	std::map<std::string, std::pair<size_t, size_t>> families;
 	size_t failures = 0;
-	size_t printed = 0;
 	size_t silicon = 0;
 	void add(const Case &item, const std::string &problem)
 	{
@@ -246,7 +245,7 @@ struct Report {
 			return;
 		++failed;
 		++failures;
-		if (printed++ < 40)
+		if (failed <= 12)
 			std::fprintf(stderr, "%s: %s: %s\n", item.family.c_str(), item.text.c_str(), problem.c_str());
 	}
 	void print(const char *where) const

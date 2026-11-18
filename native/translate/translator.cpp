@@ -3,6 +3,7 @@
 #include "a64_emitter.h"
 #include "cpu_state.h"
 #include "x86_decoder.h"
+#include "x87.h"
 
 #include <array>
 #include <stdexcept>
@@ -1888,10 +1889,13 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 	}
 	if (!ended) {
 		normalize_carry();
-		// The next instruction is not translated: unsupported or invalid stops here, a full block falls through to the next.
+		// The next instruction is not translated: x87 goes to the runtime's x87 core, unsupported or invalid stops here, a full block
+		// falls through to the next.
 		const Instruction next = at < code.size() ? decode(code.subspan(at), rip) : Instruction{};
 		if (instructions.size() >= options.max_instructions && next.mnemonic != Mnemonic::invalid && supported(next))
 			exit_to(rip);
+		else if (next.mnemonic != Mnemonic::invalid && x87_supported(next))
+			exit_with(ExitReason::x87, rip);
 		else
 			exit_with(ExitReason::unsupported, rip);
 	}
@@ -1910,7 +1914,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 
 bool translates(const Instruction &instruction)
 {
-	return supported(instruction);
+	return supported(instruction) || x87_supported(instruction);
 }
 
 TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address, const TranslatorOptions &options,

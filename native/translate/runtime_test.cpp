@@ -269,6 +269,10 @@ public:
 	}
 	bool is_native(uint64_t address) const override { return address == native; }
 	void write(uint64_t address, const void *from, size_t size) override { std::memcpy(reinterpret_cast<void *>(address), from, size); }
+	void read(uint64_t address, void *into, size_t size) const override
+	{
+		std::memcpy(into, reinterpret_cast<const void *>(address), size);
+	}
 	void watch_code(uint64_t, size_t, bool) override {}
 	size_t watch_granule() const override { return 4096; }
 };

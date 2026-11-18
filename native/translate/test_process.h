@@ -50,6 +50,7 @@ public:
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t address) const override;
 	void write(uint64_t address, const void *bytes, size_t size) override;
+	void read(uint64_t address, void *bytes, size_t size) const override;
 	void watch_code(uint64_t address, size_t size, bool watch) override;
 	size_t watch_granule() const override;
 

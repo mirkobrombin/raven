@@ -219,6 +219,11 @@ void TestProcess::write(uint64_t address, const void *bytes, size_t size)
 	std::memcpy(reinterpret_cast<void *>(address), bytes, size);
 }
 
+void TestProcess::read(uint64_t address, void *bytes, size_t size) const
+{
+	std::memcpy(bytes, reinterpret_cast<const void *>(address), size);
+}
+
 void TestProcess::watch_code(uint64_t address, size_t size, bool watch)
 {
 	const uint64_t page = host_page();

@@ -278,6 +278,11 @@ std::span<const uint8_t> VmProcess::code(uint64_t address) const
 	return {};
 }
 
+void VmProcess::read(uint64_t address, void *bytes, size_t size) const
+{
+	vm.read(address, bytes, size);
+}
+
 void VmProcess::write(uint64_t address, const void *bytes, size_t size)
 {
 	// Through the alias, past stage 2: a write the runtime makes to watched code drops its translations as a guest store would.

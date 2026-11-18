@@ -24,9 +24,33 @@ enum class ExitReason : uint32_t {
 	unsupported,
 	// A native function asked the guest to stop (ExitProcess); exit_info is its code.
 	stopped,
-	// hlt or ud2; rip is that instruction.
+	// hlt or ud2; rip is that instruction. Also an x87 instruction x86 would raise #MF on (an unmasked exception pending).
 	fault,
+	// An x87 instruction; rip is that instruction. The runtime runs it and the x87 instructions after it (x87.h).
+	x87,
 };
+
+// The x87 FPU, kept in CpuState only: the host's x87 core (x87.h) reads and writes it, translated code never does. The order is that
+// of the FXSAVE image's first 32 bytes (with ftw the abridged tag byte, and mxcsr's place unused: CpuState::mxcsr holds it), but st
+// holds the physical registers R0-R7, not ST(0)-ST(7): ST(i) is R((TOP + i) mod 8), TOP being FSW bits 13:11. Each register is the
+// 64-bit significand, then sign and exponent in the low 16 bits of the second quadword.
+//
+// MMX, when it comes, aliases the same registers: MMn is the significand of Rn, and an MMX write sets the exponent field to 0xffff,
+// TOP to 0 and every tag valid; emms clears the tags.
+struct X87State {
+	// Precision control 53 bits, round to nearest, every exception masked: what Windows x64 starts a program with.
+	uint16_t fcw = 0x27f;
+	uint16_t fsw = 0;
+	// Bit n set: Rn holds a value (FXSAVE's abridged tag word).
+	uint8_t ftw = 0;
+	uint8_t reserved = 0;
+	uint16_t fop = 0;
+	uint64_t fip = 0;
+	uint64_t fdp = 0;
+	uint64_t unused = 0;
+	alignas(16) uint64_t st[8][2] = {};
+};
+static_assert(sizeof(X87State) == 160, "the FXSAVE image's legacy area");
 
 struct LookupEntry {
 	uint64_t guest;
@@ -67,6 +91,7 @@ struct CpuState {
 	// XMM0-XMM15 between runs, low quadword first. While translated code runs, XMMn is vn; the trampolines store and load all sixteen
 	// on every exit and entry, and native thunks store them before the native function runs.
 	alignas(16) uint64_t xmm[16][2] = {};
+	X87State x87;
 };
 
 namespace state_offset {

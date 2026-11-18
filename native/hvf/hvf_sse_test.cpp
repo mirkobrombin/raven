@@ -35,6 +35,7 @@ public:
 	}
 	bool is_native(uint64_t) const override { return false; }
 	void write(uint64_t address, const void *from, size_t bytes) override { vm.write(address, from, bytes); }
+	void read(uint64_t address, void *into, size_t bytes) const override { vm.read(address, into, bytes); }
 	void watch_code(uint64_t, size_t, bool) override {}
 	size_t watch_granule() const override { return hvf::Vm::page_size; }
 

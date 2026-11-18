@@ -69,6 +69,7 @@ public:
 	// A return address into native code: the word before it is a blr, as in every exit thunk.
 	bool native_return(uint64_t address) const override;
 	void write(uint64_t address, const void *bytes, size_t size) override;
+	void read(uint64_t address, void *bytes, size_t size) const override;
 	// A watched page loses write permission at stage 2; a guest store there reaches every attached runtime's code_written. Refuses to
 	// watch with no runtime attached.
 	void watch_code(uint64_t address, size_t size, bool watch) override;

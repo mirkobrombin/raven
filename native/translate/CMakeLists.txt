@@ -16,7 +16,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else()
     set(RAVEN_TRANSLATE_PLATFORM platform_linux.cpp)
 endif()
-add_library(raven_translate STATIC x86_decoder.cpp a64_emitter.cpp translator.cpp code_cache.cpp runtime.cpp ${RAVEN_TRANSLATE_PLATFORM})
+add_library(raven_translate STATIC x86_decoder.cpp a64_emitter.cpp translator.cpp x87.cpp code_cache.cpp runtime.cpp ${RAVEN_TRANSLATE_PLATFORM})
 target_include_directories(raven_translate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(raven_translate PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
 

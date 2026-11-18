@@ -1,5 +1,8 @@
 #include "runtime.h"
 
+#include "x86_decoder.h"
+#include "x87.h"
+
 #include "a64_emitter.h"
 
 #include <algorithm>
@@ -14,7 +17,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 4;
+constexpr uint64_t translator_version = 5;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -291,6 +294,19 @@ RunResult Runtime::Thread::run()
 			runtime.chain(reinterpret_cast<uint8_t *>(cpu.exit_info), cpu.rip);
 			break;
 		}
+		case ExitReason::x87:
+			// The x87 instructions from rip on, until the first that is not one; then translated code again.
+			for (;;) {
+				const std::span<const uint8_t> bytes = runtime.memory.code(cpu.rip);
+				const Instruction instruction = decode(bytes, cpu.rip);
+				if (bytes.empty() || instruction.mnemonic == Mnemonic::invalid || !x87_supported(instruction))
+					break;
+				const uint64_t next = cpu.rip + instruction.length;
+				if (x87_execute(cpu, runtime.memory, instruction, next) == X87Result::fault)
+					return {ExitReason::fault, cpu.rip};
+				cpu.rip = next;
+			}
+			break;
 		case ExitReason::returned: return {reason, cpu.gpr[rax]};
 		case ExitReason::stopped: {
 			cpu.stop_requested = 0;
