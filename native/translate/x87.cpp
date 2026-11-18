@@ -915,10 +915,11 @@ void Core::arithmetic_instruction()
 		Flags flags;
 		F80 b;
 		const bool integer = in.mnemonic >= Mnemonic::fiadd && in.mnemonic <= Mnemonic::fidivr;
-		if (integer)
-			b = first.size == 2 ? from_magnitude(load<int16_t>(first) < 0, static_cast<u128>(std::abs(int(load<int16_t>(first)))))
-				: from_magnitude(load<int32_t>(first) < 0, static_cast<u128>(std::abs(static_cast<int64_t>(load<int32_t>(first)))));
-		else
+		if (integer) {
+			// One read of the operand, as x86 makes.
+			const int64_t value = first.size == 2 ? load<int16_t>(first) : load<int32_t>(first);
+			b = from_magnitude(value < 0, static_cast<u128>(value < 0 ? -value : value));
+		} else
 			b = first.size == 4 ? from_single(load<uint32_t>(first), flags) : from_double(load<uint64_t>(first), flags);
 		// The conversion's SNaN stays one for the operation, which reports its IE; the conversion's DE is the operation's.
 		if ((flags.bits & IE) && is_nan(kind(b)))
