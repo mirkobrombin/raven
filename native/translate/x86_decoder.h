@@ -60,9 +60,12 @@ enum class Mnemonic : uint8_t {
 	syscall,
 	ud2,
 	hlt,
+	// Only between a general and an XMM register (66 REX.W 0F 6E and 7E), what calls pass doubles with.
+	movq,
 };
 
-enum class OperandKind : uint8_t { none, reg, mem, imm, rel };
+// xmm: an XMM register, reg 0-15.
+enum class OperandKind : uint8_t { none, reg, mem, imm, rel, xmm };
 
 // General registers 0-15 in encoding order (rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8-r15); 16-19 are ah, ch, dh, bh.
 constexpr uint8_t high_byte_base = 16;

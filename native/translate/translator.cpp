@@ -119,7 +119,7 @@ bool supported(const Instruction &instruction)
 		return !instruction.lock;
 	case Mnemonic::cmovcc: return (instruction.condition >> 1) != 5;
 	case Mnemonic::push: case Mnemonic::pop: return instruction.operand_size == 8;
-	case Mnemonic::xchg: return true;
+	case Mnemonic::xchg: case Mnemonic::movq: return true;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -974,6 +974,13 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar: shift(instruction); return;
 	case Mnemonic::imul: multiply(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
+	case Mnemonic::movq:
+		// XMM registers live in v0-v15, as ARM64EC keeps them. FMOV Dd, Xn clears the rest of the vector, as movq to XMM does.
+		if (operands[0].kind == OperandKind::xmm)
+			a.emit(0x9e670000u | uint32_t(host_register[operands[1].reg]) << 5 | operands[0].reg);
+		else
+			a.emit(0x9e660000u | uint32_t(operands[1].reg) << 5 | host_register[operands[0].reg]);
+		return;
 	case Mnemonic::mov: {
 		const Operand &target = operands[0], &source = operands[1];
 		if (target.kind == OperandKind::reg && target.reg < high_byte_base && target.size >= 4) {

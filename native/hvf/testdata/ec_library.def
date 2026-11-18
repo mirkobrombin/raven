@@ -7,3 +7,4 @@ EXPORTS
     ec_call
     ec_scale
     ec_teb_self
+    ec_teb_count

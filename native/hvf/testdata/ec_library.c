@@ -57,6 +57,23 @@ EXPORT uint64_t ec_teb_self(void)
 #endif
 }
 
+// How many of count reads of NT_TIB.Self through x18 give self: a long native loop that forced exits land in.
+EXPORT int64_t ec_teb_count(uint64_t self, int64_t count)
+{
+#ifdef EC_LIBRARY_HOST
+	(void)self;
+	return count;
+#else
+	int64_t right = 0;
+	for (int64_t i = 0; i < count; ++i) {
+		uint64_t read;
+		__asm__ volatile("ldr %0, [x18, #0x30]" : "=r"(read));
+		right += read == self;
+	}
+	return right;
+#endif
+}
+
 #ifndef EC_LIBRARY_HOST
 int __stdcall ec_library_entry(void *module, unsigned reason, void *reserved)
 {

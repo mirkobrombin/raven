@@ -598,6 +598,18 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			result.operands[count++] = operand;
 	}
 	result.count = count;
+	if ((full_opcode == 0x0f6e || full_opcode == 0x0f7e) && prefixes.operand16 && rex_w && modrm.mod == 3 && !prefixes.rep &&
+		!prefixes.repne) {
+		Operand xmm;
+		xmm.kind = OperandKind::xmm;
+		xmm.size = 8;
+		xmm.reg = static_cast<uint8_t>(modrm.reg | (rex_r ? 8 : 0));
+		const Operand general = gpr(modrm.rm, 8, rex_b);
+		result.mnemonic = Mnemonic::movq;
+		result.operands[0] = full_opcode == 0x0f6e ? xmm : general;
+		result.operands[1] = full_opcode == 0x0f6e ? general : xmm;
+		result.count = 2;
+	}
 	// 90 is xchg eax, eax only with REX.B; without it, and as F3 90 (pause), it does nothing to registers.
 	if (full_opcode == 0x90 && !rex_b) {
 		result.mnemonic = prefixes.rep ? Mnemonic::other : Mnemonic::nop;
@@ -654,6 +666,7 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 {
 	switch (operand.kind) {
 	case OperandKind::reg: return register_name(operand.reg, operand.size);
+	case OperandKind::xmm: return "xmm" + std::to_string(operand.reg);
 	case OperandKind::imm: {
 		// LLVM sign-extends an imm8 and any immediate of a 64-bit operation; a wider immediate of a narrower one prints unsigned.
 		int64_t value = operand.value;
@@ -765,6 +778,7 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::syscall: name = "syscall"; break;
 	case Mnemonic::ud2: name = "ud2"; break;
 	case Mnemonic::hlt: name = "hlt"; break;
+	case Mnemonic::movq: name = "movq"; break;
 	}
 	std::string text;
 	if (instruction.lock)

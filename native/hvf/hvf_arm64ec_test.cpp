@@ -110,16 +110,34 @@ int main(int argc, char **argv)
 				std::this_thread::sleep_for(std::chrono::microseconds(200));
 			}
 		});
+		// Stops the watcher also when a call throws, which would otherwise end the test in std::terminate.
+		struct Join {
+			std::atomic<bool> &done;
+			std::thread &watcher;
+			~Join()
+			{
+				done = true;
+				if (watcher.joinable())
+					watcher.join();
+			}
+		} join{done, watcher};
 		int64_t good = 0;
 		const uint64_t cancels = vcpu.stats().cancels;
 		for (int i = 0; i < 2000; ++i)
 			good += call(5, 0, 0);
+		const uint64_t short_cancels = vcpu.stats().cancels - cancels;
+		// The same inside one long native loop, so that the forced exits land in native code.
+		constexpr int64_t reads = 200000000;
+		const int64_t right = call(9, reads, 0);
 		done = true;
 		watcher.join();
-		std::printf("x18 at the TEB in 2000 native calls across %llu forced exits: %lld right, x18 %#llx, TEB %#llx\n",
-			static_cast<unsigned long long>(vcpu.stats().cancels - cancels), static_cast<long long>(good),
+		std::printf("x18 at the TEB in 2000 native calls across %llu forced exits: %lld right; in %lld reads of one native loop across "
+			"%llu forced exits: %lld right; x18 %#llx, TEB %#llx\n",
+			static_cast<unsigned long long>(short_cancels), static_cast<long long>(good), static_cast<long long>(reads),
+			static_cast<unsigned long long>(vcpu.stats().cancels - cancels - short_cancels), static_cast<long long>(right),
 			static_cast<unsigned long long>(vcpu.reg(HV_REG_X18)), static_cast<unsigned long long>(teb));
-		check(good == 2000 && vcpu.reg(HV_REG_X18) == teb, "x18 did not hold the TEB");
+		check(good == 2000 && right == reads && vcpu.reg(HV_REG_X18) == teb, "x18 did not hold the TEB");
+		check(vcpu.stats().cancels - cancels - short_cancels >= 10, "too few forced exits landed in the native loop");
 
 		// Warm: a loop of native calls stays in the vCPU; its cost next to the same loop calling x64 code.
 		call(6, 10, 1);
