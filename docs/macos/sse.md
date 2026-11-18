@@ -242,11 +242,10 @@ Each family's test was committed failing, then its implementation.
 | `782acc77` (conversions) | 1500 of 1500 | 050c8f4d |
 | `bd896677` and `dfd29cc9` (integer) | 1500 of 1500 | 82ab2697 |
 | `66bca999` (shuffles) | 800 of 800 | 23520cae |
-| `2fe45f54` (conversion boundaries) | 14 of 800, in this process and in a vCPU: `cvtsd2si eax, xmm1: mxcsr 0x1fa1, x86 left 0x1f81` | 87f336ed |
-| `8961f729` (FEAT_AFP) | does not build: `no member named 'host_has_afp' in 'raven::translate::Runtime'` (new API) | aacee37b |
-| `32205f13` (ARM64EC FPCR) | `FAIL: fmax with a NaN in native code, as Arm without FPCR.AH: 4607182418800017408, native 9221120237041090560` | 45df15a9 |
+| `5e28f925` (conversion boundaries) | 14 of 800, in this process and in a vCPU: `cvtsd2si eax, xmm1: mxcsr 0x1fa1, x86 left 0x1f81` | 62c925db |
+| `9a39879e` (FEAT_AFP) | does not build: `no member named 'host_has_afp' in 'raven::translate::Runtime'` (new API) | 44bd2976 |
+| `378541fb` (ARM64EC FPCR) | `FAIL: fmax with a NaN in native code, as Arm without FPCR.AH: 4607182418800017408, native 9221120237041090560` | 071d0c4c |
 
-- **`2fe45f54`'s subject is 104 characters**, over the limit of 100; history was not rewritten to shorten it.
 - **`bd896677` broke the build.** Its generator failed on a memory shift count (`ValueError: invalid literal for int() with base 10:
   'word'`). `dfd29cc9` fixes it; history was not rewritten.
 - **Arithmetic, first attempt.** It passed Rm to the unary fsqrt, which made an undefined encoding: SIGILL in this process (exit
@@ -292,7 +291,7 @@ its checksum differs from x86's; with it, the native and both translated checksu
 The cost the SSE state adds to every exit and entry, on code without SSE: `hvf_bench` of 211decc0 (built from `git archive` in a
 scratch directory) and of this branch, interleaved run by run on one machine, the median of 5 warm runs of each process.
 
-- **The first pass** (all four workloads, loop and call, 3 rounds, at f04b0ea8) ran with the load average at 37 falling to 18, which
+- **The first pass** (all four workloads, loop and call, 3 rounds, at d0d37cda) ran with the load average at 37 falling to 18, which
   swamps most of it: crc32, fnv and histogram moved between 0.77 and 1.51 times the old time in both directions, run to run.
 - **entry, one call per run, which is exit and entry and little else**, measured again on its own, 10 to 15 rounds, min and median of
   the rounds:
@@ -302,7 +301,7 @@ scratch directory) and of this branch, interleaved run by run on one machine, th
   | 211decc0 | 1078 ns, median 2529 | 398 ns, median 466 |
   | the SSE state without the FPCR and FPSR work (an experiment, not committed) | | 433 ns, median 492 |
   | 803c9f96 (FPCR and FPSR set on every entry and exit) | 1218 ns, median 2575 | |
-  | f04b0ea8 (FPCR and FPSR set only when they differ; FPCR kept in a vCPU) | 1089 ns, median 2461 | 429 ns, median 553 |
+  | d0d37cda (FPCR and FPSR set only when they differ; FPCR kept in a vCPU) | 1089 ns, median 2461 | 429 ns, median 553 |
 
   Load average 7 to 45 across these runs, thermal state 1: the minima are the steadier numbers.
 - **What that says (INFERRED from those minima):**
