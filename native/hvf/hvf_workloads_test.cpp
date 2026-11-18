@@ -58,6 +58,15 @@ int main(int argc, char **argv)
 		// A runtime gives its CpuState and lookup table back: 1 MiB of runtime data holds about 15 at once.
 		for (int i = 0; i < 64; ++i)
 			translate::Runtime discarded(process, cache, options, &vcpu);
+		// Also when the constructor throws: a code cache too small for the fixed code.
+		hvf::VmCodeCache tiny(vm, 64, 1 << 20);
+		for (int i = 0; i < 64; ++i)
+			try {
+				translate::Runtime refused(process, tiny, options, &vcpu);
+				check(false, "a runtime fit its fixed code in 64 bytes");
+			} catch (const std::runtime_error &) {
+			}
+		check(tiny.allocate_data(1 << 19).host != nullptr, "a runtime that failed to construct kept its runtime data");
 		for (const Workload &workload : workloads) {
 			const std::string name = workload.name;
 			translate::Runtime runtime(process, cache, options, &vcpu);
