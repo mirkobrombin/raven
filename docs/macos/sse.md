@@ -261,6 +261,25 @@ Each family's test was committed failing, then its implementation.
   - `FAIL: the native function ran with FPCR 4194306`;
   - `FAIL: XMM8 changed across the native function`.
 
+## Oracles on x86 silicon
+
+Both oracles ran on an AMD EPYC 9V45 (GitHub Linux x86_64 runner, raven-macos-bench run 44411803673): the same generated cases,
+assembled for ELF instead of Mach-O, so 856 of the 10000 integer cases have other encodings of the same instructions (the assembler
+picks another `xchg` form). Compared field by field as the tests compare them, with `docs/macos/sse-data/compare_oracles.py`:
+
+| Oracle | Cases | Rosetta and the EPYC differ | Where |
+|---|---|---|---|
+| SSE and SSE2 | 9400 | 1 | `cmpordss xmm15, xmm14`: MXCSR.DE set by Rosetta (0x3f82), not by the EPYC (0x3f80); DE is not compared |
+| integer | 10000 | 1 | `lock cmpxchg dword` that succeeds: Rosetta clears the upper half of RAX, the EPYC keeps all of it |
+
+- PROVEN: the translator passes both x86 results, in this process and, for SSE, in a vCPU (`x86_semantics_test X86.bin`: `10000 cases,
+  0 failures`; `x86_sse_test`: `18800 cases, 0 failures`; `hvf_sse_test`: `9400 cases, 0 failures`), after the cmpxchg fix.
+- The cmpxchg case was a real defect copied from Rosetta: the translator wrote the accumulator on success too. Test first: the integer
+  test now applies `native/translate/testdata/x86_silicon.txt` (cases where silicon and Rosetta disagree, with the value silicon left)
+  and failed with `register 0 is 0xebc6a17c, x86 left 0x7f5a3510ebc6a17c`; the fix writes RAX only when the compare fails.
+- So "agrees with Rosetta" above also holds against this x86 CPU for every case of both oracles (PROVEN for this AMD core). An Intel
+  core was not run (NOT verified); Intel's documented pseudocode also writes the accumulator only on failure (INFERRED).
+
 ## Performance check
 
 `hvf_bench_run.py build-macos-hvf RESULTS 5 .../quiet/thermal saxpy,dot,copy`: the SSE workloads of
