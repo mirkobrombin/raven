@@ -27,6 +27,18 @@ uint64_t now_ns()
 		std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+// Translated code reads a lookup entry with one LDP while other guest threads run. With FEAT_LSE2, a 16-byte aligned LDP and STP are
+// single-copy atomic, so a reader sees the whole old or the whole new entry; entries are 16 bytes in a 16-byte aligned table. The DMB
+// orders the code the entry names, written and made visible to instruction fetch before, ahead of the entry.
+void store_entry(LookupEntry &entry, uint64_t guest, uint64_t host)
+{
+#if defined(__aarch64__)
+	__asm__ volatile("dmb ish\n\tstp %1, %2, [%0]" : : "r"(&entry), "r"(guest), "r"(host) : "memory");
+#else
+	entry = {guest, host};
+#endif
+}
+
 uint64_t fnv(uint64_t hash, const void *bytes, size_t size)
 {
 	const auto *data = static_cast<const uint8_t *>(bytes);
@@ -55,9 +67,11 @@ Runtime::Runtime(GuestMemory &memory, CodeAllocator &cache, TranslatorOptions op
 	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
 }
 
-Runtime::Thread &Runtime::add_thread(CodeRunner *)
+Runtime::Thread &Runtime::add_thread(CodeRunner *runner)
 {
-	throw std::logic_error("guest threads cannot share a runtime yet");
+	std::lock_guard guard(lock);
+	threads.push_back(std::unique_ptr<Thread>(new Thread(*this, runner)));
+	return *threads.back();
 }
 
 Runtime::~Runtime()
@@ -90,6 +104,7 @@ void Runtime::place_fixed_code()
 
 void Runtime::bind_native(uint64_t address, const void *function, unsigned integer_arguments)
 {
+	std::lock_guard guard(lock);
 	if (!memory.is_native(address))
 		throw std::invalid_argument("the code map does not call that address native");
 	// A thunk calls the function at its address in this process, which code running elsewhere cannot reach.
@@ -100,7 +115,7 @@ void Runtime::bind_native(uint64_t address, const void *function, unsigned integ
 
 void Runtime::remember(uint64_t guest, uint8_t *host)
 {
-	lookup[guest & ((1u << lookup_bits) - 1)] = {guest, reinterpret_cast<uint64_t>(host)};
+	store_entry(lookup[guest & ((1u << lookup_bits) - 1)], guest, reinterpret_cast<uint64_t>(host));
 }
 
 Runtime::Block *Runtime::install(TranslatedBlock &&translated)
@@ -150,6 +165,7 @@ uint8_t *Runtime::host_code(uint64_t guest)
 
 uint32_t Runtime::translate_ahead(uint64_t address)
 {
+	std::lock_guard guard(lock);
 	if (const auto found = blocks.find(address); found != blocks.end())
 		return found->second->guest_size;
 	const Block *block = translate(address);
@@ -158,6 +174,7 @@ uint32_t Runtime::translate_ahead(uint64_t address)
 
 const void *Runtime::translated_code(uint64_t address) const
 {
+	std::lock_guard guard(lock);
 	const auto found = blocks.find(address);
 	return found == blocks.end() ? nullptr : found->second->host;
 }
@@ -173,6 +190,10 @@ void Runtime::chain(uint8_t *site, uint64_t target)
 	uint32_t original;
 	cache.read(site, &original, 4);
 	const uint32_t branch = a64::Assembler::encode_b(words);
+	// Another guest thread took the same exit before this one got the lock.
+	if (original == branch)
+		return;
+	// One aligned word: a b replaced by a b, which the Arm ARM allows other guest threads to execute while it changes.
 	cache.write(site, &branch, 4);
 	if (const auto found = blocks.find(target); found != blocks.end())
 		found->second->incoming.emplace_back(site, original);
@@ -189,14 +210,26 @@ uint32_t Runtime::Thread::enter_code(const uint8_t *code)
 RunResult Runtime::Thread::run()
 {
 	for (;;) {
-		uint8_t *code = runtime.host_code(cpu.rip);
+		uint8_t *code;
+		{
+			std::lock_guard guard(runtime.lock);
+			code = runtime.host_code(cpu.rip);
+			++runtime.counters.runs;
+		}
 		if (!code)
 			return {ExitReason::unsupported, cpu.rip};
-		++runtime.counters.runs;
 		const auto reason = static_cast<ExitReason>(enter_code(code));
 		switch (reason) {
-		case ExitReason::lookup_miss: ++runtime.counters.lookup_misses; break;
-		case ExitReason::chain: runtime.chain(reinterpret_cast<uint8_t *>(cpu.exit_info), cpu.rip); break;
+		case ExitReason::lookup_miss: {
+			std::lock_guard guard(runtime.lock);
+			++runtime.counters.lookup_misses;
+			break;
+		}
+		case ExitReason::chain: {
+			std::lock_guard guard(runtime.lock);
+			runtime.chain(reinterpret_cast<uint8_t *>(cpu.exit_info), cpu.rip);
+			break;
+		}
 		case ExitReason::returned: return {reason, cpu.gpr[rax]};
 		case ExitReason::stopped: {
 			cpu.stop_requested = 0;
@@ -276,13 +309,14 @@ void Runtime::invalidate(Block &block)
 		}
 	for (LookupEntry &entry : lookup)
 		if (entry.host == reinterpret_cast<uint64_t>(block.host))
-			entry = {};
+			store_entry(entry, 0, 0);
 	memory.watch_code(block.guest_start, std::max<uint32_t>(block.guest_size, 1), false);
 	++counters.invalidated_blocks;
 }
 
 void Runtime::code_written(uint64_t address)
 {
+	std::lock_guard guard(lock);
 	const uint64_t granule = address & ~uint64_t(memory.watch_granule() - 1);
 	const auto found = blocks_by_granule.find(granule);
 	if (found == blocks_by_granule.end())
@@ -311,6 +345,7 @@ uint64_t Runtime::cache_key(std::span<const uint8_t> image, uint64_t base, const
 
 void Runtime::save_cache(const std::filesystem::path &path, uint64_t key) const
 {
+	std::lock_guard guard(lock);
 	std::ofstream out(path, std::ios::binary | std::ios::trunc);
 	auto put = [&](const auto &value) { out.write(reinterpret_cast<const char *>(&value), sizeof value); };
 	put(cache_magic);
@@ -333,6 +368,7 @@ void Runtime::save_cache(const std::filesystem::path &path, uint64_t key) const
 
 size_t Runtime::load_cache(const std::filesystem::path &path, uint64_t key)
 {
+	std::lock_guard guard(lock);
 	const uint64_t start = now_ns();
 	std::ifstream in(path, std::ios::binary);
 	auto get = [&](auto &value) { in.read(reinterpret_cast<char *>(&value), sizeof value); return bool(in); };

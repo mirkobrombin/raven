@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -44,7 +45,9 @@ public:
 
 // Runs x64 code by translating it block by block: dispatch, the lookup table for indirect branches, chaining of direct branches,
 // native functions behind thunks, and invalidation when guest code is written. The translations, the lookup table and the chains are
-// shared by every guest thread of the runtime; each thread has its own CpuState and runner.
+// shared by every guest thread of the runtime; each thread has its own CpuState and runner. Guest threads run translated code
+// concurrently; the host side (translation, chaining, invalidation) runs on the host thread of whichever guest thread needs it, one at
+// a time under the runtime's lock.
 class Runtime {
 	// Runtime data that goes back to the allocator with its owner, also when the owner's constructor throws.
 	struct OwnedData {
@@ -148,6 +151,7 @@ private:
 	uint8_t *return_address = nullptr;
 	uint64_t return_guest = 0;
 	std::vector<std::unique_ptr<Thread>> threads;
+	mutable std::mutex lock;
 
 	void place_fixed_code();
 	uint8_t *place(const std::vector<uint32_t> &code);
