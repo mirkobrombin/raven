@@ -200,7 +200,27 @@ static void read_customs(const struct reader *r, INT offset, struct tl_customs *
 	}
 }
 
-/* The file's type descriptions refer to one another by position, so they load as one table. */
+/* A type a pointer, an array of them or a fixed array would need a target for; written inline, it has none. */
+static BOOL needs_target(VARTYPE vt)
+{
+	return vt == VT_PTR || vt == VT_SAFEARRAY || vt == VT_CARRAY;
+}
+
+/* Every use of a description follows its pointers by recursion, and no declaration nests them this deep. */
+#define DESC_DEPTH 64
+
+/* What a description leads to: the target of a pointer or of a safe array, the element of a fixed array, or nothing. */
+static TYPEDESC *desc_next(TYPEDESC *desc)
+{
+	if (desc->vt == VT_PTR || desc->vt == VT_SAFEARRAY)
+		return desc->lptdesc;
+	if (desc->vt == VT_CARRAY && desc->lpadesc)
+		return &desc->lpadesc->tdescElem;
+	return NULL;
+}
+
+/* The file's type descriptions refer to one another by position, so they load as one table. A target the file does not have reads as
+   void, and a chain that loops back or runs deeper than DESC_DEPTH is cut there, so that every chain ends. */
 static BOOL load_descs(struct reader *r)
 {
 	UINT index, count = r->seg[SEG_TYPE_DESCS].length > 0 ? r->seg[SEG_TYPE_DESCS].length / 8 : 0;
@@ -211,6 +231,10 @@ static BOOL load_descs(struct reader *r)
 	if (!r->descs)
 		return FALSE;
 	r->desc_count = count;
+	TYPEDESC *none = tl_keep(r->lib, sizeof(*none));
+	if (!none)
+		return FALSE;
+	none->vt = VT_VOID;
 	for (index = 0; index < count; index++)
 	{
 		WORD first = read_word(r, base + index * 8), low = read_word(r, base + index * 8 + 4), high = read_word(r, base + index * 8 + 6);
@@ -218,12 +242,13 @@ static BOOL load_descs(struct reader *r)
 		desc->vt = first & VT_TYPEMASK;
 		if (desc->vt == VT_PTR || desc->vt == VT_SAFEARRAY)
 		{
-			TYPEDESC *target = NULL;
+			TYPEDESC *target = none;
 			if (high & 0x8000)
 			{
 				target = tl_keep(r->lib, sizeof(*target));
-				if (target)
-					target->vt = low;
+				if (!target)
+					return FALSE;
+				target->vt = needs_target(low & VT_TYPEMASK) ? VT_VOID : low & VT_TYPEMASK;
 			}
 			else if ((UINT)(low / 8) < count)
 				target = &r->descs[low / 8];
@@ -243,7 +268,10 @@ static BOOL load_descs(struct reader *r)
 				if (complex && (UINT)(element / 8) < count)
 					array->tdescElem = r->descs[element / 8];
 				else
-					array->tdescElem.vt = element & VT_TYPEMASK;
+					array->tdescElem.vt = needs_target(element & VT_TYPEMASK) ? VT_VOID : element & VT_TYPEMASK;
+				/* An element copied from a description not read yet has nothing to lead to. */
+				if (needs_target(array->tdescElem.vt) && !desc_next(&array->tdescElem))
+					array->tdescElem.vt = VT_VOID;
 				array->cDims = dims;
 				for (dim = 0; dim < dims; dim++)
 				{
@@ -252,7 +280,23 @@ static BOOL load_descs(struct reader *r)
 				}
 			}
 			desc->lpadesc = array;
+			if (!array)
+				desc->vt = VT_VOID;
 		}
+	}
+	for (index = 0; index < count; index++)
+	{
+		TYPEDESC *at = &r->descs[index], *next;
+		UINT depth;
+		for (depth = 0; (next = desc_next(at)); depth++, at = next)
+			if (depth == DESC_DEPTH)
+			{
+				if (at->vt == VT_CARRAY)
+					at->lpadesc->tdescElem = *none;
+				else
+					at->lptdesc = none;
+				break;
+			}
 	}
 	return TRUE;
 }
@@ -261,7 +305,7 @@ static void read_desc(const struct reader *r, INT type, TYPEDESC *out)
 {
 	memset(out, 0, sizeof(*out));
 	if (type < 0)
-		out->vt = type & VT_TYPEMASK;
+		out->vt = needs_target(type & VT_TYPEMASK) ? VT_VOID : type & VT_TYPEMASK;
 	else if ((UINT)(type / 8) < r->desc_count)
 		*out = r->descs[type / 8];
 	else
