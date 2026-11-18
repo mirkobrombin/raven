@@ -216,87 +216,26 @@ HRESULT parse_bmp(image_list *list, const BYTE *data, SIZE_T size)
 	return parse_dib(list, data + 14, size - 14, offset ? data + offset : NULL, FALSE);
 }
 
-/* The codes of one image: LSB first, with the table growing until 4096 entries. */
-static BOOL expand_lzw(const BYTE *data, SIZE_T size, SIZE_T *at, UINT minimum, BYTE *out, SIZE_T room)
+/* The data blocks of one image joined into a new buffer, `at` left on the terminator or the end of the file; NULL without memory. */
+static BYTE *join_blocks(const BYTE *data, SIZE_T size, SIZE_T *at, SIZE_T *joined)
 {
-	USHORT prefix[4096];
-	BYTE suffix[4096], stack[4097];
-	const UINT clear = 1U << minimum, end = clear + 1;
-	UINT next = end + 1, width = minimum + 1, held = 0, bits = 0, previous = 4096, first = 0, block = 0;
-	SIZE_T written = 0;
-	UINT index;
-	for (index = 0; index < clear; index++)
-		suffix[index] = (BYTE)index;
-	for (;;) {
-		UINT code, top = 0, current;
-		while (held < width) {
-			if (!block) {
-				if (*at >= size)
-					return TRUE;
-				block = data[(*at)++];
-				if (!block)
-					return TRUE;
-			}
-			if (*at >= size)
-				return TRUE;
-			bits |= (UINT)data[(*at)++] << held;
-			held += 8;
-			block--;
-		}
-		code = bits & ((1U << width) - 1);
-		bits >>= width;
-		held -= width;
-		if (code == clear) {
-			next = end + 1;
-			width = minimum + 1;
-			previous = 4096;
-			continue;
-		}
-		if (code == end)
-			break;
-		if (previous == 4096) {
-			/* Past a code that cannot be there the image stays as far as it got, as a damaged file does. */
-			if (code >= clear)
-				return TRUE;
-			if (written < room)
-				out[written++] = (BYTE)code;
-			previous = first = code;
-			continue;
-		}
-		current = code;
-		if (code >= next) {
-			if (code > next)
-				return TRUE;
-			stack[top++] = (BYTE)first;
-			current = previous;
-		}
-		while (current >= clear) {
-			stack[top++] = suffix[current];
-			current = prefix[current];
-		}
-		first = suffix[current];
-		stack[top++] = (BYTE)first;
-		if (next < 4096) {
-			prefix[next] = (USHORT)previous;
-			suffix[next] = (BYTE)first;
-			next++;
-			if (next == 1U << width && width < 12)
-				width++;
-		}
-		while (top && written < room)
-			out[written++] = stack[--top];
-		previous = code;
+	SIZE_T scan = *at, total = 0;
+	BYTE *codes;
+	while (scan < size && data[scan]) {
+		const SIZE_T block = min((SIZE_T)data[scan], size - scan - 1);
+		total += block;
+		scan += 1 + block;
 	}
-	/* What is left of the data blocks up to the terminator. */
-	while (block) {
-		*at += block;
-		block = *at < size ? data[(*at)++] : 0;
+	if (!(codes = wic_alloc(total ? total : 1)))
+		return NULL;
+	*joined = 0;
+	while (*at < size && data[*at]) {
+		const SIZE_T block = min((SIZE_T)data[*at], size - *at - 1);
+		memcpy(codes + *joined, data + *at + 1, block);
+		*joined += block;
+		*at += 1 + block;
 	}
-	if (*at < size && !block && *at > 0 && data[*at - 1])
-		while (*at < size && data[*at]) {
-			*at += (SIZE_T)data[*at] + 1;
-		}
-	return TRUE;
+	return codes;
 }
 
 HRESULT parse_gif(image_list *list, const BYTE *data, SIZE_T size)
@@ -377,12 +316,20 @@ HRESULT parse_gif(image_list *list, const BYTE *data, SIZE_T size)
 			if (!(flat = wic_alloc((SIZE_T)width * height)))
 				return E_OUTOFMEMORY;
 			{
-				/* A file may simply end before the image's data. */
+				/* A file may simply end before the image's data, which leaves the image empty. */
 				const UINT minimum = at < size ? data[at++] : 8;
-				if (minimum < 2 || minimum > 11 || !expand_lzw(data, size, &at, minimum, flat, (SIZE_T)width * height)) {
+				SIZE_T joined;
+				BYTE *codes;
+				if (minimum < 2 || minimum > 8) {
 					wic_free(flat);
 					return WINCODEC_ERR_BADIMAGE;
 				}
+				if (!(codes = join_blocks(data, size, &at, &joined))) {
+					wic_free(flat);
+					return E_OUTOFMEMORY;
+				}
+				lzw_expand(codes, joined, minimum, flat, (SIZE_T)width * height);
+				wic_free(codes);
 			}
 			if (flags & 0x40) {
 				static const BYTE starts[4] = {0, 4, 2, 1}, steps[4] = {8, 8, 4, 2};

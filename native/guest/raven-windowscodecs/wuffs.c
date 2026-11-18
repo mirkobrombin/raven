@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The pixels of PNG files and the zlib streams inside them, through the decoders of the Wuffs release the component is built with
+/* The pixels of PNG files and the zlib streams inside them, and the codes of GIF images, through the decoders of the Wuffs release the component is built with
  * (scripts/provision-installer.py): memory-safe code that checks every bound, in place of hand-written inflating and unfiltering. Its
  * functions stay private to this file; the few it allocates with go to the component's heap. */
 #include <stdlib.h>
@@ -16,6 +16,7 @@ static void raven_wuffs_free(void *block);
 #define WUFFS_CONFIG__MODULE__ADLER32
 #define WUFFS_CONFIG__MODULE__CRC32
 #define WUFFS_CONFIG__MODULE__DEFLATE
+#define WUFFS_CONFIG__MODULE__LZW
 #define WUFFS_CONFIG__MODULE__ZLIB
 #define WUFFS_CONFIG__MODULE__PNG
 #include "wuffs-v0.4.c"
@@ -117,4 +118,19 @@ done:
 	wic_free(out);
 	wic_free(decoder);
 	return result;
+}
+
+SIZE_T lzw_expand(const BYTE *codes, SIZE_T size, UINT literal, BYTE *out, SIZE_T room)
+{
+	const size_t decoder_size = sizeof__wuffs_lzw__decoder();
+	wuffs_lzw__decoder *decoder;
+	wuffs_base__io_buffer source = wuffs_base__ptr_u8__reader((uint8_t *)codes, size, true), target = wuffs_base__ptr_u8__writer(out, room);
+	if (!(decoder = wic_alloc(decoder_size)))
+		return 0;
+	/* Whatever ends the codes (a full image, the end code, a broken code or the end of the data), what was written stays. */
+	if (!wuffs_lzw__decoder__initialize(decoder, decoder_size, WUFFS_VERSION, WUFFS_INITIALIZE__ALREADY_ZEROED).repr &&
+		!wuffs_lzw__decoder__set_quirk(decoder, WUFFS_LZW__QUIRK_LITERAL_WIDTH_PLUS_ONE, literal + 1).repr)
+		wuffs_lzw__decoder__transform_io(decoder, &target, &source, wuffs_base__empty_slice_u8());
+	wic_free(decoder);
+	return target.meta.wi;
 }

@@ -40,6 +40,10 @@ typedef enum { png_indexed, png_narrow, png_wide } png_layout;
 BYTE *png_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_layout layout);
 /* A zlib stream inflated into a new buffer of at most room bytes; NULL when the stream is broken or does not end within the room. */
 BYTE *zlib_inflate(const BYTE *data, SIZE_T size, SIZE_T room, SIZE_T *written);
+/* The codes of a GIF image, its data blocks joined, expanded into out, the image's indices in order, by the Wuffs release (wuffs.c) with
+   `literal` bits a literal (2 to 8). Codes past the room, past the end code or past a code that cannot be there are dropped, so a damaged
+   image stays as far as it got; the number of bytes written is returned. */
+SIZE_T lzw_expand(const BYTE *codes, SIZE_T size, UINT literal, BYTE *out, SIZE_T room);
 
 /* The part of a BMP after its file header, which an icon entry also is. */
 HRESULT parse_dib(image_list *list, const BYTE *data, SIZE_T size, const BYTE *bits_at, BOOL double_height);
