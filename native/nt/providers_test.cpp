@@ -60,8 +60,16 @@ static void apc_wait_result(const std::string &bootstrap)
 	threads.current().apcs.clear();
 }
 
+// The time slice of a serial guest, which switches threads within its one task: the guest is serial whatever the environment asks,
+// and the environment is as it was afterwards (--parallel-served covers a guest with a task for each thread).
 static void served_thread_result(const std::string &bootstrap)
 {
+	struct Serial {
+		const char *const parallel = std::getenv("RAVEN_PARALLEL");
+		const std::string kept = parallel ? parallel : "";
+		Serial() { ::unsetenv("RAVEN_PARALLEL"); }
+		~Serial() { if (parallel) ::setenv("RAVEN_PARALLEL", kept.c_str(), 1); }
+	} serial;
 	const auto timeout = std::chrono::seconds(2);
 	const uint64_t base = 0x180000000ULL;
 	const std::array<std::string_view, 1> names{"vkCmdDrawIndexed"};
