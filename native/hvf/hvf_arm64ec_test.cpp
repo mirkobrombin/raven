@@ -21,6 +21,12 @@ using namespace raven;
 extern "C" {
 int64_t ec_zero(void);
 int64_t ec_add(int64_t a, int64_t b);
+int64_t ec_sum1(int64_t a);
+int64_t ec_sum3(int64_t a, int64_t b, int64_t c);
+int64_t ec_sum4(int64_t a, int64_t b, int64_t c, int64_t d);
+int64_t ec_sum5(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e);
+int64_t ec_sum6(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f);
+int64_t ec_sum7(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g);
 int64_t ec_sum8(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h);
 uint64_t ec_hash(const char *text);
 int64_t ec_call(int64_t (*callback)(int64_t, int64_t), int64_t a, int64_t b);
@@ -67,6 +73,7 @@ int main(int argc, char **argv)
 		process.bind_imports();
 		translate::TranslatorOptions options;
 		options.ordering = translate::MemoryOrdering::hardware;
+		options.vector_registers = true;
 		hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
 		hvf::Vcpu vcpu(vm, true);
 		translate::Runtime runtime(process, cache, options, &vcpu);
@@ -88,21 +95,36 @@ int main(int argc, char **argv)
 		};
 		const Case cases[] = {
 			{"no arguments", 0, 0, 0, ec_zero()},
+			{"one argument", 10, 7, 0, ec_sum1(7)},
 			{"two arguments", 1, 40, 2, ec_add(40, 2)},
+			{"three arguments", 11, 3, 5, ec_sum3(3, 5, 4)},
+			{"four arguments", 12, 3, 5, ec_sum4(3, 5, 4, 6)},
+			{"five arguments, one on the stack", 13, 3, 5, ec_sum5(3, 5, 4, 6, 5)},
+			{"six arguments, two on the stack", 14, 3, 5, ec_sum6(3, 5, 4, 6, 5, 7)},
+			{"seven arguments, three on the stack", 15, 3, 5, ec_sum7(3, 5, 4, 6, 5, 7, 6)},
 			{"eight arguments, four on the stack", 2, 3, 5, ec_sum8(3, 5, 4, 6, 5, 7, 6, 8)},
 			{"a string", 3, 0, 0, static_cast<int64_t>(ec_hash("translated x64 hands native code a string"))},
 			{"an integer and a double", 8, 6, std::bit_cast<int64_t>(1.5), std::bit_cast<int64_t>(ec_scale(6, 1.5))},
 			{"a callback into x64", 4, 7, 4, ec_call(combine, 7, 4)},
 			{"x18 at the TEB", 5, 0, 0, 1},
 		};
+		// Each case runs cold: its runs of the dispatcher count the host exits it took (lookup misses and chains included).
 		for (const Case &c : cases) {
+			const uint64_t runs = runtime.stats().runs;
 			const int64_t got = call(c.role, c.a, c.b);
 			check(got == c.expected, std::string(c.name) + ": " + std::to_string(got) + ", native " + std::to_string(c.expected));
-			std::printf("%s: %lld (native %lld)\n", c.name, static_cast<long long>(got), static_cast<long long>(c.expected));
+			std::printf("%s: %lld (native %lld), %llu runs\n", c.name, static_cast<long long>(got), static_cast<long long>(c.expected),
+				static_cast<unsigned long long>(runtime.stats().runs - runs));
 		}
 
 		// x18 across forced exits: a watcher kicks the vCPU while it reads the TEB through x18 again and again.
 		std::atomic<bool> done{false};
+		// Where each forced exit stopped the vCPU: in native code or elsewhere.
+		std::atomic<uint64_t> native_cancels{0};
+		vcpu.on_cancel = [&](hvf::Vcpu &stopped) {
+			if (process.is_native(stopped.reg(HV_REG_PC)))
+				++native_cancels;
+		};
 		std::thread watcher([&] {
 			while (!done) {
 				hv_vcpu_t id = vcpu.id();
@@ -126,28 +148,65 @@ int main(int argc, char **argv)
 		for (int i = 0; i < 2000; ++i)
 			good += call(5, 0, 0);
 		const uint64_t short_cancels = vcpu.stats().cancels - cancels;
+		const uint64_t short_native = native_cancels;
 		// The same inside one long native loop, so that the forced exits land in native code.
 		constexpr int64_t reads = 200000000;
 		const int64_t right = call(9, reads, 0);
 		done = true;
 		watcher.join();
-		std::printf("x18 at the TEB in 2000 native calls across %llu forced exits: %lld right; in %lld reads of one native loop across "
-			"%llu forced exits: %lld right; x18 %#llx, TEB %#llx\n",
-			static_cast<unsigned long long>(short_cancels), static_cast<long long>(good), static_cast<long long>(reads),
-			static_cast<unsigned long long>(vcpu.stats().cancels - cancels - short_cancels), static_cast<long long>(right),
-			static_cast<unsigned long long>(vcpu.reg(HV_REG_X18)), static_cast<unsigned long long>(teb));
+		vcpu.on_cancel = nullptr;
+		const uint64_t loop_cancels = vcpu.stats().cancels - cancels - short_cancels, loop_native = native_cancels - short_native;
+		std::printf("x18 at the TEB in 2000 native calls across %llu forced exits (%llu in native code): %lld right; in %lld reads of one "
+			"native loop across %llu forced exits (%llu in native code): %lld right; x18 %#llx, TEB %#llx\n",
+			static_cast<unsigned long long>(short_cancels), static_cast<unsigned long long>(short_native), static_cast<long long>(good),
+			static_cast<long long>(reads), static_cast<unsigned long long>(loop_cancels), static_cast<unsigned long long>(loop_native),
+			static_cast<long long>(right), static_cast<unsigned long long>(vcpu.reg(HV_REG_X18)), static_cast<unsigned long long>(teb));
 		check(good == 2000 && right == reads && vcpu.reg(HV_REG_X18) == teb, "x18 did not hold the TEB");
-		check(vcpu.stats().cancels - cancels - short_cancels >= 10, "too few forced exits landed in the native loop");
+		check(loop_native >= 10, "too few forced exits landed in native code");
+
+		// A second guest thread on its own vCPU and host thread gets its own TEB, which its native code reads through its own x18.
+		{
+			uint64_t second_teb = 0, second_x18 = 0;
+			int64_t second_self = 0, second_count = 0;
+			std::string second_error;
+			std::thread second([&] {
+				try {
+					hvf::Vcpu other(vm, true);
+					translate::Runtime::Thread &thread = runtime.add_thread(&other);
+					process.prepare_thread(thread.state(), other);
+					second_teb = thread.state().gs_base;
+					second_self = static_cast<int64_t>(thread.call(entry, {5, 0, 0}).value);
+					second_count = static_cast<int64_t>(thread.call(entry, {9, 1000000, 0}).value);
+					second_x18 = other.reg(HV_REG_X18);
+					runtime.remove_thread(thread);
+				} catch (const std::exception &error) {
+					second_error = error.what();
+				}
+			});
+			second.join();
+			std::printf("second thread: TEB %#llx, x18 %#llx, NT_TIB.Self through x18 matches gs:[0x30]: %lld, %lld of 1000000 reads "
+				"right; first thread still %lld\n",
+				static_cast<unsigned long long>(second_teb), static_cast<unsigned long long>(second_x18),
+				static_cast<long long>(second_self), static_cast<long long>(second_count), static_cast<long long>(call(5, 0, 0)));
+			check(second_error.empty(), "second thread: " + second_error);
+			check(second_teb && second_teb != teb && second_x18 == second_teb && second_self == 1 && second_count == 1000000 &&
+					vcpu.reg(HV_REG_X18) == teb,
+				"the second thread's x18 did not hold its own TEB");
+		}
 
 		// Warm: a loop of native calls stays in the vCPU; its cost next to the same loop calling x64 code.
 		call(6, 10, 1);
 		call(7, 10, 1);
 		const uint64_t runs = runtime.stats().runs, misses = runtime.stats().lookup_misses;
+		const hvf::Vcpu::Stats before = vcpu.stats();
 		constexpr int64_t n = 1000000;
 		uint64_t start = now_ns();
 		const int64_t native_sum = call(6, n, 3);
 		const double native_ns = double(now_ns() - start) / double(n);
-		check(runtime.stats().runs - runs == 1 && runtime.stats().lookup_misses == misses,
+		// One entry of the vCPU and one run of the dispatcher, ended by the return: no host exit of any kind in between.
+		const hvf::Vcpu::Stats after = vcpu.stats();
+		check(runtime.stats().runs - runs == 1 && runtime.stats().lookup_misses == misses && after.entries - before.entries == 1 &&
+				after.cancels == before.cancels && after.write_faults == before.write_faults,
 			"a warm loop of calls into native code left the vCPU");
 		start = now_ns();
 		const int64_t x64_sum = call(7, n, 3);

@@ -2,6 +2,12 @@ LIBRARY ec_library.dll
 EXPORTS
     ec_zero
     ec_add
+    ec_sum1
+    ec_sum3
+    ec_sum4
+    ec_sum5
+    ec_sum6
+    ec_sum7
     ec_sum8
     ec_hash
     ec_call

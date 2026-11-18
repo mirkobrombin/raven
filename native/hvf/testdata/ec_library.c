@@ -18,6 +18,37 @@ EXPORT int64_t ec_add(int64_t a, int64_t b)
 	return a + b;
 }
 
+// One to seven arguments: from the fifth on they come from the x64 stack.
+EXPORT int64_t ec_sum1(int64_t a)
+{
+	return 3 * a + 1;
+}
+
+EXPORT int64_t ec_sum3(int64_t a, int64_t b, int64_t c)
+{
+	return a + 2 * b + 3 * c;
+}
+
+EXPORT int64_t ec_sum4(int64_t a, int64_t b, int64_t c, int64_t d)
+{
+	return a + 2 * b + 3 * c + 4 * d;
+}
+
+EXPORT int64_t ec_sum5(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e)
+{
+	return a + 2 * b + 3 * c + 4 * d + 5 * e;
+}
+
+EXPORT int64_t ec_sum6(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f)
+{
+	return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f;
+}
+
+EXPORT int64_t ec_sum7(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g)
+{
+	return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g;
+}
+
 // Eight arguments: the last four come from the x64 stack.
 EXPORT int64_t ec_sum8(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h)
 {
