@@ -86,6 +86,7 @@ void spin(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, Spinner &spinner
 		translate::TranslatorOptions options;
 		options.ordering = translate::MemoryOrdering::hardware;
 		translate::Runtime runtime(process, cache, options, &vcpu);
+		hvf::VmProcess::Attachment attached(process, runtime);
 		process.prepare_thread(runtime);
 		vcpu.set_reg(HV_REG_X18, spinner.sentinel);
 		size_t last_cpu = ~size_t(0);

@@ -72,7 +72,7 @@ int main(int argc, char **argv)
 			translate::TranslatorOptions options;
 			options.ordering = translate::MemoryOrdering::hardware;
 			translate::Runtime runtime(process, cache, options, &vcpu);
-			process.attach(runtime);
+			hvf::VmProcess::Attachment attached(process, runtime);
 			process.prepare_thread(runtime);
 			const uint64_t entry = process.entry(process.load(argv[2]));
 			const int runs = std::atoi(argv[3]);
@@ -120,6 +120,7 @@ int main(int argc, char **argv)
 			hvf::VmCodeCache cache(vm, 64 << 20, 1 << 20);
 			hvf::Vcpu vcpu(vm, true);
 			translate::Runtime runtime(process, cache, options, &vcpu);
+			hvf::VmProcess::Attachment attached(process, runtime);
 			process.prepare_thread(runtime);
 			const uint64_t entry = process.entry(process.load(argv[2]));
 			measure(runtime, entry, runs, calls, method == "loop");

@@ -44,6 +44,7 @@ uint64_t run(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, unsigned n, b
 	options.ordering = translate::MemoryOrdering::hardware;
 	hvf::VmCodeCache shared_cache(vm, 4 << 20, 1 << 20);
 	translate::Runtime shared_runtime(process, shared_cache, options);
+	hvf::VmProcess::Attachment shared_attached(process, shared_runtime);
 	std::vector<uint64_t> blocks(n);
 	std::barrier start(n);
 	std::vector<std::thread> threads;
@@ -53,6 +54,7 @@ uint64_t run(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, unsigned n, b
 				hvf::Vcpu vcpu(vm, true);
 				std::unique_ptr<hvf::VmCodeCache> own_cache;
 				std::unique_ptr<translate::Runtime> own_runtime;
+				std::unique_ptr<hvf::VmProcess::Attachment> own_attached;
 				translate::Runtime::Thread *thread;
 				std::unique_ptr<void, std::function<void(void *)>> leave;
 				if (shared) {
@@ -61,6 +63,7 @@ uint64_t run(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, unsigned n, b
 				} else {
 					own_cache = std::make_unique<hvf::VmCodeCache>(vm, 4 << 20, 1 << 20);
 					own_runtime = std::make_unique<translate::Runtime>(process, *own_cache, options, &vcpu);
+					own_attached = std::make_unique<hvf::VmProcess::Attachment>(process, *own_runtime);
 					thread = &own_runtime->main_thread();
 				}
 				process.prepare_thread(thread->state());

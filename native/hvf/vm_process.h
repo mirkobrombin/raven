@@ -29,13 +29,22 @@ public:
 	// Maps the image at its preferred base; returns it.
 	uint64_t load(const std::filesystem::path &path);
 	uint64_t entry(uint64_t base) const;
-	// The runtime whose translations guest writes to watched code invalidate.
-	void attach(translate::Runtime &runtime) { attached = &runtime; }
-	void detach(translate::Runtime &runtime)
-	{
-		if (attached == &runtime)
-			attached = nullptr;
-	}
+	// Runtimes whose translations a write to watched code invalidates: every runtime that translates this process's code must be
+	// attached, from before its first translation until it goes, or a store could wait on a translation no write releases.
+	void attach(translate::Runtime &runtime);
+	void detach(translate::Runtime &runtime);
+	// attach for the life of a scope.
+	class Attachment {
+	public:
+		Attachment(VmProcess &process, translate::Runtime &runtime) : process(process), runtime(runtime) { process.attach(runtime); }
+		~Attachment() { process.detach(runtime); }
+		Attachment(const Attachment &) = delete;
+		Attachment &operator=(const Attachment &) = delete;
+
+	private:
+		VmProcess &process;
+		translate::Runtime &runtime;
+	};
 	// Test seam: runs on the storing vCPU's thread after a write fault's code_written and before the store is retried, where another
 	// vCPU may translate the page again.
 	std::function<void(uint64_t address)> after_code_written;
@@ -46,7 +55,8 @@ public:
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t) const override { return false; }
 	void write(uint64_t address, const void *bytes, size_t size) override;
-	// A watched page loses write permission at stage 2; a guest store there reaches the attached runtime's code_written.
+	// A watched page loses write permission at stage 2; a guest store there reaches every attached runtime's code_written. Refuses to
+	// watch with no runtime attached.
 	void watch_code(uint64_t address, size_t size, bool watch) override;
 	size_t watch_granule() const override { return Vm::page_size; }
 
@@ -58,11 +68,12 @@ private:
 	};
 	Vm &vm;
 	std::vector<Image> images;
-	translate::Runtime *attached = nullptr;
+	std::vector<translate::Runtime *> attached;
 	std::mutex lock;
 	std::map<uint64_t, unsigned> watched;
 
 	bool code_write(uint64_t address);
+	void drop_translations(uint64_t address);
 };
 
 // Translated code in guest memory: EL0 runs it at its guest address, the host writes it through its alias.

@@ -42,6 +42,7 @@ Trials run(hvf::Vm &vm, hvf::VmProcess &process, uint64_t entry, uint64_t shared
 			translate::TranslatorOptions options;
 			options.ordering = translate::MemoryOrdering::hardware;
 			translate::Runtime runtime(process, cache, options, &vcpu);
+			hvf::VmProcess::Attachment attached(process, runtime);
 			process.prepare_thread(runtime);
 			for (int trial = 0; trial < trials; ++trial) {
 				start.arrive_and_wait();

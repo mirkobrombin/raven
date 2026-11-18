@@ -29,7 +29,7 @@ int main(int argc, char **argv)
 		hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
 		hvf::Vcpu vcpu(vm, true);
 		translate::Runtime runtime(process, cache, options, &vcpu);
-		process.attach(runtime);
+		hvf::VmProcess::Attachment attached(process, runtime);
 		process.prepare_thread(runtime);
 		value = runtime.call(entry, {8, 0, 0}).value;
 	} catch (const std::exception &error) {

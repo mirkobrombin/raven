@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 		options.ordering = translate::MemoryOrdering::hardware;
 		hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
 		translate::Runtime runtime(process, cache, options);
-		process.attach(runtime);
+		hvf::VmProcess::Attachment attached(process, runtime);
 		Recorder elsewhere;
 		translate::Runtime::Thread &elsewhere_thread = runtime.add_thread(&elsewhere);
 		std::thread([&] {

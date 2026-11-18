@@ -47,6 +47,7 @@ int main(int argc, char **argv)
 		hvf::VmCodeCache cache(vm, 4 << 20, 1 << 20);
 		hvf::Vcpu vcpu(vm, true);
 		translate::Runtime runtime(process, cache, options, &vcpu);
+		hvf::VmProcess::Attachment attached(process, runtime);
 		process.prepare_thread(runtime);
 		vm.protect(first, false);
 		runtime.call(entry, {9, second, 0x22});

@@ -3,6 +3,7 @@
 #include "runtime.h"
 #include "test_process.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -20,9 +21,36 @@ VmProcess::~VmProcess()
 	vm.write_fault = nullptr;
 }
 
+void VmProcess::attach(translate::Runtime &runtime)
+{
+	std::lock_guard guard(lock);
+	if (std::find(attached.begin(), attached.end(), &runtime) == attached.end())
+		attached.push_back(&runtime);
+}
+
+void VmProcess::detach(translate::Runtime &runtime)
+{
+	std::lock_guard guard(lock);
+	std::erase(attached, &runtime);
+}
+
+void VmProcess::drop_translations(uint64_t address)
+{
+	std::vector<translate::Runtime *> runtimes;
+	{
+		std::lock_guard guard(lock);
+		runtimes = attached;
+	}
+	// Outside the lock: code_written takes each runtime's lock and calls watch_code.
+	for (translate::Runtime *runtime : runtimes)
+		runtime->code_written(address);
+}
+
 void VmProcess::watch_code(uint64_t address, size_t size, bool watch)
 {
 	std::lock_guard guard(lock);
+	if (watch && attached.empty())
+		throw std::logic_error("translating code of a VmProcess no runtime is attached to");
 	for (uint64_t at = address & ~(Vm::page_size - 1); at < address + size; at += Vm::page_size) {
 		unsigned &count = watched[at];
 		if (watch && count++ == 0)
@@ -46,9 +74,7 @@ bool VmProcess::code_write(uint64_t address)
 		if (!watched.count(page))
 			return true;
 	}
-	// Outside the lock: code_written takes the runtime's lock and calls watch_code.
-	if (attached)
-		attached->code_written(address);
+	drop_translations(address);
 	if (after_code_written)
 		after_code_written(address);
 	// code_written unwatched the page through watch_code. If a vCPU translated it again meanwhile, it is watched again and the retried
@@ -117,8 +143,8 @@ void VmProcess::write(uint64_t address, const void *bytes, size_t size)
 			std::lock_guard guard(lock);
 			code = watched.count(page) != 0;
 		}
-		if (code && attached)
-			attached->code_written(page);
+		if (code)
+			drop_translations(page);
 	}
 }
 

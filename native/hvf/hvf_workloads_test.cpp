@@ -70,6 +70,7 @@ int main(int argc, char **argv)
 		for (const Workload &workload : workloads) {
 			const std::string name = workload.name;
 			translate::Runtime runtime(process, cache, options, &vcpu);
+			hvf::VmProcess::Attachment attached(process, runtime);
 			process.prepare_thread(runtime);
 			const uint64_t entry = process.entry(process.load(guests / ("hvf_" + name + ".exe")));
 			const translate::RunResult once = runtime.call(entry, {1});
