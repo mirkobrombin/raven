@@ -1,0 +1,80 @@
+#pragma once
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <mutex>
+
+// The process's Hypervisor.framework VM: guest RAM, the guest kernel and the page tables EL0 runs under. Guest addresses are 39-bit
+// virtual addresses of EL0 (TTBR0, 4 KiB pages); the kernel lives in the upper half (TTBR1), where all guest RAM is mapped once.
+namespace raven::hvf {
+
+// How EL0 may use a mapping. The kernel's own mapping is apart and never reachable from EL0.
+enum class Access : uint8_t { read_write, read_execute };
+
+// What makes code the host writes through its alias visible to the vCPUs' instruction fetch. Tests switch parts off as controls.
+struct CodeMaintenance {
+	// DC CVAU on the host alias, to the point of unification.
+	bool host_clean = true;
+	// IC IVAU on the host alias.
+	bool host_invalidate = false;
+	// IC IALLUIS in the guest kernel before a vCPU returns to EL0 after code was written.
+	bool guest_invalidate = true;
+};
+
+class Vm {
+public:
+	static constexpr uint64_t page_size = 4096;
+	// The highest EL0 address plus one: T0SZ = 25.
+	static constexpr uint64_t user_limit = uint64_t(1) << 39;
+
+	// Creates the VM with ram_size bytes of guest RAM. Hypervisor.framework allows one VM per process.
+	explicit Vm(size_t ram_size);
+	~Vm();
+	Vm(const Vm &) = delete;
+	Vm &operator=(const Vm &) = delete;
+
+	// Maps [address, address + size) for EL0 to fresh zeroed guest RAM; returns the host alias of address. The range must be free.
+	uint8_t *map(uint64_t address, size_t size, Access access);
+	// The same at an address the VM picks; returns that address.
+	uint64_t map_anywhere(size_t size, Access access);
+	// The host alias of a guest address, or nullptr when it is not mapped. Valid up to the end of the mapping holding it.
+	uint8_t *host(uint64_t address) const;
+	// Copies between guest memory and the host; throws when the range is not mapped.
+	void read(uint64_t address, void *into, size_t size) const;
+	void write(uint64_t address, const void *from, size_t size);
+
+	// Called after the host wrote code at alias: cleans or invalidates there as maintenance says and tells the vCPUs.
+	void code_written(const uint8_t *alias, size_t size);
+	uint64_t code_generation() const { return generation.load(std::memory_order_acquire); }
+	CodeMaintenance maintenance;
+
+	// What a vCPU starts with: the kernel's vectors and stack, the page table roots, the EL0 dispatcher.
+	uint64_t vectors() const { return kernel_vectors; }
+	uint64_t kernel_stack() const { return kernel_stack_top; }
+	uint64_t user_tables() const { return ttbr0; }
+	uint64_t kernel_tables() const { return ttbr1; }
+	uint64_t dispatcher() const { return dispatcher_address; }
+
+private:
+	struct Mapping {
+		uint64_t size;
+		uint8_t *host;
+	};
+
+	uint8_t *ram = nullptr;
+	size_t ram_size = 0;
+	uint64_t next_physical = 0;
+	uint64_t next_anywhere = 0;
+	uint64_t ttbr0 = 0, ttbr1 = 0;
+	uint64_t kernel_vectors = 0, kernel_stack_top = 0, dispatcher_address = 0;
+	std::map<uint64_t, Mapping> mappings;
+	mutable std::mutex lock;
+	std::atomic<uint64_t> generation{0};
+
+	uint64_t allocate_physical(size_t size);
+	uint64_t *table_entry(uint64_t address);
+};
+
+}

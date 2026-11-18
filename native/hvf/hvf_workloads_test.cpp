@@ -1,0 +1,83 @@
+// The integer workloads translated by Raven's runtime run at EL0 in a vCPU with hardware TSO and return what their native builds
+// return, through one call each and through several calls in a translated loop.
+#include "runtime.h"
+#include "vcpu.h"
+#include "vm.h"
+#include "vm_process.h"
+
+#include <cstdio>
+#include <exception>
+#include <filesystem>
+#include <string>
+
+using namespace raven;
+
+extern "C" uint64_t workload_crc32(void), workload_fnv(void), workload_histogram(void);
+extern "C" unsigned native_entry(void);
+
+namespace {
+
+int failures = 0;
+
+void check(bool condition, const std::string &message)
+{
+	if (!condition) {
+		std::fprintf(stderr, "FAIL: %s\n", message.c_str());
+		++failures;
+	}
+}
+
+struct Workload {
+	const char *name;
+	uint64_t expected;
+};
+
+}
+
+int main(int argc, char **argv)
+{
+	if (argc != 2) {
+		std::fprintf(stderr, "usage: hvf_workloads_test GUEST_DIRECTORY\n");
+		return 2;
+	}
+	const std::filesystem::path guests = argv[1];
+	const Workload workloads[] = {
+		{"entry", native_entry()},
+		{"crc32", workload_crc32()},
+		{"fnv", workload_fnv()},
+		{"histogram", workload_histogram()},
+	};
+	try {
+		hvf::Vm vm(256 << 20);
+		hvf::VmProcess process(vm);
+		hvf::VmCodeCache cache(vm, 32 << 20, 1 << 20);
+		hvf::Vcpu vcpu(vm, true);
+		check(vcpu.actlr() & 2, "ACTLR_EL1.EnTSO reads back clear");
+		translate::TranslatorOptions options;
+		options.ordering = translate::MemoryOrdering::hardware;
+		for (const Workload &workload : workloads) {
+			const std::string name = workload.name;
+			translate::Runtime runtime(process, cache, options, &vcpu);
+			process.prepare_thread(runtime);
+			const uint64_t entry = process.entry(process.load(guests / ("hvf_" + name + ".exe")));
+			const translate::RunResult once = runtime.call(entry, {1});
+			check(once.reason == translate::ExitReason::returned, name + ": one call did not return");
+			check(once.value == workload.expected, name + ": one call returned " + std::to_string(once.value) + ", native returns " +
+				std::to_string(workload.expected));
+			const translate::RunResult loop = runtime.call(entry, {7});
+			check(loop.reason == translate::ExitReason::returned && loop.value == 7 * workload.expected,
+				name + ": seven calls in the translated loop returned " + std::to_string(loop.value));
+			std::printf("%s: %llu (native %llu), %llu runs, %llu lookup misses, %llu chains, %llu blocks\n", name.c_str(),
+				static_cast<unsigned long long>(once.value), static_cast<unsigned long long>(workload.expected),
+				static_cast<unsigned long long>(runtime.stats().runs), static_cast<unsigned long long>(runtime.stats().lookup_misses),
+				static_cast<unsigned long long>(runtime.stats().chains),
+				static_cast<unsigned long long>(runtime.translation_stats().blocks));
+		}
+	} catch (const std::exception &error) {
+		check(false, error.what());
+	}
+	if (failures)
+		return 1;
+	std::printf("hvf workloads: PASS\n");
+	return 0;
+}

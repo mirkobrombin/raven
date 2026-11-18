@@ -1,0 +1,56 @@
+#pragma once
+
+#include "runtime.h"
+
+#include <Hypervisor/Hypervisor.h>
+
+#include <cstdint>
+#include <functional>
+
+namespace raven::hvf {
+
+class Vm;
+
+// A vCPU of the VM, running translated code at EL0 under the EL0 dispatcher. Hypervisor.framework binds a vCPU to the thread that
+// created it: only that thread may construct, enter or destroy it.
+class Vcpu final : public translate::CodeRunner {
+public:
+	// tso sets ACTLR_EL1.EnTSO, so plain loads and stores at EL0 keep x86's order.
+	Vcpu(Vm &vm, bool tso);
+	~Vcpu() override;
+	Vcpu(const Vcpu &) = delete;
+	Vcpu &operator=(const Vcpu &) = delete;
+
+	// Resumes the dispatcher, which enters code through trampoline with the CpuState at state; returns once translated code exits.
+	uint32_t enter(uint64_t trampoline, uint64_t state, uint64_t code) override;
+
+	hv_vcpu_t id() const { return vcpu; }
+	// ACTLR_EL1 as the vCPU reads it back.
+	uint64_t actlr() const;
+	uint64_t reg(hv_reg_t reg) const;
+	void set_reg(hv_reg_t reg, uint64_t value);
+	// Called on this vCPU's thread whenever another thread made it exit with hv_vcpus_exit; it then resumes.
+	std::function<void(Vcpu &)> on_cancel;
+
+	struct Stats {
+		uint64_t entries = 0;
+		uint64_t cancels = 0;
+		uint64_t instruction_cache_invalidations = 0;
+	};
+	const Stats &stats() const { return counters; }
+
+private:
+	struct Mailbox;
+
+	Vm &vm;
+	hv_vcpu_t vcpu = 0;
+	hv_vcpu_exit_t *exit = nullptr;
+	Mailbox *mailbox = nullptr;
+	uint64_t mailbox_address = 0;
+	uint64_t stack_top = 0;
+	uint64_t seen_generation = 0;
+	bool started = false;
+	Stats counters;
+};
+
+}
