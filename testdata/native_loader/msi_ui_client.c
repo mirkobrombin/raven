@@ -290,7 +290,9 @@ int raven_entry(void)
 	HWND done = wait_dialog(L"Done");
 	if (!done || !FindWindowExW(done, NULL, L"Static", L"Thanks, Mirko"))
 		return 29;
-	if (FindWindowW(L"RavenMsiDialog", L"Installing"))
+	/* The progress dialog goes once the one replacing it is up, so that a window of the installer stays active throughout. */
+	HWND installing = FindWindowW(L"RavenMsiDialog", L"Installing");
+	if (installing && !wait_gone(installing))
 		return 30;
 	if (!press(done, L"Finish"))
 		return 31;
