@@ -220,10 +220,10 @@ def small_counts(rng, body, vectors, memory):
     if len(parts) not in (3, 7) or parts[0][:4] not in ("psll", "psrl", "psra") or parts[0].endswith("dq"):
         return
     count = rng.choice([0, 1, rng.randrange(70), rng.randrange(70), 1 << rng.randrange(64)])
-    if parts[2].startswith("xmm") and parts[2] != parts[1]:
-        vectors[int(parts[2][3:])][0] = count
-    elif parts[2] == "xmmword":
+    if parts[2] == "xmmword":
         memory[int(parts[-1].rstrip("]")) // 8] = count
+    elif parts[2].startswith("xmm") and parts[2] != parts[1]:
+        vectors[int(parts[2][3:])][0] = count
 
 
 # Each family: how its cases are made and what its lanes hold (by default; an instruction ending in ps or ss reads floats, in pd or
