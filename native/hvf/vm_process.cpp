@@ -35,6 +35,11 @@ uint64_t VmProcess::entry(uint64_t base) const
 
 void VmProcess::prepare_thread(translate::Runtime &runtime)
 {
+	prepare_thread(runtime.state());
+}
+
+void VmProcess::prepare_thread(translate::CpuState &state)
+{
 	constexpr size_t stack_size = 1 << 20;
 	const uint64_t stack = vm.map_anywhere(stack_size, Access::read_write);
 	const uint64_t teb = vm.map_anywhere(Vm::page_size, Access::read_write);
@@ -43,8 +48,8 @@ void VmProcess::prepare_thread(translate::Runtime &runtime)
 	vm.write(teb + 0x8, &top, 8);
 	vm.write(teb + 0x10, &stack, 8);
 	vm.write(teb + 0x30, &teb, 8);
-	runtime.state().gpr[translate::rsp] = top;
-	runtime.state().gs_base = teb;
+	state.gpr[translate::rsp] = top;
+	state.gs_base = teb;
 }
 
 std::span<const uint8_t> VmProcess::code(uint64_t address) const

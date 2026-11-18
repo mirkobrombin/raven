@@ -1,6 +1,7 @@
 #pragma once
 
 #include "code_cache.h"
+#include "cpu_state.h"
 #include "guest_memory.h"
 #include "vm.h"
 
@@ -27,6 +28,7 @@ public:
 	uint64_t entry(uint64_t base) const;
 	// A guest stack with RSP at its top and a TEB whose address gs: reads, for the thread runtime runs.
 	void prepare_thread(translate::Runtime &runtime);
+	void prepare_thread(translate::CpuState &state);
 
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t) const override { return false; }
