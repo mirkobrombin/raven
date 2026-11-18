@@ -1280,6 +1280,10 @@ void BlockTranslator::convert_to_integer(uint8_t source, bool doubles, bool trun
 	const uint32_t sz = doubles ? simd::sz : 0;
 	uint8_t value = source;
 	if (!truncate) {
+		// frintx reports inexact for 2147483647.5, which then does not fit: x86 raises only invalid there. FPSR is cleared around
+		// the pair and merged back below without inexact when invalid was raised.
+		a.mrs_fpsr(s3);
+		a.msr_fpsr(a64::zr);
 		a.simd(simd::frintx_s | sz, vs1, source);
 		value = vs1;
 	}
@@ -1301,6 +1305,15 @@ void BlockTranslator::convert_to_integer(uint8_t source, bool doubles, bool trun
 		// No single (nor double, for int64) converts to the highest integer exactly: only saturation gives it. V: it plus one overflows.
 		a.add_imm(a64::zr, s0, 1, false, is64, true);
 		a.csel(s0, s1, s0, Cond::vs, is64);
+	}
+	if (!truncate) {
+		a.mrs_fpsr(s1);
+		a.and_imm(s2, s1, 1, false);
+		a.lsl_imm(s2, s2, 4, false);
+		a.orn(s2, a64::zr, s2, false);
+		a.and_(s1, s1, s2, false);
+		a.orr(s1, s1, s3, Shift::lsl, 0, false);
+		a.msr_fpsr(s1);
 	}
 	if (keep)
 		a.msr_nzcv(s4);
