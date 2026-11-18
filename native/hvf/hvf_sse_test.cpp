@@ -83,7 +83,7 @@ int main(int argc, char **argv)
 				problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
 			else
 				problem = translate::sse_oracle::compare(item, state, buffer_alias);
-			report.add(item, problem);
+			report.add(item, problem, state);
 		}
 	} catch (const std::exception &error) {
 		std::fprintf(stderr, "FAIL: %s\n", error.what());

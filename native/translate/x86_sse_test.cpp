@@ -68,7 +68,7 @@ int main(int argc, char **argv)
 			problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
 		else
 			problem = sse_oracle::compare(item, state, buffer);
-		report.add(item, problem);
+		report.add(item, problem, state);
 	}
 	report.print("in process");
 	std::printf("%zu cases, %zu failures\n", cases.size(), report.failures);

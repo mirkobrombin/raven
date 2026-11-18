@@ -44,7 +44,7 @@ constexpr uint8_t s0 = 9, s1 = 10, s2 = 11, s3 = 12, s4 = 15, address_register =
 // Holds the last RIP-relative address the block computed, so a loop over one global computes it once.
 constexpr uint8_t constant_register = 7;
 // XMMn is vn; v16-v31 are scratch.
-constexpr uint8_t vs0 = 16;
+constexpr uint8_t vs0 = 16, vs1 = 17;
 
 constexpr uint32_t CF = 1, PF = 4, AF = 16, ZF = 64, SF = 128, OF = 2048;
 constexpr uint32_t all_flags = CF | PF | AF | ZF | SF | OF;
@@ -130,7 +130,12 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::movhpd: case Mnemonic::movhlps: case Mnemonic::movlhps: case Mnemonic::movmskps: case Mnemonic::movmskpd:
 	case Mnemonic::pmovmskb: case Mnemonic::andps: case Mnemonic::andpd: case Mnemonic::andnps: case Mnemonic::andnpd:
 	case Mnemonic::orps: case Mnemonic::orpd: case Mnemonic::xorps: case Mnemonic::xorpd: case Mnemonic::pand: case Mnemonic::pandn:
-	case Mnemonic::por: case Mnemonic::pxor:
+	case Mnemonic::por: case Mnemonic::pxor: case Mnemonic::addps: case Mnemonic::addpd: case Mnemonic::addss: case Mnemonic::addsd:
+	case Mnemonic::subps: case Mnemonic::subpd: case Mnemonic::subss: case Mnemonic::subsd: case Mnemonic::mulps: case Mnemonic::mulpd:
+	case Mnemonic::mulss: case Mnemonic::mulsd: case Mnemonic::divps: case Mnemonic::divpd: case Mnemonic::divss: case Mnemonic::divsd:
+	case Mnemonic::sqrtps: case Mnemonic::sqrtpd: case Mnemonic::sqrtss: case Mnemonic::sqrtsd: case Mnemonic::minps:
+	case Mnemonic::minpd: case Mnemonic::minss: case Mnemonic::minsd: case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss:
+	case Mnemonic::maxsd: case Mnemonic::ldmxcsr: case Mnemonic::stmxcsr:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -290,6 +295,7 @@ private:
 	void sse_move(const Instruction &instruction);
 	void sse_mask(const Instruction &instruction);
 	void sse_logic(const Instruction &instruction);
+	void sse_arithmetic(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -1135,6 +1141,46 @@ void BlockTranslator::sse_logic(const Instruction &instruction)
 	}
 }
 
+void BlockTranslator::sse_arithmetic(const Instruction &instruction)
+{
+	// With FPCR.AH, Arm's NaN propagation (the first operand's NaN, quieted), default NaN (negative) and min and max (the second
+	// operand when either is a NaN or both are zeros) are x86's, so each operation is one instruction: the destination is the first
+	// operand, the source the second.
+	struct Operation {
+		Mnemonic ps, pd, ss, sd;
+		uint32_t vector, scalar;
+	};
+	static constexpr Operation operations[] = {
+		{Mnemonic::addps, Mnemonic::addpd, Mnemonic::addss, Mnemonic::addsd, simd::fadd_4s, simd::fadd_s},
+		{Mnemonic::subps, Mnemonic::subpd, Mnemonic::subss, Mnemonic::subsd, simd::fsub_4s, simd::fsub_s},
+		{Mnemonic::mulps, Mnemonic::mulpd, Mnemonic::mulss, Mnemonic::mulsd, simd::fmul_4s, simd::fmul_s},
+		{Mnemonic::divps, Mnemonic::divpd, Mnemonic::divss, Mnemonic::divsd, simd::fdiv_4s, simd::fdiv_s},
+		{Mnemonic::minps, Mnemonic::minpd, Mnemonic::minss, Mnemonic::minsd, simd::fmin_4s, simd::fmin_s},
+		{Mnemonic::maxps, Mnemonic::maxpd, Mnemonic::maxss, Mnemonic::maxsd, simd::fmax_4s, simd::fmax_s},
+		{Mnemonic::sqrtps, Mnemonic::sqrtpd, Mnemonic::sqrtss, Mnemonic::sqrtsd, simd::fsqrt_4s, simd::fsqrt_s},
+	};
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const uint8_t target = instruction.operands[0].reg;
+	for (const Operation &operation : operations) {
+		const bool packed = mnemonic == operation.ps || mnemonic == operation.pd;
+		const bool scalar = mnemonic == operation.ss || mnemonic == operation.sd;
+		if (!packed && !scalar)
+			continue;
+		const bool doubles = mnemonic == operation.pd || mnemonic == operation.sd;
+		const bool unary = operation.vector == simd::fsqrt_4s;
+		const uint8_t source = vector_source(instruction.operands[1], vs0);
+		if (packed) {
+			a.simd(operation.vector | (doubles ? simd::sz : 0), target, unary ? source : target, unary ? 0 : source);
+			return;
+		}
+		// A scalar result clears the rest of an Arm register; x86 keeps the destination's upper elements.
+		a.simd(operation.scalar | (doubles ? simd::sz : 0), vs1, unary ? source : target, unary ? 0 : source);
+		a.ins(target, 0, vs1, 0, doubles ? 8 : 4);
+		return;
+	}
+	throw std::logic_error("not an SSE arithmetic instruction");
+}
+
 void BlockTranslator::exit_with(ExitReason reason, uint64_t rip)
 {
 	a.mov_imm(s4, rip);
@@ -1219,6 +1265,23 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::andps: case Mnemonic::andpd: case Mnemonic::andnps: case Mnemonic::andnpd: case Mnemonic::orps: case Mnemonic::orpd:
 	case Mnemonic::xorps: case Mnemonic::xorpd: case Mnemonic::pand: case Mnemonic::pandn: case Mnemonic::por: case Mnemonic::pxor:
 		sse_logic(instruction);
+		return;
+	case Mnemonic::addps: case Mnemonic::addpd: case Mnemonic::addss: case Mnemonic::addsd: case Mnemonic::subps: case Mnemonic::subpd:
+	case Mnemonic::subss: case Mnemonic::subsd: case Mnemonic::mulps: case Mnemonic::mulpd: case Mnemonic::mulss: case Mnemonic::mulsd:
+	case Mnemonic::divps: case Mnemonic::divpd: case Mnemonic::divss: case Mnemonic::divsd: case Mnemonic::sqrtps: case Mnemonic::sqrtpd:
+	case Mnemonic::sqrtss: case Mnemonic::sqrtsd: case Mnemonic::minps: case Mnemonic::minpd: case Mnemonic::minss: case Mnemonic::minsd:
+	case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss: case Mnemonic::maxsd:
+		sse_arithmetic(instruction);
+		return;
+	case Mnemonic::ldmxcsr:
+		// The whole value is MXCSR; FPCR and FPSR follow it.
+		load_memory(s0, operands[0], 4);
+		a.str(s0, state_register, state_offset::mxcsr, 4);
+		load_mxcsr(a, s0, s1, s2);
+		return;
+	case Mnemonic::stmxcsr:
+		store_mxcsr_flags(a, s0, s1, s2);
+		store_memory(s0, operands[0], 4);
 		return;
 	case Mnemonic::mov: {
 		const Operand &target = operands[0], &source = operands[1];
