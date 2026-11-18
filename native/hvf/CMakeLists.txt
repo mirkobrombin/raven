@@ -69,6 +69,23 @@ add_custom_command(OUTPUT ${GUEST}/hvf_client.exe
         -o ${GUEST}/hvf_client.exe ${CMAKE_CURRENT_SOURCE_DIR}/testdata/hvf_client.c
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/hvf_client.c VERBATIM)
 list(APPEND HVF_GUESTS ${GUEST}/hvf_client.exe)
+# An ARM64EC DLL without CRT (chpe.o from mingwex gives the __os_arm64x_* slots the thunks use) and an x64 client that imports it
+# through an import library made for x64 from the .def.
+find_program(RAVEN_MINGW_EC arm64ec-w64-mingw32-clang REQUIRED)
+find_program(RAVEN_DLLTOOL llvm-dlltool REQUIRED)
+add_custom_command(OUTPUT ${GUEST}/ec_library.dll
+    COMMAND ${RAVEN_MINGW_EC} -O2 -nostdlib -shared -Wl,--entry,ec_library_entry,--image-base,0x190000000,--no-insert-timestamp
+        -o ${GUEST}/ec_library.dll ${CMAKE_CURRENT_SOURCE_DIR}/testdata/ec_library.c -lmingwex
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/ec_library.c VERBATIM)
+add_custom_command(OUTPUT ${GUEST}/libec_library.a
+    COMMAND ${RAVEN_DLLTOOL} -m i386:x86-64 -d ${CMAKE_CURRENT_SOURCE_DIR}/testdata/ec_library.def -l ${GUEST}/libec_library.a
+        -D ec_library.dll
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/ec_library.def VERBATIM)
+add_custom_command(OUTPUT ${GUEST}/ec_client.exe
+    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--image-base,0x1a0000000,--no-insert-timestamp
+        -o ${GUEST}/ec_client.exe ${CMAKE_CURRENT_SOURCE_DIR}/testdata/ec_client.c ${GUEST}/libec_library.a
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/ec_client.c ${GUEST}/libec_library.a VERBATIM)
+list(APPEND HVF_GUESTS ${GUEST}/ec_library.dll ${GUEST}/ec_client.exe)
 add_custom_target(hvf_guests ALL DEPENDS ${HVF_GUESTS})
 
 # What the workloads return natively, for the test to compare with.
@@ -158,3 +175,13 @@ add_dependencies(hvf_two_runtimes_test hvf_guests)
 raven_hvf_sign(hvf_two_runtimes_test)
 add_test(NAME hvf_two_runtimes COMMAND hvf_two_runtimes_test ${GUEST})
 set_tests_properties(hvf_two_runtimes PROPERTIES TIMEOUT 60)
+
+add_library(hvf_ec_library_host OBJECT testdata/ec_library.c)
+target_compile_definitions(hvf_ec_library_host PRIVATE EC_LIBRARY_HOST)
+target_compile_options(hvf_ec_library_host PRIVATE -O2)
+add_executable(hvf_arm64ec_test hvf_arm64ec_test.cpp $<TARGET_OBJECTS:hvf_ec_library_host>)
+target_link_libraries(hvf_arm64ec_test PRIVATE raven_hvf)
+add_dependencies(hvf_arm64ec_test hvf_guests)
+raven_hvf_sign(hvf_arm64ec_test)
+add_test(NAME hvf_arm64ec COMMAND hvf_arm64ec_test ${GUEST})
+set_tests_properties(hvf_arm64ec PROPERTIES TIMEOUT 60)

@@ -99,6 +99,21 @@ uint64_t VmProcess::load(const std::filesystem::path &path)
 	return pe.image_base;
 }
 
+void VmProcess::prepare_thread(translate::CpuState &, Vcpu &)
+{
+	throw std::logic_error("x18 at the TEB is not set up yet");
+}
+
+void VmProcess::bind_imports()
+{
+	throw std::logic_error("imports are not bound yet");
+}
+
+void VmProcess::link_arm64ec(translate::Runtime &)
+{
+	throw std::logic_error("ARM64EC images are not linked yet");
+}
+
 uint64_t VmProcess::entry(uint64_t base) const
 {
 	for (const Image &image : images)

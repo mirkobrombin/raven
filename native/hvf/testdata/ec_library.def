@@ -1,0 +1,9 @@
+LIBRARY ec_library.dll
+EXPORTS
+    ec_zero
+    ec_add
+    ec_sum8
+    ec_hash
+    ec_call
+    ec_scale
+    ec_teb_self

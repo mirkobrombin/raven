@@ -19,6 +19,8 @@ class Runtime;
 
 namespace raven::hvf {
 
+class Vcpu;
+
 // Test-only process model inside the VM, as TestProcess is in this process: x64 images mapped at their preferred base in guest
 // memory, a stack and a TEB per thread. Images keep no imports, since native thunks cannot run in a vCPU yet.
 class VmProcess final : public translate::GuestMemory {
@@ -51,6 +53,12 @@ public:
 	// A guest stack with RSP at its top and a TEB whose address gs: reads, for the thread runtime runs.
 	void prepare_thread(translate::Runtime &runtime);
 	void prepare_thread(translate::CpuState &state);
+	// The same, and x18 of vcpu at the TEB, as native Windows ARM64 code expects it.
+	void prepare_thread(translate::CpuState &state, Vcpu &vcpu);
+	// Writes every loaded image's imports from the exports of the loaded image they name.
+	void bind_imports();
+	// For each ARM64EC image: points its __os_arm64x_* dispatch slots at runtime's transitions.
+	void link_arm64ec(translate::Runtime &runtime);
 
 	std::span<const uint8_t> code(uint64_t address) const override;
 	bool is_native(uint64_t) const override { return false; }
