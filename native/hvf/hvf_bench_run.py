@@ -1,6 +1,6 @@
 """Times every workload natively, translated in this process and translated in a vCPU, interleaved round by round on one machine.
 
-usage: hvf_bench_run.py BUILD_DIRECTORY RESULTS_DIRECTORY [ROUNDS] [THERMAL_PROGRAM]
+usage: hvf_bench_run.py BUILD_DIRECTORY RESULTS_DIRECTORY [ROUNDS] [THERMAL_PROGRAM] [WORKLOAD,...]
 
 Each round runs each configuration once as its own process: one first call (translation included), then RUNS timed runs of CALLS
 workload calls, each at least 50 ms long on this machine. The first timed run warms the core up and is dropped in every configuration
@@ -22,6 +22,8 @@ from pathlib import Path
 
 # Calls per timed run: at least 50 ms natively (entry about 330 ns per call, crc32 13 us, fnv 34 us, histogram 52 us).
 WORKLOADS = {"entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}
+# The SSE workloads (testdata/sse_workloads.c), run when named.
+SSE_WORKLOADS = {"saxpy": 60000, "dot": 10000, "copy": 40000}
 RUNS = 6
 CONFIGURATIONS = ["native", "process-loop", "process-call", "vm-loop", "vm-call"]
 
@@ -64,7 +66,12 @@ def parse(output):
 def main():
     build, results = Path(sys.argv[1]), Path(sys.argv[2])
     rounds = int(sys.argv[3]) if len(sys.argv) > 3 else 10
-    thermal = sys.argv[4] if len(sys.argv) > 4 else None
+    thermal = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+    if len(sys.argv) > 5:
+        chosen = sys.argv[5].split(",")
+        WORKLOADS.clear()
+        WORKLOADS.update({name: {**SSE_WORKLOADS, "entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}[name]
+                          for name in chosen})
     results.mkdir(parents=True, exist_ok=True)
     state = {"machine": subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True, text=True).stdout.strip(),
              "os": platform.mac_ver()[0], "rounds": rounds, "calls": WORKLOADS, "runs": RUNS, "start": machine_state(thermal)}
