@@ -10,3 +10,6 @@ It is Raven code written from the XML 1.0 and Namespaces in XML specifications a
 - `writer.c`: `IXmlWriter`. Keeps the start tag open for attributes and writes namespace declarations last in it. Writes a byte order mark for
   UTF-16 only, and a declaration only for `WriteStartDocument`.
 - `guid.c`: the interface identifiers.
+
+`native/fuzz/xml_reader.c` builds the reader on the host and feeds it changed documents under the address and undefined behaviour
+sanitizers; the CI runs it on every change.

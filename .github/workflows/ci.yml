@@ -102,7 +102,7 @@ jobs:
 
   # The waits on kernel objects: native/model/Waits.tla, Address.tla, Completion.tla and Messages.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
   # which tries every interleaving of its cases. The PE reader in native/peparse runs its tests too, which change a file at random and read it again,
-  # and the cabinet decoders, the image decoders and the compound file reader are fed changed input under the sanitizers.
+  # and the cabinet decoders, the image decoders, the compound file reader and the XML reader are fed changed input under the sanitizers.
   models:
     name: Models
     needs: [commits, files, licenses, scripts]
@@ -165,6 +165,12 @@ jobs:
           gcc -O1 -g -fshort-wchar -fsanitize=address,undefined -fno-sanitize-recover=all -Inative/fuzz/storage -Inative/guest/raven-storage \
             -o /tmp/storage-container native/fuzz/storage_container.c native/guest/raven-storage/container.c
           /tmp/storage-container 40000
+
+      - name: Change XML documents at random
+        run: |
+          gcc -O1 -g -fshort-wchar -fsanitize=address,undefined -fno-sanitize-recover=all -Inative/fuzz/xml -Inative/guest/raven-xmllite \
+            -o /tmp/xml-reader native/fuzz/xml_reader.c native/guest/raven-xmllite/reader.c
+          /tmp/xml-reader 200000
 
   # Provision: the pinned external inputs, each in its own job because they share nothing and some take long. A component is
   # rebuilt only when its recipe or its sources change.
