@@ -3642,6 +3642,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_completion_port_${mode} PROPERTIES TIMEOUT 45 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         endforeach()
         set_property(TEST native_completion_port_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
+        # A message sent to a window of a thread that ends without taking it lets its sender go on (sent_ended_client.c), with a host
+        # thread for each guest thread and one at a time.
+        raven_kernel_fixture(sent-ended sent_ended_client.c 0x1f3000000 "-lkernel32;-luser32")
+        foreach(mode default serial)
+            add_test(NAME native_sent_ended_${mode} COMMAND raven --run-process --execution=native --timeout-ms=30000
+                ${CMAKE_CURRENT_BINARY_DIR}/sent-ended.exe)
+            set_tests_properties(native_sent_ended_${mode} PROPERTIES TIMEOUT 45 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        endforeach()
+        set_property(TEST native_sent_ended_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
         # VirtualQuery goes beside the turn in parallel mode, under the memory accounting's lock (query_beside_client.c).
         raven_kernel_fixture(query-beside query_beside_client.c 0x1e1000000 "-lkernel32")
         foreach(mode default parallel)
