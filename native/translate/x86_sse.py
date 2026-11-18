@@ -149,11 +149,39 @@ def logic(rng):
     return [packed(rng, names)]
 
 
-# Each family: how its cases are made and what its lanes hold.
+def arithmetic(rng):
+    operations = ["add", "sub", "mul", "div", "sqrt", "min", "max"]
+    name = rng.choice(operations) + rng.choice(["ps", "pd", "ss", "sd"])
+    size = {"s": 4, "d": 8}[name[-1]] if name[-2] == "s" else 16
+    source = xmm(rng) if rng.random() < 0.6 else mem(rng, size, True)
+    body = [f"{name} {xmm(rng)}, {source}"]
+    roll = rng.random()
+    if roll < 0.1:
+        # A new MXCSR from memory (x86_sse.py puts a valid one at r15 + 120) before the operation.
+        body.insert(0, "ldmxcsr dword ptr [r15 + 120]")
+    elif roll < 0.2:
+        body.append(f"stmxcsr dword ptr [r15 + {rng.randrange(0, 32, 4)}]")
+    return body
+
+
+# Each family: how its cases are made and what its lanes hold (by default; an instruction ending in ps or ss reads floats, in pd or
+# sd doubles).
 FAMILIES = [
     ("moves", moves, "mixed", 600),
     ("logic", logic, "mixed", 300),
+    ("arithmetic", arithmetic, "mixed", 1500),
 ]
+
+
+def lanes_of(body, kind):
+    name = body[-1].split()[0] if not body[-1].startswith("stmxcsr") else body[0].split()[0]
+    if kind != "mixed" or name.startswith(("mov", "pmov")):
+        return kind
+    if name.endswith(("ps", "ss")):
+        return "f32"
+    if name.endswith(("pd", "sd")):
+        return "f64"
+    return kind
 
 
 def mxcsr(rng, floating):
@@ -200,9 +228,12 @@ def main():
         for _ in range(count):
             number = len(cases)
             registers = [rng.choice([rng.getrandbits(64), rng.choice(INTEGERS), rng.getrandbits(8)]) for _ in range(16)]
-            vectors = [[quadword(rng, kind), quadword(rng, kind)] for _ in range(16)]
-            memory = [quadword(rng, kind) for _ in range(16)]
             body = make(rng)
+            lanes = lanes_of(body, kind)
+            vectors = [[quadword(rng, lanes), quadword(rng, lanes)] for _ in range(16)]
+            memory = [quadword(rng, lanes) for _ in range(16)]
+            if any(line.startswith("ldmxcsr") for line in body):
+                memory[15] = mxcsr(rng, True) | rng.getrandbits(32) << 32
             lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret",
                                                                                                          f"_case_{number}_end:"]
             cases.append((family, registers, rng.getrandbits(12) & ALL_FLAGS, mxcsr(rng, floating), vectors, memory, body))
