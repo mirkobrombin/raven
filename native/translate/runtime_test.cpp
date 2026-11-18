@@ -2,6 +2,7 @@
 #include "test_process.h"
 
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <stdexcept>
@@ -258,6 +259,96 @@ static void translates_movq_only_where_vectors_persist()
 	check(translated == 3, "with vector_registers, the block should hold both movq and the ret: " + std::to_string(translated));
 }
 
+// Raw x64 code in this process's memory, and one address of native code a guest call reaches through bind_native.
+class RawCode final : public GuestMemory {
+public:
+	alignas(4096) uint8_t bytes[4096] = {};
+	size_t used = 0;
+	uint64_t native = reinterpret_cast<uint64_t>(bytes) + 2048;
+	uint64_t add(std::initializer_list<uint8_t> code)
+	{
+		const uint64_t address = reinterpret_cast<uint64_t>(bytes) + used;
+		for (uint8_t byte : code)
+			bytes[used++] = byte;
+		return address;
+	}
+	std::span<const uint8_t> code(uint64_t address) const override
+	{
+		const uint64_t start = reinterpret_cast<uint64_t>(bytes);
+		if (address < start || address >= start + used)
+			return {};
+		return {reinterpret_cast<const uint8_t *>(address), static_cast<size_t>(start + used - address)};
+	}
+	bool is_native(uint64_t address) const override { return address == native; }
+	void write(uint64_t address, const void *from, size_t size) override { std::memcpy(reinterpret_cast<void *>(address), from, size); }
+	void watch_code(uint64_t, size_t, bool) override {}
+	size_t watch_granule() const override { return 4096; }
+};
+
+// Writes every vector register, as host code may between two runs of translated code or inside a native function.
+static uint64_t clobber_vectors()
+{
+#define RAVEN_ONES(n) "movi v" #n ".2d, #0xffffffffffffffff\n"
+	__asm__ volatile(RAVEN_ONES(0) RAVEN_ONES(1) RAVEN_ONES(2) RAVEN_ONES(3) RAVEN_ONES(4) RAVEN_ONES(5) RAVEN_ONES(6) RAVEN_ONES(7)
+		RAVEN_ONES(8) RAVEN_ONES(9) RAVEN_ONES(10) RAVEN_ONES(11) RAVEN_ONES(12) RAVEN_ONES(13) RAVEN_ONES(14) RAVEN_ONES(15)
+		RAVEN_ONES(16) RAVEN_ONES(17) RAVEN_ONES(18) RAVEN_ONES(19) RAVEN_ONES(20) RAVEN_ONES(21) RAVEN_ONES(22) RAVEN_ONES(23)
+		RAVEN_ONES(24) RAVEN_ONES(25) RAVEN_ONES(26) RAVEN_ONES(27) RAVEN_ONES(28) RAVEN_ONES(29) RAVEN_ONES(30) RAVEN_ONES(31)
+		::: "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18",
+		"v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+#undef RAVEN_ONES
+	return 0;
+}
+
+// Runs translated code in this process as the runtime does without a runner, and writes every vector register after each exit.
+struct ClobberingRunner final : CodeRunner {
+	uint32_t enter(uint64_t trampoline, uint64_t state, uint64_t code) override
+	{
+		const uint32_t reason = reinterpret_cast<uint32_t (*)(uint64_t, uint64_t)>(trampoline)(state, code);
+		clobber_vectors();
+		return reason;
+	}
+};
+
+// XMM registers are guest state: XMM1 and XMM9 keep their values across an exit after which host code wrote every vector register.
+static void keeps_xmm_across_exits()
+{
+	RawCode memory;
+	// movq xmm1, rcx; movq xmm9, rdx; jmp (an exit until chained); movq rax, xmm1; movq rcx, xmm9; sub rax, rcx; ret
+	const uint64_t entry = memory.add({0x66, 0x48, 0x0f, 0x6e, 0xc9, 0x66, 0x4c, 0x0f, 0x6e, 0xca, 0xeb, 0x00, 0x66, 0x48, 0x0f, 0x7e,
+		0xc8, 0x66, 0x4c, 0x0f, 0x7e, 0xc9, 0x48, 0x29, 0xc8, 0xc3});
+	JitCodeCache cache(1 << 20);
+	ClobberingRunner runner;
+	TranslatorOptions options;
+	options.vector_registers = true;
+	Runtime runtime(memory, cache, options, &runner);
+	std::vector<uint64_t> stack(512);
+	runtime.state().gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
+	const RunResult result = runtime.call(entry, {0x7000000000000123, 0x23});
+	check(result.reason == ExitReason::returned && result.value == 0x7000000000000100,
+		"XMM1 - XMM9 across an exit gave " + describe(result));
+}
+
+// XMM6 is callee-saved in the x64 ABI and not in AAPCS64: a native function that writes v6 must leave the guest's XMM6 as it was.
+static void keeps_xmm6_across_native_calls()
+{
+	RawCode memory;
+	const uint64_t n = memory.native;
+	// movq xmm6, rcx; sub rsp, 40; mov rax, native; call rax; add rsp, 40; movq rax, xmm6; ret
+	const uint64_t entry = memory.add({0x66, 0x48, 0x0f, 0x6e, 0xf1, 0x48, 0x83, 0xec, 0x28, 0x48, 0xb8, uint8_t(n), uint8_t(n >> 8),
+		uint8_t(n >> 16), uint8_t(n >> 24), uint8_t(n >> 32), uint8_t(n >> 40), uint8_t(n >> 48), uint8_t(n >> 56), 0xff, 0xd0, 0x48, 0x83,
+		0xc4, 0x28, 0x66, 0x48, 0x0f, 0x7e, 0xf0, 0xc3});
+	JitCodeCache cache(1 << 20);
+	TranslatorOptions options;
+	options.vector_registers = true;
+	Runtime runtime(memory, cache, options);
+	runtime.bind_native(n, reinterpret_cast<const void *>(&clobber_vectors), 0);
+	std::vector<uint64_t> stack(512);
+	runtime.state().gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
+	const RunResult result = runtime.call(entry, {0x1122334455667788});
+	check(result.reason == ExitReason::returned && result.value == 0x1122334455667788,
+		"XMM6 across a native function gave " + describe(result));
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
@@ -282,6 +373,8 @@ int main(int argc, char **argv)
 		{"histogram workload", [] { runs_a_workload("histogram.exe", 0x28e14b303c16e232); }},
 		{"one guest thread in this process", stays_single_threaded},
 		{"movq only with vector_registers", translates_movq_only_where_vectors_persist},
+		{"XMM registers across exits", keeps_xmm_across_exits},
+		{"XMM6 across native calls", keeps_xmm6_across_native_calls},
 	};
 	for (const auto &[name, run] : cases) {
 		const int before = failures;
