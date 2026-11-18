@@ -150,6 +150,8 @@ uint8_t *Vm::map(uint64_t address, size_t size, Access access)
 
 void Vm::set_access(uint64_t address, size_t size, Access access)
 {
+	if (address >= user_limit || size > user_limit - address)
+		throw std::invalid_argument("not a range of EL0 pages");
 	std::lock_guard guard(lock);
 	for (uint64_t page = address & ~(page_size - 1); page < address + size; page += page_size) {
 		uint64_t &entry = *table_entry(page);

@@ -23,6 +23,10 @@ struct TranslatorOptions {
 	// them ordered; false is the faster mode Rosetta-like translators offer per application.
 	bool order_stack = true;
 	uint32_t max_instructions = 64;
+	// Whether v0-v7 keep their values from one block to the next, as in a vCPU, where nothing on the exit path writes them: then
+	// movq between general registers and XMM0-XMM7 is translated, XMMn in vn. CpuState has no XMM registers, and the host code an
+	// exit returns to in this process uses v0-v7 freely.
+	bool vector_registers = false;
 };
 
 struct TranslationStats {

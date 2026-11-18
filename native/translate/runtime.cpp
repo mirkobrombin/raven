@@ -14,7 +14,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 1;
+constexpr uint64_t translator_version = 2;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -129,7 +129,10 @@ void Runtime::bind_native(uint64_t address, const void *function, unsigned integ
 Runtime::Arm64ecRoutines Runtime::arm64ec_routines(std::span<const std::pair<uint64_t, uint64_t>> native)
 {
 	std::lock_guard guard(lock);
+	if (arm64ec.dispatch_ret && !std::equal(native.begin(), native.end(), arm64ec_ranges.begin(), arm64ec_ranges.end()))
+		throw std::logic_error("check_icall was placed for other ARM64EC ranges");
 	if (!arm64ec.dispatch_ret) {
+		arm64ec_ranges.assign(native.begin(), native.end());
 		const auto at = [](const uint8_t *code) { return reinterpret_cast<uint64_t>(code); };
 		arm64ec.dispatch_call = at(place(arm64ec_dispatch_call()));
 		arm64ec.dispatch_ret = at(place(arm64ec_dispatch_ret()));
@@ -392,7 +395,8 @@ uint64_t Runtime::cache_key(std::span<const uint8_t> image, uint64_t base, const
 	hash = fnv(hash, image.data(), image.size());
 	hash = fnv(hash, &base, sizeof base);
 	hash = fnv(hash, &translator_version, sizeof translator_version);
-	const uint64_t fields[] = {static_cast<uint64_t>(options.ordering), options.order_stack, options.max_instructions};
+	const uint64_t fields[] = {static_cast<uint64_t>(options.ordering), options.order_stack, options.max_instructions,
+		options.vector_registers};
 	return fnv(hash, fields, sizeof fields);
 }
 

@@ -99,6 +99,9 @@ def instance(rng):
         target = rng.choice([s for s in (16, 32, 64) if s > source])
         return f"{op} {register(rng, target)}, {rm(rng, source)}"
     if kind == 10:
+        if rng.random() < 0.25:
+            xmm = f"xmm{rng.randrange(16)}"
+            return f"movq {xmm}, {register(rng, 64)}" if rng.random() < 0.5 else f"movq {register(rng, 64)}, {xmm}"
         return f"movsxd {register(rng, 64)}, {rm(rng, 32)}"
     if kind == 11:
         op = rng.choice(["inc", "dec", "neg", "not", "mul", "imul", "div", "idiv"])

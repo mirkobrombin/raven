@@ -123,16 +123,24 @@ uint64_t VmProcess::load(const std::filesystem::path &path)
 	// IMAGE_LOAD_CONFIG_DIRECTORY64.CHPEMetadataPointer, at 0xc8; IMAGE_ARM64EC_METADATA's code map: RVA and count at 4 and 8, entries
 	// of a start RVA whose low two bits are the kind (0 ARM64, 1 ARM64EC, 2 x64) and a length.
 	const PEDirectory config = pe.directories[10];
-	if (config.address && config.size >= 0xd0 && read32(bytes + config.address) >= 0xd0) {
+	const auto inside = [&](uint64_t rva, uint64_t size) { return rva <= pe.image_size && size <= pe.image_size - rva; };
+	if (config.address && config.size >= 0xd0 && inside(config.address, 0xd0) && read32(bytes + config.address) >= 0xd0) {
 		uint64_t metadata;
 		std::memcpy(&metadata, bytes + config.address + 0xc8, 8);
 		if (metadata) {
+			if (metadata < pe.image_base || !inside(metadata - pe.image_base, 80))
+				throw std::runtime_error(path.string() + ": CHPE metadata outside the image");
 			image.arm64ec_metadata = metadata;
 			const uint8_t *chpe = bytes + (metadata - pe.image_base);
+			const uint32_t count = read32(chpe + 8);
+			if (!inside(read32(chpe + 4), uint64_t(count) * 8))
+				throw std::runtime_error(path.string() + ": code map outside the image");
 			const uint8_t *map = bytes + read32(chpe + 4);
 			image.code_ranges.clear();
-			for (uint32_t i = 0, count = read32(chpe + 8); i < count; ++i) {
+			for (uint32_t i = 0; i < count; ++i) {
 				const uint32_t start = read32(map + 8 * i), length = read32(map + 8 * i + 4);
+				if (!inside(start & ~3u, length))
+					throw std::runtime_error(path.string() + ": code map range outside the image");
 				const std::pair<uint64_t, uint64_t> range{image.base + (start & ~3u), image.base + (start & ~3u) + length};
 				if ((start & 3) == 2)
 					image.code_ranges.push_back(range);
@@ -220,7 +228,7 @@ uint64_t VmProcess::entry_thunk(uint64_t address) const
 		return 0;
 	uint32_t word;
 	vm.read(address - 4, &word, 4);
-	const uint64_t thunk = address + (word & ~3u);
+	const uint64_t thunk = address + static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(word & ~3u)));
 	return word & 1 && is_native(thunk) ? thunk : 0;
 }
 

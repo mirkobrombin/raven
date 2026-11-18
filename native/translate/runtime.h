@@ -114,7 +114,7 @@ public:
 	// Only without a runner: the thunk calls function in this process.
 	void bind_native(uint64_t address, const void *function, unsigned integer_arguments);
 	// The routines ARM64EC code reaches through the __os_arm64x_* slots of its CHPE metadata, placed once; native is every range of
-	// ARM64EC code in the process (indirect calls from native code check their target against it). Calls between x64 and native code
+	// ARM64EC code in the process (indirect calls from native code check their target against it), and must be the same on every call. Calls between x64 and native code
 	// then stay in translated and native code: x64 calls and returns into native code go through stubs placed when first reached.
 	struct Arm64ecRoutines {
 		uint64_t dispatch_call = 0, dispatch_ret = 0, check_icall = 0, unsupported = 0;
@@ -166,6 +166,7 @@ private:
 	// Stubs into ARM64EC code, by native address.
 	std::unordered_map<uint64_t, uint8_t *> native_stubs;
 	Arm64ecRoutines arm64ec;
+	std::vector<std::pair<uint64_t, uint64_t>> arm64ec_ranges;
 	uint8_t *enter = nullptr;
 	uint8_t *exit = nullptr;
 	uint8_t *return_address = nullptr;

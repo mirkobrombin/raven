@@ -100,7 +100,7 @@ bool ends_block(Mnemonic mnemonic)
 }
 
 // Whether the translator has code for the instruction; the block ends before any it has not.
-bool supported(const Instruction &instruction)
+bool supported(const Instruction &instruction, const TranslatorOptions &options)
 {
 	// cs:, ds:, es: and ss: change nothing in 64-bit mode (compilers pad with cs: nops); fs: and gs: add their base.
 	if (instruction.rep || instruction.repne)
@@ -119,7 +119,10 @@ bool supported(const Instruction &instruction)
 		return !instruction.lock;
 	case Mnemonic::cmovcc: return (instruction.condition >> 1) != 5;
 	case Mnemonic::push: case Mnemonic::pop: return instruction.operand_size == 8;
-	case Mnemonic::xchg: case Mnemonic::movq: return true;
+	case Mnemonic::xchg: return true;
+	case Mnemonic::movq:
+		return options.vector_registers &&
+			(first.kind == OperandKind::xmm ? first : instruction.operands[1]).reg < 8;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -975,7 +978,7 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::imul: multiply(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
 	case Mnemonic::movq:
-		// XMM registers live in v0-v15, as ARM64EC keeps them. FMOV Dd, Xn clears the rest of the vector, as movq to XMM does.
+		// XMM registers live in v0-v7, as ARM64EC keeps them. FMOV Dd, Xn clears the rest of the vector, as movq to XMM does.
 		if (operands[0].kind == OperandKind::xmm)
 			a.emit(0x9e670000u | uint32_t(host_register[operands[1].reg]) << 5 | operands[0].reg);
 		else
@@ -1148,7 +1151,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 	bool ended = false;
 	while (at < code.size() && instructions.size() < options.max_instructions) {
 		const Instruction instruction = decode(code.subspan(at), address + at);
-		if (instruction.mnemonic == Mnemonic::invalid || !supported(instruction))
+		if (instruction.mnemonic == Mnemonic::invalid || !supported(instruction, options))
 			break;
 		instructions.push_back(instruction);
 		at += instruction.length;
@@ -1178,7 +1181,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 		normalize_carry();
 		// The next instruction is not translated: unsupported or invalid stops here, a full block falls through to the next.
 		const Instruction next = at < code.size() ? decode(code.subspan(at), rip) : Instruction{};
-		if (instructions.size() >= options.max_instructions && next.mnemonic != Mnemonic::invalid && supported(next))
+		if (instructions.size() >= options.max_instructions && next.mnemonic != Mnemonic::invalid && supported(next, options))
 			exit_to(rip);
 		else
 			exit_with(ExitReason::unsupported, rip);
