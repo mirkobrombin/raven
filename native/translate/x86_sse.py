@@ -223,6 +223,47 @@ def shuffle(rng):
     return [f"{name} {xmm(rng)}, {source}, {rng.randrange(256)}"]
 
 
+DATA_LABELS = [0]
+
+
+def addressing(rng):
+    """The address forms compiled code uses: an index register, a displacement too large for one Arm offset, the stack and RIP-relative
+    constants (placed after the case's ret; only forms without an alignment requirement read them, as the copy the translator runs
+    may sit at another alignment)."""
+    load = rng.choice([("movups", 16), ("movdqu", 16), ("movsd", 8), ("movss", 4), ("addsd", 8), ("mulss", 4), ("cvtss2sd", 4),
+                       ("movq", 8)])
+    store = rng.choice([("movups", 16), ("movdqu", 16), ("movsd", 8), ("movss", 4), ("movq", 8)])
+    roll = rng.randrange(4)
+    if roll == 0:
+        scale = rng.choice([1, 2, 4, 8])
+        index = rng.randrange(0, 112 // scale)
+        name, size = rng.choice([load, store])
+        offset = rng.randrange(0, 128 - size + 1 - scale * index) if scale * index < 128 - size else 0
+        address = f"{ {16: 'xmmword', 8: 'qword', 4: 'dword'}[size]} ptr [r15 + {scale}*rcx + {offset}]"
+        operands = f"{xmm(rng)}, {address}" if (name, size) == load else f"{address}, {xmm(rng)}"
+        return [f"mov ecx, {index}", f"{name} {operands}"]
+    if roll == 1:
+        far = rng.choice([70000, -5000, 1 << 20, -300])
+        name, size = load
+        offset = rng.randrange(0, 128 - size + 1)
+        word = {16: "xmmword", 8: "qword", 4: "dword"}[size]
+        sign = "+" if far >= 0 else "-"
+        # RBX holds an address, which differs between the two runs: it is cleared after (mov leaves the flags alone).
+        return [f"lea rbx, [r15 {'-' if far >= 0 else '+'} {abs(far)}]",
+                f"{name} {xmm(rng)}, {word} ptr [rbx {sign} {abs(far) + offset if far >= 0 else abs(far) - offset}]", "mov ebx, 0"]
+    if roll == 2:
+        name, size = store
+        word = {16: "xmmword", 8: "qword", 4: "dword"}[size]
+        slot = rng.choice([16, 32, 64, 128])
+        other, _ = {16: ("movups", 16), 8: ("movsd", 8), 4: ("movss", 4)}[size]
+        return [f"{name} {word} ptr [rsp - {slot}], {xmm(rng)}", f"{other} {xmm(rng)}, {word} ptr [rsp - {slot}]"]
+    DATA_LABELS[0] += 1
+    label = f"constant_{DATA_LABELS[0]}"
+    name, size = load
+    word = {16: "xmmword", 8: "qword", 4: "dword"}[size]
+    return [f"{name} {xmm(rng)}, {word} ptr [rip + {label}]", "ret", f"{label}: .quad {quadword(rng, 'mixed'):#x}, {quadword(rng, 'mixed'):#x}"]
+
+
 def small_counts(rng, body, vectors, memory):
     """Shift counts that leave something of the value: an XMM register or 16 bytes of memory whose low quadword is the count."""
     parts = body[-1].replace(",", "").split()
@@ -245,6 +286,7 @@ FAMILIES = [
     ("convert", convert, "mixed", 1500),
     ("integer", integer, "int", 1500),
     ("shuffle", shuffle, "int", 800),
+    ("addressing", addressing, "mixed", 600),
 ]
 
 

@@ -49,28 +49,35 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "cannot read %s\n", argv[1]);
 		return 2;
 	}
-	Snippets memory;
-	JitCodeCache cache(64 << 20);
-	Runtime runtime(memory, cache);
-	std::vector<uint8_t> stack(1 << 16);
-	alignas(16) uint8_t buffer[256];
-	sse_oracle::Report report;
-	for (const sse_oracle::Case &item : cases) {
-		const uint64_t address = memory.add(item.code);
-		CpuState &state = runtime.state();
-		sse_oracle::load(state, item.input);
-		std::memcpy(buffer, item.input.buffer, sizeof buffer);
-		state.gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
-		state.gpr[r15] = reinterpret_cast<uint64_t>(buffer);
-		const RunResult result = runtime.call(address);
-		std::string problem;
-		if (result.reason != ExitReason::returned)
-			problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
-		else
-			problem = sse_oracle::compare(item, state, buffer);
-		report.add(item, problem, state);
+	// Both orderings this process can run: their vector accesses take different barriers.
+	size_t failures = 0;
+	for (const MemoryOrdering ordering : {MemoryOrdering::rcpc, MemoryOrdering::barriers}) {
+		Snippets memory;
+		JitCodeCache cache(64 << 20);
+		TranslatorOptions options;
+		options.ordering = ordering;
+		Runtime runtime(memory, cache, options);
+		std::vector<uint8_t> stack(1 << 16);
+		alignas(16) uint8_t buffer[256];
+		sse_oracle::Report report;
+		for (const sse_oracle::Case &item : cases) {
+			const uint64_t address = memory.add(item.code);
+			CpuState &state = runtime.state();
+			sse_oracle::load(state, item.input);
+			std::memcpy(buffer, item.input.buffer, sizeof buffer);
+			state.gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
+			state.gpr[r15] = reinterpret_cast<uint64_t>(buffer);
+			const RunResult result = runtime.call(address);
+			std::string problem;
+			if (result.reason != ExitReason::returned)
+				problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
+			else
+				problem = sse_oracle::compare(item, state, buffer);
+			report.add(item, problem, state);
+		}
+		report.print(ordering == MemoryOrdering::rcpc ? "in process, LDAPR/STLR" : "in process, barriers");
+		failures += report.failures;
 	}
-	report.print("in process");
-	std::printf("%zu cases, %zu failures\n", cases.size(), report.failures);
-	return report.failures == 0 ? 0 : 1;
+	std::printf("%zu cases, %zu failures\n", cases.size() * 2, failures);
+	return failures == 0 ? 0 : 1;
 }
