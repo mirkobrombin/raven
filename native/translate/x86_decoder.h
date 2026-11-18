@@ -79,7 +79,11 @@ struct Operand {
 	uint8_t index = no_register;
 	uint8_t scale = 1;
 	bool rip_relative = false;
+	// A SIB byte that names no index though ModRM alone could have said the same: LLVM prints its index as riz.
+	bool redundant_sib = false;
 	Segment segment = Segment::none;
+	// The size of an immediate as encoded, before any sign extension.
+	uint8_t encoded_size = 0;
 	// The displacement of a memory operand, the value of an immediate (sign-extended to the operand size) or the target of a branch.
 	int64_t value = 0;
 };

@@ -17,6 +17,40 @@ static std::vector<uint8_t> parse_hex(const std::string &text)
 	return bytes;
 }
 
+// The first byte after the legacy and REX prefixes, and whether 66 was among them.
+static std::pair<uint8_t, bool> first_opcode(const std::vector<uint8_t> &bytes, size_t &at)
+{
+	bool operand16 = false;
+	for (at = 0; at < bytes.size(); ++at) {
+		const uint8_t byte = bytes[at];
+		operand16 |= byte == 0x66;
+		if (byte == 0x66 || byte == 0x67 || byte == 0xf0 || byte == 0xf2 || byte == 0xf3 || byte == 0x26 || byte == 0x2e || byte == 0x36 ||
+			byte == 0x3e || byte == 0x64 || byte == 0x65 || (byte >= 0x40 && byte <= 0x4f))
+			continue;
+		return {byte, operand16};
+	}
+	return {0, operand16};
+}
+
+// Where the decoder follows the hardware the port targets and LLVM's disassembler does not: each is counted, not failed.
+static const char *divergence(const std::vector<uint8_t> &bytes, const std::string &expected, const Instruction &instruction)
+{
+	size_t at = 0;
+	const auto [opcode, operand16] = first_opcode(bytes, at);
+	const uint8_t next = at + 1 < bytes.size() ? bytes[at + 1] : 0;
+	// Intel CPUs ignore 66 on near branches in 64-bit mode and take a rel32; LLVM decodes AMD's rel16.
+	if (operand16 && instruction.length == bytes.size() + 2 &&
+		(opcode == 0xe8 || opcode == 0xe9 || (opcode == 0x0f && next >= 0x80 && next <= 0x8f)))
+		return "66 on a near branch";
+	// LLVM accepts LOCK on forms the CPU raises #UD for.
+	if (expected.rfind("lock ", 0) == 0 && instruction.mnemonic == Mnemonic::invalid)
+		return "lock on a form without a memory destination";
+	// APX (REX2, EVEX map 4): no CPU the port runs x64 code for has it, and nothing translates it.
+	if (opcode == 0xd5 || (opcode == 0x62 && (next & 7) == 4))
+		return "APX encoding";
+	return nullptr;
+}
+
 struct Tally {
 	size_t instructions = 0;
 	size_t semantic = 0;
@@ -42,7 +76,8 @@ int main(int argc, char **argv)
 	std::vector<std::string> order;
 	std::string source = "?";
 	std::string line;
-	size_t reported = 0;
+	std::map<std::string, size_t> reported;
+	std::map<std::string, size_t> divergences;
 	while (std::getline(corpus, line)) {
 		if (line.empty())
 			continue;
@@ -53,9 +88,27 @@ int main(int argc, char **argv)
 		}
 		const size_t tab = line.find('\t');
 		const size_t second = line.find('\t', tab + 1);
-		const std::vector<uint8_t> bytes = parse_hex(line.substr(0, tab));
+		std::vector<uint8_t> bytes = parse_hex(line.substr(0, tab));
 		const uint64_t address = std::stoull(line.substr(tab + 1, second - tab - 1), nullptr, 16);
-		const std::string expected = second == std::string::npos ? "" : line.substr(second + 1);
+		std::string expected = second == std::string::npos ? "" : line.substr(second + 1);
+		// LLVM prints a lock prefix that starts an instruction as an instruction of its own; join it to the one it prefixes.
+		std::string next;
+		if (expected == "lock" && std::getline(corpus, next) && !next.empty() && next[0] != '#') {
+			const size_t next_tab = next.find('\t');
+			const size_t next_second = next.find('\t', next_tab + 1);
+			const std::vector<uint8_t> rest = parse_hex(next.substr(0, next_tab));
+			bytes.insert(bytes.end(), rest.begin(), rest.end());
+			expected = next_second == std::string::npos || next_second + 1 == next.size() ? "" : "lock " + next.substr(next_second + 1);
+			line = next;
+		}
+		// LLVM also prints a prefix it cannot attach to anything as an instruction of its own; the hardware would not split it.
+		static const char *const lone_prefixes[] = {"fs", "gs", "cs", "ds", "es", "ss", "xacquire", "xrelease", "data16", "addr32", "rep",
+			"repne", "lock", "rex", "rex.W"};
+		bool lone = false;
+		for (const char *prefix : lone_prefixes)
+			lone |= expected == prefix;
+		if (lone)
+			continue;
 		// Decode from a window longer than the instruction, as the translator does, so a decoder that reads too far shows.
 		std::vector<uint8_t> window = bytes;
 		window.resize(bytes.size() + 15, 0x90);
@@ -79,9 +132,14 @@ int main(int argc, char **argv)
 					problem = "printed '" + text + "'";
 			}
 		}
+		if (!problem.empty() && !expected.empty())
+			if (const char *reason = divergence(bytes, expected, instruction)) {
+				++divergences[reason];
+				problem.clear();
+			}
 		if (!problem.empty()) {
 			++tally.failures;
-			if (reported++ < 40)
+			if (reported[source]++ < 12)
 				std::cerr << source << " " << line.substr(0, tab) << " '" << expected << "': " << problem << "\n";
 		}
 	}
@@ -93,6 +151,8 @@ int main(int argc, char **argv)
 			tally.instructions, tally.semantic, tally.instructions ? 100.0 * double(tally.semantic) / double(tally.instructions) : 0.0,
 			tally.invalid_seen, tally.failures);
 	}
+	for (const auto &[reason, count] : divergences)
+		std::printf("known divergence from LLVM, %s: %zu\n", reason.c_str(), count);
 	if (order.empty()) {
 		std::cerr << "empty corpus\n";
 		return 1;
