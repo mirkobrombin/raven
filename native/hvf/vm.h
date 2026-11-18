@@ -13,14 +13,17 @@ namespace raven::hvf {
 // How EL0 may use a mapping. The kernel's own mapping is apart and never reachable from EL0.
 enum class Access : uint8_t { read_write, read_execute };
 
-// What makes code the host writes through its alias visible to the vCPUs' instruction fetch. Tests switch parts off as controls.
+// What makes code the host writes through its alias visible to the vCPUs' instruction fetch. The M5 reports CTR_EL0.IDC = 1 (no data
+// cache clean needed), DIC = 0 (instruction cache invalidation needed) and a PIPT instruction cache, so invalidating by the host
+// alias reaches the lines the guest fetched through its own address (hvf_code_write_test). Tests switch parts off as controls.
 struct CodeMaintenance {
-	// DC CVAU on the host alias, to the point of unification.
-	bool host_clean = true;
-	// IC IVAU on the host alias.
-	bool host_invalidate = false;
-	// IC IALLUIS in the guest kernel before a vCPU returns to EL0 after code was written.
-	bool guest_invalidate = true;
+	// DC CIVAC on the host alias.
+	bool host_clean = false;
+	// DC CVAU and IC IVAU on the host alias, broadcast to the inner shareable domain.
+	bool host_invalidate = true;
+	// IC IALLUIS in the guest kernel before a vCPU returns to EL0 after code was written: for a CPU whose instruction cache is not
+	// PIPT, where the host's alias would not name the guest's lines.
+	bool guest_invalidate = false;
 };
 
 class Vm {
