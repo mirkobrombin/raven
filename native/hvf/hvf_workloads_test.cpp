@@ -55,6 +55,9 @@ int main(int argc, char **argv)
 		check(vcpu.actlr() & 2, "ACTLR_EL1.EnTSO reads back clear");
 		translate::TranslatorOptions options;
 		options.ordering = translate::MemoryOrdering::hardware;
+		// A runtime gives its CpuState and lookup table back: 1 MiB of runtime data holds about 15 at once.
+		for (int i = 0; i < 64; ++i)
+			translate::Runtime discarded(process, cache, options, &vcpu);
 		for (const Workload &workload : workloads) {
 			const std::string name = workload.name;
 			translate::Runtime runtime(process, cache, options, &vcpu);
