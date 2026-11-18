@@ -98,7 +98,6 @@ int main(int argc, char **argv)
 		process.bind_imports();
 		translate::TranslatorOptions options;
 		options.ordering = translate::MemoryOrdering::hardware;
-		options.vector_registers = true;
 		hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
 		hvf::Vcpu vcpu(vm, true);
 		translate::Runtime runtime(process, cache, options, &vcpu);

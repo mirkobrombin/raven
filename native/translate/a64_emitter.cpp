@@ -326,6 +326,26 @@ void Assembler::msr_nzcv(uint8_t rt)
 	emit(0xd51b4200u | reg(rt, 0));
 }
 
+void Assembler::mrs_fpcr(uint8_t rt)
+{
+	emit(0xd53b4400u | reg(rt, 0));
+}
+
+void Assembler::msr_fpcr(uint8_t rt)
+{
+	emit(0xd51b4400u | reg(rt, 0));
+}
+
+void Assembler::mrs_fpsr(uint8_t rt)
+{
+	emit(0xd53b4420u | reg(rt, 0));
+}
+
+void Assembler::msr_fpsr(uint8_t rt)
+{
+	emit(0xd51b4420u | reg(rt, 0));
+}
+
 void Assembler::cfinv()
 {
 	emit(0xd500401fu);

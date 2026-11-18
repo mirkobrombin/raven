@@ -246,19 +246,6 @@ static void stays_single_threaded()
 	check(refused, "a guest thread was added to a runtime with native functions bound");
 }
 
-// movq between general and XMM registers keeps its value across blocks only where nothing between them writes v0-v7: not in this
-// process, so without TranslatorOptions::vector_registers the block must end before it.
-static void translates_movq_only_where_vectors_persist()
-{
-	const uint8_t code[] = {0x66, 0x48, 0x0f, 0x6e, 0xcf, 0x66, 0x4c, 0x0f, 0x7e, 0xc8, 0xc3}; // movq xmm1, rdi; movq rax, xmm9; ret
-	TranslationStats stats;
-	TranslatorOptions options;
-	check(translate_block(code, 0x1000, options, stats).instructions == 0, "movq was translated without vector_registers");
-	options.vector_registers = true;
-	const uint32_t translated = translate_block(code, 0x1000, options, stats).instructions;
-	check(translated == 3, "with vector_registers, the block should hold both movq and the ret: " + std::to_string(translated));
-}
-
 // Raw x64 code in this process's memory, and one address of native code a guest call reaches through bind_native.
 class RawCode final : public GuestMemory {
 public:
@@ -319,13 +306,24 @@ static void keeps_xmm_across_exits()
 	JitCodeCache cache(1 << 20);
 	ClobberingRunner runner;
 	TranslatorOptions options;
-	options.vector_registers = true;
 	Runtime runtime(memory, cache, options, &runner);
 	std::vector<uint64_t> stack(512);
 	runtime.state().gpr[rsp] = reinterpret_cast<uint64_t>(stack.data() + stack.size());
 	const RunResult result = runtime.call(entry, {0x7000000000000123, 0x23});
 	check(result.reason == ExitReason::returned && result.value == 0x7000000000000100,
 		"XMM1 - XMM9 across an exit gave " + describe(result));
+	// The registers are CpuState between runs, both ways.
+	const CpuState &state = runtime.state();
+	check(state.xmm[1][0] == 0x7000000000000123 && state.xmm[1][1] == 0 && state.xmm[9][0] == 0x23, "XMM1 and XMM9 not in CpuState");
+	runtime.state().xmm[1][0] = 5;
+	runtime.state().xmm[9][0] = 2;
+	uint64_t host_fpcr;
+	__asm__ volatile("mrs %0, fpcr" : "=r"(host_fpcr));
+	const RunResult second = runtime.call(entry + 12);
+	uint64_t fpcr_after;
+	__asm__ volatile("mrs %0, fpcr" : "=r"(fpcr_after));
+	check(second.reason == ExitReason::returned && second.value == 3, "XMM1 - XMM9 set in CpuState gave " + describe(second));
+	check(fpcr_after == host_fpcr && state.mxcsr == 0x1f80, "a run left FPCR or MXCSR changed");
 }
 
 // XMM6 is callee-saved in the x64 ABI and not in AAPCS64: a native function that writes v6 must leave the guest's XMM6 as it was.
@@ -339,7 +337,6 @@ static void keeps_xmm6_across_native_calls()
 		0xc4, 0x28, 0x66, 0x48, 0x0f, 0x7e, 0xf0, 0xc3});
 	JitCodeCache cache(1 << 20);
 	TranslatorOptions options;
-	options.vector_registers = true;
 	Runtime runtime(memory, cache, options);
 	runtime.bind_native(n, reinterpret_cast<const void *>(&clobber_vectors), 0);
 	std::vector<uint64_t> stack(512);
@@ -372,7 +369,6 @@ int main(int argc, char **argv)
 		{"fnv workload", [] { runs_a_workload("fnv.exe", 0xacb8b4443b0adc25); }},
 		{"histogram workload", [] { runs_a_workload("histogram.exe", 0x28e14b303c16e232); }},
 		{"one guest thread in this process", stays_single_threaded},
-		{"movq only with vector_registers", translates_movq_only_where_vectors_persist},
 		{"XMM registers across exits", keeps_xmm_across_exits},
 		{"XMM6 across native calls", keeps_xmm6_across_native_calls},
 	};

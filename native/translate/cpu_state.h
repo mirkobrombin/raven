@@ -57,9 +57,16 @@ struct CpuState {
 	uint64_t host_frame = 0;
 	// The code a native function stopped the guest with.
 	uint64_t stop_code = 0;
-	// XMM8-XMM15 (v8-v15) between runs, kept by the trampolines when the translator keeps XMM registers (vector_registers): the
-	// trampolines give v8-v15 back to the host on every exit.
-	alignas(16) uint64_t vector_high[16] = {};
+	// The host's FPCR while translated code runs: the enter trampoline keeps it here and the exit trampoline and native thunks put it
+	// back.
+	uint64_t host_fpcr = 0;
+	// MXCSR between runs. While translated code runs, its control bits are FPCR and its exception flags FPSR (translator.cpp maps
+	// them); the exit trampoline folds FPSR back. DE stays as it was: Arm reports a denormal input only when it flushes one.
+	uint32_t mxcsr = 0x1f80;
+	uint32_t reserved = 0;
+	// XMM0-XMM15 between runs, low quadword first. While translated code runs, XMMn is vn; the trampolines store and load all sixteen
+	// on every exit and entry, and native thunks store them before the native function runs.
+	alignas(16) uint64_t xmm[16][2] = {};
 };
 
 namespace state_offset {
@@ -76,7 +83,10 @@ constexpr size_t lookup_table = offsetof(CpuState, lookup_table);
 constexpr size_t exit_reason = offsetof(CpuState, exit_reason);
 constexpr size_t stop_requested = offsetof(CpuState, stop_requested);
 constexpr size_t host_frame = offsetof(CpuState, host_frame);
-constexpr size_t vector_high = offsetof(CpuState, vector_high);
+constexpr size_t host_fpcr = offsetof(CpuState, host_fpcr);
+constexpr size_t mxcsr = offsetof(CpuState, mxcsr);
+constexpr size_t xmm = offsetof(CpuState, xmm);
+static_assert(xmm % 16 == 0 && xmm + 224 <= 1008, "ldp and stp of q registers reach the XMM array");
 }
 
 }

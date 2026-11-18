@@ -82,6 +82,11 @@ public:
 	void mrs_nzcv(uint8_t rt);
 	void msr_nzcv(uint8_t rt);
 	void cfinv();
+	// The floating-point control and status registers.
+	void mrs_fpcr(uint8_t rt);
+	void msr_fpcr(uint8_t rt);
+	void mrs_fpsr(uint8_t rt);
+	void msr_fpsr(uint8_t rt);
 	// FEAT_FlagM: N, Z and V from an 8- or 16-bit value, C kept.
 	void setf8(uint8_t rn);
 	void setf16(uint8_t rn);

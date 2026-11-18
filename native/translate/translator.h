@@ -23,10 +23,6 @@ struct TranslatorOptions {
 	// them ordered; false is the faster mode Rosetta-like translators offer per application.
 	bool order_stack = true;
 	uint32_t max_instructions = 64;
-	// Whether XMM registers keep their values from one block to the next: XMMn lives in vn, v0-v7 because nothing on the exit path
-	// writes them (in a vCPU; the host code an exit returns to in this process uses them freely), v8-v15 because the trampolines keep
-	// them in CpuState::vector_high. Then movq between general and XMM registers is translated.
-	bool vector_registers = false;
 };
 
 struct TranslationStats {
@@ -61,11 +57,11 @@ TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address,
 
 // The fixed code the runtime places once in the code cache.
 // enter(CpuState *state, const void *code): saves the host's callee-saved registers, loads the guest's and branches to code.
-// With vector_registers, v8-v15 are loaded from CpuState::vector_high after the host's are saved.
-std::vector<uint32_t> enter_trampoline(bool vector_registers = false);
+// It also keeps the host's FPCR, sets FPCR and FPSR from CpuState::mxcsr and loads XMM0-XMM15 into v0-v15.
+std::vector<uint32_t> enter_trampoline();
 // Reached with the exit reason in w9: stores the guest's registers and returns the reason from enter.
-// With vector_registers, v8-v15 are stored to CpuState::vector_high before the host's are restored.
-std::vector<uint32_t> exit_trampoline(bool vector_registers = false);
+// It also stores v0-v15 and FPSR's exception flags in CpuState and gives the host its FPCR back.
+std::vector<uint32_t> exit_trampoline();
 // Code a guest call reaches when it calls native function: the x64 arguments go to the AAPCS64 argument registers, the result to RAX,
 // and the guest's return address is taken as a ret would take it. Microsoft's ARM64EC names this direction an entry thunk.
 std::vector<uint32_t> native_thunk(uint64_t function, unsigned integer_arguments);

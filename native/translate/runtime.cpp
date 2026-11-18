@@ -14,7 +14,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 2;
+constexpr uint64_t translator_version = 3;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -109,8 +109,8 @@ uint8_t *Runtime::place(const std::vector<uint32_t> &code)
 
 void Runtime::place_fixed_code()
 {
-	enter = place(enter_trampoline(options.vector_registers));
-	exit = place(exit_trampoline(options.vector_registers));
+	enter = place(enter_trampoline());
+	exit = place(exit_trampoline());
 	return_address = place(return_stub());
 	return_guest = reinterpret_cast<uint64_t>(return_address);
 }
@@ -398,8 +398,7 @@ uint64_t Runtime::cache_key(std::span<const uint8_t> image, uint64_t base, const
 	hash = fnv(hash, image.data(), image.size());
 	hash = fnv(hash, &base, sizeof base);
 	hash = fnv(hash, &translator_version, sizeof translator_version);
-	const uint64_t fields[] = {static_cast<uint64_t>(options.ordering), options.order_stack, options.max_instructions,
-		options.vector_registers};
+	const uint64_t fields[] = {static_cast<uint64_t>(options.ordering), options.order_stack, options.max_instructions};
 	return fnv(hash, fields, sizeof fields);
 }
 

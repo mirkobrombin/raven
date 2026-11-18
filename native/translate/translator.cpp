@@ -100,7 +100,7 @@ bool ends_block(Mnemonic mnemonic)
 }
 
 // Whether the translator has code for the instruction; the block ends before any it has not.
-bool supported(const Instruction &instruction, const TranslatorOptions &options)
+bool supported(const Instruction &instruction)
 {
 	// cs:, ds:, es: and ss: change nothing in 64-bit mode (compilers pad with cs: nops); fs: and gs: add their base.
 	if (instruction.rep || instruction.repne)
@@ -120,8 +120,7 @@ bool supported(const Instruction &instruction, const TranslatorOptions &options)
 	case Mnemonic::cmovcc: return (instruction.condition >> 1) != 5;
 	case Mnemonic::push: case Mnemonic::pop: return instruction.operand_size == 8;
 	case Mnemonic::xchg: return true;
-	case Mnemonic::movq:
-		return options.vector_registers;
+	case Mnemonic::movq: return true;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -129,6 +128,68 @@ bool supported(const Instruction &instruction, const TranslatorOptions &options)
 		return size >= 4 || (instruction.operands[1].kind == OperandKind::imm && shift_count(instruction) < size * 8u);
 	default: return false;
 	}
+}
+
+// MXCSR and the Arm floating-point registers. FPCR: RC to RMode (x86's 01, toward -inf, is Arm's 10, and 10 is 01), FZ to FZ, DAZ to
+// FIZ, and AH (FEAT_AFP), with which NaN propagation, min and max and the default NaN follow x86 instead of Arm. FPSR: IE, ZE, OE, UE
+// and PE are IOC, DZC, OFC, UFC and IXC.
+void fpcr_from_mxcsr(Assembler &a, uint8_t fpcr, uint8_t mxcsr, uint8_t scratch)
+{
+	a.mov_imm(fpcr, 2, false);
+	a.ubfx(scratch, mxcsr, 13, 1, false);
+	a.bfi(fpcr, scratch, 23, 1, false);
+	a.ubfx(scratch, mxcsr, 14, 1, false);
+	a.bfi(fpcr, scratch, 22, 1, false);
+	a.ubfx(scratch, mxcsr, 15, 1, false);
+	a.bfi(fpcr, scratch, 24, 1, false);
+	a.ubfx(scratch, mxcsr, 6, 1, false);
+	a.bfi(fpcr, scratch, 0, 1, false);
+}
+
+void fpsr_from_mxcsr(Assembler &a, uint8_t fpsr, uint8_t mxcsr, uint8_t scratch)
+{
+	a.and_imm(fpsr, mxcsr, 1, false);
+	a.ubfx(scratch, mxcsr, 2, 4, false);
+	a.bfi(fpsr, scratch, 1, 4, false);
+}
+
+// The flags of mxcsr from fpsr; DE and the control bits stay.
+void mxcsr_flags_from_fpsr(Assembler &a, uint8_t mxcsr, uint8_t fpsr, uint8_t scratch)
+{
+	a.bfi(mxcsr, fpsr, 0, 1, false);
+	a.ubfx(scratch, fpsr, 1, 4, false);
+	a.bfi(mxcsr, scratch, 2, 4, false);
+}
+
+// FPCR and FPSR from CpuState::mxcsr.
+void load_mxcsr(Assembler &a, uint8_t t0, uint8_t t1, uint8_t t2)
+{
+	a.ldr(t0, state_register, state_offset::mxcsr, 4);
+	fpcr_from_mxcsr(a, t1, t0, t2);
+	a.msr_fpcr(t1);
+	fpsr_from_mxcsr(a, t1, t0, t2);
+	a.msr_fpsr(t1);
+}
+
+// FPSR's flags into CpuState::mxcsr.
+void store_mxcsr_flags(Assembler &a, uint8_t t0, uint8_t t1, uint8_t t2)
+{
+	a.ldr(t0, state_register, state_offset::mxcsr, 4);
+	a.mrs_fpsr(t1);
+	mxcsr_flags_from_fpsr(a, t0, t1, t2);
+	a.str(t0, state_register, state_offset::mxcsr, 4);
+}
+
+void store_vectors(Assembler &a, uint8_t first = 0)
+{
+	for (uint8_t reg = first; reg < 16; reg += 2)
+		a.stp_q(reg, uint8_t(reg + 1), state_register, static_cast<int16_t>(state_offset::xmm + 16 * reg));
+}
+
+void load_vectors(Assembler &a, uint8_t first = 0)
+{
+	for (uint8_t reg = first; reg < 16; reg += 2)
+		a.ldp_q(reg, uint8_t(reg + 1), state_register, static_cast<int16_t>(state_offset::xmm + 16 * reg));
 }
 
 struct Address {
@@ -1150,7 +1211,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 	bool ended = false;
 	while (at < code.size() && instructions.size() < options.max_instructions) {
 		const Instruction instruction = decode(code.subspan(at), address + at);
-		if (instruction.mnemonic == Mnemonic::invalid || !supported(instruction, options))
+		if (instruction.mnemonic == Mnemonic::invalid || !supported(instruction))
 			break;
 		instructions.push_back(instruction);
 		at += instruction.length;
@@ -1180,7 +1241,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 		normalize_carry();
 		// The next instruction is not translated: unsupported or invalid stops here, a full block falls through to the next.
 		const Instruction next = at < code.size() ? decode(code.subspan(at), rip) : Instruction{};
-		if (instructions.size() >= options.max_instructions && next.mnemonic != Mnemonic::invalid && supported(next, options))
+		if (instructions.size() >= options.max_instructions && next.mnemonic != Mnemonic::invalid && supported(next))
 			exit_to(rip);
 		else
 			exit_with(ExitReason::unsupported, rip);
@@ -1205,7 +1266,7 @@ TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address,
 	return translator.run(code, address);
 }
 
-std::vector<uint32_t> enter_trampoline(bool vector_registers)
+std::vector<uint32_t> enter_trampoline()
 {
 	Assembler a;
 	// enter(x0 = state, x1 = code). The frame keeps the host's callee-saved registers: x19-x28, x29, x30 and the low halves of v8-v15
@@ -1222,9 +1283,10 @@ std::vector<uint32_t> enter_trampoline(bool vector_registers)
 	a.stp_q(12, 13, a64::sp, 160);
 	a.stp_q(14, 15, a64::sp, 192);
 	a.mov(state_register, 0);
-	if (vector_registers)
-		for (uint8_t reg = 8; reg < 16; reg += 2)
-			a.ldp_q(reg, uint8_t(reg + 1), state_register, static_cast<int16_t>(state_offset::vector_high + 16 * (reg - 8)));
+	a.mrs_fpcr(s0);
+	a.str(s0, state_register, state_offset::host_fpcr, 8);
+	load_mxcsr(a, s0, s2, s3);
+	load_vectors(a);
 	a.mov_sp(s0, a64::sp);
 	a.str(s0, state_register, state_offset::host_frame, 8);
 	a.mov(address_register, 1);
@@ -1239,7 +1301,7 @@ std::vector<uint32_t> enter_trampoline(bool vector_registers)
 	return a.words;
 }
 
-std::vector<uint32_t> exit_trampoline(bool vector_registers)
+std::vector<uint32_t> exit_trampoline()
 {
 	Assembler a;
 	// w9: the reason; x10: the exit's detail.
@@ -1251,9 +1313,10 @@ std::vector<uint32_t> exit_trampoline(bool vector_registers)
 	a.str(s0, state_register, state_offset::nzcv, 8);
 	a.str(parity_register, state_register, state_offset::parity_source, 8);
 	a.str(adjust_register, state_register, state_offset::adjust_source, 8);
-	if (vector_registers)
-		for (uint8_t reg = 8; reg < 16; reg += 2)
-			a.stp_q(reg, uint8_t(reg + 1), state_register, static_cast<int16_t>(state_offset::vector_high + 16 * (reg - 8)));
+	store_vectors(a);
+	store_mxcsr_flags(a, s0, s2, s3);
+	a.ldr(s0, state_register, state_offset::host_fpcr, 8);
+	a.msr_fpcr(s0);
 	a.ldr(s0, state_register, state_offset::host_frame, 8);
 	a.mov_sp(a64::sp, s0);
 	a.ldr(0, state_register, state_offset::exit_reason, 4);
@@ -1304,9 +1367,18 @@ std::vector<uint32_t> native_thunk(uint64_t function, unsigned integer_arguments
 	// Arguments five to eight: on the x64 stack above the return address and the 32-byte home area; AAPCS64 takes them in x4-x7.
 	for (unsigned i = 4; i < integer_arguments; ++i)
 		a.ldr(static_cast<uint8_t>(i), host_register[rsp], static_cast<int64_t>(8 + 32 + 8 * (i - 4)), 8);
+	// The function sees the guest's XMM registers and MXCSR in CpuState and runs with the host's FPCR. XMM6-XMM15 are callee-saved for
+	// x64 and only the low halves of v8-v15 are for AAPCS64: they come back from CpuState, where a guest callback leaves them as it
+	// found them. XMM0 is the function's floating-point result.
+	store_vectors(a);
+	store_mxcsr_flags(a, s0, s1, s2);
+	a.ldr(s0, state_register, state_offset::host_fpcr, 8);
+	a.msr_fpcr(s0);
 	a.mov_imm(address_register, function);
 	a.blr(address_register);
 	a.mov(host_register[rax], 0);
+	load_vectors(a, 6);
+	load_mxcsr(a, s0, s1, s2);
 	// A native function that ended the guest (ExitProcess) asked for a stop; otherwise return as ret does.
 	const Assembler::Label stop = a.label();
 	a.ldr(s0, state_register, state_offset::stop_requested, 4);
