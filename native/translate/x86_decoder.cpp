@@ -466,6 +466,8 @@ bool read_memory(Reader &reader, const Prefixes &prefixes, ModRM modrm, Operand 
 
 }
 
+static void decode_x87(Instruction &result, uint8_t index, uint8_t mod, uint8_t reg, uint8_t rm);
+
 Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 {
 	Instruction result;
@@ -752,6 +754,12 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			result.rep = result.repne = false;
 		}
 	}
+	if (full_opcode >= 0xd8 && full_opcode <= 0xdf && !prefixes.lock && !prefixes.rep && !prefixes.repne && !prefixes.operand16 &&
+		!rex_w)
+		decode_x87(result, static_cast<uint8_t>(full_opcode - 0xd8), modrm.mod, modrm.reg, modrm.rm);
+	// wait alone: with a prefix LLVM prints the prefix as an instruction of its own.
+	if (full_opcode == 0x9b && reader.at == 1)
+		result.mnemonic = Mnemonic::fwait;
 	// 90 is xchg eax, eax only with REX.B; without it, and as F3 90 (pause), it does nothing to registers.
 	if (full_opcode == 0x90 && !rex_b) {
 		result.mnemonic = prefixes.rep ? Mnemonic::other : Mnemonic::nop;
@@ -769,6 +777,95 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 	}
 	result.length = static_cast<uint8_t>(reader.at);
 	return result;
+}
+
+// D8-DF: index is the opcode less D8. The generic pass read ModRM.rm into the first operand; forms LLVM rejects (the reserved
+// aliases such as DC D0 and DD C8, and the 287's feni, fdisi and fsetpm) stay other.
+static void decode_x87(Instruction &result, uint8_t index, uint8_t mod, uint8_t reg, uint8_t rm)
+{
+	using enum Mnemonic;
+	struct Form {
+		Mnemonic mnemonic;
+		uint8_t size;
+	};
+	static constexpr Form memory[8][8] = {
+		{{fadd, 4}, {fmul, 4}, {fcom, 4}, {fcomp, 4}, {fsub, 4}, {fsubr, 4}, {fdiv, 4}, {fdivr, 4}},
+		{{fld, 4}, {other, 0}, {fst, 4}, {fstp, 4}, {fldenv, 28}, {fldcw, 2}, {fnstenv, 28}, {fnstcw, 2}},
+		{{fiadd, 4}, {fimul, 4}, {ficom, 4}, {ficomp, 4}, {fisub, 4}, {fisubr, 4}, {fidiv, 4}, {fidivr, 4}},
+		{{fild, 4}, {fisttp, 4}, {fist, 4}, {fistp, 4}, {other, 0}, {fld, 10}, {other, 0}, {fstp, 10}},
+		{{fadd, 8}, {fmul, 8}, {fcom, 8}, {fcomp, 8}, {fsub, 8}, {fsubr, 8}, {fdiv, 8}, {fdivr, 8}},
+		{{fld, 8}, {fisttp, 8}, {fst, 8}, {fstp, 8}, {frstor, 108}, {other, 0}, {fnsave, 108}, {fnstsw, 2}},
+		{{fiadd, 2}, {fimul, 2}, {ficom, 2}, {ficomp, 2}, {fisub, 2}, {fisubr, 2}, {fidiv, 2}, {fidivr, 2}},
+		{{fild, 2}, {fisttp, 2}, {fist, 2}, {fistp, 2}, {fbld, 10}, {fild, 8}, {fbstp, 10}, {fistp, 8}},
+	};
+	if (mod != 3) {
+		const Form form = memory[index][reg];
+		if (form.mnemonic == other)
+			return;
+		result.mnemonic = form.mnemonic;
+		result.operands[0].size = form.size;
+		result.count = 1;
+		return;
+	}
+	// Register forms: st, st(i) (to_top), st(i), st (from_top), st(i) alone (one), or no operand (none).
+	enum Shape : uint8_t { none, to_top, from_top, one };
+	struct Register {
+		Mnemonic mnemonic;
+		Shape shape;
+	};
+	static constexpr Register registers[8][8] = {
+		{{fadd, to_top}, {fmul, to_top}, {fcom, one}, {fcomp, one}, {fsub, to_top}, {fsubr, to_top}, {fdiv, to_top}, {fdivr, to_top}},
+		{{fld, one}, {fxch, one}, {other, none}, {other, none}, {other, none}, {other, none}, {other, none}, {other, none}},
+		{{fcmovb, to_top}, {fcmove, to_top}, {fcmovbe, to_top}, {fcmovu, to_top}, {other, none}, {other, none}, {other, none},
+			{other, none}},
+		{{fcmovnb, to_top}, {fcmovne, to_top}, {fcmovnbe, to_top}, {fcmovnu, to_top}, {other, none}, {fucomi, to_top},
+			{fcomi, to_top}, {other, none}},
+		{{fadd, from_top}, {fmul, from_top}, {other, none}, {other, none}, {fsubr, from_top}, {fsub, from_top}, {fdivr, from_top},
+			{fdiv, from_top}},
+		{{ffree, one}, {other, none}, {fst, one}, {fstp, one}, {fucom, one}, {fucomp, one}, {other, none}, {other, none}},
+		{{faddp, from_top}, {fmulp, from_top}, {other, none}, {other, none}, {fsubrp, from_top}, {fsubp, from_top},
+			{fdivrp, from_top}, {fdivp, from_top}},
+		{{ffreep, one}, {other, none}, {other, none}, {other, none}, {other, none}, {fucompi, to_top}, {fcompi, to_top},
+			{other, none}},
+	};
+	// The forms with no register operand: D9 D0-FF, DA E9, DB E2 and E3, DE D9, DF E0.
+	static constexpr Mnemonic d9[48] = {
+		fnop, other, other, other, other, other, other, other, other, other, other, other, other, other, other, other,
+		fchs, fabs, other, other, ftst, fxam, other, other, fld1, fldl2t, fldl2e, fldpi, fldlg2, fldln2, fldz, other,
+		f2xm1, fyl2x, fptan, fpatan, fxtract, fprem1, fdecstp, fincstp, fprem, fyl2xp1, fsqrt, fsincos, frndint, fscale, fsin, fcos};
+	Register form = registers[index][reg];
+	const uint8_t modrm = static_cast<uint8_t>(0xc0 | reg << 3 | rm);
+	if (index == 1 && modrm >= 0xd0)
+		form = {d9[modrm - 0xd0], none};
+	else if (index == 2 && modrm == 0xe9)
+		form = {fucompp, none};
+	else if (index == 3 && (modrm == 0xe2 || modrm == 0xe3))
+		form = {modrm == 0xe2 ? fnclex : fninit, none};
+	else if (index == 6 && modrm == 0xd9)
+		form = {fcompp, none};
+	if (index == 7 && modrm == 0xe0) {
+		result.mnemonic = fnstsw;
+		Operand ax;
+		ax.kind = OperandKind::reg;
+		ax.size = 2;
+		ax.reg = 0;
+		result.operands = {ax};
+		result.count = 1;
+		return;
+	}
+	if (form.mnemonic == other)
+		return;
+	result.mnemonic = form.mnemonic;
+	Operand top, st;
+	top.kind = st.kind = OperandKind::st;
+	st.reg = rm;
+	result.operands = {};
+	switch (form.shape) {
+	case none: result.count = 0; break;
+	case to_top: result.operands = {top, st}; result.count = 2; break;
+	case from_top: result.operands = {st, top}; result.count = 2; break;
+	case one: result.operands = {st}; result.count = 1; break;
+	}
 }
 
 static const char *register_name(uint8_t reg, uint8_t size, bool address32 = false)
@@ -809,6 +906,7 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 	switch (operand.kind) {
 	case OperandKind::reg: return register_name(operand.reg, operand.size);
 	case OperandKind::xmm: return "xmm" + std::to_string(operand.reg);
+	case OperandKind::st: return operand.reg == no_register ? "st" : "st(" + std::to_string(operand.reg) + ")";
 	case OperandKind::imm: {
 		// LLVM sign-extends an imm8 and any immediate of a 64-bit operation; a wider immediate of a narrower one prints unsigned.
 		int64_t value = operand.value;
@@ -826,10 +924,11 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 		return buffer;
 	}
 	case OperandKind::mem: {
-		static const char *const sizes[] = {"", "byte ptr ", "word ptr ", "", "dword ptr ", "", "", "", "qword ptr ", "", "", "", "", "",
-			"", "", "xmmword ptr "};
+		static const char *const sizes[] = {"", "byte ptr ", "word ptr ", "", "dword ptr ", "", "", "", "qword ptr ", "", "tbyte ptr ",
+			"", "", "", "", "", "xmmword ptr "};
 		static const char *const segments[] = {"", "es:", "cs:", "ss:", "ds:", "fs:", "gs:"};
-		std::string text = sizes[operand.size];
+		// Environments and save areas (28 and 108 bytes) print without a size.
+		std::string text = operand.size < std::size(sizes) ? sizes[operand.size] : "";
 		text += segments[static_cast<int>(operand.segment)];
 		text += '[';
 		const bool address32 = instruction.address_size == 4;
@@ -882,6 +981,16 @@ static const char *const sse_names[] = {
 	"pminsw", "por", "paddsb", "paddsw", "pmaxsw", "pxor", "pmuludq", "pmaddwd", "psadbw", "psubb", "psubw", "psubd", "psubq",
 	"paddb", "paddw", "paddd"};
 static_assert(std::size(sse_names) == static_cast<size_t>(sse_last) - static_cast<size_t>(sse_first) + 1);
+
+static const char *const x87_names[] = {
+	"fadd", "fmul", "fcom", "fcomp", "fsub", "fsubr", "fdiv", "fdivr", "fld", "fst", "fstp", "fldenv", "fldcw", "fnstenv", "fnstcw",
+	"fxch", "fnop", "fchs", "fabs", "ftst", "fxam", "fld1", "fldl2t", "fldl2e", "fldpi", "fldlg2", "fldln2", "fldz", "f2xm1", "fyl2x",
+	"fptan", "fpatan", "fxtract", "fprem1", "fdecstp", "fincstp", "fprem", "fyl2xp1", "fsqrt", "fsincos", "frndint", "fscale", "fsin",
+	"fcos", "fiadd", "fimul", "ficom", "ficomp", "fisub", "fisubr", "fidiv", "fidivr", "fcmovb", "fcmove", "fcmovbe", "fcmovu",
+	"fucompp", "fild", "fisttp", "fist", "fistp", "fcmovnb", "fcmovne", "fcmovnbe", "fcmovnu", "fnclex", "fninit", "fucomi", "fcomi",
+	"frstor", "fnsave", "fnstsw", "ffree", "fucom", "fucomp", "faddp", "fmulp", "fcompp", "fsubrp", "fsubp", "fdivrp", "fdivp",
+	"ffreep", "fbld", "fbstp", "fucompi", "fcompi", "wait"};
+static_assert(std::size(x87_names) == static_cast<size_t>(x87_last) - static_cast<size_t>(x87_first) + 1);
 
 std::string format_intel(const Instruction &instruction)
 {
@@ -938,6 +1047,10 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::ud2: name = "ud2"; break;
 	case Mnemonic::hlt: name = "hlt"; break;
 	default: {
+		if (instruction.mnemonic >= x87_first && instruction.mnemonic <= x87_last) {
+			name = x87_names[static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(x87_first)];
+			break;
+		}
 		static const char *const predicates[] = {"eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"};
 		static const char *const suffixes[] = {"ps", "pd", "ss", "sd"};
 		const auto index = static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(sse_first);

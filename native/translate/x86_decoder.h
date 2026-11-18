@@ -9,7 +9,7 @@ namespace raven::translate {
 
 // The instructions the translator gives semantics to. Everything else that decodes is `other`: its length is right, so a block can end
 // before it, but nothing translates it.
-enum class Mnemonic : uint8_t {
+enum class Mnemonic : uint16_t {
 	invalid,
 	other,
 	add,
@@ -75,13 +75,24 @@ enum class Mnemonic : uint8_t {
 	ldmxcsr, stmxcsr, cmpps, cmppd, cmpss, cmpsd, shufps, shufpd, paddq, pmullw, pmovmskb, psubusb, psubusw, pminub, pand, paddusb,
 	paddusw, pmaxub, pandn, pavgb, pavgw, pmulhuw, pmulhw, cvttpd2dq, cvtdq2pd, cvtpd2dq, movntdq, psubsb, psubsw, pminsw, por,
 	paddsb, paddsw, pmaxsw, pxor, pmuludq, pmaddwd, psadbw, psubb, psubw, psubd, psubq, paddb, paddw, paddd,
+	// x87, from fadd to fwait (x87_first to x87_last), named as LLVM prints them: fcompi and fucompi are fcomip and fucomip, fwait
+	// prints as wait. A memory operand has the size the instruction accesses (2, 4, 8 or 10 bytes), 28 for an environment and 108
+	// for a save area.
+	fadd, fmul, fcom, fcomp, fsub, fsubr, fdiv, fdivr, fld, fst, fstp, fldenv, fldcw, fnstenv, fnstcw, fxch, fnop, fchs, fabs, ftst,
+	fxam, fld1, fldl2t, fldl2e, fldpi, fldlg2, fldln2, fldz, f2xm1, fyl2x, fptan, fpatan, fxtract, fprem1, fdecstp, fincstp, fprem,
+	fyl2xp1, fsqrt, fsincos, frndint, fscale, fsin, fcos, fiadd, fimul, ficom, ficomp, fisub, fisubr, fidiv, fidivr, fcmovb, fcmove,
+	fcmovbe, fcmovu, fucompp, fild, fisttp, fist, fistp, fcmovnb, fcmovne, fcmovnbe, fcmovnu, fnclex, fninit, fucomi, fcomi, frstor,
+	fnsave, fnstsw, ffree, fucom, fucomp, faddp, fmulp, fcompp, fsubrp, fsubp, fdivrp, fdivp, ffreep, fbld, fbstp, fucompi, fcompi,
+	fwait,
 };
 
 constexpr Mnemonic sse_first = Mnemonic::movq;
 constexpr Mnemonic sse_last = Mnemonic::paddd;
+constexpr Mnemonic x87_first = Mnemonic::fadd;
+constexpr Mnemonic x87_last = Mnemonic::fwait;
 
-// xmm: an XMM register, reg 0-15.
-enum class OperandKind : uint8_t { none, reg, mem, imm, rel, xmm };
+// xmm: an XMM register, reg 0-15. st: the x87 register ST(reg), or ST(0) written as st when reg is no_register.
+enum class OperandKind : uint8_t { none, reg, mem, imm, rel, xmm, st };
 
 // General registers 0-15 in encoding order (rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8-r15); 16-19 are ah, ch, dh, bh.
 constexpr uint8_t high_byte_base = 16;
