@@ -214,8 +214,13 @@ static HRESULT ready_chain(volume *vol, element *item)
 		return E_OUTOFMEMORY;
 	item->chain_capacity = (DWORD)(wanted ? wanted : 1);
 	while (count < wanted) {
-		if (sector >= limit)
+		if (sector >= limit) {
+			/* Refused, and asked again at the next read: nothing of this attempt stays. */
+			mem_free(item->chain);
+			item->chain = NULL;
+			item->chain_capacity = 0;
 			return STG_E_DOCFILECORRUPT;
+		}
 		item->chain[count++] = sector;
 		sector = table[sector];
 	}
@@ -326,6 +331,9 @@ static HRESULT read_regular(volume *vol, element *item, ULONGLONG offset, BYTE *
 		ULONG run = vol->sector_size - inner;
 		HRESULT status;
 
+		/* A mini sector the mini table names past the end of the mini stream lies past the root's chain. */
+		if (index >= item->chain_count)
+			return STG_E_DOCFILECORRUPT;
 		/* Consecutive sectors are read at once, which large streams nearly always are. */
 		while (run < count && index + 1 < item->chain_count && item->chain[index + 1] == item->chain[index] + 1) {
 			run += vol->sector_size;
@@ -379,6 +387,8 @@ static HRESULT write_regular(volume *vol, element *item, ULONGLONG offset, const
 		ULONG run = vol->sector_size - inner;
 		HRESULT status;
 
+		if (first >= item->chain_count)
+			return STG_E_DOCFILECORRUPT;
 		if (sector_is_shared(vol, item->chain[first])) {
 			status = copy_sector(vol, item, first);
 			if (FAILED(status))
