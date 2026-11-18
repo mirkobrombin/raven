@@ -472,8 +472,10 @@ bool DesktopObjects::invalidate(uint64_t handle,DesktopRect rect,bool erase)
 	DesktopRegion update(record->update); update.add(rect);
 	const auto previous=record->update.bytes(),current=update.bytes();
 	if (current>limit-used+previous) return false;
-	if (record->update.empty() && !update.empty()) ++record->update_generation;
+	const bool became=record->update.empty() && !update.empty();
+	if (became) ++record->update_generation;
 	record->update=std::move(update); used=used-previous+current;
+	if (became && invalidated) invalidated(record->thread);
 	if (!record->update.empty()) record->erase_pending|=erase;
 	if ((record->width<=0 || record->height<=0) && record->outer.right>record->outer.left && record->outer.bottom>record->outer.top &&
 		!record->frame_pending) {

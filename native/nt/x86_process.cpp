@@ -1491,14 +1491,15 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_legacy_file_api(shared_api);
 	windows.set_message_wait([&guest_threads](std::function<bool()> ready,std::chrono::steady_clock::time_point until) {
 		HostWait waiting;
-		guest_threads.block(std::move(ready),until);
+		guest_threads.block(std::move(ready), until, false, false, true);
 	});
 	windows.set_input_taken([&guest_threads] { guest_threads.took_input(); });
 	// A message sent to a window of another thread waits for that thread to run its procedure.
 	windows.set_block([&guest_threads](std::function<bool()> ready) {
 		HostWait waiting;
-		guest_threads.block(std::move(ready), std::nullopt);
+		guest_threads.block(std::move(ready), std::nullopt, false, false, true);
 	});
+	windows.set_tell([&guest_threads](uint32_t thread) { guest_threads.tell(thread); });
 	guest_threads.add_end_listener([&windows](uint32_t thread) { windows.thread_ended(thread); });
 	crt.set_call(invoke);
 	try {

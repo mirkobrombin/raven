@@ -55,6 +55,13 @@ public:
 	}
 	// Blocks the calling guest thread until the condition holds while the others run (a message sent to another thread's window).
 	void set_block(std::function<void(std::function<bool()>)> block) { block_hook = std::move(block); }
+	// Wakes a guest thread whose wait for its messages, or for the answer to one it sent, may have ended: its queue changed, a window of
+	// it needs painting, or its message was answered. Those waits look again only when told, or for input, timers and other processes.
+	void set_tell(std::function<void(uint32_t)> tell)
+	{
+		tell_hook = std::move(tell);
+		objects.invalidated = tell_hook;
+	}
 	// Resolves the default menu of a window class (module, resource identifier) to a menu handle.
 	// Allocates guest global memory for clipboard data that arrives from the host.
 	void set_global_allocator(std::function<uint64_t(uint64_t)> allocator) { global_allocator = std::move(allocator); }
@@ -126,7 +133,7 @@ public:
 		std::memcpy(&occupant,slot,4);
 		if (occupant==thread) __atomic_store_n(reinterpret_cast<uint64_t *>(slot+8),uint64_t(0),__ATOMIC_RELEASE);
 	}
-	void queue_changed(uint32_t thread,uint32_t kinds) { queues[thread].changed|=kinds; wake(thread); }
+	void queue_changed(uint32_t thread,uint32_t kinds) { queues[thread].changed|=kinds; wake(thread); tell(thread); }
 	// A thread that clears the quiet table whenever the display has events the runtime has not read, until it closes.
 	void watch_input();
 	bool input_watched=false;
@@ -186,7 +193,8 @@ private:
 	uint32_t owner(uint64_t window) const;
 	bool queued_for(uint32_t thread) const;
 	// A message sent to a window of another thread waits here until that thread retrieves messages; the sender waits for the result.
-	struct SentMessage { uint64_t window; uint32_t message; uint64_t wparam, lparam, result=0; uint32_t thread; bool taken=false, done=false, activation=false; };
+	struct SentMessage { uint64_t window; uint32_t message; uint64_t wparam, lparam, result=0; uint32_t thread; bool taken=false, done=false, activation=false;
+		uint32_t from=0; };
 	std::deque<std::shared_ptr<SentMessage>> sent;
 	// Runs the messages other threads sent to windows of the calling thread.
 	void serve_sent();
@@ -196,6 +204,8 @@ public:
 private:
 	bool sent_for(uint32_t thread) const;
 	std::function<void(std::function<bool()>)> block_hook;
+	std::function<void(uint32_t)> tell_hook;
+	void tell(uint32_t thread) { if (tell_hook && thread) tell_hook(thread); }
 	// A window of the calling thread that needs painting, under the filter window when one is given.
 	uint64_t invalid_owned(uint64_t filter,uint32_t thread=0) const;
 	// The window the last WM_PAINT went to; the next search for one starts after it.

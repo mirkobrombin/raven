@@ -1132,6 +1132,7 @@ void NativeWindows::thread_ended(uint32_t thread)
 		if (item->thread!=thread || item->taken) return false;
 		item->result=0;
 		item->done=true;
+		tell(item->from);
 		return true;
 	});
 }
@@ -1150,10 +1151,12 @@ void NativeWindows::serve_sent()
 		} catch (...) {
 			item->done=true;
 			std::erase(sent,item);
+			tell(item->from);
 			throw;
 		}
 		item->done=true;
 		std::erase(sent,item);
+		tell(item->from);
 	}
 }
 
@@ -1803,6 +1806,7 @@ uint64_t NativeWindows::send(uint64_t handle, uint32_t message, uint64_t wparam,
 	// answers the messages sent to its own windows while it waits for the result.
 	if (const auto me=environment.thread_id(); window->thread && me && window->thread!=me && block_hook) {
 		auto item=std::make_shared<SentMessage>(SentMessage{handle,message,wparam,lparam,0,window->thread});
+		item->from=me;
 		sent.push_back(item);
 		queue_changed(item->thread,0x40);
 		const auto began=std::chrono::steady_clock::now();

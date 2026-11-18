@@ -859,7 +859,7 @@ bool NativeThreads::hand_over_to(uint32_t object)
 	// hand_over does, with the turn still held.
 	for (const auto &thread : threads)
 		if (thread.get() != &me && !thread->outside && thread->state == GuestThread::State::waiting && thread->suspend_count == 0 &&
-			thread->ready && thread->ready())
+			!thread->told_only && thread->ready && thread->ready())
 			waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->waits.load(std::memory_order_acquire)});
 	if (waiting.empty())
 		return false;

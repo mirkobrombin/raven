@@ -3136,7 +3136,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	object_api.set_threads(&threads);
 	windows.set_message_wait([&threads](std::function<bool()> ready,std::chrono::steady_clock::time_point until) {
 		HostWait waiting;
-		threads.block(std::move(ready),until);
+		threads.block(std::move(ready), until, false, false, true);
 	});
 	windows.set_input_taken([&threads] { threads.took_input(); });
 	windows.set_idle_sources([&threads](std::chrono::steady_clock::time_point limit) { return threads.idle_until(limit); },
@@ -3149,8 +3149,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	kernel.queue_quiet=[&windows](uint32_t thread) { windows.mark_quiet(thread); };
 	windows.set_block([&threads](std::function<bool()> ready) {
 		HostWait waiting;
-		threads.block(std::move(ready), std::nullopt);
+		threads.block(std::move(ready), std::nullopt, false, false, true);
 	});
+	windows.set_tell([&threads](uint32_t thread) { threads.tell(thread); });
 	threads.add_end_listener([&windows](uint32_t thread) { windows.thread_ended(thread); });
 #ifdef RAVEN_VULKAN
 	vulkan.set_blocking([&threads](std::function<bool()> ready) {

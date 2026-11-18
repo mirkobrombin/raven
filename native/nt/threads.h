@@ -197,6 +197,11 @@ public:
 	// Puts a thread in a wait that block was given `told` for in line for the runtime, after whatever ends its wait has changed. Any host
 	// thread may call it, holding the runtime or not.
 	void tell(GuestThread &thread);
+	void tell(uint32_t id)
+	{
+		if (const auto thread = find(id))
+			tell(*thread);
+	}
 	// A wait for objects of the process's table that the host thread of a guest takes while its guest spins in its stub, without the
 	// turn: the result of raven_waits_wait (an index, an abandoned one or a time-out), or nothing when the wait has to go the usual way,
 	// which then finds the object as this left it. Only a parked host thread waits here; the main one no longer than the run may last.

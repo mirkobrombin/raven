@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <functional>
 #include <span>
 #include <memory>
 #include <optional>
@@ -381,6 +382,8 @@ public:
 	void windows_changed() { ++window_generation; }
 	bool set_title(uint64_t window,std::u16string title);
 	bool invalidate(uint64_t window,DesktopRect rect,bool erase);
+	// Told the thread of a window that has just come to need painting, for a wait of that thread to look again.
+	std::function<void(uint32_t)> invalidated;
 	bool validate(uint64_t window,DesktopRect rect);
 	bool start_paint(uint64_t window);
 	void finish_paint(uint64_t window);
