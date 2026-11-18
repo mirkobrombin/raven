@@ -248,7 +248,8 @@ static BOOL pool_load(msi_db *db, UINT *ref_size)
 			n++;
 		}
 		UINT id = db->pool_count++;
-		if (length && offset + length <= data_size) {
+		// A length past the data is refused alone, before it can wrap the offset; the strings after it keep their places.
+		if (length && length <= data_size - offset) {
 			pool_decode(&db->pool[id], effective_codepage(db), (char *)data + offset, length);
 			offset += length;
 		}
