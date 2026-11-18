@@ -5,6 +5,7 @@
 #include "text.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -256,6 +257,168 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 		call.write(call[2], bytes);
 		call.ret(1);
 	});
+	// Enumerate the services in the prefix's Services registry branch. The manager is virtual, so its list comes from the same
+	// registry that CreateService and DeleteService update; a service with no live status record is stopped.
+	const auto enum_services_status_ex = [&objects, &hive](ApiCall &call, bool wide) {
+		if (!objects.object_as<ServiceManager>(call[0])) {
+			call.fail(6);
+			return;
+		}
+		if (call.u32(1) != 0 || !call.u32(2) || !call.u32(3) || (call.u32(3) & ~3U)) {
+			call.fail(87);
+			return;
+		}
+		if (!call[6] || !call[7]) {
+			call.fail(87);
+			return;
+		}
+		const auto group = call[9] ? (wide ? call.wide(call[9], 256) : from_utf8(call.narrow(call[9], 256))) : std::u16string();
+		const auto equal_folded = [](std::u16string_view left, std::u16string_view right) {
+			return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(), [](char16_t a, char16_t b) {
+				if (a >= u'A' && a <= u'Z') a = char16_t(a + (u'a' - u'A'));
+				if (b >= u'A' && b <= u'Z') b = char16_t(b + (u'a' - u'A'));
+				return a == b;
+			});
+		};
+		struct Entry {
+			std::u16string name, display;
+			std::string narrow_name, narrow_display;
+			uint32_t type = 0;
+			Status status;
+		};
+		std::vector<Entry> entries;
+		uint64_t services = 0;
+		if (!hive.open(0x80000002ULL, u"SYSTEM\\CurrentControlSet\\Services", services)) {
+			for (uint32_t index = 0; index < 65536; ++index) {
+				std::u16string name;
+				if (hive.enum_key(services, index, name) == 259)
+					break;
+				Entry entry;
+				entry.name = name;
+				std::u16string service_group;
+				uint64_t service_key = 0;
+				if (!hive.open(services, name, service_key)) {
+					uint32_t value_type = 0;
+					std::vector<uint8_t> value;
+					if (!hive.query(service_key, u"Type", value_type, value) && value.size() >= sizeof(entry.type))
+						std::memcpy(&entry.type, value.data(), sizeof(entry.type));
+					if (!hive.query(service_key, u"DisplayName", value_type, value) && value.size() >= 2) {
+						entry.display.assign(reinterpret_cast<const char16_t *>(value.data()), value.size() / 2);
+						while (!entry.display.empty() && !entry.display.back()) entry.display.pop_back();
+					}
+					if (!hive.query(service_key, u"Group", value_type, value) && value.size() >= 2) {
+						service_group.assign(reinterpret_cast<const char16_t *>(value.data()), value.size() / 2);
+						while (!service_group.empty() && !service_group.back()) service_group.pop_back();
+					}
+					hive.close(service_key);
+					objects.release_reserved(service_key);
+				}
+				if (!entry.type || !(entry.type & call.u32(2)))
+					continue;
+				if (!group.empty() && !equal_folded(group, service_group))
+					continue;
+				entry.status = read_status(name);
+				const uint32_t state = entry.status.fields[1];
+				if ((call.u32(3) == 1 && state != state_stopped) || (call.u32(3) == 2 && state == state_stopped))
+					continue;
+				if (entry.display.empty()) entry.display = name;
+				entry.narrow_name = to_utf8(entry.name);
+				entry.narrow_display = to_utf8(entry.display);
+				entries.push_back(std::move(entry));
+			}
+			hive.close(services);
+			objects.release_reserved(services);
+		}
+		const uint32_t resume = call[8] ? call.load<uint32_t>(call[8]) : 0;
+		if (resume > entries.size()) {
+			call.fail(87);
+			return;
+		}
+		const size_t width = call.pointer_width(), unit = wide ? 2 : 1;
+		const size_t record_size = (2 * width + 9 * sizeof(uint32_t) + width - 1) & ~(width - 1);
+		const auto text_size = [wide, unit](const Entry &entry) {
+			return (wide ? entry.name.size() + entry.display.size() : entry.narrow_name.size() + entry.narrow_display.size()) * unit + 2 * unit;
+		};
+		const size_t available = entries.size() - resume;
+		size_t needed_all = available * record_size;
+		for (size_t index = resume; index < entries.size(); ++index)
+			needed_all += text_size(entries[index]);
+		const size_t capacity = call.u32(5);
+		size_t count = 0;
+		for (; count < available; ++count) {
+			const size_t candidate = (count + 1) * record_size + [&] {
+				size_t strings = 0;
+				for (size_t item = 0; item <= count; ++item) strings += text_size(entries[resume + item]);
+				return strings;
+			}();
+			if (candidate > capacity) break;
+		}
+		call.store<uint32_t>(call[7], uint32_t(count));
+		if (count < available) {
+			if (call[8]) call.store<uint32_t>(call[8], resume + uint32_t(count));
+			call.store<uint32_t>(call[6], uint32_t(std::min(needed_all, size_t(UINT32_MAX))));
+			call.fail(234);
+			return;
+		}
+		if (available && !call[4]) {
+			call.fail(87);
+			return;
+		}
+		call.store<uint32_t>(call[6], 0);
+		if (call[8]) call.store<uint32_t>(call[8], 0);
+		if (!count) {
+			if (call[8]) call.store<uint32_t>(call[8], 0);
+			call.ret(1);
+			return;
+		}
+		std::vector<uint8_t> records(count * record_size, 0);
+		uint64_t text_at = call[4] + records.size();
+		const auto set_pointer = [&records, width](size_t offset, uint64_t value) {
+			if (width == 4) {
+				const uint32_t pointer = uint32_t(value);
+				std::memcpy(records.data() + offset, &pointer, sizeof(pointer));
+			} else {
+				std::memcpy(records.data() + offset, &value, sizeof(value));
+			}
+		};
+		for (size_t index = 0; index < count; ++index) {
+			const auto &entry = entries[resume + index];
+			const size_t record = index * record_size;
+			set_pointer(record, text_at);
+			if (wide) {
+				std::vector<uint8_t> bytes((entry.name.size() + 1) * 2, 0);
+				std::memcpy(bytes.data(), entry.name.data(), entry.name.size() * 2);
+				call.write(text_at, bytes);
+				text_at += bytes.size();
+			} else {
+				std::vector<uint8_t> text(entry.narrow_name.begin(), entry.narrow_name.end());
+				text.push_back(0);
+				call.write(text_at, text);
+				text_at += text.size();
+			}
+			set_pointer(record + width, text_at);
+			if (wide) {
+				std::vector<uint8_t> text((entry.display.size() + 1) * 2);
+				std::memcpy(text.data(), entry.display.data(), entry.display.size() * 2);
+				call.write(text_at, text);
+				text_at += text.size();
+			} else {
+				std::vector<uint8_t> text(entry.narrow_display.begin(), entry.narrow_display.end());
+				text.push_back(0);
+				call.write(text_at, text);
+				text_at += text.size();
+			}
+			std::array<uint32_t, 9> status{};
+			status[0] = entry.type;
+			std::copy(entry.status.fields + 1, entry.status.fields + 7, status.begin() + 1);
+			status[7] = entry.status.process;
+			std::memcpy(records.data() + record + 2 * width, status.data(), sizeof(status));
+		}
+		call.write(call[4], records);
+		call.ret(1);
+	};
+	registry.add("EnumServicesStatusExW", 10, [enum_services_status_ex](ApiCall &call) { enum_services_status_ex(call, true); });
+	registry.add("EnumServicesStatusExA", 10, [enum_services_status_ex](ApiCall &call) { enum_services_status_ex(call, false); });
 	// QUERY_SERVICE_CONFIG: type, start, error control, then the path, group, tag, dependencies, account and display name, with the
 	// strings after the structure. A service with no account runs as LocalSystem.
 	const auto query_config = [&objects, with_key, &hive](ApiCall &call, bool wide) {
