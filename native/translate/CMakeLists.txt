@@ -11,9 +11,20 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(RAVEN_NATIVE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(RAVEN_TESTDATA ${CMAKE_CURRENT_SOURCE_DIR}/../../testdata)
 
-add_library(raven_translate STATIC x86_decoder.cpp a64_emitter.cpp)
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(RAVEN_TRANSLATE_PLATFORM platform_darwin.cpp)
+else()
+    set(RAVEN_TRANSLATE_PLATFORM platform_linux.cpp)
+endif()
+add_library(raven_translate STATIC x86_decoder.cpp a64_emitter.cpp translator.cpp code_cache.cpp runtime.cpp ${RAVEN_TRANSLATE_PLATFORM})
 target_include_directories(raven_translate PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(raven_translate PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
+
+# The PE parser is OS-neutral; LoadedImage is not (memfd, 4 KiB pages), so only the parser comes along.
+add_library(raven_translate_pe STATIC ${RAVEN_NATIVE_DIR}/pe/pe.cpp ${RAVEN_NATIVE_DIR}/pe/resources.cpp)
+target_include_directories(raven_translate_pe PUBLIC ${RAVEN_NATIVE_DIR})
+add_library(raven_translate_test_process STATIC test_process.cpp)
+target_link_libraries(raven_translate_test_process PUBLIC raven_translate raven_translate_pe)
 
 # The guest programs the tests run, built as Raven's own build builds them (native/CMakeLists.txt, scripts/provision-fixtures.py).
 find_program(RAVEN_MINGW64 x86_64-w64-mingw32-clang REQUIRED)
@@ -70,3 +81,9 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt
 add_custom_target(a64_cases ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt)
 add_test(NAME translate_a64_emitter COMMAND a64_emitter_test ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt)
 set_tests_properties(translate_a64_emitter PROPERTIES TIMEOUT 30)
+
+add_executable(runtime_test runtime_test.cpp)
+target_link_libraries(runtime_test PRIVATE raven_translate_test_process)
+add_dependencies(runtime_test translate_guests)
+add_test(NAME translate_runtime COMMAND runtime_test ${GUEST})
+set_tests_properties(translate_runtime PROPERTIES TIMEOUT 60)
