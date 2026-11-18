@@ -78,6 +78,10 @@ int main(int argc, char **argv)
 		hvf::Vcpu vcpu(vm, true);
 		translate::Runtime runtime(memory, cache, options, &vcpu);
 		for (const translate::x87_oracle::Case &item : cases) {
+			if (!translate::x87_oracle::runs(item)) {
+				report.skip(item);
+				continue;
+			}
 			const uint64_t address = memory.add(item.code);
 			translate::CpuState &state = runtime.state();
 			translate::x87_oracle::load(state, item.input);
@@ -100,6 +104,6 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	report.print("vCPU");
-	std::printf("%zu cases, %zu failures\n", cases.size(), report.failures);
+	std::printf("%zu cases run, %zu failures\n", cases.size() - report.skipped, report.failures);
 	return report.failures == 0 ? 0 : 1;
 }

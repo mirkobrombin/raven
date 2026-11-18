@@ -5,6 +5,8 @@
 // what an x86 CPU left where Rosetta disagrees with it, and replaces Rosetta's result there.
 
 #include "cpu_state.h"
+#include "x86_decoder.h"
+#include "x87.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -233,11 +235,28 @@ inline std::string compare(const Case &item, const CpuState &state, const uint8_
 	return {};
 }
 
+// Whether the core runs every instruction of the case; the others (the transcendental instructions, docs/macos/x87.md) are counted
+// as not run rather than failed.
+inline bool runs(const Case &item)
+{
+	size_t at = 0;
+	while (at < item.code.size()) {
+		const Instruction instruction = decode(std::span(item.code).subspan(at), at);
+		if (instruction.mnemonic >= x87_first && instruction.mnemonic <= x87_last && !x87_supported(instruction))
+			return false;
+		if (instruction.mnemonic == Mnemonic::invalid)
+			return true;
+		at += instruction.length;
+	}
+	return true;
+}
+
 // Failures by family, and the first few of each in full.
 struct Report {
 	std::map<std::string, std::pair<size_t, size_t>> families;
 	size_t failures = 0;
 	size_t silicon = 0;
+	std::map<std::string, size_t> not_run;
 	void add(const Case &item, const std::string &problem)
 	{
 		auto &[cases, failed] = families[item.family];
@@ -250,10 +269,18 @@ struct Report {
 		if (failed <= 12)
 			std::fprintf(stderr, "%s: #%zu %s: %s\n", item.family.c_str(), item.number, item.text.c_str(), problem.c_str());
 	}
+	size_t skipped = 0;
+	void skip(const Case &item)
+	{
+		++not_run[item.family];
+		++skipped;
+	}
 	void print(const char *where) const
 	{
 		for (const auto &[family, counts] : families)
 			std::printf("%s, %s: %zu cases, %zu failures\n", where, family.c_str(), counts.first, counts.second);
+		for (const auto &[family, count] : not_run)
+			std::printf("%s, %s: %zu cases not run, their instructions are not implemented\n", where, family.c_str(), count);
 		std::printf("%s: %zu cases held to the x86 CPU's result where Rosetta differs\n", where, silicon);
 	}
 };

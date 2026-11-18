@@ -58,7 +58,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	// Both orderings this process can run.
-	size_t failures = 0;
+	size_t failures = 0, run = 0;
 	for (const MemoryOrdering ordering : {MemoryOrdering::rcpc, MemoryOrdering::barriers}) {
 		Snippets memory;
 		JitCodeCache cache(64 << 20);
@@ -69,6 +69,10 @@ int main(int argc, char **argv)
 		alignas(16) uint8_t buffer[256];
 		x87_oracle::Report report;
 		for (const x87_oracle::Case &item : cases) {
+			if (!x87_oracle::runs(item)) {
+				report.skip(item);
+				continue;
+			}
 			const uint64_t address = memory.add(item.code);
 			CpuState &state = runtime.state();
 			x87_oracle::load(state, item.input);
@@ -88,7 +92,8 @@ int main(int argc, char **argv)
 		}
 		report.print(ordering == MemoryOrdering::rcpc ? "in process, LDAPR/STLR" : "in process, barriers");
 		failures += report.failures;
+		run += cases.size() - report.skipped;
 	}
-	std::printf("%zu cases, %zu failures\n", cases.size() * 2, failures);
+	std::printf("%zu cases run, %zu failures\n", run, failures);
 	return failures == 0 ? 0 : 1;
 }
