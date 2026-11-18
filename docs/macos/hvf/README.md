@@ -671,6 +671,15 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   rechecks the guest bytes after watching them. `CodeRunner` gained `quiesce`, which `code_written` calls on every other thread's
   runner. Single-thread callers keep the old API (`Runtime::call`, `state`), which goes to the first thread; translate's own tests pass
   unchanged (PROVEN, `ctest --test-dir build-macos-hvf`, 10 of 10).
+- For ARM64EC, `native/translate` gained `GuestMemory::entry_thunk` (default 0, so other `GuestMemory` subclasses are unchanged),
+  `Runtime::arm64ec_routines` and `Runtime::Arm64ecRoutines`, native stubs placed by `host_code` when `GuestMemory::is_native` says so,
+  the `arm64ec_*` code generators in `translator.cpp` (with the lookup probe of `native_thunk` moved into a helper, emitting the same
+  words), `Mnemonic::movq` and `OperandKind::xmm` in the decoder, `TranslatorOptions::vector_registers` (default off) and the
+  `x86_corpus.py` generator emitting `movq`. `translator_version` is 2 and the option is in `cache_key`, so ahead-of-time caches
+  written before this change no longer load (none is committed: they are written by the tests that read them). runtime_test checks
+  that `movq` is not translated without the option (a mutation dropping the check fails it: `FAIL: movq was translated without
+  vector_registers`). PROVEN on macOS (`ctest --test-dir build-macos-hvf`, 15 of 15, three times); the Linux build was not run (NOT
+  verified). Nothing outside `native/translate` and `native/hvf` includes the decoder or subclasses `GuestMemory` (PROVEN by grep).
 - `CpuState::lookup_table` stays a `LookupEntry *` but holds the address translated code uses, which is not a host pointer in a VM: it
   could become a `uint64_t`.
 - `native/hvf` reuses `test_process.h`'s `lay_out_image`, which lives in a test-only library; the real loader should provide it.
