@@ -14,11 +14,13 @@ namespace raven::hvf {
 VmProcess::VmProcess(Vm &vm) : vm(vm)
 {
 	vm.write_fault = [this](uint64_t address) { return code_write(address); };
+	vm.emulate_store = [this](uint64_t address, const void *bytes, size_t size) { write(address, bytes, size); };
 }
 
 VmProcess::~VmProcess()
 {
 	vm.write_fault = nullptr;
+	vm.emulate_store = nullptr;
 }
 
 void VmProcess::attach(translate::Runtime &runtime)

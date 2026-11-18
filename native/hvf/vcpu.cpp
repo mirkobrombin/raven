@@ -29,6 +29,9 @@ constexpr uint64_t hvc_class = 0x16, lower_data_abort_class = 0x24;
 // read-only arrives as a translation fault at level 3 (DFSC 0b000111, syndrome 0x93880047 here), not as a permission fault
 // (0b0011xx), so both count.
 constexpr uint64_t write_not_read = 1 << 6, table_walk = 1 << 7, far_not_valid = 1 << 10;
+// ISV: the syndrome describes the access, a single register's load or store without writeback: SAS (log2 of its size), SRT (its
+// register, 31 being xzr).
+constexpr uint64_t syndrome_valid = 1 << 24;
 
 bool stage2_store_fault(uint64_t syndrome)
 {
@@ -160,13 +163,31 @@ uint32_t Vcpu::enter(uint64_t trampoline, uint64_t state, uint64_t code)
 		if (exit->reason != HV_EXIT_REASON_EXCEPTION)
 			throw std::runtime_error("vCPU exit " + std::to_string(static_cast<unsigned>(exit->reason)));
 		const uint64_t syndrome = exit->exception.syndrome;
-		if (syndrome >> 26 == hvc_class && (syndrome & 0xffff) == 0)
+		if (syndrome >> 26 == hvc_class && (syndrome & 0xffff) == 0) {
+			// Faults in a row are those of one execution of a store: a store that went through leaves no trace, so count from here.
+			faults_in_a_row = 0;
 			return static_cast<uint32_t>(reg(HV_REG_X0));
+		}
 		// A store to a page the host protected at stage 2: the PC still names the store, which runs again on resume.
 		if (stage2_store_fault(syndrome) && vm.write_fault && vm.write_fault(exit->exception.virtual_address)) {
 			++counters.write_faults;
+			const uint64_t pc = reg(HV_REG_PC), address = exit->exception.virtual_address;
+			faults_in_a_row = pc == faulting_pc && address == faulting_address ? faults_in_a_row + 1 : 1;
+			faulting_pc = pc;
+			faulting_address = address;
+			// Other vCPUs translated the page again before every retry: do the store here and step over it. A store the syndrome does not
+			// describe (STP, writeback, atomics) is retried without bound.
+			if (faults_in_a_row >= store_retries && syndrome & syndrome_valid && vm.emulate_store) {
+				const unsigned size = 1u << ((syndrome >> 22) & 3), source = (syndrome >> 16) & 31;
+				const uint64_t value = source == 31 ? 0 : reg(static_cast<hv_reg_t>(HV_REG_X0 + source));
+				vm.emulate_store(address, &value, size);
+				set_reg(HV_REG_PC, pc + 4);
+				faults_in_a_row = 0;
+				++counters.emulated_stores;
+			}
 			continue;
 		}
+		faults_in_a_row = 0;
 		uint64_t esr = 0, far = 0, elr = 0;
 		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_ESR_EL1, &esr);
 		hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_FAR_EL1, &far);

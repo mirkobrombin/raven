@@ -97,14 +97,19 @@ int main(int argc, char **argv)
 					}
 				}).detach();
 				process.after_code_written = [&](uint64_t) { runtime.translate_ahead(patch_target); };
-				const uint64_t faults_before = vcpu.stats().write_faults;
+				const uint64_t faults_before = vcpu.stats().write_faults, emulated_before = vcpu.stats().emulated_stores;
 				const uint64_t always = thread.call(entry, {3, 0, 30}).value;
 				ended = true;
 				process.after_code_written = nullptr;
-				std::printf("translated again after every fault: the store ended after %llu faults, the call returned %llu\n",
-					static_cast<unsigned long long>(vcpu.stats().write_faults - faults_before), static_cast<unsigned long long>(always));
+				const uint64_t emulated = vcpu.stats().emulated_stores - emulated_before;
+				std::printf("translated again after every fault: %llu faults, %llu stores emulated, the call returned %llu\n",
+					static_cast<unsigned long long>(vcpu.stats().write_faults - faults_before), static_cast<unsigned long long>(emulated),
+					static_cast<unsigned long long>(always));
 				check(always == 30, "translated again after every fault: rewrote patch_target to return 30, it returned " +
 					std::to_string(always));
+				check(vcpu.stats().write_faults - faults_before <= hvf::Vcpu::store_retries && emulated == 1,
+					"translated again after every fault: the store was not emulated after " + std::to_string(hvf::Vcpu::store_retries) +
+						" faults");
 				thread.call(entry, {7, 0, 1});
 				const uint32_t host_value = 77;
 				process.write(patch_target + 1, &host_value, 4);

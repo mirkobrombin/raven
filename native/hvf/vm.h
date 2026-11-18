@@ -56,6 +56,8 @@ public:
 	// Handles such a store at address; true when the store can be retried. Called for stage-2 store faults only (translation or
 	// permission, not from a table walk).
 	std::function<bool(uint64_t address)> write_fault;
+	// Performs, for a vCPU, a store that kept faulting (Vcpu::store_retries): writes bytes at address as the guest store would have.
+	std::function<void(uint64_t address, const void *bytes, size_t size)> emulate_store;
 	// Copies between guest memory and the host; throws when the range is not mapped.
 	void read(uint64_t address, void *into, size_t size) const;
 	void write(uint64_t address, const void *from, size_t size);

@@ -24,6 +24,9 @@ public:
 
 	// Resumes the dispatcher, which enters code through trampoline with the CpuState at state; returns once translated code exits.
 	uint32_t enter(uint64_t trampoline, uint64_t state, uint64_t code) override;
+	// A store that faulted on watched code this many times in a row, each time after its translations were dropped, is performed by
+	// the host instead (Vm::emulate_store), so it ends however often other vCPUs translate the page again.
+	static constexpr unsigned store_retries = 8;
 	// From another thread: forces an exit with hv_vcpus_exit and waits for it, unless the vCPU is not in the guest.
 	void quiesce() override;
 
@@ -40,6 +43,7 @@ public:
 		uint64_t cancels = 0;
 		uint64_t instruction_cache_invalidations = 0;
 		uint64_t write_faults = 0;
+		uint64_t emulated_stores = 0;
 	};
 	const Stats &stats() const { return counters; }
 
@@ -54,6 +58,8 @@ private:
 	uint64_t stack_top = 0;
 	uint64_t seen_generation = 0;
 	bool started = false;
+	uint64_t faulting_pc = 0, faulting_address = 0;
+	unsigned faults_in_a_row = 0;
 	Stats counters;
 	std::atomic<bool> in_guest{false};
 	std::atomic<uint64_t> exits{0};
