@@ -235,9 +235,10 @@ are where translated code left them.
 | native indirect call (check_icall, check_call, check_icall_cfg) | native or x64 | `arm64ec_check_icall(ranges)` | x11 in one of the process's ARM64EC ranges: left alone; otherwise x9 = x11 and x11 = x10 (the exit thunk). Clobbers x9, x11, x16 and NZCV |
 
 Native code's own registers survive a host exit in the middle of a callback: x19-x28 are x64 callee-saved registers the exit
-trampoline stores in CpuState; v8-v15 are stored in `CpuState::vector_high` with `vector_registers` (before that they were replaced by
-the host frame's, and `ec_keep`'s d8 came back wrong); v0-v7 are not written on the exit path in a vCPU; sp is derived from RSP at
-every transition back into native code, since the exit trampoline takes sp from `host_frame`.
+trampoline stores in CpuState; v0-v15 are stored in `CpuState::xmm` on every exit and loaded on entry (first only v8-v15, in
+`CpuState::vector_high`, and before that they were replaced by the host frame's, and `ec_keep`'s d8 came back wrong; see
+[../sse.md](../sse.md)); sp is derived from RSP at every transition back into native code, since the exit trampoline takes sp from
+`host_frame`.
 
 ### ABI mapping
 
@@ -249,7 +250,7 @@ code never writes x24 and keeps x29 for itself:
 | RCX, RDX, R8, R9 (arguments 1-4) | x0, x1, x2, x3 | x0, x1, x2, x3 | nothing to move |
 | arguments 5+ | x64 stack at RSP + 0x28 (above the return address and home area) | same | the entry thunk loads them into x4-x7 from x4 + 0x20; x4 = RSP after the return address is popped |
 | RAX (result) | x8 (the entry thunk moves x0 there; the exit thunk moves it back) | x8 | nothing to move |
-| XMM0-XMM3 (FP arguments, by position) | v0-v3; the entry thunk moves what AAPCS64 wants (`ec_scale(int64_t, double)`: XMM1 to d0) | v0-v15 (`movq` only, with `vector_registers`) | nothing to move |
+| XMM0-XMM3 (FP arguments, by position) | v0-v3; the entry thunk moves what AAPCS64 wants (`ec_scale(int64_t, double)`: XMM1 to d0) | v0-v15 (SSE and SSE2, [../sse.md](../sse.md)) | nothing to move |
 | RSP | sp | x28 | sp = x28 into native code; x28 = sp out of it |
 | RBP | x29 | x24 | none: native code never writes x24, x29 is native code's own |
 | RBX, RSI, RDI, R12-R15 (callee-saved) | x27, x25, x26, x19-x22 | same | nothing to move |
@@ -257,12 +258,10 @@ code never writes x24 and keeps x29 for itself:
 | gs:[0x30] (TEB) | x18 | `CpuState::gs_base` | both name the same TEB page |
 | return address | x30 | on the x64 stack | popped into x30 on entry; pushed from x30 on calls back |
 
-`movq xmm, r64` and `movq r64, xmm` (66 REX.W 0F 6E/7E, register forms) are the only SSE instructions the translator knows: FMOV
-between the general register and dN, with XMMn in vn. They are translated only with `TranslatorOptions::vector_registers`: then the
-trampolines store v8-v15 in `CpuState::vector_high` on exit and load them on entry, and v0-v7 stay in the registers, which holds in
-a vCPU (nothing on the exit path writes them) and not in this process, where the host code an exit returns to uses them.
-Otherwise the block ends before them as before. The option is part of the ahead-of-time cache key, and the translator version is 2.
-Decoding matches LLVM: the corpus generator now emits register-form `movq` (192 instances, 0 failures; a mutation printing `movd`
+When this engine was written, `movq xmm, r64` and `movq r64, xmm` (66 REX.W 0F 6E/7E, register forms) were the only SSE
+instructions the translator knew, translated only with `TranslatorOptions::vector_registers`, which kept v8-v15 in
+`CpuState::vector_high` and relied on v0-v7 surviving the exit path of a vCPU. The SSE work replaced both: XMM0-XMM15 and MXCSR are
+CpuState in every runner, the option is gone and the translator version is 3 ([../sse.md](../sse.md)). Decoding matched LLVM: the corpus generator now emits register-form `movq` (192 instances, 0 failures; a mutation printing `movd`
 gives 192 failures), and a one-off run with Notepad++ x64 added matched 517 instances (PROVEN: `x86_corpus.py` with `notepad++.exe`
 and `ec_client.exe`, then `x86_decoder_test`: `notepad++.exe: 1224528 instructions, 1179633 with semantics (96.3%), 3584 rejected by
 LLVM, 0 failures`).
@@ -648,8 +647,8 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   returning). `blraaz` and the other pointer-authenticated forms are not accepted (ARM64EC code here does not use them). The
   deterministic version: dispatch_call pushes a fixed marker return address instead of x30 and keeps x30 on a per-thread LIFO in the
   TEB; a `ret` to the marker pops it. Not done: it changes what x64 sees as its return address.
-- **ARM64EC, what is not there.** XMM0-XMM7 are not in CpuState (they persist in a vCPU's v0-v7), so `Runtime::call` from the host
-  cannot pass or read them. No SSE beyond `movq`. check_icall is generated once with the ranges known at `link_arm64ec` (a later call with other
+- **ARM64EC, what is not there.** Native code runs with the guest's FPCR (FPCR.AH, FIZ and the MXCSR rounding mode), since the
+  transitions do not leave translated code ([../sse.md](../sse.md), open items). check_icall is generated once with the ranges known at `link_arm64ec` (a later call with other
   ranges throws); a DLL loaded later needs it generated again, or Windows' EC bitmap (one bit per page, a sparse two-level table in
   guest memory). `Vm::set_access` must run before any vCPU uses the pages; loading while vCPUs run needs TLB maintenance. No `dispatch_fptr`, `Get`/`SetX64Information`, auxiliary IAT (native code
   calling x64 imports directly), RedirectionMetadata, CFG, DllMain, relocation, or unwinding across transitions. Native code calling
@@ -713,7 +712,8 @@ The last argument is optional: a program that prints the thermal state (`NSProce
   written before this change no longer load (none is committed: they are written by the tests that read them). runtime_test checks
   that `movq` is not translated without the option (a mutation dropping the check fails it: `FAIL: movq was translated without
   vector_registers`). PROVEN on macOS (`ctest --test-dir build-macos-hvf`, 15 of 15, three times); the Linux build was not run (NOT
-  verified). Nothing outside `native/translate` and `native/hvf` includes the decoder or subclasses `GuestMemory` (PROVEN by grep).
+  verified). The SSE work later removed `vector_high`, `vector_registers` and that runtime_test case, and moved the translator
+  version to 3 ([../sse.md](../sse.md)). Nothing outside `native/translate` and `native/hvf` includes the decoder or subclasses `GuestMemory` (PROVEN by grep).
 - `CpuState::lookup_table` stays a `LookupEntry *` but holds the address translated code uses, which is not a host pointer in a VM: it
   could become a `uint64_t`.
 - `native/hvf` reuses `test_process.h`'s `lay_out_image`, which lives in a test-only library; the real loader should provide it.

@@ -159,8 +159,8 @@ The allocation itself goes through `AllocatorHooks.h` (`PAGE_EXECUTE_READWRITE` 
 | | FEX path A | FEX path B | Own translator |
 |---|---|---|---|
 | Code Raven maintains | An ARM64EC loader and ntdll (new), plus a fork patch | Glue in the size of FEX's 7.3k-line Windows layer, plus a fork of 92k lines of FEXCore | About 5k lines today, growing with SSE/AVX/x87 |
-| x86 coverage | Complete (SSE to AVX2, x87) | Complete | The integer subset (see the limits) |
-| Effort to first app | Large: the ARM64EC loader and ntdll come before anything runs | Large: the Darwin port of FEXCore | Done for Raven's five simplest clients. SSE/AVX and x87 are the large remaining items |
+| x86 coverage | Complete (SSE to AVX2, x87) | Complete | The integer subset, SSE and SSE2 ([sse.md](sse.md); see the limits) |
+| Effort to first app | Large: the ARM64EC loader and ntdll come before anything runs | Large: the Darwin port of FEXCore | Done for Raven's five simplest clients. x87 and AVX are the large remaining items |
 | Performance on the same workloads | Linux arm64 table below: 1.0 to 1.8 times native | Same engine as path A | Linux arm64 table below: 1.06 to 2.15 times native |
 
 #### FEX against our translator on Linux arm64
@@ -503,8 +503,8 @@ The mapping is Microsoft's ARM64EC one (https://learn.microsoft.com/en-us/window
 - **x18.** It does not matter for translated x64 code. The TEB comes from `gs:`, which the translator reads from `CpuState.gs_base`,
   so it never touches x18. It matters only for native Windows ARM64 and ARM64EC code (see the boundary below).
 - **Why this mapping.** RCX, RDX, R8 and R9 are already x0 to x3, and every x64 callee-saved register is AAPCS64 callee-saved. A call
-  into native code therefore moves no register, and native code preserves everything the x64 caller expects. The XMM registers do
-  not yet follow this rule (see the limits).
+  into native code therefore moves no register, and native code preserves everything the x64 caller expects. XMMn is vn, as in
+  ARM64EC; XMM6 to XMM15, callee-saved in x64, are whole only through CpuState ([sse.md](sse.md)).
 
 ## Flags
 
@@ -672,7 +672,7 @@ x87 needs a soft-float or F64-based path. It is the largest missing piece for bo
 ## Limits of the current core
 
 - **Not translated yet:**
-  - SSE/AVX/x87;
+  - AVX, x87, and SSE3 and later (SSE and SSE2 on XMM registers are translated: [sse.md](sse.md));
   - string instructions and `rep`;
   - `mul`/`div`, `bt*`, rotates, `pushf`/`popf`;
   - 16-bit push and pop;
@@ -681,7 +681,8 @@ x87 needs a soft-float or F64-based path. It is the largest missing piece for bo
   - `cmovp`.
   
   Each ends the block with an `unsupported` exit that names the instruction's address.
-- **Native thunks:** integer arguments only, up to eight. The XMM6 to XMM15 upper halves will need saving once SSE is translated.
+- **Native thunks:** integer arguments only, up to eight. They store XMM0 to XMM15 and MXCSR in CpuState, run the function with the
+  host's FPCR and load XMM6 to XMM15 back after it ([sse.md](sse.md)).
 - **Threads:** one guest thread. The dispatcher, block maps and invalidation take no locks. Multi-threading needs:
   - a lock around translation;
   - stop-the-world, or epochs, for invalidation and chain patching;
