@@ -10,6 +10,7 @@
 //   role 5:    waits for role 4 to run, spins n steps, and rewrites patch_target's immediate to shared[50].
 //   role 6:    n times: calls patch_target and rewrites its immediate, so every call runs a fresh translation.
 //   role 7:    n times: calls patch_target, as role 6 without the store.
+//   role 9:    stores n to the 8 bytes at shared.
 //   role 8:    patch_next, whose first instruction stores 2 into the immediate of its second, mov eax, 1: on x86 it returns 2. Run once,
 //              reset to 1, run again; returns what the second run returned.
 #include <stdint.h>
@@ -78,6 +79,10 @@ uint64_t raven_entry(uint64_t role, volatile uint64_t *shared, uint64_t n)
 		for (volatile uint64_t i = 0; i < n; i = i + 1)
 			;
 		*patch_immediate() = (uint32_t)shared[50];
+		return 0;
+	}
+	if (role == 9) {
+		*shared = n;
 		return 0;
 	}
 	if (role == 8) {

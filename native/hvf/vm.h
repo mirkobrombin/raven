@@ -46,6 +46,8 @@ public:
 	uint8_t *map(uint64_t address, size_t size, Access access);
 	// The same at an address the VM picks; returns that address.
 	uint64_t map_anywhere(size_t size, Access access);
+	// The guest physical address (IPA) behind a mapped guest address.
+	uint64_t physical(uint64_t address) const;
 	// The host alias of a guest address, or nullptr when it is not mapped. Valid up to the end of the mapping holding it.
 	uint8_t *host(uint64_t address) const;
 	// Takes write permission away from the guest page holding address at stage 2 (writable false), or gives it back. A guest store to a
