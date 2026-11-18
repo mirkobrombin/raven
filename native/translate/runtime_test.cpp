@@ -183,6 +183,15 @@ static void rewrites_its_own_code()
 	check(fixture.runtime.stats().invalidated_blocks > 0, "the guest's own write dropped no translation");
 }
 
+// The checksums the native arm64 build of testdata/workloads.c returns on its first call.
+static void runs_a_workload(const char *name, uint64_t expected)
+{
+	Fixture fixture;
+	const uint64_t base = fixture.load(name);
+	const RunResult result = fixture.runtime.call(fixture.process.entry(base));
+	check(result.reason == ExitReason::returned && result.value == expected, std::string(name) + " returned " + describe(result));
+}
+
 static void reuses_a_saved_translation()
 {
 	const std::filesystem::path path = std::filesystem::temp_directory_path() / "raven-translate-test.cache";
@@ -230,6 +239,9 @@ int main(int argc, char **argv)
 		{"self-modifying code, native write", sees_its_code_rewritten},
 		{"self-modifying code, guest write", rewrites_its_own_code},
 		{"ahead-of-time cache", reuses_a_saved_translation},
+		{"crc32 workload", [] { runs_a_workload("crc32.exe", 0x310c3e6c); }},
+		{"fnv workload", [] { runs_a_workload("fnv.exe", 0xacb8b4443b0adc25); }},
+		{"histogram workload", [] { runs_a_workload("histogram.exe", 0x28e14b303c16e232); }},
 	};
 	for (const auto &[name, run] : cases) {
 		const int before = failures;

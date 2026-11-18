@@ -55,8 +55,18 @@ add_custom_command(OUTPUT ${GUEST}/rewrite.exe
     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
         -o ${GUEST}/rewrite.exe ${CMAKE_CURRENT_SOURCE_DIR}/testdata/rewrite_client.c
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/rewrite_client.c VERBATIM)
+# The integer workloads every engine runs in the Linux arm64 comparison with FEX (testdata/workloads.c).
+set(GUEST_WORKLOADS "")
+foreach(WORKLOAD crc32 fnv histogram)
+    string(TOUPPER ${WORKLOAD} WORKLOAD_DEFINE)
+    add_custom_command(OUTPUT ${GUEST}/${WORKLOAD}.exe
+        COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -DWORKLOAD_${WORKLOAD_DEFINE}
+            -Wl,--entry,raven_entry,--no-insert-timestamp -o ${GUEST}/${WORKLOAD}.exe ${CMAKE_CURRENT_SOURCE_DIR}/testdata/workloads.c
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/testdata/workloads.c VERBATIM)
+    list(APPEND GUEST_WORKLOADS ${GUEST}/${WORKLOAD}.exe)
+endforeach()
 set(GUEST_PROGRAMS ${GUEST}/return-73.exe ${GUEST}/entry.exe ${GUEST}/startup.exe ${GUEST}/arguments.exe ${GUEST}/api_loop.exe
-    ${GUEST}/rewrite.exe)
+    ${GUEST}/rewrite.exe ${GUEST_WORKLOADS})
 add_custom_target(translate_guests ALL DEPENDS ${GUEST_PROGRAMS})
 
 # The decoder's oracle: LLVM's disassembly of random instances, random bytes, the guest programs and, where it is installed, the
