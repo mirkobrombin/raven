@@ -264,6 +264,46 @@ def addressing(rng):
     return [f"{name} {xmm(rng)}, {word} ptr [rip + {label}]", "ret", f"{label}: .quad {quadword(rng, 'mixed'):#x}, {quadword(rng, 'mixed'):#x}"]
 
 
+# Operand pairs where x86 and Arm differ unless the translator makes them agree: signed zeros and NaNs in either order.
+EDGE_PAIRS = {
+    "s": [(0x00000000, 0x80000000), (0x80000000, 0x00000000), (0x7FC00001, 0x7F800002), (0x7F800002, 0x7FC00001),
+          (0x7FC00001, 0xFFC00003), (0x7F800002, 0xFF800004), (0x7F800002, 0x3F800000), (0x3F800000, 0x7F800002),
+          (0x7FC00001, 0x80000000), (0x00000000, 0xFFC00003), (0x7F800000, 0x00000000), (0x00000000, 0x7F800000)],
+    "d": [(0x0000000000000000, 0x8000000000000000), (0x8000000000000000, 0x0000000000000000),
+          (0x7FF8000000000001, 0x7FF0000000000002), (0x7FF0000000000002, 0x7FF8000000000001),
+          (0x7FF8000000000001, 0xFFF8000000000003), (0x7FF0000000000002, 0xFFF0000000000004),
+          (0x7FF0000000000002, 0x3FF0000000000000), (0x3FF0000000000000, 0x7FF0000000000002),
+          (0x7FF8000000000001, 0x8000000000000000), (0x0000000000000000, 0xFFF8000000000003),
+          (0x7FF0000000000000, 0x0000000000000000), (0x0000000000000000, 0x7FF0000000000000)],
+}
+
+
+def edges(rng):
+    first, second = rng.sample(range(16), 2)
+    name = rng.choice(["min", "max", "add", "sub", "mul", "div", "cmplt", "cmpeq", "cmpunord"]) + rng.choice(["ps", "pd", "ss", "sd"])
+    if rng.random() < 0.2:
+        name = rng.choice(["comiss", "ucomiss", "comisd", "ucomisd"])
+    return [f"{name} xmm{first}, xmm{second}"]
+
+
+def edge_pairs(rng, body, vectors):
+    """Puts EDGE_PAIRS into every element of the two registers of an edges case."""
+    name, first, second = body[0].replace(",", "").split()
+    kind = "s" if name.endswith(("ps", "ss")) else "d"
+    for half in range(2):
+        low, high = [], []
+        for lane in range(2 if kind == "s" else 1):
+            a, b = rng.choice(EDGE_PAIRS[kind])
+            low.append(a)
+            high.append(b)
+        if kind == "s":
+            vectors[int(first[3:])][half] = low[0] | low[1] << 32
+            vectors[int(second[3:])][half] = high[0] | high[1] << 32
+        else:
+            vectors[int(first[3:])][half] = low[0]
+            vectors[int(second[3:])][half] = high[0]
+
+
 def small_counts(rng, body, vectors, memory):
     """Shift counts that leave something of the value: an XMM register or 16 bytes of memory whose low quadword is the count."""
     parts = body[-1].replace(",", "").split()
@@ -287,6 +327,7 @@ FAMILIES = [
     ("integer", integer, "int", 1500),
     ("shuffle", shuffle, "int", 800),
     ("addressing", addressing, "mixed", 600),
+    ("edges", edges, "mixed", 600),
 ]
 
 
@@ -353,6 +394,8 @@ def main():
             vectors = [[quadword(rng, lanes), quadword(rng, lanes)] for _ in range(16)]
             memory = [quadword(rng, lanes) for _ in range(16)]
             small_counts(rng, body, vectors, memory)
+            if family == "edges":
+                edge_pairs(rng, body, vectors)
             if any(line.startswith("ldmxcsr") for line in body):
                 memory[15] = mxcsr(rng, True) | rng.getrandbits(32) << 32
             lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret",
