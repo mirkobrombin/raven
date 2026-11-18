@@ -15,6 +15,8 @@ Labels: **PROVEN** (command and output below), **INFERRED** (from what, and the 
 | `native/hvf/vcpu.h`, `vcpu.cpp` | `Vcpu`: a `translate::CodeRunner` that resumes a vCPU instead of calling the enter trampoline; system registers, mailbox, exits, write faults, `quiesce` |
 | `native/hvf/vm_process.h`, `vm_process.cpp` | `VmProcess` (a `GuestMemory`: images at their preferred base in guest memory, stacks and TEBs, code watched at stage 2) and `VmCodeCache` (a `CodeAllocator` in guest memory) |
 | `native/hvf/hvf_*_test.cpp` | The exit criteria below, the instruction cache test, the shared cache and code change tests |
+| `native/translate/translator.cpp` (`arm64ec_*`), `runtime.cpp` (`arm64ec_routines`, native stubs), `guest_memory.h` (`entry_thunk`) | The ARM64EC transitions between translated x64 and native code, and `movq` between general and XMM registers |
+| `native/hvf/hvf_arm64ec_test.cpp`, `testdata/ec_library.c`, `ec_library.def`, `ec_client.c` | An x64 program calling an ARM64EC DLL in one vCPU |
 | `native/hvf/hvf_bench.cpp`, `hvf_bench_run.py`, `testdata/bench_native.c`, `testdata/bench_loop.c` | The benchmark |
 | `native/hvf/testdata/hvf_client.c` | x64 guest code of the litmus, the spin and the code changes (`patch_target`) |
 | `native/hvf/CMakeLists.txt`, `hypervisor.entitlements` | Builds on Darwin arm64 only, adds `native/translate` as a subdirectory, signs every binary that creates a VM ad hoc with `com.apple.security.hypervisor` (`RAVEN_HVF_SIGN_IDENTITY` names a keychain identity instead). No provisioning profile: the guest's low addresses come from its own page tables |
@@ -58,7 +60,7 @@ memory rather than VM-specific code:
 | `Runtime::chain` reading the original word | `memcpy` from the execute address (a guest address in the VM) | `CodeAllocator::read` |
 | `Runtime::call` pushing the return address | `memcpy` to the guest stack address | `GuestMemory::write` |
 | `Runtime::run` entering code | call of the enter trampoline as a host function | `CodeRunner::enter` when a runner is given; the in-process path is unchanged |
-| native thunks (`Runtime::bind_native`) | `mov` of a host function address | `bind_native` throws when a runner is given (open item below) |
+| native thunks (`Runtime::bind_native`) | `mov` of a host function address | `bind_native` throws when a runner is given; native code in the VM is ARM64EC code in guest memory instead (below) |
 | the emitter (`translator.cpp`) | | no host address: exits load `exit_trampoline` and `lookup_table` from the CpuState (x23); chain sites come from `adr`; RIP-relative operands are guest addresses. The only absolute host address is in `native_thunk`. INFERRED from reading the emitter (`grep -n "reinterpret_cast\|memcpy" translator.cpp` finds nothing); every test above runs its code in the vCPU, but no test scans emitted words for host addresses |
 
 The workload images import nothing, so no native thunk is needed on this path. PROVEN, in `build-macos-hvf`:
@@ -167,6 +169,87 @@ runner. Blocks, the lookup table, chains and the granule index are shared.
   before their `Vcpu` goes, and runtimes detached (`VmProcess::Attachment` does it) before they go.
 - **In this process** the runtime stays single-threaded: `add_thread` refuses a thread without a runner and any thread once native
   functions are bound (runtime_test), since `TestProcess`'s fault state is not synchronized and its SIGSEGV path calls `code_written`.
+
+## x64 calling an ARM64EC DLL in the same vCPU
+
+An x64 program translated at EL0 calls an ARM64EC DLL whose code runs as it is, at EL0 in the same vCPU, and the DLL calls x64 code
+back. No host exit on the call path once warm, and no host function involved: the transitions are guest code. ARM64EC was chosen over
+plain ARM64 because the compiler already emits what each side needs (entry thunks for x64 callers, exit thunks for x64 callees) and the
+translator's register map is already Microsoft's ARM64EC map; the 60-minute fallback to plain ARM64 was not needed (the first call
+worked about 20 minutes in).
+
+### What the DLL looks like
+
+`ec_library.dll` is built by `arm64ec-w64-mingw32-clang` (llvm-mingw 20261104) without CRT; `chpe.o` from `libmingwex` gives it the
+`__os_arm64x_*` variables its thunks load. Its header says x64 (machine 0x8664); its load config points at the CHPE metadata. PROVEN
+(`llvm-readobj --coff-load-config`, `--coff-exports`, `llvm-objdump -d` on `build-macos-hvf/guest/ec_library.dll`):
+
+- the code map: 0x1000-0x1334 ARM64EC (`.text`), 0x2000-0x3070 x64;
+- the exports point into `.hexpthk`, x64 export thunks (`mov rax, rsp; mov [rax+0x20], rbx; push rbp; pop rbp; jmp <native>`), and
+  RedirectionMetadata maps each to its native function;
+- the word before each native function x64 may call holds the offset to its entry thunk with bit 0 set: `0x179` before `ec_zero` at
+  0x1004 names `$ientry_thunk$cdecl$i8$v` at 0x117c (0x1004 + 0x178); likewise 0x1010 + 0x1b4 = 0x11c4 and 0x101c + 0x1f0 = 0x120c;
+- an entry thunk saves q6-q15, x29 and x30, reads stack arguments from x4 (`ldp x8, x5, [x4, #0x20]`), calls x9, moves x0 to x8 and
+  branches to the address in the `__os_arm64x_dispatch_ret` slot with x30 restored;
+- an exit thunk reserves 0x30 bytes (home area and frame), saves x29 and x30 and calls the `__os_arm64x_dispatch_call_no_redirect`
+  slot with the x64 target in x9, then moves x8 to x0;
+- an indirect call (`ec_call`) loads the target into x11 and the exit thunk into x10, calls the `__os_arm64x_check_icall` slot, then
+  `blr x11`, keeping its own state in x19-x22 and x25.
+
+### The loader (`VmProcess`)
+
+- `load` reads `CHPEMetadataPointer` (load config offset 0xc8) and the code map: x64 ranges are what `code()` translates; ARM64EC
+  ranges are what `is_native` answers and become EL0-executable (`Vm::set_access`, before any vCPU runs them, then the usual
+  instruction cache maintenance). Without CHPE metadata an image is x64 as before.
+- `bind_imports` writes each IAT entry from the export of the loaded image the import names (by name or ordinal).
+- `link_arm64ec` writes the slots the CHPE metadata names: `dispatch_call_no_redirect` and `dispatch_call` get Raven's dispatch_call,
+  `dispatch_ret` its dispatch_ret, `dispatch_icall` (the code's `__os_arm64x_check_icall`) and `dispatch_icall_cfg` its check_icall,
+  and `GetX64Information`, `SetX64Information` and `dispatch_fptr` a `brk #0xec`, so an unimplemented slot stops the guest with an
+  exception instead of branching to 0.
+- `entry_thunk(address)` reads the word before a native address: bit 0 set and the offset landing in native code means an entry
+  thunk; otherwise the address is one x64 returns to.
+- `prepare_thread(state, vcpu)` also sets x18 of the vCPU to the TEB, as Windows ARM64 code expects; nothing in the guest writes x18
+  afterwards (section 3).
+- The DLL's entry point is not called and nothing is relocated (every image gets its preferred base, as before).
+
+### The transitions
+
+Placed in the code cache like the return stub, generated by `translator.cpp`. They need no CpuState change: native ARM64EC code never
+writes x13, x14, x23, x24 or x28, so x23 still points at the CpuState when native code reaches a routine, and RBP (x24) and RSP (x28)
+are where translated code left them.
+
+| From | To | Code | What it does |
+|---|---|---|---|
+| x64 `call` or `jmp` | native function F | `arm64ec_entry(F, thunk)`, one per F, placed on the first lookup miss or chain to F | pops the return address into x30, sets sp and x4 to RSP past it, x9 to F, branches to the entry thunk |
+| entry thunk | x64 | `arm64ec_dispatch_ret` | RSP (x28) from sp, then the lookup table probe for x30 (a miss exits as any miss does) |
+| native, through an exit thunk | x64 function in x9 | `arm64ec_dispatch_call` | x28 = sp - 8 and the native return address (x30) stored there, as a `call` would push it; then the probe for x9 |
+| x64 `ret` | native return address R | `arm64ec_resume(R)`, one per R | sp from RSP (the ret already popped R), branch to R; RAX is x8 |
+| native indirect call | native or x64 | `arm64ec_check_icall(ranges)` | x11 in one of the process's ARM64EC ranges: left alone; otherwise x9 = x11 and x11 = x10 (the exit thunk). Clobbers x9, x11, x16 and NZCV |
+
+Only sp survives native code; the exit trampoline takes sp back from `host_frame`, so a host exit in the middle of a callback loses
+nothing native code needs: every transition back into native code derives sp from RSP.
+
+### ABI mapping
+
+The translator's register map is ARM64EC's except for RSP and RBP, which are bridged at the transitions:
+
+| x64 | ARM64EC (native) | Translator | At a transition |
+|---|---|---|---|
+| RCX, RDX, R8, R9 (arguments 1-4) | x0, x1, x2, x3 | x0, x1, x2, x3 | nothing to move |
+| arguments 5+ | x64 stack at RSP + 0x28 (above the return address and home area) | same | the entry thunk loads them into x4-x7 from x4 + 0x20; x4 = RSP after the return address is popped |
+| RAX (result) | x8 (the entry thunk moves x0 there; the exit thunk moves it back) | x8 | nothing to move |
+| XMM0-XMM3 (FP arguments, by position) | v0-v3; the entry thunk moves what AAPCS64 wants (`ec_scale(int64_t, double)`: XMM1 to d0) | v0-v15 (`movq` only) | nothing to move |
+| RSP | sp | x28 | sp = x28 into native code; x28 = sp out of it |
+| RBP | x29 | x24 | none: native code never writes x24, x29 is native code's own |
+| RBX, RSI, RDI, R12-R15 (callee-saved) | x27, x25, x26, x19-x22 | same | nothing to move |
+| R10, R11 | x4, x5 | x4, x5 | x4 is overwritten (volatile in x64) |
+| gs:[0x30] (TEB) | x18 | `CpuState::gs_base` | both name the same TEB page |
+| return address | x30 | on the x64 stack | popped into x30 on entry; pushed from x30 on calls back |
+
+`movq xmm, r64` and `movq r64, xmm` (66 REX.W 0F 6E/7E, register forms) are the only SSE instructions the translator knows: FMOV
+between the general register and dN, with XMMn in vn. Their decoding matches LLVM on 517 instances in Notepad++ x64 (PROVEN:
+`x86_corpus.py` run once with `notepad++.exe` and `ec_client.exe` added, `x86_decoder_test` on it: `notepad++.exe: 1224528
+instructions, 1179633 with semantics (96.3%), 3584 rejected by LLVM, 0 failures`); the shipped corpus has none.
 
 ## Results
 
@@ -382,6 +465,41 @@ code; with no runtime attached, translating is refused. hvf_code_race_test's bou
 translated again after every fault: 8 faults, 1 stores emulated, the call returned 30
 ```
 
+### 9. x64 and an ARM64EC DLL in one vCPU
+
+PROVEN (`build-macos-hvf/hvf_arm64ec_test build-macos-hvf/guest`, exit 0). Each value is the x64 client's result of a call into the
+DLL, compared with the same library built for this host:
+
+```
+no arguments: 24301 (native 24301)
+two arguments: 42 (native 42)
+eight arguments, four on the stack: 222 (native 222)
+a string: 2959517845112299773 (native 2959517845112299773)
+an integer and a double: 4621396905123905536 (native 4621396905123905536)
+a callback into x64: 231 (native 231)
+x18 at the TEB: 1 (native 1)
+x18 at the TEB in 2000 native calls across 12 forced exits: 2000 right; in 200000000 reads of one native loop across 247 forced exits: 200000000 right; x18 0x4001261000, TEB 0x4001261000
+per call, x64 -> native ARM64EC -> x64: 4.31 ns; x64 -> x64 through a function pointer: 1.19 ns
+hvf arm64ec: PASS
+```
+
+- The string is x64 memory the native code reads through the pointer in RCX; the double goes in XMM1 and comes back in XMM0 (the result
+  is the bits of 6 * 1.5 + 0.25); the callback is `ec_call` calling an x64 function twice through `check_icall`, its exit thunk and
+  dispatch_call, and the x64 `ret` into the exit thunk through a resume stub. These first calls run cold: every one takes lookup misses
+  and chain exits in the middle, including inside the callback, so the transitions survive host exits.
+- x18: native code compares NT_TIB.Self read through x18 with gs:[0x30] read by translated x64 code, after translated code ran; then
+  a watcher forces exits (`hv_vcpus_exit` every 200 us) during 2000 such calls and during one native loop of 2*10^8 reads, and every
+  read must match. The test requires at least 10 forced exits inside the loop.
+- Warm: a loop of 10^6 calls of `ec_add` from x64 must take exactly one run of the dispatcher and no lookup miss (checked); the same
+  loop calling an x64 function through a function pointer is the comparison.
+
+Cost, a short pass: 15 runs of the test back to back, load average 8.72 (1 min) before and after, thermal state 0 (nominal) before and
+after (`/Users/pietrodc/dev/tools/raven-mac/quiet/thermal`). Per call, x64 -> ARM64EC -> x64: median 4.33 ns (4.22-4.55); x64 -> x64
+through a function pointer: median 1.17 ns (1.16-1.43). PROVEN for this machine state; not a quiet benchmark. The native path runs the
+translated x64 export thunk (five instructions and a chained branch), the entry stub, the entry thunk (which saves and restores q6-q15)
+and one lookup for the return; the x64 path is an indirect call and a return, one lookup each. INFERRED, not measured apart:
+RedirectionMetadata would skip the export thunk.
+
 ### Cost of a guest store to translated code
 
 `hvf_bench write` in the same pass (PROVEN: `docs/macos/hvf/data/write_fault.txt`, 10 runs of 20 000 iterations): one call of
@@ -429,6 +547,11 @@ The second review's tests have failing-first commits too (exit 1 each, PROVEN):
 - `hvf_code_race_test`'s bound part, before the bound: `FAIL: the code cache is full` (every retry translated the page again until
   the 16 MiB cache ran out).
 
+`hvf_arm64ec_test` has a failing-first commit (exit 1, PROVEN): before the loader, `FAIL: imports are not bound yet`. After the
+ARM64EC commit and before `movq`, the double alone failed: `FAIL: role 8 stopped with reason 6 at 6979326278` (0x1a0001146, the
+client's `movq xmm1, rdi`, reason 6 = unsupported), exit 1. The native x18 loop landed with the loader; under the mutation below it
+fails.
+
 The parts that landed with their implementation fail under these mutations:
 
 | Test | Mutation | Command | Output |
@@ -441,12 +564,13 @@ The parts that landed with their implementation fail under these mutations:
 | code race, host write | `vm_process.cpp` `VmProcess::write`: `-if (code && attached) attached->code_written(page);` `+(void)code;` | `hvf_code_race_test build-macos-hvf/guest` | `FAIL: after the host wrote patch_target to return 77, it returned 24` |
 | granule | `vm.cpp`: `-hv_vm_config_set_ipa_granule(config, HV_IPA_GRANULE_4KB)` `+...HV_IPA_GRANULE_16KB)` | `hvf_granule_test build-macos-hvf/guest` | `FAIL: hv_vm_protect failed: 4209590275` |
 | same block, error | `CMakeLists.txt`: the test's guest directory `/nonexistent` | `ctest -R hvf_same_block` | `***Failed  Required regular expression not found` |
+| arm64ec, x18 | `vcpu.cpp`, forced exit branch: `+set_reg(HV_REG_X18, 0);` after `++counters.cancels;` | `hvf_arm64ec_test build-macos-hvf/guest` | `FAIL: guest exception: exit syndrome 0x5a000001, ESR_EL1 0x92000005, FAR_EL1 0x30, ELR_EL1 0x190001148` |
 | code change, quiesce | `vcpu.cpp` `Vcpu::quiesce`: `+return;` as its first line | `hvf_code_change_test build-macos-hvf/guest 10` | `FAIL: quiesce rarely made the spinning vCPU exit, or took 100 ms`; `100 calls, 1 forced exits`. The two-vCPU trials pass under this mutation (above) |
 
 ## Reproduction
 
 ```sh
-export PATH=/path/to/llvm-mingw/bin:$PATH        # x86_64-w64-mingw32-clang and llvm-objdump
+export PATH=/path/to/llvm-mingw/bin:$PATH        # x86_64- and arm64ec-w64-mingw32-clang, llvm-dlltool, llvm-objdump
 cmake -S native/hvf -B build-macos-hvf -G Ninja -DCMAKE_BUILD_TYPE=Release
 ninja -C build-macos-hvf
 ctest --test-dir build-macos-hvf -V               # hvf_* and native/translate's own tests
@@ -458,9 +582,23 @@ The last argument is optional: a program that prints the thermal state (`NSProce
 
 ## Open items
 
-- **Native thunks.** `bind_native` refuses to work with a runner. In the VM a call to native code has to become an exit (an `svc`
-  from a thunk in guest code, the host calling the function, the result written to the CpuState), which is the design of section 4's
-  `GuestStop::api`. Not needed by these workloads.
+- **Native thunks.** `bind_native` refuses to work with a runner. Host functions (NT services) still have to be reached by an exit
+  (an `svc` from a thunk in guest code, the host calling the function, the result written to the CpuState), which is the design of
+  section 4's `GuestStop::api`. Native guest code is ARM64EC code in guest memory (above).
+- **ARM64EC, telling a call from a return.** A native address x64 reaches is a function if the word before it carries an entry thunk
+  offset with bit 0 set, a return address otherwise. Return addresses into native code follow the exit thunk's `blr x16` or a
+  `blr x11`, whose bit 0 is clear (`blr` encodes Rn at bits 5-9), so the rule holds for compiler output (INFERRED from the encoding
+  and the thunks above; a hand-written native caller ending a `bl` with an odd offset would break it). The deterministic version:
+  dispatch_call pushes a fixed marker return address instead of x30 and keeps x30 on a per-thread LIFO in the TEB; a `ret` to the
+  marker pops it. Not done: it changes what x64 sees as its return address.
+- **ARM64EC, what is not there.** XMM registers are not in CpuState, and the enter and exit trampolines replace v8-v15 with the host
+  frame's values on every exit, so XMM8-15 (and native v8-v15 during a callback) do not survive a host exit; XMM0-3 do (the vCPU's
+  registers persist and nothing on the exit path writes them: the double case above, run cold). No SSE beyond `movq`. check_icall is
+  generated once with the ranges known at `link_arm64ec`; a DLL loaded later needs it generated again, or Windows' EC bitmap (one bit
+  per page, a sparse two-level table in guest memory). No `dispatch_fptr`, `Get`/`SetX64Information`, auxiliary IAT (native code
+  calling x64 imports directly), RedirectionMetadata, CFG, DllMain, relocation, or unwinding across transitions. Native code calling
+  native code through check_icall, and `dispatch_call` with redirection, are NOT verified (no test reaches them). In-process
+  (`TestProcess`) the stubs are never reached: no image there has ARM64EC code, and macOS owns x18.
 - **Code writes, further.** A store the syndrome does not describe (`stp`, writeback, LSE atomics on code) is retried without bound
   if other vCPUs keep translating its page again; emulating those needs decoding the instruction. Code written often pays about 12 us
   per write after each translation; a per-page policy (stop translating a page that keeps being written, or emulate its stores
