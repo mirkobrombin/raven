@@ -8,6 +8,8 @@
 //   role 4:    calls patch_target until it returns something else than at first, at most n times; returns how many times it did.
 //              shared[48] says it is running.
 //   role 5:    waits for role 4 to run, spins n steps, and rewrites patch_target's immediate to shared[50].
+//   role 6:    n times: calls patch_target and rewrites its immediate, so every call runs a fresh translation.
+//   role 7:    n times: calls patch_target, as role 6 without the store.
 #include <stdint.h>
 
 // mov eax, imm32; ret, alone on its page, so writing it touches no other code.
@@ -69,6 +71,15 @@ uint64_t raven_entry(uint64_t role, volatile uint64_t *shared, uint64_t n)
 			;
 		*patch_immediate() = (uint32_t)shared[50];
 		return 0;
+	}
+	if (role == 6 || role == 7) {
+		uint64_t sum = 0;
+		for (uint64_t i = 0; i < n; ++i) {
+			sum += patch_target();
+			if (role == 6)
+				*patch_immediate() = (uint32_t)i;
+		}
+		return sum;
 	}
 	uint64_t value = n;
 	for (uint64_t i = 0; i < n; ++i)

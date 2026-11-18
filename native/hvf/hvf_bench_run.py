@@ -7,7 +7,8 @@ workload calls, each at least 50 ms long on this machine. The first timed run wa
 alike; the process's value is the median of the others. Configurations: native (bench_native.c), process-loop and process-call (Raven's translator in this process, plain
 mode), vm-loop and vm-call (the same in a Hypervisor.framework vCPU with ACTLR_EL1.EnTSO); hvf_bench.cpp says what loop and call
 mean. Writes measurements.jsonl (one line per process), summary.csv (ratios to native's median of the same session) and state.json
-(vm.loadavg and the thermal state before and after).
+(vm.loadavg and the thermal state before and after). Then times a guest write to translated code (hvf_bench write) into
+write_fault.txt.
 """
 
 import csv
@@ -83,6 +84,9 @@ def main():
                         series.setdefault((workload, configuration, metric), []).append(values[metric])
                     series.setdefault((workload, configuration, "checksum"), []).append(values["checksum"])
             print(f"round {round_index + 1} of {rounds} done", flush=True)
+    completed = subprocess.run([str(build / "hvf_bench"), "write", str(build / "guest" / "hvf_client.exe"), "10", "20000"],
+                               capture_output=True, text=True, check=True)
+    (results / "write_fault.txt").write_text(completed.stdout)
     state["end"] = machine_state(thermal)
     (results / "state.json").write_text(json.dumps(state, indent=2) + "\n")
     for workload in WORKLOADS:
