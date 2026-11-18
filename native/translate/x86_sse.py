@@ -183,6 +183,23 @@ def compare(rng):
     return body
 
 
+def convert(rng):
+    roll = rng.randrange(4)
+    if roll == 0:
+        name = rng.choice(["cvtsi2ss", "cvtsi2sd"])
+        size = rng.choice([32, 64])
+        source = gpr(rng, size) if rng.random() < 0.7 else mem(rng, size // 8, False)
+        return [f"{name} {xmm(rng)}, {source}"]
+    if roll == 1:
+        name = rng.choice(["cvtss2si", "cvttss2si", "cvtsd2si", "cvttsd2si"])
+        source = xmm(rng) if rng.random() < 0.7 else mem(rng, 4 if "ss" in name else 8, False)
+        return [f"{name} {gpr(rng, rng.choice([32, 64]))}, {source}"]
+    name, size = rng.choice([("cvtss2sd", 4), ("cvtsd2ss", 8), ("cvtdq2ps", 16), ("cvtdq2pd", 8), ("cvtps2dq", 16), ("cvttps2dq", 16),
+                             ("cvtpd2dq", 16), ("cvttpd2dq", 16), ("cvtps2pd", 8), ("cvtpd2ps", 16)])
+    source = xmm(rng) if rng.random() < 0.7 else mem(rng, size, True)
+    return [f"{name} {xmm(rng)}, {source}"]
+
+
 # Each family: how its cases are made and what its lanes hold (by default; an instruction ending in ps or ss reads floats, in pd or
 # sd doubles).
 FAMILIES = [
@@ -190,6 +207,7 @@ FAMILIES = [
     ("logic", logic, "mixed", 300),
     ("arithmetic", arithmetic, "mixed", 1500),
     ("compare", compare, "mixed", 1200),
+    ("convert", convert, "mixed", 1500),
 ]
 
 
@@ -197,6 +215,9 @@ def lanes_of(body, kind):
     name = body[-1].split()[0] if not body[-1].startswith(("stmxcsr", "set")) else body[0].split()[0]
     if kind != "mixed" or name.startswith(("mov", "pmov")):
         return kind
+    if name.startswith("cvt"):
+        # The source's lanes: cvtdq2ps reads integers, cvttsd2si doubles.
+        return {"ss": "f32", "ps": "f32", "sd": "f64", "pd": "f64", "dq": "int"}.get(name[3:].lstrip("t").split("2")[0], kind)
     if name.endswith(("ps", "ss")):
         return "f32"
     if name.endswith(("pd", "sd")):
