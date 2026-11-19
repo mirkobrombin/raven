@@ -344,6 +344,38 @@ def popcnt(rng):
     return [f"popcnt {target}, {source}", f"set{rng.choice(['e', 'ne', 'b', 'p', 's', 'o', 'a'])} r10b"]
 
 
+STRING_OPS = ["pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"]
+
+
+def strings(rng):
+    """SSE4.2's string compares: every data format, aggregation, polarity and output selection, both operand kinds; strings_data
+    gives the registers and memory strings and lengths around 0, 8 and 16."""
+    imm = rng.randrange(128) if rng.random() < 0.7 else rng.choice([0x0c, 0x08, 0x18, 0x1a, 0x3a, 0x44, 0x04, 0x40, 0x70, 0x01, 0x0d])
+    source = mem(rng, 16) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+    return [f"{rng.choice(STRING_OPS)} xmm{reg(rng)}, {source}, {imm:#x}"]
+
+
+def strings_data(rng, body, registers, vectors, memory):
+    alphabet = [0, 0x61, 0x62, 0x63, 0x7a, 0x80, 0xff, 0x41, 0x30, 0x39]
+    def string():
+        values = [rng.choice(alphabet[1:]) for _ in range(16)]
+        if rng.random() < 0.7:
+            values[rng.randrange(16)] = 0
+        if rng.random() < 0.3:
+            values[rng.choice([0, 7, 8, 9, 14, 15])] = 0
+        return int.from_bytes(bytes(values), "little")
+    for r in range(16):
+        value = string() if rng.random() < 0.6 else (vectors[r][0] | vectors[r][1] << 64)
+        vectors[r][0], vectors[r][1] = value & (2**64 - 1), value >> 64
+    for i in range(0, 24, 2):
+        value = string()
+        memory[i], memory[i + 1] = value & (2**64 - 1), value >> 64
+    lengths = [0, 1, 7, 8, 9, 15, 16, 17, 100, -1, -8, -16, -17, 2**31 - 1, -2**31, 3, 12]
+    for r in (0, 2):
+        value = rng.choice(lengths) if rng.random() < 0.85 else rng.getrandbits(64) - 2**63
+        registers[r] = value & (2**64 - 1) if rng.random() < 0.5 else (value & 0xffffffff) | rng.getrandbits(32) << 32
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -364,7 +396,10 @@ LATER_FAMILIES = [
     ("sse41", sse41, "mixed", 1000),
     ("sse42", sse42, "int", 400),
     ("popcnt", popcnt, "int", 300),
+    ("strings", strings, "int", 1500),
 ]
+# Families whose registers, vectors and memory a function sets after the random ones.
+FIXUPS = {"strings": strings_data}
 
 
 def lanes_of(body, kind):
@@ -446,6 +481,8 @@ def main():
             lane_kind = lanes_of(body, kind)
             vectors = [[sse.quadword(rng, lane_kind) for _ in range(4)] for _ in range(16)]
             memory = [sse.quadword(rng, lane_kind) for _ in range(24)]
+            if family in FIXUPS:
+                FIXUPS[family](rng, body, registers, vectors, memory)
             add(family, registers, rng.getrandbits(12) & ALL_FLAGS, sse.mxcsr(rng, floating), vectors, memory, body)
     generate(FAMILIES)
     for text, t, x, y, z, control in fma_edges():
