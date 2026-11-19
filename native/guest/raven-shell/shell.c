@@ -18,6 +18,7 @@
 #include <servprov.h>
 #include <propsys.h>
 #include <shellapi.h>
+#include <limits.h>
 #include <string.h>
 #include <stddef.h>
 
@@ -53,7 +54,7 @@ static void trace(const char *text, const GUID *iid)
 /* Shell items ----------------------------------------------------------------------------------------------- */
 
 typedef struct {
-	IShellItemVtbl *vtbl;
+	IShellItem2Vtbl *vtbl;
 	LONG refs;
 	WCHAR path[MAX_PATH];
 } Item;
@@ -71,9 +72,9 @@ static BOOL same_iid(REFIID a, REFIID b)
 	return left[0] == right[0] && left[1] == right[1] && left[2] == right[2] && left[3] == right[3];
 }
 
-static HRESULT STDMETHODCALLTYPE item_query(IShellItem *self, REFIID iid, void **out)
+static HRESULT STDMETHODCALLTYPE item_query(IShellItem2 *self, REFIID iid, void **out)
 {
-	if (same_iid(iid, &IID_IUnknown) || same_iid(iid, &IID_IShellItem)) {
+	if (same_iid(iid, &IID_IUnknown) || same_iid(iid, &IID_IShellItem) || same_iid(iid, &IID_IShellItem2)) {
 		*out = self;
 		InterlockedIncrement(&((Item *)self)->refs);
 		return S_OK;
@@ -82,9 +83,9 @@ static HRESULT STDMETHODCALLTYPE item_query(IShellItem *self, REFIID iid, void *
 	return E_NOINTERFACE;
 }
 
-static ULONG STDMETHODCALLTYPE item_add_ref(IShellItem *self) { return (ULONG)InterlockedIncrement(&((Item *)self)->refs); }
+static ULONG STDMETHODCALLTYPE item_add_ref(IShellItem2 *self) { return (ULONG)InterlockedIncrement(&((Item *)self)->refs); }
 
-static ULONG STDMETHODCALLTYPE item_release(IShellItem *self)
+static ULONG STDMETHODCALLTYPE item_release(IShellItem2 *self)
 {
 	LONG left = InterlockedDecrement(&((Item *)self)->refs);
 	if (!left)
@@ -92,13 +93,13 @@ static ULONG STDMETHODCALLTYPE item_release(IShellItem *self)
 	return (ULONG)left;
 }
 
-static HRESULT STDMETHODCALLTYPE item_bind(IShellItem *self, IBindCtx *context, REFGUID handler, REFIID iid, void **out)
+static HRESULT STDMETHODCALLTYPE item_bind(IShellItem2 *self, IBindCtx *context, REFGUID handler, REFIID iid, void **out)
 {
 	*out = NULL;
 	return E_NOTIMPL;
 }
 
-static HRESULT STDMETHODCALLTYPE item_parent(IShellItem *self, IShellItem **parent);
+static HRESULT STDMETHODCALLTYPE item_parent(IShellItem2 *self, IShellItem **parent);
 
 /* SIGDN_URL: a file URL, file:///C:/folder/name, with the characters a URL does not carry as they are escaped as UTF-8. */
 static WCHAR *file_url(const WCHAR *path)
@@ -137,7 +138,7 @@ static WCHAR *file_url(const WCHAR *path)
 	return url;
 }
 
-static HRESULT STDMETHODCALLTYPE item_display_name(IShellItem *self, SIGDN kind, LPWSTR *name)
+static HRESULT STDMETHODCALLTYPE item_display_name(IShellItem2 *self, SIGDN kind, LPWSTR *name)
 {
 	const WCHAR *source = ((Item *)self)->path;
 	size_t length;
@@ -159,7 +160,7 @@ static HRESULT STDMETHODCALLTYPE item_display_name(IShellItem *self, SIGDN kind,
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE item_attributes(IShellItem *self, SFGAOF mask, SFGAOF *out)
+static HRESULT STDMETHODCALLTYPE item_attributes(IShellItem2 *self, SFGAOF mask, SFGAOF *out)
 {
 	DWORD attributes = GetFileAttributesW(((Item *)self)->path);
 	SFGAOF value = 0;
@@ -172,7 +173,7 @@ static HRESULT STDMETHODCALLTYPE item_attributes(IShellItem *self, SFGAOF mask, 
 	return (value & mask) == mask ? S_OK : S_FALSE;
 }
 
-static HRESULT STDMETHODCALLTYPE item_compare(IShellItem *self, IShellItem *other, SICHINTF hint, int *order)
+static HRESULT STDMETHODCALLTYPE item_compare(IShellItem2 *self, IShellItem *other, SICHINTF hint, int *order)
 {
 	LPWSTR text = NULL;
 	HRESULT result = IShellItem_GetDisplayName(other, SIGDN_FILESYSPATH, &text);
@@ -183,8 +184,175 @@ static HRESULT STDMETHODCALLTYPE item_compare(IShellItem *self, IShellItem *othe
 	return *order ? S_FALSE : S_OK;
 }
 
-static IShellItemVtbl item_vtbl = {
-	item_query, item_add_ref, item_release, item_bind, item_parent, item_display_name, item_attributes, item_compare
+/* IShellItem2: the properties are those the file system keeps for the path, read through the same store
+ * SHGetPropertyStoreFromParsingName gives, each time they are asked for. WPF's file dialogs ask for this interface for the
+ * folder they start in and end the program on anything but success. */
+HRESULT WINAPI SHGetPropertyStoreFromParsingName(PCWSTR path, IBindCtx *context, GETPROPERTYSTOREFLAGS flags, REFIID iid, void **out);
+
+static HRESULT STDMETHODCALLTYPE item_store(IShellItem2 *self, GETPROPERTYSTOREFLAGS flags, REFIID iid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	return SHGetPropertyStoreFromParsingName(((Item *)self)->path, NULL, flags, iid, out);
+}
+
+static HRESULT STDMETHODCALLTYPE item_store_with(IShellItem2 *self, GETPROPERTYSTOREFLAGS flags, IUnknown *creator, REFIID iid, void **out)
+{
+	return item_store(self, flags, iid, out);
+}
+
+/* The store holds every property the item has, so it serves any set of keys. */
+static HRESULT STDMETHODCALLTYPE item_store_keys(IShellItem2 *self, const PROPERTYKEY *keys, UINT count, GETPROPERTYSTOREFLAGS flags,
+	REFIID iid, void **out)
+{
+	return item_store(self, flags, iid, out);
+}
+
+/* Descriptions belong to the property system, which the item does not reach. */
+static HRESULT STDMETHODCALLTYPE item_descriptions(IShellItem2 *self, REFPROPERTYKEY key, REFIID iid, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	return E_NOTIMPL;
+}
+
+/* Nothing is cached: every property is read from the file system when it is asked for. */
+static HRESULT STDMETHODCALLTYPE item_update(IShellItem2 *self, IBindCtx *context) { return S_OK; }
+
+static HRESULT STDMETHODCALLTYPE item_property(IShellItem2 *self, REFPROPERTYKEY key, PROPVARIANT *value)
+{
+	IPropertyStore *store = NULL;
+	HRESULT result;
+	if (!value)
+		return E_POINTER;
+	PropVariantInit(value);
+	result = item_store(self, GPS_DEFAULT, &IID_IPropertyStore, (void **)&store);
+	if (FAILED(result))
+		return result;
+	result = IPropertyStore_GetValue(store, key, value);
+	IPropertyStore_Release(store);
+	return result;
+}
+
+/* A property the item does not have is an error for the typed getters, which have no value to give for it. */
+static HRESULT item_typed(IShellItem2 *self, REFPROPERTYKEY key, PROPVARIANT *value)
+{
+	HRESULT result = item_property(self, key, value);
+	if (SUCCEEDED(result) && value->vt == VT_EMPTY)
+		return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+	return result;
+}
+
+static HRESULT item_number(IShellItem2 *self, REFPROPERTYKEY key, BOOL is_signed, LONGLONG low, ULONGLONG high, ULONGLONG *number)
+{
+	PROPVARIANT value;
+	HRESULT result = item_typed(self, key, &value);
+	BOOL negative = FALSE;
+	if (FAILED(result))
+		return result;
+	switch (value.vt) {
+	case VT_UI1: *number = value.bVal; break;
+	case VT_UI2: *number = value.uiVal; break;
+	case VT_UI4: *number = value.ulVal; break;
+	case VT_UI8: *number = value.uhVal.QuadPart; break;
+	case VT_I1: *number = (ULONGLONG)(LONGLONG)value.cVal; negative = value.cVal < 0; break;
+	case VT_I2: *number = (ULONGLONG)(LONGLONG)value.iVal; negative = value.iVal < 0; break;
+	case VT_I4: *number = (ULONGLONG)(LONGLONG)value.lVal; negative = value.lVal < 0; break;
+	case VT_I8: *number = (ULONGLONG)value.hVal.QuadPart; negative = value.hVal.QuadPart < 0; break;
+	case VT_BOOL: *number = value.boolVal ? 1 : 0; break;
+	default:
+		PropVariantClear(&value);
+		return TYPE_E_TYPEMISMATCH;
+	}
+	if (negative ? !is_signed || (LONGLONG)*number < low : *number > high)
+		return HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW);
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE item_clsid(IShellItem2 *self, REFPROPERTYKEY key, CLSID *out)
+{
+	PROPVARIANT value;
+	HRESULT result = item_typed(self, key, &value);
+	ZeroMemory(out, sizeof(*out));
+	if (FAILED(result))
+		return result;
+	if (value.vt != VT_CLSID) {
+		PropVariantClear(&value);
+		return TYPE_E_TYPEMISMATCH;
+	}
+	*out = *value.puuid;
+	PropVariantClear(&value);
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE item_file_time(IShellItem2 *self, REFPROPERTYKEY key, FILETIME *out)
+{
+	PROPVARIANT value;
+	HRESULT result = item_typed(self, key, &value);
+	ZeroMemory(out, sizeof(*out));
+	if (FAILED(result))
+		return result;
+	if (value.vt != VT_FILETIME) {
+		PropVariantClear(&value);
+		return TYPE_E_TYPEMISMATCH;
+	}
+	*out = value.filetime;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE item_int32(IShellItem2 *self, REFPROPERTYKEY key, int *out)
+{
+	ULONGLONG number = 0;
+	HRESULT result = item_number(self, key, TRUE, INT_MIN, INT_MAX, &number);
+	*out = SUCCEEDED(result) ? (int)(LONGLONG)number : 0;
+	return result;
+}
+
+/* The text is handed over as it came from the store, allocated with CoTaskMemAlloc for the caller to free. */
+static HRESULT STDMETHODCALLTYPE item_string(IShellItem2 *self, REFPROPERTYKEY key, LPWSTR *out)
+{
+	PROPVARIANT value;
+	HRESULT result = item_typed(self, key, &value);
+	*out = NULL;
+	if (FAILED(result))
+		return result;
+	if (value.vt != VT_LPWSTR) {
+		PropVariantClear(&value);
+		return TYPE_E_TYPEMISMATCH;
+	}
+	*out = value.pwszVal;
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE item_uint32(IShellItem2 *self, REFPROPERTYKEY key, ULONG *out)
+{
+	ULONGLONG number = 0;
+	HRESULT result = item_number(self, key, FALSE, 0, ULONG_MAX, &number);
+	*out = SUCCEEDED(result) ? (ULONG)number : 0;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE item_uint64(IShellItem2 *self, REFPROPERTYKEY key, ULONGLONG *out)
+{
+	ULONGLONG number = 0;
+	HRESULT result = item_number(self, key, FALSE, 0, ~0ULL, &number);
+	*out = SUCCEEDED(result) ? number : 0;
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE item_bool(IShellItem2 *self, REFPROPERTYKEY key, BOOL *out)
+{
+	ULONGLONG number = 0;
+	HRESULT result = item_number(self, key, TRUE, LLONG_MIN, ~0ULL, &number);
+	*out = SUCCEEDED(result) && number;
+	return result;
+}
+
+static IShellItem2Vtbl item_vtbl = {
+	item_query, item_add_ref, item_release, item_bind, item_parent, item_display_name, item_attributes, item_compare,
+	item_store, item_store_with, item_store_keys, item_descriptions, item_update, item_property, item_clsid, item_file_time,
+	item_int32, item_string, item_uint32, item_uint64, item_bool
 };
 
 static HRESULT make_item(const WCHAR *path, IShellItem **out)
@@ -199,7 +367,7 @@ static HRESULT make_item(const WCHAR *path, IShellItem **out)
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE item_parent(IShellItem *self, IShellItem **parent)
+static HRESULT STDMETHODCALLTYPE item_parent(IShellItem2 *self, IShellItem **parent)
 {
 	WCHAR dir[MAX_PATH];
 	copy_text(dir, MAX_PATH, ((Item *)self)->path);
@@ -262,14 +430,18 @@ static IShellItemArrayVtbl array_vtbl = {
 typedef struct {
 	void *vtbl;
 	void *custom_vtbl; /* IFileDialogCustomize shares the object */
+	void *window_vtbl; /* IOleWindow shares the object too */
 	LONG refs;
 	BOOL save;
 	DialogState state;
 	IFileDialogEvents *events; /* the program's handler, told what the person did before Show returns */
+	BOOL showing;
+	HWND owner;
 } FileDialog;
 
 static FileDialog *dialog_of(void *self) { return (FileDialog *)self; }
 static FileDialog *dialog_of_custom(void *self) { return (FileDialog *)((char *)self - offsetof(FileDialog, custom_vtbl)); }
+static FileDialog *dialog_of_window(void *self) { return (FileDialog *)((char *)self - offsetof(FileDialog, window_vtbl)); }
 
 static HRESULT STDMETHODCALLTYPE fd_query(void *self, REFIID iid, void **out)
 {
@@ -283,6 +455,11 @@ static HRESULT STDMETHODCALLTYPE fd_query(void *self, REFIID iid, void **out)
 	}
 	if (same_iid(iid, &IID_IFileDialogCustomize)) {
 		*out = &dialog->custom_vtbl;
+		InterlockedIncrement(&dialog->refs);
+		return S_OK;
+	}
+	if (same_iid(iid, &IID_IOleWindow)) {
+		*out = &dialog->window_vtbl;
 		InterlockedIncrement(&dialog->refs);
 		return S_OK;
 	}
@@ -306,20 +483,28 @@ static ULONG STDMETHODCALLTYPE fd_release(void *self)
 static HRESULT STDMETHODCALLTYPE fd_show(void *self, HWND owner)
 {
 	FileDialog *dialog = dialog_of(self);
+	HRESULT result = S_OK;
 	trace("dialog Show", NULL);
+	dialog->showing = TRUE;
+	dialog->owner = owner;
 	for (;;) {
 		dialog->state.has_result = FALSE;
-		if (!run_dialog(owner, &dialog->state))
-			return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+		if (!run_dialog(owner, &dialog->state)) {
+			result = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+			break;
+		}
 		/* The handler hears of the folder and the selection the person ended in, then of the choice itself: many programs read the
 		 * results there and only there. A handler that refuses the choice keeps the dialog open, so it is shown again. */
 		if (!dialog->events)
-			return S_OK;
+			break;
 		IFileDialogEvents_OnFolderChange(dialog->events, (IFileDialog *)self);
 		IFileDialogEvents_OnSelectionChange(dialog->events, (IFileDialog *)self);
 		if (IFileDialogEvents_OnFileOk(dialog->events, (IFileDialog *)self) != S_FALSE)
-			return S_OK;
+			break;
 	}
+	dialog->showing = FALSE;
+	dialog->owner = NULL;
+	return result;
 }
 
 static HRESULT STDMETHODCALLTYPE fd_set_types(void *self, UINT count, const COMDLG_FILTERSPEC *specs)
@@ -527,6 +712,25 @@ static void *custom_vtbl[] = {
 	(void *)cu_ok /*EndVisualGroup*/, (void *)cu_ok /*MakeProminent*/, (void *)cu_ok /*SetControlItemText*/
 };
 
+/* IOleWindow: the window the program's own prompts belong to while the dialog is shown, such as WPF's question whether to replace a
+ * file. The dialog's window is closed by the time the handler hears of the choice, so that is the window the dialog was shown for. */
+static HRESULT STDMETHODCALLTYPE ow_query(void *self, REFIID iid, void **out) { return fd_query(dialog_of_window(self), iid, out); }
+static ULONG STDMETHODCALLTYPE ow_add_ref(void *self) { return fd_add_ref(dialog_of_window(self)); }
+static ULONG STDMETHODCALLTYPE ow_release(void *self) { return fd_release(dialog_of_window(self)); }
+
+static HRESULT STDMETHODCALLTYPE ow_window(void *self, HWND *window)
+{
+	FileDialog *dialog = dialog_of_window(self);
+	if (!window)
+		return E_POINTER;
+	*window = dialog->owner;
+	return dialog->showing ? S_OK : E_FAIL;
+}
+
+static HRESULT STDMETHODCALLTYPE ow_help(void *self, BOOL enter) { return E_NOTIMPL; }
+
+static void *window_vtbl[] = { (void *)ow_query, (void *)ow_add_ref, (void *)ow_release, (void *)ow_window, (void *)ow_help };
+
 static HRESULT make_dialog(BOOL save, REFIID iid, void **out)
 {
 	FileDialog *dialog = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FileDialog));
@@ -535,6 +739,7 @@ static HRESULT make_dialog(BOOL save, REFIID iid, void **out)
 		return E_OUTOFMEMORY;
 	dialog->vtbl = save ? save_vtbl : open_vtbl;
 	dialog->custom_vtbl = custom_vtbl;
+	dialog->window_vtbl = window_vtbl;
 	dialog->refs = 1;
 	dialog->save = save;
 	dialog->state.save = save;
