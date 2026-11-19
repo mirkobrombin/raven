@@ -94,6 +94,7 @@ FlagEffect flag_effect(const Instruction &instruction)
 		return {0, all_flags};
 	case Mnemonic::jcc: case Mnemonic::setcc: case Mnemonic::cmovcc: return {0, condition_flags(instruction.condition)};
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: case Mnemonic::ptest:
+	case Mnemonic::popcnt:
 		return {all_flags, 0};
 	default: return {};
 	}
@@ -223,7 +224,7 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::blendpd: case Mnemonic::pblendw: case Mnemonic::pextrb: case Mnemonic::pextrw: case Mnemonic::pextrd:
 	case Mnemonic::pextrq: case Mnemonic::extractps: case Mnemonic::pinsrb: case Mnemonic::pinsrw: case Mnemonic::pinsrd:
 	case Mnemonic::pinsrq: case Mnemonic::insertps: case Mnemonic::dpps: case Mnemonic::dppd: case Mnemonic::mpsadbw:
-	case Mnemonic::pcmpgtq: case Mnemonic::crc32:
+	case Mnemonic::pcmpgtq: case Mnemonic::crc32: case Mnemonic::popcnt:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -2467,6 +2468,30 @@ void BlockTranslator::translate(const Instruction &instruction)
 		const uint32_t opcode = forms[size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : 3];
 		a.simd(opcode, s0, accumulator, data);
 		a.mov(accumulator, s0, false);
+		return;
+	}
+	case Mnemonic::popcnt: {
+		// cnt on the bytes and addv; ZF from the source, CF, OF, SF, AF and PF clear.
+		const unsigned size = operands[1].size;
+		const uint8_t value = read(operands[1], s1, size == 8);
+		a.simd(simd::fmov_d_x, vs0, value);
+		a.simd(simd::cnt_8b, vs0, vs0);
+		a.simd(simd::addv_8b, vs0, vs0);
+		a.umov(s0, vs0, 0, 1);
+		if (flags_wanted(all_flags)) {
+			a.sub_imm(s2, value, 0, false, size == 8, true);
+			a.cset(s2, Cond::eq);
+			a.lsl_imm(s2, s2, 30, false);
+			// C set: the inverse of a clear CF.
+			a.orr_imm(s2, s2, uint64_t(1) << 29, false);
+			a.msr_nzcv(s2);
+			carry_inverted = true;
+			if (flags_wanted(PF | AF)) {
+				a.mov_imm(parity_register, 1);
+				a.mov(adjust_register, parity_register);
+			}
+		}
+		write(operands[0], s0);
 		return;
 	}
 	case Mnemonic::packsswb: case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd:

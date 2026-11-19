@@ -46,6 +46,8 @@ constexpr uint32_t tbl_16b = 0x4e000000, movi_8f = 0x4f04e5e0, sxtl_8h = 0x0f08a
 constexpr uint32_t ins_general = 0x4e001c00, dup_element = 0x4e000400, sxtl_4s = 0x0f10a400, uxtl_4s = 0x2f10a400,
 	uxtl_2d = 0x2f20a400, uabdl_8h = 0x2e207000, uabal_8h = 0x2e205000, smull_2d = 0x0ea0c000, uminv_h = 0x6e71a800,
 	sqxtun_4h = 0x2e612800, orn_16b = 0x4ee01c00;
+// popcnt: cnt of eight bytes and their sum (addv).
+constexpr uint32_t cnt_8b = 0x0e205800, addv_8b = 0x0e31b800;
 constexpr uint32_t frintn_4s = 0x4e218800, frintm_4s = 0x4e219800, frintp_4s = 0x4ea18800, frintz_4s = 0x4ea19800,
 	frinti_4s = 0x6ea19800, frintn_s = 0x1e244000, frintp_s = 0x1e24c000, frintm_s = 0x1e254000, frintz_s = 0x1e25c000,
 	frinti_s = 0x1e27c000;
