@@ -704,6 +704,8 @@ struct NativeProcess::State {
 	uint64_t *agent_service = nullptr;
 	pid_t agent_task = 0;
 	std::mutex agent_lock;
+	// The runtime's system calls the service thread made in place of a stopped task.
+	std::atomic<uint64_t> agent_calls{0};
 	struct SharedView {
 		void *host = MAP_FAILED;
 		size_t size = 0;
@@ -952,8 +954,12 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 		}
 		protect_memory(state->atomic_gate, 4096, PROT_READ | PROT_EXEC);
 	}
+	// Under the agent the runtime's own system calls go to its service thread rather than stopping a task. The filter stays out then:
+	// it would refuse the agent's calls, and Syscall User Dispatch takes its place.
+	if (std::getenv("RAVEN_AGENT"))
+		start_agent();
 	// The filter goes in once the page of gates is there, since a guest waiting in its stub makes the runtime's system calls from it.
-	if (mode == NativeMode::x64 && std::getenv("RAVEN_SECCOMP"))
+	else if (mode == NativeMode::x64 && std::getenv("RAVEN_SECCOMP"))
 		install_seccomp();
 }
 
@@ -1196,6 +1202,12 @@ uint64_t NativeProcess::memory_syscall(uint64_t number, uint64_t a1, uint64_t a2
 	uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
 	state->require_memory();
+	// The agent's service thread shares the guest's memory, descriptors and segments, so it makes every call of the runtime's.
+	if (state->agent_task) {
+		const uint64_t result = agent_syscall(number, a1, a2, a3, a4, a5, a6);
+		++state->agent_calls;
+		return result;
+	}
 	// A guest that waits in its stub makes the call itself, from the page of gates, and goes back to waiting: neither it nor the memory
 	// task stops, which a traced call needs four exchanges with the kernel for. Only a filtered guest can: without the filter, a system
 	// call of the guest stops it for the runtime wherever it is made.
@@ -1245,6 +1257,11 @@ void NativeProcess::start_agent()
 pid_t NativeProcess::agent_task() const
 {
 	return state->agent_task;
+}
+
+uint64_t NativeProcess::agent_calls() const
+{
+	return state->agent_calls;
 }
 
 uint64_t NativeProcess::agent_syscall(uint64_t number, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <fstream>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -76,6 +77,32 @@ static void agent(const std::string &bootstrap, raven::NativeMode mode)
 	check(long(process.agent_syscall(SYS_getpid)) == group, "the service thread stopped answering after the guest ran");
 }
 
+// With RAVEN_AGENT set the process starts its agent itself, and the runtime's memory calls go to the service thread.
+static void agent_mode(const std::string &bootstrap, raven::NativeMode mode)
+{
+	setenv("RAVEN_AGENT", "1", 1);
+	const std::array<raven::LoadedImage *, 0> images{};
+	raven::NativeProcess process(images, bootstrap, std::chrono::seconds(2), mode);
+	unsetenv("RAVEN_AGENT");
+	check(process.agent_task() > 0, "RAVEN_AGENT did not start the agent");
+	const uint64_t before = process.agent_calls();
+	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
+	check(mode != raven::NativeMode::x86 || code < UINT32_MAX, "an x86 guest got memory above 4 GiB");
+	const std::vector<uint8_t> x64{0x48, 0x8d, 0x41, 0x01, 0xc3};
+	const std::vector<uint8_t> x86{0x8b, 0x44, 0x24, 0x04, 0x40, 0xc2, 0x04, 0x00};
+	process.write_memory(code, mode == raven::NativeMode::x64 ? x64 : x86);
+	process.protect_memory(code, 4096, PROT_READ | PROT_EXEC);
+	check(process.agent_calls() >= before + 2, "the runtime's memory calls stopped a task instead of going to the service thread");
+	const std::array<uint64_t, 1> arguments{6};
+	const auto result = process.call(code, arguments, std::chrono::seconds(2));
+	check(result.stop == raven::NativeStop::returned && result.value == 7, "code mapped by the service thread did not run");
+	const uint64_t called = process.agent_calls();
+	process.unmap_memory(code);
+	check(process.agent_calls() == called + 1, "the runtime's release did not go to the service thread");
+	uint8_t byte = 0;
+	check(!process.read_alone(code, &byte, 1), "memory the runtime released is still mapped");
+}
+
 int main(int argc, char **argv)
 {
 	try {
@@ -83,7 +110,10 @@ int main(int argc, char **argv)
 			throw std::runtime_error("bootstrap path required");
 		agent(argv[1], raven::NativeMode::x64);
 		agent(argv[1], raven::NativeMode::x86);
-		std::cout << "Agent service thread in x64/x86 guests: untraced, in the guest's thread group, its calls and memory the guest's\n";
+		agent_mode(argv[1], raven::NativeMode::x64);
+		agent_mode(argv[1], raven::NativeMode::x86);
+		std::cout << "Agent service thread in x64/x86 guests: untraced, in the guest's thread group, its calls and memory the guest's, "
+			"and the runtime's memory calls under RAVEN_AGENT\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

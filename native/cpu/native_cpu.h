@@ -100,6 +100,8 @@ public:
 	void start_agent();
 	// The service thread's task, 0 before start_agent.
 	pid_t agent_task() const;
+	// How many of the runtime's system calls the service thread made in place of a stopped task.
+	uint64_t agent_calls() const;
 	// A system call the service thread makes inside the guest, without stopping any task; an error number in the result throws.
 	uint64_t agent_syscall(uint64_t number, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0, uint64_t a4 = 0, uint64_t a5 = 0,
 		uint64_t a6 = 0);
