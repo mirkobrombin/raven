@@ -137,13 +137,16 @@ int main(int argc, char **argv)
 		std::cerr << "cannot open " << argv[1] << "\n";
 		return 2;
 	}
-	// Encodings pinned as not translated: x86 raises #UD for rorx with VEX.vvvv other than 1111b.
+	// Encodings pinned as not translated: x86 raises #UD for the first (rorx with VEX.vvvv other than 1111b); the 16-bit tzcnt and
+	// lzcnt are not translated yet, so a later translation must come with its own tests.
 	struct Pinned {
 		const char *what;
 		std::vector<uint8_t> bytes;
 	};
 	const Pinned pinned[] = {
 		{"rorx eax, ebx, 3 with VEX.vvvv 0001 (#UD)", {0xc4, 0xe3, 0x73, 0xf0, 0xc3, 0x03}},
+		{"tzcnt ax, bx", {0x66, 0xf3, 0x0f, 0xbc, 0xc3}},
+		{"lzcnt ax, bx", {0x66, 0xf3, 0x0f, 0xbd, 0xc3}},
 	};
 	size_t pinned_failures = 0;
 	for (const Pinned &item : pinned) {
