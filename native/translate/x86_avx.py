@@ -603,6 +603,11 @@ def gathers_data(rng, body, registers, vectors, memory):
     vectors[x] = [int.from_bytes(raw[8 * q:8 * q + 8], "little") for q in range(4)]
 
 
+def avx2_broadcast(rng):
+    """vbroadcasti128, the AVX2 one the avx2 family left out."""
+    return [f"vbroadcasti128 ymm{reg(rng)}, {mem(rng, 16)}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -630,6 +635,7 @@ LATER_FAMILIES = [
     ("fma addsub", fma_addsub, "mixed", 600),
     ("avx2", avx2, "int", 1500),
     ("gathers", gathers, "mixed", 800),
+    ("avx2 broadcast", avx2_broadcast, "int", 100),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
 FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data}
