@@ -345,11 +345,13 @@ BD), not VEX forms of SSE.
   blsmsk. PF and AF, undefined, are left as they were; mulx, pdep, pext, rorx and the shifts change no flag.
 - **pdep and pext** loop once per set bit of the mask, lowest first, with cbz (no flag read or written): no Arm instruction does them
   (SVE2's BDEP and BEXT are not on this core). Cost (PROVEN, `hvf_bench_run.py ... bitdeposit`, `67391e2b`, raw data in
-  `avx-data/perf/bitdeposit/`, 5 rounds, load average 2.24 4.67 11.74 at the start and 2.12 4.53 11.56 at the end, thermal state 1,
-  one checksum in all 25 processes): 1024 pdep and 1024 pext through masks of 32 set bits on average take 40.3 µs per call in this
-  process (1.08 of native), 40.3 µs in a vCPU (1.08), against 37.4 µs for the same loop compiled natively; so about 20 ns per
-  instruction at 32 mask bits (INFERRED: the call divided by 2048), where x86 takes a few cycles (Intel since Haswell, AMD since
-  Zen 3; earlier Zen cores microcode them: NOT measured here).
+  `avx-data/perf/bitdeposit/`, 5 rounds, load average 2.24 4.67 11.74 at the start and 2.12 4.53 11.56 at the end, thermal state 0
+  at both ends, one checksum in all 25 processes): 1024 pdep and 1024 pext through masks of 32 set bits on average take 40.3 µs per
+  call in this process (1.08 of native, loop and call alike), 40.3 µs in a vCPU loop (1.08) and 43.0 µs in vCPU calls (1.148),
+  against 37.4 µs for the same loop compiled natively. The native standard deviation (2.8 µs) is as large as the difference, so
+  these say only that the translated loop is close to the native one. That is about 20 ns per instruction at 32 mask bits
+  (INFERRED: the call divided by 2048). x86 does each in a few cycles on Intel since Haswell and AMD since Zen 3, and earlier Zen
+  cores microcode them (INFERRED from published instruction tables, not checked in this session; NOT measured here).
 - **Tests:** the `bmi` family (3000 cases, `83598012`, failing before `0f3788b3` with every case unsupported, for example
   `bmi: #17589 blsi eax, r12d: did not return (exit 6)`): every instruction at 32 and 64 bits, register and memory sources, and
   registers and memory set to zero, one bit, all ones, alternating bits, counts and bextr controls around 0, 32 and 64.
