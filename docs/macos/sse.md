@@ -341,8 +341,16 @@ These are translated too, in their legacy forms, with semantics checked by the A
 hadd and hsub with faddp and uzp, pshufb as tbl on indices masked to 0x8f, pmulhrsw as smull and rshrn by 15 (exact at -32768
 squared, where sqrdmulh saturates), round with frint (and FPCR's RMode set around frintx when a fixed mode must still raise PE),
 dpps with masked inputs and two faddp, mpsadbw with ext, dup and uabal, phminposuw with uminv, ptest clearing PF, AF, SF and OF
-as x86 does (Rosetta keeps them), crc32 as Arm's crc32c and popcnt as cnt and addv. Not translated: SSE4.2's string compares
-(pcmpestri, pcmpestrm, pcmpistri, pcmpistrm). cpuid reports SSE3, SSSE3, SSE4.1 and POPCNT, not SSE4.2.
+as x86 does (Rosetta keeps them), crc32 as Arm's crc32c and popcnt as cnt and addv. SSE4.2's string compares (pcmpestri,
+pcmpestrm, pcmpistri, pcmpistrm) run in the host, as cpuid does (`string_compare.h`): the block ends before one and the runtime
+computes it on CpuState, every data format, aggregation, polarity and output selection, the implicit lengths of the i forms (the
+first null element) and the explicit ones of the e forms (EAX and EDX, sign-extended and saturated), with CF, ZF, SF and OF and AF
+and PF cleared. The `strings` family (1500 cases, imm8 values over all 128 and lengths around 0, 8 and 16, with registers and
+memory) passes against an AMD EPYC 7763 and an Intel Xeon Platinum 8370C, which both agree with Rosetta in every case (PROVEN,
+avx.md). rcpps, rsqrtps, rcpss and rsqrtss divide exactly, which is within x86's 1.5 * 2^-12; a denormal input counts as zero and
+a reciprocal below the smallest normal becomes a signed zero, as on x86, and FPSR is put back since x86 raises nothing (the
+`approximations` family compares within 2^-11, avx.md). cpuid reports SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT (PROVEN,
+`translate_cpuid`).
 
 ## Open items
 
@@ -365,9 +373,8 @@ as x86 does (Rosetta keeps them), crc32 as Arm's crc32c and popcnt as cnt and ad
 - **Cost of every exit and entry:** sixteen q-register moves and the MXCSR conversions; in this process also two FPCR writes (see the
   integer workloads above).
 - **Not translated:**
-  - maskmovdqu, rcpps, rsqrtps, rcpss and rsqrtss (pinsrw and pextrw are translated now);
+  - maskmovdqu (its VEX form, vmaskmovdqu, is translated; pinsrw, pextrw and the reciprocal approximations are too);
   - the MMX forms;
-  - SSE4.2's string compares (44 reachable instances in Notepad++; the rest of SSE3 to SSE4.2 is translated, see above);
   - sfence, lfence, mfence, prefetch and movnti.
 - **Rosetta is the only x86 reference.** Running `x86_sse_oracle` on an x86 machine would turn the INFERRED agreement with silicon
   into PROVEN.
