@@ -4,7 +4,7 @@ Which instructions `translates()` refuses in code that can run, grouped by mnemo
 contain each group: the code paths each gap blocks, and the groups translated since. Labels are those of
 [translation.md](translation.md): **PROVEN** (a command produced the result), **INFERRED** (derived; the missing check is named),
 **NOT verified**. The census is of the translator at `130f2bb8` (translator_version 23); [What is translated now](#what-is-translated-now)
-is at `b24035e2` (translator_version 28). MacBook Air M5, macOS 27.2.1, llvm-mingw 20261104.
+is at `fabee6af` (translator_version 31). MacBook Air M5, macOS 27.2.1, llvm-mingw 20261104.
 
 ## How it is counted
 
@@ -149,10 +149,20 @@ it, and claims about the ISA are marked:
 - **Split locks:** an LSE atomic whose operand crosses a 16-byte boundary raises an alignment fault on the M5 (PROVEN: SIGBUS in
   process for `ldaddal` at offsets 13 to 15 of 16 for 4 bytes, 9 to 15 for 8, 15 for 2; inside 16 bytes unaligned ones work). Before
   `6d7009e8` such a `lock` operand crashed the in-process test (SIGBUS, exit 138) and stopped the vCPU test with an alignment data
-  abort (ESR_EL1 0x92000021). Now every locked form (`xchg`, `cmpxchg`, `xadd` and the locked RMW) checks, without touching NZCV,
-  whether its operand crosses 16 bytes and then takes a plain load and store between full barriers: right for one thread, NOT atomic
-  against another, where x86 locks the bus. The unaligned locked family checks both kinds, 64-byte aligned buffer, in process and in a
-  vCPU (PROVEN); atomicity of the split path is not tested and does not hold (INFERRED from its code). Exposed to the alignment fault
+  abort (ESR_EL1 0x92000021). Every locked form (`xchg`, `cmpxchg`, `xadd` and the locked RMW) checks, without touching NZCV,
+  whether its operand crosses 16 bytes. From `6d7009e8` it then took a plain load and store between full barriers, which lost
+  updates against another vCPU (PROVEN, `e6043284`: two vCPUs doing 20000 `lock inc dword` each at offset 14 lost 7952 of 40000, and
+  every width and `xadd` and `cmpxchg` lost some; the `xchg` spinlock hung). Since `849e2ff6` it leaves to the runtime at the
+  instruction (`ExitReason::cpuid`), which runs it (`locked.cpp`, flags as x86) while every other vCPU of the VM is stopped
+  (`Vcpu::exclusive`: `hv_vcpus_exit` on each vCPU in the guest, and a gate in `Vcpu::enter` that keeps them out until it is done).
+  `hvf_locked` then loses no update at 2, 4 and 8 bytes, for `xadd`, a `cmpxchg` increment loop, an `xchg` spinlock, and an aligned
+  8-byte `lock add` on bytes 8 to 15 from one vCPU against a split 4-byte `lock inc` on bytes 14 to 17 from the other (PROVEN). In
+  process the runtime runs its first thread alone and cannot add others without a runner (runtime.h), so the runtime runs the
+  instruction with nothing to stop (INFERRED from that restriction; nothing in process can run two guest threads to test it). Host
+  code of other vCPUs (the runtime's own accesses for x87, xsave or a division) is not stopped, which x86 does not order with a
+  split lock either (INFERRED). Cost (measured once, rough: two vCPUs contending, setup included): 2.7 to 6.8 us per split operation
+  against 0.02 us for the plain fallback before. The unaligned locked family checks both kinds, 64-byte aligned buffer, in process and
+  in a vCPU (PROVEN). Exposed to the alignment fault
   before `6d7009e8`, and covered since: `xchg` with memory, `lock cmpxchg`, `lock xadd`, `lock add`, `sub`, `and`, `or`, `xor`,
   `inc`, `dec`, `not` and `neg` (`neg`'s `casal` loop) at 2, 4 and 8 bytes. Never exposed: the 1-byte forms, and every bit test, whose
   memory forms access one byte. Plain loads and stores are not exposed either (LDAPR and STLR take an out-of-line path when
@@ -163,8 +173,11 @@ it, and claims about the ISA are marked:
   index; CF, OF, SF, AF and PF undefined (156 cases differ there between the two, not compared).
 - **`pause`** is `yield`.
 - **DF** is now `CpuState::direction`, 0 at the start as Windows starts a thread. `cld` and `std` store it, `pushfq` builds RFLAGS
-  from the lazy flags, DF and bits 1 and 9 (IF), `popfq` sets the six status flags and DF and drops the other bits (TF, AC and the
-  rest are not kept: INFERRED harmless for user code that does not set them, NOT verified). Before this `cld`, `std`, `pushfq` and
+  from the lazy flags, DF and bits 1 and 9 (IF), `popfq` sets the six status flags and DF. Since `fabee6af` AC (bit 18) and ID (bit 21) are kept
+  in `CpuState::rflags_system` and come back through `pushfq`, as the CPUID-availability test needs (PROVEN by the rflags family,
+  which toggles each on the EPYC 7763 and Rosetta; before the fix all 24 cases failed, RBX without the bit). AC changes nothing for
+  Windows user code, which runs without CR0.AM (INFERRED). TF set by `popfq` is ignored: x86 raises a single-step exception after the
+  next instruction, the translator does not (NOT done, by decision). IF and the other system bits are not kept. Before this `cld`, `std`, `pushfq` and
   `popfq` were refused (not translated at all). `pushfq` and `popfq` agree with Rosetta and the EPYC in every case of the strings
   family (PROVEN, RAX holds what `pushfq` stored). The 16-bit `pushf` and `popf` (66) stay refused.
 - **`rep stos` and `rep movs`:** one element per pass, forward or backward by DF, RDI, RSI and RCX updated after each, RCX 0 doing
@@ -203,6 +216,8 @@ barriers (`translate_x86_semantics`) and in a vCPU with hardware TSO (`hvf_integ
 | unaligned locked (inside 16 bytes and across) | 496 | 0 | 0 |
 | bit scan | 156 | 0 | 0 |
 | strings (stos, movs, cld, std, pushfq, popfq, pause) | 272 | 0 | 0 |
+| rflags (AC and ID through popfq and pushfq) | 24 | 0 | 0 |
+| shift by one (narrow shl, shr, sar by 1, every top-bit and carry combination) | 144 | 0 | 0 |
 | fault cases: #DE from `div` and `idiv` at each width, by zero and by overflow, a memory divisor, a #DE after a `cmp`, `int 0x29`, `int3`, `ud2` | 23 | 0 | 0 |
 
 Before each feature commit the family failed whole: every case "did not return (exit 6)", the unsupported exit, and 21 of the 23
@@ -220,6 +235,11 @@ the same word, loses about half (996602 and 992116 of 2000000 in two runs), so t
   check reads the word and not the vCPU's own store. No check of 4000000 fails. The control, plain `or` and `and`, fails 374 and 589
   in two runs. With `lock or` translated as a plain load, or and store (a mutation, not committed), 6130 checks of `lock or` fail
   (PROVEN). Without the barrier the control failed none: a vCPU's load is served from its own store first.
+- `lock adc` and `lock sbb` of 0 with CF set (by `cmp eax, 2` with EAX 1) count up and down on two vCPUs since `4ecd5faa`, with no
+  update lost. With their `casal` replaced by a plain store (a mutation, not committed) they lose 994964 and 897969 of 2000000, while
+  the `hvf_locked` before `4ecd5faa` passed with that mutation (PROVEN).
+- The narrow shifts' OF: with the CF xor dropped from the narrow shift by CL (a mutation), the shift by cl family fails 2 of 312
+  cases and the shift by one family, added in `1433a811`, 16 of 144 (PROVEN).
 
 ### x86 silicon against Rosetta
 
@@ -233,9 +253,14 @@ family then, dump sha256 `8b28a4ea...`), AMD EPYC 9V45 (44526496471, with group 
   differ only in flags x86 leaves undefined: 1039 multiply cases and 1231 divide cases (bit test and locked none), not compared.
 - **rotate, shift by cl, carry narrow, flag readers, unaligned locked:** the same: no difference in a defined result; undefined flags
   differ in 7, 278, 0, 38 and 29 cases.
+- **rflags, shift by one:** the same on the EPYC 7763 (run 44532999818): ID and AC toggle on both; undefined flags differ in 0 and
+  144 cases.
 - These counts come from the dumps, which are artifacts of the bench runs and not in this repository; the summary of the last
-  (`silicon_overrides.py` on the build's Rosetta dump and the EPYC 9V45 dump, sha256 `112983216c7f89c2a25eb2714acebcbf2025c311fef7b23b2370060e2bd51f9b`,
-  holding every family) is `docs/macos/integer-data/silicon_summary.txt`.
+  (`silicon_overrides.py` on the build's Rosetta dump and the EPYC 7763 dump, sha256
+  `f672c276756d52cb1383f944525af03854da94ba467584b202ad2939010def5c`, holding every family) is
+  `docs/macos/integer-data/silicon_summary.txt`.
+- **Case counts:** the silicon runs count the oracle's cases only (17372 at group 5, 17540 now); the vCPU test adds the 23 fault
+  cases, which never run on x86 (a #DE would kill the oracle), hence its 17395 then and 17563 now.
 - **random:** the one known difference stays, the RAX a 32-bit `lock cmpxchg` leaves (case 8316), now held to the EPYC; 2609 cases
   differ only in undefined flags.
 
@@ -260,14 +285,19 @@ PROVEN (`integer_reach.py` on the same images, rerun after each feature commit):
 | libwinpthread-1.dll | 95 | 78 | 74 | 1 | 1 | 1 |
 | **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** | **238 in 165** | **68 in 32** |
 
-Linearly, Notepad++, GUP and the plugins now have 1291 refusals (7910 before), the runtime DLLs 68 (1494 before). What is left after group 5 (PROVEN, the script): in Notepad++ and its companions 53 instructions in 21 functions, `shrd r64, r64,
-cl` 10 in 4, `bswap` 12 in 7, `prefetchw`, `insb`, `cmpsb` and `vpminuq` (AVX-512); in the runtime DLLs 68 in 32, mostly RTM
-(`xbegin` 22 in 9, `xabort`, `xend`, never reached while cpuid reports no RTM: INFERRED), `tpause` 6 in 6, `shrd` and `shld`.
+Linearly, Notepad++, GUP and the plugins now have 1291 refusals (7910 before), the runtime DLLs 68 (1494 before). What is left after group 5, the whole list (PROVEN, the script):
+
+- Notepad++, GUP and the plugins, 53 instructions in 21 functions: `shrd r64, r64, cl` 10 in 4, `bswap r32` 6 in 4, `bswap r64` 6
+  in 3, `prefetchw m8` 3 in 3, `insb` 3 in 2, `vpminuq` (AVX-512, four forms) 12 in 2, `cmpsb` 2 in 2, and one each of `insd`,
+  `in r32, r16`, `out imm, r32`, `cli`, `or r8, imm`, `lahf`, `sahf`, `cmc`, `retf`, `mov m16, es` and `sfence`.
+- The runtime DLLs, 68 in 32: `xbegin` 22 in 9, `xabort` 5 in 5 and `xend` 5 in 5 (RTM, never reached while cpuid reports no RTM:
+  INFERRED), `tpause` 6 in 6, `shrd r64, r64, cl` 11 in 3, `shrd r32, r32, cl` 10 in 3, `jecxz` 2 in 1, and one each of `bswap r32`,
+  `shld r64, r64, cl`, `shld r64, r64, imm`, `shrd r64, r64, imm`, `umonitor`, `umwait` and `mfence`.
 
 ## Open items
 
 - DF is not in the context an exception would report, nor restored by anything but `popfq` and `cld` (NOT done).
-- A locked operand across 16 bytes is not atomic against another thread (the split path above).
+- A split lock costs microseconds and stops every vCPU; code that takes many would be slow (not measured on real software).
 - A #DE or an `int 0x29` is a fault exit; delivering it to the guest as an exception is the runtime's caller's work (NOT done here).
 - **Precise exception state (design item).** A #DE now shows the flags before the div, but a faulting memory access does not:
   liveness does not count a load or store as a flag reader, so flags an earlier instruction defined and a later one redefines may

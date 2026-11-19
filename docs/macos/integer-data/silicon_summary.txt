@@ -1,6 +1,6 @@
-# silicon_overrides.py on the build's Rosetta dump and the AMD EPYC 9V45 dump of raven-macos-bench run 44527495718 (sha256 112983216c7f89c2a25eb2714acebcbf2025c311fef7b23b2370060e2bd51f9b), at 0df64172.
+# silicon_overrides.py on the build's Rosetta dump and the AMD EPYC 7763 dump of raven-macos-bench run 44532999818 (sha256 f672c276756d52cb1383f944525af03854da94ba467584b202ad2939010def5c), at 1433a811.
 first: corpus	bit scan	generated=dac1a943b360b568	rosetta=54b12ee1b2a22c9d
-second: corpus	bit scan	generated=dac1a943b360b568	rosetta=68ab08d355de9199
+second: corpus	bit scan	generated=dac1a943b360b568	rosetta=b712d99f8eeeaaaf
 first: corpus	bit test	generated=29b36c029beb9877	rosetta=52830b230a9ddf54
 second: corpus	bit test	generated=29b36c029beb9877	rosetta=52830b230a9ddf54
 first: corpus	carry narrow	generated=69db1a24de0dca55	rosetta=6665b413ec4d379e
@@ -15,23 +15,28 @@ first: corpus	multiply	generated=25df878d9858d4cb	rosetta=8329c158c8aa4e17
 second: corpus	multiply	generated=25df878d9858d4cb	rosetta=ca9146786c1f70d1
 first: corpus	random	generated=91faf5c0258de935	rosetta=70e1f67988c68548
 second: corpus	random	generated=91faf5c0258de935	rosetta=11b87755948c0ec3
+first: corpus	rflags	generated=04784cf58b858e03	rosetta=43923897de371ca4
+second: corpus	rflags	generated=04784cf58b858e03	rosetta=43923897de371ca4
 first: corpus	rotate	generated=ca606c2cd4fa12e1	rosetta=26b75210bb3c89cf
 second: corpus	rotate	generated=ca606c2cd4fa12e1	rosetta=a0c4b9d21099ba34
 first: corpus	shift by cl	generated=d2ddec382e9fa159	rosetta=45d6a8834a2d2333
 second: corpus	shift by cl	generated=d2ddec382e9fa159	rosetta=f0ed015c29ca90a3
+first: corpus	shift by one	generated=01b0ddce92ab20c2	rosetta=8649c81d6fd4cc60
+second: corpus	shift by one	generated=01b0ddce92ab20c2	rosetta=bd57013f56b6c09e
 first: corpus	strings	generated=eff2bf9897e5d93f	rosetta=ee178f5e5c77fd62
 second: corpus	strings	generated=eff2bf9897e5d93f	rosetta=ee178f5e5c77fd62
 first: corpus	unaligned locked	generated=7d4ff4fd016fd37e	rosetta=4ca1ea057c9886d7
 second: corpus	unaligned locked	generated=7d4ff4fd016fd37e	rosetta=b03bdede3693c7c9
 0 cases encoded differently in the two runs (left out)
-17372 cases, 1 differ in a compared field
-  bit scan: 156 differ only in flags x86 leaves undefined (not written)
+17540 cases, 1 differ in a compared field
+  bit scan: 150 differ only in flags x86 leaves undefined (not written)
   divide: 1231 differ only in flags x86 leaves undefined (not written)
   flag readers: 38 differ only in flags x86 leaves undefined (not written)
   multiply: 1039 differ only in flags x86 leaves undefined (not written)
   random: 2609 differ only in flags x86 leaves undefined (not written)
   rotate: 7 differ only in flags x86 leaves undefined (not written)
   shift by cl: 278 differ only in flags x86 leaves undefined (not written)
+  shift by one: 144 differ only in flags x86 leaves undefined (not written)
   unaligned locked: 29 differ only in flags x86 leaves undefined (not written)
   random: 1
   field r: 1
