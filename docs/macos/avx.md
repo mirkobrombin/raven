@@ -153,8 +153,8 @@ its 53 samples (above) and the instructions they stand for translate.
 
 - **Later families** (after the FMA3 edges, so the earlier cases keep their numbers): sse3 500 (legacy and VEX at 128 and 256
   bits), ssse3 500, sse41 1000 (every SSE4.1 instruction, ptest followed by a setcc), sse42 400 (pcmpgtq, crc32 of every width),
-  popcnt 300 (16, 32 and 64 bits, then a setcc). Each was committed failing (`0186a0ac`, `88266640`, `ad08e950`, `8ed30de1`,
-  `178b1f89`: every case unsupported), then implemented. PROVEN at the end: `translate_x86_avx` 16976 cases (8488 in each
+  popcnt 300 (16, 32 and 64 bits, then a setcc). Each was committed failing (`0186a0ac`, `88266640`, `ad08e950`, `ecc31d0b`,
+  `ca050087`: every case unsupported), then implemented. PROVEN at the end: `translate_x86_avx` 16976 cases (8488 in each
   ordering), 0 failures; `hvf_avx` 8488 cases, 0 failures.
 - **Legacy alignment.** x86 raises #GP for a legacy 16-byte operand that is not 16-byte aligned; Rosetta does not check. The first
   sse3 cases had unaligned movsldup and movshdup operands: the EPYC's oracle crashed (`Segmentation fault`) where Rosetta ran them;
