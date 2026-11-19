@@ -60,6 +60,9 @@ enum class Mnemonic : uint16_t {
 	syscall,
 	ud2,
 	hlt,
+	// The runtime answers these (cpuid.h): a block ends before them with ExitReason::cpuid.
+	cpuid,
+	xgetbv,
 	// SSE and SSE2 on XMM registers, from movq to the end (sse_first to sse_last). movq and movd move between XMM and general
 	// registers or memory; movq also between XMM registers and the low quadword. A memory operand has the size the instruction
 	// accesses: 16 for a whole register, 8, 4 or 2 for a part.

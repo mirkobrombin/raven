@@ -1,3 +1,4 @@
+#include "cpuid.h"
 #include "cpuid_check.h"
 #include "runtime.h"
 
@@ -57,6 +58,24 @@ int main()
 				static_cast<uint32_t>(state.gpr[rcx]), static_cast<uint32_t>(state.gpr[rdx])};
 		},
 		"in process");
-	std::printf("%zu failures\n", failures);
-	return failures == 0 ? 0 : 1;
+	// The answers with every feature cpuid.h knows turned on must be as consistent (OSXSAVE, XCR0 and leaf 0xd with AVX), though
+	// nothing translates their instructions yet: straight from the model, the leaf and subleaf read back from the code.
+	GuestFeatures all;
+	all.avx = all.avx2 = all.fma = all.f16c = all.bmi1 = all.bmi2 = true;
+	const size_t model_failures = cpuid_check::check(
+		[&](const std::vector<uint8_t> &code) {
+			uint32_t leaf = 0, subleaf = 0;
+			std::memcpy(&leaf, &code[1], 4);
+			std::memcpy(&subleaf, &code[6], 4);
+			if (code[10] == 0x0f && code[11] == 0x01) {
+				const auto value = xgetbv(subleaf, all);
+				return cpuid_check::Answer{value ? ExitReason::returned : ExitReason::fault, static_cast<uint32_t>(value.value_or(0)), 0,
+					0, static_cast<uint32_t>(value.value_or(0) >> 32)};
+			}
+			const CpuidAnswer answer = cpuid(leaf, subleaf, all);
+			return cpuid_check::Answer{ExitReason::returned, answer.eax, answer.ebx, answer.ecx, answer.edx};
+		},
+		"every feature on, model", false);
+	std::printf("%zu failures, %zu with every feature on\n", failures, model_failures);
+	return failures + model_failures == 0 ? 0 : 1;
 }

@@ -765,6 +765,15 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 		result.mnemonic = prefixes.rep ? Mnemonic::other : Mnemonic::nop;
 		result.count = 0;
 	}
+	// cpuid (0F A2) and xgetbv (0F 01 D0), without prefixes: the runtime answers both (cpuid.h).
+	if (full_opcode == 0x0fa2 && reader.at == 2) {
+		result.mnemonic = Mnemonic::cpuid;
+		result.count = 0;
+	}
+	if (full_opcode == 0x0f01 && reader.at == 3 && bytes[2] == 0xd0) {
+		result.mnemonic = Mnemonic::xgetbv;
+		result.count = 0;
+	}
 	// LOCK applies only to read-modify-write forms with a memory destination; anything else raises #UD.
 	if (prefixes.lock && result.mnemonic != Mnemonic::other) {
 		static constexpr Mnemonic lockable[] = {Mnemonic::add, Mnemonic::or_, Mnemonic::adc, Mnemonic::sbb, Mnemonic::and_, Mnemonic::sub,
@@ -1046,6 +1055,8 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::syscall: name = "syscall"; break;
 	case Mnemonic::ud2: name = "ud2"; break;
 	case Mnemonic::hlt: name = "hlt"; break;
+	case Mnemonic::cpuid: name = "cpuid"; break;
+	case Mnemonic::xgetbv: name = "xgetbv"; break;
 	default: {
 		if (instruction.mnemonic >= x87_first && instruction.mnemonic <= x87_last) {
 			name = x87_names[static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(x87_first)];

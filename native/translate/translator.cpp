@@ -1889,13 +1889,15 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 	}
 	if (!ended) {
 		normalize_carry();
-		// The next instruction is not translated: x87 goes to the runtime's x87 core, unsupported or invalid stops here, a full block
-		// falls through to the next.
+		// The next instruction is not translated: x87 goes to the runtime's x87 core, cpuid and xgetbv to the runtime's answers,
+		// unsupported or invalid stops here, a full block falls through to the next.
 		const Instruction next = at < code.size() ? decode(code.subspan(at), rip) : Instruction{};
 		if (instructions.size() >= options.max_instructions && next.mnemonic != Mnemonic::invalid && supported(next))
 			exit_to(rip);
 		else if (next.mnemonic != Mnemonic::invalid && x87_supported(next))
 			exit_with(ExitReason::x87, rip);
+		else if (next.mnemonic == Mnemonic::cpuid || next.mnemonic == Mnemonic::xgetbv)
+			exit_with(ExitReason::cpuid, rip);
 		else
 			exit_with(ExitReason::unsupported, rip);
 	}
@@ -1914,7 +1916,8 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 
 bool translates(const Instruction &instruction)
 {
-	return supported(instruction) || x87_supported(instruction);
+	return supported(instruction) || x87_supported(instruction) || instruction.mnemonic == Mnemonic::cpuid ||
+		instruction.mnemonic == Mnemonic::xgetbv;
 }
 
 TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address, const TranslatorOptions &options,

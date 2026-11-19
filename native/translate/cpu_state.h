@@ -28,14 +28,18 @@ enum class ExitReason : uint32_t {
 	fault,
 	// An x87 instruction; rip is that instruction. The runtime runs it and the x87 instructions after it (x87.h).
 	x87,
+	// cpuid or xgetbv; rip is that instruction. The runtime answers it (cpuid.h) and goes on after it.
+	cpuid,
 };
 
 // What CpuState::exit_info holds after ExitReason::fault.
 enum class FaultKind : uint64_t {
-	// hlt or ud2 in translated code.
+	// hlt or ud2 in translated code, or an xgetbv x86 raises #UD or #GP for (cpuid.h).
 	instruction,
 	// #MF: an x87 instruction found an unmasked exception pending; FSW and FCW in CpuState::x87 say which.
 	x87,
+	// cpuid or xgetbv; rip is that instruction. The runtime answers it (cpuid.h) and goes on after it.
+	cpuid,
 };
 
 // The x87 FPU, kept in CpuState only: the host's x87 core (x87.h) reads and writes it, translated code never does. The order is that

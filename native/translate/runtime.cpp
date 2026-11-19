@@ -1,6 +1,7 @@
 #include "runtime.h"
 
 #include "x86_decoder.h"
+#include "cpuid.h"
 #include "x87.h"
 
 #include "a64_emitter.h"
@@ -17,7 +18,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 5;
+constexpr uint64_t translator_version = 6;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -319,6 +320,32 @@ RunResult Runtime::Thread::run()
 				cpu.rip = next;
 			}
 			break;
+		case ExitReason::cpuid: {
+			// cpuid or xgetbv at rip, answered from cpuid.h; then translated code again after it.
+			Instruction instruction;
+			{
+				std::lock_guard guard(runtime.lock);
+				instruction = decode(runtime.memory.code(cpu.rip), cpu.rip);
+			}
+			if (instruction.mnemonic == Mnemonic::cpuid) {
+				const CpuidAnswer answer = cpuid(static_cast<uint32_t>(cpu.gpr[rax]), static_cast<uint32_t>(cpu.gpr[rcx]));
+				cpu.gpr[rax] = answer.eax;
+				cpu.gpr[rbx] = answer.ebx;
+				cpu.gpr[rcx] = answer.ecx;
+				cpu.gpr[rdx] = answer.edx;
+			} else if (instruction.mnemonic == Mnemonic::xgetbv) {
+				const auto value = xgetbv(static_cast<uint32_t>(cpu.gpr[rcx]));
+				if (!value) {
+					cpu.exit_info = uint64_t(FaultKind::instruction);
+					return {ExitReason::fault, cpu.rip};
+				}
+				cpu.gpr[rax] = static_cast<uint32_t>(*value);
+				cpu.gpr[rdx] = *value >> 32;
+			} else
+				return {ExitReason::unsupported, cpu.rip};
+			cpu.rip += instruction.length;
+			break;
+		}
 		case ExitReason::returned: return {reason, cpu.gpr[rax]};
 		case ExitReason::stopped: {
 			cpu.stop_requested = 0;

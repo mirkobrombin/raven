@@ -78,7 +78,7 @@ inline const std::vector<Feature> &features()
 // Runs every check with run(code), which translates and runs the bytes from a fresh state and returns what they left in RAX, RBX,
 // RCX and RDX with the exit reason. Prints each failure and the leaves it read; returns the number of failures.
 template <class Run>
-size_t check(Run run, const char *where)
+size_t check(Run run, const char *where, bool require_samples = true)
 {
 	size_t failures = 0;
 	auto fail = [&](const std::string &text) {
@@ -172,7 +172,7 @@ size_t check(Run run, const char *where)
 			translated += translates(decode(bytes, 0x1000)) ? 1 : 0;
 		std::printf("%s: %s %s, %zu of %zu samples translated\n", where, feature.name, reported ? "reported" : "not reported", translated,
 			feature.samples.size());
-		if (reported && translated != feature.samples.size())
+		if (require_samples && reported && translated != feature.samples.size())
 			fail(std::string(feature.name) + " is reported but the translator does not take all its samples");
 	}
 	return failures;
