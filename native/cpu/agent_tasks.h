@@ -22,6 +22,8 @@ struct Task {
 	pid_t task = 0;
 	// The thread group the task belongs to, and whether the task leads it (a child of the runtime's, whose end waitpid reports).
 	pid_t group = 0;
+	// The guest's process group, which every task of the guest stays in and which ends with the guest.
+	pid_t process = 0;
 	uint64_t *block = nullptr;
 	// The alternate signal stack, as the runtime and the guest see it.
 	uint8_t *stack = nullptr;
@@ -37,7 +39,7 @@ struct Task {
 
 // Requests for `task` go to the agent from now on; the task is running toward its next stop in the handler.
 void hold(const Task &task);
-// Forgets every task of the thread group, which has ended.
+// Forgets every task of the thread group or of the guest's process group, which has ended.
 void release_group(pid_t group);
 bool held(pid_t task);
 

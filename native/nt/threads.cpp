@@ -1,5 +1,6 @@
 #include "threads.h"
 #include "kernel_waits.h"
+#include "cpu/agent_tasks.h"
 
 #include <cstdlib>
 #include <fcntl.h>
@@ -1669,7 +1670,7 @@ void NativeThreads::end_host(GuestThread &thread)
 	if (task > 0) {
 		::kill(task, SIGKILL);
 		int status = 0;
-		while (::waitpid(task, &status, __WALL) == -1 && errno == EINTR) {}
+		while (agent::wait(task, &status, __WALL) == -1 && errno == EINTR) {}
 		thread.snapshot.task = 0;
 	}
 }

@@ -100,6 +100,8 @@ public:
 	void start_agent();
 	// Takes the current task out of ptrace: from now on it stops in the agent's handler, and the runtime drives it over its block.
 	void hand_to_agent();
+	// Starts a guest thread in the agent's hands, with its stack top: it waits, held, for the context the runtime gives it.
+	pid_t agent_thread(uint64_t stack_top);
 	// The service thread's task, 0 before start_agent.
 	pid_t agent_task() const;
 	// How many of the runtime's system calls the service thread made in place of a stopped task.
@@ -273,6 +275,14 @@ private:
 	bool inside_served_stub() const;
 	bool served_wait_trap(uint64_t address) const;
 	void protect_range(uint64_t address, size_t size, int protection, bool image);
+	// The shared block and alternate signal stack of a task in the agent's hands, as the runtime and the guest see them.
+	struct AgentRoom {
+		uint64_t *block = nullptr;
+		uint64_t block_guest = 0;
+		uint8_t *stack = nullptr;
+		uint64_t stack_guest = 0;
+	};
+	AgentRoom agent_room();
 	struct State;
 	std::unique_ptr<State> state;
 	void install_segment(uint32_t entry, uint64_t base);

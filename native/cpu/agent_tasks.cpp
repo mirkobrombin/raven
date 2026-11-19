@@ -167,23 +167,34 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 		return 0;
 	case PTRACE_SETREGS: {
 		const auto &wanted = *static_cast<const user_regs_struct *>(data);
-		// The frame cannot carry the data, FS and GS selectors; the bases the handler sets on its way out.
-		const auto &kept = task.segments;
-		if (wanted.ds != kept.ds || wanted.es != kept.es || wanted.fs != kept.fs || wanted.gs != kept.gs)
-			return failed(EINVAL);
-		uint64_t bases = 0;
-		if (wanted.fs_base != task.segments.fs_base) {
+		// The frame carries neither the segment selectors nor the bases: the handler loads what changed on its way out, selectors
+		// first. A selector that is not null sets its base from its descriptor, and writing the base after it would clear it again.
+		auto &kept = task.segments;
+		uint64_t asked = 0;
+		const auto selector = [&](uint64_t now, uint64_t &was, size_t word, uint64_t bit) {
+			if (now == was)
+				return false;
+			task.block[word] = now;
+			asked |= bit;
+			was = now;
+			return now != 0;
+		};
+		const bool fs_described = selector(wanted.fs, kept.fs, fs_selector, load_fs);
+		const bool gs_described = selector(wanted.gs, kept.gs, gs_selector, load_gs);
+		selector(wanted.ds, kept.ds, ds_selector, load_ds);
+		selector(wanted.es, kept.es, es_selector, load_es);
+		if (wanted.fs_base != kept.fs_base && !fs_described) {
 			task.block[fs_base] = wanted.fs_base;
-			bases |= set_fs;
+			asked |= set_fs;
 		}
-		if (wanted.gs_base != task.segments.gs_base) {
+		if (wanted.gs_base != kept.gs_base && !gs_described) {
 			task.block[gs_base] = wanted.gs_base;
-			bases |= set_gs;
+			asked |= set_gs;
 		}
-		task.block[set_bases] |= bases;
-		task.segments.fs_base = wanted.fs_base;
-		task.segments.gs_base = wanted.gs_base;
-		set_registers(*context, wanted, task.segments);
+		task.block[set_bases] |= asked;
+		kept.fs_base = wanted.fs_base;
+		kept.gs_base = wanted.gs_base;
+		set_registers(*context, wanted, kept);
 		return 0;
 	}
 	case PTRACE_GETSIGINFO: {
@@ -247,8 +258,14 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 		}
 		return 0;
 	}
-	case PTRACE_SETSIGINFO:
+	case PTRACE_SETSIGINFO: {
+		// What a stop is taken for, put back after an interrupt that came behind it (see NativeChild::pause_task).
+		auto *information = on_stack<siginfo_t>(task, task.block[agent::information]);
+		if (!information)
+			return failed(EFAULT);
+		*information = *static_cast<const siginfo_t *>(data);
 		return 0;
+	}
 	default:
 		// Debug registers, events and the rest have no counterpart in the agent yet.
 		return failed(EIO);
@@ -267,7 +284,7 @@ void hold(const Task &task)
 void release_group(pid_t group)
 {
 	std::lock_guard lock(tasks_lock);
-	std::erase_if(tasks, [&](const auto &entry) { return entry.second.group == group; });
+	std::erase_if(tasks, [&](const auto &entry) { return entry.second.group == group || entry.second.process == group; });
 }
 
 bool held(pid_t task)

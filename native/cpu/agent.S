@@ -11,8 +11,9 @@
  *
  * Words of the block: 400 the state (0 nothing, 1 a signal waits for the runtime, 2 the runtime has answered; the runtime sleeps and
  * wakes on its low half), 401 the signal, 402 the address of its siginfo, 403 the address of the interrupted ucontext, 404 the
- * segment bases the runtime asks for with its answer (bit 0 FS, bit 1 GS; a signal frame does not carry them), 405 the FS base and
- * 406 the GS base asked for. */
+ * segment registers the runtime asks for with its answer, which a signal frame does not carry (bit 0 the FS base, bit 1 the GS base,
+ * bits 2 to 5 the FS, GS, DS and ES selectors), 405 the FS base and 406 the GS base asked for, 408 to 411 the FS, GS, DS and ES
+ * selectors asked for. Selectors are loaded before bases: loading one sets its base from the descriptor. */
 
 	.intel_syntax noprefix
 	.section .rodata, "a"
@@ -26,6 +27,15 @@
 	.set SYS_ARCH_PRCTL, 158
 	.set ARCH_SET_GS, 0x1001
 	.set ARCH_SET_FS, 0x1002
+	.set SYS_CLONE, 56
+	.set SYS_SIGALTSTACK, 131
+	.set SYS_PRCTL, 157
+	.set SYS_RT_SIGPROCMASK, 14
+	.set SIG_SETMASK, 2
+	.set PR_SET_SYSCALL_USER_DISPATCH, 59
+	.set PR_SYS_DISPATCH_ON, 1
+	.set AGENT_THREAD, 1000
+	.set THREAD_CLONE, 0x00048700	/* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_PARENT | CLONE_SYSVSEM, no exit signal */
 
 	.global raven_agent, raven_agent_end, raven_agent_handler, raven_agent_restorer
 	.balign 64
@@ -58,7 +68,23 @@ raven_agent_handler:
 	mov eax, SYS_FUTEX
 	syscall
 	jmp short 1b
-3:	test dword ptr [rbx + AGENT_STATE + 32], 1
+3:	test dword ptr [rbx + AGENT_STATE + 32], 4
+	jz short 6f
+	mov eax, dword ptr [rbx + AGENT_STATE + 64]
+	mov fs, eax
+6:	test dword ptr [rbx + AGENT_STATE + 32], 8
+	jz short 7f
+	mov eax, dword ptr [rbx + AGENT_STATE + 72]
+	mov gs, eax
+7:	test dword ptr [rbx + AGENT_STATE + 32], 16
+	jz short 8f
+	mov eax, dword ptr [rbx + AGENT_STATE + 80]
+	mov ds, eax
+8:	test dword ptr [rbx + AGENT_STATE + 32], 32
+	jz short 9f
+	mov eax, dword ptr [rbx + AGENT_STATE + 88]
+	mov es, eax
+9:	test dword ptr [rbx + AGENT_STATE + 32], 1
 	jz short 4f
 	mov edi, ARCH_SET_FS
 	mov rsi, qword ptr [rbx + AGENT_STATE + 40]
@@ -82,7 +108,14 @@ raven_agent_restorer:
 /* The service thread: the guest's own thread that makes system calls for the runtime, so the runtime never needs a guest thread
  * stopped to map, protect or release memory, start threads and the like. RDI is its block, in words: 0 the state (0 nothing, 1 a call
  * waits, 2 it is done; the runtime sleeps and wakes on its low half), 1 the call's number, 2 to 7 its arguments, 8 its result. It
- * never returns. */
+ * never returns.
+ *
+ * Number 1000 is the agent's own: it starts a guest thread already in the agent's hands, with argument 2 the top of the thread's
+ * stack and argument 3 its block. The thread is a child of the runtime's (CLONE_PARENT from this thread, whose process the runtime
+ * started), so the runtime reaps it, and has the signal handlers of this thread's process. The alternate stack and Syscall User
+ * Dispatch are not inherited: the thread sets them up itself from its block (the stack_t at word 504, the range the dispatch lets
+ * through at words 508 and 509, the selector in word 407), leaves their results in words 510 and 511 and stops on its breakpoint,
+ * held in the handler until the runtime gives it a context. The result is the thread's id. */
 	.global raven_agent_service
 raven_agent_service:
 	mov rbx, rdi
@@ -106,8 +139,10 @@ raven_agent_service:
 	mov r10, qword ptr [rbx + 40]
 	mov r8, qword ptr [rbx + 48]
 	mov r9, qword ptr [rbx + 56]
+	cmp rax, AGENT_THREAD
+	je short 10f
 	syscall
-	mov qword ptr [rbx + 64], rax
+11:	mov qword ptr [rbx + 64], rax
 	mov dword ptr [rbx], 2
 	mov rdi, rbx
 	mov esi, FUTEX_WAKE
@@ -116,11 +151,46 @@ raven_agent_service:
 	mov eax, SYS_FUTEX
 	syscall
 	jmp short 1b
+10:	mov r12, rsi
+	mov rsi, rdi
+	mov edi, THREAD_CLONE
+	xor edx, edx
+	xor r10d, r10d
+	xor r8d, r8d
+	mov eax, SYS_CLONE
+	syscall
+	test rax, rax
+	jnz short 11b
+	lea rdi, [r12 + 504 * 8]
+	xor esi, esi
+	mov eax, SYS_SIGALTSTACK
+	syscall
+	mov qword ptr [r12 + 510 * 8], rax
+	mov edi, PR_SET_SYSCALL_USER_DISPATCH
+	mov esi, PR_SYS_DISPATCH_ON
+	mov rdx, qword ptr [r12 + 508 * 8]
+	mov r10, qword ptr [r12 + 509 * 8]
+	lea r8, [r12 + 407 * 8]
+	mov eax, SYS_PRCTL
+	syscall
+	mov qword ptr [r12 + 511 * 8], rax
+	/* The service thread's mask came along; a breakpoint whose signal waits would end the thread instead of stopping it. */
+	push 0
+	mov edi, SIG_SETMASK
+	mov rsi, rsp
+	xor edx, edx
+	mov r10d, 8
+	mov eax, SYS_RT_SIGPROCMASK
+	syscall
+	pop rcx
+	.global raven_agent_born
+raven_agent_born:
+	int3
+	ud2
 
 /* Starts the service thread: the runtime runs this from a stopped task with RDI the service block and RSI the top of the thread's
  * stack. The thread joins the task's thread group, so it ends with the process, and is untraced even when the task traces its clones.
  * The task stops on the breakpoint after the call with RAX the new thread's id, or the error. */
-	.set SYS_CLONE, 56
 	.set SERVICE_CLONE, 0x00850f00	/* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM | CLONE_UNTRACED */
 	.global raven_agent_spawn, raven_agent_spawned
 raven_agent_spawn:
