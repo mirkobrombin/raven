@@ -262,9 +262,58 @@ def divide(rng):
     return cases
 
 
+def bit_index_values(rng, bits):
+    """Bit indices: inside the operand, just beyond it, far beyond and negative, as a register of the width holds them."""
+    values = [0, 1, bits - 1, bits, bits + 1, 2 * bits - 1, 255, 256, 1 << (bits - 2), (1 << (bits - 1)) - 1, -1, -2, -bits,
+              -bits - 1, -(1 << (bits - 1)), rng.randrange(bits), rng.randrange(-4096, 4096), rng.getrandbits(bits)]
+    return [v & ((1 << bits) - 1) for v in values]
+
+
+def bit_test(rng):
+    """bt, bts, btr and btc on registers and memory, by a register or an imm8 index, with and without lock. CF is the bit; ZF is
+    left alone (defined: it must not change); OF, SF, AF and PF are undefined. An immediate index is taken modulo the width, a
+    register one too for a register operand; for memory, a register index addresses a bit string: the signed index over 8 bytes
+    from the operand's address, which the cases put back in the buffer with a base register."""
+    cases = []
+    for op in ("bt", "bts", "btr", "btc"):
+        for bits in (16, 32, 64):
+            size = bits // 8
+            for index in bit_index_values(rng, bits) + [rng.getrandbits(bits) for _ in range(12)]:
+                registers = registers_for(rng)
+                target = rng.choice(USABLE)
+                registers[target] = rng.getrandbits(64)
+                source = rng.choice(USABLE)
+                if source != target:
+                    put(registers, source, 0, index, bits)
+                cases.append((registers, [f"{op} {GPR[bits][target]}, {GPR[bits][source]}"], CF | ZF))
+            for _ in range(15):
+                registers = registers_for(rng)
+                target = rng.choice(USABLE)
+                cases.append((registers, [f"{op} {GPR[bits][target]}, {rng.randrange(256)}"], CF | ZF))
+            locks = [""] + (["lock "] if op != "bt" else [])
+            for lock in locks:
+                for _ in range(10):
+                    offset = rng.randrange(0, 64 - size + 1)
+                    if lock:
+                        offset -= offset % size
+                    cases.append((registers_for(rng), [f"{lock}{op} {PTR[bits]} ptr [r15 + {offset}], {rng.randrange(256)}"], CF | ZF))
+                for index in bit_index_values(rng, bits) + ([rng.getrandbits(bits) for _ in range(6)] if not lock else []):
+                    registers = registers_for(rng)
+                    base, source = rng.sample(USABLE, 2)
+                    put(registers, source, 0, index, bits)
+                    # The word x86 reads holds the bit: size bytes at the address plus size times the index over the width.
+                    word = signed(index, bits) >> (bits.bit_length() - 1) << (size.bit_length() - 1)
+                    place = rng.randrange(0, 64 - size + 1)
+                    place -= place % size
+                    registers[base] = (place - word) & (2 ** 64 - 1)
+                    body = [f"{lock}{op} {PTR[bits]} ptr [r15 + {GPR[64][base]}], {GPR[bits][source]}"]
+                    cases.append((registers, body, CF | ZF))
+    return cases
+
+
 # The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
 # name's CRC-32.
-FAMILIES = [("multiply", multiply), ("divide", divide)]
+FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test)]
 
 
 def main():
