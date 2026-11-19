@@ -69,6 +69,8 @@ enum class Mnemonic : uint16_t {
 	// xsave and xrstor (0F AE /4 and /5, memory only); operand_size 8 for their REX.W forms, xsave64 and xrstor64.
 	xsave,
 	xrstor,
+	// BMI1, BMI2 and LZCNT on general registers.
+	andn, bextr, blsi, blsmsk, blsr, tzcnt, lzcnt, bzhi, mulx, pdep, pext, rorx, sarx, shlx, shrx,
 	// SSE and SSE2 on XMM registers, from movq to the end (sse_first to sse_last). movq and movd move between XMM and general
 	// registers or memory; movq also between XMM registers and the low quadword. A memory operand has the size the instruction
 	// accesses: 16 for a whole register, 8, 4 or 2 for a part.

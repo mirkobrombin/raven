@@ -96,7 +96,8 @@ FlagEffect flag_effect(const Instruction &instruction)
 		return {0, all_flags};
 	case Mnemonic::jcc: case Mnemonic::setcc: case Mnemonic::cmovcc: return {0, condition_flags(instruction.condition)};
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: case Mnemonic::ptest:
-	case Mnemonic::popcnt: case Mnemonic::vtestps: case Mnemonic::vtestpd:
+	case Mnemonic::popcnt: case Mnemonic::vtestps: case Mnemonic::vtestpd: case Mnemonic::andn: case Mnemonic::bextr:
+	case Mnemonic::blsi: case Mnemonic::blsmsk: case Mnemonic::blsr: case Mnemonic::tzcnt: case Mnemonic::lzcnt: case Mnemonic::bzhi:
 		return {all_flags, 0};
 	default: return {};
 	}
@@ -229,6 +230,12 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::blendpd: case Mnemonic::pblendw: case Mnemonic::pextrb: case Mnemonic::pextrw: case Mnemonic::pextrd:
 	case Mnemonic::pextrq: case Mnemonic::extractps: case Mnemonic::pinsrb: case Mnemonic::pinsrw: case Mnemonic::pinsrd:
 	case Mnemonic::pinsrq: case Mnemonic::insertps: case Mnemonic::dpps: case Mnemonic::dppd: case Mnemonic::mpsadbw:
+	case Mnemonic::andn: case Mnemonic::bextr: case Mnemonic::blsi: case Mnemonic::blsmsk: case Mnemonic::blsr: case Mnemonic::bzhi:
+	case Mnemonic::mulx: case Mnemonic::pdep: case Mnemonic::pext: case Mnemonic::rorx: case Mnemonic::sarx: case Mnemonic::shlx:
+	case Mnemonic::shrx:
+		return true;
+	// The 16-bit forms are not translated.
+	case Mnemonic::tzcnt: case Mnemonic::lzcnt: return instruction.operand_size >= 4;
 	case Mnemonic::pcmpgtq: case Mnemonic::crc32: case Mnemonic::popcnt:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
@@ -394,6 +401,7 @@ private:
 	void sse_arithmetic(const Instruction &instruction);
 	void sse_compare(const Instruction &instruction);
 	void sse_reciprocal(const Instruction &instruction);
+	void bmi(const Instruction &instruction);
 	void sse_ordered_compare(const Instruction &instruction);
 	// Element 0 of source (a double or a single) to a signed integer of size bytes in result (s0), truncated or rounded as MXCSR says.
 	void convert_to_integer(uint8_t source, bool doubles, bool truncate, unsigned size);
@@ -1421,6 +1429,176 @@ void BlockTranslator::sse_reciprocal(const Instruction &instruction)
 		a.ins(target, 0, vh3, 0, 4);
 	else
 		a.simd(simd::orr_16b, target, vh3, vh3);
+}
+
+void BlockTranslator::bmi(const Instruction &instruction)
+{
+	// BMI1, BMI2 and LZCNT, at 32 bits (W forms, the result zero-extended) and 64. Flags as the SDM defines them: N and Z from the
+	// result with C and V clear (ands), then CF where the instruction sets it, ZF clear for blsmsk; PF and AF, undefined, are left.
+	// mulx, pdep, pext, rorx and the shifts leave every flag alone (pdep and pext loop with cbz, which reads none).
+	const Operand *operands = instruction.operands.data();
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const bool is64 = instruction.operand_size == 8;
+	const unsigned bits = is64 ? 64 : 32;
+	const uint32_t sf = is64 ? 0x80000000u : 0;
+	auto bic = [&](uint8_t rd, uint8_t rn, uint8_t rm) { a.emit(0x0a200000u | sf | uint32_t(rm) << 16 | uint32_t(rn) << 5 | rd); };
+	auto clz = [&](uint8_t rd, uint8_t rn) { a.emit(0x5ac01000u | sf | uint32_t(rn) << 5 | rd); };
+	auto rbit = [&](uint8_t rd, uint8_t rn) { a.emit(0x5ac00000u | sf | uint32_t(rn) << 5 | rd); };
+	auto compare = [&](uint8_t rn, uint32_t value) { a.sub_imm(a64::zr, rn, value, false, is64, true); };
+	// NZCV from the result; carry, when not zr, a 0 or 1 register for CF; clear_zero for blsmsk.
+	auto flags = [&](uint8_t result, uint8_t carry, bool clear_zero) {
+		if (!flags_wanted(all_flags))
+			return;
+		a.and_(a64::zr, result, result, is64, true);
+		carry_inverted = false;
+		if (carry == a64::zr && !clear_zero)
+			return;
+		a.mrs_nzcv(s5);
+		if (clear_zero)
+			a.bfi(s5, a64::zr, 30, 1, false);
+		if (carry != a64::zr)
+			a.orr(s5, s5, carry, Shift::lsl, 29, false);
+		a.msr_nzcv(s5);
+	};
+	switch (mnemonic) {
+	case Mnemonic::andn: {
+		const uint8_t first = read(operands[1], s0), second = read(operands[2], s1);
+		bic(s2, second, first);
+		flags(s2, a64::zr, false);
+		write(operands[0], s2);
+		return;
+	}
+	case Mnemonic::bextr: {
+		// The bits from start (control bits 7:0) for length (15:8); a start or length of the width or more gives 0 or every bit.
+		const uint8_t value = read(operands[1], s0), control = read(operands[2], s1);
+		a.ubfx(s2, control, 0, 8, false);
+		a.ubfx(s3, control, 8, 8, false);
+		a.lsrv(s4, value, s2, is64);
+		compare(s2, bits);
+		a.csel(s4, a64::zr, s4, Cond::cs, is64);
+		a.mov_imm(s2, ~uint64_t(0), is64);
+		a.lslv(s2, s2, s3, is64);
+		compare(s3, bits);
+		a.csel(s2, a64::zr, s2, Cond::cs, is64);
+		bic(s4, s4, s2);
+		flags(s4, a64::zr, false);
+		write(operands[0], s4);
+		return;
+	}
+	case Mnemonic::blsi: case Mnemonic::blsmsk: case Mnemonic::blsr: case Mnemonic::tzcnt: case Mnemonic::lzcnt: {
+		const uint8_t value = read(operands[1], s0);
+		// CF: the source is not zero (blsi) or is zero (the others).
+		if (flags_wanted(all_flags)) {
+			compare(value, 0);
+			a.cset(s3, mnemonic == Mnemonic::blsi ? Cond::ne : Cond::eq);
+		}
+		switch (mnemonic) {
+		case Mnemonic::blsi: a.sub(s2, a64::zr, value, Shift::lsl, 0, is64); a.and_(s2, value, s2, is64); break;
+		case Mnemonic::blsmsk: a.sub_imm(s2, value, 1, false, is64); a.eor(s2, value, s2, Shift::lsl, 0, is64); break;
+		case Mnemonic::blsr: a.sub_imm(s2, value, 1, false, is64); a.and_(s2, value, s2, is64); break;
+		case Mnemonic::tzcnt: rbit(s2, value); clz(s2, s2); break;
+		default: clz(s2, value); break;
+		}
+		flags(s2, s3, mnemonic == Mnemonic::blsmsk);
+		write(operands[0], s2);
+		return;
+	}
+	case Mnemonic::bzhi: {
+		// The bits below index (bits 7:0 of the second source); an index of the width or more keeps them all and sets CF.
+		const uint8_t value = read(operands[1], s0), index = read(operands[2], s1);
+		a.ubfx(s2, index, 0, 8, false);
+		a.mov_imm(s3, ~uint64_t(0), is64);
+		a.lslv(s3, s3, s2, is64);
+		compare(s2, bits);
+		a.cset(s4, Cond::cs);
+		a.csel(s3, a64::zr, s3, Cond::cs, is64);
+		bic(s2, value, s3);
+		flags(s2, s4, false);
+		write(operands[0], s2);
+		return;
+	}
+	case Mnemonic::mulx: {
+		// RDX times the source, unsigned: the low half to the second operand, then the high half to the first (x86 writes the high
+		// half last when both are one register).
+		Operand rdx_operand = operands[2];
+		rdx_operand.kind = OperandKind::reg;
+		rdx_operand.reg = rdx;
+		const uint8_t value = read(operands[2], s0), multiplier = read(rdx_operand, s1);
+		if (is64) {
+			a.mul(s2, multiplier, value);
+			a.umulh(s3, multiplier, value);
+		} else {
+			// umull: the 64-bit product of two W registers.
+			a.emit(0x9ba07c00u | uint32_t(value) << 16 | uint32_t(multiplier) << 5 | s2);
+			a.lsr_imm(s3, s2, 32);
+		}
+		write(operands[1], s2);
+		write(operands[0], s3);
+		return;
+	}
+	case Mnemonic::pdep: case Mnemonic::pext: {
+		// One pass per set bit of the mask (operands[2]), lowest first: pdep puts the source's next bit there, pext takes the bit
+		// there to the result's next place. s1 the mask left, s2 the source (shifted, pdep) or the place (pext), s0 the result.
+		const uint8_t source = read(operands[1], s2, false), mask = read(operands[2], s1, false);
+		if (source != s2)
+			a.mov(s2, source, is64);
+		if (mask != s1)
+			a.mov(s1, mask, is64);
+		a.mov_imm(s0, 0);
+		if (mnemonic == Mnemonic::pext)
+			a.mov(s4, s2);
+		const Assembler::Label loop = a.label(), done = a.label();
+		if (mnemonic == Mnemonic::pext)
+			a.mov_imm(s2, 0);
+		a.bind(loop);
+		a.cbz(s1, done, is64);
+		// s3: the mask's lowest set bit.
+		a.sub(s3, a64::zr, s1, Shift::lsl, 0, is64);
+		a.and_(s3, s1, s3, is64);
+		if (mnemonic == Mnemonic::pdep) {
+			// The source's low bit as all ones or zero, kept at that bit.
+			a.sbfx(s5, s2, 0, 1, is64);
+			a.and_(s5, s5, s3, is64);
+			a.orr(s0, s0, s5, Shift::lsl, 0, is64);
+			a.lsr_imm(s2, s2, 1, is64);
+		} else {
+			// The source's bit at that place, moved to the result's next place s2.
+			rbit(s5, s3);
+			clz(s5, s5);
+			a.lsrv(s5, s4, s5, is64);
+			a.ubfx(s5, s5, 0, 1, is64);
+			a.lslv(s5, s5, s2, is64);
+			a.orr(s0, s0, s5, Shift::lsl, 0, is64);
+			a.add_imm(s2, s2, 1, false, is64);
+		}
+		a.sub_imm(s5, s1, 1, false, is64);
+		a.and_(s1, s1, s5, is64);
+		a.b(loop);
+		a.bind(done);
+		write(operands[0], s0);
+		return;
+	}
+	case Mnemonic::rorx: {
+		const uint8_t value = read(operands[1], s0);
+		const unsigned amount = static_cast<unsigned>(operands[2].value) & (bits - 1);
+		// extr of the value with itself.
+		a.emit((is64 ? 0x93c00000u : 0x13800000u) | uint32_t(value) << 16 | amount << 10 | uint32_t(value) << 5 | s2);
+		write(operands[0], s2);
+		return;
+	}
+	default: {
+		// sarx, shlx and shrx: the count is taken modulo the width, as lslv, lsrv and asrv take it.
+		const uint8_t value = read(operands[1], s0), count = read(operands[2], s1);
+		if (mnemonic == Mnemonic::shlx)
+			a.lslv(s2, value, count, is64);
+		else if (mnemonic == Mnemonic::shrx)
+			a.lsrv(s2, value, count, is64);
+		else
+			a.asrv(s2, value, count, is64);
+		write(operands[0], s2);
+		return;
+	}
+	}
 }
 
 void BlockTranslator::sse_ordered_compare(const Instruction &instruction)
@@ -2982,6 +3160,11 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::cmpps: case Mnemonic::cmppd: case Mnemonic::cmpss: case Mnemonic::cmpsd: sse_compare(instruction); return;
 	case Mnemonic::rcpps: case Mnemonic::rsqrtps: case Mnemonic::rcpss: case Mnemonic::rsqrtss: sse_reciprocal(instruction); return;
 	case Mnemonic::maskmovdqu: avx_masked(instruction); return;
+	case Mnemonic::andn: case Mnemonic::bextr: case Mnemonic::blsi: case Mnemonic::blsmsk: case Mnemonic::blsr: case Mnemonic::tzcnt:
+	case Mnemonic::lzcnt: case Mnemonic::bzhi: case Mnemonic::mulx: case Mnemonic::pdep: case Mnemonic::pext: case Mnemonic::rorx:
+	case Mnemonic::sarx: case Mnemonic::shlx: case Mnemonic::shrx:
+		bmi(instruction);
+		return;
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: sse_ordered_compare(instruction); return;
 	case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: case Mnemonic::cvtss2si: case Mnemonic::cvttss2si: case Mnemonic::cvtsd2si:
 	case Mnemonic::cvttsd2si: case Mnemonic::cvtss2sd: case Mnemonic::cvtsd2ss: case Mnemonic::cvtdq2ps: case Mnemonic::cvtdq2pd:

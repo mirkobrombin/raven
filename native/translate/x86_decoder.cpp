@@ -775,6 +775,20 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			result.operands[count++] = operand;
 	}
 	result.count = count;
+	// tzcnt and lzcnt (F3 0F BC and BD; without F3 they are bsf and bsr, not given semantics).
+	if (result.mnemonic == Mnemonic::other && legacy_map && (opcode == 0xbc || opcode == 0xbd) && prefixes.rep && !prefixes.repne) {
+		const uint8_t size = rex_w ? 8 : prefixes.operand16 ? 2 : 4;
+		Operand source = result.operands[0];
+		if (modrm.mod == 3)
+			source = gpr(modrm.rm, size, rex_b);
+		else
+			source.size = size;
+		result.mnemonic = opcode == 0xbc ? Mnemonic::tzcnt : Mnemonic::lzcnt;
+		result.operands = {gpr(modrm.reg, size, rex_r), source};
+		result.count = 2;
+		result.operand_size = size;
+		result.rep = result.repne = false;
+	}
 	// SSE4.2 on general registers: crc32 (F2 0F 38 F0 and F1) and popcnt (F3 0F B8).
 	if (result.mnemonic == Mnemonic::other && ((escape == 1 && prefixes.repne && !prefixes.rep && (escape_opcode == 0xf0 ||
 		escape_opcode == 0xf1)) || (legacy_map && opcode == 0xb8 && prefixes.rep && !prefixes.repne))) {
@@ -975,6 +989,42 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 		result.count = 0;
 		result.vex = true;
 		return vex.vvvv == 0;
+	}
+	// BMI1 and BMI2 (VEX.LZ, 0F 38 F2-F7 and 0F 3A F0): general registers of 4 bytes, 8 with VEX.W.
+	if ((vex.map == 2 && opcode >= 0xf2 && opcode <= 0xf7 && opcode != 0xf4) || (vex.map == 3 && opcode == 0xf0 && vex.pp == 3)) {
+		const uint8_t size = vex.w ? 8 : 4;
+		Operand source = memory ? rm : general(rm_number, size);
+		source.size = size;
+		const Operand target = general(reg_number, size), other = general(vex.vvvv, size);
+		auto bmi = [&](Mnemonic mnemonic, std::initializer_list<Operand> operands) {
+			if (vex.l)
+				return false;
+			set(mnemonic, operands);
+			// General-register instructions: no vector state, so not run as VEX forms of SSE.
+			result.vex = false;
+			result.operand_size = size;
+			return true;
+		};
+		if (vex.map == 3)
+			return bmi(rorx, {target, source, imm});
+		switch (opcode) {
+		case 0xf2: return vex.pp == 0 ? bmi(andn, {target, other, source}) : true;
+		case 0xf3:
+			if (vex.pp != 0 || modrm.reg < 1 || modrm.reg > 3)
+				return true;
+			return bmi(modrm.reg == 1 ? blsr : modrm.reg == 2 ? blsmsk : blsi, {other, source});
+		case 0xf5:
+			if (vex.pp == 0)
+				return bmi(bzhi, {target, source, other});
+			if (vex.pp == 1)
+				return true;
+			return bmi(vex.pp == 2 ? pext : pdep, {target, other, source});
+		case 0xf6: return vex.pp == 3 ? bmi(mulx, {target, other, source}) : true;
+		default: {
+			static constexpr Mnemonic shifts[] = {bextr, shlx, sarx, shrx};
+			return bmi(shifts[vex.pp], {target, source, other});
+		}
+		}
 	}
 	if (vex.map == 2 && vex.pp == 1) {
 		if (opcode >= 0x96 && (opcode & 0x0f) >= 6 && (opcode & 0x0f) <= 7 && opcode <= 0xb7) {
@@ -1579,6 +1629,21 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::crc32: name = "crc32"; break;
 	case Mnemonic::popcnt: name = "popcnt"; break;
 	case Mnemonic::xsave: name = instruction.operand_size == 8 ? "xsave64" : "xsave"; break;
+	case Mnemonic::andn: name = "andn"; break;
+	case Mnemonic::bextr: name = "bextr"; break;
+	case Mnemonic::blsi: name = "blsi"; break;
+	case Mnemonic::blsmsk: name = "blsmsk"; break;
+	case Mnemonic::blsr: name = "blsr"; break;
+	case Mnemonic::tzcnt: name = "tzcnt"; break;
+	case Mnemonic::lzcnt: name = "lzcnt"; break;
+	case Mnemonic::bzhi: name = "bzhi"; break;
+	case Mnemonic::mulx: name = "mulx"; break;
+	case Mnemonic::pdep: name = "pdep"; break;
+	case Mnemonic::pext: name = "pext"; break;
+	case Mnemonic::rorx: name = "rorx"; break;
+	case Mnemonic::sarx: name = "sarx"; break;
+	case Mnemonic::shlx: name = "shlx"; break;
+	case Mnemonic::shrx: name = "shrx"; break;
 	case Mnemonic::xrstor: name = instruction.operand_size == 8 ? "xrstor64" : "xrstor"; break;
 	default: {
 		if (instruction.mnemonic >= x87_first && instruction.mnemonic <= x87_last) {
