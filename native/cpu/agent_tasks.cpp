@@ -218,6 +218,22 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 		if (operation == PTRACE_GETREGSET) {
 			std::memcpy(buffer.iov_base, area, length);
 		} else {
+			// As the kernel's own: the whole state or nothing, in the standard layout, naming no component the frame does not carry.
+			// rt_sigreturn would refuse anything else, and the thread would die of it.
+			if (buffer.iov_len != size)
+				return failed(EINVAL);
+			if (size > 512) {
+				const auto *const given = static_cast<const uint8_t *>(buffer.iov_base);
+				uint64_t features = 0, present = 0, compacted = 0;
+				std::memcpy(&features, area + 464 + 8, 8);
+				std::memcpy(&present, given + 512, 8);
+				std::memcpy(&compacted, given + 520, 8);
+				bool reserved = false;
+				for (size_t index = 528; index < 576 && index < size; ++index)
+					reserved |= given[index] != 0;
+				if ((present & ~features) || compacted || reserved)
+					return failed(EINVAL);
+			}
 			uint8_t software[48];
 			std::memcpy(software, area + 464, sizeof software);
 			std::memcpy(area, buffer.iov_base, length);
