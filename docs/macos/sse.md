@@ -355,6 +355,27 @@ a reciprocal below the smallest normal becomes a signed zero, as on x86, and FPS
 is never touched (PROVEN: the `maskmovdqu` family, 200 cases against an Intel Xeon 8573C, and `hvf_avx_fault`, which failed before
 it with the masked-off bytes on an unmapped page).
 
+### What a string compare exit costs
+
+`hvf_bench_run.py build-macos-hvf RESULTS 5 .../quiet/thermal strscan` with the `strscan` workload of
+`native/hvf/testdata/avx_workloads.c` (`69db3715`): the lengths of 64 strings of 1 to 63 bytes, 16 bytes at a time, with one
+pcmpistri per chunk (a zero first operand, equal each: the index of the null byte), 160 per call; natively with NEON (cmeq against
+zero, umaxv, shrn and a count of trailing zeros). Raw data in `docs/macos/avx-data/perf/strscan/`. PROVEN (that command): 5 rounds,
+the median of each process's warm runs per call, load average 13.82 27.63 29.82 at the start and 3.67 13.53 22.79 at the end
+(1, 5, 15 minutes), thermal state 1 at both ends; the checksum is the same in all 25 processes.
+
+| Configuration | Per call | Ratio to native |
+|---|---|---|
+| native | 3857 ns (sd 1508) | 1.00 |
+| process, loop | 24287 ns (sd 13430) | 6.30 |
+| process, call | 25002 ns (sd 10892) | 6.48 |
+| vCPU, loop | 179899 ns (sd 45807) | 46.6 |
+| vCPU, call | 171333 ns (sd 10784) | 44.4 |
+
+So each pcmpistri costs about 0.13 µs in this process and about 1.1 µs in a vCPU, above the native call's time divided over its
+160 compares (INFERRED: the difference to native divided by 160; the translated code around the compares is counted with them).
+That is the exit (a block end, the runtime's decode of the instruction and a new entry), not the compare.
+
 ## Open items
 
 - **Without FEAT_AFP** the runtime refuses to run (see the guest state). Software sequences for those instructions would let it run
@@ -373,6 +394,9 @@ it with the masked-off bytes on an unmapped page).
   runs) run with the guest's FPCR: AH, FIZ and the guest's rounding mode. The kernel restores FPCR from the signal frame on return
   (INFERRED from the arm64 signal frame's NEON state), so only the handler's own floating point is affected. Setting
   `CpuState::host_fpcr` at handler entry would fix it; not done.
+- **The string compares run in the host** (an exit each: 0.13 µs in this process, 1.1 µs in a vCPU, above): a candidate for the
+  same in-guest call as the x87 core, which is to run inside the guest after the AVX work; a strlen over long strings is dominated
+  by it.
 - **Cost of every exit and entry:** sixteen q-register moves and the MXCSR conversions; in this process also two FPCR writes (see the
   integer workloads above).
 - **Not translated:**
