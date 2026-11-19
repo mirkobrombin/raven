@@ -663,6 +663,42 @@ def maskmovdqu(rng):
     return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"maskmovdqu xmm{reg(rng)}, xmm{reg(rng)}", "mov edi, 0"]
 
 
+BMI_VALUES = [0, 1, 2, 0x80000000, 0xffffffff, 0x7fffffff, 2**64 - 1, 2**63, 0x5555555555555555, 0xaaaaaaaaaaaaaaaa,
+              0x00ff00ff00ff00ff, 0x100000000, 0xffffffff00000000, 31, 32, 33, 63, 64, 65, 255, 256, 0x1f1f, 0x2020, 0x4040,
+              0x0820, 0x3f00, 0x4000, 0xff00, 0x0140, 0x4001]
+BMI_REGISTERS = [i for i in range(16) if i not in (4, 15)]
+
+
+def bmi(rng):
+    """BMI1, BMI2 and LZCNT at 32 and 64 bits, register and memory sources: one instruction each. x86_avx_check.h leaves out the
+    flags each one leaves undefined; bmi_data gives the registers and memory edge values (zero, one bit, all ones, alternating
+    bits, counts and bextr controls around 0, 32 and 64)."""
+    size = rng.choice([32, 64])
+    r = lambda: sse.GPR[size][rng.choice(BMI_REGISTERS)]
+    source = lambda: mem(rng, size // 8) if rng.random() < 0.3 else r()
+    op = rng.choice(["andn", "bextr", "blsi", "blsmsk", "blsr", "tzcnt", "lzcnt", "bzhi", "mulx", "pdep", "pext", "rorx", "sarx",
+                     "shlx", "shrx"])
+    if op in ("andn", "pdep", "pext"):
+        return [f"{op} {r()}, {r()}, {source()}"]
+    if op == "mulx":
+        hi = r()
+        return [f"mulx {hi}, {hi if rng.random() < 0.15 else r()}, {source()}"]
+    if op in ("bextr", "bzhi", "sarx", "shlx", "shrx"):
+        return [f"{op} {r()}, {source()}, {r()}"]
+    if op == "rorx":
+        return [f"rorx {r()}, {source()}, {rng.randrange(256)}"]
+    return [f"{op} {r()}, {source()}"]
+
+
+def bmi_data(rng, body, registers, vectors, memory):
+    for i in range(16):
+        if rng.random() < 0.7:
+            registers[i] = rng.choice(BMI_VALUES) if rng.random() < 0.6 else rng.getrandbits(64)
+    for i in range(24):
+        if rng.random() < 0.6:
+            memory[i] = rng.choice(BMI_VALUES)
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -694,9 +730,10 @@ LATER_FAMILIES = [
     ("strings wide", strings_wide, "int", 400),
     ("shift counts", shift_counts, "int", 400),
     ("maskmovdqu", maskmovdqu, "int", 200),
+    ("bmi", bmi, "int", 3000),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
-FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data, "shift counts": shift_counts_data}
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data, "shift counts": shift_counts_data, "bmi": bmi_data}
 
 
 def lanes_of(body, kind):

@@ -245,6 +245,22 @@ inline bool close_singles(uint64_t ours, uint64_t x86)
 	return true;
 }
 
+// The flags a case's last instruction leaves defined: all of them, but for BMI1 and LZCNT, where the SDM leaves some undefined (bzhi,
+// andn and blsi, blsmsk, blsr define CF, ZF, SF and OF; bextr CF, ZF and OF; tzcnt and lzcnt CF and ZF).
+inline uint64_t defined_flags(const std::string &text)
+{
+	const size_t start = text.rfind("; ") == std::string::npos ? 0 : text.rfind("; ") + 2;
+	const std::string op = text.substr(start, text.find(' ', start) - start);
+	constexpr uint64_t cf = 1, zf = 0x40, sf = 0x80, of = 0x800;
+	if (op == "andn" || op == "blsi" || op == "blsmsk" || op == "blsr" || op == "bzhi")
+		return cf | zf | sf | of;
+	if (op == "bextr")
+		return cf | zf | of;
+	if (op == "tzcnt" || op == "lzcnt")
+		return cf | zf;
+	return all_flags;
+}
+
 // What the translator's run left that differs from x86's, or nothing: every general register but RSP and R15, all 256 bits of every
 // YMM register, the flags, MXCSR but DE and the buffer.
 inline std::string compare(const Case &item, const CpuState &state, const uint8_t *buffer)
@@ -270,7 +286,7 @@ inline std::string compare(const Case &item, const CpuState &state, const uint8_
 			u(ours[2]), u(ours[1]), u(ours[0]), u(x86.ymm[r][3]), u(x86.ymm[r][2]), u(x86.ymm[r][1]), u(x86.ymm[r][0]));
 		return text;
 	}
-	if (sse_oracle::flags_of(state) != (x86.flags & all_flags)) {
+	if ((sse_oracle::flags_of(state) ^ x86.flags) & defined_flags(item.text)) {
 		std::snprintf(text, sizeof text, "flags %#llx, x86 left %#llx", static_cast<unsigned long long>(sse_oracle::flags_of(state)),
 			static_cast<unsigned long long>(x86.flags & all_flags));
 		return text;
