@@ -1,4 +1,5 @@
-// Runs the cases x86_semantics.py wrote on an x86-64 CPU (here: Rosetta) and records what each left, for x86_semantics_test.
+// Runs the cases x86_semantics.py wrote on an x86-64 CPU (here: Rosetta) and records what each left, for x86_semantics_test and
+// hvf_integer_test (x86_semantics_check.h reads the file).
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,7 @@ struct Case {
 	const char *start;
 	const char *end;
 	const char *text;
+	const char *family;
 };
 
 struct Io {
@@ -48,11 +50,13 @@ int main(int argc, char **argv)
 		const struct Io input = io;
 		run_case(&io, item->start);
 		const uint32_t length = (uint32_t)(item->end - item->start);
-		const uint32_t text_length = (uint32_t)strlen(item->text);
+		const uint32_t text_length = (uint32_t)strlen(item->text), family_length = (uint32_t)strlen(item->family);
 		put(out, &length, 4);
 		put(out, item->start, length);
 		put(out, &text_length, 4);
 		put(out, item->text, text_length);
+		put(out, &family_length, 4);
+		put(out, item->family, family_length);
 		put(out, &item->defined, 8);
 		put(out, &input, sizeof input);
 		put(out, &io, sizeof io);

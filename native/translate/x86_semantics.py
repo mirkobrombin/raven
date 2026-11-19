@@ -5,10 +5,15 @@ usage: x86_semantics.py OUTPUT_ASSEMBLY OUTPUT_HEADER [COUNT]
 The assembly holds one function per case and run_case, which loads a case's registers and flags, calls it and stores what it left.
 An x86-64 build of x86_semantics_oracle.c runs them on an x86 CPU or under Rosetta; the translator runs the same bytes and must agree on
 every register, every flag the sequence defines and the 64-byte buffer r15 points at.
+
+Each case belongs to a family: `random`, COUNT random sequences of up to six instructions, then the directed families of FAMILIES,
+each from its own seed, so that adding one changes no other. A directed case is one instruction (or a few) on registers chosen for
+it, edge values first; the flags come in random, so that flags an instruction must leave alone are checked too.
 """
 
 import random
 import sys
+import zlib
 
 GPR = {
     8: ["al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil"] + [f"r{i}b" for i in range(8, 16)],
@@ -142,6 +147,11 @@ def instruction(rng, first, rcx, defined):
     return f"mov {mem(rng, size)}, {reg(rng, size)}", 0, 0
 
 
+# The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
+# name's CRC-32.
+FAMILIES = []
+
+
 def main():
     assembly, header = sys.argv[1:3]
     count = int(sys.argv[3]) if len(sys.argv) > 3 else 10000
@@ -174,19 +184,27 @@ def main():
             body.append(text)
             defined = (defined | defines) & ~undefines
         lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret", f"_case_{number}_end:"]
-        cases.append((registers, flags, defined, body))
+        cases.append((registers, flags, defined, body, "random"))
+    for family, generate in FAMILIES:
+        family_rng = random.Random(zlib.crc32(family.encode()))
+        for registers, body, defined in generate(family_rng):
+            number = len(cases)
+            flags = family_rng.getrandbits(12) & ALL
+            lines += [f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret",
+                                                                                                     f"_case_{number}_end:"]
+            cases.append((registers, flags, defined, body, family))
     lines += [".data", "saved_io: .quad 0", "saved_code: .quad 0", ""]
     with open(assembly, "w") as out:
         out.write("\n".join(lines))
     with open(header, "w") as out:
         out.write("// Written by x86_semantics.py.\n")
-        for number in range(count):
+        for number in range(len(cases)):
             out.write(f"extern char case_{number}[], case_{number}_end[];\n")
         out.write("static const struct Case cases[] = {\n")
-        for number, (registers, flags, defined, body) in enumerate(cases):
-            values = ", ".join(f"{value:#x}ull" for value in registers)
+        for number, (registers, flags, defined, body, family) in enumerate(cases):
+            values = ", ".join(f"{value & (2 ** 64 - 1):#x}ull" for value in registers)
             text = "; ".join(body).replace('"', '\\"')
-            out.write(f"\t{{{{{values}}}, {flags:#x}, {defined:#x}, case_{number}, case_{number}_end, \"{text}\"}},\n")
+            out.write(f"\t{{{{{values}}}, {flags:#x}, {defined:#x}, case_{number}, case_{number}_end, \"{text}\", \"{family}\"}},\n")
         out.write("};\n")
 
 

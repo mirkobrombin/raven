@@ -114,8 +114,9 @@ add_dependencies(runtime_test translate_guests)
 add_test(NAME translate_runtime COMMAND runtime_test ${GUEST})
 set_tests_properties(translate_runtime PROPERTIES TIMEOUT 60)
 
-# The translator's semantics against an x86-64 CPU: on a Mac, Rosetta runs the x86-64 build of the oracle. Elsewhere this needs an
-# x86-64 machine or emulator to produce the results file, and is not built.
+# The translator's semantics against an x86-64 CPU: on a Mac, Rosetta runs the x86-64 build of the oracle, held to an x86 CPU where
+# Rosetta differs (testdata/x86_silicon.txt); also run in a vCPU by native/hvf's hvf_integer_test. Elsewhere this needs an x86-64
+# machine or emulator to produce the results file, and is not built.
 if(APPLE)
     set(SEMANTICS ${CMAKE_CURRENT_BINARY_DIR}/semantics)
     file(MAKE_DIRECTORY ${SEMANTICS})

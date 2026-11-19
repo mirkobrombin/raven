@@ -1,2 +1,3 @@
-# Cases where Rosetta and x86 silicon disagree: case text, register number, value an AMD EPYC 9V45 left (raven-macos-bench run 44411803673).
-lea r12, [r8 + 2*rbx + -9550]; cmpxchg qword ptr [r15 + 0], r14; lock cmpxchg dword ptr [r15 + 0], r14d; not r9d	0	7f5a3510ebc6a17c
+# x86_semantics.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/integer-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44522174773, assembled with clang as here; dump sha256 b412fd57c93cf22c247b79ad78858f34b098cd1bcffc4e5e10798feb38446c44). The tests refuse the file when a family's cases or Rosetta's results change. The random family's one difference, the RAX a 32-bit lock cmpxchg leaves, was first found on an AMD EPYC 9V45 (run 44411803673).
+corpus	random	cases=10000	generated=29504b896eccb080	rosetta=70e1f67988c68548
+8316	lea r12, [r8 + 2*rbx + -9550]; cmpxchg qword ptr [r15 + 0], r14; lock cmpxchg dword ptr [r15 + 0], r14d; not r9d	rosetta=bef3e01ee61d7fc6	r0=7ca1c6eb10355a7f
