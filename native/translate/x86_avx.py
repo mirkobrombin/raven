@@ -376,6 +376,67 @@ def strings_data(rng, body, registers, vectors, memory):
         registers[r] = value & (2**64 - 1) if rng.random() < 0.5 else (value & 0xffffffff) | rng.getrandbits(32) << 32
 
 
+def vex_sse4(rng):
+    """The VEX forms of SSSE3, SSE4.1 and SSE4.2 (maps 0F 38 and 0F 3A, and vpinsrw and vpextrw), which run the legacy code: the
+    integer ones at 128 bits (256 is AVX2), vroundps, vroundpd, vblendps, vblendpd, vdpps and vptest at both widths."""
+    d, a, b = three(rng)
+    xsource = lambda size=16: mem(rng, size) if rng.random() < 0.3 else f"xmm{b}"
+    roll = rng.randrange(14)
+    if roll == 0:
+        op = rng.choice(["vpshufb", "vphaddw", "vphaddd", "vphaddsw", "vpmaddubsw", "vphsubw", "vphsubd", "vphsubsw", "vpsignb",
+                         "vpsignw", "vpsignd", "vpmulhrsw", "vpmuldq", "vpcmpeqq", "vpcmpgtq", "vpackusdw", "vpminsb", "vpminsd",
+                         "vpminuw", "vpminud", "vpmaxsb", "vpmaxsd", "vpmaxuw", "vpmaxud", "vpmulld"])
+        return [f"{op} xmm{d}, xmm{a}, {xsource()}"]
+    if roll == 1:
+        op = rng.choice(["vpabsb", "vpabsw", "vpabsd", "vphminposuw"])
+        return [f"{op} xmm{d}, {xsource()}"]
+    if roll == 2:
+        op = rng.choice(["vpmovsxbw", "vpmovsxbd", "vpmovsxbq", "vpmovsxwd", "vpmovsxwq", "vpmovsxdq", "vpmovzxbw", "vpmovzxbd",
+                         "vpmovzxbq", "vpmovzxwd", "vpmovzxwq", "vpmovzxdq"])
+        size = {"bw": 8, "bd": 4, "bq": 2, "wd": 8, "wq": 4, "dq": 8}[op[-2:]]
+        return [f"{op} xmm{d}, {xsource(size)}"]
+    if roll == 3:
+        width = rng.choice([16, 32])
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"vptest {name(a, width)}, {source}", f"set{rng.choice(['e', 'ne', 'b', 'ae', 'a', 'be', 'p', 's', 'o'])} al"]
+    imm = rng.choice([0, 1, 2, 3, 4, 8, 9, 10, 11, 12, rng.randrange(256)])
+    if roll == 4:
+        width = rng.choice([16, 32])
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"{rng.choice(['vroundps', 'vroundpd'])} {name(d, width)}, {source}, {imm}"]
+    if roll == 5:
+        op = rng.choice(["vroundss", "vroundsd"])
+        return [f"{op} xmm{d}, xmm{a}, {xsource(4 if op.endswith('ss') else 8)}, {imm}"]
+    if roll == 6:
+        op = rng.choice(["vblendps", "vblendpd", "vdpps", "vblendps", "vblendpd", "vpblendw", "vdppd", "vmpsadbw", "vpalignr"])
+        width = rng.choice([16, 32]) if op in ("vblendps", "vblendpd", "vdpps") else 16
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        value = rng.randrange(8) if op == "vmpsadbw" else rng.randrange(256)
+        return [f"{op} {name(d, width)}, {name(a, width)}, {source}, {value}"]
+    if roll == 7:
+        op, size, gpr_size = rng.choice([("vpextrb", 1, 32), ("vpextrw", 2, 32), ("vpextrd", 4, 32), ("vpextrq", 8, 64),
+                                         ("vextractps", 4, 32)])
+        target = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} {target}, xmm{a}, {rng.randrange(256)}"]
+    if roll == 8:
+        op, size, gpr_size = rng.choice([("vpinsrb", 1, 32), ("vpinsrw", 2, 32), ("vpinsrd", 4, 32), ("vpinsrq", 8, 64)])
+        source = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} xmm{d}, xmm{a}, {source}, {rng.randrange(256)}"]
+    if roll == 9:
+        return [f"vinsertps xmm{d}, xmm{a}, {xsource(4)}, {rng.randrange(256)}"]
+    if roll == 10:
+        return [f"vpextrw {sse.gpr(rng, 32)}, xmm{a}, {rng.randrange(256)}"]
+    if roll == 11:
+        return [f"vmovntdqa xmm{d}, {mem(rng, 16, True)}"]
+    imm = rng.randrange(128) if rng.random() < 0.7 else rng.choice([0x0c, 0x08, 0x18, 0x1a, 0x3a, 0x44, 0x04, 0x40, 0x70, 0x01])
+    return [f"v{rng.choice(STRING_OPS)} xmm{a}, {xsource()}, {imm:#x}"]
+
+
+def vex_sse4_data(rng, body, registers, vectors, memory):
+    if "str" in body[0].split()[0]:
+        strings_data(rng, body, registers, vectors, memory)
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -397,9 +458,10 @@ LATER_FAMILIES = [
     ("sse42", sse42, "int", 400),
     ("popcnt", popcnt, "int", 300),
     ("strings", strings, "int", 1500),
+    ("vex sse4", vex_sse4, "mixed", 1500),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
-FIXUPS = {"strings": strings_data}
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data}
 
 
 def lanes_of(body, kind):
