@@ -5,7 +5,7 @@
 #include <span>
 
 // The code of agent.S, which the runtime copies into a guest, and the offsets within it the runtime and the guest agree on.
-extern "C" const uint8_t raven_agent[], raven_agent_end[], raven_agent_handler[], raven_agent_restorer[];
+extern "C" const uint8_t raven_agent[], raven_agent_end[], raven_agent_handler[], raven_agent_restorer[], raven_agent_service[];
 
 namespace raven::agent {
 
@@ -19,5 +19,12 @@ constexpr uint32_t idle = 0, posted = 1, answered = 2;
 inline std::span<const uint8_t> code() { return {raven_agent, size_t(raven_agent_end - raven_agent)}; }
 inline size_t handler() { return size_t(raven_agent_handler - raven_agent); }
 inline size_t restorer() { return size_t(raven_agent_restorer - raven_agent); }
+inline size_t service() { return size_t(raven_agent_service - raven_agent); }
+
+// The words of the service thread's block (see agent.S): the state, the call's number, its six arguments and its result.
+namespace service_block {
+constexpr size_t state = 0, number = 1, arguments = 2, result = 8;
+constexpr uint32_t idle = 0, waiting = 1, done = 2;
+}
 
 }

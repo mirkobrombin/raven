@@ -4,7 +4,9 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cerrno>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
 #include <linux/futex.h>
 #include <stdexcept>
@@ -105,6 +107,30 @@ static void answer(int expected_signal, long expected_call, uint64_t rax, uint64
 	syscall(SYS_futex, state(), FUTEX_WAKE, 1, nullptr, nullptr, 0);
 }
 
+// The runtime's side of the service thread: leave a call in its block, wake it and wait for the result.
+static int64_t serve(uint64_t *service, long number, std::initializer_list<uint64_t> arguments)
+{
+	namespace word = raven::agent::service_block;
+	auto *state = reinterpret_cast<uint32_t *>(&service[word::state]);
+	service[word::number] = uint64_t(number);
+	size_t index = word::arguments;
+	for (const uint64_t argument : arguments)
+		service[index++] = argument;
+	__atomic_store_n(state, word::waiting, __ATOMIC_RELEASE);
+	syscall(SYS_futex, state, FUTEX_WAKE, 1, nullptr, nullptr, 0);
+	const timespec slice{0, 100'000'000};
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (__atomic_load_n(state, __ATOMIC_ACQUIRE) != word::done) {
+		if (std::chrono::steady_clock::now() >= deadline) {
+			std::cerr << "the service thread never finished its call\n";
+			_exit(1);
+		}
+		syscall(SYS_futex, state, FUTEX_WAIT, word::waiting, &slice, nullptr, 0);
+	}
+	__atomic_store_n(state, word::idle, __ATOMIC_RELAXED);
+	return int64_t(service[word::result]);
+}
+
 int main()
 {
 	try {
@@ -153,7 +179,19 @@ int main()
 		check(kept == 0x3344, "the thread did not go on with the runtime's R12 after its breakpoint");
 		check(from_call == 4242, "the turned-away call did not return the runtime's answer");
 		check(*state() == raven::agent::idle, "the agent left its state set");
-		std::cout << "Agent breakpoint and Syscall User Dispatch round trips over the thread block passed\n";
+
+		// The service thread makes the calls the runtime leaves it, inside the guest's own process.
+		auto *service = static_cast<uint64_t *>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+		check(service != MAP_FAILED, "no service block");
+		using entry = void (*)(uint64_t *);
+		std::thread(reinterpret_cast<entry>(agent_code + raven::agent::service()), service).detach();
+		const int64_t mapped = serve(service, SYS_mmap, {0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, uint64_t(-1), 0});
+		check(mapped > 0 && (mapped & 4095) == 0, "the service thread did not map memory");
+		*reinterpret_cast<volatile uint64_t *>(mapped) = 0x55;
+		check(serve(service, SYS_munmap, {uint64_t(mapped), 4096}) == 0, "the service thread did not release memory");
+		check(serve(service, SYS_getpid, {}) == getpid(), "the service thread made its call in another process");
+		check(serve(service, SYS_close, {uint64_t(-1)}) == -EBADF, "the service thread did not hand back the call's error");
+		std::cout << "Agent breakpoint, Syscall User Dispatch and service-thread round trips over the shared blocks passed\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

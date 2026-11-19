@@ -60,6 +60,44 @@ raven_agent_restorer:
 	mov eax, SYS_RT_SIGRETURN
 	syscall
 	ud2
+
+/* The service thread: the guest's own thread that makes system calls for the runtime, so the runtime never needs a guest thread
+ * stopped to map, protect or release memory, start threads and the like. RDI is its block, in words: 0 the state (0 nothing, 1 a call
+ * waits, 2 it is done; the runtime sleeps and wakes on its low half), 1 the call's number, 2 to 7 its arguments, 8 its result. It
+ * never returns. */
+	.global raven_agent_service
+raven_agent_service:
+	mov rbx, rdi
+1:	mov ecx, 2000
+2:	cmp dword ptr [rbx], 1
+	je short 3f
+	pause
+	dec ecx
+	jnz short 2b
+	mov rdi, rbx
+	mov esi, FUTEX_WAIT
+	xor edx, edx
+	xor r10d, r10d
+	mov eax, SYS_FUTEX
+	syscall
+	jmp short 1b
+3:	mov rax, qword ptr [rbx + 8]
+	mov rdi, qword ptr [rbx + 16]
+	mov rsi, qword ptr [rbx + 24]
+	mov rdx, qword ptr [rbx + 32]
+	mov r10, qword ptr [rbx + 40]
+	mov r8, qword ptr [rbx + 48]
+	mov r9, qword ptr [rbx + 56]
+	syscall
+	mov qword ptr [rbx + 64], rax
+	mov dword ptr [rbx], 2
+	mov rdi, rbx
+	mov esi, FUTEX_WAKE
+	mov edx, 1
+	xor r10d, r10d
+	mov eax, SYS_FUTEX
+	syscall
+	jmp short 1b
 raven_agent_end:
 
 	.section .note.GNU-stack, "", @progbits
