@@ -109,8 +109,8 @@ its 53 samples (above) and the instructions they stand for translate.
 - **A memory operand that faults changes nothing.** x86 faults are restartable: an instruction that raises #PF has written no
   register and, for a store, no byte, even when its 32 bytes cross into an unmapped page (INFERRED from the SDM's description of faults
   as reported before the instruction executes; no split access was faulted on the EPYC). So every load of a 256-bit instruction (both
-  halves of a memory operand, both FMA3 forms) comes before its first write to the destination, the halves' results waiting in
-  v0-v3's neighbours v20-v23; and a 32-byte store first probes its first and last byte with `staddb wzr` (an atomic add of zero, which
+  halves of a memory operand, both FMA3 forms) comes before its first write to the destination (the halves' results wait in v20-v23);
+  and a 32-byte store first probes its first and last byte with `staddb wzr` (an atomic add of zero, which
   needs write access and changes nothing even with another thread writing), then stores. PROVEN by `hvf_avx_fault` in a vCPU, with
   the operand straddling an unmapped page: `vaddps ymm1, ymm1, [rax]` and `vfmadd231ps ymm1, ymm2, [rax]` with the low half
   unmapped leave every upper half as it was, `vmovups [rax], ymm1` with the upper half unmapped writes no byte. Before the fix
