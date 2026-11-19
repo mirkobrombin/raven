@@ -68,6 +68,8 @@ enum class Mnemonic : uint16_t {
 	// SSE4.2's crc32 and popcnt, on general registers.
 	crc32,
 	popcnt,
+	// bt, bts, btr and btc (0F A3, AB, B3, BB with a register bit index, 0F BA /4-/7 with an imm8).
+	bt, bts, btr, btc,
 	// xsave and xrstor (0F AE /4 and /5, memory only); operand_size 8 for their REX.W forms, xsave64 and xrstor64.
 	xsave,
 	xrstor,

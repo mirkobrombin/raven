@@ -91,15 +91,15 @@ constexpr Mnemonic arithmetic[8] = {Mnemonic::add, Mnemonic::or_, Mnemonic::adc,
 	Mnemonic::xor_, Mnemonic::cmp};
 
 // Groups, indexed by ModRM.reg. Their operands come from the opcode's entry unless the group entry names its own.
-enum GroupIndex : uint8_t { group1, group2, group3b, group3v, group4, group5, group11b, group11v, group1a, nop_group };
+enum GroupIndex : uint8_t { group1, group2, group3b, group3v, group4, group5, group11b, group11v, group1a, nop_group, group8 };
 
 struct Group {
 	std::array<Entry, 8> entries;
 };
 
-constexpr std::array<Group, 10> make_groups()
+constexpr std::array<Group, 11> make_groups()
 {
-	std::array<Group, 10> groups{};
+	std::array<Group, 11> groups{};
 	for (size_t i = 0; i < 8; ++i)
 		groups[group1].entries[i] = Entry{arithmetic[i]};
 	// /6 is an undocumented alias of shl and F6 /1, F7 /1 of test: they decode, but nothing translates them.
@@ -119,12 +119,14 @@ constexpr std::array<Group, 10> make_groups()
 	groups[group11b].entries = {op(Mnemonic::mov, Eb, Ib), bad(), bad(), bad(), bad(), bad(), bad(), other_modrm(Ib)};
 	groups[group11v].entries = {op(Mnemonic::mov, Ev, Iz), bad(), bad(), bad(), bad(), bad(), bad(), other_modrm(Jz)};
 	groups[group1a].entries = {op(Mnemonic::pop, Eq), bad(), bad(), bad(), bad(), bad(), bad(), bad()};
+	groups[group8].entries = {bad(), bad(), bad(), bad(), Entry{Mnemonic::bt}, Entry{Mnemonic::bts}, Entry{Mnemonic::btr},
+		Entry{Mnemonic::btc}};
 	groups[nop_group].entries = {op(Mnemonic::nop, Ev), other_modrm(), other_modrm(), other_modrm(), other_modrm(), other_modrm(),
 		other_modrm(), other_modrm()};
 	return groups;
 }
 
-constexpr std::array<Group, 10> groups = make_groups();
+constexpr std::array<Group, 11> groups = make_groups();
 
 constexpr Map make_one_byte()
 {
@@ -283,7 +285,11 @@ constexpr Map make_two_byte()
 	map[0xb1] = op(Mnemonic::cmpxchg, Ev, Gv);
 	map[0xb6] = op(Mnemonic::movzx, Gv, Eb);
 	map[0xb7] = op(Mnemonic::movzx, Gv, Ew);
-	map[0xba] = other_modrm(Ib);
+	map[0xba] = grp(group8, Ev, Ib);
+	map[0xa3] = op(Mnemonic::bt, Ev, Gv);
+	map[0xab] = op(Mnemonic::bts, Ev, Gv);
+	map[0xb3] = op(Mnemonic::btr, Ev, Gv);
+	map[0xbb] = op(Mnemonic::btc, Ev, Gv);
 	map[0xbe] = op(Mnemonic::movsx, Gv, Eb);
 	map[0xbf] = op(Mnemonic::movsx, Gv, Ew);
 	map[0xc0] = op(Mnemonic::xadd, Eb, Gb);
@@ -925,7 +931,8 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 	// LOCK applies only to read-modify-write forms with a memory destination; anything else raises #UD.
 	if (prefixes.lock && result.mnemonic != Mnemonic::other) {
 		static constexpr Mnemonic lockable[] = {Mnemonic::add, Mnemonic::or_, Mnemonic::adc, Mnemonic::sbb, Mnemonic::and_, Mnemonic::sub,
-			Mnemonic::xor_, Mnemonic::inc, Mnemonic::dec, Mnemonic::neg, Mnemonic::not_, Mnemonic::xchg, Mnemonic::cmpxchg, Mnemonic::xadd};
+			Mnemonic::xor_, Mnemonic::inc, Mnemonic::dec, Mnemonic::neg, Mnemonic::not_, Mnemonic::xchg, Mnemonic::cmpxchg, Mnemonic::xadd,
+			Mnemonic::bts, Mnemonic::btr, Mnemonic::btc};
 		bool allowed = false;
 		for (Mnemonic mnemonic : lockable)
 			allowed |= mnemonic == result.mnemonic;
@@ -1630,6 +1637,10 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::xgetbv: name = "xgetbv"; break;
 	case Mnemonic::crc32: name = "crc32"; break;
 	case Mnemonic::popcnt: name = "popcnt"; break;
+	case Mnemonic::bt: name = "bt"; break;
+	case Mnemonic::bts: name = "bts"; break;
+	case Mnemonic::btr: name = "btr"; break;
+	case Mnemonic::btc: name = "btc"; break;
 	case Mnemonic::xsave: name = instruction.operand_size == 8 ? "xsave64" : "xsave"; break;
 	case Mnemonic::andn: name = "andn"; break;
 	case Mnemonic::bextr: name = "bextr"; break;

@@ -187,6 +187,10 @@ public:
 	void casal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
 	void ldaddal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
 	void swpal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
+	// The old value to rt and [rn] and not rs, or rs, xor rs.
+	void ldclral(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
+	void ldsetal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
+	void ldeoral(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size);
 
 	// Advanced SIMD and floating point. simd: any word of a64::simd with its registers. ins (mov element): element to of rd from
 	// element from of rn; umov: element index of rn into general register rd; dup: element 0 of rn into every element of rd; elements

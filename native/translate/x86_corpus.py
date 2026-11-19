@@ -70,7 +70,7 @@ def immediate(rng, bits, signed=True):
 def instance(rng):
     size = rng.choice([8, 16, 32, 64])
     vsize = rng.choice([16, 32, 64])
-    kind = rng.randrange(24)
+    kind = rng.randrange(25)
     if kind < 5:
         op = rng.choice(ARITHMETIC)
         form = rng.randrange(4)
@@ -146,6 +146,13 @@ def instance(rng):
         op = rng.choice(["cmpxchg", "xadd"])
         lock = rng.choice(["", "lock "])
         return f"{lock}{op} {memory(rng, size)}, {register(rng, size)}"
+    if kind == 24:
+        op = rng.choice(["bt", "bts", "btr", "btc"])
+        size = rng.choice([16, 32, 64])
+        lock = "lock " if op != "bt" and rng.random() < 0.3 else ""
+        target = memory(rng, size) if lock else rm(rng, size)
+        index = register(rng, size) if rng.random() < 0.5 else str(rng.randrange(256))
+        return f"{lock}{op} {target}, {index}"
     if kind == 23 and rng.random() < 0.5:
         # The high byte registers exist only without REX: pair them with registers and addresses that need none.
         legacy = GPR[64][:8]

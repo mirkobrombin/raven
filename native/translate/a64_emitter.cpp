@@ -543,6 +543,21 @@ void Assembler::swpal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size)
 	emit((uint32_t(size_log2(size)) << 30) | 0x38e08000u | reg(rs, 16) | reg(rn, 5) | reg(rt, 0));
 }
 
+void Assembler::ldclral(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size)
+{
+	emit((uint32_t(size_log2(size)) << 30) | 0x38e01000u | reg(rs, 16) | reg(rn, 5) | reg(rt, 0));
+}
+
+void Assembler::ldsetal(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size)
+{
+	emit((uint32_t(size_log2(size)) << 30) | 0x38e03000u | reg(rs, 16) | reg(rn, 5) | reg(rt, 0));
+}
+
+void Assembler::ldeoral(uint8_t rs, uint8_t rt, uint8_t rn, unsigned size)
+{
+	emit((uint32_t(size_log2(size)) << 30) | 0x38e02000u | reg(rs, 16) | reg(rn, 5) | reg(rt, 0));
+}
+
 void Assembler::b(Label target)
 {
 	branch_to(target, 0x14000000u, FixupKind::b26);

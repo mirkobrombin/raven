@@ -99,6 +99,8 @@ FlagEffect flag_effect(const Instruction &instruction)
 	case Mnemonic::popcnt: case Mnemonic::vtestps: case Mnemonic::vtestpd: case Mnemonic::andn: case Mnemonic::bextr:
 	case Mnemonic::blsi: case Mnemonic::blsmsk: case Mnemonic::blsr: case Mnemonic::tzcnt: case Mnemonic::lzcnt: case Mnemonic::bzhi:
 		return {all_flags, 0};
+	// CF from the bit; ZF stays, OF, SF, AF and PF are undefined.
+	case Mnemonic::bt: case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: return {all_flags & ~ZF, 0};
 	default: return {};
 	}
 }
@@ -241,6 +243,8 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return !instruction.lock && (instruction.count == 1 || size >= 4);
 	case Mnemonic::mul: case Mnemonic::div: case Mnemonic::idiv: return !instruction.lock;
+	case Mnemonic::bt: return !instruction.lock;
+	case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: return !instruction.lock || first.kind == OperandKind::mem;
 	// int 0x29 is __fastfail; other vectors are system calls of other systems.
 	case Mnemonic::int_: return !instruction.lock && first.value == 0x29;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
@@ -401,6 +405,9 @@ private:
 	void multiply(const Instruction &instruction);
 	void multiply_wide(const Instruction &instruction);
 	void divide(const Instruction &instruction);
+	void bit_test(const Instruction &instruction);
+	// A byte at [base] into or from reg, ordered as memory says.
+	void byte_access(uint8_t reg, uint8_t base, bool store, const Operand &memory);
 	void exchange(const Instruction &instruction);
 	void push_value(uint8_t value);
 	void pop_value(uint8_t target);
@@ -1181,6 +1188,127 @@ void BlockTranslator::divide(const Instruction &instruction)
 		a.bfi(rax_host, s2, 0, 8);
 		a.bfi(rax_host, s4, 8, 8);
 	}
+}
+
+void BlockTranslator::byte_access(uint8_t reg, uint8_t base, bool store, const Operand &memory)
+{
+	if (!ordered(memory)) {
+		store ? a.str(reg, base, 0, 1) : a.ldr(reg, base, 0, 1);
+		++stats.plain_accesses;
+	} else if (options.ordering == MemoryOrdering::rcpc)
+		ordered_access(reg, base, 1, store);
+	else if (store) {
+		a.dmb(a64::Barrier::ishst);
+		a.str(reg, base, 0, 1);
+		++stats.barriers;
+	} else {
+		a.ldr(reg, base, 0, 1);
+		a.dmb(a64::Barrier::ishld);
+		++stats.barriers;
+	}
+}
+
+void BlockTranslator::bit_test(const Instruction &instruction)
+{
+	// bt, bts, btr and btc. CF is the bit, set alone (rmif) so that ZF stays; OF, SF, AF and PF are undefined and left. On a
+	// register both index forms take the index modulo the width. On memory an immediate does too, while a register index is signed and
+	// addresses a bit string: the operand's address plus the index over 8, bit index modulo 8. Both memory forms work on that one
+	// byte, which holds the same bit as the word x86 reads; lock makes it an LSE atomic (ldsetal, ldclral, ldeoral).
+	const Operand &target = instruction.operands[0];
+	const Operand &index = instruction.operands[1];
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const unsigned size = target.size, bits = size * 8;
+	const bool want_carry = flags_wanted(CF);
+	auto set_carry = [&](uint8_t shifted) {
+		// shifted holds CF in bit 0; rotated left by one it is the C bit of rmif's four.
+		if (!want_carry)
+			return;
+		a.rmif(shifted, 63, 0b0010);
+		carry_inverted = false;
+	};
+	if (target.kind == OperandKind::reg) {
+		const uint8_t reg = host_register[target.reg];
+		if (index.kind == OperandKind::imm) {
+			const unsigned bit = static_cast<unsigned>(index.value) & (bits - 1);
+			if (want_carry) {
+				a.lsr_imm(s2, reg, static_cast<uint8_t>(bit));
+				set_carry(s2);
+			}
+			// The 16-bit forms keep the bits above, which a 64-bit operation on a bit below 16 does; the 32-bit ones clear them.
+			const bool is64 = size != 4;
+			const uint64_t mask = uint64_t(1) << bit;
+			switch (mnemonic) {
+			case Mnemonic::bts: a.orr_imm(reg, reg, mask, is64); break;
+			case Mnemonic::btr: a.and_imm(reg, reg, is64 ? ~mask : ~mask & 0xffffffffu, is64); break;
+			case Mnemonic::btc: a.eor_imm(reg, reg, mask, is64); break;
+			default: break;
+			}
+			return;
+		}
+		a.and_imm(s1, host_register[index.reg], bits - 1, false);
+		if (want_carry) {
+			a.lsrv(s2, reg, s1);
+			set_carry(s2);
+		}
+		if (mnemonic == Mnemonic::bt)
+			return;
+		a.mov_imm(s3, 1);
+		a.lslv(s3, s3, s1);
+		switch (mnemonic) {
+		case Mnemonic::bts: a.orr(s2, reg, s3); break;
+		case Mnemonic::btr: a.emit(0x8a200000u | uint32_t(s3) << 16 | uint32_t(reg) << 5 | s2); break; // bic
+		default: a.eor(s2, reg, s3); break;
+		}
+		write(target, s2);
+		return;
+	}
+	// The byte's address in x16 and the bit in it in s1.
+	const Address at = address(target, true);
+	if (index.kind == OperandKind::imm) {
+		const unsigned bit = static_cast<unsigned>(index.value) & (bits - 1);
+		if (bit >> 3)
+			a.add_imm(address_register, at.base, bit >> 3);
+		else if (at.base != address_register)
+			a.mov(address_register, at.base);
+		a.mov_imm(s1, bit & 7);
+	} else {
+		const uint8_t value = host_register[index.reg];
+		if (size == 8)
+			a.mov(s1, value);
+		else
+			a.sbfx(s1, value, 0, static_cast<uint8_t>(bits));
+		a.add(address_register, at.base, s1, Shift::asr, 3);
+		a.and_imm(s1, s1, 7);
+	}
+	if (instruction.lock) {
+		a.mov_imm(s3, 1);
+		a.lslv(s3, s3, s1);
+		switch (mnemonic) {
+		case Mnemonic::bts: a.ldsetal(s3, s2, address_register, 1); break;
+		case Mnemonic::btr: a.ldclral(s3, s2, address_register, 1); break;
+		default: a.ldeoral(s3, s2, address_register, 1); break;
+		}
+		if (want_carry) {
+			a.lsrv(s2, s2, s1);
+			set_carry(s2);
+		}
+		return;
+	}
+	byte_access(s2, address_register, false, target);
+	if (want_carry) {
+		a.lsrv(s4, s2, s1);
+		set_carry(s4);
+	}
+	if (mnemonic == Mnemonic::bt)
+		return;
+	a.mov_imm(s3, 1);
+	a.lslv(s3, s3, s1);
+	switch (mnemonic) {
+	case Mnemonic::bts: a.orr(s2, s2, s3); break;
+	case Mnemonic::btr: a.emit(0x8a200000u | uint32_t(s3) << 16 | uint32_t(s2) << 5 | s2); break; // bic
+	default: a.eor(s2, s2, s3); break;
+	}
+	byte_access(s2, address_register, true, target);
 }
 
 void BlockTranslator::exchange(const Instruction &instruction)
@@ -3312,6 +3440,7 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar: shift(instruction); return;
 	case Mnemonic::imul: case Mnemonic::mul: multiply(instruction); return;
 	case Mnemonic::div: case Mnemonic::idiv: divide(instruction); return;
+	case Mnemonic::bt: case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: bit_test(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
 	case Mnemonic::movq: case Mnemonic::movd: case Mnemonic::movups: case Mnemonic::movupd: case Mnemonic::movaps:
 	case Mnemonic::movapd: case Mnemonic::movdqa: case Mnemonic::movdqu: case Mnemonic::movntps: case Mnemonic::movntpd:
