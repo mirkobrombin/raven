@@ -164,7 +164,11 @@ the samples passing.
 
 5788 cases. PROVEN (`python3 -I docs/macos/avx-data/silicon_overrides.py ROSETTA.bin SILICON.bin`): on an AMD EPYC 9V45 (run
 44493373058) **0 cases differ from Rosetta** in a compared field; the EPYC gave the same bytes on two runs of the binary (`cmp` in the
-workflow). So `testdata/x86_avx_silicon.txt` has no case, and the translator passes against the EPYC in every case, in this process
+workflow). So `testdata/x86_avx_silicon.txt` has no case line, only a `corpus` line with FNV-1a 64 fingerprints of the generated
+cases (code and text, `generated=891c81824699c0fc`) and of Rosetta's results (`rosetta=95d7459814bec276`): the tests refuse the file
+when either changes (PROVEN by editing one digit: `Rosetta's results are not those the silicon results were compared with`, exit 2).
+The EPYC's dump is not committed (11 MB); its sha256 `e328a853...681945`, printed in the run's log, and its corpus fingerprints, equal
+to Rosetta's, are in the file's header. And the translator passes against the EPYC in every case, in this process
 and in a vCPU.
 
 - **A false lead, recorded.** The first run (run 44490908127, an EPYC 9V74) assembled the cases with GNU as, which encodes 154 of them

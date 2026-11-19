@@ -1,3 +1,6 @@
 # x86_avx.py cases where Rosetta and an x86 CPU differ: what the x86 CPU left (docs/macos/avx-data/silicon_overrides.py writes it).
 # None: an AMD EPYC 9V45 (raven-macos-bench run 44493373058, the cases assembled with clang as here) left what Rosetta leaves in
-# all 5788.
+# all 5788. Its dump, avx_oracle.bin, has sha256 e328a8533e0ca638555bea8ea7afedf56d4b40be64ad422df4b447540b681945 (printed by the
+# run) and the same corpus fingerprints as Rosetta's below (silicon_overrides.py prints both). The corpus line names the cases and
+# Rosetta's results this was compared on: the tests refuse the file when either changes.
+corpus	cases=5788	generated=891c81824699c0fc	rosetta=95d7459814bec276
