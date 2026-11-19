@@ -4,7 +4,7 @@ Which instructions `translates()` refuses in code that can run, grouped by mnemo
 contain each group: the code paths each gap blocks, and the groups translated since. Labels are those of
 [translation.md](translation.md): **PROVEN** (a command produced the result), **INFERRED** (derived; the missing check is named),
 **NOT verified**. The census is of the translator at `130f2bb8` (translator_version 23); [What is translated now](#what-is-translated-now)
-is at `e71538cf` (translator_version 26). MacBook Air M5, macOS 27.2.1, llvm-mingw 20261104.
+is at `b24035e2` (translator_version 28). MacBook Air M5, macOS 27.2.1, llvm-mingw 20261104.
 
 ## How it is counted
 
@@ -101,6 +101,7 @@ Groups 1 to 3 of the ranked list, each a failing oracle family first and then th
 | 2. `bt`, `bts`, `btr`, `btc` (16 to 64 bits, register and imm8 index, register and memory, `lock`) | `418f5f5b` | `d2cf77f7` | 25 |
 | 3. `lock add`, `sub`, `and`, `or`, `xor`, `inc`, `dec`, `not`, `neg` on memory (8 to 64 bits) | `03a2bc4f` | `e71538cf` | 26 |
 | 4. `rol`, `ror`, `rcl`, `rcr` (imm8, by one, by CL), `shl`, `shr`, `sar` by CL at 8 and 16 bits, `adc` and `sbb` at 8 and 16 bits, `lock adc` and `lock sbb`; locked forms across 16 bytes | `979d9cdf` | `6d7009e8` | 27 |
+| 5. `bsf`, `bsr` (16 to 64 bits), `pause`, `stos` and `movs` with and without `rep` (8 to 64 bits), `cld`, `std`, `pushfq`, `popfq` | `17e6d18d` | `b24035e2` | 28 |
 
 How each works. The results are PROVEN by the oracle families and fault cases below; how the code gets them is INFERRED from reading
 it, and claims about the ISA are marked:
@@ -146,6 +147,23 @@ it, and claims about the ISA are marked:
   against another, where x86 locks the bus. The unaligned locked family checks both kinds, 64-byte aligned buffer, in process and in a
   vCPU (PROVEN); atomicity of the split path is not tested and does not hold (INFERRED from its code).
 
+- **Bit scan:** a zero source sets ZF and leaves the destination whole, a 32-bit one's upper half included: the EPYC 9V45 does that,
+  as Rosetta does (PROVEN, the bit scan family compares the whole register, zero sources among the cases). Else ZF clear and the
+  index; CF, OF, SF, AF and PF undefined (156 cases differ there between the two, not compared).
+- **`pause`** is `yield`.
+- **DF** is now `CpuState::direction`, 0 at the start as Windows starts a thread. `cld` and `std` store it, `pushfq` builds RFLAGS
+  from the lazy flags, DF and bits 1 and 9 (IF), `popfq` sets the six status flags and DF and drops the other bits (TF, AC and the
+  rest are not kept: INFERRED harmless for user code that does not set them, NOT verified). Before this `cld`, `std`, `pushfq` and
+  `popfq` were refused (not translated at all). `pushfq` and `popfq` agree with Rosetta and the EPYC in every case of the strings
+  family (PROVEN, RAX holds what `pushfq` stored). The 16-bit `pushf` and `popf` (66) stay refused.
+- **`rep stos` and `rep movs`:** one element per pass, forward or backward by DF, RDI, RSI and RCX updated after each, RCX 0 doing
+  nothing. A fault part way leaves them as x86 does (PROVEN in a vCPU, `hvf_string_fault`, a new test target: `rep stosb` with RCX
+  100 five bytes before an unmapped page faults with RCX 95 and RDI at the page end, the five bytes written; also `rep stosq`, a
+  `rep movsb` whose source faults, backward `rep stosw` and `rep movsd`, and RCX 0 on an unmapped address, which returns). Overlapping
+  `movs` forward and backward agree with silicon (PROVEN, strings family). The elements are plain accesses between barriers, as a
+  fast string operation allows (INFERRED from the SDM's ordering rules; no litmus test). A long `rep` cannot be stopped part way by
+  the runtime (NOT handled). Address-size (67) and segment-override forms and `repne` stay refused.
+
 ### Tests
 
 The integer oracle (`x86_semantics.py`) now has families and the AVX checker's fingerprint scheme (`x86_semantics_check.h`,
@@ -169,6 +187,8 @@ barriers (`translate_x86_semantics`) and in a vCPU with hardware TSO (`hvf_integ
 | carry narrow (with lock adc, lock sbb) | 464 | 0 | 0 |
 | flag readers (setc, seto, cmovc, jc in the same block after bt, mul, a rotate, a narrow shift or adc) | 144 | 0 | 0 |
 | unaligned locked (inside 16 bytes and across) | 496 | 0 | 0 |
+| bit scan | 156 | 0 | 0 |
+| strings (stos, movs, cld, std, pushfq, popfq, pause) | 272 | 0 | 0 |
 | fault cases: #DE from `div` and `idiv` at each width, by zero and by overflow, a memory divisor, a #DE after a `cmp`, `int 0x29`, `int3`, `ud2` | 23 | 0 | 0 |
 
 Before each feature commit the family failed whole: every case "did not return (exit 6)", the unsupported exit, and 21 of the 23
@@ -186,7 +206,7 @@ Every case ran on Rosetta (the build) and on GitHub's x86-64 runners through `ra
 generates the cases there, assembles them with clang as the build does and runs the oracle twice (the two runs were identical every
 time). The runs: AMD EPYC 9V74 (runs 44522174773 and 44522713416), AMD EPYC 7763 (44523646082 and 44524257886, the last holding every
 family then, dump sha256 `8b28a4ea...`), AMD EPYC 9V45 (44526496471, with group 4, dump sha256 `c4477a00...`). PROVEN by
-`silicon_overrides.py` on the dumps:
+`silicon_overrides.py` on the dumps; group 5 on an AMD EPYC 9V45 too (44527495718, dump sha256 `11298321...`):
 
 - **multiply, divide, bit test, locked:** silicon and Rosetta agree in every register, every memory byte and every defined flag. They
   differ only in flags x86 leaves undefined: 1039 multiply cases and 1231 divide cases (bit test and locked none), not compared.
@@ -195,14 +215,14 @@ family then, dump sha256 `8b28a4ea...`), AMD EPYC 9V45 (44526496471, with group 
 - **random:** the one known difference stays, the RAX a 32-bit `lock cmpxchg` leaves (case 8316), now held to the EPYC; 2609 cases
   differ only in undefined flags.
 
-No silicon-against-Rosetta difference in a defined result was found in groups 1 to 4.
+No silicon-against-Rosetta difference in a defined result was found in groups 1 to 5.
 
 ### Reachable refused instructions, before and after
 
 PROVEN (`integer_reach.py` on the same images, rerun after each feature commit):
 
-| Corpus | Before (`564c0960`) | After group 1 | After group 2 | After group 3 | After group 4 |
-|---|---|---|---|---|---|
+| Corpus | Before (`564c0960`) | After group 1 | After group 2 | After group 3 | After group 4 | After group 5 |
+|---|---|---|---|---|---|---|
 | notepad++.exe | 3675 | 2454 | 755 | 638 | 169 |
 | GUP.exe | 858 | 686 | 305 | 238 | 68 |
 | NppConverter.dll | 203 | 165 | 73 | 41 | 16 |
@@ -216,12 +236,13 @@ PROVEN (`integer_reach.py` on the same images, rerun after each feature commit):
 | libwinpthread-1.dll | 95 | 78 | 74 | 1 | 1 |
 | **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** | **238 in 165** |
 
-Linearly, Notepad++, GUP and the plugins now have 1672 refusals (7910 before), the runtime DLLs 273 (1494 before). What blocks the most functions after group 4: in Notepad++ and its companions `rep stosw` 66 in 53, `bsf r32, r32` 54 in 38,
-`bsr r32, r32` 33 in 19; in the runtime DLLs `pause` 93 in 79 and `bsr r64, r64` 56 in 41. These are group 5.
+Linearly, Notepad++, GUP and the plugins now have 1291 refusals (7910 before), the runtime DLLs 68 (1494 before). What is left after group 5 (PROVEN, the script): in Notepad++ and its companions 53 instructions in 21 functions, `shrd r64, r64,
+cl` 10 in 4, `bswap` 12 in 7, `prefetchw`, `insb`, `cmpsb` and `vpminuq` (AVX-512); in the runtime DLLs 68 in 32, mostly RTM
+(`xbegin` 22 in 9, `xabort`, `xend`, never reached while cpuid reports no RTM: INFERRED), `tpause` 6 in 6, `shrd` and `shld`.
 
 ## Open items
 
-- **Group 5 is not done:** `bsf`/`bsr`, `pause`, `rep stos` and `rep movs` (with DF, which CpuState does not hold yet).
+- DF is not in the context an exception would report, nor restored by anything but `popfq` and `cld` (NOT done).
 - A locked operand across 16 bytes is not atomic against another thread (the split path above).
 - A #DE or an `int 0x29` is a fault exit; delivering it to the guest as an exception is the runtime's caller's work (NOT done here).
 - Atomicity is counted for `lock inc`, `dec`, `add`, `sub` and `xadd` only; that `lock and`, `or`, `xor`, `not` and the locked bit

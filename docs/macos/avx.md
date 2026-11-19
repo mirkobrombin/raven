@@ -187,9 +187,10 @@ failing, then `7e83388c`). Not compared with an x86 CPU (NOT verified); xsaveopt
 - **The decoder** gives VEX semantics to these and prints them as LLVM does: 20000 random VEX encodings join the decoder corpus, 0
   print differently from LLVM or decode where LLVM rejects them (PROVEN, `x86_decoder_test`: `vex_instances.o: 25765 instructions,
   17900 with semantics (69.5%), 10690 rejected by LLVM, 0 failures`; the count includes what LLVM decodes between them).
-- `translator_version` was 23 at the end of this work, and is 26 since the integer groups of
+- `translator_version` was 23 at the end of this work, and is 28 since the integer groups of
   [integer-gaps.md](integer-gaps.md#what-is-translated-now) (24: one-operand multiply and divide, `int 0x29`; 25: the bit tests; 26:
-  locked read-modify-write). Before (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
+  locked read-modify-write; 27: rotates, narrow shifts by CL, narrow adc and sbb, split locks; 28: bit scans, strings, DF).
+  Before (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
   10: the string compares; 11: the VEX forms of SSSE3 to SSE4.2; 12: the rest of AVX but the approximations; 13: the
   approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor; 16: AVX2 but the gathers; 17: the gathers; 18: review
   fixes: a 128-bit vpgatherdq or vgatherdpd gathered 4 elements instead of 2 (reading mask and index bits x86 ignores), store
