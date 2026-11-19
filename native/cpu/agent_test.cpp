@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "agent_context.h"
 
 #include <atomic>
 #include <chrono>
@@ -45,10 +46,11 @@ static void install(int signal)
 	check(syscall(SYS_rt_sigaction, signal, &action, nullptr, 8) == 0, "the agent's handler was refused");
 }
 
-static uint64_t breakpoint()
+// R12 carries a value across the breakpoint, which the runtime reads and replaces.
+static uint64_t breakpoint(uint64_t &kept)
 {
 	uint64_t value = 0;
-	asm volatile("int3" : "+a"(value) : : "memory");
+	asm volatile("mov %1, %%r12\n\tint3\n\tmov %%r12, %1" : "+a"(value), "+r"(kept) : : "r12", "memory");
 	return value;
 }
 
@@ -62,7 +64,9 @@ static uint64_t dispatched_call(uint64_t number)
 }
 
 // The runtime's side: wait for the guest's signal, check it and answer with RAX changed.
-static void answer(int expected_signal, long expected_call, uint64_t rax)
+static const raven::agent::Segments segments{0x1000, 0x2000, 0, 0};
+
+static void answer(int expected_signal, long expected_call, uint64_t rax, uint64_t r12_seen, uint64_t r12)
 {
 	// The state may still read answered from the last round until the guest clears it: the wait then returns at once, so the deadline
 	// counts time, not rounds.
@@ -84,7 +88,19 @@ static void answer(int expected_signal, long expected_call, uint64_t rax)
 	if (expected_call >= 0)
 		check(information->si_syscall == expected_call, "the turned-away call is not the one made");
 	auto *context = reinterpret_cast<ucontext_t *>(block[raven::agent::context]);
-	context->uc_mcontext.gregs[REG_RAX] = int64_t(rax);
+	auto registers = raven::agent::registers(*context, segments, expected_call);
+	check(registers.orig_rax == uint64_t(expected_call), "orig_rax does not name the turned-away call");
+	check(registers.fs_base == segments.fs_base && registers.gs_base == segments.gs_base, "the segment bases were not kept");
+	if (r12_seen)
+		check(registers.r12 == r12_seen, "the registers read from the frame are not the thread's");
+	registers.rax = rax;
+	if (r12_seen)
+		registers.r12 = r12;
+	auto moved = registers;
+	moved.gs_base = 0x3000;
+	check(!raven::agent::set_registers(*context, moved, segments), "a frame took a new GS base");
+	check(context->uc_mcontext.gregs[REG_RAX] != int64_t(rax), "a refused change was written");
+	check(raven::agent::set_registers(*context, registers, segments), "the registers were not put back");
 	__atomic_store_n(state(), raven::agent::answered, __ATOMIC_RELEASE);
 	syscall(SYS_futex, state(), FUTEX_WAKE, 1, nullptr, nullptr, 0);
 }
@@ -102,7 +118,7 @@ int main()
 		install(SIGTRAP);
 		install(SIGSYS);
 
-		uint64_t from_breakpoint = 0, from_call = 0;
+		uint64_t from_breakpoint = 0, from_call = 0, kept = 0x1122;
 		std::string failure;
 		std::thread guest([&] {
 			try {
@@ -114,7 +130,7 @@ int main()
 				*reinterpret_cast<uint64_t **>(stack) = block;
 				stack_t alternate{stack, 0, raven::agent::stack_size};
 				check(sigaltstack(&alternate, nullptr) == 0, "alternate stack refused");
-				from_breakpoint = breakpoint();
+				from_breakpoint = breakpoint(kept);
 				check(prctl(PR_SET_SYSCALL_USER_DISPATCH, PR_SYS_DISPATCH_ON, uintptr_t(agent_code), code.size(), &selector) == 0,
 					"Syscall User Dispatch refused");
 				from_call = dispatched_call(SYS_getpid);
@@ -124,8 +140,8 @@ int main()
 			}
 		});
 		try {
-			answer(SIGTRAP, -1, 77);
-			answer(SIGSYS, SYS_getpid, 4242);
+			answer(SIGTRAP, -1, 77, 0x1122, 0x3344);
+			answer(SIGSYS, SYS_getpid, 4242, 0, 0);
 		} catch (const std::exception &error) {
 			// The guest may be held in its handler for good: end here rather than wait for it.
 			std::cerr << error.what() << '\n';
@@ -134,6 +150,7 @@ int main()
 		guest.join();
 		check(failure.empty(), failure.c_str());
 		check(from_breakpoint == 77, "the thread did not go on with the runtime's RAX after its breakpoint");
+		check(kept == 0x3344, "the thread did not go on with the runtime's R12 after its breakpoint");
 		check(from_call == 4242, "the turned-away call did not return the runtime's answer");
 		check(*state() == raven::agent::idle, "the agent left its state set");
 		std::cout << "Agent breakpoint and Syscall User Dispatch round trips over the thread block passed\n";
