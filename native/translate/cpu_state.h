@@ -103,6 +103,10 @@ struct CpuState {
 	// XMM0-XMM15 between runs, low quadword first. While translated code runs, XMMn is vn; the trampolines store and load all sixteen
 	// on every exit and entry, and native thunks store them before the native function runs.
 	alignas(16) uint64_t xmm[16][2] = {};
+	// The upper halves of YMM0-YMM15 (bits 255:128), low quadword first. They stay here while translated code runs too: an
+	// instruction on a YMM register loads and stores them around its NEON pair, a VEX.128 one clears them, a legacy SSE one leaves
+	// them alone, so the trampolines and native thunks need not move them.
+	alignas(16) uint64_t ymm_high[16][2] = {};
 	X87State x87;
 };
 
@@ -124,6 +128,8 @@ constexpr size_t host_fpcr = offsetof(CpuState, host_fpcr);
 constexpr size_t mxcsr = offsetof(CpuState, mxcsr);
 constexpr size_t xmm = offsetof(CpuState, xmm);
 static_assert(xmm % 16 == 0 && xmm + 224 <= 1008, "ldp and stp of q registers reach the XMM array");
+constexpr size_t ymm_high = offsetof(CpuState, ymm_high);
+static_assert(ymm_high % 16 == 0 && ymm_high + 240 <= 65520, "ldr and str of a q register reach every upper half");
 }
 
 }
