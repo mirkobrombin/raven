@@ -101,7 +101,8 @@ Groups 1 to 3 of the ranked list, each a failing oracle family first and then th
 | 2. `bt`, `bts`, `btr`, `btc` (16 to 64 bits, register and imm8 index, register and memory, `lock`) | `418f5f5b` | `d2cf77f7` | 25 |
 | 3. `lock add`, `sub`, `and`, `or`, `xor`, `inc`, `dec`, `not`, `neg` on memory (8 to 64 bits) | `03a2bc4f` | `e71538cf` | 26 |
 
-How each works (PROVEN by the tests below unless marked):
+How each works. The results are PROVEN by the oracle families and fault cases below; how the code gets them is INFERRED from reading
+it, and claims about the ISA are marked:
 
 - **Multiply:** `mul` and `imul` with one operand write AX (8 bits), DX:AX, EDX:EAX (both zero-extended) or RDX:RAX, reading the
   source first, as it may be RAX, RDX or AH. CF and OF are set when the high half is not zero (`mul`) or not the sign of the low half
@@ -111,17 +112,20 @@ How each works (PROVEN by the tests below unless marked):
   the width. Anything else leaves with `ExitReason::cpuid` at the instruction, and the runtime divides in 128 bits (`divide.cpp`) or
   stops with `ExitReason::fault` and `FaultKind::divide_error`, rip at the `div`, nothing changed. Translated code never computes a
   quotient Arm's `udiv` or `sdiv` would give for a #DE input (0 for a zero divisor, the minimum for minimum by -1), and the host never
-  traps. The flags are undefined and left as they were, so a #DE shows those of the instruction before.
+  traps (PROVEN by the fault cases). The flags are undefined and left as they were, so a #DE shows those of the instruction before
+  (PROVEN: the fault cases compare them).
 - **`int 0x29`** (`__fastfail`) stops with `FaultKind::fast_fail`, rip at the `int`, the code in ECX. Other `int` vectors stay
   refused. `int3` (`ExitReason::breakpoint`) and `ud2` (`FaultKind::instruction`) were already translated; the fault cases check both.
 - **Bit test:** CF is the bit, set alone (`rmif`), so ZF stays: the SDM leaves ZF unaffected, and the EPYC 7763 does too (PROVEN, the
   bit test family compares ZF with random input flags). OF, SF, AF and PF are undefined. On a register both index forms are taken
   modulo the width. On memory an imm8 index is too, and a register index is signed and addresses a bit string: the byte at the
   operand's address plus the index shifted right by 3 (arithmetic), bit index modulo 8. That byte holds the same bit as the word x86
-  reads; `lock` makes it an LSE byte atomic (`ldsetalb`, `ldclralb`, `ldeoralb`).
+  reads (INFERRED: the bit string is little-endian); `lock` makes it an LSE byte atomic (`ldsetalb`, `ldclralb`, `ldeoralb`). The
+  results with indices far beyond the operand and negative, at every width, are PROVEN by the bit test family.
 - **Locked RMW:** one LSE atomic with acquire and release, as `xadd` and `cmpxchg` already were (`ldaddal`, `ldclral` with the
   complement for `and`, `ldsetal`, `ldeoral`, `ldeoral` with all ones for `not`), then the flags from the old value and the operand
-  as without `lock`; `neg` is a `casal` loop. `inc` and `dec` keep CF. TSO is kept as it is for `xadd`: the atomics order both ways.
+  as without `lock`; `neg` is a `casal` loop. `inc` and `dec` keep CF (PROVEN). TSO is kept as it is for `xadd`, the atomics having
+  acquire and release semantics (INFERRED from the Arm ARM; no litmus test runs on the new forms).
 
 ### Tests
 
@@ -185,7 +189,7 @@ PROVEN (`integer_reach.py` on the same images, rerun after each feature commit):
 | libwinpthread-1.dll | 95 | 78 | 74 | 1 |
 | **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** |
 
-Linearly, Notepad++, GUP and the plugins went from 7910 refusals to 3488, the runtime DLLs from 1494 to 323. What blocks the most
+Linearly, Notepad++, GUP and the plugins now have 3488 refusals (7910 before), the runtime DLLs 323 (1494 before). What blocks the most
 functions now: in Notepad++ and its companions `ror r64, cl` 106 in 57, `rep stosw` 66 in 53, `bsf r32, r32` 54 in 38 and `bsr r32,
 r32` 33 in 19; in the runtime DLLs `pause` 93 in 79 and `bsr r64, r64` 56 in 41. These are groups 4 and 5, not done.
 
@@ -197,6 +201,12 @@ r32` 33 in 19; in the runtime DLLs `pause` 93 in 79 and `bsr r64, r64` 56 in 41.
 - Locked operands and bit-test memory forms are tested aligned only. LSE atomics on an address that crosses 16 bytes fault on Arm
   (FEAT_LSE2 covers only accesses within 16 bytes), where x86 takes a split lock: NOT verified on the M5.
 - A #DE or an `int 0x29` is a fault exit; delivering it to the guest as an exception is the runtime's caller's work (NOT done here).
+- The new forms are tested as single instructions before `ret`: a reader of their CF later in the same block (jcc, setcc, cmov,
+  adc, sbb after `bt` or `mul`) is covered only by the existing random sequences, which do not contain them (NOT verified).
+- Atomicity is counted for `lock inc`, `dec`, `add`, `sub` and `xadd` only; that `lock and`, `or`, `xor`, `not` and the locked bit
+  tests are atomic is INFERRED from the LSE instructions, which the oracle checks single-threaded.
+- The runtime's division reads a memory divisor through `GuestMemory::read`, as xsave and the string compares do: a fault on that
+  read is a host error, not a guest fault (NOT handled).
 - The division slow path costs an exit to the runtime (a dividend wider than 64 bits, as in 128-bit arithmetic, and every 64-bit
   `idiv` by -1): its cost was not measured.
 
