@@ -92,46 +92,45 @@ bool xsave(CpuState &state, GuestMemory &memory, const Instruction &instruction,
 	memory.read(at + mxcsr_at, &mxcsr, 4);
 	if ((header[0] & ~*xcr0) || header[1] || header[2] || ((requested & 6) && (mxcsr & ~mxcsr_mask)))
 		return false;
+	// Every read before the first write to the state: a read that faults (the area may cross into an unmapped page) leaves it as
+	// it was.
 	const uint64_t present = header[0];
-	if (requested & 1) {
-		X87State x87;
-		if (present & 1) {
-			memory.read(at, legacy, 24);
-			std::memcpy(&x87, legacy, 24);
-			if (!wide) {
-				x87.fip &= 0xffffffff;
-				x87.fdp &= 0xffffffff;
-			}
-			x87.reserved = 0;
-			x87.unused = 0;
-			for (unsigned i = 0; i < 8; ++i) {
-				uint8_t value[10];
-				memory.read(at + registers_at + 16 * i, value, 10);
-				uint16_t top = 0;
-				std::memcpy(&x87.st[i][0], value, 8);
-				std::memcpy(&top, value + 8, 2);
-				x87.st[i][1] = top;
-			}
-		} else {
-			// The initial x87 state, as finit leaves it.
-			x87.fcw = 0x37f;
+	X87State x87;
+	alignas(16) uint64_t xmm[16][2] = {}, ymm_high[16][2] = {};
+	if ((requested & 1) && (present & 1)) {
+		memory.read(at, legacy, 24);
+		std::memcpy(&x87, legacy, 24);
+		if (!wide) {
+			x87.fip &= 0xffffffff;
+			x87.fdp &= 0xffffffff;
 		}
-		state.x87 = x87;
+		x87.reserved = 0;
+		x87.unused = 0;
+		for (unsigned i = 0; i < 8; ++i) {
+			uint8_t value[10];
+			memory.read(at + registers_at + 16 * i, value, 10);
+			uint16_t top = 0;
+			std::memcpy(&x87.st[i][0], value, 8);
+			std::memcpy(&top, value + 8, 2);
+			x87.st[i][1] = top;
+		}
+	} else {
+		// The initial x87 state, as finit leaves it.
+		x87.fcw = 0x37f;
 	}
+	if ((requested & 2) && (present & 2))
+		memory.read(at + xmm_at, xmm, sizeof xmm);
+	if ((requested & 4) && (present & 4))
+		memory.read(at + ymm_at, ymm_high, sizeof ymm_high);
+	// A component requested but clear in XSTATE_BV gets its initial state: the zeros above.
+	if (requested & 1)
+		state.x87 = x87;
 	if (requested & 6)
 		state.mxcsr = mxcsr;
-	if (requested & 2) {
-		if (present & 2)
-			memory.read(at + xmm_at, state.xmm, sizeof state.xmm);
-		else
-			std::memset(state.xmm, 0, sizeof state.xmm);
-	}
-	if (requested & 4) {
-		if (present & 4)
-			memory.read(at + ymm_at, state.ymm_high, sizeof state.ymm_high);
-		else
-			std::memset(state.ymm_high, 0, sizeof state.ymm_high);
-	}
+	if (requested & 2)
+		std::memcpy(state.xmm, xmm, sizeof xmm);
+	if (requested & 4)
+		std::memcpy(state.ymm_high, ymm_high, sizeof ymm_high);
 	return true;
 }
 

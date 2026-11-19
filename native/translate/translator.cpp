@@ -2219,8 +2219,9 @@ void BlockTranslator::avx(const Instruction &instruction)
 				Operand probe = target;
 				probe.value += offset;
 				probe.size = 1;
-				effective_address(s1, probe, true);
-				a.simd(simd::staddb_zero, a64::zr, s1, a64::zr);
+				// With its segment base (effective_address() leaves it out, as lea does).
+				const Address at = address(probe, true);
+				a.simd(simd::staddb_zero, a64::zr, at.base, a64::zr);
 			}
 		}
 		translate(legacy_form(instruction, 0));
@@ -2485,8 +2486,9 @@ void BlockTranslator::avx_masked(const Instruction &instruction)
 				probe.value += offset;
 				probe.size = 1;
 				constant_valid = false;
-				effective_address(s1, probe, true);
-				a.simd(simd::staddb_zero, a64::zr, s1, a64::zr);
+				// With its segment base (effective_address() leaves it out, as lea does).
+				const Address at = address(probe, true);
+				a.simd(simd::staddb_zero, a64::zr, at.base, a64::zr);
 				if (size == 1)
 					break;
 			}
@@ -2626,7 +2628,8 @@ void BlockTranslator::avx_gather(const Instruction &instruction)
 	const Operand &memory = operands[1];
 	const auto index = static_cast<unsigned>(instruction.mnemonic) - static_cast<unsigned>(Mnemonic::vpgatherdd);
 	const unsigned element = index & 1 ? 8 : 4, index_size = index & 2 ? 8 : 4;
-	const unsigned count = index_size == element ? instruction.vector_size / element : memory.vector_index / index_size;
+	// As many elements as quadword indices, or else as the destination holds.
+	const unsigned count = index_size == 8 ? memory.vector_index / 8 : instruction.vector_size / element;
 	const uint8_t destination = operands[0].reg, mask = operands[2].reg, indices = memory.index;
 	auto lane = [&](uint8_t into, uint8_t vector, unsigned i, unsigned size) {
 		if (i < 16 / size)

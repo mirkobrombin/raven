@@ -1129,13 +1129,15 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 		// 128 bits only: the element moves, dppd, the string compares, phminposuw and the scalar rounds. The rest also at 256 bits
 		// (the integer forms there are AVX2).
 		static constexpr Mnemonic narrow[] = {pextrb, pextrw, pextrd, pextrq, extractps, pinsrb, pinsrd, pinsrq, insertps, dppd,
-			pcmpestrm, pcmpestri, pcmpistrm, pcmpistri, phminposuw, roundss, roundsd};
+			pcmpestrm, pcmpestri, pcmpistrm, pcmpistri, phminposuw};
 		for (const Mnemonic one : narrow)
 			if (vex.l && one == mnemonic)
 				return true;
 		// vpmovsx and vpmovzx at 256 bits read twice the bytes.
 		const bool extend = mnemonic >= pmovsxbw && mnemonic <= pmovzxdq && mnemonic != pmuldq && mnemonic != pcmpeqq &&
 			mnemonic != movntdqa && mnemonic != packusdw;
+		if (extend && vex.l && vex.vvvv != 0)
+			return false;
 		if (extend && vex.l) {
 			result.vector_size = 32;
 			return set(mnemonic, {vector(reg_number, 32), vrm(16, static_cast<uint8_t>(sse.size * 2))});
@@ -1148,10 +1150,12 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			is_unary |= one == mnemonic;
 		if (is_unary && vex.vvvv != 0)
 			return false;
-		result.vector_size = width;
-		const Operand v = vector(reg_number, width);
-		const Operand w = vrm(width, sse.size == 16 ? width : sse.size);
-		const Operand n = vector(vex.vvvv, width);
+		// vroundss and vroundsd ignore VEX.L.
+		const uint8_t size = mnemonic == roundss || mnemonic == roundsd ? 16 : width;
+		result.vector_size = size;
+		const Operand v = vector(reg_number, size);
+		const Operand w = vrm(size, sse.size == 16 ? size : sse.size);
+		const Operand n = vector(vex.vvvv, size);
 		Operand e = memory ? rm : general(rm_number, sse.size == 8 ? 8 : 4);
 		if (memory)
 			e.size = sse.size;
