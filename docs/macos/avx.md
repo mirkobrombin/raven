@@ -139,13 +139,13 @@ the samples passing.
 - **Rosetta** executes AVX, AVX2 and FMA3 but does not report them: cpuid leaf 1 ECX is 0x0298220f (no OSXSAVE, AVX, FMA) unless
   `ROSETTA_ADVERTISE_AVX=1`, which changes only the cpuid answers (0x7ed8320f, leaf 7 EBX 0x128, XCR0 7). PROVEN by a probe run both
   ways.
-- **Test first:** the oracle and all its families were committed together, failing (`61cd0c08`: 11576 of 11576 in this process,
-  5788 of 5788 in a vCPU, all unsupported exits), then the implementation in one commit (`0532a99e`). Per-family test-first commits were
-  not made (timebox). Before `0532a99e` passed, its first run failed 104 compare cases (comis cleared upper halves; then 33, comis read
+- **Test first:** the oracle and all its families were committed together, failing (`25269bd0`: 11576 of 11576 in this process,
+  5788 of 5788 in a vCPU, all unsupported exits), then the implementation in one commit (`f1e280d1`). Per-family test-first commits were
+  not made (timebox). Before `f1e280d1` passed, its first run failed 104 compare cases (comis cleared upper halves; then 33, comis read
   register 0) and 12 shuffle cases (vshufpd used the low lane's imm bits); all fixed in it.
-- **Do not bisect into `3059b49f`..`626c1134`:** there the decoder gives VEX instructions their SSE mnemonic and `supported()` does not
+- **Do not bisect into `3a4e7237`..`0f1f6e5e`:** there the decoder gives VEX instructions their SSE mnemonic and `supported()` does not
   yet refuse them, so the translator runs them as legacy SSE with the wrong operands (a null-address crash in the first AVX test run),
-  without a `translator_version` change. `61cd0c08` refuses them; `0532a99e` translates them and sets the version to 7.
+  without a `translator_version` change. `25269bd0` refuses them; `f1e280d1` translates them and sets the version to 7.
 - **Results** (PROVEN, `ctest`): `translate_x86_avx` 11576 cases (both memory orderings), 0 failures; `hvf_avx` 5788 cases in a vCPU, 0
   failures; MXCSR.DE alone differs in 791 passing cases (DE is never set, as in sse.md).
 
