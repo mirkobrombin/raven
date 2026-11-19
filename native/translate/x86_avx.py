@@ -281,6 +281,50 @@ def ssse3(rng):
     return [f"{op} xmm{d}, {source}"]
 
 
+def sse41(rng):
+    """SSE4.1 in its legacy form."""
+    d = reg(rng)
+    xsource = lambda size=16: mem(rng, size, size == 16) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+    roll = rng.randrange(12)
+    if roll == 0:
+        op = rng.choice(["pblendvb", "blendvps", "blendvpd"])
+        return [f"{op} xmm{reg(rng, (0,))}, {xsource()}, xmm0"]
+    if roll == 1:
+        return [f"ptest xmm{d}, {xsource()}", f"set{rng.choice(['e', 'ne', 'b', 'ae', 'a', 'be', 'p', 's', 'o'])} al"]
+    if roll == 2:
+        op = rng.choice(["pmovsxbw", "pmovsxbd", "pmovsxbq", "pmovsxwd", "pmovsxwq", "pmovsxdq", "pmovzxbw", "pmovzxbd",
+                         "pmovzxbq", "pmovzxwd", "pmovzxwq", "pmovzxdq"])
+        size = {"bw": 8, "bd": 4, "bq": 2, "wd": 8, "wq": 4, "dq": 8}[op[-2:]]
+        return [f"{op} xmm{d}, {xsource(size)}"]
+    if roll == 3:
+        op = rng.choice(["roundps", "roundpd", "roundss", "roundsd"])
+        size = {"ps": 16, "pd": 16, "ss": 4, "sd": 8}[op[-2:]]
+        return [f"{op} xmm{d}, {xsource(size)}, {rng.choice([0, 1, 2, 3, 4, 8, 9, 10, 11, 12])}"]
+    if roll == 4:
+        op = rng.choice(["blendps", "blendpd", "pblendw"])
+        return [f"{op} xmm{d}, {xsource()}, {rng.randrange(256)}"]
+    if roll == 5:
+        op, size, gpr_size = rng.choice([("pextrb", 1, 32), ("pextrw", 2, 32), ("pextrd", 4, 32), ("pextrq", 8, 64),
+                                         ("extractps", 4, 32)])
+        target = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} {target}, xmm{reg(rng)}, {rng.randrange(256)}"]
+    if roll == 6:
+        op, size, gpr_size = rng.choice([("pinsrb", 1, 32), ("pinsrw", 2, 32), ("pinsrd", 4, 32), ("pinsrq", 8, 64)])
+        source = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} xmm{d}, {source}, {rng.randrange(256)}"]
+    if roll == 7:
+        return [f"insertps xmm{d}, {xsource(4)}, {rng.randrange(256)}"]
+    if roll == 8:
+        return [f"{rng.choice(['dpps', 'dppd'])} xmm{d}, {xsource()}, {rng.randrange(256)}"]
+    if roll == 9:
+        return [f"mpsadbw xmm{d}, {xsource()}, {rng.randrange(8)}"]
+    if roll == 10:
+        return [f"movntdqa xmm{d}, {mem(rng, 16, True)}"] if rng.random() < 0.2 else [f"pextrw {sse.gpr(rng, 32)}, xmm{reg(rng)}, {rng.randrange(8)}"]
+    op = rng.choice(["pmuldq", "pcmpeqq", "packusdw", "pminsb", "pminsd", "pminuw", "pminud", "pmaxsb", "pmaxsd", "pmaxuw", "pmaxud",
+                     "pmulld", "phminposuw"])
+    return [f"{op} xmm{d}, {xsource()}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -298,6 +342,7 @@ FAMILIES = [
 LATER_FAMILIES = [
     ("sse3", sse3, "mixed", 500),
     ("ssse3", ssse3, "int", 500),
+    ("sse41", sse41, "mixed", 1000),
 ]
 
 
@@ -308,8 +353,8 @@ def lanes_of(body, kind):
         return kind
     if op.startswith("vf"):
         return "f32" if op.endswith(("ps", "ss")) else "f64"
-    if op.lstrip("v").startswith(("addsub", "hadd", "hsub")):
-        return "f32" if op.endswith("ps") else "f64"
+    if op.lstrip("v").startswith(("addsub", "hadd", "hsub", "round", "dp", "blendv", "insertps", "extractps")):
+        return "f32" if op.endswith(("ps", "ss")) else "f64" if op.endswith(("pd", "sd")) else "mixed"
     return sse.lanes_of([op[1:] + " " + " ".join(text.split()[1:])], kind)
 
 
