@@ -567,11 +567,25 @@ def strings(rng):
     return cases
 
 
+def rflags(rng):
+    """popfq and pushfq of AC (bit 18) and ID (bit 21): RFLAGS read, a bit or both toggled, written, read back into RBX, and the first
+    value put back (AC set would make the oracle's later unaligned accesses fault). TF is left out: x86 would trap on the next
+    instruction."""
+    cases = []
+    for mask in (1 << 21, 1 << 18, (1 << 21) | (1 << 18)):
+        for _ in range(8):
+            registers = registers_for(rng)
+            body = ["pushfq", "pop rax", "mov rcx, rax", f"xor rcx, {mask:#x}", "push rcx", "popfq", "pushfq", "pop rbx", "push rax",
+                    "popfq"]
+            cases.append((registers, body, ALL))
+    return cases
+
+
 # The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
 # name's CRC-32.
 FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test), ("locked", locked), ("rotate", rotate), ("shift by cl", shift_by_cl),
             ("carry narrow", carry_narrow), ("flag readers", flag_readers), ("unaligned locked", unaligned_locked),
-            ("bit scan", bit_scan), ("strings", strings)]
+            ("bit scan", bit_scan), ("strings", strings), ("rflags", rflags)]
 
 
 def main():
