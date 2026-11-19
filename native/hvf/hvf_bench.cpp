@@ -46,7 +46,8 @@ void measure(translate::Runtime &runtime, uint64_t entry, int runs, uint64_t cal
 		if (loop) {
 			const translate::RunResult result = runtime.call(entry, {calls});
 			if (result.reason != translate::ExitReason::returned)
-				throw std::runtime_error("the workload did not return");
+				throw std::runtime_error("the workload did not return (exit " + std::to_string(unsigned(result.reason)) + " at " +
+					std::to_string(result.value) + ")");
 			sink += result.value;
 		} else {
 			for (uint64_t i = 0; i < calls; ++i)

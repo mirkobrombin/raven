@@ -29,7 +29,7 @@ SSE_WORKLOADS = {"saxpy": 60000, "dot": 10000, "copy": 40000}
 # they do not.
 X87_WORKLOADS = {"ldot": 100, "lpoly": 200}
 # The AVX workloads (testdata/avx_workloads.c), run when named.
-AVX_WORKLOADS = {"fsaxpy": 40000, "bytecount": 20000}
+AVX_WORKLOADS = {"fsaxpy": 40000, "bytecount": 20000, "strscan": 20000}
 RUNS = 6
 CONFIGURATIONS = ["native", "process-loop", "process-call", "vm-loop", "vm-call"]
 

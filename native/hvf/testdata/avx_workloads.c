@@ -13,6 +13,18 @@ static uint8_t text[4096];
 #if defined(__x86_64__)
 #include <immintrin.h>
 
+// strscan: the length of a string 16 bytes at a time, as a strlen does: pcmpistri with a zero first operand (equal each) gives
+// the index of the null byte, 16 when there is none.
+static unsigned string_length(const uint8_t *from)
+{
+	const __m128i zero = _mm_setzero_si128();
+	for (unsigned at = 0;; at += 16) {
+		const int index = _mm_cmpistri(zero, _mm_loadu_si128((const __m128i *)(from + at)), _SIDD_UBYTE_OPS | _SIDD_CMP_EQUAL_EACH);
+		if (index < 16)
+			return at + (unsigned)index;
+	}
+}
+
 // y = a * x + y over 1024 singles, 16 times: vfmadd231ps on YMM registers.
 static void fma_pass(float a)
 {
@@ -37,6 +49,17 @@ static unsigned count_pass(uint8_t value)
 }
 #else
 #include <arm_neon.h>
+
+static unsigned string_length(const uint8_t *from)
+{
+	for (unsigned at = 0;; at += 16) {
+		const uint8x16_t nulls = vceqzq_u8(vld1q_u8(from + at));
+		if (vmaxvq_u8(nulls)) {
+			const uint64_t bits = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(nulls), 4)), 0);
+			return at + (unsigned)__builtin_ctzll(bits) / 4;
+		}
+	}
+}
 
 static void fma_pass(float a)
 {
@@ -82,6 +105,28 @@ uint64_t workload(void)
 	uint64_t sum = 0;
 	for (unsigned value = 0; value < 16; ++value)
 		sum = sum * 4099 + count_pass((uint8_t)value);
+	return sum;
+}
+#elif defined(WORKLOAD_STRSCAN)
+// 64 strings of 1 to 63 bytes, one per 64 bytes of 4096 (+16, so no chunk read leaves the array): the lengths, hashed.
+uint64_t workload(void)
+{
+	// Counters instead of % (the translator has no one-operand mul, which a compiler makes of it).
+	static uint8_t strings[4096 + 16];
+	uint8_t letter = 0;
+#pragma clang loop vectorize(disable)
+	for (unsigned i = 0; i < 4096; ++i) {
+		strings[i] = (uint8_t)('a' + letter);
+		letter = letter == 25 ? 0 : letter + 1;
+	}
+	unsigned length = 1;
+	for (unsigned s = 0; s < 64; ++s) {
+		strings[s * 64 + length] = 0;
+		length = length + 37 > 63 ? length + 37 - 63 : length + 37;
+	}
+	uint64_t sum = 0;
+	for (unsigned s = 0; s < 64; ++s)
+		sum = sum * 131 + string_length(strings + s * 64);
 	return sum;
 }
 #endif
