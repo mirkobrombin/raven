@@ -114,8 +114,11 @@ it, and claims about the ISA are marked:
   the width. Anything else leaves with `ExitReason::cpuid` at the instruction, and the runtime divides in 128 bits (`divide.cpp`) or
   stops with `ExitReason::fault` and `FaultKind::divide_error`, rip at the `div`, nothing changed. Translated code never computes a
   quotient Arm's `udiv` or `sdiv` would give for a #DE input (0 for a zero divisor, the minimum for minimum by -1), and the host never
-  traps (PROVEN by the fault cases). The flags are undefined and left as they were, so a #DE shows those of the instruction before
-  (PROVEN: the fault cases compare them).
+  traps (PROVEN by the fault cases). The flags are undefined and left as they were, and div and idiv count as readers of every flag
+  in the translator's liveness pass (`0df64172`), so a #DE shows those of the instruction before even when a later instruction of the
+  block redefines them. Until `0df64172` it did not: in `cmp rax, rbx; div rcx; cmp rax, rax` the first cmp's flags were never
+  computed and the #DE showed the input flags, 0x51 instead of 0x95 (PROVEN by the fault case added in `8b5d518a`, which failed
+  in process in both orderings and in the vCPU before the fix).
 - **`int 0x29`** (`__fastfail`) stops with `FaultKind::fast_fail`, rip at the `int`, the code in ECX. Other `int` vectors stay
   refused. `int3` (`ExitReason::breakpoint`) and `ud2` (`FaultKind::instruction`) were already translated; the fault cases check both.
 - **Bit test:** CF is the bit, set alone (`rmif`), so ZF stays: the SDM leaves ZF unaffected, and the EPYC 7763 does too (PROVEN, the
@@ -123,7 +126,11 @@ it, and claims about the ISA are marked:
   modulo the width. On memory an imm8 index is too, and a register index is signed and addresses a bit string: the byte at the
   operand's address plus the index shifted right by 3 (arithmetic), bit index modulo 8. That byte holds the same bit as the word x86
   reads (INFERRED: the bit string is little-endian); `lock` makes it an LSE byte atomic (`ldsetalb`, `ldclralb`, `ldeoralb`). The
-  results with indices far beyond the operand and negative, at every width, are PROVEN by the bit test family.
+  results with indices far beyond the operand and negative, at every width, are PROVEN by the bit test family, but only in the vCPU:
+  in process an address wrong in bits 56 to 63 alone still reaches the right byte, as macOS runs user code with top-byte ignore, and
+  the test is blind to it (PROVEN: with the `asr` of the bit-string address made an `lsr`, `translate_x86_semantics` passes all 1200
+  bit test cases, while `hvf_integer` fails 163 cases, for example #12488 `bt word ptr [r15 + rax], r9w` with a data abort at
+  FAR_EL1 0x2000004000410027; since `6badd93b` a guest exception fails its case, with its text, and the run goes on).
 - **Locked RMW:** one LSE atomic with acquire and release, as `xadd` and `cmpxchg` already were (`ldaddal`, `ldclral` with the
   complement for `and`, `ldsetal`, `ldeoral`, `ldeoral` with all ones for `not`), then the flags from the old value and the operand
   as without `lock`; `neg` is a `casal` loop. `inc` and `dec` keep CF (PROVEN). TSO is kept as it is for `xadd`, the atomics having
@@ -145,7 +152,11 @@ it, and claims about the ISA are marked:
   abort (ESR_EL1 0x92000021). Now every locked form (`xchg`, `cmpxchg`, `xadd` and the locked RMW) checks, without touching NZCV,
   whether its operand crosses 16 bytes and then takes a plain load and store between full barriers: right for one thread, NOT atomic
   against another, where x86 locks the bus. The unaligned locked family checks both kinds, 64-byte aligned buffer, in process and in a
-  vCPU (PROVEN); atomicity of the split path is not tested and does not hold (INFERRED from its code).
+  vCPU (PROVEN); atomicity of the split path is not tested and does not hold (INFERRED from its code). Exposed to the alignment fault
+  before `6d7009e8`, and covered since: `xchg` with memory, `lock cmpxchg`, `lock xadd`, `lock add`, `sub`, `and`, `or`, `xor`,
+  `inc`, `dec`, `not` and `neg` (`neg`'s `casal` loop) at 2, 4 and 8 bytes. Never exposed: the 1-byte forms, and every bit test, whose
+  memory forms access one byte. Plain loads and stores are not exposed either (LDAPR and STLR take an out-of-line path when
+  unaligned, plain ones fault on no alignment).
 
 - **Bit scan:** a zero source sets ZF and leaves the destination whole, a 32-bit one's upper half included: the EPYC 9V45 does that,
   as Rosetta does (PROVEN, the bit scan family compares the whole register, zero sources among the cases). Else ZF clear and the
@@ -168,12 +179,15 @@ it, and claims about the ISA are marked:
 
 The integer oracle (`x86_semantics.py`) now has families and the AVX checker's fingerprint scheme (`x86_semantics_check.h`,
 `73fd8bcd`): `testdata/x86_silicon.txt` has a `corpus` line per family run on x86 silicon and the overrides in the AVX file's format,
-written by `docs/macos/integer-data/silicon_overrides.py`; a family without a silicon run fails. The old override (registers only)
+written by `docs/macos/integer-data/silicon_overrides.py`. Since `3cd7ab4b` the `generated` hash also covers each case's defined
+flags and inputs (marking a flag defined makes the tests refuse the file until the family runs on silicon again: PROVEN by marking
+CF defined in the bit scan family, which the test then refused), and each line has `differently=N`, the cases the runner encoded
+otherwise and so did not compare, which must be 0 unless the line says `explained`; it is 0 for every family. A family without a silicon run fails. The old override (registers only)
 became a case line of the `random` family. The directed families set their registers per case, edge values first (0, 1, 2, -1, the
 signed minimum and maximum and their neighbours, powers of two), with random input flags, and compare only the flags x86 defines
 after the case (all of them where an instruction must leave a flag alone). Every case runs in process with LDAPR/STLR and with
 barriers (`translate_x86_semantics`) and in a vCPU with hardware TSO (`hvf_integer`, a new test target), with these results
-(PROVEN, the three test runs at `e71538cf`):
+(PROVEN, the three test runs at the end of this work):
 
 | Family | Cases | Failures in process (each ordering) | Failures in a vCPU |
 |---|---|---|---|
@@ -195,10 +209,17 @@ Before each feature commit the family failed whole: every case "did not return (
 fault cases (all but `int3` and `ud2`) took the unsupported exit instead of the fault.
 
 Atomicity (`hvf_locked`, a new test target, PROVEN in three runs): two vCPUs run a million iterations each of `lock inc`, `lock dec`,
-`lock add` (imm8), `lock sub` (register) and `lock xadd` on one 32-bit word, and none loses an update; `lock neg` two million times
-leaves a word of 5 at 5. The control, a plain `inc` on the same word, loses about half (996602 and 992116 of 2000000 in two runs),
-so the vCPUs did overlap. Whether the `lock neg` check would catch a non-atomic `neg` is NOT verified (an even number of lost
-negations cancels).
+`lock add` (imm8), `lock sub` (register) and `lock xadd` on one 32-bit word, and none loses an update. The control, a plain `inc` on
+the same word, loses about half (996602 and 992116 of 2000000 in two runs), so the vCPUs did overlap. Since `cb80feee`:
+
+- `lock neg` and `lock not` run 16 trials of 200000 each per vCPU on a word of 5, and every trial ends at 5. A lost negation or
+  complement shows in a trial with odds of a half (an even number cancels), so a translation that loses them passes with odds near
+  2^-16 (INFERRED from that model).
+- `lock or` with `lock and`, `lock xor` twice, `lock bts` with `lock btr` and `lock btc` twice work on one word, a bit per vCPU:
+  each sets its bit, checks it is set, clears it and checks it is clear, an `xchg` (a full barrier) before each check so that the
+  check reads the word and not the vCPU's own store. No check of 4000000 fails. The control, plain `or` and `and`, fails 374 and 589
+  in two runs. With `lock or` translated as a plain load, or and store (a mutation, not committed), 6130 checks of `lock or` fail
+  (PROVEN). Without the barrier the control failed none: a vCPU's load is served from its own store first.
 
 ### x86 silicon against Rosetta
 
@@ -212,6 +233,9 @@ family then, dump sha256 `8b28a4ea...`), AMD EPYC 9V45 (44526496471, with group 
   differ only in flags x86 leaves undefined: 1039 multiply cases and 1231 divide cases (bit test and locked none), not compared.
 - **rotate, shift by cl, carry narrow, flag readers, unaligned locked:** the same: no difference in a defined result; undefined flags
   differ in 7, 278, 0, 38 and 29 cases.
+- These counts come from the dumps, which are artifacts of the bench runs and not in this repository; the summary of the last
+  (`silicon_overrides.py` on the build's Rosetta dump and the EPYC 9V45 dump, sha256 `112983216c7f89c2a25eb2714acebcbf2025c311fef7b23b2370060e2bd51f9b`,
+  holding every family) is `docs/macos/integer-data/silicon_summary.txt`.
 - **random:** the one known difference stays, the RAX a 32-bit `lock cmpxchg` leaves (case 8316), now held to the EPYC; 2609 cases
   differ only in undefined flags.
 
@@ -245,10 +269,14 @@ cl` 10 in 4, `bswap` 12 in 7, `prefetchw`, `insb`, `cmpsb` and `vpminuq` (AVX-51
 - DF is not in the context an exception would report, nor restored by anything but `popfq` and `cld` (NOT done).
 - A locked operand across 16 bytes is not atomic against another thread (the split path above).
 - A #DE or an `int 0x29` is a fault exit; delivering it to the guest as an exception is the runtime's caller's work (NOT done here).
-- Atomicity is counted for `lock inc`, `dec`, `add`, `sub` and `xadd` only; that `lock and`, `or`, `xor`, `not` and the locked bit
-  tests are atomic is INFERRED from the LSE instructions, which the oracle checks single-threaded.
-- The runtime's division reads a memory divisor through `GuestMemory::read`, as xsave and the string compares do: a fault on that
-  read is a host error, not a guest fault (NOT handled).
+- **Precise exception state (design item).** A #DE now shows the flags before the div, but a faulting memory access does not:
+  liveness does not count a load or store as a flag reader, so flags an earlier instruction defined and a later one redefines may
+  never be computed when the access faults. That predates this work and is not fixed by making every access a reader (too costly);
+  it belongs with a side table from host pc to guest state, which would also give the guest rip and the flags at a fault.
+- The runtime's division reads a memory divisor through `GuestMemory::read`, as xsave and the string compares do. An unmapped
+  divisor faults in translated code first, since `divide` reads its source before any exit (the review confirmed it). But
+  `Vm::read` throws on an operand that straddles two mappings, so a divisor across a mapping boundary that reaches the runtime's
+  re-read in `divide.cpp` is a host error, not a guest fault (NOT handled).
 - The division slow path costs an exit to the runtime (a dividend wider than 64 bits, as in 128-bit arithmetic, and every 64-bit
   `idiv` by -1): its cost was not measured.
 
