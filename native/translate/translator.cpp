@@ -173,11 +173,12 @@ bool supported(const Instruction &instruction)
 	const Operand &first = instruction.operands[0];
 	const uint8_t size = first.size;
 	switch (instruction.mnemonic) {
+	// The decoder takes lock only with a memory destination (locked()).
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::cmp: case Mnemonic::and_: case Mnemonic::or_: case Mnemonic::xor_:
-	case Mnemonic::test: case Mnemonic::inc: case Mnemonic::dec: case Mnemonic::neg:
-		return !instruction.lock;
+	case Mnemonic::test: case Mnemonic::inc: case Mnemonic::dec: case Mnemonic::neg: case Mnemonic::not_:
+		return true;
 	case Mnemonic::adc: case Mnemonic::sbb: return !instruction.lock && size >= 4;
-	case Mnemonic::not_: case Mnemonic::mov: case Mnemonic::movzx: case Mnemonic::movsx: case Mnemonic::movsxd: case Mnemonic::lea:
+	case Mnemonic::mov: case Mnemonic::movzx: case Mnemonic::movsx: case Mnemonic::movsxd: case Mnemonic::lea:
 	case Mnemonic::setcc: case Mnemonic::nop: case Mnemonic::cbw: case Mnemonic::cwd: case Mnemonic::leave: case Mnemonic::int3:
 	case Mnemonic::syscall: case Mnemonic::hlt: case Mnemonic::ud2: case Mnemonic::jcc: case Mnemonic::jmp: case Mnemonic::call:
 	case Mnemonic::ret:
@@ -406,6 +407,10 @@ private:
 	void multiply_wide(const Instruction &instruction);
 	void divide(const Instruction &instruction);
 	void bit_test(const Instruction &instruction);
+	void locked(const Instruction &instruction);
+	// Set by locked(): the register holding the old value of the memory operand, which arithmetic() and unary() then take as the
+	// destination's value, computing the result and flags without writing it (the atomic did).
+	uint8_t locked_old = a64::zr;
 	// A byte at [base] into or from reg, ordered as memory says.
 	void byte_access(uint8_t reg, uint8_t base, bool store, const Operand &memory);
 	void exchange(const Instruction &instruction);
@@ -694,7 +699,8 @@ void BlockTranslator::arithmetic(const Instruction &instruction)
 	const bool writes = mnemonic != Mnemonic::cmp && mnemonic != Mnemonic::test;
 	const bool logical = mnemonic == Mnemonic::and_ || mnemonic == Mnemonic::or_ || mnemonic == Mnemonic::xor_ ||
 		mnemonic == Mnemonic::test;
-	const uint8_t left = read(target, s0);
+	const uint8_t left = locked_old != a64::zr ? locked_old : read(target, s0);
+	const bool store = locked_old == a64::zr;
 	// The result goes straight to a full-width destination register.
 	const bool direct = writes && target.kind == OperandKind::reg && size >= 4 && target.reg < high_byte_base;
 	const uint8_t result = direct ? host_register[target.reg] : s2;
@@ -726,7 +732,7 @@ void BlockTranslator::arithmetic(const Instruction &instruction)
 					a.mov(parity_register, result);
 			}
 		}
-		if (writes && !direct)
+		if (writes && !direct && store)
 			write(target, result);
 		return;
 	}
@@ -778,7 +784,7 @@ void BlockTranslator::arithmetic(const Instruction &instruction)
 			} else
 				a.mov(parity_register, result);
 		}
-		if (writes && !direct)
+		if (writes && !direct && store)
 			write(target, result);
 		return;
 	}
@@ -820,7 +826,7 @@ void BlockTranslator::arithmetic(const Instruction &instruction)
 	}
 	if (flags && flags_wanted(PF))
 		a.mov(parity_register, s2);
-	if (writes)
+	if (writes && store)
 		write(target, s2);
 }
 
@@ -830,7 +836,8 @@ void BlockTranslator::unary(const Instruction &instruction)
 	const unsigned size = target.size;
 	const bool is64 = size == 8;
 	const Mnemonic mnemonic = instruction.mnemonic;
-	const uint8_t value = read(target, s0);
+	const uint8_t value = locked_old != a64::zr ? locked_old : read(target, s0);
+	const bool store = locked_old == a64::zr;
 	if (mnemonic == Mnemonic::not_) {
 		a.orn(s2, a64::zr, value, is64 || size < 4 ? true : false);
 		write(target, s2);
@@ -880,7 +887,69 @@ void BlockTranslator::unary(const Instruction &instruction)
 		carry_inverted = mnemonic != Mnemonic::inc;
 	if (flags && flags_wanted(PF))
 		a.mov(parity_register, s2);
-	write(target, s2);
+	if (store)
+		write(target, s2);
+}
+
+void BlockTranslator::locked(const Instruction &instruction)
+{
+	// lock add, sub, and, or, xor, inc, dec, not and neg on memory: one LSE atomic with acquire and release (as xadd), which leaves
+	// the old value in s0; then the flags come from it and the operand as for the instruction without lock, arithmetic() and unary()
+	// computing the result without storing it. neg has no atomic: a CAS loop. NZCV is untouched until then, so inc and dec keep CF.
+	const Operand &target = instruction.operands[0];
+	const unsigned size = target.size;
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const Address at = address(target, true);
+	if (at.base != address_register)
+		a.mov(address_register, at.base);
+	uint8_t operand = s3;
+	switch (mnemonic) {
+	case Mnemonic::inc: a.mov_imm(s3, 1); break;
+	case Mnemonic::dec: a.mov_imm(s3, ~uint64_t(0)); break;
+	case Mnemonic::not_: a.mov_imm(s3, ~uint64_t(0)); break;
+	case Mnemonic::neg: break;
+	default: {
+		Operand source = instruction.operands[1];
+		operand = read(source, s1);
+		if (mnemonic == Mnemonic::sub) {
+			a.sub(s3, a64::zr, operand);
+			operand = s3;
+		} else if (mnemonic == Mnemonic::and_) {
+			a.orn(s3, a64::zr, operand);
+			operand = s3;
+		}
+		break;
+	}
+	}
+	switch (mnemonic) {
+	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::inc: case Mnemonic::dec: a.ldaddal(operand, s0, address_register, size); break;
+	case Mnemonic::and_: a.ldclral(operand, s0, address_register, size); break;
+	case Mnemonic::or_: a.ldsetal(operand, s0, address_register, size); break;
+	case Mnemonic::xor_: case Mnemonic::not_: a.ldeoral(operand, s0, address_register, size); break;
+	default: {
+		// neg: s0 the value seen, s3 its negation, s2 what the compare and swap found.
+		const Assembler::Label retry = a.label(), done = a.label();
+		a.ldr(s0, address_register, 0, size);
+		a.bind(retry);
+		a.sub(s3, a64::zr, s0);
+		a.mov(s2, s0);
+		a.casal(s2, s3, address_register, size);
+		a.sub(a64::zr, s2, s0, Shift::lsl, 0, true, true);
+		a.b(Cond::eq, done);
+		a.mov(s0, s2);
+		a.b(retry);
+		a.bind(done);
+		break;
+	}
+	}
+	if (mnemonic == Mnemonic::not_)
+		return;
+	locked_old = s0;
+	if (mnemonic == Mnemonic::inc || mnemonic == Mnemonic::dec || mnemonic == Mnemonic::neg)
+		unary(instruction);
+	else
+		arithmetic(instruction);
+	locked_old = a64::zr;
 }
 
 void BlockTranslator::shift(const Instruction &instruction)
@@ -3430,6 +3499,15 @@ void BlockTranslator::translate(const Instruction &instruction)
 	if (instruction.vex) {
 		avx(instruction);
 		return;
+	}
+	if (instruction.lock) {
+		switch (instruction.mnemonic) {
+		case Mnemonic::add: case Mnemonic::sub: case Mnemonic::and_: case Mnemonic::or_: case Mnemonic::xor_: case Mnemonic::inc:
+		case Mnemonic::dec: case Mnemonic::not_: case Mnemonic::neg:
+			locked(instruction);
+			return;
+		default: break;
+		}
 	}
 	switch (instruction.mnemonic) {
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::cmp: case Mnemonic::and_: case Mnemonic::or_: case Mnemonic::xor_:
