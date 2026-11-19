@@ -1,14 +1,14 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44503053255, assembled with clang as here; dump sha256 5d18a2518c608b33215915b5d815068d21addb4314cec1ecb8b2d7f753d5ea8a): the tests refuse the file when a family's cases or Rosetta's results change.
-# Earlier runs: an AMD EPYC 9V74 (runs 44502534716 and 44499294363) and an EPYC 7763 (run 44501136642) gave the same results for the families they had. An Intel Xeon Platinum 8370C (run 44500206597, dump sha256 37b9cf0cca10f7637359a6b9f4038e75c67ac913423a83c8aff9da653fdcdcf8) agrees with Rosetta in the strings family, as the EPYCs do, and differs from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
-# The fma addsub family was run on an Intel Xeon Platinum 8573C (raven-macos-bench run 44503360598, dump sha256 73900a3c568499d7a5a783db6332f994f83ae26ebccfcf93f900d69828695c30), no AMD run of it yet. That run agrees with Rosetta in all 600 approximation cases, where the EPYC differs in 358, and differs from the EPYC in the dpps case #7786 as the earlier Xeon did.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44505099547, assembled with clang as here; dump sha256 885a1c6540203df37a937212e41b21fea0dfd9f239398d4ed79f9ab0bff5f8b1): the tests refuse the file when a family's cases or Rosetta's results change.
+# Earlier runs: AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 corpus	approximations	cases=600	generated=52b71b7d5a377a5b	rosetta=9a08b5ad95d5336b
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	avx ops	cases=1500	generated=81ce8548266e5728	rosetta=560d169b35ec6d3f
+corpus	avx2	cases=1500	generated=86c9735094e92da1	rosetta=1090f7ead1dbb18a
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
 corpus	fma	cases=1200	generated=3a80c4c9592e6b73	rosetta=117c23e7ae1b07d1
-corpus	fma edges	cases=288	generated=7ab841c15c69c67d	rosetta=5f7aa11b0e3469d6
 corpus	fma addsub	cases=600	generated=b23222184fd734b0	rosetta=c6cb47a47f9865dc
+corpus	fma edges	cases=288	generated=7ab841c15c69c67d	rosetta=5f7aa11b0e3469d6
 corpus	integer	cases=700	generated=e885abd03fce5654	rosetta=afd4fe34eb94de6d
 corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
 corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
@@ -710,3 +710,7 @@ corpus	vex sse4	cases=1500	generated=e321b48b0d4415c8	rosetta=e582251adcae5d5b
 14028	vfmsubadd213ps ymm13, ymm15, ymm13	rosetta=54000776287d26ef	mxcsr=a11f0000
 14162	vfmsubadd213ps ymm8, ymm1, ymm8	rosetta=839ca76be2a784f4	mxcsr=a01f0000
 14164	vfmsubadd132pd ymm9, ymm6, ymm6	rosetta=6bc7a4526a08b099	mxcsr=e83f0000
+14608	vpsllvq ymm7, ymm14, ymmword ptr [r15 + 8]	rosetta=3afd243ee08978c5	ymm7=0000000000000000000000000000000000000000000000000000000000000000
+14886	vpsrlvq xmm4, xmm14, xmmword ptr [r15 + 156]	rosetta=c56978d9ca301863	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+15074	vpsllvq xmm4, xmm8, xmmword ptr [r15 + 88]	rosetta=2fc5cfbaa9b8e0c8	ymm4=00000000000000003f0000000000000000000000000000000000000000000000
+15500	vpsllvq ymm4, ymm12, ymmword ptr [r15 + 133]	rosetta=c894ba559da56e51	ymm4=0000000000000000000000000000000000000000000000000000000000000000
