@@ -475,7 +475,8 @@ def avx_ops(rng):
         if rng.random() < 0.5:
             return [f"{op} {name(d, width)}, {name(a, width)}, {mem(rng, width)}"]
         return [f"{op} {mem(rng, width)}, {name(a, width)}, {name(b, width)}"]
-    return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"vmaskmovdqu xmm{a}, xmm{b}"]
+    # rdi holds an address of the buffer, which differs from run to run: cleared after (mov leaves the flags alone).
+    return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"vmaskmovdqu xmm{a}, xmm{b}", "mov edi, 0"]
 
 
 # Each family: how its cases are made, what its lanes hold and how many there are.
