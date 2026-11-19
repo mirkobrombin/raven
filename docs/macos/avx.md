@@ -89,8 +89,8 @@ from one table and goes on after the instruction, in this process and in a vCPU 
 vpmovzx, vpinsrd ...), which the translator does not run in either encoding, and vblendv, vmaskmov, vpermilps and the AVX
 predicates 8-31 of vcmpps; AVX2 also needs vpermq, vpermd, the variable shifts, gathers and vpmaskmov. So the AVX code above is
 translated and tested but not yet reachable through CPUID-gated paths: MSVC's CRT takes its SSE2 paths. The model with every feature
-on is checked for the same consistency (`every feature on, model`, 0 failures), so turning AVX on later is one table change plus
-the samples passing.
+on is checked for the same consistency (`every feature on, model`, 0 failures), so turning AVX on later is one table change once
+its 53 samples (above) and the instructions they stand for translate.
 
 ## State
 
