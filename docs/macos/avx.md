@@ -91,9 +91,9 @@ from one table and goes on after the instruction, in this process and in a vCPU 
 **What it reports today: the baseline, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AVX (with XSAVE and OSXSAVE), FMA and AVX2; no
 F16C, BMI1, BMI2 or LZCNT** (PROVEN, `translate_cpuid` and `hvf_cpuid`, 0 failures: leaf 1 ECX 0x1c981201, EDX 0x07808101; leaf 7
 EBX 0x20; xgetbv(0) 7). Each was switched on in a commit of its own once its samples translated and its oracle families passed in
-this process and in a vCPU against an x86 CPU: SSE4.2 `c332ddac`, AVX `4d24ded4`, FMA `411a6fd0`, AVX2 `52c59c97`. AVX2 was
-reported one commit too early: a review then found vbroadcasti128 undecoded; it joined the samples (`d216126b`) and was translated
-(`a9635f75`), so from `a9635f75` on the AVX2 report holds for every sample. The model requires each SSE level to come with
+this process and in a vCPU against an x86 CPU: SSE4.2 `d1070f63`, AVX `714848e2`, FMA `26122295`, AVX2 `7ff6b2f9`. AVX2 was
+reported one commit too early: a review then found vbroadcasti128 undecoded; it joined the samples (`80216673`) and was translated
+(`86b6adcd`), so from `86b6adcd` on the AVX2 report holds for every sample. The model requires each SSE level to come with
 the ones before it, AVX with SSE4.2, and XSAVE's samples to translate whenever XSAVE is reported, which it is with AVX: so AVX also
 needed xsave and xrstor (below). The model with every feature on is checked for the same consistency (`every feature on, model`, 0
 failures).
@@ -108,8 +108,8 @@ these CPUs track it was NOT verified), and leaves the rest of the header. xrstor
 bit is set and gives it its initial state otherwise, and loads MXCSR whenever SSE or AVX is requested (INFERRED from the SDM's
 description; not run on x86). Both fault (`FaultKind::instruction`) for an address not aligned to 64 bytes, and xrstor for
 XSTATE_BV bits outside XCR0, a nonzero XCOMP_BV or the next 8 bytes, and an MXCSR with a reserved bit; while OSXSAVE is clear
-(no AVX) they fault as #UD. PROVEN by `translate_xsave` (layout, round trip, init state, the four faults; test `362cb79c` first
-failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt, xsavec, xsaves and fxsave are not translated.
+(no AVX) they fault as #UD. PROVEN by `translate_xsave` (layout, round trip, init state, the four faults; test `3be0f83c` first
+failing, then `7e83388c`). Not compared with an x86 CPU (NOT verified); xsaveopt, xsavec, xsaves and fxsave are not translated.
 
 ## State
 
@@ -183,19 +183,19 @@ failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt
 ## Tests
 
 - **This round's families**, each committed failing first, then implemented: `strings` 1500 (`ac2cc892`), `vex sse4` 1500 (the
-  VEX forms of SSSE3 to SSE4.2, `ab8e4123`), `avx ops` 1500 (vtestps, vtestpd, vpermilps, vpermilpd, vblendv, vcmp with predicates
-  0-31, the 256-bit conversions, vmaskmovps, vmaskmovpd and vmaskmovdqu, `941d97f8`; rdi cleared after vmaskmovdqu in `a34898f7`,
-  since it held an address of the buffer that differs between machines), `approximations` 600 (`41695b18`, compared within 2^-11:
-  x86 promises 1.5 * 2^-12 and its CPUs differ in the bits), `fma addsub` 600 (`e03e7d4e`), `avx2` 1500 (`b8b9d5ed`; the
-  variable shifts get counts around the element width), `gathers` 800 (`e6a49d8e`; every form and width, every scale, indices
+  VEX forms of SSSE3 to SSE4.2, `397a4560`), `avx ops` 1500 (vtestps, vtestpd, vpermilps, vpermilpd, vblendv, vcmp with predicates
+  0-31, the 256-bit conversions, vmaskmovps, vmaskmovpd and vmaskmovdqu, `cce54f83`; rdi cleared after vmaskmovdqu in `7afb535c`,
+  since it held an address of the buffer that differs between machines), `approximations` 600 (`000ae951`, compared within 2^-11:
+  x86 promises 1.5 * 2^-12 and its CPUs differ in the bits), `fma addsub` 600 (`2cebbc23`), `avx2` 1500 (`119658b2`; the
+  variable shifts get counts around the element width), `gathers` 800 (`496b2a01`; every form and width, every scale, indices
   inside the buffer, some negative, random mask bits). PROVEN at the end (`ctest`): `translate_x86_avx` 32976 cases (16488 in each
   memory ordering), 0 failures; `hvf_avx` 16488 cases in a vCPU, 0 failures. Then `avx2 broadcast` 100 (vbroadcasti128,
-  `9e4dd757`): 33176 and 16588 cases, 0 failures. The review fixes of version 18 came without a failing test first: the 128-bit
+  `d13dd50b`): 33176 and 16588 cases, 0 failures. The review fixes of version 18 came without a failing test first: the 128-bit
   gather bug did not show in the oracle (its stray loads stayed inside the buffer and their results were cleared).
-- **Masked moves and faults** (`hvf_avx_fault`, in a vCPU, test `54dd3d59` first, then `d4090f9b`): vmaskmovps with the elements on an
+- **Masked moves and faults** (`hvf_avx_fault`, in a vCPU, test `342adee2` first, then `69374b4f`): vmaskmovps with the elements on an
   unmapped page masked off neither faults nor moves them, and moves the others (load and store); with an element on the unmapped
-  page selected it faults with no register or byte changed. The same for vpmaskmovd (`51a6c6ec`, added after its implementation)
-  and vpgatherdd (`e6a49d8e` first): with the unmapped elements masked off it gathers the others, keeps the masked-off ones and
+  page selected it faults with no register or byte changed. The same for vpmaskmovd (`054880ed`, added after its implementation)
+  and vpgatherdd (`496b2a01` first): with the unmapped elements masked off it gathers the others, keeps the masked-off ones and
   clears the mask; with one selected it faults with nothing changed. PROVEN, 12 scenarios, 0 failures. A gather that faults after
   some elements (x86 keeps those) was not tested: the fault here is at element 0.
 - **Later families** (after the FMA3 edges, so the earlier cases keep their numbers): sse3 500 (legacy and VEX at 128 and 256
@@ -311,7 +311,7 @@ With AVX, FMA and AVX2 reported, the MSVC CRT's level check (8 cpuid and 2 xgetb
 = 7 and leaf 7's AVX2 bit; which level it stores, and so which routines it picks, was not read (proprietary code, CONTRIBUTING.md):
 INFERRED that its AVX and AVX2 paths become reachable, and that its AVX-512 path does not (no AVX-512 bit). What the translator takes
 of Notepad++'s VEX code, linearly over `.text` (PROVEN, `x86_decoder_test` on a corpus of `notepad++.exe` alone): before the AVX2
-work, `960 VEX instructions, 895 translated (93.2%)` (`be342dab`); now `960 VEX instructions, 958 translated (99.8%); without:
+work, `960 VEX instructions, 895 translated (93.2%)` (`526afbb4`); now `960 VEX instructions, 958 translated (99.8%); without:
 shlx 2`. shlx is BMI2, which is not reported: if the code behind the CRT's AVX2 level runs it without testing BMI2, it ends its
 block as unsupported (whether it does was not read; an open item). Its legacy SSE and SSE2 are 40832 of 40832 translated, its
 SSE4.2 string compares too. Running Notepad++ under the translator was not done: it needs the PE loaded with its imports by the
