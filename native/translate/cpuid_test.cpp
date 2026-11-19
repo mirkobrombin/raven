@@ -62,7 +62,7 @@ int main()
 	// nothing translates their instructions yet: straight from the model, the leaf and subleaf read back from the code.
 	GuestFeatures all;
 	all.sse3 = all.ssse3 = all.sse41 = all.sse42 = all.popcnt = true;
-	all.avx = all.avx2 = all.fma = all.f16c = all.bmi1 = all.bmi2 = true;
+	all.avx = all.avx2 = all.fma = all.f16c = all.bmi1 = all.bmi2 = all.lzcnt = true;
 	const size_t model_failures = cpuid_check::check(
 		[&](const std::vector<uint8_t> &code) {
 			uint32_t leaf = 0, subleaf = 0;

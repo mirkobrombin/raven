@@ -59,7 +59,7 @@ CpuidAnswer cpuid(uint32_t leaf, uint32_t subleaf, const GuestFeatures &features
 		return {0, 0, 0, 0};
 	case 0x80000000: return {highest_extended, 0, 0, 0};
 	// LAHF, LZCNT and the rest in ECX are not run; EDX: syscall and long mode.
-	case 0x80000001: return {0, 0, 0, 1u << 11 | 1u << 29};
+	case 0x80000001: return {0, 0, features.lzcnt ? 1u << 5 : 0, 1u << 11 | 1u << 29};
 	case 0x80000002: return {text("Rave"), text("n x8"), text("6-64"), text(" tra")};
 	case 0x80000003: return {text("nsla"), text("tor\0"), 0, 0};
 	case 0x80000004: return {0, 0, 0, 0};
