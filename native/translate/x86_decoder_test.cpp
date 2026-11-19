@@ -137,6 +137,25 @@ int main(int argc, char **argv)
 		std::cerr << "cannot open " << argv[1] << "\n";
 		return 2;
 	}
+	// Encodings pinned as not translated: x86 raises #UD for rorx with VEX.vvvv other than 1111b.
+	struct Pinned {
+		const char *what;
+		std::vector<uint8_t> bytes;
+	};
+	const Pinned pinned[] = {
+		{"rorx eax, ebx, 3 with VEX.vvvv 0001 (#UD)", {0xc4, 0xe3, 0x73, 0xf0, 0xc3, 0x03}},
+	};
+	size_t pinned_failures = 0;
+	for (const Pinned &item : pinned) {
+		std::vector<uint8_t> window = item.bytes;
+		window.resize(item.bytes.size() + 15, 0x90);
+		const Instruction instruction = decode(window, 0x1000);
+		if (instruction.mnemonic != Mnemonic::invalid && translates(instruction)) {
+			std::cerr << "pinned: " << item.what << ": translated as '" << format_intel(instruction) << "'\n";
+			++pinned_failures;
+		}
+	}
+	std::printf("pinned encodings: %zu, %zu failures\n", std::size(pinned), pinned_failures);
 	std::map<std::string, Tally> tallies;
 	std::vector<std::string> order;
 	std::string source = "?";
@@ -243,7 +262,7 @@ int main(int argc, char **argv)
 				std::cerr << source << " " << line.substr(0, tab) << " '" << expected << "': " << problem << "\n";
 		}
 	}
-	size_t failures = 0;
+	size_t failures = pinned_failures;
 	for (const std::string &name : order) {
 		const Tally &tally = tallies[name];
 		failures += tally.failures;
