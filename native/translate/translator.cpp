@@ -208,6 +208,10 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::pshuflw: case Mnemonic::pshufhw: case Mnemonic::shufps: case Mnemonic::shufpd:
 	case Mnemonic::addsubps: case Mnemonic::addsubpd: case Mnemonic::haddps: case Mnemonic::haddpd: case Mnemonic::hsubps:
 	case Mnemonic::hsubpd: case Mnemonic::movddup: case Mnemonic::movsldup: case Mnemonic::movshdup: case Mnemonic::lddqu:
+	case Mnemonic::pshufb: case Mnemonic::phaddw: case Mnemonic::phaddd: case Mnemonic::phaddsw: case Mnemonic::pmaddubsw:
+	case Mnemonic::phsubw: case Mnemonic::phsubd: case Mnemonic::phsubsw: case Mnemonic::psignb: case Mnemonic::psignw:
+	case Mnemonic::psignd: case Mnemonic::pmulhrsw: case Mnemonic::pabsb: case Mnemonic::pabsw: case Mnemonic::pabsd:
+	case Mnemonic::palignr:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -377,6 +381,7 @@ private:
 	void sse_shift(const Instruction &instruction);
 	void sse_shuffle(const Instruction &instruction);
 	void sse3(const Instruction &instruction);
+	void ssse3(const Instruction &instruction);
 
 	// AVX: the low 128 bits of YMMn are vn, the upper halves stay in CpuState::ymm_high (v20-v23 hold them while an instruction
 	// works on them; the SSE handlers use v16-v19).
@@ -1625,6 +1630,72 @@ void BlockTranslator::sse3(const Instruction &instruction)
 	}
 }
 
+void BlockTranslator::ssse3(const Instruction &instruction)
+{
+	using enum Mnemonic;
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const uint8_t target = instruction.operands[0].reg;
+	const uint8_t source = vector_source(instruction.operands[1], vs0);
+	const uint32_t size = mnemonic == phaddw || mnemonic == phaddsw || mnemonic == phsubw || mnemonic == phsubsw || mnemonic == psignw ||
+			mnemonic == pabsw ? simd::size_h : mnemonic == phaddd || mnemonic == phsubd || mnemonic == psignd || mnemonic == pabsd ?
+		simd::size_s : 0;
+	switch (mnemonic) {
+	case pshufb:
+		// A byte with bit 7 set selects 0; tbl gives 0 for any index from 16 on, so bits 6-4 are cleared and bit 7 kept.
+		a.simd(simd::movi_8f, vs2, 0);
+		a.simd(simd::and_16b, vs1, source, vs2);
+		a.simd(simd::tbl_16b, target, target, vs1);
+		return;
+	case phaddw: case phaddd: a.simd(simd::addp_16b | size, target, target, source); return;
+	case phaddsw: case phsubw: case phsubd: case phsubsw:
+		a.simd(simd::uzp1_16b | size, vs1, target, source);
+		a.simd(simd::uzp2_16b | size, vs2, target, source);
+		a.simd((mnemonic == phaddsw ? simd::sqadd_16b : mnemonic == phsubsw ? simd::sqsub_16b : simd::sub_16b) | size, target, vs1, vs2);
+		return;
+	case pmaddubsw:
+		// Unsigned bytes of the destination times signed bytes of the source fit a halfword exactly; adjacent pairs add with signed
+		// saturation.
+		a.simd(simd::uxtl_8h, vs1, target, 0);
+		a.simd(simd::uxtl_8h | simd::q, vs2, target, 0);
+		a.simd(simd::sxtl_8h, vs3, source, 0);
+		a.simd(simd::mul_16b | simd::size_h, vs1, vs1, vs3);
+		a.simd(simd::sxtl_8h | simd::q, vs3, source, 0);
+		a.simd(simd::mul_16b | simd::size_h, vs2, vs2, vs3);
+		a.simd(simd::uzp1_16b | simd::size_h, vs3, vs1, vs2);
+		a.simd(simd::uzp2_16b | simd::size_h, vs1, vs1, vs2);
+		a.simd(simd::sqadd_16b | simd::size_h, target, vs3, vs1);
+		return;
+	case pmulhrsw:
+		// ((a * b >> 14) + 1) >> 1 is (a * b + 2^14) >> 15, truncated to 16 bits: -32768 * -32768 gives 0x8000, where sqrdmulh would
+		// saturate.
+		a.simd(simd::smull_4s, vs1, target, source);
+		a.simd(simd::smull_4s | simd::q, vs2, target, source);
+		a.simd(simd::rshrn_4h_15, target, vs1, 0);
+		a.simd(simd::rshrn_4h_15 | simd::q, target, vs2, 0);
+		return;
+	case psignb: case psignw: case psignd:
+		a.simd(simd::neg_16b | size, vs1, target);
+		a.simd(simd::cmlt_zero_16b | size, vs2, source);
+		a.simd(simd::bsl_16b, vs2, vs1, target);
+		a.simd(simd::cmeq_zero_16b | size, vs3, source);
+		a.simd(simd::bic_16b, target, vs2, vs3);
+		return;
+	case pabsb: case pabsw: case pabsd: a.simd(simd::abs_16b | size, target, source); return;
+	default: {
+		// palignr: bytes imm8 on of the destination above the source, zeros beyond.
+		const auto shift = static_cast<unsigned>(instruction.operands[2].value & 0xff);
+		if (shift < 16)
+			a.ext(target, source, target, shift);
+		else if (shift < 32) {
+			a.simd(simd::movi_zero_2d, vs1, 0);
+			a.ext(target, target, vs1, shift - 16);
+		} else
+			a.simd(simd::movi_zero_2d, target, 0);
+		return;
+	}
+	}
+}
+
 void BlockTranslator::sse_shuffle(const Instruction &instruction)
 {
 	using enum Mnemonic;
@@ -2114,6 +2185,12 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::addsubps: case Mnemonic::addsubpd: case Mnemonic::haddps: case Mnemonic::haddpd: case Mnemonic::hsubps:
 	case Mnemonic::hsubpd: case Mnemonic::movddup: case Mnemonic::movsldup: case Mnemonic::movshdup: case Mnemonic::lddqu:
 		sse3(instruction);
+		return;
+	case Mnemonic::pshufb: case Mnemonic::phaddw: case Mnemonic::phaddd: case Mnemonic::phaddsw: case Mnemonic::pmaddubsw:
+	case Mnemonic::phsubw: case Mnemonic::phsubd: case Mnemonic::phsubsw: case Mnemonic::psignb: case Mnemonic::psignw:
+	case Mnemonic::psignd: case Mnemonic::pmulhrsw: case Mnemonic::pabsb: case Mnemonic::pabsw: case Mnemonic::pabsd:
+	case Mnemonic::palignr:
+		ssse3(instruction);
 		return;
 	case Mnemonic::packsswb: case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd:
 	case Mnemonic::punpckldq: case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq:

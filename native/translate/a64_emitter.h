@@ -34,6 +34,11 @@ constexpr uint32_t staddb_zero = 0x38200000;
 // trn2, fneg, bsl; movi of 0x00000000ffffffff in both doublewords.
 constexpr uint32_t faddp_4s = 0x6e20d400, uzp1_16b = 0x4e001800, trn1_16b = 0x4e002800, trn2_16b = 0x4e006800,
 	fneg_4s = 0x6ea0f800, bsl_16b = 0x6e601c00, movi_low_singles = 0x6f00e5e0;
+// SSSE3: tbl with one table register, movi of 0x8f in every byte, the widening moves (sxtl and uxtl of the low or, with q, the high
+// eight bytes into halfwords), smull of halfwords, rshrn by 15 of words into halfwords (with q into the high half), neg, abs and the
+// compares against zero, each on bytes or with size_h or size_s.
+constexpr uint32_t tbl_16b = 0x4e000000, movi_8f = 0x4f04e5e0, sxtl_8h = 0x0f08a400, uxtl_8h = 0x2f08a400, smull_4s = 0x0e60c000,
+	rshrn_4h_15 = 0x0f118c00, neg_16b = 0x6e20b800, abs_16b = 0x4e20b800, cmlt_zero_16b = 0x4e20a800, cmeq_zero_16b = 0x4e209800;
 // Floating point on four singles; or sz (bit 22) in for two doubles, or the scalar single for one double.
 constexpr uint32_t sz = 0x00400000;
 constexpr uint32_t fadd_4s = 0x4e20d400, fsub_4s = 0x4ea0d400, fmul_4s = 0x6e20dc00, fdiv_4s = 0x6e20fc00, fmax_4s = 0x4e20f400,
