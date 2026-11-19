@@ -110,6 +110,8 @@ FlagEffect flag_effect(const Instruction &instruction)
 	case Mnemonic::bt: case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: return {all_flags & ~ZF, 0};
 	case Mnemonic::bsf: case Mnemonic::bsr: case Mnemonic::popf: return {all_flags, 0};
 	case Mnemonic::pushf: return {0, all_flags};
+	// div and idiv leave the flags undefined but may stop with #DE, which shows those of the instruction before: they read them all.
+	case Mnemonic::div: case Mnemonic::idiv: return {0, all_flags};
 	default: return {};
 	}
 }
