@@ -124,7 +124,7 @@ static void held(const std::string &bootstrap)
 
 	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
 	// 0x000: the argument plus one. 0x010: Linux exit, which must stop for the runtime. 0x020: a breakpoint the runtime serves as an API.
-	// 0x030: a read of address zero.
+	// 0x030: a read of address zero. 0x038: a store of RAX where the argument points.
 	std::vector<uint8_t> bytes(0x40, 0xcc);
 	const std::vector<uint8_t> add{0x48, 0x8d, 0x41, 0x01, 0xc3}, exit{0xb8, 60, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05, 0xc3},
 		trap{0xcc, 0xc3}, fault{0x8b, 0x04, 0x25, 0, 0, 0, 0, 0xc3};
@@ -132,6 +132,8 @@ static void held(const std::string &bootstrap)
 	std::copy(exit.begin(), exit.end(), bytes.begin() + 0x10);
 	std::copy(trap.begin(), trap.end(), bytes.begin() + 0x20);
 	std::copy(fault.begin(), fault.end(), bytes.begin() + 0x30);
+	const std::vector<uint8_t> store{0x48, 0x89, 0x01, 0xc3};
+	std::copy(store.begin(), store.end(), bytes.begin() + 0x38);
 	process.write_memory(code, bytes);
 	process.protect_memory(code, 4096, PROT_READ | PROT_EXEC);
 
@@ -160,6 +162,18 @@ static void held(const std::string &bootstrap)
 	process.return_api(77);
 	result = process.resume(timeout);
 	check(result.stop == raven::NativeStop::returned && result.value == 77, "a held task did not return the API's value");
+
+	// The debug registers stay with ptrace, taken for the moment they are set: a watched write stops the task, which goes on after it.
+	const auto watched = process.map_memory(4096, PROT_READ | PROT_WRITE);
+	process.watch_write(watched);
+	const std::array<uint64_t, 1> target{watched};
+	result = process.call(code + 0x38, target, timeout);
+	check(result.stop == raven::NativeStop::fault && result.signal == SIGTRAP && result.signal_code == TRAP_HWBKPT,
+		"a held task's watched write did not stop for the runtime");
+	check(status_field(guest, "TracerPid") == 0, "setting a held task's debug registers left it traced");
+	process.watch_write(0);
+	result = process.resume(timeout);
+	check(result.stop == raven::NativeStop::returned, "a held task did not go on after its watched write");
 
 	result = process.call(code + 0x30, arguments, timeout);
 	check(result.stop == raven::NativeStop::fault && result.signal == SIGSEGV, "a held task's fault did not stop for the runtime");

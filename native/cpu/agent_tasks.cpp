@@ -133,6 +133,37 @@ long resume(Task &task, enum __ptrace_request operation, void *data)
 	return 0;
 }
 
+// The debug registers have no counterpart in a signal frame: ptrace stays for them, as for any control of the task from outside. The
+// task, held in the handler, is taken for the one request and let go again; the registers stay set without a tracer, and a breakpoint
+// they raise reaches the handler as any other SIGTRAP.
+long controlled(Task &task, enum __ptrace_request operation, void *address, void *data)
+{
+	const auto offset = reinterpret_cast<uintptr_t>(address);
+	const auto first = offsetof(struct user, u_debugreg), last = first + sizeof(user::u_debugreg);
+	if (offset < first || offset >= last || offset % sizeof(unsigned long))
+		return failed(EIO);
+	if (ptrace(PTRACE_SEIZE, task.task, nullptr, nullptr) == -1)
+		return -1;
+	if (ptrace(PTRACE_INTERRUPT, task.task, nullptr, nullptr) == -1) {
+		const int error = errno;
+		ptrace(PTRACE_DETACH, task.task, nullptr, nullptr);
+		return failed(error);
+	}
+	int status = 0;
+	pid_t result;
+	while ((result = ::waitpid(task.task, &status, __WALL)) == -1 && errno == EINTR) {}
+	if (result != task.task || !WIFSTOPPED(status))
+		return failed(ESRCH);
+	// A signal that came first stops the task for its delivery; it goes back with the detach.
+	const int delivered = (status >> 16) == PTRACE_EVENT_STOP ? 0 : WSTOPSIG(status);
+	errno = 0;
+	const long answer = ptrace(operation, task.task, address, data);
+	const int error = errno;
+	ptrace(PTRACE_DETACH, task.task, nullptr, reinterpret_cast<void *>(uintptr_t(delivered)));
+	errno = error;
+	return answer;
+}
+
 long held_request(Task &task, enum __ptrace_request operation, void *address, void *data)
 {
 	switch (operation) {
@@ -266,8 +297,11 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 		*information = *static_cast<const siginfo_t *>(data);
 		return 0;
 	}
+	case PTRACE_PEEKUSER:
+	case PTRACE_POKEUSER:
+		return controlled(task, operation, address, data);
 	default:
-		// Debug registers, events and the rest have no counterpart in the agent yet.
+		// Events and the rest have no counterpart in the agent.
 		return failed(EIO);
 	}
 }
