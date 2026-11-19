@@ -28,7 +28,7 @@ struct GuestFeatures {
 // in a vCPU against the x86 CPU.
 constexpr GuestFeatures guest_features{
 	.sse3 = true, .ssse3 = true, .sse41 = true, .sse42 = true, .popcnt = true, .avx = true, .avx2 = true, .fma = true,
-	.bmi1 = true};
+	.bmi1 = true, .bmi2 = true};
 
 struct CpuidAnswer {
 	uint32_t eax, ebx, ecx, edx;
