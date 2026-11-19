@@ -3104,6 +3104,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_shell_folder_x${width} COMMAND raven --run-process --execution=native ${shell_folder_client})
                     set_tests_properties(native_shell_folder_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/shell-folder-prefix${width})
+                    set(ole_clipboard_client ${CMAKE_CURRENT_BINARY_DIR}/ole-clipboard${width}.exe)
+                    add_custom_command(OUTPUT ${ole_clipboard_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${ole_clipboard_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ole_clipboard_client.c -lole32 -luser32 -lkernel32 -luuid
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ole_clipboard_client.c VERBATIM)
+                    add_custom_target(ole_clipboard_fixture${width} ALL DEPENDS ${ole_clipboard_client})
+                    add_test(NAME native_ole_clipboard_x${width} COMMAND raven --run-process --execution=native ${ole_clipboard_client})
+                    set_tests_properties(native_ole_clipboard_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ole-clipboard-prefix${width})
                     set(snapshot_client ${CMAKE_CURRENT_BINARY_DIR}/thread-snapshot${width}.exe)
                     add_custom_command(OUTPUT ${snapshot_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
