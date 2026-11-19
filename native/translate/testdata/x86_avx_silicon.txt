@@ -1,12 +1,14 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44505811968, assembled with clang as here; dump sha256 28aa394685cacc237ca24c7a37fd3ed396d7f0918d4b4222fa5010879a1bf28b): the tests refuse the file when a family's cases or Rosetta's results change.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44515104032, assembled with clang as here; dump sha256 786376ef60dbae5339c2d71f227fddbf65d35ba30659b6f25fb5b9439117f3b4): every family, the bmi family first. The tests refuse the file when a family's cases or Rosetta's results change.
 # The avx2 broadcast family: an AMD EPYC 7763 (run 44508125477), which agrees with Rosetta in all 100. Earlier runs: an AMD EPYC 9V74 (run 44505099547, all but the gathers), AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 # The strings wide and shift counts families: an Intel Xeon Platinum 8573C (run 44510983438, dump sha256 d4f8cd7d19083f3abb868f89bc1bf99c912f504e0bcb4c43c46c41b8d891619e), no AMD runner came up; it agrees with Rosetta in all 400 strings wide cases and differs in 112 shift counts cases, where Rosetta shifts a quadword by the low 32 bits of its count.
 # The maskmovdqu family: an Intel Xeon Platinum 8573C (run 44511702231), which agrees with Rosetta in all 200 cases.
+# The strings wide, shift counts and maskmovdqu families, first held to an Intel Xeon Platinum 8573C (runs 44510983438, 44511702231), gave the same results on this EPYC. In the bmi family the EPYC differs from Rosetta only in flags the SDM leaves undefined (tzcnt, lzcnt, bextr), which the tests do not compare.
 corpus	approximations	cases=600	generated=52b71b7d5a377a5b	rosetta=9a08b5ad95d5336b
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	avx ops	cases=1500	generated=81ce8548266e5728	rosetta=560d169b35ec6d3f
 corpus	avx2	cases=1500	generated=86c9735094e92da1	rosetta=1090f7ead1dbb18a
 corpus	avx2 broadcast	cases=100	generated=a04d55a7e728038e	rosetta=e96e2210190d6cb2
+corpus	bmi	cases=3000	generated=04bfc1ef47a585ee	rosetta=2b89e75821201b4d
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
 corpus	fma	cases=1200	generated=3a80c4c9592e6b73	rosetta=117c23e7ae1b07d1
@@ -16,19 +18,19 @@ corpus	gathers	cases=800	generated=04d2d37981db1a83	rosetta=851ff72a0d26b7d4
 corpus	integer	cases=700	generated=e885abd03fce5654	rosetta=afd4fe34eb94de6d
 corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
 corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
+corpus	maskmovdqu	cases=200	generated=4baf2fbe239f158b	rosetta=2e5e51957d5af0d5
 corpus	moves	cases=500	generated=a0c679a6f55af097	rosetta=005e880bff9bde0c
 corpus	popcnt	cases=300	generated=3e25867f77cf2d61	rosetta=366972829bbc22b7
+corpus	shift counts	cases=400	generated=e0b1fc8f95b89fde	rosetta=a067d7f881cfb270
 corpus	shuffle	cases=400	generated=4d882c20282e375a	rosetta=9626d96c7c36edbd
 corpus	sse3	cases=500	generated=36aa17315fe8f5c7	rosetta=0dc0a19bdd9db3bf
 corpus	sse41	cases=1000	generated=4048e75bed7d65ca	rosetta=1cc0b362db2efc2c
 corpus	sse42	cases=400	generated=781c570d9b5d810b	rosetta=800b7b2bcc4b91d5
 corpus	ssse3	cases=500	generated=5fa57f159a9ca2a7	rosetta=45920946b54303f5
 corpus	strings	cases=1500	generated=906d7b01e821f9ec	rosetta=538a2627522d2948
+corpus	strings wide	cases=400	generated=725717f41caf6273	rosetta=902b01208d80b99f
 corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
 corpus	vex sse4	cases=1500	generated=e321b48b0d4415c8	rosetta=e582251adcae5d5b
-corpus	shift counts	cases=400	generated=e0b1fc8f95b89fde	rosetta=a067d7f881cfb270
-corpus	strings wide	cases=400	generated=725717f41caf6273	rosetta=902b01208d80b99f
-corpus	maskmovdqu	cases=200	generated=4baf2fbe239f158b	rosetta=2e5e51957d5af0d5
 6791	ptest xmm1, xmm13; setp al	rosetta=80c645334d3258df	r0=0043f636f4371926	flags=0000000000000000
 6794	ptest xmm4, xmm12; sete al	rosetta=2c52bce89b3b350c	flags=0000000000000000
 6795	ptest xmm2, xmm11; setb al	rosetta=9792b41f27724e57	flags=0000000000000000
@@ -833,3 +835,495 @@ corpus	maskmovdqu	cases=200	generated=4baf2fbe239f158b	rosetta=2e5e51957d5af0d5
 17381	vpsrlvq xmm6, xmm6, xmmword ptr [r15 + 32]	rosetta=1624ef28a7f902bf	ymm6=2100000000000000000000000000000000000000000000000000000000000000
 17383	vpsrlvq ymm11, ymm2, ymmword ptr [r15 + 128]	rosetta=6aad720cd0f676e8	ymm11=3f00000000000000000000000000000000000000000000000000000000000000
 17384	vpsrlvq ymm0, ymm0, ymm5	rosetta=d2a340c631ffd120	ymm0=0000000000000000000000000000000000000000000000000000000000000000
+17592	tzcnt r14d, r11d	rosetta=d980aa2a8ae099aa	flags=0108000000000000
+17605	bextr r14, r9, rdi	rosetta=edd97c3c2e1de9fd	flags=5400000000000000
+17609	lzcnt r10, rbx	rosetta=2ae89ab2d90995e3	flags=0008000000000000
+17611	tzcnt rsi, r11	rosetta=d2086c5caa038d94	flags=4000000000000000
+17613	lzcnt r10d, eax	rosetta=6469928896db402c	flags=0108000000000000
+17617	tzcnt rax, r11	rosetta=9eae18da4a5cc0fe	flags=0008000000000000
+17620	bextr r8, r14, r8	rosetta=955353954698db72	flags=5400000000000000
+17621	bextr r11, rsi, rcx	rosetta=1316831f79e6897d	flags=5400000000000000
+17637	lzcnt rbx, qword ptr [r15 + 108]	rosetta=b13fa1c5bc95095f	flags=4000000000000000
+17646	bextr ecx, esi, esi	rosetta=938f97850406c6d1	flags=5400000000000000
+17651	tzcnt rbp, rcx	rosetta=66faa6e679a15ec7	flags=0000000000000000
+17652	bextr r13, rsi, r11	rosetta=544249a70e558c35	flags=1400000000000000
+17655	bextr rsi, rbx, rbp	rosetta=a3dea85c48fd1b29	flags=5400000000000000
+17661	tzcnt rax, r9	rosetta=a0d53046c12f69b6	flags=0008000000000000
+17671	lzcnt r9d, ebp	rosetta=0ddbcafcc203326b	flags=4000000000000000
+17677	lzcnt r11, rdx	rosetta=f84eeb7827a599a2	flags=4008000000000000
+17682	bextr r11d, eax, r9d	rosetta=0669adf37c7be9f6	flags=5400000000000000
+17700	lzcnt r14d, r9d	rosetta=3222691586e3b48e	flags=4008000000000000
+17709	tzcnt r8, qword ptr [r15 + 180]	rosetta=02e04ec80073b118	flags=4008000000000000
+17720	tzcnt r8, rsi	rosetta=eb0ab19645ba2bcf	flags=4000000000000000
+17727	lzcnt ebp, dword ptr [r15 + 82]	rosetta=5554ef061b0feaf9	flags=0108000000000000
+17728	bextr edx, ebx, eax	rosetta=f7a6a1591559e97b	flags=5400000000000000
+17731	bextr r14, rcx, r11	rosetta=6eb1ab2bc3d9ffb8	flags=5400000000000000
+17763	tzcnt rsi, r12	rosetta=cdf0ae2095b8eb7f	flags=0008000000000000
+17779	tzcnt ebx, r12d	rosetta=12ac051800d6bd3c	flags=0008000000000000
+17790	bextr rbp, r8, r13	rosetta=37de42b4f07f03a4	flags=5400000000000000
+17792	bextr r12, qword ptr [r15 + 112], rdx	rosetta=966ab584291a9f30	flags=1000000000000000
+17802	bextr edi, edi, r10d	rosetta=586e7e11829f0169	flags=5400000000000000
+17803	tzcnt esi, r12d	rosetta=ec48faf7df1a4ebc	flags=4008000000000000
+17812	bextr rsi, qword ptr [r15 + 0], r10	rosetta=a503caddafc77356	flags=5400000000000000
+17818	bextr r9, qword ptr [r15 + 22], r9	rosetta=abea44dbaca6fad2	flags=5400000000000000
+17820	tzcnt r9d, dword ptr [r15 + 90]	rosetta=3e2e71043a477c28	flags=4008000000000000
+17830	bextr rbx, qword ptr [r15 + 179], r12	rosetta=1f1861b96da4b2c1	flags=5400000000000000
+17831	lzcnt rax, r12	rosetta=dfa5542ee04a8ef4	flags=0008000000000000
+17834	tzcnt rdx, r10	rosetta=05f233e9caf416d4	flags=0008000000000000
+17839	tzcnt eax, ebx	rosetta=590c8118129ea20d	flags=4008000000000000
+17840	lzcnt rsi, qword ptr [r15 + 62]	rosetta=fdfee23f0b8c5227	flags=4008000000000000
+17845	bextr r13d, ebp, eax	rosetta=9fb8704db22bd32f	flags=5400000000000000
+17852	tzcnt rax, r10	rosetta=499f81195c103b7d	flags=0008000000000000
+17878	tzcnt rbp, r14	rosetta=a15e15fff2f13b20	flags=4008000000000000
+17880	lzcnt r12d, r9d	rosetta=dc46040637b74654	flags=4000000000000000
+17881	bextr eax, r10d, r9d	rosetta=afd2379a249fec0d	flags=5400000000000000
+17891	lzcnt ebp, r10d	rosetta=55a25390e08e3c33	flags=4000000000000000
+17898	lzcnt r14d, dword ptr [r15 + 34]	rosetta=cd0a94118ade79f0	flags=4000000000000000
+17900	bextr ebp, r12d, ebp	rosetta=82966c92ed839b30	flags=5400000000000000
+17901	tzcnt r10, qword ptr [r15 + 167]	rosetta=9ed07a6f58041e17	flags=4008000000000000
+17905	lzcnt rbx, qword ptr [r15 + 166]	rosetta=fb20b3d563a5688d	flags=4000000000000000
+17910	bextr rdi, r12, rsi	rosetta=7e14cb058dae94a8	flags=5400000000000000
+17915	lzcnt esi, ebx	rosetta=ed6f028ae6508ffd	flags=0008000000000000
+17929	bextr r10d, eax, r10d	rosetta=a34f05dc4e0f7013	flags=5400000000000000
+17932	bextr r14d, edx, edi	rosetta=4c3f9a9926d79b6a	flags=5400000000000000
+17933	bextr edx, r14d, r12d	rosetta=45907228b51e5053	flags=5400000000000000
+17935	tzcnt r8d, edx	rosetta=f0a80e6f511358f4	flags=0008000000000000
+17942	tzcnt r12d, ebp	rosetta=0238916aa607b83d	flags=4000000000000000
+17949	tzcnt r8, rbp	rosetta=6bcba2d663adc8bf	flags=0008000000000000
+17965	lzcnt r10, rdi	rosetta=74d3f8d9fd2fea04	flags=0008000000000000
+17969	tzcnt r13, r10	rosetta=fc3aaf25887cc989	flags=4008000000000000
+17971	tzcnt r14d, eax	rosetta=8b6f41d0c3f6d57c	flags=4000000000000000
+17975	bextr r8d, ecx, ebp	rosetta=12d5ff98260f93d8	flags=5400000000000000
+17980	bextr rdx, qword ptr [r15 + 57], r9	rosetta=244e1d069ec29ba9	flags=5400000000000000
+17985	bextr rdi, rbp, rcx	rosetta=8b113011c7c4d145	flags=5400000000000000
+17988	tzcnt esi, r12d	rosetta=ccff4d519a8b7197	flags=4008000000000000
+17991	bextr r11d, ecx, ebp	rosetta=8f8292c7fc0926ee	flags=5400000000000000
+17999	lzcnt rdi, qword ptr [r15 + 102]	rosetta=6e726d8c7db54d6f	flags=4000000000000000
+18000	tzcnt r11, qword ptr [r15 + 106]	rosetta=98f012f5584127bf	flags=4000000000000000
+18002	bextr esi, eax, r13d	rosetta=2514202176c4fb97	flags=5400000000000000
+18012	bextr r11, qword ptr [r15 + 113], rsi	rosetta=f70dd961b093ddde	flags=1000000000000000
+18013	tzcnt r14, qword ptr [r15 + 93]	rosetta=4d90b8c41fa7db53	flags=0000000000000000
+18017	bextr esi, dword ptr [r15 + 143], r8d	rosetta=e3b6e24d73e9ab24	flags=1400000000000000
+18033	bextr r8d, r11d, eax	rosetta=47a851d0ed5dd516	flags=5400000000000000
+18038	bextr r8, rsi, r14	rosetta=86845917a6a0ecc9	flags=5400000000000000
+18039	lzcnt r13, qword ptr [r15 + 168]	rosetta=9772cb4e6f708dee	flags=4008000000000000
+18046	tzcnt rdi, r9	rosetta=bab76ce04d1dac77	flags=0008000000000000
+18047	lzcnt rcx, qword ptr [r15 + 141]	rosetta=181ad84acca0f187	flags=0008000000000000
+18053	bextr rdx, r8, r9	rosetta=6fc268608bd8db71	flags=1000000000000000
+18069	lzcnt rdi, rdx	rosetta=e92192bd15ba04a4	flags=0000000000000000
+18073	lzcnt r12d, dword ptr [r15 + 141]	rosetta=c8a7cb244087dad8	flags=0008000000000000
+18084	tzcnt rdi, qword ptr [r15 + 165]	rosetta=80cf222b7e91c838	flags=0008000000000000
+18087	lzcnt r12d, edx	rosetta=462cbc2a49e8662e	flags=4008000000000000
+18100	lzcnt eax, edx	rosetta=46f3edffccde63d2	flags=0000000000000000
+18105	tzcnt ebp, dword ptr [r15 + 76]	rosetta=e9a4f773560b8cbc	flags=0108000000000000
+18109	tzcnt r13, qword ptr [r15 + 73]	rosetta=9b6be99b343660f3	flags=4008000000000000
+18111	lzcnt rcx, rdi	rosetta=a006859f41402601	flags=0008000000000000
+18120	bextr r13, rcx, rsi	rosetta=ac749822040cead1	flags=5400000000000000
+18123	lzcnt edi, dword ptr [r15 + 46]	rosetta=14d2b582c1aceea8	flags=4000000000000000
+18132	bextr rdi, rdi, rbx	rosetta=235efd6d3553e52b	flags=5400000000000000
+18139	tzcnt rdi, r10	rosetta=5f69bb582acbcfb9	flags=4008000000000000
+18146	lzcnt r10d, esi	rosetta=6bf817e6e4ebdb54	flags=0008000000000000
+18148	bextr r14d, r11d, ebx	rosetta=c18a13a2226c9161	flags=5400000000000000
+18163	tzcnt rsi, qword ptr [r15 + 126]	rosetta=2f1c003d6e8fbcd0	flags=4000000000000000
+18173	lzcnt ebx, r8d	rosetta=41a48c9661499bcb	flags=0008000000000000
+18178	bextr rdx, r11, r9	rosetta=09c90b6f1058bb8e	flags=5400000000000000
+18180	bextr rsi, qword ptr [r15 + 72], r8	rosetta=245ddc265e505956	flags=5400000000000000
+18194	tzcnt r8, r10	rosetta=50d5b0ddf71133c2	flags=4000000000000000
+18195	lzcnt r13d, dword ptr [r15 + 12]	rosetta=a7d6f680430a9d24	flags=0108000000000000
+18196	tzcnt r12, qword ptr [r15 + 72]	rosetta=ad2a334527fe9182	flags=4000000000000000
+18198	tzcnt r12d, r12d	rosetta=707818f171b99905	flags=4000000000000000
+18209	lzcnt r11d, r9d	rosetta=9a456ce65573761d	flags=0000000000000000
+18215	lzcnt ebx, eax	rosetta=546b8cb709296c00	flags=0108000000000000
+18217	tzcnt r8, rcx	rosetta=e04e3399f4cfd493	flags=4000000000000000
+18221	bextr r13, qword ptr [r15 + 49], r14	rosetta=cff2b274fd261ed3	flags=5400000000000000
+18232	tzcnt ebp, r10d	rosetta=62370b2710065b29	flags=0008000000000000
+18234	bextr r13, r12, r12	rosetta=0696af778f3ac458	flags=5400000000000000
+18244	lzcnt ebx, esi	rosetta=7543c87fbb6c61ff	flags=0008000000000000
+18253	tzcnt r10, r12	rosetta=e8ab04f57f740ccc	flags=4008000000000000
+18259	lzcnt r14, qword ptr [r15 + 147]	rosetta=5b4bf94457053a0a	flags=4008000000000000
+18261	lzcnt rax, r13	rosetta=b184ab8fbed3602e	flags=4008000000000000
+18264	tzcnt r12, r9	rosetta=3a758b3ad3022e05	flags=0108000000000000
+18271	tzcnt edx, eax	rosetta=3e24bfed3bf079bb	flags=0000000000000000
+18273	tzcnt ecx, ebx	rosetta=b5afeeb04f711127	flags=4000000000000000
+18274	lzcnt edi, r11d	rosetta=a55d1a7e67b6daf0	flags=0008000000000000
+18285	lzcnt eax, dword ptr [r15 + 123]	rosetta=b20303194288a5d3	flags=0108000000000000
+18290	bextr r8d, ebp, r13d	rosetta=5ce482d2fd59ee1b	flags=5400000000000000
+18302	lzcnt rcx, r9	rosetta=6ee850bc0e946acf	flags=0008000000000000
+18307	tzcnt r8d, dword ptr [r15 + 119]	rosetta=113c69c211bec73c	flags=4008000000000000
+18309	bextr ebx, esi, ebx	rosetta=213a1484e6b773c6	flags=5400000000000000
+18311	lzcnt r13, qword ptr [r15 + 31]	rosetta=e468f206b19ee28c	flags=4000000000000000
+18316	lzcnt edx, edx	rosetta=e7aa2854c5d3d4dc	flags=0008000000000000
+18321	tzcnt r8, r13	rosetta=9d78aa0f30f4ca8c	flags=0008000000000000
+18326	tzcnt r9, rcx	rosetta=7036ac26ad47bc2d	flags=0008000000000000
+18332	tzcnt edx, r9d	rosetta=fd1cdb81eb478fc6	flags=0008000000000000
+18343	lzcnt eax, ebx	rosetta=db33e40734fb65c2	flags=0008000000000000
+18344	lzcnt ebp, ebp	rosetta=d928722eed2ad4b3	flags=0008000000000000
+18346	bextr ebx, dword ptr [r15 + 9], esi	rosetta=93263841b3e065e9	flags=5400000000000000
+18361	tzcnt r11d, ebx	rosetta=162ea0ee5504d67f	flags=4008000000000000
+18365	tzcnt ecx, ebp	rosetta=2983a229e17de13a	flags=0008000000000000
+18386	bextr edi, dword ptr [r15 + 13], ebp	rosetta=d9a464023ff149fa	flags=5400000000000000
+18396	tzcnt rsi, rbx	rosetta=32bc74c71848dadb	flags=4000000000000000
+18400	bextr r13, rbp, r13	rosetta=cbd529062b28e41e	flags=5400000000000000
+18401	bextr r10, rcx, r8	rosetta=80a4b62a597c9537	flags=5400000000000000
+18412	tzcnt rbp, qword ptr [r15 + 113]	rosetta=485d2de28c8d36c2	flags=4000000000000000
+18418	bextr esi, dword ptr [r15 + 188], edi	rosetta=f368e493a9f94e44	flags=5400000000000000
+18420	tzcnt rcx, rdi	rosetta=459554df2009b3a7	flags=0008000000000000
+18427	lzcnt r13, r11	rosetta=3e0d91e6c4ad6e35	flags=4000000000000000
+18444	lzcnt ecx, r10d	rosetta=f9f62916a46ff699	flags=0008000000000000
+18456	lzcnt r11d, ebp	rosetta=6f3ef44117796415	flags=4008000000000000
+18476	tzcnt r13, qword ptr [r15 + 36]	rosetta=a89093858f2b6b12	flags=0008000000000000
+18478	bextr r14, qword ptr [r15 + 11], rbp	rosetta=6cd65e8a3dc48298	flags=5400000000000000
+18482	tzcnt r9d, r10d	rosetta=bd48bbc88cab8ce1	flags=0008000000000000
+18485	tzcnt r11d, r11d	rosetta=f4d0658e60085bf9	flags=4000000000000000
+18491	tzcnt eax, ebx	rosetta=863f39d81d164fb2	flags=4000000000000000
+18497	lzcnt rcx, qword ptr [r15 + 78]	rosetta=7705c35fef54b603	flags=0008000000000000
+18516	bextr r14d, dword ptr [r15 + 79], ebp	rosetta=a9a747597d4f8f47	flags=5400000000000000
+18520	bextr edi, r14d, r9d	rosetta=a88c40f8691519f3	flags=5400000000000000
+18532	bextr rax, qword ptr [r15 + 109], r14	rosetta=3b24b6b9eb247d70	flags=5400000000000000
+18533	tzcnt rbx, rax	rosetta=71f0c3dde7850f61	flags=0008000000000000
+18534	lzcnt rbx, qword ptr [r15 + 39]	rosetta=e4155dc01faaac7f	flags=4000000000000000
+18543	lzcnt rdx, qword ptr [r15 + 7]	rosetta=62f9f7f3efeb5977	flags=0008000000000000
+18545	lzcnt r12d, ebp	rosetta=44e3380e52faa65c	flags=4000000000000000
+18557	bextr r10, rbp, rdx	rosetta=8a61d41317102e6a	flags=1000000000000000
+18564	lzcnt r8d, esi	rosetta=680561a7b94fc8df	flags=0008000000000000
+18573	bextr esi, esi, r10d	rosetta=4e15d646182f8202	flags=5400000000000000
+18584	lzcnt edx, dword ptr [r15 + 156]	rosetta=554e4d4d8524ae96	flags=0008000000000000
+18588	bextr r8, rbx, rax	rosetta=7e9792d8c8ef7d14	flags=5400000000000000
+18603	bextr ecx, r8d, ecx	rosetta=feefc6908eecd2da	flags=5400000000000000
+18613	tzcnt r14, qword ptr [r15 + 161]	rosetta=806c5dcaed22f5f3	flags=4000000000000000
+18614	bextr r13d, ebx, ecx	rosetta=ffdb2966a1854c1c	flags=1400000000000000
+18619	tzcnt rdi, rbx	rosetta=220704124ffcb4f8	flags=0008000000000000
+18627	tzcnt rbp, qword ptr [r15 + 55]	rosetta=62243079b43c8722	flags=0008000000000000
+18633	tzcnt r13, r11	rosetta=c5d5a40e3f1d81bc	flags=4000000000000000
+18640	tzcnt r9d, r11d	rosetta=819ca3618c674de7	flags=4000000000000000
+18646	bextr r11, r9, r8	rosetta=054ee33a782c7535	flags=5400000000000000
+18653	bextr rdx, r14, r11	rosetta=6dde9a15dee38e0b	flags=5400000000000000
+18659	bextr r10d, ebx, r14d	rosetta=f2af7ff4c44e8d04	flags=5400000000000000
+18664	tzcnt edi, esi	rosetta=917fe8c8d1c0ef8c	flags=4000000000000000
+18678	tzcnt rdi, r8	rosetta=9c47b14223c22ea4	flags=4008000000000000
+18681	lzcnt ecx, r14d	rosetta=da0e11f4460be3ed	flags=0008000000000000
+18694	lzcnt rdi, r14	rosetta=88d62707e26b8a93	flags=0008000000000000
+18697	tzcnt r8, rdx	rosetta=11289d658f72052c	flags=4008000000000000
+18699	tzcnt r9, rcx	rosetta=1bfade8b8765731b	flags=4008000000000000
+18701	tzcnt r8, rdi	rosetta=99c3cfc93546c732	flags=4008000000000000
+18706	tzcnt rsi, r11	rosetta=d0dbb25cd059df15	flags=4000000000000000
+18709	bextr ebp, edx, r8d	rosetta=85dee94491f9bee6	flags=5400000000000000
+18710	bextr rsi, rbx, rax	rosetta=c058c87d5e26b1de	flags=5400000000000000
+18716	tzcnt r12d, edi	rosetta=e695a959d04eb017	flags=4000000000000000
+18724	tzcnt r14d, ecx	rosetta=d2b0cf1a206d0541	flags=0000000000000000
+18735	lzcnt r14, qword ptr [r15 + 12]	rosetta=3e01e9fd35033df2	flags=0008000000000000
+18738	tzcnt r11, r13	rosetta=2b2ed05010a676bd	flags=0000000000000000
+18767	tzcnt r10, r9	rosetta=f34f18b369031c72	flags=4000000000000000
+18774	bextr rbp, qword ptr [r15 + 163], r10	rosetta=c6fcacaf54035ef5	flags=5400000000000000
+18775	bextr ebp, dword ptr [r15 + 50], edx	rosetta=9ef564f78ed0169f	flags=5400000000000000
+18782	bextr r8d, dword ptr [r15 + 103], edi	rosetta=593025fbc92896f1	flags=5400000000000000
+18783	bextr rbp, r14, rbp	rosetta=bbf6f5c4806cc074	flags=5400000000000000
+18784	lzcnt rcx, r11	rosetta=8a5a716fb70ca323	flags=4008000000000000
+18787	tzcnt r8d, dword ptr [r15 + 167]	rosetta=0235616ddb1dee59	flags=0008000000000000
+18789	lzcnt rsi, qword ptr [r15 + 75]	rosetta=3194c646876fc4ea	flags=0008000000000000
+18795	tzcnt r14, qword ptr [r15 + 180]	rosetta=d12ebbe7e714dc9f	flags=4000000000000000
+18796	bextr edi, r11d, r9d	rosetta=99de6298f1108f47	flags=5400000000000000
+18799	bextr r14d, r9d, r13d	rosetta=079b1ed203b99162	flags=5400000000000000
+18802	lzcnt rdi, rdi	rosetta=6ea68fb735dd27c4	flags=0008000000000000
+18820	bextr rbp, r13, rcx	rosetta=9d93d20e9f134512	flags=5400000000000000
+18824	bextr r12, qword ptr [r15 + 172], rax	rosetta=123c974e2a94b1d9	flags=5400000000000000
+18833	bextr r12, r14, r12	rosetta=f973a3a3b66d036d	flags=1400000000000000
+18839	tzcnt rsi, qword ptr [r15 + 162]	rosetta=372abbe9c7256c69	flags=0000000000000000
+18844	tzcnt rsi, rsi	rosetta=e0686ba291e50fb2	flags=0008000000000000
+18848	tzcnt r12d, r14d	rosetta=62b57a0e10138864	flags=4000000000000000
+18855	bextr rcx, rbp, rdx	rosetta=85abcf57328c257f	flags=5400000000000000
+18864	tzcnt r9, rsi	rosetta=17dcf17330d12b27	flags=0008000000000000
+18868	lzcnt rbp, rbp	rosetta=cfe183bc4ba279b3	flags=4000000000000000
+18870	tzcnt r12, r13	rosetta=47986b059320dcb3	flags=0008000000000000
+18871	tzcnt r9, rcx	rosetta=c557dbcf78848aa9	flags=4000000000000000
+18875	bextr r14d, r14d, edi	rosetta=d9bd8cba96b3c29e	flags=5400000000000000
+18878	lzcnt r14d, dword ptr [r15 + 30]	rosetta=c3f92ae34ae75df0	flags=0008000000000000
+18885	bextr r8d, edi, r14d	rosetta=b578424f50153225	flags=5400000000000000
+18895	tzcnt rdi, qword ptr [r15 + 56]	rosetta=0d8f9cbaeb51cf64	flags=0008000000000000
+18898	lzcnt r14d, ebx	rosetta=e929a3cef519b3b7	flags=4000000000000000
+18912	tzcnt r13, rdx	rosetta=d5b25ffe9a4f9e8a	flags=0000000000000000
+18915	bextr rdi, r14, rcx	rosetta=8bf0653d71de010b	flags=5400000000000000
+18917	tzcnt r10, qword ptr [r15 + 107]	rosetta=3b1ec3b82f0f590d	flags=0000000000000000
+18921	lzcnt rcx, r8	rosetta=d6b02ee6903d8357	flags=4008000000000000
+18925	lzcnt rbx, rbx	rosetta=eaaf4972ce871677	flags=0008000000000000
+18931	tzcnt r8d, r12d	rosetta=41d7c2cc3aac8e70	flags=4000000000000000
+18932	lzcnt rcx, qword ptr [r15 + 155]	rosetta=ee6e9746bec39d44	flags=0008000000000000
+18933	tzcnt esi, r8d	rosetta=ed593d0708f8564f	flags=0000000000000000
+18934	bextr eax, eax, ebx	rosetta=6c2cd191cc1388cf	flags=5400000000000000
+18936	tzcnt r13d, r10d	rosetta=1e998fa9936643d5	flags=4000000000000000
+18937	bextr r14, qword ptr [r15 + 164], rdi	rosetta=91a78c458c1372ca	flags=5400000000000000
+18941	lzcnt r10, qword ptr [r15 + 169]	rosetta=c9948b0aea8e6dc7	flags=4008000000000000
+18959	bextr rdi, r12, rbx	rosetta=6c30e84f544214c6	flags=5400000000000000
+18962	bextr r14d, edx, r10d	rosetta=06edaaa3f339dcd5	flags=5400000000000000
+19009	tzcnt rbx, rbx	rosetta=fed55c326431f134	flags=0000000000000000
+19012	lzcnt r11, r10	rosetta=3b93f342459fb268	flags=4000000000000000
+19051	bextr r8d, ebx, ecx	rosetta=1ae2321e08e31727	flags=5400000000000000
+19055	bextr r12d, dword ptr [r15 + 40], edi	rosetta=8007b9ad51d9b917	flags=5400000000000000
+19060	lzcnt r10, qword ptr [r15 + 167]	rosetta=269ba353a676d963	flags=0000000000000000
+19063	lzcnt r10d, edx	rosetta=dcecf0926eaf0f8f	flags=0008000000000000
+19069	bextr rsi, qword ptr [r15 + 14], rcx	rosetta=deda42f19be46e8b	flags=5400000000000000
+19080	bextr edx, r8d, r13d	rosetta=726c35c6f82c6069	flags=5400000000000000
+19091	tzcnt ebp, dword ptr [r15 + 149]	rosetta=963563b0d4d35085	flags=0008000000000000
+19092	tzcnt rbx, qword ptr [r15 + 93]	rosetta=728a6e13d015163e	flags=4008000000000000
+19099	tzcnt rbx, qword ptr [r15 + 177]	rosetta=6eba5a54d97397db	flags=4000000000000000
+19104	lzcnt rax, r13	rosetta=1b10c001fd7eef2e	flags=0008000000000000
+19106	lzcnt r13, r14	rosetta=9fb948864af44dfa	flags=4008000000000000
+19121	bextr rbx, r14, rsi	rosetta=bafb9857141e1e87	flags=5400000000000000
+19128	lzcnt r13, rsi	rosetta=352b39bf0a5e70e1	flags=4008000000000000
+19140	lzcnt r14d, dword ptr [r15 + 54]	rosetta=4f1a7c9d0e801525	flags=0008000000000000
+19158	bextr ecx, r9d, r9d	rosetta=e76f9f9115953fbe	flags=5400000000000000
+19169	bextr r10, qword ptr [r15 + 61], r11	rosetta=3424560429ebb8da	flags=5400000000000000
+19180	lzcnt rbp, qword ptr [r15 + 89]	rosetta=1f81f7719582f42e	flags=0008000000000000
+19182	tzcnt rbx, qword ptr [r15 + 139]	rosetta=03668eb52dd18507	flags=0108000000000000
+19188	tzcnt rbp, qword ptr [r15 + 182]	rosetta=578bf33bcb00ac30	flags=0008000000000000
+19190	bextr esi, r9d, ebp	rosetta=d4df3d48da2499be	flags=5400000000000000
+19196	bextr r12, rdx, rsi	rosetta=3f65ad5e33ffee84	flags=1400000000000000
+19199	tzcnt rax, r12	rosetta=f147d1e2604a1d32	flags=0000000000000000
+19203	bextr ecx, dword ptr [r15 + 126], r12d	rosetta=be82b4087e057930	flags=5400000000000000
+19209	bextr r9d, dword ptr [r15 + 36], ebx	rosetta=54d8b18ba67d4065	flags=5400000000000000
+19222	tzcnt rdx, r8	rosetta=356fc7bb6d12b748	flags=0008000000000000
+19224	tzcnt rdi, r12	rosetta=7da8892f41b90cfa	flags=0008000000000000
+19225	lzcnt rcx, rsi	rosetta=4b6e5f4a7cf34ded	flags=4000000000000000
+19228	bextr r13d, dword ptr [r15 + 88], ebp	rosetta=227e2f87fd8f466b	flags=5400000000000000
+19230	tzcnt r11, r11	rosetta=d3b3e915060d41d1	flags=4000000000000000
+19239	bextr ebx, dword ptr [r15 + 50], ebp	rosetta=dcfada9de5ebd2cc	flags=1400000000000000
+19244	tzcnt rbx, r10	rosetta=cf5c4ec5822f9063	flags=0008000000000000
+19249	tzcnt rdx, rcx	rosetta=a7bee75fc574aed1	flags=0008000000000000
+19250	tzcnt r9, r14	rosetta=a36d35e2643742db	flags=4000000000000000
+19255	lzcnt r14d, eax	rosetta=e0437f3cac444839	flags=0008000000000000
+19256	tzcnt rbp, rbx	rosetta=5ebbed52cc03a5fb	flags=0000000000000000
+19258	tzcnt r12d, dword ptr [r15 + 146]	rosetta=3568e4d8f02fbafb	flags=0108000000000000
+19262	tzcnt rdi, qword ptr [r15 + 38]	rosetta=b428f08447e7e081	flags=4000000000000000
+19265	tzcnt r8, rsi	rosetta=fe850a730c91a90a	flags=4008000000000000
+19269	lzcnt rcx, r12	rosetta=19175c49e78c00ed	flags=0008000000000000
+19279	tzcnt r13, rax	rosetta=001e889a4dfeb8d6	flags=4008000000000000
+19281	tzcnt r12, r13	rosetta=f88a9e2e10da9400	flags=4000000000000000
+19284	lzcnt r14d, ebx	rosetta=80e38eff34e03142	flags=4008000000000000
+19303	tzcnt r9, rdx	rosetta=8e1b99ee075da844	flags=4008000000000000
+19306	tzcnt rbp, rax	rosetta=56e66396f3574d80	flags=4000000000000000
+19307	tzcnt rax, r14	rosetta=67840b1e13d9a8ab	flags=0000000000000000
+19309	lzcnt r13d, ebx	rosetta=5dfaf478a313ba29	flags=4000000000000000
+19315	bextr rcx, rax, r9	rosetta=516ca309350e3cd2	flags=5400000000000000
+19318	lzcnt esi, r10d	rosetta=911f9004b926bf32	flags=4000000000000000
+19328	tzcnt rcx, qword ptr [r15 + 68]	rosetta=f83b8c5a5a0cc161	flags=0008000000000000
+19337	tzcnt ecx, dword ptr [r15 + 131]	rosetta=e3993aa47aed5a11	flags=0108000000000000
+19339	tzcnt r14, rax	rosetta=eeb15c73ee2da267	flags=0000000000000000
+19343	lzcnt r12, qword ptr [r15 + 22]	rosetta=f19b42b636ac01cc	flags=0008000000000000
+19347	lzcnt r10d, dword ptr [r15 + 77]	rosetta=abcfdc8654d9aee6	flags=4008000000000000
+19348	bextr r13d, r9d, r10d	rosetta=7454353c367ffd49	flags=5400000000000000
+19354	bextr rsi, r8, r9	rosetta=fbc535b8aa9024ba	flags=5400000000000000
+19371	tzcnt r11d, dword ptr [r15 + 85]	rosetta=a8ebd1f80e154ba4	flags=4000000000000000
+19387	bextr ebp, r9d, esi	rosetta=46724b9f1a9a5e41	flags=5400000000000000
+19389	tzcnt r10d, r11d	rosetta=0ac679f45e63e8d7	flags=0108000000000000
+19391	bextr r10d, r11d, r11d	rosetta=d249a8291ed70a9d	flags=1000000000000000
+19401	tzcnt r9, r14	rosetta=00752fb6c9bf5c5a	flags=0008000000000000
+19406	lzcnt rbp, rbp	rosetta=46ac3a52e6fa548e	flags=0008000000000000
+19410	bextr r8, qword ptr [r15 + 127], r10	rosetta=0c7b5a601bfeec59	flags=5400000000000000
+19421	bextr r11, rsi, r8	rosetta=7aacb60b72c40143	flags=5400000000000000
+19433	lzcnt edi, dword ptr [r15 + 183]	rosetta=2c1d2f0ad588c359	flags=0000000000000000
+19438	tzcnt r10, rdx	rosetta=812b572a9c0034dd	flags=4000000000000000
+19440	tzcnt r8d, r11d	rosetta=d293b5dd245dd934	flags=4008000000000000
+19442	bextr r8d, ecx, r14d	rosetta=cd1ea0b3e4ea4b96	flags=5400000000000000
+19447	lzcnt rbp, rbp	rosetta=da8445d284c3abdb	flags=4000000000000000
+19461	lzcnt rcx, rdx	rosetta=15c27c589f907ec6	flags=4008000000000000
+19473	bextr rbx, qword ptr [r15 + 170], r12	rosetta=8d3ee8a28d5517d7	flags=5400000000000000
+19484	tzcnt ecx, r13d	rosetta=0627852686ddea73	flags=4008000000000000
+19489	bextr r10, r13, rcx	rosetta=11b574a4db525505	flags=5400000000000000
+19491	bextr r13, rbx, r10	rosetta=2442af3545c86259	flags=5400000000000000
+19493	lzcnt r9d, edi	rosetta=b0bdb550656d02d6	flags=4008000000000000
+19494	tzcnt edx, edx	rosetta=79ad8caab010eb50	flags=4008000000000000
+19495	lzcnt rax, r8	rosetta=65657978003f2ba1	flags=0108000000000000
+19498	bextr edx, dword ptr [r15 + 179], r9d	rosetta=5542c721e035cf4e	flags=5400000000000000
+19501	tzcnt rax, rdx	rosetta=d30d7cbd60537a12	flags=0008000000000000
+19511	tzcnt edi, edx	rosetta=f30fa96bf2934507	flags=4000000000000000
+19513	bextr ecx, ebp, ebp	rosetta=d7409d61b479ebd5	flags=5400000000000000
+19519	lzcnt rcx, r8	rosetta=074b2f7a8494c924	flags=4008000000000000
+19524	lzcnt r9, qword ptr [r15 + 37]	rosetta=d7310e12589761a5	flags=0008000000000000
+19526	bextr rsi, qword ptr [r15 + 114], r11	rosetta=7fbd8abe2dd9cac8	flags=5400000000000000
+19530	lzcnt r8d, edi	rosetta=ecbb4807f54ee787	flags=0008000000000000
+19539	lzcnt rbp, rdx	rosetta=6bf82ab3cba7419e	flags=0008000000000000
+19543	bextr r8, rdi, rbx	rosetta=eb9c117f8704d7e2	flags=5400000000000000
+19548	tzcnt r14, rbx	rosetta=7a667c06fec71e06	flags=4008000000000000
+19549	bextr r13d, r10d, r9d	rosetta=139331ea43f062ee	flags=5400000000000000
+19555	bextr rbx, rbp, rcx	rosetta=e28d9f2398ba9211	flags=5400000000000000
+19560	lzcnt rcx, rax	rosetta=7b63372be392b220	flags=0008000000000000
+19562	bextr r13, qword ptr [r15 + 176], r9	rosetta=aca422ddc31d977a	flags=5400000000000000
+19563	lzcnt r13, r10	rosetta=e0d3b6bdfc3f47f2	flags=0008000000000000
+19568	bextr esi, dword ptr [r15 + 168], r12d	rosetta=dec79104da479116	flags=5400000000000000
+19571	lzcnt esi, r14d	rosetta=4155da4da264d75f	flags=4008000000000000
+19575	bextr r9d, ecx, ecx	rosetta=7ee7585ad0e2ff60	flags=5400000000000000
+19579	bextr ebp, edx, eax	rosetta=f86af5364787b44a	flags=5400000000000000
+19583	lzcnt edx, ebx	rosetta=b75bec1ebf1df5b9	flags=0000000000000000
+19589	tzcnt r9d, r13d	rosetta=c5d57862098c2629	flags=0008000000000000
+19593	tzcnt ebp, dword ptr [r15 + 185]	rosetta=9eb493204fb0c06e	flags=4000000000000000
+19599	lzcnt rdi, r11	rosetta=b3e11f66ac23aa3b	flags=0008000000000000
+19615	bextr r12d, eax, r14d	rosetta=c3c82704b88fdfa1	flags=5400000000000000
+19616	lzcnt r9d, r8d	rosetta=9fcb0df7ac0911ad	flags=0000000000000000
+19624	lzcnt r14d, edi	rosetta=86af8f3bc5d62750	flags=4008000000000000
+19625	bextr rbp, r8, rax	rosetta=3e6a6a0f93284389	flags=5400000000000000
+19630	tzcnt r8d, ecx	rosetta=58c80fed7ed53535	flags=4008000000000000
+19631	bextr rsi, qword ptr [r15 + 82], r8	rosetta=e7ddc79d4c066cce	flags=5400000000000000
+19634	lzcnt ebx, r11d	rosetta=b6abf65a0d6625e1	flags=4008000000000000
+19640	tzcnt rsi, r14	rosetta=4f4364e01a63c794	flags=0008000000000000
+19646	lzcnt r14, rbp	rosetta=3cd5617345b115a7	flags=0000000000000000
+19651	bextr r14, qword ptr [r15 + 35], rbx	rosetta=1e4cade0ceac55bd	flags=5400000000000000
+19654	bextr r8, r9, rax	rosetta=4386882f86daf21e	flags=5400000000000000
+19663	tzcnt r13d, edi	rosetta=90a219d1ac3189e0	flags=4000000000000000
+19672	bextr r8, qword ptr [r15 + 146], r10	rosetta=bf4ae2e36c47e3cf	flags=5400000000000000
+19676	bextr eax, ecx, r10d	rosetta=9d270eb20bd90de8	flags=5400000000000000
+19679	tzcnt rsi, rdi	rosetta=fe86f789a970148c	flags=0108000000000000
+19682	tzcnt rsi, rcx	rosetta=48bd92940bf44f92	flags=4008000000000000
+19687	tzcnt r11, rdi	rosetta=42cb177406db2a85	flags=4008000000000000
+19689	tzcnt rdx, qword ptr [r15 + 47]	rosetta=8c9d1de18f775961	flags=0008000000000000
+19692	lzcnt rdi, r11	rosetta=9ac6a029ebab8e14	flags=4000000000000000
+19693	bextr r12d, ebx, r13d	rosetta=75cd05ce9c0f6c93	flags=5400000000000000
+19718	tzcnt rdi, r11	rosetta=939d6c3544b70f99	flags=0008000000000000
+19721	bextr rdi, r8, rdi	rosetta=dfe969fe4290b9de	flags=1000000000000000
+19722	tzcnt r14, rdi	rosetta=eb930114b4adcd0c	flags=4000000000000000
+19725	bextr rsi, rbx, r10	rosetta=1014df2eb19edbc4	flags=5400000000000000
+19733	tzcnt r14d, r12d	rosetta=e69bb2e5e1f4c8bd	flags=4000000000000000
+19740	lzcnt rax, r12	rosetta=c90639cda5426be1	flags=4000000000000000
+19743	tzcnt r12d, r10d	rosetta=c13aeb30ae93d057	flags=0008000000000000
+19746	lzcnt rcx, r11	rosetta=442534eca776143c	flags=4008000000000000
+19751	bextr rbx, qword ptr [r15 + 114], r12	rosetta=2b1ede50d5000efd	flags=1400000000000000
+19761	tzcnt ebp, r9d	rosetta=4abaee9c73511424	flags=4008000000000000
+19762	lzcnt r13d, ebx	rosetta=d6070f631a021f0e	flags=4000000000000000
+19765	bextr rsi, r10, r11	rosetta=dd260e896fae43a6	flags=5400000000000000
+19775	bextr eax, edx, ecx	rosetta=9c1907e6aed36644	flags=5400000000000000
+19779	lzcnt r9, r9	rosetta=99feea0594d518c0	flags=0008000000000000
+19781	bextr rsi, qword ptr [r15 + 113], r13	rosetta=a5cf382d752ebe99	flags=1400000000000000
+19782	bextr rcx, r13, r8	rosetta=25d69fd5e16c021b	flags=5400000000000000
+19799	tzcnt r13, r13	rosetta=204f3192c8f2d903	flags=4008000000000000
+19818	tzcnt ebx, r12d	rosetta=5378ce6bd28310a0	flags=0000000000000000
+19827	tzcnt ebx, r13d	rosetta=c72ef0ccfb10d96e	flags=4008000000000000
+19835	lzcnt rcx, r14	rosetta=4e823ea0b688c314	flags=4000000000000000
+19839	lzcnt r11d, eax	rosetta=78ddd2d7437a1640	flags=0008000000000000
+19852	bextr rsi, r11, rbx	rosetta=9f15d60676da9f59	flags=5400000000000000
+19859	lzcnt r8, rax	rosetta=1393f99142a2c2b8	flags=0000000000000000
+19866	tzcnt r10, r12	rosetta=9f81f16df6dff8b5	flags=4000000000000000
+19867	lzcnt r10, qword ptr [r15 + 49]	rosetta=64259ebd3fd0a1ff	flags=0008000000000000
+19881	tzcnt edi, dword ptr [r15 + 4]	rosetta=fb7daa4ad06520c0	flags=0108000000000000
+19888	bextr r14d, dword ptr [r15 + 13], r8d	rosetta=35f7e2e2e3c879bf	flags=5400000000000000
+19892	tzcnt rbp, rbp	rosetta=8aabb2588f222a0a	flags=4000000000000000
+19896	bextr rbx, rdi, r12	rosetta=5ad520bb4fd123e2	flags=5400000000000000
+19899	bextr r9, r10, r10	rosetta=1cdf89aff0c0c7f7	flags=5400000000000000
+19905	bextr r11d, ecx, r10d	rosetta=8e3cfb36b7e01188	flags=5400000000000000
+19911	lzcnt esi, dword ptr [r15 + 39]	rosetta=c41149124bdce11a	flags=0008000000000000
+19912	bextr r10, rdx, r13	rosetta=86fe588178f1d1bf	flags=5400000000000000
+19916	lzcnt rdx, rax	rosetta=70030b27970df80b	flags=4008000000000000
+19918	lzcnt ebp, dword ptr [r15 + 64]	rosetta=8358929536944fb5	flags=4008000000000000
+19921	bextr esi, r10d, ecx	rosetta=cb107aba0e9cc901	flags=5400000000000000
+19928	tzcnt ecx, r14d	rosetta=0d79c7b3d8b23cc9	flags=4000000000000000
+19932	tzcnt r9d, ebx	rosetta=423da2abe4daedd4	flags=0008000000000000
+19946	tzcnt rbx, rax	rosetta=2a62b2c9aef1b7ed	flags=4000000000000000
+19949	bextr ecx, r9d, ecx	rosetta=27db061235c6f94a	flags=5400000000000000
+19958	bextr eax, ebx, ebx	rosetta=90cc37b856a78f2b	flags=5400000000000000
+19959	lzcnt rbp, qword ptr [r15 + 96]	rosetta=86dffc08174ec677	flags=0000000000000000
+19965	tzcnt rcx, r9	rosetta=288c283cd0ab794d	flags=4000000000000000
+19985	lzcnt r9d, r8d	rosetta=c0d79d5bd802165a	flags=4008000000000000
+19997	lzcnt rdi, r13	rosetta=e19e21cd1a7e050a	flags=0008000000000000
+19998	lzcnt ebp, r8d	rosetta=945c0cc3e939d75b	flags=0000000000000000
+20002	tzcnt edi, r10d	rosetta=673617a3edd91a05	flags=4000000000000000
+20006	tzcnt r13d, r14d	rosetta=5888e01abca4f318	flags=4000000000000000
+20007	lzcnt rdi, r10	rosetta=1090c698f0ebac15	flags=0008000000000000
+20010	lzcnt rdx, rsi	rosetta=c5fd2937bb10ed13	flags=4008000000000000
+20011	tzcnt edi, dword ptr [r15 + 121]	rosetta=5ff4c90e4e29c25e	flags=0008000000000000
+20013	lzcnt ebx, r9d	rosetta=4685c9a92763b46d	flags=4000000000000000
+20025	lzcnt r9d, dword ptr [r15 + 151]	rosetta=6ad55737aabc5619	flags=4008000000000000
+20045	lzcnt rax, r8	rosetta=79f45fd60eac5ff5	flags=0008000000000000
+20046	lzcnt r8d, edx	rosetta=eef9ea28485751c7	flags=0008000000000000
+20048	bextr rax, rbp, rsi	rosetta=ede3aca55e697f5d	flags=5400000000000000
+20052	tzcnt r9, rbx	rosetta=2b82f094f3db54f9	flags=4000000000000000
+20065	lzcnt rax, rdx	rosetta=7792de004dc9c8a6	flags=0000000000000000
+20066	tzcnt r10, r13	rosetta=7a719595b7335f73	flags=4000000000000000
+20073	bextr rdi, qword ptr [r15 + 0], r13	rosetta=5db18b539da26994	flags=5400000000000000
+20081	tzcnt r12d, dword ptr [r15 + 102]	rosetta=72c6cf3f51a22119	flags=4000000000000000
+20096	bextr ebx, r12d, eax	rosetta=654a12f27a054f50	flags=5400000000000000
+20097	lzcnt rdi, rbp	rosetta=906b4f91eb5dde9c	flags=0008000000000000
+20102	lzcnt r13, rbp	rosetta=ae0d22e0efa57b14	flags=0008000000000000
+20127	tzcnt r12d, ebx	rosetta=397dc78755406988	flags=0008000000000000
+20129	lzcnt eax, ebp	rosetta=9cc9521a012893c7	flags=4000000000000000
+20130	tzcnt eax, edx	rosetta=174d6e99280ddeb5	flags=4000000000000000
+20132	lzcnt r9, r13	rosetta=0466f7ce05ace4b6	flags=0000000000000000
+20146	lzcnt edx, dword ptr [r15 + 1]	rosetta=02133a5a9892b594	flags=4000000000000000
+20147	bextr r14d, dword ptr [r15 + 186], ebx	rosetta=6907ea4e826037ec	flags=5400000000000000
+20155	bextr ebx, r9d, edx	rosetta=e05b90d0e006006a	flags=5400000000000000
+20164	tzcnt r13d, r13d	rosetta=f33c6692d6e43a73	flags=0008000000000000
+20171	tzcnt esi, dword ptr [r15 + 98]	rosetta=0748f7a53fae89d1	flags=0108000000000000
+20185	tzcnt ebp, r12d	rosetta=ec4c9f1e2eba0a0f	flags=4000000000000000
+20192	tzcnt rax, rcx	rosetta=10e54451cb066fa5	flags=4000000000000000
+20194	lzcnt rbp, qword ptr [r15 + 26]	rosetta=3778d0d7445857aa	flags=0008000000000000
+20198	bextr r9d, eax, edx	rosetta=4032223bde6aa873	flags=5400000000000000
+20200	bextr r14d, eax, ebx	rosetta=b4f5ed90da1b9780	flags=5400000000000000
+20204	bextr edi, ebx, edx	rosetta=07b509dff2b74ace	flags=5400000000000000
+20207	lzcnt rdx, qword ptr [r15 + 5]	rosetta=c1fceb4d68521724	flags=4008000000000000
+20208	tzcnt r13, qword ptr [r15 + 147]	rosetta=45ce743dd9791d71	flags=4000000000000000
+20214	tzcnt r14, rcx	rosetta=c70814912f1f6784	flags=0008000000000000
+20220	bextr ebx, dword ptr [r15 + 63], esi	rosetta=8cd0e135d1c05ea8	flags=5400000000000000
+20221	lzcnt r9d, dword ptr [r15 + 140]	rosetta=fc5222cbfd5f8d1f	flags=0008000000000000
+20240	bextr r14, rbp, rcx	rosetta=931ff0d79b377107	flags=5400000000000000
+20250	lzcnt rsi, rcx	rosetta=790df799cb0998c8	flags=0008000000000000
+20256	lzcnt rax, r14	rosetta=a75a063bbf75048c	flags=4008000000000000
+20258	bextr eax, dword ptr [r15 + 46], ebx	rosetta=93ac1865b75e2024	flags=5400000000000000
+20274	bextr rdx, rbp, rbp	rosetta=6bdf0345590657d4	flags=5400000000000000
+20276	lzcnt r12d, dword ptr [r15 + 103]	rosetta=dd37878132cb56fb	flags=4008000000000000
+20277	tzcnt eax, edi	rosetta=cad3a1ba03e32492	flags=4008000000000000
+20280	lzcnt ecx, r10d	rosetta=a6b018577c2acfa7	flags=0008000000000000
+20291	tzcnt rcx, qword ptr [r15 + 73]	rosetta=a98deaa73fac5e30	flags=4008000000000000
+20294	lzcnt r8d, ecx	rosetta=09e18e64b58b6a88	flags=0008000000000000
+20297	bextr rsi, r13, r13	rosetta=e2c8a396db3b65cb	flags=5400000000000000
+20298	lzcnt ecx, dword ptr [r15 + 138]	rosetta=1fa8db327bc31544	flags=4008000000000000
+20303	tzcnt r8d, r13d	rosetta=8b801410cdbb971f	flags=0008000000000000
+20317	lzcnt r12, qword ptr [r15 + 45]	rosetta=4d8cdaec230351c8	flags=0008000000000000
+20350	bextr esi, dword ptr [r15 + 125], eax	rosetta=d73542d03800868e	flags=5400000000000000
+20354	bextr r10, rbp, r8	rosetta=f53db71529348a82	flags=5400000000000000
+20355	tzcnt r10d, dword ptr [r15 + 51]	rosetta=ea37f8e8545f7f83	flags=4008000000000000
+20360	bextr edi, r12d, ebx	rosetta=1d81515380591b82	flags=5400000000000000
+20362	tzcnt esi, r9d	rosetta=465aa74593db27de	flags=4008000000000000
+20371	tzcnt edi, r12d	rosetta=beda479c8134bb4d	flags=4000000000000000
+20378	tzcnt r8d, dword ptr [r15 + 105]	rosetta=794bd65294b3b192	flags=0108000000000000
+20384	bextr r8, qword ptr [r15 + 51], rdx	rosetta=1a4ad8bc3d5aac3d	flags=1000000000000000
+20391	tzcnt rbx, r11	rosetta=b5b42b2415f52358	flags=0008000000000000
+20396	bextr r13d, r11d, ebp	rosetta=764c4262589dae5b	flags=5400000000000000
+20398	tzcnt r13, qword ptr [r15 + 173]	rosetta=033935d6cea2bac5	flags=4008000000000000
+20401	bextr rsi, r13, r11	rosetta=0d59dcc7dd4f1c8a	flags=5400000000000000
+20405	lzcnt rax, qword ptr [r15 + 132]	rosetta=90d20e3af1bda10f	flags=4008000000000000
+20414	bextr r14d, r8d, r12d	rosetta=87d5756db2e003f0	flags=5400000000000000
+20422	tzcnt r11, qword ptr [r15 + 151]	rosetta=5c33f5db30177fc0	flags=0108000000000000
+20431	bextr r10d, dword ptr [r15 + 83], r11d	rosetta=9c4904da46e61c73	flags=5400000000000000
+20435	lzcnt r8d, edi	rosetta=f22a05228759ef12	flags=4000000000000000
+20436	bextr esi, dword ptr [r15 + 73], r9d	rosetta=b89946f7d8681486	flags=5400000000000000
+20441	tzcnt rcx, r10	rosetta=e1bbab0e7927996d	flags=4008000000000000
+20445	tzcnt r11d, r14d	rosetta=2839a538cd02f929	flags=0008000000000000
+20448	bextr r11d, dword ptr [r15 + 116], ecx	rosetta=2b055d88ecfabb01	flags=5400000000000000
+20450	lzcnt ebx, edx	rosetta=dfbc280ed7b4c80f	flags=0000000000000000
+20451	bextr r11d, r10d, r9d	rosetta=b316b32149b3203d	flags=5400000000000000
+20455	bextr ebx, dword ptr [r15 + 184], r12d	rosetta=42ea8ff7fd299610	flags=5400000000000000
+20458	lzcnt r11d, eax	rosetta=4e281022356d6aaa	flags=4000000000000000
+20459	bextr edx, dword ptr [r15 + 166], r8d	rosetta=11969d4530d9cabf	flags=5400000000000000
+20472	tzcnt rdx, rcx	rosetta=d220b0cc72c9080a	flags=0008000000000000
+20473	tzcnt r9d, r11d	rosetta=186cf45aacbbc435	flags=4008000000000000
+20476	lzcnt edx, edi	rosetta=163ec95eee36993a	flags=0008000000000000
+20486	lzcnt r14d, dword ptr [r15 + 13]	rosetta=8555775dd42baf65	flags=4008000000000000
+20487	bextr r10, qword ptr [r15 + 9], r12	rosetta=d5d742be292a41f1	flags=5400000000000000
+20492	bextr r9d, dword ptr [r15 + 187], ebx	rosetta=e2bed237847a1ad3	flags=5400000000000000
+20494	tzcnt r12d, r12d	rosetta=66ff0bd6692bc3ba	flags=0008000000000000
+20500	lzcnt rsi, rsi	rosetta=4c48c84e0b6a71e4	flags=0008000000000000
+20504	tzcnt r8, qword ptr [r15 + 183]	rosetta=bd3563035b6e5a92	flags=4000000000000000
+20511	tzcnt rbp, qword ptr [r15 + 112]	rosetta=014e2fb8f850cd1b	flags=0000000000000000
+20517	tzcnt ebp, dword ptr [r15 + 80]	rosetta=d80f8f2233a1d867	flags=4000000000000000
+20518	tzcnt r9, r11	rosetta=7936460493298002	flags=4000000000000000
+20521	lzcnt rdi, rdx	rosetta=5f7332b43ec6c4f9	flags=0008000000000000
+20526	lzcnt r13d, dword ptr [r15 + 38]	rosetta=20392969258545b7	flags=0008000000000000
+20541	lzcnt r12, qword ptr [r15 + 118]	rosetta=1196cc2ab5f19935	flags=4000000000000000
+20548	bextr r9d, esi, ecx	rosetta=1b6d8745005ab3e0	flags=5400000000000000
+20554	tzcnt esi, dword ptr [r15 + 68]	rosetta=dca862444c78e220	flags=4008000000000000
+20559	bextr r13, r13, rsi	rosetta=38a55cf59aeb3795	flags=1400000000000000
+20560	tzcnt r11d, r9d	rosetta=150a056298b994dd	flags=0108000000000000
+20562	bextr rax, qword ptr [r15 + 58], r13	rosetta=9e9b4679d5b78e8a	flags=5400000000000000
+20568	lzcnt r13, r13	rosetta=cc6fec54484b25c2	flags=0008000000000000
+20569	lzcnt rdx, rsi	rosetta=b0e1851e4a6ebbc3	flags=4008000000000000
+20574	lzcnt rdi, qword ptr [r15 + 23]	rosetta=cfbbaf921baba89a	flags=0008000000000000
+20582	lzcnt ebx, ecx	rosetta=e3fbef42f6b543f5	flags=0008000000000000
+20584	bextr r14d, r9d, edx	rosetta=0db30fa84e216f30	flags=5400000000000000
+20585	bextr rbx, r10, r11	rosetta=9ecd724cf9b257d5	flags=5400000000000000
