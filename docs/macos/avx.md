@@ -366,8 +366,8 @@ of Notepad++'s VEX code, linearly over `.text` (PROVEN, `x86_decoder_test` on a 
 work, `960 VEX instructions, 895 translated (93.2%)` (`526afbb4`); after it `958 translated (99.8%); without: shlx 2`; with BMI2
 now `960 VEX instructions, 960 translated (100.0%)` (PROVEN). The 2 shlx sit in a routine that the CRT's AVX2 level reaches
 without testing BMI2 (open items); its 200 instructions now all translate. Over every instruction, linearly (data decoded as code
-included), `1218553 instructions translated of 1224528`; the most frequent left are bt 1023, imul 821, bts 777, adc 567 (16-bit
-or other forms the translator refuses), mul 320 and rol 281 (PROVEN, `563241f6`; which of them are reachable was not counted). Its legacy SSE and SSE2 are 40832 of 40832 translated, its
+included), `1218553 instructions translated of 1224528`; the most frequent left are bt 1023, imul 821, bts 777,
+adc 567, mul 320 and rol 281 (PROVEN, `563241f6`; which forms of them are refused, and which are reachable, was not counted). Its legacy SSE and SSE2 are 40832 of 40832 translated, its
 SSE4.2 string compares too. Running Notepad++ under the translator was not done: it needs the PE loaded with its imports by the
 port (NOT verified).
 
