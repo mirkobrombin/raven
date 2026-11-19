@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <fstream>
 #include <cstdlib>
+#include <cstring>
+#include <signal.h>
+#include <sys/user.h>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -103,6 +106,64 @@ static void agent_mode(const std::string &bootstrap, raven::NativeMode mode)
 	check(!process.read_alone(code, &byte, 1), "memory the runtime released is still mapped");
 }
 
+// With RAVEN_AGENT_HOLD as well the guest's task leaves ptrace: its calls, system calls, breakpoints and faults stop it in the agent's
+// handler, and the runtime handles each stop as it handled a traced one.
+static void held(const std::string &bootstrap)
+{
+	setenv("RAVEN_AGENT", "1", 1);
+	setenv("RAVEN_AGENT_HOLD", "1", 1);
+	const std::array<raven::LoadedImage *, 0> images{};
+	const auto timeout = std::chrono::seconds(2);
+	raven::NativeProcess process(images, bootstrap, timeout, raven::NativeMode::x64);
+	unsetenv("RAVEN_AGENT");
+	unsetenv("RAVEN_AGENT_HOLD");
+	const pid_t guest = pid_t(status_field(process.agent_task(), "Tgid"));
+	check(status_field(guest, "TracerPid") == 0, "the guest's task is still traced");
+
+	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
+	// 0x000: the argument plus one. 0x010: Linux exit, which must stop for the runtime. 0x020: a breakpoint the runtime serves as an API.
+	// 0x030: a read of address zero.
+	std::vector<uint8_t> bytes(0x40, 0xcc);
+	const std::vector<uint8_t> add{0x48, 0x8d, 0x41, 0x01, 0xc3}, exit{0xb8, 60, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05, 0xc3},
+		trap{0xcc, 0xc3}, fault{0x8b, 0x04, 0x25, 0, 0, 0, 0, 0xc3};
+	std::copy(add.begin(), add.end(), bytes.begin());
+	std::copy(exit.begin(), exit.end(), bytes.begin() + 0x10);
+	std::copy(trap.begin(), trap.end(), bytes.begin() + 0x20);
+	std::copy(fault.begin(), fault.end(), bytes.begin() + 0x30);
+	process.write_memory(code, bytes);
+	process.protect_memory(code, 4096, PROT_READ | PROT_EXEC);
+
+	const std::array<uint64_t, 1> arguments{41};
+	auto result = process.call(code, arguments, timeout);
+	check(result.stop == raven::NativeStop::returned && result.value == 42, "a held task did not run its code");
+
+	result = process.call(code + 0x10, arguments, timeout);
+	check(result.stop == raven::NativeStop::syscall && result.value == 60, "a held task's system call did not stop for the runtime");
+	const auto before = process.context();
+	const auto mapped = process.map_memory(4096, PROT_READ | PROT_WRITE);
+	process.unmap_memory(mapped);
+	const auto after = process.context();
+	check(std::memcmp(&after.registers, &before.registers, sizeof(user_regs_struct)) == 0,
+		"the runtime's memory calls changed a held task's stopped registers");
+	auto response = before;
+	response.registers.rax = 88;
+	response.registers.orig_rax = uint64_t(-1);
+	process.set_context(response);
+	result = process.resume(timeout);
+	check(result.stop == raven::NativeStop::returned && result.value == 88, "a held task did not go on with the runtime's answer to its call");
+
+	process.add_api_trap(code + 0x20);
+	result = process.call(code + 0x20, arguments, timeout);
+	check(result.stop == raven::NativeStop::api, "a held task's breakpoint did not stop as an API");
+	process.return_api(77);
+	result = process.resume(timeout);
+	check(result.stop == raven::NativeStop::returned && result.value == 77, "a held task did not return the API's value");
+
+	result = process.call(code + 0x30, arguments, timeout);
+	check(result.stop == raven::NativeStop::fault && result.signal == SIGSEGV, "a held task's fault did not stop for the runtime");
+	check(status_field(guest, "TracerPid") == 0, "the guest's task was traced again");
+}
+
 int main(int argc, char **argv)
 {
 	try {
@@ -112,8 +173,9 @@ int main(int argc, char **argv)
 		agent(argv[1], raven::NativeMode::x86);
 		agent_mode(argv[1], raven::NativeMode::x64);
 		agent_mode(argv[1], raven::NativeMode::x86);
+		held(argv[1]);
 		std::cout << "Agent service thread in x64/x86 guests: untraced, in the guest's thread group, its calls and memory the guest's, "
-			"and the runtime's memory calls under RAVEN_AGENT\n";
+			"the runtime's memory calls under RAVEN_AGENT, and a guest task out of ptrace under RAVEN_AGENT_HOLD\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';

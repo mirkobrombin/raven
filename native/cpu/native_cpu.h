@@ -98,6 +98,8 @@ public:
 	// The agent (see agent.h): its code copied into the guest and its service thread started there, untraced, in the thread group of
 	// the task that started it. The guest's own threads stay traced until they move to the agent.
 	void start_agent();
+	// Takes the current task out of ptrace: from now on it stops in the agent's handler, and the runtime drives it over its block.
+	void hand_to_agent();
 	// The service thread's task, 0 before start_agent.
 	pid_t agent_task() const;
 	// How many of the runtime's system calls the service thread made in place of a stopped task.

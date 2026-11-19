@@ -7,15 +7,16 @@
 
 // The registers of a thread held in the agent, as the runtime reads them from a stopped task: the interrupted context the kernel left
 // on the thread's alternate stack, put in the shape PTRACE_GETREGS gives. What a signal frame does not carry comes from what the runtime
-// already knows of the thread: the bases of FS and GS, and the data segments of a 32-bit thread.
+// already knows of the thread: the bases of FS and GS and the data, FS and GS selectors, which a 64-bit frame leaves out or writes as 0.
 
 namespace raven::agent {
 
 struct Segments {
-	uint64_t fs_base = 0, gs_base = 0, ds = 0, es = 0;
+	uint64_t fs_base = 0, gs_base = 0, ds = 0, es = 0, fs = 0, gs = 0;
 };
 
-// The selectors the frame packs into one word: CS, GS, FS and then SS, which the kernel saves when UC_SIGCONTEXT_SS is set.
+// The selectors the frame packs into one word: CS, GS, FS and then SS, which the kernel saves when UC_SIGCONTEXT_SS is set (GS and FS
+// it writes as 0).
 inline uint16_t selector(const ucontext_t &context, unsigned index)
 {
 	return uint16_t(uint64_t(context.uc_mcontext.gregs[REG_CSGSFS]) >> (16 * index));
@@ -51,16 +52,17 @@ inline user_regs_struct registers(const ucontext_t &context, const Segments &seg
 	r.gs_base = segments.gs_base;
 	r.ds = segments.ds;
 	r.es = segments.es;
-	r.fs = selector(context, 2);
-	r.gs = selector(context, 1);
+	r.fs = segments.fs;
+	r.gs = segments.gs;
 	return r;
 }
 
-// Puts registers back into the frame, which rt_sigreturn then loads. A frame cannot change the bases of FS and GS or the data
-// segments: a change to them is refused (false) and nothing is written.
+// Puts registers back into the frame, which rt_sigreturn then loads. A frame cannot change the segment bases or the data, FS and GS
+// selectors: a change to them is refused (false) and nothing is written.
 inline bool set_registers(ucontext_t &context, const user_regs_struct &r, const Segments &segments)
 {
-	if (r.fs_base != segments.fs_base || r.gs_base != segments.gs_base || r.ds != segments.ds || r.es != segments.es)
+	if (r.fs_base != segments.fs_base || r.gs_base != segments.gs_base || r.ds != segments.ds || r.es != segments.es || r.fs != segments.fs ||
+		r.gs != segments.gs)
 		return false;
 	auto *g = context.uc_mcontext.gregs;
 	g[REG_R15] = int64_t(r.r15);
