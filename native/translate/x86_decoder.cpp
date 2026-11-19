@@ -795,6 +795,18 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 		result.operand_size = size;
 		result.rep = result.repne = false;
 	}
+	if (result.mnemonic == Mnemonic::other && legacy_map && (opcode == 0xbc || opcode == 0xbd) && !prefixes.rep && !prefixes.repne) {
+		const uint8_t size = rex_w ? 8 : prefixes.operand16 ? 2 : 4;
+		Operand source = result.operands[0];
+		if (modrm.mod == 3)
+			source = gpr(modrm.rm, size, rex_b);
+		else
+			source.size = size;
+		result.mnemonic = opcode == 0xbc ? Mnemonic::bsf : Mnemonic::bsr;
+		result.operands = {gpr(modrm.reg, size, rex_r), source};
+		result.count = 2;
+		result.operand_size = size;
+	}
 	// SSE4.2 on general registers: crc32 (F2 0F 38 F0 and F1) and popcnt (F3 0F B8).
 	if (result.mnemonic == Mnemonic::other && ((escape == 1 && prefixes.repne && !prefixes.rep && (escape_opcode == 0xf0 ||
 		escape_opcode == 0xf1)) || (legacy_map && opcode == 0xb8 && prefixes.rep && !prefixes.repne))) {
@@ -908,6 +920,30 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 	if (full_opcode == 0x90 && !rex_b) {
 		result.mnemonic = prefixes.rep ? Mnemonic::other : Mnemonic::nop;
 		result.count = 0;
+	}
+	if (full_opcode == 0x90 && !rex_b && prefixes.rep && !prefixes.repne && reader.at == 2) {
+		result.mnemonic = Mnemonic::pause;
+		result.count = 0;
+		result.rep = false;
+	}
+	// cld, std, pushfq and popfq without prefixes.
+	if (reader.at == 1 && (full_opcode == 0xfc || full_opcode == 0xfd || full_opcode == 0x9c || full_opcode == 0x9d)) {
+		static constexpr Mnemonic plain[] = {Mnemonic::pushf, Mnemonic::popf, Mnemonic::cld, Mnemonic::std_};
+		result.mnemonic = plain[(full_opcode >= 0xfc ? 2 : 0) + (full_opcode & 1)];
+		result.count = 0;
+		result.operand_size = 8;
+	}
+	// stos and movs with rep or none, 66 or REX.W (48) for the word, doubleword and quadword forms, and no other prefix.
+	if (full_opcode == 0xaa || full_opcode == 0xab || full_opcode == 0xa4 || full_opcode == 0xa5) {
+		const bool bytes_form = full_opcode == 0xaa || full_opcode == 0xa4;
+		const unsigned expected = 1u + prefixes.rep + prefixes.operand16 + (prefixes.rex != 0);
+		if (!prefixes.repne && !prefixes.lock && !prefixes.address32 && prefixes.segment == Segment::none && reader.at == expected &&
+			(prefixes.rex == 0 || (prefixes.rex == 0x48 && !bytes_form && !prefixes.operand16)) && !(bytes_form && prefixes.operand16)) {
+			result.mnemonic = full_opcode >= 0xaa ? Mnemonic::stos : Mnemonic::movs;
+			result.operand_size = bytes_form ? 1 : prefixes.rex ? 8 : prefixes.operand16 ? 2 : 4;
+			result.count = 0;
+			result.rep = prefixes.rep;
+		}
 	}
 	// cpuid (0F A2) and xgetbv (0F 01 D0), without prefixes: the runtime answers both (cpuid.h).
 	if (full_opcode == 0x0fa2 && reader.at == 2) {
@@ -1641,6 +1677,23 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::bts: name = "bts"; break;
 	case Mnemonic::btr: name = "btr"; break;
 	case Mnemonic::btc: name = "btc"; break;
+	case Mnemonic::bsf: name = "bsf"; break;
+	case Mnemonic::bsr: name = "bsr"; break;
+	case Mnemonic::pause: return "pause";
+	case Mnemonic::cld: return "cld";
+	case Mnemonic::std_: return "std";
+	case Mnemonic::pushf: return "pushfq";
+	case Mnemonic::popf: return "popfq";
+	case Mnemonic::stos: case Mnemonic::movs: {
+		const unsigned size = instruction.operand_size;
+		static const char *const suffix[] = {"", "b", "w", "", "d", "", "", "", "q"};
+		static const char *const ptr[] = {"", "byte", "word", "", "dword", "", "", "", "qword"};
+		static const char *const accumulator[] = {"", "al", "ax", "", "eax", "", "", "", "rax"};
+		std::string text = instruction.rep ? "rep " : "";
+		if (instruction.mnemonic == Mnemonic::stos)
+			return text + "stos" + suffix[size] + " " + ptr[size] + " ptr es:[rdi], " + accumulator[size];
+		return text + "movs" + suffix[size] + " " + ptr[size] + " ptr es:[rdi], " + ptr[size] + " ptr [rsi]";
+	}
 	case Mnemonic::xsave: name = instruction.operand_size == 8 ? "xsave64" : "xsave"; break;
 	case Mnemonic::andn: name = "andn"; break;
 	case Mnemonic::bextr: name = "bextr"; break;

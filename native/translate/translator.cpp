@@ -108,6 +108,8 @@ FlagEffect flag_effect(const Instruction &instruction)
 		return {all_flags, 0};
 	// CF from the bit; ZF stays, OF, SF, AF and PF are undefined.
 	case Mnemonic::bt: case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: return {all_flags & ~ZF, 0};
+	case Mnemonic::bsf: case Mnemonic::bsr: case Mnemonic::popf: return {all_flags, 0};
+	case Mnemonic::pushf: return {0, all_flags};
 	default: return {};
 	}
 }
@@ -173,6 +175,8 @@ bool avx_supported(const Instruction &instruction)
 bool supported(const Instruction &instruction)
 {
 	// cs:, ds:, es: and ss: change nothing in 64-bit mode (compilers pad with cs: nops); fs: and gs: add their base.
+	if (instruction.mnemonic == Mnemonic::stos || instruction.mnemonic == Mnemonic::movs)
+		return !instruction.repne && instruction.address_size == 8;
 	if (instruction.rep || instruction.repne)
 		return false;
 	if (instruction.vex)
@@ -253,6 +257,9 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::imul: return !instruction.lock && (instruction.count == 1 || size >= 4);
 	case Mnemonic::mul: case Mnemonic::div: case Mnemonic::idiv: return !instruction.lock;
 	case Mnemonic::bt: return !instruction.lock;
+	case Mnemonic::bsf: case Mnemonic::bsr: case Mnemonic::pause: case Mnemonic::cld: case Mnemonic::std_: case Mnemonic::pushf:
+	case Mnemonic::popf:
+		return !instruction.lock;
 	case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: return !instruction.lock || first.kind == OperandKind::mem;
 	// int 0x29 is __fastfail; other vectors are system calls of other systems.
 	case Mnemonic::int_: return !instruction.lock && first.value == 0x29;
@@ -419,6 +426,10 @@ private:
 	void divide(const Instruction &instruction);
 	void bit_test(const Instruction &instruction);
 	void locked(const Instruction &instruction);
+	void bit_scan(const Instruction &instruction);
+	void flags_to_stack();
+	void flags_from_stack();
+	void string(const Instruction &instruction);
 	// Branches to split when the size bytes at base cross a 16-byte boundary, where an LSE atomic faults (FEAT_LSE2 covers unaligned
 	// accesses inside 16 bytes only). The out-of-line forms there are a plain load and store between full barriers: right for one
 	// thread, not atomic against another (x86 locks the bus for a split lock). NZCV is left alone.
@@ -1701,6 +1712,132 @@ void BlockTranslator::bit_test(const Instruction &instruction)
 	default: a.eor(s2, s2, s3); break;
 	}
 	byte_access(s2, address_register, true, target);
+}
+
+void BlockTranslator::bit_scan(const Instruction &instruction)
+{
+	// bsf and bsr: ZF set for a zero source and the destination left whole as it was (not even a 32-bit one's upper half cleared);
+	// else ZF clear and the index of the lowest or highest set bit. CF, OF, SF, AF and PF are undefined (ands leaves C and V clear).
+	const Operand &target = instruction.operands[0];
+	const unsigned size = target.size;
+	const bool is64 = size == 8;
+	const uint32_t sf = is64 ? 0x80000000u : 0;
+	const uint8_t value = read(instruction.operands[1], s1, false);
+	if (instruction.mnemonic == Mnemonic::bsf) {
+		a.emit(0x5ac00000u | sf | uint32_t(value) << 5 | s2); // rbit
+		a.emit(0x5ac01000u | sf | uint32_t(s2) << 5 | s2); // clz
+	} else {
+		a.emit(0x5ac01000u | sf | uint32_t(value) << 5 | s2); // clz
+		a.mov_imm(s3, is64 ? 63 : 31);
+		a.sub(s2, s3, s2);
+	}
+	if (flags_wanted(all_flags)) {
+		a.and_(a64::zr, value, value, true, true);
+		carry_inverted = false;
+	}
+	const Assembler::Label zero = a.label();
+	a.cbz(value, zero);
+	write(target, s2);
+	a.bind(zero);
+}
+
+void BlockTranslator::flags_to_stack()
+{
+	// pushfq: CF, PF, AF, ZF, SF and OF from the lazy form, DF from CpuState, and bits 1 and 9 (IF) set, as a Windows thread sees.
+	normalize_carry();
+	a.cset(s0, Cond::cc, true);
+	a.eor(s1, parity_register, parity_register, Shift::lsr, 4, false);
+	a.eor(s1, s1, s1, Shift::lsr, 2, false);
+	a.eor(s1, s1, s1, Shift::lsr, 1, false);
+	a.and_imm(s1, s1, 1, false);
+	a.eor_imm(s1, s1, 1, false);
+	a.orr(s0, s0, s1, Shift::lsl, 2);
+	a.eor(s1, parity_register, adjust_register);
+	a.ubfx(s1, s1, 4, 1);
+	a.orr(s0, s0, s1, Shift::lsl, 4);
+	a.cset(s1, Cond::eq, true);
+	a.orr(s0, s0, s1, Shift::lsl, 6);
+	a.cset(s1, Cond::mi, true);
+	a.orr(s0, s0, s1, Shift::lsl, 7);
+	a.cset(s1, Cond::vs, true);
+	a.orr(s0, s0, s1, Shift::lsl, 11);
+	a.ldr(s1, state_register, state_offset::direction, 4);
+	a.orr(s0, s0, s1, Shift::lsl, 10);
+	a.orr_imm(s0, s0, 0x2);
+	a.orr_imm(s0, s0, 0x200);
+	push_value(s0);
+}
+
+void BlockTranslator::flags_from_stack()
+{
+	// popfq: the six status flags into NZCV (C inverted) and the parity and adjust sources, DF into CpuState; the other bits (TF,
+	// IF, AC and the rest) are not kept.
+	pop_value(s0);
+	a.ubfx(s1, s0, 7, 1);
+	a.lsl_imm(s1, s1, 31);
+	a.ubfx(s2, s0, 6, 1);
+	a.orr(s1, s1, s2, Shift::lsl, 30);
+	a.ubfx(s2, s0, 0, 1);
+	a.eor_imm(s2, s2, 1);
+	a.orr(s1, s1, s2, Shift::lsl, 29);
+	a.ubfx(s2, s0, 11, 1);
+	a.orr(s1, s1, s2, Shift::lsl, 28);
+	a.msr_nzcv(s1);
+	carry_inverted = true;
+	a.ubfx(s2, s0, 2, 1);
+	a.eor_imm(parity_register, s2, 1);
+	a.ubfx(s2, s0, 4, 1);
+	a.eor(adjust_register, parity_register, s2, Shift::lsl, 4);
+	a.ubfx(s2, s0, 10, 1);
+	a.str(s2, state_register, state_offset::direction, 4);
+}
+
+void BlockTranslator::string(const Instruction &instruction)
+{
+	// stos and movs, one element or RCX of them with rep, forward or backward as DF says. RDI, RSI and RCX move after each element,
+	// so a fault part way leaves them where x86 does. The elements are plain accesses, which x86 allows a fast string operation
+	// (its stores may complete out of order); a barrier before orders them after earlier stores and, for movs, one after orders
+	// later loads after theirs. No flag changes: the loop tests with cbz and cbnz.
+	const unsigned size = instruction.operand_size;
+	const bool movs = instruction.mnemonic == Mnemonic::movs;
+	const bool rep = instruction.rep;
+	const uint8_t rdi_host = host_register[rdi], rsi_host = host_register[rsi], rcx_host = host_register[rcx];
+	const bool order = options.ordering != MemoryOrdering::hardware;
+	const Assembler::Label done = a.label(), backward = a.label();
+	if (order) {
+		a.dmb(a64::Barrier::ishst);
+		++stats.barriers;
+	}
+	if (rep)
+		a.cbz(rcx_host, done);
+	a.ldr(s3, state_register, state_offset::direction, 4);
+	a.cbnz(s3, backward, false);
+	for (const bool down : {false, true}) {
+		if (down)
+			a.bind(backward);
+		const Assembler::Label loop = a.label();
+		a.bind(loop);
+		uint8_t value = host_register[rax];
+		if (movs) {
+			a.ldr(s1, rsi_host, 0, size);
+			value = s1;
+		}
+		a.str(value, rdi_host, 0, size);
+		down ? a.sub_imm(rdi_host, rdi_host, size) : a.add_imm(rdi_host, rdi_host, size);
+		if (movs)
+			down ? a.sub_imm(rsi_host, rsi_host, size) : a.add_imm(rsi_host, rsi_host, size);
+		if (rep) {
+			a.sub_imm(rcx_host, rcx_host, 1);
+			a.cbnz(rcx_host, loop);
+		}
+		if (!down)
+			a.b(done);
+	}
+	a.bind(done);
+	if (order && movs) {
+		a.dmb(a64::Barrier::ishld);
+		++stats.barriers;
+	}
 }
 
 void BlockTranslator::exchange(const Instruction &instruction)
@@ -3884,6 +4021,13 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::imul: case Mnemonic::mul: multiply(instruction); return;
 	case Mnemonic::div: case Mnemonic::idiv: divide(instruction); return;
 	case Mnemonic::bt: case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: bit_test(instruction); return;
+	case Mnemonic::bsf: case Mnemonic::bsr: bit_scan(instruction); return;
+	case Mnemonic::pause: a.emit(0xd503203fu); return; // yield
+	case Mnemonic::cld: a.str(a64::zr, state_register, state_offset::direction, 4); return;
+	case Mnemonic::std_: a.mov_imm(s0, 1, false); a.str(s0, state_register, state_offset::direction, 4); return;
+	case Mnemonic::pushf: flags_to_stack(); return;
+	case Mnemonic::popf: flags_from_stack(); return;
+	case Mnemonic::stos: case Mnemonic::movs: string(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
 	case Mnemonic::movq: case Mnemonic::movd: case Mnemonic::movups: case Mnemonic::movupd: case Mnemonic::movaps:
 	case Mnemonic::movapd: case Mnemonic::movdqa: case Mnemonic::movdqu: case Mnemonic::movntps: case Mnemonic::movntpd:

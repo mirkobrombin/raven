@@ -70,6 +70,11 @@ enum class Mnemonic : uint16_t {
 	popcnt,
 	// bt, bts, btr and btc (0F A3, AB, B3, BB with a register bit index, 0F BA /4-/7 with an imm8).
 	bt, bts, btr, btc,
+	// bsf and bsr (0F BC and BD without F3), pause (F3 90), cld, std, pushfq and popfq.
+	bsf, bsr, pause, cld, std_, pushf, popf,
+	// stos and movs (AA, AB, A4, A5), with rep or without: operand_size is the element; no operands (RDI, RSI, RCX and RAX are
+	// implicit).
+	stos, movs,
 	// xsave and xrstor (0F AE /4 and /5, memory only); operand_size 8 for their REX.W forms, xsave64 and xrstor64.
 	xsave,
 	xrstor,

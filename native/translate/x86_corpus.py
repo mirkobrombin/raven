@@ -70,7 +70,7 @@ def immediate(rng, bits, signed=True):
 def instance(rng):
     size = rng.choice([8, 16, 32, 64])
     vsize = rng.choice([16, 32, 64])
-    kind = rng.randrange(25)
+    kind = rng.randrange(26)
     if kind < 5:
         op = rng.choice(ARITHMETIC)
         form = rng.randrange(4)
@@ -146,6 +146,15 @@ def instance(rng):
         op = rng.choice(["cmpxchg", "xadd"])
         lock = rng.choice(["", "lock "])
         return f"{lock}{op} {memory(rng, size)}, {register(rng, size)}"
+    if kind == 25:
+        form = rng.randrange(4)
+        if form == 0:
+            return f"{rng.choice(['bsf', 'bsr'])} {register(rng, vsize)}, {rm(rng, vsize)}"
+        if form == 1:
+            return rng.choice(["pause", "cld", "std", "pushfq", "popfq"])
+        rep = rng.choice(["", "rep "])
+        suffix = rng.choice(["b", "w", "d", "q"])
+        return f"{rep}{rng.choice(['stos', 'movs'])}{suffix}"
     if kind == 24:
         op = rng.choice(["bt", "bts", "btr", "btc"])
         size = rng.choice([16, 32, 64])
