@@ -250,6 +250,13 @@ raven_hvf_sign(hvf_locked_test)
 add_test(NAME hvf_locked COMMAND hvf_locked_test)
 set_tests_properties(hvf_locked PROPERTIES TIMEOUT 60)
 
+# rep stos and rep movs faulting part way: RCX, RDI and RSI show the progress, as on x86.
+add_executable(hvf_string_fault_test hvf_string_fault_test.cpp)
+target_link_libraries(hvf_string_fault_test PRIVATE raven_hvf)
+raven_hvf_sign(hvf_string_fault_test)
+add_test(NAME hvf_string_fault COMMAND hvf_string_fault_test)
+set_tests_properties(hvf_string_fault PROPERTIES TIMEOUT 30)
+
 # The AVX oracle's cases in a vCPU, with the same silicon results as translate_x86_avx.
 add_executable(hvf_avx_test hvf_avx_test.cpp)
 target_link_libraries(hvf_avx_test PRIVATE raven_hvf)

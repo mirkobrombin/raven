@@ -102,7 +102,8 @@ struct CpuState {
 	// MXCSR between runs. While translated code runs, its control bits are FPCR and its exception flags FPSR (translator.cpp maps
 	// them); the exit trampoline folds FPSR back. DE stays as it was: Arm reports a denormal input only when it flushes one.
 	uint32_t mxcsr = 0x1f80;
-	uint32_t reserved = 0;
+	// RFLAGS.DF, 0 or 1: translated code reads and writes it here (cld, std, popfq, pushfq, and rep stos and movs read it).
+	uint32_t direction = 0;
 	// XMM0-XMM15 between runs, low quadword first. While translated code runs, XMMn is vn; the trampolines store and load all sixteen
 	// on every exit and entry, and native thunks store them before the native function runs.
 	alignas(16) uint64_t xmm[16][2] = {};
@@ -129,6 +130,7 @@ constexpr size_t stop_requested = offsetof(CpuState, stop_requested);
 constexpr size_t host_frame = offsetof(CpuState, host_frame);
 constexpr size_t host_fpcr = offsetof(CpuState, host_fpcr);
 constexpr size_t mxcsr = offsetof(CpuState, mxcsr);
+constexpr size_t direction = offsetof(CpuState, direction);
 constexpr size_t xmm = offsetof(CpuState, xmm);
 static_assert(xmm % 16 == 0 && xmm + 224 <= 1008, "ldp and stp of q registers reach the XMM array");
 constexpr size_t ymm_high = offsetof(CpuState, ymm_high);

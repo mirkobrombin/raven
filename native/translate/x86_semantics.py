@@ -492,10 +492,86 @@ def unaligned_locked(rng):
     return cases
 
 
+def bit_scan(rng):
+    """bsf and bsr at 16, 32 and 64 bits from a register or memory, the source 0 among others: ZF is set then and the
+    destination, compared whole, shows what the CPU left in it. ZF is the one flag defined."""
+    cases = []
+    for op in ("bsf", "bsr"):
+        for bits in (16, 32, 64):
+            values = [0, 0, 0, 1, 2, 3] + [1 << i for i in range(0, bits, 5)] + [(1 << (bits - 1)), (1 << bits) - 1]
+            for value in values + [rng.getrandbits(bits) for _ in range(10)]:
+                registers = registers_for(rng)
+                target, source = rng.sample(USABLE, 2)
+                put(registers, source, 0, value, bits)
+                if rng.random() < 0.25:
+                    body = [f"mov {PTR[bits]} ptr [r15 + 16], {GPR[bits][source]}", f"{op} {GPR[bits][target]}, {PTR[bits]} ptr [r15 + 16]"]
+                elif rng.random() < 0.1:
+                    put(registers, target, 0, value, bits)
+                    body = [f"{op} {GPR[bits][target]}, {GPR[bits][target]}"]
+                else:
+                    body = [f"{op} {GPR[bits][target]}, {GPR[bits][source]}"]
+                cases.append((registers, body, ZF))
+    return cases
+
+
+def strings(rng):
+    """rep stos and rep movs at every width, and once without rep, forward and backward (std), with RCX 0 and counts that fill
+    the buffer; movs over overlapping ranges both ways. RDI and RSI point into the buffer through lea and are made offsets again
+    after, so that the registers compare (R8 holds the flags from before that). Then pushfq and popfq with DF and the six flags, cld, std and pause. No flag changes."""
+    cases = []
+    for op in ("stos", "movs"):
+        for bits in (8, 16, 32, 64):
+            size = bits // 8
+            suffix = {8: "b", 16: "w", 32: "d", 64: "q"}[bits]
+            for _ in range(24):
+                backward = rng.random() < 0.4
+                rep = rng.random() < 0.85
+                limit = 64 // size
+                count = rng.choice([0, 1, 2, rng.randrange(limit // 2 + 1), limit // 2]) if rep else 1
+                span = max(count, 1) * size
+                if op == "stos":
+                    start = rng.randrange(0, 64 - span + 1)
+                    destination = start + span - size if backward else start
+                    source = 0
+                else:
+                    # Overlapping now and then: the source a few elements before or after the destination.
+                    first = rng.randrange(0, 64 - span + 1)
+                    second = min(max(first + rng.choice([-2, -1, 1, 2, 3]) * size, 0), 64 - span) if rng.random() < 0.5 \
+                        else rng.randrange(0, 64 - span + 1)
+                    destination, source = (first + span - size, second + span - size) if backward else (first, second)
+                registers = registers_for(rng)
+                registers[1] = count
+                body = [f"lea rdi, [r15 + {destination}]", f"lea rsi, [r15 + {source}]"]
+                if backward:
+                    body.append("std")
+                body.append(f"{'rep ' if rep else ''}{op}{suffix}")
+                if backward:
+                    body.append("cld")
+                # The flags the string instruction left go to R8 (they must be the input ones): the subs after define them anew,
+                # AF from the pointers, which differ between runs.
+                body += ["pushfq", "pop r8", "sub rdi, r15", "sub rsi, r15"]
+                cases.append((registers, body, ALL & ~AF))
+    # The flags through pushfq and popfq: the six status flags and DF in, RFLAGS as pushfq stores it out.
+    for _ in range(60):
+        registers = registers_for(rng)
+        value = (rng.getrandbits(12) & ALL) | 2 | (1024 if rng.random() < 0.5 else 0)
+        registers[3] = value
+        body = ["push rbx", "popfq", "pushfq", "pop rax", "cld"]
+        if value & 1024 and rng.random() < 0.5:
+            body = ["push rbx", "popfq", "lea rdi, [r15 + 40]", "mov ecx, 3", "rep stosb", "pushfq", "pop rax", "cld", "sub rdi, r15"]
+        cases.append((registers, body, ALL & ~AF if "sub rdi, r15" in body else ALL))
+    for _ in range(20):
+        registers = registers_for(rng)
+        body = rng.choice([["std", "pushfq", "pop rax", "cld"], ["cld", "pushfq", "pop rax"], ["pause"], ["add rax, rbx", "pause", "pushfq", "pop rcx"]])
+        cases.append((registers, body, ALL))
+    return cases
+
+
 # The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
 # name's CRC-32.
 FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test), ("locked", locked), ("rotate", rotate), ("shift by cl", shift_by_cl),
-            ("carry narrow", carry_narrow), ("flag readers", flag_readers), ("unaligned locked", unaligned_locked)]
+            ("carry narrow", carry_narrow), ("flag readers", flag_readers), ("unaligned locked", unaligned_locked),
+            ("bit scan", bit_scan), ("strings", strings)]
 
 
 def main():
