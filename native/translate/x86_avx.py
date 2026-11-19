@@ -506,6 +506,68 @@ def fma_addsub(rng):
     return [f"{op} {name(d, width)}, {name(a, width)}, {source}"]
 
 
+AVX2_LANEWISE = ["vpshufb", "vphaddw", "vphaddd", "vphaddsw", "vpmaddubsw", "vphsubw", "vphsubd", "vphsubsw", "vpsignb", "vpsignw",
+                 "vpsignd", "vpmulhrsw", "vpmuldq", "vpcmpeqq", "vpcmpgtq", "vpackusdw", "vpminsb", "vpminsd", "vpminuw", "vpminud",
+                 "vpmaxsb", "vpmaxsd", "vpmaxuw", "vpmaxud", "vpmulld"]
+VARIABLE_SHIFTS = ["vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd"]
+
+
+def avx2(rng):
+    """AVX2 but the gathers: the 256-bit integer forms of maps 0F 38 and 0F 3A, vpermq, vpermd, vpermps, vpermpd, vpblendd, the
+    variable shifts and vpmaskmovd and vpmaskmovq."""
+    d, a, b = three(rng)
+    ysource = lambda: mem(rng, 32) if rng.random() < 0.3 else f"ymm{b}"
+    roll = rng.randrange(11)
+    if roll == 0:
+        return [f"{rng.choice(AVX2_LANEWISE)} ymm{d}, ymm{a}, {ysource()}"]
+    if roll == 1:
+        return [f"{rng.choice(['vpabsb', 'vpabsw', 'vpabsd'])} ymm{d}, {ysource()}"]
+    if roll == 2:
+        op = rng.choice(["vpalignr", "vpblendw", "vmpsadbw"])
+        value = rng.randrange(64) if op == "vmpsadbw" else rng.randrange(256)
+        return [f"{op} ymm{d}, ymm{a}, {ysource()}, {value}"]
+    if roll == 3:
+        return [f"vpblendvb ymm{d}, ymm{a}, {ysource()}, ymm{reg(rng)}"]
+    if roll == 4:
+        op = rng.choice(["vpmovsxbw", "vpmovsxbd", "vpmovsxbq", "vpmovsxwd", "vpmovsxwq", "vpmovsxdq", "vpmovzxbw", "vpmovzxbd",
+                         "vpmovzxbq", "vpmovzxwd", "vpmovzxwq", "vpmovzxdq"])
+        size = {"bw": 16, "bd": 8, "bq": 4, "wd": 16, "wq": 8, "dq": 16}[op[-2:]]
+        source = mem(rng, size) if rng.random() < 0.3 else f"xmm{b}"
+        return [f"{op} ymm{d}, {source}"]
+    if roll == 5:
+        return [f"vmovntdqa ymm{d}, {mem(rng, 32, True)}"]
+    if roll == 6:
+        op = rng.choice(["vpermq", "vpermpd"])
+        return [f"{op} ymm{d}, {ysource()}, {rng.randrange(256)}"]
+    if roll == 7:
+        return [f"{rng.choice(['vpermd', 'vpermps'])} ymm{d}, ymm{a}, {ysource()}"]
+    if roll == 8:
+        width = rng.choice([16, 32])
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"vpblendd {name(d, width)}, {name(a, width)}, {source}, {rng.randrange(256)}"]
+    width = rng.choice([16, 32])
+    if roll == 9:
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"{rng.choice(VARIABLE_SHIFTS)} {name(d, width)}, {name(a, width)}, {source}"]
+    op = rng.choice(["vpmaskmovd", "vpmaskmovq"])
+    if rng.random() < 0.5:
+        return [f"{op} {name(d, width)}, {name(a, width)}, {mem(rng, width)}"]
+    return [f"{op} {mem(rng, width)}, {name(a, width)}, {name(b, width)}"]
+
+
+def avx2_data(rng, body, registers, vectors, memory):
+    # The variable shifts: counts around the element width as often as anywhere else.
+    if body[0].split()[0] in VARIABLE_SHIFTS:
+        for r in range(16):
+            for q in range(4):
+                if rng.random() < 0.6:
+                    counts = [rng.choice([0, 1, 7, 15, 16, 31, 32, 33, 63, 64, 65, rng.randrange(70)]) for _ in range(2)]
+                    vectors[r][q] = counts[0] | counts[1] << 32 if "d " in body[0][:9] else counts[0]
+        for i in range(24):
+            if rng.random() < 0.6:
+                memory[i] = rng.randrange(70) | rng.randrange(70) << 32
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -531,9 +593,10 @@ LATER_FAMILIES = [
     ("avx ops", avx_ops, "mixed", 1500),
     ("approximations", approximations, "f32", 600),
     ("fma addsub", fma_addsub, "mixed", 600),
+    ("avx2", avx2, "int", 1500),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
-FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data}
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data}
 
 
 def lanes_of(body, kind):
