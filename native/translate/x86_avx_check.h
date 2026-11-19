@@ -41,7 +41,7 @@ struct Case {
 	Io input;
 	Io output;
 	bool silicon = false;
-	// Whether the case's family was run on the x86 CPU (a corpus line); if not, it is held to Rosetta only.
+	// Whether the case's family was run on the x86 CPU (a corpus line); if not, the case fails.
 	bool compared = false;
 };
 
@@ -94,7 +94,7 @@ inline uint64_t fingerprint(const Io &output)
 
 // FNV-1a 64 of one family's cases: of every case's code and text (what x86_avx.py generated), and of every case's fingerprint (what
 // Rosetta left). The silicon file has a `corpus` line per family compared with the x86 CPU holding both, so a change of either is
-// seen even where no case line would show it; a family without one is held to Rosetta only, and the tests say so.
+// seen even where no case line would show it; a family without one fails.
 inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case> &cases, const std::string &family)
 {
 	uint64_t generated = 0xcbf29ce484222325ull, results = 0xcbf29ce484222325ull;
@@ -301,8 +301,15 @@ struct Report {
 		silicon += item.silicon;
 		auto &[cases, failed] = families[item.family];
 		++cases;
-		if (!item.compared)
+		// Every family must have been run on an x86 CPU: one without a corpus line fails, even where it agrees with Rosetta.
+		if (!item.compared) {
 			rosetta_only.insert(item.family);
+			if (problem.empty()) {
+				++failed;
+				++failures;
+				return;
+			}
+		}
 		if (problem.empty())
 			return;
 		++failed;
@@ -315,7 +322,7 @@ struct Report {
 	{
 		for (const auto &[family, counts] : families)
 			std::printf("%s, %s: %zu cases, %zu failures%s\n", where, family.c_str(), counts.first, counts.second,
-				rosetta_only.count(family) ? " (Rosetta only: no x86 CPU run of this family)" : "");
+				rosetta_only.count(family) ? " (no x86 CPU run of this family: every case fails)" : "");
 		std::printf("%s: MXCSR.DE alone differs in %zu passing cases; %zu cases held to the x86 CPU where Rosetta differs\n", where,
 			denormal_flags, silicon);
 	}
