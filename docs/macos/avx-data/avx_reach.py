@@ -40,8 +40,20 @@ AVX2_ONLY = re.compile(r"^v(pbroadcast|perm2i128|inserti128|extracti128|permq|pe
                        r"psrav|pblendd|broadcasti128)")
 
 
+LEGACY = set("""addsubps addsubpd haddps haddpd hsubps hsubpd movddup movsldup movshdup lddqu pshufb phaddw phaddd phaddsw pmaddubsw
+phsubw phsubd phsubsw psignb psignw psignd pmulhrsw pabsb pabsw pabsd palignr pblendvb blendvps blendvpd ptest pmovsxbw pmovsxbd
+pmovsxbq pmovsxwd pmovsxwq pmovsxdq pmuldq pcmpeqq movntdqa packusdw pmovzxbw pmovzxbd pmovzxbq pmovzxwd pmovzxwq pmovzxdq pcmpgtq
+pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud pmulld phminposuw roundps roundpd roundss roundsd blendps blendpd pblendw
+pextrb pextrd pextrq extractps pinsrb insertps pinsrd pinsrq dpps dppd mpsadbw pcmpestrm pcmpestri pcmpistrm pcmpistri crc32 popcnt
+pinsrw pextrw""".split())
+
+
 def family(a):
     mnemonic, operands = insns[a]
+    if encoding[a] == "" and mnemonic in LEGACY and "mm" in operands + mnemonic and not re.search(r"\bmm\d", operands):
+        return "legacy SSE3-SSE4.2"
+    if encoding[a] == "" and mnemonic in ("crc32", "popcnt"):
+        return "legacy SSE3-SSE4.2"
     if encoding[a] == "evex":
         return "EVEX (AVX-512)"
     if encoding[a] != "vex":
@@ -102,7 +114,7 @@ def tally(addresses):
         if f:
             families[f] += 1
             mnemonics.setdefault(f, Counter())[m] += 1
-            if f not in ("BMI", "EVEX (AVX-512)"):
+            if f not in ("BMI", "EVEX (AVX-512)", "legacy SSE3-SSE4.2"):
                 widths["ymm" if "ymm" in ops else "xmm"] += 1
     return families, mnemonics, widths
 
@@ -123,7 +135,7 @@ if not image.lower().endswith((".exe", ".dll")):
     seen = set(order)
     families, mnemonics, widths = tally(seen)
     print("  (no .pdata: every instruction counts)")
-vector = sum(v for k, v in families.items() if k not in ("BMI", "EVEX (AVX-512)"))
+vector = sum(v for k, v in families.items() if k not in ("BMI", "EVEX (AVX-512)", "legacy SSE3-SSE4.2"))
 print(f"  reachable: vector VEX {vector}, BMI {families['BMI']}, EVEX {families['EVEX (AVX-512)']};", dict(families.most_common()),
       "registers:", dict(widths))
 for f, counter in sorted(mnemonics.items()):
