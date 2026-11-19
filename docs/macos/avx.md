@@ -208,8 +208,18 @@ failing, then `7e83388c`). Not compared with an x86 CPU (NOT verified); xsaveopt
   unmapped page masked off neither faults nor moves them, and moves the others (load and store); with an element on the unmapped
   page selected it faults with no register or byte changed. The same for vpmaskmovd (`054880ed`, added after its implementation)
   and vpgatherdd (`496b2a01` first): with the unmapped elements masked off it gathers the others, keeps the masked-off ones and
-  clears the mask; with one selected it faults with nothing changed. PROVEN, 12 scenarios, 0 failures. A gather that faults after
-  some elements (x86 keeps those) was not tested: the fault here is at element 0.
+  clears the mask; with one selected it faults with nothing changed. PROVEN, 12 scenarios, 0 failures.
+- **Gathers that fault part way** (`3e2a9c56`): every gather form at both widths faults at element 1 and at its last element; the
+  test checks that the elements before it are gathered and their mask elements cleared, and that the rest of the destination and
+  mask are as they were. The rule is the SDM's (a gather may complete some elements before a fault and records them by clearing
+  their mask elements, so it can restart): INFERRED from the SDM, not run on an x86 CPU (the bench has no faulting gather with a
+  signal handler). Only the upper halves can be checked: a guest exception ends the run without storing v0-v15, so elements
+  gathered into a low half stay in the vCPU (NOT verified there). PROVEN that the test catches the class: with the per-element
+  mask clear removed it fails 3 scenarios (dd, dq and qq at 256 bits, last element), with it 0. Legacy maskmovdqu has the same
+  masked-off and selected scenarios (`8d0f9610`, failing before `987b0d96`).
+- **Variable shift counts** (`d07cc9cb`): the `shift counts` family gives every variable shift, d and q, register and memory
+  counts of 63, 64, 128, 255, 256, 0x80000000 and 0xffffffff, with the low half or (quadwords) only the high half set. PROVEN that it
+  catches the class: changing the quadword limit from 6 bits to 32 fails 50 of its 400 cases, the earlier families none.
 - **Later families** (after the FMA3 edges, so the earlier cases keep their numbers): sse3 500 (legacy and VEX at 128 and 256
   bits), ssse3 500, sse41 1000 (every SSE4.1 instruction, ptest followed by a setcc), sse42 400 (pcmpgtq, crc32 of every width),
   popcnt 300 (16, 32 and 64 bits, then a setcc). Each was committed failing (`0186a0ac`, `88266640`, `ad08e950`, `ecc31d0b`,
@@ -337,8 +347,14 @@ port (NOT verified).
   ...) and KUSER_SHARED_DATA's ProcessorFeatures and XState (EnabledFeatures 7, the YMM area) should report what cpuid now reports.
   Not done here (native/nt is out of this branch's scope): an item for a design review.
 - **The MMX forms of SSSE3** (under cpuid) end their block while SSSE3 is reported; MMX state is the open item.
-- **BMI2 next to AVX2:** Notepad++ has 2 shlx; BMI1 and BMI2 (and LZCNT) are not translated or reported. Code that assumes BMI2
-  with AVX2 (Haswell brought both) would stop there.
+- **BMI2 next to AVX2: a real gap with this cpuid.** Notepad++'s 2 shlx are in one function (0x1404377b0 to 0x140437b61, `.pdata`),
+  a scalar double routine written in VEX. Its only way in is a dispatcher at 0x140436f70 that jumps there when a global's low two
+  bits are 3, and the code that sets that global (with 8 cpuid sites, at 0x140435fc7 and on) tests leaf 1 ECX for FMA, OSXSAVE and
+  AVX (0x18001000), xgetbv(0) for bits 1 and 2, then leaf 7 EBX bit 5 (AVX2) alone for the value 3: not BMI2 (leaf 7 EBX bit 8).
+  PROVEN by reading that disassembly (llvm-objdump of `notepad++.exe`, a GPL program with a statically linked CRT). So with AVX2
+  reported, that routine runs and its shlx ends the block as unsupported. BMI1 and BMI2 (andn, bextr, blsi, blsmsk, blsr, tzcnt,
+  lzcnt, bzhi, mulx, pdep, pext, rorx, sarx, shlx, shrx) were not implemented in this round's timebox; until they are, AVX2 should be
+  treated as reported with this known hole (or switched off): a decision for the coordinator.
 - **A gather that faults after some elements** is not tested (see Tests); nor are 32-bit addresses or fs/gs with VSIB, nor a
   test that would have caught the 128-bit vpgatherdq count (index bits beyond the elements pointing at an unmapped page).
 - **xrstor** now reads everything before writing the state; whether x86 leaves the state unchanged when the YMM area faults was
