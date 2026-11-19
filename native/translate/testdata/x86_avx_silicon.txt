@@ -1,4 +1,4 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44498540080, assembled with clang as here; dump sha256 8bc66d6d9fdb515d8518248eabd71cef46f5c9a9f593c3fe54271968b22acc53): the tests refuse the file when a family's cases or Rosetta's results change.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an  (raven-macos-bench run 44499294363, assembled with clang as here; dump sha256 26d908845c9e198c93e46dde875d15253fcf74d254c84eb22678e84e702e4ac1): the tests refuse the file when a family's cases or Rosetta's results change.
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
@@ -8,9 +8,11 @@ corpus	integer	cases=700	generated=e885abd03fce5654	rosetta=afd4fe34eb94de6d
 corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
 corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
 corpus	moves	cases=500	generated=a0c679a6f55af097	rosetta=005e880bff9bde0c
+corpus	popcnt	cases=300	generated=3e25867f77cf2d61	rosetta=366972829bbc22b7
 corpus	shuffle	cases=400	generated=4d882c20282e375a	rosetta=9626d96c7c36edbd
 corpus	sse3	cases=500	generated=36aa17315fe8f5c7	rosetta=0dc0a19bdd9db3bf
 corpus	sse41	cases=1000	generated=4048e75bed7d65ca	rosetta=1cc0b362db2efc2c
+corpus	sse42	cases=400	generated=781c570d9b5d810b	rosetta=800b7b2bcc4b91d5
 corpus	ssse3	cases=500	generated=5fa57f159a9ca2a7	rosetta=45920946b54303f5
 corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
 6791	ptest xmm1, xmm13; setp al	rosetta=80c645334d3258df	r0=0043f636f4371926	flags=0000000000000000
