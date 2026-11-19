@@ -459,6 +459,7 @@ void NativeChild::stop()
 		kill(-group, SIGKILL);
 		int status = 0;
 		while (waitpid(-group, &status, __WALL) != -1 || errno == EINTR) {}
+		agent::release_group(group);
 		forget_registers();
 		pid = -1;
 		return;
@@ -2399,7 +2400,7 @@ static int wait_own_task(pid_t task)
 {
 	for (;;) {
 		int status = 0;
-		const pid_t result = waitpid(task, &status, __WALL);
+		const pid_t result = agent::wait(task, &status, __WALL);
 		if (result == task)
 			return status;
 		if (result == -1 && errno != EINTR)
@@ -2409,7 +2410,8 @@ static int wait_own_task(pid_t task)
 
 int NativeProcess::pause_own_task(pid_t task)
 {
-	if (kill(task, SIGSTOP) != 0)
+	// A task in the agent's hands is untraced: a SIGSTOP would stop its whole process, the service thread with it.
+	if (agent::interrupt(task) != 0)
 		throw std::runtime_error("cannot interrupt own native task " + std::to_string(task) + ": " + std::strerror(errno));
 	const int status = wait_own_task(task);
 	if (!WIFSTOPPED(status))
