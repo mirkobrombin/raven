@@ -334,6 +334,16 @@ scratch directory) and of this branch, interleaved run by run on one machine, th
 - **What is not done:** moving only the vector registers a block uses, and keeping FPCR in this process (host code there would run
   with AH set). Both belong to the generator work; this process is the test runner, the vCPU the process model.
 
+## SSE3, SSSE3, SSE4.1 and SSE4.2
+
+These are translated too, in their legacy forms, with semantics checked by the AVX oracle's `sse3`, `ssse3`, `sse41`, `sse42` and
+`popcnt` families against an AMD EPYC (avx.md has the counts): addsub as one fadd of a source whose even elements fneg negated,
+hadd and hsub with faddp and uzp, pshufb as tbl on indices masked to 0x8f, pmulhrsw as smull and rshrn by 15 (exact at -32768
+squared, where sqrdmulh saturates), round with frint (and FPCR's RMode set around frintx when a fixed mode must still raise PE),
+dpps with masked inputs and two faddp, mpsadbw with ext, dup and uabal, phminposuw with uminv, ptest clearing PF, AF, SF and OF
+as x86 does (Rosetta keeps them), crc32 as Arm's crc32c and popcnt as cnt and addv. Not translated: SSE4.2's string compares
+(pcmpestri, pcmpestrm, pcmpistri, pcmpistrm). cpuid reports SSE3, SSSE3, SSE4.1 and POPCNT, not SSE4.2.
+
 ## Open items
 
 - **Without FEAT_AFP** the runtime refuses to run (see the guest state). Software sequences for those instructions would let it run
@@ -355,9 +365,9 @@ scratch directory) and of this branch, interleaved run by run on one machine, th
 - **Cost of every exit and entry:** sixteen q-register moves and the MXCSR conversions; in this process also two FPCR writes (see the
   integer workloads above).
 - **Not translated:**
-  - pinsrw and pextrw, maskmovdqu, rcpps, rsqrtps, rcpss and rsqrtss;
+  - maskmovdqu, rcpps, rsqrtps, rcpss and rsqrtss (pinsrw and pextrw are translated now);
   - the MMX forms;
-  - SSE3, SSSE3 and SSE4 (123 instances in Notepad++);
+  - SSE4.2's string compares (44 reachable instances in Notepad++; the rest of SSE3 to SSE4.2 is translated, see above);
   - sfence, lfence, mfence, prefetch and movnti.
 - **Rosetta is the only x86 reference.** Running `x86_sse_oracle` on an x86 machine would turn the INFERRED agreement with silicon
   into PROVEN.
