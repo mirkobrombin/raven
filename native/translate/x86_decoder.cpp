@@ -1151,6 +1151,9 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			is_unary |= one == mnemonic;
 		if (is_unary && vex.vvvv != 0)
 			return false;
+		// vpcmpestri and vpcmpestrm with VEX.W1 take their lengths from RAX and RDX, as REX.W does for the legacy forms.
+		if (mnemonic == pcmpestri || mnemonic == pcmpestrm)
+			result.operand_size = vex.w ? 8 : 4;
 		// vroundss and vroundsd ignore VEX.L.
 		const uint8_t size = mnemonic == roundss || mnemonic == roundsd ? 16 : width;
 		result.vector_size = size;
