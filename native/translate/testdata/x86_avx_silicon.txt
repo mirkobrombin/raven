@@ -1,6 +1,7 @@
 # x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44505811968, assembled with clang as here; dump sha256 28aa394685cacc237ca24c7a37fd3ed396d7f0918d4b4222fa5010879a1bf28b): the tests refuse the file when a family's cases or Rosetta's results change.
 # The avx2 broadcast family: an AMD EPYC 7763 (run 44508125477), which agrees with Rosetta in all 100. Earlier runs: an AMD EPYC 9V74 (run 44505099547, all but the gathers), AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 # The strings wide and shift counts families: an Intel Xeon Platinum 8573C (run 44510983438, dump sha256 d4f8cd7d19083f3abb868f89bc1bf99c912f504e0bcb4c43c46c41b8d891619e), no AMD runner came up; it agrees with Rosetta in all 400 strings wide cases and differs in 112 shift counts cases, where Rosetta shifts a quadword by the low 32 bits of its count.
+# The maskmovdqu family: an Intel Xeon Platinum 8573C (run 44511702231), which agrees with Rosetta in all 200 cases.
 corpus	approximations	cases=600	generated=52b71b7d5a377a5b	rosetta=9a08b5ad95d5336b
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	avx ops	cases=1500	generated=81ce8548266e5728	rosetta=560d169b35ec6d3f
@@ -27,6 +28,7 @@ corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
 corpus	vex sse4	cases=1500	generated=e321b48b0d4415c8	rosetta=e582251adcae5d5b
 corpus	shift counts	cases=400	generated=e0b1fc8f95b89fde	rosetta=a067d7f881cfb270
 corpus	strings wide	cases=400	generated=725717f41caf6273	rosetta=902b01208d80b99f
+corpus	maskmovdqu	cases=200	generated=4baf2fbe239f158b	rosetta=2e5e51957d5af0d5
 6791	ptest xmm1, xmm13; setp al	rosetta=80c645334d3258df	r0=0043f636f4371926	flags=0000000000000000
 6794	ptest xmm4, xmm12; sete al	rosetta=2c52bce89b3b350c	flags=0000000000000000
 6795	ptest xmm2, xmm11; setb al	rosetta=9792b41f27724e57	flags=0000000000000000
