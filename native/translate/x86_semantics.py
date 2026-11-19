@@ -567,6 +567,25 @@ def strings(rng):
     return cases
 
 
+def shift_by_one(rng):
+    """shl, shr and sar by a count of 1 at 8 and 16 bits (the by-one form, an imm8 of 1, CL of 1 and of 33), with every combination of
+    the top two bits and the low bit: OF is defined for a count of 1 (shl: the top bit of the result xor CF; shr: the top bit before;
+    sar: 0), CF is the bit out."""
+    cases = []
+    for op in ("shl", "shr", "sar"):
+        for bits in (8, 16):
+            for top in range(4):
+                for low in range(2):
+                    for count_text, cl in (("1", 0), ("cl", 1), ("cl", 33)):
+                        value = (top << (bits - 2)) | low | (rng.getrandbits(bits - 3) << 1)
+                        registers = registers_for(rng)
+                        index = rng.choice([i for i in USABLE if i not in (1,)])
+                        put(registers, index, 0, value, bits)
+                        put(registers, 1, 0, cl if count_text == "cl" else rng.getrandbits(8), 8)
+                        cases.append((registers, [f"{op} {GPR[bits][index]}, {count_text}"], ALL & ~AF))
+    return cases
+
+
 def rflags(rng):
     """popfq and pushfq of AC (bit 18) and ID (bit 21): RFLAGS read, a bit or both toggled, written, read back into RBX, and the first
     value put back (AC set would make the oracle's later unaligned accesses fault). TF is left out: x86 would trap on the next
@@ -585,7 +604,8 @@ def rflags(rng):
 # name's CRC-32.
 FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test), ("locked", locked), ("rotate", rotate), ("shift by cl", shift_by_cl),
             ("carry narrow", carry_narrow), ("flag readers", flag_readers), ("unaligned locked", unaligned_locked),
-            ("bit scan", bit_scan), ("strings", strings), ("rflags", rflags)]
+            ("bit scan", bit_scan), ("strings", strings), ("rflags", rflags),
+            ("shift by one", shift_by_one)]
 
 
 def main():
