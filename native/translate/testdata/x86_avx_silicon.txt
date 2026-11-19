@@ -1,4 +1,4 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an  (raven-macos-bench run 44499294363, assembled with clang as here; dump sha256 26d908845c9e198c93e46dde875d15253fcf74d254c84eb22678e84e702e4ac1): the tests refuse the file when a family's cases or Rosetta's results change.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44499294363, assembled with clang as here; dump sha256 26d908845c9e198c93e46dde875d15253fcf74d254c84eb22678e84e702e4ac1): the tests refuse the file when a family's cases or Rosetta's results change.
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
