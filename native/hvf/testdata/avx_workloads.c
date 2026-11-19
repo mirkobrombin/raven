@@ -13,6 +13,10 @@ static uint8_t text[4096];
 #if defined(__x86_64__)
 #include <immintrin.h>
 
+// bitdeposit: pdep and pext.
+static uint64_t deposit(uint64_t value, uint64_t mask) { return _pdep_u64(value, mask); }
+static uint64_t extract(uint64_t value, uint64_t mask) { return _pext_u64(value, mask); }
+
 // strscan: the length of a string 16 bytes at a time, as a strlen does: pcmpistri with a zero first operand (equal each) gives
 // the index of the null byte, 16 when there is none.
 static unsigned string_length(const uint8_t *from)
@@ -49,6 +53,24 @@ static unsigned count_pass(uint8_t value)
 }
 #else
 #include <arm_neon.h>
+
+// The same one bit of the mask at a time, as the translation does: there is no Arm instruction for them (SVE2's BDEP and BEXT are
+// not on this core).
+static uint64_t deposit(uint64_t value, uint64_t mask)
+{
+	uint64_t result = 0;
+	for (; mask; mask &= mask - 1, value >>= 1)
+		result |= (value & 1) ? mask & -mask : 0;
+	return result;
+}
+
+static uint64_t extract(uint64_t value, uint64_t mask)
+{
+	uint64_t result = 0;
+	for (unsigned place = 0; mask; mask &= mask - 1, ++place)
+		result |= (uint64_t)((value & mask & -mask) != 0) << place;
+	return result;
+}
 
 static unsigned string_length(const uint8_t *from)
 {
@@ -127,6 +149,20 @@ uint64_t workload(void)
 	uint64_t sum = 0;
 	for (unsigned s = 0; s < 64; ++s)
 		sum = sum * 131 + string_length(strings + s * 64);
+	return sum;
+}
+#elif defined(WORKLOAD_BITDEPOSIT)
+// pdep and pext of 1024 values through masks with 32 bits set on average (xorshift values), hashed.
+uint64_t workload(void)
+{
+	uint64_t state = 0x9e3779b97f4a7c15ull, sum = 0;
+	for (unsigned i = 0; i < 1024; ++i) {
+		state ^= state << 13;
+		state ^= state >> 7;
+		state ^= state << 17;
+		const uint64_t mask = state ^ (state >> 3);
+		sum = (sum ^ deposit(state, mask)) + extract(sum, mask);
+	}
 	return sum;
 }
 #endif
