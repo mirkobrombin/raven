@@ -28,8 +28,8 @@ enum class ExitReason : uint32_t {
 	fault,
 	// An x87 instruction; rip is that instruction. The runtime runs it and the x87 instructions after it (x87.h).
 	x87,
-	// cpuid or xgetbv, or an SSE4.2 string compare; rip is that instruction. The runtime runs it (cpuid.h, string_compare.h) and goes
-	// on after it.
+	// cpuid or xgetbv, an SSE4.2 string compare, a div or idiv translated code does not finish, or int 0x29; rip is that
+	// instruction. The runtime runs it (cpuid.h, string_compare.h, divide.h) and goes on after it, or stops (#DE, int 0x29).
 	cpuid,
 };
 

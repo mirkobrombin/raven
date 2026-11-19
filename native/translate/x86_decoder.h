@@ -57,6 +57,8 @@ enum class Mnemonic : uint16_t {
 	leave,
 	nop,
 	int3,
+	// int imm8; only int 0x29 (__fastfail) is translated.
+	int_,
 	syscall,
 	ud2,
 	hlt,

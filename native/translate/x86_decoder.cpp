@@ -200,7 +200,7 @@ constexpr Map make_one_byte()
 	map[0xca] = other(Iw);
 	map[0xcb] = other();
 	map[0xcc] = op(Mnemonic::int3);
-	map[0xcd] = other(Ib);
+	map[0xcd] = op(Mnemonic::int_, Ib);
 	map[0xce] = bad();
 	map[0xcf] = other();
 	map[0xd0] = grp(group2, Eb, One);
@@ -1622,6 +1622,7 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::leave: name = "leave"; break;
 	case Mnemonic::nop: name = "nop"; break;
 	case Mnemonic::int3: name = "int3"; break;
+	case Mnemonic::int_: name = "int"; break;
 	case Mnemonic::syscall: name = "syscall"; break;
 	case Mnemonic::ud2: name = "ud2"; break;
 	case Mnemonic::hlt: name = "hlt"; break;

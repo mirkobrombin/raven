@@ -85,7 +85,7 @@ FlagEffect flag_effect(const Instruction &instruction)
 {
 	switch (instruction.mnemonic) {
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::cmp: case Mnemonic::neg: case Mnemonic::and_: case Mnemonic::or_:
-	case Mnemonic::xor_: case Mnemonic::test: case Mnemonic::cmpxchg: case Mnemonic::xadd: case Mnemonic::imul:
+	case Mnemonic::xor_: case Mnemonic::test: case Mnemonic::cmpxchg: case Mnemonic::xadd: case Mnemonic::imul: case Mnemonic::mul:
 		return {all_flags, 0};
 	case Mnemonic::adc: case Mnemonic::sbb: return {all_flags, CF};
 	case Mnemonic::inc: case Mnemonic::dec: return {all_flags & ~CF, 0};
@@ -107,7 +107,7 @@ bool ends_block(Mnemonic mnemonic)
 {
 	switch (mnemonic) {
 	case Mnemonic::jmp: case Mnemonic::jcc: case Mnemonic::call: case Mnemonic::ret: case Mnemonic::int3: case Mnemonic::syscall:
-	case Mnemonic::hlt: case Mnemonic::ud2:
+	case Mnemonic::hlt: case Mnemonic::ud2: case Mnemonic::int_:
 		return true;
 	default: return false;
 	}
@@ -239,7 +239,10 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::pcmpgtq: case Mnemonic::crc32: case Mnemonic::popcnt:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
-	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
+	case Mnemonic::imul: return !instruction.lock && (instruction.count == 1 || size >= 4);
+	case Mnemonic::mul: case Mnemonic::div: case Mnemonic::idiv: return !instruction.lock;
+	// int 0x29 is __fastfail; other vectors are system calls of other systems.
+	case Mnemonic::int_: return !instruction.lock && first.value == 0x29;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
 		// Narrow shifts only by a count inside their width: beyond it CF is undefined and the result needs its own code.
 		return size >= 4 || (instruction.operands[1].kind == OperandKind::imm && shift_count(instruction) < size * 8u);
@@ -362,6 +365,16 @@ private:
 		bool store;
 	};
 	std::vector<Unaligned> unaligned;
+	// Out-of-line exits to the runtime, which runs the instruction at rip (ExitReason::cpuid): a division the inline code does not
+	// finish (a dividend wider than 64 bits, a zero divisor, a quotient that may not fit). invert: C must be inverted first.
+	struct RuntimeExit {
+		Assembler::Label start;
+		uint64_t rip;
+		bool invert;
+	};
+	std::vector<RuntimeExit> runtime_exits;
+	// A branch to a new runtime exit for the current instruction.
+	Assembler::Label runtime_exit();
 
 	void translate(const Instruction &instruction);
 	bool flags_wanted(uint32_t flags) const { return (live_after & flags) != 0; }
@@ -386,6 +399,8 @@ private:
 	void unary(const Instruction &instruction);
 	void shift(const Instruction &instruction);
 	void multiply(const Instruction &instruction);
+	void multiply_wide(const Instruction &instruction);
+	void divide(const Instruction &instruction);
 	void exchange(const Instruction &instruction);
 	void push_value(uint8_t value);
 	void pop_value(uint8_t target);
@@ -970,6 +985,10 @@ void BlockTranslator::shift(const Instruction &instruction)
 
 void BlockTranslator::multiply(const Instruction &instruction)
 {
+	if (instruction.count == 1) {
+		multiply_wide(instruction);
+		return;
+	}
 	const Operand &target = instruction.operands[0];
 	const bool is64 = target.size == 8;
 	const Operand &left_operand = instruction.count == 3 ? instruction.operands[1] : target;
@@ -1014,6 +1033,154 @@ void BlockTranslator::multiply(const Instruction &instruction)
 			a.mov(parity_register, s2);
 	}
 	write(target, s2);
+}
+
+void BlockTranslator::multiply_wide(const Instruction &instruction)
+{
+	// mul and imul with one operand: RAX times the source into RDX:RAX (AX for 8 bits). CF and OF: the high half is not zero (mul)
+	// or not the sign of the low half (imul); SF, ZF, AF and PF are undefined, and N and Z come from the low half. The source is read
+	// first: it may be RAX, RDX or AH.
+	const Operand &source = instruction.operands[0];
+	const unsigned size = source.size;
+	const bool is_signed = instruction.mnemonic == Mnemonic::imul;
+	const Operand rax_operand{OperandKind::reg, static_cast<uint8_t>(size), rax};
+	const Operand rdx_operand{OperandKind::reg, static_cast<uint8_t>(size), rdx};
+	const uint8_t value = read(source, s1, false);
+	if (size == 8) {
+		const uint8_t left = host_register[rax];
+		a.mul(s2, left, value);
+		is_signed ? a.smulh(s3, left, value) : a.umulh(s3, left, value);
+		// s4: what differs from a product that fits.
+		if (is_signed)
+			a.eor(s4, s3, s2, Shift::asr, 63);
+		else
+			a.mov(s4, s3);
+	} else if (size == 4) {
+		is_signed ? a.smull(s2, host_register[rax], value) : a.umull(s2, host_register[rax], value);
+		a.lsr_imm(s3, s2, 32);
+		if (is_signed) {
+			a.sbfx(s4, s2, 0, 32);
+			a.eor(s4, s4, s2);
+		} else
+			a.mov(s4, s3);
+	} else {
+		const uint8_t bits = static_cast<uint8_t>(size * 8);
+		if (is_signed) {
+			a.sbfx(s0, host_register[rax], 0, bits, false);
+			a.sbfx(s1, value, 0, bits, false);
+		} else {
+			a.ubfx(s0, host_register[rax], 0, bits, false);
+			if (value != s1)
+				a.mov(s1, value, false);
+		}
+		a.mul(s2, s0, s1, false);
+		if (is_signed) {
+			a.sbfx(s4, s2, 0, bits, false);
+			a.eor(s4, s4, s2, Shift::lsl, 0, false);
+		} else
+			a.lsr_imm(s4, s2, bits, false);
+		if (size == 2)
+			a.lsr_imm(s3, s2, 16, false);
+	}
+	if (flags_wanted(all_flags)) {
+		a.and_(a64::zr, s4, s4, true, true);
+		a.cset(s4, Cond::ne);
+		a.orr(s4, s4, s4, Shift::lsl, 1);
+		const uint8_t top = static_cast<uint8_t>(size >= 4 ? 0 : 32 - size * 8);
+		if (top) {
+			a.lsl_imm(s0, s2, top, false);
+			a.and_(a64::zr, s0, s0, false, true);
+		} else
+			a.and_(a64::zr, s2, s2, size == 8, true);
+		a.rmif(s4, 0, 0b0011);
+		carry_inverted = false;
+		if (flags_wanted(PF))
+			a.mov(parity_register, s2);
+	}
+	if (size == 1) {
+		// AX takes the whole product; RDX is not written.
+		const Operand ax{OperandKind::reg, 2, rax};
+		write(ax, s2);
+		return;
+	}
+	write(rax_operand, s2);
+	write(rdx_operand, s3);
+}
+
+Assembler::Label BlockTranslator::runtime_exit()
+{
+	runtime_exits.push_back({a.label(), next_address - current->length, !carry_inverted});
+	return runtime_exits.back().start;
+}
+
+void BlockTranslator::divide(const Instruction &instruction)
+{
+	// div and idiv. The inline code finishes the common case: a dividend that fits the host's divide (RDX zero or the sign of RAX
+	// at 64 bits) and a divisor that is neither zero nor, for idiv, -1, with a quotient checked to fit. Anything else goes to the
+	// runtime, which divides in 128 bits or stops with #DE (FaultKind::divide_error). Every flag is undefined: NZCV, PF and AF are
+	// left as they were, so a #DE shows those of the instruction before.
+	const Operand &source = instruction.operands[0];
+	const unsigned size = source.size;
+	const bool is_signed = instruction.mnemonic == Mnemonic::idiv;
+	const uint8_t value = read(source, s1, false);
+	const Assembler::Label slow = runtime_exit();
+	const uint8_t rax_host = host_register[rax], rdx_host = host_register[rdx];
+	if (size == 8) {
+		if (is_signed) {
+			a.eor(s3, rdx_host, rax_host, Shift::asr, 63);
+			a.cbnz(s3, slow);
+			a.add_imm(s3, value, 1);
+			a.cbz(s3, slow);
+		} else
+			a.cbnz(rdx_host, slow);
+		a.cbz(value, slow);
+		is_signed ? a.sdiv(s2, rax_host, value) : a.udiv(s2, rax_host, value);
+		a.msub(rdx_host, s2, value, rax_host);
+		a.mov(rax_host, s2);
+		return;
+	}
+	const uint8_t bits = static_cast<uint8_t>(size * 8);
+	// The dividend in s3: EDX:EAX in 64 bits, DX:AX or AX in 32, sign-extended for idiv; the divisor in s1, extended alike.
+	const bool wide = size == 4;
+	if (size == 4) {
+		a.mov(s3, rax_host, false);
+		a.orr(s3, s3, rdx_host, Shift::lsl, 32);
+	} else if (size == 2) {
+		a.ubfx(s3, rax_host, 0, 16, false);
+		a.bfi(s3, rdx_host, 16, 16, false);
+	} else if (is_signed)
+		a.sbfx(s3, rax_host, 0, 16, false);
+	else
+		a.ubfx(s3, rax_host, 0, 16, false);
+	if (is_signed)
+		a.sbfx(s1, value, 0, bits, wide);
+	else if (size == 4)
+		a.mov(s1, value, false);
+	else
+		a.ubfx(s1, value, 0, bits, false);
+	a.cbz(s1, slow, wide);
+	is_signed ? a.sdiv(s2, s3, s1, wide) : a.udiv(s2, s3, s1, wide);
+	// The quotient must fit the width: unsigned, nothing above it; signed, its sign extension.
+	if (is_signed) {
+		a.sbfx(s4, s2, 0, bits, wide);
+		a.eor(s4, s4, s2, Shift::lsl, 0, wide);
+		a.cbnz(s4, slow, wide);
+	} else {
+		a.lsr_imm(s4, s2, bits, wide);
+		a.cbnz(s4, slow, wide);
+	}
+	a.msub(s4, s2, s1, s3, wide);
+	if (size == 4) {
+		a.mov(rax_host, s2, false);
+		a.mov(rdx_host, s4, false);
+	} else if (size == 2) {
+		a.bfi(rax_host, s2, 0, 16);
+		a.bfi(rdx_host, s4, 0, 16);
+	} else {
+		// AL the quotient, AH the remainder.
+		a.bfi(rax_host, s2, 0, 8);
+		a.bfi(rax_host, s4, 8, 8);
+	}
 }
 
 void BlockTranslator::exchange(const Instruction &instruction)
@@ -2285,6 +2452,12 @@ void BlockTranslator::exit_indirect()
 
 void BlockTranslator::finish_exits()
 {
+	for (const RuntimeExit &exit : runtime_exits) {
+		a.bind(exit.start);
+		if (exit.invert)
+			a.cfinv();
+		exit_with(ExitReason::cpuid, exit.rip);
+	}
 	for (const Unaligned &path : unaligned) {
 		a.bind(path.start);
 		if (path.store) {
@@ -3137,7 +3310,8 @@ void BlockTranslator::translate(const Instruction &instruction)
 		return;
 	case Mnemonic::inc: case Mnemonic::dec: case Mnemonic::neg: case Mnemonic::not_: unary(instruction); return;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar: shift(instruction); return;
-	case Mnemonic::imul: multiply(instruction); return;
+	case Mnemonic::imul: case Mnemonic::mul: multiply(instruction); return;
+	case Mnemonic::div: case Mnemonic::idiv: divide(instruction); return;
 	case Mnemonic::xchg: case Mnemonic::cmpxchg: case Mnemonic::xadd: exchange(instruction); return;
 	case Mnemonic::movq: case Mnemonic::movd: case Mnemonic::movups: case Mnemonic::movupd: case Mnemonic::movaps:
 	case Mnemonic::movapd: case Mnemonic::movdqa: case Mnemonic::movdqu: case Mnemonic::movntps: case Mnemonic::movntpd:
@@ -3414,6 +3588,8 @@ void BlockTranslator::translate(const Instruction &instruction)
 		exit_indirect();
 		return;
 	case Mnemonic::int3: normalize_carry(); exit_with(ExitReason::breakpoint, next_address - instruction.length); return;
+	// The runtime stops with FaultKind::fast_fail (ExitReason::cpuid, which it answers).
+	case Mnemonic::int_: normalize_carry(); exit_with(ExitReason::cpuid, next_address - instruction.length); return;
 	case Mnemonic::syscall: normalize_carry(); exit_with(ExitReason::syscall, next_address); return;
 	case Mnemonic::hlt: case Mnemonic::ud2:
 		normalize_carry();

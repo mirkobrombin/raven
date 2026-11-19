@@ -2,6 +2,7 @@
 
 #include "x86_decoder.h"
 #include "cpuid.h"
+#include "divide.h"
 #include "string_compare.h"
 #include "xsave.h"
 #include "x87.h"
@@ -20,7 +21,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 23;
+constexpr uint64_t translator_version = 24;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -346,7 +347,16 @@ RunResult Runtime::Thread::run()
 				cpu.gpr[rdx] = *value >> 32;
 			} else if (string_compare_supported(instruction))
 				string_compare(cpu, runtime.memory, instruction, cpu.rip + instruction.length);
-			else if (xsave_supported(instruction)) {
+			else if (instruction.mnemonic == Mnemonic::int_) {
+				// int 0x29, __fastfail: the code is in ECX.
+				cpu.exit_info = uint64_t(FaultKind::fast_fail);
+				return {ExitReason::fault, cpu.rip};
+			} else if (divide_supported(instruction)) {
+				if (!divide(cpu, runtime.memory, instruction, cpu.rip + instruction.length)) {
+					cpu.exit_info = uint64_t(FaultKind::divide_error);
+					return {ExitReason::fault, cpu.rip};
+				}
+			} else if (xsave_supported(instruction)) {
 				if (!xsave(cpu, runtime.memory, instruction, cpu.rip + instruction.length)) {
 					cpu.exit_info = uint64_t(FaultKind::instruction);
 					return {ExitReason::fault, cpu.rip};

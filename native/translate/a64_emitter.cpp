@@ -306,6 +306,26 @@ void Assembler::smull(uint8_t rd, uint8_t rn, uint8_t rm)
 	emit(0x9b207c00u | reg(rm, 16) | reg(rn, 5) | reg(rd, 0));
 }
 
+void Assembler::umull(uint8_t rd, uint8_t rn, uint8_t rm)
+{
+	emit(0x9ba07c00u | reg(rm, 16) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::msub(uint8_t rd, uint8_t rn, uint8_t rm, uint8_t ra, bool is64)
+{
+	emit(sf(is64) | 0x1b008000u | reg(rm, 16) | reg(ra, 10) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::udiv(uint8_t rd, uint8_t rn, uint8_t rm, bool is64)
+{
+	emit(sf(is64) | 0x1ac00800u | reg(rm, 16) | reg(rn, 5) | reg(rd, 0));
+}
+
+void Assembler::sdiv(uint8_t rd, uint8_t rn, uint8_t rm, bool is64)
+{
+	emit(sf(is64) | 0x1ac00c00u | reg(rm, 16) | reg(rn, 5) | reg(rd, 0));
+}
+
 void Assembler::csel(uint8_t rd, uint8_t rn, uint8_t rm, Cond cond, bool is64)
 {
 	emit(sf(is64) | 0x1a800000u | reg(rm, 16) | (uint32_t(cond) << 12) | reg(rn, 5) | reg(rd, 0));

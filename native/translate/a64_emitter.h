@@ -139,6 +139,12 @@ public:
 	void smulh(uint8_t rd, uint8_t rn, uint8_t rm);
 	void umulh(uint8_t rd, uint8_t rn, uint8_t rm);
 	void smull(uint8_t rd, uint8_t rn, uint8_t rm);
+	// umull: the 64-bit product of two W registers, unsigned.
+	void umull(uint8_t rd, uint8_t rn, uint8_t rm);
+	void msub(uint8_t rd, uint8_t rn, uint8_t rm, uint8_t ra, bool is64 = true);
+	// udiv and sdiv: a zero divisor gives 0, and sdiv of the minimum by -1 the minimum; neither traps.
+	void udiv(uint8_t rd, uint8_t rn, uint8_t rm, bool is64 = true);
+	void sdiv(uint8_t rd, uint8_t rn, uint8_t rm, bool is64 = true);
 	void csel(uint8_t rd, uint8_t rn, uint8_t rm, Cond cond, bool is64 = true);
 	void csinc(uint8_t rd, uint8_t rn, uint8_t rm, Cond cond, bool is64 = true);
 	void cset(uint8_t rd, Cond cond, bool is64 = false) { csinc(rd, zr, zr, invert(cond), is64); }
