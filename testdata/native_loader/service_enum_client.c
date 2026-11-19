@@ -17,8 +17,14 @@ static int enumerate_w(SC_HANDLE manager)
 {
 	DWORD needed = 0, count = 0, resume = 0;
 	if (EnumServicesStatusExW(manager, SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_STATE_ALL, NULL, 0, &needed,
-		&count, &resume, ENUM_GROUP) || GetLastError() != ERROR_MORE_DATA || !needed || count)
-		return 11;
+		&count, &resume, ENUM_GROUP))
+		return 111;
+	if (GetLastError() != ERROR_MORE_DATA)
+		return 112;
+	if (!needed)
+		return 113;
+	if (count)
+		return 114;
 	BYTE *buffer = HeapAlloc(GetProcessHeap(), 0, needed);
 	if (!buffer)
 		return 12;
