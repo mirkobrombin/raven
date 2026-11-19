@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -159,6 +160,12 @@ int main(int argc, char **argv)
 		}
 	}
 	std::printf("pinned encodings: %zu, %zu failures\n", std::size(pinned), pinned_failures);
+	// RAVEN_REFUSED names a file to list every instruction of a corpus image (.exe or .dll) that translates() refuses in, one per
+	// line: image, address, bytes, LLVM's text (docs/macos/integer-data/integer_reach.py reads it).
+	const char *refused_path = std::getenv("RAVEN_REFUSED");
+	std::ofstream refused;
+	if (refused_path)
+		refused.open(refused_path);
 	std::map<std::string, Tally> tallies;
 	std::vector<std::string> order;
 	std::string source = "?";
@@ -233,8 +240,18 @@ int main(int argc, char **argv)
 			}
 			if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
 				++tally.translated;
-			else
+			else {
 				++tally.missing[expected.substr(0, expected.find(' '))];
+				if (refused && (source.find(".exe") != std::string::npos || source.find(".dll") != std::string::npos)) {
+					char hex[3];
+					refused << source << '\t' << std::hex << address << std::dec << '\t';
+					for (const uint8_t byte : bytes) {
+						std::snprintf(hex, sizeof hex, "%02x", byte);
+						refused << hex;
+					}
+					refused << '\t' << expected << '\n';
+				}
+			}
 			if (vex_encoded(bytes)) {
 				++tally.vex;
 				if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
@@ -284,7 +301,7 @@ int main(int argc, char **argv)
 				std::printf("%s %s %zu", i ? "," : "; without:", missing[i].second.c_str(), missing[i].first);
 			std::printf("\n");
 		}
-		if (name.find(".exe") != std::string::npos) {
+		if (name.find(".exe") != std::string::npos || name.find(".dll") != std::string::npos) {
 			std::printf("%s: %zu instructions translated of %zu", name.c_str(), tally.translated, tally.instructions);
 			std::vector<std::pair<size_t, std::string>> left;
 			for (const auto &[mnemonic, count] : tally.missing)
