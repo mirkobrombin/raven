@@ -1,7 +1,8 @@
 // A 256-bit instruction whose memory operand faults must leave the guest as it was, as x86's precise exceptions do: no upper half of
 // the destination written (it lives in CpuState, which the fault does not discard) and no byte of a 32-byte store. Each case runs in a
 // vCPU of its own, since a guest exception ends the run: an operand straddles a mapped page and an unmapped one. vmaskmovps must not
-// fault where the elements on the unmapped page are masked off (ymm2's sign bits), and must load or store the others; so must
+// fault where the elements on the unmapped page are masked off (ymm2's sign bits), and must load or store the others (vpmaskmovd
+// the same); so must
 // vpgatherdd, whose indices (ymm3) name the same 32 bytes, and which keeps the masked-off elements and clears the mask.
 #include "runtime.h"
 #include "vcpu.h"
@@ -75,6 +76,12 @@ int main()
 		{"vmaskmovps ymm1, ymm2, [rax], an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x2c, 0x08, 0xc3}, true,
 			0x8000000000000000ull, 0x8000000080000000ull},
 		{"vmaskmovps [rax], ymm2, ymm1, an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x2e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0x0000000080000000ull},
+		{"vpmaskmovd ymm1, ymm2, [rax], unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x8c, 0x08, 0xc3}, true, 0,
+			0x8000000080000000ull, false},
+		{"vpmaskmovd [rax], ymm2, ymm1, unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x8e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0, false},
+		{"vpmaskmovd [rax], ymm2, ymm1, an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x8e, 0x08, 0xc3}, false,
 			0x8000000080000000ull, 0x0000000080000000ull},
 		{"vpgatherdd ymm1, [rax + 4*ymm3], ymm2, unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x90, 0x0c, 0x98, 0xc3}, true, 0,
 			0x8000000080000000ull, false, true},
