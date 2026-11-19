@@ -1,5 +1,5 @@
 // Two vCPUs run translated x64 that adds to one 32-bit word in guest memory a million times each, with lock add, sub, inc, dec and
-// xadd, and counts the updates lost: the word must end at what the additions sum to. lock neg (a compare-and-swap loop) and lock not
+// xadd, lock adc and lock sbb, and counts the updates lost: the word must end at what the additions sum to. lock neg (a compare-and-swap loop) and lock not
 // run 16 trials each on a word of 5, which an even number of them leaves at 5; a lost one shows with odds of a half per trial. The
 // same loop with a plain inc is the control, which must lose updates, or the vCPUs did not run at the same time and a zero proves
 // nothing.
@@ -89,6 +89,9 @@ int main()
 		{"lock add dword ptr [rdi], 3", {0xf0, 0x83, 0x07, 0x03}, 3},
 		{"lock sub dword ptr [rdi], eax", {0xf0, 0x29, 0x07}, -1},
 		{"mov eax, 1; lock xadd dword ptr [rdi], eax", {0xb8, 0x01, 0x00, 0x00, 0x00, 0xf0, 0x0f, 0xc1, 0x07}, 1},
+		// cmp eax, 2 with EAX 1 sets CF: adc of 0 adds 1, sbb of 0 takes 1 (a compare-and-swap loop each).
+		{"cmp eax, 2; lock adc dword ptr [rdi], 0", {0x83, 0xf8, 0x02, 0xf0, 0x83, 0x17, 0x00}, 1},
+		{"cmp eax, 2; lock sbb dword ptr [rdi], 0", {0x83, 0xf8, 0x02, 0xf0, 0x83, 0x1f, 0x00}, -1},
 		{"inc dword ptr [rdi] (no lock, the control)", {0xff, 0x07}, 1, true},
 	};
 	// The bit loops on one word, a bit per vCPU: SET; xchg [rsp - 8], r9; test [rdi], eax; jnz +3; inc r8; CLEAR; xchg; test
