@@ -88,6 +88,24 @@ inline uint64_t fingerprint(const Io &output)
 	return value;
 }
 
+// FNV-1a 64 of the whole corpus: of every case's code and text (what x86_avx.py generated), and of every case's fingerprint (what
+// Rosetta left). The silicon file's `corpus` line holds both, so a change of either is seen even where no case line would show it.
+inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case> &cases)
+{
+	uint64_t generated = 0xcbf29ce484222325ull, results = 0xcbf29ce484222325ull;
+	auto mix = [](uint64_t &value, const void *data, size_t size) {
+		for (size_t i = 0; i < size; ++i)
+			value = (value ^ static_cast<const uint8_t *>(data)[i]) * 0x100000001b3ull;
+	};
+	for (const Case &item : cases) {
+		mix(generated, item.code.data(), item.code.size());
+		mix(generated, item.text.data(), item.text.size());
+		const uint64_t one = fingerprint(item.output);
+		mix(results, &one, sizeof one);
+	}
+	return {generated, results};
+}
+
 inline std::vector<uint8_t> hex_bytes(const std::string &text)
 {
 	std::vector<uint8_t> bytes;
@@ -101,6 +119,7 @@ inline std::vector<uint8_t> hex_bytes(const std::string &text)
 // changed, or -1 when a line does not fit the cases.
 inline long apply_silicon(std::vector<Case> &cases, const char *path)
 {
+	bool corpus_checked = false;
 	std::ifstream in(path);
 	if (!in)
 		return -1;
@@ -113,6 +132,24 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		std::stringstream stream(line);
 		for (std::string part; std::getline(stream, part, '\t');)
 			parts.push_back(part);
+		if (parts[0] == "corpus") {
+			// corpus<TAB>cases=N<TAB>generated=HEX<TAB>rosetta=HEX: what the silicon results were compared against.
+			const auto [generated, results] = corpus_fingerprints(cases);
+			char expected[96];
+			std::snprintf(expected, sizeof expected, "cases=%zu", cases.size());
+			if (parts.size() < 4 || parts[1] != expected || std::stoull(parts[2].substr(10), nullptr, 16) != generated) {
+				std::fprintf(stderr, "%s: the cases are not those the silicon results were compared on (x86_avx.py changed: %s, "
+					"generated=%016llx); run the oracle on the x86 CPU again\n", path, expected, static_cast<unsigned long long>(generated));
+				return -1;
+			}
+			if (std::stoull(parts[3].substr(8), nullptr, 16) != results) {
+				std::fprintf(stderr, "%s: Rosetta's results are not those the silicon results were compared with (rosetta=%016llx); "
+					"compare with the x86 CPU again\n", path, static_cast<unsigned long long>(results));
+				return -1;
+			}
+			corpus_checked = true;
+			continue;
+		}
 		const size_t number = std::stoul(parts[0]);
 		if (parts.size() < 3 || number >= cases.size() || parts[1] != cases[number].text) {
 			std::fprintf(stderr, "silicon line for case %zu does not fit the cases\n", number);
@@ -145,6 +182,10 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		}
 		cases[number].silicon = true;
 		++changed;
+	}
+	if (!corpus_checked) {
+		std::fprintf(stderr, "%s has no corpus line: nothing says which cases and results it was written against\n", path);
+		return -1;
 	}
 	return changed;
 }

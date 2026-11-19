@@ -1,5 +1,5 @@
 """Compares two runs of x86_avx_oracle (x86_avx.py's cases), first Rosetta's and then an x86 CPU's, field by field as
-x86_avx_check.h compares them, prints what differs by family and field, and with OUTPUT writes the silicon results file the tests
+x86_avx_check.h compares them, prints each run's corpus fingerprints (the `corpus` line), prints what differs by family and field, and with OUTPUT writes the silicon results file the tests
 apply: one line per differing case, its number, its text, rosetta=FNV-1a 64 of Rosetta's compared output (x86_avx_check.h's
 fingerprint) and FIELD=HEX for each field the x86 CPU left otherwise (rN, flags, mxcsr, ymmN, bOFFSET).
 
@@ -64,9 +64,23 @@ def fields(io):
     return result
 
 
+def corpus(cases):
+    """x86_avx_check.h's corpus_fingerprints: FNV-1a 64 over every case's code and text, and over every case's fingerprint."""
+    generated = results = 0xCBF29CE484222325
+    for code, text, _, io in cases:
+        for byte in code + text.encode():
+            generated = ((generated ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        for byte in struct.pack("<Q", fingerprint(io)):
+            results = ((results ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return generated, results
+
+
 def main():
     rosetta, silicon = read(sys.argv[1]), read(sys.argv[2])
     assert len(rosetta) == len(silicon), "different case counts"
+    for name, cases in (("first", rosetta), ("second", silicon)):
+        generated, results = corpus(cases)
+        print(f"{name}: corpus\tcases={len(cases)}\tgenerated={generated:016x}\trosetta={results:016x}")
     lines = []
     by_field = Counter()
     by_family = Counter()
@@ -100,6 +114,8 @@ def main():
     if len(sys.argv) > 4:
         with open(sys.argv[3], "w") as out:
             out.write(sys.argv[4] + "\n")
+            generated, results = corpus(rosetta)
+            out.write(f"corpus\tcases={len(rosetta)}\tgenerated={generated:016x}\trosetta={results:016x}\n")
             out.write("".join(line + "\n" for line in lines))
 
 
