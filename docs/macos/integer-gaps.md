@@ -100,6 +100,7 @@ Groups 1 to 3 of the ranked list, each a failing oracle family first and then th
 | 1. one-operand `mul`, `imul`, `div`, `idiv` (8 to 64 bits, register and memory), and `int 0x29` | `98ec8b75` | `b4390745` | 24 |
 | 2. `bt`, `bts`, `btr`, `btc` (16 to 64 bits, register and imm8 index, register and memory, `lock`) | `418f5f5b` | `d2cf77f7` | 25 |
 | 3. `lock add`, `sub`, `and`, `or`, `xor`, `inc`, `dec`, `not`, `neg` on memory (8 to 64 bits) | `03a2bc4f` | `e71538cf` | 26 |
+| 4. `rol`, `ror`, `rcl`, `rcr` (imm8, by one, by CL), `shl`, `shr`, `sar` by CL at 8 and 16 bits, `adc` and `sbb` at 8 and 16 bits, `lock adc` and `lock sbb`; locked forms across 16 bytes | `979d9cdf` | `6d7009e8` | 27 |
 
 How each works. The results are PROVEN by the oracle families and fault cases below; how the code gets them is INFERRED from reading
 it, and claims about the ISA are marked:
@@ -127,6 +128,24 @@ it, and claims about the ISA are marked:
   as without `lock`; `neg` is a `casal` loop. `inc` and `dec` keep CF (PROVEN). TSO is kept as it is for `xadd`, the atomics having
   acquire and release semantics (INFERRED from the Arm ARM; no litmus test runs on the new forms).
 
+- **Rotates:** CF and OF only (OF as for a count of 1, which alone defines it); SF, ZF, AF and PF stay. A masked count of 0 changes
+  nothing; `rol` and `ror` at 8 and 16 bits set CF even when the count is a multiple of the width (PROVEN, the rotate family). 8- and
+  16-bit values are replicated across 32 bits and rotated with `rorv` or `extr`; `rcl` and `rcr` shift the value and CF in a 64-bit
+  register, by the masked count modulo 9 and 17 at 8 and 16 bits (INFERRED from the code; the results PROVEN). A 32-bit register
+  rotated by 0 still has its upper half cleared, as the shifts do, and as Rosetta and the EPYC 9V45 do (PROVEN).
+- **Narrow shifts by CL:** CL modulo 32 may pass the width; the value shifts in a 64-bit register. Silicon defines CF for `sar` past
+  the width (the sign) and the tests compare it; for `shl` and `shr` past the width CF is undefined (PROVEN agreement on the sar
+  cases, the SDM for the rest).
+- **Narrow `adc` and `sbb`:** computed in 32 bits with the carry, CF bit 8 or 16 of the result, OF from the signs. `lock adc` and
+  `lock sbb` are a `casal` loop with NZCV kept across it.
+- **Split locks:** an LSE atomic whose operand crosses a 16-byte boundary raises an alignment fault on the M5 (PROVEN: SIGBUS in
+  process for `ldaddal` at offsets 13 to 15 of 16 for 4 bytes, 9 to 15 for 8, 15 for 2; inside 16 bytes unaligned ones work). Before
+  `6d7009e8` such a `lock` operand crashed the in-process test (SIGBUS, exit 138) and stopped the vCPU test with an alignment data
+  abort (ESR_EL1 0x92000021). Now every locked form (`xchg`, `cmpxchg`, `xadd` and the locked RMW) checks, without touching NZCV,
+  whether its operand crosses 16 bytes and then takes a plain load and store between full barriers: right for one thread, NOT atomic
+  against another, where x86 locks the bus. The unaligned locked family checks both kinds, 64-byte aligned buffer, in process and in a
+  vCPU (PROVEN); atomicity of the split path is not tested and does not hold (INFERRED from its code).
+
 ### Tests
 
 The integer oracle (`x86_semantics.py`) now has families and the AVX checker's fingerprint scheme (`x86_semantics_check.h`,
@@ -145,6 +164,11 @@ barriers (`translate_x86_semantics`) and in a vCPU with hardware TSO (`hvf_integ
 | divide (no #DE inputs: Python leaves them out) | 1303 | 0 | 0 |
 | bit test | 1200 | 0 | 0 |
 | locked | 864 | 0 | 0 |
+| rotate | 1041 | 0 | 0 |
+| shift by cl | 312 | 0 | 0 |
+| carry narrow (with lock adc, lock sbb) | 464 | 0 | 0 |
+| flag readers (setc, seto, cmovc, jc in the same block after bt, mul, a rotate, a narrow shift or adc) | 144 | 0 | 0 |
+| unaligned locked (inside 16 bytes and across) | 496 | 0 | 0 |
 | fault cases: #DE from `div` and `idiv` at each width, by zero and by overflow, a memory divisor, a #DE after a `cmp`, `int 0x29`, `int3`, `ud2` | 23 | 0 | 0 |
 
 Before each feature commit the family failed whole: every case "did not return (exit 6)", the unsupported exit, and 21 of the 23
@@ -161,48 +185,45 @@ negations cancels).
 Every case ran on Rosetta (the build) and on GitHub's x86-64 runners through `raven-macos-bench`'s `integer-oracle` workflow, which
 generates the cases there, assembles them with clang as the build does and runs the oracle twice (the two runs were identical every
 time). The runs: AMD EPYC 9V74 (runs 44522174773 and 44522713416), AMD EPYC 7763 (44523646082 and 44524257886, the last holding every
-family, dump sha256 `8b28a4ea...`). PROVEN by `silicon_overrides.py` on the dumps:
+family then, dump sha256 `8b28a4ea...`), AMD EPYC 9V45 (44526496471, with group 4, dump sha256 `c4477a00...`). PROVEN by
+`silicon_overrides.py` on the dumps:
 
 - **multiply, divide, bit test, locked:** silicon and Rosetta agree in every register, every memory byte and every defined flag. They
   differ only in flags x86 leaves undefined: 1039 multiply cases and 1231 divide cases (bit test and locked none), not compared.
+- **rotate, shift by cl, carry narrow, flag readers, unaligned locked:** the same: no difference in a defined result; undefined flags
+  differ in 7, 278, 0, 38 and 29 cases.
 - **random:** the one known difference stays, the RAX a 32-bit `lock cmpxchg` leaves (case 8316), now held to the EPYC; 2609 cases
   differ only in undefined flags.
 
-No silicon-against-Rosetta difference in a defined result was found in groups 1 to 3.
+No silicon-against-Rosetta difference in a defined result was found in groups 1 to 4.
 
 ### Reachable refused instructions, before and after
 
 PROVEN (`integer_reach.py` on the same images, rerun after each feature commit):
 
-| Corpus | Before (`564c0960`) | After group 1 | After group 2 | After group 3 |
-|---|---|---|---|---|
-| notepad++.exe | 3675 | 2454 | 755 | 638 |
-| GUP.exe | 858 | 686 | 305 | 238 |
-| NppConverter.dll | 203 | 165 | 73 | 41 |
-| nppPluginList.dll | 69 | 60 | 41 | 21 |
-| mimeTools.dll | 79 | 62 | 43 | 23 |
-| NppExport.dll | 124 | 98 | 55 | 35 |
-| **Notepad++, GUP and plugins** | **5008 in 1772 functions** | **3525 in 1131** | **1272 in 428** | **996 in 284** |
-| libc++.dll | 474 | 311 | 276 | 136 |
-| libomp.dll | 730 | 342 | 309 | 147 |
-| libunwind.dll | 8 | 4 | 3 | 3 |
-| libwinpthread-1.dll | 95 | 78 | 74 | 1 |
-| **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** |
+| Corpus | Before (`564c0960`) | After group 1 | After group 2 | After group 3 | After group 4 |
+|---|---|---|---|---|---|
+| notepad++.exe | 3675 | 2454 | 755 | 638 | 169 |
+| GUP.exe | 858 | 686 | 305 | 238 | 68 |
+| NppConverter.dll | 203 | 165 | 73 | 41 | 16 |
+| nppPluginList.dll | 69 | 60 | 41 | 21 | 6 |
+| mimeTools.dll | 79 | 62 | 43 | 23 | 7 |
+| NppExport.dll | 124 | 98 | 55 | 35 | 18 |
+| **Notepad++, GUP and plugins** | **5008 in 1772 functions** | **3525 in 1131** | **1272 in 428** | **996 in 284** | **284 in 169** |
+| libc++.dll | 474 | 311 | 276 | 136 | 99 |
+| libomp.dll | 730 | 342 | 309 | 147 | 135 |
+| libunwind.dll | 8 | 4 | 3 | 3 | 3 |
+| libwinpthread-1.dll | 95 | 78 | 74 | 1 | 1 |
+| **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** | **238 in 165** |
 
-Linearly, Notepad++, GUP and the plugins now have 3488 refusals (7910 before), the runtime DLLs 323 (1494 before). What blocks the most
-functions now: in Notepad++ and its companions `ror r64, cl` 106 in 57, `rep stosw` 66 in 53, `bsf r32, r32` 54 in 38 and `bsr r32,
-r32` 33 in 19; in the runtime DLLs `pause` 93 in 79 and `bsr r64, r64` 56 in 41. These are groups 4 and 5, not done.
+Linearly, Notepad++, GUP and the plugins now have 1672 refusals (7910 before), the runtime DLLs 273 (1494 before). What blocks the most functions after group 4: in Notepad++ and its companions `rep stosw` 66 in 53, `bsf r32, r32` 54 in 38,
+`bsr r32, r32` 33 in 19; in the runtime DLLs `pause` 93 in 79 and `bsr r64, r64` 56 in 41. These are group 5.
 
 ## Open items
 
-- **Groups 4 and 5 are not done:** rotates (`rol`, `ror` by imm and by cl), shifts by cl at 8 and 16 bits, `rcl`/`rcr`, `adc` and
-  `sbb` at 8 and 16 bits; `bsf`/`bsr`, `pause`, `rep stos` and `rep movs` (with DF, which CpuState does not hold yet).
-- `lock adc` and `lock sbb` stay refused (none in the census).
-- Locked operands and bit-test memory forms are tested aligned only. LSE atomics on an address that crosses 16 bytes fault on Arm
-  (FEAT_LSE2 covers only accesses within 16 bytes), where x86 takes a split lock: NOT verified on the M5.
+- **Group 5 is not done:** `bsf`/`bsr`, `pause`, `rep stos` and `rep movs` (with DF, which CpuState does not hold yet).
+- A locked operand across 16 bytes is not atomic against another thread (the split path above).
 - A #DE or an `int 0x29` is a fault exit; delivering it to the guest as an exception is the runtime's caller's work (NOT done here).
-- The new forms are tested as single instructions before `ret`: a reader of their CF later in the same block (jcc, setcc, cmov,
-  adc, sbb after `bt` or `mul`) is covered only by the existing random sequences, which do not contain them (NOT verified).
 - Atomicity is counted for `lock inc`, `dec`, `add`, `sub` and `xadd` only; that `lock and`, `or`, `xor`, `not` and the locked bit
   tests are atomic is INFERRED from the LSE instructions, which the oracle checks single-threaded.
 - The runtime's division reads a memory divisor through `GuestMemory::read`, as xsave and the string compares do: a fault on that
