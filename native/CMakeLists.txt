@@ -552,7 +552,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     set_tests_properties(native_cpu_contracts PROPERTIES TIMEOUT 15)
     # The agent without ptrace: a breakpoint and a call Syscall User Dispatch turns away reach the runtime over the thread's block.
     find_package(Threads REQUIRED)
-    add_executable(agent_test cpu/agent_test.cpp cpu/agent.S)
+    add_executable(agent_test cpu/agent_test.cpp cpu/agent.S cpu/agent_tasks.cpp)
     target_link_libraries(agent_test PRIVATE Threads::Threads)
     add_test(NAME native_agent_contract COMMAND agent_test)
     set_tests_properties(native_agent_contract PROPERTIES TIMEOUT 30)

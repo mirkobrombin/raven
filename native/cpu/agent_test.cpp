@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "agent_context.h"
+#include "agent_tasks.h"
 
 #include <atomic>
 #include <chrono>
@@ -14,9 +15,11 @@
 #include <asm/prctl.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <thread>
 #include <ucontext.h>
 #include <unistd.h>
+#include <vector>
 
 // The agent without ptrace: a thread that takes a breakpoint and a system call Syscall User Dispatch turns away is stopped in its signal
 // handler, the runtime reads the signal and changes the interrupted registers over the thread's block, and the thread goes on with them.
@@ -176,9 +179,48 @@ static int64_t serve(uint64_t *service, long number, std::initializer_list<uint6
 	return int64_t(service[word::result]);
 }
 
+// A held task the runtime reaped already, as it reaps a guest's whole process group once it ends the guest, reads as ended to whoever
+// still waits for it, rather than as running forever.
+static void reaped_task()
+{
+	const pid_t child = fork();
+	check(child >= 0, "cannot start a task to reap");
+	if (child == 0) {
+		pause();
+		_exit(0);
+	}
+	std::vector<uint64_t> words(512);
+	raven::agent::Task task;
+	task.task = child;
+	task.group = child;
+	task.process = child;
+	task.block = words.data();
+	raven::agent::hold(task);
+	kill(child, SIGKILL);
+	int status = 0;
+	check(waitpid(child, &status, 0) == child, "the task to reap was not reaped");
+	std::atomic<bool> done = false;
+	pid_t result = 0;
+	std::thread waiter([&] {
+		result = raven::agent::wait(child, &status, 0);
+		done = true;
+	});
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!done && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	if (!done) {
+		waiter.detach();
+		throw std::runtime_error("a wait for a held task reaped already never ended");
+	}
+	waiter.join();
+	check(result == child && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL, "a held task reaped already did not read as killed");
+	check(!raven::agent::held(child), "a held task reaped already stayed registered");
+}
+
 int main()
 {
 	try {
+		reaped_task();
 		block = static_cast<uint64_t *>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
 		check(block != MAP_FAILED, "no block");
 		const auto code = raven::agent::code();

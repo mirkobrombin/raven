@@ -97,7 +97,14 @@ bool ended(Task &task, int *status)
 {
 	if (task.task == task.group) {
 		int reaped = 0;
-		if (::waitpid(task.task, &reaped, WNOHANG | __WALL) != task.task)
+		const pid_t result = ::waitpid(task.task, &reaped, WNOHANG | __WALL);
+		// Reaped already, as the runtime reaps a whole process group once it ends the guest: the task is gone all the same.
+		if (result == -1 && errno == ECHILD) {
+			if (status)
+				*status = SIGKILL;
+			return true;
+		}
+		if (result != task.task)
 			return false;
 		if (status)
 			*status = reaped;
