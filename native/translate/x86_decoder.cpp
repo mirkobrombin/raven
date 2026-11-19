@@ -993,7 +993,6 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 				result.vector_size = width;
 				return set(broadcast.mnemonic, {vector(reg_number, width), vrm(16, broadcast.element)});
 			}
-		return true;
 	}
 	if (vex.map == 3 && vex.pp == 1 && (opcode == 0x18 || opcode == 0x19 || opcode == 0x38 || opcode == 0x39 || opcode == 0x06 ||
 		opcode == 0x46)) {
@@ -1011,6 +1010,42 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			return set(opcode == 0x06 ? vperm2f128 : vperm2i128, {vector(reg_number, 32), vector(vex.vvvv, 32), vrm(32, 32), imm});
 		}
 	}
+	if ((vex.map == 2 || vex.map == 3) && vex.pp == 1) {
+		// SSSE3, SSE4.1 and SSE4.2 in the 0F 38 and 0F 3A maps. The blendv rows are VEX.66.0F3A 4A-4C with a fourth register.
+		SseEntry sse = escape_map[vex.map - 2][opcode];
+		if (vex.map == 3 && vex.w && (opcode == 0x16 || opcode == 0x22))
+			sse = {opcode == 0x16 ? pextrq : pinsrq, sse.form, 8};
+		const SseForm form = sse.form;
+		const Mnemonic mnemonic = sse.mnemonic;
+		if (mnemonic == invalid || form == SseForm::vw0 || (!memory && form == SseForm::vm))
+			return true;
+		// At 256 bits in AVX: these; the integer forms at 256 bits are AVX2 (not given semantics here), the rest are 128 bits only.
+		if (vex.l && mnemonic != roundps && mnemonic != roundpd && mnemonic != blendps && mnemonic != blendpd && mnemonic != dpps &&
+			mnemonic != ptest)
+			return true;
+		static constexpr Mnemonic unary[] = {pabsb, pabsw, pabsd, ptest, phminposuw, movntdqa, roundps, roundpd, pextrb, pextrw, pextrd,
+			pextrq, extractps, pcmpestrm, pcmpestri, pcmpistrm, pcmpistri, pmovsxbw, pmovsxbd, pmovsxbq, pmovsxwd, pmovsxwq, pmovsxdq,
+			pmovzxbw, pmovzxbd, pmovzxbq, pmovzxwd, pmovzxwq, pmovzxdq};
+		bool is_unary = false;
+		for (const Mnemonic one : unary)
+			is_unary |= one == mnemonic;
+		if (is_unary && vex.vvvv != 0)
+			return false;
+		result.vector_size = width;
+		const Operand v = vector(reg_number, width);
+		const Operand w = vrm(width, sse.size == 16 ? width : sse.size);
+		const Operand n = vector(vex.vvvv, width);
+		Operand e = memory ? rm : general(rm_number, sse.size == 8 ? 8 : 4);
+		if (memory)
+			e.size = sse.size;
+		switch (form) {
+		case SseForm::vw: case SseForm::vm: return is_unary ? set(mnemonic, {v, w}) : set(mnemonic, {v, n, w});
+		case SseForm::vw_ib: return is_unary ? set(mnemonic, {v, w, imm}) : set(mnemonic, {v, n, w, imm});
+		case SseForm::ev_ib: return vex.vvvv == 0 ? set(mnemonic, {e, v, imm}) : false;
+		case SseForm::ve_ib: return set(mnemonic, {v, n, e, imm});
+		default: return true;
+		}
+	}
 	if (vex.map != 1)
 		return true;
 	SseEntry sse = sse_map[vex.pp][opcode];
@@ -1021,7 +1056,7 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	else if (vex.pp == 0 && opcode == 0xae && (modrm.reg == 2 || modrm.reg == 3))
 		sse = {modrm.reg == 2 ? ldmxcsr : stmxcsr, SseForm::m, 4};
 	const SseForm form = sse.form;
-	if (sse.mnemonic == invalid || (memory && (form == SseForm::vu || form == SseForm::gu || form == SseForm::ui)) ||
+	if (sse.mnemonic == invalid || (memory && (form == SseForm::vu || form == SseForm::gu || form == SseForm::ui || form == SseForm::gu_ib)) ||
 		(!memory && (form == SseForm::vm || form == SseForm::mv || form == SseForm::m)))
 		return true;
 	const Mnemonic mnemonic = sse.mnemonic;
@@ -1044,7 +1079,8 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	bool scalar = false;
 	for (const Mnemonic one : scalars)
 		scalar |= one == mnemonic;
-	static constexpr Mnemonic l0_only[] = {movq, movd, ldmxcsr, stmxcsr, movlps, movlpd, movhps, movhpd, movhlps, movlhps};
+	static constexpr Mnemonic l0_only[] = {movq, movd, ldmxcsr, stmxcsr, movlps, movlpd, movhps, movhpd, movhlps, movlhps, pinsrw,
+		pextrw};
 	for (const Mnemonic one : l0_only)
 		if (one == mnemonic && vex.l)
 			return false;
@@ -1100,7 +1136,14 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	case SseForm::gu: return set(mnemonic, {general(reg_number, 4), vector(rm_number, width)});
 	case SseForm::ui: return set(mnemonic, {vector(vex.vvvv, width), vector(rm_number, width), imm});
 	case SseForm::m: return set(mnemonic, {w});
-	case SseForm::none: return true;
+	case SseForm::ve_ib: {
+		Operand e = memory ? rm : general(rm_number, 4);
+		if (memory)
+			e.size = 2;
+		return set(mnemonic, {v, n, e, imm});
+	}
+	case SseForm::gu_ib: return vex.vvvv == 0 ? set(mnemonic, {general(reg_number, 4), vector(rm_number, 16), imm}) : false;
+	default: return true;
 	}
 	return true;
 }

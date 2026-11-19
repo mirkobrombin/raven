@@ -114,12 +114,16 @@ bool ends_block(Mnemonic mnemonic)
 // Whether the translator has code for the instruction; the block ends before any it has not.
 bool supported(const Instruction &instruction);
 
-// VEX forms of SSE and SSE2. Unary: the destination is not a source (and pshufd, pshufhw, pshuflw, whose imm8 follows the one
-// source). Otherwise operands[1] is the VEX.vvvv source the destination starts from and the rest are the legacy form's sources.
+// VEX forms of SSE to SSE4.2. Unary: the destination is not a source (and pshufd, pshufhw, pshuflw, roundps, roundpd, pextr* and
+// extractps, whose imm8 follows the one source). Otherwise operands[1] is the VEX.vvvv source the destination starts from and the rest are the legacy form's sources.
 bool vex_unary(const Instruction &instruction)
 {
-	return instruction.count == 2 || instruction.mnemonic == Mnemonic::pshufd || instruction.mnemonic == Mnemonic::pshufhw ||
-		instruction.mnemonic == Mnemonic::pshuflw;
+	switch (instruction.mnemonic) {
+	case Mnemonic::pshufd: case Mnemonic::pshufhw: case Mnemonic::pshuflw: case Mnemonic::roundps: case Mnemonic::roundpd:
+	case Mnemonic::pextrb: case Mnemonic::pextrw: case Mnemonic::pextrd: case Mnemonic::pextrq: case Mnemonic::extractps:
+		return true;
+	default: return instruction.count == 2;
+	}
 }
 
 // The legacy SSE form a VEX one runs as, with target as its destination (and first source, for the merging forms).
@@ -407,6 +411,8 @@ private:
 	uint8_t high_source(const Operand &operand, uint8_t target);
 	void avx(const Instruction &instruction);
 	void avx_mask(const Instruction &instruction);
+	void avx_test(const Instruction &instruction);
+	void test_flags();
 	void avx_lanes(const Instruction &instruction);
 	void avx_fma(const Instruction &instruction);
 
@@ -1837,28 +1843,7 @@ void BlockTranslator::sse41(const Instruction &instruction)
 		// ZF: the destination and the source share no bit; CF: the source has no bit the destination lacks. AF, OF, PF and SF clear.
 		a.simd(simd::and_16b, vs1, target, source);
 		a.simd(simd::bic_16b, vs2, source, target);
-		a.umov(s0, vs1, 0, 8);
-		a.umov(s1, vs1, 1, 8);
-		a.orr(s0, s0, s1);
-		a.umov(s1, vs2, 0, 8);
-		a.umov(s2, vs2, 1, 8);
-		a.orr(s1, s1, s2);
-		if (flags_wanted(all_flags)) {
-			// Z = (s0 == 0); C, the inverse of CF, = (s1 != 0); N = V = 0.
-			a.sub_imm(s2, s0, 0, false, true, true);
-			a.cset(s2, Cond::eq);
-			a.sub_imm(s3, s1, 0, false, true, true);
-			a.cset(s3, Cond::ne);
-			a.lsl_imm(s2, s2, 30, false);
-			a.orr(s2, s2, s3, Shift::lsl, 29, false);
-			a.msr_nzcv(s2);
-			carry_inverted = true;
-			if (flags_wanted(PF | AF)) {
-				// An odd low byte (PF clear), the same for AF's source (AF clear).
-				a.mov_imm(parity_register, 1);
-				a.mov(adjust_register, parity_register);
-			}
-		}
+		test_flags();
 		return;
 	}
 	case pmuldq:
@@ -2102,6 +2087,8 @@ void BlockTranslator::avx(const Instruction &instruction)
 	if (mnemonic >= avx_first)
 		return avx_lanes(instruction);
 	const bool wide = instruction.vector_size == 32;
+	if (mnemonic == Mnemonic::ptest)
+		return avx_test(instruction);
 	if (wide && (mnemonic == Mnemonic::movmskps || mnemonic == Mnemonic::movmskpd || mnemonic == Mnemonic::pmovmskb))
 		return avx_mask(instruction);
 	const Operand &target = operands[0];
@@ -2183,6 +2170,11 @@ void BlockTranslator::avx(const Instruction &instruction)
 		// vshufpd takes bits 3:2 of its imm8 for the upper half (vshufps the same four fields for both).
 		if (mnemonic == Mnemonic::shufpd)
 			high.operands[2].value = (operands[3].value >> 2) & 3;
+		// vblendps and vblendpd: one imm8 bit per element across both halves.
+		if (mnemonic == Mnemonic::blendps)
+			high.operands[2].value = (operands[3].value >> 4) & 15;
+		if (mnemonic == Mnemonic::blendpd)
+			high.operands[2].value = (operands[3].value >> 2) & 3;
 		translate(high);
 		store_high(vh0, destination);
 	}
@@ -2190,6 +2182,59 @@ void BlockTranslator::avx(const Instruction &instruction)
 		a.simd(simd::orr_16b, destination, working, working);
 	if (!wide)
 		clear_high(destination);
+}
+
+void BlockTranslator::test_flags()
+{
+	// ptest and the others: vs1 holds the destination and the source, vs2 the source and not the destination.
+	a.umov(s0, vs1, 0, 8);
+	a.umov(s1, vs1, 1, 8);
+	a.orr(s0, s0, s1);
+	a.umov(s1, vs2, 0, 8);
+	a.umov(s2, vs2, 1, 8);
+	a.orr(s1, s1, s2);
+	if (flags_wanted(all_flags)) {
+		// Z = (s0 == 0); C, the inverse of CF, = (s1 != 0); N = V = 0.
+		a.sub_imm(s2, s0, 0, false, true, true);
+		a.cset(s2, Cond::eq);
+		a.sub_imm(s3, s1, 0, false, true, true);
+		a.cset(s3, Cond::ne);
+		a.lsl_imm(s2, s2, 30, false);
+		a.orr(s2, s2, s3, Shift::lsl, 29, false);
+		a.msr_nzcv(s2);
+		carry_inverted = true;
+		if (flags_wanted(PF | AF)) {
+			// An odd low byte (PF clear), the same for AF's source (AF clear).
+			a.mov_imm(parity_register, 1);
+			a.mov(adjust_register, parity_register);
+		}
+	}
+}
+
+void BlockTranslator::avx_test(const Instruction &instruction)
+{
+	// vptest at either width: ZF and CF over all 256 bits. Every load comes first; nothing but the flags is written.
+	const Operand &first = instruction.operands[0], &second = instruction.operands[1];
+	uint8_t low = second.reg;
+	if (second.kind == OperandKind::mem) {
+		Operand half = second;
+		half.size = 16;
+		load_vector(vs0, half, 16);
+		low = vs0;
+	}
+	if (instruction.vector_size == 32) {
+		const uint8_t high = high_source(second, vh1);
+		load_high(vh0, first.reg);
+		a.simd(simd::and_16b, vh2, vh0, high);
+		a.simd(simd::bic_16b, vh3, high, vh0);
+	}
+	a.simd(simd::and_16b, vs1, first.reg, low);
+	a.simd(simd::bic_16b, vs2, low, first.reg);
+	if (instruction.vector_size == 32) {
+		a.simd(simd::orr_16b, vs1, vs1, vh2);
+		a.simd(simd::orr_16b, vs2, vs2, vh3);
+	}
+	test_flags();
 }
 
 void BlockTranslator::avx_mask(const Instruction &instruction)
