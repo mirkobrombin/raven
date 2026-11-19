@@ -2,7 +2,7 @@
 
 `native/translate/` translates SSE and SSE2 on XMM registers. This note records the guest state, the coverage measured on Notepad++
 x64, the x86 semantics that differ from Arm and how each is handled, the tests and their results, a short performance check and the
-open items. x87 is in [x87.md](x87.md); AVX comes next.
+open items. x87 is in [x87.md](x87.md), AVX in [avx.md](avx.md).
 
 Labels are those of [translation.md](translation.md): **PROVEN** (a command produced the result), **INFERRED** (derived; the missing
 check is named), **NOT verified**. MacBook Air M5 (Mac17,3), macOS 27.2.1, Xcode 27.2, llvm-mingw 20261104. The x86 reference is
