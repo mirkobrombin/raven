@@ -1,4 +1,4 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V45 (raven-macos-bench run 44493373058, assembled with clang as here; dump sha256 e328a8533e0ca638555bea8ea7afedf56d4b40be64ad422df4b447540b681945): the tests refuse the file when a family's cases or Rosetta's results change.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44498540080, assembled with clang as here; dump sha256 8bc66d6d9fdb515d8518248eabd71cef46f5c9a9f593c3fe54271968b22acc53): the tests refuse the file when a family's cases or Rosetta's results change.
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
@@ -9,4 +9,82 @@ corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
 corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
 corpus	moves	cases=500	generated=a0c679a6f55af097	rosetta=005e880bff9bde0c
 corpus	shuffle	cases=400	generated=4d882c20282e375a	rosetta=9626d96c7c36edbd
+corpus	sse3	cases=500	generated=36aa17315fe8f5c7	rosetta=0dc0a19bdd9db3bf
+corpus	sse41	cases=1000	generated=4048e75bed7d65ca	rosetta=1cc0b362db2efc2c
+corpus	ssse3	cases=500	generated=5fa57f159a9ca2a7	rosetta=45920946b54303f5
 corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
+6791	ptest xmm1, xmm13; setp al	rosetta=80c645334d3258df	r0=0043f636f4371926	flags=0000000000000000
+6794	ptest xmm4, xmm12; sete al	rosetta=2c52bce89b3b350c	flags=0000000000000000
+6795	ptest xmm2, xmm11; setb al	rosetta=9792b41f27724e57	flags=0000000000000000
+6796	ptest xmm0, xmm7; setae al	rosetta=0fef7a5199187a74	flags=0000000000000000
+6806	ptest xmm10, xmm13; sete al	rosetta=d5699e6fb27c7b7b	flags=0000000000000000
+6826	ptest xmm6, xmm7; sets al	rosetta=4595dc6678cf4d81	flags=0000000000000000
+6827	ptest xmm0, xmm8; setbe al	rosetta=42275e939ca9bbcc	flags=0000000000000000
+6851	ptest xmm11, xmm8; sets al	rosetta=4544a6083fd11fed	r0=0000000000002000	flags=0000000000000000
+6854	ptest xmm10, xmm0; sete al	rosetta=bcd7d64129f14f28	flags=0000000000000000
+6869	ptest xmm1, xmm9; seto al	rosetta=b4b91f24613932aa	flags=0000000000000000
+6872	ptest xmm5, xmm8; setne al	rosetta=f1d11a7b26da258e	flags=0000000000000000
+6886	ptest xmm11, xmm12; seta al	rosetta=0545051f8c667fff	flags=0000000000000000
+6898	ptest xmm9, xmmword ptr [r15 + 16]; setb al	rosetta=a50eae808e5c2c00	flags=0000000000000000
+6906	ptest xmm12, xmm8; setb al	rosetta=a756e714f898e865	flags=0000000000000000
+6917	ptest xmm3, xmm10; sets al	rosetta=caea61555c132f94	flags=0000000000000000
+6922	ptest xmm8, xmm2; setne al	rosetta=c42d723ceadd1a5f	flags=0000000000000000
+6924	ptest xmm6, xmm6; sets al	rosetta=d1f415d9fa4c17e5	flags=0100000000000000
+6927	ptest xmm8, xmm10; sete al	rosetta=6f413fe537ff11fe	flags=0000000000000000
+6929	ptest xmm7, xmm0; sets al	rosetta=b154ac3c3aab655d	r0=00ffffffffffff7f	flags=0000000000000000
+6936	ptest xmm2, xmmword ptr [r15 + 64]; seta al	rosetta=d1d6ff1dc19b0bb3	flags=0000000000000000
+6943	ptest xmm12, xmm2; sets al	rosetta=fb07b21072f28baa	flags=0000000000000000
+6951	ptest xmm13, xmm7; seto al	rosetta=3fa5556db73b4377	flags=0100000000000000
+6963	ptest xmm2, xmm15; seto al	rosetta=1875fd2183f392ef	r0=00e6aea5caaf54ef	flags=0000000000000000
+6977	ptest xmm6, xmm7; setb al	rosetta=e12e7ca964b50ac1	flags=0000000000000000
+6986	ptest xmm13, xmm12; setne al	rosetta=8b3dd9d795935719	flags=0000000000000000
+6998	ptest xmm12, xmm4; setae al	rosetta=a22e8c6e0f90bc93	flags=0000000000000000
+7010	ptest xmm3, xmm9; setp al	rosetta=2ca5baeea9bc5c3b	flags=0000000000000000
+7025	ptest xmm5, xmm12; sete al	rosetta=7eeb426e00302b03	flags=0000000000000000
+7039	ptest xmm1, xmm11; setp al	rosetta=659ba67dcfc07a88	flags=0000000000000000
+7046	ptest xmm3, xmm13; sete al	rosetta=621f0d6ccaef92b6	flags=0000000000000000
+7048	ptest xmm9, xmmword ptr [r15 + 48]; seto al	rosetta=b550d94b9d58e6f0	flags=0000000000000000
+7071	ptest xmm13, xmm1; seta al	rosetta=fc2aa352344db653	flags=0000000000000000
+7074	ptest xmm0, xmm15; setb al	rosetta=249142f86d33af93	flags=0000000000000000
+7107	ptest xmm3, xmm7; seto al	rosetta=a380a0092faec4aa	flags=0000000000000000
+7137	ptest xmm7, xmm3; setbe al	rosetta=49cb876b836bf231	flags=0000000000000000
+7174	ptest xmm15, xmm4; setne al	rosetta=c80dbe9b35fc30f3	flags=0000000000000000
+7176	ptest xmm14, xmm0; setp al	rosetta=e758f532124cc414	flags=0000000000000000
+7191	ptest xmm4, xmm5; setp al	rosetta=8b3d11f10d5073d0	flags=0000000000000000
+7196	ptest xmm7, xmm7; setbe al	rosetta=3d17de679fb90573	flags=0100000000000000
+7237	ptest xmm4, xmmword ptr [r15 + 160]; setp al	rosetta=249193e9716c5a6f	r0=001fa9d53857399b	flags=0000000000000000
+7270	ptest xmm13, xmm3; setb al	rosetta=3a20a4bcd3ca2a16	flags=0000000000000000
+7322	ptest xmm0, xmm12; setne al	rosetta=c3665badfff7316f	flags=0000000000000000
+7354	ptest xmm8, xmm0; seta al	rosetta=735dee2d20e1ca8d	flags=0000000000000000
+7387	ptest xmm7, xmm11; setae al	rosetta=726b7be7937f5702	flags=0000000000000000
+7391	ptest xmm3, xmmword ptr [r15 + 96]; seta al	rosetta=ee8564f9dd8d96c6	flags=0000000000000000
+7395	ptest xmm10, xmm10; setne al	rosetta=96a05d5d22cbc445	flags=0100000000000000
+7397	ptest xmm6, xmm3; sete al	rosetta=df2bcdc0278e4d4c	flags=0000000000000000
+7400	ptest xmm7, xmmword ptr [r15 + 16]; sets al	rosetta=f3ab20d37dd50a55	flags=0000000000000000
+7401	ptest xmm14, xmm6; seto al	rosetta=d86f5d3e54e6459c	flags=0000000000000000
+7423	ptest xmm5, xmmword ptr [r15 + 16]; setbe al	rosetta=2308dc8116102d7f	flags=0000000000000000
+7426	ptest xmm9, xmm9; setne al	rosetta=e1bdc21e96611e96	flags=0100000000000000
+7433	ptest xmm13, xmmword ptr [r15 + 48]; setbe al	rosetta=769e686d9dfa0991	flags=0000000000000000
+7438	ptest xmm6, xmm6; sete al	rosetta=94bbe82deb134145	flags=0100000000000000
+7444	ptest xmm13, xmm7; setp al	rosetta=1b1116942e694512	flags=0000000000000000
+7459	ptest xmm13, xmm3; sets al	rosetta=9ac10782361b2dd6	flags=0000000000000000
+7474	ptest xmm5, xmmword ptr [r15 + 32]; setp al	rosetta=1af2217f0923d62a	r0=0000000000000000	flags=0000000000000000
+7475	ptest xmm8, xmm14; setb al	rosetta=3536cf83b16a45fc	flags=0000000000000000
+7483	ptest xmm8, xmm6; setp al	rosetta=80b9de77eea8c506	flags=0000000000000000
+7485	ptest xmm14, xmm2; setae al	rosetta=86d9cc172e2d8b68	flags=0000000000000000
+7491	ptest xmm10, xmmword ptr [r15 + 144]; sets al	rosetta=0686e26807aa32f9	r0=0000000100000000	flags=0000000000000000
+7497	ptest xmm7, xmmword ptr [r15 + 64]; setb al	rosetta=121da1d20a69b9f8	flags=0000000000000000
+7520	ptest xmm10, xmmword ptr [r15 + 96]; setae al	rosetta=b3adf042a4721b42	flags=0000000000000000
+7528	ptest xmm1, xmmword ptr [r15 + 32]; setne al	rosetta=41d3e054e5f183e0	flags=0000000000000000
+7544	ptest xmm5, xmm4; seta al	rosetta=5d729437890c3268	flags=0000000000000000
+7572	ptest xmm1, xmmword ptr [r15 + 144]; setp al	rosetta=3287b7ec6587a6a6	flags=0000000000000000
+7584	ptest xmm1, xmm9; sete al	rosetta=1c6fe85e8733f9ee	flags=0000000000000000
+7597	ptest xmm11, xmm7; setb al	rosetta=210139ffcbdcf25d	flags=0000000000000000
+7641	ptest xmm6, xmm15; setae al	rosetta=e409cc55c0bf41d6	flags=0000000000000000
+7648	ptest xmm10, xmm13; sets al	rosetta=be8bf31b76803be7	r0=00303adbdeb87f73	flags=0000000000000000
+7690	ptest xmm7, xmmword ptr [r15 + 48]; setbe al	rosetta=b379a7e13afec392	flags=0000000000000000
+7693	ptest xmm10, xmm7; seto al	rosetta=74ca6194c95a31d1	r0=0000000000000000	flags=0000000000000000
+7731	ptest xmm2, xmm5; setne al	rosetta=8cf0d8c16f8a2ec7	flags=0000000000000000
+7747	ptest xmm1, xmm7; setp al	rosetta=ffe425fe9a9e490d	r0=00c0b3b2126d3ad8	flags=0000000000000000
+7748	ptest xmm4, xmm1; sets al	rosetta=c81f62b3e4f16593	flags=0000000000000000
+7771	ptest xmm0, xmm12; setae al	rosetta=928930126daf99f9	flags=0000000000000000
