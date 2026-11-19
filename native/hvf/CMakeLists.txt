@@ -204,6 +204,13 @@ raven_hvf_sign(hvf_arm64ec_test)
 add_test(NAME hvf_arm64ec COMMAND hvf_arm64ec_test ${GUEST})
 set_tests_properties(hvf_arm64ec PROPERTIES TIMEOUT 60)
 
+# CPUID and XGETBV in a vCPU, by the rules translate_cpuid checks in this process.
+add_executable(hvf_cpuid_test hvf_cpuid_test.cpp)
+target_link_libraries(hvf_cpuid_test PRIVATE raven_hvf)
+raven_hvf_sign(hvf_cpuid_test)
+add_test(NAME hvf_cpuid COMMAND hvf_cpuid_test)
+set_tests_properties(hvf_cpuid PROPERTIES TIMEOUT 30)
+
 # The SSE oracle's cases in a vCPU, against the results the translate build recorded under Rosetta.
 add_executable(hvf_sse_test hvf_sse_test.cpp)
 target_link_libraries(hvf_sse_test PRIVATE raven_hvf)

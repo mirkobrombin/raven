@@ -98,6 +98,12 @@ add_custom_target(a64_cases ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.tx
 add_test(NAME translate_a64_emitter COMMAND a64_emitter_test ${CMAKE_CURRENT_BINARY_DIR}/a64_cases.txt)
 set_tests_properties(translate_a64_emitter PROPERTIES TIMEOUT 30)
 
+# What CPUID and XGETBV tell translated code (cpuid_check.h); also run in a vCPU by native/hvf's hvf_cpuid_test.
+add_executable(cpuid_test cpuid_test.cpp)
+target_link_libraries(cpuid_test PRIVATE raven_translate)
+add_test(NAME translate_cpuid COMMAND cpuid_test)
+set_tests_properties(translate_cpuid PROPERTIES TIMEOUT 30)
+
 add_executable(runtime_test runtime_test.cpp)
 target_link_libraries(runtime_test PRIVATE raven_translate_test_process)
 add_dependencies(runtime_test translate_guests)
