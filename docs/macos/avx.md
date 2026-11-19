@@ -80,7 +80,9 @@ from one table and goes on after the instruction, in this process and in a vCPU 
   0x80000001), because x64 code may assume it without asking. MMX, fxsave and cmpxchg8b are not translated yet (open items).
 - **Bits that describe the same state agree:** OSXSAVE and XSAVE come with AVX; then XCR0 is 7 and leaf 0xd subleaf 0 lists 7 with
   832 bytes, subleaf 2 places the YMM state at 576 (256 bytes). Without AVX, OSXSAVE is clear and xgetbv faults (`FaultKind::instruction`)
-  as x86 raises #UD; xgetbv of an XCR other than 0 faults as #GP. FMA, F16C and AVX2 are never reported without AVX; no AVX-512 bit
+  as x86 raises #UD; xgetbv of an XCR other than 0 faults as #GP. Both give the same `FaultKind::instruction`, as hlt and ud2 do: a
+  later Windows exception mapping cannot tell #UD (STATUS_ILLEGAL_INSTRUCTION) from #GP (STATUS_PRIVILEGED_INSTRUCTION) by it and must
+  decode the instruction and read OSXSAVE and ECX (open item). FMA, F16C and AVX2 are never reported without AVX; no AVX-512 bit
   and no XCR0 bit above 2 is ever set.
 - Vendor "GenuineIntel" (as Rosetta), family 6, highest basic leaf 0xd, extended 0x80000008, brand "Raven x86-64 translator".
 
@@ -228,6 +230,7 @@ and in a vCPU.
   11 24H2 baseline may also use SSE4.2 and POPCNT without asking.
 - **`IsProcessorFeaturePresent` and KUSER_SHARED_DATA's XState** must agree with cpuid once AVX is reported; they live in native/nt,
   not touched here.
+- **xgetbv's two faults** share `FaultKind::instruction` (see cpuid and xgetbv).
 - **xsave, xrstor, xsaveopt** are not translated; CONTEXT has no YMM part yet.
 - **Alignment:** vmovaps and the other aligned forms do not raise #GP on a misaligned address.
 - **New A64 encodings** (fmla, fmls, fneg, the four-operand FMA forms) are proven by the oracle, not by `a64_emitter_test`.
