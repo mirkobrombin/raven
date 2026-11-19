@@ -260,7 +260,9 @@ def sse3(rng):
     op = rng.choice(["movddup", "movsldup", "movshdup", "lddqu"])
     size = 8 if op == "movddup" else 16
     if rng.random() < 0.6:
-        source = mem(rng, size) if op == "lddqu" or rng.random() < 0.3 else f"xmm{reg(rng)}"
+        # Legacy SSE needs 16-byte alignment for a 16-byte operand (x86 raises #GP; Rosetta does not check), lddqu and the 8 bytes of
+        # movddup do not.
+        source = mem(rng, size, op in ("movsldup", "movshdup")) if op == "lddqu" or rng.random() < 0.3 else f"xmm{reg(rng)}"
         return [f"{op} xmm{reg(rng)}, {source}"]
     width = rng.choice([16, 32])
     vsize = width if op != "movddup" or width == 32 else 8
