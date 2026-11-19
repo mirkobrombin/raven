@@ -76,7 +76,7 @@ from one table and goes on after the instruction, in this process and in a vCPU 
   | SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT | 6 of 6, 7 of 7, 22 of 22, 4 of 4, 1 of 1 | none: reported |
   | AVX, with XSAVE (xsave, xrstor) | 53 of 53, 2 of 2 | none: reported |
   | FMA | 96 of 96 | none: reported |
-  | AVX2 | 30 of 30 | none: reported |
+  | AVX2 | 31 of 31 | none: reported |
   | F16C, BMI1, BMI2, LZCNT, MOVBE, CMPXCHG16B | 0 of each | all |
 - **The x86-64 baseline is always reported** (psABI x86-64-v1: FPU, CX8, CMOV, MMX, FXSR, SSE, SSE2; long mode and syscall in
   0x80000001), because x64 code may assume it without asking. MMX, fxsave and cmpxchg8b are not translated yet (open items).
@@ -91,7 +91,9 @@ from one table and goes on after the instruction, in this process and in a vCPU 
 **What it reports today: the baseline, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AVX (with XSAVE and OSXSAVE), FMA and AVX2; no
 F16C, BMI1, BMI2 or LZCNT** (PROVEN, `translate_cpuid` and `hvf_cpuid`, 0 failures: leaf 1 ECX 0x1c981201, EDX 0x07808101; leaf 7
 EBX 0x20; xgetbv(0) 7). Each was switched on in a commit of its own once its samples translated and its oracle families passed in
-this process and in a vCPU against an x86 CPU: SSE4.2 `c332ddac`, AVX `4d24ded4`, FMA `411a6fd0`, AVX2 `52c59c97`. The model requires each SSE level to come with
+this process and in a vCPU against an x86 CPU: SSE4.2 `c332ddac`, AVX `4d24ded4`, FMA `411a6fd0`, AVX2 `52c59c97`. AVX2 was
+reported one commit too early: a review then found vbroadcasti128 undecoded; it joined the samples (`d216126b`) and was translated
+(`a9635f75`), so from `a9635f75` on the AVX2 report holds for every sample. The model requires each SSE level to come with
 the ones before it, AVX with SSE4.2, and XSAVE's samples to translate whenever XSAVE is reported, which it is with AVX: so AVX also
 needed xsave and xrstor (below). The model with every feature on is checked for the same consistency (`every feature on, model`, 0
 failures).
@@ -146,7 +148,7 @@ failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt
 | VEX forms of SSE and SSE2 | every instruction sse.md lists, at 128 bits and (packed) at 256 | the SSE code once per half; the destination starts as the first source, through v22 when the destination is the second source |
 | Masks at 256 bits | vmovmskps, vmovmskpd, vpmovmskb | each half's mask, the upper one shifted above |
 | Lanes | vinsertf128, vinserti128, vextractf128, vextracti128, vperm2f128, vperm2i128 | moves of q registers between v0-v15, CpuState and memory; zeroing per imm bits 3 and 7 |
-| Broadcasts | vbroadcastss, vbroadcastsd, vbroadcastf128, vpbroadcastb, w, d, q | dup of element 0 |
+| Broadcasts | vbroadcastss, vbroadcastsd, vbroadcastf128, vbroadcasti128, vpbroadcastb, w, d, q | dup of element 0 |
 | FMA3 | vfmadd, vfmsub, vfnmadd, vfnmsub in 132, 213, 231, ps, pd, ss, sd | scalar: fmadd, fnmsub, fmsub, fnmadd (one rounding); packed: fmla or fmls into a copy of the addend, negated first for fmsub and fnmsub (negation is exact) |
 | FMA3, alternating | vfmaddsub, vfmsubadd in 132, 213, 231, ps, pd | fmla into a copy of the addend negated in the subtracting elements (even for vfmaddsub, odd for vfmsubadd) |
 | VEX forms of SSSE3 to SSE4.2 | maps 0F 38 and 0F 3A: every instruction sse.md lists, at 128 bits; vroundps, vroundpd, vblendps, vblendpd, vdpps and vptest also at 256; vpinsrw, vpextrw | the SSE code per half; vblendps and vblendpd take the upper half's selectors from the high imm8 bits; vpcmpestri and the others in the host as their legacy forms |
@@ -173,7 +175,10 @@ failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt
   17900 with semantics (69.5%), 10690 rejected by LLVM, 0 failures`; the count includes what LLVM decodes between them).
 - `translator_version` is 15 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
   10: the string compares; 11: the VEX forms of SSSE3 to SSE4.2; 12: the rest of AVX but the approximations; 13: the
-  approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor; 16: AVX2 but the gathers; 17: the gathers).
+  approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor; 16: AVX2 but the gathers; 17: the gathers; 18: review
+  fixes: a 128-bit vpgatherdq or vgatherdpd gathered 4 elements instead of 2 (reading mask and index bits x86 ignores), store
+  probes left out an fs or gs base, vroundss and vroundsd with VEX.L set, a 256-bit vpmovsx or vpmovzx with VEX.vvvv set; 19:
+  vbroadcasti128).
 
 ## Tests
 
@@ -184,7 +189,9 @@ failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt
   x86 promises 1.5 * 2^-12 and its CPUs differ in the bits), `fma addsub` 600 (`e03e7d4e`), `avx2` 1500 (`b8b9d5ed`; the
   variable shifts get counts around the element width), `gathers` 800 (`e6a49d8e`; every form and width, every scale, indices
   inside the buffer, some negative, random mask bits). PROVEN at the end (`ctest`): `translate_x86_avx` 32976 cases (16488 in each
-  memory ordering), 0 failures; `hvf_avx` 16488 cases in a vCPU, 0 failures.
+  memory ordering), 0 failures; `hvf_avx` 16488 cases in a vCPU, 0 failures. Then `avx2 broadcast` 100 (vbroadcasti128,
+  `9e4dd757`): 33176 and 16588 cases, 0 failures. The review fixes of version 18 came without a failing test first: the 128-bit
+  gather bug did not show in the oracle (its stray loads stayed inside the buffer and their results were cleared).
 - **Masked moves and faults** (`hvf_avx_fault`, in a vCPU, test `54dd3d59` first, then `d4090f9b`): vmaskmovps with the elements on an
   unmapped page masked off neither faults nor moves them, and moves the others (load and store); with an element on the unmapped
   page selected it faults with no register or byte changed. The same for vpmaskmovd (`51a6c6ec`, added after its implementation)
@@ -318,7 +325,10 @@ port (NOT verified).
   Not done here (native/nt is out of this branch's scope): an item for a design review.
 - **BMI2 next to AVX2:** Notepad++ has 2 shlx; BMI1 and BMI2 (and LZCNT) are not translated or reported. Code that assumes BMI2
   with AVX2 (Haswell brought both) would stop there.
-- **A gather that faults after some elements** is not tested (see Tests); nor are 32-bit addresses or fs/gs with VSIB.
+- **A gather that faults after some elements** is not tested (see Tests); nor are 32-bit addresses or fs/gs with VSIB, nor a
+  test that would have caught the 128-bit vpgatherdq count (index bits beyond the elements pointing at an unmapped page).
+- **xrstor** now reads everything before writing the state; whether x86 leaves the state unchanged when the YMM area faults was
+  not checked (NOT verified).
 - **xsave and xrstor** are not compared with an x86 CPU; xsaveopt, xsavec, xsaves, fxsave and fxrstor are not translated; CONTEXT
   has no YMM part yet.
 - **More NaN cases** for VEX (3 lanes with an SNaN and a QNaN) and packed FMA3 edges (ps, pd).
