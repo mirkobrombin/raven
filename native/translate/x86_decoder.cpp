@@ -966,6 +966,14 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 		return vex.vvvv == 0;
 	}
 	if (vex.map == 2 && vex.pp == 1) {
+		if (opcode >= 0x96 && (opcode & 0x0f) >= 6 && (opcode & 0x0f) <= 7 && opcode <= 0xb7) {
+			// vfmaddsub (6) and vfmsubadd (7), ps or (W) pd.
+			const unsigned order = (opcode >> 4) - 9;
+			const auto mnemonic = static_cast<Mnemonic>(static_cast<unsigned>(vfmaddsub132ps) + (((opcode & 1) * 3 + order) * 2) +
+				(vex.w ? 1 : 0));
+			result.vector_size = width;
+			return set(mnemonic, {vector(reg_number, width), vector(vex.vvvv, width), vrm(width, width)});
+		}
 		if (opcode >= 0x96 && (opcode & 0x0f) >= 8 && opcode <= 0xbf && (opcode >> 4) >= 9 && (opcode >> 4) <= 0xb) {
 			const unsigned kind = (opcode & 0x0f) - 8, order = (opcode >> 4) - 9;
 			const bool scalar = kind & 1;
@@ -1419,7 +1427,9 @@ static const char *const avx_names[] = {
 	"vfmsub213pd", "vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps",
 	"vfnmadd132pd", "vfnmadd132ss", "vfnmadd132sd", "vfnmadd213ps", "vfnmadd213pd", "vfnmadd213ss", "vfnmadd213sd", "vfnmadd231ps",
 	"vfnmadd231pd", "vfnmadd231ss", "vfnmadd231sd", "vfnmsub132ps", "vfnmsub132pd", "vfnmsub132ss", "vfnmsub132sd", "vfnmsub213ps",
-	"vfnmsub213pd", "vfnmsub213ss", "vfnmsub213sd", "vfnmsub231ps", "vfnmsub231pd", "vfnmsub231ss", "vfnmsub231sd",
+	"vfnmsub213pd", "vfnmsub213ss", "vfnmsub213sd", "vfnmsub231ps", "vfnmsub231pd", "vfnmsub231ss", "vfnmsub231sd", "vfmaddsub132ps", "vfmaddsub132pd", "vfmaddsub213ps", "vfmaddsub213pd",
+	"vfmaddsub231ps", "vfmaddsub231pd", "vfmsubadd132ps", "vfmsubadd132pd", "vfmsubadd213ps", "vfmsubadd213pd", "vfmsubadd231ps",
+	"vfmsubadd231pd",
 };
 static_assert(std::size(avx_names) == static_cast<size_t>(avx_last) - static_cast<size_t>(avx_first) + 1);
 

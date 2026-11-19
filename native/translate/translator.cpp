@@ -2662,8 +2662,12 @@ void BlockTranslator::avx_fma(const Instruction &instruction)
 	// product, fnmsub both. Arm's four-operand scalar forms compute a + n * m (fmadd), a - n * m (fmsub), -a - n * m (fnmadd) and
 	// n * m - a (fnmsub), each rounded once; the vector forms only a + n * m (fmla) and a - n * m (fmls), so for fmsub and fnmsub
 	// the addend is negated first, which is exact.
-	const auto index = static_cast<unsigned>(instruction.mnemonic) - static_cast<unsigned>(Mnemonic::vfmadd132ps);
-	const unsigned type = index % 4, order = (index / 4) % 3, operation = index / 12;
+	// vfmaddsub (operation 4) and vfmsubadd (5) negate the addend in the even or the odd elements first, also exactly.
+	const bool alternating = instruction.mnemonic >= Mnemonic::vfmaddsub132ps;
+	const auto index = static_cast<unsigned>(instruction.mnemonic) -
+		static_cast<unsigned>(alternating ? Mnemonic::vfmaddsub132ps : Mnemonic::vfmadd132ps);
+	const unsigned type = alternating ? index % 2 : index % 4, order = alternating ? (index / 2) % 3 : (index / 4) % 3,
+		operation = alternating ? 4 + index / 6 : index / 12;
 	const bool scalar = type >= 2, doubles = type & 1;
 	const bool wide = instruction.vector_size == 32;
 	const Operand *operands = instruction.operands.data();
@@ -2692,7 +2696,19 @@ void BlockTranslator::avx_fma(const Instruction &instruction)
 			a.simd(fneg | size, vs1, addend);
 		else
 			a.simd(simd::orr_16b, vs1, addend, addend);
-		a.simd((operation >= 2 ? fmls : fmla) | size, vs1, n, m);
+		if (operation >= 4) {
+			// The subtracting elements from -addend: even ones for vfmaddsub, odd ones for vfmsubadd.
+			const bool even = operation == 4;
+			a.simd(fneg | size, vs2, addend);
+			if (doubles)
+				a.ins(vs1, even ? 0 : 1, vs2, even ? 0 : 1, 8);
+			else {
+				a.simd(simd::movi_low_singles, vs3, 0);
+				a.simd(simd::bsl_16b, vs3, even ? vs2 : vs1, even ? vs1 : vs2);
+				a.simd(simd::orr_16b, vs1, vs3, vs3);
+			}
+		}
+		a.simd((operation == 2 || operation == 3 ? fmls : fmla) | size, vs1, n, m);
 		a.simd(simd::orr_16b, result, vs1, vs1);
 	};
 	auto third = [&](const Operand &operand, uint8_t scratch, bool high) {

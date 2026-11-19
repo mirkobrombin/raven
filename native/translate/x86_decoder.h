@@ -110,6 +110,9 @@ enum class Mnemonic : uint16_t {
 	vfnmadd213pd, vfnmadd213ss, vfnmadd213sd, vfnmadd231ps, vfnmadd231pd, vfnmadd231ss, vfnmadd231sd, vfnmsub132ps, vfnmsub132pd,
 	vfnmsub132ss, vfnmsub132sd, vfnmsub213ps, vfnmsub213pd, vfnmsub213ss, vfnmsub213sd, vfnmsub231ps, vfnmsub231pd, vfnmsub231ss,
 	vfnmsub231sd,
+	// vfmaddsub and vfmsubadd: operation, operand order, then ps and pd.
+	vfmaddsub132ps, vfmaddsub132pd, vfmaddsub213ps, vfmaddsub213pd, vfmaddsub231ps, vfmaddsub231pd, vfmsubadd132ps, vfmsubadd132pd,
+	vfmsubadd213ps, vfmsubadd213pd, vfmsubadd231ps, vfmsubadd231pd,
 };
 
 constexpr Mnemonic sse_first = Mnemonic::movq;
@@ -118,7 +121,7 @@ constexpr Mnemonic sse3_first = Mnemonic::addsubps;
 constexpr Mnemonic x87_first = Mnemonic::fadd;
 constexpr Mnemonic x87_last = Mnemonic::fwait;
 constexpr Mnemonic avx_first = Mnemonic::vzeroupper;
-constexpr Mnemonic avx_last = Mnemonic::vfnmsub231sd;
+constexpr Mnemonic avx_last = Mnemonic::vfmsubadd231pd;
 constexpr Mnemonic fma_first = Mnemonic::vfmadd132ps;
 
 // xmm: an XMM register, reg 0-15, or with size 32 the YMM register. st: the x87 register ST(reg), or ST(0) written as st when reg is no_register.
