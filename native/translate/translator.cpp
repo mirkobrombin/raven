@@ -46,6 +46,8 @@ constexpr uint8_t s0 = 9, s1 = 10, s2 = 11, s3 = 12, s4 = 15, address_register =
 constexpr uint8_t constant_register = 7;
 // XMMn is vn; v16-v31 are scratch.
 constexpr uint8_t vs0 = 16, vs1 = 17, vs2 = 18, vs3 = 19;
+// For AVX, around the SSE handlers (which use vs0-vs3): upper halves and the merging forms' working copy.
+constexpr uint8_t vh0 = 20, vh1 = 21, vh2 = 22, vh3 = 23;
 // Scratch outside s0-s5, for a value kept across code that uses those.
 constexpr uint8_t s6 = 6;
 
@@ -107,14 +109,58 @@ bool ends_block(Mnemonic mnemonic)
 }
 
 // Whether the translator has code for the instruction; the block ends before any it has not.
+bool supported(const Instruction &instruction);
+
+// VEX forms of SSE and SSE2. Unary: the destination is not a source (and pshufd, pshufhw, pshuflw, whose imm8 follows the one
+// source). Otherwise operands[1] is the VEX.vvvv source the destination starts from and the rest are the legacy form's sources.
+bool vex_unary(const Instruction &instruction)
+{
+	return instruction.count == 2 || instruction.mnemonic == Mnemonic::pshufd || instruction.mnemonic == Mnemonic::pshufhw ||
+		instruction.mnemonic == Mnemonic::pshuflw;
+}
+
+// The legacy SSE form a VEX one runs as, with target as its destination (and first source, for the merging forms).
+Instruction legacy_form(const Instruction &instruction, uint8_t target)
+{
+	Instruction legacy = instruction;
+	legacy.vex = false;
+	legacy.vector_size = 16;
+	for (Operand &operand : legacy.operands)
+		if (operand.kind == OperandKind::xmm || (operand.kind == OperandKind::mem && operand.size == 32))
+			operand.size = 16;
+	if (!vex_unary(instruction)) {
+		legacy.operands = {instruction.operands[0], instruction.operands[2], instruction.operands[3], Operand{}};
+		legacy.count = static_cast<uint8_t>(instruction.count - 1);
+		for (Operand &operand : legacy.operands)
+			if (operand.kind == OperandKind::xmm || (operand.kind == OperandKind::mem && operand.size == 32))
+				operand.size = 16;
+	}
+	if (legacy.operands[0].kind == OperandKind::xmm)
+		legacy.operands[0].reg = target;
+	return legacy;
+}
+
+bool avx_supported(const Instruction &instruction)
+{
+	const Mnemonic mnemonic = instruction.mnemonic;
+	if (mnemonic >= avx_first && mnemonic <= avx_last)
+		return true;
+	if (mnemonic < sse_first || mnemonic > sse_last)
+		return false;
+	// The AVX predicates 8-31 of vcmpps and the others are not translated yet.
+	if (mnemonic >= Mnemonic::cmpps && mnemonic <= Mnemonic::cmpsd && instruction.operands[instruction.count - 1].value >= 8)
+		return false;
+	const Instruction legacy = legacy_form(instruction, instruction.operands[0].reg);
+	return supported(legacy);
+}
+
 bool supported(const Instruction &instruction)
 {
 	// cs:, ds:, es: and ss: change nothing in 64-bit mode (compilers pad with cs: nops); fs: and gs: add their base.
 	if (instruction.rep || instruction.repne)
 		return false;
-	// A VEX form shares its SSE mnemonic but not its operand order.
 	if (instruction.vex)
-		return false;
+		return avx_supported(instruction);
 	const Operand &first = instruction.operands[0];
 	const uint8_t size = first.size;
 	switch (instruction.mnemonic) {
@@ -328,6 +374,18 @@ private:
 	void sse_integer(const Instruction &instruction);
 	void sse_shift(const Instruction &instruction);
 	void sse_shuffle(const Instruction &instruction);
+
+	// AVX: the low 128 bits of YMMn are vn, the upper halves stay in CpuState::ymm_high (v20-v23 hold them while an instruction
+	// works on them; the SSE handlers use v16-v19).
+	void load_high(uint8_t target, uint8_t ymm) { a.ldr_v(target, state_register, int64_t(state_offset::ymm_high + 16 * ymm), 16); }
+	void store_high(uint8_t source, uint8_t ymm) { a.str_v(source, state_register, int64_t(state_offset::ymm_high + 16 * ymm), 16); }
+	void clear_high(uint8_t ymm);
+	// The upper half of an operand of 32 bytes into target: from CpuState for a register, from 16 bytes further on for memory.
+	uint8_t high_source(const Operand &operand, uint8_t target);
+	void avx(const Instruction &instruction);
+	void avx_mask(const Instruction &instruction);
+	void avx_lanes(const Instruction &instruction);
+	void avx_fma(const Instruction &instruction);
 
 	// Exits.
 	void exit_with(ExitReason reason, uint64_t rip);
@@ -1630,9 +1688,302 @@ void BlockTranslator::finish_exits()
 	}
 }
 
+void BlockTranslator::clear_high(uint8_t ymm)
+{
+	a.simd(simd::movi_zero_2d, vh3, 0);
+	store_high(vh3, ymm);
+}
+
+uint8_t BlockTranslator::high_source(const Operand &operand, uint8_t target)
+{
+	if (operand.kind == OperandKind::xmm) {
+		load_high(target, operand.reg);
+		return target;
+	}
+	Operand high = operand;
+	high.value += 16;
+	high.size = 16;
+	load_vector(target, high, 16);
+	return target;
+}
+
+void BlockTranslator::avx(const Instruction &instruction)
+{
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const Operand *operands = instruction.operands.data();
+	if (mnemonic == Mnemonic::vzeroupper || mnemonic == Mnemonic::vzeroall) {
+		a.simd(simd::movi_zero_2d, vh3, 0);
+		for (uint8_t r = 0; r < 16; ++r) {
+			store_high(vh3, r);
+			if (mnemonic == Mnemonic::vzeroall)
+				a.simd(simd::movi_zero_2d, r, 0);
+		}
+		return;
+	}
+	if (mnemonic >= Mnemonic::vfmadd132ps)
+		return avx_fma(instruction);
+	if (mnemonic >= avx_first)
+		return avx_lanes(instruction);
+	const bool wide = instruction.vector_size == 32;
+	if (wide && (mnemonic == Mnemonic::movmskps || mnemonic == Mnemonic::movmskpd || mnemonic == Mnemonic::pmovmskb))
+		return avx_mask(instruction);
+	const Operand &target = operands[0];
+	const bool writes_vector = target.kind == OperandKind::xmm && mnemonic != Mnemonic::comiss && mnemonic != Mnemonic::comisd &&
+		mnemonic != Mnemonic::ucomiss && mnemonic != Mnemonic::ucomisd;
+	// The shifts by a count in an XMM register or memory use its low 128 bits in both halves.
+	const bool count_shift = !vex_unary(instruction) && instruction.count == 3 && operands[2].kind != OperandKind::imm &&
+		(mnemonic == Mnemonic::psllw || mnemonic == Mnemonic::pslld || mnemonic == Mnemonic::psllq || mnemonic == Mnemonic::psrlw ||
+			mnemonic == Mnemonic::psrld || mnemonic == Mnemonic::psrlq || mnemonic == Mnemonic::psraw || mnemonic == Mnemonic::psrad);
+	if (target.kind == OperandKind::mem) {
+		// Stores: the low half as SSE stores it, then the upper half 16 bytes on.
+		translate(legacy_form(instruction, 0));
+		if (wide) {
+			load_high(vh0, operands[1].reg);
+			Operand high = target;
+			high.value += 16;
+			high.size = 16;
+			store_vector(vh0, high, 16);
+		}
+		return;
+	}
+	if (!writes_vector) {
+		translate(legacy_form(instruction, target.reg));
+		return;
+	}
+	const uint8_t destination = target.reg;
+	if (vex_unary(instruction)) {
+		// The upper half first, from the source's (CpuState or memory), so a destination equal to the source is read before it changes.
+		if (wide) {
+			Instruction high = legacy_form(instruction, vh0);
+			high.operands[1] = Operand{};
+			high.operands[1].kind = OperandKind::xmm;
+			high.operands[1].size = 16;
+			high.operands[1].reg = high_source(operands[1], vh1);
+			translate(high);
+			store_high(vh0, destination);
+		}
+		translate(legacy_form(instruction, destination));
+		if (!wide)
+			clear_high(destination);
+		return;
+	}
+	const Operand &first = operands[1], &second = operands[2];
+	if (wide) {
+		load_high(vh0, first.reg);
+		Instruction high = legacy_form(instruction, vh0);
+		if (!count_shift && second.kind != OperandKind::imm) {
+			high.operands[1] = Operand{};
+			high.operands[1].kind = OperandKind::xmm;
+			high.operands[1].size = 16;
+			high.operands[1].reg = high_source(second, vh1);
+		}
+		// vshufpd takes bits 3:2 of its imm8 for the upper half (vshufps the same four fields for both).
+		if (mnemonic == Mnemonic::shufpd)
+			high.operands[2].value = (operands[3].value >> 2) & 3;
+		translate(high);
+		store_high(vh0, destination);
+	}
+	// The low half: the destination starts as the first source unless that would overwrite the second before it is read.
+	const bool second_is_destination = second.kind == OperandKind::xmm && second.reg == destination && first.reg != destination;
+	const uint8_t working = second_is_destination ? vh2 : destination;
+	if (first.reg != working)
+		a.simd(simd::orr_16b, working, first.reg, first.reg);
+	translate(legacy_form(instruction, working));
+	if (working != destination)
+		a.simd(simd::orr_16b, destination, working, working);
+	if (!wide)
+		clear_high(destination);
+}
+
+void BlockTranslator::avx_mask(const Instruction &instruction)
+{
+	// The mask of each half as SSE computes it, the upper one shifted above the lower: 16 bits each for bytes, 4 for singles, 2 for
+	// doubles.
+	const Operand &source = instruction.operands[1];
+	const unsigned bits = instruction.mnemonic == Mnemonic::pmovmskb ? 16 : instruction.mnemonic == Mnemonic::movmskps ? 4 : 2;
+	Instruction half = legacy_form(instruction, 0);
+	half.operands[0].reg = rax;
+	half.operands[0].size = 4;
+	Operand into = instruction.operands[0];
+	load_high(vh0, source.reg);
+	half.operands[1].reg = vh0;
+	// The SSE handler writes its general register; s6 keeps the upper mask across the second run.
+	const uint8_t saved = host_register[into.reg];
+	half.operands[0].reg = into.reg;
+	translate(half);
+	a.lsl_imm(s6, saved, static_cast<uint8_t>(bits), false);
+	half.operands[1].reg = source.reg;
+	translate(half);
+	a.orr(saved, saved, s6, Shift::lsl, 0, false);
+}
+
+void BlockTranslator::avx_lanes(const Instruction &instruction)
+{
+	const Operand *operands = instruction.operands.data();
+	const Mnemonic mnemonic = instruction.mnemonic;
+	auto low_source = [&](const Operand &operand, uint8_t scratch) {
+		if (operand.kind == OperandKind::xmm) {
+			a.simd(simd::orr_16b, scratch, operand.reg, operand.reg);
+			return scratch;
+		}
+		Operand low = operand;
+		low.size = 16;
+		load_vector(scratch, low, 16);
+		return scratch;
+	};
+	switch (mnemonic) {
+	case Mnemonic::vinsertf128: case Mnemonic::vinserti128: {
+		const uint8_t destination = operands[0].reg, first = operands[1].reg;
+		const bool upper = operands[3].value & 1;
+		low_source(operands[2], vh1);
+		if (upper) {
+			if (destination != first)
+				a.simd(simd::orr_16b, destination, first, first);
+			store_high(vh1, destination);
+		} else {
+			load_high(vh0, first);
+			a.simd(simd::orr_16b, destination, vh1, vh1);
+			store_high(vh0, destination);
+		}
+		return;
+	}
+	case Mnemonic::vextractf128: case Mnemonic::vextracti128: {
+		const uint8_t source = operands[1].reg;
+		const bool upper = operands[2].value & 1;
+		uint8_t value = source;
+		if (upper) {
+			load_high(vh0, source);
+			value = vh0;
+		}
+		if (operands[0].kind == OperandKind::mem) {
+			Operand to = operands[0];
+			to.size = 16;
+			store_vector(value, to, 16);
+		} else {
+			if (operands[0].reg != value)
+				a.simd(simd::orr_16b, operands[0].reg, value, value);
+			clear_high(operands[0].reg);
+		}
+		return;
+	}
+	case Mnemonic::vperm2f128: case Mnemonic::vperm2i128: {
+		const uint8_t destination = operands[0].reg;
+		// The four lanes to choose from: the first source's low and high, the second's low and high.
+		low_source(operands[1], vh0);
+		load_high(vh1, operands[1].reg);
+		low_source(operands[2], vh2);
+		high_source(operands[2], vh3);
+		const auto control = static_cast<unsigned>(operands[3].value);
+		const uint8_t lanes[] = {vh0, vh1, vh2, vh3};
+		// The upper half first, while all four lanes are still there; then the lower one into the destination.
+		const unsigned upper = control >> 4;
+		if (upper & 8)
+			a.simd(simd::movi_zero_2d, vs0, 0);
+		else
+			a.simd(simd::orr_16b, vs0, lanes[upper & 3], lanes[upper & 3]);
+		store_high(vs0, destination);
+		if (control & 8)
+			a.simd(simd::movi_zero_2d, destination, 0);
+		else
+			a.simd(simd::orr_16b, destination, lanes[control & 3], lanes[control & 3]);
+		return;
+	}
+	default: {
+		// The broadcasts: element 0 of the source, from memory of the element's size or a register, into every element.
+		const uint8_t destination = operands[0].reg;
+		const bool wide = instruction.vector_size == 32;
+		const unsigned element = mnemonic == Mnemonic::vbroadcastss || mnemonic == Mnemonic::vpbroadcastd ? 4 :
+			mnemonic == Mnemonic::vbroadcastsd || mnemonic == Mnemonic::vpbroadcastq ? 8 : mnemonic == Mnemonic::vpbroadcastb ? 1 :
+			mnemonic == Mnemonic::vpbroadcastw ? 2 : 16;
+		uint8_t source = operands[1].reg;
+		if (operands[1].kind == OperandKind::mem) {
+			Operand from = operands[1];
+			from.size = static_cast<uint8_t>(element);
+			load_vector(vh0, from, element);
+			source = vh0;
+		}
+		if (element == 16) {
+			if (destination != source)
+				a.simd(simd::orr_16b, destination, source, source);
+		} else
+			a.dup(destination, source, element);
+		if (wide)
+			store_high(destination, destination);
+		else
+			clear_high(destination);
+		return;
+	}
+	}
+}
+
+void BlockTranslator::avx_fma(const Instruction &instruction)
+{
+	// x86: 132 is op1 * op3 + op2, 213 op2 * op1 + op3, 231 op2 * op3 + op1; fmsub subtracts the addend, fnmadd negates the
+	// product, fnmsub both. Arm's four-operand scalar forms compute a + n * m (fmadd), a - n * m (fmsub), -a - n * m (fnmadd) and
+	// n * m - a (fnmsub), each rounded once; the vector forms only a + n * m (fmla) and a - n * m (fmls), so for fmsub and fnmsub
+	// the addend is negated first, which is exact.
+	const auto index = static_cast<unsigned>(instruction.mnemonic) - static_cast<unsigned>(Mnemonic::vfmadd132ps);
+	const unsigned type = index % 4, order = (index / 4) % 3, operation = index / 12;
+	const bool scalar = type >= 2, doubles = type & 1;
+	const bool wide = instruction.vector_size == 32;
+	const Operand *operands = instruction.operands.data();
+	const uint8_t destination = operands[0].reg;
+	// The three operands as vector registers: op1 and op2 are registers; op3 is a register or memory.
+	auto run = [&](uint8_t op1, uint8_t op2, uint8_t op3, uint8_t result) {
+		uint8_t n, m, addend;
+		switch (order) {
+		case 0: n = op1; m = op3; addend = op2; break;
+		case 1: n = op2; m = op1; addend = op3; break;
+		default: n = op2; m = op3; addend = op1; break;
+		}
+		if (scalar) {
+			static constexpr uint32_t forms[] = {0x1f000000, 0x1f208000, 0x1f008000, 0x1f200000};
+			const uint32_t opcode = forms[operation] | (doubles ? simd::sz : 0) | uint32_t(addend) << 10;
+			a.simd(opcode, vs1, n, m);
+			// x86 keeps the rest of the destination (op1).
+			if (result != op1)
+				a.simd(simd::orr_16b, result, op1, op1);
+			a.ins(result, 0, vs1, 0, doubles ? 8 : 4);
+			return;
+		}
+		const uint32_t size = doubles ? simd::sz : 0;
+		constexpr uint32_t fmla = 0x4e20cc00, fmls = 0x4ea0cc00, fneg = 0x6ea0f800;
+		if (operation == 1 || operation == 3)
+			a.simd(fneg | size, vs1, addend);
+		else
+			a.simd(simd::orr_16b, vs1, addend, addend);
+		a.simd((operation >= 2 ? fmls : fmla) | size, vs1, n, m);
+		a.simd(simd::orr_16b, result, vs1, vs1);
+	};
+	auto third = [&](const Operand &operand, uint8_t scratch, bool high) {
+		if (high)
+			return high_source(operand, scratch);
+		if (operand.kind == OperandKind::xmm)
+			return operand.reg;
+		Operand low = operand;
+		if (low.size == 32)
+			low.size = 16;
+		load_vector(scratch, low, low.size);
+		return scratch;
+	};
+	if (wide) {
+		load_high(vh0, destination);
+		load_high(vh1, operands[1].reg);
+		run(vh0, vh1, third(operands[2], vh2, true), vh0);
+		store_high(vh0, destination);
+	}
+	run(destination, operands[1].reg, third(operands[2], vh2, false), destination);
+	if (!wide)
+		clear_high(destination);
+}
+
 void BlockTranslator::translate(const Instruction &instruction)
 {
 	const Operand *operands = instruction.operands.data();
+	if (instruction.vex) {
+		avx(instruction);
+		return;
+	}
 	switch (instruction.mnemonic) {
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::cmp: case Mnemonic::and_: case Mnemonic::or_: case Mnemonic::xor_:
 	case Mnemonic::test: case Mnemonic::adc: case Mnemonic::sbb:
