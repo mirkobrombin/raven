@@ -344,13 +344,16 @@ dpps with masked inputs and two faddp, mpsadbw with ext, dup and uabal, phminpos
 as x86 does (Rosetta keeps them), crc32 as Arm's crc32c and popcnt as cnt and addv. SSE4.2's string compares (pcmpestri,
 pcmpestrm, pcmpistri, pcmpistrm) run in the host, as cpuid does (`string_compare.h`): the block ends before one and the runtime
 computes it on CpuState, every data format, aggregation, polarity and output selection, the implicit lengths of the i forms (the
-first null element) and the explicit ones of the e forms (EAX and EDX, sign-extended and saturated), with CF, ZF, SF and OF and AF
+first null element) and the explicit ones of the e forms (EAX and EDX, or RAX and RDX with REX.W or VEX.W1: their absolute value,
+saturated to the element count), with CF, ZF, SF and OF and AF
 and PF cleared. The `strings` family (1500 cases, imm8 values over all 128 and lengths around 0, 8 and 16, with registers and
 memory) passes against an AMD EPYC 7763 and an Intel Xeon Platinum 8370C, which both agree with Rosetta in every case (PROVEN,
 avx.md). rcpps, rsqrtps, rcpss and rsqrtss divide exactly, which is within x86's 1.5 * 2^-12; a denormal input counts as zero and
 a reciprocal below the smallest normal becomes a signed zero, as on x86, and FPSR is put back since x86 raises nothing (the
 `approximations` family compares within 2^-11, avx.md). cpuid reports SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT (PROVEN,
-`translate_cpuid`).
+`translate_cpuid`). SSE2's maskmovdqu is translated too, a branch per byte around its store so that a masked-off byte
+is never touched (PROVEN: the `maskmovdqu` family, 200 cases against an Intel Xeon 8573C, and `hvf_avx_fault`, which failed before
+it with the masked-off bytes on an unmapped page).
 
 ## Open items
 
@@ -373,8 +376,8 @@ a reciprocal below the smallest normal becomes a signed zero, as on x86, and FPS
 - **Cost of every exit and entry:** sixteen q-register moves and the MXCSR conversions; in this process also two FPCR writes (see the
   integer workloads above).
 - **Not translated:**
-  - maskmovdqu (its VEX form, vmaskmovdqu, is translated; pinsrw, pextrw and the reciprocal approximations are too);
-  - the MMX forms;
+  - the MMX forms, the 16 SSSE3 ones included, which end their block though cpuid reports SSSE3 (MMX state aliases x87 and is
+    not implemented; avx.md says who can emit them);
   - sfence, lfence, mfence, prefetch and movnti.
 - **Rosetta is the only x86 reference.** Running `x86_sse_oracle` on an x86 machine would turn the INFERRED agreement with silicon
   into PROVEN.

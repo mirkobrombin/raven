@@ -35,7 +35,8 @@ docs/macos/avx-data/avx_reach.py llvm-objdump llvm-readobj FILE` on each):
 - **AVX2 integer** (256-bit integer and AVX2-only): vpmovmskb 79, vpcmpeqw 47, vpand 17, vpmaskmovd 13, vpblendvb 10, vpcmpeqb 9,
   vpermd 8, vpsrld 6, vpandn 6, vpcmpeqd 6, vpsllvd 6, vpmaxsd 5, vpcmpeqq 4, vpmovzxwd 4, ... vpbroadcastw 1.
 - **FMA3**: vfmadd213sd 16, vfmadd231sd 13, vfmsub213sd 1: scalar doubles only.
-- **F16C and gathers: 0** in every image. Neither was implemented (open items); measured, not guessed.
+- **F16C and gathers: 0** in every image (measured, not guessed). The gathers were implemented later all the same, for AVX2's cpuid
+  bit (see Instructions); F16C is not implemented (open items).
 
 What this says:
 
@@ -93,10 +94,20 @@ F16C, BMI1, BMI2 or LZCNT** (PROVEN, `translate_cpuid` and `hvf_cpuid`, 0 failur
 EBX 0x20; xgetbv(0) 7). Each was switched on in a commit of its own once its samples translated and its oracle families passed in
 this process and in a vCPU against an x86 CPU: SSE4.2 `d1070f63`, AVX `714848e2`, FMA `26122295`, AVX2 `7ff6b2f9`. AVX2 was
 reported one commit too early: a review then found vbroadcasti128 undecoded; it joined the samples (`80216673`) and was translated
-(`86b6adcd`), so from `86b6adcd` on the AVX2 report holds for every sample. The model requires each SSE level to come with
+(`86b6adcd`), so from `86b6adcd` on the AVX2 report holds for every sample. SSE4.2 was switched on with its `strings` family
+held to an Intel Xeon Platinum 8370C (run 44500206597, which agreed with Rosetta in all 1500 cases); an AMD EPYC 7763 confirmed it
+later (run 44501136642, the same agreement). The model requires each SSE level to come with
 the ones before it, AVX with SSE4.2, and XSAVE's samples to translate whenever XSAVE is reported, which it is with AVX: so AVX also
 needed xsave and xrstor (below). The model with every feature on is checked for the same consistency (`every feature on, model`, 0
 failures).
+
+**A known gap under SSSE3: its MMX-register forms.** The 16 SSSE3 instructions on MMX registers (pshufb, phaddw, phaddd, phaddsw,
+pmaddubsw, phsubw, phsubd, phsubsw, psignb, psignw, psignd, pmulhrsw, pabsb, pabsw, pabsd, palignr with `mm` operands) are not
+translated and end their block as unsupported, though cpuid reports SSSE3: MMX state is not implemented (it aliases the x87
+registers, x87.md). Inline or hand-written assembly can contain them with any compiler. The intrinsics do not produce them here:
+this llvm-mingw clang compiles `_mm_abs_pi8` on an `__m64` to `pabsb xmm0, xmm0` between two movq (PROVEN, `clang -O2 -mssse3` and
+llvm-objdump), as LLVM lowers the MMX intrinsics to SSE. GCC was not tried (no x86 GCC on this machine: NOT verified). MSVC does
+not offer the MMX intrinsics for x64 (INFERRED from Microsoft's documentation of them, not checked in this session).
 
 ## xsave and xrstor
 
@@ -173,12 +184,13 @@ failing, then `7e83388c`). Not compared with an x86 CPU (NOT verified); xsaveopt
 - **The decoder** gives VEX semantics to these and prints them as LLVM does: 20000 random VEX encodings join the decoder corpus, 0
   print differently from LLVM or decode where LLVM rejects them (PROVEN, `x86_decoder_test`: `vex_instances.o: 25765 instructions,
   17900 with semantics (69.5%), 10690 rejected by LLVM, 0 failures`; the count includes what LLVM decodes between them).
-- `translator_version` is 15 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
+- `translator_version` is 21 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
   10: the string compares; 11: the VEX forms of SSSE3 to SSE4.2; 12: the rest of AVX but the approximations; 13: the
   approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor; 16: AVX2 but the gathers; 17: the gathers; 18: review
   fixes: a 128-bit vpgatherdq or vgatherdpd gathered 4 elements instead of 2 (reading mask and index bits x86 ignores), store
   probes left out an fs or gs base, vroundss and vroundsd with VEX.L set, a 256-bit vpmovsx or vpmovzx with VEX.vvvv set; 19:
-  vbroadcasti128).
+  vbroadcasti128; 20: vpcmpestri and vpcmpestrm with VEX.W1 took their lengths from EAX and EDX, not RAX and RDX; 21: legacy
+  maskmovdqu).
 
 ## Tests
 
@@ -229,7 +241,8 @@ failing, then `7e83388c`). Not compared with an x86 CPU (NOT verified); xsaveopt
   yet refuse them, so the translator runs them as legacy SSE with the wrong operands (a null-address crash in the first AVX test run),
   without a `translator_version` change. `25269bd0` refuses them; `f1e280d1` translates them and sets the version to 7.
 - **Results** (PROVEN, `ctest`): `translate_x86_avx` 11576 cases (both memory orderings), 0 failures; `hvf_avx` 5788 cases in a vCPU, 0
-  failures; MXCSR.DE alone differs in 791 passing cases (DE is never set, as in sse.md).
+  failures; MXCSR.DE alone differs in 791 passing cases (DE is never set, as in sse.md). Historical: those were the first
+  families; with every family today DE alone differs in 1178 passing cases (PROVEN, `hvf_avx`).
 
 ### x86 silicon and Rosetta
 
@@ -323,6 +336,7 @@ port (NOT verified).
   PF_SSSE3_INSTRUCTIONS_AVAILABLE, PF_SSE4_1_INSTRUCTIONS_AVAILABLE, PF_SSE4_2_INSTRUCTIONS_AVAILABLE, PF_AVX_INSTRUCTIONS_AVAILABLE,
   ...) and KUSER_SHARED_DATA's ProcessorFeatures and XState (EnabledFeatures 7, the YMM area) should report what cpuid now reports.
   Not done here (native/nt is out of this branch's scope): an item for a design review.
+- **The MMX forms of SSSE3** (under cpuid) end their block while SSSE3 is reported; MMX state is the open item.
 - **BMI2 next to AVX2:** Notepad++ has 2 shlx; BMI1 and BMI2 (and LZCNT) are not translated or reported. Code that assumes BMI2
   with AVX2 (Haswell brought both) would stop there.
 - **A gather that faults after some elements** is not tested (see Tests); nor are 32-bit addresses or fs/gs with VSIB, nor a
