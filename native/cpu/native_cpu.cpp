@@ -987,6 +987,13 @@ NativeProcess::~NativeProcess()
 {
 	if (std::getenv("RAVEN_PROFILE") && std::getenv("RAVEN_QUEUED_GRAPHICS"))
 		std::cerr << "profile: queued calls=" << state->queued_calls << '\n';
+	// The thread's view of the call it waits for outlives the process otherwise: a process that ended under a call (ExitProcess from a
+	// TLS callback during LoadLibrary) left it naming a task that is gone, and the next process on this thread took it up as its own.
+	if (waiting.process == this)
+		waiting = {};
+	std::erase_if(outer_calls, [this](const OuterCall &outer) { return outer.call.process == this; });
+	held_in_stub = false;
+	forget_registers();
 }
 
 void NativeProcess::install_seccomp()
@@ -2472,7 +2479,7 @@ void NativeProcess::settle_call()
 		return;
 	const WaitingCall call = waiting;
 	waiting.task = 0;
-	if (!call.held && task_reaped(call.task)) {
+	if (task_reaped(call.task)) {
 		forget_registers();
 		return;
 	}
