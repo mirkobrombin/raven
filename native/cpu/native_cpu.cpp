@@ -3201,7 +3201,7 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 				} else {
 					agent::interrupt(child.pid);
 					int ignored = 0;
-					agent::wait(child.pid, &ignored, 0);
+					while (agent::wait(child.pid, &ignored, 0) == -1 && errno == EINTR) {}
 				}
 				if (agent::request(PTRACE_GETREGS, child.pid, 0, &where) == 0)
 					std::cerr << "raven: guest timeout at rip=0x" << std::hex << where.rip << " rsp=0x" << where.rsp << std::dec << '\n';

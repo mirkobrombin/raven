@@ -364,8 +364,13 @@ pid_t wait(pid_t task, int *status, int options)
 		// Asleep until the agent posts, a signal of the runtime's own cuts the wait short as it would cut waitpid's, or a while has
 		// passed to look at whether the task is still there.
 		const timespec slice{0, 10'000'000};
-		if (syscall(SYS_futex, state_word(held), FUTEX_WAIT, now, &slice, nullptr, 0) == -1 && errno == EINTR)
+		const long slept = syscall(SYS_futex, state_word(held), FUTEX_WAIT, now, &slice, nullptr, 0);
+		if (slept == -1 && errno == EINTR)
 			return -1;
+		// A slice that ran out with no stop comes back as cut short too: a signal that reached the thread just before it went to sleep
+		// was handled outside the wait, and the caller is the one to look again at what that signal was for (its deadline, a job).
+		if (slept == -1 && errno == ETIMEDOUT && __atomic_load_n(state_word(held), __ATOMIC_ACQUIRE) != posted)
+			return failed(EINTR);
 	}
 }
 

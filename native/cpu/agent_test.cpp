@@ -217,10 +217,52 @@ static void reaped_task()
 	check(!raven::agent::held(child), "a held task reaped already stayed registered");
 }
 
+// A wait for a held task that runs on comes back now and then without a stop, as a waitpid cut short does, so that its caller looks at
+// its deadline and its interrupts again: a signal that came just before the wait went to sleep would otherwise be lost for good.
+static void running_task()
+{
+	const pid_t child = fork();
+	check(child >= 0, "cannot start a task to wait for");
+	if (child == 0) {
+		pause();
+		_exit(0);
+	}
+	std::vector<uint64_t> words(512);
+	raven::agent::Task task;
+	task.task = child;
+	task.group = child;
+	task.process = child;
+	task.block = words.data();
+	raven::agent::hold(task);
+	std::atomic<bool> done = false;
+	pid_t result = 0;
+	int error = 0;
+	std::thread waiter([&] {
+		int status = 0;
+		result = raven::agent::wait(child, &status, 0);
+		error = errno;
+		done = true;
+	});
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!done && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	kill(child, SIGKILL);
+	int status = 0;
+	waitpid(child, &status, 0);
+	if (!done) {
+		waiter.detach();
+		throw std::runtime_error("a wait for a held task that runs on never came back to its caller");
+	}
+	waiter.join();
+	raven::agent::release_group(child);
+	check(result == -1 && error == EINTR, "a wait for a held task that runs on did not read as cut short");
+}
+
 int main()
 {
 	try {
 		reaped_task();
+		running_task();
 		block = static_cast<uint64_t *>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
 		check(block != MAP_FAILED, "no block");
 		const auto code = raven::agent::code();
