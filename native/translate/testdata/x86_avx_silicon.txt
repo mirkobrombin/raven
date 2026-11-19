@@ -1,3 +1,3 @@
 # x86_avx.py cases where Rosetta and an x86 CPU differ: what the x86 CPU left (docs/macos/avx-data/silicon_overrides.py writes it).
 # None: an AMD EPYC 9V45 (raven-macos-bench run 44493373058, the cases assembled with clang as here) left what Rosetta leaves in
-# all 5788. A line ending in "known" would mark a case the translator does not match yet.
+# all 5788.

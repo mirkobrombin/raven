@@ -39,9 +39,6 @@ struct Case {
 	Io input;
 	Io output;
 	bool silicon = false;
-	// The silicon line ends with "known": the translator does not match the x86 CPU there yet (docs/macos/avx.md, open items). The
-	// tests count such a case apart instead of failing on it, and fail if it starts to pass, so the mark is removed then.
-	bool known = false;
 };
 
 using sse_oracle::all_flags;
@@ -128,10 +125,6 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		}
 		Io &io = cases[number].output;
 		for (size_t i = 3; i < parts.size(); ++i) {
-			if (parts[i] == "known") {
-				cases[number].known = true;
-				continue;
-			}
 			const size_t equals = parts[i].find('=');
 			const std::string field = parts[i].substr(0, equals);
 			const std::vector<uint8_t> bytes = hex_bytes(parts[i].substr(equals + 1));
@@ -217,24 +210,13 @@ struct Report {
 	size_t printed = 0;
 	size_t denormal_flags = 0;
 	size_t silicon = 0;
-	size_t known = 0;
-	void add(const Case &item, std::string problem, const CpuState &state)
+	void add(const Case &item, const std::string &problem, const CpuState &state)
 	{
 		if (problem.empty() && ((state.mxcsr ^ item.output.mxcsr) & mxcsr_de))
 			++denormal_flags;
 		silicon += item.silicon;
 		auto &[cases, failed] = families[item.family];
 		++cases;
-		if (item.known) {
-			if (!problem.empty()) {
-				++known;
-				if (printed++ < 40)
-					std::fprintf(stderr, "known: %s: #%zu %s: %s\n", item.family.c_str(), static_cast<size_t>(&item - first),
-						item.text.c_str(), problem.c_str());
-				return;
-			}
-			problem = "passes, but its silicon line says known: remove the mark";
-		}
 		if (problem.empty())
 			return;
 		++failed;
@@ -247,8 +229,8 @@ struct Report {
 	{
 		for (const auto &[family, counts] : families)
 			std::printf("%s, %s: %zu cases, %zu failures\n", where, family.c_str(), counts.first, counts.second);
-		std::printf("%s: MXCSR.DE alone differs in %zu passing cases; %zu cases held to the x86 CPU where Rosetta differs, %zu of them "
-			"known to differ\n", where, denormal_flags, silicon, known);
+		std::printf("%s: MXCSR.DE alone differs in %zu passing cases; %zu cases held to the x86 CPU where Rosetta differs\n", where,
+			denormal_flags, silicon);
 	}
 	const Case *first = nullptr;
 };
