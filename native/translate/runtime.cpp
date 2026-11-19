@@ -2,6 +2,7 @@
 
 #include "x86_decoder.h"
 #include "cpuid.h"
+#include "string_compare.h"
 #include "x87.h"
 
 #include "a64_emitter.h"
@@ -18,7 +19,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 9;
+constexpr uint64_t translator_version = 10;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -321,7 +322,7 @@ RunResult Runtime::Thread::run()
 			}
 			break;
 		case ExitReason::cpuid: {
-			// cpuid or xgetbv at rip, answered from cpuid.h; then translated code again after it.
+			// cpuid or xgetbv at rip, answered from cpuid.h, or a string compare (string_compare.h); then translated code again after it.
 			Instruction instruction;
 			{
 				std::lock_guard guard(runtime.lock);
@@ -341,7 +342,9 @@ RunResult Runtime::Thread::run()
 				}
 				cpu.gpr[rax] = static_cast<uint32_t>(*value);
 				cpu.gpr[rdx] = *value >> 32;
-			} else
+			} else if (string_compare_supported(instruction))
+				string_compare(cpu, runtime.memory, instruction, cpu.rip + instruction.length);
+			else
 				return {ExitReason::unsupported, cpu.rip};
 			cpu.rip += instruction.length;
 			break;

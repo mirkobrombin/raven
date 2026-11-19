@@ -3,6 +3,7 @@
 #include "a64_emitter.h"
 #include "cpu_state.h"
 #include "x86_decoder.h"
+#include "string_compare.h"
 #include "x87.h"
 
 #include <array>
@@ -2712,7 +2713,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 			exit_to(rip);
 		else if (next.mnemonic != Mnemonic::invalid && x87_supported(next))
 			exit_with(ExitReason::x87, rip);
-		else if (next.mnemonic == Mnemonic::cpuid || next.mnemonic == Mnemonic::xgetbv)
+		else if (next.mnemonic == Mnemonic::cpuid || next.mnemonic == Mnemonic::xgetbv || string_compare_supported(next))
 			exit_with(ExitReason::cpuid, rip);
 		else
 			exit_with(ExitReason::unsupported, rip);
@@ -2733,7 +2734,7 @@ TranslatedBlock BlockTranslator::run(std::span<const uint8_t> code, uint64_t add
 bool translates(const Instruction &instruction)
 {
 	return supported(instruction) || x87_supported(instruction) || instruction.mnemonic == Mnemonic::cpuid ||
-		instruction.mnemonic == Mnemonic::xgetbv;
+		instruction.mnemonic == Mnemonic::xgetbv || string_compare_supported(instruction);
 }
 
 TranslatedBlock translate_block(std::span<const uint8_t> code, uint64_t address, const TranslatorOptions &options,
