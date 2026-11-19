@@ -28,6 +28,8 @@ SSE_WORKLOADS = {"saxpy": 60000, "dot": 10000, "copy": 40000}
 # x86's, and only the translated configurations must agree. Fewer calls than the others: translated they take 50 ms or more; natively
 # they do not.
 X87_WORKLOADS = {"ldot": 100, "lpoly": 200}
+# The AVX workloads (testdata/avx_workloads.c), run when named.
+AVX_WORKLOADS = {"fsaxpy": 40000, "bytecount": 20000}
 RUNS = 6
 CONFIGURATIONS = ["native", "process-loop", "process-call", "vm-loop", "vm-call"]
 
@@ -74,7 +76,7 @@ def main():
     if len(sys.argv) > 5:
         chosen = sys.argv[5].split(",")
         WORKLOADS.clear()
-        WORKLOADS.update({name: {**SSE_WORKLOADS, **X87_WORKLOADS, "entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}[name]
+        WORKLOADS.update({name: {**SSE_WORKLOADS, **X87_WORKLOADS, **AVX_WORKLOADS, "entry": 200000, "crc32": 4000, "fnv": 1500, "histogram": 1000}[name]
                           for name in chosen})
     results.mkdir(parents=True, exist_ok=True)
     state = {"machine": subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True, text=True).stdout.strip(),
