@@ -14,6 +14,7 @@
 #include "vm_process.h"
 
 #include <barrier>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -80,6 +81,7 @@ std::vector<uint8_t> loop_code(const std::vector<uint8_t> &body)
 
 int main()
 {
+	std::setvbuf(stdout, nullptr, _IOLBF, 0);
 	constexpr uint32_t iterations = 1000000;
 	const std::vector<Loop> loops = {
 		{"lock inc dword ptr [rdi]", {0xf0, 0xff, 0x07}, 1},
@@ -122,7 +124,7 @@ int main()
 		const uint64_t shared = vm.map_anywhere(hvf::Vm::page_size, hvf::Access::read_write);
 		auto *word = reinterpret_cast<volatile int32_t *>(vm.host(shared));
 		// Runs entry on both vCPUs from one start, each with RCX iterations and its registers from setup; returns R8 of each.
-		auto run_both = [&](uint64_t entry, uint64_t count, auto setup) {
+		auto run_pair = [&](uint64_t entry0, uint64_t entry1, uint64_t count, auto setup) {
 			std::barrier start(2);
 			uint64_t r8[2] = {};
 			auto thread = [&](unsigned role) {
@@ -139,6 +141,7 @@ int main()
 					state.gpr[translate::rcx] = count;
 					state.gpr[translate::r8] = 0;
 					setup(role, state);
+					const uint64_t entry = role ? entry1 : entry0;
 					runtime.translate_ahead(entry);
 					start.arrive_and_wait();
 					if (runtime.call(entry).reason != translate::ExitReason::returned)
@@ -154,6 +157,68 @@ int main()
 			second.join();
 			return r8[0] + r8[1];
 		};
+		auto run_both = [&](uint64_t entry, uint64_t count, auto setup) { return run_pair(entry, entry, count, setup); };
+		// Split locks: operands across a 16-byte boundary of the page (offsets from shared), which the translator cannot do with one
+		// LSE atomic. Fewer iterations: each goes through the runtime.
+		constexpr uint32_t split_iterations = 20000;
+		struct Split {
+			const char *text;
+			std::vector<uint8_t> body;
+			unsigned offset, size;
+		};
+		const std::vector<Split> splits = {
+			{"lock inc word ptr [rdi] at 15", {0xf0, 0x66, 0xff, 0x07}, 15, 2},
+			{"lock inc dword ptr [rdi] at 14", {0xf0, 0xff, 0x07}, 14, 4},
+			{"lock inc qword ptr [rdi] at 12", {0xf0, 0x48, 0xff, 0x07}, 12, 8},
+			{"mov eax, 1; lock xadd dword ptr [rdi], eax at 13", {0xb8, 0x01, 0x00, 0x00, 0x00, 0xf0, 0x0f, 0xc1, 0x07}, 13, 4},
+			// An increment by compare and swap: mov eax, [rdi]; retry: lea edx, [rax + 1]; lock cmpxchg [rdi], edx; jne retry.
+			{"lock cmpxchg dword ptr [rdi], edx (an increment loop) at 14", {0x8b, 0x07, 0x8d, 0x50, 0x01, 0xf0, 0x0f, 0xb1, 0x17, 0x75, 0xf7},
+				14, 4},
+			// A spinlock on the split word guarding a plain counter at [rsi]: retry: xchg [rdi], eax; test eax, eax; jnz retry;
+			// inc dword ptr [rsi]; mov dword ptr [rdi], 0; mov eax, 1.
+			{"xchg dword ptr [rdi], eax (a spinlock around inc dword ptr [rsi]) at 14", {0x87, 0x07, 0x85, 0xc0, 0x75, 0xfa, 0xff,
+				0x06, 0xc7, 0x07, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x01, 0x00, 0x00, 0x00}, 14, 4},
+		};
+		auto *page = reinterpret_cast<volatile uint8_t *>(vm.host(shared));
+		for (const Split &split : splits) {
+			const uint64_t entry = memory.add(loop_code(split.body));
+			for (unsigned i = 0; i < 64; ++i)
+				page[i] = 0;
+			const auto began = std::chrono::steady_clock::now();
+			run_both(entry, split_iterations, [&](unsigned, translate::CpuState &state) {
+				state.gpr[translate::rdi] = shared + split.offset;
+				state.gpr[translate::rsi] = shared + 32;
+			});
+			// The time per split operation, both vCPUs together, setup and translation included: a rough cost, not a benchmark.
+			const double per = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count() /
+				(2.0 * split_iterations);
+			std::printf("%s: %.2f us per operation (two vCPUs, rough)\n", split.text, per);
+			uint64_t value = 0;
+			const bool spinlock = split.body[0] == 0x87;
+			std::memcpy(&value, const_cast<uint8_t *>(page) + (spinlock ? 32 : split.offset), spinlock ? 4 : split.size);
+			const int64_t lost = int64_t(2 * split_iterations) - int64_t(value);
+			std::printf("%s: %lld of %u updates lost%s\n", split.text, static_cast<long long>(lost), 2 * split_iterations,
+				lost ? " (FAIL)" : "");
+			failures += lost != 0;
+		}
+		{
+			// One vCPU adds 1 << 48 to the aligned quadword at 8 (bytes 14 and 15 its top 16 bits) with lock add; the other lock incs
+			// the split doubleword at 14. Both add 1 to the 16 bits at 14 each time, below 65536 in all.
+			const uint64_t aligned = memory.add(loop_code({0x48, 0xc7, 0xc2, 0x00, 0x00, 0x00, 0x00, 0x48, 0xba, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x01, 0x00, 0xf0, 0x48, 0x01, 0x17}));
+			const uint64_t split = memory.add(loop_code({0xf0, 0xff, 0x07}));
+			for (unsigned i = 0; i < 64; ++i)
+				page[i] = 0;
+			run_pair(aligned, split, split_iterations, [&](unsigned role, translate::CpuState &state) {
+				state.gpr[translate::rdi] = shared + (role ? 14 : 8);
+			});
+			uint16_t value = 0;
+			std::memcpy(&value, const_cast<uint8_t *>(page) + 14, 2);
+			const int64_t lost = int64_t(2 * split_iterations) - int64_t(value);
+			std::printf("lock add qword ptr [8], 1 << 48 against lock inc dword ptr [14]: %lld of %u updates lost%s\n",
+				static_cast<long long>(lost), 2 * split_iterations, lost ? " (FAIL)" : "");
+			failures += lost != 0;
+		}
 		for (const BitLoop &loop : bit_loops) {
 			const uint64_t entry = memory.add(bit_code(loop));
 			*word = 0;
