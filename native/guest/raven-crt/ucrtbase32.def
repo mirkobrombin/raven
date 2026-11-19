@@ -22,6 +22,7 @@ EXPORTS
 	??_Eexception@@UAEPAXI@Z = raven_exception_delete
 	??_7exception@@6B@ = raven_exception_vtable DATA
 	raven_raise_exception = raven_raise_exception@16
+	raven_debug_break = raven_debug_break@0
 	raven_unwind = raven_unwind@16
 	raven_dispatch_fault = raven_dispatch_fault@8
 	raven_create_fiber = raven_create_fiber@12

@@ -1001,6 +1001,23 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 		auto record = exceptions->new_record(call.u32(0), call.u32(1) & flag_noncontinuable, context_rip(origin), parameters);
 		exceptions->raise(std::move(record), std::move(origin), [&context] { return native_raise_exception(context.process); });
 	});
+	// DebugBreak raises the breakpoint exception on the breakpoint its stub stops at, as an int3 of the program raises it: the address
+	// and the context name that instruction. A handler that steps over it returns to the caller, as from RaiseException; one that does
+	// not runs the breakpoint again.
+	registry.add("DebugBreak", 0, [exceptions, &context](ApiCall &) {
+		constexpr uint32_t breakpoint = 0x80000003U;
+		static constexpr uint64_t parameters[] = {0};
+		auto origin = context_from_process(context.process.context());
+		exceptions->raise_stub = context_rip(origin);
+		const uint64_t at = context_rip(origin) - 1;
+		set_context_rip(origin, at);
+		auto record = exceptions->new_record(breakpoint, 0, at, parameters);
+		exceptions->raise(std::move(record), std::move(origin), [at] {
+			NativeResult unhandled{NativeStop::exception, breakpoint, at, 0};
+			unhandled.exception_information.assign(std::begin(parameters), std::end(parameters));
+			return unhandled;
+		});
+	});
 	registry.add("RtlRaiseException", 1, [exceptions, &context](ApiCall &call) {
 		auto origin = exceptions->caller_context();
 		auto record = call.read(call[0], record_size);

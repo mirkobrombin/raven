@@ -2667,6 +2667,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             endif()
             set(TOKEN_CLIENTS)
             set(EVENT_CLIENTS)
+            set(OPTIONAL_CALLS_CLIENTS)
             set(PEER_PROCESS_CLIENTS)
             set(RAW_DEVICE_CLIENTS)
             set(DIRECTORY_CLIENTS)
@@ -2730,6 +2731,21 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_process_event_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${event_client})
                     set_tests_properties(native_process_event_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-prefix${width})
+                    set(optional_calls_client ${CMAKE_CURRENT_BINARY_DIR}/optional-calls${width}.exe)
+                    add_custom_command(OUTPUT ${optional_calls_client}
+                        COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${remote_entry},--no-insert-timestamp
+                            -o ${optional_calls_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/optional_calls_client.c -ladvapi32 -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/optional_calls_client.c VERBATIM)
+                    list(APPEND OPTIONAL_CALLS_CLIENTS ${optional_calls_client})
+                    add_test(NAME native_optional_calls_x${width} COMMAND raven --run-process --execution=native ${optional_calls_client})
+                    set_tests_properties(native_optional_calls_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/optional-calls-prefix${width})
+                    if(width EQUAL 64)
+                        add_test(NAME native_optional_calls_parallel_x64 COMMAND raven --run-process --execution=native ${optional_calls_client})
+                        set_tests_properties(native_optional_calls_parallel_x64 PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/optional-calls-parallel-prefix;RAVEN_PARALLEL=1")
+                    endif()
                     set(peer_client ${CMAKE_CURRENT_BINARY_DIR}/peer-process${width}.exe)
                     add_custom_command(OUTPUT ${peer_client}
                         COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
@@ -2765,6 +2781,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(shared_wait_fixtures ALL DEPENDS ${SHARED_WAIT_CLIENTS})
             add_custom_target(token_fixtures ALL DEPENDS ${TOKEN_CLIENTS})
             add_custom_target(event_fixtures ALL DEPENDS ${EVENT_CLIENTS})
+            add_custom_target(optional_calls_fixtures ALL DEPENDS ${OPTIONAL_CALLS_CLIENTS})
             add_custom_target(peer_process_fixtures ALL DEPENDS ${PEER_PROCESS_CLIENTS})
             add_custom_target(raw_device_fixtures ALL DEPENDS ${RAW_DEVICE_CLIENTS})
             add_custom_target(directory_fixtures ALL DEPENDS ${DIRECTORY_CLIENTS})

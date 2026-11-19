@@ -443,6 +443,12 @@ void __stdcall raven_raise_exception(DWORD code, DWORD flags, DWORD count, const
 	dispatch(&record, &context);
 }
 
+/* DebugBreak for 32-bit programs: a breakpoint instruction, which the runtime hands to the program as any other. */
+void __stdcall raven_debug_break(void)
+{
+	__asm__ volatile("int3");
+}
+
 /* Goes on with the registers of a context, as NtContinue does: its last words, the instruction, the flags and the two registers the
  * switch needs, are put just below its stack, which leaves the dispatcher's own frames far under it. */
 static void __attribute__((noreturn)) resume_context(const CONTEXT *context)

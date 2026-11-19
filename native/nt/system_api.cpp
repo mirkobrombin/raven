@@ -1308,10 +1308,12 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("GetSystemPreferredUILanguages", 4, preferred_languages);
 	registry.add("GetProcessPreferredUILanguages", 4, preferred_languages);
 	// The list stays the one language the runtime speaks; a program asking for another finds that out from the getters.
-	registry.add("SetThreadPreferredUILanguages", 3, [](ApiCall &call) {
+	const auto set_languages = [](ApiCall &call) {
 		if (call[2]) call.store<uint32_t>(call[2], 1);
 		call.ret(1);
-	});
+	};
+	registry.add("SetThreadPreferredUILanguages", 3, set_languages);
+	registry.add("SetProcessPreferredUILanguages", 3, set_languages);
 	// Power: always on mains power, no battery, nothing to suspend.
 	registry.add("GetSystemPowerStatus", 1, [](ApiCall &call) {
 		if (!call[0]) {
@@ -1339,6 +1341,16 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	});
 	registry.add("RegisterSuspendResumeNotification", 2, [](ApiCall &call) { call.ret(1); });
 	registry.add("UnregisterSuspendResumeNotification", 1, [](ApiCall &call) { call.ret(1); });
+	// The same registration as powrprof offers it: the handle goes to the caller's variable, and the result is an error code.
+	registry.add("PowerRegisterSuspendResumeNotification", 3, [](ApiCall &call) {
+		if (!call[1] || !call[2]) {
+			call.ret(87);
+			return;
+		}
+		call.store_pointer(call[2], 1);
+		call.ret(0);
+	});
+	registry.add("PowerUnregisterSuspendResumeNotification", 1, [](ApiCall &call) { call.ret(0); });
 	// Giving pages back changes nothing the program can see here.
 	registry.add("DiscardVirtualMemory", 2, [](ApiCall &call) { call.ret(0); });
 	// The display is 96 dpi and every process counts as aware of it (IsProcessDPIAware): the awareness a process asks for is kept and

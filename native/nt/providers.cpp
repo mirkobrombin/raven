@@ -231,8 +231,8 @@ static bool call_stubs()
 // on their breakpoint rather than wait in their stub for the host thread.
 static bool changes_context(std::string_view name)
 {
-	static constexpr std::array<std::string_view, 9> calls{"RaiseException", "RtlRaiseException", "NtRaiseException", "RtlRaiseStatus",
-		"RtlUnwind", "RtlUnwindEx", "RtlRestoreContext", "NtContinue", "RcConsolidateFrames"};
+	static constexpr std::array<std::string_view, 10> calls{"RaiseException", "RtlRaiseException", "NtRaiseException", "RtlRaiseStatus",
+		"RtlUnwind", "RtlUnwindEx", "RtlRestoreContext", "NtContinue", "RcConsolidateFrames", "DebugBreak"};
 	return std::find(calls.begin(), calls.end(), name) != calls.end();
 }
 
