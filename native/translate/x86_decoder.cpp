@@ -897,6 +897,16 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 		result.mnemonic = Mnemonic::xgetbv;
 		result.count = 0;
 	}
+	// xsave and xrstor, which the runtime runs too (xsave.h).
+	if (full_opcode == 0x0fae && modrm.mod != 3 && (modrm.reg == 4 || modrm.reg == 5) && !prefixes.operand16 && !prefixes.rep &&
+		!prefixes.repne && !prefixes.lock && !vex.present) {
+		Operand area = result.operands[0];
+		area.size = 0;
+		result.mnemonic = modrm.reg == 4 ? Mnemonic::xsave : Mnemonic::xrstor;
+		result.operands = {area};
+		result.count = 1;
+		result.operand_size = rex_w ? 8 : 4;
+	}
 	// LOCK applies only to read-modify-write forms with a memory destination; anything else raises #UD.
 	if (prefixes.lock && result.mnemonic != Mnemonic::other) {
 		static constexpr Mnemonic lockable[] = {Mnemonic::add, Mnemonic::or_, Mnemonic::adc, Mnemonic::sbb, Mnemonic::and_, Mnemonic::sub,
@@ -1491,6 +1501,8 @@ std::string format_intel(const Instruction &instruction)
 	case Mnemonic::xgetbv: name = "xgetbv"; break;
 	case Mnemonic::crc32: name = "crc32"; break;
 	case Mnemonic::popcnt: name = "popcnt"; break;
+	case Mnemonic::xsave: name = instruction.operand_size == 8 ? "xsave64" : "xsave"; break;
+	case Mnemonic::xrstor: name = instruction.operand_size == 8 ? "xrstor64" : "xrstor"; break;
 	default: {
 		if (instruction.mnemonic >= x87_first && instruction.mnemonic <= x87_last) {
 			name = x87_names[static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(x87_first)];

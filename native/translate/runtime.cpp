@@ -3,6 +3,7 @@
 #include "x86_decoder.h"
 #include "cpuid.h"
 #include "string_compare.h"
+#include "xsave.h"
 #include "x87.h"
 
 #include "a64_emitter.h"
@@ -19,7 +20,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 14;
+constexpr uint64_t translator_version = 15;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -322,7 +323,8 @@ RunResult Runtime::Thread::run()
 			}
 			break;
 		case ExitReason::cpuid: {
-			// cpuid or xgetbv at rip, answered from cpuid.h, or a string compare (string_compare.h); then translated code again after it.
+			// cpuid or xgetbv at rip, answered from cpuid.h, a string compare (string_compare.h) or xsave or xrstor (xsave.h); then
+			// translated code again after it.
 			Instruction instruction;
 			{
 				std::lock_guard guard(runtime.lock);
@@ -344,6 +346,12 @@ RunResult Runtime::Thread::run()
 				cpu.gpr[rdx] = *value >> 32;
 			} else if (string_compare_supported(instruction))
 				string_compare(cpu, runtime.memory, instruction, cpu.rip + instruction.length);
+			else if (xsave_supported(instruction)) {
+				if (!xsave(cpu, runtime.memory, instruction, cpu.rip + instruction.length)) {
+					cpu.exit_info = uint64_t(FaultKind::instruction);
+					return {ExitReason::fault, cpu.rip};
+				}
+			}
 			else
 				return {ExitReason::unsupported, cpu.rip};
 			cpu.rip += instruction.length;
