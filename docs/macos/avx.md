@@ -2,7 +2,8 @@
 
 `native/translate/` translates VEX-encoded instructions: the VEX forms of SSE to SSE4.2 at 128 and 256 bits, vzeroupper and
 vzeroall, the 128-bit lane moves, the broadcasts, vtestps and vtestpd, vpermilps and vpermilpd, vblendv, vmaskmov, the AVX
-compare predicates, FMA3 and AVX2 (gathers included); xsave and xrstor run in the runtime. cpuid reports AVX, FMA and AVX2. This note records what x64 code contains of AVX, how CRT code chooses AVX
+compare predicates, FMA3 and AVX2 (gathers included); xsave and xrstor run in the runtime. cpuid reports AVX, FMA and AVX2. This
+note records what x64 code contains of AVX, how CRT code chooses AVX
 paths, what cpuid and xgetbv report, the YMM state, the tests against Rosetta and an x86 CPU, a short performance check and the open
 items. SSE is in [sse.md](sse.md), x87 in [x87.md](x87.md).
 
@@ -92,7 +93,8 @@ from one table and goes on after the instruction, in this process and in a vCPU 
 
 **What it reports today: the baseline, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AVX (with XSAVE and OSXSAVE), FMA, AVX2, BMI1,
 BMI2 and LZCNT; no F16C** (PROVEN, `translate_cpuid` and `hvf_cpuid`, 0 failures: leaf 1 ECX 0x1c981201, EDX 0x07808101; leaf 7
-EBX 0x128; leaf 0x80000001 ECX 0x20; xgetbv(0) 7). BMI1 `0d5ba385`, BMI2 `2dcaf9ea`, LZCNT `c6c4344a`. Each was switched on in a commit of its own once its samples translated and its oracle families passed in
+EBX 0x128; leaf 0x80000001 ECX 0x20; xgetbv(0) 7). BMI1 `0d5ba385`, BMI2 `2dcaf9ea`, LZCNT `c6c4344a`. Each was switched on in a
+commit of its own once its samples translated and its oracle families passed in
 this process and in a vCPU against an x86 CPU: SSE4.2 `d1070f63`, AVX `714848e2`, FMA `26122295`, AVX2 `7ff6b2f9`. AVX2 was
 reported one commit too early: a review then found vbroadcasti128 undecoded; it joined the samples (`80216673`) and was translated
 (`86b6adcd`), so from `86b6adcd` on the AVX2 report holds for every sample. SSE4.2 was switched on with its `strings` family
@@ -271,7 +273,8 @@ Platinum 8573C; PROVEN with `silicon_overrides.py`, the file keeps the overrides
 - `strings`: the EPYC 7763 agrees with Rosetta in all 1500, as the Xeon 8370C did.
 - `avx2` (EPYC 9V74, run 44505099547): 4 cases differ, each a vpsllvq or vpsrlvq whose count has bits set above bit 31: Rosetta
   shifts by the low 32 bits, the EPYC by all 64 (so by 64 or more: 0), as the SDM says; the translator matches the EPYC. The 9V74
-  also gave the same fma addsub MXCSR values as the Xeon. `gathers` (run 44505811968): all 800 agree with Rosetta. One dpps case (#7786, NaN lanes) differs
+  also gave the same fma addsub MXCSR values as the Xeon. `gathers` (run 44505811968): all 800 agree with Rosetta. One dpps case
+  (#7786, NaN lanes) differs
   between the Intel runs and the AMD ones; the AMD result is kept.
 
 **The SSE3 to SSE4.2 families** (raven-macos-bench runs 44498540080, an AMD EPYC 7763, and 44499294363, an AMD EPYC 9V74; the file
@@ -369,7 +372,8 @@ work, `960 VEX instructions, 895 translated (93.2%)` (`526afbb4`); after it `958
 now `960 VEX instructions, 960 translated (100.0%)` (PROVEN). The 2 shlx sit in a routine that the CRT's AVX2 level reaches
 without testing BMI2 (open items); its 200 instructions now all translate. Over every instruction, linearly (data decoded as code
 included), `1218553 instructions translated of 1224528`; the most frequent left are bt 1023, imul 821, bts 777,
-adc 567, mul 320 and rol 281 (PROVEN, `563241f6`; which forms of them are refused, and which are reachable, was not counted). Its legacy SSE and SSE2 are 40832 of 40832 translated, its
+adc 567, mul 320 and rol 281 (PROVEN, `563241f6`; which forms of them are refused, and which are reachable, was not counted). Its
+legacy SSE and SSE2 are 40832 of 40832 translated, its
 SSE4.2 string compares too. Running Notepad++ under the translator was not done: it needs the PE loaded with its imports by the
 port (NOT verified).
 
