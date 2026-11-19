@@ -63,6 +63,9 @@ enum class Mnemonic : uint16_t {
 	// The runtime answers these (cpuid.h): a block ends before them with ExitReason::cpuid.
 	cpuid,
 	xgetbv,
+	// SSE4.2's crc32 and popcnt, on general registers.
+	crc32,
+	popcnt,
 	// SSE and SSE2 on XMM registers, from movq to the end (sse_first to sse_last). movq and movd move between XMM and general
 	// registers or memory; movq also between XMM registers and the low quadword. A memory operand has the size the instruction
 	// accesses: 16 for a whole register, 8, 4 or 2 for a part.
@@ -78,6 +81,13 @@ enum class Mnemonic : uint16_t {
 	ldmxcsr, stmxcsr, cmpps, cmppd, cmpss, cmpsd, shufps, shufpd, paddq, pmullw, pmovmskb, psubusb, psubusw, pminub, pand, paddusb,
 	paddusw, pmaxub, pandn, pavgb, pavgw, pmulhuw, pmulhw, cvttpd2dq, cvtdq2pd, cvtpd2dq, movntdq, psubsb, psubsw, pminsw, por,
 	paddsb, paddsw, pmaxsw, pxor, pmuludq, pmaddwd, psadbw, psubb, psubw, psubd, psubq, paddb, paddw, paddd,
+	// SSE3, SSSE3, SSE4.1 and SSE4.2 on XMM registers (and pinsrw, pextrw of SSE2), from addsubps to pcmpistri.
+	addsubps, addsubpd, haddps, haddpd, hsubps, hsubpd, movddup, movsldup, movshdup, lddqu, pinsrw, pextrw, pshufb, phaddw, phaddd,
+	phaddsw, pmaddubsw, phsubw, phsubd, phsubsw, psignb, psignw, psignd, pmulhrsw, pabsb, pabsw, pabsd, palignr, pblendvb, blendvps,
+	blendvpd, ptest, pmovsxbw, pmovsxbd, pmovsxbq, pmovsxwd, pmovsxwq, pmovsxdq, pmuldq, pcmpeqq, movntdqa, packusdw, pmovzxbw,
+	pmovzxbd, pmovzxbq, pmovzxwd, pmovzxwq, pmovzxdq, pcmpgtq, pminsb, pminsd, pminuw, pminud, pmaxsb, pmaxsd, pmaxuw, pmaxud, pmulld,
+	phminposuw, roundps, roundpd, roundss, roundsd, blendps, blendpd, pblendw, pextrb, pextrd, pextrq, extractps, pinsrb, insertps,
+	pinsrd, pinsrq, dpps, dppd, mpsadbw, pcmpestrm, pcmpestri, pcmpistrm, pcmpistri,
 	// x87, from fadd to fwait (x87_first to x87_last), named as LLVM prints them: fcompi and fucompi are fcomip and fucomip, fwait
 	// prints as wait. A memory operand has the size the instruction accesses (2, 4, 8 or 10 bytes), 28 for an environment and 108
 	// for a save area.
@@ -101,7 +111,8 @@ enum class Mnemonic : uint16_t {
 };
 
 constexpr Mnemonic sse_first = Mnemonic::movq;
-constexpr Mnemonic sse_last = Mnemonic::paddd;
+constexpr Mnemonic sse_last = Mnemonic::pcmpistri;
+constexpr Mnemonic sse3_first = Mnemonic::addsubps;
 constexpr Mnemonic x87_first = Mnemonic::fadd;
 constexpr Mnemonic x87_last = Mnemonic::fwait;
 constexpr Mnemonic avx_first = Mnemonic::vzeroupper;

@@ -101,6 +101,8 @@ struct Tally {
 
 // The source of random SSE and SSE2 instances: each must have semantics.
 static const std::string sse_instances = "sse_instances.o";
+// The same for SSE3 to SSE4.2, crc32 and popcnt.
+static const std::string sse4_instances = "sse4_instances.o";
 // The same for x87.
 static const std::string x87_instances = "x87_instances.o";
 
@@ -171,6 +173,8 @@ int main(int argc, char **argv)
 				problem = "not decoded";
 			else if (instruction.length != bytes.size())
 				problem = "length " + std::to_string(instruction.length) + " instead of " + std::to_string(bytes.size());
+			else if (instruction.mnemonic == Mnemonic::other && source == sse4_instances)
+				problem = "no semantics";
 			else if (instruction.mnemonic != Mnemonic::other) {
 				++tally.semantic;
 				const std::string text = format_intel(instruction);

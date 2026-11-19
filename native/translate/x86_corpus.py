@@ -189,11 +189,41 @@ SSE_FORMS = {
     "C32": "ss",
     "C64": "sd",
 }
+# SSE3 to SSE4.2 (and pinsrw, pextrw, crc32, popcnt), as sse_instance reads SSE_FORMS; Z is xmm0, the implicit operand of blendv.
+SSE4_FORMS = {
+    "V,W128": "addsubps addsubpd haddps haddpd hsubps hsubpd movsldup movshdup pshufb phaddw phaddd phaddsw pmaddubsw phsubw "
+              "phsubd phsubsw psignb psignw psignd pmulhrsw pabsb pabsw pabsd ptest pmuldq pcmpeqq packusdw pcmpgtq pminsb "
+              "pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud pmulld phminposuw",
+    "V,W64": "movddup pmovsxbw pmovsxwd pmovsxdq pmovzxbw pmovzxwd pmovzxdq",
+    "V,W32": "pmovsxbd pmovsxwq pmovzxbd pmovzxwq",
+    "V,W16": "pmovsxbq pmovzxbq",
+    "V,M128": "lddqu movntdqa",
+    "V,W128,Z": "pblendvb blendvps blendvpd",
+    "V,W128,I": "roundps roundpd blendps blendpd pblendw palignr dpps dppd mpsadbw pcmpestrm pcmpestri pcmpistrm pcmpistri",
+    "V,W32,I": "roundss insertps",
+    "V,W64,I": "roundsd",
+    "E32,V,I": "pextrd extractps",
+    "E64,V,I": "pextrq",
+    "M8,V,I": "pextrb",
+    "M16,V,I": "pextrw",
+    "G32,U,I": "pextrb pextrw",
+    "V,E32,I": "pinsrd",
+    "V,E64,I": "pinsrq",
+    "V,M8,I": "pinsrb",
+    "V,M16,I": "pinsrw",
+    "V,G32,I": "pinsrb pinsrw",
+    "G32,E8": "crc32",
+    "G32,E16": "crc32",
+    "G16,E16": "popcnt",
+    "G32,E32": "crc32 popcnt",
+    "G64,E8": "crc32",
+    "G64,E64": "crc32 popcnt",
+}
 SSE_PREDICATES = ["eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"]
 
 
-def sse_instance(rng):
-    form, names = rng.choice(list(SSE_FORMS.items()))
+def sse_instance(rng, forms=SSE_FORMS):
+    form, names = rng.choice(list(forms.items()))
     name = rng.choice(names.split())
     xmm = lambda: f"xmm{rng.randrange(16)}"
     if form.startswith("C"):
@@ -202,7 +232,9 @@ def sse_instance(rng):
     operands = []
     for part in form.split(","):
         kind, bits = part[0], int(part[1:]) if len(part) > 1 else 0
-        if kind == "V" or kind == "U" or (kind == "W" and rng.random() < 0.5):
+        if kind == "Z":
+            operands.append("xmm0")
+        elif kind == "V" or kind == "U" or (kind == "W" and rng.random() < 0.5):
             operands.append(xmm())
         elif kind in "WM":
             operands.append(memory(rng, bits))
@@ -314,6 +346,11 @@ def main():
         x87_source.write_text(".intel_syntax noprefix\n.text\n" + "".join(x87_instance(x87_rng) + "\n" for _ in range(4000)))
         x87_obj = Path(scratch) / "x87_instances.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(x87_obj), str(x87_source)], check=True)
+        sse4_rng = random.Random(20261201)
+        sse4_source = Path(scratch) / "sse4_instances.s"
+        sse4_source.write_text(".intel_syntax noprefix\n.text\n" + "".join(sse_instance(sse4_rng, SSE4_FORMS) + "\n" for _ in range(6000)))
+        sse4_obj = Path(scratch) / "sse4_instances.o"
+        subprocess.run([clang, "-c", "-x", "assembler", "-o", str(sse4_obj), str(sse4_source)], check=True)
         vex_rng = random.Random(20261119)
         vex_source = Path(scratch) / "vex_instances.s"
         vex_source.write_text(".text\n" + "".join(vex_instance(vex_rng) + "\n" for _ in range(20000)))
@@ -323,7 +360,7 @@ def main():
         noise.write_text(".text\n" + "".join(f".byte {', '.join(str(rng.randrange(256)) for _ in range(16))}\n" for _ in range(8192)))
         noise_obj = Path(scratch) / "noise.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(noise_obj), str(noise)], check=True)
-        for path in [obj, sse_obj, x87_obj, vex_obj, noise_obj] + [Path(image) for image in images]:
+        for path in [obj, sse_obj, x87_obj, sse4_obj, vex_obj, noise_obj] + [Path(image) for image in images]:
             source_name = path.name
             lines.append(f"# {source_name}")
             for raw, address, text in disassemble(objdump, str(path)):
