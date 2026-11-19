@@ -321,7 +321,7 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 					continue;
 				entry.status = read_status(name);
 				const uint32_t state = entry.status.fields[1];
-				if ((call.u32(3) == 1 && state != state_stopped) || (call.u32(3) == 2 && state == state_stopped))
+				if ((call.u32(3) == 1 && state == state_stopped) || (call.u32(3) == 2 && state != state_stopped))
 					continue;
 				if (entry.display.empty()) entry.display = name;
 				entry.narrow_name = to_utf8(entry.name);
