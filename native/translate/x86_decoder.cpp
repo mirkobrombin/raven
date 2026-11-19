@@ -1005,8 +1005,9 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			result.operand_size = size;
 			return true;
 		};
+		// rorx has one source: VEX.vvvv must be 1111b (0 here), or x86 raises #UD.
 		if (vex.map == 3)
-			return bmi(rorx, {target, source, imm});
+			return vex.vvvv == 0 ? bmi(rorx, {target, source, imm}) : false;
 		switch (opcode) {
 		case 0xf2: return vex.pp == 0 ? bmi(andn, {target, other, source}) : true;
 		case 0xf3:
