@@ -39,6 +39,16 @@ constexpr uint32_t faddp_4s = 0x6e20d400, uzp1_16b = 0x4e001800, trn1_16b = 0x4e
 // compares against zero, each on bytes or with size_h or size_s.
 constexpr uint32_t tbl_16b = 0x4e000000, movi_8f = 0x4f04e5e0, sxtl_8h = 0x0f08a400, uxtl_8h = 0x2f08a400, smull_4s = 0x0e60c000,
 	rshrn_4h_15 = 0x0f118c00, neg_16b = 0x6e20b800, abs_16b = 0x4e20b800, cmlt_zero_16b = 0x4e20a800, cmeq_zero_16b = 0x4e209800;
+// SSE4.1: ins of a general register and dup of an element (imm5 at bits 20:16 names both), widening of halfwords and singles, the
+// absolute differences of bytes into halfwords (uabdl, and accumulating uabal), smull of singles into doublewords, uminv of
+// halfwords, sqxtun of words into halfwords, and the roundings: frintn, frintm, frintp, frintz, frinti on four singles (or with sz
+// two doubles) and their scalar forms.
+constexpr uint32_t ins_general = 0x4e001c00, dup_element = 0x4e000400, sxtl_4s = 0x0f10a400, uxtl_4s = 0x2f10a400,
+	uxtl_2d = 0x2f20a400, uabdl_8h = 0x2e207000, uabal_8h = 0x2e205000, smull_2d = 0x0ea0c000, uminv_h = 0x6e71a800,
+	sqxtun_4h = 0x2e612800, orn_16b = 0x4ee01c00;
+constexpr uint32_t frintn_4s = 0x4e218800, frintm_4s = 0x4e219800, frintp_4s = 0x4ea18800, frintz_4s = 0x4ea19800,
+	frinti_4s = 0x6ea19800, frintn_s = 0x1e244000, frintp_s = 0x1e24c000, frintm_s = 0x1e254000, frintz_s = 0x1e25c000,
+	frinti_s = 0x1e27c000;
 // Floating point on four singles; or sz (bit 22) in for two doubles, or the scalar single for one double.
 constexpr uint32_t sz = 0x00400000;
 constexpr uint32_t fadd_4s = 0x4e20d400, fsub_4s = 0x4ea0d400, fmul_4s = 0x6e20dc00, fdiv_4s = 0x6e20fc00, fmax_4s = 0x4e20f400,

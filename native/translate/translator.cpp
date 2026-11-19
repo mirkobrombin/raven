@@ -212,6 +212,16 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::phsubw: case Mnemonic::phsubd: case Mnemonic::phsubsw: case Mnemonic::psignb: case Mnemonic::psignw:
 	case Mnemonic::psignd: case Mnemonic::pmulhrsw: case Mnemonic::pabsb: case Mnemonic::pabsw: case Mnemonic::pabsd:
 	case Mnemonic::palignr:
+	case Mnemonic::pblendvb: case Mnemonic::blendvps: case Mnemonic::blendvpd: case Mnemonic::ptest: case Mnemonic::pmovsxbw:
+	case Mnemonic::pmovsxbd: case Mnemonic::pmovsxbq: case Mnemonic::pmovsxwd: case Mnemonic::pmovsxwq: case Mnemonic::pmovsxdq:
+	case Mnemonic::pmovzxbw: case Mnemonic::pmovzxbd: case Mnemonic::pmovzxbq: case Mnemonic::pmovzxwd: case Mnemonic::pmovzxwq:
+	case Mnemonic::pmovzxdq: case Mnemonic::pmuldq: case Mnemonic::pcmpeqq: case Mnemonic::movntdqa: case Mnemonic::packusdw:
+	case Mnemonic::pminsb: case Mnemonic::pminsd: case Mnemonic::pminuw: case Mnemonic::pminud: case Mnemonic::pmaxsb:
+	case Mnemonic::pmaxsd: case Mnemonic::pmaxuw: case Mnemonic::pmaxud: case Mnemonic::pmulld: case Mnemonic::phminposuw:
+	case Mnemonic::roundps: case Mnemonic::roundpd: case Mnemonic::roundss: case Mnemonic::roundsd: case Mnemonic::blendps:
+	case Mnemonic::blendpd: case Mnemonic::pblendw: case Mnemonic::pextrb: case Mnemonic::pextrw: case Mnemonic::pextrd:
+	case Mnemonic::pextrq: case Mnemonic::extractps: case Mnemonic::pinsrb: case Mnemonic::pinsrw: case Mnemonic::pinsrd:
+	case Mnemonic::pinsrq: case Mnemonic::insertps: case Mnemonic::dpps: case Mnemonic::dppd: case Mnemonic::mpsadbw:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -382,6 +392,7 @@ private:
 	void sse_shuffle(const Instruction &instruction);
 	void sse3(const Instruction &instruction);
 	void ssse3(const Instruction &instruction);
+	void sse41(const Instruction &instruction);
 
 	// AVX: the low 128 bits of YMMn are vn, the upper halves stay in CpuState::ymm_high (v20-v23 hold them while an instruction
 	// works on them; the SSE handlers use v16-v19).
@@ -1696,6 +1707,242 @@ void BlockTranslator::ssse3(const Instruction &instruction)
 	}
 }
 
+namespace {
+
+// imm5 of ins (general) and dup (element): element index of size bytes.
+uint32_t element_imm5(unsigned index, unsigned size)
+{
+	const unsigned log = size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : 3;
+	return uint32_t(((index << (log + 1)) | (1u << log)) & 31) << 16;
+}
+
+}
+
+void BlockTranslator::sse41(const Instruction &instruction)
+{
+	using enum Mnemonic;
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const Operand *operands = instruction.operands.data();
+	const auto imm = [&](unsigned at) { return static_cast<unsigned>(operands[at].value & 0xff); };
+	switch (mnemonic) {
+	case pextrb: case pextrw: case pextrd: case pextrq: case extractps: {
+		// An element of the XMM register into a general register (zero-extended) or memory of its size.
+		const unsigned size = mnemonic == pextrb ? 1 : mnemonic == pextrw ? 2 : mnemonic == pextrq ? 8 : 4;
+		a.umov(s0, operands[1].reg, imm(2) % (16 / size), size);
+		if (operands[0].kind == OperandKind::mem)
+			store_memory(s0, operands[0], size);
+		else
+			write(operands[0], s0);
+		return;
+	}
+	case pinsrb: case pinsrw: case pinsrd: case pinsrq: {
+		const unsigned size = mnemonic == pinsrb ? 1 : mnemonic == pinsrw ? 2 : mnemonic == pinsrq ? 8 : 4;
+		const uint8_t value = operands[1].kind == OperandKind::mem ? (load_memory(s0, operands[1], size), s0) : read(operands[1], s0);
+		a.simd(simd::ins_general | element_imm5(imm(2) % (16 / size), size), operands[0].reg, value);
+		return;
+	}
+	default: break;
+	}
+	const uint8_t target = operands[0].reg;
+	const Operand &source_operand = operands[1];
+	switch (mnemonic) {
+	case pmovsxbw: case pmovsxbd: case pmovsxbq: case pmovsxwd: case pmovsxwq: case pmovsxdq: case pmovzxbw: case pmovzxbd:
+	case pmovzxbq: case pmovzxwd: case pmovzxwq: case pmovzxdq: {
+		// Widen step by step: bytes to halfwords, halfwords to words, words to doublewords.
+		const bool sign = mnemonic <= pmovsxdq;
+		const unsigned from = mnemonic == pmovsxbw || mnemonic == pmovsxbd || mnemonic == pmovsxbq || mnemonic == pmovzxbw ||
+				mnemonic == pmovzxbd || mnemonic == pmovzxbq ? 1 : mnemonic == pmovsxdq || mnemonic == pmovzxdq ? 4 : 2;
+		const unsigned to = mnemonic == pmovsxbw || mnemonic == pmovzxbw ? 2 : mnemonic == pmovsxbd || mnemonic == pmovzxbd ||
+				mnemonic == pmovsxwd || mnemonic == pmovzxwd ? 4 : 8;
+		uint8_t value = source_operand.reg;
+		if (source_operand.kind == OperandKind::mem) {
+			load_vector(vs0, source_operand, source_operand.size);
+			value = vs0;
+		}
+		for (unsigned size = from; size < to; size *= 2) {
+			const uint32_t opcode = size == 1 ? (sign ? simd::sxtl_8h : simd::uxtl_8h) : size == 2 ? (sign ? simd::sxtl_4s : simd::uxtl_4s) :
+				(sign ? simd::sxtl_2d : simd::uxtl_2d);
+			a.simd(opcode, size * 2 == to ? target : vs1, value, 0);
+			value = vs1;
+		}
+		return;
+	}
+	case movntdqa:
+		if (source_operand.kind == OperandKind::xmm)
+			a.simd(simd::orr_16b, target, source_operand.reg, source_operand.reg);
+		else
+			load_vector(target, source_operand, 16);
+		return;
+	case insertps: {
+		// The source element (imm8 bits 7:6, or the 4 bytes of memory) into element bits 5:4, then the elements of bits 3:0 cleared.
+		if (source_operand.kind == OperandKind::mem) {
+			load_vector(vs0, source_operand, 4);
+			a.ins(target, (imm(2) >> 4) & 3, vs0, 0, 4);
+		} else
+			a.ins(target, (imm(2) >> 4) & 3, source_operand.reg, imm(2) >> 6, 4);
+		a.simd(simd::movi_zero_2d, vs1, 0);
+		for (unsigned i = 0; i < 4; ++i)
+			if (imm(2) >> i & 1)
+				a.ins(target, i, vs1, 0, 4);
+		return;
+	}
+	case roundss: case roundsd: case roundps: case roundpd: {
+		const bool scalar = mnemonic == roundss || mnemonic == roundsd;
+		const bool doubles = mnemonic == roundsd || mnemonic == roundpd;
+		const uint8_t source = source_operand.kind == OperandKind::mem ? (load_vector(vs0, source_operand, source_operand.size), vs0) :
+			source_operand.reg;
+		const unsigned control = imm(2);
+		const uint32_t sz = doubles ? simd::sz : 0;
+		const uint8_t result = scalar ? vs1 : target;
+		// Bit 2: MXCSR's mode (frinti, or frintx when bit 3 lets PE be raised). Otherwise bits 1:0 name it: without bit 3 PE must be
+		// raised too, which only frintx does, so FPCR's RMode is set to that mode around it.
+		if (control & 4)
+			a.simd((scalar ? (control & 8 ? simd::frinti_s : simd::frintx_s) : (control & 8 ? simd::frinti_4s : simd::frintx_4s)) | sz,
+				result, source);
+		else if (control & 8) {
+			static constexpr uint32_t vector[] = {simd::frintn_4s, simd::frintm_4s, simd::frintp_4s, simd::frintz_4s};
+			static constexpr uint32_t one[] = {simd::frintn_s, simd::frintm_s, simd::frintp_s, simd::frintz_s};
+			a.simd((scalar ? one[control & 3] : vector[control & 3]) | sz, result, source);
+		} else {
+			// x86's 0 nearest, 1 down, 2 up, 3 zero are RMode 0, 2, 1, 3.
+			static constexpr uint8_t rmode[] = {0, 2, 1, 3};
+			a.mrs_fpcr(s1);
+			a.mov(s2, s1);
+			a.mov_imm(s3, rmode[control & 3], false);
+			a.bfi(s2, s3, 22, 2);
+			a.msr_fpcr(s2);
+			a.simd((scalar ? simd::frintx_s : simd::frintx_4s) | sz, result, source);
+			a.msr_fpcr(s1);
+		}
+		if (scalar)
+			a.ins(target, 0, vs1, 0, doubles ? 8 : 4);
+		return;
+	}
+	default: break;
+	}
+	const uint8_t source = vector_source(source_operand, vs0);
+	switch (mnemonic) {
+	case pblendvb: case blendvps: case blendvpd: {
+		const uint32_t size = mnemonic == blendvps ? simd::size_s : mnemonic == blendvpd ? simd::size_d : 0;
+		a.simd(simd::cmlt_zero_16b | size, vs1, 0);
+		a.simd(simd::bsl_16b, vs1, source, target);
+		a.simd(simd::orr_16b, target, vs1, vs1);
+		return;
+	}
+	case ptest: {
+		// ZF: the destination and the source share no bit; CF: the source has no bit the destination lacks. AF, OF, PF and SF clear.
+		a.simd(simd::and_16b, vs1, target, source);
+		a.simd(simd::bic_16b, vs2, source, target);
+		a.umov(s0, vs1, 0, 8);
+		a.umov(s1, vs1, 1, 8);
+		a.orr(s0, s0, s1);
+		a.umov(s1, vs2, 0, 8);
+		a.umov(s2, vs2, 1, 8);
+		a.orr(s1, s1, s2);
+		if (flags_wanted(all_flags)) {
+			// Z = (s0 == 0); C, the inverse of CF, = (s1 != 0); N = V = 0.
+			a.sub_imm(s2, s0, 0, false, true, true);
+			a.cset(s2, Cond::eq);
+			a.sub_imm(s3, s1, 0, false, true, true);
+			a.cset(s3, Cond::ne);
+			a.lsl_imm(s2, s2, 30, false);
+			a.orr(s2, s2, s3, Shift::lsl, 29, false);
+			a.msr_nzcv(s2);
+			carry_inverted = true;
+			if (flags_wanted(PF | AF)) {
+				// An odd low byte (PF clear), the same for AF's source (AF clear).
+				a.mov_imm(parity_register, 1);
+				a.mov(adjust_register, parity_register);
+			}
+		}
+		return;
+	}
+	case pmuldq:
+		a.simd(simd::uzp1_16b | simd::size_s, vs1, target, target);
+		a.simd(simd::uzp1_16b | simd::size_s, vs2, source, source);
+		a.simd(simd::smull_2d, target, vs1, vs2);
+		return;
+	case pcmpeqq: a.simd(simd::cmeq_16b | simd::size_d, target, target, source); return;
+	case packusdw:
+		a.simd(simd::sqxtun_4h, vs1, target, 0);
+		a.simd(simd::sqxtun_4h | simd::q, vs1, source, 0);
+		a.simd(simd::orr_16b, target, vs1, vs1);
+		return;
+	case pminsb: a.simd(simd::smin_16b, target, target, source); return;
+	case pminsd: a.simd(simd::smin_16b | simd::size_s, target, target, source); return;
+	case pminuw: a.simd(simd::umin_16b | simd::size_h, target, target, source); return;
+	case pminud: a.simd(simd::umin_16b | simd::size_s, target, target, source); return;
+	case pmaxsb: a.simd(simd::smax_16b, target, target, source); return;
+	case pmaxsd: a.simd(simd::smax_16b | simd::size_s, target, target, source); return;
+	case pmaxuw: a.simd(simd::umax_16b | simd::size_h, target, target, source); return;
+	case pmaxud: a.simd(simd::umax_16b | simd::size_s, target, target, source); return;
+	case pmulld: a.simd(simd::mul_16b | simd::size_s, target, target, source); return;
+	case phminposuw: {
+		// The lowest halfword and the index of its first occurrence; the rest cleared.
+		a.simd(simd::uminv_h, vs1, source);
+		a.simd(simd::dup_element | element_imm5(0, 2), vs2, vs1);
+		a.simd(simd::cmeq_16b | simd::size_h, vs2, source, vs2);
+		a.mov_imm(s0, 0x0003000200010000ull);
+		a.mov_imm(s1, 0x0007000600050004ull);
+		a.simd(simd::fmov_d_x, vs3, s0);
+		a.simd(simd::ins_general | element_imm5(1, 8), vs3, s1);
+		a.simd(simd::orn_16b, vs3, vs3, vs2);
+		a.simd(simd::uminv_h, vs3, vs3);
+		a.umov(s0, vs1, 0, 2);
+		a.umov(s1, vs3, 0, 2);
+		a.orr(s0, s0, s1, Shift::lsl, 16, false);
+		a.simd(simd::fmov_s_w, target, s0);
+		return;
+	}
+	case blendps: case blendpd: case pblendw: {
+		const unsigned size = mnemonic == blendps ? 4 : mnemonic == blendpd ? 8 : 2;
+		for (unsigned i = 0; i < 16 / size; ++i)
+			if (imm(2) >> i & 1)
+				a.ins(target, i, source, i, size);
+		return;
+	}
+	case dpps: case dppd: {
+		// Products of the elements imm8 bits 7:4 (5:4) select, +0.0 elsewhere so they raise nothing, summed as x86 does: (p0 + p1) +
+		// (p2 + p3); the sum goes to the elements bits 3:0 (1:0) select, +0.0 to the others.
+		const bool doubles = mnemonic == dppd;
+		const unsigned count = doubles ? 2 : 4, size = doubles ? 8 : 4;
+		const uint32_t sz = doubles ? simd::sz : 0;
+		auto mask = [&](unsigned bits, uint8_t into) {
+			uint64_t words[2] = {};
+			for (unsigned i = 0; i < count; ++i)
+				if (bits >> i & 1)
+					words[i * size / 8] |= (size == 8 ? ~0ull : 0xffffffffull) << (i * size % 8 * 8);
+			a.mov_imm(s0, words[0]);
+			a.mov_imm(s1, words[1]);
+			a.simd(simd::fmov_d_x, into, s0);
+			a.simd(simd::ins_general | element_imm5(1, 8), into, s1);
+		};
+		mask(imm(2) >> 4, vs3);
+		a.simd(simd::and_16b, vs1, target, vs3);
+		a.simd(simd::and_16b, vs2, source, vs3);
+		a.simd(simd::fmul_4s | sz, vs1, vs1, vs2);
+		a.simd(simd::faddp_4s | sz, vs1, vs1, vs1);
+		if (!doubles)
+			a.simd(simd::faddp_4s, vs1, vs1, vs1);
+		mask(imm(2) & 15, vs3);
+		a.simd(simd::and_16b, target, vs1, vs3);
+		return;
+	}
+	default: {
+		// mpsadbw: eight sums of four absolute byte differences, a block of the destination (imm8 bit 2: bytes 0 or 4 on) sliding
+		// against four bytes of the source (bits 1:0: from byte 0, 4, 8 or 12).
+		const unsigned from = (imm(2) >> 2 & 1) * 4, block = (imm(2) & 3) * 4;
+		for (unsigned j = 0; j < 4; ++j) {
+			a.ext(vs1, target, target, from + j);
+			a.simd(simd::dup_element | element_imm5(block + j, 1), vs2, source);
+			a.simd((j == 0 ? simd::uabdl_8h : simd::uabal_8h), vs3, vs1, vs2);
+		}
+		a.simd(simd::orr_16b, target, vs3, vs3);
+		return;
+	}
+	}
+}
+
 void BlockTranslator::sse_shuffle(const Instruction &instruction)
 {
 	using enum Mnemonic;
@@ -2191,6 +2438,18 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::psignd: case Mnemonic::pmulhrsw: case Mnemonic::pabsb: case Mnemonic::pabsw: case Mnemonic::pabsd:
 	case Mnemonic::palignr:
 		ssse3(instruction);
+		return;
+	case Mnemonic::pblendvb: case Mnemonic::blendvps: case Mnemonic::blendvpd: case Mnemonic::ptest: case Mnemonic::pmovsxbw:
+	case Mnemonic::pmovsxbd: case Mnemonic::pmovsxbq: case Mnemonic::pmovsxwd: case Mnemonic::pmovsxwq: case Mnemonic::pmovsxdq:
+	case Mnemonic::pmovzxbw: case Mnemonic::pmovzxbd: case Mnemonic::pmovzxbq: case Mnemonic::pmovzxwd: case Mnemonic::pmovzxwq:
+	case Mnemonic::pmovzxdq: case Mnemonic::pmuldq: case Mnemonic::pcmpeqq: case Mnemonic::movntdqa: case Mnemonic::packusdw:
+	case Mnemonic::pminsb: case Mnemonic::pminsd: case Mnemonic::pminuw: case Mnemonic::pminud: case Mnemonic::pmaxsb:
+	case Mnemonic::pmaxsd: case Mnemonic::pmaxuw: case Mnemonic::pmaxud: case Mnemonic::pmulld: case Mnemonic::phminposuw:
+	case Mnemonic::roundps: case Mnemonic::roundpd: case Mnemonic::roundss: case Mnemonic::roundsd: case Mnemonic::blendps:
+	case Mnemonic::blendpd: case Mnemonic::pblendw: case Mnemonic::pextrb: case Mnemonic::pextrw: case Mnemonic::pextrd:
+	case Mnemonic::pextrq: case Mnemonic::extractps: case Mnemonic::pinsrb: case Mnemonic::pinsrw: case Mnemonic::pinsrd:
+	case Mnemonic::pinsrq: case Mnemonic::insertps: case Mnemonic::dpps: case Mnemonic::dppd: case Mnemonic::mpsadbw:
+		sse41(instruction);
 		return;
 	case Mnemonic::packsswb: case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd:
 	case Mnemonic::punpckldq: case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq:
