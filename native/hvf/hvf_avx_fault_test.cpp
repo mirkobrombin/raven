@@ -1,6 +1,7 @@
 // A 256-bit instruction whose memory operand faults must leave the guest as it was, as x86's precise exceptions do: no upper half of
 // the destination written (it lives in CpuState, which the fault does not discard) and no byte of a 32-byte store. Each case runs in a
-// vCPU of its own, since a guest exception ends the run: an operand straddles a mapped page and an unmapped one.
+// vCPU of its own, since a guest exception ends the run: an operand straddles a mapped page and an unmapped one. vmaskmovps must not
+// fault where the elements on the unmapped page are masked off (ymm2's sign bits), and must load or store the others.
 #include "runtime.h"
 #include "vcpu.h"
 #include "vm.h"
@@ -54,6 +55,9 @@ struct Scenario {
 	// The operand starts 16 bytes before the boundary between a mapped page and an unmapped one: the unmapped one comes first (its
 	// low half faults) or second (its upper half faults).
 	bool low_unmapped;
+	// vmaskmovps: ymm2's low and upper halves (every single the same), and whether the access faults.
+	uint64_t mask_low = 0, mask_high = 0;
+	bool faults = true;
 };
 
 int main()
@@ -62,6 +66,14 @@ int main()
 		{"vaddps ymm1, ymm1, ymmword ptr [rax]", {0xc5, 0xf4, 0x58, 0x08, 0xc3}, true},
 		{"vfmadd231ps ymm1, ymm2, ymmword ptr [rax]", {0xc4, 0xe2, 0x6d, 0xb8, 0x08, 0xc3}, true},
 		{"vmovups ymmword ptr [rax], ymm1", {0xc5, 0xfc, 0x11, 0x08, 0xc3}, false},
+		{"vmaskmovps ymm1, ymm2, [rax], unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x2c, 0x08, 0xc3}, true, 0,
+			0x8000000080000000ull, false},
+		{"vmaskmovps [rax], ymm2, ymm1, unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x2e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0, false},
+		{"vmaskmovps ymm1, ymm2, [rax], an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x2c, 0x08, 0xc3}, true,
+			0x8000000000000000ull, 0x8000000080000000ull},
+		{"vmaskmovps [rax], ymm2, ymm1, an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x2e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0x0000000080000000ull},
 	};
 	constexpr uint64_t base = uint64_t(0x60) << 32;
 	size_t failures = 0;
@@ -88,15 +100,35 @@ int main()
 				state.xmm[r][0] = state.xmm[r][1] = 0x3f8000003f800000ull;
 				state.ymm_high[r][0] = state.ymm_high[r][1] = 0x4000000040000000ull;
 			}
+			state.xmm[2][0] = state.xmm[2][1] = scenario.mask_low;
+			state.ymm_high[2][0] = state.ymm_high[2][1] = scenario.mask_high;
 			bool faulted = false;
 			try {
 				runtime.call(address);
 			} catch (const std::exception &) {
 				faulted = true;
 			}
+			if (!scenario.faults) {
+				// The masked-off elements of a load are zero, the others what memory holds; a store writes the 16 mapped bytes alone.
+				const bool load = scenario.low_unmapped;
+				bool right = !faulted;
+				if (load)
+					right &= state.xmm[1][0] == 0 && state.xmm[1][1] == 0 && state.ymm_high[1][0] == 0x5a5a5a5a5a5a5a5aull &&
+						state.ymm_high[1][1] == 0x5a5a5a5a5a5a5a5aull;
+				for (size_t i = 0; i < hvf::Vm::page_size; ++i) {
+					const bool stored = !load && i >= hvf::Vm::page_size - 16;
+					right &= alias[i] == (stored ? (i % 4 == 3 ? 0x3f : i % 4 == 2 ? 0x80 : 0) : 0x5a);
+				}
+				if (!right) {
+					std::fprintf(stderr, "FAIL: %s: %s\n", scenario.text, faulted ? "faulted" : "wrong result");
+					++failures;
+				} else
+					std::printf("%s: did not fault, and moved the selected elements\n", scenario.text);
+				continue;
+			}
 			bool high_kept = true;
 			for (unsigned r = 0; r < 16; ++r)
-				high_kept &= state.ymm_high[r][0] == 0x4000000040000000ull && state.ymm_high[r][1] == 0x4000000040000000ull;
+				high_kept &= r == 2 || (state.ymm_high[r][0] == 0x4000000040000000ull && state.ymm_high[r][1] == 0x4000000040000000ull);
 			bool memory_kept = true;
 			for (size_t i = 0; i < hvf::Vm::page_size; ++i)
 				memory_kept &= alias[i] == 0x5a;
