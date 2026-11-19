@@ -166,6 +166,39 @@ static void held(const std::string &bootstrap)
 	check(status_field(guest, "TracerPid") == 0, "the guest's task was traced again");
 }
 
+// A 32-bit guest leaves ptrace as well: its task runs compatibility-mode code and stops for the runtime over the 64-bit handler.
+static void held_x86(const std::string &bootstrap)
+{
+	setenv("RAVEN_AGENT", "1", 1);
+	setenv("RAVEN_AGENT_HOLD", "1", 1);
+	const std::array<raven::LoadedImage *, 0> images{};
+	const auto timeout = std::chrono::seconds(2);
+	raven::NativeProcess process(images, bootstrap, timeout, raven::NativeMode::x86);
+	unsetenv("RAVEN_AGENT");
+	unsetenv("RAVEN_AGENT_HOLD");
+	const pid_t guest = pid_t(status_field(process.agent_task(), "Tgid"));
+	check(status_field(guest, "TracerPid") == 0, "the 32-bit guest's task is still traced");
+	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
+	// 0x00: the stdcall argument plus one. 0x10: a breakpoint the runtime serves as an API.
+	std::vector<uint8_t> bytes(0x20, 0xcc);
+	const std::vector<uint8_t> add{0x8b, 0x44, 0x24, 0x04, 0x40, 0xc2, 0x04, 0x00};
+	std::copy(add.begin(), add.end(), bytes.begin());
+	process.write_memory(code, bytes);
+	process.protect_memory(code, 4096, PROT_READ | PROT_EXEC);
+	const std::array<uint64_t, 1> arguments{41};
+	auto result = process.call(code, arguments, timeout);
+	check(result.stop == raven::NativeStop::returned && result.value == 42, "a held 32-bit task did not run its code");
+	// The API returns as stdcall, taking its one argument off the stack.
+	process.add_api_trap(code + 0x10, 4);
+	result = process.call(code + 0x10, arguments, timeout);
+	check(result.stop == raven::NativeStop::api, "a held 32-bit task's breakpoint did not stop as an API");
+	check(process.api_arguments(1) == std::vector<uint64_t>{41}, "a held 32-bit task's API argument differs");
+	process.return_api(77);
+	result = process.resume(timeout);
+	check(result.stop == raven::NativeStop::returned && result.value == 77, "a held 32-bit task did not return the API's value");
+	check(status_field(guest, "TracerPid") == 0, "the 32-bit guest's task was traced again");
+}
+
 // A guest out of ptrace ends with the runtime even when the runtime dies without its cleanup, as no tracer ends it then.
 static void orphaned(const std::string &bootstrap)
 {
@@ -223,6 +256,7 @@ int main(int argc, char **argv)
 		agent_mode(argv[1], raven::NativeMode::x64);
 		agent_mode(argv[1], raven::NativeMode::x86);
 		held(argv[1]);
+		held_x86(argv[1]);
 		std::cout << "Agent service thread in x64/x86 guests: untraced, in the guest's thread group, its calls and memory the guest's, "
 			"the runtime's memory calls under RAVEN_AGENT, and a guest task out of ptrace under RAVEN_AGENT_HOLD that ends with its runtime\n";
 		return 0;
