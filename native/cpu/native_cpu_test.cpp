@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <signal.h>
+#include <source_location>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -60,14 +61,14 @@ static std::vector<uint8_t> fixture(std::initializer_list<uint8_t> code, bool is
 	return bytes;
 }
 
-static void rejected(const std::function<void()> &operation)
+static void rejected(const std::function<void()> &operation, std::source_location where = std::source_location::current())
 {
 	try {
 		operation();
 	} catch (const std::runtime_error &) {
 		return;
 	}
-	throw std::runtime_error("unsupported native setup was accepted");
+	throw std::runtime_error("unsupported native setup was accepted (line " + std::to_string(where.line()) + ")");
 }
 
 static void no_children()
