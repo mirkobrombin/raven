@@ -535,7 +535,7 @@ hvf arm64ec: PASS
   calling an x64 function through a function pointer is the comparison.
 
 Cost, two short passes of 15 runs each, back to back, on a machine in use (`sysctl vm.loadavg`, thermal state from
-`/Users/pietrodc/dev/tools/raven-mac/quiet/thermal`, before and after each pass):
+a small `NSProcessInfo.thermalState` probe outside the repository, before and after each pass):
 
 | Pass | Load average (1, 5, 15 min) | Thermal | x64 -> ARM64EC -> x64, median (min-max) | x64 -> x64 through a pointer |
 |---|---|---|---|---|

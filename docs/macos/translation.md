@@ -41,7 +41,7 @@ addresses guest memory at guest virtual addresses.
 ### FEX
 
 FEX was cloned at upstream HEAD be66e03d (2026-11-16). It was also checked out at 1cc4b93e (FEX-2607), the commit Proton and Bottles'
-Soda aarch64 build use, into `/Users/pietrodc/dev/tools/raven-mac/fex` and `fex-2607`.
+Soda aarch64 build use, into two local checkouts outside the repository.
 
 Build results, with llvm-mingw 20261104 (clang 23.1.5):
 
@@ -166,7 +166,7 @@ The allocation itself goes through `AllocatorHooks.h` (`PAGE_EXECUTE_READWRITE` 
 #### FEX against our translator on Linux arm64
 
 FEX runs only on Linux and Windows, so the two engines were compared on GitHub's `ubuntu-24.04-arm` runners, in the private repository
-`fabricatorsltd/raven-macos-bench`. Workflow run 44287829572 is PROVEN; its raw CSVs, `cpu.txt` and logs are in
+`raven-macos-bench`. Workflow run 44287829572 is PROVEN; its raw CSVs, `cpu.txt` and logs are in
 `build-translate/results/linux-arm64/run-44287829572/`.
 
 **The machine.** Azure Neoverse N2, 2 vCPUs, kernel 7.0 (`cpu.txt`). It has `lrcpc`, `ilrcpc` (LRCPC2), `atomics` (LSE) and `flagm`.
@@ -387,7 +387,7 @@ the time follows is NOT verified until the quiet re-measure.
 ### Box64
 
 MIT. Upstream has an ARM64EC variant (`wine/box64ec`) and a WoW64 one (`wine/wow64`), but the library itself is Linux userspace. A
-native macOS configure succeeds. The build then stops with 577 errors (PROVEN, `/Users/pietrodc/dev/tools/raven-mac/box64-build.log`):
+native macOS configure succeeds. The build then stops with 577 errors (PROVEN, build log kept outside the repository):
 303 of them are `elf.h` not found, the rest are Linux `ucontext`/`mcontext` layouts and `sched_getcpu`. The `box64ec` DLL was not
 built (NOT verified).
 
