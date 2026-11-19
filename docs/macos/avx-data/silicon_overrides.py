@@ -64,10 +64,12 @@ def fields(io):
     return result
 
 
-def corpus(cases):
-    """x86_avx_check.h's corpus_fingerprints: FNV-1a 64 over every case's code and text, and over every case's fingerprint."""
+def corpus(cases, family):
+    """x86_avx_check.h's corpus_fingerprints for one family: FNV-1a 64 over its cases' code and text, and over their fingerprints."""
     generated = results = 0xCBF29CE484222325
-    for code, text, _, io in cases:
+    for code, text, case_family, io in cases:
+        if case_family != family:
+            continue
         for byte in code + text.encode():
             generated = ((generated ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
         for byte in struct.pack("<Q", fingerprint(io)):
@@ -77,10 +79,14 @@ def corpus(cases):
 
 def main():
     rosetta, silicon = read(sys.argv[1]), read(sys.argv[2])
-    assert len(rosetta) == len(silicon), "different case counts"
-    for name, cases in (("first", rosetta), ("second", silicon)):
-        generated, results = corpus(cases)
-        print(f"{name}: corpus\tcases={len(cases)}\tgenerated={generated:016x}\trosetta={results:016x}")
+    # The x86 run may hold fewer cases (families added since): those compare as far as it goes, and only families it holds whole
+    # get a corpus line.
+    complete = {case[2] for case in rosetta} - {case[2] for case in rosetta[len(silicon):]}
+    families = sorted(complete)
+    for family in families:
+        for name, cases in (("first", rosetta), ("second", silicon)):
+            generated, results = corpus(cases[:len(silicon)], family)
+            print(f"{name}: corpus\t{family}\tgenerated={generated:016x}\trosetta={results:016x}")
     lines = []
     by_field = Counter()
     by_family = Counter()
@@ -114,8 +120,10 @@ def main():
     if len(sys.argv) > 4:
         with open(sys.argv[3], "w") as out:
             out.write(sys.argv[4] + "\n")
-            generated, results = corpus(rosetta)
-            out.write(f"corpus\tcases={len(rosetta)}\tgenerated={generated:016x}\trosetta={results:016x}\n")
+            for family in families:
+                generated, results = corpus(rosetta, family)
+                count = sum(1 for case in rosetta if case[2] == family)
+                out.write(f"corpus\t{family}\tcases={count}\tgenerated={generated:016x}\trosetta={results:016x}\n")
             out.write("".join(line + "\n" for line in lines))
 
 

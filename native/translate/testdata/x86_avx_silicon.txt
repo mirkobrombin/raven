@@ -1,6 +1,12 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what the x86 CPU left (docs/macos/avx-data/silicon_overrides.py writes it).
-# None: an AMD EPYC 9V45 (raven-macos-bench run 44493373058, the cases assembled with clang as here) left what Rosetta leaves in
-# all 5788. Its dump, avx_oracle.bin, has sha256 e328a8533e0ca638555bea8ea7afedf56d4b40be64ad422df4b447540b681945 (printed by the
-# run) and the same corpus fingerprints as Rosetta's below (silicon_overrides.py prints both). The corpus line names the cases and
-# Rosetta's results this was compared on: the tests refuse the file when either changes.
-corpus	cases=5788	generated=891c81824699c0fc	rosetta=95d7459814bec276
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V45 (raven-macos-bench run 44493373058, assembled with clang as here; dump sha256 e328a8533e0ca638555bea8ea7afedf56d4b40be64ad422df4b447540b681945): the tests refuse the file when a family's cases or Rosetta's results change.
+corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
+corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
+corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
+corpus	fma	cases=1200	generated=3a80c4c9592e6b73	rosetta=117c23e7ae1b07d1
+corpus	fma edges	cases=288	generated=7ab841c15c69c67d	rosetta=5f7aa11b0e3469d6
+corpus	integer	cases=700	generated=e885abd03fce5654	rosetta=afd4fe34eb94de6d
+corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
+corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
+corpus	moves	cases=500	generated=a0c679a6f55af097	rosetta=005e880bff9bde0c
+corpus	shuffle	cases=400	generated=4d882c20282e375a	rosetta=9626d96c7c36edbd
+corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb

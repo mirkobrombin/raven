@@ -14,6 +14,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -39,6 +40,8 @@ struct Case {
 	Io input;
 	Io output;
 	bool silicon = false;
+	// Whether the case's family was run on the x86 CPU (a corpus line); if not, it is held to Rosetta only.
+	bool compared = false;
 };
 
 using sse_oracle::all_flags;
@@ -88,9 +91,10 @@ inline uint64_t fingerprint(const Io &output)
 	return value;
 }
 
-// FNV-1a 64 of the whole corpus: of every case's code and text (what x86_avx.py generated), and of every case's fingerprint (what
-// Rosetta left). The silicon file's `corpus` line holds both, so a change of either is seen even where no case line would show it.
-inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case> &cases)
+// FNV-1a 64 of one family's cases: of every case's code and text (what x86_avx.py generated), and of every case's fingerprint (what
+// Rosetta left). The silicon file has a `corpus` line per family compared with the x86 CPU holding both, so a change of either is
+// seen even where no case line would show it; a family without one is held to Rosetta only, and the tests say so.
+inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case> &cases, const std::string &family)
 {
 	uint64_t generated = 0xcbf29ce484222325ull, results = 0xcbf29ce484222325ull;
 	auto mix = [](uint64_t &value, const void *data, size_t size) {
@@ -98,6 +102,8 @@ inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case>
 			value = (value ^ static_cast<const uint8_t *>(data)[i]) * 0x100000001b3ull;
 	};
 	for (const Case &item : cases) {
+		if (item.family != family)
+			continue;
 		mix(generated, item.code.data(), item.code.size());
 		mix(generated, item.text.data(), item.text.size());
 		const uint64_t one = fingerprint(item.output);
@@ -119,7 +125,7 @@ inline std::vector<uint8_t> hex_bytes(const std::string &text)
 // changed, or -1 when a line does not fit the cases.
 inline long apply_silicon(std::vector<Case> &cases, const char *path)
 {
-	bool corpus_checked = false;
+	std::map<std::string, bool> compared;
 	std::ifstream in(path);
 	if (!in)
 		return -1;
@@ -133,21 +139,31 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		for (std::string part; std::getline(stream, part, '\t');)
 			parts.push_back(part);
 		if (parts[0] == "corpus") {
-			// corpus<TAB>cases=N<TAB>generated=HEX<TAB>rosetta=HEX: what the silicon results were compared against.
-			const auto [generated, results] = corpus_fingerprints(cases);
+			// corpus<TAB>FAMILY<TAB>cases=N<TAB>generated=HEX<TAB>rosetta=HEX: what the family's silicon results were compared against.
+			if (parts.size() < 5) {
+				std::fprintf(stderr, "%s: a corpus line needs a family, cases, generated and rosetta\n", path);
+				return -1;
+			}
+			const std::string family = parts[1];
+			parts.erase(parts.begin() + 1);
+			size_t count = 0;
+			for (const Case &item : cases)
+				count += item.family == family;
+			const auto [generated, results] = corpus_fingerprints(cases, family);
 			char expected[96];
-			std::snprintf(expected, sizeof expected, "cases=%zu", cases.size());
+			std::snprintf(expected, sizeof expected, "cases=%zu", count);
 			if (parts.size() < 4 || parts[1] != expected || std::stoull(parts[2].substr(10), nullptr, 16) != generated) {
-				std::fprintf(stderr, "%s: the cases are not those the silicon results were compared on (x86_avx.py changed: %s, "
-					"generated=%016llx); run the oracle on the x86 CPU again\n", path, expected, static_cast<unsigned long long>(generated));
+				std::fprintf(stderr, "%s: family %s: the cases are not those the silicon results were compared on (x86_avx.py changed: "
+					"%s, generated=%016llx); run the oracle on the x86 CPU again\n", path, family.c_str(), expected,
+					static_cast<unsigned long long>(generated));
 				return -1;
 			}
 			if (std::stoull(parts[3].substr(8), nullptr, 16) != results) {
-				std::fprintf(stderr, "%s: Rosetta's results are not those the silicon results were compared with (rosetta=%016llx); "
-					"compare with the x86 CPU again\n", path, static_cast<unsigned long long>(results));
+				std::fprintf(stderr, "%s: family %s: Rosetta's results are not those the silicon results were compared with "
+					"(rosetta=%016llx); compare with the x86 CPU again\n", path, family.c_str(), static_cast<unsigned long long>(results));
 				return -1;
 			}
-			corpus_checked = true;
+			compared[family] = true;
 			continue;
 		}
 		const size_t number = std::stoul(parts[0]);
@@ -183,10 +199,8 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		cases[number].silicon = true;
 		++changed;
 	}
-	if (!corpus_checked) {
-		std::fprintf(stderr, "%s has no corpus line: nothing says which cases and results it was written against\n", path);
-		return -1;
-	}
+	for (Case &item : cases)
+		item.compared = compared.count(item.family) != 0;
 	return changed;
 }
 
@@ -258,6 +272,8 @@ struct Report {
 		silicon += item.silicon;
 		auto &[cases, failed] = families[item.family];
 		++cases;
+		if (!item.compared)
+			rosetta_only.insert(item.family);
 		if (problem.empty())
 			return;
 		++failed;
@@ -269,11 +285,13 @@ struct Report {
 	void print(const char *where) const
 	{
 		for (const auto &[family, counts] : families)
-			std::printf("%s, %s: %zu cases, %zu failures\n", where, family.c_str(), counts.first, counts.second);
+			std::printf("%s, %s: %zu cases, %zu failures%s\n", where, family.c_str(), counts.first, counts.second,
+				rosetta_only.count(family) ? " (Rosetta only: no x86 CPU run of this family)" : "");
 		std::printf("%s: MXCSR.DE alone differs in %zu passing cases; %zu cases held to the x86 CPU where Rosetta differs\n", where,
 			denormal_flags, silicon);
 	}
 	const Case *first = nullptr;
+	std::set<std::string> rosetta_only;
 };
 
 }

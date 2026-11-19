@@ -248,6 +248,26 @@ def convert(rng):
     return [f"{op} {sse.gpr(rng, rng.choice([32, 64]))}, xmm{reg(rng)}"]
 
 
+def sse3(rng):
+    """SSE3 in its legacy form, and its VEX forms at 128 and 256 bits, which run the same code."""
+    roll = rng.random()
+    if roll < 0.6:
+        op = rng.choice(["addsubps", "addsubpd", "haddps", "haddpd", "hsubps", "hsubpd"])
+        if rng.random() < 0.6:
+            source = mem(rng, 16, True) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+            return [f"{op} xmm{reg(rng)}, {source}"]
+        return [binary(rng, ["v" + op], rng.choice([16, 32]))]
+    op = rng.choice(["movddup", "movsldup", "movshdup", "lddqu"])
+    size = 8 if op == "movddup" else 16
+    if rng.random() < 0.6:
+        source = mem(rng, size) if op == "lddqu" or rng.random() < 0.3 else f"xmm{reg(rng)}"
+        return [f"{op} xmm{reg(rng)}, {source}"]
+    width = rng.choice([16, 32])
+    vsize = width if op != "movddup" or width == 32 else 8
+    source = mem(rng, vsize) if op == "lddqu" or rng.random() < 0.3 else name(reg(rng), width)
+    return [f"v{op} {name(reg(rng), width)}, {source}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -261,6 +281,10 @@ FAMILIES = [
     ("fma", fma, "mixed", 1200),
     ("convert", convert, "mixed", 400),
 ]
+# Families added after the first run on x86 silicon come after the FMA3 edges, so the earlier cases keep their numbers.
+LATER_FAMILIES = [
+    ("sse3", sse3, "mixed", 500),
+]
 
 
 def lanes_of(body, kind):
@@ -270,6 +294,8 @@ def lanes_of(body, kind):
         return kind
     if op.startswith("vf"):
         return "f32" if op.endswith(("ps", "ss")) else "f64"
+    if op.lstrip("v").startswith(("addsub", "hadd", "hsub")):
+        return "f32" if op.endswith("ps") else "f64"
     return sse.lanes_of([op[1:] + " " + " ".join(text.split()[1:])], kind)
 
 
@@ -327,7 +353,11 @@ def main():
                                                                                                          f"_case_{number}_end:"])
         cases.append((family, registers, flags, control, vectors, memory, body))
 
-    for family, make, kind, count in FAMILIES:
+    def generate(families):
+        for family, make, kind, count in families:
+            make_family(family, make, kind, count)
+
+    def make_family(family, make, kind, count):
         rng = random.Random(zlib.crc32(family.encode()) ^ 20261219)
         floating = kind != "int"
         for _ in range(count):
@@ -337,6 +367,7 @@ def main():
             vectors = [[sse.quadword(rng, lane_kind) for _ in range(4)] for _ in range(16)]
             memory = [sse.quadword(rng, lane_kind) for _ in range(24)]
             add(family, registers, rng.getrandbits(12) & ALL_FLAGS, sse.mxcsr(rng, floating), vectors, memory, body)
+    generate(FAMILIES)
     for text, t, x, y, z, control in fma_edges():
         vectors = [[0x1111111111111111 * (i % 15 + 1)] * 4 for i in range(16)]
         for index, value in ((1, x), (2, y), (3, z)):
@@ -344,6 +375,7 @@ def main():
             low = value | (0x40490FDB << 32) if t == "ss" else value
             vectors[index] = [low, 0x0123456789ABCDEF, 0xFEDCBA9876543210, 0x5555AAAA5555AAAA]
         add("fma edges", [0] * 16, 0, control, vectors, [0] * 24, [text])
+    generate(LATER_FAMILIES)
     lines += [".data", "saved_io: .quad 0", "saved_code: .quad 0", "host_mxcsr: .long 0", ""]
     with open(assembly, "w") as out:
         out.write("\n".join(lines))
