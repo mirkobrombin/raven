@@ -1026,6 +1026,28 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			const Operand v = vector(reg_number, width), mask = vector(vex.vvvv, width), m = vrm(width, width);
 			return opcode == 0x8c ? set(mnemonic, {v, mask, m}) : set(mnemonic, {m, mask, v});
 		}
+		if (opcode >= 0x90 && opcode <= 0x93) {
+			// The gathers: VSIB memory (a SIB byte whose index is a vector register), the data, index and mask registers distinct.
+			if (!memory || modrm.rm != 4)
+				return false;
+			const bool quad_index = opcode & 1, quad = vex.w;
+			const unsigned index_size = quad_index ? 8 : 4, element = quad ? 8 : 4;
+			const unsigned count = index_size == element ? width / element : width / 8;
+			const uint8_t data_width = static_cast<uint8_t>(count * element < 16 ? 16 : count * element);
+			const uint8_t index_width = static_cast<uint8_t>(count * index_size < 16 ? 16 : count * index_size);
+			Operand m = rm;
+			m.index = rm.index != no_register ? rm.index : 4;
+			m.vector_index = index_width;
+			m.redundant_sib = false;
+			m.size = static_cast<uint8_t>(element);
+			if (reg_number == m.index || reg_number == vex.vvvv || m.index == vex.vvvv)
+				return false;
+			static constexpr Mnemonic gathers[] = {vpgatherdd, vpgatherdq, vpgatherqd, vpgatherqq, vgatherdps, vgatherdpd, vgatherqps,
+				vgatherqpd};
+			result.vector_size = data_width;
+			return set(gathers[(opcode >= 0x92 ? 4 : 0) + (quad_index ? 2 : 0) + (quad ? 1 : 0)],
+				{vector(reg_number, data_width), m, vector(vex.vvvv, data_width)});
+		}
 		if (opcode >= 0x2c && opcode <= 0x2f) {
 			if (vex.w || !memory)
 				return false;
@@ -1416,7 +1438,9 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 				text += " + ";
 			if (operand.scale != 1 || first)
 				text += std::to_string(operand.scale) + "*";
-			if (operand.index != no_register)
+			if (operand.vector_index)
+				text += (operand.vector_index == 32 ? "ymm" : "xmm") + std::to_string(operand.index);
+			else if (operand.index != no_register)
 				text += register_name(operand.index, 8, address32);
 			else
 				text += address32 ? "eiz" : "riz";
@@ -1474,7 +1498,8 @@ static const char *const avx_names[] = {
 	"vzeroupper", "vzeroall", "vbroadcastss", "vbroadcastsd", "vbroadcastf128", "vpbroadcastb", "vpbroadcastw", "vpbroadcastd",
 	"vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128", "vtestps", "vtestpd",
 	"vpermilps", "vpermilpd", "vmaskmovps", "vmaskmovpd", "vmaskmovdqu", "vpermq", "vpermpd",
-	"vpermd", "vpermps", "vpblendd", "vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd", "vpmaskmovd", "vpmaskmovq", "vfmadd132ps",
+	"vpermd", "vpermps", "vpblendd", "vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd", "vpmaskmovd", "vpmaskmovq", "vpgatherdd",
+	"vpgatherdq", "vpgatherqd", "vpgatherqq", "vgatherdps", "vgatherdpd", "vgatherqps", "vgatherqpd", "vfmadd132ps",
 	"vfmadd132pd", "vfmadd132ss", "vfmadd132sd", "vfmadd213ps", "vfmadd213pd", "vfmadd213ss", "vfmadd213sd", "vfmadd231ps",
 	"vfmadd231pd", "vfmadd231ss", "vfmadd231sd", "vfmsub132ps", "vfmsub132pd", "vfmsub132ss", "vfmsub132sd", "vfmsub213ps",
 	"vfmsub213pd", "vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps",

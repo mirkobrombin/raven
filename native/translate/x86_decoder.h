@@ -108,6 +108,8 @@ enum class Mnemonic : uint16_t {
 	vtestps, vtestpd, vpermilps, vpermilpd, vmaskmovps, vmaskmovpd, vmaskmovdqu,
 	// AVX2 without an SSE form.
 	vpermq, vpermpd, vpermd, vpermps, vpblendd, vpsllvd, vpsllvq, vpsrlvd, vpsrlvq, vpsravd, vpmaskmovd, vpmaskmovq,
+	// The gathers: index size (d, q), then element (d or ps, q or pd).
+	vpgatherdd, vpgatherdq, vpgatherqd, vpgatherqq, vgatherdps, vgatherdpd, vgatherqps, vgatherqpd,
 	// FMA3: operation, operand order, then ps, pd, ss, sd.
 	vfmadd132ps, vfmadd132pd, vfmadd132ss, vfmadd132sd, vfmadd213ps, vfmadd213pd, vfmadd213ss, vfmadd213sd, vfmadd231ps, vfmadd231pd,
 	vfmadd231ss, vfmadd231sd, vfmsub132ps, vfmsub132pd, vfmsub132ss, vfmsub132sd, vfmsub213ps, vfmsub213pd, vfmsub213ss, vfmsub213sd,
@@ -149,6 +151,8 @@ struct Operand {
 	bool rip_relative = false;
 	// A SIB byte that names no index though ModRM alone could have said the same: LLVM prints its index as riz.
 	bool redundant_sib = false;
+	// A gather's index (VSIB): an XMM (16) or YMM (32) register, index its number; 0 for a general register.
+	uint8_t vector_index = 0;
 	Segment segment = Segment::none;
 	// The size of an immediate as encoded, before any sign extension.
 	uint8_t encoded_size = 0;

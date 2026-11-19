@@ -418,6 +418,7 @@ private:
 	void avx_masked(const Instruction &instruction);
 	void avx_convert(const Instruction &instruction);
 	void avx_cross(const Instruction &instruction);
+	void avx_gather(const Instruction &instruction);
 	void avx_variable_shift(const Instruction &instruction);
 	void test_flags();
 	void avx_lanes(const Instruction &instruction);
@@ -2170,6 +2171,9 @@ void BlockTranslator::avx(const Instruction &instruction)
 	case Mnemonic::vpmaskmovq:
 		return avx_masked(instruction);
 	case Mnemonic::vpermq: case Mnemonic::vpermpd: case Mnemonic::vpermd: case Mnemonic::vpermps: return avx_cross(instruction);
+	case Mnemonic::vpgatherdd: case Mnemonic::vpgatherdq: case Mnemonic::vpgatherqd: case Mnemonic::vpgatherqq:
+	case Mnemonic::vgatherdps: case Mnemonic::vgatherdpd: case Mnemonic::vgatherqps: case Mnemonic::vgatherqpd:
+		return avx_gather(instruction);
 	case Mnemonic::vpsllvd: case Mnemonic::vpsllvq: case Mnemonic::vpsrlvd: case Mnemonic::vpsrlvq: case Mnemonic::vpsravd:
 		return avx_variable_shift(instruction);
 	case Mnemonic::vpblendd: {
@@ -2610,6 +2614,72 @@ void BlockTranslator::avx_cross(const Instruction &instruction)
 	}
 	store_high(vh3, destination);
 	a.simd(simd::orr_16b, destination, vh2, vh2);
+}
+
+void BlockTranslator::avx_gather(const Instruction &instruction)
+{
+	// The gathers, one element at a time in order: where the mask element's sign bit is set, load from base + index * scale +
+	// displacement, write the element into the destination and clear the mask element, both at once, so that a fault leaves the
+	// elements before it gathered and their mask bits clear, as x86 does. Then the whole mask is cleared, and the destination beyond
+	// the gathered elements. A masked-off element is never read.
+	const Operand *operands = instruction.operands.data();
+	const Operand &memory = operands[1];
+	const auto index = static_cast<unsigned>(instruction.mnemonic) - static_cast<unsigned>(Mnemonic::vpgatherdd);
+	const unsigned element = index & 1 ? 8 : 4, index_size = index & 2 ? 8 : 4;
+	const unsigned count = index_size == element ? instruction.vector_size / element : memory.vector_index / index_size;
+	const uint8_t destination = operands[0].reg, mask = operands[2].reg, indices = memory.index;
+	auto lane = [&](uint8_t into, uint8_t vector, unsigned i, unsigned size) {
+		if (i < 16 / size)
+			a.umov(into, vector, i, size);
+		else
+			a.ldr(into, state_register, int64_t(state_offset::ymm_high + 16 * vector + (i - 16 / size) * size), size);
+	};
+	auto set_lane = [&](uint8_t vector, unsigned i, uint8_t from) {
+		if (i < 16 / element)
+			a.simd(simd::ins_general | element_imm5(i, element), vector, from);
+		else
+			a.str(from, state_register, int64_t(state_offset::ymm_high + 16 * vector + (i - 16 / element) * element), element);
+	};
+	const unsigned shift = static_cast<unsigned>(__builtin_ctz(memory.scale));
+	for (unsigned i = 0; i < count; ++i) {
+		const Assembler::Label skip = a.label();
+		lane(s2, mask, i, element);
+		a.tbz(s2, static_cast<uint8_t>(element * 8 - 1), skip);
+		lane(s3, indices, i, index_size);
+		if (index_size == 4)
+			a.sbfx(s3, s3, 0, 32);
+		if (memory.base != no_register)
+			a.add(s1, host_register[memory.base], s3, Shift::lsl, static_cast<uint8_t>(shift));
+		else
+			a.lsl_imm(s1, s3, static_cast<uint8_t>(shift));
+		if (memory.value) {
+			a.mov_imm(s5, static_cast<uint64_t>(memory.value));
+			a.add(s1, s1, s5);
+		}
+		if (memory.segment == Segment::fs || memory.segment == Segment::gs) {
+			a.ldr(s5, state_register, memory.segment == Segment::gs ? state_offset::gs_base : state_offset::fs_base, 8);
+			a.add(s1, s1, s5);
+		}
+		if (current->address_size == 4)
+			a.mov(s1, s1, false);
+		if (options.ordering == MemoryOrdering::rcpc)
+			ordered_access(s0, s1, element, false);
+		else {
+			a.ldr(s0, s1, 0, element);
+			if (options.ordering != MemoryOrdering::hardware)
+				a.dmb(a64::Barrier::ishld);
+		}
+		set_lane(destination, i, s0);
+		set_lane(mask, i, a64::zr);
+		a.bind(skip);
+	}
+	a.simd(simd::movi_zero_2d, mask, 0);
+	clear_high(mask);
+	// Two singles from quadword indices fill the low 64 bits: the rest of the register is cleared.
+	if (count * element == 8)
+		a.simd(simd::ins_general | element_imm5(1, 8), destination, a64::zr);
+	if (instruction.vector_size == 16)
+		clear_high(destination);
 }
 
 void BlockTranslator::avx_variable_shift(const Instruction &instruction)
