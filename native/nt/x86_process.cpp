@@ -1019,6 +1019,13 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	// A processor fault is a Windows exception: as KiUserExceptionDispatcher finds them, the record and the registers of the faulting
 	// instruction go on the stack below it, and the C runtime component dispatches them in the program, to its vectored handlers and
 	// the frames its threads register. The .NET runtime turns the null check of compiled code into a NullReferenceException there.
+	// A handler that keeps returning to the same instruction ends the run after a few rounds instead of spinning.
+	struct FaultLoop {
+		uint32_t address = 0;
+		uint32_t status = 0;
+		uint32_t rounds = 0;
+	};
+	std::unordered_map<uint32_t, FaultLoop> fault_loops;
 	const auto dispatch_fault = [&](const NativeResult &fault) {
 		if (fault.signal != SIGSEGV && fault.signal != SIGBUS && fault.signal != SIGFPE && fault.signal != SIGILL && fault.signal != SIGTRAP)
 			return false;
@@ -1036,6 +1043,12 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		const auto raised = processor_exception(process, fault, uint32_t(r.rip));
 		const uint32_t status = raised.status, address = uint32_t(raised.address);
 		const auto &parameters = raised.parameters;
+		auto &loop = fault_loops[guest_threads.current_id()];
+		loop.rounds = loop.address == address && loop.status == status ? loop.rounds + 1 : 1;
+		loop.address = address;
+		loop.status = status;
+		if (loop.rounds > 8)
+			return false;
 		// RAVEN_TRACE_FAULT names each processor fault as it is handed to the program, with the module it happened in.
 		if (std::getenv("RAVEN_TRACE_FAULT")) {
 			std::cerr << "raven: fault 0x" << std::hex << status << " at 0x" << uint32_t(r.rip);
@@ -1290,6 +1303,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 						return std::find(symbol.names.begin(), symbol.names.end(), wanted) != symbol.names.end();
 					});
 					if (found != exports.end()) {
+						if (api == "RtlUnwind")
+							fault_loops[guest_threads.current_id()].rounds = 0;
 						auto native = process.context();
 						native.registers.rip = component->second->loaded.base() + found->address;
 						native.registers.orig_rax = uint64_t(-1);
