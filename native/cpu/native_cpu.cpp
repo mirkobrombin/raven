@@ -457,8 +457,19 @@ void NativeChild::stop()
 	// the memory task and those of threads still running at the end have none left to: all that remain of the group are reaped here.
 	if (threaded_host() && group > 0) {
 		kill(-group, SIGKILL);
-		int status = 0;
-		while (waitpid(-group, &status, __WALL) != -1 || errno == EINTR) {}
+		// Other threads of the runtime reap tasks of the group as well (a host thread its own task as its thread ends), and a waitpid
+		// that sleeps for a task another thread then reaps is not woken: it would sleep on with nothing left to wait for. The group is
+		// waited for without sleeping in the kernel, until none of its tasks is left.
+		for (;;) {
+			int status = 0;
+			const pid_t reaped = waitpid(-group, &status, __WALL | WNOHANG);
+			if (reaped > 0 || (reaped == -1 && errno == EINTR))
+				continue;
+			if (reaped == -1)
+				break;
+			const timespec pause{0, 1'000'000};
+			nanosleep(&pause, nullptr);
+		}
 		agent::release_group(group);
 		forget_registers();
 		pid = -1;
