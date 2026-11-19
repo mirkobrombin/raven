@@ -337,9 +337,165 @@ def locked(rng):
     return cases
 
 
+COUNTS = [0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255]
+
+
+def count_cases(rng, bits):
+    """Counts for a shift or rotate: as an imm8 (and the by-one form), and in CL, edge values first."""
+    counts = [(str(c), c) for c in COUNTS if c < 256] + [("1", 1)]
+    counts += [("cl", c) for c in COUNTS] + [("cl", rng.randrange(256)) for _ in range(8)]
+    return counts
+
+
+def rotate(rng):
+    """rol, ror, rcl and rcr by an imm8, by one and by CL. The count is masked to 5 bits (6 for 64-bit operands); a masked count of
+    0 changes nothing. rol and ror then rotate by the count modulo the width and set CF even when that is 0; rcl and rcr rotate
+    width + 1 bits through CF, modulo 9 and 17 at 8 and 16 bits. OF is defined for a masked count of 1 only; SF, ZF, AF and PF stay."""
+    cases = []
+    for op in ("rol", "ror", "rcl", "rcr"):
+        for bits in (8, 16, 32, 64):
+            for text, count in count_cases(rng, bits):
+                masked = count & (63 if bits == 64 else 31)
+                for memory in (False, True) if text != "cl" or rng.random() < 0.3 else (False,):
+                    registers = registers_for(rng)
+                    index = rng.choice([i for i in USABLE if i != 1])
+                    put(registers, 1, 0, count, 8)
+                    put(registers, index, 0, width_value(rng, bits), bits)
+                    if memory:
+                        offset = rng.randrange(0, 64 - bits // 8 + 1)
+                        target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                        body = [f"mov {target}, {GPR[bits][index]}", f"{op} {target}, {text}"]
+                    else:
+                        body = [f"{op} {GPR[bits][index]}, {text}"]
+                    cases.append((registers, body, ALL & ~(OF if masked > 1 else 0)))
+    return cases
+
+
+def shift_by_cl(rng):
+    """shl, shr and sar by CL at every width. A masked count (CL modulo 32, 64 for 64-bit operands) of 0 changes nothing. Else
+    SF, ZF and PF come from the result and AF is undefined; CF is the last bit out, undefined for shl and shr when the count is the
+    width or more (8 and 16 bits only); OF is defined for a count of 1."""
+    cases = []
+    for op in ("shl", "shr", "sar"):
+        for bits in (8, 16, 32, 64):
+            for count in COUNTS + [rng.randrange(256) for _ in range(10)]:
+                masked = count & (63 if bits == 64 else 31)
+                registers = registers_for(rng)
+                index = rng.choice([i for i in USABLE if i != 1])
+                put(registers, 1, 0, count, 8)
+                put(registers, index, 0, width_value(rng, bits), bits)
+                if rng.random() < 0.25:
+                    offset = rng.randrange(0, 64 - bits // 8 + 1)
+                    target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                    body = [f"mov {target}, {GPR[bits][index]}", f"{op} {target}, cl"]
+                else:
+                    body = [f"{op} {GPR[bits][index]}, cl"]
+                defined = ALL
+                if masked:
+                    defined &= ~AF
+                    if masked > 1:
+                        defined &= ~OF
+                    if op != "sar" and masked >= bits:
+                        defined &= ~CF
+                cases.append((registers, body, defined))
+    return cases
+
+
+def carry_narrow(rng):
+    """adc and sbb at 8 and 16 bits (register, memory and immediate forms, CF random), and lock adc and lock sbb on memory at every
+    width. Every flag is defined."""
+    cases = []
+    for op in ("adc", "sbb"):
+        for bits in (8, 16):
+            for a, b in [(a, b) for a in edges(rng, bits)[:8] for b in edges(rng, bits)[:8]] + \
+                    [(rng.getrandbits(bits), rng.getrandbits(bits)) for _ in range(20)]:
+                registers = registers_for(rng)
+                target, source = rng.sample(USABLE, 2)
+                put(registers, target, 0, a, bits)
+                put(registers, source, 0, b, bits)
+                form = rng.randrange(4)
+                if form == 0:
+                    body = [f"{op} {GPR[bits][target]}, {GPR[bits][source]}"]
+                elif form == 1:
+                    body = [f"mov {PTR[bits]} ptr [r15 + 8], {GPR[bits][source]}", f"{op} {GPR[bits][target]}, {PTR[bits]} ptr [r15 + 8]"]
+                elif form == 2:
+                    body = [f"mov {PTR[bits]} ptr [r15 + 8], {GPR[bits][target]}", f"{op} {PTR[bits]} ptr [r15 + 8], {GPR[bits][source]}"]
+                else:
+                    body = [f"{op} {GPR[bits][target]}, {imm(rng, 8 if bits == 8 or rng.random() < 0.5 else 16)}"]
+                cases.append((registers, body, ALL))
+        for bits in (8, 16, 32, 64):
+            for _ in range(16):
+                registers = registers_for(rng)
+                holder, source = rng.sample(USABLE, 2)
+                put(registers, holder, 0, width_value(rng, bits), bits)
+                put(registers, source, 0, width_value(rng, bits), bits)
+                offset = rng.randrange(0, 64 - bits // 8 + 1)
+                offset -= offset % (bits // 8)
+                target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                cases.append((registers, [f"mov {target}, {GPR[bits][holder]}", f"lock {op} {target}, {GPR[bits][source]}"], ALL))
+    return cases
+
+
+def flag_readers(rng):
+    """The new forms with a reader of their flags later in the same block: setc, seto, cmovc and jc after bt, bts, mul, imul, a
+    rotate, a narrow shift by CL and a narrow adc, so that the translator's flag liveness has them produce CF and OF."""
+    cases = []
+    producers = [("bt eax, 5", CF | ZF), ("bt rbx, rcx", CF | ZF), ("bts dword ptr [r15 + 4], 9", CF | ZF), ("btc ecx, edx", CF | ZF),
+                 ("mul rbx", CF | OF), ("imul ecx", CF | OF), ("mul bl", CF | OF), ("rol eax, 1", ALL), ("ror rbx, cl", ALL & ~OF),
+                 ("rcl dx, 1", ALL), ("shl bl, cl", CF | ZF | SF | PF), ("adc al, bl", ALL), ("sbb cx, dx", ALL),
+                 ("lock bts qword ptr [r15 + 8], rax", CF | ZF)]
+    for producer, defined in producers:
+        for _ in range(12):
+            registers = registers_for(rng)
+            put(registers, 1, 0, rng.choice([1, 2, 7, 33, 65]), 8)
+            if "[r15 + 8], rax" in producer:
+                registers[0] = rng.randrange(-64, 384) & (2 ** 64 - 1)
+            reader = rng.choice(["setc sil", "seto sil", "cmovc rdi, rsi", "jc"])
+            if reader == "jc":
+                body = [producer, "jc 1f", "mov rsi, 1", "1:", "setc dil"]
+            else:
+                body = [producer, reader]
+            reads = OF if "seto" in reader else CF
+            if not defined & reads:
+                continue
+            # The case's flags are those of the producer; which the reader saw shows in RSI or RDI.
+            cases.append((registers, body, defined))
+    return cases
+
+
+def unaligned_locked(rng):
+    """The locked forms on operands not aligned to their size, inside 16 bytes and across a 16-byte boundary of the buffer (which
+    starts 64-byte aligned in the translator's tests), and bts with lock there too."""
+    cases = []
+    ops = ["add", "sub", "and", "or", "xor", "adc", "sbb", "inc", "dec", "not", "neg", "xadd", "cmpxchg", "xchg", "bts", "btr"]
+    for op in ops:
+        for bits in (16, 32, 64):
+            size = bits // 8
+            crossing = list(range(16 - size + 1, 16)) + list(range(48 - size + 1, 48))
+            inside = [o for o in range(1, 16 - size + 1) if o % size]
+            for offset in crossing + rng.sample(inside, min(3, len(inside))):
+                registers = registers_for(rng)
+                holder, source = rng.sample(USABLE, 2)
+                put(registers, holder, 0, width_value(rng, bits), bits)
+                put(registers, source, 0, width_value(rng, bits), bits)
+                target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                prefix = "" if op == "xchg" else "lock "
+                if op in ("inc", "dec", "not", "neg"):
+                    text = f"{prefix}{op} {target}"
+                elif op in ("bts", "btr"):
+                    text = f"{prefix}{op} {target}, {rng.randrange(bits)}"
+                else:
+                    text = f"{prefix}{op} {target}, {GPR[bits][source]}"
+                defined = {"and": ALL & ~AF, "or": ALL & ~AF, "xor": ALL & ~AF, "bts": CF | ZF, "btr": CF | ZF,
+                           "cmpxchg": ZF}.get(op, ALL)
+                cases.append((registers, [f"mov {target}, {GPR[bits][holder]}", text], defined))
+    return cases
+
+
 # The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
 # name's CRC-32.
-FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test), ("locked", locked)]
+FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test), ("locked", locked), ("rotate", rotate), ("shift by cl", shift_by_cl),
+            ("carry narrow", carry_narrow), ("flag readers", flag_readers), ("unaligned locked", unaligned_locked)]
 
 
 def main():

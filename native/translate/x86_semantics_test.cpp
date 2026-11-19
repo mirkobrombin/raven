@@ -66,7 +66,7 @@ int main(int argc, char **argv)
 		options.ordering = ordering;
 		Runtime runtime(memory, cache, options);
 		std::vector<uint8_t> stack(1 << 16);
-		uint8_t buffer[64];
+		alignas(64) uint8_t buffer[64];
 		integer_oracle::Report report;
 		report.first = cases.data();
 		for (const integer_oracle::Case &item : cases) {

@@ -1,9 +1,14 @@
-# x86_semantics.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/integer-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44524257886, assembled with clang as here; dump sha256 8b28a4ea2f28e083548cf261cadc3e40f232a34ef867d571b99a9486d7411e18): every family, locked the newest. The tests refuse the file when a family's cases or Rosetta's results change.
-# Earlier runs gave the same results for the families they had: AMD EPYC 9V74 runs 44522174773 (random) and 44522713416 (random, multiply, divide), AMD EPYC 7763 run 44523646082 (and bit test). The random family's one difference, the RAX a 32-bit lock cmpxchg leaves, was first found on an AMD EPYC 9V45 (run 44411803673).
-# Rosetta and the EPYCs agree in every register, memory byte and defined flag of the multiply, divide, bit test and locked families; they differ only in flags x86 leaves undefined (counted by silicon_overrides.py, not written), and the bit test and locked families not even there.
+# x86_semantics.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/integer-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V45 (raven-macos-bench run 44526496471, assembled with clang as here; dump sha256 c4477a00c8cf1c92f6a3de3fa3b4677f4d43c257175309701726e72257f1c13e): every family, unaligned locked the newest. The tests refuse the file when a family's cases or Rosetta's results change.
+# Earlier runs gave the same results for the families they had: AMD EPYC 9V74 runs 44522174773 (random) and 44522713416 (random, multiply, divide), AMD EPYC 7763 runs 44523646082 (and bit test) and 44524257886 (and locked). The random family's one difference, the RAX a 32-bit lock cmpxchg leaves, was first found on an AMD EPYC 9V45 (run 44411803673).
+# Rosetta and the EPYCs agree in every register, memory byte and defined flag of every directed family; they differ only in flags x86 leaves undefined (counted by silicon_overrides.py, not written).
 corpus	bit test	cases=1200	generated=7127ab49267c326d	rosetta=52830b230a9ddf54
+corpus	carry narrow	cases=464	generated=ae35061595a3ca04	rosetta=6665b413ec4d379e
 corpus	divide	cases=1303	generated=d44ddee864ebb516	rosetta=67812a74a69526f7
+corpus	flag readers	cases=144	generated=034128545887151e	rosetta=357ab2fc58c4cb3e
 corpus	locked	cases=864	generated=c3698ae567f1d4b3	rosetta=3c8f0dd4c9367b60
 corpus	multiply	cases=1120	generated=2153868388b91462	rosetta=8329c158c8aa4e17
 corpus	random	cases=10000	generated=29504b896eccb080	rosetta=70e1f67988c68548
+corpus	rotate	cases=1041	generated=81b96fea8e3e6e4f	rosetta=26b75210bb3c89cf
+corpus	shift by cl	cases=312	generated=c4b86463bc97fa7b	rosetta=45d6a8834a2d2333
+corpus	unaligned locked	cases=496	generated=52757a4246e413b8	rosetta=4ca1ea057c9886d7
 8316	lea r12, [r8 + 2*rbx + -9550]; cmpxchg qword ptr [r15 + 0], r14; lock cmpxchg dword ptr [r15 + 0], r14d; not r9d	rosetta=bef3e01ee61d7fc6	r0=7ca1c6eb10355a7f
