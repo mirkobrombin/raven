@@ -1064,7 +1064,8 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			bool needs_256;
 			bool memory_only;
 		} broadcasts[] = {{0x18, vbroadcastss, 4, false, false}, {0x19, vbroadcastsd, 8, true, false},
-			{0x1a, vbroadcastf128, 16, true, true}, {0x78, vpbroadcastb, 1, false, false}, {0x79, vpbroadcastw, 2, false, false},
+			{0x1a, vbroadcastf128, 16, true, true}, {0x5a, vbroadcasti128, 16, true, true},
+			{0x78, vpbroadcastb, 1, false, false}, {0x79, vpbroadcastw, 2, false, false},
 			{0x58, vpbroadcastd, 4, false, false}, {0x59, vpbroadcastq, 8, false, false}};
 		for (const auto &broadcast : broadcasts)
 			if (opcode == broadcast.opcode) {
@@ -1182,7 +1183,8 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	else if (vex.pp == 0 && opcode == 0xae && (modrm.reg == 2 || modrm.reg == 3))
 		sse = {modrm.reg == 2 ? ldmxcsr : stmxcsr, SseForm::m, 4};
 	const SseForm form = sse.form;
-	if (sse.mnemonic == invalid || (memory && (form == SseForm::vu || form == SseForm::gu || form == SseForm::ui || form == SseForm::gu_ib)) ||
+	if (sse.mnemonic == invalid ||
+		(memory && (form == SseForm::vu || form == SseForm::gu || form == SseForm::ui || form == SseForm::gu_ib)) ||
 		(!memory && (form == SseForm::vm || form == SseForm::mv || form == SseForm::m)))
 		return true;
 	const Mnemonic mnemonic = sse.mnemonic;
@@ -1499,20 +1501,19 @@ static const char *const x87_names[] = {
 static_assert(std::size(x87_names) == static_cast<size_t>(x87_last) - static_cast<size_t>(x87_first) + 1);
 
 static const char *const avx_names[] = {
-	"vzeroupper", "vzeroall", "vbroadcastss", "vbroadcastsd", "vbroadcastf128", "vpbroadcastb", "vpbroadcastw", "vpbroadcastd",
-	"vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128", "vtestps", "vtestpd",
-	"vpermilps", "vpermilpd", "vmaskmovps", "vmaskmovpd", "vmaskmovdqu", "vpermq", "vpermpd",
-	"vpermd", "vpermps", "vpblendd", "vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd", "vpmaskmovd", "vpmaskmovq", "vpgatherdd",
-	"vpgatherdq", "vpgatherqd", "vpgatherqq", "vgatherdps", "vgatherdpd", "vgatherqps", "vgatherqpd", "vfmadd132ps",
-	"vfmadd132pd", "vfmadd132ss", "vfmadd132sd", "vfmadd213ps", "vfmadd213pd", "vfmadd213ss", "vfmadd213sd", "vfmadd231ps",
-	"vfmadd231pd", "vfmadd231ss", "vfmadd231sd", "vfmsub132ps", "vfmsub132pd", "vfmsub132ss", "vfmsub132sd", "vfmsub213ps",
-	"vfmsub213pd", "vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps",
-	"vfnmadd132pd", "vfnmadd132ss", "vfnmadd132sd", "vfnmadd213ps", "vfnmadd213pd", "vfnmadd213ss", "vfnmadd213sd", "vfnmadd231ps",
-	"vfnmadd231pd", "vfnmadd231ss", "vfnmadd231sd", "vfnmsub132ps", "vfnmsub132pd", "vfnmsub132ss", "vfnmsub132sd", "vfnmsub213ps",
-	"vfnmsub213pd", "vfnmsub213ss", "vfnmsub213sd", "vfnmsub231ps", "vfnmsub231pd", "vfnmsub231ss", "vfnmsub231sd", "vfmaddsub132ps", "vfmaddsub132pd", "vfmaddsub213ps", "vfmaddsub213pd",
-	"vfmaddsub231ps", "vfmaddsub231pd", "vfmsubadd132ps", "vfmsubadd132pd", "vfmsubadd213ps", "vfmsubadd213pd", "vfmsubadd231ps",
-	"vfmsubadd231pd",
-};
+	"vzeroupper", "vzeroall", "vbroadcastss", "vbroadcastsd", "vbroadcastf128", "vbroadcasti128", "vpbroadcastb", "vpbroadcastw",
+	"vpbroadcastd", "vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128",
+	"vtestps", "vtestpd", "vpermilps", "vpermilpd", "vmaskmovps", "vmaskmovpd", "vmaskmovdqu", "vpermq", "vpermpd", "vpermd",
+	"vpermps", "vpblendd", "vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd", "vpmaskmovd", "vpmaskmovq", "vpgatherdd",
+	"vpgatherdq", "vpgatherqd", "vpgatherqq", "vgatherdps", "vgatherdpd", "vgatherqps", "vgatherqpd", "vfmadd132ps", "vfmadd132pd",
+	"vfmadd132ss", "vfmadd132sd", "vfmadd213ps", "vfmadd213pd", "vfmadd213ss", "vfmadd213sd", "vfmadd231ps", "vfmadd231pd",
+	"vfmadd231ss", "vfmadd231sd", "vfmsub132ps", "vfmsub132pd", "vfmsub132ss", "vfmsub132sd", "vfmsub213ps", "vfmsub213pd",
+	"vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps", "vfnmadd132pd",
+	"vfnmadd132ss", "vfnmadd132sd", "vfnmadd213ps", "vfnmadd213pd", "vfnmadd213ss", "vfnmadd213sd", "vfnmadd231ps", "vfnmadd231pd",
+	"vfnmadd231ss", "vfnmadd231sd", "vfnmsub132ps", "vfnmsub132pd", "vfnmsub132ss", "vfnmsub132sd", "vfnmsub213ps", "vfnmsub213pd",
+	"vfnmsub213ss", "vfnmsub213sd", "vfnmsub231ps", "vfnmsub231pd", "vfnmsub231ss", "vfnmsub231sd", "vfmaddsub132ps",
+	"vfmaddsub132pd", "vfmaddsub213ps", "vfmaddsub213pd", "vfmaddsub231ps", "vfmaddsub231pd", "vfmsubadd132ps", "vfmsubadd132pd",
+	"vfmsubadd213ps", "vfmsubadd213pd", "vfmsubadd231ps", "vfmsubadd231pd"};
 static_assert(std::size(avx_names) == static_cast<size_t>(avx_last) - static_cast<size_t>(avx_first) + 1);
 
 std::string format_intel(const Instruction &instruction)

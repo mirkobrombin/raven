@@ -8,8 +8,8 @@ namespace raven::translate {
 
 namespace {
 
-// The standard format: the legacy area as FXSAVE lays it out (x87 state, MXCSR at 24, MXCSR_MASK at 28, ST0-ST7 at 32, XMM0-XMM15 at
-// 160), the header at 512 (XSTATE_BV, then XCOMP_BV), the upper halves of YMM0-YMM15 at 576.
+// The standard format: the legacy area as FXSAVE lays it out (x87 state, MXCSR at 24, MXCSR_MASK at 28, ST0-ST7 at 32,
+// XMM0-XMM15 at 160), the header at 512 (XSTATE_BV, then XCOMP_BV), the upper halves of YMM0-YMM15 at 576.
 constexpr uint64_t mxcsr_at = 24, mxcsr_mask_at = 28, registers_at = 32, xmm_at = 160, header_at = 512, ymm_at = 576;
 // The bits of MXCSR that may be set: all 16, DAZ included.
 constexpr uint32_t mxcsr_mask = 0xffff;

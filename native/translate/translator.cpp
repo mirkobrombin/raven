@@ -116,7 +116,8 @@ bool ends_block(Mnemonic mnemonic)
 bool supported(const Instruction &instruction);
 
 // VEX forms of SSE to SSE4.2. Unary: the destination is not a source (and pshufd, pshufhw, pshuflw, roundps, roundpd, pextr* and
-// extractps, whose imm8 follows the one source). Otherwise operands[1] is the VEX.vvvv source the destination starts from and the rest are the legacy form's sources.
+// extractps, whose imm8 follows the one source). Otherwise operands[1] is the VEX.vvvv source the destination starts from and the
+// rest are the legacy form's sources.
 bool vex_unary(const Instruction &instruction)
 {
 	switch (instruction.mnemonic) {

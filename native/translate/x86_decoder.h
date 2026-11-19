@@ -103,7 +103,8 @@ enum class Mnemonic : uint16_t {
 	fwait,
 	// AVX and AVX2 instructions without an SSE form, from vzeroupper to the last FMA3 one (avx_first to avx_last). The VEX forms of SSE
 	// and SSE2 keep the SSE mnemonic with Instruction::vex set.
-	vzeroupper, vzeroall, vbroadcastss, vbroadcastsd, vbroadcastf128, vpbroadcastb, vpbroadcastw, vpbroadcastd, vpbroadcastq,
+	vzeroupper, vzeroall, vbroadcastss, vbroadcastsd, vbroadcastf128, vbroadcasti128, vpbroadcastb, vpbroadcastw, vpbroadcastd,
+	vpbroadcastq,
 	vinsertf128, vextractf128, vinserti128, vextracti128, vperm2f128, vperm2i128,
 	vtestps, vtestpd, vpermilps, vpermilpd, vmaskmovps, vmaskmovpd, vmaskmovdqu,
 	// AVX2 without an SSE form.
