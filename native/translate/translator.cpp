@@ -192,7 +192,7 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::por: case Mnemonic::pxor: case Mnemonic::addps: case Mnemonic::addpd: case Mnemonic::addss: case Mnemonic::addsd:
 	case Mnemonic::subps: case Mnemonic::subpd: case Mnemonic::subss: case Mnemonic::subsd: case Mnemonic::mulps: case Mnemonic::mulpd:
 	case Mnemonic::mulss: case Mnemonic::mulsd: case Mnemonic::divps: case Mnemonic::divpd: case Mnemonic::divss: case Mnemonic::divsd:
-	case Mnemonic::rcpps: case Mnemonic::rsqrtps: case Mnemonic::rcpss: case Mnemonic::rsqrtss:
+	case Mnemonic::rcpps: case Mnemonic::rsqrtps: case Mnemonic::rcpss: case Mnemonic::rsqrtss: case Mnemonic::maskmovdqu:
 	case Mnemonic::sqrtps: case Mnemonic::sqrtpd: case Mnemonic::sqrtss: case Mnemonic::sqrtsd: case Mnemonic::minps:
 	case Mnemonic::minpd: case Mnemonic::minss: case Mnemonic::minsd: case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss:
 	case Mnemonic::maxsd: case Mnemonic::ldmxcsr: case Mnemonic::stmxcsr: case Mnemonic::cmpps: case Mnemonic::cmppd:
@@ -2453,7 +2453,8 @@ void BlockTranslator::avx_masked(const Instruction &instruction)
 	const unsigned count = instruction.vector_size / size;
 	const unsigned per_half = 16 / size;
 	Operand memory;
-	if (mnemonic == Mnemonic::vmaskmovdqu) {
+	const bool bytes = mnemonic == Mnemonic::vmaskmovdqu || mnemonic == Mnemonic::maskmovdqu;
+	if (bytes) {
 		memory.kind = OperandKind::mem;
 		memory.base = 7;
 		memory.index = no_register;
@@ -2461,9 +2462,9 @@ void BlockTranslator::avx_masked(const Instruction &instruction)
 	} else
 		memory = operands[0].kind == OperandKind::mem ? operands[0] : operands[2];
 	memory.size = static_cast<uint8_t>(size);
-	const bool store = mnemonic == Mnemonic::vmaskmovdqu || operands[0].kind == OperandKind::mem;
+	const bool store = bytes || operands[0].kind == OperandKind::mem;
 	const uint8_t selector = operands[1].reg;
-	const uint8_t data = mnemonic == Mnemonic::vmaskmovdqu ? operands[0].reg : store ? operands[2].reg : 0;
+	const uint8_t data = bytes ? operands[0].reg : store ? operands[2].reg : 0;
 	if (wide) {
 		load_high(vh1, selector);
 		if (store)
@@ -2980,6 +2981,7 @@ void BlockTranslator::translate(const Instruction &instruction)
 		return;
 	case Mnemonic::cmpps: case Mnemonic::cmppd: case Mnemonic::cmpss: case Mnemonic::cmpsd: sse_compare(instruction); return;
 	case Mnemonic::rcpps: case Mnemonic::rsqrtps: case Mnemonic::rcpss: case Mnemonic::rsqrtss: sse_reciprocal(instruction); return;
+	case Mnemonic::maskmovdqu: avx_masked(instruction); return;
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: sse_ordered_compare(instruction); return;
 	case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: case Mnemonic::cvtss2si: case Mnemonic::cvttss2si: case Mnemonic::cvtsd2si:
 	case Mnemonic::cvttsd2si: case Mnemonic::cvtss2sd: case Mnemonic::cvtsd2ss: case Mnemonic::cvtdq2ps: case Mnemonic::cvtdq2pd:

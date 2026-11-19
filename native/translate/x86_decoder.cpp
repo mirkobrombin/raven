@@ -366,6 +366,7 @@ constexpr SseMap make_sse_map()
 	set(1, 0xd7, pmovmskb, F::gu, 16);
 	set(1, 0xe6, cvttpd2dq, F::vw, 16); set(2, 0xe6, cvtdq2pd, F::vw, 8); set(3, 0xe6, cvtpd2dq, F::vw, 16);
 	set(1, 0xe7, movntdq, F::mv, 16);
+	set(1, 0xf7, maskmovdqu, F::vu, 16);
 	// SSE3, and pinsrw and pextrw.
 	set(3, 0xd0, addsubps, F::vw, 16); set(1, 0xd0, addsubpd, F::vw, 16);
 	set(3, 0x7c, haddps, F::vw, 16); set(1, 0x7c, haddpd, F::vw, 16); set(3, 0x7d, hsubps, F::vw, 16); set(1, 0x7d, hsubpd, F::vw, 16);
@@ -1483,7 +1484,7 @@ static const char *const sse_names[] = {
 	"cmpss", "cmpsd", "shufps", "shufpd", "paddq", "pmullw", "pmovmskb", "psubusb", "psubusw", "pminub", "pand", "paddusb", "paddusw",
 	"pmaxub", "pandn", "pavgb", "pavgw", "pmulhuw", "pmulhw", "cvttpd2dq", "cvtdq2pd", "cvtpd2dq", "movntdq", "psubsb", "psubsw",
 	"pminsw", "por", "paddsb", "paddsw", "pmaxsw", "pxor", "pmuludq", "pmaddwd", "psadbw", "psubb", "psubw", "psubd", "psubq",
-	"paddb", "paddw", "paddd", "rcpps", "rsqrtps", "rcpss", "rsqrtss",
+	"paddb", "paddw", "paddd", "rcpps", "rsqrtps", "rcpss", "rsqrtss", "maskmovdqu",
 	"addsubps", "addsubpd", "haddps", "haddpd", "hsubps", "hsubpd", "movddup", "movsldup", "movshdup", "lddqu", "pinsrw", "pextrw",
 	"pshufb", "phaddw", "phaddd", "phaddsw", "pmaddubsw", "phsubw", "phsubd", "phsubsw", "psignb", "psignw", "psignd", "pmulhrsw",
 	"pabsb", "pabsw", "pabsd", "palignr", "pblendvb", "blendvps", "blendvpd", "ptest", "pmovsxbw", "pmovsxbd", "pmovsxbq", "pmovsxwd",
