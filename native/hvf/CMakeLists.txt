@@ -243,6 +243,13 @@ add_test(NAME hvf_integer COMMAND hvf_integer_test ${CMAKE_CURRENT_BINARY_DIR}/t
     ${CMAKE_CURRENT_SOURCE_DIR}/../translate/testdata/x86_silicon.txt)
 set_tests_properties(hvf_integer PROPERTIES TIMEOUT 120)
 
+# Locked read-modify-write instructions on one word from two vCPUs: no update lost, and a plain inc as the control that loses some.
+add_executable(hvf_locked_test hvf_locked_test.cpp)
+target_link_libraries(hvf_locked_test PRIVATE raven_hvf)
+raven_hvf_sign(hvf_locked_test)
+add_test(NAME hvf_locked COMMAND hvf_locked_test)
+set_tests_properties(hvf_locked PROPERTIES TIMEOUT 60)
+
 # The AVX oracle's cases in a vCPU, with the same silicon results as translate_x86_avx.
 add_executable(hvf_avx_test hvf_avx_test.cpp)
 target_link_libraries(hvf_avx_test PRIVATE raven_hvf)

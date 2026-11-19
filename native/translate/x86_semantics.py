@@ -311,9 +311,35 @@ def bit_test(rng):
     return cases
 
 
+def locked(rng):
+    """lock add, sub, and, or, xor (register or immediate source), inc, dec, not and neg on aligned memory, the memory first set
+    to an edge value. Flags as without lock: and, or and xor leave AF undefined; inc and dec keep CF and not keeps all."""
+    cases = []
+    for op in ("add", "sub", "and", "or", "xor", "inc", "dec", "not", "neg"):
+        for bits in (8, 16, 32, 64):
+            size = bits // 8
+            for number in range(24):
+                registers = registers_for(rng)
+                holder, source = rng.sample(USABLE, 2)
+                put(registers, holder, 0, width_value(rng, bits), bits)
+                put(registers, source, 0, width_value(rng, bits), bits)
+                offset = rng.randrange(0, 64 - size + 1)
+                offset -= offset % size
+                target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                body = [f"mov {target}, {GPR[bits][holder]}"]
+                if op in ("inc", "dec", "not", "neg"):
+                    body.append(f"lock {op} {target}")
+                elif number % 3 == 2:
+                    body.append(f"lock {op} {target}, {imm(rng, 8 if bits == 8 or rng.random() < 0.5 else min(bits, 32))}")
+                else:
+                    body.append(f"lock {op} {target}, {GPR[bits][source]}")
+                cases.append((registers, body, ALL & ~AF if op in ("and", "or", "xor") else ALL))
+    return cases
+
+
 # The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
 # name's CRC-32.
-FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test)]
+FAMILIES = [("multiply", multiply), ("divide", divide), ("bit test", bit_test), ("locked", locked)]
 
 
 def main():
