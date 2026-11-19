@@ -608,6 +608,31 @@ def avx2_broadcast(rng):
     return [f"vbroadcasti128 ymm{reg(rng)}, {mem(rng, 16)}"]
 
 
+def strings_wide(rng):
+    """pcmpestri and pcmpestrm with REX.W (legacy) and VEX.W1, whose lengths are RAX and RDX: written as bytes, as assemblers spell
+    the W forms differently. xmm0-xmm7 or [r15 + disp8]."""
+    op = rng.choice([0x60, 0x61])
+    a, b = rng.randrange(8), rng.randrange(8)
+    imm = rng.randrange(128) if rng.random() < 0.7 else rng.choice([0x0c, 0x08, 0x18, 0x1a, 0x3a, 0x44, 0x04, 0x40, 0x70, 0x01])
+    memory = rng.random() < 0.3
+    offset = rng.randrange(0, 128)
+    modrm = [0x40 | a << 3 | 7, offset] if memory else [0xc0 | a << 3 | b]
+    if rng.random() < 0.5:
+        code = [0x66, 0x49 if memory else 0x48, 0x0f, 0x3a, op] + modrm + [imm]
+    else:
+        code = [0xc4, 0xc3 if memory else 0xe3, 0xf9, op] + modrm + [imm]
+    return [".byte " + ", ".join(f"{byte:#04x}" for byte in code)]
+
+
+def strings_wide_data(rng, body, registers, vectors, memory):
+    strings_data(rng, body, registers, vectors, memory)
+    # Lengths whose 64 bits and low 32 bits say different things, and negative ones.
+    wide = [0x100000005, 0xffffffff00000005, 0xfffffffb, 0x7fffffff0000000c, 0x80000000, 0xffffffff80000000, 2**64 - 3,
+            2**64 - 0x100000000, 2**64 - 17, 9, 0, 16, 17, 0x1000000000000010]
+    for r in (0, 2):
+        registers[r] = rng.choice(wide)
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -636,9 +661,10 @@ LATER_FAMILIES = [
     ("avx2", avx2, "int", 1500),
     ("gathers", gathers, "mixed", 800),
     ("avx2 broadcast", avx2_broadcast, "int", 100),
+    ("strings wide", strings_wide, "int", 400),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
-FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data}
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data}
 
 
 def lanes_of(body, kind):
