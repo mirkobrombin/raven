@@ -64,9 +64,18 @@ What this says:
 **Now** (`native/translate/cpuid.h`): a block ends before cpuid or xgetbv with `ExitReason::cpuid`; `Runtime::Thread::run` answers
 from one table and goes on after the instruction, in this process and in a vCPU (one run loop). The policy:
 
-- **A feature is reported only when the translator runs every instruction it adds.** `cpuid_check.h` holds sample encodings per
-  feature (SSE3, SSSE3, FMA, CMPXCHG16B, SSE4.1, SSE4.2, MOVBE, POPCNT, XSAVE, AVX, F16C, BMI1, AVX2, BMI2, LZCNT) and fails if a
-  reported bit has a sample `translates()` refuses.
+- **A feature is reported only when the translator runs every instruction it adds.** `cpuid_check.h` holds, per feature, at least one
+  clang-assembled sample per opcode group the feature adds (every FMA3 form: 96), and fails if a reported bit has a sample
+  `translates()` refuses. The tests print the samples refused today, which is the work left before each bit (PROVEN,
+  `translate_cpuid`):
+
+  | Feature | Samples translated | Refused today |
+  |---|---|---|
+  | SSE3, SSSE3, SSE4.1, SSE4.2 | 0 of 6, 7, 22, 4 | all: no legacy SSE3-SSE4.2 is translated |
+  | FMA | 72 of 96 | the 24 vfmaddsub and vfmsubadd forms (not decoded) |
+  | AVX | 10 of 53 | VEX SSE3-SSE4.2 forms, vinsertps, vextractps, vpinsrd, vpextrd, vptest, vtestps, vpermilps and vpermilpd, vmaskmovps, vcmp predicates 8-31, vblendvps, vblendps, vpblendvb, vdpps, vround, the 256-bit width-changing conversions, vrcpps, vrsqrtps, vpinsrw, vpextrw, vmaskmovdqu |
+  | AVX2 | 10 of 30 | vpshufb ymm, vpermq, vpermd, vpermps, vpermpd, vpblendd, vpblendvb ymm, the variable shifts, vpmaskmovd, gathers, vpmaxsd ymm, vpmovzxbd, vpalignr ymm, vmpsadbw, vmovntdqa |
+  | F16C, BMI1, BMI2, LZCNT, POPCNT, MOVBE, CMPXCHG16B, XSAVE | 0 of each | all |
 - **The x86-64 baseline is always reported** (psABI x86-64-v1: FPU, CX8, CMOV, MMX, FXSR, SSE, SSE2; long mode and syscall in
   0x80000001), because x64 code may assume it without asking. MMX, fxsave and cmpxchg8b are not translated yet (open items).
 - **Bits that describe the same state agree:** OSXSAVE and XSAVE come with AVX; then XCR0 is 7 and leaf 0xd subleaf 0 lists 7 with
