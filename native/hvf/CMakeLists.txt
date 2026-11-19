@@ -236,6 +236,13 @@ add_test(NAME hvf_avx COMMAND hvf_avx_test ${CMAKE_CURRENT_BINARY_DIR}/translate
     ${CMAKE_CURRENT_SOURCE_DIR}/../translate/testdata/x86_avx_silicon.txt)
 set_tests_properties(hvf_avx PROPERTIES TIMEOUT 120)
 
+# A 256-bit instruction whose memory operand faults leaves the upper halves and memory as they were.
+add_executable(hvf_avx_fault_test hvf_avx_fault_test.cpp)
+target_link_libraries(hvf_avx_fault_test PRIVATE raven_hvf)
+raven_hvf_sign(hvf_avx_fault_test)
+add_test(NAME hvf_avx_fault COMMAND hvf_avx_fault_test)
+set_tests_properties(hvf_avx_fault PROPERTIES TIMEOUT 30)
+
 # The x87 oracle's cases in a vCPU, with the same silicon results as translate_x87.
 add_executable(hvf_x87_test hvf_x87_test.cpp)
 target_link_libraries(hvf_x87_test PRIVATE raven_hvf)
