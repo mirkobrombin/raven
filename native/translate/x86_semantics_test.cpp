@@ -84,7 +84,22 @@ int main(int argc, char **argv)
 				problem = integer_oracle::compare(item, state, buffer);
 			report.add(item, problem);
 		}
-		report.print(ordering == MemoryOrdering::rcpc ? "in process, LDAPR/STLR" : "in process, barriers");
+		const char *where = ordering == MemoryOrdering::rcpc ? "in process, LDAPR/STLR" : "in process, barriers";
+		report.print(where);
+		size_t fault_failures = 0;
+		const std::vector<integer_oracle::FaultCase> faults = integer_oracle::fault_cases();
+		for (const integer_oracle::FaultCase &item : faults) {
+			std::memset(buffer, 0, sizeof buffer);
+			const std::string problem = integer_oracle::check_fault(item, memory.add(item.code), runtime.state(),
+				reinterpret_cast<uint64_t>(buffer), reinterpret_cast<uint64_t>(stack.data() + stack.size()),
+				[&](uint64_t address) { return runtime.call(address); });
+			if (!problem.empty()) {
+				++fault_failures;
+				std::fprintf(stderr, "%s: fault case %s: %s\n", where, item.text, problem.c_str());
+			}
+		}
+		std::printf("%s, faults: %zu cases, %zu failures\n", where, faults.size(), fault_failures);
+		failures += fault_failures;
 		std::printf("%llu blocks, %llu guest instructions, %llu host words\n",
 			static_cast<unsigned long long>(runtime.translation_stats().blocks),
 			static_cast<unsigned long long>(runtime.translation_stats().guest_instructions),

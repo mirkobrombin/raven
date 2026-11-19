@@ -39,6 +39,10 @@ enum class FaultKind : uint64_t {
 	instruction,
 	// #MF: an x87 instruction found an unmasked exception pending; FSW and FCW in CpuState::x87 say which.
 	x87,
+	// #DE: div or idiv by zero, or with a quotient that does not fit; nothing has changed, rip is that instruction.
+	divide_error,
+	// int 0x29 (__fastfail): rip is that instruction and ECX holds the code.
+	fast_fail,
 };
 
 // The x87 FPU, kept in CpuState only: the host's x87 core (x87.h) reads and writes it, translated code never does. The order is that

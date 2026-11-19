@@ -6,6 +6,7 @@
 // has changed since (its fingerprint), as x86_avx_check.h does for the AVX oracle.
 
 #include "cpu_state.h"
+#include "runtime.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -238,6 +239,102 @@ inline std::string compare(const Case &item, const CpuState &state, const uint8_
 			std::snprintf(text, sizeof text, "buffer byte %u is %#x, x86 left %#x", b, buffer[b], x86.buffer[b]);
 			return text;
 		}
+	return {};
+}
+
+// Instructions that stop translated code: #DE from div and idiv at every width (a zero divisor, a quotient too large), int 0x29,
+// int3 and ud2. Each is code that ends in ret, the registers it starts with and the stop it must make: the exit, the FaultKind for a
+// fault exit, at the offset of the stopping instruction, with every register and flag as it was before it (prefix, when not empty,
+// is an instruction before it whose effect stays: then only the registers are compared).
+struct FaultCase {
+	const char *text;
+	std::vector<uint8_t> code;
+	std::vector<std::pair<unsigned, uint64_t>> registers;
+	ExitReason reason;
+	FaultKind kind;
+	unsigned offset;
+	bool prefix = false;
+};
+
+inline std::vector<FaultCase> fault_cases()
+{
+	constexpr uint64_t min64 = 1ull << 63;
+	const ExitReason fault = ExitReason::fault;
+	const FaultKind de = FaultKind::divide_error;
+	return {
+		{"div rcx, rcx = 0", {0x48, 0xf7, 0xf1, 0xc3}, {{rax, 5}, {rdx, 0}, {rcx, 0}}, fault, de, 0},
+		{"div rcx, rdx = rcx", {0x48, 0xf7, 0xf1, 0xc3}, {{rax, 0}, {rdx, 7}, {rcx, 7}}, fault, de, 0},
+		{"div rcx, rdx > rcx", {0x48, 0xf7, 0xf1, 0xc3}, {{rax, ~0ull}, {rdx, ~0ull}, {rcx, 2}}, fault, de, 0},
+		{"div ecx, ecx = 0", {0xf7, 0xf1, 0xc3}, {{rax, 5}, {rdx, 0}, {rcx, 0xffffffff00000000ull}}, fault, de, 0},
+		{"div ecx, edx = ecx", {0xf7, 0xf1, 0xc3}, {{rax, 1}, {rdx, 3}, {rcx, 3}}, fault, de, 0},
+		{"div cx, cx = 0", {0x66, 0xf7, 0xf1, 0xc3}, {{rax, 5}, {rdx, 0}, {rcx, 0x10000}}, fault, de, 0},
+		{"div cx, dx = cx", {0x66, 0xf7, 0xf1, 0xc3}, {{rax, 0}, {rdx, 9}, {rcx, 9}}, fault, de, 0},
+		{"div cl, cl = 0", {0xf6, 0xf1, 0xc3}, {{rax, 5}, {rcx, 0x100}}, fault, de, 0},
+		{"div cl, ax = 0x100, cl = 1", {0xf6, 0xf1, 0xc3}, {{rax, 0x100}, {rcx, 1}}, fault, de, 0},
+		{"idiv rcx, rcx = 0", {0x48, 0xf7, 0xf9, 0xc3}, {{rax, 5}, {rdx, 0}, {rcx, 0}}, fault, de, 0},
+		{"idiv rcx, INT64_MIN / -1", {0x48, 0xf7, 0xf9, 0xc3}, {{rax, min64}, {rdx, ~0ull}, {rcx, ~0ull}}, fault, de, 0},
+		{"idiv rcx, 2^64 / 2", {0x48, 0xf7, 0xf9, 0xc3}, {{rax, 0}, {rdx, 1}, {rcx, 2}}, fault, de, 0},
+		{"idiv rcx, -2^64 / -2", {0x48, 0xf7, 0xf9, 0xc3}, {{rax, 0}, {rdx, ~0ull}, {rcx, ~1ull}}, fault, de, 0},
+		{"idiv ecx, INT32_MIN / -1", {0xf7, 0xf9, 0xc3}, {{rax, 0x80000000}, {rdx, 0xffffffff}, {rcx, 0xffffffff}}, fault, de, 0},
+		{"idiv ecx, ecx = 0", {0xf7, 0xf9, 0xc3}, {{rax, 5}, {rdx, 0}, {rcx, 0}}, fault, de, 0},
+		{"idiv cx, INT16_MIN / -1", {0x66, 0xf7, 0xf9, 0xc3}, {{rax, 0x8000}, {rdx, 0xffff}, {rcx, 0xffff}}, fault, de, 0},
+		{"idiv cl, -128 / -1", {0xf6, 0xf9, 0xc3}, {{rax, 0xff80}, {rcx, 0xff}}, fault, de, 0},
+		{"idiv cl, cl = 0", {0xf6, 0xf9, 0xc3}, {{rax, 0x1234}, {rcx, 0}}, fault, de, 0},
+		// div qword ptr [r15], whose eight bytes are zero.
+		{"div qword ptr [r15] = 0", {0x49, 0xf7, 0x37, 0xc3}, {{rax, 1}, {rdx, 0}}, fault, de, 0},
+		// cmp rax, rbx, then div rcx: the cmp's result stays, the fault is at the div.
+		{"cmp rax, rbx; div rcx, rcx = 0", {0x48, 0x39, 0xd8, 0x48, 0xf7, 0xf1, 0xc3}, {{rax, 1}, {rbx, 2}, {rcx, 0}}, fault, de, 3,
+			true},
+		{"int 0x29", {0xb9, 0x07, 0x00, 0x00, 0x00, 0xcd, 0x29, 0xc3}, {}, fault, FaultKind::fast_fail, 5, true},
+		{"int3", {0xcc, 0xc3}, {}, ExitReason::breakpoint, FaultKind::instruction, 0},
+		{"ud2", {0x0f, 0x0b, 0xc3}, {}, fault, FaultKind::instruction, 0},
+	};
+}
+
+// Runs a fault case through run (address, state) -> RunResult and says what went wrong, or nothing.
+template <typename Run>
+std::string check_fault(const FaultCase &item, uint64_t address, CpuState &state, uint64_t buffer, uint64_t stack, Run run)
+{
+	uint64_t registers[16];
+	for (unsigned r = 0; r < 16; ++r)
+		registers[r] = 0x1111111111111111ull * (r + 1);
+	for (const auto &[r, value] : item.registers)
+		registers[r] = value;
+	registers[rsp] = stack;
+	registers[r15] = buffer;
+	std::memcpy(state.gpr, registers, sizeof registers);
+	Io flags{};
+	flags.flags = CF | ZF | AF;
+	load(state, flags);
+	std::memcpy(state.gpr, registers, sizeof registers);
+	const RunResult result = run(address);
+	char text[200];
+	if (result.reason != item.reason) {
+		std::snprintf(text, sizeof text, "exit %u, expected %u", static_cast<unsigned>(result.reason), static_cast<unsigned>(item.reason));
+		return text;
+	}
+	if (result.value != address + item.offset) {
+		std::snprintf(text, sizeof text, "rip at offset %lld, expected %u", static_cast<long long>(result.value - address), item.offset);
+		return text;
+	}
+	if (item.reason == ExitReason::fault && state.exit_info != static_cast<uint64_t>(item.kind)) {
+		std::snprintf(text, sizeof text, "fault kind %llu, expected %llu", static_cast<unsigned long long>(state.exit_info),
+			static_cast<unsigned long long>(item.kind));
+		return text;
+	}
+	if (item.prefix)
+		return {};
+	for (unsigned r = 0; r < 16; ++r)
+		if (state.gpr[r] != registers[r]) {
+			std::snprintf(text, sizeof text, "register %u is %#llx, was %#llx", r, static_cast<unsigned long long>(state.gpr[r]),
+				static_cast<unsigned long long>(registers[r]));
+			return text;
+		}
+	if ((flags_of(state) & all_flags) != flags.flags) {
+		std::snprintf(text, sizeof text, "flags %#llx, were %#llx", static_cast<unsigned long long>(flags_of(state)),
+			static_cast<unsigned long long>(flags.flags));
+		return text;
+	}
 	return {};
 }
 

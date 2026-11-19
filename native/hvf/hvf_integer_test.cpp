@@ -62,6 +62,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	translate::integer_oracle::Report report;
+	size_t fault_cases = 0, fault_failures = 0;
 	report.first = cases.data();
 	try {
 		hvf::Vm vm(256 << 20);
@@ -89,11 +90,22 @@ int main(int argc, char **argv)
 				problem = translate::integer_oracle::compare(item, state, buffer_alias);
 			report.add(item, problem);
 		}
+		for (const translate::integer_oracle::FaultCase &item : translate::integer_oracle::fault_cases()) {
+			std::memset(buffer_alias, 0, 64);
+			const std::string problem = translate::integer_oracle::check_fault(item, memory.add(item.code), runtime.state(), buffer,
+				stack + (64 << 10), [&](uint64_t address) { return runtime.call(address); });
+			++fault_cases;
+			if (!problem.empty()) {
+				++fault_failures;
+				std::fprintf(stderr, "vCPU: fault case %s: %s\n", item.text, problem.c_str());
+			}
+		}
 	} catch (const std::exception &error) {
 		std::fprintf(stderr, "FAIL: %s\n", error.what());
 		return 1;
 	}
 	report.print("vCPU");
-	std::printf("%zu cases, %zu failures\n", cases.size(), report.failures);
-	return report.failures == 0 ? 0 : 1;
+	std::printf("vCPU, faults: %zu cases, %zu failures\n", fault_cases, fault_failures);
+	std::printf("%zu cases, %zu failures\n", cases.size() + fault_cases, report.failures + fault_failures);
+	return report.failures + fault_failures == 0 ? 0 : 1;
 }

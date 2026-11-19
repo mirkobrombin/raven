@@ -147,9 +147,124 @@ def instruction(rng, first, rcx, defined):
     return f"mov {mem(rng, size)}, {reg(rng, size)}", 0, 0
 
 
+def edges(rng, bits, signed=False):
+    """Values of a width to try first: 0, 1, -1, the minimum and maximum signed values, their neighbours and powers of two."""
+    mask = (1 << bits) - 1
+    values = [0, 1, 2, mask, mask - 1, 1 << (bits - 1), (1 << (bits - 1)) - 1, (1 << (bits - 1)) + 1, 1 << rng.randrange(bits),
+              (1 << rng.randrange(bits)) - 1]
+    return [v & mask for v in values]
+
+
+def width_value(rng, bits):
+    return rng.choice(edges(rng, bits) + [rng.getrandbits(bits)] * 4)
+
+
+def signed(value, bits):
+    value &= (1 << bits) - 1
+    return value - (1 << bits) if value >> (bits - 1) else value
+
+
+def registers_for(rng):
+    return [rng.getrandbits(64) for _ in range(16)]
+
+
+def source_register(rng, bits, avoid, high=True):
+    """A register operand of the width other than those avoid names (numbers); at 8 bits now and then ah, ch, dh or bh (with high:
+    they cannot appear in an instruction with a REX prefix)."""
+    if high and bits == 8 and rng.random() < 0.15 and not (avoid & {0, 1, 2, 3}):
+        index = rng.randrange(4)
+        return GPR[8][index][0] + "h", index, 8
+    index = rng.choice([i for i in USABLE if i not in avoid])
+    return GPR[bits][index], index, 0
+
+
+def put(registers, index, shift, value, bits):
+    """Writes value (bits wide) into register index at bit shift, keeping the rest."""
+    mask = ((1 << bits) - 1) << shift
+    registers[index] = (registers[index] & ~mask) | ((value << shift) & mask)
+
+
+def multiply(rng):
+    """mul and imul with one operand: RDX:RAX (AX for 8 bits) from RAX times the source; CF and OF defined."""
+    cases = []
+    for op in ("mul", "imul"):
+        for bits in (8, 16, 32, 64):
+            pairs = [(a, b) for a in edges(rng, bits) for b in edges(rng, bits)]
+            pairs += [(rng.getrandbits(bits), rng.getrandbits(bits)) for _ in range(40)]
+            for number, (a, b) in enumerate(pairs):
+                registers = registers_for(rng)
+                put(registers, 0, 0, a, bits)
+                memory = number % 5 == 4
+                name, index, shift = source_register(rng, bits, {4, 15} | ({0} if not memory and rng.random() < 0.8 else set()),
+                                                     not memory)
+                if index == 0 and shift == 0 and not memory:
+                    b = a
+                put(registers, index, shift, b, bits)
+                if memory:
+                    offset = rng.randrange(0, 64 - bits // 8 + 1)
+                    target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                    body = [f"mov {target}, {name}", f"{op} {target}"]
+                    if index == 0 and shift == 0:
+                        put(registers, 0, 0, a, bits)
+                else:
+                    body = [f"{op} {name}"]
+                cases.append((registers, body, CF | OF))
+    return cases
+
+
+def divide(rng):
+    """div and idiv: RDX:RAX (AX for 8 bits) by the source, quotient to RAX (AL), remainder to RDX (AH). Inputs x86 raises #DE for
+    (a zero divisor, a quotient that does not fit) are left out: the oracle would die of SIGFPE; x86_semantics_check.h's fault
+    cases check those. Every flag is undefined."""
+    cases = []
+    for op in ("div", "idiv"):
+        for bits in (8, 16, 32, 64):
+            mask = (1 << bits) - 1
+            tries = [(q, d, rng.random()) for q in edges(rng, bits) for d in edges(rng, bits)]
+            tries += [(rng.getrandbits(bits), rng.getrandbits(rng.choice([2, 8, bits // 2, bits])), rng.random()) for _ in range(80)]
+            for number, (q, d, fraction) in enumerate(tries):
+                if op == "div":
+                    if d == 0:
+                        continue
+                    n = q * d + int(fraction * d)
+                    if n >> (2 * bits) or n // d > mask:
+                        continue
+                    dividend = n
+                else:
+                    sq, sd = signed(q, bits), signed(d, bits)
+                    if sd == 0:
+                        continue
+                    product = sq * sd
+                    magnitude = int(fraction * abs(sd))
+                    n = product + (magnitude if product > 0 or (product == 0 and fraction < 0.5) else -magnitude)
+                    if not -(1 << (2 * bits - 1)) <= n < (1 << (2 * bits - 1)):
+                        continue
+                    quotient = abs(n) // abs(sd) * (1 if (n < 0) == (sd < 0) else -1)
+                    if not -(1 << (bits - 1)) <= quotient < (1 << (bits - 1)):
+                        continue
+                    dividend = n & ((1 << (2 * bits)) - 1)
+                registers = registers_for(rng)
+                if bits == 8:
+                    put(registers, 0, 0, dividend, 16)
+                else:
+                    put(registers, 0, 0, dividend, bits)
+                    put(registers, 2, 0, dividend >> bits, bits)
+                memory = number % 5 == 4
+                name, index, shift = source_register(rng, bits, {0, 2, 4, 15}, not memory)
+                put(registers, index, shift, d, bits)
+                if memory:
+                    offset = rng.randrange(0, 64 - bits // 8 + 1)
+                    target = f"{PTR[bits]} ptr [r15 + {offset}]"
+                    body = [f"mov {target}, {name}", f"{op} {target}"]
+                else:
+                    body = [f"{op} {name}"]
+                cases.append((registers, body, 0))
+    return cases
+
+
 # The directed families: name and generator, which returns a list of (registers, body, defined). Each runs with a seed of its
 # name's CRC-32.
-FAMILIES = []
+FAMILIES = [("multiply", multiply), ("divide", divide)]
 
 
 def main():
