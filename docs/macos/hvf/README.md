@@ -18,6 +18,7 @@ Labels: **PROVEN** (command and output below), **INFERRED** (from what, and the 
 | `native/translate/translator.cpp` (`arm64ec_*`), `runtime.cpp` (`arm64ec_routines`, native stubs), `guest_memory.h` (`entry_thunk`) | The ARM64EC transitions between translated x64 and native code, and `movq` between general and XMM registers |
 | `native/hvf/hvf_arm64ec_test.cpp`, `testdata/ec_library.c`, `ec_library.def`, `ec_client.c` | An x64 program calling an ARM64EC DLL in one vCPU |
 | `native/hvf/hvf_bench.cpp`, `hvf_bench_run.py`, `testdata/bench_native.c`, `testdata/bench_loop.c` | The benchmark |
+| `native/hvf/hvf_vm_cost.cpp`, `hvf_vm_cost_run.py` | What one VM costs a process: time and footprint per setup stage |
 | `native/hvf/testdata/hvf_client.c` | x64 guest code of the litmus, the spin and the code changes (`patch_target`) |
 | `native/hvf/CMakeLists.txt`, `hypervisor.entitlements` | Builds on Darwin arm64 only, adds `native/translate` as a subdirectory, signs every binary that creates a VM ad hoc with `com.apple.security.hypervisor` (`RAVEN_HVF_SIGN_IDENTITY` names a keychain identity instead). No provisioning profile: the guest's low addresses come from its own page tables |
 
@@ -564,6 +565,33 @@ so the absolute figures move with the machine's state; about 12 us per store-and
 12 us divide between the fault exit, `code_written`, two `hv_vm_protect` calls, the miss exit and translation is NOT verified. Code
 that writes its own code page often (or data that shares a page with code) pays this on every write after a translation.
 
+### Cost of a VM to a process
+
+What one VM adds to its process, up to the first translated call: `hvf_vm_cost.cpp` times each setup stage and reads the process's
+`phys_footprint` (`TASK_VM_INFO`) after it, and `hvf_vm_cost_run.py` runs it 30 times per configuration, one fresh process per run,
+since Hypervisor.framework allows one VM per process. The guest is `hvf_client.exe`; its first call is one LCG step.
+
+PROVEN, `data/vm_cost_quiet.txt` (load average 3.5, taken with the first version of the probe, same stages):
+
+| Stage | Time, median (min to max), µs | `phys_footprint` after it, KiB |
+|---|---|---|
+| process start | | 1696 |
+| `hv_vm_create` alone (bare run) | 20.6 (18.5 to 32.4) | 1808 |
+| `Vm`: create, 256 MiB of guest RAM mapped at stage 2, page tables, kernel | 30.7 (26.6 to 52.0) | 1872 |
+| load `hvf_client.exe` | 54.2 (49.8 to 76.8) | 1936 |
+| vCPU, a 4 MiB code cache, `Runtime`, thread setup | 285 (260 to 407) | 2192 |
+| first translated call | 54.1 (51.1 to 70.4) | 2320 |
+| teardown | 52.8 (45.8 to 68.2) | |
+
+- About 0.42 ms and about 620 KiB from process start to the first returned call. Guest RAM costs nothing until touched: 1024 MiB in
+  place of 256 MiB gives 31.6 µs and 2336 KiB.
+- The process from exec to exit: median 1.9 ms for an empty C program, 2.8 ms for the bare run, 3.4 ms for the whole setup. Most of
+  the difference is loading a larger binary and Hypervisor.framework, not the VM (INFERRED).
+- `data/vm_cost_busy.txt` is the committed probe on the same machine at load average 60: the times are 3 to 5 times longer, the
+  footprints the same to within 32 KiB (PROVEN).
+- NOT verified: Hypervisor.framework's kernel-side memory (stage-2 tables, vCPU state) is not in `phys_footprint`; the guest is a test
+  program, not an application.
+
 ### Failing runs
 
 Exit criterion 1 and the two runtime data checks have failing-first commits: before the VM, `FAIL: the VM is not implemented`; before
@@ -631,6 +659,7 @@ cmake -S native/hvf -B build-macos-hvf -G Ninja -DCMAKE_BUILD_TYPE=Release
 ninja -C build-macos-hvf
 ctest --test-dir build-macos-hvf -V               # hvf_* and native/translate's own tests
 python3 -I native/hvf/hvf_bench_run.py build-macos-hvf docs/macos/hvf/data 30 /path/to/thermal
+python3 -I native/hvf/hvf_vm_cost_run.py build-macos-hvf 30
 ```
 
 The last argument is optional: a program that prints the thermal state (`NSProcessInfo.thermalState`, 0 nominal to 3 critical).

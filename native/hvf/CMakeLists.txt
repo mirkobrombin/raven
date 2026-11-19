@@ -144,6 +144,11 @@ target_link_libraries(hvf_bench PRIVATE raven_hvf)
 add_dependencies(hvf_bench hvf_guests)
 raven_hvf_sign(hvf_bench)
 
+add_executable(hvf_vm_cost hvf_vm_cost.cpp)
+target_link_libraries(hvf_vm_cost PRIVATE raven_hvf)
+add_dependencies(hvf_vm_cost hvf_guests)
+raven_hvf_sign(hvf_vm_cost)
+
 add_executable(hvf_shared_test hvf_shared_test.cpp $<TARGET_OBJECTS:hvf_native_crc32_result>)
 target_link_libraries(hvf_shared_test PRIVATE raven_hvf)
 add_dependencies(hvf_shared_test hvf_guests)

@@ -1,0 +1,36 @@
+# 2026-11-19 08:30 CET, Apple M5, macOS 27.2.1, 30 fresh processes per configuration, configurations run one after another.
+# Taken with the first version of hvf_vm_cost.cpp (same stages; 'empty process' was a separate empty C program, 'vcpu_runtime' is thread_us).
+loadavg (3.52783203125, 18.341796875, 19.5048828125)
+empty process (N=30, us / KiB)
+  process wall     median    1904.3 min    1533.4 max  145795.2 stdev  25802.4
+bare hv_vm_create (N=30, us / KiB)
+  process wall     median    2818.1 min    2469.7 max    3535.7 stdev    275.0
+  create_us        median      20.6 min      18.5 max      32.4 stdev      3.8
+  fp0_kib          median    1696.0 min    1696.0 max    1696.0 stdev      0.0
+  fp1_kib          median    1808.0 min    1808.0 max    1808.0 stdev      0.0
+  destroy_us       median      18.5 min      15.1 max      39.1 stdev      4.4
+vm 256MiB (N=30, us / KiB)
+  process wall     median    3384.2 min    3177.3 max    3938.2 stdev    206.4
+  vm_us            median      30.7 min      26.6 max      52.0 stdev      5.3
+  load_us          median      54.2 min      49.8 max      76.8 stdev      6.4
+  vcpu_runtime_us  median     285.1 min     260.3 max     407.1 stdev     34.5
+  first_call_us    median      54.1 min      51.1 max      70.4 stdev      4.1
+  teardown_us      median      52.8 min      45.8 max      68.2 stdev      5.4
+  fp0_kib          median    1696.0 min    1680.0 max    1696.0 stdev      4.8
+  vm_kib           median    1872.0 min    1856.0 max    1872.0 stdev      4.8
+  loaded_kib       median    1936.0 min    1920.0 max    1936.0 stdev      2.9
+  vcpu_kib         median    2192.0 min    2176.0 max    2208.0 stdev      6.3
+  called_kib       median    2320.0 min    2288.0 max    2368.0 stdev     21.3
+vm 1024MiB (N=30, us / KiB)
+  process wall     median    3159.4 min    2975.6 max    3330.2 stdev     95.6
+  vm_us            median      31.6 min      28.5 max      37.2 stdev      1.8
+  load_us          median      49.9 min      47.6 max      57.2 stdev      1.8
+  vcpu_runtime_us  median     262.4 min     248.0 max     293.4 stdev     12.4
+  first_call_us    median      51.0 min      48.8 max      54.0 stdev      1.3
+  teardown_us      median      58.2 min      50.1 max      82.5 stdev      6.4
+  fp0_kib          median    1696.0 min    1696.0 max    1696.0 stdev      0.0
+  vm_kib           median    1888.0 min    1872.0 max    1888.0 stdev      8.0
+  loaded_kib       median    1952.0 min    1936.0 max    1952.0 stdev      8.0
+  vcpu_kib         median    2208.0 min    2192.0 max    2224.0 stdev      8.7
+  called_kib       median    2336.0 min    2304.0 max    2384.0 stdev     19.1
+loadavg (3.52783203125, 18.341796875, 19.5048828125)
