@@ -64,45 +64,62 @@ int main(int argc, char **argv)
 	translate::integer_oracle::Report report;
 	size_t fault_cases = 0, fault_failures = 0;
 	report.first = cases.data();
-	try {
-		hvf::Vm vm(256 << 20);
-		Snippets memory(vm);
-		const uint64_t buffer = vm.map_anywhere(hvf::Vm::page_size, hvf::Access::read_write);
-		uint8_t *buffer_alias = vm.host(buffer);
-		const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
-		translate::TranslatorOptions options;
-		options.ordering = translate::MemoryOrdering::hardware;
-		hvf::VmCodeCache cache(vm, 64 << 20, 1 << 20);
-		hvf::Vcpu vcpu(vm, true);
-		translate::Runtime runtime(memory, cache, options, &vcpu);
-		for (const translate::integer_oracle::Case &item : cases) {
-			const uint64_t address = memory.add(item.code);
-			translate::CpuState &state = runtime.state();
-			translate::integer_oracle::load(state, item.input);
-			std::memcpy(buffer_alias, item.input.buffer, sizeof item.input.buffer);
-			state.gpr[translate::rsp] = stack + (64 << 10);
-			state.gpr[translate::r15] = buffer;
-			const translate::RunResult result = runtime.call(address);
-			std::string problem;
-			if (result.reason != translate::ExitReason::returned)
-				problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
-			else
-				problem = translate::integer_oracle::compare(item, state, buffer_alias);
-			report.add(item, problem);
-		}
-		for (const translate::integer_oracle::FaultCase &item : translate::integer_oracle::fault_cases()) {
-			std::memset(buffer_alias, 0, 64);
-			const std::string problem = translate::integer_oracle::check_fault(item, memory.add(item.code), runtime.state(), buffer,
-				stack + (64 << 10), [&](uint64_t address) { return runtime.call(address); });
-			++fault_cases;
-			if (!problem.empty()) {
-				++fault_failures;
-				std::fprintf(stderr, "vCPU: fault case %s: %s\n", item.text, problem.c_str());
+	// A guest exception during a case (an address the translator got wrong, say) fails that case, with its text and what the vCPU
+	// reported, and the run goes on with a new VM from the next case.
+	size_t next = 0;
+	bool faults_done = false;
+	while (next < cases.size() || !faults_done) {
+		try {
+			hvf::Vm vm(256 << 20);
+			Snippets memory(vm);
+			const uint64_t buffer = vm.map_anywhere(hvf::Vm::page_size, hvf::Access::read_write);
+			uint8_t *buffer_alias = vm.host(buffer);
+			const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
+			translate::TranslatorOptions options;
+			options.ordering = translate::MemoryOrdering::hardware;
+			hvf::VmCodeCache cache(vm, 64 << 20, 1 << 20);
+			hvf::Vcpu vcpu(vm, true);
+			translate::Runtime runtime(memory, cache, options, &vcpu);
+			for (; next < cases.size(); ++next) {
+				const translate::integer_oracle::Case &item = cases[next];
+				const uint64_t address = memory.add(item.code);
+				translate::CpuState &state = runtime.state();
+				translate::integer_oracle::load(state, item.input);
+				std::memcpy(buffer_alias, item.input.buffer, sizeof item.input.buffer);
+				state.gpr[translate::rsp] = stack + (64 << 10);
+				state.gpr[translate::r15] = buffer;
+				translate::RunResult result;
+				try {
+					result = runtime.call(address);
+				} catch (const std::exception &error) {
+					report.add(item, error.what());
+					++next;
+					throw;
+				}
+				std::string problem;
+				if (result.reason != translate::ExitReason::returned)
+					problem = "did not return (exit " + std::to_string(static_cast<unsigned>(result.reason)) + ")";
+				else
+					problem = translate::integer_oracle::compare(item, state, buffer_alias);
+				report.add(item, problem);
+			}
+			for (const translate::integer_oracle::FaultCase &item : translate::integer_oracle::fault_cases()) {
+				std::memset(buffer_alias, 0, 64);
+				const std::string problem = translate::integer_oracle::check_fault(item, memory.add(item.code), runtime.state(), buffer,
+					stack + (64 << 10), [&](uint64_t address) { return runtime.call(address); });
+				++fault_cases;
+				if (!problem.empty()) {
+					++fault_failures;
+					std::fprintf(stderr, "vCPU: fault case %s: %s\n", item.text, problem.c_str());
+				}
+			}
+			faults_done = true;
+		} catch (const std::exception &error) {
+			if (next == 0 || next >= cases.size()) {
+				std::fprintf(stderr, "FAIL: %s\n", error.what());
+				return 1;
 			}
 		}
-	} catch (const std::exception &error) {
-		std::fprintf(stderr, "FAIL: %s\n", error.what());
-		return 1;
 	}
 	report.print("vCPU");
 	std::printf("vCPU, faults: %zu cases, %zu failures\n", fault_cases, fault_failures);
