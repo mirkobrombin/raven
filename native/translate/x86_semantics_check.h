@@ -245,7 +245,8 @@ inline std::string compare(const Case &item, const CpuState &state, const uint8_
 // Instructions that stop translated code: #DE from div and idiv at every width (a zero divisor, a quotient too large), int 0x29,
 // int3 and ud2. Each is code that ends in ret, the registers it starts with and the stop it must make: the exit, the FaultKind for a
 // fault exit, at the offset of the stopping instruction, with every register and flag as it was before it (prefix, when not empty,
-// is an instruction before it whose effect stays: then only the registers are compared).
+// is an instruction before it that changes registers: then those are not compared; flags, when given, are what an instruction before
+// it left).
 struct FaultCase {
 	const char *text;
 	std::vector<uint8_t> code;
@@ -254,6 +255,8 @@ struct FaultCase {
 	FaultKind kind;
 	unsigned offset;
 	bool prefix = false;
+	// The flags at the stop: those the case starts with, or these.
+	uint64_t flags = ~0ull;
 };
 
 inline std::vector<FaultCase> fault_cases()
@@ -282,9 +285,10 @@ inline std::vector<FaultCase> fault_cases()
 		{"idiv cl, cl = 0", {0xf6, 0xf9, 0xc3}, {{rax, 0x1234}, {rcx, 0}}, fault, de, 0},
 		// div qword ptr [r15], whose eight bytes are zero.
 		{"div qword ptr [r15] = 0", {0x49, 0xf7, 0x37, 0xc3}, {{rax, 1}, {rdx, 0}}, fault, de, 0},
-		// cmp rax, rbx, then div rcx: the cmp's result stays, the fault is at the div.
-		{"cmp rax, rbx; div rcx, rcx = 0", {0x48, 0x39, 0xd8, 0x48, 0xf7, 0xf1, 0xc3}, {{rax, 1}, {rbx, 2}, {rcx, 0}}, fault, de, 3,
-			true},
+		// cmp rax, rbx, then div rcx and a cmp that would redefine every flag: the fault is at the div and shows the first cmp's
+		// flags (1 - 2: CF, PF, AF and SF).
+		{"cmp rax, rbx; div rcx, rcx = 0; cmp rax, rax", {0x48, 0x39, 0xd8, 0x48, 0xf7, 0xf1, 0x48, 0x39, 0xc0, 0xc3},
+			{{rax, 1}, {rbx, 2}, {rcx, 0}}, fault, de, 3, false, CF | PF | AF | SF},
 		{"int 0x29", {0xb9, 0x07, 0x00, 0x00, 0x00, 0xcd, 0x29, 0xc3}, {}, fault, FaultKind::fast_fail, 5, true},
 		{"int3", {0xcc, 0xc3}, {}, ExitReason::breakpoint, FaultKind::instruction, 0},
 		{"ud2", {0x0f, 0x0b, 0xc3}, {}, fault, FaultKind::instruction, 0},
@@ -322,17 +326,16 @@ std::string check_fault(const FaultCase &item, uint64_t address, CpuState &state
 			static_cast<unsigned long long>(item.kind));
 		return text;
 	}
-	if (item.prefix)
-		return {};
-	for (unsigned r = 0; r < 16; ++r)
+	for (unsigned r = 0; r < 16 && !item.prefix; ++r)
 		if (state.gpr[r] != registers[r]) {
 			std::snprintf(text, sizeof text, "register %u is %#llx, was %#llx", r, static_cast<unsigned long long>(state.gpr[r]),
 				static_cast<unsigned long long>(registers[r]));
 			return text;
 		}
-	if ((flags_of(state) & all_flags) != flags.flags) {
-		std::snprintf(text, sizeof text, "flags %#llx, were %#llx", static_cast<unsigned long long>(flags_of(state)),
-			static_cast<unsigned long long>(flags.flags));
+	const uint64_t expected = item.flags == ~0ull ? flags.flags : item.flags;
+	if ((flags_of(state) & all_flags) != expected) {
+		std::snprintf(text, sizeof text, "flags %#llx, expected %#llx", static_cast<unsigned long long>(flags_of(state)),
+			static_cast<unsigned long long>(expected));
 		return text;
 	}
 	return {};
