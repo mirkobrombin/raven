@@ -2,14 +2,14 @@
 
 `native/translate/` translates VEX-encoded instructions: the VEX forms of SSE to SSE4.2 at 128 and 256 bits, vzeroupper and
 vzeroall, the 128-bit lane moves, the broadcasts, vtestps and vtestpd, vpermilps and vpermilpd, vblendv, vmaskmov, the AVX
-compare predicates, and FMA3; xsave and xrstor run in the runtime. cpuid reports AVX and FMA; AVX2 is not translated yet. This note records what x64 code contains of AVX, how CRT code chooses AVX
+compare predicates, FMA3 and AVX2 (gathers included); xsave and xrstor run in the runtime. cpuid reports AVX, FMA and AVX2. This note records what x64 code contains of AVX, how CRT code chooses AVX
 paths, what cpuid and xgetbv report, the YMM state, the tests against Rosetta and an x86 CPU, a short performance check and the open
 items. SSE is in [sse.md](sse.md), x87 in [x87.md](x87.md).
 
 Labels are those of [translation.md](translation.md): **PROVEN** (a command produced the result), **INFERRED** (derived; the missing
 check is named), **NOT verified**. MacBook Air M5 (Mac17,3), macOS 27.2.1, llvm-mingw 20261104. The x86 reference is an AMD EPYC
 (GitHub Linux x86_64 runners, the private raven-macos-bench repository: a 9V45 for the first families, a 7763 and a 9V74 for the
-later ones; `testdata/x86_avx_silicon.txt` names the runs) and, for the `fma addsub` family alone, an Intel Xeon Platinum 8573C;
+later ones; `testdata/x86_avx_silicon.txt` names the runs; Intel Xeon runs are recorded where they differ);
 Rosetta runs the same cases on every build, and where the two disagree the tests take the x86 CPU's result.
 
 ## Corpus
@@ -76,7 +76,7 @@ from one table and goes on after the instruction, in this process and in a vCPU 
   | SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT | 6 of 6, 7 of 7, 22 of 22, 4 of 4, 1 of 1 | none: reported |
   | AVX, with XSAVE (xsave, xrstor) | 53 of 53, 2 of 2 | none: reported |
   | FMA | 96 of 96 | none: reported |
-  | AVX2 | 10 of 30 | vpshufb ymm, vpermq, vpermd, vpermps, vpermpd, vpblendd, vpblendvb ymm, the variable shifts, vpmaskmovd, gathers, vpmaxsd ymm, vpmovzxbd, vpalignr ymm, vmpsadbw, vmovntdqa |
+  | AVX2 | 30 of 30 | none: reported |
   | F16C, BMI1, BMI2, LZCNT, MOVBE, CMPXCHG16B | 0 of each | all |
 - **The x86-64 baseline is always reported** (psABI x86-64-v1: FPU, CX8, CMOV, MMX, FXSR, SSE, SSE2; long mode and syscall in
   0x80000001), because x64 code may assume it without asking. MMX, fxsave and cmpxchg8b are not translated yet (open items).
@@ -88,10 +88,10 @@ from one table and goes on after the instruction, in this process and in a vCPU 
   and no XCR0 bit above 2 is ever set.
 - Vendor "GenuineIntel" (as Rosetta), family 6, highest basic leaf 0xd, extended 0x80000008, brand "Raven x86-64 translator".
 
-**What it reports today: the baseline, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AVX (with XSAVE and OSXSAVE) and FMA; no AVX2,
-F16C or BMI** (PROVEN, `translate_cpuid` and `hvf_cpuid`, 0 failures: leaf 1 ECX 0x1c981201, EDX 0x07808101; leaf 7 EBX 0;
-xgetbv(0) 7). Each was switched on in a commit of its own once its samples translated and its oracle families passed in this process
-and in a vCPU against an x86 CPU: SSE4.2 `c332ddac`, AVX `4d24ded4`, FMA `411a6fd0`. The model requires each SSE level to come with
+**What it reports today: the baseline, SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, AVX (with XSAVE and OSXSAVE), FMA and AVX2; no
+F16C, BMI1, BMI2 or LZCNT** (PROVEN, `translate_cpuid` and `hvf_cpuid`, 0 failures: leaf 1 ECX 0x1c981201, EDX 0x07808101; leaf 7
+EBX 0x20; xgetbv(0) 7). Each was switched on in a commit of its own once its samples translated and its oracle families passed in
+this process and in a vCPU against an x86 CPU: SSE4.2 `c332ddac`, AVX `4d24ded4`, FMA `411a6fd0`, AVX2 `52c59c97`. The model requires each SSE level to come with
 the ones before it, AVX with SSE4.2, and XSAVE's samples to translate whenever XSAVE is reported, which it is with AVX: so AVX also
 needed xsave and xrstor (below). The model with every feature on is checked for the same consistency (`every feature on, model`, 0
 failures).
@@ -157,18 +157,23 @@ failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt
 | Masked moves | vmaskmovps, vmaskmovpd (load and store), vmaskmovdqu | a branch per element around its access, so a masked-off element is never touched; a store probes the bytes it will write first |
 | Conversions at 256 bits | vcvtps2pd, vcvtdq2pd ymm from 16 bytes; vcvtpd2ps, vcvtpd2dq, vcvttpd2dq xmm from 32 | the SSE conversion on each half |
 | Approximations | rcpps, rsqrtps, rcpss, rsqrtss and their VEX forms | exact fdiv (and fsqrt), denormal inputs to signed infinities, tiny reciprocals to signed zeros, FPSR put back |
+| AVX2, within lanes | the 256-bit integer forms of maps 0F 38 and 0F 3A, vpblendd (as blendps) | the SSE code per half; vmpsadbw takes the upper half's offsets from imm8 bits 5:3 |
+| AVX2, widening | vpmovsx, vpmovzx into a YMM register | the SSE extension on each half of the source |
+| AVX2, across lanes | vpermq, vpermpd (imm8), vpermd, vpermps (indices) | ins of quadwords; tbl over a table of two registers (v20, v21) with byte indices from the dword indices |
+| AVX2, variable shifts | vpsllvd, vpsllvq, vpsrlvd, vpsrlvq, vpsravd | ushl or sshl by the (negated) count; a count of the width or more gives 0 (masked) or the sign (vpsravd's count capped at 31) |
+| AVX2, masked moves | vpmaskmovd, vpmaskmovq | as vmaskmovps and vmaskmovpd |
+| AVX2, gathers | vpgatherdd, dq, qd, qq, vgatherdps, dpd, qps, qpd (VSIB) | one element at a time in order: test the mask's sign, load, write the element and clear its mask bit; then the whole mask cleared |
 
 - **Lane crossing:** the per-half lowering is right only for instructions that work within 128-bit lanes. vshufpd takes imm bits 3:2
   for the upper lane (a first run failed 12 shuffle cases without it). The shifts by an XMM count use the same low 128 bits in both
-  halves. The width-changing conversions at 256 bits have their own lowering (above); vpermq, vpermd and vpermps (AVX2) are not
-  translated.
+  halves. The width-changing conversions, the AVX2 extensions and permutes and vmpsadbw have their own lowering (above).
 - **Not SME.** Plain NEON pairs; no streaming mode was tried (NOT measured).
 - **The decoder** gives VEX semantics to these and prints them as LLVM does: 20000 random VEX encodings join the decoder corpus, 0
   print differently from LLVM or decode where LLVM rejects them (PROVEN, `x86_decoder_test`: `vex_instances.o: 25765 instructions,
   17900 with semantics (69.5%), 10690 rejected by LLVM, 0 failures`; the count includes what LLVM decodes between them).
 - `translator_version` is 15 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
   10: the string compares; 11: the VEX forms of SSSE3 to SSE4.2; 12: the rest of AVX but the approximations; 13: the
-  approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor).
+  approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor; 16: AVX2 but the gathers; 17: the gathers).
 
 ## Tests
 
@@ -176,11 +181,16 @@ failing, then `cdaca813`). Not compared with an x86 CPU (NOT verified); xsaveopt
   VEX forms of SSSE3 to SSE4.2, `ab8e4123`), `avx ops` 1500 (vtestps, vtestpd, vpermilps, vpermilpd, vblendv, vcmp with predicates
   0-31, the 256-bit conversions, vmaskmovps, vmaskmovpd and vmaskmovdqu, `941d97f8`; rdi cleared after vmaskmovdqu in `a34898f7`,
   since it held an address of the buffer that differs between machines), `approximations` 600 (`41695b18`, compared within 2^-11:
-  x86 promises 1.5 * 2^-12 and its CPUs differ in the bits), `fma addsub` 600 (`e03e7d4e`). PROVEN at the end (`ctest`):
-  `translate_x86_avx` 28376 cases (14188 in each memory ordering), 0 failures; `hvf_avx` 14188 cases in a vCPU, 0 failures.
+  x86 promises 1.5 * 2^-12 and its CPUs differ in the bits), `fma addsub` 600 (`e03e7d4e`), `avx2` 1500 (`b8b9d5ed`; the
+  variable shifts get counts around the element width), `gathers` 800 (`e6a49d8e`; every form and width, every scale, indices
+  inside the buffer, some negative, random mask bits). PROVEN at the end (`ctest`): `translate_x86_avx` 32976 cases (16488 in each
+  memory ordering), 0 failures; `hvf_avx` 16488 cases in a vCPU, 0 failures.
 - **Masked moves and faults** (`hvf_avx_fault`, in a vCPU, test `54dd3d59` first, then `d4090f9b`): vmaskmovps with the elements on an
   unmapped page masked off neither faults nor moves them, and moves the others (load and store); with an element on the unmapped
-  page selected it faults with no register or byte changed. PROVEN, 7 scenarios, 0 failures.
+  page selected it faults with no register or byte changed. The same for vpmaskmovd (`51a6c6ec`, added after its implementation)
+  and vpgatherdd (`e6a49d8e` first): with the unmapped elements masked off it gathers the others, keeps the masked-off ones and
+  clears the mask; with one selected it faults with nothing changed. PROVEN, 12 scenarios, 0 failures. A gather that faults after
+  some elements (x86 keeps those) was not tested: the fault here is at element 0.
 - **Later families** (after the FMA3 edges, so the earlier cases keep their numbers): sse3 500 (legacy and VEX at 128 and 256
   bits), ssse3 500, sse41 1000 (every SSE4.1 instruction, ptest followed by a setcc), sse42 400 (pcmpgtq, crc32 of every width),
   popcnt 300 (16, 32 and 64 bits, then a setcc). Each was committed failing (`0186a0ac`, `88266640`, `ad08e950`, `ecc31d0b`,
@@ -225,9 +235,12 @@ Platinum 8573C; PROVEN with `silicon_overrides.py`, the file keeps the overrides
 - `approximations`: the EPYC 7763 differs from Rosetta in 358 of 600 cases (the result bits); the Xeon 8573C agrees with Rosetta in
   all 600 (so Rosetta's tables match that Intel core's: INFERRED from that agreement). The translator, which divides exactly, is
   within 2^-11 of the EPYC in every case.
-- `fma addsub`: run on the Xeon only (no AMD runner came up for it): 8 cases differ, all in MXCSR, where Rosetta sets IE, UE or PE
-  and the Xeon does not; the translator matches the Xeon.
-- `strings`: the EPYC 7763 agrees with Rosetta in all 1500, as the Xeon 8370C did. One dpps case (#7786, NaN lanes) differs
+- `fma addsub`: 8 cases differ, all in MXCSR, where Rosetta sets IE, UE or PE and the Xeon 8573C and the EPYC 9V74 do not; the
+  translator matches them.
+- `strings`: the EPYC 7763 agrees with Rosetta in all 1500, as the Xeon 8370C did.
+- `avx2` (EPYC 9V74, run 44505099547): 4 cases differ, each a vpsllvq or vpsrlvq whose count has bits set above bit 31: Rosetta
+  shifts by the low 32 bits, the EPYC by all 64 (so by 64 or more: 0), as the SDM says; the translator matches the EPYC. The 9V74
+  also gave the same fma addsub MXCSR values as the Xeon. `gathers` (run 44505811968): all 800 agree with Rosetta. One dpps case (#7786, NaN lanes) differs
   between the Intel runs and the AMD ones; the AMD result is kept.
 
 **The SSE3 to SSE4.2 families** (raven-macos-bench runs 44498540080, an AMD EPYC 7763, and 44499294363, an AMD EPYC 9V74; the file
@@ -287,14 +300,15 @@ fsaxpy now has one more register move per instruction (NOT measured since). Load
 
 ## Notepad++ with these features
 
-With AVX and FMA reported (and AVX2 not), the MSVC CRT's level check (8 cpuid and 2 xgetbv sites, above) can now see OSXSAVE, AVX
-and xgetbv(0) = 7; which level it stores, and so which routines it picks, was not read (proprietary code, CONTRIBUTING.md): INFERRED
-that its AVX-level paths become reachable and its AVX2 ones stay off, as leaf 7 EBX has no AVX2 bit. What the translator takes of
-Notepad++'s VEX code, linearly over `.text` (PROVEN, `x86_decoder_test` on a corpus of `notepad++.exe` alone, `be342dab`):
-`960 VEX instructions, 895 translated (93.2%)`; the 65 left are AVX2 (vpmaskmovd 13, vpblendvb ymm 10, vpermd 8, vpsllvd 6,
-vpmaxsd ymm 5, vpmovzxwd ymm 4, vpcmpeqq ymm 4, vpermq 3, and fewer) and BMI2's shlx 2, all behind bits not reported. Its legacy
-SSE and SSE2 are 40832 of 40832 translated, its SSE4.2 string compares too. Running Notepad++ under the translator was not done: it
-needs the PE loaded with its imports by the port (NOT verified).
+With AVX, FMA and AVX2 reported, the MSVC CRT's level check (8 cpuid and 2 xgetbv sites, above) can now see OSXSAVE, AVX, xgetbv(0)
+= 7 and leaf 7's AVX2 bit; which level it stores, and so which routines it picks, was not read (proprietary code, CONTRIBUTING.md):
+INFERRED that its AVX and AVX2 paths become reachable, and that its AVX-512 path does not (no AVX-512 bit). What the translator takes
+of Notepad++'s VEX code, linearly over `.text` (PROVEN, `x86_decoder_test` on a corpus of `notepad++.exe` alone): before the AVX2
+work, `960 VEX instructions, 895 translated (93.2%)` (`be342dab`); now `960 VEX instructions, 958 translated (99.8%); without:
+shlx 2`. shlx is BMI2, which is not reported: if the code behind the CRT's AVX2 level runs it without testing BMI2, it ends its
+block as unsupported (whether it does was not read; an open item). Its legacy SSE and SSE2 are 40832 of 40832 translated, its
+SSE4.2 string compares too. Running Notepad++ under the translator was not done: it needs the PE loaded with its imports by the
+port (NOT verified).
 
 ## Open items
 
@@ -302,13 +316,11 @@ needs the PE loaded with its imports by the port (NOT verified).
   PF_SSSE3_INSTRUCTIONS_AVAILABLE, PF_SSE4_1_INSTRUCTIONS_AVAILABLE, PF_SSE4_2_INSTRUCTIONS_AVAILABLE, PF_AVX_INSTRUCTIONS_AVAILABLE,
   ...) and KUSER_SHARED_DATA's ProcessorFeatures and XState (EnabledFeatures 7, the YMM area) should report what cpuid now reports.
   Not done here (native/nt is out of this branch's scope): an item for a design review.
-- **AVX2** (10 of 30 samples): the 256-bit integer forms of maps 0F 38 and 0F 3A (vpshufb, vpmaxsd, vpalignr, vmpsadbw with its
-  upper-lane imm8 bits, vpblendvb, vpmovzx and vpmovsx with their wider sources, vmovntdqa), vpermq, vpermd, vpermps, vpermpd,
-  vpblendd, vpsllvd, vpsrlvq, vpsravd, vpmaskmovd and vpmaskmovq (the masked-move code above fits), and the gathers (VSIB decoding;
-  each element completes and clears its mask bit before the next, so a fault leaves the done ones done). Then AVX2 in cpuid.
+- **BMI2 next to AVX2:** Notepad++ has 2 shlx; BMI1 and BMI2 (and LZCNT) are not translated or reported. Code that assumes BMI2
+  with AVX2 (Haswell brought both) would stop there.
+- **A gather that faults after some elements** is not tested (see Tests); nor are 32-bit addresses or fs/gs with VSIB.
 - **xsave and xrstor** are not compared with an x86 CPU; xsaveopt, xsavec, xsaves, fxsave and fxrstor are not translated; CONTEXT
   has no YMM part yet.
-- **fma addsub on AMD:** its family ran on an Intel core only.
 - **More NaN cases** for VEX (3 lanes with an SNaN and a QNaN) and packed FMA3 edges (ps, pd).
 - **Addressing** of 32-byte operands beyond `[r15 + displacement]` (see Tests).
 - **Not translated:** F16C (0 in the corpus), BMI1, BMI2, LZCNT, vldmxcsr's reserved bits (as ldmxcsr), legacy maskmovdqu.
