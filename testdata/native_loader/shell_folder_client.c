@@ -16,7 +16,8 @@ int raven_entry(void)
 	lstrcpyW(file, directory);
 	lstrcatW(file, L"raven-folder-test.txt");
 	HANDLE handle = CreateFileW(file, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (handle == INVALID_HANDLE_VALUE)
+	DWORD written = 0;
+	if (handle == INVALID_HANDLE_VALUE || !WriteFile(handle, "raven", 5, &written, NULL) || written != 5)
 		return 2;
 	CloseHandle(handle);
 
@@ -182,6 +183,47 @@ int raven_entry(void)
 		return 36;
 	if (item_data(folder, (PCUITEMID_CHILD)child, SHGDFIL_FINDDATA, &data, sizeof data - 1) != E_INVALIDARG)
 		return 37;
+
+	/* The item of a file answers IShellItem2 with what the file system keeps for it, and a property it does not have is refused. */
+	static const PROPERTYKEY size_key = {{0xb725f130, 0x47ef, 0x101a, {0xa5, 0xf1, 0x02, 0x60, 0x8c, 0x9e, 0xeb, 0xac}}, 12};
+	static const PROPERTYKEY modified_key = {{0xb725f130, 0x47ef, 0x101a, {0xa5, 0xf1, 0x02, 0x60, 0x8c, 0x9e, 0xeb, 0xac}}, 14};
+	IShellItem2 *item2 = NULL;
+	ULONGLONG size = 0;
+	FILETIME modified = {0, 0};
+	WCHAR *display = NULL;
+	ULONG unknown = 0;
+	if (SHCreateItemFromParsingName(file, NULL, &IID_IShellItem2, (void **)&item2) != S_OK || !item2)
+		return 38;
+	if (IShellItem2_GetUInt64(item2, &size_key, &size) != S_OK || size != 5)
+		return 39;
+	if (IShellItem2_GetFileTime(item2, &modified_key, &modified) != S_OK || !modified.dwHighDateTime)
+		return 40;
+	if (IShellItem2_GetString(item2, &name_key, &display) != S_OK || lstrcmpiW(display, name))
+		return 41;
+	CoTaskMemFree(display);
+	if (SUCCEEDED(IShellItem2_GetUInt32(item2, &unknown_key, &unknown)) || IShellItem2_Update(item2, NULL) != S_OK)
+		return 42;
+	store = NULL;
+	if (IShellItem2_GetPropertyStore(item2, GPS_DEFAULT, &IID_IPropertyStore, (void **)&store) != S_OK ||
+		IPropertyStore_GetValue(store, &size_key, &value) != S_OK || value.vt != VT_UI8 || value.uhVal.QuadPart != 5)
+		return 43;
+	IPropertyStore_Release(store);
+	IShellItem2_Release(item2);
+	/* The same for the folder, as WPF's file dialogs ask of the folder they start in. */
+	if (SHCreateItemFromParsingName(directory, NULL, &IID_IShellItem2, (void **)&item2) != S_OK || !item2)
+		return 44;
+	IShellItem2_Release(item2);
+	/* The save dialog names the window its prompts belong to only while it is shown. */
+	IFileSaveDialog *save = NULL;
+	IOleWindow *window = NULL;
+	HWND owner = (HWND)1;
+	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	if (CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileSaveDialog, (void **)&save) != S_OK || !save)
+		return 45;
+	if (IFileSaveDialog_QueryInterface(save, &IID_IOleWindow, (void **)&window) != S_OK || IOleWindow_GetWindow(window, &owner) != E_FAIL || owner)
+		return 46;
+	IOleWindow_Release(window);
+	IFileSaveDialog_Release(save);
 
 	ILFree((PIDLIST_RELATIVE)first);
 	ILFree(clone);
