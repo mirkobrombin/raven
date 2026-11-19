@@ -149,6 +149,24 @@ if(APPLE)
     add_test(NAME translate_x86_sse COMMAND x86_sse_test ${SEMANTICS}/sse_oracle.bin)
     set_tests_properties(translate_x86_sse PROPERTIES TIMEOUT 120)
 
+    # The same for AVX, AVX2 and FMA3 (x86_avx.py), held to an x86 CPU where Rosetta differs (testdata/x86_avx_silicon.txt); also
+    # run in a vCPU by native/hvf's hvf_avx_test.
+    add_custom_command(OUTPUT ${SEMANTICS}/x86_avx_cases.s ${SEMANTICS}/x86_avx_cases.h
+        COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/x86_avx.py ${SEMANTICS}/x86_avx_cases.s ${SEMANTICS}/x86_avx_cases.h
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x86_avx.py ${CMAKE_CURRENT_SOURCE_DIR}/x86_sse.py VERBATIM)
+    add_custom_command(OUTPUT ${SEMANTICS}/avx_oracle.bin
+        COMMAND ${CMAKE_C_COMPILER} -arch x86_64 -O1 -I ${SEMANTICS} -o ${SEMANTICS}/x86_avx_oracle
+            ${CMAKE_CURRENT_SOURCE_DIR}/x86_avx_oracle.c ${SEMANTICS}/x86_avx_cases.s
+        COMMAND ${SEMANTICS}/x86_avx_oracle ${SEMANTICS}/avx_oracle.bin
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/x86_avx_oracle.c ${SEMANTICS}/x86_avx_cases.s ${SEMANTICS}/x86_avx_cases.h VERBATIM)
+    add_custom_target(x86_avx_oracle ALL DEPENDS ${SEMANTICS}/avx_oracle.bin)
+    add_executable(x86_avx_test x86_avx_test.cpp)
+    target_link_libraries(x86_avx_test PRIVATE raven_translate)
+    add_dependencies(x86_avx_test x86_avx_oracle)
+    add_test(NAME translate_x86_avx COMMAND x86_avx_test ${SEMANTICS}/avx_oracle.bin
+        ${CMAKE_CURRENT_SOURCE_DIR}/testdata/x86_avx_silicon.txt)
+    set_tests_properties(translate_x86_avx PROPERTIES TIMEOUT 120)
+
     # The same for x87 (x87.py), held to an x86 CPU where Rosetta differs (testdata/x87_silicon.txt); also run in a vCPU by
     # native/hvf's hvf_x87_test.
     add_custom_command(OUTPUT ${SEMANTICS}/x87_cases.s ${SEMANTICS}/x87_cases.h

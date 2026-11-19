@@ -1,0 +1,1 @@
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what the x86 CPU left (written by docs/macos/avx-data/silicon_overrides.py).

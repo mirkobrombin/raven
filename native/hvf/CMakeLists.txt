@@ -219,6 +219,15 @@ raven_hvf_sign(hvf_sse_test)
 add_test(NAME hvf_sse COMMAND hvf_sse_test ${CMAKE_CURRENT_BINARY_DIR}/translate/semantics/sse_oracle.bin)
 set_tests_properties(hvf_sse PROPERTIES TIMEOUT 120)
 
+# The AVX oracle's cases in a vCPU, with the same silicon results as translate_x86_avx.
+add_executable(hvf_avx_test hvf_avx_test.cpp)
+target_link_libraries(hvf_avx_test PRIVATE raven_hvf)
+add_dependencies(hvf_avx_test x86_avx_oracle)
+raven_hvf_sign(hvf_avx_test)
+add_test(NAME hvf_avx COMMAND hvf_avx_test ${CMAKE_CURRENT_BINARY_DIR}/translate/semantics/avx_oracle.bin
+    ${CMAKE_CURRENT_SOURCE_DIR}/../translate/testdata/x86_avx_silicon.txt)
+set_tests_properties(hvf_avx PROPERTIES TIMEOUT 120)
+
 # The x87 oracle's cases in a vCPU, with the same silicon results as translate_x87.
 add_executable(hvf_x87_test hvf_x87_test.cpp)
 target_link_libraries(hvf_x87_test PRIVATE raven_hvf)

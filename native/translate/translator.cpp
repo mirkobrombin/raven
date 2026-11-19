@@ -112,6 +112,9 @@ bool supported(const Instruction &instruction)
 	// cs:, ds:, es: and ss: change nothing in 64-bit mode (compilers pad with cs: nops); fs: and gs: add their base.
 	if (instruction.rep || instruction.repne)
 		return false;
+	// A VEX form shares its SSE mnemonic but not its operand order.
+	if (instruction.vex)
+		return false;
 	const Operand &first = instruction.operands[0];
 	const uint8_t size = first.size;
 	switch (instruction.mnemonic) {
