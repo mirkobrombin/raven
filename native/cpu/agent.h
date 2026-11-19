@@ -42,6 +42,9 @@ namespace service_block {
 constexpr size_t state = 0, number = 1, arguments = 2, result = 8;
 // The agent's own call that starts a guest thread (see agent.S): the top of its stack and its block.
 constexpr uint64_t start_thread = 1000;
+// The agent's own call that starts the guest's warden (see agent.S), which ends the guest's process group once the runtime's process,
+// named by its id, ends.
+constexpr uint64_t start_warden = 1001;
 constexpr uint32_t idle = 0, waiting = 1, done = 2;
 }
 

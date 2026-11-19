@@ -716,6 +716,8 @@ struct NativeProcess::State {
 	// The segment registers the service thread has and passes on, and the size ptrace gives the extended state.
 	agent::Segments agent_segments;
 	size_t agent_xstate = 0;
+	// The guest's thread that ends it once the runtime ends.
+	pid_t agent_warden = 0;
 	// The runtime's system calls the service thread made in place of a stopped task.
 	std::atomic<uint64_t> agent_calls{0};
 	struct SharedView {
@@ -1371,6 +1373,9 @@ void NativeProcess::hand_to_agent()
 	const pid_t task = child.pid;
 	if (agent::held(task))
 		throw std::runtime_error("the task is already held by the agent");
+	// No tracer ends a task in the agent's hands with the runtime (PTRACE_O_EXITKILL): the guest's warden does, before any task leaves.
+	if (!state->agent_warden)
+		state->agent_warden = pid_t(agent_syscall(agent::service_block::start_warden, uint64_t(::getpid())));
 	const auto room = agent_room();
 	const uint64_t block_guest = room.block_guest;
 	// The alternate stack and the dispatch belong to the thread: the task sets them up itself, through the gate.

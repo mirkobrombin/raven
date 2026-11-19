@@ -35,6 +35,14 @@
 	.set PR_SET_SYSCALL_USER_DISPATCH, 59
 	.set PR_SYS_DISPATCH_ON, 1
 	.set AGENT_THREAD, 1000
+	.set AGENT_WARDEN, 1001
+	.set SYS_POLL, 7
+	.set SYS_EXIT, 60
+	.set SYS_KILL, 62
+	.set SYS_PIDFD_OPEN, 434
+	.set SIGKILL, 9
+	.set POLLIN, 1
+	.set WARDEN_CLONE, 0x00850f00	/* the service thread's own: a thread of the guest, untraced */
 	.set THREAD_CLONE, 0x00048700	/* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_PARENT | CLONE_SYSVSEM, no exit signal */
 
 	.global raven_agent, raven_agent_end, raven_agent_handler, raven_agent_restorer
@@ -115,7 +123,12 @@ raven_agent_restorer:
  * started), so the runtime reaps it, and has the signal handlers of this thread's process. The alternate stack and Syscall User
  * Dispatch are not inherited: the thread sets them up itself from its block (the stack_t at word 504, the range the dispatch lets
  * through at words 508 and 509, the selector in word 407), leaves their results in words 510 and 511 and stops on its breakpoint,
- * held in the handler until the runtime gives it a context. The result is the thread's id. */
+ * held in the handler until the runtime gives it a context. The result is the thread's id.
+ *
+ * Number 1001 starts the guest's warden, with argument 2 the runtime's process id: a thread of the guest that waits for the runtime to
+ * end and then ends the guest's whole process group, which no tracer does for tasks in the agent's hands. It waits on a pidfd, which
+ * tells when the runtime's process ends rather than the thread that started the guest. It uses no stack and takes no signal. The
+ * result is the warden's id, or the error of opening the pidfd. Words 10 to 11 of the block are its own. */
 	.global raven_agent_service
 raven_agent_service:
 	mov rbx, rdi
@@ -141,6 +154,8 @@ raven_agent_service:
 	mov r9, qword ptr [rbx + 56]
 	cmp rax, AGENT_THREAD
 	je short 10f
+	cmp rax, AGENT_WARDEN
+	je 12f
 	syscall
 11:	mov qword ptr [rbx + 64], rax
 	mov dword ptr [rbx], 2
@@ -186,6 +201,47 @@ raven_agent_service:
 	.global raven_agent_born
 raven_agent_born:
 	int3
+	ud2
+12:	xor esi, esi
+	mov eax, SYS_PIDFD_OPEN
+	syscall
+	test rax, rax
+	js 11b
+	mov dword ptr [rbx + 88], eax
+	mov dword ptr [rbx + 92], POLLIN
+	mov qword ptr [rbx + 80], -1
+	mov edi, WARDEN_CLONE
+	xor esi, esi
+	xor edx, edx
+	xor r10d, r10d
+	xor r8d, r8d
+	mov eax, SYS_CLONE
+	syscall
+	test rax, rax
+	jnz 11b
+	/* The warden shares the service thread's stack pointer: no signal may run a handler on it. */
+	mov edi, SIG_SETMASK
+	lea rsi, [rbx + 80]
+	xor edx, edx
+	mov r10d, 8
+	mov eax, SYS_RT_SIGPROCMASK
+	syscall
+13:	lea rdi, [rbx + 88]
+	mov esi, 1
+	mov edx, -1
+	mov eax, SYS_POLL
+	syscall
+	test rax, rax
+	jz short 13b
+	/* A failed wait leaves the guest alone: only the runtime's end may end it. */
+	js short 14f
+	xor edi, edi
+	mov esi, SIGKILL
+	mov eax, SYS_KILL
+	syscall
+14:	xor edi, edi
+	mov eax, SYS_EXIT
+	syscall
 	ud2
 
 /* Starts the service thread: the runtime runs this from a stopped task with RDI the service block and RSI the top of the thread's

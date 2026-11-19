@@ -12,6 +12,8 @@
 #include <string>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 // The agent in a guest process: its service thread starts untraced inside the guest and makes the runtime's system calls there, while
@@ -164,18 +166,65 @@ static void held(const std::string &bootstrap)
 	check(status_field(guest, "TracerPid") == 0, "the guest's task was traced again");
 }
 
+// A guest out of ptrace ends with the runtime even when the runtime dies without its cleanup, as no tracer ends it then.
+static void orphaned(const std::string &bootstrap)
+{
+	int channel[2];
+	check(pipe(channel) == 0, "no pipe for the dying runtime");
+	const pid_t runtime = fork();
+	check(runtime >= 0, "cannot start the dying runtime");
+	if (runtime == 0) {
+		close(channel[0]);
+		pid_t guest = 0;
+		try {
+			setenv("RAVEN_AGENT", "1", 1);
+			setenv("RAVEN_AGENT_HOLD", "1", 1);
+			const std::array<raven::LoadedImage *, 0> images{};
+			// Left to die with the process: no destructor runs.
+			auto *process = new raven::NativeProcess(images, bootstrap, std::chrono::seconds(2), raven::NativeMode::x64);
+			guest = pid_t(status_field(process->agent_task(), "Tgid"));
+		} catch (...) {
+		}
+		(void)!write(channel[1], &guest, sizeof guest);
+		_exit(0);
+	}
+	close(channel[1]);
+	pid_t guest = 0;
+	const bool told = read(channel[0], &guest, sizeof guest) == sizeof guest && guest > 0;
+	close(channel[0]);
+	int status = 0;
+	waitpid(runtime, &status, 0);
+	check(told, "the dying runtime started no guest out of ptrace");
+	const auto ended = [&] {
+		std::ifstream file("/proc/" + std::to_string(guest) + "/status");
+		for (std::string line; std::getline(file, line);) {
+			if (line.rfind("State:", 0) == 0)
+				return line.find('Z') != std::string::npos || line.find('X') != std::string::npos;
+		}
+		return true;
+	};
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	while (!ended() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	if (!ended()) {
+		kill(-getpgid(guest), SIGKILL);
+		throw std::runtime_error("a guest out of ptrace outlived its runtime");
+	}
+}
+
 int main(int argc, char **argv)
 {
 	try {
 		if (argc != 2)
 			throw std::runtime_error("bootstrap path required");
+		orphaned(argv[1]);
 		agent(argv[1], raven::NativeMode::x64);
 		agent(argv[1], raven::NativeMode::x86);
 		agent_mode(argv[1], raven::NativeMode::x64);
 		agent_mode(argv[1], raven::NativeMode::x86);
 		held(argv[1]);
 		std::cout << "Agent service thread in x64/x86 guests: untraced, in the guest's thread group, its calls and memory the guest's, "
-			"the runtime's memory calls under RAVEN_AGENT, and a guest task out of ptrace under RAVEN_AGENT_HOLD\n";
+			"the runtime's memory calls under RAVEN_AGENT, and a guest task out of ptrace under RAVEN_AGENT_HOLD that ends with its runtime\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';
