@@ -30,6 +30,10 @@ constexpr uint32_t fmov_d_d = 0x1e604000;
 constexpr uint32_t movi_zero_2d = 0x6f00e400;
 // staddb (ldaddb with wzr as Rt): Rm is the value added, Rn the address; with wzr as both, a write probe that changes nothing.
 constexpr uint32_t staddb_zero = 0x38200000;
+// Pairwise and permuting operations on four singles (or with size_s, size_d, sz as their encodings take): faddp, uzp1, trn1,
+// trn2, fneg, bsl; movi of 0x00000000ffffffff in both doublewords.
+constexpr uint32_t faddp_4s = 0x6e20d400, uzp1_16b = 0x4e001800, trn1_16b = 0x4e002800, trn2_16b = 0x4e006800,
+	fneg_4s = 0x6ea0f800, bsl_16b = 0x6e601c00, movi_low_singles = 0x6f00e5e0;
 // Floating point on four singles; or sz (bit 22) in for two doubles, or the scalar single for one double.
 constexpr uint32_t sz = 0x00400000;
 constexpr uint32_t fadd_4s = 0x4e20d400, fsub_4s = 0x4ea0d400, fmul_4s = 0x6e20dc00, fdiv_4s = 0x6e20fc00, fmax_4s = 0x4e20f400,

@@ -206,6 +206,8 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq: case Mnemonic::punpckhqdq:
 	case Mnemonic::unpcklps: case Mnemonic::unpcklpd: case Mnemonic::unpckhps: case Mnemonic::unpckhpd: case Mnemonic::pshufd:
 	case Mnemonic::pshuflw: case Mnemonic::pshufhw: case Mnemonic::shufps: case Mnemonic::shufpd:
+	case Mnemonic::addsubps: case Mnemonic::addsubpd: case Mnemonic::haddps: case Mnemonic::haddpd: case Mnemonic::hsubps:
+	case Mnemonic::hsubpd: case Mnemonic::movddup: case Mnemonic::movsldup: case Mnemonic::movshdup: case Mnemonic::lddqu:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -374,6 +376,7 @@ private:
 	void sse_integer(const Instruction &instruction);
 	void sse_shift(const Instruction &instruction);
 	void sse_shuffle(const Instruction &instruction);
+	void sse3(const Instruction &instruction);
 
 	// AVX: the low 128 bits of YMMn are vn, the upper halves stay in CpuState::ymm_high (v20-v23 hold them while an instruction
 	// works on them; the SSE handlers use v16-v19).
@@ -1570,6 +1573,58 @@ void BlockTranslator::sse_shift(const Instruction &instruction)
 	a.simd((arithmetic ? simd::sshl_16b : simd::ushl_16b) | size, target, target, vs1);
 }
 
+void BlockTranslator::sse3(const Instruction &instruction)
+{
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const uint8_t target = instruction.operands[0].reg;
+	const Operand &source_operand = instruction.operands[1];
+	const bool doubles = mnemonic == Mnemonic::addsubpd || mnemonic == Mnemonic::haddpd || mnemonic == Mnemonic::hsubpd;
+	const uint32_t sz = doubles ? simd::sz : 0;
+	const uint32_t elements = doubles ? simd::size_d : simd::size_s;
+	switch (mnemonic) {
+	case Mnemonic::movddup:
+		if (source_operand.kind == OperandKind::mem) {
+			load_vector(vs0, source_operand, 8);
+			a.dup(target, vs0, 8);
+		} else
+			a.dup(target, source_operand.reg, 8);
+		return;
+	// From memory; the upper half of vlddqu ymm comes here as a register (avx()).
+	case Mnemonic::lddqu:
+		if (source_operand.kind == OperandKind::xmm)
+			a.simd(simd::orr_16b, target, source_operand.reg, source_operand.reg);
+		else
+			load_vector(target, source_operand, 16);
+		return;
+	default: break;
+	}
+	const uint8_t source = vector_source(source_operand, vs0);
+	switch (mnemonic) {
+	case Mnemonic::movsldup: a.simd(simd::trn1_16b | simd::size_s, target, source, source); return;
+	case Mnemonic::movshdup: a.simd(simd::trn2_16b | simd::size_s, target, source, source); return;
+	// The pairs of each operand in turn: faddp adds the first element of a pair to the second, as x86 does.
+	case Mnemonic::haddps: case Mnemonic::haddpd: a.simd(simd::faddp_4s | sz, target, target, source); return;
+	case Mnemonic::hsubps: case Mnemonic::hsubpd:
+		a.simd(simd::uzp1_16b | elements, vs1, target, source);
+		a.simd(simd::uzp2_16b | elements, vs2, target, source);
+		a.simd(simd::fsub_4s | sz, target, vs1, vs2);
+		return;
+	default:
+		// addsub: the even elements subtract, the odd ones add. The source's even elements are negated first (exact; fneg leaves a
+		// NaN's sign alone under FPCR.AH), then one fadd.
+		a.simd(simd::fneg_4s | sz, vs1, source);
+		if (doubles) {
+			a.ins(vs1, 1, source, 1, 8);
+		} else {
+			a.simd(simd::movi_low_singles, vs2, 0);
+			a.simd(simd::bsl_16b, vs2, vs1, source);
+			a.simd(simd::orr_16b, vs1, vs2, vs2);
+		}
+		a.simd(simd::fadd_4s | sz, target, target, vs1);
+		return;
+	}
+}
+
 void BlockTranslator::sse_shuffle(const Instruction &instruction)
 {
 	using enum Mnemonic;
@@ -2055,6 +2110,10 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::psllw: case Mnemonic::pslld: case Mnemonic::psllq: case Mnemonic::psrlw: case Mnemonic::psrld: case Mnemonic::psrlq:
 	case Mnemonic::psraw: case Mnemonic::psrad: case Mnemonic::psrldq: case Mnemonic::pslldq:
 		sse_shift(instruction);
+		return;
+	case Mnemonic::addsubps: case Mnemonic::addsubpd: case Mnemonic::haddps: case Mnemonic::haddpd: case Mnemonic::hsubps:
+	case Mnemonic::hsubpd: case Mnemonic::movddup: case Mnemonic::movsldup: case Mnemonic::movshdup: case Mnemonic::lddqu:
+		sse3(instruction);
 		return;
 	case Mnemonic::packsswb: case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd:
 	case Mnemonic::punpckldq: case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq:
