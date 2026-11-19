@@ -71,7 +71,13 @@ def main():
     by_field = Counter()
     by_family = Counter()
     examples = {}
+    # Both runs must have executed the same bytes: an assembler may encode the same text otherwise (GNU as and clang choose
+    # different VEX forms and source orders), and then a difference says nothing about the CPU.
+    encodings = [number for number, (a, b) in enumerate(zip(rosetta, silicon)) if a[0] != b[0]]
+    print(f"{len(encodings)} cases encoded differently in the two runs (left out)")
     for number, ((code, text, family, ours), (code2, text2, _, theirs)) in enumerate(zip(rosetta, silicon)):
+        if code != code2:
+            continue
         assert text == text2, f"case {number} differs in text"
         a, b = fields(ours), fields(theirs)
         differ = [name for name in a if a[name] != b[name]]

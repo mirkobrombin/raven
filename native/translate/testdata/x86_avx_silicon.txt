@@ -1,7 +1,3 @@
-# x86_avx.py cases where Rosetta and an AMD EPYC 9V74 differ (raven-macos-bench run 44490908127): what the EPYC left
-# A line ending in "known" is a case the translator does not match yet: with a signaling and a quiet NaN in a VEX add or mul,
-# Rosetta and the translator return the first source's NaN where the EPYC returns the second source's (docs/macos/avx.md).
-573	vaddps ymm7, ymm4, ymm13; vaddps xmm7, xmm0, xmm9	rosetta=95ad26127e0ec5da	ymm7=5783683fffff7ffffeff7fff4523c17f00000000000000000000000000000000	known
-575	vaddps ymm3, ymm3, ymm9; addps xmm3, xmm7	rosetta=f1469e249b0fc575	ymm3=de0116fbfa7c38fb0000c0ffc9137a7affffff4e5687773f1803ae7a7e0c00cf	known
-609	vaddps ymm14, ymm0, ymm14; vsqrtsd xmm9, xmm0, xmm10	rosetta=eefe727153040d6b	ymm14=0000e07f000000df4523c17fffff7fff4523c1ffffff7f4b040115d0a2ab2f7b	known
-1335	vmulps ymm12, ymm1, ymm12	rosetta=8d4bc18a93b9acce	ymm12=774a019595d2c6680000c07f000080ff0000807f0000c0ff000040004523c17f	known
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what the x86 CPU left (docs/macos/avx-data/silicon_overrides.py writes it).
+# None: an AMD EPYC 9V45 (raven-macos-bench run 44493373058, the cases assembled with clang as here) left what Rosetta leaves in
+# all 5788. A line ending in "known" would mark a case the translator does not match yet.

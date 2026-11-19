@@ -6,9 +6,9 @@ paths, what cpuid and xgetbv report, the YMM state, the tests against Rosetta an
 items. SSE is in [sse.md](sse.md), x87 in [x87.md](x87.md).
 
 Labels are those of [translation.md](translation.md): **PROVEN** (a command produced the result), **INFERRED** (derived; the missing
-check is named), **NOT verified**. MacBook Air M5 (Mac17,3), macOS 27.2.1, llvm-mingw 20261104. The x86 reference is an AMD EPYC 9V74
-(GitHub Linux x86_64 runner, the private raven-macos-bench repository, run 44490908127); Rosetta runs the same cases on every build,
-and where the two disagree the tests take the EPYC's result.
+check is named), **NOT verified**. MacBook Air M5 (Mac17,3), macOS 27.2.1, llvm-mingw 20261104. The x86 reference is an AMD EPYC 9V45
+(GitHub Linux x86_64 runner, the private raven-macos-bench repository, run 44493373058); Rosetta runs the same cases on every build,
+and where the two disagree the tests would take the EPYC's result (they agree on every case).
 
 ## Corpus
 
@@ -94,7 +94,7 @@ the samples passing.
   - a legacy SSE instruction keeps them (it never touches `ymm_high`);
   - VEX scalar instructions take bits 127:32 (or 127:64) from the first source and clear 255:128;
   - vzeroupper clears all sixteen upper halves; vzeroall clears all of every register;
-  - comis and ucomis write no vector register and keep them.
+  - comis and ucomis write no vector register and keep them (PROVEN by the `compare` family, not `transitions`).
 - **ARM64EC.** The ARM64EC ABI page (learn.microsoft.com/en-us/windows/arm/arm64ec-abi, 2025-11-06) maps registers through the x64
   `CONTEXT` and says "x13, x14, x23, x24, x28, and v16 through v31 have no representation and, thus, can't be used in Arm64EC"; it
   says nothing of YMM or AVX. Microsoft's x64 calling convention page (2025-03-19) says "When present, the upper portions of
@@ -128,6 +128,11 @@ the samples passing.
   compare 500, integer 700, shuffle 400, lanes 400, fma 1200, convert 400, and 288 deterministic `fma edges` (every FMA3 form, ss and
   sd, on a NaN in each position, signaling and quiet, inf times 0 plus a QNaN, exact cancellation, results at the smallest normal,
   every RC, FZ and DAZ). A third of the register picks alias (destination = first source, = second source, or both sources equal).
+  clang swaps the sources of a commutative instruction to fit a two-byte VEX prefix, so the destination-equals-second-source path
+  (through v22) is exercised mostly by the non-commutative ones (sub, div, the shuffles, the FMA3 forms) (INFERRED from the
+  encodings).
+- **Memory operands** are all `[r15 + displacement]`. The upper half of a 32-byte operand is read 16 bytes further on, a path no case
+  takes with a RIP-relative, index-scaled or large displacement (NOT verified; the x87 oracle's `addressing` family is the model).
 - **`x86_avx_oracle.c`** runs them on x86; `x86_avx_check.h` compares every general register but RSP and R15, all 256 bits of every
   YMM register, the flags, MXCSR but DE and the buffer, and applies `testdata/x86_avx_silicon.txt` with Rosetta fingerprints, as
   x87.
@@ -136,34 +141,32 @@ the samples passing.
   ways.
 - **Test first:** the oracle and all its families were committed together, failing (`61cd0c08`: 11576 of 11576 in this process,
   5788 of 5788 in a vCPU, all unsupported exits), then the implementation in one commit (`0532a99e`). Per-family test-first commits were
-  not made (timebox). Before `0532a99e` passed: comis cleared upper halves and read a wrong register (33 compare failures), vshufpd
-  used the low lane's imm bits (12); both fixed in it.
+  not made (timebox). Before `0532a99e` passed, its first run failed 104 compare cases (comis cleared upper halves; then 33, comis read
+  register 0) and 12 shuffle cases (vshufpd used the low lane's imm bits); all fixed in it.
+- **Do not bisect into `3059b49f`..`626c1134`:** there the decoder gives VEX instructions their SSE mnemonic and `supported()` does not
+  yet refuse them, so the translator runs them as legacy SSE with the wrong operands (a null-address crash in the first AVX test run),
+  without a `translator_version` change. `61cd0c08` refuses them; `0532a99e` translates them and sets the version to 7.
 - **Results** (PROVEN, `ctest`): `translate_x86_avx` 11576 cases (both memory orderings), 0 failures; `hvf_avx` 5788 cases in a vCPU, 0
-  failures; MXCSR.DE alone differs in 789 passing cases (DE is never set, as in sse.md).
+  failures; MXCSR.DE alone differs in 791 passing cases (DE is never set, as in sse.md).
 
 ### x86 silicon and Rosetta
 
-5788 cases; the EPYC gave the same bytes on two runs (PROVEN, `cmp` in the workflow) and differs from Rosetta in 4
-(`python3 -I docs/macos/avx-data/silicon_overrides.py ROSETTA.bin SILICON.bin`, PROVEN):
+5788 cases. PROVEN (`python3 -I docs/macos/avx-data/silicon_overrides.py ROSETTA.bin SILICON.bin`): on an AMD EPYC 9V45 (run
+44493373058) **0 cases differ from Rosetta** in a compared field; the EPYC gave the same bytes on two runs of the binary (`cmp` in the
+workflow). So `testdata/x86_avx_silicon.txt` has no case, and the translator passes against the EPYC in every case, in this process
+and in a vCPU.
 
-- **FMA3: 0 differences** in 1488 cases, the 288 edges included: fused single rounding, NaN choice and sign, FZ, DAZ and every flag of
-  the scalar and packed forms agree with the EPYC to the bit, in this process and in a vCPU (PROVEN for this AMD core; Intel NOT
-  verified).
-- **4 cases differ, all one pattern:** a VEX add or mul with a signaling NaN in one source and a quiet NaN in the other, in the
-  encoding the assembler chose (it swaps commutative sources to fit a two-byte VEX prefix, so the text's order is not the bytes'):
-
-  | Case | Encoded sources (first, second) | Rosetta and the translator | EPYC |
-  |---|---|---|---|
-  | `vaddps xmm7, xmm9, xmm0` | ff812345 (SNaN), 7fc12345 (QNaN) | ffc12345 | 7fc12345 |
-  | `vaddps ymm3, ymm9, ymm3` | 7fa00000 (SNaN), ffc00000 (QNaN) | 7fe00000 | ffc00000 |
-  | `vmulps ymm12, ymm12, ymm1` | ff812345 (SNaN), 7fc12345 (QNaN) | ffc12345 | 7fc12345 |
-  | `vaddps ymm14, ymm14, ymm0` | 7fc00000 (QNaN), 7fa00000 (SNaN) | 7fc00000 | 7fe00000 |
-
-  In all four the EPYC returned the second source's NaN (quieted); Rosetta and the translator (FPCR.AH: the first source's NaN,
-  quieted, PROVEN on the host by a probe of fadd and fmul) return the first. That contradicts the rule sse.md relies on ("the first
-  source operand's NaN") for these VEX cases; whether legacy SSE behaves the same on the EPYC is open (the SSE oracle found no such
-  case). The four lines carry `known`: the tests count them apart (`4 of them known to differ`) and fail if one starts to pass. Not
-  fixed: the rule is not understood from four cases (open items).
+- **A false lead, recorded.** The first run (run 44490908127, an EPYC 9V74) assembled the cases with GNU as, which encodes 154 of them
+  differently from clang (another VEX form, or the sources of a commutative instruction not swapped). Four of those differed in a NaN
+  result and looked like "x86 returns the second source's NaN"; with the same bytes they agree. The script now compares only cases
+  whose bytes match and prints how many it left out (0 for the clang run). The bench builds with clang since.
+- **NaN choice with an SNaN and a QNaN source** (counted over the oracle's inputs, single register-register add, sub, mul and div):
+  legacy SSE 89 lanes, VEX 3 lanes; in every one x86 returns the first source's NaN, quieted, as FPCR.AH does (PROVEN by those counts
+  and a host probe of fadd and fmul with AH set). The VEX count is small (INFERRED to hold beyond it from the SSE count).
+- **FMA3: 0 differences** in 1488 cases. The 288 edges cover only ss and sd; the packed fmsub and fnmsub forms, which negate the
+  addend with fneg before fmla or fmls, had a NaN addend in 57 register-register lanes of the `fma` family (ps 35, pd 22), all equal to
+  the EPYC's, so fneg's treatment of a NaN's sign under AH matches x86 there (PROVEN for those lanes; Intel NOT verified).
+- **Rosetta** agrees with the EPYC on all of it.
 
 ## Performance check
 
@@ -192,8 +195,8 @@ the samples passing.
 ## Open items
 
 - **AVX is not reported by cpuid** until the rest of AVX1 is translated (the list under cpuid and xgetbv); then AVX2, then FMA.
-- **The four NaN cases** (silicon and Rosetta): more targeted cases on the EPYC, legacy SSE and VEX, both source orders, to find the
-  rule; an Intel core to compare.
+- **More NaN cases** for VEX (3 lanes with an SNaN and a QNaN) and packed FMA3 edges (ps, pd); an Intel core to compare.
+- **Addressing** of 32-byte operands beyond `[r15 + displacement]` (see Tests).
 - **Not translated:** VEX forms of SSE3-SSE4.2, vblendvps/pd, vpblendvb, vmaskmov and vpmaskmov (masked moves must not fault on
   masked-out lanes), vpermilps, vpermq, vpermd, vpermps, variable shifts, gathers (0 in the corpus), F16C (0 in the corpus),
   vcmp predicates 8-31, width-changing conversions at 256 bits, vldmxcsr's reserved bits (as ldmxcsr), BMI1 and BMI2.
