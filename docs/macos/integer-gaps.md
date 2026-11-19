@@ -223,18 +223,18 @@ PROVEN (`integer_reach.py` on the same images, rerun after each feature commit):
 
 | Corpus | Before (`564c0960`) | After group 1 | After group 2 | After group 3 | After group 4 | After group 5 |
 |---|---|---|---|---|---|---|
-| notepad++.exe | 3675 | 2454 | 755 | 638 | 169 |
-| GUP.exe | 858 | 686 | 305 | 238 | 68 |
-| NppConverter.dll | 203 | 165 | 73 | 41 | 16 |
-| nppPluginList.dll | 69 | 60 | 41 | 21 | 6 |
-| mimeTools.dll | 79 | 62 | 43 | 23 | 7 |
-| NppExport.dll | 124 | 98 | 55 | 35 | 18 |
-| **Notepad++, GUP and plugins** | **5008 in 1772 functions** | **3525 in 1131** | **1272 in 428** | **996 in 284** | **284 in 169** |
-| libc++.dll | 474 | 311 | 276 | 136 | 99 |
-| libomp.dll | 730 | 342 | 309 | 147 | 135 |
-| libunwind.dll | 8 | 4 | 3 | 3 | 3 |
-| libwinpthread-1.dll | 95 | 78 | 74 | 1 | 1 |
-| **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** | **238 in 165** |
+| notepad++.exe | 3675 | 2454 | 755 | 638 | 169 | 34 |
+| GUP.exe | 858 | 686 | 305 | 238 | 68 | 15 |
+| NppConverter.dll | 203 | 165 | 73 | 41 | 16 | 1 |
+| nppPluginList.dll | 69 | 60 | 41 | 21 | 6 | 0 |
+| mimeTools.dll | 79 | 62 | 43 | 23 | 7 | 0 |
+| NppExport.dll | 124 | 98 | 55 | 35 | 18 | 3 |
+| **Notepad++, GUP and plugins** | **5008 in 1772 functions** | **3525 in 1131** | **1272 in 428** | **996 in 284** | **284 in 169** | **53 in 21** |
+| libc++.dll | 474 | 311 | 276 | 136 | 99 | 24 |
+| libomp.dll | 730 | 342 | 309 | 147 | 135 | 42 |
+| libunwind.dll | 8 | 4 | 3 | 3 | 3 | 1 |
+| libwinpthread-1.dll | 95 | 78 | 74 | 1 | 1 | 1 |
+| **runtime DLLs** | **1307 in 587 functions** | **735 in 423** | **662 in 379** | **287 in 178** | **238 in 165** | **68 in 32** |
 
 Linearly, Notepad++, GUP and the plugins now have 1291 refusals (7910 before), the runtime DLLs 68 (1494 before). What is left after group 5 (PROVEN, the script): in Notepad++ and its companions 53 instructions in 21 functions, `shrd r64, r64,
 cl` 10 in 4, `bswap` 12 in 7, `prefetchw`, `insb`, `cmpsb` and `vpminuq` (AVX-512); in the runtime DLLs 68 in 32, mostly RTM
