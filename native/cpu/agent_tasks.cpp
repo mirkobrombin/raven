@@ -1,6 +1,7 @@
 #include "agent_tasks.h"
 #include "agent.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <ctime>
@@ -214,13 +215,18 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 		if (!area)
 			return failed(EFAULT);
 		auto &buffer = *static_cast<iovec *>(data);
-		const size_t length = std::min(buffer.iov_len, size);
+		const size_t whole = std::max(task.xstate_size, size);
 		if (operation == PTRACE_GETREGSET) {
-			std::memcpy(buffer.iov_base, area, length);
+			const size_t length = std::min(buffer.iov_len, whole);
+			std::memcpy(buffer.iov_base, area, std::min(length, size));
+			if (length > size)
+				std::memset(static_cast<uint8_t *>(buffer.iov_base) + size, 0, length - size);
+			buffer.iov_len = length;
+			return 0;
 		} else {
 			// As the kernel's own: the whole state or nothing, in the standard layout, naming no component the frame does not carry.
 			// rt_sigreturn would refuse anything else, and the thread would die of it.
-			if (buffer.iov_len != size)
+			if (buffer.iov_len != whole)
 				return failed(EINVAL);
 			if (size > 512) {
 				const auto *const given = static_cast<const uint8_t *>(buffer.iov_base);
@@ -236,10 +242,9 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 			}
 			uint8_t software[48];
 			std::memcpy(software, area + 464, sizeof software);
-			std::memcpy(area, buffer.iov_base, length);
+			std::memcpy(area, buffer.iov_base, size);
 			std::memcpy(area + 464, software, sizeof software);
 		}
-		buffer.iov_len = length;
 		return 0;
 	}
 	case PTRACE_SETSIGINFO:

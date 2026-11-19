@@ -1320,6 +1320,11 @@ void NativeProcess::hand_to_agent()
 	owned_call(0, 0, SYS_sigaltstack, block_guest + alternate * 8, 0);
 	owned_call(0, 0, SYS_prctl, PR_SET_SYSCALL_USER_DISPATCH, PR_SYS_DISPATCH_ON, state->agent_page, agent::code().size(),
 		block_guest + agent::dispatch_selector * 8);
+	// The extended state keeps the size ptrace gives it, which a signal frame may not have.
+	std::vector<uint8_t> probe(65536);
+	iovec extended{probe.data(), probe.size()};
+	if (agent::request(PTRACE_GETREGSET, task, reinterpret_cast<void *>(NT_X86_XSTATE), &extended) == -1)
+		throw std::runtime_error("host cannot expose native XSTATE");
 	// The task goes to the agent's breakpoint untraced, and is held in the handler where it stood stopped.
 	user_regs_struct held{};
 	trace(PTRACE_GETREGS, task, &held);
@@ -1336,6 +1341,7 @@ void NativeProcess::hand_to_agent()
 	handed.stack = stack;
 	handed.stack_guest = stack_guest;
 	handed.segments = {held.fs_base, held.gs_base, held.ds, held.es, held.fs, held.gs};
+	handed.xstate_size = extended.iov_len;
 	agent::hold(handed);
 	int status = 0;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);

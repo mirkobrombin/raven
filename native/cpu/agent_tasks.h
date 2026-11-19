@@ -27,6 +27,9 @@ struct Task {
 	uint8_t *stack = nullptr;
 	uint64_t stack_guest = 0;
 	Segments segments;
+	// The size of the extended state as ptrace gives it, learned while the task was traced. A signal frame may carry less (the
+	// components the task has not been allowed); the rest reads as the components' initial state.
+	size_t xstate_size = 0;
 	bool running = false;
 	// The system call a SIGSYS stop turned away, as orig_rax reads it; -1 for any other stop.
 	int64_t call = -1;
