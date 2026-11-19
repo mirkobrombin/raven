@@ -437,6 +437,47 @@ def vex_sse4_data(rng, body, registers, vectors, memory):
         strings_data(rng, body, registers, vectors, memory)
 
 
+def avx_ops(rng):
+    """The AVX instructions with no SSE form, or none at this width: vtestps, vtestpd, vpermilps, vpermilpd, vblendv*, vcmp with
+    predicates 0 to 31, the conversions that change the width at 256 bits, vmaskmovps, vmaskmovpd and vmaskmovdqu."""
+    d, a, b = three(rng)
+    width = rng.choice([16, 32])
+    wsource = lambda: mem(rng, width) if rng.random() < 0.3 else name(b, width)
+    roll = rng.randrange(9)
+    if roll == 0:
+        return [f"{rng.choice(['vtestps', 'vtestpd'])} {name(a, width)}, {wsource()}",
+                f"set{rng.choice(['e', 'ne', 'b', 'ae', 'a', 'be', 'p', 's', 'o'])} al"]
+    if roll == 1:
+        op = rng.choice(["vpermilps", "vpermilpd"])
+        if rng.random() < 0.5:
+            return [f"{op} {name(d, width)}, {wsource()}, {rng.randrange(256)}"]
+        return [f"{op} {name(d, width)}, {name(a, width)}, {wsource()}"]
+    if roll == 2:
+        op = rng.choice(["vblendvps", "vblendvpd", "vpblendvb"])
+        width = 16 if op == "vpblendvb" else width
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"{op} {name(d, width)}, {name(a, width)}, {source}, {name(reg(rng), width)}"]
+    if roll in (3, 4):
+        op = rng.choice(["vcmpps", "vcmppd", "vcmpss", "vcmpsd"])
+        if op in ("vcmpss", "vcmpsd"):
+            source = mem(rng, 4 if op == "vcmpss" else 8) if rng.random() < 0.3 else f"xmm{b}"
+            return [f"{op} xmm{d}, xmm{a}, {source}, {rng.randrange(32)}"]
+        return [f"{op} {name(d, width)}, {name(a, width)}, {wsource()}, {rng.randrange(32)}"]
+    if roll == 5:
+        op = rng.choice(["vcvtps2pd", "vcvtdq2pd", "vcvtpd2ps", "vcvttpd2dq", "vcvtpd2dq"])
+        if op in ("vcvtps2pd", "vcvtdq2pd"):
+            source = mem(rng, 16) if rng.random() < 0.3 else f"xmm{b}"
+            return [f"{op} ymm{d}, {source}"]
+        source = mem(rng, 32) if rng.random() < 0.3 else f"ymm{b}"
+        return [f"{op} xmm{d}, {source}"]
+    if roll in (6, 7):
+        op = rng.choice(["vmaskmovps", "vmaskmovpd"])
+        if rng.random() < 0.5:
+            return [f"{op} {name(d, width)}, {name(a, width)}, {mem(rng, width)}"]
+        return [f"{op} {mem(rng, width)}, {name(a, width)}, {name(b, width)}"]
+    return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"vmaskmovdqu xmm{a}, xmm{b}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -459,6 +500,7 @@ LATER_FAMILIES = [
     ("popcnt", popcnt, "int", 300),
     ("strings", strings, "int", 1500),
     ("vex sse4", vex_sse4, "mixed", 1500),
+    ("avx ops", avx_ops, "mixed", 1500),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
 FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data}
