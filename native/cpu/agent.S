@@ -10,7 +10,9 @@
  * the agent makes lie inside its own code, the range Syscall User Dispatch lets through.
  *
  * Words of the block: 400 the state (0 nothing, 1 a signal waits for the runtime, 2 the runtime has answered; the runtime sleeps and
- * wakes on its low half), 401 the signal, 402 the address of its siginfo, 403 the address of the interrupted ucontext. */
+ * wakes on its low half), 401 the signal, 402 the address of its siginfo, 403 the address of the interrupted ucontext, 404 the
+ * segment bases the runtime asks for with its answer (bit 0 FS, bit 1 GS; a signal frame does not carry them), 405 the FS base and
+ * 406 the GS base asked for. */
 
 	.intel_syntax noprefix
 	.section .rodata, "a"
@@ -21,6 +23,9 @@
 	.set SYS_RT_SIGRETURN, 15
 	.set FUTEX_WAIT, 0
 	.set FUTEX_WAKE, 1
+	.set SYS_ARCH_PRCTL, 158
+	.set ARCH_SET_GS, 0x1001
+	.set ARCH_SET_FS, 0x1002
 
 	.global raven_agent, raven_agent_end, raven_agent_handler, raven_agent_restorer
 	.balign 64
@@ -53,7 +58,20 @@ raven_agent_handler:
 	mov eax, SYS_FUTEX
 	syscall
 	jmp short 1b
-3:	mov dword ptr [rbx + AGENT_STATE], 0
+3:	test dword ptr [rbx + AGENT_STATE + 32], 1
+	jz short 4f
+	mov edi, ARCH_SET_FS
+	mov rsi, qword ptr [rbx + AGENT_STATE + 40]
+	mov eax, SYS_ARCH_PRCTL
+	syscall
+4:	test dword ptr [rbx + AGENT_STATE + 32], 2
+	jz short 5f
+	mov edi, ARCH_SET_GS
+	mov rsi, qword ptr [rbx + AGENT_STATE + 48]
+	mov eax, SYS_ARCH_PRCTL
+	syscall
+5:	mov dword ptr [rbx + AGENT_STATE + 32], 0
+	mov dword ptr [rbx + AGENT_STATE], 0
 	ret
 /* The return the kernel takes from the handler (SA_RESTORER). */
 raven_agent_restorer:
@@ -119,6 +137,13 @@ raven_agent_spawned:
 	int3
 1:	mov rdi, r12
 	jmp raven_agent_service
+
+/* Where a traced task goes to be handed to the agent: the runtime points it here and lets it go, and its breakpoint brings it into
+ * the handler, held there as it was held stopped. */
+	.global raven_agent_park
+raven_agent_park:
+	int3
+	ud2
 raven_agent_end:
 
 	.section .note.GNU-stack, "", @progbits

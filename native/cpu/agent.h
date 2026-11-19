@@ -6,7 +6,7 @@
 
 // The code of agent.S, which the runtime copies into a guest, and the offsets within it the runtime and the guest agree on.
 extern "C" const uint8_t raven_agent[], raven_agent_end[], raven_agent_handler[], raven_agent_restorer[], raven_agent_service[],
-	raven_agent_spawn[], raven_agent_spawned[];
+	raven_agent_spawn[], raven_agent_spawned[], raven_agent_park[];
 
 namespace raven::agent {
 
@@ -14,6 +14,9 @@ namespace raven::agent {
 constexpr size_t stack_size = 65536;
 // The words of a thread's block the agent and the runtime use (see agent.S).
 constexpr size_t state = 400, signal = 401, information = 402, context = 403;
+// The segment bases the runtime asks the handler to set before the thread goes on: which ones, then the FS and GS bases.
+constexpr size_t set_bases = 404, fs_base = 405, gs_base = 406;
+constexpr uint64_t set_fs = 1, set_gs = 2;
 // The values of the state word.
 constexpr uint32_t idle = 0, posted = 1, answered = 2;
 
@@ -24,6 +27,8 @@ inline size_t service() { return size_t(raven_agent_service - raven_agent); }
 // The routine that starts the service thread, and its breakpoint the starting task stops on.
 inline size_t spawn() { return size_t(raven_agent_spawn - raven_agent); }
 inline size_t spawned() { return size_t(raven_agent_spawned - raven_agent); }
+// The breakpoint a traced task is sent to when it is handed to the agent.
+inline size_t park() { return size_t(raven_agent_park - raven_agent); }
 
 // The words of the service thread's block (see agent.S): the state, the call's number, its six arguments and its result.
 namespace service_block {

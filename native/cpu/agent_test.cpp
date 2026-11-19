@@ -11,6 +11,7 @@
 #include <linux/futex.h>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <asm/prctl.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <thread>
@@ -136,8 +137,12 @@ static void answer(int expected_signal, long expected_call, uint64_t rax, uint64
 	if (r12_seen)
 		check(registers.r12 == r12_seen, "the registers read from the frame are not the thread's");
 	registers.rax = rax;
-	if (r12_seen)
+	if (r12_seen) {
 		registers.r12 = r12;
+		// The frame has no segment bases: the handler sets the GS base the runtime asks for before the thread goes on.
+		block[raven::agent::gs_base] = 0x5000;
+		block[raven::agent::set_bases] = raven::agent::set_gs;
+	}
 	auto moved = registers;
 	moved.gs_base = 0x3000;
 	check(!raven::agent::set_registers(*context, moved, segments), "a frame took a new GS base");
@@ -184,7 +189,7 @@ int main()
 		install(SIGTRAP);
 		install(SIGSYS);
 
-		uint64_t from_breakpoint = 0, from_call = 0, from_compat = 0, kept = 0x1122;
+		uint64_t from_breakpoint = 0, from_call = 0, from_compat = 0, kept = 0x1122, gs_after = 0;
 		uint8_t *const compat = compat_code();
 		std::string failure;
 		std::thread guest([&] {
@@ -198,6 +203,8 @@ int main()
 				stack_t alternate{stack, 0, raven::agent::stack_size};
 				check(sigaltstack(&alternate, nullptr) == 0, "alternate stack refused");
 				from_breakpoint = breakpoint(kept);
+				syscall(SYS_arch_prctl, ARCH_GET_GS, &gs_after);
+				syscall(SYS_arch_prctl, ARCH_SET_GS, 0UL);
 				from_compat = reinterpret_cast<uint32_t (*)()>(compat)();
 				check(prctl(PR_SET_SYSCALL_USER_DISPATCH, PR_SYS_DISPATCH_ON, uintptr_t(agent_code), code.size(), &selector) == 0,
 					"Syscall User Dispatch refused");
@@ -220,6 +227,8 @@ int main()
 		check(failure.empty(), failure.c_str());
 		check(from_breakpoint == 77, "the thread did not go on with the runtime's RAX after its breakpoint");
 		check(kept == 0x3344, "the thread did not go on with the runtime's R12 after its breakpoint");
+		check(gs_after == 0x5000, "the thread did not go on with the GS base the runtime asked for");
+		check(block[raven::agent::set_bases] == 0, "the handler left the segment request set");
 		check(from_compat == 0x77, "a 32-bit thread did not go on in 32-bit code with the runtime's EAX after its breakpoint");
 		check(from_call == 4242, "the turned-away call did not return the runtime's answer");
 		check(*state() == raven::agent::idle, "the agent left its state set");
