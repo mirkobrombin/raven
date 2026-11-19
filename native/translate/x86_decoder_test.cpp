@@ -97,7 +97,22 @@ struct Tally {
 	size_t x87_semantic = 0;
 	size_t x87_translated = 0;
 	std::map<std::string, size_t> x87_missing;
+	size_t vex = 0;
+	size_t vex_translated = 0;
+	std::map<std::string, size_t> vex_missing;
 };
+
+// VEX-encoded: C4 or C5 after the legacy prefixes (in 64-bit mode both always start a VEX prefix).
+static bool vex_encoded(const std::vector<uint8_t> &bytes)
+{
+	for (const uint8_t byte : bytes) {
+		if (byte == 0x66 || byte == 0x67 || byte == 0xf0 || byte == 0xf2 || byte == 0xf3 || byte == 0x26 || byte == 0x2e ||
+			byte == 0x36 || byte == 0x3e || byte == 0x64 || byte == 0x65)
+			continue;
+		return byte == 0xc4 || byte == 0xc5;
+	}
+	return false;
+}
 
 // The source of random SSE and SSE2 instances: each must have semantics.
 static const std::string sse_instances = "sse_instances.o";
@@ -192,6 +207,13 @@ int main(int argc, char **argv)
 				else
 					++tally.sse_missing[expected.substr(0, expected.find(' '))];
 			}
+			if (vex_encoded(bytes)) {
+				++tally.vex;
+				if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
+					++tally.vex_translated;
+				else
+					++tally.vex_missing[expected.substr(0, expected.find(' '))];
+			}
 			if (x87(bytes)) {
 				++tally.x87;
 				if (instruction.mnemonic != Mnemonic::invalid && instruction.mnemonic != Mnemonic::other)
@@ -231,6 +253,17 @@ int main(int argc, char **argv)
 				missing.push_back({count, mnemonic});
 			std::sort(missing.rbegin(), missing.rend());
 			for (size_t i = 0; i < missing.size() && i < 12; ++i)
+				std::printf("%s %s %zu", i ? "," : "; without:", missing[i].second.c_str(), missing[i].first);
+			std::printf("\n");
+		}
+		if (tally.vex && name.find("instances") == std::string::npos) {
+			std::printf("%s: %zu VEX instructions, %zu translated (%.1f%%)", name.c_str(), tally.vex, tally.vex_translated,
+				100.0 * double(tally.vex_translated) / double(tally.vex));
+			std::vector<std::pair<size_t, std::string>> missing;
+			for (const auto &[mnemonic, count] : tally.vex_missing)
+				missing.push_back({count, mnemonic});
+			std::sort(missing.rbegin(), missing.rend());
+			for (size_t i = 0; i < missing.size() && i < 16; ++i)
 				std::printf("%s %s %zu", i ? "," : "; without:", missing[i].second.c_str(), missing[i].first);
 			std::printf("\n");
 		}
