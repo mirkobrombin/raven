@@ -95,7 +95,7 @@ FlagEffect flag_effect(const Instruction &instruction)
 		return {0, all_flags};
 	case Mnemonic::jcc: case Mnemonic::setcc: case Mnemonic::cmovcc: return {0, condition_flags(instruction.condition)};
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: case Mnemonic::ptest:
-	case Mnemonic::popcnt:
+	case Mnemonic::popcnt: case Mnemonic::vtestps: case Mnemonic::vtestpd:
 		return {all_flags, 0};
 	default: return {};
 	}
@@ -153,9 +153,6 @@ bool avx_supported(const Instruction &instruction)
 	if (mnemonic >= avx_first && mnemonic <= avx_last)
 		return true;
 	if (mnemonic < sse_first || mnemonic > sse_last)
-		return false;
-	// The AVX predicates 8-31 of vcmpps and the others are not translated yet.
-	if (mnemonic >= Mnemonic::cmpps && mnemonic <= Mnemonic::cmpsd && instruction.operands[instruction.count - 1].value >= 8)
 		return false;
 	const Instruction legacy = legacy_form(instruction, instruction.operands[0].reg);
 	return supported(legacy);
@@ -327,6 +324,8 @@ private:
 	TranslatedBlock block;
 	// Whether host C holds the inverse of CF.
 	bool carry_inverted = true;
+	// The cmp predicates: 0-7 for legacy SSE, 0-31 for VEX (avx() widens it while it runs the SSE handlers).
+	unsigned compare_predicates = 7;
 	const Instruction *current = nullptr;
 	uint64_t next_address = 0;
 	uint32_t live_after = all_flags;
@@ -412,6 +411,9 @@ private:
 	void avx(const Instruction &instruction);
 	void avx_mask(const Instruction &instruction);
 	void avx_test(const Instruction &instruction);
+	void avx_permute(const Instruction &instruction);
+	void avx_masked(const Instruction &instruction);
+	void avx_convert(const Instruction &instruction);
 	void test_flags();
 	void avx_lanes(const Instruction &instruction);
 	void avx_fma(const Instruction &instruction);
@@ -1309,8 +1311,9 @@ void BlockTranslator::sse_arithmetic(const Instruction &instruction)
 
 void BlockTranslator::sse_compare(const Instruction &instruction)
 {
-	// cmpps, cmppd, cmpss and cmpsd: all ones where the predicate holds. lt, le, nlt and nle signal on a quiet NaN as fcmgt and fcmge do;
-	// eq, neq, unord and ord only on a signaling one, as fcmeq.
+	// cmpps, cmppd, cmpss and cmpsd: all ones where the predicate holds. Predicates 0-3 are eq, lt, le and unord, 4-7 their
+	// negations; 8 more inverts the result for unordered operands (eq_uq, nge, ngt, false, neq_oq, ge, gt, true) and 16 more swaps
+	// which predicates signal on a quiet NaN. fcmgt and fcmge signal on one, fcmeq only on a signaling NaN.
 	const Mnemonic mnemonic = instruction.mnemonic;
 	const bool doubles = mnemonic == Mnemonic::cmppd || mnemonic == Mnemonic::cmpsd;
 	const bool scalar = mnemonic == Mnemonic::cmpss || mnemonic == Mnemonic::cmpsd;
@@ -1319,23 +1322,50 @@ void BlockTranslator::sse_compare(const Instruction &instruction)
 		gt = (scalar ? simd::fcmgt_s : simd::fcmgt_4s) | sz;
 	const uint8_t target = instruction.operands[0].reg;
 	const uint8_t source = vector_source(instruction.operands[1], vs0);
-	const unsigned predicate = static_cast<unsigned>(instruction.operands[2].value) & 7;
-	switch (predicate & 3) {
+	const unsigned predicate = static_cast<unsigned>(instruction.operands[2].value) & compare_predicates;
+	const unsigned relation = predicate & 3;
+	const bool ordering = relation == 1 || relation == 2;
+	const bool signals = ordering != ((predicate & 16) != 0);
+	// eq_os, unord_s and the others that signal: an fcmge whose result is not used raises invalid on a quiet NaN.
+	if (signals && !ordering)
+		a.simd(ge, vs2, source, target);
+	switch (relation) {
 	case 0: a.simd(eq, vs1, target, source); break;
-	case 1: a.simd(gt, vs1, source, target); break;
-	case 2: a.simd(ge, vs1, source, target); break;
+	case 1: case 2:
+		if (signals) {
+			a.simd(relation == 1 ? gt : ge, vs1, source, target);
+			break;
+		}
+		// lt_oq and the other quiet ones: compare with NaNs replaced by zero (fcmeq signals on a signaling NaN alone), then clear the
+		// unordered elements.
+		a.simd(eq, vs2, target, target);
+		a.simd(eq, vs3, source, source);
+		a.simd(simd::and_16b, vs1, target, vs2);
+		a.simd(simd::and_16b, vs2, vs2, vs3);
+		a.simd(simd::and_16b, vs3, source, vs3);
+		a.simd(relation == 1 ? gt : ge, vs1, vs3, vs1);
+		a.simd(simd::and_16b, vs1, vs1, vs2);
+		break;
 	default:
 		// ord: both are numbers; unord: not.
 		a.simd(eq, vs1, target, target);
 		a.simd(eq, vs2, source, source);
 		a.simd(simd::and_16b, vs1, vs1, vs2);
-		if (predicate == 3)
+		if ((predicate & 7) == 3)
 			a.simd(simd::not_16b, vs1, vs1);
 		break;
 	}
 	// Predicates 4 to 6 are the negations of 0 to 2.
-	if (predicate >= 4 && predicate <= 6)
+	if ((predicate & 7) >= 4 && (predicate & 7) <= 6)
 		a.simd(simd::not_16b, vs1, vs1);
+	if (predicate & 8) {
+		// The result for unordered elements inverted: r xor unordered, as not (r xor ordered).
+		a.simd(eq, vs2, target, target);
+		a.simd(eq, vs3, source, source);
+		a.simd(simd::and_16b, vs2, vs2, vs3);
+		a.simd(simd::eor_16b, vs1, vs1, vs2);
+		a.simd(simd::not_16b, vs1, vs1);
+	}
 	if (scalar)
 		a.ins(target, 0, vs1, 0, doubles ? 8 : 4);
 	else
@@ -1834,7 +1864,7 @@ void BlockTranslator::sse41(const Instruction &instruction)
 	switch (mnemonic) {
 	case pblendvb: case blendvps: case blendvpd: {
 		const uint32_t size = mnemonic == blendvps ? simd::size_s : mnemonic == blendvpd ? simd::size_d : 0;
-		a.simd(simd::cmlt_zero_16b | size, vs1, 0);
+		a.simd(simd::cmlt_zero_16b | size, vs1, operands[2].reg);
 		a.simd(simd::bsl_16b, vs1, source, target);
 		a.simd(simd::orr_16b, target, vs1, vs1);
 		return;
@@ -2084,11 +2114,24 @@ void BlockTranslator::avx(const Instruction &instruction)
 	}
 	if (mnemonic >= Mnemonic::vfmadd132ps)
 		return avx_fma(instruction);
+	switch (mnemonic) {
+	case Mnemonic::ptest: case Mnemonic::vtestps: case Mnemonic::vtestpd: return avx_test(instruction);
+	case Mnemonic::vpermilps: case Mnemonic::vpermilpd: return avx_permute(instruction);
+	case Mnemonic::vmaskmovps: case Mnemonic::vmaskmovpd: case Mnemonic::vmaskmovdqu: return avx_masked(instruction);
+	default: break;
+	}
 	if (mnemonic >= avx_first)
 		return avx_lanes(instruction);
 	const bool wide = instruction.vector_size == 32;
-	if (mnemonic == Mnemonic::ptest)
-		return avx_test(instruction);
+	if (wide && (mnemonic == Mnemonic::cvtps2pd || mnemonic == Mnemonic::cvtdq2pd || mnemonic == Mnemonic::cvtpd2ps ||
+		mnemonic == Mnemonic::cvttpd2dq || mnemonic == Mnemonic::cvtpd2dq))
+		return avx_convert(instruction);
+	// The SSE handlers below see the VEX predicates of vcmpps and the others.
+	struct Predicates {
+		unsigned &mask;
+		~Predicates() { mask = 7; }
+	} predicates{compare_predicates};
+	compare_predicates = 31;
 	if (wide && (mnemonic == Mnemonic::movmskps || mnemonic == Mnemonic::movmskpd || mnemonic == Mnemonic::pmovmskb))
 		return avx_mask(instruction);
 	const Operand &target = operands[0];
@@ -2153,7 +2196,10 @@ void BlockTranslator::avx(const Instruction &instruction)
 	const uint8_t high_input = high_from_second ? high_source(second, vh1) : 0;
 	// The low half: the destination starts as the first source, in vh2 when the instruction has an upper half or a memory operand
 	// (so nothing is written before the loads) or when the destination is the second source (which must be read first).
-	const bool second_is_destination = second.kind == OperandKind::xmm && second.reg == destination && first.reg != destination;
+	// vblendvps and the others read a third source, the selector, which may be the destination too.
+	const bool blendv = mnemonic == Mnemonic::blendvps || mnemonic == Mnemonic::blendvpd || mnemonic == Mnemonic::pblendvb;
+	const bool second_is_destination = first.reg != destination && ((second.kind == OperandKind::xmm && second.reg == destination) ||
+		(blendv && operands[3].reg == destination));
 	const uint8_t working = wide || second.kind == OperandKind::mem || second_is_destination ? vh2 : destination;
 	if (first.reg != working)
 		a.simd(simd::orr_16b, working, first.reg, first.reg);
@@ -2170,6 +2216,11 @@ void BlockTranslator::avx(const Instruction &instruction)
 		// vshufpd takes bits 3:2 of its imm8 for the upper half (vshufps the same four fields for both).
 		if (mnemonic == Mnemonic::shufpd)
 			high.operands[2].value = (operands[3].value >> 2) & 3;
+		// vblendvps and the others: the selector's upper half.
+		if (blendv) {
+			load_high(vh3, operands[3].reg);
+			high.operands[2].reg = vh3;
+		}
 		// vblendps and vblendpd: one imm8 bit per element across both halves.
 		if (mnemonic == Mnemonic::blendps)
 			high.operands[2].value = (operands[3].value >> 4) & 15;
@@ -2234,7 +2285,208 @@ void BlockTranslator::avx_test(const Instruction &instruction)
 		a.simd(simd::orr_16b, vs1, vs1, vh2);
 		a.simd(simd::orr_16b, vs2, vs2, vh3);
 	}
+	// vtestps and vtestpd look at the sign bits alone.
+	if (instruction.mnemonic != Mnemonic::ptest) {
+		const uint32_t size = instruction.mnemonic == Mnemonic::vtestps ? simd::size_s : simd::size_d;
+		a.simd(simd::cmlt_zero_16b | size, vs1, vs1);
+		a.simd(simd::cmlt_zero_16b | size, vs2, vs2);
+	}
 	test_flags();
+}
+
+void BlockTranslator::avx_permute(const Instruction &instruction)
+{
+	// vpermilps and vpermilpd: each element chosen from its own 128-bit half, by imm8 or by bits of a selector vector (bits 1:0 of
+	// each single, bit 1 of each double); the data is the first source, the selector the second. Loads first: a memory operand's
+	// low half into vs0, the upper halves into vh1 (data) and vh3 (selector).
+	const Operand *operands = instruction.operands.data();
+	const bool doubles = instruction.mnemonic == Mnemonic::vpermilpd;
+	const bool wide = instruction.vector_size == 32;
+	const bool by_imm = operands[2].kind == OperandKind::imm;
+	const Operand &memory_source = by_imm ? operands[1] : operands[2];
+	const uint8_t destination = operands[0].reg;
+	uint8_t low_memory = memory_source.reg;
+	if (memory_source.kind == OperandKind::mem) {
+		Operand half = memory_source;
+		half.size = 16;
+		load_vector(vs0, half, 16);
+		low_memory = vs0;
+	}
+	const uint8_t data_low = by_imm ? low_memory : operands[1].reg;
+	uint8_t data_high = 0, selector_high = 0;
+	if (wide) {
+		data_high = by_imm ? high_source(operands[1], vh1) : (load_high(vh1, operands[1].reg), vh1);
+		if (!by_imm)
+			selector_high = high_source(operands[2], vh3);
+	}
+	if (by_imm) {
+		const unsigned imm = static_cast<unsigned>(operands[2].value) & 0xff;
+		for (unsigned half = 0; half < (wide ? 2u : 1u); ++half) {
+			const uint8_t from = half ? data_high : data_low, into = half ? vh0 : vh2;
+			if (doubles) {
+				a.ins(into, 0, from, imm >> (2 * half) & 1, 8);
+				a.ins(into, 1, from, imm >> (2 * half + 1) & 1, 8);
+			} else
+				for (unsigned i = 0; i < 4; ++i)
+					a.ins(into, i, from, imm >> (2 * i) & 3, 4);
+		}
+	} else {
+		// tbl with byte indices built from the selector: for singles (bit 1) * 8 + (bit 0) * 4 + the byte's place in the element, for
+		// doubles (bit 1) * 8 + its place. vs1 and vs2 hold the constants.
+		a.mov_imm(s0, doubles ? 0x0808080808080808 : 0x0404040404040404);
+		a.simd(simd::fmov_d_x, vs1, s0);
+		a.dup(vs1, vs1, 8);
+		a.mov_imm(s0, doubles ? 0x0706050403020100 : 0x0302010003020100);
+		a.simd(simd::fmov_d_x, vs2, s0);
+		a.dup(vs2, vs2, 8);
+		for (unsigned half = 0; half < (wide ? 2u : 1u); ++half) {
+			const uint8_t selector = half ? selector_high : low_memory;
+			const uint8_t from = half ? data_high : data_low, into = half ? vh0 : vh2;
+			const unsigned bits = doubles ? 64 : 32;
+			const uint32_t size = doubles ? simd::size_d : simd::size_s;
+			// vs3: bit 1 as a mask of the element, its 8s kept (the 4s doubled); then for singles bit 0 with its 4s added. into is free
+			// until tbl writes it, as from and the selector are other registers.
+			a.shift_imm(simd::shl, vs3, selector, bits, bits - 2);
+			a.simd(simd::cmlt_zero_16b | size, vs3, vs3);
+			a.simd(simd::and_16b, vs3, vs3, vs1);
+			if (!doubles) {
+				a.simd(simd::add_16b, vs3, vs3, vs3);
+				a.shift_imm(simd::shl, into, selector, bits, bits - 1);
+				a.simd(simd::cmlt_zero_16b | size, into, into);
+				a.simd(simd::and_16b, into, into, vs1);
+				a.simd(simd::add_16b, vs3, vs3, into);
+			}
+			a.simd(simd::add_16b, vs3, vs3, vs2);
+			a.simd(simd::tbl_16b, into, from, vs3);
+		}
+	}
+	if (wide)
+		store_high(vh0, destination);
+	a.simd(simd::orr_16b, destination, vh2, vh2);
+	if (!wide)
+		clear_high(destination);
+}
+
+void BlockTranslator::avx_masked(const Instruction &instruction)
+{
+	// vmaskmovps, vmaskmovpd and vmaskmovdqu: an element moves where its selector's sign bit is set; no other element is read or
+	// written, so it cannot fault. Each element is a branch around its access. A store probes every byte that will be written first
+	// (staddb wzr, as avx() does) so that a fault leaves memory as it was.
+	const Operand *operands = instruction.operands.data();
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const unsigned size = mnemonic == Mnemonic::vmaskmovps ? 4 : mnemonic == Mnemonic::vmaskmovpd ? 8 : 1;
+	const bool wide = instruction.vector_size == 32;
+	const unsigned count = instruction.vector_size / size;
+	const unsigned per_half = 16 / size;
+	Operand memory;
+	if (mnemonic == Mnemonic::vmaskmovdqu) {
+		memory.kind = OperandKind::mem;
+		memory.base = 7;
+		memory.index = no_register;
+		memory.scale = 1;
+	} else
+		memory = operands[0].kind == OperandKind::mem ? operands[0] : operands[2];
+	memory.size = static_cast<uint8_t>(size);
+	const bool store = mnemonic == Mnemonic::vmaskmovdqu || operands[0].kind == OperandKind::mem;
+	const uint8_t selector = operands[1].reg;
+	const uint8_t data = mnemonic == Mnemonic::vmaskmovdqu ? operands[0].reg : store ? operands[2].reg : 0;
+	if (wide) {
+		load_high(vh1, selector);
+		if (store)
+			load_high(vh3, data);
+	}
+	auto element = [&](unsigned i) {
+		Operand at = memory;
+		at.value += static_cast<int64_t>(i * size);
+		return at;
+	};
+	auto skip_unless_selected = [&](unsigned i, Assembler::Label skip) {
+		a.umov(s2, i < per_half ? selector : vh1, i % per_half, size);
+		a.tbz(s2, static_cast<uint8_t>(size * 8 - 1), skip);
+	};
+	if (store) {
+		for (unsigned i = 0; i < count; ++i) {
+			const Assembler::Label skip = a.label();
+			skip_unless_selected(i, skip);
+			for (const unsigned offset : {0u, size - 1}) {
+				Operand probe = element(i);
+				probe.value += offset;
+				probe.size = 1;
+				constant_valid = false;
+				effective_address(s1, probe, true);
+				a.simd(simd::staddb_zero, a64::zr, s1, a64::zr);
+				if (size == 1)
+					break;
+			}
+			a.bind(skip);
+		}
+		for (unsigned i = 0; i < count; ++i) {
+			const Assembler::Label skip = a.label();
+			skip_unless_selected(i, skip);
+			a.umov(s0, i < per_half ? data : vh3, i % per_half, size);
+			constant_valid = false;
+			store_memory(s0, element(i), size);
+			a.bind(skip);
+		}
+		constant_valid = false;
+		return;
+	}
+	// A load: the elements into vh2 and vh0, zero where not selected, then the destination.
+	a.simd(simd::movi_zero_2d, vh2, 0);
+	a.simd(simd::movi_zero_2d, vh0, 0);
+	for (unsigned i = 0; i < count; ++i) {
+		const Assembler::Label skip = a.label();
+		skip_unless_selected(i, skip);
+		constant_valid = false;
+		load_memory(s0, element(i), size);
+		a.simd(simd::ins_general | element_imm5(i % per_half, size), i < per_half ? vh2 : vh0, s0);
+		a.bind(skip);
+	}
+	constant_valid = false;
+	const uint8_t destination = operands[0].reg;
+	store_high(vh0, destination);
+	a.simd(simd::orr_16b, destination, vh2, vh2);
+}
+
+void BlockTranslator::avx_convert(const Instruction &instruction)
+{
+	// The 256-bit conversions that change the width run the SSE one twice: cvtps2pd and cvtdq2pd on each 8-byte half of 16 bytes
+	// into a YMM register, cvtpd2ps, cvtpd2dq and cvttpd2dq on each 16-byte half of 32 bytes into an XMM register (its upper half
+	// cleared). The source goes into vh1 (and vh3) first.
+	const Operand *operands = instruction.operands.data();
+	const uint8_t destination = operands[0].reg;
+	const Operand &source = operands[1];
+	const bool widening = instruction.mnemonic == Mnemonic::cvtps2pd || instruction.mnemonic == Mnemonic::cvtdq2pd;
+	Instruction half = legacy_form(instruction, vh2);
+	half.operands[1] = Operand{};
+	half.operands[1].kind = OperandKind::xmm;
+	half.operands[1].size = 16;
+	if (source.kind == OperandKind::mem) {
+		Operand low = source;
+		low.size = 16;
+		load_vector(vh1, low, 16);
+	} else
+		a.simd(simd::orr_16b, vh1, source.reg, source.reg);
+	if (widening) {
+		a.ext(vh3, vh1, vh1, 8);
+		half.operands[1].reg = vh1;
+		translate(half);
+		half.operands[0].reg = vh0;
+		half.operands[1].reg = vh3;
+		translate(half);
+		store_high(vh0, destination);
+		a.simd(simd::orr_16b, destination, vh2, vh2);
+		return;
+	}
+	high_source(source, vh3);
+	half.operands[1].reg = vh1;
+	translate(half);
+	half.operands[0].reg = vh0;
+	half.operands[1].reg = vh3;
+	translate(half);
+	a.ins(vh2, 1, vh0, 0, 8);
+	a.simd(simd::orr_16b, destination, vh2, vh2);
+	clear_high(destination);
 }
 
 void BlockTranslator::avx_mask(const Instruction &instruction)

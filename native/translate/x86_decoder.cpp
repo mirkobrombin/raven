@@ -976,6 +976,24 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			result.vector_size = size;
 			return set(mnemonic, {vector(reg_number, size), vector(vex.vvvv, size), vrm(size, memory_size)});
 		}
+		// vpermilps and vpermilpd by a vector, vtestps and vtestpd, the loads and stores of vmaskmovps and vmaskmovpd.
+		if (opcode >= 0x0c && opcode <= 0x0f) {
+			if (vex.w || (opcode >= 0x0e && vex.vvvv != 0))
+				return false;
+			result.vector_size = width;
+			const Operand v = vector(reg_number, width), w = vrm(width, width);
+			if (opcode >= 0x0e)
+				return set(opcode == 0x0e ? vtestps : vtestpd, {v, w});
+			return set(opcode == 0x0c ? vpermilps : vpermilpd, {v, vector(vex.vvvv, width), w});
+		}
+		if (opcode >= 0x2c && opcode <= 0x2f) {
+			if (vex.w || !memory)
+				return false;
+			result.vector_size = width;
+			const Mnemonic mnemonic = opcode & 1 ? vmaskmovpd : vmaskmovps;
+			const Operand v = vector(reg_number, width), mask = vector(vex.vvvv, width), m = vrm(width, width);
+			return opcode < 0x2e ? set(mnemonic, {v, mask, m}) : set(mnemonic, {m, mask, v});
+		}
 		// The broadcasts: vbroadcastss from memory or (AVX2) a register, vbroadcastsd only to a YMM register.
 		const struct {
 			uint8_t opcode;
@@ -1009,6 +1027,23 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 		default:
 			return set(opcode == 0x06 ? vperm2f128 : vperm2i128, {vector(reg_number, 32), vector(vex.vvvv, 32), vrm(32, 32), imm});
 		}
+	}
+	if (vex.map == 3 && vex.pp == 1 && (opcode == 0x04 || opcode == 0x05)) {
+		if (vex.w || vex.vvvv != 0)
+			return false;
+		result.vector_size = width;
+		return set(opcode == 0x04 ? vpermilps : vpermilpd, {vector(reg_number, width), vrm(width, width), imm});
+	}
+	if (vex.map == 3 && vex.pp == 1 && opcode >= 0x4a && opcode <= 0x4c) {
+		// vblendvps, vblendvpd and vpblendvb: the selector register in imm8 bits 7:4. vpblendvb at 256 bits is AVX2.
+		if (vex.w)
+			return false;
+		if (opcode == 0x4c && vex.l)
+			return true;
+		result.vector_size = width;
+		const Mnemonic mnemonic = opcode == 0x4a ? blendvps : opcode == 0x4b ? blendvpd : pblendvb;
+		return set(mnemonic, {vector(reg_number, width), vector(vex.vvvv, width), vrm(width, width),
+			vector(static_cast<uint8_t>((imm.value >> 4) & 15), width)});
 	}
 	if ((vex.map == 2 || vex.map == 3) && vex.pp == 1) {
 		// SSSE3, SSE4.1 and SSE4.2 in the 0F 38 and 0F 3A maps. The blendv rows are VEX.66.0F3A 4A-4C with a fourth register.
@@ -1048,6 +1083,11 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	}
 	if (vex.map != 1)
 		return true;
+	if (vex.pp == 1 && opcode == 0xf7) {
+		if (memory || vex.l || vex.vvvv != 0)
+			return false;
+		return set(vmaskmovdqu, {vector(reg_number, 16), vector(rm_number, 16)});
+	}
 	SseEntry sse = sse_map[vex.pp][opcode];
 	if (vex.pp == 0 && (opcode == 0x12 || opcode == 0x16) && !memory)
 		sse = {opcode == 0x12 ? movhlps : movlhps, SseForm::vu, 16};
@@ -1084,14 +1124,18 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	for (const Mnemonic one : l0_only)
 		if (one == mnemonic && vex.l)
 			return false;
-	// The conversions that change the width between source and destination have their own operand sizes at 256 bits: not given
-	// semantics here.
-	static constexpr Mnemonic widening[] = {cvtps2pd, cvtpd2ps, cvttpd2dq, cvtdq2pd, cvtpd2dq};
-	for (const Mnemonic one : widening)
-		if (one == mnemonic && vex.l)
-			return true;
 	if (is_unary && vex.vvvv != 0)
 		return false;
+	// The conversions that change the width between source and destination at 256 bits: 16 bytes into a YMM register (cvtps2pd,
+	// cvtdq2pd) or 32 into an XMM register.
+	if (vex.l && (mnemonic == cvtps2pd || mnemonic == cvtdq2pd)) {
+		result.vector_size = 32;
+		return set(mnemonic, {vector(reg_number, 32), vrm(16, 16)});
+	}
+	if (vex.l && (mnemonic == cvtpd2ps || mnemonic == cvttpd2dq || mnemonic == cvtpd2dq)) {
+		result.vector_size = 32;
+		return set(mnemonic, {vector(reg_number, 16), vrm(32, 32)});
+	}
 	const uint8_t size = scalar ? 16 : width;
 	result.vector_size = size;
 	// vmovddup of a YMM register reads 32 bytes, as the other whole-register forms.
@@ -1368,7 +1412,8 @@ static_assert(std::size(x87_names) == static_cast<size_t>(x87_last) - static_cas
 
 static const char *const avx_names[] = {
 	"vzeroupper", "vzeroall", "vbroadcastss", "vbroadcastsd", "vbroadcastf128", "vpbroadcastb", "vpbroadcastw", "vpbroadcastd",
-	"vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128", "vfmadd132ps",
+	"vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128", "vtestps", "vtestpd",
+	"vpermilps", "vpermilpd", "vmaskmovps", "vmaskmovpd", "vmaskmovdqu", "vfmadd132ps",
 	"vfmadd132pd", "vfmadd132ss", "vfmadd132sd", "vfmadd213ps", "vfmadd213pd", "vfmadd213ss", "vfmadd213sd", "vfmadd231ps",
 	"vfmadd231pd", "vfmadd231ss", "vfmadd231sd", "vfmsub132ps", "vfmsub132pd", "vfmsub132ss", "vfmsub132sd", "vfmsub213ps",
 	"vfmsub213pd", "vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps",
