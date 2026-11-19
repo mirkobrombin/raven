@@ -1,7 +1,13 @@
 // Two vCPUs run translated x64 that adds to one 32-bit word in guest memory a million times each, with lock add, sub, inc, dec and
-// xadd, and counts the updates lost: the word must end at what the additions sum to. lock neg (a compare-and-swap loop) runs as many
-// times on a word of 5, which an even number of negations leaves at 5. The same loop with a plain inc is the control, which must lose
-// updates, or the vCPUs did not run at the same time and a zero proves nothing.
+// xadd, and counts the updates lost: the word must end at what the additions sum to. lock neg (a compare-and-swap loop) and lock not
+// run 16 trials each on a word of 5, which an even number of them leaves at 5; a lost one shows with odds of a half per trial. The
+// same loop with a plain inc is the control, which must lose updates, or the vCPUs did not run at the same time and a zero proves
+// nothing.
+//
+// The bit forms (lock or and and, xor, bts and btr, btc) work on disjoint bits of one word, a bit per vCPU: each sets its bit, checks
+// that it is set, clears it and checks that it is clear. Only that vCPU changes its bit, so with atomic operations no check can fail;
+// a read-modify-write that is not atomic writes back the other vCPU's bit as it was, and that vCPU's check sees it. Plain or and and
+// are the control.
 #include "runtime.h"
 #include "vcpu.h"
 #include "vm.h"
@@ -81,23 +87,109 @@ int main()
 		{"lock add dword ptr [rdi], 3", {0xf0, 0x83, 0x07, 0x03}, 3},
 		{"lock sub dword ptr [rdi], eax", {0xf0, 0x29, 0x07}, -1},
 		{"mov eax, 1; lock xadd dword ptr [rdi], eax", {0xb8, 0x01, 0x00, 0x00, 0x00, 0xf0, 0x0f, 0xc1, 0x07}, 1},
-		{"lock neg dword ptr [rdi]", {0xf0, 0xf7, 0x1f}, 0},
 		{"inc dword ptr [rdi] (no lock, the control)", {0xff, 0x07}, 1, true},
+	};
+	// The bit loops on one word, a bit per vCPU: SET; xchg [rsp - 8], r9; test [rdi], eax; jnz +3; inc r8; CLEAR; xchg; test
+	// [rdi], eax; jz +3; inc r8; dec ecx; jnz; ret. EAX holds the vCPU's bit, EDX its complement, ESI its index; R8 counts the failed
+	// checks. The xchg (a full barrier) makes the test read the word as the other vCPU sees it, not the vCPU's own store.
+	struct BitLoop {
+		const char *text;
+		std::vector<uint8_t> set, clear;
+		bool control = false;
+	};
+	const std::vector<BitLoop> bit_loops = {
+		{"lock or and lock and", {0xf0, 0x09, 0x07}, {0xf0, 0x21, 0x17}},
+		{"lock xor twice", {0xf0, 0x31, 0x07}, {0xf0, 0x31, 0x07}},
+		{"lock bts and lock btr", {0xf0, 0x0f, 0xab, 0x37}, {0xf0, 0x0f, 0xb3, 0x37}},
+		{"lock btc twice", {0xf0, 0x0f, 0xbb, 0x37}, {0xf0, 0x0f, 0xbb, 0x37}},
+		{"or and and (no lock, the control)", {0x09, 0x07}, {0x21, 0x17}, true},
+	};
+	auto bit_code = [](const BitLoop &loop) {
+		const std::vector<uint8_t> fence = {0x4c, 0x87, 0x4c, 0x24, 0xf8};
+		std::vector<uint8_t> code = loop.set;
+		code.insert(code.end(), fence.begin(), fence.end());
+		code.insert(code.end(), {0x85, 0x07, 0x75, 0x03, 0x49, 0xff, 0xc0});
+		code.insert(code.end(), loop.clear.begin(), loop.clear.end());
+		code.insert(code.end(), fence.begin(), fence.end());
+		code.insert(code.end(), {0x85, 0x07, 0x74, 0x03, 0x49, 0xff, 0xc0, 0xff, 0xc9});
+		code.insert(code.end(), {0x75, static_cast<uint8_t>(-static_cast<int>(code.size() + 2)), 0xc3});
+		return code;
 	};
 	int failures = 0;
 	try {
-		hvf::Vm vm(256 << 20);
+		hvf::Vm vm(uint64_t(1) << 30);
 		Snippets memory(vm);
 		const uint64_t shared = vm.map_anywhere(hvf::Vm::page_size, hvf::Access::read_write);
 		auto *word = reinterpret_cast<volatile int32_t *>(vm.host(shared));
+		// Runs entry on both vCPUs from one start, each with RCX iterations and its registers from setup; returns R8 of each.
+		auto run_both = [&](uint64_t entry, uint64_t count, auto setup) {
+			std::barrier start(2);
+			uint64_t r8[2] = {};
+			auto thread = [&](unsigned role) {
+				try {
+					hvf::Vcpu vcpu(vm, true);
+					hvf::VmCodeCache cache(vm, 1 << 20, 1 << 18);
+					translate::TranslatorOptions options;
+					options.ordering = translate::MemoryOrdering::hardware;
+					translate::Runtime runtime(memory, cache, options, &vcpu);
+					const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
+					translate::CpuState &state = runtime.state();
+					state.gpr[translate::rsp] = stack + (64 << 10);
+					state.gpr[translate::rdi] = shared;
+					state.gpr[translate::rcx] = count;
+					state.gpr[translate::r8] = 0;
+					setup(role, state);
+					runtime.translate_ahead(entry);
+					start.arrive_and_wait();
+					if (runtime.call(entry).reason != translate::ExitReason::returned)
+						throw std::runtime_error("the loop did not return");
+					r8[role] = state.gpr[translate::r8];
+				} catch (const std::exception &error) {
+					std::fprintf(stderr, "FAIL: %s\n", error.what());
+					std::_Exit(1);
+				}
+			};
+			std::thread first(thread, 0u), second(thread, 1u);
+			first.join();
+			second.join();
+			return r8[0] + r8[1];
+		};
+		for (const BitLoop &loop : bit_loops) {
+			const uint64_t entry = memory.add(bit_code(loop));
+			*word = 0;
+			const uint64_t failed = run_both(entry, iterations, [](unsigned role, translate::CpuState &state) {
+				state.gpr[translate::rax] = 1u << role;
+				state.gpr[translate::rdx] = ~(1u << role) & 0xffffffffu;
+				state.gpr[translate::rsi] = role;
+			});
+			const bool ok = loop.control ? failed > 0 : failed == 0;
+			std::printf("%s: %llu of %u checks failed%s\n", loop.text, static_cast<unsigned long long>(failed), 4 * iterations,
+				ok ? "" : loop.control ? " (FAIL: the control failed none, so the vCPUs did not overlap)" : " (FAIL)");
+			failures += !ok;
+		}
+		// lock neg and lock not, 16 trials each.
+		for (const auto &[text, body] : {std::pair<const char *, std::vector<uint8_t>>{"lock neg dword ptr [rdi]", {0xf0, 0xf7, 0x1f}},
+				 {"lock not dword ptr [rdi]", {0xf0, 0xf7, 0x17}}}) {
+			const uint64_t entry = memory.add(loop_code(body));
+			unsigned wrong = 0;
+			for (int trial = 0; trial < 16; ++trial) {
+				*word = 5;
+				run_both(entry, 200000, [](unsigned, translate::CpuState &) {});
+				wrong += *word != 5;
+			}
+			std::printf("%s: %u of 16 trials of 400000 left the word other than 5%s\n", text, wrong, wrong ? " (FAIL)" : "");
+			failures += wrong != 0;
+		}
 		for (const Loop &loop : loops) {
+			if (!loop.step)
+				continue;
 			const uint64_t entry = memory.add(loop_code(loop.body));
 			*word = loop.step ? 0 : 5;
 			std::barrier start(2);
 			auto thread = [&](unsigned) {
 				try {
 					hvf::Vcpu vcpu(vm, true);
-					hvf::VmCodeCache cache(vm, 4 << 20, 1 << 20);
+					hvf::VmCodeCache cache(vm, 1 << 20, 1 << 18);
 					translate::TranslatorOptions options;
 					options.ordering = translate::MemoryOrdering::hardware;
 					translate::Runtime runtime(memory, cache, options, &vcpu);
