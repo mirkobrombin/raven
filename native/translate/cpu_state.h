@@ -112,6 +112,9 @@ struct CpuState {
 	// them alone, so the trampolines and native thunks need not move them.
 	alignas(16) uint64_t ymm_high[16][2] = {};
 	X87State x87;
+	// RFLAGS.AC (bit 18) and ID (bit 21) as popfq left them, the rest zero, for pushfq to give back: code tests for CPUID by toggling
+	// ID. Neither changes what translated code does (AC checks alignment only where the OS sets CR0.AM).
+	uint64_t rflags_system = 0;
 };
 
 namespace state_offset {
@@ -131,6 +134,8 @@ constexpr size_t host_frame = offsetof(CpuState, host_frame);
 constexpr size_t host_fpcr = offsetof(CpuState, host_fpcr);
 constexpr size_t mxcsr = offsetof(CpuState, mxcsr);
 constexpr size_t direction = offsetof(CpuState, direction);
+constexpr size_t rflags_system = offsetof(CpuState, rflags_system);
+static_assert(rflags_system % 8 == 0 && rflags_system < 32768, "ldr and str of rflags_system reach it");
 constexpr size_t xmm = offsetof(CpuState, xmm);
 static_assert(xmm % 16 == 0 && xmm + 224 <= 1008, "ldp and stp of q registers reach the XMM array");
 constexpr size_t ymm_high = offsetof(CpuState, ymm_high);

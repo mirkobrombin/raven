@@ -1737,7 +1737,8 @@ void BlockTranslator::bit_scan(const Instruction &instruction)
 
 void BlockTranslator::flags_to_stack()
 {
-	// pushfq: CF, PF, AF, ZF, SF and OF from the lazy form, DF from CpuState, and bits 1 and 9 (IF) set, as a Windows thread sees.
+	// pushfq: CF, PF, AF, ZF, SF and OF from the lazy form, DF, AC and ID from CpuState, and bits 1 and 9 (IF) set, as a Windows
+	// thread sees.
 	normalize_carry();
 	a.cset(s0, Cond::cc, true);
 	a.eor(s1, parity_register, parity_register, Shift::lsr, 4, false);
@@ -1757,6 +1758,8 @@ void BlockTranslator::flags_to_stack()
 	a.orr(s0, s0, s1, Shift::lsl, 11);
 	a.ldr(s1, state_register, state_offset::direction, 4);
 	a.orr(s0, s0, s1, Shift::lsl, 10);
+	a.ldr(s1, state_register, state_offset::rflags_system, 8);
+	a.orr(s0, s0, s1);
 	a.orr_imm(s0, s0, 0x2);
 	a.orr_imm(s0, s0, 0x200);
 	push_value(s0);
@@ -1764,8 +1767,8 @@ void BlockTranslator::flags_to_stack()
 
 void BlockTranslator::flags_from_stack()
 {
-	// popfq: the six status flags into NZCV (C inverted) and the parity and adjust sources, DF into CpuState; the other bits (TF,
-	// IF, AC and the rest) are not kept.
+	// popfq: the six status flags into NZCV (C inverted) and the parity and adjust sources, DF, AC and ID into CpuState. TF is
+	// dropped: x86 raises a single-step exception after the next instruction, which is not done. IF and the others are not kept.
 	pop_value(s0);
 	a.ubfx(s1, s0, 7, 1);
 	a.lsl_imm(s1, s1, 31);
@@ -1784,6 +1787,9 @@ void BlockTranslator::flags_from_stack()
 	a.eor(adjust_register, parity_register, s2, Shift::lsl, 4);
 	a.ubfx(s2, s0, 10, 1);
 	a.str(s2, state_register, state_offset::direction, 4);
+	a.mov_imm(s2, (uint64_t(1) << 18) | (uint64_t(1) << 21));
+	a.and_(s2, s0, s2);
+	a.str(s2, state_register, state_offset::rflags_system, 8);
 }
 
 void BlockTranslator::string(const Instruction &instruction)
