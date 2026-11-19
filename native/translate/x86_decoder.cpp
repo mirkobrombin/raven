@@ -425,6 +425,12 @@ struct Prefixes {
 	uint8_t rex = 0;
 };
 
+struct Vex {
+	bool present = false;
+	bool r = false, x = false, b = false, w = false, l = false;
+	uint8_t map = 0, vvvv = 0, pp = 0, opcode = 0;
+};
+
 struct ModRM {
 	uint8_t mod = 0, reg = 0, rm = 0;
 };
@@ -467,12 +473,14 @@ bool read_memory(Reader &reader, const Prefixes &prefixes, ModRM modrm, Operand 
 }
 
 static void decode_x87(Instruction &result, uint8_t index, uint8_t mod, uint8_t reg, uint8_t rm);
+static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, bool rex_w);
 
 Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 {
 	Instruction result;
 	Reader reader(bytes);
 	Prefixes prefixes;
+	Vex vex;
 	// Legacy prefixes in any order; a REX prefix counts only right before the opcode.
 	for (;;) {
 		if (!reader.has(1))
@@ -523,6 +531,21 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 				return {};
 			if (opcode == 0x62 && (map == 0 || map == 4 || map == 7))
 				return {};
+			// VEX (C4, C5) after no 66, F2, F3 or REX prefix: its fields, for the forms the decoder gives semantics to.
+			if (opcode != 0x62 && opcode != 0x8f && !prefixes.operand16 && !prefixes.rep && !prefixes.repne && !prefixes.rex &&
+				!prefixes.lock) {
+				const uint8_t first_byte = reader.peek();
+				const uint8_t second_byte = opcode == 0xc4 ? bytes[reader.at + 1] : first_byte;
+				vex.present = true;
+				vex.map = static_cast<uint8_t>(map);
+				vex.r = !(first_byte & 0x80);
+				vex.x = opcode == 0xc4 && !(first_byte & 0x40);
+				vex.b = opcode == 0xc4 && !(first_byte & 0x20);
+				vex.w = opcode == 0xc4 && (second_byte & 0x80);
+				vex.vvvv = static_cast<uint8_t>((~second_byte >> 3) & 15);
+				vex.l = (second_byte >> 2) & 1;
+				vex.pp = second_byte & 3;
+			}
 			reader.take(payload);
 			if (!reader.has(1))
 				return {};
@@ -536,7 +559,8 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			const bool has_modrm = !(map == 1 && vex_opcode == 0x77 && opcode != 0x62);
 			entry = has_modrm ? other_modrm(imm) : other();
 			full_opcode = 0x10000u | vex_opcode;
-			prefixes.rex = 0;
+			prefixes.rex = vex.present ? static_cast<uint8_t>(0x40 | (vex.w ? 8 : 0) | (vex.r ? 4 : 0) | (vex.x ? 2 : 0) | (vex.b ? 1 : 0)) : 0;
+			vex.opcode = vex_opcode;
 		}
 	} else if (opcode == 0xd5) {
 		// REX2 (APX): one payload byte whose top bit selects the 0F map. Nothing translates APX code.
@@ -754,6 +778,8 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 			result.rep = result.repne = false;
 		}
 	}
+	if (vex.present && result.mnemonic == Mnemonic::other && !decode_vex(result, vex, modrm, rex_w))
+		return {};
 	if (full_opcode >= 0xd8 && full_opcode <= 0xdf && !prefixes.lock && !prefixes.rep && !prefixes.repne && !prefixes.operand16 &&
 		!rex_w)
 		decode_x87(result, static_cast<uint8_t>(full_opcode - 0xd8), modrm.mod, modrm.reg, modrm.rm);
@@ -790,6 +816,196 @@ Instruction decode(std::span<const uint8_t> bytes, uint64_t address)
 
 // D8-DF: index is the opcode less D8. The generic pass read ModRM.rm into the first operand; forms LLVM rejects (the reserved
 // aliases such as DC D0 and DD C8, and the 287's feni, fdisi and fsetpm) stay other.
+// The VEX forms the translator knows: those of SSE and SSE2 in map 1 (sse_map, by VEX.pp), vzeroupper and vzeroall, and the AVX, AVX2
+// and FMA3 instructions of avx_first to avx_last. The generic pass left ModRM.rm in operands[0] and an imm8 in operands[1]. Anything
+// else stays `other`. Returns false where x86 raises #UD for the encoding (a VEX.vvvv that must be 1111 and is not, VEX.L where the
+// form has none), so the instruction does not decode.
+static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, bool)
+{
+	using enum Mnemonic;
+	const bool memory = modrm.mod != 3;
+	const Operand rm = result.operands[0];
+	const Operand imm = result.operands[1];
+	const uint8_t width = vex.l ? 32 : 16;
+	auto vector = [](uint8_t number, uint8_t size) {
+		Operand operand;
+		operand.kind = OperandKind::xmm;
+		operand.reg = number;
+		operand.size = size;
+		return operand;
+	};
+	auto general = [](uint8_t number, uint8_t size) {
+		Operand operand;
+		operand.kind = OperandKind::reg;
+		operand.reg = number;
+		operand.size = size;
+		return operand;
+	};
+	const uint8_t reg_number = static_cast<uint8_t>(modrm.reg | (vex.r ? 8 : 0));
+	const uint8_t rm_number = static_cast<uint8_t>(modrm.rm | (vex.b ? 8 : 0));
+	auto vrm = [&](uint8_t size, uint8_t memory_size) {
+		if (!memory)
+			return vector(rm_number, size);
+		Operand operand = rm;
+		operand.size = memory_size;
+		return operand;
+	};
+	auto set = [&](Mnemonic mnemonic, std::initializer_list<Operand> operands) {
+		result.mnemonic = mnemonic;
+		result.count = static_cast<uint8_t>(operands.size());
+		result.operands = {};
+		uint8_t i = 0;
+		for (const Operand &operand : operands)
+			result.operands[i++] = operand;
+		result.vex = true;
+		result.rep = result.repne = false;
+		return true;
+	};
+	const auto opcode = vex.opcode;
+	if (vex.map == 1 && opcode == 0x77 && vex.pp == 0) {
+		result.mnemonic = vex.l ? vzeroall : vzeroupper;
+		result.count = 0;
+		result.vex = true;
+		return vex.vvvv == 0;
+	}
+	if (vex.map == 2 && vex.pp == 1) {
+		if (opcode >= 0x96 && (opcode & 0x0f) >= 8 && opcode <= 0xbf && (opcode >> 4) >= 9 && (opcode >> 4) <= 0xb) {
+			const unsigned kind = (opcode & 0x0f) - 8, order = (opcode >> 4) - 9;
+			const bool scalar = kind & 1;
+			const unsigned type = (scalar ? 2 : 0) + (vex.w ? 1 : 0);
+			const auto mnemonic = static_cast<Mnemonic>(static_cast<unsigned>(fma_first) + ((kind / 2) * 3 + order) * 4 + type);
+			const uint8_t size = scalar ? 16 : width;
+			const uint8_t memory_size = scalar ? (vex.w ? 8 : 4) : width;
+			result.vector_size = size;
+			return set(mnemonic, {vector(reg_number, size), vector(vex.vvvv, size), vrm(size, memory_size)});
+		}
+		// The broadcasts: vbroadcastss from memory or (AVX2) a register, vbroadcastsd only to a YMM register.
+		const struct {
+			uint8_t opcode;
+			Mnemonic mnemonic;
+			uint8_t element;
+			bool needs_256;
+			bool memory_only;
+		} broadcasts[] = {{0x18, vbroadcastss, 4, false, false}, {0x19, vbroadcastsd, 8, true, false},
+			{0x1a, vbroadcastf128, 16, true, true}, {0x78, vpbroadcastb, 1, false, false}, {0x79, vpbroadcastw, 2, false, false},
+			{0x58, vpbroadcastd, 4, false, false}, {0x59, vpbroadcastq, 8, false, false}};
+		for (const auto &broadcast : broadcasts)
+			if (opcode == broadcast.opcode) {
+				if (vex.w || vex.vvvv != 0 || (broadcast.needs_256 && !vex.l) || (broadcast.memory_only && !memory))
+					return false;
+				result.vector_size = width;
+				return set(broadcast.mnemonic, {vector(reg_number, width), vrm(16, broadcast.element)});
+			}
+		return true;
+	}
+	if (vex.map == 3 && vex.pp == 1 && (opcode == 0x18 || opcode == 0x19 || opcode == 0x38 || opcode == 0x39 || opcode == 0x06 ||
+		opcode == 0x46)) {
+		if (!vex.l || vex.w)
+			return false;
+		result.vector_size = 32;
+		switch (opcode) {
+		case 0x18: case 0x38:
+			return set(opcode == 0x18 ? vinsertf128 : vinserti128, {vector(reg_number, 32), vector(vex.vvvv, 32), vrm(16, 16), imm});
+		case 0x19: case 0x39:
+			if (vex.vvvv != 0)
+				return false;
+			return set(opcode == 0x19 ? vextractf128 : vextracti128, {vrm(16, 16), vector(reg_number, 32), imm});
+		default:
+			return set(opcode == 0x06 ? vperm2f128 : vperm2i128, {vector(reg_number, 32), vector(vex.vvvv, 32), vrm(32, 32), imm});
+		}
+	}
+	if (vex.map != 1)
+		return true;
+	SseEntry sse = sse_map[vex.pp][opcode];
+	if (vex.pp == 0 && (opcode == 0x12 || opcode == 0x16) && !memory)
+		sse = {opcode == 0x12 ? movhlps : movlhps, SseForm::vu, 16};
+	else if (vex.pp == 1 && opcode >= 0x71 && opcode <= 0x73)
+		sse = {sse_shifts[opcode - 0x71][modrm.reg], SseForm::ui, 0};
+	else if (vex.pp == 0 && opcode == 0xae && (modrm.reg == 2 || modrm.reg == 3))
+		sse = {modrm.reg == 2 ? ldmxcsr : stmxcsr, SseForm::m, 4};
+	const SseForm form = sse.form;
+	if (sse.mnemonic == invalid || (memory && (form == SseForm::vu || form == SseForm::gu || form == SseForm::ui)) ||
+		(!memory && (form == SseForm::vm || form == SseForm::mv || form == SseForm::m)))
+		return true;
+	const Mnemonic mnemonic = sse.mnemonic;
+	// The forms with one source: VEX.vvvv is 1111 (0 here) or x86 raises #UD.
+	static constexpr Mnemonic unary[] = {movups, movupd, movaps, movapd, movdqa, movdqu, movntps, movntpd, movntdq, sqrtps, sqrtpd,
+		cvtdq2ps, cvtps2dq, cvttps2dq, cvtps2pd, cvtpd2ps, cvttpd2dq, cvtdq2pd, cvtpd2dq, pshufd, pshufhw, pshuflw, ucomiss, ucomisd,
+		comiss, comisd, movq, movd, movmskps, movmskpd, pmovmskb, cvttss2si, cvttsd2si, cvtss2si, cvtsd2si, ldmxcsr, stmxcsr};
+	bool is_unary = false;
+	for (const Mnemonic one : unary)
+		is_unary |= one == mnemonic;
+	const bool scalar_move = (mnemonic == movss || mnemonic == movsd);
+	// Loads of a scalar and every store have one source.
+	if ((scalar_move && memory) || ((form == SseForm::wv || form == SseForm::mv) && memory))
+		is_unary = true;
+	// Forms whose elements are no wider than a quadword or a scalar: VEX.L is ignored (scalars) or must be 0.
+	static constexpr Mnemonic scalars[] = {movss, movsd, movlps, movlpd, movhps, movhpd, movhlps, movlhps, cvtsi2ss, cvtsi2sd,
+		cvttss2si, cvttsd2si, cvtss2si, cvtsd2si, ucomiss, ucomisd, comiss, comisd, sqrtss, sqrtsd, addss, addsd, mulss, mulsd, subss,
+		subsd, minss, minsd, divss, divsd, maxss, maxsd, cvtss2sd, cvtsd2ss, cmpss, cmpsd};
+	bool scalar = false;
+	for (const Mnemonic one : scalars)
+		scalar |= one == mnemonic;
+	static constexpr Mnemonic l0_only[] = {movq, movd, ldmxcsr, stmxcsr, movlps, movlpd, movhps, movhpd, movhlps, movlhps};
+	for (const Mnemonic one : l0_only)
+		if (one == mnemonic && vex.l)
+			return false;
+	// The conversions that change the width between source and destination have their own operand sizes at 256 bits: not given
+	// semantics here.
+	static constexpr Mnemonic widening[] = {cvtps2pd, cvtpd2ps, cvttpd2dq, cvtdq2pd, cvtpd2dq};
+	for (const Mnemonic one : widening)
+		if (one == mnemonic && vex.l)
+			return true;
+	if (is_unary && vex.vvvv != 0)
+		return false;
+	const uint8_t size = scalar ? 16 : width;
+	result.vector_size = size;
+	const uint8_t memory_size = sse.size == 16 ? size : sse.size;
+	const Operand v = vector(reg_number, size);
+	const Operand w = vrm(size, memory_size);
+	const Operand n = vector(vex.vvvv, size);
+	// The shifts by a count in an XMM register or memory read 128 bits of it whatever VEX.L says.
+	const bool count_shift = form == SseForm::vw && (mnemonic == psrlw || mnemonic == psrld || mnemonic == psrlq ||
+		mnemonic == psraw || mnemonic == psrad || mnemonic == psllw || mnemonic == pslld || mnemonic == psllq);
+	const uint8_t wide = vex.w ? 8 : 4;
+	switch (form) {
+	case SseForm::vw:
+		if (scalar_move && !memory)
+			return set(mnemonic, {v, n, vector(rm_number, 16)});
+		if (count_shift)
+			return set(mnemonic, {v, n, vrm(16, 16)});
+		if (mnemonic == movq)
+			return set(mnemonic, {vector(reg_number, 16), vrm(16, 8)});
+		return is_unary ? set(mnemonic, {v, w}) : set(mnemonic, {v, n, w});
+	case SseForm::vw_ib: return is_unary ? set(mnemonic, {v, w, imm}) : set(mnemonic, {v, n, w, imm});
+	case SseForm::wv: case SseForm::mv:
+		if (scalar_move && !memory)
+			return set(mnemonic, {vector(rm_number, 16), n, v});
+		if (mnemonic == movq)
+			return set(mnemonic, {vrm(16, 8), vector(reg_number, 16)});
+		return set(mnemonic, {w, v});
+	case SseForm::vm: case SseForm::vu: return set(mnemonic, {v, n, w});
+	case SseForm::ve: {
+		Operand e = memory ? rm : general(rm_number, wide);
+		e.size = wide;
+		if (mnemonic == movd)
+			return set(vex.w ? movq : movd, {vector(reg_number, 16), e});
+		return set(mnemonic, {v, n, e});
+	}
+	case SseForm::ev: {
+		Operand e = memory ? rm : general(rm_number, wide);
+		e.size = wide;
+		return set(vex.w ? movq : movd, {e, vector(reg_number, 16)});
+	}
+	case SseForm::gw: return set(mnemonic, {general(reg_number, wide), w});
+	case SseForm::gu: return set(mnemonic, {general(reg_number, 4), vector(rm_number, width)});
+	case SseForm::ui: return set(mnemonic, {vector(vex.vvvv, width), vector(rm_number, width), imm});
+	case SseForm::m: return set(mnemonic, {w});
+	case SseForm::none: return true;
+	}
+	return true;
+}
+
 static void decode_x87(Instruction &result, uint8_t index, uint8_t mod, uint8_t reg, uint8_t rm)
 {
 	using enum Mnemonic;
@@ -914,7 +1130,7 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 {
 	switch (operand.kind) {
 	case OperandKind::reg: return register_name(operand.reg, operand.size);
-	case OperandKind::xmm: return "xmm" + std::to_string(operand.reg);
+	case OperandKind::xmm: return (operand.size == 32 ? "ymm" : "xmm") + std::to_string(operand.reg);
 	case OperandKind::st: return operand.reg == no_register ? "st" : "st(" + std::to_string(operand.reg) + ")";
 	case OperandKind::imm: {
 		// LLVM sign-extends an imm8 and any immediate of a 64-bit operation; a wider immediate of a narrower one prints unsigned.
@@ -934,7 +1150,7 @@ static std::string format_operand(const Instruction &instruction, const Operand 
 	}
 	case OperandKind::mem: {
 		static const char *const sizes[] = {"", "byte ptr ", "word ptr ", "", "dword ptr ", "", "", "", "qword ptr ", "", "tbyte ptr ",
-			"", "", "", "", "", "xmmword ptr "};
+			"", "", "", "", "", "xmmword ptr ", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "ymmword ptr "};
 		static const char *const segments[] = {"", "es:", "cs:", "ss:", "ds:", "fs:", "gs:"};
 		// Environments and save areas (28 and 108 bytes) print without a size.
 		std::string text = operand.size < std::size(sizes) ? sizes[operand.size] : "";
@@ -1001,6 +1217,18 @@ static const char *const x87_names[] = {
 	"ffreep", "fbld", "fbstp", "fucompi", "fcompi", "wait"};
 static_assert(std::size(x87_names) == static_cast<size_t>(x87_last) - static_cast<size_t>(x87_first) + 1);
 
+static const char *const avx_names[] = {
+	"vzeroupper", "vzeroall", "vbroadcastss", "vbroadcastsd", "vbroadcastf128", "vpbroadcastb", "vpbroadcastw", "vpbroadcastd",
+	"vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128", "vfmadd132ps",
+	"vfmadd132pd", "vfmadd132ss", "vfmadd132sd", "vfmadd213ps", "vfmadd213pd", "vfmadd213ss", "vfmadd213sd", "vfmadd231ps",
+	"vfmadd231pd", "vfmadd231ss", "vfmadd231sd", "vfmsub132ps", "vfmsub132pd", "vfmsub132ss", "vfmsub132sd", "vfmsub213ps",
+	"vfmsub213pd", "vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps",
+	"vfnmadd132pd", "vfnmadd132ss", "vfnmadd132sd", "vfnmadd213ps", "vfnmadd213pd", "vfnmadd213ss", "vfnmadd213sd", "vfnmadd231ps",
+	"vfnmadd231pd", "vfnmadd231ss", "vfnmadd231sd", "vfnmsub132ps", "vfnmsub132pd", "vfnmsub132ss", "vfnmsub132sd", "vfnmsub213ps",
+	"vfnmsub213pd", "vfnmsub213ss", "vfnmsub213sd", "vfnmsub231ps", "vfnmsub231pd", "vfnmsub231ss", "vfnmsub231sd",
+};
+static_assert(std::size(avx_names) == static_cast<size_t>(avx_last) - static_cast<size_t>(avx_first) + 1);
+
 std::string format_intel(const Instruction &instruction)
 {
 	static const char *const conditions[] = {"o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"};
@@ -1062,17 +1290,26 @@ std::string format_intel(const Instruction &instruction)
 			name = x87_names[static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(x87_first)];
 			break;
 		}
-		static const char *const predicates[] = {"eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"};
+		if (instruction.mnemonic >= avx_first && instruction.mnemonic <= avx_last) {
+			name = avx_names[static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(avx_first)];
+			break;
+		}
+		static const char *const predicates[] = {"eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord", "eq_uq", "nge", "ngt", "false",
+			"neq_oq", "ge", "gt", "true", "eq_os", "lt_oq", "le_oq", "unord_s", "neq_us", "nlt_uq", "nle_uq", "ord_s", "eq_us", "nge_uq",
+			"ngt_uq", "false_os", "neq_os", "ge_oq", "gt_oq", "true_us"};
 		static const char *const suffixes[] = {"ps", "pd", "ss", "sd"};
 		const auto index = static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(sse_first);
-		name = sse_names[index];
-		// cmpps, cmppd, cmpss and cmpsd with a predicate SSE defines print as LLVM's pseudo-instructions.
-		if (instruction.mnemonic >= Mnemonic::cmpps && instruction.mnemonic <= Mnemonic::cmpsd && instruction.operands[2].value < 8) {
+		name = std::string(instruction.vex ? "v" : "") + sse_names[index];
+		// cmpps, cmppd, cmpss and cmpsd with a predicate SSE (0-7) or AVX (0-31) defines print as LLVM's pseudo-instructions.
+		const uint8_t last = instruction.vex ? 3 : 2;
+		if (instruction.mnemonic >= Mnemonic::cmpps && instruction.mnemonic <= Mnemonic::cmpsd &&
+			instruction.operands[last].value < (instruction.vex ? 32 : 8)) {
 			const auto kind = static_cast<size_t>(instruction.mnemonic) - static_cast<size_t>(Mnemonic::cmpps);
-			name = std::string("cmp") + predicates[instruction.operands[2].value] + suffixes[kind];
+			name = std::string(instruction.vex ? "vcmp" : "cmp") + predicates[instruction.operands[last].value] + suffixes[kind];
 			Instruction shown = instruction;
-			shown.count = 2;
+			shown.count = last;
 			shown.mnemonic = Mnemonic::movaps;
+			shown.vex = false;
 			std::string text = format_intel(shown);
 			return name + text.substr(text.find(' '));
 		}

@@ -87,14 +87,28 @@ enum class Mnemonic : uint16_t {
 	fcmovbe, fcmovu, fucompp, fild, fisttp, fist, fistp, fcmovnb, fcmovne, fcmovnbe, fcmovnu, fnclex, fninit, fucomi, fcomi, frstor,
 	fnsave, fnstsw, ffree, fucom, fucomp, faddp, fmulp, fcompp, fsubrp, fsubp, fdivrp, fdivp, ffreep, fbld, fbstp, fucompi, fcompi,
 	fwait,
+	// AVX and AVX2 instructions without an SSE form, from vzeroupper to the last FMA3 one (avx_first to avx_last). The VEX forms of SSE
+	// and SSE2 keep the SSE mnemonic with Instruction::vex set.
+	vzeroupper, vzeroall, vbroadcastss, vbroadcastsd, vbroadcastf128, vpbroadcastb, vpbroadcastw, vpbroadcastd, vpbroadcastq,
+	vinsertf128, vextractf128, vinserti128, vextracti128, vperm2f128, vperm2i128,
+	// FMA3: operation, operand order, then ps, pd, ss, sd.
+	vfmadd132ps, vfmadd132pd, vfmadd132ss, vfmadd132sd, vfmadd213ps, vfmadd213pd, vfmadd213ss, vfmadd213sd, vfmadd231ps, vfmadd231pd,
+	vfmadd231ss, vfmadd231sd, vfmsub132ps, vfmsub132pd, vfmsub132ss, vfmsub132sd, vfmsub213ps, vfmsub213pd, vfmsub213ss, vfmsub213sd,
+	vfmsub231ps, vfmsub231pd, vfmsub231ss, vfmsub231sd, vfnmadd132ps, vfnmadd132pd, vfnmadd132ss, vfnmadd132sd, vfnmadd213ps,
+	vfnmadd213pd, vfnmadd213ss, vfnmadd213sd, vfnmadd231ps, vfnmadd231pd, vfnmadd231ss, vfnmadd231sd, vfnmsub132ps, vfnmsub132pd,
+	vfnmsub132ss, vfnmsub132sd, vfnmsub213ps, vfnmsub213pd, vfnmsub213ss, vfnmsub213sd, vfnmsub231ps, vfnmsub231pd, vfnmsub231ss,
+	vfnmsub231sd,
 };
 
 constexpr Mnemonic sse_first = Mnemonic::movq;
 constexpr Mnemonic sse_last = Mnemonic::paddd;
 constexpr Mnemonic x87_first = Mnemonic::fadd;
 constexpr Mnemonic x87_last = Mnemonic::fwait;
+constexpr Mnemonic avx_first = Mnemonic::vzeroupper;
+constexpr Mnemonic avx_last = Mnemonic::vfnmsub231sd;
+constexpr Mnemonic fma_first = Mnemonic::vfmadd132ps;
 
-// xmm: an XMM register, reg 0-15. st: the x87 register ST(reg), or ST(0) written as st when reg is no_register.
+// xmm: an XMM register, reg 0-15, or with size 32 the YMM register. st: the x87 register ST(reg), or ST(0) written as st when reg is no_register.
 enum class OperandKind : uint8_t { none, reg, mem, imm, rel, xmm, st };
 
 // General registers 0-15 in encoding order (rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8-r15); 16-19 are ah, ch, dh, bh.
@@ -132,7 +146,11 @@ struct Instruction {
 	bool rep = false;
 	bool repne = false;
 	uint8_t count = 0;
-	std::array<Operand, 3> operands{};
+	std::array<Operand, 4> operands{};
+	// VEX-encoded: an SSE mnemonic names its VEX form (the operands then follow the VEX order: destination, the VEX.vvvv source, the
+	// ModRM source, any immediate), and vector_size is 32 for a 256-bit form (VEX.L), 16 otherwise.
+	bool vex = false;
+	uint8_t vector_size = 16;
 	// The opcode: one byte, or 0x0f00 | byte, 0x0f3800 | byte, 0x0f3a00 | byte for the escape maps.
 	uint32_t opcode = 0;
 };

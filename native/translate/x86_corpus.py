@@ -233,6 +233,40 @@ X87_NULLARY = ("fnop fchs fabs ftst fxam fld1 fldl2t fldl2e fldpi fldlg2 fldln2 
                "fincstp fprem fyl2xp1 fsqrt fsincos frndint fscale fsin fcos fucompp fnclex fninit fcompp wait").split() + ["fnstsw ax"]
 
 
+# VEX encodings, as bytes, in the opcodes the decoder gives VEX semantics to and their neighbours: map 1 (all of it), the FMA3 and
+# broadcast rows of map 2, and the 128-bit lane moves of map 3, with every VEX field random. LLVM decides which are valid.
+VEX_MAP2 = list(range(0x96, 0xc0)) + [0x18, 0x19, 0x1a, 0x58, 0x59, 0x5a, 0x78, 0x79]
+VEX_MAP3 = [0x06, 0x18, 0x19, 0x38, 0x39, 0x46, 0x00, 0x01]
+
+
+def vex_instance(rng):
+    vex_map = rng.choice([1, 1, 1, 2, 3])
+    opcode = rng.randrange(256) if vex_map == 1 else rng.choice(VEX_MAP2 if vex_map == 2 else VEX_MAP3)
+    w, vvvv, l, pp = rng.randrange(2), rng.randrange(16), rng.randrange(2), rng.choice([0, 1, 1, 2, 3]) if vex_map == 1 else 1
+    if rng.random() < 0.4:
+        vvvv = 15
+    r, x, b = rng.randrange(2), rng.randrange(2), rng.randrange(2)
+    if vex_map == 1 and w == 0 and x == 1 and b == 1 and rng.random() < 0.5:
+        prefix = [0xc5, r << 7 | vvvv << 3 | l << 2 | pp]
+    else:
+        prefix = [0xc4, r << 7 | x << 6 | b << 5 | vex_map, w << 7 | vvvv << 3 | l << 2 | pp]
+    modrm = rng.randrange(256) if rng.random() < 0.5 else 0xc0 | rng.randrange(64)
+    mod, rm = modrm >> 6, modrm & 7
+    rest = [modrm]
+    if mod != 3 and rm == 4:
+        sib = rng.randrange(256)
+        rest.append(sib)
+        if mod == 0 and sib & 7 == 5:
+            rest += [rng.randrange(256) for _ in range(4)]
+    if mod == 1:
+        rest.append(rng.randrange(256))
+    elif mod == 2 or (mod == 0 and rm == 5):
+        rest += [rng.randrange(256) for _ in range(4)]
+    if vex_map == 3 or (vex_map == 1 and opcode in (0xc2, 0xc4, 0xc5, 0xc6, 0x70, 0x71, 0x72, 0x73)):
+        rest.append(rng.randrange(256))
+    return ".byte " + ", ".join(str(value) for value in prefix + [opcode] + rest)
+
+
 def x87_instance(rng):
     roll = rng.random()
     if roll < 0.45:
@@ -280,11 +314,16 @@ def main():
         x87_source.write_text(".intel_syntax noprefix\n.text\n" + "".join(x87_instance(x87_rng) + "\n" for _ in range(4000)))
         x87_obj = Path(scratch) / "x87_instances.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(x87_obj), str(x87_source)], check=True)
+        vex_rng = random.Random(20261119)
+        vex_source = Path(scratch) / "vex_instances.s"
+        vex_source.write_text(".text\n" + "".join(vex_instance(vex_rng) + "\n" for _ in range(20000)))
+        vex_obj = Path(scratch) / "vex_instances.o"
+        subprocess.run([clang, "-c", "-x", "assembler", "-o", str(vex_obj), str(vex_source)], check=True)
         noise = Path(scratch) / "noise.s"
         noise.write_text(".text\n" + "".join(f".byte {', '.join(str(rng.randrange(256)) for _ in range(16))}\n" for _ in range(8192)))
         noise_obj = Path(scratch) / "noise.o"
         subprocess.run([clang, "-c", "-x", "assembler", "-o", str(noise_obj), str(noise)], check=True)
-        for path in [obj, sse_obj, x87_obj, noise_obj] + [Path(image) for image in images]:
+        for path in [obj, sse_obj, x87_obj, vex_obj, noise_obj] + [Path(image) for image in images]:
             source_name = path.name
             lines.append(f"# {source_name}")
             for raw, address, text in disassemble(objdump, str(path)):
