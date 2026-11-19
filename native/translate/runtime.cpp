@@ -19,7 +19,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 12;
+constexpr uint64_t translator_version = 13;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;

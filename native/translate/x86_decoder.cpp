@@ -337,8 +337,8 @@ constexpr SseMap make_sse_map()
 	set(0, 0x2f, comiss, F::vw, 4); set(1, 0x2f, comisd, F::vw, 8);
 	set(0, 0x50, movmskps, F::gu, 16); set(1, 0x50, movmskpd, F::gu, 16);
 	// The arithmetic rows 51 and 54-5F: ps, pd, ss, sd.
-	const Mnemonic arithmetic[][4] = {{sqrtps, sqrtpd, sqrtss, sqrtsd}, {invalid, invalid, invalid, invalid},
-		{invalid, invalid, invalid, invalid}, {andps, andpd, invalid, invalid}, {andnps, andnpd, invalid, invalid},
+	const Mnemonic arithmetic[][4] = {{sqrtps, sqrtpd, sqrtss, sqrtsd}, {rsqrtps, invalid, rsqrtss, invalid},
+		{rcpps, invalid, rcpss, invalid}, {andps, andpd, invalid, invalid}, {andnps, andnpd, invalid, invalid},
 		{orps, orpd, invalid, invalid}, {xorps, xorpd, invalid, invalid}, {addps, addpd, addss, addsd}, {mulps, mulpd, mulss, mulsd},
 		{cvtps2pd, cvtpd2ps, cvtss2sd, cvtsd2ss}, {cvtdq2ps, cvtps2dq, cvttps2dq, invalid}, {subps, subpd, subss, subsd},
 		{minps, minpd, minss, minsd}, {divps, divpd, divss, divsd}, {maxps, maxpd, maxss, maxsd}};
@@ -1104,7 +1104,7 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	static constexpr Mnemonic unary[] = {movups, movupd, movaps, movapd, movdqa, movdqu, movntps, movntpd, movntdq, sqrtps, sqrtpd,
 		cvtdq2ps, cvtps2dq, cvttps2dq, cvtps2pd, cvtpd2ps, cvttpd2dq, cvtdq2pd, cvtpd2dq, pshufd, pshufhw, pshuflw, ucomiss, ucomisd,
 		comiss, comisd, movq, movd, movmskps, movmskpd, pmovmskb, cvttss2si, cvttsd2si, cvtss2si, cvtsd2si, ldmxcsr, stmxcsr, movddup,
-		movsldup, movshdup, lddqu};
+		movsldup, movshdup, lddqu, rcpps, rsqrtps};
 	bool is_unary = false;
 	for (const Mnemonic one : unary)
 		is_unary |= one == mnemonic;
@@ -1115,7 +1115,7 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 	// Forms whose elements are no wider than a quadword or a scalar: VEX.L is ignored (scalars) or must be 0.
 	static constexpr Mnemonic scalars[] = {movss, movsd, movlps, movlpd, movhps, movhpd, movhlps, movlhps, cvtsi2ss, cvtsi2sd,
 		cvttss2si, cvttsd2si, cvtss2si, cvtsd2si, ucomiss, ucomisd, comiss, comisd, sqrtss, sqrtsd, addss, addsd, mulss, mulsd, subss,
-		subsd, minss, minsd, divss, divsd, maxss, maxsd, cvtss2sd, cvtsd2ss, cmpss, cmpsd};
+		subsd, minss, minsd, divss, divsd, maxss, maxsd, cvtss2sd, cvtsd2ss, cmpss, cmpsd, rcpss, rsqrtss};
 	bool scalar = false;
 	for (const Mnemonic one : scalars)
 		scalar |= one == mnemonic;
@@ -1390,7 +1390,7 @@ static const char *const sse_names[] = {
 	"cmpss", "cmpsd", "shufps", "shufpd", "paddq", "pmullw", "pmovmskb", "psubusb", "psubusw", "pminub", "pand", "paddusb", "paddusw",
 	"pmaxub", "pandn", "pavgb", "pavgw", "pmulhuw", "pmulhw", "cvttpd2dq", "cvtdq2pd", "cvtpd2dq", "movntdq", "psubsb", "psubsw",
 	"pminsw", "por", "paddsb", "paddsw", "pmaxsw", "pxor", "pmuludq", "pmaddwd", "psadbw", "psubb", "psubw", "psubd", "psubq",
-	"paddb", "paddw", "paddd",
+	"paddb", "paddw", "paddd", "rcpps", "rsqrtps", "rcpss", "rsqrtss",
 	"addsubps", "addsubpd", "haddps", "haddpd", "hsubps", "hsubpd", "movddup", "movsldup", "movshdup", "lddqu", "pinsrw", "pextrw",
 	"pshufb", "phaddw", "phaddd", "phaddsw", "pmaddubsw", "phsubw", "phsubd", "phsubsw", "psignb", "psignw", "psignd", "pmulhrsw",
 	"pabsb", "pabsw", "pabsd", "palignr", "pblendvb", "blendvps", "blendvpd", "ptest", "pmovsxbw", "pmovsxbd", "pmovsxbq", "pmovsxwd",

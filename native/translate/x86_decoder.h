@@ -80,7 +80,8 @@ enum class Mnemonic : uint16_t {
 	pshufd, pshufhw, pshuflw, psrlw, psraw, psllw, psrld, psrad, pslld, psrlq, psrldq, psllq, pslldq, pcmpeqb, pcmpeqw, pcmpeqd,
 	ldmxcsr, stmxcsr, cmpps, cmppd, cmpss, cmpsd, shufps, shufpd, paddq, pmullw, pmovmskb, psubusb, psubusw, pminub, pand, paddusb,
 	paddusw, pmaxub, pandn, pavgb, pavgw, pmulhuw, pmulhw, cvttpd2dq, cvtdq2pd, cvtpd2dq, movntdq, psubsb, psubsw, pminsw, por,
-	paddsb, paddsw, pmaxsw, pxor, pmuludq, pmaddwd, psadbw, psubb, psubw, psubd, psubq, paddb, paddw, paddd,
+	paddsb, paddsw, pmaxsw, pxor, pmuludq, pmaddwd, psadbw, psubb, psubw, psubd, psubq, paddb, paddw, paddd, rcpps, rsqrtps, rcpss,
+	rsqrtss,
 	// SSE3, SSSE3, SSE4.1 and SSE4.2 on XMM registers (and pinsrw, pextrw of SSE2), from addsubps to pcmpistri.
 	addsubps, addsubpd, haddps, haddpd, hsubps, hsubpd, movddup, movsldup, movshdup, lddqu, pinsrw, pextrw, pshufb, phaddw, phaddd,
 	phaddsw, pmaddubsw, phsubw, phsubd, phsubsw, psignb, psignw, psignd, pmulhrsw, pabsb, pabsw, pabsd, palignr, pblendvb, blendvps,

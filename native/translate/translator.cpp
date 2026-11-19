@@ -190,6 +190,7 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::por: case Mnemonic::pxor: case Mnemonic::addps: case Mnemonic::addpd: case Mnemonic::addss: case Mnemonic::addsd:
 	case Mnemonic::subps: case Mnemonic::subpd: case Mnemonic::subss: case Mnemonic::subsd: case Mnemonic::mulps: case Mnemonic::mulpd:
 	case Mnemonic::mulss: case Mnemonic::mulsd: case Mnemonic::divps: case Mnemonic::divpd: case Mnemonic::divss: case Mnemonic::divsd:
+	case Mnemonic::rcpps: case Mnemonic::rsqrtps: case Mnemonic::rcpss: case Mnemonic::rsqrtss:
 	case Mnemonic::sqrtps: case Mnemonic::sqrtpd: case Mnemonic::sqrtss: case Mnemonic::sqrtsd: case Mnemonic::minps:
 	case Mnemonic::minpd: case Mnemonic::minss: case Mnemonic::minsd: case Mnemonic::maxps: case Mnemonic::maxpd: case Mnemonic::maxss:
 	case Mnemonic::maxsd: case Mnemonic::ldmxcsr: case Mnemonic::stmxcsr: case Mnemonic::cmpps: case Mnemonic::cmppd:
@@ -390,6 +391,7 @@ private:
 	void sse_logic(const Instruction &instruction);
 	void sse_arithmetic(const Instruction &instruction);
 	void sse_compare(const Instruction &instruction);
+	void sse_reciprocal(const Instruction &instruction);
 	void sse_ordered_compare(const Instruction &instruction);
 	// Element 0 of source (a double or a single) to a signed integer of size bytes in result (s0), truncated or rounded as MXCSR says.
 	void convert_to_integer(uint8_t source, bool doubles, bool truncate, unsigned size);
@@ -1370,6 +1372,50 @@ void BlockTranslator::sse_compare(const Instruction &instruction)
 		a.ins(target, 0, vs1, 0, doubles ? 8 : 4);
 	else
 		a.simd(simd::orr_16b, target, vs1, vs1);
+}
+
+void BlockTranslator::sse_reciprocal(const Instruction &instruction)
+{
+	// rcpps, rsqrtps, rcpss and rsqrtss: x86 approximates within 1.5 * 2^-12 and raises nothing; this divides exactly (well within
+	// that) and puts FPSR back. As x86: a denormal input counts as zero (an infinity of its sign), and a reciprocal below the smallest
+	// normal becomes a zero of its sign. vh3 is free here, in SSE code and under avx().
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const bool square_root = mnemonic == Mnemonic::rsqrtps || mnemonic == Mnemonic::rsqrtss;
+	const bool scalar = mnemonic == Mnemonic::rcpss || mnemonic == Mnemonic::rsqrtss;
+	const uint8_t target = instruction.operands[0].reg;
+	const uint8_t source = vector_source(instruction.operands[1], vs0);
+	a.mrs_fpsr(s3);
+	// vs3: the sign bits; vs1: an infinity of each input's sign; vh3: 1.0; vs2: the result.
+	a.simd(simd::movi_zero_2d, vs3, 0);
+	a.simd(simd::fneg_4s, vs3, vs3);
+	a.simd(simd::and_16b, vs1, source, vs3);
+	a.mov_imm(s0, 0x3f8000003f800000);
+	a.simd(simd::fmov_d_x, vh3, s0);
+	a.dup(vh3, vh3, 8);
+	a.simd(simd::fdiv_4s, vs1, vh3, vs1);
+	if (square_root) {
+		a.simd(simd::fsqrt_4s, vs2, source);
+		a.simd(simd::fdiv_4s, vs2, vh3, vs2);
+	} else
+		a.simd(simd::fdiv_4s, vs2, vh3, source);
+	// Inputs whose magnitude is below 0x00800000 (the smallest normal): the infinity.
+	a.simd(simd::bic_16b, vh3, source, vs3);
+	a.shift_imm(simd::ushr, vs3, vs3, 32, 8);
+	a.simd(simd::cmgt_16b | simd::size_s, vh3, vs3, vh3);
+	a.simd(simd::bsl_16b, vh3, vs1, vs2);
+	if (!square_root) {
+		// Results below the smallest normal (NaNs are above it): their sign alone.
+		a.shift_imm(simd::shl, vs2, vs3, 32, 8);
+		a.simd(simd::bic_16b, vs1, vh3, vs2);
+		a.simd(simd::cmgt_16b | simd::size_s, vs1, vs3, vs1);
+		a.simd(simd::bic_16b, vs1, vs1, vs2);
+		a.simd(simd::bic_16b, vh3, vh3, vs1);
+	}
+	a.msr_fpsr(s3);
+	if (scalar)
+		a.ins(target, 0, vh3, 0, 4);
+	else
+		a.simd(simd::orr_16b, target, vh3, vh3);
 }
 
 void BlockTranslator::sse_ordered_compare(const Instruction &instruction)
@@ -2710,6 +2756,7 @@ void BlockTranslator::translate(const Instruction &instruction)
 		sse_arithmetic(instruction);
 		return;
 	case Mnemonic::cmpps: case Mnemonic::cmppd: case Mnemonic::cmpss: case Mnemonic::cmpsd: sse_compare(instruction); return;
+	case Mnemonic::rcpps: case Mnemonic::rsqrtps: case Mnemonic::rcpss: case Mnemonic::rsqrtss: sse_reciprocal(instruction); return;
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: sse_ordered_compare(instruction); return;
 	case Mnemonic::cvtsi2ss: case Mnemonic::cvtsi2sd: case Mnemonic::cvtss2si: case Mnemonic::cvttss2si: case Mnemonic::cvtsd2si:
 	case Mnemonic::cvttsd2si: case Mnemonic::cvtss2sd: case Mnemonic::cvtsd2ss: case Mnemonic::cvtdq2ps: case Mnemonic::cvtdq2pd:
