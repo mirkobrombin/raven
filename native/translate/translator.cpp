@@ -93,7 +93,8 @@ FlagEffect flag_effect(const Instruction &instruction)
 		// A count of zero leaves every flag as it was.
 		return {0, all_flags};
 	case Mnemonic::jcc: case Mnemonic::setcc: case Mnemonic::cmovcc: return {0, condition_flags(instruction.condition)};
-	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: return {all_flags, 0};
+	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: case Mnemonic::ptest:
+		return {all_flags, 0};
 	default: return {};
 	}
 }
@@ -222,6 +223,7 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::blendpd: case Mnemonic::pblendw: case Mnemonic::pextrb: case Mnemonic::pextrw: case Mnemonic::pextrd:
 	case Mnemonic::pextrq: case Mnemonic::extractps: case Mnemonic::pinsrb: case Mnemonic::pinsrw: case Mnemonic::pinsrd:
 	case Mnemonic::pinsrq: case Mnemonic::insertps: case Mnemonic::dpps: case Mnemonic::dppd: case Mnemonic::mpsadbw:
+	case Mnemonic::pcmpgtq: case Mnemonic::crc32:
 		return !instruction.lock;
 	case Mnemonic::cmpxchg: case Mnemonic::xadd: return first.kind == OperandKind::mem;
 	case Mnemonic::imul: return instruction.count >= 2 && size >= 4;
@@ -2451,6 +2453,22 @@ void BlockTranslator::translate(const Instruction &instruction)
 	case Mnemonic::pinsrq: case Mnemonic::insertps: case Mnemonic::dpps: case Mnemonic::dppd: case Mnemonic::mpsadbw:
 		sse41(instruction);
 		return;
+	case Mnemonic::pcmpgtq: {
+		const uint8_t source = vector_source(operands[1], vs0);
+		a.simd(simd::cmgt_16b | simd::size_d, operands[0].reg, operands[0].reg, source);
+		return;
+	}
+	case Mnemonic::crc32: {
+		// x86's crc32 is CRC-32C, bit-reflected, as Arm's crc32c: the accumulator in the low 32 bits, the result zero-extended.
+		const unsigned size = operands[1].size;
+		const uint8_t data = read(operands[1], s1);
+		const uint8_t accumulator = host_register[operands[0].reg];
+		static constexpr uint32_t forms[] = {0x1ac05000, 0x1ac05400, 0x1ac05800, 0x9ac05c00};
+		const uint32_t opcode = forms[size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : 3];
+		a.simd(opcode, s0, accumulator, data);
+		a.mov(accumulator, s0, false);
+		return;
+	}
 	case Mnemonic::packsswb: case Mnemonic::packssdw: case Mnemonic::packuswb: case Mnemonic::punpcklbw: case Mnemonic::punpcklwd:
 	case Mnemonic::punpckldq: case Mnemonic::punpcklqdq: case Mnemonic::punpckhbw: case Mnemonic::punpckhwd: case Mnemonic::punpckhdq:
 	case Mnemonic::punpckhqdq: case Mnemonic::unpcklps: case Mnemonic::unpcklpd: case Mnemonic::unpckhps: case Mnemonic::unpckhpd:
