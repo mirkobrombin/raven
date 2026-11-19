@@ -268,6 +268,17 @@ def sse3(rng):
     return [f"v{op} {name(reg(rng), width)}, {source}"]
 
 
+def ssse3(rng):
+    """SSSE3 in its legacy form."""
+    d = reg(rng)
+    source = mem(rng, 16, True) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+    if rng.random() < 0.15:
+        return [f"palignr xmm{d}, {source}, {rng.choice([0, 1, 4, 8, 15, 16, 17, 24, 31, 32, 200, rng.randrange(256)])}"]
+    op = rng.choice(["pshufb", "phaddw", "phaddd", "phaddsw", "pmaddubsw", "phsubw", "phsubd", "phsubsw", "psignb", "psignw",
+                     "psignd", "pmulhrsw", "pabsb", "pabsw", "pabsd"])
+    return [f"{op} xmm{d}, {source}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -284,6 +295,7 @@ FAMILIES = [
 # Families added after the first run on x86 silicon come after the FMA3 edges, so the earlier cases keep their numbers.
 LATER_FAMILIES = [
     ("sse3", sse3, "mixed", 500),
+    ("ssse3", ssse3, "int", 500),
 ]
 
 
