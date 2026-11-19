@@ -136,6 +136,8 @@ public:
 	NativeChild(const NativeChild &) = delete;
 	NativeChild &operator=(const NativeChild &) = delete;
 	pid_t pid = -1;
+	// Set as stop() begins: the tasks of the process are being killed and reaped.
+	std::atomic<bool> stopping{false};
 	uint64_t gate = 0, batch_gate = 0;
 	// `served` is polled while the guest runs: calls the guest makes without stopping are answered there.
 	int wait(const std::function<bool()> *served = nullptr);
@@ -429,6 +431,7 @@ void NativeChild::pause_task()
 
 void NativeChild::stop()
 {
+	stopping.store(true, std::memory_order_release);
 	if (events.joinable()) {
 		kill(-group, SIGKILL);
 		events.join();
@@ -2599,7 +2602,7 @@ NativeResult NativeProcess::resume(std::chrono::milliseconds timeout)
 	} catch (const std::runtime_error &) {
 		// Another host thread ended the process while this one waited for its task, which is gone: the run ends as that thread said.
 		std::lock_guard lock(state->ended_lock);
-		if (state->ended)
+		if (state->ended && state->child && state->child->stopping.load(std::memory_order_acquire))
 			return *state->ended;
 		throw;
 	}
