@@ -98,6 +98,27 @@ raven_agent_service:
 	mov eax, SYS_FUTEX
 	syscall
 	jmp short 1b
+
+/* Starts the service thread: the runtime runs this from a stopped task with RDI the service block and RSI the top of the thread's
+ * stack. The thread joins the task's thread group, so it ends with the process, and is untraced even when the task traces its clones.
+ * The task stops on the breakpoint after the call with RAX the new thread's id, or the error. */
+	.set SYS_CLONE, 56
+	.set SERVICE_CLONE, 0x00850f00	/* CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM | CLONE_UNTRACED */
+	.global raven_agent_spawn, raven_agent_spawned
+raven_agent_spawn:
+	mov r12, rdi
+	mov edi, SERVICE_CLONE
+	xor edx, edx
+	xor r10d, r10d
+	xor r8d, r8d
+	mov eax, SYS_CLONE
+	syscall
+	test rax, rax
+	jz short 1f
+raven_agent_spawned:
+	int3
+1:	mov rdi, r12
+	jmp raven_agent_service
 raven_agent_end:
 
 	.section .note.GNU-stack, "", @progbits

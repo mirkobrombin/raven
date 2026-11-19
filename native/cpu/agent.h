@@ -5,7 +5,8 @@
 #include <span>
 
 // The code of agent.S, which the runtime copies into a guest, and the offsets within it the runtime and the guest agree on.
-extern "C" const uint8_t raven_agent[], raven_agent_end[], raven_agent_handler[], raven_agent_restorer[], raven_agent_service[];
+extern "C" const uint8_t raven_agent[], raven_agent_end[], raven_agent_handler[], raven_agent_restorer[], raven_agent_service[],
+	raven_agent_spawn[], raven_agent_spawned[];
 
 namespace raven::agent {
 
@@ -20,6 +21,9 @@ inline std::span<const uint8_t> code() { return {raven_agent, size_t(raven_agent
 inline size_t handler() { return size_t(raven_agent_handler - raven_agent); }
 inline size_t restorer() { return size_t(raven_agent_restorer - raven_agent); }
 inline size_t service() { return size_t(raven_agent_service - raven_agent); }
+// The routine that starts the service thread, and its breakpoint the starting task stops on.
+inline size_t spawn() { return size_t(raven_agent_spawn - raven_agent); }
+inline size_t spawned() { return size_t(raven_agent_spawned - raven_agent); }
 
 // The words of the service thread's block (see agent.S): the state, the call's number, its six arguments and its result.
 namespace service_block {

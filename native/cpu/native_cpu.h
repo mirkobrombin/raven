@@ -95,6 +95,14 @@ public:
 	// The same for pages of a mapped program image, which the program may protect although it did not allocate them.
 	void protect_image(uint64_t address, size_t size, int protection);
 	void unmap_memory(uint64_t address);
+	// The agent (see agent.h): its code copied into the guest and its service thread started there, untraced, in the thread group of
+	// the task that started it. The guest's own threads stay traced until they move to the agent.
+	void start_agent();
+	// The service thread's task, 0 before start_agent.
+	pid_t agent_task() const;
+	// A system call the service thread makes inside the guest, without stopping any task; an error number in the result throws.
+	uint64_t agent_syscall(uint64_t number, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0, uint64_t a4 = 0, uint64_t a5 = 0,
+		uint64_t a6 = 0);
 	// Maps a host-owned memfd into the guest at a fresh address, or at the free page-aligned address given; release it with unmap_memory.
 	uint64_t map_shared(int descriptor, size_t size, uint64_t offset = 0, uint64_t address = 0);
 	// Transfers the same open file description, including device mapping permissions, instead of reopening it.
@@ -265,6 +273,9 @@ private:
 	std::unique_ptr<State> state;
 	void install_segment(uint32_t entry, uint64_t base);
 	uint64_t memory_syscall(uint64_t number, uint64_t a1, uint64_t a2, uint64_t a3 = 0,
+		uint64_t a4 = 0, uint64_t a5 = 0, uint64_t a6 = 0);
+	// Runs the runtime's own code from `entry` to its breakpoint at `trap` in a stopped task, as memory_syscall runs the gate (entry 0).
+	uint64_t owned_call(uint64_t entry, uint64_t trap, uint64_t number, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0,
 		uint64_t a4 = 0, uint64_t a5 = 0, uint64_t a6 = 0);
 	NativeResult begin_call(uint64_t address, std::span<const uint64_t> arguments,
 		uint64_t stack_ceiling, std::chrono::milliseconds timeout);

@@ -1,4 +1,5 @@
 #include "native_cpu.h"
+#include "agent.h"
 #include "served_queue.h"
 #include "served_stub.h"
 #include "call_cycles.h"
@@ -21,6 +22,7 @@
 #include <functional>
 #include <csignal>
 #include <ctime>
+#include <linux/futex.h>
 #include <mutex>
 #include <condition_variable>
 #include <deque>
@@ -140,6 +142,10 @@ public:
 	// `served` is polled while the guest runs: calls the guest makes without stopping are answered there.
 	int wait(const std::function<bool()> *served = nullptr);
 	uint64_t syscall(uint64_t number, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0,
+		uint64_t a4 = 0, uint64_t a5 = 0, uint64_t a6 = 0);
+	// Runs the runtime's own 64-bit code from `entry` with RAX and the argument registers of a system call set, until it stops on its
+	// breakpoint at `trap`; the result is RAX there, and an error number in it throws.
+	uint64_t run_owned(uint64_t entry, uint64_t trap, uint64_t number, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0,
 		uint64_t a4 = 0, uint64_t a5 = 0, uint64_t a6 = 0);
 	// System calls made one after the other in a single stop of the guest, through the batch gate of the bootstrap: each the number and
 	// six arguments. Their results, in order; the first that fails throws, and none after it is made.
@@ -601,10 +607,16 @@ int NativeChild::wait(const std::function<bool()> *served)
 uint64_t NativeChild::syscall(uint64_t number, uint64_t a1, uint64_t a2, uint64_t a3,
 	uint64_t a4, uint64_t a5, uint64_t a6)
 {
+	return run_owned(gate + 1, gate + 3, number, a1, a2, a3, a4, a5, a6);
+}
+
+uint64_t NativeChild::run_owned(uint64_t entry, uint64_t trap, uint64_t number, uint64_t a1, uint64_t a2, uint64_t a3,
+	uint64_t a4, uint64_t a5, uint64_t a6)
+{
 	user_regs_struct registers{};
 	trace(PTRACE_GETREGS, pid, &registers);
-	registers.rip = gate + 1;
-	// The gate is a 64-bit SYSCALL; a compatibility-mode guest is switched out only for this instruction.
+	registers.rip = entry;
+	// The owned code is 64-bit; a compatibility-mode guest is switched out only while it runs.
 	registers.cs = 0x33;
 	registers.ss = 0x2b;
 	registers.rax = number;
@@ -626,7 +638,7 @@ uint64_t NativeChild::syscall(uint64_t number, uint64_t a1, uint64_t a2, uint64_
 		throw std::runtime_error(detail.str());
 	}
 	trace(PTRACE_GETREGS, pid, &registers);
-	if (registers.rip != gate + 4)
+	if (registers.rip != trap + 1)
 		throw std::runtime_error("native syscall stopped outside its gate");
 	if (registers.rax >= uint64_t(-4095))
 		throw std::runtime_error("native syscall: " + std::string(std::strerror(static_cast<int>(-registers.rax))));
@@ -687,6 +699,11 @@ struct NativeProcess::State {
 	uint64_t atomic_gate = 0;
 	// The routine that carries out what a host thread asks of its guest waiting in a stub; zero when stubs cannot be asked.
 	uint64_t request_gate = 0;
+	// The agent (see start_agent): its code in the guest, its service thread's block as the runtime sees it and the thread's task.
+	uint64_t agent_page = 0;
+	uint64_t *agent_service = nullptr;
+	pid_t agent_task = 0;
+	std::mutex agent_lock;
 	struct SharedView {
 		void *host = MAP_FAILED;
 		size_t size = 0;
@@ -1189,9 +1206,84 @@ uint64_t NativeProcess::memory_syscall(uint64_t number, uint64_t a1, uint64_t a2
 			throw std::runtime_error("native syscall: " + std::string(std::strerror(static_cast<int>(-result))));
 		return result;
 	}
+	return owned_call(0, 0, number, a1, a2, a3, a4, a5, a6);
+}
+
+void NativeProcess::start_agent()
+{
+	if (state->agent_task)
+		throw std::runtime_error("the agent is already started");
+	// The agent's system calls are made outside the gate, which the filter stops; under the agent, Syscall User Dispatch takes its place.
+	if (state->seccomp)
+		throw std::runtime_error("the agent cannot start under the system call filter");
+	const auto code = agent::code();
+	if (code.size() > 4096)
+		throw std::runtime_error("the agent does not fit its page");
+	const uint64_t page = map_memory(4096, PROT_READ | PROT_WRITE);
+	write_memory(page, code);
+	protect_memory(page, 4096, PROT_READ | PROT_EXEC);
+	const int descriptor = memfd_create("raven-agent-service", MFD_CLOEXEC);
+	if (descriptor < 0)
+		throw std::runtime_error("cannot create the agent's service block");
+	uint64_t block = 0;
+	try {
+		if (ftruncate(descriptor, 4096) != 0)
+			throw std::runtime_error("cannot size the agent's service block");
+		block = map_descriptor(descriptor, 4096);
+	} catch (...) {
+		close(descriptor);
+		throw;
+	}
+	close(descriptor);
+	const uint64_t stack = map_memory(agent::stack_size, PROT_READ | PROT_WRITE);
+	const uint64_t task = owned_call(page + agent::spawn(), page + agent::spawned(), 0, block, stack + agent::stack_size);
+	state->agent_page = page;
+	state->agent_service = static_cast<uint64_t *>(state->shared_views.at(block)->host);
+	state->agent_task = pid_t(task);
+}
+
+pid_t NativeProcess::agent_task() const
+{
+	return state->agent_task;
+}
+
+uint64_t NativeProcess::agent_syscall(uint64_t number, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
+{
+	namespace word = agent::service_block;
+	if (!state->agent_task)
+		throw std::runtime_error("the agent is not started");
+	std::lock_guard lock(state->agent_lock);
+	uint64_t *const service = state->agent_service;
+	auto *const progress = reinterpret_cast<uint32_t *>(&service[word::state]);
+	service[word::number] = number;
+	const uint64_t arguments[] = {a1, a2, a3, a4, a5, a6};
+	std::memcpy(&service[word::arguments], arguments, sizeof arguments);
+	__atomic_store_n(progress, word::waiting, __ATOMIC_RELEASE);
+	::syscall(SYS_futex, progress, FUTEX_WAKE, 1, nullptr, nullptr, 0);
+	const timespec slice{0, 100'000'000};
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (__atomic_load_n(progress, __ATOMIC_ACQUIRE) != word::done) {
+		if (std::chrono::steady_clock::now() >= deadline)
+			throw std::runtime_error("the agent's service thread did not answer");
+		::syscall(SYS_futex, progress, FUTEX_WAIT, word::waiting, &slice, nullptr, 0);
+	}
+	const uint64_t result = service[word::result];
+	__atomic_store_n(progress, word::idle, __ATOMIC_RELAXED);
+	if (result >= uint64_t(-4095))
+		throw std::runtime_error("agent syscall: " + std::string(std::strerror(static_cast<int>(-result))));
+	return result;
+}
+
+uint64_t NativeProcess::owned_call(uint64_t entry, uint64_t trap, uint64_t number, uint64_t a1, uint64_t a2,
+	uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
+{
 	settle_call();
 	// A Linux system call leaves the extended processor state alone, so only the general registers the gate uses are kept.
 	auto &child = *state->child;
+	if (!entry) {
+		entry = child.gate + 1;
+		trap = child.gate + 3;
+	}
 	struct SelectedTask {
 		NativeChild &child;
 		pid_t previous;
@@ -1212,13 +1304,13 @@ uint64_t NativeProcess::memory_syscall(uint64_t number, uint64_t a1, uint64_t a2
 	child.set_timeout(std::chrono::seconds(2));
 	uint64_t result = 0;
 	try {
-		result = child.syscall(number, a1, a2, a3, a4, a5, a6);
+		result = child.run_owned(entry, trap, number, a1, a2, a3, a4, a5, a6);
 	} catch (...) {
 		try {
 			user_regs_struct where{};
 			if (child.pid != -1)
 				trace(PTRACE_GETREGS, child.pid, &where);
-			if (child.pid == -1 || where.rip != child.gate + 4)
+			if (child.pid == -1 || where.rip != trap + 1)
 				throw std::runtime_error("native memory operation lost its gate");
 			trace(PTRACE_SETREGS, child.pid, &saved);
 		} catch (...) {
