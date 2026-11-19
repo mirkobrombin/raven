@@ -568,6 +568,41 @@ def avx2_data(rng, body, registers, vectors, memory):
                 memory[i] = rng.randrange(70) | rng.randrange(70) << 32
 
 
+GATHERS = {"vpgatherdd": (4, 4), "vpgatherdq": (4, 8), "vpgatherqd": (8, 4), "vpgatherqq": (8, 8), "vgatherdps": (4, 4),
+           "vgatherdpd": (4, 8), "vgatherqps": (8, 4), "vgatherqpd": (8, 8)}
+
+
+def gathers(rng):
+    """The AVX2 gathers: every form at both widths, base r15 or none, every scale, the mask's sign bits random; gathers_data puts
+    the indices inside the buffer (some negative)."""
+    op = rng.choice(sorted(GATHERS))
+    index_size, element = GATHERS[op]
+    width = rng.choice([16, 32])
+    d, x, m = rng.sample(range(16), 3)
+    count = width // max(index_size, element) if index_size != element else width // element
+    # The widths: data and mask hold count elements, the index count indices.
+    data_width = max(16, count * element)
+    index_width = max(16, count * index_size)
+    scale = rng.choice([1, 2, 4, 8])
+    displacement = rng.choice([0, 8, 64, 128])
+    return [f"{op} {name(d, data_width)}, [r15 + {scale}*{name(x, index_width)} + {displacement}], {name(m, data_width)}"]
+
+
+def gathers_data(rng, body, registers, vectors, memory):
+    import re
+    text = body[0]
+    op = text.split()[0]
+    index_size, element = GATHERS[op]
+    found = re.search(r"\[r15 \+ (\d)\*[xy]mm(\d+) \+ (\d+)\]", text)
+    scale, x, displacement = int(found.group(1)), int(found.group(2)), int(found.group(3))
+    low = -(displacement // scale)
+    high = (192 - element - displacement) // scale
+    values = [rng.randint(low, high) for _ in range(32 // index_size)]
+    mask = (1 << (8 * index_size)) - 1
+    raw = b"".join((value & mask).to_bytes(index_size, "little") for value in values)
+    vectors[x] = [int.from_bytes(raw[8 * q:8 * q + 8], "little") for q in range(4)]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -594,9 +629,10 @@ LATER_FAMILIES = [
     ("approximations", approximations, "f32", 600),
     ("fma addsub", fma_addsub, "mixed", 600),
     ("avx2", avx2, "int", 1500),
+    ("gathers", gathers, "mixed", 800),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
-FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data}
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data}
 
 
 def lanes_of(body, kind):
