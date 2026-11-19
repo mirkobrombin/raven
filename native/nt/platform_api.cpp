@@ -1109,6 +1109,8 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 		if (call[0]) call.store_pointer(call[0], 0);
 		call.ret(e_notimpl);
 	});
+	// Raven's shell component puts a data object on the clipboard; without it there is no clipboard for one.
+	registry.add("OleSetClipboard", 1, [](ApiCall &call) { call.ret(e_notimpl); });
 
 	// BSTRs: a four-byte byte count precedes the characters, which are zero-terminated.
 	const auto make_bstr = [&context](ApiCall &call, const uint8_t *bytes, size_t length) {

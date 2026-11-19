@@ -165,7 +165,7 @@ def main():
                    "OpenRegStream", "SHOpenRegStreamW", "SHOpenRegStreamA", "SHOpenRegStream2W", "SHOpenRegStream2A", "InitNetworkAddressControl",
                    "RoGetActivationFactory", "RoActivateInstance", "CoCreateFreeThreadedMarshaler",
                    "SHGetDesktopFolder", "SHCreateItemFromIDList", "SHCreateShellItem", "CreateFileMoniker", "SHLoadIndirectString", "SHGetPropertyStoreFromParsingName", "ILGetSize", "ILGetNext", "ILFindLastID", "ILClone", "ILCloneFirst", "ILCombine", "ILFree", "ILCreateFromPathW", "SHILCreateFromPath", "SHParseDisplayName", "SHBindToParent", "SHGetDataFromIDListW", "ILIsEqual",
-                   "CreateErrorInfo", "SetErrorInfo", "GetErrorInfo", "CoWaitForMultipleHandles", "OleGetClipboard",
+                   "CreateErrorInfo", "SetErrorInfo", "GetErrorInfo", "CoWaitForMultipleHandles", "OleGetClipboard", "OleSetClipboard", "ReleaseStgMedium",
                    "CoRegisterClassObject", "CoRevokeClassObject", "CoResumeClassObjects", "CoSuspendClassObjects", "CoAddRefServerProcess", "CoReleaseServerProcess",
                    "SHGetFileInfoW", "SHGetFileInfoA")
     (output / "raven-shell.def").write_text("NAME raven-shell.dll\nEXPORTS\n" + "".join(definition_line(name, shell_defined.get(name)) for name in shell_names))
