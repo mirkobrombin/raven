@@ -24,7 +24,12 @@ CpuidAnswer cpuid(uint32_t leaf, uint32_t subleaf, const GuestFeatures &features
 	case 1: {
 		// Family 6, model 0, stepping 0; no brand index, CLFLUSH size or APIC ID, one logical processor.
 		uint32_t ecx = 0;
+		ecx |= features.sse3 ? 1u << 0 : 0;
+		ecx |= features.ssse3 ? 1u << 9 : 0;
 		ecx |= features.fma ? 1u << 12 : 0;
+		ecx |= features.sse41 ? 1u << 19 : 0;
+		ecx |= features.sse42 ? 1u << 20 : 0;
+		ecx |= features.popcnt ? 1u << 23 : 0;
 		ecx |= xsave ? 1u << 26 | 1u << 27 : 0;
 		ecx |= features.avx ? 1u << 28 : 0;
 		ecx |= features.f16c ? 1u << 29 : 0;

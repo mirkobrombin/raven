@@ -11,6 +11,11 @@ namespace raven::translate {
 // CMOV, MMX, FXSR, SSE, SSE2, long mode, syscall), which x64 code may assume without asking, nothing is reported yet:
 // docs/macos/avx.md has the policy and what each feature still lacks. cpuid_check.h tests both rules.
 struct GuestFeatures {
+	bool sse3 = false;
+	bool ssse3 = false;
+	bool sse41 = false;
+	bool sse42 = false;
+	bool popcnt = false;
 	bool avx = false;
 	bool avx2 = false;
 	bool fma = false;
@@ -19,8 +24,9 @@ struct GuestFeatures {
 	bool bmi2 = false;
 };
 
-// What the translator runs today.
-constexpr GuestFeatures guest_features{};
+// What the translator runs today: every sample of cpuid_check.h translates, and the feature's oracle families pass in this process and
+// in a vCPU against the x86 CPU.
+constexpr GuestFeatures guest_features{.sse3 = true};
 
 struct CpuidAnswer {
 	uint32_t eax, ebx, ecx, edx;

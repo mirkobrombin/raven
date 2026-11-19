@@ -442,6 +442,12 @@ size_t check(Run run, const char *where, bool require_samples = true)
 			fail(std::string(name) + " without AVX");
 	if ((leaf7.ebx >> 5 & 1) && !avx)
 		fail("AVX2 without AVX");
+	// Each SSE level assumes the ones before it, and AVX all of them (its VEX forms are theirs).
+	const bool sse3 = leaf1.ecx & 1, ssse3 = leaf1.ecx >> 9 & 1, sse41 = leaf1.ecx >> 19 & 1, sse42 = leaf1.ecx >> 20 & 1;
+	if ((ssse3 && !sse3) || (sse41 && !ssse3) || (sse42 && !sse41))
+		fail("an SSE level without the one before it");
+	if (avx && !sse42)
+		fail("AVX without SSE4.2");
 	// AVX512F, DQ, IFMA, PF, ER, CD, BW, VL in EBX; VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ in ECX; 4VNNIW, 4FMAPS, VP2INTERSECT, FP16 in
 	// EDX.
 	if (leaf7.ebx & 0xdc230000u)

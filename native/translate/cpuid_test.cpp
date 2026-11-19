@@ -61,6 +61,7 @@ int main()
 	// The answers with every feature cpuid.h knows turned on must be as consistent (OSXSAVE, XCR0 and leaf 0xd with AVX), though
 	// nothing translates their instructions yet: straight from the model, the leaf and subleaf read back from the code.
 	GuestFeatures all;
+	all.sse3 = all.ssse3 = all.sse41 = all.sse42 = all.popcnt = true;
 	all.avx = all.avx2 = all.fma = all.f16c = all.bmi1 = all.bmi2 = true;
 	const size_t model_failures = cpuid_check::check(
 		[&](const std::vector<uint8_t> &code) {
