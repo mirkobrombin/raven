@@ -325,6 +325,25 @@ def sse41(rng):
     return [f"{op} xmm{d}, {xsource()}"]
 
 
+def sse42(rng):
+    """SSE4.2 without the string compares (pcmpestri and the others: not translated yet): pcmpgtq and crc32."""
+    if rng.random() < 0.3:
+        source = mem(rng, 16, True) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+        return [f"pcmpgtq xmm{reg(rng)}, {source}"]
+    target_size, size = rng.choice([(32, 8), (32, 16), (32, 32), (64, 8), (64, 64)])
+    source = mem(rng, size // 8) if rng.random() < 0.3 else sse.gpr(rng, size) if size >= 32 else \
+        rng.choice(["al", "cl", "dl", "bl", "sil", "dil", "r8b", "r9b"] if size == 8 else ["ax", "cx", "dx", "bx", "si", "r8w"])
+    return [f"crc32 {sse.gpr(rng, target_size)}, {source}"]
+
+
+def popcnt(rng):
+    size = rng.choice([16, 32, 64])
+    source = mem(rng, size // 8) if rng.random() < 0.3 else (rng.choice(["ax", "cx", "dx", "bx", "si", "r8w"]) if size == 16
+                                                              else sse.gpr(rng, size))
+    target = rng.choice(["ax", "cx", "dx", "bx", "di", "r9w"]) if size == 16 else sse.gpr(rng, size)
+    return [f"popcnt {target}, {source}", f"set{rng.choice(['e', 'ne', 'b', 'p', 's', 'o', 'a'])} r10b"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -343,6 +362,7 @@ LATER_FAMILIES = [
     ("sse3", sse3, "mixed", 500),
     ("ssse3", ssse3, "int", 500),
     ("sse41", sse41, "mixed", 1000),
+    ("sse42", sse42, "int", 400),
 ]
 
 
