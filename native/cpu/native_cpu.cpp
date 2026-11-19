@@ -718,6 +718,12 @@ struct NativeProcess::State {
 	size_t agent_xstate = 0;
 	// The guest's thread that ends it once the runtime ends.
 	pid_t agent_warden = 0;
+	// Every room for a task in the agent's hands, with the task it serves: 0 for none yet, -1 while one is being started.
+	struct AgentSlot {
+		AgentRoom room;
+		pid_t task = 0;
+	};
+	std::vector<AgentSlot> agent_slots;
 	// The runtime's system calls the service thread made in place of a stopped task.
 	std::atomic<uint64_t> agent_calls{0};
 	struct SharedView {
@@ -1287,25 +1293,50 @@ void NativeProcess::start_agent()
 
 NativeProcess::AgentRoom NativeProcess::agent_room()
 {
-	const auto shared_block = [&](size_t size, uint64_t &guest) {
-		const int descriptor = memfd_create("raven-agent-task", MFD_CLOEXEC);
+	// Rooms come in slabs, one shared mapping each, and a room whose task has ended serves the next one: a block and a stack mapped
+	// apart for every thread cost a dozen of the agent's calls and two searches of the address space each, which a program that starts
+	// hundreds of threads paid for in whole seconds (in a 32-bit guest above all).
+	auto &slots = state->agent_slots;
+	size_t slot = slots.size();
+	for (size_t at = 0; at < slots.size(); ++at) {
+		if (slots[at].task == 0 || (slots[at].task > 0 && !agent::held(slots[at].task))) {
+			slot = at;
+			break;
+		}
+	}
+	if (slot == slots.size()) {
+		constexpr size_t rooms = 32;
+		// The blocks first, then the stacks, which lie on boundaries of their size: one stack's worth more leaves room to align them.
+		const size_t blocks = rooms * 4096, size = blocks + (rooms + 1) * agent::stack_size;
+		const int descriptor = memfd_create("raven-agent-rooms", MFD_CLOEXEC);
 		if (descriptor < 0)
-			throw std::runtime_error("cannot create the agent's task block");
+			throw std::runtime_error("cannot create the agent's task blocks");
+		uint64_t base = 0;
 		try {
 			if (ftruncate(descriptor, off_t(size)) != 0)
-				throw std::runtime_error("cannot size the agent's task block");
-			guest = map_descriptor(descriptor, size);
+				throw std::runtime_error("cannot size the agent's task blocks");
+			base = map_descriptor(descriptor, size);
 		} catch (...) {
 			close(descriptor);
 			throw;
 		}
 		close(descriptor);
-		return static_cast<uint8_t *>(state->shared_views.at(guest)->host);
-	};
-	AgentRoom room;
-	room.block = reinterpret_cast<uint64_t *>(shared_block(4096, room.block_guest));
-	room.stack = shared_block(agent::stack_size, room.stack_guest);
+		auto *const host = static_cast<uint8_t *>(state->shared_views.at(base)->host);
+		const uint64_t stacks = (base + blocks + agent::stack_size - 1) & ~uint64_t(agent::stack_size - 1);
+		for (size_t at = 0; at < rooms; ++at) {
+			State::AgentSlot fresh;
+			fresh.room.block_guest = base + at * 4096;
+			fresh.room.block = reinterpret_cast<uint64_t *>(host + at * 4096);
+			fresh.room.stack_guest = stacks + at * agent::stack_size;
+			fresh.room.stack = host + (fresh.room.stack_guest - base);
+			slots.push_back(fresh);
+		}
+	}
+	slots[slot].task = -1;
+	AgentRoom room = slots[slot].room;
+	room.slot = slot;
 	uint64_t *const block = room.block;
+	std::memset(block, 0, 4096);
 	// The handler finds the block from its stack pointer: the stack lies on a boundary of its size and names the block first.
 	if (room.stack_guest % agent::stack_size)
 		throw std::runtime_error("the agent's signal stack is not aligned to its size");
@@ -1339,6 +1370,7 @@ pid_t NativeProcess::agent_thread(uint64_t stack_top)
 		throw std::runtime_error("threads are started by the agent only once the guest's first task is in its hands");
 	const auto room = agent_room();
 	const pid_t task = pid_t(agent_syscall(agent::service_block::start_thread, stack_top, room.block_guest));
+	state->agent_slots[room.slot].task = task;
 	agent::Task born;
 	born.task = task;
 	born.group = task;
@@ -1414,6 +1446,7 @@ void NativeProcess::hand_to_agent()
 	handed.xstate_size = extended.iov_len;
 	state->agent_xstate = extended.iov_len;
 	agent::hold(handed);
+	state->agent_slots[room.slot].task = task;
 	int status = 0;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	pid_t result = 0;

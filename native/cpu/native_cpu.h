@@ -281,6 +281,7 @@ private:
 		uint64_t block_guest = 0;
 		uint8_t *stack = nullptr;
 		uint64_t stack_guest = 0;
+		size_t slot = 0;
 	};
 	AgentRoom agent_room();
 	struct State;
