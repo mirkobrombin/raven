@@ -2384,6 +2384,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtCreateFile", "NtOpenFile",
 		// What an open file and its volume are, which paint.net's file system layer looks up at run time.
 		"NtQueryInformationFile", "NtQueryVolumeInformationFile",
+		// What libuv, the event loop of Node.js and Electron, looks up when it starts and does not run without.
+		"NtDeviceIoControlFile", "NtSetInformationFile",
 		// What the runtime's own components import from ntdll, which they need whether a program loads them at start or later.
 		"DbgPrint", "NtCancelIoFile", "NtCreateSection", "NtFsControlFile", "NtReadFile", "RtlCreateUnicodeStringFromAsciiz", "RtlFreeHeap",
 		"RtlFreeUnicodeString", "RtlDllShutdownInProgress", "RtlGetVersion", "RtlIpv6AddressToStringExW", "RtlIpv6StringToAddressW", "RtlLengthSid", "RtlUnicodeToMultiByteN",
