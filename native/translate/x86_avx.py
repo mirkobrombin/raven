@@ -633,6 +633,31 @@ def strings_wide_data(rng, body, registers, vectors, memory):
         registers[r] = rng.choice(wide)
 
 
+SHIFT_COUNTS = [63, 64, 128, 255, 256, 0x80000000, 0xffffffff, 0, 1, 31, 32, 33]
+
+
+def shift_counts(rng):
+    """The variable shifts with counts at the edges (shift_counts_data): of 63 and more, with the low half or (quadwords) only the
+    high half of the count set."""
+    d, a, b = three(rng)
+    width = rng.choice([16, 32])
+    source = mem(rng, width, True) if rng.random() < 0.4 else name(b, width)
+    return [f"{rng.choice(VARIABLE_SHIFTS)} {name(d, width)}, {name(a, width)}, {source}"]
+
+
+def shift_counts_data(rng, body, registers, vectors, memory):
+    quad = body[0].split()[0].endswith("q")
+    def count():
+        value = rng.choice(SHIFT_COUNTS)
+        return value << 32 if quad and rng.random() < 0.5 else value
+    def quadword():
+        return count() if quad else count() | count() << 32
+    for r in range(16):
+        vectors[r] = [quadword() if rng.random() < 0.8 else vectors[r][q] for q in range(4)]
+    for i in range(24):
+        memory[i] = quadword()
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -662,9 +687,10 @@ LATER_FAMILIES = [
     ("gathers", gathers, "mixed", 800),
     ("avx2 broadcast", avx2_broadcast, "int", 100),
     ("strings wide", strings_wide, "int", 400),
+    ("shift counts", shift_counts, "int", 400),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
-FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data}
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data, "shift counts": shift_counts_data}
 
 
 def lanes_of(body, kind):
