@@ -363,6 +363,7 @@ LATER_FAMILIES = [
     ("ssse3", ssse3, "int", 500),
     ("sse41", sse41, "mixed", 1000),
     ("sse42", sse42, "int", 400),
+    ("popcnt", popcnt, "int", 300),
 ]
 
 
