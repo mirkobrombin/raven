@@ -38,8 +38,6 @@ enum class FaultKind : uint64_t {
 	instruction,
 	// #MF: an x87 instruction found an unmasked exception pending; FSW and FCW in CpuState::x87 say which.
 	x87,
-	// cpuid or xgetbv; rip is that instruction. The runtime answers it (cpuid.h) and goes on after it.
-	cpuid,
 };
 
 // The x87 FPU, kept in CpuState only: the host's x87 core (x87.h) reads and writes it, translated code never does. The order is that
