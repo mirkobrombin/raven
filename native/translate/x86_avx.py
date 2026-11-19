@@ -658,6 +658,11 @@ def shift_counts_data(rng, body, registers, vectors, memory):
         memory[i] = quadword()
 
 
+def maskmovdqu(rng):
+    """Legacy maskmovdqu (SSE2): the bytes whose selector byte has its top bit set, stored at [rdi]."""
+    return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"maskmovdqu xmm{reg(rng)}, xmm{reg(rng)}", "mov edi, 0"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -688,6 +693,7 @@ LATER_FAMILIES = [
     ("avx2 broadcast", avx2_broadcast, "int", 100),
     ("strings wide", strings_wide, "int", 400),
     ("shift counts", shift_counts, "int", 400),
+    ("maskmovdqu", maskmovdqu, "int", 200),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
 FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data, "shift counts": shift_counts_data}

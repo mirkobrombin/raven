@@ -175,6 +175,47 @@ int main()
 			++failures;
 		}
 	}
+	// Legacy maskmovdqu xmm1, xmm2 at rdi, 8 bytes before an unmapped page: with the selectors of the unmapped bytes clear it stores
+	// the others and does not fault; with one of them set it faults and stores nothing.
+	for (const bool selected : {false, true}) {
+		const char *text = selected ? "maskmovdqu xmm1, xmm2, an unmapped byte selected" : "maskmovdqu xmm1, xmm2, unmapped bytes masked off";
+		try {
+			hvf::Vm vm(64 << 20);
+			Snippets memory(vm);
+			const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
+			uint8_t *alias = vm.map(base, hvf::Vm::page_size, hvf::Access::read_write);
+			std::memset(alias, 0x5a, hvf::Vm::page_size);
+			translate::TranslatorOptions options;
+			options.ordering = translate::MemoryOrdering::hardware;
+			hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
+			hvf::Vcpu vcpu(vm, true);
+			translate::Runtime runtime(memory, cache, options, &vcpu);
+			const uint64_t address = memory.add({0x66, 0x0f, 0xf7, 0xca, 0xc3});
+			translate::CpuState &state = runtime.state();
+			state.gpr[translate::rsp] = stack + (64 << 10);
+			state.gpr[translate::rdi] = base + hvf::Vm::page_size - 8;
+			state.xmm[1][0] = state.xmm[1][1] = 0x1111111111111111ull;
+			state.xmm[2][0] = 0x8080808080808080ull;
+			state.xmm[2][1] = selected ? 0x80 : 0;
+			bool faulted = false;
+			try {
+				runtime.call(address);
+			} catch (const std::exception &) {
+				faulted = true;
+			}
+			bool right = faulted == selected;
+			for (size_t i = 0; i < hvf::Vm::page_size; ++i)
+				right &= alias[i] == (!selected && i >= hvf::Vm::page_size - 8 ? 0x11 : 0x5a);
+			if (!right) {
+				std::fprintf(stderr, "FAIL: %s: %s\n", text, faulted ? "faulted" : "did not fault");
+				++failures;
+			} else
+				std::printf("%s: %s\n", text, selected ? "faulted with memory as it was" : "did not fault, stored the selected bytes");
+		} catch (const std::exception &error) {
+			std::fprintf(stderr, "FAIL: %s: %s\n", text, error.what());
+			++failures;
+		}
+	}
 	// Gathers that fault at element k > 0. x86 gathers element by element: the SDM says a fault leaves the elements before it gathered
 	// and their mask elements cleared, the rest as they were, so the instruction can restart. Every form, both widths, k = 1 and the
 	// last element; the other elements are on the mapped page, element k on the unmapped one after it. Only the upper halves can be
