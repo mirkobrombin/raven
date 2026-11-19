@@ -26,7 +26,7 @@ struct GuestFeatures {
 
 // What the translator runs today: every sample of cpuid_check.h translates, and the feature's oracle families pass in this process and
 // in a vCPU against the x86 CPU.
-constexpr GuestFeatures guest_features{.sse3 = true, .ssse3 = true, .sse41 = true, .popcnt = true};
+constexpr GuestFeatures guest_features{.sse3 = true, .ssse3 = true, .sse41 = true, .sse42 = true, .popcnt = true};
 
 struct CpuidAnswer {
 	uint32_t eax, ebx, ecx, edx;
