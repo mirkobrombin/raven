@@ -1004,6 +1004,28 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 				return set(opcode == 0x0e ? vtestps : vtestpd, {v, w});
 			return set(opcode == 0x0c ? vpermilps : vpermilpd, {v, vector(vex.vvvv, width), w});
 		}
+		// AVX2: vpermd and vpermps (indices in VEX.vvvv), the variable shifts, vpmaskmovd and vpmaskmovq.
+		if ((opcode == 0x36 || opcode == 0x16) && !vex.w) {
+			if (!vex.l)
+				return false;
+			result.vector_size = 32;
+			return set(opcode == 0x36 ? vpermd : vpermps, {vector(reg_number, 32), vector(vex.vvvv, 32), vrm(32, 32)});
+		}
+		if (opcode >= 0x45 && opcode <= 0x47) {
+			if (opcode == 0x46 && vex.w)
+				return false;
+			const Mnemonic mnemonic = opcode == 0x45 ? (vex.w ? vpsrlvq : vpsrlvd) : opcode == 0x46 ? vpsravd : (vex.w ? vpsllvq : vpsllvd);
+			result.vector_size = width;
+			return set(mnemonic, {vector(reg_number, width), vector(vex.vvvv, width), vrm(width, width)});
+		}
+		if (opcode == 0x8c || opcode == 0x8e) {
+			if (!memory)
+				return false;
+			result.vector_size = width;
+			const Mnemonic mnemonic = vex.w ? vpmaskmovq : vpmaskmovd;
+			const Operand v = vector(reg_number, width), mask = vector(vex.vvvv, width), m = vrm(width, width);
+			return opcode == 0x8c ? set(mnemonic, {v, mask, m}) : set(mnemonic, {m, mask, v});
+		}
 		if (opcode >= 0x2c && opcode <= 0x2f) {
 			if (vex.w || !memory)
 				return false;
@@ -1046,6 +1068,18 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 			return set(opcode == 0x06 ? vperm2f128 : vperm2i128, {vector(reg_number, 32), vector(vex.vvvv, 32), vrm(32, 32), imm});
 		}
 	}
+	if (vex.map == 3 && vex.pp == 1 && (opcode == 0x00 || opcode == 0x01)) {
+		if (!vex.w || !vex.l || vex.vvvv != 0)
+			return false;
+		result.vector_size = 32;
+		return set(opcode == 0x00 ? vpermq : vpermpd, {vector(reg_number, 32), vrm(32, 32), imm});
+	}
+	if (vex.map == 3 && vex.pp == 1 && opcode == 0x02) {
+		if (vex.w)
+			return false;
+		result.vector_size = width;
+		return set(vpblendd, {vector(reg_number, width), vector(vex.vvvv, width), vrm(width, width), imm});
+	}
 	if (vex.map == 3 && vex.pp == 1 && (opcode == 0x04 || opcode == 0x05)) {
 		if (vex.w || vex.vvvv != 0)
 			return false;
@@ -1056,8 +1090,6 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 		// vblendvps, vblendvpd and vpblendvb: the selector register in imm8 bits 7:4. vpblendvb at 256 bits is AVX2.
 		if (vex.w)
 			return false;
-		if (opcode == 0x4c && vex.l)
-			return true;
 		result.vector_size = width;
 		const Mnemonic mnemonic = opcode == 0x4a ? blendvps : opcode == 0x4b ? blendvpd : pblendvb;
 		return set(mnemonic, {vector(reg_number, width), vector(vex.vvvv, width), vrm(width, width),
@@ -1072,10 +1104,20 @@ static bool decode_vex(Instruction &result, const Vex &vex, const ModRM &modrm, 
 		const Mnemonic mnemonic = sse.mnemonic;
 		if (mnemonic == invalid || form == SseForm::vw0 || (!memory && form == SseForm::vm))
 			return true;
-		// At 256 bits in AVX: these; the integer forms at 256 bits are AVX2 (not given semantics here), the rest are 128 bits only.
-		if (vex.l && mnemonic != roundps && mnemonic != roundpd && mnemonic != blendps && mnemonic != blendpd && mnemonic != dpps &&
-			mnemonic != ptest)
-			return true;
+		// 128 bits only: the element moves, dppd, the string compares, phminposuw and the scalar rounds. The rest also at 256 bits
+		// (the integer forms there are AVX2).
+		static constexpr Mnemonic narrow[] = {pextrb, pextrw, pextrd, pextrq, extractps, pinsrb, pinsrd, pinsrq, insertps, dppd,
+			pcmpestrm, pcmpestri, pcmpistrm, pcmpistri, phminposuw, roundss, roundsd};
+		for (const Mnemonic one : narrow)
+			if (vex.l && one == mnemonic)
+				return true;
+		// vpmovsx and vpmovzx at 256 bits read twice the bytes.
+		const bool extend = mnemonic >= pmovsxbw && mnemonic <= pmovzxdq && mnemonic != pmuldq && mnemonic != pcmpeqq &&
+			mnemonic != movntdqa && mnemonic != packusdw;
+		if (extend && vex.l) {
+			result.vector_size = 32;
+			return set(mnemonic, {vector(reg_number, 32), vrm(16, static_cast<uint8_t>(sse.size * 2))});
+		}
 		static constexpr Mnemonic unary[] = {pabsb, pabsw, pabsd, ptest, phminposuw, movntdqa, roundps, roundpd, pextrb, pextrw, pextrd,
 			pextrq, extractps, pcmpestrm, pcmpestri, pcmpistrm, pcmpistri, pmovsxbw, pmovsxbd, pmovsxbq, pmovsxwd, pmovsxwq, pmovsxdq,
 			pmovzxbw, pmovzxbd, pmovzxbq, pmovzxwd, pmovzxwq, pmovzxdq};
@@ -1431,7 +1473,8 @@ static_assert(std::size(x87_names) == static_cast<size_t>(x87_last) - static_cas
 static const char *const avx_names[] = {
 	"vzeroupper", "vzeroall", "vbroadcastss", "vbroadcastsd", "vbroadcastf128", "vpbroadcastb", "vpbroadcastw", "vpbroadcastd",
 	"vpbroadcastq", "vinsertf128", "vextractf128", "vinserti128", "vextracti128", "vperm2f128", "vperm2i128", "vtestps", "vtestpd",
-	"vpermilps", "vpermilpd", "vmaskmovps", "vmaskmovpd", "vmaskmovdqu", "vfmadd132ps",
+	"vpermilps", "vpermilpd", "vmaskmovps", "vmaskmovpd", "vmaskmovdqu", "vpermq", "vpermpd",
+	"vpermd", "vpermps", "vpblendd", "vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd", "vpmaskmovd", "vpmaskmovq", "vfmadd132ps",
 	"vfmadd132pd", "vfmadd132ss", "vfmadd132sd", "vfmadd213ps", "vfmadd213pd", "vfmadd213ss", "vfmadd213sd", "vfmadd231ps",
 	"vfmadd231pd", "vfmadd231ss", "vfmadd231sd", "vfmsub132ps", "vfmsub132pd", "vfmsub132ss", "vfmsub132sd", "vfmsub213ps",
 	"vfmsub213pd", "vfmsub213ss", "vfmsub213sd", "vfmsub231ps", "vfmsub231pd", "vfmsub231ss", "vfmsub231sd", "vfnmadd132ps",

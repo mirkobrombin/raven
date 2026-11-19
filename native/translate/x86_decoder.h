@@ -106,6 +106,8 @@ enum class Mnemonic : uint16_t {
 	vzeroupper, vzeroall, vbroadcastss, vbroadcastsd, vbroadcastf128, vpbroadcastb, vpbroadcastw, vpbroadcastd, vpbroadcastq,
 	vinsertf128, vextractf128, vinserti128, vextracti128, vperm2f128, vperm2i128,
 	vtestps, vtestpd, vpermilps, vpermilpd, vmaskmovps, vmaskmovpd, vmaskmovdqu,
+	// AVX2 without an SSE form.
+	vpermq, vpermpd, vpermd, vpermps, vpblendd, vpsllvd, vpsllvq, vpsrlvd, vpsrlvq, vpsravd, vpmaskmovd, vpmaskmovq,
 	// FMA3: operation, operand order, then ps, pd, ss, sd.
 	vfmadd132ps, vfmadd132pd, vfmadd132ss, vfmadd132sd, vfmadd213ps, vfmadd213pd, vfmadd213ss, vfmadd213sd, vfmadd231ps, vfmadd231pd,
 	vfmadd231ss, vfmadd231sd, vfmsub132ps, vfmsub132pd, vfmsub132ss, vfmsub132sd, vfmsub213ps, vfmsub213pd, vfmsub213ss, vfmsub213sd,
