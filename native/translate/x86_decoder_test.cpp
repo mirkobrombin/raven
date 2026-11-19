@@ -99,6 +99,8 @@ struct Tally {
 	std::map<std::string, size_t> x87_missing;
 	size_t vex = 0;
 	size_t vex_translated = 0;
+	size_t translated = 0;
+	std::map<std::string, size_t> missing;
 	std::map<std::string, size_t> vex_missing;
 };
 
@@ -207,6 +209,10 @@ int main(int argc, char **argv)
 				else
 					++tally.sse_missing[expected.substr(0, expected.find(' '))];
 			}
+			if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
+				++tally.translated;
+			else
+				++tally.missing[expected.substr(0, expected.find(' '))];
 			if (vex_encoded(bytes)) {
 				++tally.vex;
 				if (instruction.mnemonic != Mnemonic::invalid && translates(instruction))
@@ -254,6 +260,16 @@ int main(int argc, char **argv)
 			std::sort(missing.rbegin(), missing.rend());
 			for (size_t i = 0; i < missing.size() && i < 12; ++i)
 				std::printf("%s %s %zu", i ? "," : "; without:", missing[i].second.c_str(), missing[i].first);
+			std::printf("\n");
+		}
+		if (name.find(".exe") != std::string::npos) {
+			std::printf("%s: %zu instructions translated of %zu", name.c_str(), tally.translated, tally.instructions);
+			std::vector<std::pair<size_t, std::string>> left;
+			for (const auto &[mnemonic, count] : tally.missing)
+				left.push_back({count, mnemonic});
+			std::sort(left.rbegin(), left.rend());
+			for (size_t i = 0; i < left.size() && i < 16; ++i)
+				std::printf("%s %s %zu", i ? "," : "; without:", left[i].second.c_str(), left[i].first);
 			std::printf("\n");
 		}
 		if (tally.vex && name.find("instances") == std::string::npos) {
