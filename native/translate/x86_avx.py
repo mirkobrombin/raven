@@ -479,6 +479,23 @@ def avx_ops(rng):
     return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"vmaskmovdqu xmm{a}, xmm{b}", "mov edi, 0"]
 
 
+def approximations(rng):
+    """rcpps, rsqrtps, rcpss and rsqrtss, legacy and VEX: x86 promises a relative error of at most 1.5 * 2^-12, and the result
+    differs between x86 CPUs, so the tests compare these within 2^-11 (x86_avx_check.h)."""
+    op = rng.choice(["rcpps", "rsqrtps", "rcpss", "rsqrtss"])
+    scalar = op.endswith("ss")
+    if rng.random() < 0.4:
+        source = (mem(rng, 4) if scalar else mem(rng, 16, True)) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+        return [f"{op} xmm{reg(rng)}, {source}"]
+    d, a, b = three(rng)
+    if scalar:
+        source = mem(rng, 4) if rng.random() < 0.3 else f"xmm{b}"
+        return [f"v{op} xmm{d}, xmm{a}, {source}"]
+    width = rng.choice([16, 32])
+    source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+    return [f"v{op} {name(d, width)}, {source}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -502,6 +519,7 @@ LATER_FAMILIES = [
     ("strings", strings, "int", 1500),
     ("vex sse4", vex_sse4, "mixed", 1500),
     ("avx ops", avx_ops, "mixed", 1500),
+    ("approximations", approximations, "f32", 600),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
 FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data}

@@ -8,6 +8,7 @@
 #include "cpu_state.h"
 #include "x86_sse_check.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -219,6 +220,31 @@ inline void load(CpuState &state, const Io &input)
 	}
 }
 
+// rcpps, rsqrtps, rcpss and rsqrtss: x86 gives an approximation within 1.5 * 2^-12 of the exact result, which differs between x86 CPUs.
+// Two singles agree when they are the same, or two normal numbers of one sign within 2^-11 of each other.
+inline bool approximation(const std::string &text)
+{
+	return text.find("rcp") != std::string::npos || text.find("rsqrt") != std::string::npos;
+}
+
+inline bool close_singles(uint64_t ours, uint64_t x86)
+{
+	for (unsigned half = 0; half < 2; ++half) {
+		const uint32_t a = static_cast<uint32_t>(ours >> (32 * half)), b = static_cast<uint32_t>(x86 >> (32 * half));
+		if (a == b)
+			continue;
+		const uint32_t exponent_a = a >> 23 & 0xff, exponent_b = b >> 23 & 0xff;
+		if ((a ^ b) >> 31 || exponent_a == 0 || exponent_a == 0xff || exponent_b == 0 || exponent_b == 0xff)
+			return false;
+		float fa, fb;
+		std::memcpy(&fa, &a, 4);
+		std::memcpy(&fb, &b, 4);
+		if (std::fabs(fa - fb) > std::fabs(fb) * 0x1p-11f)
+			return false;
+	}
+	return true;
+}
+
 // What the translator's run left that differs from x86's, or nothing: every general register but RSP and R15, all 256 bits of every
 // YMM register, the flags, MXCSR but DE and the buffer.
 inline std::string compare(const Case &item, const CpuState &state, const uint8_t *buffer)
@@ -235,6 +261,9 @@ inline std::string compare(const Case &item, const CpuState &state, const uint8_
 	for (unsigned r = 0; r < 16; ++r) {
 		const uint64_t ours[4] = {state.xmm[r][0], state.xmm[r][1], state.ymm_high[r][0], state.ymm_high[r][1]};
 		if (std::memcmp(ours, x86.ymm[r], sizeof ours) == 0)
+			continue;
+		if (approximation(item.text) && close_singles(ours[0], x86.ymm[r][0]) && close_singles(ours[1], x86.ymm[r][1]) &&
+			close_singles(ours[2], x86.ymm[r][2]) && close_singles(ours[3], x86.ymm[r][3]))
 			continue;
 		auto u = [](uint64_t value) { return static_cast<unsigned long long>(value); };
 		std::snprintf(text, sizeof text, "ymm%u is %016llx%016llx%016llx%016llx, x86 left %016llx%016llx%016llx%016llx", r, u(ours[3]),
