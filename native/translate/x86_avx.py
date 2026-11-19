@@ -496,6 +496,16 @@ def approximations(rng):
     return [f"v{op} {name(d, width)}, {source}"]
 
 
+def fma_addsub(rng):
+    """vfmaddsub and vfmsubadd: the even elements subtract the addend and the odd ones add it, or the other way round."""
+    d, a, b = three(rng)
+    t = rng.choice(["ps", "pd"])
+    width = rng.choice([16, 32])
+    source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+    op = f"vf{rng.choice(['maddsub', 'msubadd'])}{rng.choice(['132', '213', '231'])}{t}"
+    return [f"{op} {name(d, width)}, {name(a, width)}, {source}"]
+
+
 # Each family: how its cases are made, what its lanes hold and how many there are.
 FAMILIES = [
     ("moves", moves, "mixed", 500),
@@ -520,6 +530,7 @@ LATER_FAMILIES = [
     ("vex sse4", vex_sse4, "mixed", 1500),
     ("avx ops", avx_ops, "mixed", 1500),
     ("approximations", approximations, "f32", 600),
+    ("fma addsub", fma_addsub, "mixed", 600),
 ]
 # Families whose registers, vectors and memory a function sets after the random ones.
 FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data}
