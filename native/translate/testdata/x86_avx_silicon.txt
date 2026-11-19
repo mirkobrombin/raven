@@ -1,9 +1,10 @@
 # x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44505811968, assembled with clang as here; dump sha256 28aa394685cacc237ca24c7a37fd3ed396d7f0918d4b4222fa5010879a1bf28b): the tests refuse the file when a family's cases or Rosetta's results change.
-# Earlier runs: an AMD EPYC 9V74 (run 44505099547, all but the gathers), AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
+# The avx2 broadcast family: an AMD EPYC 7763 (run 44508125477), which agrees with Rosetta in all 100. Earlier runs: an AMD EPYC 9V74 (run 44505099547, all but the gathers), AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 corpus	approximations	cases=600	generated=52b71b7d5a377a5b	rosetta=9a08b5ad95d5336b
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	avx ops	cases=1500	generated=81ce8548266e5728	rosetta=560d169b35ec6d3f
 corpus	avx2	cases=1500	generated=86c9735094e92da1	rosetta=1090f7ead1dbb18a
+corpus	avx2 broadcast	cases=100	generated=a04d55a7e728038e	rosetta=e96e2210190d6cb2
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
 corpus	fma	cases=1200	generated=3a80c4c9592e6b73	rosetta=117c23e7ae1b07d1
