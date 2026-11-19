@@ -6,6 +6,7 @@
 #include "translator.h"
 
 #include <cstdint>
+#include <functional>
 #include <filesystem>
 #include <initializer_list>
 #include <map>
@@ -44,6 +45,9 @@ public:
 	// Called from another host thread after the runtime unlinked and unpublished code: returns once code this runner is running has
 	// passed a context synchronization event since the call, or at once when it runs none. Then it can no longer enter that code.
 	virtual void quiesce() {}
+	// Runs work while no other guest thread of the VM runs translated code, for a locked instruction no host atomic covers (locked.h).
+	// Without a runner the runtime runs its first thread alone, so work just runs.
+	virtual void exclusive(const std::function<void()> &work) { work(); }
 	// Whether the host code an exit returns to needs its own FPCR back. A vCPU's dispatcher does no floating point, so there FPCR can
 	// keep the guest's from one run to the next and entry skips setting it again.
 	virtual bool restores_host_fpcr() const { return true; }

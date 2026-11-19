@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <condition_variable>
 #include <mutex>
+#include <vector>
 
 // The process's Hypervisor.framework VM: guest RAM, the guest kernel and the page tables EL0 runs under. Guest addresses are 39-bit
 // virtual addresses of EL0 (TTBR0, 4 KiB pages); the kernel lives in the upper half (TTBR1), where all guest RAM is mapped once.
@@ -68,6 +70,17 @@ public:
 	// Called after the host wrote code at alias: cleans or invalidates there as maintenance says and tells the vCPUs.
 	void code_written(const uint8_t *alias, size_t size);
 	uint64_t code_generation() const { return generation.load(std::memory_order_acquire); }
+
+	// The gate every vCPU of the VM passes before it runs the guest, which Vcpu::exclusive closes to stop them all: while stopping,
+	// none enters, and running counts those inside. vcpus lists every vCPU alive, for exclusive to make them exit.
+	struct World {
+		std::mutex lock;
+		std::condition_variable changed;
+		bool stopping = false;
+		unsigned running = 0;
+		std::vector<class Vcpu *> vcpus;
+	};
+	World world;
 	CodeMaintenance maintenance;
 
 	// What a vCPU starts with: the kernel's vectors and stack, the page table roots, the EL0 dispatcher.

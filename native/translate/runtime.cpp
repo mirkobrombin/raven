@@ -3,6 +3,7 @@
 #include "x86_decoder.h"
 #include "cpuid.h"
 #include "divide.h"
+#include "locked.h"
 #include "string_compare.h"
 #include "xsave.h"
 #include "x87.h"
@@ -21,7 +22,7 @@ namespace raven::translate {
 namespace {
 
 // Bumped whenever the code the translator emits changes, so caches written by an older translator stop matching.
-constexpr uint64_t translator_version = 29;
+constexpr uint64_t translator_version = 30;
 constexpr uint32_t cache_magic = 0x43545652; // "RVTC"
 
 thread_local Runtime::Thread *running = nullptr;
@@ -351,6 +352,12 @@ RunResult Runtime::Thread::run()
 				// int 0x29, __fastfail: the code is in ECX.
 				cpu.exit_info = uint64_t(FaultKind::fast_fail);
 				return {ExitReason::fault, cpu.rip};
+			} else if (locked_supported(instruction)) {
+				auto work = [&] { locked_execute(cpu, runtime.memory, instruction, cpu.rip + instruction.length); };
+				if (runner)
+					runner->exclusive(work);
+				else
+					work();
 			} else if (divide_supported(instruction)) {
 				if (!divide(cpu, runtime.memory, instruction, cpu.rip + instruction.length)) {
 					cpu.exit_info = uint64_t(FaultKind::divide_error);

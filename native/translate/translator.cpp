@@ -433,9 +433,10 @@ private:
 	void flags_from_stack();
 	void string(const Instruction &instruction);
 	// Branches to split when the size bytes at base cross a 16-byte boundary, where an LSE atomic faults (FEAT_LSE2 covers unaligned
-	// accesses inside 16 bytes only). The out-of-line forms there are a plain load and store between full barriers: right for one
-	// thread, not atomic against another (x86 locks the bus for a split lock). NZCV is left alone.
+	// accesses inside 16 bytes only). NZCV is left alone. split_exit binds split to an exit to the runtime at the instruction, which
+	// runs it with every other guest thread stopped (locked.h), as x86 locks the bus for a split lock.
 	void branch_if_split(uint8_t base, unsigned size, Assembler::Label split);
+	void split_exit(Assembler::Label split);
 	// Set by locked(): the register holding the old value of the memory operand, which arithmetic() and unary() then take as the
 	// destination's value, computing the result and flags without writing it (the atomic did).
 	uint8_t locked_old = a64::zr;
@@ -957,6 +958,14 @@ void BlockTranslator::branch_if_split(uint8_t base, unsigned size, Assembler::La
 	a.tbnz(s5, 4, split);
 }
 
+void BlockTranslator::split_exit(Assembler::Label split)
+{
+	a.bind(split);
+	if (!carry_inverted)
+		a.cfinv();
+	exit_with(ExitReason::cpuid, next_address - current->length);
+}
+
 void BlockTranslator::locked(const Instruction &instruction)
 {
 	// lock add, sub, and, or, xor, inc, dec, not and neg on memory: one LSE atomic with acquire and release (as xadd), which leaves
@@ -1000,14 +1009,8 @@ void BlockTranslator::locked(const Instruction &instruction)
 		a.b(Cond::eq, done);
 		a.mov(s0, s2);
 		a.b(retry);
-		if (size > 1) {
-			a.bind(split);
-			a.dmb(a64::Barrier::ish);
-			a.ldr(s0, address_register, 0, size);
-			result();
-			a.str(s3, address_register, 0, size);
-			a.dmb(a64::Barrier::ish);
-		}
+		if (size > 1)
+			split_exit(split);
 		a.bind(done);
 		a.msr_nzcv(s6);
 		locked_old = s0;
@@ -1054,18 +1057,7 @@ void BlockTranslator::locked(const Instruction &instruction)
 	}
 	if (size > 1) {
 		a.b(join);
-		a.bind(split);
-		a.dmb(a64::Barrier::ish);
-		a.ldr(s0, address_register, 0, size);
-		switch (mnemonic) {
-		case Mnemonic::add: case Mnemonic::sub: case Mnemonic::inc: case Mnemonic::dec: a.add(s2, s0, operand); break;
-		case Mnemonic::and_: a.emit(0x8a200000u | uint32_t(operand) << 16 | uint32_t(s0) << 5 | s2); break; // bic
-		case Mnemonic::or_: a.orr(s2, s0, operand); break;
-		case Mnemonic::xor_: case Mnemonic::not_: a.eor(s2, s0, operand); break;
-		default: a.sub(s2, a64::zr, s0); break;
-		}
-		a.str(s2, address_register, 0, size);
-		a.dmb(a64::Barrier::ish);
+		split_exit(split);
 		a.bind(join);
 	}
 	if (mnemonic == Mnemonic::not_)
@@ -1860,11 +1852,7 @@ void BlockTranslator::exchange(const Instruction &instruction)
 			a.swpal(value, s1, at.base, size);
 			if (size > 1) {
 				a.b(join);
-				a.bind(split);
-				a.dmb(a64::Barrier::ish);
-				a.ldr(s1, at.base, 0, size);
-				a.str(value, at.base, 0, size);
-				a.dmb(a64::Barrier::ish);
+				split_exit(split);
 				a.bind(join);
 			}
 			write(reg, s1);
@@ -1886,20 +1874,13 @@ void BlockTranslator::exchange(const Instruction &instruction)
 		const uint8_t expected = read(accumulator, s0, false);
 		const uint8_t replacement = read(second, s1, false);
 		a.mov(s3, expected);
-		const Assembler::Label split = a.label(), join = a.label(), unchanged = a.label();
+		const Assembler::Label split = a.label(), join = a.label();
 		if (size > 1)
 			branch_if_split(address_register, size, split);
 		a.casal(s0, replacement, address_register, size);
 		if (size > 1) {
 			a.b(join);
-			a.bind(split);
-			a.dmb(a64::Barrier::ish);
-			a.ldr(s0, address_register, 0, size);
-			a.sub(a64::zr, s0, s3, Shift::lsl, 0, true, true);
-			a.b(Cond::ne, unchanged);
-			a.str(replacement, address_register, 0, size);
-			a.bind(unchanged);
-			a.dmb(a64::Barrier::ish);
+			split_exit(split);
 			a.bind(join);
 		}
 		const uint8_t top = static_cast<uint8_t>(size >= 4 ? 0 : 32 - size * 8);
@@ -1934,12 +1915,7 @@ void BlockTranslator::exchange(const Instruction &instruction)
 	a.ldaddal(addend, s0, address_register, size);
 	if (size > 1) {
 		a.b(join);
-		a.bind(split);
-		a.dmb(a64::Barrier::ish);
-		a.ldr(s0, address_register, 0, size);
-		a.add(s3, s0, addend);
-		a.str(s3, address_register, 0, size);
-		a.dmb(a64::Barrier::ish);
+		split_exit(split);
 		a.bind(join);
 	}
 	const uint8_t top = static_cast<uint8_t>(size >= 4 ? 0 : 32 - size * 8);

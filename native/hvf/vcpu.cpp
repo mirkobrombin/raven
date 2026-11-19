@@ -2,6 +2,8 @@
 
 #include "vm.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <stdexcept>
@@ -101,11 +103,44 @@ Vcpu::Vcpu(Vm &vm, bool tso) : vm(vm)
 		hv_vcpu_destroy(vcpu);
 		throw;
 	}
+	std::lock_guard guard(vm.world.lock);
+	vm.world.vcpus.push_back(this);
 }
 
 Vcpu::~Vcpu()
 {
+	{
+		std::lock_guard guard(vm.world.lock);
+		std::erase(vm.world.vcpus, this);
+	}
 	hv_vcpu_destroy(vcpu);
+}
+
+void Vcpu::exclusive(const std::function<void()> &work)
+{
+	std::unique_lock guard(vm.world.lock);
+	vm.world.changed.wait(guard, [&] { return !vm.world.stopping; });
+	vm.world.stopping = true;
+	// Every vCPU in the guest exits; the gate keeps it out until stopping clears. Asked again while waiting, in case one entered
+	// between the two.
+	while (vm.world.running) {
+		for (Vcpu *other : vm.world.vcpus)
+			if (other != this && other->in_guest.load())
+				hv_vcpus_exit(&other->vcpu, 1);
+		vm.world.changed.wait_for(guard, std::chrono::microseconds(50));
+	}
+	guard.unlock();
+	try {
+		work();
+	} catch (...) {
+		guard.lock();
+		vm.world.stopping = false;
+		vm.world.changed.notify_all();
+		throw;
+	}
+	guard.lock();
+	vm.world.stopping = false;
+	vm.world.changed.notify_all();
 }
 
 void Vcpu::quiesce()
@@ -157,10 +192,20 @@ uint32_t Vcpu::enter(uint64_t trampoline, uint64_t state, uint64_t code)
 	started = true;
 	++counters.entries;
 	for (;;) {
-		in_guest.store(true);
+		{
+			std::unique_lock guard(vm.world.lock);
+			vm.world.changed.wait(guard, [&] { return !vm.world.stopping; });
+			++vm.world.running;
+			in_guest.store(true);
+		}
 		const hv_return_t ran = hv_vcpu_run(vcpu);
 		exits.fetch_add(1);
-		in_guest.store(false);
+		{
+			std::lock_guard guard(vm.world.lock);
+			in_guest.store(false);
+			--vm.world.running;
+		}
+		vm.world.changed.notify_all();
 		check(ran, "hv_vcpu_run");
 		if (exit->reason == HV_EXIT_REASON_CANCELED) {
 			++counters.cancels;

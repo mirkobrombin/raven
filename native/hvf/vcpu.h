@@ -33,6 +33,9 @@ public:
 	// From another thread: forces an exit with hv_vcpus_exit and waits for it, unless the vCPU is not in the guest.
 	void quiesce() override;
 	bool restores_host_fpcr() const override { return false; }
+	// On this vCPU's thread: stops every other vCPU of the VM (hv_vcpus_exit, then the gate keeps them out of the guest), runs work
+	// and lets them go on.
+	void exclusive(const std::function<void()> &work) override;
 
 	hv_vcpu_t id() const { return vcpu; }
 	// ACTLR_EL1 as the vCPU reads it back.
