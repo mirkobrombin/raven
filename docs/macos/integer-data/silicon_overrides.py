@@ -28,7 +28,7 @@ def read(path):
             at += 4 + length
         defined = struct.unpack_from("<Q", data, at)[0]
         at += 8
-        cases.append((fields[0], fields[1].decode(), fields[2].decode(), data[at + IO:at + 2 * IO], defined))
+        cases.append((fields[0], fields[1].decode(), fields[2].decode(), data[at + IO:at + 2 * IO], defined, data[at:at + IO]))
         at += 2 * IO
     return cases
 
@@ -62,12 +62,13 @@ def fields(io, defined):
 
 
 def corpus(cases, family):
-    """x86_semantics_check.h's corpus_fingerprints for one family: FNV-1a 64 over its cases' code and text, and over their fingerprints."""
+    """x86_semantics_check.h's corpus_fingerprints for one family: FNV-1a 64 over its cases' code, text, defined flags and inputs, and
+    over their fingerprints."""
     generated = results = 0xCBF29CE484222325
-    for code, text, case_family, io, _ in cases:
+    for code, text, case_family, io, defined, input_io in cases:
         if case_family != family:
             continue
-        for byte in code + text.encode():
+        for byte in code + text.encode() + struct.pack("<Q", defined) + input_io:
             generated = ((generated ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
         for byte in struct.pack("<Q", fingerprint(io)):
             results = ((results ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
@@ -93,7 +94,7 @@ def main():
     encodings = [number for number, (a, b) in enumerate(zip(rosetta, silicon)) if a[0] != b[0]]
     print(f"{len(encodings)} cases encoded differently in the two runs (left out)")
     undefined = Counter()
-    for number, ((code, text, family, ours, defined), (code2, text2, _, theirs, _)) in enumerate(zip(rosetta, silicon)):
+    for number, ((code, text, family, ours, defined, _), (code2, text2, _, theirs, _, _)) in enumerate(zip(rosetta, silicon)):
         if code != code2:
             continue
         assert text == text2, f"case {number} differs in text"
@@ -128,7 +129,8 @@ def main():
             for family in families:
                 generated, results = corpus(rosetta, family)
                 count = sum(1 for case in rosetta if case[2] == family)
-                out.write(f"corpus\t{family}\tcases={count}\tgenerated={generated:016x}\trosetta={results:016x}\n")
+                differently = sum(1 for number in encodings if rosetta[number][2] == family)
+                out.write(f"corpus\t{family}\tcases={count}\tgenerated={generated:016x}\trosetta={results:016x}\tdifferently={differently}\n")
             out.write("".join(line + "\n" for line in lines))
 
 

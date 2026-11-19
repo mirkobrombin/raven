@@ -87,8 +87,8 @@ inline uint64_t fingerprint(const Io &output)
 	return value;
 }
 
-// FNV-1a 64 of one family's cases: of every case's code and text (what x86_semantics.py generated), and of every case's fingerprint
-// (what Rosetta left). The silicon file has a `corpus` line per family compared with the x86 CPU holding both.
+// FNV-1a 64 of one family's cases: of every case's code, text, defined flags and inputs (what x86_semantics.py generated), and of
+// every case's fingerprint (what Rosetta left). The silicon file has a `corpus` line per family compared with the x86 CPU holding both.
 inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case> &cases, const std::string &family)
 {
 	uint64_t generated = 0xcbf29ce484222325ull, results = 0xcbf29ce484222325ull;
@@ -101,6 +101,8 @@ inline std::pair<uint64_t, uint64_t> corpus_fingerprints(const std::vector<Case>
 			continue;
 		mix(generated, item.code.data(), item.code.size());
 		mix(generated, item.text.data(), item.text.size());
+		mix(generated, &item.defined, sizeof item.defined);
+		mix(generated, &item.input, sizeof item.input);
 		const uint64_t one = fingerprint(item.output);
 		mix(results, &one, sizeof one);
 	}
@@ -115,7 +117,9 @@ inline std::vector<uint8_t> hex_bytes(const std::string &text)
 	return bytes;
 }
 
-// Applies the silicon results: corpus lines (corpus<TAB>FAMILY<TAB>cases=N<TAB>generated=HEX<TAB>rosetta=HEX) and one line per case,
+// Applies the silicon results: corpus lines (corpus<TAB>FAMILY<TAB>cases=N<TAB>generated=HEX<TAB>rosetta=HEX<TAB>differently=N, the
+// last the cases the x86 run encoded otherwise and so did not compare, which must be 0 or followed by `explained`, the doc saying
+// why) and one line per case,
 // NUMBER<TAB>TEXT<TAB>rosetta=FINGERPRINT, then FIELD=HEX for each field the x86 CPU left otherwise: rN, flags or bOFFSET (a run of
 // buffer bytes). Returns how many cases changed, or -1 when a line does not fit the cases.
 inline long apply_silicon(std::vector<Case> &cases, const char *path)
@@ -134,8 +138,13 @@ inline long apply_silicon(std::vector<Case> &cases, const char *path)
 		for (std::string part; std::getline(stream, part, '\t');)
 			parts.push_back(part);
 		if (parts[0] == "corpus") {
-			if (parts.size() < 5) {
-				std::fprintf(stderr, "%s: a corpus line needs a family, cases, generated and rosetta\n", path);
+			if (parts.size() < 6 || parts[5].rfind("differently=", 0) != 0) {
+				std::fprintf(stderr, "%s: a corpus line needs a family, cases, generated, rosetta and differently\n", path);
+				return -1;
+			}
+			if (parts[5] != "differently=0" && (parts.size() < 7 || parts[6] != "explained")) {
+				std::fprintf(stderr, "%s: family %s: %s cases were encoded otherwise on the x86 CPU and not compared\n", path,
+					parts[1].c_str(), parts[5].substr(12).c_str());
 				return -1;
 			}
 			const std::string family = parts[1];
