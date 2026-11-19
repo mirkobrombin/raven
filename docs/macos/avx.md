@@ -187,13 +187,13 @@ failing, then `7e83388c`). Not compared with an x86 CPU (NOT verified); xsaveopt
 - **The decoder** gives VEX semantics to these and prints them as LLVM does: 20000 random VEX encodings join the decoder corpus, 0
   print differently from LLVM or decode where LLVM rejects them (PROVEN, `x86_decoder_test`: `vex_instances.o: 25765 instructions,
   17900 with semantics (69.5%), 10690 rejected by LLVM, 0 failures`; the count includes what LLVM decodes between them).
-- `translator_version` is 22 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
+- `translator_version` is 23 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions; 9: SSE3 to SSE4.2;
   10: the string compares; 11: the VEX forms of SSSE3 to SSE4.2; 12: the rest of AVX but the approximations; 13: the
   approximations; 14: vfmaddsub and vfmsubadd; 15: xsave and xrstor; 16: AVX2 but the gathers; 17: the gathers; 18: review
   fixes: a 128-bit vpgatherdq or vgatherdpd gathered 4 elements instead of 2 (reading mask and index bits x86 ignores), store
   probes left out an fs or gs base, vroundss and vroundsd with VEX.L set, a 256-bit vpmovsx or vpmovzx with VEX.vvvv set; 19:
   vbroadcasti128; 20: vpcmpestri and vpcmpestrm with VEX.W1 took their lengths from EAX and EDX, not RAX and RDX; 21: legacy
-  maskmovdqu; 22: BMI1, BMI2 and LZCNT).
+  maskmovdqu; 22: BMI1, BMI2 and LZCNT; 23: rorx with VEX.vvvv set refused).
 
 ## Tests
 
