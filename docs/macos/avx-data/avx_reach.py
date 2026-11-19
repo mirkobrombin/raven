@@ -22,8 +22,10 @@ PREFIXES = {0x66, 0x67, 0xf0, 0xf2, 0xf3, 0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65} | 
 encoding = {}
 member = ""
 for line in listing.splitlines():
-    if line.endswith(":") and "file format" in line:
-        member = line.split("(")[-1].split(")")[0] if "(" in line else ""
+    if "file format" in line:
+        # An archive member: "LIBRARY(MEMBER):\tfile format ...", each starting at offset 0.
+        name = line.split("file format")[0].strip().rstrip(":")
+        member = name if name.endswith(")") else ""
     m = line_re.match(line)
     if m:
         a = (member, int(m.group(1), 16))
@@ -60,8 +62,8 @@ reach_from = list(order)
 ranges = []
 if image.lower().endswith((".exe", ".dll")):
     unwind = subprocess.run([readobj, "--unwind", image], capture_output=True, text=True).stdout
-    ranges = list(zip([int(x, 16) for x in re.findall(r"StartAddress: \(0x([0-9A-F]+)\)", unwind)],
-                      [int(x, 16) for x in re.findall(r"EndAddress: \(0x([0-9A-F]+)\)", unwind)]))
+    ranges = list(zip([int(x, 16) for x in re.findall(r"StartAddress: (?:\S+ )?\(0x([0-9A-F]+)\)", unwind)],
+                      [int(x, 16) for x in re.findall(r"EndAddress: (?:\S+ )?\(0x([0-9A-F]+)\)", unwind)]))
     headers = subprocess.run([readobj, "--file-headers", "--coff-exports", image], capture_output=True, text=True).stdout
     base = int(re.search(r"ImageBase: 0x([0-9A-F]+)", headers).group(1), 16)
     reach_from = [("", s) for s, _ in ranges] + [("", base + int(re.search(r"AddressOfEntryPoint: 0x([0-9A-F]+)", headers).group(1), 16))]
@@ -113,8 +115,17 @@ for s, e in ranges:
         in_range.add(order[i])
         i += 1
 families, mnemonics, widths = tally(seen)
-print(f"{image.split('/')[-1]}: {len(order)} insns, {len(seen)} reachable ({len(missing)} desynced starts), {len(ranges)} pdata ranges")
-print("  VEX reachable:", sum(v for k, v in families.items() if k != "EVEX (AVX-512)"), dict(families.most_common()), "registers:", dict(widths))
+if image.lower().endswith((".exe", ".dll")):
+    print(f"{image.split('/')[-1]}: {len(order)} insns, {len(seen)} reachable ({len(missing)} desynced starts), {len(ranges)} pdata ranges")
+else:
+    print(f"{image.split('/')[-1]}: {len(order)} insns")
+if not image.lower().endswith((".exe", ".dll")):
+    seen = set(order)
+    families, mnemonics, widths = tally(seen)
+    print("  (no .pdata: every instruction counts)")
+vector = sum(v for k, v in families.items() if k not in ("BMI", "EVEX (AVX-512)"))
+print(f"  reachable: vector VEX {vector}, BMI {families['BMI']}, EVEX {families['EVEX (AVX-512)']};", dict(families.most_common()),
+      "registers:", dict(widths))
 for f, counter in sorted(mnemonics.items()):
     print(f"    {f}: {dict(counter.most_common(40))}")
 if ranges:
