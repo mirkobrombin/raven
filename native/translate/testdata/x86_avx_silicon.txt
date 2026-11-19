@@ -1,4 +1,5 @@
 # x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44499294363, assembled with clang as here; dump sha256 26d908845c9e198c93e46dde875d15253fcf74d254c84eb22678e84e702e4ac1): the tests refuse the file when a family's cases or Rosetta's results change.
+# The strings family was run on an Intel Xeon Platinum 8370C (raven-macos-bench run 44500206597, dump sha256 37b9cf0cca10f7637359a6b9f4038e75c67ac913423a83c8aff9da653fdcdcf8): it agrees with Rosetta in all its cases. That run differs from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
@@ -90,3 +91,4 @@ corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
 7747	ptest xmm1, xmm7; setp al	rosetta=ffe425fe9a9e490d	r0=00c0b3b2126d3ad8	flags=0000000000000000
 7748	ptest xmm4, xmm1; sets al	rosetta=c81f62b3e4f16593	flags=0000000000000000
 7771	ptest xmm0, xmm12; setae al	rosetta=928930126daf99f9	flags=0000000000000000
+corpus	strings	cases=1500	generated=906d7b01e821f9ec	rosetta=538a2627522d2948
