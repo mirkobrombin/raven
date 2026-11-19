@@ -203,7 +203,9 @@ and in a vCPU.
 - **bytecount:** bytes equal to each of 16 values in 4096 bytes: vpcmpeqb, vpmovmskb and a scalar bit count (built with
   `-mno-popcnt`, which the translator does not run). The native build counts with NEON 16 bytes at a time: not the same algorithm.
 
-5 rounds, the median of each process's warm runs per call, ratio to native. Load average 19.97 at the start (1, 5, 15 minutes:
+PROVEN (that command; raw data `docs/macos/avx-data/perf/measurements.jsonl`, `summary.csv` and `state.json`): 5 rounds, the median of
+each process's warm runs per call, ratio to native. Measured before `4f72c2d4` reordered loads and writes in 256-bit instructions, so
+fsaxpy now has one more register move per instruction (NOT measured since). Load average 19.97 at the start (1, 5, 15 minutes:
 19.97 13.83 11.22) and 15.00 at the end, thermal state 1 at both ends: a busy machine, standard deviations 10-30%.
 
 | Workload | Native | Process, loop | Process, call | vCPU, loop | vCPU, call |
