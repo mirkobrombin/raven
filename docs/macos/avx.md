@@ -369,8 +369,7 @@ With AVX, FMA and AVX2 reported, the MSVC CRT's level check (8 cpuid and 2 xgetb
 INFERRED that its AVX and AVX2 paths become reachable, and that its AVX-512 path does not (no AVX-512 bit). What the translator takes
 of Notepad++'s VEX code, linearly over `.text` (PROVEN, `x86_decoder_test` on a corpus of `notepad++.exe` alone): before the AVX2
 work, `960 VEX instructions, 895 translated (93.2%)` (`526afbb4`); after it `958 translated (99.8%); without: shlx 2`; with BMI2
-now `960 VEX instructions, 960 translated (100.0%)` (PROVEN). The 2 shlx sit in a routine that the CRT's AVX2 level reaches
-without testing BMI2 (open items); its 200 instructions now all translate. Over every instruction, linearly (data decoded as code
+now `960 VEX instructions, 960 translated (100.0%)` (PROVEN). The 2 shlx sit in one VEX routine (open items); its 200 instructions now all translate. Over every instruction, linearly (data decoded as code
 included), `1218553 instructions translated of 1224528`; the most frequent left are bt 1023, imul 821, bts 777,
 adc 567, mul 320 and rol 281 (PROVEN, `563241f6`; which forms of them are refused, and which are reachable, was not counted). Its
 legacy SSE and SSE2 are 40832 of 40832 translated, its
@@ -385,10 +384,10 @@ port (NOT verified).
   Not done here (native/nt is out of this branch's scope): an item for a design review.
 - **The MMX forms of SSSE3** (under cpuid) end their block while SSSE3 is reported; MMX state is the open item.
 - **BMI2 next to AVX2: closed.** Notepad++'s 2 shlx are in one function (0x1404377b0 to 0x140437b61, `.pdata`), a scalar double
-  routine in VEX, reached only through a dispatcher (0x140436f70) whose level the CRT sets from FMA, OSXSAVE, AVX, xgetbv and AVX2
-  alone, not BMI2 (PROVEN by reading that disassembly). With BMI2 translated, the routine's 200 instructions all translate (PROVEN,
-  `x86_decoder_test` on that range: `200 instructions translated of 200`), and Notepad++'s VEX code is `960 VEX instructions, 960
-  translated (100.0%)`.
+  routine in VEX code. Every real CPU with AVX2 also has BMI2, so reporting AVX2 without it could send such code to an instruction
+  the translator refused (INFERRED; the selection logic of the statically linked MSVC CRT is proprietary and is not described
+  here, CONTRIBUTING.md). With BMI2 translated, the routine's 200 instructions all translate (PROVEN, `x86_decoder_test` on that
+  range: `200 instructions translated of 200`), and Notepad++'s VEX code is `960 VEX instructions, 960 translated (100.0%)`.
 - **The 16-bit tzcnt and lzcnt** are not translated. Notepad++ has 17 tzcnt and lzcnt, all 32-bit, all translated (PROVEN,
   llvm-objdump and `x86_decoder_test`).
 - **A gather that faults after some elements** is not tested (see Tests); nor are 32-bit addresses or fs/gs with VSIB, nor a
