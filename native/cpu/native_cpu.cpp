@@ -711,7 +711,7 @@ struct NativeProcess::State {
 	std::mutex agent_lock;
 	// Whether the agent's signal handlers are installed.
 	bool agent_handlers = false;
-	// Whether guest tasks are in the agent's hands rather than traced (RAVEN_AGENT_HOLD).
+	// Whether guest tasks are in the agent's hands rather than traced (see the constructor).
 	bool agent_holds = false;
 	// The segment registers the service thread has and passes on, and the size ptrace gives the extended state.
 	agent::Segments agent_segments;
@@ -974,19 +974,36 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 		}
 		protect_memory(state->atomic_gate, 4096, PROT_READ | PROT_EXEC);
 	}
-	// Under the agent the runtime's own system calls go to its service thread rather than stopping a task. The filter stays out then:
-	// it would refuse the agent's calls, and Syscall User Dispatch takes its place.
-	if (std::getenv("RAVEN_AGENT")) {
+	// The guest's tasks leave ptrace for the agent: the runtime's own system calls go to its service thread, and what stopped a task for
+	// ptrace stops it in the agent's handler. RAVEN_PTRACE keeps them traced, as does the seccomp filter (RAVEN_SECCOMP), which would
+	// refuse the agent's calls, and a kernel without Syscall User Dispatch.
+	const bool seccomp = mode == NativeMode::x64 && std::getenv("RAVEN_SECCOMP");
+	if (!seccomp && !std::getenv("RAVEN_PTRACE") && agent_supported()) {
 		start_agent();
-		// RAVEN_AGENT_HOLD also takes the guest's task out of ptrace: its stops come over the agent.
-		if (std::getenv("RAVEN_AGENT_HOLD") && (!parallel() || threaded_host())) {
+		// Host threads that share one waiter for every task (RAVEN_COROUTINE_HOST) keep their tasks traced.
+		if (!parallel() || threaded_host()) {
 			hand_to_agent();
 			state->agent_holds = true;
 		}
 	}
 	// The filter goes in once the page of gates is there, since a guest waiting in its stub makes the runtime's system calls from it.
-	else if (mode == NativeMode::x64 && std::getenv("RAVEN_SECCOMP"))
+	else if (seccomp)
 		install_seccomp();
+}
+
+// Whether the kernel has what the agent needs: Syscall User Dispatch (Linux 5.11) and pidfd_open (5.3), asked once.
+bool NativeProcess::agent_supported()
+{
+	static const bool supported = [] {
+		if (prctl(PR_SET_SYSCALL_USER_DISPATCH, PR_SYS_DISPATCH_OFF, 0, 0, 0) != 0)
+			return false;
+		const long descriptor = ::syscall(SYS_pidfd_open, ::getpid(), 0);
+		if (descriptor < 0)
+			return false;
+		close(int(descriptor));
+		return true;
+	}();
+	return supported;
 }
 
 NativeProcess::~NativeProcess()

@@ -44,8 +44,11 @@ static long status_field(pid_t task, const std::string &name)
 
 static void agent(const std::string &bootstrap, raven::NativeMode mode)
 {
+	// RAVEN_PTRACE keeps the guest traced, without an agent until one is started.
+	setenv("RAVEN_PTRACE", "1", 1);
 	const std::array<raven::LoadedImage *, 0> images{};
 	raven::NativeProcess process(images, bootstrap, std::chrono::seconds(2), mode);
+	unsetenv("RAVEN_PTRACE");
 	rejected([&] { process.agent_syscall(SYS_getpid); }, "a call went to an agent that was not started");
 	check(process.agent_task() == 0, "an agent task before the agent started");
 	process.start_agent();
@@ -53,9 +56,10 @@ static void agent(const std::string &bootstrap, raven::NativeMode mode)
 	check(task > 0, "the agent started no task");
 	rejected([&] { process.start_agent(); }, "the agent started twice");
 
-	// The service thread lives in the guest's thread group, untraced.
+	// The service thread lives in the guest's thread group, untraced, beside the guest's own task, which RAVEN_PTRACE left traced.
 	const long group = status_field(task, "Tgid");
 	check(group != getpid(), "the service thread runs in the runtime");
+	check(status_field(pid_t(group), "TracerPid") == getpid(), "RAVEN_PTRACE did not keep the guest's task traced");
 	check(status_field(task, "TracerPid") == 0, "the service thread is traced");
 	check(long(process.agent_syscall(SYS_getpid)) == group, "the service thread made its call in another process");
 	check(long(process.agent_syscall(SYS_gettid)) == task, "another thread made the service thread's call");
@@ -82,14 +86,12 @@ static void agent(const std::string &bootstrap, raven::NativeMode mode)
 	check(long(process.agent_syscall(SYS_getpid)) == group, "the service thread stopped answering after the guest ran");
 }
 
-// With RAVEN_AGENT set the process starts its agent itself, and the runtime's memory calls go to the service thread.
+// A process starts its agent itself, and the runtime's memory calls go to the service thread.
 static void agent_mode(const std::string &bootstrap, raven::NativeMode mode)
 {
-	setenv("RAVEN_AGENT", "1", 1);
 	const std::array<raven::LoadedImage *, 0> images{};
 	raven::NativeProcess process(images, bootstrap, std::chrono::seconds(2), mode);
-	unsetenv("RAVEN_AGENT");
-	check(process.agent_task() > 0, "RAVEN_AGENT did not start the agent");
+	check(process.agent_task() > 0, "a process did not start its agent");
 	const uint64_t before = process.agent_calls();
 	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
 	check(mode != raven::NativeMode::x86 || code < UINT32_MAX, "an x86 guest got memory above 4 GiB");
@@ -108,17 +110,13 @@ static void agent_mode(const std::string &bootstrap, raven::NativeMode mode)
 	check(!process.read_alone(code, &byte, 1), "memory the runtime released is still mapped");
 }
 
-// With RAVEN_AGENT_HOLD as well the guest's task leaves ptrace: its calls, system calls, breakpoints and faults stop it in the agent's
+// The guest's task leaves ptrace as well: its calls, system calls, breakpoints and faults stop it in the agent's
 // handler, and the runtime handles each stop as it handled a traced one.
 static void held(const std::string &bootstrap)
 {
-	setenv("RAVEN_AGENT", "1", 1);
-	setenv("RAVEN_AGENT_HOLD", "1", 1);
 	const std::array<raven::LoadedImage *, 0> images{};
 	const auto timeout = std::chrono::seconds(2);
 	raven::NativeProcess process(images, bootstrap, timeout, raven::NativeMode::x64);
-	unsetenv("RAVEN_AGENT");
-	unsetenv("RAVEN_AGENT_HOLD");
 	const pid_t guest = pid_t(status_field(process.agent_task(), "Tgid"));
 	check(status_field(guest, "TracerPid") == 0, "the guest's task is still traced");
 
@@ -183,13 +181,9 @@ static void held(const std::string &bootstrap)
 // A 32-bit guest leaves ptrace as well: its task runs compatibility-mode code and stops for the runtime over the 64-bit handler.
 static void held_x86(const std::string &bootstrap)
 {
-	setenv("RAVEN_AGENT", "1", 1);
-	setenv("RAVEN_AGENT_HOLD", "1", 1);
 	const std::array<raven::LoadedImage *, 0> images{};
 	const auto timeout = std::chrono::seconds(2);
 	raven::NativeProcess process(images, bootstrap, timeout, raven::NativeMode::x86);
-	unsetenv("RAVEN_AGENT");
-	unsetenv("RAVEN_AGENT_HOLD");
 	const pid_t guest = pid_t(status_field(process.agent_task(), "Tgid"));
 	check(status_field(guest, "TracerPid") == 0, "the 32-bit guest's task is still traced");
 	const auto code = process.map_memory(4096, PROT_READ | PROT_WRITE);
@@ -224,8 +218,6 @@ static void orphaned(const std::string &bootstrap)
 		close(channel[0]);
 		pid_t guest = 0;
 		try {
-			setenv("RAVEN_AGENT", "1", 1);
-			setenv("RAVEN_AGENT_HOLD", "1", 1);
 			const std::array<raven::LoadedImage *, 0> images{};
 			// Left to die with the process: no destructor runs.
 			auto *process = new raven::NativeProcess(images, bootstrap, std::chrono::seconds(2), raven::NativeMode::x64);
@@ -272,7 +264,7 @@ int main(int argc, char **argv)
 		held(argv[1]);
 		held_x86(argv[1]);
 		std::cout << "Agent service thread in x64/x86 guests: untraced, in the guest's thread group, its calls and memory the guest's, "
-			"the runtime's memory calls under RAVEN_AGENT, and a guest task out of ptrace under RAVEN_AGENT_HOLD that ends with its runtime\n";
+			"the runtime's memory calls, and guest tasks out of ptrace that end with their runtime, or traced under RAVEN_PTRACE\n";
 		return 0;
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';
