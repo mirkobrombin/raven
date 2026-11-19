@@ -1,5 +1,5 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44499294363, assembled with clang as here; dump sha256 26d908845c9e198c93e46dde875d15253fcf74d254c84eb22678e84e702e4ac1): the tests refuse the file when a family's cases or Rosetta's results change.
-# The strings family was run on an Intel Xeon Platinum 8370C (raven-macos-bench run 44500206597, dump sha256 37b9cf0cca10f7637359a6b9f4038e75c67ac913423a83c8aff9da653fdcdcf8): it agrees with Rosetta in all its cases. That run differs from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44501136642, assembled with clang as here; dump sha256 40a755f6ffa80c9164b2b0069bd94de0bf77bd9040d406b137835bb05f26340e): the tests refuse the file when a family's cases or Rosetta's results change.
+# Earlier runs: an AMD EPYC 9V74 (run 44499294363) gave the same results for the families it had. An Intel Xeon Platinum 8370C (run 44500206597, dump sha256 37b9cf0cca10f7637359a6b9f4038e75c67ac913423a83c8aff9da653fdcdcf8) agrees with Rosetta in the strings family, as the EPYC does, and differs from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
 corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
@@ -15,7 +15,9 @@ corpus	sse3	cases=500	generated=36aa17315fe8f5c7	rosetta=0dc0a19bdd9db3bf
 corpus	sse41	cases=1000	generated=4048e75bed7d65ca	rosetta=1cc0b362db2efc2c
 corpus	sse42	cases=400	generated=781c570d9b5d810b	rosetta=800b7b2bcc4b91d5
 corpus	ssse3	cases=500	generated=5fa57f159a9ca2a7	rosetta=45920946b54303f5
+corpus	strings	cases=1500	generated=906d7b01e821f9ec	rosetta=538a2627522d2948
 corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
+corpus	vex sse4	cases=1500	generated=e321b48b0d4415c8	rosetta=e582251adcae5d5b
 6791	ptest xmm1, xmm13; setp al	rosetta=80c645334d3258df	r0=0043f636f4371926	flags=0000000000000000
 6794	ptest xmm4, xmm12; sete al	rosetta=2c52bce89b3b350c	flags=0000000000000000
 6795	ptest xmm2, xmm11; setb al	rosetta=9792b41f27724e57	flags=0000000000000000
@@ -91,4 +93,93 @@ corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
 7747	ptest xmm1, xmm7; setp al	rosetta=ffe425fe9a9e490d	r0=00c0b3b2126d3ad8	flags=0000000000000000
 7748	ptest xmm4, xmm1; sets al	rosetta=c81f62b3e4f16593	flags=0000000000000000
 7771	ptest xmm0, xmm12; setae al	rosetta=928930126daf99f9	flags=0000000000000000
-corpus	strings	cases=1500	generated=906d7b01e821f9ec	rosetta=538a2627522d2948
+9994	vptest xmm7, xmmword ptr [r15 + 9]; setp al	rosetta=28d9b38649d2ca95	flags=0000000000000000
+10017	vptest xmm3, xmm1; setae al	rosetta=863ba47627b80c53	flags=0000000000000000
+10052	vptest ymm13, ymm5; seto al	rosetta=069c7716b016ab43	flags=0000000000000000
+10057	vptest xmm15, xmmword ptr [r15 + 23]; seta al	rosetta=6a98c9be02a2cfa7	flags=0000000000000000
+10060	vptest ymm4, ymm15; setbe al	rosetta=3e2616ac47a48488	flags=0000000000000000
+10078	vptest xmm6, xmmword ptr [r15 + 54]; setp al	rosetta=f4d965d751068ed6	r0=00e3becbe47ac269	flags=0000000000000000
+10080	vptest ymm4, ymm0; setae al	rosetta=9cad180d09d07009	flags=0000000000000000
+10085	vptest ymm13, ymmword ptr [r15 + 119]; setae al	rosetta=a86cb22c5c0c521b	flags=0000000000000000
+10087	vptest ymm1, ymmword ptr [r15 + 94]; setae al	rosetta=7d240da5fbeecbae	flags=0000000000000000
+10103	vptest ymm2, ymm5; setp al	rosetta=251ad588e05c148c	r0=0000000000000000	flags=0000000000000000
+10110	vptest xmm2, xmm8; setae al	rosetta=f10f26c9ae22c463	flags=0000000000000000
+10119	vptest xmm7, xmmword ptr [r15 + 71]; setp al	rosetta=3ce5e71d86c8b61a	flags=0000000000000000
+10175	vptest ymm6, ymm5; seto al	rosetta=2db307b91a07bdb0	flags=0000000000000000
+10185	vptest ymm9, ymm3; seta al	rosetta=c7cef9b17db3a32f	flags=0000000000000000
+10196	vptest xmm15, xmm10; setb al	rosetta=26db35ad6652004b	flags=0000000000000000
+10210	vptest xmm12, xmm11; seta al	rosetta=8b90c8aa7bd05bb6	flags=0000000000000000
+10218	vptest xmm3, xmm3; sets al	rosetta=29abc310481ccd77	flags=0100000000000000
+10253	vptest xmm13, xmm7; setp al	rosetta=f577ef4de34b156d	flags=0000000000000000
+10268	vptest xmm8, xmmword ptr [r15 + 78]; setne al	rosetta=db31299348fcbdbb	flags=0000000000000000
+10273	vptest xmm3, xmmword ptr [r15 + 146]; setbe al	rosetta=8f225606a0df35a3	flags=0000000000000000
+10287	vptest ymm13, ymmword ptr [r15 + 121]; seta al	rosetta=b504c420420e300f	flags=0000000000000000
+10309	vptest xmm2, xmm15; sete al	rosetta=1d1fe14af13c8ee0	flags=0000000000000000
+10342	vptest ymm2, ymm10; setbe al	rosetta=1aa082b74a4bc12f	flags=0000000000000000
+10347	vptest xmm1, xmm2; seto al	rosetta=559a38b6cd9e40fc	r0=004f55fa12f37cd3	flags=0000000000000000
+10348	vptest xmm11, xmm6; sete al	rosetta=efeb5629cc908bee	flags=0000000000000000
+10375	vptest ymm4, ymm9; seto al	rosetta=c65623c909967495	r0=000054b5cb99befb	flags=0000000000000000
+10416	vptest xmm2, xmm13; seta al	rosetta=2e2bb95e4cde8a0d	flags=0000000000000000
+10445	vptest ymm10, ymm6; sete al	rosetta=2bbb9548fd46e5db	flags=0000000000000000
+10450	vptest xmm3, xmmword ptr [r15 + 31]; setne al	rosetta=f8f105add55ff97b	flags=0000000000000000
+10484	vptest xmm2, xmm8; setbe al	rosetta=9504e370697bca3c	flags=0000000000000000
+10569	vptest xmm6, xmm9; seto al	rosetta=82f685deb3710f77	r0=005e8425a1f52782	flags=0000000000000000
+10571	vptest xmm4, xmm2; sets al	rosetta=74f0a22c9c6a8315	r0=0000000000000000	flags=0000000000000000
+10586	vptest xmm10, xmmword ptr [r15 + 86]; setbe al	rosetta=de6643a414f4b8b7	flags=0000000000000000
+10654	vptest xmm12, xmm7; sete al	rosetta=4b77412e856e498a	flags=0000000000000000
+10674	vptest xmm12, xmm12; setp al	rosetta=f1ae715566c6b8d1	flags=0100000000000000
+10694	vptest xmm13, xmmword ptr [r15 + 160]; seto al	rosetta=9a22fb2162edbf90	flags=0000000000000000
+10731	vptest xmm9, xmm12; sets al	rosetta=82a72a7b9553c2ec	r0=004f320e41680d07	flags=0000000000000000
+10745	vptest ymm4, ymm1; setbe al	rosetta=f1bc519814df25a6	flags=0000000000000000
+10782	vptest ymm13, ymmword ptr [r15 + 92]; setb al	rosetta=28bd8cf04adcac1b	flags=0000000000000000
+10793	vptest ymm10, ymm7; setbe al	rosetta=a7b5c7f3a5accf67	flags=0000000000000000
+10826	vptest ymm13, ymmword ptr [r15 + 24]; seta al	rosetta=785c073a1de15e98	flags=0000000000000000
+10830	vptest ymm3, ymm10; sets al	rosetta=b3fe252409f5c1fb	flags=0000000000000000
+10854	vptest ymm15, ymm2; sets al	rosetta=fde64ce90afa3b4f	r0=0000000000000000	flags=0000000000000000
+10861	vptest ymm4, ymm4; setbe al	rosetta=d9797c161d48e6c1	flags=0100000000000000
+10863	vptest ymm11, ymm11; setae al	rosetta=36bb600c72a4680d	flags=0100000000000000
+10881	vptest xmm11, xmm7; seto al	rosetta=6b3c673070cedac1	r0=0000000000000000	flags=0000000000000000
+10885	vptest xmm10, xmm11; sete al	rosetta=2e9112cdfee7a0b7	flags=0000000000000000
+10902	vptest ymm4, ymm3; sets al	rosetta=971cf82c1be240a0	flags=0000000000000000
+10914	vptest xmm10, xmm10; sets al	rosetta=7acb66914607c434	r0=0000008000000000	flags=0100000000000000
+10921	vptest xmm0, xmmword ptr [r15 + 106]; setbe al	rosetta=0532ea5a5cb8f9f9	flags=0000000000000000
+10928	vptest xmm13, xmm10; sets al	rosetta=2983f57e5721cfae	r0=003a5276b941a64e	flags=0000000000000000
+10935	vptest xmm6, xmm14; seto al	rosetta=f043de01b0863ff9	r0=003b06a121e86ec4	flags=0000000000000000
+10952	vptest ymm10, ymm0; setp al	rosetta=9e3fa75fe740e15c	r0=00190bb317cabf08	flags=0000000000000000
+10953	vptest ymm2, ymm13; setae al	rosetta=9f8ac49c65606a5e	flags=0000000000000000
+10956	vptest ymm9, ymm10; seto al	rosetta=99ffe53459f552b5	r0=00fbab49afb89cfb	flags=0000000000000000
+10980	vptest xmm15, xmm12; setne al	rosetta=611b50a5e7905178	flags=0000000000000000
+10993	vptest ymm15, ymm7; setne al	rosetta=847549efa33f31da	flags=0000000000000000
+11005	vptest xmm6, xmm5; setne al	rosetta=14e132b7dfb21a94	flags=0000000000000000
+11060	vptest ymm10, ymmword ptr [r15 + 91]; setp al	rosetta=2b2f891d21447492	r0=00f7ddf73add0b9d	flags=0000000000000000
+11061	vptest ymm8, ymmword ptr [r15 + 50]; seto al	rosetta=74ac3a609eef6934	flags=0000000000000000
+11072	vptest ymm15, ymmword ptr [r15 + 60]; setbe al	rosetta=1b103395b456405b	flags=0000000000000000
+11074	vptest xmm7, xmm7; setp al	rosetta=fb0a2363d862687a	flags=0100000000000000
+11077	vptest xmm15, xmm1; setb al	rosetta=108f30e423a8c9d8	flags=0000000000000000
+11091	vptest xmm13, xmm14; sets al	rosetta=173c7dac550e38d1	flags=0000000000000000
+11107	vptest xmm5, xmm0; sete al	rosetta=d2e195897b471fa1	flags=0000000000000000
+11117	vptest ymm8, ymm9; setp al	rosetta=a30b2034e3d45ecd	r0=0000000000000000	flags=0000000000000000
+11147	vptest xmm14, xmm5; setb al	rosetta=307f3e022d127ada	flags=0000000000000000
+11156	vptest xmm13, xmmword ptr [r15 + 9]; setp al	rosetta=962a69085f89b0d3	flags=0000000000000000
+11159	vptest xmm8, xmm8; sete al	rosetta=c543f2a43f5c6d3d	flags=0100000000000000
+11164	vptest ymm2, ymm4; setne al	rosetta=7f38e4dcc28e853a	flags=0000000000000000
+11168	vptest xmm12, xmmword ptr [r15 + 132]; setbe al	rosetta=6f3ade257fdcda93	flags=0000000000000000
+11197	vptest ymm5, ymmword ptr [r15 + 42]; setne al	rosetta=87446d687e414cf8	flags=0000000000000000
+11202	vptest ymm9, ymm9; setne al	rosetta=fb7d579140b3fb39	flags=0100000000000000
+11211	vptest ymm0, ymm15; setbe al	rosetta=714ea3f308f352c7	flags=0000000000000000
+11229	vptest xmm15, xmm11; sets al	rosetta=1c6e8e68484c5b17	r0=00000080ffffffff	flags=0000000000000000
+11256	vptest ymm11, ymm7; seto al	rosetta=83d0b26a08727b56	flags=0000000000000000
+11297	vptest ymm3, ymm0; seta al	rosetta=21c81aabb99374ba	flags=0000000000000000
+11323	vptest ymm3, ymm10; setne al	rosetta=04090f54112a5559	flags=0000000000000000
+11330	vptest xmm5, xmm11; setp al	rosetta=e34fb711d6c5b6f8	flags=0000000000000000
+11332	vptest ymm9, ymm5; setb al	rosetta=b97b42d536bb358f	flags=0000000000000000
+11347	vptest ymm6, ymmword ptr [r15 + 98]; setae al	rosetta=32fea693425c672b	flags=0000000000000000
+11373	vptest ymm7, ymmword ptr [r15 + 126]; seto al	rosetta=ac4ff2f84577e43b	flags=0000000000000000
+11375	vptest xmm1, xmm11; sete al	rosetta=9164fd3a7958fc1d	flags=0000000000000000
+11390	vptest ymm6, ymm2; setne al	rosetta=ea3d0b9dd4a1fbfa	flags=0000000000000000
+11392	vptest xmm1, xmmword ptr [r15 + 157]; setae al	rosetta=631361506e648c81	flags=0000000000000000
+11408	vptest xmm4, xmm10; setb al	rosetta=68f835d9ae25de64	flags=0000000000000000
+11417	vptest ymm9, ymm7; setae al	rosetta=938732b8906f0647	flags=0000000000000000
+11418	vptest ymm8, ymm8; seto al	rosetta=2d1e511e01dc7592	flags=0100000000000000
+11425	vptest xmm7, xmmword ptr [r15 + 136]; setae al	rosetta=85809adeb8f6a7da	flags=0000000000000000
+11429	vptest xmm14, xmm0; sete al	rosetta=863444b8a43e6425	flags=0000000000000000
