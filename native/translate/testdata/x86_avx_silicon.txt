@@ -1,5 +1,5 @@
-# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44505099547, assembled with clang as here; dump sha256 885a1c6540203df37a937212e41b21fea0dfd9f239398d4ed79f9ab0bff5f8b1): the tests refuse the file when a family's cases or Rosetta's results change.
-# Earlier runs: AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 9V74 (raven-macos-bench run 44505811968, assembled with clang as here; dump sha256 28aa394685cacc237ca24c7a37fd3ed396d7f0918d4b4222fa5010879a1bf28b): the tests refuse the file when a family's cases or Rosetta's results change.
+# Earlier runs: an AMD EPYC 9V74 (run 44505099547, all but the gathers), AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
 corpus	approximations	cases=600	generated=52b71b7d5a377a5b	rosetta=9a08b5ad95d5336b
 corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
 corpus	avx ops	cases=1500	generated=81ce8548266e5728	rosetta=560d169b35ec6d3f
@@ -9,6 +9,7 @@ corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
 corpus	fma	cases=1200	generated=3a80c4c9592e6b73	rosetta=117c23e7ae1b07d1
 corpus	fma addsub	cases=600	generated=b23222184fd734b0	rosetta=c6cb47a47f9865dc
 corpus	fma edges	cases=288	generated=7ab841c15c69c67d	rosetta=5f7aa11b0e3469d6
+corpus	gathers	cases=800	generated=04d2d37981db1a83	rosetta=851ff72a0d26b7d4
 corpus	integer	cases=700	generated=e885abd03fce5654	rosetta=afd4fe34eb94de6d
 corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
 corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
