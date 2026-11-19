@@ -1735,7 +1735,19 @@ void BlockTranslator::avx(const Instruction &instruction)
 		(mnemonic == Mnemonic::psllw || mnemonic == Mnemonic::pslld || mnemonic == Mnemonic::psllq || mnemonic == Mnemonic::psrlw ||
 			mnemonic == Mnemonic::psrld || mnemonic == Mnemonic::psrlq || mnemonic == Mnemonic::psraw || mnemonic == Mnemonic::psrad);
 	if (target.kind == OperandKind::mem) {
-		// Stores: the low half as SSE stores it, then the upper half 16 bytes on.
+		// Stores: the low half as SSE stores it, then the upper half 16 bytes on. x86 writes no byte of a store that faults; two
+		// stores of 16 bytes would leave the first written when the second faults. So the first and the last byte are probed first
+		// with an atomic add of zero (staddb wzr), which needs write access and changes nothing, even with another thread writing:
+		// 32 bytes span at most those two pages.
+		if (wide) {
+			for (const int64_t offset : {int64_t(0), int64_t(31)}) {
+				Operand probe = target;
+				probe.value += offset;
+				probe.size = 1;
+				effective_address(s1, probe, true);
+				a.simd(simd::staddb_zero, a64::zr, s1, a64::zr);
+			}
+		}
 		translate(legacy_form(instruction, 0));
 		if (wide) {
 			load_high(vh0, operands[1].reg);
@@ -1751,31 +1763,45 @@ void BlockTranslator::avx(const Instruction &instruction)
 		return;
 	}
 	const uint8_t destination = target.reg;
+	// x86's exceptions are precise: an instruction whose memory operand faults changes no register. So every load comes before the
+	// first write to the destination: the upper half of a memory operand into vh1, the low half's result into vh2, the upper half's
+	// into vh0, and only then the destination's two halves.
 	if (vex_unary(instruction)) {
-		// The upper half first, from the source's (CpuState or memory), so a destination equal to the source is read before it changes.
 		if (wide) {
+			const uint8_t high_input = high_source(operands[1], vh1);
+			translate(legacy_form(instruction, vh2));
 			Instruction high = legacy_form(instruction, vh0);
 			high.operands[1] = Operand{};
 			high.operands[1].kind = OperandKind::xmm;
 			high.operands[1].size = 16;
-			high.operands[1].reg = high_source(operands[1], vh1);
+			high.operands[1].reg = high_input;
 			translate(high);
 			store_high(vh0, destination);
+			a.simd(simd::orr_16b, destination, vh2, vh2);
+			return;
 		}
 		translate(legacy_form(instruction, destination));
-		if (!wide)
-			clear_high(destination);
+		clear_high(destination);
 		return;
 	}
 	const Operand &first = operands[1], &second = operands[2];
+	const bool high_from_second = wide && !count_shift && second.kind != OperandKind::imm;
+	const uint8_t high_input = high_from_second ? high_source(second, vh1) : 0;
+	// The low half: the destination starts as the first source, in vh2 when the instruction has an upper half or a memory operand
+	// (so nothing is written before the loads) or when the destination is the second source (which must be read first).
+	const bool second_is_destination = second.kind == OperandKind::xmm && second.reg == destination && first.reg != destination;
+	const uint8_t working = wide || second.kind == OperandKind::mem || second_is_destination ? vh2 : destination;
+	if (first.reg != working)
+		a.simd(simd::orr_16b, working, first.reg, first.reg);
+	translate(legacy_form(instruction, working));
 	if (wide) {
 		load_high(vh0, first.reg);
 		Instruction high = legacy_form(instruction, vh0);
-		if (!count_shift && second.kind != OperandKind::imm) {
+		if (high_from_second) {
 			high.operands[1] = Operand{};
 			high.operands[1].kind = OperandKind::xmm;
 			high.operands[1].size = 16;
-			high.operands[1].reg = high_source(second, vh1);
+			high.operands[1].reg = high_input;
 		}
 		// vshufpd takes bits 3:2 of its imm8 for the upper half (vshufps the same four fields for both).
 		if (mnemonic == Mnemonic::shufpd)
@@ -1783,12 +1809,6 @@ void BlockTranslator::avx(const Instruction &instruction)
 		translate(high);
 		store_high(vh0, destination);
 	}
-	// The low half: the destination starts as the first source unless that would overwrite the second before it is read.
-	const bool second_is_destination = second.kind == OperandKind::xmm && second.reg == destination && first.reg != destination;
-	const uint8_t working = second_is_destination ? vh2 : destination;
-	if (first.reg != working)
-		a.simd(simd::orr_16b, working, first.reg, first.reg);
-	translate(legacy_form(instruction, working));
 	if (working != destination)
 		a.simd(simd::orr_16b, destination, working, working);
 	if (!wide)
@@ -1966,15 +1986,19 @@ void BlockTranslator::avx_fma(const Instruction &instruction)
 		load_vector(scratch, low, low.size);
 		return scratch;
 	};
+	// Both halves of a memory operand are loaded before the destination changes (precise exceptions, as in avx()).
 	if (wide) {
+		const uint8_t high_third = third(operands[2], vh2, true);
+		const uint8_t low_third = third(operands[2], vh3, false);
 		load_high(vh0, destination);
 		load_high(vh1, operands[1].reg);
-		run(vh0, vh1, third(operands[2], vh2, true), vh0);
+		run(vh0, vh1, high_third, vh0);
+		run(destination, operands[1].reg, low_third, destination);
 		store_high(vh0, destination);
+		return;
 	}
 	run(destination, operands[1].reg, third(operands[2], vh2, false), destination);
-	if (!wide)
-		clear_high(destination);
+	clear_high(destination);
 }
 
 void BlockTranslator::translate(const Instruction &instruction)

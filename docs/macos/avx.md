@@ -95,6 +95,17 @@ the samples passing.
   - VEX scalar instructions take bits 127:32 (or 127:64) from the first source and clear 255:128;
   - vzeroupper clears all sixteen upper halves; vzeroall clears all of every register;
   - comis and ucomis write no vector register and keep them (PROVEN by the `compare` family, not `transitions`).
+- **A memory operand that faults changes nothing.** x86 faults are restartable: an instruction that raises #PF has written no
+  register and, for a store, no byte, even when its 32 bytes cross into an unmapped page (INFERRED from the SDM's description of faults
+  as reported before the instruction executes; no split access was faulted on the EPYC). So every load of a 256-bit instruction (both
+  halves of a memory operand, both FMA3 forms) comes before its first write to the destination, the halves' results waiting in
+  v0-v3's neighbours v20-v23; and a 32-byte store first probes its first and last byte with `staddb wzr` (an atomic add of zero, which
+  needs write access and changes nothing even with another thread writing), then stores. PROVEN by `hvf_avx_fault` in a vCPU, with
+  the operand straddling an unmapped page: `vaddps ymm1, ymm1, [rax]` and `vfmadd231ps ymm1, ymm2, [rax]` with the low half
+  unmapped leave every upper half as it was, `vmovups [rax], ymm1` with the upper half unmapped writes no byte. Before the fix
+  (test `9fb748f7`) all three failed: `an upper half changed before the fault`, `memory was written before the fault`. Not covered:
+  the low halves (host registers, not stored on a guest fault, so not observable this way), this process (a host fault ends it), and
+  a 16-byte SSE store that crosses a page (an Arm store may then be partly performed; not probed).
 - **ARM64EC.** The ARM64EC ABI page (learn.microsoft.com/en-us/windows/arm/arm64ec-abi, 2025-11-06) maps registers through the x64
   `CONTEXT` and says "x13, x14, x23, x24, x28, and v16 through v31 have no representation and, thus, can't be used in Arm64EC"; it
   says nothing of YMM or AVX. Microsoft's x64 calling convention page (2025-03-19) says "When present, the upper portions of
@@ -120,7 +131,7 @@ the samples passing.
 - **The decoder** gives VEX semantics to these and prints them as LLVM does: 20000 random VEX encodings join the decoder corpus, 0
   print differently from LLVM or decode where LLVM rejects them (PROVEN, `x86_decoder_test`: `vex_instances.o: 25765 instructions,
   17900 with semantics (69.5%), 10690 rejected by LLVM, 0 failures`; the count includes what LLVM decodes between them).
-- `translator_version` is 7 (6: the cpuid exit; 7: VEX blocks).
+- `translator_version` is 8 (6: the cpuid exit; 7: VEX blocks; 8: loads before writes in 256-bit instructions).
 
 ## Tests
 

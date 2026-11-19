@@ -28,6 +28,8 @@ constexpr uint32_t and_16b = 0x4e201c00, bic_16b = 0x4e601c00, orr_16b = 0x4ea01
 constexpr uint32_t fmov_s_w = 0x1e270000, fmov_w_s = 0x1e260000, fmov_d_x = 0x9e670000, fmov_x_d = 0x9e660000;
 constexpr uint32_t fmov_d_d = 0x1e604000;
 constexpr uint32_t movi_zero_2d = 0x6f00e400;
+// staddb (ldaddb with wzr as Rt): Rm is the value added, Rn the address; with wzr as both, a write probe that changes nothing.
+constexpr uint32_t staddb_zero = 0x38200000;
 // Floating point on four singles; or sz (bit 22) in for two doubles, or the scalar single for one double.
 constexpr uint32_t sz = 0x00400000;
 constexpr uint32_t fadd_4s = 0x4e20d400, fsub_4s = 0x4ea0d400, fmul_4s = 0x6e20dc00, fdiv_4s = 0x6e20fc00, fmax_4s = 0x4e20f400,
