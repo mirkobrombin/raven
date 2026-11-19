@@ -94,6 +94,13 @@ FlagEffect flag_effect(const Instruction &instruction)
 			return {shift_count(instruction) ? all_flags : 0, 0};
 		// A count of zero leaves every flag as it was.
 		return {0, all_flags};
+	case Mnemonic::rol: case Mnemonic::ror: case Mnemonic::rcl: case Mnemonic::rcr: {
+		// CF and OF only, the others stay; a count of 0 leaves those two as well, and rcl and rcr read CF.
+		const uint32_t uses = instruction.mnemonic == Mnemonic::rcl || instruction.mnemonic == Mnemonic::rcr ? CF : 0;
+		if (instruction.operands[1].kind == OperandKind::imm)
+			return shift_count(instruction) ? FlagEffect{CF | OF, uses} : FlagEffect{};
+		return {0, CF | OF};
+	}
 	case Mnemonic::jcc: case Mnemonic::setcc: case Mnemonic::cmovcc: return {0, condition_flags(instruction.condition)};
 	case Mnemonic::comiss: case Mnemonic::comisd: case Mnemonic::ucomiss: case Mnemonic::ucomisd: case Mnemonic::ptest:
 	case Mnemonic::popcnt: case Mnemonic::vtestps: case Mnemonic::vtestpd: case Mnemonic::andn: case Mnemonic::bextr:
@@ -177,7 +184,8 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::cmp: case Mnemonic::and_: case Mnemonic::or_: case Mnemonic::xor_:
 	case Mnemonic::test: case Mnemonic::inc: case Mnemonic::dec: case Mnemonic::neg: case Mnemonic::not_:
 		return true;
-	case Mnemonic::adc: case Mnemonic::sbb: return !instruction.lock && size >= 4;
+	case Mnemonic::adc: case Mnemonic::sbb: return true;
+	case Mnemonic::rol: case Mnemonic::ror: case Mnemonic::rcl: case Mnemonic::rcr: return !instruction.lock;
 	case Mnemonic::mov: case Mnemonic::movzx: case Mnemonic::movsx: case Mnemonic::movsxd: case Mnemonic::lea:
 	case Mnemonic::setcc: case Mnemonic::nop: case Mnemonic::cbw: case Mnemonic::cwd: case Mnemonic::leave: case Mnemonic::int3:
 	case Mnemonic::syscall: case Mnemonic::hlt: case Mnemonic::ud2: case Mnemonic::jcc: case Mnemonic::jmp: case Mnemonic::call:
@@ -250,7 +258,7 @@ bool supported(const Instruction &instruction)
 	case Mnemonic::int_: return !instruction.lock && first.value == 0x29;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar:
 		// Narrow shifts only by a count inside their width: beyond it CF is undefined and the result needs its own code.
-		return size >= 4 || (instruction.operands[1].kind == OperandKind::imm && shift_count(instruction) < size * 8u);
+		return size >= 4 || instruction.operands[1].kind != OperandKind::imm || shift_count(instruction) < size * 8u;
 	default: return false;
 	}
 }
@@ -403,11 +411,18 @@ private:
 	void arithmetic(const Instruction &instruction);
 	void unary(const Instruction &instruction);
 	void shift(const Instruction &instruction);
+	void narrow_shift_by_cl(const Instruction &instruction);
+	void rotate(const Instruction &instruction);
+	void rotate_carry(const Instruction &instruction);
 	void multiply(const Instruction &instruction);
 	void multiply_wide(const Instruction &instruction);
 	void divide(const Instruction &instruction);
 	void bit_test(const Instruction &instruction);
 	void locked(const Instruction &instruction);
+	// Branches to split when the size bytes at base cross a 16-byte boundary, where an LSE atomic faults (FEAT_LSE2 covers unaligned
+	// accesses inside 16 bytes only). The out-of-line forms there are a plain load and store between full barriers: right for one
+	// thread, not atomic against another (x86 locks the bus for a split lock). NZCV is left alone.
+	void branch_if_split(uint8_t base, unsigned size, Assembler::Label split);
 	// Set by locked(): the register holding the old value of the memory operand, which arithmetic() and unary() then take as the
 	// destination's value, computing the result and flags without writing it (the atomic did).
 	uint8_t locked_old = a64::zr;
@@ -793,6 +808,36 @@ void BlockTranslator::arithmetic(const Instruction &instruction)
 	if (flags && flags_wanted(AF))
 		a.eor(adjust_register, left, right);
 	switch (mnemonic) {
+	case Mnemonic::adc: case Mnemonic::sbb: {
+		// In 32 bits with the carry added or taken: CF is bit `bits` of the sum or difference, OF from the operands' signs.
+		const uint8_t bits = static_cast<uint8_t>(size * 8);
+		a.cset(s4, condition(2));
+		if (mnemonic == Mnemonic::adc) {
+			a.add(s2, left, right, Shift::lsl, 0, false);
+			a.add(s2, s2, s4, Shift::lsl, 0, false);
+		} else {
+			a.sub(s2, left, right, Shift::lsl, 0, false);
+			a.sub(s2, s2, s4, Shift::lsl, 0, false);
+		}
+		if (flags) {
+			if (mnemonic == Mnemonic::adc) {
+				a.eor(s3, left, s2, Shift::lsl, 0, false);
+				a.eor(s4, right, s2, Shift::lsl, 0, false);
+			} else {
+				a.eor(s3, left, right, Shift::lsl, 0, false);
+				a.eor(s4, left, s2, Shift::lsl, 0, false);
+			}
+			a.and_(s3, s3, s4, false);
+			a.ubfx(s3, s3, static_cast<uint8_t>(bits - 1), 1, false);
+			a.ubfx(s4, s2, bits, 1, false);
+			a.orr(s3, s3, s4, Shift::lsl, 1, false);
+			a.lsl_imm(s4, s2, top, false);
+			a.and_(a64::zr, s4, s4, false, true);
+			a.rmif(s3, 0, 0b0011);
+			carry_inverted = false;
+		}
+		break;
+	}
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::cmp:
 		if (flags) {
 			a.lsl_imm(s3, left, top, false);
@@ -891,6 +936,14 @@ void BlockTranslator::unary(const Instruction &instruction)
 		write(target, s2);
 }
 
+void BlockTranslator::branch_if_split(uint8_t base, unsigned size, Assembler::Label split)
+{
+	// The first and last byte differ in bit 4 exactly when the access crosses 16 bytes (size is at most 8).
+	a.add_imm(s5, base, size - 1);
+	a.eor(s5, s5, base);
+	a.tbnz(s5, 4, split);
+}
+
 void BlockTranslator::locked(const Instruction &instruction)
 {
 	// lock add, sub, and, or, xor, inc, dec, not and neg on memory: one LSE atomic with acquire and release (as xadd), which leaves
@@ -908,6 +961,47 @@ void BlockTranslator::locked(const Instruction &instruction)
 	case Mnemonic::dec: a.mov_imm(s3, ~uint64_t(0)); break;
 	case Mnemonic::not_: a.mov_imm(s3, ~uint64_t(0)); break;
 	case Mnemonic::neg: break;
+	case Mnemonic::adc: case Mnemonic::sbb: {
+		// A CAS loop on old plus or minus the source and CF (s4), NZCV kept in s6 across it for arithmetic() to read.
+		operand = read(instruction.operands[1], s1);
+		a.cset(s4, condition(2), true);
+		a.mrs_nzcv(s6);
+		const Assembler::Label retry = a.label(), done = a.label(), split = a.label();
+		auto result = [&]() {
+			if (mnemonic == Mnemonic::adc) {
+				a.add(s3, s0, operand);
+				a.add(s3, s3, s4);
+			} else {
+				a.sub(s3, s0, operand);
+				a.sub(s3, s3, s4);
+			}
+		};
+		if (size > 1)
+			branch_if_split(address_register, size, split);
+		a.ldr(s0, address_register, 0, size);
+		a.bind(retry);
+		result();
+		a.mov(s2, s0);
+		a.casal(s2, s3, address_register, size);
+		a.sub(a64::zr, s2, s0, Shift::lsl, 0, true, true);
+		a.b(Cond::eq, done);
+		a.mov(s0, s2);
+		a.b(retry);
+		if (size > 1) {
+			a.bind(split);
+			a.dmb(a64::Barrier::ish);
+			a.ldr(s0, address_register, 0, size);
+			result();
+			a.str(s3, address_register, 0, size);
+			a.dmb(a64::Barrier::ish);
+		}
+		a.bind(done);
+		a.msr_nzcv(s6);
+		locked_old = s0;
+		arithmetic(instruction);
+		locked_old = a64::zr;
+		return;
+	}
 	default: {
 		Operand source = instruction.operands[1];
 		operand = read(source, s1);
@@ -921,6 +1015,9 @@ void BlockTranslator::locked(const Instruction &instruction)
 		break;
 	}
 	}
+	const Assembler::Label split = a.label(), join = a.label();
+	if (size > 1)
+		branch_if_split(address_register, size, split);
 	switch (mnemonic) {
 	case Mnemonic::add: case Mnemonic::sub: case Mnemonic::inc: case Mnemonic::dec: a.ldaddal(operand, s0, address_register, size); break;
 	case Mnemonic::and_: a.ldclral(operand, s0, address_register, size); break;
@@ -941,6 +1038,22 @@ void BlockTranslator::locked(const Instruction &instruction)
 		a.bind(done);
 		break;
 	}
+	}
+	if (size > 1) {
+		a.b(join);
+		a.bind(split);
+		a.dmb(a64::Barrier::ish);
+		a.ldr(s0, address_register, 0, size);
+		switch (mnemonic) {
+		case Mnemonic::add: case Mnemonic::sub: case Mnemonic::inc: case Mnemonic::dec: a.add(s2, s0, operand); break;
+		case Mnemonic::and_: a.emit(0x8a200000u | uint32_t(operand) << 16 | uint32_t(s0) << 5 | s2); break; // bic
+		case Mnemonic::or_: a.orr(s2, s0, operand); break;
+		case Mnemonic::xor_: case Mnemonic::not_: a.eor(s2, s0, operand); break;
+		default: a.sub(s2, a64::zr, s0); break;
+		}
+		a.str(s2, address_register, 0, size);
+		a.dmb(a64::Barrier::ish);
+		a.bind(join);
 	}
 	if (mnemonic == Mnemonic::not_)
 		return;
@@ -1012,6 +1125,10 @@ void BlockTranslator::shift(const Instruction &instruction)
 		write(target, s2);
 		return;
 	}
+	if (size < 4) {
+		narrow_shift_by_cl(instruction);
+		return;
+	}
 	// By CL: a count of zero changes nothing at all, not even the flags. Both ways leave C inverted.
 	if (flags_wanted(all_flags))
 		normalize_carry();
@@ -1057,6 +1174,212 @@ void BlockTranslator::shift(const Instruction &instruction)
 	a.bind(skip);
 	if (flags_wanted(all_flags))
 		carry_inverted = true;
+}
+
+void BlockTranslator::narrow_shift_by_cl(const Instruction &instruction)
+{
+	// 8 and 16 bits by CL: the count is CL modulo 32, so it may pass the width. The zero-extended (sar: sign-extended) value shifts in
+	// a 64-bit register; CF is the last bit out (for shl, bit `bits` of the shifted value), OF as for a count of one, the result's low
+	// bits give SF, ZF and PF. A count of zero changes nothing; both ways leave C inverted.
+	const Operand &target = instruction.operands[0];
+	const Mnemonic mnemonic = instruction.mnemonic;
+	const unsigned bits = target.size * 8;
+	const bool flags = flags_wanted(all_flags);
+	if (flags)
+		normalize_carry();
+	const Assembler::Label skip = a.label();
+	a.and_imm(s1, host_register[rcx], 31, false);
+	a.cbz(s1, skip, false);
+	read(target, s0, false);
+	if (mnemonic == Mnemonic::sar)
+		a.sbfx(s0, s0, 0, static_cast<uint8_t>(bits));
+	switch (mnemonic) {
+	case Mnemonic::shl: a.lslv(s2, s0, s1); break;
+	case Mnemonic::shr: a.lsrv(s2, s0, s1); break;
+	default: a.asrv(s2, s0, s1); break;
+	}
+	if (flags) {
+		if (mnemonic == Mnemonic::shl) {
+			a.ubfx(s3, s2, static_cast<uint8_t>(bits), 1);
+			a.ubfx(s4, s2, static_cast<uint8_t>(bits - 1), 1);
+			a.eor(s4, s4, s3);
+		} else {
+			a.sub_imm(s3, s1, 1, false, false);
+			a.lsrv(s3, s0, s3);
+			a.and_imm(s3, s3, 1);
+			if (mnemonic == Mnemonic::shr)
+				a.ubfx(s4, s0, static_cast<uint8_t>(bits - 1), 1);
+			else
+				a.mov_imm(s4, 0);
+		}
+		a.orr(s4, s4, s3, Shift::lsl, 1);
+		a.lsl_imm(s3, s2, static_cast<uint8_t>(32 - bits), false);
+		a.and_(a64::zr, s3, s3, false, true);
+		a.rmif(s4, 0, 0b0011);
+		if (flags_wanted(PF))
+			a.mov(parity_register, s2);
+	}
+	write(target, s2);
+	if (flags)
+		a.cfinv();
+	a.bind(skip);
+	if (flags)
+		carry_inverted = true;
+}
+
+void BlockTranslator::rotate(const Instruction &instruction)
+{
+	// rol and ror: CF and OF only (OF as for a count of one), SF, ZF, AF and PF stay. The count is masked to 5 bits (6 at 64); a
+	// masked count of 0 changes nothing, else CF is set even when the count modulo the width is 0. 8- and 16-bit values are
+	// replicated across 32 bits, so a 32-bit rotate by the masked count rotates them modulo their width; rol is ror by the negated
+	// count.
+	const Operand &target = instruction.operands[0];
+	const Operand &count_operand = instruction.operands[1];
+	const bool is_rol = instruction.mnemonic == Mnemonic::rol;
+	const unsigned size = target.size, bits = size * 8;
+	const bool is64 = size == 8;
+	const bool flags = flags_wanted(CF | OF);
+	const bool by_cl = count_operand.kind != OperandKind::imm;
+	const Assembler::Label skip = a.label();
+	if (by_cl) {
+		if (flags)
+			normalize_carry();
+		if (target.kind == OperandKind::reg && size == 4)
+			a.mov(host_register[target.reg], host_register[target.reg], false);
+		a.and_imm(s1, host_register[rcx], is64 ? 63 : 31, false);
+		a.cbz(s1, skip, false);
+	} else if (shift_count(instruction) == 0) {
+		if (target.kind == OperandKind::reg && size == 4)
+			a.mov(host_register[target.reg], host_register[target.reg], false);
+		return;
+	}
+	uint8_t value = read(target, s0, false);
+	if (size == 1) {
+		a.orr(s0, value, value, Shift::lsl, 8, false);
+		value = s0;
+	}
+	if (size <= 2) {
+		a.orr(s0, value, value, Shift::lsl, 16, false);
+		value = s0;
+	}
+	const uint32_t sf = is64 ? 0x80000000u : 0;
+	if (by_cl) {
+		uint8_t amount = s1;
+		if (is_rol) {
+			a.sub(s3, a64::zr, s1, Shift::lsl, 0, false);
+			amount = s3;
+		}
+		a.emit(sf | 0x1ac02c00u | uint32_t(amount) << 16 | uint32_t(value) << 5 | s2); // rorv
+	} else {
+		const unsigned width = is64 ? 64 : 32;
+		const unsigned count = shift_count(instruction) % width;
+		const unsigned amount = is_rol ? (width - count) % width : count;
+		a.emit((is64 ? 0x93c00000u : 0x13800000u) | uint32_t(value) << 16 | amount << 10 | uint32_t(value) << 5 | s2); // extr
+	}
+	if (flags) {
+		// s3 CF, s4 OF: rol, the low bit and the top bit xor CF; ror, the top bit and the top bit xor the one below.
+		a.ubfx(s3, s2, is_rol ? 0 : static_cast<uint8_t>(bits - 1), 1);
+		a.ubfx(s4, s2, static_cast<uint8_t>(bits - 1), 1);
+		if (is_rol)
+			a.eor(s4, s4, s3);
+		else {
+			a.ubfx(s1, s2, static_cast<uint8_t>(bits - 2), 1);
+			a.eor(s4, s4, s1);
+		}
+		a.orr(s4, s4, s3, Shift::lsl, 1);
+		a.rmif(s4, 0, 0b0011);
+		carry_inverted = false;
+	}
+	write(target, s2);
+	if (by_cl) {
+		if (flags)
+			a.cfinv();
+		a.bind(skip);
+		if (flags)
+			carry_inverted = true;
+	}
+}
+
+void BlockTranslator::rotate_carry(const Instruction &instruction)
+{
+	// rcl and rcr rotate the value and CF, bits + 1 of them, by the masked count modulo 9 and 17 at 8 and 16 bits. With n that
+	// count (1 to bits) and B the width, on the zero-extended value v and c the carry:
+	//   rcl: (v << n) | (c << (n - 1)) | ((v >> 1) >> (B - n)), CF bit B - n of v, OF the top bit of the result xor CF;
+	//   rcr: (v >> n) | (c << (B - n)) | ((v << 1) << (B - n)), CF bit n - 1 of v, OF the top bit of v xor c.
+	// n of 0 changes nothing (OF is undefined then). SF, ZF, AF and PF stay.
+	const Operand &target = instruction.operands[0];
+	const Operand &count_operand = instruction.operands[1];
+	const bool is_rcl = instruction.mnemonic == Mnemonic::rcl;
+	const unsigned size = target.size, bits = size * 8;
+	const bool is64 = size == 8;
+	const bool by_cl = count_operand.kind != OperandKind::imm;
+	const Assembler::Label skip = a.label();
+	if (by_cl) {
+		normalize_carry();
+		if (target.kind == OperandKind::reg && size == 4)
+			a.mov(host_register[target.reg], host_register[target.reg], false);
+		a.and_imm(s1, host_register[rcx], is64 ? 63 : 31, false);
+		a.cbz(s1, skip, false);
+		if (bits < 32) {
+			a.mov_imm(s3, bits + 1);
+			a.udiv(s2, s1, s3);
+			a.msub(s1, s2, s3, s1);
+			a.cbz(s1, skip);
+		}
+	} else {
+		const unsigned masked = shift_count(instruction);
+		if (masked == 0) {
+			if (target.kind == OperandKind::reg && size == 4)
+				a.mov(host_register[target.reg], host_register[target.reg], false);
+			return;
+		}
+		if (bits < 32 && masked % (bits + 1) == 0)
+			return;
+		a.mov_imm(s1, bits < 32 ? masked % (bits + 1) : masked);
+	}
+	a.cset(s6, condition(2), true);
+	read(target, s0, false);
+	// s5: B - n.
+	a.mov_imm(s5, bits);
+	a.sub(s5, s5, s1);
+	if (is_rcl) {
+		a.lslv(s2, s0, s1);
+		a.sub_imm(s3, s1, 1);
+		a.lslv(s3, s6, s3);
+		a.orr(s2, s2, s3);
+		a.lsr_imm(s3, s0, 1);
+		a.lsrv(s3, s3, s5);
+		a.orr(s2, s2, s3);
+		a.lsrv(s3, s0, s5);
+	} else {
+		a.lsrv(s2, s0, s1);
+		a.lslv(s3, s6, s5);
+		a.orr(s2, s2, s3);
+		a.lsl_imm(s3, s0, 1);
+		a.lslv(s3, s3, s5);
+		a.orr(s2, s2, s3);
+		a.sub_imm(s3, s1, 1);
+		a.lsrv(s3, s0, s3);
+	}
+	a.and_imm(s3, s3, 1);
+	if (bits < 64)
+		a.ubfx(s2, s2, 0, static_cast<uint8_t>(bits));
+	if (is_rcl) {
+		a.ubfx(s4, s2, static_cast<uint8_t>(bits - 1), 1);
+		a.eor(s4, s4, s3);
+	} else {
+		a.ubfx(s4, s0, static_cast<uint8_t>(bits - 1), 1);
+		a.eor(s4, s4, s6);
+	}
+	a.orr(s4, s4, s3, Shift::lsl, 1);
+	a.rmif(s4, 0, 0b0011);
+	carry_inverted = false;
+	write(target, s2);
+	if (by_cl) {
+		a.cfinv();
+		a.bind(skip);
+		carry_inverted = true;
+	}
 }
 
 void BlockTranslator::multiply(const Instruction &instruction)
@@ -1392,7 +1715,19 @@ void BlockTranslator::exchange(const Instruction &instruction)
 			const Operand &reg = first.kind == OperandKind::mem ? second : first;
 			const uint8_t value = read(reg, s0, false);
 			const Address at = address(memory, true);
+			const Assembler::Label split = a.label(), join = a.label();
+			if (size > 1)
+				branch_if_split(at.base, size, split);
 			a.swpal(value, s1, at.base, size);
+			if (size > 1) {
+				a.b(join);
+				a.bind(split);
+				a.dmb(a64::Barrier::ish);
+				a.ldr(s1, at.base, 0, size);
+				a.str(value, at.base, 0, size);
+				a.dmb(a64::Barrier::ish);
+				a.bind(join);
+			}
 			write(reg, s1);
 			return;
 		}
@@ -1412,7 +1747,22 @@ void BlockTranslator::exchange(const Instruction &instruction)
 		const uint8_t expected = read(accumulator, s0, false);
 		const uint8_t replacement = read(second, s1, false);
 		a.mov(s3, expected);
+		const Assembler::Label split = a.label(), join = a.label(), unchanged = a.label();
+		if (size > 1)
+			branch_if_split(address_register, size, split);
 		a.casal(s0, replacement, address_register, size);
+		if (size > 1) {
+			a.b(join);
+			a.bind(split);
+			a.dmb(a64::Barrier::ish);
+			a.ldr(s0, address_register, 0, size);
+			a.sub(a64::zr, s0, s3, Shift::lsl, 0, true, true);
+			a.b(Cond::ne, unchanged);
+			a.str(replacement, address_register, 0, size);
+			a.bind(unchanged);
+			a.dmb(a64::Barrier::ish);
+			a.bind(join);
+		}
 		const uint8_t top = static_cast<uint8_t>(size >= 4 ? 0 : 32 - size * 8);
 		if (top) {
 			a.lsl_imm(s4, s3, top, false);
@@ -1439,7 +1789,20 @@ void BlockTranslator::exchange(const Instruction &instruction)
 	}
 	// xadd: memory gets the sum, the register the old value; flags as for add.
 	const uint8_t addend = read(second, s1, false);
+	const Assembler::Label split = a.label(), join = a.label();
+	if (size > 1)
+		branch_if_split(address_register, size, split);
 	a.ldaddal(addend, s0, address_register, size);
+	if (size > 1) {
+		a.b(join);
+		a.bind(split);
+		a.dmb(a64::Barrier::ish);
+		a.ldr(s0, address_register, 0, size);
+		a.add(s3, s0, addend);
+		a.str(s3, address_register, 0, size);
+		a.dmb(a64::Barrier::ish);
+		a.bind(join);
+	}
 	const uint8_t top = static_cast<uint8_t>(size >= 4 ? 0 : 32 - size * 8);
 	if (flags_wanted(all_flags)) {
 		if (top) {
@@ -3503,7 +3866,7 @@ void BlockTranslator::translate(const Instruction &instruction)
 	if (instruction.lock) {
 		switch (instruction.mnemonic) {
 		case Mnemonic::add: case Mnemonic::sub: case Mnemonic::and_: case Mnemonic::or_: case Mnemonic::xor_: case Mnemonic::inc:
-		case Mnemonic::dec: case Mnemonic::not_: case Mnemonic::neg:
+		case Mnemonic::dec: case Mnemonic::not_: case Mnemonic::neg: case Mnemonic::adc: case Mnemonic::sbb:
 			locked(instruction);
 			return;
 		default: break;
@@ -3516,6 +3879,8 @@ void BlockTranslator::translate(const Instruction &instruction)
 		return;
 	case Mnemonic::inc: case Mnemonic::dec: case Mnemonic::neg: case Mnemonic::not_: unary(instruction); return;
 	case Mnemonic::shl: case Mnemonic::shr: case Mnemonic::sar: shift(instruction); return;
+	case Mnemonic::rol: case Mnemonic::ror: rotate(instruction); return;
+	case Mnemonic::rcl: case Mnemonic::rcr: rotate_carry(instruction); return;
 	case Mnemonic::imul: case Mnemonic::mul: multiply(instruction); return;
 	case Mnemonic::div: case Mnemonic::idiv: divide(instruction); return;
 	case Mnemonic::bt: case Mnemonic::bts: case Mnemonic::btr: case Mnemonic::btc: bit_test(instruction); return;
