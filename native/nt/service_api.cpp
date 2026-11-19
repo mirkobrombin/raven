@@ -180,6 +180,8 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 			set_dword(key, u"Start", call.u32(5));
 			set_dword(key, u"ErrorControl", call.u32(6));
 			set_text(key, u"ImagePath", text(call[7]), 2);
+			if (call[8])
+				set_text(key, u"Group", text(call[8]), 1);
 			if (call[11])
 				set_text(key, u"ObjectName", text(call[11]), 1);
 		});
