@@ -102,6 +102,10 @@ set_tests_properties(translate_a64_emitter PROPERTIES TIMEOUT 30)
 add_executable(cpuid_test cpuid_test.cpp)
 target_link_libraries(cpuid_test PRIVATE raven_translate)
 add_test(NAME translate_cpuid COMMAND cpuid_test)
+# xsave and xrstor (xsave.h), which come with AVX.
+add_executable(xsave_test xsave_test.cpp)
+target_link_libraries(xsave_test PRIVATE raven_translate)
+add_test(NAME translate_xsave COMMAND xsave_test)
 set_tests_properties(translate_cpuid PROPERTIES TIMEOUT 30)
 
 add_executable(runtime_test runtime_test.cpp)
