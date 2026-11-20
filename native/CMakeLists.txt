@@ -2695,6 +2695,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_prefix_setup_children_parallel PROPERTIES TIMEOUT 60 ENVIRONMENT RAVEN_PARALLEL=1)
             endif()
             set(TOKEN_CLIENTS)
+            set(STATUS_ERROR_CLIENTS)
             set(EVENT_CLIENTS)
             set(PEER_PROCESS_CLIENTS)
             set(RAW_DEVICE_CLIENTS)
@@ -2749,6 +2750,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_process_token_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${token_client})
                     set_tests_properties(native_process_token_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/token-prefix${width})
+                    set(status_error_client ${CMAKE_CURRENT_BINARY_DIR}/status-error${width}.exe)
+                    add_custom_command(OUTPUT ${status_error_client}
+                        COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${remote_entry},--no-insert-timestamp
+                            -o ${status_error_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/status_error_client.c -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/status_error_client.c VERBATIM)
+                    list(APPEND STATUS_ERROR_CLIENTS ${status_error_client})
+                    add_test(NAME native_status_error_x${width} COMMAND raven --run-process --execution=native ${status_error_client})
+                    set_tests_properties(native_status_error_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/status-error-prefix${width})
                     set(event_client ${CMAKE_CURRENT_BINARY_DIR}/event${width}.exe)
                     add_custom_command(OUTPUT ${event_client}
                         COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
@@ -2793,6 +2804,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(remote_process_fixtures ALL DEPENDS ${REMOTE_PROCESS_CLIENTS})
             add_custom_target(shared_wait_fixtures ALL DEPENDS ${SHARED_WAIT_CLIENTS})
             add_custom_target(token_fixtures ALL DEPENDS ${TOKEN_CLIENTS})
+            add_custom_target(status_error_fixtures ALL DEPENDS ${STATUS_ERROR_CLIENTS})
             add_custom_target(event_fixtures ALL DEPENDS ${EVENT_CLIENTS})
             add_custom_target(peer_process_fixtures ALL DEPENDS ${PEER_PROCESS_CLIENTS})
             add_custom_target(raw_device_fixtures ALL DEPENDS ${RAW_DEVICE_CLIENTS})
