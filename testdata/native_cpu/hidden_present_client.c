@@ -92,8 +92,6 @@ unsigned int raven_entry(void)
 	const char *swap_extension = "VK_KHR_swapchain";
 	VkDeviceCreateInfo device_info = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, 0, 0, 1, &queue_info, 0, 0, 1, &swap_extension, 0};
 	if (vkCreateDevice(physical[0], &device_info, 0, &device) != VK_SUCCESS) return 8;
-	VkQueue queue = VK_NULL_HANDLE;
-	vkGetDeviceQueue(device, family, 0, &queue);
 	VkSwapchainKHR swaps[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 	VkImage images[2][16];
 	uint32_t image_counts[2] = {0, 0};
@@ -111,6 +109,56 @@ unsigned int raven_entry(void)
 			image_counts[target] < swap_info.minImageCount)
 			return 10;
 	}
+	VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+	VkFence fence = VK_NULL_HANDLE;
+	if (vkCreateFence(device, &fence_info, 0, &fence) != VK_SUCCESS) return 13;
+	/* An image acquired before the program has asked for a queue: the fence is signaled all the same. */
+	uint32_t early = 0;
+	if (vkAcquireNextImageKHR(device, swaps[0], UINT64_MAX, VK_NULL_HANDLE, fence, &early) != VK_SUCCESS || early >= image_counts[0] ||
+		vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS || vkResetFences(device, 1, &fence) != VK_SUCCESS)
+		return 25;
+	VkQueue queue = VK_NULL_HANDLE;
+	vkGetDeviceQueue(device, family, 0, &queue);
+	VkPresentInfoKHR give_back = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, 0, 0, 0, 1, &swaps[0], &early, 0};
+	if (vkQueuePresentKHR(queue, &give_back) != VK_SUCCESS) return 25;
+	/* The images the program holds are not handed out again: with all of them held, an acquire that may not wait finds none, and
+	 * one that waits a millisecond times out. Each comes back once presented. */
+	uint32_t held[16];
+	for (uint32_t image = 0; image < image_counts[0]; ++image) {
+		if (vkAcquireNextImageKHR(device, swaps[0], UINT64_MAX, VK_NULL_HANDLE, fence, &held[image]) != VK_SUCCESS ||
+			vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS || vkResetFences(device, 1, &fence) != VK_SUCCESS)
+			return 26;
+		for (uint32_t before = 0; before < image; ++before)
+			if (held[before] == held[image]) return 26;
+	}
+	uint32_t none = 0;
+	if (vkAcquireNextImageKHR(device, swaps[0], 0, VK_NULL_HANDLE, fence, &none) != VK_NOT_READY ||
+		vkAcquireNextImageKHR(device, swaps[0], 1000000, VK_NULL_HANDLE, fence, &none) != VK_TIMEOUT)
+		return 27;
+	for (uint32_t image = 0; image < image_counts[0]; ++image) {
+		VkPresentInfoKHR present = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, 0, 0, 0, 1, &swaps[0], &held[image], 0};
+		if (vkQueuePresentKHR(queue, &present) != VK_SUCCESS) return 27;
+	}
+	/* The acquire of Vulkan 1.1, with its information in a structure. */
+	PFN_vkAcquireNextImage2KHR acquire2 = (PFN_vkAcquireNextImage2KHR)vkGetDeviceProcAddr(device, "vkAcquireNextImage2KHR");
+	VkAcquireNextImageInfoKHR acquire_info = {VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR, 0, swaps[0], UINT64_MAX, VK_NULL_HANDLE, fence, 1};
+	uint32_t second = 0;
+	if (!acquire2 || acquire2(device, &acquire_info, &second) != VK_SUCCESS || second >= image_counts[0] ||
+		vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS || vkResetFences(device, 1, &fence) != VK_SUCCESS)
+		return 28;
+	give_back.pImageIndices = &second;
+	if (vkQueuePresentKHR(queue, &give_back) != VK_SUCCESS) return 28;
+	/* An image made over the swap chain and bound to one of its images, as a program aliases a swap chain image. */
+	VkImageSwapchainCreateInfoKHR over_swap = {VK_STRUCTURE_TYPE_IMAGE_SWAPCHAIN_CREATE_INFO_KHR, 0, swaps[0]};
+	VkImageCreateInfo alias_info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &over_swap, 0, VK_IMAGE_TYPE_2D, chosen[0].format,
+		{caps[0].currentExtent.width, caps[0].currentExtent.height, 1}, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+		VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_SHARING_MODE_EXCLUSIVE, 0, 0, VK_IMAGE_LAYOUT_UNDEFINED};
+	VkImage alias = VK_NULL_HANDLE;
+	if (vkCreateImage(device, &alias_info, 0, &alias) != VK_SUCCESS) return 29;
+	VkBindImageMemorySwapchainInfoKHR bind_swap = {VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR, 0, swaps[0], 0};
+	VkBindImageMemoryInfo bind = {VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO, &bind_swap, alias, VK_NULL_HANDLE, 0};
+	if (vkBindImageMemory2(device, 1, &bind) != VK_SUCCESS) return 29;
+	vkDestroyImage(device, alias, 0);
 	VkCommandPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, 0, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, family};
 	VkCommandPool pool = VK_NULL_HANDLE;
 	if (vkCreateCommandPool(device, &pool_info, 0, &pool) != VK_SUCCESS) return 11;
@@ -118,12 +166,10 @@ unsigned int raven_entry(void)
 	VkCommandBuffer command = VK_NULL_HANDLE;
 	if (vkAllocateCommandBuffers(device, &allocate, &command) != VK_SUCCESS) return 12;
 	VkSemaphoreCreateInfo semaphore_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-	VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 	VkSemaphore acquired[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE}, finished = VK_NULL_HANDLE;
-	VkFence fence = VK_NULL_HANDLE;
 	if (vkCreateSemaphore(device, &semaphore_info, 0, &acquired[0]) != VK_SUCCESS ||
 		vkCreateSemaphore(device, &semaphore_info, 0, &acquired[1]) != VK_SUCCESS ||
-		vkCreateSemaphore(device, &semaphore_info, 0, &finished) != VK_SUCCESS || vkCreateFence(device, &fence_info, 0, &fence) != VK_SUCCESS)
+		vkCreateSemaphore(device, &semaphore_info, 0, &finished) != VK_SUCCESS)
 		return 13;
 	/* More frames than the swap chain has images: a present to the hidden window that waited for the screen would stop here. */
 	const DWORD started = GetTickCount();
