@@ -3354,6 +3354,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
                         ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation;RAVEN_VULKAN_NONCOHERENT=1")
                 endif()
+                # The Vulkan bridge keeps the swap chains of the present tests itself: the validation layer, where it is installed, checks
+                # what the bridge does with the device.
+                set(RAVEN_PRESENT_VALIDATION "")
+                if(RAVEN_VULKAN_VALIDATION_LAYER)
+                    set(RAVEN_PRESENT_VALIDATION VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation)
+                endif()
                 # A swap chain over a window nobody has shown presents at once and is lost once the window is shown.
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/hidden-present64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
@@ -3366,7 +3372,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_dependencies(vulkan_hidden_present64_fixture vulkan_import64)
                 add_test(NAME native_vulkan_hidden_present_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/hidden-present64.exe)
                 set_tests_properties(native_vulkan_hidden_present_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
-                    FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-" ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-x64-prefix)
+                    FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                    ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-x64-prefix;${RAVEN_PRESENT_VALIDATION}")
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/foreign-present64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                         -idirafter ${Vulkan_INCLUDE_DIRS}
@@ -3383,7 +3390,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     $<TARGET_FILE:raven-bootstrap> ${VULKAN_FIXTURES}/foreign-present64.exe)
                 # A prefix of its own keeps its window records apart from the other tests that publish windows.
                 set_tests_properties(native_vulkan_foreign_present_x64 PROPERTIES TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
-                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/foreign-present-x64-prefix)
+                    ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/foreign-present-x64-prefix;${RAVEN_PRESENT_VALIDATION}")
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/descriptor-buffer64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                         -idirafter ${Vulkan_INCLUDE_DIRS} -I${PROJECT_SOURCE_DIR}/testdata/native_cpu
@@ -3418,7 +3425,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             $<TARGET_FILE:raven-bootstrap> ${VULKAN_FIXTURES}/foreign-present32.exe)
                         # A prefix of its own keeps its window records apart from the other tests that publish windows.
                         set_tests_properties(native_vulkan_foreign_present_x32 PROPERTIES TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
-                            ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/foreign-present-x32-prefix)
+                            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/foreign-present-x32-prefix;${RAVEN_PRESENT_VALIDATION}")
                         add_custom_command(OUTPUT ${VULKAN_FIXTURES}/descriptor-buffer32.exe
                             COMMAND ${RAVEN_MINGW32_VULKAN} -minline-all-stringops -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                                 -I${VULKAN_GENERATED_DIR}/mingw-include -I${PROJECT_SOURCE_DIR}/testdata/native_cpu
@@ -5760,6 +5767,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_host_maximize COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-host-maximize.py
                         $<TARGET_FILE:raven> ${FRAME_RESTORE_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/host-maximize)
                     set_tests_properties(native_host_maximize PROPERTIES TIMEOUT 90 RESOURCE_LOCK raven_compositor)
+                endif()
+                # One present to a hidden window, whose swap chain the Vulkan bridge keeps, and to a shown one, whose swap chain the driver keeps.
+                if(TARGET raven_wayland AND TARGET vulkan_hidden_present64_fixture AND RAVEN_LABWC)
+                    add_test(NAME native_vulkan_mixed_present_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-vulkan-mixed-present.py
+                        $<TARGET_FILE:raven> ${VULKAN_FIXTURES}/hidden-present64.exe ${CMAKE_CURRENT_BINARY_DIR}/vulkan-mixed-present)
+                    set_tests_properties(native_vulkan_mixed_present_x64 PROPERTIES TIMEOUT 60 ENVIRONMENT "${RAVEN_PRESENT_VALIDATION}")
                 endif()
                 # A host file picked in the file dialog: the program may read what it opened and write what it saved, nothing more.
                 if(TARGET raven_wayland AND TARGET picker_fixture AND RAVEN_CONTROLS_COMPONENT_DIR AND RAVEN_LABWC AND RAVEN_WLRCTL AND RAVEN_WTYPE)

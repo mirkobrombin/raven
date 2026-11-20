@@ -24,6 +24,8 @@ std::span<const std::string_view> vulkan_hand_names();
 std::span<const std::string_view> vulkan_generated_names();
 bool vulkan_generated_is_device(std::string_view name);
 
+class Marshal;
+
 class VulkanBridge {
 public:
 	VulkanBridge(NativeProcess &process, const ModuleSet &modules) : process(process), modules(modules) {}
@@ -130,16 +132,30 @@ private:
 	std::map<uint64_t, uint64_t> surface_windows;
 	// The instance token each of those surfaces was created from.
 	std::map<uint64_t, uint64_t> surface_instances;
+	// Surfaces over windows another process owns. These and the hidden ones below have no host surface: the bridge answers their
+	// surface and swapchain commands.
 	std::set<uint64_t> foreign_surfaces;
 	// Surfaces over windows whose top-level window was hidden when they were made: they present nowhere, as on Windows, until the
 	// window is shown and they are lost, so the program makes them again over what the host shows.
 	std::set<uint64_t> hidden_surfaces;
+	bool own_surface(uint64_t surface) const { return foreign_surfaces.contains(surface) || hidden_surfaces.contains(surface); }
 	bool hidden_surface_lost(uint64_t surface) const;
 	struct ForeignSwapchain;
 	std::map<uint64_t, std::shared_ptr<ForeignSwapchain>> foreign_swapchains;
-	VkResult prepare_foreign_swapchain(uint64_t token,uint64_t device,VkSwapchainKHR swapchain,
-		const VkSwapchainCreateInfoKHR &info,uint64_t window);
-	std::optional<VkResult> present_foreign(uint64_t queue,const VkPresentInfoKHR &info);
+	bool dispatch_own(std::string_view name);
+	static VkSurfaceCapabilitiesKHR own_surface_capabilities();
+	// Presentation is the bridge's own work or goes through a host window, so a family can present when it can draw.
+	bool queue_family_draws(uint64_t physical,uint32_t family) const;
+	VkResult create_own_swapchain(uint64_t device,const VkSwapchainCreateInfoKHR &info,uint64_t window,bool foreign,uint64_t &token);
+	VkResult acquire_own_image(Marshal &marshal,const std::vector<uint64_t> &arguments);
+	// `tokens` are the program's handles of the swapchains in `info`.
+	std::optional<VkResult> present_foreign(uint64_t queue,const VkPresentInfoKHR &info,const std::vector<uint64_t> &tokens);
+	// Presents in flight on host threads. The bridge signals an image it hands out through a queue, which a program does not keep
+	// apart from its presents: the acquire waits until none is in flight, while the other guest threads run.
+	// shortcut: one count for all queues, so the acquire also waits for a present on another queue; count each queue when a
+	// program presents on two.
+	std::atomic<uint32_t> presents{0};
+	VkResult detached_present(const std::function<VkResult()> &work);
 	void release_foreign_swapchains(uint64_t device);
 	// A swapchain's surface token and the extent it was created with; a surface whose window changed size makes it out of date.
 	struct Swapchain { uint64_t surface; uint32_t width, height; };
