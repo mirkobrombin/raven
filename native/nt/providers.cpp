@@ -1827,8 +1827,11 @@ static bool answered_api(std::string_view module, std::string_view name)
 		"GetWindowRect", "GetWindowLongPtrW", "GetWindowLongPtrA", "GetWindowLongW", "GetWindowLongA", "GetParent", "IsWindowVisible",
 		"IsIconic", "IsChild", "GetKeyState", "GetSystemMetrics", "GetSysColor", "GetForegroundWindow", "GetCursorPos", "GetDesktopWindow",
 		"MapWindowPoints", "GetDpiForWindow", "OffsetRect", "IntersectRect", "EqualRect", "IsRectEmpty", "SetRectEmpty",
-		"CopyRect", "InflateRect", "UnionRect", "PtInRect"};
-	static const std::unordered_set<std::string_view> gdi{"LPtoDP", "DPtoLP", "GetTextColor", "GetBkColor", "GetBkMode", "GetTextAlign"};
+		"CopyRect", "InflateRect", "UnionRect", "PtInRect", "GetAncestor", "GetPropW", "GetFocus", "GetMenuItemCount", "GetSubMenu",
+		"GetMenuItemID"};
+	// GetMenuState is left out: it searches a menu tree on the guest's stack, and the wrapper's way to give up expects the stack it left.
+	static const std::unordered_set<std::string_view> gdi{"LPtoDP", "DPtoLP", "GetTextColor", "GetBkColor", "GetBkMode", "GetTextAlign",
+		"RectInRegion", "GetRgnBox", "PtInRegion", "GetObjectW", "GetObjectA"};
 	static const std::unordered_set<std::string_view> theme{"IsThemeActive", "IsAppThemed", "IsCompositionActive", "GetThemeAppProperties"};
 	return (module == "user32.dll" && user.contains(name)) || (module == "gdi32.dll" && gdi.contains(name)) ||
 		(module == "uxtheme.dll" && theme.contains(name));
