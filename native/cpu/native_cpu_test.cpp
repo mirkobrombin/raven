@@ -86,6 +86,31 @@ static uint64_t value(std::span<const uint8_t> bytes)
 	return result;
 }
 
+// Each host thread keeps the state of the guest thread it loaded: another host thread that loads a thread of the same process, as it
+// takes the runtime's turn, changes nothing of it.
+static void host_thread_states(const std::string &bootstrap)
+{
+	const auto timeout = std::chrono::seconds(2);
+	const auto bytes = fixture({0xc3});
+	const raven::PEImage image(bytes);
+	raven::LoadedImage loaded(image, image.image_base);
+	raven::LoadedImage *images[] = {&loaded};
+	raven::NativeProcess process(images, bootstrap, timeout);
+	check(process.parallel(), "thread state test requires parallel tasks");
+	const auto stack = process.map_memory(65536, PROT_READ | PROT_WRITE);
+	auto other = process.new_thread(stack + 65536, 0);
+	auto mine = process.save_thread(false);
+	check(other.task > 0 && other.task != mine.task, "the threads share a task");
+	mine.stack_top = 0x1000;
+	mine.context_in_task = true;
+	process.load_thread(mine);
+	other.stack_top = 0x2000;
+	other.context_in_task = true;
+	std::thread([&] { process.load_thread(other); }).join();
+	const auto after = process.save_thread(false);
+	check(after.task == mine.task && after.stack_top == 0x1000, "another host thread's load changed this host thread's guest thread");
+}
+
 static void parallel_stop_contracts(const std::string &bootstrap)
 {
 	const auto timeout = std::chrono::seconds(2);
@@ -722,14 +747,17 @@ static void persistent_contracts(const std::string &bootstrap)
 int main(int argc, char **argv)
 {
 	try {
-		check(argc == 2 || (argc == 3 && (std::string(argv[2]) == "--memory" || std::string(argv[2]) == "--parallel-stops")),
-			"bootstrap path required");
+		check(argc == 2 || (argc == 3 && (std::string(argv[2]) == "--memory" || std::string(argv[2]) == "--parallel-stops" ||
+			std::string(argv[2]) == "--thread-states")), "bootstrap path required");
 		const std::string bootstrap = argv[1];
 		if (argc == 3) {
-			if (std::string(argv[2]) == "--parallel-stops") parallel_stop_contracts(bootstrap);
+			const std::string mode = argv[2];
+			if (mode == "--parallel-stops") parallel_stop_contracts(bootstrap);
+			else if (mode == "--thread-states") host_thread_states(bootstrap);
 			else memory_contracts(bootstrap);
 			no_children();
-			std::cout << "Native " << (std::string(argv[2]) == "--parallel-stops" ? "parallel stop" : "memory") << " contracts passed\n";
+			std::cout << "Native " << (mode == "--parallel-stops" ? "parallel stop" : mode == "--thread-states" ? "thread state" : "memory")
+				<< " contracts passed\n";
 			return 0;
 		}
 		const auto run = [&](std::vector<uint8_t> &bytes, std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
