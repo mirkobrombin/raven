@@ -210,7 +210,10 @@ uint64_t NativeEnvironment::create_thread_block(uint64_t stack_base, uint64_t st
 			process.unmap_memory(block);
 			throw;
 		}
-		thread_ids[block] = thread_id;
+		{
+			std::lock_guard lock(thread_ids_lock);
+			thread_ids[block] = thread_id;
+		}
 		return block;
 	}
 	const auto teb = process.map_memory(8192, PROT_READ | PROT_WRITE);
@@ -227,15 +230,21 @@ uint64_t NativeEnvironment::create_thread_block(uint64_t stack_base, uint64_t st
 		process.unmap_memory(teb);
 		throw;
 	}
-	thread_ids[teb] = thread_id;
+	{
+		std::lock_guard lock(thread_ids_lock);
+		thread_ids[teb] = thread_id;
+	}
 	return teb;
 }
 
 void NativeEnvironment::release_thread_block(uint64_t teb)
 {
-	if (teb == thread_block)
+	if (teb == block())
 		throw std::runtime_error("the current native thread block cannot be released");
-	thread_ids.erase(teb);
+	{
+		std::lock_guard lock(thread_ids_lock);
+		thread_ids.erase(teb);
+	}
 	process.unmap_memory(teb);
 }
 
@@ -289,7 +298,7 @@ void NativeEnvironment::require_current() const
 	if (process.mode() == NativeMode::x86)
 		return;
 	const auto serving = process.serving_teb();
-	if ((serving ? serving : process.thread_base()) != thread_block)
+	if ((serving ? serving : process.thread_base()) != block())
 		throw std::runtime_error("native environment is not the current guest thread");
 }
 
@@ -301,13 +310,13 @@ size_t NativeEnvironment::last_error_offset() const
 uint32_t NativeEnvironment::last_error() const
 {
 	require_current();
-	return value(process, thread_block + last_error_offset());
+	return value(process, block() + last_error_offset());
 }
 
 void NativeEnvironment::set_last_error(uint32_t error)
 {
 	require_current();
-	field(process, thread_block + last_error_offset(), error, 4);
+	field(process, block() + last_error_offset(), error, 4);
 }
 
 std::optional<uint32_t> NativeEnvironment::own_last_error() const
@@ -577,7 +586,7 @@ bool NativeEnvironment::dispatch(std::string_view name)
 	else if (name == "GetLastError")
 		result = last_error();
 	else
-		result = value(process, thread_block + (process.mode() == NativeMode::x86 ? (name == "GetCurrentProcessId" ? 0x20 : 0x24) :
+		result = value(process, block() + (process.mode() == NativeMode::x86 ? (name == "GetCurrentProcessId" ? 0x20 : 0x24) :
 			(name == "GetCurrentProcessId" ? 0x40 : 0x48)));
 	process.return_api(result);
 	return true;

@@ -8,6 +8,8 @@
 #include <optional>
 #include <array>
 #include <map>
+#include <mutex>
+#include <atomic>
 
 namespace raven {
 
@@ -43,7 +45,8 @@ struct NativeLaunch {
 class NativeEnvironment {
 public:
 	NativeEnvironment(NativeProcess &process, uint64_t image_base, uint32_t process_id, uint32_t thread_id);
-	uint64_t teb() const { return thread_block; }
+	// The block of the guest thread the calling host thread works for (see set_current).
+	uint64_t teb() const { return block(); }
 	uint64_t peb() const { return process_block; }
 	// Guest address of the ANSI command line, valid once process parameters exist.
 	uint64_t command_line() const { return command_line_ansi; }
@@ -57,7 +60,9 @@ public:
 	// Per-thread TEB for guest threads beyond the first (x64). The block is not current until set_current names it.
 	uint64_t create_thread_block(uint64_t stack_base, uint64_t stack_limit, uint32_t thread_id);
 	void release_thread_block(uint64_t teb);
-	void set_current(uint64_t teb) { thread_block = teb; }
+	// Names the guest thread the calling host thread works for from now on: each host thread has its own, so a host thread that takes
+	// the turn changes no other's. A host thread that named none works for the first thread.
+	void set_current(uint64_t teb) { current = {id, teb}; }
 	// The block of the guest thread the calling host thread serves, which it answers for beside the turn as well; 0 for a host thread
 	// that serves no guest thread of its own.
 	static void set_own(uint64_t teb) { own_block = teb; }
@@ -68,7 +73,8 @@ public:
 	// The id of the guest thread whose block is current.
 	uint32_t thread_id() const
 	{
-		const auto found = thread_ids.find(thread_block);
+		std::lock_guard lock(thread_ids_lock);
+		const auto found = thread_ids.find(block());
 		return found == thread_ids.end() ? 0 : found->second;
 	}
 	static constexpr uint32_t heap_capacity = 512;
@@ -80,7 +86,16 @@ public:
 
 private:
 	NativeProcess &process;
+	// The first thread's block, which a host thread that named no other works for.
 	uint64_t thread_block = 0;
+	struct Current {
+		uint64_t environment;
+		uint64_t block;
+	};
+	static inline thread_local Current current{};
+	static inline std::atomic<uint64_t> ids{0};
+	const uint64_t id = ++ids;
+	uint64_t block() const { return current.environment == id ? current.block : thread_block; }
 	static inline thread_local uint64_t own_block = 0;
 	size_t last_error_offset() const;
 	uint64_t process_block = 0;
@@ -88,6 +103,8 @@ private:
 	uint64_t command_line_ansi = 0;
 	uint32_t ansi_code_page = 0;
 	uint64_t startup_info_ansi = 0;
+	// The thread id of every block, which host threads read beside the turn as well.
+	mutable std::mutex thread_ids_lock;
 	std::map<uint64_t, uint32_t> thread_ids;
 	void require_current() const;
 	void x86_constructor(uint64_t image_base, uint32_t process_id, uint32_t thread_id);
