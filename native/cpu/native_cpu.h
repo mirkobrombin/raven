@@ -61,6 +61,10 @@ struct NativeThreadState {
 	uint64_t served_stack = 0;
 	bool context_in_task = false;
 	bool serving_queued = false;
+	// The thread's block of the environment while it is served, and on a 32-bit program its FS selector and base.
+	uint64_t teb = 0;
+	uint32_t fs_selector = 0;
+	uint64_t fs_base = 0;
 };
 
 // Images must outlive this stopped/resumable x86-64 Linux process.
