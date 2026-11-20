@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <string>
+#include <string_view>
 #include <linux/landlock.h>
 #include <cstddef>
 #include <cstring>
@@ -53,8 +55,24 @@ static bool reaches(const sockaddr_un &address, socklen_t length)
 	return done;
 }
 
-int main()
+// A runtime the confined one starts, as a program of its own: it confines itself in turn and opens a document with a Linux program of
+// the prefix. It holds nothing of the runtime that started it but the channel it was handed, as a runtime started by exec does.
+static int inner_runtime(const std::filesystem::path &root, const char *)
 {
+	raven::sandbox().set_program(u"C:\\Program Files\\Raven\\Host\\Viewer.exe");
+	raven::sandbox().set_parent(u"C:\\Tools\\Editor.exe");
+	raven::sandbox().load(root / "prefix");
+	check(raven::confine(root / "prefix"), "the inner runtime is not confined");
+	check(raven::sandbox().open_on_host("Viewer", {}), "the inner runtime cannot open with a Linux program of the prefix");
+	check(!raven::sandbox().open_on_host("Viewer", {(root / "home/.ssh/id").string()}),
+		"the inner runtime hands a Linux program a file neither program reaches");
+	return 0;
+}
+
+int main(int count, char **arguments)
+{
+	if (count >= 3 && std::string_view(arguments[1]) == "--inner")
+		return inner_runtime(arguments[2], count >= 4 ? arguments[3] : nullptr);
 	if (::syscall(SYS_landlock_create_ruleset, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION) < 1) {
 		std::cout << "the kernel has no Landlock\n";
 		return 0;
@@ -73,6 +91,14 @@ int main()
 	std::ofstream(root / "home/.ssh/id") << "key";
 	std::ofstream(root / "granted/letter.txt") << "letter";
 	std::ofstream(root / "later/picture.png") << "picture";
+	// A Linux program the desktop lists, outside every folder the confinement leaves open, and a gio that notes the entry it launches.
+	std::filesystem::create_directories(root / "host/applications");
+	std::filesystem::create_directories(root / "host/bin");
+	std::ofstream(root / "host/applications/viewer.desktop") << "[Desktop Entry]\nName=Viewer\n";
+	std::ofstream(root / "host/bin/gio") << "#!/bin/sh\ncat \"$2\" > '" << (root / "launched").string() << "'\n";
+	std::filesystem::permissions(root / "host/bin/gio", std::filesystem::perms::owner_all);
+	::setenv("XDG_DATA_HOME", (root / "host").c_str(), 1);
+	::setenv("PATH", ((root / "host/bin").string() + ":" + (std::getenv("PATH") ? std::getenv("PATH") : "/usr/bin:/bin")).c_str(), 1);
 
 	// A host service on an abstract name, and one on a socket file in a folder the confinement leaves open.
 	sockaddr_un abstract_address{}, file_address{};
@@ -86,7 +112,20 @@ int main()
 	if (child > 0) {
 		int status = 0;
 		::waitpid(child, &status, 0);
+		// The Linux program the inner runtime opened was started outside the confinement, where it reads its desktop entry.
+		bool launched = false;
+		for (int waited = 0; waited < 100 && !launched; ++waited) {
+			std::ifstream note(root / "launched");
+			std::string line;
+			launched = std::getline(note, line) && line == "[Desktop Entry]";
+			if (!launched)
+				::usleep(50000);
+		}
 		std::filesystem::remove_all(root);
+		if (WIFEXITED(status) && !WEXITSTATUS(status) && !launched) {
+			std::cerr << "the Linux program a runtime started inside the confinement opens is not started outside it\n";
+			return 1;
+		}
 		return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 	}
 	raven::sandbox().set_program(u"C:\\Tools\\Editor.exe");
@@ -135,8 +174,21 @@ int main()
 	char self[4096];
 	const auto length = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
 	check(length > 0, "the test cannot name itself");
+	self[length] = '\0';
 	const auto started = raven::brokered_spawn({std::string(self, size_t(length)), "/bin/sh"}, {});
 	check(started.first < 0, "the broker starts a program that is not the runtime's trusted one");
+	// A runtime started inside the confinement opens a document with a Linux program of the prefix: its own broker is inside the
+	// confinement, so the broker outside it starts the program, for the program that asked as for this one.
+	std::ofstream(root / "prefix/sandbox.conf", std::ios::app) << "host-app Viewer\tviewer\n";
+	const pid_t inner = ::fork();
+	if (inner == 0) {
+		const std::string tree = root.string();
+		::execl(self, self, "--inner", tree.c_str(), nullptr);
+		std::_Exit(127);
+	}
+	int inner_status = 0;
+	::waitpid(inner, &inner_status, 0);
+	check(WIFEXITED(inner_status) && !WEXITSTATUS(inner_status), "the inner runtime failed");
 	std::cout << "confined\n";
 	return 0;
 }
