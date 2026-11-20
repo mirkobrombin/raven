@@ -201,6 +201,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_link_libraries(launch_test PRIVATE raven_cpu)
     add_test(NAME native_launch_arguments_contract COMMAND launch_test)
     set_tests_properties(native_launch_arguments_contract PROPERTIES TIMEOUT 15)
+    add_executable(installer_name_test nt/installer_name_test.cpp)
+    target_link_libraries(installer_name_test PRIVATE raven_cpu)
     target_include_directories(raven_cpu PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/nls-generated)
     add_executable(nls_test nt/nls_test.cpp)
     target_link_libraries(nls_test PRIVATE raven_cpu)
@@ -1818,6 +1820,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set(QUEUE_ENTRY _raven_entry)
             endif()
             if(QUEUE_COMPILER)
+                set(INSTALLER_NAME_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/installer-name-${QUEUE_ARCH}.exe)
+                add_custom_command(OUTPUT ${INSTALLER_NAME_FIXTURE}
+                    COMMAND ${QUEUE_COMPILER} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,${QUEUE_ENTRY},--no-insert-timestamp
+                        -o ${INSTALLER_NAME_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/installer_name_client.c
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/installer_name_client.c VERBATIM)
+                add_custom_target(installer_name_fixture_${QUEUE_ARCH} ALL DEPENDS ${INSTALLER_NAME_FIXTURE})
+                add_test(NAME native_installer_name_x${QUEUE_ARCH} COMMAND installer_name_test ${INSTALLER_NAME_FIXTURE})
+                set_tests_properties(native_installer_name_x${QUEUE_ARCH} PROPERTIES TIMEOUT 15)
                 add_custom_command(OUTPUT ${QUEUE_FIXTURE}
                     COMMAND ${QUEUE_COMPILER} -nostdlib -Wl,--entry,${QUEUE_ENTRY},--no-insert-timestamp
                         -o ${QUEUE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/queue_client.c -lkernel32 -luser32
