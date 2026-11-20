@@ -75,6 +75,23 @@ static int network_off(void)
 	return 0;
 }
 
+// Opens the document and waits for the note of the program registered for its kind.
+static int open_document(const WCHAR *target)
+{
+	static const WCHAR note[] = L"C:\\raven-associate\\opened.txt";
+	// The program of an earlier round may still hold its note for a moment.
+	for (int tries = 0; tries < 200 && !DeleteFileW(note) && GetLastError() == ERROR_SHARING_VIOLATION; ++tries)
+		Sleep(10);
+	if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) return 47;
+	if ((INT_PTR)ShellExecuteW(NULL, L"open", target, NULL, NULL, SW_SHOWNORMAL) <= 32) return 42;
+	for (int waited = 0; waited < 200; ++waited) {
+		if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES)
+			return 0;
+		Sleep(100);
+	}
+	return 43;
+}
+
 // Run in a prefix of its own: a document opens with the program the prefix registered for its kind.
 static int associate(const WCHAR *program)
 {
@@ -89,17 +106,14 @@ static int associate(const WCHAR *program)
 	if (RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Classes\\.ravtest", NULL, REG_SZ, L"Raven.Test", 22) ||
 		RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Classes\\Raven.Test\\shell\\open\\command", NULL, REG_SZ, command, (at + 1) * 2)) return 40;
 	CreateDirectoryW(L"C:\\raven-associate", NULL);
-	DeleteFileW(L"C:\\raven-associate\\opened.txt");
 	HANDLE document = CreateFileW(L"C:\\raven-associate\\letter.ravtest", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
 	if (document == INVALID_HANDLE_VALUE) return 41;
 	CloseHandle(document);
-	if ((INT_PTR)ShellExecuteW(NULL, L"open", L"C:\\raven-associate\\letter.ravtest", NULL, NULL, SW_SHOWNORMAL) <= 32) return 42;
-	for (int waited = 0; waited < 200; ++waited) {
-		if (GetFileAttributesW(L"C:\\raven-associate\\opened.txt") != INVALID_FILE_ATTRIBUTES)
-			return 0;
-		Sleep(100);
-	}
-	return 43;
+	const int plain = open_document(L"C:\\raven-associate\\letter.ravtest");
+	if (plain) return plain;
+	// The target also opens in quotes, as Chromium passes an address.
+	const int quoted = open_document(L"\"C:\\raven-associate\\letter.ravtest\"");
+	return quoted ? quoted + 6 : 0;
 }
 
 // The program registered for the kind: it notes the document it was handed.

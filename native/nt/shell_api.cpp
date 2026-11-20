@@ -628,6 +628,9 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		const std::u16string &parameters, const std::u16string &directory, std::shared_ptr<ProcessObject> &started) -> uint64_t {
 		if (!equal_fold(operation, u"open") && !equal_fold(operation, u"edit") && !equal_fold(operation, u"explore") && !equal_fold(operation, u"runas"))
 			return 31;
+		// ShellExecute takes one pair of quotes off the target: Chromium quotes every address.
+		if (target.size() >= 2 && target.front() == u'"' && target.back() == u'"')
+			target = target.substr(1, target.size() - 2);
 		// Who opens a document or an address: the choice the person made for its kind in the control panel; otherwise the program of the
 		// prefix registered for it, before any Linux program.
 		const auto open_with = [&](const std::u16string &kind, const std::u16string &argument) -> std::optional<uint64_t> {
