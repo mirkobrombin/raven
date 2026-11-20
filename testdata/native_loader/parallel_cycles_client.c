@@ -1,8 +1,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-// Threads that call at once: VirtualProtect, which the runtime answers in its turn, and VirtualAlloc, VirtualFree, SetEvent, CreateEventW
-// and CloseHandle, which it answers beside the turn. What each costs is what RAVEN_CYCLES reports. Each thread's last error stays its own.
+// Threads that call at once: GetCurrentDirectoryW, which the runtime answers in its turn, and VirtualAlloc, VirtualProtect, VirtualFree,
+// SetEvent, CreateEventW and CloseHandle, which it answers beside the turn. What each costs is what RAVEN_CYCLES reports. Each thread's
+// last error stays its own.
 
 static volatile LONG ready;
 static HANDLE start, signal;
@@ -26,6 +27,12 @@ static DWORD WINAPI calls(void *parameter)
 		SetLastError(0);
 		if (VirtualFree(memory, 0, MEM_RELEASE) || GetLastError() != ERROR_INVALID_ADDRESS)
 			return 18;
+		SetLastError(0);
+		if (VirtualProtect(memory, 4096, PAGE_READWRITE, &previous) || GetLastError() != ERROR_INVALID_ADDRESS)
+			return 19;
+		WCHAR directory[MAX_PATH];
+		if (!GetCurrentDirectoryW(MAX_PATH, directory))
+			return 20;
 		if (!SetEvent(signal))
 			return 13;
 		SetLastError(1234);

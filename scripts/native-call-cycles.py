@@ -20,18 +20,18 @@ def main():
     rows = {}
     for match in re.finditer(r"^cycles:\s+(\S+)\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+(\d+)\s+service\s+(\d+)", output, re.M):
         rows[match[1]] = {"calls": int(match[2]), "beside": int(match[3]), "turn": int(match[5])}
-    protections, events = rows.get("VirtualProtect"), rows.get("SetEvent")
-    if not protections or protections["calls"] < 1600:
-        raise SystemExit(f"VirtualProtect is not reported for every call\n{output}")
-    # VirtualProtect takes the turn: four threads calling it at once wait for it.
-    if protections["beside"] or not protections["turn"]:
-        raise SystemExit(f"VirtualProtect shows no wait for the turn\n{output}")
-    for name in ("VirtualAlloc", "VirtualFree", "SetEvent", "CreateEventW", "CloseHandle"):
+    directories, events = rows.get("GetCurrentDirectoryW"), rows.get("SetEvent")
+    if not directories or directories["calls"] < 1600:
+        raise SystemExit(f"GetCurrentDirectoryW is not reported for every call\n{output}")
+    # GetCurrentDirectoryW takes the turn: four threads calling it at once wait for it.
+    if directories["beside"] or not directories["turn"]:
+        raise SystemExit(f"GetCurrentDirectoryW shows no wait for the turn\n{output}")
+    for name in ("VirtualAlloc", "VirtualProtect", "VirtualFree", "SetEvent", "CreateEventW", "CloseHandle"):
         row = rows.get(name)
         if not row or row["beside"] < row["calls"] // 2:
             raise SystemExit(f"{name} is not answered beside the turn\n{output}")
     allocations = rows["VirtualAlloc"]
-    print(f"VirtualProtect waits {protections['turn']} cycles for the turn; VirtualAlloc beside it {allocations['beside']} of "
+    print(f"GetCurrentDirectoryW waits {directories['turn']} cycles for the turn; VirtualAlloc beside it {allocations['beside']} of "
           f"{allocations['calls']} times, waiting {allocations['turn']} cycles for it; SetEvent {events['beside']} of {events['calls']}")
 
 
