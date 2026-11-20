@@ -819,6 +819,11 @@ void NativeWindows::show_cursor()
 void NativeWindows::flush_dirty(bool force)
 {
 	settle_focus_leave(false);
+	present_dirty(force);
+}
+
+void NativeWindows::present_dirty(bool force)
+{
 	import_foreign_frames();
 	const auto roots=std::move(dirty_roots);
 	const auto areas=std::move(dirty_areas);
@@ -838,6 +843,19 @@ void NativeWindows::flush_dirty(bool force)
 			present(root, force);
 			presenting.reset();
 		}
+}
+
+std::chrono::steady_clock::time_point NativeWindows::present_frames()
+{
+	// A frame that cannot be shown does not end the caller's wait with its error.
+	try { present_dirty(); } catch (uint32_t) {}
+	return foreign_look(std::chrono::steady_clock::now()+std::chrono::milliseconds(20));
+}
+
+std::chrono::steady_clock::time_point NativeWindows::foreign_look(std::chrono::steady_clock::time_point limit) const
+{
+	const bool drawn=std::any_of(foreign_frames.begin(),foreign_frames.end(),[](const auto &frame) { return frame.second!=0; });
+	return drawn ? std::min(limit,foreign_checked+std::chrono::milliseconds(8)) : limit;
 }
 
 void NativeWindows::release_surface(uint64_t handle)
@@ -1687,8 +1705,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			for (const auto &timer : timers) until=std::min(until,timer.due);
 			if (caret && caret->hidden<=0 && !caret->blank) until=std::min(until,caret->next);
 			if (scroll_drag.window) until=std::min(until,scroll_drag.next);
-			if (std::any_of(foreign_frames.begin(),foreign_frames.end(),[](const auto &frame) { return frame.second!=0; }))
-				until=std::min(until,foreign_checked+std::chrono::milliseconds(8));
+			until=foreign_look(until);
 			message_wait([&] {
 				// Collect host input without invoking a guest procedure while the scheduler checks another thread.
 				queue_status(me,0,false);
@@ -1716,8 +1733,7 @@ void NativeWindows::wait_idle(std::chrono::steady_clock::time_point deadline)
 	if (caret && caret->hidden<=0 && !caret->blank) until=std::min(until,caret->next);
 	if (scroll_drag.window) until=std::min(until,scroll_drag.next);
 	// Windows another process draws into are looked at as often as before; one starting to draw shows in the windows directory.
-	if (std::any_of(foreign_frames.begin(),foreign_frames.end(),[](const auto &frame) { return frame.second!=0; }))
-		until=std::min(until,foreign_checked+std::chrono::milliseconds(8));
+	until=foreign_look(until);
 	if (pending_for(environment.thread_id()) || !dirty_roots.empty()) until=now;
 	until=idle_until(until);
 	if (until>now) {

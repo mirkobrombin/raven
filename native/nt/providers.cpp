@@ -3185,6 +3185,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	windows.set_global_data([&allocator](uint64_t handle) { return allocator.data(handle); });
 	kernel.queue_status=[&windows](uint32_t thread,uint32_t mask,bool clear) { return windows.queue_status(thread,mask,clear); };
 	kernel.queue_quiet=[&windows](uint32_t thread) { windows.mark_quiet(thread); };
+	kernel.present_frames=[&windows] { return windows.present_frames(); };
 	windows.set_block([&threads](std::function<bool()> ready) {
 		HostWait waiting;
 		threads.block(std::move(ready), std::nullopt, false, false, true);

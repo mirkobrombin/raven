@@ -60,6 +60,8 @@ struct KernelContext {
 	std::function<uint32_t(uint32_t,uint32_t,bool)> queue_status;
 	// After a poll of a thread's queue found nothing: lets the guest answer the next polls itself for a moment.
 	std::function<void(uint32_t)> queue_quiet;
+	// Shows waiting frames on the calling thread. Returns when to look again.
+	std::function<std::chrono::steady_clock::time_point()> present_frames;
 	// Takes a reference on the loaded module at this base, or pins it for the life of the process (GetModuleHandleEx).
 	std::function<void(uint64_t, bool)> reference_module;
 	// The loaded module a guest string names, by name or by path, as GetModuleHandle finds it (zero, with the last error set, if none).

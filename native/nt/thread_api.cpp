@@ -567,6 +567,9 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			auto until = wake;
 			for (size_t index = 0; index < handles.size(); ++index)
 				if (const auto due = waited.wakes_at(index); due && (!until || *due < *until)) until = due;
+			// A thread that waits here and takes no message shows frames as message retrieval does, and looks again as often.
+			if (context.present_frames)
+				if (const auto look = context.present_frames(); !until || look < *until) until = look;
 			HostWait waiting;
 			threads.block([&] {
 				if (alertable && !me->apcs.empty()) return true;

@@ -152,6 +152,8 @@ public:
 	void drawing(uint64_t window, const DesktopRect *area = nullptr);
 	void present_drawn(uint64_t window);
 	void flush_dirty(bool force = false);
+	// Shows waiting frames on the calling thread. Returns when to look again, as often as message retrieval looks.
+	std::chrono::steady_clock::time_point present_frames();
 	// Whether a message, paint request or due timer waits for the guest; host input is delivered to the windows on the way, so this
 	// runs only inside a call of the guest thread.
 	bool input_ready();
@@ -232,6 +234,10 @@ private:
 	// A message to a window of another process: the owner's answer, or nothing when it gave none in time.
 	std::optional<uint64_t> send_foreign(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam,std::chrono::milliseconds timeout);
 	void import_foreign_frames();
+	// What flush_dirty shows, without the focus change it settles first.
+	void present_dirty(bool force = false);
+	// When to look again for frames of other processes: at `limit`, or 8 ms after the last look while one draws into a window.
+	std::chrono::steady_clock::time_point foreign_look(std::chrono::steady_clock::time_point limit) const;
 	uint8_t *screen_block=nullptr;
 	// A table entry handed out while calls were in progress, with the depth of the outermost of them: it is compared again before the
 	// guest runs until that call returns, as the call may change it through a pointer it took before a callback.

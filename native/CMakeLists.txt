@@ -1802,6 +1802,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_executable(queue_test desktop/queue_test.cpp)
         target_link_libraries(queue_test PRIVATE raven_cpu)
         add_dependencies(queue_test raven-bootstrap)
+        add_executable(wait_present_test desktop/wait_present_test.cpp)
+        target_link_libraries(wait_present_test PRIVATE raven_cpu)
+        add_dependencies(wait_present_test raven-bootstrap)
         add_executable(raw_buffer_test desktop/raw_buffer_test.cpp)
         target_link_libraries(raw_buffer_test PRIVATE raven_cpu)
         add_dependencies(raw_buffer_test raven-bootstrap)
@@ -1825,6 +1828,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_queue_x${QUEUE_ARCH} PROPERTIES TIMEOUT 15)
                 add_test(NAME native_queue_x${QUEUE_ARCH}_parallel COMMAND queue_test $<TARGET_FILE:raven-bootstrap> ${QUEUE_FIXTURE})
                 set_tests_properties(native_queue_x${QUEUE_ARCH}_parallel PROPERTIES TIMEOUT 15 ENVIRONMENT RAVEN_PARALLEL=1)
+                set(WAIT_PRESENT_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/wait-present-${QUEUE_ARCH}.exe)
+                add_custom_command(OUTPUT ${WAIT_PRESENT_FIXTURE}
+                    COMMAND ${QUEUE_COMPILER} -nostdlib -Wl,--entry,${QUEUE_ENTRY},--no-insert-timestamp
+                        -o ${WAIT_PRESENT_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/wait_present_client.c -lkernel32 -luser32 -lgdi32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/wait_present_client.c VERBATIM)
+                add_custom_target(wait_present_${QUEUE_ARCH}_fixture ALL DEPENDS ${WAIT_PRESENT_FIXTURE})
+                add_dependencies(wait_present_test wait_present_${QUEUE_ARCH}_fixture)
+                add_test(NAME native_wait_present_x${QUEUE_ARCH} COMMAND wait_present_test $<TARGET_FILE:raven-bootstrap> ${WAIT_PRESENT_FIXTURE})
+                set_tests_properties(native_wait_present_x${QUEUE_ARCH} PROPERTIES TIMEOUT 15)
+                add_test(NAME native_wait_present_x${QUEUE_ARCH}_parallel COMMAND wait_present_test $<TARGET_FILE:raven-bootstrap> ${WAIT_PRESENT_FIXTURE})
+                set_tests_properties(native_wait_present_x${QUEUE_ARCH}_parallel PROPERTIES TIMEOUT 15 ENVIRONMENT RAVEN_PARALLEL=1)
                 set(RAW_BUFFER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/raw-buffer-${QUEUE_ARCH}.exe)
                 add_custom_command(OUTPUT ${RAW_BUFFER_FIXTURE}
                     COMMAND ${QUEUE_COMPILER} -nostdlib -O1 -fno-builtin -fno-stack-protector
