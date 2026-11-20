@@ -144,6 +144,11 @@ public:
 	// run while the runtime serves another read a table only between two looks at an even count that did not change.
 	static constexpr size_t table_version=0x7b0;
 	void publish_windows();
+	// Whether the guest logged drawing for the runtime to carry out, which it does without a call.
+	bool drawing_logged() const
+	{
+		return deferred_log && __atomic_load_n(reinterpret_cast<const uint32_t *>(deferred_log), __ATOMIC_ACQUIRE) != 0;
+	}
 	void api_entered() { ++api_depth; }
 	void api_left();
 	// user32 entry points that follow the shared registry conventions; every handler runs on the calling guest thread.

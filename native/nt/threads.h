@@ -82,6 +82,9 @@ struct GuestThread {
 	// Whether its wait ends only when another thread tells it (NativeThreads::tell) or its time runs out: the scheduler does not look at
 	// its condition. `told_holding` keeps a tell that came while it still held the runtime, for when it gives the runtime up.
 	bool told_only = false, told_holding = false;
+	// How deeply the thread held the desktop lock when it gave the runtime up, to take it back as deeply with the runtime (see
+	// DesktopLock).
+	unsigned desktop_depth = 0;
 	std::condition_variable turn;
 	bool queued = false, parked = false, paused = false;
 	int held = -2;

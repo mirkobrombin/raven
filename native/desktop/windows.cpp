@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include "windows.h"
 #include "nt/actctx.h"
+#include "nt/desktop_lock.h"
 #include "nt/text.h"
 #include "nt/sandbox.h"
 #include "brush.h"
@@ -1741,7 +1742,11 @@ void NativeWindows::wait_idle(std::chrono::steady_clock::time_point deadline)
 		idle_descriptors(descriptors);
 		const auto left=std::chrono::duration_cast<std::chrono::nanoseconds>(until-now).count();
 		const timespec timeout{left/1000000000,left%1000000000};
-		::ppoll(descriptors.data(),descriptors.size(),&timeout,nullptr);
+		{
+			// Threads answered beside the turn post and send meanwhile: the desktop lock is not held over the wait.
+			const DesktopRelease desktop_release;
+			::ppoll(descriptors.data(),descriptors.size(),&timeout,nullptr);
+		}
 		idle_drain();
 		if (descriptors[1].revents & POLLIN) {
 			drain_foreign_frames_descriptor();
