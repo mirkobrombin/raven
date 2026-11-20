@@ -74,6 +74,9 @@ public:
 	// Opens host files and addresses with a Linux program the prefix exposes, for the program that started this one: only what that
 	// program reaches. False when the program is not exposed or a path is refused.
 	bool open_on_host(std::string_view name, const std::vector<std::string> &targets) const;
+	// What open_on_host does on the host, for the program `caller`; with `own`, only what this runtime's own program reaches as well,
+	// for a runtime started inside its confinement that names its caller.
+	bool launch_on_host(std::string_view name, const std::vector<std::string> &targets, std::u16string_view caller, bool own) const;
 	// The launch options a child runtime needs to keep the grants of this run.
 	std::vector<std::string> child_options() const;
 

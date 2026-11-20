@@ -1,6 +1,7 @@
 #include "confine.h"
 #include "apps.h"
 #include "sandbox.h"
+#include "text.h"
 
 #include <array>
 #include <cerrno>
@@ -27,9 +28,17 @@ namespace raven {
 namespace {
 
 int broker_socket = -1;
+// The channel to the broker of the outermost confined runtime, handed by the runtime that started this one (see host_broker_channel).
+int outer_socket = -1;
 bool is_confined = false;
 
 std::mutex &broker_lock()
+{
+	static std::mutex lock;
+	return lock;
+}
+
+std::mutex &outer_lock()
 {
 	static std::mutex lock;
 	return lock;
@@ -46,7 +55,8 @@ constexpr uint64_t file_rights = LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS
 constexpr uint64_t read_rights = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR;
 constexpr uint64_t run_rights = read_rights | LANDLOCK_ACCESS_FS_EXECUTE;
 
-enum : char { request_open = 'o', request_spawn = 's', request_address = 'a', request_host = 'h', request_change = 'c' };
+enum : char { request_open = 'o', request_spawn = 's', request_address = 'a', request_host = 'h', request_change = 'c', request_link = 'l',
+	request_host_for = 'f' };
 
 bool send_message(int socket, const std::string &bytes, const std::vector<int> &descriptors)
 {
@@ -103,12 +113,12 @@ std::string answer(int64_t value, int error)
 	return bytes;
 }
 
-// Asks the broker and waits for its answer, with the descriptors it sends back.
-int64_t ask(const std::string &request, const std::vector<int> &descriptors, std::vector<int> &returned)
+// Asks a broker and waits for its answer, with the descriptors it sends back.
+int64_t ask_on(int socket, std::mutex &lock, const std::string &request, const std::vector<int> &descriptors, std::vector<int> &returned)
 {
-	std::lock_guard guard(broker_lock());
+	std::lock_guard guard(lock);
 	std::string bytes;
-	if (broker_socket < 0 || !send_message(broker_socket, request, descriptors) || !receive_message(broker_socket, bytes, returned) || bytes.size() < 12) {
+	if (socket < 0 || !send_message(socket, request, descriptors) || !receive_message(socket, bytes, returned) || bytes.size() < 12) {
 		errno = EACCES;
 		return -1;
 	}
@@ -118,6 +128,23 @@ int64_t ask(const std::string &request, const std::vector<int> &descriptors, std
 	std::memcpy(&error, bytes.data() + 8, 4);
 	errno = error;
 	return value;
+}
+
+int64_t ask(const std::string &request, const std::vector<int> &descriptors, std::vector<int> &returned)
+{
+	return ask_on(broker_socket, broker_lock(), request, descriptors, returned);
+}
+
+// The parts of a request, each ended by a zero, after its kind.
+std::vector<std::string> request_parts(const std::string &bytes)
+{
+	std::vector<std::string> parts;
+	for (size_t at = 1; at < bytes.size();) {
+		const auto end = bytes.find('\0', at);
+		parts.push_back(bytes.substr(at, end == bytes.npos ? bytes.npos : end - at));
+		at = end == bytes.npos ? bytes.size() : end + 1;
+	}
+	return parts;
 }
 
 // The broker's checks: the grant the path needs, both before it is opened and for the file it turned out to be.
@@ -257,7 +284,32 @@ void spawn_for(int socket, const std::string &bytes, std::vector<int> &descripto
 		::close(process);
 }
 
-[[noreturn]] void serve(int socket)
+[[noreturn]] void serve(int socket, bool linked);
+
+// A channel to this broker for a runtime started inside the confinement: a process of its own, outside the confinement as the broker is,
+// serves it.
+void link_for(int socket)
+{
+	int pair[2];
+	if (::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair)) {
+		send_message(socket, answer(-1, errno), {});
+		return;
+	}
+	const pid_t server = ::fork();
+	if (server == 0) {
+		::close(pair[0]);
+		::close(socket);
+		::prctl(PR_SET_PDEATHSIG, SIGKILL);
+		serve(pair[1], true);
+	}
+	::close(pair[1]);
+	send_message(socket, server < 0 ? answer(-1, EAGAIN) : answer(1, 0), server < 0 ? std::vector<int>{} : std::vector<int>{pair[0]});
+	::close(pair[0]);
+}
+
+// `linked`: the channel of a runtime started inside the confinement, which only asks for what the host alone can do, and for channels
+// of its own to hand on.
+[[noreturn]] void serve(int socket, bool linked)
 {
 	for (;;) {
 		pollfd entry{socket, POLLIN, 0};
@@ -270,7 +322,21 @@ void spawn_for(int socket, const std::string &bytes, std::vector<int> &descripto
 		std::vector<int> descriptors;
 		if (!receive_message(socket, bytes, descriptors))
 			::_exit(0);
-		if (bytes.size() >= 9 && bytes[0] == request_open)
+		if (bytes.size() >= 1 && bytes[0] == request_link)
+			link_for(socket);
+		else if (linked && bytes.size() >= 2 && bytes[0] == request_host_for) {
+			// The program's name, the program that asked for it, then each target.
+			auto parts = request_parts(bytes);
+			if (parts.size() < 2)
+				send_message(socket, answer(-1, EINVAL), {});
+			else {
+				const auto name = parts[0], caller = parts[1];
+				parts.erase(parts.begin(), parts.begin() + 2);
+				send_message(socket, answer(sandbox().launch_on_host(name, parts, from_utf8(caller), true) ? 1 : 0, 0), {});
+			}
+		} else if (linked && (bytes.empty() || bytes[0] != request_address))
+			send_message(socket, answer(-1, EACCES), {});
+		else if (bytes.size() >= 9 && bytes[0] == request_open)
 			open_for(socket, bytes);
 		else if (bytes.size() >= 2 && bytes[0] == request_spawn)
 			spawn_for(socket, bytes, descriptors);
@@ -278,12 +344,7 @@ void spawn_for(int socket, const std::string &bytes, std::vector<int> &descripto
 			change_for(socket, bytes);
 		else if (bytes.size() >= 2 && bytes[0] == request_host) {
 			// The program's name, then each target, each ended by a zero.
-			std::vector<std::string> parts;
-			for (size_t at = 1; at < bytes.size();) {
-				const auto end = bytes.find('\0', at);
-				parts.push_back(bytes.substr(at, end == bytes.npos ? bytes.npos : end - at));
-				at = end == bytes.npos ? bytes.size() : end + 1;
-			}
+			auto parts = request_parts(bytes);
 			const auto name = parts.empty() ? std::string() : parts.front();
 			if (!parts.empty())
 				parts.erase(parts.begin());
@@ -420,7 +481,7 @@ bool confine(const std::filesystem::path &prefix, bool abstract_sockets)
 		::close(pair[0]);
 		::close(ruleset);
 		::prctl(PR_SET_PDEATHSIG, SIGKILL);
-		serve(pair[1]);
+		serve(pair[1], false);
 	}
 	::close(pair[1]);
 	if (broker < 0) {
@@ -555,6 +616,63 @@ bool brokered_address(std::string_view address)
 {
 	std::vector<int> returned;
 	const bool opened = ask(std::string(1, request_address) + std::string(address), {}, returned) == 1;
+	for (const int descriptor : returned)
+		::close(descriptor);
+	return opened;
+}
+
+int host_broker_channel()
+{
+	std::vector<int> returned;
+	int64_t linked = -1;
+	const std::string request(1, request_link);
+	if (outer_socket >= 0)
+		linked = ask_on(outer_socket, outer_lock(), request, {}, returned);
+	else if (is_confined)
+		linked = ask(request, {}, returned);
+	else
+		return -1;
+	if (linked != 1 || returned.size() != 1) {
+		for (const int descriptor : returned)
+			::close(descriptor);
+		return -1;
+	}
+	return returned[0];
+}
+
+void adopt_host_broker(int descriptor)
+{
+	if (descriptor < 0 || ::fcntl(descriptor, F_SETFD, FD_CLOEXEC))
+		return;
+	outer_socket = descriptor;
+}
+
+bool host_brokered()
+{
+	return outer_socket >= 0;
+}
+
+bool forwarded_host(std::string_view name, const std::vector<std::string> &targets, std::string_view caller)
+{
+	std::string request(1, request_host_for);
+	request += name;
+	request += '\0';
+	request += caller;
+	for (const auto &target : targets) {
+		request += '\0';
+		request += target;
+	}
+	std::vector<int> returned;
+	const bool opened = ask_on(outer_socket, outer_lock(), request, {}, returned) == 1;
+	for (const int descriptor : returned)
+		::close(descriptor);
+	return opened;
+}
+
+bool forwarded_address(std::string_view address)
+{
+	std::vector<int> returned;
+	const bool opened = ask_on(outer_socket, outer_lock(), std::string(1, request_address) + std::string(address), {}, returned) == 1;
 	for (const int descriptor : returned)
 		::close(descriptor);
 	return opened;

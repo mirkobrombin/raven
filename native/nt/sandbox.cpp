@@ -141,9 +141,18 @@ Sandbox::Access Sandbox::access_as(const std::filesystem::path &host, std::u16st
 
 bool Sandbox::open_on_host(std::string_view name, const std::vector<std::string> &targets) const
 {
+	// A runtime started inside a confinement, and the broker it starts, are inside it too: the broker outside every confinement starts
+	// the Linux program.
+	if (host_brokered())
+		return forwarded_host(name, targets, to_utf8(parent_program));
 	// A confined runtime would confine the Linux program too: the broker starts it, after the same checks.
 	if (confined())
 		return brokered_host(name, targets);
+	return launch_on_host(name, targets, parent_program, false);
+}
+
+bool Sandbox::launch_on_host(std::string_view name, const std::vector<std::string> &targets, std::u16string_view caller, bool own) const
+{
 	std::string desktop;
 	for (const auto &app : host_apps())
 		if (equal_fold(from_utf8(app.name), from_utf8(name)))
@@ -179,9 +188,10 @@ bool Sandbox::open_on_host(std::string_view name, const std::vector<std::string>
 			if (scheme != "http" && scheme != "https" && scheme != "mailto" && scheme != "ftp")
 				return false;
 		} else {
-			const auto reach = target.empty() || target.front() != '/' ? Access::none : access_as(target, parent_program);
+			const auto reaches = [](Access reach) { return reach == Access::read || reach == Access::write; };
+			const bool absolute = !target.empty() && target.front() == '/';
 			const bool in_prefix = !target.empty() && std::string_view(target).starts_with(directory.string() + "/");
-			if (!in_prefix && reach != Access::read && reach != Access::write) {
+			if (!in_prefix && (!absolute || !reaches(access_as(target, caller)) || (own && !reaches(access(target))))) {
 				refuse(target, "open-on-host");
 				return false;
 			}
@@ -337,7 +347,10 @@ void Sandbox::refuse(const std::filesystem::path &host, std::string_view operati
 
 bool Sandbox::open_address(std::string_view address) const
 {
-	// A confined runtime cannot reach the desktop's handlers: the broker opens the address, after the same checks.
+	// A confined runtime cannot reach the desktop's handlers: the broker opens the address, after the same checks; the one outside
+	// every confinement for a runtime started inside one.
+	if (host_brokered())
+		return forwarded_address(address);
 	if (confined())
 		return brokered_address(address);
 	const auto scheme = address.substr(0, address.find(':'));
