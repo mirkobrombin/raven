@@ -1829,6 +1829,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(installer_name_fixture_${QUEUE_ARCH} ALL DEPENDS ${INSTALLER_NAME_FIXTURE})
                 add_test(NAME native_installer_name_x${QUEUE_ARCH} COMMAND installer_name_test ${INSTALLER_NAME_FIXTURE})
                 set_tests_properties(native_installer_name_x${QUEUE_ARCH} PROPERTIES TIMEOUT 15)
+                set(SERVICE_ENUM_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/service-enum-${QUEUE_ARCH}.exe)
+                add_custom_command(OUTPUT ${SERVICE_ENUM_FIXTURE}
+                    COMMAND ${QUEUE_COMPILER} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,${QUEUE_ENTRY},--no-insert-timestamp
+                        -o ${SERVICE_ENUM_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/service_enum_client.c -ladvapi32 -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/service_enum_client.c VERBATIM)
+                add_custom_target(service_enum_${QUEUE_ARCH}_fixture ALL DEPENDS ${SERVICE_ENUM_FIXTURE})
+                add_test(NAME native_service_enum_x${QUEUE_ARCH} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                    ${SERVICE_ENUM_FIXTURE})
+                set_tests_properties(native_service_enum_x${QUEUE_ARCH} PROPERTIES TIMEOUT 120
+                    PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/service-enum-prefix-x${QUEUE_ARCH})
                 add_custom_command(OUTPUT ${QUEUE_FIXTURE}
                     COMMAND ${QUEUE_COMPILER} -nostdlib -Wl,--entry,${QUEUE_ENTRY},--no-insert-timestamp
                         -o ${QUEUE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/queue_client.c -lkernel32 -luser32

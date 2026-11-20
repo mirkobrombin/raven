@@ -281,6 +281,8 @@
 {"EnumFontFamiliesExW", 5},
 {"EnumProcessModules", 4},
 {"EnumProcessModulesEx", 5},
+{"EnumServicesStatusExA", 10},
+{"EnumServicesStatusExW", 10},
 {"EnumSystemLocalesW", 2},
 {"EnumThreadWindows", 3},
 {"EnumWindows", 2},
