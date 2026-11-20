@@ -20,17 +20,19 @@ def main():
     rows = {}
     for match in re.finditer(r"^cycles:\s+(\S+)\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+(\d+)\s+service\s+(\d+)", output, re.M):
         rows[match[1]] = {"calls": int(match[2]), "beside": int(match[3]), "turn": int(match[5])}
-    allocations, events = rows.get("VirtualAlloc"), rows.get("SetEvent")
-    if not allocations or allocations["calls"] < 1600:
-        raise SystemExit(f"VirtualAlloc is not reported for every call\n{output}")
-    # VirtualAlloc takes the turn: four threads calling it at once wait for it.
-    if allocations["beside"] or not allocations["turn"]:
-        raise SystemExit(f"VirtualAlloc shows no wait for the turn\n{output}")
-    for name in ("SetEvent", "CreateEventW", "CloseHandle"):
+    protections, events = rows.get("VirtualProtect"), rows.get("SetEvent")
+    if not protections or protections["calls"] < 1600:
+        raise SystemExit(f"VirtualProtect is not reported for every call\n{output}")
+    # VirtualProtect takes the turn: four threads calling it at once wait for it.
+    if protections["beside"] or not protections["turn"]:
+        raise SystemExit(f"VirtualProtect shows no wait for the turn\n{output}")
+    for name in ("VirtualAlloc", "VirtualFree", "SetEvent", "CreateEventW", "CloseHandle"):
         row = rows.get(name)
         if not row or row["beside"] < row["calls"] // 2:
             raise SystemExit(f"{name} is not answered beside the turn\n{output}")
-    print(f"VirtualAlloc waits {allocations['turn']} cycles for the turn; SetEvent beside it {events['beside']} of {events['calls']} times")
+    allocations = rows["VirtualAlloc"]
+    print(f"VirtualProtect waits {protections['turn']} cycles for the turn; VirtualAlloc beside it {allocations['beside']} of "
+          f"{allocations['calls']} times, waiting {allocations['turn']} cycles for it; SetEvent {events['beside']} of {events['calls']}")
 
 
 main()

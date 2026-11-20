@@ -1,8 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-// Threads that call at once: VirtualAlloc and VirtualFree, which the runtime answers in its turn, and SetEvent, CreateEventW and
-// CloseHandle, which it answers beside the turn. What each costs is what RAVEN_CYCLES reports. Each thread's last error stays its own.
+// Threads that call at once: VirtualProtect, which the runtime answers in its turn, and VirtualAlloc, VirtualFree, SetEvent, CreateEventW
+// and CloseHandle, which it answers beside the turn. What each costs is what RAVEN_CYCLES reports. Each thread's last error stays its own.
 
 static volatile LONG ready;
 static HANDLE start, signal;
@@ -18,8 +18,14 @@ static DWORD WINAPI calls(void *parameter)
 		if (!memory)
 			return 11;
 		((volatile char *)memory)[i] = 1;
+		DWORD previous;
+		if (!VirtualProtect(memory, 4096, PAGE_READONLY, &previous) || previous != PAGE_READWRITE || ((volatile char *)memory)[i] != 1)
+			return 17;
 		if (!VirtualFree(memory, 0, MEM_RELEASE))
 			return 12;
+		SetLastError(0);
+		if (VirtualFree(memory, 0, MEM_RELEASE) || GetLastError() != ERROR_INVALID_ADDRESS)
+			return 18;
 		if (!SetEvent(signal))
 			return 13;
 		SetLastError(1234);
