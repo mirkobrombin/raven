@@ -1272,6 +1272,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			// component: the call goes on there with the same arguments, so handlers that resume elsewhere, as a C++ catch does, never return
 			// to the runtime. The vectored handler lists live there too, and fibers, which the thread switches by itself.
 			static const std::map<std::string_view, std::string_view> in_runtime{{"RaiseException", "raven_raise_exception"},
+				{"DebugBreak", "raven_debug_break"},
 				{"RtlUnwind", "raven_unwind"}, {"AddVectoredExceptionHandler", "raven_add_vectored_exception"},
 				{"RtlAddVectoredExceptionHandler", "raven_add_vectored_exception"},
 				{"AddVectoredContinueHandler", "raven_add_vectored_continue"}, {"RtlAddVectoredContinueHandler", "raven_add_vectored_continue"},
@@ -1303,7 +1304,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 						return std::find(symbol.names.begin(), symbol.names.end(), wanted) != symbol.names.end();
 					});
 					if (found != exports.end()) {
-						if (api == "RtlUnwind")
+						// A call of DebugBreak is a new breakpoint, not a handler that came back to the last one.
+						if (api == "RtlUnwind" || api == "DebugBreak")
 							fault_loops[guest_threads.current_id()].rounds = 0;
 						auto native = process.context();
 						native.registers.rip = component->second->loaded.base() + found->address;

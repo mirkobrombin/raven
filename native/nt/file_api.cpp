@@ -1604,6 +1604,8 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("SetCachedSigningLevel", 4, [file_of](ApiCall &call) {
 		call.fail(file_of(call[3]) ? 50 : 6);
 	});
+	// What a file is, asked by its name alone, is not offered, as on a file system without that path: the caller opens the file.
+	registry.add("GetFileInformationByName", 4, [](ApiCall &call) { call.fail(50); });
 	registry.add("GetFileInformationByHandleEx", 4, [&, resolve, missing, file_of, query_directory](ApiCall &call) {
 		// The directory classes read a directory's entries as NtQueryDirectoryFile does, in the record of the matching native class:
 		// FileIdBothDirectoryInfo (10), FileFullDirectoryInfo (14) and FileIdExtdDirectoryInfo (19), and their restarting forms.
