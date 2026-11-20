@@ -42,6 +42,9 @@ static DWORD WINAPI calls(void *parameter)
 		if (!SetPropW(window, (LPCWSTR)(ULONG_PTR)count_atom, (HANDLE)(UINT_PTR)(i + 1)) ||
 			GetPropW(window, (LPCWSTR)(ULONG_PTR)count_atom) != (HANDLE)(UINT_PTR)(i + 1))
 			return 15;
+		if (!SetPropW(window, L"raven.name", (HANDLE)(UINT_PTR)(i + 2)) || RemovePropW(window, L"raven.name") != (HANDLE)(UINT_PTR)(i + 2) ||
+			RemovePropW(window, L"raven.name"))
+			return 24;
 		if (GetMenuItemCount(menu) != 2 || GetMenuItemID(menu, 0) != 100 || GetSubMenu(menu, 1) != popup)
 			return 21;
 		RECT bounds, inside = {2, 2, 4, 4};
