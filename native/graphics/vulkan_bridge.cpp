@@ -165,7 +165,7 @@ VkResult VulkanBridge::detached(const std::function<VkResult()> &work, std::atom
 			notify();
 	});
 	try {
-		park([&call] { return call->done.load(std::memory_order_acquire); });
+		park([&call] { return call->done.load(std::memory_order_acquire); }, std::nullopt);
 	} catch (...) {
 		if (cancel)
 			cancel->store(true);
@@ -519,7 +519,7 @@ bool VulkanBridge::dispatch(std::string_view name)
 		result = static_cast<uint32_t>(status);
 		if (status == VK_SUCCESS) {
 			const auto token = next_handle++;
-			Device record{device, arguments[0], {}};
+			Device record{device, arguments[0], {}, queue_infos[0].queueFamilyIndex};
 			try {
 				devices.emplace(token, record);
 				write(arguments[3], token);

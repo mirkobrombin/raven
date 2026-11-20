@@ -3189,9 +3189,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	windows.set_tell([&threads](uint32_t thread) { threads.tell(thread); });
 	threads.add_end_listener([&windows](uint32_t thread) { windows.thread_ended(thread); });
 #ifdef RAVEN_VULKAN
-	vulkan.set_blocking([&threads](std::function<bool()> ready) {
+	vulkan.set_blocking([&threads](std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake) {
 		HostWait waiting;
-		threads.block(std::move(ready), std::nullopt);
+		return threads.block(std::move(ready), wake);
 	}, [&threads] { threads.nudge(); });
 #endif
 	// The block the served stubs of every runtime provider share, and which stub serves which name.

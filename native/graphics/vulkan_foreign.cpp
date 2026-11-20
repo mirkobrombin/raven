@@ -30,6 +30,8 @@ struct VulkanBridge::ForeignSwapchain {
 	VkDevice device=VK_NULL_HANDLE;
 	VkFormat format=VK_FORMAT_UNDEFINED;
 	uint32_t width=0,height=0,family=UINT32_MAX,next=0;
+	// The images the program holds: acquired and not presented yet.
+	std::vector<bool> held;
 	// The queue of the last present.
 	VkQueue queue=VK_NULL_HANDLE;
 	std::vector<VkDeviceMemory> image_memory;
@@ -76,7 +78,8 @@ bool VulkanBridge::queue_family_draws(uint64_t physical_token,uint32_t family) c
 VkResult VulkanBridge::create_own_swapchain(uint64_t device_token,const VkSwapchainCreateInfoKHR &info,uint64_t window,bool foreign,uint64_t &token)
 {
 	if (!own_format(info.imageFormat)) return VK_ERROR_FORMAT_NOT_SUPPORTED;
-	// shortcut: no mutable-format, protected or split-instance swapchains, add them when a program asks for one.
+	// Each flag needs what the bridge does not offer for these surfaces: VK_KHR_swapchain_mutable_format, protected surface capabilities,
+	// or a device group of several physical devices.
 	if (info.flags) return VK_ERROR_INITIALIZATION_FAILED;
 	if (foreign) {
 		const auto size=foreign_window_size(window);
@@ -140,9 +143,10 @@ VkResult VulkanBridge::create_own_swapchain(uint64_t device_token,const VkSwapch
 		result=vkMapMemory(target->device,target->memory,0,VK_WHOLE_SIZE,0,&target->mapped);
 		if (result!=VK_SUCCESS) return result;
 	}
-	// No host swapchain stands behind the token: the generated command that destroys it passes a null handle, which the driver ignores.
-	// shortcut: an image a program makes or binds over the swapchain (VkImageSwapchainCreateInfoKHR, VkBindImageMemorySwapchainInfoKHR)
-	// gets the null handle too, refuse those when a program uses them.
+	target->held.assign(target->images.size(),false);
+	// No host swapchain stands behind the token: the generated command that destroys it passes a null handle, which the driver ignores,
+	// and so does an image a program makes over the swapchain (VkImageSwapchainCreateInfoKHR), which is then an ordinary image. One it
+	// binds over a swapchain image takes that image's memory (own_image_memory).
 	token=next_handle++;
 	generic.emplace(token,Generic{0,static_cast<uint8_t>(H::VkSwapchainKHR),device_token});
 	foreign_swapchains.emplace(token,std::move(target));
@@ -151,40 +155,70 @@ VkResult VulkanBridge::create_own_swapchain(uint64_t device_token,const VkSwapch
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 
-VkResult VulkanBridge::detached_present(const std::function<VkResult()> &work)
+VkResult VulkanBridge::detached_present(VkQueue queue,const std::function<VkResult()> &work)
 {
-	++presents;
+	auto &in_flight=presents[queue];
+	++in_flight;
 	return detached([&] {
 		const auto status=work();
-		--presents;
+		--in_flight;
 		return status;
 	});
 }
 
-VkResult VulkanBridge::acquire_own_image(Marshal &marshal,const std::vector<uint64_t> &a)
+std::optional<VkDeviceMemory> VulkanBridge::own_image_memory(uint64_t swapchain,uint32_t index) const
 {
-	if (park) park([this] { return !presents; });
-	marshal.context(H::VkDevice,a[0]);
-	marshal.check_writable(a[5],4);
-	auto &target=*foreign_swapchains.at(a[1]);
-	const auto semaphore=reinterpret_cast<VkSemaphore>(marshal.host(H::VkSemaphore,a[3]));
-	const auto fence=reinterpret_cast<VkFence>(marshal.host(H::VkFence,a[4]));
-	// Only a queue signals a semaphore or a fence, so an empty batch does it: on the queue the swapchain's frames go to, and
-	// before the first present on any queue of the device.
+	const auto found=foreign_swapchains.find(swapchain);
+	if (found==foreign_swapchains.end()) return std::nullopt;
+	if (index>=found->second->image_memory.size()) throw std::runtime_error("Vulkan image binds over a swapchain image that does not exist");
+	return found->second->image_memory[index];
+}
+
+VkResult VulkanBridge::acquire_own_image(Marshal &marshal,uint64_t device_token,uint64_t swapchain,uint64_t timeout,uint64_t semaphore_token,
+	uint64_t fence_token,uint64_t index_address)
+{
+	marshal.context(H::VkDevice,device_token);
+	marshal.check_writable(index_address,4);
+	// Held for the wait below, while another thread may destroy the swapchain.
+	const auto owned=foreign_swapchains.at(swapchain);
+	auto &target=*owned;
+	const auto semaphore=reinterpret_cast<VkSemaphore>(marshal.host(H::VkSemaphore,semaphore_token));
+	const auto fence=reinterpret_cast<VkFence>(marshal.host(H::VkFence,fence_token));
+	// Only a queue signals a semaphore or a fence, so an empty batch does it: on the queue the swapchain's frames go to, and before
+	// the first present on the device's first queue, which the device was made with whether or not the program has asked for it.
 	auto queue=target.queue;
 	if (!queue) {
-		const auto any=std::find_if(queues.begin(),queues.end(),[&](const auto &item) { return item.second.device==a[0]; });
-		// shortcut: fails before the program has a queue of the device, get one for it when a program acquires that early.
-		if (any==queues.end()) return VK_ERROR_INITIALIZATION_FAILED;
-		queue=any->second.handle;
+		const auto &device=devices.at(device_token);
+		vkGetDeviceQueue(device.handle,device.family,0,&queue);
 	}
+	// An image the program holds is not handed out again: the next free one after the last handed out is.
+	const auto free_image=[&target]() -> std::optional<uint32_t> {
+		const auto count=uint32_t(target.images.size());
+		for (uint32_t step=0;step<count;++step)
+			if (const uint32_t index=(target.next+step)%count; !target.held[index]) return index;
+		return std::nullopt;
+	};
+	// Nor does the batch meet a present in flight on its queue. With every image held, the acquire waits for another thread of the
+	// program to present one, up to its timeout; without a way to wait, presents are not in flight and nothing frees an image.
+	auto &in_flight=presents[queue];
+	const auto ready=[&] { return !in_flight.load(std::memory_order_acquire) && free_image(); };
+	if (!ready()) {
+		const bool held=!free_image();
+		if (held && !timeout) return VK_NOT_READY;
+		std::optional<std::chrono::steady_clock::time_point> wake;
+		if (held && timeout<(uint64_t(1)<<62)) wake=std::chrono::steady_clock::now()+std::chrono::nanoseconds(timeout);
+		if (!park || !park(ready,wake)) return VK_TIMEOUT;
+	}
+	const uint32_t index=*free_image();
 	VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
 	submit.signalSemaphoreCount=semaphore ? 1 : 0; submit.pSignalSemaphores=&semaphore;
-	// On the program's own thread, as its submits are, with no present in flight: nothing else uses the queue at this moment.
+	// On the program's own thread, as its submits are, with no present in flight on the queue: nothing else uses it at this moment.
 	const auto status=vkQueueSubmit(queue,1,&submit,fence);
-	// shortcut: images go round in order and none is ever busy, track them when a program holds several at once.
-	if (status==VK_SUCCESS) store<uint32_t>(a[5],target.next++%uint32_t(target.images.size()));
-	return status;
+	if (status!=VK_SUCCESS) return status;
+	target.held[index]=true;
+	target.next=(index+1)%uint32_t(target.images.size());
+	store<uint32_t>(index_address,index);
+	return VK_SUCCESS;
 }
 
 // The surface queries and the image list the driver cannot answer for a surface or a swapchain it never saw.
@@ -228,12 +262,12 @@ bool VulkanBridge::dispatch_own(std::string_view name)
 		process.return_api(static_cast<uint32_t>(list(marshal,a[2],a[3],tokens.data(),uint32_t(tokens.size()),sizeof tokens[0])));
 		return true;
 	}
-	// shortcut: the extended queries and acquire are refused for these surfaces and swapchains, answer them when a program uses them.
-	// VkPhysicalDeviceSurfaceInfo2KHR and VkAcquireNextImageInfoKHR: sType, pNext, then the surface or the swapchain.
-	if (name=="vkGetPhysicalDeviceSurfaceCapabilities2KHR" || name=="vkGetPhysicalDeviceSurfaceFormats2KHR" || name=="vkAcquireNextImage2KHR") {
+	// The other surface queries of VK_KHR_get_surface_capabilities2, which the bridge does not offer: a program that calls them anyway
+	// on a surface the bridge keeps learns that it is lost.
+	if (name=="vkGetPhysicalDeviceSurfaceCapabilities2KHR" || name=="vkGetPhysicalDeviceSurfaceFormats2KHR") {
 		const auto a=process.api_arguments(name=="vkGetPhysicalDeviceSurfaceFormats2KHR" ? 4 : 3);
-		const auto handle=load<uint64_t>(a[1]+16);
-		if (!own_surface(handle) && !foreign_swapchains.contains(handle)) return false;
+		// VkPhysicalDeviceSurfaceInfo2KHR: sType, pNext, then the surface.
+		if (!own_surface(load<uint64_t>(a[1]+16))) return false;
 		process.return_api(static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR));
 		return true;
 	}
@@ -259,12 +293,37 @@ std::optional<VkResult> VulkanBridge::present_foreign(uint64_t queue_token,const
 		} else if (info.pImageIndices[i]>=own->second->images.size()) return VK_ERROR_OUT_OF_DATE_KHR;
 		else frames.push_back({own->second,info.pImageIndices[i]});
 	}
+	// A presented image is the program's no more: the next acquire may hand it out.
+	for (const auto &frame:frames) frame.target->held[frame.index]=false;
 	if (frames.empty()) return std::nullopt;
 	const auto queue=queues.at(queue_token);
+	// The driver's part of the present keeps the chain, with its arrays of one entry per swapchain cut to the driver's swapchains.
+	// VkPresentIdKHR and VkDeviceGroupPresentInfoKHR are the structures a present may carry from what the bridge offers.
+	VkPresentIdKHR ids{VK_STRUCTURE_TYPE_PRESENT_ID_KHR};
+	VkDeviceGroupPresentInfoKHR group{VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_INFO_KHR};
+	std::vector<uint64_t> id_values;
+	std::vector<uint32_t> masks;
+	const void *chain=nullptr;
+	for (auto *element=static_cast<const VkBaseInStructure *>(info.pNext);element;element=element->pNext) {
+		if (element->sType==VK_STRUCTURE_TYPE_PRESENT_ID_KHR) {
+			const auto &source=*reinterpret_cast<const VkPresentIdKHR *>(element);
+			if (source.pPresentIds)
+				for (const auto place:host_places) id_values.push_back(source.pPresentIds[place]);
+			ids.swapchainCount=uint32_t(host_places.size()); ids.pPresentIds=source.pPresentIds ? id_values.data() : nullptr;
+			ids.pNext=chain; chain=&ids;
+		} else if (element->sType==VK_STRUCTURE_TYPE_DEVICE_GROUP_PRESENT_INFO_KHR) {
+			const auto &source=*reinterpret_cast<const VkDeviceGroupPresentInfoKHR *>(element);
+			if (source.swapchainCount)
+				for (const auto place:host_places) masks.push_back(source.pDeviceMasks[place]);
+			group.swapchainCount=source.swapchainCount ? uint32_t(masks.size()) : 0; group.pDeviceMasks=masks.empty() ? nullptr : masks.data();
+			group.mode=source.mode;
+			group.pNext=chain; chain=&group;
+		} else throw std::runtime_error("unsupported structure in the chain of a Vulkan present");
+	}
 	// One batch consumes the present's waits once, including waits shared with host swapchains in the same present.
 	// The host present follows the completed batch without waiting on those binary semaphores a second time.
 	bool presented=false;
-	const auto status=detached_present([&]() -> VkResult {
+	const auto status=detached_present(queue.handle,[&]() -> VkResult {
 		std::vector<VkCommandBuffer> commands;
 		for (const auto &frame:frames) {
 			auto &target=*frame.target;
@@ -323,10 +382,8 @@ std::optional<VkResult> VulkanBridge::present_foreign(uint64_t queue_token,const
 		presented=true;
 		if (info.pResults) std::fill_n(info.pResults,info.swapchainCount,VK_SUCCESS);
 		if (host_swapchains.empty()) return VK_SUCCESS;
-		// shortcut: the driver's part of a mixed present drops the pNext chain (present id, device group), filter its arrays when
-		// an offered extension's chain changes what a present does.
 		std::vector<VkResult> results(host_swapchains.size());
-		const VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,nullptr,0,nullptr,uint32_t(host_swapchains.size()),
+		const VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,chain,0,nullptr,uint32_t(host_swapchains.size()),
 			host_swapchains.data(),host_indices.data(),results.data()};
 		result=vkQueuePresentKHR(queue.handle,&present);
 		if (info.pResults)
