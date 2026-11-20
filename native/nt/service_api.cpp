@@ -342,21 +342,37 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 			return (wide ? entry.name.size() + entry.display.size() : entry.narrow_name.size() + entry.narrow_display.size()) * unit + 2 * unit;
 		};
 		const size_t available = entries.size() - resume;
-		// The entries that fit go into the buffer; with ERROR_MORE_DATA the size of the rest and where to resume come back with them.
+		size_t needed_all = available * record_size;
+		for (size_t index = resume; index < entries.size(); ++index)
+			needed_all += text_size(entries[index]);
 		const size_t capacity = call.u32(5);
-		size_t count = 0, used = 0;
+		size_t count = 0;
 		for (; count < available; ++count) {
-			const size_t next = used + record_size + text_size(entries[resume + count]);
-			if (next > capacity) break;
-			used = next;
+			const size_t candidate = (count + 1) * record_size + [&] {
+				size_t strings = 0;
+				for (size_t item = 0; item <= count; ++item) strings += text_size(entries[resume + item]);
+				return strings;
+			}();
+			if (candidate > capacity) break;
 		}
-		if (count && !call[4]) {
+		call.store<uint32_t>(call[7], uint32_t(count));
+		if (count < available) {
+			if (call[8]) call.store<uint32_t>(call[8], resume + uint32_t(count));
+			call.store<uint32_t>(call[6], uint32_t(std::min(needed_all, size_t(UINT32_MAX))));
+			call.fail(234);
+			return;
+		}
+		if (available && !call[4]) {
 			call.fail(87);
 			return;
 		}
-		size_t rest = 0;
-		for (size_t index = resume + count; index < entries.size(); ++index)
-			rest += record_size + text_size(entries[index]);
+		call.store<uint32_t>(call[6], 0);
+		if (call[8]) call.store<uint32_t>(call[8], 0);
+		if (!count) {
+			if (call[8]) call.store<uint32_t>(call[8], 0);
+			call.ret(1);
+			return;
+		}
 		std::vector<uint8_t> records(count * record_size, 0);
 		uint64_t text_at = call[4] + records.size();
 		const auto set_pointer = [&records, width](size_t offset, uint64_t value) {
@@ -400,13 +416,8 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 			status[7] = entry.status.process;
 			std::memcpy(records.data() + record + 2 * width, status.data(), sizeof(status));
 		}
-		if (count)
-			call.write(call[4], records);
-		call.store<uint32_t>(call[7], uint32_t(count));
-		call.store<uint32_t>(call[6], uint32_t(std::min(rest, size_t(UINT32_MAX))));
-		if (call[8]) call.store<uint32_t>(call[8], count < available ? resume + uint32_t(count) : 0);
-		if (count < available) call.fail(234);
-		else call.ret(1);
+		call.write(call[4], records);
+		call.ret(1);
 	};
 	registry.add("EnumServicesStatusExW", 10, [enum_services_status_ex](ApiCall &call) { enum_services_status_ex(call, true); });
 	registry.add("EnumServicesStatusExA", 10, [enum_services_status_ex](ApiCall &call) { enum_services_status_ex(call, false); });
