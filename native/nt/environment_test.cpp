@@ -9,6 +9,7 @@
 #include <map>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <thread>
 
 static std::vector<uint8_t> read_file(const char *path)
 {
@@ -65,6 +66,21 @@ int main(int argc, char **argv)
 		const auto shared = process.read_memory(0x7ffe0260, 20);
 		check(shared[0] == 0x65 && shared[1] == 0x4a && shared[4] == 1 && shared[12] == 10 && shared[16] == 0 &&
 			process.has_protection(0x7ffe0000, 4096, PROT_READ), "shared user data does not name Windows 10 22H2");
+		// Each host thread names the guest thread it works for: another host thread that names its own changes nothing here.
+		{
+			const auto first = environment.teb();
+			const auto second = environment.create_thread_block(0x7000000, 0x6ff0000, 92);
+			uint64_t named = 0;
+			uint32_t named_id = 0;
+			std::thread([&] {
+				environment.set_current(second);
+				named = environment.teb();
+				named_id = environment.thread_id();
+			}).join();
+			check(named == second && named_id == 92, "a host thread did not work for the thread it named");
+			check(environment.teb() == first && environment.thread_id() == 91, "another host thread changed the thread this one works for");
+			environment.release_thread_block(second);
+		}
 		check(environment.last_error() == 0, "initial LastError is not zero");
 		environment.set_last_error(55);
 		const auto heap_list=environment.prepare_heaps();
