@@ -2313,7 +2313,7 @@ bool NativeProcess::serve_alone(uint64_t *block)
 	block[11] = 0;
 	auto &cycles = CallCycles::instance();
 	if (cycles.enabled())
-		cycles.answered(block, stub, cycles.seen(block, stub, since));
+		cycles.answered(block, stub, cycles.seen(block, stub, since), true);
 	__atomic_store_n(&block[0], 0, __ATOMIC_RELEASE);
 	return true;
 }

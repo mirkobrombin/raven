@@ -1,6 +1,7 @@
 #include "threads.h"
 #include "kernel_waits.h"
 #include "cpu/agent_tasks.h"
+#include "cpu/call_cycles.h"
 
 #include <cstdlib>
 #include <fcntl.h>
@@ -1555,6 +1556,8 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 				if (beside_wanted)
 					break;
 				told = true;
+				// The call is seen with the turn kept: nothing was waited for.
+				CallCycles::instance().waited_turn(0);
 				return -4;
 			}
 			__builtin_ia32_pause();
@@ -1609,7 +1612,10 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 					me.turn.wait(lock);
 			}
 		}
+		const uint64_t asked = __rdtsc();
 		enter(me);
+		// RAVEN_CYCLES counts the wait for the turn against the call that ended the park; a stop of any other kind has none.
+		CallCycles::instance().waited_turn(status == -4 ? __rdtsc() - asked : 0);
 		if (!me.paused || me.state == GuestThread::State::done || me.unwinding)
 			break;
 		// It was suspended while it waited for its turn.
