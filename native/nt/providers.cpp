@@ -201,12 +201,12 @@ static bool served_api(std::string_view module, std::string_view name)
 
 // Calls of subsystems that keep their own lock: with a host thread for each guest thread they are answered beside the turn, by the
 // handler the usual way runs, unless they need the turn after all (see ApiCall::alone). The registry, the transfers of plain files
-// under each file's lock (see read_beside), VirtualQuery under the memory accounting's lock, and the events made and the handles closed
-// under the handle table's lock (see NativeObjects::close_alone).
+// under each file's lock (see read_beside), VirtualQuery, VirtualAlloc and VirtualFree under the memory accounting's lock (see
+// NativeMemory::serve_alone), and the events made and the handles closed under the handle table's lock (see NativeObjects::close_alone).
 static bool beside_api(std::string_view module, std::string_view name)
 {
-	static constexpr std::array<std::string_view, 9> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
-		"GetFileSizeEx", "VirtualQuery", "CreateEventW", "CloseHandle"};
+	static constexpr std::array<std::string_view, 11> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
+		"GetFileSizeEx", "VirtualQuery", "VirtualAlloc", "VirtualFree", "CreateEventW", "CloseHandle"};
 	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
 		return true;
 	if (module != "advapi32.dll" && module != "kernelbase.dll")
@@ -3430,6 +3430,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			if (const auto named = beside_names.find(stub); named != beside_names.end()) {
 				// The page record of an address, written where the guest asked; any other case (a short buffer, an address the accounting
 				// does not answer for, a buffer it cannot write) goes the usual way, which reports the error.
+				if (named->second == "VirtualAlloc" || named->second == "VirtualFree")
+					return memory.serve_alone(named->second, arguments);
 				if (named->second == "VirtualQuery") {
 					if (arguments[2] < 48)
 						return std::nullopt;

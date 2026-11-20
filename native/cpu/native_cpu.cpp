@@ -743,6 +743,11 @@ struct NativeProcess::State {
 		~SharedView() { if (host != MAP_FAILED) munmap(host, size); }
 	};
 	std::map<uint64_t, std::unique_ptr<SharedView>> shared_views;
+	// Guards what records the guest's memory (the mappings and allocations, the shared views and the served blocks among them, and the
+	// API breakpoints in it): a host thread changes it beside the turn for the calls of its own thread (VirtualAlloc and VirtualFree)
+	// while the turn reads and changes it. Held over a whole operation, including the guest's system calls it makes; recursive, as one
+	// operation is built from others. Taken before agent_lock, never while waiting for another host thread.
+	mutable std::recursive_mutex memory_lock;
 	// The guest's own mappings by start address; they never overlap. A program such as a browser makes thousands of them, and every
 	// read, write and protection change looks one up.
 	std::map<uint64_t, ImageMapping> mappings;
@@ -842,6 +847,7 @@ struct NativeProcess::State {
 
 uint8_t *NativeProcess::State::shared_memory(uint64_t address, size_t &size) const
 {
+	std::lock_guard memory(memory_lock);
 	const auto after = shared_views.upper_bound(address);
 	if (after != shared_views.begin()) {
 		const auto &view = *std::prev(after);
@@ -884,6 +890,7 @@ void NativeProcess::State::require_memory() const
 
 bool NativeProcess::State::covers(uint64_t address, size_t size, int protection) const
 {
+	std::lock_guard memory(memory_lock);
 	if (size > UINT64_MAX - address)
 		return false;
 	const uint64_t end = address + size;
@@ -1120,6 +1127,7 @@ void NativeProcess::set_context(const NativeContext &context)
 
 std::vector<uint8_t> NativeProcess::read_memory(uint64_t address, size_t size) const
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	if (!state->covers(address, size, PROT_READ))
 		throw std::runtime_error("native read exceeds readable guest memory" + (std::getenv("RAVEN_TRACE_API") ? " at " + std::to_string(address) + "+" + std::to_string(size) : std::string()));
@@ -1148,6 +1156,11 @@ std::vector<uint8_t> NativeProcess::read_memory(uint64_t address, size_t size) c
 pid_t NativeProcess::State::memory_reader() const
 {
 	return memory_task > 0 ? memory_task : child->pid;
+}
+
+bool NativeProcess::memory_beside() const
+{
+	return state->agent_task && parallel();
 }
 
 bool NativeProcess::read_alone(uint64_t address, void *into, size_t size) const
@@ -1184,6 +1197,7 @@ bool NativeProcess::write_alone(uint64_t address, const void *from, size_t size)
 
 void NativeProcess::write_memory(uint64_t address, std::span<const uint8_t> bytes)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->trap_page.clear();
 	validate_write_memory(address,bytes.size());
 	for (size_t offset = 0; offset < bytes.size();) {
@@ -1205,6 +1219,7 @@ void NativeProcess::write_memory(uint64_t address, std::span<const uint8_t> byte
 
 void NativeProcess::validate_write_memory(uint64_t address,size_t size) const
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	if (!state->covers(address,size,PROT_WRITE)) throw std::runtime_error("native write exceeds writable guest memory");
 }
@@ -1315,7 +1330,7 @@ void NativeProcess::start_agent()
 	state->agent_segments = {starter.fs_base, starter.gs_base, starter.ds, starter.es, starter.fs, starter.gs};
 	const uint64_t task = owned_call(page + agent::spawn(), page + agent::spawned(), 0, block, stack + agent::stack_size);
 	state->agent_page = page;
-	state->agent_service = static_cast<uint64_t *>(state->shared_views.at(block)->host);
+	state->agent_service = static_cast<uint64_t *>([&] { std::lock_guard memory(state->memory_lock); return state->shared_views.at(block)->host; }());
 	state->agent_task = pid_t(task);
 }
 
@@ -1349,7 +1364,7 @@ NativeProcess::AgentRoom NativeProcess::agent_room()
 			throw;
 		}
 		close(descriptor);
-		auto *const host = static_cast<uint8_t *>(state->shared_views.at(base)->host);
+		auto *const host = static_cast<uint8_t *>([&] { std::lock_guard memory(state->memory_lock); return state->shared_views.at(base)->host; }());
 		const uint64_t stacks = (base + blocks + agent::stack_size - 1) & ~uint64_t(agent::stack_size - 1);
 		for (size_t at = 0; at < rooms; ++at) {
 			State::AgentSlot fresh;
@@ -1611,11 +1626,12 @@ static uint64_t low_gap(pid_t pid, uint64_t size, uint64_t limit)
 
 uint64_t NativeProcess::map_memory(size_t size, int protection, uint64_t address)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->trap_page.clear();
 	state->require_memory();
 	memory_range(address, size, protection, state->limit());
 	state->allocations.reserve(state->allocations.size() + 1);
-	const auto hint = address ? address : state->mode == NativeMode::x86 ? low_gap(state->child->pid, size, state->limit()) : 0;
+	const auto hint = address ? address : state->mode == NativeMode::x86 ? low_gap(state->memory_reader(), size, state->limit()) : 0;
 	const auto mapped = memory_syscall(SYS_mmap, hint, size, static_cast<uint64_t>(protection),
 		MAP_PRIVATE | MAP_ANONYMOUS | (protection == PROT_NONE ? MAP_NORESERVE : 0) | (hint ? MAP_FIXED_NOREPLACE : 0), uint64_t(-1));
 	if ((address && mapped != address) || mapped >= state->limit() || size > state->limit() - mapped) {
@@ -1635,6 +1651,7 @@ uint64_t NativeProcess::map_shared(int descriptor, size_t size, uint64_t offset,
 
 uint64_t NativeProcess::map_descriptor(int descriptor, size_t size, uint64_t offset)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	memory_range(0, size, PROT_READ | PROT_WRITE, state->limit());
 	const auto flags = fcntl(descriptor, F_GETFL);
@@ -1690,6 +1707,7 @@ uint64_t NativeProcess::receive_descriptor(int descriptor, uint64_t scratch)
 
 uint64_t NativeProcess::map_file(int descriptor, size_t size, uint64_t offset, bool transfer, uint64_t address)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->trap_page.clear();
 	state->require_memory();
 	memory_range(0, size, PROT_READ | PROT_WRITE, state->limit());
@@ -1711,7 +1729,7 @@ uint64_t NativeProcess::map_file(int descriptor, size_t size, uint64_t offset, b
 		// such a boundary: a reservation one granule larger is made, the file is mapped over its aligned part and the slack is returned.
 		// A view asked for at an address goes exactly there and needs no slack.
 		const uint64_t granularity = address ? 0 : 0x10000;
-		const auto hint = address ? address : state->mode == NativeMode::x86 ? low_gap(state->child->pid, size + granularity, state->limit()) : 0;
+		const auto hint = address ? address : state->mode == NativeMode::x86 ? low_gap(state->memory_reader(), size + granularity, state->limit()) : 0;
 		const auto reserved = memory_syscall(SYS_mmap, hint, size + granularity, PROT_NONE,
 			MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (hint ? MAP_FIXED_NOREPLACE : 0), uint64_t(-1), 0);
 		if (reserved >= state->limit() || size + granularity > state->limit() - reserved || (address && reserved != address)) {
@@ -1749,11 +1767,13 @@ uint64_t NativeProcess::map_file(int descriptor, size_t size, uint64_t offset, b
 
 uint64_t NativeProcess::mapping_changes() const
 {
+	std::lock_guard memory(state->memory_lock);
 	return state->mapping_changes;
 }
 
 bool NativeProcess::has_protection(uint64_t address, size_t size, int protection) const
 {
+	std::lock_guard memory(state->memory_lock);
 	const uint64_t end = address + size;
 	while (address < end) {
 		const auto after = state->mappings.upper_bound(address);
@@ -1769,6 +1789,7 @@ bool NativeProcess::has_protection(uint64_t address, size_t size, int protection
 
 void NativeProcess::protect_memory(uint64_t address, size_t size, int protection)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->trap_page.clear();
 	protect_range(address, size, protection, false);
 }
@@ -1780,6 +1801,7 @@ void NativeProcess::protect_image(uint64_t address, size_t size, int protection)
 
 void NativeProcess::protect_range(uint64_t address, size_t size, int protection, bool image)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	memory_range(address, size, protection, state->limit());
 	const auto owned = std::find_if(state->allocations.begin(), state->allocations.end(), [&](const auto &allocation) {
@@ -1824,6 +1846,7 @@ void NativeProcess::protect_range(uint64_t address, size_t size, int protection,
 
 void NativeProcess::unmap_memory(uint64_t address)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->trap_page.clear();
 	state->require_memory();
 	const auto owned = std::find_if(state->allocations.begin(), state->allocations.end(), [&](const auto &allocation) {
@@ -1846,6 +1869,7 @@ void NativeProcess::unmap_memory(uint64_t address)
 
 bool NativeProcess::memory_available(uint64_t address, size_t size) const
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	memory_range(address,size,PROT_NONE,state->limit());
 	const auto end = address+size;
@@ -1861,7 +1885,7 @@ bool NativeProcess::memory_available(uint64_t address, size_t size) const
 	// The host maps a few things of its own into the guest near the top of the address space (the loader, vdso, its stack); the
 	// runtime does not track those, so a range up there is checked against the guest's own map.
 	if (end > 0x700000000000ULL) {
-		std::ifstream maps("/proc/" + std::to_string(state->child->pid) + "/maps");
+		std::ifstream maps("/proc/" + std::to_string(state->memory_reader()) + "/maps");
 		std::string line;
 		while (std::getline(maps, line)) {
 			uint64_t first = 0, last = 0;
@@ -1874,6 +1898,7 @@ bool NativeProcess::memory_available(uint64_t address, size_t size) const
 
 void NativeProcess::discard_memory(uint64_t address, size_t size)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	memory_range(address,size,PROT_NONE,state->limit());
 	const auto owned = std::find_if(state->allocations.begin(),state->allocations.end(),[&](const auto &allocation) {
@@ -1887,6 +1912,7 @@ void NativeProcess::discard_memory(uint64_t address, size_t size)
 
 void NativeProcess::map_image(LoadedImage &image)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	const auto base = image.base();
 	const auto size = image.data().size();
@@ -1938,6 +1964,7 @@ void NativeProcess::map_image(LoadedImage &image)
 
 void NativeProcess::unmap_image(uint64_t address)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_memory();
 	const auto owned = std::find_if(state->image_allocations.begin(), state->image_allocations.end(), [&](const auto &image) {
 		return image.first == address;
@@ -2067,6 +2094,7 @@ uint64_t NativeProcess::thread_base() const
 		static thread_local const uint64_t *block = nullptr;
 		static thread_local uint64_t base = 0;
 		if (block != waiting.block) {
+			std::lock_guard memory(state->memory_lock);
 			const auto found = state->served_owners.find(waiting.block);
 			if (found == state->served_owners.end())
 				throw std::runtime_error("a waiting call has no thread-block owner");
@@ -2736,6 +2764,7 @@ void NativeProcess::install_segment(uint32_t entry, uint64_t base)
 
 void NativeProcess::add_api_trap(uint64_t address, uint32_t callee_cleanup)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_stopped();
 	// Traps are registered by the thousand, mostly next to each other: the page around one is read once for those that follow.
 	const auto byte_at = [&](uint64_t at) {
@@ -2765,6 +2794,7 @@ void NativeProcess::add_api_trap(uint64_t address, uint32_t callee_cleanup)
 
 void NativeProcess::add_api_traps(std::map<uint64_t, ApiTrap> traps)
 {
+	std::lock_guard memory(state->memory_lock);
 	state->require_stopped();
 	if (state->api_traps.empty())
 		state->api_traps = std::move(traps);
@@ -3321,10 +3351,14 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 		}
 		return {NativeStop::returned, x86 ? registers.rax & 0xffffffff : registers.rax, registers.rip, signal};
 	}
-	if (breakpoint && state->api_traps.contains(registers.rip - 1)) {
-		state->awaiting_api = true;
-		state->pending_cleanup = state->api_traps.at(registers.rip - 1).cleanup;
-		return {NativeStop::api, registers.rip - 1, registers.rip, signal};
+	if (breakpoint) {
+		std::unique_lock memory(state->memory_lock);
+		if (const auto trap = state->api_traps.find(registers.rip - 1); trap != state->api_traps.end()) {
+			state->pending_cleanup = trap->second.cleanup;
+			memory.unlock();
+			state->awaiting_api = true;
+			return {NativeStop::api, registers.rip - 1, registers.rip, signal};
+		}
 	}
 	const uint64_t fault_address = signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE ?
 		reinterpret_cast<uint64_t>(info.si_addr) : 0;
@@ -3357,6 +3391,7 @@ void NativeProcess::set_guest_sampler(std::chrono::milliseconds period, std::fun
 
 void NativeProcess::make_served_block(uint64_t teb, uint64_t &guest, uint64_t *&host)
 {
+	std::lock_guard memory(state->memory_lock);
 	const int descriptor = memfd_create("raven-thread-calls", MFD_CLOEXEC);
 	if (descriptor < 0)
 		throw std::runtime_error("cannot create thread call block");
@@ -3382,6 +3417,7 @@ void NativeProcess::make_served_block(uint64_t teb, uint64_t &guest, uint64_t *&
 
 uint64_t NativeProcess::serving_teb() const
 {
+	std::lock_guard memory(state->memory_lock);
 	if (!state->serving) return 0;
 	if (!parallel()) return state->thread_teb;
 	const auto found = state->served_owners.find(state->thread_served_block);
@@ -3521,8 +3557,13 @@ bool NativeProcess::drain_queued_calls(bool all)
 		// producer's TLS, so flush every thread before a synchronous operation can observe their commands.
 		auto *current = state->thread_served_block;
 		bool drained = false;
+		// The handlers may change the guest's memory, so they run on a copy of the list, without the lock.
+		const auto blocks = [&] {
+			std::lock_guard memory(state->memory_lock);
+			return state->queued_blocks;
+		}();
 		try {
-			for (const auto &[guest, block] : state->queued_blocks) {
+			for (const auto &[guest, block] : blocks) {
 				(void)guest;
 				if (__atomic_load_n(&block[ServedQueue::head], __ATOMIC_ACQUIRE) == block[ServedQueue::tail])
 					continue;
@@ -3759,7 +3800,12 @@ void NativeProcess::return_api(uint64_t value)
 		return;
 	}
 	// Stopped right after a breakpoint that a RET follows: the guest returns by itself.
-	if (const auto trap = state->api_traps.find(registers.rip - 1); trap != state->api_traps.end() && trap->second.returns) {
+	const bool returns = [&] {
+		std::lock_guard memory(state->memory_lock);
+		const auto trap = state->api_traps.find(registers.rip - 1);
+		return trap != state->api_traps.end() && trap->second.returns;
+	}();
+	if (returns) {
 		registers.rax = value;
 		registers.orig_rax = uint64_t(-1);
 		trace(PTRACE_SETREGS, state->child->pid, &registers);

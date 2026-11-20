@@ -465,6 +465,29 @@ static uint32_t error(uint32_t status)
 	return 87;
 }
 
+std::optional<uint64_t> NativeMemory::serve_alone(std::string_view name, const uint64_t *arguments)
+{
+	const bool alloc=name=="VirtualAlloc";
+	if ((!alloc && name!="VirtualFree") || !process.memory_beside())
+		return std::nullopt;
+	// A request that fails changes nothing, so one that cannot be finished here is made again in the turn.
+	NativeMemoryRange operation;
+	try {
+		operation=alloc ? allocate(arguments[0],arguments[1],uint32_t(arguments[2]),uint32_t(arguments[3])) :
+			free(arguments[0],arguments[1],uint32_t(arguments[2]));
+	} catch (...) {
+		return std::nullopt;
+	}
+	static const bool trace=std::getenv("RAVEN_TRACE_MEMORY")!=nullptr;
+	if (trace)
+		std::fprintf(stderr,"mem %.*s beside [%llx %llx %llx %llx] status %x result %llx\n",int(name.size()),name.data(),
+			(unsigned long long)arguments[0],(unsigned long long)arguments[1],(unsigned long long)arguments[2],
+			(unsigned long long)(alloc ? arguments[3] : 0),operation.status,(unsigned long long)operation.address);
+	if (operation.status)
+		return environment.set_own_last_error(error(operation.status)) ? std::optional<uint64_t>(0) : std::nullopt;
+	return alloc ? operation.address : 1;
+}
+
 bool NativeMemory::dispatch(std::string_view name)
 {
 	std::lock_guard lock(guard);
