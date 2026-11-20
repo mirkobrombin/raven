@@ -1,4 +1,5 @@
 #include "providers.h"
+#include "desktop_lock.h"
 #include "child_process.h"
 #include "handle_channel.h"
 #include "warm_host.h"
@@ -204,8 +205,20 @@ static bool served_api(std::string_view module, std::string_view name)
 // under each file's lock (see read_beside), VirtualQuery, VirtualAlloc, VirtualFree and VirtualProtect under the memory accounting's
 // lock (see NativeMemory::serve_alone), and the events made and the handles closed under the handle table's lock (see
 // NativeObjects::close_alone).
+// Window data and properties a thread changes beside the turn under the desktop lock (see DesktopLock): changes that send no message and
+// start no drawing. SetWindowLongPtr is answered beside the turn for the user data, the identifier and the extra bytes; the indexes that
+// notify the window go the usual way.
+static bool desktop_beside_api(std::string_view name)
+{
+	static constexpr std::array<std::string_view, 8> names{"SetPropW", "SetPropA", "RemovePropW", "RemovePropA", "SetWindowLongPtrW",
+		"SetWindowLongPtrA", "SetWindowLongW", "SetWindowLongA"};
+	return std::find(names.begin(), names.end(), name) != names.end();
+}
+
 static bool beside_api(std::string_view module, std::string_view name)
 {
+	if (module == "user32.dll")
+		return desktop_beside_api(name);
 	static constexpr std::array<std::string_view, 12> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
 		"GetFileSizeEx", "VirtualQuery", "VirtualAlloc", "VirtualFree", "VirtualProtect", "CreateEventW", "CloseHandle"};
 	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
@@ -2787,9 +2800,12 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	desktop.set_updated([&](uint64_t window,const DesktopRect *area) { windows.drawing(window,area); });
 #ifdef RAVEN_VULKAN
 	VulkanBridge vulkan(process, modules);
-	vulkan.set_surface_source({[&windows](uint64_t window) { return windows.host_surface(window,true); },
-		[&windows](uint64_t window) { windows.release_host_surface(window); },
-		[&windows](uint64_t window) { return windows.client_size(window); }, [&windows](uint64_t window) { return windows.shown(window); },
+	// The bridge asks for a window's surface from calls served beside the turn and from its present threads too: each takes the desktop
+	// lock.
+	vulkan.set_surface_source({[&windows](uint64_t window) { const DesktopScope desktop_scope; return windows.host_surface(window,true); },
+		[&windows](uint64_t window) { const DesktopScope desktop_scope; windows.release_host_surface(window); },
+		[&windows](uint64_t window) { const DesktopScope desktop_scope; return windows.client_size(window); },
+		[&windows](uint64_t window) { const DesktopScope desktop_scope; return windows.shown(window); },
 		windows.host_platform()});
 #endif
 	const auto remaining = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()); };
@@ -2798,6 +2814,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	NativeThreads *threads_ptr=nullptr;
 	auto last_service=std::chrono::steady_clock::now();
 	const auto invoke = [&](uint64_t address, std::span<const uint64_t> arguments) {
+		// The guest code runs without the desktop lock, as Windows leaves USER over a callback; the calls it makes take it again.
+		const DesktopRelease desktop_release;
 		auto budget = remaining();
 		if (budget.count() <= 0)
 			return NativeResult{NativeStop::timeout, 0, address, 0};
@@ -3025,9 +3043,17 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 			bool dispatched;
 			api_in_progress = api_name.c_str();
-			windows.apply_dc_log();
-			windows.take_deferred([&desktop](uint32_t operation, uint64_t handle) { desktop.apply_deferred(operation, handle); });
-			windows.screen_dc_use(api_name);
+			// A Vulkan call takes the desktop lock itself where it reaches a window (see set_surface_source): it waits for the device
+			// and for the bridge's own threads, which take the lock too, so it neither holds the lock nor takes it for the desktop's
+			// bookkeeping, which the next call that reaches the desktop does.
+			const bool graphics_call = api_name.starts_with("vk");
+			std::optional<DesktopScope> desktop_scope;
+			if (!graphics_call) {
+				desktop_scope.emplace();
+				windows.apply_dc_log();
+				windows.take_deferred([&desktop](uint32_t operation, uint64_t handle) { desktop.apply_deferred(operation, handle); });
+				windows.screen_dc_use(api_name);
+			}
 			const auto profile_start = RuntimeProfile::instance().enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			static const bool trace_failures = std::getenv("RAVEN_TRACE_FAIL");
 			const auto error_before = trace_failures ? environment.last_error() : 0;
@@ -3035,7 +3061,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			try {
 				if (kernel_ptr && kernel_ptr->leave_abandoned_callbacks && process.callback_depth() > 0)
 					kernel_ptr->leave_abandoned_callbacks();
-				const WindowCallScope window_scope(windows);
+				std::optional<WindowCallScope> window_scope;
+				if (!graphics_call)
+					window_scope.emplace(windows);
 				// The generalized desktop services come first so that they replace the older narrow ones.
 				dispatched = desktop_api.dispatch(process, environment, api_name) || environment.dispatch(api_name) || module_api.dispatch(api_name) || resources.dispatch(api_name) || memory.dispatch(api_name) || object_api.dispatch(api_name) || heap.dispatch(api_name) || desktop.dispatch(api_name) || windows.dispatch(api_name) || api_registry.dispatch(process, environment, api_name)
 #ifdef RAVEN_VULKAN
@@ -3186,15 +3214,20 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	threads.set_watched([reactor = kernel.reactor](std::vector<pollfd> &descriptors) { reactor->watch(descriptors); });
 	windows.set_global_allocator([&allocator](uint64_t size) { return allocator.allocate(size,true); });
 	windows.set_global_data([&allocator](uint64_t handle) { return allocator.data(handle); });
-	kernel.queue_status=[&windows](uint32_t thread,uint32_t mask,bool clear) { return windows.queue_status(thread,mask,clear); };
-	kernel.queue_quiet=[&windows](uint32_t thread) { windows.mark_quiet(thread); };
-	kernel.present_frames=[&windows] { return windows.present_frames(); };
+	// The scheduler looks at a waiting thread's condition after the thread gave the desktop lock up with the runtime: what looks at the
+	// windows' queues takes it again.
+	kernel.queue_status=[&windows](uint32_t thread,uint32_t mask,bool clear) {
+		const DesktopScope desktop_scope;
+		return windows.queue_status(thread,mask,clear);
+	};
+	kernel.queue_quiet=[&windows](uint32_t thread) { const DesktopScope desktop_scope; windows.mark_quiet(thread); };
+	kernel.present_frames=[&windows] { const DesktopScope desktop_scope; return windows.present_frames(); };
 	windows.set_block([&threads](std::function<bool()> ready) {
 		HostWait waiting;
-		threads.block(std::move(ready), std::nullopt, false, false, true);
+		threads.block([ready = std::move(ready)] { const DesktopScope desktop_scope; return ready(); }, std::nullopt, false, false, true);
 	});
 	windows.set_tell([&threads](uint32_t thread) { threads.tell(thread); });
-	threads.add_end_listener([&windows](uint32_t thread) { windows.thread_ended(thread); });
+	threads.add_end_listener([&windows](uint32_t thread) { const DesktopScope desktop_scope; windows.thread_ended(thread); });
 #ifdef RAVEN_VULKAN
 	vulkan.set_blocking([&threads](std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake) {
 		HostWait waiting;
@@ -3348,7 +3381,15 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const uint64_t table_guest = process.map_shared(table_file, table_size);
 	close(table_file);
 	windows.set_window_table(table);
-	process.set_resume_hook([&windows] { windows.publish_windows(); });
+	// Every change to the desktop is made under its lock, and the guest's drawing log is the one thing written beside it: with neither
+	// since the last publish there is nothing to write, and a thread that only draws with Vulkan does not take the lock at all.
+	process.set_resume_hook([&windows, published = std::make_shared<std::atomic<uint64_t>>(0)] {
+		if (desktop_lock().entries() == published->load(std::memory_order_acquire) && !windows.drawing_logged())
+			return;
+		const DesktopScope desktop_scope;
+		published->store(desktop_lock().entries(), std::memory_order_release);
+		windows.publish_windows();
+	});
 	__atomic_store_n(&served_block[window_table / 8], table_guest, __ATOMIC_RELEASE);
 	// The locale table follows the window table.
 	const auto locales = locale_table();
@@ -3431,7 +3472,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty() ||
 		!beside_names.empty()))
 		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, &memory, event_stubs, address_stubs,
-			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_api](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
 			// A call of a subsystem with a lock of its own runs its usual handler here; the arguments past the four in registers are on the
 			// guest's stack above their home space.
 			if (const auto named = beside_names.find(stub); named != beside_names.end()) {
@@ -3451,7 +3492,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					}
 					return 48;
 				}
-				const auto entry = api_registry.find(named->second);
+				// The window manager's handlers are the desktop's registry; the others are the runtime's.
+				const bool desktop_call = desktop_beside_api(named->second);
+				const auto entry = (desktop_call ? desktop_api : api_registry).find(named->second);
 				if (!entry)
 					return std::nullopt;
 				const uint32_t count = entry->first;
@@ -3462,6 +3505,19 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						return std::nullopt;
 				}
 				words.resize(count);
+				// A change of the desktop's state holds its lock, and what it changed is published as the call ends, for the guest's
+				// own answers to read.
+				if (desktop_call && named->second.starts_with("SetWindowLong")) {
+					const int32_t index = int32_t(uint32_t(words[1]));
+					if (index < 0 && index != -21 && index != -12)
+						return std::nullopt;
+				}
+				std::optional<DesktopScope> desktop_scope;
+				std::optional<WindowCallScope> window_scope;
+				if (desktop_call) {
+					desktop_scope.emplace();
+					window_scope.emplace(windows);
+				}
 				ApiCall call(process, environment, std::move(words));
 				call.alone = true;
 				try {
@@ -3589,11 +3645,18 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			throw std::runtime_error("a served call came from an unknown stub");
 		const ServedThreadScope thread_scope(environment, process.serving_teb());
 		api_in_progress = found->second.c_str();
-		// Deferred releases wait for a stop of the guest: releasing a DIB section unmaps guest memory, which a running guest cannot have
-		// done to it.
-		windows.apply_dc_log();
-		windows.screen_dc_use(found->second);
-		const WindowCallScope window_scope(windows);
+		// A Vulkan call leaves the desktop alone, as in the trap path.
+		const bool graphics_call = found->second.starts_with("vk");
+		std::optional<DesktopScope> desktop_scope;
+		std::optional<WindowCallScope> window_scope;
+		if (!graphics_call) {
+			desktop_scope.emplace();
+			// Deferred releases wait for a stop of the guest: releasing a DIB section unmaps guest memory, which a running guest cannot
+			// have done to it.
+			windows.apply_dc_log();
+			windows.screen_dc_use(found->second);
+			window_scope.emplace(windows);
+		}
 		const auto profile_start = RuntimeProfile::instance().enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		const bool dispatched = api_registry.dispatch(process, environment, found->second)
 #ifdef RAVEN_VULKAN

@@ -2,6 +2,7 @@
 #include "kernel_waits.h"
 #include "cpu/agent_tasks.h"
 #include "cpu/call_cycles.h"
+#include "desktop_lock.h"
 
 #include <cstdlib>
 #include <fcntl.h>
@@ -1124,6 +1125,7 @@ void NativeThreads::moved()
 
 void NativeThreads::install(GuestThread &me)
 {
+	desktop_lock().resume(std::exchange(me.desktop_depth, 0u));
 	me.turns.fetch_add(1, std::memory_order_relaxed);
 	moved();
 	running = &me;
@@ -1393,6 +1395,9 @@ void NativeThreads::wake_ready(GuestThread *except, bool all)
 
 void NativeThreads::leave(GuestThread &me, bool save)
 {
+	// The desktop lock is only ever taken after the runtime: whoever gives the runtime up gives the lock up with it.
+	if (const unsigned held = desktop_lock().suspend())
+		me.desktop_depth = held;
 	const auto now = std::chrono::steady_clock::now();
 	if (save && !process.gone())
 		me.snapshot = process.save_thread(false);
