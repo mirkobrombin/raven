@@ -3795,7 +3795,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set(parallel_base 0x19980000)
             endif()
             if(parallel_compiler)
-                foreach(kind guest suspend remote lifecycle served wait)
+                foreach(kind guest suspend remote lifecycle served wait cycles)
                     set(parallel_client ${CMAKE_CURRENT_BINARY_DIR}/parallel-${kind}${width}.exe)
                     add_custom_command(OUTPUT ${parallel_client}
                         COMMAND ${parallel_compiler} -O2 -nostdlib -fno-builtin -fno-stack-protector
@@ -3803,7 +3803,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             -o ${parallel_client} ${LOADER_SOURCES}/parallel_${kind}_client.c -lkernel32
                         DEPENDS ${LOADER_SOURCES}/parallel_${kind}_client.c VERBATIM)
                     list(APPEND PARALLEL_CLIENTS ${parallel_client})
-                    if(kind STREQUAL lifecycle)
+                    if(kind STREQUAL cycles AND width EQUAL 64)
+                        # What threads that call at once cost, by RAVEN_CYCLES: served stubs are those of 64-bit providers.
+                        if(Python3_Interpreter_FOUND)
+                            add_test(NAME native_parallel_${kind}_x${width} COMMAND ${Python3_EXECUTABLE}
+                                ${PROJECT_SOURCE_DIR}/scripts/native-call-cycles.py $<TARGET_FILE:raven> ${parallel_client})
+                        endif()
+                    elseif(kind STREQUAL lifecycle)
                         if(Python3_Interpreter_FOUND)
                             set(parallel_sampling)
                             if(width EQUAL 64)
@@ -3817,7 +3823,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             --timeout-ms=12000 ${parallel_client})
                         set_tests_properties(native_parallel_${kind}_x${width} PROPERTIES PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     endif()
-                    if(NOT kind STREQUAL lifecycle OR Python3_Interpreter_FOUND)
+                    if(NOT (kind STREQUAL lifecycle OR (kind STREQUAL cycles AND width EQUAL 64)) OR Python3_Interpreter_FOUND)
                         set_tests_properties(native_parallel_${kind}_x${width} PROPERTIES TIMEOUT 30
                             ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-${kind}-prefix${width}")
                     endif()
