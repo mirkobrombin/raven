@@ -36,6 +36,19 @@ bool brokered_address(std::string_view address);
 // Opens host files and addresses with an exposed Linux program through the broker.
 bool brokered_host(std::string_view name, const std::vector<std::string> &targets);
 
+// A runtime started by a confined runtime runs inside that confinement too, whatever its own, and so does any broker it starts: what only
+// the host can do, starting a Linux program or opening an address, goes to the broker of the outermost confined runtime instead, over a
+// channel each runtime hands the runtimes it starts. A new channel to that broker for a runtime about to start, or -1 when this runtime
+// runs in no confinement, so that what it starts reaches the host itself.
+int host_broker_channel();
+// Takes the channel the runtime that started this one handed it.
+void adopt_host_broker(int descriptor);
+bool host_brokered();
+// Through that channel: opens host files and addresses with an exposed Linux program for the program `caller` (UTF-8), which the broker
+// checks the targets against together with its own program, and opens a web or mail address.
+bool forwarded_host(std::string_view name, const std::vector<std::string> &targets, std::string_view caller);
+bool forwarded_address(std::string_view address);
+
 // Whether a program image is one of the runtime's trusted programs: its control panel or its file dialog, in the runtime's own folder.
 bool trusted_image(const std::filesystem::path &image);
 

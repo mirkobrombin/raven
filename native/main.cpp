@@ -287,6 +287,7 @@ int main(int argc, char **argv)
 		}
 		else if (option.starts_with("--inherit-fd=")) inherit_fd=std::atoi(std::string(option.substr(13)).c_str());
 		else if (option.starts_with("--handle-channel-fd=")) handle_channel_fd=std::atoi(std::string(option.substr(20)).c_str());
+		else if (option.starts_with("--host-broker-fd=")) raven::adopt_host_broker(std::atoi(std::string(option.substr(17)).c_str()));
 		else if (option.starts_with("--diagnostics-fd=")) {
 			// The runtime's own messages go where the parent runtime writes its own; the program's standard error moves out of their way
 			// to a descriptor of its own, so nothing the runtime says ever lands in a pipe the program reads.

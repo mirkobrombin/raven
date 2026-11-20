@@ -57,8 +57,10 @@ static bool reaches(const sockaddr_un &address, socklen_t length)
 
 // A runtime the confined one starts, as a program of its own: it confines itself in turn and opens a document with a Linux program of
 // the prefix. It holds nothing of the runtime that started it but the channel it was handed, as a runtime started by exec does.
-static int inner_runtime(const std::filesystem::path &root, const char *)
+static int inner_runtime(const std::filesystem::path &root, const char *channel)
 {
+	if (channel)
+		raven::adopt_host_broker(std::atoi(channel));
 	raven::sandbox().set_program(u"C:\\Program Files\\Raven\\Host\\Viewer.exe");
 	raven::sandbox().set_parent(u"C:\\Tools\\Editor.exe");
 	raven::sandbox().load(root / "prefix");
@@ -180,14 +182,18 @@ int main(int count, char **arguments)
 	// A runtime started inside the confinement opens a document with a Linux program of the prefix: its own broker is inside the
 	// confinement, so the broker outside it starts the program, for the program that asked as for this one.
 	std::ofstream(root / "prefix/sandbox.conf", std::ios::app) << "host-app Viewer\tviewer\n";
+	const int channel = raven::host_broker_channel();
+	check(channel >= 0, "the broker hands no channel to a runtime started inside the confinement");
 	const pid_t inner = ::fork();
 	if (inner == 0) {
-		const std::string tree = root.string();
-		::execl(self, self, "--inner", tree.c_str(), nullptr);
+		::fcntl(channel, F_SETFD, 0);
+		const std::string tree = root.string(), handed = std::to_string(channel);
+		::execl(self, self, "--inner", tree.c_str(), handed.c_str(), nullptr);
 		std::_Exit(127);
 	}
 	int inner_status = 0;
 	::waitpid(inner, &inner_status, 0);
+	::close(channel);
 	check(WIFEXITED(inner_status) && !WEXITSTATUS(inner_status), "the inner runtime failed");
 	std::cout << "confined\n";
 	return 0;

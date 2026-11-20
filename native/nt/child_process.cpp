@@ -290,6 +290,13 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 		owned.push_back(channel_pair[1]);
 		arguments.push_back("--handle-channel-fd=" + std::to_string(pass(channel_pair[1])));
 	}
+	// A runtime this one starts itself runs inside its confinement, and gets a channel to the broker outside it; a trusted program the
+	// broker starts runs outside and needs none.
+	const bool brokered = confined() && trusted_image(launch.image);
+	if (const int channel = brokered ? -1 : host_broker_channel(); channel >= 0) {
+		owned.push_back(channel);
+		arguments.push_back("--host-broker-fd=" + std::to_string(pass(channel)));
+	}
 	for (auto &option : sandbox().child_options())
 		arguments.push_back(std::move(option));
 	arguments.push_back("--command-line=" + to_utf8(launch.command_line));
@@ -303,7 +310,7 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 	pid_t child = 0;
 	int status = 0, brokered_process = -1;
 	// A trusted program sees the whole host: a confined runtime has the broker start it, outside the confinement.
-	if (confined() && trusted_image(launch.image)) {
+	if (brokered) {
 		std::vector<std::pair<int, int>> descriptors;
 		for (const auto &item : passes)
 			descriptors.emplace_back(item.source, item.target);
