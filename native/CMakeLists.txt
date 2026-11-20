@@ -3901,6 +3901,20 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         set_tests_properties(native_parallel_${kind}_x${width} PROPERTIES TIMEOUT 90)
                     endif()
                 endforeach()
+                # Threads that call USER and GDI at once, each on a window of its own, and what RAVEN_CYCLES reports for them.
+                if(width EQUAL 64 AND Python3_Interpreter_FOUND)
+                    set(parallel_desktop_client ${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop${width}.exe)
+                    add_custom_command(OUTPUT ${parallel_desktop_client}
+                        COMMAND ${parallel_compiler} -O2 -nostdlib -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${parallel_entry},--image-base,${parallel_base},--disable-dynamicbase,--no-insert-timestamp
+                            -o ${parallel_desktop_client} ${LOADER_SOURCES}/parallel_desktop_client.c -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/parallel_desktop_client.c VERBATIM)
+                    list(APPEND PARALLEL_CLIENTS ${parallel_desktop_client})
+                    add_test(NAME native_parallel_desktop_x${width} COMMAND ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/scripts/native-desktop-cycles.py $<TARGET_FILE:raven> ${parallel_desktop_client})
+                    set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
+                        ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
+                endif()
             endif()
         endforeach()
         add_custom_target(parallel_fixtures ALL DEPENDS ${PARALLEL_CLIENTS})

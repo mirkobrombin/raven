@@ -125,7 +125,8 @@ private:
 		const auto per = [](uint64_t total, uint64_t count) { return (unsigned long long)(count ? total / count : 0); };
 		std::fprintf(stderr, "cycles: %llu calls, %llu beside the turn, per call boundary %llu turn %llu service %llu return %llu\n",
 			(unsigned long long)count, (unsigned long long)beside, per(boundary, count), per(turn, count), per(service, count), per(back, returns));
-		for (size_t index = 0; index < order.size() && index < 12; ++index) {
+		// The costliest dozen while the program runs; every call in the report the run ends with.
+		for (size_t index = 0; index < order.size() && (ending || index < 12); ++index) {
 			const auto &entry = calls[order[index].second];
 			const auto name = names.find(order[index].second);
 			std::fprintf(stderr, "cycles:   %-32s %8llu calls %8llu beside  boundary %7llu  turn %9llu  service %9llu  return %7llu\n",
