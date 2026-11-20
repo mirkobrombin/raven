@@ -2700,6 +2700,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(PEER_PROCESS_CLIENTS)
             set(RAW_DEVICE_CLIENTS)
             set(DIRECTORY_CLIENTS)
+            set(SET_INFORMATION_CLIENTS)
             foreach(width 64 32)
                 if(width EQUAL 64)
                     set(remote_compiler ${RAVEN_MINGW64})
@@ -2794,6 +2795,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_directory_x${width} COMMAND raven --run-process --execution=native ${directory_client})
                     set_tests_properties(native_directory_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/directory-prefix${width})
+                    set(set_information_client ${CMAKE_CURRENT_BINARY_DIR}/set-information${width}.exe)
+                    add_custom_command(OUTPUT ${set_information_client}
+                        COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${remote_entry},--no-insert-timestamp
+                            -o ${set_information_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/set_information_client.c -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/set_information_client.c VERBATIM)
+                    list(APPEND SET_INFORMATION_CLIENTS ${set_information_client})
+                    add_test(NAME native_set_information_x${width} COMMAND raven --run-process --execution=native ${set_information_client})
+                    set_tests_properties(native_set_information_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/set-information-prefix${width})
                     add_test(NAME native_raw_device_x${width} COMMAND raven --run-process --execution=native ${raw_client})
                     set_tests_properties(native_raw_device_x${width} PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     add_test(NAME native_peer_process_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${peer_client})
@@ -2809,6 +2820,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_target(peer_process_fixtures ALL DEPENDS ${PEER_PROCESS_CLIENTS})
             add_custom_target(raw_device_fixtures ALL DEPENDS ${RAW_DEVICE_CLIENTS})
             add_custom_target(directory_fixtures ALL DEPENDS ${DIRECTORY_CLIENTS})
+            add_custom_target(set_information_fixtures ALL DEPENDS ${SET_INFORMATION_CLIENTS})
             set(UCRT_IO_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/ucrt-io.exe)
             add_custom_command(OUTPUT ${UCRT_IO_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
