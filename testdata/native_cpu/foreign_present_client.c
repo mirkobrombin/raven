@@ -60,6 +60,9 @@ unsigned int raven_entry(void)
 	VkSemaphoreCreateInfo semaphore_info={VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 	VkSemaphore acquired=VK_NULL_HANDLE,finished=VK_NULL_HANDLE;
 	if (vkCreateSemaphore(device,&semaphore_info,0,&acquired)!=VK_SUCCESS || vkCreateSemaphore(device,&semaphore_info,0,&finished)!=VK_SUCCESS) return 13;
+	VkFenceCreateInfo fence_info={VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+	VkFence fence=VK_NULL_HANDLE;
+	if (vkCreateFence(device,&fence_info,0,&fence)!=VK_SUCCESS) return 13;
 	for (uint32_t frame=0;frame<2;++frame) {
 		if (frame) {
 			for (uint32_t wait=0;!control && wait<20000;++wait) Sleep(1);
@@ -75,14 +78,18 @@ unsigned int raven_entry(void)
 		VkImage images[16]; count=16;
 		if (vkGetSwapchainImagesKHR(device,swap,&count,images)!=VK_SUCCESS || !count) return 10;
 		uint32_t index=0;
-		if (vkAcquireNextImageKHR(device,swap,UINT64_MAX,acquired,0,&index)!=VK_SUCCESS) return 14;
+		/* The first frame: a semaphore tells that the image is acquired, and one that it is drawn. The second: a fence tells the
+		 * first, and the present waits for no semaphore. */
+		if (vkAcquireNextImageKHR(device,swap,UINT64_MAX,frame ? VK_NULL_HANDLE : acquired,frame ? fence : VK_NULL_HANDLE,&index)!=VK_SUCCESS) return 14;
+		if (frame && vkWaitForFences(device,1,&fence,VK_TRUE,UINT64_MAX)!=VK_SUCCESS) return 14;
 		if (vkResetCommandBuffer(command,0)!=VK_SUCCESS) return 22;
 		VkCommandBufferBeginInfo begin={VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
 		if (vkBeginCommandBuffer(command,&begin)!=VK_SUCCESS) return 15;
 		VkImageMemoryBarrier barrier={VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,0,0,VK_ACCESS_TRANSFER_WRITE_BIT,
 			VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_QUEUE_FAMILY_IGNORED,VK_QUEUE_FAMILY_IGNORED,images[index],{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}};
 		vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,0,0,0,1,&barrier);
-		VkClearColorValue color={{0.25f,0.5f,0.75f,1}};
+		/* 128/255 and not 0.5: a driver may round a value halfway between two texel values either way. */
+		VkClearColorValue color={{0.25f,128/255.0f,0.75f,1}};
 		if (frame) { color.float32[0]=1; color.float32[1]=0.125f; color.float32[2]=0; }
 		vkCmdClearColorImage(command,images[index],VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&color,1,&barrier.subresourceRange);
 		barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask=0;
@@ -90,10 +97,10 @@ unsigned int raven_entry(void)
 		vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,0,0,0,0,0,1,&barrier);
 		if (vkEndCommandBuffer(command)!=VK_SUCCESS) return 16;
 		VkPipelineStageFlags stage=VK_PIPELINE_STAGE_TRANSFER_BIT;
-		VkSubmitInfo submit={VK_STRUCTURE_TYPE_SUBMIT_INFO,0,1,&acquired,&stage,1,&command,1,&finished};
-		if (vkQueueSubmit(queue,1,&submit,0)!=VK_SUCCESS) return 17;
+		VkSubmitInfo submit={VK_STRUCTURE_TYPE_SUBMIT_INFO,0,frame ? 0 : 1,&acquired,&stage,1,&command,frame ? 0 : 1,&finished};
+		if (vkQueueSubmit(queue,1,&submit,0)!=VK_SUCCESS || (frame && vkQueueWaitIdle(queue)!=VK_SUCCESS)) return 17;
 		VkResult presented=VK_ERROR_UNKNOWN;
-		VkPresentInfoKHR present={VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,0,1,&finished,1,&swap,&index,&presented};
+		VkPresentInfoKHR present={VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,0,frame ? 0 : 1,&finished,1,&swap,&index,&presented};
 		if (vkQueuePresentKHR(queue,&present)!=VK_SUCCESS || presented!=VK_SUCCESS || vkQueueWaitIdle(queue)!=VK_SUCCESS) return 18;
 		presented_frames=frame+1;
 	}
@@ -101,7 +108,8 @@ unsigned int raven_entry(void)
 	if (control!=2) return 23;
 	uint32_t lost=0;
 	if (vkAcquireNextImageKHR(device,swap,0,acquired,0,&lost)!=VK_ERROR_SURFACE_LOST_KHR) return 24;
-	vkDestroySemaphore(device,finished,0); vkDestroySemaphore(device,acquired,0);
+	if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical[0],surface,&caps)!=VK_ERROR_SURFACE_LOST_KHR) return 25;
+	vkDestroyFence(device,fence,0); vkDestroySemaphore(device,finished,0); vkDestroySemaphore(device,acquired,0);
 	vkDestroyCommandPool(device,pool,0); vkDestroySwapchainKHR(device,swap,0); vkDestroyDevice(device,0);
 	vkDestroySurfaceKHR(instance,surface,0); vkDestroyInstance(instance,0);
 	return 0;

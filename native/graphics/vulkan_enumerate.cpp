@@ -157,7 +157,6 @@ std::vector<VkExtensionProperties> offered(const std::vector<VkExtensionProperti
 
 bool VulkanBridge::host_extension_names(const std::vector<std::string> &guest, bool device, std::vector<std::string> &host) const
 {
-	const auto available = device ? std::vector<VkExtensionProperties>() : host_instance_extensions();
 	for (const auto &name : guest) {
 		bool found = false;
 		for (const auto &offer : device ? std::span<const Offer>(device_offers) : std::span<const Offer>(instance_offers))
@@ -169,14 +168,10 @@ bool VulkanBridge::host_extension_names(const std::vector<std::string> &guest, b
 				// A surface type needs the base surface extension next to it.
 				if (!device && std::strcmp(extension, "VK_KHR_surface") && std::find(host.begin(), host.end(), "VK_KHR_surface") == host.end())
 					host.push_back("VK_KHR_surface");
-				if (!device && name=="VK_KHR_win32_surface" && has(available,"VK_EXT_headless_surface") &&
-					std::find(host.begin(),host.end(),"VK_EXT_headless_surface")==host.end())
-					host.push_back("VK_EXT_headless_surface");
 			}
 		if (!found)
 			return false;
 	}
-	(void)available;
 	return true;
 }
 

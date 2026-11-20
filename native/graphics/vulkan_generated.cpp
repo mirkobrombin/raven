@@ -119,7 +119,7 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 		const bool hidden = window && surface_source.shown && !surface_source.shown(window);
 		const auto host = !hidden && surface_source.create ? surface_source.create(window) : std::nullopt;
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
-		bool foreign=false;
+		const bool own = !host && (hidden || foreign_window_size(window));
 		if (host) {
 			VkResult created = VK_ERROR_INITIALIZATION_FAILED;
 			if (host->platform == HostPlatform::wayland) {
@@ -139,18 +139,12 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			if (created != VK_SUCCESS && surface_source.release && !shared) {
 				surface_source.release(window);
 			}
-		} else if (hidden || foreign_window_size(window)) {
-			const auto create=reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(vkGetInstanceProcAddr(marshal.host_instance,"vkCreateHeadlessSurfaceEXT"));
-			if (create) {
-				VkHeadlessSurfaceCreateInfoEXT info{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
-				status=static_cast<uint32_t>(create(marshal.host_instance,&info,nullptr,&surface));
-				foreign=!hidden && status==VK_SUCCESS;
-			}
-		}
+		} else if (own) status = VK_SUCCESS;
 		if (status==VK_SUCCESS) {
-			const auto token=marshal.new_token(H::VkSurfaceKHR,reinterpret_cast<uint64_t>(surface));
+			const auto token=own ? next_handle++ : marshal.new_token(H::VkSurfaceKHR,reinterpret_cast<uint64_t>(surface));
+			if (own) generic.emplace(token,Generic{0,static_cast<uint8_t>(H::VkSurfaceKHR),0});
 			surface_windows.emplace(token,window); surface_instances.emplace(token,a[0]);
-			if (foreign) foreign_surfaces.insert(token);
+			if (own && !hidden) foreign_surfaces.insert(token);
 			if (hidden) hidden_surfaces.insert(token);
 			store<uint64_t>(a[3],token);
 		}
@@ -171,23 +165,52 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 		return true;
 	}
 	if (name == "vkGetPhysicalDeviceWin32PresentationSupportKHR") {
-		auto a = process.api_arguments(2);
-		a[1] = static_cast<uint32_t>(a[1]);
-		const auto found = physical.find(a[0]);
-		if (found == physical.end())
-			throw std::runtime_error("invalid Vulkan physical device handle");
-		uint32_t count = 0;
-		vkGetPhysicalDeviceQueueFamilyProperties(found->second.handle, &count, nullptr);
-		std::vector<VkQueueFamilyProperties> families(count);
-		vkGetPhysicalDeviceQueueFamilyProperties(found->second.handle, &count, families.data());
-		// Presentation goes through the host window the surface is created over; a family can present when it can draw.
-		process.return_api(a[1] < count && (families[a[1]].queueFlags & VK_QUEUE_GRAPHICS_BIT) ? VK_TRUE : VK_FALSE);
+		const auto a = process.api_arguments(2);
+		process.return_api(queue_family_draws(a[0], static_cast<uint32_t>(a[1])) ? VK_TRUE : VK_FALSE);
 		return true;
+	}
+	if (dispatch_own(name))
+		return true;
+	// An image bound over an image of a swapchain the bridge keeps takes that image's memory, as the driver never saw the swapchain.
+	// VkBindImageMemoryInfo: 40 bytes, pNext at 8; VkBindImageMemorySwapchainInfoKHR: swapchain at 16 and imageIndex at 24.
+	if (name == "vkBindImageMemory2" || name == "vkBindImageMemory2KHR") {
+		const auto a = process.api_arguments(3);
+		const uint32_t count = static_cast<uint32_t>(a[1]);
+		std::vector<std::optional<VkDeviceMemory>> over;
+		if (a[2] && count <= 4096) {
+			over.resize(count);
+			for (uint32_t index = 0; index < count; ++index) {
+				uint64_t next = load<uint64_t>(a[2] + uint64_t(index) * 40 + 8);
+				for (uint32_t depth = 0; next && depth < 64; ++depth, next = load<uint64_t>(next + 8))
+					if (load<uint32_t>(next) == VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR)
+						over[index] = own_image_memory(load<uint64_t>(next + 16), load<uint32_t>(next + 24));
+			}
+		}
+		if (std::any_of(over.begin(), over.end(), [](const auto &memory) { return memory.has_value(); })) {
+			Marshal marshal(*this, process);
+			marshal.context(H::VkDevice, a[0]);
+			auto *infos = decode_array_VkBindImageMemoryInfo(marshal, a[2], count);
+			for (uint32_t index = 0; index < count; ++index) {
+				if (!over[index])
+					continue;
+				infos[index].memory = *over[index];
+				infos[index].memoryOffset = 0;
+				// The binding's swapchain is one the driver does not know: the chain goes on without it.
+				for (auto **link = reinterpret_cast<VkBaseOutStructure **>(const_cast<void **>(&infos[index].pNext)); *link;)
+					if ((*link)->sType == VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR)
+						*link = (*link)->pNext;
+					else
+						link = &(*link)->pNext;
+			}
+			const auto device = reinterpret_cast<VkDevice>(marshal.host(H::VkDevice, a[0]));
+			process.return_api(static_cast<uint32_t>(marshal.proc<PFN_vkBindImageMemory2>("vkBindImageMemory2")(device, count, infos)));
+			return true;
+		}
 	}
 	// A Windows surface reports the client area of its window as its only extent and a swapchain of another size is out of date.
 	// The window's size stands in for the extent of the host surface, which a Wayland surface does not have.
 	if (name == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR" || name == "vkCreateSwapchainKHR" || name == "vkAcquireNextImageKHR" ||
-		name == "vkQueuePresentKHR") {
+		name == "vkAcquireNextImage2KHR" || name == "vkQueuePresentKHR") {
 		const auto arguments = process.api_arguments(name == "vkAcquireNextImageKHR" ? 6 : name == "vkCreateSwapchainKHR" ? 4 : 3);
 		std::array<uint64_t, 4> floating{};
 		try { floating = process.api_float_arguments(); } catch (const std::runtime_error &) {}
@@ -201,7 +224,12 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 		};
 		uint64_t result = 0;
 		if (name == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR") {
-			result = cmd_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(*this, marshal, arguments, floating);
+			if (!own_surface(arguments[1]))
+				result = cmd_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(*this, marshal, arguments, floating);
+			else if (window_size(arguments[1]))
+				marshal.store(arguments[2], own_surface_capabilities());
+			else
+				result = static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR);
 			if (static_cast<int32_t>(result) == VK_SUCCESS)
 				if (const auto size = window_size(arguments[1])) {
 					// VkSurfaceCapabilitiesKHR: minImageCount, maxImageCount, then currentExtent, minImageExtent and maxImageExtent.
@@ -212,19 +240,13 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 				}
 		} else if (name == "vkCreateSwapchainKHR") {
 			const auto surface=load<uint64_t>(arguments[1]+24);
-			if (foreign_surfaces.contains(surface)) {
+			if (own_surface(surface)) {
 				marshal.context(H::VkDevice,arguments[0]);
 				marshal.require_null(arguments[2]); marshal.check_writable(arguments[3],8);
-				auto *info=decode_array_VkSwapchainCreateInfoKHR(marshal,arguments[1],1);
-				info->imageUsage|=VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-				VkSwapchainKHR swapchain=VK_NULL_HANDLE;
-				auto status=vkCreateSwapchainKHR(marshal.host_device,info,nullptr,&swapchain);
-				if (status==VK_SUCCESS) {
-					const auto token=marshal.new_token(H::VkSwapchainKHR,reinterpret_cast<uint64_t>(swapchain));
-					status=prepare_foreign_swapchain(token,arguments[0],swapchain,*info,surface_windows.at(surface));
-					if (status==VK_SUCCESS) store<uint64_t>(arguments[3],token);
-					else { vkDestroySwapchainKHR(marshal.host_device,swapchain,nullptr); marshal.forget(token); }
-				}
+				const auto *info=decode_array_VkSwapchainCreateInfoKHR(marshal,arguments[1],1);
+				uint64_t token=0;
+				const auto status=create_own_swapchain(arguments[0],*info,surface_windows.at(surface),foreign_surfaces.contains(surface),token);
+				if (status==VK_SUCCESS) store<uint64_t>(arguments[3],token);
 				result=static_cast<uint32_t>(status);
 			} else result = cmd_vkCreateSwapchainKHR(*this, marshal, arguments, floating);
 			if (static_cast<int32_t>(result) == VK_SUCCESS) {
@@ -232,12 +254,19 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 				const auto token = load<uint64_t>(arguments[3]);
 				swapchains[token] = {load<uint64_t>(arguments[1] + 24), load<uint32_t>(arguments[1] + 44), load<uint32_t>(arguments[1] + 48)};
 			}
-		} else if (name == "vkAcquireNextImageKHR") {
-			const auto swap=swapchains.find(arguments[1]);
+		} else if (name == "vkAcquireNextImageKHR" || name == "vkAcquireNextImage2KHR") {
+			// vkAcquireNextImage2KHR names the swapchain, timeout, semaphore and fence in VkAcquireNextImageInfoKHR, at 16, 24, 32 and
+			// 40; the device mask names the one physical device a device of the bridge has.
+			const bool second = name == "vkAcquireNextImage2KHR";
+			const auto field = [&](size_t place, uint64_t offset) { return second ? load<uint64_t>(arguments[1] + offset) : arguments[place]; };
+			const auto swapchain = field(1, 16);
+			const auto swap=swapchains.find(swapchain);
 			const bool lost=swap!=swapchains.end() && ((foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface)) ||
 				hidden_surface_lost(swap->second.surface));
-			result = lost ? static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR) : swapchain_stale(arguments[1]) ? static_cast<uint32_t>(VK_ERROR_OUT_OF_DATE_KHR)
-				: cmd_vkAcquireNextImageKHR(*this, marshal, arguments, floating);
+			result = lost ? static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR) : swapchain_stale(swapchain) ? static_cast<uint32_t>(VK_ERROR_OUT_OF_DATE_KHR)
+				: foreign_swapchains.contains(swapchain) ? static_cast<uint32_t>(acquire_own_image(marshal, arguments[0], swapchain, field(2, 24),
+					field(3, 32), field(4, 40), second ? arguments[2] : arguments[5]))
+				: second ? cmd_vkAcquireNextImage2KHR(*this, marshal, arguments, floating) : cmd_vkAcquireNextImageKHR(*this, marshal, arguments, floating);
 		} else {
 			marshal.context(H::VkQueue,arguments[0]);
 			if (load<uint32_t>(arguments[1]+32)>4096 || load<uint32_t>(arguments[1]+16)>4096)
@@ -245,17 +274,21 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			auto *info=decode_array_VkPresentInfoKHR(marshal,arguments[1],1);
 			const auto results=load<uint64_t>(arguments[1]+56);
 			if (results) marshal.check_writable(results,size_t(info->swapchainCount)*4);
-			const auto foreign=present_foreign(arguments[0],*info);
+			if (info->swapchainCount && !info->pImageIndices)
+				throw std::runtime_error("Vulkan present has no image indices");
+			// VkPresentInfoKHR: pSwapchains at 40.
+			const auto list = load<uint64_t>(arguments[1] + 40);
+			std::vector<uint64_t> tokens(info->swapchainCount);
+			for (uint32_t index = 0; index < info->swapchainCount; ++index)
+				tokens[index] = load<uint64_t>(list + uint64_t(index) * 8);
+			const auto foreign=present_foreign(arguments[0],*info,tokens);
 			const auto host_queue=queues.at(arguments[0]).handle;
-			result=static_cast<uint32_t>(foreign ? *foreign : detached([&] {
+			result=static_cast<uint32_t>(foreign ? *foreign : detached_present(host_queue,[&] {
 				return vkQueuePresentKHR(host_queue,info);
 			}));
 			if (static_cast<int32_t>(result) == VK_SUCCESS) {
-				// VkPresentInfoKHR: swapchainCount at 32 and pSwapchains at 40.
-				const auto count = load<uint32_t>(arguments[1] + 32);
-				const auto list = load<uint64_t>(arguments[1] + 40);
-				for (uint32_t index = 0; index < count; ++index) {
-					const auto token=load<uint64_t>(list+uint64_t(index)*8);
+				for (uint32_t index = 0; index < info->swapchainCount; ++index) {
+					const auto token=tokens[index];
 					const auto swap=swapchains.find(token);
 					const bool lost=swap!=swapchains.end() && ((foreign_surfaces.contains(swap->second.surface) &&
 						!window_size(swap->second.surface)) || hidden_surface_lost(swap->second.surface));
