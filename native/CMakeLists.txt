@@ -3451,7 +3451,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/hidden_present_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
                 add_custom_target(vulkan_hidden_present64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/hidden-present64.exe)
                 add_dependencies(vulkan_hidden_present64_fixture vulkan_import64)
-                add_test(NAME native_vulkan_hidden_present_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/hidden-present64.exe)
+                add_test(NAME native_vulkan_hidden_present_x64 COMMAND raven --run-process --execution=native --timeout-ms=20000 ${VULKAN_FIXTURES}/hidden-present64.exe)
                 set_tests_properties(native_vulkan_hidden_present_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
                     ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-x64-prefix;${RAVEN_PRESENT_VALIDATION}")
