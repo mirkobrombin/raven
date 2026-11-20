@@ -8,6 +8,8 @@
 
 static volatile LONG ready;
 static HANDLE start;
+static HWND painted;
+static HANDLE painter_ready;
 static HMENU menu, popup;
 static HRGN region;
 static HBITMAP bitmap;
@@ -77,6 +79,33 @@ static DWORD WINAPI calls(void *parameter)
 	return 0;
 }
 
+// A thread that waits for its messages and paints its window when another thread invalidates it: the invalidation, served beside
+// the turn, has to wake it.
+static DWORD WINAPI painter(void *unused)
+{
+	(void)unused;
+	painted = CreateWindowExW(0, L"raven.parallel.desktop", L"painted", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 160, 120, NULL, NULL,
+		GetModuleHandleW(NULL), NULL);
+	if (!painted)
+		return 30;
+	MSG message;
+	while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE))
+		DispatchMessageW(&message);
+	ValidateRect(painted, NULL);
+	SetEvent(painter_ready);
+	while (GetMessageW(&message, NULL, 0, 0) > 0) {
+		if (message.message == WM_PAINT && message.hwnd == painted) {
+			PAINTSTRUCT paint;
+			BeginPaint(painted, &paint);
+			EndPaint(painted, &paint);
+			DestroyWindow(painted);
+			return 0;
+		}
+		DispatchMessageW(&message);
+	}
+	return 31;
+}
+
 int raven_entry(void)
 {
 	WNDCLASSW definition = {0};
@@ -110,5 +139,16 @@ int raven_entry(void)
 		if (!GetExitCodeThread(threads[index], &code) || code)
 			return 100 + index * 20 + (int)code;
 	}
-	return 0;
+	painter_ready = CreateEventW(NULL, TRUE, FALSE, NULL);
+	HANDLE painting = painter_ready ? CreateThread(NULL, 0, painter, NULL, 0, NULL) : NULL;
+	if (!painting || WaitForSingleObject(painter_ready, 5000) != WAIT_OBJECT_0)
+		return 5;
+	// Long enough for the painter to be waiting for its messages.
+	Sleep(50);
+	if (!InvalidateRect(painted, NULL, FALSE))
+		return 6;
+	DWORD code = 0;
+	if (WaitForSingleObject(painting, 10000) != WAIT_OBJECT_0 || !GetExitCodeThread(painting, &code))
+		return 7;
+	return (int)code;
 }
