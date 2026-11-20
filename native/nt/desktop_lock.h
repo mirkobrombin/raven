@@ -1,6 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include "api.h"
 #include <mutex>
 #include <thread>
 
@@ -20,7 +25,7 @@ public:
 			++depth;
 			return;
 		}
-		mutex.lock();
+		take();
 		owner.store(me, std::memory_order_relaxed);
 		depth = 1;
 		taken.fetch_add(1, std::memory_order_release);
@@ -50,7 +55,7 @@ public:
 	{
 		if (!held)
 			return;
-		mutex.lock();
+		take();
 		owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 		depth = held;
 		taken.fetch_add(1, std::memory_order_release);
@@ -59,6 +64,22 @@ public:
 	uint64_t entries() const { return taken.load(std::memory_order_acquire); }
 
 private:
+	void take()
+	{
+		if (mutex.try_lock()) {
+			holder.store(api_in_progress);
+			return;
+		}
+		const auto start = std::chrono::steady_clock::now();
+		mutex.lock();
+		const auto waited = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+		const char *before = holder.exchange(api_in_progress);
+		if (waited >= 1000 && reports.fetch_add(1) < 40)
+			std::fprintf(stderr, "raven: desktop lock: thread %ld (api %s) waited %ld us; it was held for %s\n", long(::syscall(SYS_gettid)),
+				api_in_progress ? api_in_progress : "-", long(waited), before ? before : "-");
+	}
+	std::atomic<const char *> holder{nullptr};
+	std::atomic<int> reports{0};
 	std::mutex mutex;
 	std::atomic<std::thread::id> owner{};
 	std::atomic<uint64_t> taken{0};
