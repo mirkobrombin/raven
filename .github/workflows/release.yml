@@ -292,8 +292,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
-          notes="Built from main at ${SHA} on $(date -u +%Y-%m-%d), after the complete test suite passed on it. "
-          notes+="This pre-release is replaced by the next night's build whenever main has changed."
+          notes="Built from main at ${SHA} on $(date -u +%Y-%m-%d)."
           gh release create nightly dist/* --prerelease --latest=false --target "${SHA}" --title "Nightly ${SHA:0:7}" --notes "${notes}"
 
       - name: Create the draft
