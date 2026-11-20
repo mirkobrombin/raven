@@ -467,14 +467,23 @@ static uint32_t error(uint32_t status)
 
 std::optional<uint64_t> NativeMemory::serve_alone(std::string_view name, const uint64_t *arguments)
 {
-	const bool alloc=name=="VirtualAlloc";
-	if ((!alloc && name!="VirtualFree") || !process.memory_beside())
+	const bool alloc=name=="VirtualAlloc", change=name=="VirtualProtect";
+	if ((!alloc && !change && name!="VirtualFree") || !process.memory_beside())
 		return std::nullopt;
+	// VirtualProtect's previous access goes where the program asked, which must be writable and outside the range it changes: anything
+	// else the turn reports.
+	const uint64_t old=change ? arguments[3] : 0;
+	if (change) {
+		const uint64_t base=arguments[0] & ~uint64_t(4095), end=(arguments[0]+arguments[1]+4095) & ~uint64_t(4095);
+		uint32_t previous=0;
+		if ((old<end && old+4>base) || !process.read_alone(old,&previous,4) || !process.write_alone(old,&previous,4))
+			return std::nullopt;
+	}
 	// A request that fails changes nothing, so one that cannot be finished here is made again in the turn.
 	NativeMemoryRange operation;
 	try {
 		operation=alloc ? allocate(arguments[0],arguments[1],uint32_t(arguments[2]),uint32_t(arguments[3])) :
-			free(arguments[0],arguments[1],uint32_t(arguments[2]));
+			change ? protect(arguments[0],arguments[1],uint32_t(arguments[2])) : free(arguments[0],arguments[1],uint32_t(arguments[2]));
 	} catch (...) {
 		return std::nullopt;
 	}
@@ -482,9 +491,12 @@ std::optional<uint64_t> NativeMemory::serve_alone(std::string_view name, const u
 	if (trace)
 		std::fprintf(stderr,"mem %.*s beside [%llx %llx %llx %llx] status %x result %llx\n",int(name.size()),name.data(),
 			(unsigned long long)arguments[0],(unsigned long long)arguments[1],(unsigned long long)arguments[2],
-			(unsigned long long)(alloc ? arguments[3] : 0),operation.status,(unsigned long long)operation.address);
+			(unsigned long long)(alloc || change ? arguments[3] : 0),operation.status,(unsigned long long)operation.address);
 	if (operation.status)
 		return environment.set_own_last_error(error(operation.status)) ? std::optional<uint64_t>(0) : std::nullopt;
+	// The page under the previous access was found writable, and the change left it alone.
+	if (change && !process.write_alone(old,&operation.previous,4))
+		throw std::runtime_error("the previous access of VirtualProtect cannot be written");
 	return alloc ? operation.address : 1;
 }
 

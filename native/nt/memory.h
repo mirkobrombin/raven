@@ -37,8 +37,9 @@ public:
 	void remove_image(uint64_t base) { std::lock_guard lock(guard); images.erase(base); }
 	void add_image(uint64_t base, uint64_t size, std::span<const std::pair<std::pair<uint64_t,uint64_t>,uint32_t>> sections);
 	bool dispatch(std::string_view name);
-	// VirtualAlloc and VirtualFree for a host thread that does not hold the turn (see NativeProcess::memory_beside): what the call
-	// returns, with the last error of the host thread's own guest thread set when it fails; nothing when the call needs the turn.
+	// VirtualAlloc, VirtualFree and VirtualProtect for a host thread that does not hold the turn (see NativeProcess::memory_beside):
+	// what the call returns, with the last error of the host thread's own guest thread set when it fails; nothing when the call needs
+	// the turn.
 	std::optional<uint64_t> serve_alone(std::string_view name, const uint64_t *arguments);
 	static std::span<const std::string_view> nt_exports();
 	// The address space held by reservations; commitment is counted separately and is what the limit applies to.
@@ -127,8 +128,8 @@ private:
 	void close_windows(uint64_t from, uint64_t to);
 	bool window_holds(uint64_t from, uint64_t to) const;
 	uint64_t *commit_block = nullptr;
-	// Held by every public call: VirtualQuery, VirtualAlloc and VirtualFree are answered beside the turn, while the turn's calls change the
-	// regions (see dispatch).
+	// Held by every public call: VirtualQuery, VirtualAlloc, VirtualFree and VirtualProtect are answered beside the turn, while the
+	// turn's calls change the regions (see dispatch).
 	mutable std::recursive_mutex guard;
 	size_t window_next = 0;
 };
