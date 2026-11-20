@@ -22,16 +22,18 @@ ApiCall::ApiCall(NativeProcess &process, NativeEnvironment &environment, std::ve
 
 void ApiCall::fail(uint32_t error, uint64_t value)
 {
-	if (alone)
-		throw ApiNeedsTurn{};
-	environment.set_last_error(error);
+	set_last_error(error);
 	result = value;
 }
 
 uint32_t ApiCall::last_error() const
 {
-	if (alone)
-		throw ApiNeedsTurn{};
+	if (alone) {
+		const auto error = environment.own_last_error();
+		if (!error)
+			throw ApiNeedsTurn{};
+		return *error;
+	}
 	return environment.last_error();
 }
 
@@ -83,8 +85,11 @@ size_t ApiCall::pointer_width() const
 
 void ApiCall::set_last_error(uint32_t error)
 {
-	if (alone)
-		throw ApiNeedsTurn{};
+	if (alone) {
+		if (!environment.set_own_last_error(error))
+			throw ApiNeedsTurn{};
+		return;
+	}
 	environment.set_last_error(error);
 }
 

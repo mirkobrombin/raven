@@ -19,6 +19,7 @@ public:
 	explicit MutexObject(int descriptor);
 	~MutexObject() override;
 	std::u16string_view type_name() const override { return u"Mutant"; }
+	bool closes_beside() const override { return true; }
 	uint32_t default_access() const override { return 0x1f0001; }
 	int signaled(uint32_t thread) const override;
 	bool try_consume(uint32_t thread) override;

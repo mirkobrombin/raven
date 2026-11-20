@@ -1143,6 +1143,9 @@ void NativeThreads::install(GuestThread &me)
 	process.load_thread(me.snapshot);
 	if (me.teb)
 		environment.set_current(me.teb);
+	// A host thread serves its own guest thread's calls beside the turn as well; under one host thread for all, the one it switched to.
+	if (&me != &admin)
+		NativeEnvironment::set_own(me.teb);
 	if (&me == &admin)
 		return;
 	if (me.unwinding && !me.main)

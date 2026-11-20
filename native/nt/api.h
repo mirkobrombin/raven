@@ -14,8 +14,8 @@ namespace raven {
 
 // Raised by guest-memory accessors when the guest passed a pointer that cannot be read or written.
 struct ApiFault {};
-// Thrown by a call served beside the turn (ApiCall::alone) that needs what only the turn gives, such as the last error of its thread: the
-// call is then answered the usual way, from the start.
+// Thrown by a call served beside the turn (ApiCall::alone) that needs what only the turn gives, such as memory the child cannot be reached
+// at directly: the call is then answered the usual way, from the start.
 struct ApiNeedsTurn {};
 
 // One guest call of a native API: argument words, the return value and bounds-checked guest memory.
@@ -63,8 +63,8 @@ public:
 	NativeProcess &process;
 	NativeEnvironment &environment;
 	uint64_t result = 0;
-	// Served beside the turn by a host thread that does not hold it: guest memory is read and written straight from the child, and
-	// the last error, which belongs to the thread holding the turn, is not touched (see ApiNeedsTurn).
+	// Served beside the turn by a host thread that does not hold it: guest memory, and the last error in the block of the host thread's
+	// own guest thread, are read and written straight from the child (see ApiNeedsTurn).
 	bool alone = false;
 
 private:

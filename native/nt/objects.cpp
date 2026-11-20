@@ -297,6 +297,27 @@ uint32_t NativeObjects::close(uint64_t handle)
 	return 0;
 }
 
+std::optional<uint32_t> NativeObjects::close_alone(uint64_t handle)
+{
+	static const bool traced = std::getenv("RAVEN_TRACE_HANDLES") != nullptr;
+	// What the handle held goes once the table's lock is let go: an object's last reference may be among it.
+	Handle closed;
+	{
+		std::lock_guard lock(mutex);
+		const auto found = handles.find(handle);
+		if (found == handles.end())
+			return handle >= handle_range_to_child ? std::nullopt : std::optional<uint32_t>(invalid_handle);
+		const Handle &held = found->second;
+		if (held.file || (held.event && !held.event->closes_beside()) || (held.generic && !held.generic->closes_beside()))
+			return std::nullopt;
+		closed = std::move(found->second);
+		handles.erase(found);
+	}
+	if (traced)
+		std::fprintf(stderr, "handle %llx closed beside the turn\n", static_cast<unsigned long long>(handle));
+	return 0;
+}
+
 uint64_t NativeObjects::reserve(std::function<void(uint64_t)> on_close)
 {
 	auto object=std::make_shared<ReservedObject>();

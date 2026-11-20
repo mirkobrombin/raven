@@ -19,6 +19,7 @@ public:
 	int set_state(bool signaled) override;
 	bool describe(InheritedHandle &record) const override;
 	std::u16string_view type_name() const override { return u"Event"; }
+	bool closes_beside() const override { return true; }
 	bool manual_reset() const { return type == 0; }
 	// A pulse for one waiting thread: the event looks signaled to that thread alone until its wait takes it or the pulse is revoked,
 	// so a waiter that the scheduler looks at later is still released and nobody else ever sees the event set.

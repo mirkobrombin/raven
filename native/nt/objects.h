@@ -51,6 +51,9 @@ public:
 	// last_handle_closed runs once that last handle is gone, as a completion port ends the waits on it.
 	virtual bool watches_last_handle() const { return false; }
 	virtual void last_handle_closed() {}
+	// Whether the object may go with its last handle on a host thread that does not hold the runtime's turn: what it releases then
+	// (its place in the process's table of waits, memory it maps, its descriptor) answers to no state the turn guards.
+	virtual bool closes_beside() const { return false; }
 };
 
 class NativeObjects;
@@ -95,6 +98,9 @@ public:
 	int descriptor(uint64_t handle) const;
 	NativeObjectResult write_file(uint64_t handle, std::span<const uint8_t> bytes);
 	uint32_t close(uint64_t handle);
+	// The same for a host thread that does not hold the turn: the status close gives, or nothing when the call needs the turn after all
+	// (a handle another process passed on that has not arrived yet, or an object that needs the turn to go, see closes_beside).
+	std::optional<uint32_t> close_alone(uint64_t handle);
 	// Takes a handle value for an owner outside the table; zero when none is free. Closing it runs `on_close`.
 	uint64_t reserve(std::function<void(uint64_t)> on_close);
 	// Forgets a reserved handle without telling the owner (the owner closed it first).

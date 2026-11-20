@@ -293,16 +293,34 @@ void NativeEnvironment::require_current() const
 		throw std::runtime_error("native environment is not the current guest thread");
 }
 
+size_t NativeEnvironment::last_error_offset() const
+{
+	return process.mode() == NativeMode::x86 ? 0x34 : 0x68;
+}
+
 uint32_t NativeEnvironment::last_error() const
 {
 	require_current();
-	return value(process, thread_block + (process.mode() == NativeMode::x86 ? 0x34 : 0x68));
+	return value(process, thread_block + last_error_offset());
 }
 
 void NativeEnvironment::set_last_error(uint32_t error)
 {
 	require_current();
-	field(process, thread_block + (process.mode() == NativeMode::x86 ? 0x34 : 0x68), error, 4);
+	field(process, thread_block + last_error_offset(), error, 4);
+}
+
+std::optional<uint32_t> NativeEnvironment::own_last_error() const
+{
+	uint32_t error = 0;
+	if (!own_block || !process.read_alone(own_block + last_error_offset(), &error, sizeof error))
+		return std::nullopt;
+	return error;
+}
+
+bool NativeEnvironment::set_own_last_error(uint32_t error)
+{
+	return own_block && process.write_alone(own_block + last_error_offset(), &error, sizeof error);
 }
 
 uint64_t NativeEnvironment::prepare_heaps()

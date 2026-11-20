@@ -58,6 +58,13 @@ public:
 	uint64_t create_thread_block(uint64_t stack_base, uint64_t stack_limit, uint32_t thread_id);
 	void release_thread_block(uint64_t teb);
 	void set_current(uint64_t teb) { thread_block = teb; }
+	// The block of the guest thread the calling host thread serves, which it answers for beside the turn as well; 0 for a host thread
+	// that serves no guest thread of its own.
+	static void set_own(uint64_t teb) { own_block = teb; }
+	// The last error of the calling host thread's own guest thread, read and written straight in its block, without the turn; nothing
+	// when the host thread serves no guest thread or the block cannot be reached.
+	std::optional<uint32_t> own_last_error() const;
+	bool set_own_last_error(uint32_t error);
 	// The id of the guest thread whose block is current.
 	uint32_t thread_id() const
 	{
@@ -74,6 +81,8 @@ public:
 private:
 	NativeProcess &process;
 	uint64_t thread_block = 0;
+	static inline thread_local uint64_t own_block = 0;
+	size_t last_error_offset() const;
 	uint64_t process_block = 0;
 	uint64_t heap_storage = 0;
 	uint64_t command_line_ansi = 0;

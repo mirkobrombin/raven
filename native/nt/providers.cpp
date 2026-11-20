@@ -201,11 +201,12 @@ static bool served_api(std::string_view module, std::string_view name)
 
 // Calls of subsystems that keep their own lock: with a host thread for each guest thread they are answered beside the turn, by the
 // handler the usual way runs, unless they need the turn after all (see ApiCall::alone). The registry, the transfers of plain files
-// under each file's lock (see read_beside), and VirtualQuery under the memory accounting's lock.
+// under each file's lock (see read_beside), VirtualQuery under the memory accounting's lock, and the events made and the handles closed
+// under the handle table's lock (see NativeObjects::close_alone).
 static bool beside_api(std::string_view module, std::string_view name)
 {
-	static constexpr std::array<std::string_view, 7> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
-		"GetFileSizeEx", "VirtualQuery"};
+	static constexpr std::array<std::string_view, 9> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
+		"GetFileSizeEx", "VirtualQuery", "CreateEventW", "CloseHandle"};
 	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
 		return true;
 	if (module != "advapi32.dll" && module != "kernelbase.dll")
@@ -3277,6 +3278,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			// stopped, which only the thread's own host thread can do.
 			if (call_stubs() && process.parallel()) {
 				called_stubs.push_back(module->loaded.base() + stub);
+				if (beside_api(module_name, symbol.names.at(0)))
+					beside_names.emplace(module->loaded.base() + stub, symbol.names.at(0));
 				std::array<uint8_t, 7> previous{};
 				std::copy_n(image.data() + stub + served_tail, previous.size(), previous.begin());
 				served_pointers.tails.emplace_back(image.data() + stub + served_tail, previous);

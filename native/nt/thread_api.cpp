@@ -63,6 +63,7 @@ public:
 			raven_waits_close(kernel_waits(), waits_object);
 	}
 	std::u16string_view type_name() const override { return u"Semaphore"; }
+	bool closes_beside() const override { return true; }
 	uint32_t table_semaphore() const override { return waits_object; }
 	int signaled(uint32_t) const override
 	{

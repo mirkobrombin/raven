@@ -45,7 +45,9 @@ static uint32_t error(uint32_t status)
 void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &objects, NativeThreads &threads)
 {
 	registry.add("CloseHandle", 1, [&objects](ApiCall &call) {
-		const uint32_t status=objects.close(call[0]);
+		std::optional<uint32_t> beside;
+		if (call.alone && !(beside=objects.close_alone(call[0]))) throw ApiNeedsTurn{};
+		const uint32_t status=beside ? *beside : objects.close(call[0]);
 		if (status) call.fail(error(status), 0);
 		else call.ret(1);
 	});
