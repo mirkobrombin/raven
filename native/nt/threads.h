@@ -188,6 +188,8 @@ public:
 	std::shared_ptr<GuestThread> create(uint64_t start, uint64_t parameter, uint64_t stack_size, bool suspended);
 	GuestThread &current() { return *running; }
 	std::shared_ptr<GuestThread> find(uint32_t id) const;
+	// The same for a host thread that may not hold the turn, as one serving its guest beside it.
+	std::shared_ptr<GuestThread> find_told(uint32_t id);
 	uint32_t current_id() const { return running->id; }
 	// The id of the guest thread the calling host thread serves, whether it holds the turn or not; zero on a thread that serves none.
 	static uint32_t own_id();
@@ -202,7 +204,7 @@ public:
 	void tell(GuestThread &thread);
 	void tell(uint32_t id)
 	{
-		if (const auto thread = find(id))
+		if (const auto thread = find_told(id))
 			tell(*thread);
 	}
 	// A wait for objects of the process's table that the host thread of a guest takes while its guest spins in its stub, without the

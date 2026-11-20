@@ -58,6 +58,31 @@ void NativeWindows::register_api(ApiRegistry &registry)
 	register_ansi_api(registry);
 	register_theme_api(registry);
 
+	// The update region of a window, from any thread: the thread that owns the window hears of it through the tell hook
+	// (DesktopObjects::invalidated), so these are answered beside the turn as well.
+	for (const bool invalidate : {true, false})
+		registry.add(invalidate ? "InvalidateRect" : "ValidateRect", invalidate ? 3 : 2, [this, invalidate](ApiCall &call) {
+			if (!call[0]) {
+				call.fail(120);
+				return;
+			}
+			const auto *window = std::as_const(objects).window(call[0]);
+			if (!window) {
+				call.fail(1400);
+				return;
+			}
+			DesktopRect rect{0, 0, window->width, window->height};
+			if (call[1]) {
+				const auto given = read_rect(call, call[1]);
+				rect = {std::max(given.left, 0), std::max(given.top, 0), std::min(given.right, window->width), std::min(given.bottom, window->height)};
+			}
+			if (!(invalidate ? objects.invalidate(call[0], rect, call[2] != 0) : objects.validate(call[0], rect))) {
+				call.fail(8);
+				return;
+			}
+			call.ret(1);
+		});
+
 	// Rectangle helpers are pure arithmetic on guest RECTs.
 	registry.add("InflateRect", 3, [](ApiCall &call) {
 		auto rect = read_rect(call, call[0]);

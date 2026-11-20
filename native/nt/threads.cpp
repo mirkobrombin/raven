@@ -192,6 +192,12 @@ std::shared_ptr<GuestThread> NativeThreads::find(uint32_t id) const
 	return nullptr;
 }
 
+std::shared_ptr<GuestThread> NativeThreads::find_told(uint32_t id)
+{
+	std::lock_guard lock(gate);
+	return find(id);
+}
+
 std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t parameter, uint64_t stack_size, bool suspended)
 {
 	if (process.parallel())
@@ -231,7 +237,11 @@ std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t para
 	thread->suspend_count = suspended ? 1 : 0;
 	if (threaded) {
 		thread->state = GuestThread::State::ready;
-		threads.push_back(thread);
+		{
+			// Under the gate as well as the turn: a host thread serving its guest beside the turn looks threads up by id (find_told).
+			std::lock_guard lock(gate);
+			threads.push_back(thread);
+		}
 		pthread_attr_t attributes;
 		pthread_attr_init(&attributes);
 		pthread_attr_setstacksize(&attributes, host_stack_size);
