@@ -26,8 +26,10 @@ def main():
     # VirtualAlloc takes the turn: four threads calling it at once wait for it.
     if allocations["beside"] or not allocations["turn"]:
         raise SystemExit(f"VirtualAlloc shows no wait for the turn\n{output}")
-    if not events or events["beside"] < events["calls"] // 2:
-        raise SystemExit(f"SetEvent is not answered beside the turn\n{output}")
+    for name in ("SetEvent", "CreateEventW", "CloseHandle"):
+        row = rows.get(name)
+        if not row or row["beside"] < row["calls"] // 2:
+            raise SystemExit(f"{name} is not answered beside the turn\n{output}")
     print(f"VirtualAlloc waits {allocations['turn']} cycles for the turn; SetEvent beside it {events['beside']} of {events['calls']} times")
 
 
