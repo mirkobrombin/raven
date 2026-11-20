@@ -17,6 +17,9 @@ struct ApiFault {};
 // Thrown by a call served beside the turn (ApiCall::alone) that needs what only the turn gives, such as memory the child cannot be reached
 // at directly: the call is then answered the usual way, from the start.
 struct ApiNeedsTurn {};
+// Thrown by a handler that leaves a call to the providers after its registry, for the cases they keep: the registry then reports the
+// call as not its own.
+struct ApiDeclined {};
 
 // One guest call of a native API: argument words, the return value and bounds-checked guest memory.
 // The text a guest pointer addresses when it holds a short run of printable characters, narrow or wide; empty otherwise. For traces.

@@ -241,6 +241,8 @@ bool ApiRegistry::dispatch(NativeProcess &process, NativeEnvironment &environmen
 	} catch (const uint32_t &error) {
 		// The window and drawing layers report a bad handle or argument by throwing the Windows error: the call fails with it.
 		call.fail(error);
+	} catch (const ApiDeclined &) {
+		return false;
 	}
 	process.return_api(call.result);
 	return true;

@@ -83,6 +83,30 @@ void NativeWindows::register_api(ApiRegistry &registry)
 			call.ret(1);
 		});
 
+	// The device context of a window that already has its surface, taken and released from any thread. The screen's, those of other
+	// processes' windows and a first surface, which maps memory into the guest, are left to the window dispatch.
+	for (const bool whole : {false, true})
+		registry.add(whole ? "GetWindowDC" : "GetDC", 1, [this, whole](ApiCall &call) {
+			const auto *window = call[0] ? std::as_const(objects).window(call[0]) : nullptr;
+			if (!window || call[0] == desktop_window() || !window->dc)
+				throw ApiDeclined{};
+			DesktopDC device{window->bitmap, window->bitmap, call[0]};
+			device.leased = true;
+			objects.configure_window_dc(call[0], device, whole);
+			const uint64_t context = objects.add(device);
+			if (!context)
+				throw uint32_t(8);
+			call.ret(context);
+		});
+	registry.add("ReleaseDC", 2, [this](ApiCall &call) {
+		if (!call[0] || call[0] == desktop_window() || !std::as_const(objects).window(call[0]))
+			throw ApiDeclined{};
+		const auto *device = objects.dc(call[1]);
+		if (!device || !device->leased || device->window != call[0])
+			throw uint32_t(1400);
+		call.ret(objects.erase(call[1]));
+	});
+
 	// Rectangle helpers are pure arithmetic on guest RECTs.
 	registry.add("InflateRect", 3, [](ApiCall &call) {
 		auto rect = read_rect(call, call[0]);
