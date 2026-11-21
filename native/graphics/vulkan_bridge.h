@@ -58,7 +58,14 @@ public:
 
 	friend class Marshal;
 	// Brings the guest's view of mapped memory and the driver's in line before and after work the driver does.
-	void synchronize_to_device(uint64_t device) { shadow_to_device(device); }
+	void synchronize_to_device(uint64_t device)
+	{
+		shadow_to_device(device);
+		// Work the device runs can write any of its memory.
+		for (auto &[token, memory] : memories)
+			if (memory.device == device)
+				memory.fresh = false;
+	}
 	void synchronize_from_device(uint64_t device) { shadow_from_device(device, cached_memory); }
 	// Reading a timeline semaphore makes the work behind a new value visible; the same value again brings nothing the last read did not.
 	void synchronize_after_counter(uint64_t device, uint64_t semaphore, uint64_t value)
@@ -141,6 +148,8 @@ private:
 		bool coherent = false;
 		// Host-cached memory reads back cheaply; the other host-visible kinds are write-combined, where every byte read is slow.
 		bool cached = false;
+		// No submit of its device and no mapping has written it since it was allocated, so its contents are undefined.
+		bool fresh = true;
 		std::vector<uint8_t> snapshot;
 		// The guest's shadow is a memfd the host maps as well, so comparing it with the driver's mapping never goes through the debugger
 		// interface: `view` is the host's window on the same bytes as the guest address `shadow`.

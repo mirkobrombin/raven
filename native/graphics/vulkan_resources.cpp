@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <sys/mman.h>
@@ -259,12 +260,20 @@ if (name == "vkFreeMemory") {
 			void *host = static_cast<uint8_t *>(mapped) + (offset - host_offset);
 			uint64_t shadow = 0;
 			try {
-				if (memory.coherent)
+				// RAVEN_VULKAN_SHADOW gives every mapping a shadow, as on a driver whose mappings cannot be shared.
+				static const bool shadowed = std::getenv("RAVEN_VULKAN_SHADOW") != nullptr;
+				if (memory.coherent && !shadowed)
 					if (const auto mapping = map_gpu_memory(process, host, size_t(size))) {
 						shadow = mapping->address;
 						memory.mapping_base = mapping->base;
 					}
-				if (!shadow) {
+				// Reading the driver's mapping of write-combined memory runs at tens of megabytes a second. New memory is not read: the
+				// device gets the zeros a new shadow holds, so the shadow and the device agree as the copy back expects.
+				if (!shadow && memory.fresh && memory.coherent) {
+					std::memset(host, 0, size_t(size));
+					memory.snapshot.assign(size_t(size), 0);
+					shadow = make_shadow(memory, size_t(size));
+				} else if (!shadow) {
 					memory.snapshot.assign(static_cast<const uint8_t *>(host), static_cast<const uint8_t *>(host) + size);
 					shadow = make_shadow(memory, size_t(size));
 					std::memcpy(memory.view, memory.snapshot.data(), memory.snapshot.size());
@@ -275,6 +284,7 @@ if (name == "vkFreeMemory") {
 				throw;
 			}
 			memory.host = host;
+			memory.fresh = false;
 			memory.shadow = shadow;
 			memory.offset = offset;
 			memory.mapped = size;

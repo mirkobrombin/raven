@@ -3458,6 +3458,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_dependencies(vulkan_mapped_range64_fixture vulkan_import64)
                 add_test(NAME native_vulkan_mapped_range_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/mapped-range64.exe)
                 set_tests_properties(native_vulkan_mapped_range_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 " FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-")
+                if(RAVEN_LAVAPIPE_ICD)
+                    add_custom_command(OUTPUT ${VULKAN_FIXTURES}/fresh-map64.exe
+                        COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
+                            -idirafter ${Vulkan_INCLUDE_DIRS}
+                            -Wl,--entry,raven_entry,--image-base,0x18e000000
+                            -o ${VULKAN_FIXTURES}/fresh-map64.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_fresh_map_client.c
+                            ${VULKAN_FIXTURES}/vulkan.a
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/vulkan_fresh_map_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
+                    add_custom_target(vulkan_fresh_map64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/fresh-map64.exe)
+                    add_dependencies(vulkan_fresh_map64_fixture vulkan_import64)
+                    # Lavapipe carves its allocations from one file, so a new allocation can hold bytes a freed one held. Its mappings
+                    # can be shared with the guest: RAVEN_VULKAN_SHADOW takes the shadow path NVIDIA's mappings need.
+                    add_test(NAME native_vulkan_fresh_map_x64 COMMAND raven --run-process --execution=native ${VULKAN_FIXTURES}/fresh-map64.exe)
+                    set_tests_properties(native_vulkan_fresh_map_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-" ENVIRONMENT "VK_DRIVER_FILES=${RAVEN_LAVAPIPE_ICD};LP_NUM_THREADS=2;RAVEN_VULKAN_SHADOW=1")
+                endif()
                 # Lavapipe's host-visible memory is all coherent: the runtime treats it as not, so the flushes and invalidations it sends
                 # for such memory reach the validation layer.
                 if(RAVEN_LAVAPIPE_ICD AND RAVEN_VULKAN_VALIDATION_LAYER)
