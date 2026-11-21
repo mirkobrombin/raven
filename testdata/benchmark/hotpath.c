@@ -2,7 +2,8 @@
 
 /* What the calls a program makes most often cost, each timed inside the program so that starting it is left out: a call answered without
  * leaving the process's user mode, one the kernel answers, setting an event nobody waits for, two threads handing a turn back and forth
- * through events, the same through waits for any or all of a set, and four threads taking one critical section or one slim lock. Each
+ * through events, the same through waits for any or all of a set, and four threads taking one critical section or one slim lock, and a
+ * system call straight into ntdll, which leaves the process's user mode the way Windows' system calls do. Each
  * prints "hotpath NAME NANOSECONDS" per operation, then "hotpath done". */
 
 #define CONTENDERS 4
@@ -153,6 +154,19 @@ void __stdcall entry(void)
 	report("kernel_call", now() - start, 20000);
 
 	HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
+	/* NtQueryEvent(event, EventBasicInformation, information, size, returned): one of ntdll's system calls. */
+	typedef LONG(WINAPI * query_event)(HANDLE, int, void *, ULONG, ULONG *);
+	const query_event query = (query_event)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryEvent");
+	if (query) {
+		ULONG information[2], returned;
+		start = now();
+		for (unsigned index = 0; index < 20000; ++index)
+			if (query(event, 0, information, sizeof(information), &returned)) {
+				write_text("hotpath failed\n");
+				ExitProcess(1);
+			}
+		report("nt_syscall", now() - start, 20000);
+	}
 	start = now();
 	for (unsigned index = 0; index < 100000; ++index) {
 		SetEvent(event);

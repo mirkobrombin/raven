@@ -3822,6 +3822,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
         set_tests_properties(native_hotpath_bench PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "hotpath done"
             FAIL_REGULAR_EXPRESSION "hotpath failed" ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-prefix")
+        # The same with the guest's tasks kept under ptrace, as before the agent served their system calls: the two side by side are what
+        # the agent saves per call.
+        add_test(NAME native_hotpath_bench_ptrace COMMAND raven --run-process --execution=native --stdio=inherit --timeout-ms=120000
+            ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
+        set_tests_properties(native_hotpath_bench_ptrace PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "hotpath done"
+            FAIL_REGULAR_EXPRESSION "hotpath failed" ENVIRONMENT "RAVEN_PTRACE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-prefix-ptrace")
         # Event waits are ended by whoever sets the event, never found by looking at the waiting threads (event_pingpong_client.c).
         raven_kernel_fixture(event-pingpong event_pingpong_client.c 0x1f5000000 "-lkernel32")
         add_test(NAME native_event_pingpong_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
