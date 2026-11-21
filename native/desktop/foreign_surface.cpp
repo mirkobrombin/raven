@@ -372,8 +372,7 @@ std::shared_ptr<ForeignSurface> ForeignSurface::open_for_drawing(uint64_t window
 	} catch (...) {
 		return nullptr;
 	}
-	surface->header[1] = width;
-	surface->header[2] = height;
+	// The size in the header stays that of the frame the pixels hold until publish_frame: the owner may take that frame again.
 	surface->header[0] = surface_magic;
 	return surface;
 }
