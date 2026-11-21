@@ -1,0 +1,1329 @@
+# x86_avx.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/avx-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44515104032, assembled with clang as here; dump sha256 786376ef60dbae5339c2d71f227fddbf65d35ba30659b6f25fb5b9439117f3b4): every family, the bmi family first. The tests refuse the file when a family's cases or Rosetta's results change.
+# The avx2 broadcast family: an AMD EPYC 7763 (run 44508125477), which agrees with Rosetta in all 100. Earlier runs: an AMD EPYC 9V74 (run 44505099547, all but the gathers), AMD EPYC 7763 (runs 44501136642, 44503053255) and 9V74 (44499294363, 44502534716) gave the same results for the families they had. Intel Xeon Platinum 8370C (run 44500206597) and 8573C (run 44503360598): they agree with Rosetta in the strings family, as the EPYCs do; the 8573C agrees with Rosetta in all 600 approximation cases, where the EPYCs differ in 358, and with the EPYC in the 8 fma addsub MXCSR values; both differ from the AMD runs in one dpps case (#7786, NaN lanes), not applied here: the AMD EPYC stays the reference.
+# The strings wide and shift counts families: an Intel Xeon Platinum 8573C (run 44510983438, dump sha256 d4f8cd7d19083f3abb868f89bc1bf99c912f504e0bcb4c43c46c41b8d891619e), no AMD runner came up; it agrees with Rosetta in all 400 strings wide cases and differs in 112 shift counts cases, where Rosetta shifts a quadword by the low 32 bits of its count.
+# The maskmovdqu family: an Intel Xeon Platinum 8573C (run 44511702231), which agrees with Rosetta in all 200 cases.
+# The strings wide, shift counts and maskmovdqu families, first held to an Intel Xeon Platinum 8573C (runs 44510983438, 44511702231), gave the same results on this EPYC. In the bmi family the EPYC differs from Rosetta only in flags the SDM leaves undefined (tzcnt, lzcnt, bextr), which the tests do not compare.
+corpus	approximations	cases=600	generated=52b71b7d5a377a5b	rosetta=9a08b5ad95d5336b
+corpus	arithmetic	cases=900	generated=07595ae09bc18ae3	rosetta=4201fcf5758e63a8
+corpus	avx ops	cases=1500	generated=81ce8548266e5728	rosetta=560d169b35ec6d3f
+corpus	avx2	cases=1500	generated=86c9735094e92da1	rosetta=1090f7ead1dbb18a
+corpus	avx2 broadcast	cases=100	generated=a04d55a7e728038e	rosetta=e96e2210190d6cb2
+corpus	bmi	cases=3000	generated=04bfc1ef47a585ee	rosetta=2b89e75821201b4d
+corpus	compare	cases=500	generated=a7c4b71d8192fd29	rosetta=c287af4eb516efa5
+corpus	convert	cases=400	generated=ea0e1ee717c12959	rosetta=baa3a39568a8699d
+corpus	fma	cases=1200	generated=3a80c4c9592e6b73	rosetta=117c23e7ae1b07d1
+corpus	fma addsub	cases=600	generated=b23222184fd734b0	rosetta=c6cb47a47f9865dc
+corpus	fma edges	cases=288	generated=7ab841c15c69c67d	rosetta=5f7aa11b0e3469d6
+corpus	gathers	cases=800	generated=04d2d37981db1a83	rosetta=851ff72a0d26b7d4
+corpus	integer	cases=700	generated=e885abd03fce5654	rosetta=afd4fe34eb94de6d
+corpus	lanes	cases=400	generated=08e8c05e1b72d7c9	rosetta=c036997dc1c06cc8
+corpus	logic	cases=200	generated=ab419e799cd0ccc4	rosetta=8d2b46c52713241e
+corpus	maskmovdqu	cases=200	generated=4baf2fbe239f158b	rosetta=2e5e51957d5af0d5
+corpus	moves	cases=500	generated=a0c679a6f55af097	rosetta=005e880bff9bde0c
+corpus	popcnt	cases=300	generated=3e25867f77cf2d61	rosetta=366972829bbc22b7
+corpus	shift counts	cases=400	generated=e0b1fc8f95b89fde	rosetta=a067d7f881cfb270
+corpus	shuffle	cases=400	generated=4d882c20282e375a	rosetta=9626d96c7c36edbd
+corpus	sse3	cases=500	generated=36aa17315fe8f5c7	rosetta=0dc0a19bdd9db3bf
+corpus	sse41	cases=1000	generated=4048e75bed7d65ca	rosetta=1cc0b362db2efc2c
+corpus	sse42	cases=400	generated=781c570d9b5d810b	rosetta=800b7b2bcc4b91d5
+corpus	ssse3	cases=500	generated=5fa57f159a9ca2a7	rosetta=45920946b54303f5
+corpus	strings	cases=1500	generated=906d7b01e821f9ec	rosetta=538a2627522d2948
+corpus	strings wide	cases=400	generated=725717f41caf6273	rosetta=902b01208d80b99f
+corpus	transitions	cases=300	generated=66a8f3b24a6e6479	rosetta=81cfafd0bac8f5cb
+corpus	vex sse4	cases=1500	generated=e321b48b0d4415c8	rosetta=e582251adcae5d5b
+6791	ptest xmm1, xmm13; setp al	rosetta=80c645334d3258df	r0=0043f636f4371926	flags=0000000000000000
+6794	ptest xmm4, xmm12; sete al	rosetta=2c52bce89b3b350c	flags=0000000000000000
+6795	ptest xmm2, xmm11; setb al	rosetta=9792b41f27724e57	flags=0000000000000000
+6796	ptest xmm0, xmm7; setae al	rosetta=0fef7a5199187a74	flags=0000000000000000
+6806	ptest xmm10, xmm13; sete al	rosetta=d5699e6fb27c7b7b	flags=0000000000000000
+6826	ptest xmm6, xmm7; sets al	rosetta=4595dc6678cf4d81	flags=0000000000000000
+6827	ptest xmm0, xmm8; setbe al	rosetta=42275e939ca9bbcc	flags=0000000000000000
+6851	ptest xmm11, xmm8; sets al	rosetta=4544a6083fd11fed	r0=0000000000002000	flags=0000000000000000
+6854	ptest xmm10, xmm0; sete al	rosetta=bcd7d64129f14f28	flags=0000000000000000
+6869	ptest xmm1, xmm9; seto al	rosetta=b4b91f24613932aa	flags=0000000000000000
+6872	ptest xmm5, xmm8; setne al	rosetta=f1d11a7b26da258e	flags=0000000000000000
+6886	ptest xmm11, xmm12; seta al	rosetta=0545051f8c667fff	flags=0000000000000000
+6898	ptest xmm9, xmmword ptr [r15 + 16]; setb al	rosetta=a50eae808e5c2c00	flags=0000000000000000
+6906	ptest xmm12, xmm8; setb al	rosetta=a756e714f898e865	flags=0000000000000000
+6917	ptest xmm3, xmm10; sets al	rosetta=caea61555c132f94	flags=0000000000000000
+6922	ptest xmm8, xmm2; setne al	rosetta=c42d723ceadd1a5f	flags=0000000000000000
+6924	ptest xmm6, xmm6; sets al	rosetta=d1f415d9fa4c17e5	flags=0100000000000000
+6927	ptest xmm8, xmm10; sete al	rosetta=6f413fe537ff11fe	flags=0000000000000000
+6929	ptest xmm7, xmm0; sets al	rosetta=b154ac3c3aab655d	r0=00ffffffffffff7f	flags=0000000000000000
+6936	ptest xmm2, xmmword ptr [r15 + 64]; seta al	rosetta=d1d6ff1dc19b0bb3	flags=0000000000000000
+6943	ptest xmm12, xmm2; sets al	rosetta=fb07b21072f28baa	flags=0000000000000000
+6951	ptest xmm13, xmm7; seto al	rosetta=3fa5556db73b4377	flags=0100000000000000
+6963	ptest xmm2, xmm15; seto al	rosetta=1875fd2183f392ef	r0=00e6aea5caaf54ef	flags=0000000000000000
+6977	ptest xmm6, xmm7; setb al	rosetta=e12e7ca964b50ac1	flags=0000000000000000
+6986	ptest xmm13, xmm12; setne al	rosetta=8b3dd9d795935719	flags=0000000000000000
+6998	ptest xmm12, xmm4; setae al	rosetta=a22e8c6e0f90bc93	flags=0000000000000000
+7010	ptest xmm3, xmm9; setp al	rosetta=2ca5baeea9bc5c3b	flags=0000000000000000
+7025	ptest xmm5, xmm12; sete al	rosetta=7eeb426e00302b03	flags=0000000000000000
+7039	ptest xmm1, xmm11; setp al	rosetta=659ba67dcfc07a88	flags=0000000000000000
+7046	ptest xmm3, xmm13; sete al	rosetta=621f0d6ccaef92b6	flags=0000000000000000
+7048	ptest xmm9, xmmword ptr [r15 + 48]; seto al	rosetta=b550d94b9d58e6f0	flags=0000000000000000
+7071	ptest xmm13, xmm1; seta al	rosetta=fc2aa352344db653	flags=0000000000000000
+7074	ptest xmm0, xmm15; setb al	rosetta=249142f86d33af93	flags=0000000000000000
+7107	ptest xmm3, xmm7; seto al	rosetta=a380a0092faec4aa	flags=0000000000000000
+7137	ptest xmm7, xmm3; setbe al	rosetta=49cb876b836bf231	flags=0000000000000000
+7174	ptest xmm15, xmm4; setne al	rosetta=c80dbe9b35fc30f3	flags=0000000000000000
+7176	ptest xmm14, xmm0; setp al	rosetta=e758f532124cc414	flags=0000000000000000
+7191	ptest xmm4, xmm5; setp al	rosetta=8b3d11f10d5073d0	flags=0000000000000000
+7196	ptest xmm7, xmm7; setbe al	rosetta=3d17de679fb90573	flags=0100000000000000
+7237	ptest xmm4, xmmword ptr [r15 + 160]; setp al	rosetta=249193e9716c5a6f	r0=001fa9d53857399b	flags=0000000000000000
+7270	ptest xmm13, xmm3; setb al	rosetta=3a20a4bcd3ca2a16	flags=0000000000000000
+7322	ptest xmm0, xmm12; setne al	rosetta=c3665badfff7316f	flags=0000000000000000
+7354	ptest xmm8, xmm0; seta al	rosetta=735dee2d20e1ca8d	flags=0000000000000000
+7387	ptest xmm7, xmm11; setae al	rosetta=726b7be7937f5702	flags=0000000000000000
+7391	ptest xmm3, xmmword ptr [r15 + 96]; seta al	rosetta=ee8564f9dd8d96c6	flags=0000000000000000
+7395	ptest xmm10, xmm10; setne al	rosetta=96a05d5d22cbc445	flags=0100000000000000
+7397	ptest xmm6, xmm3; sete al	rosetta=df2bcdc0278e4d4c	flags=0000000000000000
+7400	ptest xmm7, xmmword ptr [r15 + 16]; sets al	rosetta=f3ab20d37dd50a55	flags=0000000000000000
+7401	ptest xmm14, xmm6; seto al	rosetta=d86f5d3e54e6459c	flags=0000000000000000
+7423	ptest xmm5, xmmword ptr [r15 + 16]; setbe al	rosetta=2308dc8116102d7f	flags=0000000000000000
+7426	ptest xmm9, xmm9; setne al	rosetta=e1bdc21e96611e96	flags=0100000000000000
+7433	ptest xmm13, xmmword ptr [r15 + 48]; setbe al	rosetta=769e686d9dfa0991	flags=0000000000000000
+7438	ptest xmm6, xmm6; sete al	rosetta=94bbe82deb134145	flags=0100000000000000
+7444	ptest xmm13, xmm7; setp al	rosetta=1b1116942e694512	flags=0000000000000000
+7459	ptest xmm13, xmm3; sets al	rosetta=9ac10782361b2dd6	flags=0000000000000000
+7474	ptest xmm5, xmmword ptr [r15 + 32]; setp al	rosetta=1af2217f0923d62a	r0=0000000000000000	flags=0000000000000000
+7475	ptest xmm8, xmm14; setb al	rosetta=3536cf83b16a45fc	flags=0000000000000000
+7483	ptest xmm8, xmm6; setp al	rosetta=80b9de77eea8c506	flags=0000000000000000
+7485	ptest xmm14, xmm2; setae al	rosetta=86d9cc172e2d8b68	flags=0000000000000000
+7491	ptest xmm10, xmmword ptr [r15 + 144]; sets al	rosetta=0686e26807aa32f9	r0=0000000100000000	flags=0000000000000000
+7497	ptest xmm7, xmmword ptr [r15 + 64]; setb al	rosetta=121da1d20a69b9f8	flags=0000000000000000
+7520	ptest xmm10, xmmword ptr [r15 + 96]; setae al	rosetta=b3adf042a4721b42	flags=0000000000000000
+7528	ptest xmm1, xmmword ptr [r15 + 32]; setne al	rosetta=41d3e054e5f183e0	flags=0000000000000000
+7544	ptest xmm5, xmm4; seta al	rosetta=5d729437890c3268	flags=0000000000000000
+7572	ptest xmm1, xmmword ptr [r15 + 144]; setp al	rosetta=3287b7ec6587a6a6	flags=0000000000000000
+7584	ptest xmm1, xmm9; sete al	rosetta=1c6fe85e8733f9ee	flags=0000000000000000
+7597	ptest xmm11, xmm7; setb al	rosetta=210139ffcbdcf25d	flags=0000000000000000
+7641	ptest xmm6, xmm15; setae al	rosetta=e409cc55c0bf41d6	flags=0000000000000000
+7648	ptest xmm10, xmm13; sets al	rosetta=be8bf31b76803be7	r0=00303adbdeb87f73	flags=0000000000000000
+7690	ptest xmm7, xmmword ptr [r15 + 48]; setbe al	rosetta=b379a7e13afec392	flags=0000000000000000
+7693	ptest xmm10, xmm7; seto al	rosetta=74ca6194c95a31d1	r0=0000000000000000	flags=0000000000000000
+7731	ptest xmm2, xmm5; setne al	rosetta=8cf0d8c16f8a2ec7	flags=0000000000000000
+7747	ptest xmm1, xmm7; setp al	rosetta=ffe425fe9a9e490d	r0=00c0b3b2126d3ad8	flags=0000000000000000
+7748	ptest xmm4, xmm1; sets al	rosetta=c81f62b3e4f16593	flags=0000000000000000
+7771	ptest xmm0, xmm12; setae al	rosetta=928930126daf99f9	flags=0000000000000000
+9994	vptest xmm7, xmmword ptr [r15 + 9]; setp al	rosetta=28d9b38649d2ca95	flags=0000000000000000
+10017	vptest xmm3, xmm1; setae al	rosetta=863ba47627b80c53	flags=0000000000000000
+10052	vptest ymm13, ymm5; seto al	rosetta=069c7716b016ab43	flags=0000000000000000
+10057	vptest xmm15, xmmword ptr [r15 + 23]; seta al	rosetta=6a98c9be02a2cfa7	flags=0000000000000000
+10060	vptest ymm4, ymm15; setbe al	rosetta=3e2616ac47a48488	flags=0000000000000000
+10078	vptest xmm6, xmmword ptr [r15 + 54]; setp al	rosetta=f4d965d751068ed6	r0=00e3becbe47ac269	flags=0000000000000000
+10080	vptest ymm4, ymm0; setae al	rosetta=9cad180d09d07009	flags=0000000000000000
+10085	vptest ymm13, ymmword ptr [r15 + 119]; setae al	rosetta=a86cb22c5c0c521b	flags=0000000000000000
+10087	vptest ymm1, ymmword ptr [r15 + 94]; setae al	rosetta=7d240da5fbeecbae	flags=0000000000000000
+10103	vptest ymm2, ymm5; setp al	rosetta=251ad588e05c148c	r0=0000000000000000	flags=0000000000000000
+10110	vptest xmm2, xmm8; setae al	rosetta=f10f26c9ae22c463	flags=0000000000000000
+10119	vptest xmm7, xmmword ptr [r15 + 71]; setp al	rosetta=3ce5e71d86c8b61a	flags=0000000000000000
+10175	vptest ymm6, ymm5; seto al	rosetta=2db307b91a07bdb0	flags=0000000000000000
+10185	vptest ymm9, ymm3; seta al	rosetta=c7cef9b17db3a32f	flags=0000000000000000
+10196	vptest xmm15, xmm10; setb al	rosetta=26db35ad6652004b	flags=0000000000000000
+10210	vptest xmm12, xmm11; seta al	rosetta=8b90c8aa7bd05bb6	flags=0000000000000000
+10218	vptest xmm3, xmm3; sets al	rosetta=29abc310481ccd77	flags=0100000000000000
+10253	vptest xmm13, xmm7; setp al	rosetta=f577ef4de34b156d	flags=0000000000000000
+10268	vptest xmm8, xmmword ptr [r15 + 78]; setne al	rosetta=db31299348fcbdbb	flags=0000000000000000
+10273	vptest xmm3, xmmword ptr [r15 + 146]; setbe al	rosetta=8f225606a0df35a3	flags=0000000000000000
+10287	vptest ymm13, ymmword ptr [r15 + 121]; seta al	rosetta=b504c420420e300f	flags=0000000000000000
+10309	vptest xmm2, xmm15; sete al	rosetta=1d1fe14af13c8ee0	flags=0000000000000000
+10342	vptest ymm2, ymm10; setbe al	rosetta=1aa082b74a4bc12f	flags=0000000000000000
+10347	vptest xmm1, xmm2; seto al	rosetta=559a38b6cd9e40fc	r0=004f55fa12f37cd3	flags=0000000000000000
+10348	vptest xmm11, xmm6; sete al	rosetta=efeb5629cc908bee	flags=0000000000000000
+10375	vptest ymm4, ymm9; seto al	rosetta=c65623c909967495	r0=000054b5cb99befb	flags=0000000000000000
+10416	vptest xmm2, xmm13; seta al	rosetta=2e2bb95e4cde8a0d	flags=0000000000000000
+10445	vptest ymm10, ymm6; sete al	rosetta=2bbb9548fd46e5db	flags=0000000000000000
+10450	vptest xmm3, xmmword ptr [r15 + 31]; setne al	rosetta=f8f105add55ff97b	flags=0000000000000000
+10484	vptest xmm2, xmm8; setbe al	rosetta=9504e370697bca3c	flags=0000000000000000
+10569	vptest xmm6, xmm9; seto al	rosetta=82f685deb3710f77	r0=005e8425a1f52782	flags=0000000000000000
+10571	vptest xmm4, xmm2; sets al	rosetta=74f0a22c9c6a8315	r0=0000000000000000	flags=0000000000000000
+10586	vptest xmm10, xmmword ptr [r15 + 86]; setbe al	rosetta=de6643a414f4b8b7	flags=0000000000000000
+10654	vptest xmm12, xmm7; sete al	rosetta=4b77412e856e498a	flags=0000000000000000
+10674	vptest xmm12, xmm12; setp al	rosetta=f1ae715566c6b8d1	flags=0100000000000000
+10694	vptest xmm13, xmmword ptr [r15 + 160]; seto al	rosetta=9a22fb2162edbf90	flags=0000000000000000
+10731	vptest xmm9, xmm12; sets al	rosetta=82a72a7b9553c2ec	r0=004f320e41680d07	flags=0000000000000000
+10745	vptest ymm4, ymm1; setbe al	rosetta=f1bc519814df25a6	flags=0000000000000000
+10782	vptest ymm13, ymmword ptr [r15 + 92]; setb al	rosetta=28bd8cf04adcac1b	flags=0000000000000000
+10793	vptest ymm10, ymm7; setbe al	rosetta=a7b5c7f3a5accf67	flags=0000000000000000
+10826	vptest ymm13, ymmword ptr [r15 + 24]; seta al	rosetta=785c073a1de15e98	flags=0000000000000000
+10830	vptest ymm3, ymm10; sets al	rosetta=b3fe252409f5c1fb	flags=0000000000000000
+10854	vptest ymm15, ymm2; sets al	rosetta=fde64ce90afa3b4f	r0=0000000000000000	flags=0000000000000000
+10861	vptest ymm4, ymm4; setbe al	rosetta=d9797c161d48e6c1	flags=0100000000000000
+10863	vptest ymm11, ymm11; setae al	rosetta=36bb600c72a4680d	flags=0100000000000000
+10881	vptest xmm11, xmm7; seto al	rosetta=6b3c673070cedac1	r0=0000000000000000	flags=0000000000000000
+10885	vptest xmm10, xmm11; sete al	rosetta=2e9112cdfee7a0b7	flags=0000000000000000
+10902	vptest ymm4, ymm3; sets al	rosetta=971cf82c1be240a0	flags=0000000000000000
+10914	vptest xmm10, xmm10; sets al	rosetta=7acb66914607c434	r0=0000008000000000	flags=0100000000000000
+10921	vptest xmm0, xmmword ptr [r15 + 106]; setbe al	rosetta=0532ea5a5cb8f9f9	flags=0000000000000000
+10928	vptest xmm13, xmm10; sets al	rosetta=2983f57e5721cfae	r0=003a5276b941a64e	flags=0000000000000000
+10935	vptest xmm6, xmm14; seto al	rosetta=f043de01b0863ff9	r0=003b06a121e86ec4	flags=0000000000000000
+10952	vptest ymm10, ymm0; setp al	rosetta=9e3fa75fe740e15c	r0=00190bb317cabf08	flags=0000000000000000
+10953	vptest ymm2, ymm13; setae al	rosetta=9f8ac49c65606a5e	flags=0000000000000000
+10956	vptest ymm9, ymm10; seto al	rosetta=99ffe53459f552b5	r0=00fbab49afb89cfb	flags=0000000000000000
+10980	vptest xmm15, xmm12; setne al	rosetta=611b50a5e7905178	flags=0000000000000000
+10993	vptest ymm15, ymm7; setne al	rosetta=847549efa33f31da	flags=0000000000000000
+11005	vptest xmm6, xmm5; setne al	rosetta=14e132b7dfb21a94	flags=0000000000000000
+11060	vptest ymm10, ymmword ptr [r15 + 91]; setp al	rosetta=2b2f891d21447492	r0=00f7ddf73add0b9d	flags=0000000000000000
+11061	vptest ymm8, ymmword ptr [r15 + 50]; seto al	rosetta=74ac3a609eef6934	flags=0000000000000000
+11072	vptest ymm15, ymmword ptr [r15 + 60]; setbe al	rosetta=1b103395b456405b	flags=0000000000000000
+11074	vptest xmm7, xmm7; setp al	rosetta=fb0a2363d862687a	flags=0100000000000000
+11077	vptest xmm15, xmm1; setb al	rosetta=108f30e423a8c9d8	flags=0000000000000000
+11091	vptest xmm13, xmm14; sets al	rosetta=173c7dac550e38d1	flags=0000000000000000
+11107	vptest xmm5, xmm0; sete al	rosetta=d2e195897b471fa1	flags=0000000000000000
+11117	vptest ymm8, ymm9; setp al	rosetta=a30b2034e3d45ecd	r0=0000000000000000	flags=0000000000000000
+11147	vptest xmm14, xmm5; setb al	rosetta=307f3e022d127ada	flags=0000000000000000
+11156	vptest xmm13, xmmword ptr [r15 + 9]; setp al	rosetta=962a69085f89b0d3	flags=0000000000000000
+11159	vptest xmm8, xmm8; sete al	rosetta=c543f2a43f5c6d3d	flags=0100000000000000
+11164	vptest ymm2, ymm4; setne al	rosetta=7f38e4dcc28e853a	flags=0000000000000000
+11168	vptest xmm12, xmmword ptr [r15 + 132]; setbe al	rosetta=6f3ade257fdcda93	flags=0000000000000000
+11197	vptest ymm5, ymmword ptr [r15 + 42]; setne al	rosetta=87446d687e414cf8	flags=0000000000000000
+11202	vptest ymm9, ymm9; setne al	rosetta=fb7d579140b3fb39	flags=0100000000000000
+11211	vptest ymm0, ymm15; setbe al	rosetta=714ea3f308f352c7	flags=0000000000000000
+11229	vptest xmm15, xmm11; sets al	rosetta=1c6e8e68484c5b17	r0=00000080ffffffff	flags=0000000000000000
+11256	vptest ymm11, ymm7; seto al	rosetta=83d0b26a08727b56	flags=0000000000000000
+11297	vptest ymm3, ymm0; seta al	rosetta=21c81aabb99374ba	flags=0000000000000000
+11323	vptest ymm3, ymm10; setne al	rosetta=04090f54112a5559	flags=0000000000000000
+11330	vptest xmm5, xmm11; setp al	rosetta=e34fb711d6c5b6f8	flags=0000000000000000
+11332	vptest ymm9, ymm5; setb al	rosetta=b97b42d536bb358f	flags=0000000000000000
+11347	vptest ymm6, ymmword ptr [r15 + 98]; setae al	rosetta=32fea693425c672b	flags=0000000000000000
+11373	vptest ymm7, ymmword ptr [r15 + 126]; seto al	rosetta=ac4ff2f84577e43b	flags=0000000000000000
+11375	vptest xmm1, xmm11; sete al	rosetta=9164fd3a7958fc1d	flags=0000000000000000
+11390	vptest ymm6, ymm2; setne al	rosetta=ea3d0b9dd4a1fbfa	flags=0000000000000000
+11392	vptest xmm1, xmmword ptr [r15 + 157]; setae al	rosetta=631361506e648c81	flags=0000000000000000
+11408	vptest xmm4, xmm10; setb al	rosetta=68f835d9ae25de64	flags=0000000000000000
+11417	vptest ymm9, ymm7; setae al	rosetta=938732b8906f0647	flags=0000000000000000
+11418	vptest ymm8, ymm8; seto al	rosetta=2d1e511e01dc7592	flags=0100000000000000
+11425	vptest xmm7, xmmword ptr [r15 + 136]; setae al	rosetta=85809adeb8f6a7da	flags=0000000000000000
+11429	vptest xmm14, xmm0; sete al	rosetta=863444b8a43e6425	flags=0000000000000000
+11493	vtestps ymm5, ymm11; sets al	rosetta=1a271537e6959d02	r0=0000000000000000	flags=0000000000000000
+11495	vtestps xmm8, xmmword ptr [r15 + 39]; setb al	rosetta=598fd0a65affa58d	flags=4000000000000000
+11496	vtestpd xmm1, xmm7; setb al	rosetta=5958b07382c86e22	flags=4000000000000000
+11497	vtestps ymm13, ymm0; sete al	rosetta=c4b082615067e9fc	flags=0000000000000000
+11505	vtestpd xmm2, xmm6; setbe al	rosetta=a6293eb0602071dc	flags=4100000000000000
+11506	vtestps ymm11, ymm11; setp al	rosetta=8fdf3b39e4041279	flags=0100000000000000
+11515	vtestpd xmm10, xmm7; setne al	rosetta=fec63dcd6a2cbdc1	flags=4000000000000000
+11517	vtestpd ymm3, ymm8; seto al	rosetta=30780d61554f2f5b	flags=4000000000000000
+11533	vtestpd ymm6, ymmword ptr [r15 + 61]; sete al	rosetta=dbb636f9095db5aa	flags=4100000000000000
+11535	vtestpd ymm9, ymm7; sete al	rosetta=d5a30cb3339a69fc	flags=4100000000000000
+11561	vtestpd ymm10, ymm6; sete al	rosetta=5356b55c884ea825	flags=0000000000000000
+11566	vtestps xmm1, xmm4; sets al	rosetta=0b2c9f1982ba68f5	r0=0000000000000000	flags=4000000000000000
+11588	vtestps xmm8, xmmword ptr [r15 + 147]; setbe al	rosetta=e1c5dd7d257fcb99	flags=0000000000000000
+11609	vtestpd ymm4, ymmword ptr [r15 + 3]; setbe al	rosetta=2bd485ebb53bd5d9	flags=4000000000000000
+11612	vtestpd ymm1, ymm13; setp al	rosetta=243b69ac3d69134b	flags=4000000000000000
+11653	vtestpd xmm0, xmm11; setbe al	rosetta=633ec0210b8ae373	flags=0100000000000000
+11654	vtestps ymm13, ymm12; seta al	rosetta=8bcc254114da326b	flags=0000000000000000
+11672	vtestpd xmm3, xmm13; seta al	rosetta=b65b0b1389279706	flags=4000000000000000
+11674	vtestps xmm7, xmm3; setne al	rosetta=1bc199f3717d5d67	flags=4000000000000000
+11696	vtestpd xmm13, xmm7; setne al	rosetta=28a68aae9727c3b5	flags=4100000000000000
+11717	vtestpd xmm15, xmm9; setae al	rosetta=f36444592444c5c6	flags=0100000000000000
+11732	vtestps ymm13, ymmword ptr [r15 + 69]; setne al	rosetta=c7cf92f82dab53b4	flags=4000000000000000
+11734	vtestpd xmm10, xmm7; setb al	rosetta=c277f2761f1d939d	flags=0100000000000000
+11762	vtestpd ymm9, ymm4; sets al	rosetta=0fc52d28e61f8494	flags=0000000000000000
+11763	vtestpd ymm3, ymmword ptr [r15 + 15]; setp al	rosetta=0f2163fd1df64fc9	flags=4000000000000000
+11774	vtestpd xmm4, xmm4; seto al	rosetta=449f65259ebd2e15	r0=00000080ffffffff	flags=0100000000000000
+11775	vtestpd ymm15, ymm3; sets al	rosetta=c32d523d124cb6d7	r0=0000000100000000	flags=0000000000000000
+11776	vtestps ymm10, ymmword ptr [r15 + 157]; setb al	rosetta=440fd9204ad91c0d	flags=0100000000000000
+11781	vtestpd ymm1, ymm11; seto al	rosetta=542206f103fc6ed7	r0=00ffff7f00000000	flags=0100000000000000
+11783	vtestpd ymm0, ymmword ptr [r15 + 61]; setne al	rosetta=789a7669550f03cd	flags=0000000000000000
+11795	vtestps xmm11, xmm2; seta al	rosetta=156dd6af06be38c0	flags=4100000000000000
+11820	vtestpd ymm7, ymmword ptr [r15 + 121]; seto al	rosetta=36a6b736e6cd900f	flags=0100000000000000
+11827	vtestpd xmm15, xmm8; sets al	rosetta=b1c63af3b7c2d62b	r0=00545112de420129	flags=4000000000000000
+11828	vtestps xmm7, xmm8; seto al	rosetta=1b8191e2fc535701	r0=00ffffff00000000	flags=4100000000000000
+11839	vtestpd ymm12, ymm14; setbe al	rosetta=643e85e0865e4d7a	flags=4000000000000000
+11861	vtestps xmm15, xmm12; setb al	rosetta=49f94ee63cbdefeb	flags=0000000000000000
+11862	vtestps ymm12, ymm13; seto al	rosetta=1255b9a1b4e375e1	flags=4000000000000000
+11880	vtestps ymm12, ymmword ptr [r15 + 23]; seta al	rosetta=40cb14c9a473c486	flags=0000000000000000
+11895	vtestpd ymm6, ymm6; sets al	rosetta=a8f4b270796e9a3e	flags=0100000000000000
+11898	vtestpd ymm4, ymm4; setae al	rosetta=f892efd30bdb4176	flags=0100000000000000
+11904	vtestpd xmm5, xmmword ptr [r15 + 63]; setbe al	rosetta=c1eeb41c77169a19	flags=0100000000000000
+11908	vtestpd ymm14, ymmword ptr [r15 + 136]; sete al	rosetta=7ca14f195620e57e	flags=4000000000000000
+11914	vtestpd ymm6, ymmword ptr [r15 + 25]; setp al	rosetta=e9d6854cc38dade9	r0=0017fefd00eb406f	flags=4000000000000000
+11917	vtestpd ymm12, ymmword ptr [r15 + 103]; seta al	rosetta=b5e37572158535e6	flags=0000000000000000
+11926	vtestps xmm2, xmm2; sete al	rosetta=417e8c58dcd1e565	flags=0100000000000000
+11942	vtestps xmm1, xmm5; setbe al	rosetta=abd2fd3698ec429a	flags=0000000000000000
+11951	vtestps ymm7, ymm4; sets al	rosetta=9720e7aad3ceb3ac	r0=0000000000000000	flags=0000000000000000
+11960	vtestps ymm7, ymm12; sete al	rosetta=701c6ccead9245fe	flags=4000000000000000
+11972	vtestps xmm11, xmmword ptr [r15 + 128]; seta al	rosetta=5c8dfa5f07e43e4f	flags=4000000000000000
+11980	vtestpd xmm11, xmm4; sete al	rosetta=a821b4d1bb9e0f9f	flags=0100000000000000
+11981	vtestps xmm5, xmm6; sete al	rosetta=ef6b6b48f0d09590	flags=4000000000000000
+11989	vtestps xmm13, xmm7; seto al	rosetta=3a4eb8539920f402	flags=0100000000000000
+12008	vtestpd ymm8, ymm14; setbe al	rosetta=c015fd1e1bae758c	flags=0100000000000000
+12019	vtestpd xmm1, xmmword ptr [r15 + 148]; setne al	rosetta=d43ae3e3da40472f	flags=4100000000000000
+12020	vtestpd ymm13, ymmword ptr [r15 + 124]; seto al	rosetta=5d45c2f00a21bcd9	r0=00ffffffffffff7f	flags=0000000000000000
+12024	vtestpd ymm3, ymm2; seta al	rosetta=0d7d4d9ec300f3af	flags=0000000000000000
+12028	vtestpd ymm1, ymmword ptr [r15 + 90]; setae al	rosetta=81d2d6d718906592	flags=0000000000000000
+12038	vtestpd xmm11, xmmword ptr [r15 + 79]; setb al	rosetta=bb7cda516f5f6bb3	flags=0100000000000000
+12040	vtestps ymm9, ymm4; setae al	rosetta=8c0148eb0b9d1e66	flags=0000000000000000
+12042	vtestps ymm3, ymm8; setae al	rosetta=7607327fab10afa8	flags=0100000000000000
+12051	vtestps ymm5, ymmword ptr [r15 + 16]; setbe al	rosetta=e7c262393fe3a024	flags=0000000000000000
+12057	vtestps xmm11, xmm1; seto al	rosetta=f6f8a2bd786399cf	r0=0000000000000000	flags=0100000000000000
+12064	vtestps xmm12, xmmword ptr [r15 + 113]; sete al	rosetta=e9a59a22fe352835	flags=4000000000000000
+12090	vtestps ymm0, ymmword ptr [r15 + 17]; sete al	rosetta=a94e352d2e1ddd49	flags=0000000000000000
+12095	vtestps ymm2, ymm13; setb al	rosetta=b8cc7f24da41410e	flags=0000000000000000
+12116	vtestps xmm0, xmm12; setb al	rosetta=5f40111a3b2d53c8	flags=0000000000000000
+12119	vtestps xmm5, xmmword ptr [r15 + 38]; sete al	rosetta=e3a0752f0d415620	flags=4000000000000000
+12132	vtestps ymm2, ymm10; seto al	rosetta=d6eb645c5a0dea05	r0=00ffffff00000000	flags=0000000000000000
+12135	vtestpd ymm14, ymm6; setp al	rosetta=0fe3a14f64bdcc2d	r0=0000000000000000	flags=4000000000000000
+12136	vtestps xmm9, xmm0; seto al	rosetta=36fada73d52b00f7	r0=007f384767c18448	flags=0000000000000000
+12137	vtestpd ymm0, ymm7; sete al	rosetta=67f64cf67fc875a7	flags=0100000000000000
+12150	vtestpd ymm1, ymmword ptr [r15 + 31]; setb al	rosetta=3b34084aaa2b872e	flags=0100000000000000
+12156	vtestpd ymm0, ymm0; sets al	rosetta=ca08a801d8b2d181	r0=0000000000000000	flags=0100000000000000
+12175	vtestpd ymm6, ymm13; seto al	rosetta=80f4c92ea43374a6	r0=0000000000000000	flags=0000000000000000
+12197	vtestpd ymm8, ymmword ptr [r15 + 28]; sete al	rosetta=a965337bf5ddce0e	flags=4100000000000000
+12224	vtestpd ymm0, ymm0; setp al	rosetta=ae47f027bdfe6245	flags=0100000000000000
+12231	vtestpd ymm10, ymm12; sete al	rosetta=6a1b90302bb5ca20	flags=0000000000000000
+12234	vtestps ymm7, ymm10; setp al	rosetta=a4b28cd425889704	flags=4000000000000000
+12236	vtestpd xmm12, xmm5; sete al	rosetta=bd4ac92cb6ee68f4	flags=0100000000000000
+12260	vtestpd xmm12, xmm12; seta al	rosetta=69ab53b56d17df80	flags=4100000000000000
+12261	vtestps xmm5, xmm4; setp al	rosetta=afae8ae109443e7c	r0=00ffffff00000000	flags=0000000000000000
+12275	vtestps xmm6, xmm12; setae al	rosetta=55043325797b13ec	flags=0000000000000000
+12285	vtestpd ymm14, ymm2; setb al	rosetta=d598c9cdcbbb6c76	flags=0100000000000000
+12312	vtestpd xmm13, xmm14; seto al	rosetta=e4f9b9172576f6b5	r0=0000000000000000	flags=4100000000000000
+12314	vtestpd ymm6, ymm7; setb al	rosetta=8646b3eb287911ee	flags=4000000000000000
+12317	vtestpd xmm8, xmmword ptr [r15 + 1]; setne al	rosetta=4d6f278ac5921dbe	flags=0100000000000000
+12320	vtestps xmm13, xmm14; setbe al	rosetta=144cb6744a091957	flags=0100000000000000
+12330	vtestpd ymm14, ymmword ptr [r15 + 13]; seto al	rosetta=adba996aaf9763ff	r0=0000000000000000	flags=4000000000000000
+12348	vtestps xmm8, xmmword ptr [r15 + 62]; seto al	rosetta=fb1ecf0a1cda9c34	r0=006b9c2e1d039ab3	flags=4100000000000000
+12364	vtestpd xmm15, xmm7; setne al	rosetta=6337ba1698349415	flags=0100000000000000
+12366	vtestps xmm2, xmm11; seto al	rosetta=811863f94660f51e	flags=4000000000000000
+12379	vtestpd ymm10, ymm9; seto al	rosetta=51c1b7c0a3fa6b5a	flags=0100000000000000
+12394	vtestpd ymm14, ymm1; seto al	rosetta=9fe289b5aff4ce6a	flags=0000000000000000
+12407	vtestps xmm4, xmm4; setp al	rosetta=4ca7206e8d25a0ab	flags=0100000000000000
+12412	vtestpd xmm1, xmmword ptr [r15 + 125]; setb al	rosetta=b2f6cb21c40bfee8	flags=4100000000000000
+12414	vtestps xmm8, xmm12; setae al	rosetta=6441cf93c3a765e6	flags=4000000000000000
+12417	vtestps xmm5, xmm9; setne al	rosetta=045350dfece45487	flags=0000000000000000
+12439	vtestpd ymm6, ymm7; setae al	rosetta=67988af77a921c1c	flags=4000000000000000
+12442	vtestps xmm15, xmm3; setne al	rosetta=347c3b21a2f14f81	flags=4000000000000000
+12458	vtestpd xmm7, xmm0; setp al	rosetta=6d54ad8a2d72b758	flags=0100000000000000
+12460	vtestpd xmm8, xmm5; seto al	rosetta=1efb341a2711953e	flags=4100000000000000
+12468	vtestpd ymm0, ymmword ptr [r15 + 118]; setbe al	rosetta=eaf6e128d85b8c75	flags=0100000000000000
+12478	vtestps ymm12, ymm15; sete al	rosetta=fe38be75466aad72	flags=0000000000000000
+12502	vtestpd xmm0, xmm3; sets al	rosetta=d4974ac693c0132e	r0=00d57c0c5d3d11e9	flags=0100000000000000
+12505	vtestps ymm11, ymm7; setae al	rosetta=17216a42fc320b38	flags=0000000000000000
+12535	vtestps ymm0, ymmword ptr [r15 + 34]; setb al	rosetta=b04da85f99216b9f	flags=4000000000000000
+12551	vtestpd ymm10, ymmword ptr [r15 + 158]; seta al	rosetta=d12ca541b9b633c9	flags=0000000000000000
+12561	vtestpd xmm2, xmm14; setb al	rosetta=2f971365430c54d7	flags=0100000000000000
+12568	vtestps xmm12, xmm2; setae al	rosetta=32ed6175243633ef	flags=0000000000000000
+12588	vtestpd xmm5, xmmword ptr [r15 + 148]; sets al	rosetta=c2ef4394b6e58ebe	flags=4100000000000000
+12603	vtestps xmm2, xmmword ptr [r15 + 70]; sets al	rosetta=051962412332b89d	r0=0000000000000000	flags=0100000000000000
+12616	vtestpd xmm12, xmm14; setb al	rosetta=38a9b82dd9e250fb	flags=0100000000000000
+12622	vtestps ymm15, ymm1; setb al	rosetta=0f592fed3625eee9	flags=0000000000000000
+12633	vtestps xmm12, xmm3; seto al	rosetta=3ba16b535ff7cda4	flags=4100000000000000
+12634	vtestpd xmm15, xmmword ptr [r15 + 21]; setb al	rosetta=b9597546ecafaced	flags=4100000000000000
+12644	vtestpd xmm13, xmm15; seta al	rosetta=ea8ac1d35d58fb21	flags=4100000000000000
+12653	vtestps xmm4, xmm14; setbe al	rosetta=844b85fa1ee041a0	flags=0000000000000000
+12664	vtestpd ymm7, ymm5; seta al	rosetta=0925a3d42f2828fc	flags=4100000000000000
+12672	vtestps xmm10, xmm6; sete al	rosetta=bb112904c092988c	flags=0000000000000000
+12673	vtestpd xmm2, xmmword ptr [r15 + 65]; seto al	rosetta=437037f203d5026c	flags=0100000000000000
+12677	vtestps ymm1, ymm1; sete al	rosetta=c858f4509d2c62e9	flags=0100000000000000
+12680	vtestps xmm11, xmmword ptr [r15 + 152]; seto al	rosetta=a326545eaea860f3	r0=0012b4e1b4a00fd1	flags=4000000000000000
+12682	vtestps xmm13, xmm13; setae al	rosetta=fce8af65f2b5cf4f	flags=0100000000000000
+12691	vtestps ymm11, ymmword ptr [r15 + 128]; setp al	rosetta=b9da4cddfb7db977	flags=0000000000000000
+12719	vtestps xmm3, xmm15; setp al	rosetta=0fa47f502b3f9d0d	flags=0000000000000000
+12723	vtestpd xmm1, xmm11; sete al	rosetta=90d353754c0869ed	flags=4000000000000000
+12727	vtestpd ymm7, ymm3; setne al	rosetta=f2b54e7ec5e83938	flags=0000000000000000
+12744	vtestpd ymm13, ymm7; sete al	rosetta=773c0b5bff5ffeff	flags=0000000000000000
+12753	vtestpd xmm2, xmm13; sete al	rosetta=07475e895cbb6e81	flags=0100000000000000
+12771	vtestps xmm13, xmm0; setne al	rosetta=e955be98dda6b364	flags=0100000000000000
+12773	vtestpd xmm1, xmm1; sets al	rosetta=a44f7d7e420f129c	flags=4100000000000000
+12774	vtestpd ymm10, ymmword ptr [r15 + 136]; seta al	rosetta=845450408d00a158	flags=0000000000000000
+12782	vtestpd ymm9, ymm9; setb al	rosetta=f91d80ad519fa183	flags=4100000000000000
+12790	vtestps ymm9, ymmword ptr [r15 + 70]; sete al	rosetta=341c7438de674f85	flags=4000000000000000
+12805	vtestpd ymm3, ymm4; setne al	rosetta=95892ea8169ce606	flags=0000000000000000
+12821	vtestps xmm11, xmm0; sete al	rosetta=c10022876ae2dd30	flags=0000000000000000
+12842	vtestpd ymm5, ymmword ptr [r15 + 108]; seta al	rosetta=ab920111d13f109a	flags=4000000000000000
+12848	vtestpd ymm10, ymm13; seto al	rosetta=b45ac72849cb46a0	r0=0000000000002000	flags=0100000000000000
+12857	vtestpd xmm13, xmm7; sets al	rosetta=485c5366bfb9eccf	flags=0100000000000000
+12875	vtestpd xmm12, xmm13; setne al	rosetta=80abccd66c6c27f8	flags=4100000000000000
+12881	vtestpd xmm7, xmm12; setae al	rosetta=8e05128514b7e9c6	flags=0100000000000000
+12891	vtestps ymm14, ymm6; setbe al	rosetta=707d095761c12742	flags=0000000000000000
+12914	vtestpd ymm15, ymm13; sets al	rosetta=bf509227b5b73507	r0=0000000000002000	flags=4000000000000000
+12915	vtestpd ymm2, ymm4; setne al	rosetta=8a8c9463791539bb	flags=0100000000000000
+12923	vtestps xmm3, xmm9; seta al	rosetta=1a77e8ad00d86267	flags=0000000000000000
+12928	vtestpd xmm15, xmm5; setbe al	rosetta=94baa48e46a0f66c	flags=4000000000000000
+12929	vtestps ymm3, ymmword ptr [r15 + 119]; sets al	rosetta=597c7f522c2c6c7f	flags=4000000000000000
+12931	vtestpd xmm9, xmm14; seto al	rosetta=464cffe5fa1b4ab8	flags=0100000000000000
+12940	vtestps ymm5, ymm13; seto al	rosetta=0eae2f79a52dbdc6	r0=0000000000000000	flags=0100000000000000
+12942	vtestpd ymm6, ymmword ptr [r15 + 2]; setne al	rosetta=e5a7e19c1392f8b0	flags=0000000000000000
+12943	vtestpd xmm2, xmmword ptr [r15 + 138]; setbe al	rosetta=a2b99b83314c96c0	flags=0100000000000000
+12948	vtestps xmm4, xmmword ptr [r15 + 12]; setp al	rosetta=ede8ee6e91a004a5	flags=4100000000000000
+12956	vtestpd xmm0, xmm15; seta al	rosetta=43762d239b767228	flags=4100000000000000
+12963	vtestps xmm11, xmm6; setp al	rosetta=43af2f929af3d788	flags=0000000000000000
+12966	vtestps ymm4, ymmword ptr [r15 + 131]; setb al	rosetta=517ca73c15b9ebc9	flags=0000000000000000
+12967	vtestpd ymm15, ymm12; sets al	rosetta=0241d58f7c680e76	flags=0000000000000000
+12979	vtestps xmm8, xmm5; seto al	rosetta=9339316c5509bd71	flags=0000000000000000
+12991	rcpps xmm15, xmmword ptr [r15 + 80]	rosetta=ad369d26a4cef56a	ymm15=00b0cb670000807f0088215b00f07fbfffff7fff915f9e7aed0612d3cacd36d7
+12992	rsqrtss xmm4, dword ptr [r15 + 101]	rosetta=0d520e281c67a507	ymm4=0080515e000000bfffff7f7f36e3fd167dd232fb966205f9cc934ebb95d9e6be
+12994	rsqrtps xmm1, xmm11	rosetta=1590da8f0f242319	ymm1=0000c0ff000080ff0000b5370020a83fc0428d770000807f0000c07f452381ff
+12996	vrsqrtps ymm1, ymm1	rosetta=73f652c6929c5e34	ymm1=0000b5390000c0ff0080d33f0000c0ff0080a53f0000c0ff00f0bd210000c0ff
+12997	rcpps xmm13, xmm8	rosetta=d6317aad0d57526f	ymm13=00a8da360000000000000080000000800000001a44ce61833359f53d000080bf
+12998	rcpps xmm15, xmm15	rosetta=3ac9b9efef747eec	ymm15=0000003000f07f7e00f07fbf00e880b6210756fa000020401d2b10c9f90215d0
+12999	vrcpps xmm6, xmmword ptr [r15 + 112]	rosetta=2e3b41e1a89dd9c5	ymm6=00108cbf00906be700880acc00c84fcc00000000000000000000000000000000
+13000	vrsqrtps xmm15, xmmword ptr [r15 + 80]	rosetta=7c930774bc907234	ymm15=0000c0ff0000b5370000c0ff0000b53900000000000000000000000000000000
+13002	rcpps xmm2, xmm14	rosetta=1d17e7dac3584c96	ymm2=00c8a68600f0ff3300f0ff72000000300083953effff7f00000000cf73c96a95
+13004	vrcpps ymm15, ymm3	rosetta=94119a1d0b2562bb	ymm15=00e8db2e00680c360000204100f8a069000000800000008000f0ff1f00703636
+13006	vrsqrtps ymm11, ymm0	rosetta=e633d1cedd4590b2	ymm11=0000c0ff0000c0ff0050e13f00f8ff5e0000355200b80b220000c0ff0058682a
+13008	rsqrtps xmm13, xmm5	rosetta=424afb8f73d0ebcd	ymm13=0000c0ff00685e4500c827370000801f78131e9700000080000000bff3d93afb
+13010	vrsqrtss xmm6, xmm6, xmm6	rosetta=c90524d88e52c654	ymm6=00184a30cdcccc3dffff7f4b452381ff00000000000000000000000000000000
+13011	vrsqrtps ymm3, ymm2	rosetta=88f47a7bf02abd92	ymm3=00c8f33f4523c1ff0000c0ff000080ff00e0833a0000c0ff0000c0ff0000c0ff
+13012	vrsqrtps ymm6, ymm12	rosetta=6948fec3c5d747a7	ymm6=0000c0ff0068be26000080ff0000355900b8d0420000c0ff0008513f0000c0ff
+13013	vrsqrtps ymm6, ymm15	rosetta=a8f0cbb7c3ece9b1	ymm6=0000b52f000080ff0000c0ff0000b537000080ff0000c0ff0000c0ff0000c0ff
+13016	rsqrtps xmm11, xmm1	rosetta=716d1578968c17b6	ymm11=00e8213f00d0083f000080ff0050163b56801abef90215d0d6174d97e4347379
+13017	vrcpps ymm7, ymmword ptr [r15 + 63]	rosetta=886db3afb0191a12	ymm7=00800ac97affff7f00f0ffde7fffff7f0050317d0000807f4bffff7f0000807f
+13019	rsqrtps xmm4, xmm13	rosetta=1d469cf9dd09d836	ymm4=0000c0ff00f8ff5e0008b52f0018e5590000803f1bae83960100008001000080
+13020	vrcpss xmm9, xmm12, xmm5	rosetta=344ace4d82b13bcf	ymm9=0040c5b8ffffff4e000060400100000000000000000000000000000000000000
+13021	vrcpss xmm6, xmm7, dword ptr [r15 + 128]	rosetta=1a3dfe813f7db1e2	ymm6=008804c04edd0fbd2e5e499115e97e1700000000000000000000000000000000
+13023	rcpps xmm13, xmmword ptr [r15 + 128]	rosetta=e25c6686c65c0815	ymm13=0000807f0000c0ff00b89cb600a892b5ffff7f001d14e079559537fb94ef1e49
+13025	vrsqrtss xmm15, xmm5, dword ptr [r15 + 111]	rosetta=de81ba12aa9fa7ba	ymm15=0000352f0100004b61b348b20000008000000000000000000000000000000000
+13027	vrsqrtss xmm3, xmm11, xmm13	rosetta=c3804444fbe66556	ymm3=00e01122ffff7f4b46ffd67c0000807f00000000000000000000000000000000
+13029	rcpps xmm10, xmm15	rosetta=95b10b54c0d9d27d	ymm10=0000e07f4523c17f00e82de80018d63f5b7d4649f9021550c1a646c9bfb69597
+13030	vrsqrtps xmm0, xmm3	rosetta=e2fb86f6c24c5051	ymm0=0000b53f0000c0ff00c827370000b53900000000000000000000000000000000
+13032	rsqrtss xmm7, xmm6	rosetta=eaacfadb646ada4f	ymm7=00606438000000007638907a0000a07f0000c0ffc4c565930000807f00008000
+13033	vrsqrtss xmm2, xmm7, dword ptr [r15 + 57]	rosetta=735d73edca848cf0	ymm2=0048eb57ec16961600000000000080bf00000000000000000000000000000000
+13034	rcpps xmm13, xmmword ptr [r15 + 144]	rosetta=e21d22a68509eca5	ymm13=0000807f00b01eb700e8dbae00d07769000000000000001acfb44f1e00008000
+13035	vrcpps xmm13, xmm3	rosetta=38e195b5b4a569dd	ymm13=4523c17f4523c17f00483339003058b600000000000000000000000000000000
+13040	rcpps xmm0, xmmword ptr [r15 + 128]	rosetta=9839310108f1b037	ymm0=00f0ff6400086468000080ff00e8db2e45c7eebe4166913ee5c9e3f944f011f8
+13041	vrcpps ymm3, ymm3	rosetta=df64cf3ec3fcc4a7	ymm3=003072370090bf03001003e900f07fbf0000c07f00f0ffaf00d803c100f07f7e
+13043	rsqrtss xmm7, xmm2	rosetta=5a918816350327cd	ymm7=00a06f53cdcccc3dcdcccc3df90215500487c3bef9021550728d84970000001a
+13044	rsqrtps xmm6, xmm9	rosetta=019cfafdf0bb7f4d	ymm6=00d09c210000c0ff0000c0ff0000355900002040cd5a948c1a1042c9cf2f963d
+13045	rsqrtps xmm12, xmmword ptr [r15 + 48]	rosetta=3958ca6319a80374	ymm12=0008513f00e0ae210000c0ff0090b22194533afb00008000000000800000c03f
+13046	vrcpps ymm0, ymmword ptr [r15 + 66]	rosetta=7a8190df9d2a9832	ymm0=00c830a600889d4a00b098120000807f0000807f0068a12b00e0314cba48ffff
+13047	vrsqrtps xmm3, xmm8	rosetta=1273aff3874a6f6e	ymm3=0000c0ff000080390000c0ff0000c0ff00000000000000000000000000000000
+13048	rcpps xmm5, xmmword ptr [r15 + 64]	rosetta=259ccbd952034e75	ymm5=009830e900f0ff2f00f0ffaf00784c37eaf26825ffff7fff430bf98b641683fa
+13050	vrsqrtps xmm9, xmm8	rosetta=2aa86c42a649d5dc	ymm9=00f87f3f00008c354523c17f0000c0ff00000000000000000000000000000000
+13051	vrcpps xmm4, xmm4	rosetta=4a49bb28a7234272	ymm4=00108c3f00a82a3f0018e53500f0ff6400000000000000000000000000000000
+13052	vrsqrtps xmm4, xmm4	rosetta=03aa6d372bb39e8b	ymm4=0000807f0000c0ff00f8ff5e0000803900000000000000000000000000000000
+13055	vrsqrtps xmm14, xmm2	rosetta=918eb74dfde09d67	ymm14=00f8ff5e0000c0ff0000b5390000c0ff00000000000000000000000000000000
+13060	rcpps xmm12, xmm1	rosetta=860f9def672ee709	ymm12=000080ff4523c17f00e8db2e0020b33f7311db7acdcccc3d92be62ee454b41fa
+13061	vrcpss xmm13, xmm13, dword ptr [r15 + 79]	rosetta=3962bdefc3e66780	ymm13=00a0d24455658fbe73341dc832b4bd4800000000000000000000000000000000
+13062	vrsqrtps xmm10, xmm14	rosetta=6a4425ce8e8a3576	ymm10=0000c0ff0098a32100e8213f0000c0ff00000000000000000000000000000000
+13063	rcpps xmm9, xmmword ptr [r15 + 80]	rosetta=725c4bf3bb13f2fc	ymm9=00983e840000c07f00009eb50090940538eb3948a61867c90000807f0000a07f
+13064	rcpps xmm1, xmm12	rosetta=34d1d6b1e8d5656d	ymm1=00408bbf4523c1ff003857360038c383c29e04484523c17f9d19907a0000a07f
+13067	vrcpps xmm15, xmmword ptr [r15 + 9]	rosetta=a2091998713fb9fc	ymm15=00905a610000807f0018ab39004000e400000000000000000000000000000000
+13070	vrcpps ymm13, ymm4	rosetta=8dc875bf2dfa3e7d	ymm13=00f0ff3f00a82a3f0060ff3f00c0153600f07fbf00f0ffbf0100c07f00f0ffaf
+13071	rsqrtss xmm15, xmm3	rosetta=2d0c58ed5963ee89	ymm15=000035524335710e568af7be4523c17f0000004fe08854bf4b23f95273aa3697
+13072	vrcpss xmm10, xmm14, xmm15	rosetta=b7b2d9ef005139ba	ymm10=00a8c435b55e1284f6fc0b97d26986be00000000000000000000000000000000
+13073	rcpps xmm14, xmm10	rosetta=010c8e4553f436c9	ymm14=00a82a3f00a82a3f00f0ff720000807fcdcccc3d000000804b7b2ac9ffff7fff
+13075	rsqrtps xmm5, xmm9	rosetta=dc53fc42d78a3b93	ymm5=0000c0ff0000c0ff0000355900003552000080bfbef8131781fe1efb9d224897
+13077	vrcpps ymm15, ymmword ptr [r15 + 56]	rosetta=db572fa219707ee2	ymm15=0038ab35009884310000c0ff000000204523c17f00a89cc80000c0ff00b83169
+13078	vrcpps ymm4, ymm1	rosetta=243d84dade300fc2	ymm4=0000807f000000300000c07f005897250040d73f003870680000204100f07fbf
+13079	vrsqrtps ymm13, ymm3	rosetta=ca43bec0830cb274	ymm13=000035520000c0ff0000c0ff0040a13a0000c0ff000080ff0000c0ff00308529
+13080	rsqrtps xmm0, xmm3	rosetta=be452069c38095a0	ymm0=0000c0ff0000807f0000b53f0000b53f0000005f0000003fc2eb8717976a6b3f
+13082	vrcpss xmm10, xmm9, xmm13	rosetta=ba115dfce5591561	ymm10=0030d4f24f42e248000080ff0000008000000000000000000000000000000000
+13083	vrsqrtps ymm5, ymm1	rosetta=76296a126fe67495	ymm5=00681d540000807f00b8ab3f00d0a6210000c0ff0000355900e8213f00502535
+13085	vrsqrtps ymm14, ymmword ptr [r15 + 64]	rosetta=923bfb4518a6031a	ymm14=00684a400040ca4400f8ff5e00e8a73f0000c0ff0000b5390000c0ff00c82737
+13086	vrsqrtps ymm11, ymm6	rosetta=14c181c12280f8fb	ymm11=00f89e380000b53f000080ff0000c0ff00a082380000c0ff0000c0ff00000000
+13088	vrcpps xmm4, xmm12	rosetta=ebdac5ed73f73258	ymm4=0000807f00985d37000080ff0000e07f00000000000000000000000000000000
+13089	rsqrtss xmm15, dword ptr [r15 + 27]	rosetta=3d220e9a92d3b4c3	ymm15=00f8ff280000003ff53619bff9021550b18b779719b24548207634b200000080
+13090	vrsqrtps xmm8, xmm0	rosetta=65e7fea307860e70	ymm8=002801220000b52f00e8df5300d0083f00000000000000000000000000000000
+13093	vrsqrtps xmm15, xmm10	rosetta=b49ccb7255577b58	ymm15=00e0d43f0000c0ff0008b5370050b83a00000000000000000000000000000000
+13100	vrcpps xmm1, xmmword ptr [r15 + 71]	rosetta=8d8140d01878fb7a	ymm1=0000807f00986268000080ff00e0934c00000000000000000000000000000000
+13102	vrsqrtss xmm4, xmm4, dword ptr [r15 + 166]	rosetta=db17c3b99a31eddb	ymm4=0060f437ccda70bf0d5b52c9000000df00000000000000000000000000000000
+13103	vrcpss xmm11, xmm6, xmm6	rosetta=513646104b8445f5	ymm11=00008033e5f3673f39c3367be6d261c800000000000000000000000000000000
+13106	vrcpps ymm12, ymm3	rosetta=79fa8fe80a36b683	ymm12=00a82a3f00f852db4523c1ff0000e07f000000000000c0ff0048fcb700507a67
+13107	vrsqrtss xmm7, xmm10, xmm8	rosetta=0037b00908fc730e	ymm7=00f8ff5effff7f4bffff7f4b000080ff00000000000000000000000000000000
+13108	rsqrtps xmm7, xmm15	rosetta=2e61ce8b40336880	ymm7=4523c17f000080390070774800d0d22100000000ffff7f802ad0824400000000
+13110	rsqrtps xmm15, xmm5	rosetta=70eae57cc0b81949	ymm15=0000801f000035520000b53f00f8ff5e0100004bffff7f4b4a98d996f2cc6b3d
+13112	vrsqrtss xmm13, xmm12, xmm9	rosetta=5c6e44767df3c4c8	ymm13=00a0a7310100004bcdcccc3d0100008000000000000000000000000000000000
+13116	vrsqrtps ymm12, ymmword ptr [r15 + 139]	rosetta=d26570c1a41710bf	ymm12=00b8934300a01b530018fa5a0000807f0000c0ff0030ea5d3bffff7f0000c0ff
+13118	vrcpps ymm15, ymmword ptr [r15 + 96]	rosetta=a391102f2b2446f2	ymm15=0030b8bf00c8e43500b0853f001806300080308f0000807f0060934700f02336
+13119	vrsqrtps xmm10, xmm6	rosetta=df9b3d33b2a82814	ymm10=00c880200000801f00e0fb210000c0ff00000000000000000000000000000000
+13121	rcpps xmm13, xmmword ptr [r15 + 0]	rosetta=36d1848012321830	ymm13=000080ff00000e13003074684523c17f452381ff000000800e9c313f128114f8
+13122	vrcpss xmm14, xmm6, xmm8	rosetta=382063e8c654b7e2	ymm14=0020d0834c432cfbe815ec30d723e87a00000000000000000000000000000000
+13126	vrcpps ymm2, ymm15	rosetta=5ae74b54e269ca61	ymm2=0000000000988dbe00000000000080ff000080ff0090bc06003003c10090b9f4
+13127	vrcpps ymm9, ymmword ptr [r15 + 65]	rosetta=ca61e59aa77af515	ymm9=002000880028ddb600c0024600f009b10000807f0000807f00f0fe7d0068a1ba
+13128	vrsqrtps xmm12, xmm14	rosetta=0a3cc88e8e5229e1	ymm12=0000b52f00684a400000c0ff0000b53700000000000000000000000000000000
+13136	rcpps xmm9, xmm12	rosetta=2a9c0d30a4d259da	ymm9=000000800000000000088c4c00f07f7e0000204095a211fbf90215d0000000bf
+13141	vrsqrtss xmm2, xmm2, xmm7	rosetta=2699450f3a2906d1	ymm2=0000b5370100008089825cc838c6ea3900000000000000000000000000000000
+13142	vrsqrtss xmm3, xmm0, xmm3	rosetta=ed9c8b53cc9bd098	ymm3=00b0662f8782af16aa6823790000807f00000000000000000000000000000000
+13143	rsqrtps xmm2, xmm4	rosetta=cd68ad6645f1184c	ymm2=00f8ff5e0000807f0000b53f000080ffffffff4e3ec22796905ca33eb3b4c0fa
+13144	vrsqrtps ymm14, ymm4	rosetta=85e31892be40a542	ymm14=0000c0ff0098ad530000b52f0000c0ff0000c0ff0000c0ff00e0c1210000c0ff
+13147	rcpps xmm8, xmmword ptr [r15 + 96]	rosetta=39f6cc4fb9f5e4c5	ymm8=0008893600c0cc3e00104b410038f8b50000a07f000080bf9dd16efe9829393e
+13148	vrsqrtss xmm1, xmm13, xmm14	rosetta=b65a66763d94e54e	ymm1=00a8235a000000df4fc807fa723e1fbe00000000000000000000000000000000
+13149	vrcpps ymm3, ymm3	rosetta=f2e3c1d9b82f06e5	ymm3=0000e07f00f0ff3f00782cc0000008c00000803300f0ffbf00c0cc3e00f0ffaf
+13150	rcpps xmm0, xmm1	rosetta=ece9957ea4cf9d0c	ymm0=00000000007021b600c0cc3e0080ba3fffff7f7f1e5cbc7a0000c03fffff7f4b
+13152	vrsqrtss xmm4, xmm3, xmm11	rosetta=abec5061e55ee79f	ymm4=00a88f3a58311e20ffff7fff34ee684900000000000000000000000000000000
+13153	rcpps xmm13, xmm10	rosetta=3db699b362598109	ymm13=00f07fbf00a882bf00e8dbae006811b6000000800000c07f000000cf10e3013e
+13155	rsqrtss xmm15, dword ptr [r15 + 45]	rosetta=a9d0b0fa3cf1831d	ymm15=00003544e5f588170000003f00000080ffffff5e61458079f90215500000000c
+13158	vrcpps ymm6, ymm13	rosetta=8545a83481a0245a	ymm6=0100c07f00c07c670038baf4006041a100e82fbd00084dd100d0cd3500000080
+13160	vrsqrtss xmm6, xmm2, xmm2	rosetta=0a77ebe350d9b14e	ymm6=00880955ffffff4e0100807f0000005f00000000000000000000000000000000
+13161	rcpps xmm10, xmmword ptr [r15 + 112]	rosetta=b39e4c8268e8a1a9	ymm10=00c8ee68002093bf00f0ff9f00d8d083ffd51da26cf8f0720000005fe5a8a308
+13162	rsqrtps xmm8, xmmword ptr [r15 + 96]	rosetta=dc0b691388f3f7ea	ymm8=0000c0ff000080ff00284b540000c0ff7773ca2bcdcccc3d000000bf010000cf
+13164	vrcpps ymm11, ymm0	rosetta=3536b282f01fc201	ymm11=00389ab60060d9840040cdd30050b33100c0cc3e00c0cc3e00000080000080ff
+13166	rcpps xmm7, xmm7	rosetta=e467700bdea7d7ff	ymm7=0000807f000080ff00205fb600402040fe0cdac8c6f11b150100807f576325c9
+13167	rcpps xmm13, xmm6	rosetta=f54e2a5dde220b8d	ymm13=001873e700f0ffbf0000807f0000807f8d9deefa000000806e8a287b000080bf
+13169	vrcpps ymm13, ymm4	rosetta=3365b86a8937f862	ymm13=0000e07f00008033000080ff000080ff0050366800c02c840068c28300000080
+13174	vrcpss xmm7, xmm11, xmm7	rosetta=606fe6f90db6a505	ymm7=004848c00000803f0000c07f26e586be00000000000000000000000000000000
+13176	rcpps xmm3, xmm15	rosetta=c79cfc6bd99a93bd	ymm3=0000807f00f07fbf00f0ffbf00d0e003010000804523c17fb6a8493f033972c8
+13178	vrsqrtps ymm6, ymm10	rosetta=ecca414197a0309a	ymm6=0018cc3a0000e07f00e8a1210000c0ff0000c0ff0000c0ff00b076220000c0ff
+13179	vrsqrtps ymm9, ymm14	rosetta=b971fd638af2ebe3	ymm9=000080394523c17f0000807f0000b53f0000c0ff0000c0ff0000c0ff0000b53f
+13180	vrsqrtps ymm15, ymm8	rosetta=8a9c0e254f4f5f71	ymm15=00a8803f0098af2100909c530000c0ff00a87a440000c0ff0000b5390000c0ff
+13182	rcpps xmm8, xmm1	rosetta=ed2339c5c37c5cda	ymm8=00f0825c00f0e31900b042b100000020000060400000803f01feac4801000000
+13184	vrcpss xmm11, xmm5, xmm6	rosetta=18e2b9bff7e7f8e0	ymm11=0060d5e7ab05bbbd34759717f90215d000000000000000000000000000000000
+13185	rsqrtps xmm5, xmm5	rosetta=d1da61d7b61b3ef0	ymm5=0078f44c00809d21000080390000c0ff8b62821757c8f14c58e06b7500000000
+13186	vrcpps ymm14, ymm10	rosetta=41e094f8c61f50f9	ymm14=00d861e70000008000f0ffaf00f0ff9f00e8dbae0000807f00c0cc3e00f0ffbf
+13187	rcpps xmm3, xmm8	rosetta=811f1942ce4f063e	ymm3=0000c07f0068d7b90070da3500000030ffff7f0000002040000080bfde099517
+13189	rsqrtps xmm14, xmm13	rosetta=fa953c1203b79349	ymm14=0000903a000035590000c0ff0000c0ff1d8dd0cf620201c8f01d573fb42f8ecf
+13191	vrcpps ymm6, ymm4	rosetta=c80fb9343776de0b	ymm6=00f0ff2f00b0f73f00c85b160040e0040000002000c0cc3e00d08c0400e8dbae
+13192	rsqrtps xmm3, xmm0	rosetta=7106af177d74c4f8	ymm3=4523c1ff000080ff00305a3e00f8ff5e0000000c0000000c76377f97d943f2c8
+13195	vrcpss xmm6, xmm0, xmm11	rosetta=48090a77f49264d7	ymm6=00008033ffff7fff0100807ff6152b5c00000000000000000000000000000000
+13196	rsqrtss xmm4, dword ptr [r15 + 35]	rosetta=8b30610ca08a6659	ymm4=00181332cb324e7501000000ffff7fffffff7f7ffb313a3e0d6a5ac7ae5a9548
+13197	rsqrtss xmm2, xmm0	rosetta=284cdd026e410853	ymm2=00f8ff5ee5eb9c3d000080004532b1c815b8673dfb8d6017b47f827adb882048
+13198	vrcpps ymm3, ymm12	rosetta=50f6b5656f77a4e9	ymm3=00f0ff7200f0ffbf00f8004100f0ff9f0028e3e600d0e73500a82a3f00285184
+13200	vrsqrtps xmm2, xmm10	rosetta=d57aa78ab46803a6	ymm2=0000c0ff0030a83a0000c0ff0088b13a00000000000000000000000000000000
+13201	rsqrtps xmm4, xmm10	rosetta=e27e3baee836adff	ymm4=0000c0ff0068c13a000080ff00787545e4bc87c8010000cfffff7f000000807f
+13203	vrcpps xmm15, xmm15	rosetta=5a1d24180302fe0d	ymm15=00c090bf00a0a73f00f07f3f00386a6700000000000000000000000000000000
+13204	rcpss xmm5, xmm5	rosetta=0863d22ee3fe9d68	ymm5=0038b26705cd35cd9f13fbc80100004b2da95c45460803437afb6f650100004b
+13205	vrsqrtps ymm11, ymmword ptr [r15 + 73]	rosetta=5cf4d2472137018c	ymm11=0000c0ff0000807f0000c0ff0098bd5e0000c0ff00f80d4f0040815e00f87f41
+13208	vrsqrtps ymm4, ymm5	rosetta=de99dce89622c182	ymm4=00c832220000c0ff0078e23a0000c0ff0000c0ff004816520000c0ff0000c0ff
+13212	vrsqrtps ymm11, ymm13	rosetta=001d3f761bc0cbfe	ymm11=0000c0ff00f8a35b0040a6210050b72100d00b22006882540018e53a0000c0ff
+13213	vrcpps ymm4, ymm14	rosetta=122e08a8a39c8898	ymm4=00c82fb600c8b09100a82a3f00f0ff9f00e8dbae00d0f86700e8db2e00f07f3f
+13215	rsqrtps xmm11, xmm10	rosetta=acfe22acb3d02c40	ymm11=0008b5370000c0ff0008993a0000c0ff01000000000000cfdd149bc801000000
+13218	vrcpss xmm9, xmm12, xmm10	rosetta=ac8d54af22650e80	ymm9=005888bff90215d045781ffb837e991600000000000000000000000000000000
+13219	vrcpss xmm11, xmm14, dword ptr [r15 + 124]	rosetta=44af6a177aeda081	ymm11=000089bf0100807ffc8fdefa452381ff00000000000000000000000000000000
+13220	vrsqrtps ymm7, ymm10	rosetta=53e5627c8e388590	ymm7=0000c0ff0000b53f00f8ca3a00683540009803550000c0ff00f8ff5e0000801f
+13222	vrcpps ymm12, ymm9	rosetta=116ac623e17be60f	ymm12=005012040028e50c00f0ff720070020500c893f6000020410060b06700a8b167
+13223	vrcpps ymm6, ymm8	rosetta=74167223c207b9e0	ymm6=00b0c19c0020feb50100c07f0050aae800f07fbf00780b4300f0ffbf00b0bfe7
+13224	vrsqrtps xmm0, xmmword ptr [r15 + 43]	rosetta=7fe71a642c2c034a	ymm0=0000c0ff0000807f0088f5430000c0ff00000000000000000000000000000000
+13225	rcpss xmm6, dword ptr [r15 + 115]	rosetta=64bad7657b64f348	ymm6=00409bdbffff7f4b21da8dfa000000800000c0ff26eaddbba7656196f90215d0
+13226	vrsqrtps xmm5, xmmword ptr [r15 + 121]	rosetta=b5588bb606b01570	ymm5=0000807f0000c0ff0070815e0000c0ff00000000000000000000000000000000
+13229	vrcpps xmm10, xmm6	rosetta=58624888706543bb	ymm10=000882e7009085e700f07f7e0038010400000000000000000000000000000000
+13230	vrcpps xmm5, xmmword ptr [r15 + 40]	rosetta=5a98fecfcb9fe3a3	ymm5=0060b11e000080ff00e8b294001802f100000000000000000000000000000000
+13231	vrcpps ymm10, ymmword ptr [r15 + 32]	rosetta=171671cc63511f60	ymm10=0000803300f0ff3300f0ff6400f0e38300f07f3f00c8a6670080abc100c0809c
+13234	rsqrtps xmm15, xmmword ptr [r15 + 16]	rosetta=6323b6d71e5e06df	ymm15=00b004220050754b0018de210000801f4523c17f0100004b1e6749930000c03f
+13236	rsqrtps xmm10, xmm0	rosetta=b70e674a09f4bcf0	ymm10=00b8bc530098983a0000b53700f87f3f010000cf166a0197738b6cbf01000080
+13237	rcpps xmm9, xmmword ptr [r15 + 32]	rosetta=da25529fdb962e54	ymm9=00a82a3f0000807f0068cf030058bd8a0100004bddac00495078217b0000004f
+13240	vrsqrtps xmm13, xmm14	rosetta=f674c70d14895425	ymm13=0000c0ff0000b52f0000933a00906e5300000000000000000000000000000000
+13249	vrcpss xmm6, xmm13, dword ptr [r15 + 107]	rosetta=68ddfb8848cd0962	ymm6=00b884275111bcc855c137938f30829600000000000000000000000000000000
+13250	rsqrtps xmm5, xmm7	rosetta=cbc113289bb66cc4	ymm5=0050da3f000080ff0000801f00c81654ffff7f7fbf66c5be0000001af1629497
+13252	rsqrtps xmm1, xmm11	rosetta=d7e5ec2f81fb5279	ymm1=0050bb4f00d0083f0000b53f0008b5377bacb522f0a373c9000000005f2710bf
+13253	vrsqrtps ymm4, ymm3	rosetta=d9a06c66f9ab5506	ymm4=00c03d4e0000c0ff00d0083f000035520000c0ff0000c0ff0000c0ff0050a440
+13254	rsqrtps xmm15, xmm13	rosetta=515ffc32ac0f5944	ymm15=00f8a83f006800240000c0ff00f8ff5e171e73490000a07f1ce9807000008000
+13255	rcpps xmm7, xmmword ptr [r15 + 80]	rosetta=ab7b25bbb681afe0	ymm7=00e8936000e8dbae0000e07f00e84904f902155030a902fbffff7f0026a45d34
+13256	rcpps xmm7, xmmword ptr [r15 + 128]	rosetta=9395700b13828b92	ymm7=0040923e00f09a0100e80b40000080330fc8bc6a000000bf010000cfa8923682
+13257	rsqrtps xmm2, xmmword ptr [r15 + 128]	rosetta=0c4f7cb639f7c6e4	ymm2=000080ff00b8a83a000080390000c0ff19fde5ffffffff5e0000001aff39a6c8
+13259	rcpss xmm2, xmm13	rosetta=4d07946f14c46b19	ymm2=00709a8359829ad6000080ff010080000000a07f7e4296f1d679823ebc693d8c
+13260	vrsqrtps ymm1, ymm14	rosetta=14d9d266f7d34658	ymm1=00a08e3f0100c07f0000c0ff0048973a0008b52f0000c0ff0000c0ff0000c0ff
+13261	vrcpps xmm6, xmm10	rosetta=797a89d02723a45a	ymm6=00102e8400f07f3f00f022fe00b832c100000000000000000000000000000000
+13262	rsqrtss xmm13, dword ptr [r15 + 148]	rosetta=4515bf382e608432	ymm13=0070833a0000004f36410bfb000080006e46f87a0000003f313c20f80000c03f
+13265	vrsqrtps ymm4, ymm6	rosetta=95b65717a7b46414	ymm4=0000c0ff0000c0ff0000c0ff0000807f0000c0ff0000c0ff0000c0ff00c82737
+13266	vrsqrtps ymm10, ymmword ptr [r15 + 20]	rosetta=ab0763031632fc71	ymm10=0000c0ff0000c0ff000035520008de530000c0ff0000b53f0000c0ff0000b52f
+13267	vrcpps ymm8, ymm7	rosetta=ccb541f5fdf126d1	ymm8=007802040000008000e8db2e007024b600f0ffaf0000008000c8ac0400c08800
+13269	rcpss xmm0, xmm11	rosetta=3d240f7e4edf0649	ymm0=00e8dbae0000800006059a3d4523c17f0000005fffff7f7fad597900ffff7f80
+13270	rsqrtps xmm6, xmm1	rosetta=c670264f9518db76	ymm6=00f8ff5e0088f4210068aa3f00b0c13a14957016000000dfac0ce3bee317ea15
+13271	rsqrtps xmm5, xmmword ptr [r15 + 0]	rosetta=4760c498c2c3f13d	ymm5=0100c07f0000c0ff0088895300085255fb70d796bb2c22fbb55d32e34ae04a16
+13275	vrcpss xmm9, xmm4, xmm9	rosetta=4703166a6cd4bf2b	ymm9=0048e8361d9691704523c17f000000df00000000000000000000000000000000
+13276	rcpps xmm3, xmm6	rosetta=2370fd9dd5170f95	ymm3=00f09abf0000003000f0ffbf00488ac4ffffff4e0000803fcdcccc3db29d35bf
+13278	vrcpps xmm2, xmm13	rosetta=7baa05c968468c07	ymm2=00f00c9300b0a1bf0040ca3f00d0db0300000000000000000000000000000000
+13279	vrcpps xmm12, xmm2	rosetta=9e2aeea52c59bc6f	ymm12=00f07f7e00c8adfd000020410000c23f00000000000000000000000000000000
+13280	rcpps xmm11, xmm11	rosetta=238ce6b986c71b64	ymm11=00e0dd6900f0ff2f4523c17f00e8db540000a07fffffff4effff7f000000003f
+13281	rsqrtps xmm8, xmm8	rosetta=cd51d9dd31b4f4e9	ymm8=00684a400090993f0000c0ff00507a53166d5049346b80c8000080bf31dda595
+13282	vrcpps ymm11, ymm12	rosetta=6cc6261fe0188171	ymm11=00c8b1830098ff8300f0ff1f0060f5840080332a00604de80000000000608fb6
+13285	rsqrtss xmm3, dword ptr [r15 + 116]	rosetta=3f4442cf96a18d1e	ymm3=00788840cdcccc3d85700e0e0000000c26fc2c7b010000cff90215d0ffffff5e
+13286	vrcpss xmm10, xmm0, xmm7	rosetta=7b8bfec40565f933	ymm10=00f80384000000bfffff7ffff24f881700000000000000000000000000000000
+13288	rcpps xmm4, xmm14	rosetta=cf27083f4595d5bc	ymm4=000080330070b1bf00f883400068e0cc1f4f2b17000000dfcfee553f00008000
+13289	vrcpps xmm10, xmm14	rosetta=b9f15f0cda5fcb01	ymm10=00a0a884000000200030c8400090ac9a00000000000000000000000000000000
+13290	vrsqrtss xmm6, xmm9, dword ptr [r15 + 143]	rosetta=c8945ae9d57b8474	ymm6=001802250100004b00000080c952e8be00000000000000000000000000000000
+13291	vrcpss xmm12, xmm5, xmm10	rosetta=af25c0ca3ae13ee7	ymm12=00b04507d6c588be98c6c7bb8e0a02c600000000000000000000000000000000
+13292	vrcpss xmm0, xmm14, xmm3	rosetta=348077407d5377d3	ymm0=00a8a7c3452381ff01000000ffff7f7f00000000000000000000000000000000
+13293	vrcpss xmm14, xmm9, xmm3	rosetta=6e6b21e05b8fdf8f	ymm14=00a01d690000001a434f9364f90215d000000000000000000000000000000000
+13294	rsqrtps xmm11, xmm10	rosetta=b3653068f6c2c97d	ymm11=00f8ff5e0000e07f0000c0ff006095371262f2480000a07fda6cebe2ffff7f7f
+13295	vrsqrtps ymm15, ymmword ptr [r15 + 22]	rosetta=71980fe2b3ae002c	ymm15=008041567ebfffff00385c4e0000807f0000807f0000807f0000807f0000807f
+13299	rsqrtps xmm12, xmm15	rosetta=57dcf01a260a9a35	ymm12=00780b5c000035520000c0ff0000c07f0000807fcf11f07a95451a97bbd75197
+13300	rcpps xmm7, xmm8	rosetta=0b0fac90cfeba0b4	ymm7=0038f00300f0ffbf00e8db2e000080ff29721d8b000020404daccd91a4866d48
+13301	vrcpps xmm4, xmm0	rosetta=2eae986dcf483834	ymm4=00403be80000807f00203d4100f07f7e00000000000000000000000000000000
+13303	rsqrtps xmm12, xmmword ptr [r15 + 160]	rosetta=30abe22cc15f7d17	ymm12=0000c0ff0000c0ff00d0a85600505922b3a72fbf42e27ec8010000cf00000080
+13304	vrcpps ymm10, ymm10	rosetta=2a66782dc51cf8ab	ymm10=00f0ff9f00c0cc3e0100c07f00f0ffbf00f0ff1f00a8f73500f0ff9f00384b84
+13305	rcpps xmm6, xmm14	rosetta=9036616adc95f301	ymm6=00a8050500e06eb60000ccb500880a36ffff7f7fab478dfab900f996ffff7f7f
+13306	vrsqrtps ymm7, ymm7	rosetta=791bbbac42798601	ymm7=0000c0ff0000c0ff0000807f0090e1530038923a0090953a0000c0ff0000c0ff
+13308	rsqrtps xmm2, xmm12	rosetta=dd6679f1252e2eb5	ymm2=0000807f00c06f2b0000b52f00087053ffffff4e010000cf010000001f62b903
+13309	rcpss xmm12, xmm6	rosetta=b2cc61bd6ee0bbd5	ymm12=00f83dd800002040e26445bf558437fb3aa2463f8d159bfa3efa077adac05b3e
+13310	vrsqrtps xmm2, xmmword ptr [r15 + 85]	rosetta=8c81d8dbd1c97608	ymm2=0068d15e0000807f00f8c14c0040815800000000000000000000000000000000
+13311	vrsqrtps xmm11, xmm11	rosetta=f0240b6978f87619	ymm11=0000c0ff0008d5270000b53f0000c0ff00000000000000000000000000000000
+13313	vrcpps ymm14, ymm6	rosetta=965fecaba2efebf8	ymm14=00e0aa3f00001c6900f89267000080ff00606f6700b806040000807f00d09cb6
+13315	vrsqrtps ymm6, ymm6	rosetta=01397cd3f7d5a5a4	ymm6=0000c0ff00e8213f0000c0ff0000c0ff0050873f0000c0ff0100c07f00e04358
+13316	vrsqrtps xmm10, xmm5	rosetta=4a9f28c711c5447a	ymm10=0000c0ff0000b53900989b3a0000c0ff00000000000000000000000000000000
+13319	vrcpss xmm2, xmm14, dword ptr [r15 + 156]	rosetta=374bd9623b055e7b	ymm2=0088ef038a574412944f6d6e4232241700000000000000000000000000000000
+13320	vrcpps xmm2, xmmword ptr [r15 + 115]	rosetta=15a7f5ccba7032a5	ymm2=97ffffff003045b900303bee0010b9d400000000000000000000000000000000
+13322	rcpps xmm5, xmm2	rosetta=1085295805358431	ymm5=00d80f760040a1bf00f07f3f002086040000000000006040f9021550ffff7f4b
+13323	vrcpss xmm15, xmm15, xmm4	rosetta=b7fcb482b4215cac	ymm15=0088c6732a180fa405ec7fbfe624438000000000000000000000000000000000
+13324	vrcpps xmm6, xmm7	rosetta=ca0894d5adefb89c	ymm6=004091b70000002000f8f10300f8148400000000000000000000000000000000
+13325	rsqrtss xmm4, dword ptr [r15 + 85]	rosetta=cc2dd0cb155dabae	ymm4=0048515e01000080ffff7f0011e3674bffff7f80940c2c80000000cfffff7f7f
+13327	rcpss xmm4, xmm12	rosetta=941d57a7e67f1e57	ymm4=007875b631024e974c68b4f6e35bc75bffffff5ef90215d00000a07f843b657a
+13328	vrcpps ymm14, ymm10	rosetta=d3bd66b2bb985800	ymm14=0000803300f0ff3f0050c5b5008090b800504d4000d067200000008000808bb7
+13329	vrcpss xmm7, xmm6, dword ptr [r15 + 139]	rosetta=3459f4e5af1ac79e	ymm7=005009ce6cad97beffff7fffb9eb899500000000000000000000000000000000
+13331	rsqrtss xmm1, xmm9	rosetta=104dcb1d00ad8b5e	ymm1=0000b537000080bfae50397b4523c17f0100004b68ca3ebf452381fff279d195
+13335	vrcpps ymm0, ymm13	rosetta=0d49eb830b93bbd2	ymm0=00c0d90600f08d8400f07fbf00b888c000d0b1b500508f7600f0ffaf0098e1ee
+13338	vrcpps ymm0, ymm6	rosetta=5ff64f8a3017f91d	ymm0=00f0ff3f00d8124000f07fbf00f0ff3300b856e7005087670100c07f00f07f3f
+13339	vrsqrtps ymm5, ymm8	rosetta=7f2211389cfa0f3a	ymm5=0000b52f00607b530018df210008b52f00e08a4100684a4000a8ef2100d0083f
+13340	vrcpps xmm12, xmm12	rosetta=6c782d8ff6b69089	ymm12=0068113600f0ff7200600d6a00f0ff2f00000000000000000000000000000000
+13341	vrcpss xmm11, xmm4, xmm1	rosetta=b128c00456551438	ymm11=00e8dbae0100004bffff7f805793841700000000000000000000000000000000
+13343	vrcpps ymm3, ymm8	rosetta=2b4ce083e2942bea	ymm3=0088169500f0ff330000a4c000b84e8400f0ffbf00f0ff3f00f0ff1f00f07fbf
+13347	rcpps xmm1, xmmword ptr [r15 + 0]	rosetta=8f7b383674c0304a	ymm1=0000204100f01a840000002000204505ccaa33fb124cc377f90215d02270a979
+13348	rcpps xmm5, xmmword ptr [r15 + 96]	rosetta=9f264277d017509b	ymm5=00f0ff640000000000c8b13f002828c0ecda7bbfffff7f4b428c521701008000
+13350	vrsqrtss xmm11, xmm14, xmm12	rosetta=674a227d0ccf083a	ymm11=00c8b33f452381ffffffff4e70d5061700000000000000000000000000000000
+13351	rsqrtps xmm2, xmm2	rosetta=4ea2b435fd11d8b8	ymm2=0038633b0000c0ff0008513f0000c0ff0000a07f000000cf75a8937a57a1953e
+13352	vrsqrtps ymm14, ymm13	rosetta=9fcc1fab6b7b6212	ymm14=00f87f3f0060054f0000c0ff0070823f0000c0ff00e8cc4c0000c0ff0000c0ff
+13356	rcpss xmm5, xmm9	rosetta=8729b907338fb813	ymm5=0068cf670100004b000000bfffff7f807fe36871322f3dbf00000080565966fa
+13363	vrcpps xmm13, xmmword ptr [r15 + 107]	rosetta=4c020e49a6328b2a	ymm13=00c8aa0000b8114600f0ff5e0000807f00000000000000000000000000000000
+13365	vrsqrtps ymm12, ymm15	rosetta=776b84a2934b3011	ymm12=0000c0ff0000c0ff00f8f83f0000c0ff0008b5370000c0ff0058ea210000c0ff
+13368	rsqrtps xmm13, xmm9	rosetta=425638615cda232e	ymm13=0000c0ff0000c0ff00d8584000000a54ffffff5e010000cfcdcccc3df90215d0
+13369	rsqrtps xmm14, xmm6	rosetta=f9ef1575bc172aee	ymm14=0000b5370008b52f009087404523c17fffff7f7f0000005f000000df6e17aa16
+13372	rsqrtps xmm9, xmm13	rosetta=b92983b645967dbd	ymm9=00684a400000b539003095530000c0ff97db2fbf000000000100807f000000df
+13373	vrsqrtps ymm13, ymm15	rosetta=f45538cf5b229111	ymm13=0038a3400000801f0000c0ff0008b52f0000c0ff00c05f3b000080ff0000c0ff
+13374	vrcpps ymm6, ymm4	rosetta=514c7c383ae90f34	ymm6=00d8be6700c0a5200008920500a82a3f0000003000989ee700b871604523c1ff
+13375	rsqrtss xmm14, xmm2	rosetta=22b5dbc46a758f70	ymm14=0000b537ffff7f7f5a4b3a0100002040ffff7f00000060400000a07f0000000c
+13378	vrcpps xmm3, xmm8	rosetta=6ef25a57a3de0ea0	ymm3=0000d9a300f07f7e00d8bd03000080ff00000000000000000000000000000000
+13381	rsqrtps xmm4, xmm13	rosetta=90887b219a586151	ymm4=00d09d3f0000b52f00f8ff5e00e8213fdb1ed3940000001abff21449fb3102bf
+13382	rsqrtss xmm7, xmm3	rosetta=336840f35c418176	ymm7=00c827372d252e97ffff7fff000080bf8c2c6c44f90215d019d9499715ad17fb
+13383	vrsqrtss xmm13, xmm7, xmm12	rosetta=729c4e57edb5dcc1	ymm13=0008513f00000000ffff7f7f7e3f1d4900000000000000000000000000000000
+13385	vrsqrtps xmm12, xmm9	rosetta=06d88ba9d9021f23	ymm12=000080390000c0ff4523c17f000080ff00000000000000000000000000000000
+13388	rcpps xmm6, xmm9	rosetta=84aadeae59a72500	ymm6=002827c000c8a13500e8dabf00e8db2e0000807f0000008098749f5b452381ff
+13390	rcpps xmm0, xmm14	rosetta=e289e25be8c22b3e	ymm0=0058816700d0609b0020ef3500000080452381ffbba0e079d41df4fa3b54ce7a
+13392	vrsqrtps ymm7, ymm0	rosetta=88b0f8098b17ef9a	ymm7=0000c0ff00f87f3f0000c0ff0000801f0000807f000035520000c0ff0000c0ff
+13393	vrcpss xmm13, xmm11, dword ptr [r15 + 124]	rosetta=bfd1b6beb10ec273	ymm13=00100418ffff7f00f83185470000c0ff00000000000000000000000000000000
+13394	vrcpps xmm3, xmmword ptr [r15 + 44]	rosetta=7794b69275df0695	ymm3=00f0ffbf00a8019700f0ffaf00f0ff7200000000000000000000000000000000
+13395	vrcpss xmm4, xmm5, xmm14	rosetta=9cfdeaa4e2ace75c	ymm4=007065670000807fffff7f7f4f0e71e400000000000000000000000000000000
+13396	rsqrtps xmm3, xmm6	rosetta=b2af46940380bd8c	ymm3=0000c0ff0000c0ff0008f8210000807f000000bf46cdd9be1511897a5a197f40
+13398	vrsqrtss xmm2, xmm6, xmm11	rosetta=fa9c8383da4fffce	ymm2=00a099530000003ffbfe5f97ffff7f8000000000000000000000000000000000
+13399	vrcpps xmm2, xmmword ptr [r15 + 81]	rosetta=5388278fb7e880c5	ymm2=0000807f0020007e0008ea7d004080f800000000000000000000000000000000
+13401	vrcpss xmm10, xmm9, xmm11	rosetta=6d6752af49a4817e	ymm10=00d835abcc7da8fa000080ff1a626ec900000000000000000000000000000000
+13404	vrsqrtss xmm2, xmm6, xmm8	rosetta=400d6502a64d95f5	ymm2=0038873a4523c17f0000c07f0100807f00000000000000000000000000000000
+13405	rsqrtss xmm14, xmm14	rosetta=1efb1c1dbe7aeada	ymm14=0010984101000000f90215d0464499159622f8598e571c97000000cfcc9b6c97
+13407	vrsqrtps xmm0, xmmword ptr [r15 + 119]	rosetta=4ed7c2c68089dbc6	ymm0=4effff7f005000330038a72d0048084200000000000000000000000000000000
+13408	vrsqrtps xmm2, xmm10	rosetta=aa456904d8aac3ce	ymm2=0000c0ff0000c0ff0010c22100f87f3f00000000000000000000000000000000
+13409	vrsqrtps xmm13, xmm9	rosetta=2052b3abbc025305	ymm13=0000c0ff0000355900e8213f0000c0ff00000000000000000000000000000000
+13410	vrsqrtps xmm9, xmmword ptr [r15 + 149]	rosetta=98636d59813af4d3	ymm9=0060a35e002000240000807f0030b55e00000000000000000000000000000000
+13411	vrcpps ymm10, ymmword ptr [r15 + 82]	rosetta=e638e7c286e38c83	ymm10=0000807f0000807f0000807fc0ffffff0000807f0010299f00b0094100c88ca6
+13412	rsqrtss xmm6, xmm15	rosetta=0beecbee45df07b9	ymm6=0000f45d57f147c9ffffff4e3dbd8ce001000000ffffff5ec6b2e6560000c03f
+13414	rcpps xmm11, xmm1	rosetta=2726c312fde9b421	ymm11=004074040000000000e8db2e00385967000000df4523c17f75d7bc3e00000080
+13417	vrcpps ymm7, ymm0	rosetta=0d56d168c102b81f	ymm7=0000008000f0ff9f0100c07f00f0ffaf0028b5e700e85b840078b9ea00f0ffaf
+13419	rsqrtps xmm12, xmm1	rosetta=a2c169b9b0f3845f	ymm12=00e8213f0000803900d0083f0000807ffcf70664c2cc5c340000000c84c6b0f8
+13422	vrcpss xmm3, xmm14, xmm14	rosetta=40b776e7b6feb4f6	ymm3=00a82a3fa43758ba4ff736fbb82286c700000000000000000000000000000000
+13423	rsqrtps xmm5, xmm15	rosetta=475e78429292b672	ymm5=0000c0ff0048003300900e2200a09d3a0100000052b57ffafcd7151601008000
+13424	vrcpss xmm14, xmm14, xmm7	rosetta=363d9e0a19574e28	ymm14=0020a5e70000001a2e23f6facebdf4c700000000000000000000000000000000
+13426	vrsqrtps ymm2, ymmword ptr [r15 + 151]	rosetta=c4e33e34de813c03	ymm2=00b809360000c0ff00c0022e0060da1f003087320030a2452cffff7f00ffffff
+13429	vrcpps ymm5, ymm10	rosetta=0ec3b819b9fdeb2a	ymm5=0038fb0500d87a8400a0ec830000807f00f0ff640078f86f000080ff00682f7b
+13430	vrsqrtps ymm5, ymm13	rosetta=6afcf6e7db9dfa8b	ymm5=0000807f0000c0ff0000c0ff0000c0ff0008b52f0000c0ff0000c07f00003552
+13432	rsqrtss xmm10, xmm6	rosetta=8300f11cd45c76d5	ymm10=00e0b621f90215d0a69dae08f172e802010000cfca7fc0c84ab85447bccd0844
+13433	vrsqrtps xmm11, xmmword ptr [r15 + 51]	rosetta=00a065e6ee24efc6	ymm11=0038434100a09a4b00e013540000c0ff00000000000000000000000000000000
+13434	rsqrtps xmm11, xmm9	rosetta=4573b0bcb7953e68	ymm11=00f8ff5e0000c0ff0000c0ff00003552366176bfcdcccc3dffff7f4b0000807f
+13435	rcpss xmm6, dword ptr [r15 + 154]	rosetta=367176d05bd2cdaa	ymm6=0060825d0000807fc42201496b5a28738c2bd29606e309485e1a10fd00000000
+13437	vrsqrtps ymm6, ymm12	rosetta=43920eb77e807208	ymm6=000035590000b52f0000c0ff0000c0ff0000b53f0098f43a0000c0ff00684a40
+13438	vrcpps xmm1, xmm15	rosetta=7a1d9016e0cb5259	ymm1=00c8580400e8dbae00a011910050b9c000000000000000000000000000000000
+13439	vrsqrtps xmm15, xmm15	rosetta=b8b45b1f7499fe79	ymm15=000080ff0008513f0000c0ff0000c0ff00000000000000000000000000000000
+13440	vrcpps xmm10, xmm9	rosetta=8c622c3a8dcb045c	ymm10=0078dcbf0070b1350000e07f0000204100000000000000000000000000000000
+13442	vrcpps xmm8, xmmword ptr [r15 + 152]	rosetta=66bd38c705489594	ymm8=00b08a360028347700881f40000080ff00000000000000000000000000000000
+13443	rcpps xmm4, xmm3	rosetta=ff376f8dfd02ddcf	ymm4=0000807f00e8db2e000000304523c1ff8e52c448ffffff5e00006040ed7f703f
+13444	vrcpps xmm6, xmm3	rosetta=147600c0d702a67f	ymm6=00681fe900983fc0000000200090478500000000000000000000000000000000
+13445	vrcpps xmm13, xmm13	rosetta=0f8d86ca66e06e40	ymm13=0068d23f00f0ffaf4523c17f002857e700000000000000000000000000000000
+13446	vrcpps xmm13, xmm11	rosetta=15ee0b2444b8e497	ymm13=0000e07f0000803300181c0400e04b2400000000000000000000000000000000
+13447	vrsqrtps xmm4, xmm14	rosetta=dd4a31709ec70d20	ymm4=0000b53f00206e47000080ff00a0744900000000000000000000000000000000
+13448	vrcpps xmm14, xmm4	rosetta=6de1ef39b875b657	ymm14=002034600040420400b8da840000204100000000000000000000000000000000
+13450	rcpps xmm3, xmm7	rosetta=39ff766be547b95d	ymm3=00d0956700809f840100c07f006815e1aa7ca5be000080ffff195316a7a5183f
+13451	vrcpps ymm1, ymmword ptr [r15 + 22]	rosetta=698af4f7fbec65f3	ymm1=0000807f0090037c15d0ffff00e002c200f09c9b00d024370000807f00b09d84
+13453	rcpss xmm14, dword ptr [r15 + 90]	rosetta=9d75cdc6c50e451c	ymm14=0000eda80000004f560fabbd0000c07f452381ff010000800000001a6e61a4fd
+13454	rsqrtps xmm12, xmm4	rosetta=9d6c07b8505596f9	ymm12=0098dc530000e07f0100c07f0000b52fcdcccc3d000060400000005f0000a07f
+13455	vrsqrtss xmm9, xmm9, xmm10	rosetta=b3d1f625b6a63a0b	ymm9=0000b5390000001a60cbb2fa592b26c900000000000000000000000000000000
+13456	vrcpps ymm9, ymm0	rosetta=be3a7930d6ac99da	ymm9=00f07f3f00f0ff64003857670100c07f0000803300f0ff6400f07f7e0100c07f
+13457	rcpps xmm0, xmm15	rosetta=a94697537cca62d6	ymm0=00501a060000e07f00d856690010adb6000000000000a07f0f812888f9021550
+13458	vrcpps ymm3, ymm11	rosetta=fea14f1c8e645461	ymm3=00583e8400d8270e00b0cc3600a82a3f00f0ffaf0048adb50000e07f00f0ffbf
+13461	vrcpps ymm3, ymm11	rosetta=4ef960c353e798fc	ymm3=00f07f7e0000c07f00a82a3f00f0ffbf0058a98700d8c4400100c07f00000000
+13463	rsqrtss xmm0, xmm4	rosetta=3e27d3b643ca4ca2	ymm0=00008039ffff7f80f9021550010000cf0000000c0100807ff9021550e3995b17
+13465	rsqrtps xmm12, xmmword ptr [r15 + 64]	rosetta=8c84314ebfb7c2ee	ymm12=00a008220000c0ff00389a3a0000c07fcdcccc3dffffff4ebcb767f9f9021550
+13466	rcpps xmm7, xmm13	rosetta=80dd0d9263741dfc	ymm7=000080ff0010ac3f0000003000f8afaa7ba43338010000cfeb93fe3dbb292cfb
+13467	vrsqrtps xmm0, xmm0	rosetta=31bf4748de0326a3	ymm0=0000b5394523c17f0000807f00708a3a00000000000000000000000000000000
+13468	vrcpps xmm3, xmm3	rosetta=a799bd682a59bd18	ymm3=0078cf0300b09e590038bd8300b05d5400000000000000000000000000000000
+13472	vrcpps ymm1, ymm0	rosetta=7b9ae4efd0f8bd16	ymm1=000080ff00f0ff9f00e806b70000c07f00c844060000000000000030000080ff
+13473	rsqrtps xmm4, xmm4	rosetta=029d7f0d6f42524a	ymm4=000035520000c0ff0000c0ff00f0a23a452381ffffffff5e714f6a3fd9bea448
+13476	vrsqrtps xmm2, xmmword ptr [r15 + 147]	rosetta=8666b8d20d40eef3	ymm2=00e0dd320000807f000896290000807f00000000000000000000000000000000
+13478	vrsqrtps xmm8, xmm3	rosetta=3a909ce0b76a2f94	ymm8=0090fb210060a33a0000e07f000080ff00000000000000000000000000000000
+13479	rcpps xmm12, xmm14	rosetta=6b19d34654539365	ymm12=00e8db2e0000807f0000c07f000000006c38e5480000c03f000000cfe38b883e
+13481	vrcpps xmm4, xmm10	rosetta=e16b5c21d6889afa	ymm4=00b83c0c00f0ff6400c8f03f0020624000000000000000000000000000000000
+13482	vrcpss xmm2, xmm2, dword ptr [r15 + 75]	rosetta=006f9043aa3443c2	ymm2=0080257aa61f7797ffff7f800100807f00000000000000000000000000000000
+13483	rsqrtps xmm14, xmm6	rosetta=d8480d645f89b58e	ymm14=0050ac214523c17f0000c07f00e8213f4523c17fe0d21f7a0000c03f11460f16
+13484	rsqrtps xmm4, xmm1	rosetta=941df4ddff0edcb6	ymm4=0000c0ff0000801f0000c0ff000035592db894e8cdcccc3d4b49b17a3ceb5296
+13485	vrsqrtss xmm14, xmm13, xmm2	rosetta=8ffe063e97fc95a6	ymm14=00b8cb21f90215d00000005fcdcccc3d00000000000000000000000000000000
+13487	vrsqrtss xmm8, xmm12, dword ptr [r15 + 82]	rosetta=ea197cd17c368b84	ymm8=0060b92f0000005f1f1258c923731c4900000000000000000000000000000000
+13488	rsqrtps xmm0, xmm6	rosetta=dd225e68faf08049	ymm0=00d0893f00587f240000c0ff0000c0ff452381ff000000df9f4dacc8bda0ffb7
+13492	vrsqrtps xmm13, xmmword ptr [r15 + 18]	rosetta=7f2559e460295f0d	ymm13=00d8d1460088f1200020af460000c0ff00000000000000000000000000000000
+13493	rsqrtss xmm9, dword ptr [r15 + 121]	rosetta=1c9a4d12b0f28c08	ymm9=00a0eb5ea2a2c77a1f77ae3e000000df000000cf8ece1a001a7e183f6c0ac048
+13494	rsqrtps xmm13, xmm3	rosetta=b745df9535c21850	ymm13=00c0042f00c894300000c0ff0000355952da0fbf6ca7ad157b2cdab40264954f
+13497	vrsqrtps ymm1, ymm1	rosetta=2a9d85d52ccc2c07	ymm1=00b8ae540000c0ff0090073b0000b5390000b53700e00d220000c0ff00003559
+13499	rsqrtss xmm11, xmm5	rosetta=6a6e34c83c1cbf3b	ymm11=0060ad2b0000003fd94563e6452381ff0000c03f5df751c407703d490100004b
+13500	vrcpps ymm2, ymmword ptr [r15 + 116]	rosetta=6fcfa822819af2d5	ymm2=00f0ffaf00c821370000807f4523c17f0100c07f00f0ffbf00a0298400f0ffbf
+13501	rcpss xmm1, xmm6	rosetta=56c833a13255d44e	ymm1=0010aec05b1b1949e26c02179f1ef348452381ffda6257499649b0590100004b
+13502	rcpss xmm3, dword ptr [r15 + 104]	rosetta=9ee21a7b0ee4dba2	ymm3=00f8d6f1ffffff5e0100004b0000807fffffff5e00008000ffff7f00e9001e7b
+13503	vrcpss xmm3, xmm9, xmm9	rosetta=be3f976823a09c63	ymm3=00f0b2b600000080d6c236490000005f00000000000000000000000000000000
+13505	rsqrtps xmm7, xmmword ptr [r15 + 112]	rosetta=273c033e4ffd1860	ymm7=0000c0ff0068b23f00f87f3f0040813fffff7f4b0b6b51faf9021550ffffff5e
+13509	vrcpps xmm12, xmmword ptr [r15 + 22]	rosetta=f7138463db735530	ymm12=00b0392300c814f30068b98c3a7bffff00000000000000000000000000000000
+13510	vrcpss xmm14, xmm14, xmm8	rosetta=980bcbd9716840b3	ymm14=00e8dbaeffff7f000000003f0000807f00000000000000000000000000000000
+13511	vrcpss xmm14, xmm4, xmm13	rosetta=83bbd7dc4adafe15	ymm14=00905ae780b3027affff7f4b0000008000000000000000000000000000000000
+13512	rsqrtps xmm6, xmm13	rosetta=d321e21f9a6d6dec	ymm6=0000c0ff0008513f0000c0ff000035590000003fd5f622bfc082aee8f90215d0
+13513	vrcpps xmm3, xmm15	rosetta=8185e3102c9e11dd	ymm3=00801e3600e023490000803300382cbd00000000000000000000000000000000
+13514	rcpps xmm10, xmm3	rosetta=94a049547a8cd475	ymm10=00b8ea0600589a85000000300040ee356661af08dfa76a3e9a0cd1fa0100807f
+13515	rcpss xmm14, dword ptr [r15 + 181]	rosetta=7fd2f9fd62b38929	ymm14=00f0127e010000cf00006040000000df000080bf35d55b49327e1316c8879d22
+13517	rcpps xmm2, xmmword ptr [r15 + 96]	rosetta=48841da44ee33f4b	ymm2=00e8ad3f0030e8840000204100c01504d027effa0459eee3010000004523c17f
+13518	vrsqrtps ymm8, ymmword ptr [r15 + 20]	rosetta=839c275f6f97900f	ymm8=0000c0ff4523c1ff0008b52f00d0602b0000c0ff00789a530000355900a8903a
+13520	vrcpss xmm14, xmm3, xmm6	rosetta=1b6fc7d21eb1470a	ymm14=00d81585452381fff95f3dbf2d7164e800000000000000000000000000000000
+13522	vrsqrtps ymm3, ymmword ptr [r15 + 55]	rosetta=26e668008eb01eec	ymm3=3fffff7f0000c0ff00f8be440000c0ff0000c0ff0000c0ff0000807f000080ff
+13523	vrsqrtps xmm7, xmm13	rosetta=cd8e5a8ee81cb45c	ymm7=0000b53f0018ff410000c0ff000080ff00000000000000000000000000000000
+13525	rcpps xmm13, xmm1	rosetta=a8af3c9d381643f5	ymm13=00f07f3f00487d670070b8b50060d0bf091cda26f90215d0ffff7f4b19cd9817
+13526	rcpps xmm13, xmm2	rosetta=0ad8176a47ebd44e	ymm13=00e8dbae00f083c00078adc000f805ea459a4bff010000cf0000803f679aa5b4
+13527	vrsqrtss xmm11, xmm4, xmm5	rosetta=782e5865b049cf9f	ymm11=0000801f000080bfffffff4e122b2c4900000000000000000000000000000000
+13528	vrsqrtss xmm12, xmm8, dword ptr [r15 + 45]	rosetta=caa2cae8adec1e7f	ymm12=0000b75e0100004b000080bffcdcd5e200000000000000000000000000000000
+13530	rcpps xmm0, xmm2	rosetta=1fdb1ad048580761	ymm0=003800c00100c07f00788be700a028b6000080bf0000004f9944b3c80000803f
+13531	rsqrtss xmm8, xmm10	rosetta=476afda10cbbcd38	ymm8=00f87f3f01008000010000cfb48993be638440979d603e970000c0fff90215d0
+13532	vrsqrtps xmm8, xmm7	rosetta=6fbf2f3270fcd66c	ymm8=00f87f3f0010a0210000c0ff0000807f00000000000000000000000000000000
+13535	vrsqrtps ymm5, ymm8	rosetta=beba6a8a7f2123ad	ymm5=0000801f0008b537000080ff00a804220000355200e8213f0000c0ff0000c0ff
+13537	vrcpps ymm15, ymm5	rosetta=2ad58b89998e5afd	ymm15=00505cbb00f0ffaf00c078840038f7bf00f81bb600f0ff2f00f07fbf00f0ffbf
+13538	rcpss xmm11, xmm11	rosetta=7d42dceb320f1114	ymm11=00a82a3f2e921af96130037a00002040b118b0760000c0ffaba76dfae34e877a
+13539	vrcpss xmm3, xmm11, xmm13	rosetta=d1b813fdfc4612ba	ymm3=0088f5030000c0ffffff7fff1703719b00000000000000000000000000000000
+13540	rcpps xmm7, xmm12	rosetta=fb0925234c19133c	ymm7=00604c6e0000d40400f0ffaf00f0ff33d9ac6fc9174075170000c07fffffff4e
+13542	rsqrtps xmm13, xmm6	rosetta=3039e94bf98f3586	ymm13=0000c0ff001806540000b52f0000c07fffffff5e679515750100807f0000803f
+13546	rcpss xmm13, xmm13	rosetta=dec805f4bc607630	ymm13=00286940ffff7f4b0000005f5df16d49ffff7fff060966a798f5a306c108c6b1
+13549	vrcpss xmm0, xmm4, dword ptr [r15 + 73]	rosetta=fb7e54fcf641903e	ymm0=0058aaa400008000c190fafaa9444d9600000000000000000000000000000000
+13550	vrcpps ymm13, ymm6	rosetta=1902e9d79c0902b0	ymm13=00f89b3700c0b7a400e8060500000020000000000048894000d803b2000080ff
+13552	vrsqrtss xmm0, xmm2, xmm11	rosetta=9974a1dd98d073ee	ymm0=00684a40452381ffb61d2cf74ab820fb00000000000000000000000000000000
+13553	rsqrtps xmm8, xmm3	rosetta=0268ff3cbd71a706	ymm8=00988b3f0000807f00684a4000808a3affff7fff01000000352c0549000080ff
+13554	rsqrtps xmm10, xmm5	rosetta=e958e42d617e043e	ymm10=00f8ff5e0000c0ff0000c0ff0000c0ff0000c0ff0000001a0100807f0100807f
+13555	vrcpss xmm11, xmm4, xmm0	rosetta=e7f81ee6461bf40b	ymm11=00889eeef458ac3d1a4c5248cdcccc3d00000000000000000000000000000000
+13556	rcpps xmm13, xmmword ptr [r15 + 128]	rosetta=31179b6ee4fe651b	ymm13=00000020008809cb00f80e84005084c0540ecb7a0000803fe1a1fc7ad3128797
+13557	vrcpps ymm15, ymm4	rosetta=4a93a6aca2bfb089	ymm15=00802eed4523c17f00c81f06004843b600b00e3900180aa200f0ff3300303904
+13558	vrsqrtps ymm0, ymm1	rosetta=5f1fc84277d386d7	ymm0=0000807f0008b5370000c07f0000d0570000b53f0000b52f0000b5390080d139
+13561	vrcpss xmm8, xmm4, xmm8	rosetta=4032f5cbb05ab9fa	ymm8=00e8db2e46c1463f7a9a244c000080ff00000000000000000000000000000000
+13563	vrcpss xmm9, xmm8, dword ptr [r15 + 95]	rosetta=5cb2c31e532432d3	ymm9=00c892b6cc5355bf2eb89a1796b3f3d700000000000000000000000000000000
+13564	rcpps xmm6, xmmword ptr [r15 + 0]	rosetta=d0c09d071e7ca97d	ymm6=004096b5007807b600f07f3f00884754000000dfeac9c8160000a07f00006040
+13565	vrcpps ymm5, ymm5	rosetta=d5bdddd74f26d504	ymm5=00f0ac2200f0950f0080bf3f0048c6b500b0474100f0ffbf00e02ac100000000
+13566	rcpps xmm2, xmm14	rosetta=f597e35e0d201c2a	ymm2=00f07fbf008089bf00f07f7e00a0d5d26f4cb0faaf5015c97c454c975fb1de28
+13567	rcpps xmm12, xmm5	rosetta=1cbf71ddc048c548	ymm12=0000c0ff0000807f00e8290400f07fbf9d2c1e3ef8e199f91bef12bf90fba9fa
+13568	vrsqrtps ymm2, ymm2	rosetta=dbe47664890c46ef	ymm2=0000c0ff0000c0ff00b8cd530078a021000035524523c17f00e8213f0000c0ff
+13569	rsqrtps xmm13, xmm2	rosetta=032ff2cdfaf05416	ymm13=0000c0ff003007220000c0ff00a0c04fe20f74fd231d363f0000803fe20517d3
+13570	rcpps xmm2, xmm6	rosetta=19e300bf45b44e90	ymm2=00008033000000000000003000503e17055d1d9700008000000000000000c0ff
+13571	vrsqrtps ymm14, ymm5	rosetta=321ea7aedb9c6faa	ymm14=0000b53700d0083f0000c0ff0000807f00c8ed380020313b0000c0ff0000c0ff
+13572	rcpps xmm8, xmm7	rosetta=177cd54ffcd639e2	ymm8=00f0813600b80be00058a34100a074e73c0e7b16000060403ac189c7e32d027b
+13573	rcpss xmm1, xmm15	rosetta=bf07a21e830b9831	ymm1=00281e0583b7cd7843b08817ffff7fffe09616d773b0ee3d75ec5416c67d2a49
+13575	vrsqrtps ymm10, ymm1	rosetta=773d9551c09de0a1	ymm10=0000c0ff0100c07f0000c07f00904e52000035590008b52f4523c17f00f8903a
+13576	vrcpps ymm1, ymm1	rosetta=424cbfafaeeb43c7	ymm1=0040828400f07fbf00d027e1000080ff00b011e100c0b56700c0cc3e0008a7e7
+13577	rsqrtss xmm10, dword ptr [r15 + 73]	rosetta=79676a6bf9260bc2	ymm10=00400142000080bf1efe21bf880e05782782d13efb30014886a8ed16ffff7f4b
+13579	vrcpss xmm1, xmm1, xmm12	rosetta=afed2a9960ce372f	ymm1=0010e040ffff7f4baa4346970000000c00000000000000000000000000000000
+13583	vrsqrtps ymm7, ymm6	rosetta=c3ab4607991a6417	ymm7=0000c0ff0000c0ff0000c0ff00f8324100c8273700f8ff5e000080ff0008b52f
+13584	vrcpps ymm13, ymm6	rosetta=edea41ecdd7d625c	ymm13=000000200000000000f0ffaf0000807f0088c7b700e82e2000d8181c00004805
+13585	vrsqrtps xmm4, xmmword ptr [r15 + 68]	rosetta=2fce011f9cbe92d3	ymm4=0008513f0000c0ff0000807f0000c0ff00000000000000000000000000000000
+13650	vfmsubadd132pd ymm2, ymm4, ymm4	rosetta=48619bdd985664eb	mxcsr=a83f0000
+13696	vfmaddsub213pd ymm7, ymm3, ymm3	rosetta=8094515aee5f9d7b	mxcsr=a05f0000
+13852	vfmaddsub213pd ymm11, ymm15, ymm11	rosetta=d32b2f5361bad772	mxcsr=a81f0000
+13888	vfmsubadd213pd ymm8, ymm1, ymm10	rosetta=523de393856373eb	mxcsr=a05f0000
+13942	vfmsubadd213ps ymm15, ymm10, ymm6	rosetta=5be0b7a3b0d06111	mxcsr=a15f0000
+14028	vfmsubadd213ps ymm13, ymm15, ymm13	rosetta=54000776287d26ef	mxcsr=a11f0000
+14162	vfmsubadd213ps ymm8, ymm1, ymm8	rosetta=839ca76be2a784f4	mxcsr=a01f0000
+14164	vfmsubadd132pd ymm9, ymm6, ymm6	rosetta=6bc7a4526a08b099	mxcsr=e83f0000
+14608	vpsllvq ymm7, ymm14, ymmword ptr [r15 + 8]	rosetta=3afd243ee08978c5	ymm7=0000000000000000000000000000000000000000000000000000000000000000
+14886	vpsrlvq xmm4, xmm14, xmmword ptr [r15 + 156]	rosetta=c56978d9ca301863	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+15074	vpsllvq xmm4, xmm8, xmmword ptr [r15 + 88]	rosetta=2fc5cfbaa9b8e0c8	ymm4=00000000000000003f0000000000000000000000000000000000000000000000
+15500	vpsllvq ymm4, ymm12, ymmword ptr [r15 + 133]	rosetta=c894ba559da56e51	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+16991	vpsrlvq ymm15, ymm0, ymmword ptr [r15 + 96]	rosetta=e0ff005cb36ac389	ymm15=0000000000000000000000004000000000000000000000000000000000000000
+16993	vpsrlvq ymm1, ymm13, ymmword ptr [r15 + 128]	rosetta=e8f350ce3917e893	ymm1=0000000000000000000000000000000000000000000000007f810180fe810001
+16995	vpsllvq ymm8, ymm12, ymm6	rosetta=4c4fc708dd000813	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+16996	vpsllvq ymm4, ymm0, ymm15	rosetta=b89c1ea1d5d86c33	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+17001	vpsrlvq ymm7, ymm8, ymm5	rosetta=72c5dba00c3a6076	ymm7=000000000000000000000000000000004c278b5f000000000000000000000000
+17003	vpsrlvq ymm11, ymm1, ymmword ptr [r15 + 0]	rosetta=977c1c4c6d0c8a0e	ymm11=0000000000000000000000000000000040000000000000000000000000000000
+17007	vpsrlvq xmm8, xmm5, xmmword ptr [r15 + 16]	rosetta=e04a5fa2bdbe6e65	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17010	vpsllvq ymm5, ymm14, ymm14	rosetta=fbf1b80fd2ef5981	ymm5=0000000000000000000000000000000000000000420000000000000000000000
+17012	vpsrlvq ymm7, ymm4, ymmword ptr [r15 + 96]	rosetta=7736f41424213d73	ymm7=00000000000000000000000000000000dbcbf447022c9d410000000000000000
+17017	vpsllvq xmm8, xmm1, xmm11	rosetta=9082dce45914a5f9	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17023	vpsrlvq ymm12, ymm15, ymm8	rosetta=97ecba2e05780bff	ymm12=0000000000000000000000800000000000000000000000000000000000000000
+17026	vpsllvq ymm9, ymm13, ymmword ptr [r15 + 32]	rosetta=dae73e2cf5b11195	ymm9=0000000000000000000000000000000000000000000100000000000000000000
+17027	vpsrlvq ymm14, ymm3, ymm8	rosetta=aadc28bc9dca7f95	ymm14=0000000000000000000000000000000000000000000000000000000000000000
+17028	vpsrlvq xmm5, xmm10, xmm10	rosetta=49f64c3472d870ff	ymm5=0000000000000000000000000000000000000000000000000000000000000000
+17030	vpsrlvq ymm5, ymm5, ymmword ptr [r15 + 96]	rosetta=65507a118250082a	ymm5=00000000000000000f000000000000003f000000000000000000000000000000
+17035	vpsrlvq xmm8, xmm14, xmm14	rosetta=733693fc09d4dd5c	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17038	vpsrlvq ymm6, ymm8, ymm4	rosetta=c9f994e34d5d8612	ymm6=0000000000000000000000000000000001000000000000000000000000000000
+17039	vpsrlvq xmm7, xmm7, xmm13	rosetta=d11f6eb87eab6a6e	ymm7=0000000000000000000000000000000000000000000000000000000000000000
+17046	vpsrlvq xmm3, xmm3, xmm3	rosetta=53d6d0d3acc9d3d6	ymm3=0000000000000000000000000000000000000000000000000000000000000000
+17049	vpsrlvq ymm12, ymm11, ymmword ptr [r15 + 64]	rosetta=6fa3216f98846634	ymm12=0000000000000000000000000000000000000000000000000000000080000000
+17051	vpsrlvq xmm12, xmm12, xmmword ptr [r15 + 128]	rosetta=52010980dafb90d4	ymm12=8000000000000000000000000000000000000000000000000000000000000000
+17055	vpsrlvq xmm1, xmm12, xmmword ptr [r15 + 144]	rosetta=422db04080f04607	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17059	vpsrlvq xmm15, xmm1, xmm15	rosetta=5a7cd7c592fd1a8f	ymm15=000000000000000040ffbf4080ff007f00000000000000000000000000000000
+17060	vpsllvq xmm8, xmm13, xmmword ptr [r15 + 64]	rosetta=46413e1935a1eefa	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17064	vpsllvq xmm0, xmm10, xmm0	rosetta=7eddc53178258bd6	ymm0=0000000000000080000000000000000000000000000000000000000000000000
+17071	vpsrlvq xmm4, xmm11, xmm6	rosetta=450d374b3bd5bdd9	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+17073	vpsrlvq ymm8, ymm5, ymm3	rosetta=7bfff6cc87a76f19	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17074	vpsllvq ymm2, ymm8, ymm15	rosetta=b17cf5d1189b32f4	ymm2=0002000000000000000000000000000000000000000000000000000000000000
+17077	vpsrlvq xmm11, xmm11, xmm5	rosetta=cb0aa9781b3d0adc	ymm11=0000000000000000000000000000000000000000000000000000000000000000
+17081	vpsrlvq ymm0, ymm5, ymm0	rosetta=7fbd23864f227ece	ymm0=0000000000000000000000000000000000000000000000000000000000000000
+17088	vpsllvq ymm1, ymm4, ymm4	rosetta=646310a708495f86	ymm1=0000000000000000000000000000000000000000000000800000000000000000
+17093	vpsrlvq ymm11, ymm14, ymmword ptr [r15 + 96]	rosetta=15012fcfa026f9f7	ymm11=0000000000000000010000000000000000000000000000000000000000000000
+17095	vpsrlvq xmm11, xmm7, xmm11	rosetta=d45bd070ceebd05e	ymm11=0000000000000000000000000000000000000000000000000000000000000000
+17097	vpsllvq xmm12, xmm14, xmmword ptr [r15 + 16]	rosetta=2eea551d6b06f71c	ymm12=0000000000000000020000000000000000000000000000000000000000000000
+17099	vpsrlvq xmm0, xmm4, xmmword ptr [r15 + 48]	rosetta=01c18729452380c7	ymm0=0000000000000000ffffffff0000000000000000000000000000000000000000
+17105	vpsllvq ymm1, ymm4, ymm1	rosetta=c36fe32c76a2509b	ymm1=0000000000000000000000000000000000000000fe0100000000000000020000
+17110	vpsrlvq xmm9, xmm11, xmm3	rosetta=93ce2cbcf615faec	ymm9=0000000000000000000000000000000000000000000000000000000000000000
+17116	vpsrlvq xmm0, xmm8, xmm4	rosetta=19fcec488e8d2cf2	ymm0=0000000000000000000000000000000000000000000000000000000000000000
+17119	vpsllvq ymm11, ymm11, ymm7	rosetta=4379873e3654245e	ymm11=0000000000000000000000000000000000000000000000000000000000000000
+17126	vpsllvq xmm2, xmm5, xmmword ptr [r15 + 80]	rosetta=37334753aba3fd62	ymm2=0000000000000000000000000000000000000000000000000000000000000000
+17130	vpsrlvq xmm2, xmm8, xmmword ptr [r15 + 112]	rosetta=4a5cabcb27921687	ymm2=0000000000000000000000800000000000000000000000000000000000000000
+17132	vpsrlvq ymm9, ymm15, ymm9	rosetta=baf5ee9ea6a7ddfb	ymm9=0000000000000000000000000000000000000000000000000000000000000000
+17134	vpsllvq ymm1, ymm6, ymm8	rosetta=cc66ae5d8db93cb0	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17136	vpsrlvq ymm6, ymm6, ymm15	rosetta=18bccbe62ea1d110	ymm6=00000000000000000000000000000000ffffff7f000000001000000000000000
+17142	vpsllvq ymm7, ymm8, ymm14	rosetta=73322041f4066476	ymm7=0000000000000000000000000200000042000000000000000000000000000000
+17144	vpsllvq ymm10, ymm2, ymm5	rosetta=3811a7474ad65659	ymm10=0000000000000000000000000000000000000000000000000000000000000000
+17148	vpsllvq xmm4, xmm4, xmm7	rosetta=3c9c0890de9e52f6	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+17153	vpsrlvq xmm1, xmm4, xmmword ptr [r15 + 64]	rosetta=71d2c7e9c06f8f90	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17157	vpsllvq ymm14, ymm9, ymm9	rosetta=76a0cbb41f061ac7	ymm14=0000000000000000000000000000000000000000000000000000000000000000
+17162	vpsrlvq ymm9, ymm0, ymmword ptr [r15 + 64]	rosetta=9bc06862dd144387	ymm9=00000000000000004c2990850000000000010000000000000000000000000000
+17163	vpsllvq xmm4, xmm4, xmmword ptr [r15 + 80]	rosetta=b57f7c15f7806a45	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+17164	vpsllvq ymm2, ymm15, ymm2	rosetta=ff8be3bb94882433	ymm2=0000000000000000000000000000000088a9cbedffffffff000000000218d9f6
+17167	vpsrlvq ymm8, ymm8, ymm8	rosetta=f7948d542dfad096	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17169	vpsllvq ymm1, ymm0, ymm3	rosetta=1913980e3bf3f359	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17172	vpsrlvq ymm0, ymm2, ymmword ptr [r15 + 96]	rosetta=957ae866a019c1ee	ymm0=e3800d149991d98300000000000000007ffe0181fe00ff010000000000000000
+17177	vpsllvq ymm10, ymm0, ymm15	rosetta=fadb6bb2a25812bb	ymm10=00000000ff000000800000000000000000000000000000000000000000000000
+17182	vpsllvq xmm9, xmm13, xmm13	rosetta=db2269241b5c87ec	ymm9=0000000000000000000000000000000000000000000000000000000000000000
+17183	vpsllvq xmm3, xmm4, xmm8	rosetta=f3164e2a052f6a4e	ymm3=0000000000000000000000000000000000000000000000000000000000000000
+17184	vpsllvq xmm5, xmm13, xmmword ptr [r15 + 48]	rosetta=6d2c75b835056998	ymm5=0000000000000000000000000000000000000000000000000000000000000000
+17195	vpsrlvq xmm10, xmm10, xmm12	rosetta=2e73d26a65a80447	ymm10=0000000000000000000000000000000000000000000000000000000000000000
+17196	vpsrlvq xmm8, xmm9, xmmword ptr [r15 + 160]	rosetta=8294980485df4e92	ymm8=0000000000000000000000000000000000000000000000000000000000000000
+17200	vpsllvq xmm6, xmm12, xmmword ptr [r15 + 32]	rosetta=2a76e1ace872fffd	ymm6=0000000000000000000000000000000000000000000000000000000000000000
+17202	vpsllvq ymm3, ymm13, ymm13	rosetta=c7d47723e68827b4	ymm3=0000000000000000000000800f00000000000000200000000000000000000000
+17204	vpsllvq ymm12, ymm0, ymm4	rosetta=4725cc308e1393f9	ymm12=0000000000000000000000000000000000000000000000000000000000000000
+17213	vpsllvq ymm3, ymm7, ymm4	rosetta=48dbf7d23b1b8044	ymm3=0000000021000000000000000000000000000000000000000000000000000000
+17220	vpsllvq xmm2, xmm1, xmmword ptr [r15 + 48]	rosetta=f397ffac867a569e	ymm2=0000000000000000000000000000000000000000000000000000000000000000
+17226	vpsllvq xmm12, xmm12, xmm8	rosetta=ef9b43090a69aab1	ymm12=0000000000000000000000000000000000000000000000000000000000000000
+17235	vpsllvq ymm1, ymm3, ymmword ptr [r15 + 0]	rosetta=42dae11a1e204ab4	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17238	vpsllvq xmm14, xmm0, xmm15	rosetta=a5c5c04555ffbf5f	ymm14=0000000000000000000000000000000000000000000000000000000000000000
+17240	vpsrlvq ymm10, ymm7, ymmword ptr [r15 + 0]	rosetta=db860a9ae8c8e384	ymm10=00000000000000000000000000000000000000003f0000000000000000000000
+17241	vpsrlvq xmm6, xmm8, xmmword ptr [r15 + 128]	rosetta=524b387d759016bb	ymm6=0000000000000000b598cbb6f77eaf7300000000000000000000000000000000
+17244	vpsllvq ymm2, ymm10, ymm2	rosetta=cfcb81e2598ecfaa	ymm2=0000000000000000000000000000000000000000000000000000000000000000
+17248	vpsrlvq xmm1, xmm1, xmm1	rosetta=027c01ca6d2d72d7	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17253	vpsllvq ymm9, ymm1, ymmword ptr [r15 + 0]	rosetta=d36bc706e376f5b7	ymm9=0000000000000000000000000000000000000000000000000000000000020000
+17255	vpsrlvq ymm1, ymm15, ymm1	rosetta=11a342143a21795b	ymm1=000000000000000000000000ffffffff00000000000000000000000000000000
+17256	vpsrlvq ymm1, ymm1, ymmword ptr [r15 + 128]	rosetta=bd132a1e54e3de0b	ymm1=0000000000000000000000000000000000000000000000000000000000000000
+17265	vpsllvq ymm14, ymm6, ymm6	rosetta=9ea1296a0cd7eae5	ymm14=0000000000000000000000000000000000000000000000000000000000000000
+17269	vpsllvq ymm7, ymm13, ymm15	rosetta=229395241a91ade2	ymm7=0000000000000000000000000000000000000080000000000000000000000000
+17273	vpsrlvq ymm7, ymm6, ymm10	rosetta=abbfe7177927296e	ymm7=000000000000000000c03f400000000000020000000000000000000000000000
+17276	vpsllvq ymm11, ymm11, ymm2	rosetta=e480e41fa1f7891d	ymm11=0000000000000000000000000000000000000000000000000000000000000000
+17280	vpsllvq ymm5, ymm15, ymmword ptr [r15 + 96]	rosetta=c0b31b0d68363800	ymm5=00000080ffffff7f000000000000000000000000000000800000000000000080
+17281	vpsrlvq ymm14, ymm8, ymm12	rosetta=04cafc52f7290202	ymm14=0000000000000000000000000000000000000000000000000000000000000000
+17286	vpsrlvq ymm3, ymm3, ymm13	rosetta=75f230176efb1167	ymm3=0000000000000000000000000000000000000000000000001000000000000000
+17288	vpsllvq ymm1, ymm15, ymmword ptr [r15 + 64]	rosetta=f00ecfeab8e2b49a	ymm1=0000000000000000000000004000000000000000000000000000000000000000
+17289	vpsllvq ymm2, ymm14, ymmword ptr [r15 + 0]	rosetta=466199c17867855b	ymm2=000000000000000000000000000000000000000000000000cc6f4ff1642a5a60
+17294	vpsrlvq ymm4, ymm4, ymm0	rosetta=0a7e0bbeb0ca4a61	ymm4=0000000000000000000000000000008000000000000000000000000000000000
+17298	vpsrlvq xmm12, xmm4, xmmword ptr [r15 + 32]	rosetta=d91c4b5a4558a1b9	ymm12=0000000000000000000000000000000000000000000000000000000000000000
+17301	vpsllvq ymm5, ymm11, ymmword ptr [r15 + 0]	rosetta=0719a15db792a012	ymm5=0000000000000000000000000000000000000000000000000000000000000000
+17304	vpsllvq ymm1, ymm13, ymmword ptr [r15 + 64]	rosetta=95c9db95bd175bea	ymm1=000000000000000000000000000000000000000000000000000000001f000000
+17306	vpsrlvq xmm6, xmm6, xmmword ptr [r15 + 80]	rosetta=fbc03f7a3847d5dc	ymm6=0000000000000000000000000000000000000000000000000000000000000000
+17308	vpsrlvq ymm5, ymm13, ymm1	rosetta=e17bda80e3c1691d	ymm5=000000000000000000000000000000000000000000000000000000801f000000
+17313	vpsrlvq ymm14, ymm4, ymmword ptr [r15 + 0]	rosetta=b8083d7e54c84f69	ymm14=81feff7f00000181000000000000000000000000000000000000000000000000
+17314	vpsllvq xmm12, xmm5, xmmword ptr [r15 + 144]	rosetta=ba09f658eef2b81e	ymm12=0000000000000000000000000000000000000000000000000000000000000000
+17317	vpsllvq ymm2, ymm6, ymmword ptr [r15 + 64]	rosetta=6132e53eb0dc9753	ymm2=00000000000000000000000000000000000000007e0000000000000000000000
+17318	vpsrlvq xmm5, xmm13, xmmword ptr [r15 + 0]	rosetta=1b58a0affd34363c	ymm5=0000000000000000000000000000000000000000000000000000000000000000
+17320	vpsrlvq xmm6, xmm10, xmm6	rosetta=5d5e9fdf61a465a3	ymm6=0000000000000000000000000000000000000000000000000000000000000000
+17323	vpsllvq ymm7, ymm12, ymm1	rosetta=4237d34c9012455d	ymm7=0000000000000000000000000000000000000000000000001f00000000000000
+17329	vpsllvq xmm3, xmm11, xmmword ptr [r15 + 160]	rosetta=d95bc271186d1d46	ymm3=0000000000000000000000000000000000000000000000000000000000000000
+17333	vpsllvq xmm2, xmm7, xmmword ptr [r15 + 96]	rosetta=9ac5aebd4a72ec24	ymm2=0000000000000000000000000000000000000000000000000000000000000000
+17349	vpsrlvq ymm6, ymm5, ymm10	rosetta=9677a0ef25490d6a	ymm6=1f00000000000000c18cca510000000001000000000000000000000000000000
+17351	vpsrlvq ymm0, ymm0, ymm14	rosetta=bc33f63d1c1412fb	ymm0=0000000000000000000000000000000000000000000000000000000000000000
+17353	vpsllvq ymm0, ymm0, ymm11	rosetta=1be7fddbedb85760	ymm0=0000000000000000000000000000000000000000000000000000000000000000
+17354	vpsrlvq xmm4, xmm5, xmm13	rosetta=dbbc1f0f2495e687	ymm4=0000000000000000000000000000000000000000000000000000000000000000
+17357	vpsllvq ymm10, ymm3, ymmword ptr [r15 + 96]	rosetta=2be4e640987f8b03	ymm10=0000000000000000000000000000000000000000000000000000000000000000
+17359	vpsllvq ymm14, ymm4, ymm14	rosetta=2339b989b2ab158f	ymm14=0000000000000000000000000000000000000000000000000000000000000000
+17363	vpsllvq ymm3, ymm10, ymmword ptr [r15 + 96]	rosetta=2704309cda9ef468	ymm3=00000000000000000000000000000000feffffff010000000000000000000000
+17365	vpsrlvq ymm15, ymm4, ymm11	rosetta=1fb3fb7316063932	ymm15=0000000000000000000000000000000000000000000000004000000000000000
+17376	vpsrlvq ymm12, ymm4, ymmword ptr [r15 + 32]	rosetta=4be82ee4757f5529	ymm12=0000000000000000000000000000000000000000000000000000004000000000
+17377	vpsllvq ymm9, ymm9, ymm7	rosetta=e9136062881456f8	ymm9=0000000000000000000000000000000000000000000000000000000000000000
+17381	vpsrlvq xmm6, xmm6, xmmword ptr [r15 + 32]	rosetta=1624ef28a7f902bf	ymm6=2100000000000000000000000000000000000000000000000000000000000000
+17383	vpsrlvq ymm11, ymm2, ymmword ptr [r15 + 128]	rosetta=6aad720cd0f676e8	ymm11=3f00000000000000000000000000000000000000000000000000000000000000
+17384	vpsrlvq ymm0, ymm0, ymm5	rosetta=d2a340c631ffd120	ymm0=0000000000000000000000000000000000000000000000000000000000000000
+17592	tzcnt r14d, r11d	rosetta=d980aa2a8ae099aa	flags=0108000000000000
+17605	bextr r14, r9, rdi	rosetta=edd97c3c2e1de9fd	flags=5400000000000000
+17609	lzcnt r10, rbx	rosetta=2ae89ab2d90995e3	flags=0008000000000000
+17611	tzcnt rsi, r11	rosetta=d2086c5caa038d94	flags=4000000000000000
+17613	lzcnt r10d, eax	rosetta=6469928896db402c	flags=0108000000000000
+17617	tzcnt rax, r11	rosetta=9eae18da4a5cc0fe	flags=0008000000000000
+17620	bextr r8, r14, r8	rosetta=955353954698db72	flags=5400000000000000
+17621	bextr r11, rsi, rcx	rosetta=1316831f79e6897d	flags=5400000000000000
+17637	lzcnt rbx, qword ptr [r15 + 108]	rosetta=b13fa1c5bc95095f	flags=4000000000000000
+17646	bextr ecx, esi, esi	rosetta=938f97850406c6d1	flags=5400000000000000
+17651	tzcnt rbp, rcx	rosetta=66faa6e679a15ec7	flags=0000000000000000
+17652	bextr r13, rsi, r11	rosetta=544249a70e558c35	flags=1400000000000000
+17655	bextr rsi, rbx, rbp	rosetta=a3dea85c48fd1b29	flags=5400000000000000
+17661	tzcnt rax, r9	rosetta=a0d53046c12f69b6	flags=0008000000000000
+17671	lzcnt r9d, ebp	rosetta=0ddbcafcc203326b	flags=4000000000000000
+17677	lzcnt r11, rdx	rosetta=f84eeb7827a599a2	flags=4008000000000000
+17682	bextr r11d, eax, r9d	rosetta=0669adf37c7be9f6	flags=5400000000000000
+17700	lzcnt r14d, r9d	rosetta=3222691586e3b48e	flags=4008000000000000
+17709	tzcnt r8, qword ptr [r15 + 180]	rosetta=02e04ec80073b118	flags=4008000000000000
+17720	tzcnt r8, rsi	rosetta=eb0ab19645ba2bcf	flags=4000000000000000
+17727	lzcnt ebp, dword ptr [r15 + 82]	rosetta=5554ef061b0feaf9	flags=0108000000000000
+17728	bextr edx, ebx, eax	rosetta=f7a6a1591559e97b	flags=5400000000000000
+17731	bextr r14, rcx, r11	rosetta=6eb1ab2bc3d9ffb8	flags=5400000000000000
+17763	tzcnt rsi, r12	rosetta=cdf0ae2095b8eb7f	flags=0008000000000000
+17779	tzcnt ebx, r12d	rosetta=12ac051800d6bd3c	flags=0008000000000000
+17790	bextr rbp, r8, r13	rosetta=37de42b4f07f03a4	flags=5400000000000000
+17792	bextr r12, qword ptr [r15 + 112], rdx	rosetta=966ab584291a9f30	flags=1000000000000000
+17802	bextr edi, edi, r10d	rosetta=586e7e11829f0169	flags=5400000000000000
+17803	tzcnt esi, r12d	rosetta=ec48faf7df1a4ebc	flags=4008000000000000
+17812	bextr rsi, qword ptr [r15 + 0], r10	rosetta=a503caddafc77356	flags=5400000000000000
+17818	bextr r9, qword ptr [r15 + 22], r9	rosetta=abea44dbaca6fad2	flags=5400000000000000
+17820	tzcnt r9d, dword ptr [r15 + 90]	rosetta=3e2e71043a477c28	flags=4008000000000000
+17830	bextr rbx, qword ptr [r15 + 179], r12	rosetta=1f1861b96da4b2c1	flags=5400000000000000
+17831	lzcnt rax, r12	rosetta=dfa5542ee04a8ef4	flags=0008000000000000
+17834	tzcnt rdx, r10	rosetta=05f233e9caf416d4	flags=0008000000000000
+17839	tzcnt eax, ebx	rosetta=590c8118129ea20d	flags=4008000000000000
+17840	lzcnt rsi, qword ptr [r15 + 62]	rosetta=fdfee23f0b8c5227	flags=4008000000000000
+17845	bextr r13d, ebp, eax	rosetta=9fb8704db22bd32f	flags=5400000000000000
+17852	tzcnt rax, r10	rosetta=499f81195c103b7d	flags=0008000000000000
+17878	tzcnt rbp, r14	rosetta=a15e15fff2f13b20	flags=4008000000000000
+17880	lzcnt r12d, r9d	rosetta=dc46040637b74654	flags=4000000000000000
+17881	bextr eax, r10d, r9d	rosetta=afd2379a249fec0d	flags=5400000000000000
+17891	lzcnt ebp, r10d	rosetta=55a25390e08e3c33	flags=4000000000000000
+17898	lzcnt r14d, dword ptr [r15 + 34]	rosetta=cd0a94118ade79f0	flags=4000000000000000
+17900	bextr ebp, r12d, ebp	rosetta=82966c92ed839b30	flags=5400000000000000
+17901	tzcnt r10, qword ptr [r15 + 167]	rosetta=9ed07a6f58041e17	flags=4008000000000000
+17905	lzcnt rbx, qword ptr [r15 + 166]	rosetta=fb20b3d563a5688d	flags=4000000000000000
+17910	bextr rdi, r12, rsi	rosetta=7e14cb058dae94a8	flags=5400000000000000
+17915	lzcnt esi, ebx	rosetta=ed6f028ae6508ffd	flags=0008000000000000
+17929	bextr r10d, eax, r10d	rosetta=a34f05dc4e0f7013	flags=5400000000000000
+17932	bextr r14d, edx, edi	rosetta=4c3f9a9926d79b6a	flags=5400000000000000
+17933	bextr edx, r14d, r12d	rosetta=45907228b51e5053	flags=5400000000000000
+17935	tzcnt r8d, edx	rosetta=f0a80e6f511358f4	flags=0008000000000000
+17942	tzcnt r12d, ebp	rosetta=0238916aa607b83d	flags=4000000000000000
+17949	tzcnt r8, rbp	rosetta=6bcba2d663adc8bf	flags=0008000000000000
+17965	lzcnt r10, rdi	rosetta=74d3f8d9fd2fea04	flags=0008000000000000
+17969	tzcnt r13, r10	rosetta=fc3aaf25887cc989	flags=4008000000000000
+17971	tzcnt r14d, eax	rosetta=8b6f41d0c3f6d57c	flags=4000000000000000
+17975	bextr r8d, ecx, ebp	rosetta=12d5ff98260f93d8	flags=5400000000000000
+17980	bextr rdx, qword ptr [r15 + 57], r9	rosetta=244e1d069ec29ba9	flags=5400000000000000
+17985	bextr rdi, rbp, rcx	rosetta=8b113011c7c4d145	flags=5400000000000000
+17988	tzcnt esi, r12d	rosetta=ccff4d519a8b7197	flags=4008000000000000
+17991	bextr r11d, ecx, ebp	rosetta=8f8292c7fc0926ee	flags=5400000000000000
+17999	lzcnt rdi, qword ptr [r15 + 102]	rosetta=6e726d8c7db54d6f	flags=4000000000000000
+18000	tzcnt r11, qword ptr [r15 + 106]	rosetta=98f012f5584127bf	flags=4000000000000000
+18002	bextr esi, eax, r13d	rosetta=2514202176c4fb97	flags=5400000000000000
+18012	bextr r11, qword ptr [r15 + 113], rsi	rosetta=f70dd961b093ddde	flags=1000000000000000
+18013	tzcnt r14, qword ptr [r15 + 93]	rosetta=4d90b8c41fa7db53	flags=0000000000000000
+18017	bextr esi, dword ptr [r15 + 143], r8d	rosetta=e3b6e24d73e9ab24	flags=1400000000000000
+18033	bextr r8d, r11d, eax	rosetta=47a851d0ed5dd516	flags=5400000000000000
+18038	bextr r8, rsi, r14	rosetta=86845917a6a0ecc9	flags=5400000000000000
+18039	lzcnt r13, qword ptr [r15 + 168]	rosetta=9772cb4e6f708dee	flags=4008000000000000
+18046	tzcnt rdi, r9	rosetta=bab76ce04d1dac77	flags=0008000000000000
+18047	lzcnt rcx, qword ptr [r15 + 141]	rosetta=181ad84acca0f187	flags=0008000000000000
+18053	bextr rdx, r8, r9	rosetta=6fc268608bd8db71	flags=1000000000000000
+18069	lzcnt rdi, rdx	rosetta=e92192bd15ba04a4	flags=0000000000000000
+18073	lzcnt r12d, dword ptr [r15 + 141]	rosetta=c8a7cb244087dad8	flags=0008000000000000
+18084	tzcnt rdi, qword ptr [r15 + 165]	rosetta=80cf222b7e91c838	flags=0008000000000000
+18087	lzcnt r12d, edx	rosetta=462cbc2a49e8662e	flags=4008000000000000
+18100	lzcnt eax, edx	rosetta=46f3edffccde63d2	flags=0000000000000000
+18105	tzcnt ebp, dword ptr [r15 + 76]	rosetta=e9a4f773560b8cbc	flags=0108000000000000
+18109	tzcnt r13, qword ptr [r15 + 73]	rosetta=9b6be99b343660f3	flags=4008000000000000
+18111	lzcnt rcx, rdi	rosetta=a006859f41402601	flags=0008000000000000
+18120	bextr r13, rcx, rsi	rosetta=ac749822040cead1	flags=5400000000000000
+18123	lzcnt edi, dword ptr [r15 + 46]	rosetta=14d2b582c1aceea8	flags=4000000000000000
+18132	bextr rdi, rdi, rbx	rosetta=235efd6d3553e52b	flags=5400000000000000
+18139	tzcnt rdi, r10	rosetta=5f69bb582acbcfb9	flags=4008000000000000
+18146	lzcnt r10d, esi	rosetta=6bf817e6e4ebdb54	flags=0008000000000000
+18148	bextr r14d, r11d, ebx	rosetta=c18a13a2226c9161	flags=5400000000000000
+18163	tzcnt rsi, qword ptr [r15 + 126]	rosetta=2f1c003d6e8fbcd0	flags=4000000000000000
+18173	lzcnt ebx, r8d	rosetta=41a48c9661499bcb	flags=0008000000000000
+18178	bextr rdx, r11, r9	rosetta=09c90b6f1058bb8e	flags=5400000000000000
+18180	bextr rsi, qword ptr [r15 + 72], r8	rosetta=245ddc265e505956	flags=5400000000000000
+18194	tzcnt r8, r10	rosetta=50d5b0ddf71133c2	flags=4000000000000000
+18195	lzcnt r13d, dword ptr [r15 + 12]	rosetta=a7d6f680430a9d24	flags=0108000000000000
+18196	tzcnt r12, qword ptr [r15 + 72]	rosetta=ad2a334527fe9182	flags=4000000000000000
+18198	tzcnt r12d, r12d	rosetta=707818f171b99905	flags=4000000000000000
+18209	lzcnt r11d, r9d	rosetta=9a456ce65573761d	flags=0000000000000000
+18215	lzcnt ebx, eax	rosetta=546b8cb709296c00	flags=0108000000000000
+18217	tzcnt r8, rcx	rosetta=e04e3399f4cfd493	flags=4000000000000000
+18221	bextr r13, qword ptr [r15 + 49], r14	rosetta=cff2b274fd261ed3	flags=5400000000000000
+18232	tzcnt ebp, r10d	rosetta=62370b2710065b29	flags=0008000000000000
+18234	bextr r13, r12, r12	rosetta=0696af778f3ac458	flags=5400000000000000
+18244	lzcnt ebx, esi	rosetta=7543c87fbb6c61ff	flags=0008000000000000
+18253	tzcnt r10, r12	rosetta=e8ab04f57f740ccc	flags=4008000000000000
+18259	lzcnt r14, qword ptr [r15 + 147]	rosetta=5b4bf94457053a0a	flags=4008000000000000
+18261	lzcnt rax, r13	rosetta=b184ab8fbed3602e	flags=4008000000000000
+18264	tzcnt r12, r9	rosetta=3a758b3ad3022e05	flags=0108000000000000
+18271	tzcnt edx, eax	rosetta=3e24bfed3bf079bb	flags=0000000000000000
+18273	tzcnt ecx, ebx	rosetta=b5afeeb04f711127	flags=4000000000000000
+18274	lzcnt edi, r11d	rosetta=a55d1a7e67b6daf0	flags=0008000000000000
+18285	lzcnt eax, dword ptr [r15 + 123]	rosetta=b20303194288a5d3	flags=0108000000000000
+18290	bextr r8d, ebp, r13d	rosetta=5ce482d2fd59ee1b	flags=5400000000000000
+18302	lzcnt rcx, r9	rosetta=6ee850bc0e946acf	flags=0008000000000000
+18307	tzcnt r8d, dword ptr [r15 + 119]	rosetta=113c69c211bec73c	flags=4008000000000000
+18309	bextr ebx, esi, ebx	rosetta=213a1484e6b773c6	flags=5400000000000000
+18311	lzcnt r13, qword ptr [r15 + 31]	rosetta=e468f206b19ee28c	flags=4000000000000000
+18316	lzcnt edx, edx	rosetta=e7aa2854c5d3d4dc	flags=0008000000000000
+18321	tzcnt r8, r13	rosetta=9d78aa0f30f4ca8c	flags=0008000000000000
+18326	tzcnt r9, rcx	rosetta=7036ac26ad47bc2d	flags=0008000000000000
+18332	tzcnt edx, r9d	rosetta=fd1cdb81eb478fc6	flags=0008000000000000
+18343	lzcnt eax, ebx	rosetta=db33e40734fb65c2	flags=0008000000000000
+18344	lzcnt ebp, ebp	rosetta=d928722eed2ad4b3	flags=0008000000000000
+18346	bextr ebx, dword ptr [r15 + 9], esi	rosetta=93263841b3e065e9	flags=5400000000000000
+18361	tzcnt r11d, ebx	rosetta=162ea0ee5504d67f	flags=4008000000000000
+18365	tzcnt ecx, ebp	rosetta=2983a229e17de13a	flags=0008000000000000
+18386	bextr edi, dword ptr [r15 + 13], ebp	rosetta=d9a464023ff149fa	flags=5400000000000000
+18396	tzcnt rsi, rbx	rosetta=32bc74c71848dadb	flags=4000000000000000
+18400	bextr r13, rbp, r13	rosetta=cbd529062b28e41e	flags=5400000000000000
+18401	bextr r10, rcx, r8	rosetta=80a4b62a597c9537	flags=5400000000000000
+18412	tzcnt rbp, qword ptr [r15 + 113]	rosetta=485d2de28c8d36c2	flags=4000000000000000
+18418	bextr esi, dword ptr [r15 + 188], edi	rosetta=f368e493a9f94e44	flags=5400000000000000
+18420	tzcnt rcx, rdi	rosetta=459554df2009b3a7	flags=0008000000000000
+18427	lzcnt r13, r11	rosetta=3e0d91e6c4ad6e35	flags=4000000000000000
+18444	lzcnt ecx, r10d	rosetta=f9f62916a46ff699	flags=0008000000000000
+18456	lzcnt r11d, ebp	rosetta=6f3ef44117796415	flags=4008000000000000
+18476	tzcnt r13, qword ptr [r15 + 36]	rosetta=a89093858f2b6b12	flags=0008000000000000
+18478	bextr r14, qword ptr [r15 + 11], rbp	rosetta=6cd65e8a3dc48298	flags=5400000000000000
+18482	tzcnt r9d, r10d	rosetta=bd48bbc88cab8ce1	flags=0008000000000000
+18485	tzcnt r11d, r11d	rosetta=f4d0658e60085bf9	flags=4000000000000000
+18491	tzcnt eax, ebx	rosetta=863f39d81d164fb2	flags=4000000000000000
+18497	lzcnt rcx, qword ptr [r15 + 78]	rosetta=7705c35fef54b603	flags=0008000000000000
+18516	bextr r14d, dword ptr [r15 + 79], ebp	rosetta=a9a747597d4f8f47	flags=5400000000000000
+18520	bextr edi, r14d, r9d	rosetta=a88c40f8691519f3	flags=5400000000000000
+18532	bextr rax, qword ptr [r15 + 109], r14	rosetta=3b24b6b9eb247d70	flags=5400000000000000
+18533	tzcnt rbx, rax	rosetta=71f0c3dde7850f61	flags=0008000000000000
+18534	lzcnt rbx, qword ptr [r15 + 39]	rosetta=e4155dc01faaac7f	flags=4000000000000000
+18543	lzcnt rdx, qword ptr [r15 + 7]	rosetta=62f9f7f3efeb5977	flags=0008000000000000
+18545	lzcnt r12d, ebp	rosetta=44e3380e52faa65c	flags=4000000000000000
+18557	bextr r10, rbp, rdx	rosetta=8a61d41317102e6a	flags=1000000000000000
+18564	lzcnt r8d, esi	rosetta=680561a7b94fc8df	flags=0008000000000000
+18573	bextr esi, esi, r10d	rosetta=4e15d646182f8202	flags=5400000000000000
+18584	lzcnt edx, dword ptr [r15 + 156]	rosetta=554e4d4d8524ae96	flags=0008000000000000
+18588	bextr r8, rbx, rax	rosetta=7e9792d8c8ef7d14	flags=5400000000000000
+18603	bextr ecx, r8d, ecx	rosetta=feefc6908eecd2da	flags=5400000000000000
+18613	tzcnt r14, qword ptr [r15 + 161]	rosetta=806c5dcaed22f5f3	flags=4000000000000000
+18614	bextr r13d, ebx, ecx	rosetta=ffdb2966a1854c1c	flags=1400000000000000
+18619	tzcnt rdi, rbx	rosetta=220704124ffcb4f8	flags=0008000000000000
+18627	tzcnt rbp, qword ptr [r15 + 55]	rosetta=62243079b43c8722	flags=0008000000000000
+18633	tzcnt r13, r11	rosetta=c5d5a40e3f1d81bc	flags=4000000000000000
+18640	tzcnt r9d, r11d	rosetta=819ca3618c674de7	flags=4000000000000000
+18646	bextr r11, r9, r8	rosetta=054ee33a782c7535	flags=5400000000000000
+18653	bextr rdx, r14, r11	rosetta=6dde9a15dee38e0b	flags=5400000000000000
+18659	bextr r10d, ebx, r14d	rosetta=f2af7ff4c44e8d04	flags=5400000000000000
+18664	tzcnt edi, esi	rosetta=917fe8c8d1c0ef8c	flags=4000000000000000
+18678	tzcnt rdi, r8	rosetta=9c47b14223c22ea4	flags=4008000000000000
+18681	lzcnt ecx, r14d	rosetta=da0e11f4460be3ed	flags=0008000000000000
+18694	lzcnt rdi, r14	rosetta=88d62707e26b8a93	flags=0008000000000000
+18697	tzcnt r8, rdx	rosetta=11289d658f72052c	flags=4008000000000000
+18699	tzcnt r9, rcx	rosetta=1bfade8b8765731b	flags=4008000000000000
+18701	tzcnt r8, rdi	rosetta=99c3cfc93546c732	flags=4008000000000000
+18706	tzcnt rsi, r11	rosetta=d0dbb25cd059df15	flags=4000000000000000
+18709	bextr ebp, edx, r8d	rosetta=85dee94491f9bee6	flags=5400000000000000
+18710	bextr rsi, rbx, rax	rosetta=c058c87d5e26b1de	flags=5400000000000000
+18716	tzcnt r12d, edi	rosetta=e695a959d04eb017	flags=4000000000000000
+18724	tzcnt r14d, ecx	rosetta=d2b0cf1a206d0541	flags=0000000000000000
+18735	lzcnt r14, qword ptr [r15 + 12]	rosetta=3e01e9fd35033df2	flags=0008000000000000
+18738	tzcnt r11, r13	rosetta=2b2ed05010a676bd	flags=0000000000000000
+18767	tzcnt r10, r9	rosetta=f34f18b369031c72	flags=4000000000000000
+18774	bextr rbp, qword ptr [r15 + 163], r10	rosetta=c6fcacaf54035ef5	flags=5400000000000000
+18775	bextr ebp, dword ptr [r15 + 50], edx	rosetta=9ef564f78ed0169f	flags=5400000000000000
+18782	bextr r8d, dword ptr [r15 + 103], edi	rosetta=593025fbc92896f1	flags=5400000000000000
+18783	bextr rbp, r14, rbp	rosetta=bbf6f5c4806cc074	flags=5400000000000000
+18784	lzcnt rcx, r11	rosetta=8a5a716fb70ca323	flags=4008000000000000
+18787	tzcnt r8d, dword ptr [r15 + 167]	rosetta=0235616ddb1dee59	flags=0008000000000000
+18789	lzcnt rsi, qword ptr [r15 + 75]	rosetta=3194c646876fc4ea	flags=0008000000000000
+18795	tzcnt r14, qword ptr [r15 + 180]	rosetta=d12ebbe7e714dc9f	flags=4000000000000000
+18796	bextr edi, r11d, r9d	rosetta=99de6298f1108f47	flags=5400000000000000
+18799	bextr r14d, r9d, r13d	rosetta=079b1ed203b99162	flags=5400000000000000
+18802	lzcnt rdi, rdi	rosetta=6ea68fb735dd27c4	flags=0008000000000000
+18820	bextr rbp, r13, rcx	rosetta=9d93d20e9f134512	flags=5400000000000000
+18824	bextr r12, qword ptr [r15 + 172], rax	rosetta=123c974e2a94b1d9	flags=5400000000000000
+18833	bextr r12, r14, r12	rosetta=f973a3a3b66d036d	flags=1400000000000000
+18839	tzcnt rsi, qword ptr [r15 + 162]	rosetta=372abbe9c7256c69	flags=0000000000000000
+18844	tzcnt rsi, rsi	rosetta=e0686ba291e50fb2	flags=0008000000000000
+18848	tzcnt r12d, r14d	rosetta=62b57a0e10138864	flags=4000000000000000
+18855	bextr rcx, rbp, rdx	rosetta=85abcf57328c257f	flags=5400000000000000
+18864	tzcnt r9, rsi	rosetta=17dcf17330d12b27	flags=0008000000000000
+18868	lzcnt rbp, rbp	rosetta=cfe183bc4ba279b3	flags=4000000000000000
+18870	tzcnt r12, r13	rosetta=47986b059320dcb3	flags=0008000000000000
+18871	tzcnt r9, rcx	rosetta=c557dbcf78848aa9	flags=4000000000000000
+18875	bextr r14d, r14d, edi	rosetta=d9bd8cba96b3c29e	flags=5400000000000000
+18878	lzcnt r14d, dword ptr [r15 + 30]	rosetta=c3f92ae34ae75df0	flags=0008000000000000
+18885	bextr r8d, edi, r14d	rosetta=b578424f50153225	flags=5400000000000000
+18895	tzcnt rdi, qword ptr [r15 + 56]	rosetta=0d8f9cbaeb51cf64	flags=0008000000000000
+18898	lzcnt r14d, ebx	rosetta=e929a3cef519b3b7	flags=4000000000000000
+18912	tzcnt r13, rdx	rosetta=d5b25ffe9a4f9e8a	flags=0000000000000000
+18915	bextr rdi, r14, rcx	rosetta=8bf0653d71de010b	flags=5400000000000000
+18917	tzcnt r10, qword ptr [r15 + 107]	rosetta=3b1ec3b82f0f590d	flags=0000000000000000
+18921	lzcnt rcx, r8	rosetta=d6b02ee6903d8357	flags=4008000000000000
+18925	lzcnt rbx, rbx	rosetta=eaaf4972ce871677	flags=0008000000000000
+18931	tzcnt r8d, r12d	rosetta=41d7c2cc3aac8e70	flags=4000000000000000
+18932	lzcnt rcx, qword ptr [r15 + 155]	rosetta=ee6e9746bec39d44	flags=0008000000000000
+18933	tzcnt esi, r8d	rosetta=ed593d0708f8564f	flags=0000000000000000
+18934	bextr eax, eax, ebx	rosetta=6c2cd191cc1388cf	flags=5400000000000000
+18936	tzcnt r13d, r10d	rosetta=1e998fa9936643d5	flags=4000000000000000
+18937	bextr r14, qword ptr [r15 + 164], rdi	rosetta=91a78c458c1372ca	flags=5400000000000000
+18941	lzcnt r10, qword ptr [r15 + 169]	rosetta=c9948b0aea8e6dc7	flags=4008000000000000
+18959	bextr rdi, r12, rbx	rosetta=6c30e84f544214c6	flags=5400000000000000
+18962	bextr r14d, edx, r10d	rosetta=06edaaa3f339dcd5	flags=5400000000000000
+19009	tzcnt rbx, rbx	rosetta=fed55c326431f134	flags=0000000000000000
+19012	lzcnt r11, r10	rosetta=3b93f342459fb268	flags=4000000000000000
+19051	bextr r8d, ebx, ecx	rosetta=1ae2321e08e31727	flags=5400000000000000
+19055	bextr r12d, dword ptr [r15 + 40], edi	rosetta=8007b9ad51d9b917	flags=5400000000000000
+19060	lzcnt r10, qword ptr [r15 + 167]	rosetta=269ba353a676d963	flags=0000000000000000
+19063	lzcnt r10d, edx	rosetta=dcecf0926eaf0f8f	flags=0008000000000000
+19069	bextr rsi, qword ptr [r15 + 14], rcx	rosetta=deda42f19be46e8b	flags=5400000000000000
+19080	bextr edx, r8d, r13d	rosetta=726c35c6f82c6069	flags=5400000000000000
+19091	tzcnt ebp, dword ptr [r15 + 149]	rosetta=963563b0d4d35085	flags=0008000000000000
+19092	tzcnt rbx, qword ptr [r15 + 93]	rosetta=728a6e13d015163e	flags=4008000000000000
+19099	tzcnt rbx, qword ptr [r15 + 177]	rosetta=6eba5a54d97397db	flags=4000000000000000
+19104	lzcnt rax, r13	rosetta=1b10c001fd7eef2e	flags=0008000000000000
+19106	lzcnt r13, r14	rosetta=9fb948864af44dfa	flags=4008000000000000
+19121	bextr rbx, r14, rsi	rosetta=bafb9857141e1e87	flags=5400000000000000
+19128	lzcnt r13, rsi	rosetta=352b39bf0a5e70e1	flags=4008000000000000
+19140	lzcnt r14d, dword ptr [r15 + 54]	rosetta=4f1a7c9d0e801525	flags=0008000000000000
+19158	bextr ecx, r9d, r9d	rosetta=e76f9f9115953fbe	flags=5400000000000000
+19169	bextr r10, qword ptr [r15 + 61], r11	rosetta=3424560429ebb8da	flags=5400000000000000
+19180	lzcnt rbp, qword ptr [r15 + 89]	rosetta=1f81f7719582f42e	flags=0008000000000000
+19182	tzcnt rbx, qword ptr [r15 + 139]	rosetta=03668eb52dd18507	flags=0108000000000000
+19188	tzcnt rbp, qword ptr [r15 + 182]	rosetta=578bf33bcb00ac30	flags=0008000000000000
+19190	bextr esi, r9d, ebp	rosetta=d4df3d48da2499be	flags=5400000000000000
+19196	bextr r12, rdx, rsi	rosetta=3f65ad5e33ffee84	flags=1400000000000000
+19199	tzcnt rax, r12	rosetta=f147d1e2604a1d32	flags=0000000000000000
+19203	bextr ecx, dword ptr [r15 + 126], r12d	rosetta=be82b4087e057930	flags=5400000000000000
+19209	bextr r9d, dword ptr [r15 + 36], ebx	rosetta=54d8b18ba67d4065	flags=5400000000000000
+19222	tzcnt rdx, r8	rosetta=356fc7bb6d12b748	flags=0008000000000000
+19224	tzcnt rdi, r12	rosetta=7da8892f41b90cfa	flags=0008000000000000
+19225	lzcnt rcx, rsi	rosetta=4b6e5f4a7cf34ded	flags=4000000000000000
+19228	bextr r13d, dword ptr [r15 + 88], ebp	rosetta=227e2f87fd8f466b	flags=5400000000000000
+19230	tzcnt r11, r11	rosetta=d3b3e915060d41d1	flags=4000000000000000
+19239	bextr ebx, dword ptr [r15 + 50], ebp	rosetta=dcfada9de5ebd2cc	flags=1400000000000000
+19244	tzcnt rbx, r10	rosetta=cf5c4ec5822f9063	flags=0008000000000000
+19249	tzcnt rdx, rcx	rosetta=a7bee75fc574aed1	flags=0008000000000000
+19250	tzcnt r9, r14	rosetta=a36d35e2643742db	flags=4000000000000000
+19255	lzcnt r14d, eax	rosetta=e0437f3cac444839	flags=0008000000000000
+19256	tzcnt rbp, rbx	rosetta=5ebbed52cc03a5fb	flags=0000000000000000
+19258	tzcnt r12d, dword ptr [r15 + 146]	rosetta=3568e4d8f02fbafb	flags=0108000000000000
+19262	tzcnt rdi, qword ptr [r15 + 38]	rosetta=b428f08447e7e081	flags=4000000000000000
+19265	tzcnt r8, rsi	rosetta=fe850a730c91a90a	flags=4008000000000000
+19269	lzcnt rcx, r12	rosetta=19175c49e78c00ed	flags=0008000000000000
+19279	tzcnt r13, rax	rosetta=001e889a4dfeb8d6	flags=4008000000000000
+19281	tzcnt r12, r13	rosetta=f88a9e2e10da9400	flags=4000000000000000
+19284	lzcnt r14d, ebx	rosetta=80e38eff34e03142	flags=4008000000000000
+19303	tzcnt r9, rdx	rosetta=8e1b99ee075da844	flags=4008000000000000
+19306	tzcnt rbp, rax	rosetta=56e66396f3574d80	flags=4000000000000000
+19307	tzcnt rax, r14	rosetta=67840b1e13d9a8ab	flags=0000000000000000
+19309	lzcnt r13d, ebx	rosetta=5dfaf478a313ba29	flags=4000000000000000
+19315	bextr rcx, rax, r9	rosetta=516ca309350e3cd2	flags=5400000000000000
+19318	lzcnt esi, r10d	rosetta=911f9004b926bf32	flags=4000000000000000
+19328	tzcnt rcx, qword ptr [r15 + 68]	rosetta=f83b8c5a5a0cc161	flags=0008000000000000
+19337	tzcnt ecx, dword ptr [r15 + 131]	rosetta=e3993aa47aed5a11	flags=0108000000000000
+19339	tzcnt r14, rax	rosetta=eeb15c73ee2da267	flags=0000000000000000
+19343	lzcnt r12, qword ptr [r15 + 22]	rosetta=f19b42b636ac01cc	flags=0008000000000000
+19347	lzcnt r10d, dword ptr [r15 + 77]	rosetta=abcfdc8654d9aee6	flags=4008000000000000
+19348	bextr r13d, r9d, r10d	rosetta=7454353c367ffd49	flags=5400000000000000
+19354	bextr rsi, r8, r9	rosetta=fbc535b8aa9024ba	flags=5400000000000000
+19371	tzcnt r11d, dword ptr [r15 + 85]	rosetta=a8ebd1f80e154ba4	flags=4000000000000000
+19387	bextr ebp, r9d, esi	rosetta=46724b9f1a9a5e41	flags=5400000000000000
+19389	tzcnt r10d, r11d	rosetta=0ac679f45e63e8d7	flags=0108000000000000
+19391	bextr r10d, r11d, r11d	rosetta=d249a8291ed70a9d	flags=1000000000000000
+19401	tzcnt r9, r14	rosetta=00752fb6c9bf5c5a	flags=0008000000000000
+19406	lzcnt rbp, rbp	rosetta=46ac3a52e6fa548e	flags=0008000000000000
+19410	bextr r8, qword ptr [r15 + 127], r10	rosetta=0c7b5a601bfeec59	flags=5400000000000000
+19421	bextr r11, rsi, r8	rosetta=7aacb60b72c40143	flags=5400000000000000
+19433	lzcnt edi, dword ptr [r15 + 183]	rosetta=2c1d2f0ad588c359	flags=0000000000000000
+19438	tzcnt r10, rdx	rosetta=812b572a9c0034dd	flags=4000000000000000
+19440	tzcnt r8d, r11d	rosetta=d293b5dd245dd934	flags=4008000000000000
+19442	bextr r8d, ecx, r14d	rosetta=cd1ea0b3e4ea4b96	flags=5400000000000000
+19447	lzcnt rbp, rbp	rosetta=da8445d284c3abdb	flags=4000000000000000
+19461	lzcnt rcx, rdx	rosetta=15c27c589f907ec6	flags=4008000000000000
+19473	bextr rbx, qword ptr [r15 + 170], r12	rosetta=8d3ee8a28d5517d7	flags=5400000000000000
+19484	tzcnt ecx, r13d	rosetta=0627852686ddea73	flags=4008000000000000
+19489	bextr r10, r13, rcx	rosetta=11b574a4db525505	flags=5400000000000000
+19491	bextr r13, rbx, r10	rosetta=2442af3545c86259	flags=5400000000000000
+19493	lzcnt r9d, edi	rosetta=b0bdb550656d02d6	flags=4008000000000000
+19494	tzcnt edx, edx	rosetta=79ad8caab010eb50	flags=4008000000000000
+19495	lzcnt rax, r8	rosetta=65657978003f2ba1	flags=0108000000000000
+19498	bextr edx, dword ptr [r15 + 179], r9d	rosetta=5542c721e035cf4e	flags=5400000000000000
+19501	tzcnt rax, rdx	rosetta=d30d7cbd60537a12	flags=0008000000000000
+19511	tzcnt edi, edx	rosetta=f30fa96bf2934507	flags=4000000000000000
+19513	bextr ecx, ebp, ebp	rosetta=d7409d61b479ebd5	flags=5400000000000000
+19519	lzcnt rcx, r8	rosetta=074b2f7a8494c924	flags=4008000000000000
+19524	lzcnt r9, qword ptr [r15 + 37]	rosetta=d7310e12589761a5	flags=0008000000000000
+19526	bextr rsi, qword ptr [r15 + 114], r11	rosetta=7fbd8abe2dd9cac8	flags=5400000000000000
+19530	lzcnt r8d, edi	rosetta=ecbb4807f54ee787	flags=0008000000000000
+19539	lzcnt rbp, rdx	rosetta=6bf82ab3cba7419e	flags=0008000000000000
+19543	bextr r8, rdi, rbx	rosetta=eb9c117f8704d7e2	flags=5400000000000000
+19548	tzcnt r14, rbx	rosetta=7a667c06fec71e06	flags=4008000000000000
+19549	bextr r13d, r10d, r9d	rosetta=139331ea43f062ee	flags=5400000000000000
+19555	bextr rbx, rbp, rcx	rosetta=e28d9f2398ba9211	flags=5400000000000000
+19560	lzcnt rcx, rax	rosetta=7b63372be392b220	flags=0008000000000000
+19562	bextr r13, qword ptr [r15 + 176], r9	rosetta=aca422ddc31d977a	flags=5400000000000000
+19563	lzcnt r13, r10	rosetta=e0d3b6bdfc3f47f2	flags=0008000000000000
+19568	bextr esi, dword ptr [r15 + 168], r12d	rosetta=dec79104da479116	flags=5400000000000000
+19571	lzcnt esi, r14d	rosetta=4155da4da264d75f	flags=4008000000000000
+19575	bextr r9d, ecx, ecx	rosetta=7ee7585ad0e2ff60	flags=5400000000000000
+19579	bextr ebp, edx, eax	rosetta=f86af5364787b44a	flags=5400000000000000
+19583	lzcnt edx, ebx	rosetta=b75bec1ebf1df5b9	flags=0000000000000000
+19589	tzcnt r9d, r13d	rosetta=c5d57862098c2629	flags=0008000000000000
+19593	tzcnt ebp, dword ptr [r15 + 185]	rosetta=9eb493204fb0c06e	flags=4000000000000000
+19599	lzcnt rdi, r11	rosetta=b3e11f66ac23aa3b	flags=0008000000000000
+19615	bextr r12d, eax, r14d	rosetta=c3c82704b88fdfa1	flags=5400000000000000
+19616	lzcnt r9d, r8d	rosetta=9fcb0df7ac0911ad	flags=0000000000000000
+19624	lzcnt r14d, edi	rosetta=86af8f3bc5d62750	flags=4008000000000000
+19625	bextr rbp, r8, rax	rosetta=3e6a6a0f93284389	flags=5400000000000000
+19630	tzcnt r8d, ecx	rosetta=58c80fed7ed53535	flags=4008000000000000
+19631	bextr rsi, qword ptr [r15 + 82], r8	rosetta=e7ddc79d4c066cce	flags=5400000000000000
+19634	lzcnt ebx, r11d	rosetta=b6abf65a0d6625e1	flags=4008000000000000
+19640	tzcnt rsi, r14	rosetta=4f4364e01a63c794	flags=0008000000000000
+19646	lzcnt r14, rbp	rosetta=3cd5617345b115a7	flags=0000000000000000
+19651	bextr r14, qword ptr [r15 + 35], rbx	rosetta=1e4cade0ceac55bd	flags=5400000000000000
+19654	bextr r8, r9, rax	rosetta=4386882f86daf21e	flags=5400000000000000
+19663	tzcnt r13d, edi	rosetta=90a219d1ac3189e0	flags=4000000000000000
+19672	bextr r8, qword ptr [r15 + 146], r10	rosetta=bf4ae2e36c47e3cf	flags=5400000000000000
+19676	bextr eax, ecx, r10d	rosetta=9d270eb20bd90de8	flags=5400000000000000
+19679	tzcnt rsi, rdi	rosetta=fe86f789a970148c	flags=0108000000000000
+19682	tzcnt rsi, rcx	rosetta=48bd92940bf44f92	flags=4008000000000000
+19687	tzcnt r11, rdi	rosetta=42cb177406db2a85	flags=4008000000000000
+19689	tzcnt rdx, qword ptr [r15 + 47]	rosetta=8c9d1de18f775961	flags=0008000000000000
+19692	lzcnt rdi, r11	rosetta=9ac6a029ebab8e14	flags=4000000000000000
+19693	bextr r12d, ebx, r13d	rosetta=75cd05ce9c0f6c93	flags=5400000000000000
+19718	tzcnt rdi, r11	rosetta=939d6c3544b70f99	flags=0008000000000000
+19721	bextr rdi, r8, rdi	rosetta=dfe969fe4290b9de	flags=1000000000000000
+19722	tzcnt r14, rdi	rosetta=eb930114b4adcd0c	flags=4000000000000000
+19725	bextr rsi, rbx, r10	rosetta=1014df2eb19edbc4	flags=5400000000000000
+19733	tzcnt r14d, r12d	rosetta=e69bb2e5e1f4c8bd	flags=4000000000000000
+19740	lzcnt rax, r12	rosetta=c90639cda5426be1	flags=4000000000000000
+19743	tzcnt r12d, r10d	rosetta=c13aeb30ae93d057	flags=0008000000000000
+19746	lzcnt rcx, r11	rosetta=442534eca776143c	flags=4008000000000000
+19751	bextr rbx, qword ptr [r15 + 114], r12	rosetta=2b1ede50d5000efd	flags=1400000000000000
+19761	tzcnt ebp, r9d	rosetta=4abaee9c73511424	flags=4008000000000000
+19762	lzcnt r13d, ebx	rosetta=d6070f631a021f0e	flags=4000000000000000
+19765	bextr rsi, r10, r11	rosetta=dd260e896fae43a6	flags=5400000000000000
+19775	bextr eax, edx, ecx	rosetta=9c1907e6aed36644	flags=5400000000000000
+19779	lzcnt r9, r9	rosetta=99feea0594d518c0	flags=0008000000000000
+19781	bextr rsi, qword ptr [r15 + 113], r13	rosetta=a5cf382d752ebe99	flags=1400000000000000
+19782	bextr rcx, r13, r8	rosetta=25d69fd5e16c021b	flags=5400000000000000
+19799	tzcnt r13, r13	rosetta=204f3192c8f2d903	flags=4008000000000000
+19818	tzcnt ebx, r12d	rosetta=5378ce6bd28310a0	flags=0000000000000000
+19827	tzcnt ebx, r13d	rosetta=c72ef0ccfb10d96e	flags=4008000000000000
+19835	lzcnt rcx, r14	rosetta=4e823ea0b688c314	flags=4000000000000000
+19839	lzcnt r11d, eax	rosetta=78ddd2d7437a1640	flags=0008000000000000
+19852	bextr rsi, r11, rbx	rosetta=9f15d60676da9f59	flags=5400000000000000
+19859	lzcnt r8, rax	rosetta=1393f99142a2c2b8	flags=0000000000000000
+19866	tzcnt r10, r12	rosetta=9f81f16df6dff8b5	flags=4000000000000000
+19867	lzcnt r10, qword ptr [r15 + 49]	rosetta=64259ebd3fd0a1ff	flags=0008000000000000
+19881	tzcnt edi, dword ptr [r15 + 4]	rosetta=fb7daa4ad06520c0	flags=0108000000000000
+19888	bextr r14d, dword ptr [r15 + 13], r8d	rosetta=35f7e2e2e3c879bf	flags=5400000000000000
+19892	tzcnt rbp, rbp	rosetta=8aabb2588f222a0a	flags=4000000000000000
+19896	bextr rbx, rdi, r12	rosetta=5ad520bb4fd123e2	flags=5400000000000000
+19899	bextr r9, r10, r10	rosetta=1cdf89aff0c0c7f7	flags=5400000000000000
+19905	bextr r11d, ecx, r10d	rosetta=8e3cfb36b7e01188	flags=5400000000000000
+19911	lzcnt esi, dword ptr [r15 + 39]	rosetta=c41149124bdce11a	flags=0008000000000000
+19912	bextr r10, rdx, r13	rosetta=86fe588178f1d1bf	flags=5400000000000000
+19916	lzcnt rdx, rax	rosetta=70030b27970df80b	flags=4008000000000000
+19918	lzcnt ebp, dword ptr [r15 + 64]	rosetta=8358929536944fb5	flags=4008000000000000
+19921	bextr esi, r10d, ecx	rosetta=cb107aba0e9cc901	flags=5400000000000000
+19928	tzcnt ecx, r14d	rosetta=0d79c7b3d8b23cc9	flags=4000000000000000
+19932	tzcnt r9d, ebx	rosetta=423da2abe4daedd4	flags=0008000000000000
+19946	tzcnt rbx, rax	rosetta=2a62b2c9aef1b7ed	flags=4000000000000000
+19949	bextr ecx, r9d, ecx	rosetta=27db061235c6f94a	flags=5400000000000000
+19958	bextr eax, ebx, ebx	rosetta=90cc37b856a78f2b	flags=5400000000000000
+19959	lzcnt rbp, qword ptr [r15 + 96]	rosetta=86dffc08174ec677	flags=0000000000000000
+19965	tzcnt rcx, r9	rosetta=288c283cd0ab794d	flags=4000000000000000
+19985	lzcnt r9d, r8d	rosetta=c0d79d5bd802165a	flags=4008000000000000
+19997	lzcnt rdi, r13	rosetta=e19e21cd1a7e050a	flags=0008000000000000
+19998	lzcnt ebp, r8d	rosetta=945c0cc3e939d75b	flags=0000000000000000
+20002	tzcnt edi, r10d	rosetta=673617a3edd91a05	flags=4000000000000000
+20006	tzcnt r13d, r14d	rosetta=5888e01abca4f318	flags=4000000000000000
+20007	lzcnt rdi, r10	rosetta=1090c698f0ebac15	flags=0008000000000000
+20010	lzcnt rdx, rsi	rosetta=c5fd2937bb10ed13	flags=4008000000000000
+20011	tzcnt edi, dword ptr [r15 + 121]	rosetta=5ff4c90e4e29c25e	flags=0008000000000000
+20013	lzcnt ebx, r9d	rosetta=4685c9a92763b46d	flags=4000000000000000
+20025	lzcnt r9d, dword ptr [r15 + 151]	rosetta=6ad55737aabc5619	flags=4008000000000000
+20045	lzcnt rax, r8	rosetta=79f45fd60eac5ff5	flags=0008000000000000
+20046	lzcnt r8d, edx	rosetta=eef9ea28485751c7	flags=0008000000000000
+20048	bextr rax, rbp, rsi	rosetta=ede3aca55e697f5d	flags=5400000000000000
+20052	tzcnt r9, rbx	rosetta=2b82f094f3db54f9	flags=4000000000000000
+20065	lzcnt rax, rdx	rosetta=7792de004dc9c8a6	flags=0000000000000000
+20066	tzcnt r10, r13	rosetta=7a719595b7335f73	flags=4000000000000000
+20073	bextr rdi, qword ptr [r15 + 0], r13	rosetta=5db18b539da26994	flags=5400000000000000
+20081	tzcnt r12d, dword ptr [r15 + 102]	rosetta=72c6cf3f51a22119	flags=4000000000000000
+20096	bextr ebx, r12d, eax	rosetta=654a12f27a054f50	flags=5400000000000000
+20097	lzcnt rdi, rbp	rosetta=906b4f91eb5dde9c	flags=0008000000000000
+20102	lzcnt r13, rbp	rosetta=ae0d22e0efa57b14	flags=0008000000000000
+20127	tzcnt r12d, ebx	rosetta=397dc78755406988	flags=0008000000000000
+20129	lzcnt eax, ebp	rosetta=9cc9521a012893c7	flags=4000000000000000
+20130	tzcnt eax, edx	rosetta=174d6e99280ddeb5	flags=4000000000000000
+20132	lzcnt r9, r13	rosetta=0466f7ce05ace4b6	flags=0000000000000000
+20146	lzcnt edx, dword ptr [r15 + 1]	rosetta=02133a5a9892b594	flags=4000000000000000
+20147	bextr r14d, dword ptr [r15 + 186], ebx	rosetta=6907ea4e826037ec	flags=5400000000000000
+20155	bextr ebx, r9d, edx	rosetta=e05b90d0e006006a	flags=5400000000000000
+20164	tzcnt r13d, r13d	rosetta=f33c6692d6e43a73	flags=0008000000000000
+20171	tzcnt esi, dword ptr [r15 + 98]	rosetta=0748f7a53fae89d1	flags=0108000000000000
+20185	tzcnt ebp, r12d	rosetta=ec4c9f1e2eba0a0f	flags=4000000000000000
+20192	tzcnt rax, rcx	rosetta=10e54451cb066fa5	flags=4000000000000000
+20194	lzcnt rbp, qword ptr [r15 + 26]	rosetta=3778d0d7445857aa	flags=0008000000000000
+20198	bextr r9d, eax, edx	rosetta=4032223bde6aa873	flags=5400000000000000
+20200	bextr r14d, eax, ebx	rosetta=b4f5ed90da1b9780	flags=5400000000000000
+20204	bextr edi, ebx, edx	rosetta=07b509dff2b74ace	flags=5400000000000000
+20207	lzcnt rdx, qword ptr [r15 + 5]	rosetta=c1fceb4d68521724	flags=4008000000000000
+20208	tzcnt r13, qword ptr [r15 + 147]	rosetta=45ce743dd9791d71	flags=4000000000000000
+20214	tzcnt r14, rcx	rosetta=c70814912f1f6784	flags=0008000000000000
+20220	bextr ebx, dword ptr [r15 + 63], esi	rosetta=8cd0e135d1c05ea8	flags=5400000000000000
+20221	lzcnt r9d, dword ptr [r15 + 140]	rosetta=fc5222cbfd5f8d1f	flags=0008000000000000
+20240	bextr r14, rbp, rcx	rosetta=931ff0d79b377107	flags=5400000000000000
+20250	lzcnt rsi, rcx	rosetta=790df799cb0998c8	flags=0008000000000000
+20256	lzcnt rax, r14	rosetta=a75a063bbf75048c	flags=4008000000000000
+20258	bextr eax, dword ptr [r15 + 46], ebx	rosetta=93ac1865b75e2024	flags=5400000000000000
+20274	bextr rdx, rbp, rbp	rosetta=6bdf0345590657d4	flags=5400000000000000
+20276	lzcnt r12d, dword ptr [r15 + 103]	rosetta=dd37878132cb56fb	flags=4008000000000000
+20277	tzcnt eax, edi	rosetta=cad3a1ba03e32492	flags=4008000000000000
+20280	lzcnt ecx, r10d	rosetta=a6b018577c2acfa7	flags=0008000000000000
+20291	tzcnt rcx, qword ptr [r15 + 73]	rosetta=a98deaa73fac5e30	flags=4008000000000000
+20294	lzcnt r8d, ecx	rosetta=09e18e64b58b6a88	flags=0008000000000000
+20297	bextr rsi, r13, r13	rosetta=e2c8a396db3b65cb	flags=5400000000000000
+20298	lzcnt ecx, dword ptr [r15 + 138]	rosetta=1fa8db327bc31544	flags=4008000000000000
+20303	tzcnt r8d, r13d	rosetta=8b801410cdbb971f	flags=0008000000000000
+20317	lzcnt r12, qword ptr [r15 + 45]	rosetta=4d8cdaec230351c8	flags=0008000000000000
+20350	bextr esi, dword ptr [r15 + 125], eax	rosetta=d73542d03800868e	flags=5400000000000000
+20354	bextr r10, rbp, r8	rosetta=f53db71529348a82	flags=5400000000000000
+20355	tzcnt r10d, dword ptr [r15 + 51]	rosetta=ea37f8e8545f7f83	flags=4008000000000000
+20360	bextr edi, r12d, ebx	rosetta=1d81515380591b82	flags=5400000000000000
+20362	tzcnt esi, r9d	rosetta=465aa74593db27de	flags=4008000000000000
+20371	tzcnt edi, r12d	rosetta=beda479c8134bb4d	flags=4000000000000000
+20378	tzcnt r8d, dword ptr [r15 + 105]	rosetta=794bd65294b3b192	flags=0108000000000000
+20384	bextr r8, qword ptr [r15 + 51], rdx	rosetta=1a4ad8bc3d5aac3d	flags=1000000000000000
+20391	tzcnt rbx, r11	rosetta=b5b42b2415f52358	flags=0008000000000000
+20396	bextr r13d, r11d, ebp	rosetta=764c4262589dae5b	flags=5400000000000000
+20398	tzcnt r13, qword ptr [r15 + 173]	rosetta=033935d6cea2bac5	flags=4008000000000000
+20401	bextr rsi, r13, r11	rosetta=0d59dcc7dd4f1c8a	flags=5400000000000000
+20405	lzcnt rax, qword ptr [r15 + 132]	rosetta=90d20e3af1bda10f	flags=4008000000000000
+20414	bextr r14d, r8d, r12d	rosetta=87d5756db2e003f0	flags=5400000000000000
+20422	tzcnt r11, qword ptr [r15 + 151]	rosetta=5c33f5db30177fc0	flags=0108000000000000
+20431	bextr r10d, dword ptr [r15 + 83], r11d	rosetta=9c4904da46e61c73	flags=5400000000000000
+20435	lzcnt r8d, edi	rosetta=f22a05228759ef12	flags=4000000000000000
+20436	bextr esi, dword ptr [r15 + 73], r9d	rosetta=b89946f7d8681486	flags=5400000000000000
+20441	tzcnt rcx, r10	rosetta=e1bbab0e7927996d	flags=4008000000000000
+20445	tzcnt r11d, r14d	rosetta=2839a538cd02f929	flags=0008000000000000
+20448	bextr r11d, dword ptr [r15 + 116], ecx	rosetta=2b055d88ecfabb01	flags=5400000000000000
+20450	lzcnt ebx, edx	rosetta=dfbc280ed7b4c80f	flags=0000000000000000
+20451	bextr r11d, r10d, r9d	rosetta=b316b32149b3203d	flags=5400000000000000
+20455	bextr ebx, dword ptr [r15 + 184], r12d	rosetta=42ea8ff7fd299610	flags=5400000000000000
+20458	lzcnt r11d, eax	rosetta=4e281022356d6aaa	flags=4000000000000000
+20459	bextr edx, dword ptr [r15 + 166], r8d	rosetta=11969d4530d9cabf	flags=5400000000000000
+20472	tzcnt rdx, rcx	rosetta=d220b0cc72c9080a	flags=0008000000000000
+20473	tzcnt r9d, r11d	rosetta=186cf45aacbbc435	flags=4008000000000000
+20476	lzcnt edx, edi	rosetta=163ec95eee36993a	flags=0008000000000000
+20486	lzcnt r14d, dword ptr [r15 + 13]	rosetta=8555775dd42baf65	flags=4008000000000000
+20487	bextr r10, qword ptr [r15 + 9], r12	rosetta=d5d742be292a41f1	flags=5400000000000000
+20492	bextr r9d, dword ptr [r15 + 187], ebx	rosetta=e2bed237847a1ad3	flags=5400000000000000
+20494	tzcnt r12d, r12d	rosetta=66ff0bd6692bc3ba	flags=0008000000000000
+20500	lzcnt rsi, rsi	rosetta=4c48c84e0b6a71e4	flags=0008000000000000
+20504	tzcnt r8, qword ptr [r15 + 183]	rosetta=bd3563035b6e5a92	flags=4000000000000000
+20511	tzcnt rbp, qword ptr [r15 + 112]	rosetta=014e2fb8f850cd1b	flags=0000000000000000
+20517	tzcnt ebp, dword ptr [r15 + 80]	rosetta=d80f8f2233a1d867	flags=4000000000000000
+20518	tzcnt r9, r11	rosetta=7936460493298002	flags=4000000000000000
+20521	lzcnt rdi, rdx	rosetta=5f7332b43ec6c4f9	flags=0008000000000000
+20526	lzcnt r13d, dword ptr [r15 + 38]	rosetta=20392969258545b7	flags=0008000000000000
+20541	lzcnt r12, qword ptr [r15 + 118]	rosetta=1196cc2ab5f19935	flags=4000000000000000
+20548	bextr r9d, esi, ecx	rosetta=1b6d8745005ab3e0	flags=5400000000000000
+20554	tzcnt esi, dword ptr [r15 + 68]	rosetta=dca862444c78e220	flags=4008000000000000
+20559	bextr r13, r13, rsi	rosetta=38a55cf59aeb3795	flags=1400000000000000
+20560	tzcnt r11d, r9d	rosetta=150a056298b994dd	flags=0108000000000000
+20562	bextr rax, qword ptr [r15 + 58], r13	rosetta=9e9b4679d5b78e8a	flags=5400000000000000
+20568	lzcnt r13, r13	rosetta=cc6fec54484b25c2	flags=0008000000000000
+20569	lzcnt rdx, rsi	rosetta=b0e1851e4a6ebbc3	flags=4008000000000000
+20574	lzcnt rdi, qword ptr [r15 + 23]	rosetta=cfbbaf921baba89a	flags=0008000000000000
+20582	lzcnt ebx, ecx	rosetta=e3fbef42f6b543f5	flags=0008000000000000
+20584	bextr r14d, r9d, edx	rosetta=0db30fa84e216f30	flags=5400000000000000
+20585	bextr rbx, r10, r11	rosetta=9ecd724cf9b257d5	flags=5400000000000000

@@ -1,0 +1,18 @@
+# x86_semantics.py cases where Rosetta and an x86 CPU differ: what it left (docs/macos/integer-data/silicon_overrides.py writes this file). One corpus line per family run on the x86 CPU, an AMD EPYC 7763 (raven-macos-bench run 44532999818, assembled with clang as here; dump sha256 f672c276756d52cb1383f944525af03854da94ba467584b202ad2939010def5c): every family, rflags and shift by one the newest. The tests refuse the file when a family's cases or Rosetta's results change.
+# Earlier runs gave the same results for the families they had: AMD EPYC 9V74 runs 44522174773 (random) and 44522713416 (random, multiply, divide), AMD EPYC 7763 runs 44523646082 (and bit test) and 44524257886 (and locked), AMD EPYC 9V45 runs 44526496471 (and group 4) and 44527495718 (and group 5). The random family's one difference, the RAX a 32-bit lock cmpxchg leaves, was first found on an AMD EPYC 9V45 (run 44411803673).
+# Rosetta and the EPYCs agree in every register, memory byte and defined flag of every directed family; they differ only in flags x86 leaves undefined (counted by silicon_overrides.py, not written).
+corpus	bit scan	cases=156	generated=dac1a943b360b568	rosetta=54b12ee1b2a22c9d	differently=0
+corpus	bit test	cases=1200	generated=29b36c029beb9877	rosetta=52830b230a9ddf54	differently=0
+corpus	carry narrow	cases=464	generated=69db1a24de0dca55	rosetta=6665b413ec4d379e	differently=0
+corpus	divide	cases=1303	generated=380dc37114903ba1	rosetta=67812a74a69526f7	differently=0
+corpus	flag readers	cases=144	generated=b26101cc75ce188a	rosetta=357ab2fc58c4cb3e	differently=0
+corpus	locked	cases=864	generated=27d3d2ba7368ed78	rosetta=3c8f0dd4c9367b60	differently=0
+corpus	multiply	cases=1120	generated=25df878d9858d4cb	rosetta=8329c158c8aa4e17	differently=0
+corpus	random	cases=10000	generated=91faf5c0258de935	rosetta=70e1f67988c68548	differently=0
+corpus	rflags	cases=24	generated=04784cf58b858e03	rosetta=43923897de371ca4	differently=0
+corpus	rotate	cases=1041	generated=ca606c2cd4fa12e1	rosetta=26b75210bb3c89cf	differently=0
+corpus	shift by cl	cases=312	generated=d2ddec382e9fa159	rosetta=45d6a8834a2d2333	differently=0
+corpus	shift by one	cases=144	generated=01b0ddce92ab20c2	rosetta=8649c81d6fd4cc60	differently=0
+corpus	strings	cases=272	generated=eff2bf9897e5d93f	rosetta=ee178f5e5c77fd62	differently=0
+corpus	unaligned locked	cases=496	generated=7d4ff4fd016fd37e	rosetta=4ca1ea057c9886d7	differently=0
+8316	lea r12, [r8 + 2*rbx + -9550]; cmpxchg qword ptr [r15 + 0], r14; lock cmpxchg dword ptr [r15 + 0], r14d; not r9d	rosetta=bef3e01ee61d7fc6	r0=7ca1c6eb10355a7f

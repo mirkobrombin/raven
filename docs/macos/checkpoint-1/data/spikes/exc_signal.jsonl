@@ -1,0 +1,3 @@
+{"bench":"exc_signal","metric":"brk","unit":"ns","n":30,"min":1574.0667,"median":1580.9437,"p95":1717.8000,"mean":1595.2231,"stddev":53.7801,"max":1846.5916,"qos":"USER_INTERACTIVE","translated":0,"note":"1e4 round-trips per run"}
+{"bench":"exc_signal","metric":"fault","unit":"ns","n":30,"min":1655.1750,"median":1672.2813,"p95":1683.7583,"mean":1673.1786,"stddev":6.6277,"max":1685.3709,"qos":"USER_INTERACTIVE","translated":0,"note":"1e4 round-trips per run"}
+{"bench":"exc_signal","metric":"svc","unit":"ns","n":30,"min":1308.4625,"median":1315.0687,"p95":1325.1167,"mean":1315.6369,"stddev":4.3170,"max":1327.2750,"qos":"USER_INTERACTIVE","translated":0,"note":"1e4 round-trips per run"}

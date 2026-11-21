@@ -1,0 +1,586 @@
+{
+  "blocks": [
+    {
+      "config": "wine-msync",
+      "workload": "call-x86_64",
+      "before": {
+        "time": "2026-11-18T14:08:23+01:00",
+        "battery": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23920739)\t80%; AC attached; not charging present: true",
+        "therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "thermal_state": "0",
+        "load": "{ 2.88 2.42 2.18 }",
+        "all_processes_cpu_percent": 59.6
+      },
+      "after": {
+        "time": "2026-11-18T14:08:30+01:00",
+        "battery": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23920739)\t80%; AC attached; not charging present: true",
+        "therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "thermal_state": "0",
+        "load": "{ 3.29 2.51 2.21 }",
+        "all_processes_cpu_percent": 416.2
+      }
+    },
+    {
+      "config": "wine-msync",
+      "workload": "startup-x86_64",
+      "before": {
+        "time": "2026-11-18T14:08:31+01:00",
+        "battery": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23920739)\t80%; AC attached; not charging present: true",
+        "therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "thermal_state": "0",
+        "load": "{ 3.58 2.58 2.24 }",
+        "all_processes_cpu_percent": 394.8
+      },
+      "after": {
+        "time": "2026-11-18T14:08:36+01:00",
+        "battery": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23920739)\t80%; AC attached; not charging present: true",
+        "therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "thermal_state": "0",
+        "load": "{ 3.54 2.59 2.24 }",
+        "all_processes_cpu_percent": 242.7
+      }
+    },
+    {
+      "config": "wine-msync",
+      "workload": "npp",
+      "before": {
+        "time": "2026-11-18T14:08:37+01:00",
+        "battery": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23920739)\t80%; AC attached; not charging present: true",
+        "therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "thermal_state": "0",
+        "load": "{ 3.54 2.59 2.24 }",
+        "all_processes_cpu_percent": 157.6
+      },
+      "after": {
+        "time": "2026-11-18T14:08:52+01:00",
+        "battery": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23920739)\t80%; AC attached; not charging present: true",
+        "therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+        "thermal_state": "0",
+        "load": "{ 3.48 2.63 2.26 }",
+        "all_processes_cpu_percent": 243.0
+      }
+    }
+  ],
+  "stats": {
+    "wine-msync/call-x86_64/set_event": {
+      "n": 3,
+      "min": 28.0,
+      "median": 29.0,
+      "p95": 29.0,
+      "mean": 28.666666666666668,
+      "stddev": 0.5773502691896257,
+      "max": 29.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/wait_signaled": {
+      "n": 3,
+      "min": 54.0,
+      "median": 54.0,
+      "p95": 54.0,
+      "mean": 54.0,
+      "stddev": 0.0,
+      "max": 54.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/event_ping_pong": {
+      "n": 3,
+      "min": 4231.0,
+      "median": 6203.0,
+      "p95": 7629.0,
+      "mean": 6021.0,
+      "stddev": 1706.295402326338,
+      "max": 7629.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/wait_any_8": {
+      "n": 3,
+      "min": 99.0,
+      "median": 99.0,
+      "p95": 100.0,
+      "mean": 99.33333333333333,
+      "stddev": 0.5773502691896257,
+      "max": 100.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/wait_all_8": {
+      "n": 3,
+      "min": 112.0,
+      "median": 112.0,
+      "p95": 114.0,
+      "mean": 112.66666666666667,
+      "stddev": 1.1547005383792515,
+      "max": 114.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/section_4_threads": {
+      "n": 3,
+      "min": 59.0,
+      "median": 60.0,
+      "p95": 60.0,
+      "mean": 59.666666666666664,
+      "stddev": 0.5773502691896257,
+      "max": 60.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/srw_4_threads": {
+      "n": 3,
+      "min": 125.0,
+      "median": 126.0,
+      "p95": 127.0,
+      "mean": 126.0,
+      "stddev": 1.0,
+      "max": 127.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/set_event_4_threads": {
+      "n": 3,
+      "min": 33.0,
+      "median": 45.0,
+      "p95": 46.0,
+      "mean": 41.333333333333336,
+      "stddev": 7.234178138070235,
+      "max": 46.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/wait_signaled_4_threads": {
+      "n": 3,
+      "min": 57.0,
+      "median": 57.0,
+      "p95": 57.0,
+      "mean": 57.0,
+      "stddev": 0.0,
+      "max": 57.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/process_ping_pong": {
+      "n": 3,
+      "min": 8053.0,
+      "median": 8084.0,
+      "p95": 8272.0,
+      "mean": 8136.333333333333,
+      "stddev": 118.50879010998861,
+      "max": 8272.0,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/wall_seconds": {
+      "n": 3,
+      "min": 1.3852703329757787,
+      "median": 1.4278167079901323,
+      "p95": 1.4613397080102004,
+      "mean": 1.4248089163253705,
+      "stddev": 0.038123779489392606,
+      "max": 1.4613397080102004,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/exit_seconds": {
+      "n": 3,
+      "min": 1.3063078749692068,
+      "median": 1.347916290978901,
+      "p95": 1.3773149580229074,
+      "mean": 1.343846374657005,
+      "stddev": 0.03567806924567544,
+      "max": 1.3773149580229074,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/cpu_seconds": {
+      "n": 3,
+      "min": 0.8335429999999999,
+      "median": 0.86737,
+      "p95": 0.8950259999999999,
+      "mean": 0.8653129999999999,
+      "stddev": 0.03079307160710017,
+      "max": 0.8950259999999999,
+      "attempts": 3
+    },
+    "wine-msync/call-x86_64/rss_mib": {
+      "n": 3,
+      "min": 9.4140625,
+      "median": 9.4375,
+      "p95": 9.4375,
+      "mean": 9.4296875,
+      "stddev": 0.013531646934131853,
+      "max": 9.4375,
+      "attempts": 3
+    },
+    "wine-msync/startup-x86_64/wall_seconds": {
+      "n": 3,
+      "min": 1.013365916965995,
+      "median": 1.0207414589822292,
+      "p95": 1.025485708960332,
+      "mean": 1.0198643616361853,
+      "stddev": 0.006107316457522618,
+      "max": 1.025485708960332,
+      "attempts": 3
+    },
+    "wine-msync/startup-x86_64/exit_seconds": {
+      "n": 3,
+      "min": 0.9307655839947984,
+      "median": 0.9333998749498278,
+      "p95": 0.940157166973222,
+      "mean": 0.9347742086392827,
+      "stddev": 0.004844280393168061,
+      "max": 0.940157166973222,
+      "attempts": 3
+    },
+    "wine-msync/startup-x86_64/cpu_seconds": {
+      "n": 3,
+      "min": 0.036712999999999996,
+      "median": 0.036747,
+      "p95": 0.037634,
+      "mean": 0.03703133333333333,
+      "stddev": 0.0005222014298461224,
+      "max": 0.037634,
+      "attempts": 3
+    },
+    "wine-msync/startup-x86_64/rss_mib": {
+      "n": 3,
+      "min": 8.8125,
+      "median": 8.83203125,
+      "p95": 8.859375,
+      "mean": 8.834635416666666,
+      "stddev": 0.023545756927116048,
+      "max": 8.859375,
+      "attempts": 3
+    },
+    "wine-msync/npp/window_seconds": {
+      "n": 3,
+      "min": 2.483261375,
+      "median": 2.493193,
+      "p95": 2.495330541,
+      "mean": 2.4905949720000002,
+      "stddev": 0.006440380741887594,
+      "max": 2.495330541,
+      "attempts": 3
+    }
+  },
+  "stats_quiet": {
+    "wine-msync/call-x86_64/set_event": {
+      "n": 3,
+      "min": 28.0,
+      "median": 29.0,
+      "p95": 29.0,
+      "mean": 28.666666666666668,
+      "stddev": 0.5773502691896257,
+      "max": 29.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/wait_signaled": {
+      "n": 3,
+      "min": 54.0,
+      "median": 54.0,
+      "p95": 54.0,
+      "mean": 54.0,
+      "stddev": 0.0,
+      "max": 54.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/event_ping_pong": {
+      "n": 3,
+      "min": 4231.0,
+      "median": 6203.0,
+      "p95": 7629.0,
+      "mean": 6021.0,
+      "stddev": 1706.295402326338,
+      "max": 7629.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/wait_any_8": {
+      "n": 3,
+      "min": 99.0,
+      "median": 99.0,
+      "p95": 100.0,
+      "mean": 99.33333333333333,
+      "stddev": 0.5773502691896257,
+      "max": 100.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/wait_all_8": {
+      "n": 3,
+      "min": 112.0,
+      "median": 112.0,
+      "p95": 114.0,
+      "mean": 112.66666666666667,
+      "stddev": 1.1547005383792515,
+      "max": 114.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/section_4_threads": {
+      "n": 3,
+      "min": 59.0,
+      "median": 60.0,
+      "p95": 60.0,
+      "mean": 59.666666666666664,
+      "stddev": 0.5773502691896257,
+      "max": 60.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/srw_4_threads": {
+      "n": 3,
+      "min": 125.0,
+      "median": 126.0,
+      "p95": 127.0,
+      "mean": 126.0,
+      "stddev": 1.0,
+      "max": 127.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/set_event_4_threads": {
+      "n": 3,
+      "min": 33.0,
+      "median": 45.0,
+      "p95": 46.0,
+      "mean": 41.333333333333336,
+      "stddev": 7.234178138070235,
+      "max": 46.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/wait_signaled_4_threads": {
+      "n": 3,
+      "min": 57.0,
+      "median": 57.0,
+      "p95": 57.0,
+      "mean": 57.0,
+      "stddev": 0.0,
+      "max": 57.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/process_ping_pong": {
+      "n": 3,
+      "min": 8053.0,
+      "median": 8084.0,
+      "p95": 8272.0,
+      "mean": 8136.333333333333,
+      "stddev": 118.50879010998861,
+      "max": 8272.0,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/wall_seconds": {
+      "n": 3,
+      "min": 1.3852703329757787,
+      "median": 1.4278167079901323,
+      "p95": 1.4613397080102004,
+      "mean": 1.4248089163253705,
+      "stddev": 0.038123779489392606,
+      "max": 1.4613397080102004,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/exit_seconds": {
+      "n": 3,
+      "min": 1.3063078749692068,
+      "median": 1.347916290978901,
+      "p95": 1.3773149580229074,
+      "mean": 1.343846374657005,
+      "stddev": 0.03567806924567544,
+      "max": 1.3773149580229074,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/cpu_seconds": {
+      "n": 3,
+      "min": 0.8335429999999999,
+      "median": 0.86737,
+      "p95": 0.8950259999999999,
+      "mean": 0.8653129999999999,
+      "stddev": 0.03079307160710017,
+      "max": 0.8950259999999999,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/call-x86_64/rss_mib": {
+      "n": 3,
+      "min": 9.4140625,
+      "median": 9.4375,
+      "p95": 9.4375,
+      "mean": 9.4296875,
+      "stddev": 0.013531646934131853,
+      "max": 9.4375,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/startup-x86_64/wall_seconds": {
+      "n": 3,
+      "min": 1.013365916965995,
+      "median": 1.0207414589822292,
+      "p95": 1.025485708960332,
+      "mean": 1.0198643616361853,
+      "stddev": 0.006107316457522618,
+      "max": 1.025485708960332,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/startup-x86_64/exit_seconds": {
+      "n": 3,
+      "min": 0.9307655839947984,
+      "median": 0.9333998749498278,
+      "p95": 0.940157166973222,
+      "mean": 0.9347742086392827,
+      "stddev": 0.004844280393168061,
+      "max": 0.940157166973222,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/startup-x86_64/cpu_seconds": {
+      "n": 3,
+      "min": 0.036712999999999996,
+      "median": 0.036747,
+      "p95": 0.037634,
+      "mean": 0.03703133333333333,
+      "stddev": 0.0005222014298461224,
+      "max": 0.037634,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/startup-x86_64/rss_mib": {
+      "n": 3,
+      "min": 8.8125,
+      "median": 8.83203125,
+      "p95": 8.859375,
+      "mean": 8.834635416666666,
+      "stddev": 0.023545756927116048,
+      "max": 8.859375,
+      "attempts": 3,
+      "load_at_most": 100.0
+    },
+    "wine-msync/npp/window_seconds": {
+      "n": 3,
+      "min": 2.483261375,
+      "median": 2.493193,
+      "p95": 2.495330541,
+      "mean": 2.4905949720000002,
+      "stddev": 0.006440380741887594,
+      "max": 2.495330541,
+      "attempts": 3,
+      "load_at_most": 100.0
+    }
+  },
+  "commands": [
+    [
+      "<checkout>/scripts/benchmark-macos.py",
+      "--runtime",
+      "wine",
+      "--runner",
+      "<tools>/mcsoda/mcsoda-11.0-4-x86_64/bin/wine",
+      "--prefix",
+      "<tools>/wineprefix",
+      "--work",
+      "<tools>/quiet/wine-work.noindex",
+      "--out",
+      "<tools>/quiet/results/d3",
+      "--sync",
+      "msync",
+      "--repeats",
+      "3",
+      "--warmup",
+      "1",
+      "--quiet-load",
+      "100",
+      "--quiet-wait",
+      "1",
+      "--timeout",
+      "300",
+      "--cc-dir",
+      "<tools>/llvm-mingw/llvm-mingw-20261104-ucrt-macos-universal/bin",
+      "--npp",
+      "<tools>/npp/app",
+      "call-x86_64"
+    ],
+    [
+      "<checkout>/scripts/benchmark-macos.py",
+      "--runtime",
+      "wine",
+      "--runner",
+      "<tools>/mcsoda/mcsoda-11.0-4-x86_64/bin/wine",
+      "--prefix",
+      "<tools>/wineprefix",
+      "--work",
+      "<tools>/quiet/wine-work.noindex",
+      "--out",
+      "<tools>/quiet/results/d3",
+      "--sync",
+      "msync",
+      "--repeats",
+      "3",
+      "--warmup",
+      "1",
+      "--quiet-load",
+      "100",
+      "--quiet-wait",
+      "1",
+      "--timeout",
+      "300",
+      "--cc-dir",
+      "<tools>/llvm-mingw/llvm-mingw-20261104-ucrt-macos-universal/bin",
+      "--npp",
+      "<tools>/npp/app",
+      "startup-x86_64"
+    ],
+    [
+      "<checkout>/scripts/benchmark-macos.py",
+      "--runtime",
+      "wine",
+      "--runner",
+      "<tools>/mcsoda/mcsoda-11.0-4-x86_64/bin/wine",
+      "--prefix",
+      "<tools>/wineprefix",
+      "--work",
+      "<tools>/quiet/wine-work.noindex",
+      "--out",
+      "<tools>/quiet/results/d3",
+      "--sync",
+      "msync",
+      "--repeats",
+      "3",
+      "--warmup",
+      "1",
+      "--quiet-load",
+      "100",
+      "--quiet-wait",
+      "1",
+      "--timeout",
+      "300",
+      "--cc-dir",
+      "<tools>/llvm-mingw/llvm-mingw-20261104-ucrt-macos-universal/bin",
+      "--npp",
+      "<tools>/npp/app",
+      "npp"
+    ]
+  ],
+  "runtime": {
+    "kind": "wine",
+    "runner": "<tools>/mcsoda/mcsoda-11.0-4-x86_64/bin/wine",
+    "version": "wine-experimental.bleeding.edge.11.0.411656.20260810 ( TkG Plain )",
+    "base_env": {
+      "PATH": "/usr/bin:/bin",
+      "HOME": "~",
+      "TMPDIR": "<tmp>",
+      "LANG": "en_US.UTF-8",
+      "WINEDEBUG": "-all",
+      "WINEDLLOVERRIDES": "mscoree=;mshtml="
+    }
+  },
+  "host": {
+    "model": [
+      "Mac17,3",
+      "Apple M5",
+      "25769803776",
+      "4",
+      "6"
+    ],
+    "os": [
+      "ProductName:macOS",
+      "ProductVersion:27.2.1",
+      "BuildVersion:26B131"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+LIBRARY ec_library.dll
+EXPORTS
+    ec_zero
+    ec_add
+    ec_sum1
+    ec_sum3
+    ec_sum4
+    ec_sum5
+    ec_sum6
+    ec_sum7
+    ec_sum8
+    ec_hash
+    ec_call
+    ec_scale
+    ec_teb_self
+    ec_teb_count
+    ec_keep
+    ec_call6
+    ec_call_double
+    ec_clobber_v6v7
+    ec_call_checked
+    ec_raw_address
+    ec_fmax

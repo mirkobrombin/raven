@@ -1,0 +1,60 @@
+{
+ "source": "Xcode 27.2 SharedFrameworks/DVTPortal.framework/Versions/A/Resources/DVTPortalCachedPortalCapabilities.json (excerpt)",
+ "entry": {
+  "attributes": {
+   "alwaysEnableForSupportedProductTypes": false,
+   "canRequestFromPortal": false,
+   "description": "The Cross Architecture Compatibility Framework entitlement enables developers to build software that provides cross-architecture compatibility on Apple Silicon Macs.",
+   "developmentOnly": false,
+   "distributionApprovalRequired": false,
+   "distributionTypes": [
+    {
+     "displayValue": "Ad hoc",
+     "name": "AD_HOC"
+    },
+    {
+     "displayValue": "Developer ID",
+     "name": "DEVELOPER_ID"
+    },
+    {
+     "displayValue": "Development",
+     "name": "DEVELOPMENT"
+    },
+    {
+     "displayValue": "App Store Connect",
+     "name": "STORE"
+    }
+   ],
+   "editable": true,
+   "enabledByDefault": false,
+   "entitlements": [
+    {
+     "description": "Cross Architecture Support",
+     "isRequiredInPlist": true,
+     "name": "Cross Architecture Support",
+     "profileKey": "com.apple.developer.cross-architecture-support",
+     "valueType": "BOOLEAN",
+     "values": [
+      {
+       "inference": "constant",
+       "value": "true"
+      }
+     ]
+    }
+   ],
+   "isPublic": true,
+   "name": "Cross-architecture Compatibility Framework",
+   "sfSymbolIcon": "arrow.left.arrow.right.square",
+   "supportedSDKs": [
+    {
+     "name": "MAC_OS"
+    }
+   ],
+   "validTeamTypes": [
+    "APPLE_DEVELOPER_PROGRAM"
+   ]
+  },
+  "id": "CROSS_ARCHITECTURE_COMPATIBILITY_FRAMEWORK",
+  "type": "capabilities"
+ }
+}

@@ -1,0 +1,849 @@
+"""Writes AVX, AVX2 and FMA3 cases for the translator's oracle test: one or a few VEX instructions each, with inputs around the edges
+where x86 and Arm differ (as x86_sse.py) and every YMM register's upper half set, so that clearing it (VEX.128) and keeping it
+(legacy SSE) give different results.
+
+usage: x86_avx.py OUTPUT_ASSEMBLY OUTPUT_HEADER
+
+The assembly holds one function per case and run_case, which loads a case's registers, flags, YMM registers and MXCSR, calls it and
+stores what it left. An x86-64 build of x86_avx_oracle.c runs them on an x86 CPU or under Rosetta; the translator runs the same bytes
+and must agree on every general and YMM register, the flags, MXCSR (but DE) and the 256-byte buffer r15 points at. Each family has a
+seed of its own, so a family added later leaves the cases of the others, and their silicon results, as they were.
+"""
+
+import os
+import random
+import sys
+import zlib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import x86_sse as sse  # noqa: E402
+
+ALL_FLAGS = sse.ALL_FLAGS
+
+
+def reg(rng, avoid=()):
+    return rng.choice([i for i in range(16) if i not in avoid])
+
+
+def three(rng):
+    """Destination and two sources, a third of them aliased: destination = first source, destination = second source (which
+    needs a scratch register), or both sources the same."""
+    d, a, b = rng.randrange(16), rng.randrange(16), rng.randrange(16)
+    roll = rng.random()
+    if roll < 0.12:
+        a = d
+    elif roll < 0.24:
+        b = d
+    elif roll < 0.33:
+        b = a
+    return d, a, b
+
+
+def name(number, width):
+    return f"{'ymm' if width == 32 else 'xmm'}{number}"
+
+
+def mem(rng, size, aligned=False):
+    word = {1: "byte", 2: "word", 4: "dword", 8: "qword", 16: "xmmword", 32: "ymmword"}[size]
+    offset = rng.randrange(0, 192 - size + 1)
+    if aligned:
+        offset -= offset % size
+    return f"{word} ptr [r15 + {offset}]"
+
+
+def binary(rng, names, width, memory_chance=0.4):
+    d, a, b = three(rng)
+    source = mem(rng, width) if rng.random() < memory_chance else name(b, width)
+    return f"{rng.choice(names)} {name(d, width)}, {name(a, width)}, {source}"
+
+
+def moves(rng):
+    roll = rng.randrange(8)
+    width = rng.choice([16, 32])
+    whole = ["vmovaps", "vmovapd", "vmovdqa", "vmovups", "vmovupd", "vmovdqu"]
+    if roll < 3:
+        op = rng.choice(whole)
+        aligned = op in ("vmovaps", "vmovapd", "vmovdqa")
+        form = rng.randrange(3)
+        if form == 0:
+            return [f"{op} {name(reg(rng), width)}, {name(reg(rng), width)}"]
+        if form == 1:
+            return [f"{op} {name(reg(rng), width)}, {mem(rng, width, aligned)}"]
+        return [f"{op} {mem(rng, width, aligned)}, {name(reg(rng), width)}"]
+    if roll == 3:
+        op, size = rng.choice([("vmovss", 4), ("vmovsd", 8)])
+        form = rng.randrange(3)
+        if form == 0:
+            d, a, b = three(rng)
+            return [f"{op} xmm{d}, xmm{a}, xmm{b}"]
+        if form == 1:
+            return [f"{op} xmm{reg(rng)}, {mem(rng, size)}"]
+        return [f"{op} {mem(rng, size)}, xmm{reg(rng)}"]
+    if roll == 4:
+        size = rng.choice([32, 64])
+        gpr = sse.gpr(rng, size)
+        op = "vmovd" if size == 32 else "vmovq"
+        form = rng.randrange(4)
+        if form == 0:
+            return [f"{op} xmm{reg(rng)}, {gpr}"]
+        if form == 1:
+            return [f"{op} {gpr}, xmm{reg(rng)}"]
+        if form == 2:
+            return [f"{op} xmm{reg(rng)}, {mem(rng, size // 8)}"]
+        return [f"{op} {mem(rng, size // 8)}, xmm{reg(rng)}"]
+    if roll == 5:
+        return [f"vmovq xmm{reg(rng)}, xmm{reg(rng)}"]
+    if roll == 6:
+        return [f"vmovntdq {mem(rng, width, True)}, {name(reg(rng), width)}"]
+    op = rng.choice(["vmovlps", "vmovhps", "vmovlpd", "vmovhpd"])
+    if rng.random() < 0.5:
+        return [f"{op} xmm{reg(rng)}, xmm{reg(rng)}, {mem(rng, 8)}"]
+    return [f"{op} {mem(rng, 8)}, xmm{reg(rng)}"]
+
+
+def transitions(rng):
+    """What happens to the upper halves: a 256-bit write, then a legacy SSE instruction (keeps them), a VEX.128 one (clears them),
+    vzeroupper or vzeroall."""
+    a, b, c = rng.randrange(16), rng.randrange(16), rng.randrange(16)
+    first = f"vaddps ymm{a}, ymm{b}, ymm{c}" if rng.random() < 0.5 else f"vmovups ymm{a}, {mem(rng, 32)}"
+    roll = rng.randrange(6)
+    if roll == 0:
+        return [first, f"addps xmm{a}, xmm{rng.randrange(16)}"]
+    if roll == 1:
+        return [first, f"movaps xmm{a}, xmm{rng.randrange(16)}"]
+    if roll == 2:
+        return [first, f"vaddps xmm{a}, xmm{rng.randrange(16)}, xmm{rng.randrange(16)}"]
+    if roll == 3:
+        return [first, "vzeroupper"]
+    if roll == 4:
+        return [first, "vzeroall"]
+    d, x, y = three(rng)
+    return [first, f"{rng.choice(['vaddsd', 'vmulss', 'vsqrtsd', 'vmaxss'])} xmm{d}, xmm{x}, xmm{y}"]
+
+
+def arithmetic(rng):
+    width = rng.choice([16, 32])
+    roll = rng.random()
+    if roll < 0.55:
+        return [binary(rng, [f"v{op}{t}" for op in ("add", "sub", "mul", "div", "min", "max") for t in ("ps", "pd")], width)]
+    if roll < 0.85:
+        d, a, b = three(rng)
+        op = rng.choice([f"v{op}{t}" for op in ("add", "sub", "mul", "div", "min", "max", "sqrt") for t in ("ss", "sd")])
+        source = mem(rng, 4 if op.endswith("ss") else 8) if rng.random() < 0.4 else f"xmm{b}"
+        return [f"{op} xmm{d}, xmm{a}, {source}"]
+    op = rng.choice(["vsqrtps", "vsqrtpd"])
+    source = mem(rng, width) if rng.random() < 0.4 else name(reg(rng), width)
+    return [f"{op} {name(reg(rng), width)}, {source}"]
+
+
+def logic(rng):
+    width = rng.choice([16, 32])
+    names = ["vandps", "vandpd", "vandnps", "vandnpd", "vorps", "vorpd", "vxorps", "vxorpd", "vpand", "vpandn", "vpor", "vpxor"]
+    return [binary(rng, names, width)]
+
+
+def compare(rng):
+    width = rng.choice([16, 32])
+    roll = rng.random()
+    if roll < 0.6:
+        d, a, b = three(rng)
+        t = rng.choice(["ps", "pd"])
+        source = mem(rng, width) if rng.random() < 0.4 else name(b, width)
+        return [f"vcmp{t} {name(d, width)}, {name(a, width)}, {source}, {rng.randrange(8)}"]
+    if roll < 0.8:
+        d, a, b = three(rng)
+        t = rng.choice(["ss", "sd"])
+        return [f"vcmp{t} xmm{d}, xmm{a}, xmm{b}, {rng.randrange(8)}"]
+    op = rng.choice(["vcomiss", "vcomisd", "vucomiss", "vucomisd"])
+    cond = rng.choice(["a", "ae", "b", "be", "e", "ne", "p", "np"])
+    return [f"{op} xmm{reg(rng)}, xmm{reg(rng)}", f"set{cond} al"]
+
+
+def integer(rng):
+    width = rng.choice([16, 32])
+    roll = rng.random()
+    if roll < 0.6:
+        names = ["vpaddb", "vpaddw", "vpaddd", "vpaddq", "vpsubb", "vpsubw", "vpsubd", "vpsubq", "vpaddsb", "vpaddsw", "vpaddusb",
+                 "vpaddusw", "vpsubsb", "vpsubsw", "vpsubusb", "vpsubusw", "vpmullw", "vpmulhw", "vpmulhuw", "vpmuludq", "vpmaddwd",
+                 "vpcmpeqb", "vpcmpeqw", "vpcmpeqd", "vpcmpgtb", "vpcmpgtw", "vpcmpgtd", "vpavgb", "vpavgw", "vpminub", "vpmaxub",
+                 "vpminsw", "vpmaxsw", "vpsadbw"]
+        return [binary(rng, names, width)]
+    if roll < 0.8:
+        op = rng.choice(["vpmovmskb", "vmovmskps", "vmovmskpd"])
+        return [f"{op} {sse.gpr(rng, 32)}, {name(reg(rng), width)}"]
+    d, a = reg(rng), reg(rng)
+    op = rng.choice(["vpsllw", "vpslld", "vpsllq", "vpsrlw", "vpsrld", "vpsrlq", "vpsraw", "vpsrad"])
+    if rng.random() < 0.5:
+        return [f"{op} {name(d, width)}, {name(a, width)}, {rng.choice([0, 1, 7, 15, 16, 31, 32, 63, 64, 200])}"]
+    return [f"{op} {name(d, width)}, {name(a, width)}, xmm{reg(rng)}"]
+
+
+def shuffle(rng):
+    width = rng.choice([16, 32])
+    roll = rng.random()
+    if roll < 0.5:
+        names = ["vpacksswb", "vpackssdw", "vpackuswb", "vpunpcklbw", "vpunpcklwd", "vpunpckldq", "vpunpcklqdq", "vpunpckhbw",
+                 "vpunpckhwd", "vpunpckhdq", "vpunpckhqdq", "vunpcklps", "vunpcklpd", "vunpckhps", "vunpckhpd"]
+        return [binary(rng, names, width)]
+    if roll < 0.75:
+        op = rng.choice(["vpshufd", "vpshuflw", "vpshufhw"])
+        return [f"{op} {name(reg(rng), width)}, {name(reg(rng), width)}, {rng.randrange(256)}"]
+    if roll < 0.9:
+        d, a, b = three(rng)
+        op = rng.choice(["vshufps", "vshufpd"])
+        return [f"{op} {name(d, width)}, {name(a, width)}, {name(b, width)}, {rng.randrange(256)}"]
+    op = rng.choice(["vpslldq", "vpsrldq"])
+    return [f"{op} {name(reg(rng), width)}, {name(reg(rng), width)}, {rng.choice([0, 1, 4, 8, 15, 16, 20])}"]
+
+
+def lanes(rng):
+    roll = rng.randrange(6)
+    d, a, b = three(rng)
+    if roll == 0:
+        source = mem(rng, 16) if rng.random() < 0.4 else f"xmm{b}"
+        return [f"{rng.choice(['vinsertf128', 'vinserti128'])} ymm{d}, ymm{a}, {source}, {rng.randrange(4)}"]
+    if roll == 1:
+        target = mem(rng, 16) if rng.random() < 0.4 else f"xmm{d}"
+        return [f"{rng.choice(['vextractf128', 'vextracti128'])} {target}, ymm{a}, {rng.randrange(4)}"]
+    if roll == 2:
+        source = mem(rng, 32) if rng.random() < 0.4 else f"ymm{b}"
+        return [f"{rng.choice(['vperm2f128', 'vperm2i128'])} ymm{d}, ymm{a}, {source}, {rng.randrange(256)}"]
+    if roll == 3:
+        op, size = rng.choice([("vbroadcastss", 4), ("vbroadcastsd", 8), ("vbroadcastf128", 16)])
+        width = 32 if size != 4 else rng.choice([16, 32])
+        source = mem(rng, size) if size == 16 or rng.random() < 0.5 else f"xmm{a}"
+        return [f"{op} {name(d, width)}, {source}"]
+    op, size = rng.choice([("vpbroadcastb", 1), ("vpbroadcastw", 2), ("vpbroadcastd", 4), ("vpbroadcastq", 8)])
+    width = rng.choice([16, 32])
+    source = mem(rng, size) if rng.random() < 0.5 else f"xmm{a}"
+    return [f"{op} {name(d, width)}, {source}"]
+
+
+FMA_NAMES = [f"vf{op}{order}" for op in ("madd", "msub", "nmadd", "nmsub") for order in ("132", "213", "231")]
+
+
+def fma(rng):
+    d, a, b = three(rng)
+    t = rng.choice(["ps", "pd", "ss", "sd"])
+    width = 16 if t in ("ss", "sd") else rng.choice([16, 32])
+    size = {"ss": 4, "sd": 8}.get(t, width)
+    source = mem(rng, size) if rng.random() < 0.3 else name(b, width)
+    return [f"{rng.choice(FMA_NAMES)}{t} {name(d, width)}, {name(a, width)}, {source}"]
+
+
+def convert(rng):
+    width = rng.choice([16, 32])
+    roll = rng.random()
+    if roll < 0.4:
+        op = rng.choice(["vcvtdq2ps", "vcvtps2dq", "vcvttps2dq"])
+        return [f"{op} {name(reg(rng), width)}, {name(reg(rng), width)}"]
+    if roll < 0.7:
+        d, a = reg(rng), reg(rng)
+        size = rng.choice([32, 64])
+        return [f"{rng.choice(['vcvtsi2ss', 'vcvtsi2sd'])} xmm{d}, xmm{a}, {sse.gpr(rng, size)}"]
+    if roll < 0.85:
+        d, a, b = three(rng)
+        return [f"{rng.choice(['vcvtss2sd', 'vcvtsd2ss'])} xmm{d}, xmm{a}, xmm{b}"]
+    op = rng.choice(["vcvttss2si", "vcvttsd2si", "vcvtss2si", "vcvtsd2si"])
+    return [f"{op} {sse.gpr(rng, rng.choice([32, 64]))}, xmm{reg(rng)}"]
+
+
+def sse3(rng):
+    """SSE3 in its legacy form, and its VEX forms at 128 and 256 bits, which run the same code."""
+    roll = rng.random()
+    if roll < 0.6:
+        op = rng.choice(["addsubps", "addsubpd", "haddps", "haddpd", "hsubps", "hsubpd"])
+        if rng.random() < 0.6:
+            source = mem(rng, 16, True) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+            return [f"{op} xmm{reg(rng)}, {source}"]
+        return [binary(rng, ["v" + op], rng.choice([16, 32]))]
+    op = rng.choice(["movddup", "movsldup", "movshdup", "lddqu"])
+    size = 8 if op == "movddup" else 16
+    if rng.random() < 0.6:
+        # Legacy SSE needs 16-byte alignment for a 16-byte operand (x86 raises #GP; Rosetta does not check), lddqu and the 8 bytes of
+        # movddup do not.
+        source = mem(rng, size, op in ("movsldup", "movshdup")) if op == "lddqu" or rng.random() < 0.3 else f"xmm{reg(rng)}"
+        return [f"{op} xmm{reg(rng)}, {source}"]
+    width = rng.choice([16, 32])
+    vsize = width if op != "movddup" or width == 32 else 8
+    source = mem(rng, vsize) if op == "lddqu" or rng.random() < 0.3 else name(reg(rng), width)
+    return [f"v{op} {name(reg(rng), width)}, {source}"]
+
+
+def ssse3(rng):
+    """SSSE3 in its legacy form."""
+    d = reg(rng)
+    source = mem(rng, 16, True) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+    if rng.random() < 0.15:
+        return [f"palignr xmm{d}, {source}, {rng.choice([0, 1, 4, 8, 15, 16, 17, 24, 31, 32, 200, rng.randrange(256)])}"]
+    op = rng.choice(["pshufb", "phaddw", "phaddd", "phaddsw", "pmaddubsw", "phsubw", "phsubd", "phsubsw", "psignb", "psignw",
+                     "psignd", "pmulhrsw", "pabsb", "pabsw", "pabsd"])
+    return [f"{op} xmm{d}, {source}"]
+
+
+def sse41(rng):
+    """SSE4.1 in its legacy form."""
+    d = reg(rng)
+    xsource = lambda size=16: mem(rng, size, size == 16) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+    roll = rng.randrange(12)
+    if roll == 0:
+        op = rng.choice(["pblendvb", "blendvps", "blendvpd"])
+        return [f"{op} xmm{reg(rng, (0,))}, {xsource()}, xmm0"]
+    if roll == 1:
+        return [f"ptest xmm{d}, {xsource()}", f"set{rng.choice(['e', 'ne', 'b', 'ae', 'a', 'be', 'p', 's', 'o'])} al"]
+    if roll == 2:
+        op = rng.choice(["pmovsxbw", "pmovsxbd", "pmovsxbq", "pmovsxwd", "pmovsxwq", "pmovsxdq", "pmovzxbw", "pmovzxbd",
+                         "pmovzxbq", "pmovzxwd", "pmovzxwq", "pmovzxdq"])
+        size = {"bw": 8, "bd": 4, "bq": 2, "wd": 8, "wq": 4, "dq": 8}[op[-2:]]
+        return [f"{op} xmm{d}, {xsource(size)}"]
+    if roll == 3:
+        op = rng.choice(["roundps", "roundpd", "roundss", "roundsd"])
+        size = {"ps": 16, "pd": 16, "ss": 4, "sd": 8}[op[-2:]]
+        return [f"{op} xmm{d}, {xsource(size)}, {rng.choice([0, 1, 2, 3, 4, 8, 9, 10, 11, 12])}"]
+    if roll == 4:
+        op = rng.choice(["blendps", "blendpd", "pblendw"])
+        return [f"{op} xmm{d}, {xsource()}, {rng.randrange(256)}"]
+    if roll == 5:
+        op, size, gpr_size = rng.choice([("pextrb", 1, 32), ("pextrw", 2, 32), ("pextrd", 4, 32), ("pextrq", 8, 64),
+                                         ("extractps", 4, 32)])
+        target = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} {target}, xmm{reg(rng)}, {rng.randrange(256)}"]
+    if roll == 6:
+        op, size, gpr_size = rng.choice([("pinsrb", 1, 32), ("pinsrw", 2, 32), ("pinsrd", 4, 32), ("pinsrq", 8, 64)])
+        source = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} xmm{d}, {source}, {rng.randrange(256)}"]
+    if roll == 7:
+        return [f"insertps xmm{d}, {xsource(4)}, {rng.randrange(256)}"]
+    if roll == 8:
+        return [f"{rng.choice(['dpps', 'dppd'])} xmm{d}, {xsource()}, {rng.randrange(256)}"]
+    if roll == 9:
+        return [f"mpsadbw xmm{d}, {xsource()}, {rng.randrange(8)}"]
+    if roll == 10:
+        return [f"movntdqa xmm{d}, {mem(rng, 16, True)}"] if rng.random() < 0.2 else [f"pextrw {sse.gpr(rng, 32)}, xmm{reg(rng)}, {rng.randrange(8)}"]
+    op = rng.choice(["pmuldq", "pcmpeqq", "packusdw", "pminsb", "pminsd", "pminuw", "pminud", "pmaxsb", "pmaxsd", "pmaxuw", "pmaxud",
+                     "pmulld", "phminposuw"])
+    return [f"{op} xmm{d}, {xsource()}"]
+
+
+def sse42(rng):
+    """SSE4.2 without the string compares (pcmpestri and the others: not translated yet): pcmpgtq and crc32."""
+    if rng.random() < 0.3:
+        source = mem(rng, 16, True) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+        return [f"pcmpgtq xmm{reg(rng)}, {source}"]
+    target_size, size = rng.choice([(32, 8), (32, 16), (32, 32), (64, 8), (64, 64)])
+    source = mem(rng, size // 8) if rng.random() < 0.3 else sse.gpr(rng, size) if size >= 32 else \
+        rng.choice(["al", "cl", "dl", "bl", "sil", "dil", "r8b", "r9b"] if size == 8 else ["ax", "cx", "dx", "bx", "si", "r8w"])
+    return [f"crc32 {sse.gpr(rng, target_size)}, {source}"]
+
+
+def popcnt(rng):
+    size = rng.choice([16, 32, 64])
+    source = mem(rng, size // 8) if rng.random() < 0.3 else (rng.choice(["ax", "cx", "dx", "bx", "si", "r8w"]) if size == 16
+                                                              else sse.gpr(rng, size))
+    target = rng.choice(["ax", "cx", "dx", "bx", "di", "r9w"]) if size == 16 else sse.gpr(rng, size)
+    return [f"popcnt {target}, {source}", f"set{rng.choice(['e', 'ne', 'b', 'p', 's', 'o', 'a'])} r10b"]
+
+
+STRING_OPS = ["pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"]
+
+
+def strings(rng):
+    """SSE4.2's string compares: every data format, aggregation, polarity and output selection, both operand kinds; strings_data
+    gives the registers and memory strings and lengths around 0, 8 and 16."""
+    imm = rng.randrange(128) if rng.random() < 0.7 else rng.choice([0x0c, 0x08, 0x18, 0x1a, 0x3a, 0x44, 0x04, 0x40, 0x70, 0x01, 0x0d])
+    source = mem(rng, 16) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+    return [f"{rng.choice(STRING_OPS)} xmm{reg(rng)}, {source}, {imm:#x}"]
+
+
+def strings_data(rng, body, registers, vectors, memory):
+    alphabet = [0, 0x61, 0x62, 0x63, 0x7a, 0x80, 0xff, 0x41, 0x30, 0x39]
+    def string():
+        values = [rng.choice(alphabet[1:]) for _ in range(16)]
+        if rng.random() < 0.7:
+            values[rng.randrange(16)] = 0
+        if rng.random() < 0.3:
+            values[rng.choice([0, 7, 8, 9, 14, 15])] = 0
+        return int.from_bytes(bytes(values), "little")
+    for r in range(16):
+        value = string() if rng.random() < 0.6 else (vectors[r][0] | vectors[r][1] << 64)
+        vectors[r][0], vectors[r][1] = value & (2**64 - 1), value >> 64
+    for i in range(0, 24, 2):
+        value = string()
+        memory[i], memory[i + 1] = value & (2**64 - 1), value >> 64
+    lengths = [0, 1, 7, 8, 9, 15, 16, 17, 100, -1, -8, -16, -17, 2**31 - 1, -2**31, 3, 12]
+    for r in (0, 2):
+        value = rng.choice(lengths) if rng.random() < 0.85 else rng.getrandbits(64) - 2**63
+        registers[r] = value & (2**64 - 1) if rng.random() < 0.5 else (value & 0xffffffff) | rng.getrandbits(32) << 32
+
+
+def vex_sse4(rng):
+    """The VEX forms of SSSE3, SSE4.1 and SSE4.2 (maps 0F 38 and 0F 3A, and vpinsrw and vpextrw), which run the legacy code: the
+    integer ones at 128 bits (256 is AVX2), vroundps, vroundpd, vblendps, vblendpd, vdpps and vptest at both widths."""
+    d, a, b = three(rng)
+    xsource = lambda size=16: mem(rng, size) if rng.random() < 0.3 else f"xmm{b}"
+    roll = rng.randrange(14)
+    if roll == 0:
+        op = rng.choice(["vpshufb", "vphaddw", "vphaddd", "vphaddsw", "vpmaddubsw", "vphsubw", "vphsubd", "vphsubsw", "vpsignb",
+                         "vpsignw", "vpsignd", "vpmulhrsw", "vpmuldq", "vpcmpeqq", "vpcmpgtq", "vpackusdw", "vpminsb", "vpminsd",
+                         "vpminuw", "vpminud", "vpmaxsb", "vpmaxsd", "vpmaxuw", "vpmaxud", "vpmulld"])
+        return [f"{op} xmm{d}, xmm{a}, {xsource()}"]
+    if roll == 1:
+        op = rng.choice(["vpabsb", "vpabsw", "vpabsd", "vphminposuw"])
+        return [f"{op} xmm{d}, {xsource()}"]
+    if roll == 2:
+        op = rng.choice(["vpmovsxbw", "vpmovsxbd", "vpmovsxbq", "vpmovsxwd", "vpmovsxwq", "vpmovsxdq", "vpmovzxbw", "vpmovzxbd",
+                         "vpmovzxbq", "vpmovzxwd", "vpmovzxwq", "vpmovzxdq"])
+        size = {"bw": 8, "bd": 4, "bq": 2, "wd": 8, "wq": 4, "dq": 8}[op[-2:]]
+        return [f"{op} xmm{d}, {xsource(size)}"]
+    if roll == 3:
+        width = rng.choice([16, 32])
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"vptest {name(a, width)}, {source}", f"set{rng.choice(['e', 'ne', 'b', 'ae', 'a', 'be', 'p', 's', 'o'])} al"]
+    imm = rng.choice([0, 1, 2, 3, 4, 8, 9, 10, 11, 12, rng.randrange(256)])
+    if roll == 4:
+        width = rng.choice([16, 32])
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"{rng.choice(['vroundps', 'vroundpd'])} {name(d, width)}, {source}, {imm}"]
+    if roll == 5:
+        op = rng.choice(["vroundss", "vroundsd"])
+        return [f"{op} xmm{d}, xmm{a}, {xsource(4 if op.endswith('ss') else 8)}, {imm}"]
+    if roll == 6:
+        op = rng.choice(["vblendps", "vblendpd", "vdpps", "vblendps", "vblendpd", "vpblendw", "vdppd", "vmpsadbw", "vpalignr"])
+        width = rng.choice([16, 32]) if op in ("vblendps", "vblendpd", "vdpps") else 16
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        value = rng.randrange(8) if op == "vmpsadbw" else rng.randrange(256)
+        return [f"{op} {name(d, width)}, {name(a, width)}, {source}, {value}"]
+    if roll == 7:
+        op, size, gpr_size = rng.choice([("vpextrb", 1, 32), ("vpextrw", 2, 32), ("vpextrd", 4, 32), ("vpextrq", 8, 64),
+                                         ("vextractps", 4, 32)])
+        target = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} {target}, xmm{a}, {rng.randrange(256)}"]
+    if roll == 8:
+        op, size, gpr_size = rng.choice([("vpinsrb", 1, 32), ("vpinsrw", 2, 32), ("vpinsrd", 4, 32), ("vpinsrq", 8, 64)])
+        source = mem(rng, size) if rng.random() < 0.4 else sse.gpr(rng, gpr_size)
+        return [f"{op} xmm{d}, xmm{a}, {source}, {rng.randrange(256)}"]
+    if roll == 9:
+        return [f"vinsertps xmm{d}, xmm{a}, {xsource(4)}, {rng.randrange(256)}"]
+    if roll == 10:
+        return [f"vpextrw {sse.gpr(rng, 32)}, xmm{a}, {rng.randrange(256)}"]
+    if roll == 11:
+        return [f"vmovntdqa xmm{d}, {mem(rng, 16, True)}"]
+    imm = rng.randrange(128) if rng.random() < 0.7 else rng.choice([0x0c, 0x08, 0x18, 0x1a, 0x3a, 0x44, 0x04, 0x40, 0x70, 0x01])
+    return [f"v{rng.choice(STRING_OPS)} xmm{a}, {xsource()}, {imm:#x}"]
+
+
+def vex_sse4_data(rng, body, registers, vectors, memory):
+    if "str" in body[0].split()[0]:
+        strings_data(rng, body, registers, vectors, memory)
+
+
+def avx_ops(rng):
+    """The AVX instructions with no SSE form, or none at this width: vtestps, vtestpd, vpermilps, vpermilpd, vblendv*, vcmp with
+    predicates 0 to 31, the conversions that change the width at 256 bits, vmaskmovps, vmaskmovpd and vmaskmovdqu."""
+    d, a, b = three(rng)
+    width = rng.choice([16, 32])
+    wsource = lambda: mem(rng, width) if rng.random() < 0.3 else name(b, width)
+    roll = rng.randrange(9)
+    if roll == 0:
+        return [f"{rng.choice(['vtestps', 'vtestpd'])} {name(a, width)}, {wsource()}",
+                f"set{rng.choice(['e', 'ne', 'b', 'ae', 'a', 'be', 'p', 's', 'o'])} al"]
+    if roll == 1:
+        op = rng.choice(["vpermilps", "vpermilpd"])
+        if rng.random() < 0.5:
+            return [f"{op} {name(d, width)}, {wsource()}, {rng.randrange(256)}"]
+        return [f"{op} {name(d, width)}, {name(a, width)}, {wsource()}"]
+    if roll == 2:
+        op = rng.choice(["vblendvps", "vblendvpd", "vpblendvb"])
+        width = 16 if op == "vpblendvb" else width
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"{op} {name(d, width)}, {name(a, width)}, {source}, {name(reg(rng), width)}"]
+    if roll in (3, 4):
+        op = rng.choice(["vcmpps", "vcmppd", "vcmpss", "vcmpsd"])
+        if op in ("vcmpss", "vcmpsd"):
+            source = mem(rng, 4 if op == "vcmpss" else 8) if rng.random() < 0.3 else f"xmm{b}"
+            return [f"{op} xmm{d}, xmm{a}, {source}, {rng.randrange(32)}"]
+        return [f"{op} {name(d, width)}, {name(a, width)}, {wsource()}, {rng.randrange(32)}"]
+    if roll == 5:
+        op = rng.choice(["vcvtps2pd", "vcvtdq2pd", "vcvtpd2ps", "vcvttpd2dq", "vcvtpd2dq"])
+        if op in ("vcvtps2pd", "vcvtdq2pd"):
+            source = mem(rng, 16) if rng.random() < 0.3 else f"xmm{b}"
+            return [f"{op} ymm{d}, {source}"]
+        source = mem(rng, 32) if rng.random() < 0.3 else f"ymm{b}"
+        return [f"{op} xmm{d}, {source}"]
+    if roll in (6, 7):
+        op = rng.choice(["vmaskmovps", "vmaskmovpd"])
+        if rng.random() < 0.5:
+            return [f"{op} {name(d, width)}, {name(a, width)}, {mem(rng, width)}"]
+        return [f"{op} {mem(rng, width)}, {name(a, width)}, {name(b, width)}"]
+    # rdi holds an address of the buffer, which differs from run to run: cleared after (mov leaves the flags alone).
+    return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"vmaskmovdqu xmm{a}, xmm{b}", "mov edi, 0"]
+
+
+def approximations(rng):
+    """rcpps, rsqrtps, rcpss and rsqrtss, legacy and VEX: x86 promises a relative error of at most 1.5 * 2^-12, and the result
+    differs between x86 CPUs, so the tests compare these within 2^-11 (x86_avx_check.h)."""
+    op = rng.choice(["rcpps", "rsqrtps", "rcpss", "rsqrtss"])
+    scalar = op.endswith("ss")
+    if rng.random() < 0.4:
+        source = (mem(rng, 4) if scalar else mem(rng, 16, True)) if rng.random() < 0.3 else f"xmm{reg(rng)}"
+        return [f"{op} xmm{reg(rng)}, {source}"]
+    d, a, b = three(rng)
+    if scalar:
+        source = mem(rng, 4) if rng.random() < 0.3 else f"xmm{b}"
+        return [f"v{op} xmm{d}, xmm{a}, {source}"]
+    width = rng.choice([16, 32])
+    source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+    return [f"v{op} {name(d, width)}, {source}"]
+
+
+def fma_addsub(rng):
+    """vfmaddsub and vfmsubadd: the even elements subtract the addend and the odd ones add it, or the other way round."""
+    d, a, b = three(rng)
+    t = rng.choice(["ps", "pd"])
+    width = rng.choice([16, 32])
+    source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+    op = f"vf{rng.choice(['maddsub', 'msubadd'])}{rng.choice(['132', '213', '231'])}{t}"
+    return [f"{op} {name(d, width)}, {name(a, width)}, {source}"]
+
+
+AVX2_LANEWISE = ["vpshufb", "vphaddw", "vphaddd", "vphaddsw", "vpmaddubsw", "vphsubw", "vphsubd", "vphsubsw", "vpsignb", "vpsignw",
+                 "vpsignd", "vpmulhrsw", "vpmuldq", "vpcmpeqq", "vpcmpgtq", "vpackusdw", "vpminsb", "vpminsd", "vpminuw", "vpminud",
+                 "vpmaxsb", "vpmaxsd", "vpmaxuw", "vpmaxud", "vpmulld"]
+VARIABLE_SHIFTS = ["vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd"]
+
+
+def avx2(rng):
+    """AVX2 but the gathers: the 256-bit integer forms of maps 0F 38 and 0F 3A, vpermq, vpermd, vpermps, vpermpd, vpblendd, the
+    variable shifts and vpmaskmovd and vpmaskmovq."""
+    d, a, b = three(rng)
+    ysource = lambda: mem(rng, 32) if rng.random() < 0.3 else f"ymm{b}"
+    roll = rng.randrange(11)
+    if roll == 0:
+        return [f"{rng.choice(AVX2_LANEWISE)} ymm{d}, ymm{a}, {ysource()}"]
+    if roll == 1:
+        return [f"{rng.choice(['vpabsb', 'vpabsw', 'vpabsd'])} ymm{d}, {ysource()}"]
+    if roll == 2:
+        op = rng.choice(["vpalignr", "vpblendw", "vmpsadbw"])
+        value = rng.randrange(64) if op == "vmpsadbw" else rng.randrange(256)
+        return [f"{op} ymm{d}, ymm{a}, {ysource()}, {value}"]
+    if roll == 3:
+        return [f"vpblendvb ymm{d}, ymm{a}, {ysource()}, ymm{reg(rng)}"]
+    if roll == 4:
+        op = rng.choice(["vpmovsxbw", "vpmovsxbd", "vpmovsxbq", "vpmovsxwd", "vpmovsxwq", "vpmovsxdq", "vpmovzxbw", "vpmovzxbd",
+                         "vpmovzxbq", "vpmovzxwd", "vpmovzxwq", "vpmovzxdq"])
+        size = {"bw": 16, "bd": 8, "bq": 4, "wd": 16, "wq": 8, "dq": 16}[op[-2:]]
+        source = mem(rng, size) if rng.random() < 0.3 else f"xmm{b}"
+        return [f"{op} ymm{d}, {source}"]
+    if roll == 5:
+        return [f"vmovntdqa ymm{d}, {mem(rng, 32, True)}"]
+    if roll == 6:
+        op = rng.choice(["vpermq", "vpermpd"])
+        return [f"{op} ymm{d}, {ysource()}, {rng.randrange(256)}"]
+    if roll == 7:
+        return [f"{rng.choice(['vpermd', 'vpermps'])} ymm{d}, ymm{a}, {ysource()}"]
+    if roll == 8:
+        width = rng.choice([16, 32])
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"vpblendd {name(d, width)}, {name(a, width)}, {source}, {rng.randrange(256)}"]
+    width = rng.choice([16, 32])
+    if roll == 9:
+        source = mem(rng, width) if rng.random() < 0.3 else name(b, width)
+        return [f"{rng.choice(VARIABLE_SHIFTS)} {name(d, width)}, {name(a, width)}, {source}"]
+    op = rng.choice(["vpmaskmovd", "vpmaskmovq"])
+    if rng.random() < 0.5:
+        return [f"{op} {name(d, width)}, {name(a, width)}, {mem(rng, width)}"]
+    return [f"{op} {mem(rng, width)}, {name(a, width)}, {name(b, width)}"]
+
+
+def avx2_data(rng, body, registers, vectors, memory):
+    # The variable shifts: counts around the element width as often as anywhere else.
+    if body[0].split()[0] in VARIABLE_SHIFTS:
+        for r in range(16):
+            for q in range(4):
+                if rng.random() < 0.6:
+                    counts = [rng.choice([0, 1, 7, 15, 16, 31, 32, 33, 63, 64, 65, rng.randrange(70)]) for _ in range(2)]
+                    vectors[r][q] = counts[0] | counts[1] << 32 if "d " in body[0][:9] else counts[0]
+        for i in range(24):
+            if rng.random() < 0.6:
+                memory[i] = rng.randrange(70) | rng.randrange(70) << 32
+
+
+GATHERS = {"vpgatherdd": (4, 4), "vpgatherdq": (4, 8), "vpgatherqd": (8, 4), "vpgatherqq": (8, 8), "vgatherdps": (4, 4),
+           "vgatherdpd": (4, 8), "vgatherqps": (8, 4), "vgatherqpd": (8, 8)}
+
+
+def gathers(rng):
+    """The AVX2 gathers: every form at both widths, base r15 or none, every scale, the mask's sign bits random; gathers_data puts
+    the indices inside the buffer (some negative)."""
+    op = rng.choice(sorted(GATHERS))
+    index_size, element = GATHERS[op]
+    width = rng.choice([16, 32])
+    d, x, m = rng.sample(range(16), 3)
+    count = width // max(index_size, element) if index_size != element else width // element
+    # The widths: data and mask hold count elements, the index count indices.
+    data_width = max(16, count * element)
+    index_width = max(16, count * index_size)
+    scale = rng.choice([1, 2, 4, 8])
+    displacement = rng.choice([0, 8, 64, 128])
+    return [f"{op} {name(d, data_width)}, [r15 + {scale}*{name(x, index_width)} + {displacement}], {name(m, data_width)}"]
+
+
+def gathers_data(rng, body, registers, vectors, memory):
+    import re
+    text = body[0]
+    op = text.split()[0]
+    index_size, element = GATHERS[op]
+    found = re.search(r"\[r15 \+ (\d)\*[xy]mm(\d+) \+ (\d+)\]", text)
+    scale, x, displacement = int(found.group(1)), int(found.group(2)), int(found.group(3))
+    low = -(displacement // scale)
+    high = (192 - element - displacement) // scale
+    values = [rng.randint(low, high) for _ in range(32 // index_size)]
+    mask = (1 << (8 * index_size)) - 1
+    raw = b"".join((value & mask).to_bytes(index_size, "little") for value in values)
+    vectors[x] = [int.from_bytes(raw[8 * q:8 * q + 8], "little") for q in range(4)]
+
+
+def avx2_broadcast(rng):
+    """vbroadcasti128, the AVX2 one the avx2 family left out."""
+    return [f"vbroadcasti128 ymm{reg(rng)}, {mem(rng, 16)}"]
+
+
+def strings_wide(rng):
+    """pcmpestri and pcmpestrm with REX.W (legacy) and VEX.W1, whose lengths are RAX and RDX: written as bytes, as assemblers spell
+    the W forms differently. xmm0-xmm7 or [r15 + disp8]."""
+    op = rng.choice([0x60, 0x61])
+    a, b = rng.randrange(8), rng.randrange(8)
+    imm = rng.randrange(128) if rng.random() < 0.7 else rng.choice([0x0c, 0x08, 0x18, 0x1a, 0x3a, 0x44, 0x04, 0x40, 0x70, 0x01])
+    memory = rng.random() < 0.3
+    offset = rng.randrange(0, 128)
+    modrm = [0x40 | a << 3 | 7, offset] if memory else [0xc0 | a << 3 | b]
+    if rng.random() < 0.5:
+        code = [0x66, 0x49 if memory else 0x48, 0x0f, 0x3a, op] + modrm + [imm]
+    else:
+        code = [0xc4, 0xc3 if memory else 0xe3, 0xf9, op] + modrm + [imm]
+    return [".byte " + ", ".join(f"{byte:#04x}" for byte in code)]
+
+
+def strings_wide_data(rng, body, registers, vectors, memory):
+    strings_data(rng, body, registers, vectors, memory)
+    # Lengths whose 64 bits and low 32 bits say different things, and negative ones.
+    wide = [0x100000005, 0xffffffff00000005, 0xfffffffb, 0x7fffffff0000000c, 0x80000000, 0xffffffff80000000, 2**64 - 3,
+            2**64 - 0x100000000, 2**64 - 17, 9, 0, 16, 17, 0x1000000000000010]
+    for r in (0, 2):
+        registers[r] = rng.choice(wide)
+
+
+SHIFT_COUNTS = [63, 64, 128, 255, 256, 0x80000000, 0xffffffff, 0, 1, 31, 32, 33]
+
+
+def shift_counts(rng):
+    """The variable shifts with counts at the edges (shift_counts_data): of 63 and more, with the low half or (quadwords) only the
+    high half of the count set."""
+    d, a, b = three(rng)
+    width = rng.choice([16, 32])
+    source = mem(rng, width, True) if rng.random() < 0.4 else name(b, width)
+    return [f"{rng.choice(VARIABLE_SHIFTS)} {name(d, width)}, {name(a, width)}, {source}"]
+
+
+def shift_counts_data(rng, body, registers, vectors, memory):
+    quad = body[0].split()[0].endswith("q")
+    def count():
+        value = rng.choice(SHIFT_COUNTS)
+        return value << 32 if quad and rng.random() < 0.5 else value
+    def quadword():
+        return count() if quad else count() | count() << 32
+    for r in range(16):
+        vectors[r] = [quadword() if rng.random() < 0.8 else vectors[r][q] for q in range(4)]
+    for i in range(24):
+        memory[i] = quadword()
+
+
+def maskmovdqu(rng):
+    """Legacy maskmovdqu (SSE2): the bytes whose selector byte has its top bit set, stored at [rdi]."""
+    return [f"lea rdi, [r15 + {rng.randrange(177)}]", f"maskmovdqu xmm{reg(rng)}, xmm{reg(rng)}", "mov edi, 0"]
+
+
+BMI_VALUES = [0, 1, 2, 0x80000000, 0xffffffff, 0x7fffffff, 2**64 - 1, 2**63, 0x5555555555555555, 0xaaaaaaaaaaaaaaaa,
+              0x00ff00ff00ff00ff, 0x100000000, 0xffffffff00000000, 31, 32, 33, 63, 64, 65, 255, 256, 0x1f1f, 0x2020, 0x4040,
+              0x0820, 0x3f00, 0x4000, 0xff00, 0x0140, 0x4001]
+BMI_REGISTERS = [i for i in range(16) if i not in (4, 15)]
+
+
+def bmi(rng):
+    """BMI1, BMI2 and LZCNT at 32 and 64 bits, register and memory sources: one instruction each. x86_avx_check.h leaves out the
+    flags each one leaves undefined; bmi_data gives the registers and memory edge values (zero, one bit, all ones, alternating
+    bits, counts and bextr controls around 0, 32 and 64)."""
+    size = rng.choice([32, 64])
+    r = lambda: sse.GPR[size][rng.choice(BMI_REGISTERS)]
+    source = lambda: mem(rng, size // 8) if rng.random() < 0.3 else r()
+    op = rng.choice(["andn", "bextr", "blsi", "blsmsk", "blsr", "tzcnt", "lzcnt", "bzhi", "mulx", "pdep", "pext", "rorx", "sarx",
+                     "shlx", "shrx"])
+    if op in ("andn", "pdep", "pext"):
+        return [f"{op} {r()}, {r()}, {source()}"]
+    if op == "mulx":
+        hi = r()
+        return [f"mulx {hi}, {hi if rng.random() < 0.15 else r()}, {source()}"]
+    if op in ("bextr", "bzhi", "sarx", "shlx", "shrx"):
+        return [f"{op} {r()}, {source()}, {r()}"]
+    if op == "rorx":
+        return [f"rorx {r()}, {source()}, {rng.randrange(256)}"]
+    return [f"{op} {r()}, {source()}"]
+
+
+def bmi_data(rng, body, registers, vectors, memory):
+    for i in range(16):
+        if rng.random() < 0.7:
+            registers[i] = rng.choice(BMI_VALUES) if rng.random() < 0.6 else rng.getrandbits(64)
+    for i in range(24):
+        if rng.random() < 0.6:
+            memory[i] = rng.choice(BMI_VALUES)
+
+
+# Each family: how its cases are made, what its lanes hold and how many there are.
+FAMILIES = [
+    ("moves", moves, "mixed", 500),
+    ("transitions", transitions, "f32", 300),
+    ("arithmetic", arithmetic, "mixed", 900),
+    ("logic", logic, "mixed", 200),
+    ("compare", compare, "mixed", 500),
+    ("integer", integer, "int", 700),
+    ("shuffle", shuffle, "int", 400),
+    ("lanes", lanes, "mixed", 400),
+    ("fma", fma, "mixed", 1200),
+    ("convert", convert, "mixed", 400),
+]
+# Families added after the first run on x86 silicon come after the FMA3 edges, so the earlier cases keep their numbers.
+LATER_FAMILIES = [
+    ("sse3", sse3, "mixed", 500),
+    ("ssse3", ssse3, "int", 500),
+    ("sse41", sse41, "mixed", 1000),
+    ("sse42", sse42, "int", 400),
+    ("popcnt", popcnt, "int", 300),
+    ("strings", strings, "int", 1500),
+    ("vex sse4", vex_sse4, "mixed", 1500),
+    ("avx ops", avx_ops, "mixed", 1500),
+    ("approximations", approximations, "f32", 600),
+    ("fma addsub", fma_addsub, "mixed", 600),
+    ("avx2", avx2, "int", 1500),
+    ("gathers", gathers, "mixed", 800),
+    ("avx2 broadcast", avx2_broadcast, "int", 100),
+    ("strings wide", strings_wide, "int", 400),
+    ("shift counts", shift_counts, "int", 400),
+    ("maskmovdqu", maskmovdqu, "int", 200),
+    ("bmi", bmi, "int", 3000),
+]
+# Families whose registers, vectors and memory a function sets after the random ones.
+FIXUPS = {"strings": strings_data, "vex sse4": vex_sse4_data, "avx2": avx2_data, "gathers": gathers_data, "strings wide": strings_wide_data, "shift counts": shift_counts_data, "bmi": bmi_data}
+
+
+def lanes_of(body, kind):
+    text = body[-1]
+    op = text.split()[0]
+    if kind != "mixed":
+        return kind
+    if op.startswith("vf"):
+        return "f32" if op.endswith(("ps", "ss")) else "f64"
+    if op.lstrip("v").startswith(("addsub", "hadd", "hsub", "round", "dp", "blendv", "insertps", "extractps")):
+        return "f32" if op.endswith(("ps", "ss")) else "f64" if op.endswith(("pd", "sd")) else "mixed"
+    return sse.lanes_of([op[1:] + " " + " ".join(text.split()[1:])], kind)
+
+
+def fma_edges():
+    """FMA3 on the values where a fused operation and x86 can disagree: a NaN (quiet or signaling) in each of the three positions,
+    infinity times zero plus a quiet NaN, products that cancel the addend exactly, results at the smallest normal, in every rounding
+    mode with and without FZ and DAZ."""
+    cases = []
+    q32, s32, q64, s64 = 0x7FC12345, 0x7F812345, 0x7FF8000012345678, 0x7FF0000012345678
+    values32 = [0x3F800000, 0x00000000, 0x80000000, 0x7F800000, 0xFF800000, q32, s32, 0xFFC00001, 0x00800000, 0x80800000,
+                0x00000001, 0x3F000000, 0x00400000, 0x7F7FFFFF, 0x34000000, 0xBF800001]
+    values64 = [0x3FF0000000000000, 0, 0x8000000000000000, 0x7FF0000000000000, 0xFFF0000000000000, q64, s64,
+                0xFFF8000000000001, 0x0010000000000000, 0x8010000000000000, 1, 0x3FE0000000000000, 0x0008000000000000,
+                0x7FEFFFFFFFFFFFFF, 0x3CB0000000000000, 0xBFF0000000000001]
+    rng = random.Random(20261219)
+    for op in FMA_NAMES:
+        for t in ("ss", "sd"):
+            pool = values32 if t == "ss" else values64
+            for _ in range(12):
+                x, y, z = (rng.choice(pool) for _ in range(3))
+                control = 0x1F80 | rng.randrange(4) << 13 | (0x8000 if rng.random() < 0.2 else 0) | (0x40 if rng.random() < 0.2 else 0)
+                cases.append((f"{op}{t} xmm1, xmm2, xmm3", t, x, y, z, control))
+    return cases
+
+
+def main():
+    assembly, header = sys.argv[1:3]
+    lines = [".intel_syntax noprefix", ".text"]
+    # run_case(io = rdi, code = rsi). io: 16 registers, the flags, MXCSR, then YMM0-YMM15 at 144 (32 bytes each) and the buffer r15
+    # points at, at 672.
+    lines += [
+        ".globl _run_case", "_run_case:",
+        "push rbx", "push rbp", "push r12", "push r13", "push r14", "push r15", "sub rsp, 8",
+        "mov qword ptr [rip + saved_io], rdi", "mov qword ptr [rip + saved_code], rsi", "stmxcsr dword ptr [rip + host_mxcsr]",
+    ]
+    lines += [f"vmovdqu ymm{i}, ymmword ptr [rdi + {144 + 32 * i}]" for i in range(16)]
+    lines += ["ldmxcsr dword ptr [rdi + 136]", "push qword ptr [rdi + 128]", "popfq"]
+    for index, reg_name in enumerate(sse.GPR[64]):
+        if reg_name not in ("rsp", "rdi", "r15"):
+            lines.append(f"mov {reg_name}, qword ptr [rdi + {8 * index}]")
+    lines += ["lea r15, [rdi + 672]", "mov rdi, qword ptr [rdi + 56]", "call qword ptr [rip + saved_code]",
+              "pushfq", "push rdi", "mov rdi, qword ptr [rip + saved_io]", "pop qword ptr [rdi + 56]", "pop qword ptr [rdi + 128]"]
+    for index, reg_name in enumerate(sse.GPR[64]):
+        if reg_name not in ("rsp", "rdi", "r15"):
+            lines.append(f"mov qword ptr [rdi + {8 * index}], {reg_name}")
+    lines += ["stmxcsr dword ptr [rdi + 136]"]
+    lines += [f"vmovdqu ymmword ptr [rdi + {144 + 32 * i}], ymm{i}" for i in range(16)]
+    lines += ["vzeroupper", "ldmxcsr dword ptr [rip + host_mxcsr]", "add rsp, 8", "pop r15", "pop r14", "pop r13", "pop r12",
+              "pop rbp", "pop rbx", "ret"]
+    cases = []
+
+    def add(family, registers, flags, control, vectors, memory, body):
+        number = len(cases)
+        lines.extend([f".globl _case_{number}", f".globl _case_{number}_end", f"_case_{number}:"] + body + ["ret",
+                                                                                                         f"_case_{number}_end:"])
+        cases.append((family, registers, flags, control, vectors, memory, body))
+
+    def generate(families):
+        for family, make, kind, count in families:
+            make_family(family, make, kind, count)
+
+    def make_family(family, make, kind, count):
+        rng = random.Random(zlib.crc32(family.encode()) ^ 20261219)
+        floating = kind != "int"
+        for _ in range(count):
+            registers = [rng.choice([rng.getrandbits(64), rng.choice(sse.INTEGERS), rng.getrandbits(8)]) for _ in range(16)]
+            body = make(rng)
+            lane_kind = lanes_of(body, kind)
+            vectors = [[sse.quadword(rng, lane_kind) for _ in range(4)] for _ in range(16)]
+            memory = [sse.quadword(rng, lane_kind) for _ in range(24)]
+            if family in FIXUPS:
+                FIXUPS[family](rng, body, registers, vectors, memory)
+            add(family, registers, rng.getrandbits(12) & ALL_FLAGS, sse.mxcsr(rng, floating), vectors, memory, body)
+    generate(FAMILIES)
+    for text, t, x, y, z, control in fma_edges():
+        vectors = [[0x1111111111111111 * (i % 15 + 1)] * 4 for i in range(16)]
+        for index, value in ((1, x), (2, y), (3, z)):
+            # Element 1 of a single holds pi: the result's must come from the first source.
+            low = value | (0x40490FDB << 32) if t == "ss" else value
+            vectors[index] = [low, 0x0123456789ABCDEF, 0xFEDCBA9876543210, 0x5555AAAA5555AAAA]
+        add("fma edges", [0] * 16, 0, control, vectors, [0] * 24, [text])
+    generate(LATER_FAMILIES)
+    lines += [".data", "saved_io: .quad 0", "saved_code: .quad 0", "host_mxcsr: .long 0", ""]
+    with open(assembly, "w") as out:
+        out.write("\n".join(lines))
+    with open(header, "w") as out:
+        out.write("// Written by x86_avx.py.\n")
+        for number in range(len(cases)):
+            out.write(f"extern char case_{number}[], case_{number}_end[];\n")
+        out.write("static const struct Case cases[] = {\n")
+        for number, (family, registers, flags, control, vectors, memory, body) in enumerate(cases):
+            values = ", ".join(f"{value:#x}ull" for value in registers)
+            ymm = ", ".join("{" + ", ".join(f"{q:#x}ull" for q in quads) + "}" for quads in vectors)
+            words = ", ".join(f"{value:#x}ull" for value in memory)
+            text = "; ".join(body).replace('"', '\\"')
+            out.write(f"\t{{{{{values}}}, {flags:#x}, {control:#x}, {{{ymm}}}, {{{words}}}, \"{family}\", case_{number}, "
+                      f"case_{number}_end, \"{text}\"}},\n")
+        out.write("};\n")
+
+
+if __name__ == "__main__":
+    main()

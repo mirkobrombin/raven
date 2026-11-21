@@ -1,0 +1,311 @@
+// A 256-bit instruction whose memory operand faults must leave the guest as it was, as x86's precise exceptions do: no upper half of
+// the destination written (it lives in CpuState, which the fault does not discard) and no byte of a 32-byte store. Each case runs in a
+// vCPU of its own, since a guest exception ends the run: an operand straddles a mapped page and an unmapped one. vmaskmovps must not
+// fault where the elements on the unmapped page are masked off (ymm2's sign bits), and must load or store the others (vpmaskmovd
+// the same); so must
+// vpgatherdd, whose indices (ymm3) name the same 32 bytes, and which keeps the masked-off elements and clears the mask.
+#include "runtime.h"
+#include "vcpu.h"
+#include "vm.h"
+#include "vm_process.h"
+
+#include <cstdio>
+#include <cstring>
+#include <exception>
+#include <vector>
+
+using namespace raven;
+
+namespace {
+
+// The cases' x64 code in guest memory; nothing runs it but the translator, which reads it through the host alias.
+class Snippets final : public translate::GuestMemory {
+public:
+	explicit Snippets(hvf::Vm &vm) : vm(vm), base(vm.map_anywhere(size, hvf::Access::read_write)), alias(vm.host(base)) {}
+	uint64_t add(const std::vector<uint8_t> &code)
+	{
+		const uint64_t address = base + used;
+		std::memcpy(alias + used, code.data(), code.size());
+		used += (code.size() + 15) & ~size_t(15);
+		return address;
+	}
+	std::span<const uint8_t> code(uint64_t address) const override
+	{
+		if (address < base || address >= base + used)
+			return {};
+		return {alias + (address - base), static_cast<size_t>(base + used - address)};
+	}
+	bool is_native(uint64_t) const override { return false; }
+	void write(uint64_t address, const void *from, size_t bytes) override { vm.write(address, from, bytes); }
+	void read(uint64_t address, void *into, size_t bytes) const override { vm.read(address, into, bytes); }
+	void watch_code(uint64_t, size_t, bool) override {}
+	size_t watch_granule() const override { return hvf::Vm::page_size; }
+
+private:
+	static constexpr size_t size = 1 << 20;
+	hvf::Vm &vm;
+	uint64_t base;
+	uint8_t *alias;
+	size_t used = 0;
+};
+
+}
+
+struct Scenario {
+	const char *text;
+	std::vector<uint8_t> code;
+	// The operand starts 16 bytes before the boundary between a mapped page and an unmapped one: the unmapped one comes first (its
+	// low half faults) or second (its upper half faults).
+	bool low_unmapped;
+	// vmaskmovps: ymm2's low and upper halves (every single the same), and whether the access faults.
+	uint64_t mask_low = 0, mask_high = 0;
+	bool faults = true;
+	bool gather = false;
+};
+
+int main()
+{
+	const Scenario scenarios[] = {
+		{"vaddps ymm1, ymm1, ymmword ptr [rax]", {0xc5, 0xf4, 0x58, 0x08, 0xc3}, true},
+		{"vfmadd231ps ymm1, ymm2, ymmword ptr [rax]", {0xc4, 0xe2, 0x6d, 0xb8, 0x08, 0xc3}, true},
+		{"vmovups ymmword ptr [rax], ymm1", {0xc5, 0xfc, 0x11, 0x08, 0xc3}, false},
+		{"vmaskmovps ymm1, ymm2, [rax], unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x2c, 0x08, 0xc3}, true, 0,
+			0x8000000080000000ull, false},
+		{"vmaskmovps [rax], ymm2, ymm1, unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x2e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0, false},
+		{"vmaskmovps ymm1, ymm2, [rax], an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x2c, 0x08, 0xc3}, true,
+			0x8000000000000000ull, 0x8000000080000000ull},
+		{"vmaskmovps [rax], ymm2, ymm1, an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x2e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0x0000000080000000ull},
+		{"vpmaskmovd ymm1, ymm2, [rax], unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x8c, 0x08, 0xc3}, true, 0,
+			0x8000000080000000ull, false},
+		{"vpmaskmovd [rax], ymm2, ymm1, unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x8e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0, false},
+		{"vpmaskmovd [rax], ymm2, ymm1, an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x8e, 0x08, 0xc3}, false,
+			0x8000000080000000ull, 0x0000000080000000ull},
+		{"vpgatherdd ymm1, [rax + 4*ymm3], ymm2, unmapped elements masked off", {0xc4, 0xe2, 0x6d, 0x90, 0x0c, 0x98, 0xc3}, true, 0,
+			0x8000000080000000ull, false, true},
+		{"vpgatherdd ymm1, [rax + 4*ymm3], ymm2, an unmapped element selected", {0xc4, 0xe2, 0x6d, 0x90, 0x0c, 0x98, 0xc3}, true,
+			0x8000000000000000ull, 0x8000000080000000ull, true, true},
+	};
+	constexpr uint64_t base = uint64_t(0x60) << 32;
+	size_t failures = 0;
+	for (const Scenario &scenario : scenarios) {
+		try {
+			hvf::Vm vm(64 << 20);
+			Snippets memory(vm);
+			const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
+			// Mapped: one page; the page before it (low_unmapped) or after it stays unmapped.
+			const uint64_t page = scenario.low_unmapped ? base + hvf::Vm::page_size : base;
+			uint8_t *alias = vm.map(page, hvf::Vm::page_size, hvf::Access::read_write);
+			std::memset(alias, 0x5a, hvf::Vm::page_size);
+			const uint64_t operand = scenario.low_unmapped ? page - 16 : page + hvf::Vm::page_size - 16;
+			translate::TranslatorOptions options;
+			options.ordering = translate::MemoryOrdering::hardware;
+			hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
+			hvf::Vcpu vcpu(vm, true);
+			translate::Runtime runtime(memory, cache, options, &vcpu);
+			const uint64_t address = memory.add(scenario.code);
+			translate::CpuState &state = runtime.state();
+			state.gpr[translate::rsp] = stack + (64 << 10);
+			state.gpr[translate::rax] = operand;
+			for (unsigned r = 0; r < 16; ++r) {
+				state.xmm[r][0] = state.xmm[r][1] = 0x3f8000003f800000ull;
+				state.ymm_high[r][0] = state.ymm_high[r][1] = 0x4000000040000000ull;
+			}
+			state.xmm[2][0] = state.xmm[2][1] = scenario.mask_low;
+			state.ymm_high[2][0] = state.ymm_high[2][1] = scenario.mask_high;
+			// vpgatherdd's indices: element i at 4 * i.
+			state.xmm[3][0] = uint64_t(1) << 32;
+			state.xmm[3][1] = uint64_t(3) << 32 | 2;
+			state.ymm_high[3][0] = uint64_t(5) << 32 | 4;
+			state.ymm_high[3][1] = uint64_t(7) << 32 | 6;
+			bool faulted = false;
+			try {
+				runtime.call(address);
+			} catch (const std::exception &) {
+				faulted = true;
+			}
+			if (!scenario.faults && scenario.gather) {
+				// The masked-off elements keep their value, the others come from memory, and the mask is all clear.
+				const bool right = !faulted && state.xmm[1][0] == 0x3f8000003f800000ull && state.xmm[1][1] == 0x3f8000003f800000ull &&
+					state.ymm_high[1][0] == 0x5a5a5a5a5a5a5a5aull && state.ymm_high[1][1] == 0x5a5a5a5a5a5a5a5aull &&
+					state.xmm[2][0] == 0 && state.xmm[2][1] == 0 && state.ymm_high[2][0] == 0 && state.ymm_high[2][1] == 0;
+				if (!right) {
+					std::fprintf(stderr, "FAIL: %s: %s\n", scenario.text, faulted ? "faulted" : "wrong result");
+					++failures;
+				} else
+					std::printf("%s: did not fault, gathered the selected elements and cleared the mask\n", scenario.text);
+				continue;
+			}
+			if (!scenario.faults) {
+				// The masked-off elements of a load are zero, the others what memory holds; a store writes the 16 mapped bytes alone.
+				const bool load = scenario.low_unmapped;
+				bool right = !faulted;
+				if (load)
+					right &= state.xmm[1][0] == 0 && state.xmm[1][1] == 0 && state.ymm_high[1][0] == 0x5a5a5a5a5a5a5a5aull &&
+						state.ymm_high[1][1] == 0x5a5a5a5a5a5a5a5aull;
+				for (size_t i = 0; i < hvf::Vm::page_size; ++i) {
+					const bool stored = !load && i >= hvf::Vm::page_size - 16;
+					right &= alias[i] == (stored ? (i % 4 == 3 ? 0x3f : i % 4 == 2 ? 0x80 : 0) : 0x5a);
+				}
+				if (!right) {
+					std::fprintf(stderr, "FAIL: %s: %s\n", scenario.text, faulted ? "faulted" : "wrong result");
+					++failures;
+				} else
+					std::printf("%s: did not fault, and moved the selected elements\n", scenario.text);
+				continue;
+			}
+			bool high_kept = true;
+			for (unsigned r = 0; r < 16; ++r)
+				high_kept &= r == 2 ? state.ymm_high[2][0] == scenario.mask_high && state.ymm_high[2][1] == scenario.mask_high :
+					r == 3 ? state.ymm_high[3][0] == (uint64_t(5) << 32 | 4) && state.ymm_high[3][1] == (uint64_t(7) << 32 | 6) :
+							 state.ymm_high[r][0] == 0x4000000040000000ull && state.ymm_high[r][1] == 0x4000000040000000ull;
+			bool memory_kept = true;
+			for (size_t i = 0; i < hvf::Vm::page_size; ++i)
+				memory_kept &= alias[i] == 0x5a;
+			if (!faulted || !high_kept || !memory_kept) {
+				std::fprintf(stderr, "FAIL: %s: %s%s%s\n", scenario.text, faulted ? "" : "did not fault; ",
+					high_kept ? "" : "an upper half changed before the fault; ", memory_kept ? "" : "memory was written before the fault");
+				++failures;
+			} else
+				std::printf("%s: faulted with the upper halves and memory as they were\n", scenario.text);
+		} catch (const std::exception &error) {
+			std::fprintf(stderr, "FAIL: %s: %s\n", scenario.text, error.what());
+			++failures;
+		}
+	}
+	// Legacy maskmovdqu xmm1, xmm2 at rdi, 8 bytes before an unmapped page: with the selectors of the unmapped bytes clear it stores
+	// the others and does not fault; with one of them set it faults and stores nothing.
+	for (const bool selected : {false, true}) {
+		const char *text = selected ? "maskmovdqu xmm1, xmm2, an unmapped byte selected" : "maskmovdqu xmm1, xmm2, unmapped bytes masked off";
+		try {
+			hvf::Vm vm(64 << 20);
+			Snippets memory(vm);
+			const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
+			uint8_t *alias = vm.map(base, hvf::Vm::page_size, hvf::Access::read_write);
+			std::memset(alias, 0x5a, hvf::Vm::page_size);
+			translate::TranslatorOptions options;
+			options.ordering = translate::MemoryOrdering::hardware;
+			hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
+			hvf::Vcpu vcpu(vm, true);
+			translate::Runtime runtime(memory, cache, options, &vcpu);
+			const uint64_t address = memory.add({0x66, 0x0f, 0xf7, 0xca, 0xc3});
+			translate::CpuState &state = runtime.state();
+			state.gpr[translate::rsp] = stack + (64 << 10);
+			state.gpr[translate::rdi] = base + hvf::Vm::page_size - 8;
+			state.xmm[1][0] = state.xmm[1][1] = 0x1111111111111111ull;
+			state.xmm[2][0] = 0x8080808080808080ull;
+			state.xmm[2][1] = selected ? 0x80 : 0;
+			bool faulted = false;
+			try {
+				runtime.call(address);
+			} catch (const std::exception &) {
+				faulted = true;
+			}
+			bool right = faulted == selected;
+			for (size_t i = 0; i < hvf::Vm::page_size; ++i)
+				right &= alias[i] == (!selected && i >= hvf::Vm::page_size - 8 ? 0x11 : 0x5a);
+			if (!right) {
+				std::fprintf(stderr, "FAIL: %s: %s\n", text, faulted ? "faulted" : "did not fault");
+				++failures;
+			} else
+				std::printf("%s: %s\n", text, selected ? "faulted with memory as it was" : "did not fault, stored the selected bytes");
+		} catch (const std::exception &error) {
+			std::fprintf(stderr, "FAIL: %s: %s\n", text, error.what());
+			++failures;
+		}
+	}
+	// Gathers that fault at element k > 0. x86 gathers element by element: the SDM says a fault leaves the elements before it gathered
+	// and their mask elements cleared, the rest as they were, so the instruction can restart. Every form, both widths, k = 1 and the
+	// last element; the other elements are on the mapped page, element k on the unmapped one after it. Only the upper halves can be
+	// checked: a guest exception ends the run (Vcpu::run throws) without storing v0-v15, so the low halves' gathered elements stay in
+	// the vCPU's registers, out of CpuState's reach.
+	struct Form {
+		const char *name;
+		uint8_t opcode;
+		bool quad;
+		unsigned index_size, element;
+	};
+	const Form forms[] = {{"vpgatherdd", 0x90, false, 4, 4}, {"vpgatherdq", 0x90, true, 4, 8}, {"vpgatherqd", 0x91, false, 8, 4},
+		{"vpgatherqq", 0x91, true, 8, 8}};
+	for (const Form &form : forms)
+		for (const bool wide : {false, true}) {
+			const unsigned count = form.index_size == 8 ? (wide ? 4 : 2) : (wide ? 32 : 16) / form.element;
+			// The data and mask are 128 bits wide for qd at either width (four or two dwords), else as VEX.L says.
+			const unsigned data_bytes = count * form.element;
+			for (unsigned k = 1; k < count; k = k == 1 && count > 2 ? count - 1 : count) {
+				char text[96];
+				std::snprintf(text, sizeof text, "%s %s, faulting at element %u of %u", form.name, wide ? "256" : "128", k, count);
+				try {
+					hvf::Vm vm(64 << 20);
+					Snippets memory(vm);
+					const uint64_t stack = vm.map_anywhere(64 << 10, hvf::Access::read_write);
+					uint8_t *alias = vm.map(base, hvf::Vm::page_size, hvf::Access::read_write);
+					std::memset(alias, 0x5a, hvf::Vm::page_size);
+					translate::TranslatorOptions options;
+					options.ordering = translate::MemoryOrdering::hardware;
+					hvf::VmCodeCache cache(vm, 16 << 20, 1 << 20);
+					hvf::Vcpu vcpu(vm, true);
+					translate::Runtime runtime(memory, cache, options, &vcpu);
+					// vpgather ymm1/xmm1, [rax + 1*ymm3/xmm3], ymm2/xmm2.
+					const uint8_t vex = static_cast<uint8_t>((form.quad ? 0x80 : 0) | (~2u & 15) << 3 | (wide ? 4 : 0) | 1);
+					const uint64_t address = memory.add({0xc4, 0xe2, vex, form.opcode, 0x0c, 0x18, 0xc3});
+					translate::CpuState &state = runtime.state();
+					state.gpr[translate::rsp] = stack + (64 << 10);
+					state.gpr[translate::rax] = base + hvf::Vm::page_size - 64;
+					uint8_t data[32], mask[32], indices[32] = {};
+					std::memset(data, 0x11, sizeof data);
+					std::memset(mask, 0xff, sizeof mask);
+					for (unsigned i = 0; i < count; ++i) {
+						const uint64_t offset = i == k ? 64 + 16 : i * form.element;
+						std::memcpy(indices + i * form.index_size, &offset, form.index_size);
+					}
+					auto put = [&](unsigned r, const uint8_t *bytes) {
+						std::memcpy(state.xmm[r], bytes, 16);
+						std::memcpy(state.ymm_high[r], bytes + 16, 16);
+					};
+					put(1, data);
+					put(2, mask);
+					put(3, indices);
+					bool faulted = false;
+					try {
+						runtime.call(address);
+					} catch (const std::exception &) {
+						faulted = true;
+					}
+					uint8_t after_data[32], after_mask[32];
+					std::memcpy(after_data, state.xmm[1], 16);
+					std::memcpy(after_data + 16, state.ymm_high[1], 16);
+					std::memcpy(after_mask, state.xmm[2], 16);
+					std::memcpy(after_mask + 16, state.ymm_high[2], 16);
+					bool right = faulted;
+					for (unsigned i = 0; i < count; ++i)
+						for (unsigned b = 0; b < form.element; ++b) {
+							const unsigned at = i * form.element + b;
+							if (at >= 16)
+								right &= after_data[at] == (i < k ? 0x5a : 0x11) && after_mask[at] == (i < k ? 0 : 0xff);
+						}
+					// Beyond the elements, as they were: the instruction did not complete.
+					for (unsigned at = data_bytes; at < 32; ++at)
+						right &= after_data[at] == 0x11 && after_mask[at] == 0xff;
+					if (!right) {
+						std::fprintf(stderr, "FAIL: %s: %s; data", text, faulted ? "faulted" : "did not fault");
+						for (unsigned at = 0; at < data_bytes; at += form.element)
+							std::fprintf(stderr, " %02x", after_data[at]);
+						std::fprintf(stderr, ", mask");
+						for (unsigned at = 0; at < data_bytes; at += form.element)
+							std::fprintf(stderr, " %02x", after_mask[at]);
+						std::fprintf(stderr, "\n");
+						++failures;
+					} else
+						std::printf("%s: in the upper half, elements before it gathered with their mask cleared, the rest as they were\n", text);
+				} catch (const std::exception &error) {
+					std::fprintf(stderr, "FAIL: %s: %s\n", text, error.what());
+					++failures;
+				}
+			}
+		}
+	std::printf("%zu failures\n", failures);
+	return failures == 0 ? 0 : 1;
+}

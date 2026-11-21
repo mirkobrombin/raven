@@ -1,0 +1,1 @@
+{"bench":"hvf_guest_fault","metric":"el1_translation_fault_roundtrip","unit":"ns","n":30,"min":67.8448,"median":68.1156,"p95":70.1879,"mean":68.4560,"stddev":0.8376,"max":71.1978,"qos":"USER_INTERACTIVE","translated":0,"note":"load from unmapped VA -> EL1 vector skips it -> eret, no host exit, 1e6 per run"}
