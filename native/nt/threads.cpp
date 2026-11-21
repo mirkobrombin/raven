@@ -111,6 +111,8 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 
 NativeThreads::~NativeThreads()
 {
+	if (std::getenv("RAVEN_TRACE_WAITS"))
+		std::fprintf(stderr, "waits: conditions looked at %llu times\n", (unsigned long long)condition_looks.load());
 	if (shared_change_listener == wake)
 		shared_change_listener = -1;
 	process.set_time_slicing(std::chrono::milliseconds(0), nullptr, nullptr);
@@ -683,6 +685,12 @@ std::function<void()> NativeThreads::remote_nudge() const
 bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake, bool turn, bool polled,
 	bool told)
 {
+	static const bool count_looks = std::getenv("RAVEN_TRACE_WAITS");
+	if (count_looks && !turn)
+		ready = [this, inner = std::move(ready)] {
+			condition_looks.fetch_add(1, std::memory_order_relaxed);
+			return inner();
+		};
 	// A thread that gives its turn waits even when it could go on: the others that can run go first.
 	if (!turn && ready())
 		return true;
