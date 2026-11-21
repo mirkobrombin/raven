@@ -12,6 +12,7 @@ use loom::{sync::Mutex, thread};
 use std::{sync::Mutex, thread};
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 pub mod ffi;
@@ -72,6 +73,26 @@ struct Pending {
     alertable: bool,
 }
 
+/// A word of the host's that a wait ending sets to 1: the host keeps it until the wait has left the line (see Waits::leave).
+#[derive(Debug)]
+pub struct Signal(*const AtomicU32);
+
+// The word is the host's, and it keeps it alive and in place for as long as the wait can end.
+unsafe impl Send for Signal {}
+
+impl Signal {
+    /// # Safety
+    /// `word` stays valid until the wait it is given for has left the line.
+    pub unsafe fn new(word: *const AtomicU32) -> Self {
+        Self(word)
+    }
+
+    fn tell(self) {
+        // Safety: see new.
+        unsafe { (*self.0).store(1, Ordering::Release) }
+    }
+}
+
 #[derive(Default)]
 struct ThreadState {
     apcs: u32,
@@ -79,6 +100,8 @@ struct ThreadState {
     wait: Option<Pending>,
     outcome: Option<Outcome>,
     parked: Option<thread::Thread>,
+    /// The word a thread lined up without parking (see Waits::line_up) is told through.
+    signal: Option<Signal>,
     /// An interruption that came while the thread did not wait: its next wait that would block ends at once.
     interrupted: bool,
 }
@@ -146,6 +169,9 @@ impl State {
         state.outcome = Some(outcome);
         if let Some(parked) = &state.parked {
             parked.unpark();
+        }
+        if let Some(signal) = state.signal.take() {
+            signal.tell();
         }
     }
 
@@ -323,6 +349,7 @@ impl Waits {
             me.wait = Some(Pending { objects: objects.to_vec(), all, alertable });
             me.outcome = None;
             me.parked = Some(thread::current());
+            me.signal = None;
             state.line.push_back(thread);
         }
         loop {
@@ -344,6 +371,50 @@ impl Waits {
                 return Ok(Outcome::Timeout);
             }
         }
+    }
+
+    /// Lines `thread` up for `objects` as wait does, without parking its host thread: for a host thread that runs several guest
+    /// threads and picks the next one itself. Whoever ends the wait sets `signal`, and leave gives what it took. A wait that is
+    /// satisfied at once, or ends at once, gives its outcome here instead, and is not lined up.
+    pub fn line_up(&self, thread: ThreadId, objects: &[ObjectId], all: bool, alertable: bool, signal: Signal) -> Result<Option<Outcome>, Error> {
+        let mut state = self.lock();
+        if objects.is_empty() || objects.iter().any(|object| !state.objects.contains_key(object)) {
+            return Err(Error::Invalid);
+        }
+        let me = state.threads.entry(thread).or_default();
+        if alertable && me.apcs > 0 {
+            return Ok(Some(Outcome::IoCompletion));
+        }
+        if state.satisfied(thread, objects, all) {
+            return Ok(Some(state.take(thread, objects, all)));
+        }
+        let me = state.threads.get_mut(&thread).expect("the thread was added above");
+        if std::mem::take(&mut me.interrupted) {
+            return Ok(Some(Outcome::Interrupted));
+        }
+        me.wait = Some(Pending { objects: objects.to_vec(), all, alertable });
+        me.outcome = None;
+        me.parked = None;
+        me.signal = Some(signal);
+        state.line.push_back(thread);
+        Ok(None)
+    }
+
+    /// Takes `thread` out of the line it was put in by line_up: what its wait took when it ended, or none when it has not ended, which
+    /// then leaves the line as a wait that timed out does.
+    pub fn leave(&self, thread: ThreadId) -> Option<Outcome> {
+        let mut state = self.lock();
+        // A thread that ended is forgotten once its wait has ended too.
+        let Some(me) = state.threads.get_mut(&thread) else { return Some(Outcome::Ended) };
+        me.signal = None;
+        if let Some(outcome) = me.outcome.take() {
+            return Some(outcome);
+        }
+        if me.wait.is_some() {
+            state.end(thread, Outcome::Timeout);
+            state.threads.get_mut(&thread).expect("the thread waited").outcome = None;
+        }
+        None
     }
 
     /// An APC was queued to `thread`: an alertable wait ends for it; otherwise it counts until the thread waits alertably.
@@ -469,6 +540,19 @@ impl Table {
     }
     pub fn wait(&self, thread: ThreadId, objects: &[ObjectId], all: bool, alertable: bool, timeout: Option<Duration>) -> Result<Outcome, Error> {
         either!(self, waits => waits.wait(thread, objects, all, alertable, timeout))
+    }
+    /// Waits::line_up; the kernel's objects have no line to stand in without a thread blocked there, and give None.
+    pub fn line_up(&self, thread: ThreadId, objects: &[ObjectId], all: bool, alertable: bool, signal: Signal) -> Option<Result<Option<Outcome>, Error>> {
+        match self {
+            Self::Locked(waits) => Some(waits.line_up(thread, objects, all, alertable, signal)),
+            Self::Kernel(_) => None,
+        }
+    }
+    pub fn leave(&self, thread: ThreadId) -> Option<Outcome> {
+        match self {
+            Self::Locked(waits) => waits.leave(thread),
+            Self::Kernel(_) => None,
+        }
     }
     pub fn queue_apc(&self, thread: ThreadId) {
         either!(self, waits => waits.queue_apc(thread))

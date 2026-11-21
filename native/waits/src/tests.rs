@@ -315,3 +315,68 @@ fn ffi_gives_windows_values() {
         ffi::raven_waits_free(waits);
     }
 }
+
+/// A wait lined up without parking, as a host thread that runs several guest threads makes it: whoever grants it tells its word, and
+/// leave gives what it took. The kernel's objects have no such line.
+fn lined(waits: &Table, thread: ThreadId, objects: &[ObjectId], signal: &std::sync::atomic::AtomicU32) -> Option<Result<Option<Outcome>, Error>> {
+    // Safety: every case keeps its word until the wait has left the line.
+    waits.line_up(thread, objects, false, false, unsafe { Signal::new(signal) })
+}
+
+#[test]
+fn a_lined_up_wait_is_told_when_its_object_is_set() {
+    let waits = waits();
+    let event = waits.create(Kind::AutoEvent, 0).unwrap();
+    let signal = std::sync::atomic::AtomicU32::new(0);
+    let Some(lined_up) = lined(&waits, 1, &[event], &signal) else {
+        assert!(waits.kernel());
+        return;
+    };
+    assert_eq!(lined_up, Ok(None));
+    assert!(waits.waiting(1));
+    let setter = waits.clone();
+    std::thread::spawn(move || setter.set(event).unwrap()).join().unwrap();
+    assert_eq!(signal.load(std::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(waits.leave(1), Some(Outcome::Object(0)));
+    assert_eq!(waits.query(event), Ok(0), "the wait took the event");
+    assert!(!waits.waiting(1));
+}
+
+#[test]
+fn a_satisfied_wait_is_not_lined_up() {
+    let waits = waits();
+    let event = waits.create(Kind::AutoEvent, 1).unwrap();
+    let signal = std::sync::atomic::AtomicU32::new(0);
+    let Some(lined_up) = lined(&waits, 1, &[event], &signal) else { return };
+    assert_eq!(lined_up, Ok(Some(Outcome::Object(0))));
+    assert_eq!(signal.load(std::sync::atomic::Ordering::Acquire), 0);
+    assert!(!waits.waiting(1));
+}
+
+#[test]
+fn a_wait_that_leaves_the_line_takes_nothing() {
+    let waits = waits();
+    let event = waits.create(Kind::AutoEvent, 0).unwrap();
+    let signal = std::sync::atomic::AtomicU32::new(0);
+    if lined(&waits, 1, &[event], &signal).is_none() {
+        return;
+    }
+    assert_eq!(waits.leave(1), None);
+    assert!(!waits.waiting(1));
+    waits.set(event).unwrap();
+    assert_eq!(signal.load(std::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(waits.query(event), Ok(1), "nobody took the event");
+}
+
+#[test]
+fn a_lined_up_wait_ends_with_its_thread() {
+    let waits = waits();
+    let event = waits.create(Kind::ManualEvent, 0).unwrap();
+    let signal = std::sync::atomic::AtomicU32::new(0);
+    if lined(&waits, 1, &[event], &signal).is_none() {
+        return;
+    }
+    waits.thread_ended(1);
+    assert_eq!(signal.load(std::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(waits.leave(1), Some(Outcome::Ended));
+}
