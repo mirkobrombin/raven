@@ -17,10 +17,10 @@ constexpr std::array<std::pair<std::string_view, uint32_t>, 23> thread_exports{{
 	// last error, and the same host-side sections as the kernel32 forms, since a 32-bit section has no guest implementation.
 	{"RtlDeleteCriticalSection", 1}, {"RtlEnterCriticalSection", 1}, {"RtlInitializeCriticalSection", 1}, {"RtlInitializeCriticalSectionAndSpinCount", 2},
 	{"RtlInitializeCriticalSectionEx", 3}, {"RtlLeaveCriticalSection", 1}, {"RtlTryEnterCriticalSection", 1},
-	{"Sleep", 1}, {"SwitchToThread", 0}, {"TryEnterCriticalSection", 1}, {"WaitForSingleObject", 2},
+	{"Sleep", 1}, {"SwitchToThread", 0}, {"TryEnterCriticalSection", 1},
 }};
 
-constexpr uint32_t wait_timeout = 0x102, wait_failed = UINT32_MAX, still_active = 259;
+constexpr uint32_t still_active = 259;
 
 }
 
@@ -32,41 +32,6 @@ NativeX86Threads::NativeX86Threads(NativeProcess &process, NativeEnvironment &en
 std::span<const std::pair<std::string_view, uint32_t>> NativeX86Threads::exports()
 {
 	return thread_exports;
-}
-
-uint32_t NativeX86Threads::wait(uint64_t handle, uint32_t milliseconds)
-{
-	const uint32_t id = threads.current_id();
-	std::optional<std::chrono::steady_clock::time_point> wake;
-	if (milliseconds != UINT32_MAX)
-		wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
-	bool looked = false;
-	WaitedObjects waited(objects, std::span<const uint64_t>(&handle, 1));
-	for (;;) {
-		const int state = waited.signaled(0, id);
-		if (state < 0) {
-			environment.set_last_error(state == -3 ? 5 : 6);
-			return wait_failed;
-		}
-		if (state == 1 && waited.try_consume(0, id)) {
-			return 0;
-		}
-		const auto ready = [&] { return waited.signaled(0, id) == 1; };
-		if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake)) {
-			// Once, a wait that has run out still takes in what the host finished meanwhile.
-			if (!looked) {
-				looked = true;
-				if (threads.block(ready, std::chrono::steady_clock::now()))
-					continue;
-			}
-			return wait_timeout;
-		}
-		// An object that turns signaled by itself, such as a timer, is looked at again when it says.
-		auto until = wake;
-		if (const auto due = waited.wakes_at(0); due && (!until || *due < *until))
-			until = due;
-		threads.block(ready, until);
-	}
 }
 
 void NativeX86Threads::mirror_section(uint64_t address, const Section &section)
@@ -218,8 +183,6 @@ bool NativeX86Threads::dispatch(std::string_view name)
 		process.return_api(0);
 	} else if (name == "SwitchToThread") {
 		process.return_api(threads.yield());
-	} else {
-		process.return_api(wait(args[0], uint32_t(args[1])));
 	}
 	return true;
 }
