@@ -4128,8 +4128,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             -o ${parallel_desktop_client} ${LOADER_SOURCES}/parallel_desktop_client.c -luser32 -lgdi32 -lkernel32
                         DEPENDS ${LOADER_SOURCES}/parallel_desktop_client.c VERBATIM)
                     list(APPEND PARALLEL_CLIENTS ${parallel_desktop_client})
+                    # The threads' calls on objects of their own wait for one another a tenth of their service at most.
                     add_test(NAME native_parallel_desktop_x${width} COMMAND ${Python3_EXECUTABLE}
-                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${parallel_desktop_client}
+                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${parallel_desktop_client} --lock-under 10 --runs 5
                         # Changes of window data and properties are answered beside the turn, under the desktop lock; what the guest reads from
                         # the runtime's tables reaches the runtime only when a change came in between.
                         --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC,PeekMessageW
@@ -4146,7 +4147,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     list(APPEND PARALLEL_CLIENTS ${parallel_gdi_client})
                     add_test(NAME native_parallel_gdi_x${width} COMMAND ${Python3_EXECUTABLE}
                         ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${parallel_gdi_client}
-                        --beside PatBlt,FillRect,BitBlt,GetPixel)
+                        --beside PatBlt,FillRect,BitBlt,GetPixel --lock-under 10 --runs 5)
                     set_tests_properties(native_parallel_gdi_x${width} PROPERTIES TIMEOUT 120
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-gdi-prefix${width}")
                 endif()
