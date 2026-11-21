@@ -332,7 +332,8 @@ private:
 	bool keep_host_window=false;
 	// A top-level window's surface released while it is resized, kept for the new size when it fits: making a surface maps fresh pages
 	// into both processes.
-	struct SpareSurface { std::shared_ptr<SharedPixels> pixels; uint64_t address=0; size_t size=0; uint32_t width=0,height=0; };
+	// client: where the client area lay in the pixels.
+	struct SpareSurface { std::shared_ptr<SharedPixels> pixels; uint64_t address=0; size_t size=0; uint32_t width=0,height=0; DesktopRect client{}; };
 	std::map<uint64_t,SpareSurface> spare_surfaces;
 	bool resizing=false;
 	// Windows that SetWindowPos is placing: their WM_MOVE and WM_SIZE come from the default answer to WM_WINDOWPOSCHANGED instead.
