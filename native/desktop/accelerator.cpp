@@ -4,6 +4,7 @@ namespace raven {
 
 uint64_t DesktopObjects::add_accelerators(std::vector<DesktopAccelerator> table)
 {
+	const TableHold hold(*this, true);
 	constexpr uint64_t first = 0x7a000000ULL;
 	if (table.empty() || table.size() > 1024 || accelerator_tables.size() >= 1024)
 		return 0;
@@ -15,6 +16,7 @@ uint64_t DesktopObjects::add_accelerators(std::vector<DesktopAccelerator> table)
 
 bool DesktopObjects::remove_accelerators(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	const bool removed = accelerator_tables.erase(handle) != 0;
 	accelerator_version += removed;
 	return removed;
@@ -22,6 +24,7 @@ bool DesktopObjects::remove_accelerators(uint64_t handle)
 
 const std::vector<DesktopAccelerator> *DesktopObjects::accelerators(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	const auto found = accelerator_tables.find(handle);
 	return found == accelerator_tables.end() ? nullptr : &found->second;
 }

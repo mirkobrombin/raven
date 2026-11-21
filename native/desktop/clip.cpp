@@ -10,12 +10,14 @@ struct ClipError { uint32_t error=0; };
 
 const DesktopRegion *DesktopObjects::region(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	const auto found=objects.find(handle);
 	return found==objects.end() ? nullptr : std::get_if<DesktopRegion>(&found->second);
 }
 
 bool DesktopObjects::replace_region(uint64_t handle,DesktopRegion value)
 {
+	const TableHold hold(*this, true);
 	const auto found=objects.find(handle);
 	if (found==objects.end() || !std::holds_alternative<DesktopRegion>(found->second)) return false;
 	const auto previous=std::get<DesktopRegion>(found->second).bytes(),current=value.bytes();
@@ -27,6 +29,7 @@ bool DesktopObjects::replace_region(uint64_t handle,DesktopRegion value)
 
 bool DesktopObjects::select_clip(uint64_t handle,std::optional<DesktopRegion> value)
 {
+	const TableHold hold(*this, true);
 	auto *device=dc(handle);if (!device) return false;
 	const auto previous=device->application_clip ? device->application_clip->bytes() : 0,current=value ? value->bytes() : 0;
 	if (current>limit-used+previous) return false;
