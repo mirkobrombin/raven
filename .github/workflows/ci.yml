@@ -646,11 +646,61 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # The tests of waits again with the kernel's NT synchronization objects: the shards run where /dev/ntsync does not open, so the host's
+  # table answers them there. The runner loads ntsync and hands the device to the same test image.
+  ntsync:
+    name: Waits on ntsync
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open /dev/ntsync
+        run: |
+          sudo modprobe ntsync
+          sudo chmod 0666 /dev/ntsync
+
+      - name: Download components
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: component-*
+          path: ${{ runner.temp }}/ci/archives
+          merge-multiple: true
+
+      - name: Download build tree
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build
+          path: ${{ runner.temp }}/ci
+
+      - name: Run the tests of waits
+        run: |
+          docker run --rm --device /dev/ntsync --cap-add SYS_PTRACE --security-opt seccomp=unconfined --shm-size 2g \
+            -v "${GITHUB_WORKSPACE}:/w" -v "${RUNNER_TEMP}/ci:/opt/ci" -w /w \
+            -e BUILD=/opt/ci/build -e COMPONENTS=/opt/ci/components -e ARCHIVES=/opt/ci/archives -e XDG_RUNTIME_DIR=/run/ci-runtime \
+            fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c \
+            sh .github/scripts/ntsync-waits.sh
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-ntsync
+          path: |
+            ${{ runner.temp }}/ci/build/junit-ntsync.xml
+            ${{ runner.temp }}/ci/build/Testing/Temporary/LastTest.log
+          retention-days: 14
+          if-no-files-found: warn
+
   # Report: one place that says how the run went, and one required check for branch protection.
 
   report:
     name: Report
-    needs: [commits, files, licenses, scripts, models, kernel-waits, provision, portable, compliance, build, test]
+    needs: [commits, files, licenses, scripts, models, kernel-waits, provision, portable, compliance, build, test, ntsync]
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
