@@ -39,7 +39,6 @@ private:
 	// among them) take an index of 0 for "not allocated".
 	std::vector<bool> tls_used = [] { std::vector<bool> used(1088, false); used[0] = true; return used; }();
 	uint32_t unique_counter = 1;
-	uint32_t wait(const std::vector<uint64_t> &handles, bool all, uint32_t milliseconds);
 	void lock_exclusive(uint64_t address);
 	void lock_shared(uint64_t address);
 	void write32(uint64_t address, uint32_t value);
