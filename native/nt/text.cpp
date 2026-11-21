@@ -143,7 +143,8 @@ std::u16string widen_ascii(std::string_view text)
 
 std::string to_ansi(std::u16string_view text, uint32_t code_page)
 {
-	if (native_single_byte_page(code_page))
+	// Windows-1252 has a table of its own beside the other single-byte pages, best fits included.
+	if (native_single_byte_page(code_page) || code_page == 1252)
 		return encode_ansi(text, code_page);
 	std::string result;
 	result.reserve(text.size());
