@@ -6114,12 +6114,29 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/wsprintf.exe
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
                     -Wl,--entry,raven_entry,--no-insert-timestamp
-                    -o ${CMAKE_CURRENT_BINARY_DIR}/wsprintf.exe ${LOADER_SOURCES}/wsprintf_client.c -luser32 -lkernel32
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/wsprintf.exe ${LOADER_SOURCES}/wsprintf_client.c -luser32 -lshlwapi -lkernel32 -lgcc
                 DEPENDS ${LOADER_SOURCES}/wsprintf_client.c VERBATIM)
             add_custom_target(wsprintf_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/wsprintf.exe)
             add_test(NAME native_wsprintf COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/wsprintf.exe)
             set_tests_properties(native_wsprintf PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/wsprintf-prefix)
+            # With the components, the formatting runs in the guest: user32's in raven-user32.dll, shlwapi's in raven-shell.dll.
+            if(RAVEN_CONTROLS_COMPONENT_DIR)
+                add_test(NAME native_wsprintf_guest_x64 COMMAND raven --run-process --execution=native --stdio=inherit ${CMAKE_CURRENT_BINARY_DIR}/wsprintf.exe -- guest)
+                set_tests_properties(native_wsprintf_guest_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "wsprintf checks passed"
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/wsprintf-prefix)
+            endif()
+            if(RAVEN_MINGW32 AND RAVEN_CONTROLS32_COMPONENT_DIR)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/wsprintf32.exe
+                    COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/wsprintf32.exe ${LOADER_SOURCES}/wsprintf_client.c -luser32 -lshlwapi -lkernel32 -lgcc
+                    DEPENDS ${LOADER_SOURCES}/wsprintf_client.c VERBATIM)
+                add_custom_target(wsprintf_fixture32 ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/wsprintf32.exe)
+                add_test(NAME native_wsprintf_guest_x32 COMMAND raven --run-process --execution=native --stdio=inherit ${CMAKE_CURRENT_BINARY_DIR}/wsprintf32.exe -- guest)
+                set_tests_properties(native_wsprintf_guest_x32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "wsprintf checks passed"
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/wsprintf-prefix32)
+            endif()
             add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/display.exe
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
                     -Wl,--entry,raven_entry,--no-insert-timestamp
