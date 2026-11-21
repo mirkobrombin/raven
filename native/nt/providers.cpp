@@ -1902,31 +1902,35 @@ static bool answered_api(std::string_view module, std::string_view name)
 // push rcx; push r11; call answer; mov r11,[pointer]; mov r11,[r11+0x7b0]; cmp r11,[rsp]; jne again; add rsp,40; ret;
 // again: add rsp,8; pop rcx; pop rdx; pop r8; pop r9; slow: jmp stub; then where the answer itself gives up, with the wrapper's
 // return address and the five words still on the stack: add rsp,48; jmp stub.
-static constexpr size_t answer_wrapper_size = 87, answer_wrapper_slot = 128, answer_gives_up = 78;
+// The room each wrapper of an answered call takes (see raven_answer_wrapper in gates.S).
+static constexpr size_t answer_wrapper_slot = 128;
 
 static std::vector<uint8_t> answer_wrapper(int32_t to_pointer, int32_t to_answer, int32_t to_stub)
 {
-	std::vector<uint8_t> code{0x4c, 0x8b, 0x1d, 0, 0, 0, 0, 0x4d, 0x85, 0xdb, 0x74, 0x3d, 0x4d, 0x8b, 0x9b, 0xb0, 0x07, 0x00, 0x00, 0x41,
-		0xf6, 0xc3, 0x01, 0x75, 0x30, 0x41, 0x51, 0x41, 0x50, 0x52, 0x51, 0x41, 0x53, 0xe8, 0, 0, 0, 0, 0x4c, 0x8b, 0x1d, 0, 0, 0, 0, 0x4d,
-		0x8b, 0x9b, 0xb0, 0x07, 0x00, 0x00, 0x4c, 0x3b, 0x1c, 0x24, 0x75, 0x05, 0x48, 0x83, 0xc4, 0x28, 0xc3, 0x48, 0x83, 0xc4, 0x08, 0x59,
-		0x5a, 0x41, 0x58, 0x41, 0x59, 0xe9, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x30, 0xe9, 0, 0, 0, 0};
-	static_assert(NativeWindows::table_version == 0x7b0, "the answer wrapper's offset is written into its code");
-	const auto put = [&](size_t at, int32_t target) {
-		const int32_t relative = target - int32_t(at + 4);
-		std::memcpy(code.data() + at, &relative, 4);
+	const auto bytes = served_stub::answer_wrapper();
+	if (bytes.size() > answer_wrapper_slot)
+		throw std::logic_error("the answer wrapper outgrew its slot");
+	std::vector<uint8_t> code(bytes.begin(), bytes.end());
+	static_assert(NativeWindows::table_version == 0x7b0, "the answer wrapper reads the tables' version at this offset (gates.S)");
+	// Each field ends at its label; a target is relative to the wrapper's start, as the field's own end is.
+	const auto put = [&](size_t end, int32_t target) {
+		const int32_t relative = target - int32_t(end);
+		std::memcpy(code.data() + end - 4, &relative, 4);
 	};
-	put(3, to_pointer);
-	put(41, to_pointer);
-	put(34, to_answer);
-	put(74, to_stub);
-	put(83, to_stub);
+	put(served_stub::answer_pointer(), to_pointer);
+	put(served_stub::answer_pointer_again(), to_pointer);
+	put(served_stub::answer_call(), to_answer);
+	put(served_stub::answer_stub(), to_stub);
+	put(served_stub::answer_end(), to_stub);
 	return code;
 }
 
 static bool answer_wrapper_at(std::span<const uint8_t> image, uint32_t rva)
 {
-	return size_t(rva) + answer_wrapper_size <= image.size() && image[rva] == 0x4c && image[rva + 1] == 0x8b && image[rva + 2] == 0x1d &&
-		image[rva + 33] == 0xe8 && image[rva + 73] == 0xe9 && image[rva + 82] == 0xe9;
+	const auto bytes = served_stub::answer_wrapper();
+	return size_t(rva) + bytes.size() <= image.size() && std::equal(bytes.begin(), bytes.begin() + 3, image.begin() + rva) &&
+		image[rva + served_stub::answer_call() - 5] == 0xe8 && image[rva + served_stub::answer_stub() - 5] == 0xe9 &&
+		image[rva + served_stub::answer_end() - 5] == 0xe9;
 }
 
 static size_t string_prelude_slot(const GuestPrelude &prelude)
@@ -2255,7 +2259,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				blocks_next += answer_wrapper_slot;
 			const int32_t displacement = int32_t(served_start + (wrapped ? 24 : 0)) - int32_t(code) - 7;
 			std::memcpy(bytes_of.data() + 3, &displacement, 4);
-			const int32_t relative = int32_t(wrapped ? wrapper + answer_gives_up : trap) - int32_t(code + bytes_of.size());
+			const int32_t relative = int32_t(wrapped ? wrapper + served_stub::answer_gives_up() : trap) - int32_t(code + bytes_of.size());
 			std::memcpy(bytes_of.data() + bytes_of.size() - 4, &relative, 4);
 			std::copy(bytes_of.begin(), bytes_of.end(), bytes.begin() + ptrdiff_t(code));
 			if (wrapped) {
