@@ -8,6 +8,7 @@
 #include "colors.h"
 #include "menu.h"
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <functional>
@@ -346,12 +347,20 @@ public:
 			handles.erase(std::unique(handles.begin(), handles.end()), handles.end());
 			return handles;
 		}
+		// Calls under the shared desktop lock touch their own objects at once (see DesktopLock); everything else that reads or clears the
+		// handles holds the lock whole.
 		void touch(uint64_t handle)
 		{
-			if (!handles.empty() && handles.back()==handle) return;
-			if (handles.size()<4096) handles.push_back(handle);
-			else overflow=true;
+			while (busy.test_and_set(std::memory_order_acquire))
+				busy.wait(true, std::memory_order_relaxed);
+			if (handles.empty() || handles.back()!=handle) {
+				if (handles.size()<4096) handles.push_back(handle);
+				else overflow=true;
+			}
+			busy.clear(std::memory_order_release);
+			busy.notify_one();
 		}
+		std::atomic_flag busy{};
 	};
 	TouchedHandles &touched_windows() { return windows_touched; }
 	TouchedHandles &touched_menus() { return menus_touched; }
