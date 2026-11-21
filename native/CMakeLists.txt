@@ -989,6 +989,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_target(class_background_boundary ALL DEPENDS ${CLASS_BACKGROUND_BOUNDARY})
         add_test(NAME native_class_background_boundary COMMAND raven --run-process --execution=native ${CLASS_BACKGROUND_BOUNDARY})
         set_tests_properties(native_class_background_boundary PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        set(RESIZE_FRAME ${CMAKE_CURRENT_BINARY_DIR}/resize-frame.exe)
+        add_custom_command(OUTPUT ${RESIZE_FRAME}
+            COMMAND ${RAVEN_MINGW64} -nostdlib -fno-stack-protector
+                -Wl,--entry,raven_entry,--image-base,0x1b8000000,--no-insert-timestamp
+                -o ${RESIZE_FRAME} ${PROJECT_SOURCE_DIR}/testdata/native_loader/resize_frame_client.c -lkernel32 -luser32 -lgdi32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/resize_frame_client.c VERBATIM)
+        add_custom_target(resize_frame_fixture ALL DEPENDS ${RESIZE_FRAME})
+        add_executable(resize_frame_test desktop/resize_frame_test.cpp)
+        target_link_libraries(resize_frame_test PRIVATE raven_cpu)
+        add_dependencies(resize_frame_test resize_frame_fixture raven-bootstrap)
+        add_test(NAME native_resize_frame COMMAND resize_frame_test $<TARGET_FILE:raven-bootstrap> ${RESIZE_FRAME})
+        set_tests_properties(native_resize_frame PROPERTIES TIMEOUT 20)
         set(EXIT_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/exit-fixtures)
         file(MAKE_DIRECTORY ${EXIT_FIXTURES})
         set(EXIT_OUTPUTS "")

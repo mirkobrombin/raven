@@ -155,13 +155,14 @@ uint64_t NativeWindows::surface_dc(uint64_t handle)
 	const auto size=(size_t(width)*size_t(height)*4+4095)&~size_t(4095);
 	std::shared_ptr<SharedPixels> shared;
 	uint64_t address=0;
-	// A window given another size keeps what it showed, from its corner, until it paints: Windows leaves the old pixels there too, and
-	// a program that takes a while over its new layout does not show an empty window meanwhile.
+	// A window given another size keeps what its client area showed until it paints: Windows leaves the old pixels there too, and a
+	// program that takes a while over its new layout does not show an empty window meanwhile.
 	std::vector<uint8_t> before;
 	uint32_t before_width=0,before_height=0;
+	DesktopRect kept{};
 	if (const auto spare=spare_surfaces.find(handle); spare!=spare_surfaces.end() && spare->second.width && spare->second.height &&
 		size_t(spare->second.width)*spare->second.height*4<=spare->second.pixels->size()) {
-		before_width=spare->second.width; before_height=spare->second.height;
+		before_width=spare->second.width; before_height=spare->second.height; kept=spare->second.client;
 		before.assign(spare->second.pixels->data(),spare->second.pixels->data()+size_t(before_width)*before_height*4);
 	}
 	if (const auto spare=spare_surfaces.find(handle); spare!=spare_surfaces.end() && spare->second.size>=size) {
@@ -174,16 +175,23 @@ uint64_t NativeWindows::surface_dc(uint64_t handle)
 		address=process.map_shared(shared->descriptor(),size);
 	}
 	// What nothing has drawn on yet shows the window's background, not black: a program that takes seconds over its first paint, or
-	// over controls that a graphics driver draws, shows them as empty panels while they load. The pixels of a surface the window had
-	// before are laid out for another size; only what is kept from its corner stays.
+	// over controls that a graphics driver draws, shows them as empty panels while they load.
 	{
 		const uint32_t pixel=unpainted_pixel(*window);
 		auto *words=reinterpret_cast<uint32_t *>(shared->data());
 		std::fill(words,words+std::min(size,shared->size())/4,pixel);
 	}
-	for (uint32_t row=0;row<std::min<uint32_t>(before_height,uint32_t(height));++row)
-		std::memcpy(shared->data()+size_t(row)*size_t(width)*4,before.data()+size_t(row)*before_width*4,
-			size_t(std::min<uint32_t>(before_width,uint32_t(width)))*4);
+	// The old client area moves to where the client area lies now. The frame and what was drawn beside the client area are not kept: at
+	// the old edges they would lie inside a larger window, and presenting draws the frame again.
+	const int64_t client_left=int64_t(window->x)-window->outer.left,client_top=int64_t(window->y)-window->outer.top;
+	const int64_t shift_x=client_left-kept.left,shift_y=client_top-kept.top;
+	const int64_t left=std::max<int64_t>({kept.left,0,std::max<int64_t>(client_left,0)-shift_x});
+	const int64_t top=std::max<int64_t>({kept.top,0,std::max<int64_t>(client_top,0)-shift_y});
+	const int64_t right=std::min<int64_t>({kept.right,before_width,std::min<int64_t>(client_left+window->width,width)-shift_x});
+	const int64_t bottom=std::min<int64_t>({kept.bottom,before_height,std::min<int64_t>(client_top+window->height,height)-shift_y});
+	for (int64_t row=top;row<bottom && left<right;++row)
+		std::memcpy(shared->data()+(size_t(row+shift_y)*size_t(width)+size_t(left+shift_x))*4,before.data()+(size_t(row)*before_width+size_t(left))*4,
+			size_t(right-left)*4);
 	uint64_t bitmap=0,dc=0;
 	try {
 		bitmap=objects.add(DesktopBitmap{uint32_t(width),uint32_t(height),32,{},address,true,true,false,shared});
@@ -896,7 +904,9 @@ void NativeWindows::release_surface(uint64_t handle)
 		const auto address=record->address;
 		if (resizing && record->shared) {
 			drop_spare_surface(handle);
-			spare_surfaces[handle]={record->shared,address,record->shared->size(),record->width,record->height};
+			const int32_t left=window->x-window->outer.left,top=window->y-window->outer.top;
+			spare_surfaces[handle]={record->shared,address,record->shared->size(),record->width,record->height,
+				{left,top,left+window->width,top+window->height}};
 		} else {
 			process.unmap_memory(address);
 		}
