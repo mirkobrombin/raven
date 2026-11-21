@@ -263,6 +263,23 @@ static std::optional<std::vector<uint64_t>> drawing_objects(std::string_view nam
 	return handles;
 }
 
+// The window a call on the data of one window of the process's changes, when it may run under the shared desktop lock: its user data
+// and extra bytes, and its properties, which nothing else reads from the window's record. None for any other index, which may send
+// the window messages or change what other windows show, and for a window the process does not have.
+static std::optional<uint64_t> window_data_object(std::string_view name, std::span<const uint64_t> words, const DesktopObjects &objects)
+{
+	static constexpr std::array<std::string_view, 4> longs{"SetWindowLongPtrW", "SetWindowLongPtrA", "SetWindowLongW", "SetWindowLongA"};
+	static constexpr std::array<std::string_view, 4> properties{"SetPropW", "SetPropA", "RemovePropW", "RemovePropA"};
+	const auto listed = [name](const auto &names) { return std::find(names.begin(), names.end(), name) != names.end(); };
+	if (words.size() < 2 || !objects.window(words[0]))
+		return std::nullopt;
+	if (listed(properties))
+		return words[0];
+	if (const int32_t index = int32_t(uint32_t(words[1])); listed(longs) && (index == -21 || index >= 0))
+		return words[0];
+	return std::nullopt;
+}
+
 static bool beside_api(std::string_view module, std::string_view name)
 {
 	if (module == "user32.dll")
@@ -3113,12 +3130,16 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					if (index < 0 && index != -21 && index != -12)
 						return std::nullopt;
 				}
-				// Drawing that changes nothing but the pixels of contexts of the thread's own runs under the shared desktop lock, with the
-				// stripes of those contexts and of the bitmaps it draws into or reads (see drawing_objects).
+				// Drawing that changes nothing but the pixels of memory contexts, and changes to the data of one window, run under the shared
+				// desktop lock with the stripes of what they work on (see drawing_objects and window_data_object).
 				if (desktop_call) {
 					const DesktopSharedScope shared;
-					const auto handles = windows.dc_logged() ? std::nullopt :
+					const bool logged = windows.dc_logged() || windows.drawing_logged();
+					auto handles = logged ? std::nullopt :
 						drawing_objects(named->second, words, std::as_const(desktop_objects), windows.published_screen_dc());
+					const auto window = logged || handles ? std::nullopt : window_data_object(named->second, words, std::as_const(desktop_objects));
+					if (window)
+						handles = std::vector<uint64_t>{*window};
 					if (handles) {
 						const DesktopStripes stripes(*handles);
 						ApiCall call(process, environment, std::move(words));
@@ -3128,6 +3149,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						} catch (...) {
 							return std::nullopt;
 						}
+						// The guest answers reads of the window's data from its record, which shows the change before the call returns.
+						if (window)
+							windows.publish_window_alone(*window);
 						return call.result;
 					}
 				}
