@@ -378,7 +378,10 @@ private:
 	void place_pointer(const DesktopEvent &event,uint32_t message,uint32_t buttons,int64_t x,int64_t y);
 	void release_held_input();
 	std::deque<DesktopEvent> held_input;
-	uint64_t retrieve(std::span<const uint64_t> arguments,bool blocking);
+	// `beside` writes the message for a PeekMessage served beside the turn (see register_api), which leaves to the turn whatever would run
+	// a procedure of the guest.
+	uint64_t retrieve(std::span<const uint64_t> arguments,bool blocking,
+		const std::function<void(uint64_t,std::span<const uint8_t>)> *beside=nullptr);
 	void post(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam);
 	uint64_t surface_dc(uint64_t window);
 	bool tree_dispatch(std::string_view name);

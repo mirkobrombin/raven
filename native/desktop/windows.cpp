@@ -1586,8 +1586,17 @@ NativeWindows::Modifiers NativeWindows::modifier_state() const
 	return Modifiers{(vk_state[0x10] & 0x80)!=0,(vk_state[0x11] & 0x80)!=0,(vk_state[0x12] & 0x80)!=0};
 }
 
-uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
+uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking,
+	const std::function<void(uint64_t,std::span<const uint8_t>)> *beside)
 {
+	// Beside the turn no procedure of the guest can run: a retrieval that would call one, a hook, a message another thread or process
+	// sent, input to be received first or taken now, goes to the turn and is done there from the start.
+	const bool alone=beside!=nullptr;
+	if (alone && (blocking || has_hook(2) || has_hook(3) || has_hook(7))) throw ApiNeedsTurn{};
+	const auto write=[&](uint64_t address,std::span<const uint8_t> bytes) {
+		if (alone) (*beside)(address,bytes);
+		else process.write_memory(address,bytes);
+	};
 	const auto layout=message_layout(process.mode()==NativeMode::x86);
 	// A 32-bit (HWND)-1 selects thread messages exactly like its 64-bit sign extension.
 	const auto window=process.mode()==NativeMode::x86 && args[1]==UINT32_MAX ? UINT64_MAX : args[1];
@@ -1607,10 +1616,13 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 	};
 	for (;;) {
 		collect_input(std::chrono::milliseconds(0));
+		if (alone && pending_for(me)) throw ApiNeedsTurn{};
 		deliver_pending();
 		if (kinds & 0x8) import_foreign_posts();
+		if (alone && (kinds & 0x40) && foreign_frames_stamp()!=sends_stamp) throw ApiNeedsTurn{};
 		if (kinds & 0x40) answer_foreign_sends();
 		// Messages sent from other threads run before anything is retrieved, as they do while a Windows thread pumps its queue.
+		if (alone && (kinds & 0x40) && sent_for(me)) throw ApiNeedsTurn{};
 		if (kinds & 0x40) serve_sent();
 		auto found=std::find_if(messages.begin(),messages.end(),matches);
 		const auto quit=(kinds & 0x108) ? quits.find(me) : quits.end();
@@ -1621,8 +1633,11 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			put(bytes,layout.wparam,value.wparam,layout.pointer); put(bytes,layout.lparam,value.lparam,layout.pointer);
 			put(bytes,layout.time,value.time,4);
 			put(bytes,layout.x,uint32_t(value.x),4); put(bytes,layout.y,uint32_t(value.y),4);
-			process.write_memory(args[0],bytes);
-			if ((flags & 1U) && input_taken && ((value.message>=0x200 && value.message<=0x20e) || (value.message>=0x100 && value.message<=0x109)))
+			const bool input=(value.message>=0x200 && value.message<=0x20e) || (value.message>=0x100 && value.message<=0x109);
+			// Taking input tells the scheduler, which only the turn does.
+			if (alone && (flags & 1U) && input_taken && input) throw ApiNeedsTurn{};
+			write(args[0],bytes);
+			if ((flags & 1U) && input_taken && input)
 				input_taken();
 			// RAVEN_TRACE_MSG also follows what each retrieval returns, with the filter it was asked with.
 			static const char *const trace_retrieval=std::getenv("RAVEN_TRACE_MSG");
@@ -1680,7 +1695,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking)
 			paint_cursor=paint;
 			std::vector<uint8_t> bytes(layout.size);
 			put(bytes,0,paint,layout.pointer); put(bytes,layout.message,0x0f,4); put(bytes,layout.time,message_time(),4);
-			process.write_memory(args[0],bytes);
+			write(args[0],bytes);
 			queue_status(me,seen,true);
 			return 1;
 		}

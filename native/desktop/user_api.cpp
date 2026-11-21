@@ -107,6 +107,17 @@ void NativeWindows::register_api(ApiRegistry &registry)
 		call.ret(objects.erase(call[1]));
 	});
 
+	// A peek at the calling thread's own queue, beside the turn; in the turn, and for what retrieve leaves to it, the window dispatch.
+	registry.add("PeekMessageW", 5, [this](ApiCall &call) {
+		if (!call.alone)
+			throw ApiDeclined{};
+		const std::array<uint64_t, 5> arguments{call[0], call[1], call[2], call[3], call[4]};
+		const std::function<void(uint64_t, std::span<const uint8_t>)> write = [&call](uint64_t address, std::span<const uint8_t> bytes) {
+			call.write(address, bytes);
+		};
+		call.ret(retrieve(arguments, false, &write));
+	});
+
 	// Rectangle helpers are pure arithmetic on guest RECTs.
 	registry.add("InflateRect", 3, [](ApiCall &call) {
 		auto rect = read_rect(call, call[0]);

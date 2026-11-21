@@ -210,8 +210,9 @@ static bool served_api(std::string_view module, std::string_view name)
 // notify the window go the usual way.
 static bool desktop_beside_api(std::string_view name)
 {
-	static constexpr std::array<std::string_view, 13> names{"SetPropW", "SetPropA", "RemovePropW", "RemovePropA", "SetWindowLongPtrW",
-		"SetWindowLongPtrA", "SetWindowLongW", "SetWindowLongA", "InvalidateRect", "ValidateRect", "GetDC", "GetWindowDC", "ReleaseDC"};
+	static constexpr std::array<std::string_view, 14> names{"SetPropW", "SetPropA", "RemovePropW", "RemovePropA", "SetWindowLongPtrW",
+		"SetWindowLongPtrA", "SetWindowLongW", "SetWindowLongA", "InvalidateRect", "ValidateRect", "GetDC", "GetWindowDC", "ReleaseDC",
+		"PeekMessageW"};
 	return std::find(names.begin(), names.end(), name) != names.end();
 }
 
