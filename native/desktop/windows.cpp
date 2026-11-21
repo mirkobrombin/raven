@@ -2520,6 +2520,19 @@ void NativeWindows::publish_window_record(uint64_t handle,const DesktopWindow *w
 	put(0,handle);
 }
 
+void NativeWindows::publish_window_alone(uint64_t handle)
+{
+	if (!window_table || !screen_block)
+		return;
+	// The guest reads a record between two looks at an even count that did not change: one writer at a time keeps it odd throughout.
+	static std::mutex writing;
+	const std::lock_guard lock(writing);
+	auto *version=reinterpret_cast<uint64_t *>(screen_block+table_version);
+	__atomic_fetch_add(version,1,__ATOMIC_SEQ_CST);
+	publish_window_record(handle,std::as_const(objects).window(handle));
+	__atomic_fetch_add(version,1,__ATOMIC_SEQ_CST);
+}
+
 void NativeWindows::publish_windows()
 {
 	if (!window_table)

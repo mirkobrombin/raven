@@ -150,6 +150,9 @@ public:
 	// run while the runtime serves another read a table only between two looks at an even count that did not change.
 	static constexpr size_t table_version=0x7b0;
 	void publish_windows();
+	// Writes the record of one window a call under the shared desktop lock changed (see DesktopLock), as publish_windows writes it,
+	// while calls on other windows go on.
+	void publish_window_alone(uint64_t handle);
 	// Whether the guest logged drawing for the runtime to carry out, which it does without a call.
 	bool drawing_logged() const
 	{
