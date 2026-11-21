@@ -3431,4 +3431,284 @@ raven_prelude_string_set_thread_locale:
 	.long 0
 raven_prelude_string_set_thread_locale_end:
 
+/* QueryPerformanceCounter and the unbiased interrupt times, once the runtime has published how the time stamp counter relates to the
+ * performance counter (see guest_clock_api): mov r10,[pointer]; test r10,r10; jz served; mov r11,[r10+multiplier]; test r11,r11;
+ * jz served; the count from rdtsc as 32.32 fixed point from the base; mov [rcx],rax; mov eax,1; ret. Both jumps go to the served
+ * stub, whose rel32 the runtime fills in where served and served_again end. */
+	.global raven_prelude_clock, raven_prelude_clock_end, raven_prelude_clock_served, raven_prelude_clock_served_again
+raven_prelude_clock:
+	mov r10, qword ptr [rip + 0]
+	test r10, r10
+	.byte 0x0f, 0x84
+	.long 0
+raven_prelude_clock_served:
+	mov r11, qword ptr [r10 + 0x810]
+	test r11, r11
+	.byte 0x0f, 0x84
+	.long 0
+raven_prelude_clock_served_again:
+	rdtsc
+	shl rdx, 0x20
+	or rax, rdx
+	sub rax, qword ptr [r10 + 0x800]
+	mul r11
+	shrd rax, rdx, 0x20
+	add rax, qword ptr [r10 + 0x808]
+	mov qword ptr [rcx], rax
+	mov eax, 0x1
+	ret
+raven_prelude_clock_end:
+
+/* VirtualAlloc of a read-write commit that falls in a range open in the guest (see guest_memory_api): mov r10,[pointer]; test r10,r10;
+ * jz slow; test rcx,rcx; jz slow; test rdx,rdx; jz slow; cmp r8d,MEM_COMMIT; jne slow; cmp r9d,PAGE_READWRITE; je main; slow: jmp trap;
+ * restore: mov r8d,MEM_COMMIT; mov r9d,PAGE_READWRITE; jmp slow; main: rax = first page, r11 = end page; jbe slow; look through the open
+ * ranges at commit_windows for one holding [rax, r11), take a log slot with lock xadd at commit_log, store the range there and return
+ * rax; a full log or no range goes back to restore. The runtime fills in the rel32 that ends at trap. */
+	.global raven_prelude_commit, raven_prelude_commit_end, raven_prelude_commit_trap
+raven_prelude_commit:
+	mov r10, qword ptr [rip + 0]
+	test r10, r10
+	je .Lcommit_slow
+	test rcx, rcx
+	je .Lcommit_slow
+	test rdx, rdx
+	je .Lcommit_slow
+	cmp r8d, 0x1000
+	jne .Lcommit_slow
+	cmp r9d, 0x4
+	je .Lcommit_38
+.Lcommit_slow:
+	.byte 0xe9
+	.long 0
+raven_prelude_commit_trap:
+.Lcommit_restore:
+	mov r8d, 0x1000
+	mov r9d, 0x4
+	jmp .Lcommit_slow
+.Lcommit_38:
+	mov rax, rcx
+	and rax, 0xfffffffffffff000
+	lea r11, [rcx + rdx * 1 + 0xfff]
+	and r11, 0xfffffffffffff000
+	cmp r11, rax
+	jbe .Lcommit_slow
+	mov r8d, dword ptr [r10 + 0xa00]
+	lea r9, [r10 + 0xa08]
+.Lcommit_63:
+	test r8d, r8d
+	je .Lcommit_restore
+	cmp rax, qword ptr [r9]
+	jb .Lcommit_9d
+	cmp r11, qword ptr [r9 + 0x8]
+	ja .Lcommit_9d
+	mov r8d, 0x1
+	lock xadd dword ptr [r10 + 0xd10], r8d
+	cmp r8d, 0x20
+	jae .Lcommit_restore
+	shl r8, 0x4
+	mov qword ptr [r10 + r8 * 1 + 0xd18], rax
+	mov qword ptr [r10 + r8 * 1 + 0xd20], r11
+	ret
+.Lcommit_9d:
+	add r9, 0x10
+	dec r8d
+	jmp .Lcommit_63
+raven_prelude_commit_end:
+
+/* VirtualFree of a small decommit in an open range: mov r10,[pointer]; test r10,r10; jz slow; test rcx,rcx; jz slow; test rdx,rdx;
+ * jz slow; cmp r8d,MEM_DECOMMIT; je main; slow: jmp trap; restore: mov r8d,MEM_DECOMMIT; jmp slow; main: cmp rdx,256 KiB; ja slow;
+ * rax = first page, r11 = end page; look through the open ranges for one holding [rax, r11), take a log slot with lock xadd, zero the
+ * pages with rep stosb (keeping rdi), store the range with its low bit set and return TRUE; a full log or no range goes back to
+ * restore. The runtime fills in the rel32 that ends at trap. */
+	.global raven_prelude_decommit, raven_prelude_decommit_end, raven_prelude_decommit_trap
+raven_prelude_decommit:
+	mov r10, qword ptr [rip + 0]
+	test r10, r10
+	je .Ldecommit_slow
+	test rcx, rcx
+	je .Ldecommit_slow
+	test rdx, rdx
+	je .Ldecommit_slow
+	cmp r8d, 0x4000
+	je .Ldecommit_2c
+.Ldecommit_slow:
+	.byte 0xe9
+	.long 0
+raven_prelude_decommit_trap:
+.Ldecommit_restore:
+	mov r8d, 0x4000
+	jmp .Ldecommit_slow
+.Ldecommit_2c:
+	cmp rdx, 0x40000
+	ja .Ldecommit_slow
+	mov rax, rcx
+	and rax, 0xfffffffffffff000
+	lea r11, [rcx + rdx * 1 + 0xfff]
+	and r11, 0xfffffffffffff000
+	mov r8d, dword ptr [r10 + 0xa00]
+	lea r9, [r10 + 0xa08]
+.Ldecommit_5b:
+	test r8d, r8d
+	je .Ldecommit_restore
+	cmp rax, qword ptr [r9]
+	jb .Ldecommit_b0
+	cmp r11, qword ptr [r9 + 0x8]
+	ja .Ldecommit_b0
+	mov r8d, 0x1
+	lock xadd dword ptr [r10 + 0xd10], r8d
+	cmp r8d, 0x20
+	jae .Ldecommit_restore
+	shl r8, 0x4
+	push rdi
+	mov rdi, rax
+	mov r9, rax
+	mov rcx, r11
+	sub rcx, rax
+	xor eax, eax
+	rep stos byte ptr [rdi], al
+	pop rdi
+	or r9, 0x1
+	mov qword ptr [r10 + r8 * 1 + 0xd18], r9
+	mov qword ptr [r10 + r8 * 1 + 0xd20], r11
+	mov eax, 0x1
+	ret
+.Ldecommit_b0:
+	add r9, 0x10
+	dec r8d
+	jmp .Ldecommit_5b
+raven_prelude_decommit_end:
+
+/* The preludes of the commands a renderer records by the thousand (see queued_arguments): each puts the call in the thread's ring of
+ * queued calls in the served block, which the runtime drains in order, instead of stopping. The block comes through GS as for the served
+ * stubs; the ring's head, tail and whether it is on sit at 0x80, 0x88 and 0x90, its sixteen records of sixteen words at 0x100. A record
+ * holds the stub the call stands for, then its arguments: the four registers, those on the stack, and for OpenGL the low halves of
+ * XMM0 to XMM3; vkCmdBindDescriptorSets and vkCmdBindVertexBuffers copy their arrays into the record and point at the copies. A ring
+ * that is off or full, or arrays too long for a record, take the served stub instead (`slow`, a jmp whose rel32 the runtime fills in,
+ * as it does the stub's address the lea that ends at `stub` loads). Every prelude fills a slot of 384 bytes. */
+	.macro queued name, arguments, kind=plain
+	.global raven_prelude_queued_\name, raven_prelude_queued_\name\()_stub, raven_prelude_queued_\name\()_end
+raven_prelude_queued_\name:
+	xchg ax, ax
+	mov r10, qword ptr gs:[0x1ff0]
+	test r10, r10
+	{disp32} je .Lqueued_\name\()_slow
+	cmp qword ptr [r10 + 0x90], 1
+	{disp32} jne .Lqueued_\name\()_slow
+	mov rax, qword ptr [r10 + 0x80]
+	mov r11, rax
+	sub r11, qword ptr [r10 + 0x88]
+	cmp r11, 16
+	{disp32} jae .Lqueued_\name\()_slow
+	mov r11, rax
+	and r11d, 15
+	shl r11, 7
+	add r11, r10
+	mov qword ptr [r11 + 0x108], rcx
+	mov qword ptr [r11 + 0x110], rdx
+	mov qword ptr [r11 + 0x118], r8
+	mov qword ptr [r11 + 0x120], r9
+	.ifc \kind, gl_draw_elements
+	/* Only while the element buffer the runtime last saw bound is published. */
+	cmp qword ptr [r10 + 0x98], 1
+	{disp32} jne .Lqueued_\name\()_slow
+	.endif
+	.ifc \kind, gl_bind_buffer
+	/* A change of the element buffer is served, so that the capability is published before another draw enters the ring. */
+	cmp ecx, 0x8893
+	{disp32} je .Lqueued_\name\()_slow
+	.endif
+	.ifc \kind, descriptors
+	cmp dword ptr [rsp + 40], 4
+	{disp32} ja .Lqueued_\name\()_slow
+	cmp dword ptr [rsp + 56], 4
+	{disp32} ja .Lqueued_\name\()_slow
+	.endif
+	.ifc \kind, vertices
+	cmp r8d, 4
+	{disp32} ja .Lqueued_\name\()_slow
+	.endif
+	.if \arguments > 4
+	.set .Lqueued_index, 4
+	.rept \arguments - 4
+	mov rcx, qword ptr [rsp + 40 + (.Lqueued_index - 4) * 8]
+	mov qword ptr [r11 + 0x108 + .Lqueued_index * 8], rcx
+	.set .Lqueued_index, .Lqueued_index + 1
+	.endr
+	.endif
+	.ifc \kind, plain
+	.else
+	.ifnc \kind, descriptors
+	.ifnc \kind, vertices
+	/* The low XMM words, before the caller can reuse them; Vulkan's arrays use these words instead. */
+	movq qword ptr [r11 + 0x148], xmm0
+	movq qword ptr [r11 + 0x150], xmm1
+	movq qword ptr [r11 + 0x158], xmm2
+	movq qword ptr [r11 + 0x160], xmm3
+	.endif
+	.endif
+	.endif
+	.ifc \kind, descriptors
+	/* The descriptor sets and the dynamic offsets, into the record; the published pointers name the copies. */
+	push rsi
+	push rdi
+	queued_copy 5, 4, 80, movsq
+	queued_copy 7, 6, 112, movsd
+	pop rdi
+	pop rsi
+	.endif
+	.ifc \kind, vertices
+	/* The buffers and their offsets, likewise. */
+	push rsi
+	push rdi
+	queued_copy 3, 2, 64, movsq
+	queued_copy 4, 2, 96, movsq
+	pop rdi
+	pop rsi
+	.endif
+	lea rcx, [rip + 0]
+raven_prelude_queued_\name\()_stub:
+	mov qword ptr [r11 + 0x100], rcx
+	inc qword ptr [r10 + 0x80]
+	ret
+	.skip 379 - (. - raven_prelude_queued_\name), 0x90
+.Lqueued_\name\()_slow:
+	.byte 0xe9
+	.long 0
+raven_prelude_queued_\name\()_end:
+	.endm
+
+/* Copies the array whose pointer is argument `pointer` and whose count is argument `count` to `payload` bytes into the record, and
+ * points the argument at the copy. */
+	.macro queued_copy pointer, count, payload, move
+	mov rsi, qword ptr [r11 + 0x100 + (\pointer + 1) * 8]
+	lea rdi, [r11 + 0x100 + \payload]
+	mov qword ptr [r11 + 0x100 + (\pointer + 1) * 8], rdi
+	mov ecx, dword ptr [r11 + 0x100 + (\count + 1) * 8]
+	rep \move
+	.endm
+
+	queued vk3, 3
+	queued vk4, 4
+	queued vk5, 5
+	queued vk6, 6
+	queued vk_descriptors, 8, descriptors
+	queued vk_vertices, 5, vertices
+	queued gl1, 1, gl
+	queued gl2, 2, gl
+	queued gl3, 3, gl
+	queued gl4, 4, gl
+	queued gl_draw_elements, 4, gl_draw_elements
+	queued gl_bind_buffer, 2, gl_bind_buffer
+
+/* An export of ntdll that is a system call, made as Windows' own ntdll makes it, with the service number the runtime writes where
+ * `service` ends. The runtime recognises these bytes when it looks for the stub behind an export (see served_stub_rva). */
+	.global raven_nt_syscall, raven_nt_syscall_service, raven_nt_syscall_end
+raven_nt_syscall:
+	{load} mov r10, rcx
+	mov eax, 0
+raven_nt_syscall_service:
+	syscall
+	ret
+raven_nt_syscall_end:
+
 	.section .note.GNU-stack, "", @progbits

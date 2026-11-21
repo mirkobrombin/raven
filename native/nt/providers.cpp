@@ -298,117 +298,85 @@ static std::vector<uint8_t> served_stub_code(int32_t to_pointer, bool asked = fa
 	return code;
 }
 
-static unsigned queued_arguments(std::string_view module, std::string_view name)
+// The calls a renderer makes by the thousand that the guest puts in its thread's ring instead of stopping (see the queued preludes of
+// preludes.S): how many arguments each records, and its prelude, with where the field for its served stub's address ends.
+struct QueuedCall {
+	std::string_view name;
+	unsigned arguments;
+	const uint8_t *code, *stub, *end;
+};
+
+static const QueuedCall *queued_call(std::string_view module, std::string_view name)
 {
 #ifdef RAVEN_OPENGL
+	// Only context-local state: shared texture and program changes still flush every producer synchronously.
+	static const QueuedCall opengl[]{
+		{"glColor4f", 4, raven_prelude_queued_gl4, raven_prelude_queued_gl4_stub, raven_prelude_queued_gl4_end},
+		{"glColor4ub", 4, raven_prelude_queued_gl4, raven_prelude_queued_gl4_stub, raven_prelude_queued_gl4_end},
+		{"glRotatef", 4, raven_prelude_queued_gl4, raven_prelude_queued_gl4_stub, raven_prelude_queued_gl4_end},
+		{"glDrawElements", 4, raven_prelude_queued_gl_draw_elements, raven_prelude_queued_gl_draw_elements_stub, raven_prelude_queued_gl_draw_elements_end},
+		{"glVertex3f", 3, raven_prelude_queued_gl3, raven_prelude_queued_gl3_stub, raven_prelude_queued_gl3_end},
+		{"glTranslatef", 3, raven_prelude_queued_gl3, raven_prelude_queued_gl3_stub, raven_prelude_queued_gl3_end},
+		{"glScalef", 3, raven_prelude_queued_gl3, raven_prelude_queued_gl3_stub, raven_prelude_queued_gl3_end},
+		{"glTexCoord2f", 2, raven_prelude_queued_gl2, raven_prelude_queued_gl2_stub, raven_prelude_queued_gl2_end},
+		{"glBindBuffer", 2, raven_prelude_queued_gl_bind_buffer, raven_prelude_queued_gl_bind_buffer_stub, raven_prelude_queued_gl_bind_buffer_end},
+		{"glActiveTexture", 1, raven_prelude_queued_gl1, raven_prelude_queued_gl1_stub, raven_prelude_queued_gl1_end},
+		{"glUseProgram", 1, raven_prelude_queued_gl1, raven_prelude_queued_gl1_stub, raven_prelude_queued_gl1_end},
+		{"glEnable", 1, raven_prelude_queued_gl1, raven_prelude_queued_gl1_stub, raven_prelude_queued_gl1_end},
+		{"glDisable", 1, raven_prelude_queued_gl1, raven_prelude_queued_gl1_stub, raven_prelude_queued_gl1_end},
+	};
 	if (module == "opengl32.dll") {
-		if (!std::getenv("RAVEN_QUEUED_OPENGL")) return 0;
-		// Only context-local state: shared texture and program changes still flush every producer synchronously.
-		if (name == "glColor4f" || name == "glColor4ub" || name == "glRotatef" || name == "glDrawElements") return 4;
-		if (name == "glVertex3f" || name == "glTranslatef" || name == "glScalef") return 3;
-		if (name == "glTexCoord2f" || name == "glBindBuffer") return 2;
-		if (name == "glActiveTexture" || name == "glUseProgram" || name == "glEnable" || name == "glDisable") return 1;
-		return 0;
+		if (!std::getenv("RAVEN_QUEUED_OPENGL"))
+			return nullptr;
+		for (const auto &call : opengl)
+			if (call.name == name)
+				return &call;
+		return nullptr;
 	}
 #endif
+	static const QueuedCall vulkan[]{
+		{"vkCmdBindDescriptorSets", 8, raven_prelude_queued_vk_descriptors, raven_prelude_queued_vk_descriptors_stub, raven_prelude_queued_vk_descriptors_end},
+		{"vkCmdBindVertexBuffers", 5, raven_prelude_queued_vk_vertices, raven_prelude_queued_vk_vertices_stub, raven_prelude_queued_vk_vertices_end},
+		{"vkCmdDrawIndexed", 6, raven_prelude_queued_vk6, raven_prelude_queued_vk6_stub, raven_prelude_queued_vk6_end},
+		{"vkCmdDraw", 5, raven_prelude_queued_vk5, raven_prelude_queued_vk5_stub, raven_prelude_queued_vk5_end},
+		{"vkCmdDrawIndirect", 5, raven_prelude_queued_vk5, raven_prelude_queued_vk5_stub, raven_prelude_queued_vk5_end},
+		{"vkCmdDrawIndexedIndirect", 5, raven_prelude_queued_vk5, raven_prelude_queued_vk5_stub, raven_prelude_queued_vk5_end},
+		{"vkCmdBindIndexBuffer", 4, raven_prelude_queued_vk4, raven_prelude_queued_vk4_stub, raven_prelude_queued_vk4_end},
+		{"vkCmdDispatch", 4, raven_prelude_queued_vk4, raven_prelude_queued_vk4_stub, raven_prelude_queued_vk4_end},
+		{"vkCmdBindPipeline", 3, raven_prelude_queued_vk3, raven_prelude_queued_vk3_stub, raven_prelude_queued_vk3_end},
+		{"vkCmdSetStencilReference", 3, raven_prelude_queued_vk3, raven_prelude_queued_vk3_stub, raven_prelude_queued_vk3_end},
+	};
 	if (module != "vulkan-1.dll")
-		return 0;
-	if (name == "vkCmdBindDescriptorSets") return 8;
-	if (name == "vkCmdBindVertexBuffers") return 5;
-	if (name == "vkCmdDrawIndexed") return 6;
-	if (name == "vkCmdDraw" || name == "vkCmdDrawIndirect" || name == "vkCmdDrawIndexedIndirect") return 5;
-	if (name == "vkCmdBindIndexBuffer" || name == "vkCmdDispatch") return 4;
-	if (name == "vkCmdBindPipeline" || name == "vkCmdSetStencilReference") return 3;
-	return 0;
+		return nullptr;
+	for (const auto &call : vulkan)
+		if (call.name == name)
+			return &call;
+	return nullptr;
+}
+
+static unsigned queued_arguments(std::string_view module, std::string_view name)
+{
+	const auto *call = queued_call(module, name);
+	return call ? call->arguments : 0;
 }
 
 static constexpr size_t queued_prelude_size = 384;
 
-static std::vector<uint8_t> queued_prelude(int32_t to_served, unsigned arguments, std::string_view name)
+static std::vector<uint8_t> queued_prelude(int32_t to_served, const QueuedCall &call)
 {
 	static_assert(ServedQueue::head * 8 == 0x80 && ServedQueue::tail * 8 == 0x88 && ServedQueue::enabled * 8 == 0x90 &&
-		ServedQueue::records * 8 == 0x100 && ServedQueue::gl_elements * 8 == 0x98 && ServedQueue::words == 16 && ServedQueue::capacity == 16);
-	// Read the thread's ring, or use the synchronous stub when disabled, full or the copied arrays would exceed a record.
-	std::vector<uint8_t> code{
-		0x66, 0x90, 0x65, 0x4c, 0x8b, 0x14, 0x25, 0xf0, 0x1f, 0, 0, 0x4d, 0x85, 0xd2, 0x0f, 0x84, 0, 0, 0, 0,
-		0x49, 0x83, 0xba, 0x90, 0, 0, 0, 1, 0x0f, 0x85, 0, 0, 0, 0,
-		0x49, 0x8b, 0x82, 0x80, 0, 0, 0, 0x49, 0x89, 0xc3, 0x4d, 0x2b, 0x9a, 0x88, 0, 0, 0,
-		0x49, 0x83, 0xfb, 0x10, 0x0f, 0x83, 0, 0, 0, 0,
-		0x49, 0x89, 0xc3, 0x41, 0x83, 0xe3, 0x0f, 0x49, 0xc1, 0xe3, 7, 0x4d, 0x01, 0xd3,
-		0x49, 0x89, 0x8b, 0x08, 1, 0, 0, 0x49, 0x89, 0x93, 0x10, 1, 0, 0,
-		0x4d, 0x89, 0x83, 0x18, 1, 0, 0, 0x4d, 0x89, 0x8b, 0x20, 1, 0, 0};
-	std::vector<size_t> fallback{16, 30, 57};
-	if (name == "glDrawElements") {
-		const uint8_t bound[]{0x49, 0x83, 0xba, 0x98, 0, 0, 0, 1, 0x0f, 0x85, 0, 0, 0, 0};
-		fallback.push_back(code.size() + 10);
-		code.insert(code.end(), std::begin(bound), std::end(bound));
-	} else if (name == "glBindBuffer") {
-		// Element-buffer changes publish the capability before another draw can enter the ring.
-		const uint8_t elements[]{0x81, 0xf9, 0x93, 0x88, 0, 0, 0x0f, 0x84, 0, 0, 0, 0};
-		fallback.push_back(code.size() + 8);
-		code.insert(code.end(), std::begin(elements), std::end(elements));
-	}
-	const bool descriptors = name == "vkCmdBindDescriptorSets", vertices = name == "vkCmdBindVertexBuffers";
-	if (descriptors) {
-		for (const uint8_t at : {uint8_t(40), uint8_t(56)}) {
-			const uint8_t bound[]{0x83, 0x7c, 0x24, at, 4, 0x0f, 0x87, 0, 0, 0, 0};
-			fallback.push_back(code.size() + 7);
-			code.insert(code.end(), std::begin(bound), std::end(bound));
-		}
-	} else if (vertices) {
-		const uint8_t bound[]{0x41, 0x83, 0xf8, 4, 0x0f, 0x87, 0, 0, 0, 0};
-		fallback.push_back(code.size() + 6);
-		code.insert(code.end(), std::begin(bound), std::end(bound));
-	}
-	for (unsigned index = 4; index < arguments; ++index) {
-		const uint8_t word[]{0x48, 0x8b, 0x4c, 0x24, uint8_t(40 + (index - 4) * 8),
-			0x49, 0x89, 0x8b, uint8_t(8 + index * 8), 1, 0, 0};
-		code.insert(code.end(), std::begin(word), std::end(word));
-	}
-	if (name.starts_with("gl")) {
-		// Copy the low XMM words before the caller can reuse them. Vulkan's array payload uses these words instead.
-		for (unsigned index = 0; index < 4; ++index) {
-			const uint8_t word[]{0x66, 0x49, 0x0f, 0x7e, uint8_t(0x83 + index * 8), uint8_t(0x48 + index * 8), 1, 0, 0};
-			code.insert(code.end(), std::begin(word), std::end(word));
-		}
-	}
-	if (descriptors || vertices) {
-		// Preserve Windows' nonvolatile copy registers; the published pointers name the record, never the caller's scratch arrays.
-		code.insert(code.end(), {0x56, 0x57});
-		const auto copy = [&](unsigned pointer, unsigned count, unsigned payload, bool wide) {
-			const auto displacement = [&](unsigned value) {
-				const uint32_t at = 0x100 + value;
-				const auto *bytes = reinterpret_cast<const uint8_t *>(&at);
-				code.insert(code.end(), bytes, bytes + 4);
-			};
-			code.insert(code.end(), {0x49, 0x8b, 0xb3}); displacement((pointer + 1) * 8);
-			code.insert(code.end(), {0x49, 0x8d, 0xbb}); displacement(payload);
-			code.insert(code.end(), {0x49, 0x89, 0xbb}); displacement((pointer + 1) * 8);
-			code.insert(code.end(), {0x41, 0x8b, 0x8b}); displacement((count + 1) * 8);
-			code.push_back(0xf3);
-			if (wide) code.push_back(0x48);
-			code.push_back(0xa5);
-		};
-		if (descriptors) { copy(5, 4, 80, true); copy(7, 6, 112, false); }
-		else { copy(3, 2, 64, true); copy(4, 2, 96, true); }
-		code.insert(code.end(), {0x5f, 0x5e});
-	}
-	const size_t stub_pointer = code.size() + 3;
-	const uint8_t publish[]{0x48, 0x8d, 0x0d, 0, 0, 0, 0, 0x49, 0x89, 0x8b, 0, 1, 0, 0,
-		0x49, 0xff, 0x82, 0x80, 0, 0, 0, 0xc3};
-	code.insert(code.end(), std::begin(publish), std::end(publish));
-	if (code.size() > queued_prelude_size - 5)
-		throw std::runtime_error("queued command prelude exceeds its slot");
-	code.resize(queued_prelude_size, 0x90);
-	const auto relative = [&](size_t at, int32_t target) {
-		const int32_t displacement = target - int32_t(at + 4);
-		std::memcpy(code.data() + at, &displacement, 4);
+		ServedQueue::records * 8 == 0x100 && ServedQueue::gl_elements * 8 == 0x98 && ServedQueue::words == 16 && ServedQueue::capacity == 16,
+		"the queued preludes' offsets are written into their code");
+	auto code = prelude_code(call.code, call.end);
+	if (code.size() != queued_prelude_size)
+		throw std::logic_error("a queued prelude does not fill its slot");
+	// The address of the served stub, which the record names, and the jump to it a full or disabled ring takes.
+	const auto relative = [&](size_t end) {
+		const int32_t displacement = to_served - int32_t(end);
+		std::memcpy(code.data() + end - 4, &displacement, 4);
 	};
-	for (const size_t at : fallback)
-		relative(at, queued_prelude_size - 5);
-	relative(stub_pointer, to_served);
-	code[queued_prelude_size - 5] = 0xe9;
-	relative(queued_prelude_size - 4, to_served);
+	relative(size_t(call.stub - call.code));
+	relative(queued_prelude_size);
 	return code;
 }
 
@@ -427,21 +395,13 @@ static constexpr size_t clock_prelude_size = 96, clock_calibration = 0x800;
 
 static std::vector<uint8_t> clock_prelude(int32_t to_pointer, int32_t to_served)
 {
-	std::vector<uint8_t> code{
-		// mov r10, [pointer]; test r10, r10; jz served
-		0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0x4d, 0x85, 0xd2, 0x0f, 0x84, 0, 0, 0, 0,
-		// mov r11, [r10 + multiplier]; test r11, r11; jz served
-		0x4d, 0x8b, 0x9a, 0x10, 0x08, 0, 0, 0x4d, 0x85, 0xdb, 0x0f, 0x84, 0, 0, 0, 0,
-		// rdtsc; shl rdx, 32; or rax, rdx; sub rax, [r10 + base counter]; mul r11; shrd rax, rdx, 32; add rax, [r10 + base count]
-		0x0f, 0x31, 0x48, 0xc1, 0xe2, 0x20, 0x48, 0x09, 0xd0, 0x49, 0x2b, 0x82, 0x00, 0x08, 0, 0, 0x49, 0xf7, 0xe3, 0x48, 0x0f, 0xac, 0xd0, 0x20,
-		0x49, 0x03, 0x82, 0x08, 0x08, 0, 0,
-		// mov [rcx], rax; mov eax, 1; ret
-		0x48, 0x89, 0x01, 0xb8, 1, 0, 0, 0, 0xc3};
+	auto code = prelude_code(raven_prelude_clock, raven_prelude_clock_end);
 	const int32_t displacement = to_pointer - 7;
 	std::memcpy(code.data() + 3, &displacement, 4);
-	for (const size_t jump : {size_t(12), size_t(28)}) {
-		const int32_t relative = to_served - int32_t(jump + 4);
-		std::memcpy(code.data() + jump, &relative, 4);
+	for (const uint8_t *end : {raven_prelude_clock_served, raven_prelude_clock_served_again}) {
+		const auto at = size_t(end - raven_prelude_clock);
+		const int32_t relative = to_served - int32_t(at);
+		std::memcpy(code.data() + at - 4, &relative, 4);
 	}
 	return code;
 }
@@ -467,26 +427,16 @@ static bool guest_commit_api(std::string_view module, std::string_view name)
 
 static constexpr size_t commit_prelude_size = 192;
 
+// Where the jump to the breakpoint begins in each prelude (see preludes.S).
 static size_t commit_jump(GuestMemoryApi kind)
 {
-	return kind == GuestMemoryApi::commit ? 37 : 31;
+	return kind == GuestMemoryApi::commit ? size_t(raven_prelude_commit_trap - raven_prelude_commit) - 5 :
+		size_t(raven_prelude_decommit_trap - raven_prelude_decommit) - 5;
 }
 
-// mov r10,[pointer]; test r10,r10; jz slow; test rcx,rcx; jz slow; test rdx,rdx; jz slow; cmp r8d,MEM_DECOMMIT; je main; slow: jmp trap;
-// restore: mov r8d,MEM_DECOMMIT; jmp slow; main: cmp rdx,256 KiB; ja slow; rax = first page, r11 = end page; look through the open
-// ranges for one holding [rax, r11), take a log slot with lock xadd, zero the pages with rep stosb (keeping rdi), store the range with
-// its low bit set and return TRUE; a full log or no range goes back to restore.
 static std::vector<uint8_t> decommit_prelude(int32_t to_pointer, int32_t to_trap)
 {
-	std::vector<uint8_t> code{0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0x4d, 0x85, 0xd2, 0x74, 0x13, 0x48, 0x85, 0xc9, 0x74, 0x0e, 0x48, 0x85, 0xd2,
-		0x74, 0x09, 0x41, 0x81, 0xf8, 0x00, 0x40, 0x00, 0x00, 0x74, 0x0d, 0xe9, 0, 0, 0, 0, 0x41, 0xb8, 0x00, 0x40, 0x00, 0x00,
-		0xeb, 0xf3, 0x48, 0x81, 0xfa, 0x00, 0x00, 0x04, 0x00, 0x77, 0xea, 0x48, 0x89, 0xc8, 0x48, 0x25, 0x00, 0xf0, 0xff, 0xff, 0x4c,
-		0x8d, 0x9c, 0x11, 0xff, 0x0f, 0x00, 0x00, 0x49, 0x81, 0xe3, 0x00, 0xf0, 0xff, 0xff, 0x45, 0x8b, 0x82, 0x00, 0x0a, 0x00, 0x00,
-		0x4d, 0x8d, 0x8a, 0x08, 0x0a, 0x00, 0x00, 0x45, 0x85, 0xc0, 0x74, 0xc4, 0x49, 0x3b, 0x01, 0x72, 0x4b, 0x4d, 0x3b, 0x59, 0x08,
-		0x77, 0x45, 0x41, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xf0, 0x45, 0x0f, 0xc1, 0x82, 0x10, 0x0d, 0x00, 0x00, 0x41, 0x83, 0xf8, 0x20,
-		0x73, 0xa4, 0x49, 0xc1, 0xe0, 0x04, 0x57, 0x48, 0x89, 0xc7, 0x49, 0x89, 0xc1, 0x4c, 0x89, 0xd9, 0x48, 0x29, 0xc1, 0x31, 0xc0,
-		0xf3, 0xaa, 0x5f, 0x49, 0x83, 0xc9, 0x01, 0x4f, 0x89, 0x8c, 0x02, 0x18, 0x0d, 0x00, 0x00, 0x4f, 0x89, 0x9c, 0x02, 0x20, 0x0d,
-		0x00, 0x00, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, 0x49, 0x83, 0xc1, 0x10, 0x41, 0xff, 0xc8, 0xeb, 0xa2};
+	auto code = prelude_code(raven_prelude_decommit, raven_prelude_decommit_end);
 	const int32_t displacement = to_pointer - 7;
 	std::memcpy(code.data() + 3, &displacement, 4);
 	const int32_t relative = to_trap - int32_t(commit_jump(GuestMemoryApi::decommit) + 5);
@@ -1494,18 +1444,7 @@ static size_t string_prelude_slot(const GuestPrelude &prelude)
 
 static std::vector<uint8_t> commit_prelude(int32_t to_pointer, int32_t to_trap)
 {
-	// mov r10,[pointer]; test r10,r10; jz slow; test rcx,rcx; jz slow; test rdx,rdx; jz slow; cmp r8d,MEM_COMMIT; jne slow;
-	// cmp r9d,PAGE_READWRITE; je main; slow: jmp trap; restore: mov r8d,MEM_COMMIT; mov r9d,PAGE_READWRITE; jmp slow;
-	// main: rax = first page, r11 = end page; jbe slow; look through the open ranges at commit_windows for one holding [rax, r11),
-	// take a log slot with lock xadd at commit_log, store the range there and return rax; a full log or no range goes back to restore.
-	std::vector<uint8_t> code{0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0x4d, 0x85, 0xd2, 0x74, 0x19, 0x48, 0x85, 0xc9, 0x74, 0x14, 0x48, 0x85, 0xd2,
-		0x74, 0x0f, 0x41, 0x81, 0xf8, 0x00, 0x10, 0x00, 0x00, 0x75, 0x06, 0x41, 0x83, 0xf9, 0x04, 0x74, 0x13, 0xe9, 0, 0, 0, 0, 0x41,
-		0xb8, 0x00, 0x10, 0x00, 0x00, 0x41, 0xb9, 0x04, 0x00, 0x00, 0x00, 0xeb, 0xed, 0x48, 0x89, 0xc8, 0x48, 0x25, 0x00, 0xf0, 0xff,
-		0xff, 0x4c, 0x8d, 0x9c, 0x11, 0xff, 0x0f, 0x00, 0x00, 0x49, 0x81, 0xe3, 0x00, 0xf0, 0xff, 0xff, 0x49, 0x39, 0xc3, 0x76, 0xd0,
-		0x45, 0x8b, 0x82, 0x00, 0x0a, 0x00, 0x00, 0x4d, 0x8d, 0x8a, 0x08, 0x0a, 0x00, 0x00, 0x45, 0x85, 0xc0, 0x74, 0xc2, 0x49, 0x3b,
-		0x01, 0x72, 0x30, 0x4d, 0x3b, 0x59, 0x08, 0x77, 0x2a, 0x41, 0xb8, 0x01, 0x00, 0x00, 0x00, 0xf0, 0x45, 0x0f, 0xc1, 0x82, 0x10,
-		0x0d, 0x00, 0x00, 0x41, 0x83, 0xf8, 0x20, 0x73, 0xa2, 0x49, 0xc1, 0xe0, 0x04, 0x4b, 0x89, 0x84, 0x02, 0x18, 0x0d, 0x00, 0x00,
-		0x4f, 0x89, 0x9c, 0x02, 0x20, 0x0d, 0x00, 0x00, 0xc3, 0x49, 0x83, 0xc1, 0x10, 0x41, 0xff, 0xc8, 0xeb, 0xbd};
+	auto code = prelude_code(raven_prelude_commit, raven_prelude_commit_end);
 	static_assert(NativeMemory::commit_windows == 0xa00 && NativeMemory::commit_log == 0xd10 && NativeMemory::commit_window_count == 48 &&
 		NativeMemory::commit_log_count == 32, "the commit prelude's offsets are written into its code");
 	const int32_t displacement = to_pointer - 7;
@@ -1779,9 +1718,8 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 			bytes[code + 15] = 0xc3;
 		}
 		if (service) {
-			const std::array<uint8_t, 11> entry{0x4c, 0x8b, 0xd1, 0xb8, 0, 0, 0, 0, 0x0f, 0x05, 0xc3};
-			std::copy(entry.begin(), entry.end(), bytes.begin() + ptrdiff_t(code));
-			put(code + 4, service);
+			std::copy(raven_nt_syscall, raven_nt_syscall_end, bytes.begin() + ptrdiff_t(code));
+			put(code + size_t(raven_nt_syscall_service - raven_nt_syscall) - 4, service);
 		}
 		if (!x86 && served_api(name, exports[index])) {
 			code = served_start + 64 + served_next++ * served_stub_size;
@@ -1848,11 +1786,11 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 					bytes[code + 0x30] = 0xcc;
 					bytes[code + 0x31] = 0xc3;
 				}
-		if (queued && queued_arguments(name, exports[index])) {
+		if (const auto *call = queued ? queued_call(name, exports[index]) : nullptr) {
 			const size_t served = code;
 			code = queued_next;
 			queued_next += queued_prelude_size;
-			const auto prelude = queued_prelude(int32_t(served) - int32_t(code), queued_arguments(name, exports[index]), exports[index]);
+			const auto prelude = queued_prelude(int32_t(served) - int32_t(code), *call);
 			std::copy(prelude.begin(), prelude.end(), bytes.begin() + ptrdiff_t(code));
 		}
 		const auto data = std::find(data_exports.begin(), data_exports.end(), exports[index]);

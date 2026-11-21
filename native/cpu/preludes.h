@@ -4,7 +4,19 @@
 #include <vector>
 
 // The routines of preludes.S, which the runtime copies into a guest to answer calls there.
-extern "C" const uint8_t raven_prelude_tick[], raven_prelude_tick_end[], raven_prelude_screen_get_dc[], raven_prelude_screen_get_dc_end[],
+extern "C" const uint8_t raven_nt_syscall[], raven_nt_syscall_service[], raven_nt_syscall_end[], raven_prelude_queued_gl1[], raven_prelude_queued_gl1_stub[], raven_prelude_queued_gl1_end[], raven_prelude_queued_gl2[],
+	raven_prelude_queued_gl2_stub[], raven_prelude_queued_gl2_end[], raven_prelude_queued_gl3[], raven_prelude_queued_gl3_stub[],
+	raven_prelude_queued_gl3_end[], raven_prelude_queued_gl4[], raven_prelude_queued_gl4_stub[], raven_prelude_queued_gl4_end[],
+	raven_prelude_queued_gl_bind_buffer[], raven_prelude_queued_gl_bind_buffer_stub[], raven_prelude_queued_gl_bind_buffer_end[],
+	raven_prelude_queued_gl_draw_elements[], raven_prelude_queued_gl_draw_elements_stub[], raven_prelude_queued_gl_draw_elements_end[],
+	raven_prelude_queued_vk3[], raven_prelude_queued_vk3_stub[], raven_prelude_queued_vk3_end[], raven_prelude_queued_vk4[],
+	raven_prelude_queued_vk4_stub[], raven_prelude_queued_vk4_end[], raven_prelude_queued_vk5[], raven_prelude_queued_vk5_stub[],
+	raven_prelude_queued_vk5_end[], raven_prelude_queued_vk6[], raven_prelude_queued_vk6_stub[], raven_prelude_queued_vk6_end[],
+	raven_prelude_queued_vk_descriptors[], raven_prelude_queued_vk_descriptors_stub[], raven_prelude_queued_vk_descriptors_end[],
+	raven_prelude_queued_vk_vertices[], raven_prelude_queued_vk_vertices_stub[], raven_prelude_queued_vk_vertices_end[],
+	raven_prelude_clock[], raven_prelude_clock_end[], raven_prelude_clock_served[], raven_prelude_clock_served_again[],
+	raven_prelude_commit[], raven_prelude_commit_end[], raven_prelude_commit_trap[], raven_prelude_decommit[], raven_prelude_decommit_end[],
+	raven_prelude_decommit_trap[], raven_prelude_tick[], raven_prelude_tick_end[], raven_prelude_screen_get_dc[], raven_prelude_screen_get_dc_end[],
 	raven_prelude_screen_release_dc[], raven_prelude_screen_release_dc_end[], raven_prelude_screen_device_caps[],
 	raven_prelude_screen_device_caps_end[], raven_prelude_window_long_ptr[], raven_prelude_window_long_ptr_end[], raven_prelude_window_long[],
 	raven_prelude_window_long_end[], raven_prelude_window_property[], raven_prelude_window_property_end[], raven_prelude_window_exists[],
