@@ -1015,6 +1015,34 @@ static const std::vector<uint8_t> &call_procedure_prelude()
 	return code;
 }
 
+// SendMessageW to a window of the calling thread calls its procedure with the same four arguments, as the runtime does: the guest jumps
+// to it, so the procedure returns to the caller. The record (window_table) must name the window, the calling thread as its own and a
+// procedure, all read while the count of changes (NativeWindows::table_version) is even and the same before and after; otherwise, and
+// for a window of another thread or process, the runtime sends it. It checks the count itself, as it cannot come back to an answer
+// wrapper, so it runs while other threads run as well (self_checked_api):
+//   mov r10,[pointer]; test r10,r10; jz slow; mov r11,[r10+0x700]; test r11,r11; jz slow; test rcx,rcx; jz slow
+//   mov rax,[r10+0x7b0]; test al,1; jnz slow; push rsi; mov esi,ecx; and esi,0x1ff; shl esi,8; add r11,rsi; cmp rcx,[r11]; jne fail
+//   mov esi,gs:[0x48]; test esi,esi; jz fail; cmp esi,[r11+0xf0]; jne fail; mov r11,[r11+0x10]; test r11,r11; jz fail
+//   cmp rax,[r10+0x7b0]; jne fail; pop rsi; jmp r11; fail: pop rsi; slow: jmp stub
+static const std::vector<uint8_t> &own_thread_send_prelude()
+{
+	static const std::vector<uint8_t> code{
+		0x4c, 0x8b, 0x15, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xd2, 0x74, 0x5c, 0x4d, 0x8b, 0x9a, 0x00, 0x07, 0x00, 0x00, 0x4d, 0x85, 0xdb, 0x74, 0x50,
+		0x48, 0x85, 0xc9, 0x74, 0x4b, 0x49, 0x8b, 0x82, 0xb0, 0x07, 0x00, 0x00, 0xa8, 0x01, 0x75, 0x40, 0x56, 0x89, 0xce, 0x81, 0xe6, 0xff, 0x01, 0x00,
+		0x00, 0xc1, 0xe6, 0x08, 0x49, 0x01, 0xf3, 0x49, 0x3b, 0x0b, 0x75, 0x2b, 0x65, 0x8b, 0x34, 0x25, 0x48, 0x00, 0x00, 0x00, 0x85, 0xf6, 0x74, 0x1f,
+		0x41, 0x3b, 0xb3, 0xf0, 0x00, 0x00, 0x00, 0x75, 0x16, 0x4d, 0x8b, 0x5b, 0x10, 0x4d, 0x85, 0xdb, 0x74, 0x0d, 0x49, 0x3b, 0x82, 0xb0, 0x07, 0x00,
+		0x00, 0x75, 0x04, 0x5e, 0x41, 0xff, 0xe3, 0x5e, 0xe9, 0x00, 0x00, 0x00, 0x00};
+	static_assert(NativeWindows::table_version == 0x7b0 && NativeWindows::window_owner == 0xf0 && NativeWindows::window_records == 512 &&
+		NativeWindows::window_record == 256, "the send prelude's offsets are written into its code");
+	return code;
+}
+
+// The preludes that check the count of changes themselves and so run while other threads run, without an answer wrapper.
+static bool self_checked_api(std::string_view module, std::string_view name)
+{
+	return module == "user32.dll" && name == "SendMessageW";
+}
+
 // GetSystemMetrics and GetSysColor, which do not change while the process runs, read from the table the runtime writes once (see
 // NativeWindows::set_system_table) for indexes below 128 and 64.
 static constexpr size_t system_pointer = 0x730;
@@ -1782,6 +1810,9 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		add({"user32.dll"}, {"GetSystemMetrics"}, system_metrics_prelude);
 		add({"user32.dll"}, {"GetSysColor"}, system_colors_prelude);
 		add({"user32.dll"}, {"CallWindowProcW", "CallWindowProcA"}, call_procedure_prelude);
+		// RAVEN_TRACE_MSG follows every message the runtime delivers, those to the thread's own windows too.
+		if (!std::getenv("RAVEN_TRACE_MSG"))
+			add({"user32.dll"}, {"SendMessageW"}, own_thread_send_prelude);
 		add({"user32.dll"}, {"OffsetRect"}, offset_rect_prelude);
 		add({"user32.dll"}, {"SetRect"}, set_rect_prelude);
 		add({"user32.dll"}, {"IntersectRect"}, intersect_rect_prelude);
@@ -3275,7 +3306,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const auto *prelude = symbol.address && !symbol.names.empty() && symbol.forwarder.empty() ? block_prelude(module_name, symbol.names.at(0)) : nullptr;
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() &&
 				(guest_clock_api(module_name, symbol.names.at(0)) || prelude == &tick_prelude() || (!process.parallel() && prelude) ||
-					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address))) &&
+					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address)) ||
+					(process.parallel() && prelude && self_checked_api(module_name, symbol.names.at(0)))) &&
 				served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address) {
 				auto image = module->loaded.data();
 				int32_t displacement = 0;
