@@ -61,8 +61,7 @@ public:
 			return;
 		if (--depth)
 			return;
-		owner.store(std::thread::id(), std::memory_order_relaxed);
-		pthread_rwlock_unlock(&lock);
+		let_go();
 	}
 	// Takes it shared; a thread that holds it whole already has what it asks for. It does not count as an entry (see entries): what a
 	// shared holder changes, it publishes itself.
@@ -98,8 +97,7 @@ public:
 			return 0;
 		const unsigned held = depth;
 		depth = 0;
-		owner.store(std::thread::id(), std::memory_order_relaxed);
-		pthread_rwlock_unlock(&lock);
+		let_go();
 		return held;
 	}
 	void resume(unsigned held)
@@ -118,16 +116,27 @@ private:
 	// Takes it whole; what it waited while others held it goes to the call being served (see CallCycles).
 	void take()
 	{
-		if (!pthread_rwlock_trywrlock(&lock))
-			return;
-		const uint64_t started = __rdtsc();
-		pthread_rwlock_wrlock(&lock);
-		CallCycles::instance().waited_lock(__rdtsc() - started);
+		if (pthread_rwlock_trywrlock(&lock)) {
+			const uint64_t started = __rdtsc();
+			pthread_rwlock_wrlock(&lock);
+			CallCycles::instance().waited_lock(__rdtsc() - started);
+		}
+		taken_at = __rdtsc();
+	}
+	// Gives it up whole; how long it was held goes to the call being served.
+	void let_go()
+	{
+		owner.store(std::thread::id(), std::memory_order_relaxed);
+		const uint64_t since = taken_at;
+		pthread_rwlock_unlock(&lock);
+		CallCycles::instance().held_lock(__rdtsc() - since);
 	}
 	pthread_rwlock_t lock;
 	std::atomic<std::thread::id> owner{};
 	std::atomic<uint64_t> taken{0};
 	unsigned depth = 0;
+	// When its holder took it whole: only the holder reads or writes it.
+	uint64_t taken_at = 0;
 	// How many shared scopes the calling thread opened while it held it whole; how deeply it holds it shared is desktop_shared_depth.
 	static inline thread_local unsigned shared_within = 0;
 };
