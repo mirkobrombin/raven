@@ -15,6 +15,7 @@
 #include <functional>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 namespace raven {
@@ -153,6 +154,8 @@ public:
 	// Writes the record of one window a call under the shared desktop lock changed (see DesktopLock), as publish_windows writes it,
 	// while calls on other windows go on.
 	void publish_window_alone(uint64_t handle);
+	// The same for a device context such a call took or released.
+	void publish_dc_alone(uint64_t handle);
 	// Whether the guest logged drawing for the runtime to carry out, which it does without a call.
 	bool drawing_logged() const
 	{
@@ -273,6 +276,8 @@ private:
 	uint8_t *bitmap_table=nullptr;
 	uint8_t *system_table=nullptr;
 	uint8_t *dc_table=nullptr;
+	// One writer at a time for the records the calls under the shared desktop lock publish (see publish_window_alone).
+	std::mutex publishing_alone;
 	uint8_t *deferred_log=nullptr,*icon_table=nullptr;
 	std::vector<uint64_t> deferred_pending;
 	bool deferred(uint64_t handle) const { return std::find(deferred_pending.begin(),deferred_pending.end(),handle)!=deferred_pending.end(); }
