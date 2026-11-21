@@ -74,7 +74,9 @@ public:
 	static constexpr size_t screen_caps = 0x400, screen_dc = 0x600, screen_dc_state = 0x608;
 	void set_screen_block(uint64_t *block) { screen_block = reinterpret_cast<uint8_t *>(block); }
 	// A call the runtime serves with the published screen context as its first argument may change it: the guest's ReleaseDC then
-	// leaves it to the runtime. Called before every served call.
+	// leaves it to the runtime. Called before every served call, with its first argument.
+	void screen_dc_use(std::string_view name, uint64_t first);
+	// The same for a call served in the turn, whose first argument is read only when a context is published.
 	void screen_dc_use(std::string_view name);
 	// The window table the guest's window preludes read: a record of 256 bytes for each window, at its handle's low nine bits, and
 	// the offsets in a record. The runtime brings the records of the windows it touched up to date before the guest runs again; a

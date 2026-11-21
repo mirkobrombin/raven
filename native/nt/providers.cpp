@@ -216,10 +216,23 @@ static bool desktop_beside_api(std::string_view name)
 	return std::find(names.begin(), names.end(), name) != names.end();
 }
 
+// Drawing into a context and reading its pixels, under the desktop lock like the window data above: the handlers of the desktop's registry,
+// which touch only the contexts and the objects selected into them, and mark the window behind a window's context as drawn. Guest memory a
+// handler reads or writes it reaches directly, as any call beside the turn (see ApiCall::alone).
+static bool gdi_beside_api(std::string_view name)
+{
+	static constexpr std::array<std::string_view, 24> names{"PatBlt", "BitBlt", "StretchBlt", "FillRect", "FrameRect", "GetPixel", "Rectangle",
+		"Ellipse", "RoundRect", "Polygon", "Polyline", "PolylineTo", "PolyPolyline", "LineTo", "FillRgn", "FrameRgn", "GradientFill", "GdiAlphaBlend",
+		"AlphaBlend", "StretchDIBits", "SetDIBits", "GetDIBits", "SaveDC", "RestoreDC"};
+	return std::find(names.begin(), names.end(), name) != names.end();
+}
+
 static bool beside_api(std::string_view module, std::string_view name)
 {
 	if (module == "user32.dll")
-		return desktop_beside_api(name);
+		return desktop_beside_api(name) || name == "FillRect" || name == "FrameRect";
+	if (module == "gdi32.dll" || module == "msimg32.dll")
+		return gdi_beside_api(name);
 	// Recording into a command buffer, which only reads the Vulkan bridge's tables.
 	if (module == "vulkan-1.dll")
 		return name.starts_with("vkCmd") || name == "vkBeginCommandBuffer" || name == "vkEndCommandBuffer" || name == "vkResetCommandBuffer";
@@ -3549,7 +3562,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (named->second.starts_with("vk"))
 					return graphics_beside ? graphics_beside(named->second, arguments) : std::nullopt;
 				// The window manager's handlers are the desktop's registry; the others are the runtime's.
-				const bool desktop_call = desktop_beside_api(named->second);
+				const bool desktop_call = desktop_beside_api(named->second) || gdi_beside_api(named->second);
 				const auto entry = (desktop_call ? desktop_api : api_registry).find(named->second);
 				if (!entry)
 					return std::nullopt;
@@ -3572,8 +3585,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::optional<WindowCallScope> window_scope;
 				if (desktop_call) {
 					desktop_scope.emplace();
-					// The contexts' state the guest changed by itself comes in first, as in the turn.
+					// The contexts' state the guest changed by itself comes in first, as in the turn; deferred releases wait for a stop
+					// of the guest, as for a call answered through its stub.
 					windows.apply_dc_log();
+					windows.screen_dc_use(named->second, words.empty() ? 0 : words[0]);
 					window_scope.emplace(windows);
 				}
 				ApiCall call(process, environment, std::move(words));

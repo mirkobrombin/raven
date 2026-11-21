@@ -3012,13 +3012,19 @@ void NativeWindows::api_left()
 
 void NativeWindows::screen_dc_use(std::string_view name)
 {
+	if (screen_block && __atomic_load_n(reinterpret_cast<uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE))
+		screen_dc_use(name,process.api_arguments(1)[0]);
+}
+
+void NativeWindows::screen_dc_use(std::string_view name, uint64_t first)
+{
 	if (!screen_block)
 		return;
 	const uint64_t published=__atomic_load_n(reinterpret_cast<uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE);
 	if (!published || name=="GetDeviceCaps" || name=="ReleaseDC")
 		return;
 	// Only the first argument: the calls that change a context take it there, and the other registers may hold anything.
-	if (process.api_arguments(1)[0]==published)
+	if (first==published)
 		__atomic_store_n(reinterpret_cast<uint32_t *>(screen_block+screen_dc_state),uint32_t(2),__ATOMIC_RELEASE);
 }
 
