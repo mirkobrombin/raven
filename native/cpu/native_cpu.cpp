@@ -1176,7 +1176,8 @@ std::vector<uint8_t> NativeProcess::read_memory(uint64_t address, size_t size) c
 		}
 		const iovec local{result.data() + offset, count};
 		const iovec remote{reinterpret_cast<void *>(address + offset), count};
-		const auto copied = process_vm_readv(state->child->pid(), &local, 1, &remote, 1, 0);
+		// Through the task that lives as long as the process: a host thread beside the turn reads while the turn switches the child.
+		const auto copied = process_vm_readv(state->memory_reader(), &local, 1, &remote, 1, 0);
 		if (copied < 0 && errno == EINTR) continue;
 		if (copied <= 0)
 			throw std::runtime_error("cannot read native guest memory");
@@ -1244,7 +1245,7 @@ void NativeProcess::write_memory(uint64_t address, std::span<const uint8_t> byte
 		}
 		const iovec local{const_cast<uint8_t *>(bytes.data() + offset), count};
 		const iovec remote{reinterpret_cast<void *>(address + offset), count};
-		const auto copied = process_vm_writev(state->child->pid(), &local, 1, &remote, 1, 0);
+		const auto copied = process_vm_writev(state->memory_reader(), &local, 1, &remote, 1, 0);
 		if (copied < 0 && errno == EINTR) continue;
 		if (copied <= 0)
 			throw std::runtime_error("cannot write native guest memory");
@@ -3537,6 +3538,17 @@ bool NativeProcess::inside_served_stub() const
 uint64_t NativeProcess::serve_call(uint64_t stub, std::vector<uint64_t> words, std::array<uint64_t, 4> floats, uint64_t stack, bool queued)
 {
 	++state->served_calls;
+	return translated_call(std::move(words), floats, stack, queued, [&] { state->served_handler(stub); });
+}
+
+uint64_t NativeProcess::serve_beside(std::vector<uint64_t> words, std::array<uint64_t, 4> floats, uint64_t stack, const std::function<void()> &handler)
+{
+	return translated_call(std::move(words), floats, stack, false, handler);
+}
+
+uint64_t NativeProcess::translated_call(std::vector<uint64_t> words, std::array<uint64_t, 4> floats, uint64_t stack, bool queued,
+	const std::function<void()> &handler)
+{
 	auto translated_words = std::move(state->side().translated_words);
 	const auto translated_depth = state->side().translated_depth;
 	const auto translated_floats = state->side().translated_floats;
@@ -3560,7 +3572,7 @@ uint64_t NativeProcess::serve_call(uint64_t stub, std::vector<uint64_t> words, s
 	uint64_t result = 0;
 	try {
 		begin_translated_call(std::move(words), floats);
-		state->served_handler(stub);
+		handler();
 		result = end_translated_call();
 	} catch (...) {
 		state->side().translated_words.reset();

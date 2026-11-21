@@ -235,11 +235,14 @@ public:
 	std::vector<uint64_t> api_arguments(size_t count) const;
 	// Replaces one stdcall argument word of the pending x86 API call, so an adapter can forward the call to another handler.
 	void set_api_argument(size_t index, uint32_t value);
-	// Runs a handler written for x64 argument conventions on behalf of a 32-bit call: api_arguments and api_float_arguments answer from the
-	// given words, and return_api keeps its value for end_translated_call instead of resuming the guest.
 	// Lets a guest that runs for `slice` without stopping be interrupted so that `yield` can give the processor to another thread; `wanted` says
 	// whether there is another thread to give it to.
 	void set_time_slicing(std::chrono::milliseconds slice, std::function<bool()> wanted, std::function<void()> yield);
+	// Runs `handler` as a call of the calling host thread's own guest thread, beside the turn: the arguments and the answer go through
+	// that thread's state as for a served call, and guest memory is reached as any host thread may reach it.
+	uint64_t serve_beside(std::vector<uint64_t> words, std::array<uint64_t, 4> floats, uint64_t stack, const std::function<void()> &handler);
+	// Runs a handler written for x64 argument conventions on behalf of a 32-bit call: api_arguments and api_float_arguments answer from the
+	// given words, and return_api keeps its value for end_translated_call instead of resuming the guest.
 	void begin_translated_call(std::vector<uint64_t> words, std::array<uint64_t, 4> floats);
 	uint64_t end_translated_call();
 	// Low 64 bits of XMM0 to XMM3, where an x64 caller passes the first four floating-point arguments.
@@ -281,6 +284,8 @@ private:
 	bool queued_pending() const;
 	bool drain_queued_calls(bool all = false);
 	uint64_t serve_call(uint64_t stub, std::vector<uint64_t> words, std::array<uint64_t, 4> floats, uint64_t stack, bool queued = false);
+	uint64_t translated_call(std::vector<uint64_t> words, std::array<uint64_t, 4> floats, uint64_t stack, bool queued,
+		const std::function<void()> &handler);
 	bool inside_served_stub() const;
 	bool served_wait_trap(uint64_t address) const;
 	void protect_range(uint64_t address, size_t size, int protection, bool image);

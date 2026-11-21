@@ -207,7 +207,9 @@ VkResult VulkanBridge::acquire_own_image(Marshal &marshal,uint64_t device_token,
 		if (held && !timeout) return VK_NOT_READY;
 		std::optional<std::chrono::steady_clock::time_point> wake;
 		if (held && timeout<(uint64_t(1)<<62)) wake=std::chrono::steady_clock::now()+std::chrono::nanoseconds(timeout);
-		if (!park || !park(ready,wake)) return VK_TIMEOUT;
+		if (!park) return VK_TIMEOUT;
+		const TablesRelease release(*this);
+		if (!park(ready,wake)) return VK_TIMEOUT;
 	}
 	const uint32_t index=*free_image();
 	VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};

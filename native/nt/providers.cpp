@@ -220,6 +220,9 @@ static bool beside_api(std::string_view module, std::string_view name)
 {
 	if (module == "user32.dll")
 		return desktop_beside_api(name);
+	// Recording into a command buffer, which only reads the Vulkan bridge's tables.
+	if (module == "vulkan-1.dll")
+		return name.starts_with("vkCmd") || name == "vkBeginCommandBuffer" || name == "vkEndCommandBuffer" || name == "vkResetCommandBuffer";
 	static constexpr std::array<std::string_view, 12> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
 		"GetFileSizeEx", "VirtualQuery", "VirtualAlloc", "VirtualFree", "VirtualProtect", "CreateEventW", "CloseHandle"};
 	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
@@ -3504,10 +3507,26 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (name == "WaitForMultipleObjects" || name == "WaitForMultipleObjectsEx")
 			multiple_stubs.emplace_back(stub, name == "WaitForMultipleObjectsEx");
 	}
+	// Vulkan's recording calls beside the turn: the bridge's handler runs on the calling thread's own state, sharing the bridge's tables
+	// with the other threads that record (see VulkanBridge::dispatch_beside). A call that fails to decode goes the usual way, which
+	// reports it; the driver has not been called then.
+	std::function<std::optional<uint64_t>(const std::string &, const uint64_t *)> graphics_beside;
+#ifdef RAVEN_VULKAN
+	graphics_beside = [&process, &vulkan](const std::string &name, const uint64_t *arguments) -> std::optional<uint64_t> {
+		bool known = false;
+		try {
+			const auto result = process.serve_beside({arguments[0], arguments[1], arguments[2], arguments[3]},
+				{arguments[5], arguments[6], arguments[7], arguments[8]}, arguments[4] + 40, [&] { known = vulkan.dispatch_beside(name); });
+			return known ? std::optional<uint64_t>(result) : std::nullopt;
+		} catch (...) {
+			return std::nullopt;
+		}
+	};
+#endif
 	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty() ||
 		!beside_names.empty()))
 		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, &memory, event_stubs, address_stubs,
-			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_api](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_api, graphics_beside](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
 			// A call of a subsystem with a lock of its own runs its usual handler here; the arguments past the four in registers are on the
 			// guest's stack above their home space.
 			if (const auto named = beside_names.find(stub); named != beside_names.end()) {
@@ -3527,6 +3546,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					}
 					return 48;
 				}
+				if (named->second.starts_with("vk"))
+					return graphics_beside ? graphics_beside(named->second, arguments) : std::nullopt;
 				// The window manager's handlers are the desktop's registry; the others are the runtime's.
 				const bool desktop_call = desktop_beside_api(named->second);
 				const auto entry = (desktop_call ? desktop_api : api_registry).find(named->second);

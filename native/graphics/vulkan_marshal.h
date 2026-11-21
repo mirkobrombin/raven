@@ -78,9 +78,11 @@ public:
 	{
 		// Device-specific entry points stay with their device, including when the driver reuses a destroyed device's handle.
 		auto *const procedures = host_device ? &bridge.devices.at(device_token).procedures : nullptr;
-		if (procedures)
+		if (procedures) {
+			const std::lock_guard lock(bridge.procedures_lock);
 			if (const auto found = procedures->find(name); found != procedures->end())
 				return reinterpret_cast<F>(found->second);
+		}
 		const auto lookup = [&](const char *spelling) {
 			return host_device ? vkGetDeviceProcAddr(host_device, spelling) : vkGetInstanceProcAddr(host_instance, spelling);
 		};
@@ -91,8 +93,10 @@ public:
 				function = lookup((std::string(name) + suffix).c_str());
 		if (!function)
 			throw std::runtime_error(std::string("the driver does not provide ") + name);
-		if (procedures)
+		if (procedures) {
+			const std::lock_guard lock(bridge.procedures_lock);
 			procedures->emplace(name, function);
+		}
 		return reinterpret_cast<F>(function);
 	}
 
