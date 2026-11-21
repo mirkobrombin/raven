@@ -1468,10 +1468,11 @@ static bool answered_api(std::string_view module, std::string_view name)
 		(module == "uxtheme.dll" && theme.contains(name));
 }
 
-// The wrapper: mov r11,[pointer]; test r11,r11; jz slow; mov r11,[r11+0x7b0]; test r11b,1; jnz slow; push r9; push r8; push rdx;
-// push rcx; push r11; call answer; mov r11,[pointer]; mov r11,[r11+0x7b0]; cmp r11,[rsp]; jne again; add rsp,40; ret;
-// again: add rsp,8; pop rcx; pop rdx; pop r8; pop r9; slow: jmp stub; then where the answer itself gives up, with the wrapper's
-// return address and the five words still on the stack: add rsp,48; jmp stub.
+// The wrapper: mov r11,[pointer]; test r11,r11; jz slow; mov r10,r11; mov eax,128; try: mov r11,[r10+0x7b0]; test r11b,1; jnz busy;
+// push rax; push r10; push r9; push r8; push rdx; push rcx; push r11; call answer; mov r11,[rsp+40]; mov r11,[r11+0x7b0];
+// cmp r11,[rsp]; jne again; add rsp,56; ret; again: add rsp,8; pop rcx; pop rdx; pop r8; pop r9; pop r10; pop rax; busy: pause;
+// dec eax; jnz try; slow: jmp stub; then where the answer itself gives up, with the wrapper's return address and the seven words still
+// on the stack: add rsp,16; pop rcx; pop rdx; pop r8; pop r9; add rsp,16; jmp stub.
 // The room each wrapper of an answered call takes (see raven_answer_wrapper in gates.S).
 static constexpr size_t answer_wrapper_slot = 128;
 
@@ -1488,7 +1489,6 @@ static std::vector<uint8_t> answer_wrapper(int32_t to_pointer, int32_t to_answer
 		std::memcpy(code.data() + end - 4, &relative, 4);
 	};
 	put(served_stub::answer_pointer(), to_pointer);
-	put(served_stub::answer_pointer_again(), to_pointer);
 	put(served_stub::answer_call(), to_answer);
 	put(served_stub::answer_stub(), to_stub);
 	put(served_stub::answer_end(), to_stub);
@@ -1538,8 +1538,8 @@ static uint32_t served_stub_rva(std::span<const uint8_t> image, std::string_view
 		return rva;
 	if (answer_wrapper_at(image, rva)) {
 		int32_t relative = 0;
-		std::memcpy(&relative, image.data() + rva + 74, 4);
-		return uint32_t(int64_t(rva) + 78 + relative);
+		std::memcpy(&relative, image.data() + rva + served_stub::answer_stub() - 4, 4);
+		return uint32_t(int64_t(rva) + served_stub::answer_stub() + relative);
 	}
 	if (const auto *prelude = block_prelude(module, name)) {
 		int32_t relative = 0;

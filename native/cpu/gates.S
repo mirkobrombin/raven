@@ -85,20 +85,27 @@ raven_local_block:
 raven_local_block_end:
 
 /* The wrapper of a call the guest may answer itself while other threads run (see answer_wrapper in providers.cpp). It reads the version
- * of the runtime's tables from the served block, gives up to the stub while they change (odd), runs the guest's own answer with the
- * argument registers it saved, and keeps that answer only if the version did not move meanwhile; otherwise the stub serves the call
- * from the start. The runtime fills in the four rel32 fields that end at the labels: the provider's pointer to the served block, twice,
- * the guest's answer, and the stub, twice; the second, at the label where the answer gave up, drops the answer's frame first. */
+ * of the runtime's tables from the served block, runs the guest's own answer with the argument registers it saved, and keeps that answer
+ * only if the version was even and did not move meanwhile. Another thread's call beside the turn publishes the one record it changed in
+ * a moment, so the wrapper looks again a number of times before it gives up to the stub, which serves the call from the start and takes
+ * the desktop lock whole for it. The runtime fills in the three rel32 fields that end at the labels: the provider's pointer to the served
+ * block, the guest's answer, and the stub, twice; the second, at the label where the answer gave up, drops the answer's frame first. */
 	.global raven_answer_wrapper, raven_answer_wrapper_end, raven_answer_wrapper_pointer, raven_answer_wrapper_answer
-	.global raven_answer_wrapper_pointer_again, raven_answer_wrapper_stub, raven_answer_wrapper_gives_up
+	.global raven_answer_wrapper_stub, raven_answer_wrapper_gives_up
 raven_answer_wrapper:
 	mov r11, qword ptr [rip + 0]
 raven_answer_wrapper_pointer:
 	test r11, r11
 	jz short .Lanswer_stub
-	mov r11, qword ptr [r11 + 0x7b0]
+	mov r10, r11
+	mov eax, 128
+.Lanswer_try:
+	mov r11, qword ptr [r10 + 0x7b0]
 	test r11b, 1
-	jnz short .Lanswer_stub
+	jnz short .Lanswer_busy
+	/* Seven words keep the stack aligned for the call; the four over its home space are the version and the arguments. */
+	push rax
+	push r10
 	push r9
 	push r8
 	push rdx
@@ -107,12 +114,11 @@ raven_answer_wrapper_pointer:
 	.byte 0xe8
 	.long 0
 raven_answer_wrapper_answer:
-	mov r11, qword ptr [rip + 0]
-raven_answer_wrapper_pointer_again:
+	mov r11, qword ptr [rsp + 0x28]
 	mov r11, qword ptr [r11 + 0x7b0]
 	cmp r11, qword ptr [rsp]
 	jne short .Lanswer_changed
-	add rsp, 0x28
+	add rsp, 0x38
 	ret
 .Lanswer_changed:
 	add rsp, 8
@@ -120,12 +126,23 @@ raven_answer_wrapper_pointer_again:
 	pop rdx
 	pop r8
 	pop r9
+	pop r10
+	pop rax
+.Lanswer_busy:
+	pause
+	dec eax
+	jnz short .Lanswer_try
 .Lanswer_stub:
 	.byte 0xe9
 	.long 0
 raven_answer_wrapper_stub:
 raven_answer_wrapper_gives_up:
-	add rsp, 0x30
+	add rsp, 0x10
+	pop rcx
+	pop rdx
+	pop r8
+	pop r9
+	add rsp, 0x10
 	.byte 0xe9
 	.long 0
 raven_answer_wrapper_end:
