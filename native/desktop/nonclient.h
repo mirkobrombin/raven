@@ -9,7 +9,11 @@ struct DesktopMetrics {
 	int32_t button_x=18,button_y=25,small_button_x=17,small_button_y=17;
 	// Default screen size for backends without output geometry.
 	int32_t screen_x=1920,screen_y=1080;
+	// The size of the work area a maximized window fills, which the host gave the last maximized window: its panels lie outside. 0 is
+	// the screen's size.
+	int32_t work_x=0,work_y=0;
 	int32_t get(int32_t index) const;
+	DesktopRect work_area() const { return {0,0,work_x ? work_x : screen_x,work_y ? work_y : screen_y}; }
 };
 
 // What GetSystemMetrics answers for an index.

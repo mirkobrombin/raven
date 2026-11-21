@@ -68,7 +68,16 @@ bool DesktopObjects::set_screen_size(int32_t width,int32_t height)
 	if (window_metrics.screen_x==width && window_metrics.screen_y==height) return false;
 	window_metrics.screen_x=width;
 	window_metrics.screen_y=height;
+	window_metrics.work_x=window_metrics.work_y=0;
 	return true;
+}
+
+void DesktopObjects::set_work_area(int32_t width,int32_t height)
+{
+	// shortcut: a window maximized on another output gives that output's work area, which can be larger than the screen; one monitor
+	// for each output would keep them apart.
+	window_metrics.work_x=width;
+	window_metrics.work_y=height;
 }
 
 const DesktopMenu *DesktopObjects::menu(uint64_t handle) const

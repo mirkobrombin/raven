@@ -368,10 +368,17 @@ void NativeWindows::present(uint64_t handle, bool force)
 			return;
 		} catch (const std::exception &) {}
 	}
-	// Host titles use replacement characters; the guest retains every UTF-16 code unit.
-	if (presentation.maximize) presentation.maximize(handle,(window->style & 0x01000000U)!=0);
+	const bool maximized=(window->style & 0x01000000U)!=0;
+	if (presentation.maximize) presentation.maximize(handle,maximized);
 	if (presentation.transient_for) presentation.transient_for(handle,owning ? owner : 0);
 	if (part && presentation.changed_within) presentation.changed_within(handle,{part->left,part->top,part->right,part->bottom});
+	if (maximized && presentation.shown_within) {
+		const auto work=objects.nonclient_metrics().work_area();
+		const auto &outer=window->outer;
+		presentation.shown_within(handle,{std::max(work.left-outer.left,0),std::max(work.top-outer.top,0),std::min(work.right,outer.right)-outer.left,
+			std::min(work.bottom,outer.bottom)-outer.top});
+	}
+	// Host titles use replacement characters; the guest retains every UTF-16 code unit.
 	presentation.present(handle,encode_utf8(window->title,true),bitmap->width,bitmap->height,pixels);
 	place_host_surface(handle);
 	place_overlays(handle,*bitmap,pixels);
@@ -1352,8 +1359,14 @@ void NativeWindows::receive(const DesktopEvent &event)
 		// The host's configured size applies to resizable windows and to a requested maximization.
 		const auto *window=std::as_const(objects).window(event.window);
 		if (!window || window->parent || !(window->style & (0x40000U | 0x01000000U)) || event.x<=0 || event.y<=0) return;
-		const DesktopRect outer{window->outer.left,window->outer.top,window->outer.left+event.x,window->outer.top+event.y};
-		if (outer.right-outer.left==window->outer.right-window->outer.left && outer.bottom-outer.top==window->outer.bottom-window->outer.top) return;
+		DesktopRect outer{window->outer.left,window->outer.top,window->outer.left+event.x,window->outer.top+event.y};
+		// The size the host gives a window it shows maximized is the work area's.
+		if ((window->style & 0x01000000U) && event.wparam) {
+			objects.set_work_area(event.x,event.y);
+			outer=objects.nonclient_metrics().work_area();
+		}
+		if (outer.left==window->outer.left && outer.top==window->outer.top && outer.right==window->outer.right && outer.bottom==window->outer.bottom)
+			return;
 		// The compositor already resized the host window, so it stays and receives the next frame at the new size.
 		keep_host_window=true;
 		try { place_window(event.window,outer,0,0x14); } catch (...) { keep_host_window=false; throw; }
