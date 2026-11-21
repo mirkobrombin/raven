@@ -371,6 +371,23 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				return wait_io_completion;
 			if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake))
 				return wait_timeout;
+			// Where one host thread runs every guest thread, such a wait stands in the table's line instead, and the scheduler reads what
+			// the table told it (see NativeThreads::wait_in_line).
+			if (!threads.waits_outside() && !table.empty()) {
+				raven_waits_take_apcs(kernel_waits(), id);
+				if (alertable && !threads.current().apcs.empty())
+					continue;
+				if (const uint32_t result = threads.wait_in_line(table, all, alertable, wake); result != raven_wait_unlined) {
+					if (result < 64 || (result >= wait_abandoned && result < wait_abandoned + 64) || result == wait_timeout)
+						return result;
+					if (result == wait_io_completion) {
+						raven_waits_take_apcs(kernel_waits(), id);
+						if (run_apcs())
+							return wait_io_completion;
+					}
+					continue;
+				}
+			}
 			// A wait on objects of the process's table alone blocks its host thread there, outside the runtime, until whoever sets what
 			// it waits for wakes it with what it took (see native/waits). The others are looked at again when something may have ended them.
 			if (threads.waits_outside() && !table.empty()) {

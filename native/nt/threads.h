@@ -36,6 +36,10 @@ struct GuestThread {
 	// Wait condition: pure check, evaluated by the scheduler; the thread resumes when it holds or the wake time passes.
 	std::function<bool()> ready;
 	std::optional<std::chrono::steady_clock::time_point> wake;
+	// For a wait that stands in the line of the process's table (see NativeThreads::wait_in_line): the word whoever grants it sets.
+	const std::atomic<uint32_t> *granted = nullptr;
+	// Whether the wait can end: what the table told a wait in its line, the condition otherwise.
+	bool can_go_on() const { return granted ? granted->load(std::memory_order_acquire) != 0 : ready && ready(); }
 	// The API the thread waits in and since when, for the list RAVEN_DUMP_THREADS_ON asks for.
 	const char *waiting_in = nullptr;
 	std::chrono::steady_clock::time_point waiting_since;
@@ -239,6 +243,11 @@ public:
 	// limit shortens it for the main thread), and is called again after the thread was called away for a job.
 	uint32_t wait_outside(const std::function<uint32_t(std::optional<std::chrono::steady_clock::time_point>)> &wait,
 		std::optional<std::chrono::steady_clock::time_point> wake);
+	// A wait on objects of the process's table where one host thread runs every guest thread: the thread stands in the table's line,
+	// and whoever grants it what it waits for tells it there, so the scheduler reads that instead of looking at the objects. Gives the
+	// wait's result, WAIT_TIMEOUT when it was not granted by `wake`, or raven_wait_unlined when it cannot wait that way: with a host
+	// thread for each guest thread (see wait_outside), on the kernel's objects, or inside another such wait of the same thread.
+	uint32_t wait_in_line(const std::vector<uint32_t> &table, bool all, bool alertable, std::optional<std::chrono::steady_clock::time_point> wake);
 	// The object of the process's table of waits that is set when `thread` ends.
 	static uint32_t end_object(GuestThread &thread);
 	// Queues an APC to a thread, which ends its alertable wait.
@@ -347,6 +356,8 @@ private:
 	std::atomic<uint64_t> signals{1};
 	// How many times a waiting thread's condition was looked at, told with RAVEN_TRACE_WAITS: a wait its waker ends is never looked at.
 	std::atomic<uint64_t> condition_looks{0};
+	// Set by wait_in_line for the block it calls, whose condition is the table's word and is not counted among the looks.
+	bool lined_block = false;
 	// Whether what the thread that holds the runtime is serving still has to be counted.
 	bool told = true;
 	// When a thread that left the runtime last looked for the waits that ended (see leave).
