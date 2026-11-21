@@ -92,6 +92,10 @@ static DWORD WINAPI painter(void *unused)
 	while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE))
 		DispatchMessageW(&message);
 	ValidateRect(painted, NULL);
+	// The queue was just found empty: a paint asked for now is there at the very next look.
+	if (PeekMessageW(&message, NULL, 0, 0, PM_NOREMOVE) || !InvalidateRect(painted, NULL, FALSE) ||
+		!PeekMessageW(&message, painted, WM_PAINT, WM_PAINT, PM_NOREMOVE) || !ValidateRect(painted, NULL))
+		return 32;
 	SetEvent(painter_ready);
 	while (GetMessageW(&message, NULL, 0, 0) > 0) {
 		if (message.message == WM_PAINT && message.hwnd == painted) {
