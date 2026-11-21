@@ -3,8 +3,9 @@
 #include <winternl.h>
 
 // The AFD readiness poll as mio and wepoll use it: \Device\Afd opened with NtCreateFile and joined to a completion port; a poll of a
-// listening socket completes with AFD_POLL_ACCEPT once a client connects, its packet carrying the APC context; a second poll that
-// nothing satisfies ends as cancelled after NtCancelIoFileEx. Returns 0, or the number of the check that failed.
+// listening socket completes with AFD_POLL_ACCEPT once a client connects, its packet carrying the APC context; polls that nothing
+// satisfies stay pending without keeping the process busy, and end as cancelled after NtCancelIoFileEx. Returns 0, or the number of
+// the check that failed.
 NTSTATUS NTAPI NtCancelIoFileEx(HANDLE, PIO_STATUS_BLOCK, PIO_STATUS_BLOCK);
 
 typedef struct {
@@ -74,6 +75,26 @@ int raven_entry(void)
 	result = NtDeviceIoControlFile(afd, NULL, NULL, &status, &status, IOCTL_AFD_POLL, &poll, sizeof poll, &poll, sizeof poll);
 	if (result != STATUS_PENDING)
 		return 10;
+	// So is one for data on the connected client, which can always be written to. Neither wakes the process while they wait: one that
+	// woke for them again and again would use the whole 300 ms.
+	static PollInfo quiet;
+	static IO_STATUS_BLOCK quiet_status;
+	quiet.timeout.QuadPart = 0x7fffffffffffffffLL;
+	quiet.count = 1;
+	quiet.handles[0].socket = (HANDLE)client;
+	quiet.handles[0].events = AFD_POLL_RECEIVE;
+	if (NtDeviceIoControlFile(afd, NULL, NULL, &quiet_status, &quiet_status, IOCTL_AFD_POLL, &quiet, sizeof quiet, &quiet, sizeof quiet) != STATUS_PENDING)
+		return 14;
+	FILETIME created, ended, kernel, user;
+	if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user))
+		return 15;
+	const ULONGLONG before = ((ULONGLONG)kernel.dwHighDateTime << 32 | kernel.dwLowDateTime) + ((ULONGLONG)user.dwHighDateTime << 32 | user.dwLowDateTime);
+	Sleep(300);
+	if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user))
+		return 15;
+	const ULONGLONG after = ((ULONGLONG)kernel.dwHighDateTime << 32 | kernel.dwLowDateTime) + ((ULONGLONG)user.dwHighDateTime << 32 | user.dwLowDateTime);
+	if (after - before > 600000)
+		return 15;
 	IO_STATUS_BLOCK cancelled;
 	if (NtCancelIoFileEx(afd, &status, &cancelled))
 		return 11;
@@ -81,6 +102,9 @@ int raven_entry(void)
 		return 12;
 	if (status.Status != (NTSTATUS)0xC0000120L)
 		return 13;
+	if (NtCancelIoFileEx(afd, &quiet_status, &cancelled) ||
+		GetQueuedCompletionStatus(port, &bytes, &key, &context, 10000) || context != (OVERLAPPED *)&quiet_status)
+		return 16;
 	closesocket(client);
 	closesocket(listener);
 	CloseHandle(afd);

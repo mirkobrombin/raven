@@ -167,6 +167,9 @@ public:
 	void set_idle(std::function<void(std::chrono::milliseconds)> idle) { poll = std::move(idle); }
 	// Adds the descriptors whose readiness can make a waiting thread's condition true; the idle wait sleeps on them.
 	void set_watched(std::function<void(std::vector<pollfd> &)> descriptors) { watched = std::move(descriptors); }
+	// A pending operation waits for these events of this descriptor now: the administrative thread, asleep on what it gathered,
+	// gathers again.
+	void watch_added(int descriptor, short events);
 	// True while something outside the process, such as a child program, can still make a waiting thread's condition true.
 	void add_external(std::function<bool()> pending) { externals.push_back(std::move(pending)); }
 	// Runs whenever every thread waits, so work the host does for the guest (finishing started operations) can make a wait succeed.
@@ -311,6 +314,8 @@ private:
 	// Written to end the idle wait: by nudge() and by the thread that sees other processes change shared objects.
 	int wake = -1;
 	std::function<void(std::vector<pollfd> &)> watched;
+	// The descriptors the administrative thread sleeps on. It changes them in its turn only; other threads read them in theirs.
+	std::vector<pollfd> admin_sources;
 	std::vector<std::shared_ptr<GuestThread>> threads;
 	GuestThread *running = nullptr;
 	// Set while the process ends: threads leave through their frames and the deadline no longer interrupts them.

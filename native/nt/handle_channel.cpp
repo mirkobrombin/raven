@@ -348,6 +348,24 @@ void remove_child_channel(HandleChannel *channel)
 	children.erase(std::remove(children.begin(), children.end(), channel), children.end());
 }
 
+std::vector<int> handle_descriptors()
+{
+	std::vector<int> descriptors;
+	if (process_channels.listener >= 0)
+		descriptors.push_back(process_channels.listener);
+	for (const auto &channel : process_channels.accepted)
+		descriptors.push_back(channel->host_descriptor());
+	for (const auto &[pid, channel] : process_channels.outgoing)
+		if (channel)
+			descriptors.push_back(channel->host_descriptor());
+	std::lock_guard lock(channels_mutex);
+	for (const auto *channel : children)
+		descriptors.push_back(channel->host_descriptor());
+	if (parent)
+		descriptors.push_back(parent->host_descriptor());
+	return descriptors;
+}
+
 void receive_handles(NativeObjects &objects)
 {
 	const auto owners = retained_children();

@@ -3,8 +3,10 @@
 #include "cpu/agent_tasks.h"
 #include "cpu/call_cycles.h"
 #include "desktop_lock.h"
+#include "handle_channel.h"
 
 #include <cstdlib>
+#include <map>
 #include <fcntl.h>
 #include <iostream>
 
@@ -18,6 +20,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <poll.h>
+#include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <thread>
@@ -650,6 +653,14 @@ void NativeThreads::drain_wake()
 	uint64_t drained = 0;
 	while (::read(wake, &drained, sizeof drained) > 0) {}
 	process.drain_execution();
+}
+
+void NativeThreads::watch_added(int descriptor, short events)
+{
+	if (admin_hosted && std::none_of(admin_sources.begin(), admin_sources.end(), [&](const pollfd &source) {
+			return source.fd == descriptor && (source.events & events) == events;
+		}))
+		nudge();
 }
 
 void NativeThreads::nudge()
@@ -1771,15 +1782,30 @@ void NativeThreads::admin_main()
 	admin.host_tid = pid_t(::gettid());
 	NativeProcess::arm_host_thread();
 	NativeProcess::adopt_task(admin.snapshot.task);
+	// Requests of other processes (DuplicateHandle into this one, its memory) and the host I/O that pending operations wait for are
+	// answered by serve() and the pumps: their descriptors wake this thread. They are gathered in its turn, where they change. One
+	// still ready at two gathers in a row, with the pumps run between them, is one nothing here finishes (closed, hung up, or ready for
+	// what no operation asked): it is left out until a gather finds it quiet, or it would wake this thread again and again.
+	std::vector<int> ready_before;
+	// The set this thread sleeps in, made in its turn from what it gathered there. A poll would hold every file it waits on open, so a
+	// socket the guest closed meanwhile would keep its bound address until the sleep ended; the kernel takes a released file out of an
+	// epoll set by itself. Without a set the thread sleeps on `wake` alone.
+	int sleep_set = -1;
 	for (;;) {
-		std::vector<pollfd> descriptors{{wake, POLLIN, 0}};
 		auto now = std::chrono::steady_clock::now();
 		auto until = std::min(admin_due, now + std::chrono::milliseconds(20));
 		{
 			// The administrative thread works only when no guest thread does the host's work for it.
-			const auto left = std::chrono::duration_cast<std::chrono::nanoseconds>(until > now ? until - now : std::chrono::nanoseconds(0)).count();
-			const timespec timeout{left / 1000000000, left % 1000000000};
-			::ppoll(descriptors.data(), descriptors.size(), &timeout, nullptr);
+			const auto left = std::chrono::ceil<std::chrono::milliseconds>(until > now ? until - now : std::chrono::steady_clock::duration::zero());
+			if (sleep_set < 0) {
+				pollfd only{wake, POLLIN, 0};
+				::poll(&only, 1, int(left.count()));
+			} else {
+				epoll_event ready[8];
+				::epoll_wait(sleep_set, ready, 8, int(left.count()));
+				::close(sleep_set);
+				sleep_set = -1;
+			}
 		}
 		uint64_t drained = 0;
 		while (::read(wake, &drained, sizeof drained) > 0) {}
@@ -1800,9 +1826,36 @@ void NativeThreads::admin_main()
 		try {
 			if (process.gone())
 				throw ThreadExit{0};
+			admin_sources.clear();
 			serve();
 			for (const auto &pump : pumps)
 				pump();
+			std::vector<pollfd> sources;
+			for (const int channel : handle_descriptors())
+				sources.push_back({channel, POLLIN, 0});
+			if (watched)
+				watched(sources);
+			::poll(sources.data(), sources.size(), 0);
+			std::vector<int> ready;
+			for (const auto &source : sources)
+				if (source.revents)
+					ready.push_back(source.fd);
+			std::erase_if(sources, [&](const pollfd &source) {
+				return source.revents && std::find(ready_before.begin(), ready_before.end(), source.fd) != ready_before.end();
+			});
+			ready_before = std::move(ready);
+			admin_sources = std::move(sources);
+			std::map<int, uint32_t> interest{{wake, EPOLLIN}};
+			for (const auto &source : admin_sources)
+				interest[source.fd] |= uint32_t(uint16_t(source.events));
+			sleep_set = ::epoll_create1(EPOLL_CLOEXEC);
+			for (const auto &[descriptor, events] : interest) {
+				epoll_event event{};
+				event.events = events;
+				event.data.fd = descriptor;
+				if (sleep_set >= 0)
+					::epoll_ctl(sleep_set, EPOLL_CTL_ADD, descriptor, &event);
+			}
 			// When every thread waits without a timeout for what only another of them could give, and no other process, host source
 			// or window system can end a wait either, the run is over: the main thread is told so.
 			bool stuck = !tearing_down && !pending && !poll && !shared_object_count.load() &&
@@ -1844,7 +1897,7 @@ void NativeThreads::admin_main()
 			if (thread->state == GuestThread::State::waiting && thread->wake)
 				admin_due = std::min(admin_due, *thread->wake);
 		// What the services and pumps brought in, and what no call announces, is looked at for every waiting thread.
-		scanned = {};
+		scanned = leave_scanned = {};
 		try {
 			leave(admin);
 		} catch (...) {

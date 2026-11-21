@@ -216,6 +216,46 @@ static int test_allocation(HANDLE process)
 	return 0;
 }
 
+static LONGLONG elapsed_ms(LARGE_INTEGER start)
+{
+	LARGE_INTEGER now, frequency;
+	QueryPerformanceCounter(&now);
+	QueryPerformanceFrequency(&frequency);
+	return (now.QuadPart - start.QuadPart) * 1000 / frequency.QuadPart;
+}
+
+/* A process whose threads all wait answers the calls of another process at once: these 125 calls take a few milliseconds. A process
+ * that answers only when its scheduler wakes on its own (every 20 ms) takes 2.5 s. */
+static int test_prompt_calls(HANDLE process)
+{
+	HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
+	void *block = VirtualAllocEx(process, NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	LARGE_INTEGER start;
+	unsigned round;
+	if (!event || !block) {
+		if (event)
+			CloseHandle(event);
+		return 80;
+	}
+	QueryPerformanceCounter(&start);
+	for (round = 0; round < 25; ++round) {
+		HANDLE sent = NULL, back = NULL;
+		SIZE_T copied = 0;
+		void *page;
+		if (!DuplicateHandle(GetCurrentProcess(), event, process, &sent, 0, FALSE, DUPLICATE_SAME_ACCESS) ||
+			!DuplicateHandle(process, sent, GetCurrentProcess(), &back, 0, FALSE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE) ||
+			!CloseHandle(back) || !WriteProcessMemory(process, block, &round, sizeof(round), &copied) || copied != sizeof(round) ||
+			!(page = VirtualAllocEx(process, NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) || !VirtualFreeEx(process, page, 0, MEM_RELEASE)) {
+			CloseHandle(event);
+			return 81;
+		}
+	}
+	CloseHandle(event);
+	if (elapsed_ms(start) > 1000)
+		return 82;
+	return 0;
+}
+
 static int test_child(query_process query, copy_memory read_memory, copy_memory write_memory, PROCESS_INFORMATION *child)
 {
 	open_thread open = (open_thread)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenProcess");
@@ -304,6 +344,119 @@ static int test_child(query_process query, copy_memory read_memory, copy_memory 
 	return 0;
 }
 
+static void reply_pipe_name(WCHAR *name, DWORD owner)
+{
+	static const WCHAR prefix[] = L"\\\\.\\pipe\\raven-remote-reply-";
+	unsigned at = 0, digits = 0;
+	DWORD rest = owner;
+	for (; prefix[at]; ++at)
+		name[at] = prefix[at];
+	do ++digits; while (rest /= 10);
+	name[at + digits] = 0;
+	do name[at + --digits] = (WCHAR)(L'0' + owner % 10); while (owner /= 10);
+}
+
+/* The child started with --r: sends back each byte its parent writes, until a zero, with overlapped I/O as a message loop does. */
+static int echo_replies(query_process query)
+{
+	struct basic_information information;
+	ULONG length = 0;
+	WCHAR name[64];
+	OVERLAPPED overlapped = {0};
+	HANDLE pipe;
+	if (query(GetCurrentProcess(), 0, &information, sizeof(information), &length))
+		return 2;
+	reply_pipe_name(name, (DWORD)information.parent);
+	pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+	overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+	if (pipe == INVALID_HANDLE_VALUE || !overlapped.hEvent)
+		return 3;
+	for (;;) {
+		BYTE value = 0xff;
+		DWORD count = 0;
+		if ((!ReadFile(pipe, &value, 1, &count, &overlapped) && (GetLastError() != ERROR_IO_PENDING ||
+			!GetOverlappedResult(pipe, &overlapped, &count, TRUE))) || count != 1)
+			return 4;
+		if ((!WriteFile(pipe, &value, 1, &count, &overlapped) && (GetLastError() != ERROR_IO_PENDING ||
+			!GetOverlappedResult(pipe, &overlapped, &count, TRUE))) || count != 1)
+			return 5;
+		if (!value)
+			return 0;
+	}
+}
+
+/* A reply over a pipe reaches a thread that waits for it while nothing else in its process runs at once: 40 round trips take a few
+ * milliseconds. A process that finds finished host I/O only when its scheduler wakes on its own (every 20 ms) takes 800 ms. */
+static int test_pipe_replies(WCHAR *command, unsigned used, STARTUPINFOW *startup)
+{
+	WCHAR name[64];
+	OVERLAPPED overlapped = {0};
+	PROCESS_INFORMATION child;
+	LARGE_INTEGER start;
+	DWORD exit_code = 1, count;
+	HANDLE pipe;
+	unsigned round;
+	int result = 0;
+	reply_pipe_name(name, GetCurrentProcessId());
+	pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 64, 64, 0, NULL);
+	overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+	if (pipe == INVALID_HANDLE_VALUE || !overlapped.hEvent)
+		return 83;
+	command[used - 1] = 'r';
+	if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, startup, &child)) {
+		CloseHandle(pipe);
+		return 83;
+	}
+	if (!ConnectNamedPipe(pipe, &overlapped) && GetLastError() != ERROR_PIPE_CONNECTED &&
+		(GetLastError() != ERROR_IO_PENDING || WaitForSingleObject(overlapped.hEvent, 15000) != WAIT_OBJECT_0))
+		result = 84;
+	/* The child waits for the first byte now, and nothing else runs in it. */
+	if (!result)
+		result = test_prompt_calls(child.hProcess);
+	QueryPerformanceCounter(&start);
+	for (round = 0; !result && round < 40; ++round) {
+		BYTE value = (BYTE)(round == 39 ? 0 : round + 1), back = 0xff;
+		if ((!WriteFile(pipe, &value, 1, &count, &overlapped) && (GetLastError() != ERROR_IO_PENDING ||
+			!GetOverlappedResult(pipe, &overlapped, &count, TRUE))) || count != 1)
+			result = 85;
+		else if (!ReadFile(pipe, &back, 1, &count, &overlapped) && (GetLastError() != ERROR_IO_PENDING ||
+			WaitForSingleObject(overlapped.hEvent, 5000) != WAIT_OBJECT_0 || !GetOverlappedResult(pipe, &overlapped, &count, FALSE)))
+			result = 85;
+		else if (back != value)
+			result = 86;
+	}
+	if (!result && elapsed_ms(start) > 300)
+		result = 87;
+	/* A read left pending writes into this frame when it ends: it ends before the frame does, and the child with it. */
+	if (result) {
+		CancelIoEx(pipe, NULL);
+		GetOverlappedResult(pipe, &overlapped, &count, TRUE);
+		TerminateProcess(child.hProcess, 99);
+	}
+	if (WaitForSingleObject(child.hProcess, 15000) != WAIT_OBJECT_0 || !GetExitCodeProcess(child.hProcess, &exit_code) || (!result && exit_code))
+		result = result ? result : 88;
+	/* The child ended and its handle is still open, so the channel to it has hung up: that must not keep this process busy. A process
+	 * that wakes for it again and again uses the whole 500 ms; a quiet one uses a few. */
+	if (!result) {
+		FILETIME created, ended, kernel, user;
+		ULONGLONG before, after;
+		if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user))
+			result = 89;
+		before = ((ULONGLONG)kernel.dwHighDateTime << 32 | kernel.dwLowDateTime) + ((ULONGLONG)user.dwHighDateTime << 32 | user.dwLowDateTime);
+		Sleep(500);
+		if (!result && !GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user))
+			result = 89;
+		after = ((ULONGLONG)kernel.dwHighDateTime << 32 | kernel.dwLowDateTime) + ((ULONGLONG)user.dwHighDateTime << 32 | user.dwLowDateTime);
+		if (!result && after - before > 800000)
+			result = 89;
+	}
+	CloseHandle(child.hThread);
+	CloseHandle(child.hProcess);
+	CloseHandle(overlapped.hEvent);
+	CloseHandle(pipe);
+	return result;
+}
+
 int raven_entry(void)
 {
 	const WCHAR *line = GetCommandLineW();
@@ -331,6 +484,9 @@ int raven_entry(void)
 			return 0;
 		} else
 #endif
+		if (line[index] == '-' && line[index + 1] == '-' && line[index + 2] == 'r') {
+			return echo_replies(query);
+		} else
 		if (line[index] == '-' && line[index + 1] == '-' && line[index + 2] == 'c') {
 #ifdef _WIN64
 			ULONG_PTR client[2] = {GetCurrentProcessId(), GetCurrentThreadId()};
@@ -471,6 +627,8 @@ int raven_entry(void)
 	}
 	CloseHandle(child.hThread);
 	CloseHandle(child.hProcess);
+	if (!result)
+		result = test_pipe_replies(command, used, &startup);
 #ifdef _WIN64
 	if (!result) {
 		DWORD exit_code = 0;

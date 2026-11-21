@@ -1477,6 +1477,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	compat.set_global_blocks([&allocator](uint64_t address) { return allocator.size(address); }, [&allocator](uint64_t address) { return allocator.release(address); });
 	KernelContext kernel{process, environment, memory, allocator, kernel_objects, guest_threads, paths, modules, entry, *launch, invoke};
 	guest_threads.set_watched([reactor = kernel.reactor](std::vector<pollfd> &descriptors) { reactor->watch(descriptors); });
+	kernel.reactor->set_watch_added([&guest_threads](int descriptor, short events) { guest_threads.watch_added(descriptor, events); });
 	// Waits that also wake for messages ask the window system, and the window system sleeps as the scheduler does.
 	kernel.queue_status = [&windows](uint32_t thread,uint32_t mask,bool clear) { return windows.queue_status(thread,mask,clear); };
 	kernel.present_frames = [&windows] { return windows.present_frames(); };
