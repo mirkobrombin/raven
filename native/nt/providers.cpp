@@ -229,6 +229,41 @@ static bool gdi_beside_api(std::string_view name)
 	return std::find(names.begin(), names.end(), name) != names.end();
 }
 
+// The objects a drawing call beside the turn works on when it may run under the shared desktop lock (see DesktopLock): the memory
+// contexts it names and the bitmaps selected into them, and the bitmap GetDIBits and SetDIBits name. None when it may not: a call that
+// moves the current position or saves and restores a context's state changes what other calls read, and a window's context, a foreign
+// one or the screen's reaches the window's surface and its damage, which the desktop keeps whole. An unknown handle goes the usual way
+// as well, which answers it.
+static std::optional<std::vector<uint64_t>> drawing_objects(std::string_view name, std::span<const uint64_t> words, const DesktopObjects &objects,
+	uint64_t screen)
+{
+	static constexpr std::array<std::string_view, 14> one{"PatBlt", "FillRect", "FrameRect", "GetPixel", "Rectangle", "Ellipse", "RoundRect",
+		"Polygon", "Polyline", "PolyPolyline", "FillRgn", "FrameRgn", "GradientFill", "StretchDIBits"};
+	static constexpr std::array<std::string_view, 4> two{"BitBlt", "StretchBlt", "GdiAlphaBlend", "AlphaBlend"};
+	static constexpr std::array<std::string_view, 2> bitmaps{"SetDIBits", "GetDIBits"};
+	const auto listed = [name](const auto &names) { return std::find(names.begin(), names.end(), name) != names.end(); };
+	const bool by_bitmap = listed(bitmaps);
+	const size_t contexts = listed(one) || by_bitmap ? 1 : listed(two) ? 2 : 0;
+	if (!contexts || words.size() < (contexts == 2 ? 6 : by_bitmap ? 2 : 1))
+		return std::nullopt;
+	std::vector<uint64_t> handles;
+	for (const size_t index : {size_t(0), size_t(5)}) {
+		if (index && contexts < 2)
+			break;
+		// A transfer without a source names none.
+		if (index && !words[index])
+			continue;
+		const auto *dc = objects.dc(words[index]);
+		if (!dc || dc->window || dc->foreign || dc->leased || words[index] == screen)
+			return std::nullopt;
+		handles.push_back(words[index]);
+		handles.push_back(dc->bitmap);
+	}
+	if (by_bitmap)
+		handles.push_back(words[1]);
+	return handles;
+}
+
 static bool beside_api(std::string_view module, std::string_view name)
 {
 	// The state of an event is under the object's own lock.
@@ -3174,7 +3209,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty() ||
 		!beside_names.empty()))
 		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, &memory, event_stubs, address_stubs,
-			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_api, graphics_beside](uint64_t stub, const uint64_t *arguments) -> std::optional<uint64_t> {
+			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_objects, &desktop_api, graphics_beside](uint64_t stub,
+			const uint64_t *arguments) -> std::optional<uint64_t> {
 			// A call of a subsystem with a lock of its own runs its usual handler here; the arguments past the four in registers are on the
 			// guest's stack above their home space.
 			if (const auto named = beside_names.find(stub); named != beside_names.end()) {
@@ -3217,6 +3253,24 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					const int32_t index = int32_t(uint32_t(words[1]));
 					if (index < 0 && index != -21 && index != -12)
 						return std::nullopt;
+				}
+				// Drawing that changes nothing but the pixels of contexts of the thread's own runs under the shared desktop lock, with the
+				// stripes of those contexts and of the bitmaps it draws into or reads (see drawing_objects).
+				if (desktop_call) {
+					const DesktopSharedScope shared;
+					const auto handles = windows.dc_logged() ? std::nullopt :
+						drawing_objects(named->second, words, std::as_const(desktop_objects), windows.published_screen_dc());
+					if (handles) {
+						const DesktopStripes stripes(*handles);
+						ApiCall call(process, environment, std::move(words));
+						call.alone = true;
+						try {
+							entry->second(call);
+						} catch (...) {
+							return std::nullopt;
+						}
+						return call.result;
+					}
 				}
 				std::optional<DesktopScope> desktop_scope;
 				std::optional<WindowCallScope> window_scope;

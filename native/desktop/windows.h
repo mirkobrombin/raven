@@ -104,6 +104,10 @@ public:
 	static constexpr size_t dc_slots=1024, dc_slot=32, dc_slots_at=4096, dc_table_size=dc_slots_at+dc_slots*dc_slot;
 	void set_dc_table(uint8_t *table);
 	void apply_dc_log();
+	// Whether the guest logged a change of a context that the runtime has not taken in yet.
+	bool dc_logged() const { return dc_table && __atomic_load_n(reinterpret_cast<const uint32_t *>(dc_table), __ATOMIC_ACQUIRE) != 0; }
+	// The screen's context the guest answers GetDC(NULL) with, 0 while none is published.
+	uint64_t published_screen_dc() const;
 	// Releases the guest answers itself and leaves for the runtime: a log page (a count, then from 16 up to 255 entries of a handle
 	// and an operation) and the set of valid icons (a handle at each handle's low ten bits). The guest takes a handle out of its tables
 	// as it logs it; the runtime carries the log out before it serves a call and does not publish logged handles again until then.
