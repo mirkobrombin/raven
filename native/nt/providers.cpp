@@ -2567,8 +2567,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			// Nor do the calls that read state or draw, nor changes of a window's own data and properties or taking its contexts: they put
 			// nothing in a queue, and a window they leave needing paint wakes its thread itself (see NativeWindows::set_tell).
 			if (!keep_quiet.contains(api_name) && !inert.contains(api_name) &&
-				!window_call(api_name, process.api_arguments(2), std::as_const(desktop_objects)))
+				!window_call(api_name, process.api_arguments(2), std::as_const(desktop_objects))) {
+				static std::atomic<int> named{0};
+				if (std::getenv("RAVEN_TRACE_QUIET") && named++<60) std::cerr << "quiet: call wakes " << api_name << '\n';
 				windows.wake(environment.thread_id());
+			}
 			if (threads_ptr && (inert.contains(api_name) || api_name.starts_with("vkCmd") || api_name.starts_with("gl")))
 				threads_ptr->quiet_call();
 			// ntdll's RtlExitUserProcess is the ExitProcess of programs that do without kernel32.

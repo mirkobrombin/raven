@@ -17,6 +17,9 @@
 #include <memory>
 #include <x86intrin.h>
 #include <mutex>
+#include <iostream>
+#include <atomic>
+#include <cstdlib>
 #include <optional>
 
 namespace raven {
@@ -144,7 +147,11 @@ public:
 		auto *slot=quiet_table+(thread%quiet_slots)*quiet_slot;
 		uint32_t occupant=0;
 		std::memcpy(&occupant,slot,4);
-		if (occupant==thread) __atomic_store_n(reinterpret_cast<uint64_t *>(slot+8),uint64_t(0),__ATOMIC_RELEASE);
+		if (occupant==thread) {
+			static std::atomic<int> wakes{0};
+			if (std::getenv("RAVEN_TRACE_QUIET") && wakes++<60) std::cerr<<"quiet: wake "<<thread<<" from "<<environment.thread_id()<<"\n";
+			__atomic_store_n(reinterpret_cast<uint64_t *>(slot+8),uint64_t(0),__ATOMIC_RELEASE);
+		}
 	}
 	void queue_changed(uint32_t thread,uint32_t kinds) { queues[thread].changed|=kinds; wake(thread); tell(thread); }
 	// A thread that clears the quiet table whenever the display has events the runtime has not read, until it closes.

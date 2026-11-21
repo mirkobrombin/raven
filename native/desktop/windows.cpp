@@ -662,7 +662,8 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 
 void NativeWindows::mark_quiet(uint32_t thread)
 {
-	if (!quiet_table) return;
+	static const bool trace_quiet=std::getenv("RAVEN_TRACE_QUIET"); static std::atomic<int> quiet_lines{0}; 
+	if (!quiet_table) { if (trace_quiet && quiet_lines++<60) std::cerr<<"quiet: no table\n"; return; }
 	// The kinds of message the queue holds, which the call that found nothing did not ask for: a window waiting to be painted
 	// answers PeekMessage, not GetInputState.
 	const uint32_t holds=queue_status(thread,0xffff,false)>>16;
@@ -673,11 +674,12 @@ void NativeWindows::mark_quiet(uint32_t thread)
 	const uint64_t ticks=__rdtsc();
 	const auto now=std::chrono::steady_clock::now();
 	const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(now-made_time).count();
-	if (elapsed<100'000'000 || ticks<=made_ticks) return;
+	if (elapsed<100'000'000 || ticks<=made_ticks) { if (trace_quiet && quiet_lines++<60) std::cerr<<"quiet: early "<<elapsed<<"\n"; return; }
 	auto until=now+std::chrono::milliseconds(16);
 	for (const auto &timer : timers)
 		if (!timer.thread || timer.thread==thread) until=std::min(until,timer.due);
-	if (until<=now) return;
+	if (until<=now) { if (trace_quiet && quiet_lines++<60) std::cerr<<"quiet: timer due\n"; return; }
+	if (trace_quiet && quiet_lines++<60) std::cerr<<"quiet: mark "<<thread<<" holds "<<std::hex<<holds<<std::dec<<"\n";
 	const double rate=double(ticks-made_ticks)/double(elapsed);
 	const uint64_t deadline=ticks+uint64_t(rate*double(std::chrono::duration_cast<std::chrono::nanoseconds>(until-now).count()));
 	auto *slot=quiet_table+(thread%quiet_slots)*quiet_slot;
@@ -700,6 +702,7 @@ void NativeWindows::watch_input()
 			const int ready=::poll(&entry,1,-1);
 			if (ready<0 && errno==EINTR) continue;
 			if (ready<0 || (entry.revents & (POLLERR|POLLHUP|POLLNVAL))) return;
+			{ static std::atomic<int> clears{0}; if (std::getenv("RAVEN_TRACE_QUIET") && (++clears%200==1)) std::cerr<<"quiet: input clears all, "<<clears<<"\n"; }
 			for (size_t slot=0;slot<quiet_slots;++slot)
 				__atomic_store_n(reinterpret_cast<uint64_t *>(table+slot*quiet_slot+8),uint64_t(0),__ATOMIC_RELEASE);
 			// The events stay unread until a thread of the program asks for its messages: look again a moment later, not at once.

@@ -4059,7 +4059,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC
                         --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW,PeekMessageW)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
-                        ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
+                        ENVIRONMENT "RAVEN_TRACE_QUIET=1;RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
                     # Threads that each draw into a bitmap of their own: the drawing calls are answered beside the turn, under the desktop lock.
                     set(parallel_gdi_client ${CMAKE_CURRENT_BINARY_DIR}/parallel-gdi${width}.exe)
                     add_custom_command(OUTPUT ${parallel_gdi_client}
