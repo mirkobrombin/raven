@@ -3033,6 +3033,11 @@ void NativeWindows::api_left()
 	std::erase_if(watched_dcs,outlived);
 }
 
+uint64_t NativeWindows::published_screen_dc() const
+{
+	return screen_block ? __atomic_load_n(reinterpret_cast<const uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE) : 0;
+}
+
 void NativeWindows::screen_dc_use(std::string_view name)
 {
 	if (screen_block && __atomic_load_n(reinterpret_cast<uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE))
