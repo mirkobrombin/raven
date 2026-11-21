@@ -191,8 +191,9 @@ public:
 	DesktopStripes &operator=(const DesktopStripes &) = delete;
 
 private:
-	static constexpr size_t count = 64;
-	static size_t stripe(uint64_t handle) { return size_t((handle * 0x9e3779b97f4a7c15ULL) >> 58); }
+	// Enough that the few objects each of a handful of threads works on seldom share one.
+	static constexpr size_t count = 1024;
+	static size_t stripe(uint64_t handle) { return size_t((handle * 0x9e3779b97f4a7c15ULL) >> 54); }
 	static std::array<std::mutex, count> &locks()
 	{
 		static std::array<std::mutex, count> made;
