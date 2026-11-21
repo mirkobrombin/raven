@@ -3527,6 +3527,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				} catch (...) {
 					return std::nullopt;
 				}
+				// As in the turn, a call that may have changed the queue makes the guest's next poll of it ask the runtime (see keep_quiet).
+				if (desktop_call)
+					windows.wake(environment.thread_id());
 				return call.result;
 			}
 			// The object of the process's table behind a handle the thread may wait on: an event, a semaphore or a mutex. 0 for any
