@@ -372,6 +372,12 @@ void NativeWindows::paint_scrollbars(uint64_t root)
 		if (!window || !(window->style & (ws_hscroll | ws_vscroll)) || objects.window_root(handle) != root || !objects.window_visible(handle))
 			continue;
 		// Drawing is clipped to the window's own outer rectangle and the ancestors' client areas.
+		auto clip = window->outer;
+		for (const auto *above = window; above->parent && (above = std::as_const(objects).window(above->parent));)
+			clip = {std::max(clip.left, above->x), std::max(clip.top, above->y), std::min(clip.right, above->x + above->width),
+				std::min(clip.bottom, above->y + above->height)};
+		clip = shifted(clip);
+		canvas.clip = {std::max(clip.left, 0), std::max(clip.top, 0), std::min(clip.right, canvas.width), std::min(clip.bottom, canvas.height)};
 		for (int bar = 0; bar < 2; ++bar) {
 			const auto geometry = scroll_geometry(*window, bar);
 			if (!geometry.present)

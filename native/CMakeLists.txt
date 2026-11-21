@@ -980,6 +980,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_dependencies(class_background_test class_background_fixture raven-bootstrap)
         add_test(NAME native_class_background COMMAND class_background_test $<TARGET_FILE:raven-bootstrap> ${CLASS_BACKGROUND} ${CMAKE_CURRENT_BINARY_DIR}/class-background.bgra)
         set_tests_properties(native_class_background PROPERTIES TIMEOUT 20)
+        set(SCROLLBAR_CLIP ${CMAKE_CURRENT_BINARY_DIR}/scrollbar-clip.exe)
+        add_custom_command(OUTPUT ${SCROLLBAR_CLIP}
+            COMMAND ${RAVEN_MINGW64} -nostdlib -fno-stack-protector
+                -Wl,--entry,raven_entry,--image-base,0x1b8000000,--no-insert-timestamp
+                -o ${SCROLLBAR_CLIP} ${PROJECT_SOURCE_DIR}/testdata/native_loader/scrollbar_clip_client.c -lkernel32 -luser32 -lgdi32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/scrollbar_clip_client.c VERBATIM)
+        add_custom_target(scrollbar_clip_fixture ALL DEPENDS ${SCROLLBAR_CLIP})
+        add_executable(scrollbar_clip_test desktop/scrollbar_clip_test.cpp)
+        target_link_libraries(scrollbar_clip_test PRIVATE raven_cpu)
+        add_dependencies(scrollbar_clip_test scrollbar_clip_fixture raven-bootstrap)
+        add_test(NAME native_scrollbar_clip COMMAND scrollbar_clip_test $<TARGET_FILE:raven-bootstrap> ${SCROLLBAR_CLIP})
+        set_tests_properties(native_scrollbar_clip PROPERTIES TIMEOUT 20)
         set(CLASS_BACKGROUND_BOUNDARY ${CMAKE_CURRENT_BINARY_DIR}/class-background-boundary.exe)
         add_custom_command(OUTPUT ${CLASS_BACKGROUND_BOUNDARY}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -DRAVEN_CLASS_BACKGROUND_BOUNDARY
