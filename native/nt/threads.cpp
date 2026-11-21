@@ -529,7 +529,7 @@ std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current, bool only
 			continue;
 		}
 		if (thread->state == GuestThread::State::waiting) {
-			if ((thread->ready && thread->ready()) || (thread->wake && now >= *thread->wake))
+			if (thread->can_go_on() || (thread->wake && now >= *thread->wake))
 				return thread;
 		}
 	}
@@ -706,7 +706,7 @@ bool NativeThreads::block(std::function<bool()> ready, std::optional<std::chrono
 	bool told)
 {
 	static const bool count_looks = std::getenv("RAVEN_TRACE_WAITS");
-	if (count_looks && !turn)
+	if (!std::exchange(lined_block, false) && count_looks && !turn)
 		ready = [this, inner = std::move(ready)] {
 			condition_looks.fetch_add(1, std::memory_order_relaxed);
 			return inner();
@@ -867,7 +867,7 @@ bool NativeThreads::hand_over()
 	for (const auto &thread : threads) {
 		if (thread.get() == running || thread->state != GuestThread::State::waiting || thread->suspend_count > 0)
 			continue;
-		if (thread->ready && thread->ready()) {
+		if (thread->can_go_on()) {
 			running->state = GuestThread::State::ready;
 			switch_to(*thread);
 			running->state = GuestThread::State::running;
@@ -1902,6 +1902,37 @@ bool NativeThreads::threaded_block(std::function<bool()> &ready, std::optional<s
 		if (!ready || ready() || (wake && std::chrono::steady_clock::now() >= *wake))
 			return true;
 	}
+}
+
+uint32_t NativeThreads::wait_in_line(const std::vector<uint32_t> &table, bool all, bool alertable,
+	std::optional<std::chrono::steady_clock::time_point> wake)
+{
+	auto &me = *running;
+	if (threaded || me.granted)
+		return raven_wait_unlined;
+	static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
+	std::atomic<uint32_t> told{0};
+	const uint32_t lined = raven_waits_line_up(kernel_waits(), me.id, table.data(), uint32_t(table.size()), all, alertable,
+		reinterpret_cast<uint32_t *>(&told));
+	if (lined != raven_wait_lined)
+		return lined;
+	// The thread leaves the line however the block ends, an error or the end of the process included: the table keeps the word until then.
+	struct Leave {
+		GuestThread &thread;
+		bool left = false;
+		~Leave()
+		{
+			thread.granted = nullptr;
+			if (!left)
+				raven_waits_leave(kernel_waits(), thread.id);
+		}
+	} leave_line{me};
+	me.granted = &told;
+	lined_block = true;
+	block([&told] { return told.load(std::memory_order_acquire) != 0; }, wake);
+	me.granted = nullptr;
+	leave_line.left = true;
+	return raven_waits_leave(kernel_waits(), me.id);
 }
 
 uint32_t NativeThreads::wait_outside(const std::function<uint32_t(std::optional<std::chrono::steady_clock::time_point>)> &wait,
