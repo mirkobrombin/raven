@@ -103,3 +103,7 @@ SetDlgItemTextW
 TabbedTextOutA
 TabbedTextOutW
 TranslateMDISysAccel
+wsprintfA
+wsprintfW
+wvsprintfA
+wvsprintfW
