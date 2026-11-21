@@ -95,6 +95,9 @@ struct DesktopPresentation {
 	// Said before a frame is presented: it differs from the window's last one inside this rectangle alone (left, top, right, bottom),
 	// so the rest of it need not be looked at.
 	std::function<void(uint64_t handle,std::array<int32_t,4> area)> changed_within;
+	// Said before a frame of a maximized window is presented: the part of it on the screen (left, top, right, bottom), which the host
+	// shows as the window. A program can place the sizing border of its maximized window past the screen's edges, as Windows does.
+	std::function<void(uint64_t handle,std::array<int32_t,4> area)> shown_within;
 };
 
 }

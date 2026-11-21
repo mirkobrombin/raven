@@ -108,7 +108,9 @@ struct WaylandPresentation::State {
 		// Whether the compositor's last configure shows the window maximized, whether the state Raven asked for is still to come, and
 		// whether the program was told of a state the compositor chose itself.
 		bool shown_maximized=false, state_asked=true, state_reported=false;
+		// The size of the window geometry, and where it starts in the frame.
 		uint32_t width=0,height=0,pending_width=0,pending_height=0;
+		int32_t geometry_x=0,geometry_y=0;
 		std::vector<std::unique_ptr<Buffer>> buffers;
 		// The buffer of the last commit, whose pixels are what the compositor shows, and the hash of each of its rows.
 		Buffer *shown=nullptr;
@@ -204,6 +206,8 @@ struct WaylandPresentation::State {
 	std::map<uint64_t,std::unique_ptr<Hosted>> hosted;
 	// The rectangle the next frame of a window differs from its last in, when its presenter said so.
 	std::map<uint64_t,std::array<int32_t,4>> within;
+	// The part of the next frame of a maximized window that lies on the screen.
+	std::map<uint64_t,std::array<int32_t,4>> on_screen;
 	uint64_t hosted_order=0;
 	// Child windows drawn by GDI shown over the driver's surfaces of their root (see overlay).
 	struct Overlay {
@@ -852,7 +856,7 @@ struct WaylandPresentation::State {
 			window->shell=xdg_wm_base_get_xdg_surface(shell,window->proxy);
 			xdg_positioner *positioner=xdg_wm_base_create_positioner(shell);
 			xdg_positioner_set_size(positioner,int32_t(width),int32_t(height));
-			xdg_positioner_set_anchor_rect(positioner,x,y,1,1);
+			xdg_positioner_set_anchor_rect(positioner,x-owner->second->geometry_x,y-owner->second->geometry_y,1,1);
 			xdg_positioner_set_anchor(positioner,XDG_POSITIONER_ANCHOR_TOP_LEFT);
 			xdg_positioner_set_gravity(positioner,XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
 			// A menu that would leave the screen opens on the other side of the point, as Windows opens one near the bottom upwards; with
@@ -1089,10 +1093,16 @@ struct WaylandPresentation::State {
 	}
 
 	void present(uint64_t handle,std::string_view title,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
+		const auto shown=on_screen.extract(handle);
 		if (!handle || !width || !height || width>8192 || height>8192 || uint64_t(width)*height>16*1024*1024 || pixels.size()!=size_t(width)*height*4)
 			throw std::runtime_error("invalid native Wayland frame");
 		connect();
 		const auto area=within.extract(handle);
+		auto part=std::array<int32_t,4>{0,0,int32_t(width),int32_t(height)};
+		if (shown && 0<=shown.mapped()[0] && shown.mapped()[0]<shown.mapped()[2] && shown.mapped()[2]<=part[2] && 0<=shown.mapped()[1] &&
+			shown.mapped()[1]<shown.mapped()[3] && shown.mapped()[3]<=part[3])
+			part=shown.mapped();
+		const auto shown_width=uint32_t(part[2]-part[0]),shown_height=uint32_t(part[3]-part[1]);
 		auto found=surfaces.find(handle);
 		// A window shown as a popup until now becomes a window of its own.
 		if (found!=surfaces.end() && found->second->is_popup) {
@@ -1101,7 +1111,7 @@ struct WaylandPresentation::State {
 		}
 		if (found==surfaces.end()) {
 			auto window=std::make_unique<Surface>();
-			window->width=width; window->height=height;
+			window->width=shown_width; window->height=shown_height;
 			window->maximized=maximized.contains(handle);
 			window->proxy=wl_compositor_create_surface(compositor);
 			window->shell=xdg_wm_base_get_xdg_surface(shell,window->proxy);
@@ -1149,10 +1159,13 @@ struct WaylandPresentation::State {
 		}
 		if (window.closed) throw std::runtime_error("Wayland surface cannot accept this frame");
 		if (window.maximized && window.pending_width && window.pending_height &&
-			(window.pending_width!=width || window.pending_height!=height)) return;
-		if (window.pending_width==width && window.pending_height==height) window.resized=false;
-		window.width=width; window.height=height;
-		xdg_surface_set_window_geometry(window.shell,0,0,int32_t(width),int32_t(height));
+			(window.pending_width!=shown_width || window.pending_height!=shown_height)) return;
+		if (window.pending_width==shown_width && window.pending_height==shown_height) window.resized=false;
+		window.width=shown_width; window.height=shown_height;
+		window.geometry_x=part[0]; window.geometry_y=part[1];
+		// shortcut: the frame outside the geometry still shows, and takes input, on an output beside this one; crop it when Raven places
+		// windows on more than one output.
+		xdg_surface_set_window_geometry(window.shell,part[0],part[1],int32_t(shown_width),int32_t(shown_height));
 		window.alpha=translucent.contains(handle);
 		attach_frame(window,width,height,pixels,area ? &area.mapped() : nullptr);
 		if (window.first_frame) {
@@ -1181,6 +1194,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->present(handle,title,width,height,pixels);
 	},[this](uint64_t handle) {
 		state->maximized.erase(handle);
+		state->on_screen.erase(handle);
 		state->owners.erase(handle);
 		state->translucent.erase(handle);
 		if (state->pointer_window==handle) state->pointer_window=0;
@@ -1253,6 +1267,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 	}};
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
 	result.changed_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->within[handle]=area; };
+	result.shown_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->on_screen[handle]=area; };
 	result.translucent=[this](uint64_t handle,bool alpha) {
 		if (alpha) state->translucent.insert(handle);
 		else state->translucent.erase(handle);

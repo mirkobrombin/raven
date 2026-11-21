@@ -1561,6 +1561,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${FRAME_RESTORE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c -lkernel32 -luser32 -lgdi32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c VERBATIM)
             add_custom_target(frame_restore_fixture ALL DEPENDS ${FRAME_RESTORE_FIXTURE})
+            set(MAXIMIZED_BORDER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/maximized-border.exe)
+            add_custom_command(OUTPUT ${MAXIMIZED_BORDER_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${MAXIMIZED_BORDER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/maximized_border_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/maximized_border_client.c VERBATIM)
+            add_custom_target(maximized_border_fixture ALL DEPENDS ${MAXIMIZED_BORDER_FIXTURE})
             set(PICKER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/picker-client.exe)
             add_custom_command(OUTPUT ${PICKER_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,raven_entry,--no-insert-timestamp
@@ -5862,6 +5869,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_host_maximize COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-host-maximize.py
                         $<TARGET_FILE:raven> ${FRAME_RESTORE_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/host-maximize)
                     set_tests_properties(native_host_maximize PROPERTIES TIMEOUT 90 RESOURCE_LOCK raven_compositor)
+                endif()
+                # A maximized window that places its sizing border past the screen's edges shows, and takes a click where it shows.
+                if(TARGET raven_wayland AND TARGET maximized_border_fixture AND RAVEN_LABWC AND RAVEN_WLRCTL AND RAVEN_GRIM)
+                    add_test(NAME native_maximized_border COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-maximized-border.py
+                        $<TARGET_FILE:raven> ${MAXIMIZED_BORDER_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/maximized-border)
+                    set_tests_properties(native_maximized_border PROPERTIES TIMEOUT 90)
                 endif()
                 # One present to a hidden window, whose swap chain the Vulkan bridge keeps, and to a shown one, whose swap chain the driver keeps.
                 if(TARGET raven_wayland AND TARGET vulkan_hidden_present64_fixture AND RAVEN_LABWC)

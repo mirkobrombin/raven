@@ -360,10 +360,17 @@ void NativeWindows::present(uint64_t handle, bool force)
 			return;
 		} catch (const std::exception &) {}
 	}
-	// Host titles use replacement characters; the guest retains every UTF-16 code unit.
-	if (presentation.maximize) presentation.maximize(handle,(window->style & 0x01000000U)!=0);
+	const bool maximized=(window->style & 0x01000000U)!=0;
+	if (presentation.maximize) presentation.maximize(handle,maximized);
 	if (presentation.transient_for) presentation.transient_for(handle,owning ? owner : 0);
 	if (part && presentation.changed_within) presentation.changed_within(handle,{part->left,part->top,part->right,part->bottom});
+	if (maximized && presentation.shown_within) {
+		const auto &screen=objects.nonclient_metrics();
+		const auto &outer=window->outer;
+		presentation.shown_within(handle,{std::max(-outer.left,0),std::max(-outer.top,0),std::min(screen.screen_x,outer.right)-outer.left,
+			std::min(screen.screen_y,outer.bottom)-outer.top});
+	}
+	// Host titles use replacement characters; the guest retains every UTF-16 code unit.
 	presentation.present(handle,encode_utf8(window->title,true),bitmap->width,bitmap->height,pixels);
 	place_host_surface(handle);
 	place_overlays(handle,*bitmap,pixels);
