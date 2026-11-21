@@ -19,7 +19,8 @@ static void check(bool value,const char *message)
 
 // A compositor in the test's own process. Like GNOME's, it grants a popup grab only for the serial of the newest key press, dismissing the
 // popup otherwise; it gives a grabbing popup the keyboard in the same burst of events as the popup's first configure, and gives it back to
-// the popup's parent when the popup goes. It accepts and ignores every other request.
+// the popup's parent when the popup goes. Like every compositor, it releases a surface's buffer once a newer one is committed. It accepts
+// and ignores every other request.
 struct Compositor {
 	struct Shell { wl_resource *shell=nullptr,*role=nullptr,*parent=nullptr; bool popup=false,grab=false,denied=false,configured=false; uint32_t adjustment=0; };
 	wl_display *display=wl_display_create();
@@ -32,6 +33,12 @@ struct Compositor {
 	// and whether the newest opened on a window.
 	std::atomic<int> subsurfaces{0},subsurfaces_on_windows{0},placed_x{0},placed_y{0},popups{0};
 	std::atomic<bool> popup_on_window{false};
+	// The shared memory pools the client made, each surface's buffer attached and not yet committed, and committed; the width, format and
+	// first byte of the buffer committed last.
+	std::atomic<int> pools{0};
+	std::map<wl_resource *,wl_resource *> attached,shown;
+	std::atomic<int32_t> committed_width{0};
+	std::atomic<uint32_t> committed_format{0},committed_byte{0};
 	uint32_t serial=0,pressed=0;
 	// Set by the test: a key is pressed and released; the next frame committed to a window is answered with a request to close it.
 	std::atomic<bool> type{false},stop{false},close_on_commit{false};
@@ -114,10 +121,27 @@ static int dispatch(const void *data,void *target,uint32_t,const wl_message *mes
 	} else if (request=="xdg_popup.destroy") {
 		const auto &shell=compositor.surfaces[surface_of(resource)];
 		if (compositor.focused==surface_of(resource) && shell.parent) compositor.focus(shell.parent);
+	} else if (request=="wl_surface.attach") {
+		compositor.attached[resource]=object(0);
 	} else if (request=="wl_surface.destroy") {
 		compositor.surfaces.erase(resource);
+		compositor.attached.erase(resource);
+		compositor.shown.erase(resource);
 		if (compositor.focused==resource) compositor.focused=nullptr;
 	} else if (request=="wl_surface.commit") {
+		if (const auto next=compositor.attached.find(resource); next!=compositor.attached.end()) {
+			auto &shown=compositor.shown[resource];
+			if (shown && shown!=next->second) wl_buffer_send_release(shown);
+			shown=next->second;
+			compositor.attached.erase(next);
+			if (auto *buffer=shown ? wl_shm_buffer_get(shown) : nullptr) {
+				wl_shm_buffer_begin_access(buffer);
+				compositor.committed_width=wl_shm_buffer_get_width(buffer);
+				compositor.committed_format=wl_shm_buffer_get_format(buffer);
+				compositor.committed_byte=*static_cast<const uint8_t *>(wl_shm_buffer_get_data(buffer));
+				wl_shm_buffer_end_access(buffer);
+			}
+		}
 		const auto found=compositor.surfaces.find(resource);
 		if (found!=compositor.surfaces.end() && found->second.configured && !found->second.popup && compositor.close_on_commit.exchange(false))
 			xdg_toplevel_send_close(found->second.role);
@@ -205,6 +229,24 @@ static void exercise(raven::DesktopPresentation &desktop,Compositor &compositor)
 			asked=asked || (event.window==1 && event.message==0x10);
 	check(asked,"the compositor's close did not reach the window");
 	desktop.present(1,"owner",64,48,frame);
+	// A window that changes size at each step, as while the user drags its edge, cuts its new buffers from the pools it has. Each buffer
+	// shows its own frame, at its own width.
+	const int pools_before=compositor.pools;
+	for (uint32_t width=200;width<220;++width) {
+		const std::vector<uint8_t> sized(size_t(width)*80*4,uint8_t(width));
+		desktop.present(9,"sizes",width,80,sized);
+		check(compositor.committed_width==int32_t(width) && compositor.committed_byte==uint8_t(width) &&
+			compositor.committed_format==WL_SHM_FORMAT_XRGB8888,"a buffer cut again for another size shows another frame");
+	}
+	std::cout<<"buffer pools for 20 sizes: "<<compositor.pools-pools_before<<'\n';
+	check(compositor.pools-pools_before<=3,"a window made a new buffer pool for each of its sizes");
+	// A buffer cut again for a frame with alpha says so; a frame larger than every pool gets a new one.
+	desktop.translucent(9,true);
+	desktop.present(9,"sizes",219,80,std::vector<uint8_t>(219*80*4,0x30));
+	check(compositor.committed_format==WL_SHM_FORMAT_ARGB8888 && compositor.committed_byte==0x30,"a frame with alpha is shown without it");
+	const int pools_small=compositor.pools;
+	desktop.present(9,"sizes",600,80,std::vector<uint8_t>(600*80*4,0x50));
+	check(compositor.committed_width==600 && compositor.committed_byte==0x50 && compositor.pools==pools_small+1,"a larger frame is not shown whole");
 }
 
 int main()
@@ -220,6 +262,11 @@ int main()
 		std::cerr<<"cannot start the test compositor\n";
 		return 1;
 	}
+	auto *logger=wl_display_add_protocol_logger(compositor.display,[](void *data,wl_protocol_logger_type type,const wl_protocol_logger_message *message) {
+		if (type==WL_PROTOCOL_LOGGER_REQUEST && std::string(wl_resource_get_class(message->resource))=="wl_shm" &&
+			std::string(message->message->name)=="create_pool")
+			++static_cast<Compositor *>(data)->pools;
+	},&compositor);
 	// The presentation connects through the inherited socket instead of a compositor named by WAYLAND_DISPLAY.
 	setenv("WAYLAND_SOCKET",std::to_string(sockets[1]).c_str(),1);
 	std::thread server([&] {
@@ -238,6 +285,7 @@ int main()
 	} catch (const std::exception &error) { failure=error.what(); }
 	compositor.stop=true;
 	server.join();
+	wl_protocol_logger_destroy(logger);
 	wl_display_destroy(compositor.display);
 	if (!failure.empty()) { std::cerr<<failure<<'\n'; return 1; }
 	return 0;

@@ -79,15 +79,18 @@ struct WaylandPresentation::State {
 	};
 	struct Buffer {
 		wl_buffer *proxy=nullptr;
+		// The pool stays with the buffer, with room for a larger frame: a window that changes size cuts its next buffers from pages
+		// both processes already hold.
+		wl_shm_pool *pool=nullptr;
 		void *pixels=MAP_FAILED;
-		size_t size=0;
+		size_t size=0,capacity=0;
 		uint32_t width=0,height=0;
 		// What changed since this buffer last received a frame (left, top, right, bottom): only that part is copied into it again.
 		std::array<int32_t,4> stale{0,0,0,0};
 		bool released=false;
 		// Whether its pixels carry premultiplied alpha (ARGB) or are opaque (XRGB).
 		bool alpha=false;
-		~Buffer() { if (proxy) wl_buffer_destroy(proxy); if (pixels!=MAP_FAILED) munmap(pixels,size); }
+		~Buffer() { if (proxy) wl_buffer_destroy(proxy); if (pool) wl_shm_pool_destroy(pool); if (pixels!=MAP_FAILED) munmap(pixels,capacity); }
 	};
 	struct Surface {
 		wl_surface *proxy=nullptr;
@@ -738,7 +741,8 @@ struct WaylandPresentation::State {
 
 	void attach_frame(Surface &window,uint32_t width,uint32_t height,std::span<const uint8_t> pixels,const std::array<int32_t,4> *within=nullptr) {
 		events(std::chrono::milliseconds(0));
-		// Released buffers of this size are reused; the compositor only repaints what changed since the shown frame.
+		// Released buffers are reused, cut again from their pool for another size; the compositor only repaints what changed since the
+		// shown frame.
 		std::array<int32_t,4> damage{0,0,int32_t(width),int32_t(height)};
 		const bool same_size=window.shown && window.shown->width==width && window.shown->height==height && window.shown->alpha==window.alpha;
 		// Hashes describe the shown frame only after a comparison made them; a frame presented whole leaves none.
@@ -750,9 +754,28 @@ struct WaylandPresentation::State {
 				return;
 			}
 		}
-		std::erase_if(window.buffers,[&](const auto &buffer) {
-			return buffer->released && buffer.get()!=window.shown && (buffer->width!=width || buffer->height!=height || buffer->alpha!=window.alpha);
-		});
+		static const wl_buffer_listener buffer_listener{[](void *data,wl_buffer *) { static_cast<Buffer *>(data)->released=true; }};
+		const auto format=window.alpha ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888;
+		const auto other=[&](const Buffer &buffer) {
+			return buffer.released && &buffer!=window.shown && (buffer.width!=width || buffer.height!=height || buffer.alpha!=window.alpha);
+		};
+		constexpr size_t memory_limit=256*1024*1024;
+		size_t used=0;
+		for (const auto &[key,surface] : surfaces)
+			for (const auto &buffer : surface->buffers) used+=buffer->size;
+		for (auto &buffer : window.buffers)
+			if (other(*buffer) && buffer->capacity>=pixels.size() && used-buffer->size+pixels.size()<=memory_limit) {
+				// The pages past the new frame go back to the system: a buffer holds only what its frame uses.
+				const size_t kept=(pixels.size()+4095)&~size_t(4095);
+				madvise(static_cast<uint8_t *>(buffer->pixels)+kept,buffer->capacity-kept,MADV_REMOVE);
+				used=used-buffer->size+pixels.size();
+				wl_buffer_destroy(buffer->proxy);
+				buffer->proxy=wl_shm_pool_create_buffer(buffer->pool,0,int32_t(width),int32_t(height),int32_t(width*4),format);
+				wl_buffer_add_listener(buffer->proxy,&buffer_listener,buffer.get());
+				buffer->size=pixels.size(); buffer->width=width; buffer->height=height; buffer->alpha=window.alpha;
+				buffer->stale={0,0,int32_t(width),int32_t(height)};
+			}
+		std::erase_if(window.buffers,[&](const auto &buffer) { return other(*buffer); });
 		Buffer *target=nullptr;
 		size_t pending=0;
 		for (const auto &buffer : window.buffers) {
@@ -761,22 +784,21 @@ struct WaylandPresentation::State {
 		}
 		if (!target) {
 			if (pending>=3) throw std::runtime_error("Wayland presentation buffer limit reached");
-			size_t used=0;
+			used=0;
 			for (const auto &[key,surface] : surfaces)
 				for (const auto &buffer : surface->buffers) used+=buffer->size;
-			if (used+pixels.size()>256*1024*1024) throw std::runtime_error("Wayland presentation memory limit reached");
+			if (used+pixels.size()>memory_limit) throw std::runtime_error("Wayland presentation memory limit reached");
 			auto buffer=std::make_unique<Buffer>(); buffer->size=pixels.size(); buffer->width=width; buffer->height=height;
 			buffer->stale={0,0,int32_t(width),int32_t(height)}; buffer->alpha=window.alpha;
+			// Twice the frame: the file is sparse, so the room costs nothing until a larger frame fills it.
+			buffer->capacity=(buffer->size*2+4095)&~size_t(4095);
 			const int descriptor=int(syscall(SYS_memfd_create,"raven-frame",MFD_CLOEXEC));
 			if (descriptor<0) throw std::runtime_error("Wayland frame descriptor failed");
-			if (ftruncate(descriptor,off_t(buffer->size))<0) { close(descriptor); throw std::runtime_error("Wayland frame sizing failed"); }
-			buffer->pixels=mmap(nullptr,buffer->size,PROT_READ|PROT_WRITE,MAP_SHARED,descriptor,0);
+			if (ftruncate(descriptor,off_t(buffer->capacity))<0) { close(descriptor); throw std::runtime_error("Wayland frame sizing failed"); }
+			buffer->pixels=mmap(nullptr,buffer->capacity,PROT_READ|PROT_WRITE,MAP_SHARED,descriptor,0);
 			if (buffer->pixels==MAP_FAILED) { close(descriptor); throw std::runtime_error("Wayland frame mapping failed"); }
-			wl_shm_pool *pool=wl_shm_create_pool(shm,descriptor,int32_t(buffer->size)); close(descriptor);
-			buffer->proxy=wl_shm_pool_create_buffer(pool,0,int32_t(width),int32_t(height),int32_t(width*4),
-				window.alpha ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888);
-			wl_shm_pool_destroy(pool);
-			static const wl_buffer_listener buffer_listener{[](void *data,wl_buffer *) { static_cast<Buffer *>(data)->released=true; }};
+			buffer->pool=wl_shm_create_pool(shm,descriptor,int32_t(buffer->capacity)); close(descriptor);
+			buffer->proxy=wl_shm_pool_create_buffer(buffer->pool,0,int32_t(width),int32_t(height),int32_t(width*4),format);
 			wl_buffer_add_listener(buffer->proxy,&buffer_listener,buffer.get());
 			target=buffer.get();
 			window.buffers.push_back(std::move(buffer));
@@ -1028,7 +1050,7 @@ struct WaylandPresentation::State {
 		for (const auto &buffer : entry->buffers) if (buffer->released && !target) target=buffer.get();
 		if (!target) {
 			if (entry->buffers.size()>=3) return;
-			auto buffer=std::make_unique<Buffer>(); buffer->size=size_t(width)*height*4; buffer->width=width; buffer->height=height;
+			auto buffer=std::make_unique<Buffer>(); buffer->size=buffer->capacity=size_t(width)*height*4; buffer->width=width; buffer->height=height;
 			const int descriptor=int(syscall(SYS_memfd_create,"raven-overlay",MFD_CLOEXEC));
 			if (descriptor<0) return;
 			if (ftruncate(descriptor,off_t(buffer->size))<0) { close(descriptor); return; }
