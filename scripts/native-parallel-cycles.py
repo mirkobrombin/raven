@@ -2,7 +2,8 @@
 """Check what RAVEN_CYCLES reports for a program whose threads call the system at once.
 
 --beside names the calls the runtime must answer beside the turn at least half the times they reach it; --guest names those the guest
-answers itself, which may reach the runtime only when a change came in between (60 times at most)."""
+answers itself, which may reach the runtime only when a change came in between (60 times at most). --lock-under bounds the share of the
+service of the calls --beside names spent waiting for the desktop lock, in percent: calls that sleep or wait would hide it."""
 
 import argparse
 import os
@@ -16,6 +17,7 @@ def main():
     parser.add_argument("fixture")
     parser.add_argument("--beside", default="", help="comma separated")
     parser.add_argument("--guest", default="", help="comma separated")
+    parser.add_argument("--lock-under", type=float, help="percent of the service")
     args = parser.parse_args()
     # No report comes during the run at this interval: the one the run ends with holds every call.
     result = subprocess.run([args.runtime, "--run-process", "--execution=native", "--timeout-ms=30000", args.fixture],
@@ -41,6 +43,13 @@ def main():
     for name in filter(None, args.guest.split(",")):
         if reached.get(name, 0) > 60:
             raise SystemExit(f"{name} reaches the runtime {reached[name]} times while threads run at once\n{output}")
+    measured = [row for row in rows if row[1] in set(filter(None, args.beside.split(",")))]
+    service = sum(calls * served for _, _, calls, _, served, _ in measured)
+    locked = sum(calls * waited for _, _, calls, _, _, waited in measured)
+    share = 100.0 * locked / service if service else 0.0
+    print(f"desktop lock: {share:.1f}% of the service")
+    if args.lock_under is not None and share >= args.lock_under:
+        raise SystemExit(f"the calls waited for the desktop lock {share:.1f}% of their service, {args.lock_under}% at most\n{output}")
 
 
 main()
