@@ -1,8 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <x86intrin.h>
 #include <mutex>
 #include <thread>
+
+#include "call_cycles.h"
 
 namespace raven {
 
@@ -20,7 +23,7 @@ public:
 			++depth;
 			return;
 		}
-		mutex.lock();
+		take();
 		owner.store(me, std::memory_order_relaxed);
 		depth = 1;
 		taken.fetch_add(1, std::memory_order_release);
@@ -50,7 +53,7 @@ public:
 	{
 		if (!held)
 			return;
-		mutex.lock();
+		take();
 		owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 		depth = held;
 		taken.fetch_add(1, std::memory_order_release);
@@ -59,6 +62,15 @@ public:
 	uint64_t entries() const { return taken.load(std::memory_order_acquire); }
 
 private:
+	// Takes the mutex; what it waited while another thread held it goes to the call being served (see CallCycles).
+	void take()
+	{
+		if (mutex.try_lock())
+			return;
+		const uint64_t started = __rdtsc();
+		mutex.lock();
+		CallCycles::instance().waited_lock(__rdtsc() - started);
+	}
 	std::mutex mutex;
 	std::atomic<std::thread::id> owner{};
 	std::atomic<uint64_t> taken{0};
