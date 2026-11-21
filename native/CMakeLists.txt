@@ -3461,6 +3461,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${VULKAN_FIXTURES}/hidden-present64.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/hidden_present_client.c
                         ${VULKAN_FIXTURES}/vulkan.a -luser32 -lkernel32
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/hidden_present_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
+                # Threads that record command buffers at once, each from a pool of its own: the recording is answered beside the turn.
+                if(Python3_Interpreter_FOUND)
+                    add_custom_command(OUTPUT ${VULKAN_FIXTURES}/parallel-vulkan64.exe
+                        COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
+                            -idirafter ${Vulkan_INCLUDE_DIRS}
+                            -Wl,--entry,raven_entry,--image-base,0x18e000000
+                            -o ${VULKAN_FIXTURES}/parallel-vulkan64.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/parallel_vulkan_client.c
+                            ${VULKAN_FIXTURES}/vulkan.a -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/parallel_vulkan_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
+                    add_custom_target(vulkan_parallel64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/parallel-vulkan64.exe)
+                    add_dependencies(vulkan_parallel64_fixture vulkan_import64)
+                    add_test(NAME native_parallel_vulkan_x64 COMMAND ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${VULKAN_FIXTURES}/parallel-vulkan64.exe
+                        --beside vkCmdFillBuffer,vkCmdPipelineBarrier,vkBeginCommandBuffer,vkEndCommandBuffer,vkResetCommandBuffer)
+                    set_tests_properties(native_parallel_vulkan_x64 PROPERTIES TIMEOUT 120 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                        ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-vulkan-x64-prefix")
+                endif()
                 add_custom_target(vulkan_hidden_present64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/hidden-present64.exe)
                 add_dependencies(vulkan_hidden_present64_fixture vulkan_import64)
                 add_test(NAME native_vulkan_hidden_present_x64 COMMAND raven --run-process --execution=native --timeout-ms=20000 ${VULKAN_FIXTURES}/hidden-present64.exe)
@@ -3942,7 +3959,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         DEPENDS ${LOADER_SOURCES}/parallel_desktop_client.c VERBATIM)
                     list(APPEND PARALLEL_CLIENTS ${parallel_desktop_client})
                     add_test(NAME native_parallel_desktop_x${width} COMMAND ${Python3_EXECUTABLE}
-                        ${PROJECT_SOURCE_DIR}/scripts/native-desktop-cycles.py $<TARGET_FILE:raven> ${parallel_desktop_client})
+                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${parallel_desktop_client}
+                        # Changes of window data and properties are answered beside the turn, under the desktop lock; what the guest reads from
+                        # the runtime's tables reaches the runtime only when a change came in between.
+                        --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC,PeekMessageW
+                        --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
                 endif()
