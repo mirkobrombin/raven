@@ -464,10 +464,14 @@ bool NativeWindows::system_dispatch(std::string_view name)
 				const auto value = take();
 				std::u16string body;
 				if (item->type == 'c' || item->type == 'C') {
-					if (ansi && item->type == 'c')
-						body = from_ansi(std::string(1, char(uint8_t(value))), 1252);
-					else
+					// %c takes a character of the function's width, %C of the other; %hc and %lc say which.
+					bool wide = (item->type == 'c') != ansi;
+					if (item->narrow_size) wide = false;
+					if (item->wide_size) wide = true;
+					if (wide)
 						body.push_back(char16_t(uint16_t(value)));
+					else
+						body = from_ansi(std::string(1, char(uint8_t(value))), 1252);
 				} else if (item->type == 's' || item->type == 'S') {
 					// %s takes the string width of the function (UTF-16); %S, %hs and %ls swap it.
 					bool wide = (item->type == 's') != ansi;
