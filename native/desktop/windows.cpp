@@ -667,19 +667,18 @@ void NativeWindows::mark_quiet(uint32_t thread)
 	// answers PeekMessage, not GetInputState.
 	const uint32_t holds=queue_status(thread,0xffff,false)>>16;
 	watch_input();
-	// The time stamp counter's rate, taken against the steady clock since the first poll that could be answered: until it has run a
-	// tenth of a second the guest asks the runtime every time.
-	static const uint64_t first_ticks=__rdtsc();
-	static const auto first_time=std::chrono::steady_clock::now();
+	// The time stamp counter's rate, taken against the steady clock since the process's desktop was made: until that is a tenth of a
+	// second ago the guest asks the runtime every time. Counted from the first poll instead, a program whose threads poll for less than
+	// that, between bursts of calls, never had its polls answered in the guest.
 	const uint64_t ticks=__rdtsc();
 	const auto now=std::chrono::steady_clock::now();
-	const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(now-first_time).count();
-	if (elapsed<100'000'000 || ticks<=first_ticks) return;
+	const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(now-made_time).count();
+	if (elapsed<100'000'000 || ticks<=made_ticks) return;
 	auto until=now+std::chrono::milliseconds(16);
 	for (const auto &timer : timers)
 		if (!timer.thread || timer.thread==thread) until=std::min(until,timer.due);
 	if (until<=now) return;
-	const double rate=double(ticks-first_ticks)/double(elapsed);
+	const double rate=double(ticks-made_ticks)/double(elapsed);
 	const uint64_t deadline=ticks+uint64_t(rate*double(std::chrono::duration_cast<std::chrono::nanoseconds>(until-now).count()));
 	auto *slot=quiet_table+(thread%quiet_slots)*quiet_slot;
 	__atomic_store_n(reinterpret_cast<uint64_t *>(slot+8),uint64_t(0),__ATOMIC_RELEASE);
