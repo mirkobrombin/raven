@@ -70,7 +70,7 @@ public:
 	void set_menu_loader(std::function<uint64_t(uint64_t,uint64_t)> loader) { menu_loader = std::move(loader); }
 	bool dispatch(std::string_view name);
 	// The served block where the screen context the guest's GetDC(NULL) takes is published (see the screen preludes), and the
-	// offsets in it of the capability table, the context and its state.
+	// offsets in it of the capability table, the context and its state: two words, 16-byte aligned, that change together.
 	static constexpr size_t screen_caps = 0x400, screen_dc = 0x600, screen_dc_state = 0x608;
 	void set_screen_block(uint64_t *block) { screen_block = reinterpret_cast<uint8_t *>(block); }
 	// A call the runtime serves with the published screen context as its first argument may change it: the guest's ReleaseDC then

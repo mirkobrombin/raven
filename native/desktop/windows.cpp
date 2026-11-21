@@ -2396,18 +2396,33 @@ uint64_t NativeWindows::map_points(uint64_t from,uint64_t to,uint64_t points,uin
 	return uint16_t(dx) | (uint32_t(uint16_t(dy))<<16);
 }
 
+// The published screen context and its state change together, with the one lock cmpxchg16b the guest's GetDC and ReleaseDC take them
+// with: `handle` and `state` are what the slot is expected to hold, and what it held when it did not.
+static bool exchange_screen_slot(uint8_t *slot, uint64_t &handle, uint64_t &state, uint64_t new_handle, uint64_t new_state)
+{
+	bool done;
+	asm volatile("lock cmpxchg16b %[slot]" : "=@ccz"(done), [slot] "+m"(*reinterpret_cast<unsigned __int128 *>(slot)), "+a"(handle),
+		"+d"(state) : "b"(new_handle), "c"(new_state) : "memory");
+	return done;
+}
+
 void NativeWindows::publish_screen_dc(uint64_t desktop)
 {
 	if (!screen_block)
 		return;
-	auto &published=*reinterpret_cast<uint64_t *>(screen_block+screen_dc);
+	auto *slot=reinterpret_cast<uint64_t *>(screen_block+screen_dc);
 	// A published context that is gone (deleted rather than released) is withdrawn, and so is one a caller holds: it stays that
-	// caller's, an ordinary context its ReleaseDC brings to the runtime, and the next GetDC(NULL) in the guest takes a new one.
-	if (const uint64_t current=__atomic_load_n(&published,__ATOMIC_ACQUIRE); current &&
-		(!objects.dc(current) || __atomic_load_n(reinterpret_cast<uint32_t *>(screen_block+screen_dc_state),__ATOMIC_ACQUIRE)))
-		withdraw_screen_dc(current);
-	if (__atomic_load_n(&published,__ATOMIC_ACQUIRE))
-		return;
+	// caller's, an ordinary context its ReleaseDC brings to the runtime, and the next GetDC(NULL) in the guest takes a new one. One the
+	// guest gave back meanwhile is free again and stays.
+	for (;;) {
+		uint64_t current=__atomic_load_n(&slot[0],__ATOMIC_ACQUIRE), state=__atomic_load_n(&slot[1],__ATOMIC_ACQUIRE);
+		if (!current)
+			break;
+		if (objects.dc(current) && !state)
+			return;
+		if (exchange_screen_slot(screen_block+screen_dc,current,state,0,0))
+			break;
+	}
 	// A context of its own, free: the caller keeps the one it asked for, which a program may hold for its whole life.
 	const auto *window=std::as_const(objects).window(desktop);
 	DesktopDC device{window->bitmap,window->bitmap,desktop}; device.leased=true;
@@ -2420,21 +2435,23 @@ void NativeWindows::publish_screen_dc(uint64_t desktop)
 		const uint32_t value=device_caps(objects,*objects.dc(handle),index);
 		std::memcpy(screen_block+screen_caps+size_t(index)*4,&value,4);
 	}
-	__atomic_store_n(reinterpret_cast<uint32_t *>(screen_block+screen_dc_state),uint32_t(0),__ATOMIC_RELEASE);
-	__atomic_store_n(&published,handle,__ATOMIC_RELEASE);
+	// The slot is empty, which no GetDC in the guest takes: the context goes in last.
+	__atomic_store_n(&slot[1],uint64_t(0),__ATOMIC_RELEASE);
+	__atomic_store_n(&slot[0],handle,__ATOMIC_RELEASE);
 }
 
 bool NativeWindows::withdraw_screen_dc(uint64_t handle)
 {
 	if (!screen_block || !handle)
 		return false;
-	auto &published=*reinterpret_cast<uint64_t *>(screen_block+screen_dc);
-	if (__atomic_load_n(&published,__ATOMIC_ACQUIRE)!=handle)
-		return false;
-	// The context goes first, so a GetDC that takes the freed state finds none and goes to the runtime.
-	__atomic_store_n(&published,uint64_t(0),__ATOMIC_RELEASE);
-	__atomic_store_n(reinterpret_cast<uint32_t *>(screen_block+screen_dc_state),uint32_t(0),__ATOMIC_RELEASE);
-	return true;
+	auto *slot=reinterpret_cast<uint64_t *>(screen_block+screen_dc);
+	for (;;) {
+		uint64_t current=__atomic_load_n(&slot[0],__ATOMIC_ACQUIRE), state=__atomic_load_n(&slot[1],__ATOMIC_ACQUIRE);
+		if (current!=handle)
+			return false;
+		if (exchange_screen_slot(screen_block+screen_dc,current,state,0,0))
+			return true;
+	}
 }
 
 void NativeWindows::set_window_table(uint8_t *table)
@@ -3014,12 +3031,16 @@ void NativeWindows::screen_dc_use(std::string_view name)
 {
 	if (!screen_block)
 		return;
-	const uint64_t published=__atomic_load_n(reinterpret_cast<uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE);
+	const auto *slot=reinterpret_cast<uint64_t *>(screen_block+screen_dc);
+	const uint64_t published=__atomic_load_n(&slot[0],__ATOMIC_ACQUIRE);
 	if (!published || name=="GetDeviceCaps" || name=="ReleaseDC")
 		return;
 	// Only the first argument: the calls that change a context take it there, and the other registers may hold anything.
-	if (process.api_arguments(1)[0]==published)
-		__atomic_store_n(reinterpret_cast<uint32_t *>(screen_block+screen_dc_state),uint32_t(2),__ATOMIC_RELEASE);
+	if (process.api_arguments(1)[0]!=published)
+		return;
+	for (uint64_t current=published, state=__atomic_load_n(&slot[1],__ATOMIC_ACQUIRE); current==published;)
+		if (exchange_screen_slot(screen_block+screen_dc,current,state,published,2))
+			break;
 }
 
 bool NativeWindows::dispatch(std::string_view name)
@@ -3248,10 +3269,9 @@ bool NativeWindows::dispatch(std::string_view name)
 		else if (name=="GetDC" || name=="GetWindowDC") {
 			// Parallel guests trap here: the host owns the cache until the guest preludes can publish atomically.
 			if (process.parallel() && screen_block && !args[0] && name=="GetDC") {
-				auto &state=*reinterpret_cast<uint32_t *>(screen_block+screen_dc_state);
-				const auto cached=*reinterpret_cast<uint64_t *>(screen_block+screen_dc);
-				if (cached && !state && objects.dc(cached)) {
-					state=1;
+				const auto cached=__atomic_load_n(reinterpret_cast<uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE);
+				uint64_t expected=cached, state=0;
+				if (cached && objects.dc(cached) && exchange_screen_slot(screen_block+screen_dc,expected,state,cached,1)) {
 					process.return_api(cached);
 					return true;
 				}
@@ -3325,10 +3345,9 @@ bool NativeWindows::dispatch(std::string_view name)
 			if (window) {
 				if (!device || !device->leased || device->window!=owner) throw uint32_t(1400);
 				if (process.parallel() && screen_block && !args[0] &&
-					*reinterpret_cast<uint64_t *>(screen_block+screen_dc)==args[1]) {
-					auto &state=*reinterpret_cast<uint32_t *>(screen_block+screen_dc_state);
-					if (state==1) {
-						state=0;
+					__atomic_load_n(reinterpret_cast<uint64_t *>(screen_block+screen_dc),__ATOMIC_ACQUIRE)==args[1]) {
+					uint64_t expected=args[1], state=1;
+					if (exchange_screen_slot(screen_block+screen_dc,expected,state,args[1],0)) {
 						process.return_api(1);
 						return true;
 					}
