@@ -519,6 +519,7 @@
         "native/guest/raven-user32/draw.c",
         "native/guest/raven-user32/edit.c",
         "native/guest/raven-user32/exports.txt",
+        "native/guest/raven-user32/format.c",
         "native/guest/raven-user32/listbox.c",
         "native/guest/raven-user32/make_resources.py",
         "native/guest/raven-user32/mdi.c",
