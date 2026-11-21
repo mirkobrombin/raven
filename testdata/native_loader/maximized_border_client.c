@@ -1,10 +1,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-// A window shown maximized that places its sizing border past the screen's edges, as Windows 10 lays out a maximized window and as
-// Chromium places its own: the screen shows its client area, a fill of COLOR. A click on the screen's centre must reach the window at
+// A window shown maximized that places its sizing border past the edges of the work area, as Windows 10 lays out a maximized window and
+// as Chromium places its own: the screen shows its client area, a fill of COLOR. A click on the screen's centre must reach the window at
 // that point of the screen, and opens a menu there; once the menu closes, the window restores itself, for the host to maximize it again.
-// The host closes the window; the exit code says what went wrong.
+// The work area the window is told of leaves out the host's panel. The host closes the window; the exit code says what went wrong.
 #define COLOR RGB(32,128,224)
 static POINT clicked={-1,-1};
 
@@ -12,10 +12,11 @@ static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM 
 {
 	if (message==WM_WINDOWPOSCHANGING && IsZoomed(window)) {
 		WINDOWPOS *place=(WINDOWPOS *)lparam;
-		if (!(place->flags & SWP_NOSIZE)) {
+		MONITORINFO monitor={sizeof(monitor)};
+		if (!(place->flags & SWP_NOSIZE) && GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTOPRIMARY),&monitor)) {
 			const int border=8;
-			place->x=-border; place->y=-border;
-			place->cx=GetSystemMetrics(SM_CXSCREEN)+2*border; place->cy=GetSystemMetrics(SM_CYSCREEN)+2*border;
+			place->x=monitor.rcWork.left-border; place->y=monitor.rcWork.top-border;
+			place->cx=monitor.rcWork.right-monitor.rcWork.left+2*border; place->cy=monitor.rcWork.bottom-monitor.rcWork.top+2*border;
 			place->flags&=~SWP_NOMOVE;
 		}
 	}
@@ -29,7 +30,12 @@ static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wparam,LPARAM 
 		ShowWindow(window,SW_RESTORE);
 	}
 	if (message==WM_CLOSE) {
-		if (clicked.x<0) PostQuitMessage(20);
+		MONITORINFO monitor={sizeof(monitor)};
+		RECT work;
+		if (!GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTOPRIMARY),&monitor) || !SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0) ||
+			!EqualRect(&work,&monitor.rcWork) || work.bottom>=GetSystemMetrics(SM_CYSCREEN))
+			PostQuitMessage(22);
+		else if (clicked.x<0) PostQuitMessage(20);
 		else if (clicked.x!=GetSystemMetrics(SM_CXSCREEN)/2 || clicked.y!=GetSystemMetrics(SM_CYSCREEN)/2) PostQuitMessage(21);
 		else PostQuitMessage(0);
 		return 0;

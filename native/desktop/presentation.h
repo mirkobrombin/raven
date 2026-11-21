@@ -16,6 +16,7 @@ namespace raven {
 // pointer_wheel: message carries the signed wheel delta in 1/120 notches (wparam 1 for the horizontal wheel), x and y the pointer position.
 // popup_done: the compositor dismissed a popup (for example by a click outside it).
 // pointer_relative: x and y carry the movement of the mouse itself, unaccelerated and not stopped by the screen edges.
+// resize: x and y carry the size the host gives the window, wparam 1 when the host shows it maximized.
 enum class DesktopEventKind { message, pointer_motion, pointer_button, keymap, modifiers, keyboard_focus, key, popup_done, resize, pointer_wheel,
 	pointer_relative, pointer_leave };
 
@@ -95,8 +96,8 @@ struct DesktopPresentation {
 	// Said before a frame is presented: it differs from the window's last one inside this rectangle alone (left, top, right, bottom),
 	// so the rest of it need not be looked at.
 	std::function<void(uint64_t handle,std::array<int32_t,4> area)> changed_within;
-	// Said before a frame of a maximized window is presented: the part of it on the screen (left, top, right, bottom), which the host
-	// shows as the window. A program can place the sizing border of its maximized window past the screen's edges, as Windows does.
+	// Said before a frame of a maximized window is presented: the part of it in the work area (left, top, right, bottom), which the host
+	// shows as the window. A program can place the sizing border of its maximized window past the work area's edges, as Windows does.
 	std::function<void(uint64_t handle,std::array<int32_t,4> area)> shown_within;
 };
 

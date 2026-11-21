@@ -1164,7 +1164,8 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		}
 		switch (action) {
 		case 0x30: {
-			const int32_t rect[] = {0, 0, screen.screen_x, screen.screen_y};
+			const auto work = screen.work_area();
+			const int32_t rect[] = {work.left, work.top, work.right, work.bottom};
 			call.write(pointer, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(rect), 16));
 			call.ret(1);
 			return;

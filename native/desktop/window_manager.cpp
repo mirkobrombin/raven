@@ -154,7 +154,7 @@ bool NativeWindows::show_window(uint64_t handle, uint32_t command)
 				window->restore = window->outer;
 			window->style = (window->style & ~ws_minimize) | ws_maximize;
 			// The window hears of its new place as of any other: WM_WINDOWPOSCHANGED, which a program may lay its content out from.
-			place_window(handle, {0, 0, screen.screen_x, screen.screen_y}, 0, 0x14);
+			place_window(handle, screen.work_area(), 0, 0x14);
 		} else if (minimize && !is_min) {
 			if (!is_max)
 				window->restore = window->outer;
@@ -1274,7 +1274,8 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 				return;
 			}
 			std::vector<uint8_t> bytes(size);
-			const int32_t values[10] = {int32_t(size), 0, 0, metrics.screen_x, metrics.screen_y, 0, 0, metrics.screen_x, metrics.screen_y, 1};
+			const auto work = metrics.work_area();
+			const int32_t values[10] = {int32_t(size), 0, 0, metrics.screen_x, metrics.screen_y, work.left, work.top, work.right, work.bottom, 1};
 			std::memcpy(bytes.data(), values, 40);
 			if (size > 40) {
 				const std::string_view device = "\\\\.\\DISPLAY1";

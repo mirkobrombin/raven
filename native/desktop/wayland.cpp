@@ -206,7 +206,7 @@ struct WaylandPresentation::State {
 	std::map<uint64_t,std::unique_ptr<Hosted>> hosted;
 	// The rectangle the next frame of a window differs from its last in, when its presenter said so.
 	std::map<uint64_t,std::array<int32_t,4>> within;
-	// The part of the next frame of a maximized window that lies on the screen.
+	// The part of the next frame of a maximized window that lies in the work area.
 	std::map<uint64_t,std::array<int32_t,4>> on_screen;
 	uint64_t hosted_order=0;
 	// Child windows drawn by GDI shown over the driver's surfaces of their root (see overlay).
@@ -1163,8 +1163,8 @@ struct WaylandPresentation::State {
 		if (window.pending_width==shown_width && window.pending_height==shown_height) window.resized=false;
 		window.width=shown_width; window.height=shown_height;
 		window.geometry_x=part[0]; window.geometry_y=part[1];
-		// shortcut: the frame outside the geometry still shows, and takes input, on an output beside this one; crop it when Raven places
-		// windows on more than one output.
+		// shortcut: the frame outside the geometry still shows, and takes input, where nothing else covers it: on an output beside this one,
+		// or in a strip the compositor keeps free for a panel. Crop it with a viewport when that shows.
 		xdg_surface_set_window_geometry(window.shell,part[0],part[1],int32_t(shown_width),int32_t(shown_height));
 		window.alpha=translucent.contains(handle);
 		attach_frame(window,width,height,pixels,area ? &area.mapped() : nullptr);
@@ -1221,7 +1221,8 @@ DesktopPresentation WaylandPresentation::callbacks()
 			// The size that comes with such a state waits until the program has followed it, so the window it remembers to restore
 			// is the one it had, not the compositor's maximized size.
 			if (surface->resized && !surface->is_popup && !surface->state_reported) {
-				events.push_back({handle,0,0,0,DesktopEventKind::resize,int32_t(surface->pending_width),int32_t(surface->pending_height)});
+				events.push_back({handle,0,surface->shown_maximized,0,DesktopEventKind::resize,int32_t(surface->pending_width),
+					int32_t(surface->pending_height)});
 				surface->resized=false;
 			}
 			if (surface->closed && !surface->close_posted) {
