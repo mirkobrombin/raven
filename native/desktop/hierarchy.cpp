@@ -8,12 +8,14 @@ namespace raven {
 
 const DesktopWindow *DesktopObjects::window(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	const auto found=objects.find(handle);
 	return found==objects.end() ? nullptr : std::get_if<DesktopWindow>(&found->second);
 }
 
 uint64_t DesktopObjects::window_root(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	for (unsigned depth=0;depth<64;++depth) {
 		const auto *record=window(handle);
 		if (!record) return 0;
@@ -25,6 +27,7 @@ uint64_t DesktopObjects::window_root(uint64_t handle) const
 
 std::vector<uint64_t> DesktopObjects::child_windows(uint64_t parent, bool unlinked) const
 {
+	const TableHold hold(*this, false);
 	std::vector<std::pair<uint64_t,uint64_t>> found;
 	for (const auto handle:window_set)
 		if (const auto *record=window(handle); record && record->parent==parent && (record->linked || unlinked)) found.emplace_back(record->order,handle);
@@ -36,6 +39,7 @@ std::vector<uint64_t> DesktopObjects::child_windows(uint64_t parent, bool unlink
 
 void DesktopObjects::restack(uint64_t handle,bool top)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle);
 	if (!record) return;
 	const auto siblings=child_windows(record->parent);
@@ -47,6 +51,7 @@ void DesktopObjects::restack(uint64_t handle,bool top)
 
 bool DesktopObjects::is_child(uint64_t parent,uint64_t child) const
 {
+	const TableHold hold(*this, false);
 	if (!parent || !child || parent==child) return false;
 	for (unsigned depth=0;depth<64;++depth) {
 		const auto *record=window(child);
@@ -59,6 +64,7 @@ bool DesktopObjects::is_child(uint64_t parent,uint64_t child) const
 
 bool DesktopObjects::window_visible(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	for (unsigned depth=0;depth<64;++depth) {
 		const auto *record=window(handle);
 		if (!record || !record->visible) return false;
@@ -70,6 +76,7 @@ bool DesktopObjects::window_visible(uint64_t handle) const
 
 void DesktopObjects::configure_window_dc(uint64_t handle,DesktopDC &device,bool frame) const
 {
+	const TableHold hold(*this, false);
 	const auto *record=window(handle),*root=window(window_root(handle));
 	if (!record || !root) throw uint32_t(1400);
 	device.window_frame=frame;

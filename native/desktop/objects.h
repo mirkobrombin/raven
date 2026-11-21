@@ -6,9 +6,12 @@
 #include "shared_pixels.h"
 #include "nonclient.h"
 #include "colors.h"
+#include "desktop_hold.h"
 #include "menu.h"
 #include <algorithm>
 #include <atomic>
+#include <shared_mutex>
+#include <stdexcept>
 #include <array>
 #include <chrono>
 #include <functional>
@@ -420,6 +423,47 @@ public:
 	void set_work_area(int32_t width,int32_t height);
 
 private:
+	// Calls under the shared desktop lock (desktop_hold.h) may add and remove objects of their own while others read the table: while
+	// the calling thread holds the lock shared, a member reads the table under `storage` shared and changes it under it whole. Under the
+	// desktop lock whole nobody else is in the table, and nothing is taken. A member another calls within its hold takes nothing more;
+	// one that changes the table is never called within a hold that only reads it.
+	mutable std::shared_mutex storage;
+	class TableHold {
+	public:
+		TableHold(const DesktopObjects &owner, bool whole) : owner(owner)
+		{
+			if (!desktop_shared_depth)
+				return;
+			counted = true;
+			if (depth++) {
+				if (whole && !whole_held)
+					throw std::logic_error("the desktop's table is changed within a hold that only reads it");
+				return;
+			}
+			whole_held = whole;
+			if (whole)
+				owner.storage.lock();
+			else
+				owner.storage.lock_shared();
+		}
+		~TableHold()
+		{
+			if (!counted || --depth)
+				return;
+			if (whole_held)
+				owner.storage.unlock();
+			else
+				owner.storage.unlock_shared();
+		}
+		TableHold(const TableHold &) = delete;
+		TableHold &operator=(const TableHold &) = delete;
+
+	private:
+		const DesktopObjects &owner;
+		bool counted = false;
+		static inline thread_local unsigned depth = 0;
+		static inline thread_local bool whole_held = false;
+	};
 	TouchedHandles windows_touched{}, menus_touched{}, bitmaps_touched{}, dcs_touched{}, icons_touched{}, regions_touched{};
 	// How many contexts each bitmap is selected into.
 	std::map<uint64_t,uint32_t> selections;

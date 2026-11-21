@@ -10,12 +10,14 @@ uint8_t combine_raster(uint32_t mode,uint8_t pen,uint8_t destination);
 
 const DesktopPen *DesktopObjects::pen(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	if (handle>=desktop_stock_pen && handle<desktop_stock_pen+stock_pens.size()) return &stock_pens[size_t(handle-desktop_stock_pen)];
 	const auto found=objects.find(handle);return found==objects.end() ? nullptr : std::get_if<DesktopPen>(&found->second);
 }
 
 bool DesktopObjects::pen_selected(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	for(const auto &[identity,object]:objects)
 		if(const auto *device=std::get_if<DesktopDC>(&object);device && device->pen==handle)return true;
 	return false;
@@ -23,6 +25,7 @@ bool DesktopObjects::pen_selected(uint64_t handle) const
 
 uint64_t DesktopObjects::select_pen(uint64_t handle,uint64_t selected)
 {
+	const TableHold hold(*this, true);
 	auto *device=dc(handle);if(!device || !pen(selected))return 0;
 	const auto previous=device->pen;device->pen=selected;
 	if(const auto *old=pen(previous);old && old->pending_delete && !pen_selected(previous))erase(previous);
@@ -31,6 +34,7 @@ uint64_t DesktopObjects::select_pen(uint64_t handle,uint64_t selected)
 
 bool DesktopObjects::delete_pen(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	if(handle>=desktop_stock_pen && handle<desktop_stock_pen+stock_pens.size())return true;
 	const auto found=objects.find(handle);if(found==objects.end())return false;
 	auto *value=std::get_if<DesktopPen>(&found->second);if(!value)return false;

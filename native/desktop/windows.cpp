@@ -2525,12 +2525,23 @@ void NativeWindows::publish_window_alone(uint64_t handle)
 	if (!window_table || !screen_block)
 		return;
 	// The guest reads a record between two looks at an even count that did not change: one writer at a time keeps it odd throughout.
-	static std::mutex writing;
-	const std::lock_guard lock(writing);
+	const std::lock_guard lock(publishing_alone);
 	auto *version=reinterpret_cast<uint64_t *>(screen_block+table_version);
 	__atomic_fetch_add(version,1,__ATOMIC_SEQ_CST);
 	publish_window_record(handle,std::as_const(objects).window(handle));
 	__atomic_fetch_add(version,1,__ATOMIC_SEQ_CST);
+}
+
+void NativeWindows::publish_dc_alone(uint64_t handle)
+{
+	if (!dc_table)
+		return;
+	const std::lock_guard lock(publishing_alone);
+	const auto *device=std::as_const(objects).dc(handle);
+	publish_dc(handle,device);
+	// A call of the turn that a callback interrupted may still watch a context released meanwhile.
+	if (!device)
+		std::erase_if(watched_dcs,[handle](const auto &item) { return item.first==handle; });
 }
 
 void NativeWindows::publish_windows()
