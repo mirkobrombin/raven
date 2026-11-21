@@ -74,10 +74,13 @@ int raven_entry(void)
 		}
 		if (WaitForMultipleObjects(4, workers, TRUE, 5000) != WAIT_OBJECT_0)
 			return 9;
+		/* A worker that failed tells which check: 11 no context or a shared one, 12 the font, 13 the release; 14 still running. */
 		for (unsigned index = 0; index < 4; ++index) {
 			DWORD code = 0;
-			if (!GetExitCodeThread(workers[index], &code) || code)
+			if (!GetExitCodeThread(workers[index], &code))
 				return 10;
+			if (code)
+				return code == STILL_ACTIVE ? 14 : 10 + (int)code;
 			CloseHandle(workers[index]);
 		}
 	}
