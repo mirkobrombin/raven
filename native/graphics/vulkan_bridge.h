@@ -9,8 +9,11 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <unordered_map>
+#include <utility>
 #include <vulkan/vulkan.h>
 
 namespace raven {
@@ -34,7 +37,12 @@ public:
 	VulkanBridge(const VulkanBridge &) = delete;
 	VulkanBridge &operator=(const VulkanBridge &) = delete;
 	static std::span<const std::string_view> exports();
+	// A call in the runtime's turn: it holds the bridge's tables alone.
 	bool dispatch(std::string_view name);
+	// A recording call a guest thread makes beside the turn (vkCmd*, and beginning, ending and resetting a command buffer): it only reads
+	// the tables, which it shares with the other threads recording at once. The program keeps each command buffer to one thread at a
+	// time, as Vulkan asks of it.
+	bool dispatch_beside(std::string_view name);
 	// The host display and surface over a local window. Foreign windows present through shared pixels instead.
 	struct SurfaceSource {
 		std::function<std::optional<HostSurface>(uint64_t window)> create;
@@ -79,6 +87,31 @@ public:
 private:
 	NativeProcess &process;
 	const ModuleSet &modules;
+	// The tables of handles below. A thread that parks for the driver gives its hold up meanwhile, as the turn's other calls run then
+	// (see TablesRelease); the entry points a device has looked up are kept under a lock of their own, as recording calls look them up
+	// while they share the tables.
+	std::shared_mutex tables;
+	static inline thread_local unsigned tables_held = 0;
+	// Gives up the calling thread's sole hold of the tables over a scope, however deep, and takes it back after.
+	struct TablesRelease {
+		VulkanBridge &bridge;
+		const unsigned held;
+		explicit TablesRelease(VulkanBridge &owner) : bridge(owner), held(std::exchange(tables_held, 0u))
+		{
+			if (held)
+				bridge.tables.unlock();
+		}
+		~TablesRelease()
+		{
+			if (held)
+				bridge.tables.lock();
+			tables_held = held;
+		}
+		TablesRelease(const TablesRelease &) = delete;
+		TablesRelease &operator=(const TablesRelease &) = delete;
+	};
+	std::mutex procedures_lock;
+	bool dispatch_tables(std::string_view name);
 	Park park;
 	std::function<void()> wake;
 	struct Workers;

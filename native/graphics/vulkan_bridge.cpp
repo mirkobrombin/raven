@@ -165,6 +165,7 @@ VkResult VulkanBridge::detached(const std::function<VkResult()> &work, std::atom
 			notify();
 	});
 	try {
+		const TablesRelease release(*this);
 		park([&call] { return call->done.load(std::memory_order_acquire); }, std::nullopt);
 	} catch (...) {
 		if (cancel)
@@ -269,6 +270,26 @@ std::string VulkanBridge::string(uint64_t address)
 }
 
 bool VulkanBridge::dispatch(std::string_view name)
+{
+	// A call the bridge makes on its own behalf from within a call already holds the tables.
+	if (tables_held) {
+		++tables_held;
+		const struct Leave { ~Leave() { --tables_held; } } leave;
+		return dispatch_tables(name);
+	}
+	const std::unique_lock hold(tables);
+	tables_held = 1;
+	const struct Leave { ~Leave() { tables_held = 0; } } leave;
+	return dispatch_tables(name);
+}
+
+bool VulkanBridge::dispatch_beside(std::string_view name)
+{
+	const std::shared_lock hold(tables);
+	return dispatch_tables(name);
+}
+
+bool VulkanBridge::dispatch_tables(std::string_view name)
 {
 	if (dispatch_resource(name) || dispatch_enumerate(name) || dispatch_queries(name) || dispatch_hand(name) || dispatch_generated(name))
 		return true;
