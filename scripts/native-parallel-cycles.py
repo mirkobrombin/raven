@@ -24,14 +24,15 @@ def main():
     if result.returncode != 0 or "Native entry returned 0 " not in output:
         raise SystemExit(f"the program failed: exit {result.returncode}\n{output}")
     rows = []
-    for match in re.finditer(r"^cycles:\s+(\S+)\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+(\d+)\s+service\s+(\d+)", output, re.M):
-        rows.append((int(match[5]), match[1], int(match[2]), int(match[3]), int(match[6])))
+    for match in re.finditer(r"^cycles:\s+(\S+)\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+(\d+)\s+service\s+(\d+)"
+                             r"\s+return\s+\d+\s+lock\s+(\d+)", output, re.M):
+        rows.append((int(match[5]), match[1], int(match[2]), int(match[3]), int(match[6]), int(match[7])))
     if not rows:
         raise SystemExit(f"no calls reported\n{output}")
-    for turn, name, calls, beside, service in sorted(rows, reverse=True):
-        print(f"{name}: {calls} calls, {beside} beside, turn {turn}, service {service}")
+    for turn, name, calls, beside, service, locked in sorted(rows, reverse=True):
+        print(f"{name}: {calls} calls, {beside} beside, turn {turn}, service {service}, lock {locked}")
     reached, beside = {}, {}
-    for _, name, calls, answered, _ in rows:
+    for _, name, calls, answered, _, _ in rows:
         reached[name] = reached.get(name, 0) + calls
         beside[name] = beside.get(name, 0) + answered
     for name in filter(None, args.beside.split(",")):
