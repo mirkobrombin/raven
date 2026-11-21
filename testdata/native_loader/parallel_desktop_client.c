@@ -145,6 +145,9 @@ int raven_entry(void)
 		return 5;
 	// Long enough for the painter to be waiting for its messages.
 	Sleep(50);
+	// A message sent to another thread's window runs on that thread, which answers it while it waits for its own.
+	if (SendMessageW(painted, WM_USER, 41, 0) != 42)
+		return 8;
 	if (!InvalidateRect(painted, NULL, FALSE))
 		return 6;
 	DWORD code = 0;

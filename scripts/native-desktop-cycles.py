@@ -35,7 +35,7 @@ def main():
         if beside.get(name, 0) < reached.get(name, 0) // 2 or not reached.get(name, 0):
             raise SystemExit(f"{name} is answered beside the turn {beside.get(name, 0)} of {reached.get(name, 0)} times\n{output}")
     for name in ("GetAncestor", "GetPropW", "GetFocus", "GetMenuItemCount", "GetMenuItemID", "GetSubMenu", "PtInRegion", "RectInRegion",
-                 "GetRgnBox", "GetObjectW", "GetWindowRect", "GetClientRect", "GetWindowLongPtrW"):
+                 "GetRgnBox", "GetObjectW", "GetWindowRect", "GetClientRect", "GetWindowLongPtrW", "SendMessageW"):
         if reached.get(name, 0) > 60:
             raise SystemExit(f"{name} reaches the runtime {reached[name]} times of 1200 while threads run at once\n{output}")
 
