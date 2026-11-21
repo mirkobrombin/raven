@@ -392,6 +392,11 @@ void NativeThreads::finish(GuestThread &thread, uint32_t code)
 	}
 	thread.exit_code = code;
 	thread.state = GuestThread::State::done;
+	{
+		std::lock_guard lock(thread.end_lock);
+		if (thread.end_object)
+			raven_waits_set(kernel_waits(), thread.end_object, nullptr);
+	}
 	for (const auto &listener : end_listeners)
 		listener(thread.id);
 	moved();
@@ -402,6 +407,21 @@ void NativeThreads::finish(GuestThread &thread, uint32_t code)
 		::close(report);
 	}
 	thread.exit_reports.clear();
+}
+
+GuestThread::~GuestThread()
+{
+	if (end_object)
+		raven_waits_close(kernel_waits(), end_object);
+}
+
+uint32_t NativeThreads::end_object(GuestThread &thread)
+{
+	// Made under the same lock its end sets it under, after the end marks the thread done: it is made set when the thread has ended.
+	std::lock_guard lock(thread.end_lock);
+	if (!thread.end_object)
+		thread.end_object = raven_waits_create(kernel_waits(), raven_manual_event, thread.state == GuestThread::State::done, 0);
+	return thread.end_object;
 }
 
 bool ThreadObject::describe(InheritedHandle &record) const

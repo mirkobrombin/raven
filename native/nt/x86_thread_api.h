@@ -28,7 +28,6 @@ private:
 	std::map<uint64_t, Section> sections;
 	// The debug data every section points at: callers that force it write the section's name there.
 	uint64_t section_debug = 0;
-	uint32_t wait(uint64_t handle, uint32_t milliseconds);
 	// Writes the owner fields of the guest's section as Windows keeps them, which code that tests a section inline reads.
 	void mirror_section(uint64_t address, const Section &section);
 };

@@ -105,6 +105,11 @@ struct GuestThread {
 	std::atomic<uint64_t> turns{0};
 	// How many waits the thread has begun, in the runtime or outside: one that grew since a set woke it waits again.
 	std::atomic<uint64_t> waits{0};
+	// The thread's end as an object of the process's table of waits, made the first time a wait needs it (see NativeThreads::end_object)
+	// and set when the thread ends: a wait on a thread among events, mutexes and semaphores is ended by whoever ends the thread.
+	std::mutex end_lock;
+	uint32_t end_object = 0;
+	~GuestThread();
 };
 
 class ThreadObject : public KernelObject {
@@ -237,6 +242,8 @@ public:
 	// limit shortens it for the main thread), and is called again after the thread was called away for a job.
 	uint32_t wait_outside(const std::function<uint32_t(std::optional<std::chrono::steady_clock::time_point>)> &wait,
 		std::optional<std::chrono::steady_clock::time_point> wake);
+	// The object of the process's table of waits that is set when `thread` ends.
+	static uint32_t end_object(GuestThread &thread);
 	// Queues an APC to a thread, which ends its alertable wait.
 	void queue_apc(GuestThread &thread, GuestThread::Apc apc);
 	// Ends the thread's wait outside the runtime, or the next one it begins, so that it takes its turn and looks at why.
