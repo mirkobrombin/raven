@@ -1,0 +1,67 @@
+#pragma once
+
+#include <cstdint>
+#include <vector>
+
+// The routines of preludes.S, which the runtime copies into a guest to answer calls there.
+extern "C" const uint8_t raven_prelude_tick[], raven_prelude_tick_end[], raven_prelude_screen_get_dc[], raven_prelude_screen_get_dc_end[],
+	raven_prelude_screen_release_dc[], raven_prelude_screen_release_dc_end[], raven_prelude_screen_device_caps[],
+	raven_prelude_screen_device_caps_end[], raven_prelude_window_long_ptr[], raven_prelude_window_long_ptr_end[], raven_prelude_window_long[],
+	raven_prelude_window_long_end[], raven_prelude_window_property[], raven_prelude_window_property_end[], raven_prelude_window_exists[],
+	raven_prelude_window_exists_end[], raven_prelude_window_thread[], raven_prelude_window_thread_end[], raven_prelude_window_client[],
+	raven_prelude_window_client_end[], raven_prelude_window_outer[], raven_prelude_window_outer_end[], raven_prelude_locale[],
+	raven_prelude_locale_end[], raven_prelude_nt_commit[], raven_prelude_nt_commit_end[], raven_prelude_nt_decommit[],
+	raven_prelude_nt_decommit_end[], raven_prelude_window_child[], raven_prelude_window_child_end[], raven_prelude_window_dpi[],
+	raven_prelude_window_dpi_end[], raven_prelude_focus[], raven_prelude_focus_end[], raven_prelude_foreground[],
+	raven_prelude_foreground_end[], raven_prelude_default_procedure[], raven_prelude_default_procedure_end[], raven_prelude_cursor_position[],
+	raven_prelude_cursor_position_end[], raven_prelude_menu_count[], raven_prelude_menu_count_end[], raven_prelude_menu_submenu[],
+	raven_prelude_menu_submenu_end[], raven_prelude_menu_id[], raven_prelude_menu_id_end[], raven_prelude_menu_state[],
+	raven_prelude_menu_state_end[], raven_prelude_menu_string[], raven_prelude_menu_string_end[], raven_prelude_bitmap_object[],
+	raven_prelude_bitmap_object_end[], raven_prelude_muldiv[], raven_prelude_muldiv_end[], raven_prelude_offset_rect[],
+	raven_prelude_offset_rect_end[], raven_prelude_set_rect[], raven_prelude_set_rect_end[], raven_prelude_intersect_rect[],
+	raven_prelude_intersect_rect_end[], raven_prelude_window_theme[], raven_prelude_window_theme_end[], raven_prelude_file_name[],
+	raven_prelude_file_name_end[], raven_prelude_call_procedure[], raven_prelude_call_procedure_end[], raven_prelude_own_thread_send[],
+	raven_prelude_own_thread_send_end[], raven_prelude_system_metrics[], raven_prelude_system_metrics_end[], raven_prelude_system_colors[],
+	raven_prelude_system_colors_end[], raven_prelude_translate_message[], raven_prelude_translate_message_end[],
+	raven_prelude_message_filter[], raven_prelude_message_filter_end[], raven_prelude_desktop_window[], raven_prelude_desktop_window_end[],
+	raven_prelude_accelerator[], raven_prelude_accelerator_end[], raven_prelude_dc_text_color[], raven_prelude_dc_text_color_end[],
+	raven_prelude_dc_background_color[], raven_prelude_dc_background_color_end[], raven_prelude_dc_background_mode[],
+	raven_prelude_dc_background_mode_end[], raven_prelude_dc_text_align[], raven_prelude_dc_text_align_end[], raven_prelude_dc_to_device[],
+	raven_prelude_dc_to_device_end[], raven_prelude_dc_to_logical[], raven_prelude_dc_to_logical_end[], raven_prelude_dc_get_text_color[],
+	raven_prelude_dc_get_text_color_end[], raven_prelude_dc_get_background_color[], raven_prelude_dc_get_background_color_end[],
+	raven_prelude_dc_get_background_mode[], raven_prelude_dc_get_background_mode_end[], raven_prelude_dc_get_text_align[],
+	raven_prelude_dc_get_text_align_end[], raven_prelude_destroy_icon[], raven_prelude_destroy_icon_end[], raven_prelude_delete_dc[],
+	raven_prelude_delete_dc_end[], raven_prelude_delete_object[], raven_prelude_delete_object_end[], raven_prelude_init_once_begin[],
+	raven_prelude_init_once_begin_end[], raven_prelude_is_rect_empty[], raven_prelude_is_rect_empty_end[], raven_prelude_set_rect_empty[],
+	raven_prelude_set_rect_empty_end[], raven_prelude_copy_rect[], raven_prelude_copy_rect_end[], raven_prelude_inflate_rect[],
+	raven_prelude_inflate_rect_end[], raven_prelude_union_rect[], raven_prelude_union_rect_end[], raven_prelude_equal_rect[],
+	raven_prelude_equal_rect_end[], raven_prelude_local_time[], raven_prelude_local_time_end[], raven_prelude_monitor[],
+	raven_prelude_monitor_end[], raven_prelude_window_dpi_context[], raven_prelude_window_dpi_context_end[], raven_prelude_window_visible[],
+	raven_prelude_window_visible_end[], raven_prelude_window_iconic[], raven_prelude_window_iconic_end[], raven_prelude_dpi_set[],
+	raven_prelude_dpi_set_end[], raven_prelude_dpi_get[], raven_prelude_dpi_get_end[], raven_prelude_keyboard_layout[],
+	raven_prelude_keyboard_layout_end[], raven_prelude_win_event_hook[], raven_prelude_win_event_hook_end[], raven_prelude_slist_depth[],
+	raven_prelude_slist_depth_end[], raven_prelude_point_in_rect[], raven_prelude_point_in_rect_end[], raven_prelude_guid_text[],
+	raven_prelude_guid_text_end[], raven_prelude_rect_in_region[], raven_prelude_rect_in_region_end[], raven_prelude_point_in_region[],
+	raven_prelude_point_in_region_end[], raven_prelude_region_box[], raven_prelude_region_box_end[], raven_prelude_quiet_peek[],
+	raven_prelude_quiet_peek_end[], raven_prelude_quiet_input[], raven_prelude_quiet_input_end[], raven_prelude_quiet_status[],
+	raven_prelude_quiet_status_end[], raven_prelude_key_state[], raven_prelude_key_state_end[], raven_prelude_context_activate[],
+	raven_prelude_context_activate_end[], raven_prelude_context_deactivate[], raven_prelude_context_deactivate_end[],
+	raven_prelude_window_parent[], raven_prelude_window_parent_end[], raven_prelude_window_ancestor[], raven_prelude_window_ancestor_end[],
+	raven_prelude_map_points[], raven_prelude_map_points_end[], raven_prelude_locale_number[], raven_prelude_locale_number_end[],
+	raven_prelude_resource_load[], raven_prelude_resource_load_end[], raven_prelude_resource_size[], raven_prelude_resource_size_end[],
+	raven_prelude_resource_lock[], raven_prelude_resource_lock_end[], raven_prelude_next_hook[], raven_prelude_next_hook_end[],
+	raven_prelude_silent_trace[], raven_prelude_silent_trace_end[], raven_prelude_theme_state[], raven_prelude_theme_state_end[],
+	raven_prelude_theme_flags[], raven_prelude_theme_flags_end[], raven_prelude_string_compare[], raven_prelude_string_compare_end[],
+	raven_prelude_string_lstrlen_w[], raven_prelude_string_lstrlen_w_end[], raven_prelude_string_lstrlen_a[],
+	raven_prelude_string_lstrlen_a_end[], raven_prelude_string_lstrcpyn_w[], raven_prelude_string_lstrcpyn_w_end[],
+	raven_prelude_string_lstrcpyn_a[], raven_prelude_string_lstrcpyn_a_end[], raven_prelude_string_lstrcmp_w[],
+	raven_prelude_string_lstrcmp_w_end[], raven_prelude_string_multi_byte_to_wide_char[], raven_prelude_string_multi_byte_to_wide_char_end[],
+	raven_prelude_string_wide_char_to_multi_byte[], raven_prelude_string_wide_char_to_multi_byte_end[],
+	raven_prelude_string_get_thread_locale[], raven_prelude_string_get_thread_locale_end[], raven_prelude_string_get_a_c_p[],
+	raven_prelude_string_get_a_c_p_end[], raven_prelude_string_set_thread_locale[], raven_prelude_string_set_thread_locale_end[];
+
+namespace raven {
+
+inline std::vector<uint8_t> prelude_code(const uint8_t *begin, const uint8_t *end) { return {begin, end}; }
+
+}
