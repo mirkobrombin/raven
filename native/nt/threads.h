@@ -343,6 +343,8 @@ private:
 	std::atomic<unsigned> lined{0};
 	// Counts what may have ended a wait, and when every waiting thread's condition was last looked at whatever the count.
 	std::atomic<uint64_t> signals{1};
+	// How many times a waiting thread's condition was looked at, told with RAVEN_TRACE_WAITS: a wait its waker ends is never looked at.
+	std::atomic<uint64_t> condition_looks{0};
 	// Whether what the thread that holds the runtime is serving still has to be counted.
 	bool told = true;
 	// When a thread that left the runtime last looked for the waits that ended (see leave).

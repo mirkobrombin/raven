@@ -3811,6 +3811,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_suspend_terminate_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         set_property(TEST native_suspend_terminate_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # Event waits are ended by whoever sets the event, never found by looking at the waiting threads (event_pingpong_client.c).
+        raven_kernel_fixture(event-pingpong event_pingpong_client.c 0x1f5000000 "-lkernel32")
+        add_test(NAME native_event_pingpong_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
+            ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong.exe)
+        set_tests_properties(native_event_pingpong_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            FAIL_REGULAR_EXPRESSION "conditions looked at [0-9][0-9][0-9]+ times"
+            ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-pingpong-prefix")
         # Of its 6000 wakes, the few a thread makes while it holds the turn anyway are served there; taking the turn for each made hundreds.
         set_property(TEST native_address_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: \\(call\\) WakeByAddress[A-Za-z]* calls=[0-9][0-9][0-9]")
         # Releasing a semaphore goes beside the turn in parallel mode, and no release is lost (semaphore_beside_client.c).
@@ -4309,6 +4316,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/served-semaphore32-prefix-${mode}")
                 endforeach()
                 set_property(TEST native_served_semaphore_x32_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+                # Event waits in a 32-bit process are ended by whoever sets the event: the runtime does not look at the waiting threads'
+                # conditions to find them (event_pingpong_client.c; the 64-bit form is with the other kernel fixtures).
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong32.exe
+                    COMMAND ${RAVEN_MINGW32} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong32.exe ${LOADER_SOURCES}/event_pingpong_client.c -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/event_pingpong_client.c VERBATIM)
+                add_custom_target(event_pingpong32_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong32.exe)
+                add_test(NAME native_event_pingpong_x32 COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong32.exe)
+                set_tests_properties(native_event_pingpong_x32 PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    FAIL_REGULAR_EXPRESSION "conditions looked at [0-9][0-9][0-9]+ times"
+                    ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-pingpong32-prefix")
                 foreach(mode default parallel)
                     add_test(NAME native_kernel_threads_x32_${mode} COMMAND raven --run-process --execution=native
                         ${CMAKE_CURRENT_BINARY_DIR}/kernel-threads32.exe)
