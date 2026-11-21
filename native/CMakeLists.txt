@@ -3811,6 +3811,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_suspend_terminate_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         set_property(TEST native_suspend_terminate_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # The program the comparison with Wine times (scripts/benchmark-wine.py hotpath) runs to its end here, so the figures it prints come
+        # from a run that did all its work.
+        add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe
+            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,entry,--no-insert-timestamp
+                -o ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe ${PROJECT_SOURCE_DIR}/testdata/benchmark/hotpath.c -lkernel32
+            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/benchmark/hotpath.c VERBATIM)
+        add_custom_target(hotpath_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
+        add_test(NAME native_hotpath_bench COMMAND raven --run-process --execution=native --stdio=inherit --timeout-ms=120000
+            ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
+        set_tests_properties(native_hotpath_bench PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "hotpath done"
+            FAIL_REGULAR_EXPRESSION "hotpath failed" ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-prefix")
         # Event waits are ended by whoever sets the event, never found by looking at the waiting threads (event_pingpong_client.c).
         raven_kernel_fixture(event-pingpong event_pingpong_client.c 0x1f5000000 "-lkernel32")
         add_test(NAME native_event_pingpong_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
