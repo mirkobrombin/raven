@@ -1,4 +1,5 @@
 #include "nls.h"
+#include "text.h"
 
 #include <fstream>
 #include <iostream>
@@ -21,6 +22,9 @@ int main(int argc,char **argv)
 		check(raven::encode_ansi(text,1252)==expected,"native CP1252 differs from the full NT reference");
 		check(raven::encode_ansi(u"",1252).empty() && raven::encode_ansi(u"ASCII",1252)=="ASCII","empty or ASCII conversion differs");
 		check(raven::encode_ansi(u"\u00e9\u4e2d\U0001f642",1252)==std::string("\xe9???",4),"best-fit/default/surrogate conversion differs");
+		// The runtime's own conversions to the ANSI page agree with it, the characters of 0x80 to 0x9f included.
+		check(raven::to_ansi(u"\u20ac\u2122\u00e9",1252)=="\x80\x99\xe9" && raven::from_ansi("\x80\x99\xe9",1252)==u"\u20ac\u2122\u00e9",
+			"the runtime's CP1252 conversions differ from the code page");
 		// Each other Windows single-byte page reads every byte back as itself, and best-fits only where an exact byte is missing.
 		for (const uint32_t code_page : {1250U,1251U,1253U,1254U,1255U,1256U,1257U,1258U}) {
 			const auto *page=raven::native_single_byte_page(code_page);
