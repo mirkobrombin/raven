@@ -425,7 +425,8 @@ private:
 	std::map<uint64_t,uint32_t> selections;
 	// The windows among the objects, in handle order.
 	std::set<uint64_t> window_set;
-	uint64_t window_generation=0;
+	// Calls under the shared desktop lock hand windows out for change at once (see TouchedHandles::touch).
+	std::atomic<uint64_t> window_generation=0;
 	mutable uint64_t waiting_generation=~uint64_t(0);
 	mutable std::vector<uint64_t> waiting{};
 	void count_selection(uint64_t bitmap, int change)
