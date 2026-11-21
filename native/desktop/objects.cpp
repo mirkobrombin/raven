@@ -522,7 +522,8 @@ bool DesktopObjects::invalidate(uint64_t handle,DesktopRect rect,bool erase)
 	const bool became=record->update.empty() && !update.empty();
 	if (became) ++record->update_generation;
 	record->update=std::move(update); used=used-previous+current;
-	if (became && invalidated) invalidated(record->thread);
+	// A hidden window gets no WM_PAINT (see waiting_paint): its thread has nothing new to read until it is shown.
+	if (became && invalidated && window_visible(handle)) invalidated(record->thread);
 	if (!record->update.empty()) record->erase_pending|=erase;
 	if ((record->width<=0 || record->height<=0) && record->outer.right>record->outer.left && record->outer.bottom>record->outer.top &&
 		!record->frame_pending) {
