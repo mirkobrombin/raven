@@ -100,6 +100,32 @@ jobs:
           done
           echo "${#shells[@]} shell scripts parsed"
 
+  # The waits on the kernel's own NT synchronization objects: the runner's kernel has the ntsync module, which a container cannot load, so
+  # these run on the runner itself, with every case of native/waits on /dev/ntsync instead of the host's table.
+  kernel-waits:
+    name: Kernel waits
+    needs: [commits, files, licenses, scripts]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open /dev/ntsync
+        run: |
+          sudo modprobe ntsync
+          sudo chmod 0666 /dev/ntsync
+          ls -l /dev/ntsync
+          uname -r
+
+      - name: Test the waits on kernel objects
+        working-directory: native/waits
+        env:
+          RAVEN_TEST_NTSYNC: "1"
+        run: cargo test --locked --release
+
   # The waits on kernel objects: native/model/Waits.tla, Address.tla, Completion.tla and Messages.tla checked by TLC, and the implementation in native/waits by its tests and by loom,
   # which tries every interleaving of its cases. The PE reader in native/peparse runs its tests too, which change a file at random and read it again,
   # and the cabinet decoders, the image decoders, the compound file reader, the XML reader and the delta patch reader
@@ -624,7 +650,7 @@ jobs:
 
   report:
     name: Report
-    needs: [commits, files, licenses, scripts, models, provision, portable, compliance, build, test]
+    needs: [commits, files, licenses, scripts, models, kernel-waits, provision, portable, compliance, build, test]
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
