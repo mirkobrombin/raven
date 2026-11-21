@@ -4132,9 +4132,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_parallel_desktop_x${width} COMMAND ${Python3_EXECUTABLE}
                         ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${parallel_desktop_client} --lock-under 10 --runs 5
                         # Changes of window data and properties are answered beside the turn, under the desktop lock; what the guest reads from
-                        # the runtime's tables reaches the runtime only when a change came in between.
-                        --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC,PeekMessageW
-                        --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW)
+                        # the runtime's tables reaches the runtime only when a change came in between, and so does a peek at a queue found
+                        # empty a moment before.
+                        --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC
+                        --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW,PeekMessageW)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
                     # Threads that each draw into a bitmap of their own: the drawing calls are answered beside the turn, under the desktop lock.

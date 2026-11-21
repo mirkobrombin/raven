@@ -15,6 +15,7 @@
 #include <functional>
 #include <deque>
 #include <memory>
+#include <x86intrin.h>
 #include <mutex>
 #include <optional>
 
@@ -61,7 +62,12 @@ public:
 	void set_tell(std::function<void(uint32_t)> tell)
 	{
 		tell_hook = std::move(tell);
-		objects.invalidated = tell_hook;
+		// A window that comes to need painting also ends what the guest answers alone for its thread's queue (see mark_quiet), from
+		// whatever thread invalidated it.
+		objects.invalidated = [this](uint32_t thread) {
+			wake(thread);
+			this->tell(thread);
+		};
 	}
 	// Resolves the default menu of a window class (module, resource identifier) to a menu handle.
 	// Allocates guest global memory for clipboard data that arrives from the host.
@@ -284,6 +290,9 @@ private:
 	void publish_icons();
 	uint8_t *region_table=nullptr;
 	uint8_t *quiet_table=nullptr;
+	// The time stamp counter and the clock when the desktop of the process was made, which mark_quiet takes its rate against.
+	const uint64_t made_ticks=__rdtsc();
+	const std::chrono::steady_clock::time_point made_time=std::chrono::steady_clock::now();
 	uint8_t *key_table=nullptr;
 	void publish_keys() { if (key_table && std::memcmp(key_table,vk_state.data(),vk_state.size())) std::memcpy(key_table,vk_state.data(),vk_state.size()); }
 	void publish_region(uint64_t handle);
