@@ -1,4 +1,5 @@
 #include "api.h"
+#include "nt/desktop_lock.h"
 #include <iostream>
 
 #include <algorithm>
@@ -77,15 +78,27 @@ uint64_t NativeDesktop::select(uint64_t handle, uint64_t bitmap_handle)
 	return previous;
 }
 
-bool NativeDesktop::delete_bitmap(uint64_t handle)
+bool NativeDesktop::delete_bitmap(uint64_t handle, bool let_go)
 {
 	const auto *bitmap = objects.bitmap(handle);
 	if (!bitmap) return false;
 	if (bitmap->stock) return true;
 	if (objects.selected(handle)) return false;
-	if (bitmap->address)
-		process.unmap_memory(bitmap->address);
-	return objects.erase(handle);
+	const auto address = bitmap->address;
+	if (!objects.erase(handle))
+		return false;
+	// The bitmap has left the table under the desktop lock, but its pixels are the process's memory, which the turn guards: a deletion
+	// the program asked for unmaps them with the lock let go, as that takes far longer than the deletion, and threads drawing beside the
+	// turn would wait for it. It is taken back before the call returns.
+	if (address) {
+		if (let_go) {
+			const DesktopRelease release;
+			process.unmap_memory(address);
+		} else {
+			process.unmap_memory(address);
+		}
+	}
+	return true;
 }
 
 uint64_t NativeDesktop::create_section(std::span<const uint64_t> args)

@@ -52,6 +52,7 @@ public:
 	void apply_deferred(uint32_t operation, uint64_t handle);
 
 private:
+
 	NativeProcess &process;
 	NativeEnvironment &environment;
 	DesktopObjects &objects;
@@ -99,7 +100,8 @@ private:
 	uint64_t compatible_bitmap(std::span<const uint64_t> arguments);
 	uint64_t allocate_bitmap(uint32_t width,uint32_t height,uint32_t depth,bool section,bool top_down);
 	uint64_t allocate_dib(uint32_t width,uint32_t height,uint32_t bits,bool top_down,std::vector<uint32_t> palette,uint64_t section=0,uint64_t section_offset=0);
-	bool delete_bitmap(uint64_t handle);
+	// let_go: the desktop lock is let go while the pixels are unmapped (see delete_bitmap).
+	bool delete_bitmap(uint64_t handle, bool let_go = false);
 	bool draw(std::span<const uint64_t> arguments);
 	bool fill(std::span<const uint64_t> arguments);
 	bool frame(std::span<const uint64_t> arguments);
