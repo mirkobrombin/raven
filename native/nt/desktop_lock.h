@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "cpu/call_cycles.h"
+#include "desktop/desktop_hold.h"
 
 namespace raven {
 
@@ -46,7 +47,7 @@ public:
 			++depth;
 			return;
 		}
-		if (shared_depth)
+		if (desktop_shared_depth)
 			throw std::logic_error("the desktop lock is asked for whole while it is held shared");
 		take();
 		owner.store(me, std::memory_order_relaxed);
@@ -71,7 +72,7 @@ public:
 			++shared_within;
 			return;
 		}
-		if (shared_depth++)
+		if (desktop_shared_depth++)
 			return;
 		if (pthread_rwlock_tryrdlock(&lock)) {
 			const uint64_t started = __rdtsc();
@@ -85,11 +86,11 @@ public:
 			--shared_within;
 			return;
 		}
-		if (shared_depth && !--shared_depth)
+		if (desktop_shared_depth && !--desktop_shared_depth)
 			pthread_rwlock_unlock(&lock);
 	}
 	// Whether the calling thread holds it shared and not whole.
-	static bool held_shared() { return shared_depth != 0; }
+	static bool held_shared() { return desktop_shared_depth != 0; }
 	// Gives the lock up however deeply the calling thread holds it, and says how deeply, for resume.
 	unsigned suspend()
 	{
@@ -127,8 +128,8 @@ private:
 	std::atomic<std::thread::id> owner{};
 	std::atomic<uint64_t> taken{0};
 	unsigned depth = 0;
-	// How deeply the calling thread holds it shared, and how many shared scopes it opened while it held it whole.
-	static inline thread_local unsigned shared_depth = 0, shared_within = 0;
+	// How many shared scopes the calling thread opened while it held it whole; how deeply it holds it shared is desktop_shared_depth.
+	static inline thread_local unsigned shared_within = 0;
 };
 
 inline DesktopLock &desktop_lock()

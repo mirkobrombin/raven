@@ -64,6 +64,7 @@ const DesktopMetrics &DesktopObjects::nonclient_metrics() const { return window_
 
 bool DesktopObjects::set_screen_size(int32_t width,int32_t height)
 {
+	const TableHold hold(*this, true);
 	if (width<=0 || height<=0 || width>8192 || height>8192) throw std::runtime_error("invalid screen dimensions");
 	if (window_metrics.screen_x==width && window_metrics.screen_y==height) return false;
 	window_metrics.screen_x=width;
@@ -73,12 +74,14 @@ bool DesktopObjects::set_screen_size(int32_t width,int32_t height)
 
 const DesktopMenu *DesktopObjects::menu(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	const auto found=objects.find(handle);
 	return found==objects.end() ? nullptr : std::get_if<DesktopMenu>(&found->second);
 }
 
 DesktopMenu *DesktopObjects::edit_menu(uint64_t handle)
 {
+	const TableHold hold(*this, false);
 	const auto found=objects.find(handle);
 	auto *record=found==objects.end() ? nullptr : std::get_if<DesktopMenu>(&found->second);
 	if (record) menus_touched.touch(handle);
@@ -87,6 +90,7 @@ DesktopMenu *DesktopObjects::edit_menu(uint64_t handle)
 
 std::vector<uint64_t> DesktopObjects::accelerator_handles() const
 {
+	const TableHold hold(*this, false);
 	std::vector<uint64_t> result;
 	for (const auto &[handle,table] : accelerator_tables) result.push_back(handle);
 	return result;
@@ -94,6 +98,7 @@ std::vector<uint64_t> DesktopObjects::accelerator_handles() const
 
 std::vector<uint64_t> DesktopObjects::bitmap_handles() const
 {
+	const TableHold hold(*this, false);
 	std::vector<uint64_t> result;
 	for (const auto &[handle,object] : objects)
 		if (std::holds_alternative<DesktopBitmap>(object)) result.push_back(handle);
@@ -102,6 +107,7 @@ std::vector<uint64_t> DesktopObjects::bitmap_handles() const
 
 std::vector<uint64_t> DesktopObjects::menu_handles() const
 {
+	const TableHold hold(*this, false);
 	std::vector<uint64_t> result;
 	for (const auto &[handle,object] : objects)
 		if (std::holds_alternative<DesktopMenu>(object)) result.push_back(handle);
@@ -110,6 +116,7 @@ std::vector<uint64_t> DesktopObjects::menu_handles() const
 
 uint64_t DesktopObjects::load_menu(const MenuTemplate &definition)
 {
+	const TableHold hold(*this, true);
 	const auto load=[&](auto &&self,const std::vector<MenuTemplateItem> &items,uint32_t help,unsigned depth)->uint64_t {
 		if (depth>64 || items.size()>4096) throw std::runtime_error("menu owner limit exceeded");
 		DesktopMenu record{{},help};
@@ -137,6 +144,7 @@ uint64_t DesktopObjects::load_menu(const MenuTemplate &definition)
 
 uint64_t DesktopObjects::add(Object object)
 {
+	const TableHold hold(*this, true);
 	if (const auto *record=std::get_if<DesktopWindow>(&object); record && record->parent) {
 		const auto *parent=window(record->parent);
 		if (!parent || parent->destroying) return 0;
@@ -196,6 +204,7 @@ uint64_t DesktopObjects::add(Object object)
 
 bool DesktopObjects::erase(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	const auto found = objects.find(handle);
 	if (found == objects.end())
 		return false;
@@ -233,6 +242,7 @@ bool DesktopObjects::erase(uint64_t handle)
 
 const DesktopFont *DesktopObjects::font(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	if (handle==desktop_system_font) return &system_font;
 	if (handle==desktop_gui_font) return &gui_font;
 	if (handle==desktop_fixed_font) return &fixed_font;
@@ -242,6 +252,7 @@ const DesktopFont *DesktopObjects::font(uint64_t handle) const
 
 bool DesktopObjects::font_selected(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	for (const auto &[identity,object] : objects)
 		if (const auto *device=std::get_if<DesktopDC>(&object); device && device->font==handle) return true;
 	return false;
@@ -249,6 +260,7 @@ bool DesktopObjects::font_selected(uint64_t handle) const
 
 uint64_t DesktopObjects::select_font(uint64_t handle,uint64_t selected_font)
 {
+	const TableHold hold(*this, true);
 	auto *device=dc(handle);
 	if (!device || !font(selected_font)) return 0;
 	const auto previous=device->font;
@@ -259,12 +271,14 @@ uint64_t DesktopObjects::select_font(uint64_t handle,uint64_t selected_font)
 
 DesktopPalette *DesktopObjects::palette(uint64_t handle)
 {
+	const TableHold hold(*this, false);
 	const auto found=objects.find(handle);
 	return found==objects.end() ? nullptr : std::get_if<DesktopPalette>(&found->second);
 }
 
 uint32_t DesktopObjects::set_dc_brush_color(uint32_t color)
 {
+	const TableHold hold(*this, true);
 	const auto previous=stock_brushes[6].color;
 	stock_brushes[6].color=color;
 	return previous;
@@ -272,6 +286,7 @@ uint32_t DesktopObjects::set_dc_brush_color(uint32_t color)
 
 uint32_t DesktopObjects::set_dc_pen_color(uint32_t color)
 {
+	const TableHold hold(*this, true);
 	const auto previous=stock_pens[3].color;
 	stock_pens[3].color=color;
 	return previous;
@@ -279,6 +294,7 @@ uint32_t DesktopObjects::set_dc_pen_color(uint32_t color)
 
 bool DesktopObjects::delete_font(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	if (handle==desktop_system_font || handle==desktop_gui_font || handle==desktop_fixed_font) return true;
 	const auto found=objects.find(handle);
 	if (found==objects.end()) return false;
@@ -291,6 +307,7 @@ bool DesktopObjects::delete_font(uint64_t handle)
 
 void DesktopObjects::update_window_dcs(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	if (!window(handle)) return;
 	for (auto &[identity,object] : objects)
 		if (auto *device=std::get_if<DesktopDC>(&object); device && (device->window==handle || is_child(handle,device->window)) && (device->bounds || device->window_frame))
@@ -299,6 +316,7 @@ void DesktopObjects::update_window_dcs(uint64_t handle)
 
 void DesktopObjects::detach_window_dcs(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	for (auto &[identity,object] : objects)
 		if (auto *device=std::get_if<DesktopDC>(&object); device && device->window==handle && device->leased) {
 			const auto previous=object_size(object);
@@ -313,6 +331,7 @@ void DesktopObjects::detach_window_dcs(uint64_t handle)
 // A retained device context follows its window onto the surface that replaces a released one.
 void DesktopObjects::attach_window_dcs(uint64_t root,uint64_t bitmap)
 {
+	const TableHold hold(*this, true);
 	for (auto &[identity,object] : objects)
 		if (auto *device=std::get_if<DesktopDC>(&object); device && device->leased && !device->bitmap && device->window && window(device->window) && window_root(device->window)==root) {
 			device->bitmap=device->default_bitmap=bitmap;
@@ -323,6 +342,7 @@ void DesktopObjects::attach_window_dcs(uint64_t root,uint64_t bitmap)
 
 const DesktopBrush *DesktopObjects::brush(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	if (handle>=desktop_stock_brush && handle<desktop_stock_brush+stock_brushes.size()) return &stock_brushes[size_t(handle-desktop_stock_brush)];
 	if (handle>=desktop_system_brush && handle<desktop_system_brush+system_brushes.size()) return &system_brushes[size_t(handle-desktop_system_brush)];
 	const auto found=objects.find(handle);
@@ -331,6 +351,7 @@ const DesktopBrush *DesktopObjects::brush(uint64_t handle) const
 
 bool DesktopObjects::brush_selected(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	for (const auto &[identity,object] : objects)
 		if (const auto *device=std::get_if<DesktopDC>(&object); device && device->brush==handle) return true;
 	return false;
@@ -338,6 +359,7 @@ bool DesktopObjects::brush_selected(uint64_t handle) const
 
 uint64_t DesktopObjects::select_brush(uint64_t handle,uint64_t selected_brush)
 {
+	const TableHold hold(*this, true);
 	auto *device=dc(handle); if (!device || !brush(selected_brush)) return 0;
 	const auto previous=device->brush; device->brush=selected_brush;
 	if (const auto *record=brush(previous); record && record->pending_delete && !brush_selected(previous)) erase(previous);
@@ -346,6 +368,7 @@ uint64_t DesktopObjects::select_brush(uint64_t handle,uint64_t selected_brush)
 
 bool DesktopObjects::delete_brush(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	if (handle>=desktop_stock_brush && handle<desktop_stock_brush+stock_brushes.size()) return true;
 	if (handle>=desktop_system_brush && handle<desktop_system_brush+system_brushes.size()) return true;
 	const auto found=objects.find(handle); if (found==objects.end()) return false;
@@ -356,17 +379,20 @@ bool DesktopObjects::delete_brush(uint64_t handle)
 
 const DesktopIcon *DesktopObjects::icon(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	const auto found = objects.find(handle);
 	return found == objects.end() ? nullptr : std::get_if<DesktopIcon>(&found->second);
 }
 
 DesktopIcon *DesktopObjects::icon(uint64_t handle)
 {
+	const TableHold hold(*this, false);
 	return const_cast<DesktopIcon *>(std::as_const(*this).icon(handle));
 }
 
 const DesktopBitmap *DesktopObjects::bitmap(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	if (handle == 0x10000)
 		return &default_bitmap;
 	const auto found = objects.find(handle);
@@ -375,6 +401,7 @@ const DesktopBitmap *DesktopObjects::bitmap(uint64_t handle) const
 
 DesktopBitmap *DesktopObjects::bitmap(uint64_t handle)
 {
+	const TableHold hold(*this, false);
 	if (handle == 0x10000)
 		return &default_bitmap;
 	const auto found = objects.find(handle);
@@ -386,6 +413,7 @@ DesktopBitmap *DesktopObjects::bitmap(uint64_t handle)
 
 DesktopDC *DesktopObjects::dc(uint64_t handle)
 {
+	const TableHold hold(*this, false);
 	const auto found = objects.find(handle);
 	auto *record = found == objects.end() ? nullptr : std::get_if<DesktopDC>(&found->second);
 	if (record)
@@ -395,12 +423,14 @@ DesktopDC *DesktopObjects::dc(uint64_t handle)
 
 const DesktopDC *DesktopObjects::dc(uint64_t handle) const
 {
+	const TableHold hold(*this, false);
 	const auto found = objects.find(handle);
 	return found == objects.end() ? nullptr : std::get_if<DesktopDC>(&found->second);
 }
 
 std::vector<uint64_t> DesktopObjects::icon_handles() const
 {
+	const TableHold hold(*this, false);
 	std::vector<uint64_t> result;
 	for (const auto &[handle,object] : objects)
 		if (std::holds_alternative<DesktopIcon>(object)) result.push_back(handle);
@@ -409,6 +439,7 @@ std::vector<uint64_t> DesktopObjects::icon_handles() const
 
 std::vector<uint64_t> DesktopObjects::region_handles() const
 {
+	const TableHold hold(*this, false);
 	std::vector<uint64_t> result;
 	for (const auto &[handle,object] : objects)
 		if (std::holds_alternative<DesktopRegion>(object)) result.push_back(handle);
@@ -417,6 +448,7 @@ std::vector<uint64_t> DesktopObjects::region_handles() const
 
 std::vector<uint64_t> DesktopObjects::dc_handles() const
 {
+	const TableHold hold(*this, false);
 	std::vector<uint64_t> result;
 	for (const auto &[handle,object] : objects)
 		if (std::holds_alternative<DesktopDC>(object)) result.push_back(handle);
@@ -425,6 +457,7 @@ std::vector<uint64_t> DesktopObjects::dc_handles() const
 
 DesktopWindow *DesktopObjects::window(uint64_t handle)
 {
+	const TableHold hold(*this, false);
 	const auto found=objects.find(handle);
 	auto *record=found==objects.end() ? nullptr : std::get_if<DesktopWindow>(&found->second);
 	if (record) {
@@ -436,11 +469,13 @@ DesktopWindow *DesktopObjects::window(uint64_t handle)
 
 std::vector<uint64_t> DesktopObjects::window_handles() const
 {
+	const TableHold hold(*this, false);
 	return std::vector<uint64_t>(window_set.begin(),window_set.end());
 }
 
 const std::vector<uint64_t> &DesktopObjects::waiting_paint() const
 {
+	const TableHold hold(*this, true);
 	if (waiting_generation==window_generation) return waiting;
 	waiting.clear();
 	for (const auto handle : window_set)
@@ -451,6 +486,7 @@ const std::vector<uint64_t> &DesktopObjects::waiting_paint() const
 
 uint64_t DesktopObjects::invalid_window(uint64_t filter) const
 {
+	const TableHold hold(*this, true);
 	for (const auto handle : waiting_paint())
 		if (!filter || filter==handle || is_child(filter,handle)) return handle;
 	return 0;
@@ -458,6 +494,7 @@ uint64_t DesktopObjects::invalid_window(uint64_t filter) const
 
 bool DesktopObjects::set_title(uint64_t handle,std::u16string title)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle);
 	if (!record || title.size()>(limit-used)/2+record->title.size()) return false;
 	const auto previous=record->title.size()*2;
@@ -468,6 +505,7 @@ bool DesktopObjects::set_title(uint64_t handle,std::u16string title)
 
 bool DesktopObjects::invalidate(uint64_t handle,DesktopRect rect,bool erase)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle); if (!record) return false;
 	DesktopRegion update(record->update); update.add(rect);
 	const auto previous=record->update.bytes(),current=update.bytes();
@@ -486,6 +524,7 @@ bool DesktopObjects::invalidate(uint64_t handle,DesktopRect rect,bool erase)
 
 bool DesktopObjects::validate(uint64_t handle,DesktopRect rect)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle); if (!record) return false;
 	DesktopRegion update(record->update); update.subtract(rect);
 	const auto previous=record->update.bytes(),current=update.bytes();
@@ -498,6 +537,7 @@ bool DesktopObjects::validate(uint64_t handle,DesktopRect rect)
 
 bool DesktopObjects::start_paint(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle);
 	auto *device=record ? dc(record->dc) : nullptr;
 	if (!record || !device || record->painting || device->clip) throw std::runtime_error("invalid paint owner transition");
@@ -508,6 +548,7 @@ bool DesktopObjects::start_paint(uint64_t handle)
 
 void DesktopObjects::finish_paint(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle); auto *device=record ? dc(record->dc) : nullptr;
 	if (!record || !device || !record->painting || !device->clip) throw std::runtime_error("invalid paint completion");
 	used-=device->clip->bytes(); device->clip.reset(); record->painting=false; record->painted=true;
@@ -520,6 +561,7 @@ void DesktopObjects::finish_paint(uint64_t handle)
 
 void DesktopObjects::abandon_paint(uint64_t handle)
 {
+	const TableHold hold(*this, true);
 	auto *record=window(handle);
 	if (!record || !record->painting) return;
 	if (auto *device=dc(record->dc); device && device->clip) { used-=device->clip->bytes(); device->clip.reset(); }
@@ -538,6 +580,7 @@ static bool same_name(std::string_view a,std::string_view b)
 
 bool DesktopObjects::class_registered(uint64_t instance,std::string_view name,bool global) const
 {
+	const TableHold hold(*this, false);
 	for (const auto &[id,definition] : classes)
 		if (same_name(name,definition.name) && bool(definition.style & 0x4000)==global && (global || definition.instance==instance)) return true;
 	return false;
@@ -545,6 +588,7 @@ bool DesktopObjects::class_registered(uint64_t instance,std::string_view name,bo
 
 uint16_t DesktopObjects::register_class(DesktopClass definition)
 {
+	const TableHold hold(*this, true);
 	const auto size=sizeof(DesktopClass)+definition.name.size()+definition.extra.size();
 	if (definition.name.empty() || !definition.procedure || (definition.background && definition.background>31 && !brush(definition.background)) || class_registered(definition.instance,definition.name,(definition.style & 0x4000)!=0) ||
 		next_class>UINT16_MAX ||
@@ -565,6 +609,7 @@ uint16_t DesktopObjects::register_class(DesktopClass definition)
 
 uint32_t DesktopObjects::unregister_class(uint16_t atom)
 {
+	const TableHold hold(*this, true);
 	const auto found=classes.find(atom);
 	if (found==classes.end()) return 1411;
 	for (const auto &[handle,object] : objects)
@@ -579,6 +624,7 @@ uint32_t DesktopObjects::unregister_class(uint16_t atom)
 
 uint16_t DesktopObjects::find_class(uint64_t instance, std::string_view name) const
 {
+	const TableHold hold(*this, false);
 	uint16_t global=0,any=0;
 	// A window created without a module handle finds the class of whichever module registered it.
 	for (const auto &[id,definition] : classes)
@@ -592,6 +638,7 @@ uint16_t DesktopObjects::find_class(uint64_t instance, std::string_view name) co
 
 uint16_t DesktopObjects::find_class(uint64_t instance,uint16_t atom) const
 {
+	const TableHold hold(*this, false);
 	uint16_t global=0,any=0;
 	for (const auto &[id,definition] : classes)
 		if (definition.atom==atom) {
@@ -604,23 +651,27 @@ uint16_t DesktopObjects::find_class(uint64_t instance,uint16_t atom) const
 
 const DesktopClass *DesktopObjects::window_class(uint16_t atom) const
 {
+	const TableHold hold(*this, false);
 	const auto found=classes.find(atom);
 	return found==classes.end() ? nullptr : &found->second;
 }
 
 DesktopClass *DesktopObjects::window_class(uint16_t atom)
 {
+	const TableHold hold(*this, false);
 	const auto found=classes.find(atom);
 	return found==classes.end() ? nullptr : &found->second;
 }
 
 bool DesktopObjects::selected(uint64_t bitmap) const
 {
+	const TableHold hold(*this, false);
 	return selections.contains(bitmap);
 }
 
 void DesktopObjects::reselect(DesktopDC &dc, uint64_t bitmap)
 {
+	const TableHold hold(*this, true);
 	count_selection(dc.bitmap, -1);
 	dc.bitmap = bitmap;
 	count_selection(bitmap, 1);
