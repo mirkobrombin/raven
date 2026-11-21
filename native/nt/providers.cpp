@@ -2656,6 +2656,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 			bool dispatched;
 			api_in_progress = api_name.c_str();
+			desktop_serving = api_in_progress;
 			// A Vulkan call takes the desktop lock itself where it reaches a window (see set_surface_source): it waits for the device
 			// and for the bridge's own threads, which take the lock too, so it neither holds the lock nor takes it for the desktop's
 			// bookkeeping, which the next call that reaches the desktop does.
@@ -3128,6 +3129,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					return graphics_beside ? graphics_beside(named->second, arguments) : std::nullopt;
 				// The window manager's handlers are the desktop's registry; the others are the runtime's.
 				const bool desktop_call = desktop_beside_api(named->second) || gdi_beside_api(named->second);
+				desktop_serving = named->second.c_str();
 				const auto entry = (desktop_call ? desktop_api : api_registry).find(named->second);
 				if (!entry)
 					return std::nullopt;
@@ -3178,6 +3180,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::optional<DesktopScope> desktop_scope;
 				std::optional<WindowCallScope> window_scope;
 				if (desktop_call) {
+					static std::atomic<int> fallen{0};
+					if (std::getenv("RAVEN_TRACE_WHOLE") && fallen++ < 200)
+						std::fprintf(stderr, "beside whole: %s dc_logged %d drawing_logged %d\n", named->second.c_str(), int(windows.dc_logged()),
+							int(windows.drawing_logged()));
 					desktop_scope.emplace();
 					// The contexts' state the guest changed by itself comes in first, as in the turn; deferred releases wait for a stop
 					// of the guest, as for a call answered through its stub.
@@ -3312,6 +3318,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			throw std::runtime_error("a served call came from an unknown stub");
 		const ServedThreadScope thread_scope(environment, process.serving_teb());
 		api_in_progress = found->second.c_str();
+		desktop_serving = api_in_progress;
 		// A Vulkan call leaves the desktop alone, as in the trap path.
 		const bool graphics_call = found->second.starts_with("vk");
 		std::optional<DesktopScope> desktop_scope;

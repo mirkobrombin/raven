@@ -7,6 +7,8 @@
 #include <mutex>
 #include <pthread.h>
 #include <stdexcept>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
@@ -14,6 +16,8 @@
 #include "desktop/desktop_hold.h"
 
 namespace raven {
+
+inline thread_local const char *desktop_serving = nullptr;
 
 // The lock of the desktop's state, USER's and GDI's alike: the windows and their queues, and the objects they share with drawing. Windows
 // keeps USER under one lock as well. The host thread that holds the runtime's turn takes it for each call it serves, and a host thread
@@ -129,7 +133,12 @@ private:
 		owner.store(std::thread::id(), std::memory_order_relaxed);
 		const uint64_t since = taken_at;
 		pthread_rwlock_unlock(&lock);
-		CallCycles::instance().held_lock(__rdtsc() - since);
+		const uint64_t held = __rdtsc() - since;
+		CallCycles::instance().held_lock(held);
+		static const bool trace = std::getenv("RAVEN_TRACE_WHOLE");
+		static std::atomic<int> lines{0};
+		if (trace && held > 5000 && lines++ < 400)
+			std::fprintf(stderr, "whole: %s %llu\n", desktop_serving ? desktop_serving : "(none)", (unsigned long long)held);
 	}
 	pthread_rwlock_t lock;
 	std::atomic<std::thread::id> owner{};
