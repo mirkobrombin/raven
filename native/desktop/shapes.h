@@ -48,8 +48,16 @@ struct Shapes {
 		if (right <= left || bottom <= top)
 			return;
 		left += ox; right += ox; top += oy; bottom += oy;
+		// A border alone covers nothing farther than this inside every edge: such pixels are skipped, so an outline costs its perimeter,
+		// not its area.
+		const double band = radius + width + 1;
 		for (int64_t y = int64_t(std::floor(top)); y < int64_t(std::ceil(bottom)); ++y)
 			for (int64_t x = int64_t(std::floor(left)); x < int64_t(std::ceil(right)); ++x) {
+				if (!fill && double(y) + 0.5 > top + band && double(y) + 0.5 < bottom - band && double(x) + 0.5 > left + band &&
+					double(x) + 0.5 < right - band) {
+					x = int64_t(std::ceil(right - band - 0.5)) - 1;
+					continue;
+				}
 				const double d = rounded_distance(double(x) + 0.5, double(y) + 0.5, left, top, right, bottom, radius);
 				const double outer = std::clamp(0.5 - d, 0.0, 1.0);
 				if (outer <= 0)
