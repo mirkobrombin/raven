@@ -2617,7 +2617,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				{"kernel32.dll", "raven-rtl.dll", "raven-rtl."}, {"kernelbase.dll", "raven-rtl.dll", "raven-rtl."},
 				// The generic AVL tables, critical sections, SRW locks, frame unwinding and the growth of code generators' function tables
 				// of ntdll; its heap stays with the host, which calls the guest RTL itself.
-				{"ntdll.dll", "raven-rtl.dll", "raven-rtl."}};
+				{"ntdll.dll", "raven-rtl.dll", "raven-rtl."},
+				// COM's task allocator hands out the blocks of the process heap, which the guest RTL holds.
+				{"ole32.dll", "raven-rtl.dll", "raven-rtl."}, {"combase.dll", "raven-rtl.dll", "raven-rtl."}};
 			for (const auto &overlay_rule : overlays) {
 				if (name != overlay_rule.library)
 					continue;

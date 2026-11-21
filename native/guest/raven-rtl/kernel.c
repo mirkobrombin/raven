@@ -74,6 +74,31 @@ HANDLE WINAPI RavenGetProcessHeap(VOID)
 	return PEB_PROCESS_HEAP;
 }
 
+/* ---- COM's task allocator, whose blocks are the process heap's: the memory the runtime hands a program to free with CoTaskMemFree
+   comes from the same heap. ole32's and combase's exports of these names are forwarded here. ---- */
+PVOID WINAPI RavenCoTaskMemAlloc(SIZE_T size)
+{
+	return RtlAllocateHeap(PEB_PROCESS_HEAP, 0, size ? size : 1);
+}
+
+/* No block reallocates as a new one; a size of zero frees the block and answers NULL. */
+PVOID WINAPI RavenCoTaskMemRealloc(PVOID block, SIZE_T size)
+{
+	if (!block)
+		return RavenCoTaskMemAlloc(size);
+	if (!size) {
+		RtlFreeHeap(PEB_PROCESS_HEAP, 0, block);
+		return NULL;
+	}
+	return RtlReAllocateHeap(PEB_PROCESS_HEAP, 0, block, size);
+}
+
+VOID WINAPI RavenCoTaskMemFree(PVOID block)
+{
+	if (block)
+		RtlFreeHeap(PEB_PROCESS_HEAP, 0, block);
+}
+
 /* ---- critical sections: without spinning, since only one guest thread runs at a time and spinning only delays the owner. The wait goes on
    LockCount itself, so nothing here needs a handle a program could close by mistake. ---- */
 

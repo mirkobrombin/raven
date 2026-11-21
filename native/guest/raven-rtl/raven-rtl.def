@@ -12,6 +12,9 @@ EXPORTS
  HeapFree=RavenHeapFree
  HeapSize=RavenHeapSize
  GetProcessHeap=RavenGetProcessHeap
+ CoTaskMemAlloc=RavenCoTaskMemAlloc
+ CoTaskMemRealloc=RavenCoTaskMemRealloc
+ CoTaskMemFree=RavenCoTaskMemFree
  InitializeCriticalSection=RavenInitializeCriticalSection
  InitializeCriticalSectionAndSpinCount=RavenInitializeCriticalSectionAndSpinCount
  InitializeCriticalSectionEx=RavenInitializeCriticalSectionEx
