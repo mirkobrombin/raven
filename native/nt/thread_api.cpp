@@ -250,6 +250,8 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				object = mutex->table_object();
 			else if (const auto semaphore = objects.object_as<SemaphoreObject>(handle))
 				object = semaphore->waits_object;
+			else if (const auto thread = objects.object_as<ThreadObject>(handle))
+				object = NativeThreads::end_object(*thread->thread);
 			if (!object)
 				return std::vector<uint32_t>{};
 			table.push_back(object);
