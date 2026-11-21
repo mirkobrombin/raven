@@ -1,11 +1,14 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <x86intrin.h>
 #include <mutex>
 #include <pthread.h>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 #include "cpu/call_cycles.h"
 
@@ -157,6 +160,44 @@ struct DesktopRelease {
 	~DesktopRelease() { desktop_lock().resume(held); }
 	DesktopRelease(const DesktopRelease &) = delete;
 	DesktopRelease &operator=(const DesktopRelease &) = delete;
+};
+
+// The objects a call under the shared desktop lock works on, each behind one of a fixed set of locks chosen by its handle: two calls
+// on the same context, bitmap or window take turns, calls on different ones mostly do not. A scope takes its stripes in their order, so
+// two scopes never wait for each other in a circle; a stripe is held only inside one call, never over a callback.
+class DesktopStripes {
+public:
+	explicit DesktopStripes(const std::vector<uint64_t> &handles)
+	{
+		for (const uint64_t handle : handles)
+			if (handle)
+				taken.push_back(stripe(handle));
+		std::sort(taken.begin(), taken.end());
+		taken.erase(std::unique(taken.begin(), taken.end()), taken.end());
+		for (const size_t index : taken)
+			if (!locks()[index].try_lock()) {
+				const uint64_t started = __rdtsc();
+				locks()[index].lock();
+				CallCycles::instance().waited_lock(__rdtsc() - started);
+			}
+	}
+	~DesktopStripes()
+	{
+		for (auto index = taken.rbegin(); index != taken.rend(); ++index)
+			locks()[*index].unlock();
+	}
+	DesktopStripes(const DesktopStripes &) = delete;
+	DesktopStripes &operator=(const DesktopStripes &) = delete;
+
+private:
+	static constexpr size_t count = 64;
+	static size_t stripe(uint64_t handle) { return size_t((handle * 0x9e3779b97f4a7c15ULL) >> 58); }
+	static std::array<std::mutex, count> &locks()
+	{
+		static std::array<std::mutex, count> made;
+		return made;
+	}
+	std::vector<size_t> taken;
 };
 
 }
