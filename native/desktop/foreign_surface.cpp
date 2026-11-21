@@ -16,8 +16,10 @@
 #include <sstream>
 #include <vector>
 #include <mutex>
+#include <pthread.h>
 #include <signal.h>
 #include <string>
+#include <thread>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -393,8 +395,58 @@ void ForeignSurface::publish_frame()
 	std::atomic_ref<uint32_t>(header[3]).fetch_add(1, std::memory_order_release);
 }
 
+// The changes of the windows directory counted so far, and whether a host thread counts them (see foreign_frames_stamp): not yet, being
+// started, yes, or it cannot.
+static std::atomic<uint64_t> foreign_changes{1};
+enum class ForeignWatch { none, starting, running, unavailable };
+static std::atomic<ForeignWatch> foreign_watch{ForeignWatch::none};
+static std::atomic<int> foreign_watch_descriptor{-1};
+
+static bool watching_foreign_changes()
+{
+	auto state = foreign_watch.load(std::memory_order_acquire);
+	if (state != ForeignWatch::none)
+		return state == ForeignWatch::running;
+	if (!foreign_watch.compare_exchange_strong(state, ForeignWatch::starting, std::memory_order_acq_rel))
+		return state == ForeignWatch::running;
+	// A child the runtime forks without a new program keeps the watch's descriptor but not its thread: it starts its own.
+	static const bool forks_handled = [] {
+		return ::pthread_atfork(nullptr, nullptr, [] {
+			if (const int descriptor = foreign_watch_descriptor.exchange(-1); descriptor >= 0)
+				::close(descriptor);
+			foreign_watch.store(ForeignWatch::none, std::memory_order_release);
+		}) == 0;
+	}();
+	const int watch = forks_handled ? ::inotify_init1(IN_CLOEXEC) : -1;
+	if (watch < 0 || ::inotify_add_watch(watch, window_directory().c_str(), IN_CREATE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE) < 0) {
+		if (watch >= 0)
+			::close(watch);
+		foreign_watch.store(ForeignWatch::unavailable, std::memory_order_release);
+		return false;
+	}
+	foreign_watch_descriptor.store(watch, std::memory_order_release);
+	std::thread([watch] {
+		alignas(inotify_event) char events[4096];
+		for (;;) {
+			const auto taken = ::read(watch, events, sizeof events);
+			if (taken < 0 && errno == EINTR)
+				continue;
+			if (taken <= 0)
+				return;
+			foreign_changes.fetch_add(1, std::memory_order_release);
+		}
+	}).detach();
+	foreign_watch.store(ForeignWatch::running, std::memory_order_release);
+	return true;
+}
+
 uint64_t foreign_frames_stamp()
 {
+	// The directory changes when a window of another program appears or goes, or one of them is sent or posted a message. Programs
+	// poll their queues thousands of times a second and each poll asks for this: a host thread of its own waits for the changes and
+	// counts them, so a poll reads a number instead of asking the file system, which it does only while the watch cannot be had.
+	if (watching_foreign_changes())
+		return foreign_changes.load(std::memory_order_acquire);
 	struct stat status{};
 	if (::stat(window_directory().c_str(), &status) != 0)
 		return 0;
@@ -418,7 +470,12 @@ void drain_foreign_frames_descriptor()
 {
 	alignas(inotify_event) char events[4096];
 	const int descriptor = foreign_frames_descriptor();
-	while (descriptor >= 0 && ::read(descriptor, events, sizeof events) > 0) {}
+	bool changed = false;
+	while (descriptor >= 0 && ::read(descriptor, events, sizeof events) > 0)
+		changed = true;
+	// A thread woken by the change sees it in the stamp at once, before the watching thread may have counted it.
+	if (changed)
+		foreign_changes.fetch_add(1, std::memory_order_release);
 }
 
 bool take_foreign_frame(uint64_t window, uint32_t &seen, const std::function<void(const uint8_t *, uint32_t, uint32_t)> &use)
