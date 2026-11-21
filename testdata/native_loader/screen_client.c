@@ -64,7 +64,8 @@ int raven_entry(void)
 	HDC memory = CreateCompatibleDC(NULL);
 	if (!memory || !screen_caps_hold(memory) || GetDeviceCaps(memory, NUMCOLORS) != -1 || !DeleteDC(memory))
 		return 7;
-	for (unsigned round = 0; round < 16; ++round) {
+	/* Rounds enough that a thread taking the context in the guest meets the runtime publishing another one. */
+	for (unsigned round = 0; round < 256; ++round) {
 		HANDLE workers[4];
 		ready = 0;
 		for (unsigned index = 0; index < 4; ++index) {

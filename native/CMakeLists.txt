@@ -1206,7 +1206,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/screen_client.c VERBATIM)
         add_custom_target(screen_pe_fixture ALL DEPENDS ${SCREEN_FIXTURE})
         add_test(NAME native_screen_dc_cli COMMAND raven --run-process --execution=native ${SCREEN_FIXTURE})
-        set_tests_properties(native_screen_dc_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        set_tests_properties(native_screen_dc_cli PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         set(WINDOW_STATE_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/window-state-fixture.exe)
         add_custom_command(OUTPUT ${WINDOW_STATE_FIXTURE}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
