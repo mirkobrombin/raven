@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -31,8 +32,10 @@ namespace {
 
 // The host side of the DirectWrite component: font files are read, measured and rasterized with FreeType, and the guest gets numbers and
 // bitmaps back. Handles are small integers; the file bytes are copied because FreeType keeps pointing at them.
+// The faces opened from one guest buffer share one copy of its bytes; `source` is the buffer's guest address.
 struct HostFont {
-	std::vector<uint8_t> data;
+	std::shared_ptr<const std::vector<uint8_t>> data;
+	uint64_t source = 0;
 	FT_Face face = nullptr;
 };
 
@@ -284,8 +287,13 @@ void register_font_service(ApiRegistry &registry, KernelContext &)
 			return;
 		}
 		auto font = std::make_unique<HostFont>();
-		font->data = call.read(call[0], call.u32(1));
-		if (FT_New_Memory_Face(library, font->data.data(), FT_Long(font->data.size()), FT_Long(call.u32(2)), &font->face)) {
+		// The guest keeps a buffer as it is while a face opened from it is open (raven-dwrite's FontBytes).
+		const auto open = std::find_if(fonts.begin(), fonts.end(), [&](const auto &entry) {
+			return entry.second->source == call[0] && entry.second->data->size() == call.u32(1);
+		});
+		font->source = call[0];
+		font->data = open != fonts.end() ? open->second->data : std::make_shared<const std::vector<uint8_t>>(call.read(call[0], call.u32(1)));
+		if (FT_New_Memory_Face(library, font->data->data(), FT_Long(font->data->size()), FT_Long(call.u32(2)), &font->face)) {
 			call.ret(0);
 			return;
 		}

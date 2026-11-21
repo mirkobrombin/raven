@@ -544,12 +544,98 @@ static void ensure_system(void)
 	InitOnceExecuteOnce(&system_once, build_system, NULL, NULL);
 }
 
+/* ---- font files: the bytes of one file, which every face opened from it shares ---- */
+/* A file is kept once while a face uses it. It is found again by its path, by the font file object it was read through, or by its
+   bytes: a program's loader can serve one file under several keys (Chromium's font proxy gives each family its own). The host keeps one
+   copy of a buffer for all the faces opened from it, so the buffer stays as it is while one of them is open. */
+typedef struct FontBytes {
+	LONG refs;
+	BYTE *bytes;
+	DWORD size;
+	WCHAR *path;
+	struct FontBytes *next;
+} FontBytes;
+
+static FontBytes *font_files;
+static SRWLOCK font_files_lock = SRWLOCK_INIT;
+
+static void font_bytes_release(FontBytes *file)
+{
+	BOOL last;
+	if (!file)
+		return;
+	AcquireSRWLockExclusive(&font_files_lock);
+	last = --file->refs == 0;
+	if (last) {
+		FontBytes **link = &font_files;
+		while (*link != file)
+			link = &(*link)->next;
+		*link = file->next;
+	}
+	ReleaseSRWLockExclusive(&font_files_lock);
+	if (!last)
+		return;
+	FREE(file->path);
+	FREE(file->bytes);
+	FREE(file);
+}
+
+/* The kept file read from this path, with a reference. */
+static FontBytes *font_bytes_of_path_kept(const WCHAR *path)
+{
+	FontBytes *file;
+	AcquireSRWLockExclusive(&font_files_lock);
+	for (file = font_files; file && !(file->path && wequal_fold(file->path, path)); file = file->next)
+		;
+	if (file)
+		++file->refs;
+	ReleaseSRWLockExclusive(&font_files_lock);
+	return file;
+}
+
+/* The kept file with these bytes, or a new one that keeps them: it takes the buffer when `owned` (and frees it when a kept file has the
+   same bytes), and copies it otherwise. */
+static FontBytes *font_bytes_keep(const BYTE *bytes, DWORD size, BOOL owned, const WCHAR *path)
+{
+	FontBytes *file;
+	BYTE *copy = (BYTE *)bytes;
+	if (!bytes)
+		return NULL;
+	AcquireSRWLockExclusive(&font_files_lock);
+	for (file = font_files; file; file = file->next)
+		if (file->size == size && !memcmp(file->bytes, bytes, size))
+			break;
+	if (file) {
+		++file->refs;
+		if (path && !file->path)
+			file->path = wdup(path);
+		ReleaseSRWLockExclusive(&font_files_lock);
+		if (owned)
+			FREE(copy);
+		return file;
+	}
+	if (!owned && (copy = ALLOC(size)) != NULL)
+		memcpy(copy, bytes, size);
+	file = copy ? ALLOC(sizeof(FontBytes)) : NULL;
+	if (file) {
+		file->refs = 1;
+		file->bytes = copy;
+		file->size = size;
+		file->path = path ? wdup(path) : NULL;
+		file->next = font_files;
+		font_files = file;
+	}
+	ReleaseSRWLockExclusive(&font_files_lock);
+	if (!file)
+		FREE(copy);
+	return file;
+}
+
 /* ---- font data: one opened face of a font file ---- */
 typedef struct FaceData {
 	LONG refs;
 	DWORD host;
-	BYTE *bytes;
-	DWORD size;
+	FontBytes *file;
 	WCHAR *path;
 	DWORD index;
 	INT32 info[20];
@@ -560,33 +646,35 @@ static void face_data_release(FaceData *data)
 {
 	if (data && InterlockedDecrement(&data->refs) == 0) {
 		RavenFontClose(data->host);
-		if (data->bytes)
-			FREE(data->bytes);
+		font_bytes_release(data->file);
 		if (data->path)
 			FREE(data->path);
 		FREE(data);
 	}
 }
 
-/* Takes the bytes of a font file and opens one face of it with the host; the data owns the bytes. */
-static FaceData *face_data_create(BYTE *bytes, DWORD size, DWORD index, const WCHAR *path)
+/* Opens one face of a font file with the host; the data holds a reference to the file. */
+static FaceData *face_data_create(FontBytes *file, DWORD index, const WCHAR *path)
 {
 	FaceData *data = ALLOC(sizeof(FaceData));
 	if (!data)
 		return NULL;
+	AcquireSRWLockExclusive(&font_files_lock);
+	++file->refs;
+	ReleaseSRWLockExclusive(&font_files_lock);
 	data->refs = 1;
-	data->bytes = bytes;
-	data->size = size;
+	data->file = file;
 	data->index = index;
 	data->path = path ? wdup(path) : NULL;
-	data->host = RavenFontOpen(bytes, size, index);
+	data->host = RavenFontOpen(file->bytes, file->size, index);
 	if (!data->host || !RavenFontInfo(data->host, data->info)) {
 		data->refs = 1;
 		face_data_release(data);
 		return NULL;
 	}
 	/* A file that starts with OTTO holds CFF outlines; everything else here is TrueType. */
-	data->face_type = size >= 4 && bytes[0] == 'O' && bytes[1] == 'T' && bytes[2] == 'T' && bytes[3] == 'O' ? DWRITE_FONT_FACE_TYPE_CFF : DWRITE_FONT_FACE_TYPE_TRUETYPE;
+	data->face_type = file->size >= 4 && file->bytes[0] == 'O' && file->bytes[1] == 'T' && file->bytes[2] == 'T' && file->bytes[3] == 'O' ?
+		DWRITE_FONT_FACE_TYPE_CFF : DWRITE_FONT_FACE_TYPE_TRUETYPE;
 	return data;
 }
 
@@ -637,10 +725,15 @@ static FaceData *face_data_for_entry(const FontEntry *entry)
 			return cache[index].data;
 		}
 	{
-		DWORD size = 0;
-		BYTE *bytes = read_file(entry->path, &size);
-		if (bytes)
-			result = face_data_create(bytes, size, entry->index, entry->path);
+		FontBytes *file = font_bytes_of_path_kept(entry->path);
+		if (!file) {
+			DWORD size = 0;
+			BYTE *bytes = read_file(entry->path, &size);
+			file = font_bytes_keep(bytes, size, TRUE, entry->path);
+		}
+		if (file)
+			result = face_data_create(file, entry->index, entry->path);
+		font_bytes_release(file);
 		if (result && index < 256) {
 			cache[index].entry = entry;
 			cache[index].data = result;
@@ -948,6 +1041,7 @@ typedef struct {
 	BYTE *key;
 	UINT32 key_size;
 	IDWriteFontFileLoader *loader;
+	FontBytes *bytes;
 } FontFile;
 
 static HRESULT STDMETHODCALLTYPE file_query(IDWriteFontFile *self, REFIID iid, void **out)
@@ -970,6 +1064,7 @@ static ULONG STDMETHODCALLTYPE file_release(IDWriteFontFile *self)
 	if (!left) {
 		if (file->loader)
 			IDWriteFontFileLoader_Release(file->loader);
+		font_bytes_release(file->bytes);
 		FREE(file->key);
 		FREE(file);
 	}
@@ -990,44 +1085,56 @@ static HRESULT STDMETHODCALLTYPE file_loader(IDWriteFontFile *self, IDWriteFontF
 	return S_OK;
 }
 
-/* The bytes of the file behind a font file object, read through its loader. */
-static BYTE *file_bytes(FontFile *file, DWORD *size)
+/* The bytes of the file behind a font file object, with a reference: the ones it read before, or bytes read through its loader, which
+   the object keeps for the next use. */
+static FontBytes *font_bytes_of_file(FontFile *file)
 {
+	FontBytes *kept = NULL;
 	IDWriteFontFileStream *stream = NULL;
 	UINT64 length = 0;
 	const void *fragment = NULL;
 	void *context = NULL;
-	BYTE *copy = NULL;
+	AcquireSRWLockExclusive(&font_files_lock);
+	if (file->bytes) {
+		kept = file->bytes;
+		++kept->refs;
+	}
+	ReleaseSRWLockExclusive(&font_files_lock);
+	if (kept)
+		return kept;
 	if (FAILED(IDWriteFontFileLoader_CreateStreamFromKey(file->loader, file->key, file->key_size, &stream)) || !stream)
 		return NULL;
 	if (SUCCEEDED(IDWriteFontFileStream_GetFileSize(stream, &length)) && length && length < 0x7fffffff &&
 		SUCCEEDED(IDWriteFontFileStream_ReadFileFragment(stream, &fragment, 0, length, &context))) {
-		copy = ALLOC((size_t)length);
-		if (copy) {
-			memcpy(copy, fragment, (size_t)length);
-			*size = (DWORD)length;
-		}
+		kept = font_bytes_keep(fragment, (DWORD)length, FALSE, NULL);
 		IDWriteFontFileStream_ReleaseFileFragment(stream, context);
 	}
 	IDWriteFontFileStream_Release(stream);
-	return copy;
+	AcquireSRWLockExclusive(&font_files_lock);
+	if (kept && !file->bytes) {
+		file->bytes = kept;
+		++kept->refs;
+	}
+	ReleaseSRWLockExclusive(&font_files_lock);
+	return kept;
 }
 
 static HRESULT STDMETHODCALLTYPE file_analyze(IDWriteFontFile *self, WINBOOL *supported, DWRITE_FONT_FILE_TYPE *file_type, DWRITE_FONT_FACE_TYPE *face_type, UINT32 *faces)
 {
-	DWORD size = 0;
-	BYTE *bytes = file_bytes((FontFile *)self, &size);
+	FontBytes *file = font_bytes_of_file((FontFile *)self);
 	FaceData *data;
 	DWORD kind;
-	if (!bytes) {
+	if (!file) {
 		*supported = FALSE;
 		*file_type = DWRITE_FONT_FILE_TYPE_UNKNOWN;
 		*face_type = DWRITE_FONT_FACE_TYPE_UNKNOWN;
 		*faces = 0;
 		return S_OK;
 	}
-	kind = size >= 4 && bytes[0] == 't' && bytes[1] == 't' && bytes[2] == 'c' && bytes[3] == 'f' ? 3 : size >= 4 && bytes[0] == 'O' && bytes[1] == 'T' ? 1 : 2;
-	data = face_data_create(bytes, size, 0, NULL);
+	kind = file->size >= 4 && file->bytes[0] == 't' && file->bytes[1] == 't' && file->bytes[2] == 'c' && file->bytes[3] == 'f' ? 3 :
+		file->size >= 4 && file->bytes[0] == 'O' && file->bytes[1] == 'T' ? 1 : 2;
+	data = face_data_create(file, 0, NULL);
+	font_bytes_release(file);
 	if (!data) {
 		*supported = FALSE;
 		*file_type = DWRITE_FONT_FILE_TYPE_UNKNOWN;
@@ -2923,27 +3030,23 @@ static WCHAR *face_name(FaceData *data, DWORD preferred, DWORD fallback)
 	return length && length < sizeof(buffer) ? widen(buffer) : NULL;
 }
 
-/* Opens every face of a file that the program's own loader serves and files each one under its family. Each face owns a copy of the
+/* Opens every face of a file that the program's own loader serves and files each one under its family. The faces share the file's
    bytes; the entries live as long as the collection, which is never released. */
 static void custom_add_file(CustomCollection *collection, IDWriteFontFile *file)
 {
 	FontFile source = {0};
-	DWORD size = 0, index, faces = 1;
-	BYTE *bytes;
+	DWORD index, faces = 1;
+	FontBytes *shared;
 	const void *key = NULL;
 	if (FAILED(IDWriteFontFile_GetReferenceKey(file, &key, &source.key_size)) || FAILED(IDWriteFontFile_GetLoader(file, &source.loader)))
 		return;
 	source.key = (BYTE *)key;
-	bytes = file_bytes(&source, &size);
+	shared = font_bytes_of_file(((FontFile *)file)->vtbl == (const IDWriteFontFileVtbl *)FontFile_table_ ? (FontFile *)file : &source);
 	IDWriteFontFileLoader_Release(source.loader);
-	for (index = 0; bytes && index < faces; ++index) {
-		BYTE *copy = ALLOC(size);
+	for (index = 0; shared && index < faces; ++index) {
 		FaceData *data;
 		FontEntry *entry;
-		if (!copy)
-			break;
-		memcpy(copy, bytes, size);
-		data = face_data_create(copy, size, index, NULL);
+		data = face_data_create(shared, index, NULL);
 		if (!data)
 			continue;
 		if (!index && data->info[13] > 1)
@@ -2971,8 +3074,8 @@ static void custom_add_file(CustomCollection *collection, IDWriteFontFile *file)
 		if (entry->family && entry->family[0])
 			custom_add_entry(collection, entry);
 	}
-	if (bytes)
-		FREE(bytes);
+	font_bytes_release(shared);
+	font_bytes_release(source.bytes);
 }
 
 static HRESULT STDMETHODCALLTYPE factory_custom_collection(IDWriteFactory2 *self, IDWriteFontCollectionLoader *loader, const void *key, UINT32 key_size,
@@ -4020,16 +4123,16 @@ static HRESULT STDMETHODCALLTYPE factory_custom_file_reference(IDWriteFactory2 *
 static HRESULT STDMETHODCALLTYPE factory_create_face(IDWriteFactory2 *self, DWRITE_FONT_FACE_TYPE type, UINT32 count, IDWriteFontFile *const *files, UINT32 index,
 	DWRITE_FONT_SIMULATIONS simulations, IDWriteFontFace **face)
 {
-	DWORD size = 0;
-	BYTE *bytes;
+	FontBytes *file;
 	FaceData *data;
 	*face = NULL;
 	if (count != 1 || !files || !files[0])
 		return E_INVALIDARG;
-	bytes = file_bytes((FontFile *)files[0], &size);
-	if (!bytes)
+	file = font_bytes_of_file((FontFile *)files[0]);
+	if (!file)
 		return DWRITE_E_FILENOTFOUND;
-	data = face_data_create(bytes, size, index, NULL);
+	data = face_data_create(file, index, NULL);
+	font_bytes_release(file);
 	if (!data)
 		return DWRITE_E_FILEFORMAT;
 	*face = make_face(data, files[0], simulations);
