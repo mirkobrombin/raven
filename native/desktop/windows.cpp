@@ -915,7 +915,7 @@ void NativeWindows::release_surface(uint64_t handle)
 			spare_surfaces[handle]={record->shared,address,record->shared->size(),record->width,record->height,
 				{left,top,left+window->width,top+window->height}};
 		} else {
-			process.unmap_memory(address);
+			released_surfaces.push_back(address);
 		}
 		objects.erase(bitmap);
 	}
@@ -926,7 +926,7 @@ void NativeWindows::drop_spare_surface(uint64_t handle)
 {
 	const auto found=spare_surfaces.find(handle);
 	if (found==spare_surfaces.end()) return;
-	process.unmap_memory(found->second.address);
+	released_surfaces.push_back(found->second.address);
 	spare_surfaces.erase(found);
 }
 
@@ -3081,6 +3081,21 @@ void NativeWindows::screen_dc_use(std::string_view name, uint64_t first)
 }
 
 bool NativeWindows::dispatch(std::string_view name)
+{
+	const bool done=dispatch_call(name);
+	unmap_released();
+	return done;
+}
+
+void NativeWindows::unmap_released()
+{
+	if (released_surfaces.empty()) return;
+	const auto addresses=std::exchange(released_surfaces,{});
+	const DesktopRelease release;
+	for (const auto address : addresses) process.unmap_memory(address);
+}
+
+bool NativeWindows::dispatch_call(std::string_view name)
 {
 	if (tree_dispatch(name) || system_dispatch(name)) return true;
 	// A 32-bit program's window data accessors are served by the shared handlers, which apply style changes.

@@ -76,6 +76,8 @@ public:
 	void set_global_data(std::function<uint64_t(uint64_t)> data) { global_data = std::move(data); }
 	void set_menu_loader(std::function<uint64_t(uint64_t,uint64_t)> loader) { menu_loader = std::move(loader); }
 	bool dispatch(std::string_view name);
+	// Unmaps the surfaces released during the call (see release_surface) with the desktop lock let go, before the call returns.
+	void unmap_released();
 	// The served block where the screen context the guest's GetDC(NULL) takes is published (see the screen preludes), and the
 	// offsets in it of the capability table, the context and its state.
 	static constexpr size_t screen_caps = 0x400, screen_dc = 0x600, screen_dc_state = 0x608;
@@ -360,6 +362,10 @@ private:
 	// Windows that SetWindowPos is placing: their WM_MOVE and WM_SIZE come from the default answer to WM_WINDOWPOSCHANGED instead.
 	std::set<uint64_t> placing;
 	void drop_spare_surface(uint64_t handle);
+	// The surfaces' pixels released under the desktop lock and not yet unmapped: unmapping a window's pixels takes far longer than
+	// releasing its records, and every thread that draws or changes a window of its own would wait for it.
+	std::vector<uint64_t> released_surfaces;
+	bool dispatch_call(std::string_view name);
 	// The compositor took the keyboard from the program's windows; applied once no window of the program receives it right after.
 	bool focus_leaving=false;
 	std::chrono::steady_clock::time_point focus_left{};

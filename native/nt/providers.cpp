@@ -2776,6 +2776,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				result=process.resume(budget);
 				continue;
 			}
+			// A surface released through the desktop's other handlers is unmapped as the call ends too (see NativeWindows::unmap_released).
+			if (desktop_scope)
+				windows.unmap_released();
 			// Calls that stopped the guest are counted apart from served ones: a stop costs far more than the call.
 			if (RuntimeProfile::instance().enabled() && profile_start != std::chrono::steady_clock::time_point{})
 				RuntimeProfile::instance().api((process.call_waiting() ? "(call) " : "(stop) ") + api_name, std::chrono::steady_clock::now() - profile_start);
@@ -3332,6 +3335,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				} catch (...) {
 					return std::nullopt;
 				}
+				if (desktop_scope)
+					windows.unmap_released();
 				return call.result;
 			}
 			// The object of the process's table behind a handle the thread may wait on: an event, a semaphore or a mutex. 0 for any
