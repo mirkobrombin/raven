@@ -3317,6 +3317,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_heap_capacity_cli COMMAND raven --run-process --execution=native
                 --timeout-ms=30000 ${HEAP_CAPACITY} ${RAVEN_RTL_COMPONENT_PATH})
             set_tests_properties(native_heap_capacity_cli PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            # COM's task allocator, which runs in the component beside the process heap.
+            set(TASK_MEMORY_CLIENT ${HEAP_FIXTURE_DIR}/task-memory.exe)
+            add_custom_command(OUTPUT ${TASK_MEMORY_CLIENT}
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${HEAP_FIXTURE_DIR}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${TASK_MEMORY_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/task_memory_client.c
+                    -lole32 -luuid -luser32 -lkernel32 -lgcc
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/task_memory_client.c VERBATIM)
+            add_custom_target(task_memory_fixture ALL DEPENDS ${TASK_MEMORY_CLIENT})
+            add_test(NAME native_task_memory COMMAND raven --run-process --execution=native --stdio=inherit ${TASK_MEMORY_CLIENT})
+            set_tests_properties(native_task_memory PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "task allocator checks passed")
         endif()
         if(PNG_FOUND AND RAVEN_WINDRES)
             set(DESKTOP_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/desktop-fixtures)
