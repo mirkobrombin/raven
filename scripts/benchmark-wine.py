@@ -9,6 +9,9 @@ Workloads:
   startup   a program that returns immediately
   sqlite    sqlite3.exe computing a recursive query over several million rows (CPU bound)
   d3d11     testdata/d3d11/triangle.exe through DXVK on lavapipe (graphics API throughput and start up cost)
+  hotpath   testdata/benchmark/hotpath.exe, which times its own calls: one answered in user mode, one the kernel answers, setting an
+            event, two threads handing a turn through an event and through waits for any or all, and four threads on one critical
+            section or slim lock; a second table gives the median nanoseconds of each per runtime
 
 usage: benchmark-wine.py RAVEN WINE_BINARY TESTDATA DXVK_PE64_DIRECTORY STARTUP_EXE WORKDIR [REPEATS] [WORKLOAD...]
 """
@@ -87,8 +90,9 @@ def main():
     subprocess.run([str(raven), "--run-process", "--execution=native", "--timeout-ms=300000", str(work / "startup.exe")],
                    env=dict(base, RAVEN_PREFIX=str(raven_warm)), capture_output=True, timeout=300)
     warm_prefixes = {"wine": warm, "raven": raven_warm}
-    rows, measurements = [], []
-    for name, program in (("startup", work / "startup.exe"), ("sqlite", sqlite), ("d3d11", d3d / "triangle.exe")):
+    rows, measurements, operations = [], [], {}
+    for name, program in (("startup", work / "startup.exe"), ("sqlite", sqlite), ("d3d11", d3d / "triangle.exe"),
+                          ("hotpath", testdata / "benchmark" / "hotpath.exe")):
         if selected and name not in selected:
             continue
         for runtime in ("raven", "wine"):
@@ -101,7 +105,7 @@ def main():
                 program_args = [str(program)] + ([":memory:", QUERY] if name == "sqlite" else [])
                 if runtime == "raven":
                     env["RAVEN_PREFIX"] = str(prefix)
-                    command = [str(raven), "--run-process", "--execution=native", "--timeout-ms=500000"] + (["--stdio=inherit"] if name == "sqlite" else []) + [str(program)]
+                    command = [str(raven), "--run-process", "--execution=native", "--timeout-ms=500000"] + (["--stdio=inherit"] if name in ("sqlite", "hotpath") else []) + [str(program)]
                     if name == "sqlite":
                         command += ["--", ":memory:", QUERY]
                 else:
@@ -112,6 +116,14 @@ def main():
                     verified = sample[3] == 0
                     if name == "sqlite":
                         verified = verified and "8000000" in sample[4].splitlines()
+                    elif name == "hotpath":
+                        lines = sample[4].splitlines()
+                        verified = verified and "hotpath done" in lines
+                        if verified:
+                            for line in lines:
+                                parts = line.split()
+                                if len(parts) == 3 and parts[0] == "hotpath" and parts[2].isdigit():
+                                    operations.setdefault(parts[1], {}).setdefault(runtime, []).append(int(parts[2]))
                     elif name == "d3d11":
                         marker = prefix / "drive_c/triangle.txt"
                         pixels = prefix / "drive_c/triangle.raw"
@@ -136,6 +148,15 @@ def main():
             print(f"{name:9} {runtime:6} {'-':>8} {'-':>8} {'-':>9}  {note}")
         else:
             print(f"{name:9} {runtime:6} {wall:8.4f} {cpu:8.4f} {rss:9.1f}  {note}")
+    if operations:
+        print()
+        print(f"{'operation':22} {'raven ns':>10} {'wine ns':>10} {'raven/wine':>11}")
+        for operation, runtimes in operations.items():
+            raven_ns = statistics.median(runtimes["raven"]) if "raven" in runtimes else None
+            wine_ns = statistics.median(runtimes["wine"]) if "wine" in runtimes else None
+            ratio = f"{raven_ns / wine_ns:11.2f}" if raven_ns is not None and wine_ns else f"{'-':>11}"
+            show = lambda value: f"{value:10.0f}" if value is not None else f"{'-':>10}"
+            print(f"{operation:22} {show(raven_ns)} {show(wine_ns)} {ratio}")
 
 
 if __name__ == "__main__":
