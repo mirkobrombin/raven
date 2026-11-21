@@ -481,7 +481,7 @@ bool NativeDesktop::dispatch(std::string_view name)
 			result = icon->shared || objects.erase(handle);
 	} else if (name == "DeleteObject") {
 		const auto handle = process.api_arguments(1)[0];
-		result = objects.pen(handle) ? objects.delete_pen(handle) : objects.region(handle) || objects.palette(handle) ? objects.erase(handle) : objects.brush(handle) ? objects.delete_brush(handle) : objects.font(handle) ? objects.delete_font(handle) : objects.dc(handle) ? delete_dc(handle) : delete_bitmap(handle);
+		result = objects.pen(handle) ? objects.delete_pen(handle) : objects.region(handle) || objects.palette(handle) ? objects.erase(handle) : objects.brush(handle) ? objects.delete_brush(handle) : objects.font(handle) ? objects.delete_font(handle) : objects.dc(handle) ? delete_dc(handle) : delete_bitmap(handle, true);
 	} else if (name == "CreateSolidBrush") {
 		auto color=uint32_t(process.api_arguments(1)[0]);
 		// A palette-relative color is the color itself on a display without a palette.
