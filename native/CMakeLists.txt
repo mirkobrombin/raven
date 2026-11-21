@@ -3966,6 +3966,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
+                    # Threads that each draw into a bitmap of their own: the drawing calls are answered beside the turn, under the desktop lock.
+                    set(parallel_gdi_client ${CMAKE_CURRENT_BINARY_DIR}/parallel-gdi${width}.exe)
+                    add_custom_command(OUTPUT ${parallel_gdi_client}
+                        COMMAND ${parallel_compiler} -O2 -nostdlib -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${parallel_entry},--image-base,${parallel_base},--disable-dynamicbase,--no-insert-timestamp
+                            -o ${parallel_gdi_client} ${LOADER_SOURCES}/parallel_gdi_client.c -luser32 -lgdi32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/parallel_gdi_client.c VERBATIM)
+                    list(APPEND PARALLEL_CLIENTS ${parallel_gdi_client})
+                    add_test(NAME native_parallel_gdi_x${width} COMMAND ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${parallel_gdi_client}
+                        --beside PatBlt,FillRect,BitBlt,GetPixel)
+                    set_tests_properties(native_parallel_gdi_x${width} PROPERTIES TIMEOUT 120
+                        ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-gdi-prefix${width}")
                 endif()
             endif()
         endforeach()
