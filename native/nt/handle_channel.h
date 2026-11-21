@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <vector>
 #include <sys/types.h>
 
 namespace raven {
@@ -55,6 +56,8 @@ void add_child_channel(HandleChannel *channel);
 void remove_child_channel(HandleChannel *channel);
 // Takes in whatever the other processes have sent and answers what they asked.
 void receive_handles(NativeObjects &objects);
+// The descriptors receive_handles reads; only where receive_handles may run.
+std::vector<int> handle_descriptors();
 // Process queries can reach a runtime of this prefix even when it is neither the caller's parent nor its child.
 void enable_process_requests();
 std::shared_ptr<HandleChannel> process_request_channel(pid_t pid);

@@ -248,5 +248,26 @@ int raven_entry(void)
 	error = GetLastError();
 	if (error != ERROR_FILE_NOT_FOUND || WaitNamedPipeW(name, 10))
 		return 53;
+	/* A server that waits for a client with an overlapped ConnectNamedPipe while the process idles, once closed, ends the wait as aborted
+	   and leaves its name free at once for a new pipe of one instance. Three times, as the process may be idle at different moments. */
+	{
+		int round;
+		for (round = 0; round < 3; ++round) {
+			OVERLAPPED waiting = {0};
+			HANDLE idle_server = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, NULL);
+			waiting.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+			if (idle_server == INVALID_HANDLE_VALUE || !waiting.hEvent || ConnectNamedPipe(idle_server, &waiting) || GetLastError() != ERROR_IO_PENDING)
+				return 67;
+			Sleep(50);
+			CloseHandle(idle_server);
+			idle_server = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, NULL);
+			if (idle_server == INVALID_HANDLE_VALUE)
+				return 68;
+			CloseHandle(idle_server);
+			if (WaitForSingleObject(waiting.hEvent, 5000) != WAIT_OBJECT_0)
+				return 69;
+			CloseHandle(waiting.hEvent);
+		}
+	}
 	return 0;
 }

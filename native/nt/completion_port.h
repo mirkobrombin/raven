@@ -54,7 +54,11 @@ public:
 	void add(Operation operation, int descriptor = -1, short events = 0)
 	{
 		(polling ? added : operations).emplace_back(Pending{std::move(operation), descriptor, events}, std::make_unique<HostWait>());
+		if (descriptor >= 0 && watch_added)
+			watch_added(descriptor, events);
 	}
+	// Told the descriptor and events of each operation added that names one, so that a process that sleeps on them sleeps on it too.
+	void set_watch_added(std::function<void(int, short)> told) { watch_added = std::move(told); }
 	// Gives every pending operation a chance to finish; true when any did.
 	bool poll()
 	{
@@ -102,6 +106,7 @@ private:
 	std::vector<std::pair<Pending, std::unique_ptr<HostWait>>> operations, added;
 	bool polling = false;
 	std::chrono::steady_clock::time_point looked;
+	std::function<void(int, short)> watch_added;
 };
 
 }

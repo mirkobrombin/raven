@@ -404,7 +404,11 @@ bool afd_device_control(KernelContext &context, ApiCall &call)
 			std::erase(owner->polls, poll);
 		return true;
 	};
-	context.reactor->add(attempt, watched.front().socket->descriptor, short(POLLIN | POLLPRI | POLLOUT | POLLRDHUP));
+	// Only the events asked for: a socket that can always be written must not wake a sleeping process for a poll that waits to receive.
+	const uint32_t asked = watched.front().events;
+	const short events = short(((asked & (afd_receive | afd_accept)) ? POLLIN : 0) | ((asked & afd_receive_expedited) ? POLLPRI : 0) |
+		((asked & afd_send) ? POLLOUT : 0) | ((asked & afd_disconnect) ? POLLRDHUP : 0));
+	context.reactor->add(attempt, watched.front().socket->descriptor, events);
 	call.ret(status_pending);
 	return true;
 }

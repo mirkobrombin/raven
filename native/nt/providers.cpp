@@ -3262,6 +3262,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		[&threads](std::vector<pollfd> &descriptors) { threads.idle_descriptors(descriptors); }, [&threads] { threads.drain_wake(); });
 	KernelContext kernel{process, environment, memory, allocator, kernel_objects, threads, paths, modules, entry, *launch, invoke};
 	threads.set_watched([reactor = kernel.reactor](std::vector<pollfd> &descriptors) { reactor->watch(descriptors); });
+	kernel.reactor->set_watch_added([&threads](int descriptor, short events) { threads.watch_added(descriptor, events); });
 	windows.set_global_allocator([&allocator](uint64_t size) { return allocator.allocate(size,true); });
 	windows.set_global_data([&allocator](uint64_t handle) { return allocator.data(handle); });
 	// The scheduler looks at a waiting thread's condition after the thread gave the desktop lock up with the runtime: what looks at the
