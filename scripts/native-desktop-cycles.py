@@ -30,7 +30,8 @@ def main():
     beside = {}
     for _, name, calls, answered, _ in rows:
         beside[name] = beside.get(name, 0) + answered
-    for name in ("SetWindowLongPtrW", "SetPropW", "RemovePropW", "InvalidateRect", "GetDC", "ReleaseDC"):
+    for name in ("SetWindowLongPtrW", "SetPropW", "RemovePropW", "InvalidateRect", "GetDC", "ReleaseDC",
+                 "PeekMessageW"):
         if beside.get(name, 0) < reached.get(name, 0) // 2 or not reached.get(name, 0):
             raise SystemExit(f"{name} is answered beside the turn {beside.get(name, 0)} of {reached.get(name, 0)} times\n{output}")
     for name in ("GetAncestor", "GetPropW", "GetFocus", "GetMenuItemCount", "GetMenuItemID", "GetSubMenu", "PtInRegion", "RectInRegion",
