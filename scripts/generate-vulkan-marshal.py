@@ -525,7 +525,10 @@ def emit(registry, selected, state, output, classify_member, declared):
     table = []
     counts = {}
     command_code = []
-    hooks_pre = {"vkQueueSubmit": "synchronize_to_device", "vkQueueSubmit2": "synchronize_to_device", "vkQueueSubmit2KHR": "synchronize_to_device"}
+    # Sparse binding and signals from the host can release work submitted earlier: the device may write any memory then.
+    hooks_pre = {"vkQueueSubmit": "synchronize_to_device", "vkQueueSubmit2": "synchronize_to_device", "vkQueueSubmit2KHR": "synchronize_to_device",
+                 "vkQueueBindSparse": "synchronize_to_device", "vkSignalSemaphore": "synchronize_to_device", "vkSignalSemaphoreKHR": "synchronize_to_device",
+                 "vkSetEvent": "synchronize_to_device"}
     hooks_post = {"vkQueueWaitIdle": "synchronize_from_device", "vkWaitForFences": "synchronize_from_device", "vkGetFenceStatus": "synchronize_from_device","vkWaitSemaphores": "synchronize_from_device", "vkWaitSemaphoresKHR": "synchronize_from_device", "vkGetSemaphoreCounterValue": "synchronize_after_counter",
                   "vkGetSemaphoreCounterValueKHR": "synchronize_after_counter"}
     # Commands that can keep the driver busy for long: they run on a host thread while the guest's other threads go on.

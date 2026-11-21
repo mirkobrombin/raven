@@ -48,6 +48,10 @@ uint64_t Marshal::allocate_memory(const std::vector<uint64_t> &a)
 	// memory is all coherent.
 	if (std::getenv("RAVEN_VULKAN_NONCOHERENT"))
 		record.coherent = false;
+	// Shared memory holds what its other owners write.
+	for (auto *next = static_cast<const VkBaseInStructure *>(info->pNext); next; next = next->pNext)
+		if (next->sType == VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO)
+			record.fresh = false;
 	// Importing host memory would require matching external-memory flags on every bound resource.
 	const auto status = vkAllocateMemory(host_device, info, nullptr, &memory);
 	if (status == VK_SUCCESS) {
