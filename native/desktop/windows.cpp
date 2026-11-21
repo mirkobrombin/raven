@@ -135,6 +135,34 @@ void NativeWindows::refresh_screen()
 	}
 }
 
+void NativeWindows::prepare_surface(uint64_t handle)
+{
+	if (!desktop_lock().held_whole()) return;
+	// A child draws on its root's surface.
+	const auto *window=std::as_const(objects).window(handle);
+	if (window && window->parent) {
+		handle=objects.window_root(handle);
+		window=std::as_const(objects).window(handle);
+	}
+	if (!window || window->dc || window->parent || spare_surfaces.contains(handle)) return;
+	const auto width=std::max<int64_t>(int64_t(window->outer.right)-window->outer.left,1),height=std::max<int64_t>(int64_t(window->outer.bottom)-window->outer.top,1);
+	if (width>8192 || height>8192 || uint64_t(width)*uint64_t(height)>16*1024*1024) return;
+	const auto size=(size_t(width)*size_t(height)*4+4095)&~size_t(4095);
+	std::shared_ptr<SharedPixels> shared;
+	uint64_t address=0;
+	try {
+		const DesktopRelease release;
+		shared=std::make_shared<SharedPixels>(size);
+		address=process.map_shared(shared->descriptor(),size);
+	} catch (...) {
+		return;
+	}
+	// Another thread may have given the window its surface, or destroyed it, meanwhile.
+	window=std::as_const(objects).window(handle);
+	if (!window || window->dc || spare_surfaces.contains(handle)) { released_surfaces.push_back(address); return; }
+	spare_surfaces[handle]={shared,address,size};
+}
+
 uint64_t NativeWindows::surface_dc(uint64_t handle)
 {
 	if (const auto *known=std::as_const(objects).window(handle); known && known->dc) return known->dc;
@@ -3332,6 +3360,7 @@ bool NativeWindows::dispatch_call(std::string_view name)
 			// A null window selects the screen, which is the desktop window's surface.
 			const auto target=args[0] ? args[0] : desktop_window();
 			if (!std::as_const(objects).window(target)) { result=foreign_dc(target); process.return_api(result); return true; }
+			prepare_surface(target);
 			surface_dc(target);
 			const auto *window=std::as_const(objects).window(target);
 			DesktopDC device{window->bitmap,window->bitmap,target}; device.leased=true;
@@ -3341,6 +3370,7 @@ bool NativeWindows::dispatch_call(std::string_view name)
 			if (!args[0] && name=="GetDC") publish_screen_dc(target);
 		}
 		else if (name=="BeginPaint") {
+			prepare_surface(args[0]);
 			auto *window=objects.window(args[0]); if (!window) throw uint32_t(1400);
 			const bool narrow=process.mode()==NativeMode::x86;
 			const size_t P=narrow ? 4 : 8;

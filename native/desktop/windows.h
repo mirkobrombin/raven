@@ -414,6 +414,9 @@ private:
 		const std::function<void(uint64_t,std::span<const uint8_t>)> *beside=nullptr);
 	void post(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam);
 	uint64_t surface_dc(uint64_t window);
+	// Makes the pixels of a top-level window's first surface with the desktop lock let go, for surface_dc to take as a spare: making and
+	// mapping them takes far longer than anything else a first GetDC or BeginPaint does, and every other thread would wait for it.
+	void prepare_surface(uint64_t window);
 	bool tree_dispatch(std::string_view name);
 	// Classic frame geometry in window-relative coordinates, derived from AdjustWindowRectEx rules.
 	struct FrameLayout {

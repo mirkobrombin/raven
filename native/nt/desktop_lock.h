@@ -91,6 +91,7 @@ public:
 	}
 	// Whether the calling thread holds it shared and not whole.
 	static bool held_shared() { return desktop_shared_depth != 0; }
+	bool held_whole() const { return owner.load(std::memory_order_relaxed) == std::this_thread::get_id(); }
 	// Gives the lock up however deeply the calling thread holds it, and says how deeply, for resume.
 	unsigned suspend()
 	{
