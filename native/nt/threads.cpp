@@ -1,4 +1,6 @@
 #include "threads.h"
+#include "cpu/agent.h"
+#include "cpu/agent_tasks.h"
 #include "kernel_waits.h"
 #include "cpu/agent_tasks.h"
 #include "cpu/call_cycles.h"
@@ -115,8 +117,9 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 NativeThreads::~NativeThreads()
 {
 	if (std::getenv("RAVEN_TRACE_WAITS"))
-		std::fprintf(stderr, "waits: conditions looked at %llu times\nwaits: processor times read %llu times\n",
-			(unsigned long long)condition_looks.load(), (unsigned long long)processor_times.load());
+		std::fprintf(stderr,
+			"waits: conditions looked at %llu times\nwaits: processor times read %llu times\nwaits: stops seen late %llu times\n",
+			(unsigned long long)condition_looks.load(), (unsigned long long)processor_times.load(), (unsigned long long)late_stops.load());
 	if (shared_change_listener == wake)
 		shared_change_listener = -1;
 	process.set_time_slicing(std::chrono::milliseconds(0), nullptr, nullptr);
@@ -1624,8 +1627,10 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 		signaled();
 	// A guest that calls again at once finds its host thread still with the runtime: giving the runtime up and taking it back costs more
 	// than most calls. It is kept for a few microseconds only, and only while no other thread waits for it.
-	if (block)
-		for (unsigned looks = 0; looks < 256 && !lined.load(std::memory_order_relaxed); ++looks) {
+	if (block) {
+		const uint32_t *const stop = agent::stop_word(task);
+		unsigned looks = 0;
+		for (; looks < 256 && !lined.load(std::memory_order_relaxed); ++looks) {
 			if (__atomic_load_n(&block[0], __ATOMIC_ACQUIRE)) {
 				// One that needs nothing of the runtime is answered here and the guest goes on; one that has to block parks first.
 				beside_wanted = false;
@@ -1642,6 +1647,9 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 			}
 			__builtin_ia32_pause();
 		}
+		if (looks == 256 && stop && __atomic_load_n(stop, __ATOMIC_ACQUIRE) == agent::posted)
+			late_stops.fetch_add(1, std::memory_order_relaxed);
+	}
 	{
 		std::lock_guard lock(gate);
 		me.parked = true;

@@ -387,6 +387,12 @@ int interrupt(pid_t task)
 	return kill(task, SIGSTOP);
 }
 
+const uint32_t *stop_word(pid_t task)
+{
+	const Task *const found = find(task);
+	return found ? state_word(*found) : nullptr;
+}
+
 bool stopped(pid_t task)
 {
 	Task *const found = find(task);

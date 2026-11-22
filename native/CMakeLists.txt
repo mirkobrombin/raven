@@ -3847,6 +3847,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_clock_cycles_x64 PROPERTIES TIMEOUT 150
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/clock-cycles-prefix")
         endif()
+        # A stop, as an NT system call is, ends its host thread's looks at the served block: the program's 20000 are seen at once.
+        add_test(NAME native_stop_seen_x64 COMMAND raven --run-process --execution=native --stdio=inherit --timeout-ms=120000
+            ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
+        set_tests_properties(native_stop_seen_x64 PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "stops seen late [0-9]+ times"
+            FAIL_REGULAR_EXPRESSION "stops seen late [0-9][0-9][0-9][0-9]+ times;hotpath failed"
+            ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/stop-seen-prefix")
         # Event waits are ended by whoever sets the event, never found by looking at the waiting threads (event_pingpong_client.c).
         raven_kernel_fixture(event-pingpong event_pingpong_client.c 0x1f5000000 "-lkernel32")
         add_test(NAME native_event_pingpong_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000

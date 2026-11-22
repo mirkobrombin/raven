@@ -283,6 +283,8 @@ public:
 	void moved();
 	// How many times a setter handing over read a woken thread's processor time from /proc, told with RAVEN_TRACE_WAITS.
 	std::atomic<uint64_t> processor_times{0};
+	// How many times a host thread looked at its guest's block to the end while the guest stood stopped, told with RAVEN_TRACE_WAITS.
+	std::atomic<uint64_t> late_stops{0};
 	// The threads in block, counted on entry before they look at what they wait for (see waiting_in_runtime), and those that wait
 	// outside for each object of the table, by slot (see quiet_for).
 	std::atomic<int> waiting_threads{0};
