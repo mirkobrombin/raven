@@ -169,7 +169,20 @@ int raven_entry(void)
 	int lit = 0, position;
 	ID2D1SimplifiedGeometrySink sink = {&sink_vtbl};
 
-	if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory, (IUnknown **)&factory)) || !factory)
+#ifdef RAVEN_TEST_DWRITE_LATE
+	IUnknown *unsupported = NULL;
+	HMODULE library = LoadLibraryW(L"dwrite.dll");
+	if (!library)
+		return 70;
+	HRESULT (WINAPI *create_factory)(DWRITE_FACTORY_TYPE, REFIID, IUnknown **) = (void *)GetProcAddress(library, "DWriteCreateFactory");
+	if (!create_factory)
+		return 71;
+	if (create_factory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFont, &unsupported) != E_NOINTERFACE || unsupported)
+		return 72;
+#else
+	HRESULT (WINAPI *create_factory)(DWRITE_FACTORY_TYPE, REFIID, IUnknown **) = DWriteCreateFactory;
+#endif
+	if (FAILED(create_factory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory, (IUnknown **)&factory)) || !factory)
 		return 1;
 	if (FAILED(IDWriteFactory_QueryInterface(factory, &IID_IDWriteFactory2, (void **)&factory2)))
 		return 2;

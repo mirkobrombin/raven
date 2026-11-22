@@ -2687,6 +2687,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/regedit.exe $<TARGET_FILE_DIR:raven>/x86/regedit.exe)
             # Run at every build, so a component provisioned again reaches the runtime without relinking it.
             add_dependencies(raven raven_controls32_components)
+            if(RAVEN_MINGW32 AND FREETYPE_FOUND)
+                set(DWRITE_CLIENT32 ${CMAKE_CURRENT_BINARY_DIR}/dwrite-client32.exe)
+                add_custom_command(OUTPUT ${DWRITE_CLIENT32}
+                    COMMAND ${RAVEN_MINGW32} -nostdlib -O1 -fno-builtin -fno-stack-protector -DRAVEN_TEST_DWRITE_LATE
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${DWRITE_CLIENT32} ${PROJECT_SOURCE_DIR}/testdata/native_loader/dwrite_client.c -lkernel32 -lgcc
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/dwrite_client.c VERBATIM)
+                add_custom_target(dwrite_fixture32 ALL DEPENDS ${DWRITE_CLIENT32})
+                add_test(NAME native_dwrite_x32 COMMAND raven --run-process --execution=native --timeout-ms=20000 ${DWRITE_CLIENT32})
+                set_tests_properties(native_dwrite_x32 PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            endif()
         endif()
         if(RAVEN_CONTROLS_COMPONENT_DIR)
             if(NOT EXISTS "${RAVEN_CONTROLS_COMPONENT_DIR}/comctl32.dll")
