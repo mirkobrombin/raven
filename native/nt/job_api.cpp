@@ -222,9 +222,10 @@ void register_job_api(ApiRegistry &registry, KernelContext &context)
 				call.fail(24);
 				return;
 			}
-			const auto port = objects.object_as<CompletionPort>(call.load_pointer(call[2] + width));
-			if (!port) {
-				call.fail(6);
+			const auto port_handle = call.load_pointer(call[2] + width);
+			const auto port = objects.object_as<CompletionPort>(port_handle);
+			if (!port || !(objects.access_of(port_handle) & 2)) {
+				call.fail(port ? 5 : 6);
 				return;
 			}
 			job->port = port;

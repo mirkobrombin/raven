@@ -2893,15 +2893,16 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		// The current-thread pseudo handle duplicates into a real handle to the calling thread; the current-process one into the process itself.
 		std::optional<uint32_t> narrowed = typed_rights;
-		const bool section = objects.object_as<SectionObject>(call[1]) != nullptr;
-		if (section && !(call.u32(6) & same_access)) {
+		const bool section = std::dynamic_pointer_cast<SectionObject>(source) != nullptr;
+		const bool completion = source && source->type_name() == u"IoCompletion";
+		if ((section || completion) && !(call.u32(6) & same_access)) {
 			// A copy cannot carry rights the original lacks; asking for them is refused.
 			const uint32_t held = objects.access_of(call[1]);
 			uint32_t wanted = call.u32(4);
 			if (wanted & (0x10000000U | 0x02000000U))
 				wanted = held;
 			if (wanted & ~held) {
-				if (std::getenv("RAVEN_TRACE_FAIL"))
+				if (section && std::getenv("RAVEN_TRACE_FAIL"))
 					std::fprintf(stderr, "raven: section handle %llx holds %x, a copy asked for %x\n", (unsigned long long)call[1], held, wanted);
 				call.fail(5);
 				return;
