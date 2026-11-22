@@ -867,15 +867,26 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.store_pointer(call[1], call[0] + root * 2);
 		call.ret(0);
 	});
-	registry.add("PathCchCombineEx", 5, [](ApiCall &call) {
-		if (!call[0] || !call[1] || call[1] > 32768 || (!call[2] && !call[3])) {
+	const auto path_cch_combine = [](ApiCall &call, bool extended) {
+		constexpr size_t max_chars = 32768;
+		if (!call[0] || !call[1] || call[1] > max_chars || (extended && !call[2] && !call[3])) {
 			call.ret(0x80070057U);
 			return;
 		}
-		const auto directory = call[2] ? call.wide(call[2]) : std::u16string();
-		const auto file = call[3] ? call.wide(call[3]) : std::u16string();
+		auto directory = call[2] ? call.wide(call[2], max_chars) : std::u16string();
+		const auto file = call[3] ? call.wide(call[3], max_chars) : std::u16string();
+		const bool input_too_long = directory.size() == max_chars || file.size() == max_chars;
+		if (!extended && !file.empty() && separator(file.front()) && !is_unc_root(file)) {
+			const size_t drive = directory.size() >= 2 && directory[1] == u':' ? 2 : 0;
+			directory.resize(std::max(root_length(directory), drive));
+		}
 		const auto combined = absolute(file) && !(separator(file[0]) && !is_unc_root(file)) ? file : join(directory, file);
 		const auto result = canonical(combined);
+		if (!extended && (result.size() >= max_path || input_too_long)) {
+			call.store<uint16_t>(call[0], 0);
+			call.ret(0x800700ceU);
+			return;
+		}
 		if (result.size() >= call[1]) {
 			call.store<uint16_t>(call[0], 0);
 			call.ret(0x8007007aU);
@@ -883,7 +894,9 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.put_wide(call[0], result, call[1]);
 		call.ret(0);
-	});
+	};
+	registry.add("PathCchCombine", 4, [path_cch_combine](ApiCall &call) { path_cch_combine(call, false); });
+	registry.add("PathCchCombineEx", 5, [path_cch_combine](ApiCall &call) { path_cch_combine(call, true); });
 	registry.add("PathCchAppend", 3, [](ApiCall &call) {
 		if (!call[0] || !call[1] || call[1] > 32768 || !call[2]) {
 			call.ret(0x80070057U);
