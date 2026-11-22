@@ -3828,6 +3828,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
         set_tests_properties(native_hotpath_bench_ptrace PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "hotpath done"
             FAIL_REGULAR_EXPRESSION "hotpath failed" ENVIRONMENT "RAVEN_PTRACE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-prefix-ptrace")
+        # An NT system call the program makes stops on its SYSCALL instead of going through a served stub; RAVEN_CYCLES counts it as well.
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME native_syscall_cycles_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-syscall-cycles.py
+                $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
+            set_tests_properties(native_syscall_cycles_x64 PROPERTIES TIMEOUT 150
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/syscall-cycles-prefix")
+        endif()
         # Event waits are ended by whoever sets the event, never found by looking at the waiting threads (event_pingpong_client.c).
         raven_kernel_fixture(event-pingpong event_pingpong_client.c 0x1f5000000 "-lkernel32")
         add_test(NAME native_event_pingpong_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
