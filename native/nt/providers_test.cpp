@@ -555,14 +555,16 @@ int main(int argc, char **argv)
 		const auto nt_bytes = raven::runtime_provider("ntdll.dll", base, natives);
 		const raven::PEImage nt_image(nt_bytes);
 		const auto nt_exports = nt_image.exports();
-		const auto service = nt_image.file_span(nt_exports[1].address, 11);
-		check(service[0] == 0x4c && service[1] == 0x8b && service[2] == 0xd1 && service[3] == 0xb8 &&
-			service[8] == 0x0f && service[9] == 0x05 && service[10] == 0xc3, "NT service entry differs");
-		check(std::ranges::equal(service, nt_image.file_span(nt_exports[3].address, 11)), "Zw service identity differs");
+		const auto service = nt_image.file_span(nt_exports[1].address, 24);
+		check(service[0] == 0x4c && service[1] == 0x8b && service[2] == 0xd1 && service[3] == 0xb8 && service[8] == 0xf6 &&
+			service[9] == 0x04 && service[10] == 0x25 && service[15] == 0x01 && service[16] == 0x75 && service[17] == 0x03 &&
+			service[18] == 0x0f && service[19] == 0x05 && service[20] == 0xc3 && service[21] == 0xff && service[22] == 0xe0 &&
+			service[23] == 0xc3, "NT service entry differs");
+		check(std::ranges::equal(service, nt_image.file_span(nt_exports[3].address, 24)), "Zw service identity differs");
 		const std::array<std::string_view, 1> only_thread{"NtOpenThread"};
 		const auto smaller = raven::runtime_provider("ntdll.dll", base + 65536, only_thread);
 		const raven::PEImage smaller_image(smaller);
-		check(std::ranges::equal(service, smaller_image.file_span(smaller_image.exports()[0].address, 11)),
+		check(std::ranges::equal(service, smaller_image.file_span(smaller_image.exports()[0].address, 24)),
 			"NT service identity depends on the process import graph");
 		check(nt_image.file_span(nt_exports[2].address, 1)[0] == 0xcc, "unknown NT function received a service identity");
 		// A provider is made once at a base of its own and moved where its size fits: what it is moved to must be the provider made there.

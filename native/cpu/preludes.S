@@ -3703,15 +3703,38 @@ raven_prelude_queued_\name\()_end:
 	queued gl_draw_elements, 4, gl_draw_elements
 	queued gl_bind_buffer, 2, gl_bind_buffer
 
-/* An export of ntdll that is a system call, made as Windows' own ntdll makes it, with the service number the runtime writes where
- * `service` ends. The runtime recognises these bytes when it looks for the stub behind an export (see served_stub_rva). */
-	.global raven_nt_syscall, raven_nt_syscall_service, raven_nt_syscall_end
+/* An export of ntdll that is a system service, in the 24 bytes of Windows 10's: programs that hook ntdll check them, copy them
+ * elsewhere and run the copy (Chromium's sandbox/win/src/service_resolver_64.cc shows which they check). The runtime writes the number
+ * where `service` ends and the address of its flag where `flag` ends. With the flag clear the export makes the system call. With it set
+ * it jumps to the number, which is the address of the service's entry on the service page, so a copy works from any address; RCX and
+ * the stack are then still as the caller left them. The runtime recognises these bytes when it looks for the stub behind an export
+ * (see served_stub_rva). */
+	.global raven_nt_syscall, raven_nt_syscall_service, raven_nt_syscall_flag, raven_nt_syscall_return, raven_nt_syscall_end
 raven_nt_syscall:
 	{load} mov r10, rcx
 	mov eax, 0
 raven_nt_syscall_service:
+	.byte 0xf6, 0x04, 0x25		/* test byte ptr [flag], 1 */
+	.long 0
+raven_nt_syscall_flag:
+	.byte 1
+	jnz short 1f
 	syscall
+raven_nt_syscall_return:
+	ret
+1:	jmp rax
 	ret
 raven_nt_syscall_end:
+
+/* An entry of the service page: on to the stub whose address the runtime writes after it, or, for a service that has none, the system
+ * call with the number still in RAX and argument one in R10. */
+	.global raven_service_stubbed, raven_service_stubbed_end, raven_service_trapped, raven_service_trapped_end
+raven_service_stubbed:
+	jmp qword ptr [rip + 0]
+raven_service_stubbed_end:
+raven_service_trapped:
+	syscall
+	ret
+raven_service_trapped_end:
 
 	.section .note.GNU-stack, "", @progbits

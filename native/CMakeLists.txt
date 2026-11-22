@@ -3846,7 +3846,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_property(TEST native_service_entry_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         set_property(TEST native_service_entry_serial PROPERTY PASS_REGULAR_EXPRESSION "Native entry returned 100 ")
         set_property(TEST native_service_entry_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
-        # An NT system call the program makes stops on its SYSCALL instead of going through a served stub; RAVEN_CYCLES counts it as well.
+        # RAVEN_CYCLES counts the NT services a program calls, as it does the calls through served stubs.
         if(Python3_Interpreter_FOUND)
             add_test(NAME native_syscall_cycles_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-syscall-cycles.py
                 $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)

@@ -231,6 +231,9 @@ static bool gdi_beside_api(std::string_view name)
 
 static bool beside_api(std::string_view module, std::string_view name)
 {
+	// The state of an event is under the object's own lock.
+	if (module == "ntdll.dll" && name == "NtQueryEvent")
+		return true;
 	if (module == "user32.dll")
 		return desktop_beside_api(name) || name == "FillRect" || name == "FrameRect";
 	if (module == "gdi32.dll" || module == "msimg32.dll")
@@ -1496,15 +1499,65 @@ static uint32_t served_stub_rva(std::span<const uint8_t> image, std::string_view
 	return uint32_t(int64_t(rva) + 16 + relative);
 }
 
+// The page of NT services, in the low area KUSER_SHARED_DATA opens: the flag the exports test, then an entry for each service, whose
+// address is the service's number (see raven_nt_syscall). It is the guest's to read and run.
+constexpr uint64_t service_page = 0x7ffe1000;
+constexpr size_t service_entry_size = 16;
+// The room of a service's export: its 24 bytes, and from service_stub on the stub its entry leads to.
+constexpr size_t service_stub = 32, service_room = (service_stub + served_stub_size + 63) & ~size_t(63);
+
+static const std::vector<std::string_view> &nt_services()
+{
+	static const auto services = [] {
+		std::vector<std::string_view> names;
+		for (const auto name : system_export_names("ntdll.dll"))
+			if (name.starts_with("Nt"))
+				names.push_back(name);
+		return names;
+	}();
+	return services;
+}
+
 static uint32_t nt_service_number(std::string_view module, std::string_view name)
 {
 	if (module != "ntdll.dll" || (!name.starts_with("Nt") && !name.starts_with("Zw")))
 		return 0;
 	const std::string canonical = "Nt" + std::string(name.substr(2));
-	const auto names = system_export_names("ntdll.dll");
+	const auto &names = nt_services();
 	const auto found = std::lower_bound(names.begin(), names.end(), canonical);
 	// Use the complete name table so a copied service keeps its identity across different process import graphs.
-	return found != names.end() && *found == canonical ? 0x10000 + uint32_t(found - names.begin()) : 0;
+	return found != names.end() && *found == canonical ? uint32_t(service_page + (1 + size_t(found - names.begin())) * service_entry_size) : 0;
+}
+
+// Maps the page before any guest code runs. An entry leads to the stub given for its number, and without one makes the system call;
+// the flag is set only where some entry has a stub.
+static void map_service_page(NativeProcess &process, const std::map<uint32_t, uint64_t> &stubs)
+{
+	std::vector<uint8_t> page(((1 + nt_services().size()) * service_entry_size + 4095) & ~size_t(4095), 0xcc);
+	page[0] = !stubs.empty();
+	for (size_t at = service_entry_size; at < (1 + nt_services().size()) * service_entry_size; at += service_entry_size) {
+		if (const auto stub = stubs.find(uint32_t(service_page + at)); stub != stubs.end()) {
+			const auto jump = std::copy(raven_service_stubbed, raven_service_stubbed_end, page.begin() + ptrdiff_t(at));
+			std::memcpy(&*jump, &stub->second, 8);
+		} else {
+			std::copy(raven_service_trapped, raven_service_trapped_end, page.begin() + ptrdiff_t(at));
+		}
+	}
+	const int descriptor = memfd_create("raven-services", MFD_CLOEXEC);
+	if (descriptor < 0 || ftruncate(descriptor, off_t(page.size())) != 0) {
+		if (descriptor >= 0)
+			close(descriptor);
+		throw std::runtime_error("cannot create the page of NT services");
+	}
+	try {
+		process.map_shared(descriptor, page.size(), 0, service_page);
+	} catch (...) {
+		close(descriptor);
+		throw;
+	}
+	close(descriptor);
+	process.write_memory(service_page, page);
+	process.protect_memory(service_page, page.size(), PROT_READ | PROT_EXEC);
 }
 
 uint64_t api_trap_address(const PEModule &provider, std::string_view module, std::string_view name, uint32_t address)
@@ -1613,11 +1666,13 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	size_t served_count = 0;
 	// The calls the host threads answer have stubs of the same kind, after the served ones; a system service keeps its own entry.
 	const bool calls = fast_paths && !x86 && call_stubs();
-	size_t call_count = 0;
+	size_t call_count = 0, service_count = 0;
 	if (!x86)
 		for (const auto symbol : exports) {
+			const bool service = nt_service_number(name, symbol);
 			served_count += served_api(name, symbol);
-			call_count += calls && !served_api(name, symbol) && !nt_service_number(name, symbol);
+			service_count += service;
+			call_count += calls && !served_api(name, symbol) && !service;
 		}
 	size_t clock_count = 0;
 	if (!x86)
@@ -1636,7 +1691,8 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 				block_size += ((prelude->size() + 63) & ~size_t(63)) + (call_stubs() && answered_api(name, exports[index]) ? answer_wrapper_slot : 0);
 	// The block pointer of the served stubs and the block preludes, then the stubs, then the clock preludes, then the commit preludes.
 	const size_t served_start = fast_start + fast_count * 64;
-	const size_t clock_start = served_start + (served_count || call_count || block_size ? 64 + (served_count + call_count) * served_stub_size : 0);
+	const bool served_area = served_count || call_count || block_size || (calls && service_count);
+	const size_t clock_start = served_start + (served_area ? 64 + (served_count + call_count) * served_stub_size : 0);
 	const size_t commit_start = clock_start + clock_count * clock_prelude_size;
 	const size_t strings_start = commit_start + commit_count * commit_prelude_size;
 	size_t strings_size = 0;
@@ -1651,7 +1707,9 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 		for (const auto symbol : exports)
 			queued_count += queued_arguments(name, symbol) != 0;
 	const size_t queued_start = blocks_start + block_size;
-	const size_t end = queued_start + queued_count * queued_prelude_size;
+	const size_t queued_end = queued_start + queued_count * queued_prelude_size;
+	const size_t services_start = service_count ? (queued_end + 63) & ~size_t(63) : queued_end;
+	const size_t end = services_start + service_count * service_room;
 	std::vector<uint8_t> bytes((end + 511) & ~size_t(511));
 	const auto rva = [](size_t offset) { return 0x1000 + offset - 0x200; };
 	const auto put = [&](size_t offset, uint64_t value, size_t width = 4) {
@@ -1704,7 +1762,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 	text(module_name, name);
 	size_t cursor = module_name + name.size() + 1;
 	size_t fast_next = 0, served_next = 0, clock_next = 0, commit_next = 0, strings_next = strings_start, blocks_next = blocks_start;
-	size_t queued_next = queued_start;
+	size_t queued_next = queued_start, services_next = services_start;
 	for (size_t index = 0; index < exports.size(); ++index) {
 		size_t code = 0x200 + index * 16;
 		const uint32_t service = x86 ? 0 : nt_service_number(name, exports[index]);
@@ -1717,8 +1775,16 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 			bytes[code + 15] = 0xc3;
 		}
 		if (service) {
+			code = services_next;
+			services_next += service_room;
 			std::copy(raven_nt_syscall, raven_nt_syscall_end, bytes.begin() + ptrdiff_t(code));
 			put(code + size_t(raven_nt_syscall_service - raven_nt_syscall) - 4, service);
+			put(code + size_t(raven_nt_syscall_flag - raven_nt_syscall) - 4, service_page);
+			if (calls) {
+				const size_t stub = code + service_stub;
+				const auto served = served_stub_code(int32_t(served_start + 16) - int32_t(stub), true);
+				std::copy(served.begin(), served.end(), bytes.begin() + ptrdiff_t(stub));
+			}
 		}
 		if (!x86 && served_api(name, exports[index])) {
 			code = served_start + 64 + served_next++ * served_stub_size;
@@ -2183,6 +2249,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					if (image.runtime_api) {
 						if (const uint32_t number = nt_service_number("ntdll.dll", name)) {
 							generated_services.emplace(number, "Nt" + name.substr(2));
+							// The breakpoint of the stub behind the service: a call the host thread does not answer in the block stops there.
+							if (call_stubs() && stub_at(image.loaded.data(), uint32_t(symbol.address + service_stub)))
+								traps.emplace(image.loaded.base() + symbol.address + service_stub + served_trap, "Nt" + name.substr(2));
 							continue;
 						}
 						traps.emplace(api_trap_address(image,"ntdll.dll",name,symbol.address),name.starts_with("Zw") ? "Nt"+name.substr(2) : name);
@@ -2875,6 +2944,34 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 		}
 	}
+	// A service's entry leads to a stub its thread's host thread answers, as the other calls' stubs. The services that act on the
+	// thread's registers keep the system call, as their calls keep the breakpoint.
+	if (const auto ntdll = modules.all().find("ntdll.dll"); ntdll != modules.all().end() && ntdll->second->runtime_api) {
+		std::map<uint32_t, uint64_t> entered;
+		if (call_stubs() && process.parallel())
+			for (const auto &symbol : ntdll->second->exports) {
+				if (!symbol.address || symbol.names.empty() || !symbol.forwarder.empty())
+					continue;
+				const uint32_t number = nt_service_number("ntdll.dll", symbol.names.at(0));
+				const std::string service = number ? "Nt" + symbol.names.at(0).substr(2) : std::string();
+				auto image = ntdll->second->loaded.data();
+				const auto stub = uint32_t(symbol.address + service_stub);
+				if (!number || changes_context(service) || entered.contains(number) || !stub_at(image, stub))
+					continue;
+				std::array<uint8_t, 12> previous{};
+				std::copy_n(image.data() + stub, previous.size(), previous.begin());
+				served_pointers.entries.emplace_back(image.data() + stub, previous);
+				std::copy(served_stub::local_block().begin(), served_stub::local_block().end(), image.data() + stub);
+				const uint64_t address = ntdll->second->loaded.base() + stub;
+				entered.emplace(number, address);
+				called_stubs.push_back(address);
+				if (cycles_named)
+					stub_names.emplace(address, service);
+				if (beside_api("ntdll.dll", service))
+					beside_names.emplace(address, service);
+			}
+		map_service_page(process, entered);
+	}
 	if (cycles_named) {
 		stub_names.insert(served_names.begin(), served_names.end());
 		CallCycles::instance().set_names(std::move(stub_names));
@@ -2990,7 +3087,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	// the turn where it stopped. One made from anywhere else goes the usual way, which checks the instruction.
 	if (const auto ntdll = modules.all().find("ntdll.dll"); process.parallel() && ntdll != modules.all().end() && ntdll->second->runtime_api) {
 		const uint32_t number = nt_service_number("ntdll.dll", "NtQueryEvent");
-		const auto after_syscall = uint64_t(raven_nt_syscall_service - raven_nt_syscall) + 2;
+		const auto after_syscall = uint64_t(raven_nt_syscall_return - raven_nt_syscall);
 		std::vector<uint64_t> returns;
 		for (const auto &symbol : ntdll->second->exports)
 			if (symbol.address && symbol.forwarder.empty())
@@ -3077,6 +3174,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					}
 					return 48;
 				}
+				if (named->second == "NtQueryEvent")
+					return NativeObjectAPI::query_alone(process, kernel_objects, arguments);
 				if (named->second.starts_with("vk"))
 					return graphics_beside ? graphics_beside(named->second, arguments) : std::nullopt;
 				// The window manager's handlers are the desktop's registry; the others are the runtime's.

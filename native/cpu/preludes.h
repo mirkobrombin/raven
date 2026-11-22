@@ -4,7 +4,9 @@
 #include <vector>
 
 // The routines of preludes.S, which the runtime copies into a guest to answer calls there.
-extern "C" const uint8_t raven_nt_syscall[], raven_nt_syscall_service[], raven_nt_syscall_end[], raven_prelude_queued_gl1[], raven_prelude_queued_gl1_stub[], raven_prelude_queued_gl1_end[], raven_prelude_queued_gl2[],
+extern "C" const uint8_t raven_nt_syscall[], raven_nt_syscall_service[], raven_nt_syscall_flag[], raven_nt_syscall_return[],
+	raven_nt_syscall_end[], raven_service_stubbed[], raven_service_stubbed_end[], raven_service_trapped[], raven_service_trapped_end[],
+	raven_prelude_queued_gl1[], raven_prelude_queued_gl1_stub[], raven_prelude_queued_gl1_end[], raven_prelude_queued_gl2[],
 	raven_prelude_queued_gl2_stub[], raven_prelude_queued_gl2_end[], raven_prelude_queued_gl3[], raven_prelude_queued_gl3_stub[],
 	raven_prelude_queued_gl3_end[], raven_prelude_queued_gl4[], raven_prelude_queued_gl4_stub[], raven_prelude_queued_gl4_end[],
 	raven_prelude_queued_gl_bind_buffer[], raven_prelude_queued_gl_bind_buffer_stub[], raven_prelude_queued_gl_bind_buffer_end[],
