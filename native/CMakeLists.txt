@@ -2451,6 +2451,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_graphics_lookup_${installer_arch} COMMAND raven --run-process --execution=native ${graphics_fixture}/lookup.exe)
                 set_tests_properties(native_graphics_lookup_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_D3D_DIRECTORY=${graphics_fixture}/missing:${graphics_fixture}/driver)
+                add_custom_command(OUTPUT ${fixture}/nt-io-completion.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/nt-io-completion.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_io_completion.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_io_completion.c VERBATIM)
+                add_custom_target(nt_io_completion_fixture_${installer_arch} ALL DEPENDS ${fixture}/nt-io-completion.exe)
+                add_test(NAME native_nt_io_completion_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/nt-io-completion.exe)
+                set_tests_properties(native_nt_io_completion_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_custom_command(OUTPUT ${fixture}/nt-power-information.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/nt-power-information.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_power_information.c -lkernel32
