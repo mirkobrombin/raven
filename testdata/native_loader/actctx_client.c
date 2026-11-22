@@ -56,6 +56,20 @@ int raven_entry(void)
 	if (!ActivateActCtx(context, &cookie) || !cookie || !GetCurrentActCtx(&current) || current != context)
 		return 6;
 	release(current);
+	typedef LONG (WINAPI *query_active_function)(ULONG, void *, SIZE_T, SIZE_T *);
+	query_active_function query_active =
+		(query_active_function)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlQueryInformationActiveActivationContext");
+	if (!query_active)
+		return 25;
+	ACTIVATION_CONTEXT_BASIC_INFORMATION basic = {0};
+	SIZE_T basic_size = 0;
+	if (query_active(ActivationContextBasicInformation, &basic, sizeof basic - 1, &basic_size) != (LONG)0xc0000023 ||
+		basic_size != sizeof basic || basic.hActCtx)
+		return 26;
+	if (query_active(ActivationContextBasicInformation, &basic, sizeof basic, &basic_size) ||
+		basic_size != sizeof basic || basic.hActCtx != context || basic.dwFlags)
+		return 27;
+	release(basic.hActCtx);
 	if (!DeactivateActCtx(0, cookie))
 		return 7;
 	ReleaseActCtx(context);
