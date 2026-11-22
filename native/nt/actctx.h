@@ -36,6 +36,7 @@ public:
 		std::map<std::string, ComClass> com_classes;
 		// The type of the identity, such as win32, for the textual identity the runtime is given.
 		std::string type;
+		std::map<std::string, std::string, std::less<>> winrt_classes{};
 	};
 	// A class an activation context serves: the class, the library it comes from as a guest path, the textual identity of its
 	// assembly and the assembly's place in the context.
@@ -45,6 +46,7 @@ public:
 		uint32_t roster = 1;
 	};
 	std::optional<ServedClass> served_class(uint64_t handle, std::string_view clsid) const;
+	std::optional<std::u16string> winrt_library(uint64_t handle, std::string_view name) const;
 	struct Context {
 		Assembly root;
 		std::u16string source;

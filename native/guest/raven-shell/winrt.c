@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Mirko Brombin
  * See LICENSES/MIT.txt.
  */
-/* Raven shell component: Windows Runtime classes registered in the registry, as the runtime finds in-process classes on Windows.
+/* Raven shell component: Windows Runtime classes declared in the active manifest or registered in the machine registry.
  *
  * A class is looked up under HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\WindowsRuntime\ActivatableClassId\<class>, whose DllPath value names
  * the library that serves it; the library is loaded and its DllGetActivationFactory asked for the factory of the class. */
@@ -68,7 +68,19 @@ HRESULT WINAPI RoGetActivationFactory(HSTRING name, REFIID iid, void **out)
 	*out = NULL;
 	if (!name)
 		return E_INVALIDARG;
-	if (!class_library(name, library, MAX_PATH)) {
+	UINT32 length = 0;
+	const WCHAR *text = WindowsGetStringRawBuffer(name, &length);
+	if (!length || length >= 512 || (UINT32)lstrlenW(text) != length)
+		return E_INVALIDARG;
+	typedef UINT32 (WINAPI *manifest_library)(const WCHAR *, WCHAR *, UINT32);
+	HMODULE host = GetModuleHandleW(L"ravenhost.dll");
+	if (!host)
+		host = LoadLibraryW(L"ravenhost.dll");
+	manifest_library local = host ? (manifest_library)GetProcAddress(host, "RavenWinRTClassLibrary") : NULL;
+	const UINT32 count = local ? local(text, library, ARRAYSIZE(library)) : 0;
+	if (count > ARRAYSIZE(library))
+		return CO_E_DLLNOTFOUND;
+	if (!count && !class_library(name, library, MAX_PATH)) {
 		trace_unregistered(name);
 		return REGDB_E_CLASSNOTREG;
 	}

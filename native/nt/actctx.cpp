@@ -119,6 +119,13 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 	const auto text = manifest_text(bytes);
 	Assembly root;
 	bool identified = false, in_dependency = false, in_file = false, assembly = false;
+	struct Namespace {
+		size_t depth;
+		std::string attribute, value;
+	};
+	std::vector<Namespace> namespaces;
+	size_t depth = 0;
+	std::optional<size_t> file_depth;
 	size_t at = 0;
 	while ((at = text.find('<', at)) != text.npos) {
 		if (text.compare(at, 4, "<!--") == 0) {
@@ -142,9 +149,9 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 		while (name_end < tag.size() && tag[name_end] != ' ' && tag[name_end] != '\t' && tag[name_end] != '\r' && tag[name_end] != '\n' &&
 			tag[name_end] != '/')
 			++name_end;
-		auto element = lowered(tag.substr(0, name_end));
-		if (const auto colon = element.find(':'); colon != element.npos)
-			element = element.substr(colon + 1);
+		const auto qualified = lowered(tag.substr(0, name_end));
+		const auto colon = qualified.find(':');
+		const auto element = qualified.substr(colon == qualified.npos ? 0 : colon + 1);
 		// Attributes are name="value" or name='value'.
 		std::map<std::string, std::string> attributes;
 		for (size_t scan = name_end; scan < tag.size();) {
@@ -167,12 +174,33 @@ std::optional<ActivationContexts::Assembly> ActivationContexts::parse(std::strin
 			attributes[key] = std::string(tag.substr(open + 1, close - open - 1));
 			scan = close + 1;
 		}
+		if (!closing)
+			for (const auto &[name, value] : attributes)
+				if (name == "xmlns" || name.starts_with("xmlns:"))
+					namespaces.push_back({depth, name, value});
+		if (element == "activatableclass" && !closing && !in_dependency && file_depth && depth == *file_depth + 1) {
+			const auto key = colon == qualified.npos ? "xmlns" : "xmlns:" + qualified.substr(0, colon);
+			const auto ns = std::find_if(namespaces.rbegin(), namespaces.rend(), [&](const auto &entry) { return entry.attribute == key; });
+			const auto found = attributes.find("name");
+			if (ns != namespaces.rend() && ns->value == "urn:schemas-microsoft-com:winrt.v1" &&
+				found != attributes.end() && !found->second.empty() && !root.files.empty())
+				root.winrt_classes.try_emplace(found->second, root.files.back());
+		}
+		if (closing && depth)
+			--depth;
+		if (closing || self_closing) {
+			while (!namespaces.empty() && namespaces.back().depth >= depth)
+				namespaces.pop_back();
+		} else {
+			++depth;
+		}
 		if (element == "assembly" && !closing)
 			assembly = true;
 		if (element == "dependentassembly")
 			in_dependency = !closing && !self_closing;
 		else if (element == "file") {
 			in_file = !closing && !self_closing;
+			file_depth = in_file && attributes.contains("name") ? std::optional(depth - 1) : std::nullopt;
 			if (!closing && attributes.contains("name"))
 				root.files.push_back(attributes["name"]);
 		} else if (element == "assemblyidentity" && !closing) {
@@ -405,6 +433,29 @@ std::optional<uint32_t> ActivationContexts::library_roster(uint64_t handle, std:
 	return std::nullopt;
 }
 
+std::optional<std::u16string> ActivationContexts::winrt_library(uint64_t handle, std::string_view name) const
+{
+	const auto found = contexts.find(handle);
+	if (!kernel || found == contexts.end())
+		return std::nullopt;
+	const auto search = [&](const auto &self, const Assembly &assembly, const std::u16string &folder) -> std::optional<std::u16string> {
+		if (const auto entry = assembly.winrt_classes.find(name); entry != assembly.winrt_classes.end()) {
+			const auto &file = entry->second;
+			if (file.empty() || file.find_first_of(":\\/") != file.npos || file == "." || file == "..")
+				return std::u16string();
+			return folder + u"\\" + from_utf8(file);
+		}
+		for (const auto &dependency : assembly.dependencies)
+			if (auto path = self(self, dependency, kernel->paths.dos(folder_of(dependency))))
+				return path;
+		return std::nullopt;
+	};
+	const auto &source = found->second.source;
+	const auto slash = source.find_last_of(u"\\/");
+	const auto folder = slash == source.npos ? kernel->paths.dos(application) : source.substr(0, slash);
+	return search(search, found->second.root, folder);
+}
+
 void ActivationContexts::set_compatibility_layer(std::u16string_view layers)
 {
 	// The layers are names separated by spaces, after an optional "~" or "!"; the first that names a version of Windows decides.
@@ -560,6 +611,20 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 	auto &contexts = activation_contexts();
 	contexts.attach(context);
 	const auto thread = [&context] { return context.threads.current_id(); };
+	registry.add("RavenWinRTClassLibrary", 3, [&contexts, thread](ApiCall &call) {
+		if (!call[0])
+			return;
+		const auto path = contexts.winrt_library(contexts.current(thread()), to_utf8(call.wide(call[0], 512)));
+		if (!path)
+			return;
+		if (path->empty()) {
+			call.ret(UINT32_MAX);
+			return;
+		}
+		if (call[1])
+			call.put_wide(call[1], *path, call.u32(2));
+		call.ret(path->size() + 1);
+	});
 	// CreateActCtxW(ACTCTXW): a manifest file, or a manifest resource of a module named by path or handle. CreateActCtxA takes the same
 	// structure with its source path in the ANSI code page.
 	const auto create = [&context, &contexts](ApiCall &call, bool ansi) {

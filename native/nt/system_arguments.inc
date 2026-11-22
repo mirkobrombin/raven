@@ -2383,7 +2383,7 @@ static constexpr std::pair<std::string_view, uint8_t> ravenhost_words[]{
 	{"RavenFontName",4},{"RavenFontOpen",3},{"RavenFontOutline",4},{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},
 	{"RavenGrantPath",2},{"RavenHostApps",2},{"RavenHostOpen",1},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenPublishPackage",2},{"RavenSandboxLog",2},
 	{"RavenSandboxRead",2},{"RavenSandboxWrite",1},{"RavenShaderRelease",1},{"RavenShaderRequest",2},{"RavenShaderResult",4},{"RavenSnapshotDelete",1},
-	{"RavenSnapshotList",2},{"RavenSnapshotRestore",1},{"RavenSnapshotTake",1},{"RavenTrace",1},{"RavenVerifyPackageSignature",5},
+	{"RavenSnapshotList",2},{"RavenSnapshotRestore",1},{"RavenSnapshotTake",1},{"RavenTrace",1},{"RavenVerifyPackageSignature",5},{"RavenWinRTClassLibrary",3},
 };
 static constexpr std::pair<std::string_view, uint8_t> secur32_words[]{
 	{"AcceptSecurityContext",9},{"AcquireCredentialsHandleA",9},{"AcquireCredentialsHandleW",9},{"AddCredentialsA",8},{"AddCredentialsW",8},{"AddSecurityPackageA",2},

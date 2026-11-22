@@ -2478,7 +2478,7 @@ static constexpr std::string_view ravenhost_exports[]{
 	"RavenFontName","RavenFontOpen","RavenFontOutline","RavenFontRender","RavenFontScan","RavenFontTable",
 	"RavenGrantPath","RavenHostApps","RavenHostOpen","RavenPathCombine","RavenPathWiden","RavenPublishPackage","RavenSandboxLog",
 	"RavenSandboxRead","RavenSandboxWrite","RavenShaderRelease","RavenShaderRequest","RavenShaderResult","RavenSnapshotDelete",
-	"RavenSnapshotList","RavenSnapshotRestore","RavenSnapshotTake","RavenTrace","RavenVerifyPackageSignature",
+	"RavenSnapshotList","RavenSnapshotRestore","RavenSnapshotTake","RavenTrace","RavenVerifyPackageSignature","RavenWinRTClassLibrary",
 };
 static constexpr std::string_view secur32_exports[]{
 	"AcceptSecurityContext","AcquireCredentialsHandleA","AcquireCredentialsHandleW","AddCredentialsA","AddCredentialsW","AddSecurityPackageA",
