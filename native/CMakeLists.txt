@@ -3833,6 +3833,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_hotpath_compare PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-compare-prefix")
         endif()
+        # A system service's export has Windows 10's bytes and, with a host thread for each guest thread, makes no system call
+        # (service_entry_client.c); one thread at a time it makes the system call those bytes hold.
+        raven_kernel_fixture(service-entry service_entry_client.c 0x1d9000000 "-lkernel32")
+        foreach(mode parallel serial)
+            add_test(NAME native_service_entry_${mode} COMMAND raven --run-process --execution=native --timeout-ms=30000
+                ${CMAKE_CURRENT_BINARY_DIR}/service-entry.exe)
+            set_tests_properties(native_service_entry_${mode} PROPERTIES TIMEOUT 45
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/service-entry-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_service_entry_parallel PROPERTY PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+        set_property(TEST native_service_entry_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        set_property(TEST native_service_entry_serial PROPERTY PASS_REGULAR_EXPRESSION "Native entry returned 100 ")
+        set_property(TEST native_service_entry_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
         # An NT system call the program makes stops on its SYSCALL instead of going through a served stub; RAVEN_CYCLES counts it as well.
         if(Python3_Interpreter_FOUND)
             add_test(NAME native_syscall_cycles_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-syscall-cycles.py
