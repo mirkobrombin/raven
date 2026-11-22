@@ -86,14 +86,15 @@ static int test_handle_count(query_process query, HANDLE process, BOOL own)
 #ifdef _WIN64
 static int test_thread_thunk(open_thread open, ULONG_PTR *client)
 {
-	BYTE original[11], *source = (BYTE *)open;
+	BYTE original[24], *source = (BYTE *)open;
 	BYTE *code = VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 	HANDLE handle = NULL;
 	DWORD previous, ignored;
 	LONG patched, copied;
 	unsigned index;
 	if (!code || source[0] != 0x4c || source[1] != 0x8b || source[2] != 0xd1 || source[3] != 0xb8 ||
-		source[8] != 0x0f || source[9] != 0x05 || source[10] != 0xc3)
+		source[8] != 0xf6 || source[9] != 0x04 || source[10] != 0x25 || source[15] != 0x01 || source[16] != 0x75 || source[17] != 0x03 ||
+		source[18] != 0x0f || source[19] != 0x05 || source[20] != 0xc3 || source[23] != 0xc3)
 		return 64;
 	for (index = 0; index < sizeof(original); ++index)
 		code[index] = original[index] = source[index];
