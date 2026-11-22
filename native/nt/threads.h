@@ -274,10 +274,18 @@ public:
 	bool yield();
 	// Runs a thread whose wait the running one has just ended, as setting an event does; false when no waiting thread became ready.
 	bool hand_over();
-	// The same with a host thread for each guest thread: the threads waiting outside for `object` of the process's table (0 for none),
-	// which setting it may have woken, and those waiting in the runtime whose wait now holds, take their turn before the setter goes on, until each calls again, waits again or ends (a few milliseconds at
-	// most). False when no thread was waiting for it.
-	bool hand_over_to(uint32_t object);
+	// A thread that waits outside, as it stood before the object it waits for was set.
+	struct Waiter {
+		GuestThread *thread;
+		uint64_t turns, waits;
+	};
+	// The threads waiting outside for `object` of the process's table (none for 0). It is asked before the object is set: one the set
+	// wakes may have left its wait before the setter could look, and has still to run before the setter goes on.
+	std::vector<Waiter> waiting_for(uint32_t object);
+	// The same as hand_over with a host thread for each guest thread: those that waited for what was set, which setting it may have
+	// woken, and those waiting in the runtime whose wait now holds, take their turn before the setter goes on, until each calls again,
+	// waits again or ends (a few milliseconds at most). False when no thread was waiting for it.
+	bool hand_over_to(const std::vector<Waiter> &waited);
 	// How many threads wait outside for objects of the process's table, so that a set nobody waits for looks no further.
 	std::atomic<int> table_waiters{0};
 	// Moves on each time a thread takes its turn, goes to wait outside or ends; a setter handing over sleeps on it instead of keeping

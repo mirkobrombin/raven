@@ -957,7 +957,20 @@ static bool runnable(pid_t host, pid_t task)
 	return false;
 }
 
-bool NativeThreads::hand_over_to(uint32_t object)
+std::vector<NativeThreads::Waiter> NativeThreads::waiting_for(uint32_t object)
+{
+	std::vector<Waiter> found;
+	if (!object || table_waiters.load(std::memory_order_acquire) <= 0)
+		return found;
+	std::lock_guard lock(gate);
+	for (const auto &thread : threads)
+		if (thread.get() != running && thread->outside && thread->state == GuestThread::State::waiting &&
+			std::find(thread->waits_on.begin(), thread->waits_on.end(), object) != thread->waits_on.end())
+			found.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), thread->waits.load(std::memory_order_acquire)});
+	return found;
+}
+
+bool NativeThreads::hand_over_to(const std::vector<Waiter> &waited)
 {
 	if (!threaded || tearing_down || !running)
 		return false;
@@ -976,13 +989,8 @@ bool NativeThreads::hand_over_to(uint32_t object)
 	};
 	std::vector<Woken> waiting;
 	const auto started = std::chrono::steady_clock::now();
-	if (object && table_waiters.load(std::memory_order_acquire) > 0) {
-		std::lock_guard lock(gate);
-		for (const auto &thread : threads)
-			if (thread.get() != &me && thread->outside && thread->state == GuestThread::State::waiting &&
-				std::find(thread->waits_on.begin(), thread->waits_on.end(), object) != thread->waits_on.end())
-				waiting.push_back({thread.get(), thread->turns.load(std::memory_order_relaxed), started, thread->waits.load(std::memory_order_acquire)});
-	}
+	for (const auto &[thread, turns, waits] : waited)
+		waiting.push_back({thread, turns, started, waits});
 	// The waits that block in the runtime (those of a 32-bit guest, or on objects outside the table) are looked at as the serial
 	// hand_over does, with the turn still held.
 	for (const auto &thread : threads)
