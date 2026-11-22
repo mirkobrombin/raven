@@ -5,6 +5,7 @@
 #ifdef RAVEN_NATIVE_CPU
 #include "cpu/native_cpu.h"
 #include "nt/providers.h"
+#include "nt/loader.h"
 #include "nt/paths.h"
 #include "nt/launch.h"
 #include "nt/actctx.h"
@@ -713,27 +714,9 @@ int main(int argc, char **argv)
 							if (std::filesystem::exists(component))
 								return read_module(component.c_str());
 						}
-						// The Direct3D libraries a Windows installation provides come from RAVEN_D3D_DIRECTORY (one or more directories separated by
-						// colons, such as a DXVK build and a vkd3d-proton build of the program's width) or from beside the runtime.
-						if (!selected && (name=="dxgi.dll" || name=="d3d11.dll" || name=="d3d10core.dll" || name=="d3d10_1.dll" || name=="d3d9.dll" || name=="d3d8.dll" ||
-							name=="d3d12.dll" || name=="d3d12core.dll")) {
-							std::vector<std::filesystem::path> places;
-							if (const char *directories = std::getenv("RAVEN_D3D_DIRECTORY"))
-								for (std::string_view rest = directories; !rest.empty();) {
-									const auto colon = rest.find(':');
-									if (const auto part = rest.substr(0, colon); !part.empty())
-										places.emplace_back(std::string(part));
-									rest = colon == rest.npos ? std::string_view() : rest.substr(colon + 1);
-								}
-							places.emplace_back(std::filesystem::read_symlink("/proc/self/exe").parent_path());
-							for (const auto &place : places)
-								if (std::filesystem::exists(place / name))
-									return read_module((place / name).c_str());
-							// Direct3D 10.1 is the runtime's own library over the d3d10core.dll found here, when no build carries one.
-							if (name=="d3d10_1.dll")
-								if (const auto component = component_directory / "raven-d3d10_1.dll"; std::filesystem::exists(component))
-									return read_module(component.c_str());
-						}
+						if (!selected)
+							if (const auto component = raven::configured_d3d_library(name, entry->image.is_64))
+								return read_module(component->c_str());
 						// Then the system directory, where installers put the libraries programs share. The system's own libraries are the
 						// runtime's whatever files there carry their names.
 						const auto system_names = raven::system_library_names();

@@ -99,18 +99,10 @@ std::optional<std::vector<uint8_t>> NativeX86Loader::read_library(const std::str
 				return read_all(component);
 			}
 		}
-		// Direct3D 10.1 is the runtime's own library over d3d10core.dll, unless the Direct3D build the runtime is given carries one.
-		if (name == "d3d10_1.dll") {
-			std::vector<std::filesystem::path> places;
-			if (const char *directory = std::getenv("RAVEN_D3D_DIRECTORY"))
-				places.push_back(std::filesystem::path(directory) / name);
-			places.push_back(std::filesystem::read_symlink("/proc/self/exe").parent_path() / "x86" / "raven-d3d10_1.dll");
-			for (const auto &place : places)
-				if (std::filesystem::exists(place)) {
-					identity = name;
-					file = place;
-					return read_all(place);
-				}
+		if (const auto configured = configured_d3d_library(name, false)) {
+			identity = name;
+			file = *configured;
+			return read_all(file);
 		}
 		return std::nullopt;
 	}

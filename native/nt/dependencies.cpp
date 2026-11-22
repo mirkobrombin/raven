@@ -5,10 +5,40 @@
 #include "actctx.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 
 namespace raven {
+
+std::optional<std::filesystem::path> configured_d3d_library(std::string_view name, bool is_64)
+{
+	static constexpr std::string_view libraries[]{"dxgi.dll", "d3d11.dll", "d3d10core.dll", "d3d10_1.dll",
+		"d3d9.dll", "d3d8.dll", "d3d12.dll", "d3d12core.dll"};
+	if (std::find(std::begin(libraries), std::end(libraries), name) == std::end(libraries))
+		return std::nullopt;
+	if (const char *directories = std::getenv("RAVEN_D3D_DIRECTORY"))
+		for (std::string_view rest = directories; !rest.empty();) {
+			const auto colon = rest.find(':');
+			if (const auto part = rest.substr(0, colon); !part.empty()) {
+				const auto candidate = std::filesystem::path(part) / name;
+				if (std::filesystem::is_regular_file(candidate))
+					return candidate;
+			}
+			rest = colon == rest.npos ? std::string_view() : rest.substr(colon + 1);
+		}
+	const auto runtime_directory = std::filesystem::read_symlink("/proc/self/exe").parent_path();
+	const auto candidate = runtime_directory / name;
+	if (std::filesystem::is_regular_file(candidate))
+		return candidate;
+	// A private D3D 10.1 build can supply the bridge to the selected d3d10core.dll.
+	if (name == "d3d10_1.dll") {
+		const auto component = runtime_directory / (is_64 ? "" : "x86") / "raven-d3d10_1.dll";
+		if (std::filesystem::is_regular_file(component))
+			return component;
+	}
+	return std::nullopt;
+}
 
 void validate_native_image(const PEImage &image,std::string_view name,bool is_64)
 {
