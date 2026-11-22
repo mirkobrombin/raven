@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cpuid.h>
+#include <x86intrin.h>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -301,6 +302,31 @@ uint64_t counter_ticks()
 	timespec now{};
 	::clock_gettime(CLOCK_MONOTONIC, &now);
 	return uint64_t(now.tv_sec) * 10000000ULL + uint64_t(now.tv_nsec) / 100;
+}
+
+// The closest of a few readings of the clock, each between two of the counter: the counter is the one before, so a count that goes on
+// from the sample is never behind the clock's.
+ClockSample clock_sample()
+{
+	ClockSample best{};
+	uint64_t closest = UINT64_MAX;
+	for (int reading = 0; reading < 8; ++reading) {
+		timespec now{};
+		const uint64_t before = __rdtsc();
+		::clock_gettime(CLOCK_MONOTONIC, &now);
+		const uint64_t after = __rdtsc();
+		if (after - before < closest) {
+			closest = after - before;
+			best = {before, uint64_t(now.tv_sec) * 1000000000ULL + uint64_t(now.tv_nsec)};
+		}
+	}
+	return best;
+}
+
+const ClockSample &clock_origin()
+{
+	static const ClockSample origin = clock_sample();
+	return origin;
 }
 
 // The local time at the start of the current second and the performance counter span of that second, for a GetLocalTime the

@@ -10,23 +10,24 @@
 	.intel_syntax noprefix
 	.section .rodata, "a"
 
-/* mov r10,[pointer]; test r10,r10; jz slow; mov r11,[r10+multiplier]; test r11,r11; jz slow; rdtsc; the count as in the clock prelude;
+/* mov r10,[pointer]; test r10,r10; jz slow; mov r11,[r10+calibration]; test r11,r11; jz slow; rdtsc; the count as in the clock prelude;
  * xor edx,edx; mov ecx,10000; div rcx; ret; slow: jmp breakpoint */
 	.global raven_prelude_tick, raven_prelude_tick_end
 raven_prelude_tick:
 	mov r10, qword ptr [rip + 0]
 	test r10, r10
 	je .Ltick_slow
-	mov r11, qword ptr [r10 + 0x810]
+	mov r11, qword ptr [r10 + 0x800]
 	test r11, r11
 	je .Ltick_slow
 	rdtsc
 	shl rdx, 0x20
 	or rax, rdx
-	sub rax, qword ptr [r10 + 0x800]
-	mul r11
+	add r11, r10
+	sub rax, qword ptr [r11]
+	mul qword ptr [r11 + 0x10]
 	shrd rax, rdx, 0x20
-	add rax, qword ptr [r10 + 0x808]
+	add rax, qword ptr [r11 + 0x8]
 	xor edx, edx
 	mov ecx, 0x2710
 	div rcx
@@ -2111,7 +2112,7 @@ raven_prelude_local_time:
 	mov r10, qword ptr [rip + 0]
 	test r10, r10
 	je .Llocal_time_slow
-	mov r11, qword ptr [r10 + 0x810]
+	mov r11, qword ptr [r10 + 0x800]
 	test r11, r11
 	je .Llocal_time_slow
 	mov r8, qword ptr [r10 + 0x848]
@@ -2121,10 +2122,11 @@ raven_prelude_local_time:
 	rdtsc
 	shl rdx, 0x20
 	or rax, rdx
-	sub rax, qword ptr [r10 + 0x800]
-	mul r11
+	add r11, r10
+	sub rax, qword ptr [r11]
+	mul qword ptr [r11 + 0x10]
 	shrd rax, rdx, 0x20
-	add rax, qword ptr [r10 + 0x808]
+	add rax, qword ptr [r11 + 0x8]
 	mov rcx, qword ptr [r10 + 0x840]
 	cmp rax, rcx
 	jb .Llocal_time_88
@@ -3432,9 +3434,9 @@ raven_prelude_string_set_thread_locale:
 raven_prelude_string_set_thread_locale_end:
 
 /* QueryPerformanceCounter and the unbiased interrupt times, once the runtime has published how the time stamp counter relates to the
- * performance counter (see guest_clock_api): mov r10,[pointer]; test r10,r10; jz served; mov r11,[r10+multiplier]; test r11,r11;
- * jz served; the count from rdtsc as 32.32 fixed point from the base; mov [rcx],rax; mov eax,1; ret. Both jumps go to the served
- * stub, whose rel32 the runtime fills in where served and served_again end. */
+ * performance counter (see guest_clock_api): mov r10,[pointer]; test r10,r10; jz served; mov r11,[r10+calibration]; test r11,r11;
+ * jz served; the count from rdtsc as 32.32 fixed point from the base of the slot at that offset; mov [rcx],rax; mov eax,1; ret. Both
+ * jumps go to the served stub, whose rel32 the runtime fills in where served and served_again end. */
 	.global raven_prelude_clock, raven_prelude_clock_end, raven_prelude_clock_served, raven_prelude_clock_served_again
 raven_prelude_clock:
 	mov r10, qword ptr [rip + 0]
@@ -3442,7 +3444,7 @@ raven_prelude_clock:
 	.byte 0x0f, 0x84
 	.long 0
 raven_prelude_clock_served:
-	mov r11, qword ptr [r10 + 0x810]
+	mov r11, qword ptr [r10 + 0x800]
 	test r11, r11
 	.byte 0x0f, 0x84
 	.long 0
@@ -3450,10 +3452,11 @@ raven_prelude_clock_served_again:
 	rdtsc
 	shl rdx, 0x20
 	or rax, rdx
-	sub rax, qword ptr [r10 + 0x800]
-	mul r11
+	add r11, r10
+	sub rax, qword ptr [r11]
+	mul qword ptr [r11 + 0x10]
 	shrd rax, rdx, 0x20
-	add rax, qword ptr [r10 + 0x808]
+	add rax, qword ptr [r11 + 0x8]
 	mov qword ptr [rcx], rax
 	mov eax, 0x1
 	ret

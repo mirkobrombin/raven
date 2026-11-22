@@ -18,6 +18,7 @@
 #include "nt/text.h"
 #include "nt/system_exports.h"
 #include "nt/warm_host.h"
+#include "nt/kernel_context.h"
 #ifdef RAVEN_OPENGL
 #include "graphics/opengl_bridge.h"
 #endif
@@ -184,6 +185,10 @@ static void show_fault(int signal)
 
 int main(int argc, char **argv)
 {
+#ifdef RAVEN_NATIVE_CPU
+	// The guest's clock is calibrated from here to when the guest starts.
+	raven::clock_origin();
+#endif
 	if (std::getenv("RAVEN_BACKTRACE")) {
 		std::set_terminate(show_backtrace);
 		std::signal(SIGSEGV, show_fault);
