@@ -2439,6 +2439,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(apiset_services_fixture_${installer_arch} ALL DEPENDS ${fixture}/apiset-services.exe)
                 add_test(NAME native_apiset_services_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/apiset-services.exe)
                 set_tests_properties(native_apiset_services_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                set(graphics_fixture ${fixture}/graphics-lookup)
+                file(MAKE_DIRECTORY ${graphics_fixture}/driver)
+                add_custom_command(OUTPUT ${graphics_fixture}/lookup.exe ${graphics_fixture}/driver/d3d11.dll
+                    COMMAND ${installer_compiler} -O2 -nostdlib -shared -fno-stack-protector ${action_link}
+                        -o ${graphics_fixture}/driver/d3d11.dll ${PROJECT_SOURCE_DIR}/testdata/native_loader/module_plugin.c -lkernel32
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${graphics_fixture}/lookup.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/graphics_lookup.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/module_plugin.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/graphics_lookup.c VERBATIM)
+                add_custom_target(graphics_lookup_fixture_${installer_arch} ALL DEPENDS ${graphics_fixture}/lookup.exe ${graphics_fixture}/driver/d3d11.dll)
+                add_test(NAME native_graphics_lookup_${installer_arch} COMMAND raven --run-process --execution=native ${graphics_fixture}/lookup.exe)
+                set_tests_properties(native_graphics_lookup_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_D3D_DIRECTORY=${graphics_fixture}/missing:${graphics_fixture}/driver)
                 add_custom_command(OUTPUT ${fixture}/nt-power-information.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/nt-power-information.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_power_information.c -lkernel32
