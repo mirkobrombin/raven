@@ -2431,6 +2431,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(pathcch_append_fixture_${installer_arch} ALL DEPENDS ${fixture}/pathcch-append.exe)
                 add_test(NAME native_pathcch_append_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/pathcch-append.exe)
                 set_tests_properties(native_pathcch_append_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${fixture}/nt-power-information.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/nt-power-information.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_power_information.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_power_information.c VERBATIM)
+                add_custom_target(nt_power_information_fixture_${installer_arch} ALL DEPENDS ${fixture}/nt-power-information.exe)
+                add_test(NAME native_nt_power_information_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/nt-power-information.exe)
+                set_tests_properties(native_nt_power_information_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 # Side-by-side classes and visual styles: a program with the common controls 6 manifest gets the version 6 controls, contexts
                 # activate from a manifest file, and the styles draw the accent default button.
                 file(MAKE_DIRECTORY ${fixture}/actctx)
