@@ -30,7 +30,6 @@ def main():
     if x86:
         # The 32-bit C runtime component is built by the main build; the others are described here.
         wanted.discard("crt")
-        wanted.discard("d2d1")
         wanted.discard("uianimation")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -242,10 +241,14 @@ def main():
         run([triple + "-gcc", "-c", *d2d1_flags, d2d1_support / "shader_run.c", "-o", d2d1_objects[1]])
         run([triple + "-gcc", "-c", *d2d1_flags, repo / "native/guest/raven-dwrite/crt.c", "-o", d2d1_objects[2]])
         # Office binds D2D1CreateFactory by number, as ordinal 1 of the system library.
-        (output / "raven-d2d1.def").write_text("NAME raven-d2d1.dll\nEXPORTS\nD2D1CreateFactory @1\n" + "".join(name + "\n" for name in (
-            "D2D1ComputeMaximumScaleFactor", "D2D1ConvertColorSpace", "D2D1CreateDevice", "D2D1CreateDeviceContext",
-            "D2D1InvertMatrix", "D2D1IsMatrixInvertible", "D2D1MakeRotateMatrix", "D2D1MakeSkewMatrix", "D2D1SinCos", "D2D1Tan", "D2D1Vec3Length")))
-        run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,0x1fa000000,--no-insert-timestamp", *link_extra,
+        d2d1_exports = decorated(d2d1_objects)
+        factory_export = definition_line("D2D1CreateFactory", d2d1_exports["D2D1CreateFactory"]).rstrip() + " @1\n"
+        (output / "raven-d2d1.def").write_text("NAME raven-d2d1.dll\nEXPORTS\n" + factory_export + "".join(
+            definition_line(name, d2d1_exports[name]) for name in (
+                "D2D1ComputeMaximumScaleFactor", "D2D1ConvertColorSpace", "D2D1CreateDevice", "D2D1CreateDeviceContext",
+                "D2D1InvertMatrix", "D2D1IsMatrixInvertible", "D2D1MakeRotateMatrix", "D2D1MakeSkewMatrix", "D2D1SinCos", "D2D1Tan", "D2D1Vec3Length")))
+        image_base = 0x1fa00000 if x86 else 0x1fa000000
+        run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,{image_base:#x},--no-insert-timestamp", *link_extra,
              "-o", output / "raven-d2d1.dll", *d2d1_objects, output / "raven-d2d1.def", "-L" + str(output), "-lravenhost", "-ldwrite",
              "-lwindowscodecs", "-luser32", "-lgdi32", "-lkernel32", "-lgcc"])
     if "uianimation" in wanted:

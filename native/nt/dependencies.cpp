@@ -16,7 +16,7 @@ std::optional<std::filesystem::path> graphics_component(std::string_view name, b
 	std::string_view file;
 	if (name == "dwrite.dll")
 		file = "raven-dwrite.dll";
-	else if (is_64 && name == "d2d1.dll")
+	else if (name == "d2d1.dll")
 		file = "raven-d2d1.dll";
 	else if (is_64 && name == "uianimation.dll")
 		file = "raven-uianimation.dll";

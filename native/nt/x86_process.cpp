@@ -1532,6 +1532,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_bcrypt_api(shared_api, kernel);
 	register_process_info_api(shared_api, kernel);
 	register_font_service(shared_api, kernel);
+	register_canvas_service(shared_api, kernel);
 	register_sandbox_api(shared_api, kernel);
 	register_shader_service(shared_api, kernel);
 	register_audio_service(shared_api, kernel);
