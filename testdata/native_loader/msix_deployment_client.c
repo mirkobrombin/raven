@@ -15,6 +15,16 @@ typedef __x_ABI_CWindows_CFoundation_CIUriRuntimeClassFactory uri_factory;
 typedef __x_ABI_CWindows_CManagement_CDeployment_CIPackageManager package_manager;
 typedef __FIAsyncOperationWithProgress_2_Windows__CManagement__CDeployment__CDeploymentResult_DeploymentProgress deployment_operation;
 
+static void report_status(HRESULT result)
+{
+	char text[] = "Deployment status 0x00000000\n";
+	static const char digits[] = "0123456789abcdef";
+	for (unsigned index = 0; index < 8; ++index)
+		text[20 + index] = digits[((DWORD)result >> (28 - 4 * index)) & 15];
+	DWORD written;
+	WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), text, sizeof(text) - 1, &written, NULL);
+}
+
 static HRESULT package_uri(const WCHAR *file, uri_class **uri)
 {
 	WCHAR path[MAX_PATH];
@@ -64,8 +74,10 @@ static int install(package_manager *manager, const WCHAR *file, HRESULT expected
 	uri->lpVtbl->Release(uri);
 	if (result == E_NOTIMPL)
 		return 5;
-	if (FAILED(result) || !operation)
+	if (FAILED(result) || !operation) {
+		report_status(result);
 		return 6;
+	}
 	IAsyncInfo *info = NULL;
 	result = IUnknown_QueryInterface((IUnknown *)operation, &IID_IAsyncInfo, (void **)&info);
 	IUnknown_Release((IUnknown *)operation);
@@ -81,7 +93,10 @@ static int install(package_manager *manager, const WCHAR *file, HRESULT expected
 	HRESULT error = S_OK;
 	result = IAsyncInfo_get_ErrorCode(info, &error);
 	IAsyncInfo_Release(info);
-	return status == (FAILED(expected) ? Error : Completed) && SUCCEEDED(result) && error == expected ? 0 : 9;
+	if (status == (FAILED(expected) ? Error : Completed) && SUCCEEDED(result) && error == expected)
+		return 0;
+	report_status(FAILED(result) ? result : error);
+	return 9;
 }
 
 #ifdef MSIX_FULL_TRUST

@@ -151,14 +151,14 @@ def package(executable, arch, directory, openssl):
 def run_test(raven, client, directory):
     with tempfile.TemporaryDirectory(prefix="prefix-", dir=directory) as prefix:
         env = dict(os.environ, RAVEN_PREFIX=prefix)
-        command = [raven, "--run-process", "--execution=native", "--timeout-ms=40000", client]
+        command = [raven, "--run-process", "--execution=native", "--stdio=inherit", "--timeout-ms=40000", client]
         for trusted in (False, True):
             if trusted:
                 certificate = (directory / "signer.cer").read_bytes()
                 trust = Path(prefix) / "msix-trusted-publishers"
                 trust.mkdir()
                 (trust / (hashlib.sha256(certificate).hexdigest() + ".cer")).write_bytes(certificate)
-            arguments = command if trusted else [*command, "--untrusted"]
+            arguments = command if trusted else [*command, "--", "--untrusted"]
             result = subprocess.run(arguments, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             print(result.stdout, end="")
             entries = re.findall(r"Native entry returned (\d+) ", result.stdout)
