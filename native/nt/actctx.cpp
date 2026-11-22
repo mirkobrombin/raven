@@ -734,8 +734,18 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 		call.store_pointer(call[0], handle);
 		call.ret(1);
 	});
+	const auto write_basic_context = [](ApiCall &call, uint64_t handle, uint64_t buffer, uint64_t capacity, uint64_t length) {
+		const size_t width = call.pointer_width(), needed = width * 2;
+		if (length)
+			call.store_pointer(length, needed);
+		if (!buffer || capacity < needed)
+			return false;
+		call.store_pointer(buffer, handle);
+		call.store_pointer(buffer + width, 0);
+		return true;
+	};
 	// QueryActCtxW answers the basic information: the context and its flags. The detailed forms report that there is nothing to describe.
-	registry.add("QueryActCtxW", 7, [&contexts, thread](ApiCall &call) {
+	registry.add("QueryActCtxW", 7, [&contexts, thread, write_basic_context](ApiCall &call) {
 		const uint32_t flags = call.u32(0), information = call.u32(3);
 		uint64_t handle = call[1];
 		if (flags & 4)
@@ -747,16 +757,25 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87);
 			return;
 		}
-		const size_t width = call.pointer_width(), needed = width * 2;
-		if (call[6])
-			call.store_pointer(call[6], needed);
-		if (!call[4] || call[5] < needed) {
+		if (!write_basic_context(call, handle, call[4], call[5], call[6])) {
 			call.fail(122);
 			return;
 		}
-		call.store_pointer(call[4], handle);
-		call.store_pointer(call[4] + width, 0);
 		call.ret(1);
+	});
+	registry.add("RtlQueryInformationActiveActivationContext", 4, [&contexts, thread, write_basic_context](ApiCall &call) {
+		if (call.u32(0) != 1) {
+			call.ret(0xc0000002U);
+			return;
+		}
+		const auto handle = contexts.current(thread());
+		if (!write_basic_context(call, handle, call[1], call[2], call[3])) {
+			call.ret(0xc0000023U);
+			return;
+		}
+		if (auto *found = contexts.find(handle))
+			++found->references;
+		call.ret(0);
 	});
 	// FindActCtxSectionStringW answers the library redirection section: a library an assembly of the context in effect declares, with the
 	// context and the assembly's place in it. The other sections have no entries.

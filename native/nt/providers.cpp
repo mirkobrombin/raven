@@ -2177,7 +2177,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto name : {"NtSetInformationThread", "NtOpenThreadToken", "NtOpenThreadTokenEx", "NtOpenThread", "NtOpenProcess", "NtOpenProcessToken", "NtOpenProcessTokenEx", "NtCompareTokens", "NtQueryInformationProcess", "NtReadVirtualMemory", "NtWriteVirtualMemory", "NtQuerySection", "NtFlushInstructionCache", "RtlAddGrowableFunctionTable", "RtlGrowFunctionTable", "RtlDeleteGrowableFunctionTable",
 		"NtWriteFile", "NtQueryDirectoryFile", "ZwQueryDirectoryFile", "RtlNtStatusToDosError", "NtQueryObject", "NtMapViewOfSection", "NtUnmapViewOfSection",
 		"NtPowerInformation", "ZwPowerInformation",
-		"RtlReleaseActivationContext",
+		"RtlQueryInformationActiveActivationContext", "RtlReleaseActivationContext",
 		"RtlAcquireSRWLockExclusive", "RtlAcquireSRWLockShared", "RtlWakeConditionVariable", "RtlWakeAllConditionVariable", "RtlWaitOnAddress",
 		"RtlWakeAddressSingle", "RtlWakeAddressAll",
 		// The processor a thread runs on.
