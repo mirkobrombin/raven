@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Raven.Test.LocalClient" version="1.0.0.0"/>
+  <file name="local-component.dll">
+    <activatableClass xmlns="urn:schemas-microsoft-com:winrt.v1" name="Raven.Test.LocalComponent" threadingModel="both"/>
+  </file>
+</assembly>

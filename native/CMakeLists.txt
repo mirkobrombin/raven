@@ -2410,6 +2410,20 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${fixture}/module-path/module-path.exe)
                 set_tests_properties(native_module_path_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/module-path-prefix)
+                set(winrt_local ${fixture}/winrt-local)
+                file(MAKE_DIRECTORY ${winrt_local})
+                add_custom_command(OUTPUT ${winrt_local}/winrt-local.exe ${winrt_local}/local-component.dll
+                    COMMAND ${resource_compiler} -O coff -i winrt_local.rc -o ${winrt_local}/manifest.o
+                    COMMAND ${installer_compiler} -O2 -nostdlib -shared -fno-stack-protector -fno-builtin ${action_link} -DRAVEN_WINRT_SERVER
+                        -o ${winrt_local}/local-component.dll winrt_local.c -lruntimeobject -lkernel32
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${winrt_local}/winrt-local.exe winrt_local.c ${winrt_local}/manifest.o -lruntimeobject -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/winrt_local.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/winrt_local.rc
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/winrt_local.manifest
+                    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/testdata/native_loader VERBATIM)
+                add_custom_target(winrt_local_fixture_${installer_arch} ALL DEPENDS ${winrt_local}/winrt-local.exe ${winrt_local}/local-component.dll)
+                add_test(NAME native_winrt_local_${installer_arch} COMMAND raven --run-process --execution=native ${winrt_local}/winrt-local.exe)
+                set_tests_properties(native_winrt_local_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 # Side-by-side classes and visual styles: a program with the common controls 6 manifest gets the version 6 controls, contexts
                 # activate from a manifest file, and the styles draw the accent default button.
                 file(MAKE_DIRECTORY ${fixture}/actctx)
