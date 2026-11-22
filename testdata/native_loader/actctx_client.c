@@ -46,11 +46,16 @@ int raven_entry(void)
 	HANDLE context = CreateActCtxW(&request);
 	if (context == INVALID_HANDLE_VALUE)
 		return 5;
+	typedef void (WINAPI *release_function)(HANDLE);
+	release_function release = (release_function)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlReleaseActivationContext");
+	if (!release)
+		return 24;
+	release(NULL);
 	ULONG_PTR cookie = 0;
 	HANDLE current = NULL;
 	if (!ActivateActCtx(context, &cookie) || !cookie || !GetCurrentActCtx(&current) || current != context)
 		return 6;
-	ReleaseActCtx(current);
+	release(current);
 	if (!DeactivateActCtx(0, cookie))
 		return 7;
 	ReleaseActCtx(context);
