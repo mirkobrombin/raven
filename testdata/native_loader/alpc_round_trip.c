@@ -77,6 +77,10 @@ int raven_entry(void)
 	struct message message;
 	if (receive(listener, &message, 0) != 0x102)
 		return 3;
+	HANDLE restricted = NULL;
+	if (!DuplicateHandle(GetCurrentProcess(), listener, GetCurrentProcess(), &restricted, READ_CONTROL, FALSE, 0) ||
+		receive(restricted, &message, 0) != (NTSTATUS)0xc0000022 || !CloseHandle(restricted))
+		return 18;
 	BYTE different_sid[SECURITY_MAX_SID_SIZE];
 	DWORD sid_size = sizeof different_sid;
 	LARGE_INTEGER no_wait;

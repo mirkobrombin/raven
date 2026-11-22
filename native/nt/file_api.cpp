@@ -2894,9 +2894,10 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		// The current-thread pseudo handle duplicates into a real handle to the calling thread; the current-process one into the process itself.
 		std::optional<uint32_t> narrowed = typed_rights;
 		const bool section = std::dynamic_pointer_cast<SectionObject>(source) != nullptr;
-		const bool completion = source && (source->type_name() == u"IoCompletion" || source->type_name() == u"IoCompletionReserve" ||
-			source->type_name() == u"WaitCompletionPacket");
-		if ((section || completion) && !(call.u32(6) & same_access)) {
+		const auto type = source ? source->type_name() : std::u16string_view();
+		const bool scoped_access = section || type == u"IoCompletion" || type == u"IoCompletionReserve" ||
+			type == u"WaitCompletionPacket" || type == u"ALPC Port";
+		if (scoped_access && !(call.u32(6) & same_access)) {
 			// A copy cannot carry rights the original lacks; asking for them is refused.
 			const uint32_t held = objects.access_of(call[1]);
 			uint32_t wanted = call.u32(4);

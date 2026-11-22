@@ -51,6 +51,7 @@ public:
 	bool closed = false, name_closed = false;
 	bool server = false;
 	size_t message_limit = UINT16_MAX;
+	std::vector<uint8_t> owner_sid;
 	std::shared_ptr<AlpcConnection> connection;
 	std::deque<AlpcMessage> inbox;
 	std::map<uint32_t, std::shared_ptr<AlpcConnection>> requests;
@@ -259,8 +260,10 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			}
 			const auto port = std::make_shared<AlpcPort>(std::move(name));
 			port->message_limit = *limit;
-			if (!key.empty())
+			if (!key.empty()) {
+				port->owner_sid = user_sid();
 				names->emplace(std::move(key), port);
+			}
 			const auto made = objects.add_object(port);
 			if (!made.status) {
 				objects.set_inherit(made.value, (flags & 2) != 0);
@@ -298,8 +301,16 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const auto listener = named == names->end() ? nullptr : named->second.lock();
 		if (!listener || listener->closed)
 			return 0xc0000034u;
-		if (call[2] || call[5] || call[8] || call[9] || (call.u32(4) & ~0x20000u))
+		if (call[2] || call[8] || call[9] || (call.u32(4) & ~0x20000u))
 			return not_supported;
+		if (const auto required = call[5]) {
+			const auto sid_header = call.read(required, 2);
+			if (sid_header[0] != 1 || sid_header[1] > 15)
+				return 0xc0000078u;
+			const size_t length = 8 + 4 * sid_header[1];
+			if (call.read(required, length) != listener->owner_sid)
+				return 0xc00002a0u;
+		}
 		if ((call[6] != 0) != (call[7] != 0))
 			return invalid_parameter;
 		call.process.validate_write_memory(call[0], call.pointer_width());
