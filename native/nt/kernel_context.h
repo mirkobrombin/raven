@@ -117,6 +117,7 @@ void register_security_api(ApiRegistry &registry, KernelContext &context);
 void register_schannel_api(ApiRegistry &registry, KernelContext &context);
 void register_child_process_api(ApiRegistry &registry, KernelContext &context);
 void register_winsock_api(ApiRegistry &registry, KernelContext &context);
+void register_alpc_api(ApiRegistry &registry);
 // WinINet's synchronous HTTP client over host sockets and the host's OpenSSL.
 void register_wininet_api(ApiRegistry &registry, KernelContext &context);
 // SetFileCompletionNotificationModes for a socket handle or an AFD endpoint; false when the handle is neither.

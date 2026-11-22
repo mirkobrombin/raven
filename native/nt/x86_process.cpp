@@ -1522,6 +1522,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_security_api(shared_api, kernel);
 	register_child_process_api(shared_api, kernel);
 	register_winsock_api(shared_api, kernel);
+	register_alpc_api(shared_api);
 #ifdef RAVEN_OPENSSL
 	register_wininet_api(shared_api, kernel);
 #endif
