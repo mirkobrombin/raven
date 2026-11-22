@@ -56,6 +56,13 @@ static DWORD WINAPI client(void *argument)
 	if (send_receive(port, 0x20000, &request.header, NULL, &message.header, &capacity, NULL, &limit) ||
 		message.header.data_length != sizeof(ULONG) || message.value != 425)
 		return 12;
+	request.value = 123;
+	capacity = sizeof message;
+	limit.QuadPart = -10000000;
+	if (send_receive(port, 0x20000, &request.header, NULL, &message.header, &capacity, NULL, &limit) != 0x102)
+		return 19;
+	if (send(port, 456) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 789)
+		return 20;
 	return CloseHandle(port) ? 0 : 13;
 }
 
@@ -159,6 +166,12 @@ int raven_entry(void)
 	message.value = 425;
 	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL))
 		return 9;
+	struct message timed_out;
+	if (receive(listener, &timed_out, -30000000) || (timed_out.header.type & 0xfff) != 1 || timed_out.value != 123 ||
+		receive(listener, &message, -30000000) || (message.header.type & 0xfff) != 3 || message.value != 456)
+		return 21;
+	if (send_receive(listener, 1, &timed_out.header, NULL, NULL, NULL, NULL, NULL) >= 0 || send(peer, 789))
+		return 22;
 	DWORD result = 0;
 	if (WaitForSingleObject(worker, 4000) != WAIT_OBJECT_0 ||
 		!(cross_process ? GetExitCodeProcess(worker, &result) : GetExitCodeThread(worker, &result)))
