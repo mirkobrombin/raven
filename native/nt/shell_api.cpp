@@ -636,7 +636,7 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		if (target.size() >= apps_folder.size() && equal_fold(std::u16string_view(target).substr(0, apps_folder.size()), apps_folder)) {
 			if (!equal_fold(operation, u"open"))
 				return 31;
-			const auto app = find_msix_application(NativePrefix::from_environment(), std::u16string_view(target).substr(apps_folder.size()));
+			const auto app = find_msix_application(paths.native_prefix(), std::u16string_view(target).substr(apps_folder.size()));
 			if (!app)
 				return 2;
 			uint32_t error = 0;

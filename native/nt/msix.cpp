@@ -409,7 +409,7 @@ uint32_t publish_package(KernelContext &context, std::u16string_view stage, std:
 	if (!source || !temp || !source->exists || source->host.parent_path() != temp->host ||
 		!source->host.filename().string().starts_with(".raven-msix-"))
 		return 0x80070057U;
-	const NativePrefix prefix = NativePrefix::from_environment();
+	const auto &prefix = context.paths.native_prefix();
 	const auto store = msix_store(prefix);
 	std::error_code error;
 	if (!std::filesystem::is_directory(std::filesystem::symlink_status(source->host, error)) || error)
@@ -422,7 +422,13 @@ uint32_t publish_package(KernelContext &context, std::u16string_view stage, std:
 		return 0x80070005U;
 	struct Pending {
 		std::filesystem::path path;
-		~Pending() { std::error_code ignored; std::filesystem::remove_all(path, ignored); }
+		~Pending()
+		{
+			if (!path.empty()) {
+				std::error_code ignored;
+				std::filesystem::remove_all(path, ignored);
+			}
+		}
 	} cleanup{pending};
 	std::filesystem::copy(source->host, pending, std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks, error);
 	if (error)
@@ -446,6 +452,7 @@ uint32_t publish_package(KernelContext &context, std::u16string_view stage, std:
 	const auto target = store / name;
 	if (::syscall(SYS_renameat2, AT_FDCWD, pending.c_str(), AT_FDCWD, target.c_str(), RENAME_NOREPLACE) < 0)
 		return errno == EEXIST ? 0x800700b7U : 0x80070005U;
+	cleanup.path.clear();
 	return 0;
 }
 
@@ -500,9 +507,8 @@ void register_msix_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(call[0] && call[1] ? publish_package(context, call.wide(call[0]), call.wide(call[1], 129)) : 0x80070057U);
 	});
 	std::shared_ptr<const MsixApplication> app;
-	const NativePrefix prefix = NativePrefix::from_environment();
 	if (!context.launch.app_user_model_id.empty())
-		if (auto found = find_msix_application(prefix, context.launch.app_user_model_id, context.launch.image_path))
+		if (auto found = find_msix_application(context.paths.native_prefix(), context.launch.app_user_model_id, context.launch.image_path))
 			app = std::make_shared<MsixApplication>(std::move(*found));
 	const auto write_name = [](ApiCall &call, uint64_t length, uint64_t output, const std::u16string *value) {
 		if (!value) {
@@ -570,7 +576,7 @@ void register_msix_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.ret(0);
 	});
-	registry.add("GetPackagesByPackageFamily", 5, [prefix](ApiCall &call) {
+	registry.add("GetPackagesByPackageFamily", 5, [&context](ApiCall &call) {
 		if (!call[0] || !call[1] || !call[3]) {
 			call.ret(87);
 			return;
@@ -578,7 +584,8 @@ void register_msix_api(ApiRegistry &registry, KernelContext &context)
 		const auto family = call.wide(call[0], 129);
 		std::vector<std::u16string> names;
 		std::error_code error;
-		for (std::filesystem::directory_iterator packages(msix_store(prefix), error), end; !error && packages != end; packages.increment(error))
+		for (std::filesystem::directory_iterator packages(msix_store(context.paths.native_prefix()), error), end; !error && packages != end;
+			packages.increment(error))
 			if (auto package = package_record(packages->path()); package && equal_fold(package->family, family))
 				names.push_back(std::move(package->full_name));
 		std::sort(names.begin(), names.end());

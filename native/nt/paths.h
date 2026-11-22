@@ -30,6 +30,7 @@ public:
 	int status(const std::filesystem::path &host, struct stat &result, bool follow) const;
 	// Read beside the turn as well, while the turn may change it (see resolves_alone).
 	std::u16string current() const { const std::lock_guard guard(directory_lock); return directory; }
+	const NativePrefix &native_prefix() const { return prefix; }
 	// The directory must exist; the stored form is a full path without a trailing separator (except for roots).
 	bool set_current(std::u16string_view path);
 	bool set_dll_directory(std::optional<std::u16string> path);
