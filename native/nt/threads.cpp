@@ -1232,6 +1232,27 @@ void NativeThreads::install(GuestThread &me)
 	check_pending();
 }
 
+void NativeThreads::announce(GuestThread &self, std::span<const uint32_t> objects)
+{
+	{
+		std::lock_guard lock(gate);
+		self.waits_on.assign(objects.begin(), objects.end());
+	}
+	table_waiters.fetch_add(1, std::memory_order_release);
+	for (const uint32_t object : objects)
+		table_waited[object % table_waited.size()].fetch_add(1, std::memory_order_acq_rel);
+}
+
+void NativeThreads::withdraw(GuestThread &self)
+{
+	// Only its own thread changes waits_on, so it reads them without the gate.
+	for (const uint32_t object : self.waits_on)
+		table_waited[object % table_waited.size()].fetch_sub(1, std::memory_order_release);
+	table_waiters.fetch_sub(1, std::memory_order_release);
+	std::lock_guard lock(gate);
+	self.waits_on.clear();
+}
+
 std::optional<uint32_t> NativeThreads::wait_beside(std::span<const uint32_t> objects, bool all, uint32_t milliseconds)
 {
 	GuestThread *const me = parked_here;
@@ -1262,10 +1283,7 @@ std::optional<uint32_t> NativeThreads::wait_beside(std::span<const uint32_t> obj
 		me->state = GuestThread::State::waiting;
 		me->waits.fetch_add(1, std::memory_order_release);
 	}
-	me->waits_on.assign(objects.begin(), objects.end());
-	table_waiters.fetch_add(1, std::memory_order_release);
-	for (const uint32_t object : objects)
-		table_waited[object % table_waited.size()].fetch_add(1, std::memory_order_acq_rel);
+	announce(*me, objects);
 	// Going to wait counts as a move, as for a wait outside; waking does not, so a setter handing over waits for the guest to go on.
 	moved();
 	uint32_t result = raven_wait_interrupted;
@@ -1283,10 +1301,7 @@ std::optional<uint32_t> NativeThreads::wait_beside(std::span<const uint32_t> obj
 		if (me->unwinding || me->state == GuestThread::State::done)
 			break;
 	}
-	for (const uint32_t object : objects)
-		table_waited[object % table_waited.size()].fetch_sub(1, std::memory_order_release);
-	table_waiters.fetch_sub(1, std::memory_order_release);
-	me->waits_on.clear();
+	withdraw(*me);
 	{
 		std::lock_guard lock(gate);
 		me->outside = false;

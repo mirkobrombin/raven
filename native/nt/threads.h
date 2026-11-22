@@ -251,6 +251,10 @@ public:
 	// wait's result, WAIT_TIMEOUT when it was not granted by `wake`, or raven_wait_unlined when it cannot wait that way: with a host
 	// thread for each guest thread (see wait_outside), on the kernel's objects, or inside another such wait of the same thread.
 	uint32_t wait_in_line(const std::vector<uint32_t> &table, bool all, bool alertable, std::optional<std::chrono::steady_clock::time_point> wake);
+	// Names the table's objects `self` goes to wait outside for, until it withdraws them. A setter reads them under the gate (see
+	// hand_over_to), so they change only there.
+	void announce(GuestThread &self, std::span<const uint32_t> objects);
+	void withdraw(GuestThread &self);
 	// The object of the process's table of waits that is set when `thread` ends.
 	static uint32_t end_object(GuestThread &thread);
 	// Queues an APC to a thread, which ends its alertable wait.

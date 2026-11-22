@@ -400,17 +400,11 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 					GuestThread &self;
 					Announced(NativeThreads &threads, GuestThread &self, const std::vector<uint32_t> &table) : threads(threads), self(self)
 					{
-						self.waits_on = table;
-						threads.table_waiters.fetch_add(1, std::memory_order_release);
-						for (const uint32_t object : table)
-							threads.table_waited[object % threads.table_waited.size()].fetch_add(1, std::memory_order_acq_rel);
+						threads.announce(self, table);
 					}
 					~Announced()
 					{
-						for (const uint32_t object : self.waits_on)
-							threads.table_waited[object % threads.table_waited.size()].fetch_sub(1, std::memory_order_release);
-						threads.table_waiters.fetch_sub(1, std::memory_order_release);
-						self.waits_on.clear();
+						threads.withdraw(self);
 					}
 				} announced(threads, threads.current(), table);
 				const uint32_t result = threads.wait_outside([&](std::optional<std::chrono::steady_clock::time_point> until) {
