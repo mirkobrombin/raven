@@ -2431,6 +2431,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(pathcch_append_fixture_${installer_arch} ALL DEPENDS ${fixture}/pathcch-append.exe)
                 add_test(NAME native_pathcch_append_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/pathcch-append.exe)
                 set_tests_properties(native_pathcch_append_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${fixture}/apiset-services.exe
+                    COMMAND ${resource_compiler} -O coff -i ${PROJECT_SOURCE_DIR}/testdata/native_loader/string_resources.rc -o ${fixture}/apiset-strings.o
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/apiset-services.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/apiset_services.c ${fixture}/apiset-strings.o -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/apiset_services.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/string_resources.rc VERBATIM)
+                add_custom_target(apiset_services_fixture_${installer_arch} ALL DEPENDS ${fixture}/apiset-services.exe)
+                add_test(NAME native_apiset_services_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/apiset-services.exe)
+                set_tests_properties(native_apiset_services_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_custom_command(OUTPUT ${fixture}/nt-power-information.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/nt-power-information.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/nt_power_information.c -lkernel32
