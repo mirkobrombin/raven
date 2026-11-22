@@ -12,6 +12,7 @@ namespace {
 
 class AlpcPort;
 struct AlpcConnection;
+struct AlpcReply;
 
 struct AlpcMessage {
 	std::vector<uint8_t> data;
@@ -19,6 +20,7 @@ struct AlpcMessage {
 	uint32_t id = 0;
 	uint16_t type = 0;
 	std::shared_ptr<AlpcConnection> request;
+	std::shared_ptr<AlpcReply> reply;
 };
 
 struct AlpcConnection {
@@ -29,6 +31,13 @@ struct AlpcConnection {
 	AlpcMessage response;
 };
 
+struct AlpcReply {
+	std::weak_ptr<AlpcConnection> connection;
+	size_t maximum = UINT16_MAX;
+	bool delivered = false;
+	std::optional<AlpcMessage> result;
+};
+
 class AlpcPort : public KernelObject {
 public:
 	explicit AlpcPort(std::u16string name = {}) : name(std::move(name)) {}
@@ -37,7 +46,7 @@ public:
 	uint32_t default_access() const override { return 0x1f0001; }
 	bool watches_last_handle() const override { return true; }
 	void last_handle_closed() override { disconnect(); name_closed = true; }
-	void disconnect() { closed = true; inbox.clear(); requests.clear(); }
+	void disconnect() { closed = true; inbox.clear(); requests.clear(); replies.clear(); }
 
 	bool closed = false, name_closed = false;
 	bool server = false;
@@ -45,9 +54,22 @@ public:
 	std::shared_ptr<AlpcConnection> connection;
 	std::deque<AlpcMessage> inbox;
 	std::map<uint32_t, std::shared_ptr<AlpcConnection>> requests;
+	std::map<uint32_t, std::shared_ptr<AlpcReply>> replies;
 
 private:
 	std::u16string name;
+};
+
+// An abandoned request must cease to be visible to the receiving endpoint.
+struct WithdrawAlpcRequest {
+	AlpcPort &port;
+	uint32_t id;
+	~WithdrawAlpcRequest()
+	{
+		port.requests.erase(id);
+		port.replies.erase(id);
+		std::erase_if(port.inbox, [id = id](const auto &message) { return message.id == id; });
+	}
 };
 
 constexpr uint32_t invalid_parameter = 0xc000000du, invalid_handle = 0xc0000008u, not_supported = 0xc00000bbu,
@@ -295,16 +317,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		connection->client = client;
 		connection->listener = listener;
 		const uint32_t id = uint32_t((*next_id)++);
-		// A connection withdrawn before it is accepted must cease to be visible on the listener.
-		struct Withdraw {
-			AlpcPort &listener;
-			uint32_t id;
-			~Withdraw()
-			{
-				listener.requests.erase(id);
-				std::erase_if(listener.inbox, [id = id](const auto &message) { return message.id == id; });
-			}
-		} withdraw{*listener, id};
+		WithdrawAlpcRequest withdraw{*listener, id};
 		request->process = call.load_pointer(context.environment.teb() + 8 * call.pointer_width());
 		request->thread = context.threads.current_id();
 		request->id = id;
@@ -373,8 +386,12 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const auto port = context.objects.object_as<AlpcPort>(call[0]);
 		if (!port)
 			return invalid_handle;
-		if (call.u32(1) || call[3] || call[6])
+		constexpr uint32_t reply_flag = 1, sync_flag = 0x20000;
+		const uint32_t flags = call.u32(1);
+		if (flags & ~(reply_flag | sync_flag) || call[3] || call[6])
 			return not_supported;
+		if (flags && (!call[2] || ((flags & sync_flag) && (!call[4] || (flags & reply_flag)))))
+			return invalid_parameter;
 		if (!(context.objects.access_of(call[0]) & 1))
 			return 0xc0000022u;
 		if ((!call[2] && !call[4]) || ((call[4] != 0) != (call[5] != 0)))
@@ -386,20 +403,50 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			auto message = read_message(call, call[2]);
 			if (!message)
 				return invalid_parameter;
-			if (!port->connection)
-				return port_disconnected;
-			const auto destination = (port->server ? port->connection->client : port->connection->listener).lock();
-			if (!destination)
-				return port_disconnected;
-			if (header_size(call) + message->data.size() > std::min(port->message_limit, destination->message_limit))
-				return invalid_parameter;
-			if (destination->inbox.size() >= 256 || *next_id > UINT32_MAX)
-				return 0xc0000044u;
 			message->process = call.load_pointer(context.environment.teb() + 8 * call.pointer_width());
 			message->thread = context.threads.current_id();
-			message->id = uint32_t((*next_id)++);
-			message->type = 3;
-			destination->inbox.push_back(std::move(*message));
+			if (flags & reply_flag) {
+				const auto receiver = port->server ? port->connection->listener.lock() : port;
+				if (!receiver)
+					return port_disconnected;
+				const auto pending = receiver->replies.find(message->id);
+				if (pending == receiver->replies.end() || !pending->second->delivered || pending->second->result ||
+					(port->connection && pending->second->connection.lock() != port->connection))
+					return 0xc000021fu;
+				if (header_size(call) + message->data.size() > pending->second->maximum)
+					return invalid_parameter;
+				message->type = 2;
+				pending->second->result = std::move(*message);
+			} else {
+				if (!port->connection)
+					return port_disconnected;
+				const auto destination = (port->server ? port->connection->client : port->connection->listener).lock();
+				if (!destination)
+					return port_disconnected;
+				if (header_size(call) + message->data.size() > std::min(port->message_limit, destination->message_limit))
+					return invalid_parameter;
+				if (destination->inbox.size() >= 256 || *next_id > UINT32_MAX)
+					return 0xc0000044u;
+				message->id = uint32_t((*next_id)++);
+				if (call[4]) {
+					call.process.validate_write_memory(call[5], call.pointer_width());
+					if (destination->replies.size() >= 256)
+						return 0xc0000044u;
+					const auto reply = std::make_shared<AlpcReply>();
+					reply->connection = port->connection;
+					reply->maximum = std::min(port->message_limit, destination->message_limit);
+					message->reply = reply;
+					message->type = 1;
+					WithdrawAlpcRequest withdraw{*destination, message->id};
+					destination->replies.emplace(message->id, reply);
+					destination->inbox.push_back(std::move(*message));
+					if (!context.threads.block([&] { return reply->result || disconnected(*port); }, wake))
+						return timeout;
+					return reply->result ? write_message(call, call[4], call[5], *reply->result) : port_disconnected;
+				}
+				message->type = 3;
+				destination->inbox.push_back(std::move(*message));
+			}
 		}
 		if (!call[4])
 			return 0;
@@ -412,6 +459,8 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return status;
 		if (message.request)
 			message.request->delivered = true;
+		if (message.reply)
+			message.reply->delivered = true;
 		port->inbox.pop_front();
 		return 0;
 	}));
