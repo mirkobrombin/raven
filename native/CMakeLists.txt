@@ -2438,6 +2438,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(nt_power_information_fixture_${installer_arch} ALL DEPENDS ${fixture}/nt-power-information.exe)
                 add_test(NAME native_nt_power_information_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/nt-power-information.exe)
                 set_tests_properties(native_nt_power_information_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${fixture}/d3dkmt-contract.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/d3dkmt-contract.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/d3dkmt_contract.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/d3dkmt_contract.c VERBATIM)
+                add_custom_target(d3dkmt_contract_fixture_${installer_arch} ALL DEPENDS ${fixture}/d3dkmt-contract.exe)
+                add_test(NAME native_d3dkmt_contract_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/d3dkmt-contract.exe)
+                set_tests_properties(native_d3dkmt_contract_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 # Side-by-side classes and visual styles: a program with the common controls 6 manifest gets the version 6 controls, contexts
                 # activate from a manifest file, and the styles draw the accent default button.
                 file(MAKE_DIRECTORY ${fixture}/actctx)
