@@ -47,5 +47,16 @@ int raven_entry(void)
 	compare = 1;
 	if (wait_on_address(&address, &compare, sizeof address, 0) || GetLastError() != ERROR_TIMEOUT)
 		return 10;
+
+	HMODULE query_contract = LoadLibraryW(L"api-ms-win-core-apiquery-l2-1-0.dll");
+	BOOL (WINAPI *available)(const char *) = query_contract ? (void *)GetProcAddress(query_contract, "IsApiSetImplemented") : NULL;
+	if (!available)
+		return 11;
+	if (!available("api-ms-win-core-apiquery-l2-1-0") || !available("API-MS-WIN-CORE-SYNCH-L1-2-0") ||
+		!available("api-ms-win-core-console-l1-1-0"))
+		return 12;
+	if (available("api-ms-win-core-synch-l1-2-0.dll") || available("api-ms-win-core-synch-l1-2-9") ||
+		available("kernel32.dll") || available("api-ms-win-core-raven-absent-l1-1-0") || available(""))
+		return 13;
 	return 0;
 }
