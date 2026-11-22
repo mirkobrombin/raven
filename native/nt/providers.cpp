@@ -2179,7 +2179,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtPowerInformation", "ZwPowerInformation",
 		"NtCreateIoCompletion", "NtAllocateReserveObject", "NtSetIoCompletionEx", "NtRemoveIoCompletionEx", "NtCreateWaitCompletionPacket",
 		"NtAssociateWaitCompletionPacket", "NtCancelWaitCompletionPacket",
-		"AlpcGetHeaderSize", "AlpcGetMessageAttribute", "AlpcInitializeMessageAttribute",
+		"AlpcGetHeaderSize", "AlpcGetMessageAttribute", "AlpcInitializeMessageAttribute", "NtAlpcCreatePort",
 		"RtlQueryInformationActiveActivationContext", "RtlReleaseActivationContext",
 		"RtlActivateActivationContextUnsafeFast", "RtlDeactivateActivationContextUnsafeFast",
 		"RtlAcquireSRWLockExclusive", "RtlAcquireSRWLockShared", "RtlWakeConditionVariable", "RtlWakeAllConditionVariable", "RtlWaitOnAddress",
@@ -3709,7 +3709,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_security_api(api_registry, kernel);
 	register_child_process_api(api_registry, kernel);
 	register_winsock_api(api_registry, kernel);
-	register_alpc_api(api_registry);
+	register_alpc_api(api_registry, kernel);
 #ifdef RAVEN_OPENSSL
 	register_wininet_api(api_registry, kernel);
 #endif

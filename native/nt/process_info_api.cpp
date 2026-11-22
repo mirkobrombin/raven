@@ -1524,7 +1524,7 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		try { copy_process_memory(call, true, true); }
 		catch (const ApiFault &) { call.ret(0xc0000005U); }
 	});
-	// What the object manager tells about a handle: the basic record, the name (objects here have none), the type and the handle flags.
+	// What the object manager tells about a handle: the basic record, the name, the type and the handle flags.
 	registry.add("NtQueryObject", 5, [&objects](ApiCall &call) {
 		const uint64_t handle = call[0];
 		const size_t width = call.pointer_width();
@@ -1543,12 +1543,13 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint8_t> info;
 		const auto put = [&](size_t at, uint64_t value, size_t size) { std::memcpy(info.data() + at, &value, size); };
 		// A UNICODE_STRING at the start of the record whose text follows the record.
-		const auto counted = [&](size_t record, const std::u16string &text) {
+		const auto counted = [&](size_t record, std::u16string_view text) {
 			info.assign(record + (text.size() + 1) * 2, 0);
 			put(0, text.size() * 2, 2);
 			put(2, (text.size() + 1) * 2, 2);
 			put(width, text.empty() ? 0 : call[2] + record, width);
-			std::memcpy(info.data() + record, text.data(), text.size() * 2);
+			if (!text.empty())
+				std::memcpy(info.data() + record, text.data(), text.size() * 2);
 		};
 		switch (call.u32(1)) {
 		case 0:
@@ -1559,9 +1560,10 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 			put(12, 1, 4);
 			break;
 		case 1:
-			// A file's name is its path on its device; other objects are not named here.
 			if (const auto file = pseudo ? nullptr : objects.object_as<FileObject>(handle))
 				counted(width == 4 ? 8 : 16, NativePaths::device_path(file->dos_path));
+			else if (const auto object = pseudo ? nullptr : objects.object(handle))
+				counted(width == 4 ? 8 : 16, object->object_name());
 			else
 				counted(width == 4 ? 8 : 16, u"");
 			break;

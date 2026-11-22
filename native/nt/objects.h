@@ -35,6 +35,7 @@ public:
 	virtual bool describe(InheritedHandle &record) const { (void)record; return false; }
 	// The name of the object's type in the object manager (NtQueryObject); empty for objects Windows has no type for.
 	virtual std::u16string_view type_name() const { return {}; }
+	virtual std::u16string_view object_name() const { return {}; }
 	// The access a new handle to the object holds when nothing narrower is asked for.
 	virtual uint32_t default_access() const { return 0x1f0003; }
 	// When the object turns signaled by itself, as a timer does at its due time; a waiter wakes then to look again.
