@@ -46,7 +46,7 @@ static DWORD WINAPI client(void *argument)
 	struct message message = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 34};
 	SIZE_T capacity = sizeof message;
 	LARGE_INTEGER limit;
-	limit.QuadPart = -30000000;
+	limit.QuadPart = -100000000;
 	if (connect(&port, input->name, NULL, NULL, 0x20000, input->server_sid, &message.header, &capacity, NULL, NULL, &limit) || !port)
 		return 10;
 	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 711)
@@ -59,6 +59,40 @@ static DWORD WINAPI client(void *argument)
 	return CloseHandle(port) ? 0 : 13;
 }
 
+union token_info { TOKEN_USER user; BYTE buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]; };
+
+static BOOL read_token_user(union token_info *info)
+{
+	HANDLE token = NULL;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+		return FALSE;
+	DWORD length = 0;
+	const BOOL read = GetTokenInformation(token, TokenUser, info, sizeof *info, &length);
+	return CloseHandle(token) && read;
+}
+
+static HANDLE start_client_process(void)
+{
+	WCHAR image[MAX_PATH], command[MAX_PATH + 32] = L"\"";
+	const DWORD length = GetModuleFileNameW(NULL, image, ARRAYSIZE(image));
+	if (!length || length == ARRAYSIZE(image))
+		return NULL;
+	lstrcatW(command, image);
+	lstrcatW(command, L"\" --alpc-client");
+	STARTUPINFOW startup = {sizeof startup};
+	PROCESS_INFORMATION process;
+	if (!CreateProcessW(image, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process))
+		return NULL;
+	CloseHandle(process.hThread);
+	return process.hProcess;
+}
+
+static BOOL command_ends_with(const WCHAR *line, const WCHAR *suffix)
+{
+	const int length = lstrlenW(line), tail = lstrlenW(suffix);
+	return length >= tail && !lstrcmpW(line + length - tail, suffix);
+}
+
 int raven_entry(void)
 {
 	const HMODULE native = GetModuleHandleW(L"ntdll.dll");
@@ -68,8 +102,18 @@ int raven_entry(void)
 	send_receive = (exchange)GetProcAddress(native, "NtAlpcSendWaitReceivePort");
 	if (!create || !accept || !connect || !send_receive)
 		return 1;
-	WCHAR address[] = L"\\RPC Control\\RavenRoundTrip";
-	UNICODE_STRING name = {sizeof address - sizeof(WCHAR), sizeof address, address};
+	const WCHAR *command = GetCommandLineW();
+	const BOOL child = command_ends_with(command, L" --alpc-client");
+	const BOOL cross_process = child || command_ends_with(command, L" --alpc-process");
+	WCHAR server_process[] = L"\\RPC Control\\RavenProcessRoundTrip", server_thread[] = L"\\RPC Control\\RavenThreadRoundTrip";
+	const USHORT name_length = cross_process ? sizeof server_process : sizeof server_thread;
+	UNICODE_STRING name = {name_length - sizeof(WCHAR), name_length, cross_process ? server_process : server_thread};
+	union token_info token_user;
+	if (!read_token_user(&token_user))
+		return 17;
+	struct client_input input = {&name, token_user.user.User.Sid};
+	if (child)
+		return client(&input);
 	OBJECT_ATTRIBUTES attributes = {.Length = sizeof attributes, .ObjectName = &name, .Attributes = 0x40};
 	HANDLE listener = NULL, peer = NULL;
 	if (create(&listener, &attributes, NULL) || !listener)
@@ -89,14 +133,8 @@ int raven_entry(void)
 		connect(&peer, &name, NULL, NULL, 0x20000, different_sid, NULL, NULL, NULL, NULL, &no_wait) != (NTSTATUS)0xc00002a0 || peer ||
 		receive(listener, &message, 0) != 0x102)
 		return 16;
-	union { TOKEN_USER user; BYTE buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]; } token_user;
-	HANDLE token = NULL;
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) ||
-		!GetTokenInformation(token, TokenUser, &token_user, sizeof token_user, &sid_size) || !CloseHandle(token))
-		return 17;
-	struct client_input input = {&name, token_user.user.User.Sid};
-	HANDLE worker = CreateThread(NULL, 0, client, &input, 0, NULL);
-	if (!worker || receive(listener, &message, -30000000) || (message.header.type & 0xfff) != 10 ||
+	HANDLE worker = cross_process ? start_client_process() : CreateThread(NULL, 0, client, &input, 0, NULL);
+	if (!worker || receive(listener, &message, -100000000) || (message.header.type & 0xfff) != 10 ||
 		!message.header.message_id || message.value != 34)
 		return 4;
 	message.header.data_length = 0;
@@ -116,7 +154,8 @@ int raven_entry(void)
 	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL))
 		return 9;
 	DWORD result = 0;
-	if (WaitForSingleObject(worker, 4000) != WAIT_OBJECT_0 || !GetExitCodeThread(worker, &result))
+	if (WaitForSingleObject(worker, 4000) != WAIT_OBJECT_0 ||
+		!(cross_process ? GetExitCodeProcess(worker, &result) : GetExitCodeThread(worker, &result)))
 		return 14;
 	return !CloseHandle(worker) || !CloseHandle(peer) || !CloseHandle(listener) ? 15 : result;
 }
