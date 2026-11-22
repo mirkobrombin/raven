@@ -16,14 +16,17 @@ def main():
     output = result.stdout + result.stderr
     if result.returncode != 0 or "hotpath done" not in output:
         raise SystemExit(f"the program failed: exit {result.returncode}\n{output}")
-    row = re.search(r"^cycles:\s+NtQueryEvent\s+(\d+) calls\s+\d+ beside\s+boundary\s+(\d+)\s+turn\s+\d+\s+service\s+(\d+)\s+return\s+(\d+)"
+    row = re.search(r"^cycles:\s+NtQueryEvent\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+\d+\s+service\s+(\d+)\s+return\s+(\d+)"
                     r"\s+lock\s+\d+\s+copies\s+(\d+)",
                     output, re.M)
     if not row:
         raise SystemExit(f"NtQueryEvent is not reported\n{output}")
-    calls, boundary, service, back, copies = map(int, row.groups())
+    calls, beside, boundary, service, back, copies = map(int, row.groups())
     if calls < 20000 or not service:
         raise SystemExit(f"NtQueryEvent is not reported for every call\n{output}")
+    # The state of an event is under the object's own lock, as what SetEvent and ResetEvent change: it needs no turn.
+    if beside < calls * 0.99:
+        raise SystemExit(f"NtQueryEvent is answered beside the turn {beside} times in {calls} calls")
     if copies > calls * 1.1:
         raise SystemExit(f"NtQueryEvent has guest memory copied {copies} times in {calls} calls")
     # Each process reports for itself, those that make the prefix as well: the program's row is the one with all its calls.
