@@ -1188,7 +1188,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	// Power information: the processors with their frequencies from the host, a machine on mains power with no battery, and no sleep states.
 	const auto power_information = [](ApiCall &call) {
 		constexpr uint32_t status_success = 0, status_buffer_too_small = 0xc0000023U, status_invalid_parameter = 0xc000000dU;
-		constexpr uint32_t platform_information = 65;
+		constexpr uint32_t platform_information = 66;
 		const uint32_t level = call.u32(0);
 		std::vector<uint8_t> data;
 		if (level == 11) {
