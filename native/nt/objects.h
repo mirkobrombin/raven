@@ -137,6 +137,8 @@ public:
 	// The object behind a handle of this process that grants `access`, for a host thread that does not hold the turn; null otherwise.
 	std::shared_ptr<KernelObject> object_alone(uint64_t handle, uint32_t access) const;
 	NativeObjectResult query_event(uint64_t handle);
+	// The same for an event event_alone finds, without the turn.
+	std::optional<uint64_t> query_event_alone(uint64_t handle) const;
 	// The object manager type of the object behind a handle; nullopt when the handle does not exist.
 	std::optional<std::u16string> type_name(uint64_t handle) const;
 	NativeObjectResult wait(uint64_t handle, std::optional<int64_t> timeout,
@@ -165,6 +167,7 @@ private:
 	// The next free handle value; the caller holds the mutex. Values that inherited handles occupy are skipped.
 	uint64_t take();
 	void arrive(uint64_t handle) const;
+	static uint64_t event_information(const EventObject &object);
 	size_t limit;
 	std::pair<std::shared_ptr<EventObject>,uint32_t> event(uint64_t handle, uint32_t access) const;
 	std::shared_ptr<File> file(uint64_t handle) const;

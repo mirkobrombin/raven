@@ -20,6 +20,9 @@ public:
 	// Setting an event that a thread may wait for is not answered without stopping: it runs again stopped, where the thread it wakes can
 	// run first.
 	static void register_served(ApiRegistry &registry, NativeObjects &objects, class NativeThreads &threads);
+	// NtQueryEvent beside the turn, from the four argument words and the stack pointer. Nothing for a call that reports an error: the
+	// usual way answers that one.
+	static std::optional<uint64_t> query_alone(NativeProcess &process, const NativeObjects &objects, const uint64_t *arguments);
 
 	void set_deadline(std::chrono::steady_clock::time_point end) { deadline = end; }
 

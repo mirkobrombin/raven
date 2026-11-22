@@ -865,6 +865,7 @@ struct NativeProcess::State {
 	std::function<void(std::function<bool()>)> execution_turn;
 	std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> execution_park;
 	std::function<std::optional<uint64_t>(uint64_t, const uint64_t *)> concurrent_served;
+	std::function<std::optional<uint64_t>(uint64_t, uint64_t, const uint64_t *)> concurrent_service;
 	std::function<bool()> poll_served;
 	// Diagnostics: where the guest is found running, every sample_period.
 	std::chrono::milliseconds sample_period{0};
@@ -2448,6 +2449,36 @@ void NativeProcess::set_concurrent_served(std::function<std::optional<uint64_t>(
 	state->concurrent_served = std::move(alone);
 }
 
+void NativeProcess::set_concurrent_service(std::function<std::optional<uint64_t>(uint64_t, uint64_t, const uint64_t *)> alone)
+{
+	state->concurrent_service = std::move(alone);
+}
+
+bool NativeProcess::serve_service_alone(pid_t task)
+{
+	uint64_t *const held = state->concurrent_service ? agent::block_of(task) : nullptr;
+	user_regs_struct registers{};
+	if (!held || agent::request(PTRACE_GETREGS, task, nullptr, &registers) == -1)
+		return false;
+	const uint64_t since = __rdtsc(), number = registers.orig_rax;
+	// Argument one is in R10, as SYSCALL takes RCX for itself.
+	const uint64_t arguments[]{registers.r10, registers.rdx, registers.r8, registers.r9, registers.rsp};
+	const auto result = state->concurrent_service(registers.rip, number, arguments);
+	if (!result)
+		return false;
+	if (auto &cycles = CallCycles::instance(); cycles.enabled()) {
+		uint64_t *const stamps = held + agent::cycle_stamps;
+		cycles.answered(stamps, number, cycles.seen(stamps, number, since), true);
+	}
+	registers.rax = *result;
+	registers.rcx = registers.r10;
+	registers.orig_rax = uint64_t(-1);
+	if (agent::request(PTRACE_SETREGS, task, nullptr, &registers) == -1 ||
+		agent::request(state->guest_resume(), task, nullptr, nullptr) == -1)
+		throw std::runtime_error("cannot resume a native guest task after a system call answered beside the turn");
+	return true;
+}
+
 bool NativeProcess::serve_alone(uint64_t *block)
 {
 	if (!block || !state->concurrent_served)
@@ -2473,7 +2504,11 @@ bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block)
 {
 	// A guest whose host thread was asleep spins in its stub until it stops at the breakpoint of a long wait, and goes back to looking at
 	// its block when let go on: a call that needs nothing of the runtime is answered there as well, without the turn.
-	if (!block || status < 0 || !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP)
+	if (!block || status < 0 || !WIFSTOPPED(status))
+		return false;
+	if (WSTOPSIG(status) == (SIGTRAP | 0x80))
+		return serve_service_alone(task);
+	if (WSTOPSIG(status) != SIGTRAP)
 		return false;
 	const uint64_t stub = __atomic_load_n(&block[0], __ATOMIC_ACQUIRE);
 	user_regs_struct registers{};

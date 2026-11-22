@@ -2986,6 +2986,27 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	windows.set_key_table(table + keys_at);
 	__atomic_store_n(&served_block[key_pointer / 8], table_guest + keys_at, __ATOMIC_RELEASE);
 	process.set_call_stubs(std::move(called_stubs));
+	// Reading an event's state needs nothing of the runtime either, and ntdll's export for it is a system call: that is answered beside
+	// the turn where it stopped. One made from anywhere else goes the usual way, which checks the instruction.
+	if (const auto ntdll = modules.all().find("ntdll.dll"); process.parallel() && ntdll != modules.all().end() && ntdll->second->runtime_api) {
+		const uint32_t number = nt_service_number("ntdll.dll", "NtQueryEvent");
+		const auto after_syscall = uint64_t(raven_nt_syscall_service - raven_nt_syscall) + 2;
+		std::vector<uint64_t> returns;
+		for (const auto &symbol : ntdll->second->exports)
+			if (symbol.address && symbol.forwarder.empty())
+				for (const auto &name : symbol.names)
+					if (nt_service_number("ntdll.dll", name) == number)
+						returns.push_back(ntdll->second->loaded.base() + symbol.address + after_syscall);
+		if (!returns.empty()) {
+			CallCycles::instance().name_service(number, "NtQueryEvent");
+			process.set_concurrent_service([&process, &kernel_objects, number, returns](uint64_t after, uint64_t called,
+				const uint64_t *arguments) -> std::optional<uint64_t> {
+				if (called != number || std::find(returns.begin(), returns.end(), after) == returns.end())
+					return std::nullopt;
+				return NativeObjectAPI::query_alone(process, kernel_objects, arguments);
+			});
+		}
+	}
 	// Setting or resetting an event no thread waits for in the table needs nothing of the runtime: the host thread answers it outside the
 	// turn, and threads that set events of their own go side by side. The threads that wait in the runtime, and one that began to wait
 	// meanwhile, are looked at again as after any other change. A wait for an event of the table that is set is taken there beside the

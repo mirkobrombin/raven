@@ -222,9 +222,13 @@ public:
 	// Calls a parallel guest leaves in its block that the host thread may answer outside the runtime's turn: `alone` gets the stub and
 	// the four argument words and gives the result, or nothing when the call needs the runtime after all.
 	void set_concurrent_served(std::function<std::optional<uint64_t>(uint64_t, const uint64_t *)> alone);
+	// The same for a system call that stopped a guest in the agent's hands: `alone` gets the address after the instruction, the number,
+	// and the four argument words followed by the stack pointer. The guest goes on at that address with the result in RAX.
+	void set_concurrent_service(std::function<std::optional<uint64_t>(uint64_t, uint64_t, const uint64_t *)> alone);
 	// Answers the call in `block` that way; false when it is not one or needs the runtime.
 	bool serve_alone(uint64_t *block);
 	bool serve_stopped_alone(pid_t task, int status, uint64_t *block);
+	bool serve_service_alone(pid_t task);
 	// Writes the floating-point and extended state of a paused task, as PTRACE_GETREGSET with NT_X86_XSTATE gives it.
 	static void set_task_xstate(pid_t task, std::span<const uint8_t> xstate);
 	static void arm_host_thread();

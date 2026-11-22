@@ -72,6 +72,19 @@ void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &obje
 		});
 }
 
+std::optional<uint64_t> NativeObjectAPI::query_alone(NativeProcess &process, const NativeObjects &objects, const uint64_t *arguments)
+{
+	if (uint32_t(arguments[1]) || uint32_t(arguments[3])<8) return std::nullopt;
+	uint64_t length_address=0;
+	if (!process.read_alone(arguments[4]+40,&length_address,sizeof length_address)) return std::nullopt;
+	const auto state=objects.query_event_alone(arguments[0]);
+	if (!state) return std::nullopt;
+	const uint32_t length=8;
+	if (length_address && !process.write_alone(length_address,&length,sizeof length)) return std::nullopt;
+	if (!process.write_alone(arguments[2],&*state,sizeof *state)) return std::nullopt;
+	return 0;
+}
+
 bool NativeObjectAPI::dispatch(std::string_view name)
 {
 	if (file_io(name)) return true;

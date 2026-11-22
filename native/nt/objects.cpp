@@ -380,13 +380,26 @@ std::optional<std::u16string> NativeObjects::type_name(uint64_t handle) const
 	return std::u16string();
 }
 
+uint64_t NativeObjects::event_information(const EventObject &object)
+{
+	std::lock_guard lock(object.mutex);
+	return uint64_t(object.type) | (uint64_t(object.is_set())<<32);
+}
+
 NativeObjectResult NativeObjects::query_event(uint64_t handle)
 {
 	arrive(handle);
 	const auto [object,status]=event(handle,1);
 	if (status) return {0,status};
-	std::lock_guard lock(object->mutex);
-	return {uint64_t(object->type) | (uint64_t(object->is_set())<<32)};
+	return {event_information(*object)};
+}
+
+std::optional<uint64_t> NativeObjects::query_event_alone(uint64_t handle) const
+{
+	const auto object = event_alone(handle, 1);
+	if (!object)
+		return std::nullopt;
+	return event_information(*object);
 }
 
 NativeObjectResult NativeObjects::wait(uint64_t handle, std::optional<int64_t> timeout,
