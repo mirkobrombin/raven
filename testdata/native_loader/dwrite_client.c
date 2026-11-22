@@ -422,6 +422,7 @@ int raven_entry(void)
 			/* A layout of that format is of the newest kind too and keeps its settings: the spacing, the axis values, and the line
 			   metrics with leading, the fourth method of IDWriteTextLayout3 after the eighty of IDWriteTextLayout2. */
 			typedef HRESULT (STDMETHODCALLTYPE *lines_function)(void *, DWRITE_LINE_METRICS1 *, UINT32, UINT32 *);
+			typedef UINT32 (STDMETHODCALLTYPE *layout_count_function)(void *, UINT32);
 			IDWriteTextLayout *layout;
 			void **layout4;
 			DWRITE_LINE_METRICS1 lines[2];
@@ -430,7 +431,7 @@ int raven_entry(void)
 				FAILED(IDWriteTextLayout_QueryInterface(layout, &IID_IDWriteTextLayout4, (void **)&layout4)))
 				return 48;
 			if (FAILED(((spacing_function)(*(void ***)layout4)[82])(layout4, &read)) || read.leadingBefore != 0.5f ||
-				((count_function)(*(void ***)layout4)[85])(layout4) != 1)
+				((layout_count_function)(*(void ***)layout4)[85])(layout4, 0) != 1)
 				return 49;
 			if (FAILED(((lines_function)(*(void ***)layout4)[83])(layout4, lines, 2, &line_count)) || line_count != 1 || lines[0].length != 4)
 				return 50;
