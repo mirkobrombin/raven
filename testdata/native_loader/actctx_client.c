@@ -72,6 +72,39 @@ int raven_entry(void)
 	release(basic.hActCtx);
 	if (!DeactivateActCtx(0, cookie))
 		return 7;
+	struct caller_frame {
+		SIZE_T size;
+		ULONG format;
+		struct { void *previous; HANDLE context; ULONG flags; } frame;
+		void *reserved[4];
+	};
+	typedef void (FASTCALL *fast_activate_function)(struct caller_frame *, HANDLE);
+	typedef void (FASTCALL *fast_deactivate_function)(struct caller_frame *);
+	HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+	const fast_activate_function fast_activate = (fast_activate_function)GetProcAddress(ntdll, "RtlActivateActivationContextUnsafeFast");
+	const fast_deactivate_function fast_deactivate = (fast_deactivate_function)GetProcAddress(ntdll, "RtlDeactivateActivationContextUnsafeFast");
+	if (!fast_activate || !fast_deactivate)
+		return 28;
+	HANDLE default_context = NULL, nested = CreateActCtxW(&request);
+	if (nested == INVALID_HANDLE_VALUE || !GetCurrentActCtx(&default_context))
+		return 29;
+	struct caller_frame outer = {sizeof outer}, inner = {sizeof inner};
+	fast_activate(&outer, context);
+	fast_activate(&inner, nested);
+	if (inner.frame.previous != &outer.frame || outer.frame.context != context || inner.frame.context != nested ||
+		!GetCurrentActCtx(&current) || current != nested)
+		return 30;
+	ReleaseActCtx(current);
+	fast_deactivate(&inner);
+	if (!GetCurrentActCtx(&current) || current != context)
+		return 31;
+	ReleaseActCtx(current);
+	fast_deactivate(&outer);
+	if (!GetCurrentActCtx(&current) || current != default_context)
+		return 32;
+	ReleaseActCtx(current);
+	ReleaseActCtx(default_context);
+	ReleaseActCtx(nested);
 	ReleaseActCtx(context);
 
 	if (!IsThemeActive())
