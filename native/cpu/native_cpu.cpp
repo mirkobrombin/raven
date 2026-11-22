@@ -1177,6 +1177,7 @@ std::vector<uint8_t> NativeProcess::read_memory(uint64_t address, size_t size) c
 		const iovec local{result.data() + offset, count};
 		const iovec remote{reinterpret_cast<void *>(address + offset), count};
 		// Through the task that lives as long as the process: a host thread beside the turn reads while the turn switches the child.
+		CallCycles::instance().copied();
 		const auto copied = process_vm_readv(state->memory_reader(), &local, 1, &remote, 1, 0);
 		if (copied < 0 && errno == EINTR) continue;
 		if (copied <= 0)
@@ -1205,6 +1206,7 @@ bool NativeProcess::read_alone(uint64_t address, void *into, size_t size) const
 	for (size_t offset = 0; offset < size;) {
 		const iovec local{static_cast<uint8_t *>(into) + offset, size - offset};
 		const iovec remote{reinterpret_cast<void *>(address + offset), size - offset};
+		CallCycles::instance().copied();
 		const auto copied = process_vm_readv(task, &local, 1, &remote, 1, 0);
 		if (copied < 0 && errno == EINTR)
 			continue;
@@ -1221,6 +1223,7 @@ bool NativeProcess::write_alone(uint64_t address, const void *from, size_t size)
 	for (size_t offset = 0; offset < size;) {
 		const iovec local{const_cast<uint8_t *>(static_cast<const uint8_t *>(from)) + offset, size - offset};
 		const iovec remote{reinterpret_cast<void *>(address + offset), size - offset};
+		CallCycles::instance().copied();
 		const auto copied = process_vm_writev(task, &local, 1, &remote, 1, 0);
 		if (copied < 0 && errno == EINTR)
 			continue;
@@ -1245,6 +1248,7 @@ void NativeProcess::write_memory(uint64_t address, std::span<const uint8_t> byte
 		}
 		const iovec local{const_cast<uint8_t *>(bytes.data() + offset), count};
 		const iovec remote{reinterpret_cast<void *>(address + offset), count};
+		CallCycles::instance().copied();
 		const auto copied = process_vm_writev(state->memory_reader(), &local, 1, &remote, 1, 0);
 		if (copied < 0 && errno == EINTR) continue;
 		if (copied <= 0)
