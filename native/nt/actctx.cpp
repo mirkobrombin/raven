@@ -702,7 +702,9 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 		if (auto *found = contexts.find(call[0]))
 			++found->references;
 	});
-	registry.add("ReleaseActCtx", 1, [&contexts](ApiCall &call) { contexts.release(call[0]); });
+	const auto release = [&contexts](ApiCall &call) { contexts.release(call[0]); };
+	registry.add("ReleaseActCtx", 1, release);
+	registry.add("RtlReleaseActivationContext", 1, release);
 	registry.add("ZombifyActCtx", 1, [](ApiCall &call) { call.ret(1); });
 	registry.add("ActivateActCtx", 2, [&contexts, thread](ApiCall &call) {
 		if (call[0] && call[0] != UINT64_MAX && !contexts.find(call[0])) {
