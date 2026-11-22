@@ -7,15 +7,24 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <poll.h>
 #include <vector>
 
 namespace raven {
 
+class CompletionReserve : public KernelObject {
+public:
+	std::u16string_view type_name() const override { return u"IoCompletionReserve"; }
+	bool queued = false;
+};
+
 struct CompletionPacket {
 	uint64_t bytes = 0, key = 0, overlapped = 0;
 	// The Windows error of the operation, zero when it succeeded.
 	uint32_t status = 0;
+	std::optional<uint32_t> native_status = {};
+	std::shared_ptr<CompletionReserve> reserve = {};
 };
 
 // An I/O completion port: a queue of finished operations that threads take from.
@@ -27,14 +36,25 @@ public:
 	{
 		if (packets.empty())
 			return false;
-		packet = packets.front();
+		packet = std::move(packets.front());
 		packets.pop_front();
+		if (packet.reserve) {
+			packet.reserve->queued = false;
+			packet.reserve.reset();
+		}
 		return true;
 	}
 	bool empty() const { return packets.empty(); }
 	// Its last handle closed: the threads that wait on it give up (ERROR_ABANDONED_WAIT_0), and the packets still queued are gone.
 	bool watches_last_handle() const override { return true; }
-	void last_handle_closed() override { abandoned = true; packets.clear(); }
+	void last_handle_closed() override
+	{
+		abandoned = true;
+		for (const auto &packet : packets)
+			if (packet.reserve)
+				packet.reserve->queued = false;
+		packets.clear();
+	}
 	bool closed() const { return abandoned; }
 
 private:

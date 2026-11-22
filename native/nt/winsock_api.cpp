@@ -1499,6 +1499,52 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0xc000009aU);
 		}
 	});
+	registry.add("NtAllocateReserveObject", 3, [&objects](ApiCall &call) {
+		if (call.u32(2) != 1 || call[1]) {
+			call.ret(call.u32(2) > 1 ? 0xc000000dU : 0xc00000bbU);
+			return;
+		}
+		try {
+			call.process.validate_write_memory(call[0], call.pointer_width());
+			const auto made = objects.add_object(std::make_shared<CompletionReserve>());
+			if (!made.status)
+				call.store_pointer(call[0], made.value);
+			call.ret(made.status);
+		} catch (const ApiFault &) {
+			call.ret(0xc0000005U);
+		} catch (const std::runtime_error &) {
+			call.ret(0xc0000005U);
+		} catch (const std::bad_alloc &) {
+			call.ret(0xc000009aU);
+		}
+	});
+	registry.add("NtSetIoCompletionEx", 6, [&objects, completion_for_modify](ApiCall &call) {
+		const auto [port, status] = completion_for_modify(call[0]);
+		if (!port) {
+			call.ret(status);
+			return;
+		}
+		const auto reserve = objects.object_as<CompletionReserve>(call[1]);
+		if (!reserve) {
+			call.ret(objects.type_name(call[1]) ? 0xc0000024U : 0xc0000008U);
+			return;
+		}
+		if (!(objects.access_of(call[1]) & modify_completion)) {
+			call.ret(0xc0000022U);
+			return;
+		}
+		if (reserve->queued) {
+			call.ret(0xc00000f0U);
+			return;
+		}
+		try {
+			port->post({call[5], call[2], call[3], 0, call.u32(4), reserve});
+			reserve->queued = true;
+			call.ret(0);
+		} catch (const std::bad_alloc &) {
+			call.ret(0xc000009aU);
+		}
+	});
 	registry.add("CreateIoCompletionPort", 4, [&objects, socket_of, completion_for_modify](ApiCall &call) {
 		std::shared_ptr<CompletionPort> port;
 		if (call[1]) {
@@ -1583,7 +1629,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 	const auto port_error = [](PortWait ended) -> uint32_t {
 		return ended == PortWait::abandoned ? 735 : ended == PortWait::apcs ? 0xc0 : 258;
 	};
-	registry.add("GetQueuedCompletionStatus", 5, [completion_for_modify, wait_packet, port_error](ApiCall &call) {
+	registry.add("GetQueuedCompletionStatus", 5, [&registry, completion_for_modify, wait_packet, port_error](ApiCall &call) {
 		const auto [port, status] = completion_for_modify(call[0]);
 		if (!port) {
 			call.fail(status == 0xc0000022U ? 5 : 6);
@@ -1602,8 +1648,20 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			call.store_pointer(call[2], packet.key);
 		if (call[3])
 			call.store_pointer(call[3], packet.overlapped);
-		if (packet.status) {
-			call.fail(packet.status);
+		uint32_t error = packet.status;
+		if (packet.native_status && int32_t(*packet.native_status) < 0) {
+			if ((*packet.native_status & 0xffff0000U) == 0xc0070000U) {
+				error = *packet.native_status & 0xffffU;
+			} else if (const auto translator = registry.find("RtlNtStatusToDosError")) {
+				ApiCall translate(call.process, call.environment, {*packet.native_status});
+				translator->second(translate);
+				error = uint32_t(translate.result);
+			} else {
+				error = 317;
+			}
+		}
+		if (error) {
+			call.fail(error);
 			return;
 		}
 		call.ret(1);
@@ -1623,7 +1681,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			const uint64_t entry = call[1] + removed * stride;
 			call.store_pointer(entry, packet.key);
 			call.store_pointer(entry + width, packet.overlapped);
-			call.store_pointer(entry + 2 * width, packet.status);
+			call.store_pointer(entry + 2 * width, packet.native_status.value_or(packet.status));
 			call.store<uint32_t>(entry + 3 * width, uint32_t(packet.bytes));
 			++removed;
 			// The next packet is taken only when there is room for it; one taken and not handed out would be lost.
