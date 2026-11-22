@@ -1309,7 +1309,7 @@ static constexpr std::string_view user32_exports[]{
 	"IsCharLowerW","IsCharUpperA","IsCharUpperW","IsChild","IsClipboardFormatAvailable","IsDialogMessage",
 	"IsDialogMessageA","IsDialogMessageW","IsDlgButtonChecked","IsGUIThread","IsHungAppWindow","IsIconic",
 	"IsImmersiveProcess","IsInDesktopWindowBand","IsMenu","IsMouseInPointerEnabled","IsProcess16Bit","IsProcessDPIAware",
-	"IsQueueAttached","IsRectEmpty","IsSETEnabled","IsServerSideWindow","IsThreadDesktopComposited","IsThreadMessageQueueAttached",
+	"IsQueueAttached","IsRectEmpty","IsSETEnabled","IsServerSideWindow","IsShellManagedWindow","IsThreadDesktopComposited","IsThreadMessageQueueAttached",
 	"IsTopLevelWindow","IsTouchWindow","IsValidDpiAwarenessContext","IsWinEventHookInstalled","IsWindow","IsWindowArranged",
 	"IsWindowEnabled","IsWindowInDestroy","IsWindowRedirectedForPrint","IsWindowUnicode","IsWindowVisible","IsWow64Message",
 	"IsZoomed","KillSystemTimer","KillTimer","LoadAcceleratorsA","LoadAcceleratorsW","LoadBitmapA",

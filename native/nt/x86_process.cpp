@@ -551,13 +551,14 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		std::vector<std::string_view> own(implemented.begin(), implemented.end());
 		own.insert(own.end(), pending.begin(), pending.end());
 		const auto exports = with_imports(dll, own);
-		const auto size = PEImage(runtime_provider(dll, 0x70000000ULL, exports, true)).image_size;
+		const auto ordinals = system_export_ordinals(dll);
+		const auto size = PEImage(runtime_provider(dll, 0x70000000ULL, exports, true, {}, ordinals)).image_size;
 		const auto base = provider_base(modules, size);
-		auto &provider = modules.add(dll, runtime_provider(dll, base, exports, true), base);
+		auto &provider = modules.add(dll, runtime_provider(dll, base, exports, true, {}, ordinals), base);
 		provider.runtime_api = true;
 		overlay(provider, dll);
 		for (const auto &symbol : provider.exports) {
-			if (!symbol.forwarder.empty())
+			if (symbol.names.empty() || !symbol.forwarder.empty())
 				continue;
 			const auto &exported = symbol.names.at(0);
 			const auto view = std::find(exports.begin(), exports.end(), exported);

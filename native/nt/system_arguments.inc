@@ -1233,7 +1233,7 @@ static constexpr std::pair<std::string_view, uint8_t> user32_words[]{
 	{"IsCharUpperW",1},{"IsChild",2},{"IsClipboardFormatAvailable",1},{"IsDialogMessage",2},{"IsDialogMessageA",2},{"IsDialogMessageW",2},
 	{"IsDlgButtonChecked",2},{"IsGUIThread",1},{"IsHungAppWindow",1},{"IsIconic",1},{"IsImmersiveProcess",1},{"IsInDesktopWindowBand",1},
 	{"IsMenu",1},{"IsMouseInPointerEnabled",0},{"IsOneCoreTransformMode",0},{"IsProcess16Bit",0},{"IsProcessDPIAware",0},{"IsQueueAttached",0},
-	{"IsRectEmpty",1},{"IsSETEnabled",0},{"IsServerSideWindow",1},{"IsThreadDesktopComposited",0},{"IsThreadMessageQueueAttached",1},{"IsThreadTSFEventAware",1},
+	{"IsRectEmpty",1},{"IsSETEnabled",0},{"IsServerSideWindow",1},{"IsShellManagedWindow",1},{"IsThreadDesktopComposited",0},{"IsThreadMessageQueueAttached",1},{"IsThreadTSFEventAware",1},
 	{"IsTopLevelWindow",1},{"IsTouchWindow",2},{"IsValidDpiAwarenessContext",1},{"IsWinEventHookInstalled",1},{"IsWindow",1},{"IsWindowArranged",1},
 	{"IsWindowEnabled",1},{"IsWindowInDestroy",1},{"IsWindowRedirectedForPrint",1},{"IsWindowUnicode",1},{"IsWindowVisible",1},{"IsWow64Message",0},
 	{"IsZoomed",1},{"KillSystemTimer",2},{"KillTimer",2},{"LoadAcceleratorsA",2},{"LoadAcceleratorsW",2},{"LoadBitmapA",2},
