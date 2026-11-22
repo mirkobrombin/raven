@@ -134,6 +134,20 @@ static void map_shared_user_data(NativeProcess &process)
 	keep_clocks(page);
 }
 
+// The host maps a thread block as well: most calls leave the last error there, and that takes no call into the kernel.
+static uint64_t map_thread_block(NativeProcess &process)
+{
+	const auto block = process.map_memory(8192, PROT_NONE);
+	try {
+		process.share_memory(block, 8192);
+		process.protect_memory(block, 8192, PROT_READ | PROT_WRITE);
+	} catch (...) {
+		process.unmap_memory(block);
+		throw;
+	}
+	return block;
+}
+
 NativeEnvironment::NativeEnvironment(NativeProcess &process, uint64_t image_base,
 	uint32_t process_id, uint32_t thread_id) : process(process)
 {
@@ -150,7 +164,7 @@ NativeEnvironment::NativeEnvironment(NativeProcess &process, uint64_t image_base
 	try {
 		map_shared_user_data(process);
 		process_block = process.map_memory(4096, PROT_READ | PROT_WRITE);
-		thread_block = process.map_memory(8192, PROT_READ | PROT_WRITE);
+		thread_block = map_thread_block(process);
 		// x64 NT_TIB, CLIENT_ID and the initial TEB/PEB contract fields.
 		field(process, thread_block, UINT64_MAX, 8);
 		field(process, thread_block + 0x08, stack_base, 8);
@@ -195,7 +209,7 @@ uint64_t NativeEnvironment::create_thread_block(uint64_t stack_base, uint64_t st
 	if (!thread_id)
 		throw std::runtime_error("native guest threads need a thread identity");
 	if (process.mode() == NativeMode::x86) {
-		const auto block = process.map_memory(8192, PROT_READ | PROT_WRITE);
+		const auto block = map_thread_block(process);
 		try {
 			field(process, block, UINT32_MAX, 4);
 			field(process, block + 0x04, stack_base, 4);
@@ -216,7 +230,7 @@ uint64_t NativeEnvironment::create_thread_block(uint64_t stack_base, uint64_t st
 		}
 		return block;
 	}
-	const auto teb = process.map_memory(8192, PROT_READ | PROT_WRITE);
+	const auto teb = map_thread_block(process);
 	try {
 		field(process, teb, UINT64_MAX, 8);
 		field(process, teb + 0x08, stack_base, 8);
@@ -258,7 +272,7 @@ void NativeEnvironment::x86_constructor(uint64_t image_base, uint32_t process_id
 	try {
 		map_shared_user_data(process);
 		process_block = process.map_memory(4096, PROT_READ | PROT_WRITE);
-		thread_block = process.map_memory(8192, PROT_READ | PROT_WRITE);
+		thread_block = map_thread_block(process);
 		// x86 NT_TIB, CLIENT_ID and the initial TEB/PEB contract fields.
 		field(process, thread_block, UINT32_MAX, 4);
 		field(process, thread_block + 0x04, stack_base, 4);

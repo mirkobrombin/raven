@@ -905,15 +905,15 @@ uint8_t *NativeProcess::State::shared_memory(uint64_t address, size_t &size) con
 
 std::unique_ptr<NativeProcess::State::SharedView> NativeProcess::State::private_view(size_t size, SharedFile &file)
 {
-	file.descriptor = memfd_create("raven-stack", MFD_CLOEXEC);
+	file.descriptor = memfd_create("raven-private-view", MFD_CLOEXEC);
 	if (file.descriptor < 0 || ftruncate(file.descriptor, off_t(size)) != 0)
-		throw std::runtime_error("cannot create native stack memory");
+		throw std::runtime_error("cannot create native private memory");
 	auto view = std::make_unique<SharedView>();
 	view->size = size;
 	view->private_pages = true;
 	view->host = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, file.descriptor, 0);
 	if (view->host == MAP_FAILED)
-		throw std::runtime_error("cannot map native stack memory in host");
+		throw std::runtime_error("cannot map native private memory in host");
 	return view;
 }
 
@@ -2003,7 +2003,7 @@ void NativeProcess::share_memory(uint64_t address, size_t size)
 		guest_file = receive_descriptor(file.descriptor, scratch);
 		if (memory_syscall(SYS_mmap, address, size, PROT_NONE, MAP_SHARED | MAP_FIXED, guest_file, 0) != address) {
 			state->child->stop();
-			throw std::runtime_error("host returned an invalid shared stack address");
+			throw std::runtime_error("host returned an invalid shared memory address");
 		}
 		state->shared_views.emplace(address, std::move(view));
 		memory_syscall(SYS_close, guest_file, 0);
