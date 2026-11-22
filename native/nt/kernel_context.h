@@ -82,13 +82,6 @@ struct KernelContext {
 inline constexpr uint64_t filetime_epoch_offset = 11644473600ULL * 10000000ULL;
 // The performance counter in 100 ns units: the host's monotonic clock, as QueryPerformanceCounter reports it.
 uint64_t counter_ticks();
-// The time stamp counter beside the monotonic clock it was read with; clock_origin is the sample the process took as it started, from
-// which the guest's clock is calibrated.
-struct ClockSample {
-	uint64_t counter, nanoseconds;
-};
-ClockSample clock_sample();
-const ClockSample &clock_origin();
 // The counter span of the current local second and its SYSTEMTIME, as the guest's GetLocalTime reads them.
 std::array<uint64_t, 4> local_second();
 

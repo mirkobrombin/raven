@@ -17,6 +17,7 @@
 #include "apiset.h"
 #include "text.h"
 #include "kernel_context.h"
+#include "clock_calibration.h"
 #include "event.h"
 #include "kernel_waits.h"
 #include "event_pulse.h"
@@ -381,9 +382,7 @@ static std::vector<uint8_t> queued_prelude(int32_t to_served, const QueuedCall &
 }
 
 // The performance counter is read in the guest once the runtime has published how the processor's time stamp counter relates to it: the
-// stub exported for it is a prelude that computes the count from RDTSC and falls back to its served stub until then. The calibration sits
-// in the served block: the offset of the slot to read, written last, and two slots, each the counter value at the base, the count at the
-// base, and the multiplier, a 32.32 fixed-point count per tick of the time stamp counter.
+// stub exported for it is a prelude that computes the count from RDTSC and falls back to its served stub until then (see ClockCalibration).
 static bool guest_clock_api(std::string_view module, std::string_view name)
 {
 	// The unbiased interrupt time counts the same monotonic clock in the same 100 ns units as the performance counter.
@@ -391,8 +390,7 @@ static bool guest_clock_api(std::string_view module, std::string_view name)
 		(name == "QueryPerformanceCounter" || name == "QueryUnbiasedInterruptTime" || name == "QueryUnbiasedInterruptTimePrecise");
 }
 
-static constexpr size_t clock_prelude_size = 96, clock_calibration = 0x800;
-static constexpr std::array<size_t, 2> clock_slots{0x808, 0x820};
+static constexpr size_t clock_prelude_size = 96;
 
 static std::vector<uint8_t> clock_prelude(int32_t to_pointer, int32_t to_served)
 {
@@ -3240,41 +3238,13 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		if (RuntimeProfile::instance().enabled() && profile_start != std::chrono::steady_clock::time_point{})
 			RuntimeProfile::instance().api(found->second, std::chrono::steady_clock::now() - profile_start);
 	}, std::move(queued_stubs));
-	// The guest reads the performance counter itself from its first call: the time stamp counter is calibrated against it over the time
-	// since the runtime started, published before the guest runs, and over 200 ms once those have passed. The second calibration goes
-	// to a slot of its own and is named last, so a reader has one or the other whole; it goes on from the count of the first, so the
-	// clock does not step. A slot's base lies 2^30 counts back: a reader whose counter was read just before the slot was named is not
-	// before the base.
-	struct ClockCalibration {
-		ClockSample origin = clock_origin();
-		size_t slot = 0;
-		void publish(uint64_t *block)
-		{
-			if (slot == clock_slots[1])
-				return;
-			const ClockSample now = clock_sample();
-			if (now.counter <= origin.counter || now.nanoseconds - origin.nanoseconds < (slot ? 200000000ULL : 1000000ULL))
-				return;
-			const auto multiplier = uint64_t((static_cast<unsigned __int128>(now.nanoseconds - origin.nanoseconds) << 32) /
-				(static_cast<unsigned __int128>(now.counter - origin.counter) * 100));
-			uint64_t count = now.nanoseconds / 100;
-			if (slot) {
-				const uint64_t *last = block + slot / 8;
-				count = last[1] + uint64_t((static_cast<unsigned __int128>(now.counter - last[0]) * last[2]) >> 32);
-			}
-			const uint64_t back = 1ULL << 30;
-			const size_t next = slot ? clock_slots[1] : clock_slots[0];
-			uint64_t *published = block + next / 8;
-			published[0] = now.counter - back;
-			published[1] = count - uint64_t((static_cast<unsigned __int128>(back) * multiplier) >> 32);
-			published[2] = multiplier;
-			__atomic_store_n(&block[clock_calibration / 8], next, __ATOMIC_RELEASE);
-			slot = next;
-		}
-	};
-	const auto calibration = std::make_shared<ClockCalibration>();
-	calibration->publish(served_block);
-	threads.add_service([served_block, calibration] { calibration->publish(served_block); });
+	// The guest reads the performance counter itself from its first call (see ClockCalibration).
+	const auto calibration = std::make_shared<ClockCalibration>(clock_origin());
+	calibration->publish(served_block, clock_sample());
+	threads.add_service([served_block, calibration] {
+		if (!calibration->done())
+			calibration->publish(served_block, clock_sample());
+	});
 	// The local second the guest's GetLocalTime reads is published again once it is over: the end goes first and last, so a guest
 	// that copies while it changes sees the end move and asks the runtime.
 	threads.add_service([served_block] {

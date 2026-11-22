@@ -18,7 +18,7 @@
 #include "nt/text.h"
 #include "nt/system_exports.h"
 #include "nt/warm_host.h"
-#include "nt/kernel_context.h"
+#include "nt/clock_calibration.h"
 #ifdef RAVEN_OPENGL
 #include "graphics/opengl_bridge.h"
 #endif

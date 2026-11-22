@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include "clock_calibration.h"
 #include <cpuid.h>
 #include <x86intrin.h>
 #include <cstring>
@@ -317,9 +318,13 @@ ClockSample clock_sample()
 		const uint64_t after = __rdtsc();
 		if (after - before < closest) {
 			closest = after - before;
-			best = {before, uint64_t(now.tv_sec) * 1000000000ULL + uint64_t(now.tv_nsec)};
+			best = {before, uint64_t(now.tv_sec) * 1000000000ULL + uint64_t(now.tv_nsec), 0};
 		}
 	}
+	timespec awake{}, all{};
+	::clock_gettime(CLOCK_MONOTONIC, &awake);
+	::clock_gettime(CLOCK_BOOTTIME, &all);
+	best.slept = uint64_t((int64_t(all.tv_sec) - awake.tv_sec) * 1000000000LL + (int64_t(all.tv_nsec) - awake.tv_nsec));
 	return best;
 }
 
