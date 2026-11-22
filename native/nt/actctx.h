@@ -76,7 +76,10 @@ public:
 	void release(uint64_t handle);
 	// The context in effect on a thread: the last one it activated, else the program's own.
 	uint64_t current(uint32_t thread) const;
-	uint64_t activate(uint32_t thread, uint64_t handle);
+	uint64_t activate(uint32_t thread, uint64_t handle, uint64_t caller_frame = 0);
+	uint64_t current_caller_frame(uint32_t thread) const;
+	void deactivate_caller_frame(uint32_t thread, uint64_t caller_frame);
+	void clear_thread(uint32_t thread);
 	bool deactivate(uint32_t thread, uint64_t cookie);
 	void set_process_default(uint64_t handle);
 	// The table the activation preludes read: for each slot, at a thread id divided by four modulo the slot count, the thread id and
@@ -107,7 +110,8 @@ private:
 	std::filesystem::path manifests, application;
 	std::optional<Assembly> program;
 	std::map<uint64_t, Context> contexts;
-	std::map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> stacks;
+	struct Frame { uint64_t handle, cookie, caller_frame; };
+	std::map<uint32_t, std::vector<Frame>> stacks;
 	uint64_t next_handle = 0x7e000001, next_cookie = 1, process_default = 0;
 	std::optional<Version> layer_version;
 	uint8_t *current_table = nullptr;

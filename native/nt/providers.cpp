@@ -2180,6 +2180,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtCreateIoCompletion", "NtAllocateReserveObject", "NtSetIoCompletionEx", "NtRemoveIoCompletionEx", "NtCreateWaitCompletionPacket",
 		"NtAssociateWaitCompletionPacket", "NtCancelWaitCompletionPacket",
 		"RtlQueryInformationActiveActivationContext", "RtlReleaseActivationContext",
+		"RtlActivateActivationContextUnsafeFast", "RtlDeactivateActivationContextUnsafeFast",
 		"RtlAcquireSRWLockExclusive", "RtlAcquireSRWLockShared", "RtlWakeConditionVariable", "RtlWakeAllConditionVariable", "RtlWaitOnAddress",
 		"RtlWakeAddressSingle", "RtlWakeAddressAll",
 		// The processor a thread runs on.

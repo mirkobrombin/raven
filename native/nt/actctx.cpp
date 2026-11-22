@@ -520,14 +520,17 @@ void ActivationContexts::release(uint64_t handle)
 uint64_t ActivationContexts::current(uint32_t thread) const
 {
 	if (const auto found = stacks.find(thread); found != stacks.end() && !found->second.empty())
-		return found->second.back().first;
+		return found->second.back().handle;
 	return process_default;
 }
 
-uint64_t ActivationContexts::activate(uint32_t thread, uint64_t handle)
+uint64_t ActivationContexts::activate(uint32_t thread, uint64_t handle, uint64_t caller_frame)
 {
 	const auto cookie = next_cookie++;
-	stacks[thread].emplace_back(handle, cookie);
+	stacks[thread].push_back({handle, cookie, caller_frame});
+	if (caller_frame)
+		if (auto *active = find(handle))
+			++active->references;
 	publish(thread);
 	return cookie;
 }
@@ -562,12 +565,40 @@ void ActivationContexts::publish(uint32_t thread)
 bool ActivationContexts::deactivate(uint32_t thread, uint64_t cookie)
 {
 	auto &stack = stacks[thread];
-	const auto found = std::find_if(stack.begin(), stack.end(), [&](const auto &frame) { return frame.second == cookie; });
+	const auto found = std::find_if(stack.begin(), stack.end(), [&](const auto &frame) { return frame.cookie == cookie; });
 	if (found == stack.end())
 		return false;
+	for (auto frame = found; frame != stack.end(); ++frame)
+		if (frame->caller_frame)
+			release(frame->handle);
 	stack.erase(found, stack.end());
 	publish(thread);
 	return true;
+}
+
+uint64_t ActivationContexts::current_caller_frame(uint32_t thread) const
+{
+	const auto found = stacks.find(thread);
+	return found == stacks.end() || found->second.empty() ? 0 : found->second.back().caller_frame;
+}
+
+void ActivationContexts::deactivate_caller_frame(uint32_t thread, uint64_t caller_frame)
+{
+	const auto found = stacks.find(thread);
+	if (found == stacks.end() || found->second.empty() || found->second.back().caller_frame != caller_frame)
+		return;
+	deactivate(thread, found->second.back().cookie);
+}
+
+void ActivationContexts::clear_thread(uint32_t thread)
+{
+	if (const auto found = stacks.find(thread); found != stacks.end()) {
+		for (const auto &frame : found->second)
+			if (frame.caller_frame)
+				release(frame.handle);
+		stacks.erase(found);
+		publish(thread);
+	}
 }
 
 std::optional<std::string> ActivationContexts::registered_name(uint32_t thread, std::string_view name) const
@@ -575,7 +606,7 @@ std::optional<std::string> ActivationContexts::registered_name(uint32_t thread, 
 	const auto found = stacks.find(thread);
 	if (found == stacks.end() || found->second.empty())
 		return std::nullopt;
-	const auto context = contexts.find(found->second.back().first);
+	const auto context = contexts.find(found->second.back().handle);
 	if (context == contexts.end())
 		return std::nullopt;
 	const auto &root = context->second.root;
@@ -610,6 +641,7 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 {
 	auto &contexts = activation_contexts();
 	contexts.attach(context);
+	context.threads.add_end_listener([&contexts](uint32_t thread) { contexts.clear_thread(thread); });
 	const auto thread = [&context] { return context.threads.current_id(); };
 	registry.add("RavenWinRTClassLibrary", 3, [&contexts, thread](ApiCall &call) {
 		if (!call[0])
@@ -722,6 +754,29 @@ void register_actctx_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		call.ret(1);
+	});
+	const bool x86 = context.process.mode() == NativeMode::x86;
+	// On x86 these exports take their two words in ECX and EDX and pop no stack arguments.
+	registry.add("RtlActivateActivationContextUnsafeFast", x86 ? 0 : 2, [&contexts, thread, x86](ApiCall &call) {
+		uint64_t frame, handle;
+		if (x86) {
+			const auto registers = call.process.general_registers();
+			frame = uint32_t(registers.rcx);
+			handle = uint32_t(registers.rdx);
+		} else {
+			frame = call[0];
+			handle = call[1];
+		}
+		const auto width = call.pointer_width();
+		const auto record = frame + 2 * width;
+		call.store_pointer(record, contexts.current_caller_frame(thread()));
+		call.store_pointer(record + width, handle);
+		call.store<uint32_t>(record + 2 * width, 0);
+		contexts.activate(thread(), handle, record);
+	});
+	registry.add("RtlDeactivateActivationContextUnsafeFast", x86 ? 0 : 1, [&contexts, thread, x86](ApiCall &call) {
+		const auto frame = x86 ? uint64_t(uint32_t(call.process.general_registers().rcx)) : call[0];
+		contexts.deactivate_caller_frame(thread(), frame + 2 * call.pointer_width());
 	});
 	registry.add("GetCurrentActCtx", 1, [&contexts, thread](ApiCall &call) {
 		if (!call[0]) {
