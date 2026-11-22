@@ -425,7 +425,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		// The system's libraries are the runtime's whatever copies the program ships or an installer left in the system directory, except those a
 		// copy in the program's folder may replace.
 		std::vector<std::string_view> provided;
-		for (const std::string_view library : {"kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "setupapi.dll", "msvcrt.dll", "winmm.dll",
+		for (const std::string_view library : {"kernel32.dll", "kernelbase.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "setupapi.dll", "msvcrt.dll", "winmm.dll",
 			"dsound.dll", "vulkan-1.dll", "shell32.dll", "comctl32.dll", "ntdll.dll", "version.dll", "ole32.dll"})
 			if (!program_may_replace(library))
 				provided.push_back(library);
@@ -451,6 +451,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	std::set<std::string> unknown_names;
 	{
 		std::set<std::string> system_libraries(system_library_names().begin(), system_library_names().end());
+		system_libraries.insert("kernelbase.dll");
 		system_libraries.insert("usp10.dll");
 		system_libraries.insert("ntdll.dll");
 		for (const auto &[module_name, module] : modules.all())
@@ -486,7 +487,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	const auto with_imports = [&](const std::string &library, std::span<const std::string_view> own) {
 		std::vector<std::string_view> merged(own.begin(), own.end());
 		// A library loaded later, such as an installer plug-in, imports names the initial graph never named: every public name binds.
-		const auto published = system_export_names(library);
+		const auto published = system_export_names(library == "kernelbase.dll" ? "kernel32.dll" : library);
 		merged.insert(merged.end(), published.begin(), published.end());
 		if (const auto found = imported_names.find(library); found != imported_names.end())
 			for (const auto &name : found->second)
@@ -497,7 +498,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	};
 	// The stdcall argument words of a function: the library's own decorated symbol first, then what Raven's tables say.
 	const auto words_of = [](const std::string &library, std::string_view name, uint32_t fallback) {
-		const auto authoritative = system_export_words(library, name);
+		const auto authoritative = system_export_words(library == "kernelbase.dll" ? "kernel32.dll" : library, name);
 		if (authoritative != UINT32_MAX)
 			return authoritative;
 		return fallback;
@@ -666,6 +667,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 			traps.emplace(provider.loaded.base() + symbol.address, std::pair{name, words_of(dll, exported, count(exported)) * 4});
 		}
 	};
+	add_library("kernelbase.dll", {}, {}, [](std::string_view name) {
+		const auto words = registry_words(name);
+		return words == UINT32_MAX ? 0 : words;
+	});
 	std::vector<std::string_view> advapi_names;
 	for (const auto &item : host_exports("advapi32.dll"))
 		advapi_names.push_back(item.name);
