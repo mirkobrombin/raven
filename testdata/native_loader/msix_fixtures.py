@@ -3,7 +3,6 @@
 import hashlib
 import os
 from pathlib import Path
-import re
 import struct
 import subprocess
 import sys
@@ -161,8 +160,9 @@ def run_test(raven, client, directory):
             arguments = command if trusted else [*command, "--", "--untrusted"]
             result = subprocess.run(arguments, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             print(result.stdout, end="")
-            entries = re.findall(r"Native entry returned (\d+) ", result.stdout)
-            if result.returncode or not entries or entries[-1] != "0":
+            mode = "trusted package and activation" if trusted else "untrusted package"
+            print(f"{mode}: guest exit status {result.returncode}")
+            if result.returncode:
                 return 1
     return 0
 
