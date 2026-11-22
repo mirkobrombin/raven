@@ -115,7 +115,8 @@ NativeThreads::NativeThreads(NativeProcess &process, NativeEnvironment &environm
 NativeThreads::~NativeThreads()
 {
 	if (std::getenv("RAVEN_TRACE_WAITS"))
-		std::fprintf(stderr, "waits: conditions looked at %llu times\n", (unsigned long long)condition_looks.load());
+		std::fprintf(stderr, "waits: conditions looked at %llu times\nwaits: processor times read %llu times\n",
+			(unsigned long long)condition_looks.load(), (unsigned long long)processor_times.load());
 	if (shared_change_listener == wake)
 		shared_change_listener = -1;
 	process.set_time_slicing(std::chrono::milliseconds(0), nullptr, nullptr);
@@ -1003,6 +1004,7 @@ bool NativeThreads::hand_over_to(uint32_t object)
 					continue;
 				any = true;
 				const uint64_t ran = thread_run_time(woken.thread->host_tid, woken.thread->snapshot.task);
+				processor_times.fetch_add(1, std::memory_order_relaxed);
 				if (woken.changed == started)
 					woken.woke = ran;
 				if (turns != woken.turns) {

@@ -3854,6 +3854,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_event_pingpong_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
             FAIL_REGULAR_EXPRESSION "conditions looked at [0-9][0-9][0-9]+ times"
             ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-pingpong-prefix")
+        # A setter handing over reads the woken thread's processor time, two files of /proc, only for one that runs on without waiting again:
+        # in 2000 round trips that is the exception.
+        add_test(NAME native_event_handover_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
+            ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong.exe)
+        set_tests_properties(native_event_handover_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            FAIL_REGULAR_EXPRESSION "processor times read [0-9][0-9][0-9][0-9]+ times"
+            ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-handover-prefix")
         # Of its 6000 wakes, the few a thread makes while it holds the turn anyway are served there; taking the turn for each made hundreds.
         set_property(TEST native_address_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: \\(call\\) WakeByAddress[A-Za-z]* calls=[0-9][0-9][0-9]")
         # Releasing a semaphore goes beside the turn in parallel mode, and no release is lost (semaphore_beside_client.c).
