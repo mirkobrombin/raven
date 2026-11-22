@@ -964,8 +964,12 @@ bool NativeThreads::hand_over_to(uint32_t object)
 		uint64_t turns;
 		std::chrono::steady_clock::time_point changed;
 		uint64_t waits;
-		// The processor time it had run when its turns last changed, and when it woke.
+		// The processor time it had run when first read after its turns last changed, and after it woke.
 		uint64_t ran = 0, woke = 0;
+	};
+	struct Busy {
+		Woken *woken;
+		pid_t host, task;
 	};
 	std::vector<Woken> waiting;
 	const auto started = std::chrono::steady_clock::now();
@@ -991,11 +995,16 @@ bool NativeThreads::hand_over_to(uint32_t object)
 	// longer than that, and the setter would go on before it ended. A wait on the clock of a tenth of a second bounds a thread that gets
 	// no processor at all. One the set did not wake (an event reset on its own wakes one waiter) is not waited for. The setter sleeps
 	// between looks: on two processors, spinning took the one the woken thread needed and made each round trip a hundred times slower.
+	// Processor time is two files of /proc for each thread, so it is read only of a thread that has not waited again within a tenth of a
+	// millisecond, no more often than that, and without the gate, which the woken thread takes to wait again.
 	handing.fetch_add(1, std::memory_order_acq_rel);
+	std::vector<Busy> busy;
+	auto count_at = started + std::chrono::microseconds(100);
 	for (;;) {
 		const uint32_t seen = moves.load(std::memory_order_acquire);
 		const auto now = std::chrono::steady_clock::now();
 		bool any = false, settled = true;
+		busy.clear();
 		{
 			std::lock_guard lock(gate);
 			for (auto &woken : waiting) {
@@ -1003,23 +1012,35 @@ bool NativeThreads::hand_over_to(uint32_t object)
 				if (turns == woken.turns && woken.changed == started)
 					continue;
 				any = true;
-				const uint64_t ran = thread_run_time(woken.thread->host_tid, woken.thread->snapshot.task);
-				processor_times.fetch_add(1, std::memory_order_relaxed);
-				if (woken.changed == started)
-					woken.woke = ran;
 				if (turns != woken.turns) {
 					woken.turns = turns;
 					woken.changed = now;
-					woken.ran = ran;
+					woken.ran = 0;
 				}
 				// A thread that woke is still in its old wait when it takes the turn, and its next call may be served in that same turn:
 				// only a wait it began since is a new one.
 				const bool waits = woken.thread->waits.load(std::memory_order_acquire) != woken.waits;
-				// Where the scheduler keeps no count, the clock stands in for it.
-				const bool spent = ran ? ran - woken.ran >= 1000000 || ran - woken.woke >= 5000000 :
-					now - woken.changed >= std::chrono::milliseconds(1) || now - started >= std::chrono::milliseconds(5);
-				if (!(woken.thread->state == GuestThread::State::done || waits || spent))
-					settled = false;
+				if (woken.thread->state != GuestThread::State::done && !waits)
+					busy.push_back({&woken, woken.thread->host_tid, woken.thread->snapshot.task});
+			}
+		}
+		if (!busy.empty()) {
+			settled = now >= count_at;
+			if (settled) {
+				for (const auto &[woken, host, task] : busy) {
+					const uint64_t ran = thread_run_time(host, task);
+					processor_times.fetch_add(1, std::memory_order_relaxed);
+					if (!woken->ran)
+						woken->ran = ran;
+					if (!woken->woke)
+						woken->woke = ran;
+					// Where the scheduler keeps no count, the clock stands in for it.
+					const bool spent = ran ? ran - woken->ran >= 1000000 || ran - woken->woke >= 5000000 :
+						now - woken->changed >= std::chrono::milliseconds(1) || now - started >= std::chrono::milliseconds(5);
+					if (!spent)
+						settled = false;
+				}
+				count_at = now + std::chrono::microseconds(100);
 			}
 		}
 		// None came yet: the set woke none of them, unless one stands woken and waits for a processor.
@@ -1269,9 +1290,9 @@ std::optional<uint32_t> NativeThreads::wait_beside(std::span<const uint32_t> obj
 		if (me->state == GuestThread::State::waiting)
 			me->state = GuestThread::State::running;
 	}
-	// Woken, it runs again as if it had taken a turn: the setter sees it move and waits until it calls, waits again or ends.
+	// Woken, it runs again as if it had taken a turn, which a setter handing over finds at its next look. It is not woken to see so: it
+	// could only sleep again until this thread waits again or ends, which wake it, and would take the processor this thread needs.
 	me->turns.fetch_add(1, std::memory_order_relaxed);
-	moved();
 	// Interrupted for anything but a job, or failed, the wait took nothing: the usual way waits again and finds out why.
 	if (result == raven_wait_interrupted || result == raven_wait_failed || result == raven_wait_ended || (limited && result == 0x102))
 		return std::nullopt;
