@@ -3,6 +3,7 @@
 #include "child_process.h"
 #include "sandbox.h"
 #include "kernel_context.h"
+#include "msix.h"
 #include "registry.h"
 #include "text.h"
 
@@ -631,6 +632,21 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		// ShellExecute takes one pair of quotes off the target: Chromium quotes every address.
 		if (target.size() >= 2 && target.front() == u'"' && target.back() == u'"')
 			target = target.substr(1, target.size() - 2);
+		constexpr std::u16string_view apps_folder = u"shell:AppsFolder\\";
+		if (target.size() >= apps_folder.size() && equal_fold(std::u16string_view(target).substr(0, apps_folder.size()), apps_folder)) {
+			if (!equal_fold(operation, u"open"))
+				return 31;
+			const auto app = find_msix_application(NativePrefix::from_environment(), std::u16string_view(target).substr(apps_folder.size()));
+			if (!app)
+				return 2;
+			uint32_t error = 0;
+			const int standard[3] = {0, 1, 2};
+			const auto line = u"\"" + app->image + u"\"" + (parameters.empty() ? u"" : u" " + parameters);
+			const auto environment = context.environment_block ? context.environment_block() : std::u16string();
+			started = start_program(context, app->image, line, directory.empty() ? app->directory : directory, standard, environment,
+				nullptr, error, {}, app->aumid);
+			return started ? 42 : error == 193 ? 11 : error;
+		}
 		// Who opens a document or an address: the choice the person made for its kind in the control panel; otherwise the program of the
 		// prefix registered for it, before any Linux program.
 		const auto open_with = [&](const std::u16string &kind, const std::u16string &argument) -> std::optional<uint64_t> {

@@ -104,6 +104,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_link_options(raven-bootstrap PRIVATE -fno-sanitize=all -nostdlib -static
         -Wl,-no-pie,-Ttext-segment=0x700000000000,-e,_start,--build-id=none)
     add_library(raven_cpu STATIC cpu/native_cpu.cpp cpu/gates.S cpu/preludes.S cpu/agent.S cpu/agent_tasks.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/audio_engine.cpp nt/audio_service.cpp nt/warm_host.cpp nt/warm_client.cpp nt/event_pulse.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/guest_events.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/apps.cpp nt/sandbox.cpp nt/sandbox_api.cpp nt/confine.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/unload_trace.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp)
+    target_sources(raven_cpu PRIVATE nt/msix.cpp)
     target_include_directories(raven_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     set(NLS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/windows-codepages)
     file(SHA256 ${NLS_SOURCE}/c_1252.txt NLS_TEXT_HASH)
@@ -2076,6 +2077,29 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${appx_fixture}/msix-deployment-client.exe)
                 set_tests_properties(native_msix_deployment_${installer_arch} PROPERTIES TIMEOUT 60
                     PASS_REGULAR_EXPRESSION "Native entry returned 0 " ENVIRONMENT RAVEN_PREFIX=${appx_fixture}/deployment-prefix)
+                find_program(MSIX_OPENSSL_TOOL openssl)
+                if(MSIX_OPENSSL_TOOL AND OPENSSL_FOUND)
+                    set(msix_fixture ${appx_fixture}/signed)
+                    set(msix_sources ${PROJECT_SOURCE_DIR}/testdata/native_loader)
+                    add_custom_command(OUTPUT ${msix_fixture}/app.msix ${msix_fixture}/app-tampered.msix
+                        ${msix_fixture}/signer.cer ${msix_fixture}/client.exe
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${msix_fixture}
+                        COMMAND ${installer_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                            -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${msix_fixture}/app.exe
+                            ${msix_sources}/msix_application.c -lkernel32
+                        COMMAND ${installer_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin -DMSIX_FULL_TRUST
+                            -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${msix_fixture}/client.exe
+                            ${msix_sources}/msix_deployment_client.c -lruntimeobject -lshell32 -lkernel32
+                        COMMAND ${Python3_EXECUTABLE} -B ${msix_sources}/msix_fixtures.py ${msix_fixture}/app.exe
+                            ${installer_arch} ${msix_fixture} ${MSIX_OPENSSL_TOOL}
+                        DEPENDS ${msix_sources}/msix_application.c ${msix_sources}/msix_deployment_client.c
+                            ${msix_sources}/msix_fixtures.py ${msix_sources}/appx_fixtures.py VERBATIM)
+                    add_custom_target(msix_full_trust_fixture_${installer_arch} ALL
+                        DEPENDS ${msix_fixture}/app.msix ${msix_fixture}/app-tampered.msix ${msix_fixture}/signer.cer ${msix_fixture}/client.exe)
+                    add_test(NAME native_msix_full_trust_${installer_arch} COMMAND ${Python3_EXECUTABLE} -B ${msix_sources}/msix_fixtures.py
+                        --run $<TARGET_FILE:raven> ${msix_fixture}/client.exe ${msix_fixture})
+                    set_tests_properties(native_msix_full_trust_${installer_arch} PROPERTIES TIMEOUT 100)
+                endif()
                 # Delta patches mspatcha_fixtures.py writes, applied through the mspatcha exports by name, handle and buffer.
                 set(mspatcha_fixture ${CMAKE_CURRENT_BINARY_DIR}/mspatcha-fixtures/${installer_arch})
                 add_custom_command(OUTPUT ${mspatcha_fixture}/mspatcha-client.exe ${mspatcha_fixture}/delta.pa19
@@ -5445,19 +5469,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 endforeach()
                 # raven-deployment.dll, the PackageManager class of the Windows Runtime for each width: Raven code on the public headers.
                 set(deployment_source ${PROJECT_SOURCE_DIR}/native/guest/raven-deployment)
+                set(winrt_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winrt)
+                set(deployment_sources ${deployment_source}/deployment.c ${deployment_source}/install.c
+                    ${winrt_source}/winrt.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c)
+                set(deployment_libraries -lruntimeobject -lole32 -lshlwapi -lkernel32 -lgcc)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-deployment.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-deployment.dll
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-deployment.dll
-                        ${deployment_source}/deployment.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lkernel32 -lgcc
+                        ${deployment_sources} ${deployment_libraries}
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-deployment.dll
-                        ${deployment_source}/deployment.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lkernel32 -lgcc
-                    DEPENDS ${deployment_source}/deployment.c VERBATIM)
+                        ${deployment_sources} ${deployment_libraries}
+                    DEPENDS ${deployment_sources} ${winrt_source}/winrt.h ${winrt_source}/foundation.h
+                        ${PROJECT_SOURCE_DIR}/native/guest/raven-appx/appxpackaging.h VERBATIM)
                 add_custom_target(deployment_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-deployment.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-deployment.dll)
                 # raven-web.dll, the HTTP classes of the Windows Runtime (Windows.Web.Http, its Headers and Filters) and Windows.Foundation.Uri,
                 # for each width: Raven code over WinINet, on the C declarations scripts/generate-winrt-header.py writes from Microsoft's
                 # published metadata (native/guest/raven-web/windows.web.http.h and native/guest/raven-winrt/foundation.h).
                 set(web_source ${PROJECT_SOURCE_DIR}/native/guest/raven-web)
-                set(winrt_source ${PROJECT_SOURCE_DIR}/native/guest/raven-winrt)
                 set(web_sources ${web_source}/http.c ${web_source}/headers.c ${web_source}/content.c ${web_source}/transport.c ${web_source}/uri.c
                     ${winrt_source}/winrt.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c)
                 set(web_libraries -lruntimeobject -lwininet -lurlmon -lole32 -loleaut32 -lkernel32 -lgcc)

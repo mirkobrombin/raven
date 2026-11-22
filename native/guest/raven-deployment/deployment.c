@@ -5,17 +5,19 @@
 /* Raven deployment component: the Windows.Management.Deployment.PackageManager class of the Windows Runtime, which programs ask which
  * packaged applications are installed, before they install a desktop version of one.
  *
- * Raven installs no packaged applications, so every query finds none: a collection of packages or users is empty, and a package asked
- * for by its full name is null, as Windows answers when that package is absent. Deploying, staging or removing packages is not
- * supported. */
+ * AddPackageAsync reads a local MSIX package and installs its full-trust applications. The package store publishes its contents
+ * only when the signature, manifest and payload have been checked. */
 #define INITGUID
 #define CINTERFACE
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shlwapi.h>
 #include <winstring.h>
 #include <activation.h>
 #include <windows.management.deployment.h>
+#include "../raven-appx/appxpackaging.h"
+#include "../raven-winrt/winrt.h"
 
 #define ALLOC(size) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size))
 #define FREE(block) HeapFree(GetProcessHeap(), 0, (block))
@@ -23,6 +25,8 @@
 typedef __x_ABI_CWindows_CManagement_CDeployment_CIPackageManager package_manager;
 typedef __FIIterable_1_Windows__CApplicationModel__CPackage package_iterable;
 typedef __FIAsyncOperationWithProgress_2_Windows__CManagement__CDeployment__CDeploymentResult_DeploymentProgress deployment_operation;
+
+HRESULT install_msix(IAppxPackageReader *reader, struct winrt_async *operation);
 
 static const WCHAR class_name[] = L"Windows.Management.Deployment.PackageManager";
 static LONG objects;
@@ -203,11 +207,138 @@ static HRESULT unsupported(deployment_operation **operation)
 	return E_NOTIMPL;
 }
 
+static void free_package_path(void *path)
+{
+	FREE(path);
+}
+
+static HRESULT local_package_path(__x_ABI_CWindows_CFoundation_CIUriRuntimeClass *uri, WCHAR **path)
+{
+	HSTRING absolute = NULL;
+	HRESULT result = uri->lpVtbl->get_AbsoluteUri(uri, &absolute);
+	if (FAILED(result))
+		return result;
+
+	UINT32 length = 0;
+	const WCHAR *text = WindowsGetStringRawBuffer(absolute, &length);
+	if (length < 8 || length >= 32767 || (UINT32)lstrlenW(text) != length || StrChrW(text, L'?') || StrChrW(text, L'#')) {
+		WindowsDeleteString(absolute);
+		return E_INVALIDARG;
+	}
+	DWORD capacity = length + 1;
+	WCHAR *resolved = ALLOC(capacity * sizeof(*resolved));
+	if (!resolved) {
+		WindowsDeleteString(absolute);
+		return E_OUTOFMEMORY;
+	}
+	result = PathCreateFromUrlW(text, resolved, &capacity, 0);
+	WindowsDeleteString(absolute);
+	if (SUCCEEDED(result) && (capacity < 3 || (DWORD)lstrlenW(resolved) != capacity || resolved[1] != L':' || resolved[2] != L'\\'))
+		result = E_INVALIDARG;
+	if (FAILED(result)) {
+		FREE(resolved);
+		return result;
+	}
+	*path = resolved;
+	return S_OK;
+}
+
+struct deployment_result {
+	struct winrt_object object;
+	struct winrt_interface result;
+	GUID activity;
+};
+
+static HRESULT WINAPI result_text(void *iface, HSTRING *out)
+{
+	return WindowsCreateString(NULL, 0, out);
+}
+
+static HRESULT WINAPI result_activity(void *iface, GUID *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = ((struct deployment_result *)winrt_object_of(iface))->activity;
+	return S_OK;
+}
+
+static HRESULT WINAPI result_error(void *iface, HRESULT *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = S_OK;
+	return S_OK;
+}
+
+static const __x_ABI_CWindows_CManagement_CDeployment_CIDeploymentResultVtbl result_table = {
+	WINRT_INSPECTABLE, (void *)result_text, (void *)result_activity, (void *)result_error,
+};
+static const struct winrt_entry result_entries[] = {
+	WINRT_ENTRY(struct deployment_result, result, IID___x_ABI_CWindows_CManagement_CDeployment_CIDeploymentResult), WINRT_END,
+};
+static const struct winrt_class result_class = {L"Windows.Management.Deployment.DeploymentResult", result_entries, NULL};
+
+static HRESULT deploy_package(struct winrt_async *operation, void *path, union winrt_value *value)
+{
+	if (winrt_async_canceled(operation))
+		return E_ABORT;
+	HRESULT result = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+	if (FAILED(result))
+		return result;
+	IAppxFactory *factory = NULL;
+	IAppxPackageReader *reader = NULL;
+	IStream *stream = NULL;
+	result = SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, NULL, &stream);
+	if (SUCCEEDED(result))
+		result = CoCreateInstance(&CLSID_AppxFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IAppxFactory, (void **)&factory);
+	if (SUCCEEDED(result))
+		result = factory->lpVtbl->CreatePackageReader(factory, stream, &reader);
+	if (SUCCEEDED(result)) {
+		typedef HRESULT (WINAPI *verify_package)(IAppxPackageReader *);
+		HMODULE appx = GetModuleHandleW(L"raven-appx.dll");
+		verify_package verify = appx ? (verify_package)GetProcAddress(appx, "RavenAppxVerifyPackage") : NULL;
+		result = verify ? verify(reader) : TRUST_E_SUBJECT_NOT_TRUSTED;
+	}
+	struct deployment_result *answer = NULL;
+	if (SUCCEEDED(result)) {
+		answer = winrt_new(&result_class, sizeof(*answer), NULL);
+		if (!answer)
+			result = E_OUTOFMEMORY;
+		else {
+			answer->result.table = &result_table;
+			result = CoCreateGuid(&answer->activity);
+		}
+	}
+	if (SUCCEEDED(result))
+		result = install_msix(reader, operation);
+	if (SUCCEEDED(result))
+		value->object = &answer->result;
+	else if (answer)
+		winrt_put(&answer->result);
+	winrt_put(reader);
+	winrt_put(factory);
+	winrt_put(stream);
+	CoUninitialize();
+	return result;
+}
+
 static HRESULT WINAPI manager_add(package_manager *iface, __x_ABI_CWindows_CFoundation_CIUriRuntimeClass *uri,
 	__FIIterable_1_Windows__CFoundation__CUri *dependencies, __x_ABI_CWindows_CManagement_CDeployment_CDeploymentOptions options,
 	deployment_operation **operation)
 {
-	return unsupported(operation);
+	if (!operation)
+		return E_POINTER;
+	*operation = NULL;
+	if (!uri)
+		return E_INVALIDARG;
+	if (dependencies || options)
+		return E_NOTIMPL;
+	WCHAR *path = NULL;
+	HRESULT result = local_package_path(uri, &path);
+	if (FAILED(result))
+		return result;
+	return winrt_async_start(&IID___FIAsyncOperationWithProgress_2_Windows__CManagement__CDeployment__CDeploymentResult_DeploymentProgress,
+		TRUE, WINRT_RESULT_OBJECT, deploy_package, path, free_package_path, (void **)operation);
 }
 
 static HRESULT WINAPI manager_remove(package_manager *iface, HSTRING name, deployment_operation **operation) { return unsupported(operation); }
@@ -319,7 +450,7 @@ __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActi
 	return S_OK;
 }
 
-__declspec(dllexport) HRESULT WINAPI DllCanUnloadNow(void) { return objects ? S_FALSE : S_OK; }
+__declspec(dllexport) HRESULT WINAPI DllCanUnloadNow(void) { return objects || winrt_in_use() ? S_FALSE : S_OK; }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {

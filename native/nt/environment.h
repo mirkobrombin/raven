@@ -39,6 +39,7 @@ struct NativeLaunch {
 	std::vector<InheritedHandle> inherited;
 	// The primary thread stays suspended after its process environment and request channel exist.
 	int suspended_fd = -1;
+	std::u16string app_user_model_id;
 };
 
 // Initial x64 thread fields only. Mappings belong to the process and survive this view.

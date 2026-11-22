@@ -102,6 +102,7 @@
         "native/guest/raven-d3dcompiler/ravenhost32.def",
         "native/guest/raven-d3dcompiler/ravenhost64.def",
         "native/guest/raven-deployment/deployment.c",
+        "native/guest/raven-deployment/install.c",
         "native/guest/raven-dism/dism.c",
         "native/guest/raven-dism/dism.manifest",
         "native/guest/raven-dism/dism.rc",

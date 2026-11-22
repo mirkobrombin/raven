@@ -160,7 +160,7 @@ void register_canvas_service(ApiRegistry &registry, KernelContext &context);
 // Starts the program an application name or command line names, looked up the way Windows does; null with the Windows error otherwise.
 std::shared_ptr<class ProcessObject> start_program(KernelContext &context, const std::u16string &application, const std::u16string &line,
 	const std::u16string &directory, const int (&standard)[3], const std::u16string &environment, int *gate, uint32_t &error,
-	std::vector<InheritedHandle> inherited = {});
+	std::vector<InheritedHandle> inherited = {}, std::u16string_view app_user_model_id = {});
 // Puts a child process into a job; false with the Windows error otherwise.
 bool assign_to_job(KernelContext &context, uint64_t job, const std::shared_ptr<class ProcessObject> &process, uint32_t &error);
 // Runs the user APCs queued to the current thread, oldest first, as an alertable wait does before it ends with WAIT_IO_COMPLETION; true

@@ -1,6 +1,7 @@
 #include <atomic>
 #include "kernel_context.h"
 #include "actctx.h"
+#include "msix.h"
 #include "text.h"
 #include "x86_compat_api.h"
 #include "unwind.h"
@@ -1418,32 +1419,8 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[0], bytes);
 		call.ret(1);
 	});
+	register_msix_api(registry, context);
 	// Windows 10 Pro (PRODUCT_PROFESSIONAL), whatever version the program asks about.
-	// A program in the prefix runs outside any app package: the package queries answer APPMODEL_ERROR_NO_PACKAGE, with no length.
-	for (const char *name : {"GetCurrentPackageFullName", "GetCurrentPackageFamilyName", "GetCurrentPackageId", "GetCurrentPackagePath",
-			"GetCurrentApplicationUserModelId"})
-		registry.add(name, 2, [](ApiCall &call) {
-			if (call[0])
-				call.store<uint32_t>(call[0], 0);
-			call.ret(15700);
-		});
-	// The same for any process, which is never packaged either: the length follows the process handle.
-	for (const char *name : {"GetPackageFullName", "GetPackageFamilyName", "GetApplicationUserModelId"})
-		registry.add(name, 3, [](ApiCall &call) {
-			if (call[1])
-				call.store<uint32_t>(call[1], 0);
-			call.ret(15700);
-		});
-	// No app package is installed: a family has no packages, and the counts say so.
-	registry.add("GetPackagesByPackageFamily", 5, [](ApiCall &call) {
-		if (!call[0] || !call[1] || !call[3]) {
-			call.ret(87);
-			return;
-		}
-		call.store<uint32_t>(call[1], 0);
-		call.store<uint32_t>(call[3], 0);
-		call.ret(0);
-	});
 	registry.add("GetProductInfo", 5, [](ApiCall &call) {
 		if (!call[4]) {
 			call.fail(87);

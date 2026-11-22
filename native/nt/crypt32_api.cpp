@@ -1,5 +1,6 @@
 #include "kernel_context.h"
 #include "authenticode.h"
+#include "msix.h"
 #include "text.h"
 
 #ifdef RAVEN_OPENSSL
@@ -224,6 +225,92 @@ std::vector<uint8_t> der_of(X509 *certificate)
 	return bytes;
 }
 
+uint32_t verify_package_signature(std::span<const uint8_t> p7x, std::span<const uint8_t> hashes, std::u16string_view publisher)
+{
+	constexpr uint32_t no_signature = 0x800b0100U, bad_digest = 0x80096010U, bad_signature = 0x80096004U,
+		untrusted = 0x800b0109U, expired = 0x800b0101U, publisher_mismatch = 0x80080204U;
+	if (p7x.size() <= 4 || std::memcmp(p7x.data(), "PKCX", 4))
+		return no_signature;
+	const unsigned char *at = p7x.data() + 4;
+	std::unique_ptr<PKCS7, decltype(&PKCS7_free)> signature(d2i_PKCS7(nullptr, &at, long(p7x.size() - 4)), PKCS7_free);
+	if (!signature || at != p7x.data() + p7x.size() || !PKCS7_type_is_signed(signature.get()) || !signature->d.sign->contents)
+		return no_signature;
+	const auto *content = signature->d.sign->contents;
+	char oid[64]{};
+	OBJ_obj2txt(oid, sizeof oid, content->type, 1);
+	if (std::strcmp(oid, "1.3.6.1.4.1.311.2.1.4") || !content->d.other || content->d.other->type != V_ASN1_SEQUENCE)
+		return no_signature;
+	const auto bytes = asn1_bytes(content->d.other->value.sequence);
+	const auto sequence = [](const unsigned char *&cursor, const unsigned char *end) -> size_t {
+		long size = 0;
+		int tag = 0, type = 0;
+		const int flags = ASN1_get_object(&cursor, &size, &tag, &type, long(end - cursor));
+		return flags == V_ASN1_CONSTRUCTED && tag == V_ASN1_SEQUENCE && type == V_ASN1_UNIVERSAL && size > 0 &&
+			size <= end - cursor ? size_t(size) : 0;
+	};
+	if (bytes.empty())
+		return no_signature;
+	const auto *end = bytes.data() + bytes.size();
+	at = bytes.data();
+	const auto signed_size = sequence(at, end);
+	if (!signed_size || at + signed_size != end)
+		return no_signature;
+	const auto *signed_data = at;
+	const auto subject_size = sequence(at, end);
+	if (!subject_size)
+		return no_signature;
+	at += subject_size;
+	std::unique_ptr<X509_SIG, decltype(&X509_SIG_free)> digest(d2i_X509_SIG(nullptr, &at, long(end - at)), X509_SIG_free);
+	if (!digest || at != end)
+		return no_signature;
+	const X509_ALGOR *algorithm = nullptr;
+	const ASN1_OCTET_STRING *expected = nullptr;
+	X509_SIG_get0(digest.get(), &algorithm, &expected);
+	const int kind = OBJ_obj2nid(algorithm->algorithm);
+	const size_t digest_size = kind == NID_sha256 ? 32 : kind == NID_sha384 ? 48 : kind == NID_sha512 ? 64 : 0;
+	if (!digest_size || (hashes.size() != 4 + 4 * (4 + digest_size) && hashes.size() != 4 + 5 * (4 + digest_size)) ||
+		hashes.size() != size_t(ASN1_STRING_length(expected)) || std::memcmp(hashes.data(), ASN1_STRING_get0_data(expected), hashes.size()))
+		return bad_digest;
+	std::unique_ptr<BIO, decltype(&BIO_free)> payload(BIO_new_mem_buf(signed_data, int(signed_size)), BIO_free);
+	if (!payload || PKCS7_verify(signature.get(), nullptr, nullptr, payload.get(), nullptr, PKCS7_NOVERIFY | PKCS7_BINARY) != 1)
+		return bad_signature;
+	STACK_OF(X509) *signers = PKCS7_get0_signers(signature.get(), nullptr, 0);
+	X509 *signer = signers && sk_X509_num(signers) == 1 ? sk_X509_value(signers, 0) : nullptr;
+	sk_X509_free(signers);
+	if (!signer || !(X509_get_extension_flags(signer) & EXFLAG_XKUSAGE) || !(X509_get_extended_key_usage(signer) & XKU_CODE_SIGN) ||
+		!(X509_get_key_usage(signer) & KU_DIGITAL_SIGNATURE))
+		return bad_signature;
+	const auto *name = X509_get_subject_name(signer);
+	if (publisher != from_utf8(name_text(name, 3 | 0x02000000)) && publisher != from_utf8(name_text(name, 3)))
+		return publisher_mismatch;
+	if (X509_cmp_current_time(X509_get0_notBefore(signer)) != -1 || X509_cmp_current_time(X509_get0_notAfter(signer)) != 1)
+		return expired;
+
+	// A developer can trust an exact signing certificate in this prefix. Guest drives do not contain this store.
+	const auto encoded = der_of(signer);
+	std::array<unsigned char, SHA256_DIGEST_LENGTH> fingerprint{};
+	SHA256(encoded.data(), encoded.size(), fingerprint.data());
+	std::string filename;
+	for (const unsigned char byte : fingerprint) {
+		constexpr char hex[] = "0123456789abcdef";
+		filename += hex[byte >> 4];
+		filename += hex[byte & 15];
+	}
+	const auto path = NativePrefix::from_environment().root() / "msix-trusted-publishers" / (filename + ".cer");
+	std::ifstream input(path, std::ios::binary);
+	std::vector<uint8_t> trusted(encoded.size());
+	if (!encoded.empty() && input.read(reinterpret_cast<char *>(trusted.data()), std::streamsize(trusted.size())) &&
+		input.peek() == std::ifstream::traits_type::eof() && encoded == trusted)
+		return 0;
+
+	std::unique_ptr<X509_STORE_CTX, decltype(&X509_STORE_CTX_free)> context(X509_STORE_CTX_new(), X509_STORE_CTX_free);
+	auto *roots = trust_anchors();
+	if (!roots || !context || X509_STORE_CTX_init(context.get(), roots, signer, signature->d.sign->cert) != 1)
+		return untrusted;
+	X509_STORE_CTX_set_purpose(context.get(), X509_PURPOSE_ANY);
+	return X509_verify_cert(context.get()) == 1 ? 0 : untrusted;
+}
+
 X509Pointer parse(std::span<const uint8_t> bytes)
 {
 	const unsigned char *at = bytes.data();
@@ -262,6 +349,21 @@ uint32_t trust_of(int error)
 
 void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 {
+	registry.add("RavenVerifyPackageSignature", 5, [&context](ApiCall &call) {
+		const uint32_t thread = context.environment.thread_id();
+		remember_msix_verification(thread, {}, {});
+		const uint32_t signature_size = call.u32(1), hash_size = call.u32(3);
+		if (!call[0] || !call[2] || !call[4] || signature_size > 1024 * 1024 || hash_size > 344) {
+			call.ret(0x80070057U);
+			return;
+		}
+		const auto hashes = call.read(call[2], hash_size);
+		const auto publisher = call.wide(call[4], 1024);
+		const auto status = verify_package_signature(call.read(call[0], signature_size), hashes, publisher);
+		if (!status)
+			remember_msix_verification(thread, publisher, hashes);
+		call.ret(status);
+	});
 	auto &objects = context.objects;
 	auto &allocator = context.allocator;
 	// A certificate context in the guest points at its encoded bytes and at a CERT_INFO with the fields programs read most.

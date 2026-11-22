@@ -2,6 +2,7 @@
 #include "actctx.h"
 #include "apps.h"
 #include "confine.h"
+#include "msix.h"
 #include "sandbox.h"
 #include "text.h"
 #include "system_exports.h"
@@ -424,11 +425,19 @@ std::optional<NativePaths::Resolved> NativePaths::resolve_direct(const std::u16s
 {
 	if (path.size() < 3)
 		return std::nullopt;
-	auto host = drive_root(path[0]);
+	const bool packaged = path.size() >= windows_apps.size() &&
+		equal_fold(std::u16string_view(path).substr(0, windows_apps.size()), windows_apps) &&
+		(path.size() == windows_apps.size() || path[windows_apps.size()] == u'\\');
+	auto host = packaged ? std::optional(msix_store(prefix)) : drive_root(path[0]);
 	if (!host)
 		return std::nullopt;
 	Resolved result{*host, true, true};
-	std::u16string_view rest = std::u16string_view(path).substr(3);
+	std::u16string_view rest = std::u16string_view(path).substr(packaged ? windows_apps.size() : 3);
+	if (packaged) {
+		std::error_code error;
+		result.exists = std::filesystem::is_directory(*host, error);
+		result.writable = false;
+	}
 	while (!rest.empty()) {
 		const auto end = rest.find(u'\\');
 		const auto part = rest.substr(0, end);
@@ -451,7 +460,7 @@ std::optional<NativePaths::Resolved> NativePaths::resolve_direct(const std::u16s
 			break;
 		rest = rest.substr(end + 1);
 	}
-	if ((path[0] | 0x20) != u'z' && app_layer().active())
+	if (!packaged && (path[0] | 0x20) != u'z' && app_layer().active())
 		apply_layer(result);
 	if ((path[0] | 0x20) == u'z') {
 		const auto access = sandbox().access(result.host);
@@ -459,7 +468,7 @@ std::optional<NativePaths::Resolved> NativePaths::resolve_direct(const std::u16s
 			sandbox().refuse(result.host, "open");
 			return Resolved{std::filesystem::path("/proc/raven-denied") / result.host.filename(), false, false, true, false};
 		}
-		result.writable = access == Sandbox::Access::write;
+		result.writable = access == Sandbox::Access::write && changeable(result.host);
 	}
 	return result;
 }
@@ -474,6 +483,13 @@ bool NativePaths::listed(const std::filesystem::path &host) const
 
 bool NativePaths::changeable(const std::filesystem::path &host) const
 {
+	const std::string_view path = host.native(), root = prefix.root().native();
+	if (path.size() > root.size() && path.starts_with(root) && path[root.size()] == '/') {
+		const auto relative = path.substr(root.size() + 1);
+		const auto first = relative.substr(0, relative.find('/'));
+		if (first == "msix-packages" || first == "msix-trusted-publishers")
+			return false;
+	}
 	return in_prefix(host) || sandbox().access(host) == Sandbox::Access::write;
 }
 
@@ -820,6 +836,8 @@ std::u16string NativePaths::dos(const std::filesystem::path &host) const
 		}
 		return std::nullopt;
 	};
+	if (const auto tail = relative(msix_store(prefix)))
+		return std::u16string(windows_apps) + *tail;
 	for (char16_t letter = u'a'; letter < u'z'; ++letter)
 		if (const auto root = drive_root(letter))
 			if (const auto tail = relative(*root))

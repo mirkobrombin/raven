@@ -301,6 +301,8 @@ std::shared_ptr<ProcessObject> spawn_child(const ChildLaunch &launch, uint32_t &
 		arguments.push_back(std::move(option));
 	arguments.push_back("--command-line=" + to_utf8(launch.command_line));
 	arguments.push_back("--directory=" + to_utf8(launch.directory));
+	if (!launch.app_user_model_id.empty())
+		arguments.push_back("--app-user-model-id=" + to_utf8(launch.app_user_model_id));
 	arguments.push_back(launch.image.string());
 	std::vector<char *> argv;
 	for (auto &argument : arguments)

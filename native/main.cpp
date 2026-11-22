@@ -264,7 +264,7 @@ int main(int argc, char **argv)
 	bool wayland=false,x11=false;
 	bool inherited_stdio=false;
 	// A program started by another one carries the command line and the directory its parent chose.
-	std::optional<std::string> command_line_text, directory_text;
+	std::optional<std::string> command_line_text, directory_text, app_user_model_id;
 	int environment_fd=-1,suspended_fd=-1,inherit_fd=-1,handle_channel_fd=-1,guest_error_fd=2;
 	bool elevated=false,noninteractive=false;
 	for (bool more=run_process;more && argc>first_file;) {
@@ -285,6 +285,7 @@ int main(int argc, char **argv)
 		else if (option=="--stdio=inherit") inherited_stdio=true;
 		else if (option.starts_with("--command-line=")) command_line_text=std::string(option.substr(15));
 		else if (option.starts_with("--directory=")) directory_text=std::string(option.substr(12));
+		else if (option.starts_with("--app-user-model-id=")) app_user_model_id=std::string(option.substr(20));
 		else if (option.starts_with("--environment-fd=")) environment_fd=std::atoi(std::string(option.substr(17)).c_str());
 		else if (option.starts_with("--suspended-fd=")) {
 			suspended_fd=std::atoi(std::string(option.substr(15)).c_str());
@@ -925,6 +926,7 @@ int main(int argc, char **argv)
 						launch->suspended_fd = suspended_fd;
 						if (command_line_text) launch->command_line=raven::from_utf8(*command_line_text);
 						if (directory_text) launch->directory=raven::from_utf8(*directory_text);
+						if (app_user_model_id) launch->app_user_model_id=raven::from_utf8(*app_user_model_id);
 						if (handle_channel_fd>=0) raven::set_parent_channel(handle_channel_fd);
 						if (inherit_fd>=0) {
 							// The handles the creator passed on arrive as descriptors, described in an anonymous file.

@@ -263,6 +263,73 @@ static HRESULT required_part(appx_archive *archive, const WCHAR *name, BYTE **da
 	return entry ? appx_archive_extract(archive, entry, data, size) : APPX_E_MISSING_REQUIRED_FILE;
 }
 
+__declspec(dllexport) HRESULT WINAPI RavenAppxVerifyPackage(IAppxPackageReader *reader)
+{
+	if (!reader || reader->lpVtbl != &package_table)
+		return E_INVALIDARG;
+	package *self = (package *)reader;
+	appx_entry *signature = appx_archive_find(self->archive, L"AppxSignature.p7x");
+	if (!signature)
+		return TRUST_E_NOSIGNATURE;
+	if (signature->size > 1024 * 1024 || signature->compressed > 1024 * 1024)
+		return APPX_E_CORRUPT_CONTENT;
+	typedef HRESULT (WINAPI *verify_signature)(const BYTE *, UINT32, const BYTE *, UINT32, const WCHAR *);
+	HMODULE host = GetModuleHandleW(L"ravenhost.dll");
+	if (!host)
+		host = LoadLibraryW(L"ravenhost.dll");
+	verify_signature verify = host ? (verify_signature)GetProcAddress(host, "RavenVerifyPackageSignature") : NULL;
+	if (!verify)
+		return TRUST_E_SUBJECT_NOT_TRUSTED;
+
+	const appx_hash *hash = &self->map->hash;
+	BYTE hashes[4 + 5 * (4 + 64)];
+	memcpy(hashes, "APPX", 4);
+	static const char tags[][5] = {"AXPC", "AXCD", "AXCT", "AXBM", "AXCI"};
+	for (UINT32 index = 0; index < ARRAYSIZE(tags); ++index)
+		memcpy(hashes + 4 + index * (4 + hash->length), tags[index], 4);
+	const UINT32 stride = 4 + hash->length;
+	HRESULT result = appx_archive_signed_hashes(self->archive, signature, hash->algorithm, hashes + 8, hashes + 8 + stride, hash->length);
+	BYTE *types = NULL;
+	UINT64 types_size = 0;
+	if (SUCCEEDED(result))
+		result = required_part(self->archive, L"[Content_Types].xml", &types, &types_size);
+	if (SUCCEEDED(result))
+		result = appx_hash_data(hash, types, (UINT32)types_size, hashes + 8 + 2 * stride);
+	FREE(types);
+	if (SUCCEEDED(result))
+		result = appx_hash_data(hash, self->map_data, (UINT32)self->map_size, hashes + 8 + 3 * stride);
+	appx_entry *integrity = appx_archive_find(self->archive, L"AppxMetadata/CodeIntegrity.cat");
+	if (SUCCEEDED(result) && integrity) {
+		BYTE *data = NULL;
+		UINT64 size = 0;
+		result = appx_archive_extract(self->archive, integrity, &data, &size);
+		if (SUCCEEDED(result))
+			result = appx_hash_data(hash, data, (UINT32)size, hashes + 8 + 4 * stride);
+		FREE(data);
+	}
+	BYTE *p7x = NULL;
+	UINT64 p7x_size = 0;
+	if (SUCCEEDED(result))
+		result = appx_archive_extract(self->archive, signature, &p7x, &p7x_size);
+
+	IAppxManifestReader *manifest = NULL;
+	IAppxManifestPackageId *id = NULL;
+	WCHAR *publisher = NULL;
+	if (SUCCEEDED(result))
+		result = package_manifest(reader, &manifest);
+	if (SUCCEEDED(result))
+		result = manifest->lpVtbl->GetPackageId(manifest, &id);
+	if (SUCCEEDED(result))
+		result = id->lpVtbl->GetPublisher(id, &publisher);
+	if (SUCCEEDED(result))
+		result = verify(p7x, (UINT32)p7x_size, hashes, 4 + (integrity ? 5 : 4) * stride, publisher);
+	CoTaskMemFree(publisher);
+	if (id) id->lpVtbl->Release(id);
+	if (manifest) manifest->lpVtbl->Release(manifest);
+	FREE(p7x);
+	return result;
+}
+
 HRESULT appx_package_reader(IStream *stream, IAppxPackageReader **out)
 {
 	*out = NULL;

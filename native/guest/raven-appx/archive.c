@@ -58,7 +58,7 @@ HRESULT appx_archive_open(IStream *stream, appx_archive **out)
 		}
 	if (SUCCEEDED(result) && record < 0)
 		result = APPX_E_CORRUPT_CONTENT;
-	UINT64 count = 0, directory = 0, directory_size = 0;
+	UINT64 count = 0, directory = 0, directory_size = 0, zip64_end = 0;
 	if (SUCCEEDED(result)) {
 		const BYTE *eocd = end + record;
 		count = u16(eocd + 10);
@@ -67,7 +67,8 @@ HRESULT appx_archive_open(IStream *stream, appx_archive **out)
 		/* ZIP64: the locator just before the record points at the ZIP64 end of central directory, which holds the real values. */
 		if ((count == 0xffff || directory_size == 0xffffffff || directory == 0xffffffff) && record >= 20 && u32(eocd - 20) == 0x07064b50) {
 			BYTE zip64[56];
-			result = read_at(stream, u64(eocd - 20 + 8), zip64, sizeof zip64);
+			zip64_end = u64(eocd - 20 + 8);
+			result = read_at(stream, zip64_end, zip64, sizeof zip64);
 			if (SUCCEEDED(result) && u32(zip64) != 0x06064b50)
 				result = APPX_E_CORRUPT_CONTENT;
 			if (SUCCEEDED(result)) {
@@ -95,6 +96,11 @@ HRESULT appx_archive_open(IStream *stream, appx_archive **out)
 	}
 	archive->refs = 1;
 	archive->stream = stream;
+	archive->directory = directory;
+	archive->directory_size = directory_size;
+	archive->end = total - tail + (UINT64)record;
+	archive->zip64_end = zip64_end;
+	archive->size = total;
 	IStream_AddRef(stream);
 	InitializeCriticalSection(&archive->lock);
 	result = read_at(stream, directory, bytes, (UINT32)directory_size);
@@ -111,6 +117,8 @@ HRESULT appx_archive_open(IStream *stream, appx_archive **out)
 			break;
 		}
 		appx_entry *entry = &archive->entries[archive->count];
+		entry->central = directory + at;
+		entry->central_size = 46 + name_length + extra_length + comment_length;
 		entry->method = u16(header + 10);
 		entry->compressed = u32(header + 20);
 		entry->size = u32(header + 24);
@@ -145,7 +153,7 @@ HRESULT appx_archive_open(IStream *stream, appx_archive **out)
 		if (FAILED(result))
 			break;
 		archive->count++;
-		at += 46 + (UINT64)name_length + extra_length + comment_length;
+		at += entry->central_size;
 	}
 	FREE(bytes);
 	if (FAILED(result)) {
@@ -238,6 +246,132 @@ HRESULT appx_archive_read(appx_archive *archive, appx_entry *entry, UINT64 offse
 	if (SUCCEEDED(result))
 		result = read_at(archive->stream, entry->data + offset, buffer, size);
 	LeaveCriticalSection(&archive->lock);
+	return result;
+}
+
+static void put_le(BYTE *at, UINT64 value, UINT32 size)
+{
+	for (UINT32 index = 0; index < size; ++index)
+		at[index] = (BYTE)(value >> (index * 8));
+}
+
+static HRESULT hash_range(IStream *stream, BCRYPT_HASH_HANDLE hash, UINT64 offset, UINT64 size, BYTE *buffer)
+{
+	while (size) {
+		const UINT32 piece = size > APPX_BLOCK_SIZE ? APPX_BLOCK_SIZE : (UINT32)size;
+		HRESULT result = read_at(stream, offset, buffer, piece);
+		if (FAILED(result))
+			return result;
+		const NTSTATUS status = BCryptHashData(hash, buffer, piece, 0);
+		if (status)
+			return HRESULT_FROM_NT(status);
+		size -= piece;
+		offset += piece;
+	}
+	return S_OK;
+}
+
+static HRESULT hash_directory_end(appx_archive *archive, appx_entry *signature, BCRYPT_HASH_HANDLE hash, BYTE *buffer)
+{
+	const UINT64 directory_size = archive->directory_size - signature->central_size;
+	const UINT64 count = archive->count - 1;
+	UINT64 end_offset = archive->directory + archive->directory_size;
+	if (archive->zip64_end) {
+		BYTE end64[56], locator[20];
+		if (end_offset != archive->zip64_end || archive->end < end_offset || archive->end - end_offset < sizeof end64 + sizeof locator)
+			return APPX_E_CORRUPT_CONTENT;
+		HRESULT result = read_at(archive->stream, end_offset, end64, sizeof end64);
+		if (SUCCEEDED(result))
+			result = read_at(archive->stream, archive->end - sizeof locator, locator, sizeof locator);
+		if (FAILED(result))
+			return result;
+		const UINT64 extension = archive->end - end_offset - sizeof end64 - sizeof locator;
+		if (u32(end64) != 0x06064b50 || u64(end64 + 4) != 44 + extension || u32(end64 + 16) || u32(end64 + 20) ||
+			u64(end64 + 24) != archive->count || u32(locator) != 0x07064b50 || u32(locator + 4) || u32(locator + 16) != 1)
+			return APPX_E_CORRUPT_CONTENT;
+		put_le(end64 + 24, count, 8);
+		put_le(end64 + 32, count, 8);
+		put_le(end64 + 40, directory_size, 8);
+		put_le(end64 + 48, signature->header, 8);
+		put_le(locator + 8, signature->header + directory_size, 8);
+		NTSTATUS status = BCryptHashData(hash, end64, sizeof end64, 0);
+		if (!status) {
+			result = hash_range(archive->stream, hash, end_offset + sizeof end64, extension, buffer);
+			if (FAILED(result))
+				return result;
+			status = BCryptHashData(hash, locator, sizeof locator, 0);
+		}
+		if (status)
+			return HRESULT_FROM_NT(status);
+		end_offset = archive->end;
+	}
+	if (archive->end != end_offset)
+		return APPX_E_CORRUPT_CONTENT;
+	BYTE end[22];
+	HRESULT result = read_at(archive->stream, end_offset, end, sizeof end);
+	if (FAILED(result))
+		return result;
+	if (u32(end) != 0x06054b50 || u16(end + 4) || u16(end + 6) || archive->size - end_offset != sizeof end + u16(end + 20))
+		return APPX_E_CORRUPT_CONTENT;
+	for (UINT32 offset = 8; offset <= 10; offset += 2)
+		if (u16(end + offset) != 0xffff)
+			put_le(end + offset, count, 2);
+	if (u32(end + 12) != 0xffffffff)
+		put_le(end + 12, directory_size, 4);
+	if (u32(end + 16) != 0xffffffff)
+		put_le(end + 16, signature->header, 4);
+	const NTSTATUS status = BCryptHashData(hash, end, sizeof end, 0);
+	return status ? HRESULT_FROM_NT(status) : hash_range(archive->stream, hash, end_offset + sizeof end, u16(end + 20), buffer);
+}
+
+/* The signed ZIP digests describe the file records and the directory as they were before the signature part was appended. */
+HRESULT appx_archive_signed_hashes(appx_archive *archive, appx_entry *signature, BCRYPT_ALG_HANDLE algorithm, BYTE *records,
+	BYTE *directory, UINT32 digest_size)
+{
+	if (signature->header >= archive->directory || signature->central < archive->directory ||
+		signature->central - archive->directory + signature->central_size > archive->directory_size)
+		return APPX_E_CORRUPT_CONTENT;
+	BYTE *buffer = ALLOC(APPX_BLOCK_SIZE);
+	if (!buffer)
+		return E_OUTOFMEMORY;
+	EnterCriticalSection(&archive->lock);
+	HRESULT result = S_OK;
+	for (UINT32 index = 0; index < archive->count && SUCCEEDED(result); ++index) {
+		appx_entry *entry = &archive->entries[index];
+		const UINT64 end = entry == signature ? archive->directory : signature->header;
+		if (entry != signature && appx_part_matches(entry->name, L"AppxSignature.p7x"))
+			result = APPX_E_CORRUPT_CONTENT;
+		if (SUCCEEDED(result))
+			result = data_offset(archive, entry);
+		if (SUCCEEDED(result) && (entry->header >= end || entry->data > end || entry->compressed > end - entry->data))
+			result = APPX_E_CORRUPT_CONTENT;
+	}
+	for (UINT32 part = 0; part < 2 && SUCCEEDED(result); ++part) {
+		BCRYPT_HASH_HANDLE hash;
+		NTSTATUS status = BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0);
+		if (status) {
+			result = HRESULT_FROM_NT(status);
+			break;
+		}
+		if (!part)
+			result = hash_range(archive->stream, hash, 0, signature->header, buffer);
+		else {
+			const UINT64 after = signature->central + signature->central_size;
+			result = hash_range(archive->stream, hash, archive->directory, signature->central - archive->directory, buffer);
+			if (SUCCEEDED(result))
+				result = hash_range(archive->stream, hash, after, archive->directory + archive->directory_size - after, buffer);
+			if (SUCCEEDED(result))
+				result = hash_directory_end(archive, signature, hash, buffer);
+		}
+		if (SUCCEEDED(result)) {
+			status = BCryptFinishHash(hash, part ? directory : records, digest_size, 0);
+			if (status)
+				result = HRESULT_FROM_NT(status);
+		}
+		BCryptDestroyHash(hash);
+	}
+	LeaveCriticalSection(&archive->lock);
+	FREE(buffer);
 	return result;
 }
 

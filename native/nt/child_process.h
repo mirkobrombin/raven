@@ -121,6 +121,7 @@ struct ChildLaunch {
 	int *gate = nullptr;
 	// Handles the child receives under the values they have in the creator; `descriptor` is the creator's host descriptor behind each.
 	std::vector<InheritedHandle> inherited;
+	std::u16string app_user_model_id;
 };
 
 // Starts the child; null with the Windows error in `error` when the host could not.

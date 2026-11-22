@@ -65,6 +65,8 @@ typedef struct appx_entry {
 	UINT64 header; /* the offset of its local header */
 	UINT64 data; /* the offset of its data, once the local header was read (0 before) */
 	UINT64 compressed, size;
+	UINT64 central;
+	UINT32 central_size;
 	WORD method; /* 0 stored, 8 deflated */
 } appx_entry;
 
@@ -74,6 +76,7 @@ typedef struct appx_archive {
 	CRITICAL_SECTION lock;
 	appx_entry *entries;
 	UINT32 count;
+	UINT64 directory, directory_size, end, zip64_end, size;
 } appx_archive;
 
 HRESULT appx_archive_open(IStream *stream, appx_archive **out);
@@ -90,6 +93,8 @@ HRESULT appx_archive_read(appx_archive *archive, appx_entry *entry, UINT64 offse
 HRESULT appx_archive_extract(appx_archive *archive, appx_entry *entry, BYTE **data, UINT64 *size);
 /* Decompresses raw deflate data into a buffer of exactly the expected size. */
 HRESULT appx_inflate(const BYTE *input, UINT64 input_size, BYTE *output, UINT64 output_size);
+HRESULT appx_archive_signed_hashes(appx_archive *archive, appx_entry *signature, BCRYPT_ALG_HANDLE algorithm, BYTE *records,
+	BYTE *directory, UINT32 digest_size);
 
 /* ---- XML: a footprint file parsed into a tree with the XmlLite reader. ---- */
 typedef struct appx_attribute {

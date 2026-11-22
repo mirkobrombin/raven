@@ -55,7 +55,7 @@ std::u16string first_word(std::u16string_view line)
 
 std::shared_ptr<ProcessObject> start_program(KernelContext &context, const std::u16string &application, const std::u16string &line,
 	const std::u16string &directory, const int (&standard)[3], const std::u16string &environment, int *gate, uint32_t &error,
-	std::vector<InheritedHandle> inherited)
+	std::vector<InheritedHandle> inherited, std::u16string_view app_user_model_id)
 {
 	auto &paths = context.paths;
 	// Without an application name, an unquoted command line names its program by its first blank-separated words: Windows tries the
@@ -156,6 +156,7 @@ std::shared_ptr<ProcessObject> start_program(KernelContext &context, const std::
 	launch.suspended = gate != nullptr;
 	launch.gate = gate;
 	launch.inherited = std::move(inherited);
+	launch.app_user_model_id = app_user_model_id;
 	return spawn_child(launch, error);
 }
 
