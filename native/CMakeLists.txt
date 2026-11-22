@@ -2424,6 +2424,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(winrt_local_fixture_${installer_arch} ALL DEPENDS ${winrt_local}/winrt-local.exe ${winrt_local}/local-component.dll)
                 add_test(NAME native_winrt_local_${installer_arch} COMMAND raven --run-process --execution=native ${winrt_local}/winrt-local.exe)
                 set_tests_properties(native_winrt_local_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${fixture}/pathcch-append.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/pathcch-append.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/pathcch_append.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/pathcch_append.c VERBATIM)
+                add_custom_target(pathcch_append_fixture_${installer_arch} ALL DEPENDS ${fixture}/pathcch-append.exe)
+                add_test(NAME native_pathcch_append_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/pathcch-append.exe)
+                set_tests_properties(native_pathcch_append_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 # Side-by-side classes and visual styles: a program with the common controls 6 manifest gets the version 6 controls, contexts
                 # activate from a manifest file, and the styles draw the accent default button.
                 file(MAKE_DIRECTORY ${fixture}/actctx)
