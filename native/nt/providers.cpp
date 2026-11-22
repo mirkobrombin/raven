@@ -3240,7 +3240,6 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	}, std::move(queued_stubs));
 	// The guest reads the performance counter itself from its first call (see ClockCalibration).
 	const auto calibration = std::make_shared<ClockCalibration>(clock_origin());
-	calibration->publish(served_block, clock_sample());
 	threads.add_service([served_block, calibration] {
 		if (!calibration->done())
 			calibration->publish(served_block, clock_sample());
@@ -3910,6 +3909,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		windows.set_deadline(deadline);
 		threads.set_deadline(deadline);
 	}
+	// Only now, as a start forked ahead may have waited through a suspension for its request.
+	calibration->publish(served_block, clock_sample());
 	// Declared last, so the first thing done when the process ends.
 	struct Ending {
 		~Ending()

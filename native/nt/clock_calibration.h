@@ -18,7 +18,8 @@ const ClockSample &clock_origin();
 // multiplier, a 32.32 fixed-point count per tick of the counter. The first calibration is over the time since the runtime started, the
 // second over 200 ms once those have passed. The second goes to a slot of its own and is named last, so a reader has one or the other
 // whole; it goes on from the count of the first, so the clock does not step. A slot's base lies 2^30 counts back: a reader whose counter
-// was read just before the slot was named is not before the base.
+// was read just before the slot was named is not before the base. A calibration is never over a suspension, which a start forked from
+// a warm host may have had since its origin: it begins again from the sample that found one.
 class ClockCalibration {
 public:
 	static constexpr size_t named = 0x800, first = 0x808, second = 0x820;
@@ -29,12 +30,17 @@ public:
 	{
 		if (done())
 			return;
-		if (now.counter <= origin.counter || now.nanoseconds - origin.nanoseconds < (slot ? 200000000ULL : 1000000ULL))
+		if (now.counter <= origin.counter || now.slept > origin.slept + suspension) {
+			origin = now;
+			return;
+		}
+		if (now.nanoseconds - origin.nanoseconds < (slot ? 200000000ULL : 1000000ULL))
 			return;
 		const auto multiplier = uint64_t((static_cast<unsigned __int128>(now.nanoseconds - origin.nanoseconds) << 32) /
 			(static_cast<unsigned __int128>(now.counter - origin.counter) * 100));
 		uint64_t count = now.nanoseconds / 100;
-		if (slot) {
+		// A counter that started again is behind the first slot's base, and the count then goes on from the monotonic clock.
+		if (slot && now.counter > block[slot / 8]) {
 			const uint64_t *last = block + slot / 8;
 			count = last[1] + uint64_t((static_cast<unsigned __int128>(now.counter - last[0]) * last[2]) >> 32);
 		}
@@ -49,6 +55,8 @@ public:
 	}
 
 private:
+	// Two readings of the clocks apart differ by less.
+	static constexpr uint64_t suspension = 10000000;
 	ClockSample origin;
 	size_t slot = 0;
 };
