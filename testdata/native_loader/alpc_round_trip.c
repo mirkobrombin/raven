@@ -71,7 +71,7 @@ static BOOL read_token_user(union token_info *info)
 	return CloseHandle(token) && read;
 }
 
-static HANDLE start_client_process(void)
+static HANDLE start_client_process(DWORD *process_id, DWORD *thread_id)
 {
 	WCHAR image[MAX_PATH], command[MAX_PATH + 32] = L"\"";
 	const DWORD length = GetModuleFileNameW(NULL, image, ARRAYSIZE(image));
@@ -83,6 +83,8 @@ static HANDLE start_client_process(void)
 	PROCESS_INFORMATION process;
 	if (!CreateProcessW(image, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process))
 		return NULL;
+	*process_id = process.dwProcessId;
+	*thread_id = process.dwThreadId;
 	CloseHandle(process.hThread);
 	return process.hProcess;
 }
@@ -133,17 +135,21 @@ int raven_entry(void)
 		connect(&peer, &name, NULL, NULL, 0x20000, different_sid, NULL, NULL, NULL, NULL, &no_wait) != (NTSTATUS)0xc00002a0 || peer ||
 		receive(listener, &message, 0) != 0x102)
 		return 16;
-	HANDLE worker = cross_process ? start_client_process() : CreateThread(NULL, 0, client, &input, 0, NULL);
+	DWORD peer_process = GetCurrentProcessId(), peer_thread = 0;
+	HANDLE worker = cross_process ? start_client_process(&peer_process, &peer_thread) :
+		CreateThread(NULL, 0, client, &input, 0, &peer_thread);
 	if (!worker || receive(listener, &message, -100000000) || (message.header.type & 0xfff) != 10 ||
-		!message.header.message_id || message.value != 34)
+		!message.header.message_id || message.value != 34 || message.header.process != peer_process || message.header.thread != peer_thread)
 		return 4;
 	message.header.data_length = 0;
 	message.header.total_length = sizeof message.header;
 	if (accept(&peer, listener, 0, NULL, NULL, NULL, &message.header, NULL, TRUE) || !peer)
 		return 5;
-	if (receive(listener, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 582 || send(peer, 711))
+	if (receive(listener, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 582 ||
+		message.header.process != peer_process || message.header.thread != peer_thread || send(peer, 711))
 		return 6;
-	if (receive(listener, &message, -30000000) || !message.header.message_id || message.value != 921)
+	if (receive(listener, &message, -30000000) || !message.header.message_id || message.value != 921 ||
+		message.header.process != peer_process || message.header.thread != peer_thread)
 		return 7;
 	const ULONG request_id = message.header.message_id;
 	message.header.message_id = request_id ^ 0x80000000;
