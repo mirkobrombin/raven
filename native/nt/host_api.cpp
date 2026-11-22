@@ -1554,14 +1554,13 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		objects.close(call[0]);
 		call.ret(1);
 	});
-	// Every process runs in session 1, the interactive one.
-	registry.add("WTSGetActiveConsoleSessionId", 0, [](ApiCall &call) { call.ret(1); });
+	registry.add("WTSGetActiveConsoleSessionId", 0, [](ApiCall &call) { call.ret(native_session_id); });
 	registry.add("ProcessIdToSessionId", 2, [](ApiCall &call) {
 		if (!call[1]) {
 			call.fail(87);
 			return;
 		}
-		call.store<uint32_t>(call[1], 1);
+		call.store<uint32_t>(call[1], native_session_id);
 		call.ret(1);
 	});
 	const auto set_dll_directory = [&context](ApiCall &call, bool wide) {

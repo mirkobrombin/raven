@@ -102,6 +102,7 @@ public:
 			::close(std::exchange(descriptor, -1));
 	}
 
+	uint32_t process() const { return process_id; }
 	int descriptor;
 
 private:
@@ -871,6 +872,31 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		if (message.reply)
 			message.reply->delivered = true;
 		port->inbox.pop_front();
+		return 0;
+	}));
+	registry.add("NtAlpcQueryInformation", 5, alpc_status([&objects = context.objects, disconnected](ApiCall &call) -> uint32_t {
+		const auto port = objects.object_as<AlpcPort>(call[0]);
+		if (!port)
+			return invalid_handle;
+		constexpr uint32_t server_session_information = 12;
+		if (call.u32(1) != server_session_information)
+			return 0xc0000003u;
+		if (!(objects.access_of(call[0]) & 1))
+			return 0xc0000022u;
+		if (!port->connection || port->server || disconnected(*port))
+			return invalid_parameter;
+		const auto &peer = port->connection->peer;
+		const std::array<uint32_t, 2> info{native_session_id, peer ? peer->process() : uint32_t(::getpid())};
+		if (call[4])
+			call.process.validate_write_memory(call[4], sizeof(uint32_t));
+		if (call.u32(3) < sizeof(info)) {
+			if (call[4])
+				call.store<uint32_t>(call[4], sizeof(info));
+			return 0xc0000004u;
+		}
+		call.store(call[2], info);
+		if (call[4])
+			call.store<uint32_t>(call[4], sizeof(info));
 		return 0;
 	}));
 	registry.add("NtAlpcDisconnectPort", 2, [&objects = context.objects](ApiCall &call) {

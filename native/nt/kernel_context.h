@@ -81,6 +81,9 @@ struct KernelContext {
 	std::shared_ptr<UnloadTrace> unloads = std::make_shared<UnloadTrace>();
 };
 
+// Guest processes share one interactive session.
+inline constexpr uint32_t native_session_id = 1;
+
 // Windows FILETIME ticks are 100 ns units since 1601-01-01.
 inline constexpr uint64_t filetime_epoch_offset = 11644473600ULL * 10000000ULL;
 // The performance counter in 100 ns units: the host's monotonic clock, as QueryPerformanceCounter reports it.
