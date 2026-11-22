@@ -84,8 +84,8 @@ public:
 	NativeContext context() const;
 	void set_context(const NativeContext &context);
 	std::vector<uint8_t> read_memory(uint64_t address, size_t size) const;
-	// Reads guest memory from a host thread that does not hold the turn: straight from the child, without the tables of regions the
-	// turn guards. False when any of it cannot be read.
+	// Reads guest memory from a host thread that does not hold the turn: from the view both sides map where there is one, otherwise
+	// straight from the child. It never waits for the tables of regions. False when any of it cannot be read.
 	bool read_alone(uint64_t address, void *into, size_t size) const;
 	// The same for writing: false when any of it is not writable in the guest, which then sees none of the bytes that did not go.
 	bool write_alone(uint64_t address, const void *from, size_t size);

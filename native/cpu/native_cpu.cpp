@@ -882,6 +882,7 @@ struct NativeProcess::State {
 	void require_memory() const;
 	bool covers(uint64_t address, size_t size, int protection) const;
 	uint8_t *shared_memory(uint64_t address, size_t &size) const;
+	uint8_t *shared_alone(uint64_t address, size_t size, int protection) const;
 	pid_t memory_reader() const;
 	uint64_t limit() const { return mode == NativeMode::x86 ? 0x100000000ULL : 0x800000000000ULL; }
 };
@@ -901,6 +902,14 @@ uint8_t *NativeProcess::State::shared_memory(uint64_t address, size_t &size) con
 	if (after != shared_views.end())
 		size = std::min(size, size_t(after->first - address));
 	return nullptr;
+}
+
+// Memory both sides map, for a host thread without the turn that holds memory_lock: all of it within one view and open to `protection`.
+uint8_t *NativeProcess::State::shared_alone(uint64_t address, size_t size, int protection) const
+{
+	size_t count = size;
+	auto *const shared = shared_memory(address, count);
+	return shared && count == size && covers(address, size, protection) ? shared : nullptr;
 }
 
 std::unique_ptr<NativeProcess::State::SharedView> NativeProcess::State::private_view(size_t size, SharedFile &file)
@@ -1231,6 +1240,12 @@ bool NativeProcess::memory_beside() const
 
 bool NativeProcess::read_alone(uint64_t address, void *into, size_t size) const
 {
+	// The records of memory are only tried: whoever holds them may be making the guest's system calls, and the kernel copies meanwhile.
+	if (std::unique_lock memory(state->memory_lock, std::try_to_lock); memory)
+		if (const auto *shared = state->shared_alone(address, size, PROT_READ)) {
+			std::memcpy(into, shared, size);
+			return true;
+		}
 	const pid_t task = state->memory_reader();
 	for (size_t offset = 0; offset < size;) {
 		const iovec local{static_cast<uint8_t *>(into) + offset, size - offset};
@@ -1248,6 +1263,11 @@ bool NativeProcess::read_alone(uint64_t address, void *into, size_t size) const
 
 bool NativeProcess::write_alone(uint64_t address, const void *from, size_t size)
 {
+	if (std::unique_lock memory(state->memory_lock, std::try_to_lock); memory)
+		if (auto *shared = state->shared_alone(address, size, PROT_WRITE)) {
+			std::memcpy(shared, from, size);
+			return true;
+		}
 	const pid_t task = state->memory_reader();
 	for (size_t offset = 0; offset < size;) {
 		const iovec local{const_cast<uint8_t *>(static_cast<const uint8_t *>(from)) + offset, size - offset};
