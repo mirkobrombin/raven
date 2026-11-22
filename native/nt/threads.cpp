@@ -224,6 +224,13 @@ std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t para
 	const auto range = memory.allocate(0, size + 4096, 0x2000, 1);
 	if (range.status)
 		throw std::runtime_error("native guest thread stack allocation failed");
+	// The host maps the stack as well: a call's arguments, results and return address are mostly there.
+	try {
+		process.share_memory(range.address, size + 4096);
+	} catch (...) {
+		memory.free(range.address, 0, 0x8000);
+		throw;
+	}
 	const uint64_t commit = std::min<uint64_t>(size, 64 * 1024), top = range.address + 4096 + size;
 	if (memory.allocate(top - commit, commit, 0x1000, 4).status) {
 		memory.free(range.address, 0, 0x8000);

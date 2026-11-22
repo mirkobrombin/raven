@@ -127,6 +127,8 @@ public:
 	uint64_t map_descriptor(int descriptor, size_t size, uint64_t offset = 0);
 	bool memory_available(uint64_t address, size_t size) const;
 	void discard_memory(uint64_t address, size_t size);
+	// Backs a reservation nothing has touched with memory the host maps as well, as thread stacks are: copies there need no kernel.
+	void share_memory(uint64_t address, size_t size);
 	// Dynamic image mappings share LoadedImage storage; the loader owns initialization and lifetime.
 	void map_image(LoadedImage &image);
 	void unmap_image(uint64_t address);

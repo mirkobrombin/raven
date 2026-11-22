@@ -786,8 +786,15 @@ struct NativeProcess::State {
 	struct SharedView {
 		void *host = MAP_FAILED;
 		size_t size = 0;
+		// Stands for the guest's private memory (a stack): what is discarded in it reads as zero again.
+		bool private_pages = false;
 		~SharedView() { if (host != MAP_FAILED) munmap(host, size); }
 	};
+	struct SharedFile {
+		int descriptor = -1;
+		~SharedFile() { if (descriptor >= 0) close(descriptor); }
+	};
+	static std::unique_ptr<SharedView> private_view(size_t size, SharedFile &file);
 	std::map<uint64_t, std::unique_ptr<SharedView>> shared_views;
 	// Guards what records the guest's memory (the mappings and allocations, the shared views and the served blocks among them, and the
 	// API breakpoints in it): a host thread changes it beside the turn for the calls of its own thread (VirtualAlloc and VirtualFree)
@@ -896,6 +903,20 @@ uint8_t *NativeProcess::State::shared_memory(uint64_t address, size_t &size) con
 	return nullptr;
 }
 
+std::unique_ptr<NativeProcess::State::SharedView> NativeProcess::State::private_view(size_t size, SharedFile &file)
+{
+	file.descriptor = memfd_create("raven-stack", MFD_CLOEXEC);
+	if (file.descriptor < 0 || ftruncate(file.descriptor, off_t(size)) != 0)
+		throw std::runtime_error("cannot create native stack memory");
+	auto view = std::make_unique<SharedView>();
+	view->size = size;
+	view->private_pages = true;
+	view->host = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, file.descriptor, 0);
+	if (view->host == MAP_FAILED)
+		throw std::runtime_error("cannot map native stack memory in host");
+	return view;
+}
+
 void NativeProcess::State::require_stopped() const
 {
 	if (!child || child->pid() == -1) {
@@ -956,6 +977,12 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 			throw std::runtime_error("native image does not fit the guest address space");
 		descriptors.push_back(mapped_image->descriptor());
 	}
+	// The first thread's stack is as large as the program's headers reserve, as Windows makes it, from 1 MiB to 64 MiB. Both sides map
+	// it; the guest is born with its file.
+	const uint64_t stack_size = std::clamp<uint64_t>((stack_reserve + 0xffff) & ~uint64_t(0xffff), 1024 * 1024, 64 * 1024 * 1024);
+	State::SharedFile stack_file;
+	auto stack_view = State::private_view(stack_size, stack_file);
+	descriptors.push_back(stack_file.descriptor);
 	state->child = std::make_unique<NativeChild>(descriptors, bootstrap, setup_timeout);
 	state->child->owner = state->id;
 	auto &child = *state->child;
@@ -978,15 +1005,17 @@ NativeProcess::NativeProcess(std::span<LoadedImage *const> images, const std::st
 			++state->mapping_changes;
 		}
 	}
-	// The first thread's stack is as large as the program's headers reserve, as Windows makes it, from 1 MiB to 64 MiB.
-	const uint64_t stack_size = std::clamp<uint64_t>((stack_reserve + 0xffff) & ~uint64_t(0xffff), 1024 * 1024, 64 * 1024 * 1024);
 	state->initial_stack_size = stack_size;
 	const uint64_t low_flag = mode == NativeMode::x86 ? MAP_32BIT : 0;
 	const auto stack = child.syscall(SYS_mmap, 0, stack_size + 8192, PROT_NONE,
 		MAP_PRIVATE | MAP_ANONYMOUS | low_flag, uint64_t(-1));
 	if (stack + stack_size + 8192 > state->limit())
 		throw std::runtime_error("host placed the native stack outside the guest address space");
-	child.syscall(SYS_mprotect, stack + 4096, stack_size, PROT_READ | PROT_WRITE);
+	const auto guest_file = static_cast<uint64_t>(stack_file.descriptor);
+	if (child.syscall(SYS_mmap, stack + 4096, stack_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, guest_file, 0) != stack + 4096)
+		throw std::runtime_error("host placed the native stack's memory elsewhere");
+	child.syscall(SYS_close, guest_file);
+	state->shared_views.emplace(stack + 4096, std::move(stack_view));
 	state->mappings.insert_or_assign(stack + 4096, ImageMapping{stack + 4096, stack_size, 0, PROT_READ | PROT_WRITE});
 	++state->mapping_changes;
 	state->side().stack_top = stack + 4096 + stack_size;
@@ -1947,7 +1976,49 @@ void NativeProcess::discard_memory(uint64_t address, size_t size)
 	});
 	if (owned == state->allocations.end())
 		throw std::runtime_error("native discard range is outside a dynamic allocation");
-	memory_syscall(SYS_madvise,address,size,MADV_DONTNEED);
+	const auto view = state->shared_views.find(owned->first);
+	if (view == state->shared_views.end() || !view->second->private_pages) {
+		memory_syscall(SYS_madvise,address,size,MADV_DONTNEED);
+		return;
+	}
+	// MADV_DONTNEED leaves shared pages as they are. The host's view is always writable, as MADV_REMOVE needs, whatever the guest's is.
+	if (madvise(static_cast<uint8_t *>(view->second->host) + (address - owned->first), size, MADV_REMOVE) != 0)
+		throw std::runtime_error("cannot discard native shared memory");
+}
+
+void NativeProcess::share_memory(uint64_t address, size_t size)
+{
+	std::lock_guard memory(state->memory_lock);
+	state->trap_page.clear();
+	state->require_memory();
+	memory_range(address, size, PROT_NONE, state->limit());
+	const auto owned = std::find(state->allocations.begin(), state->allocations.end(), std::pair<uint64_t, uint64_t>(address, size));
+	if (owned == state->allocations.end() || state->shared_views.contains(address) || !has_protection(address, size, PROT_NONE))
+		throw std::runtime_error("native shared memory requires an untouched reservation");
+	State::SharedFile file;
+	auto view = State::private_view(size, file);
+	const auto scratch = map_memory(4096, PROT_READ | PROT_WRITE);
+	uint64_t guest_file = uint64_t(-1);
+	try {
+		guest_file = receive_descriptor(file.descriptor, scratch);
+		if (memory_syscall(SYS_mmap, address, size, PROT_NONE, MAP_SHARED | MAP_FIXED, guest_file, 0) != address) {
+			state->child->stop();
+			throw std::runtime_error("host returned an invalid shared stack address");
+		}
+		state->shared_views.emplace(address, std::move(view));
+		memory_syscall(SYS_close, guest_file, 0);
+		guest_file = uint64_t(-1);
+		unmap_memory(scratch);
+	} catch (...) {
+		try {
+			if (guest_file != uint64_t(-1))
+				memory_syscall(SYS_close, guest_file, 0);
+			unmap_memory(scratch);
+		} catch (...) {
+			state->child->stop();
+		}
+		throw;
+	}
 }
 
 void NativeProcess::map_image(LoadedImage &image)
@@ -3795,8 +3866,7 @@ void NativeProcess::enter_nt_service(uint64_t instruction, uint32_t number)
 		throw std::runtime_error("native process is not at a pending syscall service");
 	auto saved=context();
 	if (saved.registers.rip!=instruction || saved.registers.orig_rax!=number || instruction<2 ||
-		read_memory(instruction-2,2)!=std::vector<uint8_t>{0x0f,0x05} || !state->covers(instruction-2,3,PROT_EXEC) ||
-		read_memory(instruction,1)!=std::vector<uint8_t>{0xc3})
+		!state->covers(instruction-2,3,PROT_EXEC) || read_memory(instruction-2,3)!=std::vector<uint8_t>{0x0f,0x05,0xc3})
 		throw std::runtime_error("native NT service boundary does not match the captured syscall");
 	// x64 NT service stubs preserve argument one in R10 before SYSCALL replaces RCX.
 	saved.registers.rcx=saved.registers.r10;
