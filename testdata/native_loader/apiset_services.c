@@ -31,5 +31,21 @@ int raven_entry(void)
 		return 5;
 	if (load_ansi(instance, 1234, text, ARRAYSIZE(text)) || load_wide(instance, 1234, wide, ARRAYSIZE(wide)))
 		return 6;
+
+	HMODULE base = LoadLibraryW(L"kernelbase.dll");
+	HMODULE sync = LoadLibraryW(L"api-ms-win-core-synch-l1-2-0.dll");
+	if (!base || base == GetModuleHandleW(L"kernel32.dll") || sync != base)
+		return 7;
+	BOOL (WINAPI *wait_on_address)(volatile void *, void *, SIZE_T, DWORD) =
+		(void *)GetProcAddress(sync, "WaitOnAddress");
+	if (!wait_on_address)
+		return 8;
+	volatile LONG address = 1;
+	LONG compare = 0;
+	if (!wait_on_address(&address, &compare, sizeof address, 0))
+		return 9;
+	compare = 1;
+	if (wait_on_address(&address, &compare, sizeof address, 0) || GetLastError() != ERROR_TIMEOUT)
+		return 10;
 	return 0;
 }
