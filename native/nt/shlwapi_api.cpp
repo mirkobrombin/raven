@@ -884,6 +884,34 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.put_wide(call[0], result, call[1]);
 		call.ret(0);
 	});
+	registry.add("PathCchAppend", 3, [](ApiCall &call) {
+		if (!call[0] || !call[1] || call[1] > 32768 || !call[2]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		std::u16string base(call[1], u'\0');
+		const auto bytes = call.read(call[0], base.size() * sizeof(char16_t));
+		std::memcpy(base.data(), bytes.data(), bytes.size());
+		const auto end = base.find(u'\0');
+		if (end == std::u16string::npos) {
+			call.ret(0x80070057U);
+			return;
+		}
+		base.resize(end);
+		const auto more = call.wide(call[2], 32768);
+		const auto combined = absolute(more) && !(separator(more.front()) && !is_unc_root(more)) ? more : join(base, more);
+		const auto result = canonical(combined);
+		if (result.size() >= max_path) {
+			call.ret(0x800700ceU);
+			return;
+		}
+		if (result.size() >= call[1]) {
+			call.ret(0x8007007aU);
+			return;
+		}
+		call.put_wide(call[0], result, call[1]);
+		call.ret(0);
+	});
 	// PathCchCanonicalize is the Ex form with no flags; both remove the . and .. parts the way PathCchCombineEx does.
 	const auto path_cch_canonicalize = [](ApiCall &call) {
 		if (!call[0] || !call[1] || call[1] > 32768 || !call[2]) {
