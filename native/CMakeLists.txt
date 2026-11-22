@@ -4851,6 +4851,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_event_wakes_table_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${event_wakes_client})
                     set_tests_properties(native_event_wakes_table_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_NTSYNC=0)
+                    set(event_wakes_often_client ${CMAKE_CURRENT_BINARY_DIR}/event-wakes-often${width}.exe)
+                    add_custom_command(OUTPUT ${event_wakes_often_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${event_wakes_often_client} ${LOADER_SOURCES}/event_wakes_often_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/event_wakes_often_client.c VERBATIM)
+                    add_custom_target(event_wakes_often_fixture${width} ALL DEPENDS ${event_wakes_often_client})
+                    add_test(NAME native_event_wakes_often_x${width} COMMAND raven --run-process --execution=native --timeout-ms=150000 ${event_wakes_often_client})
+                    set_tests_properties(native_event_wakes_often_x${width} PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # On one processor the woken thread may run before the setter looks for who waited.
+                    add_test(NAME native_event_wakes_often_pinned_x${width} COMMAND taskset -c 0 $<TARGET_FILE:raven> --run-process --execution=native --timeout-ms=150000 ${event_wakes_often_client})
+                    set_tests_properties(native_event_wakes_often_pinned_x${width} PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 " ENVIRONMENT RAVEN_PARALLEL=1)
                     set(event_beside_client ${CMAKE_CURRENT_BINARY_DIR}/event-beside${width}.exe)
                     add_custom_command(OUTPUT ${event_beside_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
