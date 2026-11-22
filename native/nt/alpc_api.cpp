@@ -1,5 +1,8 @@
 #include "kernel_context.h"
 
+#include "handle_channel.h"
+#include "local_socket.h"
+
 #include <array>
 #include <bit>
 #include <cstring>
@@ -17,25 +20,165 @@ struct AlpcReply;
 struct AlpcMessage {
 	std::vector<uint8_t> data;
 	uint64_t process = 0, thread = 0;
-	uint32_t id = 0;
+	uint32_t id = 0, capacity = 0;
 	uint16_t type = 0;
 	std::shared_ptr<AlpcConnection> request;
 	std::shared_ptr<AlpcReply> reply;
+};
+
+enum class AlpcPacket : uint32_t { connect = 1, accept, reject, datagram, request, reply, cancel };
+
+class AlpcPeer {
+public:
+	explicit AlpcPeer(int descriptor) : descriptor(descriptor) {}
+	~AlpcPeer() { close(); }
+	AlpcPeer(AlpcPeer &&other) noexcept : descriptor(std::exchange(other.descriptor, -1)), process_id(other.process_id) {}
+	AlpcPeer(const AlpcPeer &) = delete;
+	AlpcPeer &operator=(const AlpcPeer &) = delete;
+
+	bool authenticate()
+	{
+		ucred peer{};
+		socklen_t size = sizeof(peer);
+		if (::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &peer, &size) || size != sizeof(peer) || peer.uid != ::geteuid() ||
+			peer.pid <= 0 || !process_request_channel(peer.pid))
+			return false;
+		process_id = uint32_t(peer.pid);
+		return true;
+	}
+
+	uint32_t send(AlpcPacket kind, const AlpcMessage &message) const
+	{
+		if (descriptor < 0)
+			return 0xc0000037u;
+		if (message.data.size() > maximum_payload)
+			return 0xc000000du;
+		std::array<uint32_t, 6> fields{
+			wire_version, uint32_t(kind), message.id, uint32_t(message.thread), uint32_t(message.data.size()), message.capacity};
+		iovec vectors[] = {{fields.data(), sizeof(fields)}, {const_cast<uint8_t *>(message.data.data()), message.data.size()}};
+		msghdr header{};
+		header.msg_iov = vectors;
+		header.msg_iovlen = 2;
+		ssize_t sent;
+		do sent = ::sendmsg(descriptor, &header, MSG_NOSIGNAL); while (sent < 0 && errno == EINTR);
+		if (sent < 0 && (errno == EAGAIN || errno == ENOBUFS))
+			return 0xc0000044u;
+		return sent == ssize_t(sizeof(fields) + message.data.size()) ? 0 : 0xc0000037u;
+	}
+
+	bool receive(AlpcPacket &kind, AlpcMessage &message)
+	{
+		std::array<uint32_t, 6> fields{};
+		ssize_t count;
+		do count = ::recv(descriptor, fields.data(), sizeof(fields), MSG_PEEK); while (count < 0 && errno == EINTR);
+		if (count < 0 && errno == EAGAIN)
+			return false;
+		if (count != ssize_t(sizeof(fields)) || fields[0] != wire_version || fields[1] < uint32_t(AlpcPacket::connect) ||
+			fields[1] > uint32_t(AlpcPacket::cancel) || fields[4] > maximum_payload || fields[5] > maximum_payload) {
+			close();
+			return false;
+		}
+		message.data.resize(fields[4]);
+		iovec vectors[] = {{fields.data(), sizeof(fields)}, {message.data.data(), message.data.size()}};
+		msghdr header{};
+		header.msg_iov = vectors;
+		header.msg_iovlen = 2;
+		do count = ::recvmsg(descriptor, &header, 0); while (count < 0 && errno == EINTR);
+		if (count != ssize_t(sizeof(fields) + message.data.size()) || (header.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) {
+			close();
+			return false;
+		}
+		kind = AlpcPacket(fields[1]);
+		message.process = process_id;
+		message.thread = fields[3];
+		message.id = fields[2];
+		message.capacity = fields[5];
+		return true;
+	}
+
+	void close()
+	{
+		if (descriptor >= 0)
+			::close(std::exchange(descriptor, -1));
+	}
+
+	int descriptor;
+
+private:
+	static constexpr uint32_t wire_version = 1;
+	static constexpr size_t maximum_payload = UINT16_MAX - 24;
+	uint32_t process_id = 0;
 };
 
 struct AlpcConnection {
 	enum class State { waiting, accepted, rejected };
 	State state = State::waiting;
 	bool delivered = false;
+	std::unique_ptr<AlpcPeer> peer;
+	uint32_t local_request_id = 0, remote_request_id = 0, remote_capacity = 0;
 	std::weak_ptr<AlpcPort> listener, client, server;
 	AlpcMessage response;
+	std::map<uint32_t, std::shared_ptr<AlpcReply>> outbound;
 };
 
 struct AlpcReply {
 	std::weak_ptr<AlpcConnection> connection;
 	size_t maximum = UINT16_MAX;
+	uint32_t remote_id = 0;
 	bool delivered = false;
 	std::optional<AlpcMessage> result;
+};
+
+std::string alpc_socket_name(std::u16string_view name)
+{
+	return "alpc:" + std::string(reinterpret_cast<const char *>(name.data()), name.size() * sizeof(char16_t));
+}
+
+class AlpcListenerSocket {
+public:
+	~AlpcListenerSocket()
+	{
+		stop();
+		if (!path.empty())
+			::unlink(path.c_str());
+		if (reservation >= 0)
+			::close(reservation);
+	}
+
+	uint32_t open(std::u16string_view name)
+	{
+		const auto address = alpc_socket_name(name);
+		sockaddr_un storage;
+		const auto length = local_socket_address(address, storage);
+		if (length > sizeof(storage))
+			return 0xc0000033u;
+		const std::string socket_path = storage.sun_path;
+		reservation = ::open((socket_path + ".lock").c_str(), O_CREAT | O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
+		if (reservation < 0)
+			return 0xc000009au;
+		// Keep the name reserved through disconnect until the last handle closes.
+		if (::flock(reservation, LOCK_EX | LOCK_NB))
+			return errno == EWOULDBLOCK ? 0xc0000035u : 0xc000009au;
+		descriptor = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+		if (descriptor < 0)
+			return 0xc000009au;
+		if (bind_local_socket(descriptor, address))
+			return errno == EADDRINUSE ? 0xc0000035u : 0xc000009au;
+		path = socket_path;
+		return ::listen(descriptor, 64) ? 0xc000009au : 0;
+	}
+
+	void stop()
+	{
+		if (descriptor >= 0)
+			::close(std::exchange(descriptor, -1));
+	}
+
+	int descriptor = -1;
+
+private:
+	int reservation = -1;
+	std::string path;
 };
 
 class AlpcPort : public KernelObject {
@@ -45,13 +188,28 @@ public:
 	std::u16string_view object_name() const override { return name; }
 	uint32_t default_access() const override { return 0x1f0001; }
 	bool watches_last_handle() const override { return true; }
-	void last_handle_closed() override { disconnect(); name_closed = true; }
-	void disconnect() { closed = true; inbox.clear(); requests.clear(); replies.clear(); }
+	void last_handle_closed() override { disconnect(); listener_socket.reset(); name_closed = true; }
+	void disconnect()
+	{
+		closed = true;
+		if (listener_socket)
+			listener_socket->stop();
+		if (connection && connection->peer)
+			connection->peer->close();
+		for (const auto &remote : remote_connections)
+			if (const auto link = remote.lock())
+				link->peer->close();
+		inbox.clear();
+		requests.clear();
+		replies.clear();
+	}
 
 	bool closed = false, name_closed = false;
 	bool server = false;
 	size_t message_limit = UINT16_MAX;
 	std::vector<uint8_t> owner_sid;
+	std::unique_ptr<AlpcListenerSocket> listener_socket;
+	std::vector<std::weak_ptr<AlpcConnection>> remote_connections;
 	std::shared_ptr<AlpcConnection> connection;
 	std::deque<AlpcMessage> inbox;
 	std::map<uint32_t, std::shared_ptr<AlpcConnection>> requests;
@@ -72,6 +230,135 @@ struct WithdrawAlpcRequest {
 		std::erase_if(port.inbox, [id = id](const auto &message) { return message.id == id; });
 	}
 };
+
+bool route_alpc_packet(AlpcPort &port, const std::shared_ptr<AlpcConnection> &connection, AlpcPacket kind,
+	AlpcMessage message, uint64_t &next_id)
+{
+	if (kind == AlpcPacket::reply) {
+		const auto pending = connection->outbound.find(message.id);
+		if (pending != connection->outbound.end() && !pending->second->result) {
+			message.type = 2;
+			pending->second->result = std::move(message);
+		}
+		return true;
+	}
+	if (kind == AlpcPacket::cancel) {
+		if (!message.data.empty())
+			return false;
+		const auto pending = std::find_if(port.replies.begin(), port.replies.end(), [&](const auto &entry) {
+			return entry.second->remote_id == message.id && entry.second->connection.lock() == connection;
+		});
+		if (pending != port.replies.end()) {
+			const WithdrawAlpcRequest withdraw{port, pending->first};
+		}
+		return true;
+	}
+	if ((kind != AlpcPacket::datagram && kind != AlpcPacket::request) || port.inbox.size() >= 256 || next_id > UINT32_MAX)
+		return false;
+	const auto remote_id = message.id;
+	message.id = uint32_t(next_id++);
+	message.type = kind == AlpcPacket::request ? 1 : 3;
+	if (kind == AlpcPacket::request) {
+		if (port.replies.size() >= 256 || std::any_of(port.replies.begin(), port.replies.end(), [&](const auto &entry) {
+			return entry.second->remote_id == remote_id && entry.second->connection.lock() == connection;
+		}))
+			return false;
+		const auto reply = std::make_shared<AlpcReply>();
+		reply->remote_id = remote_id;
+		reply->connection = connection;
+		reply->maximum = port.message_limit;
+		message.reply = reply;
+		port.replies.emplace(message.id, reply);
+	}
+	port.inbox.push_back(std::move(message));
+	return true;
+}
+
+void watch_alpc_peer(Reactor &reactor, const std::shared_ptr<AlpcConnection> &connection,
+	const std::shared_ptr<AlpcPort> &port, const std::shared_ptr<uint64_t> &next_id, size_t header, bool listener)
+{
+	reactor.add([connection, endpoint = std::weak_ptr(port), next_id, header, listener] {
+		const auto port = endpoint.lock();
+		auto &peer = *connection->peer;
+		if (port && !port->closed && peer.descriptor >= 0) {
+			try {
+				AlpcPacket kind;
+				AlpcMessage message;
+				if (peer.receive(kind, message)) {
+					if (!message.id || header + message.data.size() > port->message_limit) {
+						peer.close();
+					} else if (connection->state == AlpcConnection::State::accepted) {
+						if (message.capacity || !route_alpc_packet(*port, connection, kind, std::move(message), *next_id))
+							peer.close();
+					} else if (connection->state != AlpcConnection::State::waiting) {
+						peer.close();
+					} else if (listener && kind == AlpcPacket::connect && !connection->local_request_id &&
+						port->requests.size() < 256 && port->inbox.size() < 256 && *next_id <= UINT32_MAX) {
+						connection->local_request_id = uint32_t((*next_id)++);
+						connection->remote_request_id = message.id;
+						connection->remote_capacity = message.capacity;
+						message.id = connection->local_request_id;
+						message.type = 10;
+						message.request = connection;
+						port->requests.emplace(message.id, connection);
+						port->inbox.push_back(std::move(message));
+					} else if (!listener && message.id == connection->local_request_id &&
+						(kind == AlpcPacket::accept || kind == AlpcPacket::reject)) {
+						connection->state = kind == AlpcPacket::accept ? AlpcConnection::State::accepted : AlpcConnection::State::rejected;
+						connection->remote_capacity = message.capacity;
+						connection->response = std::move(message);
+					} else {
+						peer.close();
+					}
+				}
+			} catch (const std::bad_alloc &) {
+				peer.close();
+			}
+			if (peer.descriptor >= 0)
+				return false;
+		}
+		peer.close();
+		if (port) {
+			if (listener)
+				port->requests.erase(connection->local_request_id);
+			std::erase_if(port->inbox, [&](const auto &message) {
+				return message.request == connection || (message.reply && message.reply->connection.lock() == connection);
+			});
+			std::erase_if(port->replies, [&](const auto &entry) { return entry.second->connection.lock() == connection; });
+		}
+		return true;
+	}, connection->peer->descriptor, POLLIN);
+}
+
+void watch_alpc_listener(Reactor &reactor, const std::shared_ptr<AlpcPort> &port,
+	const std::shared_ptr<uint64_t> &next_id, size_t header)
+{
+	reactor.add([&reactor, weak = std::weak_ptr(port), next_id, header] {
+		const auto listener = weak.lock();
+		if (!listener || listener->closed)
+			return true;
+		for (unsigned count = 0; count < 16; ++count) {
+			AlpcPeer incoming(::accept4(listener->listener_socket->descriptor, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK));
+			if (incoming.descriptor < 0)
+				break;
+			std::erase_if(listener->remote_connections, [](const auto &item) { return item.expired(); });
+			if (listener->remote_connections.size() >= 256)
+				continue;
+			try {
+				if (!incoming.authenticate())
+					continue;
+				const auto connection = std::make_shared<AlpcConnection>();
+				connection->peer = std::make_unique<AlpcPeer>(std::move(incoming));
+				connection->listener = listener;
+				listener->remote_connections.push_back(connection);
+				watch_alpc_peer(reactor, connection, listener, next_id, header, true);
+			} catch (const std::bad_alloc &) {
+				break;
+			}
+		}
+		return false;
+	}, port->listener_socket->descriptor, POLLIN);
+}
 
 constexpr uint32_t invalid_parameter = 0xc000000du, invalid_handle = 0xc0000008u, not_supported = 0xc00000bbu,
 	port_disconnected = 0xc0000037u, buffer_too_small = 0xc0000023u, timeout = 0x102;
@@ -219,7 +506,8 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(call[0] + attribute_size(allocated, call.pointer_width(), flag));
 	});
 	const auto names = std::make_shared<std::map<std::u16string, std::weak_ptr<AlpcPort>>>();
-	registry.add("NtAlpcCreatePort", 3, [&objects = context.objects, names](ApiCall &call) {
+	const auto next_id = std::make_shared<uint64_t>(1);
+	registry.add("NtAlpcCreatePort", 3, [&context, &objects = context.objects, names, next_id](ApiCall &call) {
 		try {
 			const size_t width = call.pointer_width();
 			call.process.validate_write_memory(call[0], width);
@@ -261,6 +549,11 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			const auto port = std::make_shared<AlpcPort>(std::move(name));
 			port->message_limit = *limit;
 			if (!key.empty()) {
+				port->listener_socket = std::make_unique<AlpcListenerSocket>();
+				if (const auto status = port->listener_socket->open(key)) {
+					call.ret(status);
+					return;
+				}
 				port->owner_sid = user_sid();
 				names->emplace(std::move(key), port);
 			}
@@ -269,6 +562,8 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 				objects.set_inherit(made.value, (flags & 2) != 0);
 				try {
 					call.store_pointer(call[0], made.value);
+					if (port->listener_socket)
+						watch_alpc_listener(*context.reactor, port, next_id, header_size(call));
 				} catch (...) {
 					objects.close(made.value);
 					throw;
@@ -283,12 +578,13 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0xc0000005u);
 		}
 	});
-	auto next_id = std::make_shared<uint64_t>(1);
 	const auto disconnected = [](const AlpcPort &port) {
 		if (port.closed)
 			return true;
 		if (!port.connection)
 			return false;
+		if (port.connection->peer)
+			return port.connection->peer->descriptor < 0;
 		const auto listener = port.connection->listener.lock();
 		const auto peer = (port.server ? port.connection->client : port.connection->server).lock();
 		return !listener || listener->closed || !peer || peer->closed;
@@ -297,18 +593,21 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const auto name = alpc_name(call, call[1]);
 		if (!name)
 			return 0xc0000033u;
-		const auto named = names->find(alpc_name_key(*name));
+		const auto key = alpc_name_key(*name);
+		const auto named = names->find(key);
 		const auto listener = named == names->end() ? nullptr : named->second.lock();
-		if (!listener || listener->closed)
+		if (listener && listener->closed)
 			return 0xc0000034u;
 		if (call[2] || call[8] || call[9] || (call.u32(4) & ~0x20000u))
 			return not_supported;
+		std::vector<uint8_t> required_sid;
 		if (const auto required = call[5]) {
 			const auto sid_header = call.read(required, 2);
 			if (sid_header[0] != 1 || sid_header[1] > 15)
 				return 0xc0000078u;
 			const size_t length = 8 + 4 * sid_header[1];
-			if (call.read(required, length) != listener->owner_sid)
+			required_sid = call.read(required, length);
+			if (listener && required_sid != listener->owner_sid)
 				return 0xc00002a0u;
 		}
 		if ((call[6] != 0) != (call[7] != 0))
@@ -317,29 +616,66 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const auto wake = deadline(call, call[10]);
 		auto request = call[6] ? read_message(call, call[6], call.load_pointer(call[7])) : std::optional<AlpcMessage>(AlpcMessage{});
 		const auto limit = port_message_limit(call, call[3]);
-		if (!request || !limit || header_size(call) + request->data.size() > listener->message_limit)
+		if (!request || !limit)
 			return invalid_parameter;
-		if (listener->requests.size() >= 256 || listener->inbox.size() >= 256 || *next_id > UINT32_MAX)
+		if (*next_id > UINT32_MAX)
 			return 0xc0000044u;
 		const auto client = std::make_shared<AlpcPort>();
 		client->message_limit = *limit;
 		const auto connection = std::make_shared<AlpcConnection>();
 		client->connection = connection;
+		struct UncommittedConnection {
+			AlpcConnection &connection;
+			bool committed = false;
+			~UncommittedConnection() { if (!committed && connection.peer) connection.peer->close(); }
+		} pending{*connection};
 		connection->client = client;
-		connection->listener = listener;
-		const uint32_t id = uint32_t((*next_id)++);
-		WithdrawAlpcRequest withdraw{*listener, id};
 		request->process = call.load_pointer(context.environment.teb() + 8 * call.pointer_width());
 		request->thread = context.threads.current_id();
-		request->id = id;
-		request->type = 10;
-		request->request = connection;
-		listener->requests.emplace(id, connection);
-		listener->inbox.push_back(std::move(*request));
-		if (!context.threads.block([&] { return listener->closed || connection->state != AlpcConnection::State::waiting; }, wake))
-			return timeout;
-		if (listener->closed)
-			return port_disconnected;
+		request->id = uint32_t((*next_id)++);
+		if (listener) {
+			if (header_size(call) + request->data.size() > listener->message_limit)
+				return invalid_parameter;
+			if (listener->requests.size() >= 256 || listener->inbox.size() >= 256)
+				return 0xc0000044u;
+			connection->listener = listener;
+			WithdrawAlpcRequest withdraw{*listener, request->id};
+			request->type = 10;
+			request->request = connection;
+			listener->requests.emplace(request->id, connection);
+			listener->inbox.push_back(std::move(*request));
+			if (!context.threads.block([&] { return listener->closed || connection->state != AlpcConnection::State::waiting; }, wake))
+				return timeout;
+			if (listener->closed)
+				return port_disconnected;
+		} else {
+			sockaddr_un address;
+			const auto length = local_socket_address(alpc_socket_name(key), address);
+			if (length > sizeof(address))
+				return 0xc0000033u;
+			AlpcPeer peer(::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+			if (peer.descriptor < 0)
+				return 0xc000009au;
+			if (::connect(peer.descriptor, reinterpret_cast<const sockaddr *>(&address), length))
+				return errno == EAGAIN ? 0xc0000044u : 0xc0000034u;
+			if (!peer.authenticate())
+				return 0xc0000022u;
+			// The verified runtime has the same account SID as other processes of this prefix.
+			if (!required_sid.empty() && required_sid != user_sid())
+				return 0xc00002a0u;
+			connection->peer = std::make_unique<AlpcPeer>(std::move(peer));
+			connection->local_request_id = request->id;
+			request->capacity = uint32_t(client->message_limit - header_size(call));
+			if (const auto status = connection->peer->send(AlpcPacket::connect, *request))
+				return status;
+			watch_alpc_peer(*context.reactor, connection, client, next_id, header_size(call), false);
+			if (!context.threads.block([&] {
+				return connection->peer->descriptor < 0 || connection->state != AlpcConnection::State::waiting;
+			}, wake))
+				return timeout;
+			if (connection->peer->descriptor < 0 && connection->state == AlpcConnection::State::waiting)
+				return port_disconnected;
+		}
 		if (connection->state != AlpcConnection::State::accepted)
 			return 0xc0000041u;
 		if (call[6])
@@ -350,6 +686,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return made.status;
 		try { call.store_pointer(call[0], made.value); }
 		catch (...) { context.objects.close(made.value); throw; }
+		pending.committed = true;
 		return 0;
 	}));
 	registry.add("NtAlpcAcceptConnectPort", 9, alpc_status([&context](ApiCall &call) -> uint32_t {
@@ -371,26 +708,45 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		if (pending == listener->requests.end() || !pending->second->delivered || pending->second->state != AlpcConnection::State::waiting)
 			return 0xc000021fu;
 		const auto connection = pending->second;
+		if (connection->peer && connection->peer->descriptor < 0)
+			return port_disconnected;
 		if (!call.u32(8)) {
+			if (connection->peer) {
+				response->id = connection->remote_request_id;
+				response->data.clear();
+				if (const auto status = connection->peer->send(AlpcPacket::reject, *response))
+					return status;
+				connection->peer->close();
+			}
 			connection->state = AlpcConnection::State::rejected;
 			return 0;
 		}
 		const auto limit = port_message_limit(call, call[4]);
-		if (!limit)
+		if (!limit || (connection->peer && response->data.size() > connection->remote_capacity))
 			return invalid_parameter;
 		call.process.validate_write_memory(call[0], call.pointer_width());
 		const auto server = std::make_shared<AlpcPort>();
 		server->message_limit = *limit;
 		server->server = true;
-		server->connection = connection;
 		const auto made = context.objects.add_object(server);
 		if (made.status)
 			return made.status;
-		try { call.store_pointer(call[0], made.value); }
-		catch (...) { context.objects.close(made.value); throw; }
+		if (connection->peer) {
+			response->id = connection->remote_request_id;
+			response->thread = context.threads.current_id();
+			response->capacity = uint32_t(std::min(listener->message_limit, server->message_limit) - header_size(call));
+			if (const auto status = connection->peer->send(AlpcPacket::accept, *response)) {
+				context.objects.close(made.value);
+				return status;
+			}
+			listener->requests.erase(connection->local_request_id);
+		}
+		server->connection = connection;
 		connection->server = server;
 		connection->response = std::move(*response);
 		connection->state = AlpcConnection::State::accepted;
+		try { call.store_pointer(call[0], made.value); }
+		catch (...) { context.objects.close(made.value); throw; }
 		return 0;
 	}));
 	registry.add("NtAlpcSendWaitReceivePort", 8, alpc_status([&context, next_id, disconnected](ApiCall &call) -> uint32_t {
@@ -426,8 +782,50 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 					return 0xc000021fu;
 				if (header_size(call) + message->data.size() > pending->second->maximum)
 					return invalid_parameter;
-				message->type = 2;
-				pending->second->result = std::move(*message);
+				if (pending->second->remote_id) {
+					const auto link = pending->second->connection.lock();
+					if (!link || !link->peer)
+						return port_disconnected;
+					if (message->data.size() > link->remote_capacity)
+						return invalid_parameter;
+					message->id = pending->second->remote_id;
+					if (const auto status = link->peer->send(AlpcPacket::reply, *message))
+						return status;
+					receiver->replies.erase(pending);
+				} else {
+					message->type = 2;
+					pending->second->result = std::move(*message);
+				}
+			} else if (port->connection && port->connection->peer) {
+				const auto link = port->connection;
+				if (header_size(call) + message->data.size() > port->message_limit || message->data.size() > link->remote_capacity)
+					return invalid_parameter;
+				if (*next_id > UINT32_MAX)
+					return 0xc0000044u;
+				message->id = uint32_t((*next_id)++);
+				if (flags & sync_flag) {
+					call.process.validate_write_memory(call[5], call.pointer_width());
+					if (link->outbound.size() >= 256)
+						return 0xc0000044u;
+					const auto reply = std::make_shared<AlpcReply>();
+					link->outbound.emplace(message->id, reply);
+					struct Pending {
+						AlpcConnection &connection;
+						uint32_t id;
+						~Pending() { connection.outbound.erase(id); }
+					} pending{*link, message->id};
+					if (const auto status = link->peer->send(AlpcPacket::request, *message))
+						return status;
+					if (!context.threads.block([&] { return reply->result || disconnected(*port); }, wake)) {
+						message->data.clear();
+						if (link->peer->send(AlpcPacket::cancel, *message))
+							link->peer->close();
+						return timeout;
+					}
+					return reply->result ? write_message(call, call[4], call[5], *reply->result) : port_disconnected;
+				}
+				if (const auto status = link->peer->send(AlpcPacket::datagram, *message))
+					return status;
 			} else {
 				if (!port->connection)
 					return port_disconnected;
