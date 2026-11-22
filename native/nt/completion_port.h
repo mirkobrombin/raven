@@ -3,6 +3,7 @@
 #include "child_process.h"
 #include "objects.h"
 
+#include <algorithm>
 #include <chrono>
 #include <deque>
 #include <functional>
@@ -13,10 +14,14 @@
 
 namespace raven {
 
-class CompletionReserve : public KernelObject {
+class CompletionReservation : public KernelObject {
+public:
+	bool queued = false;
+};
+
+class CompletionReserve : public CompletionReservation {
 public:
 	std::u16string_view type_name() const override { return u"IoCompletionReserve"; }
-	bool queued = false;
 };
 
 struct CompletionPacket {
@@ -24,7 +29,7 @@ struct CompletionPacket {
 	// The Windows error of the operation, zero when it succeeded.
 	uint32_t status = 0;
 	std::optional<uint32_t> native_status = {};
-	std::shared_ptr<CompletionReserve> reserve = {};
+	std::shared_ptr<CompletionReservation> reserve = {};
 };
 
 // An I/O completion port: a queue of finished operations that threads take from.
@@ -44,6 +49,15 @@ public:
 		}
 		return true;
 	}
+	bool cancel(const CompletionReservation &reservation)
+	{
+		const auto found = std::find_if(packets.begin(), packets.end(), [&](const auto &packet) { return packet.reserve.get() == &reservation; });
+		if (found == packets.end())
+			return false;
+		found->reserve->queued = false;
+		packets.erase(found);
+		return true;
+	}
 	bool empty() const { return packets.empty(); }
 	// Its last handle closed: the threads that wait on it give up (ERROR_ABANDONED_WAIT_0), and the packets still queued are gone.
 	bool watches_last_handle() const override { return true; }
@@ -60,6 +74,16 @@ public:
 private:
 	std::deque<CompletionPacket> packets;
 	bool abandoned = false;
+};
+
+class WaitCompletionPacket : public CompletionReservation {
+public:
+	std::u16string_view type_name() const override { return u"WaitCompletionPacket"; }
+	uint32_t default_access() const override { return 0x000f0001; }
+	std::weak_ptr<CompletionPort> port;
+	std::shared_ptr<KernelObject> target;
+	CompletionPacket notification;
+	uint64_t generation = 0;
 };
 
 // Operations that were started and cannot finish yet. Each one is asked again whenever the process looks for completions, and drops out

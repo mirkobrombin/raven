@@ -1458,7 +1458,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			return {{}, 0xc0000022U};
 		return {port, 0};
 	};
-	registry.add("NtCreateIoCompletion", 4, [&objects](ApiCall &call) {
+	const auto create_completion = [&objects](ApiCall &call, bool wait_packet) {
 		try {
 			const size_t width = call.pointer_width();
 			call.process.validate_write_memory(call[0], width);
@@ -1474,17 +1474,23 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 				}
 				attributes = call.load<uint32_t>(address + 3 * width);
 			}
+			const uint32_t all_access = wait_packet ? 0x000f0001U : 0x001f0003U;
 			uint32_t access = call.u32(1);
-			if (access & (0x10000000U | 0x02000000U)) access |= 0x1f0003;
-			if (access & 0x80000000U) access |= 0x20001;
-			if (access & 0x40000000U) access |= 0x20002;
-			if (access & 0x20000000U) access |= 0x120000;
+			if (access & (0x10000000U | 0x02000000U)) access |= all_access;
+			if (access & 0x80000000U) access |= wait_packet ? 0x20000 : 0x20001;
+			if (access & 0x40000000U) access |= wait_packet ? 0x20001 : 0x20002;
+			if (access & 0x20000000U) access |= wait_packet ? 0x20000 : 0x120000;
 			access &= ~0xf2000000U;
-			if (access & ~0x1f0003U) {
+			if (access & ~all_access) {
 				call.ret(0xc0000022U);
 				return;
 			}
-			const auto made = objects.add_object(std::make_shared<CompletionPort>());
+			std::shared_ptr<KernelObject> object;
+			if (wait_packet)
+				object = std::make_shared<WaitCompletionPacket>();
+			else
+				object = std::make_shared<CompletionPort>();
+			const auto made = objects.add_object(std::move(object));
 			if (!made.status) {
 				objects.set_access(made.value, access);
 				objects.set_inherit(made.value, (attributes & 2) != 0);
@@ -1498,7 +1504,9 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		} catch (const std::bad_alloc &) {
 			call.ret(0xc000009aU);
 		}
-	});
+	};
+	registry.add("NtCreateIoCompletion", 4, [create_completion](ApiCall &call) { create_completion(call, false); });
+	registry.add("NtCreateWaitCompletionPacket", 3, [create_completion](ApiCall &call) { create_completion(call, true); });
 	registry.add("NtAllocateReserveObject", 3, [&objects](ApiCall &call) {
 		if (call.u32(2) != 1 || call[1]) {
 			call.ret(call.u32(2) > 1 ? 0xc000000dU : 0xc00000bbU);
