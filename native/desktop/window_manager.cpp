@@ -650,6 +650,10 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	registry.add("IsWindowArranged", 1, [](ApiCall &call) { call.ret(0); });
 	// The desktop does not create shell-managed frames for applications.
 	registry.add("IsShellManagedWindow", 1, [](ApiCall &call) { call.ret(0); });
+	registry.add("IsWindowInDestroy", 1, [this](ApiCall &call) {
+		const auto *window = std::as_const(objects).window(call[0]);
+		call.ret(window && window->destroying);
+	});
 	registry.add("IsIconic", 1, [this](ApiCall &call) {
 		const auto *window = std::as_const(objects).window(call[0]);
 		call.ret(window && (window->style & ws_minimize));
