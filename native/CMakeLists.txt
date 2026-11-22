@@ -3822,12 +3822,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
         set_tests_properties(native_hotpath_bench PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "hotpath done"
             FAIL_REGULAR_EXPRESSION "hotpath failed" ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-prefix")
-        # The same with the guest's tasks kept under ptrace, as before the agent served their system calls: the two side by side are what
-        # the agent saves per call.
-        add_test(NAME native_hotpath_bench_ptrace COMMAND raven --run-process --execution=native --stdio=inherit --timeout-ms=120000
-            ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
-        set_tests_properties(native_hotpath_bench_ptrace PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "hotpath done"
-            FAIL_REGULAR_EXPRESSION "hotpath failed" ENVIRONMENT "RAVEN_PTRACE=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-prefix-ptrace")
+        # The same beside the guest's tasks kept under ptrace, as before the agent served their system calls: alone on one machine and taking
+        # turns, which two tests are not, as CI's shards put them on different machines.
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME native_hotpath_compare COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-hotpath-compare.py
+                $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe agent: ptrace:RAVEN_PTRACE=1)
+            set_tests_properties(native_hotpath_compare PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hotpath-compare-prefix")
+        endif()
         # An NT system call the program makes stops on its SYSCALL instead of going through a served stub; RAVEN_CYCLES counts it as well.
         if(Python3_Interpreter_FOUND)
             add_test(NAME native_syscall_cycles_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-syscall-cycles.py
