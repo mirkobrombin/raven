@@ -2687,6 +2687,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/regedit.exe $<TARGET_FILE_DIR:raven>/x86/regedit.exe)
             # Run at every build, so a component provisioned again reaches the runtime without relinking it.
             add_dependencies(raven raven_controls32_components)
+            if(EXISTS "${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-dwrite.dll")
+                add_custom_command(TARGET raven_controls32_components POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/raven-dwrite.dll $<TARGET_FILE_DIR:raven>/x86/raven-dwrite.dll)
+            endif()
             if(RAVEN_MINGW32 AND FREETYPE_FOUND)
                 set(DWRITE_CLIENT32 ${CMAKE_CURRENT_BINARY_DIR}/dwrite-client32.exe)
                 add_custom_command(OUTPUT ${DWRITE_CLIENT32}

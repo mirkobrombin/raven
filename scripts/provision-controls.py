@@ -30,7 +30,6 @@ def main():
     if x86:
         # The 32-bit C runtime component is built by the main build; the others are described here.
         wanted.discard("crt")
-        wanted.discard("dwrite")
         wanted.discard("d2d1")
         wanted.discard("uianimation")
     output = args.output.resolve()
@@ -227,8 +226,10 @@ def main():
         dwrite_flags = ["-O2", "-Wall", "-Wno-unused-function", "-Wno-unused-variable", "-ffreestanding", "-fno-builtin", f"-ffile-prefix-map={repo}=raven"]
         run([triple + "-gcc", "-c", *dwrite_flags, "-I" + str(dwrite_support), dwrite_support / "dwrite.c", "-o", dwrite_objects[0]])
         run([triple + "-gcc", "-c", *dwrite_flags, dwrite_support / "crt.c", "-o", dwrite_objects[1]])
-        (output / "raven-dwrite.def").write_text("NAME raven-dwrite.dll\nEXPORTS\nDWriteCreateFactory\n")
-        run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,0x1fb000000,--no-insert-timestamp", *link_extra,
+        factory_export = definition_line("DWriteCreateFactory", decorated(dwrite_objects)["DWriteCreateFactory"])
+        (output / "raven-dwrite.def").write_text("NAME raven-dwrite.dll\nEXPORTS\n" + factory_export)
+        image_base = 0x1fb00000 if x86 else 0x1fb000000
+        run([triple + "-gcc", "-shared", "-nostdlib", f"-Wl,--entry,{entry_point},--image-base,{image_base:#x},--no-insert-timestamp", *link_extra,
              "-o", output / "raven-dwrite.dll", *dwrite_objects, output / "raven-dwrite.def", "-L" + str(output), "-lravenhost", "-lgdi32", "-lkernel32", "-lgcc"])
     if "d2d1" in wanted:
         # The Direct2D component: Raven code on the public headers; surfaces live with the host and are drawn with Skia through ravenhost.dll,

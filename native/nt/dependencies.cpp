@@ -11,6 +11,23 @@
 
 namespace raven {
 
+std::optional<std::filesystem::path> graphics_component(std::string_view name, bool is_64)
+{
+	std::string_view file;
+	if (name == "dwrite.dll")
+		file = "raven-dwrite.dll";
+	else if (is_64 && name == "d2d1.dll")
+		file = "raven-d2d1.dll";
+	else if (is_64 && name == "uianimation.dll")
+		file = "raven-uianimation.dll";
+	else
+		return std::nullopt;
+	const auto component = std::filesystem::read_symlink("/proc/self/exe").parent_path() / (is_64 ? "" : "x86") / file;
+	if (std::filesystem::is_regular_file(component))
+		return component;
+	return std::nullopt;
+}
+
 std::optional<std::filesystem::path> configured_d3d_library(std::string_view name, bool is_64)
 {
 	static constexpr std::string_view libraries[]{"dxgi.dll", "d3d11.dll", "d3d10core.dll", "d3d10_1.dll",

@@ -99,6 +99,11 @@ std::optional<std::vector<uint8_t>> NativeX86Loader::read_library(const std::str
 				return read_all(component);
 			}
 		}
+		if (const auto component = graphics_component(name, false)) {
+			identity = name;
+			file = *component;
+			return read_all(file);
+		}
 		if (const auto configured = configured_d3d_library(name, false)) {
 			identity = name;
 			file = *configured;

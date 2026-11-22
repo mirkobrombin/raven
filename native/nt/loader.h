@@ -22,6 +22,7 @@ void register_image(NativeMemory &memory, const PEModule &module);
 // Ties each API set name the graph imports to the system library that implements it, once that library is in the set.
 void alias_api_sets(ModuleSet &modules);
 void forward_opengl_formats(ModuleSet &modules, PEModule &provider);
+std::optional<std::filesystem::path> graphics_component(std::string_view name, bool is_64);
 std::optional<std::filesystem::path> configured_d3d_library(std::string_view name, bool is_64);
 void load_initial_dependencies(ModuleSet &modules,
 	const std::function<std::optional<ModuleBytes>(std::string_view)> &source,
