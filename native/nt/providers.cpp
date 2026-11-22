@@ -2451,6 +2451,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					service_name = &generated->second;
 				else
 					return result;
+				CallCycles::instance().name_service(result.value, *service_name);
 				process.enter_nt_service(result.instruction, uint32_t(result.value));
 			}
 			if (!service_name)

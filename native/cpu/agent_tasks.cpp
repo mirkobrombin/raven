@@ -333,6 +333,12 @@ bool held(pid_t task)
 	return find(task) != nullptr;
 }
 
+uint64_t *block_of(pid_t task)
+{
+	const Task *const found = find(task);
+	return found ? found->block : nullptr;
+}
+
 long request(enum __ptrace_request operation, pid_t task, void *address, void *data)
 {
 	if (Task *const found = find(task))

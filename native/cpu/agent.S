@@ -13,7 +13,8 @@
  * wakes on its low half), 401 the signal, 402 the address of its siginfo, 403 the address of the interrupted ucontext, 404 the
  * segment registers the runtime asks for with its answer, which a signal frame does not carry (bit 0 the FS base, bit 1 the GS base,
  * bits 2 to 5 the FS, GS, DS and ES selectors), 405 the FS base and 406 the GS base asked for, 408 to 411 the FS, GS, DS and ES
- * selectors asked for. Selectors are loaded before bases: loading one sets its base from the descriptor. */
+ * selectors asked for. Selectors are loaded before bases: loading one sets its base from the descriptor. Words 412 and 415 are the
+ * time stamp counter as the handler took the signal and as it let the thread go on; 413 and 414 are the runtime's (see CallCycles). */
 
 	.intel_syntax noprefix
 	.section .rodata, "a"
@@ -55,6 +56,9 @@ raven_agent_handler:
 	mov qword ptr [rbx + AGENT_STATE + 8], rdi
 	mov qword ptr [rbx + AGENT_STATE + 16], rsi
 	mov qword ptr [rbx + AGENT_STATE + 24], rdx
+	rdtsc
+	mov dword ptr [rbx + AGENT_STATE + 96], eax
+	mov dword ptr [rbx + AGENT_STATE + 100], edx
 	mov dword ptr [rbx + AGENT_STATE], 1
 	/* Every register is the agent's to use: rt_sigreturn puts back the interrupted ones. */
 	lea rdi, [rbx + AGENT_STATE]
@@ -104,7 +108,10 @@ raven_agent_handler:
 	mov rsi, qword ptr [rbx + AGENT_STATE + 48]
 	mov eax, SYS_ARCH_PRCTL
 	syscall
-5:	mov dword ptr [rbx + AGENT_STATE + 32], 0
+5:	rdtsc
+	mov dword ptr [rbx + AGENT_STATE + 120], eax
+	mov dword ptr [rbx + AGENT_STATE + 124], edx
+	mov dword ptr [rbx + AGENT_STATE + 32], 0
 	mov dword ptr [rbx + AGENT_STATE], 0
 	ret
 /* The return the kernel takes from the handler (SA_RESTORER). */

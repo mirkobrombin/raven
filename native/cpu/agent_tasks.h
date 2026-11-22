@@ -42,6 +42,8 @@ void hold(const Task &task);
 // Forgets every task of the thread group or of the guest's process group, which has ended.
 void release_group(pid_t group);
 bool held(pid_t task);
+// A held task's block; null for any other task.
+uint64_t *block_of(pid_t task);
 
 // ptrace(2) for any task.
 long request(enum __ptrace_request operation, pid_t task, void *address, void *data);

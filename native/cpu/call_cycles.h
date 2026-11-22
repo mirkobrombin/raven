@@ -16,12 +16,14 @@
 
 namespace raven {
 
-// What the calls through served stubs cost, in time stamp counter cycles, when RAVEN_CYCLES is set to the seconds between reports. A call is cut in four: the boundary, from the stub taking its arguments to the runtime seeing the call, less the turn; the turn,
-// the part of the boundary its host thread waited for the runtime while other threads had it; the service, from the call seen to the
-// runtime answering; the return, from the answer to the guest going on with it. The stub stamps the two guest ends in the thread's block
-// (gates.S), the runtime the two in between; the return of a call is known when the next call on the same block is seen. Calls answered
-// beside the turn (see NativeProcess::serve_alone) are counted apart as well, as they have no turn to wait for. Apart again, the part of the
-// service a call spent waiting for the desktop's lock while another thread held it (see DesktopLock).
+// What the calls through served stubs cost, and the NT system calls of threads in the agent's hands (timed in its handler, agent.S), in
+// time stamp counter cycles, when RAVEN_CYCLES is set to the seconds between reports. A call is cut in four: the boundary, from the stub
+// taking its arguments to the runtime seeing the call, less the turn; the turn, the part of the boundary its host thread waited for the
+// runtime while other threads had it; the service, from the call seen to the runtime answering; the return, from the answer to the guest
+// going on with it. The stub stamps the two guest ends in the thread's block (gates.S), the runtime the two in between; the return of a
+// call is known when the next call on the same block is seen. Calls answered beside the turn (see NativeProcess::serve_alone) are counted
+// apart as well, as they have no turn to wait for. Apart again, the part of the service a call spent waiting for the desktop's lock while
+// another thread held it (see DesktopLock).
 class CallCycles {
 public:
 	static CallCycles &instance()
@@ -34,6 +36,14 @@ public:
 	{
 		std::lock_guard lock(mutex);
 		names = std::move(stubs);
+	}
+	// A system call is counted by its number, which no stub's address equals; its name is known once it is served.
+	void name_service(uint64_t number, const std::string &name)
+	{
+		if (!enabled())
+			return;
+		std::lock_guard lock(mutex);
+		names.try_emplace(number, name);
 	}
 	// The runtime sees the call `stub` in `block` at `now`: the cycles it returns are the time it was seen, for answered(). A call answered
 	// beside the turn is counted once it is known to be answered there, with the time it was seen.

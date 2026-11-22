@@ -3127,6 +3127,8 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 		} else {
 			if (state->resume_hook)
 				state->resume_hook();
+			if (uint64_t *const stamps = std::exchange(state->side().service_stamps, nullptr))
+				CallCycles::instance().answered(stamps, state->side().service_number, state->side().service_seen);
 			trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid());
 		}
 		state->side().stopped = false;
@@ -3344,6 +3346,13 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 	}
 	if (signal == (SIGTRAP | 0x80)) {
 		state->side().awaiting_syscall = true;
+		if (auto &cycles = CallCycles::instance(); cycles.enabled())
+			if (uint64_t *const block = agent::block_of(child.pid())) {
+				auto &side = state->side();
+				side.service_stamps = block + agent::cycle_stamps;
+				side.service_number = registers.orig_rax;
+				side.service_seen = cycles.seen(side.service_stamps, side.service_number);
+			}
 		return {NativeStop::syscall, registers.orig_rax, registers.rip, signal};
 	}
 	state->side().awaiting_syscall = false;
