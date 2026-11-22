@@ -1602,12 +1602,15 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// Waits for one packet: the wait ends with one, when the time runs out, when the port's last handle is closed meanwhile (see
 	// CompletionPort::closed), or, for an alertable wait with nothing queued, once the APCs queued to the thread have run.
-	enum class PortWait { packet, timeout, abandoned, apcs };
-	const auto wait_packet = [&reactor, &threads, &context](const std::shared_ptr<CompletionPort> &port, uint32_t milliseconds, bool alertable,
-		CompletionPacket &packet) {
-		std::optional<std::chrono::steady_clock::time_point> wake;
-		if (milliseconds != UINT32_MAX)
-			wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+	enum class PortWait { packet, timeout, abandoned, apcs, alerted };
+	using Deadline = std::optional<std::chrono::steady_clock::time_point>;
+	const auto win32_deadline = [](uint32_t milliseconds) -> Deadline {
+		if (milliseconds == UINT32_MAX)
+			return std::nullopt;
+		return std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+	};
+	const auto wait_packet = [&reactor, &threads, &context](const std::shared_ptr<CompletionPort> &port, Deadline wake, bool alertable,
+		bool native, CompletionPacket &packet) {
 		for (;;) {
 			reactor.poll();
 			if (port->closed())
@@ -1616,27 +1619,80 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 				return PortWait::packet;
 			if (alertable && run_user_apcs(context))
 				return PortWait::apcs;
-			if (milliseconds == 0 || (wake && std::chrono::steady_clock::now() >= *wake))
+			auto *me = &threads.current();
+			if (alertable && native && std::exchange(me->alerted, false))
+				return PortWait::alerted;
+			if (wake && std::chrono::steady_clock::now() >= *wake)
 				return PortWait::timeout;
 			HostWait waiting;
-			const auto *me = &threads.current();
 			threads.block([&] {
-				return port->closed() || !port->empty() || (alertable && !me->apcs.empty()) || (reactor.look(), !port->empty());
+				return port->closed() || !port->empty() || (alertable && (!me->apcs.empty() || (native && me->alerted))) ||
+					(reactor.look(), !port->empty());
 			}, wake);
 		}
 	};
+	registry.add("NtRemoveIoCompletionEx", 6, [completion_for_modify, wait_packet](ApiCall &call) {
+		const uint32_t count = call.u32(2);
+		if (!count || count > 0x07ffffffU) {
+			call.ret(0xc000000dU);
+			return;
+		}
+		const auto [port, status] = completion_for_modify(call[0]);
+		if (!port) {
+			call.ret(status);
+			return;
+		}
+		const size_t width = call.pointer_width(), stride = 4 * width;
+		if ((width == 8 && call[1] % width) || call[3] % sizeof(uint32_t)) {
+			call.ret(0x80000002U);
+			return;
+		}
+		try {
+			call.process.validate_write_memory(call[1], count * stride);
+			call.process.validate_write_memory(call[3], sizeof(uint32_t));
+			Deadline wake;
+			if (call[4]) {
+				const auto interval = call.load<int64_t>(call[4]);
+				const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch());
+				const int64_t clock = now.count() / 100 + int64_t(filetime_epoch_offset);
+				const uint64_t ticks = interval < 0 ? uint64_t(-(interval + 1)) + 1 : uint64_t(std::max<int64_t>(0, interval - clock));
+				if (ticks <= 100ULL * 365 * 24 * 3600 * 10000000ULL)
+					wake = std::chrono::steady_clock::now() + std::chrono::nanoseconds(ticks * 100);
+			}
+			CompletionPacket packet;
+			const auto ended = wait_packet(port, wake, call.u32(5) != 0, true, packet);
+			uint32_t removed = 0;
+			if (ended == PortWait::packet) {
+				do {
+					const auto entry = call[1] + removed * stride;
+					call.store_pointer(entry, packet.key);
+					call.store_pointer(entry + width, packet.overlapped);
+					call.store_pointer(entry + 2 * width, packet.native_status.value_or(packet.status ? 0xc0070000U | (packet.status & 0xffffU) : 0));
+					call.store_pointer(entry + 3 * width, packet.bytes);
+				} while (++removed < count && port->take(packet));
+			}
+			call.store<uint32_t>(call[3], removed);
+			call.ret(ended == PortWait::packet ? 0 : ended == PortWait::timeout ? 0x102 : ended == PortWait::apcs ? 0xc0 :
+				ended == PortWait::alerted ? 0x101 : 0x80);
+		} catch (const ApiFault &) {
+			call.ret(0xc0000005U);
+		} catch (const std::runtime_error &) {
+			call.ret(0xc0000005U);
+		}
+	});
+
 	// The Windows error of a wait that ended without a packet.
 	const auto port_error = [](PortWait ended) -> uint32_t {
 		return ended == PortWait::abandoned ? 735 : ended == PortWait::apcs ? 0xc0 : 258;
 	};
-	registry.add("GetQueuedCompletionStatus", 5, [&registry, completion_for_modify, wait_packet, port_error](ApiCall &call) {
+	registry.add("GetQueuedCompletionStatus", 5, [&registry, completion_for_modify, wait_packet, win32_deadline, port_error](ApiCall &call) {
 		const auto [port, status] = completion_for_modify(call[0]);
 		if (!port) {
 			call.fail(status == 0xc0000022U ? 5 : 6);
 			return;
 		}
 		CompletionPacket packet;
-		if (const auto ended = wait_packet(port, call.u32(4), false, packet); ended != PortWait::packet) {
+		if (const auto ended = wait_packet(port, win32_deadline(call.u32(4)), false, false, packet); ended != PortWait::packet) {
 			if (call[3])
 				call.store_pointer(call[3], 0);
 			call.fail(port_error(ended));
@@ -1667,7 +1723,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	// OVERLAPPED_ENTRY: the key, the OVERLAPPED pointer, an internal word and the byte count.
-	registry.add("GetQueuedCompletionStatusEx", 6, [completion_for_modify, wait_packet, port_error](ApiCall &call) {
+	registry.add("GetQueuedCompletionStatusEx", 6, [completion_for_modify, wait_packet, win32_deadline, port_error](ApiCall &call) {
 		const auto [port, status] = completion_for_modify(call[0]);
 		if (!port || !call[1] || !call.u32(2) || !call[3]) {
 			call.fail(port ? 87 : status == 0xc0000022U ? 5 : 6);
@@ -1676,7 +1732,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		const size_t width = call.pointer_width(), stride = width == 4 ? 16 : 32;
 		uint32_t removed = 0;
 		CompletionPacket packet;
-		auto ended = wait_packet(port, call.u32(4), call.u32(5) != 0, packet);
+		auto ended = wait_packet(port, win32_deadline(call.u32(4)), call.u32(5) != 0, false, packet);
 		while (ended == PortWait::packet && removed < call.u32(2)) {
 			const uint64_t entry = call[1] + removed * stride;
 			call.store_pointer(entry, packet.key);
@@ -1686,7 +1742,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			++removed;
 			// The next packet is taken only when there is room for it; one taken and not handed out would be lost.
 			if (removed < call.u32(2))
-				ended = wait_packet(port, 0, false, packet);
+				ended = wait_packet(port, std::chrono::steady_clock::now(), false, false, packet);
 		}
 		if (!removed) {
 			call.fail(port_error(ended));
