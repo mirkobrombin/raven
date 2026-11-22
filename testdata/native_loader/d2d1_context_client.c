@@ -73,6 +73,8 @@ int raven_entry(void)
 	create_function create = library ? (create_function)GetProcAddress(library, "D2D1CreateFactory") : NULL;
 	if (!create)
 		return 2;
+	if ((create_function)GetProcAddress(library, MAKEINTRESOURCEA(1)) != create)
+		return 39;
 	ID2D1Factory *factory = NULL;
 	if (FAILED(create(D2D1_FACTORY_TYPE_SINGLE_THREADED, &IID_ID2D1Factory, NULL, (void **)&factory)))
 		return 3;

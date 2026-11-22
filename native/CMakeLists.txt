@@ -2702,6 +2702,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_dwrite_x32 COMMAND raven --run-process --execution=native --timeout-ms=20000 ${DWRITE_CLIENT32})
                 set_tests_properties(native_dwrite_x32 PROPERTIES TIMEOUT 40 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             endif()
+            if(RAVEN_MINGW32 AND RAVEN_INSTALLER32_COMPONENT_DIR AND RAVEN_SKIA_LIBRARY)
+                set(D2D1_CONTEXT_CLIENT32 ${CMAKE_CURRENT_BINARY_DIR}/d2d1-context32.exe)
+                add_custom_command(OUTPUT ${D2D1_CONTEXT_CLIENT32}
+                    COMMAND ${RAVEN_MINGW32} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${D2D1_CONTEXT_CLIENT32} ${PROJECT_SOURCE_DIR}/testdata/native_loader/d2d1_context_client.c -lole32 -lkernel32 -lgcc
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/d2d1_context_client.c VERBATIM)
+                add_custom_target(d2d1_context_fixture32 ALL DEPENDS ${D2D1_CONTEXT_CLIENT32})
+                add_test(NAME native_d2d1_context_x32 COMMAND raven --run-process --execution=native ${D2D1_CONTEXT_CLIENT32})
+                set_tests_properties(native_d2d1_context_x32 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            endif()
         endif()
         if(RAVEN_CONTROLS_COMPONENT_DIR)
             if(NOT EXISTS "${RAVEN_CONTROLS_COMPONENT_DIR}/comctl32.dll")
