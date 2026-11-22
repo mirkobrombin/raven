@@ -18,7 +18,7 @@ int raven_entry(void)
 
 	WCHAR port_name[] = L"\\RPC Control\\RavenAlpcFixture";
 	UNICODE_STRING name = {sizeof port_name - sizeof(WCHAR), sizeof port_name, port_name};
-	OBJECT_ATTRIBUTES attributes = {sizeof attributes, NULL, &name, 0x40, NULL, NULL};
+	OBJECT_ATTRIBUTES attributes = {.Length = sizeof attributes, .ObjectName = &name, .Attributes = 0x40};
 	if (create(NULL, &attributes, NULL) != (NTSTATUS)0xc0000005)
 		return 3;
 	HANDLE port = NULL, second = NULL;
