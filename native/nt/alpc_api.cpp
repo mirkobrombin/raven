@@ -3,22 +3,153 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <deque>
 #include <map>
 
 namespace raven {
 
 namespace {
 
+class AlpcPort;
+struct AlpcConnection;
+
+struct AlpcMessage {
+	std::vector<uint8_t> data;
+	uint64_t process = 0, thread = 0;
+	uint32_t id = 0;
+	uint16_t type = 0;
+	std::shared_ptr<AlpcConnection> request;
+};
+
+struct AlpcConnection {
+	enum class State { waiting, accepted, rejected };
+	State state = State::waiting;
+	bool delivered = false;
+	std::weak_ptr<AlpcPort> listener, client, server;
+	AlpcMessage response;
+};
+
 class AlpcPort : public KernelObject {
 public:
-	explicit AlpcPort(std::u16string name) : name(std::move(name)) {}
+	explicit AlpcPort(std::u16string name = {}) : name(std::move(name)) {}
 	std::u16string_view type_name() const override { return u"ALPC Port"; }
 	std::u16string_view object_name() const override { return name; }
 	uint32_t default_access() const override { return 0x1f0001; }
+	bool watches_last_handle() const override { return true; }
+	void last_handle_closed() override { disconnect(); name_closed = true; }
+	void disconnect() { closed = true; inbox.clear(); requests.clear(); }
+
+	bool closed = false, name_closed = false;
+	bool server = false;
+	size_t message_limit = UINT16_MAX;
+	std::shared_ptr<AlpcConnection> connection;
+	std::deque<AlpcMessage> inbox;
+	std::map<uint32_t, std::shared_ptr<AlpcConnection>> requests;
 
 private:
 	std::u16string name;
 };
+
+constexpr uint32_t invalid_parameter = 0xc000000du, invalid_handle = 0xc0000008u, not_supported = 0xc00000bbu,
+	port_disconnected = 0xc0000037u, buffer_too_small = 0xc0000023u, timeout = 0x102;
+
+std::u16string alpc_name_key(std::u16string name)
+{
+	for (auto &character : name)
+		if (character >= u'A' && character <= u'Z')
+			character += u'a' - u'A';
+	return name;
+}
+
+std::optional<std::u16string> alpc_name(ApiCall &call, uint64_t counted)
+{
+	if (!counted)
+		return std::nullopt;
+	const auto size = call.load<uint16_t>(counted);
+	if (!size || size % 2 || size > 65532 || size > call.load<uint16_t>(counted + 2))
+		return std::nullopt;
+	const auto bytes = call.read(call.load_pointer(counted + call.pointer_width()), size);
+	std::u16string name(size / 2, 0);
+	std::memcpy(name.data(), bytes.data(), size);
+	if (!name.starts_with(u'\\') || name.find(u'\0') != name.npos || name.ends_with(u'\\'))
+		return std::nullopt;
+	return name;
+}
+
+size_t header_size(const ApiCall &call)
+{
+	return call.pointer_width() == 8 ? 40 : 24;
+}
+
+std::optional<size_t> port_message_limit(ApiCall &call, uint64_t attributes)
+{
+	if (!attributes)
+		return UINT16_MAX;
+	if (call.load<uint32_t>(attributes) & 0x00100000u)
+		return std::nullopt;
+	const auto maximum = call.load_pointer(attributes + 16);
+	if (maximum && (maximum < header_size(call) || maximum > UINT16_MAX))
+		return std::nullopt;
+	return maximum ? size_t(maximum) : UINT16_MAX;
+}
+
+std::optional<AlpcMessage> read_message(ApiCall &call, uint64_t address, size_t capacity = UINT16_MAX)
+{
+	const size_t header = header_size(call);
+	const auto data = call.load<uint16_t>(address), total = call.load<uint16_t>(address + 2);
+	if (total < header + data || total > capacity || call.load<uint16_t>(address + 6))
+		return std::nullopt;
+	AlpcMessage message;
+	message.id = call.load<uint32_t>(address + 8 + 2 * call.pointer_width());
+	message.data = call.read(address + header, data);
+	return message;
+}
+
+uint32_t write_message(ApiCall &call, uint64_t address, uint64_t length, const AlpcMessage &message)
+{
+	const size_t header = header_size(call), width = call.pointer_width(), needed = header + message.data.size();
+	const uint64_t capacity = call.load_pointer(length);
+	call.process.validate_write_memory(length, width);
+	if (capacity < needed) {
+		call.store_pointer(length, needed);
+		return buffer_too_small;
+	}
+	std::vector<uint8_t> bytes(needed, 0);
+	const auto put = [&](size_t offset, uint64_t value, size_t count) { std::memcpy(bytes.data() + offset, &value, count); };
+	put(0, message.data.size(), 2);
+	put(2, needed, 2);
+	put(4, message.type, 2);
+	put(8, message.process, width);
+	put(8 + width, message.thread, width);
+	put(8 + 2 * width, message.id, 4);
+	if (!message.data.empty())
+		std::memcpy(bytes.data() + header, message.data.data(), message.data.size());
+	call.write(address, bytes);
+	call.store_pointer(length, needed);
+	return 0;
+}
+
+std::optional<std::chrono::steady_clock::time_point> deadline(ApiCall &call, uint64_t address)
+{
+	if (!address)
+		return std::nullopt;
+	const int64_t interval = call.load<int64_t>(address);
+	const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch());
+	const uint64_t ticks = interval < 0 ? uint64_t(-(interval + 1)) + 1 : uint64_t(std::max<int64_t>(0, interval - (now.count() / 100 + int64_t(filetime_epoch_offset))));
+	if (ticks > 100ULL * 365 * 24 * 3600 * 10000000ULL)
+		return std::nullopt;
+	return std::chrono::steady_clock::now() + std::chrono::nanoseconds(ticks * 100);
+}
+
+template<typename Handler> auto alpc_status(Handler handler)
+{
+	return [handler = std::move(handler)](ApiCall &call) {
+		try { call.ret(handler(call)); }
+		catch (const std::bad_alloc &) { call.ret(0xc000009au); }
+		catch (const ApiFault &) { call.ret(0xc0000005u); }
+		catch (const std::runtime_error &) { call.ret(0xc0000005u); }
+	};
+}
 
 constexpr uint32_t attribute_mask = 0xfe000000u;
 
@@ -69,8 +200,9 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		try {
 			const size_t width = call.pointer_width();
 			call.process.validate_write_memory(call[0], width);
-			if (call[2] && (call.load<uint32_t>(call[2]) & 0x00100000u)) {
-				call.ret(0xc000000du);
+			const auto limit = port_message_limit(call, call[2]);
+			if (!limit) {
+				call.ret(invalid_parameter);
 				return;
 			}
 			uint32_t flags = 0;
@@ -86,31 +218,25 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 				}
 				flags = call.load<uint32_t>(attributes + 3 * width);
 				if (const auto counted = call.load_pointer(attributes + 2 * width)) {
-					const auto size = call.load<uint16_t>(counted);
-					if (size > call.load<uint16_t>(counted + 2) || size % 2 || size > 65532) {
+					auto parsed = alpc_name(call, counted);
+					if (!parsed) {
 						call.ret(0xc0000033u);
 						return;
 					}
-					const auto bytes = call.read(call.load_pointer(counted + width), size);
-					name.resize(size / 2);
-					if (!bytes.empty())
-						std::memcpy(name.data(), bytes.data(), size);
-					if (!name.starts_with(u'\\') || name.find(u'\0') != name.npos || name.ends_with(u'\\')) {
-						call.ret(0xc0000033u);
-						return;
-					}
+					name = std::move(*parsed);
 				}
 			}
-			auto key = name;
-			for (auto &character : key)
-				if (character >= u'A' && character <= u'Z')
-					character += u'a' - u'A';
-			std::erase_if(*names, [](const auto &entry) { return entry.second.expired(); });
+			auto key = alpc_name_key(name);
+			std::erase_if(*names, [](const auto &entry) {
+				const auto port = entry.second.lock();
+				return !port || port->name_closed;
+			});
 			if (!key.empty() && names->contains(key)) {
 				call.ret(0xc0000035u);
 				return;
 			}
 			const auto port = std::make_shared<AlpcPort>(std::move(name));
+			port->message_limit = *limit;
 			if (!key.empty())
 				names->emplace(std::move(key), port);
 			const auto made = objects.add_object(port);
@@ -130,6 +256,176 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0xc0000005u);
 		} catch (const std::runtime_error &) {
 			call.ret(0xc0000005u);
+		}
+	});
+	auto next_id = std::make_shared<uint64_t>(1);
+	const auto disconnected = [](const AlpcPort &port) {
+		if (port.closed)
+			return true;
+		if (!port.connection)
+			return false;
+		const auto listener = port.connection->listener.lock();
+		const auto peer = (port.server ? port.connection->client : port.connection->server).lock();
+		return !listener || listener->closed || !peer || peer->closed;
+	};
+	registry.add("NtAlpcConnectPort", 11, alpc_status([&context, names, next_id](ApiCall &call) -> uint32_t {
+		const auto name = alpc_name(call, call[1]);
+		if (!name)
+			return 0xc0000033u;
+		const auto named = names->find(alpc_name_key(*name));
+		const auto listener = named == names->end() ? nullptr : named->second.lock();
+		if (!listener || listener->closed)
+			return 0xc0000034u;
+		if (call[2] || call[5] || call[8] || call[9] || (call.u32(4) & ~0x20000u))
+			return not_supported;
+		if ((call[6] != 0) != (call[7] != 0))
+			return invalid_parameter;
+		call.process.validate_write_memory(call[0], call.pointer_width());
+		const auto wake = deadline(call, call[10]);
+		auto request = call[6] ? read_message(call, call[6], call.load_pointer(call[7])) : std::optional<AlpcMessage>(AlpcMessage{});
+		const auto limit = port_message_limit(call, call[3]);
+		if (!request || !limit || header_size(call) + request->data.size() > listener->message_limit)
+			return invalid_parameter;
+		if (listener->requests.size() >= 256 || listener->inbox.size() >= 256 || *next_id > UINT32_MAX)
+			return 0xc0000044u;
+		const auto client = std::make_shared<AlpcPort>();
+		client->message_limit = *limit;
+		const auto connection = std::make_shared<AlpcConnection>();
+		client->connection = connection;
+		connection->client = client;
+		connection->listener = listener;
+		const uint32_t id = uint32_t((*next_id)++);
+		// A connection withdrawn before it is accepted must cease to be visible on the listener.
+		struct Withdraw {
+			AlpcPort &listener;
+			uint32_t id;
+			~Withdraw()
+			{
+				listener.requests.erase(id);
+				std::erase_if(listener.inbox, [id = id](const auto &message) { return message.id == id; });
+			}
+		} withdraw{*listener, id};
+		request->process = call.load_pointer(context.environment.teb() + 8 * call.pointer_width());
+		request->thread = context.threads.current_id();
+		request->id = id;
+		request->type = 10;
+		request->request = connection;
+		listener->requests.emplace(id, connection);
+		listener->inbox.push_back(std::move(*request));
+		if (!context.threads.block([&] { return listener->closed || connection->state != AlpcConnection::State::waiting; }, wake))
+			return timeout;
+		if (listener->closed)
+			return port_disconnected;
+		if (connection->state != AlpcConnection::State::accepted)
+			return 0xc0000041u;
+		if (call[6])
+			if (const auto status = write_message(call, call[6], call[7], connection->response))
+				return status;
+		const auto made = context.objects.add_object(client);
+		if (made.status)
+			return made.status;
+		try { call.store_pointer(call[0], made.value); }
+		catch (...) { context.objects.close(made.value); throw; }
+		return 0;
+	}));
+	registry.add("NtAlpcAcceptConnectPort", 9, alpc_status([&context](ApiCall &call) -> uint32_t {
+		const auto listener = context.objects.object_as<AlpcPort>(call[1]);
+		if (!listener)
+			return invalid_handle;
+		if (listener->closed)
+			return port_disconnected;
+		if (call.u32(2) || call[3] || call[5] || call[7])
+			return not_supported;
+		if (!(context.objects.access_of(call[1]) & 1))
+			return 0xc0000022u;
+		if (!call[6])
+			return invalid_parameter;
+		auto response = read_message(call, call[6]);
+		if (!response)
+			return invalid_parameter;
+		const auto pending = listener->requests.find(response->id);
+		if (pending == listener->requests.end() || !pending->second->delivered || pending->second->state != AlpcConnection::State::waiting)
+			return 0xc000021fu;
+		const auto connection = pending->second;
+		if (!call.u32(8)) {
+			connection->state = AlpcConnection::State::rejected;
+			return 0;
+		}
+		const auto limit = port_message_limit(call, call[4]);
+		if (!limit)
+			return invalid_parameter;
+		call.process.validate_write_memory(call[0], call.pointer_width());
+		const auto server = std::make_shared<AlpcPort>();
+		server->message_limit = *limit;
+		server->server = true;
+		server->connection = connection;
+		const auto made = context.objects.add_object(server);
+		if (made.status)
+			return made.status;
+		try { call.store_pointer(call[0], made.value); }
+		catch (...) { context.objects.close(made.value); throw; }
+		connection->server = server;
+		connection->response = std::move(*response);
+		connection->state = AlpcConnection::State::accepted;
+		return 0;
+	}));
+	registry.add("NtAlpcSendWaitReceivePort", 8, alpc_status([&context, next_id, disconnected](ApiCall &call) -> uint32_t {
+		const auto port = context.objects.object_as<AlpcPort>(call[0]);
+		if (!port)
+			return invalid_handle;
+		if (call.u32(1) || call[3] || call[6])
+			return not_supported;
+		if (!(context.objects.access_of(call[0]) & 1))
+			return 0xc0000022u;
+		if ((!call[2] && !call[4]) || ((call[4] != 0) != (call[5] != 0)))
+			return invalid_parameter;
+		if (disconnected(*port))
+			return port_disconnected;
+		const auto wake = deadline(call, call[7]);
+		if (call[2]) {
+			auto message = read_message(call, call[2]);
+			if (!message)
+				return invalid_parameter;
+			if (!port->connection)
+				return port_disconnected;
+			const auto destination = (port->server ? port->connection->client : port->connection->listener).lock();
+			if (!destination)
+				return port_disconnected;
+			if (header_size(call) + message->data.size() > std::min(port->message_limit, destination->message_limit))
+				return invalid_parameter;
+			if (destination->inbox.size() >= 256 || *next_id > UINT32_MAX)
+				return 0xc0000044u;
+			message->process = call.load_pointer(context.environment.teb() + 8 * call.pointer_width());
+			message->thread = context.threads.current_id();
+			message->id = uint32_t((*next_id)++);
+			message->type = 3;
+			destination->inbox.push_back(std::move(*message));
+		}
+		if (!call[4])
+			return 0;
+		if (!context.threads.block([&] { return !port->inbox.empty() || disconnected(*port); }, wake))
+			return timeout;
+		if (port->inbox.empty())
+			return port_disconnected;
+		const auto &message = port->inbox.front();
+		if (const auto status = write_message(call, call[4], call[5], message))
+			return status;
+		if (message.request)
+			message.request->delivered = true;
+		port->inbox.pop_front();
+		return 0;
+	}));
+	registry.add("NtAlpcDisconnectPort", 2, [&objects = context.objects](ApiCall &call) {
+		const auto port = objects.object_as<AlpcPort>(call[0]);
+		if (!port)
+			call.ret(invalid_handle);
+		else if (call.u32(1))
+			call.ret(invalid_parameter);
+		else if (!(objects.access_of(call[0]) & 1))
+			call.ret(0xc0000022u);
+		else {
+			port->disconnect();
+			call.ret(0);
 		}
 	});
 }
