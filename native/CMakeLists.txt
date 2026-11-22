@@ -2065,6 +2065,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(appx_fixture_${installer_arch} ALL DEPENDS ${appx_fixture}/appx-client.exe ${appx_fixture}/appx-good.msix)
                 add_test(NAME native_appx_packaging_${installer_arch} COMMAND raven --run-process --execution=native ${appx_fixture}/appx-client.exe)
                 set_tests_properties(native_appx_packaging_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${appx_fixture}/msix-deployment-client.exe
+                    COMMAND ${installer_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${appx_fixture}/msix-deployment-client.exe
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/msix_deployment_client.c -lruntimeobject -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/msix_deployment_client.c VERBATIM)
+                add_custom_target(msix_deployment_fixture_${installer_arch} ALL DEPENDS ${appx_fixture}/msix-deployment-client.exe)
+                add_dependencies(msix_deployment_fixture_${installer_arch} appx_fixture_${installer_arch})
+                add_test(NAME native_msix_deployment_${installer_arch} COMMAND raven --run-process --execution=native
+                    ${appx_fixture}/msix-deployment-client.exe)
+                set_tests_properties(native_msix_deployment_${installer_arch} PROPERTIES TIMEOUT 60
+                    PASS_REGULAR_EXPRESSION "Native entry returned 0 " ENVIRONMENT RAVEN_PREFIX=${appx_fixture}/deployment-prefix)
                 # Delta patches mspatcha_fixtures.py writes, applied through the mspatcha exports by name, handle and buffer.
                 set(mspatcha_fixture ${CMAKE_CURRENT_BINARY_DIR}/mspatcha-fixtures/${installer_arch})
                 add_custom_command(OUTPUT ${mspatcha_fixture}/mspatcha-client.exe ${mspatcha_fixture}/delta.pa19
