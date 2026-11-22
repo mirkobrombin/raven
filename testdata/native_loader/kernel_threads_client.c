@@ -196,6 +196,44 @@ static DWORD WINAPI leaving(LPVOID parameter)
 	return 0;
 }
 
+/* A stack's guard page is closed to the copies the kernel half makes as well as to the thread. */
+static int guard_closed(void)
+{
+	ULONG_PTR low=0,high=0;
+	BYTE byte=0;
+	SIZE_T moved=0;
+	GetCurrentThreadStackLimits(&low,&high);
+	return low && !ReadProcessMemory(GetCurrentProcess(),(void *)(low-1),&byte,1,&moved) &&
+		!WriteProcessMemory(GetCurrentProcess(),(void *)(low-1),&byte,1,&moved);
+}
+
+/* Decommitted stack pages come back empty for both halves: a page of an open range, a range too long for the guest to empty itself,
+   and a page that was made read-only, which no open range holds. */
+static DWORD WINAPI stack_pages(LPVOID parameter)
+{
+	static const SIZE_T sizes[3]={4096,0x50000,4096};
+	ULONG_PTR low=0,high=0;
+	(void)parameter;
+	if(!guard_closed()) return 1;
+	GetCurrentThreadStackLimits(&low,&high);
+	volatile BYTE *part=(volatile BYTE *)(((low+0xffff)&~(ULONG_PTR)0xffff)+0x10000);
+	for(int i=0;i<3;++i) {
+		const SIZE_T size=sizes[i];
+		BYTE seen=0;
+		SIZE_T moved=0;
+		DWORD previous;
+		if(!VirtualAlloc((void *)part,size,MEM_COMMIT,PAGE_READWRITE)) return 2;
+		for(SIZE_T at=0;at<size;at+=512) part[at]=0xa5;
+		if(!ReadProcessMemory(GetCurrentProcess(),(const void *)part,&seen,1,&moved) || seen!=0xa5) return 3;
+		if(i==2 && !VirtualProtect((void *)part,size,PAGE_READONLY,&previous)) return 4;
+		if(!VirtualFree((void *)part,size,MEM_DECOMMIT) || !VirtualAlloc((void *)part,size,MEM_COMMIT,PAGE_READWRITE)) return 5;
+		if(!ReadProcessMemory(GetCurrentProcess(),(const void *)part,&seen,1,&moved) || seen) return 6;
+		for(SIZE_T at=0;at<size;at+=512)
+			if(part[at]) return 7;
+	}
+	return guard_closed() ? 0 : 8;
+}
+
 int raven_entry(void)
 {
 	const int options = critical_options();
@@ -372,5 +410,11 @@ int raven_entry(void)
 	HANDLE both[2]={leaving_handle,CreateEventA(0,TRUE,FALSE,0)};
 	CHECK(109,WaitForMultipleObjects(2,both,FALSE,5000)==WAIT_OBJECT_0);
 	CloseHandle(both[1]);
+	CHECK(110,guard_closed());
+	HANDLE stacked=CreateThread(0,0x100000,stack_pages,0,STACK_SIZE_PARAM_IS_A_RESERVATION,0);
+	CHECK(111,stacked && WaitForSingleObject(stacked,5000)==WAIT_OBJECT_0);
+	CHECK(112,GetExitCodeThread(stacked,&code));
+	CHECK(120+code,code==0);
+	CloseHandle(stacked);
 	return 0;
 }
