@@ -2481,7 +2481,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_alpc_port_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_custom_command(OUTPUT ${fixture}/alpc-round-trip.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
-                        -o ${fixture}/alpc-round-trip.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_round_trip.c -lkernel32
+                        -o ${fixture}/alpc-round-trip.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_round_trip.c -lkernel32 -ladvapi32
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_round_trip.c VERBATIM)
                 add_custom_target(alpc_round_trip_fixture_${installer_arch} ALL DEPENDS ${fixture}/alpc-round-trip.exe)
                 add_test(NAME native_alpc_round_trip_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/alpc-round-trip.exe)

@@ -20,6 +20,8 @@ typedef NTSTATUS (NTAPI *connect_port)(HANDLE *, UNICODE_STRING *, OBJECT_ATTRIB
 typedef NTSTATUS (NTAPI *accept_port)(HANDLE *, HANDLE, ULONG, OBJECT_ATTRIBUTES *, const void *, void *, struct header *, void *, BOOLEAN);
 typedef NTSTATUS (NTAPI *exchange)(HANDLE, ULONG, struct header *, void *, struct header *, SIZE_T *, void *, LARGE_INTEGER *);
 
+struct client_input { UNICODE_STRING *name; PSID server_sid; };
+
 static connect_port connect;
 static exchange send_receive;
 
@@ -39,13 +41,13 @@ static NTSTATUS send(HANDLE port, ULONG value)
 
 static DWORD WINAPI client(void *argument)
 {
-	UNICODE_STRING *name = argument;
+	const struct client_input *input = argument;
 	HANDLE port = NULL;
 	struct message message = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 34};
 	SIZE_T capacity = sizeof message;
 	LARGE_INTEGER limit;
 	limit.QuadPart = -30000000;
-	if (connect(&port, name, NULL, NULL, 0x20000, NULL, &message.header, &capacity, NULL, NULL, &limit) || !port)
+	if (connect(&port, input->name, NULL, NULL, 0x20000, input->server_sid, &message.header, &capacity, NULL, NULL, &limit) || !port)
 		return 10;
 	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 711)
 		return 11;
@@ -75,7 +77,21 @@ int raven_entry(void)
 	struct message message;
 	if (receive(listener, &message, 0) != 0x102)
 		return 3;
-	HANDLE worker = CreateThread(NULL, 0, client, &name, 0, NULL);
+	BYTE different_sid[SECURITY_MAX_SID_SIZE];
+	DWORD sid_size = sizeof different_sid;
+	LARGE_INTEGER no_wait;
+	no_wait.QuadPart = 0;
+	if (!CreateWellKnownSid(WinNullSid, NULL, different_sid, &sid_size) ||
+		connect(&peer, &name, NULL, NULL, 0x20000, different_sid, NULL, NULL, NULL, NULL, &no_wait) != (NTSTATUS)0xc00002a0 || peer ||
+		receive(listener, &message, 0) != 0x102)
+		return 16;
+	union { TOKEN_USER user; BYTE buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]; } token_user;
+	HANDLE token = NULL;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) ||
+		!GetTokenInformation(token, TokenUser, &token_user, sizeof token_user, &sid_size) || !CloseHandle(token))
+		return 17;
+	struct client_input input = {&name, token_user.user.User.Sid};
+	HANDLE worker = CreateThread(NULL, 0, client, &input, 0, NULL);
 	if (!worker || receive(listener, &message, -30000000) || (message.header.type & 0xfff) != 10 ||
 		!message.header.message_id || message.value != 34)
 		return 4;
