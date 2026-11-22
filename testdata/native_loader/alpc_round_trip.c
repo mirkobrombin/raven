@@ -49,7 +49,12 @@ static DWORD WINAPI client(void *argument)
 		return 10;
 	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 711)
 		return 11;
-	return CloseHandle(port) ? 0 : 12;
+	struct message request = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 921};
+	capacity = sizeof message;
+	if (send_receive(port, 0x20000, &request.header, NULL, &message.header, &capacity, NULL, &limit) ||
+		message.header.data_length != sizeof(ULONG) || message.value != 425)
+		return 12;
+	return CloseHandle(port) ? 0 : 13;
 }
 
 int raven_entry(void)
@@ -80,8 +85,18 @@ int raven_entry(void)
 		return 5;
 	if (receive(listener, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 582 || send(peer, 711))
 		return 6;
+	if (receive(listener, &message, -30000000) || !message.header.message_id || message.value != 921)
+		return 7;
+	const ULONG request_id = message.header.message_id;
+	message.header.message_id = request_id ^ 0x80000000;
+	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL) >= 0)
+		return 8;
+	message.header.message_id = request_id;
+	message.value = 425;
+	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL))
+		return 9;
 	DWORD result = 0;
 	if (WaitForSingleObject(worker, 4000) != WAIT_OBJECT_0 || !GetExitCodeThread(worker, &result))
-		return 7;
-	return !CloseHandle(worker) || !CloseHandle(peer) || !CloseHandle(listener) ? 8 : result;
+		return 14;
+	return !CloseHandle(worker) || !CloseHandle(peer) || !CloseHandle(listener) ? 15 : result;
 }
