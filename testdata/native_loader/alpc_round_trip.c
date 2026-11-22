@@ -20,10 +20,14 @@ typedef NTSTATUS (NTAPI *connect_port)(HANDLE *, UNICODE_STRING *, OBJECT_ATTRIB
 typedef NTSTATUS (NTAPI *accept_port)(HANDLE *, HANDLE, ULONG, OBJECT_ATTRIBUTES *, const void *, void *, struct header *, void *, BOOLEAN);
 typedef NTSTATUS (NTAPI *exchange)(HANDLE, ULONG, struct header *, void *, struct header *, SIZE_T *, void *, LARGE_INTEGER *);
 
+typedef NTSTATUS (NTAPI *query_port)(HANDLE, ULONG, void *, ULONG, ULONG *);
+
+struct server_session { ULONG session, process; };
 struct client_input { UNICODE_STRING *name; PSID server_sid; };
 
 static connect_port connect;
 static exchange send_receive;
+static query_port query;
 
 static NTSTATUS receive(HANDLE port, struct message *message, LONGLONG interval)
 {
@@ -49,8 +53,16 @@ static DWORD WINAPI client(void *argument)
 	limit.QuadPart = -100000000;
 	if (connect(&port, input->name, NULL, NULL, 0x20000, input->server_sid, &message.header, &capacity, NULL, NULL, &limit) || !port)
 		return 10;
-	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 711)
+	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || !message.value)
 		return 11;
+	struct server_session server = {0};
+	DWORD session = 0;
+	ULONG needed = 0;
+	if (query(port, 12, &server, sizeof server - 1, &needed) >= 0 || server.process || server.session)
+		return 24;
+	if (!ProcessIdToSessionId(message.value, &session) || query(port, 12, &server, sizeof server, &needed) ||
+		server.process != message.value || server.session != session)
+		return 25;
 	struct message request = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 921};
 	capacity = sizeof message;
 	if (send_receive(port, 0x20000, &request.header, NULL, &message.header, &capacity, NULL, &limit) ||
@@ -111,6 +123,9 @@ int raven_entry(void)
 	send_receive = (exchange)GetProcAddress(native, "NtAlpcSendWaitReceivePort");
 	if (!create || !accept || !connect || !send_receive)
 		return 1;
+	query = (query_port)GetProcAddress(native, "NtAlpcQueryInformation");
+	if (!query)
+		return 23;
 	const WCHAR *command = GetCommandLineW();
 	const BOOL child = command_ends_with(command, L" --alpc-client");
 	const BOOL cross_process = child || command_ends_with(command, L" --alpc-process");
@@ -153,7 +168,7 @@ int raven_entry(void)
 	if (accept(&peer, listener, 0, NULL, NULL, NULL, &message.header, NULL, TRUE) || !peer)
 		return 5;
 	if (receive(listener, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 582 ||
-		message.header.process != peer_process || message.header.thread != peer_thread || send(peer, 711))
+		message.header.process != peer_process || message.header.thread != peer_thread || send(peer, GetCurrentProcessId()))
 		return 6;
 	if (receive(listener, &message, -30000000) || !message.header.message_id || message.value != 921 ||
 		message.header.process != peer_process || message.header.thread != peer_thread)
