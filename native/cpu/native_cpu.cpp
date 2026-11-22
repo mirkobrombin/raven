@@ -2428,11 +2428,14 @@ int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point d
 		patience = std::min(200u, patience * 2);
 		return result;
 	};
+	const uint32_t *const stop = block ? agent::stop_word(task) : nullptr;
 	for (unsigned polls = poller.polls ? 200 - patience : 199;; ++polls) {
 		if (block && polls < 200)
 			for (unsigned looks = 0; looks < 64; ++looks) {
 				if (__atomic_load_n(&block[0], __ATOMIC_ACQUIRE))
 					return came(-4);
+				if (stop && __atomic_load_n(stop, __ATOMIC_ACQUIRE) == agent::posted)
+					break;
 				__builtin_ia32_pause();
 			}
 		int status = 0;

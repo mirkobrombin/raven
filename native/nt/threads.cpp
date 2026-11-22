@@ -1645,6 +1645,9 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 				CallCycles::instance().waited_turn(0);
 				return -4;
 			}
+			// A guest that stopped leaves no call in its block: it is waited for, which finds the stop at once.
+			if (stop && __atomic_load_n(stop, __ATOMIC_ACQUIRE) == agent::posted)
+				break;
 			__builtin_ia32_pause();
 		}
 		if (looks == 256 && stop && __atomic_load_n(stop, __ATOMIC_ACQUIRE) == agent::posted)
