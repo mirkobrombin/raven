@@ -1553,6 +1553,99 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			call.ret(0xc000009aU);
 		}
 	});
+	const auto wait_for_modify = [&objects](uint64_t handle) -> std::pair<std::shared_ptr<WaitCompletionPacket>, uint32_t> {
+		const auto wait = objects.object_as<WaitCompletionPacket>(handle);
+		if (!wait)
+			return {{}, objects.type_name(handle) ? 0xc0000024U : 0xc0000008U};
+		if (!(objects.access_of(handle) & 1))
+			return {{}, 0xc0000022U};
+		return {wait, 0};
+	};
+	const auto finish_wait = [](const std::shared_ptr<WaitCompletionPacket> &wait) {
+		if (!wait->target)
+			return true;
+		const auto port = wait->port.lock();
+		if (!port || port->closed()) {
+			wait->target.reset();
+			return true;
+		}
+		if (wait->target->signaled(0) != 1)
+			return false;
+		auto completion = wait->notification;
+		completion.reserve = wait;
+		try {
+			port->post(completion);
+		} catch (const std::bad_alloc &) {
+			return false;
+		}
+		if (!wait->target->try_consume(0)) {
+			port->cancel(*wait);
+			return false;
+		}
+		wait->queued = true;
+		wait->target.reset();
+		return true;
+	};
+	registry.add("NtAssociateWaitCompletionPacket", 8, [&objects, &reactor, wait_for_modify, completion_for_modify, finish_wait](ApiCall &call) {
+		const auto [wait, wait_status] = wait_for_modify(call[0]);
+		const auto [port, port_status] = completion_for_modify(call[1]);
+		if (!wait || !port) {
+			call.ret(wait ? port_status : wait_status);
+			return;
+		}
+		if (wait->target || wait->queued) {
+			call.ret(0xc00000efU);
+			return;
+		}
+		const auto target = objects.object(call[2]);
+		if (!target || target->type_name() == u"Mutant" || target->signaled(0) < 0) {
+			call.ret(target ? 0xc00000f1U : 0xc0000008U);
+			return;
+		}
+		if (!(objects.access_of(call[2]) & 0x100000)) {
+			call.ret(0xc0000022U);
+			return;
+		}
+		try {
+			if (call[7])
+				call.process.validate_write_memory(call[7], 1);
+			wait->port = port;
+			wait->target = target;
+			wait->notification = {call[6], call[3], call[4], 0, call.u32(5)};
+			const auto generation = ++wait->generation;
+			const bool signaled = finish_wait(wait);
+			if (!signaled)
+				reactor.add([wait, generation, finish_wait] { return wait->generation != generation || finish_wait(wait); });
+			if (call[7])
+				call.store<uint8_t>(call[7], signaled);
+			call.ret(0);
+		} catch (const std::bad_alloc &) {
+			wait->target.reset();
+			call.ret(0xc000009aU);
+		} catch (const ApiFault &) {
+			wait->target.reset();
+			port->cancel(*wait);
+			call.ret(0xc0000005U);
+		} catch (const std::runtime_error &) {
+			wait->target.reset();
+			port->cancel(*wait);
+			call.ret(0xc0000005U);
+		}
+	});
+	registry.add("NtCancelWaitCompletionPacket", 2, [wait_for_modify, finish_wait](ApiCall &call) {
+		const auto [wait, status] = wait_for_modify(call[0]);
+		if (!wait) {
+			call.ret(status);
+		} else if (wait->target && !finish_wait(wait)) {
+			wait->target.reset();
+			call.ret(0);
+		} else if (wait->queued && !call.u32(1)) {
+			call.ret(0x103);
+		} else {
+			const auto port = wait->port.lock();
+			call.ret(port && port->cancel(*wait) ? 0 : 0xc0000120U);
+		}
+	});
 	registry.add("CreateIoCompletionPort", 4, [&objects, socket_of, completion_for_modify](ApiCall &call) {
 		std::shared_ptr<CompletionPort> port;
 		if (call[1]) {
