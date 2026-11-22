@@ -1186,8 +1186,9 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("ChangeWindowMessageFilter", 2, [](ApiCall &call) { call.ret(1); });
 	registry.add("InSendMessageEx", 1, [](ApiCall &call) { call.ret(0); });
 	// Power information: the processors with their frequencies from the host, a machine on mains power with no battery, and no sleep states.
-	registry.add("CallNtPowerInformation", 5, [](ApiCall &call) {
+	const auto power_information = [](ApiCall &call) {
 		constexpr uint32_t status_success = 0, status_buffer_too_small = 0xc0000023U, status_invalid_parameter = 0xc000000dU;
+		constexpr uint32_t platform_information = 65;
 		const uint32_t level = call.u32(0);
 		std::vector<uint8_t> data;
 		if (level == 11) {
@@ -1221,6 +1222,13 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			data[0] = 1;
 		} else if (level == 4) {
 			data.assign(76, 0);
+		} else if (level == platform_information) {
+			if (call[1] || call.u32(2) || !call[3]) {
+				call.ret(status_invalid_parameter);
+				return;
+			}
+			// POWER_PLATFORM_INFORMATION is one BOOLEAN. The guest has no connected standby.
+			data.assign(1, 0);
 		} else {
 			call.ret(status_invalid_parameter);
 			return;
@@ -1231,7 +1239,9 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		}
 		call.write(call[3], data);
 		call.ret(status_success);
-	});
+	};
+	registry.add("CallNtPowerInformation", 5, power_information);
+	registry.add("NtPowerInformation", 5, power_information);
 	// Interrupt time is the monotonic clock in 100 ns ticks, which does not run while the host sleeps.
 	const auto interrupt_time = [](ApiCall &call) {
 		if (!call[0]) {

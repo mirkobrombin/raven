@@ -86,6 +86,7 @@ constexpr std::array shared_exports{
 	NativeX86System::Export{"kernel32.dll", "GetPhysicallyInstalledSystemMemory", 1},
 	NativeX86System::Export{"ws2_32.dll", "WSASendMsg", 6}, NativeX86System::Export{"ws2_32.dll", "WSARecvMsg", 5},
 	NativeX86System::Export{"ntdll.dll", "NtQueryDirectoryFile", 11}, NativeX86System::Export{"ntdll.dll", "ZwQueryDirectoryFile", 11},
+	NativeX86System::Export{"ntdll.dll", "NtPowerInformation", 5}, NativeX86System::Export{"ntdll.dll", "ZwPowerInformation", 5},
 	NativeX86System::Export{"kernel32.dll", "CreateDirectoryW", 2}, NativeX86System::Export{"kernel32.dll", "CreateFileA", 7},
 	NativeX86System::Export{"kernel32.dll", "CreateEventExA", 4}, NativeX86System::Export{"kernel32.dll", "CreateEventExW", 4},
 	NativeX86System::Export{"kernel32.dll", "GetCPInfoExA", 3}, NativeX86System::Export{"kernel32.dll", "GetCPInfoExW", 3},
