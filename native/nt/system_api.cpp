@@ -1,6 +1,7 @@
 #include <atomic>
 #include "kernel_context.h"
 #include "actctx.h"
+#include "apiset.h"
 #include "msix.h"
 #include "text.h"
 #include "x86_compat_api.h"
@@ -365,6 +366,9 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 	auto &paths = context.paths;
 	auto &modules = context.modules;
 
+	registry.add("IsApiSetImplemented", 1, [](ApiCall &call) {
+		call.ret(call[0] && apiset_implemented(call.narrow(call[0], 256)));
+	});
 	registry.add("GetSystemTimeAsFileTime", 1, [](ApiCall &call) { call.store<uint64_t>(call[0], now_ticks()); });
 	registry.add("GetSystemTimePreciseAsFileTime", 1, [](ApiCall &call) { call.store<uint64_t>(call[0], now_ticks()); });
 	registry.add("GetSystemTime", 1, [](ApiCall &call) { call.write(call[0], system_time(now_ticks())); });

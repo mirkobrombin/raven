@@ -618,7 +618,7 @@ static constexpr std::pair<std::string_view, uint8_t> kernel32_words[]{
 	{"InitializeEnclave",5},{"InitializeProcThreadAttributeList",4},{"InitializeSListHead",1},{"InitializeSRWLock",1},{"InitializeSynchronizationBarrier",3},{"InstallELAMCertificateInfo",1},
 	{"InterlockedAnd64",3},{"InterlockedCompareExchange",3},{"InterlockedCompareExchange64",5},{"InterlockedDecrement",1},{"InterlockedExchange",2},{"InterlockedExchangeAdd",2},
 	{"InterlockedFlushSList",1},{"InterlockedIncrement",1},{"InterlockedOr64",3},{"InterlockedPopEntrySList",1},{"InterlockedPushEntrySList",2},{"InterlockedPushListSList",2},
-	{"InterlockedPushListSListEx",4},{"InterlockedXor64",3},{"InvalidateConsoleDIBits",2},{"IsBadCodePtr",1},{"IsBadHugeReadPtr",2},{"IsBadHugeWritePtr",2},
+	{"InterlockedPushListSListEx",4},{"InterlockedXor64",3},{"InvalidateConsoleDIBits",2},{"IsApiSetImplemented",1},{"IsBadCodePtr",1},{"IsBadHugeReadPtr",2},{"IsBadHugeWritePtr",2},
 	{"IsBadReadPtr",2},{"IsBadStringPtrA",2},{"IsBadStringPtrW",2},{"IsBadWritePtr",2},{"IsCalendarLeapDay",5},{"IsCalendarLeapMonth",4},
 	{"IsCalendarLeapYear",3},{"IsDBCSLeadByte",1},{"IsDBCSLeadByteEx",2},{"IsDebuggerPresent",0},{"IsEnclaveTypeSupported",1},{"IsIoRingOpSupported",2},
 	{"IsNLSDefinedString",5},{"IsNativeVhdBoot",1},{"IsNormalizedString",3},{"IsProcessCritical",2},{"IsProcessInJob",3},{"IsProcessorFeaturePresent",1},

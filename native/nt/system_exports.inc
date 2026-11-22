@@ -643,7 +643,7 @@ static constexpr std::string_view kernel32_exports[]{
 	"InterlockedBitTestAndComplement","InterlockedBitTestAndComplement64","InterlockedBitTestAndReset","InterlockedBitTestAndReset64","InterlockedBitTestAndSet","InterlockedBitTestAndSet64",
 	"InterlockedCompareExchange","InterlockedCompareExchange64","InterlockedDecrement","InterlockedExchange","InterlockedExchangeAdd","InterlockedFlushSList",
 	"InterlockedIncrement","InterlockedOr","InterlockedOr64","InterlockedPopEntrySList","InterlockedPushEntrySList","InterlockedPushListSList",
-	"InterlockedPushListSListEx","InterlockedXor","InterlockedXor64","InvalidateConsoleDIBits","IsBadCodePtr","IsBadHugeReadPtr",
+	"InterlockedPushListSListEx","InterlockedXor","InterlockedXor64","InvalidateConsoleDIBits","IsApiSetImplemented","IsBadCodePtr","IsBadHugeReadPtr",
 	"IsBadHugeWritePtr","IsBadReadPtr","IsBadStringPtrA","IsBadStringPtrW","IsBadWritePtr","IsCalendarLeapDay",
 	"IsCalendarLeapMonth","IsCalendarLeapYear","IsDBCSLeadByte","IsDBCSLeadByteEx","IsDebuggerPresent","IsEnclaveTypeSupported",
 	"IsIoRingOpSupported","IsNLSDefinedString","IsNativeVhdBoot","IsNormalizedString","IsProcessCritical","IsProcessInJob",
