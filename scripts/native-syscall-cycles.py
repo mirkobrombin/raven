@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check that RAVEN_CYCLES reports the NT system calls a program makes itself, as it does the calls through served stubs, and that one
-whose arguments and results lie on the caller's stack has the kernel copy guest memory once at most."""
+whose arguments and results lie on the caller's stack has the kernel copy guest memory once at most. So does a call that reads a
+name and sets the thread's last error: the thread's own block is reached as its stack is."""
 
 import os
 import re
@@ -25,6 +26,13 @@ def main():
         raise SystemExit(f"NtQueryEvent is not reported for every call\n{output}")
     if copies > calls * 1.1:
         raise SystemExit(f"NtQueryEvent has guest memory copied {copies} times in {calls} calls")
+    # Each process reports for itself, those that make the prefix as well: the program's row is the one with all its calls.
+    rows = re.findall(r"^cycles:\s+GetFileAttributesW\s+(\d+) calls\s.*\scopies\s+(\d+)", output, re.M)
+    named_calls, named_copies = max(((int(made), int(copied)) for made, copied in rows), default=(0, 0))
+    if named_calls < 20000:
+        raise SystemExit(f"GetFileAttributesW is not reported for every call\n{output}")
+    if named_copies > named_calls * 1.1:
+        raise SystemExit(f"GetFileAttributesW has guest memory copied {named_copies} times in {named_calls} calls")
     print(f"NtQueryEvent {calls} calls: boundary {boundary}, service {service}, return {back} cycles")
 
 
