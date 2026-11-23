@@ -13,15 +13,19 @@
 #include "clock_calibration.h"
 #include <cpuid.h>
 #include <x86intrin.h>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <map>
 #include <set>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <thread>
 #include <sched.h>
 #include <sys/mman.h>
@@ -34,6 +38,36 @@ namespace raven {
 namespace {
 
 constexpr uint64_t current_process = UINT64_MAX, current_thread = UINT64_MAX - 1;
+
+void trace_profile_registry_call(ApiCall &call)
+{
+	std::ostringstream line;
+	line << "profapi: GetAppContainerRegistryHandleFromName";
+	for (size_t index = 0; index < 5; ++index) {
+		const auto address = call[index];
+		line << " arg" << std::dec << index << "=0x" << std::hex << address;
+		if (address < 0x10000 || address >= 0x800000000000ULL || address % 2)
+			continue;
+		std::u16string candidate;
+		try {
+			for (size_t offset = 0; offset < 96; ++offset) {
+				const auto unit = call.load<char16_t>(address + offset * sizeof(char16_t));
+				if (!unit) {
+					if (!candidate.empty())
+						line << " wide=" << std::quoted(to_utf8(candidate));
+					break;
+				}
+				if (unit < 0x20 || (unit >= 0x7f && unit <= 0x9f) || unit == 0x2028 || unit == 0x2029)
+					break;
+				candidate.push_back(unit);
+			}
+		} catch (const ApiFault &) {
+			// A raw argument need not point to readable memory.
+		}
+	}
+	line << " hr=0x80004001\n";
+	std::fputs(line.str().c_str(), stderr);
+}
 
 // Civil date from days since 1970-01-01 (proleptic Gregorian), after Howard Hinnant's public-domain algorithm.
 struct Civil {
@@ -1424,6 +1458,12 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	register_msix_api(registry, context);
+	registry.add("GetAppContainerRegistryHandleFromName", 5, [](ApiCall &call) {
+		const char *trace = std::getenv("RAVEN_TRACE_PROFAPI");
+		if (trace && std::string_view(trace) == "1")
+			trace_profile_registry_call(call);
+		call.ret(0x80004001U); // E_NOTIMPL
+	});
 	// Windows 10 Pro (PRODUCT_PROFESSIONAL), whatever version the program asks about.
 	registry.add("GetProductInfo", 5, [](ApiCall &call) {
 		if (!call[4]) {

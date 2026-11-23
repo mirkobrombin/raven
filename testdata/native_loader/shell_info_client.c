@@ -6,6 +6,37 @@
 
 #define CHECK(code, condition) do { if (!(condition)) return code; } while (0)
 
+typedef HRESULT (WINAPI *profile_probe)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR);
+
+static HRESULT call_profile_probe(profile_probe probe, const WCHAR *text, ULONG_PTR *output, BOOL *stack_ok)
+{
+#if defined(__i386__)
+	HRESULT result;
+	unsigned balanced;
+	/* Measure ESP around the call itself, before any compiler stack adjustment. */
+	__asm__ volatile(
+		"movl %%esp, %%esi\n\t"
+		"pushl $5\n\t"
+		"pushl %[output]\n\t"
+		"pushl $0x20000\n\t"
+		"pushl %[text]\n\t"
+		"pushl $1\n\t"
+		"call *%[probe]\n\t"
+		"xorl %%ecx, %%ecx\n\t"
+		"cmpl %%esi, %%esp\n\t"
+		"sete %%cl\n\t"
+		"movl %%esi, %%esp"
+		: "=a"(result), "=c"(balanced)
+		: [probe] "r"(probe), [text] "r"(text), [output] "r"(output)
+		: "esi", "edx", "cc", "memory");
+	*stack_ok = balanced != 0;
+	return result;
+#else
+	*stack_ok = TRUE;
+	return probe(1, (ULONG_PTR)text, 0x20000, (ULONG_PTR)output, 5);
+#endif
+}
+
 static int same(const WCHAR *left, const WCHAR *right)
 {
 	unsigned i = 0;
@@ -148,11 +179,14 @@ int raven_entry(void)
 
 	HMODULE profile = LoadLibraryW(L"profapi.dll");
 	CHECK(46, profile);
-	typedef HRESULT (WINAPI *profile_probe)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR);
 	profile_probe probe = (profile_probe)GetProcAddress(profile, MAKEINTRESOURCEA(114));
 	CHECK(47, probe);
 	ULONG_PTR unchanged = 0x5a5a;
-	CHECK(48, probe(1, (ULONG_PTR)L"RavenProfileProbe", 0x20000, (ULONG_PTR)&unchanged, 5) == E_NOTIMPL && unchanged == 0x5a5a);
+	for (unsigned attempt = 0; attempt < 2; ++attempt) {
+		BOOL stack_ok;
+		CHECK(48, call_profile_probe(probe, L"RavenProfileProbe", &unchanged, &stack_ok) == E_NOTIMPL && unchanged == 0x5a5a);
+		CHECK(50, stack_ok);
+	}
 	CHECK(49, FreeLibrary(profile));
 	return 0;
 }
