@@ -4883,6 +4883,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(late_imports_fixture${width} ALL DEPENDS ${late_imports_dir}/client.exe ${late_imports_dir}/late-imports.dll)
                     add_test(NAME native_late_system_imports_x${width} COMMAND raven --run-process --execution=native ${late_imports_dir}/client.exe)
                     set_tests_properties(native_late_system_imports_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(font_languages_client ${CMAKE_CURRENT_BINARY_DIR}/font-languages${width}.exe)
+                    add_custom_command(OUTPUT ${font_languages_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${font_languages_client} ${LOADER_SOURCES}/font_languages_client.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/font_languages_client.c VERBATIM)
+                    add_custom_target(font_languages_fixture${width} ALL DEPENDS ${font_languages_client})
+                    add_test(NAME native_font_languages_x${width} COMMAND raven --run-process --execution=native ${font_languages_client})
+                    set_tests_properties(native_font_languages_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(rotated_text_client ${CMAKE_CURRENT_BINARY_DIR}/rotated-text${width}.exe)
                     add_custom_command(OUTPUT ${rotated_text_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
