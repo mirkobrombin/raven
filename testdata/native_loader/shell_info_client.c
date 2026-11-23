@@ -145,5 +145,14 @@ int raven_entry(void)
 
 	CHECK(29, CoLockObjectExternal(0,TRUE,FALSE) == E_INVALIDARG);
 	CHECK(30, CoLockObjectExternal((IUnknown *)&info,TRUE,FALSE) == S_OK && CoLockObjectExternal((IUnknown *)&info,FALSE,TRUE) == S_OK);
+
+	HMODULE profile = LoadLibraryW(L"profapi.dll");
+	CHECK(46, profile);
+	typedef HRESULT (WINAPI *profile_probe)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR);
+	profile_probe probe = (profile_probe)GetProcAddress(profile, MAKEINTRESOURCEA(114));
+	CHECK(47, probe);
+	ULONG_PTR unchanged = 0x5a5a;
+	CHECK(48, probe(1, (ULONG_PTR)L"RavenProfileProbe", 0x20000, (ULONG_PTR)&unchanged, 5) == E_NOTIMPL && unchanged == 0x5a5a);
+	CHECK(49, FreeLibrary(profile));
 	return 0;
 }
