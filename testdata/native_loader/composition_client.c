@@ -10,13 +10,8 @@
 
 typedef HRESULT (WINAPI *initialize_function)(int);
 typedef HRESULT (WINAPI *activate_function)(HSTRING, IInspectable **);
+typedef HRESULT (WINAPI *reference_function)(PCWSTR, UINT32, HSTRING_HEADER *, HSTRING *);
 typedef DWORD (WINAPI *clock_function)(UINT, const HANDLE *, DWORD);
-
-/* The string header programs built with C++/WinRT write themselves for a reference: flags, length, two unused words, the characters. */
-struct reference {
-	UINT32 flags, length, unused[2];
-	const WCHAR *text;
-};
 
 typedef struct ICompositorControllerVtbl controller_table;
 typedef struct {
@@ -80,11 +75,15 @@ static BOOL contains(const char *text, const char *part)
 	return FALSE;
 }
 
-static IInspectable *activate(activate_function RoActivateInstance, const WCHAR *name, UINT32 length)
+static IInspectable *activate(activate_function RoActivateInstance, reference_function WindowsCreateStringReference,
+	const WCHAR *name, UINT32 length)
 {
-	struct reference class_name = {1, length, {0, 0}, name};
+	HSTRING_HEADER header;
+	HSTRING class_name;
+	if (FAILED(WindowsCreateStringReference(name, length, &header, &class_name)))
+		return NULL;
 	IInspectable *object = NULL;
-	return RoActivateInstance((HSTRING)&class_name, &object) == S_OK ? object : NULL;
+	return RoActivateInstance(class_name, &object) == S_OK ? object : NULL;
 }
 
 /* The visual layer of the Windows Runtime as paint.net uses it in a desktop window: a compositor controller announces changes through
@@ -97,9 +96,10 @@ int raven_entry(void)
 	HMODULE runtime = LoadLibraryW(L"combase.dll");
 	initialize_function RoInitialize = runtime ? (initialize_function)GetProcAddress(runtime, "RoInitialize") : NULL;
 	activate_function RoActivateInstance = runtime ? (activate_function)GetProcAddress(runtime, "RoActivateInstance") : NULL;
-	if (!RoInitialize || !RoActivateInstance) return 30;
+	reference_function WindowsCreateStringReference = runtime ? (reference_function)GetProcAddress(runtime, "WindowsCreateStringReference") : NULL;
+	if (!RoInitialize || !RoActivateInstance || !WindowsCreateStringReference) return 30;
 	if (FAILED(RoInitialize(0))) return 1;
-	IInspectable *object = activate(RoActivateInstance, controller_name, ARRAYSIZE(controller_name) - 1);
+	IInspectable *object = activate(RoActivateInstance, WindowsCreateStringReference, controller_name, ARRAYSIZE(controller_name) - 1);
 	if (!object) return 2;
 	controller_object *controller = NULL;
 	if (FAILED(IInspectable_QueryInterface(object, &IID_ICompositorController, (void **)&controller))) return 3;
@@ -195,7 +195,7 @@ int raven_entry(void)
 	if (FAILED(controller->lpVtbl->remove_CommitNeeded(controller, token))) return 37;
 
 	/* A compositor made on its own commits by itself. */
-	IInspectable *alone = activate(RoActivateInstance, compositor_name, ARRAYSIZE(compositor_name) - 1);
+	IInspectable *alone = activate(RoActivateInstance, WindowsCreateStringReference, compositor_name, ARRAYSIZE(compositor_name) - 1);
 	__x_ABI_CWindows_CUI_CComposition_CICompositor *second = NULL;
 	if (!alone || FAILED(IInspectable_QueryInterface(alone, &IID___x_ABI_CWindows_CUI_CComposition_CICompositor, (void **)&second))) return 38;
 

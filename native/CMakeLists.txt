@@ -5699,16 +5699,25 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${composition_source}/composition.c ${composition_source}/composition_tables.h ${composition_source}/composition_interfaces.h
                     VERBATIM)
                 add_custom_target(composition_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll)
-                set(composition_client ${CMAKE_CURRENT_BINARY_DIR}/composition-client64.exe)
-                add_custom_command(OUTPUT ${composition_client}
-                    COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
-                        -o ${composition_client} ${LOADER_SOURCES}/composition_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
-                        -lgdi32 -luser32 -lkernel32 -lgcc
-                    DEPENDS ${LOADER_SOURCES}/composition_client.c ${composition_source}/composition_interfaces.h VERBATIM)
-                add_custom_target(composition_fixture ALL DEPENDS ${composition_client} composition_component)
-                add_test(NAME native_composition_x64 COMMAND raven --run-process --execution=native ${composition_client})
-                set_tests_properties(native_composition_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
-                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-x64-prefix)
+                foreach(width 64 32)
+                    set(composition_client ${CMAKE_CURRENT_BINARY_DIR}/composition-client${width}.exe)
+                    if(width EQUAL 64)
+                        set(composition_compiler ${RAVEN_MINGW64})
+                        set(composition_entry raven_entry)
+                    else()
+                        set(composition_compiler ${RAVEN_MINGW32})
+                        set(composition_entry _raven_entry)
+                    endif()
+                    add_custom_command(OUTPUT ${composition_client}
+                        COMMAND ${composition_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${composition_entry},--no-insert-timestamp
+                            -o ${composition_client} ${LOADER_SOURCES}/composition_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c
+                            -lgdi32 -luser32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/composition_client.c ${composition_source}/composition_interfaces.h VERBATIM)
+                    add_custom_target(composition_fixture${width} ALL DEPENDS ${composition_client} composition_component)
+                    add_test(NAME native_composition_x${width} COMMAND raven --run-process --execution=native ${composition_client})
+                    set_tests_properties(native_composition_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-x${width}-prefix)
+                endforeach()
                 # A swap chain of half floats shown by a visual, through DXVK over a Vulkan driver.
                 set(composition_swapchain_client ${CMAKE_CURRENT_BINARY_DIR}/composition-swapchain64.exe)
                 add_custom_command(OUTPUT ${composition_swapchain_client}
