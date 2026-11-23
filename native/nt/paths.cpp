@@ -40,10 +40,6 @@ std::u16string strip_namespace(std::u16string_view path)
 	return std::u16string(path);
 }
 
-// Looks for an entry that differs from name only by case, so Windows spellings find Linux files. The entries of a folder are kept by
-// their upper-case spelling while the folder stays as it was: programs ask for files that are not there by the hundred, Office for a
-// library at each click, and each miss read the whole folder. A folder changed in the last two seconds is read again each time, as its
-// time stamp may not have moved for a change made within the same tick.
 // How many times a lookup looked at a folder itself, told at the end with RAVEN_TRACE_PATHS.
 struct FolderChecks {
 	std::atomic<uint64_t> count{0};
@@ -55,12 +51,12 @@ struct FolderChecks {
 };
 FolderChecks folder_checks;
 
+// Looks for an entry that differs from name only by case, so Windows spellings find Linux files. The entries of a folder are kept by
+// their upper-case spelling while the folder stays as it was: programs ask for files that are not there by the hundred, Office for a
+// library at each click, and each miss read the whole folder. A folder is checked by its time stamp at each lookup, and one changed in
+// the last two seconds is read again each time, as its time stamp may not have moved for a change made within the same tick.
 std::optional<std::string> case_match(const std::filesystem::path &directory, const std::string &name)
 {
-	std::error_code ignored;
-	folder_checks.count.fetch_add(1, std::memory_order_relaxed);
-	if (std::filesystem::exists(directory / name, ignored))
-		return name;
 	const auto key = [](std::u16string text) {
 		for (auto &character : text)
 			character = upper_case(character);
@@ -68,31 +64,49 @@ std::optional<std::string> case_match(const std::filesystem::path &directory, co
 	};
 	struct Listing {
 		timespec changed{};
+		std::unordered_map<std::string, bool> exact;
 		std::unordered_map<std::u16string, std::string> names;
 	};
-	static std::mutex lock;
-	static std::unordered_map<std::string, Listing> listings;
-	struct stat status{};
-	if (::stat(directory.c_str(), &status) != 0)
-		return std::nullopt;
-	timespec now{};
-	::clock_gettime(CLOCK_REALTIME, &now);
-	const bool settled = now.tv_sec - status.st_mtim.tv_sec > 2;
-	std::lock_guard guard(lock);
-	auto cached = listings.find(directory.native());
-	if (!settled || cached == listings.end() || cached->second.changed.tv_sec != status.st_mtim.tv_sec ||
-		cached->second.changed.tv_nsec != status.st_mtim.tv_nsec) {
-		DIR *handle = ::opendir(directory.c_str());
-		if (!handle)
+	struct Listings {
+		std::mutex lock;
+		std::unordered_map<std::string, Listing> folders;
+		void forget(const std::string &folder) { folders.erase(folder); }
+	};
+	// It lives as long as the host, past the end of main, as the host threads that look names up do.
+	static auto *listings = new Listings;
+	std::lock_guard guard(listings->lock);
+	auto cached = listings->folders.find(directory.native());
+	{
+		folder_checks.count.fetch_add(1, std::memory_order_relaxed);
+		struct stat status{};
+		if (::stat(directory.c_str(), &status) != 0)
 			return std::nullopt;
-		Listing listing{status.st_mtim, {}};
-		while (const auto *entry = ::readdir(handle))
-			listing.names.emplace(key(from_utf8(entry->d_name)), entry->d_name);
-		::closedir(handle);
-		if (listings.size() > 4096)
-			listings.clear();
-		cached = listings.insert_or_assign(directory.native(), std::move(listing)).first;
+		timespec now{};
+		::clock_gettime(CLOCK_REALTIME, &now);
+		const bool settled = now.tv_sec - status.st_mtim.tv_sec > 2;
+		if (!settled || cached == listings->folders.end() || cached->second.changed.tv_sec != status.st_mtim.tv_sec ||
+			cached->second.changed.tv_nsec != status.st_mtim.tv_nsec) {
+			listings->forget(directory.native());
+			if (listings->folders.size() > 4096)
+				while (!listings->folders.empty())
+					listings->forget(listings->folders.begin()->first);
+			Listing listing{status.st_mtim, {}, {}};
+			DIR *handle = ::opendir(directory.c_str());
+			if (!handle) {
+				// A folder the sandbox lets the host pass through but not list: the name is looked at itself.
+				std::error_code ignored;
+				return std::filesystem::exists(directory / name, ignored) ? std::optional<std::string>(name) : std::nullopt;
+			}
+			while (const auto *entry = ::readdir(handle)) {
+				listing.exact.emplace(entry->d_name, true);
+				listing.names.emplace(key(from_utf8(entry->d_name)), entry->d_name);
+			}
+			::closedir(handle);
+			cached = listings->folders.insert_or_assign(directory.native(), std::move(listing)).first;
+		}
 	}
+	if (cached->second.exact.contains(name))
+		return name;
 	const auto found = cached->second.names.find(key(from_utf8(name)));
 	if (found == cached->second.names.end())
 		return std::nullopt;
