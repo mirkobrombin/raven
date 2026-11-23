@@ -1342,6 +1342,21 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	});
 	registry.add("WindowsGetStringLen", 1, [](ApiCall &call) { call.ret(call[0] ? call.load<uint32_t>(call[0] + 4) : 0); });
 	registry.add("WindowsIsStringEmpty", 1, [](ApiCall &call) { call.ret(!call[0] || !call.load<uint32_t>(call[0] + 4)); });
+	// Whether a null code unit lies before the string's end; a null string holds none.
+	registry.add("WindowsStringHasEmbeddedNull", 2, [](ApiCall &call) {
+		if (!call[1]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		bool found = false;
+		if (call[0]) {
+			const auto units = call.read(call.load_pointer(call[0] + 16), size_t(call.load<uint32_t>(call[0] + 4)) * 2);
+			for (size_t at = 0; at + 1 < units.size() && !found; at += 2)
+				found = !units[at] && !units[at + 1];
+		}
+		call.store<uint32_t>(call[1], found);
+		call.ret(0);
+	});
 	// Two strings in code unit order, a null string being the empty one.
 	registry.add("WindowsCompareStringOrdinal", 3, [](ApiCall &call) {
 		const auto text = [&](uint64_t handle) {
