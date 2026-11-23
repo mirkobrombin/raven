@@ -299,8 +299,7 @@ bool kernel_string_api(NativeProcess &process, NativeEnvironment &environment, c
 	const NativeLaunch &launch, std::string_view name)
 {
 	if (name == "GetTickCount" || name == "timeGetTime") {
-		const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch());
-		process.return_api(uint32_t(now.count()));
+		process.return_api(uint32_t(shared_tick_count()));
 		return true;
 	}
 	if (name == "ProcessIdToSessionId") {

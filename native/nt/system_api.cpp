@@ -383,8 +383,8 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.store<uint64_t>(call[0], 10000000ULL);
 			call.ret(1);
 		});
-	registry.add("GetTickCount64", 0, [](ApiCall &call) { call.ret(counter_ticks() / 10000); });
-	registry.add("GetTickCount", 0, [](ApiCall &call) { call.ret(uint32_t(counter_ticks() / 10000)); });
+	registry.add("GetTickCount64", 0, [](ApiCall &call) { call.ret(shared_tick_count()); });
+	registry.add("GetTickCount", 0, [](ApiCall &call) { call.ret(uint32_t(shared_tick_count())); });
 	// winmm timers: the host clock already has millisecond resolution, so periods are accepted and change nothing.
 	registry.add("timeGetTime", 0, [](ApiCall &call) { call.ret(uint32_t(counter_ticks() / 10000)); });
 	registry.add("timeBeginPeriod", 1, [](ApiCall &call) { call.ret(call.u32(0) ? 0 : 97); });

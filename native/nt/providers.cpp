@@ -501,9 +501,9 @@ static const GuestPrelude *string_prelude(std::string_view module, std::string_v
 	return nullptr;
 }
 
-// Services the guest answers from what the runtime publishes in the served block. The millisecond clocks are the performance counter
-// divided by 10000, read from the time stamp counter once the runtime has published its calibration, as QueryPerformanceCounter is.
-// Each loads the block pointer first, as the served stubs do, and ends in a jump to the export's breakpoint.
+// Services the guest answers from what the runtime publishes in the served block or the shared user data page. The millisecond clocks
+// read the page's tick count, as Windows does. Each starts as the others do, with the block pointer's place, and ends in a jump to the
+// export's breakpoint.
 static const std::vector<uint8_t> &tick_prelude()
 {
 	static const std::vector<uint8_t> code = prelude_code(raven_prelude_tick, raven_prelude_tick_end);

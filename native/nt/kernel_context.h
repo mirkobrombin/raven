@@ -82,6 +82,8 @@ struct KernelContext {
 inline constexpr uint64_t filetime_epoch_offset = 11644473600ULL * 10000000ULL;
 // The performance counter in 100 ns units: the host's monotonic clock, as QueryPerformanceCounter reports it.
 uint64_t counter_ticks();
+// GetTickCount64: the tick count of the shared user data page, in milliseconds (see environment.cpp).
+uint64_t shared_tick_count();
 // The counter span of the current local second and its SYSTEMTIME, as the guest's GetLocalTime reads them.
 std::array<uint64_t, 4> local_second();
 

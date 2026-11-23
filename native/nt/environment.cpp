@@ -1,5 +1,6 @@
 #include "environment.h"
 #include "nls.h"
+#include "kernel_context.h"
 
 #include <array>
 #include <atomic>
@@ -49,18 +50,22 @@ void store_system_time(uint8_t *page, size_t at, uint64_t value)
 	word(4).store(uint32_t(value >> 32), std::memory_order_release);
 }
 
-// The clock fields: the tick count (in ticks of 15.625 ms, the TickCountMultiplier the page declares), the interrupt time since boot
-// and the system time since 1601, both in 100-nanosecond units.
+// The tick count last written to the pages, which every way of asking for it answers.
+std::atomic<uint64_t> published_ticks{0};
+
+// The clock fields: the tick count in milliseconds (the page declares a TickCountMultiplier of one, as the pages move every
+// millisecond), the interrupt time since boot and the system time since 1601, both in 100-nanosecond units.
 void store_clocks(uint8_t *page)
 {
 	using namespace std::chrono;
 	const auto interrupt_time = uint64_t(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count() / 100);
 	const auto system_time = uint64_t(duration_cast<nanoseconds>(system_clock::now().time_since_epoch()).count() / 100) + 116444736000000000ULL;
-	const uint64_t ticks = interrupt_time / 156250;
+	const uint64_t ticks = std::max(interrupt_time / 10000, published_ticks.load(std::memory_order_relaxed));
 	std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t *>(page)).store(uint32_t(ticks), std::memory_order_release);
 	store_system_time(page, 0x08, interrupt_time);
 	store_system_time(page, 0x14, system_time);
 	store_system_time(page, 0x320, ticks);
+	published_ticks.store(ticks, std::memory_order_release);
 }
 
 // One thread keeps every shared user data page this host made current, so a host that runs several guest processes (the unit tests
@@ -89,6 +94,14 @@ void keep_clocks(uint8_t *page)
 
 }
 
+uint64_t shared_tick_count()
+{
+	const uint64_t ticks = published_ticks.load(std::memory_order_acquire);
+	if (ticks)
+		return ticks;
+	return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 static void map_shared_user_data(NativeProcess &process)
 {
 	try {
@@ -115,7 +128,7 @@ static void map_shared_user_data(NativeProcess &process)
 	}
 	::close(descriptor);
 	const uint64_t base = shared_user_data;
-	field(process, base + 0x04, 0x0fa00000, 4);
+	field(process, base + 0x04, 0x01000000, 4);
 	store_clocks(page);
 	field(process, base + 0x2c, 0x14c, 2);
 	field(process, base + 0x2e, 0x8664, 2);

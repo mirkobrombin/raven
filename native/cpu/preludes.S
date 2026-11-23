@@ -10,27 +10,18 @@
 	.intel_syntax noprefix
 	.section .rodata, "a"
 
-/* mov r10,[pointer]; test r10,r10; jz slow; mov r11,[r10+calibration]; test r11,r11; jz slow; rdtsc; the count as in the clock prelude;
- * xor edx,edx; mov ecx,10000; div rcx; ret; slow: jmp breakpoint */
+/* GetTickCount and GetTickCount64 as Windows answers them: the tick count of KUSER_SHARED_DATA, which the host keeps in milliseconds
+ * (its multiplier is one), read as a KSYSTEM_TIME: the first high word, the low word, and again while the second high word differs.
+ * The lea only keeps the layout of the preludes that load the block pointer; the jump is never taken. */
 	.global raven_prelude_tick, raven_prelude_tick_end
 raven_prelude_tick:
-	mov r10, qword ptr [rip + 0]
-	test r10, r10
-	je .Ltick_slow
-	mov r11, qword ptr [r10 + 0x800]
-	test r11, r11
-	je .Ltick_slow
-	rdtsc
+	lea r10, [rip + 0]
+1:	mov edx, dword ptr ds:0x7ffe0324
+	mov eax, dword ptr ds:0x7ffe0320
+	cmp edx, dword ptr ds:0x7ffe0328
+	jne 1b
 	shl rdx, 0x20
 	or rax, rdx
-	add r11, r10
-	sub rax, qword ptr [r11]
-	mul qword ptr [r11 + 0x10]
-	shrd rax, rdx, 0x20
-	add rax, qword ptr [r11 + 0x8]
-	xor edx, edx
-	mov ecx, 0x2710
-	div rcx
 	ret
 .Ltick_slow:
 	.byte 0xe9
