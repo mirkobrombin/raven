@@ -2347,11 +2347,13 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 	}
 	auto x=int32_t(args[4]),y=int32_t(args[5]);
 	auto width=int32_t(args[6]),height=int32_t(args[7]);
-	// CW_USEDEFAULT (0x80000000): top-level windows get a cascading position and three quarters of the screen; children get zero.
-	if (x==INT32_MIN || y==INT32_MIN || width==INT32_MIN || height==INT32_MIN) {
+	// For a visible overlapped window at CW_USEDEFAULT, y is the initial ShowWindow command.
+	const bool default_show=x==INT32_MIN && !(effective_style & 0xc0000000U) && (effective_style & 0x10000000U);
+	const uint32_t show_command=y==INT32_MIN ? 5 : uint32_t(y);
+	if (x==INT32_MIN) { x=0; y=0; }
+	if (y==INT32_MIN) y=0;
+	if (width==INT32_MIN || height==INT32_MIN) {
 		const auto &screen=objects.nonclient_metrics();
-		if (x==INT32_MIN) x=child ? 0 : 0;
-		if (y==INT32_MIN) y=child ? 0 : 0;
 		if (width==INT32_MIN) width=child ? 0 : screen.screen_x*3/4;
 		if (height==INT32_MIN) height=child ? 0 : screen.screen_y*3/4;
 	}
@@ -2492,7 +2494,10 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 			directory([handle,width,height] { publish_window(handle,width,height); });
 		}
 		publish_traits(handle);
-		if (effective_style & 0x10000000U) {
+		if (default_show) {
+			show_window(handle,show_command);
+			if (!std::as_const(objects).window(handle)) return 0;
+		} else if (effective_style & 0x10000000U) {
 			auto *window=objects.window(handle);window->visible=true;objects.update_window_dcs(child ? window->parent : handle);
 			if (objects.window_visible(handle)) present(handle);
 			if (!objects.invalidate(handle,{0,0,window->width,window->height},true)) throw uint32_t(8);
