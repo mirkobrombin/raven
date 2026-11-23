@@ -2475,7 +2475,7 @@ static constexpr std::string_view winspool_exports[]{
 };
 static constexpr std::string_view ravenhost_exports[]{
 	"RavenAppDiscard","RavenAppList","RavenAudioClose","RavenAudioOpen","RavenAudioReset","RavenAudioSetEvent","RavenAudioStart","RavenAudioStop","RavenCanvasBatch","RavenCanvasBounds","RavenCanvasChanged","RavenCanvasCreate","RavenCanvasDestroy","RavenCanvasDraw",
-	"RavenCanvasPixels","RavenCanvasSize","RavenFontClose","RavenFontGlyphs","RavenFontInfo","RavenFontMetrics",
+	"RavenCanvasPixels","RavenCanvasSize","RavenCreateSharedVisual","RavenFontClose","RavenFontGlyphs","RavenFontInfo","RavenFontMetrics",
 	"RavenFontName","RavenFontOpen","RavenFontOutline","RavenFontRender","RavenFontScan","RavenFontTable",
 	"RavenGrantPath","RavenHostApps","RavenHostOpen","RavenPathCombine","RavenPathWiden","RavenPublishPackage","RavenSandboxLog",
 	"RavenSandboxRead","RavenSandboxWrite","RavenShaderRelease","RavenShaderRequest","RavenShaderResult","RavenSnapshotDelete",

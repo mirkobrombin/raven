@@ -2179,6 +2179,18 @@ __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActi
 	return CLASS_E_CLASSNOTAVAILABLE;
 }
 
+HRESULT WINAPI DCompositionCreateSharedVisualHandle(HANDLE *handle)
+{
+	typedef HRESULT (WINAPI *create_visual)(HANDLE *);
+	HMODULE host = LoadLibraryW(L"ravenhost.dll");
+	if (!host)
+		return HRESULT_FROM_WIN32(GetLastError());
+	create_visual create = (create_visual)GetProcAddress(host, "RavenCreateSharedVisual");
+	HRESULT result = create ? create(handle) : HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+	FreeLibrary(host);
+	return result;
+}
+
 /* ---- the compositor clock ---- */
 #define FRAME_MS 16
 

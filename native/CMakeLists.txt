@@ -5691,13 +5691,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll
-                        ${composition_source}/composition.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lole32 -lgdi32 -lmsimg32
+                        ${composition_source}/composition.c ${composition_source}/dcomp64.def
+                        ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lole32 -lgdi32 -lmsimg32
                         -luser32 -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll
-                        ${composition_source}/composition.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lole32 -lgdi32 -lmsimg32
+                        ${composition_source}/composition.c ${composition_source}/dcomp32.def
+                        ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -lole32 -lgdi32 -lmsimg32
                         -luser32 -lkernel32 -lgcc
                     DEPENDS ${composition_source}/composition.c ${composition_source}/composition_tables.h ${composition_source}/composition_interfaces.h
-                    VERBATIM)
+                        ${composition_source}/dcomp64.def ${composition_source}/dcomp32.def VERBATIM)
                 add_custom_target(composition_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll)
                 foreach(width 64 32)
                     set(composition_client ${CMAKE_CURRENT_BINARY_DIR}/composition-client${width}.exe)

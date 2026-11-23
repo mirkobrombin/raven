@@ -1,5 +1,6 @@
 #include "host_names.h"
 #include "firmware.h"
+#include "composition_visual.h"
 #include "kernel_context.h"
 #include "section.h"
 #include "security_attributes.h"
@@ -184,6 +185,26 @@ void register_memory_api(ApiRegistry &registry, KernelContext &context)
 	auto &allocator = context.allocator;
 	auto &memory = context.memory;
 	auto &objects = context.objects;
+	registry.add("RavenCreateSharedVisual", 1, [&objects](ApiCall &call) {
+		if (!call[0]) {
+			call.ret(0xc000000dU);
+			return;
+		}
+		uint64_t handle = 0;
+		try {
+			const auto made = objects.add_object(std::make_shared<CompositionVisual>());
+			handle = made.value;
+			if (!made.status)
+				call.store_pointer(call[0], handle);
+			call.ret(made.status);
+		} catch (const ApiFault &) {
+			if (handle)
+				objects.close(handle);
+			call.ret(0xc0000005U);
+		} catch (const std::bad_alloc &) {
+			call.ret(0xc000009aU);
+		}
+	});
 	constexpr uint32_t zero_flag = 0x40, movable_flag = 2, modify_flag = 0x80;
 	const auto allocate_block = [&](ApiCall &call) {
 		const bool zero = call.u32(0) & zero_flag;

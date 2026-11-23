@@ -1,6 +1,7 @@
 #include "inherit.h"
 #include "access_token.h"
 #include "child_process.h"
+#include "composition_visual.h"
 #include "event.h"
 #include "mutex.h"
 
@@ -111,6 +112,8 @@ std::shared_ptr<KernelObject> object_from_record(const InheritedHandle &item)
 		return std::make_shared<EventObject>(item.descriptor);
 	if (item.kind == "token")
 		return std::make_shared<AccessToken>(item.descriptor);
+	if (item.kind == "composition" && CompositionVisual::can_adopt(item.descriptor))
+		return std::make_shared<CompositionVisual>(item.descriptor);
 	if (item.kind == "file") {
 		// The creator keeps the duty to delete a file that closes with its last handle.
 		return std::make_shared<FileObject>(item.descriptor, item.access, item.bits & 1, std::filesystem::path(item.path), item.text, item.flags & ~0x04000000U);
