@@ -480,6 +480,9 @@ int main(int argc, char **argv)
 									std::filesystem::remove(entry.path(), error);
 							}
 						}
+						// The desktop's entries for the addresses the prefix takes from it, written again at each start: the runtime may have moved.
+						if (handle_channel_fd < 0 && !std::getenv("RAVEN_PREFIX_SETUP"))
+							raven::sandbox().publish_links();
 						// The classes the runtime's components serve are registered in the prefix, as Windows ships them registered: regsvr32 runs
 						// for each width when the components changed since the prefix last registered them. The runs themselves skip this step.
 						const char *servers[] = {"oleaut32.dll", "msxml3.dll", "windowscodecs.dll", "mlang.dll", "propsys.dll"};

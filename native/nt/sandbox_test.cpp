@@ -1,9 +1,11 @@
 #include "sandbox.h"
+#include "registry.h"
 
 #include <arpa/inet.h>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <netinet/in.h>
 #include <sys/un.h>
 
@@ -121,6 +123,50 @@ int main()
 	check(!other.open_on_host("Viewer", {(root / "home/user/.ssh/id").string()}), "a bridge hands a Linux program a file its caller does not reach");
 	check(!other.open_on_host("Missing", {}), "a program the prefix does not expose is started");
 	check(!other.open_on_host("Viewer", {"file:///etc/passwd"}), "a bridge hands a Linux program a file address");
+
+	// The desktop gets an entry for a kind of address only when the prefix lets it hand that kind in and a program registered for it.
+	const auto entry = [&] {
+		for (const auto &file : std::filesystem::directory_iterator(root / "data/applications"))
+			if (file.path().filename().string().starts_with("raven-link-"))
+				return file.path();
+		return std::filesystem::path();
+	};
+	std::ofstream(root / "prefix/sandbox.conf", std::ios::trunc) << "link NXM\nlink ../x\nlink ravtest\n";
+	check(other.links() == std::vector<std::string>{"nxm", "ravtest"}, "the kinds of address the desktop may hand in differ");
+	other.publish_links();
+	check(entry().empty(), "an entry is written for a kind no program registered");
+	{
+		raven::NativeRegistry hive(root / "prefix/registry.dat");
+		uint64_t key = 0;
+		uint32_t disposition = 0;
+		check(!hive.create(0x80000000ULL, u"nxm", key, disposition) && !hive.set(key, u"URL Protocol", 1, std::vector<uint8_t>{0, 0}),
+			"the kind cannot be registered");
+	}
+	other.publish_links();
+	std::ifstream written(entry());
+	const std::string text((std::istreambuf_iterator<char>(written)), {});
+	check(entry().filename().string().ends_with("-nxm.desktop") && text.find("\nMimeType=x-scheme-handler/nxm;\n") != text.npos &&
+		text.find("\nExec=env \"RAVEN_PREFIX=" + root.string() + "/prefix\" ") != text.npos &&
+		text.find("rundll32.exe\" -- shell32.dll,ShellExec_RunDLL %u\n") != text.npos, "the entry differs");
+	// A prefix whose path holds a blank, a dollar and a percent sign: the command quotes and escapes it as the specification asks.
+	std::filesystem::create_directories(root / "odd $%");
+	std::filesystem::copy_file(root / "prefix/registry.dat", root / "odd $%/registry.dat");
+	std::ofstream(root / "odd $%/sandbox.conf") << "link nxm\n";
+	raven::Sandbox odd;
+	odd.load(root / "odd $%");
+	odd.publish_links();
+	bool quoted = false;
+	for (const auto &file : std::filesystem::directory_iterator(root / "data/applications")) {
+		std::ifstream input(file.path());
+		const std::string content((std::istreambuf_iterator<char>(input)), {});
+		quoted = quoted || content.find("Exec=env \"RAVEN_PREFIX=" + root.string() + "/odd \\\\$%%\" ") != content.npos;
+	}
+	check(quoted, "the command of a prefix with a blank, a dollar and a percent sign in its path is not escaped");
+	std::ofstream(root / "odd $%/sandbox.conf", std::ios::trunc) << "\n";
+	odd.publish_links();
+	std::ofstream(root / "prefix/sandbox.conf", std::ios::trunc) << "handler nxm\twindows\n";
+	other.publish_links();
+	check(entry().empty(), "the entry stays when the prefix no longer lets the desktop hand the kind in");
 	std::filesystem::remove_all(root);
 	return 0;
 }

@@ -177,6 +177,8 @@ void register_sandbox_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(error ? 0 : 1);
 		if (error)
 			call.set_last_error(29);
+		else
+			sandbox().publish_links();
 	});
 	// RavenSandboxLog(buffer, capacity): the refusals noted in sandbox.log, newest last.
 	registry.add("RavenSandboxLog", 2, [prefix, give](ApiCall &call) {

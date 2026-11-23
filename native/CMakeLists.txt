@@ -5275,7 +5275,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     set_tests_properties(native_network_off_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/offline-prefix${width})
                     # A prefix where a program is registered for a kind of document.
-                    add_test(NAME native_associate_x${width} COMMAND raven --run-process --execution=native ${sandbox_client} -- associate)
+                    add_test(NAME native_associate_x${width} COMMAND raven --run-process --execution=native --timeout-ms=30000 ${sandbox_client} -- associate)
                     set_tests_properties(native_associate_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/associate-prefix${width})
                     set(winmm_client ${CMAKE_CURRENT_BINARY_DIR}/winmm-client${width}.exe)

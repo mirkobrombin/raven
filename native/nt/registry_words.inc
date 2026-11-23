@@ -1207,6 +1207,7 @@
 {"SetupDiDestroyDeviceInfoList", 1},
 {"SetupDiEnumDeviceInterfaces", 5},
 {"SetupDiGetClassDevsW", 4},
+{"ShellExec_RunDLLW", 4},
 {"ShellExecuteExW", 1},
 {"ShellExecuteW", 6},
 {"Shell_NotifyIconW", 2},
