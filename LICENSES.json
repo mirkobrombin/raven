@@ -390,6 +390,8 @@
         "native/guest/raven-composition/composition.c",
         "native/guest/raven-composition/composition_interfaces.h",
         "native/guest/raven-composition/composition_tables.h",
+        "native/guest/raven-composition/dcomp32.def",
+        "native/guest/raven-composition/dcomp64.def",
         "native/guest/raven-coremessaging/coremessaging.c",
         "native/guest/raven-vbscript/README.md",
         "native/guest/raven-vbscript/builtins.c",
