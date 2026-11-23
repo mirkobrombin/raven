@@ -28,6 +28,18 @@ int raven_entry(void)
 	for (unsigned i = 0; i < sizeof(names) / sizeof(*names); ++i)
 		CHECK(1 + i, GetProcAddress(ntdll, names[i]));
 	SetInformation set = (SetInformation)GetProcAddress(ntdll, "NtSetInformationFile");
+	LONG (WINAPI *query_system)(ULONG, void *, ULONG, ULONG *) =
+		(void *)GetProcAddress(ntdll, "NtQuerySystemInformation");
+	enum { recommended_shared_data_alignment = 58 };
+	ULONG alignment = 0, required = 0;
+	SetLastError(1234);
+	// The alignment is the processor's cache line: a power of two, 64 on the processors of today.
+	CHECK(11, query_system(recommended_shared_data_alignment, &alignment, sizeof(alignment), NULL) == 0 &&
+		alignment >= 16 && alignment <= 256 && !(alignment & (alignment - 1)) && GetLastError() == 1234);
+	alignment = 0;
+	CHECK(12, query_system(recommended_shared_data_alignment, &alignment, sizeof(alignment) - 1, &required) == (LONG)0xc0000004 &&
+		required == sizeof(alignment) && !alignment);
+	CHECK(13, query_system(recommended_shared_data_alignment, NULL, sizeof(alignment), NULL) == (LONG)0xc0000005);
 
 	const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 	WCHAR temporary[260], directory[260], path[260], inner[260];
