@@ -185,6 +185,20 @@ public:
 };
 
 // A registered wait: the callback runs on a guest thread once the object is signaled or the time runs out.
+// A thread pool due time is a FILETIME: negative for an interval from now in units of 100 ns, otherwise a system time, already passed
+// when zero.
+std::chrono::steady_clock::time_point pool_due_time(int64_t due)
+{
+	using namespace std::chrono;
+	auto when = steady_clock::now();
+	if (due < 0)
+		return when + microseconds(-due / 10);
+	const auto now_1601 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count() + 11644473600000000LL;
+	if (const auto ahead = due / 10 - now_1601; ahead > 0)
+		when += microseconds(ahead);
+	return when;
+}
+
 class WaitRegistration : public KernelObject {
 public:
 	uint64_t handle = 0, callback = 0, context = 0;
@@ -2275,7 +2289,6 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				group->members.push_back(made.value);
 		call.ret(made.value);
 	});
-	// The due time is a FILETIME: negative for an interval from now in units of 100 ns, otherwise a system time, already passed when zero.
 	const auto set_pool_timer = [&objects](ApiCall &call) -> std::shared_ptr<QueueTimer> {
 		const auto timer = objects.object_as<QueueTimer>(call[0]);
 		if (!timer || !timer->instance)
@@ -2284,18 +2297,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			timer->active = false;
 			return timer;
 		}
-		const auto due = call.load<int64_t>(call[1]);
-		auto when = std::chrono::steady_clock::now();
-		if (due < 0) {
-			when += std::chrono::microseconds(-due / 10);
-		} else {
-			using namespace std::chrono;
-			const auto now_1601 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count() + 11644473600000000LL;
-			const auto ahead = due / 10 - now_1601;
-			if (ahead > 0)
-				when += microseconds(ahead);
-		}
-		timer->deadline = when;
+		timer->deadline = pool_due_time(call.load<int64_t>(call[1]));
 		timer->period = call.u32(2);
 		timer->active = true;
 		return timer;
