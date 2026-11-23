@@ -47,5 +47,15 @@ int raven_entry(void)
 		return 14;
 	if (combine(path, ARRAYSIZE(path), L"C:\\root", long_part) != HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE))
 		return 15;
+	HRESULT (WINAPI *combine_ex)(WCHAR *, size_t, const WCHAR *, const WCHAR *, ULONG) =
+		(void *)GetProcAddress(path_api, "PathCchCombineEx");
+	if (!combine_ex)
+		return 16;
+	if (combine_ex(path, ARRAYSIZE(path), L"C:\\root\\part", L"..\\file.txt", 0) ||
+		lstrcmpW(path, L"C:\\root\\file.txt"))
+		return 17;
+	if (combine_ex(small, ARRAYSIZE(small), L"C:\\root", L"file.txt", 0) != HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER) ||
+		small[0] || combine_ex(NULL, ARRAYSIZE(path), L"C:\\root", L"file.txt", 0) != E_INVALIDARG)
+		return 18;
 	return 0;
 }
