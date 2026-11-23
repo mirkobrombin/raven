@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <dirent.h>
 #include <mutex>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -52,9 +53,11 @@ struct FolderChecks {
 FolderChecks folder_checks;
 
 // Looks for an entry that differs from name only by case, so Windows spellings find Linux files. The entries of a folder are kept by
-// their upper-case spelling while the folder stays as it was: programs ask for files that are not there by the hundred, Office for a
-// library at each click, and each miss read the whole folder. A folder is checked by its time stamp at each lookup, and one changed in
-// the last two seconds is read again each time, as its time stamp may not have moved for a change made within the same tick.
+// their upper-case spelling: programs ask for files that are not there by the hundred, Office for a library at each click, and each miss
+// read the whole folder. A folder kept is watched with inotify, whose events the kernel queues as each change is made, so the queue
+// read before each lookup tells which listings went out of date, and a lookup in a folder that did not change looks at nothing on disk.
+// Without a watch (none left, or no inotify) a folder is checked by its time stamp at each lookup, and one changed in the last two
+// seconds is read again each time, as its time stamp may not have moved for a change made within the same tick.
 std::optional<std::string> case_match(const std::filesystem::path &directory, const std::string &name)
 {
 	const auto key = [](std::u16string text) {
@@ -64,19 +67,52 @@ std::optional<std::string> case_match(const std::filesystem::path &directory, co
 	};
 	struct Listing {
 		timespec changed{};
+		int watch = -1;
 		std::unordered_map<std::string, bool> exact;
 		std::unordered_map<std::u16string, std::string> names;
 	};
 	struct Listings {
 		std::mutex lock;
 		std::unordered_map<std::string, Listing> folders;
-		void forget(const std::string &folder) { folders.erase(folder); }
+		std::unordered_map<int, std::string> watched;
+		const int notify = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+		void forget(const std::string &folder)
+		{
+			const auto found = folders.find(folder);
+			if (found == folders.end())
+				return;
+			if (found->second.watch >= 0) {
+				::inotify_rm_watch(notify, found->second.watch);
+				watched.erase(found->second.watch);
+			}
+			folders.erase(found);
+		}
+		// Drops the listings of the folders that changed since the last lookup.
+		void drain()
+		{
+			alignas(inotify_event) char events[4096];
+			for (ssize_t length; notify >= 0 && (length = ::read(notify, events, sizeof events)) > 0;)
+				for (ssize_t at = 0; at < length;) {
+					const auto *event = reinterpret_cast<const inotify_event *>(events + at);
+					at += ssize_t(sizeof(inotify_event) + event->len);
+					if (event->mask & IN_Q_OVERFLOW) {
+						while (!folders.empty())
+							forget(folders.begin()->first);
+						continue;
+					}
+					if (const auto found = watched.find(event->wd); found != watched.end()) {
+						const std::string folder = found->second;
+						forget(folder);
+					}
+				}
+		}
 	};
 	// It lives as long as the host, past the end of main, as the host threads that look names up do.
 	static auto *listings = new Listings;
 	std::lock_guard guard(listings->lock);
+	listings->drain();
 	auto cached = listings->folders.find(directory.native());
-	{
+	if (cached == listings->folders.end() || cached->second.watch < 0) {
 		folder_checks.count.fetch_add(1, std::memory_order_relaxed);
 		struct stat status{};
 		if (::stat(directory.c_str(), &status) != 0)
@@ -90,9 +126,15 @@ std::optional<std::string> case_match(const std::filesystem::path &directory, co
 			if (listings->folders.size() > 4096)
 				while (!listings->folders.empty())
 					listings->forget(listings->folders.begin()->first);
-			Listing listing{status.st_mtim, {}, {}};
+			// Watched before it is read: a change made while it is read drops the listing at the next lookup.
+			Listing listing{status.st_mtim, -1, {}, {}};
+			if (listings->notify >= 0)
+				listing.watch = ::inotify_add_watch(listings->notify, directory.c_str(),
+					IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR);
 			DIR *handle = ::opendir(directory.c_str());
 			if (!handle) {
+				if (listing.watch >= 0)
+					::inotify_rm_watch(listings->notify, listing.watch);
 				// A folder the sandbox lets the host pass through but not list: the name is looked at itself.
 				std::error_code ignored;
 				return std::filesystem::exists(directory / name, ignored) ? std::optional<std::string>(name) : std::nullopt;
@@ -102,6 +144,8 @@ std::optional<std::string> case_match(const std::filesystem::path &directory, co
 				listing.names.emplace(key(from_utf8(entry->d_name)), entry->d_name);
 			}
 			::closedir(handle);
+			if (listing.watch >= 0)
+				listings->watched[listing.watch] = directory.native();
 			cached = listings->folders.insert_or_assign(directory.native(), std::move(listing)).first;
 		}
 	}
