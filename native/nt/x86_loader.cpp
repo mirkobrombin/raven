@@ -185,6 +185,9 @@ PEModule *NativeX86Loader::bring(const std::string &requested)
 		return &added;
 	}
 	std::string missing;
+	const auto record_missing = [&](const PEImport &symbol) {
+		missing += " " + symbol.module + "!" + (symbol.by_ordinal ? "#" + std::to_string(symbol.ordinal) : symbol.name);
+	};
 	// A library's own manifest names the side-by-side assemblies its imports come from, the C runtime of its compiler most often.
 	// Its context is the one in effect while it and the libraries it brings in start, which the C runtime checks it was found by.
 	const auto own = activation_contexts().module_manifest(added.image);
@@ -199,13 +202,13 @@ PEModule *NativeX86Loader::bring(const std::string &requested)
 			if (const auto folder = activation_contexts().assembly_folder(*own, dependency))
 				bring(lowered(to_utf8(paths.dos(*folder))) + "\\" + dependency);
 		if (!modules.all().contains(dependency) && !bring(dependency)) {
-			missing += " " + symbol.module + "!";
+			record_missing(symbol);
 			continue;
 		}
 		try {
 			modules.resolve(symbol);
 		} catch (const std::runtime_error &) {
-			missing += " " + symbol.module + "!" + (symbol.by_ordinal ? "#" + std::to_string(symbol.ordinal) : symbol.name);
+			record_missing(symbol);
 		}
 	}
 	importer_context = outer;
