@@ -1972,10 +1972,12 @@ void NativeThreads::admin_main()
 			for (const auto &thread : threads) {
 				if (!stuck || thread->state == GuestThread::State::done)
 					continue;
-				// A wait in the process's table is stuck while it stands in line there with no time-out of its own.
+				// A wait in the process's table is stuck while it stands in line there with no time-out of its own, and its thread sleeps: on
+				// ntsync a wait a set ended stays in line until its thread has run, which on a busy machine can be after the setter waited.
 				if (const bool outside = (std::lock_guard(gate), thread->outside); outside && thread->state == GuestThread::State::waiting) {
 					waits = true;
-					stuck = thread->outside_endless && raven_waits_waiting(kernel_waits(), thread->id);
+					stuck = thread->outside_endless && raven_waits_waiting(kernel_waits(), thread->id) &&
+						!runnable(thread->host_tid, thread->snapshot.task);
 					continue;
 				}
 				if (thread->state != GuestThread::State::waiting || thread->wake || thread->queued || !thread->ready) {
