@@ -947,10 +947,8 @@ static bool runnable_at(const char *path)
 	return state && state[1] == ' ' && state[2] == 'R';
 }
 
-// Whether a woken thread has not yet had its turn only for want of a processor: its host thread, or its guest task, which a wait
-// outside the runtime wakes by itself while the host thread sleeps, stands ready or runs.
 // Whether the process may run on one processor alone, as it was started: a set on Windows lets the woken thread go first only there.
-static bool one_processor()
+bool NativeThreads::one_processor()
 {
 	static const bool alone = [] {
 		cpu_set_t usable;
@@ -959,6 +957,8 @@ static bool one_processor()
 	return alone;
 }
 
+// Whether a woken thread has not yet had its turn only for want of a processor: its host thread, or its guest task, which a wait
+// outside the runtime wakes by itself while the host thread sleeps, stands ready or runs.
 static bool runnable(pid_t host, pid_t task)
 {
 	char path[64];

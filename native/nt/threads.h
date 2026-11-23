@@ -265,6 +265,8 @@ public:
 	void signaled() { signals.fetch_add(1, std::memory_order_relaxed); }
 	// Whether no thread waits outside the runtime for `object` of the process's table (or for one that shares its slot): a call answered
 	// outside the runtime's turn (see NativeProcess::serve_alone) may then change the object without handing the turn to whom it wakes.
+	// Whether the process may run on one processor alone: only there does a set let the woken thread go first (see hand_over_to).
+	static bool one_processor();
 	bool quiet_for(uint32_t object) const { return table_waited[object % table_waited.size()].load(std::memory_order_acquire) == 0; }
 	// Whether a thread waits in the runtime: one a change outside the turn may concern is looked at again after a nudge.
 	bool waiting_in_runtime() const { return waiting_threads.load(std::memory_order_acquire) != 0; }

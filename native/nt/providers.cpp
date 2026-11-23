@@ -3104,8 +3104,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			});
 		}
 	}
-	// Setting or resetting an event no thread waits for in the table needs nothing of the runtime: the host thread answers it outside the
-	// turn, and threads that set events of their own go side by side. The threads that wait in the runtime, and one that began to wait
+	// Setting or resetting an event of the table needs nothing of the runtime: the host thread answers it outside the turn, and threads
+	// that set events of their own go side by side. On one processor alone a set an outside waiter awaits takes the turn to hand it over. The threads that wait in the runtime, and one that began to wait
 	// meanwhile, are looked at again as after any other change. A wait for an event of the table that is set is taken there beside the
 	// others too; one that would block, or report an error, goes the usual way.
 	enum class EventCall { reset, set, wait, wait_ex };
@@ -3320,9 +3320,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			const auto event = kernel_objects.event_alone(arguments[0]);
 			if (!event)
 				return std::nullopt;
-			// An event outside the table (one shared with other processes) has its waiters on its word or in the runtime.
+			// An event outside the table (one shared with other processes) has its waiters on its word or in the runtime. One a thread
+			// waits for outside the runtime is set here too unless the process has one processor, where the turn hands over to the thread.
 			const uint32_t object = event->table_object();
-			if ((object && !threads.quiet_for(object)) || event->set_state(found->second == EventCall::set) < 0)
+			if ((object && NativeThreads::one_processor() && !threads.quiet_for(object)) || event->set_state(found->second == EventCall::set) < 0)
 				return std::nullopt;
 			threads.signaled();
 			if (threads.waiting_in_runtime() || (object && !threads.quiet_for(object)))
