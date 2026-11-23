@@ -53,11 +53,11 @@ static NTSTATUS send(HANDLE port, ULONG value)
 	return send_receive(port, 0, &message.header, NULL, NULL, NULL, NULL, NULL);
 }
 
-static BOOL lower_client_integrity(void)
+static BOOL set_client_integrity(WELL_KNOWN_SID_TYPE label_type)
 {
 	BYTE sid[SECURITY_MAX_SID_SIZE];
 	DWORD size = sizeof sid;
-	if (!CreateWellKnownSid(WinLowLabelSid, NULL, sid, &size))
+	if (!CreateWellKnownSid(label_type, NULL, sid, &size))
 		return FALSE;
 	HANDLE token;
 	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT, &token))
@@ -71,10 +71,15 @@ static BOOL check_impersonation(impersonate_port impersonate, HANDLE port, struc
 {
 	const ULONG id = message->message_id;
 	message->message_id = 0;
-	const NTSTATUS rejected = impersonate(port, message, impersonation_level);
+	const NTSTATUS invalid_message = impersonate(port, message, impersonation_level);
 	message->message_id = id;
+	const ULONG_PTR process = message->process;
+	message->process = GetCurrentProcessId();
+	const NTSTATUS wrong_sender = impersonate(port, message, impersonation_level);
+	message->process = process;
 	HANDLE token;
-	if (rejected >= 0 || OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) || GetLastError() != ERROR_NO_TOKEN)
+	if (invalid_message >= 0 || wrong_sender >= 0 || OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) ||
+		GetLastError() != ERROR_NO_TOKEN)
 		return FALSE;
 	if (impersonate(port, message, impersonation_level) || !OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
 		return FALSE;
@@ -93,7 +98,7 @@ static DWORD WINAPI client(void *argument)
 	const struct client_input *input = argument;
 	const struct port_attributes port_attrs = {allow_impersonation, {sizeof(SECURITY_QUALITY_OF_SERVICE), SecurityImpersonation,
 		SECURITY_STATIC_TRACKING, FALSE}, .message_limit = 512};
-	if (input->impersonation && !lower_client_integrity())
+	if (input->impersonation && !set_client_integrity(WinLowLabelSid))
 		return 35;
 	HANDLE port = NULL;
 	struct message message = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 34};
@@ -103,6 +108,8 @@ static DWORD WINAPI client(void *argument)
 	if (connect(&port, input->name, NULL, input->impersonation ? &port_attrs : NULL, 0x20000, input->server_sid,
 		&message.header, &capacity, NULL, NULL, &limit) || !port)
 		return 10;
+	if (input->impersonation && !set_client_integrity(WinUntrustedLabelSid))
+		return 36;
 	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || !message.value)
 		return 11;
 	struct server_session server = {0};
@@ -257,6 +264,8 @@ int raven_entry(void)
 	message.value = 425;
 	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL))
 		return 9;
+	if (impersonation && impersonate(peer, &message.header, impersonation_level) >= 0)
+		return 37;
 	struct message timed_out;
 	if (receive(listener, &timed_out, -30000000) || (timed_out.header.type & 0xfff) != 1 || timed_out.value != 123 ||
 		receive(listener, &message, -30000000) || (message.header.type & 0xfff) != 3 || message.value != 456)
