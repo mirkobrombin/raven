@@ -1,0 +1,3 @@
+LIBRARY user32.dll
+EXPORTS
+	ProbeOrdinal @2557 NONAME

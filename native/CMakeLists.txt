@@ -4891,6 +4891,39 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(late_imports_fixture${width} ALL DEPENDS ${late_imports_dir}/client.exe ${late_imports_dir}/late-imports.dll)
                     add_test(NAME native_late_system_imports_x${width} COMMAND raven --run-process --execution=native ${late_imports_dir}/client.exe)
                     set_tests_properties(native_late_system_imports_x${width} PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(import_probe_dir ${CMAKE_CURRENT_BINARY_DIR}/import-probe-${width})
+                    set(import_probe_defs ${LOADER_SOURCES}/import_probe_bcp47.def ${LOADER_SOURCES}/import_probe_appmodel.def
+                        ${LOADER_SOURCES}/import_probe_user32.def)
+                    set(import_probe_libs ${import_probe_dir}/bcp47.a ${import_probe_dir}/appmodel.a ${import_probe_dir}/user32.a)
+                    set(import_probe_flags -nostdlib -O1 -fno-builtin -fno-stack-protector)
+                    add_custom_command(OUTPUT ${import_probe_dir}/client.exe ${import_probe_dir}/import-probe.dll ${import_probe_dir}/outside-probe.dll
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${import_probe_dir}
+                        COMMAND ${late_imports_dlltool} -d ${LOADER_SOURCES}/import_probe_bcp47.def -l ${import_probe_dir}/bcp47.a
+                        COMMAND ${late_imports_dlltool} -d ${LOADER_SOURCES}/import_probe_appmodel.def -l ${import_probe_dir}/appmodel.a
+                        COMMAND ${late_imports_dlltool} -d ${LOADER_SOURCES}/import_probe_user32.def -l ${import_probe_dir}/user32.a
+                        COMMAND ${webservices_compiler} ${import_probe_flags} -shared -Wl,--entry,0,--no-insert-timestamp -o ${import_probe_dir}/import-probe.dll
+                            ${LOADER_SOURCES}/import_probe.c ${import_probe_libs}
+                        COMMAND ${webservices_compiler} ${import_probe_flags} -shared -DOUTSIDE_PROBE -Wl,--entry,0,--no-insert-timestamp -o ${import_probe_dir}/outside-probe.dll
+                            ${LOADER_SOURCES}/import_probe.c ${import_probe_dir}/appmodel.a
+                        COMMAND ${webservices_compiler} ${import_probe_flags} -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${import_probe_dir}/client.exe ${LOADER_SOURCES}/import_probe_client.c -lkernel32
+                        DEPENDS ${import_probe_defs} ${LOADER_SOURCES}/import_probe.c ${LOADER_SOURCES}/import_probe_client.c VERBATIM)
+                    add_custom_target(import_probe_fixture${width} ALL DEPENDS ${import_probe_dir}/client.exe ${import_probe_dir}/import-probe.dll ${import_probe_dir}/outside-probe.dll)
+                    set(import_probe_symbols "bcp47langs.dll!GetApplicationLanguages" "kernel32.dll!GetSystemMetadataPathForPackage" "user32.dll!#2557")
+                    foreach(case d x 0 1 2)
+                        set(probe_test native_import_probe_${case}_x${width})
+                        add_test(NAME ${probe_test} COMMAND raven --run-process --execution=native --stdio=inherit ${import_probe_dir}/client.exe)
+                        set_tests_properties(${probe_test} PROPERTIES TIMEOUT 20 ENVIRONMENT "RAVEN_GUEST_IMPORT_PROBE_CASE=${case}")
+                        if(case STREQUAL "d" OR case STREQUAL "x")
+                            set_tests_properties(${probe_test} PROPERTIES PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        else()
+                            list(GET import_probe_symbols ${case} probe_symbol)
+                            set_tests_properties(${probe_test} PROPERTIES PASS_REGULAR_EXPRESSION "import probe: ${probe_symbol} .* from import-probe.dll\\+[0-9a-f]+")
+                        endif()
+                        if(NOT case STREQUAL "d")
+                            set_property(TEST ${probe_test} APPEND PROPERTY ENVIRONMENT "RAVEN_TRACE_IMPORT_PROBE=1")
+                        endif()
+                    endforeach()
                     set(font_languages_client ${CMAKE_CURRENT_BINARY_DIR}/font-languages${width}.exe)
                     add_custom_command(OUTPUT ${font_languages_client}
                         COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp

@@ -1,0 +1,3 @@
+LIBRARY bcp47langs.dll
+EXPORTS
+	GetApplicationLanguages
