@@ -1963,6 +1963,9 @@ void NativeThreads::admin_main()
 			}
 			// When every thread waits without a timeout for what only another of them could give, and no other process, host source
 			// or window system can end a wait either, the run is over: the main thread is told so.
+			// The threads are looked at one by one while calls beside the turn go on: a set there may end one thread's wait after it was
+			// looked at and before the setter, looked at later, began to wait. Each such set counts a signal, so none may come in between.
+			const uint64_t signals_before = signals.load(std::memory_order_acquire);
 			bool stuck = !tearing_down && !pending && !poll && !shared_object_count.load() &&
 				!std::any_of(externals.begin(), externals.end(), [](const auto &external) { return external(); });
 			bool waits = false;
@@ -1986,7 +1989,7 @@ void NativeThreads::admin_main()
 					stuck = false;
 				}
 			}
-			if (stuck && waits) {
+			if (stuck && waits && signals.load(std::memory_order_acquire) == signals_before) {
 				pending = std::make_exception_ptr(std::runtime_error("native guest threads deadlocked: every thread waits without a timeout"));
 				call_away(*threads.front());
 				std::lock_guard lock(gate);

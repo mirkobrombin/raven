@@ -262,7 +262,7 @@ public:
 	// Ends the thread's wait outside the runtime, or the next one it begins, so that it takes its turn and looks at why.
 	static void call_away(GuestThread &thread);
 	// Tells that something may have ended a wait: an object signaled, a message posted, a thread ended.
-	void signaled() { signals.fetch_add(1, std::memory_order_relaxed); }
+	void signaled() { signals.fetch_add(1, std::memory_order_release); }
 	// Whether no thread waits outside the runtime for `object` of the process's table (or for one that shares its slot): a call answered
 	// outside the runtime's turn (see NativeProcess::serve_alone) may then change the object without handing the turn to whom it wakes.
 	// Whether the process may run on one processor alone: only there does a set let the woken thread go first (see hand_over_to).
