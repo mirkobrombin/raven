@@ -3885,6 +3885,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_event_handover_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
             FAIL_REGULAR_EXPRESSION "processor times read [0-9][0-9][0-9][0-9]+ times"
             ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-handover-prefix")
+        # A setter goes on while the thread its set woke runs elsewhere, as on Windows (event_setter_goes_on_client.c).
+        raven_kernel_fixture(event-setter-goes-on event_setter_goes_on_client.c 0x1f6000000 "-lkernel32")
+        add_test(NAME native_event_setter_goes_on_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
+            ${CMAKE_CURRENT_BINARY_DIR}/event-setter-goes-on.exe)
+        set_tests_properties(native_event_setter_goes_on_x64 PROPERTIES TIMEOUT 75 RUN_SERIAL TRUE PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-setter-goes-on-prefix")
         # Of its 6000 wakes, the few a thread makes while it holds the turn anyway are served there; taking the turn for each made hundreds.
         set_property(TEST native_address_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION "profile: \\(call\\) WakeByAddress[A-Za-z]* calls=[0-9][0-9][0-9]")
         # Releasing a semaphore goes beside the turn in parallel mode, and no release is lost (semaphore_beside_client.c).
