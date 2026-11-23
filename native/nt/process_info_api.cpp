@@ -1165,8 +1165,29 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// SystemProcessInformation (class 5) lists the same processes as a Toolhelp snapshot: a SYSTEM_PROCESS_INFORMATION for each, its
 	// SYSTEM_THREAD_INFORMATION entries after it and its image name after those, linked by NextEntryOffset. A buffer too small is
-	// answered with STATUS_INFO_LENGTH_MISMATCH and the length needed. The runtime answers the other classes before this one is reached.
+	// answered with STATUS_INFO_LENGTH_MISMATCH and the length needed. SystemRecommendedSharedDataAlignment (class 58) is one ULONG, the
+	// processor's cache line. The runtime answers the other classes before this one is reached.
 	registry.add("NtQuerySystemInformation", 4, [take_snapshot](ApiCall &call) {
+		if (call.u32(0) == 58) {
+			try {
+				if (call[3])
+					call.store<uint32_t>(call[3], 4);
+				if (call.u32(2) != 4) {
+					call.ret(0xc0000004U);
+					return;
+				}
+				if (!call[1]) {
+					call.ret(0xc0000005U);
+					return;
+				}
+				const long line = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
+				call.store<uint32_t>(call[1], line >= 16 && line <= 256 && !(line & (line - 1)) ? uint32_t(line) : 64);
+				call.ret(0);
+			} catch (const ApiFault &) {
+				call.ret(0xc0000005U);
+			}
+			return;
+		}
 		if (call.u32(0) != 5) {
 			call.ret(0xc0000003U);
 			return;
