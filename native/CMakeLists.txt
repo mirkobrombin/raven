@@ -6294,6 +6294,23 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe -- ${X86_MISSING_IMPORT})
                 set_tests_properties(native_x86_missing_import_trace PROPERTIES TIMEOUT 20 ENVIRONMENT RAVEN_TRACE_X86=1
                     PASS_REGULAR_EXPRESSION "raven_missing_dependency[.]dll!RavenMissingImport")
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x64-missing-import.dll ${CMAKE_CURRENT_BINARY_DIR}/x64-load-client.exe
+                    COMMAND ${RAVEN_DLLTOOL} -d ${LOADER_SOURCES}/missing_dependency.def
+                        -l ${CMAKE_CURRENT_BINARY_DIR}/x64-missing-dependency.a
+                    COMMAND ${RAVEN_MINGW64} -shared -nostdlib -O2 -Wl,--entry,0,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x64-missing-import.dll ${LOADER_SOURCES}/missing_import.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/x64-missing-dependency.a
+                    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x64-load-client.exe ${LOADER_SOURCES}/x86_load_client.c -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/missing_dependency.def ${LOADER_SOURCES}/missing_import.c
+                        ${LOADER_SOURCES}/x86_load_client.c VERBATIM)
+                add_custom_target(x64_missing_import_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x64-missing-import.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/x64-load-client.exe)
+                string(REPLACE "/" "\\" X64_MISSING_IMPORT "Z:${CMAKE_CURRENT_BINARY_DIR}/x64-missing-import.dll")
+                add_test(NAME native_x64_missing_import_trace COMMAND raven --run-process --execution=native
+                    ${CMAKE_CURRENT_BINARY_DIR}/x64-load-client.exe -- ${X64_MISSING_IMPORT})
+                set_tests_properties(native_x64_missing_import_trace PROPERTIES TIMEOUT 20 ENVIRONMENT RAVEN_TRACE_FAIL=1
+                    PASS_REGULAR_EXPRESSION "raven_missing_dependency[.]dll!RavenMissingImport")
                 set(RAVEN_DXVK_PE32_DIR "" CACHE PATH "Directory holding the 32-bit DXVK libraries (d3d9.dll)")
                 if(RAVEN_DXVK_PE32_DIR AND EXISTS "${RAVEN_DXVK_PE32_DIR}/d3d9.dll")
                     string(REPLACE "/" "\\" X86_DXVK_D3D9 "Z:${RAVEN_DXVK_PE32_DIR}/d3d9.dll")
