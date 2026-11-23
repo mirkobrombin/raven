@@ -370,8 +370,6 @@ pid_t wait(pid_t task, int *status, int options)
 				*status = stop_status(held);
 			return task;
 		}
-		if (!held.running)
-			return failed(ECHILD);
 		if (ended(held, status)) {
 			// The leader reads as ended only once its whole group has; any other thread ends alone, and the guest's other threads
 			// stay in the agent's hands.
@@ -385,13 +383,15 @@ pid_t wait(pid_t task, int *status, int options)
 			return 0;
 		// Asleep until the agent posts, a signal of the runtime's own cuts the wait short as it would cut waitpid's, or a while has
 		// passed to look at whether the task is still there.
+		// A task whose stop was read already posts nothing until it goes on, as a traced one reports nothing more to waitpid: the wait
+		// sleeps the slice out instead.
 		const timespec slice{0, 10'000'000};
-		const long slept = syscall(SYS_futex, state_word(held), FUTEX_WAIT, now, &slice, nullptr, 0);
+		const long slept = held.running ? syscall(SYS_futex, state_word(held), FUTEX_WAIT, now, &slice, nullptr, 0) : nanosleep(&slice, nullptr);
 		if (slept == -1 && errno == EINTR)
 			return -1;
 		// A slice that ran out with no stop comes back as cut short too: a signal that reached the thread just before it went to sleep
 		// was handled outside the wait, and the caller is the one to look again at what that signal was for (its deadline, a job).
-		if (slept == -1 && errno == ETIMEDOUT && __atomic_load_n(state_word(held), __ATOMIC_ACQUIRE) != posted)
+		if (!held.running || (slept == -1 && errno == ETIMEDOUT && __atomic_load_n(state_word(held), __ATOMIC_ACQUIRE) != posted))
 			return failed(EINTR);
 	}
 }
