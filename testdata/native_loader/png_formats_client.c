@@ -395,13 +395,13 @@ int raven_entry(void)
 			raw[index] = 0;
 		write_png(&huge, raw, sizeof raw);
 		if (IWICImagingFactory_CreateStream(factory, &stream) != S_OK || IWICStream_InitializeFromMemory(stream, file, file_size) != S_OK)
-			return 91;
+			return 101;
 		if (IWICImagingFactory_CreateDecoderFromStream(factory, (IStream *)stream, NULL, WICDecodeMetadataCacheOnDemand, &decoder) == S_OK &&
 			IWICBitmapDecoder_GetFrame(decoder, 0, &frame) == S_OK)
 		{
 			WICRect corner = {0, 0, 4, 1};
 			if (IWICBitmapFrameDecode_CopyPixels(frame, &corner, 16, sizeof row, row) == S_OK)
-				return 92;
+				return 102;
 		}
 		if (frame)
 			IWICBitmapFrameDecode_Release(frame);
