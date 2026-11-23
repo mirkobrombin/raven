@@ -64,6 +64,23 @@ static void CALLBACK counted(PTP_CALLBACK_INSTANCE instance, PVOID context, PTP_
 	InterlockedIncrement(&work_count);
 }
 
+static volatile LONG wait_count;
+static TP_WAIT_RESULT wait_result;
+static PTP_WAIT wait_seen;
+static PVOID wait_context;
+static PTP_CALLBACK_INSTANCE wait_instance;
+static HANDLE wait_done;
+
+static void CALLBACK waited(PTP_CALLBACK_INSTANCE instance, PVOID context, PTP_WAIT wait, TP_WAIT_RESULT result)
+{
+	wait_instance = instance;
+	wait_context = context;
+	wait_seen = wait;
+	wait_result = result;
+	InterlockedIncrement(&wait_count);
+	SetEvent(wait_done);
+}
+
 static FILETIME from_now(LONGLONG milliseconds)
 {
 	ULARGE_INTEGER due;
@@ -207,5 +224,36 @@ int raven_entry(void)
 	if (work_count != 600) return 24;
 	if (work_overflow) return 25;
 	CloseThreadpoolWork(work);
+
+	/* Thread pool waits, as CoreMessaging waits for its queues: a wait starts unset, runs its callback once when its object is
+	   signaled or its timeout passes, with the instance, the context, itself and the result, and has to be set again to run again. */
+	wait_done = CreateEventW(NULL, FALSE, FALSE, NULL);
+	HANDLE signal = CreateEventW(NULL, FALSE, FALSE, NULL);
+	PTP_WAIT pool_wait = CreateThreadpoolWait(waited, (PVOID)0x7170, NULL);
+	if (!wait_done || !signal || !pool_wait) return 28;
+	SetThreadpoolWait(pool_wait, signal, NULL);
+	SetEvent(signal);
+	if (WaitForSingleObject(wait_done, 5000) != WAIT_OBJECT_0) return 29;
+	WaitForThreadpoolWaitCallbacks(pool_wait, FALSE);
+	if (wait_count != 1 || wait_result != WAIT_OBJECT_0 || wait_seen != pool_wait || wait_context != (PVOID)0x7170 || !wait_instance)
+		return 30;
+	SetEvent(signal);
+	Sleep(60);
+	if (wait_count != 1 || WaitForSingleObject(signal, 0) != WAIT_OBJECT_0) return 31;
+	due = from_now(20);
+	SetThreadpoolWait(pool_wait, signal, &due);
+	if (WaitForSingleObject(wait_done, 5000) != WAIT_OBJECT_0) return 32;
+	WaitForThreadpoolWaitCallbacks(pool_wait, FALSE);
+	if (wait_count != 2 || wait_result != WAIT_TIMEOUT) return 32;
+	/* A wait taken back before its object or its time comes never runs, and the Ex form says it was set. */
+	due = from_now(600000);
+	SetThreadpoolWait(pool_wait, signal, &due);
+	if (!SetThreadpoolWaitEx(pool_wait, NULL, NULL, NULL) || SetThreadpoolWaitEx(pool_wait, NULL, NULL, NULL)) return 33;
+	SetEvent(signal);
+	Sleep(60);
+	WaitForThreadpoolWaitCallbacks(pool_wait, TRUE);
+	if (wait_count != 2) return 34;
+	CloseThreadpoolWait(pool_wait);
+	CloseHandle(signal);
 	return 0;
 }
