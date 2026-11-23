@@ -27,5 +27,21 @@ int raven_entry(void)
 	const ULONGLONG reported = (ULONGLONG)now.dwHighDateTime << 32 | now.dwLowDateTime;
 	if (reported > wall_after + 2000000 || wall_after > reported + 2000000)
 		return 3;
+	/* The tick counts are the page's tick count times its multiplier, as Windows reads them: each falls between the page's value read
+	   just before and just after it. */
+	volatile const ULONG *tick_count = (const ULONG *)0x7ffe0320, *multiplier = (const ULONG *)0x7ffe0004;
+	for (int round = 0; round < 1000; ++round) {
+		const ULONGLONG first = read_time(tick_count) * *multiplier >> 24, counted = GetTickCount64(), short_count = GetTickCount();
+		const ULONGLONG last = read_time(tick_count) * *multiplier >> 24;
+		if (counted < first || counted > last)
+			return 4;
+		if ((ULONG)(short_count - (ULONG)first) > (ULONG)(last - first))
+			return 5;
+	}
+	/* The page moves by the millisecond, finer than Windows' default tick, so a short sleep shows on it. */
+	const ULONGLONG ticks_before = GetTickCount64();
+	Sleep(5);
+	if (GetTickCount64() - ticks_before < 4)
+		return 6;
 	return 0;
 }
