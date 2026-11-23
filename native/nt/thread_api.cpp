@@ -199,9 +199,11 @@ std::chrono::steady_clock::time_point pool_due_time(int64_t due)
 	return when;
 }
 
+// A wait registered with RegisterWaitForSingleObject, or a thread pool wait: that one has a callback instance and its own handle, and
+// runs once each time it is set.
 class WaitRegistration : public KernelObject {
 public:
-	uint64_t handle = 0, callback = 0, context = 0;
+	uint64_t handle = 0, callback = 0, context = 0, instance = 0, self = 0;
 	uint32_t timeout = 0, flags = 0;
 	std::chrono::steady_clock::time_point deadline;
 	bool active = true;
@@ -2027,9 +2029,13 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			if (signaled && !objects.try_consume(wait->handle, 0))
 				continue;
 			const auto thread = threads.create(wait->callback, wait->context, 1024 * 1024, false);
-			thread->arguments = {wait->context, signaled ? 0u : 1u};
+			// A thread pool wait's callback takes WAIT_OBJECT_0 or WAIT_TIMEOUT; a registered wait's, whether its time ran out.
+			if (wait->instance)
+				thread->arguments = {wait->instance, wait->context, wait->self, signaled ? 0u : 0x102u};
+			else
+				thread->arguments = {wait->context, signaled ? 0u : 1u};
 			wait->running = thread;
-			if (wait->flags & 0x8)
+			if (wait->instance || (wait->flags & 0x8))
 				wait->active = false;
 			else
 				wait->deadline = now + std::chrono::milliseconds(wait->timeout);
@@ -2085,6 +2091,77 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("UnregisterWait", 1, [unregister_wait](ApiCall &call) { unregister_wait(call, false); });
 	registry.add("UnregisterWaitEx", 2, [unregister_wait](ApiCall &call) { unregister_wait(call, true); });
+
+	// Thread pool waits share the pump of the registered waits. One starts unset; setting it names the object and the timeout, a null
+	// object unsets it, and it runs its callback once (see the pump). The object is kept by a handle of the wait's own until it is unset.
+	registry.add("CreateThreadpoolWait", 3, [&objects, &context, registrations](ApiCall &call) {
+		if (!call[0]) {
+			call.fail(87, 0);
+			return;
+		}
+		auto wait = std::make_shared<WaitRegistration>();
+		wait->callback = call[0];
+		wait->context = call[1];
+		wait->active = false;
+		// TP_CALLBACK_INSTANCE is opaque to callbacks, so a block of the process stands in for it.
+		wait->instance = context.allocator.allocate(64);
+		const auto made = objects.add_object(wait);
+		if (made.status || !wait->instance) {
+			call.fail(8, 0);
+			return;
+		}
+		wait->self = made.value;
+		registrations->push_back(wait);
+		// TP_CALLBACK_ENVIRON: the version, then the pool and the cleanup group as pointers.
+		if (call[2])
+			if (const auto group = objects.object_as<CleanupGroupObject>(call.load_pointer(call[2] + 2 * call.pointer_width())))
+				group->members.push_back(made.value);
+		call.ret(made.value);
+	});
+	// Says whether the wait was set and had not run yet, as SetThreadpoolWaitEx does.
+	const auto set_pool_wait = [&objects](ApiCall &call) {
+		const auto wait = objects.object_as<WaitRegistration>(call[0]);
+		if (!wait || !wait->instance)
+			return false;
+		const bool was_set = std::exchange(wait->active, false);
+		if (wait->handle)
+			objects.close(std::exchange(wait->handle, 0));
+		if (!call[1])
+			return was_set;
+		const auto copy = objects.duplicate(call[1]);
+		if (copy.status)
+			return was_set;
+		wait->handle = copy.value;
+		// No timeout is an endless wait; otherwise the timeout is a FILETIME, as a thread pool timer's due time.
+		wait->timeout = call[2] ? 0 : UINT32_MAX;
+		if (call[2])
+			wait->deadline = pool_due_time(call.load<int64_t>(call[2]));
+		wait->active = true;
+		return was_set;
+	};
+	registry.add("SetThreadpoolWait", 3, [set_pool_wait](ApiCall &call) { set_pool_wait(call); });
+	registry.add("SetThreadpoolWaitEx", 4, [set_pool_wait](ApiCall &call) { call.ret(set_pool_wait(call) ? 1 : 0); });
+	// A callback starts as soon as its wait is satisfied, so none is ever queued: cancelling unsets the wait, and the call waits for the
+	// callback that runs.
+	registry.add("WaitForThreadpoolWaitCallbacks", 2, [&objects, &threads](ApiCall &call) {
+		const auto wait = objects.object_as<WaitRegistration>(call[0]);
+		if (!wait || !wait->instance)
+			return;
+		if (call.u32(1))
+			wait->active = false;
+		if (wait->running && wait->running->state != GuestThread::State::done)
+			threads.block([wait] { return wait->running->state == GuestThread::State::done; }, std::nullopt);
+	});
+	registry.add("CloseThreadpoolWait", 1, [&objects, registrations](ApiCall &call) {
+		const auto wait = objects.object_as<WaitRegistration>(call[0]);
+		if (!wait || !wait->instance)
+			return;
+		wait->active = false;
+		if (wait->handle)
+			objects.close(std::exchange(wait->handle, 0));
+		registrations->erase(std::remove(registrations->begin(), registrations->end(), wait), registrations->end());
+		objects.close(call[0]);
+	});
 
 	// Timer queues: the same pump starts each due timer's callback on a new guest thread, with TRUE for a timer that ran out; a timer
 	// whose callback still runs is not started again. Deleting timers can name an event that is set once their callbacks have returned.
