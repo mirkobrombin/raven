@@ -52,6 +52,7 @@ static const GUID core_application = {0x0aacf7a4, 0x5e1d, 0x49df, {0x80, 0x34, 0
 static const GUID core_application2 = {0x998681fb, 0x1ab6, 0x4b7f, {0xbe, 0x4a, 0x9a, 0x06, 0x45, 0x22, 0x4c, 0x04}};
 static const GUID language_factory = {0x9b0252ac, 0x0c27, 0x44f8, {0xb7, 0x92, 0x97, 0x93, 0xfb, 0x66, 0xc6, 0x3e}};
 static const GUID language_statics = {0xb23cd557, 0x0865, 0x46d4, {0x89, 0xb8, 0xd5, 0x9b, 0xe8, 0x99, 0x0f, 0x0d}};
+static const GUID app_languages_statics = {0x75b40847, 0x0a4c, 0x4a92, {0x95, 0x65, 0xfd, 0x63, 0xc9, 0x5f, 0x7a, 0xed}};
 static const GUID property_set = {0x8a43ed9f, 0xf4e6, 0x4421, {0xac, 0xf9, 0x1d, 0xab, 0x29, 0x86, 0x82, 0x0c}};
 static const GUID property_map = {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x3b, 0x95, 0x39, 0x50, 0x6a, 0xca}};
 static const GUID api_information = {0x997439fe, 0xf681, 0x4a11, {0xb4, 0x16, 0xc1, 0x3a, 0x47, 0xe8, 0xba, 0x36}};
@@ -231,6 +232,27 @@ static int check_analytics(void)
 	return 0;
 }
 
+static int check_app_languages(void)
+{
+	object *factory = statics(L"Windows.Globalization.ApplicationLanguages", &app_languages_statics), *view = NULL;
+	if (!factory) return 90;
+	if (METHOD(factory, 8, object_method)(factory, NULL) != E_POINTER ||
+		METHOD(factory, 8, object_method)(factory, &view) != S_OK || !view) return 91;
+	METHOD(factory, 2, release_method)(factory);
+	ULONG count, capacity = LOCALE_NAME_MAX_LENGTH + 1;
+	WCHAR preferred[LOCALE_NAME_MAX_LENGTH + 1];
+	if (!GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, preferred, &capacity) || !count) return 92;
+	UINT32 size = 0;
+	if (METHOD(view, 7, HRESULT (WINAPI *)(object *, UINT32 *))(view, &size) != S_OK || !size) return 93;
+	void *name = NULL;
+	if (METHOD(view, 6, HRESULT (WINAPI *)(object *, UINT32, void **))(view, 0, &name) != S_OK || !name ||
+		lstrcmpW(WindowsGetStringRawBuffer(name, NULL), preferred)) return 94;
+	WindowsDeleteString(name);
+	if (METHOD(view, 6, HRESULT (WINAPI *)(object *, UINT32, void **))(view, size, &name) != (HRESULT)0x8000000b || name) return 95;
+	METHOD(view, 2, release_method)(view);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	/* Programs that use the Windows Runtime use COM as well, as Office does. */
@@ -327,5 +349,7 @@ int raven_entry(void)
 		failure = check_search();
 	if (!failure)
 		failure = check_analytics();
-	return failure ? failure : check_metadata();
+	if (!failure)
+		failure = check_metadata();
+	return failure ? failure : check_app_languages();
 }
