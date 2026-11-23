@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check what RAVEN_CYCLES reports for a program whose threads call the system at once.
 
---beside names the calls the runtime must answer beside the turn at least half the times they reach it; --guest names those the guest
-answers itself, which may reach the runtime only when a change came in between (60 times at most)."""
+--beside names the calls the runtime must answer beside the turn at least half the times they reach it, --always those it must answer
+there at least nine times in ten; --guest names those the guest answers itself, which may reach the runtime only when a change came in
+between (60 times at most)."""
 
 import argparse
 import os
@@ -15,6 +16,7 @@ def main():
     parser.add_argument("runtime")
     parser.add_argument("fixture")
     parser.add_argument("--beside", default="", help="comma separated")
+    parser.add_argument("--always", default="", help="comma separated")
     parser.add_argument("--guest", default="", help="comma separated")
     args = parser.parse_args()
     # No report comes during the run at this interval: the one the run ends with holds every call.
@@ -37,6 +39,9 @@ def main():
         beside[name] = beside.get(name, 0) + answered
     for name in filter(None, args.beside.split(",")):
         if beside.get(name, 0) < reached.get(name, 0) // 2 or not reached.get(name, 0):
+            raise SystemExit(f"{name} is answered beside the turn {beside.get(name, 0)} of {reached.get(name, 0)} times\n{output}")
+    for name in filter(None, args.always.split(",")):
+        if beside.get(name, 0) * 10 < reached.get(name, 0) * 9 or not reached.get(name, 0):
             raise SystemExit(f"{name} is answered beside the turn {beside.get(name, 0)} of {reached.get(name, 0)} times\n{output}")
     for name in filter(None, args.guest.split(",")):
         if reached.get(name, 0) > 60:
