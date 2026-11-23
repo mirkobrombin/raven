@@ -884,6 +884,13 @@ struct NativeProcess::State {
 	void require_memory() const;
 	bool covers(uint64_t address, size_t size, int protection) const;
 	uint8_t *shared_memory(uint64_t address, size_t &size) const;
+	// The served block of the thread whose TEB is at `teb`, where it stamps its system calls with RAVEN_CYCLES; null for one without.
+	uint64_t *served_block_of(uint64_t teb) const
+	{
+		std::lock_guard memory(memory_lock);
+		const auto found = std::find_if(served_owners.begin(), served_owners.end(), [teb](const auto &owner) { return owner.second == teb; });
+		return found == served_owners.end() ? nullptr : found->first;
+	}
 	uint8_t *shared_alone(uint64_t address, size_t size, int protection) const;
 	pid_t memory_reader() const;
 	uint64_t limit() const { return mode == NativeMode::x86 ? 0x100000000ULL : 0x800000000000ULL; }
@@ -2460,21 +2467,36 @@ void NativeProcess::set_service_landing(uint64_t landing)
 	state->service_landing = landing;
 }
 
+// With RAVEN_CYCLES, a guest goes on from a system call the runtime answered through the landing, which stamps the moment in its block
+// before it goes to `rip`.
+static void land(uint64_t *served, uint64_t landing, uint64_t number, unsigned long long &rip)
+{
+	if (!served || !landing)
+		return;
+	served[served_stub::service_landing_target] = rip;
+	served[served_stub::service_last] = number;
+	rip = landing;
+}
+
 bool NativeProcess::serve_service_alone(pid_t task)
 {
 	uint64_t *const held = state->concurrent_service ? agent::block_of(task) : nullptr;
 	user_regs_struct registers{};
 	if (!held || agent::request(PTRACE_GETREGS, task, nullptr, &registers) == -1)
 		return false;
+	auto &cycles = CallCycles::instance();
+	uint64_t *const served = cycles.enabled() ? state->served_block_of(registers.gs_base) : nullptr;
 	const uint64_t since = __rdtsc(), number = registers.orig_rax;
 	// Argument one is in R10, as SYSCALL takes RCX for itself.
 	const uint64_t arguments[]{registers.r10, registers.rdx, registers.r8, registers.r9, registers.rsp};
 	const auto result = state->concurrent_service(registers.rip, number, arguments);
 	if (!result)
 		return false;
-	if (auto &cycles = CallCycles::instance(); cycles.enabled()) {
+	if (cycles.enabled()) {
 		uint64_t *const stamps = held + agent::cycle_stamps;
+		cycles.signalled(served, stamps, number);
 		cycles.answered(stamps, number, cycles.seen(stamps, number, since), true);
+		land(served, state->service_landing, number, registers.rip);
 	}
 	registers.rax = *result;
 	registers.rcx = registers.r10;
@@ -3273,8 +3295,16 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 		} else {
 			if (state->resume_hook)
 				state->resume_hook();
-			if (uint64_t *const stamps = std::exchange(state->side().service_stamps, nullptr))
+			if (uint64_t *const stamps = std::exchange(state->side().service_stamps, nullptr)) {
 				CallCycles::instance().answered(stamps, state->side().service_number, state->side().service_seen);
+				if (uint64_t *const served = std::exchange(state->side().service_block, nullptr);
+					served && state->service_landing && state->mode == NativeMode::x64) {
+					user_regs_struct registers{};
+					trace(PTRACE_GETREGS, child.pid(), &registers);
+					land(served, state->service_landing, state->side().service_number, registers.rip);
+					trace(PTRACE_SETREGS, child.pid(), &registers);
+				}
+			}
 			trace(state->steps_left ? PTRACE_SINGLESTEP : state->seccomp ? PTRACE_CONT : PTRACE_SYSEMU, child.pid());
 		}
 		state->side().stopped = false;
@@ -3497,6 +3527,8 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 				auto &side = state->side();
 				side.service_stamps = block + agent::cycle_stamps;
 				side.service_number = registers.orig_rax;
+				side.service_block = state->served_block_of(registers.gs_base);
+				cycles.signalled(side.service_block, side.service_stamps, side.service_number);
 				side.service_seen = cycles.seen(side.service_stamps, side.service_number);
 			}
 		return {NativeStop::syscall, registers.orig_rax, registers.rip, signal};

@@ -57,8 +57,9 @@ struct NativeThreadState {
 	bool stopped = true;
 	uint64_t served_guest = 0;
 	uint64_t *served_block = nullptr;
-	// The system call being answered as RAVEN_CYCLES counts it: the stamps in its task's block, its number and when it was seen.
-	uint64_t *service_stamps = nullptr;
+	// The system call being answered as RAVEN_CYCLES counts it: the stamps in its task's block and in its thread's served block (see
+	// raven_service_timed), its number and when it was seen.
+	uint64_t *service_stamps = nullptr, *service_block = nullptr;
 	uint64_t service_number = 0, service_seen = 0;
 	bool serving = false;
 	uint64_t served_stack = 0;

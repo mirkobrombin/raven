@@ -95,6 +95,27 @@ public:
 		if (enabled())
 			waited = cycles;
 	}
+	// A system call the agent took, from a guest whose served block is `served`: what the signal took from the guest's stamp to the
+	// handler's (`stamps`, see agent.h) and, for the call answered before it, from the handler letting the guest go to the guest's stamp
+	// at the landing. Each stamp counts once.
+	void signalled(uint64_t *served, const uint64_t *stamps, uint64_t number)
+	{
+		if (!enabled() || !served)
+			return;
+		const uint64_t asked = std::exchange(served[served_stub::service_asked], 0), entered = stamps[served_stub::entered];
+		const uint64_t landed = std::exchange(served[served_stub::service_resumed], 0), left = stamps[served_stub::resumed];
+		std::lock_guard lock(mutex);
+		if (asked && entered >= asked && entered - asked < limit) {
+			auto &entry = calls[number];
+			entry.delivery += entered - asked;
+			++entry.deliveries;
+		}
+		if (landed && left && landed >= left && landed - left < limit) {
+			auto &entry = calls[served[served_stub::service_last]];
+			entry.sigreturn += landed - left;
+			++entry.sigreturns;
+		}
+	}
 	// The host thread waited `cycles` for a lock another thread held, in the call it serves.
 	void waited_lock(uint64_t cycles)
 	{
@@ -118,6 +139,7 @@ public:
 private:
 	struct Entry {
 		uint64_t count = 0, returns = 0, beside = 0, boundary = 0, turn = 0, service = 0, back = 0, locked = 0, copies = 0;
+		uint64_t delivery = 0, deliveries = 0, sigreturn = 0, sigreturns = 0;
 	};
 	// A stretch longer than this many cycles (about a second) is a guest that was stopped or descheduled, not the cost of a call.
 	static constexpr uint64_t limit = 4'000'000'000ULL;
@@ -159,10 +181,13 @@ private:
 		for (size_t index = 0; index < order.size() && (ending || index < 12); ++index) {
 			const auto &entry = calls[order[index].second];
 			const auto name = names.find(order[index].second);
-			std::fprintf(stderr, "cycles:   %-32s %8llu calls %8llu beside  boundary %7llu  turn %9llu  service %9llu  return %7llu  lock %9llu  copies %8llu\n",
+			// A system call has the signal's way to the agent and back besides: the kernel's part of its boundary and of its return.
+			std::fprintf(stderr, "cycles:   %-32s %8llu calls %8llu beside  boundary %7llu  turn %9llu  service %9llu  return %7llu  lock %9llu  copies %8llu"
+				"  signal %7llu  sigreturn %7llu\n",
 				name == names.end() ? "?" : name->second.c_str(), (unsigned long long)entry.count, (unsigned long long)entry.beside,
 				per(entry.boundary, entry.count), per(entry.turn, entry.count), per(entry.service, entry.count), per(entry.back, entry.returns),
-				per(entry.locked, entry.count), (unsigned long long)entry.copies);
+				per(entry.locked, entry.count), (unsigned long long)entry.copies, per(entry.delivery, entry.deliveries),
+				per(entry.sigreturn, entry.sigreturns));
 		}
 		calls.clear();
 	}
