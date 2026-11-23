@@ -20,6 +20,16 @@ int raven_entry(void)
 	if (IInspectable_GetRuntimeClassName(object, &runtime_name) != S_OK) return 4;
 	const WCHAR *text = WindowsGetStringRawBuffer(runtime_name, &length);
 	if (length != ARRAYSIZE(name) - 1 || CompareStringOrdinal(text, (int)length, name, -1, FALSE) != CSTR_EQUAL) return 5;
+	BOOL embedded = TRUE;
+	if (WindowsStringHasEmbeddedNull(runtime_name, &embedded) != S_OK || embedded) return 6;
+	static const WCHAR split[] = {L'a', 0, L'b'};
+	HSTRING held = NULL;
+	if (WindowsCreateString(split, ARRAYSIZE(split), &held) != S_OK || WindowsStringHasEmbeddedNull(held, &embedded) != S_OK || !embedded)
+		return 7;
+	WindowsDeleteString(held);
+	embedded = TRUE;
+	if (WindowsStringHasEmbeddedNull(NULL, &embedded) != S_OK || embedded || WindowsStringHasEmbeddedNull(runtime_name, NULL) != E_INVALIDARG)
+		return 8;
 	WindowsDeleteString(runtime_name);
 	IInspectable_Release(object);
 	WindowsDeleteString(class_name);
