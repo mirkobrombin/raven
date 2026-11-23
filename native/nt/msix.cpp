@@ -543,6 +543,29 @@ void register_msix_api(ApiRegistry &registry, KernelContext &context)
 				write_name(call, call[1], call[2], value);
 			});
 	}
+	registry.add("GetPackagePathByFullName", 3, [&context, write_name](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.ret(87);
+			return;
+		}
+		const auto name = call.wide(call[0], 129);
+		if (!identity_component(to_utf8(name))) {
+			call.ret(87);
+			return;
+		}
+		std::error_code error;
+		for (std::filesystem::directory_iterator packages(msix_store(context.paths.native_prefix()), error), end; !error && packages != end;
+			packages.increment(error)) {
+			if (!equal_fold(from_utf8(packages->path().filename().string()), name) ||
+				!std::filesystem::is_directory(packages->symlink_status(error)) || error)
+				continue;
+			if (const auto package = package_record(packages->path())) {
+				write_name(call, call[1], call[2], &package->directory);
+				return;
+			}
+		}
+		call.ret(1168);
+	});
 	registry.add("GetCurrentPackageId", 2, [app](ApiCall &call) {
 		if (!app) {
 			if (call[0])
