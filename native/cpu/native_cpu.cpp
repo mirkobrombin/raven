@@ -2536,6 +2536,13 @@ void NativeProcess::set_execution_park(std::function<int(pid_t, std::chrono::ste
 	state->execution_park = std::move(park);
 }
 
+// A failed wait as its message tells it: the task, whether the agent held it, and the error.
+static std::string waited_wrong(const char *what, pid_t task)
+{
+	const int error = errno;
+	return std::string(what) + " " + std::to_string(task) + (agent::held(task) ? " held" : " traced") + ": " + std::strerror(error);
+}
+
 int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point deadline, const std::function<bool()> &interrupted,
 	const uint64_t *block)
 {
@@ -2573,7 +2580,7 @@ int NativeProcess::wait_task(pid_t task, std::chrono::steady_clock::time_point d
 		if (result == task)
 			return polls < 200 ? came(status) : status;
 		if (result == -1 && errno != EINTR)
-			throw std::runtime_error("cannot wait for a native guest task");
+			throw std::runtime_error(waited_wrong("cannot wait for a native guest task", task));
 		if (block && __atomic_load_n(&block[0], __ATOMIC_ACQUIRE))
 			return came(-4);
 		if (interrupted && interrupted())
@@ -2666,7 +2673,7 @@ static int wait_own_task(pid_t task)
 		if (result == task)
 			return status;
 		if (result == -1 && errno != EINTR)
-			throw std::runtime_error("cannot wait for a native guest task");
+			throw std::runtime_error(waited_wrong("cannot wait for a native guest task to stop as asked", task));
 	}
 }
 
