@@ -5669,6 +5669,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(uisettings_fixture ALL DEPENDS ${uisettings_client} uisettings_component)
                 add_test(NAME native_uisettings_x64 COMMAND raven --run-process --execution=native ${uisettings_client})
                 set_tests_properties(native_uisettings_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                set(bcp47langs_source ${PROJECT_SOURCE_DIR}/native/guest/raven-bcp47langs/bcp47langs.c)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/bcp47langs.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/bcp47langs.dll
+                    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
+                    COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,0,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/bcp47langs.dll
+                        ${bcp47langs_source} -lkernel32
+                    COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,0,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/bcp47langs.dll
+                        ${bcp47langs_source} -lkernel32
+                    DEPENDS ${bcp47langs_source} VERBATIM)
+                add_custom_target(bcp47langs_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/bcp47langs.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/bcp47langs.dll)
                 # dcomp.dll, the visual layer of Windows.UI.Composition and the compositor clock for each width: Raven code on the public headers.
                 set(composition_source ${PROJECT_SOURCE_DIR}/native/guest/raven-composition)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll
