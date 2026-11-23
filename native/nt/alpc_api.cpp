@@ -8,6 +8,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <fcntl.h>
 
 namespace raven {
 
@@ -20,8 +21,9 @@ struct AlpcReply;
 struct AlpcMessage {
 	std::vector<uint8_t> data;
 	uint64_t process = 0, thread = 0;
-	uint32_t id = 0, capacity = 0;
+	uint32_t id = 0, capacity = 0, security = 0;
 	uint16_t type = 0;
+	std::shared_ptr<AccessToken> token;
 	std::shared_ptr<AlpcConnection> request;
 	std::shared_ptr<AlpcReply> reply;
 };
@@ -53,12 +55,24 @@ public:
 			return 0xc0000037u;
 		if (message.data.size() > maximum_payload)
 			return 0xc000000du;
-		std::array<uint32_t, 6> fields{
-			wire_version, uint32_t(kind), message.id, uint32_t(message.thread), uint32_t(message.data.size()), message.capacity};
+		std::array<uint32_t, 7> fields{
+			wire_version, uint32_t(kind), message.id, uint32_t(message.thread), uint32_t(message.data.size()), message.capacity, message.security};
 		iovec vectors[] = {{fields.data(), sizeof(fields)}, {const_cast<uint8_t *>(message.data.data()), message.data.size()}};
+		alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
 		msghdr header{};
 		header.msg_iov = vectors;
 		header.msg_iovlen = 2;
+		if (message.token) {
+			InheritedHandle description;
+			message.token->describe(description);
+			header.msg_control = control;
+			header.msg_controllen = sizeof(control);
+			auto *descriptor = CMSG_FIRSTHDR(&header);
+			descriptor->cmsg_level = SOL_SOCKET;
+			descriptor->cmsg_type = SCM_RIGHTS;
+			descriptor->cmsg_len = CMSG_LEN(sizeof(int));
+			std::memcpy(CMSG_DATA(descriptor), &description.descriptor, sizeof(int));
+		}
 		ssize_t sent;
 		do sent = ::sendmsg(descriptor, &header, MSG_NOSIGNAL); while (sent < 0 && errno == EINTR);
 		if (sent < 0 && (errno == EAGAIN || errno == ENOBUFS))
@@ -68,7 +82,7 @@ public:
 
 	bool receive(AlpcPacket &kind, AlpcMessage &message)
 	{
-		std::array<uint32_t, 6> fields{};
+		std::array<uint32_t, 7> fields{};
 		ssize_t count;
 		do count = ::recv(descriptor, fields.data(), sizeof(fields), MSG_PEEK); while (count < 0 && errno == EINTR);
 		if (count < 0 && errno == EAGAIN)
@@ -80,19 +94,60 @@ public:
 		}
 		message.data.resize(fields[4]);
 		iovec vectors[] = {{fields.data(), sizeof(fields)}, {message.data.data(), message.data.size()}};
+		alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
 		msghdr header{};
 		header.msg_iov = vectors;
 		header.msg_iovlen = 2;
-		do count = ::recvmsg(descriptor, &header, 0); while (count < 0 && errno == EINTR);
-		if (count != ssize_t(sizeof(fields) + message.data.size()) || (header.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) {
+		header.msg_control = control;
+		header.msg_controllen = sizeof(control);
+		do count = ::recvmsg(descriptor, &header, MSG_CMSG_CLOEXEC); while (count < 0 && errno == EINTR);
+		struct PendingToken {
+			int fd = -1;
+			~PendingToken() { if (fd >= 0) ::close(fd); }
+		} token;
+		bool invalid_control = false;
+		if (count >= 0)
+			for (auto *item = CMSG_FIRSTHDR(&header); item; item = CMSG_NXTHDR(&header, item)) {
+				if (item->cmsg_level != SOL_SOCKET || item->cmsg_type != SCM_RIGHTS || item->cmsg_len < CMSG_LEN(sizeof(int))) {
+					invalid_control = true;
+					continue;
+				}
+				const size_t descriptors = (item->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+				for (size_t index = 0; index < descriptors; ++index) {
+					int fd;
+					std::memcpy(&fd, CMSG_DATA(item) + index * sizeof(int), sizeof(fd));
+					if (token.fd < 0)
+						token.fd = fd;
+					else {
+						::close(fd);
+						invalid_control = true;
+					}
+				}
+			}
+		if (count != ssize_t(sizeof(fields) + message.data.size()) || (header.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) || invalid_control) {
 			close();
 			return false;
 		}
 		kind = AlpcPacket(fields[1]);
+		if (token.fd >= 0) {
+			constexpr int required_seals = F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL;
+			const int seals = ::fcntl(token.fd, F_GET_SEALS);
+			if ((kind != AlpcPacket::connect && kind != AlpcPacket::request) || seals < 0 || (seals & required_seals) != required_seals) {
+				close();
+				return false;
+			}
+			try {
+				message.token.reset(new AccessToken(std::exchange(token.fd, -1)));
+			} catch (const std::runtime_error &) {
+				close();
+				return false;
+			}
+		}
 		message.process = process_id;
 		message.thread = fields[3];
 		message.id = fields[2];
 		message.capacity = fields[5];
+		message.security = fields[6];
 		return true;
 	}
 
@@ -106,10 +161,13 @@ public:
 	int descriptor;
 
 private:
-	static constexpr uint32_t wire_version = 1;
+	static constexpr uint32_t wire_version = 2;
 	static constexpr size_t maximum_payload = UINT16_MAX - 24;
 	uint32_t process_id = 0;
 };
+
+constexpr uint32_t security_granted = 1, security_dynamic = 2, security_effective = 4, security_level_shift = 3;
+constexpr uint32_t security_mask = security_granted | security_dynamic | security_effective | (3 << security_level_shift);
 
 struct AlpcConnection {
 	enum class State { waiting, accepted, rejected };
@@ -117,6 +175,8 @@ struct AlpcConnection {
 	bool delivered = false;
 	std::unique_ptr<AlpcPeer> peer;
 	uint32_t local_request_id = 0, remote_request_id = 0, remote_capacity = 0;
+	uint32_t security = 0;
+	std::shared_ptr<AccessToken> static_token;
 	std::weak_ptr<AlpcPort> listener, client, server;
 	AlpcMessage response;
 	std::map<uint32_t, std::shared_ptr<AlpcReply>> outbound;
@@ -126,6 +186,8 @@ struct AlpcReply {
 	std::weak_ptr<AlpcConnection> connection;
 	size_t maximum = UINT16_MAX;
 	uint32_t remote_id = 0;
+	uint64_t sender_process = 0, sender_thread = 0;
+	std::shared_ptr<AccessToken> token;
 	bool delivered = false;
 	std::optional<AlpcMessage> result;
 };
@@ -268,6 +330,9 @@ bool route_alpc_packet(AlpcPort &port, const std::shared_ptr<AlpcConnection> &co
 		reply->remote_id = remote_id;
 		reply->connection = connection;
 		reply->maximum = port.message_limit;
+		reply->sender_process = message.process;
+		reply->sender_thread = message.thread;
+		reply->token = std::move(message.token);
 		message.reply = reply;
 		port.replies.emplace(message.id, reply);
 	}
@@ -286,15 +351,22 @@ void watch_alpc_peer(Reactor &reactor, const std::shared_ptr<AlpcConnection> &co
 				AlpcPacket kind;
 				AlpcMessage message;
 				if (peer.receive(kind, message)) {
-					if (!message.id || header + message.data.size() > port->message_limit) {
+					const auto grant = message.security;
+					const bool invalid_grant = (grant & ~security_mask) || (grant && !(grant & security_granted)) ||
+						(kind == AlpcPacket::connect && bool(message.token) != bool((grant & security_granted) && !(grant & security_dynamic)));
+					if (!message.id || invalid_grant || header + message.data.size() > port->message_limit) {
 						peer.close();
 					} else if (connection->state == AlpcConnection::State::accepted) {
-						if (message.capacity || !route_alpc_packet(*port, connection, kind, std::move(message), *next_id))
+						const bool needs_token = listener && kind == AlpcPacket::request && (connection->security & security_dynamic);
+						if (message.capacity || message.security || bool(message.token) != needs_token ||
+							!route_alpc_packet(*port, connection, kind, std::move(message), *next_id))
 							peer.close();
 					} else if (connection->state != AlpcConnection::State::waiting) {
 						peer.close();
 					} else if (listener && kind == AlpcPacket::connect && !connection->local_request_id &&
 						port->requests.size() < 256 && port->inbox.size() < 256 && *next_id <= UINT32_MAX) {
+						connection->security = grant;
+						connection->static_token = std::move(message.token);
 						connection->local_request_id = uint32_t((*next_id)++);
 						connection->remote_request_id = message.id;
 						connection->remote_capacity = message.capacity;
@@ -303,7 +375,7 @@ void watch_alpc_peer(Reactor &reactor, const std::shared_ptr<AlpcConnection> &co
 						message.request = connection;
 						port->requests.emplace(message.id, connection);
 						port->inbox.push_back(std::move(message));
-					} else if (!listener && message.id == connection->local_request_id &&
+					} else if (!listener && !message.security && message.id == connection->local_request_id &&
 						(kind == AlpcPacket::accept || kind == AlpcPacket::reject)) {
 						connection->state = kind == AlpcPacket::accept ? AlpcConnection::State::accepted : AlpcConnection::State::rejected;
 						connection->remote_capacity = message.capacity;
@@ -625,6 +697,21 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		client->message_limit = *limit;
 		const auto connection = std::make_shared<AlpcConnection>();
 		client->connection = connection;
+		if (const auto attrs = call[3]; attrs && (call.load<uint32_t>(attrs) & 0x10000u)) {
+			const uint32_t level = call.load<uint32_t>(attrs + 8);
+			const auto tracking = call.load<uint8_t>(attrs + 12), effective = call.load<uint8_t>(attrs + 13);
+			if (call.load<uint32_t>(attrs + 4) != 12 || level > 3 || tracking > 1 || effective > 1)
+				return invalid_parameter;
+			connection->security = security_granted | (level << security_level_shift);
+			if (effective)
+				connection->security |= security_effective;
+			if (tracking) {
+				connection->security |= security_dynamic;
+			} else {
+				const auto &current = context.threads.current().impersonation;
+				connection->static_token = std::make_shared<AccessToken>(*(current ? current : context.process_token));
+			}
+		}
 		struct UncommittedConnection {
 			AlpcConnection &connection;
 			bool committed = false;
@@ -667,6 +754,8 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			connection->peer = std::make_unique<AlpcPeer>(std::move(peer));
 			connection->local_request_id = request->id;
 			request->capacity = uint32_t(client->message_limit - header_size(call));
+			request->security = connection->security;
+			request->token = connection->static_token;
 			if (const auto status = connection->peer->send(AlpcPacket::connect, *request))
 				return status;
 			watch_alpc_peer(*context.reactor, connection, client, next_id, header_size(call), false);
@@ -809,6 +898,10 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 					if (link->outbound.size() >= 256)
 						return 0xc0000044u;
 					const auto reply = std::make_shared<AlpcReply>();
+					if (!port->server && (link->security & security_dynamic)) {
+						const auto &current = context.threads.current().impersonation;
+						message->token = current ? current : context.process_token;
+					}
 					link->outbound.emplace(message->id, reply);
 					struct Pending {
 						AlpcConnection &connection;
@@ -819,6 +912,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 						return status;
 					if (!context.threads.block([&] { return reply->result || disconnected(*port); }, wake)) {
 						message->data.clear();
+						message->token.reset();
 						if (link->peer->send(AlpcPacket::cancel, *message))
 							link->peer->close();
 						return timeout;
@@ -845,6 +939,12 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 					const auto reply = std::make_shared<AlpcReply>();
 					reply->connection = port->connection;
 					reply->maximum = std::min(port->message_limit, destination->message_limit);
+					reply->sender_process = message->process;
+					reply->sender_thread = message->thread;
+					if (!port->server && (port->connection->security & security_dynamic)) {
+						const auto &current = context.threads.current().impersonation;
+						reply->token = current ? current : context.process_token;
+					}
 					message->reply = reply;
 					message->type = 1;
 					WithdrawAlpcRequest withdraw{*destination, message->id};
@@ -872,6 +972,56 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		if (message.reply)
 			message.reply->delivered = true;
 		port->inbox.pop_front();
+		return 0;
+	}));
+	registry.add("NtAlpcImpersonateClientOfPort", 3, alpc_status([&context, disconnected](ApiCall &call) -> uint32_t {
+		const auto port = context.objects.object_as<AlpcPort>(call[0]);
+		if (!port)
+			return invalid_handle;
+		if (!(context.objects.access_of(call[0]) & 1))
+			return 0xc0000022u;
+		if (!port->server || !port->connection || disconnected(*port))
+			return port_disconnected;
+		const uint32_t flags = call.u32(2);
+		if (!call[1] || (flags & ~0xfu))
+			return invalid_parameter;
+		if (flags & 1)
+			return not_supported;
+		const auto listener = port->connection->listener.lock();
+		if (!listener || listener->closed)
+			return port_disconnected;
+		const auto width = call.pointer_width();
+		const auto id = call.load<uint32_t>(call[1] + 8 + 2 * width);
+		const auto pending = listener->replies.find(id);
+		if (pending == listener->replies.end() || !pending->second->delivered || pending->second->result ||
+			pending->second->connection.lock() != port->connection ||
+			call.load_pointer(call[1] + 8) != pending->second->sender_process ||
+			call.load_pointer(call[1] + 8 + width) != pending->second->sender_thread)
+			return 0xc000021fu;
+		const auto grant = port->connection->security;
+		const auto &source = grant & security_dynamic ? pending->second->token : port->connection->static_token;
+		if (!(grant & security_granted) || !source)
+			return 0xc0000022u;
+		auto token = std::make_shared<AccessToken>(*source);
+		const auto identity = token->data();
+		uint32_t ceiling = grant >> security_level_shift;
+		if (identity.type == 2)
+			ceiling = std::min(ceiling, identity.impersonation_level);
+		const uint32_t level = flags >> 2 ? flags >> 2 : ceiling;
+		if (!level)
+			return not_supported;
+		if (level > ceiling || ((flags & 2) && level < 2))
+			return 0xc00000a5u;
+		if (grant & security_effective) {
+			std::vector<uint64_t> disabled;
+			for (const auto &privilege : identity.privileges)
+				if (!(privilege.attributes & 2))
+					disabled.push_back(privilege.luid);
+			token->restrict_privileges(false, disabled);
+		}
+		token->set_type(2);
+		token->set_impersonation_level(level);
+		context.threads.current().impersonation = std::move(token);
 		return 0;
 	}));
 	registry.add("NtAlpcQueryInformation", 5, alpc_status([&objects = context.objects, disconnected](ApiCall &call) -> uint32_t {
