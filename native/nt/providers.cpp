@@ -4124,7 +4124,18 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 									}
 								}
 						}
-					auto &dependency = acquire(symbol.module);
+					const auto acquire_import = [&](const std::string &library) -> PEModule & {
+						try {
+							return acquire(library);
+						} catch (const LoadFailure &failure) {
+							if (failure.error == 126 && (std::getenv("RAVEN_TRACE_API") || std::getenv("RAVEN_TRACE_FAIL")))
+								std::cerr << "raven: cannot load " << name << ": " << staged[index].module->name << " imports "
+									<< symbol.module << '!' << (symbol.by_ordinal ? "#" + std::to_string(symbol.ordinal) : symbol.name)
+									<< ", missing library " << library << '\n';
+							throw;
+						}
+					};
+					auto &dependency = acquire_import(symbol.module);
 					if (context)
 						entry_contexts.emplace(&dependency, context);
 					for (;;) {
@@ -4134,7 +4145,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						} catch (const std::runtime_error &error) {
 							const std::string_view message = error.what();
 							if (message.starts_with("missing PE module: "))
-								acquire(std::string(message.substr(19)));
+								acquire_import(std::string(message.substr(19)));
 							else if (message.starts_with("missing PE export: ")) {
 								if (std::getenv("RAVEN_TRACE_API") || std::getenv("RAVEN_TRACE_FAIL"))
 									std::cerr << "raven: cannot load " << name << ": " << staged[index].module->name << " imports " << message << '\n';
