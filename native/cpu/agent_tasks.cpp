@@ -328,6 +328,17 @@ void release_group(pid_t group)
 	std::erase_if(tasks, [&](const auto &entry) { return entry.second.group == group || entry.second.process == group; });
 }
 
+namespace {
+
+// Forgets one task that ended while its thread group goes on.
+void release(pid_t task)
+{
+	std::lock_guard lock(tasks_lock);
+	tasks.erase(task);
+}
+
+}
+
 bool held(pid_t task)
 {
 	return find(task) != nullptr;
@@ -362,7 +373,12 @@ pid_t wait(pid_t task, int *status, int options)
 		if (!held.running)
 			return failed(ECHILD);
 		if (ended(held, status)) {
-			release_group(held.group);
+			// The leader reads as ended only once its whole group has; any other thread ends alone, and the guest's other threads
+			// stay in the agent's hands.
+			if (held.task == held.group)
+				release_group(held.group);
+			else
+				release(task);
 			return task;
 		}
 		if (options & WNOHANG)
