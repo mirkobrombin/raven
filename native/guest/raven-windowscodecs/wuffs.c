@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The pixels of PNG files and the zlib streams inside them, and the codes of GIF images, through the decoders of the Wuffs release the component is built with
+/* The pixels of PNG files and the codes of GIF images, through the decoders of the Wuffs release the component is built with
  * (scripts/provision-installer.py): memory-safe code that checks every bound, in place of hand-written inflating and unfiltering. Its
  * functions stay private to this file; the few it allocates with go to the component's heap. */
 #include <stdlib.h>
@@ -44,7 +44,8 @@ static BYTE *allocate(UINT64 size)
 	return size && size <= (SIZE_T)-1 ? wic_alloc((SIZE_T)size) : NULL;
 }
 
-BYTE *png_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_layout layout)
+/* The pixels as png_pixels gives them; `stream_refused` tells whether the deflate stream was what Wuffs turned down. */
+static BYTE *decoded_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_layout layout, BOOL *stream_refused)
 {
 	const uint32_t format = layout == png_indexed ? WUFFS_BASE__PIXEL_FORMAT__INDEXED__BGRA_NONPREMUL :
 		layout == png_wide ? WUFFS_BASE__PIXEL_FORMAT__BGRA_NONPREMUL_4X16LE : WUFFS_BASE__PIXEL_FORMAT__BGRA_NONPREMUL;
@@ -57,7 +58,9 @@ BYTE *png_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_lay
 	wuffs_base__io_buffer source = wuffs_base__ptr_u8__reader((uint8_t *)data, size, true);
 	wuffs_base__range_ii_u64 work_size;
 	BYTE *memory = NULL, *work = NULL, *result = NULL;
+	wuffs_base__status status;
 	UINT64 bytes;
+	*stream_refused = FALSE;
 	if (!width || !height || (UINT64)width * height > (UINT64)-1 / 8)
 		return NULL;
 	bytes = (UINT64)width * height * pixel + palette;
@@ -78,9 +81,12 @@ BYTE *png_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_lay
 		goto done;
 	if (wuffs_base__pixel_buffer__set_from_slice(&buffer, &config.pixcfg, wuffs_base__make_slice_u8(memory, (size_t)bytes)).repr)
 		goto done;
-	if (wuffs_png__decoder__decode_frame(decoder, &buffer, &source, WUFFS_BASE__PIXEL_BLEND__SRC,
-			wuffs_base__make_slice_u8(work, (size_t)work_size.max_incl), NULL).repr)
+	status = wuffs_png__decoder__decode_frame(decoder, &buffer, &source, WUFFS_BASE__PIXEL_BLEND__SRC,
+		wuffs_base__make_slice_u8(work, (size_t)work_size.max_incl), NULL);
+	if (status.repr) {
+		*stream_refused = !memcmp(status.repr, "#deflate: ", 10);
 		goto done;
+	}
 	result = memory;
 	memory = NULL;
 done:
@@ -90,34 +96,19 @@ done:
 	return result;
 }
 
-BYTE *zlib_inflate(const BYTE *data, SIZE_T size, SIZE_T room, SIZE_T *written)
+BYTE *png_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_layout layout)
 {
-	const size_t decoder_size = sizeof__wuffs_zlib__decoder();
-	wuffs_zlib__decoder *decoder;
-	wuffs_base__io_buffer source = wuffs_base__ptr_u8__reader((uint8_t *)data, size, true), target;
-	wuffs_base__range_ii_u64 work_size;
-	BYTE *out = NULL, *work = NULL, *result = NULL;
-	*written = 0;
-	if (!(decoder = wic_alloc(decoder_size)))
+	BOOL stream_refused = FALSE;
+	SIZE_T restored_size = 0;
+	BYTE *pixels = decoded_pixels(data, size, width, height, layout, &stream_refused), *restored;
+	if (pixels || !stream_refused)
+		return pixels;
+	/* A stream zlib reads but Wuffs does not comes back to Wuffs inflated (zlib.c). */
+	if (!(restored = png_restored(data, size, &restored_size)))
 		return NULL;
-	if (wuffs_zlib__decoder__initialize(decoder, decoder_size, WUFFS_VERSION, WUFFS_INITIALIZE__ALREADY_ZEROED).repr ||
-		wuffs_zlib__decoder__set_quirk(decoder, WUFFS_BASE__QUIRK_IGNORE_CHECKSUM, 1).repr)
-		goto done;
-	work_size = wuffs_zlib__decoder__workbuf_len(decoder);
-	if (!(out = allocate(room)) || (work_size.max_incl && !(work = allocate(work_size.max_incl))))
-		goto done;
-	target = wuffs_base__ptr_u8__writer(out, room);
-	/* A stream that does not end within the room is refused, as one that breaks off. */
-	if (wuffs_zlib__decoder__transform_io(decoder, &target, &source, wuffs_base__make_slice_u8(work, (size_t)work_size.max_incl)).repr)
-		goto done;
-	*written = target.meta.wi;
-	result = out;
-	out = NULL;
-done:
-	wic_free(work);
-	wic_free(out);
-	wic_free(decoder);
-	return result;
+	pixels = decoded_pixels(restored, restored_size, width, height, layout, &stream_refused);
+	wic_free(restored);
+	return pixels;
 }
 
 SIZE_T lzw_expand(const BYTE *codes, SIZE_T size, UINT literal, BYTE *out, SIZE_T room)

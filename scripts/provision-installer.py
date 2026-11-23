@@ -478,15 +478,18 @@ def main():
     run([triple + "-dlltool", *(["-k"] if x86 else []), "-d", output / "mlang_import.def", "-l", output / "libmlang.a"])
     # windowscodecs.dll: Raven's own imaging component; JPEG and TIFF go through the libraries built above, named by path so
     # no export of the component can resolve to one of the installer's own import libraries, and PNG through the Wuffs release's single
-    # C file, which wuffs.c builds in.
+    # C file, which wuffs.c builds in. zlib's inflater comes in as well, built without a C library (Z_SOLO), for the streams Wuffs
+    # refuses and for colour profiles.
     own_codecs = repo / "native/guest/raven-windowscodecs"
-    codecs_objects = []
+    codecs_objects = [compile_object(zlib_source / name, "codecs_zlib_" + Path(name).stem, ["-I" + str(zlib_include), "-DZ_SOLO"])
+                      for name in ("adler32.c", "crc32.c", "inflate.c", "inffast.c", "inftrees.c", "zutil.c")]
     for path in [*sorted(own_codecs.glob("*.c")), repo / "native/guest/raven-comctl32/crt.c"]:
         target = objects / ("codecs_" + path.stem + ".o")
         # Wuffs reads unaligned words through small copies of a fixed size, which only the compiler's own memcpy turns into loads.
         builtins = [] if path.name == "wuffs.c" else ["-fno-builtin"]
         run([triple + "-gcc", "-c", "-O2", "-std=gnu11", *builtins, "-D_WIN32_WINNT=0x601", "-DUNICODE", "-D_CRTIMP=", "-DCOBJMACROS", "-I" + str(own_codecs),
-             "-I" + str(jpeg_source), "-I" + str(tiff_source), "-I" + str(upstream_sources["wuffs"] / "release" / "c"), "-w", path, "-o", target])
+             "-I" + str(jpeg_source), "-I" + str(tiff_source), "-I" + str(upstream_sources["wuffs"] / "release" / "c"), "-I" + str(zlib_include),
+             "-DZ_SOLO", "-w", path, "-o", target])
         codecs_objects.append(target)
     codecs_exports = (own_codecs / "exports.txt").read_text()
     (output / "windowscodecs.def").write_text("LIBRARY windowscodecs.dll\nEXPORTS\n" + codecs_exports)

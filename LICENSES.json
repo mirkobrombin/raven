@@ -439,6 +439,7 @@
         "native/guest/raven-windowscodecs/transform.c",
         "native/guest/raven-windowscodecs/wic.h",
         "native/guest/raven-windowscodecs/wuffs.c",
+        "native/guest/raven-windowscodecs/zlib.c",
         "native/guest/raven-winmm/main.c",
         "native/guest/raven-winmm/mixer.c",
         "native/guest/raven-winmm/ravenhost32.def",

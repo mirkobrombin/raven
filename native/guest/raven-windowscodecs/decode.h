@@ -40,6 +40,9 @@ typedef enum { png_indexed, png_narrow, png_wide } png_layout;
 BYTE *png_pixels(const BYTE *data, SIZE_T size, UINT width, UINT height, png_layout layout);
 /* A zlib stream inflated into a new buffer of at most room bytes; NULL when the stream is broken or does not end within the room. */
 BYTE *zlib_inflate(const BYTE *data, SIZE_T size, SIZE_T room, SIZE_T *written);
+/* The PNG file with its pixel data inflated by zlib and put back in stored blocks, every other chunk as it was; NULL when zlib cannot read
+   it either (zlib.c). */
+BYTE *png_restored(const BYTE *data, SIZE_T size, SIZE_T *restored_size);
 /* The codes of a GIF image, its data blocks joined, expanded into out, the image's indices in order, by the Wuffs release (wuffs.c) with
    `literal` bits a literal (2 to 8). Codes past the room, past the end code or past a code that cannot be there are dropped, so a damaged
    image stays as far as it got; the number of bytes written is returned. */
