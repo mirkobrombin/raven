@@ -60,9 +60,14 @@ static DWORD WINAPI client(void *argument)
 	ULONG needed = 0;
 	if (query(port, 12, &server, sizeof server - 1, &needed) >= 0 || server.process || server.session)
 		return 24;
-	if (!ProcessIdToSessionId(message.value, &session) || query(port, 12, &server, sizeof server, &needed) ||
-		server.process != message.value || server.session != session)
+	if (!ProcessIdToSessionId(message.value, &session))
+		return 28;
+	if (query(port, 12, &server, sizeof server, &needed))
 		return 25;
+	if (server.process != message.value)
+		return 29;
+	if (server.session != session)
+		return 30;
 	struct message request = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 921};
 	capacity = sizeof message;
 	if (send_receive(port, 0x20000, &request.header, NULL, &message.header, &capacity, NULL, &limit) ||
@@ -170,9 +175,17 @@ int raven_entry(void)
 	if (receive(listener, &message, -30000000) || message.header.data_length != sizeof(ULONG) || message.value != 582 ||
 		message.header.process != peer_process || message.header.thread != peer_thread || send(peer, GetCurrentProcessId()))
 		return 6;
-	if (receive(listener, &message, -30000000) || !message.header.message_id || message.value != 921 ||
-		message.header.process != peer_process || message.header.thread != peer_thread)
+	if (receive(listener, &message, -30000000)) {
+		DWORD result = 0;
+		const BOOL read = cross_process ? GetExitCodeProcess(worker, &result) : GetExitCodeThread(worker, &result);
+		if (read && result && result != STILL_ACTIVE)
+			return result;
 		return 7;
+	}
+	if (!message.header.message_id || message.value != 921)
+		return 26;
+	if (message.header.process != peer_process || message.header.thread != peer_thread)
+		return 27;
 	const ULONG request_id = message.header.message_id;
 	message.header.message_id = request_id ^ 0x80000000;
 	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL) >= 0)
