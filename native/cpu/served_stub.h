@@ -19,6 +19,9 @@ namespace raven::served_stub {
 constexpr size_t size = 160;
 // The words of a thread's block the stubs and the runtime stamp a call's times in (see gates.S).
 constexpr size_t entered = 12, last_stub = 13, answered = 14, resumed = 15;
+// The words the guest stamps a system call the agent takes in, with RAVEN_CYCLES (see raven_service_timed in preludes.S): as it asks for
+// the service and as it goes on after the answer; where the runtime leaves the address the guest goes on at, and the call it answered.
+constexpr size_t service_asked = 496, service_resumed = 497, service_landing_target = 498, service_last = 499;
 
 inline std::span<const uint8_t> code() { return {raven_served_stub, size_t(raven_served_stub_end - raven_served_stub)}; }
 inline std::span<const uint8_t> local_block() { return {raven_local_block, size_t(raven_local_block_end - raven_local_block)}; }

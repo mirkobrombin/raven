@@ -1530,18 +1530,32 @@ static uint32_t nt_service_number(std::string_view module, std::string_view name
 }
 
 // Maps the page before any guest code runs. An entry leads to the stub given for its number, and without one makes the system call;
-// the flag is set only where some entry has a stub.
-static void map_service_page(NativeProcess &process, const std::map<uint32_t, uint64_t> &stubs)
+// the flag is set only where some entry has a stub. With RAVEN_CYCLES the flag is set and the system calls go through the timed routine
+// after the entries, which stamps them (see raven_service_timed): it gives the address after that routine's system call, or 0.
+static uint64_t map_service_page(NativeProcess &process, const std::map<uint32_t, uint64_t> &stubs)
 {
-	std::vector<uint8_t> page(((1 + nt_services().size()) * service_entry_size + 4095) & ~size_t(4095), 0xcc);
-	page[0] = !stubs.empty();
-	for (size_t at = service_entry_size; at < (1 + nt_services().size()) * service_entry_size; at += service_entry_size) {
+	const size_t entries = (1 + nt_services().size()) * service_entry_size;
+	const bool timed = CallCycles::instance().enabled();
+	const size_t timed_size = size_t(raven_service_timed_end - raven_service_timed), landing_at = entries + timed_size;
+	const size_t used = timed ? landing_at + size_t(raven_service_landing_end - raven_service_landing) : entries;
+	std::vector<uint8_t> page((used + 4095) & ~size_t(4095), 0xcc);
+	page[0] = timed || !stubs.empty();
+	for (size_t at = service_entry_size; at < entries; at += service_entry_size) {
 		if (const auto stub = stubs.find(uint32_t(service_page + at)); stub != stubs.end()) {
 			const auto jump = std::copy(raven_service_stubbed, raven_service_stubbed_end, page.begin() + ptrdiff_t(at));
 			std::memcpy(&*jump, &stub->second, 8);
+		} else if (timed) {
+			page[at] = 0xe9;
+			const int32_t displacement = int32_t(entries) - int32_t(at + 5);
+			std::memcpy(&page[at + 1], &displacement, 4);
 		} else {
 			std::copy(raven_service_trapped, raven_service_trapped_end, page.begin() + ptrdiff_t(at));
 		}
+	}
+	if (timed) {
+		std::copy(raven_service_timed, raven_service_timed_end, page.begin() + ptrdiff_t(entries));
+		std::copy(raven_service_landing, raven_service_landing_end, page.begin() + ptrdiff_t(landing_at));
+		process.set_service_landing(service_page + landing_at);
 	}
 	const int descriptor = memfd_create("raven-services", MFD_CLOEXEC);
 	if (descriptor < 0 || ftruncate(descriptor, off_t(page.size())) != 0) {
@@ -1558,6 +1572,8 @@ static void map_service_page(NativeProcess &process, const std::map<uint32_t, ui
 	close(descriptor);
 	process.write_memory(service_page, page);
 	process.protect_memory(service_page, page.size(), PROT_READ | PROT_EXEC);
+	// The routine ends in its system call and a return.
+	return timed ? service_page + entries + timed_size - 1 : 0;
 }
 
 uint64_t api_trap_address(const PEModule &provider, std::string_view module, std::string_view name, uint32_t address)
@@ -2946,6 +2962,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	}
 	// A service's entry leads to a stub its thread's host thread answers, as the other calls' stubs. The services that act on the
 	// thread's registers keep the system call, as their calls keep the breakpoint.
+	uint64_t timed_service_return = 0;
 	if (const auto ntdll = modules.all().find("ntdll.dll"); ntdll != modules.all().end() && ntdll->second->runtime_api) {
 		std::map<uint32_t, uint64_t> entered;
 		if (call_stubs() && process.parallel())
@@ -2970,7 +2987,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (beside_api("ntdll.dll", service))
 					beside_names.emplace(address, service);
 			}
-		map_service_page(process, entered);
+		timed_service_return = map_service_page(process, entered);
 	}
 	if (cycles_named) {
 		stub_names.insert(served_names.begin(), served_names.end());
@@ -3094,6 +3111,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				for (const auto &name : symbol.names)
 					if (nt_service_number("ntdll.dll", name) == number)
 						returns.push_back(ntdll->second->loaded.base() + symbol.address + after_syscall);
+		// With RAVEN_CYCLES the exports make the system call in the timed routine.
+		if (!returns.empty() && timed_service_return)
+			returns.push_back(timed_service_return);
 		if (!returns.empty()) {
 			CallCycles::instance().name_service(number, "NtQueryEvent");
 			process.set_concurrent_service([&process, &kernel_objects, number, returns](uint64_t after, uint64_t called,

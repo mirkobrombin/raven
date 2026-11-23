@@ -225,6 +225,8 @@ public:
 	// The same for a system call that stopped a guest in the agent's hands: `alone` gets the address after the instruction, the number,
 	// and the four argument words followed by the stack pointer. The guest goes on at that address with the result in RAX.
 	void set_concurrent_service(std::function<std::optional<uint64_t>(uint64_t, uint64_t, const uint64_t *)> alone);
+	// With RAVEN_CYCLES, where a thread goes on after a system call the runtime answered, to stamp it (see raven_service_landing).
+	void set_service_landing(uint64_t landing);
 	// Answers the call in `block` that way; false when it is not one or needs the runtime.
 	bool serve_alone(uint64_t *block);
 	bool serve_stopped_alone(pid_t task, int status, uint64_t *block);

@@ -3737,4 +3737,39 @@ raven_service_trapped:
 	ret
 raven_service_trapped_end:
 
+/* With RAVEN_CYCLES, the entries without a stub lead here instead: the time stamp counter as the thread asks for the service, in word
+ * 496 of its block (see served_stub.h), then the system call as from the entry. The landing is where a thread goes on after the runtime
+ * answered a system call it made: it leaves the counter in word 497 and goes to the address the runtime left in word 498, with every
+ * register and flag as the runtime left them. */
+	.global raven_service_timed, raven_service_timed_end, raven_service_landing, raven_service_landing_end
+raven_service_timed:
+	push rax
+	push rdx
+	push rcx
+	rdtsc
+	mov rcx, qword ptr gs:[0x1ff0]
+	jrcxz 1f			/* a thread without a block of its own makes the call untimed */
+	mov dword ptr [rcx + 496 * 8], eax
+	mov dword ptr [rcx + 496 * 8 + 4], edx
+1:	pop rcx
+	pop rdx
+	pop rax
+	syscall
+	ret
+raven_service_timed_end:
+raven_service_landing:
+	push rax
+	push rdx
+	push rcx
+	rdtsc
+	mov rcx, qword ptr gs:[0x1ff0]
+	mov dword ptr [rcx + 497 * 8], eax
+	mov dword ptr [rcx + 497 * 8 + 4], edx
+	push qword ptr [rcx + 498 * 8]
+	mov rcx, qword ptr [rsp + 8]
+	mov rdx, qword ptr [rsp + 16]
+	mov rax, qword ptr [rsp + 24]
+	ret 24
+raven_service_landing_end:
+
 	.section .note.GNU-stack, "", @progbits

@@ -866,6 +866,7 @@ struct NativeProcess::State {
 	std::function<int(pid_t, std::chrono::steady_clock::time_point, const uint64_t *)> execution_park;
 	std::function<std::optional<uint64_t>(uint64_t, const uint64_t *)> concurrent_served;
 	std::function<std::optional<uint64_t>(uint64_t, uint64_t, const uint64_t *)> concurrent_service;
+	uint64_t service_landing = 0;
 	std::function<bool()> poll_served;
 	// Diagnostics: where the guest is found running, every sample_period.
 	std::chrono::milliseconds sample_period{0};
@@ -2452,6 +2453,11 @@ void NativeProcess::set_concurrent_served(std::function<std::optional<uint64_t>(
 void NativeProcess::set_concurrent_service(std::function<std::optional<uint64_t>(uint64_t, uint64_t, const uint64_t *)> alone)
 {
 	state->concurrent_service = std::move(alone);
+}
+
+void NativeProcess::set_service_landing(uint64_t landing)
+{
+	state->service_landing = landing;
 }
 
 bool NativeProcess::serve_service_alone(pid_t task)
