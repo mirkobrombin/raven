@@ -26,8 +26,10 @@ ImportProbes add_import_probes(ModuleSet &modules, bool x86)
 	auto &provider = modules.add(std::string(provider_name), runtime_provider(provider_name, x86 ? 0x70000000ULL : 0x6fff03000000ULL, names, x86));
 	provider.runtime_api = true;
 	ImportProbes probes;
-	for (const auto &symbol : provider.exports)
-		probes.emplace(provider.loaded.base() + symbol.address, names[symbol.ordinal - 1]);
+	for (const auto name : names) {
+		const auto &symbol = provider.exports.at(provider.export_names.at(name));
+		probes.emplace(provider.loaded.base() + symbol.address, name);
+	}
 	modules.set_import_probe([probes](std::string_view module, std::string_view name, uint32_t ordinal) -> uint64_t {
 		for (const auto &[address, label] : probes) {
 			const auto split = label.find('!');
