@@ -4918,7 +4918,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                             set_tests_properties(${probe_test} PROPERTIES PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                         else()
                             list(GET import_probe_symbols ${case} probe_symbol)
-                            set_tests_properties(${probe_test} PROPERTIES PASS_REGULAR_EXPRESSION "import probe: ${probe_symbol} .* from import-probe.dll\\+[0-9a-f]+")
+                            set_tests_properties(${probe_test} PROPERTIES
+                                PASS_REGULAR_EXPRESSION "import probe: ${probe_symbol} 111 222 333 444 from import-probe.dll\\+[0-9a-f]+"
+                                FAIL_REGULAR_EXPRESSION "Native entry returned")
                         endif()
                         if(NOT case STREQUAL "d")
                             set_property(TEST ${probe_test} APPEND PROPERTY ENVIRONMENT "RAVEN_TRACE_IMPORT_PROBE=1")

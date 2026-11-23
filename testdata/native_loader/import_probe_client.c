@@ -6,8 +6,12 @@ int raven_entry(void)
 	if (GetEnvironmentVariableW(L"IMPORT_PROBE_CASE", mode, ARRAYSIZE(mode)) != 1)
 		return 1;
 	HMODULE library = LoadLibraryW(mode[0] == L'x' ? L"outside-probe.dll" : L"import-probe.dll");
-	if (mode[0] == L'x' || mode[0] == L'd')
-		return library ? 2 : 0;
+	if (mode[0] == L'x' || mode[0] == L'd') {
+		if (library)
+			return 2;
+		const DWORD error = GetLastError();
+		return error == ERROR_MOD_NOT_FOUND || error == ERROR_PROC_NOT_FOUND ? 0 : 7;
+	}
 	if (!library)
 		return 3;
 	HMODULE languages = GetModuleHandleW(L"bcp47langs.dll");

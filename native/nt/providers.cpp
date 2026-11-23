@@ -2466,6 +2466,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			traps.emplace(api_trap_address(*modules.all().at("vulkan-1.dll"), "vulkan-1.dll", symbol.names.at(0), symbol.address),
 				symbol.names.at(0));
 #endif
+	const auto import_probes = add_import_probes(modules, false);
 	alias_api_sets(modules);
 	modules.bind_imports();
 	auto order = initialization_order(modules, entry);
@@ -2498,6 +2499,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			api_traps.emplace_hint(api_traps.end(), address, NativeProcess::ApiTrap{0, offset + 1 < bytes->size() && (*bytes)[offset + 1] == 0xc3});
 		}
 	}
+	for (const auto &[address, name] : import_probes)
+		api_traps.emplace(address, NativeProcess::ApiTrap{0, false});
 	// Stubs of exports forwarded to a component keep their breakpoint; trapping them lets callers that read the export table directly
 	// reach the component's implementation with their own stack frame intact.
 	std::unordered_map<uint64_t, uint64_t> forwarded_traps;
@@ -2722,8 +2725,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					continue;
 				}
 			const auto found = traps.find(result.value);
-			if (!service_name && found == traps.end())
+			if (!service_name && found == traps.end()) {
+				trace_import_probe(import_probes, modules, process, result.value, false);
 				return result;
+			}
 			const auto &api_name = service_name ? *service_name : found->second;
 			// Any call may post, send or draw, and the guest then asks the runtime again at its next poll of the queue, but for the polls
 			// themselves and calls that leave every queue as it is: waits (a message that arrives meanwhile clears the slot), waitable
@@ -4140,7 +4145,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						entry_contexts.emplace(&dependency, context);
 					for (;;) {
 						try {
-							modules.resolve(symbol);
+							modules.resolve_import(symbol);
 							break;
 						} catch (const std::runtime_error &error) {
 							const std::string_view message = error.what();

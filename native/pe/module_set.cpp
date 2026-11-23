@@ -218,16 +218,27 @@ uint64_t ModuleSet::resolve(const PEImport &symbol) const
 	return resolve(symbol.module, symbol.name, symbol.ordinal, symbol.by_ordinal, chain);
 }
 
+uint64_t ModuleSet::resolve_import(const PEImport &symbol) const
+{
+	std::set<std::pair<std::string, uint32_t>> chain;
+	return resolve(symbol.module, symbol.name, symbol.ordinal, symbol.by_ordinal, chain, nullptr, true);
+}
+
+void ModuleSet::set_import_probe(std::function<uint64_t(std::string_view, std::string_view, uint32_t)> probe)
+{
+	import_probe = std::move(probe);
+}
+
 std::vector<const PEModule *> ModuleSet::resolution_path(const PEImport &symbol) const
 {
 	std::set<std::pair<std::string, uint32_t>> chain;
 	std::vector<const PEModule *> path;
-	resolve(symbol.module, symbol.name, symbol.ordinal, symbol.by_ordinal, chain, &path);
+	resolve(symbol.module, symbol.name, symbol.ordinal, symbol.by_ordinal, chain, &path, true);
 	return path;
 }
 
 uint64_t ModuleSet::resolve(std::string module, std::string name, uint32_t ordinal, bool by_ordinal,
-	std::set<std::pair<std::string, uint32_t>> &chain, std::vector<const PEModule *> *path) const
+	std::set<std::pair<std::string, uint32_t>> &chain, std::vector<const PEModule *> *path, bool static_import) const
 {
 	module = module_name(std::move(module));
 	if (const auto alias = aliases.find(module); alias != aliases.end() && !modules.contains(module))
@@ -254,8 +265,12 @@ uint64_t ModuleSet::resolve(std::string module, std::string name, uint32_t ordin
 		exported = std::find_if(target.exports.begin(), target.exports.end(), [&](const auto &entry) {
 			return std::find(entry.names.begin(), entry.names.end(), name) != entry.names.end();
 		});
-	if (exported == target.exports.end() || !exported->address)
+	if (exported == target.exports.end() || !exported->address) {
+		if (static_import && import_probe)
+			if (const auto probe = import_probe(module, by_ordinal ? std::string_view{} : name, by_ordinal ? ordinal : 0))
+				return probe;
 		throw std::runtime_error("missing PE export: " + module + "!" + (by_ordinal ? "#" + std::to_string(ordinal) : name));
+	}
 	if (!chain.emplace(module, exported->ordinal).second || chain.size() > 256)
 		throw std::runtime_error("cyclic or excessive PE forwarder chain");
 	if (exported->forwarder.empty())
@@ -288,7 +303,7 @@ size_t ModuleSet::bind_imports()
 		for (const auto &symbol : module->imports) {
 			uint64_t value = 0;
 			try {
-				value = resolve(symbol);
+				value = resolve_import(symbol);
 			} catch (const std::runtime_error &failure) {
 				if (std::string_view(failure.what()).starts_with("missing PE ")) {
 					unresolved.emplace_back(failure.what());

@@ -760,6 +760,7 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		add_library(library.c_str(), {}, {}, [](std::string_view name) { return registry_words(name) != UINT32_MAX ? registry_words(name) : uint32_t(0); },
 			system_export_ordinals(library));
 	}
+	const auto import_probes = add_import_probes(modules, true);
 	alias_api_sets(modules);
 	modules.bind_imports();
 	std::vector<LoadedImage *> images;
@@ -769,6 +770,8 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	NativeProcess process(images, bootstrap, timeout, NativeMode::x86, entry.image.stack_reserve);
 	for (const auto &[address, api] : traps)
 		process.add_api_trap(address, api.second);
+	for (const auto &[address, name] : import_probes)
+		process.add_api_trap(address, 0);
 	// Stubs of exports forwarded to a component keep their breakpoint; trapping them lets callers that read the export table directly
 	// reach the component's implementation with their own stack frame intact.
 	std::unordered_map<uint64_t, uint64_t> forwarded_traps;
@@ -1120,8 +1123,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 				continue;
 			}
 			const auto found = traps.find(result.value);
-			if (found == traps.end())
+			if (found == traps.end()) {
+				trace_import_probe(import_probes, modules, process, result.value, true);
 				return result;
+			}
 			const auto api = found->second.first;
 			if (getenv("RAVEN_TRACE_X86")) {
 				std::ostringstream line;

@@ -206,7 +206,7 @@ PEModule *NativeX86Loader::bring(const std::string &requested)
 			continue;
 		}
 		try {
-			modules.resolve(symbol);
+			modules.resolve_import(symbol);
 		} catch (const std::runtime_error &) {
 			record_missing(symbol);
 		}

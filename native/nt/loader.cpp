@@ -1,12 +1,69 @@
 #include "loader.h"
 #include "paths.h"
+#include "providers.h"
 #include "system_exports.h"
 
-#include <stdexcept>
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <sys/mman.h>
 
 namespace raven {
+
+ImportProbes add_import_probes(ModuleSet &modules, bool x86)
+{
+	const char *trace = std::getenv("RAVEN_TRACE_IMPORT_PROBE");
+	if (!trace || std::string_view(trace) != "1")
+		return {};
+	static constexpr std::string_view provider_name = "raven-import-probe.dll";
+	static constexpr std::string_view names[]{
+		"bcp47langs.dll!GetApplicationLanguages", "bcp47langs.dll!LanguageListAsMuiForm",
+		"kernel32.dll!GetEffectivePackageStatusForUserSid", "kernel32.dll!GetSystemMetadataPathForPackage", "user32.dll!#2557",
+	};
+	auto &provider = modules.add(std::string(provider_name), runtime_provider(provider_name, x86 ? 0x70000000ULL : 0x6fff03000000ULL, names, x86));
+	provider.runtime_api = true;
+	ImportProbes probes;
+	for (const auto &symbol : provider.exports)
+		probes.emplace(provider.loaded.base() + symbol.address, names[symbol.ordinal - 1]);
+	modules.set_import_probe([probes](std::string_view module, std::string_view name, uint32_t ordinal) -> uint64_t {
+		for (const auto &[address, label] : probes) {
+			const auto split = label.find('!');
+			const auto symbol = label.substr(split + 1);
+			if (module == label.substr(0, split) &&
+				(symbol.starts_with('#') ? ordinal == 2557 && symbol == "#2557" : !ordinal && name == symbol))
+				return address;
+		}
+		return 0;
+	});
+	return probes;
+}
+
+void trace_import_probe(const ImportProbes &probes, const ModuleSet &modules, NativeProcess &process, uint64_t address, bool x86)
+{
+	const auto found = probes.find(address);
+	if (found == probes.end())
+		return;
+	std::ostringstream line;
+	line << "import probe: " << found->second << std::hex;
+	try {
+		for (const auto word : process.api_arguments(4))
+			line << ' ' << word;
+		const auto bytes = process.read_memory(process.api_stack_pointer(), x86 ? 4 : 8);
+		uint64_t caller = 0;
+		std::memcpy(&caller, bytes.data(), bytes.size());
+		for (const auto &[name, module] : modules.all())
+			if (caller >= module->loaded.base() && caller - module->loaded.base() < module->image.image_size) {
+				line << " from " << name << '+' << caller - module->loaded.base();
+				break;
+			}
+	} catch (const std::runtime_error &) {
+		line << " (call frame unreadable)";
+	}
+	std::cerr << line.str() << '\n';
+}
 
 ProgramLibraries::ProgramLibraries(std::u16string_view image_path, bool is_64) : is_64(is_64)
 {

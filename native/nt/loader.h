@@ -45,6 +45,9 @@ private:
 };
 
 std::vector<const PEModule *> initialization_order(const ModuleSet &modules, const PEModule &entry);
+using ImportProbes = std::map<uint64_t, std::string_view>;
+ImportProbes add_import_probes(ModuleSet &modules, bool x86);
+void trace_import_probe(const ImportProbes &probes, const ModuleSet &modules, NativeProcess &process, uint64_t address, bool x86);
 uint64_t initialize_loader_data(NativeProcess &process, uint64_t peb,
 	const ModuleSet &modules, const PEModule &entry);
 
