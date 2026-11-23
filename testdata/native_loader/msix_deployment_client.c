@@ -101,6 +101,38 @@ static int install(package_manager *manager, const WCHAR *file, HRESULT expected
 
 #ifdef MSIX_FULL_TRUST
 #define FAMILY L"Raven.MsixTest_gh7ecn69rvjyc"
+#ifdef _WIN64
+#define ARCH L"x64"
+#else
+#define ARCH L"x86"
+#endif
+#define FULL_NAME L"Raven.MsixTest_1.2.3.4_" ARCH L"__gh7ecn69rvjyc"
+
+static int check_package_path(void)
+{
+	typedef LONG (WINAPI *package_path)(PCWSTR, UINT32 *, PWSTR);
+	const package_path query = (package_path)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetPackagePathByFullName");
+	if (!query)
+		return 41;
+	const WCHAR expected[] = L"C:\\Program Files\\WindowsApps\\" FULL_NAME;
+	WCHAR found[ARRAYSIZE(expected)];
+	UINT32 length = 0;
+	if (query(FULL_NAME, &length, NULL) != ERROR_INSUFFICIENT_BUFFER || length != ARRAYSIZE(expected))
+		return 42;
+	--length;
+	if (query(FULL_NAME, &length, found) != ERROR_INSUFFICIENT_BUFFER || length != ARRAYSIZE(expected))
+		return 43;
+	if (query(FULL_NAME, &length, found) != ERROR_SUCCESS || lstrcmpW(found, expected))
+		return 44;
+	if (query(L"raven.msixTEST_1.2.3.4_" ARCH L"__gh7ecn69rvjyc", &length, found) != ERROR_SUCCESS || lstrcmpW(found, expected))
+		return 45;
+	if (query(L"Raven.MsixTest_9.9.9.9_" ARCH L"__gh7ecn69rvjyc", &length, NULL) != ERROR_NOT_FOUND)
+		return 46;
+	if (query(FULL_NAME, NULL, NULL) != ERROR_INVALID_PARAMETER ||
+		query(L"..\\Raven.MsixTest", &length, found) != ERROR_INVALID_PARAMETER)
+		return 47;
+	return 0;
+}
 
 static int launch(const WCHAR *target, BOOL exists)
 {
@@ -156,7 +188,8 @@ int raven_entry(void)
 	if (check)
 		return check;
 	manager->lpVtbl->Release(manager);
-	return launch(L"shell:AppsFolder\\" FAMILY L"!Main", TRUE);
+	check = launch(L"shell:AppsFolder\\" FAMILY L"!Main", TRUE);
+	return check ? check : check_package_path();
 #else
 	const int check = install(manager, L"appx-good.msix", TRUST_E_NOSIGNATURE);
 	manager->lpVtbl->Release(manager);
