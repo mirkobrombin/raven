@@ -125,7 +125,8 @@ int raven_entry(void)
 		ended = WaitForSingleObject(information.hProcess, 0) == WAIT_OBJECT_0;
 		if (++rounds > 4000)
 			return 5;
-		Sleep(5);
+		// The parent sleeps until its queue has something new, as a message pump does: each message another process sends wakes it.
+		MsgWaitForMultipleObjectsEx(1, &information.hProcess, 20000, QS_ALLINPUT, 0);
 	}
 	if (WaitForSingleObject(information.hProcess, 20000) != WAIT_OBJECT_0)
 		return 5;

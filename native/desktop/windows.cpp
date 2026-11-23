@@ -629,6 +629,23 @@ void NativeWindows::collect_input(std::chrono::milliseconds budget)
 	}
 }
 
+uint32_t NativeWindows::foreign_kinds(uint32_t thread)
+{
+	// What other processes sent or posted to the thread's windows waits in the windows directory until the thread reads its queue
+	// (answer_foreign_sends, import_foreign_posts). The directory is read again only when it changed.
+	if (const auto stamp=foreign_frames_stamp(); stamp!=waiting_stamp) {
+		waiting_stamp=stamp;
+		foreign_waiting=foreign_messages_waiting([this](uint64_t window) { return std::as_const(objects).window(window)!=nullptr; });
+	}
+	uint32_t kinds=0;
+	// A window destroyed since has no thread and concerns none.
+	for (const auto &[window,waiting] : foreign_waiting)
+		if (owner(window)==thread) kinds|=waiting;
+	// The guest answers PeekMessage itself while the thread's queue was quiet (mark_quiet): such a message must reach the runtime's.
+	if (kinds) wake(thread);
+	return kinds;
+}
+
 uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 {
 	const auto event_thread=[&](const DesktopEvent &event) { return input_thread(event); };
@@ -639,6 +656,8 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 		if (!message.thread || message.thread==thread) current|=message.kinds;
 	if (quits.contains(thread)) current|=0x108;
 	if (sent_for(thread)) current|=0x40;
+	const uint32_t foreign=foreign_kinds(thread);
+	current|=foreign;
 	for (const auto &event : pending_events)
 		if (!event_thread(event) || event_thread(event)==thread) current|=event_kinds(event);
 	auto &state=queues[thread];
@@ -654,6 +673,12 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 	}
 	state.paints=std::move(paints);
 	state.changed=(state.changed | (current & ~state.current)) & current;
+	// Another process's messages are news once for each change of the directory: a call that clears them leaves the news to the next
+	// call that keeps them (mark_quiet's), so one that came while PeekMessage took the others still wakes the wait.
+	if (foreign && state.foreign_stamp!=waiting_stamp) {
+		state.changed|=foreign;
+		if (!clear) state.foreign_stamp=waiting_stamp;
+	}
 	state.current=current;
 	const uint32_t result=((current<<16) | state.changed) & ((mask<<16) | mask);
 	if (clear) state.changed&=~mask;
@@ -1748,7 +1773,7 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking,
 			message_wait([&] {
 				// Collect host input without invoking a guest procedure while the scheduler checks another thread.
 				queue_status(me,0,false);
-				return pending_for(me) || ((kinds & 0x40) && sent_for(me)) ||
+				return pending_for(me) || ((kinds & 0x40) && sent_for(me)) || (foreign_kinds(me) & kinds) ||
 					((kinds & 0x108) && quits.contains(me)) || std::any_of(messages.begin(),messages.end(),matches) ||
 					((kinds & 0x20) && ((!minimum && !maximum) || (minimum<=0x0f && maximum>=0x0f)) && invalid_owned(window,me));
 			},until);

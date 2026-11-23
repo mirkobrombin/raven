@@ -196,6 +196,8 @@ private:
 	void queue(Message message,uint32_t kinds=0x108);
 	struct QueueState {
 		uint32_t current=0,changed=0;
+		// The windows directory as the thread was last told of another process's messages in it (queue_status).
+		uint64_t foreign_stamp=UINT64_MAX;
 		std::map<uint64_t,uint64_t> paints;
 	};
 	std::map<uint32_t,QueueState> queues;
@@ -235,7 +237,11 @@ private:
 	std::chrono::steady_clock::time_point foreign_checked{};
 	uint64_t foreign_stamp=UINT64_MAX;
 	// The windows directory as it was when messages other processes posted were last taken in.
-	uint64_t posts_stamp=UINT64_MAX,sends_stamp=UINT64_MAX;
+	uint64_t posts_stamp=UINT64_MAX,sends_stamp=UINT64_MAX,waiting_stamp=UINT64_MAX;
+	// The windows of this process other processes sent (0x40) or posted (0x108) messages to that wait to be taken, as last read.
+	std::vector<std::pair<uint64_t,uint32_t>> foreign_waiting;
+	// The kinds of message (0x40 sent, 0x108 posted) other processes left for the thread's windows that wait to be taken.
+	uint32_t foreign_kinds(uint32_t thread);
 	void import_foreign_posts();
 	void answer_foreign_sends();
 	// A message to a window of another process: the owner's answer, or nothing when it gave none in time.

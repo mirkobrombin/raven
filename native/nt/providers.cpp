@@ -2838,6 +2838,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	};
 	kernel.queue_quiet=[&windows](uint32_t thread) { const DesktopScope desktop_scope; windows.mark_quiet(thread); };
 	kernel.present_frames=[&windows] { const DesktopScope desktop_scope; return windows.present_frames(); };
+	// Another process's message wakes a waiting thread when it lands, not at its next look.
+	set_foreign_nudge(threads.remote_nudge());
 	windows.set_block([&threads](std::function<bool()> ready) {
 		HostWait waiting;
 		threads.block([ready = std::move(ready)] { const DesktopScope desktop_scope; return ready(); }, std::nullopt, false, false, true);

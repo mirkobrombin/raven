@@ -571,9 +571,12 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 					if (taken) return 0;
 				}
 			} else {
+				// The queue is looked at even when an object ends the wait: a message another process sent meanwhile then reaches the next
+				// PeekMessage (NativeWindows::queue_status).
+				const bool queued = input();
 				for (size_t index = 0; index < states.size(); ++index)
 					if (states[index] == 1 && waited.try_consume(index, id)) return uint32_t(index);
-				if (input()) return count;
+				if (queued) return count;
 			}
 			if (alertable && !me->apcs.empty() && run_apcs()) return wait_io_completion;
 			if (!milliseconds || (wake && std::chrono::steady_clock::now() >= *wake)) return wait_timeout;
