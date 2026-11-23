@@ -1555,14 +1555,6 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("WTSGetActiveConsoleSessionId", 0, [](ApiCall &call) { call.ret(native_session_id); });
-	registry.add("ProcessIdToSessionId", 2, [](ApiCall &call) {
-		if (!call[1]) {
-			call.fail(87);
-			return;
-		}
-		call.store<uint32_t>(call[1], native_session_id);
-		call.ret(1);
-	});
 	const auto set_dll_directory = [&context](ApiCall &call, bool wide) {
 		std::optional<std::u16string> path;
 		if (call[0]) path = wide ? call.wide(call[0]) : from_ansi(call.narrow(call[0]), context.launch.ansi_code_page);

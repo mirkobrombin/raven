@@ -530,6 +530,21 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		else
 			call.ret(made.value);
 	});
+	registry.add("ProcessIdToSessionId", 2, [open_process, &objects](ApiCall &call) {
+		if (!call[1]) {
+			call.fail(87);
+			return;
+		}
+		constexpr uint32_t process_query_information = 0x400;
+		const auto made = open_process(call.u32(0), process_query_information, false);
+		if (made.status) {
+			call.fail(made.status == 0xc000000bU ? 87 : 4);
+			return;
+		}
+		objects.close(made.value);
+		call.store<uint32_t>(call[1], native_session_id);
+		call.ret(1);
+	});
 	registry.add("NtOpenProcess", 4, [open_process, &context](ApiCall &call) {
 		try {
 			call.process.validate_write_memory(call[0], call.pointer_width());

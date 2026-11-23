@@ -134,6 +134,10 @@ int raven_entry(void)
 	const WCHAR *command = GetCommandLineW();
 	const BOOL child = command_ends_with(command, L" --alpc-client");
 	const BOOL cross_process = child || command_ends_with(command, L" --alpc-process");
+	DWORD invalid_session = MAXDWORD;
+	if (ProcessIdToSessionId(MAXDWORD, &invalid_session) || invalid_session != MAXDWORD ||
+		ProcessIdToSessionId(GetCurrentProcessId(), NULL))
+		return 31;
 	WCHAR server_process[] = L"\\RPC Control\\RavenProcessRoundTrip", server_thread[] = L"\\RPC Control\\RavenThreadRoundTrip";
 	const USHORT name_length = cross_process ? sizeof server_process : sizeof server_thread;
 	UNICODE_STRING name = {name_length - sizeof(WCHAR), name_length, cross_process ? server_process : server_thread};

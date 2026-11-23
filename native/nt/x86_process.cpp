@@ -304,21 +304,6 @@ bool kernel_string_api(NativeProcess &process, NativeEnvironment &environment, c
 		process.return_api(uint32_t(shared_tick_count()));
 		return true;
 	}
-	if (name == "ProcessIdToSessionId") {
-		// Only the process itself is known, and it runs in the interactive session.
-		const auto args = process.api_arguments(2);
-		const auto own = process.read_memory(environment.teb() + 0x20, 4);
-		const uint32_t own_id = own[0] | uint32_t(own[1]) << 8 | uint32_t(own[2]) << 16 | uint32_t(own[3]) << 24;
-		if (uint32_t(args[0]) != own_id || !args[1]) {
-			environment.set_last_error(87);
-			process.return_api(0);
-			return true;
-		}
-		const uint8_t session[4] = {1, 0, 0, 0};
-		process.write_memory(args[1], session);
-		process.return_api(1);
-		return true;
-	}
 	if (name == "timeBeginPeriod" || name == "timeEndPeriod") {
 		process.api_arguments(1);
 		process.return_api(0);
