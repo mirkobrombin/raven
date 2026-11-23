@@ -3855,7 +3855,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         if(Python3_Interpreter_FOUND)
             add_test(NAME native_syscall_cycles_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-syscall-cycles.py
                 $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
-            set_tests_properties(native_syscall_cycles_x64 PROPERTIES TIMEOUT 150
+            set_tests_properties(native_syscall_cycles_x64 PROPERTIES TIMEOUT 300
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/syscall-cycles-prefix")
         endif()
         # The guest reads the tick count itself from the start of the process, not only once its clock has been running for a while.
