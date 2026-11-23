@@ -15,15 +15,23 @@ int raven_entry(void)
 	WCHAR list[256];
 	size_t length = 0;
 	if (fallback(locale, 1, list, &length) != HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER) ||
-		length <= 1 || length > ARRAYSIZE(list))
+		length <= 1 || length >= ARRAYSIZE(list))
 		return 3;
+	const size_t capacity = length;
+	for (size_t index = 0; index <= capacity; ++index)
+		list[index] = L'!';
 	length = 0;
-	if (fallback(locale, ARRAYSIZE(list), list, &length) != S_OK ||
-		length < ARRAYSIZE(locale) || length > ARRAYSIZE(list))
+	if (fallback(locale, capacity, list, &length) != S_OK ||
+		length < ARRAYSIZE(locale) - 1 || length > capacity || list[capacity] != L'!')
 		return 4;
 	for (size_t index = 0; index + 1 < ARRAYSIZE(locale); ++index)
 		if (list[index] != locale[index])
 			return 5;
+	size_t terminator = ARRAYSIZE(locale) - 1;
+	while (terminator < capacity && list[terminator])
+		++terminator;
+	if (terminator == capacity)
+		return 9;
 	length = 0;
 	if (fallback(NULL, ARRAYSIZE(list), list, &length) != S_OK || !length || length > ARRAYSIZE(list))
 		return 6;
