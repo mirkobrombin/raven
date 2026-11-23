@@ -62,7 +62,7 @@ void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &obje
 			if (set && threads.host_threads())
 				waited=waiters_of(objects, threads, call[0]);
 			const uint32_t status=objects.set_event(call[0], set).status;
-			// The thread the event wakes runs before the setter goes on, as it would on another processor.
+			// On one processor the thread the event wakes runs before the setter goes on, as Windows lets it (see hand_over_to).
 			if (set && !status && threads.host_threads())
 				threads.hand_over_to(waited);
 			else if (set && !status && !call.process.serving())
@@ -141,7 +141,7 @@ bool NativeObjectAPI::dispatch(std::string_view name)
 				waited=waiters_of(objects, *threads, args[0]);
 			const auto changed=objects.set_event(args[0],signal);
 			status=changed.status; result=1;
-			// The thread the event wakes runs before the setter goes on, as it would on another processor.
+			// On one processor the thread the event wakes runs before the setter goes on, as Windows lets it (see hand_over_to).
 			if (signal && !status && threads && threads->host_threads())
 				threads->hand_over_to(waited);
 			else if (signal && !status && threads)

@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <poll.h>
+#include <sched.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
@@ -948,6 +949,16 @@ static bool runnable_at(const char *path)
 
 // Whether a woken thread has not yet had its turn only for want of a processor: its host thread, or its guest task, which a wait
 // outside the runtime wakes by itself while the host thread sleeps, stands ready or runs.
+// Whether the process may run on one processor alone, as it was started: a set on Windows lets the woken thread go first only there.
+static bool one_processor()
+{
+	static const bool alone = [] {
+		cpu_set_t usable;
+		return ::sched_getaffinity(0, sizeof usable, &usable) == 0 && CPU_COUNT(&usable) == 1;
+	}();
+	return alone;
+}
+
 static bool runnable(pid_t host, pid_t task)
 {
 	char path[64];
@@ -979,7 +990,9 @@ std::vector<NativeThreads::Waiter> NativeThreads::waiting_for(uint32_t object)
 
 bool NativeThreads::hand_over_to(const std::vector<Waiter> &waited)
 {
-	if (!threaded || tearing_down || !running)
+	// With more than one processor the setter goes on at once while the woken threads run elsewhere: Windows does not wait for them
+	// (a SetEvent there returned before its woken thread had run at least 99 times in 2000 on four processors).
+	if (!threaded || tearing_down || !running || !one_processor())
 		return false;
 	GuestThread &me = *running;
 	struct Woken {

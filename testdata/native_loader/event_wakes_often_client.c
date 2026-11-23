@@ -1,6 +1,7 @@
-// The promise of event_wakes_client two thousand times over: a thread that waits for an event has run when SetEvent returns, also when
-// it left its wait before the setter looked for the threads that waited. The exit code is 100 and the number of sets it had not run
-// after (99 at most), or names the check that failed.
+// The promise of event_wakes_client two thousand times over: a thread that waits for an event runs once SetEvent has woken it, also when
+// it left its wait before the setter looked for the threads that waited, within a tenth of a second. Whether it has run when SetEvent
+// returns is not promised: on Windows it had not after at least 99 sets of 2000 on four processors, and after up to 75 on one. The exit
+// code is 0, or names the check that failed.
 #include <windows.h>
 
 #define ROUNDS 2000
@@ -30,7 +31,6 @@ int raven_entry(void)
 	HANDLE thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
 	if (!thread)
 		return 2;
-	int missed = 0;
 	for (LONG round = 1; round <= ROUNDS; ++round) {
 		while (waiting != round)
 			Sleep(1);
@@ -39,9 +39,7 @@ int raven_entry(void)
 		if (woke == round)
 			return 3;
 		SetEvent(go);
-		if (woke != round && missed < 99)
-			++missed;
-		if (WaitForSingleObject(back, 5000) != WAIT_OBJECT_0)
+		if (WaitForSingleObject(back, 100) != WAIT_OBJECT_0 || woke != round)
 			return 4;
 	}
 	if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0)
@@ -49,5 +47,5 @@ int raven_entry(void)
 	CloseHandle(thread);
 	CloseHandle(go);
 	CloseHandle(back);
-	return missed ? 100 + missed : 0;
+	return 0;
 }

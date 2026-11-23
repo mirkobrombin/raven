@@ -282,9 +282,10 @@ public:
 	// The threads waiting outside for `object` of the process's table (none for 0). It is asked before the object is set: one the set
 	// wakes may have left its wait before the setter could look, and has still to run before the setter goes on.
 	std::vector<Waiter> waiting_for(uint32_t object);
-	// The same as hand_over with a host thread for each guest thread: those that waited for what was set, which setting it may have
-	// woken, and those waiting in the runtime whose wait now holds, take their turn before the setter goes on, until each calls again,
-	// waits again or ends (a few milliseconds at most). False when no thread was waiting for it.
+	// The same as hand_over with a host thread for each guest thread, on a process that runs on one processor: those that waited for what
+	// was set, which setting it may have woken, and those waiting in the runtime whose wait now holds, take their turn before the setter
+	// goes on, until each calls again, waits again or ends (a few milliseconds at most). False when no thread was waiting for it, or when
+	// the process has more processors, where the setter goes on beside them.
 	bool hand_over_to(const std::vector<Waiter> &waited);
 	// How many threads wait outside for objects of the process's table, so that a set nobody waits for looks no further.
 	std::atomic<int> table_waiters{0};
