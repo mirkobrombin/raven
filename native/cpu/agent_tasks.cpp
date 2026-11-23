@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <linux/futex.h>
+#include <memory>
 #include <mutex>
 #include <signal.h>
 #include <sys/prctl.h>
@@ -24,14 +25,16 @@ namespace raven::agent {
 
 namespace {
 
+// Each task is shared with the threads using it: one thread may forget a task (its group ended) while another still waits for it or asks
+// something of it, and that one goes on with the task it found.
 std::mutex tasks_lock;
-std::unordered_map<pid_t, Task> tasks;
+std::unordered_map<pid_t, std::shared_ptr<Task>> tasks;
 
-Task *find(pid_t task)
+std::shared_ptr<Task> find(pid_t task)
 {
 	std::lock_guard lock(tasks_lock);
 	const auto found = tasks.find(task);
-	return found == tasks.end() ? nullptr : &found->second;
+	return found == tasks.end() ? nullptr : found->second;
 }
 
 uint32_t *state_word(const Task &task)
@@ -317,24 +320,27 @@ long held_request(Task &task, enum __ptrace_request operation, void *address, vo
 
 void hold(const Task &task)
 {
+	auto held = std::make_shared<Task>(task);
+	held->running = true;
 	std::lock_guard lock(tasks_lock);
-	tasks[task.task] = task;
-	tasks[task.task].running = true;
+	tasks[task.task] = std::move(held);
 }
 
 void release_group(pid_t group)
 {
 	std::lock_guard lock(tasks_lock);
-	std::erase_if(tasks, [&](const auto &entry) { return entry.second.group == group || entry.second.process == group; });
+	std::erase_if(tasks, [&](const auto &entry) { return entry.second->group == group || entry.second->process == group; });
 }
 
 namespace {
 
-// Forgets one task that ended while its thread group goes on.
-void release(pid_t task)
+// Forgets one task that ended while its thread group goes on, unless its id names a newer task by now.
+void release(const std::shared_ptr<Task> &task)
 {
 	std::lock_guard lock(tasks_lock);
-	tasks.erase(task);
+	const auto found = tasks.find(task->task);
+	if (found != tasks.end() && found->second == task)
+		tasks.erase(found);
 }
 
 }
@@ -346,20 +352,20 @@ bool held(pid_t task)
 
 uint64_t *block_of(pid_t task)
 {
-	const Task *const found = find(task);
+	const auto found = find(task);
 	return found ? found->block : nullptr;
 }
 
 long request(enum __ptrace_request operation, pid_t task, void *address, void *data)
 {
-	if (Task *const found = find(task))
+	if (const auto found = find(task))
 		return held_request(*found, operation, address, data);
 	return ptrace(operation, task, address, data);
 }
 
 pid_t wait(pid_t task, int *status, int options)
 {
-	Task *const found = find(task);
+	const auto found = find(task);
 	if (!found)
 		return ::waitpid(task, status, options);
 	Task &held = *found;
@@ -376,7 +382,7 @@ pid_t wait(pid_t task, int *status, int options)
 			if (held.task == held.group)
 				release_group(held.group);
 			else
-				release(task);
+				release(found);
 			return task;
 		}
 		if (options & WNOHANG)
@@ -398,20 +404,20 @@ pid_t wait(pid_t task, int *status, int options)
 
 int interrupt(pid_t task)
 {
-	if (Task *const found = find(task))
+	if (const auto found = find(task))
 		return int(syscall(SYS_tgkill, found->group, task, interrupt_signal));
 	return kill(task, SIGSTOP);
 }
 
 const uint32_t *stop_word(pid_t task)
 {
-	const Task *const found = find(task);
+	const auto found = find(task);
 	return found ? state_word(*found) : nullptr;
 }
 
 bool stopped(pid_t task)
 {
-	Task *const found = find(task);
+	const auto found = find(task);
 	return found && (!found->running || __atomic_load_n(state_word(*found), __ATOMIC_ACQUIRE) == posted);
 }
 
