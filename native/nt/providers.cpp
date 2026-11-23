@@ -848,9 +848,10 @@ static const std::vector<uint8_t> &call_procedure_prelude()
 // for a window of another thread or process, the runtime sends it. It checks the count itself, as it cannot come back to an answer
 // wrapper, so it runs while other threads run as well (self_checked_api):
 //   mov r10,[pointer]; test r10,r10; jz slow; mov r11,[r10+0x700]; test r11,r11; jz slow; test rcx,rcx; jz slow
-//   mov rax,[r10+0x7b0]; test al,1; jnz slow; push rsi; mov esi,ecx; and esi,0x1ff; shl esi,8; add r11,rsi; cmp rcx,[r11]; jne fail
-//   mov esi,gs:[0x48]; test esi,esi; jz fail; cmp esi,[r11+0xf0]; jne fail; mov r11,[r11+0x10]; test r11,r11; jz fail
-//   cmp rax,[r10+0x7b0]; jne fail; pop rsi; jmp r11; fail: pop rsi; slow: jmp stub
+//   push rsi; push rdi; push 128; try: mov rax,[r10+0x7b0]; test al,1; jnz busy; mov esi,ecx; and esi,0x1ff; shl esi,8; add rsi,r11
+//   cmp rcx,[rsi]; jne moved; mov edi,gs:[0x48]; test edi,edi; jz fail; cmp edi,[rsi+0xf0]; jne moved; mov rdi,[rsi+0x10]
+//   test rdi,rdi; jz moved; cmp rax,[r10+0x7b0]; jne busy; mov r11,rdi; add rsp,8; pop rdi; pop rsi; jmp r11
+//   moved: cmp rax,[r10+0x7b0]; je fail; busy: pause; dec dword [rsp]; jnz try; fail: add rsp,8; pop rdi; pop rsi; slow: jmp stub
 static const std::vector<uint8_t> &own_thread_send_prelude()
 {
 	static const std::vector<uint8_t> code = prelude_code(raven_prelude_own_thread_send, raven_prelude_own_thread_send_end);

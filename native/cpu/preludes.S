@@ -1293,29 +1293,46 @@ raven_prelude_own_thread_send:
 	je .Lown_thread_send_slow
 	test rcx, rcx
 	je .Lown_thread_send_slow
+	/* While another thread publishes a record the version is odd or moves: the record is looked at again, 128 times at most. */
+	push rsi
+	push rdi
+	push 128
+.Lown_thread_send_try:
 	mov rax, qword ptr [r10 + 0x7b0]
 	test al, 0x1
-	jne .Lown_thread_send_slow
-	push rsi
+	jne .Lown_thread_send_busy
 	mov esi, ecx
 	and esi, 0x1ff
 	shl esi, 0x8
-	add r11, rsi
-	cmp rcx, qword ptr [r11]
-	jne .Lown_thread_send_67
-	mov esi, dword ptr gs:0x48
-	test esi, esi
-	je .Lown_thread_send_67
-	cmp esi, dword ptr [r11 + 0xf0]
-	jne .Lown_thread_send_67
-	mov r11, qword ptr [r11 + 0x10]
-	test r11, r11
-	je .Lown_thread_send_67
+	add rsi, r11
+	cmp rcx, qword ptr [rsi]
+	jne .Lown_thread_send_moved
+	mov edi, dword ptr gs:0x48
+	test edi, edi
+	je .Lown_thread_send_fail
+	cmp edi, dword ptr [rsi + 0xf0]
+	jne .Lown_thread_send_moved
+	mov rdi, qword ptr [rsi + 0x10]
+	test rdi, rdi
+	je .Lown_thread_send_moved
 	cmp rax, qword ptr [r10 + 0x7b0]
-	jne .Lown_thread_send_67
+	jne .Lown_thread_send_busy
+	mov r11, rdi
+	add rsp, 8
+	pop rdi
 	pop rsi
 	jmp r11
-.Lown_thread_send_67:
+	/* A record that does not answer counts only if the tables did not move while it was read. */
+.Lown_thread_send_moved:
+	cmp rax, qword ptr [r10 + 0x7b0]
+	je .Lown_thread_send_fail
+.Lown_thread_send_busy:
+	pause
+	dec dword ptr [rsp]
+	jne .Lown_thread_send_try
+.Lown_thread_send_fail:
+	add rsp, 8
+	pop rdi
 	pop rsi
 .Lown_thread_send_slow:
 	.byte 0xe9
