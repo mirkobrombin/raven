@@ -1,10 +1,13 @@
 // The windows of one process are visible to another of the same prefix: a child finds its parent's window by class and title, reads
 // its title and visibility, sees it in EnumWindows, learns which process owns it, sends it messages (WM_COPYDATA among them) whose
-// answers come back, and posts it messages the parent's queue receives.
+// answers come back, and posts it messages the parent's queue receives. It finds the parent's message-only window with
+// FindWindowEx(HWND_MESSAGE), as a second start of a Chromium program finds the first, and hands it its command line by WM_COPYDATA.
 #include <windows.h>
 
 static const wchar_t class_name[] = L"RavenCrossWindow";
 static const wchar_t title[] = L"Cross window probe é";
+static const wchar_t messages_class[] = L"RavenCrossMessages";
+static const wchar_t messages_title[] = L"C:\\Users\\Profile";
 
 struct search { HWND wanted; int seen; };
 static const char payload[] = "hello from the child";
@@ -44,6 +47,11 @@ static int child(DWORD parent)
 		return 11;
 	if (FindWindowW(class_name, L"Another title"))
 		return 12;
+	if (FindWindowExW(NULL, NULL, class_name, title) != window)
+		return 24;
+	HWND messages = FindWindowExW(HWND_MESSAGE, NULL, messages_class, messages_title);
+	if (!messages || FindWindowExW(HWND_MESSAGE, NULL, messages_class, L"C:\\Users\\Other"))
+		return 25;
 	wchar_t text[64];
 	if (GetWindowTextLengthW(window) != lstrlenW(title) || GetWindowTextW(window, text, 64) != lstrlenW(title) || !same(text, title))
 		return 13;
@@ -69,6 +77,8 @@ static int child(DWORD parent)
 	DWORD_PTR answer = 0;
 	if (!SendMessageTimeoutW(window, WM_APP + 3, 3, 4, SMTO_NORMAL, 5000, &answer) || answer != 13)
 		return 23;
+	if (!SendMessageTimeoutW(messages, WM_COPYDATA, 0, (LPARAM)&data, SMTO_ABORTIFHUNG, 5000, &answer) || answer != 77)
+		return 26;
 	// Parameters that point into this process cannot travel; plain values can.
 	SetLastError(0);
 	if (PostMessageW(window, WM_SETTEXT, 0, (LPARAM)L"lost") || GetLastError() != ERROR_MESSAGE_SYNC_ONLY)
@@ -100,6 +110,10 @@ int raven_entry(void)
 	if (!window)
 		return 2;
 	ShowWindow(window, SW_SHOWNORMAL);
+	definition.lpszClassName = messages_class;
+	if (!RegisterClassW(&definition) ||
+		!CreateWindowExW(0, messages_class, messages_title, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, definition.hInstance, NULL))
+		return 8;
 
 	wchar_t path[MAX_PATH], command[MAX_PATH + 64];
 	if (!GetModuleFileNameW(NULL, path, MAX_PATH))

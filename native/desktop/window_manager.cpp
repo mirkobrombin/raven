@@ -505,7 +505,9 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 	registry.add("FindWindowExW", 4, [this](ApiCall &call) {
 		const auto name = call[2] && call[2] > 0xffff ? call.wide(call[2], 256) : std::u16string();
 		const auto title = call[3] ? call.wide(call[3], 4096) : std::u16string();
-		const auto siblings = objects.child_windows(call[0]);
+		// Message-only windows are top-level windows here, so HWND_MESSAGE searches the top level, as the desktop window does.
+		const uint64_t parent = call[0] == UINT64_MAX - 2 || call[0] == 0xfffffffdULL || call[0] == desktop ? 0 : call[0];
+		const auto siblings = parent ? objects.child_windows(parent) : top_level_windows();
 		bool started = call[1] == 0;
 		for (auto candidate = siblings.rbegin(); candidate != siblings.rend(); ++candidate) {
 			if (!started) {
@@ -521,6 +523,13 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 			call.ret(*candidate);
 			return;
 		}
+		// The top-level windows of the prefix's other processes come after this process's own, as FindWindowW finds them.
+		// shortcut: a search that starts after another process's window finds nothing more; walk foreign_windows() if a caller needs it.
+		if (!parent && started)
+			if (const auto found = foreign_top_level(name, call[3] != 0, title)) {
+				call.ret(found);
+				return;
+			}
 		call.fail(1400);
 	});
 	registry.add("GetAncestor", 2, [this](ApiCall &call) {
