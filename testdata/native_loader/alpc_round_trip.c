@@ -24,7 +24,8 @@ typedef NTSTATUS (NTAPI *query_port)(HANDLE, ULONG, void *, ULONG, ULONG *);
 typedef NTSTATUS (NTAPI *impersonate_port)(HANDLE, struct header *, ULONG);
 
 struct server_session { ULONG session, process; };
-struct client_input { UNICODE_STRING *name; PSID server_sid; BOOL impersonation; };
+enum identity_tracking { no_impersonation, static_identity, dynamic_identity };
+struct client_input { UNICODE_STRING *name; PSID server_sid; enum identity_tracking tracking; };
 struct port_attributes {
 	ULONG flags;
 	SECURITY_QUALITY_OF_SERVICE qos;
@@ -67,7 +68,7 @@ static BOOL set_client_integrity(WELL_KNOWN_SID_TYPE label_type)
 	return CloseHandle(token) && lowered;
 }
 
-static BOOL check_impersonation(impersonate_port impersonate, HANDLE port, struct header *message)
+static BOOL check_impersonation(impersonate_port impersonate, HANDLE port, struct header *message, DWORD expected_integrity)
 {
 	const ULONG id = message->message_id;
 	message->message_id = 0;
@@ -87,7 +88,7 @@ static BOOL check_impersonation(impersonate_port impersonate, HANDLE port, struc
 	SECURITY_IMPERSONATION_LEVEL level;
 	DWORD size;
 	const BOOL client = GetTokenInformation(token, TokenIntegrityLevel, &integrity, sizeof integrity, &size) &&
-		*GetSidSubAuthority(integrity.label.Label.Sid, 0) == SECURITY_MANDATORY_LOW_RID &&
+		*GetSidSubAuthority(integrity.label.Label.Sid, 0) == expected_integrity &&
 		GetTokenInformation(token, TokenImpersonationLevel, &level, sizeof level, &size) && level == SecurityImpersonation;
 	return CloseHandle(token) && RevertToSelf() && client &&
 		!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) && GetLastError() == ERROR_NO_TOKEN;
@@ -97,18 +98,18 @@ static DWORD WINAPI client(void *argument)
 {
 	const struct client_input *input = argument;
 	const struct port_attributes port_attrs = {allow_impersonation, {sizeof(SECURITY_QUALITY_OF_SERVICE), SecurityImpersonation,
-		SECURITY_STATIC_TRACKING, FALSE}, .message_limit = 512};
-	if (input->impersonation && !set_client_integrity(WinLowLabelSid))
+		input->tracking == dynamic_identity ? SECURITY_DYNAMIC_TRACKING : SECURITY_STATIC_TRACKING, FALSE}, .message_limit = 512};
+	if (input->tracking && !set_client_integrity(WinLowLabelSid))
 		return 35;
 	HANDLE port = NULL;
 	struct message message = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 34};
 	SIZE_T capacity = sizeof message;
 	LARGE_INTEGER limit;
 	limit.QuadPart = -100000000;
-	if (connect(&port, input->name, NULL, input->impersonation ? &port_attrs : NULL, 0x20000, input->server_sid,
+	if (connect(&port, input->name, NULL, input->tracking ? &port_attrs : NULL, 0x20000, input->server_sid,
 		&message.header, &capacity, NULL, NULL, &limit) || !port)
 		return 10;
-	if (input->impersonation && !set_client_integrity(WinUntrustedLabelSid))
+	if (input->tracking && !set_client_integrity(WinUntrustedLabelSid))
 		return 36;
 	if (send(port, 582) || receive(port, &message, -30000000) || message.header.data_length != sizeof(ULONG) || !message.value)
 		return 11;
@@ -152,14 +153,16 @@ static BOOL read_token_user(union token_info *info)
 	return CloseHandle(token) && read;
 }
 
-static HANDLE start_client_process(DWORD *process_id, DWORD *thread_id, BOOL impersonation)
+static HANDLE start_client_process(DWORD *process_id, DWORD *thread_id, enum identity_tracking tracking)
 {
 	WCHAR image[MAX_PATH], command[MAX_PATH + 32] = L"\"";
 	const DWORD length = GetModuleFileNameW(NULL, image, ARRAYSIZE(image));
 	if (!length || length == ARRAYSIZE(image))
 		return NULL;
 	lstrcatW(command, image);
-	lstrcatW(command, impersonation ? L"\" --alpc-token-client" : L"\" --alpc-client");
+	const WCHAR *suffix = tracking == dynamic_identity ? L"\" --alpc-dynamic-client" :
+		tracking == static_identity ? L"\" --alpc-token-client" : L"\" --alpc-client";
+	lstrcatW(command, suffix);
 	STARTUPINFOW startup = {sizeof startup};
 	PROCESS_INFORMATION process;
 	if (!CreateProcessW(image, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process))
@@ -189,13 +192,15 @@ int raven_entry(void)
 	if (!query)
 		return 23;
 	const WCHAR *command = GetCommandLineW();
-	const BOOL token_child = command_ends_with(command, L" --alpc-token-client");
-	const BOOL impersonation = token_child || command_ends_with(command, L" --alpc-impersonation");
-	const BOOL child = token_child || command_ends_with(command, L" --alpc-client");
-	const BOOL cross_process = child || impersonation || command_ends_with(command, L" --alpc-process");
-	const impersonate_port impersonate = impersonation ?
+	const BOOL static_child = command_ends_with(command, L" --alpc-token-client");
+	const BOOL dynamic_child = command_ends_with(command, L" --alpc-dynamic-client");
+	const enum identity_tracking tracking = dynamic_child || command_ends_with(command, L" --alpc-dynamic-impersonation") ? dynamic_identity :
+		static_child || command_ends_with(command, L" --alpc-impersonation") ? static_identity : no_impersonation;
+	const BOOL child = static_child || dynamic_child || command_ends_with(command, L" --alpc-client");
+	const BOOL cross_process = child || tracking || command_ends_with(command, L" --alpc-process");
+	const impersonate_port impersonate = tracking ?
 		(impersonate_port)GetProcAddress(native, "NtAlpcImpersonateClientOfPort") : NULL;
-	if (impersonation && !impersonate)
+	if (tracking && !impersonate)
 		return 32;
 	DWORD invalid_session = MAXDWORD;
 	if (ProcessIdToSessionId(MAXDWORD, &invalid_session) || invalid_session != MAXDWORD ||
@@ -203,12 +208,12 @@ int raven_entry(void)
 		return 31;
 	WCHAR server_process[] = L"\\RPC Control\\RavenProcessRoundTrip", server_thread[] = L"\\RPC Control\\RavenThreadRoundTrip";
 	WCHAR server_token[] = L"\\RPC Control\\RavenImpersonationRoundTrip";
-	const USHORT name_length = impersonation ? sizeof server_token : cross_process ? sizeof server_process : sizeof server_thread;
-	UNICODE_STRING name = {name_length - sizeof(WCHAR), name_length, impersonation ? server_token : cross_process ? server_process : server_thread};
+	const USHORT name_length = tracking ? sizeof server_token : cross_process ? sizeof server_process : sizeof server_thread;
+	UNICODE_STRING name = {name_length - sizeof(WCHAR), name_length, tracking ? server_token : cross_process ? server_process : server_thread};
 	union token_info token_user;
 	if (!read_token_user(&token_user))
 		return 17;
-	struct client_input input = {&name, token_user.user.User.Sid, impersonation};
+	struct client_input input = {&name, token_user.user.User.Sid, tracking};
 	if (child)
 		return client(&input);
 	OBJECT_ATTRIBUTES attributes = {.Length = sizeof attributes, .ObjectName = &name, .Attributes = 0x40};
@@ -231,7 +236,7 @@ int raven_entry(void)
 		receive(listener, &message, 0) != 0x102)
 		return 16;
 	DWORD peer_process = GetCurrentProcessId(), peer_thread = 0;
-	HANDLE worker = cross_process ? start_client_process(&peer_process, &peer_thread, impersonation) :
+	HANDLE worker = cross_process ? start_client_process(&peer_process, &peer_thread, tracking) :
 		CreateThread(NULL, 0, client, &input, 0, &peer_thread);
 	if (!worker || receive(listener, &message, -100000000) || (message.header.type & 0xfff) != 10 ||
 		!message.header.message_id || message.value != 34 || message.header.process != peer_process || message.header.thread != peer_thread)
@@ -254,7 +259,8 @@ int raven_entry(void)
 		return 26;
 	if (message.header.process != peer_process || message.header.thread != peer_thread)
 		return 27;
-	if (impersonation && !check_impersonation(impersonate, peer, &message.header))
+	const DWORD expected_integrity = tracking == dynamic_identity ? SECURITY_MANDATORY_UNTRUSTED_RID : SECURITY_MANDATORY_LOW_RID;
+	if (tracking && !check_impersonation(impersonate, peer, &message.header, expected_integrity))
 		return 33;
 	const ULONG request_id = message.header.message_id;
 	message.header.message_id = request_id ^ 0x80000000;
@@ -264,7 +270,7 @@ int raven_entry(void)
 	message.value = 425;
 	if (send_receive(listener, 1, &message.header, NULL, NULL, NULL, NULL, NULL))
 		return 9;
-	if (impersonation && impersonate(peer, &message.header, impersonation_level) >= 0)
+	if (tracking && impersonate(peer, &message.header, impersonation_level) >= 0)
 		return 37;
 	struct message timed_out;
 	if (receive(listener, &timed_out, -30000000) || (timed_out.header.type & 0xfff) != 1 || timed_out.value != 123 ||
