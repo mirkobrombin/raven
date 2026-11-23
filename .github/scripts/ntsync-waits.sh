@@ -10,7 +10,7 @@ git config --global --add safe.directory "*"
 zstd -d -q -c /opt/ci/build.tar.zst | tar -C /opt/ci -xf -
 install -d -m 0700 "${XDG_RUNTIME_DIR}"
 
-tests='native_(abandoned_mutex|address_beside|apc_nonalertable|completion_port|event_beside|event_cli|event_wakes_x|finished_apc|multiple_beside|mutex_beside|process_event|pulse_event|semaphore_beside|served_semaphore|waits_and_alerts|timeout_waits|shared_wait|shared_infinite_wait|suspend_terminate)'
+tests='native_(abandoned_mutex|address_beside|apc_nonalertable|completion_port|event_beside|event_cli|event_pingpong|event_set_beside|event_wakes_x|hotpath_bench|finished_apc|multiple_beside|mutex_beside|process_event|pulse_event|semaphore_beside|served_semaphore|waits_and_alerts|timeout_waits|shared_wait|shared_infinite_wait|suspend_terminate)'
 status=0
 RAVEN_TRACE_WAITS=1 ctest --test-dir "${BUILD}" -R "${tests}" -E '_table' -j 2 --timeout 600 \
     --output-on-failure --output-junit "${BUILD}/junit-ntsync.xml" || status=1
