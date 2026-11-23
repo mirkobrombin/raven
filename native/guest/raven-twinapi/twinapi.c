@@ -27,6 +27,7 @@
 #include <windows.h>
 #include <winstring.h>
 #include <activation.h>
+#include <appmodel.h>
 #include <iphlpapi.h>
 
 #define ALLOC(size) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size))
@@ -46,6 +47,7 @@ static const IID iid_language2 = {0x6a47e5b5, 0xd94d, 0x4886, {0xa4, 0x04, 0xa5,
 static const IID iid_language_factory = {0x9b0252ac, 0x0c27, 0x44f8, {0xb7, 0x92, 0x97, 0x93, 0xfb, 0x66, 0xc6, 0x3e}};
 static const IID iid_language_statics = {0xb23cd557, 0x0865, 0x46d4, {0x89, 0xb8, 0xd5, 0x9b, 0xe8, 0x99, 0x0f, 0x0d}};
 static const IID iid_language_statics2 = {0x30199f6e, 0x914b, 0x4b2a, {0x9d, 0x6e, 0xe3, 0xb0, 0xe2, 0x7d, 0xbe, 0x4f}};
+static const IID iid_application_languages = {0x75b40847, 0x0a4c, 0x4a92, {0x95, 0x65, 0xfd, 0x63, 0xc9, 0x5f, 0x7a, 0xed}};
 static const IID iid_retail_info = {0x0712c6b8, 0x8b92, 0x4f2a, {0x84, 0x99, 0x03, 0x1f, 0x17, 0x98, 0xd6, 0xef}};
 static const IID iid_shared_mode = {0x893df40e, 0xcad6, 0x4d50, {0x8c, 0x49, 0x6f, 0xcf, 0xc0, 0x3e, 0xdb, 0x29}};
 static const IID iid_shared_mode2 = {0x608988a4, 0xccf1, 0x4ee8, {0xa5, 0xe2, 0xfd, 0x6a, 0x1d, 0x0c, 0xfa, 0xc8}};
@@ -609,9 +611,14 @@ static HRESULT collection(const struct kind *view, const struct kind *iterator, 
 	self->iterator = iterator;
 	self->strings = strings;
 	for (; self->count < count && self->count < MOST_ITEMS; ++self->count) {
-		if (strings)
-			WindowsDuplicateString(items[self->count], (HSTRING *)&self->items[self->count]);
-		else
+		if (strings) {
+			const HRESULT hr = WindowsDuplicateString(items[self->count], (HSTRING *)&self->items[self->count]);
+			if (FAILED(hr)) {
+				release(*out);
+				*out = NULL;
+				return hr;
+			}
+		} else
 			reference(self->items[self->count] = items[self->count]);
 	}
 	return S_OK;
@@ -1703,6 +1710,71 @@ static const struct kind language_factory_kind = {"Language", L"Windows.Globaliz
 static struct object language_factory = {{language_factory_table.slots, language_create_table.slots, language_statics_table.slots,
 	language_statics2_table.slots}, &language_factory_kind, 1};
 
+static HRESULT WINAPI app_language_override(void *iface, HSTRING *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	return missing("ApplicationLanguages.PrimaryLanguageOverride");
+}
+
+static HRESULT WINAPI app_set_language_override(void *iface, HSTRING tag)
+{
+	return missing("ApplicationLanguages.put_PrimaryLanguageOverride");
+}
+
+static HRESULT WINAPI app_languages(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	UINT32 name_length = 0;
+	LONG status = GetCurrentPackageFullName(&name_length, NULL);
+	if (status == ERROR_INSUFFICIENT_BUFFER)
+		return missing("ApplicationLanguages.Languages for a packaged process");
+	if (status != APPMODEL_ERROR_NO_PACKAGE)
+		return status ? HRESULT_FROM_WIN32(status) : E_UNEXPECTED;
+
+	WCHAR names[MOST_ITEMS * LOCALE_NAME_MAX_LENGTH + 1];
+	ULONG count = 0, size = ARRAYSIZE(names);
+	if (!GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, names, &size))
+		return HRESULT_FROM_WIN32(GetLastError());
+	if (count > MOST_ITEMS || size < 2 || size > ARRAYSIZE(names) || names[size - 1] || names[size - 2])
+		return E_UNEXPECTED;
+
+	void *items[MOST_ITEMS];
+	HSTRING_HEADER headers[MOST_ITEMS];
+	const WCHAR *name = names, *end = names + size - 1;
+	for (ULONG index = 0; index < count; ++index) {
+		if (name >= end || !*name)
+			return E_UNEXPECTED;
+		const int length = lstrlenW(name);
+		HSTRING item;
+		const HRESULT hr = WindowsCreateStringReference(name, length, &headers[index], &item);
+		if (FAILED(hr))
+			return hr;
+		items[index] = item;
+		name += length + 1;
+	}
+	if (name != end)
+		return E_UNEXPECTED;
+	return collection(&string_view, &string_iterator, vector_table.slots, TRUE, items, count, out);
+}
+
+static HRESULT WINAPI app_manifest_languages(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	return missing("ApplicationLanguages.ManifestLanguages");
+}
+
+TABLE(app_languages_statics_table, 1, INSPECTABLE, (const void *)app_language_override, (const void *)app_set_language_override,
+	(const void *)app_languages, (const void *)app_manifest_languages);
+static const struct face_iid app_languages_iids[] = {{&iid_factory, 0}, {&iid_application_languages, 1}, {NULL, 0}};
+static const struct kind app_languages_kind = {"ApplicationLanguages", L"Windows.Globalization.ApplicationLanguages", app_languages_iids, NULL};
+static struct object app_languages_factory = {{language_factory_table.slots, app_languages_statics_table.slots}, &app_languages_kind, 1};
+
 /* Windows.Foundation.Metadata.ApiInformation. A type is present when a runtime class of that name is registered for activation. */
 static boolean registered(HSTRING type)
 {
@@ -1745,8 +1817,8 @@ static const struct face_iid api_iids[] = {{&iid_factory, 0}, {&iid_api_informat
 static const struct kind api_kind = {"ApiInformation", L"Windows.Foundation.Metadata.ApiInformation", api_iids, NULL};
 static struct object api_information = {{api_factory_table.slots, api_statics_table.slots}, &api_kind, 1};
 
-static struct object *const classes[] = {&language_factory, &retail_info, &shared_mode, &analytics_info, &network_information, &online_id, &ticket_request_factory, &web_core,
-	&core_application, &api_information};
+static struct object *const classes[] = {&language_factory, &app_languages_factory, &retail_info, &shared_mode, &analytics_info, &network_information,
+	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

@@ -254,6 +254,7 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.UI.Composition.Compositor", u"dcomp.dll"},
 		{u"Windows.UI.Composition.Core.CompositorController", u"dcomp.dll"},
 		{u"Windows.Globalization.Language", u"raven-twinapi.dll"},
+		{u"Windows.Globalization.ApplicationLanguages", u"raven-twinapi.dll"},
 		{u"Windows.System.Profile.RetailInfo", u"raven-twinapi.dll"}, {u"Windows.System.Profile.SharedModeSettings", u"raven-twinapi.dll"},
 		{u"Windows.System.Profile.AnalyticsInfo", u"raven-twinapi.dll"},
 		{u"Windows.Networking.Connectivity.NetworkInformation", u"raven-twinapi.dll"},
