@@ -3734,6 +3734,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endfunction()
         raven_kernel_fixture(kernel-file kernel_files_client.c 0x1b1000000 "-lkernel32")
         raven_kernel_fixture(kernel-ansi kernel_ansi_client.c 0x1b5000000 "-lkernel32")
+        # Names in folders the runtime has read are found without looking at the folder again: the hot path's 20000 lookups check it
+        # a handful of times, and changes made under one spelling are seen under another at once.
+        raven_kernel_fixture(path-case path_case_client.c 0x1b5000000 "-lkernel32")
+        add_test(NAME native_path_case COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/path-case.exe)
+        set_tests_properties(native_path_case PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/path-case-prefix")
+        add_test(NAME native_path_folder_checks COMMAND raven --run-process --execution=native --stdio=inherit --timeout-ms=120000
+            ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe)
+        set_tests_properties(native_path_folder_checks PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "paths: folders checked [0-9]+ times"
+            FAIL_REGULAR_EXPRESSION "paths: folders checked [0-9][0-9][0-9][0-9]+ times;hotpath failed"
+            ENVIRONMENT "RAVEN_TRACE_PATHS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/folder-checks-prefix")
         raven_kernel_fixture(kernel-threads kernel_threads_client.c 0x1b2000000 "-lkernel32")
         raven_kernel_fixture(served-semaphore served_semaphore_client.c 0x1b8000000 "-lkernel32")
         # A run whose threads all wait past its time limit ends at that limit.

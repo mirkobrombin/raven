@@ -7,7 +7,9 @@
 #include "system_exports.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <dirent.h>
 #include <mutex>
@@ -42,9 +44,21 @@ std::u16string strip_namespace(std::u16string_view path)
 // their upper-case spelling while the folder stays as it was: programs ask for files that are not there by the hundred, Office for a
 // library at each click, and each miss read the whole folder. A folder changed in the last two seconds is read again each time, as its
 // time stamp may not have moved for a change made within the same tick.
+// How many times a lookup looked at a folder itself, told at the end with RAVEN_TRACE_PATHS.
+struct FolderChecks {
+	std::atomic<uint64_t> count{0};
+	~FolderChecks()
+	{
+		if (std::getenv("RAVEN_TRACE_PATHS"))
+			std::fprintf(stderr, "paths: folders checked %llu times\n", (unsigned long long)count.load());
+	}
+};
+FolderChecks folder_checks;
+
 std::optional<std::string> case_match(const std::filesystem::path &directory, const std::string &name)
 {
 	std::error_code ignored;
+	folder_checks.count.fetch_add(1, std::memory_order_relaxed);
 	if (std::filesystem::exists(directory / name, ignored))
 		return name;
 	const auto key = [](std::u16string text) {
