@@ -258,11 +258,70 @@ static void running_task()
 	check(result == -1 && error == EINTR, "a wait for a held task that runs on did not read as cut short");
 }
 
+// One thread of a guest that ends leaves the guest's other threads in the agent's hands: only the end of the guest forgets them all.
+static void ended_thread()
+{
+	int ending_pipe[2], staying_pipe[2], go[2];
+	check(pipe(ending_pipe) == 0 && pipe(staying_pipe) == 0 && pipe(go) == 0, "no pipes for a guest of two threads");
+	const pid_t child = fork();
+	check(child >= 0, "cannot start a guest of two threads");
+	if (child == 0) {
+		const auto named = [](int pipe_end) {
+			const pid_t own = pid_t(syscall(SYS_gettid));
+			(void)!write(pipe_end, &own, sizeof own);
+		};
+		std::thread ending([&] {
+			named(ending_pipe[1]);
+			char byte;
+			(void)!read(go[0], &byte, 1);
+		});
+		std::thread staying([&] {
+			named(staying_pipe[1]);
+			pause();
+		});
+		ending.join();
+		pause();
+		_exit(0);
+	}
+	pid_t ending = 0, staying = 0;
+	check(read(ending_pipe[0], &ending, sizeof ending) == sizeof ending && read(staying_pipe[0], &staying, sizeof staying) == sizeof staying,
+		"the guest's threads were not named");
+	std::vector<uint64_t> words(1024);
+	for (const pid_t thread : {ending, staying}) {
+		raven::agent::Task task;
+		task.task = thread;
+		task.group = child;
+		task.process = child;
+		task.block = words.data() + (thread == ending ? 0 : 512);
+		raven::agent::hold(task);
+	}
+	check(write(go[1], "x", 1) == 1, "the thread to end was not told to");
+	const auto waited = [](pid_t thread, int &status) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		pid_t result = -1;
+		do
+			result = raven::agent::wait(thread, &status, 0);
+		while (result == -1 && errno == EINTR && std::chrono::steady_clock::now() < deadline);
+		return result;
+	};
+	int status = 0;
+	const pid_t ended = waited(ending, status);
+	const bool kept = raven::agent::held(staying);
+	const pid_t running = raven::agent::wait(staying, &status, WNOHANG);
+	kill(child, SIGKILL);
+	waitpid(child, &status, 0);
+	raven::agent::release_group(child);
+	check(ended == ending, "the end of a guest thread was not seen");
+	check(kept && running == 0, "the end of one guest thread had the agent forget the guest's other threads");
+	check(!raven::agent::held(staying), "a thread of a guest that ended stayed registered");
+}
+
 int main()
 {
 	try {
 		reaped_task();
 		running_task();
+		ended_thread();
 		block = static_cast<uint64_t *>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
 		check(block != MAP_FAILED, "no block");
 		const auto code = raven::agent::code();
