@@ -6,8 +6,9 @@
 
 /* PNG files of the kinds the format allows, made here with stored deflate blocks and read through the imaging component: each keeps
    the pixel format it was written in, and every pixel and palette entry comes back. A chunk whose checksum is wrong is read as the others
-   are. A 32-bit program reading a picture whose pixels would not fit its address space gets an error instead of a damaged heap. The exit
-   code names the first check that failed: ten for each case, plus the step. */
+   are. So is a picture compressed as literals alone, with a distance code of no codes (RFC 1951, 3.2.7), as some encoders write small
+   palettes. A 32-bit program reading a picture whose pixels would not fit its address space gets an error instead of a damaged heap. The
+   exit code names the first check that failed: ten for each case, plus the step. */
 
 #define PLAIN __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
@@ -17,7 +18,7 @@ typedef struct
 	UINT (*sample)(UINT x, UINT y, UINT channel);
 	const BYTE *palette, *transparency;
 	UINT colors, transparent;
-	BOOL damaged;
+	BOOL damaged, literals;
 } picture;
 
 static BYTE file[65536], raw[32768], packed[40000], pixels[8192], expected[8192];
@@ -126,6 +127,70 @@ PLAIN static UINT zlib_stored(const BYTE *data, UINT size)
 	return at;
 }
 
+/* A zlib stream of one block of fixed lengths (RFC 1951, 3.2.7): literals 0 to 254 of 8 bits, 255 and the end of 9, and one distance
+   code of no bits, which says no distance follows. The lengths are told in the code lengths' own code: 8 in 1 bit, 0 and 9 in 2. */
+static UINT bits_at, bits_held, bits_count;
+
+static void put_bits(UINT value, UINT count)
+{
+	bits_held |= value << bits_count;
+	bits_count += count;
+	while (bits_count >= 8) {
+		packed[bits_at++] = (BYTE)bits_held;
+		bits_held >>= 8;
+		bits_count -= 8;
+	}
+}
+
+/* A Huffman code goes out from its first bit down. */
+static void put_code(UINT code, UINT length)
+{
+	UINT reversed = 0;
+	for (UINT bit = 0; bit < length; ++bit)
+		reversed |= (code >> bit & 1) << (length - 1 - bit);
+	put_bits(reversed, length);
+}
+
+static void put_literal(UINT symbol)
+{
+	if (symbol < 255)
+		put_code(symbol, 8);
+	else
+		put_code(510 + (symbol - 255), 9);
+}
+
+static UINT zlib_literals(const BYTE *data, UINT size)
+{
+	static const UINT order_lengths[7] = {0, 0, 0, 2, 1, 0, 2};
+	UINT a = 1, b = 0;
+	bits_at = bits_held = bits_count = 0;
+	packed[bits_at++] = 0x78;
+	packed[bits_at++] = 0x01;
+	put_bits(1, 1);
+	put_bits(2, 2);
+	put_bits(0, 5);
+	put_bits(0, 5);
+	put_bits(3, 4);
+	for (UINT index = 0; index < 7; ++index)
+		put_bits(order_lengths[index], 3);
+	for (UINT symbol = 0; symbol < 257; ++symbol)
+		put_code(symbol < 255 ? 0 : 3, symbol < 255 ? 1 : 2);
+	put_code(2, 2);
+	for (UINT index = 0; index < size; ++index) {
+		put_literal(data[index]);
+		a = (a + data[index]) % 65521;
+		b = (b + a) % 65521;
+	}
+	put_literal(256);
+	if (bits_count)
+		put_bits(0, 8 - bits_count);
+	packed[bits_at++] = (BYTE)(b >> 8);
+	packed[bits_at++] = (BYTE)b;
+	packed[bits_at++] = (BYTE)(a >> 8);
+	packed[bits_at++] = (BYTE)a;
+	return bits_at;
+}
+
 static void write_png(const picture *p, const BYTE *data, UINT size)
 {
 	static const BYTE signature[8] = {0x89, 'P', 'N', 'G', 13, 10, 26, 10};
@@ -138,7 +203,7 @@ static void write_png(const picture *p, const BYTE *data, UINT size)
 		chunk("PLTE", p->palette, p->colors * 3, FALSE);
 	if (p->transparency)
 		chunk("tRNS", p->transparency, p->transparent, FALSE);
-	chunk("IDAT", packed, zlib_stored(data, size), p->damaged);
+	chunk("IDAT", packed, p->literals ? zlib_literals(data, size) : zlib_stored(data, size), p->damaged);
 	chunk("IEND", NULL, 0, FALSE);
 }
 
@@ -297,6 +362,7 @@ int raven_entry(void)
 		{4, 3, 8, 2, 0, rgb8_sample, NULL, rgb_key, 0, 6, FALSE},
 		{5, 2, 8, 6, 0, rgba8_sample, NULL, NULL, 0, 0, FALSE},
 		{4, 2, 16, 0, 0, gray_alpha16_sample, NULL, gray16_key, 0, 2, FALSE},
+		{16, 16, 8, 3, 0, indexed_sample, palette, alphas, 4, 2, FALSE, TRUE},
 	};
 	IWICImagingFactory *factory = NULL;
 	for (UINT index = 0; index < 256; ++index) {
