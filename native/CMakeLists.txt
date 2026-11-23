@@ -5717,6 +5717,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_composition_x${width} COMMAND raven --run-process --execution=native ${composition_client})
                     set_tests_properties(native_composition_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-x${width}-prefix)
+                    set(shared_visual_client ${CMAKE_CURRENT_BINARY_DIR}/composition-shared-visual${width}.exe)
+                    add_custom_command(OUTPUT ${shared_visual_client}
+                        COMMAND ${composition_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${composition_entry},--no-insert-timestamp
+                            -o ${shared_visual_client} ${LOADER_SOURCES}/composition_shared_visual.c -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/composition_shared_visual.c VERBATIM)
+                    add_custom_target(composition_shared_visual_fixture${width} ALL DEPENDS ${shared_visual_client} composition_component)
+                    add_test(NAME native_composition_shared_visual_x${width} COMMAND raven --run-process --execution=native ${shared_visual_client})
+                    set_tests_properties(native_composition_shared_visual_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/composition-shared-visual-x${width}-prefix)
                 endforeach()
                 # A swap chain of half floats shown by a visual, through DXVK over a Vulkan driver.
                 set(composition_swapchain_client ${CMAKE_CURRENT_BINARY_DIR}/composition-swapchain64.exe)
