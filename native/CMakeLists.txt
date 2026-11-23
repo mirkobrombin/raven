@@ -6230,14 +6230,27 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         $<TARGET_FILE:raven> --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe)
                     set_tests_properties(native_x86_vulkan_compute PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 endif()
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe
+                    COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe ${LOADER_SOURCES}/x86_load_client.c -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/x86_load_client.c VERBATIM)
+                add_custom_target(x86_load_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-missing-import.dll
+                    COMMAND ${RAVEN_DLLTOOL32} -d ${LOADER_SOURCES}/missing_dependency.def
+                        -l ${CMAKE_CURRENT_BINARY_DIR}/x86-missing-dependency.a
+                    COMMAND ${RAVEN_MINGW32} -shared -nostdlib -O2 -Wl,--entry,0,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86-missing-import.dll ${LOADER_SOURCES}/missing_import.c
+                        ${CMAKE_CURRENT_BINARY_DIR}/x86-missing-dependency.a
+                    DEPENDS ${LOADER_SOURCES}/missing_dependency.def ${LOADER_SOURCES}/missing_import.c VERBATIM)
+                add_custom_target(x86_missing_import_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-missing-import.dll)
+                string(REPLACE "/" "\\" X86_MISSING_IMPORT "Z:${CMAKE_CURRENT_BINARY_DIR}/x86-missing-import.dll")
+                add_test(NAME native_x86_missing_import_trace COMMAND raven --run-process --execution=native
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe -- ${X86_MISSING_IMPORT})
+                set_tests_properties(native_x86_missing_import_trace PROPERTIES TIMEOUT 20 ENVIRONMENT RAVEN_TRACE_X86=1
+                    PASS_REGULAR_EXPRESSION "raven_missing_dependency[.]dll!RavenMissingImport")
                 set(RAVEN_DXVK_PE32_DIR "" CACHE PATH "Directory holding the 32-bit DXVK libraries (d3d9.dll)")
                 if(RAVEN_DXVK_PE32_DIR AND EXISTS "${RAVEN_DXVK_PE32_DIR}/d3d9.dll")
-                    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe
-                        COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
-                            -Wl,--entry,_raven_entry,--no-insert-timestamp
-                            -o ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe ${LOADER_SOURCES}/x86_load_client.c -lkernel32
-                        DEPENDS ${LOADER_SOURCES}/x86_load_client.c VERBATIM)
-                    add_custom_target(x86_load_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe)
                     string(REPLACE "/" "\\" X86_DXVK_D3D9 "Z:${RAVEN_DXVK_PE32_DIR}/d3d9.dll")
                     add_test(NAME native_x86_dxvk_d3d9_load COMMAND raven --run-process --execution=native
                         ${CMAKE_CURRENT_BINARY_DIR}/x86-load-client.exe -- ${X86_DXVK_D3D9})
