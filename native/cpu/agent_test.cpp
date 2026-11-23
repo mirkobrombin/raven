@@ -316,9 +316,50 @@ static void ended_thread()
 	check(!raven::agent::held(staying), "a thread of a guest that ended stayed registered");
 }
 
+// A held task whose stop was read already has nothing more to report until it goes on, as a traced one: a wait that does not sleep
+// finds nothing, one that sleeps comes back cut short now and then, and the task's end still reads as its end.
+static void stopped_task()
+{
+	const pid_t child = fork();
+	check(child >= 0, "cannot start a task to stop");
+	if (child == 0) {
+		pause();
+		_exit(0);
+	}
+	std::vector<uint64_t> words(512);
+	raven::agent::Task task;
+	task.task = child;
+	task.group = child;
+	task.process = child;
+	task.block = words.data();
+	raven::agent::hold(task);
+	words[raven::agent::signal] = SIGTRAP;
+	__atomic_store_n(reinterpret_cast<uint32_t *>(&words[raven::agent::state]), raven::agent::posted, __ATOMIC_RELEASE);
+	int status = 0;
+	const pid_t stop = raven::agent::wait(child, &status, 0);
+	const bool trapped = stop == child && WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP;
+	const pid_t polled = raven::agent::wait(child, &status, WNOHANG);
+	const pid_t slept = raven::agent::wait(child, &status, 0);
+	const int error = errno;
+	kill(child, SIGKILL);
+	pid_t ended = -1;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	do
+		ended = raven::agent::wait(child, &status, 0);
+	while (ended == -1 && errno == EINTR && std::chrono::steady_clock::now() < deadline);
+	raven::agent::release_group(child);
+	if (ended != child)
+		waitpid(child, &status, 0);
+	check(trapped, "a held task's stop did not read as its signal");
+	check(polled == 0, "a held task whose stop was read already did not read as having nothing to report");
+	check(slept == -1 && error == EINTR, "a wait for a held task whose stop was read already did not come back cut short");
+	check(ended == child && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL, "a held task killed while stopped did not read as killed");
+}
+
 int main()
 {
 	try {
+		stopped_task();
 		reaped_task();
 		running_task();
 		ended_thread();
