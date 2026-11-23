@@ -111,5 +111,15 @@ int raven_entry(void)
 		state = WaitForMultipleObjects(1, &overlapped.hEvent, FALSE, 0);
 	CHECK(24, state == WAIT_OBJECT_0 && GetOverlappedResult(server, &overlapped, &count, FALSE) && count == 4 && buffer[0] == 'p');
 	CHECK(25, CloseHandle(client) && CloseHandle(server) && CloseHandle(overlapped.hEvent) && DestroyWindow(root));
+
+	HWND hidden = CreateWindowExW(0, type.lpszClassName, L"hidden", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+		CW_USEDEFAULT, SW_HIDE, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
+	CHECK(27, hidden);
+	CHECK(28, !IsWindowVisible(hidden) && !(GetWindowLongW(hidden, GWL_STYLE) & WS_VISIBLE));
+	CHECK(29, !ShowWindow(hidden, SW_SHOW) && IsWindowVisible(hidden) && DestroyWindow(hidden));
+	HWND maximized = CreateWindowExW(0, type.lpszClassName, L"maximized", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+		CW_USEDEFAULT, SW_SHOWMAXIMIZED, CW_USEDEFAULT, CW_USEDEFAULT, NULL, NULL, NULL, NULL);
+	CHECK(30, maximized && IsWindowVisible(maximized) && (GetWindowLongW(maximized, GWL_STYLE) & WS_MAXIMIZE));
+	CHECK(31, DestroyWindow(maximized));
 	return 0;
 }
