@@ -89,13 +89,19 @@ public:
 	// Runs the handler for an API trap; false when no handler is registered under this name.
 	// For a 32-bit caller, the pseudo handles -1 and -2 arrive sign-extended, as the handlers of a 64-bit process expect them.
 	bool dispatch(NativeProcess &process, NativeEnvironment &environment, std::string_view name, bool widen_handles = false) const;
+	// The handlers added while this is set act on kernel objects alone (waits, threads, synchronization): their calls are answered
+	// without the desktop lock, which they take themselves where they reach a thread's message queue.
+	void set_kernel(bool kernel) { adding_kernel = kernel; }
+	bool kernel(std::string_view name) const;
 
 private:
 	struct Entry {
 		uint32_t arguments;
 		ApiHandler handler;
+		bool kernel = false;
 	};
 	std::map<std::string, Entry> entries;
+	bool adding_kernel = false;
 };
 
 }

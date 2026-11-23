@@ -2744,9 +2744,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			// A Vulkan call takes the desktop lock itself where it reaches a window (see set_surface_source): it waits for the device
 			// and for the bridge's own threads, which take the lock too, so it neither holds the lock nor takes it for the desktop's
 			// bookkeeping, which the next call that reaches the desktop does.
-			const bool graphics_call = api_name.starts_with("vk");
+			// A wait, a thread or a synchronization object is the kernel's alone: holding the desktop through it would keep the threads
+			// that draw beside the turn waiting (see ApiRegistry::set_kernel).
+			const bool graphics_call = api_name.starts_with("vk"), kernel_call = api_registry.kernel(api_name);
 			std::optional<DesktopScope> desktop_scope;
-			if (!graphics_call) {
+			if (!graphics_call && !kernel_call) {
 				desktop_scope.emplace();
 				windows.apply_dc_log();
 				windows.take_deferred([&desktop](uint32_t operation, uint64_t handle) { desktop.apply_deferred(operation, handle); });
@@ -3459,10 +3461,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		const ServedThreadScope thread_scope(environment, process.serving_teb());
 		api_in_progress = found->second.c_str();
 		// A Vulkan call leaves the desktop alone, as in the trap path.
-		const bool graphics_call = found->second.starts_with("vk");
+		const bool graphics_call = found->second.starts_with("vk"), kernel_call = api_registry.kernel(found->second);
 		std::optional<DesktopScope> desktop_scope;
 		std::optional<WindowCallScope> window_scope;
-		if (!graphics_call) {
+		if (!graphics_call && !kernel_call) {
 			desktop_scope.emplace();
 			// Deferred releases wait for a stop of the guest: releasing a DIB section unmaps guest memory, which a running guest cannot
 			// have done to it.
@@ -3570,9 +3572,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_shader_service(api_registry, kernel);
 	register_audio_service(api_registry, kernel);
 	register_canvas_service(api_registry, kernel);
+	api_registry.set_kernel(true);
 	register_sync_api(api_registry, kernel);
 	register_thread_api(api_registry, kernel);
 	NativeObjectAPI::register_served(api_registry, kernel.objects, kernel.threads);
+	api_registry.set_kernel(false);
 	register_text_api(api_registry, kernel);
 	register_console_api(api_registry, kernel);
 	register_memory_api(api_registry, kernel);
