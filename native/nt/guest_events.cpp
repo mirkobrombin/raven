@@ -66,6 +66,51 @@ void GuestEvents::withdraw(uint64_t handle)
 		empty(index);
 }
 
+void GuestEvents::withdraw_event(const void *event)
+{
+	std::lock_guard held(lock);
+	for (const size_t index : std::vector<size_t>(used))
+		if (owners[index] == event) {
+			++tickets[index];
+			empty(index);
+		}
+}
+
+void GuestEvents::flush()
+{
+	std::vector<int> closed;
+	{
+		std::lock_guard held(lock);
+		closed.swap(closing);
+	}
+	for (const int descriptor : closed)
+		drop(descriptor);
+}
+
+void GuestEvents::hold()
+{
+	std::lock_guard held(lock);
+	if (holders++)
+		return;
+	// The guest counts itself among a slot's users before it looks at the header: once the header is set, a guest that did not see it
+	// is among the users of its slot, and its ioctl is over when they are none.
+	std::atomic_ref(word(barred)).store(1, std::memory_order_seq_cst);
+	for (const size_t index : used)
+		wait_unused(index);
+}
+
+void GuestEvents::release()
+{
+	std::lock_guard held(lock);
+	if (holders && !--holders)
+		std::atomic_ref(word(barred)).store(0, std::memory_order_release);
+}
+
+uint64_t GuestEvents::made_by_guest() const
+{
+	return std::atomic_ref(word(made)).load(std::memory_order_relaxed);
+}
+
 void GuestEvents::empty(size_t index)
 {
 	std::atomic_ref(word(header + index * slot_size + slot_handle)).store(0, std::memory_order_seq_cst);
