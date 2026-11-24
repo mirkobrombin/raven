@@ -532,6 +532,13 @@ impl Table {
     pub fn query(&self, object: ObjectId) -> Result<u32, Error> {
         either!(self, waits => waits.query(object))
     }
+    /// An event's own ntsync descriptor (see ntsync::Waits::event_descriptor); the table kept in this process has none to give.
+    pub fn event_descriptor(&self, object: ObjectId) -> Result<std::os::fd::OwnedFd, Error> {
+        match self {
+            Self::Kernel(waits) => waits.event_descriptor(object),
+            Self::Locked(_) => Err(Error::Invalid),
+        }
+    }
     pub fn release_mutex(&self, object: ObjectId, thread: ThreadId) -> Result<u32, Error> {
         either!(self, waits => waits.release_mutex(object, thread))
     }

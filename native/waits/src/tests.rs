@@ -380,3 +380,22 @@ fn a_lined_up_wait_ends_with_its_thread() {
     assert_eq!(signal.load(std::sync::atomic::Ordering::Acquire), 1);
     assert_eq!(waits.leave(1), Some(Outcome::Ended));
 }
+
+/// An event's own descriptor works the event in the kernel as the table does: the guest sets and resets events with it.
+#[test]
+fn an_event_descriptor_works_the_event() {
+    let waits = waits();
+    let event = waits.create(Kind::ManualEvent, 0).unwrap();
+    let mutex = waits.create(Kind::Mutex, 0).unwrap();
+    assert!(waits.event_descriptor(mutex).is_err());
+    if !waits.kernel() {
+        assert!(waits.event_descriptor(event).is_err());
+        return;
+    }
+    let descriptor = waits.event_descriptor(event).unwrap();
+    let mut previous = 7u32;
+    ntsync::control(std::os::fd::AsRawFd::as_raw_fd(&descriptor), ntsync::EVENT_SET, &mut previous).unwrap();
+    assert_eq!(previous, 0);
+    drop(descriptor);
+    assert_eq!(waits.reset(event).unwrap(), 1);
+}

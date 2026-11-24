@@ -10,7 +10,7 @@
 use crate::{Error, Kind, ObjectId, Outcome, ThreadId};
 use std::collections::HashMap;
 use std::fs::File;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ const CREATE_MUTEX: u64 = ioc(WRITE, 0x84, 8);
 const MUTEX_UNLOCK: u64 = ioc(READ | WRITE, 0x85, 8);
 const MUTEX_KILL: u64 = ioc(WRITE, 0x86, 4);
 const CREATE_EVENT: u64 = ioc(WRITE, 0x87, 8);
-const EVENT_SET: u64 = ioc(READ, 0x88, 4);
+pub(crate) const EVENT_SET: u64 = ioc(READ, 0x88, 4);
 const EVENT_RESET: u64 = ioc(READ, 0x89, 4);
 const EVENT_PULSE: u64 = ioc(READ, 0x8a, 4);
 const SEM_READ: u64 = ioc(READ, 0x8b, 8);
@@ -73,7 +73,7 @@ extern "C" {
 }
 
 /// An ioctl on `descriptor` with `argument`: its result, or the error number.
-fn control<T>(descriptor: RawFd, request: u64, argument: &mut T) -> Result<i32, i32> {
+pub(crate) fn control<T>(descriptor: RawFd, request: u64, argument: &mut T) -> Result<i32, i32> {
     // SAFETY: each request is given the structure of the size the request number encodes.
     let result = unsafe { ioctl(descriptor, request, argument as *mut T) };
     if result < 0 {
@@ -234,6 +234,13 @@ impl Waits {
 
     pub fn set(&self, object: ObjectId) -> Result<u32, Error> {
         self.event_call(object, EVENT_SET)
+    }
+
+    /// A descriptor of its own for an event, which the caller closes: a guest sets and resets the event with its own ioctls on it.
+    pub fn event_descriptor(&self, object: ObjectId) -> Result<OwnedFd, Error> {
+        let descriptor = Self::event(&self.lock(), object)?;
+        // Safety: the table keeps the descriptor open while its lock is held, and the clone is made under it.
+        unsafe { BorrowedFd::borrow_raw(descriptor) }.try_clone_to_owned().map_err(|_| Error::Invalid)
     }
 
     pub fn reset(&self, object: ObjectId) -> Result<u32, Error> {

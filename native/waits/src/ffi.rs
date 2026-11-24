@@ -55,6 +55,15 @@ pub unsafe extern "C" fn raven_waits_kernel(waits: *const Table) -> u32 {
     u32::from((*waits).kernel())
 }
 
+/// A new descriptor of an event's ntsync object, which the caller closes, or -1: no such event, or no /dev/ntsync.
+///
+/// # Safety
+/// `waits` came from raven_waits_new.
+#[no_mangle]
+pub unsafe extern "C" fn raven_waits_event_descriptor(waits: *const Table, object: u32) -> i32 {
+    (*waits).event_descriptor(object).map_or(-1, std::os::fd::IntoRawFd::into_raw_fd)
+}
+
 /// # Safety
 /// `waits` came from raven_waits_new and no other call uses it any more.
 #[no_mangle]

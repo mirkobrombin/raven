@@ -27,6 +27,8 @@ uint32_t raven_waits_reset(const RavenWaits *waits, uint32_t object, uint32_t *p
 uint32_t raven_waits_pulse(const RavenWaits *waits, uint32_t object, uint32_t *previous, uint32_t *granted);
 uint32_t raven_waits_detach(const RavenWaits *waits, uint32_t object, uint32_t *value, uint32_t *owner, uint32_t *depth);
 uint32_t raven_waits_query(const RavenWaits *waits, uint32_t object, uint32_t *value);
+// A new descriptor of an event's ntsync object, which the caller closes, or -1: no such event, or no /dev/ntsync.
+int32_t raven_waits_event_descriptor(const RavenWaits *waits, uint32_t object);
 uint32_t raven_waits_release_mutex(const RavenWaits *waits, uint32_t object, uint32_t thread, uint32_t *previous);
 uint32_t raven_waits_release_semaphore(const RavenWaits *waits, uint32_t object, uint32_t count, uint32_t *previous);
 uint32_t raven_waits_wait(const RavenWaits *waits, uint32_t thread, const uint32_t *objects, uint32_t count, uint32_t all,
