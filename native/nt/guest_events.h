@@ -58,6 +58,8 @@ public:
 	// Why an offer did not reach the guest, counted and told with the rest: the handle's access, the event held back from the guest,
 	// its slot taken by another handle, no descriptor of its object, the guest not taking it, the handle changed meanwhile.
 	enum class Refusal { access, held, taken, descriptor, given, changed, count };
+	// Sets answered beside the turn that were left to the turn for an offer, and offers the runtime looked at.
+	std::atomic<uint64_t> left_to_turn{0}, looked_at{0};
 	void refused(Refusal why) { refusals[size_t(why)].fetch_add(1, std::memory_order_relaxed); }
 	// The process is going and ends its threads wherever they are: no set of the guest counts any more, and nothing waits for a slot's
 	// users, among whom may be a thread that was ended there.

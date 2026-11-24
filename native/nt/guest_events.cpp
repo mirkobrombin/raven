@@ -27,10 +27,12 @@ void GuestEvents::activate(std::unique_ptr<GuestEvents> events)
 	if (process_events && std::getenv("RAVEN_TRACE_GUEST_EVENTS")) {
 		const auto &refusals = process_events->refusals;
 		std::fprintf(stderr, "guest events: %llu sets and resets made by the guest, %llu handles offered, refused: access %llu held %llu "
-			"taken %llu descriptor %llu given %llu changed %llu\n", (unsigned long long)process_events->made_by_guest(),
+			"taken %llu descriptor %llu given %llu changed %llu, left to the turn %llu, looked at %llu\n",
+			(unsigned long long)process_events->made_by_guest(),
 			(unsigned long long)process_events->handles_offered(), (unsigned long long)refusals[0].load(), (unsigned long long)refusals[1].load(),
 			(unsigned long long)refusals[2].load(), (unsigned long long)refusals[3].load(), (unsigned long long)refusals[4].load(),
-			(unsigned long long)refusals[5].load());
+			(unsigned long long)refusals[5].load(), (unsigned long long)process_events->left_to_turn.load(),
+			(unsigned long long)process_events->looked_at.load());
 	}
 	process_active.store(events.get(), std::memory_order_release);
 	process_events = std::move(events);

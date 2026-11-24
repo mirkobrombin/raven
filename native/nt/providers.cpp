@@ -3549,8 +3549,12 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				return wait_table(std::span(&object, 1), false, uint32_t(arguments[1]));
 			}
 			const auto event = kernel_objects.event_alone(arguments[0]);
-			if (!event || event->offer_due())
+			if (!event)
 				return std::nullopt;
+			if (event->offer_due()) {
+				GuestEvents::active()->left_to_turn.fetch_add(1, std::memory_order_relaxed);
+				return std::nullopt;
+			}
 			// An event outside the table (one shared with other processes) has its waiters on its word or in the runtime. One a thread
 			// waits for outside the runtime is set here too unless the process has one processor, where the turn hands over to the thread.
 			const uint32_t object = event->table_object();

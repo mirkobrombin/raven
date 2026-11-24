@@ -351,6 +351,7 @@ void NativeObjects::offer_to_guest(uint64_t handle)
 	auto *const events = GuestEvents::active();
 	if (!events)
 		return;
+	events->looked_at.fetch_add(1, std::memory_order_relaxed);
 	std::shared_ptr<EventObject> event;
 	std::optional<uint64_t> ticket;
 	{
