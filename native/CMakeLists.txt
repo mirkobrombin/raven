@@ -3858,6 +3858,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_suspend_waiting_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         set_property(TEST native_suspend_waiting_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # A thread suspended before it first ran keeps the context it starts from (suspend_new_thread_client.c).
+        raven_kernel_fixture(suspend-new-thread suspend_new_thread_client.c 0x1ef000000 "-lkernel32")
+        foreach(mode default parallel table)
+            add_test(NAME native_suspend_new_thread_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/suspend-new-thread.exe)
+            set_tests_properties(native_suspend_new_thread_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/suspend-new-thread-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_suspend_new_thread_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        set_property(TEST native_suspend_new_thread_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         # The program the comparison with Wine times (scripts/benchmark-wine.py hotpath) runs to its end here, so the figures it prints come
         # from a run that did all its work.
         add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hotpath.exe
