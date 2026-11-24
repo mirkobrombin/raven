@@ -25,7 +25,8 @@ void GuestEvents::activate(std::unique_ptr<GuestEvents> events)
 {
 	// How many sets and resets the guest made itself is told as its table goes, with RAVEN_TRACE_GUEST_EVENTS.
 	if (process_events && std::getenv("RAVEN_TRACE_GUEST_EVENTS"))
-		std::fprintf(stderr, "guest events: %llu sets and resets made by the guest\n", (unsigned long long)process_events->made_by_guest());
+		std::fprintf(stderr, "guest events: %llu sets and resets made by the guest, %llu handles offered\n",
+			(unsigned long long)process_events->made_by_guest(), (unsigned long long)process_events->handles_offered());
 	process_active.store(events.get(), std::memory_order_release);
 	process_events = std::move(events);
 }
@@ -55,6 +56,7 @@ bool GuestEvents::offer(uint64_t handle, const void *event, int descriptor, uint
 			holder.store(handle, std::memory_order_release);
 			owners[index] = event;
 			used.push_back(index);
+			offered.fetch_add(1, std::memory_order_relaxed);
 			return true;
 		}
 	}

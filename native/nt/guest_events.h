@@ -53,6 +53,8 @@ public:
 	void hold();
 	void release();
 	uint64_t made_by_guest() const;
+	// How many handles the guest was given, told with what it made.
+	uint64_t handles_offered() const { return offered.load(std::memory_order_relaxed); }
 	// The process is going and ends its threads wherever they are: no set of the guest counts any more, and nothing waits for a slot's
 	// users, among whom may be a thread that was ended there.
 	void shut();
@@ -69,6 +71,7 @@ private:
 	std::vector<int> closing;
 	size_t holders = 0;
 	std::atomic<bool> closing_down{false};
+	std::atomic<uint64_t> offered{0};
 	uint64_t &word(size_t offset) const { return *reinterpret_cast<uint64_t *>(table + offset); }
 	uint8_t *slot(size_t index) const { return table + header + index * slot_size; }
 	void empty(size_t index);

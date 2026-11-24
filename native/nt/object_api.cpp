@@ -151,6 +151,8 @@ bool NativeObjectAPI::dispatch(std::string_view name)
 			else if (signal && !status && threads)
 				threads->hand_over();
 			if (nt && args[1] && !status) { std::array<uint8_t,4> output{}; put(output,0,changed.value,4); process.write_memory(args[1],output); }
+			// The next set or reset of this handle the guest may make itself.
+			if (!status) objects.offer_to_guest(args[0]);
 		} else if (query) {
 			if (uint32_t(args[1])!=0) status=0xc00000bbU;
 			else {
