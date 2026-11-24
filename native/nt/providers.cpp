@@ -1556,6 +1556,18 @@ static std::vector<uint8_t> commit_prelude(int32_t to_pointer, int32_t to_trap)
 
 // Where the served stub behind an export sits: the export itself, or the stub a clock prelude falls back to; for a commit prelude, the
 // breakpoint it falls back to.
+// The block prelude in front of an export, when its code is there: a provider built without guest-side paths keeps a plain or served
+// stub under the same name. The prelude's code is compared past its pointer and before its jump, which differ per export.
+static const std::vector<uint8_t> *placed_block_prelude(std::span<const uint8_t> image, std::string_view module, std::string_view name,
+	uint32_t rva)
+{
+	const auto *prelude = block_prelude(module, name);
+	if (!prelude || prelude->size() < 12 || rva > image.size() || image.size() - rva < prelude->size() ||
+		!std::equal(prelude->begin() + 7, prelude->end() - 4, image.begin() + rva + 7))
+		return nullptr;
+	return prelude;
+}
+
 static uint32_t served_stub_rva(std::span<const uint8_t> image, std::string_view module, std::string_view name, uint32_t rva)
 {
 	if (queued_arguments(module, name) && rva <= image.size() && image.size() - rva >= queued_prelude_size &&
@@ -1575,7 +1587,7 @@ static uint32_t served_stub_rva(std::span<const uint8_t> image, std::string_view
 		std::memcpy(&relative, image.data() + rva + served_stub::answer_stub() - 4, 4);
 		return uint32_t(int64_t(rva) + served_stub::answer_stub() + relative);
 	}
-	if (const auto *prelude = block_prelude(module, name)) {
+	if (const auto *prelude = placed_block_prelude(image, module, name, rva)) {
 		int32_t relative = 0;
 		std::memcpy(&relative, image.data() + rva + prelude->size() - 4, 4);
 		return uint32_t(int64_t(rva) + prelude->size() + relative);
@@ -2076,7 +2088,7 @@ static void start_guest_events(NativeProcess &process, ModuleSet &modules, std::
 		const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
 		for (const auto &symbol : module->exports)
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && guest_event_api(module_name, symbol.names.at(0)) &&
-				served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address) {
+				placed_block_prelude(module->loaded.data(), module_name, symbol.names.at(0), symbol.address)) {
 				auto image = module->loaded.data();
 				int32_t displacement = 0;
 				std::memcpy(&displacement, image.data() + symbol.address + 3, 4);
@@ -3059,7 +3071,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
 		for (const auto &symbol : module->exports) {
 			// The clock and the tick counts only read calibration; their pointers are safe while other threads run.
-			const auto *prelude = symbol.address && !symbol.names.empty() && symbol.forwarder.empty() ? block_prelude(module_name, symbol.names.at(0)) : nullptr;
+			const auto *prelude = symbol.address && !symbol.names.empty() && symbol.forwarder.empty() ?
+				placed_block_prelude(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) : nullptr;
 			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && !guest_event_api(module_name, symbol.names.at(0)) &&
 				(guest_clock_api(module_name, symbol.names.at(0)) || prelude == &tick_prelude() || (!process.parallel() && prelude) ||
 					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address)) ||
@@ -3176,7 +3189,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && (module_name == "user32.dll" || module_name == "ntdll.dll" ||
 						(module_name == "gdi32.dll" && (symbol.names.at(0) == "RectInRegion" ||
 						symbol.names.at(0) == "PtInRegion" || symbol.names.at(0) == "GetRgnBox"))))
-					if (const auto *prelude = block_prelude(module_name, symbol.names.at(0)); prelude && prelude != &screen_release_dc_prelude() &&
+					if (const auto *prelude = placed_block_prelude(module->loaded.data(), module_name, symbol.names.at(0), symbol.address);
+						prelude && prelude != &screen_release_dc_prelude() &&
 						served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address)
 						for (uint64_t piece = 0; piece < prelude->size(); piece += served_trap)
 							served_stubs.push_back(module->loaded.base() + symbol.address + piece);
