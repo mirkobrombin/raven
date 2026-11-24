@@ -41,8 +41,9 @@ public:
 	// Holds the event back from the guest while the runtime looks at a wait for it by itself, and lets it go again.
 	void hold_from_guest();
 	void give_back_to_guest();
-	// Whether the event was offered to the guest once already (NativeObjects::offer_to_guest): a set answered beside the turn, which
-	// cannot hand the guest a descriptor, leaves the first one to the turn, which offers it.
+	// Whether the event was offered to the guest already (NativeObjects::offer_to_guest): a set answered beside the turn, which cannot
+	// hand the guest a descriptor, leaves the first one to the turn, which offers it. An event held back meanwhile is offered again once
+	// let go (give_back_to_guest).
 	bool offer_due() const { return GuestEvents::active() && !offer_tried.load(std::memory_order_acquire) && guest_may_work(); }
 	void offering() { offer_tried.store(true, std::memory_order_release); }
 	std::atomic<uint32_t> *wait_word() const override;

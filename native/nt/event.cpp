@@ -211,6 +211,7 @@ void EventObject::give_back_to_guest()
 {
 	if (guest_holds.fetch_sub(1, std::memory_order_acq_rel) != 1)
 		return;
+	offer_tried.store(false, std::memory_order_release);
 	if (auto *const events = GuestEvents::active())
 		events->resume_event(this, [this] { return guest_may_work(); });
 }
