@@ -48,7 +48,9 @@ int raven_entry(void)
 #ifdef __x86_64__
 		CONTEXT context;
 		context.ContextFlags = CONTEXT_CONTROL;
-		if (!GetThreadContext(thread, &context) || !context.Rip || !context.Rsp) return 4;
+		if (!GetThreadContext(thread, &context)) return 4;
+		if (!context.Rip) return 12;
+		if (!context.Rsp) return 13;
 #endif
 		if (ResumeThread(thread) != 1) return 5;
 		Sleep(1);
