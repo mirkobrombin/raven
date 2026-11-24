@@ -2058,6 +2058,56 @@ bool releasing_memory()
 	return releasing.load(std::memory_order_relaxed);
 }
 
+// Starts the events the guest sets and resets itself (guest_events.h) where it can: with the agent's kernel gate, the kernel's ntsync
+// objects, a host thread for each guest thread and more than one processor (on one, the thread a set wakes runs before the setter goes
+// on, which the runtime arranges: see NativeThreads::hand_over_to). The table's address goes where the event preludes read it, among
+// `places`, which are cleared when the process ends. RAVEN_GUEST_EVENTS=0 leaves every set to the runtime.
+static void start_guest_events(NativeProcess &process, ModuleSet &modules, std::vector<uint8_t *> &places)
+{
+	const char *const wanted = std::getenv("RAVEN_GUEST_EVENTS");
+	if ((wanted && std::string_view(wanted) == "0") || !process.parallel() || !process.kernel_gate() || !raven_waits_kernel(kernel_waits()) ||
+		NativeThreads::one_processor())
+		return;
+	std::vector<NativeProcess::GuestWindow> windows;
+	std::vector<uint8_t *> pointers;
+	for (const auto &[module_key, module] : modules.all()) {
+		if (!module->runtime_api)
+			continue;
+		const std::string_view module_name = module_key.starts_with("system32-") ? std::string_view(module_key).substr(9) : std::string_view(module_key);
+		for (const auto &symbol : module->exports)
+			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && guest_event_api(module_name, symbol.names.at(0)) &&
+				served_stub_rva(module->loaded.data(), module_name, symbol.names.at(0), symbol.address) != symbol.address) {
+				auto image = module->loaded.data();
+				int32_t displacement = 0;
+				std::memcpy(&displacement, image.data() + symbol.address + 3, 4);
+				pointers.push_back(image.data() + symbol.address + 7 + displacement);
+				windows.push_back(event_window(module->loaded.base() + symbol.address, symbol.names.at(0) == "SetEvent"));
+			}
+	}
+	if (windows.empty())
+		return;
+	const int file = memfd_create("raven-guest-events", MFD_CLOEXEC);
+	if (file < 0 || ftruncate(file, off_t(GuestEvents::size)) != 0)
+		throw std::runtime_error("cannot create the guest events table");
+	auto *const table = static_cast<uint8_t *>(mmap(nullptr, GuestEvents::size, PROT_READ | PROT_WRITE, MAP_SHARED, file, 0));
+	if (table == MAP_FAILED)
+		throw std::runtime_error("cannot map the guest events table");
+	const uint64_t guest = process.map_shared(file, GuestEvents::size);
+	close(file);
+	const uint64_t gate = process.kernel_gate();
+	std::memcpy(table + GuestEvents::gate, &gate, 8);
+	NativeProcess::set_guest_windows(std::move(windows), gate, [table, guest](uint64_t slot) {
+		if (slot >= guest + GuestEvents::header && slot < guest + GuestEvents::size)
+			std::atomic_ref(*reinterpret_cast<uint32_t *>(table + (slot - guest) + GuestEvents::slot_users)).fetch_sub(1, std::memory_order_acq_rel);
+	});
+	GuestEvents::activate(std::make_unique<GuestEvents>(table, [&process](int descriptor) { return process.hand_descriptor(descriptor); },
+		[&process](int descriptor) { process.drop_descriptor(descriptor); }));
+	for (auto *const pointer : pointers) {
+		std::memcpy(pointer, &guest, 8);
+		places.push_back(pointer);
+	}
+}
+
 NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	const std::string &bootstrap, std::chrono::milliseconds timeout,
 	std::function<std::optional<ModuleBytes>(std::string_view)> source,
@@ -3131,6 +3181,15 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 						for (uint64_t piece = 0; piece < prelude->size(); piece += served_trap)
 							served_stubs.push_back(module->loaded.base() + symbol.address + piece);
 		}
+	start_guest_events(process, modules, served_pointers.places);
+	// The guest's events leave with the process: the next one in this runtime starts without them.
+	struct GuestEventsEnd {
+		~GuestEventsEnd()
+		{
+			NativeProcess::set_guest_windows({}, 0, {});
+			GuestEvents::activate(nullptr);
+		}
+	} guest_events_end;
 	memory.set_commit_block(served_block);
 	windows.set_screen_block(served_block);
 	static_assert(focus_published == NativeWindows::focus_published && focus_window == NativeWindows::focus_window &&
