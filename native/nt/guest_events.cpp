@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 namespace raven {
@@ -21,6 +23,9 @@ GuestEvents *GuestEvents::active()
 
 void GuestEvents::activate(std::unique_ptr<GuestEvents> events)
 {
+	// How many sets and resets the guest made itself is told as its table goes, with RAVEN_TRACE_GUEST_EVENTS.
+	if (process_events && std::getenv("RAVEN_TRACE_GUEST_EVENTS"))
+		std::fprintf(stderr, "guest events: %llu sets and resets made by the guest\n", (unsigned long long)process_events->made_by_guest());
 	process_active.store(events.get(), std::memory_order_release);
 	process_events = std::move(events);
 }

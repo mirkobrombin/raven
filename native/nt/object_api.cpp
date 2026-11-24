@@ -68,7 +68,11 @@ void NativeObjectAPI::register_served(ApiRegistry &registry, NativeObjects &obje
 			else if (set && !status && !call.process.serving())
 				threads.hand_over();
 			if (status) call.fail(error(status), 0);
-			else call.ret(1);
+			else {
+				call.ret(1);
+				// The next set or reset of this handle the guest may make itself.
+				objects.offer_to_guest(call[0]);
+			}
 		});
 }
 
