@@ -3924,11 +3924,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         set_tests_properties(native_event_handover_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
             FAIL_REGULAR_EXPRESSION "processor times read [0-9][0-9][0-9][0-9]+ times"
             ENVIRONMENT "RAVEN_TRACE_WAITS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-handover-prefix")
-        # With more than one processor a set that wakes a waiting thread needs no turn, so the round trips' sets are answered beside it.
+        # With more than one processor a set that wakes a waiting thread needs no turn, so the round trips' sets are answered beside it. On
+        # /dev/ntsync the guest makes those sets itself (guest_events.h): the runtime's way is checked with the guest leaving them to it.
         add_test(NAME native_event_set_beside_x64 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py
             $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/event-pingpong.exe --always SetEvent)
         set_tests_properties(native_event_set_beside_x64 PROPERTIES TIMEOUT 120
-            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-set-beside-prefix")
+            ENVIRONMENT "RAVEN_GUEST_EVENTS=0;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-set-beside-prefix")
         # A setter goes on while the thread its set woke runs elsewhere, as on Windows (event_setter_goes_on_client.c).
         raven_kernel_fixture(event-setter-goes-on event_setter_goes_on_client.c 0x1f6000000 "-lkernel32")
         add_test(NAME native_event_setter_goes_on_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
