@@ -3,6 +3,7 @@
 #include "kernel_context.h"
 #include "mutex.h"
 #include "event.h"
+#include "guest_events.h"
 #include "kernel_waits.h"
 #include "security_attributes.h"
 #include "shared_file.h"
@@ -18,6 +19,32 @@
 namespace raven {
 
 namespace {
+
+// The events of a wait the scheduler looks at by itself are held back from the guest meanwhile: a set the guest made itself would not
+// tell the scheduler to look again (guest_events.h).
+class EventsHeld {
+public:
+	EventsHeld(NativeObjects &objects, const std::vector<uint64_t> &handles)
+	{
+		if (!GuestEvents::active())
+			return;
+		for (const uint64_t handle : handles)
+			if (auto event = objects.object_as<EventObject>(handle)) {
+				event->hold_from_guest();
+				events.push_back(std::move(event));
+			}
+	}
+	~EventsHeld()
+	{
+		for (const auto &event : events)
+			event->give_back_to_guest();
+	}
+	EventsHeld(const EventsHeld &) = delete;
+	EventsHeld &operator=(const EventsHeld &) = delete;
+
+private:
+	std::vector<std::shared_ptr<EventObject>> events;
+};
 
 constexpr uint64_t current_thread_pseudo = UINT64_MAX - 1;
 constexpr uint32_t wait_timeout = 0x102, wait_failed = UINT32_MAX, wait_io_completion = 0xc0, wait_abandoned = 0x80;
@@ -440,6 +467,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			for (size_t index = 0; index < resolved.size(); ++index)
 				if (const auto due = waited.wakes_at(index); due && (!until || *due < *until))
 					until = due;
+			const EventsHeld held(objects, resolved);
 			threads.block(ready, until);
 		}
 	};
@@ -584,6 +612,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			if (context.present_frames)
 				if (const auto look = context.present_frames(); !until || look < *until) until = look;
 			HostWait waiting;
+			const EventsHeld held(objects, handles);
 			threads.block([&] {
 				if (alertable && !me->apcs.empty()) return true;
 				bool any = false, every = true;
