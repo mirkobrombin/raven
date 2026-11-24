@@ -1,4 +1,5 @@
 #include "event.h"
+#include "guest_events.h"
 #include "kernel_waits.h"
 #include "shared_file.h"
 
@@ -85,7 +86,11 @@ bool EventObject::describe(InheritedHandle &record) const
 			::close(created);
 			return false;
 		}
-		// The event leaves the table with its state; the waits there for it end, to wait again on the shared one.
+		// The event leaves the table with its state; the waits there for it end, to wait again on the shared one. The guest gives it up
+		// first: a set it made on the object afterwards would be lost.
+		guest_gone.store(true, std::memory_order_seq_cst);
+		if (auto *const events = GuestEvents::active())
+			events->withdraw_event(this);
 		if (waits_object) {
 			uint32_t state = 0;
 			raven_waits_detach(kernel_waits(), std::exchange(waits_object, 0), &state, nullptr, nullptr);
@@ -188,6 +193,26 @@ uint32_t EventObject::table_object() const
 {
 	std::lock_guard lock(mutex);
 	return waits_object;
+}
+
+bool EventObject::guest_may_work() const
+{
+	return !guest_gone.load(std::memory_order_acquire) && !guest_holds.load(std::memory_order_acquire);
+}
+
+void EventObject::hold_from_guest()
+{
+	guest_holds.fetch_add(1, std::memory_order_seq_cst);
+	if (auto *const events = GuestEvents::active())
+		events->pause_event(this);
+}
+
+void EventObject::give_back_to_guest()
+{
+	if (guest_holds.fetch_sub(1, std::memory_order_acq_rel) != 1)
+		return;
+	if (auto *const events = GuestEvents::active())
+		events->resume_event(this, [this] { return guest_may_work(); });
 }
 
 void EventObject::pulse_other_processes()

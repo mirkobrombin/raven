@@ -34,6 +34,12 @@ public:
 	bool pulse_table_waiters();
 	// The event in the process's table, or 0 once it is shared with other processes.
 	uint32_t table_object() const;
+	// Whether the guest may set and reset the event itself (guest_events.h): it was never shared and nothing holds it back. Atomics alone,
+	// so the guest events table may ask under its own lock.
+	bool guest_may_work() const;
+	// Holds the event back from the guest while the runtime looks at a wait for it by itself, and lets it go again.
+	void hold_from_guest();
+	void give_back_to_guest();
 	std::atomic<uint32_t> *wait_word() const override;
 
 private:
@@ -49,6 +55,8 @@ private:
 	mutable int descriptor = -1;
 	mutable Shared *shared = nullptr;
 	mutable uint32_t waits_object = 0;
+	std::atomic<uint32_t> guest_holds{0};
+	mutable std::atomic<bool> guest_gone{false};
 	bool is_set() const;
 	bool take(uint32_t thread);
 };
