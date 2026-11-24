@@ -742,8 +742,9 @@ void NativeWindows::publish_traits(uint64_t handle)
 	const auto *window=std::as_const(objects).window(handle);
 	if (!window || window->destroying) return;
 	const auto *definition=objects.window_class(window->class_id);
-	publish_window_traits(handle,{window->style,window->ex_style,definition ? definition->name : std::string(),window->parent,window->visible,
-		to_utf8(window->title)});
+	ForeignWindowTraits traits{window->style,window->ex_style,definition ? definition->name : std::string(),window->parent,window->visible,
+		to_utf8(window->title)};
+	directory([handle,traits=std::move(traits)] { publish_window_traits(handle,traits); });
 }
 
 uint64_t NativeWindows::foreign_dc(uint64_t handle)
@@ -1998,7 +1999,7 @@ bool NativeWindows::destroy(uint64_t handle)
 	window=objects.window(handle);
 	if (!window || window->destroying) throw uint32_t(5);
 	window->destroying=true;window->visible=false;window->style&=~0x10000000U;
-	withdraw_window(handle);
+	directory([handle] { withdraw_window(handle); });
 	// The owner of a closing active window, a dialog's among them, becomes active and takes the keyboard back.
 	if (active==handle) activate(successor(handle));
 	if (focus==handle || objects.is_child(handle,focus)) set_focus(0);
@@ -2409,7 +2410,10 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		}
 		if (child) parent_notify(handle,1);
 		if (!std::as_const(objects).window(handle)) return 0;
-		if (const auto *created=std::as_const(objects).window(handle)) publish_window(handle,uint32_t(std::max(created->width,0)),uint32_t(std::max(created->height,0)));
+		if (const auto *created=std::as_const(objects).window(handle)) {
+			const uint32_t width=uint32_t(std::max(created->width,0)),height=uint32_t(std::max(created->height,0));
+			directory([handle,width,height] { publish_window(handle,width,height); });
+		}
 		publish_traits(handle);
 		if (effective_style & 0x10000000U) {
 			auto *window=objects.window(handle);window->visible=true;objects.update_window_dcs(child ? window->parent : handle);
@@ -3111,16 +3115,30 @@ void NativeWindows::screen_dc_use(std::string_view name, uint64_t first)
 bool NativeWindows::dispatch(std::string_view name)
 {
 	const bool done=dispatch_call(name);
-	unmap_released();
+	finish_call();
 	return done;
 }
 
-void NativeWindows::unmap_released()
+void NativeWindows::finish_call()
 {
-	if (released_surfaces.empty()) return;
+	if (released_surfaces.empty() && directory_work.empty()) return;
 	const auto addresses=std::exchange(released_surfaces,{});
+	const auto work=std::exchange(directory_work,{});
+	const std::lock_guard order(directory_order);
 	const DesktopRelease release;
 	for (const auto address : addresses) process.unmap_memory(address);
+	for (const auto &item : work) item();
+}
+
+void NativeWindows::directory(std::function<void()> work)
+{
+	// Under the shared lock a call changes only objects of its own thread, and nothing waits for it to let go.
+	if (!desktop_lock().held_whole()) {
+		const std::lock_guard order(directory_order);
+		work();
+		return;
+	}
+	directory_work.push_back(std::move(work));
 }
 
 bool NativeWindows::dispatch_call(std::string_view name)

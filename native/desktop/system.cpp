@@ -154,8 +154,10 @@ void NativeWindows::recalculate_client(uint64_t handle,int32_t previous_width,in
 			shift_window(child, client.left - laid_out.first, client.top - laid_out.second);
 	resized = window->width != old_width || window->height != old_height;
 	objects.update_window_dcs(handle);
-	if (resized)
-		publish_window(handle, uint32_t(std::max(window->width, 0)), uint32_t(std::max(window->height, 0)));
+	if (resized) {
+		const uint32_t width = uint32_t(std::max(window->width, 0)), height = uint32_t(std::max(window->height, 0));
+		directory([handle, width, height] { publish_window(handle, width, height); });
+	}
 	if (resized && !placing.contains(handle))
 		send(handle, 5, 0, uint16_t(window->width) | (uint64_t(uint16_t(window->height)) << 16));
 	if (std::as_const(objects).window(handle) && objects.window_visible(handle)) {

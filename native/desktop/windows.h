@@ -76,8 +76,9 @@ public:
 	void set_global_data(std::function<uint64_t(uint64_t)> data) { global_data = std::move(data); }
 	void set_menu_loader(std::function<uint64_t(uint64_t,uint64_t)> loader) { menu_loader = std::move(loader); }
 	bool dispatch(std::string_view name);
-	// Unmaps the surfaces released during the call (see release_surface) with the desktop lock let go, before the call returns.
-	void unmap_released();
+	// Does what the call left for after the desktop lock, with the lock let go, before the call returns: unmapping the surfaces released
+	// during the call (see release_surface) and writing the window directory other processes find windows in (see foreign_surface.h).
+	void finish_call();
 	// The served block where the screen context the guest's GetDC(NULL) takes is published (see the screen preludes), and the
 	// offsets in it of the capability table, the context and its state.
 	static constexpr size_t screen_caps = 0x400, screen_dc = 0x600, screen_dc_state = 0x608;
@@ -365,6 +366,12 @@ private:
 	// The surfaces' pixels released under the desktop lock and not yet unmapped: unmapping a window's pixels takes far longer than
 	// releasing its records, and every thread that draws or changes a window of its own would wait for it.
 	std::vector<uint64_t> released_surfaces;
+	// The window directory's files written or removed under the whole desktop lock, in order: they reach the disk, which every thread
+	// that draws or changes a window of its own would wait for. A call that finishes takes the order before it lets the lock go, so the
+	// files of a window made by one call and destroyed by a later one are written in that order.
+	std::vector<std::function<void()>> directory_work;
+	std::mutex directory_order;
+	void directory(std::function<void()> work);
 	bool dispatch_call(std::string_view name);
 	// The compositor took the keyboard from the program's windows; applied once no window of the program receives it right after.
 	bool focus_leaving=false;
