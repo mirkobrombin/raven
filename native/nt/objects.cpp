@@ -358,6 +358,8 @@ void NativeObjects::offer_to_guest(uint64_t handle)
 		const auto found = handles.find(handle);
 		if (found == handles.end() || !found->second.event)
 			return;
+		// Tried once, the event's sets beside the turn stay there whatever comes of it.
+		found->second.event->offering();
 		if (!(found->second.access & 2))
 			return events->refused(GuestEvents::Refusal::access);
 		if (!found->second.event->guest_may_work())
