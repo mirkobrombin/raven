@@ -77,6 +77,9 @@ struct GuestThread {
 	// pause took hold. `job` is work another thread has it do on its own task, which only it may trace.
 	pthread_t host{};
 	bool hosted = false;
+	// Whether its host thread put its state into its task yet; until then the task waits in the agent's hands and the snapshot holds
+	// the context it starts from. Only its host thread reads and changes it.
+	bool loaded = false;
 	pid_t host_tid = 0;
 	// The count of signals at which the wait's condition was last found not to hold, and whether it is looked at whatever the count.
 	uint64_t seen_signals = 0;

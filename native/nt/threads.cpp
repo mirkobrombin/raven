@@ -1253,6 +1253,7 @@ void NativeThreads::install(GuestThread &me)
 	if (&me != &admin && me.state == GuestThread::State::done)
 		throw ThreadExit{me.exit_code};
 	process.load_thread(me.snapshot);
+	me.loaded = true;
 	if (me.teb)
 		environment.set_current(me.teb);
 	// A host thread serves its own guest thread's calls beside the turn as well; under one host thread for all, the one it switched to.
@@ -1783,6 +1784,11 @@ void NativeThreads::pause_task_of(GuestThread &thread)
 	// Only the host thread knows for sure whether its guest runs: it stops one that runs and keeps it stopped, and reads the context of
 	// one that stopped already, which waits for its turn and stays at its call while it is suspended (see park).
 	send_job(thread, [&thread] {
+		// A thread suspended before it first ran has nothing in its task to stop or read: its start context stays the one it gets.
+		if (!thread.loaded) {
+			thread.paused = true;
+			return;
+		}
 		const pid_t task = thread.snapshot.task;
 		// A guest that stopped at its stub while its call is served beside the turn stays at that stop: nothing is left to stop.
 		if (thread.parked && !agent::stop_read(task))
@@ -1809,16 +1815,23 @@ void NativeThreads::set_registers(GuestThread &thread, const user_regs_struct &r
 	thread.snapshot.context.registers = registers;
 	if (!threaded || &thread == running)
 		return process.set_thread_registers(thread.snapshot, registers);
-	// The registers live in the task while it is paused or its state was left there; its host thread sets them.
+	// The registers live in the task while it is paused or its state was left there; its host thread sets them. Before the thread
+	// first ran they live in the snapshot alone, and its host thread puts them in the task when it does.
 	if (thread.paused || thread.snapshot.context_in_task)
-		send_job(thread, [&thread, registers] { NativeProcess::set_task_registers(thread.snapshot.task, registers); });
+		send_job(thread, [&thread, registers] {
+			if (thread.loaded)
+				NativeProcess::set_task_registers(thread.snapshot.task, registers);
+		});
 }
 
 void NativeThreads::set_xstate(GuestThread &thread)
 {
 	if (!threaded || &thread == running || !(thread.paused || thread.snapshot.context_in_task) || thread.snapshot.context.xstate.size() < 512)
 		return;
-	send_job(thread, [&thread] { NativeProcess::set_task_xstate(thread.snapshot.task, thread.snapshot.context.xstate); });
+	send_job(thread, [&thread] {
+		if (thread.loaded)
+			NativeProcess::set_task_xstate(thread.snapshot.task, thread.snapshot.context.xstate);
+	});
 }
 
 void NativeThreads::end_host(GuestThread &thread)
@@ -1853,6 +1866,24 @@ void NativeThreads::host_main(GuestThread &thread)
 		wait_turn(thread, std::nullopt);
 		try {
 			install(thread);
+			// One suspended after it was put in line, before it first ran, waits to be resumed at its start as well.
+			const auto suspended = [&] {
+				std::lock_guard lock(gate);
+				return thread.paused && thread.state != GuestThread::State::done && !thread.unwinding;
+			};
+			while (suspended()) {
+				leave(thread, false);
+				{
+					std::unique_lock lock(gate);
+					while (thread.paused && thread.state != GuestThread::State::done && !thread.unwinding) {
+						if (thread.job)
+							run_job(thread, lock);
+						else
+							thread.turn.wait(lock);
+					}
+				}
+				enter(thread);
+			}
 			thread.state = GuestThread::State::running;
 			thread_main(thread);
 		} catch (const ThreadExit &) {
