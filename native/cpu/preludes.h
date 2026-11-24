@@ -75,6 +75,13 @@ extern "C" const uint8_t raven_nt_syscall[], raven_nt_syscall_service[], raven_n
 	raven_prelude_string_get_thread_locale[], raven_prelude_string_get_thread_locale_end[], raven_prelude_string_get_a_c_p[],
 	raven_prelude_string_get_a_c_p_end[], raven_prelude_string_set_thread_locale[], raven_prelude_string_set_thread_locale_end[];
 
+// The preludes of the events the guest works itself, with the points of their window (see guest_event in preludes.S).
+extern "C" const uint8_t raven_prelude_event_set[], raven_prelude_event_set_opened[], raven_prelude_event_set_saved[],
+	raven_prelude_event_set_called[], raven_prelude_event_set_returned[], raven_prelude_event_set_closed[], raven_prelude_event_set_left[],
+	raven_prelude_event_set_end[], raven_prelude_event_reset[], raven_prelude_event_reset_opened[], raven_prelude_event_reset_saved[],
+	raven_prelude_event_reset_called[], raven_prelude_event_reset_returned[], raven_prelude_event_reset_closed[],
+	raven_prelude_event_reset_left[], raven_prelude_event_reset_end[];
+
 namespace raven {
 
 inline std::vector<uint8_t> prelude_code(const uint8_t *begin, const uint8_t *end) { return {begin, end}; }

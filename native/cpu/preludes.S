@@ -3780,4 +3780,65 @@ raven_service_landing:
 	ret 24
 raven_service_landing_end:
 
+/* SetEvent and ResetEvent of an event the runtime lets the guest work itself (see native/nt/guest_events.h), made as Windows makes
+ * them: one call into the kernel, here an ioctl on the event's ntsync object through the agent's kernel gate, whose address is the
+ * table header's third word. The rip-relative load gives the guest events table, or 0 where the guest works no event. The thread counts
+ * itself among the slot's users, looks again at the handle there (a paused one does not compare) and at the table's header, and makes
+ * the ioctl with the u32 it returns in the caller's home space, where RDI and RSI wait too. Anything else goes to the runtime with the
+ * caller's registers.
+ *
+ * A thread the runtime stops between `opened` and `closed` counts among the users: the runtime moves it out (see guest_windows in
+ * native_cpu.cpp), back to the start before the ioctl, with RDI and RSI from the home space once `saved` is passed, and past `closed`
+ * after it. `left` gives up without the ioctl. */
+	.macro guest_event name, request
+	.global raven_prelude_event_\name, raven_prelude_event_\name\()_opened, raven_prelude_event_\name\()_saved
+	.global raven_prelude_event_\name\()_called, raven_prelude_event_\name\()_returned, raven_prelude_event_\name\()_closed
+	.global raven_prelude_event_\name\()_left, raven_prelude_event_\name\()_end
+raven_prelude_event_\name:
+	mov r10, qword ptr [rip + 0]
+	test r10, r10
+	je 9f
+	mov eax, ecx
+	shr eax, 2
+	and eax, 0xfff
+	shl eax, 4
+	lea r8, [r10 + rax + 0x40]
+	lock inc dword ptr [r8 + 12]
+raven_prelude_event_\name\()_opened:
+	cmp rcx, qword ptr [r8]
+	jne raven_prelude_event_\name\()_left
+	cmp qword ptr [r10], 0
+	jne raven_prelude_event_\name\()_left
+	mov qword ptr [rsp + 16], rdi
+	mov qword ptr [rsp + 24], rsi
+raven_prelude_event_\name\()_saved:
+	mov r9, rcx
+	mov edi, dword ptr [r8 + 8]
+	mov esi, \request
+	lea rdx, [rsp + 8]
+	mov eax, 16
+raven_prelude_event_\name\()_called:
+	call qword ptr [r10 + 16]
+raven_prelude_event_\name\()_returned:
+	mov rdi, qword ptr [rsp + 16]
+	mov rsi, qword ptr [rsp + 24]
+	lock dec dword ptr [r8 + 12]
+raven_prelude_event_\name\()_closed:
+	mov rcx, r9
+	test rax, rax
+	jne 9f
+	lock inc qword ptr [r10 + 8]
+	mov eax, 1
+	ret
+raven_prelude_event_\name\()_left:
+	lock dec dword ptr [r8 + 12]
+9:	.byte 0xe9
+	.long 0
+raven_prelude_event_\name\()_end:
+	.endm
+
+	/* NTSYNC_IOC_EVENT_SET and NTSYNC_IOC_EVENT_RESET: _IOR('N', 0x88 and 0x89, __u32). */
+	guest_event set, 0x80044e88
+	guest_event reset, 0x80044e89
+
 	.section .note.GNU-stack, "", @progbits
