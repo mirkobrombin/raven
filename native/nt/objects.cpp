@@ -1,5 +1,7 @@
 #include "objects.h"
 #include "event.h"
+#include "guest_events.h"
+#include "kernel_waits.h"
 #include "api.h"
 #include "handle_channel.h"
 #include "shared_file.h"
@@ -9,6 +11,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <unistd.h>
 
 namespace raven {
 
@@ -286,10 +289,14 @@ uint32_t NativeObjects::close(uint64_t handle)
 		const auto found=handles.find(handle);
 		if (found==handles.end()) return invalid_handle;
 		generic=std::move(found->second.generic);
+		if (auto *const events = GuestEvents::active())
+			events->withdraw(handle);
 		handles.erase(found);
 		last=generic && generic->watches_last_handle() &&
 			std::none_of(handles.begin(),handles.end(),[&](const auto &entry) { return entry.second.generic==generic; });
 	}
+	if (auto *const events = GuestEvents::active())
+		events->flush();
 	if (const auto reserved=std::dynamic_pointer_cast<ReservedObject>(generic); reserved && reserved->on_close)
 		reserved->on_close(handle);
 	if (last)
@@ -311,8 +318,12 @@ std::optional<uint32_t> NativeObjects::close_alone(uint64_t handle)
 		if (held.file || (held.event && !held.event->closes_beside()) || (held.generic && !held.generic->closes_beside()))
 			return std::nullopt;
 		closed = std::move(found->second);
+		if (auto *const events = GuestEvents::active())
+			events->withdraw(handle);
 		handles.erase(found);
 	}
+	if (auto *const events = GuestEvents::active())
+		events->flush();
 	if (traced)
 		std::fprintf(stderr, "handle %llx closed beside the turn\n", static_cast<unsigned long long>(handle));
 	return 0;
@@ -334,6 +345,31 @@ void NativeObjects::release_reserved(uint64_t handle)
 }
 
 std::atomic<int> shared_object_count{0};
+
+void NativeObjects::offer_to_guest(uint64_t handle)
+{
+	auto *const events = GuestEvents::active();
+	if (!events)
+		return;
+	std::shared_ptr<EventObject> event;
+	std::optional<uint64_t> ticket;
+	{
+		std::lock_guard lock(mutex);
+		const auto found = handles.find(handle);
+		if (found == handles.end() || !found->second.event || !(found->second.access & 2) || !found->second.event->guest_may_work())
+			return;
+		// The ticket is taken under the table's lock: closing the handle before the guest holds the descriptor changes it.
+		if (!(ticket = events->ticket(handle)))
+			return;
+		event = found->second.event;
+	}
+	const uint32_t object = event->table_object();
+	const int descriptor = object ? raven_waits_event_descriptor(kernel_waits(), object) : -1;
+	if (descriptor < 0)
+		return;
+	events->offer(handle, event.get(), descriptor, *ticket, [&event] { return event->guest_may_work(); });
+	::close(descriptor);
+}
 
 NativeObjectResult NativeObjects::set_event(uint64_t handle, bool signaled)
 {
@@ -408,6 +444,12 @@ NativeObjectResult NativeObjects::wait(uint64_t handle, std::optional<int64_t> t
 	const auto [object,status]=event(handle,0x100000);
 	if (status) return {0,status};
 	if (timeout && *timeout>0) return {0,0xc00000bbU};
+	// This wait is looked at here, which would not see a set the guest made itself.
+	struct Held {
+		EventObject &event;
+		explicit Held(EventObject &event) : event(event) { event.hold_from_guest(); }
+		~Held() { event.give_back_to_guest(); }
+	} held(*object);
 	std::unique_lock lock(object->mutex);
 	if (!object->take(0)) {
 		if (timeout && !*timeout) return {0,0x102};

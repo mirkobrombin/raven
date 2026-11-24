@@ -131,6 +131,9 @@ public:
 	// Process requests share the handle channel, but the process owner validates and serves them.
 	std::function<InheritedHandle(const InheritedHandle &)> process_request;
 	NativeObjectResult set_event(uint64_t handle, bool signaled);
+	// Lets the guest set and reset the event a handle names with its own ioctls from now on (guest_events.h), when the process has a
+	// guest events table, the handle may change the event's state and nothing holds the event back.
+	void offer_to_guest(uint64_t handle);
 	// For a call answered beside the others, outside the runtime's turn: the event of this process the handle gives the access to (to
 	// set it, unless asked otherwise); nothing when the call needs the runtime (any other handle, or an error to report).
 	std::shared_ptr<EventObject> event_alone(uint64_t handle, uint32_t access = 2) const;
