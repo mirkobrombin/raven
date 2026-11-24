@@ -1249,6 +1249,67 @@ uint64_t NativeProcess::kernel_gate() const
 	return state->agent_task ? state->agent_page + agent::kernel() : 0;
 }
 
+// The guest windows by start (see GuestWindow), the kernel gate and what lets go of what a thread held in one: set once, before the
+// guest's threads run.
+static std::vector<NativeProcess::GuestWindow> guest_windows;
+static uint64_t guest_window_gate = 0;
+static std::function<void(uint64_t)> leave_guest_window;
+
+static bool read_task(pid_t task, uint64_t address, void *into, size_t size)
+{
+	const iovec local{into, size};
+	const iovec remote{reinterpret_cast<void *>(address), size};
+	ssize_t copied;
+	do { copied = process_vm_readv(task, &local, 1, &remote, 1, 0); } while (copied < 0 && errno == EINTR);
+	return copied == ssize_t(size);
+}
+
+void NativeProcess::set_guest_windows(std::vector<GuestWindow> windows, uint64_t gate, std::function<void(uint64_t)> leave)
+{
+	std::sort(windows.begin(), windows.end(), [](const auto &left, const auto &right) { return left.start < right.start; });
+	guest_windows = std::move(windows);
+	guest_window_gate = gate;
+	leave_guest_window = std::move(leave);
+}
+
+void NativeProcess::settle_window(pid_t task)
+{
+	if (guest_windows.empty())
+		return;
+	user_regs_struct registers{};
+	if (agent::request(PTRACE_GETREGS, task, nullptr, &registers) != 0)
+		return;
+	// In the gate the system call is still to be made at its first instruction, and made at its return.
+	uint64_t at = registers.rip;
+	const uint64_t gate = guest_window_gate;
+	const bool gated = gate && (at == gate || at == gate + 2);
+	if (gated && !read_task(task, registers.rsp, &at, 8))
+		throw std::runtime_error("cannot read the return address of a native task in the kernel gate");
+	const auto after = std::upper_bound(guest_windows.begin(), guest_windows.end(), at,
+		[](uint64_t address, const GuestWindow &window) { return address < window.start; });
+	if (after == guest_windows.begin())
+		return;
+	const GuestWindow &window = *(after - 1);
+	const uint64_t offset = at - window.start;
+	const bool made = gated ? registers.rip == gate + 2 : offset >= window.returned && offset < window.closed;
+	const bool unmade = gated ? registers.rip == gate : (offset >= window.opened && offset <= window.called) || offset == window.left;
+	if ((gated && offset != window.returned) || (!made && !unmade))
+		return;
+	if (gated)
+		registers.rsp += 8;
+	leave_guest_window(registers.r8);
+	if (made || (offset >= window.saved && offset != window.left)) {
+		uint64_t home[2];
+		if (!read_task(task, registers.rsp + 16, home, sizeof home))
+			throw std::runtime_error("cannot read the home space of a native task in a guest window");
+		registers.rdi = home[0];
+		registers.rsi = home[1];
+	}
+	registers.rip = window.start + (made ? window.closed : 0);
+	if (agent::request(PTRACE_SETREGS, task, nullptr, &registers) != 0)
+		throw std::runtime_error("cannot move a native task out of a guest window");
+}
+
 int NativeProcess::hand_descriptor(int descriptor)
 {
 	// The descriptor socket carries one descriptor at a time, which map_file uses under the same lock.
@@ -2175,6 +2236,7 @@ void NativeProcess::end_call()
 	if (parallel() && !state->side().stopped) {
 		auto &child = *state->child;
 		child.pause_task();
+		settle_window(child.pid());
 		int discarded;
 		while (child.take_stop(child.pid(), discarded)) {}
 		state->side().stopped = true;
@@ -2750,6 +2812,7 @@ int NativeProcess::pause_own_task(pid_t task)
 			throw std::runtime_error("native task did not receive its suspend interrupt");
 		trace(PTRACE_SETSIGINFO, task, &info);
 	}
+	settle_window(task);
 	forget_registers();
 	return status;
 }
@@ -2885,6 +2948,7 @@ void NativeProcess::pause_thread(NativeThreadState &thread)
 	try {
 		child.set_pid(thread.task);
 		child.pause_task();
+		settle_window(thread.task);
 		state->side().stopped = true;
 		drain_queued_calls(true);
 		forget_registers();
@@ -3400,6 +3464,7 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 			if (!observed) {
 				if (sampling && std::chrono::steady_clock::now() < execution_deadline) {
 					child.pause_task();
+					settle_window(child.pid());
 					child.set_timeout(std::chrono::seconds(2));
 					status = child.wait();
 					sampled_stop = true;
@@ -3430,6 +3495,7 @@ NativeResult NativeProcess::resume_task(std::chrono::milliseconds timeout)
 			while (agent::wait(child.pid(), &interrupted, 0) == -1 && errno == EINTR) {}
 			if (!WIFSTOPPED(interrupted))
 				throw std::runtime_error("native guest exited outside the runtime boundary");
+			settle_window(child.pid());
 			if (WSTOPSIG(interrupted) == SIGSTOP) {
 				state->side().stopped = true;
 				if (sampling) {

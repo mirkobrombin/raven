@@ -236,6 +236,23 @@ public:
 	// Writes the floating-point and extended state of a paused task, as PTRACE_GETREGSET with NT_X86_XSTATE gives it.
 	static void set_task_xstate(pid_t task, std::span<const uint8_t> xstate);
 	static void arm_host_thread();
+	// The guest's address of the agent's kernel gate (agent.S), or 0 without the agent.
+	uint64_t kernel_gate() const;
+	// A stretch of guest code where a thread holds something the runtime may wait for, so a thread the runtime stops is not left there
+	// (see the event preludes of preludes.S), as offsets from its start. Up to `called`, and at `left`, the thread goes back to the start,
+	// with RDI and RSI from the caller's home space once `saved` is passed; from `returned` on it goes past `closed`. Either way `leave`
+	// lets go of what it held, named by R8. A thread in the kernel gate belongs to the window the gate returns to.
+	struct GuestWindow {
+		uint64_t start;
+		uint32_t opened, saved, called, returned, closed, left;
+	};
+	// Kept for the process, as the pauses of its tasks are; `gate` is kernel_gate's.
+	static void set_guest_windows(std::vector<GuestWindow> windows, uint64_t gate, std::function<void(uint64_t)> leave);
+	// Moves a task the runtime has stopped out of the window it stands in, if any.
+	static void settle_window(pid_t task);
+	// Puts a copy of a host descriptor into the guest's own descriptor table and gives its number there; drop_descriptor closes it.
+	int hand_descriptor(int descriptor);
+	void drop_descriptor(int descriptor);
 	void stop_thread(const NativeThreadState &thread);
 	void pause_thread(NativeThreadState &thread);
 	// The general registers a thread that is not running continues with: a thread paused in its own task gets them there, a saved
@@ -292,11 +309,6 @@ private:
 	void make_served_block(uint64_t teb, uint64_t &guest, uint64_t *&host);
 	uint64_t map_file(int descriptor, size_t size, uint64_t offset, bool transfer, uint64_t address = 0);
 	uint64_t receive_descriptor(int descriptor, uint64_t scratch);
-	// The guest's address of the agent's kernel gate (agent.S), or 0 without the agent.
-	uint64_t kernel_gate() const;
-	// Puts a copy of a host descriptor into the guest's own descriptor table and gives its number there; drop_descriptor closes it.
-	int hand_descriptor(int descriptor);
-	void drop_descriptor(int descriptor);
 	void install_seccomp();
 	bool serve_pending();
 	bool queued_pending() const;
