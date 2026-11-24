@@ -356,17 +356,21 @@ void NativeObjects::offer_to_guest(uint64_t handle)
 	{
 		std::lock_guard lock(mutex);
 		const auto found = handles.find(handle);
-		if (found == handles.end() || !found->second.event || !(found->second.access & 2) || !found->second.event->guest_may_work())
+		if (found == handles.end() || !found->second.event)
 			return;
+		if (!(found->second.access & 2))
+			return events->refused(GuestEvents::Refusal::access);
+		if (!found->second.event->guest_may_work())
+			return events->refused(GuestEvents::Refusal::held);
 		// The ticket is taken under the table's lock: closing the handle before the guest holds the descriptor changes it.
 		if (!(ticket = events->ticket(handle)))
-			return;
+			return events->refused(GuestEvents::Refusal::taken);
 		event = found->second.event;
 	}
 	const uint32_t object = event->table_object();
 	const int descriptor = object ? raven_waits_event_descriptor(kernel_waits(), object) : -1;
 	if (descriptor < 0)
-		return;
+		return events->refused(GuestEvents::Refusal::descriptor);
 	events->offer(handle, event.get(), descriptor, *ticket, [&event] { return event->guest_may_work(); });
 	::close(descriptor);
 }

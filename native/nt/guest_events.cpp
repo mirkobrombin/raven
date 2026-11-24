@@ -24,9 +24,14 @@ GuestEvents *GuestEvents::active()
 void GuestEvents::activate(std::unique_ptr<GuestEvents> events)
 {
 	// How many sets and resets the guest made itself is told as its table goes, with RAVEN_TRACE_GUEST_EVENTS.
-	if (process_events && std::getenv("RAVEN_TRACE_GUEST_EVENTS"))
-		std::fprintf(stderr, "guest events: %llu sets and resets made by the guest, %llu handles offered\n",
-			(unsigned long long)process_events->made_by_guest(), (unsigned long long)process_events->handles_offered());
+	if (process_events && std::getenv("RAVEN_TRACE_GUEST_EVENTS")) {
+		const auto &refusals = process_events->refusals;
+		std::fprintf(stderr, "guest events: %llu sets and resets made by the guest, %llu handles offered, refused: access %llu held %llu "
+			"taken %llu descriptor %llu given %llu changed %llu\n", (unsigned long long)process_events->made_by_guest(),
+			(unsigned long long)process_events->handles_offered(), (unsigned long long)refusals[0].load(), (unsigned long long)refusals[1].load(),
+			(unsigned long long)refusals[2].load(), (unsigned long long)refusals[3].load(), (unsigned long long)refusals[4].load(),
+			(unsigned long long)refusals[5].load());
+	}
 	process_active.store(events.get(), std::memory_order_release);
 	process_events = std::move(events);
 }
@@ -45,8 +50,10 @@ bool GuestEvents::offer(uint64_t handle, const void *event, int descriptor, uint
 	if (!handle)
 		return false;
 	const int guest = give(descriptor);
-	if (guest < 0)
+	if (guest < 0) {
+		refused(Refusal::given);
 		return false;
+	}
 	{
 		const size_t index = slot_of(handle);
 		std::lock_guard held(lock);
@@ -60,6 +67,7 @@ bool GuestEvents::offer(uint64_t handle, const void *event, int descriptor, uint
 			return true;
 		}
 	}
+	refused(Refusal::changed);
 	drop(guest);
 	return false;
 }

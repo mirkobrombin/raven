@@ -55,6 +55,10 @@ public:
 	uint64_t made_by_guest() const;
 	// How many handles the guest was given, told with what it made.
 	uint64_t handles_offered() const { return offered.load(std::memory_order_relaxed); }
+	// Why an offer did not reach the guest, counted and told with the rest: the handle's access, the event held back from the guest,
+	// its slot taken by another handle, no descriptor of its object, the guest not taking it, the handle changed meanwhile.
+	enum class Refusal { access, held, taken, descriptor, given, changed, count };
+	void refused(Refusal why) { refusals[size_t(why)].fetch_add(1, std::memory_order_relaxed); }
 	// The process is going and ends its threads wherever they are: no set of the guest counts any more, and nothing waits for a slot's
 	// users, among whom may be a thread that was ended there.
 	void shut();
@@ -72,6 +76,7 @@ private:
 	size_t holders = 0;
 	std::atomic<bool> closing_down{false};
 	std::atomic<uint64_t> offered{0};
+	std::atomic<uint64_t> refusals[size_t(Refusal::count)] = {};
 	uint64_t &word(size_t offset) const { return *reinterpret_cast<uint64_t *>(table + offset); }
 	uint8_t *slot(size_t index) const { return table + header + index * slot_size; }
 	void empty(size_t index);
