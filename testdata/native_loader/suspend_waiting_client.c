@@ -2,7 +2,16 @@
 #include <windows.h>
 
 static HANDLE port;
-static volatile LONG woke;
+static volatile LONG woke, stop;
+
+static DWORD WINAPI spinner(void *parameter)
+{
+	(void)parameter;
+	volatile unsigned long long turns = 0;
+	while (!stop)
+		++turns;
+	return 0;
+}
 
 static DWORD WINAPI worker(void *parameter)
 {
@@ -10,23 +19,31 @@ static DWORD WINAPI worker(void *parameter)
 	DWORD bytes = 0;
 	ULONG_PTR key = 0;
 	OVERLAPPED *overlapped = NULL;
-	if (!GetQueuedCompletionStatus(port, &bytes, &key, &overlapped, INFINITE) || key != 42)
-		return 1;
-	InterlockedExchange(&woke, 1);
-	return 0;
+	for (;;) {
+		if (GetQueuedCompletionStatus(port, &bytes, &key, &overlapped, 20)) {
+			InterlockedExchange(&woke, 1);
+			return key == 42 ? 0 : 1;
+		}
+		if (GetLastError() != WAIT_TIMEOUT)
+			return 2;
+	}
 }
 
-/* A thread that waits long for a completion port, as the pool threads of the .NET runtime do, is suspended and read the way its
- * garbage collector does: suspending it returns at once, it stays where it is while suspended, and the packet ends its wait once it
- * is resumed. */
+/* A thread that keeps waiting for a completion port, as the pool threads of the .NET runtime do, is suspended and read the way its
+ * garbage collector does, while more threads than processors keep the machine busy: its call then often stops at its stub before the
+ * runtime takes it up. Suspending it returns at once, it stays where it is while suspended, and a packet ends its wait once resumed. */
 int raven_entry(void)
 {
+	SYSTEM_INFO system;
+	GetSystemInfo(&system);
+	const unsigned spinners = system.dwNumberOfProcessors * 2 > 32 ? 32 : system.dwNumberOfProcessors * 2;
+	HANDLE busy[32];
 	port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
-	if (!port) return 1;
 	HANDLE thread = CreateThread(0, 0, worker, 0, 0, 0);
-	if (!thread) return 2;
-	Sleep(100);
-	for (unsigned round = 0; round < 20; ++round) {
+	if (!port || !thread) return 1;
+	for (unsigned index = 0; index < spinners; ++index)
+		if (!(busy[index] = CreateThread(0, 0, spinner, 0, 0, 0))) return 2;
+	for (unsigned round = 0; round < 200; ++round) {
 		if (SuspendThread(thread) != 0) return 3;
 #ifdef __x86_64__
 		CONTEXT context;
@@ -34,17 +51,16 @@ int raven_entry(void)
 		if (!GetThreadContext(thread, &context) || !context.Rip || !context.Rsp) return 4;
 #endif
 		if (ResumeThread(thread) != 1) return 5;
-		Sleep(5);
+		Sleep(1);
 	}
-	if (SuspendThread(thread) != 0) return 6;
-	if (!PostQueuedCompletionStatus(port, 0, 42, NULL)) return 7;
+	InterlockedExchange(&stop, 1);
+	if (WaitForMultipleObjects(spinners, busy, TRUE, 5000) != WAIT_OBJECT_0) return 6;
+	if (SuspendThread(thread) != 0) return 7;
+	if (!PostQueuedCompletionStatus(port, 0, 42, NULL)) return 8;
 	Sleep(50);
-	if (woke) return 8;
-	if (ResumeThread(thread) != 1) return 9;
-	if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0) return 10;
+	if (woke) return 9;
+	if (ResumeThread(thread) != 1) return 10;
 	DWORD code = 1;
-	if (!GetExitCodeThread(thread, &code) || code != 0 || !woke) return 11;
-	CloseHandle(thread);
-	CloseHandle(port);
+	if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0 || !GetExitCodeThread(thread, &code) || code != 0 || !woke) return 11;
 	return 0;
 }
