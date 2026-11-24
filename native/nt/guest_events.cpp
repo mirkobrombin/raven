@@ -1,0 +1,90 @@
+#include "guest_events.h"
+
+#include <algorithm>
+#include <atomic>
+#include <thread>
+
+namespace raven {
+
+static std::unique_ptr<GuestEvents> process_events;
+static std::atomic<GuestEvents *> process_active{nullptr};
+
+GuestEvents::GuestEvents(uint8_t *table, std::function<int(int)> give, std::function<void(int)> drop)
+	: table(table), give(std::move(give)), drop(std::move(drop))
+{
+}
+
+GuestEvents *GuestEvents::active()
+{
+	return process_active.load(std::memory_order_acquire);
+}
+
+void GuestEvents::activate(std::unique_ptr<GuestEvents> events)
+{
+	process_active.store(events.get(), std::memory_order_release);
+	process_events = std::move(events);
+}
+
+std::optional<uint64_t> GuestEvents::ticket(uint64_t handle) const
+{
+	const size_t index = slot_of(handle);
+	std::lock_guard held(lock);
+	if (std::atomic_ref(word(header + index * slot_size + slot_handle)).load(std::memory_order_relaxed))
+		return std::nullopt;
+	return tickets[index];
+}
+
+bool GuestEvents::offer(uint64_t handle, const void *event, int descriptor, uint64_t ticket, const std::function<bool()> &allowed)
+{
+	if (!handle)
+		return false;
+	const int guest = give(descriptor);
+	if (guest < 0)
+		return false;
+	{
+		const size_t index = slot_of(handle);
+		std::lock_guard held(lock);
+		std::atomic_ref holder(word(header + index * slot_size + slot_handle));
+		if (tickets[index] == ticket && !holder.load(std::memory_order_relaxed) && allowed()) {
+			std::atomic_ref(*reinterpret_cast<int32_t *>(slot(index) + slot_descriptor)).store(guest, std::memory_order_relaxed);
+			holder.store(handle, std::memory_order_release);
+			owners[index] = event;
+			used.push_back(index);
+			return true;
+		}
+	}
+	drop(guest);
+	return false;
+}
+
+void GuestEvents::withdraw(uint64_t handle)
+{
+	const size_t index = slot_of(handle);
+	std::lock_guard held(lock);
+	++tickets[index];
+	if (std::atomic_ref(word(header + index * slot_size + slot_handle)).load(std::memory_order_relaxed) == handle)
+		empty(index);
+}
+
+void GuestEvents::empty(size_t index)
+{
+	std::atomic_ref(word(header + index * slot_size + slot_handle)).store(0, std::memory_order_seq_cst);
+	wait_unused(index);
+	closing.push_back(std::atomic_ref(*reinterpret_cast<int32_t *>(slot(index) + slot_descriptor)).load(std::memory_order_relaxed));
+	owners[index] = nullptr;
+	used.erase(std::find(used.begin(), used.end(), index));
+}
+
+void GuestEvents::wait_unused(size_t index) const
+{
+	// A guest among the users is between two instructions of its prelude, or in the one ioctl: one the runtime stops there is moved out
+	// of the window first (see NativeThreads), so the wait is for a thread that runs.
+	std::atomic_ref users(*reinterpret_cast<uint32_t *>(slot(index) + slot_users));
+	for (unsigned round = 0; users.load(std::memory_order_acquire); ++round)
+		if (round < 1000)
+			__builtin_ia32_pause();
+		else
+			std::this_thread::yield();
+}
+
+}
