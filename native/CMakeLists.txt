@@ -3841,6 +3841,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             ${CMAKE_CURRENT_BINARY_DIR}/guest-events.exe)
         set_tests_properties(native_guest_events_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
             ENVIRONMENT "RAVEN_TRACE_GUEST_EVENTS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-events-prefix")
+        # A thread stopped or ended in the middle of the sets it makes itself leaves the event usable (guest_events_stops_client.c).
+        raven_kernel_fixture(guest-events-stops guest_events_stops_client.c 0x1ef000000 "-lkernel32")
+        add_test(NAME native_guest_events_stops_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
+            ${CMAKE_CURRENT_BINARY_DIR}/guest-events-stops.exe)
+        set_tests_properties(native_guest_events_stops_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            ENVIRONMENT "RAVEN_TRACE_GUEST_EVENTS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-events-stops-prefix")
         # Suspending a thread that has waited long for a completion port returns at once and holds it until it is resumed
         # (suspend_waiting_client.c).
         raven_kernel_fixture(suspend-waiting suspend_waiting_client.c 0x1ef000000 "-lkernel32")
