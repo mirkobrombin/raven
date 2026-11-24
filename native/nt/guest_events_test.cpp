@@ -81,6 +81,16 @@ int main()
 		check(table[GuestEvents::barred] == 1, "the header cleared while still held");
 		events.release();
 		check(table[GuestEvents::barred] == 0, "the header stayed set");
+		// A paused event keeps its slots with their handles marked, until nothing holds it back.
+		events.pause_event(&event_two);
+		check(held(0x100) == (0x100 | GuestEvents::paused) && held(0x104) == (0x104 | GuestEvents::paused), "the event was not paused");
+		events.resume_event(&event_two, [] { return false; });
+		check(held(0x100) & GuestEvents::paused, "the event resumed while still held back");
+		events.resume_event(&event_two, [] { return true; });
+		check(held(0x100) == 0x100 && held(0x104) == 0x104, "the event did not resume");
+		events.pause_event(&event_two);
+		events.withdraw(0x104);
+		check(!held(0x104), "a paused handle stayed when closed");
 		events.withdraw_event(&event_two);
 		check(!held(0x100) && !held(0x104), "an event's slots stayed");
 		events.flush();

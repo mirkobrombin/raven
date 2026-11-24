@@ -23,6 +23,7 @@ class GuestEvents {
 public:
 	static constexpr size_t slots = 4096, slot_size = 16, header = 64, size = header + slots * slot_size;
 	static constexpr size_t barred = 0, made = 8, slot_handle = 0, slot_descriptor = 8, slot_users = 12;
+	static constexpr uint64_t paused = uint64_t(1) << 63;
 	// `give` puts a host descriptor into the guest's table and gives its number there; `drop` closes one there.
 	GuestEvents(uint8_t *table, std::function<int(int)> give, std::function<void(int)> drop);
 	// The process's table once the runtime made it, or null: a guest that cannot work events itself has none.
@@ -40,6 +41,11 @@ public:
 	void withdraw(uint64_t handle);
 	void withdraw_event(const void *event);
 	void flush();
+	// Keeps the guest from working an event while the runtime looks at a wait for it by itself, which would not see a set made in the
+	// guest: its slots stay, with their handles marked so the guest's comparison fails. Resuming clears the mark when `free` says, under
+	// the table's lock, that nothing holds the event back any more.
+	void pause_event(const void *event);
+	void resume_event(const void *event, const std::function<bool()> &free);
 	// While held, the guest works no event itself: a wait the runtime looks at by itself would not see what the guest set.
 	void hold();
 	void release();

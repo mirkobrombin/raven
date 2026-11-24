@@ -62,7 +62,7 @@ void GuestEvents::withdraw(uint64_t handle)
 	const size_t index = slot_of(handle);
 	std::lock_guard held(lock);
 	++tickets[index];
-	if (std::atomic_ref(word(header + index * slot_size + slot_handle)).load(std::memory_order_relaxed) == handle)
+	if ((std::atomic_ref(word(header + index * slot_size + slot_handle)).load(std::memory_order_relaxed) & ~paused) == handle)
 		empty(index);
 }
 
@@ -73,6 +73,29 @@ void GuestEvents::withdraw_event(const void *event)
 		if (owners[index] == event) {
 			++tickets[index];
 			empty(index);
+		}
+}
+
+void GuestEvents::pause_event(const void *event)
+{
+	std::lock_guard held(lock);
+	for (const size_t index : used)
+		if (owners[index] == event) {
+			std::atomic_ref holder(word(header + index * slot_size + slot_handle));
+			holder.store(holder.load(std::memory_order_relaxed) | paused, std::memory_order_seq_cst);
+			wait_unused(index);
+		}
+}
+
+void GuestEvents::resume_event(const void *event, const std::function<bool()> &free)
+{
+	std::lock_guard held(lock);
+	if (!free())
+		return;
+	for (const size_t index : used)
+		if (owners[index] == event) {
+			std::atomic_ref holder(word(header + index * slot_size + slot_handle));
+			holder.store(holder.load(std::memory_order_relaxed) & ~paused, std::memory_order_release);
 		}
 }
 
