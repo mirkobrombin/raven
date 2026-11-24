@@ -763,6 +763,8 @@ struct NativeProcess::State {
 	uint64_t request_gate = 0;
 	// The agent (see start_agent): its code in the guest, its service thread's block as the runtime sees it and the thread's task.
 	uint64_t agent_page = 0;
+	// Where hand_descriptor builds the message the guest receives a descriptor with, mapped at its first use.
+	uint64_t hand_scratch = 0;
 	uint64_t *agent_service = nullptr;
 	pid_t agent_task = 0;
 	std::mutex agent_lock;
@@ -1240,6 +1242,27 @@ std::vector<uint8_t> NativeProcess::read_memory(uint64_t address, size_t size) c
 pid_t NativeProcess::State::memory_reader() const
 {
 	return memory_task > 0 ? memory_task : child->pid();
+}
+
+uint64_t NativeProcess::kernel_gate() const
+{
+	return state->agent_task ? state->agent_page + agent::kernel() : 0;
+}
+
+int NativeProcess::hand_descriptor(int descriptor)
+{
+	// The descriptor socket carries one descriptor at a time, which map_file uses under the same lock.
+	std::lock_guard memory(state->memory_lock);
+	state->require_memory();
+	if (!state->hand_scratch)
+		state->hand_scratch = map_memory(4096, PROT_READ | PROT_WRITE);
+	return int(receive_descriptor(descriptor, state->hand_scratch));
+}
+
+void NativeProcess::drop_descriptor(int descriptor)
+{
+	std::lock_guard memory(state->memory_lock);
+	memory_syscall(SYS_close, uint64_t(descriptor), 0, 0, 0, 0, 0);
 }
 
 bool NativeProcess::memory_beside() const

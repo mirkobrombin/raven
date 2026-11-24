@@ -292,6 +292,11 @@ private:
 	void make_served_block(uint64_t teb, uint64_t &guest, uint64_t *&host);
 	uint64_t map_file(int descriptor, size_t size, uint64_t offset, bool transfer, uint64_t address = 0);
 	uint64_t receive_descriptor(int descriptor, uint64_t scratch);
+	// The guest's address of the agent's kernel gate (agent.S), or 0 without the agent.
+	uint64_t kernel_gate() const;
+	// Puts a copy of a host descriptor into the guest's own descriptor table and gives its number there; drop_descriptor closes it.
+	int hand_descriptor(int descriptor);
+	void drop_descriptor(int descriptor);
 	void install_seccomp();
 	bool serve_pending();
 	bool queued_pending() const;
