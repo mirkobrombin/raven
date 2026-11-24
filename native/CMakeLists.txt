@@ -4138,6 +4138,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW,PeekMessageW)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
+                    # Making and destroying windows writes the directory other processes find windows in, with the desktop lock let go.
+                    add_test(NAME native_desktop_files_unlocked_x${width} COMMAND raven --run-process --execution=native --timeout-ms=30000
+                        ${parallel_desktop_client})
+                    set_tests_properties(native_desktop_files_unlocked_x${width} PROPERTIES TIMEOUT 60
+                        PASS_REGULAR_EXPRESSION "window files written under the desktop lock 0 times"
+                        FAIL_REGULAR_EXPRESSION "window files written under the desktop lock [1-9];Native entry returned [1-9]"
+                        ENVIRONMENT "RAVEN_TRACE_DESKTOP_FILES=1;RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/desktop-files-prefix${width}")
                     # Threads that each draw into a bitmap of their own: the drawing calls are answered beside the turn, under the desktop lock.
                     set(parallel_gdi_client ${CMAKE_CURRENT_BINARY_DIR}/parallel-gdi${width}.exe)
                     add_custom_command(OUTPUT ${parallel_gdi_client}

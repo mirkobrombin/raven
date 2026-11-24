@@ -1,6 +1,7 @@
 #include "foreign_surface.h"
 
 #include "shared_pixels.h"
+#include "nt/desktop_lock.h"
 #include "nt/host_names.h"
 #include "nt/prefix.h"
 #include "nt/sandbox.h"
@@ -96,8 +97,28 @@ static void sweep_windows(const std::filesystem::path &directory)
 		std::filesystem::remove(path, error);
 }
 
+// How many times the window directory was written while the desktop lock was held whole, told at the end with RAVEN_TRACE_DESKTOP_FILES:
+// every thread that draws or changes a window of its own would wait for the disk.
+namespace {
+struct LockedWrites {
+	std::atomic<uint64_t> count{0};
+	void note()
+	{
+		if (desktop_lock().held_whole())
+			count.fetch_add(1, std::memory_order_relaxed);
+	}
+	~LockedWrites()
+	{
+		if (std::getenv("RAVEN_TRACE_DESKTOP_FILES"))
+			std::fprintf(stderr, "desktop: window files written under the desktop lock %llu times\n", (unsigned long long)count.load());
+	}
+};
+LockedWrites locked_writes;
+}
+
 void publish_window(uint64_t window, uint32_t width, uint32_t height)
 {
+	locked_writes.note();
 	// The windows of the runtime's control panel and file dialog are not shown to other programs: none can find them, send them a message
 	// or draw into them.
 	if (sandbox().trusted())
@@ -117,6 +138,7 @@ void publish_window(uint64_t window, uint32_t width, uint32_t height)
 
 void withdraw_window(uint64_t window)
 {
+	locked_writes.note();
 	const auto directory = window_directory();
 	std::error_code error;
 	std::filesystem::remove(directory / (window_name(window) + ".window"), error);
@@ -126,6 +148,7 @@ void withdraw_window(uint64_t window)
 
 void publish_window_traits(uint64_t window, const ForeignWindowTraits &traits)
 {
+	locked_writes.note();
 	if (sandbox().trusted())
 		return;
 	const auto directory = window_directory();
