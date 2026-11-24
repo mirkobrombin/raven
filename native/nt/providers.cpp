@@ -19,6 +19,7 @@
 #include "kernel_context.h"
 #include "clock_calibration.h"
 #include "event.h"
+#include "guest_events.h"
 #include "kernel_waits.h"
 #include "event_pulse.h"
 #include "actctx.h"
@@ -861,6 +862,36 @@ static const std::vector<uint8_t> &own_thread_send_prelude()
 }
 
 // The preludes that check the count of changes themselves and so run while other threads run, without an answer wrapper.
+// SetEvent and ResetEvent, which the guest makes itself for an event the runtime lets it work (guest_events.h). Their pointer, the guest
+// events table, is the fifth of the module's pointers, which stays zero where the guest works no event.
+static bool guest_event_api(std::string_view module, std::string_view name)
+{
+	return (module == "kernel32.dll" || module == "kernelbase.dll") && (name == "SetEvent" || name == "ResetEvent");
+}
+
+static const std::vector<uint8_t> &event_set_prelude()
+{
+	static const std::vector<uint8_t> code = prelude_code(raven_prelude_event_set, raven_prelude_event_set_end);
+	return code;
+}
+
+static const std::vector<uint8_t> &event_reset_prelude()
+{
+	static const std::vector<uint8_t> code = prelude_code(raven_prelude_event_reset, raven_prelude_event_reset_end);
+	return code;
+}
+
+// The window of an event prelude placed at `start` (see NativeProcess::GuestWindow), from the labels of its code.
+static NativeProcess::GuestWindow event_window(uint64_t start, bool set)
+{
+	const auto at = [base = set ? raven_prelude_event_set : raven_prelude_event_reset](const uint8_t *label) { return uint32_t(label - base); };
+	if (set)
+		return {start, at(raven_prelude_event_set_opened), at(raven_prelude_event_set_saved), at(raven_prelude_event_set_called),
+			at(raven_prelude_event_set_returned), at(raven_prelude_event_set_closed), at(raven_prelude_event_set_left)};
+	return {start, at(raven_prelude_event_reset_opened), at(raven_prelude_event_reset_saved), at(raven_prelude_event_reset_called),
+		at(raven_prelude_event_reset_returned), at(raven_prelude_event_reset_closed), at(raven_prelude_event_reset_left)};
+}
+
 static bool self_checked_api(std::string_view module, std::string_view name)
 {
 	return module == "user32.dll" && name == "SendMessageW";
@@ -1389,6 +1420,8 @@ static const std::vector<uint8_t> *block_prelude(std::string_view module, std::s
 		add({"ntdll.dll"}, {"NtAllocateVirtualMemory", "ZwAllocateVirtualMemory"}, nt_commit_prelude);
 		add({"ntdll.dll"}, {"NtFreeVirtualMemory", "ZwFreeVirtualMemory"}, nt_decommit_prelude);
 		add({"kernel32.dll", "kernelbase.dll"}, {"MulDiv"}, muldiv_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"SetEvent"}, event_set_prelude);
+		add({"kernel32.dll", "kernelbase.dll"}, {"ResetEvent"}, event_reset_prelude);
 		add({"shlwapi.dll", "kernelbase.dll"}, {"PathFindFileNameW"}, file_name_prelude);
 		add({"user32.dll"}, {"TranslateMessage"}, translate_message_prelude);
 		add({"user32.dll"}, {"CallMsgFilterW"}, message_filter_prelude);
@@ -1895,7 +1928,7 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 			const size_t answer = code, wrapper = blocks_next;
 			if (wrapped)
 				blocks_next += answer_wrapper_slot;
-			const int32_t displacement = int32_t(served_start + (wrapped ? 24 : 0)) - int32_t(code) - 7;
+			const int32_t displacement = int32_t(served_start + (wrapped ? 24 : guest_event_api(name, exports[index]) ? 32 : 0)) - int32_t(code) - 7;
 			std::memcpy(bytes_of.data() + 3, &displacement, 4);
 			const int32_t relative = int32_t(wrapped ? wrapper + served_stub::answer_gives_up() : trap) - int32_t(code + bytes_of.size());
 			std::memcpy(bytes_of.data() + bytes_of.size() - 4, &relative, 4);
@@ -2977,7 +3010,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		for (const auto &symbol : module->exports) {
 			// The clock and the tick counts only read calibration; their pointers are safe while other threads run.
 			const auto *prelude = symbol.address && !symbol.names.empty() && symbol.forwarder.empty() ? block_prelude(module_name, symbol.names.at(0)) : nullptr;
-			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() &&
+			if (symbol.address && !symbol.names.empty() && symbol.forwarder.empty() && !guest_event_api(module_name, symbol.names.at(0)) &&
 				(guest_clock_api(module_name, symbol.names.at(0)) || prelude == &tick_prelude() || (!process.parallel() && prelude) ||
 					(process.parallel() && answer_wrapper_at(module->loaded.data(), symbol.address)) ||
 					(process.parallel() && prelude && self_checked_api(module_name, symbol.names.at(0)))) &&

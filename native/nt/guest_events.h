@@ -16,13 +16,13 @@ namespace raven {
 // asks the runtime for, as before.
 //
 // The table is a header and a slot for each value of a handle's bits 2 to 13. The header's first word is set while the guest may work no
-// event itself, its second counts what it did. A slot is {handle, descriptor, users}: the guest counts itself among its users, looks again
+// event itself, its second counts what it did, its third is the address of the agent's kernel gate the guest makes its ioctls through. A slot is {handle, descriptor, users}: the guest counts itself among its users, looks again
 // at the header and the handle, makes its ioctl and leaves. The runtime takes a slot back by clearing it and waiting until it has no
 // users, so no ioctl of the guest reaches an object after the runtime has let it go.
 class GuestEvents {
 public:
 	static constexpr size_t slots = 4096, slot_size = 16, header = 64, size = header + slots * slot_size;
-	static constexpr size_t barred = 0, made = 8, slot_handle = 0, slot_descriptor = 8, slot_users = 12;
+	static constexpr size_t barred = 0, made = 8, gate = 16, slot_handle = 0, slot_descriptor = 8, slot_users = 12;
 	static constexpr uint64_t paused = uint64_t(1) << 63;
 	// `give` puts a host descriptor into the guest's table and gives its number there; `drop` closes one there.
 	GuestEvents(uint8_t *table, std::function<int(int)> give, std::function<void(int)> drop);
