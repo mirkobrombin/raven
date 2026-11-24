@@ -878,6 +878,18 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 			call.store<uint32_t>(call[2], 0);
 		call.ret(0);
 	});
+	// No process runs inside an AppContainer, whose objects live under a directory of their own: the path of that directory is empty,
+	// as Windows answers it for a process outside one, whatever the token and SID.
+	registry.add("RtlGetAppContainerNamedObjectPath", 4, [](ApiCall &call) {
+		if (!call[3]) {
+			call.ret(0xc000000dU);
+			return;
+		}
+		call.store<uint32_t>(call[3], 0);
+		call.store_pointer(call[3] + call.pointer_width(), 0);
+		call.ret(0);
+	});
+	registry.add("GetAppContainerNamedObjectPath", 5, [](ApiCall &call) { call.fail(4250); });
 	// The licensing policy store holds no values: every query answers SL_E_VALUE_NOT_FOUND.
 	const auto policy_value = [](ApiCall &call) { call.ret(call[0] ? 0xc004f012U : 0x80070057U); };
 	registry.add("SLGetWindowsInformation", 4, policy_value);

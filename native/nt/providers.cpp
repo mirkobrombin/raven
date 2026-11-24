@@ -2206,6 +2206,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"RtlFormatCurrentUserKeyPath", "RtlGetLastNtStatus",
 		// What a browser installer looks up about the machine it runs on.
 		"RtlGetDeviceFamilyInfoEnum", "RtlConvertDeviceFamilyInfoToString",
+		// What the core messaging runtime of the Windows App SDK asks before it names its objects.
+		"RtlGetAppContainerNamedObjectPath",
 		// The unwinding of 64-bit frames, which libraries built with their own exception handling import.
 		"RtlCaptureContext", "RtlLookupFunctionEntry", "RtlPcToFileHeader", "RtlVirtualUnwind", "RtlUnwindEx",
 		// What the .NET runtime imports from ntdll: the function tables of the code it compiles, and the restoring of a context.

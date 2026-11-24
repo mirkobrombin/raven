@@ -96,6 +96,8 @@ constexpr std::array shared_exports{
 	NativeX86System::Export{"kernel32.dll", "GetTickCount64", 0}, NativeX86System::Export{"kernel32.dll", "LocalFree", 1},
 	NativeX86System::Export{"kernel32.dll", "MapViewOfFile", 5}, NativeX86System::Export{"kernel32.dll", "UnmapViewOfFile", 1},
 	NativeX86System::Export{"kernel32.dll", "PathCchAppend", 3}, NativeX86System::Export{"kernel32.dll", "PathCchCombineEx", 5},
+	NativeX86System::Export{"kernel32.dll", "GetAppContainerNamedObjectPath", 5},
+	NativeX86System::Export{"ntdll.dll", "RtlGetAppContainerNamedObjectPath", 4},
 	NativeX86System::Export{"user32.dll", "AllowSetForegroundWindow", 1},
 	NativeX86System::Export{"user32.dll", "PeekMessageA", 5},
 	NativeX86System::Export{"user32.dll", "CallWindowProcA", 5}, NativeX86System::Export{"user32.dll", "DestroyCursor", 1},
