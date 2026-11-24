@@ -102,6 +102,17 @@ static uint64_t dispatched_call(uint64_t number)
 	return value;
 }
 
+// A call through the agent's kernel gate reaches the kernel while the selector turns the thread's own calls away. The red zone is
+// stepped over: the call pushes its return address below the stack pointer.
+static uint64_t gate_call(uint64_t number)
+{
+	uint64_t value = number;
+	selector = SYSCALL_DISPATCH_FILTER_BLOCK;
+	asm volatile("sub $128, %%rsp\n\tcall *%1\n\tadd $128, %%rsp" : "+a"(value) : "r"(agent_code + raven::agent::kernel()) : "rcx", "r11", "memory");
+	selector = SYSCALL_DISPATCH_FILTER_ALLOW;
+	return value;
+}
+
 // The runtime's side: wait for the guest's signal, check it and answer with RAX changed.
 static const raven::agent::Segments segments{0x1000, 0x2000, 0, 0};
 
@@ -373,7 +384,7 @@ int main()
 		install(SIGTRAP);
 		install(SIGSYS);
 
-		uint64_t from_breakpoint = 0, from_call = 0, from_compat = 0, kept = 0x1122, gs_after = 0;
+		uint64_t from_breakpoint = 0, from_call = 0, from_compat = 0, kept = 0x1122, gs_after = 0, from_gate = 0, own_tid = 1;
 		uint8_t *const compat = compat_code();
 		std::string failure;
 		std::thread guest([&] {
@@ -393,6 +404,8 @@ int main()
 				check(prctl(PR_SET_SYSCALL_USER_DISPATCH, PR_SYS_DISPATCH_ON, uintptr_t(agent_code), code.size(), &selector) == 0,
 					"Syscall User Dispatch refused");
 				from_call = dispatched_call(SYS_getpid);
+				from_gate = gate_call(SYS_gettid);
+				own_tid = uint64_t(syscall(SYS_gettid));
 				prctl(PR_SET_SYSCALL_USER_DISPATCH, PR_SYS_DISPATCH_OFF, 0, 0, 0);
 			} catch (const std::exception &error) {
 				failure = error.what();
@@ -415,6 +428,7 @@ int main()
 		check(block[raven::agent::set_bases] == 0, "the handler left the segment request set");
 		check(from_compat == 0x77, "a 32-bit thread did not go on in 32-bit code with the runtime's EAX after its breakpoint");
 		check(from_call == 4242, "the turned-away call did not return the runtime's answer");
+		check(from_gate == own_tid, "a call through the kernel gate did not reach the kernel");
 		check(*state() == raven::agent::idle, "the agent left its state set");
 
 		// The service thread makes the calls the runtime leaves it, inside the guest's own process.

@@ -6,7 +6,7 @@
 
 // The code of agent.S, which the runtime copies into a guest, and the offsets within it the runtime and the guest agree on.
 extern "C" const uint8_t raven_agent[], raven_agent_end[], raven_agent_handler[], raven_agent_restorer[], raven_agent_service[],
-	raven_agent_spawn[], raven_agent_spawned[], raven_agent_park[], raven_agent_born[];
+	raven_agent_spawn[], raven_agent_spawned[], raven_agent_park[], raven_agent_born[], raven_agent_kernel[];
 
 namespace raven::agent {
 
@@ -36,6 +36,7 @@ inline size_t spawn() { return size_t(raven_agent_spawn - raven_agent); }
 inline size_t spawned() { return size_t(raven_agent_spawned - raven_agent); }
 // The breakpoint a traced task is sent to when it is handed to the agent.
 inline size_t park() { return size_t(raven_agent_park - raven_agent); }
+inline size_t kernel() { return size_t(raven_agent_kernel - raven_agent); }
 // The breakpoint a thread the service thread started stops on before it has a context of its own.
 inline size_t born() { return size_t(raven_agent_born - raven_agent); }
 

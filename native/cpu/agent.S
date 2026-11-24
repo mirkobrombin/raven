@@ -271,6 +271,14 @@ raven_agent_spawned:
 1:	mov rdi, r12
 	jmp raven_agent_service
 
+/* The kernel gate: a system call the guest's own code makes through the agent, inside the range Syscall User Dispatch lets through,
+ * which the kernel answers at once with the guest's own descriptors. RAX holds the number and the arguments are where the kernel
+ * takes them; RCX and R11 are lost. The runtime points only the preludes that work its own ntsync objects here. */
+	.global raven_agent_kernel
+raven_agent_kernel:
+	syscall
+	ret
+
 /* Where a traced task goes to be handed to the agent: the runtime points it here and lets it go, and its breakpoint brings it into
  * the handler, held there as it was held stopped. */
 	.global raven_agent_park
