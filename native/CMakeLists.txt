@@ -3834,6 +3834,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_suspend_terminate_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         set_property(TEST native_suspend_terminate_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # SetEvent and ResetEvent as the guest makes them itself where the runtime lets it (guest_events_client.c); the job on /dev/ntsync
+        # checks that it did.
+        raven_kernel_fixture(guest-events guest_events_client.c 0x1ef000000 "-lkernel32")
+        add_test(NAME native_guest_events_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
+            ${CMAKE_CURRENT_BINARY_DIR}/guest-events.exe)
+        set_tests_properties(native_guest_events_x64 PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+            ENVIRONMENT "RAVEN_TRACE_GUEST_EVENTS=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/guest-events-prefix")
         # Suspending a thread that has waited long for a completion port returns at once and holds it until it is resumed
         # (suspend_waiting_client.c).
         raven_kernel_fixture(suspend-waiting suspend_waiting_client.c 0x1ef000000 "-lkernel32")
