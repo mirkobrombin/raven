@@ -415,6 +415,12 @@ const uint32_t *stop_word(pid_t task)
 	return found ? state_word(*found) : nullptr;
 }
 
+bool stop_read(pid_t task)
+{
+	const auto found = find(task);
+	return found && !found->running;
+}
+
 bool stopped(pid_t task)
 {
 	const auto found = find(task);

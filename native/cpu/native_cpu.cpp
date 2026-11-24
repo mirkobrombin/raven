@@ -2528,7 +2528,7 @@ bool NativeProcess::serve_alone(uint64_t *block)
 	return true;
 }
 
-bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block)
+bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block, const std::function<bool()> &held)
 {
 	// A guest whose host thread was asleep spins in its stub until it stops at the breakpoint of a long wait, and goes back to looking at
 	// its block when let go on: a call that needs nothing of the runtime is answered there as well, without the turn.
@@ -2547,12 +2547,16 @@ bool NativeProcess::serve_stopped_alone(pid_t task, int status, uint64_t *block)
 		if (agent::request(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip - 1 < state->served_wait_offset ||
 			!std::binary_search(state->call_stubs.begin(), state->call_stubs.end(), registers.rip - 1 - state->served_wait_offset))
 			return false;
+		if (held && held())
+			return false;
 		if (agent::request(state->guest_resume(), task, nullptr, nullptr) == -1)
 			throw std::runtime_error("cannot resume a native guest task after a call answered beside the turn");
 		return true;
 	}
 	if ((stub & 1) || agent::request(PTRACE_GETREGS, task, nullptr, &registers) == -1 || registers.rip != stub + served_stub::wait() + 1 ||
 		!serve_alone(block))
+		return false;
+	if (held && held())
 		return false;
 	if (agent::request(state->guest_resume(), task, nullptr, nullptr) == -1)
 		throw std::runtime_error("cannot resume a native guest task after a call answered beside the turn");

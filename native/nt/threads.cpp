@@ -1715,8 +1715,18 @@ int NativeThreads::park(pid_t task, std::chrono::steady_clock::time_point limit,
 		// A call that needs nothing of the runtime is answered here, outside its turn, and the guest goes on, whether it still spins in
 		// its stub or stopped there.
 		auto *const served = const_cast<uint64_t *>(block);
-		if (status == -4 ? process.serve_alone(served) : process.serve_stopped_alone(task, status, served))
-			continue;
+		const auto suspended = [&] {
+			std::lock_guard lock(gate);
+			return me.paused;
+		};
+		if (status == -4 ? process.serve_alone(served) : process.serve_stopped_alone(task, status, served, suspended)) {
+			// A suspension that came while the call was served stopped the guest: the thread goes on with that stop.
+			std::lock_guard lock(gate);
+			if (me.held == -2)
+				continue;
+			status = std::exchange(me.held, -2);
+			break;
+		}
 		if (status != -3)
 			break;
 		std::unique_lock lock(gate);
@@ -1767,9 +1777,10 @@ void NativeThreads::pause_task_of(GuestThread &thread)
 	// one that stopped already, which waits for its turn and stays at its call while it is suspended (see park).
 	send_job(thread, [&thread] {
 		const pid_t task = thread.snapshot.task;
-		if (thread.parked)
+		// A guest that stopped at its stub while its call is served beside the turn stays at that stop: nothing is left to stop.
+		if (thread.parked && !agent::stop_read(task))
 			thread.held = NativeProcess::pause_own_task(task);
-		else
+		else if (!thread.parked)
 			// A guest that waits in a stub for its call's answer runs, though it goes nowhere: it is stopped where it is.
 			NativeProcess::hold_call(task);
 		thread.paused = true;

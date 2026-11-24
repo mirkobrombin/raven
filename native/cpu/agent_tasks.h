@@ -54,6 +54,8 @@ pid_t wait(pid_t task, int *status, int options);
 int interrupt(pid_t task);
 // Whether a held task has stopped, so wait would not block.
 bool stopped(pid_t task);
+// Whether a held task stands at a stop that was read already and nothing resumed it since: it stays there until it is resumed.
+bool stop_read(pid_t task);
 // The word a held task's handler sets to posted (agent.h) as the task stops, for a loop that looks at it many times; null for any
 // other task.
 const uint32_t *stop_word(pid_t task);

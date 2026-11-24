@@ -230,7 +230,8 @@ public:
 	void set_service_landing(uint64_t landing);
 	// Answers the call in `block` that way; false when it is not one or needs the runtime.
 	bool serve_alone(uint64_t *block);
-	bool serve_stopped_alone(pid_t task, int status, uint64_t *block);
+	// A guest held by its thread's suspension (held) is not let go on after its call is answered: the stop is the thread's to go on with.
+	bool serve_stopped_alone(pid_t task, int status, uint64_t *block, const std::function<bool()> &held = {});
 	bool serve_service_alone(pid_t task);
 	// Writes the floating-point and extended state of a paused task, as PTRACE_GETREGSET with NT_X86_XSTATE gives it.
 	static void set_task_xstate(pid_t task, std::span<const uint8_t> xstate);
