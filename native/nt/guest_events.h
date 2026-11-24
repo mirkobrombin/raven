@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -50,6 +51,10 @@ public:
 	void hold();
 	void release();
 	uint64_t made_by_guest() const;
+	// The process is going and ends its threads wherever they are: no set of the guest counts any more, and nothing waits for a slot's
+	// users, among whom may be a thread that was ended there.
+	void shut();
+	bool shut_down() const { return closing_down.load(std::memory_order_acquire); }
 
 private:
 	uint8_t *table;
@@ -61,6 +66,7 @@ private:
 	std::vector<size_t> used;
 	std::vector<int> closing;
 	size_t holders = 0;
+	std::atomic<bool> closing_down{false};
 	uint64_t &word(size_t offset) const { return *reinterpret_cast<uint64_t *>(table + offset); }
 	uint8_t *slot(size_t index) const { return table + header + index * slot_size; }
 	void empty(size_t index);

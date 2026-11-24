@@ -94,6 +94,14 @@ int main()
 		events.withdraw_event(&event_two);
 		check(!held(0x100) && !held(0x104), "an event's slots stayed");
 		events.flush();
+		// Once the process is going, a slot's users are not waited for: one of them may have been ended there.
+		auto last = events.ticket(0x200);
+		check(last && events.offer(0x200, &event_one, pipe_ends[0], *last, [] { return true; }), "the last offer was refused");
+		users(0x200)->store(1);
+		events.shut();
+		events.withdraw(0x200);
+		check(!held(0x200) && table[GuestEvents::barred] == 1, "shutting down waited for a user or left the guest working events");
+		events.flush();
 		std::cout << "guest events contract passed\n";
 		return 0;
 	} catch (const std::exception &error) {

@@ -2,6 +2,7 @@
 #include "cpu/agent.h"
 #include "cpu/agent_tasks.h"
 #include "kernel_waits.h"
+#include "guest_events.h"
 #include "cpu/agent_tasks.h"
 #include "cpu/call_cycles.h"
 #include "desktop_lock.h"
@@ -389,6 +390,10 @@ void NativeThreads::finish(GuestThread &thread, uint32_t code)
 	// The mutexes the thread holds in the table are abandoned to their waiters, and a wait of its own there, or on shared objects, ends.
 	raven_waits_thread_ended(kernel_waits(), thread.id);
 	call_away(thread);
+	// A thread ended in the middle of a set it makes itself would hold its event's slot for good: it is stopped first, which moves it out
+	// of the set (see NativeProcess::settle_window).
+	if (const auto *events = GuestEvents::active(); events && !events->shut_down() && &thread != running && threaded && !thread.parked)
+		pause_task_of(thread);
 	if (&thread != running && threaded) {
 		// Its host thread reaps the task and leaves through the thread's frames once it has its turn.
 		if (thread.snapshot.task > 0)
@@ -1117,6 +1122,8 @@ void NativeThreads::terminate(const std::shared_ptr<GuestThread> &thread, uint32
 
 void NativeThreads::terminate_others(uint32_t code)
 {
+	if (auto *const events = GuestEvents::active())
+		events->shut();
 	for (const auto &thread : threads)
 		if (thread.get() != running && thread->state != GuestThread::State::done)
 			finish(*thread, code);
@@ -2157,6 +2164,8 @@ void NativeThreads::call_away(GuestThread &thread)
 void NativeThreads::threaded_unwind()
 {
 	tearing_down = true;
+	if (auto *const events = GuestEvents::active())
+		events->shut();
 	auto &me = *running;
 	for (int round = 0; round < 5000; ++round) {
 		bool left = false;

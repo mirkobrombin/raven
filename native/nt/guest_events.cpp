@@ -134,6 +134,12 @@ void GuestEvents::release()
 		std::atomic_ref(word(barred)).store(0, std::memory_order_release);
 }
 
+void GuestEvents::shut()
+{
+	closing_down.store(true, std::memory_order_release);
+	std::atomic_ref(word(barred)).store(1, std::memory_order_seq_cst);
+}
+
 uint64_t GuestEvents::made_by_guest() const
 {
 	return std::atomic_ref(word(made)).load(std::memory_order_relaxed);
@@ -153,7 +159,7 @@ void GuestEvents::wait_unused(size_t index) const
 	// A guest among the users is between two instructions of its prelude, or in the one ioctl: one the runtime stops there is moved out
 	// of the window first (see NativeThreads), so the wait is for a thread that runs.
 	std::atomic_ref users(*reinterpret_cast<uint32_t *>(slot(index) + slot_users));
-	for (unsigned round = 0; users.load(std::memory_order_acquire); ++round)
+	for (unsigned round = 0; users.load(std::memory_order_acquire) && !shut_down(); ++round)
 		if (round < 1000)
 			__builtin_ia32_pause();
 		else
