@@ -1046,6 +1046,7 @@ static void fill_defaults(void)
 	SendMessageW(open_choice, CB_RESETCONTENT, 0, 0);
 	SendMessageW(open_choice, CB_ADDSTRING, 0, (LPARAM)L"A program of the prefix");
 	SendMessageW(open_choice, CB_ADDSTRING, 0, (LPARAM)L"Ask every time");
+	SendMessageW(open_choice, CB_ADDSTRING, 0, (LPARAM)L"This prefix, for links from Linux");
 	for (index = 0; index < config_count; ++index) {
 		const WCHAR *value;
 		if ((value = pair_line(config_lines[index], L"host-app ", name, 128))) {
@@ -1063,6 +1064,9 @@ static void fill_defaults(void)
 			set_cell(log_list, row, 1, !lstrcmpW(value, L"windows") ? L"A program of the prefix" : !lstrcmpW(value, L"ask") ? L"Ask every time" :
 				starts_with(value, L"linux:") ? text : value);
 		}
+		/* "link SCHEME": the Linux desktop hands addresses of the kind to the program of the prefix registered for it. */
+		if (starts_with(config_lines[index], L"link "))
+			set_cell(log_list, add_list_row(log_list, config_lines[index] + 5, index), 1, L"This prefix, for links from Linux");
 	}
 	SendMessageW(open_choice, CB_SETCURSEL, 0, 0);
 }
@@ -1128,8 +1132,20 @@ static void set_handler(void)
 	for (at = kind[0] == L'.' ? kind + 1 : kind; *at; ++at)
 		if (!((*at >= L'a' && *at <= L'z') || (*at >= L'A' && *at <= L'Z') || (*at >= L'0' && *at <= L'9') || *at == L'-' || *at == L'+'))
 			break;
-	if (!kind[0] || !kind[1] || *at || chosen < 0) {
-		MessageBoxW(main_window, L"Type a kind such as .pdf or mailto first.", L"Default apps", MB_OK | MB_ICONINFORMATION);
+	if (!kind[0] || !kind[1] || *at || chosen < 0 || (chosen == 2 && !((kind[0] >= L'a' && kind[0] <= L'z') || (kind[0] >= L'A' && kind[0] <= L'Z')))) {
+		MessageBoxW(main_window, chosen == 2 ? L"Type a kind of address such as nxm first." : L"Type a kind such as .pdf or mailto first.", L"Default apps",
+			MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	/* Links from Linux cross the sandbox: only this panel lets them in, by a "link" line, apart from who opens the kind inside. */
+	if (chosen == 2) {
+		for (index = config_count - 1; index >= 0; --index)
+			if (starts_with(config_lines[index], L"link ") && !lstrcmpiW(config_lines[index] + 5, kind))
+				remove_config_line(index);
+		wsprintfW(line, L"link %s", kind);
+		add_config_line(line);
+		if (write_config())
+			fill_defaults();
 		return;
 	}
 	for (index = config_count - 1; index >= 0; --index)

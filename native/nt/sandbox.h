@@ -29,7 +29,7 @@ public:
 
 	// Reads the prefix's sandbox.conf, and again whenever it changes. A line "read PATH" or "write PATH" grants a path to every program,
 	// "app-read PROGRAM<tab>PATH" and "app-write PROGRAM<tab>PATH" to one program, and "network off" or "app-network-off PROGRAM" take
-	// the network away.
+	// the network away. A line "link SCHEME" lets the Linux desktop hand the prefix SCHEME: addresses (see publish_links).
 	void load(const std::filesystem::path &prefix);
 	// The program this runtime runs, by the Windows path of its executable, which the grants of one program are matched against.
 	void set_program(std::u16string program);
@@ -69,6 +69,12 @@ public:
 	// Who opens a kind of file (".txt") or of address ("mailto"): a line "handler KIND<tab>windows", "handler KIND<tab>linux:NAME" or
 	// "handler KIND<tab>ask"; empty when no line names it, and a program of the prefix opens it then.
 	std::string handler(std::string_view kind) const;
+	// The kinds of address the desktop may hand the prefix, by their "link" lines.
+	std::vector<std::string> links() const;
+	// A desktop entry (x-scheme-handler/SCHEME) for each kind of address the prefix lets the desktop hand it that a program of the prefix
+	// registered (HKEY_CLASSES_ROOT\SCHEME with a "URL Protocol" value), and none for the others. Its command opens the address in the
+	// prefix with rundll32's ShellExec_RunDLL, as ShellExecute opens it there, with this runtime's window system.
+	void publish_links() const;
 	// The access another program of the prefix has: the program that started this one, whose files a bridge to a Linux program passes on.
 	Access access_as(const std::filesystem::path &host, std::u16string_view other) const;
 	// Opens host files and addresses with a Linux program the prefix exposes, for the program that started this one: only what that
@@ -90,6 +96,7 @@ private:
 	mutable bool network_allowed = true;
 	mutable std::vector<HostApp> exposed;
 	mutable std::vector<std::pair<std::string, std::string>> handlers;
+	mutable std::vector<std::string> schemes;
 	mutable timespec configuration_time{};
 	mutable off_t configuration_size = -1;
 };

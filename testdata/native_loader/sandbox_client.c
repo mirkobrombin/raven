@@ -75,16 +75,26 @@ static int network_off(void)
 	return 0;
 }
 
-// Opens the document and waits for the note of the program registered for its kind.
-static int open_document(const WCHAR *target)
+// Opens the document and waits up to `tenths` tenths of a second for the note of the program registered for its kind; from the desktop,
+// through rundll32 shell32.dll,ShellExec_RunDLL as the desktop's entry for a kind of address runs it.
+static int open_document(const WCHAR *target, BOOL from_desktop, int tenths)
 {
 	static const WCHAR note[] = L"C:\\raven-associate\\opened.txt";
 	// The program of an earlier round may still hold its note for a moment.
 	for (int tries = 0; tries < 200 && !DeleteFileW(note) && GetLastError() == ERROR_SHARING_VIOLATION; ++tries)
 		Sleep(10);
 	if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES) return 47;
-	if ((INT_PTR)ShellExecuteW(NULL, L"open", target, NULL, NULL, SW_SHOWNORMAL) <= 32) return 42;
-	for (int waited = 0; waited < 200; ++waited) {
+	if (from_desktop) {
+		WCHAR line[MAX_PATH] = L"rundll32.exe shell32.dll,ShellExec_RunDLL ";
+		STARTUPINFOW startup = {sizeof(startup)};
+		PROCESS_INFORMATION information;
+		lstrcatW(line, target);
+		if (!CreateProcessW(L"C:\\windows\\system32\\rundll32.exe", line, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &information)) return 48;
+		WaitForSingleObject(information.hProcess, 20000);
+		CloseHandle(information.hThread);
+		CloseHandle(information.hProcess);
+	} else if ((INT_PTR)ShellExecuteW(NULL, L"open", target, NULL, NULL, SW_SHOWNORMAL) <= 32) return 42;
+	for (int waited = 0; waited < tenths; ++waited) {
 		if (GetFileAttributesW(note) != INVALID_FILE_ATTRIBUTES)
 			return 0;
 		Sleep(100);
@@ -109,11 +119,18 @@ static int associate(const WCHAR *program)
 	HANDLE document = CreateFileW(L"C:\\raven-associate\\letter.ravtest", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
 	if (document == INVALID_HANDLE_VALUE) return 41;
 	CloseHandle(document);
-	const int plain = open_document(L"C:\\raven-associate\\letter.ravtest");
+	const int plain = open_document(L"C:\\raven-associate\\letter.ravtest", FALSE, 200);
 	if (plain) return plain;
 	// The target also opens in quotes, as Chromium passes an address.
-	const int quoted = open_document(L"\"C:\\raven-associate\\letter.ravtest\"");
-	return quoted ? quoted + 6 : 0;
+	const int quoted = open_document(L"\"C:\\raven-associate\\letter.ravtest\"", FALSE, 200);
+	if (quoted) return quoted + 6;
+	// An address of a kind the prefix registered, handed in from the desktop; one with a quote in it is refused.
+	if (RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Classes\\ravtest", L"URL Protocol", REG_SZ, L"", 2) ||
+		RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Classes\\ravtest\\shell\\open\\command", NULL, REG_SZ, command, (at + 1) * 2)) return 49;
+	if (open_document(L"ravtest://letter.ravtest/\"x", TRUE, 20) != 43) return 50;
+	if (open_document(L"ravtest:x/../raven-associate/letter.ravtest", TRUE, 20) != 43) return 51;
+	const int linked = open_document(L"ravtest://letter.ravtest/1", TRUE, 200);
+	return linked ? linked + 20 : 0;
 }
 
 // The program registered for the kind: it notes the document it was handed.

@@ -709,6 +709,24 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		call.ret(open_target(call[1] ? call.wide(call[1]) : std::u16string(u"open"), call[2] ? call.wide(call[2]) : std::u16string(),
 			call[3] ? call.wide(call[3]) : std::u16string(), call[4] ? call.wide(call[4]) : std::u16string(), started));
 	});
+	// ShellExec_RunDLL(window, instance, address, show): rundll32 shell32.dll,ShellExec_RunDLL SCHEME://... opens the address with the
+	// program the prefix registered for its scheme, as ShellExecute does. The desktop's entry for a kind of address the prefix takes runs it
+	// (Sandbox::publish_links), so the address comes from outside the sandbox: anything but a whole SCHEME:// address is refused, as a
+	// "scheme:" with no "//" would be opened as a path and a blank or a quote would break out of the registered command's "%1".
+	// shortcut: only addresses, no files or parameters; open them too if a program of the prefix calls it so.
+	registry.add("ShellExec_RunDLLW", 4, [open_target](ApiCall &call) {
+		const auto target = call[2] ? call.wide(call[2]) : std::u16string();
+		const auto scheme = target.find(u"://");
+		const auto scheme_character = [](char16_t c) { return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z') || (c >= u'0' && c <= u'9') ||
+			c == u'+' || c == u'-' || c == u'.'; };
+		if (scheme == target.npos || scheme < 2 || !std::all_of(target.begin(), target.begin() + std::ptrdiff_t(scheme), scheme_character) ||
+			std::any_of(target.begin(), target.end(), [](char16_t c) { return c <= u' ' || c == u'"' || c == 0x7f; })) {
+			sandbox().refuse(to_utf8(target), "open-address");
+			return;
+		}
+		std::shared_ptr<ProcessObject> started;
+		open_target(u"open", target, {}, {}, started);
+	});
 	// SHELLEXECUTEINFOW: the pointers sit after the size, mask and window, each as wide as the program's.
 	registry.add("ShellExecuteExW", 1, [open_target, &context](ApiCall &call) {
 		const size_t width = call.pointer_width();
