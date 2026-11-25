@@ -4175,7 +4175,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         # the runtime's tables reaches the runtime only when a change came in between, and so does a peek at a queue found
                         # empty a moment before.
                         --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC
-                        --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW,PeekMessageW)
+                        --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW,PeekMessageW
+                        # A peek at a queue of its own that needs nothing of the whole desktop leaves the other threads' calls running.
+                        --whole-at-most PeekMessageW:3)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-desktop-prefix${width}")
                     # Making and destroying windows writes the directory other processes find windows in, with the desktop lock let go.

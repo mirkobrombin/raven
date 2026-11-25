@@ -3431,6 +3431,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				std::optional<WindowCallScope> window_scope;
 				if (desktop_call) {
 					desktop_scope.emplace();
+					CallCycles::instance().took_whole();
 					// The contexts' state the guest changed by itself comes in first, as in the turn; deferred releases wait for a stop
 					// of the guest, as for a call answered through its stub.
 					windows.apply_dc_log();

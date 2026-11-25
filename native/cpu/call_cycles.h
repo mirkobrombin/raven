@@ -86,6 +86,8 @@ public:
 			++entry.beside;
 		entry.locked += std::exchange(locked, 0);
 		entry.copies += std::exchange(copies, 0);
+		// A call that went to the turn after all counts only the turn's answer.
+		entry.whole += std::exchange(whole, 0) * beside;
 		report();
 	}
 	// The host thread of the calling thread waited `cycles` for the runtime's turn before it saw the call it is about to see; 0 when it
@@ -128,6 +130,13 @@ public:
 		if (enabled())
 			++copies;
 	}
+	// The host thread took the desktop lock whole for a call it answers beside the turn, which stops every other thread's call on the
+	// desktop until it is done.
+	void took_whole()
+	{
+		if (enabled())
+			whole = 1;
+	}
 	~CallCycles()
 	{
 		// What a run shorter than one report's interval cost is told as it ends.
@@ -138,7 +147,7 @@ public:
 
 private:
 	struct Entry {
-		uint64_t count = 0, returns = 0, beside = 0, boundary = 0, turn = 0, service = 0, back = 0, locked = 0, copies = 0;
+		uint64_t count = 0, returns = 0, beside = 0, boundary = 0, turn = 0, service = 0, back = 0, locked = 0, copies = 0, whole = 0;
 		uint64_t delivery = 0, deliveries = 0, sigreturn = 0, sigreturns = 0;
 	};
 	// A stretch longer than this many cycles (about a second) is a guest that was stopped or descheduled, not the cost of a call.
@@ -154,6 +163,8 @@ private:
 	static inline thread_local uint64_t locked = 0;
 	// The kernel's copies of guest memory, kept until the call they were made for is answered.
 	static inline thread_local uint64_t copies = 0;
+	// Whether the call took the desktop lock whole beside the turn, kept until it is answered.
+	static inline thread_local uint64_t whole = 0;
 
 	void report(bool ending = false)
 	{
@@ -183,11 +194,11 @@ private:
 			const auto name = names.find(order[index].second);
 			// A system call has the signal's way to the agent and back besides: the kernel's part of its boundary and of its return.
 			std::fprintf(stderr, "cycles:   %-32s %8llu calls %8llu beside  boundary %7llu  turn %9llu  service %9llu  return %7llu  lock %9llu  copies %8llu"
-				"  signal %7llu  sigreturn %7llu\n",
+				"  signal %7llu  sigreturn %7llu  whole %8llu\n",
 				name == names.end() ? "?" : name->second.c_str(), (unsigned long long)entry.count, (unsigned long long)entry.beside,
 				per(entry.boundary, entry.count), per(entry.turn, entry.count), per(entry.service, entry.count), per(entry.back, entry.returns),
 				per(entry.locked, entry.count), (unsigned long long)entry.copies, per(entry.delivery, entry.deliveries),
-				per(entry.sigreturn, entry.sigreturns));
+				per(entry.sigreturn, entry.sigreturns), (unsigned long long)entry.whole);
 		}
 		calls.clear();
 	}
