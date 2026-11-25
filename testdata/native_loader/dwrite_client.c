@@ -1,6 +1,6 @@
 /* Exercises DirectWrite through its public interfaces: the system fonts, a face, glyph metrics, an outline and a rendered glyph run,
    left to right and, as a run of odd bidi level, right to left from its origin; and a font file that the program's own loader serves to
-   two collections and a face, which DirectWrite reads once. */
+   two collections and a face, which DirectWrite reads once and finds again in the collections. */
 #define INITGUID
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -95,7 +95,7 @@ static IDWriteFontCollectionLoaderVtbl served_collection_vtbl = {(void *)served_
 static IDWriteFontCollectionLoader served_collections = {&served_collection_vtbl};
 
 /* The bytes of the file behind a system face, served again by the program's loaders: two collections that list the font file object
-   and a face made from it read it once, and the face has the system face's glyphs. */
+   and a face made from it read it once, the face has the system face's glyphs, and the collections find their font from it. */
 static int test_served_file(IDWriteFactory *factory, IDWriteFontFace *system_face)
 {
 	IDWriteFontFile *system_file = NULL;
@@ -142,6 +142,31 @@ static int test_served_file(IDWriteFactory *factory, IDWriteFontFace *system_fac
 		return 68;
 	if (streams_made != 1)
 		return 69;
+	/* The collection knows the face the program opened from its file, and a face opened through another file object the loader makes for
+	   the same key, as WPF makes one for every reference to a font. */
+	{
+		IDWriteFontFile *again = NULL;
+		IDWriteFontFace *reopened = NULL, *of_font = NULL;
+		IDWriteFont *found = NULL;
+		if (IDWriteFontCollection_GetFontFromFontFace(first, NULL, &found) != E_INVALIDARG || found ||
+			IDWriteFontCollection_GetFontFromFontFace(first, face, NULL) != E_POINTER)
+			return 70;
+		if (FAILED(IDWriteFontCollection_GetFontFromFontFace(first, face, &found)) || !found ||
+			FAILED(IDWriteFont_CreateFontFace(found, &of_font)) || IDWriteFontFace_GetIndex(of_font) != IDWriteFontFace_GetIndex(face) ||
+			IDWriteFontFace_GetGlyphCount(of_font) != IDWriteFontFace_GetGlyphCount(face))
+			return 71;
+		IDWriteFontFace_Release(of_font);
+		IDWriteFont_Release(found);
+		found = NULL;
+		if (FAILED(IDWriteFactory_CreateCustomFontFileReference(factory, &file_key, sizeof file_key, &served_loader, &again)) ||
+			FAILED(IDWriteFactory_CreateFontFace(factory, IDWriteFontFace_GetType(system_face), 1, &again, IDWriteFontFace_GetIndex(system_face),
+				DWRITE_FONT_SIMULATIONS_NONE, &reopened)) ||
+			FAILED(IDWriteFontCollection_GetFontFromFontFace(second, reopened, &found)) || !found)
+			return 72;
+		IDWriteFont_Release(found);
+		IDWriteFontFace_Release(reopened);
+		IDWriteFontFile_Release(again);
+	}
 	IDWriteFontFace_Release(face);
 	return 0;
 }
