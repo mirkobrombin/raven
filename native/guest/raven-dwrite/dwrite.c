@@ -2951,16 +2951,23 @@ static HRESULT STDMETHODCALLTYPE custom_find(IDWriteFontCollection *self, const 
 		}
 	return S_OK;
 }
+/* The font of the collection a face was opened from. A face the program opened itself, through a font file of its own loader, has data of
+   its own: it is the entry's face when it is the same face of the same file, which every face read from those bytes shares. */
 static HRESULT STDMETHODCALLTYPE custom_from_face(IDWriteFontCollection *self, IDWriteFontFace *face, IDWriteFont **font)
 {
 	CustomCollection *collection = CUSTOM_OF(self);
 	Face *source = (Face *)face;
 	UINT32 position, entry;
+	if (!font)
+		return E_POINTER;
 	*font = NULL;
+	if (!face)
+		return E_INVALIDARG;
 	for (position = 0; position < collection->count; ++position)
 		for (entry = 0; entry < collection->families[position].count; ++entry) {
 			FontEntry *candidate = collection->families[position].entries[entry];
-			if (candidate->data ? candidate->data == source->data :
+			if (candidate->data ? candidate->data == source->data ||
+					(candidate->index == source->data->index && candidate->data->file == source->data->file) :
 				source->data->path && candidate->index == source->data->index && wequal_fold(candidate->path, source->data->path)) {
 				*font = make_font(candidate, &collection->families[position]);
 				return *font ? S_OK : E_OUTOFMEMORY;
