@@ -153,6 +153,11 @@ int raven_entry(void)
 		return 9;
 	if (receive(listener, &message, &attributes, -30000000) || message.value != 77 || (message.header.type & 0xfff) != 3)
 		return 10;
+	// Releasing a message frees what is kept for it; a message built by the server itself, as CoreMessaging releases one, frees nothing.
+	struct message release = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 0};
+	if (send_receive(listener, 0x10000, &message.header, NULL, NULL, NULL, NULL, NULL) ||
+		send_receive(listener, 0x10000, &release.header, NULL, NULL, NULL, NULL, NULL))
+		return 17;
 	const struct context_attribute *about = get(&attributes, context);
 	if (attributes.allocated != (security | view | context | work_on_behalf) || attributes.valid != context || !about)
 		return 11;
