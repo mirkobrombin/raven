@@ -187,6 +187,12 @@ void Sandbox::publish_links() const
 	const char *options = std::getenv("RAVEN_CHILD_OPTIONS");
 	const std::string desktop = options && std::string_view(options).find("--desktop=x11") != std::string_view::npos ? " --desktop=x11" :
 		std::getenv("WAYLAND_DISPLAY") ? " --desktop=wayland" : "";
+	// A path with a line break or another control character would add lines of its own to the entry: such a prefix gets none.
+	const auto plain = [](const std::string &text) {
+		return std::none_of(text.begin(), text.end(), [](unsigned char character) { return character < ' ' || character == 0x7f; });
+	};
+	if (!plain(prefix.string()) || !plain(runtime.string()))
+		wanted.clear();
 	std::string name;
 	for (const char character : prefix.filename().string())
 		name += static_cast<unsigned char>(character) < ' ' ? ' ' : character;

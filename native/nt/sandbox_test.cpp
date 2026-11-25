@@ -167,6 +167,14 @@ int main()
 	std::ofstream(root / "prefix/sandbox.conf", std::ios::trunc) << "handler nxm\twindows\n";
 	other.publish_links();
 	check(entry().empty(), "the entry stays when the prefix no longer lets the desktop hand the kind in");
+	// A prefix whose path holds a line break gets no entry, whose lines the path would otherwise add to.
+	std::filesystem::create_directories(root / "two\nlines");
+	std::filesystem::copy_file(root / "prefix/registry.dat", root / "two\nlines/registry.dat");
+	std::ofstream(root / "two\nlines/sandbox.conf") << "link nxm\n";
+	raven::Sandbox broken;
+	broken.load(root / "two\nlines");
+	broken.publish_links();
+	check(entry().empty(), "a prefix whose path holds a line break gets an entry");
 	std::filesystem::remove_all(root);
 	return 0;
 }
