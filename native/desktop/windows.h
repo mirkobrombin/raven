@@ -185,6 +185,10 @@ public:
 	bool input_ready();
 	// Queue categories in the high word, new categories in the low word; safe in a waiting thread's condition.
 	uint32_t queue_status(uint32_t thread,uint32_t mask,bool clear);
+	// What queue_status answers from the queue as it is, without taking input in or posting timers first.
+	uint32_t status_bits(uint32_t thread,uint32_t mask,bool clear);
+	// Sets the thread's quiet slot (see set_quiet_table) for a queue holding the kinds `holds`.
+	void quiet_until(uint32_t thread,uint32_t holds);
 	void dump_windows();
 	void shutdown();
 

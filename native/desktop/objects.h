@@ -386,6 +386,11 @@ public:
 	bool window_visible(uint64_t handle) const;
 	void configure_window_dc(uint64_t window,DesktopDC &device,bool frame) const;
 	uint64_t invalid_window(uint64_t filter) const;
+	// The window WM_PAINT goes to next for `thread`, under `filter` when one is given: the first waiting after `after`, going round, or
+	// the waiting parent above it. Worked out under one hold of the table, so a peek beside the turn can ask while others invalidate.
+	uint64_t paint_target(uint64_t filter,uint32_t thread,uint64_t after) const;
+	// The windows waiting to be painted that `thread` paints, each with its update generation, under one hold of the table.
+	std::map<uint64_t,uint64_t> paint_generations(uint32_t thread) const;
 	std::vector<uint64_t> window_handles() const;
 	// The visible windows waiting to be painted, in handle order. A message loop asks at every call; the list is worked out again
 	// only after a window was handed out for change, added or erased, or the runtime said one may have changed (windows_changed).

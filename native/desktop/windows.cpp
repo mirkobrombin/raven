@@ -659,9 +659,14 @@ void NativeWindows::collect_input(std::chrono::milliseconds budget)
 
 uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 {
-	const auto event_thread=[&](const DesktopEvent &event) { return input_thread(event); };
 	collect_input(std::chrono::milliseconds(0));
 	post_due_timers();
+	return status_bits(thread,mask,clear);
+}
+
+uint32_t NativeWindows::status_bits(uint32_t thread,uint32_t mask,bool clear)
+{
+	const auto event_thread=[&](const DesktopEvent &event) { return input_thread(event); };
 	uint32_t current=0;
 	for (const auto &message : messages)
 		if (!message.thread || message.thread==thread) current|=message.kinds;
@@ -670,15 +675,11 @@ uint32_t NativeWindows::queue_status(uint32_t thread,uint32_t mask,bool clear)
 	for (const auto &event : pending_events)
 		if (!event_thread(event) || event_thread(event)==thread) current|=event_kinds(event);
 	auto &state=queues[thread];
-	std::map<uint64_t,uint64_t> paints;
-	// Read-only: a window handed out for change would be published to the guest again.
-	for (const auto handle : std::as_const(objects).waiting_paint()) {
-		const auto *window=std::as_const(objects).window(handle);
-		if (!window || (window->thread && window->thread!=thread)) continue;
+	auto paints=objects.paint_generations(thread);
+	for (const auto &[handle,generation] : paints) {
 		current|=0x20;
-		paints[handle]=window->update_generation;
 		const auto previous=state.paints.find(handle);
-		if (previous==state.paints.end() || previous->second!=window->update_generation) state.changed|=0x20;
+		if (previous==state.paints.end() || previous->second!=generation) state.changed|=0x20;
 	}
 	state.paints=std::move(paints);
 	state.changed=(state.changed | (current & ~state.current)) & current;
@@ -695,6 +696,12 @@ void NativeWindows::mark_quiet(uint32_t thread)
 	// answers PeekMessage, not GetInputState.
 	const uint32_t holds=queue_status(thread,0xffff,false)>>16;
 	watch_input();
+	quiet_until(thread,holds);
+}
+
+void NativeWindows::quiet_until(uint32_t thread,uint32_t holds)
+{
+	if (!quiet_table) return;
 	// The time stamp counter's rate, taken against the steady clock since the process's desktop was made: until that is two
 	// milliseconds ago the guest asks the runtime every time. The deadline lies at most 16 ms ahead, and the clock reads to a fraction
 	// of a microsecond, so the rate is already far closer than that needs; a program whose threads poll a few hundred times within its
@@ -1227,29 +1234,7 @@ void NativeWindows::serve_sent()
 
 uint64_t NativeWindows::invalid_owned(uint64_t filter,uint32_t thread) const
 {
-	const auto me=thread ? thread : environment.thread_id();
-	// The search starts after the window painted last and goes round: a window invalidated with every pointer move (a status bar
-	// showing the position) would otherwise be found first each time, and the others, the canvas the pointer draws on among them,
-	// would wait for as long as the moves go on.
-	auto handles=std::as_const(objects).waiting_paint();
-	std::stable_partition(handles.begin(),handles.end(),[&](uint64_t handle) { return handle>paint_cursor; });
-	for (const auto handle : handles) {
-		const auto *window=std::as_const(objects).window(handle);
-		if (!window || (window->thread && window->thread!=me)) continue;
-		if (filter && filter!=handle && !objects.is_child(filter,handle)) continue;
-		// Parents paint before their children, as Windows orders WM_PAINT: a child may lie under what its parent draws, and handles
-		// come back in any order once windows are destroyed and made again.
-		uint64_t chosen=handle;
-		for (auto parent=window->parent;parent && parent!=filter;) {
-			const auto *above=std::as_const(objects).window(parent);
-			if (!above) break;
-			if (above->needs_paint() && objects.window_visible(parent) && (!above->thread || above->thread==me)) chosen=parent;
-			parent=above->parent;
-		}
-		if (filter && chosen!=handle && filter!=chosen && !objects.is_child(filter,chosen)) chosen=handle;
-		return chosen;
-	}
-	return 0;
+	return objects.paint_target(filter,thread ? thread : environment.thread_id(),paint_cursor);
 }
 
 // A compositor that moves the keyboard between two windows of the program reports a leave first. The leave waits a moment, so the

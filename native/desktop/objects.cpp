@@ -501,6 +501,43 @@ uint64_t DesktopObjects::invalid_window(uint64_t filter) const
 	return 0;
 }
 
+uint64_t DesktopObjects::paint_target(uint64_t filter,uint32_t thread,uint64_t after) const
+{
+	const TableHold hold(*this, true);
+	// The search starts after the window painted last and goes round: a window invalidated with every pointer move (a status bar
+	// showing the position) would otherwise be found first each time, and the others, the canvas the pointer draws on among them,
+	// would wait for as long as the moves go on.
+	auto handles=waiting_paint();
+	std::stable_partition(handles.begin(),handles.end(),[&](uint64_t handle) { return handle>after; });
+	for (const auto handle : handles) {
+		const auto *record=window(handle);
+		if (!record || (record->thread && record->thread!=thread)) continue;
+		if (filter && filter!=handle && !is_child(filter,handle)) continue;
+		// Parents paint before their children, as Windows orders WM_PAINT: a child may lie under what its parent draws, and handles
+		// come back in any order once windows are destroyed and made again.
+		uint64_t chosen=handle;
+		for (auto parent=record->parent;parent && parent!=filter;) {
+			const auto *above=window(parent);
+			if (!above) break;
+			if (above->needs_paint() && window_visible(parent) && (!above->thread || above->thread==thread)) chosen=parent;
+			parent=above->parent;
+		}
+		if (filter && chosen!=handle && filter!=chosen && !is_child(filter,chosen)) chosen=handle;
+		return chosen;
+	}
+	return 0;
+}
+
+std::map<uint64_t,uint64_t> DesktopObjects::paint_generations(uint32_t thread) const
+{
+	const TableHold hold(*this, true);
+	std::map<uint64_t,uint64_t> paints;
+	for (const auto handle : waiting_paint())
+		if (const auto *record=window(handle); record && (!record->thread || record->thread==thread))
+			paints[handle]=record->update_generation;
+	return paints;
+}
+
 bool DesktopObjects::set_title(uint64_t handle,std::u16string title)
 {
 	const TableHold hold(*this, true);
