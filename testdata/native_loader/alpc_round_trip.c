@@ -257,6 +257,9 @@ int raven_entry(void)
 	}
 	if (!message.header.message_id || message.value != 921)
 		return 26;
+	// A request whose sender waits for the reply comes marked as one to answer (LPC_CONTINUATION_REQUIRED).
+	if ((message.header.type & 0xfff) != 1 || !(message.header.type & 0x2000))
+		return 38;
 	if (message.header.process != peer_process || message.header.thread != peer_thread)
 		return 27;
 	const DWORD expected_integrity = tracking == dynamic_identity ? SECURITY_MANDATORY_UNTRUSTED_RID : SECURITY_MANDATORY_LOW_RID;
