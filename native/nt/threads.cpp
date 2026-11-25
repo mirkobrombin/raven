@@ -1525,8 +1525,14 @@ void NativeThreads::leave(GuestThread &me, bool save)
 	if (const unsigned held = desktop_lock().suspend())
 		me.desktop_depth = held;
 	const auto now = std::chrono::steady_clock::now();
-	if (save && !process.gone())
-		me.snapshot = process.save_thread(false);
+	if (save && !process.gone()) {
+		auto saved = process.save_thread(false);
+		// A suspended thread whose task runs on in its stub keeps the registers read when it was stopped (see pause_task_of): there is
+		// nothing else to read them from until it is resumed.
+		if (me.paused && !saved.stopped)
+			saved.context = std::move(me.snapshot.context);
+		me.snapshot = std::move(saved);
+	}
 	if (std::exchange(told, false))
 		signaled();
 	// The threads whose waits ended meanwhile join the line before the runtime is given on. While others wait in line for the runtime
