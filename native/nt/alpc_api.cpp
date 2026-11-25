@@ -170,6 +170,8 @@ private:
 
 constexpr uint32_t security_granted = 1, security_dynamic = 2, security_effective = 4, security_level_shift = 3;
 constexpr uint32_t security_mask = security_granted | security_dynamic | security_effective | (3 << security_level_shift);
+// A request whose sender waits for the reply is delivered with LPC_CONTINUATION_REQUIRED beside its type: the receiver answers it.
+constexpr uint16_t awaited_request = 1 | 0x2000;
 
 struct AlpcConnection {
 	enum class State { waiting, accepted, rejected };
@@ -330,7 +332,7 @@ bool route_alpc_packet(AlpcPort &port, const std::shared_ptr<AlpcConnection> &co
 		return false;
 	const auto remote_id = message.id;
 	message.id = uint32_t(next_id++);
-	message.type = kind == AlpcPacket::request ? 1 : 3;
+	message.type = kind == AlpcPacket::request ? awaited_request : 3;
 	if (kind == AlpcPacket::request) {
 		if (port.replies.size() >= 256 || std::any_of(port.replies.begin(), port.replies.end(), [&](const auto &entry) {
 			return entry.second->remote_id == remote_id && entry.second->connection.lock() == connection;
@@ -1024,7 +1026,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 						reply->token = current ? current : context.process_token;
 					}
 					message->reply = reply;
-					message->type = 1;
+					message->type = awaited_request;
 					if (!port->server)
 						message->port_context = port->connection->context;
 					WithdrawAlpcRequest withdraw{*destination, message->id};
