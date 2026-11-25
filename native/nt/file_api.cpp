@@ -1718,12 +1718,12 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		struct stat own{};
-		if (!resolved->exists || ::lstat(resolved->host.c_str(), &own)) {
+		if (!resolved->exists || paths.status(resolved->host, own, false)) {
 			call.set_last_error(missing(*resolved));
 			return;
 		}
 		const bool link = S_ISLNK(own.st_mode);
-		if (!link || ::stat(resolved->host.c_str(), &metadata))
+		if (!link || paths.status(resolved->host, metadata, true))
 			metadata = own;
 		call.set_last_error(0);
 		call.ret(attributes_of(metadata, resolved->host) | (link ? attribute_reparse : 0));

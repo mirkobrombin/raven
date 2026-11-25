@@ -2,6 +2,10 @@
 
 #include "prefix.h"
 
+#include <sys/stat.h>
+
+#include <array>
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -18,6 +22,12 @@ namespace raven {
 class NativePaths {
 public:
 	explicit NativePaths(const NativePrefix &prefix);
+	~NativePaths();
+	NativePaths(const NativePaths &) = delete;
+	NativePaths &operator=(const NativePaths &) = delete;
+	// lstat (or stat, when it follows a link) of a host path: one on a drive of the prefix is read from the drive's folder, held open, so
+	// the kernel walks only the path below it instead of every folder of the prefix's own path at each call.
+	int status(const std::filesystem::path &host, struct stat &result, bool follow) const;
 	// Read beside the turn as well, while the turn may change it (see resolves_alone).
 	std::u16string current() const { const std::lock_guard guard(directory_lock); return directory; }
 	// The directory must exist; the stored form is a full path without a trailing separator (except for roots).
@@ -115,6 +125,8 @@ private:
 	std::function<std::vector<std::u16string>()> package_roots;
 	std::function<std::u16string()> search_path;
 	std::optional<std::filesystem::path> drive_root(char16_t letter) const;
+	// The folder of each drive of the prefix from C: to Y:, opened at its first use (O_PATH); -1 until then.
+	mutable std::array<std::atomic<int>, 23> drive_folders;
 	std::optional<Resolved> resolve_direct(const std::u16string &path) const;
 	// The path relative to the prefix of a prefix or layer host path, and which of them it is in; empty outside both.
 	std::string layer_relative(const std::filesystem::path &host, bool &in_layer) const;

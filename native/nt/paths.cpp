@@ -16,6 +16,7 @@
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
@@ -227,6 +228,43 @@ uint32_t NativePaths::drives() const
 
 NativePaths::NativePaths(const NativePrefix &prefix) : prefix(prefix), directory(u"C:\\")
 {
+	for (auto &folder : drive_folders)
+		folder.store(-1, std::memory_order_relaxed);
+}
+
+NativePaths::~NativePaths()
+{
+	for (auto &folder : drive_folders)
+		if (const int descriptor = folder.load(std::memory_order_relaxed); descriptor >= 0)
+			::close(descriptor);
+}
+
+int NativePaths::status(const std::filesystem::path &host, struct stat &result, bool follow) const
+{
+	const int flags = follow ? 0 : AT_SYMLINK_NOFOLLOW;
+	// PREFIX/drive_X/rest: the letter X and the rest, which is read from the drive's folder.
+	const auto &text = host.native(), &root = prefix.root().native();
+	const size_t letter_at = root.size() + 7;
+	if (text.size() > letter_at + 1 && text.compare(0, root.size(), root) == 0 && text.compare(root.size(), 7, "/drive_") == 0 &&
+		text[letter_at] >= 'c' && text[letter_at] <= 'y' && text[letter_at + 1] == '/') {
+		auto &folder = drive_folders[size_t(text[letter_at] - 'c')];
+		int descriptor = folder.load(std::memory_order_acquire);
+		if (descriptor < 0) {
+			const int opened = ::open(text.substr(0, letter_at + 1).c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC);
+			if (opened >= 0) {
+				// Two threads may open it at once: the first one stored is kept.
+				if (folder.compare_exchange_strong(descriptor, opened, std::memory_order_acq_rel))
+					descriptor = opened;
+				else
+					::close(opened);
+			}
+		}
+		if (descriptor >= 0) {
+			const char *rest = text.c_str() + letter_at + 2;
+			return ::fstatat(descriptor, *rest ? rest : ".", &result, flags);
+		}
+	}
+	return ::fstatat(AT_FDCWD, text.c_str(), &result, flags);
 }
 
 std::optional<std::filesystem::path> NativePaths::drive_root(char16_t letter) const
