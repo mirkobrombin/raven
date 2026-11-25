@@ -2486,6 +2486,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(alpc_wait_fixture_${installer_arch} ALL DEPENDS ${fixture}/alpc-wait.exe)
                 add_test(NAME native_alpc_wait_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/alpc-wait.exe)
                 set_tests_properties(native_alpc_wait_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                # Traced with every argument a call may take: a call made near the top of its stack shows what it can and goes on.
+                add_test(NAME native_trace_arguments_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/alpc-wait.exe)
+                set_tests_properties(native_trace_arguments_${installer_arch} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT "RAVEN_TRACE_API=1;RAVEN_TRACE_ARGS=12")
                 add_custom_command(OUTPUT ${fixture}/alpc-round-trip.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/alpc-round-trip.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_round_trip.c -lkernel32 -ladvapi32
