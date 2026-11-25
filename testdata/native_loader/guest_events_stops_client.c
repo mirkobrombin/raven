@@ -43,16 +43,19 @@ int raven_entry(void)
 	DWORD code = 1;
 	if (WaitForSingleObject(thread, 10000) != WAIT_OBJECT_0 || !GetExitCodeThread(thread, &code) || code || !CloseHandle(thread)) return 5;
 	say("stops: first thread joined\n");
-	stop_flicker = 0;
-	thread = CreateThread(0, 0, flickerer, 0, 0, 0);
-	if (!thread) return 6;
-	Sleep(20);
-	say("stops: terminating\n");
-	if (!TerminateThread(thread, 0) || WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0 || !CloseHandle(thread)) return 7;
+	// Ended at a random point of its sets many times over, one of them lands in the middle of one.
+	for (unsigned ending = 0; ending < 50; ++ending) {
+		stop_flicker = 0;
+		thread = CreateThread(0, 0, flickerer, 0, 0, 0);
+		if (!thread) return 6;
+		Sleep(2);
+		if (ending % 10 == 0) say("stops: terminating\n");
+		if (!TerminateThread(thread, 0) || WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0 || !CloseHandle(thread)) return 7;
+		HANDLE both[2] = {flicker, timer};
+		const DWORD looked = WaitForMultipleObjects(2, both, FALSE, 1);
+		if (looked != WAIT_OBJECT_0 && looked != WAIT_TIMEOUT) return 8;
+	}
 	say("stops: terminated\n");
-	HANDLE both[2] = {flicker, timer};
-	const DWORD looked = WaitForMultipleObjects(2, both, FALSE, 1);
-	if (looked != WAIT_OBJECT_0 && looked != WAIT_TIMEOUT) return 8;
 	if (!SetEvent(flicker) || WaitForSingleObject(flicker, 0) != WAIT_OBJECT_0) return 9;
 	say("stops: done\n");
 	return 0;
