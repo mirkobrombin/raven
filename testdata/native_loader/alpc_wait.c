@@ -21,12 +21,19 @@ struct security_attribute {
 	SECURITY_QUALITY_OF_SERVICE *quality;
 	void *context;
 };
+struct port_attributes {
+	ULONG flags;
+	SECURITY_QUALITY_OF_SERVICE quality;
+	SIZE_T limits[6];
+	ULONG duplicable, reserved;
+};
 struct message_attributes {
 	ULONG allocated, valid;
 	BYTE storage[200];
 };
 
 typedef NTSTATUS (NTAPI *create_port)(HANDLE *, OBJECT_ATTRIBUTES *, const void *);
+typedef NTSTATUS (NTAPI *impersonate_client)(HANDLE, struct header *, void *);
 typedef NTSTATUS (NTAPI *connect_port)(HANDLE *, UNICODE_STRING *, OBJECT_ATTRIBUTES *, const void *, ULONG, PSID,
 	struct header *, SIZE_T *, void *, void *, LARGE_INTEGER *);
 typedef NTSTATUS (NTAPI *accept_port)(HANDLE *, HANDLE, ULONG, OBJECT_ATTRIBUTES *, const void *, void *, struct header *, void *, BOOLEAN);
@@ -61,8 +68,9 @@ static DWORD WINAPI client(void *go)
 	limit.QuadPart = -100000000;
 	HANDLE port = NULL;
 	// The client port is nameless, and the connection message carries a security attribute without a quality of service, as
-	// CoreMessaging sends it: the port attributes' stays in force.
+	// CoreMessaging sends it: the port attributes' stays in force, and lets the server identify it.
 	OBJECT_ATTRIBUTES object = {.Length = sizeof object};
+	struct port_attributes allowed = {0x10000, {sizeof(SECURITY_QUALITY_OF_SERVICE), SecurityIdentification, SECURITY_STATIC_TRACKING, TRUE}};
 	struct message_attributes sent, received;
 	SIZE_T needed = 0;
 	if (initialize(security, &sent, sizeof sent, &needed) || initialize(context, &received, sizeof received, &needed))
@@ -72,7 +80,7 @@ static DWORD WINAPI client(void *go)
 	about->quality = NULL;
 	about->context = (void *)(LONG_PTR)-2;
 	sent.valid = security;
-	if (connect(&port, &name, &object, NULL, 0x20000, NULL, &message.header, &capacity, &sent, &received, &limit) || !port)
+	if (connect(&port, &name, &object, &allowed, 0x20000, NULL, &message.header, &capacity, &sent, &received, &limit) || !port)
 		return 40;
 	if (WaitForSingleObject(go, 10000))
 		return 41;
@@ -85,13 +93,14 @@ int raven_entry(void)
 	const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
 	const create_port create = (create_port)GetProcAddress(ntdll, "NtAlpcCreatePort");
 	const accept_port accept = (accept_port)GetProcAddress(ntdll, "NtAlpcAcceptConnectPort");
+	const impersonate_client impersonate = (impersonate_client)GetProcAddress(ntdll, "NtAlpcImpersonateClientOfPort");
 	const create_packet create_wait = (create_packet)GetProcAddress(ntdll, "NtCreateWaitCompletionPacket");
 	const associate_packet associate = (associate_packet)GetProcAddress(ntdll, "NtAssociateWaitCompletionPacket");
 	initialize = (initialize_attributes)GetProcAddress(ntdll, "AlpcInitializeMessageAttribute");
 	get = (get_attribute)GetProcAddress(ntdll, "AlpcGetMessageAttribute");
 	connect = (connect_port)GetProcAddress(ntdll, "NtAlpcConnectPort");
 	send_receive = (exchange)GetProcAddress(ntdll, "NtAlpcSendWaitReceivePort");
-	if (!create || !accept || !create_wait || !associate || !initialize || !get || !connect || !send_receive)
+	if (!create || !accept || !impersonate || !create_wait || !associate || !initialize || !get || !connect || !send_receive)
 		return 1;
 	WCHAR text[] = L"\\RPC Control\\RavenAlpcWait";
 	UNICODE_STRING name = {sizeof text - sizeof(WCHAR), sizeof text, text};
@@ -117,6 +126,9 @@ int raven_entry(void)
 	if (!GetQueuedCompletionStatus(completion, &bytes, &key, &overlapped, 10000) || bytes != 23 || key != 17 || (ULONG_PTR)overlapped != 19 ||
 		GetQueuedCompletionStatus(completion, &bytes, &key, &overlapped, 0) || GetLastError() != WAIT_TIMEOUT)
 		return 5;
+	// The server identifies who asks before it accepts, through the connection port and the request.
+	if (impersonate(listener, &message.header, NULL) || !RevertToSelf())
+		return 16;
 	HANDLE peer = NULL;
 	void *const port_context = (void *)(ULONG_PTR)0x5eed;
 	if (accept(&peer, listener, 0, NULL, NULL, port_context, &message.header, NULL, TRUE) || !peer)
