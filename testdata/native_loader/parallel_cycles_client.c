@@ -2,8 +2,8 @@
 #include <windows.h>
 
 // Threads that call at once: GetCurrentDirectoryW, which the runtime answers in its turn, and VirtualAlloc, VirtualProtect, VirtualFree,
-// SetEvent, CreateEventW and CloseHandle, which it answers beside the turn. What each costs is what RAVEN_CYCLES reports. Each thread's
-// last error stays its own.
+// SetEvent, CreateEventW, CloseHandle and GetFileAttributesW, which it answers beside the turn. What each costs is what RAVEN_CYCLES
+// reports. Each thread's last error stays its own.
 
 static volatile LONG ready;
 static HANDLE start, signal;
@@ -44,6 +44,15 @@ static DWORD WINAPI calls(void *parameter)
 		SetLastError(0);
 		if (CloseHandle((HANDLE)(ULONG_PTR)0x3ffffff0) || GetLastError() != ERROR_INVALID_HANDLE)
 			return 16;
+		DWORD attributes = GetFileAttributesW(L"C:\\windows");
+		if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+			return 21;
+		SetLastError(0);
+		if (GetFileAttributesW(L"C:\\windows\\raven-missing") != INVALID_FILE_ATTRIBUTES || GetLastError() != ERROR_FILE_NOT_FOUND)
+			return 22;
+		SetLastError(0);
+		if (GetFileAttributesW(L"C:\\raven-missing\\file") != INVALID_FILE_ATTRIBUTES || GetLastError() != ERROR_PATH_NOT_FOUND)
+			return 23;
 	}
 	return 0;
 }

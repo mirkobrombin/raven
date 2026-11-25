@@ -26,7 +26,7 @@ def main():
     # GetCurrentDirectoryW takes the turn: four threads calling it at once wait for it.
     if directories["beside"] or not directories["turn"]:
         raise SystemExit(f"GetCurrentDirectoryW shows no wait for the turn\n{output}")
-    for name in ("VirtualAlloc", "VirtualProtect", "VirtualFree", "SetEvent", "CreateEventW", "CloseHandle"):
+    for name in ("VirtualAlloc", "VirtualProtect", "VirtualFree", "SetEvent", "CreateEventW", "CloseHandle", "GetFileAttributesW"):
         row = rows.get(name)
         if not row or row["beside"] < row["calls"] // 2:
             raise SystemExit(f"{name} is not answered beside the turn\n{output}")
