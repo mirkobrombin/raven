@@ -43,7 +43,7 @@ int raven_entry(void)
 	if (!port || !thread) return 1;
 	for (unsigned index = 0; index < spinners; ++index)
 		if (!(busy[index] = CreateThread(0, 0, spinner, 0, 0, 0))) return 2;
-	for (unsigned round = 0; round < 200; ++round) {
+	for (unsigned round = 0; round < 3000; ++round) {
 		if (SuspendThread(thread) != 0) return 3;
 #ifdef __x86_64__
 		CONTEXT context;
