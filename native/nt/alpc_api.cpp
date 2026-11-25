@@ -901,8 +901,16 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return invalid_handle;
 		constexpr uint32_t reply_flag = 1, sync_flag = 0x20000;
 		const uint32_t flags = call.u32(1);
-		if (flags & ~(reply_flag | sync_flag) || call[3])
+		if (flags & ~(reply_flag | sync_flag))
 			return not_supported;
+		// Attributes to send that name none as valid send nothing (CoreMessaging passes them so); none is sent along here yet.
+		if (const auto sent = call[3]) {
+			const uint32_t allocated = call.load<uint32_t>(sent), valid = call.load<uint32_t>(sent + 4);
+			if (valid & ~allocated)
+				return invalid_parameter;
+			if (valid)
+				return not_supported;
+		}
 		if (flags && (!call[2] || ((flags & sync_flag) && (!call[4] || (flags & reply_flag)))))
 			return invalid_parameter;
 		if (!(context.objects.access_of(call[0]) & 1))
