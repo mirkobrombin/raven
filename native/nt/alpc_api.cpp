@@ -901,10 +901,13 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return invalid_handle;
 		constexpr uint32_t reply_flag = 1, release_flag = 0x10000, sync_flag = 0x20000;
 		const uint32_t flags = call.u32(1);
-		// Releasing a message frees what the kernel keeps for it once received (views, handles, attributes); none is kept here, so a
-		// release has nothing to free and a reply still due stays due. CoreMessaging releases a message it built itself, of id 0.
+		// Releasing a message frees what the kernel keeps for it once received (views, handles, attributes), with the attributes the
+		// receiver was given; none is kept here, so a release has nothing to free and a reply still due stays due. CoreMessaging
+		// releases a message it built itself, of id 0, and one it received with its attributes.
 		if (flags == release_flag) {
-			if (!call[2] || call[3] || call[4] || call[6])
+			if (!call[2] || call[4] || call[6])
+				return invalid_parameter;
+			if (const auto given = call[3]; given && (call.load<uint32_t>(given + 4) & ~call.load<uint32_t>(given)))
 				return invalid_parameter;
 			if (!(context.objects.access_of(call[0]) & 1))
 				return 0xc0000022u;
