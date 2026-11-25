@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,7 +18,8 @@ namespace raven {
 class NativePaths {
 public:
 	explicit NativePaths(const NativePrefix &prefix);
-	const std::u16string &current() const { return directory; }
+	// Read beside the turn as well, while the turn may change it (see resolves_alone).
+	std::u16string current() const { const std::lock_guard guard(directory_lock); return directory; }
 	// The directory must exist; the stored form is a full path without a trailing separator (except for roots).
 	bool set_current(std::u16string_view path);
 	bool set_dll_directory(std::optional<std::u16string> path);
@@ -35,6 +37,10 @@ public:
 		bool writable = true;
 	};
 	std::optional<Resolved> resolve(std::u16string_view path) const;
+	// Whether resolve may find the path beside the turn, while the turn changes what it reads: not under the program's layer, whose
+	// records the turn changes, nor on the host drive, whose refusals the sandbox records, nor with WOW64's redirection, which the
+	// thread turns off and on.
+	bool resolves_alone(std::u16string_view path) const;
 	// Whether a host file or folder appears in the listing of its folder: everything in the prefix's drives, only what the sandbox grants
 	// or leads to on Z:.
 	bool listed(const std::filesystem::path &host) const;
@@ -103,6 +109,7 @@ public:
 private:
 	const NativePrefix &prefix;
 	std::u16string directory;
+	mutable std::mutex directory_lock;
 	std::optional<std::u16string> dll_folder;
 	bool wow64 = false, redirecting = true;
 	std::function<std::vector<std::u16string>()> package_roots;

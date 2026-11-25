@@ -1706,6 +1706,9 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("GetFileAttributesW", 1, [&, resolve, missing, file_of](ApiCall &call) {
 		call.ret(UINT32_MAX);
 		const auto name = call.wide(call[0]);
+		// Beside the turn (see beside_api) only a path found without what the turn changes.
+		if (call.alone && !paths.resolves_alone(name))
+			throw ApiNeedsTurn{};
 		const auto resolved = resolve(call, name);
 		struct stat metadata{};
 		if (!resolved)

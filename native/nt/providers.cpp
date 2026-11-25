@@ -306,8 +306,9 @@ static bool beside_api(std::string_view module, std::string_view name)
 	// Recording into a command buffer, which only reads the Vulkan bridge's tables.
 	if (module == "vulkan-1.dll")
 		return name.starts_with("vkCmd") || name == "vkBeginCommandBuffer" || name == "vkEndCommandBuffer" || name == "vkResetCommandBuffer";
-	static constexpr std::array<std::string_view, 12> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
-		"GetFileSizeEx", "VirtualQuery", "VirtualAlloc", "VirtualFree", "VirtualProtect", "CreateEventW", "CloseHandle"};
+	static constexpr std::array<std::string_view, 13> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
+		"GetFileSizeEx", "VirtualQuery", "VirtualAlloc", "VirtualFree", "VirtualProtect", "CreateEventW", "CloseHandle",
+		"GetFileAttributesW"};
 	if ((module == "kernel32.dll" || module == "kernelbase.dll") && std::find(files.begin(), files.end(), name) != files.end())
 		return true;
 	if (module != "advapi32.dll" && module != "kernelbase.dll")

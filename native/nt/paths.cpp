@@ -283,16 +283,16 @@ std::u16string NativePaths::full(std::u16string_view input) const
 		rest = rest.substr(2);
 		if (rest.starts_with(u"\\"))
 			base = std::u16string(1, letter) + u":";
-		else if (upper_case(directory[0]) == letter)
-			base = directory;
+		else if (const auto here = current(); upper_case(here[0]) == letter)
+			base = here;
 		else
 			base = std::u16string(1, letter) + u":\\";
 	} else if (text.starts_with(u"\\\\")) {
 		return {};
 	} else if (text.starts_with(u"\\")) {
-		base = directory.substr(0, 2);
+		base = current().substr(0, 2);
 	} else {
-		base = directory;
+		base = current();
 	}
 	// base is "X:" (rooted rest), "X:\" or "X:\dir..." (relative rest).
 	std::vector<std::u16string> parts;
@@ -751,8 +751,16 @@ bool NativePaths::set_current(std::u16string_view path)
 	const auto resolved = resolve(path);
 	if (!resolved || !resolved->exists || !std::filesystem::is_directory(resolved->host))
 		return false;
-	directory = full(path);
+	auto changed = full(path);
+	const std::lock_guard guard(directory_lock);
+	directory = std::move(changed);
 	return true;
+}
+
+bool NativePaths::resolves_alone(std::u16string_view path) const
+{
+	const auto named = full(path);
+	return !wow64 && !app_layer().active() && !named.empty() && (named[0] | 0x20) != u'z';
 }
 
 std::u16string NativePaths::dos(const std::filesystem::path &host) const
