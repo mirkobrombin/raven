@@ -54,5 +54,6 @@ int raven_entry(void)
 	const DWORD looked = WaitForMultipleObjects(2, both, FALSE, 1);
 	if (looked != WAIT_OBJECT_0 && looked != WAIT_TIMEOUT) return 8;
 	if (!SetEvent(flicker) || WaitForSingleObject(flicker, 0) != WAIT_OBJECT_0) return 9;
+	say("stops: done\n");
 	return 0;
 }
