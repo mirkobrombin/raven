@@ -903,12 +903,14 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const uint32_t flags = call.u32(1);
 		if (flags & ~(reply_flag | sync_flag))
 			return not_supported;
-		// Attributes to send that name none as valid send nothing (CoreMessaging passes them so); none is sent along here yet.
+		// Of the attributes a sender names as valid, a context and a work-on-behalf ticket are taken and go no further (CoreMessaging
+		// sends both with each request): the receiver's context comes from its connection, and the ticket's contents are not public.
 		if (const auto sent = call[3]) {
+			constexpr uint32_t context_flag = 0x20000000u, work_on_behalf_flag = 0x02000000u;
 			const uint32_t allocated = call.load<uint32_t>(sent), valid = call.load<uint32_t>(sent + 4);
 			if (valid & ~allocated)
 				return invalid_parameter;
-			if (valid)
+			if (valid & ~(context_flag | work_on_behalf_flag))
 				return not_supported;
 		}
 		if (flags && (!call[2] || ((flags & sync_flag) && (!call[4] || (flags & reply_flag)))))
