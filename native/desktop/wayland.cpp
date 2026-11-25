@@ -665,6 +665,25 @@ struct WaylandPresentation::State {
 		if (input_failed) throw std::runtime_error(input_error);
 	}
 
+	// See DesktopPresentation::quiet. A graphics driver presenting to the program's windows reads the same connection, so events can sit
+	// in the queue with the socket empty. Only polling changes what is kept here, under the whole desktop lock.
+	bool quiet() {
+		if (!display) return true;
+		if (!pending.empty() || input_failed) return false;
+		for (const auto &[handle,surface] : surfaces) {
+			if (surface->is_popup) { if (surface->closed && !surface->close_posted) return false; continue; }
+			const bool settled=surface->shown_maximized==surface->maximized;
+			if ((!settled && !surface->state_asked && !surface->state_reported) ||
+				(surface->resized && (settled || !surface->state_reported)) || (surface->closed && !surface->close_posted)) return false;
+		}
+		if (wl_display_prepare_read(display)!=0) return false;
+		const bool flushed=wl_display_flush(display)>=0;
+		pollfd socket{wl_display_get_fd(display),POLLIN,0};
+		const bool readable=::poll(&socket,1,0)!=0;
+		wl_display_cancel_read(display);
+		return flushed && !readable;
+	}
+
 	void sync() {
 		bool complete=false;
 		wl_callback *callback=wl_display_sync(display);
@@ -1289,6 +1308,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->overlay(handle,window,x,y,width,height,pixels,stride);
 	}};
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.quiet=[this] { return state->quiet(); };
 	result.changed_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->within[handle]=area; };
 	result.shown_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->on_screen[handle]=area; };
 	result.translucent=[this](uint64_t handle,bool alpha) {

@@ -99,6 +99,10 @@ struct DesktopPresentation {
 	// Said before a frame of a maximized window is presented: the part of it in the work area (left, top, right, bottom), which the host
 	// shows as the window. A program can place the sizing border of its maximized window past the work area's edges, as Windows does.
 	std::function<void(uint64_t handle,std::array<int32_t,4> area)> shown_within;
+	// Whether a poll that waits for nothing would find nothing to take in or do: no event kept for the program, none read or readable
+	// from the connection, nothing left to send. Peeks beside the turn ask it under the shared desktop lock, several at once; absent,
+	// every peek polls itself.
+	std::function<bool()> quiet;
 };
 
 }

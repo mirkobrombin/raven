@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <poll.h>
 #include <set>
@@ -1017,6 +1018,22 @@ struct XcbPresentation::State {
 		return result;
 	}
 
+	// See DesktopPresentation::quiet. Events a reply wait read are taken in here as descriptor() does; the peeks that ask at once take
+	// turns, and nothing else uses the connection while they hold the desktop lock shared.
+	std::mutex quiet_turn;
+	bool quiet() {
+		if (!connection) return true;
+		const std::lock_guard turn(quiet_turn);
+		while (auto *event=xcb_poll_for_queued_event(connection)) { handle(event); std::free(event); }
+		if (!pending.empty() || input_failed || std::any_of(windows.begin(),windows.end(),[](const auto &entry) {
+			const auto &window=*entry.second;
+			return window.resized || (window.closed && !window.close_posted) || window.exposed[2]>window.exposed[0];
+		})) return false;
+		xcb_flush(connection);
+		pollfd socket{xcb_get_file_descriptor(connection),POLLIN,0};
+		return ::poll(&socket,1,0)==0 && !xcb_connection_has_error(connection);
+	}
+
 	int descriptor() {
 		if (!connection) return -1;
 		// Events a reply wait already read leave the socket quiet: the signal, always readable, stands in for it while they wait.
@@ -1071,6 +1088,7 @@ DesktopPresentation XcbPresentation::callbacks()
 		state->show_cursor();
 	}};
 	result.platform=HostPlatform::xcb;
+	result.quiet=[this] { return state->quiet(); };
 	result.minimize=[this](uint64_t handle) { state->minimize(handle); };
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
 	return result;
