@@ -23,6 +23,8 @@ struct AlpcMessage {
 	uint64_t process = 0, thread = 0;
 	uint32_t id = 0, capacity = 0, security = 0;
 	uint16_t type = 0;
+	// The context the server gave the sender's connection when it accepted it, told to the connection port's receiver.
+	uint64_t port_context = 0;
 	std::shared_ptr<AccessToken> token;
 	std::shared_ptr<AlpcConnection> request;
 	std::shared_ptr<AlpcReply> reply;
@@ -176,6 +178,7 @@ struct AlpcConnection {
 	std::unique_ptr<AlpcPeer> peer;
 	uint32_t local_request_id = 0, remote_request_id = 0, remote_capacity = 0;
 	uint32_t security = 0;
+	uint64_t context = 0;
 	std::shared_ptr<AccessToken> static_token;
 	std::weak_ptr<AlpcPort> listener, client, server;
 	AlpcMessage response;
@@ -250,6 +253,13 @@ public:
 	std::u16string_view type_name() const override { return u"ALPC Port"; }
 	std::u16string_view object_name() const override { return name; }
 	uint32_t default_access() const override { return 0x1f0001; }
+	// A port can be waited on: it is signaled while a message or a connection request waits to be received.
+	int signaled(uint32_t thread) const override { (void)thread; return inbox.empty() ? 0 : 1; }
+	void deliver(AlpcMessage message)
+	{
+		inbox.push_back(std::move(message));
+		signaled_now();
+	}
 	bool watches_last_handle() const override { return true; }
 	void last_handle_closed() override { disconnect(); listener_socket.reset(); name_closed = true; }
 	void disconnect()
@@ -336,7 +346,9 @@ bool route_alpc_packet(AlpcPort &port, const std::shared_ptr<AlpcConnection> &co
 		message.reply = reply;
 		port.replies.emplace(message.id, reply);
 	}
-	port.inbox.push_back(std::move(message));
+	if (connection->listener.lock().get() == &port)
+		message.port_context = connection->context;
+	port.deliver(std::move(message));
 	return true;
 }
 
@@ -374,7 +386,7 @@ void watch_alpc_peer(Reactor &reactor, const std::shared_ptr<AlpcConnection> &co
 						message.type = 10;
 						message.request = connection;
 						port->requests.emplace(message.id, connection);
-						port->inbox.push_back(std::move(message));
+						port->deliver(std::move(message));
 					} else if (!listener && !message.security && message.id == connection->local_request_id &&
 						(kind == AlpcPacket::accept || kind == AlpcPacket::reject)) {
 						connection->state = kind == AlpcPacket::accept ? AlpcConnection::State::accepted : AlpcConnection::State::rejected;
@@ -549,6 +561,22 @@ size_t attribute_size(uint32_t allocated, size_t width, uint32_t first_excluded 
 			size += sizes[index];
 	}
 	return size;
+}
+
+// A received message brings none of the attributes a sender can attach here, only its context: the port context of the sender's
+// connection and the message's id.
+void write_received_attributes(ApiCall &call, uint64_t address, const AlpcMessage &message)
+{
+	constexpr uint32_t context_flag = 0x20000000u;
+	const size_t width = call.pointer_width();
+	const uint32_t valid = call.load<uint32_t>(address) & context_flag;
+	call.store<uint32_t>(address + 4, valid);
+	if (!valid)
+		return;
+	const uint64_t slot = address + attribute_size(call.load<uint32_t>(address), width, context_flag);
+	call.store_pointer(slot, message.port_context);
+	call.store_pointer(slot + width, 0);
+	call.store(slot + 2 * width, std::array<uint32_t, 3>{0, message.id, 0});
 }
 
 }
@@ -731,7 +759,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			request->type = 10;
 			request->request = connection;
 			listener->requests.emplace(request->id, connection);
-			listener->inbox.push_back(std::move(*request));
+			listener->deliver(std::move(*request));
 			if (!context.threads.block([&] { return listener->closed || connection->state != AlpcConnection::State::waiting; }, wake))
 				return timeout;
 			if (listener->closed)
@@ -785,7 +813,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return invalid_handle;
 		if (listener->closed)
 			return port_disconnected;
-		if (call.u32(2) || call[3] || call[5] || call[7])
+		if (call.u32(2) || call[3] || call[7])
 			return not_supported;
 		if (!(context.objects.access_of(call[1]) & 1))
 			return 0xc0000022u;
@@ -833,6 +861,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		}
 		server->connection = connection;
 		connection->server = server;
+		connection->context = call[5];
 		connection->response = std::move(*response);
 		connection->state = AlpcConnection::State::accepted;
 		try { call.store_pointer(call[0], made.value); }
@@ -845,7 +874,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return invalid_handle;
 		constexpr uint32_t reply_flag = 1, sync_flag = 0x20000;
 		const uint32_t flags = call.u32(1);
-		if (flags & ~(reply_flag | sync_flag) || call[3] || call[6])
+		if (flags & ~(reply_flag | sync_flag) || call[3])
 			return not_supported;
 		if (flags && (!call[2] || ((flags & sync_flag) && (!call[4] || (flags & reply_flag)))))
 			return invalid_parameter;
@@ -947,15 +976,19 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 					}
 					message->reply = reply;
 					message->type = 1;
+					if (!port->server)
+						message->port_context = port->connection->context;
 					WithdrawAlpcRequest withdraw{*destination, message->id};
 					destination->replies.emplace(message->id, reply);
-					destination->inbox.push_back(std::move(*message));
+					destination->deliver(std::move(*message));
 					if (!context.threads.block([&] { return reply->result || disconnected(*port); }, wake))
 						return timeout;
 					return reply->result ? write_message(call, call[4], call[5], *reply->result) : port_disconnected;
 				}
 				message->type = 3;
-				destination->inbox.push_back(std::move(*message));
+				if (!port->server)
+					message->port_context = port->connection->context;
+				destination->deliver(std::move(*message));
 			}
 		}
 		if (!call[4])
@@ -965,8 +998,12 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		if (port->inbox.empty())
 			return port_disconnected;
 		const auto &message = port->inbox.front();
+		if (call[6])
+			call.process.validate_write_memory(call[6], 8);
 		if (const auto status = write_message(call, call[4], call[5], message))
 			return status;
+		if (call[6])
+			write_received_attributes(call, call[6], message);
 		if (message.request)
 			message.request->delivered = true;
 		if (message.reply)

@@ -11,6 +11,8 @@
 #include <optional>
 #include <string>
 #include <span>
+#include <iterator>
+#include <utility>
 #include <cstdint>
 #include <vector>
 
@@ -55,6 +57,21 @@ public:
 	// Whether the object may go with its last handle on a host thread that does not hold the runtime's turn: what it releases then
 	// (its place in the process's table of waits, memory it maps, its descriptor) answers to no state the turn guards.
 	virtual bool closes_beside() const { return false; }
+
+	// What waits for the object to turn signaled runs the moment it does, before a waiter can take the state again: a wait completion
+	// packet tied to an ALPC port would otherwise miss a message received right after it came. Objects that call signaled_now when they
+	// turn signaled get that; the rest are looked at again after calls. A watcher returns true once it is done with. Runs under the turn.
+	void watch_signal(std::function<bool()> watcher) { signal_watchers.push_back(std::move(watcher)); }
+	void signaled_now()
+	{
+		auto watchers = std::exchange(signal_watchers, {});
+		std::erase_if(watchers, [](const auto &watcher) { return watcher(); });
+		watchers.insert(watchers.end(), std::make_move_iterator(signal_watchers.begin()), std::make_move_iterator(signal_watchers.end()));
+		signal_watchers = std::move(watchers);
+	}
+
+private:
+	std::vector<std::function<bool()>> signal_watchers;
 };
 
 class NativeObjects;

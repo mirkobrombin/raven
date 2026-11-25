@@ -1614,8 +1614,13 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			wait->notification = {call[6], call[3], call[4], 0, call.u32(5)};
 			const auto generation = ++wait->generation;
 			const bool signaled = finish_wait(wait);
-			if (!signaled)
+			if (!signaled) {
 				reactor.add([wait, generation, finish_wait] { return wait->generation != generation || finish_wait(wait); });
+				target->watch_signal([weak = std::weak_ptr(wait), generation, finish_wait] {
+					const auto pending = weak.lock();
+					return !pending || pending->generation != generation || finish_wait(pending);
+				});
+			}
 			if (call[7])
 				call.store<uint8_t>(call[7], signaled);
 			call.ret(0);
