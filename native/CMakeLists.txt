@@ -5381,6 +5381,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(pulse_event_fixture${width} ALL DEPENDS ${pulse_event_client})
                     add_test(NAME native_pulse_event_x${width} COMMAND raven --run-process --execution=native ${pulse_event_client})
                     set_tests_properties(native_pulse_event_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # A COM wait in a single-threaded apartment answers sent messages and leaves posted ones queued.
+                    set(cowait_client ${CMAKE_CURRENT_BINARY_DIR}/cowait-client${width}.exe)
+                    add_custom_command(OUTPUT ${cowait_client}
+                        COMMAND ${accprop_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${accprop_entry},--no-insert-timestamp
+                            -o ${cowait_client} ${LOADER_SOURCES}/cowait_client.c -lole32 -luser32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/cowait_client.c VERBATIM)
+                    add_custom_target(cowait_fixture${width} ALL DEPENDS ${cowait_client})
+                    add_test(NAME native_cowait_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cowait_client})
+                    set_tests_properties(native_cowait_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     if(width EQUAL 64)
                         set(timer_queue_client ${CMAKE_CURRENT_BINARY_DIR}/timer-queue-client${width}.exe)
                         add_custom_command(OUTPUT ${timer_queue_client}
