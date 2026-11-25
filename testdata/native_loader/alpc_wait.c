@@ -84,8 +84,12 @@ static DWORD WINAPI client(void *go)
 		return 40;
 	if (WaitForSingleObject(go, 10000))
 		return 41;
+	// Attributes to send that name none as valid, as CoreMessaging passes them, send nothing.
 	struct message datagram = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 77};
-	return send_receive(port, 0, &datagram.header, NULL, NULL, NULL, NULL, NULL) ? 42 : 0;
+	struct message_attributes none;
+	if (initialize(security | view | context | work_on_behalf, &none, sizeof none, &needed))
+		return 44;
+	return send_receive(port, 0, &datagram.header, &none, NULL, NULL, NULL, NULL) ? 42 : 0;
 }
 
 int raven_entry(void)
