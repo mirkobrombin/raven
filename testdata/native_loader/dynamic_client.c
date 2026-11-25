@@ -28,6 +28,33 @@ static BOOL listed(HMODULE module, BOOL expected)
 	return TRUE;
 }
 
+typedef void (WINAPI *unload_trace_fn)(ULONG **, ULONG **, void **);
+
+// ntdll keeps the libraries unloaded last, which crash reporters read: the one at this base, by its name, is among them.
+static BOOL unloaded(HMODULE module)
+{
+	unload_trace_fn trace = (unload_trace_fn)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetUnloadEventTraceEx");
+	ULONG *size = NULL, *count = NULL;
+	void *ring = NULL;
+	if (!trace)
+		return FALSE;
+	trace(&size, &count, &ring);
+	if (!size || !count || !ring || *size != 104 || *count != 64)
+		return FALSE;
+	static const WCHAR name[] = L"tlsprobe.dll";
+	for (ULONG index = 0; index < *count; ++index) {
+		const unsigned char *record = (const unsigned char *)ring + index * *size;
+		const WCHAR *image = (const WCHAR *)(record + 28);
+		unsigned at = 0;
+		while (name[at] && (image[at] | 0x20) == name[at])
+			++at;
+		if (*(void *const *)record == (void *)module && *(const SIZE_T *)(record + 8) && !name[at] && !image[at] &&
+			*(const ULONG *)(record + 20))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 DWORD raven_entry(void)
 {
 	SetLastError(99);
@@ -53,6 +80,8 @@ DWORD raven_entry(void)
 		return 5;
 	if (FreeLibrary(second) || GetLastError() != ERROR_MOD_NOT_FOUND)
 		return 6;
+	if (!unloaded(second))
+		return 19;
 	first = LoadLibraryA("tlsprobe.dll");
 	if (!first)
 		return 7;
