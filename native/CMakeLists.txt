@@ -2479,6 +2479,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_target(alpc_port_fixture_${installer_arch} ALL DEPENDS ${fixture}/alpc-port.exe)
                 add_test(NAME native_alpc_port_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/alpc-port.exe)
                 set_tests_properties(native_alpc_port_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${fixture}/alpc-wait.exe
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/alpc-wait.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_wait.c -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_wait.c VERBATIM)
+                add_custom_target(alpc_wait_fixture_${installer_arch} ALL DEPENDS ${fixture}/alpc-wait.exe)
+                add_test(NAME native_alpc_wait_${installer_arch} COMMAND raven --run-process --execution=native ${fixture}/alpc-wait.exe)
+                set_tests_properties(native_alpc_wait_${installer_arch} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_custom_command(OUTPUT ${fixture}/alpc-round-trip.exe
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/alpc-round-trip.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/alpc_round_trip.c -lkernel32 -ladvapi32
