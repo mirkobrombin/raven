@@ -2214,6 +2214,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		"NtCreateKeyedEvent", "NtOpenKeyedEvent",
 		// Looked up by diagnostics code that records where a call came from.
 		"RtlCaptureStackBackTrace",
+		// The libraries unloaded last, which Steam's interface library imports from ntdll.
+		"RtlGetUnloadEventTrace", "RtlGetUnloadEventTraceEx",
 		// What the virtualization layer of Click-to-Run Office imports from ntdll: more of the registry and the objects, counted strings,
 		// file name expressions, and the generic tables, which the guest RTL holds.
 		"NtDuplicateObject", "NtEnumerateKey", "NtEnumerateValueKey", "NtFlushKey", "NtNotifyChangeKey", "NtNotifyChangeMultipleKeys",
@@ -4213,6 +4215,8 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			}
 		std::erase_if(attached, [&](const auto *item) { return !reachable.contains(item); });
 		for (const auto *module : released) {
+			kernel.unloads->record(process, allocator, true, module->loaded.base(), module->image.image_size,
+				module->file.empty() ? module->name : module->file.filename().string());
 			tls.remove(*module);
 			loader_data.remove(*module);
 			memory.remove_image(module->loaded.base());

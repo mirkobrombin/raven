@@ -696,6 +696,20 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 			call.store<uint64_t>(call[2], total / 2);
 		call.ret(1);
 	});
+	// RtlGetUnloadEventTraceEx(&size, &count, &ring) points at the record size, the record count and the ring of the libraries unloaded
+	// last; RtlGetUnloadEventTrace returns the ring alone.
+	registry.add("RtlGetUnloadEventTraceEx", 3, [&context](ApiCall &call) {
+		const bool wide = call.pointer_width() == 8;
+		const auto block = context.unloads->block(call.process, context.allocator, wide);
+		const uint64_t pointers[] = {block, block ? block + 4 : 0, block ? block + UnloadTrace::ring : 0};
+		for (size_t index = 0; index < 3; ++index)
+			if (call[index])
+				call.store_pointer(call[index], pointers[index]);
+	});
+	registry.add("RtlGetUnloadEventTrace", 0, [&context](ApiCall &call) {
+		const auto block = context.unloads->block(call.process, context.allocator, call.pointer_width() == 8);
+		call.ret(block ? block + UnloadTrace::ring : 0);
+	});
 	registry.add("RtlCaptureStackBackTrace", 4, [](ApiCall &call) {
 		if (call[3])
 			call.store<uint32_t>(call[3], 0);

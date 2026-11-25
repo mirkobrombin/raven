@@ -883,11 +883,16 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 		started_modules.erase(&module);
 		memory.remove_image(module.loaded.base());
 	});
-	library_loader.set_started([&started_modules](PEModule &module, bool started) {
-		if (started)
+	// Notes each library the loader unloads in the kernel's trace (KernelContext::unloads), once the kernel is there.
+	std::function<void(const PEModule &)> note_unload;
+	library_loader.set_started([&started_modules, &note_unload](PEModule &module, bool started) {
+		if (started) {
 			started_modules.insert(&module);
-		else
+		} else {
 			started_modules.erase(&module);
+			if (note_unload)
+				note_unload(module);
+		}
 	});
 	if (launch) {
 		const auto separator = launch->image_path.find_last_of(u'\\');
@@ -1475,6 +1480,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	GuestAllocator allocator(memory, guest_heap);
 	compat.set_global_blocks([&allocator](uint64_t address) { return allocator.size(address); }, [&allocator](uint64_t address) { return allocator.release(address); });
 	KernelContext kernel{process, environment, memory, allocator, kernel_objects, guest_threads, paths, modules, entry, *launch, invoke};
+	note_unload = [&process, &allocator, unloads = kernel.unloads](const PEModule &module) {
+		unloads->record(process, allocator, false, module.loaded.base(), module.image.image_size,
+			module.file.empty() ? module.name : module.file.filename().string());
+	};
 	guest_threads.set_watched([reactor = kernel.reactor](std::vector<pollfd> &descriptors) { reactor->watch(descriptors); });
 	kernel.reactor->set_watch_added([&guest_threads](int descriptor, short events) { guest_threads.watch_added(descriptor, events); });
 	// Waits that also wake for messages ask the window system, and the window system sleeps as the scheduler does.

@@ -1050,6 +1050,8 @@
 {"RtlFormatCurrentUserKeyPath", 1},
 {"RtlFreeUnicodeString", 1},
 {"RtlGetLastNtStatus", 0},
+{"RtlGetUnloadEventTrace", 0},
+{"RtlGetUnloadEventTraceEx", 3},
 {"RtlGrowFunctionTable", 2},
 {"RtlInitUnicodeString", 2},
 {"RtlInstallFunctionTableCallback", 6},

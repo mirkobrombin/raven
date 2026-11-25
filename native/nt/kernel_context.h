@@ -9,6 +9,7 @@
 #include "completion_port.h"
 #include "pipe.h"
 #include "threads.h"
+#include "unload_trace.h"
 #include <array>
 #include <optional>
 #include <string>
@@ -76,6 +77,8 @@ struct KernelContext {
 	// Named pipes served by this process and the pipe operations that have not finished.
 	std::shared_ptr<PipeState> pipes = std::make_shared<PipeState>();
 	std::shared_ptr<AccessToken> process_token = std::make_shared<AccessToken>();
+	// The libraries the process unloaded last (RtlGetUnloadEventTraceEx).
+	std::shared_ptr<UnloadTrace> unloads = std::make_shared<UnloadTrace>();
 };
 
 // Windows FILETIME ticks are 100 ns units since 1601-01-01.
