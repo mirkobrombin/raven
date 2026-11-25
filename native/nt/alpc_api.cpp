@@ -699,8 +699,30 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const auto listener = named == names->end() ? nullptr : named->second.lock();
 		if (listener && listener->closed)
 			return 0xc0000034u;
-		if (call[2] || call[8] || call[9] || (call.u32(4) & ~0x20000u))
+		if (call.u32(4) & ~0x20000u)
 			return not_supported;
+		const size_t width = call.pointer_width();
+		// The client port is nameless: its object attributes may only carry flags.
+		if (const auto attributes = call[2]) {
+			if (call.load<uint32_t>(attributes) != 6 * width)
+				return invalid_parameter;
+			if (call.load_pointer(attributes + width) || call.load_pointer(attributes + 2 * width) || call.load_pointer(attributes + 4 * width))
+				return not_supported;
+		}
+		// Of what a client can send with its connection message, the security attribute is taken: its quality of service grants the
+		// server what the port attributes' would.
+		constexpr uint32_t security_flag = 0x80000000u;
+		uint64_t sent_quality = 0;
+		if (const auto sent = call[8]) {
+			const uint32_t allocated = call.load<uint32_t>(sent), valid = call.load<uint32_t>(sent + 4);
+			if ((valid & ~security_flag) || (valid & ~allocated))
+				return not_supported;
+			if (valid & security_flag)
+				if (!(sent_quality = call.load_pointer(sent + attribute_size(allocated, width, security_flag) + width)))
+					return invalid_parameter;
+		}
+		if (call[9])
+			call.process.validate_write_memory(call[9], 8);
 		std::vector<uint8_t> required_sid;
 		if (const auto required = call[5]) {
 			const auto sid_header = call.read(required, 2);
@@ -725,10 +747,13 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		client->message_limit = *limit;
 		const auto connection = std::make_shared<AlpcConnection>();
 		client->connection = connection;
-		if (const auto attrs = call[3]; attrs && (call.load<uint32_t>(attrs) & 0x10000u)) {
-			const uint32_t level = call.load<uint32_t>(attrs + 8);
-			const auto tracking = call.load<uint8_t>(attrs + 12), effective = call.load<uint8_t>(attrs + 13);
-			if (call.load<uint32_t>(attrs + 4) != 12 || level > 3 || tracking > 1 || effective > 1)
+		uint64_t quality = sent_quality;
+		if (const auto attrs = call[3]; !quality && attrs && (call.load<uint32_t>(attrs) & 0x10000u))
+			quality = attrs + 4;
+		if (quality) {
+			const uint32_t level = call.load<uint32_t>(quality + 4);
+			const auto tracking = call.load<uint8_t>(quality + 8), effective = call.load<uint8_t>(quality + 9);
+			if (call.load<uint32_t>(quality) != 12 || level > 3 || tracking > 1 || effective > 1)
 				return invalid_parameter;
 			connection->security = security_granted | (level << security_level_shift);
 			if (effective)
@@ -799,6 +824,8 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		if (call[6])
 			if (const auto status = write_message(call, call[6], call[7], connection->response))
 				return status;
+		if (call[9])
+			write_received_attributes(call, call[9], connection->response);
 		const auto made = context.objects.add_object(client);
 		if (made.status)
 			return made.status;

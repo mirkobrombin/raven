@@ -36,7 +36,13 @@ struct CompletionPacket {
 class CompletionPort : public KernelObject {
 public:
 	std::u16string_view type_name() const override { return u"IoCompletion"; }
-	void post(const CompletionPacket &packet) { packets.push_back(packet); }
+	// As Windows' queue object it can be waited on: signaled while it holds packets, and a wait on it leaves them queued.
+	int signaled(uint32_t thread) const override { (void)thread; return packets.empty() ? 0 : 1; }
+	void post(const CompletionPacket &packet)
+	{
+		packets.push_back(packet);
+		signaled_now();
+	}
 	bool take(CompletionPacket &packet)
 	{
 		if (packets.empty())
