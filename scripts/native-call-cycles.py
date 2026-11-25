@@ -19,7 +19,7 @@ def main():
         raise SystemExit(f"no summary of the calls\n{output}")
     rows = {}
     for match in re.finditer(r"^cycles:\s+(\S+)\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+(\d+)\s+service\s+(\d+)", output, re.M):
-        rows[match[1]] = {"calls": int(match[2]), "beside": int(match[3]), "turn": int(match[5])}
+        rows[match[1]] = {"calls": int(match[2]), "beside": int(match[3]), "turn": int(match[5]), "service": int(match[6])}
     directories, events = rows.get("GetCurrentDirectoryW"), rows.get("SetEvent")
     if not directories or directories["calls"] < 1600:
         raise SystemExit(f"GetCurrentDirectoryW is not reported for every call\n{output}")
@@ -30,9 +30,10 @@ def main():
         row = rows.get(name)
         if not row or row["beside"] < row["calls"] // 2:
             raise SystemExit(f"{name} is not answered beside the turn\n{output}")
-    allocations = rows["VirtualAlloc"]
+    allocations, attributes = rows["VirtualAlloc"], rows["GetFileAttributesW"]
     print(f"GetCurrentDirectoryW waits {directories['turn']} cycles for the turn; VirtualAlloc beside it {allocations['beside']} of "
-          f"{allocations['calls']} times, waiting {allocations['turn']} cycles for it; SetEvent {events['beside']} of {events['calls']}")
+          f"{allocations['calls']} times, waiting {allocations['turn']} cycles for it; SetEvent {events['beside']} of {events['calls']}; "
+          f"GetFileAttributesW {attributes['beside']} of {attributes['calls']} beside, service {attributes['service']} cycles")
 
 
 main()
