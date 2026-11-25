@@ -365,7 +365,7 @@ void watch_alpc_peer(Reactor &reactor, const std::shared_ptr<AlpcConnection> &co
 				if (peer.receive(kind, message)) {
 					const auto grant = message.security;
 					const bool invalid_grant = (grant & ~security_mask) || (grant && !(grant & security_granted)) ||
-						(kind == AlpcPacket::connect && bool(message.token) != bool((grant & security_granted) && !(grant & security_dynamic)));
+						(kind == AlpcPacket::connect && bool(message.token) != bool(grant & security_granted));
 					if (!message.id || invalid_grant || header + message.data.size() > port->message_limit) {
 						peer.close();
 					} else if (connection->state == AlpcConnection::State::accepted) {
@@ -758,12 +758,12 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			connection->security = security_granted | (level << security_level_shift);
 			if (effective)
 				connection->security |= security_effective;
-			if (tracking) {
+			if (tracking)
 				connection->security |= security_dynamic;
-			} else {
-				const auto &current = context.threads.current().impersonation;
-				connection->static_token = std::make_shared<AccessToken>(*(current ? current : context.process_token));
-			}
+			// The token the client has as it asks: what a static grant impersonates, and what the server's receiver impersonates from
+			// the connection request itself.
+			const auto &current = context.threads.current().impersonation;
+			connection->static_token = std::make_shared<AccessToken>(*(current ? current : context.process_token));
 		}
 		struct UncommittedConnection {
 			AlpcConnection &connection;
@@ -1044,26 +1044,44 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			return invalid_handle;
 		if (!(context.objects.access_of(call[0]) & 1))
 			return 0xc0000022u;
-		if (!port->server || !port->connection || disconnected(*port))
-			return port_disconnected;
 		const uint32_t flags = call.u32(2);
-		if (!call[1] || (flags & ~0xfu))
-			return invalid_parameter;
-		if (flags & 1)
-			return not_supported;
-		const auto listener = port->connection->listener.lock();
-		if (!listener || listener->closed)
-			return port_disconnected;
 		const auto width = call.pointer_width();
-		const auto id = call.load<uint32_t>(call[1] + 8 + 2 * width);
-		const auto pending = listener->replies.find(id);
-		if (pending == listener->replies.end() || !pending->second->delivered || pending->second->result ||
-			pending->second->connection.lock() != port->connection ||
-			call.load_pointer(call[1] + 8) != pending->second->sender_process ||
-			call.load_pointer(call[1] + 8 + width) != pending->second->sender_thread)
-			return 0xc000021fu;
-		const auto grant = port->connection->security;
-		const auto &source = grant & security_dynamic ? pending->second->token : port->connection->static_token;
+		uint32_t grant = 0;
+		std::shared_ptr<AccessToken> source;
+		if (!port->connection && !port->server) {
+			// On the connection port, the receiver impersonates a client that asks to connect, named by its request, before it
+			// accepts it: servers decide so by who asks.
+			if (port->closed)
+				return port_disconnected;
+			if (!call[1] || (flags & ~0xfu))
+				return invalid_parameter;
+			if (flags & 1)
+				return not_supported;
+			const auto pending = port->requests.find(call.load<uint32_t>(call[1] + 8 + 2 * width));
+			if (pending == port->requests.end() || !pending->second->delivered || pending->second->state != AlpcConnection::State::waiting)
+				return 0xc000021fu;
+			grant = pending->second->security;
+			source = pending->second->static_token;
+		} else {
+			if (!port->server || !port->connection || disconnected(*port))
+				return port_disconnected;
+			if (!call[1] || (flags & ~0xfu))
+				return invalid_parameter;
+			if (flags & 1)
+				return not_supported;
+			const auto listener = port->connection->listener.lock();
+			if (!listener || listener->closed)
+				return port_disconnected;
+			const auto id = call.load<uint32_t>(call[1] + 8 + 2 * width);
+			const auto pending = listener->replies.find(id);
+			if (pending == listener->replies.end() || !pending->second->delivered || pending->second->result ||
+				pending->second->connection.lock() != port->connection ||
+				call.load_pointer(call[1] + 8) != pending->second->sender_process ||
+				call.load_pointer(call[1] + 8 + width) != pending->second->sender_thread)
+				return 0xc000021fu;
+			grant = port->connection->security;
+			source = grant & security_dynamic ? pending->second->token : port->connection->static_token;
+		}
 		if (!(grant & security_granted) || !source)
 			return 0xc0000022u;
 		auto token = std::make_shared<AccessToken>(*source);
