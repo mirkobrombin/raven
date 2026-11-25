@@ -2801,9 +2801,19 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (trace_time)
 					std::cerr << "t=" << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() << ' ';
 				std::cerr << "api " << api_name << '(' << std::hex;
-				// RAVEN_TRACE_ARGS widens the argument list shown (the default is the four register arguments).
+				// RAVEN_TRACE_ARGS widens the argument list shown (the default is the four register arguments), up to what the call takes
+				// where that is known. A call near the top of its stack has no more there to read: it shows its register arguments.
 				const char *width = std::getenv("RAVEN_TRACE_ARGS");
-				for (const auto value : process.api_arguments(width ? std::clamp(std::atoi(width), 1, 12) : 4))
+				size_t shown = width ? size_t(std::clamp(std::atoi(width), 1, 12)) : 4;
+				if (const auto known = api_registry.find(api_name))
+					shown = std::min<size_t>(shown, std::max<uint32_t>(known->first, 4));
+				std::vector<uint64_t> arguments;
+				try {
+					arguments = process.api_arguments(shown);
+				} catch (const std::runtime_error &) {
+					arguments = process.api_arguments(4);
+				}
+				for (const auto value : arguments)
 					std::cerr << ' ' << value;
 				std::cerr << std::dec << " )";
 				if (std::getenv("RAVEN_TRACE_STRINGS"))
