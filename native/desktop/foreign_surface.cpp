@@ -24,7 +24,9 @@
 
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <poll.h>
 #include <sys/inotify.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -240,8 +242,8 @@ void take_foreign_messages(const std::function<bool(uint64_t)> &owned, const std
 	for (const auto &path : posted) {
 		const auto name = path.filename().string();
 		char *end = nullptr;
-		const auto window = std::strtoull(name.substr(0, 8).c_str(), &end, 16);
-		if (name.size() < 9 || name[8] != '.' || !end || *end || !owned(window))
+		const auto window = std::strtoull(name.c_str(), &end, 16);
+		if (name.size() < 9 || name[8] != '.' || end != name.c_str() + 8 || !owned(window))
 			continue;
 		std::ifstream input(path);
 		uint32_t message = 0;
@@ -252,6 +254,22 @@ void take_foreign_messages(const std::function<bool(uint64_t)> &owned, const std
 		if (read)
 			use(window, message, wparam, lparam);
 	}
+}
+
+std::vector<std::pair<uint64_t, uint32_t>> foreign_messages_waiting(const std::function<bool(uint64_t)> &owned)
+{
+	std::vector<std::pair<uint64_t, uint32_t>> waiting;
+	std::error_code error;
+	for (const auto &entry : std::filesystem::directory_iterator(window_directory(), error)) {
+		const auto extension = entry.path().extension();
+		const auto name = entry.path().filename().string();
+		char *end = nullptr;
+		const auto window = std::strtoull(name.c_str(), &end, 16);
+		if ((extension != ".send" && extension != ".post") || name.size() < 9 || name[8] != '.' || end != name.c_str() + 8 || !owned(window))
+			continue;
+		waiting.emplace_back(window, extension == ".send" ? 0x40U : 0x108U);
+	}
+	return waiting;
 }
 
 std::optional<uint64_t> send_foreign_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam, const std::vector<uint8_t> &data,
@@ -308,8 +326,8 @@ void take_foreign_sends(const std::function<bool(uint64_t)> &owned,
 	for (const auto &path : sent) {
 		const auto name = path.filename().string();
 		char *end = nullptr;
-		const auto window = std::strtoull(name.substr(0, 8).c_str(), &end, 16);
-		if (name.size() < 9 || name[8] != '.' || !end || *end || !owned(window))
+		const auto window = std::strtoull(name.c_str(), &end, 16);
+		if (name.size() < 9 || name[8] != '.' || end != name.c_str() + 8 || !owned(window))
 			continue;
 		std::ifstream input(path, std::ios::binary);
 		uint32_t message = 0;
@@ -418,11 +436,18 @@ void ForeignSurface::publish_frame()
 }
 
 // The changes of the windows directory counted so far, and whether a host thread counts them (see foreign_frames_stamp): not yet, being
-// started, yes, or it cannot.
-static std::atomic<uint64_t> foreign_changes{1};
+// started, yes, or it cannot. The count is odd while the thread reads the kernel's events.
+static std::atomic<uint64_t> foreign_changes{2};
 enum class ForeignWatch { none, starting, running, unavailable };
 static std::atomic<ForeignWatch> foreign_watch{ForeignWatch::none};
 static std::atomic<int> foreign_watch_descriptor{-1};
+// What the watch thread calls after it counted a change, set once for the process; one it replaces stays, as the thread may be calling it.
+static std::atomic<std::function<void()> *> foreign_nudge{nullptr};
+
+void set_foreign_nudge(std::function<void()> nudge)
+{
+	foreign_nudge.store(new std::function<void()>(std::move(nudge)), std::memory_order_release);
+}
 
 static bool watching_foreign_changes()
 {
@@ -436,6 +461,8 @@ static bool watching_foreign_changes()
 		return ::pthread_atfork(nullptr, nullptr, [] {
 			if (const int descriptor = foreign_watch_descriptor.exchange(-1); descriptor >= 0)
 				::close(descriptor);
+			// A fork while the parent's thread read events leaves the count odd: the child's starts even and new.
+			foreign_changes.store((foreign_changes.load(std::memory_order_relaxed) | 1) + 1, std::memory_order_relaxed);
 			foreign_watch.store(ForeignWatch::none, std::memory_order_release);
 		}) == 0;
 	}();
@@ -447,18 +474,35 @@ static bool watching_foreign_changes()
 		return false;
 	}
 	foreign_watch_descriptor.store(watch, std::memory_order_release);
-	std::thread([watch] {
-		alignas(inotify_event) char events[4096];
-		for (;;) {
-			const auto taken = ::read(watch, events, sizeof events);
-			if (taken < 0 && errno == EINTR)
-				continue;
-			if (taken <= 0)
-				return;
-			foreign_changes.fetch_add(1, std::memory_order_release);
-		}
-	}).detach();
 	foreign_watch.store(ForeignWatch::running, std::memory_order_release);
+	try {
+		std::thread([watch] {
+			alignas(inotify_event) char events[4096];
+			for (;;) {
+				pollfd ready{watch, POLLIN, 0};
+				if (::poll(&ready, 1, -1) < 0) {
+					if (errno == EINTR)
+						continue;
+					break;
+				}
+				foreign_changes.fetch_add(1, std::memory_order_release);
+				const auto taken = ::read(watch, events, sizeof events);
+				foreign_changes.fetch_add(1, std::memory_order_release);
+				if (taken < 0 && errno == EINTR)
+					continue;
+				if (taken <= 0)
+					break;
+				// A thread waiting for its messages looks at them again at once, not at its next look up to 20 ms later.
+				if (const auto *nudge = foreign_nudge.load(std::memory_order_acquire))
+					(*nudge)();
+			}
+			// A watch that fails leaves the stamp to the directory's time, as when it could not be had.
+			foreign_watch.store(ForeignWatch::unavailable, std::memory_order_release);
+		}).detach();
+	} catch (const std::system_error &) {
+		foreign_watch.store(ForeignWatch::unavailable, std::memory_order_release);
+		return false;
+	}
 	return true;
 }
 
@@ -467,8 +511,15 @@ uint64_t foreign_frames_stamp()
 	// The directory changes when a window of another program appears or goes, or one of them is sent or posted a message. Programs
 	// poll their queues thousands of times a second and each poll asks for this: a host thread of its own waits for the changes and
 	// counts them, so a poll reads a number instead of asking the file system, which it does only while the watch cannot be had.
-	if (watching_foreign_changes())
-		return foreign_changes.load(std::memory_order_acquire);
+	// The thread counts a change only after it woke, so events the kernel holds and the thread is still reading give a new number at each
+	// call: a message another process posted is seen as soon as its post returned.
+	if (watching_foreign_changes()) {
+		int pending = 0;
+		::ioctl(foreign_watch_descriptor.load(std::memory_order_acquire), FIONREAD, &pending);
+		const auto count = foreign_changes.load(std::memory_order_acquire);
+		static std::atomic<uint64_t> unsettled{0};
+		return pending > 0 || count & 1 ? 1ULL << 63 | unsettled.fetch_add(1, std::memory_order_relaxed) : count;
+	}
 	struct stat status{};
 	if (::stat(window_directory().c_str(), &status) != 0)
 		return 0;
@@ -492,12 +543,8 @@ void drain_foreign_frames_descriptor()
 {
 	alignas(inotify_event) char events[4096];
 	const int descriptor = foreign_frames_descriptor();
-	bool changed = false;
-	while (descriptor >= 0 && ::read(descriptor, events, sizeof events) > 0)
-		changed = true;
-	// A thread woken by the change sees it in the stamp at once, before the watching thread may have counted it.
-	if (changed)
-		foreign_changes.fetch_add(1, std::memory_order_release);
+	// A thread woken by the change sees it in the stamp at once: the watch still holds the change or counts it (foreign_frames_stamp).
+	while (descriptor >= 0 && ::read(descriptor, events, sizeof events) > 0) {}
 }
 
 bool take_foreign_frame(uint64_t window, uint32_t &seen, const std::function<void(const uint8_t *, uint32_t, uint32_t)> &use)
