@@ -141,6 +141,11 @@ public:
 	static constexpr size_t hook_table_at=quiet_slots*quiet_slot, hook_entries=64, hook_entry=16;
 	void publish_hooks();
 	void mark_quiet(uint32_t thread);
+	// A PeekMessageW beside the turn, under the shared desktop lock: the calling thread's posted messages, its WM_QUIT and its windows'
+	// WM_PAINT, while nothing of the whole desktop waits to be done first. None when something does (see the definition): the peek then
+	// takes the lock whole and retrieve does it all.
+	std::optional<uint64_t> peek_shared(std::span<const uint64_t> arguments,
+		const std::function<void(uint64_t,std::span<const uint8_t>)> &write);
 	void wake(uint32_t thread)
 	{
 		if (!quiet_table) return;
@@ -189,6 +194,9 @@ public:
 	uint32_t status_bits(uint32_t thread,uint32_t mask,bool clear);
 	// Sets the thread's quiet slot (see set_quiet_table) for a queue holding the kinds `holds`.
 	void quiet_until(uint32_t thread,uint32_t holds);
+	// The peeks under the shared desktop lock take turns with this over the queue and the threads' status and paint cursor; everything
+	// else changes those only under the whole lock.
+	std::mutex queue_turn;
 	void dump_windows();
 	void shutdown();
 

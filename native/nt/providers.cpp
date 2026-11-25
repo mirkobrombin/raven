@@ -3403,6 +3403,20 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (desktop_call) {
 					const DesktopSharedScope shared;
 					const bool logged = windows.dc_logged() || windows.drawing_logged();
+					// A peek that needs nothing of the whole desktop leaves the other threads' calls running (see
+					// NativeWindows::peek_shared).
+					if (named->second == "PeekMessageW" && !logged) {
+						ApiCall call(process, environment, std::vector<uint64_t>(words));
+						call.alone = true;
+						try {
+							if (const auto answer = windows.peek_shared(words, [&call](uint64_t address, std::span<const uint8_t> bytes) {
+									call.write(address, bytes);
+								}))
+								return answer;
+						} catch (...) {
+							return std::nullopt;
+						}
+					}
 					auto handles = logged ? std::nullopt :
 						drawing_objects(named->second, words, std::as_const(desktop_objects), windows.published_screen_dc());
 					const auto window = logged || handles ? std::nullopt : window_call(named->second, words, std::as_const(desktop_objects));

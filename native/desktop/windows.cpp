@@ -1778,6 +1778,73 @@ uint64_t NativeWindows::retrieve(std::span<const uint64_t> args,bool blocking,
 	}
 }
 
+// What makes the peek go whole: host input or events to take in, messages other processes posted or sent, messages other threads sent
+// this one, drawing to present, a timer of the thread due, a focus leaving, frames other processes draw, hooks to call; and a message
+// of input, which moves the key state. Those change only under the whole lock, which the shared one keeps away while they are read.
+std::optional<uint64_t> NativeWindows::peek_shared(std::span<const uint64_t> args,
+	const std::function<void(uint64_t,std::span<const uint8_t>)> &write)
+{
+	const auto me=environment.thread_id();
+	const auto now=std::chrono::steady_clock::now();
+	const auto stamp=foreign_frames_stamp();
+	// Without a host connection there is nothing to take in; one that cannot tell is polled.
+	if (!me || (presentation.poll && !presentation.quiet) || has_hook(2) || has_hook(3) || has_hook(7) || !pending_events.empty() ||
+		!held_input.empty() || !dirty_roots.empty() || focus_leaving || stamp!=posts_stamp || stamp!=sends_stamp || stamp!=foreign_stamp ||
+		sent_for(me) || std::any_of(foreign_frames.begin(),foreign_frames.end(),[](const auto &entry) { return entry.second!=0; }) ||
+		std::any_of(timers.begin(),timers.end(),[&](const Timer &timer) { return (!timer.thread || timer.thread==me) && timer.due<=now; }))
+		return std::nullopt;
+	const auto layout=message_layout(process.mode()==NativeMode::x86);
+	const auto window=process.mode()==NativeMode::x86 && args[1]==UINT32_MAX ? UINT64_MAX : args[1];
+	const auto minimum=uint32_t(args[2]),maximum=uint32_t(args[3]),flags=uint32_t(args[4]);
+	// A call retrieve fails is failed there.
+	if ((window && window!=UINT64_MAX && !std::as_const(objects).window(window)) ||
+		((minimum || maximum) && (minimum>maximum || maximum>0xffff)) || (flags & ~0x1dff0003U) ||
+		(presentation.poll && !presentation.quiet()))
+		return std::nullopt;
+	const auto kinds=flags>>16 ? flags>>16 : 0x1dffU;
+	const auto seen=(kinds | 8U) & ((minimum || maximum || (flags>>16)) ? ~0x100U : UINT32_MAX);
+	const std::lock_guard turn(queue_turn);
+	const auto found=std::find_if(messages.begin(),messages.end(),[&](const Message &message) {
+		return (!message.thread || message.thread==me) && (message.kinds & kinds) &&
+			(!window || (window==UINT64_MAX ? !message.window : message.window==window || objects.is_child(window,message.window))) &&
+			(message.message==0x12 || (!minimum && !maximum) || (message.message>=minimum && message.message<=maximum));
+	});
+	const auto quit=(kinds & 0x108) ? quits.find(me) : quits.end();
+	Message value{0,0,0,0,message_time(),0,0};
+	if (found!=messages.end()) {
+		const auto number=found->message;
+		if ((number>=0x100 && number<=0x109) || (number>=0x200 && number<=0x20e) || (number>=0x2a0 && number<=0x2a3)) return std::nullopt;
+		value=*found;
+	} else if (quit!=quits.end()) value=Message{0,quit->second,0,0x12,message_time(),cursor_x,cursor_y};
+	else if (const auto paint=(kinds & 0x20) && ((!minimum && !maximum) || (minimum<=0x0f && maximum>=0x0f)) ?
+		objects.paint_target(window,me,paint_cursor) : 0) {
+		value.window=paint;
+		value.message=0x0f;
+	} else {
+		status_bits(me,seen,true);
+		quiet_until(me,status_bits(me,0xffff,false)>>16);
+		return 0;
+	}
+	std::vector<uint8_t> bytes(layout.size);
+	put(bytes,0,value.window,layout.pointer); put(bytes,layout.message,value.message,4);
+	put(bytes,layout.wparam,value.wparam,layout.pointer); put(bytes,layout.lparam,value.lparam,layout.pointer);
+	put(bytes,layout.time,value.time,4);
+	put(bytes,layout.x,uint32_t(value.x),4); put(bytes,layout.y,uint32_t(value.y),4);
+	write(args[0],bytes);
+	static const char *const trace_retrieval=std::getenv("RAVEN_TRACE_MSG");
+	if (trace_retrieval)
+		fprintf(stderr,"get %llx %x filter %llx %x-%x %s shared\n",(unsigned long long)value.window,value.message,
+			(unsigned long long)window,minimum,maximum,(flags & 1U) ? "remove" : "peek");
+	if (value.message==0x0f) paint_cursor=value.window;
+	else if (flags & 1U) {
+		retrieved[me]={value.time,value.x,value.y};
+		if (found!=messages.end()) messages.erase(found);
+		else quits.erase(me);
+	}
+	status_bits(me,seen,true);
+	return 1;
+}
+
 void NativeWindows::wait_idle(std::chrono::steady_clock::time_point deadline)
 {
 	const auto now=std::chrono::steady_clock::now();
