@@ -710,7 +710,8 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 				return not_supported;
 		}
 		// Of what a client can send with its connection message, the security attribute is taken: its quality of service grants the
-		// server what the port attributes' would.
+		// server what the port attributes' would. One without a quality of service (CoreMessaging sends it so, with a context handle of
+		// -2) leaves the port attributes' in force; there are no security contexts here for its handle to name.
 		constexpr uint32_t security_flag = 0x80000000u;
 		uint64_t sent_quality = 0;
 		if (const auto sent = call[8]) {
@@ -718,8 +719,7 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 			if ((valid & ~security_flag) || (valid & ~allocated))
 				return not_supported;
 			if (valid & security_flag)
-				if (!(sent_quality = call.load_pointer(sent + attribute_size(allocated, width, security_flag) + width)))
-					return invalid_parameter;
+				sent_quality = call.load_pointer(sent + attribute_size(allocated, width, security_flag) + width);
 		}
 		if (call[9])
 			call.process.validate_write_memory(call[9], 8);
