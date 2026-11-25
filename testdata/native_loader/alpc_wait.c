@@ -60,17 +60,17 @@ static DWORD WINAPI client(void *go)
 	LARGE_INTEGER limit;
 	limit.QuadPart = -100000000;
 	HANDLE port = NULL;
-	// The client port is nameless, and the connection message carries a security attribute with its quality of service.
+	// The client port is nameless, and the connection message carries a security attribute without a quality of service, as
+	// CoreMessaging sends it: the port attributes' stays in force.
 	OBJECT_ATTRIBUTES object = {.Length = sizeof object};
-	SECURITY_QUALITY_OF_SERVICE quality = {sizeof quality, SecurityImpersonation, SECURITY_STATIC_TRACKING, FALSE};
 	struct message_attributes sent, received;
 	SIZE_T needed = 0;
 	if (initialize(security, &sent, sizeof sent, &needed) || initialize(context, &received, sizeof received, &needed))
 		return 43;
 	struct security_attribute *about = get(&sent, security);
 	about->flags = 0;
-	about->quality = &quality;
-	about->context = NULL;
+	about->quality = NULL;
+	about->context = (void *)(LONG_PTR)-2;
 	sent.valid = security;
 	if (connect(&port, &name, &object, NULL, 0x20000, NULL, &message.header, &capacity, &sent, &received, &limit) || !port)
 		return 40;
