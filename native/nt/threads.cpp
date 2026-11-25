@@ -391,8 +391,12 @@ void NativeThreads::finish(GuestThread &thread, uint32_t code)
 	raven_waits_thread_ended(kernel_waits(), thread.id);
 	call_away(thread);
 	// A thread ended in the middle of a set it makes itself would hold its event's slot for good: it is stopped first, which moves it out
-	// of the set (see NativeProcess::settle_window).
-	if (const auto *events = GuestEvents::active(); events && !events->shut_down() && &thread != running && threaded && !thread.parked)
+	// of the set (see NativeProcess::settle_window). Only a parked thread's guest runs, so only it can stand in a set.
+	const bool guest_runs = [&] {
+		std::lock_guard lock(gate);
+		return thread.parked;
+	}();
+	if (const auto *events = GuestEvents::active(); events && !events->shut_down() && &thread != running && threaded && guest_runs)
 		pause_task_of(thread);
 	if (&thread != running && threaded) {
 		// Its host thread reaps the task and leaves through the thread's frames once it has its turn.
