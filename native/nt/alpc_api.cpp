@@ -899,8 +899,17 @@ void register_alpc_api(ApiRegistry &registry, KernelContext &context)
 		const auto port = context.objects.object_as<AlpcPort>(call[0]);
 		if (!port)
 			return invalid_handle;
-		constexpr uint32_t reply_flag = 1, sync_flag = 0x20000;
+		constexpr uint32_t reply_flag = 1, release_flag = 0x10000, sync_flag = 0x20000;
 		const uint32_t flags = call.u32(1);
+		// Releasing a message frees what the kernel keeps for it once received (views, handles, attributes); none is kept here, so a
+		// release has nothing to free and a reply still due stays due. CoreMessaging releases a message it built itself, of id 0.
+		if (flags == release_flag) {
+			if (!call[2] || call[3] || call[4] || call[6])
+				return invalid_parameter;
+			if (!(context.objects.access_of(call[0]) & 1))
+				return 0xc0000022u;
+			return read_message(call, call[2]) ? 0 : invalid_parameter;
+		}
 		if (flags & ~(reply_flag | sync_flag))
 			return not_supported;
 		// Of the attributes a sender names as valid, a context and a work-on-behalf ticket are taken and go no further (CoreMessaging
