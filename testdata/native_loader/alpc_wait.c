@@ -84,12 +84,17 @@ static DWORD WINAPI client(void *go)
 		return 40;
 	if (WaitForSingleObject(go, 10000))
 		return 41;
-	// Attributes to send that name none as valid, as CoreMessaging passes them, send nothing.
+	// A sender may name a context and a work-on-behalf ticket as valid, as CoreMessaging does with each request: the receiver's
+	// context still comes from its connection.
 	struct message datagram = {{sizeof(ULONG), sizeof(struct header) + sizeof(ULONG)}, 77};
-	struct message_attributes none;
-	if (initialize(security | view | context | work_on_behalf, &none, sizeof none, &needed))
+	struct message_attributes along;
+	if (initialize(security | view | context | work_on_behalf, &along, sizeof along, &needed))
 		return 44;
-	return send_receive(port, 0, &datagram.header, &none, NULL, NULL, NULL, NULL) ? 42 : 0;
+	struct context_attribute *sent_context = get(&along, context);
+	sent_context->port_context = sent_context->message_context = NULL;
+	sent_context->sequence = sent_context->message_id = sent_context->callback_id = 0;
+	along.valid = context | work_on_behalf;
+	return send_receive(port, 0, &datagram.header, &along, NULL, NULL, NULL, NULL) ? 42 : 0;
 }
 
 int raven_entry(void)
