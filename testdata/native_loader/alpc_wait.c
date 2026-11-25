@@ -16,6 +16,11 @@ struct context_attribute {
 	void *port_context, *message_context;
 	ULONG sequence, message_id, callback_id;
 };
+struct security_attribute {
+	ULONG flags;
+	SECURITY_QUALITY_OF_SERVICE *quality;
+	void *context;
+};
 struct message_attributes {
 	ULONG allocated, valid;
 	BYTE storage[200];
@@ -35,6 +40,8 @@ enum { security = 0x80000000, view = 0x40000000, context = 0x20000000, work_on_b
 
 static connect_port connect;
 static exchange send_receive;
+static initialize_attributes initialize;
+static get_attribute get;
 
 static NTSTATUS receive(HANDLE port, struct message *message, void *attributes, LONGLONG interval)
 {
@@ -53,7 +60,19 @@ static DWORD WINAPI client(void *go)
 	LARGE_INTEGER limit;
 	limit.QuadPart = -100000000;
 	HANDLE port = NULL;
-	if (connect(&port, &name, NULL, NULL, 0x20000, NULL, &message.header, &capacity, NULL, NULL, &limit) || !port)
+	// The client port is nameless, and the connection message carries a security attribute with its quality of service.
+	OBJECT_ATTRIBUTES object = {.Length = sizeof object};
+	SECURITY_QUALITY_OF_SERVICE quality = {sizeof quality, SecurityImpersonation, SECURITY_STATIC_TRACKING, FALSE};
+	struct message_attributes sent, received;
+	SIZE_T needed = 0;
+	if (initialize(security, &sent, sizeof sent, &needed) || initialize(context, &received, sizeof received, &needed))
+		return 43;
+	struct security_attribute *about = get(&sent, security);
+	about->flags = 0;
+	about->quality = &quality;
+	about->context = NULL;
+	sent.valid = security;
+	if (connect(&port, &name, &object, NULL, 0x20000, NULL, &message.header, &capacity, &sent, &received, &limit) || !port)
 		return 40;
 	if (WaitForSingleObject(go, 10000))
 		return 41;
@@ -68,8 +87,8 @@ int raven_entry(void)
 	const accept_port accept = (accept_port)GetProcAddress(ntdll, "NtAlpcAcceptConnectPort");
 	const create_packet create_wait = (create_packet)GetProcAddress(ntdll, "NtCreateWaitCompletionPacket");
 	const associate_packet associate = (associate_packet)GetProcAddress(ntdll, "NtAssociateWaitCompletionPacket");
-	const initialize_attributes initialize = (initialize_attributes)GetProcAddress(ntdll, "AlpcInitializeMessageAttribute");
-	const get_attribute get = (get_attribute)GetProcAddress(ntdll, "AlpcGetMessageAttribute");
+	initialize = (initialize_attributes)GetProcAddress(ntdll, "AlpcInitializeMessageAttribute");
+	get = (get_attribute)GetProcAddress(ntdll, "AlpcGetMessageAttribute");
 	connect = (connect_port)GetProcAddress(ntdll, "NtAlpcConnectPort");
 	send_receive = (exchange)GetProcAddress(ntdll, "NtAlpcSendWaitReceivePort");
 	if (!create || !accept || !create_wait || !associate || !initialize || !get || !connect || !send_receive)

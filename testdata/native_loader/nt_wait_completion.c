@@ -57,5 +57,10 @@ int raven_entry(void)
 	HANDLE worker = CreateThread(NULL, 0, signal_event, event, 0, NULL);
 	if (!worker || !received(port, 2000) || WaitForSingleObject(worker, 2000) != WAIT_OBJECT_0 || !empty(port))
 		return 8;
+	// A port is itself a waitable queue: signaled while it holds packets, and a wait on it takes none of them.
+	if (WaitForSingleObject(port, 0) != WAIT_TIMEOUT || !PostQueuedCompletionStatus(port, 23, 17, (OVERLAPPED *)(ULONG_PTR)19) ||
+		WaitForSingleObject(port, 0) != WAIT_OBJECT_0 || WaitForSingleObject(port, 0) != WAIT_OBJECT_0 || !received(port, 0) ||
+		WaitForSingleObject(port, 0) != WAIT_TIMEOUT)
+		return 10;
 	return CloseHandle(worker) && CloseHandle(packet) && CloseHandle(event) && CloseHandle(port) ? 0 : 9;
 }
