@@ -1,6 +1,7 @@
 #include "keyboard.h"
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <iterator>
 #ifdef RAVEN_XKB
 #include <xkbcommon/xkbcommon.h>
@@ -14,6 +15,9 @@ struct KeyboardMap::State {
 	xkb_context *context=xkb_context_new(XKB_CONTEXT_NO_DEFAULT_INCLUDES);
 	xkb_keymap *map=nullptr;
 	xkb_state *keys=nullptr;
+	// Whether the keymap names its keys by their place on a keyboard, as every keymap of a real keyboard does. A virtual keyboard
+	// names them as it likes and binds them to keycodes in the order it types them.
+	bool physical=false;
 	~State() { if (keys) xkb_state_unref(keys); if (map) xkb_keymap_unref(map); if (context) xkb_context_unref(context); }
 #endif
 };
@@ -33,6 +37,8 @@ void KeyboardMap::load(std::string_view text)
 	if (state->keys) xkb_state_unref(state->keys);
 	if (state->map) xkb_keymap_unref(state->map);
 	state->map=map; state->keys=keys;
+	state->physical=xkb_keymap_key_by_name(map,"ESC")!=XKB_KEYCODE_INVALID || xkb_keymap_key_by_name(map,"AE01")!=XKB_KEYCODE_INVALID ||
+		xkb_keymap_key_by_name(map,"AC01")!=XKB_KEYCODE_INVALID;
 #else
 	(void)text; throw std::runtime_error("native keyboard keymap support not built");
 #endif
@@ -97,6 +103,36 @@ static uint32_t virtual_key_of_character(uint32_t c)
 }
 #endif
 
+#ifdef RAVEN_XKB
+// The set-1 scan code of the key that gives a symbol on a US keyboard, or zero for a symbol no main-block key gives there.
+uint32_t scan_of_symbol(xkb_keysym_t symbol)
+{
+	static constexpr std::string_view rows[]{"1234567890-=","qwertyuiop[]","asdfghjkl;'`","\\zxcvbnm,./"};
+	static constexpr uint32_t starts[]{2,16,30,43};
+	if (symbol>='A' && symbol<='Z') symbol+='a'-'A';
+	if (symbol>=0x20 && symbol<0x7f) {
+		for (size_t row=0;row<std::size(rows);++row)
+			if (const auto at=rows[row].find(char(symbol));at!=std::string_view::npos) return starts[row]+uint32_t(at);
+		return symbol==' ' ? 57 : 0;
+	}
+	if (symbol>=XKB_KEY_F1 && symbol<=XKB_KEY_F10) return 59+symbol-XKB_KEY_F1;
+	switch (symbol) {
+	case XKB_KEY_Escape: return 1;
+	case XKB_KEY_BackSpace: return 14;
+	case XKB_KEY_Tab: return 15;
+	case XKB_KEY_Return: return 28;
+	case XKB_KEY_Control_L: return 29;
+	case XKB_KEY_Shift_L: return 42;
+	case XKB_KEY_Shift_R: return 54;
+	case XKB_KEY_Alt_L: return 56;
+	case XKB_KEY_Caps_Lock: return 58;
+	case XKB_KEY_F11: return 87;
+	case XKB_KEY_F12: return 88;
+	}
+	return 0;
+}
+#endif
+
 KeyboardKey KeyboardMap::decode(uint32_t code) const
 {
 #ifdef RAVEN_XKB
@@ -115,7 +151,9 @@ KeyboardKey KeyboardMap::decode(uint32_t code) const
 	const auto *name=xkb_keymap_key_get_name(state->map,code+8);
 	if (!name) throw std::runtime_error("keyboard key has no physical name");
 	const std::string_view physical(name);
-	if (physical.size()==4 && physical[2]>='0' && physical[2]<='9' && physical[3]>='0' && physical[3]<='9') {
+	const auto typed=state->physical ? 0 : scan_of_symbol(symbol);
+	if (typed) key.scan=typed;
+	else if (physical.size()==4 && physical[2]>='0' && physical[2]<='9' && physical[3]>='0' && physical[3]<='9') {
 		const auto position=unsigned(physical[2]-'0')*10+unsigned(physical[3]-'0');
 		if (physical.substr(0,2)=="AD" && position>=1 && position<=10) key.scan=15+position;
 		else if (physical.substr(0,2)=="AC" && position>=1 && position<=9) key.scan=29+position;
