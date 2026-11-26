@@ -1334,6 +1334,32 @@ void register_system_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[1], bytes);
 		call.ret(1);
 	});
+	// CPU sets: a 32-byte SYSTEM_CPU_SET_INFORMATION for each logical processor of group 0, with the ids Windows gives them (0x100 on), one
+	// core each in the one package, node and cache, as GetLogicalProcessorInformationEx describes them. The size the records take is
+	// returned even when the buffer is too small for them.
+	registry.add("GetSystemCpuSetInformation", 5, [](ApiCall &call) {
+		if (!call[2] || call.u32(4)) {
+			call.fail(87);
+			return;
+		}
+		const uint32_t count = uint32_t(std::clamp<long>(::sysconf(_SC_NPROCESSORS_ONLN), 1, 64));
+		std::vector<uint8_t> bytes(size_t(count) * 32);
+		for (uint32_t index = 0; index < count; ++index) {
+			auto *set = bytes.data() + size_t(index) * 32;
+			const uint32_t size = 32, id = 0x100 + index;
+			std::memcpy(set, &size, 4);
+			std::memcpy(set + 8, &id, 4);
+			set[14] = uint8_t(index);
+			set[15] = uint8_t(index);
+		}
+		call.store<uint32_t>(call[2], uint32_t(bytes.size()));
+		if (!call[0] || call.u32(1) < bytes.size()) {
+			call.fail(122);
+			return;
+		}
+		call.write(call[0], bytes);
+		call.ret(1);
+	});
 	// The same topology as fixed-size records: a processor mask, the relationship, then the 16-byte union (core flags, node number).
 	registry.add("GetLogicalProcessorInformation", 2, [processor_mask](ApiCall &call) {
 		if (!call[1]) {
