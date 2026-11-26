@@ -61,6 +61,8 @@ struct GuestThread {
 	// the next one. Each is taken by the wait it ends.
 	bool alerted = false, alerted_by_id = false;
 	int priority = 0;
+	// The processor the scheduler would rather run the thread on, in group 0; Raven reports it but does not pin the thread to it.
+	uint8_t ideal_processor = 0;
 	// Whether the thread last gave the processor up only because its time slice ended, and when: such a thread waits behind those
 	// that wait and wake, which on Windows find a free processor at once, but never longer than a few slices.
 	bool spent_slice = false;

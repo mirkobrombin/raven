@@ -15,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <unistd.h>
 
 namespace raven {
 
@@ -1331,6 +1332,56 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(1);
 	});
 	registry.add("SetThreadAffinityMask", 2, [](ApiCall &call) { call.ret(1); });
+	// The ideal processor of a thread: any processor of group 0 may be named, and each change returns the one before it.
+	const auto processors = [] { return uint32_t(std::clamp<long>(::sysconf(_SC_NPROCESSORS_ONLN), 1, 64)); };
+	// MAXIMUM_PROCESSORS (64, or 32 for a 32-bit program) only asks; a processor past the last fails with (DWORD)-1.
+	registry.add("SetThreadIdealProcessor", 2, [thread_from, processors](ApiCall &call) {
+		const auto thread = thread_from(call[0]);
+		if (!thread) {
+			call.fail(6, 0xffffffff);
+			return;
+		}
+		const uint32_t ideal = call.u32(1), previous = thread->ideal_processor;
+		if (ideal == (call.pointer_width() == 8 ? 64u : 32u)) {
+			call.ret(previous);
+			return;
+		}
+		if (ideal >= processors()) {
+			call.fail(87, 0xffffffff);
+			return;
+		}
+		thread->ideal_processor = uint8_t(ideal);
+		call.ret(previous);
+	});
+	// PROCESSOR_NUMBER: the group as a word, the number and a reserved byte.
+	registry.add("SetThreadIdealProcessorEx", 3, [thread_from, processors](ApiCall &call) {
+		const auto thread = thread_from(call[0]);
+		if (!thread) {
+			call.fail(6);
+			return;
+		}
+		if (!call[1] || call.load<uint16_t>(call[1]) != 0 || call.load<uint8_t>(call[1] + 2) >= processors()) {
+			call.fail(87);
+			return;
+		}
+		if (call[2])
+			call.store<uint32_t>(call[2], uint32_t(thread->ideal_processor) << 16);
+		thread->ideal_processor = call.load<uint8_t>(call[1] + 2);
+		call.ret(1);
+	});
+	registry.add("GetThreadIdealProcessorEx", 2, [thread_from](ApiCall &call) {
+		const auto thread = thread_from(call[0]);
+		if (!thread) {
+			call.fail(6);
+			return;
+		}
+		if (!call[1]) {
+			call.fail(87);
+			return;
+		}
+		call.store<uint32_t>(call[1], uint32_t(thread->ideal_processor) << 16);
+		call.ret(1);
+	});
 	registry.add("SetThreadStackGuarantee", 1, [](ApiCall &call) { call.ret(1); });
 	registry.add("OpenThread", 3, [&threads, &objects, handle_of](ApiCall &call) {
 		const auto thread = threads.find(call.u32(2));
