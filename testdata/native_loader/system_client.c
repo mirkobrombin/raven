@@ -161,6 +161,28 @@ int raven_entry(void)
 			return 21;
 	}
 	{
+		/* CPU sets: a 32-byte record for each logical processor, the size asked for first when the buffer is too small. */
+		typedef BOOL (WINAPI *cpu_sets)(void *,ULONG,ULONG *,HANDLE,ULONG);
+		const cpu_sets query=(cpu_sets)GetProcAddress(GetModuleHandleA("kernel32.dll"),"GetSystemCpuSetInformation");
+		if (!query) return 48;
+		SYSTEM_INFO system;
+		GetSystemInfo(&system);
+		static unsigned char sets[32*64+8];
+		ULONG needed=0;
+		SetLastError(0);
+		if (query(sets,16,&needed,GetCurrentProcess(),0) || GetLastError()!=ERROR_INSUFFICIENT_BUFFER || needed!=32*system.dwNumberOfProcessors)
+			return 49;
+		sets[needed]=0x5a;
+		ULONG length=0;
+		if (!query(sets,needed,&length,NULL,0) || length!=needed || sets[needed]!=0x5a) return 50;
+		for (ULONG index=0;index<system.dwNumberOfProcessors;++index) {
+			const unsigned char *set=sets+index*32;
+			if (*(const ULONG *)set!=32 || *(const ULONG *)(set+4)!=0 || *(const ULONG *)(set+8)!=0x100+index ||
+				*(const USHORT *)(set+12)!=0 || set[14]!=index)
+				return 51;
+		}
+	}
+	{
 		/* SystemProcessInformation: SYSTEM_PROCESS_INFORMATION entries linked by their first field, each followed by its threads. */
 		static unsigned char list[65536];
 		ULONG needed=0;
