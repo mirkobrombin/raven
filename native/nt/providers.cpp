@@ -2849,6 +2849,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			std::optional<DesktopScope> desktop_scope;
 			if (!graphics_call && !kernel_call) {
 				desktop_scope.emplace();
+				CallCycles::instance().took_desktop();
 				windows.apply_dc_log();
 				windows.take_deferred([&desktop](uint32_t operation, uint64_t handle) { desktop.apply_deferred(operation, handle); });
 				windows.screen_dc_use(api_name);
@@ -3597,6 +3598,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		std::optional<WindowCallScope> window_scope;
 		if (!graphics_call && !kernel_call) {
 			desktop_scope.emplace();
+			CallCycles::instance().took_desktop();
 			// Deferred releases wait for a stop of the guest: releasing a DIB section unmaps guest memory, which a running guest cannot
 			// have done to it.
 			windows.apply_dc_log();

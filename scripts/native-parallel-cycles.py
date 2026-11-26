@@ -7,7 +7,9 @@ between (60 times at most). --lock-under bounds the share of the service of the 
 in percent: calls that sleep or wait would hide it. The share swings between runs with how the machine schedules the threads, so it is
 the median of --runs runs that is bounded; the other checks hold for every run. --whole-at-most bounds how many times in a run a call
 (NAME:COUNT) answered beside the turn takes the desktop lock whole, stopping every other thread's call on the desktop meanwhile: a
-count, not a share, since the times it must (the process's first look, the first after a window appears) do not grow with the run."""
+count, not a share, since the times it must (the process's first look, the first after a window appears) do not grow with the run.
+--unlocked names calls the turn must answer without the desktop lock, as they reach no window or drawing, in every run; each has to
+reach the turn in one run at least."""
 
 import argparse
 import os
@@ -25,17 +27,18 @@ def run(args):
         raise SystemExit(f"the program failed: exit {result.returncode}\n{output}")
     rows = []
     for match in re.finditer(r"^cycles:\s+(\S+)\s+(\d+) calls\s+(\d+) beside\s+boundary\s+(\d+)\s+turn\s+(\d+)\s+service\s+(\d+)"
-                             r"\s+return\s+\d+\s+lock\s+(\d+).*\swhole\s+(\d+)$", output, re.M):
-        rows.append((int(match[5]), match[1], int(match[2]), int(match[3]), int(match[6]), int(match[7]), int(match[8])))
+                             r"\s+return\s+\d+\s+lock\s+(\d+).*\swhole\s+(\d+)\s+desktop\s+(\d+)$", output, re.M):
+        rows.append((int(match[5]), match[1], int(match[2]), int(match[3]), int(match[6]), int(match[7]), int(match[8]), int(match[9])))
     if not rows:
         raise SystemExit(f"no calls reported\n{output}")
-    for turn, name, calls, beside, service, locked, whole in sorted(rows, reverse=True):
-        print(f"{name}: {calls} calls, {beside} beside, turn {turn}, service {service}, lock {locked}, whole {whole}")
-    reached, beside, whole = {}, {}, {}
-    for _, name, calls, answered, _, _, taken in rows:
+    for turn, name, calls, beside, service, locked, whole, desktop in sorted(rows, reverse=True):
+        print(f"{name}: {calls} calls, {beside} beside, turn {turn}, service {service}, lock {locked}, whole {whole}, desktop {desktop}")
+    reached, beside, whole, desktop = {}, {}, {}, {}
+    for _, name, calls, answered, _, _, taken, held in rows:
         reached[name] = reached.get(name, 0) + calls
         beside[name] = beside.get(name, 0) + answered
         whole[name] = whole.get(name, 0) + taken
+        desktop[name] = desktop.get(name, 0) + held
     for name in filter(None, args.beside.split(",")):
         if beside.get(name, 0) < reached.get(name, 0) // 2 or not reached.get(name, 0):
             raise SystemExit(f"{name} is answered beside the turn {beside.get(name, 0)} of {reached.get(name, 0)} times\n{output}")
@@ -50,12 +53,16 @@ def run(args):
         if whole.get(name, 0) > int(most):
             raise SystemExit(f"{name} took the desktop lock whole {whole.get(name, 0)} of the {beside.get(name, 0)} times it was answered "
                              f"beside the turn, {most} at most\n{output}")
+    for name in filter(None, args.unlocked.split(",")):
+        if desktop.get(name, 0):
+            raise SystemExit(f"{name} took the desktop lock {desktop.get(name, 0)} of the {reached.get(name, 0)} times the turn "
+                             f"answered it\n{output}")
     measured = [row for row in rows if row[1] in set(filter(None, args.beside.split(",")))]
-    service = sum(calls * served for _, _, calls, _, served, _, _ in measured)
-    locked = sum(calls * waited for _, _, calls, _, _, waited, _ in measured)
+    service = sum(calls * served for _, _, calls, _, served, _, _, _ in measured)
+    locked = sum(calls * waited for _, _, calls, _, _, waited, _, _ in measured)
     share = 100.0 * locked / service if service else 0.0
     print(f"desktop lock: {share:.1f}% of the service")
-    return share
+    return share, reached
 
 
 def main():
@@ -67,9 +74,15 @@ def main():
     parser.add_argument("--guest", default="", help="comma separated")
     parser.add_argument("--lock-under", type=float, help="percent of the service")
     parser.add_argument("--whole-at-most", default="", help="comma separated NAME:COUNT")
+    parser.add_argument("--unlocked", default="", help="comma separated")
     parser.add_argument("--runs", type=int, default=1)
     args = parser.parse_args()
-    shares = [run(args) for _ in range(args.runs)]
+    results = [run(args) for _ in range(args.runs)]
+    shares = [share for share, _ in results]
+    # Not every run brings each of these calls to the turn: each has to reach it in some run, not in each.
+    for name in filter(None, args.unlocked.split(",")):
+        if not any(reached.get(name, 0) for _, reached in results):
+            raise SystemExit(f"{name} never reached the turn in {args.runs} runs")
     share = statistics.median(shares)
     print(f"desktop lock: median {share:.1f}% of the service over {len(shares)} runs: " + ", ".join(f"{one:.1f}" for one in shares))
     if args.lock_under is not None and share >= args.lock_under:
