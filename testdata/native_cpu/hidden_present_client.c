@@ -34,9 +34,10 @@ static DWORD WINAPI acquire_alone(void *unused)
 }
 
 /* A swap chain over a window nobody has shown, as DXGI makes for composition: presenting to it returns at once, as on Windows, where
- * the frames of a hidden window go nowhere. Once the window is shown the surface is lost, so the program makes it again over what
- * the screen shows.
- * With "mixed" on the command line, which needs a desktop, each present also carries a swap chain over a window that is shown. */
+ * the frames of a hidden window go nowhere. Once the window is shown the surface stays, as on Windows, and its swap chain is out of
+ * date, so the program makes another over the same surface.
+ * With "mixed" on the command line, which needs a desktop, each present also carries a swap chain over a window that is shown, and
+ * the swap chain made again once the hidden window shows takes frames for the screen. */
 unsigned int raven_entry(void)
 {
 	uint32_t targets = 1;
@@ -247,8 +248,34 @@ unsigned int raven_entry(void)
 	if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0 || !GetExitCodeThread(thread, &taken) || !taken) return 24;
 	CloseHandle(thread);
 	ShowWindow(windows[0], SW_SHOWNOACTIVATE);
-	uint32_t lost = 0;
-	if (vkAcquireNextImageKHR(device, swaps[0], 0, acquired[0], 0, &lost) != VK_ERROR_SURFACE_LOST_KHR) return 21;
+	uint32_t stale = 0;
+	if (vkAcquireNextImageKHR(device, swaps[0], 0, acquired[0], 0, &stale) != VK_ERROR_OUT_OF_DATE_KHR) return 21;
+	VkSwapchainKHR again = VK_NULL_HANDLE;
+	if (targets == 2) {
+		VkSurfaceCapabilitiesKHR shown_caps;
+		if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical[0], surfaces[0], &shown_caps) != VK_SUCCESS) return 30;
+		VkSwapchainCreateInfoKHR again_info = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, 0, 0, surfaces[0], shown_caps.minImageCount,
+			chosen[0].format, chosen[0].colorSpace, shown_caps.currentExtent, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_SHARING_MODE_EXCLUSIVE,
+			0, 0, shown_caps.currentTransform, VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_PRESENT_MODE_FIFO_KHR, VK_TRUE, swaps[0]};
+		if (vkCreateSwapchainKHR(device, &again_info, 0, &again) != VK_SUCCESS) return 31;
+		VkImage again_images[16];
+		count = 16;
+		if (vkGetSwapchainImagesKHR(device, again, &count, again_images) != VK_SUCCESS || !count) return 31;
+		uint32_t index = 0;
+		if (!usable(vkAcquireNextImageKHR(device, again, UINT64_MAX, VK_NULL_HANDLE, fence, &index), 1) || index >= count ||
+			vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS || vkResetFences(device, 1, &fence) != VK_SUCCESS)
+			return 32;
+		VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+		VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, 0, 0, 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, again_images[index], {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+		if (vkResetCommandBuffer(command, 0) != VK_SUCCESS || vkBeginCommandBuffer(command, &begin) != VK_SUCCESS) return 33;
+		vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, 0, 0, 0, 1, &barrier);
+		VkSubmitInfo submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO, 0, 0, 0, 0, 1, &command, 0, 0};
+		if (vkEndCommandBuffer(command) != VK_SUCCESS || vkQueueSubmit(queue, 1, &submit, 0) != VK_SUCCESS || vkQueueWaitIdle(queue) != VK_SUCCESS)
+			return 33;
+		VkPresentInfoKHR present = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, 0, 0, 0, 1, &again, &index, 0};
+		if (!usable(vkQueuePresentKHR(queue, &present), 1) || vkQueueWaitIdle(queue) != VK_SUCCESS) return 34;
+	}
 	vkDestroyFence(device, idle_fence, 0);
 	vkDestroyFence(device, fence, 0);
 	vkDestroySemaphore(device, finished, 0);
@@ -256,6 +283,7 @@ unsigned int raven_entry(void)
 	vkDestroySemaphore(device, acquired[0], 0);
 	vkDestroyCommandPool(device, pool, 0);
 	vkDestroySwapchainKHR(device, idle_swap, 0);
+	vkDestroySwapchainKHR(device, again, 0);
 	for (uint32_t target = 0; target < targets; ++target) vkDestroySwapchainKHR(device, swaps[target], 0);
 	vkDestroyDevice(device, 0);
 	vkDestroySurfaceKHR(instance, idle_surface, 0);
