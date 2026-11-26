@@ -1639,7 +1639,8 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		std::memcpy(trustee.data() + (width == 4 ? 16 : 24), &sid, width);
 		call.write(call[0], trustee);
 	});
-	registry.add("SetEntriesInAclW", 4, [&context, named_sid](ApiCall &call) {
+	// SetEntriesInAclA and W differ only in how a trustee given by name is written: in the program's code page, or UTF-16.
+	const auto set_entries = [&context, named_sid](ApiCall &call, bool wide) {
 		const uint32_t count = call.u32(0);
 		if (!call[3] || (count && !call[1])) {
 			call.ret(87);
@@ -1683,7 +1684,7 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 			std::vector<uint8_t> sid;
 			if (form == 0 && valid_sid(call, name))
 				sid = call.read(name, sid_length(call, name));
-			else if (form == 1 && (sid = named_sid(call.wide(name, 64))).size())
+			else if (form == 1 && (sid = named_sid(wide ? call.wide(name, 64) : from_ansi(call.narrow(name, 64), context.launch.ansi_code_page))).size())
 				;
 			else {
 				call.ret(1332);
@@ -1736,7 +1737,9 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 		call.write(memory, acl);
 		call.store_pointer(call[3], memory);
 		call.ret(0);
-	});
+	};
+	registry.add("SetEntriesInAclA", 4, [set_entries](ApiCall &call) { set_entries(call, false); });
+	registry.add("SetEntriesInAclW", 4, [set_entries](ApiCall &call) { set_entries(call, true); });
 	// AddAce: ready-made entries go into the list at a position, or at its end for MAXDWORD, and the entries after them move up.
 	registry.add("AddAce", 5, [](ApiCall &call) {
 		if (!call[0] || !call[3]) {
