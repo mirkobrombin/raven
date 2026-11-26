@@ -149,9 +149,14 @@ struct VulkanBridge::Workers {
 
 VkResult VulkanBridge::detached(const std::function<VkResult()> &work, std::atomic<bool> *cancel)
 {
-	// Beside the turn the guest thread's own host thread is free to wait for the driver.
-	if (!park || beside_call)
+	if (!park)
 		return work();
+	// Beside the turn the guest thread's own host thread is free to wait for the driver, and leaves the tables to the turn meanwhile:
+	// the work takes what it needs of them before.
+	if (beside_call) {
+		const TablesRelease release(*this);
+		return work();
+	}
 	if (!workers)
 		workers = std::make_shared<Workers>();
 	struct Call {

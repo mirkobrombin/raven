@@ -534,7 +534,9 @@ def emit(registry, selected, state, output, classify_member, declared):
     # Commands that can keep the driver busy for long: they run on a host thread while the guest's other threads go on.
     detached = {"vkQueuePresentKHR"}
     # Waits with a timeout: the driver waits in slices so that a process that ends is not held by a wait nothing will satisfy.
-    detached_waits = {"vkWaitSemaphores", "vkWaitSemaphoresKHR", "vkWaitForFences"}
+    detached_waits = {"vkWaitSemaphores", "vkWaitSemaphoresKHR", "vkWaitForFences", "vkAcquireNextImageKHR"}
+    # Work put on a queue, which the bridge's own submissions and presents on that queue keep apart from (see VulkanBridge::QueueUse).
+    queue_work = {"vkQueueSubmit", "vkQueueSubmit2", "vkQueueSubmit2KHR", "vkQueueBindSparse", "vkQueueWaitIdle"}
     for exported, target in sorted(selected.items()):
         info = registry.commands[target]
         params = info["params"]
@@ -672,6 +674,8 @@ def emit(registry, selected, state, output, classify_member, declared):
         pre = hooks_pre.get(exported) or hooks_pre.get(target)
         if pre:
             lines.append(f"\tb.{pre}(m.device_token);")
+        if exported in queue_work or target in queue_work:
+            lines.append("\tconst std::lock_guard submitting(b.queue_use(v_queue).submission);")
         ret = info["return"]
         lines.append(f"\tauto function = m.proc<PFN_{target}>(\"{target}\");")
         call = f"function({', '.join(call_args)})"

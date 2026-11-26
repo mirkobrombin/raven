@@ -175,10 +175,10 @@ const std::vector<FastStub> &fast_stubs()
 // The Vulkan calls besides vkCmd* that a guest thread makes beside the turn.
 static bool queue_beside_api(std::string_view name)
 {
-	static constexpr std::array<std::string_view, 16> calls{"vkBeginCommandBuffer", "vkEndCommandBuffer", "vkResetCommandBuffer",
+	static constexpr std::array<std::string_view, 19> calls{"vkBeginCommandBuffer", "vkEndCommandBuffer", "vkResetCommandBuffer",
 		"vkResetCommandPool", "vkQueueSubmit", "vkQueueSubmit2", "vkQueueSubmit2KHR", "vkWaitSemaphores", "vkWaitSemaphoresKHR",
 		"vkWaitForFences", "vkGetFenceStatus", "vkResetFences", "vkGetSemaphoreCounterValue", "vkGetSemaphoreCounterValueKHR",
-		"vkSignalSemaphore", "vkSignalSemaphoreKHR"};
+		"vkSignalSemaphore", "vkSignalSemaphoreKHR", "vkQueuePresentKHR", "vkAcquireNextImageKHR", "vkAcquireNextImage2KHR"};
 	return std::find(calls.begin(), calls.end(), name) != calls.end();
 }
 

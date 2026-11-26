@@ -271,6 +271,10 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 				: foreign_swapchains.contains(swapchain) ? static_cast<uint32_t>(acquire_own_image(marshal, arguments[0], swapchain, field(2, 24),
 					field(3, 32), field(4, 40), second ? arguments[2] : arguments[5]))
 				: second ? cmd_vkAcquireNextImage2KHR(*this, marshal, arguments, floating) : cmd_vkAcquireNextImageKHR(*this, marshal, arguments, floating);
+		} else if (process.serving() && !process.parallel()) {
+			// A present can wait for the display; a serial process answering it while its guest spins in the stub has it run again
+			// stopped at its trap.
+			process.decline_served();
 		} else {
 			marshal.context(H::VkQueue,arguments[0]);
 			if (load<uint32_t>(arguments[1]+32)>4096 || load<uint32_t>(arguments[1]+16)>4096)

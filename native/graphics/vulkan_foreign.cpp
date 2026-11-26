@@ -155,13 +155,39 @@ VkResult VulkanBridge::create_own_swapchain(uint64_t device_token,const VkSwapch
 
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 
+VulkanBridge::QueueUse &VulkanBridge::queue_use(VkQueue queue)
+{
+	const std::lock_guard hold(queue_uses_lock);
+	auto &use=queue_uses[queue];
+	if (!use) use=std::make_unique<QueueUse>();
+	return *use;
+}
+
+void VulkanBridge::images_moved()
+{
+	{ const std::lock_guard hold(images_lock); }
+	images_changed.notify_all();
+	if (wake) wake();
+}
+
 VkResult VulkanBridge::detached_present(VkQueue queue,const std::function<VkResult()> &work)
 {
-	auto &in_flight=presents[queue];
-	++in_flight;
+	auto &use=queue_use(queue);
+	{
+		const std::lock_guard hold(images_lock);
+		++use.presents;
+	}
 	return detached([&] {
-		const auto status=work();
-		--in_flight;
+		VkResult status;
+		{
+			const std::lock_guard submitting(use.submission);
+			status=work();
+		}
+		{
+			const std::lock_guard hold(images_lock);
+			--use.presents;
+		}
+		images_moved();
 		return status;
 	});
 }
@@ -200,25 +226,60 @@ VkResult VulkanBridge::acquire_own_image(Marshal &marshal,uint64_t device_token,
 	};
 	// Nor does the batch meet a present in flight on its queue. With every image held, the acquire waits for another thread of the
 	// program to present one, up to its timeout; without a way to wait, presents are not in flight and nothing frees an image.
-	auto &in_flight=presents[queue];
-	const auto ready=[&] { return !in_flight.load(std::memory_order_acquire) && free_image(); };
+	auto &use=queue_use(queue);
+	const auto ready=[&] { return !use.presents.load(std::memory_order_acquire) && free_image(); };
+	std::unique_lock hold(images_lock);
 	if (!ready()) {
 		const bool held=!free_image();
 		if (held && !timeout) return VK_NOT_READY;
 		std::optional<std::chrono::steady_clock::time_point> wake;
 		if (held && timeout<(uint64_t(1)<<62)) wake=std::chrono::steady_clock::now()+std::chrono::nanoseconds(timeout);
 		if (!park) return VK_TIMEOUT;
+		// A serial process answers a served call while its guest spins in the stub: a wait runs again stopped at its trap.
+		if (process.serving() && !process.parallel()) {
+			process.decline_served();
+			return VK_TIMEOUT;
+		}
 		const TablesRelease release(*this);
-		if (!park(ready,wake)) return VK_TIMEOUT;
+		if (beside_call) {
+			// Beside the turn the thread waits here, in slices, and leaves for the usual way when it is wanted elsewhere.
+			while (!ready()) {
+				const auto slice=std::chrono::steady_clock::now()+std::chrono::milliseconds(50);
+				if (wake && *wake<=std::chrono::steady_clock::now()) return VK_TIMEOUT;
+				images_changed.wait_until(hold,wake ? std::min(*wake,slice) : slice);
+				if (!ready() && called_away && called_away())
+					throw std::runtime_error("a Vulkan acquire beside the turn was called away");
+			}
+		} else {
+			hold.unlock();
+			const bool came=park([&] {
+				const std::lock_guard look(images_lock);
+				return ready();
+			},wake);
+			hold.lock();
+			if (!came || !ready()) return VK_TIMEOUT;
+		}
 	}
 	const uint32_t index=*free_image();
-	VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-	submit.signalSemaphoreCount=semaphore ? 1 : 0; submit.pSignalSemaphores=&semaphore;
-	// On the program's own thread, as its submits are, with no present in flight on the queue: nothing else uses it at this moment.
-	const auto status=vkQueueSubmit(queue,1,&submit,fence);
-	if (status!=VK_SUCCESS) return status;
 	target.held[index]=true;
 	target.next=(index+1)%uint32_t(target.images.size());
+	hold.unlock();
+	VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+	submit.signalSemaphoreCount=semaphore ? 1 : 0; submit.pSignalSemaphores=&semaphore;
+	// The program's submits from other threads hold the queue's submission as this one does.
+	VkResult status;
+	{
+		const std::lock_guard submitting(use.submission);
+		status=vkQueueSubmit(queue,1,&submit,fence);
+	}
+	if (status!=VK_SUCCESS) {
+		{
+			const std::lock_guard back(images_lock);
+			target.held[index]=false;
+		}
+		images_moved();
+		return status;
+	}
 	store<uint32_t>(index_address,index);
 	return VK_SUCCESS;
 }
@@ -295,8 +356,6 @@ std::optional<VkResult> VulkanBridge::present_foreign(uint64_t queue_token,const
 		} else if (info.pImageIndices[i]>=own->second->images.size()) return VK_ERROR_OUT_OF_DATE_KHR;
 		else frames.push_back({own->second,info.pImageIndices[i]});
 	}
-	// A presented image is the program's no more: the next acquire may hand it out.
-	for (const auto &frame:frames) frame.target->held[frame.index]=false;
 	if (frames.empty()) return std::nullopt;
 	const auto queue=queues.at(queue_token);
 	// The driver's part of the present keeps the chain, with its arrays of one entry per swapchain cut to the driver's swapchains.
@@ -326,6 +385,12 @@ std::optional<VkResult> VulkanBridge::present_foreign(uint64_t queue_token,const
 	// The host present follows the completed batch without waiting on those binary semaphores a second time.
 	bool presented=false;
 	const auto status=detached_present(queue.handle,[&]() -> VkResult {
+		// A presented image is the program's no more: the next acquire may hand it out, once no present is in flight on the queue,
+		// which this one is from here.
+		{
+			const std::lock_guard hold(images_lock);
+			for (const auto &frame:frames) frame.target->held[frame.index]=false;
+		}
 		std::vector<VkCommandBuffer> commands;
 		for (const auto &frame:frames) {
 			auto &target=*frame.target;

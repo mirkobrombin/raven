@@ -5,6 +5,7 @@
 #include "pe/module_set.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -40,7 +41,7 @@ public:
 	// A call in the runtime's turn: it holds the bridge's tables alone.
 	bool dispatch(std::string_view name);
 	// A call a guest thread makes beside the turn: recording (vkCmd*, and beginning, ending and resetting a command buffer or its pool),
-	// submitting and the waits on fences and semaphores. It only reads the tables, which it shares with the other threads that call at
+	// submitting, presenting, acquiring an image and the waits on fences and semaphores. It only reads the tables, which it shares with the other threads that call at
 	// once; the program keeps each command buffer, pool and queue to one thread at a time, as Vulkan asks of it, and the guest's view of
 	// mapped memory has a lock of its own (see coherence). A wait blocks the calling thread alone, and gives up when `called_away` says the
 	// thread is wanted elsewhere: it throws, and the call goes the usual way.
@@ -223,11 +224,24 @@ private:
 	std::optional<VkDeviceMemory> own_image_memory(uint64_t swapchain,uint32_t index) const;
 	// `tokens` are the program's handles of the swapchains in `info`.
 	std::optional<VkResult> present_foreign(uint64_t queue,const VkPresentInfoKHR &info,const std::vector<uint64_t> &tokens);
-	// Presents in flight on host threads, by host queue. The bridge signals an image it hands out through a queue, which a program does
-	// not keep apart from its presents on that queue: the acquire waits until none is in flight there, while the other guest threads
-	// run. The counts are made on the thread that serves the bridge and never removed, so a host thread that counts a present down
-	// keeps its own.
-	std::unordered_map<VkQueue, std::atomic<uint32_t>> presents;
+	// What threads that call at once share of a host queue. The bridge signals an image it hands out through a queue, which a program
+	// keeps apart neither from its presents on that queue nor from its submits there from other threads: the acquire waits until no
+	// present is in flight, and its submission, the program's and the presents hold `submission`. Entries are made under
+	// queue_uses_lock and never removed, so a thread that counts a present down keeps its own.
+	struct QueueUse {
+		std::atomic<uint32_t> presents{0};
+		std::mutex submission;
+	};
+	std::unordered_map<VkQueue, std::unique_ptr<QueueUse>> queue_uses;
+	std::mutex queue_uses_lock;
+public:
+	QueueUse &queue_use(VkQueue queue);
+private:
+	// The images the program holds in the bridge's own swapchains and the presents in flight change under `images_lock`; an acquire
+	// that waits for them beside the turn waits on `images_changed`, one in the turn through the scheduler.
+	std::mutex images_lock;
+	std::condition_variable images_changed;
+	void images_moved();
 	VkResult detached_present(VkQueue queue,const std::function<VkResult()> &work);
 	void release_foreign_swapchains(uint64_t device);
 	// A swapchain's surface token and the extent it was created with; a surface whose window changed size makes it out of date.
