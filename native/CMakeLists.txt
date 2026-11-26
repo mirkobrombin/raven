@@ -3770,6 +3770,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 set_tests_properties(native_vulkan_hidden_present_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
                     ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-x64-prefix;${RAVEN_PRESENT_VALIDATION}")
+                # Its thousand presents and the acquires of its second thread are answered beside the turn when threads run in parallel,
+                # and run again stopped at their trap in a serial process, whose served calls cannot wait.
+                if(Python3_Interpreter_FOUND)
+                    add_test(NAME native_vulkan_hidden_present_parallel_x64 COMMAND ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${VULKAN_FIXTURES}/hidden-present64.exe
+                        --beside vkQueuePresentKHR,vkAcquireNextImageKHR)
+                    set_tests_properties(native_vulkan_hidden_present_parallel_x64 PROPERTIES TIMEOUT 120 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                        ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-parallel-x64-prefix")
+                endif()
+                add_test(NAME native_vulkan_hidden_present_serial_x64 COMMAND raven --run-process --execution=native --timeout-ms=20000 ${VULKAN_FIXTURES}/hidden-present64.exe)
+                set_tests_properties(native_vulkan_hidden_present_serial_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                    ENVIRONMENT "RAVEN_SERIAL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/hidden-present-serial-x64-prefix;${RAVEN_PRESENT_VALIDATION}")
                 add_custom_command(OUTPUT ${VULKAN_FIXTURES}/foreign-present64.exe
                     COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
                         -idirafter ${Vulkan_INCLUDE_DIRS}
