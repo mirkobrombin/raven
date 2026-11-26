@@ -4063,6 +4063,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             "profile: \\(call\\) (Sleep|RtlSleep|Wake|RtlWake|RtlWaitOnAddress)[A-Za-z]* calls=[0-9][0-9][0-9]")
         set_property(TEST native_condition_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
         set_property(TEST native_condition_beside_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
+        # A thread made and waited for at once starts within a fraction of a millisecond, three hundred times (thread_start_client.c): one
+        # whose host thread came after its maker had given the runtime up waited for the next look at every thread.
+        raven_kernel_fixture(thread-start thread_start_client.c 0x1f9000000 "-lkernel32")
+        foreach(mode default parallel serial)
+            add_test(NAME native_thread_start_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/thread-start.exe)
+            set_tests_properties(native_thread_start_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/thread-start-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_thread_start_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        set_property(TEST native_thread_start_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
         # Suspending a running thread holds it still, nested suspensions count, and a terminated thread ends its waiters with its exit code
         # (parallel_suspend_client.c), with each way of keeping kernel objects.
         raven_kernel_fixture(parallel-suspend parallel_suspend_client.c 0x1ef000000 "-lkernel32")
