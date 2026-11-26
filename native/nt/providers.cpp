@@ -2015,7 +2015,13 @@ std::vector<uint8_t> runtime_provider(std::string_view name, uint64_t base,
 struct WindowCallScope {
 	NativeWindows &windows;
 	explicit WindowCallScope(NativeWindows &windows) : windows(windows) { windows.api_entered(); }
-	~WindowCallScope() { windows.api_left(); }
+	// What the call touched is published under the desktop lock, which a call that reaches no window, as a kernel call, did not take:
+	// other threads change their windows beside the turn meanwhile.
+	~WindowCallScope()
+	{
+		const DesktopScope desktop_scope;
+		windows.api_left();
+	}
 	WindowCallScope(const WindowCallScope &) = delete;
 	WindowCallScope &operator=(const WindowCallScope &) = delete;
 };

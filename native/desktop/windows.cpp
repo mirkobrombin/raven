@@ -2580,6 +2580,7 @@ bool NativeWindows::withdraw_screen_dc(uint64_t handle)
 void NativeWindows::set_window_table(uint8_t *table)
 {
 	window_table=table;
+	const DesktopScope desktop_scope;
 	objects.touched_windows().overflow=true;
 	publish_windows();
 }
@@ -2665,6 +2666,9 @@ void NativeWindows::publish_windows()
 {
 	if (!window_table)
 		return;
+	// The records are read from windows that other threads change beside the turn under the lock held shared.
+	if (!desktop_lock().held_whole())
+		throw std::logic_error("the windows' records are written without the desktop lock");
 	// Nothing touched, watched or released since the last time: only the few published words can have changed.
 	uint32_t logged=0;
 	if (deferred_log) std::memcpy(&logged,deferred_log,4);
