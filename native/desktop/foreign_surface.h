@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -70,6 +71,8 @@ public:
 private:
 	int file = -1;
 	uint32_t *header = nullptr;
+	// Until the first frame: where the pixels are made, and the window's name they take then.
+	std::filesystem::path drawing, path;
 };
 
 // Owner side: when another process finished a new frame for the window, hands its pixels (32-bit rows, top down) to `use` and returns

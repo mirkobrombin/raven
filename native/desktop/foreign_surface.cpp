@@ -100,11 +100,12 @@ static void sweep_windows(const std::filesystem::path &directory, const std::fil
 		stale.push_back(path);
 		stale.push_back(std::filesystem::path(path).replace_extension(".traits"));
 		stale.push_back(directory / path.filename().replace_extension(".pixels"));
+		stale.push_back(directory / path.filename().replace_extension(".drawing"));
 	}
 	for (const auto &entry : std::filesystem::directory_iterator(directory, error)) {
 		const auto path = entry.path();
 		const auto record = records / (path.filename().string().substr(0, 8) + ".window");
-		if (path.extension() == ".pixels" && !std::filesystem::exists(record, error)) {
+		if ((path.extension() == ".pixels" || path.extension() == ".drawing") && !std::filesystem::exists(record, error)) {
 			stale.push_back(path);
 		} else if (path.extension() == ".post" || path.extension() == ".posting" || path.extension() == ".send" || path.extension() == ".sending" ||
 			path.extension() == ".reply" || path.extension() == ".replying") {
@@ -162,6 +163,7 @@ void withdraw_window(uint64_t window)
 	std::error_code error;
 	std::filesystem::remove(window_records() / (window_name(window) + ".window"), error);
 	std::filesystem::remove(window_directory() / (window_name(window) + ".pixels"), error);
+	std::filesystem::remove(window_directory() / (window_name(window) + ".drawing"), error);
 	std::filesystem::remove(window_records() / (window_name(window) + ".traits"), error);
 }
 
@@ -405,8 +407,15 @@ std::shared_ptr<ForeignSurface> ForeignSurface::open_for_drawing(uint64_t window
 {
 	if (!width || !height || width > 16384 || height > 16384)
 		return nullptr;
+	// Pixels with no frame yet are made under a name of their own and take the window's name with their first frame: the owner looks at
+	// a window not drawn yet only when the directory changed, and a frame written into pixels already there changes nothing in it.
+	// Every drawer of the window opens the same file under either name, so a swap chain made again before its first frame shares it.
 	const auto path = window_directory() / (window_name(window) + ".pixels");
-	const int file = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+	const auto drawing = window_directory() / (window_name(window) + ".drawing");
+	int file = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
+	bool shown = file >= 0;
+	if (!shown)
+		file = ::open(drawing.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
 	if (file < 0)
 		return nullptr;
 	const size_t bytes = (size_t(width) * height * 4 + 4095) & ~size_t(4095);
@@ -425,6 +434,10 @@ std::shared_ptr<ForeignSurface> ForeignSurface::open_for_drawing(uint64_t window
 	surface->header = static_cast<uint32_t *>(mapped);
 	surface->width = width;
 	surface->height = height;
+	if (!shown) {
+		surface->drawing = drawing;
+		surface->path = path;
+	}
 	try {
 		surface->pixels = std::make_shared<SharedPixels>(file, header_size, bytes);
 	} catch (...) {
@@ -450,6 +463,9 @@ void ForeignSurface::publish_frame()
 	header[1] = width;
 	header[2] = height;
 	std::atomic_ref<uint32_t>(header[3]).fetch_add(1, std::memory_order_release);
+	// The first frame shows the pixels under the window's name; another drawer of the same file may have done it already.
+	if (!drawing.empty() && (::rename(drawing.c_str(), path.c_str()) == 0 || errno == ENOENT))
+		drawing.clear();
 }
 
 // The changes of the windows directory counted so far, and whether a host thread counts them (see foreign_frames_stamp): not yet, being
