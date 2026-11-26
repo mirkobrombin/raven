@@ -12,6 +12,7 @@
 #include "unload_trace.h"
 #include <array>
 #include <optional>
+#include <span>
 #include <string>
 #include "pe/module_set.h"
 
@@ -50,6 +51,9 @@ struct KernelContext {
 	// Wakes the threads that wait on an address (WakeByAddressSingle with all false, WakeByAddressAll with it true) from a host thread
 	// that does not hold the turn, and tells whether one woke; the waiters are looked at again (set by the synchronization handlers).
 	std::function<bool(uint64_t, bool)> wake_address_beside;
+	// RtlWaitOnAddress from a host thread that does not hold the turn: the address, the bytes it is compared with and the NT time-out
+	// (none for ever). True when the value differs or a wake came, false on the time-out, nothing when the wait has to go the usual way.
+	std::function<std::optional<bool>(uint64_t, std::span<const uint8_t>, std::optional<int64_t>)> wait_address_beside;
 	// Delivers a CPU fault to the guest's handlers; never returns normally (it redirects or ends the process).
 	std::function<void(const NativeResult &)> raise_fault;
 	// At an API call made inside callbacks: ends those the guest has left without returning, and makes the call again at the nesting

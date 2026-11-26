@@ -1407,16 +1407,57 @@ bool NativeThreads::can_wait_words()
 std::optional<uint32_t> NativeThreads::wait_shared_beside(const std::vector<std::shared_ptr<KernelObject>> &held,
 	const std::vector<std::atomic<uint32_t> *> &words, bool all, uint32_t milliseconds)
 {
+	if (held.empty() || held.size() != words.size())
+		return std::nullopt;
+	std::optional<std::chrono::steady_clock::time_point> until;
+	if (milliseconds != UINT32_MAX)
+		until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+	return sleep_beside(until, [&](GuestThread &me, std::optional<std::chrono::steady_clock::time_point> limit) {
+		return sleep_on_words(me, held, words, all, limit);
+	});
+}
+
+std::optional<bool> NativeThreads::wait_word_beside(std::atomic<uint32_t> &word, uint32_t seen,
+	std::optional<std::chrono::steady_clock::time_point> until)
+{
+	const auto result = sleep_beside(until, [&word, seen](GuestThread &me, std::optional<std::chrono::steady_clock::time_point> limit) {
+		const std::vector<std::atomic<uint32_t> *> words{&word};
+		for (;;) {
+			const uint32_t calls = me.calls.load();
+			if (calls != me.calls_seen) {
+				me.calls_seen = calls;
+				return raven_wait_interrupted;
+			}
+			if (word.load(std::memory_order_acquire) != seen)
+				return 0U;
+			timespec deadline{};
+			if (limit) {
+				if (std::chrono::steady_clock::now() >= *limit)
+					return 0x102U;
+				const auto left = limit->time_since_epoch();
+				deadline.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(left).count();
+				deadline.tv_nsec = (std::chrono::duration_cast<std::chrono::nanoseconds>(left) % std::chrono::seconds(1)).count();
+			}
+			wait_words(words, {seen}, me.calls, calls, limit ? &deadline : nullptr);
+		}
+	});
+	if (!result)
+		return std::nullopt;
+	return *result == 0;
+}
+
+// Waits outside the runtime on the host thread of a guest that spins in its stub, as wait_beside does: `sleep` takes or sleeps until
+// something changes, the thread is called away (it then runs the job it was called for and sleeps again) or the time given passes.
+std::optional<uint32_t> NativeThreads::sleep_beside(std::optional<std::chrono::steady_clock::time_point> until,
+	const std::function<uint32_t(GuestThread &, std::optional<std::chrono::steady_clock::time_point>)> &sleep)
+{
 	GuestThread *const me = parked_here;
 	if (!me) {
 		beside_wanted = true;
 		return std::nullopt;
 	}
-	if (!waits_outside() || held.empty() || held.size() != words.size() || !can_wait_words())
+	if (!waits_outside() || !can_wait_words())
 		return std::nullopt;
-	std::optional<std::chrono::steady_clock::time_point> until;
-	if (milliseconds != UINT32_MAX)
-		until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
 	// As in wait_beside: the main thread waits no longer than the run may last, and a wait without a time-out counts as endless.
 	const bool endless = !until;
 	const bool limited = me->main && (!until || deadline < *until);
@@ -1434,7 +1475,7 @@ std::optional<uint32_t> NativeThreads::wait_shared_beside(const std::vector<std:
 	moved();
 	uint32_t result = raven_wait_interrupted;
 	for (;;) {
-		result = sleep_on_words(*me, held, words, all, until);
+		result = sleep(*me, until);
 		if (result != raven_wait_interrupted)
 			break;
 		std::unique_lock lock(gate);

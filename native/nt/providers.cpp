@@ -184,10 +184,11 @@ static bool served_api(std::string_view module, std::string_view name)
 	// Reading a socket's recorded events polls the host sockets and never blocks.
 	if (module == "ws2_32.dll")
 		return name == "WSAEnumNetworkEvents";
-	// Waking marks the sleepers; they run when the scheduler next picks a thread.
+	// Waking marks the sleepers; they run when the scheduler next picks a thread. A wait on an address the guest's waker changes and
+	// wakes is answered beside the turn as well.
 	if (module == "ntdll.dll")
 		return name == "RtlWakeConditionVariable" || name == "RtlWakeAllConditionVariable" || name == "RtlWakeAddressSingle" ||
-			name == "RtlWakeAddressAll";
+			name == "RtlWakeAddressAll" || name == "RtlWaitOnAddress";
 #ifdef RAVEN_OPENGL
 	if (module == "opengl32.dll")
 		return OpenGLBridge::served_api(name);
@@ -2394,7 +2395,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (overlay == modules.all().end() || overlay->second->runtime_api)
 					continue;
 				for (auto &symbol : provider->exports)
-					if (!symbol.names.empty() && (!nt_only || symbol.names.at(0).find("GenericTable") != std::string::npos || symbol.names.at(0).find("CriticalSection") != std::string::npos || symbol.names.at(0).find("SRWLock") != std::string::npos || symbol.names.at(0) == "RtlVirtualUnwind" || symbol.names.at(0) == "RtlGrowFunctionTable") && std::any_of(overlay->second->exports.begin(), overlay->second->exports.end(), [&](const auto &candidate) {
+					if (!symbol.names.empty() && (!nt_only || symbol.names.at(0).find("GenericTable") != std::string::npos || symbol.names.at(0).find("CriticalSection") != std::string::npos || symbol.names.at(0).find("SRWLock") != std::string::npos || symbol.names.at(0).find("ConditionVariable") != std::string::npos || symbol.names.at(0) == "RtlVirtualUnwind" || symbol.names.at(0) == "RtlGrowFunctionTable") && std::any_of(overlay->second->exports.begin(), overlay->second->exports.end(), [&](const auto &candidate) {
 							return candidate.forwarder.empty() && std::find(candidate.names.begin(), candidate.names.end(), symbol.names.at(0)) != candidate.names.end();
 						}))
 						symbol.forwarder = overlay_rule.prefix + symbol.names.at(0);
@@ -3363,6 +3364,11 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	for (const auto &[stub, name] : served_names)
 		if (name == "WakeByAddressSingle" || name == "WakeByAddressAll" || name == "RtlWakeAddressSingle" || name == "RtlWakeAddressAll")
 			address_stubs.emplace_back(stub, name.ends_with("All"));
+	// And waiting on an address: the host thread sleeps there while its guest spins in its stub, and a wake beside the turn ends it.
+	std::vector<uint64_t> address_wait_stubs;
+	for (const auto &[stub, name] : served_names)
+		if (name == "RtlWaitOnAddress")
+			address_wait_stubs.push_back(stub);
 	// Releasing a semaphore the table keeps goes beside the others too, when no previous count is asked for: the table has a lock of its
 	// own, and a release it refuses changed nothing, so the usual way answers it with the error.
 	std::vector<uint64_t> semaphore_stubs;
@@ -3395,10 +3401,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		}
 	};
 #endif
-	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !semaphore_stubs.empty() || !mutex_stubs.empty() ||
-		!beside_names.empty()))
+	if (process.parallel() && (!event_stubs.empty() || !address_stubs.empty() || !address_wait_stubs.empty() || !semaphore_stubs.empty() ||
+		!mutex_stubs.empty() || !beside_names.empty()))
 		process.set_concurrent_served([&process, &environment, &api_registry, &threads, &kernel_objects, &kernel, &memory, event_stubs, address_stubs,
-			semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_objects, &desktop_api, graphics_beside](uint64_t stub,
+			address_wait_stubs, semaphore_stubs, mutex_stubs, multiple_stubs, beside_names, &windows, &desktop_objects, &desktop_api, graphics_beside](uint64_t stub,
 			const uint64_t *arguments) -> std::optional<uint64_t> {
 			// A call of a subsystem with a lock of its own runs its usual handler here; the arguments past the four in registers are on the
 			// guest's stack above their home space.
@@ -3594,6 +3600,20 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 					return std::nullopt;
 				kernel.wake_address_beside(arguments[0], address->second);
 				return 0;
+			}
+			if (std::find(address_wait_stubs.begin(), address_wait_stubs.end(), stub) != address_wait_stubs.end()) {
+				// A size or a time-out the wait cannot read goes the usual way, which reports it.
+				const size_t size = arguments[2];
+				uint8_t expected[8];
+				int64_t timeout = 0;
+				if (!kernel.wait_address_beside || (size != 1 && size != 2 && size != 4 && size != 8) ||
+					!process.read_alone(arguments[1], expected, size) || (arguments[3] && !process.read_alone(arguments[3], &timeout, sizeof timeout)))
+					return std::nullopt;
+				const auto woken = kernel.wait_address_beside(arguments[0], std::span(expected, size),
+					arguments[3] ? std::optional<int64_t>(timeout) : std::nullopt);
+				if (!woken)
+					return std::nullopt;
+				return *woken ? 0 : 0x102;
 			}
 			const auto found = std::find_if(event_stubs.begin(), event_stubs.end(), [stub](const auto &entry) { return entry.first == stub; });
 			if (found == event_stubs.end())

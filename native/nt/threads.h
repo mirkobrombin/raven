@@ -230,6 +230,9 @@ public:
 	// or nothing for the usual way. `held` and `words` go together, one word for each object.
 	std::optional<uint32_t> wait_shared_beside(const std::vector<std::shared_ptr<KernelObject>> &held,
 		const std::vector<std::atomic<uint32_t> *> &words, bool all, uint32_t milliseconds);
+	// The same for a word of the runtime's own that a waker changes from `seen` and wakes (wake_word): true when it changed, false at
+	// `until`, nothing for the usual way.
+	std::optional<bool> wait_word_beside(std::atomic<uint32_t> &word, uint32_t seen, std::optional<std::chrono::steady_clock::time_point> until);
 	// Takes what a wait on shared objects can take, or sleeps on their words until one changes, the thread is called away or `until`
 	// passes: an index, 0x102, or raven_wait_interrupted.
 	static uint32_t sleep_on_words(GuestThread &me, const std::vector<std::shared_ptr<KernelObject>> &held,
@@ -407,6 +410,8 @@ private:
 	void enqueue(GuestThread &thread);
 	void wake_ready(GuestThread *except, bool all = false);
 	void run_job(GuestThread &me, std::unique_lock<std::mutex> &lock);
+	std::optional<uint32_t> sleep_beside(std::optional<std::chrono::steady_clock::time_point> until,
+		const std::function<uint32_t(GuestThread &, std::optional<std::chrono::steady_clock::time_point>)> &sleep);
 	void send_job(GuestThread &thread, std::function<void()> work);
 	int park(pid_t task, std::chrono::steady_clock::time_point deadline, const uint64_t *block);
 	void host_main(GuestThread &thread);

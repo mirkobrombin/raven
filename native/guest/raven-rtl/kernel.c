@@ -5,16 +5,12 @@
 #include "raven_rtl.h"
 
 /* The kernel32 functions a program calls most often, run in the guest as Windows runs them in user mode: the process heap, critical
- * sections, SRW locks and the waking of condition variables. The runtime forwards kernel32's exports of these names here, so a call
- * costs what a function call costs. Waiting stays with the runtime's scheduler: a thread waits for a held lock on the lock's word,
- * and the release that frees it wakes the word, both through ntdll; a condition variable with sleepers goes to the runtime. */
+ * sections, SRW locks and condition variables. The runtime forwards kernel32's exports of these names here, so a call costs what a
+ * function call costs. Waiting stays with the runtime's scheduler: a thread waits for a held lock or a condition variable on its word,
+ * and the release or wake that changes the word wakes it, both through ntdll. */
 
 #define LAST_ERROR (*(volatile ULONG *)((PUCHAR)NtCurrentTeb() + 0x68))
 #define THREAD_ID ((ULONG)(ULONG_PTR)TEB_THREAD_ID)
-
-/* The runtime's waits, served by its scheduler. */
-VOID NTAPI RtlWakeConditionVariable(PRTL_CONDITION_VARIABLE variable);
-VOID NTAPI RtlWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable);
 
 /* ---- the heap: the flags kernel32 accepts, and the error it reports when the heap fails ---- */
 PVOID WINAPI RavenHeapAlloc(HANDLE heap, ULONG flags, SIZE_T size)
@@ -390,19 +386,118 @@ VOID WINAPI RavenReleaseSRWLockShared(PRTL_SRWLOCK lock)
 	}
 }
 
+/* ---- condition variables: one word, its low half a count of wakes and its high half how many threads sleep on it. A sleeper counts
+   itself and reads the wakes in one step, releases the lock and waits on the low half for it to change; a wake counts itself and wakes
+   the word only if somebody sleeps. As both change the word with one interlocked operation, a wake either sees the sleeper counted or
+   changes the value the sleeper then waits on, so no wake is lost. A sleeper may wake without a wake, which waits on a condition
+   variable allow. ---- */
+#define CV_SLEEPER ((LONG64)1 << 32)
+
 VOID WINAPI RavenInitializeConditionVariable(PRTL_CONDITION_VARIABLE variable) { variable->Ptr = NULL; }
 
-VOID WINAPI RavenWakeConditionVariable(PRTL_CONDITION_VARIABLE variable)
+static void cv_wake(PRTL_CONDITION_VARIABLE variable, BOOL all)
 {
-	if (*(volatile PVOID *)&variable->Ptr)
-		RtlWakeConditionVariable(variable);
+	LONG64 value, next;
+	do {
+		value = *(volatile LONG64 *)&variable->Ptr;
+		next = (value & ~(LONG64)0xffffffff) | (ULONG)(value + 1);
+	} while (InterlockedCompareExchange64((volatile LONG64 *)&variable->Ptr, next, value) != value);
+	if (!(next >> 32))
+		return;
+	if (all)
+		RtlWakeAddressAll(&variable->Ptr);
+	else
+		RtlWakeAddressSingle(&variable->Ptr);
 }
 
-VOID WINAPI RavenWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable)
+VOID WINAPI RavenWakeConditionVariable(PRTL_CONDITION_VARIABLE variable) { cv_wake(variable, FALSE); }
+VOID WINAPI RavenWakeAllConditionVariable(PRTL_CONDITION_VARIABLE variable) { cv_wake(variable, TRUE); }
+
+/* Sleeps until a wake or the time-out, with the lock released meanwhile: STATUS_SUCCESS or STATUS_TIMEOUT. */
+static NTSTATUS cv_sleep(PRTL_CONDITION_VARIABLE variable, PRTL_SRWLOCK lock, PRTL_CRITICAL_SECTION section, BOOL shared,
+	const LARGE_INTEGER *timeout)
 {
-	if (*(volatile PVOID *)&variable->Ptr)
-		RtlWakeAllConditionVariable(variable);
+	ULONG wakes = (ULONG)InterlockedAdd64((volatile LONG64 *)&variable->Ptr, CV_SLEEPER);
+	LARGE_INTEGER limit;
+	NTSTATUS status;
+	if (section)
+		RavenLeaveCriticalSection(section);
+	else if (shared)
+		RavenReleaseSRWLockShared(lock);
+	else
+		RavenReleaseSRWLockExclusive(lock);
+	if (timeout)
+		limit = *timeout;
+	status = RtlWaitOnAddress(&variable->Ptr, &wakes, sizeof(wakes), timeout ? &limit : NULL);
+	InterlockedAdd64((volatile LONG64 *)&variable->Ptr, -CV_SLEEPER);
+	if (section)
+		RavenEnterCriticalSection(section);
+	else if (shared)
+		RavenAcquireSRWLockShared(lock);
+	else
+		RavenAcquireSRWLockExclusive(lock);
+	return status == STATUS_TIMEOUT ? STATUS_TIMEOUT : STATUS_SUCCESS;
 }
+
+/* kernel32's milliseconds as an NT time-out, none for INFINITE; and its answer, FALSE with ERROR_TIMEOUT when the time ran out. */
+static BOOL cv_answer(NTSTATUS status)
+{
+	if (status == STATUS_TIMEOUT) {
+		LAST_ERROR = ERROR_TIMEOUT;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static const LARGE_INTEGER *cv_timeout(DWORD milliseconds, LARGE_INTEGER *timeout)
+{
+	if (milliseconds == INFINITE)
+		return NULL;
+	timeout->QuadPart = -(LONGLONG)milliseconds * 10000;
+	return timeout;
+}
+
+BOOL WINAPI RavenSleepConditionVariableSRW(PRTL_CONDITION_VARIABLE variable, PRTL_SRWLOCK lock, DWORD milliseconds, ULONG flags)
+{
+	LARGE_INTEGER timeout;
+	return cv_answer(cv_sleep(variable, lock, NULL, flags & CONDITION_VARIABLE_LOCKMODE_SHARED, cv_timeout(milliseconds, &timeout)));
+}
+
+BOOL WINAPI RavenSleepConditionVariableCS(PRTL_CONDITION_VARIABLE variable, PRTL_CRITICAL_SECTION section, DWORD milliseconds)
+{
+	LARGE_INTEGER timeout;
+	return cv_answer(cv_sleep(variable, NULL, section, FALSE, cv_timeout(milliseconds, &timeout)));
+}
+
+NTSTATUS NTAPI RavenRtlSleepConditionVariableSRW(PRTL_CONDITION_VARIABLE variable, PRTL_SRWLOCK lock, const LARGE_INTEGER *timeout,
+	ULONG flags)
+{
+	return cv_sleep(variable, lock, NULL, flags & CONDITION_VARIABLE_LOCKMODE_SHARED, timeout);
+}
+
+NTSTATUS NTAPI RavenRtlSleepConditionVariableCS(PRTL_CONDITION_VARIABLE variable, PRTL_CRITICAL_SECTION section, const LARGE_INTEGER *timeout)
+{
+	return cv_sleep(variable, NULL, section, FALSE, timeout);
+}
+
+/* ---- waits on an address: kernel32's names over ntdll's, which answer with a status ---- */
+BOOL WINAPI RavenWaitOnAddress(volatile VOID *address, PVOID compare, SIZE_T size, DWORD milliseconds)
+{
+	LARGE_INTEGER timeout;
+	NTSTATUS status = RtlWaitOnAddress(address, compare, size, (PLARGE_INTEGER)cv_timeout(milliseconds, &timeout));
+	if (status == STATUS_TIMEOUT) {
+		LAST_ERROR = ERROR_TIMEOUT;
+		return FALSE;
+	}
+	if (status) {
+		LAST_ERROR = RtlNtStatusToDosError(status);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+VOID WINAPI RavenWakeByAddressSingle(PVOID address) { RtlWakeAddressSingle(address); }
+VOID WINAPI RavenWakeByAddressAll(PVOID address) { RtlWakeAddressAll(address); }
 
 /* ---- fibers: switching fibers only swaps registers and thread block fields, which the program's own thread does without the runtime.
    The current fiber is the thread block's FiberData (gs:0x20), whose first word is the fiber's parameter, as GetFiberData reads it.
