@@ -23,7 +23,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <span>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -32,7 +34,125 @@ namespace raven {
 
 namespace {
 
+// Calls whose arguments are all values, passed to the host function as they are.
+#define RAVEN_GL_SCALARS(X) \
+	X(glAccum) X(glBeginConditionalRender) X(glBeginQuery) X(glBeginTransformFeedback) X(glBindBufferBase) X(glBindBufferRange) \
+	X(glBindSampler) X(glBlendColor) X(glBlendEquation) X(glBlendEquationSeparate) X(glBlendFuncSeparate) X(glClearAccum) \
+	X(glClearBufferfi) X(glClearIndex) X(glClearStencil) X(glColor3b) X(glColor3d) X(glColor3i) X(glColor3s) X(glColor3ub) \
+	X(glColor3ui) X(glColor3us) X(glColor4b) X(glColor4d) X(glColor4i) X(glColor4s) X(glColor4ui) X(glColor4us) X(glColorMaski) \
+	X(glColorP3ui) X(glColorP4ui) X(glCopyBufferSubData) X(glCopyPixels) X(glCopyTexImage1D) X(glCopyTexImage2D) \
+	X(glCopyTexSubImage1D) X(glCopyTexSubImage3D) X(glDepthRange) X(glDetachShader) X(glDisablei) X(glEdgeFlag) X(glEnablei) \
+	X(glEndConditionalRender) X(glEndQuery) X(glEndTransformFeedback) X(glEvalCoord1d) X(glEvalCoord1f) X(glEvalCoord2d) \
+	X(glEvalCoord2f) X(glEvalMesh1) X(glEvalMesh2) X(glEvalPoint1) X(glEvalPoint2) X(glFogCoordd) X(glFogCoordf) X(glFogf) \
+	X(glFogi) X(glFramebufferTexture) X(glFramebufferTexture1D) X(glFramebufferTexture3D) X(glFramebufferTextureLayer) \
+	X(glGenerateMipmap) X(glIndexMask) X(glIndexd) X(glIndexf) X(glIndexi) X(glIndexs) X(glIndexub) X(glInitNames) X(glIsBuffer) \
+	X(glIsEnabled) X(glIsEnabledi) X(glIsFramebuffer) X(glIsList) X(glIsProgram) X(glIsQuery) X(glIsRenderbuffer) X(glIsSampler) \
+	X(glIsShader) X(glIsVertexArray) X(glLightModelf) X(glLightModeli) X(glLightf) X(glLighti) X(glListBase) X(glLoadName) \
+	X(glLogicOp) X(glMapGrid1d) X(glMapGrid1f) X(glMapGrid2d) X(glMapGrid2f) X(glMaterialf) X(glMateriali) X(glMultiTexCoord1d) \
+	X(glMultiTexCoord1f) X(glMultiTexCoord1i) X(glMultiTexCoord1s) X(glMultiTexCoord2d) X(glMultiTexCoord2f) X(glMultiTexCoord2i) \
+	X(glMultiTexCoord2s) X(glMultiTexCoord3d) X(glMultiTexCoord3f) X(glMultiTexCoord3i) X(glMultiTexCoord3s) X(glMultiTexCoord4d) \
+	X(glMultiTexCoord4f) X(glMultiTexCoord4i) X(glMultiTexCoord4s) X(glMultiTexCoordP1ui) X(glMultiTexCoordP2ui) \
+	X(glMultiTexCoordP3ui) X(glMultiTexCoordP4ui) X(glNormal3b) X(glNormal3d) X(glNormal3f) X(glNormal3i) X(glNormal3s) \
+	X(glNormalP3ui) X(glPassThrough) X(glPixelStoref) X(glPixelTransferf) X(glPixelTransferi) X(glPixelZoom) X(glPointParameterf) \
+	X(glPointParameteri) X(glPolygonOffset) X(glPopAttrib) X(glPopClientAttrib) X(glPopName) X(glPrimitiveRestartIndex) \
+	X(glProvokingVertex) X(glPushAttrib) X(glPushClientAttrib) X(glPushName) X(glQueryCounter) X(glRasterPos2d) X(glRasterPos2f) \
+	X(glRasterPos2i) X(glRasterPos2s) X(glRasterPos3d) X(glRasterPos3f) X(glRasterPos3i) X(glRasterPos3s) X(glRasterPos4d) \
+	X(glRasterPos4f) X(glRasterPos4i) X(glRasterPos4s) X(glRectf) X(glRecti) X(glRects) X(glRenderbufferStorage) X(glRotated) \
+	X(glSampleCoverage) X(glSampleMaski) X(glSamplerParameterf) X(glSamplerParameteri) X(glScaled) X(glSecondaryColor3b) \
+	X(glSecondaryColor3d) X(glSecondaryColor3f) X(glSecondaryColor3i) X(glSecondaryColor3s) X(glSecondaryColor3ub) \
+	X(glSecondaryColor3ui) X(glSecondaryColor3us) X(glSecondaryColorP3ui) X(glStencilFuncSeparate) X(glStencilMaskSeparate) \
+	X(glStencilOpSeparate) X(glTexBuffer) X(glTexCoord1d) X(glTexCoord1f) X(glTexCoord1i) X(glTexCoord1s) X(glTexCoord2d) \
+	X(glTexCoord2i) X(glTexCoord2s) X(glTexCoord3d) X(glTexCoord3f) X(glTexCoord3i) X(glTexCoord3s) X(glTexCoord4d) \
+	X(glTexCoord4f) X(glTexCoord4i) X(glTexCoord4s) X(glTexCoordP1ui) X(glTexCoordP2ui) X(glTexCoordP3ui) X(glTexCoordP4ui) \
+	X(glTexEnvi) X(glTexGend) X(glTexGenf) X(glTexImage3DMultisample) X(glTranslated) X(glUniform1ui) X(glUniform2i) \
+	X(glUniform2ui) X(glUniform3i) X(glUniform3ui) X(glUniform4i) X(glUniform4ui) X(glUniformBlockBinding) X(glValidateProgram) \
+	X(glVertex2d) X(glVertex2i) X(glVertex2s) X(glVertex3d) X(glVertex3i) X(glVertex3s) X(glVertex4d) X(glVertex4f) X(glVertex4i) \
+	X(glVertex4s) X(glVertexAttrib1d) X(glVertexAttrib1f) X(glVertexAttrib1s) X(glVertexAttrib2d) X(glVertexAttrib2f) \
+	X(glVertexAttrib2s) X(glVertexAttrib3d) X(glVertexAttrib3f) X(glVertexAttrib3s) X(glVertexAttrib4Nub) X(glVertexAttrib4d) \
+	X(glVertexAttrib4f) X(glVertexAttrib4s) X(glVertexAttribDivisor) X(glVertexAttribI1i) X(glVertexAttribI1ui) \
+	X(glVertexAttribI2i) X(glVertexAttribI2ui) X(glVertexAttribI3i) X(glVertexAttribI3ui) X(glVertexAttribI4i) \
+	X(glVertexAttribI4ui) X(glVertexAttribP1ui) X(glVertexAttribP2ui) X(glVertexAttribP3ui) X(glVertexAttribP4ui) X(glVertexP2ui) \
+	X(glVertexP3ui) X(glVertexP4ui) X(glWindowPos2d) X(glWindowPos2f) X(glWindowPos2i) X(glWindowPos2s) X(glWindowPos3d) \
+	X(glWindowPos3f) X(glWindowPos3i) X(glWindowPos3s)
+
+// Calls that read a fixed number of values from their last argument.
+#define RAVEN_GL_VECTORS(X) \
+	X(glClipPlane, 4) X(glColor3bv, 3) X(glColor3dv, 3) X(glColor3fv, 3) X(glColor3iv, 3) X(glColor3sv, 3) X(glColor3ubv, 3) \
+	X(glColor3uiv, 3) X(glColor3usv, 3) X(glColor4bv, 4) X(glColor4dv, 4) X(glColor4iv, 4) X(glColor4sv, 4) X(glColor4ubv, 4) \
+	X(glColor4uiv, 4) X(glColor4usv, 4) X(glColorP3uiv, 1) X(glColorP4uiv, 1) X(glEdgeFlagv, 1) X(glEvalCoord1dv, 1) \
+	X(glEvalCoord1fv, 1) X(glEvalCoord2dv, 2) X(glEvalCoord2fv, 2) X(glFogCoorddv, 1) X(glFogCoordfv, 1) X(glIndexdv, 1) \
+	X(glIndexfv, 1) X(glIndexiv, 1) X(glIndexsv, 1) X(glIndexubv, 1) X(glLoadMatrixd, 16) X(glLoadMatrixf, 16) \
+	X(glLoadTransposeMatrixd, 16) X(glLoadTransposeMatrixf, 16) X(glMultMatrixd, 16) X(glMultMatrixf, 16) \
+	X(glMultTransposeMatrixd, 16) X(glMultTransposeMatrixf, 16) X(glMultiTexCoord1dv, 1) X(glMultiTexCoord1fv, 1) \
+	X(glMultiTexCoord1iv, 1) X(glMultiTexCoord1sv, 1) X(glMultiTexCoord2dv, 2) X(glMultiTexCoord2fv, 2) X(glMultiTexCoord2iv, 2) \
+	X(glMultiTexCoord2sv, 2) X(glMultiTexCoord3dv, 3) X(glMultiTexCoord3fv, 3) X(glMultiTexCoord3iv, 3) X(glMultiTexCoord3sv, 3) \
+	X(glMultiTexCoord4dv, 4) X(glMultiTexCoord4fv, 4) X(glMultiTexCoord4iv, 4) X(glMultiTexCoord4sv, 4) \
+	X(glMultiTexCoordP1uiv, 1) X(glMultiTexCoordP2uiv, 1) X(glMultiTexCoordP3uiv, 1) X(glMultiTexCoordP4uiv, 1) X(glNormal3bv, 3) \
+	X(glNormal3dv, 3) X(glNormal3fv, 3) X(glNormal3iv, 3) X(glNormal3sv, 3) X(glNormalP3uiv, 1) X(glRasterPos2dv, 2) \
+	X(glRasterPos2fv, 2) X(glRasterPos2iv, 2) X(glRasterPos2sv, 2) X(glRasterPos3dv, 3) X(glRasterPos3fv, 3) X(glRasterPos3iv, 3) \
+	X(glRasterPos3sv, 3) X(glRasterPos4dv, 4) X(glRasterPos4fv, 4) X(glRasterPos4iv, 4) X(glRasterPos4sv, 4) \
+	X(glSecondaryColor3bv, 3) X(glSecondaryColor3dv, 3) X(glSecondaryColor3fv, 3) X(glSecondaryColor3iv, 3) \
+	X(glSecondaryColor3sv, 3) X(glSecondaryColor3ubv, 3) X(glSecondaryColor3uiv, 3) X(glSecondaryColor3usv, 3) \
+	X(glSecondaryColorP3uiv, 1) X(glTexCoord1dv, 1) X(glTexCoord1fv, 1) X(glTexCoord1iv, 1) X(glTexCoord1sv, 1) \
+	X(glTexCoord2dv, 2) X(glTexCoord2fv, 2) X(glTexCoord2iv, 2) X(glTexCoord2sv, 2) X(glTexCoord3dv, 3) X(glTexCoord3fv, 3) \
+	X(glTexCoord3iv, 3) X(glTexCoord3sv, 3) X(glTexCoord4dv, 4) X(glTexCoord4fv, 4) X(glTexCoord4iv, 4) X(glTexCoord4sv, 4) \
+	X(glTexCoordP1uiv, 1) X(glTexCoordP2uiv, 1) X(glTexCoordP3uiv, 1) X(glTexCoordP4uiv, 1) X(glVertex2dv, 2) X(glVertex2fv, 2) \
+	X(glVertex2iv, 2) X(glVertex2sv, 2) X(glVertex3dv, 3) X(glVertex3fv, 3) X(glVertex3iv, 3) X(glVertex3sv, 3) X(glVertex4dv, 4) \
+	X(glVertex4fv, 4) X(glVertex4iv, 4) X(glVertex4sv, 4) X(glVertexAttrib1dv, 1) X(glVertexAttrib1fv, 1) X(glVertexAttrib1sv, 1) \
+	X(glVertexAttrib2dv, 2) X(glVertexAttrib2fv, 2) X(glVertexAttrib2sv, 2) X(glVertexAttrib3dv, 3) X(glVertexAttrib3fv, 3) \
+	X(glVertexAttrib3sv, 3) X(glVertexAttrib4Nbv, 4) X(glVertexAttrib4Niv, 4) X(glVertexAttrib4Nsv, 4) X(glVertexAttrib4Nubv, 4) \
+	X(glVertexAttrib4Nuiv, 4) X(glVertexAttrib4Nusv, 4) X(glVertexAttrib4bv, 4) X(glVertexAttrib4dv, 4) X(glVertexAttrib4fv, 4) \
+	X(glVertexAttrib4iv, 4) X(glVertexAttrib4sv, 4) X(glVertexAttrib4ubv, 4) X(glVertexAttrib4uiv, 4) X(glVertexAttrib4usv, 4) \
+	X(glVertexAttribI1iv, 1) X(glVertexAttribI1uiv, 1) X(glVertexAttribI2iv, 2) X(glVertexAttribI2uiv, 2) \
+	X(glVertexAttribI3iv, 3) X(glVertexAttribI3uiv, 3) X(glVertexAttribI4bv, 4) X(glVertexAttribI4iv, 4) X(glVertexAttribI4sv, 4) \
+	X(glVertexAttribI4ubv, 4) X(glVertexAttribI4uiv, 4) X(glVertexAttribI4usv, 4) X(glVertexAttribP1uiv, 1) \
+	X(glVertexAttribP2uiv, 1) X(glVertexAttribP3uiv, 1) X(glVertexAttribP4uiv, 1) X(glVertexP2uiv, 1) X(glVertexP3uiv, 1) \
+	X(glVertexP4uiv, 1) X(glWindowPos2dv, 2) X(glWindowPos2fv, 2) X(glWindowPos2iv, 2) X(glWindowPos2sv, 2) X(glWindowPos3dv, 3) \
+	X(glWindowPos3fv, 3) X(glWindowPos3iv, 3) X(glWindowPos3sv, 3)
+
+// Uniform calls that read count groups of values from their last argument.
+#define RAVEN_GL_UNIFORMS(X) \
+	X(glUniform1fv, 1) X(glUniform1iv, 1) X(glUniform1uiv, 1) X(glUniform2fv, 2) X(glUniform2iv, 2) X(glUniform2uiv, 2) \
+	X(glUniform3fv, 3) X(glUniform3iv, 3) X(glUniform3uiv, 3) X(glUniform4fv, 4) X(glUniform4iv, 4) X(glUniform4uiv, 4) \
+	X(glUniformMatrix2fv, 4) X(glUniformMatrix2x3fv, 6) X(glUniformMatrix2x4fv, 8) X(glUniformMatrix3fv, 9) \
+	X(glUniformMatrix3x2fv, 6) X(glUniformMatrix3x4fv, 12) X(glUniformMatrix4x2fv, 8) X(glUniformMatrix4x3fv, 12)
+
+// Calls with their own handler below: what they read and write depends on more than their arguments.
+#define RAVEN_GL_HANDLED(X) \
+	X(glAreTexturesResident) X(glArrayElement) X(glBindFragDataLocation) X(glBindFragDataLocationIndexed) X(glBitmap) \
+	X(glBufferSubData) X(glCallLists) X(glClearBufferfv) X(glClearBufferiv) X(glClearBufferuiv) X(glClientWaitSync) \
+	X(glCompressedTexImage1D) X(glCompressedTexImage2D) X(glCompressedTexImage3D) X(glCompressedTexSubImage1D) \
+	X(glCompressedTexSubImage2D) X(glCompressedTexSubImage3D) X(glDeleteFramebuffers) X(glDeleteQueries) X(glDeleteRenderbuffers) \
+	X(glDeleteSamplers) X(glDeleteSync) X(glDeleteVertexArrays) X(glDrawArraysInstanced) X(glDrawElementsBaseVertex) \
+	X(glDrawElementsInstanced) X(glDrawElementsInstancedBaseVertex) X(glDrawPixels) X(glDrawRangeElements) \
+	X(glDrawRangeElementsBaseVertex) X(glEdgeFlagPointer) X(glFeedbackBuffer) X(glFenceSync) X(glFlushMappedBufferRange) \
+	X(glFogCoordPointer) X(glFogfv) X(glFogiv) X(glGenQueries) X(glGenSamplers) X(glGetActiveAttrib) X(glGetActiveUniform) \
+	X(glGetActiveUniformBlockName) X(glGetActiveUniformBlockiv) X(glGetActiveUniformName) X(glGetActiveUniformsiv) \
+	X(glGetAttachedShaders) X(glGetAttribLocation) X(glGetBooleani_v) X(glGetBooleanv) X(glGetBufferParameteri64v) \
+	X(glGetBufferParameteriv) X(glGetBufferPointerv) X(glGetBufferSubData) X(glGetClipPlane) X(glGetCompressedTexImage) \
+	X(glGetFragDataIndex) X(glGetFragDataLocation) X(glGetFramebufferAttachmentParameteriv) X(glGetInteger64i_v) \
+	X(glGetInteger64v) X(glGetIntegeri_v) X(glGetLightfv) X(glGetLightiv) X(glGetMapdv) X(glGetMapfv) X(glGetMapiv) \
+	X(glGetMaterialfv) X(glGetMaterialiv) X(glGetMultisamplefv) X(glGetPixelMapfv) X(glGetPixelMapuiv) X(glGetPixelMapusv) \
+	X(glGetPointerv) X(glGetPolygonStipple) X(glGetQueryObjecti64v) X(glGetQueryObjectiv) X(glGetQueryObjectui64v) \
+	X(glGetQueryObjectuiv) X(glGetQueryiv) X(glGetRenderbufferParameteriv) X(glGetSamplerParameterIiv) \
+	X(glGetSamplerParameterIuiv) X(glGetSamplerParameterfv) X(glGetSamplerParameteriv) X(glGetShaderSource) X(glGetSynciv) \
+	X(glGetTexEnvfv) X(glGetTexEnviv) X(glGetTexGendv) X(glGetTexGenfv) X(glGetTexGeniv) X(glGetTexImage) \
+	X(glGetTexLevelParameterfv) X(glGetTexParameterIiv) X(glGetTexParameterIuiv) X(glGetTexParameterfv) X(glGetTexParameteriv) \
+	X(glGetTransformFeedbackVarying) X(glGetUniformBlockIndex) X(glGetUniformIndices) X(glGetUniformfv) X(glGetUniformiv) \
+	X(glGetUniformuiv) X(glGetVertexAttribIiv) X(glGetVertexAttribIuiv) X(glGetVertexAttribPointerv) X(glGetVertexAttribdv) \
+	X(glGetVertexAttribfv) X(glGetVertexAttribiv) X(glIndexPointer) X(glIsSync) X(glLightModelfv) X(glLightModeliv) X(glLightiv) \
+	X(glMap1d) X(glMap1f) X(glMap2d) X(glMap2f) X(glMapBuffer) X(glMapBufferRange) X(glMaterialfv) X(glMaterialiv) \
+	X(glMultiDrawArrays) X(glMultiDrawElements) X(glMultiDrawElementsBaseVertex) X(glPixelMapfv) X(glPixelMapuiv) \
+	X(glPixelMapusv) X(glPointParameterfv) X(glPointParameteriv) X(glPolygonStipple) X(glPrioritizeTextures) X(glRectdv) \
+	X(glRectfv) X(glRectiv) X(glRectsv) X(glSamplerParameterIiv) X(glSamplerParameterIuiv) X(glSamplerParameterfv) \
+	X(glSamplerParameteriv) X(glSecondaryColorPointer) X(glSelectBuffer) X(glTexEnvfv) X(glTexEnviv) X(glTexGendv) X(glTexGeniv) \
+	X(glTexImage1D) X(glTexParameterIiv) X(glTexParameterIuiv) X(glTexParameterfv) X(glTexParameteriv) X(glTexSubImage1D) \
+	X(glTexSubImage3D) X(glTransformFeedbackVaryings) X(glUnmapBuffer) X(glVertexAttribIPointer) X(glWaitSync)
+
+#define RAVEN_GL_NAME(function, ...) #function,
 constexpr std::string_view names[] = {
+	RAVEN_GL_SCALARS(RAVEN_GL_NAME) RAVEN_GL_VECTORS(RAVEN_GL_NAME) RAVEN_GL_UNIFORMS(RAVEN_GL_NAME)
+	RAVEN_GL_HANDLED(RAVEN_GL_NAME)
 	"glBegin", "glClear", "glClearColor", "glColor4f", "glDeleteLists", "glDisable", "glEnable", "glEnd", "glEndList",
 	"glGenLists", "glGetError", "glGetString", "glLoadIdentity", "glMatrixMode", "glNewList", "glReadPixels",
 	"glVertex2f", "glVertex3f", "glViewport", "glCallList",
@@ -58,6 +178,7 @@ constexpr std::string_view names[] = {
 	"wglChoosePixelFormat", "wglCreateContext", "wglDeleteContext", "wglDescribePixelFormat", "wglGetCurrentContext",
 	"wglGetCurrentDC", "wglGetPixelFormat", "wglGetProcAddress", "wglMakeCurrent", "wglSetPixelFormat", "wglSwapBuffers"
 };
+#undef RAVEN_GL_NAME
 
 std::array<float, 4> floats(ApiCall &call)
 {
@@ -88,24 +209,21 @@ void scalar_call(ApiCall &call, Result (*function)(Args...), std::index_sequence
 	else call.ret(uint64_t(function(scalar_argument<Args>(call, floating, Index)...)));
 }
 
-size_t query_count(GLenum name)
+// The most values a state query may write for its name: the lists of formats are as long as the driver says, every other name
+// writes at most a matrix.
+size_t state_limit(GLenum name)
 {
+	GLenum count_name = 0;
 	switch (name) {
-	case GL_MODELVIEW_MATRIX: case GL_PROJECTION_MATRIX: case GL_TEXTURE_MATRIX: return 16;
-	case GL_VIEWPORT: case GL_SCISSOR_BOX: case GL_CURRENT_COLOR: case GL_COLOR_CLEAR_VALUE: return 4;
-	case GL_DEPTH_RANGE: case GL_ALIASED_LINE_WIDTH_RANGE: case GL_ALIASED_POINT_SIZE_RANGE: return 2;
-	case GL_MAJOR_VERSION: case GL_MINOR_VERSION: case GL_NUM_EXTENSIONS: case GL_CONTEXT_FLAGS: case GL_CONTEXT_PROFILE_MASK:
-	case GL_RESET_NOTIFICATION_STRATEGY: case GL_CONTEXT_RELEASE_BEHAVIOR: case GL_CONTEXT_ROBUST_ACCESS:
-	case GL_MAX_TEXTURE_SIZE: case GL_MAX_3D_TEXTURE_SIZE: case GL_MAX_CUBE_MAP_TEXTURE_SIZE: case GL_MAX_TEXTURE_UNITS:
-	case GL_MAX_TEXTURE_IMAGE_UNITS: case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: case GL_MAX_VERTEX_ATTRIBS:
-	case GL_MAX_DRAW_BUFFERS: case GL_MAX_COLOR_ATTACHMENTS: case GL_MAX_SAMPLES: case GL_MAX_RENDERBUFFER_SIZE:
-	case GL_RED_BITS: case GL_GREEN_BITS: case GL_BLUE_BITS: case GL_ALPHA_BITS: case GL_DEPTH_BITS: case GL_STENCIL_BITS:
-	case GL_DOUBLEBUFFER: case GL_STEREO: case GL_SAMPLE_BUFFERS: case GL_SAMPLES: case GL_ACTIVE_TEXTURE:
-	case GL_CLIENT_ACTIVE_TEXTURE: case GL_CURRENT_PROGRAM: case GL_ARRAY_BUFFER_BINDING: case GL_ELEMENT_ARRAY_BUFFER_BINDING:
-	case GL_PACK_ALIGNMENT: case GL_UNPACK_ALIGNMENT: case GL_FRAMEBUFFER_BINDING: case GL_READ_FRAMEBUFFER_BINDING:
-	case GL_TEXTURE_BINDING_2D: case GL_TEXTURE_BINDING_3D: case GL_TEXTURE_BINDING_CUBE_MAP: return 1;
-	default: throw std::runtime_error("unsupported OpenGL query size: " + std::to_string(name));
+	case GL_COMPRESSED_TEXTURE_FORMATS: count_name = GL_NUM_COMPRESSED_TEXTURE_FORMATS; break;
+	case GL_PROGRAM_BINARY_FORMATS: count_name = GL_NUM_PROGRAM_BINARY_FORMATS; break;
+	case GL_SHADER_BINARY_FORMATS: count_name = GL_NUM_SHADER_BINARY_FORMATS; break;
+	default: return 64;
 	}
+	GLint count = 0;
+	glGetIntegerv(count_name, &count);
+	if (count < 0 || count > 4096) throw std::runtime_error("OpenGL format count exceeds bounds");
+	return size_t(count) + 64;
 }
 
 template<typename T, typename Function> void output(ApiCall &call, uint64_t address, size_t count, Function function)
@@ -134,11 +252,11 @@ template<typename T> std::vector<T> input(ApiCall &call, uint64_t address, size_
 // An array the guest pointed at its own memory instead of a buffer. The host driver keeps the guest's address only as a value: each draw
 // reads a copy of the vertices it uses (see draw_client).
 struct ClientArray {
-	// GL_VERTEX_ARRAY, GL_NORMAL_ARRAY, GL_COLOR_ARRAY, GL_TEXTURE_COORD_ARRAY, or 0 for a generic vertex attribute.
+	// The array's client state, or 0 for a generic vertex attribute.
 	GLenum kind = 0;
 	// The texture unit of a texture coordinate array, or the index of a generic attribute.
 	GLuint index = 0;
-	GLint size = 0, stride = 0, normalized = 0;
+	GLint size = 0, stride = 0, normalized = 0, integer = 0, divisor = 0;
 	GLenum type = 0;
 	uint64_t address = 0;
 };
@@ -161,16 +279,18 @@ size_t element_bytes(GLint size, GLenum type)
 std::vector<ClientArray> find_client_arrays()
 {
 	std::vector<ClientArray> arrays;
-	const auto fixed = [&arrays](GLenum kind, GLuint index, GLenum binding, GLenum size, GLenum type, GLenum stride, GLenum pointer) {
+	// An array whose layout query is 0 has a fixed layout: the size and type given.
+	const auto fixed = [&arrays](GLenum kind, GLuint index, GLenum binding, GLenum size, GLint fixed_size, GLenum type, GLenum fixed_type,
+		GLenum stride, GLenum pointer) {
 		GLint buffer = 0;
 		if (!glIsEnabled(kind)) return;
 		glGetIntegerv(binding, &buffer);
 		if (buffer) return;
 		ClientArray array{kind, index};
+		array.size = fixed_size;
 		if (size) glGetIntegerv(size, &array.size);
-		else array.size = 3;
-		GLint value = 0;
-		glGetIntegerv(type, &value);
+		GLint value = GLint(fixed_type);
+		if (type) glGetIntegerv(type, &value);
 		array.type = GLenum(value);
 		glGetIntegerv(stride, &array.stride);
 		void *address = nullptr;
@@ -178,28 +298,26 @@ std::vector<ClientArray> find_client_arrays()
 		array.address = reinterpret_cast<uintptr_t>(address);
 		arrays.push_back(array);
 	};
-	fixed(GL_VERTEX_ARRAY, 0, GL_VERTEX_ARRAY_BUFFER_BINDING, GL_VERTEX_ARRAY_SIZE, GL_VERTEX_ARRAY_TYPE, GL_VERTEX_ARRAY_STRIDE,
+	fixed(GL_VERTEX_ARRAY, 0, GL_VERTEX_ARRAY_BUFFER_BINDING, GL_VERTEX_ARRAY_SIZE, 0, GL_VERTEX_ARRAY_TYPE, 0, GL_VERTEX_ARRAY_STRIDE,
 		GL_VERTEX_ARRAY_POINTER);
-	fixed(GL_NORMAL_ARRAY, 0, GL_NORMAL_ARRAY_BUFFER_BINDING, 0, GL_NORMAL_ARRAY_TYPE, GL_NORMAL_ARRAY_STRIDE, GL_NORMAL_ARRAY_POINTER);
-	fixed(GL_COLOR_ARRAY, 0, GL_COLOR_ARRAY_BUFFER_BINDING, GL_COLOR_ARRAY_SIZE, GL_COLOR_ARRAY_TYPE, GL_COLOR_ARRAY_STRIDE,
+	fixed(GL_NORMAL_ARRAY, 0, GL_NORMAL_ARRAY_BUFFER_BINDING, 0, 3, GL_NORMAL_ARRAY_TYPE, 0, GL_NORMAL_ARRAY_STRIDE, GL_NORMAL_ARRAY_POINTER);
+	fixed(GL_COLOR_ARRAY, 0, GL_COLOR_ARRAY_BUFFER_BINDING, GL_COLOR_ARRAY_SIZE, 0, GL_COLOR_ARRAY_TYPE, 0, GL_COLOR_ARRAY_STRIDE,
 		GL_COLOR_ARRAY_POINTER);
-	// The guest has no call that points these arrays anywhere, so one enabled without a buffer reads from address zero.
-	for (const auto [array, binding] : {std::pair{GL_INDEX_ARRAY, GL_INDEX_ARRAY_BUFFER_BINDING},
-		{GL_EDGE_FLAG_ARRAY, GL_EDGE_FLAG_ARRAY_BUFFER_BINDING}, {GL_SECONDARY_COLOR_ARRAY, GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING},
-		{GL_FOG_COORD_ARRAY, GL_FOG_COORD_ARRAY_BUFFER_BINDING}}) {
-		GLint buffer = 0;
-		if (!glIsEnabled(GLenum(array))) continue;
-		glGetIntegerv(GLenum(binding), &buffer);
-		if (!buffer) throw ApiFault{};
-	}
+	fixed(GL_SECONDARY_COLOR_ARRAY, 0, GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING, GL_SECONDARY_COLOR_ARRAY_SIZE, 0,
+		GL_SECONDARY_COLOR_ARRAY_TYPE, 0, GL_SECONDARY_COLOR_ARRAY_STRIDE, GL_SECONDARY_COLOR_ARRAY_POINTER);
+	fixed(GL_FOG_COORD_ARRAY, 0, GL_FOG_COORD_ARRAY_BUFFER_BINDING, 0, 1, GL_FOG_COORD_ARRAY_TYPE, 0, GL_FOG_COORD_ARRAY_STRIDE,
+		GL_FOG_COORD_ARRAY_POINTER);
+	fixed(GL_INDEX_ARRAY, 0, GL_INDEX_ARRAY_BUFFER_BINDING, 0, 1, GL_INDEX_ARRAY_TYPE, 0, GL_INDEX_ARRAY_STRIDE, GL_INDEX_ARRAY_POINTER);
+	fixed(GL_EDGE_FLAG_ARRAY, 0, GL_EDGE_FLAG_ARRAY_BUFFER_BINDING, 0, 1, 0, GL_UNSIGNED_BYTE, GL_EDGE_FLAG_ARRAY_STRIDE,
+		GL_EDGE_FLAG_ARRAY_POINTER);
 	GLint original = 0, textures = 0;
 	glGetIntegerv(GL_CLIENT_ACTIVE_TEXTURE, &original);
 	glGetIntegerv(GL_MAX_TEXTURE_COORDS, &textures);
 	if (textures < 0 || textures > 32) throw std::runtime_error("OpenGL texture array count exceeds bounds");
 	for (GLint index = 0; index < textures; ++index) {
 		glClientActiveTexture(GL_TEXTURE0 + index);
-		fixed(GL_TEXTURE_COORD_ARRAY, GLuint(index), GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING, GL_TEXTURE_COORD_ARRAY_SIZE,
-			GL_TEXTURE_COORD_ARRAY_TYPE, GL_TEXTURE_COORD_ARRAY_STRIDE, GL_TEXTURE_COORD_ARRAY_POINTER);
+		fixed(GL_TEXTURE_COORD_ARRAY, GLuint(index), GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING, GL_TEXTURE_COORD_ARRAY_SIZE, 0,
+			GL_TEXTURE_COORD_ARRAY_TYPE, 0, GL_TEXTURE_COORD_ARRAY_STRIDE, GL_TEXTURE_COORD_ARRAY_POINTER);
 	}
 	glClientActiveTexture(GLenum(original));
 	GLint attributes = 0;
@@ -217,6 +335,8 @@ std::vector<ClientArray> find_client_arrays()
 		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_TYPE, &type);
 		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &array.stride);
 		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_NORMALIZED, &array.normalized);
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_INTEGER, &array.integer);
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_DIVISOR, &array.divisor);
 		array.type = GLenum(type);
 		void *address = nullptr;
 		glGetVertexAttribPointerv(index, GL_VERTEX_ATTRIB_ARRAY_POINTER, &address);
@@ -233,30 +353,43 @@ void point_array(const ClientArray &array, const void *data)
 	case GL_VERTEX_ARRAY: glVertexPointer(array.size, array.type, array.stride, data); break;
 	case GL_NORMAL_ARRAY: glNormalPointer(array.type, array.stride, data); break;
 	case GL_COLOR_ARRAY: glColorPointer(array.size, array.type, array.stride, data); break;
+	case GL_SECONDARY_COLOR_ARRAY: glSecondaryColorPointer(array.size, array.type, array.stride, data); break;
+	case GL_FOG_COORD_ARRAY: glFogCoordPointer(array.type, array.stride, data); break;
+	case GL_INDEX_ARRAY: glIndexPointer(array.type, array.stride, data); break;
+	case GL_EDGE_FLAG_ARRAY: glEdgeFlagPointer(array.stride, data); break;
 	case GL_TEXTURE_COORD_ARRAY:
 		glClientActiveTexture(GL_TEXTURE0 + array.index);
 		glTexCoordPointer(array.size, array.type, array.stride, data);
 		break;
-	default: glVertexAttribPointer(array.index, array.size, array.type, GLboolean(array.normalized), array.stride, data);
+	default:
+		if (array.integer) glVertexAttribIPointer(array.index, array.size, array.type, array.stride, data);
+		else glVertexAttribPointer(array.index, array.size, array.type, GLboolean(array.normalized), array.stride, data);
 	}
 }
 
-// Runs a draw that reads vertices first to last from the guest's client arrays. Each array's vertices are copied from guest memory
-// before the host is touched, so an unreadable array fails the call with nothing drawn; the driver reads the copies, and the guest's
-// addresses are put back for the next draw.
-template<typename Draw> void draw_client(ApiCall &call, const std::vector<ClientArray> &arrays, uint32_t first, uint32_t last, Draw draw)
+// Runs a draw of the given instances that reads vertices first to last from the guest's client arrays; an array with a divisor reads
+// one element for every divisor instances instead. Each array's elements are copied from guest memory before the host is touched, so
+// an unreadable array fails the call with nothing drawn; the driver reads the copies, and the guest's addresses are put back after.
+template<typename Draw>
+void draw_client(ApiCall &call, const std::vector<ClientArray> &arrays, int64_t first, int64_t last, uint64_t instances, Draw draw)
 {
 	if (arrays.empty()) { draw(); return; }
+	if (!instances) return;
 	std::vector<std::vector<uint8_t>> copies;
-	std::vector<uint64_t> starts;
+	std::vector<int64_t> starts;
 	copies.reserve(arrays.size());
 	size_t total = 0;
 	for (const auto &array : arrays) {
-		const uint64_t element = element_bytes(array.size, array.type), stride = array.stride > 0 ? uint64_t(array.stride) : element;
-		const uint64_t bytes = uint64_t(last - first) * stride + element, start = uint64_t(first) * stride;
+		const int64_t element = int64_t(element_bytes(array.size, array.type));
+		const int64_t stride = array.stride > 0 ? array.stride : element;
+		const int64_t low = array.divisor ? 0 : first, high = array.divisor ? int64_t((instances - 1) / uint64_t(array.divisor)) : last;
+		const uint64_t bytes = uint64_t(high - low) * uint64_t(stride) + uint64_t(element);
+		const int64_t start = low * stride;
 		uint64_t address = 0;
-		if (bytes > (256ULL << 20) || (total += bytes) > (256ULL << 20)) throw std::runtime_error("OpenGL client arrays exceed bounds");
-		if (__builtin_add_overflow(array.address, start, &address)) throw ApiFault{};
+		if (high < low || bytes > (256ULL << 20) || (total += bytes) > (256ULL << 20))
+			throw std::runtime_error("OpenGL client arrays exceed bounds");
+		if (start < 0 ? __builtin_sub_overflow(array.address, uint64_t(-start), &address) :
+			__builtin_add_overflow(array.address, uint64_t(start), &address)) throw ApiFault{};
 		copies.push_back(call.read(address, size_t(bytes)));
 		starts.push_back(start);
 	}
@@ -264,54 +397,187 @@ template<typename Draw> void draw_client(ApiCall &call, const std::vector<Client
 	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &buffer);
 	glGetIntegerv(GL_CLIENT_ACTIVE_TEXTURE, &unit);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	// The driver reads vertex i at the array's address plus i strides, so each copy is offered at its first vertex's place.
+	// The driver reads element i at the array's address plus i strides, so each copy is offered at its first element's place.
 	for (size_t index = 0; index < arrays.size(); ++index)
-		point_array(arrays[index], reinterpret_cast<const void *>(reinterpret_cast<uintptr_t>(copies[index].data()) - starts[index]));
+		point_array(arrays[index], reinterpret_cast<const void *>(reinterpret_cast<uintptr_t>(copies[index].data()) - uintptr_t(starts[index])));
 	draw();
 	for (const auto &array : arrays) point_array(array, reinterpret_cast<const void *>(uintptr_t(array.address)));
 	glClientActiveTexture(GLenum(unit));
 	glBindBuffer(GL_ARRAY_BUFFER, GLuint(buffer));
 }
 
-size_t unpack_size(GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type)
+// The bytes a pixel of format and type takes, or zero for bitmaps, whose pixels are bits.
+size_t pixel_bytes(GLenum format, GLenum type)
 {
-	if (width < 0 || height < 0 || depth < 0 || width > 8192 || height > 8192 || depth > 2048)
-		throw std::runtime_error("OpenGL texture dimensions exceed bounds");
-	if (!width || !height || !depth) return 0;
+	switch (type) {
+	case GL_BITMAP:
+		if (format != GL_COLOR_INDEX && format != GL_STENCIL_INDEX) throw std::runtime_error("unsupported OpenGL bitmap format");
+		return 0;
+	case GL_UNSIGNED_BYTE_3_3_2: case GL_UNSIGNED_BYTE_2_3_3_REV: return 1;
+	case GL_UNSIGNED_SHORT_5_6_5: case GL_UNSIGNED_SHORT_5_6_5_REV: case GL_UNSIGNED_SHORT_4_4_4_4: case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+	case GL_UNSIGNED_SHORT_5_5_5_1: case GL_UNSIGNED_SHORT_1_5_5_5_REV: return 2;
+	case GL_UNSIGNED_INT_8_8_8_8: case GL_UNSIGNED_INT_8_8_8_8_REV: case GL_UNSIGNED_INT_10_10_10_2: case GL_UNSIGNED_INT_2_10_10_10_REV:
+	case GL_UNSIGNED_INT_10F_11F_11F_REV: case GL_UNSIGNED_INT_5_9_9_9_REV: case GL_UNSIGNED_INT_24_8: return 4;
+	case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: return 8;
+	}
+	if (format == GL_DEPTH_STENCIL) throw std::runtime_error("unsupported OpenGL depth-stencil element");
 	size_t components = 0, element = 0;
 	switch (format) {
-	case GL_RED: case GL_ALPHA: case GL_LUMINANCE: case GL_DEPTH_COMPONENT: components = 1; break;
-	case GL_RG: case GL_LUMINANCE_ALPHA: components = 2; break;
-	case GL_RGB: case GL_BGR: components = 3; break;
-	case GL_RGBA: case GL_BGRA: components = 4; break;
-	case GL_DEPTH_STENCIL: components = 1; break;
+	case GL_RED: case GL_GREEN: case GL_BLUE: case GL_ALPHA: case GL_LUMINANCE: case GL_DEPTH_COMPONENT: case GL_STENCIL_INDEX:
+	case GL_COLOR_INDEX: case GL_RED_INTEGER: case GL_GREEN_INTEGER: case GL_BLUE_INTEGER: case GL_ALPHA_INTEGER: components = 1; break;
+	case GL_RG: case GL_LUMINANCE_ALPHA: case GL_RG_INTEGER: components = 2; break;
+	case GL_RGB: case GL_BGR: case GL_RGB_INTEGER: case GL_BGR_INTEGER: components = 3; break;
+	case GL_RGBA: case GL_BGRA: case GL_RGBA_INTEGER: case GL_BGRA_INTEGER: components = 4; break;
 	default: throw std::runtime_error("unsupported OpenGL texture format");
 	}
 	switch (type) {
 	case GL_UNSIGNED_BYTE: case GL_BYTE: element = 1; break;
 	case GL_UNSIGNED_SHORT: case GL_SHORT: case GL_HALF_FLOAT: element = 2; break;
 	case GL_UNSIGNED_INT: case GL_INT: case GL_FLOAT: element = 4; break;
-	case GL_UNSIGNED_INT_24_8:
-		if (format != GL_DEPTH_STENCIL) throw std::runtime_error("unsupported OpenGL packed texture format");
-		element = 4; break;
 	default: throw std::runtime_error("unsupported OpenGL texture element");
 	}
-	if (format == GL_DEPTH_STENCIL && type != GL_UNSIGNED_INT_24_8)
-		throw std::runtime_error("unsupported OpenGL depth-stencil element");
+	return components * element;
+}
+
+// The bytes an image of the given size spans in client memory under the pack or unpack state, from its first byte to its last.
+size_t pixel_size(GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, bool pack)
+{
+	if (width < 0 || height < 0 || depth < 0 || width > 8192 || height > 8192 || depth > 2048)
+		throw std::runtime_error("OpenGL texture dimensions exceed bounds");
+	if (!width || !height || !depth) return 0;
+	const size_t bytes_per_pixel = pixel_bytes(format, type);
 	GLint alignment = 0, row = 0, image = 0, skip_rows = 0, skip_pixels = 0, skip_images = 0;
-	glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment); glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row);
-	glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, &image); glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
-	glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels); glGetIntegerv(GL_UNPACK_SKIP_IMAGES, &skip_images);
+	glGetIntegerv(pack ? GL_PACK_ALIGNMENT : GL_UNPACK_ALIGNMENT, &alignment);
+	glGetIntegerv(pack ? GL_PACK_ROW_LENGTH : GL_UNPACK_ROW_LENGTH, &row);
+	glGetIntegerv(pack ? GL_PACK_IMAGE_HEIGHT : GL_UNPACK_IMAGE_HEIGHT, &image);
+	glGetIntegerv(pack ? GL_PACK_SKIP_ROWS : GL_UNPACK_SKIP_ROWS, &skip_rows);
+	glGetIntegerv(pack ? GL_PACK_SKIP_PIXELS : GL_UNPACK_SKIP_PIXELS, &skip_pixels);
+	glGetIntegerv(pack ? GL_PACK_SKIP_IMAGES : GL_UNPACK_SKIP_IMAGES, &skip_images);
 	if ((alignment != 1 && alignment != 2 && alignment != 4 && alignment != 8) || row < 0 || image < 0 ||
 		skip_rows < 0 || skip_pixels < 0 || skip_images < 0 || row > 8192 || image > 8192 ||
 		skip_rows > 8192 || skip_pixels > 8192 || skip_images > 2048)
 		throw std::runtime_error("OpenGL unpack state exceeds bounds");
-	const size_t stride = ((size_t(row ? row : width) * components * element + alignment - 1) / alignment) * alignment;
+	const size_t pixels = size_t(row ? row : width);
+	// A bitmap row holds a bit for each pixel; skipped pixels are skipped bits.
+	const size_t stride = bytes_per_pixel ? ((pixels * bytes_per_pixel + alignment - 1) / alignment) * alignment :
+		(((pixels + 7) / 8 + alignment - 1) / alignment) * alignment;
+	const size_t last_row = bytes_per_pixel ? (size_t(skip_pixels) + width) * bytes_per_pixel : (size_t(skip_pixels) + width + 7) / 8;
 	const size_t layer = stride * size_t(image ? image : height);
-	const size_t bytes = (size_t(skip_images) + depth - 1) * layer + (size_t(skip_rows) + height - 1) * stride +
-		(size_t(skip_pixels) + width) * components * element;
+	const size_t bytes = (size_t(skip_images) + depth - 1) * layer + (size_t(skip_rows) + height - 1) * stride + last_row;
 	if (bytes > (256ULL << 20)) throw std::runtime_error("OpenGL texture upload exceeds bounds");
 	return bytes;
+}
+
+size_t unpack_size(GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type)
+{
+	return pixel_size(width, height, depth, format, type, false);
+}
+
+// How many values a query writes for its name. A query writes the same values each time it is asked, so running it over two buffers
+// with different fills shows which elements it wrote: those that differ from their fill in either run. Queries write a prefix.
+template<typename T, typename Query> size_t written_count(Query query, size_t limit = 64)
+{
+	std::vector<T> first(limit), second(limit);
+	std::memset(static_cast<void *>(first.data()), 0x5a, limit * sizeof(T));
+	std::memset(static_cast<void *>(second.data()), 0xa5, limit * sizeof(T));
+	query(first.data());
+	query(second.data());
+	std::array<uint8_t, sizeof(T)> first_fill, second_fill;
+	first_fill.fill(0x5a);
+	second_fill.fill(0xa5);
+	size_t count = 0;
+	for (size_t index = 0; index < limit; ++index)
+		if (std::memcmp(&first[index], first_fill.data(), sizeof(T)) || std::memcmp(&second[index], second_fill.data(), sizeof(T)))
+			count = index + 1;
+	return count;
+}
+
+// Answers a query into guest memory with as many values as the query writes for its name.
+template<typename T, typename Query> void query_output(ApiCall &call, uint64_t address, Query query, size_t limit = 64)
+{
+	output<T>(call, address, written_count<T>(query, limit), [&](T *values) { if (values) query(values); });
+}
+
+template<typename... Args> using last_argument = std::tuple_element_t<sizeof...(Args) - 1, std::tuple<Args...>>;
+
+// Calls a function whose last argument points at count values of the guest's, copied to host memory first.
+template<typename... Args, size_t... Index>
+void vector_call(ApiCall &call, void (*function)(Args...), size_t count, std::index_sequence<Index...>)
+{
+	using Value = std::remove_cv_t<std::remove_pointer_t<last_argument<Args...>>>;
+	const auto values = input<Value>(call, call[sizeof...(Args) - 1], count);
+	std::array<uint64_t, 4> floating{};
+	if constexpr ((std::is_floating_point_v<Args> || ...)) floating = call.process.api_float_arguments();
+	function(scalar_argument<std::tuple_element_t<Index, std::tuple<Args...>>>(call, floating, Index)..., values.data());
+}
+
+// An array of count guest strings, as shader sources and variable names are passed.
+std::vector<std::string> guest_strings(ApiCall &call, uint64_t address, int32_t count)
+{
+	if (count < 0 || count > 4096) throw std::runtime_error("OpenGL string count exceeds bounds");
+	std::vector<std::string> strings;
+	size_t total = 0;
+	for (int32_t index = 0; index < count; ++index) {
+		strings.push_back(call.narrow(call.load_pointer(address + size_t(index) * call.pointer_width()), 65536));
+		if ((total += strings.back().size()) > 16 * 1024 * 1024) throw std::runtime_error("OpenGL strings exceed bounds");
+	}
+	return strings;
+}
+
+GLenum buffer_binding(GLenum target)
+{
+	switch (target) {
+	case GL_ARRAY_BUFFER: return GL_ARRAY_BUFFER_BINDING;
+	case GL_ELEMENT_ARRAY_BUFFER: return GL_ELEMENT_ARRAY_BUFFER_BINDING;
+	case GL_PIXEL_PACK_BUFFER: return GL_PIXEL_PACK_BUFFER_BINDING;
+	case GL_PIXEL_UNPACK_BUFFER: return GL_PIXEL_UNPACK_BUFFER_BINDING;
+	case GL_UNIFORM_BUFFER: return GL_UNIFORM_BUFFER_BINDING;
+	case GL_TEXTURE_BUFFER: return GL_TEXTURE_BUFFER_BINDING;
+	case GL_TRANSFORM_FEEDBACK_BUFFER: return GL_TRANSFORM_FEEDBACK_BUFFER_BINDING;
+	case GL_COPY_READ_BUFFER: return GL_COPY_READ_BUFFER_BINDING;
+	case GL_COPY_WRITE_BUFFER: return GL_COPY_WRITE_BUFFER_BINDING;
+	case GL_DRAW_INDIRECT_BUFFER: return GL_DRAW_INDIRECT_BUFFER_BINDING;
+	case GL_QUERY_BUFFER: return GL_QUERY_BUFFER_BINDING;
+	default: return 0;
+	}
+}
+
+GLuint bound_buffer(GLenum binding)
+{
+	GLint buffer = 0;
+	if (binding) glGetIntegerv(binding, &buffer);
+	return GLuint(buffer);
+}
+
+// The pixels an upload reads: guest memory, or an offset into the bound unpack buffer, which must lie inside it. A null pointer is
+// accepted only where the call allocates without reading.
+const void *unpack_data(ApiCall &call, uint64_t address, size_t size, std::vector<uint8_t> &bytes, bool null_allowed = false)
+{
+	if (bound_buffer(GL_PIXEL_UNPACK_BUFFER_BINDING)) {
+		GLint64 capacity = 0;
+		glGetBufferParameteri64v(GL_PIXEL_UNPACK_BUFFER, GL_BUFFER_SIZE, &capacity);
+		if (capacity < 0 || address > uint64_t(capacity) || size > uint64_t(capacity) - address)
+			throw std::runtime_error("OpenGL upload offset exceeds its buffer");
+		return reinterpret_cast<const void *>(address);
+	}
+	if (!address && null_allowed) return nullptr;
+	bytes = call.read(address, size);
+	return bytes.data();
+}
+
+// Pixels a read-back writes: into guest memory, or at an offset into the bound pack buffer, which must lie inside it.
+template<typename Read> void pack_output(ApiCall &call, uint64_t address, size_t size, Read read)
+{
+	if (bound_buffer(GL_PIXEL_PACK_BUFFER_BINDING)) {
+		GLint64 capacity = 0;
+		glGetBufferParameteri64v(GL_PIXEL_PACK_BUFFER, GL_BUFFER_SIZE, &capacity);
+		if (capacity < 0 || address > uint64_t(capacity) || size > uint64_t(capacity) - address)
+			throw std::runtime_error("OpenGL read-back offset exceeds its buffer");
+		read(reinterpret_cast<void *>(address));
+		return;
+	}
+	if (size > (256ULL << 20)) throw std::runtime_error("OpenGL read-back exceeds bounds");
+	output<uint8_t>(call, address, size, [&](uint8_t *bytes) { read(bytes); });
 }
 
 }
@@ -339,7 +605,19 @@ struct OpenGLBridge::State {
 		bool used = false, arrays_valid = false, elements = false;
 		// The arrays draws read from guest memory, found again when array state changes (arrays_valid false).
 		std::vector<ClientArray> client{};
+		// Errors raised before a query Raven made for itself, which the guest has yet to read (see quietly).
+		std::vector<GLenum> errors{};
+		// The feedback or selection buffer the driver fills while the render mode lasts, copied to the guest's when it ends.
+		struct Capture { uint64_t address = 0; std::vector<uint8_t> bytes; };
+		Capture feedback{}, selection{};
 	};
+	// Sync objects by the token the guest holds, so that the guest never hands the driver an address.
+	std::map<uint64_t, GLsync> syncs;
+	uint64_t next_sync = 0x5900000000000001ULL;
+	// A buffer range the guest mapped: guest memory stands in for the driver's mapping, filled from the buffer when the guest reads it,
+	// and written to the buffer when the guest unmaps or flushes it. Keyed by context and buffer name.
+	struct Mapping { uint64_t address = 0, offset = 0, length = 0; GLbitfield access = 0; };
+	std::map<std::pair<uint64_t, GLuint>, Mapping> mappings;
 	struct Current { uint64_t context = 0, dc = 0; };
 	struct Surface {
 		EGLSurface host = EGL_NO_SURFACE;
@@ -565,6 +843,87 @@ struct OpenGLBridge::State {
 			if (draw != EGL_NO_SURFACE && !eglSwapInterval(display, found->second.interval))
 				throw std::runtime_error("cannot restore OpenGL swap interval");
 		}
+	}
+
+	// Runs a query Raven makes for itself: an error it raises is not the guest's, and errors the guest has not read yet are kept for it.
+	template<typename Function> void quietly(ApiCall &call, Function function)
+	{
+		auto &errors = contexts.at(selected(call).context).errors;
+		for (int count = 0; count < 8; ++count) {
+			const auto error = glGetError();
+			if (error == GL_NO_ERROR) break;
+			if (std::find(errors.begin(), errors.end(), error) == errors.end()) errors.push_back(error);
+		}
+		function();
+		for (int count = 0; count < 8 && glGetError() != GL_NO_ERROR; ++count) {}
+	}
+
+	// The values a parameter call reads: as many as the matching query writes for the same name, in a buffer of at least sixteen so
+	// that a name the query does not know still finds memory the driver may read.
+	template<typename T, typename Query> std::vector<T> parameter_input(ApiCall &call, uint64_t address, Query query)
+	{
+		size_t count = 0;
+		quietly(call, [&] { count = written_count<T>(query); });
+		auto values = input<T>(call, address, count);
+		values.resize(std::max<size_t>(values.size(), 16));
+		return values;
+	}
+
+	// An indexed draw: the indices come from the element buffer or from guest memory, and client arrays are copied for the vertices
+	// they name, moved by base.
+	template<typename Draw>
+	void draw_elements(ApiCall &call, int32_t count, GLenum type, uint64_t address, int32_t base, int32_t instances, Draw draw)
+	{
+		const auto &arrays = client_arrays(call);
+		if (count < 0 || count > 16 * 1024 * 1024) throw std::runtime_error("OpenGL element count exceeds bounds");
+		const size_t element = type == GL_UNSIGNED_BYTE ? 1 : type == GL_UNSIGNED_SHORT ? 2 : type == GL_UNSIGNED_INT ? 4 : 0;
+		if (!element) throw std::runtime_error("unsupported OpenGL element type");
+		const GLuint buffer = bound_buffer(GL_ELEMENT_ARRAY_BUFFER_BINDING);
+		const bool queued = call.process.serving_queued();
+		if (!buffer && queued)
+			throw std::runtime_error("queued OpenGL indexed draw has no element buffer");
+		std::vector<uint8_t> bytes;
+		const void *indices = nullptr;
+		const size_t size = size_t(count) * element;
+		if (buffer) {
+			GLint64 capacity = 0;
+			glGetBufferParameteri64v(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &capacity);
+			if (capacity < 0 || address > uint64_t(capacity) || size > uint64_t(capacity) - address)
+				throw std::runtime_error("OpenGL element offset exceeds its buffer");
+			indices = reinterpret_cast<const void *>(address);
+		} else if (size) { bytes = call.read(address, size); indices = bytes.data(); }
+		if (arrays.empty()) draw(indices);
+		else if (size && instances > 0) {
+			// The vertices the draw reads run from its lowest index to its highest, leaving out the index that restarts a primitive.
+			if (buffer) {
+				bytes.resize(size);
+				glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(address), GLsizeiptr(size), bytes.data());
+			}
+			const uint32_t all = element == 1 ? 0xffu : element == 2 ? 0xffffu : 0xffffffffu;
+			GLint restart_index = 0;
+			glGetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &restart_index);
+			const bool fixed = glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX), restart = fixed || glIsEnabled(GL_PRIMITIVE_RESTART);
+			const uint32_t skipped = fixed ? all : uint32_t(restart_index);
+			uint32_t first = UINT32_MAX, last = 0;
+			for (size_t offset = 0; offset < size; offset += element) {
+				uint32_t index = 0;
+				std::memcpy(&index, bytes.data() + offset, element);
+				if (restart && index == skipped) continue;
+				first = std::min(first, index);
+				last = std::max(last, index);
+			}
+			// Indices that only restart primitives draw nothing.
+			if (first <= last) draw_client(call, arrays, int64_t(first) + base, int64_t(last) + base, uint64_t(instances), [&] { draw(indices); });
+		}
+		if (queued) ++queued_draws;
+	}
+
+	template<typename Draw> void draw_arrays(ApiCall &call, int32_t first, int32_t count, int32_t instances, Draw draw)
+	{
+		const auto &arrays = client_arrays(call);
+		// A negative first, count or instance count is refused by the driver before it reads a vertex.
+		if (arrays.empty() || first < 0 || count < 0 || instances < 0) draw();
+		else if (count) draw_client(call, arrays, first, int64_t(first) + count - 1, uint64_t(instances), draw);
 	}
 
 	const std::vector<ClientArray> &client_arrays(ApiCall &call)
@@ -803,11 +1162,14 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		call.ret(s.modules.resolve({"opengl32.dll", name, 0, false, 0}));
 	});
 	const auto add = [&registry, &s](const char *name, uint32_t count, ApiHandler handler) {
-		static constexpr std::array<std::string_view, 13> array_changes{
-			"glBindVertexArray", "glCallList", "glColorPointer", "glDeleteBuffers", "glDisableClientState", "glDisableVertexAttribArray",
-			"glEnableClientState", "glInterleavedArrays", "glEnableVertexAttribArray", "glNormalPointer", "glTexCoordPointer", "glVertexAttribPointer", "glVertexPointer"};
-		const bool changed = std::find(array_changes.begin(), array_changes.end(), name) != array_changes.end();
-		const bool elements = std::string_view(name) == "glBindVertexArray" || std::string_view(name) == "glDeleteBuffers";
+		static constexpr std::string_view array_changes[] = {
+			"glBindVertexArray", "glCallList", "glCallLists", "glColorPointer", "glDeleteBuffers", "glDeleteVertexArrays", "glDisableClientState",
+			"glDisableVertexAttribArray", "glEdgeFlagPointer", "glEnableClientState", "glEnableVertexAttribArray", "glFogCoordPointer",
+			"glIndexPointer", "glInterleavedArrays", "glNormalPointer", "glPopClientAttrib", "glSecondaryColorPointer", "glTexCoordPointer",
+			"glVertexAttribDivisor", "glVertexAttribIPointer", "glVertexAttribPointer", "glVertexPointer"};
+		const bool changed = std::find(std::begin(array_changes), std::end(array_changes), name) != std::end(array_changes);
+		const bool elements = std::string_view(name) == "glBindVertexArray" || std::string_view(name) == "glDeleteBuffers" ||
+			std::string_view(name) == "glDeleteVertexArrays" || std::string_view(name) == "glPopClientAttrib";
 		const bool binding = std::string_view(name) == "glBindBuffer";
 		registry.add(name, count, [&s, changed, elements, binding, handler = std::move(handler)](ApiCall &call) {
 			s.activate(call);
@@ -897,7 +1259,6 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		const auto values = input<GLfloat>(call, call[2], count);
 		glLightfv(call.u32(0), name, values.data());
 	});
-	scalar("glRenderMode", glRenderMode);
 	add("glColor4fv", 1, [](ApiCall &call) {
 		const auto values = input<GLfloat>(call, call[0], 4);
 		glColor4fv(values.data());
@@ -963,13 +1324,13 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		call.ret(text ? s.string(reinterpret_cast<const char *>(text)) : 0);
 	});
 	add("glGetIntegerv", 2, [](ApiCall &call) {
-		output<GLint>(call, call[1], query_count(call.u32(0)), [&](auto *values) { glGetIntegerv(call.u32(0), values); });
+		query_output<GLint>(call, call[1], [&](GLint *values) { glGetIntegerv(call.u32(0), values); }, state_limit(call.u32(0)));
 	});
 	add("glGetFloatv", 2, [](ApiCall &call) {
-		output<GLfloat>(call, call[1], query_count(call.u32(0)), [&](auto *values) { glGetFloatv(call.u32(0), values); });
+		query_output<GLfloat>(call, call[1], [&](GLfloat *values) { glGetFloatv(call.u32(0), values); }, state_limit(call.u32(0)));
 	});
 	add("glGetDoublev", 2, [](ApiCall &call) {
-		output<GLdouble>(call, call[1], query_count(call.u32(0)), [&](auto *values) { glGetDoublev(call.u32(0), values); });
+		query_output<GLdouble>(call, call[1], [&](GLdouble *values) { glGetDoublev(call.u32(0), values); }, state_limit(call.u32(0)));
 	});
 	for (const auto [name, function] : {std::pair{"glGenTextures", &glGenTextures}, {"glGenFramebuffers", glGenFramebuffers},
 		{"glGenRenderbuffers", glGenRenderbuffers}, {"glGenVertexArrays", glGenVertexArrays}})
@@ -1078,51 +1439,8 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		glVertexAttribPointer(call.u32(0), call.i32(1), call.u32(2), GLboolean(call.u32(3)), call.i32(4), reinterpret_cast<const void *>(call[5]));
 	});
 	add("glDrawElements", 4, [&s](ApiCall &call) {
-		const auto &arrays = s.client_arrays(call);
-		if (call.i32(1) < 0 || call.u32(1) > 16 * 1024 * 1024) throw std::runtime_error("OpenGL element count exceeds bounds");
-		const auto type = call.u32(2);
-		const size_t element = type == GL_UNSIGNED_BYTE ? 1 : type == GL_UNSIGNED_SHORT ? 2 : type == GL_UNSIGNED_INT ? 4 : 0;
-		if (!element) throw std::runtime_error("unsupported OpenGL element type");
-		GLint buffer = 0;
-		glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &buffer);
-		const bool queued = call.process.serving_queued();
-		if (!buffer && queued)
-			throw std::runtime_error("queued OpenGL indexed draw has no element buffer");
-		std::vector<uint8_t> bytes;
-		const void *indices = nullptr;
-		const size_t size = size_t(call.u32(1)) * element;
-		if (buffer) {
-			GLint64 capacity = 0;
-			glGetBufferParameteri64v(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &capacity);
-			if (capacity < 0 || call[3] > uint64_t(capacity) || size > uint64_t(capacity) - call[3])
-				throw std::runtime_error("OpenGL element offset exceeds its buffer");
-			indices = reinterpret_cast<const void *>(call[3]);
-		} else if (size) { bytes = call.read(call[3], size); indices = bytes.data(); }
-		const auto draw = [&call, type, indices] { glDrawElements(call.u32(0), call.i32(1), type, indices); };
-		if (arrays.empty()) draw();
-		else if (size) {
-			// The vertices the draw reads run from its lowest index to its highest, leaving out the index that restarts a primitive.
-			if (buffer) {
-				bytes.resize(size);
-				glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(call[3]), GLsizeiptr(size), bytes.data());
-			}
-			const uint32_t all = element == 1 ? 0xffu : element == 2 ? 0xffffu : 0xffffffffu;
-			GLint restart_index = 0;
-			glGetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &restart_index);
-			const bool fixed = glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX), restart = fixed || glIsEnabled(GL_PRIMITIVE_RESTART);
-			const uint32_t skipped = fixed ? all : uint32_t(restart_index);
-			uint32_t first = UINT32_MAX, last = 0;
-			for (size_t offset = 0; offset < size; offset += element) {
-				uint32_t index = 0;
-				std::memcpy(&index, bytes.data() + offset, element);
-				if (restart && index == skipped) continue;
-				first = std::min(first, index);
-				last = std::max(last, index);
-			}
-			// Indices that only restart primitives draw nothing.
-			if (first <= last) draw_client(call, arrays, first, last, draw);
-		}
-		if (queued) ++s.queued_draws;
+		s.draw_elements(call, call.i32(1), call.u32(2), call[3], 0, 1,
+			[&call](const void *indices) { glDrawElements(call.u32(0), call.i32(1), call.u32(2), indices); });
 	});
 	add("glClear", 1, [](ApiCall &call) { glClear(call.u32(0)); });
 	add("glClearColor", 4, [](ApiCall &call) { const auto f = floats(call); glClearColor(f[0], f[1], f[2], f[3]); });
@@ -1132,7 +1450,6 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 	add("glBegin", 1, [](ApiCall &call) { glBegin(call.u32(0)); });
 	add("glEnd", 0, [](ApiCall &) { glEnd(); });
 	add("glViewport", 4, [](ApiCall &call) { glViewport(call.i32(0), call.i32(1), call.i32(2), call.i32(3)); });
-	add("glGetError", 0, [](ApiCall &call) { call.ret(glGetError()); });
 	add("glEnable", 1, [](ApiCall &call) { glEnable(call.u32(0)); });
 	add("glDisable", 1, [](ApiCall &call) { glDisable(call.u32(0)); });
 	add("glEnableClientState", 1, [](ApiCall &call) { glEnableClientState(call.u32(0)); });
@@ -1167,11 +1484,7 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		glInterleavedArrays(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2]));
 	});
 	add("glDrawArrays", 3, [&s](ApiCall &call) {
-		const auto &arrays = s.client_arrays(call);
-		const auto draw = [&call] { glDrawArrays(call.u32(0), call.i32(1), call.i32(2)); };
-		// A negative first or count is refused by the driver before it reads a vertex.
-		if (call.i32(1) < 0 || call.i32(2) <= 0) draw();
-		else draw_client(call, arrays, call.u32(1), call.u32(1) + call.u32(2) - 1, draw);
+		s.draw_arrays(call, call.i32(1), call.i32(2), 1, [&call] { glDrawArrays(call.u32(0), call.i32(1), call.i32(2)); });
 	});
 	add("glMatrixMode", 1, [](ApiCall &call) { glMatrixMode(call.u32(0)); });
 	add("glLoadIdentity", 0, [](ApiCall &) { glLoadIdentity(); });
@@ -1199,6 +1512,655 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		call.write(call[6], bytes);
 		glReadPixels(call.i32(0), call.i32(1), call.i32(2), call.i32(3), GL_RGBA, GL_UNSIGNED_BYTE, bytes.data());
 		call.write(call[6], bytes);
+	});
+	const auto vector = [&add]<typename... Args>(const char *name, void (*function)(Args...), size_t count) {
+		add(name, sizeof...(Args), [function, count](ApiCall &call) {
+			vector_call(call, function, count, std::make_index_sequence<sizeof...(Args) - 1>{});
+		});
+	};
+	const auto uniform = [&add]<typename... Args>(const char *name, void (*function)(Args...), size_t group) {
+		add(name, sizeof...(Args), [function, group](ApiCall &call) {
+			if (call.i32(1) < 0 || call.u32(1) > 65536) throw std::runtime_error("OpenGL uniform count exceeds bounds");
+			vector_call(call, function, size_t(call.u32(1)) * group, std::make_index_sequence<sizeof...(Args) - 1>{});
+		});
+	};
+#define RAVEN_GL_SCALAR(function) scalar(#function, function);
+#define RAVEN_GL_VECTOR(function, count) vector(#function, function, count);
+#define RAVEN_GL_UNIFORM(function, group) uniform(#function, function, group);
+	RAVEN_GL_SCALARS(RAVEN_GL_SCALAR)
+	RAVEN_GL_VECTORS(RAVEN_GL_VECTOR)
+	RAVEN_GL_UNIFORMS(RAVEN_GL_UNIFORM)
+#undef RAVEN_GL_SCALAR
+#undef RAVEN_GL_VECTOR
+#undef RAVEN_GL_UNIFORM
+	add("glRectfv", 2, [](ApiCall &call) { glRectfv(input<GLfloat>(call, call[0], 2).data(), input<GLfloat>(call, call[1], 2).data()); });
+	add("glRectdv", 2, [](ApiCall &call) { glRectdv(input<GLdouble>(call, call[0], 2).data(), input<GLdouble>(call, call[1], 2).data()); });
+	add("glRectiv", 2, [](ApiCall &call) { glRectiv(input<GLint>(call, call[0], 2).data(), input<GLint>(call, call[1], 2).data()); });
+	add("glRectsv", 2, [](ApiCall &call) { glRectsv(input<GLshort>(call, call[0], 2).data(), input<GLshort>(call, call[1], 2).data()); });
+
+	// Draws.
+	add("glDrawArraysInstanced", 4, [&s](ApiCall &call) {
+		s.draw_arrays(call, call.i32(1), call.i32(2), call.i32(3),
+			[&call] { glDrawArraysInstanced(call.u32(0), call.i32(1), call.i32(2), call.i32(3)); });
+	});
+	add("glArrayElement", 1, [&s](ApiCall &call) { s.draw_arrays(call, call.i32(0), 1, 1, [&call] { glArrayElement(call.i32(0)); }); });
+	add("glDrawElementsInstanced", 5, [&s](ApiCall &call) {
+		s.draw_elements(call, call.i32(1), call.u32(2), call[3], 0, call.i32(4),
+			[&call](const void *indices) { glDrawElementsInstanced(call.u32(0), call.i32(1), call.u32(2), indices, call.i32(4)); });
+	});
+	add("glDrawElementsBaseVertex", 5, [&s](ApiCall &call) {
+		s.draw_elements(call, call.i32(1), call.u32(2), call[3], call.i32(4), 1,
+			[&call](const void *indices) { glDrawElementsBaseVertex(call.u32(0), call.i32(1), call.u32(2), indices, call.i32(4)); });
+	});
+	add("glDrawElementsInstancedBaseVertex", 6, [&s](ApiCall &call) {
+		s.draw_elements(call, call.i32(1), call.u32(2), call[3], call.i32(5), call.i32(4), [&call](const void *indices) {
+			glDrawElementsInstancedBaseVertex(call.u32(0), call.i32(1), call.u32(2), indices, call.i32(4), call.i32(5));
+		});
+	});
+	// The range is only a promise about the indices; the copy follows the indices themselves.
+	add("glDrawRangeElements", 6, [&s](ApiCall &call) {
+		s.draw_elements(call, call.i32(3), call.u32(4), call[5], 0, 1, [&call](const void *indices) {
+			glDrawRangeElements(call.u32(0), call.u32(1), call.u32(2), call.i32(3), call.u32(4), indices);
+		});
+	});
+	add("glDrawRangeElementsBaseVertex", 7, [&s](ApiCall &call) {
+		s.draw_elements(call, call.i32(3), call.u32(4), call[5], call.i32(6), 1, [&call](const void *indices) {
+			glDrawRangeElementsBaseVertex(call.u32(0), call.u32(1), call.u32(2), call.i32(3), call.u32(4), indices, call.i32(6));
+		});
+	});
+	// Several draws in one call are the same draws made one by one.
+	add("glMultiDrawArrays", 4, [&s](ApiCall &call) {
+		if (call.i32(3) < 0 || call.u32(3) > 65536) throw std::runtime_error("OpenGL draw count exceeds bounds");
+		const auto firsts = input<GLint>(call, call[1], call.u32(3)), counts = input<GLsizei>(call, call[2], call.u32(3));
+		for (size_t index = 0; index < firsts.size(); ++index)
+			s.draw_arrays(call, firsts[index], counts[index], 1, [&] { glDrawArrays(call.u32(0), firsts[index], counts[index]); });
+	});
+	for (const bool based : {false, true})
+		add(based ? "glMultiDrawElementsBaseVertex" : "glMultiDrawElements", based ? 6 : 5, [&s, based](ApiCall &call) {
+			if (call.i32(4) < 0 || call.u32(4) > 65536) throw std::runtime_error("OpenGL draw count exceeds bounds");
+			const auto counts = input<GLsizei>(call, call[1], call.u32(4));
+			const auto bases = based ? input<GLint>(call, call[5], call.u32(4)) : std::vector<GLint>(call.u32(4));
+			for (size_t index = 0; index < counts.size(); ++index) {
+				const auto indices = call.load_pointer(call[3] + index * call.pointer_width());
+				s.draw_elements(call, counts[index], call.u32(2), indices, bases[index], 1, [&](const void *data) {
+					glDrawElementsBaseVertex(call.u32(0), counts[index], call.u32(2), data, bases[index]);
+				});
+			}
+		});
+
+	// Client arrays in the guest's memory, beside the ones above.
+	add("glVertexAttribIPointer", 5, [](ApiCall &call) {
+		glVertexAttribIPointer(call.u32(0), call.i32(1), call.u32(2), call.i32(3), reinterpret_cast<const void *>(call[4]));
+	});
+	add("glSecondaryColorPointer", 4, [](ApiCall &call) {
+		glSecondaryColorPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
+	});
+	add("glFogCoordPointer", 3, [](ApiCall &call) { glFogCoordPointer(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2])); });
+	add("glIndexPointer", 3, [](ApiCall &call) { glIndexPointer(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2])); });
+	add("glEdgeFlagPointer", 2, [](ApiCall &call) { glEdgeFlagPointer(call.i32(0), reinterpret_cast<const void *>(call[1])); });
+
+	// Objects named in arrays.
+	for (const auto [name, function] : {std::pair{"glGenQueries", &glGenQueries}, {"glGenSamplers", glGenSamplers}})
+		add(name, 2, [function](ApiCall &call) {
+			if (call.i32(0) < 0 || call.u32(0) > 65536) throw std::runtime_error("OpenGL object count exceeds bounds");
+			output<GLuint>(call, call[1], call.u32(0), [&](auto *values) { function(call.i32(0), values); });
+		});
+	for (const auto [name, function] : {std::pair{"glDeleteFramebuffers", &glDeleteFramebuffers}, {"glDeleteRenderbuffers", glDeleteRenderbuffers},
+		{"glDeleteVertexArrays", glDeleteVertexArrays}, {"glDeleteQueries", glDeleteQueries}, {"glDeleteSamplers", glDeleteSamplers}})
+		add(name, 2, [function](ApiCall &call) {
+			if (call.i32(0) < 0 || call.u32(0) > 65536) throw std::runtime_error("OpenGL object count exceeds bounds");
+			function(call.i32(0), input<GLuint>(call, call[1], call.u32(0)).data());
+		});
+	add("glAreTexturesResident", 3, [](ApiCall &call) {
+		if (call.i32(0) < 0 || call.u32(0) > 65536) throw std::runtime_error("OpenGL texture count exceeds bounds");
+		const auto textures = input<GLuint>(call, call[1], call.u32(0));
+		GLboolean resident = GL_FALSE;
+		output<GLboolean>(call, call[2], call.u32(0), [&](auto *values) { resident = glAreTexturesResident(call.i32(0), textures.data(), values); });
+		call.ret(resident);
+	});
+	add("glPrioritizeTextures", 3, [](ApiCall &call) {
+		if (call.i32(0) < 0 || call.u32(0) > 65536) throw std::runtime_error("OpenGL texture count exceeds bounds");
+		glPrioritizeTextures(call.i32(0), input<GLuint>(call, call[1], call.u32(0)).data(), input<GLclampf>(call, call[2], call.u32(0)).data());
+	});
+	add("glCallLists", 3, [](ApiCall &call) {
+		if (call.i32(0) < 0 || call.u32(0) > 1024 * 1024) throw std::runtime_error("OpenGL list count exceeds bounds");
+		size_t element = 0;
+		switch (call.u32(1)) {
+		case GL_BYTE: case GL_UNSIGNED_BYTE: element = 1; break;
+		case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_2_BYTES: element = 2; break;
+		case GL_3_BYTES: element = 3; break;
+		case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: case GL_4_BYTES: element = 4; break;
+		}
+		// A type the driver refuses is refused before it reads a name.
+		const auto names = input<uint8_t>(call, call[2], size_t(call.u32(0)) * element);
+		glCallLists(call.i32(0), call.u32(1), element ? names.data() : nullptr);
+	});
+
+	// Programs: names, variables and blocks.
+	for (const auto [name, function] : {std::pair{"glGetAttribLocation", &glGetAttribLocation},
+		{"glGetFragDataLocation", glGetFragDataLocation}, {"glGetFragDataIndex", glGetFragDataIndex}})
+		add(name, 2, [function](ApiCall &call) { call.ret(uint64_t(int64_t(function(call.u32(0), call.narrow(call[1], 65536).c_str())))); });
+	add("glGetUniformBlockIndex", 2, [](ApiCall &call) { call.ret(glGetUniformBlockIndex(call.u32(0), call.narrow(call[1], 65536).c_str())); });
+	add("glBindFragDataLocation", 3, [](ApiCall &call) { glBindFragDataLocation(call.u32(0), call.u32(1), call.narrow(call[2], 65536).c_str()); });
+	add("glBindFragDataLocationIndexed", 4, [](ApiCall &call) {
+		glBindFragDataLocationIndexed(call.u32(0), call.u32(1), call.u32(2), call.narrow(call[3], 65536).c_str());
+	});
+	const auto text_output = [](ApiCall &call, size_t capacity, size_t length, size_t text, auto function) {
+		if (call.i32(capacity) < 0 || call.u32(capacity) > 4 * 1024 * 1024) throw std::runtime_error("OpenGL text exceeds bounds");
+		GLsizei written = 0;
+		output<char>(call, call[text], call.u32(capacity), [&](char *values) { function(&written, values); });
+		if (call[length]) call.store(call[length], written);
+	};
+	add("glGetShaderSource", 4, [text_output](ApiCall &call) {
+		text_output(call, 1, 2, 3, [&](GLsizei *length, char *text) { glGetShaderSource(call.u32(0), call.i32(1), length, text); });
+	});
+	for (const auto [name, function] : {std::pair{"glGetActiveUniformName", &glGetActiveUniformName},
+		{"glGetActiveUniformBlockName", glGetActiveUniformBlockName}})
+		add(name, 5, [text_output, function](ApiCall &call) {
+			text_output(call, 2, 3, 4, [&](GLsizei *length, char *text) { function(call.u32(0), call.u32(1), call.i32(2), length, text); });
+		});
+	const auto variable = [&add, text_output]<typename Size>(const char *name, void (*function)(GLuint, GLuint, GLsizei, GLsizei *, Size *, GLenum *, GLchar *)) {
+		add(name, 7, [text_output, function](ApiCall &call) {
+			Size size = 0;
+			GLenum type = 0;
+			text_output(call, 2, 3, 6, [&](GLsizei *length, char *text) { function(call.u32(0), call.u32(1), call.i32(2), length, &size, &type, text); });
+			if (call[4]) call.store(call[4], size);
+			if (call[5]) call.store(call[5], type);
+		});
+	};
+	variable("glGetActiveUniform", glGetActiveUniform);
+	variable("glGetActiveAttrib", glGetActiveAttrib);
+	variable("glGetTransformFeedbackVarying", glGetTransformFeedbackVarying);
+	add("glGetAttachedShaders", 4, [](ApiCall &call) {
+		if (call.i32(1) < 0 || call.u32(1) > 4096) throw std::runtime_error("OpenGL shader count exceeds bounds");
+		GLsizei count = 0;
+		output<GLuint>(call, call[3], call.u32(1), [&](auto *values) { glGetAttachedShaders(call.u32(0), call.i32(1), &count, values); });
+		if (call[2]) call.store(call[2], count);
+	});
+	add("glGetUniformIndices", 4, [](ApiCall &call) {
+		const auto strings = guest_strings(call, call[2], call.i32(1));
+		std::vector<const char *> pointers;
+		for (const auto &text : strings) pointers.push_back(text.c_str());
+		output<GLuint>(call, call[3], strings.size(), [&](auto *values) { glGetUniformIndices(call.u32(0), call.i32(1), pointers.data(), values); });
+	});
+	add("glTransformFeedbackVaryings", 4, [](ApiCall &call) {
+		const auto strings = guest_strings(call, call[2], call.i32(1));
+		std::vector<const char *> pointers;
+		for (const auto &text : strings) pointers.push_back(text.c_str());
+		glTransformFeedbackVaryings(call.u32(0), call.i32(1), pointers.data(), call.u32(3));
+	});
+	add("glGetActiveUniformsiv", 5, [](ApiCall &call) {
+		if (call.i32(1) < 0 || call.u32(1) > 65536) throw std::runtime_error("OpenGL uniform count exceeds bounds");
+		const auto indices = input<GLuint>(call, call[2], call.u32(1));
+		output<GLint>(call, call[4], call.u32(1), [&](auto *values) { glGetActiveUniformsiv(call.u32(0), call.i32(1), indices.data(), call.u32(3), values); });
+	});
+	add("glGetActiveUniformBlockiv", 4, [](ApiCall &call) {
+		// The indices of a block's uniforms are as many as its uniforms.
+		GLint uniforms = 0;
+		if (call.u32(2) == GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES)
+			glGetActiveUniformBlockiv(call.u32(0), call.u32(1), GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &uniforms);
+		if (uniforms < 0 || uniforms > 65536) throw std::runtime_error("OpenGL uniform count exceeds bounds");
+		query_output<GLint>(call, call[3], [&](GLint *values) { glGetActiveUniformBlockiv(call.u32(0), call.u32(1), call.u32(2), values); },
+			size_t(uniforms) + 64);
+	});
+	for (const auto [name, function] : {std::pair{"glGetUniformfv", &glGetUniformfv}})
+		add(name, 3, [function](ApiCall &call) { query_output<GLfloat>(call, call[2], [&](GLfloat *values) { function(call.u32(0), call.i32(1), values); }, 16); });
+	add("glGetUniformiv", 3, [](ApiCall &call) { query_output<GLint>(call, call[2], [&](GLint *values) { glGetUniformiv(call.u32(0), call.i32(1), values); }, 16); });
+	add("glGetUniformuiv", 3, [](ApiCall &call) { query_output<GLuint>(call, call[2], [&](GLuint *values) { glGetUniformuiv(call.u32(0), call.i32(1), values); }, 16); });
+
+	// State queries: they write as many values as the name asks for.
+	add("glGetBooleanv", 2, [](ApiCall &call) {
+		query_output<GLboolean>(call, call[1], [&](GLboolean *values) { glGetBooleanv(call.u32(0), values); }, state_limit(call.u32(0)));
+	});
+	add("glGetInteger64v", 2, [](ApiCall &call) {
+		query_output<GLint64>(call, call[1], [&](GLint64 *values) { glGetInteger64v(call.u32(0), values); }, state_limit(call.u32(0)));
+	});
+	add("glGetIntegeri_v", 3, [](ApiCall &call) { query_output<GLint>(call, call[2], [&](GLint *values) { glGetIntegeri_v(call.u32(0), call.u32(1), values); }); });
+	add("glGetBooleani_v", 3, [](ApiCall &call) { query_output<GLboolean>(call, call[2], [&](GLboolean *values) { glGetBooleani_v(call.u32(0), call.u32(1), values); }); });
+	add("glGetInteger64i_v", 3, [](ApiCall &call) { query_output<GLint64>(call, call[2], [&](GLint64 *values) { glGetInteger64i_v(call.u32(0), call.u32(1), values); }); });
+	const auto query3 = [&add]<typename A, typename T>(const char *name, void (*function)(A, GLenum, T *)) {
+		add(name, 3, [function](ApiCall &call) { query_output<T>(call, call[2], [&](T *values) { function(A(call[0]), call.u32(1), values); }); });
+	};
+	query3("glGetRenderbufferParameteriv", glGetRenderbufferParameteriv);
+	query3("glGetQueryiv", glGetQueryiv);
+	query3("glGetTexParameterfv", glGetTexParameterfv);
+	query3("glGetTexParameteriv", glGetTexParameteriv);
+	query3("glGetTexParameterIiv", glGetTexParameterIiv);
+	query3("glGetTexParameterIuiv", glGetTexParameterIuiv);
+	query3("glGetSamplerParameterfv", glGetSamplerParameterfv);
+	query3("glGetSamplerParameteriv", glGetSamplerParameteriv);
+	query3("glGetSamplerParameterIiv", glGetSamplerParameterIiv);
+	query3("glGetSamplerParameterIuiv", glGetSamplerParameterIuiv);
+	query3("glGetVertexAttribdv", glGetVertexAttribdv);
+	query3("glGetVertexAttribfv", glGetVertexAttribfv);
+	query3("glGetVertexAttribiv", glGetVertexAttribiv);
+	query3("glGetVertexAttribIiv", glGetVertexAttribIiv);
+	query3("glGetVertexAttribIuiv", glGetVertexAttribIuiv);
+	query3("glGetLightfv", glGetLightfv);
+	query3("glGetLightiv", glGetLightiv);
+	query3("glGetMaterialfv", glGetMaterialfv);
+	query3("glGetMaterialiv", glGetMaterialiv);
+	query3("glGetTexEnvfv", glGetTexEnvfv);
+	query3("glGetTexEnviv", glGetTexEnviv);
+	query3("glGetTexGendv", glGetTexGendv);
+	query3("glGetTexGenfv", glGetTexGenfv);
+	query3("glGetTexGeniv", glGetTexGeniv);
+	query3("glGetMultisamplefv", glGetMultisamplefv);
+	add("glGetTexLevelParameterfv", 4, [](ApiCall &call) {
+		query_output<GLfloat>(call, call[3], [&](GLfloat *values) { glGetTexLevelParameterfv(call.u32(0), call.i32(1), call.u32(2), values); });
+	});
+	add("glGetFramebufferAttachmentParameteriv", 4, [](ApiCall &call) {
+		query_output<GLint>(call, call[3], [&](GLint *values) { glGetFramebufferAttachmentParameteriv(call.u32(0), call.u32(1), call.u32(2), values); });
+	});
+	add("glGetClipPlane", 2, [](ApiCall &call) { output<GLdouble>(call, call[1], 4, [&](auto *values) { glGetClipPlane(call.u32(0), values); }); });
+	// A map holds at most the largest order squared control points of four values.
+	const auto get_map = [&add]<typename T>(const char *name, void (*function)(GLenum, GLenum, T *)) {
+		add(name, 3, [function](ApiCall &call) {
+			GLint order = 0;
+			glGetIntegerv(GL_MAX_EVAL_ORDER, &order);
+			if (order < 0 || order > 64) throw std::runtime_error("OpenGL evaluator order exceeds bounds");
+			query_output<T>(call, call[2], [&](T *values) { function(call.u32(0), call.u32(1), values); }, size_t(order) * size_t(order) * 4);
+		});
+	};
+	get_map("glGetMapdv", glGetMapdv);
+	get_map("glGetMapfv", glGetMapfv);
+	get_map("glGetMapiv", glGetMapiv);
+	// Pointers the guest set are its own addresses or buffer offsets, and go back as they are.
+	add("glGetPointerv", 2, [](ApiCall &call) {
+		void *value = nullptr;
+		call.store_pointer(call[1], 0);
+		glGetPointerv(call.u32(0), &value);
+		call.store_pointer(call[1], reinterpret_cast<uintptr_t>(value));
+	});
+	add("glGetVertexAttribPointerv", 3, [](ApiCall &call) {
+		void *value = nullptr;
+		call.store_pointer(call[2], 0);
+		glGetVertexAttribPointerv(call.u32(0), call.u32(1), &value);
+		call.store_pointer(call[2], reinterpret_cast<uintptr_t>(value));
+	});
+
+	// Parameters whose count depends on their name: as many as the matching query reads back.
+	const auto parameters3 = [&add, &s]<typename A, typename T>(const char *name, void (*set)(A, GLenum, const T *), void (*get)(A, GLenum, T *)) {
+		add(name, 3, [&s, set, get](ApiCall &call) {
+			const auto values = s.parameter_input<T>(call, call[2], [&](T *out) { get(A(call[0]), call.u32(1), out); });
+			set(A(call[0]), call.u32(1), values.data());
+		});
+	};
+	parameters3("glTexParameterfv", glTexParameterfv, glGetTexParameterfv);
+	parameters3("glTexParameteriv", glTexParameteriv, glGetTexParameteriv);
+	parameters3("glTexParameterIiv", glTexParameterIiv, glGetTexParameterIiv);
+	parameters3("glTexParameterIuiv", glTexParameterIuiv, glGetTexParameterIuiv);
+	parameters3("glSamplerParameterfv", glSamplerParameterfv, glGetSamplerParameterfv);
+	parameters3("glSamplerParameteriv", glSamplerParameteriv, glGetSamplerParameteriv);
+	parameters3("glSamplerParameterIiv", glSamplerParameterIiv, glGetSamplerParameterIiv);
+	parameters3("glSamplerParameterIuiv", glSamplerParameterIuiv, glGetSamplerParameterIuiv);
+	parameters3("glLightiv", glLightiv, glGetLightiv);
+	parameters3("glTexEnvfv", glTexEnvfv, glGetTexEnvfv);
+	parameters3("glTexEnviv", glTexEnviv, glGetTexEnviv);
+	parameters3("glTexGendv", glTexGendv, glGetTexGendv);
+	parameters3("glTexGeniv", glTexGeniv, glGetTexGeniv);
+	const auto parameters2 = [&add, &s]<typename T>(const char *name, void (*set)(GLenum, const T *), void (*get)(GLenum, T *)) {
+		add(name, 2, [&s, set, get](ApiCall &call) {
+			const auto values = s.parameter_input<T>(call, call[1], [&](T *out) { get(call.u32(0), out); });
+			set(call.u32(0), values.data());
+		});
+	};
+	parameters2("glFogfv", glFogfv, glGetFloatv);
+	parameters2("glFogiv", glFogiv, glGetIntegerv);
+	parameters2("glLightModelfv", glLightModelfv, glGetFloatv);
+	parameters2("glLightModeliv", glLightModeliv, glGetIntegerv);
+	parameters2("glPointParameterfv", glPointParameterfv, glGetFloatv);
+	parameters2("glPointParameteriv", glPointParameteriv, glGetIntegerv);
+	// A material set for both faces, or ambient and diffuse at once, reads as many values as one face's ambient colour.
+	const auto material = [&add, &s]<typename T>(const char *name, void (*set)(GLenum, GLenum, const T *), void (*get)(GLenum, GLenum, T *)) {
+		add(name, 3, [&s, set, get](ApiCall &call) {
+			const GLenum face = call.u32(0) == GL_FRONT_AND_BACK ? GL_FRONT : call.u32(0);
+			const GLenum parameter = call.u32(1) == GL_AMBIENT_AND_DIFFUSE ? GL_AMBIENT : call.u32(1);
+			const auto values = s.parameter_input<T>(call, call[2], [&](T *out) { get(face, parameter, out); });
+			set(call.u32(0), call.u32(1), values.data());
+		});
+	};
+	material("glMaterialfv", glMaterialfv, glGetMaterialfv);
+	material("glMaterialiv", glMaterialiv, glGetMaterialiv);
+	const auto clear = [&add]<typename T>(const char *name, void (*function)(GLenum, GLint, const T *)) {
+		add(name, 3, [function](ApiCall &call) {
+			function(call.u32(0), call.i32(1), input<T>(call, call[2], call.u32(0) == GL_COLOR ? 4 : 1).data());
+		});
+	};
+	clear("glClearBufferfv", glClearBufferfv);
+	clear("glClearBufferiv", glClearBufferiv);
+	clear("glClearBufferuiv", glClearBufferuiv);
+
+	// Evaluator maps: order control points of stride values each, the last of which holds as many values as the map's target.
+	const auto map_values = [](GLenum target) -> size_t {
+		switch (target) {
+		case GL_MAP1_INDEX: case GL_MAP2_INDEX: case GL_MAP1_TEXTURE_COORD_1: case GL_MAP2_TEXTURE_COORD_1: return 1;
+		case GL_MAP1_TEXTURE_COORD_2: case GL_MAP2_TEXTURE_COORD_2: return 2;
+		case GL_MAP1_VERTEX_3: case GL_MAP2_VERTEX_3: case GL_MAP1_NORMAL: case GL_MAP2_NORMAL: case GL_MAP1_TEXTURE_COORD_3:
+		case GL_MAP2_TEXTURE_COORD_3: return 3;
+		case GL_MAP1_VERTEX_4: case GL_MAP2_VERTEX_4: case GL_MAP1_COLOR_4: case GL_MAP2_COLOR_4: case GL_MAP1_TEXTURE_COORD_4:
+		case GL_MAP2_TEXTURE_COORD_4: return 4;
+		}
+		return 0;
+	};
+	const auto map_points = [map_values](GLenum target, GLint stride, GLint order) -> size_t {
+		const size_t values = map_values(target);
+		// What the driver refuses it refuses before reading a point.
+		if (!values || stride < GLint(values) || order < 1 || order > 64 || stride > 65536) return 0;
+		return size_t(order - 1) * size_t(stride);
+	};
+	const auto map1 = [&add, map_values, map_points]<typename T>(const char *name, void (*function)(GLenum, T, T, GLint, GLint, const T *)) {
+		add(name, 6, [function, map_values, map_points](ApiCall &call) {
+			const auto floating = call.process.api_float_arguments();
+			const auto span = map_points(call.u32(0), call.i32(3), call.i32(4));
+			auto points = input<T>(call, call[5], span ? span + map_values(call.u32(0)) : 0);
+			points.resize(std::max<size_t>(points.size(), 16));
+			function(call.u32(0), scalar_argument<T>(call, floating, 1), scalar_argument<T>(call, floating, 2), call.i32(3), call.i32(4), points.data());
+		});
+	};
+	map1("glMap1d", glMap1d);
+	map1("glMap1f", glMap1f);
+	const auto map2 = [&add, map_values, map_points]<typename T>(const char *name,
+		void (*function)(GLenum, T, T, GLint, GLint, T, T, GLint, GLint, const T *)) {
+		add(name, 10, [function, map_values, map_points](ApiCall &call) {
+			const auto floating = call.process.api_float_arguments();
+			const auto u = map_points(call.u32(0), call.i32(3), call.i32(4)), v = map_points(call.u32(0), call.i32(7), call.i32(8));
+			const bool valid = map_values(call.u32(0)) && call.i32(4) >= 1 && call.i32(8) >= 1 && call.i32(4) <= 64 && call.i32(8) <= 64 &&
+				call.i32(3) >= GLint(map_values(call.u32(0))) && call.i32(7) >= GLint(map_values(call.u32(0))) && call.i32(3) <= 65536 && call.i32(7) <= 65536;
+			auto points = input<T>(call, call[9], valid ? u + v + map_values(call.u32(0)) : 0);
+			points.resize(std::max<size_t>(points.size(), 16));
+			function(call.u32(0), scalar_argument<T>(call, floating, 1), scalar_argument<T>(call, floating, 2), call.i32(3), call.i32(4),
+				scalar_argument<T>(call, floating, 5), scalar_argument<T>(call, floating, 6), call.i32(7), call.i32(8), points.data());
+		});
+	};
+	map2("glMap2d", glMap2d);
+	map2("glMap2f", glMap2f);
+
+	// Pixel maps, stipples and bitmaps: client memory, or the bound pixel buffer.
+	const auto pixel_map = [&add]<typename T>(const char *name, void (*function)(GLenum, GLsizei, const T *)) {
+		add(name, 3, [function](ApiCall &call) {
+			if (call.i32(1) < 0 || call.u32(1) > 65536) throw std::runtime_error("OpenGL pixel map exceeds bounds");
+			std::vector<uint8_t> bytes;
+			function(call.u32(0), call.i32(1), static_cast<const T *>(unpack_data(call, call[2], size_t(call.u32(1)) * sizeof(T), bytes)));
+		});
+	};
+	pixel_map("glPixelMapfv", glPixelMapfv);
+	pixel_map("glPixelMapuiv", glPixelMapuiv);
+	pixel_map("glPixelMapusv", glPixelMapusv);
+	// A map's size is named by the map's own name plus 0x40.
+	const auto get_pixel_map = [&add]<typename T>(const char *name, void (*function)(GLenum, T *)) {
+		add(name, 2, [function](ApiCall &call) {
+			GLint size = 0;
+			glGetIntegerv(call.u32(0) + 0x40, &size);
+			if (size < 0 || size > 65536) throw std::runtime_error("OpenGL pixel map exceeds bounds");
+			pack_output(call, call[1], size_t(size) * sizeof(T), [&](void *values) { function(call.u32(0), static_cast<T *>(values)); });
+		});
+	};
+	get_pixel_map("glGetPixelMapfv", glGetPixelMapfv);
+	get_pixel_map("glGetPixelMapuiv", glGetPixelMapuiv);
+	get_pixel_map("glGetPixelMapusv", glGetPixelMapusv);
+	add("glPolygonStipple", 1, [](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glPolygonStipple(static_cast<const GLubyte *>(unpack_data(call, call[0], pixel_size(32, 32, 1, GL_COLOR_INDEX, GL_BITMAP, false), bytes)));
+	});
+	add("glGetPolygonStipple", 1, [](ApiCall &call) {
+		pack_output(call, call[0], pixel_size(32, 32, 1, GL_COLOR_INDEX, GL_BITMAP, true), [](void *mask) { glGetPolygonStipple(static_cast<GLubyte *>(mask)); });
+	});
+	add("glBitmap", 7, [](ApiCall &call) {
+		const auto floating = call.process.api_float_arguments();
+		std::vector<uint8_t> bytes;
+		const auto *bitmap = static_cast<const GLubyte *>(unpack_data(call, call[6], pixel_size(call.i32(0), call.i32(1), 1, GL_COLOR_INDEX, GL_BITMAP, false),
+			bytes, true));
+		glBitmap(call.i32(0), call.i32(1), scalar_argument<GLfloat>(call, floating, 2), scalar_argument<GLfloat>(call, floating, 3),
+			scalar_argument<GLfloat>(call, floating, 4), scalar_argument<GLfloat>(call, floating, 5), bitmap);
+	});
+	add("glDrawPixels", 5, [](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glDrawPixels(call.i32(0), call.i32(1), call.u32(2), call.u32(3),
+			unpack_data(call, call[4], pixel_size(call.i32(0), call.i32(1), 1, call.u32(2), call.u32(3), false), bytes));
+	});
+
+	// Textures.
+	add("glTexImage1D", 8, [](ApiCall &call) {
+		const bool proxy = call.u32(0) == GL_PROXY_TEXTURE_1D;
+		std::vector<uint8_t> bytes;
+		const auto *data = proxy ? nullptr : unpack_data(call, call[7], pixel_size(call.i32(3), 1, 1, call.u32(5), call.u32(6), false), bytes, true);
+		glTexImage1D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.i32(4), call.u32(5), call.u32(6), data);
+	});
+	add("glTexSubImage1D", 7, [](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glTexSubImage1D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.u32(4), call.u32(5),
+			unpack_data(call, call[6], pixel_size(call.i32(3), 1, 1, call.u32(4), call.u32(5), false), bytes));
+	});
+	add("glTexSubImage3D", 11, [](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glTexSubImage3D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.i32(4), call.i32(5), call.i32(6), call.i32(7), call.u32(8),
+			call.u32(9), unpack_data(call, call[10], pixel_size(call.i32(5), call.i32(6), call.i32(7), call.u32(8), call.u32(9), false), bytes));
+	});
+	// Compressed images carry their size.
+	const auto compressed = [](ApiCall &call, size_t size_index, bool allocates, std::vector<uint8_t> &bytes) {
+		if (call.i32(size_index) < 0 || call.u32(size_index) > (256U << 20)) throw std::runtime_error("OpenGL compressed image exceeds bounds");
+		return unpack_data(call, call[size_index + 1], call.u32(size_index), bytes, allocates);
+	};
+	add("glCompressedTexImage1D", 7, [compressed](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glCompressedTexImage1D(call.u32(0), call.i32(1), call.u32(2), call.i32(3), call.i32(4), call.i32(5), compressed(call, 5, true, bytes));
+	});
+	add("glCompressedTexImage2D", 8, [compressed](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glCompressedTexImage2D(call.u32(0), call.i32(1), call.u32(2), call.i32(3), call.i32(4), call.i32(5), call.i32(6),
+			compressed(call, 6, true, bytes));
+	});
+	add("glCompressedTexImage3D", 9, [compressed](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glCompressedTexImage3D(call.u32(0), call.i32(1), call.u32(2), call.i32(3), call.i32(4), call.i32(5), call.i32(6), call.i32(7),
+			compressed(call, 7, true, bytes));
+	});
+	add("glCompressedTexSubImage1D", 7, [compressed](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glCompressedTexSubImage1D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.u32(4), call.i32(5), compressed(call, 5, false, bytes));
+	});
+	add("glCompressedTexSubImage2D", 9, [compressed](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glCompressedTexSubImage2D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.i32(4), call.i32(5), call.u32(6), call.i32(7),
+			compressed(call, 7, false, bytes));
+	});
+	add("glCompressedTexSubImage3D", 11, [compressed](ApiCall &call) {
+		std::vector<uint8_t> bytes;
+		glCompressedTexSubImage3D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.i32(4), call.i32(5), call.i32(6), call.i32(7),
+			call.u32(8), call.i32(9), compressed(call, 9, false, bytes));
+	});
+	add("glGetTexImage", 5, [](ApiCall &call) {
+		GLint width = 0, height = 0, depth = 0;
+		glGetTexLevelParameteriv(call.u32(0), call.i32(1), GL_TEXTURE_WIDTH, &width);
+		glGetTexLevelParameteriv(call.u32(0), call.i32(1), GL_TEXTURE_HEIGHT, &height);
+		glGetTexLevelParameteriv(call.u32(0), call.i32(1), GL_TEXTURE_DEPTH, &depth);
+		pack_output(call, call[4], pixel_size(width, height, depth, call.u32(2), call.u32(3), true),
+			[&](void *pixels) { glGetTexImage(call.u32(0), call.i32(1), call.u32(2), call.u32(3), pixels); });
+	});
+	add("glGetCompressedTexImage", 3, [](ApiCall &call) {
+		GLint size = 0;
+		glGetTexLevelParameteriv(call.u32(0), call.i32(1), GL_TEXTURE_COMPRESSED_IMAGE_SIZE, &size);
+		if (size < 0) throw std::runtime_error("OpenGL compressed image exceeds bounds");
+		pack_output(call, call[2], size_t(size), [&](void *pixels) { glGetCompressedTexImage(call.u32(0), call.i32(1), pixels); });
+	});
+
+	// Buffers.
+	add("glBufferSubData", 4, [](ApiCall &call) {
+		if (call[2] > (256ULL << 20)) throw std::runtime_error("OpenGL buffer upload exceeds bounds");
+		const auto bytes = call.read(call[3], size_t(call[2]));
+		glBufferSubData(call.u32(0), GLintptr(call[1]), GLsizeiptr(call[2]), bytes.data());
+	});
+	add("glGetBufferSubData", 4, [](ApiCall &call) {
+		if (call[2] > (256ULL << 20)) throw std::runtime_error("OpenGL buffer read-back exceeds bounds");
+		output<uint8_t>(call, call[3], size_t(call[2]), [&](uint8_t *bytes) { glGetBufferSubData(call.u32(0), GLintptr(call[1]), GLsizeiptr(call[2]), bytes); });
+	});
+	// What the driver says of a mapping is said of the guest's.
+	const auto mapping_value = [&s](ApiCall &call, GLenum target, GLenum name, auto &value) {
+		const auto found = s.mappings.find({s.selected(call).context, bound_buffer(buffer_binding(target))});
+		if (found == s.mappings.end()) return;
+		if (name == GL_BUFFER_MAPPED) value = GL_TRUE;
+		else if (name == GL_BUFFER_MAP_OFFSET) value = decltype(+value)(found->second.offset);
+		else if (name == GL_BUFFER_MAP_LENGTH) value = decltype(+value)(found->second.length);
+		else if (name == GL_BUFFER_ACCESS_FLAGS) value = decltype(+value)(found->second.access);
+		else if (name == GL_BUFFER_ACCESS) {
+			const auto access = found->second.access & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+			value = decltype(+value)(access == GL_MAP_READ_BIT ? GL_READ_ONLY : access == GL_MAP_WRITE_BIT ? GL_WRITE_ONLY : GL_READ_WRITE);
+		}
+	};
+	add("glGetBufferParameteriv", 3, [mapping_value](ApiCall &call) {
+		GLint value = 0;
+		call.store(call[2], call.load<GLint>(call[2]));
+		glGetBufferParameteriv(call.u32(0), call.u32(1), &value);
+		mapping_value(call, call.u32(0), call.u32(1), value);
+		call.store(call[2], value);
+	});
+	add("glGetBufferParameteri64v", 3, [mapping_value](ApiCall &call) {
+		GLint64 value = 0;
+		call.store(call[2], call.load<GLint64>(call[2]));
+		glGetBufferParameteri64v(call.u32(0), call.u32(1), &value);
+		mapping_value(call, call.u32(0), call.u32(1), value);
+		call.store(call[2], value);
+	});
+	add("glGetBufferPointerv", 3, [&s](ApiCall &call) {
+		const auto found = s.mappings.find({s.selected(call).context, bound_buffer(buffer_binding(call.u32(0)))});
+		call.store_pointer(call[2], found != s.mappings.end() && call.u32(1) == GL_BUFFER_MAP_POINTER ? found->second.address : 0);
+	});
+	const auto map_range = [&s](ApiCall &call, GLenum target, uint64_t offset, uint64_t length, GLbitfield access) -> uint64_t {
+		const auto buffer = bound_buffer(buffer_binding(target));
+		GLint64 size = 0;
+		if (buffer) glGetBufferParameteri64v(target, GL_BUFFER_SIZE, &size);
+		const std::pair key{s.selected(call).context, buffer};
+		const bool valid = buffer && size >= 0 && length && offset <= uint64_t(size) && length <= uint64_t(size) - offset &&
+			(access & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT)) && !s.mappings.contains(key) && length <= (256ULL << 20);
+		if (!valid) {
+			// The driver raises the error a refused mapping raises; a mapping it grants anyway is undone at once.
+			if (glMapBufferRange(target, GLintptr(offset), GLsizeiptr(length), access)) glUnmapBuffer(target);
+			return 0;
+		}
+		const auto address = s.process.map_memory(size_t((length + 4095) & ~uint64_t(4095)), PROT_READ | PROT_WRITE);
+		if (!(access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))) {
+			std::vector<uint8_t> bytes(length);
+			glGetBufferSubData(target, GLintptr(offset), GLsizeiptr(length), bytes.data());
+			s.process.write_memory(address, bytes);
+		}
+		s.mappings.emplace(key, State::Mapping{address, offset, length, access});
+		return address;
+	};
+	add("glMapBufferRange", 4, [map_range](ApiCall &call) { call.ret(map_range(call, call.u32(0), call[1], call[2], call.u32(3))); });
+	add("glMapBuffer", 2, [map_range](ApiCall &call) {
+		GLint64 size = 0;
+		if (bound_buffer(buffer_binding(call.u32(0)))) glGetBufferParameteri64v(call.u32(0), GL_BUFFER_SIZE, &size);
+		const auto access = call.u32(1) == GL_READ_ONLY ? GL_MAP_READ_BIT : call.u32(1) == GL_WRITE_ONLY ? GL_MAP_WRITE_BIT :
+			call.u32(1) == GL_READ_WRITE ? GL_MAP_READ_BIT | GL_MAP_WRITE_BIT : 0;
+		call.ret(map_range(call, call.u32(0), 0, uint64_t(std::max<GLint64>(size, 0)), access));
+	});
+	add("glFlushMappedBufferRange", 3, [&s](ApiCall &call) {
+		const auto found = s.mappings.find({s.selected(call).context, bound_buffer(buffer_binding(call.u32(0)))});
+		if (found == s.mappings.end() || !(found->second.access & GL_MAP_FLUSH_EXPLICIT_BIT) || call[1] > found->second.length ||
+			call[2] > found->second.length - call[1]) {
+			glFlushMappedBufferRange(call.u32(0), GLintptr(call[1]), GLsizeiptr(call[2]));
+			return;
+		}
+		const auto bytes = call.read(found->second.address + call[1], size_t(call[2]));
+		glBufferSubData(call.u32(0), GLintptr(found->second.offset + call[1]), GLsizeiptr(call[2]), bytes.data());
+	});
+	add("glUnmapBuffer", 1, [&s](ApiCall &call) {
+		const auto found = s.mappings.find({s.selected(call).context, bound_buffer(buffer_binding(call.u32(0)))});
+		if (found == s.mappings.end()) { call.ret(glUnmapBuffer(call.u32(0))); return; }
+		const auto mapping = found->second;
+		s.mappings.erase(found);
+		if ((mapping.access & GL_MAP_WRITE_BIT) && !(mapping.access & GL_MAP_FLUSH_EXPLICIT_BIT)) {
+			const auto bytes = s.process.read_memory(mapping.address, size_t(mapping.length));
+			glBufferSubData(call.u32(0), GLintptr(mapping.offset), GLsizeiptr(mapping.length), bytes.data());
+		}
+		s.process.unmap_memory(mapping.address);
+		call.ret(GL_TRUE);
+	});
+
+	// Queries: a query buffer bound takes the result at an offset instead of client memory.
+	const auto query_object = [&add]<typename T>(const char *name, void (*function)(GLuint, GLenum, T *)) {
+		add(name, 3, [function](ApiCall &call) {
+			if (bound_buffer(GL_QUERY_BUFFER_BINDING)) function(call.u32(0), call.u32(1), reinterpret_cast<T *>(call[2]));
+			else output<T>(call, call[2], 1, [&](T *value) { function(call.u32(0), call.u32(1), value); });
+		});
+	};
+	query_object("glGetQueryObjectiv", glGetQueryObjectiv);
+	query_object("glGetQueryObjectuiv", glGetQueryObjectuiv);
+	query_object("glGetQueryObjecti64v", glGetQueryObjecti64v);
+	query_object("glGetQueryObjectui64v", glGetQueryObjectui64v);
+
+	// Sync objects.
+	add("glFenceSync", 2, [&s](ApiCall &call) {
+		const auto sync = glFenceSync(call.u32(0), call.u32(1));
+		if (!sync) return;
+		s.syncs.emplace(s.next_sync, sync);
+		call.ret(s.next_sync++);
+	});
+	add("glDeleteSync", 1, [&s](ApiCall &call) {
+		const auto found = s.syncs.find(call[0]);
+		// A token Raven never gave out names no sync object, and deleting it changes nothing.
+		if (found == s.syncs.end()) return;
+		glDeleteSync(found->second);
+		s.syncs.erase(found);
+	});
+	add("glIsSync", 1, [&s](ApiCall &call) {
+		const auto found = s.syncs.find(call[0]);
+		call.ret(found != s.syncs.end() && glIsSync(found->second));
+	});
+	add("glClientWaitSync", 3, [&s](ApiCall &call) {
+		const auto found = s.syncs.find(call[0]);
+		call.ret(found == s.syncs.end() ? GL_WAIT_FAILED : glClientWaitSync(found->second, call.u32(1), call[2]));
+	});
+	add("glWaitSync", 3, [&s](ApiCall &call) {
+		const auto found = s.syncs.find(call[0]);
+		if (found != s.syncs.end()) glWaitSync(found->second, call.u32(1), call[2]);
+	});
+	add("glGetSynciv", 5, [&s](ApiCall &call) {
+		const auto found = s.syncs.find(call[0]);
+		if (call.i32(2) < 0 || call.u32(2) > 64) throw std::runtime_error("OpenGL sync query exceeds bounds");
+		if (found == s.syncs.end()) return;
+		GLsizei length = 0;
+		output<GLint>(call, call[4], call.u32(2), [&](GLint *values) { glGetSynciv(found->second, call.u32(1), call.i32(2), &length, values); });
+		if (call[3]) call.store(call[3], length);
+	});
+
+	// Feedback and selection: the driver fills a host buffer while the render mode lasts, and the guest's gets it when the mode ends.
+	add("glFeedbackBuffer", 3, [&s](ApiCall &call) {
+		if (call.i32(0) < 0 || call.u32(0) > 16 * 1024 * 1024) throw std::runtime_error("OpenGL feedback buffer exceeds bounds");
+		auto &capture = s.contexts.at(s.selected(call).context).feedback;
+		// The guest's buffer must be writable now, not only when the mode ends.
+		auto bytes = call.read(call[2], size_t(call.u32(0)) * sizeof(GLfloat));
+		call.write(call[2], bytes);
+		capture = {call[2], std::move(bytes)};
+		glFeedbackBuffer(call.i32(0), call.u32(1), reinterpret_cast<GLfloat *>(capture.bytes.data()));
+	});
+	add("glSelectBuffer", 2, [&s](ApiCall &call) {
+		if (call.i32(0) < 0 || call.u32(0) > 16 * 1024 * 1024) throw std::runtime_error("OpenGL selection buffer exceeds bounds");
+		auto &capture = s.contexts.at(s.selected(call).context).selection;
+		// The guest's buffer must be writable now, not only when the mode ends.
+		auto bytes = call.read(call[1], size_t(call.u32(0)) * sizeof(GLuint));
+		call.write(call[1], bytes);
+		capture = {call[1], std::move(bytes)};
+		glSelectBuffer(call.i32(0), reinterpret_cast<GLuint *>(capture.bytes.data()));
+	});
+	// Leaving feedback or selection mode ends the capture: the values the driver wrote go to the guest's buffer.
+	add("glRenderMode", 1, [&s](ApiCall &call) {
+		GLint mode = 0;
+		glGetIntegerv(GL_RENDER_MODE, &mode);
+		const GLint result = glRenderMode(call.u32(0));
+		auto &context = s.contexts.at(s.selected(call).context);
+		auto &capture = mode == GL_FEEDBACK ? context.feedback : context.selection;
+		// The capture started as a copy of the guest's buffer, so the values the driver left alone go back unchanged.
+		if ((mode == GL_FEEDBACK || mode == GL_SELECT) && capture.address) call.write(capture.address, capture.bytes);
+		call.ret(uint64_t(int64_t(result)));
+	});
+	// Errors raised before Raven's own queries are the guest's, and it reads them first.
+	add("glGetError", 0, [&s](ApiCall &call) {
+		auto &errors = s.contexts.at(s.selected(call).context).errors;
+		if (errors.empty()) { call.ret(glGetError()); return; }
+		call.ret(errors.front());
+		errors.erase(errors.begin());
 	});
 }
 
