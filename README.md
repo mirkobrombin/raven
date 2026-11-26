@@ -134,30 +134,32 @@ The same programs on the same machine, against Wine 11.0 and Soda 11.0-32-experi
 
 ![Direct3D 11 frame rate](docs/benchmark-frames.svg)
 
-ClassiCube 1.3.8, fixed seed 1, four alternating rounds:
+![ClassiCube frame rate](docs/benchmark-games.svg)
+
+ClassiCube 1.3.8, fixed seed 1, four rounds alternating Raven with each other runtime:
 
 | Runtime | Median FPS | Samples (FPS) |
 |---|---:|---|
-| Raven | 71.5 | 72, 73, 54, 71 |
-| Wine 11.0 | 63.0 | 65, 68, 61, 61 |
-| Soda 11.0-32 exp. | 63.0 | 64, 64, 61, 62 |
+| Raven | 90.5 | 89, 94, 92, 90, 92, 90, 91, 89 |
+| Wine 11.0 | 85.5 | 86, 86, 85, 85 |
+| Soda 11.0-32 exp. | 85.0 | 87, 86, 84, 83 |
 
-These replace the earlier ClassiCube series; its scene configuration was not verified against the retained samples. Raven uses its default execution mode.
+Raven uses its default execution mode.
 
 | Component | Value |
 |---|---|
 | CPU | Intel Core i7-13700H (14 cores, 20 threads, up to 5.0 GHz); 8 logical CPUs available to the benchmark environment |
 | Memory | 31 GiB |
-| Kernel | Linux 7.2.11 |
+| Kernel | Linux 7.3.5 |
 | Userland | Ubuntu 26.04.1 LTS |
 | Graphics | Mesa 26.0.8 lavapipe (software Vulkan), two rendering threads |
 | Display | labwc 0.9.3, headless, one isolated instance per run |
 
 The workloads: a program that exits at once, a SQLite query over eight million rows, a Direct3D 11 triangle checked pixel by pixel, 2,000 Direct3D 11 frames at 256 by 256, the time to the main window of Notepad++ and of the ClassiCube launcher, and ClassiCube 1.3.8 itself (Direct3D 11 build, world seed 1, 640 by 480, view distance 128, frames counted from the fifth to the fifteenth second after the world loads).
 
-Every runtime starts from a copy of a prefix it initialised beforehand. Each workload runs three times and the charts show the median; ClassiCube runs four rounds alternating the runtimes, so a change in machine load weighs on both. The Soda Direct3D 11 triangle did not finish within its 600-second limit. Software Vulkan keeps the numbers reproducible anywhere; a hardware GPU raises them for every runtime.
+The results were measured on 26 November 2026 at commit `b672366d`; process start-up and the two application windows were measured again at `c8ec8591`, which fixes how a new thread first gets its turn. Every runtime starts from a copy of a prefix it initialised beforehand. Each workload runs three times beside each of the other runtimes and the charts show the median; Raven's value is the median of its samples from both sessions. The Direct3D frames and ClassiCube alternate the runtimes, so a change in machine load weighs on both. The application runner looks for the window about every 50 milliseconds and cannot tell apart times closer than that. The Soda Direct3D 11 triangle did not finish within its 600-second limit. Software Vulkan keeps the numbers reproducible anywhere; a hardware GPU raises them for every runtime.
 
-The [earlier chart data](docs/benchmarks.json), with CPU time and memory, remains available; its ClassiCube entry is superseded by the table above. The scripts `scripts/benchmark-wine.py`, `benchmark-apps.py`, `benchmark-frames.py` and `benchmark-classicube.py` run these workloads. The ClassiCube runner groups trials by runtime; use separate one-trial runs to alternate runtimes.
+The [chart data](docs/benchmarks.json) adds CPU time, memory and the SHA-256 of both measured runtimes; `scripts/benchmark-charts.py` draws the charts from it. The scripts `scripts/benchmark-wine.py`, `benchmark-apps.py`, `benchmark-frames.py` and `benchmark-classicube.py` run these workloads. The ClassiCube runner groups trials by runtime; use separate one-trial runs to alternate runtimes.
 
 ## License
 
