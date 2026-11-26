@@ -144,6 +144,8 @@ void register_ansi_adapters(ApiRegistry &registry)
 		if (!base)
 			continue;
 		const auto [arguments, handler] = *base;
+		// An adapter reaches what the handler it wraps reaches.
+		registry.set_desktop(registry.desktop(wide_name));
 		registry.add(adapter.name, arguments, [adapter, handler = handler, arguments = arguments](ApiCall &call) {
 			const auto code_page = code_page_of(file_function(adapter.name));
 			Scratch scratch(call.process);
@@ -235,6 +237,7 @@ void register_ansi_adapters(ApiRegistry &registry)
 			}
 		});
 	}
+	registry.set_desktop(false);
 	register_temp_file_name(registry);
 	registry.add("SetFileApisToOEM", 0, [](ApiCall &call) { file_apis_oem = true; call.ret(0); });
 	registry.add("SetFileApisToANSI", 0, [](ApiCall &call) { file_apis_oem = false; call.ret(0); });

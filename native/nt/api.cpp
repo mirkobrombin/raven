@@ -201,7 +201,7 @@ size_t ApiCall::put_narrow(uint64_t address, std::string_view text, size_t capac
 
 void ApiRegistry::add(std::string_view name, uint32_t arguments, ApiHandler handler)
 {
-	if (!entries.emplace(std::string(name), Entry{arguments, std::move(handler), adding_kernel}).second)
+	if (!entries.emplace(std::string(name), Entry{arguments, std::move(handler), adding_kernel, adding_desktop}).second)
 		throw std::runtime_error("native API registered twice: " + std::string(name));
 }
 
@@ -209,6 +209,12 @@ bool ApiRegistry::kernel(std::string_view name) const
 {
 	const auto found = entries.find(std::string(name));
 	return found != entries.end() && found->second.kernel;
+}
+
+bool ApiRegistry::desktop(std::string_view name) const
+{
+	const auto found = entries.find(std::string(name));
+	return found != entries.end() && found->second.desktop;
 }
 
 std::optional<std::pair<uint32_t,ApiHandler>> ApiRegistry::find(std::string_view name) const

@@ -2845,15 +2845,13 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 			// bookkeeping, which the next call that reaches the desktop does.
 			// A wait, a thread or a synchronization object is the kernel's alone: holding the desktop through it would keep the threads
 			// that draw beside the turn waiting (see ApiRegistry::set_kernel).
+			// A call that reaches no window or drawing is answered without the desktop lock, as one beside the turn is: the process's
+			// own state (its environment, modules, resources, memory, objects and heaps) and the runtime's registry, whose handlers reach
+			// the desktop only through the kernel's hooks, which take the lock themselves (see ApiRegistry::set_desktop).
 			const bool graphics_call = api_name.starts_with("vk"), kernel_call = api_registry.kernel(api_name);
+			const bool own_first = !graphics_call && !kernel_call && !desktop_api.has(api_name);
+			const bool own_call = own_first && api_registry.has(api_name) && !api_registry.desktop(api_name);
 			std::optional<DesktopScope> desktop_scope;
-			if (!graphics_call && !kernel_call) {
-				desktop_scope.emplace();
-				CallCycles::instance().took_desktop();
-				windows.apply_dc_log();
-				windows.take_deferred([&desktop](uint32_t operation, uint64_t handle) { desktop.apply_deferred(operation, handle); });
-				windows.screen_dc_use(api_name);
-			}
 			const auto profile_start = RuntimeProfile::instance().enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			static const bool trace_failures = std::getenv("RAVEN_TRACE_FAIL");
 			const auto error_before = trace_failures ? environment.last_error() : 0;
@@ -2862,14 +2860,30 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				if (kernel_ptr && kernel_ptr->leave_abandoned_callbacks && process.callback_depth() > 0)
 					kernel_ptr->leave_abandoned_callbacks();
 				std::optional<WindowCallScope> window_scope;
-				if (!graphics_call)
-					window_scope.emplace(windows);
-				// The generalized desktop services come first so that they replace the older narrow ones.
-				dispatched = desktop_api.dispatch(process, environment, api_name) || environment.dispatch(api_name) || module_api.dispatch(api_name) || resources.dispatch(api_name) || memory.dispatch(api_name) || object_api.dispatch(api_name) || heap.dispatch(api_name) || desktop.dispatch(api_name) || windows.dispatch(api_name) || api_registry.dispatch(process, environment, api_name)
+				const auto own_state = [&] {
+					return environment.dispatch(api_name) || module_api.dispatch(api_name) || resources.dispatch(api_name) || memory.dispatch(api_name) ||
+						object_api.dispatch(api_name) || heap.dispatch(api_name);
+				};
+				dispatched = own_first && (own_state() || (own_call && api_registry.dispatch(process, environment, api_name)));
+				if (!dispatched) {
+					if (!graphics_call && !kernel_call) {
+						desktop_scope.emplace();
+						CallCycles::instance().took_desktop();
+						windows.apply_dc_log();
+						windows.take_deferred([&desktop](uint32_t operation, uint64_t handle) { desktop.apply_deferred(operation, handle); });
+						windows.screen_dc_use(api_name);
+					}
+					if (!graphics_call)
+						window_scope.emplace(windows);
+					// The generalized desktop services come first so that they replace the older narrow ones; what the process's own state
+					// answers was asked already when the desktop's services do not know the call.
+					dispatched = desktop_api.dispatch(process, environment, api_name) || (!own_first && own_state()) || desktop.dispatch(api_name) ||
+						windows.dispatch(api_name) || (!own_call && api_registry.dispatch(process, environment, api_name))
 #ifdef RAVEN_VULKAN
-					|| vulkan.dispatch(api_name)
+						|| vulkan.dispatch(api_name)
 #endif
-					;
+						;
+				}
 			} catch (const ExecutionRedirected &redirected) {
 				if (redirected.level!=level) throw;
 				budget=remaining();
@@ -3594,9 +3608,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		api_in_progress = found->second.c_str();
 		// A Vulkan call leaves the desktop alone, as in the trap path.
 		const bool graphics_call = found->second.starts_with("vk"), kernel_call = api_registry.kernel(found->second);
+		const bool own_call = !desktop_api.has(found->second) && api_registry.has(found->second) && !api_registry.desktop(found->second);
 		std::optional<DesktopScope> desktop_scope;
 		std::optional<WindowCallScope> window_scope;
-		if (!graphics_call && !kernel_call) {
+		if (!graphics_call && !kernel_call && !own_call) {
 			desktop_scope.emplace();
 			CallCycles::instance().took_desktop();
 			// Deferred releases wait for a stop of the guest: releasing a DIB section unmaps guest memory, which a running guest cannot
@@ -3719,7 +3734,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_actctx_api(api_registry, kernel);
 	register_version_api(api_registry, kernel);
 #ifdef RAVEN_OPENGL
+	// OpenGL draws into windows' contexts and surfaces.
+	api_registry.set_desktop(true);
 	if (opengl) opengl->register_api(api_registry, threads);
+	api_registry.set_desktop(false);
 #endif
 	windows.register_api(desktop_api);
 	desktop.register_gdi_api(desktop_api);

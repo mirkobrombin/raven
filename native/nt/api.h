@@ -93,15 +93,19 @@ public:
 	// without the desktop lock, which they take themselves where they reach a thread's message queue.
 	void set_kernel(bool kernel) { adding_kernel = kernel; }
 	bool kernel(std::string_view name) const;
+	// The handlers added while this is set reach windows or drawing themselves, and are answered under the desktop lock; the others reach
+	// the desktop only through the kernel's hooks, which take the lock, and are answered without it.
+	void set_desktop(bool desktop) { adding_desktop = desktop; }
+	bool desktop(std::string_view name) const;
 
 private:
 	struct Entry {
 		uint32_t arguments;
 		ApiHandler handler;
-		bool kernel = false;
+		bool kernel = false, desktop = false;
 	};
 	std::map<std::string, Entry> entries;
-	bool adding_kernel = false;
+	bool adding_kernel = false, adding_desktop = false;
 };
 
 }
