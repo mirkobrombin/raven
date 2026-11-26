@@ -1,7 +1,9 @@
 #include "desktop/foreign_surface.h"
+#include "desktop/shared_pixels.h"
 
 #include <chrono>
 #include <csignal>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -75,6 +77,41 @@ int main()
 		stop_other();
 		check(posted,"cannot post to the other program's window");
 		check(settled_stamp()!=before,"a posted message left the stamp as it was");
+		// Another program draws into a window of this one, as a browser's GPU process does: it opens the pixels, makes its swap chain and
+		// only then finishes a first frame. The owner looks at a window not drawn yet only when the stamp moved, so the first frame must
+		// move it, or the window shows nothing for good.
+		raven::publish_window(window,4,2);
+		int ready[2],go[2];
+		check(::pipe(ready)==0 && ::pipe(go)==0,"cannot make pipes");
+		other=::fork();
+		check(other>=0,"cannot start a drawing program");
+		if (!other) {
+			const auto surface=raven::ForeignSurface::open_for_drawing(window,4,2);
+			char byte=surface ? 1 : 0;
+			if (::write(ready[1],&byte,1)!=1 || ::read(go[0],&byte,1)!=1 || !surface) ::_exit(1);
+			std::memset(surface->pixels->data(),9,4*2*4);
+			surface->publish_frame();
+			byte=1;
+			if (::write(ready[1],&byte,1)!=1) ::_exit(1);
+			::pause();
+			::_exit(0);
+		}
+		char byte=0;
+		check(::read(ready[0],&byte,1)==1 && byte,"the drawing program cannot open the pixels");
+		const auto opened=settled_stamp();
+		uint32_t seen=0;
+		const auto take=[&] {
+			return raven::take_foreign_frame(window,seen,[](const uint8_t *pixels,uint32_t width,uint32_t height) {
+				check(width==4 && height==2 && pixels[0]==9,"the first frame differs");
+			});
+		};
+		check(!take(),"a frame was taken before any was drawn");
+		byte=1;
+		check(::write(go[1],&byte,1)==1 && ::read(ready[0],&byte,1)==1,"the drawing program did not draw");
+		const auto drawn=settled_stamp();
+		stop_other();
+		check(drawn!=opened,"a window's first frame left the stamp as it was: its owner never looks at it");
+		check(take(),"the first frame is not taken");
 	} catch (const std::exception &error) {
 		stop_other();
 		std::cerr<<error.what()<<'\n';
