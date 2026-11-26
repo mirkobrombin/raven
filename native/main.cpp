@@ -52,6 +52,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <stdexcept>
 
 #ifdef RAVEN_NATIVE_CPU
@@ -91,7 +92,7 @@ static raven::ModuleBytes map_module(const std::filesystem::path &path)
 #endif
 	auto bytes = raven::ModuleBytes::map(path);
 	if (!bytes)
-		throw std::runtime_error("cannot map PE file: " + path.string());
+		throw std::runtime_error("cannot map PE file: " + path.string() + ": " + std::strerror(errno));
 	if (std::span<const uint8_t>(*bytes).size() > 0xffffffffULL)
 		throw std::runtime_error("PE file exceeds inspection size limit");
 	return std::move(*bytes);
@@ -186,6 +187,12 @@ static void show_fault(int signal)
 
 int main(int argc, char **argv)
 {
+	// A Windows program keeps as many files, pipes and sockets open as it needs, far past the soft limit a session may start programs
+	// with: the limit is raised as far as the hard limit lets it, for this process and every one it starts.
+	if (rlimit files{}; ::getrlimit(RLIMIT_NOFILE, &files) == 0 && files.rlim_cur < files.rlim_max) {
+		files.rlim_cur = files.rlim_max;
+		::setrlimit(RLIMIT_NOFILE, &files);
+	}
 #ifdef RAVEN_NATIVE_CPU
 	// The guest's clock is calibrated from here to when the guest starts.
 	raven::clock_origin();

@@ -1,6 +1,7 @@
 #include "module_set.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <fcntl.h>
 #include <stdexcept>
@@ -34,9 +35,13 @@ std::optional<ModuleBytes> ModuleBytes::map(const std::filesystem::path &path)
 	void *address = MAP_FAILED;
 	if (::fstat(descriptor, &status) == 0 && status.st_size > 0)
 		address = ::mmap(nullptr, size_t(status.st_size), PROT_READ, MAP_PRIVATE, descriptor, 0);
+	// The caller reports why the file could not be mapped; closing the descriptor must not change the reason.
+	const int reason = errno;
 	::close(descriptor);
-	if (address == MAP_FAILED)
+	if (address == MAP_FAILED) {
+		errno = reason;
 		return std::nullopt;
+	}
 	const size_t size = size_t(status.st_size);
 	ModuleBytes result;
 	result.mapping = std::shared_ptr<const void>(address, [size](const void *mapped) { ::munmap(const_cast<void *>(mapped), size); });
