@@ -111,6 +111,8 @@ struct WaylandPresentation::State {
 		// Whether the compositor's last configure shows the window maximized, whether the state Raven asked for is still to come, and
 		// whether the program was told of a state the compositor chose itself.
 		bool shown_maximized=false, state_asked=true, state_reported=false;
+		// Whether the window covers the screen and the compositor was asked to show it full screen.
+		bool full_screen=false;
 		// The size of the window geometry, and where it starts in the frame.
 		uint32_t width=0,height=0,pending_width=0,pending_height=0;
 		int32_t geometry_x=0,geometry_y=0;
@@ -223,6 +225,8 @@ struct WaylandPresentation::State {
 	};
 	std::map<uint64_t,std::unique_ptr<Overlay>> overlays;
 	std::set<uint64_t> maximized;
+	// Windows that cover the screen, which the compositor shows full screen on the output instead of placing them.
+	std::set<uint64_t> full_screens;
 	// The top-level window that owns each window, which the compositor keeps it above.
 	std::map<uint64_t,uint64_t> owners;
 	// Windows whose pixels carry premultiplied alpha, which the compositor blends over what lies below.
@@ -1139,6 +1143,16 @@ struct WaylandPresentation::State {
 		if (!window.configured || window.closed) throw std::runtime_error("Wayland maximization configuration failed");
 	}
 
+	void full_screen(uint64_t handle,bool wanted) {
+		if (wanted) full_screens.insert(handle); else full_screens.erase(handle);
+		const auto found=surfaces.find(handle);
+		if (found==surfaces.end() || !found->second->role || found->second->full_screen==wanted) return;
+		auto &window=*found->second;
+		window.full_screen=wanted;
+		if (wanted) xdg_toplevel_set_fullscreen(window.role,nullptr);
+		else xdg_toplevel_unset_fullscreen(window.role);
+	}
+
 	void present(uint64_t handle,std::string_view title,uint32_t width,uint32_t height,std::span<const uint8_t> pixels) {
 		const auto shown=on_screen.extract(handle);
 		if (!handle || !width || !height || width>8192 || height>8192 || uint64_t(width)*height>16*1024*1024 || pixels.size()!=size_t(width)*height*4)
@@ -1160,6 +1174,7 @@ struct WaylandPresentation::State {
 			auto window=std::make_unique<Surface>();
 			window->width=shown_width; window->height=shown_height;
 			window->maximized=maximized.contains(handle);
+			window->full_screen=full_screens.contains(handle);
 			window->proxy=wl_compositor_create_surface(compositor);
 			window->shell=xdg_wm_base_get_xdg_surface(shell,window->proxy);
 			window->role=xdg_surface_get_toplevel(window->shell);
@@ -1182,6 +1197,7 @@ struct WaylandPresentation::State {
 			xdg_toplevel_set_app_id(window->role,"raven.native");
 			// A floating window starts at its requested size; a maximized one follows the compositor's work area.
 			if (window->maximized) xdg_toplevel_set_maximized(window->role);
+			else if (window->full_screen) xdg_toplevel_set_fullscreen(window->role,nullptr);
 			else {
 				xdg_toplevel_set_min_size(window->role,int32_t(width),int32_t(height));
 				xdg_toplevel_set_max_size(window->role,int32_t(width),int32_t(height));
@@ -1241,6 +1257,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->present(handle,title,width,height,pixels);
 	},[this](uint64_t handle) {
 		state->maximized.erase(handle);
+		state->full_screens.erase(handle);
 		state->on_screen.erase(handle);
 		state->owners.erase(handle);
 		state->translucent.erase(handle);
@@ -1314,6 +1331,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->overlay(handle,window,x,y,width,height,pixels,stride);
 	}};
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.full_screen=[this](uint64_t handle,bool wanted) { state->full_screen(handle,wanted); };
 	result.quiet=[this] { return state->quiet(); };
 	result.changed_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->within[handle]=area; };
 	result.shown_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->on_screen[handle]=area; };

@@ -46,10 +46,11 @@ template <typename T> struct Reply {
 
 constexpr const char *atom_names[]={"WM_PROTOCOLS","WM_DELETE_WINDOW","WM_NAME","WM_CLASS","_NET_WM_NAME","UTF8_STRING","STRING","TEXT",
 	"CLIPBOARD","TARGETS","text/plain;charset=utf-8","text/plain","RAVEN_SELECTION","INCR","_NET_WM_STATE","_NET_WM_STATE_MAXIMIZED_VERT",
-	"_NET_WM_STATE_MAXIMIZED_HORZ","_NET_WM_MOVERESIZE","_MOTIF_WM_HINTS","_NET_WM_WINDOW_TYPE","_NET_WM_WINDOW_TYPE_POPUP_MENU","ATOM","WM_CHANGE_STATE","WM_STATE"};
+	"_NET_WM_STATE_MAXIMIZED_HORZ","_NET_WM_MOVERESIZE","_MOTIF_WM_HINTS","_NET_WM_WINDOW_TYPE","_NET_WM_WINDOW_TYPE_POPUP_MENU","ATOM","WM_CHANGE_STATE","WM_STATE",
+	"_NET_WM_STATE_FULLSCREEN"};
 enum Atom { wm_protocols, wm_delete_window, wm_name, wm_class, net_wm_name, utf8_string, string_type, text_type, clipboard, targets,
 	text_utf8, text_plain, raven_selection, incr, net_wm_state, maximized_vert, maximized_horz, net_wm_moveresize, motif_hints,
-	window_type, window_type_popup, atom_type, wm_change_state, wm_state, atom_count };
+	window_type, window_type_popup, atom_type, wm_change_state, wm_state, full_screen_state, atom_count };
 
 }
 
@@ -61,7 +62,7 @@ struct XcbPresentation::State {
 		int32_t popup_x=0,popup_y=0;
 		std::array<int32_t,4> screen{0,0,0,0};
 		uint64_t parent=0;
-		bool closed=false, close_posted=false, resized=false, maximized=false, mapped=false, iconic=false;
+		bool closed=false, close_posted=false, resized=false, maximized=false, mapped=false, iconic=false, full_screen=false;
 		uint32_t width=0,height=0,pending_width=0,pending_height=0;
 		std::string title;
 		// The frame the window shows, kept to repaint what the server exposes and to send only what changed.
@@ -91,6 +92,8 @@ struct XcbPresentation::State {
 	xkb_context *keyboard_context=nullptr;
 	std::map<uint64_t,std::unique_ptr<Window>> windows;
 	std::set<uint64_t> maximized;
+	// Windows that cover the screen, which the window manager shows full screen.
+	std::set<uint64_t> full_screens;
 	std::vector<DesktopEvent> pending;
 	uint64_t pointer_window=0,keyboard_window=0;
 	int32_t pointer_x=0,pointer_y=0,root_x=0,root_y=0;
@@ -531,15 +534,19 @@ struct XcbPresentation::State {
 		xcb_flush(connection);
 	}
 
-	void set_maximized(Window &window,bool wanted,bool mapped) {
-		const xcb_atom_t states[]={atoms[maximized_vert],atoms[maximized_horz]};
-		if (!mapped) {
-			if (wanted) property(window.id,atoms[net_wm_state],atoms[atom_type],32,2,states);
-			return;
-		}
+	// The states a window is mapped with, which the window manager reads from _NET_WM_STATE before it places the window.
+	void set_initial_state(Window &window) {
+		std::vector<xcb_atom_t> states;
+		if (window.maximized) states.insert(states.end(),{atoms[maximized_vert],atoms[maximized_horz]});
+		if (window.full_screen) states.push_back(atoms[full_screen_state]);
+		if (!states.empty()) property(window.id,atoms[net_wm_state],atoms[atom_type],32,uint32_t(states.size()),states.data());
+	}
+
+	// Asks the window manager to add or remove up to two states of a mapped window (EWMH _NET_WM_STATE).
+	void change_state(Window &window,bool wanted,xcb_atom_t first,xcb_atom_t second) {
 		xcb_client_message_event_t message{};
 		message.response_type=XCB_CLIENT_MESSAGE; message.format=32; message.window=window.id; message.type=atoms[net_wm_state];
-		message.data.data32[0]=wanted ? 1 : 0; message.data.data32[1]=states[0]; message.data.data32[2]=states[1]; message.data.data32[3]=1;
+		message.data.data32[0]=wanted ? 1 : 0; message.data.data32[1]=first; message.data.data32[2]=second; message.data.data32[3]=1;
 		xcb_send_event(connection,0,screen->root,XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT|XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
 			reinterpret_cast<const char *>(&message));
 	}
@@ -569,7 +576,16 @@ struct XcbPresentation::State {
 		const auto found=windows.find(handle);
 		if (found==windows.end() || found->second->is_popup || found->second->maximized==wanted) return;
 		found->second->maximized=wanted;
-		set_maximized(*found->second,wanted,true);
+		change_state(*found->second,wanted,atoms[maximized_vert],atoms[maximized_horz]);
+		xcb_flush(connection);
+	}
+
+	void full_screen(uint64_t handle,bool wanted) {
+		if (wanted) full_screens.insert(handle); else full_screens.erase(handle);
+		const auto found=windows.find(handle);
+		if (found==windows.end() || found->second->is_popup || found->second->full_screen==wanted) return;
+		found->second->full_screen=wanted;
+		change_state(*found->second,wanted,atoms[full_screen_state],0);
 		xcb_flush(connection);
 	}
 
@@ -588,13 +604,14 @@ struct XcbPresentation::State {
 			auto window=std::make_unique<Window>();
 			window->width=width; window->height=height;
 			window->maximized=maximized.contains(handle);
+			window->full_screen=full_screens.contains(handle);
 			window->id=make_window(false,0,0,width,height);
 			property(window->id,atoms[wm_protocols],atoms[atom_type],32,1,&atoms[wm_delete_window]);
 			// Raven draws the frame itself, as on Wayland; the window manager adds none.
 			const uint32_t hints[]={2,0,0,0,0};
 			property(window->id,atoms[motif_hints],atoms[motif_hints],32,5,hints);
 			set_title(*window,title);
-			set_maximized(*window,window->maximized,false);
+			set_initial_state(*window);
 			apply_transient(handle,*window);
 			xcb_map_window(connection,window->id);
 			if (tracing()) std::fprintf(stderr,"x11: window %llx -> %x %ux%u\n",(unsigned long long)handle,window->id,width,height);
@@ -981,6 +998,7 @@ struct XcbPresentation::State {
 
 	void remove(uint64_t handle) {
 		maximized.erase(handle);
+		full_screens.erase(handle);
 		if (pointer_window==handle) pointer_window=0;
 		std::erase_if(pending,[&](const DesktopEvent &event) { return event.window==handle; });
 		if (constrained_window==handle) release_constraint();
@@ -1091,6 +1109,7 @@ DesktopPresentation XcbPresentation::callbacks()
 	result.quiet=[this] { return state->quiet(); };
 	result.minimize=[this](uint64_t handle) { state->minimize(handle); };
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.full_screen=[this](uint64_t handle,bool wanted) { state->full_screen(handle,wanted); };
 	return result;
 }
 

@@ -397,6 +397,15 @@ void NativeWindows::present(uint64_t handle, bool force)
 		} catch (const std::exception &) {}
 	}
 	const bool maximized=(window->style & 0x01000000U)!=0;
+	// A window whose rectangle covers the screen is shown full screen, as a game's is, unless it is maximized with its caption or
+	// minimized: Wine decides it the same way (is_fullscreen in win32u). Without it the host places it as any other window.
+	if (presentation.full_screen) {
+		const auto &metrics=objects.nonclient_metrics();
+		const auto &outer=window->outer;
+		const bool covers=outer.left<=0 && outer.top<=0 && outer.right>=metrics.screen_x && outer.bottom>=metrics.screen_y;
+		const bool captioned=(window->style & 0x00c00000U)==0x00c00000U,minimized=(window->style & 0x20000000U)!=0;
+		presentation.full_screen(handle,covers && !(maximized && captioned) && !minimized);
+	}
 	if (presentation.maximize) presentation.maximize(handle,maximized);
 	if (presentation.transient_for) presentation.transient_for(handle,owning ? owner : 0);
 	if (part && presentation.changed_within) presentation.changed_within(handle,{part->left,part->top,part->right,part->bottom});
