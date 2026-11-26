@@ -4012,6 +4012,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_address_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
         set_property(TEST native_address_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        # Two threads hand a turn back and forth through condition variables under a slim lock, a shared hold of it and a critical section,
+        # and a sleep nobody wakes times out (condition_beside_client.c). In parallel mode the sleeps and wakes stay off the turn: they took
+        # it for every one of their thousands of calls. In a serial process a sleep reaches the address wait through its served stub, which
+        # cannot block there.
+        raven_kernel_fixture(condition-beside condition_beside_client.c 0x1f8000000 "-lkernel32")
+        foreach(mode default parallel table serial)
+            add_test(NAME native_condition_beside_${mode} COMMAND raven --run-process --execution=native --timeout-ms=60000
+                ${CMAKE_CURRENT_BINARY_DIR}/condition-beside.exe)
+            set_tests_properties(native_condition_beside_${mode} PROPERTIES TIMEOUT 75 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/condition-beside-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_condition_beside_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1 RAVEN_PROFILE=1)
+        set_property(TEST native_condition_beside_parallel PROPERTY FAIL_REGULAR_EXPRESSION
+            "profile: \\(call\\) (Sleep|RtlSleep|Wake|RtlWake|RtlWaitOnAddress)[A-Za-z]* calls=[0-9][0-9][0-9]")
+        set_property(TEST native_condition_beside_table APPEND PROPERTY ENVIRONMENT RAVEN_NTSYNC=0)
+        set_property(TEST native_condition_beside_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
         # Suspending a running thread holds it still, nested suspensions count, and a terminated thread ends its waiters with its exit code
         # (parallel_suspend_client.c), with each way of keeping kernel objects.
         raven_kernel_fixture(parallel-suspend parallel_suspend_client.c 0x1ef000000 "-lkernel32")
