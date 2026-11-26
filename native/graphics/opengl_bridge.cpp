@@ -131,23 +131,66 @@ template<typename T> std::vector<T> input(ApiCall &call, uint64_t address, size_
 	return values;
 }
 
-void require_array_buffer()
+// An array the guest pointed at its own memory instead of a buffer. The host driver keeps the guest's address only as a value: each draw
+// reads a copy of the vertices it uses (see draw_client).
+struct ClientArray {
+	// GL_VERTEX_ARRAY, GL_NORMAL_ARRAY, GL_COLOR_ARRAY, GL_TEXTURE_COORD_ARRAY, or 0 for a generic vertex attribute.
+	GLenum kind = 0;
+	// The texture unit of a texture coordinate array, or the index of a generic attribute.
+	GLuint index = 0;
+	GLint size = 0, stride = 0, normalized = 0;
+	GLenum type = 0;
+	uint64_t address = 0;
+};
+
+size_t element_bytes(GLint size, GLenum type)
 {
-	GLint buffer = 0;
-	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &buffer);
-	if (!buffer) throw std::runtime_error("OpenGL client arrays require guest copies");
+	if (type == GL_INT_2_10_10_10_REV || type == GL_UNSIGNED_INT_2_10_10_10_REV || type == GL_UNSIGNED_INT_10F_11F_11F_REV) return 4;
+	const size_t components = size == GL_BGRA ? 4 : size >= 1 && size <= 4 ? size_t(size) : 0;
+	size_t bytes = 0;
+	switch (type) {
+	case GL_BYTE: case GL_UNSIGNED_BYTE: bytes = 1; break;
+	case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: bytes = 2; break;
+	case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: case GL_FIXED: bytes = 4; break;
+	case GL_DOUBLE: bytes = 8; break;
+	}
+	if (!components || !bytes) throw std::runtime_error("unsupported OpenGL client array layout");
+	return components * bytes;
 }
 
-void validate_arrays()
+std::vector<ClientArray> find_client_arrays()
 {
-	for (const auto [array, binding] : {std::pair{GL_VERTEX_ARRAY, GL_VERTEX_ARRAY_BUFFER_BINDING},
-		{GL_COLOR_ARRAY, GL_COLOR_ARRAY_BUFFER_BINDING}, {GL_NORMAL_ARRAY, GL_NORMAL_ARRAY_BUFFER_BINDING},
-		{GL_INDEX_ARRAY, GL_INDEX_ARRAY_BUFFER_BINDING}, {GL_EDGE_FLAG_ARRAY, GL_EDGE_FLAG_ARRAY_BUFFER_BINDING},
-		{GL_SECONDARY_COLOR_ARRAY, GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING}, {GL_FOG_COORD_ARRAY, GL_FOG_COORD_ARRAY_BUFFER_BINDING}}) {
+	std::vector<ClientArray> arrays;
+	const auto fixed = [&arrays](GLenum kind, GLuint index, GLenum binding, GLenum size, GLenum type, GLenum stride, GLenum pointer) {
+		GLint buffer = 0;
+		if (!glIsEnabled(kind)) return;
+		glGetIntegerv(binding, &buffer);
+		if (buffer) return;
+		ClientArray array{kind, index};
+		if (size) glGetIntegerv(size, &array.size);
+		else array.size = 3;
+		GLint value = 0;
+		glGetIntegerv(type, &value);
+		array.type = GLenum(value);
+		glGetIntegerv(stride, &array.stride);
+		void *address = nullptr;
+		glGetPointerv(pointer, &address);
+		array.address = reinterpret_cast<uintptr_t>(address);
+		arrays.push_back(array);
+	};
+	fixed(GL_VERTEX_ARRAY, 0, GL_VERTEX_ARRAY_BUFFER_BINDING, GL_VERTEX_ARRAY_SIZE, GL_VERTEX_ARRAY_TYPE, GL_VERTEX_ARRAY_STRIDE,
+		GL_VERTEX_ARRAY_POINTER);
+	fixed(GL_NORMAL_ARRAY, 0, GL_NORMAL_ARRAY_BUFFER_BINDING, 0, GL_NORMAL_ARRAY_TYPE, GL_NORMAL_ARRAY_STRIDE, GL_NORMAL_ARRAY_POINTER);
+	fixed(GL_COLOR_ARRAY, 0, GL_COLOR_ARRAY_BUFFER_BINDING, GL_COLOR_ARRAY_SIZE, GL_COLOR_ARRAY_TYPE, GL_COLOR_ARRAY_STRIDE,
+		GL_COLOR_ARRAY_POINTER);
+	// The guest has no call that points these arrays anywhere, so one enabled without a buffer reads from address zero.
+	for (const auto [array, binding] : {std::pair{GL_INDEX_ARRAY, GL_INDEX_ARRAY_BUFFER_BINDING},
+		{GL_EDGE_FLAG_ARRAY, GL_EDGE_FLAG_ARRAY_BUFFER_BINDING}, {GL_SECONDARY_COLOR_ARRAY, GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING},
+		{GL_FOG_COORD_ARRAY, GL_FOG_COORD_ARRAY_BUFFER_BINDING}}) {
 		GLint buffer = 0;
 		if (!glIsEnabled(GLenum(array))) continue;
 		glGetIntegerv(GLenum(binding), &buffer);
-		if (!buffer) throw std::runtime_error("OpenGL draw uses an uncopied client array");
+		if (!buffer) throw ApiFault{};
 	}
 	GLint original = 0, textures = 0;
 	glGetIntegerv(GL_CLIENT_ACTIVE_TEXTURE, &original);
@@ -155,12 +198,8 @@ void validate_arrays()
 	if (textures < 0 || textures > 32) throw std::runtime_error("OpenGL texture array count exceeds bounds");
 	for (GLint index = 0; index < textures; ++index) {
 		glClientActiveTexture(GL_TEXTURE0 + index);
-		GLint buffer = 0;
-		if (glIsEnabled(GL_TEXTURE_COORD_ARRAY)) glGetIntegerv(GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING, &buffer);
-		if (glIsEnabled(GL_TEXTURE_COORD_ARRAY) && !buffer) {
-			glClientActiveTexture(GLenum(original));
-			throw std::runtime_error("OpenGL draw uses an uncopied texture array");
-		}
+		fixed(GL_TEXTURE_COORD_ARRAY, GLuint(index), GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING, GL_TEXTURE_COORD_ARRAY_SIZE,
+			GL_TEXTURE_COORD_ARRAY_TYPE, GL_TEXTURE_COORD_ARRAY_STRIDE, GL_TEXTURE_COORD_ARRAY_POINTER);
 	}
 	glClientActiveTexture(GLenum(original));
 	GLint attributes = 0;
@@ -169,9 +208,69 @@ void validate_arrays()
 	for (GLint index = 0; index < attributes; ++index) {
 		GLint enabled = 0, buffer = 0;
 		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &enabled);
-		if (enabled) glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &buffer);
-		if (enabled && !buffer) throw std::runtime_error("OpenGL draw uses an uncopied vertex attribute");
+		if (!enabled) continue;
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &buffer);
+		if (buffer) continue;
+		ClientArray array{0, GLuint(index)};
+		GLint type = 0;
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_SIZE, &array.size);
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_TYPE, &type);
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &array.stride);
+		glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_NORMALIZED, &array.normalized);
+		array.type = GLenum(type);
+		void *address = nullptr;
+		glGetVertexAttribPointerv(index, GL_VERTEX_ATTRIB_ARRAY_POINTER, &address);
+		array.address = reinterpret_cast<uintptr_t>(address);
+		arrays.push_back(array);
 	}
+	return arrays;
+}
+
+// Points one array at a host address; GL_ARRAY_BUFFER must be unbound.
+void point_array(const ClientArray &array, const void *data)
+{
+	switch (array.kind) {
+	case GL_VERTEX_ARRAY: glVertexPointer(array.size, array.type, array.stride, data); break;
+	case GL_NORMAL_ARRAY: glNormalPointer(array.type, array.stride, data); break;
+	case GL_COLOR_ARRAY: glColorPointer(array.size, array.type, array.stride, data); break;
+	case GL_TEXTURE_COORD_ARRAY:
+		glClientActiveTexture(GL_TEXTURE0 + array.index);
+		glTexCoordPointer(array.size, array.type, array.stride, data);
+		break;
+	default: glVertexAttribPointer(array.index, array.size, array.type, GLboolean(array.normalized), array.stride, data);
+	}
+}
+
+// Runs a draw that reads vertices first to last from the guest's client arrays. Each array's vertices are copied from guest memory
+// before the host is touched, so an unreadable array fails the call with nothing drawn; the driver reads the copies, and the guest's
+// addresses are put back for the next draw.
+template<typename Draw> void draw_client(ApiCall &call, const std::vector<ClientArray> &arrays, uint32_t first, uint32_t last, Draw draw)
+{
+	if (arrays.empty()) { draw(); return; }
+	std::vector<std::vector<uint8_t>> copies;
+	std::vector<uint64_t> starts;
+	copies.reserve(arrays.size());
+	size_t total = 0;
+	for (const auto &array : arrays) {
+		const uint64_t element = element_bytes(array.size, array.type), stride = array.stride > 0 ? uint64_t(array.stride) : element;
+		const uint64_t bytes = uint64_t(last - first) * stride + element, start = uint64_t(first) * stride;
+		uint64_t address = 0;
+		if (bytes > (256ULL << 20) || (total += bytes) > (256ULL << 20)) throw std::runtime_error("OpenGL client arrays exceed bounds");
+		if (__builtin_add_overflow(array.address, start, &address)) throw ApiFault{};
+		copies.push_back(call.read(address, size_t(bytes)));
+		starts.push_back(start);
+	}
+	GLint buffer = 0, unit = 0;
+	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &buffer);
+	glGetIntegerv(GL_CLIENT_ACTIVE_TEXTURE, &unit);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	// The driver reads vertex i at the array's address plus i strides, so each copy is offered at its first vertex's place.
+	for (size_t index = 0; index < arrays.size(); ++index)
+		point_array(arrays[index], reinterpret_cast<const void *>(reinterpret_cast<uintptr_t>(copies[index].data()) - starts[index]));
+	draw();
+	for (const auto &array : arrays) point_array(array, reinterpret_cast<const void *>(uintptr_t(array.address)));
+	glClientActiveTexture(GLenum(unit));
+	glBindBuffer(GL_ARRAY_BUFFER, GLuint(buffer));
 }
 
 size_t unpack_size(GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type)
@@ -233,7 +332,14 @@ struct OpenGLBridge::State {
 	HostPlatform platform = HostPlatform::wayland;
 	bool queued_elements = std::getenv("RAVEN_QUEUED_GRAPHICS") && std::getenv("RAVEN_QUEUED_OPENGL");
 	uint64_t queued_draws = 0;
-	struct Context { EGLContext host; uint32_t owner = 0; int interval = 1; bool used = false, arrays_valid = false, elements = false; };
+	struct Context {
+		EGLContext host;
+		uint32_t owner = 0;
+		int interval = 1;
+		bool used = false, arrays_valid = false, elements = false;
+		// The arrays draws read from guest memory, found again when array state changes (arrays_valid false).
+		std::vector<ClientArray> client{};
+	};
 	struct Current { uint64_t context = 0, dc = 0; };
 	struct Surface {
 		EGLSurface host = EGL_NO_SURFACE;
@@ -461,12 +567,14 @@ struct OpenGLBridge::State {
 		}
 	}
 
-	void validate_draw_arrays(ApiCall &call)
+	const std::vector<ClientArray> &client_arrays(ApiCall &call)
 	{
 		auto &context = contexts.at(selected(call).context);
-		if (context.arrays_valid) return;
-		validate_arrays();
-		context.arrays_valid = true;
+		if (!context.arrays_valid) {
+			context.client = find_client_arrays();
+			context.arrays_valid = true;
+		}
+		return context.client;
 	}
 
 	void publish_elements(ApiCall &call, bool refresh = false)
@@ -958,19 +1066,19 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 			else glTexImage3D(call.u32(0), call.i32(1), call.i32(2), call.i32(3), call.i32(4), call.i32(5), call.i32(6), call.u32(7), call.u32(8), data);
 		});
 	add("glColorPointer", 4, [](ApiCall &call) {
-		require_array_buffer(); glColorPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
+		glColorPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
 	});
 	add("glTexCoordPointer", 4, [](ApiCall &call) {
-		require_array_buffer(); glTexCoordPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
+		glTexCoordPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
 	});
 	add("glNormalPointer", 3, [](ApiCall &call) {
-		require_array_buffer(); glNormalPointer(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2]));
+		glNormalPointer(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2]));
 	});
 	add("glVertexAttribPointer", 6, [](ApiCall &call) {
-		require_array_buffer(); glVertexAttribPointer(call.u32(0), call.i32(1), call.u32(2), GLboolean(call.u32(3)), call.i32(4), reinterpret_cast<const void *>(call[5]));
+		glVertexAttribPointer(call.u32(0), call.i32(1), call.u32(2), GLboolean(call.u32(3)), call.i32(4), reinterpret_cast<const void *>(call[5]));
 	});
 	add("glDrawElements", 4, [&s](ApiCall &call) {
-		s.validate_draw_arrays(call);
+		const auto &arrays = s.client_arrays(call);
 		if (call.i32(1) < 0 || call.u32(1) > 16 * 1024 * 1024) throw std::runtime_error("OpenGL element count exceeds bounds");
 		const auto type = call.u32(2);
 		const size_t element = type == GL_UNSIGNED_BYTE ? 1 : type == GL_UNSIGNED_SHORT ? 2 : type == GL_UNSIGNED_INT ? 4 : 0;
@@ -990,7 +1098,30 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 				throw std::runtime_error("OpenGL element offset exceeds its buffer");
 			indices = reinterpret_cast<const void *>(call[3]);
 		} else if (size) { bytes = call.read(call[3], size); indices = bytes.data(); }
-		glDrawElements(call.u32(0), call.i32(1), type, indices);
+		const auto draw = [&call, type, indices] { glDrawElements(call.u32(0), call.i32(1), type, indices); };
+		if (arrays.empty()) draw();
+		else if (size) {
+			// The vertices the draw reads run from its lowest index to its highest, leaving out the index that restarts a primitive.
+			if (buffer) {
+				bytes.resize(size);
+				glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(call[3]), GLsizeiptr(size), bytes.data());
+			}
+			const uint32_t all = element == 1 ? 0xffu : element == 2 ? 0xffffu : 0xffffffffu;
+			GLint restart_index = 0;
+			glGetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &restart_index);
+			const bool fixed = glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX), restart = fixed || glIsEnabled(GL_PRIMITIVE_RESTART);
+			const uint32_t skipped = fixed ? all : uint32_t(restart_index);
+			uint32_t first = UINT32_MAX, last = 0;
+			for (size_t offset = 0; offset < size; offset += element) {
+				uint32_t index = 0;
+				std::memcpy(&index, bytes.data() + offset, element);
+				if (restart && index == skipped) continue;
+				first = std::min(first, index);
+				last = std::max(last, index);
+			}
+			// Indices that only restart primitives draw nothing.
+			if (first <= last) draw_client(call, arrays, first, last, draw);
+		}
 		if (queued) ++s.queued_draws;
 	});
 	add("glClear", 1, [](ApiCall &call) { glClear(call.u32(0)); });
@@ -1030,16 +1161,17 @@ void OpenGLBridge::register_api(ApiRegistry &registry, NativeThreads &threads)
 		glBufferData(call.u32(0), GLsizeiptr(call[1]), bytes.empty() ? nullptr : bytes.data(), call.u32(3));
 	});
 	add("glVertexPointer", 4, [](ApiCall &call) {
-		require_array_buffer();
 		glVertexPointer(call.i32(0), call.u32(1), call.i32(2), reinterpret_cast<const void *>(call[3]));
 	});
 	add("glInterleavedArrays", 3, [](ApiCall &call) {
-		require_array_buffer();
 		glInterleavedArrays(call.u32(0), call.i32(1), reinterpret_cast<const void *>(call[2]));
 	});
 	add("glDrawArrays", 3, [&s](ApiCall &call) {
-		s.validate_draw_arrays(call);
-		glDrawArrays(call.u32(0), call.i32(1), call.i32(2));
+		const auto &arrays = s.client_arrays(call);
+		const auto draw = [&call] { glDrawArrays(call.u32(0), call.i32(1), call.i32(2)); };
+		// A negative first or count is refused by the driver before it reads a vertex.
+		if (call.i32(1) < 0 || call.i32(2) <= 0) draw();
+		else draw_client(call, arrays, call.u32(1), call.u32(1) + call.u32(2) - 1, draw);
 	});
 	add("glMatrixMode", 1, [](ApiCall &call) { glMatrixMode(call.u32(0)); });
 	add("glLoadIdentity", 0, [](ApiCall &) { glLoadIdentity(); });
