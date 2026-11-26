@@ -29,6 +29,28 @@ static int laid_out(BOOL second)
 	return 0;
 }
 
+// The ideal processor: each call returns the one the thread had, a processor past the last fails, and MAXIMUM_PROCESSORS only asks.
+static int ideal_processor(void)
+{
+	HANDLE self=GetCurrentThread();
+	SYSTEM_INFO system;
+	GetSystemInfo(&system);
+	const DWORD last=system.dwNumberOfProcessors-1;
+	const DWORD first=SetThreadIdealProcessor(self,MAXIMUM_PROCESSORS);
+	if (first>last) return 1;
+	if (SetThreadIdealProcessor(self,last)!=first || SetThreadIdealProcessor(self,MAXIMUM_PROCESSORS)!=last) return 2;
+	SetLastError(0);
+	if (SetThreadIdealProcessor(self,last+1)!=(DWORD)-1 || GetLastError()!=ERROR_INVALID_PARAMETER) return 3;
+	PROCESSOR_NUMBER number={0,0,0x5a},previous={0x5a5a,0x5a,0x5a};
+	if (!GetThreadIdealProcessorEx(self,&number) || number.Group || number.Number!=last || number.Reserved) return 4;
+	number.Number=0;
+	if (!SetThreadIdealProcessorEx(self,&number,&previous) || previous.Group || previous.Number!=last || previous.Reserved) return 5;
+	if (SetThreadIdealProcessor(self,MAXIMUM_PROCESSORS)!=0) return 6;
+	number.Group=1;
+	if (SetThreadIdealProcessorEx(self,&number,NULL) || GetLastError()!=ERROR_INVALID_PARAMETER) return 7;
+	return 0;
+}
+
 // Background processing mode is entered and left by the thread itself and is never reported as a priority.
 int raven_entry(void)
 {
@@ -51,6 +73,8 @@ int raven_entry(void)
 	CloseHandle(other);
 	if (!refused) return 11;
 	if (reported!=THREAD_PRIORITY_NORMAL) return 12;
+	int ideal=ideal_processor();
+	if (ideal) return 40+ideal;
 	int first=laid_out(FALSE);
 	if (first) return 20+first;
 	int second=laid_out(TRUE);
