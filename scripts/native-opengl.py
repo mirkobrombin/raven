@@ -71,7 +71,11 @@ def main():
                 elif invalid_array.startswith("bad-element-"):
                     expected = "OpenGL element " + invalid_array.removeprefix("bad-element-") + " exceeds"
                 else:
-                    expected = r"OpenGL draw uses an uncopied (client array|texture array|vertex attribute)"
+                    # An array left at an address the guest never filled fails the draw the way an unreadable pointer does.
+                    if status != 95:
+                        raise RuntimeError(f"OpenGL draw from an unreadable array did not fail: status {status}, {text[-1000:]}")
+                    print("OpenGL draw from an unreadable array failed before host drawing")
+                    return
                 if status != 1 or not re.search(expected, text):
                     raise RuntimeError(f"unsafe OpenGL draw was not rejected: status {status}, {text[-1000:]}")
                 print("Unsafe OpenGL draw rejected before host drawing")

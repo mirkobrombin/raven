@@ -106,6 +106,53 @@ static int pixel(int x, int y, unsigned char r, unsigned char g, unsigned char b
 	return matches;
 }
 
+// Vertices a game keeps in its own memory, as Windows draws them: a draw reads only the vertices it uses, from where the arrays point
+// at the time of the draw.
+static int client_arrays(void)
+{
+	// Two quads, and the draw takes the second, so the copy must begin where the draw does.
+	const float positions[] = {9, 9, 9, 9, 9, 9, 9, 9, -1, -1, 1, -1, 1, 1, -1, 1};
+	unsigned char colours[32] = {0};
+	for (unsigned index = 16; index < 32; index += 4) {
+		colours[index] = 255; colours[index + 2] = 255; colours[index + 3] = 255;
+	}
+	glClearColor(0, 0, 0, 1);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, positions);
+	glColorPointer(4, GL_UNSIGNED_BYTE, 0, colours);
+	glDrawArrays(GL_QUADS, 4, 4);
+	if (glGetError() || !pixel(16, 16, 255, 0, 255)) return 91;
+	// Interleaved vertices, drawn through indices that are in the game's memory as well.
+	struct vertex { float x, y; unsigned char r, g, b, a; } vertices[8];
+	for (unsigned index = 0; index < 8; ++index) {
+		vertices[index].x = index < 4 ? 9 : positions[index * 2];
+		vertices[index].y = index < 4 ? 9 : positions[index * 2 + 1];
+		vertices[index].r = 0; vertices[index].g = 255; vertices[index].b = 255; vertices[index].a = 255;
+	}
+	const unsigned short indices[] = {4, 5, 6, 7};
+	glVertexPointer(2, GL_FLOAT, sizeof(struct vertex), &vertices[0].x);
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(struct vertex), &vertices[0].r);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDrawElements(GL_QUADS, 4, GL_UNSIGNED_SHORT, indices);
+	if (glGetError() || !pixel(16, 16, 0, 255, 255)) return 92;
+	// What the game writes between draws is what the next draw shows.
+	for (unsigned index = 4; index < 8; ++index) { vertices[index].r = 255; vertices[index].b = 0; }
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDrawElements(GL_QUADS, 4, GL_UNSIGNED_SHORT, indices);
+	if (glGetError() || !pixel(16, 16, 255, 255, 0)) return 93;
+	// An array at memory the game cannot read fails the draw as any unreadable pointer does, and nothing is drawn.
+	glVertexPointer(2, GL_FLOAT, 0, (void *)8);
+	glClear(GL_COLOR_BUFFER_BIT);
+	SetLastError(0);
+	glDrawArrays(GL_QUADS, 0, 4);
+	if (GetLastError() != ERROR_NOACCESS || glGetError() || !pixel(16, 16, 0, 0, 0)) return 94;
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_VERTEX_ARRAY);
+	return 0;
+}
+
 static int game_features(void)
 {
 #define GL_PROC(result, name, arguments) result (WINAPI *name) arguments = (void *)wglGetProcAddress(#name); if (!name) return 35
@@ -380,9 +427,11 @@ int raven_entry(void)
 		if (!enable) return 62;
 		enable(0);
 	}
+	// Each of these leaves an array enabled at an address the game never filled: the draw fails as for any unreadable pointer.
 	if (option_requested("--array-")) {
+		SetLastError(0);
 		glDrawArrays(GL_QUADS, 0, 4);
-		return 63;
+		return GetLastError() == ERROR_NOACCESS && !glGetError() ? 95 : 63;
 	}
 	glDisableClientState(GL_VERTEX_ARRAY);
 	if (!pixel(16, 16, 0, 255, 0)) return 12;
@@ -398,6 +447,8 @@ int raven_entry(void)
 	if (!pixel(1, 1, 255, 0, 0) || !pixel(30, 30, 0, 255, 0)) return 14;
 	glDeleteLists(list, 1);
 	release(1, &buffer);
+	const int client = client_arrays();
+	if (client) return client;
 	const int features = game_features();
 	if (features) return features;
 	glClearColor(1, 0, 0, 1);
