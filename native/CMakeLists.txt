@@ -6838,6 +6838,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_legacy_file_api COMMAND raven --run-process --execution=native ${CMAKE_CURRENT_BINARY_DIR}/legacy_file.exe)
             set_tests_properties(native_legacy_file_api PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/legacy-file-prefix)
+            add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/open_handles.exe
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/open_handles.exe ${LOADER_SOURCES}/open_handles_client.c -lkernel32
+                DEPENDS ${LOADER_SOURCES}/open_handles_client.c VERBATIM)
+            add_custom_target(open_handles_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/open_handles.exe)
+            # A session can start programs with a low soft limit on open files; a program keeps as many open as Windows lets it.
+            add_test(NAME native_open_handles COMMAND sh -c "ulimit -Sn 256 && exec \"$0\" --run-process --execution=native \"$1\""
+                $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/open_handles.exe)
+            set_tests_properties(native_open_handles PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/open-handles-prefix)
             set(RAVEN_OPENGL_PE64_DIR "" CACHE PATH "Directory holding Mesa opengl32.dll and its dependencies for 64-bit programs")
             if(HOST_OPENGL_FOUND AND (TARGET raven_wayland OR RAVEN_X11_TESTS))
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/opengl-host.exe
