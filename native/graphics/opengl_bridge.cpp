@@ -227,6 +227,9 @@ struct OpenGLBridge::State {
 	EGLConfig config = nullptr;
 	// Whether contexts draw to host windows, and on which window system; without one they draw to offscreen buffers.
 	bool windowed = false;
+	// Windows shows an OpenGL window opaque whatever alpha its pixels hold, and a game that never writes alpha leaves it at zero. A
+	// Wayland surface is presented opaque through EGL_EXT_present_opaque; without it, the configuration has no alpha.
+	bool present_opaque = false;
 	HostPlatform platform = HostPlatform::wayland;
 	bool queued_elements = std::getenv("RAVEN_QUEUED_GRAPHICS") && std::getenv("RAVEN_QUEUED_OPENGL");
 	uint64_t queued_draws = 0;
@@ -291,21 +294,39 @@ struct OpenGLBridge::State {
 			EGL_ALPHA_SIZE, xcb ? 0 : 8, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};
 		EGLint count = 0;
 		if (!xcb) {
-			if (!eglChooseConfig(candidate, attributes, &config, 1, &count) || !count) { eglTerminate(candidate); return false; }
-			display = candidate;
-			return true;
+			const char *extensions = windowed ? eglQueryString(candidate, EGL_EXTENSIONS) : nullptr;
+			for (const char *found = extensions; found && (found = std::strstr(found, "EGL_EXT_present_opaque")); found += 22)
+				if ((found == extensions || found[-1] == ' ') && (found[22] == ' ' || found[22] == 0)) present_opaque = true;
+			if (!windowed || present_opaque) {
+				if (!eglChooseConfig(candidate, attributes, &config, 1, &count) || !count) { eglTerminate(candidate); return false; }
+				display = candidate;
+				return true;
+			}
+		}
+		std::array<EGLConfig, 256> configs{};
+		config = nullptr;
+		if (!xcb) {
+			// A Wayland surface without EGL_EXT_present_opaque: a configuration without alpha, which the compositor shows opaque.
+			const EGLint opaque[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
+				EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 0, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};
+			if (!eglChooseConfig(candidate, opaque, configs.data(), EGLint(configs.size()), &count)) count = 0;
+			for (EGLint index = 0; index < count && !config; ++index) {
+				EGLint alpha = 0;
+				eglGetConfigAttrib(candidate, configs[size_t(index)], EGL_ALPHA_SIZE, &alpha);
+				if (!alpha) config = configs[size_t(index)];
+			}
 		}
 #ifdef RAVEN_XCB
-		const auto visual = xcb_setup_roots_iterator(xcb_get_setup(static_cast<xcb_connection_t *>(native))).data->root_visual;
-		std::array<EGLConfig, 256> configs{};
-		if (!eglChooseConfig(candidate, attributes, configs.data(), EGLint(configs.size()), &count)) count = 0;
-		config = nullptr;
-		EGLint best_alpha = -1;
-		for (EGLint index = 0; index < count; ++index) {
-			EGLint id = 0, alpha = 0;
-			eglGetConfigAttrib(candidate, configs[size_t(index)], EGL_NATIVE_VISUAL_ID, &id);
-			eglGetConfigAttrib(candidate, configs[size_t(index)], EGL_ALPHA_SIZE, &alpha);
-			if (uint32_t(id) == visual && alpha > best_alpha) { config = configs[size_t(index)]; best_alpha = alpha; }
+		if (xcb) {
+			const auto visual = xcb_setup_roots_iterator(xcb_get_setup(static_cast<xcb_connection_t *>(native))).data->root_visual;
+			if (!eglChooseConfig(candidate, attributes, configs.data(), EGLint(configs.size()), &count)) count = 0;
+			EGLint best_alpha = -1;
+			for (EGLint index = 0; index < count; ++index) {
+				EGLint id = 0, alpha = 0;
+				eglGetConfigAttrib(candidate, configs[size_t(index)], EGL_NATIVE_VISUAL_ID, &id);
+				eglGetConfigAttrib(candidate, configs[size_t(index)], EGL_ALPHA_SIZE, &alpha);
+				if (uint32_t(id) == visual && alpha > best_alpha) { config = configs[size_t(index)]; best_alpha = alpha; }
+			}
 		}
 #endif
 		if (!config) { eglTerminate(candidate); return false; }
@@ -367,15 +388,17 @@ struct OpenGLBridge::State {
 			if (target.window) wl_egl_window_resize(target.window, int(size->first), int(size->second), 0, 0);
 #endif
 			// The X11 child window has a size of its own, which follows the client area.
-			if (target.xid && !windows.host_surface(handle)) throw std::runtime_error("OpenGL window lost its host surface");
+			if (target.xid && !windows.host_surface(handle, true)) throw std::runtime_error("OpenGL window lost its host surface");
 		}
 		target.width = size->first;
 		target.height = size->second;
 		if (target.host != EGL_NO_SURFACE) return target.host;
+		// A window not shown yet gets its surface too, as a game makes its context current and swaps a first frame before it shows
+		// the window: Windows swaps it, and nothing appears until the window is shown.
 		if (windowed && platform == HostPlatform::xcb) {
 #ifdef RAVEN_XCB
 			if (!target.xid) {
-				const auto native = windows.host_surface(handle);
+				const auto native = windows.host_surface(handle, true);
 				if (!native) return EGL_NO_SURFACE;
 				if (native->platform != HostPlatform::xcb || eglGetPlatformDisplay(EGL_PLATFORM_XCB_EXT, native->display, nullptr) != display)
 					throw std::runtime_error("OpenGL window belongs to another display");
@@ -387,14 +410,16 @@ struct OpenGLBridge::State {
 		} else if (windowed) {
 #ifdef RAVEN_OPENGL_WAYLAND
 			if (!target.window) {
-				const auto native = windows.host_surface(handle);
+				const auto native = windows.host_surface(handle, true);
 				if (!native) return EGL_NO_SURFACE;
 				if (native->platform != HostPlatform::wayland || eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, native->display, nullptr) != display)
 					throw std::runtime_error("OpenGL window belongs to another display");
 				target.window = wl_egl_window_create(static_cast<wl_surface *>(native->surface), int(target.width), int(target.height));
 				if (!target.window) throw std::runtime_error("cannot create OpenGL Wayland window");
 			}
-			target.host = eglCreateWindowSurface(display, config, reinterpret_cast<EGLNativeWindowType>(target.window), nullptr);
+			const EGLint opaque[] = {EGL_PRESENT_OPAQUE_EXT, EGL_TRUE, EGL_NONE};
+			target.host = eglCreateWindowSurface(display, config, reinterpret_cast<EGLNativeWindowType>(target.window),
+				present_opaque ? opaque : nullptr);
 #endif
 		} else {
 			const EGLint dimensions[] = {EGL_WIDTH, int(target.width), EGL_HEIGHT, int(target.height), EGL_NONE};

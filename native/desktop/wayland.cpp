@@ -992,6 +992,12 @@ struct WaylandPresentation::State {
 			wl_region *none=wl_compositor_create_region(compositor);
 			wl_surface_set_input_region(entry->proxy,none);
 			wl_region_destroy(none);
+			// Windows shows what a driver draws for a window opaque, whatever alpha its pixels hold: a game that never writes alpha
+			// leaves it at zero. The compositor cuts the region to the surface's size.
+			wl_region *whole=wl_compositor_create_region(compositor);
+			wl_region_add(whole,0,0,INT32_MAX,INT32_MAX);
+			wl_surface_set_opaque_region(entry->proxy,whole);
+			wl_region_destroy(whole);
 		}
 		// A host window made again for the root leaves the old role inert.
 		const bool moved=entry->role && (!parent || entry->parent!=parent->serial);
