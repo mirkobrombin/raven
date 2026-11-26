@@ -667,6 +667,21 @@ int raven_entry(void)
 			if (SetEntriesInAclW(1, &revoke, &malformed, &result) != ERROR_INVALID_ACL || result)
 				return 41;
 		}
+		{
+			/* The ANSI form names its trustee in the program's code page. */
+			EXPLICIT_ACCESSA named;
+			PACL granted = NULL;
+			clear(&named, sizeof(named));
+			named.grfAccessPermissions = GENERIC_ALL;
+			named.grfAccessMode = SET_ACCESS;
+			named.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+			named.Trustee.ptstrName = (LPSTR)"Everyone";
+			if (SetEntriesInAclA(1, &named, NULL, &granted) != ERROR_SUCCESS || !granted || granted->AceCount != 1 ||
+				!GetAce(granted, 0, (void **)&ace) || ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE || ace->Mask != GENERIC_ALL ||
+				!EqualSid(&ace->SidStart, world))
+				return 285;
+			LocalFree(granted);
+		}
 		LocalFree(original);
 		LocalFree(reduced);
 		LocalFree(empty);
