@@ -1919,7 +1919,14 @@ void NativeThreads::host_main(GuestThread &thread)
 		adopted = false;
 	}
 	if (adopted) {
-		// A thread created suspended starts once it is resumed: until then nothing puts it in line.
+		// A thread created suspended starts once it is resumed: until then nothing puts it in line. Any other goes in line itself: the
+		// thread that made it gives the runtime up at once, often before this host thread is there to be found (see wake_ready), and it
+		// would wait for the next look at every thread, milliseconds later.
+		{
+			std::lock_guard lock(gate);
+			if (thread.state == GuestThread::State::ready && thread.suspend_count == 0 && !thread.paused)
+				enqueue(thread);
+		}
 		wait_turn(thread, std::nullopt);
 		try {
 			install(thread);
