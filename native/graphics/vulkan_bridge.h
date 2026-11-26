@@ -205,11 +205,15 @@ private:
 	// Surfaces over windows another process owns. These and the hidden ones below have no host surface: the bridge answers their
 	// surface and swapchain commands.
 	std::set<uint64_t> foreign_surfaces;
-	// Surfaces over windows whose top-level window was hidden when they were made: they present nowhere, as on Windows, until the
-	// window is shown and they are lost, so the program makes them again over what the host shows.
+	// Surfaces over windows whose top-level window was hidden when they were made: they present nowhere, as on Windows. Once the window
+	// is shown the same surface gets the host surface that shows it (reveal_surface), and a swap chain made while it was hidden is out
+	// of date, so the program makes another over what the host shows.
 	std::set<uint64_t> hidden_surfaces;
 	bool own_surface(uint64_t surface) const { return foreign_surfaces.contains(surface) || hidden_surfaces.contains(surface); }
-	bool hidden_surface_lost(uint64_t surface) const;
+	void reveal_surface(uint64_t surface);
+	bool hidden_swapchain_shown(uint64_t swapchain) const;
+	// The host surface over the host window that shows a guest window, made from the instance the marshal has in context.
+	VkResult create_host_surface(Marshal &marshal, const HostSurface &host, VkSurfaceKHR &surface);
 	struct ForeignSwapchain;
 	std::map<uint64_t, std::shared_ptr<ForeignSwapchain>> foreign_swapchains;
 	bool dispatch_own(std::string_view name);

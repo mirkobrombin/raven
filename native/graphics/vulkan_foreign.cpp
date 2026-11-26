@@ -297,6 +297,7 @@ bool VulkanBridge::dispatch_own(std::string_view name)
 	};
 	if (name=="vkGetPhysicalDeviceSurfaceSupportKHR") {
 		const auto a=process.api_arguments(4);
+		reveal_surface(a[2]);
 		if (!own_surface(a[2])) return false;
 		Marshal marshal(*this,process);
 		marshal.check_writable(a[3],4);
@@ -306,6 +307,7 @@ bool VulkanBridge::dispatch_own(std::string_view name)
 	}
 	if (name=="vkGetPhysicalDeviceSurfaceFormatsKHR" || name=="vkGetPhysicalDeviceSurfacePresentModesKHR") {
 		const auto a=process.api_arguments(4);
+		reveal_surface(a[1]);
 		if (!own_surface(a[1])) return false;
 		Marshal marshal(*this,process);
 		marshal.context(H::VkPhysicalDevice,a[0]);
@@ -330,6 +332,7 @@ bool VulkanBridge::dispatch_own(std::string_view name)
 	if (name=="vkGetPhysicalDeviceSurfaceCapabilities2KHR" || name=="vkGetPhysicalDeviceSurfaceFormats2KHR") {
 		const auto a=process.api_arguments(name=="vkGetPhysicalDeviceSurfaceFormats2KHR" ? 4 : 3);
 		// VkPhysicalDeviceSurfaceInfo2KHR: sType, pNext, then the surface.
+		reveal_surface(load<uint64_t>(a[1]+16));
 		if (!own_surface(load<uint64_t>(a[1]+16))) return false;
 		process.return_api(static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR));
 		return true;

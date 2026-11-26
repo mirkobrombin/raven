@@ -125,19 +125,7 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		const bool own = !host && (hidden || foreign_window_size(window));
 		if (host) {
-			VkResult created = VK_ERROR_INITIALIZATION_FAILED;
-			if (host->platform == HostPlatform::wayland) {
-				VkWaylandSurfaceCreateInfoKHR info{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR, nullptr, 0,
-					static_cast<struct wl_display *>(host->display), static_cast<struct wl_surface *>(host->surface)};
-				created = marshal.proc<PFN_vkCreateWaylandSurfaceKHR>("vkCreateWaylandSurfaceKHR")(marshal.host_instance, &info, nullptr, &surface);
-			}
-#ifdef RAVEN_XCB
-			else if (host->platform == HostPlatform::xcb) {
-				VkXcbSurfaceCreateInfoKHR info{VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR, nullptr, 0,
-					static_cast<xcb_connection_t *>(host->display), host->window};
-				created = marshal.proc<PFN_vkCreateXcbSurfaceKHR>("vkCreateXcbSurfaceKHR")(marshal.host_instance, &info, nullptr, &surface);
-			}
-#endif
+			const VkResult created = create_host_surface(marshal, *host, surface);
 			status = static_cast<uint32_t>(created);
 			const bool shared = std::any_of(surface_windows.begin(), surface_windows.end(), [window](const auto &entry) { return entry.second == window; });
 			if (created != VK_SUCCESS && surface_source.release && !shared) {
@@ -228,6 +216,7 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 		};
 		uint64_t result = 0;
 		if (name == "vkGetPhysicalDeviceSurfaceCapabilitiesKHR") {
+			reveal_surface(arguments[1]);
 			if (!own_surface(arguments[1]))
 				result = cmd_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(*this, marshal, arguments, floating);
 			else if (window_size(arguments[1]))
@@ -244,6 +233,7 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 				}
 		} else if (name == "vkCreateSwapchainKHR") {
 			const auto surface=load<uint64_t>(arguments[1]+24);
+			reveal_surface(surface);
 			if (own_surface(surface)) {
 				marshal.context(H::VkDevice,arguments[0]);
 				marshal.require_null(arguments[2]); marshal.check_writable(arguments[3],8);
@@ -265,9 +255,9 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 			const auto field = [&](size_t place, uint64_t offset) { return second ? load<uint64_t>(arguments[1] + offset) : arguments[place]; };
 			const auto swapchain = field(1, 16);
 			const auto swap=swapchains.find(swapchain);
-			const bool lost=swap!=swapchains.end() && ((foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface)) ||
-				hidden_surface_lost(swap->second.surface));
-			result = lost ? static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR) : swapchain_stale(swapchain) ? static_cast<uint32_t>(VK_ERROR_OUT_OF_DATE_KHR)
+			const bool lost=swap!=swapchains.end() && foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface);
+			result = lost ? static_cast<uint32_t>(VK_ERROR_SURFACE_LOST_KHR)
+				: swapchain_stale(swapchain) || hidden_swapchain_shown(swapchain) ? static_cast<uint32_t>(VK_ERROR_OUT_OF_DATE_KHR)
 				: foreign_swapchains.contains(swapchain) ? static_cast<uint32_t>(acquire_own_image(marshal, arguments[0], swapchain, field(2, 24),
 					field(3, 32), field(4, 40), second ? arguments[2] : arguments[5]))
 				: second ? cmd_vkAcquireNextImage2KHR(*this, marshal, arguments, floating) : cmd_vkAcquireNextImageKHR(*this, marshal, arguments, floating);
@@ -298,10 +288,11 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 				for (uint32_t index = 0; index < info->swapchainCount; ++index) {
 					const auto token=tokens[index];
 					const auto swap=swapchains.find(token);
-					const bool lost=swap!=swapchains.end() && ((foreign_surfaces.contains(swap->second.surface) &&
-						!window_size(swap->second.surface)) || hidden_surface_lost(swap->second.surface));
-					if (lost || swapchain_stale(token)) {
-						const auto status=lost ? VK_ERROR_SURFACE_LOST_KHR : VK_SUBOPTIMAL_KHR;
+					const bool lost=swap!=swapchains.end() && foreign_surfaces.contains(swap->second.surface) && !window_size(swap->second.surface);
+					// A swap chain made while its window was hidden took its frame for nobody; the next is for the host window.
+					const bool shown=hidden_swapchain_shown(token);
+					if (lost || shown || swapchain_stale(token)) {
+						const auto status=lost ? VK_ERROR_SURFACE_LOST_KHR : shown ? VK_ERROR_OUT_OF_DATE_KHR : VK_SUBOPTIMAL_KHR;
 						result=static_cast<uint32_t>(status);
 						if (info->pResults) info->pResults[index]=status;
 					}
@@ -375,10 +366,61 @@ bool VulkanBridge::dispatch_hand(std::string_view name)
 	return false;
 }
 
-bool VulkanBridge::hidden_surface_lost(uint64_t surface) const
+VkResult VulkanBridge::create_host_surface(Marshal &marshal, const HostSurface &host, VkSurfaceKHR &surface)
+{
+	if (host.platform == HostPlatform::wayland) {
+		VkWaylandSurfaceCreateInfoKHR info{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR, nullptr, 0,
+			static_cast<struct wl_display *>(host.display), static_cast<struct wl_surface *>(host.surface)};
+		return marshal.proc<PFN_vkCreateWaylandSurfaceKHR>("vkCreateWaylandSurfaceKHR")(marshal.host_instance, &info, nullptr, &surface);
+	}
+#ifdef RAVEN_XCB
+	if (host.platform == HostPlatform::xcb) {
+		VkXcbSurfaceCreateInfoKHR info{VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR, nullptr, 0,
+			static_cast<xcb_connection_t *>(host.display), host.window};
+		return marshal.proc<PFN_vkCreateXcbSurfaceKHR>("vkCreateXcbSurfaceKHR")(marshal.host_instance, &info, nullptr, &surface);
+	}
+#endif
+	return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+// A surface made over a hidden window takes the host surface of its window once the window shows: the token the program holds stays,
+// as a Windows surface outlives the window being hidden or shown. Until the host has a surface for the window, it stays the bridge's.
+void VulkanBridge::reveal_surface(uint64_t surface)
 {
 	const auto window = surface_windows.find(surface);
-	return hidden_surfaces.contains(surface) && window != surface_windows.end() && surface_source.shown && surface_source.shown(window->second);
+	const auto instance = surface_instances.find(surface);
+	const auto token = generic.find(surface);
+	if (!hidden_surfaces.contains(surface) || window == surface_windows.end() || instance == surface_instances.end() || token == generic.end() ||
+		!surface_source.shown || !surface_source.shown(window->second) || !surface_source.create)
+		return;
+	const auto host = surface_source.create(window->second);
+	if (!host)
+		return;
+	Marshal marshal(*this, process);
+	marshal.context(H::VkInstance, instance->second);
+	VkSurfaceKHR made = VK_NULL_HANDLE;
+	if (create_host_surface(marshal, *host, made) != VK_SUCCESS) {
+		const bool shared = std::any_of(surface_windows.begin(), surface_windows.end(), [&](const auto &entry) {
+			return entry.first != surface && entry.second == window->second && !hidden_surfaces.contains(entry.first);
+		});
+		if (surface_source.release && !shared)
+			surface_source.release(window->second);
+		return;
+	}
+	token->second.host = reinterpret_cast<uint64_t>(made);
+	hidden_surfaces.erase(surface);
+}
+
+// A swap chain the bridge keeps over a surface that was hidden when it was made: out of date once the window shows.
+bool VulkanBridge::hidden_swapchain_shown(uint64_t swapchain) const
+{
+	const auto found = swapchains.find(swapchain);
+	if (found == swapchains.end() || !foreign_swapchains.contains(swapchain) || foreign_surfaces.contains(found->second.surface))
+		return false;
+	if (!hidden_surfaces.contains(found->second.surface))
+		return true;
+	const auto window = surface_windows.find(found->second.surface);
+	return window != surface_windows.end() && surface_source.shown && surface_source.shown(window->second);
 }
 
 bool VulkanBridge::swapchain_stale(uint64_t swapchain) const
