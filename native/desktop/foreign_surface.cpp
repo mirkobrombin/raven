@@ -20,6 +20,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include <fcntl.h>
@@ -438,6 +439,24 @@ void ForeignSurface::publish_frame()
 // The changes of the windows directory counted so far, and whether a host thread counts them (see foreign_frames_stamp): not yet, being
 // started, yes, or it cannot. The count is odd while the thread reads the kernel's events.
 static std::atomic<uint64_t> foreign_changes{2};
+
+// Whether the kernel's events tell of a change the stamp stands for: a message posted or sent, a reply, a frame drawn. That a window
+// appears, goes, or changes its traits is news to no reader of the stamp, which a program's own windows would otherwise bring each time
+// one opens or closes: every thread of it would look at the whole directory again at its next look at its queue.
+static bool foreign_news(const char *events, size_t size)
+{
+	for (size_t at = 0; at + sizeof(inotify_event) <= size;) {
+		const auto *event = reinterpret_cast<const inotify_event *>(events + at);
+		at += sizeof(inotify_event) + event->len;
+		if (event->mask & IN_Q_OVERFLOW || !event->len)
+			return true;
+		const std::string_view name(event->name);
+		const auto kind = name.size() > 9 && name[8] == '.' ? name.substr(9, 6) : std::string_view{};
+		if (kind != "window" && kind != "traits")
+			return true;
+	}
+	return false;
+}
 enum class ForeignWatch { none, starting, running, unavailable };
 static std::atomic<ForeignWatch> foreign_watch{ForeignWatch::none};
 static std::atomic<int> foreign_watch_descriptor{-1};
@@ -487,11 +506,18 @@ static bool watching_foreign_changes()
 				}
 				foreign_changes.fetch_add(1, std::memory_order_release);
 				const auto taken = ::read(watch, events, sizeof events);
-				foreign_changes.fetch_add(1, std::memory_order_release);
+				// Events that are no news leave the count as it was, so the stamp is the same once the thread read them.
+				const bool news = taken <= 0 || foreign_news(events, size_t(taken));
+				if (news)
+					foreign_changes.fetch_add(1, std::memory_order_release);
+				else
+					foreign_changes.fetch_sub(1, std::memory_order_release);
 				if (taken < 0 && errno == EINTR)
 					continue;
 				if (taken <= 0)
 					break;
+				if (!news)
+					continue;
 				// A thread waiting for its messages looks at them again at once, not at its next look up to 20 ms later.
 				if (const auto *nudge = foreign_nudge.load(std::memory_order_acquire))
 					(*nudge)();
