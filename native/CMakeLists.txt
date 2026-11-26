@@ -1612,6 +1612,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${FRAME_RESTORE_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c -lkernel32 -luser32 -lgdi32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/frame_restore_client.c VERBATIM)
             add_custom_target(frame_restore_fixture ALL DEPENDS ${FRAME_RESTORE_FIXTURE})
+            set(FULL_SCREEN_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/full-screen.exe)
+            add_custom_command(OUTPUT ${FULL_SCREEN_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4800000,--no-insert-timestamp
+                    -o ${FULL_SCREEN_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/full_screen_client.c -lkernel32 -luser32 -lgdi32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/full_screen_client.c VERBATIM)
+            add_custom_target(full_screen_fixture ALL DEPENDS ${FULL_SCREEN_FIXTURE})
+            add_executable(full_screen_test desktop/full_screen_test.cpp)
+            target_link_libraries(full_screen_test PRIVATE raven_cpu)
+            add_dependencies(full_screen_test full_screen_fixture raven-bootstrap)
+            add_test(NAME native_full_screen COMMAND full_screen_test $<TARGET_FILE:raven-bootstrap> ${FULL_SCREEN_FIXTURE})
+            set_tests_properties(native_full_screen PROPERTIES TIMEOUT 30)
             set(MAXIMIZED_BORDER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/maximized-border.exe)
             add_custom_command(OUTPUT ${MAXIMIZED_BORDER_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector

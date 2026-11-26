@@ -103,6 +103,9 @@ struct DesktopPresentation {
 	// from the connection, nothing left to send. Peeks beside the turn ask it under the shared desktop lock, several at once; absent,
 	// every peek polls itself.
 	std::function<bool()> quiet;
+	// Requests or leaves full screen for a top-level window, as Windows shows one whose rectangle covers the screen unless it is
+	// maximized with its caption. Said before the window's frame.
+	std::function<void(uint64_t,bool)> full_screen;
 };
 
 }
