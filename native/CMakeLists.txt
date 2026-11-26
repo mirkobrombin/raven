@@ -4417,8 +4417,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         # empty a moment before.
                         --beside SetWindowLongPtrW,SetPropW,RemovePropW,InvalidateRect,GetDC,ReleaseDC
                         --guest GetAncestor,GetPropW,GetFocus,GetMenuItemCount,GetMenuItemID,GetSubMenu,PtInRegion,RectInRegion,GetRgnBox,GetObjectW,GetWindowRect,GetClientRect,GetWindowLongPtrW,SendMessageW,PeekMessageW
-                        # A peek at a queue of its own that needs nothing of the whole desktop leaves the other threads' calls running.
-                        --whole-at-most PeekMessageW:3
+                        # A peek at a queue of its own that needs nothing of the whole desktop leaves the other threads' calls running: only the
+                        # process's first takes it whole, to take in what other processes posted before.
+                        --whole-at-most PeekMessageW:1
                         # Calls that reach no window or drawing, made as threads start and end, leave the desktop to the threads' calls.
                         --unlocked GetStdHandle,lstrcatW,DisableThreadLibraryCalls,GetCommandLineW)
                     set_tests_properties(native_parallel_desktop_x${width} PROPERTIES TIMEOUT 120

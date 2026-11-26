@@ -63,11 +63,13 @@ int main()
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		const auto window=raven::window_handle_base()+1;
 		const auto before=settled_stamp();
-		// A window of the program's own opening, changing and closing is no news to it.
+		// A window of the program's own opening, changing and closing is no news to it, not even for the moment the watch has not read
+		// the change yet: each thread looking at its queue then would take the desktop whole.
 		raven::publish_window(window,4,2);
 		raven::publish_window_traits(window,{});
+		check(raven::foreign_frames_stamp()==before,"a window of the program's own unsettled the stamp");
 		raven::withdraw_window(window);
-		check(settled_stamp()==before,"a window of the program's own moved the stamp");
+		check(raven::foreign_frames_stamp()==before && settled_stamp()==before,"a window of the program's own moved the stamp");
 		// A message posted to a window is.
 		const bool posted=raven::post_foreign_message(foreign,0x400,0,0);
 		stop_other();
