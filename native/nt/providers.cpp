@@ -172,6 +172,16 @@ const std::vector<FastStub> &fast_stubs()
 
 // Calls that only read and write guest memory: their stubs leave the arguments in a block the runtime shares with the guest and spin until
 // the answer is there, so the guest never stops for them.
+// The Vulkan calls besides vkCmd* that a guest thread makes beside the turn.
+static bool queue_beside_api(std::string_view name)
+{
+	static constexpr std::array<std::string_view, 16> calls{"vkBeginCommandBuffer", "vkEndCommandBuffer", "vkResetCommandBuffer",
+		"vkResetCommandPool", "vkQueueSubmit", "vkQueueSubmit2", "vkQueueSubmit2KHR", "vkWaitSemaphores", "vkWaitSemaphoresKHR",
+		"vkWaitForFences", "vkGetFenceStatus", "vkResetFences", "vkGetSemaphoreCounterValue", "vkGetSemaphoreCounterValueKHR",
+		"vkSignalSemaphore", "vkSignalSemaphoreKHR"};
+	return std::find(calls.begin(), calls.end(), name) != calls.end();
+}
+
 static bool served_api(std::string_view module, std::string_view name)
 {
 	if (module == "kernel32.dll" || module == "kernelbase.dll")
@@ -201,7 +211,7 @@ static bool served_api(std::string_view module, std::string_view name)
 		"vkQueueSubmit2", "vkQueueSubmit2KHR", "vkResetCommandBuffer", "vkResetCommandPool", "vkResetDescriptorPool", "vkResetFences",
 		"vkSignalSemaphore", "vkSignalSemaphoreKHR", "vkUpdateDescriptorSetWithTemplate", "vkUpdateDescriptorSetWithTemplateKHR",
 		"vkUpdateDescriptorSets"};
-	return name.starts_with("vkCmd") || std::find(recording.begin(), recording.end(), name) != recording.end();
+	return name.starts_with("vkCmd") || queue_beside_api(name) || std::find(recording.begin(), recording.end(), name) != recording.end();
 }
 
 // Calls of subsystems that keep their own lock: with a host thread for each guest thread they are answered beside the turn, by the
@@ -304,9 +314,10 @@ static bool beside_api(std::string_view module, std::string_view name)
 		return desktop_beside_api(name) || name == "FillRect" || name == "FrameRect";
 	if (module == "gdi32.dll" || module == "msimg32.dll")
 		return gdi_beside_api(name);
-	// Recording into a command buffer, which only reads the Vulkan bridge's tables.
+	// Recording into a command buffer, submitting it and waiting for the work, which only read the Vulkan bridge's tables (see
+	// VulkanBridge::dispatch_beside).
 	if (module == "vulkan-1.dll")
-		return name.starts_with("vkCmd") || name == "vkBeginCommandBuffer" || name == "vkEndCommandBuffer" || name == "vkResetCommandBuffer";
+		return name.starts_with("vkCmd") || queue_beside_api(name);
 	static constexpr std::array<std::string_view, 13> files{"ReadFile", "WriteFile", "SetFilePointer", "SetFilePointerEx", "GetFileSize",
 		"GetFileSizeEx", "VirtualQuery", "VirtualAlloc", "VirtualFree", "VirtualProtect", "CreateEventW", "CloseHandle",
 		"GetFileAttributesW"};
@@ -3079,6 +3090,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		HostWait waiting;
 		return threads.block(std::move(ready), wake);
 	}, [&threads] { threads.nudge(); });
+	vulkan.set_called_away([] { return NativeThreads::called_away_beside(); });
 #endif
 	// The block the served stubs of every runtime provider share, and which stub serves which name.
 	const int served_file = memfd_create("raven-served-calls", MFD_CLOEXEC);

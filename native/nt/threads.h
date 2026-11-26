@@ -233,6 +233,9 @@ public:
 	// The same for a word of the runtime's own that a waker changes from `seen` and wakes (wake_word): true when it changed, false at
 	// `until`, nothing for the usual way.
 	std::optional<bool> wait_word_beside(std::atomic<uint32_t> &word, uint32_t seen, std::optional<std::chrono::steady_clock::time_point> until);
+	// Whether the guest thread whose host thread answers a call beside the turn is wanted elsewhere meanwhile (a job, an APC, its end),
+	// so that a wait it does outside the waits above gives up and goes the usual way.
+	static bool called_away_beside();
 	// Takes what a wait on shared objects can take, or sleeps on their words until one changes, the thread is called away or `until`
 	// passes: an index, 0x102, or raven_wait_interrupted.
 	static uint32_t sleep_on_words(GuestThread &me, const std::vector<std::shared_ptr<KernelObject>> &held,

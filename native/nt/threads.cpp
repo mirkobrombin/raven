@@ -1446,6 +1446,12 @@ std::optional<bool> NativeThreads::wait_word_beside(std::atomic<uint32_t> &word,
 	return *result == 0;
 }
 
+bool NativeThreads::called_away_beside()
+{
+	const GuestThread *const me = parked_here;
+	return me && me->calls.load(std::memory_order_acquire) != me->calls_seen;
+}
+
 // Waits outside the runtime on the host thread of a guest that spins in its stub, as wait_beside does: `sleep` takes or sleeps until
 // something changes, the thread is called away (it then runs the job it was called for and sleeps again) or the time given passes.
 std::optional<uint32_t> NativeThreads::sleep_beside(std::optional<std::chrono::steady_clock::time_point> until,

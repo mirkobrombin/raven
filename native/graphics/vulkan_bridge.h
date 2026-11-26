@@ -39,10 +39,13 @@ public:
 	static std::span<const std::string_view> exports();
 	// A call in the runtime's turn: it holds the bridge's tables alone.
 	bool dispatch(std::string_view name);
-	// A recording call a guest thread makes beside the turn (vkCmd*, and beginning, ending and resetting a command buffer): it only reads
-	// the tables, which it shares with the other threads recording at once. The program keeps each command buffer to one thread at a
-	// time, as Vulkan asks of it.
+	// A call a guest thread makes beside the turn: recording (vkCmd*, and beginning, ending and resetting a command buffer or its pool),
+	// submitting and the waits on fences and semaphores. It only reads the tables, which it shares with the other threads that call at
+	// once; the program keeps each command buffer, pool and queue to one thread at a time, as Vulkan asks of it, and the guest's view of
+	// mapped memory has a lock of its own (see coherence). A wait blocks the calling thread alone, and gives up when `called_away` says the
+	// thread is wanted elsewhere: it throws, and the call goes the usual way.
 	bool dispatch_beside(std::string_view name);
+	void set_called_away(std::function<bool()> check) { called_away = std::move(check); }
 	// The host display and surface over a local window. Foreign windows present through shared pixels instead.
 	struct SurfaceSource {
 		std::function<std::optional<HostSurface>(uint64_t window)> create;
@@ -60,16 +63,22 @@ public:
 	// Brings the guest's view of mapped memory and the driver's in line before and after work the driver does.
 	void synchronize_to_device(uint64_t device)
 	{
+		const std::lock_guard hold(coherence);
 		shadow_to_device(device);
 		// Work the device runs can write any of its memory.
 		for (auto &[token, memory] : memories)
 			if (memory.device == device)
 				memory.fresh = false;
 	}
-	void synchronize_from_device(uint64_t device) { shadow_from_device(device, cached_memory); }
+	void synchronize_from_device(uint64_t device)
+	{
+		const std::lock_guard hold(coherence);
+		shadow_from_device(device, cached_memory);
+	}
 	// Reading a timeline semaphore makes the work behind a new value visible; the same value again brings nothing the last read did not.
 	void synchronize_after_counter(uint64_t device, uint64_t semaphore, uint64_t value)
 	{
+		const std::lock_guard hold(coherence);
 		const auto [seen, fresh] = counters.try_emplace(semaphore, value);
 		if (!fresh && seen->second == value)
 			return;
@@ -99,25 +108,38 @@ private:
 	// while they share the tables.
 	std::shared_mutex tables;
 	static inline thread_local unsigned tables_held = 0;
-	// Gives up the calling thread's sole hold of the tables over a scope, however deep, and takes it back after.
+	// Whether the calling thread shares the tables, as a call beside the turn does.
+	static inline thread_local bool tables_shared = false;
+	// Gives up the calling thread's hold of the tables, sole or shared, over a scope, however deep, and takes it back after.
 	struct TablesRelease {
 		VulkanBridge &bridge;
 		const unsigned held;
-		explicit TablesRelease(VulkanBridge &owner) : bridge(owner), held(std::exchange(tables_held, 0u))
+		const bool shared;
+		explicit TablesRelease(VulkanBridge &owner) : bridge(owner), held(std::exchange(tables_held, 0u)), shared(std::exchange(tables_shared, false))
 		{
 			if (held)
 				bridge.tables.unlock();
+			if (shared)
+				bridge.tables.unlock_shared();
 		}
 		~TablesRelease()
 		{
 			if (held)
 				bridge.tables.lock();
+			if (shared)
+				bridge.tables.lock_shared();
 			tables_held = held;
+			tables_shared = shared;
 		}
 		TablesRelease(const TablesRelease &) = delete;
 		TablesRelease &operator=(const TablesRelease &) = delete;
 	};
 	std::mutex procedures_lock;
+	// The shadows of mapped memory and the counters last read, which threads that submit or wait beside the turn bring in line at once.
+	std::mutex coherence;
+	// Set on a host thread while it answers a call beside the turn: its driver calls run there, without the scheduler.
+	static inline thread_local bool beside_call = false;
+	std::function<bool()> called_away;
 	bool dispatch_tables(std::string_view name);
 	Park park;
 	std::function<void()> wake;
