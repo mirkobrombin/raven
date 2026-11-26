@@ -3741,6 +3741,28 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         --beside vkCmdFillBuffer,vkCmdPipelineBarrier,vkBeginCommandBuffer,vkEndCommandBuffer,vkResetCommandBuffer)
                     set_tests_properties(native_parallel_vulkan_x64 PROPERTIES TIMEOUT 120 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
                         ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-vulkan-x64-prefix")
+                    # A thread that submits and signals a timeline semaphore and one that waits for it, as Direct3D over Vulkan hands its
+                    # frames on: submitting, resetting the pool and the waits are answered beside the turn too.
+                    add_custom_command(OUTPUT ${VULKAN_FIXTURES}/parallel-vulkan-queue64.exe
+                        COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -mno-stack-arg-probe
+                            -idirafter ${Vulkan_INCLUDE_DIRS}
+                            -Wl,--entry,raven_entry,--image-base,0x18e000000
+                            -o ${VULKAN_FIXTURES}/parallel-vulkan-queue64.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/parallel_vulkan_queue_client.c
+                            ${VULKAN_FIXTURES}/vulkan.a -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/parallel_vulkan_queue_client.c ${VULKAN_FIXTURES}/vulkan.a VERBATIM)
+                    add_custom_target(vulkan_parallel_queue64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/parallel-vulkan-queue64.exe)
+                    add_dependencies(vulkan_parallel_queue64_fixture vulkan_import64)
+                    add_test(NAME native_parallel_vulkan_queue_x64 COMMAND ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/scripts/native-parallel-cycles.py $<TARGET_FILE:raven> ${VULKAN_FIXTURES}/parallel-vulkan-queue64.exe
+                        --beside vkQueueSubmit,vkWaitSemaphores,vkResetCommandPool,vkGetSemaphoreCounterValue)
+                    set_tests_properties(native_parallel_vulkan_queue_x64 PROPERTIES TIMEOUT 120 FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                        ENVIRONMENT "RAVEN_PARALLEL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/parallel-vulkan-queue-x64-prefix")
+                    # In a serial process the waits reach the bridge through their served stubs, which cannot block there.
+                    add_test(NAME native_vulkan_queue_serial_x64 COMMAND raven --run-process --execution=native --timeout-ms=60000
+                        ${VULKAN_FIXTURES}/parallel-vulkan-queue64.exe)
+                    set_tests_properties(native_vulkan_queue_serial_x64 PROPERTIES TIMEOUT 90 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        FAIL_REGULAR_EXPRESSION "Validation Error:|VUID-"
+                        ENVIRONMENT "RAVEN_SERIAL=1;RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/vulkan-queue-serial-x64-prefix")
                 endif()
                 add_custom_target(vulkan_hidden_present64_fixture ALL DEPENDS ${VULKAN_FIXTURES}/hidden-present64.exe)
                 add_dependencies(vulkan_hidden_present64_fixture vulkan_import64)
