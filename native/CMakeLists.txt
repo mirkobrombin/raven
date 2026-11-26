@@ -6847,6 +6847,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -lopengl32 -lglu32 -lgdi32 -luser32 -lkernel32
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/opengl_host_client.c VERBATIM)
                 add_custom_target(opengl_host_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/opengl-host.exe)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/opengl-hidden-start.exe
+                    COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-stack-protector
+                        -Wl,--entry,raven_entry,--image-base,0x1fb000000,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/opengl-hidden-start.exe ${PROJECT_SOURCE_DIR}/testdata/native_cpu/opengl_hidden_start_client.c
+                        -lopengl32 -lgdi32 -luser32 -lkernel32
+                    DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_cpu/opengl_hidden_start_client.c VERBATIM)
+                add_custom_target(opengl_hidden_start_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/opengl-hidden-start.exe)
                 if(RAVEN_X11_TESTS)
                     foreach(mode opengl opengl-maximized)
                         add_test(NAME native_x11_${mode} COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11.py
@@ -6883,6 +6890,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/opengl-host.exe native
                         ${CMAKE_CURRENT_BINARY_DIR}/opengl-host-maximized maximize)
                     set_tests_properties(native_opengl_host_maximized PROPERTIES TIMEOUT 60 ENVIRONMENT RAVEN_PARALLEL=1)
+                    # A context made current and swapped before its window is shown, then the window shown and maximized: its frames reach
+                    # the screen (opengl_hidden_start_client.c).
+                    add_test(NAME native_opengl_hidden_start COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-opengl.py
+                        $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/opengl-hidden-start.exe native
+                        ${CMAKE_CURRENT_BINARY_DIR}/opengl-hidden-start covers)
+                    set_tests_properties(native_opengl_hidden_start PROPERTIES TIMEOUT 60)
                     foreach(array color texture delete attribute vao context)
                         add_test(NAME native_opengl_array_${array} COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-opengl.py
                             $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/opengl-host.exe native
