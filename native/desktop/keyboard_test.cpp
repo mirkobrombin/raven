@@ -52,6 +52,19 @@ int main()
 		check(small.decode(34).code==71,"small keymap differs");
 		const auto beyond=small.decode(200),before=small.decode(0);
 		check(!beyond.code && !beyond.character && !before.code && !before.character,"key outside the keymap differs");
+		// A virtual keyboard (wtype, an on-screen or remote keyboard) binds the keys it types from the first keycode on, under names of its
+		// own: the scan code a game reads is the one the symbol has on a keyboard, not the one its keycode would have had.
+		raven::KeyboardMap typed;
+		typed.load("xkb_keymap { xkb_keycodes { minimum = 8; maximum = 13; <K1> = 9; <K2> = 10; <K3> = 11; <K4> = 12; <K5> = 13; }; "
+			"xkb_types { type \"ONE_LEVEL\" { modifiers=none; level_name[Level1]=\"Any\"; }; }; xkb_compatibility { }; "
+			"xkb_symbols { key <K1> { [ w ] }; key <K2> { [ 1 ] }; key <K3> { [ space ] }; key <K4> { [ Escape ] }; key <K5> { [ eacute ] }; }; };");
+		const uint32_t typed_codes[]{'W','1',' ',27},typed_scans[]{17,2,57,1};
+		for (uint32_t index=0;index<4;++index) {
+			const auto key=typed.decode(index+1);
+			check(key.code==typed_codes[index] && key.scan==typed_scans[index],"virtual keyboard scan code differs");
+		}
+		// A symbol no keyboard key gives keeps the keycode's own scan code.
+		check(typed.decode(5).scan==5,"virtual keyboard fallback scan code differs");
 	} catch (const std::exception &error) { std::cerr<<error.what()<<'\n'; return 1; }
 	return 0;
 }
