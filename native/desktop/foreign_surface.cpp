@@ -55,6 +55,19 @@ const std::filesystem::path &window_directory()
 	return directory;
 }
 
+// The records of the windows themselves (.window, .traits) live in a directory of their own inside it: a watch of the directory sees
+// only what the processes send and post each other and the pixels they draw, not each window a process makes, moves or retitles.
+const std::filesystem::path &window_records()
+{
+	static const std::filesystem::path directory = [] {
+		auto made = window_directory() / "windows";
+		std::error_code error;
+		std::filesystem::create_directories(made, error);
+		return made;
+	}();
+	return directory;
+}
+
 std::string window_name(uint64_t window)
 {
 	char text[17];
@@ -72,27 +85,31 @@ uint64_t window_handle_base()
 }
 
 // Removes what processes that ended without withdrawing their windows left: a window whose owner is gone, and pixels without a window.
-static void sweep_windows(const std::filesystem::path &directory)
+static void sweep_windows(const std::filesystem::path &directory, const std::filesystem::path &records)
 {
 	std::error_code error;
 	std::vector<std::filesystem::path> stale;
+	for (const auto &entry : std::filesystem::directory_iterator(records, error)) {
+		const auto path = entry.path();
+		if (path.extension() != ".window")
+			continue;
+		std::ifstream input(path);
+		long owner = 0;
+		if ((input >> owner) && owner > 0 && !(::kill(pid_t(owner), 0) != 0 && errno == ESRCH))
+			continue;
+		stale.push_back(path);
+		stale.push_back(std::filesystem::path(path).replace_extension(".traits"));
+		stale.push_back(directory / path.filename().replace_extension(".pixels"));
+	}
 	for (const auto &entry : std::filesystem::directory_iterator(directory, error)) {
 		const auto path = entry.path();
-		if (path.extension() == ".window") {
-			std::ifstream input(path);
-			long owner = 0;
-			if ((input >> owner) && owner > 0 && !(::kill(pid_t(owner), 0) != 0 && errno == ESRCH))
-				continue;
-			stale.push_back(path);
-			stale.push_back(std::filesystem::path(path).replace_extension(".pixels"));
-			stale.push_back(std::filesystem::path(path).replace_extension(".traits"));
-		} else if (path.extension() == ".pixels" && !std::filesystem::exists(std::filesystem::path(path).replace_extension(".window"), error)) {
+		const auto record = records / (path.filename().string().substr(0, 8) + ".window");
+		if (path.extension() == ".pixels" && !std::filesystem::exists(record, error)) {
 			stale.push_back(path);
 		} else if (path.extension() == ".post" || path.extension() == ".posting" || path.extension() == ".send" || path.extension() == ".sending" ||
 			path.extension() == ".reply" || path.extension() == ".replying") {
 			// Messages for a window no longer there, or half written by a poster that ended.
-			const auto window = path.filename().string().substr(0, 8);
-			if (!std::filesystem::exists(directory / (window + ".window"), error))
+			if (!std::filesystem::exists(record, error))
 				stale.push_back(path);
 		}
 	}
@@ -126,9 +143,9 @@ void publish_window(uint64_t window, uint32_t width, uint32_t height)
 	// or draw into them.
 	if (sandbox().trusted())
 		return;
-	const auto directory = window_directory();
+	const auto &directory = window_records();
 	static std::once_flag swept;
-	std::call_once(swept, [&] { sweep_windows(directory); });
+	std::call_once(swept, [&] { sweep_windows(window_directory(), directory); });
 	const auto final_path = directory / (window_name(window) + ".window");
 	const auto temporary = directory / (window_name(window) + ".window." + std::to_string(::getpid()));
 	{
@@ -142,11 +159,10 @@ void publish_window(uint64_t window, uint32_t width, uint32_t height)
 void withdraw_window(uint64_t window)
 {
 	locked_writes.note();
-	const auto directory = window_directory();
 	std::error_code error;
-	std::filesystem::remove(directory / (window_name(window) + ".window"), error);
-	std::filesystem::remove(directory / (window_name(window) + ".pixels"), error);
-	std::filesystem::remove(directory / (window_name(window) + ".traits"), error);
+	std::filesystem::remove(window_records() / (window_name(window) + ".window"), error);
+	std::filesystem::remove(window_directory() / (window_name(window) + ".pixels"), error);
+	std::filesystem::remove(window_records() / (window_name(window) + ".traits"), error);
 }
 
 void publish_window_traits(uint64_t window, const ForeignWindowTraits &traits)
@@ -154,7 +170,7 @@ void publish_window_traits(uint64_t window, const ForeignWindowTraits &traits)
 	locked_writes.note();
 	if (sandbox().trusted())
 		return;
-	const auto directory = window_directory();
+	const auto &directory = window_records();
 	const auto final_path = directory / (window_name(window) + ".traits");
 	const auto temporary = directory / (window_name(window) + ".traits." + std::to_string(::getpid()));
 	{
@@ -173,7 +189,7 @@ struct ForeignRecord {
 
 static std::optional<ForeignRecord> foreign_record(uint64_t window)
 {
-	std::ifstream input(window_directory() / (window_name(window) + ".window"));
+	std::ifstream input(window_records() / (window_name(window) + ".window"));
 	ForeignRecord record;
 	if (!(input >> record.owner >> record.width >> record.height) || record.owner <= 0 || record.owner == ::getpid())
 		return std::nullopt;
@@ -194,7 +210,7 @@ std::optional<ForeignWindowTraits> foreign_window_traits(uint64_t window)
 {
 	if (!foreign_record(window))
 		return std::nullopt;
-	std::ifstream input(window_directory() / (window_name(window) + ".traits"));
+	std::ifstream input(window_records() / (window_name(window) + ".traits"));
 	ForeignWindowTraits traits;
 	std::string first;
 	if (!std::getline(input, first))
@@ -361,7 +377,7 @@ std::vector<uint64_t> foreign_windows()
 {
 	std::vector<uint64_t> found;
 	std::error_code error;
-	for (const auto &entry : std::filesystem::directory_iterator(window_directory(), error)) {
+	for (const auto &entry : std::filesystem::directory_iterator(window_records(), error)) {
 		const auto path = entry.path();
 		if (path.extension() != ".window")
 			continue;
@@ -441,8 +457,9 @@ void ForeignSurface::publish_frame()
 static std::atomic<uint64_t> foreign_changes{2};
 
 // Whether the kernel's events tell of a change the stamp stands for: a message posted or sent, a reply, a frame drawn. That a window
-// appears, goes, or changes its traits is news to no reader of the stamp, which a program's own windows would otherwise bring each time
-// one opens or closes: every thread of it would look at the whole directory again at its next look at its queue.
+// appears, goes, or changes its traits is news to no reader of the stamp: its records are written in a directory of their own, which
+// the watch does not see, or a program's own windows would bring events each time one opens or closes, and every thread of it would
+// take the desktop whole at its next look at its queue while the watch had not read them yet.
 static bool foreign_news(const char *events, size_t size)
 {
 	for (size_t at = 0; at + sizeof(inotify_event) <= size;) {
@@ -450,9 +467,8 @@ static bool foreign_news(const char *events, size_t size)
 		at += sizeof(inotify_event) + event->len;
 		if (event->mask & IN_Q_OVERFLOW || !event->len)
 			return true;
-		const std::string_view name(event->name);
-		const auto kind = name.size() > 9 && name[8] == '.' ? name.substr(9, 6) : std::string_view{};
-		if (kind != "window" && kind != "traits")
+		// Every file there is a message or pixels; the directory of the window records is made once.
+		if (std::string_view(event->name) != "windows")
 			return true;
 	}
 	return false;
@@ -555,8 +571,10 @@ uint64_t foreign_frames_stamp()
 int foreign_frames_descriptor()
 {
 	static const int descriptor = [] {
+		// A window of another process that appears or goes wakes the thread as its pixels do.
 		const int watch = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-		if (watch >= 0 && ::inotify_add_watch(watch, window_directory().c_str(), IN_CREATE | IN_MOVED_TO | IN_DELETE) < 0) {
+		if (watch >= 0 && (::inotify_add_watch(watch, window_directory().c_str(), IN_CREATE | IN_MOVED_TO | IN_DELETE) < 0 ||
+			::inotify_add_watch(watch, window_records().c_str(), IN_CREATE | IN_MOVED_TO | IN_DELETE) < 0)) {
 			::close(watch);
 			return -1;
 		}

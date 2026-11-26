@@ -2491,6 +2491,9 @@ uint64_t NativeWindows::create(std::span<const uint64_t> args)
 		if (!std::as_const(objects).window(handle)) return 0;
 		if (const auto *created=std::as_const(objects).window(handle)) {
 			const uint32_t width=uint32_t(std::max(created->width,0)),height=uint32_t(std::max(created->height,0));
+			// No other process can send a message to this one before it shows them its first window: the intake of sent messages starts
+			// from the directory as it is now, or the first look of each thread at its queue would need the turn to read it.
+			if (sends_stamp==UINT64_MAX) sends_stamp=foreign_frames_stamp();
 			directory([handle,width,height] { publish_window(handle,width,height); });
 		}
 		publish_traits(handle);
