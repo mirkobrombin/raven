@@ -740,7 +740,8 @@ void register_service_api(ApiRegistry &registry, KernelContext &context, NativeR
 		}
 		const int standard[3] = {0, 1, 2};
 		uint32_t error = 0;
-		const auto child = start_program(context, u"", image, u"", standard, context.environment_block ? context.environment_block() : std::u16string(), nullptr, error);
+		// The command is the one the manager hands out (expanded_image_path), so a service written with %SystemRoot% starts too.
+		const auto child = start_program(context, u"", expanded_image_path(image), u"", standard, context.environment_block ? context.environment_block() : std::u16string(), nullptr, error);
 		if (!child) {
 			call.fail(error ? error : 2);
 			return;

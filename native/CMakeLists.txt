@@ -2177,7 +2177,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             if(RAVEN_WIXL AND installer_compiler)
                 set(fixture ${MSI_FIXTURES}/${installer_arch})
                 add_custom_command(OUTPUT ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/com-marshal.exe ${fixture}/local-server.exe ${fixture}/typelib-marshal.exe ${fixture}/typelib-read.exe ${fixture}/msi-install.exe ${fixture}/msi-patch.exe ${fixture}/msiexec-client.exe
-                    ${fixture}/clicktorun/msi-clicktorun.exe ${fixture}/msi-ui.exe
+                    ${fixture}/clicktorun/msi-clicktorun.exe ${fixture}/msi-ui.exe ${fixture}/msi-service.exe
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${fixture}
                     COMMAND ${RAVEN_WIXL} -a ${installer_arch} -o ${fixture}/basic.msi msi_basic.wxs
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
@@ -2197,6 +2197,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/msiexec-client.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msiexec_client.c -lmsi -lkernel32
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                        -o ${fixture}/msi-service.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_service_client.c -ladvapi32 -lkernel32
+                    COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
                         -o ${fixture}/msi-ui.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_ui_client.c -lmsi -luser32 -ladvapi32 -lkernel32
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${fixture}/clicktorun
                     COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
@@ -2204,9 +2206,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/testdata/native_loader
                     DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/com_marshal_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/local_server_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/typelib_marshal_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/typelib_read_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_basic.wxs ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_payload.txt ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_database_client.c
                         ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_install_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_patch_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msiexec_client.c
-                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_ui_client.c VERBATIM)
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_clicktorun_client.c ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_ui_client.c
+                        ${PROJECT_SOURCE_DIR}/testdata/native_loader/msi_service_client.c VERBATIM)
                 add_custom_target(msi_database_fixture_${installer_arch} ALL DEPENDS ${fixture}/basic.msi ${fixture}/msi-database.exe ${fixture}/local-server.exe ${fixture}/typelib-marshal.exe ${fixture}/typelib-read.exe ${fixture}/msi-install.exe ${fixture}/msi-patch.exe
-                    ${fixture}/msiexec-client.exe ${fixture}/clicktorun/msi-clicktorun.exe ${fixture}/msi-ui.exe)
+                    ${fixture}/msiexec-client.exe ${fixture}/clicktorun/msi-clicktorun.exe ${fixture}/msi-ui.exe ${fixture}/msi-service.exe)
                 # A Click-to-Run product known only from its package manifest: a component's product and the files it publishes by qualifier.
                 add_test(NAME native_msi_clicktorun_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000
                     ${fixture}/clicktorun/msi-clicktorun.exe)
@@ -2695,6 +2698,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_msiexec_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msiexec-client.exe)
                 set_tests_properties(native_msiexec_${installer_arch} PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/msiexec-prefix)
+                # The Windows Installer service started through the service manager, which runs msiexec /V, and stopped again.
+                add_test(NAME native_msi_service_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msi-service.exe)
+                set_tests_properties(native_msi_service_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${fixture}/msi-service-prefix)
             endif()
         endforeach()
         if(RAVEN_INSTALLER32_COMPONENT_DIR AND RAVEN_MINGW32_INSTALLER)

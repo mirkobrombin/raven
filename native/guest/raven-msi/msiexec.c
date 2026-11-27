@@ -5,7 +5,7 @@
 #include <msiquery.h>
 
 /* The installer's command line, as its documentation gives it: /i /x /f /a package, /q levels, /l log, PROPERTY=value.
- * /raven-action is how the engine starts a custom action host. */
+ * /raven-action is how the engine starts a custom action host; /V is the Windows Installer service. */
 
 UINT WINAPI RavenActionHost(const WCHAR *pipe, const WCHAR *library, const WCHAR *entry);
 
@@ -67,6 +67,42 @@ static UINT product_named_by(const WCHAR *package, WCHAR product[39])
 	return status ? ERROR_INSTALL_PACKAGE_INVALID : ERROR_SUCCESS;
 }
 
+/* The Windows Installer service, as the manager starts it with msiexec /V. Packages are installed by the engine in the program
+ * that asks for them, so the service has nothing to serve: it is there for the installers that start it and wait until it runs
+ * before they go on. It stops when told to, and on its own once idle for ten minutes, as the service of Windows does. */
+static SERVICE_STATUS_HANDLE service_handle;
+static HANDLE service_stop;
+
+static void report(DWORD state)
+{
+	const DWORD accepted = state == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0;
+	SERVICE_STATUS status = {SERVICE_WIN32_OWN_PROCESS, state, accepted};
+	SetServiceStatus(service_handle, &status);
+}
+
+static DWORD WINAPI service_control(DWORD control, DWORD type, void *data, void *context)
+{
+	(void)type, (void)data, (void)context;
+	if (control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN) {
+		report(SERVICE_STOP_PENDING);
+		SetEvent(service_stop);
+		return NO_ERROR;
+	}
+	return control == SERVICE_CONTROL_INTERROGATE ? NO_ERROR : ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+static void WINAPI service_main(DWORD count, WCHAR **arguments)
+{
+	(void)count, (void)arguments;
+	service_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+	service_handle = RegisterServiceCtrlHandlerExW(L"MSIServer", service_control, NULL);
+	if (!service_handle)
+		return;
+	report(SERVICE_RUNNING);
+	WaitForSingleObject(service_stop, 10 * 60 * 1000);
+	report(SERVICE_STOPPED);
+}
+
 void WINAPI raven_msiexec(void)
 {
 	const WCHAR *at = GetCommandLineW();
@@ -87,6 +123,10 @@ void WINAPI raven_msiexec(void)
 		if (argument[0] != '/' && argument[0] != '-') {
 			append(&properties, &room, start, at);
 			continue;
+		}
+		if (!lstrcmpiW(argument, L"/V") || !lstrcmpiW(argument, L"-V")) {
+			SERVICE_TABLE_ENTRYW table[] = {{(WCHAR *)L"MSIServer", service_main}, {NULL, NULL}};
+			ExitProcess(StartServiceCtrlDispatcherW(table) ? ERROR_SUCCESS : GetLastError());
 		}
 		if (!lstrcmpiW(argument, L"/raven-action")) {
 			static WCHAR pipe[512], library[32768], entry[512];

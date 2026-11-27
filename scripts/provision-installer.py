@@ -323,7 +323,7 @@ def main():
     # msiexec.exe: the command line of the installer, which installers and the shell start for packages.
     run([triple + "-gcc", "-O2", "-std=gnu11", "-fno-builtin", "-nostdlib", "-mwindows", "-D_WIN32_WINNT=0x601", "-DUNICODE",
          f"-Wl,--entry,{'_raven_msiexec@0' if x86 else 'raven_msiexec'},--no-insert-timestamp", "-I" + str(own_msi),
-         own_msi / "msiexec.c", repo / "native/guest/raven-comctl32/crt.c", "-o", output / "msiexec.exe", "-L" + str(output), "-lmsi", "-luser32", "-lkernel32", "-lgcc"])
+         own_msi / "msiexec.c", repo / "native/guest/raven-comctl32/crt.c", "-o", output / "msiexec.exe", "-L" + str(output), "-lmsi", "-luser32", "-ladvapi32", "-lkernel32", "-lgcc"])
     # msxml3.dll: the XML document object model installers and their bootstrappers parse their manifests with, on libxml2 and libxslt.
     # libxml2's configuration: its own one for Windows compilers, and the version header with the features listed above. Files are
     # examined with the C runtime's plain stat, for libxslt as well.
