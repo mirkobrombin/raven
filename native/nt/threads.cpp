@@ -7,6 +7,7 @@
 #include "cpu/call_cycles.h"
 #include "desktop_lock.h"
 #include "handle_channel.h"
+#include "child_process.h"
 
 #include <cstdlib>
 #include <map>
@@ -434,6 +435,8 @@ GuestThread::~GuestThread()
 {
 	if (end_object)
 		raven_waits_close(kernel_waits(), end_object);
+	if (const int signal = calls_signal.load(); signal >= 0)
+		::close(signal);
 }
 
 uint32_t NativeThreads::end_object(GuestThread &thread)
@@ -2183,6 +2186,65 @@ uint32_t NativeThreads::wait_in_line(const std::vector<uint32_t> &table, bool al
 	return raven_waits_leave(kernel_waits(), me.id);
 }
 
+// Counts a call away and wakes a wait outside that sleeps on the count or on the thread's descriptor. The count is raised before the
+// descriptor is read, and a wait makes the descriptor before it reads the count, so one of the two always sees the other.
+static void signal_calls(GuestThread &thread)
+{
+	thread.calls.fetch_add(1);
+	::syscall(SYS_futex, &thread.calls, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+	if (const int signal = thread.calls_signal.load(); signal >= 0) {
+		const uint64_t one = 1;
+		[[maybe_unused]] const auto written = ::write(signal, &one, sizeof one);
+	}
+}
+
+bool NativeThreads::wait_descriptor(int descriptor, short events, std::optional<std::chrono::steady_clock::time_point> wake)
+{
+	const auto ready = [descriptor, events] {
+		pollfd entry{descriptor, events, 0};
+		return ::poll(&entry, 1, 0) != 0;
+	};
+	if (ready())
+		return true;
+	if (!waits_outside()) {
+		HostWait waiting;
+		return block(ready, wake) && ready();
+	}
+	auto &self = *running;
+	if (self.calls_signal.load() < 0)
+		self.calls_signal.store(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK));
+	const int signal = self.calls_signal.load();
+	constexpr uint32_t timed_out = 0x102;
+	for (;;) {
+		const uint32_t result = wait_outside([&](std::optional<std::chrono::steady_clock::time_point> limit) {
+			for (;;) {
+				const uint32_t calls = self.calls.load();
+				if (calls != self.calls_seen) {
+					self.calls_seen = calls;
+					return raven_wait_interrupted;
+				}
+				pollfd entries[]{{descriptor, events, 0}, {signal, POLLIN, 0}};
+				// Without a descriptor of its own the thread looks at its calls every 20 ms.
+				timespec left{0, 20'000'000};
+				if (limit) {
+					const auto now = std::chrono::steady_clock::now();
+					if (now >= *limit)
+						return timed_out;
+					const auto rest = std::chrono::duration_cast<std::chrono::nanoseconds>(*limit - now).count();
+					if (signal >= 0 || rest < 20'000'000)
+						left = {time_t(rest / 1000000000), long(rest % 1000000000)};
+				}
+				if (::ppoll(entries, signal >= 0 ? 2 : 1, limit || signal < 0 ? &left : nullptr, nullptr) > 0 && entries[0].revents)
+					return 0U;
+				uint64_t drained = 0;
+				while (signal >= 0 && ::read(signal, &drained, sizeof drained) > 0) {}
+			}
+		}, wake);
+		if (result != raven_wait_interrupted)
+			return result == 0;
+	}
+}
+
 uint32_t NativeThreads::wait_outside(const std::function<uint32_t(std::optional<std::chrono::steady_clock::time_point>)> &wait,
 	std::optional<std::chrono::steady_clock::time_point> wake)
 {
@@ -2245,15 +2307,13 @@ void NativeThreads::queue_apc(GuestThread &thread, GuestThread::Apc apc)
 	thread.apcs.push_back(std::move(apc));
 	raven_waits_queue_apc(kernel_waits(), thread.id);
 	// A wait on shared objects has no table to tell: it looks at the APC in the runtime, and waits again if it is not alertable.
-	thread.calls.fetch_add(1);
-	::syscall(SYS_futex, &thread.calls, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+	signal_calls(thread);
 }
 
 void NativeThreads::call_away(GuestThread &thread)
 {
 	raven_waits_interrupt(kernel_waits(), thread.id);
-	thread.calls.fetch_add(1);
-	::syscall(SYS_futex, &thread.calls, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+	signal_calls(thread);
 }
 
 void NativeThreads::threaded_unwind()

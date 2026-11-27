@@ -108,6 +108,9 @@ struct GuestThread {
 	// NativeThreads::call_away); `calls_seen` is how many of those the thread has answered.
 	std::atomic<uint32_t> calls{0};
 	uint32_t calls_seen = 0;
+	// An eventfd that is signaled with `calls`, for a wait outside on a host descriptor, which cannot sleep on a word (see
+	// NativeThreads::wait_descriptor); made by the first such wait.
+	std::atomic<int> calls_signal{-1};
 	// The objects of the process's table that wait outside is for, which the thread that sets one of them looks at (see hand_over_to),
 	// and how many turns the thread has taken in the runtime.
 	std::vector<uint32_t> waits_on;
@@ -262,6 +265,9 @@ public:
 	// wait's result, WAIT_TIMEOUT when it was not granted by `wake`, or raven_wait_unlined when it cannot wait that way: with a host
 	// thread for each guest thread (see wait_outside), on the kernel's objects, or inside another such wait of the same thread.
 	uint32_t wait_in_line(const std::vector<uint32_t> &table, bool all, bool alertable, std::optional<std::chrono::steady_clock::time_point> wake);
+	// Waits until a host descriptor has `events` (poll's), as a read of a pipe the host gave the process does, without holding the
+	// runtime: outside it with a host thread for each guest thread, otherwise in block. False when `wake` passed first.
+	bool wait_descriptor(int descriptor, short events, std::optional<std::chrono::steady_clock::time_point> wake);
 	// Names the table's objects `self` goes to wait outside for, until it withdraws them. A setter reads them under the gate (see
 	// hand_over_to), so they change only there.
 	void announce(GuestThread &self, std::span<const uint32_t> objects);

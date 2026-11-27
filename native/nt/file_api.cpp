@@ -613,8 +613,13 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		}
 		if (transfer_pipe(context, call, true) || read_console_file(context, call))
 			return;
-		// The standard handles inherited from the host read straight from their descriptors.
+		// The standard handles inherited from the host read straight from their descriptors. A pipe or a socket waits for its data with
+		// the runtime given up, as the program's other threads go on meanwhile.
 		if (!file_of(call[0])) {
+			struct stat kind{};
+			if (const int descriptor = objects.descriptor(call[0]);
+				descriptor >= 0 && !::fstat(descriptor, &kind) && (S_ISFIFO(kind.st_mode) || S_ISSOCK(kind.st_mode)))
+				context.threads.wait_descriptor(descriptor, POLLIN, std::nullopt);
 			std::vector<uint8_t> buffer(std::min<uint32_t>(call.u32(2), 1 << 20));
 			const auto result = objects.read_file(call[0], buffer);
 			if (!result.status && !call[4]) {
