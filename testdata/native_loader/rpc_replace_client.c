@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <rpc.h>
+#include <rpcasync.h>
 #include "rpc_replace.h"
 
 /* How a server stub frees what it unmarshalled. A manager may free what an [in, out] pointer points to and hand back a block of its
@@ -43,13 +44,37 @@ void server_replace_name(handle_t binding, named *item)
 		lstrcpyW(item->name, L"replaced");
 }
 
-static int names_seen;
+static int names_seen, attributes_seen;
+
+/* What the server learns of a call it serves, as the EA app's services check who calls them: the local transport, the client's
+ * process (this one), its locality, the procedure (take_name is the second) and the interface. */
+static int same_uuid(const UUID *a, const UUID *b)
+{
+	const unsigned char *left = (const unsigned char *)a, *right = (const unsigned char *)b;
+	for (int at = 0; at < (int)sizeof(UUID); ++at)
+		if (left[at] != right[at])
+			return 0;
+	return 1;
+}
+
+static void check_attributes(void)
+{
+	static const UUID called = {0x5b8f3c2e, 0x7a41, 0x4d6e, {0x9c, 0x13, 0x2f, 0x0b, 0x8e, 0x6a, 0x4d, 0x71}};
+	RPC_CALL_ATTRIBUTES_V2_W attributes = {0};
+	attributes.Version = 2;
+	attributes.Flags = 0x10 | 0x20; /* RPC_QUERY_CLIENT_PID, RPC_QUERY_IS_CLIENT_LOCAL */
+	if (RpcServerInqCallAttributesW(NULL, &attributes) == RPC_S_OK && attributes.ProtocolSequence == 3 &&
+		attributes.IsClientLocal == rcclLocal && (DWORD)(ULONG_PTR)attributes.ClientPID == GetCurrentProcessId() &&
+		attributes.OpNum == 1 && same_uuid(&attributes.InterfaceUuid, &called))
+		attributes_seen++;
+}
 
 void server_take_name(handle_t binding, named *item)
 {
 	(void)binding;
 	if (item && item->name && !lstrcmpW(item->name, L"taken"))
 		names_seen++;
+	check_attributes();
 }
 
 void server_take_holder(handle_t binding, holder *item)
@@ -83,6 +108,10 @@ int raven_entry(void)
 		take_name(binding, &item);
 	}
 	if (names_seen != 8) return 8;
+	if (attributes_seen != 8) return 50;
+	RPC_CALL_ATTRIBUTES_V2_W outside = {0};
+	outside.Version = 2;
+	if (RpcServerInqCallAttributesW(NULL, &outside) != RPC_S_NO_CALL_ACTIVE) return 51;
 	for (int round = 0; round < 8; round++) {
 		named inner = {(wchar_t *)L"held"};
 		holder item = {&inner};

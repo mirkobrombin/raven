@@ -267,6 +267,8 @@ RpcRaiseException
 RpcRevertToSelf
 RpcRevertToSelfEx
 RpcServerInqBindings
+RpcServerInqCallAttributesA
+RpcServerInqCallAttributesW
 RpcServerInqDefaultPrincNameA
 RpcServerInqDefaultPrincNameW
 RpcServerListen

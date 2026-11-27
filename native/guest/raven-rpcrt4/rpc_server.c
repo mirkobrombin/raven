@@ -84,6 +84,9 @@ typedef struct connection_state
 	} contexts[MAX_CONTEXTS];
 	INT context_count;
 	WCHAR *protseq, *endpoint;
+	// The call being served: its procedure and its interface, for RpcServerInqCallAttributes.
+	USHORT opnum;
+	UUID called;
 } connection_state;
 
 #pragma pack(push, 1)
@@ -245,6 +248,8 @@ static BOOL handle_call(connection_state *state, BYTE *data, ULONG length, ULONG
 	state->binding.request = data;
 	state->binding.request_size = length;
 	message.ProcNum = opnum;
+	state->opnum = opnum;
+	state->called = abstract->SyntaxGUID;
 	message.TransferSyntax = (RPC_SYNTAX_IDENTIFIER *)&ndr_syntax;
 	message.RpcInterfaceInformation = spec;
 	message.ManagerEpv = manager;
@@ -803,6 +808,89 @@ RPC_STATUS RPC_ENTRY I_RpcBindingInqLocalClientPID(RPC_BINDING_HANDLE handle, UL
 		return RPC_S_INVALID_BINDING;
 	*pid = client;
 	return RPC_S_OK;
+}
+
+// What a server knows of the call it is serving: version 1 has the authentication, 2 adds the transport, the client's process, its
+// locality, the procedure and the interface, and 3 the client's identifier, which a local call has none of. A principal name asked
+// for is the empty name of the local transport, which vouches for its client by its process; a buffer too small for it is told the
+// size with ERROR_MORE_DATA.
+
+// The flags and transports of RpcServerInqCallAttributes, as rpcasync.h of the Windows SDK gives them; mingw-w64 has only some.
+#ifndef RPC_QUERY_SERVER_PRINCIPAL_NAME
+#define RPC_QUERY_SERVER_PRINCIPAL_NAME 0x02
+#endif
+#ifndef RPC_QUERY_CLIENT_PRINCIPAL_NAME
+#define RPC_QUERY_CLIENT_PRINCIPAL_NAME 0x04
+#endif
+#ifndef RPC_QUERY_CALL_LOCAL_ADDRESS
+#define RPC_QUERY_CALL_LOCAL_ADDRESS 0x08
+#endif
+#ifndef RPC_QUERY_NO_AUTH_REQUIRED
+#define RPC_QUERY_NO_AUTH_REQUIRED 0x40
+#endif
+#ifndef RPC_PROTSEQ_LRPC
+#define RPC_PROTSEQ_TCP 0x1
+#define RPC_PROTSEQ_NMP 0x2
+#define RPC_PROTSEQ_LRPC 0x3
+#endif
+
+RPC_STATUS RPC_ENTRY RpcServerInqCallAttributesW(RPC_BINDING_HANDLE handle, void *attributes)
+{
+	RPC_CALL_ATTRIBUTES_V2_W *out = attributes;
+	if (!out || out->Version < 1 || out->Version > 3)
+		return RPC_S_INVALID_ARG;
+	rpc_binding *binding = rpc_binding_of(handle ? handle : I_RpcGetCurrentCallHandle());
+	if (!binding)
+		return RPC_S_NO_CALL_ACTIVE;
+	if (!binding->server)
+		return RPC_S_INVALID_BINDING;
+	connection_state *state = CONTAINING_RECORD(binding, connection_state, binding);
+	const BOOL local = !lstrcmpW(binding->protseq, L"ncalrpc");
+	if (!local && !(out->Flags & RPC_QUERY_NO_AUTH_REQUIRED) && (out->Flags & (RPC_QUERY_SERVER_PRINCIPAL_NAME | RPC_QUERY_CLIENT_PRINCIPAL_NAME)))
+		return RPC_S_BINDING_HAS_NO_AUTH;
+	RPC_STATUS status = RPC_S_OK;
+	if (out->Flags & RPC_QUERY_SERVER_PRINCIPAL_NAME) {
+		if (out->ServerPrincipalNameBufferLength >= sizeof(WCHAR) && out->ServerPrincipalName)
+			out->ServerPrincipalName[0] = 0;
+		else
+			status = ERROR_MORE_DATA;
+		out->ServerPrincipalNameBufferLength = sizeof(WCHAR);
+	}
+	if (out->Flags & RPC_QUERY_CLIENT_PRINCIPAL_NAME) {
+		if (out->ClientPrincipalNameBufferLength >= sizeof(WCHAR) && out->ClientPrincipalName)
+			out->ClientPrincipalName[0] = 0;
+		else
+			status = ERROR_MORE_DATA;
+		out->ClientPrincipalNameBufferLength = sizeof(WCHAR);
+	}
+	out->AuthenticationLevel = local ? RPC_C_AUTHN_LEVEL_PKT_PRIVACY : RPC_C_AUTHN_LEVEL_NONE;
+	out->AuthenticationService = local ? RPC_C_AUTHN_WINNT : RPC_C_AUTHN_NONE;
+	out->NullSession = FALSE;
+	if (out->Version >= 2) {
+		ULONG client = 0;
+		out->KernelMode = FALSE;
+		out->ProtocolSequence = local ? RPC_PROTSEQ_LRPC : !lstrcmpW(binding->protseq, L"ncacn_np") ? RPC_PROTSEQ_NMP : RPC_PROTSEQ_TCP;
+		out->IsClientLocal = local ? rcclLocal : rcclClientUnknownLocality;
+		out->ClientPID = local && GetNamedPipeClientProcessId(state->stream.pipe, &client) ? (HANDLE)(ULONG_PTR)client : NULL;
+		out->CallStatus = 0;
+		out->CallType = rctNormal;
+		out->OpNum = state->opnum;
+		out->InterfaceUuid = state->called;
+		if (out->Flags & RPC_QUERY_CALL_LOCAL_ADDRESS)
+			out->CallLocalAddress = NULL;
+	}
+	if (out->Version == 3) {
+		// RPC_CALL_ATTRIBUTES_V3: the client identifier's length and buffer follow version 2's fields.
+		struct { RPC_CALL_ATTRIBUTES_V2_W v2; ULONG length; unsigned char *identifier; } *third = attributes;
+		third->length = 0;
+	}
+	return status;
+}
+
+RPC_STATUS RPC_ENTRY RpcServerInqCallAttributesA(RPC_BINDING_HANDLE handle, void *attributes)
+{
+	// The A form differs only in the type of its name buffers, which a local call leaves empty the same way.
+	return RpcServerInqCallAttributesW(handle, attributes);
 }
 
 // Pipes carry their client's identity; a socket arrives from nobody in particular.
