@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Install the Fedora packages one stage of the pipeline needs.
 #
-#   build     compilers, cross compilers and the libraries the README lists
-#   test      the build set plus the compositors, input tools and software Vulkan the display tests drive
+#   build     compilers, cross compilers and the libraries the README lists, and the tools the display tests drive, as the configure
+#             step registers each of those tests only when it finds what it needs
+#   test      the build set plus the drivers and fonts the tests run with
 #   policy    only what the policy and compliance checks run
 #
 # usage: install-fedora.sh build|test|policy
@@ -23,13 +24,15 @@ build=(
     python3-fonttools
     # The configure step registers the Windows Installer, COM and imaging tests only when it finds wixl to make their packages.
     msitools
+    # Display tests start their own headless labwc or Xvfb, and the configure step registers them only when it finds these tools.
+    labwc grim wlrctl wtype wl-clipboard wlr-randr xorg-x11-server-Xvfb openbox xdotool xclip xkeyboard-config python3-pillow
+    # The .NET workflow builds its WinForms window with Mono's mcs, which the configure step looks for.
+    mono-devel
 )
-# Display tests start their own headless labwc or Xvfb when these tools are found, and skip themselves otherwise. Text
-# tests ask for Arial, Times New Roman and Courier New, which Raven serves from the Liberation and DejaVu faces it finds
+# Text tests ask for Arial, Times New Roman and Courier New, which Raven serves from the Liberation and DejaVu faces it finds
 # under /usr/share/fonts.
 test=(
-    "${build[@]}" labwc grim wlrctl wtype wl-clipboard wlr-randr xorg-x11-server-Xvfb openbox xdotool xclip xkeyboard-config
-    mesa-dri-drivers python3-pillow mono-devel
+    "${build[@]}" mesa-dri-drivers
     liberation-sans-fonts liberation-serif-fonts liberation-mono-fonts dejavu-sans-fonts dejavu-serif-fonts
     dejavu-sans-mono-fonts
 )
