@@ -269,12 +269,45 @@ bool run_user_apcs(KernelContext &context)
 	return ran;
 }
 
+namespace {
+
+// The thread object of each guest thread that a handle names, by thread id.
+class ThreadObjects {
+public:
+	void keep(uint32_t id, const std::shared_ptr<ThreadObject> &object)
+	{
+		// The ids of threads whose last handle went are dropped once they are as many as the rest.
+		if (known.size() >= prune_at) {
+			std::erase_if(known, [](const auto &entry) { return entry.second.expired(); });
+			prune_at = std::max<size_t>(64, known.size() * 2);
+		}
+		known[id] = object;
+	}
+
+	std::shared_ptr<ThreadObject> object(const std::shared_ptr<GuestThread> &thread)
+	{
+		if (const auto found = known.find(thread->id); found != known.end())
+			if (auto object = found->second.lock())
+				return object;
+		auto object = std::make_shared<ThreadObject>(thread);
+		keep(thread->id, object);
+		return object;
+	}
+
+private:
+	std::map<uint32_t, std::weak_ptr<ThreadObject>> known;
+	size_t prune_at = 64;
+};
+
+}
+
 void register_thread_api(ApiRegistry &registry, KernelContext &context)
 {
 	auto &threads = context.threads;
 	auto &objects = context.objects;
-	// Thread handles are per object; one thread object per guest thread keeps handle identity stable.
-	auto handle_of = std::make_shared<std::map<uint32_t, std::shared_ptr<ThreadObject>>>();
+	// Thread handles are per object; one thread object per guest thread keeps handle identity stable. The handles keep it, not this:
+	// an ended thread whose last handle is closed is gone, as on Windows, with the end object its waits used.
+	auto handle_of = std::make_shared<ThreadObjects>();
 	const auto thread_from = [&threads, &objects](uint64_t handle) -> std::shared_ptr<GuestThread> {
 		if (handle == current_thread_pseudo || handle == 0xfffffffeULL)
 			return threads.find(threads.current_id());
@@ -772,7 +805,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(8);
 			return;
 		}
-		(*handle_of)[thread->id] = object;
+		handle_of->keep(thread->id, object);
 		if (call[5]) call.store<uint32_t>(call[5], thread->id);
 		call.ret(made.value);
 	});
@@ -1389,9 +1422,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 			call.fail(87);
 			return;
 		}
-		auto &object = (*handle_of)[thread->id];
-		if (!object)
-			object = std::make_shared<ThreadObject>(thread);
+		const auto object = handle_of->object(thread);
 		const auto made = objects.add_object(object);
 		if (!made.status) {
 			objects.set_access(made.value, thread_access(call.u32(0)));
@@ -1430,9 +1461,7 @@ void register_thread_api(ApiRegistry &registry, KernelContext &context)
 				call.ret(0xc0000022U);
 				return;
 			}
-			auto &object = (*handle_of)[thread->id];
-			if (!object)
-				object = std::make_shared<ThreadObject>(thread);
+			const auto object = handle_of->object(thread);
 			const auto made = objects.add_object(object);
 			if (!made.status) {
 				objects.set_access(made.value, thread_access(call.u32(1)));

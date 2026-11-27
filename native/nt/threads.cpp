@@ -198,9 +198,10 @@ std::vector<uint64_t> NativeThreads::thread_blocks() const
 
 std::shared_ptr<GuestThread> NativeThreads::find(uint32_t id) const
 {
+	// An ended thread that no handle names is gone at once, as on Windows, though what it held may be given back only later (see reap).
 	for (const auto &thread : threads)
 		if (thread->id == id)
-			return thread;
+			return thread->state == GuestThread::State::done && !thread->main && thread.use_count() == 1 ? nullptr : thread;
 	return nullptr;
 }
 
@@ -212,8 +213,7 @@ std::shared_ptr<GuestThread> NativeThreads::find_told(uint32_t id)
 
 std::shared_ptr<GuestThread> NativeThreads::create(uint64_t start, uint64_t parameter, uint64_t stack_size, bool suspended)
 {
-	if (process.parallel())
-		reap();
+	reap();
 	// Windows sets no small limit: the .NET thread pool parks a few hundred idle workers at once. The cap only stops a runaway loop.
 	if (live() >= 8192)
 		throw std::runtime_error("native guest thread limit reached");
@@ -521,13 +521,19 @@ void NativeThreads::reap()
 				thread->hosted = false;
 				release_resources(*thread);
 			}
-		return;
-	}
-	for (auto &thread : threads)
-		if (thread->state == GuestThread::State::done && thread.get() != running && thread->host_stack) {
-			thread->host_stack.reset();
-			release_resources(*thread);
-		}
+	} else
+		for (auto &thread : threads)
+			if (thread->state == GuestThread::State::done && thread.get() != running && thread->host_stack) {
+				thread->host_stack.reset();
+				release_resources(*thread);
+			}
+	// An ended thread that gave everything back and that no handle names any more is gone, as on Windows: its id opens nothing, and
+	// what it was waited for with (its end object) is closed. Threads served beside the turn look threads up under the gate.
+	std::lock_guard lock(gate);
+	std::erase_if(threads, [this](const std::shared_ptr<GuestThread> &thread) {
+		return thread->state == GuestThread::State::done && !thread->main && thread.get() != running && !thread->teb && !thread->hosted &&
+			!thread->host_stack && thread.use_count() == 1;
+	});
 }
 
 std::shared_ptr<GuestThread> NativeThreads::pick(bool include_current, bool only_due)

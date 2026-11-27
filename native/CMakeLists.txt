@@ -4116,6 +4116,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         endforeach()
         set_property(TEST native_thread_start_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
         set_property(TEST native_thread_start_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
+        # An ended thread is gone once its last handle is closed, and three thousand of them leave no descriptor behind (thread_end_client.c).
+        raven_kernel_fixture(thread-end thread_end_client.c 0x1fa000000 "-lkernel32")
+        foreach(mode default parallel serial)
+            add_test(NAME native_thread_end_${mode} COMMAND sh -c "ulimit -n 512 && exec \"$0\" \"$@\"" $<TARGET_FILE:raven> --run-process
+                --execution=native --timeout-ms=120000 ${CMAKE_CURRENT_BINARY_DIR}/thread-end.exe)
+            set_tests_properties(native_thread_end_${mode} PROPERTIES TIMEOUT 150 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/thread-end-prefix-${mode}")
+        endforeach()
+        set_property(TEST native_thread_end_parallel APPEND PROPERTY ENVIRONMENT RAVEN_PARALLEL=1)
+        set_property(TEST native_thread_end_serial APPEND PROPERTY ENVIRONMENT RAVEN_SERIAL=1)
         # Suspending a running thread holds it still, nested suspensions count, and a terminated thread ends its waiters with its exit code
         # (parallel_suspend_client.c), with each way of keeping kernel objects.
         raven_kernel_fixture(parallel-suspend parallel_suspend_client.c 0x1ef000000 "-lkernel32")
