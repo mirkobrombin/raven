@@ -5236,6 +5236,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(cert_chain_duplicate_fixture${width} ALL DEPENDS ${cert_chain_duplicate_client})
                     add_test(NAME native_cert_chain_duplicate_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cert_chain_duplicate_client})
                     set_tests_properties(native_cert_chain_duplicate_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    set(cert_system_store_client ${CMAKE_CURRENT_BINARY_DIR}/cert-system-store${width}.exe)
+                    add_custom_command(OUTPUT ${cert_system_store_client}
+                        COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                            -o ${cert_system_store_client} ${LOADER_SOURCES}/cert_system_store_client.c -lcrypt32 -lkernel32
+                        DEPENDS ${LOADER_SOURCES}/cert_system_store_client.c VERBATIM)
+                    add_custom_target(cert_system_store_fixture${width} ALL DEPENDS ${cert_system_store_client})
+                    add_test(NAME native_cert_system_store_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${cert_system_store_client})
+                    set_tests_properties(native_cert_system_store_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     set(slow_start_dir ${CMAKE_CURRENT_BINARY_DIR}/slow-start-${width})
                     add_custom_command(OUTPUT ${slow_start_dir}/client.exe ${slow_start_dir}/slow-start.dll
                         COMMAND ${CMAKE_COMMAND} -E make_directory ${slow_start_dir}

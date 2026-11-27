@@ -590,33 +590,51 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 			objects.close(store);
 	};
 
-	registry.add("CertOpenStore", 5, [&objects](ApiCall &call) {
-		const uint64_t provider = call[0];
+	// A system store by its name: the root store is the host's bundle; every other system store starts empty. Names are matched
+	// regardless of case, as Windows does.
+	const auto system_store = [](std::u16string_view name) {
 		auto store = std::make_shared<CertificateStore>();
-		if (provider == store_provider_system_w || provider == store_provider_system_a) {
-			// The root store is the host's bundle; every other system store starts empty.
-			const auto name = provider == store_provider_system_w ? call.wide(call[4], 64) : [&] {
-				const auto narrow = call.narrow(call[4], 64);
-				return std::u16string(narrow.begin(), narrow.end());
-			}();
-			if (name == u"ROOT" || name == u"root") {
-				if (auto *roots = trust_anchors()) {
-					const auto *objects_list = X509_STORE_get0_objects(roots);
-					for (int index = 0; objects_list && index < sk_X509_OBJECT_num(objects_list); ++index)
-						if (auto *certificate = X509_OBJECT_get0_X509(sk_X509_OBJECT_value(objects_list, index)))
-							store->certificates.push_back(der_of(certificate));
-				}
+		if (equal_fold(name, u"ROOT"))
+			if (auto *roots = trust_anchors()) {
+				const auto *objects_list = X509_STORE_get0_objects(roots);
+				for (int index = 0; objects_list && index < sk_X509_OBJECT_num(objects_list); ++index)
+					if (auto *certificate = X509_OBJECT_get0_X509(sk_X509_OBJECT_value(objects_list, index)))
+						store->certificates.push_back(der_of(certificate));
 			}
-		} else if (provider != store_provider_memory) {
-			call.fail(0x80092009U, 0);
-			return;
-		}
-		const auto made = objects.add_object(store);
+		return store;
+	};
+	const auto narrow_name = [](ApiCall &call, uint64_t address) {
+		const auto narrow = call.narrow(address, 64);
+		return std::u16string(narrow.begin(), narrow.end());
+	};
+	const auto hand_store = [&objects](ApiCall &call, std::shared_ptr<CertificateStore> store) {
+		const auto made = objects.add_object(std::move(store));
 		if (made.status) {
 			call.fail(8, 0);
 			return;
 		}
 		call.ret(made.value);
+	};
+	registry.add("CertOpenStore", 5, [=](ApiCall &call) {
+		const uint64_t provider = call[0];
+		if (provider == store_provider_system_w || provider == store_provider_system_a)
+			hand_store(call, system_store(provider == store_provider_system_w ? call.wide(call[4], 64) : narrow_name(call, call[4])));
+		else if (provider == store_provider_memory)
+			hand_store(call, std::make_shared<CertificateStore>());
+		else
+			call.fail(0x80092009U, 0);
+	});
+	// CertOpenSystemStore opens the current user's system store of that name, as CertOpenStore does with the system provider; the
+	// cryptographic provider handle it takes is not needed.
+	registry.add("CertOpenSystemStoreA", 2, [=](ApiCall &call) {
+		if (!call[1])
+			return call.fail(87, 0);
+		hand_store(call, system_store(narrow_name(call, call[1])));
+	});
+	registry.add("CertOpenSystemStoreW", 2, [=](ApiCall &call) {
+		if (!call[1])
+			return call.fail(87, 0);
+		hand_store(call, system_store(call.wide(call[1], 64)));
 	});
 	registry.add("CertCloseStore", 2, [&objects](ApiCall &call) {
 		if (!objects.object_as<CertificateStore>(call[0])) {

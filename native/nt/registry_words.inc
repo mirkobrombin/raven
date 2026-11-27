@@ -98,6 +98,8 @@
 {"CertGetNameStringW", 6},
 {"CertNameToStrW", 5},
 {"CertOpenStore", 5},
+{"CertOpenSystemStoreA", 2},
+{"CertOpenSystemStoreW", 2},
 {"ChangeClipboardChain", 2},
 {"ChangeServiceConfig2A", 3},
 {"ChangeServiceConfig2W", 3},
