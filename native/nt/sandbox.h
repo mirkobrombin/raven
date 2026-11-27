@@ -71,6 +71,15 @@ public:
 	std::string handler(std::string_view kind) const;
 	// The kinds of address the desktop may hand the prefix, by their "link" lines.
 	std::vector<std::string> links() const;
+	// The printers the prefix shows its programs: a line "printer NAME<tab>TARGET" passes each job sent to NAME, unchanged (as a RAW
+	// job), to TARGET: "file:/folder" saves each job as a file there, "cups:QUEUE" hands it to that Linux print queue as raw data.
+	struct Printer {
+		std::string name, target;
+	};
+	std::vector<Printer> printers() const;
+	// The serial ports the prefix shows its programs: a line "serial COM1<tab>/dev/ttyUSB0" opens that Linux device for COM1. Empty when
+	// no line names the port.
+	std::string serial_device(std::u16string_view port) const;
 	// A desktop entry (x-scheme-handler/SCHEME) for each kind of address the prefix lets the desktop hand it that a program of the prefix
 	// registered (HKEY_CLASSES_ROOT\SCHEME with a "URL Protocol" value), and none for the others. Its command opens the address in the
 	// prefix with rundll32's ShellExec_RunDLL, as ShellExecute opens it there, with this runtime's window system.
@@ -97,6 +106,8 @@ private:
 	mutable std::vector<HostApp> exposed;
 	mutable std::vector<std::pair<std::string, std::string>> handlers;
 	mutable std::vector<std::string> schemes;
+	mutable std::vector<Printer> printer_lines;
+	mutable std::vector<std::pair<std::string, std::string>> serial_lines;
 	mutable timespec configuration_time{};
 	mutable off_t configuration_size = -1;
 };

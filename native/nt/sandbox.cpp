@@ -85,6 +85,8 @@ void Sandbox::refresh() const
 	exposed.clear();
 	handlers.clear();
 	schemes.clear();
+	printer_lines.clear();
+	serial_lines.clear();
 	network_allowed = true;
 	std::ifstream input(file);
 	for (std::string line; std::getline(input, line);) {
@@ -111,6 +113,16 @@ void Sandbox::refresh() const
 			for (auto &character : value)
 				character = char(std::tolower(static_cast<unsigned char>(character)));
 			schemes.push_back(value);
+		}
+		else if (word == "serial") {
+			const auto tab = value.find('\t');
+			if (tab != value.npos && tab && tab + 1 < value.size() && value[tab + 1] == '/')
+				serial_lines.emplace_back(value.substr(0, tab), value.substr(tab + 1));
+		}
+		else if (word == "printer") {
+			const auto tab = value.find('\t');
+			if (tab != value.npos && tab && tab + 1 < value.size())
+				printer_lines.push_back({value.substr(0, tab), value.substr(tab + 1)});
 		}
 		else if (word == "host-app" || word == "handler") {
 			const auto tab = value.find('\t');
@@ -146,6 +158,23 @@ std::vector<std::string> Sandbox::links() const
 	refresh();
 	std::lock_guard guard(configuration_lock());
 	return schemes;
+}
+
+std::string Sandbox::serial_device(std::u16string_view port) const
+{
+	refresh();
+	std::lock_guard guard(configuration_lock());
+	for (const auto &[name, device] : serial_lines)
+		if (equal_fold(from_utf8(name), port))
+			return device;
+	return {};
+}
+
+std::vector<Sandbox::Printer> Sandbox::printers() const
+{
+	refresh();
+	std::lock_guard guard(configuration_lock());
+	return printer_lines;
 }
 
 void Sandbox::publish_links() const
