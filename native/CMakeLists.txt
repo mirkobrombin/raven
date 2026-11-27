@@ -3438,6 +3438,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_ucrt_python_x${width} COMMAND raven --run-process --execution=native ${ucrt_python_client})
                     set_tests_properties(native_ucrt_python_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-python-prefix${width})
+                    # _wstat32i64 and _stat32i64: the 64-bit size with 32-bit times, as Geometry Dash imports it.
+                    set(ucrt_stat_client ${CMAKE_CURRENT_BINARY_DIR}/ucrt-stat${width}.exe)
+                    add_custom_command(OUTPUT ${ucrt_stat_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${ucrt_stat_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_stat_client.c -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_stat_client.c VERBATIM)
+                    add_custom_target(ucrt_stat_fixture${width} ALL DEPENDS ${ucrt_stat_client})
+                    add_test(NAME native_ucrt_stat_x${width} COMMAND raven --run-process --execution=native ${ucrt_stat_client})
+                    set_tests_properties(native_ucrt_stat_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-stat-prefix${width})
                     set(shell_info_client ${CMAKE_CURRENT_BINARY_DIR}/shell-info${width}.exe)
                     add_custom_command(OUTPUT ${shell_info_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
