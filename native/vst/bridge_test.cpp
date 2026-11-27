@@ -88,20 +88,30 @@ int main(int count, char **arguments)
 		IPluginFactory *const factory = get();
 		check(factory, "the module has no factory");
 
+		// A factory of the first version describes its classes without subcategories, as some plugins and the bridges that carry
+		// them give it; a host reads those too.
 		IPluginFactory2 *const second = query<IPluginFactory2>(factory);
-		check(second, "the factory has no IPluginFactory2");
 		TUID processor_id{};
 		bool found = false;
 		for (int32 index = 0; index < factory->countClasses(); ++index) {
 			PClassInfo2 info{};
-			check(second->getClassInfo2(index, &info) == kResultOk, "a class has no description");
+			if (second)
+				check(second->getClassInfo2(index, &info) == kResultOk, "a class has no description");
+			else {
+				PClassInfo first{};
+				check(factory->getClassInfo(index, &first) == kResultOk, "a class has no description");
+				std::memcpy(info.cid, first.cid, sizeof info.cid);
+				std::memcpy(info.category, first.category, sizeof info.category);
+				std::memcpy(info.name, first.name, sizeof info.name);
+			}
 			std::printf("class: %s, %s, %s\n", info.category, info.subCategories, info.name);
 			if (!std::strcmp(info.category, kVstAudioEffectClass)) {
 				std::memcpy(processor_id, info.cid, sizeof processor_id);
 				found = true;
 			}
 		}
-		second->release();
+		if (second)
+			second->release();
 		check(found, "no audio effect class");
 
 		auto *const host = new Host;
