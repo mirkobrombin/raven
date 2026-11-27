@@ -36,6 +36,8 @@ static const GUID core_window_static = {0x4d239005, 0x3c2a, 0x41b1, {0x90, 0x22,
 static const GUID core_window_interop = {0x45d64a29, 0xa63e, 0x4cb6, {0xb4, 0x98, 0x57, 0x81, 0xd2, 0x98, 0xcb, 0x4f}};
 static const GUID launch_activated = {0xfbc93e26, 0xa14a, 0x4b4f, {0x82, 0xb0, 0x33, 0xbe, 0xd9, 0x20, 0xaf, 0x52}};
 static const GUID async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const GUID display_statics = {0xc6a02a6c, 0xd452, 0x44dc, {0xba, 0x07, 0x96, 0xf3, 0xc6, 0xad, 0xf9, 0xd1}};
+static const GUID display4 = {0xc972ce2f, 0x1242, 0x46be, {0xb5, 0x36, 0xe1, 0xaa, 0xfe, 0x9e, 0x7a, 0xcf}};
 static const GUID window_event = {0x272b1ef3, 0xc633, 0x4da5, {0xa2, 0x6c, 0xc6, 0xd0, 0xf5, 0x6b, 0x29, 0xda}};
 
 struct rect {
@@ -290,6 +292,26 @@ static HRESULT WINAPI view_run(object *self)
 	if (METHOD(window, 0, query_method)(window, &core_window_interop, (void **)&interop) != S_OK ||
 		METHOD(interop, 3, HRESULT (WINAPI *)(object *, HWND *))(interop, &handle) != S_OK || !IsWindow(handle) || !IsWindowVisible(handle))
 		fail(42);
+	/* The view's display, as the template's device resources read it: DPI, scale, orientation and the screen's pixels. */
+	object *displays = statics(L"Windows.Graphics.Display.DisplayInformation", &display_statics), *display = NULL, *display_size = NULL;
+	FLOAT dpi = 0;
+	INT32 scale = 0, orientation = 0;
+	UINT32 screen_width = 0;
+	INT64 dpi_token = 0;
+	if (!displays || METHOD(displays, 6, object_method)(displays, &display) != S_OK || !display ||
+		METHOD(display, 11, HRESULT (WINAPI *)(object *, FLOAT *))(display, &dpi) != S_OK || dpi < 96.0f ||
+		METHOD(display, 10, number_method)(display, &scale) != S_OK || scale != (INT32)(dpi * 100 / 96) ||
+		METHOD(display, 6, number_method)(display, &orientation) != S_OK || orientation != 1 ||
+		METHOD(display, 14, event_method)(display, (object *)&on_closed, &dpi_token) != S_OK || !dpi_token ||
+		METHOD(display, 0, query_method)(display, &display4, (void **)&display_size) != S_OK ||
+		METHOD(display_size, 6, HRESULT (WINAPI *)(object *, UINT32 *))(display_size, &screen_width) != S_OK || !screen_width)
+		fail(55);
+	if (display)
+		METHOD(display, 15, HRESULT (WINAPI *)(object *, INT64))(display, dpi_token);
+	if (display_size)
+		METHOD(display_size, 2, release_method)(display_size);
+	if (display)
+		METHOD(display, 2, release_method)(display);
 	struct rect bounds = {0};
 	BYTE shown = 0;
 	if (METHOD(window, 7, HRESULT (WINAPI *)(object *, struct rect *))(window, &bounds) != S_OK || bounds.width <= 0 || bounds.height <= 0 ||
@@ -407,6 +429,10 @@ int raven_entry(void)
 		return 7;
 	WindowsDeleteString(id);
 #endif
+	/* A thread that runs no view has no display. */
+	object *displays = statics(L"Windows.Graphics.Display.DisplayInformation", &display_statics), *display = NULL;
+	if (!displays || METHOD(displays, 6, object_method)(displays, &display) == S_OK || display)
+		return 8;
 	if (METHOD(core, 13, HRESULT (WINAPI *)(object *, object *))(core, &source) != S_OK)
 		return 4;
 	if (failed)

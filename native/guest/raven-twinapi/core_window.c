@@ -13,6 +13,8 @@
  * - Windows.UI.Core.CoreDispatcher: the message loop of the window's thread, which runs work posted to it in order with the window's own
  *   messages, and stops when the window is closed.
  * - Windows.UI.Core.CoreCursor: a system cursor by its type, which the window shows while the pointer is over it; no cursor hides it.
+ * - Windows.Graphics.Display.DisplayInformation: the view's display, in landscape, at the DPI of the view's window, which is the
+ *   monitor's; DpiChanged is raised when the window moves to a monitor of another DPI.
  * - IDXGIFactory2.CreateSwapChainForCoreWindow, when the DXGI the app loads does not make swap chains for core windows: the swap chain is
  *   made for the desktop window behind the core window, with the same description. */
 #include "object.h"
@@ -45,6 +47,11 @@ static const IID iid_activated = {0xcf651713, 0xcd08, 0x4fd8, {0xb6, 0x97, 0xa2,
 static const IID iid_launch_activated = {0xfbc93e26, 0xa14a, 0x4b4f, {0x82, 0xb0, 0x33, 0xbe, 0xd9, 0x20, 0xaf, 0x52}};
 static const IID iid_prelaunch_activated = {0x0c44717b, 0x19f7, 0x48d6, {0xb0, 0x46, 0xcf, 0x22, 0x82, 0x6e, 0xaa, 0x74}};
 static const IID iid_view_activated = {0x930cef4b, 0xb829, 0x40fc, {0x88, 0xf4, 0x85, 0x13, 0xe8, 0xa6, 0x47, 0x38}};
+static const IID iid_display_statics = {0xc6a02a6c, 0xd452, 0x44dc, {0xba, 0x07, 0x96, 0xf3, 0xc6, 0xad, 0xf9, 0xd1}};
+static const IID iid_display = {0xbed112ae, 0xadc3, 0x4dc9, {0xae, 0x65, 0x85, 0x1f, 0x4d, 0x7d, 0x47, 0x99}};
+static const IID iid_display2 = {0x4dcd0021, 0xfad1, 0x4b8e, {0x8e, 0xdf, 0x77, 0x58, 0x87, 0xb8, 0xbf, 0x19}};
+static const IID iid_display3 = {0xdb15011d, 0x0f09, 0x4466, {0x8f, 0xf3, 0x11, 0xde, 0x9a, 0x3c, 0x92, 0x9a}};
+static const IID iid_display4 = {0xc972ce2f, 0x1242, 0x46be, {0xb5, 0x36, 0xe1, 0xaa, 0xfe, 0x9e, 0x7a, 0xcf}};
 static const IID iid_dxgi_factory2 = {0x50c83a1c, 0xe072, 0x4c48, {0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0}};
 static const IID iid_async_action = {0x5a648006, 0x843a, 0x4da9, {0x86, 0x5b, 0x9d, 0x26, 0xe5, 0xdf, 0xad, 0x7b}};
 
@@ -376,9 +383,12 @@ struct window {
 		exited, moved, pressed, released, touch_hit, wheel, size_changed, visibility;
 };
 
+struct display;
+
 struct view {
 	struct object base;
 	struct window *window;
+	struct display *display;
 	struct handlers activated, hosted_closing;
 };
 
@@ -772,6 +782,7 @@ static BYTE message_button(UINT message, WPARAM wparam)
 }
 
 static void window_activate_view(struct window *self);
+static void display_dpi_changed(void);
 
 static LRESULT CALLBACK window_procedure(HWND handle, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -896,6 +907,13 @@ static LRESULT CALLBACK window_procedure(HWND handle, UINT message, WPARAM wpara
 			return TRUE;
 		}
 		break;
+	case WM_DPICHANGED: {
+		const RECT *suggested = (const RECT *)lparam;
+		SetWindowPos(handle, NULL, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top,
+			SWP_NOZORDER | SWP_NOACTIVATE);
+		display_dpi_changed();
+		return 0;
+	}
 	case WM_CLOSE:
 		DestroyWindow(handle);
 		return 0;
@@ -1397,6 +1415,8 @@ static struct view *view_of(void *iface) { return (struct view *)owner(iface); }
 static void destroy_view(struct object *base)
 {
 	struct view *self = (struct view *)base;
+	if (self->display)
+		release(face_of((struct object *)self->display, 0));
 	if (self->window)
 		release(face_of(&self->window->base, 0));
 	handlers_clear(&self->activated);
@@ -1492,6 +1512,187 @@ HRESULT application_exit(void)
 	}
 	ExitProcess(0);
 }
+
+/* Windows.Graphics.Display.DisplayInformation of the running view. */
+struct display {
+	struct object base;
+	struct handlers orientation, dpi, stereo, color;
+};
+
+static struct handlers contents_invalidated;
+
+static void destroy_display(struct object *base)
+{
+	struct display *self = (struct display *)base;
+	handlers_clear(&self->orientation);
+	handlers_clear(&self->dpi);
+	handlers_clear(&self->stereo);
+	handlers_clear(&self->color);
+}
+
+static struct display *display_of(void *iface) { return (struct display *)owner(iface); }
+
+static HWND display_window(void) { return current_view && current_view->window ? current_view->window->handle : NULL; }
+
+static UINT display_dpi(void)
+{
+	static UINT (WINAPI *dpi_for_window)(HWND);
+	static BOOL looked;
+	if (!looked) {
+		dpi_for_window = (UINT (WINAPI *)(HWND))GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
+		looked = TRUE;
+	}
+	const HWND window = display_window();
+	const UINT dpi = dpi_for_window && window ? dpi_for_window(window) : 96;
+	return dpi ? dpi : 96;
+}
+
+static HRESULT WINAPI display_orientation(void *iface, INT32 *out)
+{
+	if (!out)
+		return E_POINTER;
+	/* DisplayOrientations.Landscape */
+	*out = 1;
+	return S_OK;
+}
+
+static HRESULT WINAPI display_scale(void *iface, INT32 *out)
+{
+	if (!out)
+		return E_POINTER;
+	/* ResolutionScale counts in percent. */
+	*out = (INT32)(display_dpi() * 100 / 96);
+	return S_OK;
+}
+
+static HRESULT WINAPI display_logical_dpi(void *iface, FLOAT *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = (FLOAT)display_dpi();
+	return S_OK;
+}
+
+static HRESULT WINAPI display_raw_pixels_per_view_pixel(void *iface, DOUBLE *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = display_dpi() / 96.0;
+	return S_OK;
+}
+
+static HRESULT WINAPI display_no_stereo(void *iface, boolean *out) { return answer_flag(out, FALSE); }
+
+static HRESULT WINAPI display_color_profile(void *iface, void **out)
+{
+	answer_null(out);
+	return missing("DisplayInformation.GetColorProfileAsync");
+}
+
+/* The display's diagonal is not known: the property is null, as for a display that reports no size. */
+static HRESULT WINAPI display_diagonal(void *iface, void **out) { return answer_null(out); }
+
+static void monitor_size(UINT32 *width, UINT32 *height)
+{
+	MONITORINFO info = {sizeof info};
+	const HWND window = display_window();
+	if (window && GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &info)) {
+		*width = (UINT32)(info.rcMonitor.right - info.rcMonitor.left);
+		*height = (UINT32)(info.rcMonitor.bottom - info.rcMonitor.top);
+	} else {
+		*width = (UINT32)GetSystemMetrics(SM_CXSCREEN);
+		*height = (UINT32)GetSystemMetrics(SM_CYSCREEN);
+	}
+}
+
+static HRESULT WINAPI display_width(void *iface, UINT32 *out)
+{
+	UINT32 height;
+	if (!out)
+		return E_POINTER;
+	monitor_size(out, &height);
+	return S_OK;
+}
+
+static HRESULT WINAPI display_height(void *iface, UINT32 *out)
+{
+	UINT32 width;
+	if (!out)
+		return E_POINTER;
+	monitor_size(&width, out);
+	return S_OK;
+}
+
+#define DISPLAY_EVENT(name) \
+	static HRESULT WINAPI display_add_##name(void *iface, void *handler, INT64 *token) \
+	{ \
+		return handlers_add(&display_of(iface)->name, handler, token); \
+	} \
+	static HRESULT WINAPI display_remove_##name(void *iface, INT64 token) { return handlers_remove(&display_of(iface)->name, token); }
+
+DISPLAY_EVENT(orientation)
+DISPLAY_EVENT(dpi)
+DISPLAY_EVENT(stereo)
+DISPLAY_EVENT(color)
+
+TABLE(display_table, 0, INSPECTABLE, (const void *)display_orientation, (const void *)display_orientation,
+	(const void *)display_add_orientation, (const void *)display_remove_orientation, (const void *)display_scale,
+	(const void *)display_logical_dpi, (const void *)display_logical_dpi, (const void *)display_logical_dpi, (const void *)display_add_dpi,
+	(const void *)display_remove_dpi, (const void *)display_no_stereo, (const void *)display_add_stereo, (const void *)display_remove_stereo,
+	(const void *)display_color_profile, (const void *)display_add_color, (const void *)display_remove_color);
+TABLE(display2_table, 1, INSPECTABLE, (const void *)display_raw_pixels_per_view_pixel);
+TABLE(display3_table, 2, INSPECTABLE, (const void *)display_diagonal);
+TABLE(display4_table, 3, INSPECTABLE, (const void *)display_width, (const void *)display_height);
+static const struct face_iid display_iids[] = {{&iid_display, 0}, {&iid_display2, 1}, {&iid_display3, 2}, {&iid_display4, 3}, {NULL, 0}};
+static const struct kind display_kind = {"DisplayInformation", L"Windows.Graphics.Display.DisplayInformation", display_iids, destroy_display};
+
+static void display_dpi_changed(void)
+{
+	struct display *display = current_view ? current_view->display : NULL;
+	if (!display)
+		return;
+	void *face = face_of(&display->base, 0);
+	reference(face);
+	handlers_raise(&display->dpi, face, NULL);
+	release(face);
+}
+
+/* DisplayInformation.GetForCurrentView: the one object of the view, on the view's thread. */
+static HRESULT WINAPI display_for_view(void *iface, void **out)
+{
+	static const void *const *const tables[] = {display_table.slots, display2_table.slots, display3_table.slots, display4_table.slots};
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!current_view || current_thread != GetCurrentThreadId())
+		return NOT_FOUND;
+	if (!current_view->display && !(current_view->display = make(sizeof(struct display), &display_kind, tables, 4)))
+		return E_OUTOFMEMORY;
+	reference(*out = face_of(&current_view->display->base, 0));
+	return S_OK;
+}
+
+static HRESULT WINAPI display_rotation(void *iface, INT32 *out)
+{
+	if (!out)
+		return E_POINTER;
+	/* DisplayOrientations.None: the app has no preference. */
+	*out = 0;
+	return S_OK;
+}
+
+static HRESULT WINAPI display_set_rotation(void *iface, INT32 value) { return S_OK; }
+
+static HRESULT WINAPI display_add_invalidated(void *iface, void *handler, INT64 *token) { return handlers_add(&contents_invalidated, handler, token); }
+static HRESULT WINAPI display_remove_invalidated(void *iface, INT64 token) { return handlers_remove(&contents_invalidated, token); }
+
+TABLE(display_factory_table, 0, FACTORY);
+TABLE(display_statics_table, 1, INSPECTABLE, (const void *)display_for_view, (const void *)display_rotation, (const void *)display_set_rotation,
+	(const void *)display_add_invalidated, (const void *)display_remove_invalidated);
+static const struct face_iid display_factory_iids[] = {{&iid_factory, 0}, {&iid_display_statics, 1}, {NULL, 0}};
+static const struct kind display_factory_kind = {"DisplayInformation", L"Windows.Graphics.Display.DisplayInformation", display_factory_iids,
+	NULL};
+struct object display_information_class = {{display_factory_table.slots, display_statics_table.slots}, &display_factory_kind, 1};
 
 /* A swap chain for a core window is one for its desktop window. */
 static HRESULT STDMETHODCALLTYPE core_window_swap_chain(IDXGIFactory2 *factory, IUnknown *device, IUnknown *window,

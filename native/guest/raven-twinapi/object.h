@@ -93,6 +93,6 @@ HRESULT WINAPI static_activate(void *iface, IInspectable **out);
 HRESULT application_run(IUnknown *source);
 HRESULT application_view(void **out);
 HRESULT application_exit(void);
-extern struct object core_window_class, core_cursor_class;
+extern struct object core_window_class, core_cursor_class, display_information_class;
 
 #endif
