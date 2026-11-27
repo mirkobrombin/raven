@@ -26,7 +26,7 @@ GPLv3 license applied to every file.
 | SQLite (`winsqlite3.dll`), if bundled | Public domain (SPDX `blessing`); unmodified amalgamation pinned in `scripts/provision-sqlite.py` |
 | Windows Runtime interface declarations | MIT (Microsoft's metadata from windows-rs); `native/guest/raven-web/windows.web.http.h`, `native/guest/raven-winrt/foundation.h` |
 | Windows packaging interface declarations | MIT (Microsoft's metadata from windows-rs); `native/guest/raven-appx/appxpackaging.h` |
-| VST 3 interface headers, compiled into `raven-vsthost.exe` | MIT; Steinberg's pluginterfaces tree pinned in `scripts/provision-vst3.py`, which keeps its LICENSE.txt |
+| VST 3 interface headers, compiled into `raven-vsthost.exe` and `raven-vst.so` | MIT; Steinberg's pluginterfaces tree pinned in `scripts/provision-vst3.py`, which keeps its LICENSE.txt |
 
 The PE guest components run in the supervised Windows process; they are not
 linked or loaded into the Linux host.

@@ -7495,20 +7495,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
             endif()
         endif()
-        # raven-vsthost.exe, the Windows side of the VST 3 bridge, and a plugin to test it with, built when RAVEN_VST3_SDK_DIRECTORY names
-        # the output of scripts/provision-vst3.py, which holds the interface headers.
+        # The VST 3 bridge, built when RAVEN_VST3_SDK_DIRECTORY names the output of scripts/provision-vst3.py, which holds the interface
+        # headers: raven-vsthost.exe, its Windows side; raven-vst.so, the Linux plugin that runs it; a Windows plugin to test them with.
         set(RAVEN_VST3_SDK_DIRECTORY "" CACHE PATH "Directory holding the VST 3 interface headers provisioned by scripts/provision-vst3.py")
         find_program(RAVEN_MINGW64_CXX x86_64-w64-mingw32-g++)
-        if(RAVEN_VST3_SDK_DIRECTORY AND RAVEN_MINGW64_CXX)
+        find_program(RAVEN_DLLTOOL x86_64-w64-mingw32-dlltool)
+        if(RAVEN_VST3_SDK_DIRECTORY AND RAVEN_MINGW64_CXX AND RAVEN_DLLTOOL)
             if(NOT EXISTS "${RAVEN_VST3_SDK_DIRECTORY}/pluginterfaces/base/funknown.h")
                 message(FATAL_ERROR "RAVEN_VST3_SDK_DIRECTORY must be the output of scripts/provision-vst3.py")
             endif()
+            set(vst_source ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost)
             set(vst_interfaces ${RAVEN_VST3_SDK_DIRECTORY}/pluginterfaces/base/funknown.cpp ${RAVEN_VST3_SDK_DIRECTORY}/pluginterfaces/base/coreiids.cpp)
             set(vst_host ${CMAKE_CURRENT_BINARY_DIR}/raven-vsthost.exe)
             add_custom_command(OUTPUT ${vst_host}
+                COMMAND ${RAVEN_DLLTOOL} -d ${vst_source}/ravenhost64.def -l ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-vst64.a
                 COMMAND ${RAVEN_MINGW64_CXX} -std=c++17 -O2 -municode -static -I${RAVEN_VST3_SDK_DIRECTORY} -o ${vst_host}
-                    ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/host.cpp ${vst_interfaces} -lole32
-                DEPENDS ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/host.cpp VERBATIM)
+                    ${vst_source}/host.cpp ${vst_source}/interfaces.cpp ${vst_interfaces} ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-vst64.a -lole32
+                DEPENDS ${vst_source}/host.cpp ${vst_source}/interfaces.cpp ${vst_source}/bridge.h ${vst_source}/bridge_objects.h
+                    ${vst_source}/ravenhost64.def VERBATIM)
             # The plugin as a bundle, the form a host meets most.
             set(vst_bundle ${CMAKE_CURRENT_BINARY_DIR}/vst-fixtures/RavenGain.vst3)
             add_custom_command(OUTPUT ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3
@@ -7517,15 +7521,36 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3 ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp ${vst_interfaces} -lole32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp VERBATIM)
             add_custom_target(vst_bridge ALL DEPENDS ${vst_host} ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3)
+            add_library(raven_vst MODULE vst/plugin.cpp ${vst_source}/interfaces.cpp ${vst_interfaces})
+            target_include_directories(raven_vst PRIVATE ${RAVEN_VST3_SDK_DIRECTORY} ${CMAKE_CURRENT_SOURCE_DIR})
+            set_target_properties(raven_vst PROPERTIES PREFIX "" OUTPUT_NAME raven-vst CXX_VISIBILITY_PRESET hidden)
+            target_compile_options(raven_vst PRIVATE -Wno-format)
+            target_link_libraries(raven_vst PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+            add_executable(vst_bridge_test vst/bridge_test.cpp ${vst_source}/interfaces.cpp ${vst_interfaces})
+            target_include_directories(vst_bridge_test PRIVATE ${RAVEN_VST3_SDK_DIRECTORY} ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_options(vst_bridge_test PRIVATE -Wno-format)
+            target_link_libraries(vst_bridge_test PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+            # The Linux plugin that stands for the test plugin: the module in a bundle of its own, with the settings that name what it runs.
+            set(vst_bridged ${CMAKE_CURRENT_BINARY_DIR}/vst-fixtures/RavenGainBridged.vst3)
+            add_custom_command(TARGET raven_vst POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${vst_bridged}/Contents/x86_64-linux
+                COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:raven_vst> ${vst_bridged}/Contents/x86_64-linux/RavenGainBridged.so VERBATIM)
+            file(GENERATE OUTPUT ${vst_bridged}/Contents/Resources/raven-bridge.conf
+                CONTENT "plugin=${vst_bundle}\nraven=$<TARGET_FILE:raven>\nhost=${vst_host}\n")
         endif()
         # The host and the plugin import the C runtime, which the controls component brings.
-        if(RAVEN_VST3_SDK_DIRECTORY AND RAVEN_MINGW64_CXX AND RAVEN_CONTROLS_COMPONENT_DIR)
+        if(RAVEN_VST3_SDK_DIRECTORY AND RAVEN_MINGW64_CXX AND RAVEN_DLLTOOL AND RAVEN_CONTROLS_COMPONENT_DIR)
             # The plugin is given as the Linux side gives it: a host path granted for reading, by its spelling on Z:.
             string(REPLACE "/" "\\" vst_bundle_windows "Z:${vst_bundle}")
             add_test(NAME native_vst_list COMMAND raven --run-process --execution=native --stdio=inherit --grant-read=${vst_bundle}
                 "--command-line=raven-vsthost.exe --list \"${vst_bundle_windows}\"" ${vst_host})
             set_tests_properties(native_vst_list PROPERTIES TIMEOUT 60
                 PASS_REGULAR_EXPRESSION "52A7E1C30B4D4F219A6E5C8D17F3B2A4\tAudio Module Class\t\tRaven Gain\n52A7E1C30B4D4F219A6E5C8D17F3B2A5\tComponent Controller Class\t\tRaven Gain Controller\n"
+                ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+            # A Linux host loads the bridged plugin, which runs the test plugin under Raven: classes, parameters, states and audio blocks.
+            add_test(NAME native_vst_bridge COMMAND vst_bridge_test ${vst_bridged}/Contents/x86_64-linux/RavenGainBridged.so 500)
+            set_tests_properties(native_vst_bridge PROPERTIES TIMEOUT 60
+                PASS_REGULAR_EXPRESSION "first block: 0.500 0.500\ncontroller gain: 0.250\nblocks: 500.*\nbridge: done"
                 ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
         endif()
         find_program(RAVEN_WINDRES x86_64-w64-mingw32-windres)

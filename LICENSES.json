@@ -563,7 +563,10 @@
         "native/guest/raven-installer/dllmain.c",
         "native/guest/raven-installer/msftedit.c",
         "native/guest/raven-installer/support.c",
+        "native/guest/raven-vsthost/bridge.h",
+        "native/guest/raven-vsthost/bridge_objects.h",
         "native/guest/raven-vsthost/host.cpp",
+        "native/guest/raven-vsthost/interfaces.cpp",
         "native/guest/raven-vsthost/ravenhost64.def"
       ],
       "license": "MIT",
@@ -706,7 +709,7 @@
       "review": "reviewed",
       "revision": "3.8.1_build_84",
       "provenance": "Steinberg's pluginterfaces tree from https://github.com/steinbergmedia/vst3_pluginterfaces (MIT; Copyright (c) 2026, Steinberg Media Technologies GmbH), pinned by tag and checksum in scripts/provision-vst3.py, which keeps the tree's LICENSE.txt beside it",
-      "boundary": "Interface declarations and the identifier and reference counting helpers of funknown.cpp and coreiids.cpp, compiled into the PE guest program raven-vsthost.exe and the plugin fixture of its tests."
+      "boundary": "Interface declarations and the identifier and reference counting helpers of funknown.cpp and coreiids.cpp, compiled into the PE guest program raven-vsthost.exe, the Linux plugin raven-vst.so that runs it, and the programs of their tests."
     },
     {
       "name": "External build inputs",
