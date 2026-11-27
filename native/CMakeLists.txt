@@ -7479,6 +7479,39 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
             endif()
         endif()
+        # raven-vsthost.exe, the Windows side of the VST 3 bridge, and a plugin to test it with, built when RAVEN_VST3_SDK_DIRECTORY names
+        # the output of scripts/provision-vst3.py, which holds the interface headers.
+        set(RAVEN_VST3_SDK_DIRECTORY "" CACHE PATH "Directory holding the VST 3 interface headers provisioned by scripts/provision-vst3.py")
+        find_program(RAVEN_MINGW64_CXX x86_64-w64-mingw32-g++)
+        if(RAVEN_VST3_SDK_DIRECTORY AND RAVEN_MINGW64_CXX)
+            if(NOT EXISTS "${RAVEN_VST3_SDK_DIRECTORY}/pluginterfaces/base/funknown.h")
+                message(FATAL_ERROR "RAVEN_VST3_SDK_DIRECTORY must be the output of scripts/provision-vst3.py")
+            endif()
+            set(vst_interfaces ${RAVEN_VST3_SDK_DIRECTORY}/pluginterfaces/base/funknown.cpp ${RAVEN_VST3_SDK_DIRECTORY}/pluginterfaces/base/coreiids.cpp)
+            set(vst_host ${CMAKE_CURRENT_BINARY_DIR}/raven-vsthost.exe)
+            add_custom_command(OUTPUT ${vst_host}
+                COMMAND ${RAVEN_MINGW64_CXX} -std=c++17 -O2 -municode -static -I${RAVEN_VST3_SDK_DIRECTORY} -o ${vst_host}
+                    ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/host.cpp ${vst_interfaces} -lole32
+                DEPENDS ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/host.cpp VERBATIM)
+            # The plugin as a bundle, the form a host meets most.
+            set(vst_bundle ${CMAKE_CURRENT_BINARY_DIR}/vst-fixtures/RavenGain.vst3)
+            add_custom_command(OUTPUT ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${vst_bundle}/Contents/x86_64-win
+                COMMAND ${RAVEN_MINGW64_CXX} -std=c++17 -O2 -shared -static -I${RAVEN_VST3_SDK_DIRECTORY}
+                    -o ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3 ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp ${vst_interfaces} -lole32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp VERBATIM)
+            add_custom_target(vst_bridge ALL DEPENDS ${vst_host} ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3)
+        endif()
+        # The host and the plugin import the C runtime, which the controls component brings.
+        if(RAVEN_VST3_SDK_DIRECTORY AND RAVEN_MINGW64_CXX AND RAVEN_CONTROLS_COMPONENT_DIR)
+            # The plugin is given as the Linux side gives it: a host path granted for reading, by its spelling on Z:.
+            string(REPLACE "/" "\\" vst_bundle_windows "Z:${vst_bundle}")
+            add_test(NAME native_vst_list COMMAND raven --run-process --execution=native --stdio=inherit --grant-read=${vst_bundle}
+                "--command-line=raven-vsthost.exe --list \"${vst_bundle_windows}\"" ${vst_host})
+            set_tests_properties(native_vst_list PROPERTIES TIMEOUT 60
+                PASS_REGULAR_EXPRESSION "52A7E1C30B4D4F219A6E5C8D17F3B2A4\tAudio Module Class\t\tRaven Gain\n52A7E1C30B4D4F219A6E5C8D17F3B2A5\tComponent Controller Class\t\tRaven Gain Controller\n"
+                ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+        endif()
         find_program(RAVEN_WINDRES x86_64-w64-mingw32-windres)
         find_program(RAVEN_MINGW32 i686-w64-mingw32-gcc)
         find_program(RAVEN_WINDRES32 i686-w64-mingw32-windres)

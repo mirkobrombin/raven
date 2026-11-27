@@ -562,7 +562,8 @@
         "native/guest/raven-installer/README.md",
         "native/guest/raven-installer/dllmain.c",
         "native/guest/raven-installer/msftedit.c",
-        "native/guest/raven-installer/support.c"
+        "native/guest/raven-installer/support.c",
+        "native/guest/raven-vsthost/host.cpp"
       ],
       "license": "MIT",
       "review": "reviewed",
@@ -694,6 +695,17 @@
       "revision": "58217a690d6256ee229044a174de67d72d28bc35",
       "provenance": "Interface identifiers, method order, parameters, structures and error codes from Microsoft's Windows metadata as distributed by https://github.com/microsoft/windows-rs (MIT OR Apache-2.0, used under MIT; Copyright (c) Microsoft Corporation), written by scripts/generate-appx-header.py",
       "boundary": "C declarations compiled into the PE guest component raven-appx.dll and its test. No code."
+    },
+    {
+      "name": "VST 3 interface headers",
+      "cmake_keys": [
+        "RAVEN_VST3_SDK_DIRECTORY"
+      ],
+      "license": "MIT",
+      "review": "reviewed",
+      "revision": "3.8.1_build_84",
+      "provenance": "Steinberg's pluginterfaces tree from https://github.com/steinbergmedia/vst3_pluginterfaces (MIT; Copyright (c) 2026, Steinberg Media Technologies GmbH), pinned by tag and checksum in scripts/provision-vst3.py, which keeps the tree's LICENSE.txt beside it",
+      "boundary": "Interface declarations and the identifier and reference counting helpers of funknown.cpp and coreiids.cpp, compiled into the PE guest program raven-vsthost.exe and the plugin fixture of its tests."
     },
     {
       "name": "External build inputs",

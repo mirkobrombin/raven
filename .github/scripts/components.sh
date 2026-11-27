@@ -29,6 +29,7 @@ case "${1:-}" in
 -DRAVEN_DXVK_PE32_DIR=${components}/graphics/dxvk/pe32
 -DRAVEN_VKD3D_PE64_DIR=${components}/graphics/vkd3d-proton/pe64
 -DRAVEN_ROOT_CERTIFICATE_DIRECTORY=${components}/roots
+-DRAVEN_VST3_SDK_DIRECTORY=${components}/vst3
 -DPNG_LIBRARY_RELEASE=${components}/libpng/install/lib/libpng16.a
 -DPNG_PNG_INCLUDE_DIR=${components}/libpng/install/include
 -DRAVEN_SKIA_SOURCE=${components}/text/skia

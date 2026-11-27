@@ -259,6 +259,9 @@ jobs:
           - component: roots
             arguments: --output
             recipe: scripts/provision-roots.py
+          - component: vst3
+            arguments: --output
+            recipe: scripts/provision-vst3.py
           - component: libpng
             arguments: --output
             recipe: scripts/provision-libpng.py
