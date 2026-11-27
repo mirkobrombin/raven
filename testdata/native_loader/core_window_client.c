@@ -2,9 +2,14 @@
 // view sees, in order, Initialize with its application view, SetWindow with its core window, Load and Run, then Uninitialize. The view's
 // Activated event comes while Run processes events, with the arguments of a launch, and the app activates its window there. Run then
 // checks the window: its handle, bounds and dispatcher, work posted to the dispatcher, keys, characters, the mouse, a resize, and closing.
-// Built with MSIX_VIEW, it is the app of a package and also checks its identifier there. The exit code names the first check that failed.
+// Built with SWAP_CHAIN, it also presents a Direct3D 11 frame through a swap chain made for its core window. Built with MSIX_VIEW, it is the app of a package and also checks its identifier there. The exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#ifdef SWAP_CHAIN
+#define COBJMACROS
+#include <d3d11.h>
+#include <dxgi1_2.h>
+#endif
 
 __declspec(dllimport) HRESULT WINAPI RoInitialize(int type);
 __declspec(dllimport) HRESULT WINAPI RoGetActivationFactory(void *name, const GUID *iid, void **factory);
@@ -290,6 +295,37 @@ static HRESULT WINAPI view_run(object *self)
 	if (METHOD(window, 7, HRESULT (WINAPI *)(object *, struct rect *))(window, &bounds) != S_OK || bounds.width <= 0 || bounds.height <= 0 ||
 		METHOD(window, 17, flag_method)(window, &shown) != S_OK || !shown)
 		fail(43);
+#ifdef SWAP_CHAIN
+	/* As the DirectX template makes its swap chain: flip model, two buffers, the size of the window's bounds. */
+	static const GUID factory2 = {0x50c83a1c, 0xe072, 0x4c48, {0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0}};
+	HMODULE d3d11 = LoadLibraryW(L"d3d11.dll"), dxgi = LoadLibraryW(L"dxgi.dll");
+	PFN_D3D11_CREATE_DEVICE create_device = d3d11 ? (PFN_D3D11_CREATE_DEVICE)(void *)GetProcAddress(d3d11, "D3D11CreateDevice") : NULL;
+	HRESULT (WINAPI *create_factory)(const GUID *, void **) = dxgi ? (HRESULT (WINAPI *)(const GUID *, void **))(void *)GetProcAddress(dxgi,
+		"CreateDXGIFactory1") : NULL;
+	ID3D11Device *device = NULL;
+	IDXGIFactory2 *factory = NULL;
+	IDXGISwapChain1 *chain = NULL;
+	if (!create_device || !create_factory || FAILED(create_device(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &device,
+			NULL, NULL)) || FAILED(create_factory(&factory2, (void **)&factory)))
+		fail(60);
+	else {
+		DXGI_SWAP_CHAIN_DESC1 description = {(UINT)bounds.width, (UINT)bounds.height, DXGI_FORMAT_B8G8R8A8_UNORM, FALSE, {1, 0},
+			DXGI_USAGE_RENDER_TARGET_OUTPUT, 2, DXGI_SCALING_NONE, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_ALPHA_MODE_IGNORE, 0};
+		HRESULT made = IDXGIFactory2_CreateSwapChainForCoreWindow(factory, (IUnknown *)device, (IUnknown *)window, &description, NULL, &chain);
+		if (made == E_NOTIMPL)
+			fail(63);
+		else if (FAILED(made) || !chain)
+			fail(61);
+		else if (FAILED(IDXGISwapChain1_Present(chain, 1, 0)))
+			fail(62);
+		if (chain)
+			IDXGISwapChain1_Release(chain);
+	}
+	if (factory)
+		IDXGIFactory2_Release(factory);
+	if (device)
+		ID3D11Device_Release(device);
+#endif
 	/* Work posted to the dispatcher runs when the app processes events, and its action completes. */
 	object *action = NULL, *info = NULL;
 	if (METHOD(dispatcher, 8, HRESULT (WINAPI *)(object *, INT32, object *, object **))(dispatcher, 0, (object *)&on_dispatched, &action) != S_OK ||

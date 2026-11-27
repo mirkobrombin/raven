@@ -12,8 +12,11 @@
  *   pixels, as the window's DPI makes them. The window's handle is what ICoreWindowInterop gives.
  * - Windows.UI.Core.CoreDispatcher: the message loop of the window's thread, which runs work posted to it in order with the window's own
  *   messages, and stops when the window is closed.
- * - Windows.UI.Core.CoreCursor: a system cursor by its type, which the window shows while the pointer is over it; no cursor hides it. */
+ * - Windows.UI.Core.CoreCursor: a system cursor by its type, which the window shows while the pointer is over it; no cursor hides it.
+ * - IDXGIFactory2.CreateSwapChainForCoreWindow, when the DXGI the app loads does not make swap chains for core windows: the swap chain is
+ *   made for the desktop window behind the core window, with the same description. */
 #include "object.h"
+#include <dxgi1_2.h>
 
 static const IID iid_application_view = {0x638bb2db, 0x451d, 0x4661, {0xb0, 0x99, 0x41, 0x4f, 0x34, 0xff, 0xb9, 0xf1}};
 static const IID iid_application_view2 = {0x68eb7adf, 0x917f, 0x48eb, {0x9a, 0xeb, 0x7d, 0xe5, 0x3e, 0x08, 0x6a, 0xb1}};
@@ -42,6 +45,7 @@ static const IID iid_activated = {0xcf651713, 0xcd08, 0x4fd8, {0xb6, 0x97, 0xa2,
 static const IID iid_launch_activated = {0xfbc93e26, 0xa14a, 0x4b4f, {0x82, 0xb0, 0x33, 0xbe, 0xd9, 0x20, 0xaf, 0x52}};
 static const IID iid_prelaunch_activated = {0x0c44717b, 0x19f7, 0x48d6, {0xb0, 0x46, 0xcf, 0x22, 0x82, 0x6e, 0xaa, 0x74}};
 static const IID iid_view_activated = {0x930cef4b, 0xb829, 0x40fc, {0x88, 0xf4, 0x85, 0x13, 0xe8, 0xa6, 0x47, 0x38}};
+static const IID iid_dxgi_factory2 = {0x50c83a1c, 0xe072, 0x4c48, {0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0}};
 static const IID iid_async_action = {0x5a648006, 0x843a, 0x4da9, {0x86, 0x5b, 0x9d, 0x26, 0xe5, 0xdf, 0xad, 0x7b}};
 
 /* Windows.Foundation's structures and the core window's key status, as the Windows Runtime lays them out. */
@@ -1489,6 +1493,46 @@ HRESULT application_exit(void)
 	ExitProcess(0);
 }
 
+/* A swap chain for a core window is one for its desktop window. */
+static HRESULT STDMETHODCALLTYPE core_window_swap_chain(IDXGIFactory2 *factory, IUnknown *device, IUnknown *window,
+	const DXGI_SWAP_CHAIN_DESC1 *description, IDXGIOutput *output, IDXGISwapChain1 **out)
+{
+	IUnknown *interop = NULL;
+	HWND handle = NULL;
+	if (out)
+		*out = NULL;
+	if (!device || !window || !description || !out)
+		return DXGI_ERROR_INVALID_CALL;
+	if (FAILED(window->lpVtbl->QueryInterface(window, &iid_core_window_interop, (void **)&interop)))
+		return DXGI_ERROR_INVALID_CALL;
+	((HRESULT (WINAPI *)(void *, HWND *))method(interop, 3))(interop, &handle);
+	release(interop);
+	return factory->lpVtbl->CreateSwapChainForHwnd(factory, device, handle, description, NULL, output, out);
+}
+
+/* The DXGI an app of the Windows Runtime loads answers a core window with its own swap chain, or with E_NOTIMPL before it looks at
+ * its arguments, as DXVK does. Its factories share one table of methods, whose entry for core windows then makes the swap chain for the
+ * desktop window; the library stays loaded while the table is in use. */
+static void serve_core_window_swap_chains(void)
+{
+	HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+	HRESULT (WINAPI *create)(REFIID, void **) = dxgi ? (HRESULT (WINAPI *)(REFIID, void **))GetProcAddress(dxgi, "CreateDXGIFactory1") : NULL;
+	IDXGIFactory2 *factory = NULL;
+	if (!create || FAILED(create(&iid_dxgi_factory2, (void **)&factory)) || !factory)
+		return;
+	IDXGISwapChain1 *probe = NULL;
+	if (factory->lpVtbl->CreateSwapChainForCoreWindow(factory, NULL, NULL, NULL, NULL, &probe) == E_NOTIMPL) {
+		void **slot = (void **)&factory->lpVtbl->CreateSwapChainForCoreWindow;
+		DWORD protection;
+		if (VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &protection)) {
+			*slot = (void *)core_window_swap_chain;
+			VirtualProtect(slot, sizeof *slot, protection, &protection);
+			trace("CreateSwapChainForCoreWindow", " is served by the core window's desktop window");
+		}
+	}
+	factory->lpVtbl->Release(factory);
+}
+
 /* CoreApplication.Run: the view source makes the app's view, which is initialized with its application view, given its window, loaded,
  * activated and run, then uninitialized; IFrameworkViewSource.CreateView, and IFrameworkView's Initialize, SetWindow, Load, Run and
  * Uninitialize are the methods after IInspectable's in that order. */
@@ -1514,6 +1558,7 @@ HRESULT application_run(IUnknown *source)
 	}
 	current_view = view;
 	current_thread = GetCurrentThreadId();
+	serve_core_window_swap_chains();
 	result = ((HRESULT (WINAPI *)(void *, void *))method(app, 6))(app, face_of(&view->base, 0));
 	if (SUCCEEDED(result))
 		result = ((HRESULT (WINAPI *)(void *, void *))method(app, 7))(app, face_of(&view->window->base, 0));

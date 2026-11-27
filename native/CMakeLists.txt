@@ -7147,6 +7147,20 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 # The software driver's worker threads hold allocations at exit; leak checking still covers everything else.
                 set(RAVEN_LSAN LSAN_OPTIONS=suppressions=${PROJECT_SOURCE_DIR}/testdata/lsan.supp)
                 set_tests_properties(native_d3d11_triangle PROPERTIES TIMEOUT 300 ENVIRONMENT "${RAVEN_VULKAN_ICD};${RAVEN_LSAN}")
+                # An app of the Windows Runtime presents a Direct3D 11 frame through a swap chain made for its core window.
+                if(RAVEN_LABWC AND TARGET twinapi_component)
+                    set(core_window_swap_chain_client ${CMAKE_CURRENT_BINARY_DIR}/core-window-swap-chain.exe)
+                    add_custom_command(OUTPUT ${core_window_swap_chain_client}
+                        COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -DSWAP_CHAIN -Wl,--entry,raven_entry,--no-insert-timestamp
+                            -o ${core_window_swap_chain_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/core_window_client.c
+                            -lruntimeobject -luser32 -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/core_window_client.c VERBATIM)
+                    add_custom_target(core_window_swap_chain_fixture ALL DEPENDS ${core_window_swap_chain_client} twinapi_component)
+                    add_test(NAME native_core_window_swap_chain COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-wayland-run.py
+                        $<TARGET_FILE:raven> ${core_window_swap_chain_client} ${RAVEN_DXVK_PE64_DIR} ${CMAKE_CURRENT_BINARY_DIR}/core-window-swap-chain)
+                    set_tests_properties(native_core_window_swap_chain PROPERTIES TIMEOUT 180 RESOURCE_LOCK raven_compositor
+                        PASS_REGULAR_EXPRESSION "Native entry returned 0 " ENVIRONMENT "${RAVEN_VULKAN_ICD};${RAVEN_LSAN}")
+                endif()
                 add_test(NAME native_d3d11_deferred COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-d3d11.py
                     $<TARGET_FILE:raven> ${RAVEN_TESTDATA_DIR}/d3d11/deferred.exe ${RAVEN_DXVK_PE64_DIR}
                     ${CMAKE_CURRENT_BINARY_DIR}/d3d11-deferred)
