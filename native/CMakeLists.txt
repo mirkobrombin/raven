@@ -5252,6 +5252,20 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(installer_calls_fixture${width} ALL DEPENDS ${installer_calls_client})
                     add_test(NAME native_installer_calls_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${installer_calls_client})
                     set_tests_properties(native_installer_calls_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    if(RAVEN_FONT_DIRECTORY)
+                        # The program reads a font that lies beside it, in a folder of its own.
+                        set(font_memory_dir ${CMAKE_CURRENT_BINARY_DIR}/font-memory${width})
+                        set(font_memory_client ${font_memory_dir}/font-memory.exe)
+                        add_custom_command(OUTPUT ${font_memory_client}
+                            COMMAND ${CMAKE_COMMAND} -E make_directory ${font_memory_dir}
+                            COMMAND ${CMAKE_COMMAND} -E copy ${RAVEN_FONT_DIRECTORY}/LiberationSans-Regular.ttf ${font_memory_dir}/font.ttf
+                            COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
+                                -o ${font_memory_client} ${LOADER_SOURCES}/font_memory_client.c -lgdi32 -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/font_memory_client.c VERBATIM)
+                        add_custom_target(font_memory_fixture${width} ALL DEPENDS ${font_memory_client})
+                        add_test(NAME native_font_memory_x${width} COMMAND raven --run-process --execution=native --timeout-ms=20000 ${font_memory_client})
+                        set_tests_properties(native_font_memory_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endif()
                     set(slow_start_dir ${CMAKE_CURRENT_BINARY_DIR}/slow-start-${width})
                     add_custom_command(OUTPUT ${slow_start_dir}/client.exe ${slow_start_dir}/slow-start.dll
                         COMMAND ${CMAKE_COMMAND} -E make_directory ${slow_start_dir}

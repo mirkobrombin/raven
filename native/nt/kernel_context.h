@@ -166,6 +166,8 @@ struct InstalledFamily {
 };
 // The families of the fonts installed in the prefix, in name order; none without FreeType.
 std::vector<InstalledFamily> installed_font_families();
+// The number of faces in the bytes of a font file or collection; 0 for bytes that are not a font, and without FreeType.
+uint32_t font_face_count(std::span<const uint8_t> bytes);
 void register_canvas_service(ApiRegistry &registry, KernelContext &context);
 // Starts the program an application name or command line names, looked up the way Windows does; null with the Windows error otherwise.
 std::shared_ptr<class ProcessObject> start_program(KernelContext &context, const std::u16string &application, const std::u16string &line,

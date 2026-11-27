@@ -12,6 +12,8 @@
 #include <optional>
 #include <memory>
 #include <map>
+#include <mutex>
+#include <set>
 #include <sys/mman.h>
 
 #ifdef RAVEN_SKIA
@@ -1449,6 +1451,39 @@ void NativeDesktop::register_text_api(ApiRegistry &registry)
 	// Fonts come from the system's own list here: a private font that exists counts as added, and its faces stay out of the list.
 	registry.add("AddFontResourceExW", 3, [](ApiCall &call) { call.ret(call[0] ? 1 : 0); });
 	registry.add("RemoveFontResourceExW", 3, [](ApiCall &call) { call.ret(call[0] ? 1 : 0); });
+	// AddFontMemResourceEx(bytes, size, reserved, count): a font a program carries in memory, private to it and never enumerated, as
+	// on Windows. Its faces are counted and the handle it gets back releases them; text drawn in its face takes the closest bundled
+	// family, as for any face that is not bundled.
+	struct MemoryFonts {
+		std::mutex lock;
+		std::set<uint64_t> handles;
+		uint64_t next = 0x6d660000;
+	};
+	auto memory_fonts = std::make_shared<MemoryFonts>();
+	registry.add("AddFontMemResourceEx", 4, [memory_fonts](ApiCall &call) {
+		if (!call[0] || !call.u32(1) || !call[3] || call[2]) {
+			call.fail(87, 0);
+			return;
+		}
+		const auto faces = font_face_count(call.read(call[0], call.u32(1)));
+		if (!faces) {
+			call.ret(0);
+			return;
+		}
+		std::lock_guard guard(memory_fonts->lock);
+		const auto handle = memory_fonts->next++;
+		memory_fonts->handles.insert(handle);
+		call.store<uint32_t>(call[3], faces);
+		call.ret(handle);
+	});
+	registry.add("RemoveFontMemResourceEx", 1, [memory_fonts](ApiCall &call) {
+		std::lock_guard guard(memory_fonts->lock);
+		if (!memory_fonts->handles.erase(call[0])) {
+			call.fail(87, 0);
+			return;
+		}
+		call.ret(1);
+	});
 	// ScriptGetFontScriptTags(dc, cache, analysis, capacity, tags, count): the default script serves every font's text here.
 	registry.add("ScriptGetFontScriptTags", 6, [](ApiCall &call) {
 		if (!call[4] || !call[5] || call.i32(3) < 1) {

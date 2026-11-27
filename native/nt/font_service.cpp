@@ -240,6 +240,17 @@ std::vector<InstalledFamily> installed_font_families()
 	return families;
 }
 
+uint32_t font_face_count(std::span<const uint8_t> bytes)
+{
+	std::lock_guard lock(font_mutex);
+	FT_Face face = nullptr;
+	if (bytes.empty() || !freetype() || FT_New_Memory_Face(library, bytes.data(), FT_Long(bytes.size()), 0, &face))
+		return 0;
+	const auto faces = uint32_t(face->num_faces);
+	FT_Done_Face(face);
+	return faces;
+}
+
 namespace {
 
 HostFont *font_of(uint32_t handle)
@@ -540,6 +551,11 @@ void register_font_service(ApiRegistry &, KernelContext &)
 std::vector<InstalledFamily> installed_font_families()
 {
 	return {};
+}
+
+uint32_t font_face_count(std::span<const uint8_t>)
+{
+	return 0;
 }
 
 #endif
