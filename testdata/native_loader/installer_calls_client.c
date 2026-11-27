@@ -1,6 +1,6 @@
-// The calls the EA app installer's bootstrapper makes before it shows anything: it writes a hash as hexadecimal text, reads Base64
-// back, imports a certificate's RSA key, lists the entries of an access list and asks for the computer's name and the region in
-// ANSI. The exit code names the first check that failed.
+// Calls the EA app installer's bootstrapper makes: it writes a hash as hexadecimal text, reads Base64 back, imports a certificate's
+// RSA key, lists the entries of an access list, asks for the computer's name and the region in ANSI, and before it starts its elevated
+// part compares the final path of each folder it walks with the one it built. The exit code names the first check that failed.
 #include <windows.h>
 #include <wincrypt.h>
 #include <aclapi.h>
@@ -137,10 +137,51 @@ static int names(void)
 	return 0;
 }
 
+static int length_of(const WCHAR *text)
+{
+	int length = 0;
+	while (text[length])
+		++length;
+	return length;
+}
+
+static int final_paths(void)
+{
+	WCHAR temp[MAX_PATH], final[MAX_PATH + 8];
+	DWORD length = GetTempPathW(MAX_PATH, temp);
+	if (!length || temp[length - 1] != '\\')
+		return 50;
+	/* The folder opened by a name that ends in a backslash: its final path has none. */
+	HANDLE folder = CreateFileW(temp, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (folder == INVALID_HANDLE_VALUE)
+		return 51;
+	DWORD got = GetFinalPathNameByHandleW(folder, final, MAX_PATH + 8, VOLUME_NAME_DOS);
+	if (got != length - 1 + 4 || got != (DWORD)length_of(final) || !same(final, L"\\\\?\\", 4 * sizeof(WCHAR)) ||
+		!same(final + 4, temp, (length - 1) * sizeof(WCHAR)))
+		return 52;
+	/* Too small a buffer is told the length with the terminator. */
+	if (GetFinalPathNameByHandleW(folder, final, 4, VOLUME_NAME_DOS) != got + 1)
+		return 53;
+	if (GetFinalPathNameByHandleW(folder, final, MAX_PATH + 8, VOLUME_NAME_NONE) != length - 1 - 2 || !same(final, temp + 2, (length - 3) * sizeof(WCHAR)))
+		return 54;
+	char narrow[MAX_PATH + 8];
+	if (GetFinalPathNameByHandleA(folder, narrow, sizeof narrow, VOLUME_NAME_DOS) != got || narrow[4] != (char)temp[0])
+		return 55;
+	CloseHandle(folder);
+	/* A drive's root keeps its backslash. */
+	HANDLE root = CreateFileW(L"C:\\", 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (root == INVALID_HANDLE_VALUE)
+		return 56;
+	if (GetFinalPathNameByHandleW(root, final, MAX_PATH, VOLUME_NAME_DOS) != 7 || !same(final, L"\\\\?\\C:\\", 8 * sizeof(WCHAR)))
+		return 57;
+	CloseHandle(root);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	int failed;
-	if ((failed = text()) || (failed = key()) || (failed = entries()) || (failed = names()))
+	if ((failed = text()) || (failed = key()) || (failed = entries()) || (failed = names()) || (failed = final_paths()))
 		return failed;
 	return 0;
 }

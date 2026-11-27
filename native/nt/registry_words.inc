@@ -436,6 +436,7 @@
 {"GetFileVersionInfoSizeExW", 3},
 {"GetFileVersionInfoSizeW", 2},
 {"GetFileVersionInfoW", 4},
+{"GetFinalPathNameByHandleA", 4},
 {"GetFinalPathNameByHandleW", 4},
 {"GetForegroundWindow", 0},
 {"GetFullPathNameW", 4},

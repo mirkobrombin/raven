@@ -1898,17 +1898,54 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 		call.write(call[2], bytes);
 		call.ret(1);
 	});
-	registry.add("GetFinalPathNameByHandleW", 4, [&, resolve, missing, file_of](ApiCall &call) {
+	// GetFinalPathNameByHandle names the file a handle has open by where it is, not by how it was opened: the drive path normalized from
+	// the host file, a folder without its closing backslash unless it is the drive's root, as programs that compare it with paths they
+	// build expect. The flags choose the volume's form: \\?\C:\ (VOLUME_NAME_DOS, 0), the volume's \\?\Volume{GUID}\ name (1), its
+	// \Device\HarddiskVolumeN (2) or none (4); FILE_NAME_OPENED (8) names the same file here. The count leaves the terminator out, or
+	// includes it when the buffer is too small.
+	const auto final_path = [&paths, &context, file_of](ApiCall &call, bool wide) {
 		const auto file = file_of(call[0]);
 		if (!file) {
 			call.fail(6);
 			return;
 		}
-		const auto text = u"\\\\?\\" + file->dos_path;
-		const size_t capacity = call.u32(2);
-		const size_t length = call.put_wide(call[1], text, capacity);
-		call.ret(capacity > length ? length : length + 1);
-	});
+		const uint32_t flags = call.u32(3), volume = flags & 7;
+		if ((flags & ~0xfU) || volume == 3 || volume > 4) {
+			call.fail(87);
+			return;
+		}
+		const auto dos = file->path.empty() ? file->dos_path : paths.dos(file->path);
+		if (dos.size() < 3 || dos[1] != u':' || dos[2] != u'\\') {
+			call.fail(3);
+			return;
+		}
+		std::u16string text;
+		if (volume == 0)
+			text = u"\\\\?\\" + dos;
+		else if (volume == 1)
+			text = NativePaths::volume_name(dos[0]) + dos.substr(3);
+		else if (volume == 2)
+			text = NativePaths::device_path(dos);
+		else
+			text = dos.substr(2);
+		if (text.empty()) {
+			call.fail(3);
+			return;
+		}
+		const auto narrow = wide ? std::string() : to_ansi(text, context.launch.ansi_code_page);
+		const size_t length = wide ? text.size() : narrow.size(), capacity = call.u32(2);
+		if (!call[1] || capacity <= length) {
+			call.ret(length + 1);
+			return;
+		}
+		if (wide)
+			call.put_wide(call[1], text, capacity);
+		else
+			call.put_narrow(call[1], narrow, capacity);
+		call.ret(length);
+	};
+	registry.add("GetFinalPathNameByHandleW", 4, [final_path](ApiCall &call) { final_path(call, true); });
+	registry.add("GetFinalPathNameByHandleA", 4, [final_path](ApiCall &call) { final_path(call, false); });
 	registry.add("GetFileAttributesW", 1, [&, resolve, missing, file_of](ApiCall &call) {
 		call.ret(UINT32_MAX);
 		const auto name = call.wide(call[0]);
