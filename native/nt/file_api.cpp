@@ -3306,14 +3306,18 @@ void register_file_api(ApiRegistry &registry, KernelContext &context)
 			}
 			typed_rights = call.u32(4) & 0x02000000U ? held : *requested;
 		}
-		// The channel to the process a handle names: a child of this one, or the parent that started it.
+		// The channel to the process a handle names: a child of this one, the parent that started it, or else the channel every process
+		// of the prefix keeps for the others (a program and the client that started it from further up, as Steam's games do).
 		const auto channel_of = [&](uint64_t handle) -> HandleChannel * {
 			const auto process = objects.object_as<ProcessObject>(handle);
 			if (!process)
 				return nullptr;
 			if (process->channel)
 				return process->channel.get();
-			return process->foreign && process->pid == ::getppid() ? parent_channel() : nullptr;
+			if (process->foreign && process->pid == ::getppid())
+				if (auto *parent = parent_channel())
+					return parent;
+			return process->exited() ? nullptr : process_request_channel(process->pid).get();
 		};
 		if (from_self && !to_self) {
 			// A handle for another process travels over the channel to it and has a value there that the sender chose.

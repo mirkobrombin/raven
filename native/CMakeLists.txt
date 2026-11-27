@@ -3084,6 +3084,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_process_event_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${event_client})
                     set_tests_properties(native_process_event_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/event-prefix${width})
+                    # DuplicateHandle into and out of a process that is neither the caller's child nor its parent.
+                    set(ancestor_handle_client ${CMAKE_CURRENT_BINARY_DIR}/ancestor-handle${width}.exe)
+                    add_custom_command(OUTPUT ${ancestor_handle_client}
+                        COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${remote_entry},--no-insert-timestamp
+                            -o ${ancestor_handle_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ancestor_handle_client.c -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ancestor_handle_client.c VERBATIM)
+                    add_custom_target(ancestor_handle_fixture${width} ALL DEPENDS ${ancestor_handle_client})
+                    add_test(NAME native_ancestor_handle_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${ancestor_handle_client})
+                    set_tests_properties(native_ancestor_handle_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ancestor-handle-prefix${width})
                     set(optional_calls_client ${CMAKE_CURRENT_BINARY_DIR}/optional-calls${width}.exe)
                     add_custom_command(OUTPUT ${optional_calls_client}
                         COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector

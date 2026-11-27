@@ -4,6 +4,7 @@
 #include "host_names.h"
 #include "local_socket.h"
 #include "objects.h"
+#include "sandbox.h"
 #include "threads.h"
 
 #include <algorithm>
@@ -75,6 +76,13 @@ void enable_process_requests()
 	process_channels.listener = descriptor;
 }
 
+bool process_requests_bound(pid_t pid)
+{
+	socklen_t length;
+	const auto address = process_address(pid, length);
+	return local_socket_bound(address.sun_path);
+}
+
 std::shared_ptr<HandleChannel> process_request_channel(pid_t pid)
 {
 	if (!runtime_process_alive(pid))
@@ -135,8 +143,6 @@ bool HandleChannel::send_frame(const InheritedHandle &record, int shared)
 
 NativeObjectResult HandleChannel::send(NativeObjects &objects, NativeThreads &threads, InheritedHandle record, uint32_t inherit)
 {
-	if (process_only)
-		return {0, 0xc00000bbU};
 	const int shared = record.descriptor;
 	if (shared < 0)
 		return {0, 0xc0000008U};
@@ -153,8 +159,6 @@ NativeObjectResult HandleChannel::send(NativeObjects &objects, NativeThreads &th
 
 std::shared_ptr<KernelObject> HandleChannel::fetch(NativeObjects &objects, NativeThreads &threads, uint64_t value, bool close_source, uint32_t &access)
 {
-	if (process_only)
-		return nullptr;
 	InheritedHandle request;
 	request.kind = request_kind;
 	request.handle = value;
@@ -233,8 +237,19 @@ void HandleChannel::receive(NativeObjects &objects)
 			continue;
 		}
 		auto &record = records.front();
-		if (process_only && !record.kind.starts_with("process:") && record.kind != answer_prefix + "process") {
+		const bool handle_frame = record.kind.starts_with(transfer_prefix) || record.kind == request_kind;
+		if (peer && !handle_frame && !record.kind.starts_with("process:") && !record.kind.starts_with(answer_prefix)) {
 			if (received >= 0) ::close(received);
+			continue;
+		}
+		// No program takes handles from the runtime's control panel and file dialog or puts its own into them.
+		if (peer && handle_frame && sandbox().trusted()) {
+			if (received >= 0) ::close(received);
+			InheritedHandle answer;
+			answer.kind = record.kind == request_kind ? answer_prefix : answer_prefix + "transfer";
+			answer.handle = record.size;
+			answer.access = 0xc0000022U;
+			send_frame(answer, -1);
 			continue;
 		}
 		if (record.kind.starts_with(transfer_prefix)) {

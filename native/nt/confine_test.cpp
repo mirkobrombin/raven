@@ -1,4 +1,6 @@
+#include "child_process.h"
 #include "confine.h"
+#include "handle_channel.h"
 #include "sandbox.h"
 
 #include <cerrno>
@@ -65,6 +67,15 @@ static int inner_runtime(const std::filesystem::path &root, const char *channel)
 	raven::sandbox().set_parent(u"C:\\Tools\\Editor.exe");
 	raven::sandbox().load(root / "prefix");
 	check(raven::confine(root / "prefix"), "the inner runtime is not confined");
+	// The runtime that started this one is confined apart from it, so its executable cannot be read; the request socket it keeps names
+	// it as a runtime of the prefix, and the test's first process, which keeps none, is not taken for one.
+	char executable[64];
+	check(::readlink(("/proc/" + std::to_string(::getppid()) + "/exe").c_str(), executable, sizeof(executable)) < 0 && errno == EACCES,
+		"the inner runtime reads the executable of the runtime that started it");
+	check(raven::runtime_process_alive(::getppid()), "the inner runtime does not see the runtime that started it");
+	check(raven::process_request_channel(::getppid()) != nullptr, "the inner runtime cannot reach the runtime that started it");
+	if (const char *first = std::getenv("RAVEN_CONFINE_TEST_FIRST"))
+		check(!raven::runtime_process_alive(std::atoi(first)), "the inner runtime takes a process without a request socket for a runtime");
 	check(raven::sandbox().open_on_host("Viewer", {}), "the inner runtime cannot open with a Linux program of the prefix");
 	check(!raven::sandbox().open_on_host("Viewer", {(root / "home/.ssh/id").string()}),
 		"the inner runtime hands a Linux program a file neither program reaches");
@@ -109,6 +120,8 @@ int main(int count, char **arguments)
 	const int file_service = listening((root / "prefix/service").string(), false, file_address, file_length);
 	check(abstract_service >= 0 && file_service >= 0, "the test cannot listen");
 
+	::setenv("RAVEN_PREFIX", (root / "prefix").c_str(), 1);
+	::setenv("RAVEN_CONFINE_TEST_FIRST", std::to_string(::getpid()).c_str(), 1);
 	// The confined checks run in a child, so that this process can remove the tree afterwards.
 	const pid_t child = ::fork();
 	if (child > 0) {
@@ -133,6 +146,7 @@ int main(int count, char **arguments)
 	raven::sandbox().set_program(u"C:\\Tools\\Editor.exe");
 	raven::sandbox().load(root / "prefix");
 	raven::sandbox().grant(root / "granted", false);
+	raven::enable_process_requests();
 	// The Direct3D libraries come from the folders RAVEN_D3D_DIRECTORY lists, each of which the confined runtime still reads.
 	::setenv("RAVEN_D3D_DIRECTORY", ((root / "dxvk").string() + ":" + (root / "vkd3d").string()).c_str(), 1);
 	check(raven::confine(root / "prefix"), "the runtime is not confined");

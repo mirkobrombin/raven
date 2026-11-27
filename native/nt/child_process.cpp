@@ -3,6 +3,7 @@
 #include "console.h"
 
 #include "elevation.h"
+#include "handle_channel.h"
 #include "sandbox.h"
 #include "text.h"
 
@@ -109,6 +110,10 @@ bool runtime_process_alive(pid_t pid)
 	char mine[4096], theirs[4096];
 	const auto mine_length = ::readlink("/proc/self/exe", mine, sizeof(mine));
 	const auto theirs_length = ::readlink(("/proc/" + std::to_string(pid) + "/exe").c_str(), theirs, sizeof(theirs));
+	// A confined process may not read the executable of a process confined apart from it, its parent among them, since Landlock counts that
+	// as tracing it: a Raven process of this prefix is then known by the request socket it keeps bound under its process id.
+	if (theirs_length < 0 && errno == EACCES)
+		return process_requests_bound(pid);
 	return mine_length > 0 && mine_length == theirs_length && std::equal(mine, mine + mine_length, theirs);
 }
 

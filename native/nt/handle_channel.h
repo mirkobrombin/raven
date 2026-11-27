@@ -21,10 +21,11 @@ constexpr uint64_t handle_range_to_child = 0x40000000;
 
 // A socket between a process and one of its children that carries handles after the child started (DuplicateHandle into or out of
 // the other process). A transfer carries the descriptor and the record that rebuilds the object. The receiver assigns its value;
-// requests are answered when the other process next schedules its threads.
+// requests are answered when the other process next schedules its threads. A peer channel joins two processes of the prefix that did
+// not start each other: it carries process requests and handles asked for or sent with DuplicateHandle, never handles left to inherit.
 class HandleChannel {
 public:
-	explicit HandleChannel(int descriptor, bool process_only = false) : descriptor(descriptor), process_only(process_only) {}
+	explicit HandleChannel(int descriptor, bool peer = false) : descriptor(descriptor), peer(peer) {}
 	~HandleChannel();
 	HandleChannel(const HandleChannel &) = delete;
 	HandleChannel &operator=(const HandleChannel &) = delete;
@@ -43,7 +44,7 @@ private:
 	bool send_frame(const InheritedHandle &record, int shared);
 	std::optional<InheritedHandle> exchange(NativeObjects &objects, NativeThreads &threads, InheritedHandle request, int shared = -1);
 	int descriptor;
-	bool process_only;
+	bool peer;
 	uint64_t next_request = 1;
 	std::map<uint64_t, std::optional<InheritedHandle>> answers;
 };
@@ -61,5 +62,7 @@ std::vector<int> handle_descriptors();
 // Process queries can reach a runtime of this prefix even when it is neither the caller's parent nor its child.
 void enable_process_requests();
 std::shared_ptr<HandleChannel> process_request_channel(pid_t pid);
+// Whether a process keeps bound the socket the other Raven processes of this prefix send it requests on.
+bool process_requests_bound(pid_t pid);
 
 }
