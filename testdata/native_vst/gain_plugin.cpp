@@ -1,9 +1,11 @@
 // A VST 3 plugin for Windows as a host meets one, built on the interface headers alone: a factory with a processor class and the edit
 // controller it names, one stereo bus each way, one parameter. The processor multiplies its input by twice the parameter's normalized
-// value, takes the last point of each block's changes for it, and keeps the value in its state, which the controller reads back.
+// value, takes the last point of each block's changes for it, and keeps the value in its state, which the controller reads back. The
+// controller's editor is a green window of 300 by 200 pixels; a click on it sets the gain to 0.75 as a host hears of an edit.
 
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -12,10 +14,16 @@
 #include <atomic>
 #include <cstring>
 
+#include <windows.h>
+
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
 // The identifiers of the Vst interfaces, which the SDK's helper classes define and the headers only declare; coreiids.cpp has the others.
+namespace Steinberg {
+DEF_CLASS_IID(IPlugView)
+DEF_CLASS_IID(IPlugFrame)
+}
 namespace Steinberg::Vst {
 DEF_CLASS_IID(IComponent)
 DEF_CLASS_IID(IAudioProcessor)
@@ -166,6 +174,70 @@ private:
 	double gain = 0.5;
 };
 
+class Controller;
+
+// The editor: a child of the window the host attaches it to, which tells the controller of a click.
+class Editor : public Counted<IPlugView> {
+public:
+	explicit Editor(Controller &controller);
+	tresult PLUGIN_API queryInterface(const TUID iid, void **object) override
+	{
+		if (FUnknownPrivate::iidEqual(iid, FUnknown::iid) || FUnknownPrivate::iidEqual(iid, IPlugView::iid))
+			return answer(static_cast<IPlugView *>(this), object);
+		*object = nullptr;
+		return kNoInterface;
+	}
+	tresult PLUGIN_API isPlatformTypeSupported(FIDString type) override { return std::strcmp(type, kPlatformTypeHWND) ? kResultFalse : kResultTrue; }
+	tresult PLUGIN_API attached(void *parent, FIDString type) override
+	{
+		if (isPlatformTypeSupported(type) != kResultTrue || !parent || window)
+			return kResultFalse;
+		static const ATOM kind = [] {
+			WNDCLASSW made{};
+			made.lpfnWndProc = procedure;
+			made.hInstance = GetModuleHandleW(nullptr);
+			made.lpszClassName = L"RavenGainEditor";
+			return RegisterClassW(&made);
+		}();
+		window = CreateWindowExW(0, MAKEINTATOM(kind), L"", WS_CHILD | WS_VISIBLE, 0, 0, 300, 200, static_cast<HWND>(parent), nullptr,
+			GetModuleHandleW(nullptr), nullptr);
+		if (!window)
+			return kResultFalse;
+		SetWindowLongPtrW(window, GWLP_USERDATA, LONG_PTR(this));
+		return kResultTrue;
+	}
+	tresult PLUGIN_API removed() override
+	{
+		if (window)
+			DestroyWindow(window);
+		window = nullptr;
+		return kResultOk;
+	}
+	tresult PLUGIN_API onWheel(float) override { return kResultFalse; }
+	tresult PLUGIN_API onKeyDown(char16, int16, int16) override { return kResultFalse; }
+	tresult PLUGIN_API onKeyUp(char16, int16, int16) override { return kResultFalse; }
+	tresult PLUGIN_API getSize(ViewRect *size) override
+	{
+		if (!size)
+			return kInvalidArgument;
+		*size = ViewRect(0, 0, 300, 200);
+		return kResultOk;
+	}
+	tresult PLUGIN_API onSize(ViewRect *) override { return kResultOk; }
+	tresult PLUGIN_API onFocus(TBool) override { return kResultOk; }
+	tresult PLUGIN_API setFrame(IPlugFrame *) override { return kResultOk; }
+	tresult PLUGIN_API canResize() override { return kResultFalse; }
+	tresult PLUGIN_API checkSizeConstraint(ViewRect *) override { return kResultFalse; }
+
+protected:
+	~Editor() override;
+
+private:
+	static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+	Controller &controller;
+	HWND window = nullptr;
+};
+
 class Controller : public Counted<IEditController> {
 public:
 	tresult PLUGIN_API queryInterface(const TUID iid, void **object) override
@@ -231,12 +303,54 @@ public:
 		handler = given;
 		return kResultOk;
 	}
-	IPlugView *PLUGIN_API createView(FIDString) override { return nullptr; }
+	IPlugView *PLUGIN_API createView(FIDString name) override
+	{
+		return name && !std::strcmp(name, ViewType::kEditor) ? new Editor(*this) : nullptr;
+	}
+	// A click on the editor: the gain becomes 0.75, which the host hears of as an edit of the parameter.
+	void clicked()
+	{
+		gain = 0.75;
+		if (!handler)
+			return;
+		handler->beginEdit(gain_id);
+		handler->performEdit(gain_id, gain);
+		handler->endEdit(gain_id);
+	}
 
 private:
 	double gain = 0.5;
 	IComponentHandler *handler = nullptr;
 };
+
+Editor::Editor(Controller &controller) : controller(controller) { controller.addRef(); }
+
+Editor::~Editor()
+{
+	removed();
+	controller.release();
+}
+
+LRESULT CALLBACK Editor::procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+{
+	auto *const editor = reinterpret_cast<Editor *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+	if (message == WM_PAINT) {
+		PAINTSTRUCT paint;
+		const HDC context = BeginPaint(window, &paint);
+		const HBRUSH green = CreateSolidBrush(RGB(0, 255, 0));
+		RECT area;
+		GetClientRect(window, &area);
+		FillRect(context, &area, green);
+		DeleteObject(green);
+		EndPaint(window, &paint);
+		return 0;
+	}
+	if (message == WM_LBUTTONDOWN && editor) {
+		editor->controller.clicked();
+		return 0;
+	}
+	return DefWindowProcW(window, message, wparam, lparam);
+}
 
 class Factory : public IPluginFactory {
 public:

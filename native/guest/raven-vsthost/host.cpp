@@ -9,6 +9,7 @@
 
 #include "bridge_objects.h"
 
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
 
 #include <windows.h>
@@ -24,6 +25,7 @@ extern "C" {
 __declspec(dllimport) void *WINAPI RavenLinkMap(SIZE_T *size);
 __declspec(dllimport) DWORD WINAPI RavenLinkWait(const volatile LONG *word, LONG seen, DWORD milliseconds);
 __declspec(dllimport) BOOL WINAPI RavenLinkWake(volatile LONG *word);
+__declspec(dllimport) BOOL WINAPI RavenEmbedWindow(HWND window, UINT64 host);
 }
 
 namespace {
@@ -414,11 +416,74 @@ struct Object {
 	}
 };
 
+// The frame of a plugin's view: the window the view is attached to, shown inside the host's X11 window. A view that asks for another
+// size gets it at once, and the Linux side hears of it to resize the host's window and tell the view.
+class Frame : public Counted<IPlugFrame> {
+public:
+	Frame(uint32_t view, HWND window) : view(view), window(window) {}
+	tresult PLUGIN_API resizeView(IPlugView *, ViewRect *size) override
+	{
+		if (!size || size->right < size->left || size->bottom < size->top)
+			return kInvalidArgument;
+		SetWindowPos(window, nullptr, 0, 0, size->right - size->left, size->bottom - size->top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		Writer notice(uint32_t(Notice::resize_view));
+		notice.u32(view).record(*size);
+		output.send(notice);
+		return kResultTrue;
+	}
+
+private:
+	uint32_t view;
+	HWND window;
+};
+
+// A plugin's view, with the window it is attached to once the Linux side has a window of the host's to show it in.
+struct View {
+	IPlugView *view = nullptr;
+	HWND window = nullptr;
+	Frame *frame = nullptr;
+
+	void detach()
+	{
+		if (window) {
+			view->removed();
+			view->setFrame(nullptr);
+			DestroyWindow(window);
+			window = nullptr;
+		}
+		if (frame)
+			frame->release();
+		frame = nullptr;
+	}
+	void end()
+	{
+		detach();
+		view->release();
+	}
+};
+
+// The window a view is attached to: a popup with no frame, which the runtime shows inside the host's window.
+HWND view_window(int32 width, int32 height)
+{
+	static const ATOM type = [] {
+		WNDCLASSW made{};
+		made.lpfnWndProc = DefWindowProcW;
+		made.hInstance = GetModuleHandleW(nullptr);
+		made.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+		made.lpszClassName = L"RavenPluginView";
+		return RegisterClassW(&made);
+	}();
+	return CreateWindowExW(0, MAKEINTATOM(type), L"", WS_POPUP | WS_CLIPCHILDREN, 0, 0, std::max(width, 1), std::max(height, 1), nullptr,
+		nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
 class Server {
 public:
 	explicit Server(IPluginFactory &factory) : factory(factory) {}
 	~Server()
 	{
+		for (auto &[id, view] : views)
+			view.end();
 		for (auto &[id, object] : objects)
 			object.end();
 	}
@@ -430,10 +495,13 @@ public:
 		case Call::hello: hello(call, answer); break;
 		case Call::create: create(call, answer); break;
 		case Call::release: {
-			const auto found = objects.find(call.u32());
-			if (found != objects.end()) {
+			const uint32_t id = call.u32();
+			if (const auto found = objects.find(id); found != objects.end()) {
 				found->second.end();
 				objects.erase(found);
+			} else if (const auto view = views.find(id); view != views.end()) {
+				view->second.end();
+				views.erase(view);
 			}
 			break;
 		}
@@ -481,7 +549,7 @@ public:
 			break;
 		}
 		default:
-			if (!component(call, answer) && !processor(call, answer) && !controller(call, answer))
+			if (!component(call, answer) && !processor(call, answer) && !controller(call, answer) && !view(call, answer))
 				throw std::runtime_error("an unknown call");
 		}
 		output.send(answer);
@@ -751,8 +819,106 @@ private:
 		return true;
 	}
 
+	bool view(Reader &call, Writer &answer)
+	{
+		const Call kind = Call(call.tag);
+		if (kind == Call::create_view) {
+			IEditController *const controller = object(call.u32()).controller;
+			const auto name = call.bytes();
+			const std::string text(name.begin(), name.end());
+			IPlugView *const made = controller ? controller->createView(text.c_str()) : nullptr;
+			if (!made) {
+				answer.u32(0);
+				return true;
+			}
+			const uint32_t id = next++;
+			views[id].view = made;
+			answer.u32(id);
+			return true;
+		}
+		if (kind < Call::view_platform || kind > Call::view_scale)
+			return false;
+		const auto found = views.find(call.u32());
+		if (found == views.end())
+			throw std::runtime_error("a call names no view");
+		View &target = found->second;
+		IPlugView &view = *target.view;
+		switch (kind) {
+		case Call::view_platform: {
+			// The host's X11 window becomes a window of the program's own: the view is attached to that as on Windows.
+			const auto type = call.bytes();
+			const bool x11 = std::string(type.begin(), type.end()) == kPlatformTypeX11EmbedWindowID;
+			answer.result(x11 ? view.isPlatformTypeSupported(kPlatformTypeHWND) : kResultFalse);
+			break;
+		}
+		case Call::view_attach: {
+			const uint64_t host = call.u64();
+			target.detach();
+			ViewRect size{};
+			if (view.getSize(&size) != kResultOk)
+				size = ViewRect(0, 0, 400, 300);
+			target.window = view_window(size.getWidth(), size.getHeight());
+			if (!target.window || !RavenEmbedWindow(target.window, host)) {
+				if (target.window)
+					DestroyWindow(target.window);
+				target.window = nullptr;
+				answer.result(kResultFalse);
+				break;
+			}
+			target.frame = new Frame(found->first, target.window);
+			view.setFrame(target.frame);
+			ShowWindow(target.window, SW_SHOWNOACTIVATE);
+			const tresult result = view.attached(target.window, kPlatformTypeHWND);
+			if (result != kResultOk)
+				target.detach();
+			else
+				UpdateWindow(target.window);
+			answer.result(result);
+			break;
+		}
+		case Call::view_remove: {
+			const bool attached = target.window != nullptr;
+			target.detach();
+			answer.result(attached ? kResultOk : kResultFalse);
+			break;
+		}
+		case Call::view_size: {
+			ViewRect size{};
+			const tresult result = view.getSize(&size);
+			answer.result(result).record(size);
+			break;
+		}
+		case Call::view_on_size: {
+			auto size = call.record<ViewRect>();
+			if (target.window)
+				SetWindowPos(target.window, nullptr, 0, 0, size.getWidth(), size.getHeight(), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+			answer.result(view.onSize(&size));
+			break;
+		}
+		case Call::view_focus: answer.result(view.onFocus(TBool(call.u32() != 0))); break;
+		case Call::view_can_resize: answer.result(view.canResize()); break;
+		case Call::view_check_size: {
+			auto size = call.record<ViewRect>();
+			const tresult result = view.checkSizeConstraint(&size);
+			answer.result(result).record(size);
+			break;
+		}
+		case Call::view_scale: {
+			const double factor = call.f64();
+			auto *const scaling = query<IPlugViewContentScaleSupport>(&view);
+			answer.result(scaling ? scaling->setContentScaleFactor(IPlugViewContentScaleSupport::ScaleFactor(factor)) : kNotImplemented);
+			if (scaling)
+				scaling->release();
+			break;
+		}
+		default: return false;
+		}
+		return true;
+	}
+
 	IPluginFactory &factory;
 	std::map<uint32_t, Object> objects;
+	std::map<uint32_t, View> views;
 	uint32_t next = 1;
 };
 

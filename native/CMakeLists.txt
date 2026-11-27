@@ -6995,8 +6995,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(embed_pe_fixture ALL DEPENDS ${EMBED_FIXTURES}/embed.exe)
                         add_executable(x11_embed_test desktop/x11_embed_test.cpp)
                         target_link_libraries(x11_embed_test PRIVATE PkgConfig::XCB_CLIENT)
-                        add_test(NAME native_x11_embed COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11-embed.py
-                            $<TARGET_FILE:x11_embed_test> $<TARGET_FILE:raven> ${EMBED_FIXTURES}/embed.exe ${CMAKE_CURRENT_BINARY_DIR}/x11-embed)
+                        add_test(NAME native_x11_embed COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11-run.py
+                            ${CMAKE_CURRENT_BINARY_DIR}/x11-embed $<TARGET_FILE:x11_embed_test> $<TARGET_FILE:raven> ${EMBED_FIXTURES}/embed.exe)
                         set_tests_properties(native_x11_embed PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "embedded: child 200x100 at 0,0, pixel ff0000")
                     endif()
                 endif()
@@ -7536,7 +7536,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_command(OUTPUT ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3
                 COMMAND ${CMAKE_COMMAND} -E make_directory ${vst_bundle}/Contents/x86_64-win
                 COMMAND ${RAVEN_MINGW64_CXX} -std=c++17 -O2 -shared -static -I${RAVEN_VST3_SDK_DIRECTORY}
-                    -o ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3 ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp ${vst_interfaces} -lole32
+                    -o ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3 ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp ${vst_interfaces} -lole32 -lgdi32 -luser32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_vst/gain_plugin.cpp VERBATIM)
             add_custom_target(vst_bridge ALL DEPENDS ${vst_host} ${vst_bundle}/Contents/x86_64-win/RavenGain.vst3)
             add_library(raven_vst MODULE vst/plugin.cpp ${vst_source}/interfaces.cpp ${vst_interfaces})
@@ -7570,6 +7570,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_vst_bridge PROPERTIES TIMEOUT 60
                 PASS_REGULAR_EXPRESSION "first block: 0.500 0.500\ncontroller gain: 0.250\nblocks: 500.*\nbridge: done"
                 ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+            # The plugin's editor in a window of a Linux host on an isolated X server, with its edits coming back through the host's run loop.
+            if(RAVEN_X11_TESTS)
+                add_executable(vst_editor_test vst/editor_test.cpp ${vst_source}/interfaces.cpp ${vst_interfaces})
+                target_include_directories(vst_editor_test PRIVATE ${RAVEN_VST3_SDK_DIRECTORY} ${CMAKE_CURRENT_SOURCE_DIR})
+                target_compile_options(vst_editor_test PRIVATE -Wno-format)
+                target_link_libraries(vst_editor_test PRIVATE ${CMAKE_DL_LIBS} Threads::Threads PkgConfig::XCB_CLIENT)
+                add_test(NAME native_vst_editor COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11-run.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/vst-editor $<TARGET_FILE:vst_editor_test> ${vst_bridged}/Contents/x86_64-linux/RavenGainBridged.so)
+                set_tests_properties(native_vst_editor PROPERTIES TIMEOUT 120
+                    PASS_REGULAR_EXPRESSION "editor: shown in the host's window\nedit: parameter 0 to 0.75, 1 begun, 1 ended\neditor: done"
+                    ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+            endif()
         endif()
         find_program(RAVEN_WINDRES x86_64-w64-mingw32-windres)
         find_program(RAVEN_MINGW32 i686-w64-mingw32-gcc)

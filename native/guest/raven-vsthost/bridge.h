@@ -13,6 +13,7 @@
 
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/base/ipluginbase.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -31,10 +32,10 @@ namespace raven_vst {
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
-constexpr uint32_t protocol = 1;
+constexpr uint32_t protocol = 2;
 
 // The structures that cross as they are have one layout on both sides.
-static_assert(sizeof(ProcessContext) == 112 && sizeof(ProcessSetup) == 24 && sizeof(ParameterInfo) == 792 && sizeof(BusInfo) == 276 &&
+static_assert(sizeof(ViewRect) == 16 && sizeof(ProcessContext) == 112 && sizeof(ProcessSetup) == 24 && sizeof(ParameterInfo) == 792 && sizeof(BusInfo) == 276 &&
 	sizeof(RoutingInfo) == 12 && sizeof(Event) == 48 && sizeof(PClassInfo2) == 440 && sizeof(PClassInfoW) == 696 && sizeof(PFactoryInfo) == 452,
 	"a structure that crosses the bridge has another layout here");
 
@@ -86,6 +87,18 @@ enum class Call : uint32_t {
 	get_normalized, // object, id -> value
 	set_normalized, // object, id, value -> result
 	set_handler, // object, whether the host gave one -> result
+	// IPlugView: a view is an object of its own, released with `release`. The Linux side shows it inside the host's X11 window, which
+	// the program gives a window of its own to (RavenEmbedWindow), and the plugin's view is attached to that window as on Windows.
+	create_view, // object, name -> view (0 when the controller has none)
+	view_platform, // view, platform type -> result
+	view_attach, // view, the host's X11 window -> result
+	view_remove, // view -> result
+	view_size, // view -> result, ViewRect
+	view_on_size, // view, ViewRect -> result
+	view_focus, // view, state -> result
+	view_can_resize, // view -> result
+	view_check_size, // view, ViewRect -> result, ViewRect
+	view_scale, // view, factor (f64) -> result, for IPlugViewContentScaleSupport
 };
 
 // What the plugin told the host between two answers.
@@ -95,6 +108,7 @@ enum class Notice : uint32_t {
 	end_edit, // object, id
 	restart, // object, flags
 	message, // from object, Message: what a plugin object sent the peer it is connected to
+	resize_view, // view, ViewRect: the plugin's view asked its frame for another size, and its window has it already
 };
 
 constexpr uint32_t answer = 0;

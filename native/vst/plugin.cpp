@@ -14,6 +14,7 @@
 
 #include "guest/raven-vsthost/bridge_objects.h"
 
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
 
 #include <condition_variable>
@@ -29,6 +30,7 @@
 #include <linux/futex.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -48,7 +50,16 @@ void wake(std::atomic<uint32_t> &word)
 	::syscall(SYS_futex, &word, FUTEX_WAKE, INT32_MAX, nullptr, nullptr, 0);
 }
 
-class Proxy;
+// What a notice of the Windows side is handed to: a plugin object or a view, held while it takes it.
+class Receiver {
+public:
+	virtual void hold() = 0;
+	virtual void let_go() = 0;
+	virtual void tell(Reader &notice) = 0;
+
+protected:
+	~Receiver() = default;
+};
 
 class Bridge {
 public:
@@ -91,7 +102,10 @@ public:
 	// Hands on the notices that came, for a call that had none to wait for.
 	void deliver();
 
-	void attach(uint32_t object, Proxy *proxy)
+	// Signaled when a notice comes, for a host's run loop to hand it on from its own thread (see ViewProxy::setFrame).
+	int notice_descriptor() const { return notices_ready; }
+
+	void attach(uint32_t object, Receiver *proxy)
 	{
 		const std::lock_guard guard(lock);
 		proxies[object] = proxy;
@@ -237,7 +251,13 @@ private:
 		const std::string command = "--command-line=raven-vsthost.exe --serve \"" + windows_path(plugin) + "\"";
 		const std::string grant = "--grant-read=" + (std::filesystem::is_directory(plugin) ? plugin : plugin.parent_path()).string();
 		std::vector<std::string> arguments{raven, "--run-process", "--execution=native", "--stdio=inherit", "--timeout-ms=86400000",
-			"--link-fd=3", grant, command, host};
+			"--link-fd=3", grant};
+		// A host shows a plugin's editor in an X11 window (kPlatformTypeX11EmbedWindowID), which only the runtime's X11 desktop can show a
+		// window inside.
+		if (std::getenv("DISPLAY"))
+			arguments.emplace_back("--desktop=x11");
+		arguments.push_back(command);
+		arguments.push_back(host);
 		std::vector<char *> argv;
 		for (auto &argument : arguments)
 			argv.push_back(argument.data());
@@ -294,19 +314,24 @@ private:
 				answers.push_back(std::move(message));
 				answers_ready.notify_all();
 			} else
+			{
 				notices.push_back(std::move(message));
+				const uint64_t one = 1;
+				[[maybe_unused]] const auto written = ::write(notices_ready, &one, sizeof one);
+			}
 		}
 	}
 
 	std::mutex calling, lock;
 	std::condition_variable answers_ready;
 	std::deque<Reader> answers, notices;
-	std::map<uint32_t, Proxy *> proxies;
+	std::map<uint32_t, Receiver *> proxies;
 	std::thread reader;
 	pid_t child = -1;
 	int to_host = -1, from_host = -1;
 	bool failed = false;
 	uint64_t used = 4096;
+	int notices_ready = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 };
 
 // Shorthands for the calls of an object.
@@ -325,8 +350,10 @@ tresult result_of(std::optional<Reader> &answer)
 tresult result_of(std::optional<Reader> &&answer) { return result_of(answer); }
 
 // What the host makes from a plugin class: its component, processor, controller and connection point, as the Windows object has them.
-class Proxy : public IComponent, public IAudioProcessor, public IConnectionPoint {
+class Proxy : public IComponent, public IAudioProcessor, public IConnectionPoint, public Receiver {
 public:
+	void hold() override { addRef(); }
+	void let_go() override { release(); }
 	Proxy(uint32_t object, uint32_t interfaces) : object(object), interfaces(interfaces) { Bridge::instance().attach(object, this); }
 
 	tresult PLUGIN_API queryInterface(const TUID iid, void **found) override
@@ -558,7 +585,7 @@ public:
 			}
 			return result_of(ask(Writer(uint32_t(Call::set_handler)).u32(owner.object).u32(given ? 1 : 0)));
 		}
-		IPlugView *PLUGIN_API createView(FIDString) override { return nullptr; }
+		IPlugView *PLUGIN_API createView(FIDString name) override;
 
 	private:
 		Proxy &owner;
@@ -604,7 +631,7 @@ public:
 	}
 
 	// A notice of the plugin object's, handed on by the thread whose call it came with.
-	void tell(Reader &notice)
+	void tell(Reader &notice) override
 	{
 		IComponentHandler *target = nullptr;
 		IConnectionPoint *connected = nullptr;
@@ -697,9 +724,11 @@ private:
 
 void Bridge::deliver()
 {
+	uint64_t drained = 0;
+	while (::read(notices_ready, &drained, sizeof drained) > 0) {}
 	for (;;) {
 		std::optional<Reader> notice;
-		Proxy *proxy = nullptr;
+		Receiver *proxy = nullptr;
 		{
 			const std::lock_guard guard(lock);
 			if (notices.empty())
@@ -712,7 +741,7 @@ void Bridge::deliver()
 				const auto found = proxies.find(probe.u32());
 				if (found != proxies.end()) {
 					proxy = found->second;
-					proxy->addRef();
+					proxy->hold();
 				}
 			} catch (const std::exception &) {
 			}
@@ -724,7 +753,7 @@ void Bridge::deliver()
 			proxy->tell(*notice);
 		} catch (const std::exception &) {
 		}
-		proxy->release();
+		proxy->let_go();
 	}
 }
 
@@ -818,6 +847,149 @@ tresult PLUGIN_API Proxy::process(ProcessData &data)
 			data.outputEvents->addEvent(event);
 	}
 	return from_wire(Result(shared.result));
+}
+
+// A plugin's view, shown inside the host's X11 window: the Windows side gives that window a window of its own and attaches the plugin's
+// view to it. What the plugin tells the host meanwhile (its edits, a new size) is handed on from the host's run loop, which the frame
+// brings, as the user works in the editor while the host calls nothing.
+class ViewProxy : public IPlugView, public IPlugViewContentScaleSupport, public Receiver {
+public:
+	explicit ViewProxy(uint32_t view) : view(view) { Bridge::instance().attach(view, this); }
+
+	tresult PLUGIN_API queryInterface(const TUID iid, void **found) override
+	{
+		*found = nullptr;
+		if (same(iid, FUnknown::iid) || same(iid, IPlugView::iid))
+			*found = static_cast<IPlugView *>(this);
+		else if (same(iid, IPlugViewContentScaleSupport::iid))
+			*found = static_cast<IPlugViewContentScaleSupport *>(this);
+		if (!*found)
+			return kNoInterface;
+		addRef();
+		return kResultOk;
+	}
+	uint32 PLUGIN_API addRef() override { return ++references; }
+	uint32 PLUGIN_API release() override
+	{
+		const uint32 left = --references;
+		if (!left)
+			delete this;
+		return left;
+	}
+	void hold() override { addRef(); }
+	void let_go() override { release(); }
+
+	tresult PLUGIN_API isPlatformTypeSupported(FIDString type) override
+	{
+		return type ? result_of(ask(Writer(uint32_t(Call::view_platform)).u32(view).bytes(type, std::strlen(type)))) : kInvalidArgument;
+	}
+	tresult PLUGIN_API attached(void *parent, FIDString type) override
+	{
+		if (!parent || !type || std::strcmp(type, kPlatformTypeX11EmbedWindowID))
+			return kResultFalse;
+		return result_of(ask(Writer(uint32_t(Call::view_attach)).u32(view).u64(uint64_t(reinterpret_cast<uintptr_t>(parent)))));
+	}
+	tresult PLUGIN_API removed() override { return result_of(ask(Writer(uint32_t(Call::view_remove)).u32(view))); }
+	// The keyboard goes to the plugin's own window, which takes it when clicked.
+	tresult PLUGIN_API onWheel(float) override { return kResultFalse; }
+	tresult PLUGIN_API onKeyDown(char16, int16, int16) override { return kResultFalse; }
+	tresult PLUGIN_API onKeyUp(char16, int16, int16) override { return kResultFalse; }
+	tresult PLUGIN_API getSize(ViewRect *size) override
+	{
+		if (!size)
+			return kInvalidArgument;
+		auto answer = ask(Writer(uint32_t(Call::view_size)).u32(view));
+		const tresult result = result_of(answer);
+		if (result == kResultOk)
+			*size = answer->record<ViewRect>();
+		return result;
+	}
+	tresult PLUGIN_API onSize(ViewRect *size) override
+	{
+		return size ? result_of(ask(Writer(uint32_t(Call::view_on_size)).u32(view).record(*size))) : kInvalidArgument;
+	}
+	tresult PLUGIN_API onFocus(TBool state) override { return result_of(ask(Writer(uint32_t(Call::view_focus)).u32(view).u32(state ? 1 : 0))); }
+	tresult PLUGIN_API setFrame(IPlugFrame *given) override
+	{
+		forget_frame();
+		if (!given)
+			return kResultOk;
+		given->addRef();
+		frame = given;
+		if (frame->queryInterface(Linux::IRunLoop::iid, reinterpret_cast<void **>(&loop)) == kResultOk && loop) {
+			handler = new NoticeHandler;
+			if (loop->registerEventHandler(handler, Bridge::instance().notice_descriptor()) != kResultOk) {
+				handler->release();
+				handler = nullptr;
+			}
+		}
+		return kResultOk;
+	}
+	tresult PLUGIN_API canResize() override { return result_of(ask(Writer(uint32_t(Call::view_can_resize)).u32(view))); }
+	tresult PLUGIN_API checkSizeConstraint(ViewRect *size) override
+	{
+		if (!size)
+			return kInvalidArgument;
+		auto answer = ask(Writer(uint32_t(Call::view_check_size)).u32(view).record(*size));
+		const tresult result = result_of(answer);
+		if (answer && result != kInternalError)
+			*size = answer->record<ViewRect>();
+		return result;
+	}
+	tresult PLUGIN_API setContentScaleFactor(ScaleFactor factor) override
+	{
+		return result_of(ask(Writer(uint32_t(Call::view_scale)).u32(view).f64(factor)));
+	}
+
+	void tell(Reader &notice) override
+	{
+		if (Notice(notice.tag) != Notice::resize_view || !frame)
+			return;
+		auto size = notice.record<ViewRect>();
+		frame->resizeView(this, &size);
+	}
+
+private:
+	class NoticeHandler : public Counted<Linux::IEventHandler> {
+	public:
+		void PLUGIN_API onFDIsSet(Linux::FileDescriptor) override { Bridge::instance().deliver(); }
+	};
+
+	virtual ~ViewProxy()
+	{
+		forget_frame();
+		Bridge::instance().detach(view);
+		ask(Writer(uint32_t(Call::release)).u32(view));
+	}
+	void forget_frame()
+	{
+		if (loop && handler)
+			loop->unregisterEventHandler(handler);
+		if (handler)
+			handler->release();
+		if (loop)
+			loop->release();
+		if (frame)
+			frame->release();
+		handler = nullptr;
+		loop = nullptr;
+		frame = nullptr;
+	}
+
+	std::atomic<uint32> references{1};
+	const uint32_t view;
+	IPlugFrame *frame = nullptr;
+	Linux::IRunLoop *loop = nullptr;
+	NoticeHandler *handler = nullptr;
+};
+
+IPlugView *PLUGIN_API Proxy::Controller::createView(FIDString name)
+{
+	if (!name)
+		return nullptr;
+	auto answer = ask(Writer(uint32_t(Call::create_view)).u32(owner.object).bytes(name, std::strlen(name)));
+	const uint32_t made = answer ? answer->u32() : 0;
+	return made ? new ViewProxy(made) : nullptr;
 }
 
 class Factory : public Counted<IPluginFactory3, IPluginFactory2, IPluginFactory> {

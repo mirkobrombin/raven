@@ -2,6 +2,7 @@
 // only declare; pluginterfaces/base/coreiids.cpp has those of the base interfaces.
 
 #include "pluginterfaces/gui/iplugview.h"
+#include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -14,6 +15,12 @@
 namespace Steinberg {
 DEF_CLASS_IID(IPlugView)
 DEF_CLASS_IID(IPlugFrame)
+DEF_CLASS_IID(IPlugViewContentScaleSupport)
+namespace Linux {
+DEF_CLASS_IID(IRunLoop)
+DEF_CLASS_IID(IEventHandler)
+DEF_CLASS_IID(ITimerHandler)
+}
 namespace Vst {
 DEF_CLASS_IID(IComponent)
 DEF_CLASS_IID(IAudioProcessor)
