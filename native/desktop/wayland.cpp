@@ -229,6 +229,9 @@ struct WaylandPresentation::State {
 	std::set<uint64_t> full_screens;
 	// The top-level window that owns each window, which the compositor keeps it above.
 	std::map<uint64_t,uint64_t> owners;
+	// The windows of other programs that top-level windows show inside, by handle (see embed): such a window's toplevel names the other
+	// window in its application id, for the compositor of that program to show it there (the bridge of a VST 3 plugin, native/vst).
+	std::map<uint64_t,uint64_t> embedders;
 	// Windows whose pixels carry premultiplied alpha, which the compositor blends over what lies below.
 	std::set<uint64_t> translucent;
 
@@ -1118,6 +1121,19 @@ struct WaylandPresentation::State {
 		xdg_toplevel_set_parent(found->second->role,shown ? parent->second->role : nullptr);
 	}
 
+	// Shows a top-level window inside a window of another program from its next frame on, or on its own again for 0.
+	void embed(uint64_t handle,uint64_t host) {
+		const auto known=embedders.find(handle);
+		if (known==embedders.end() ? !host : known->second==host) return;
+		if (host) embedders[handle]=host;
+		else embedders.erase(known);
+		// A window shown already is made again, with its new application id, by its next frame.
+		if (const auto found=surfaces.find(handle); found!=surfaces.end() && found->second->role) {
+			surfaces.erase(found);
+			sync();
+		}
+	}
+
 	void transient_for(uint64_t handle,uint64_t owner) {
 		const auto known=owners.find(handle);
 		if (owner ? known!=owners.end() && known->second==owner : known==owners.end()) return;
@@ -1194,7 +1210,8 @@ struct WaylandPresentation::State {
 			xdg_surface_add_listener(window->shell,&surface_listener,window.get());
 			xdg_toplevel_add_listener(window->role,&role_listener,window.get());
 			xdg_toplevel_set_title(window->role,std::string(title).c_str());
-			xdg_toplevel_set_app_id(window->role,"raven.native");
+			const auto embedder=embedders.find(handle);
+			xdg_toplevel_set_app_id(window->role,embedder==embedders.end() ? "raven.native" : ("raven-embed-"+std::to_string(embedder->second)).c_str());
 			// A floating window starts at its requested size; a maximized one follows the compositor's work area.
 			if (window->maximized) xdg_toplevel_set_maximized(window->role);
 			else if (window->full_screen) xdg_toplevel_set_fullscreen(window->role,nullptr);
@@ -1260,6 +1277,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->full_screens.erase(handle);
 		state->on_screen.erase(handle);
 		state->owners.erase(handle);
+		state->embedders.erase(handle);
 		state->translucent.erase(handle);
 		if (state->pointer_window==handle) state->pointer_window=0;
 		if (state->keyboard_window==handle) state->keyboard_window=0;
@@ -1331,6 +1349,7 @@ DesktopPresentation WaylandPresentation::callbacks()
 		state->overlay(handle,window,x,y,width,height,pixels,stride);
 	}};
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.embed=[this](uint64_t handle,uint64_t host) { state->embed(handle,host); };
 	result.full_screen=[this](uint64_t handle,bool wanted) { state->full_screen(handle,wanted); };
 	result.quiet=[this] { return state->quiet(); };
 	result.changed_within=[this](uint64_t handle,std::array<int32_t,4> area) { state->within[handle]=area; };

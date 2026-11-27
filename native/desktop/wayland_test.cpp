@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
@@ -42,6 +43,9 @@ struct Compositor {
 	uint32_t serial=0,pressed=0;
 	// Set by the test: a key is pressed and released; the next frame committed to a window is answered with a request to close it.
 	std::atomic<bool> type{false},stop{false},close_on_commit{false};
+	// The application id the newest toplevel was given.
+	std::string app_id;
+	std::mutex app_id_lock;
 
 	void focus(wl_resource *surface) {
 		if (!keyboard) return;
@@ -114,6 +118,9 @@ static int dispatch(const void *data,void *target,uint32_t,const wl_message *mes
 		compositor.placed_y=arguments[1].i;
 	} else if (request=="xdg_positioner.set_constraint_adjustment") {
 		compositor.adjustments[resource]=arguments[0].u;
+	} else if (request=="xdg_toplevel.set_app_id") {
+		const std::lock_guard guard(compositor.app_id_lock);
+		compositor.app_id=arguments[0].s ? arguments[0].s : "";
 	} else if (request=="xdg_popup.grab") {
 		auto &shell=compositor.surfaces[surface_of(resource)];
 		shell.grab=true;
@@ -247,6 +254,15 @@ static void exercise(raven::DesktopPresentation &desktop,Compositor &compositor)
 	const int pools_small=compositor.pools;
 	desktop.present(9,"sizes",600,80,std::vector<uint8_t>(600*80*4,0x50));
 	check(compositor.committed_width==600 && compositor.committed_byte==0x50 && compositor.pools==pools_small+1,"a larger frame is not shown whole");
+	// A window shown inside a window of another program names it in its application id, for that program's compositor (native/vst);
+	// shown on its own again, it is the runtime's window as before.
+	const auto app_id=[&] { const std::lock_guard guard(compositor.app_id_lock); return compositor.app_id; };
+	desktop.embed(10,42);
+	desktop.present(10,"editor",32,24,std::vector<uint8_t>(32*24*4,0x60));
+	check(app_id()=="raven-embed-42","an embedded window does not name the window it shows inside");
+	desktop.embed(10,0);
+	desktop.present(10,"editor",32,24,std::vector<uint8_t>(32*24*4,0x60));
+	check(app_id()=="raven.native","a window shown on its own again still names another program's window");
 }
 
 int main()
