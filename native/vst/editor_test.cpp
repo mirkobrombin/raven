@@ -5,9 +5,7 @@
 //
 // usage: editor_test MODULE
 
-#include "guest/raven-vsthost/bridge_objects.h"
-
-#include "pluginterfaces/gui/iplugview.h"
+#include "vst/test_host.h"
 
 #include <xcb/xcb.h>
 
@@ -15,101 +13,13 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
-#include <map>
 
 #include <dlfcn.h>
-#include <poll.h>
 
 using namespace raven_vst;
+using namespace raven_vst::test;
 
 namespace {
-
-void check(bool value, const char *message)
-{
-	if (!value)
-		throw std::runtime_error(message);
-}
-
-// The run loop a host's frame brings: the descriptors the plugin registers are looked at while the host waits.
-class RunLoop : public Counted<Linux::IRunLoop> {
-public:
-	tresult PLUGIN_API registerEventHandler(Linux::IEventHandler *handler, Linux::FileDescriptor descriptor) override
-	{
-		if (!handler || descriptor < 0)
-			return kInvalidArgument;
-		handler->addRef();
-		handlers.emplace(descriptor, handler);
-		return kResultOk;
-	}
-	tresult PLUGIN_API unregisterEventHandler(Linux::IEventHandler *handler) override
-	{
-		for (auto at = handlers.begin(); at != handlers.end();)
-			if (at->second == handler) {
-				at->second->release();
-				at = handlers.erase(at);
-			} else
-				++at;
-		return kResultOk;
-	}
-	tresult PLUGIN_API registerTimer(Linux::ITimerHandler *, Linux::TimerInterval) override { return kNotImplemented; }
-	tresult PLUGIN_API unregisterTimer(Linux::ITimerHandler *) override { return kNotImplemented; }
-	// Runs what became ready within `slice`.
-	void run(std::chrono::milliseconds slice)
-	{
-		std::vector<pollfd> watched;
-		for (const auto &[descriptor, handler] : handlers)
-			watched.push_back({descriptor, POLLIN, 0});
-		::poll(watched.data(), watched.size(), int(slice.count()));
-		for (const auto &entry : watched)
-			if (entry.revents)
-				if (const auto found = handlers.find(entry.fd); found != handlers.end())
-					found->second->onFDIsSet(entry.fd);
-	}
-	size_t count() const { return handlers.size(); }
-
-private:
-	std::multimap<int, Linux::IEventHandler *> handlers;
-};
-
-class Frame : public Counted<IPlugFrame> {
-public:
-	explicit Frame(RunLoop &loop) : loop(loop) {}
-	tresult PLUGIN_API queryInterface(const TUID iid, void **object) override
-	{
-		if (same(iid, Linux::IRunLoop::iid))
-			return loop.queryInterface(iid, object);
-		return Counted::queryInterface(iid, object);
-	}
-	tresult PLUGIN_API resizeView(IPlugView *, ViewRect *) override { return kResultTrue; }
-
-private:
-	RunLoop &loop;
-};
-
-// Keeps the edits the controller tells the host of.
-class Handler : public Counted<IComponentHandler> {
-public:
-	tresult PLUGIN_API beginEdit(ParamID) override
-	{
-		++begun;
-		return kResultOk;
-	}
-	tresult PLUGIN_API performEdit(ParamID id, ParamValue value) override
-	{
-		edited = id;
-		this->value = value;
-		return kResultOk;
-	}
-	tresult PLUGIN_API endEdit(ParamID) override
-	{
-		++ended;
-		return kResultOk;
-	}
-	tresult PLUGIN_API restartComponent(int32) override { return kResultOk; }
-	int begun = 0, ended = 0;
-	ParamID edited = UINT32_MAX;
-	ParamValue value = -1;
-};
 
 // The colour at a point of a window, as the server shows it.
 uint32_t pixel(xcb_connection_t *connection, xcb_window_t window, int16_t x, int16_t y)
@@ -153,15 +63,7 @@ int main(int count, char **arguments)
 		IPluginFactory *const factory = get ? get() : nullptr;
 		check(factory, "the module has no factory");
 		TUID controller_id{};
-		bool found = false;
-		for (int32 index = 0; index < factory->countClasses() && !found; ++index) {
-			PClassInfo info{};
-			if (factory->getClassInfo(index, &info) == kResultOk && !std::strcmp(info.category, kVstComponentControllerClass)) {
-				std::memcpy(controller_id, info.cid, sizeof controller_id);
-				found = true;
-			}
-		}
-		check(found, "no controller class");
+		check(controller_class(*factory, controller_id), "no controller class");
 		IEditController *controller = nullptr;
 		check(factory->createInstance(controller_id, IEditController::iid, reinterpret_cast<void **>(&controller)) == kResultOk && controller,
 			"the controller is not made");

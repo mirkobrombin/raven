@@ -3,6 +3,7 @@
 
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
+#include "pluginterfaces/gui/iwaylandframe.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -16,6 +17,8 @@ namespace Steinberg {
 DEF_CLASS_IID(IPlugView)
 DEF_CLASS_IID(IPlugFrame)
 DEF_CLASS_IID(IPlugViewContentScaleSupport)
+DEF_CLASS_IID(IWaylandHost)
+DEF_CLASS_IID(IWaylandFrame)
 namespace Linux {
 DEF_CLASS_IID(IRunLoop)
 DEF_CLASS_IID(IEventHandler)

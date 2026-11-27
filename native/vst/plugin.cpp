@@ -15,7 +15,9 @@
 #include "guest/raven-vsthost/bridge_objects.h"
 
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
+#include "pluginterfaces/gui/iwaylandframe.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
+#include "vst/wayland_relay.h"
 
 #include <condition_variable>
 #include <deque>
@@ -104,6 +106,35 @@ public:
 
 	// Signaled when a notice comes, for a host's run loop to hand it on from its own thread (see ViewProxy::setFrame).
 	int notice_descriptor() const { return notices_ready; }
+
+	// Where editors show: in the host's X11 windows, or on its Wayland surfaces through the relay (wayland_relay.h).
+	bool shows_on_x11() const { return x11; }
+	WaylandRelay *wayland() const { return relay.get(); }
+
+	// The host, as it gave itself to the factory or to an object, for what it makes for plugins (IWaylandHost).
+	void remember_host(FUnknown *context)
+	{
+		const std::lock_guard guard(lock);
+		IHostApplication *given = nullptr;
+		if (application || !context || context->queryInterface(IHostApplication::iid, reinterpret_cast<void **>(&given)) != kResultOk)
+			return;
+		application = given;
+	}
+	IHostApplication *host_application()
+	{
+		const std::lock_guard guard(lock);
+		if (application)
+			application->addRef();
+		return application;
+	}
+	// The host is let go before it unloads the module, as it may be gone by the time the module's own objects end.
+	void forget_host()
+	{
+		const std::lock_guard guard(lock);
+		if (application)
+			application->release();
+		application = nullptr;
+	}
 
 	void attach(uint32_t object, Receiver *proxy)
 	{
@@ -253,9 +284,20 @@ private:
 		std::vector<std::string> arguments{raven, "--run-process", "--execution=native", "--stdio=inherit", "--timeout-ms=none",
 			"--link-fd=3", grant};
 		// A host shows a plugin's editor in an X11 window (kPlatformTypeX11EmbedWindowID), which only the runtime's X11 desktop can show a
-		// window inside.
-		if (std::getenv("DISPLAY"))
+		// window inside, and an X11 host has DISPLAY, a Wayland host under XWayland too. A host with Wayland alone shows it on a Wayland
+		// surface: the runtime's desktop is then the relay, whose connection it inherits as WAYLAND_SOCKET.
+		x11 = std::getenv("DISPLAY") != nullptr;
+		int wayland_client = -1;
+#ifdef RAVEN_VST_WAYLAND
+		if (!x11 && std::getenv("WAYLAND_DISPLAY"))
+			relay = WaylandRelay::start(wayland_client);
+#endif
+		if (x11)
 			arguments.emplace_back("--desktop=x11");
+		else if (relay) {
+			arguments.emplace_back("--desktop=wayland");
+			posix_spawn_file_actions_adddup2(&actions, wayland_client, 4);
+		}
 		arguments.push_back(command);
 		arguments.push_back(host);
 		std::vector<char *> argv;
@@ -268,6 +310,8 @@ private:
 				environment.emplace_back(*variable);
 		if (!prefix.empty())
 			environment.push_back("RAVEN_PREFIX=" + prefix);
+		if (relay)
+			environment.push_back("WAYLAND_SOCKET=4");
 		std::vector<char *> envp;
 		for (auto &variable : environment)
 			envp.push_back(variable.data());
@@ -277,6 +321,8 @@ private:
 		::close(child_input);
 		::close(child_output);
 		::close(child_link);
+		if (wayland_client >= 0)
+			::close(wayland_client);
 		if (spawned) {
 			child = -1;
 			std::fprintf(stderr, "raven-vst: %s does not start: %s\n", raven.c_str(), std::strerror(spawned));
@@ -332,6 +378,9 @@ private:
 	bool failed = false;
 	uint64_t used = 4096;
 	int notices_ready = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+	bool x11 = false;
+	std::unique_ptr<WaylandRelay> relay;
+	IHostApplication *application = nullptr;
 };
 
 // Shorthands for the calls of an object.
@@ -387,6 +436,7 @@ public:
 	// IPluginBase
 	tresult PLUGIN_API initialize(FUnknown *context) override
 	{
+		Bridge::instance().remember_host(context);
 		String128 name{};
 		IHostApplication *application = nullptr;
 		if (context && context->queryInterface(IHostApplication::iid, reinterpret_cast<void **>(&application)) == kResultOk && application) {
@@ -881,15 +931,41 @@ public:
 
 	tresult PLUGIN_API isPlatformTypeSupported(FIDString type) override
 	{
-		return type ? result_of(ask(Writer(uint32_t(Call::view_platform)).u32(view).bytes(type, std::strlen(type)))) : kInvalidArgument;
+		if (!type || !shown_on(type))
+			return type ? kResultFalse : kInvalidArgument;
+		return result_of(ask(Writer(uint32_t(Call::view_platform)).u32(view).bytes(type, std::strlen(type))));
 	}
 	tresult PLUGIN_API attached(void *parent, FIDString type) override
 	{
-		if (!parent || !type || std::strcmp(type, kPlatformTypeX11EmbedWindowID))
+		if (!parent || !type || !shown_on(type) || wayland_display)
 			return kResultFalse;
-		return result_of(ask(Writer(uint32_t(Call::view_attach)).u32(view).u64(uint64_t(reinterpret_cast<uintptr_t>(parent)))));
+		if (!std::strcmp(type, kPlatformTypeX11EmbedWindowID))
+			return result_of(ask(Writer(uint32_t(Call::view_attach)).u32(view).u64(uint64_t(reinterpret_cast<uintptr_t>(parent)))));
+		// On Wayland the runtime's window for the view is tagged with the view's number, which the relay shows on the host's surface,
+		// on a connection the host opens for the plugin.
+		IHostApplication *const application = Bridge::instance().host_application();
+		void *made = nullptr;
+		if (application && application->createInstance(const_cast<char *>(IWaylandHost::iid.toTUID()), const_cast<char *>(IWaylandHost::iid.toTUID()),
+				&made) == kResultOk)
+			wayland_host = static_cast<IWaylandHost *>(made);
+		if (application)
+			application->release();
+		wayland_display = wayland_host ? wayland_host->openWaylandConnection() : nullptr;
+		if (!wayland_display || !Bridge::instance().wayland()->show(view, wayland_display, static_cast<wl_surface *>(parent))) {
+			detach_wayland();
+			return kResultFalse;
+		}
+		const tresult result = result_of(ask(Writer(uint32_t(Call::view_attach)).u32(view).u64(view)));
+		if (result != kResultOk)
+			detach_wayland();
+		return result;
 	}
-	tresult PLUGIN_API removed() override { return result_of(ask(Writer(uint32_t(Call::view_remove)).u32(view))); }
+	tresult PLUGIN_API removed() override
+	{
+		const tresult result = result_of(ask(Writer(uint32_t(Call::view_remove)).u32(view)));
+		detach_wayland();
+		return result;
+	}
 	// The keyboard goes to the plugin's own window, which takes it when clicked.
 	tresult PLUGIN_API onWheel(float) override { return kResultFalse; }
 	tresult PLUGIN_API onKeyDown(char16, int16, int16) override { return kResultFalse; }
@@ -955,8 +1031,31 @@ private:
 		void PLUGIN_API onFDIsSet(Linux::FileDescriptor) override { Bridge::instance().deliver(); }
 	};
 
+	// The platform the runtime's desktop shows views on.
+	static bool shown_on(FIDString type)
+	{
+		auto &bridge = Bridge::instance();
+		return bridge.shows_on_x11() ? !std::strcmp(type, kPlatformTypeX11EmbedWindowID)
+					     : bridge.wayland() && !std::strcmp(type, kPlatformTypeWaylandSurfaceID);
+	}
+	// The view shows on the host's Wayland connection no more, which goes back to the host.
+	void detach_wayland()
+	{
+		if (wayland_display) {
+			Bridge::instance().wayland()->hide(view);
+			Bridge::instance().wayland()->forget(wayland_display);
+			wayland_host->closeWaylandConnection(wayland_display);
+		}
+		if (wayland_host)
+			wayland_host->release();
+		wayland_display = nullptr;
+		wayland_host = nullptr;
+	}
+
 	virtual ~ViewProxy()
 	{
+		if (wayland_display)
+			removed();
 		forget_frame();
 		Bridge::instance().detach(view);
 		ask(Writer(uint32_t(Call::release)).u32(view));
@@ -981,6 +1080,8 @@ private:
 	IPlugFrame *frame = nullptr;
 	Linux::IRunLoop *loop = nullptr;
 	NoticeHandler *handler = nullptr;
+	IWaylandHost *wayland_host = nullptr;
+	wl_display *wayland_display = nullptr;
 };
 
 IPlugView *PLUGIN_API Proxy::Controller::createView(FIDString name)
@@ -1035,7 +1136,11 @@ public:
 		widen(info->sdkVersion, more->sdkVersion, PClassInfo2::kVersionSize);
 		return kResultOk;
 	}
-	tresult PLUGIN_API setHostContext(FUnknown *) override { return kResultOk; }
+	tresult PLUGIN_API setHostContext(FUnknown *context) override
+	{
+		Bridge::instance().remember_host(context);
+		return kResultOk;
+	}
 	tresult PLUGIN_API createInstance(FIDString cid, FIDString iid, void **object) override
 	{
 		*object = nullptr;
@@ -1077,7 +1182,11 @@ private:
 extern "C" {
 
 SMTG_EXPORT_SYMBOL bool ModuleEntry(void *) { return true; }
-SMTG_EXPORT_SYMBOL bool ModuleExit() { return true; }
+SMTG_EXPORT_SYMBOL bool ModuleExit()
+{
+	Bridge::instance().forget_host();
+	return true;
+}
 
 SMTG_EXPORT_SYMBOL IPluginFactory *PLUGIN_API GetPluginFactory()
 {

@@ -7553,6 +7553,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_target_properties(raven_vst PROPERTIES PREFIX "" OUTPUT_NAME raven-vst CXX_VISIBILITY_PRESET hidden)
             target_compile_options(raven_vst PRIVATE -Wno-format)
             target_link_libraries(raven_vst PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+            # A Wayland host's editors show through the plugin's own compositor for the runtime (vst/wayland_relay.h).
+            if(TARGET raven_wayland AND WAYLAND_SERVER_FOUND)
+                target_sources(raven_vst PRIVATE vst/wayland_relay.cpp ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c
+                    ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-server-protocol.h)
+                target_include_directories(raven_vst PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+                target_compile_definitions(raven_vst PRIVATE RAVEN_VST_WAYLAND)
+                target_link_libraries(raven_vst PRIVATE PkgConfig::WAYLAND_CLIENT PkgConfig::WAYLAND_SERVER)
+            endif()
             add_executable(vst_bridge_test vst/bridge_test.cpp ${vst_source}/interfaces.cpp ${vst_interfaces})
             target_include_directories(vst_bridge_test PRIVATE ${RAVEN_VST3_SDK_DIRECTORY} ${CMAKE_CURRENT_SOURCE_DIR})
             target_compile_options(vst_bridge_test PRIVATE -Wno-format)
@@ -7589,6 +7597,21 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${CMAKE_CURRENT_BINARY_DIR}/vst-editor $<TARGET_FILE:vst_editor_test> ${vst_bridged}/Contents/x86_64-linux/RavenGainBridged.so)
                 set_tests_properties(native_vst_editor PROPERTIES TIMEOUT 120
                     PASS_REGULAR_EXPRESSION "editor: shown in the host's window\nedit: parameter 0 to 0.75, 1 begun, 1 ended\neditor: done"
+                    ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+            endif()
+            # The same on a Wayland host's surface, through the plugin's relay, on an isolated labwc.
+            if(TARGET raven_wayland AND WAYLAND_SERVER_FOUND AND RAVEN_LABWC AND RAVEN_GRIM AND RAVEN_WLRCTL AND RAVEN_WLR_RANDR AND RAVEN_PIL_PYTHON)
+                add_executable(vst_wayland_editor_test vst/wayland_editor_test.cpp ${vst_source}/interfaces.cpp ${vst_interfaces}
+                    ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c)
+                target_include_directories(vst_wayland_editor_test PRIVATE ${RAVEN_VST3_SDK_DIRECTORY} ${CMAKE_CURRENT_SOURCE_DIR}
+                    ${CMAKE_CURRENT_BINARY_DIR})
+                target_compile_options(vst_wayland_editor_test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-format>)
+                target_link_libraries(vst_wayland_editor_test PRIVATE ${CMAKE_DL_LIBS} Threads::Threads PkgConfig::WAYLAND_CLIENT)
+                add_test(NAME native_vst_wayland_editor COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-wayland-vst-editor.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/vst-wayland-editor $<TARGET_FILE:vst_wayland_editor_test>
+                    ${vst_bridged}/Contents/x86_64-linux/RavenGainBridged.so)
+                set_tests_properties(native_vst_wayland_editor PROPERTIES TIMEOUT 180 RESOURCE_LOCK raven_compositor
+                    PASS_REGULAR_EXPRESSION "editor: shown at the corner of the host's window, 300 by 200\nedit: parameter 0 to 0.75, 1 begun, 1 ended\neditor: done"
                     ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
             endif()
         endif()

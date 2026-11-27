@@ -87,11 +87,12 @@ enum class Call : uint32_t {
 	get_normalized, // object, id -> value
 	set_normalized, // object, id, value -> result
 	set_handler, // object, whether the host gave one -> result
-	// IPlugView: a view is an object of its own, released with `release`. The Linux side shows it inside the host's X11 window, which
-	// the program gives a window of its own to (RavenEmbedWindow), and the plugin's view is attached to that window as on Windows.
+	// IPlugView: a view is an object of its own, released with `release`. The Linux side shows it inside the host's X11 window, or on its
+	// Wayland surface through the relay of native/vst/wayland_relay.h, which the program gives a window of its own to (RavenEmbedWindow),
+	// and the plugin's view is attached to that window as on Windows.
 	create_view, // object, name -> view (0 when the controller has none)
 	view_platform, // view, platform type -> result
-	view_attach, // view, the host's X11 window -> result
+	view_attach, // view, the host's X11 window or, on Wayland, the view itself, which tags its window (wayland_relay.h) -> result
 	view_remove, // view -> result
 	view_size, // view -> result, ViewRect
 	view_on_size, // view, ViewRect -> result

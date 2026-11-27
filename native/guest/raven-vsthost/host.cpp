@@ -845,10 +845,11 @@ private:
 		IPlugView &view = *target.view;
 		switch (kind) {
 		case Call::view_platform: {
-			// The host's X11 window becomes a window of the program's own: the view is attached to that as on Windows.
+			// The host's X11 window or Wayland surface shows a window of the program's own: the view is attached to that as on Windows.
 			const auto type = call.bytes();
-			const bool x11 = std::string(type.begin(), type.end()) == kPlatformTypeX11EmbedWindowID;
-			answer.result(x11 ? view.isPlatformTypeSupported(kPlatformTypeHWND) : kResultFalse);
+			const std::string name(type.begin(), type.end());
+			const bool linux_type = name == kPlatformTypeX11EmbedWindowID || name == kPlatformTypeWaylandSurfaceID;
+			answer.result(linux_type ? view.isPlatformTypeSupported(kPlatformTypeHWND) : kResultFalse);
 			break;
 		}
 		case Call::view_attach: {
