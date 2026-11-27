@@ -563,7 +563,8 @@
         "native/guest/raven-installer/dllmain.c",
         "native/guest/raven-installer/msftedit.c",
         "native/guest/raven-installer/support.c",
-        "native/guest/raven-vsthost/host.cpp"
+        "native/guest/raven-vsthost/host.cpp",
+        "native/guest/raven-vsthost/ravenhost64.def"
       ],
       "license": "MIT",
       "review": "reviewed",

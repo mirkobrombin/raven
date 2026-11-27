@@ -153,6 +153,8 @@ void register_sandbox_api(ApiRegistry &registry, KernelContext &context);
 void register_shader_service(ApiRegistry &registry, KernelContext &context);
 // The sound engine for the guest's audio components: streams whose samples and counters live in a page the guest maps (raven_audio.h).
 void register_audio_service(ApiRegistry &registry, KernelContext &context);
+// The waits and wakes on the words of the memory the program that started the runtime shares with the Windows program (link.h).
+void register_link_service(ApiRegistry &registry, KernelContext &context);
 // An installed font family as GDI enumerates it: the face closest to regular, and the scripts and code pages its OS/2 table claims.
 struct InstalledFamily {
 	std::u16string name;

@@ -1,0 +1,5 @@
+LIBRARY ravenhost.dll
+EXPORTS
+	RavenLinkMap
+	RavenLinkWait
+	RavenLinkWake

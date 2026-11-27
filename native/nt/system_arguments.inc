@@ -2382,7 +2382,7 @@ static constexpr std::pair<std::string_view, uint8_t> ravenhost_words[]{
 	{"RavenAppDiscard",1},{"RavenAppList",2},{"RavenAudioClose",1},{"RavenAudioOpen",6},{"RavenAudioReset",1},{"RavenAudioSetEvent",2},{"RavenAudioStart",1},{"RavenAudioStop",1},{"RavenCanvasBatch",2},{"RavenCanvasBounds",2},{"RavenCanvasChanged",3},{"RavenCanvasCreate",2},{"RavenCanvasDestroy",1},{"RavenCanvasDraw",4},
 	{"RavenCanvasPixels",8},{"RavenCanvasSize",2},{"RavenCreateSharedVisual",1},{"RavenFontClose",1},{"RavenFontGlyphs",4},{"RavenFontInfo",2},{"RavenFontMetrics",3},
 	{"RavenFontName",4},{"RavenFontOpen",3},{"RavenFontOutline",4},{"RavenFontRender",10},{"RavenFontScan",2},{"RavenFontTable",5},
-	{"RavenGrantPath",2},{"RavenHostApps",2},{"RavenHostOpen",1},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenPublishPackage",2},{"RavenSandboxLog",2},
+	{"RavenGrantPath",2},{"RavenHostApps",2},{"RavenHostOpen",1},{"RavenLinkMap",1},{"RavenLinkWait",3},{"RavenLinkWake",1},{"RavenPathCombine",8},{"RavenPathWiden",7},{"RavenPublishPackage",2},{"RavenSandboxLog",2},
 	{"RavenSandboxRead",2},{"RavenSandboxWrite",1},{"RavenShaderRelease",1},{"RavenShaderRequest",2},{"RavenShaderResult",4},{"RavenSnapshotDelete",1},
 	{"RavenSnapshotList",2},{"RavenSnapshotRestore",1},{"RavenSnapshotTake",1},{"RavenTrace",1},{"RavenVerifyPackageSignature",5},{"RavenWinRTClassLibrary",3},
 };

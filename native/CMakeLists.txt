@@ -103,7 +103,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_compile_options(raven-bootstrap PRIVATE -fno-sanitize=all)
     target_link_options(raven-bootstrap PRIVATE -fno-sanitize=all -nostdlib -static
         -Wl,-no-pie,-Ttext-segment=0x700000000000,-e,_start,--build-id=none)
-    add_library(raven_cpu STATIC cpu/native_cpu.cpp cpu/gates.S cpu/preludes.S cpu/agent.S cpu/agent_tasks.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/audio_engine.cpp nt/audio_service.cpp nt/warm_host.cpp nt/warm_client.cpp nt/event_pulse.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/guest_events.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/apps.cpp nt/sandbox.cpp nt/sandbox_api.cpp nt/confine.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/unload_trace.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp nt/alpc_api.cpp)
+    add_library(raven_cpu STATIC cpu/native_cpu.cpp cpu/gates.S cpu/preludes.S cpu/agent.S cpu/agent_tasks.cpp nt/normalization.cpp nt/environment.cpp nt/system.cpp nt/firmware.cpp nt/interfaces.cpp nt/providers.cpp nt/audio_engine.cpp nt/audio_service.cpp nt/link_service.cpp nt/warm_host.cpp nt/warm_client.cpp nt/event_pulse.cpp nt/api.cpp nt/unwind.cpp nt/seh.cpp nt/apiset.cpp nt/system_exports.cpp nt/text.cpp nt/paths.cpp nt/file_api.cpp nt/ansi_api.cpp nt/shlwapi_api.cpp nt/registry_api.cpp nt/shell_api.cpp nt/platform_api.cpp nt/hash.cpp nt/version_api.cpp nt/system_api.cpp nt/process_api.cpp nt/actctx.cpp nt/security_api.cpp nt/access_token.cpp nt/event.cpp nt/guest_events.cpp nt/mutex.cpp nt/child_api.cpp nt/child_process.cpp nt/winsock_api.cpp nt/host_api.cpp nt/pipe.cpp nt/job_api.cpp nt/wave_api.cpp nt/mmio_api.cpp nt/inherit.cpp nt/handle_channel.cpp nt/elevation.cpp nt/snapshot.cpp nt/apps.cpp nt/sandbox.cpp nt/sandbox_api.cpp nt/confine.cpp nt/restart.cpp nt/service_api.cpp nt/crypt32_api.cpp nt/bcrypt_api.cpp nt/authenticode.cpp nt/process_info_api.cpp nt/font_service.cpp nt/shader_service.cpp nt/canvas_service.cpp nt/sync_api.cpp nt/threads.cpp nt/thread_api.cpp nt/text_api.cpp nt/console.cpp nt/console_api.cpp nt/memory_api.cpp nt/guest_allocator.cpp nt/unload_trace.cpp nt/module_api.cpp nt/loader.cpp nt/tls.cpp nt/exceptions.cpp nt/resources.cpp nt/memory.cpp nt/objects.cpp nt/object_api.cpp nt/heap.cpp desktop/objects.cpp desktop/nonclient.cpp desktop/api.cpp desktop/surface.cpp desktop/windows.cpp desktop/system.cpp desktop/user_api.cpp desktop/window_manager.cpp desktop/window_ansi.cpp desktop/menu_manager.cpp desktop/shared_pixels.cpp desktop/foreign_surface.cpp desktop/user_ext.cpp desktop/scrollbar.cpp desktop/window_long.cpp desktop/child_frame.cpp desktop/gdi.cpp desktop/gdi_api.cpp desktop/gdi_text.cpp desktop/theme.cpp nt/alpc_api.cpp)
     target_sources(raven_cpu PRIVATE nt/msix.cpp)
     target_include_directories(raven_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     set(NLS_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/upstream/windows-codepages)
@@ -3638,6 +3638,22 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_desktop_surface_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
         endif()
         find_program(RAVEN_DLLTOOL x86_64-w64-mingw32-dlltool)
+        # The link between a Linux program and the Windows program the runtime runs for it: the two take turns on words of the memory
+        # they share, and the Linux side reports how long each turn took.
+        if(RAVEN_DLLTOOL)
+            set(LINK_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/link-fixtures)
+            add_custom_command(OUTPUT ${LINK_FIXTURES}/client.exe
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${LINK_FIXTURES}
+                COMMAND ${RAVEN_DLLTOOL} -d ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/ravenhost64.def -l ${LINK_FIXTURES}/ravenhost.a
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry
+                    -o ${LINK_FIXTURES}/client.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/link_client.c ${LINK_FIXTURES}/ravenhost.a -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/link_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/ravenhost64.def VERBATIM)
+            add_custom_target(link_pe_fixture ALL DEPENDS ${LINK_FIXTURES}/client.exe)
+            add_executable(link_test nt/link_test.cpp)
+            add_test(NAME native_link_turns COMMAND link_test $<TARGET_FILE:raven> ${LINK_FIXTURES}/client.exe)
+            set_tests_properties(native_link_turns PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "link: 2000 rounds"
+                ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
+        endif()
         if(Vulkan_FOUND AND RAVEN_DLLTOOL)
             set(VULKAN_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/vulkan-fixtures)
             # The import library lists every command the guest provider exports: the hand-written ones and the generated ones.

@@ -314,6 +314,9 @@ static bool beside_api(std::string_view module, std::string_view name)
 		return desktop_beside_api(name) || name == "FillRect" || name == "FrameRect";
 	if (module == "gdi32.dll" || module == "msimg32.dll")
 		return gdi_beside_api(name);
+	// A wait on a word of the link sleeps on the word alone, and a wake only wakes its sleepers.
+	if (module == "ravenhost.dll")
+		return name == "RavenLinkWait" || name == "RavenLinkWake";
 	// Recording into a command buffer, submitting it and waiting for the work, which only read the Vulkan bridge's tables (see
 	// VulkanBridge::dispatch_beside).
 	if (module == "vulkan-1.dll")
@@ -3783,6 +3786,7 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	register_sandbox_api(api_registry, kernel);
 	register_shader_service(api_registry, kernel);
 	register_audio_service(api_registry, kernel);
+	register_link_service(api_registry, kernel);
 	register_canvas_service(api_registry, kernel);
 	api_registry.set_kernel(true);
 	register_sync_api(api_registry, kernel);

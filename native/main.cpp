@@ -14,6 +14,7 @@
 #include "nt/snapshot.h"
 #include "nt/apps.h"
 #include "nt/confine.h"
+#include "nt/link.h"
 #include "nt/sandbox.h"
 #include "nt/handle_channel.h"
 #include "nt/text.h"
@@ -302,6 +303,13 @@ int main(int argc, char **argv)
 		else if (option.starts_with("--inherit-fd=")) inherit_fd=std::atoi(std::string(option.substr(13)).c_str());
 		else if (option.starts_with("--handle-channel-fd=")) handle_channel_fd=std::atoi(std::string(option.substr(20)).c_str());
 		else if (option.starts_with("--host-broker-fd=")) raven::adopt_host_broker(std::atoi(std::string(option.substr(17)).c_str()));
+		// Memory the program starting the runtime shares with the Windows program, which maps it through ravenhost.dll's RavenLinkMap.
+		else if (option.starts_with("--link-fd=")) {
+			if (!raven::adopt_link(std::atoi(std::string(option.substr(10)).c_str()))) {
+				std::cerr << "raven: --link-fd must name a descriptor of shared memory\n";
+				return 2;
+			}
+		}
 		else if (option.starts_with("--diagnostics-fd=")) {
 			// The runtime's own messages go where the parent runtime writes its own; the program's standard error moves out of their way
 			// to a descriptor of its own, so nothing the runtime says ever lands in a pipe the program reads.
