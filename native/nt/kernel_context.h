@@ -71,6 +71,9 @@ struct KernelContext {
 	std::function<void(uint64_t, bool)> reference_module;
 	// The loaded module a guest string names, by name or by path, as GetModuleHandle finds it (zero, with the last error set, if none).
 	std::function<uint64_t(uint64_t, bool)> module_named;
+	// Posts a message to a window's queue as PostMessage does, from the scheduler's own work as well as from a call; false when there is
+	// no such window (set by the window manager).
+	std::function<bool(uint64_t, uint32_t, uint64_t, uint64_t)> post_window_message;
 	// The environment variables the program has now, as the block a new process receives (set by the system handlers).
 	std::function<std::u16string()> environment_block;
 	// A certificate context for the first of these encoded certificates, its store a new memory store holding them all, as Schannel

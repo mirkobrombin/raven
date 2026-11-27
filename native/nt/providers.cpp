@@ -3808,6 +3808,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	api_registry.set_desktop(false);
 #endif
 	windows.register_api(desktop_api);
+	kernel.post_window_message = [&windows](uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam) {
+		const DesktopScope desktop_scope;
+		return windows.post_message(window, message, wparam, lparam);
+	};
 	desktop.register_gdi_api(desktop_api);
 	desktop.register_text_api(desktop_api);
 	desktop.register_image_api(desktop_api);

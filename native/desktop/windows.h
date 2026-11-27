@@ -179,6 +179,9 @@ public:
 	void api_left();
 	// user32 entry points that follow the shared registry conventions; every handler runs on the calling guest thread.
 	void register_api(ApiRegistry &registry);
+	// PostMessage for the runtime's own work, such as the network events of WSAAsyncSelect; false when there is no such window or its
+	// queue is full. The caller holds the desktop lock.
+	bool post_message(uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam);
 	// Drawing marks the surface dirty; the next message retrieval presents it, so a burst of primitives costs one frame.
 	void drawing(uint64_t window, const DesktopRect *area = nullptr);
 	void present_drawn(uint64_t window);

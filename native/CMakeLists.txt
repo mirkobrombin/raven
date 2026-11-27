@@ -3095,6 +3095,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_ancestor_handle_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${ancestor_handle_client})
                     set_tests_properties(native_ancestor_handle_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ancestor-handle-prefix${width})
+                    # WSAAsyncSelect: network events posted to a window, as Qt's socket notifiers wait for them.
+                    set(socket_window_client ${CMAKE_CURRENT_BINARY_DIR}/socket-window${width}.exe)
+                    add_custom_command(OUTPUT ${socket_window_client}
+                        COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${remote_entry},--no-insert-timestamp
+                            -o ${socket_window_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/socket_window_client.c -lws2_32 -luser32 -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/socket_window_client.c VERBATIM)
+                    add_custom_target(socket_window_fixture${width} ALL DEPENDS ${socket_window_client})
+                    add_test(NAME native_socket_window_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${socket_window_client})
+                    set_tests_properties(native_socket_window_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/socket-window-prefix${width})
                     set(optional_calls_client ${CMAKE_CURRENT_BINARY_DIR}/optional-calls${width}.exe)
                     add_custom_command(OUTPUT ${optional_calls_client}
                         COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector

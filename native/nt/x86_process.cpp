@@ -1,4 +1,5 @@
 #include "providers.h"
+#include "desktop_lock.h"
 #include "handle_channel.h"
 #include "object_api.h"
 #include "module_api.h"
@@ -1514,6 +1515,10 @@ NativeResult run_native_process_x86(ModuleSet &modules, PEModule &entry,
 	register_security_api(shared_api, kernel);
 	register_child_process_api(shared_api, kernel);
 	register_winsock_api(shared_api, kernel);
+	kernel.post_window_message = [&windows](uint64_t window, uint32_t message, uint64_t wparam, uint64_t lparam) {
+		const DesktopScope desktop_scope;
+		return windows.post_message(window, message, wparam, lparam);
+	};
 	register_alpc_api(shared_api, kernel);
 #ifdef RAVEN_OPENSSL
 	register_wininet_api(shared_api, kernel);

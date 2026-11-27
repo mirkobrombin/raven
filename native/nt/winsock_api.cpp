@@ -45,6 +45,9 @@ public:
 	bool closed = false;
 	// A non-blocking connect is under way: select reports its success as writable and its failure as an exception.
 	bool connecting = false;
+	// A stream socket seen connected or listening. Before that it reports no network event, as on Windows; the host would call a
+	// socket that never connected writable and hung up.
+	bool established = false;
 	int type = SOCK_STREAM;
 	std::shared_ptr<CompletionPort> port;
 	uint64_t key = 0;
@@ -54,6 +57,10 @@ public:
 	// since the program last enumerated them, with their error codes (WSANETWORKEVENTS order).
 	uint64_t select_event = 0;
 	uint32_t select_mask = 0, select_enabled = 0, select_recorded = 0;
+	// WSAAsyncSelect: the window and message each network event is posted with instead, one message per event as it happens, and the
+	// socket handle the message names.
+	uint64_t select_window = 0, select_handle = 0;
+	uint32_t select_message = 0;
 	std::array<int32_t, 10> select_errors{};
 };
 
@@ -683,6 +690,8 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 				child->guest_nonblocking = socket->guest_nonblocking;
 				if (socket->select_mask) {
 					child->select_event = socket->select_event;
+					child->select_window = socket->select_window;
+					child->select_message = socket->select_message;
 					child->select_mask = socket->select_mask;
 					child->select_enabled = fd_all_events;
 				}
@@ -692,6 +701,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 					fail(call, wsaemfile);
 					return;
 				}
+				child->select_handle = made.value;
 				if (child->select_mask)
 					selected->push_back(child);
 				put_address(call, call[1], call[2], storage, length);
@@ -2029,18 +2039,49 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		sio_base_handle = 0x48000022, sio_bsp_handle = 0x4800001b, sio_bsp_handle_select = 0x4800001c, sio_bsp_handle_poll = 0x4800001d;
 	const auto resolve_export = [&context](const char *library, const char *name) { return context.modules.resolve({library, name, 0, false, 0}); };
 	// WSAEventSelect: the sockets are looked at whenever the threads are scheduled; a network event the program asked for is recorded
-	// once until the call that consumes it enables it again, and recording one sets the program's event.
-	const auto select_descriptor = [](const SocketObject &socket) {
+	// once until the call that consumes it enables it again, and recording one sets the program's event. WSAAsyncSelect reports the
+	// same events, each as a message posted to the program's window with the socket and WSAMAKESELECTREPLY(event, error).
+	const auto select_descriptor = [](SocketObject &socket) {
 		const auto enabled = socket.select_mask & socket.select_enabled;
 		if (!socket.select_mask || socket.closed || (!enabled && !socket.connecting))
 			return pollfd{-1, 0, 0};
+		if (socket.type == SOCK_STREAM && !socket.connecting && !socket.established) {
+			int listening = 0;
+			socklen_t length = sizeof(listening);
+			sockaddr_storage peer{};
+			socklen_t peer_length = sizeof(peer);
+			socket.established = (!::getsockopt(socket.descriptor, SOL_SOCKET, SO_ACCEPTCONN, &listening, &length) && listening) ||
+				!::getpeername(socket.descriptor, reinterpret_cast<sockaddr *>(&peer), &peer_length);
+			if (!socket.established)
+				return pollfd{-1, 0, 0};
+		}
 		short events = 0;
 		if (enabled & (fd_read | fd_accept | fd_close)) events |= POLLIN;
 		if ((enabled & fd_write) || socket.connecting) events |= POLLOUT;
 		if (enabled & fd_oob) events |= POLLPRI;
 		return pollfd{socket.descriptor, events, 0};
 	};
-	const auto record_select = [&objects](SocketObject &socket, short ready) {
+	const auto notify = [&objects, &context](SocketObject &socket, uint32_t found) {
+		if (!found)
+			return;
+		if (!socket.select_window) {
+			if (socket.select_event)
+				objects.set_event(socket.select_event, true);
+			return;
+		}
+		// In the order a connection lives its events, each once.
+		static constexpr std::array<std::pair<uint32_t, size_t>, 6> order{{{fd_connect, 4}, {fd_accept, 3}, {fd_read, 0}, {fd_oob, 2},
+			{fd_write, 1}, {fd_close, 5}}};
+		for (const auto &[event, bit] : order)
+			if (found & event) {
+				const uint32_t reply = uint32_t(uint16_t(socket.select_errors[bit])) << 16 | event;
+				if (context.post_window_message)
+					context.post_window_message(socket.select_window, socket.select_message, socket.select_handle, reply);
+			}
+		socket.select_recorded &= ~found;
+		socket.select_errors = {};
+	};
+	const auto record_select = [notify](SocketObject &socket, short ready) {
 		uint32_t found = 0;
 		const auto record = [&](uint32_t event, size_t bit, int32_t error) {
 			if (!(socket.select_mask & event) || !(socket.select_enabled & event))
@@ -2060,8 +2101,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			record(fd_connect, 4, error ? int32_t(wsa_error(error)) : 0);
 			if (error) {
 				record(fd_close, 5, int32_t(wsa_error(error)));
-				if (found && socket.select_event)
-					objects.set_event(socket.select_event, true);
+				notify(socket, found);
 				return;
 			}
 		}
@@ -2089,8 +2129,7 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			if (ready & POLLOUT)
 				record(fd_write, 1, 0);
 		}
-		if (found && socket.select_event)
-			objects.set_event(socket.select_event, true);
+		notify(socket, found);
 	};
 	const auto check_select = [select_descriptor, record_select](SocketObject &socket) {
 		auto entry = select_descriptor(socket);
@@ -2133,9 +2172,35 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			fail(call, wsaeinval, uint32_t(-1));
 			return;
 		}
-		// Selecting events makes the socket non-blocking, and every event may be reported from then on.
+		// Selecting events makes the socket non-blocking, and every event may be reported from then on; it ends a WSAAsyncSelect.
 		socket->select_event = call[1];
+		socket->select_window = 0;
 		socket->select_mask = call.u32(2);
+		socket->select_enabled = fd_all_events;
+		socket->select_recorded = 0;
+		socket->select_errors = {};
+		socket->guest_nonblocking = true;
+		if (std::none_of(selected->begin(), selected->end(), [&](const auto &weak) { return weak.lock() == socket; }))
+			selected->push_back(socket);
+		check_select(*socket);
+		call.ret(0);
+	});
+	// The window and message the network events are posted with; no events ends the selection, and either selection ends the other.
+	registry.add("WSAAsyncSelect", 4, [socket_of, fail, selected, check_select](ApiCall &call) {
+		const auto socket = socket_of(call[0]);
+		if (!socket) {
+			fail(call, wsaenotsock, uint32_t(-1));
+			return;
+		}
+		if (call.u32(3) && !call[1]) {
+			fail(call, wsaeinval, uint32_t(-1));
+			return;
+		}
+		socket->select_event = 0;
+		socket->select_window = call.u32(3) ? call[1] : 0;
+		socket->select_message = call.u32(2);
+		socket->select_handle = call[0];
+		socket->select_mask = call.u32(3);
 		socket->select_enabled = fd_all_events;
 		socket->select_recorded = 0;
 		socket->select_errors = {};

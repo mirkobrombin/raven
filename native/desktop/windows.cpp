@@ -1119,6 +1119,11 @@ void NativeWindows::raw_mouse_input(int64_t dx,int64_t dy,uint32_t button_flags,
 	queue({target,0,handle,0xffU,message_time(),cursor_x,cursor_y},0x400);
 }
 
+bool NativeWindows::post_message(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam)
+{
+	try { post(window,message,wparam,lparam); return true; } catch (uint32_t) { return false; }
+}
+
 void NativeWindows::post(uint64_t window,uint32_t message,uint64_t wparam,uint64_t lparam)
 {
 	// A broadcast goes to every top-level window, each in its own thread's queue.
