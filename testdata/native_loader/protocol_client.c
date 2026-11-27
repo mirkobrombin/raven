@@ -4,7 +4,8 @@
 #include <ws2tcpip.h>
 
 /* getprotobyname and getprotobynumber answer from the protocols database into one PROTOENT that the following call reuses, as Winsock
-   reuses its per-thread one. Both spellings of a protocol name the same record, and a protocol the database does not list is refused. */
+   reuses its per-thread one. Both spellings of a protocol name the same record, and a protocol the database does not list is refused.
+   The socket forms of the byte order conversions follow. */
 static int same(const char *left, const char *right)
 {
 	if (!left || !right)
@@ -75,6 +76,19 @@ int raven_entry(void)
 	const int extended = extended_lookup();
 	if (extended)
 		return 10 + extended;
+	/* The socket forms of the byte order conversions store the converted value and answer 0 (Qt's socket engine reads addresses with
+	   them); a handle that is no socket and a missing place to store are refused. */
+	SOCKET socket_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	u_long wide = 0;
+	u_short narrow = 0;
+	if (socket_handle == INVALID_SOCKET || WSAHtonl(socket_handle, 0x01020304, &wide) || wide != 0x04030201 ||
+		WSANtohl(socket_handle, 0x04030201, &wide) || wide != 0x01020304 || WSAHtons(socket_handle, 0x0102, &narrow) || narrow != 0x0201 ||
+		WSANtohs(socket_handle, 0x0201, &narrow) || narrow != 0x0102)
+		return 30;
+	if (WSANtohl(socket_handle, 1, NULL) != SOCKET_ERROR || WSAGetLastError() != WSAEFAULT ||
+		WSAHtons((SOCKET)0x7ff0, 1, &narrow) != SOCKET_ERROR || WSAGetLastError() != WSAENOTSOCK)
+		return 31;
+	closesocket(socket_handle);
 	WSACleanup();
 	return 0;
 }

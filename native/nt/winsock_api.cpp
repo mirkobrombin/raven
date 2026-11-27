@@ -2793,6 +2793,21 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("ntohs", 1, [](ApiCall &call) { call.ret(uint16_t(call.u32(0) << 8 | (call.u32(0) >> 8 & 0xff))); });
 	registry.add("htonl", 1, [](ApiCall &call) { call.ret(__builtin_bswap32(call.u32(0))); });
 	registry.add("ntohl", 1, [](ApiCall &call) { call.ret(__builtin_bswap32(call.u32(0))); });
+	// The socket forms answer 0 with the converted value stored, or SOCKET_ERROR for a handle that is no socket or no place to store it.
+	for (const bool wide : {true, false})
+		for (const char *name : wide ? std::initializer_list<const char *>{"WSAHtonl", "WSANtohl"} : std::initializer_list<const char *>{"WSAHtons", "WSANtohs"})
+			registry.add(name, 3, [socket_of, fail, wide](ApiCall &call) {
+				const auto socket = socket_of(call[0]);
+				if (!socket || !call[2]) {
+					fail(call, socket ? wsaefault : wsaenotsock);
+					return;
+				}
+				if (wide)
+					call.store<uint32_t>(call[2], __builtin_bswap32(call.u32(1)));
+				else
+					call.store<uint16_t>(call[2], __builtin_bswap16(uint16_t(call.u32(1))));
+				call.ret(0);
+			});
 
 	// WSADATA differs in field order: the version words come first in both, the rest follows the program's layout.
 	// A numeric address with an optional port ("1.2.3.4:80", "[::1]:80" or a bare address) as a SOCKADDR of the family asked for.
