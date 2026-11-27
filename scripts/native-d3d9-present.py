@@ -24,32 +24,10 @@ import time
 
 from PIL import Image
 from lavapipe import icd as lavapipe_icd
+import labwc_session
 
 SIZE = 256
 GPU = len(sys.argv) > 5 and sys.argv[5] == "gpu"
-RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / f"raven-labwc-{'gpu' if GPU else 'runtime'}"
-
-
-def environment():
-    return {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(RUNTIME), "WAYLAND_DISPLAY": "wayland-0"}
-
-
-def start_compositor(log):
-    if (RUNTIME / "wayland-0").exists():
-        probe = subprocess.run(["wlrctl", "toplevel", "list"], env=environment(), capture_output=True, timeout=10)
-        if probe.returncode == 0:
-            return None
-        (RUNTIME / "wayland-0").unlink(missing_ok=True)
-        (RUNTIME / "wayland-0.lock").unlink(missing_ok=True)
-    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    env = environment() | {"WLR_BACKENDS": "headless", "WLR_RENDERER": "gles2" if GPU else "pixman", "WLR_HEADLESS_OUTPUTS": "1"}
-    process = subprocess.Popen(["labwc"], env=env, stdout=log, stderr=log)
-    for _ in range(50):
-        if (RUNTIME / "wayland-0").exists():
-            time.sleep(0.5)
-            return process
-        time.sleep(0.1)
-    raise RuntimeError("isolated compositor did not start")
 
 
 def rgb(raw, width=SIZE, height=SIZE):
@@ -84,8 +62,8 @@ def main():
         shutil.copy(dxvk / name, run / name)
     shutil.copy(workload, run / "window.exe")
     with open(work / "compositor.log", "wb") as log:
-        compositor = start_compositor(log)
-        env = os.environ | environment() | {"RAVEN_PREFIX": str(prefix)}
+        compositor = labwc_session.start(log, GPU)
+        env = os.environ | labwc_session.environment(GPU) | {"RAVEN_PREFIX": str(prefix)}
         env["PATH"] = os.environ["PATH"]
         lavapipe = lavapipe_icd()
         if "VK_DRIVER_FILES" not in env and lavapipe.exists() and not GPU:
@@ -101,7 +79,7 @@ def main():
                 raise SystemExit(f"workload did not present all frames: {status.read_text() if status.exists() else 'missing'}")
             time.sleep(1)
             capture = work / "capture.png"
-            subprocess.run(["grim", str(capture)], env=environment(), check=True, timeout=20)
+            subprocess.run(["grim", str(capture)], env=labwc_session.environment(GPU), check=True, timeout=20)
         finally:
             process.terminate()
             try:
