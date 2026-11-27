@@ -1114,8 +1114,9 @@ static void release_device(ID3D10Multithread *guard)
 }
 
 /* The desktop compositor takes the back buffer as the program presents it, so the frame is copied out at that moment: afterwards the
- * Direct3D libraries may hand the same buffer back to the program to draw the next frame into. */
-static void capture_frame(struct surface *surface, const RECT *dirty)
+ * Direct3D libraries may hand the same buffer back to the program to draw the next frame into. The frame is in buffer `index`: 0 while the
+ * program presents it. */
+static void capture_frame(struct surface *surface, UINT index, const RECT *dirty)
 {
 	ID3D11Texture2D *buffer = NULL;
 	ID3D11Device *device = NULL;
@@ -1123,7 +1124,7 @@ static void capture_frame(struct surface *surface, const RECT *dirty)
 	ID3D10Multithread *guard;
 	D3D11_TEXTURE2D_DESC desc;
 	BOOL fresh = FALSE;
-	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, 0, &IID_ID3D11Texture2D, (void **)&buffer)))
+	if (FAILED(IDXGISwapChain1_GetBuffer(surface->swap_chain, index, &IID_ID3D11Texture2D, (void **)&buffer)))
 		return;
 	ID3D11Texture2D_GetDesc(buffer, &desc);
 	ID3D11Texture2D_GetDevice(buffer, &device);
@@ -1336,7 +1337,7 @@ static HRESULT STDMETHODCALLTYPE surface_present(IDXGISwapChain1 *chain, UINT in
 	onto = surface && present_onto(surface);
 	HRESULT hr;
 	if (surface && !onto)
-		capture_frame(surface, NULL);
+		capture_frame(surface, 0, NULL);
 	hr = presenter->present(chain, interval, flags);
 	if (surface) {
 		if (SUCCEEDED(hr) && !onto)
@@ -1361,7 +1362,7 @@ static HRESULT STDMETHODCALLTYPE surface_present1(IDXGISwapChain1 *chain, UINT i
 		UINT index;
 		for (index = 0; parameters && parameters->pDirtyRects && index < parameters->DirtyRectsCount; ++index)
 			UnionRect(&dirty, &dirty, &parameters->pDirtyRects[index]);
-		capture_frame(surface, IsRectEmpty(&dirty) ? NULL : &dirty);
+		capture_frame(surface, 0, IsRectEmpty(&dirty) ? NULL : &dirty);
 	}
 	hr = presenter->present1(chain, interval, flags, parameters);
 	if (surface) {
@@ -1402,7 +1403,8 @@ static HRESULT STDMETHODCALLTYPE interop_CreateCompositionSurfaceForSwapChain(vo
 	struct compositor *compositor = compositor_of(iface);
 	struct surface *surface;
 	IDXGISwapChain1 *chain = NULL;
-	UINT presented = 0;
+	DXGI_SWAP_CHAIN_DESC1 desc;
+	UINT presented = 0, last = 0;
 	HRESULT hr;
 	if (!out)
 		return E_POINTER;
@@ -1420,9 +1422,15 @@ static HRESULT STDMETHODCALLTYPE interop_CreateCompositionSurfaceForSwapChain(vo
 	node_addref(&compositor->node);
 	surface->swap_chain = chain;
 	watch_presents(surface);
-	/* A swap chain that presented before the surface was made shows that frame, which buffer 0 still holds. */
-	if (SUCCEEDED(IDXGISwapChain1_GetLastPresentCount(chain, &presented)) && presented)
-		capture_frame(surface, NULL);
+	/* A swap chain that presented before the surface was made shows that frame. A sequential swap chain's buffers turn at each present,
+	 * buffer 0 becoming the one to draw the next frame into, so the frame presented last is in its last buffer. Any other swap chain
+	 * lets a program read only buffer 0. */
+	if (SUCCEEDED(IDXGISwapChain1_GetLastPresentCount(chain, &presented)) && presented) {
+		if (SUCCEEDED(IDXGISwapChain1_GetDesc1(chain, &desc)) && desc.BufferCount > 1 &&
+			(desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL || desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL))
+			last = desc.BufferCount - 1;
+		capture_frame(surface, last, NULL);
+	}
 	hr = hand_out(&surface->node, &IID___x_ABI_CWindows_CUI_CComposition_CICompositionSurface, out);
 	node_release(&surface->node);
 	return hr;

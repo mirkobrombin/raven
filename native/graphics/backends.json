@@ -1,15 +1,15 @@
 {
   "dxvk": {
-    "version": "3.1.1",
-    "archive": "dxvk-3.1.1.tar.gz",
-    "size": 18041512,
-    "url": "https://github.com/doitsujin/dxvk/releases/download/v3.1.1/dxvk-3.1.1.tar.gz",
-    "sha256": "40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608",
-    "archive_root": "dxvk-3.1.1",
+    "version": "3.2",
+    "archive": "dxvk-3.2.tar.gz",
+    "size": 18662088,
+    "url": "https://github.com/doitsujin/dxvk/releases/download/v3.2/dxvk-3.2.tar.gz",
+    "sha256": "17449ed21602377971289eb2984750699825ac1bac3bbfa2426b2bba0f355692",
+    "archive_root": "dxvk-3.2",
     "architectures": {"pe32": "x32", "pe64": "x64"},
     "dlls": ["d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"],
-    "source": {"url": "https://github.com/doitsujin/dxvk/archive/refs/tags/v3.1.1.tar.gz",
-               "sha256": "ef4944134f6c39d0937f265391db2d08bca33cd3a2f0ee9133e1eb55f1cc657c"}
+    "source": {"url": "https://github.com/doitsujin/dxvk/archive/refs/tags/v3.2.tar.gz",
+               "sha256": "01015a228ec73ec4f27cdc614a840656aa2d09e59fcec1cdb2b624bce9e41565"}
   },
   "vkd3d-proton": {
     "version": "3.1",
