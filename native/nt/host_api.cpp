@@ -1908,6 +1908,73 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	});
 	// The newer interface calls name an interface by a LUID or a GUID, which no interface here has: the rows of MIB_IF_ROW2 carry a GUID
 	// of their own that nothing else refers to, so they are left to the older MIB_IFROW calls, which go by the index.
+	// DnsQueryConfig(type, flags, adapter, reserved, buffer, length): the resolver's settings. Known here are the server list (6), an
+	// IP4_ARRAY of the host's IPv4 servers, and the host name, plain (12 to 14) or full (15 to 17; the host has no DNS domain of its own),
+	// each wide, ANSI or UTF-8.
+	// With DNS_CONFIG_FLAG_ALLOC the answer goes in a block that LocalFree releases and the buffer receives its address; otherwise a
+	// buffer that is missing or short gets the length needed and ERROR_MORE_DATA. The status is returned, not set as the last error.
+	registry.add("DnsQueryConfig", 6, [&context](ApiCall &call) {
+		const uint32_t type = call.u32(0);
+		std::vector<uint8_t> answer;
+		if (type == 6) {
+			std::vector<uint32_t> servers;
+			for (const auto &server : host_dns_servers())
+				if (server[0] == AF_INET) {
+					uint32_t address;
+					std::memcpy(&address, server.data() + 4, 4);
+					servers.push_back(address);
+				}
+			if (servers.empty()) {
+				call.ret(9852);
+				return;
+			}
+			answer.resize(4 + 4 * servers.size());
+			const uint32_t count = uint32_t(servers.size());
+			std::memcpy(answer.data(), &count, 4);
+			std::memcpy(answer.data() + 4, servers.data(), 4 * servers.size());
+		} else if (type >= 12 && type <= 17) {
+			char name[256] = {};
+			::gethostname(name, sizeof(name) - 1);
+			const std::string_view text(name);
+			if ((type - 12) % 3 == 0) {
+				for (const char character : text) {
+					answer.push_back(uint8_t(character));
+					answer.push_back(0);
+				}
+				answer.insert(answer.end(), {0, 0});
+			} else {
+				answer.assign(text.begin(), text.end());
+				answer.push_back(0);
+			}
+		} else {
+			call.ret(error_invalid_parameter);
+			return;
+		}
+		if (!call[5]) {
+			call.ret(error_invalid_parameter);
+			return;
+		}
+		if (call.u32(1) & 1) {
+			const uint64_t block = context.allocator.allocate(answer.size());
+			if (!block || !call[4]) {
+				call.ret(block ? error_invalid_parameter : 14);
+				return;
+			}
+			call.write(block, answer);
+			call.store_pointer(call[4], block);
+			call.store<uint32_t>(call[5], uint32_t(answer.size()));
+			call.ret(0);
+			return;
+		}
+		const uint32_t capacity = call.load<uint32_t>(call[5]);
+		call.store<uint32_t>(call[5], uint32_t(answer.size()));
+		if (!call[4] || capacity < answer.size()) {
+			call.ret(error_more_data);
+			return;
+		}
+		call.write(call[4], answer);
+		call.ret(0);
+	});
 	registry.add("ConvertInterfaceGuidToLuid", 2, [](ApiCall &call) { call.ret(1168); });
 	// A LUID is made from the interface's type and index (interface_luid), so the conversions go both ways over the host's interfaces.
 	// An interface's name is its type's word and the index in the LUID, as "ethernet_2"; a type without a word is named "iftype" and

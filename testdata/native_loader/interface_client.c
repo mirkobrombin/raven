@@ -2,6 +2,7 @@
 #define _WIN32_WINNT 0x0600
 #include <windows.h>
 #include <iphlpapi.h>
+#include <windns.h>
 
 /* A program reads how the machine is networked before it opens its first socket: how many interfaces there are, a row for each, and one
    row by index, and the LUID and name the newer calls know each interface by. Every answer has to agree with the others, and a bad
@@ -90,6 +91,24 @@ int raven_entry(void)
 	expect(ConvertInterfaceIndexToLuid(0x7fffffffu, &none) == ERROR_FILE_NOT_FOUND, 29);
 	expect(ConvertInterfaceNameToLuidW(L"no such interface", &none) == ERROR_INVALID_NAME, 30);
 	expect(ConvertInterfaceIndexToLuid(1, NULL) == ERROR_INVALID_PARAMETER, 31);
+
+	// The resolver's settings: the DNS servers as an IP4_ARRAY, asked for its length first unless the host has none, and the host name
+	// in a block the call allocates and LocalFree releases.
+	DWORD length = 0;
+	const DNS_STATUS servers = DnsQueryConfig(DnsConfigDnsServerList, 0, NULL, NULL, NULL, &length);
+	expect(servers == DNS_ERROR_NO_DNS_SERVERS || (servers == ERROR_MORE_DATA && length >= 8 && (length - 4) % 4 == 0), 32);
+	if (servers == ERROR_MORE_DATA) {
+		IP4_ARRAY *list = LocalAlloc(LMEM_FIXED, length);
+		DWORD room = length;
+		expect(list && DnsQueryConfig(DnsConfigDnsServerList, 0, NULL, NULL, list, &room) == NO_ERROR, 33);
+		expect(list && list->AddrCount == (length - 4) / 4 && list->AddrArray[0] != 0, 34);
+		LocalFree(list);
+	}
+	WCHAR *host = NULL;
+	length = 0;
+	expect(DnsQueryConfig(DnsConfigHostName_W, DNS_CONFIG_FLAG_ALLOC, NULL, NULL, &host, &length) == NO_ERROR && host && host[0], 35);
+	expect(host && length >= 4 && host[length / 2 - 1] == 0, 36);
+	expect(!host || LocalFree(host) == NULL, 37);
 
 	// An index no interface has is refused, as Windows refuses it.
 	MIB_IFROW missing;

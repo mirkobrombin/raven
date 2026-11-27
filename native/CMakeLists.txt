@@ -712,7 +712,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         add_custom_command(OUTPUT ${INTERFACE_CLIENT}
             COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin
                 -Wl,--entry,raven_entry,--image-base,0x1d7000000,--no-insert-timestamp
-                -o ${INTERFACE_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c -liphlpapi -lkernel32
+                -o ${INTERFACE_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c -liphlpapi -ldnsapi -lkernel32
             DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c VERBATIM)
         add_custom_target(interface_pe_fixture ALL DEPENDS ${INTERFACE_CLIENT})
         add_test(NAME native_interface_table_client COMMAND raven --run-process --execution=native --timeout-ms=30000 ${INTERFACE_CLIENT})
@@ -724,7 +724,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_custom_command(OUTPUT ${INTERFACE_CLIENT32}
                 COMMAND ${RAVEN_MINGW32_INTERFACES} -O2 -nostdlib -fno-stack-protector -fno-builtin
                     -Wl,--entry,_raven_entry,--image-base,0x1d7000000,--no-insert-timestamp
-                    -o ${INTERFACE_CLIENT32} ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c -liphlpapi -lkernel32
+                    -o ${INTERFACE_CLIENT32} ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c -liphlpapi -ldnsapi -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/interface_client.c VERBATIM)
             add_custom_target(interface_pe_fixture32 ALL DEPENDS ${INTERFACE_CLIENT32})
             add_test(NAME native_interface_table_client_x32 COMMAND raven --run-process --execution=native --timeout-ms=30000 ${INTERFACE_CLIENT32})
