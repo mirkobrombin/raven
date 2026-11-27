@@ -57,6 +57,9 @@ def pick(raven, fixture, prefix, title, path, arguments):
     """Run the program, wait for its dialog, type the host path in Windows form and confirm."""
     env = os.environ | environment() | {"RAVEN_PREFIX": str(prefix)}
     env["PATH"] = os.environ["PATH"]
+    # A virtual keyboard kept for the whole run: the seat has a keyboard only while one exists, and a program that binds it after the
+    # keys were typed misses them, as the dialog did on busy machines.
+    keyboard = subprocess.Popen(["wtype", "-s", "100000000"], env=environment())
     program = subprocess.Popen([str(raven), "--run-process", "--execution=native", "--timeout-ms=60000", "--desktop=wayland", str(fixture),
                                 "--", *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     try:
@@ -75,6 +78,8 @@ def pick(raven, fixture, prefix, title, path, arguments):
     finally:
         if program.poll() is None:
             program.kill()
+        keyboard.kill()
+        keyboard.wait()
     if "Native entry returned 0 " not in output:
         code = next((int(word) for line in output.splitlines() if line.startswith("Native entry returned ") for word in line.split()[3:4]), None)
         raise SystemExit(FAILURES.get(code, f"the program ended with {code}: {output[-300:]!r} {errors[-300:]!r}"))
