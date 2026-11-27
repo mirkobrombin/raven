@@ -194,8 +194,7 @@ uint64_t NativeResources::access(uint64_t handle, uint64_t resource, bool size)
 			const auto &item = index.resources[found->second];
 			if (size)
 				return item.size;
-			if (item.size > 256 * 1024 * 1024)
-				throw std::runtime_error("native resource payload exceeds initial policy limit");
+			// The parse keeps every payload inside its image, which is the only bound: an installer may carry its whole package in one.
 			readable(image->loaded.base() + item.data_address, item.size);
 			return image->loaded.base() + item.data_address;
 		}
@@ -234,10 +233,7 @@ uint64_t NativeResources::lock(uint64_t data)
 	for (const auto &[name, image] : modules.all())
 		if (data >= image->loaded.base() && data - image->loaded.base() < image->image.image_size)
 			if (const auto &index = parse(*image); index.by_data.contains(uint32_t(data - image->loaded.base()))) {
-				const auto &resource = index.resources[index.by_data.at(uint32_t(data - image->loaded.base()))];
-				if (resource.size > 256 * 1024 * 1024)
-					throw std::runtime_error("native resource payload exceeds initial policy limit");
-				readable(data, resource.size);
+				readable(data, index.resources[index.by_data.at(uint32_t(data - image->loaded.base()))].size);
 				return data;
 			}
 	environment.set_last_error(6);

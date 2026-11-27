@@ -7708,6 +7708,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set_tests_properties(native_resource_contract PROPERTIES TIMEOUT 15)
             add_test(NAME native_resource_cli COMMAND raven --run-process --execution=native ${RESOURCE_FIXTURES}/client.exe)
             set_tests_properties(native_resource_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+            add_custom_command(OUTPUT ${RESOURCE_FIXTURES}/large.exe
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry
+                    -o ${RESOURCE_FIXTURES}/large.exe ${LOADER_SOURCES}/large_resource_client.c ${RESOURCE_FIXTURES}/resources.o -lkernel32
+                DEPENDS ${RESOURCE_FIXTURES}/resources.o ${LOADER_SOURCES}/large_resource_client.c VERBATIM)
+            add_custom_target(large_resource_pe_fixture ALL DEPENDS ${RESOURCE_FIXTURES}/large.exe)
+            add_dependencies(large_resource_pe_fixture resource_pe_fixtures)
+            add_test(NAME native_large_resource_cli COMMAND raven --run-process --execution=native ${RESOURCE_FIXTURES}/large.exe)
+            set_tests_properties(native_large_resource_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
             if(RAVEN_MINGW32 AND RAVEN_WINDRES32)
                 add_custom_command(OUTPUT ${RESOURCE_FIXTURES}/resources32.o ${RESOURCE_FIXTURES}/client32.exe
                     COMMAND ${RAVEN_WINDRES32} ${LOADER_SOURCES}/resources.rc ${RESOURCE_FIXTURES}/resources32.o
@@ -7725,6 +7733,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_x86_resource_cli COMMAND raven --run-process --execution=native
                     ${RESOURCE_FIXTURES}/client32.exe ${RESOURCE_FIXTURES}/x86/resources.dll)
                 set_tests_properties(native_x86_resource_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                add_custom_command(OUTPUT ${RESOURCE_FIXTURES}/x86/large.exe
+                    COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -Wl,--entry,_raven_entry
+                        -o ${RESOURCE_FIXTURES}/x86/large.exe ${LOADER_SOURCES}/large_resource_client.c ${RESOURCE_FIXTURES}/resources32.o -lkernel32
+                    DEPENDS ${RESOURCE_FIXTURES}/resources32.o ${LOADER_SOURCES}/large_resource_client.c VERBATIM)
+                add_custom_target(large_resource_pe32_fixture ALL DEPENDS ${RESOURCE_FIXTURES}/x86/large.exe)
+                add_dependencies(large_resource_pe32_fixture resource_pe32_fixture)
+                add_test(NAME native_x86_large_resource_cli COMMAND raven --run-process --execution=native ${RESOURCE_FIXTURES}/x86/large.exe)
+                set_tests_properties(native_x86_large_resource_cli PROPERTIES TIMEOUT 15 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                 add_executable(pe_resources_test pe/resources_test.cpp)
                 target_link_libraries(pe_resources_test PRIVATE raven_pe)
                 add_dependencies(pe_resources_test resource_pe_fixtures resource_pe32_fixture)
