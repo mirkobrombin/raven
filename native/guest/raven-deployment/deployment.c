@@ -5,8 +5,9 @@
 /* Raven deployment component: the Windows.Management.Deployment.PackageManager class of the Windows Runtime, which programs ask which
  * packaged applications are installed, before they install a desktop version of one.
  *
- * AddPackageAsync reads a local MSIX package and installs its full-trust applications. The package store publishes its contents
- * only when the signature, manifest and payload have been checked. */
+ * AddPackageAsync reads a local MSIX package and installs the applications that name a program, full-trust ones and apps of the
+ * Windows Runtime that run their own view. The package store publishes its contents only when the signature, manifest and payload
+ * have been checked. */
 #define INITGUID
 #define CINTERFACE
 #define COBJMACROS

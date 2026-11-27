@@ -189,7 +189,11 @@ int raven_entry(void)
 		return check;
 	manager->lpVtbl->Release(manager);
 	check = launch(L"shell:AppsFolder\\" FAMILY L"!Main", TRUE);
-	return check ? check : check_package_path();
+	if (check)
+		return check;
+	/* The package's app of the Windows Runtime runs its view in its core window, with the package's identity. */
+	check = launch(L"shell:AppsFolder\\" FAMILY L"!View", TRUE);
+	return check ? 100 + check : check_package_path();
 #else
 	const int check = install(manager, L"appx-good.msix", TRUST_E_NOSIGNATURE);
 	manager->lpVtbl->Release(manager);

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Builds a signed full-trust package from the test executable, using a key made for this test run."""
+"""Builds a signed package from the test executables, a full-trust program and an app of the Windows Runtime that runs its own view,
+using a key made for this test run."""
 import hashlib
 import os
 from pathlib import Path
@@ -29,6 +30,10 @@ MANIFEST = """<?xml version="1.0" encoding="utf-8"?>
   <Applications>
     <Application Id="Main" Executable="app.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements DisplayName="Raven MSIX test" Description="Raven MSIX test" BackgroundColor="transparent"
+                          Square150x150Logo="Tile.png" Square44x44Logo="Small.png" />
+    </Application>
+    <Application Id="View" Executable="view.exe" EntryPoint="Raven.View.App">
+      <uap:VisualElements DisplayName="Raven view test" Description="Raven view test" BackgroundColor="transparent"
                           Square150x150Logo="Tile.png" Square44x44Logo="Small.png" />
     </Application>
   </Applications>
@@ -122,11 +127,11 @@ def sign(openssl, directory, hashes):
         certificate.unlink(missing_ok=True)
 
 
-def package(executable, arch, directory, openssl):
+def package(executable, view, arch, directory, openssl):
     writer = Writer()
     files = []
     manifest = MANIFEST.format(publisher=PUBLISHER, arch=arch).encode()
-    for name, payload in (("app.exe", executable), ("Store.png", png(50)), ("Tile.png", png(150)),
+    for name, payload in (("app.exe", executable), ("view.exe", view), ("Store.png", png(50)), ("Tile.png", png(150)),
                           ("Small.png", png(44)), ("AppxManifest.xml", manifest)):
         header, sizes = writer.add(name, payload, False)
         files.append((name, payload, header, sizes))
@@ -171,7 +176,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "--run":
         raven, client, directory = sys.argv[2:]
         sys.exit(run_test(raven, client, Path(directory)))
-    executable, architecture, output, openssl = sys.argv[1:]
+    executable, view, architecture, output, openssl = sys.argv[1:]
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    package(Path(executable).read_bytes(), architecture, output, openssl)
+    package(Path(executable).read_bytes(), Path(view).read_bytes(), architecture, output, openssl)

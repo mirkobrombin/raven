@@ -2099,7 +2099,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     set(msix_fixture ${appx_fixture}/signed)
                     set(msix_sources ${PROJECT_SOURCE_DIR}/testdata/native_loader)
                     add_custom_command(OUTPUT ${msix_fixture}/app.msix ${msix_fixture}/app-tampered.msix
-                        ${msix_fixture}/signer.cer ${msix_fixture}/client.exe
+                        ${msix_fixture}/signer.cer ${msix_fixture}/client.exe ${msix_fixture}/view.exe
                         COMMAND ${CMAKE_COMMAND} -E make_directory ${msix_fixture}
                         COMMAND ${installer_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin
                             -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${msix_fixture}/app.exe
@@ -2107,9 +2107,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         COMMAND ${installer_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin -DMSIX_FULL_TRUST
                             -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${msix_fixture}/client.exe
                             ${msix_sources}/msix_deployment_client.c -lruntimeobject -lshell32 -lkernel32
-                        COMMAND ${Python3_EXECUTABLE} -B ${msix_sources}/msix_fixtures.py ${msix_fixture}/app.exe
+                        COMMAND ${installer_compiler} -O1 -nostdlib -fno-stack-protector -fno-builtin -DMSIX_VIEW
+                            -Wl,--entry,${installer_entry},--no-insert-timestamp -o ${msix_fixture}/view.exe
+                            ${msix_sources}/core_window_client.c -lruntimeobject -luser32 -lkernel32 -lgcc
+                        COMMAND ${Python3_EXECUTABLE} -B ${msix_sources}/msix_fixtures.py ${msix_fixture}/app.exe ${msix_fixture}/view.exe
                             ${installer_arch} ${msix_fixture} ${MSIX_OPENSSL_TOOL}
-                        DEPENDS ${msix_sources}/msix_application.c ${msix_sources}/msix_deployment_client.c
+                        DEPENDS ${msix_sources}/msix_application.c ${msix_sources}/msix_deployment_client.c ${msix_sources}/core_window_client.c
                             ${msix_sources}/msix_fixtures.py ${msix_sources}/appx_fixtures.py VERBATIM)
                     add_custom_target(msix_full_trust_fixture_${installer_arch} ALL
                         DEPENDS ${msix_fixture}/app.msix ${msix_fixture}/app-tampered.msix ${msix_fixture}/signer.cer ${msix_fixture}/client.exe)

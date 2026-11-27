@@ -369,8 +369,8 @@ bool validate_manifest(std::string_view xml, const std::filesystem::path &stage,
 				return false;
 			has_identity = true;
 		}
-		if (parents.size() == 2 && parents.back() == "Applications" && tag->name == "Application" &&
-			attribute(*tag, "EntryPoint") == "Windows.FullTrustApplication") {
+		// Every application that names its program: a full-trust one, or an app of the Windows Runtime that runs its own view.
+		if (parents.size() == 2 && parents.back() == "Applications" && tag->name == "Application" && !attribute(*tag, "Executable").empty()) {
 			const auto id = attribute(*tag, "Id"), executable = attribute(*tag, "Executable");
 			if (id.empty() || !relative_file(from_utf8(executable)) || !applications.emplace(to_utf8(record.family) + "!" + id, executable).second)
 				return false;

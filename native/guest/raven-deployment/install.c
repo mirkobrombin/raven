@@ -202,14 +202,14 @@ static HRESULT write_applications(IAppxManifestReader *manifest, const WCHAR *st
 		result = CALL(applications, GetHasCurrent, &present);
 	while (SUCCEEDED(result) && present) {
 		IAppxManifestApplication *app = NULL;
-		WCHAR *entry = NULL, *name = NULL, *aumid = NULL;
+		WCHAR *name = NULL, *aumid = NULL;
 		result = CALL(applications, GetCurrent, &app);
+		/* An application starts as a program: a full-trust desktop program, or an app of the Windows Runtime whose program runs its view
+		 * with CoreApplication. One made only of web pages names no program and cannot start. */
 		if (SUCCEEDED(result))
-			result = CALL(app, GetStringValue, L"EntryPoint", &entry);
-		if (SUCCEEDED(result) && entry && !lstrcmpW(entry, L"Windows.FullTrustApplication")) {
 			result = CALL(app, GetStringValue, L"Executable", &name);
-			if (SUCCEEDED(result))
-				result = CALL(app, GetAppUserModelId, &aumid);
+		if (SUCCEEDED(result) && name) {
+			result = CALL(app, GetAppUserModelId, &aumid);
 			WCHAR path[MAX_PATH];
 			const int prefix = lstrlenW(family);
 			if (SUCCEEDED(result) && (!safe_name(name, TRUE) || !join_path(path, stage, name) || !safe_name(aumid, FALSE) ||
@@ -229,7 +229,6 @@ static HRESULT write_applications(IAppxManifestReader *manifest, const WCHAR *st
 		}
 		CoTaskMemFree(aumid);
 		CoTaskMemFree(name);
-		CoTaskMemFree(entry);
 		winrt_put(app);
 		if (SUCCEEDED(result))
 			result = CALL(applications, MoveNext, &present);
