@@ -250,7 +250,7 @@ private:
 		posix_spawn_file_actions_adddup2(&actions, child_link, 3);
 		const std::string command = "--command-line=raven-vsthost.exe --serve \"" + windows_path(plugin) + "\"";
 		const std::string grant = "--grant-read=" + (std::filesystem::is_directory(plugin) ? plugin : plugin.parent_path()).string();
-		std::vector<std::string> arguments{raven, "--run-process", "--execution=native", "--stdio=inherit", "--timeout-ms=86400000",
+		std::vector<std::string> arguments{raven, "--run-process", "--execution=native", "--stdio=inherit", "--timeout-ms=none",
 			"--link-fd=3", grant};
 		// A host shows a plugin's editor in an X11 window (kPlatformTypeX11EmbedWindowID), which only the runtime's X11 desktop can show a
 		// window inside.

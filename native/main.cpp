@@ -186,6 +186,10 @@ static void show_fault(int signal)
 	std::raise(signal);
 }
 
+// The time a run without a limit of its own may last, a century: every wait the runtime makes ends by then, and the time stays well
+// within the steady clock's range wherever it is added to the present.
+static constexpr std::chrono::milliseconds unlimited_run{std::chrono::hours(24 * 365 * 100)};
+
 int main(int argc, char **argv)
 {
 	// A Windows program keeps as many files, pipes and sockets open as it needs, far past the soft limit a session may start programs
@@ -282,8 +286,10 @@ int main(int argc, char **argv)
 			const std::string_view value=option.substr(13);
 			uint64_t milliseconds=0;
 			const auto parsed=std::from_chars(value.data(),value.data()+value.size(),milliseconds);
-			if (parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || milliseconds<1 || milliseconds>86400000) {
-				std::cerr << "raven: native timeout must be 1..86400000 milliseconds\n";
+			// "none" is a program that runs for as long as it is used, as a plugin a host keeps loaded: the run has no limit of its own.
+			if (value=="none") milliseconds=uint64_t(unlimited_run.count());
+			else if (parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size() || milliseconds<1 || milliseconds>86400000) {
+				std::cerr << "raven: native timeout must be 1..86400000 milliseconds or none\n";
 				return 2;
 			}
 			timeout=std::chrono::milliseconds(milliseconds);
@@ -339,7 +345,7 @@ int main(int argc, char **argv)
 	}
 	// What programs it starts inherit: how long they may run and which window system they use.
 	const auto pass_options=[&] {
-		std::string options="--timeout-ms="+std::to_string(timeout.count());
+		std::string options="--timeout-ms="+(timeout==unlimited_run ? std::string("none") : std::to_string(timeout.count()));
 		if (wayland) options+=" --desktop=wayland";
 		if (x11) options+=" --desktop=x11";
 		setenv("RAVEN_CHILD_OPTIONS",options.c_str(),1);
@@ -361,7 +367,7 @@ int main(int argc, char **argv)
 			<< "       raven --bind-imports program.exe dependency.dll ...\n"
 			<< "       raven --run-entry --execution=native fixture.exe\n"
 			<< "       raven --run-modules --execution=native fixture.exe dependency.dll ...\n"
-			<< "       raven --run-process --execution=native [--timeout-ms=N] [--desktop=wayland|--desktop=x11] [--stdio=inherit] program.exe [dependency.dll ...] [-- guest-argument ...]\n"
+			<< "       raven --run-process --execution=native [--timeout-ms=N|none] [--desktop=wayland|--desktop=x11] [--stdio=inherit] program.exe [dependency.dll ...] [-- guest-argument ...]\n"
 			<< "Complete Windows process initialization is not implemented yet.\n";
 		return 2;
 	}

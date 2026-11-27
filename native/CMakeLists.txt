@@ -3649,6 +3649,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${LINK_FIXTURES}/client.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/link_client.c ${LINK_FIXTURES}/ravenhost.a -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/link_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/ravenhost64.def VERBATIM)
             add_custom_target(link_pe_fixture ALL DEPENDS ${LINK_FIXTURES}/client.exe)
+            # A run with no time limit of its own, as a plugin a host keeps loaded has, outlasts the time a run is given by default.
+            add_custom_command(OUTPUT ${LINK_FIXTURES}/sleep.exe
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -Wl,--entry,raven_entry
+                    -o ${LINK_FIXTURES}/sleep.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/sleep_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/sleep_client.c VERBATIM)
+            add_custom_target(sleep_pe_fixture ALL DEPENDS ${LINK_FIXTURES}/sleep.exe)
+            add_test(NAME native_unlimited_run COMMAND raven --run-process --execution=native --timeout-ms=none ${LINK_FIXTURES}/sleep.exe)
+            set_tests_properties(native_unlimited_run PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${KERNEL_PREFIX})
             add_executable(link_test nt/link_test.cpp)
             add_test(NAME native_link_turns COMMAND link_test $<TARGET_FILE:raven> ${LINK_FIXTURES}/client.exe)
             set_tests_properties(native_link_turns PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "link: 2000 rounds"
