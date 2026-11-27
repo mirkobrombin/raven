@@ -16,31 +16,11 @@ import sys
 import time
 
 from PIL import Image
-
-RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
+import labwc_session
 
 
 def environment():
-    return {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(RUNTIME), "WAYLAND_DISPLAY": "wayland-0"}
-
-
-def start_compositor(log):
-    """Start a headless labwc that never touches the user's own session."""
-    if (RUNTIME / "wayland-0").exists():
-        probe = subprocess.run(["wlrctl", "toplevel", "list"], env=environment(), capture_output=True, timeout=10)
-        if probe.returncode == 0:
-            return None
-        (RUNTIME / "wayland-0").unlink(missing_ok=True)
-        (RUNTIME / "wayland-0.lock").unlink(missing_ok=True)
-    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    env = environment() | {"WLR_BACKENDS": "headless", "WLR_RENDERER": "pixman", "WLR_HEADLESS_OUTPUTS": "1"}
-    process = subprocess.Popen(["labwc"], env=env, stdout=log, stderr=log)
-    for _ in range(50):
-        if (RUNTIME / "wayland-0").exists():
-            time.sleep(0.5)
-            return process
-        time.sleep(0.1)
-    raise RuntimeError("isolated compositor did not start")
+    return labwc_session.environment(False)
 
 
 def visible_area(path):
@@ -95,7 +75,7 @@ def main():
     shutil.rmtree(prefix, ignore_errors=True)
     system = prefix / "drive_c" / "windows" / str(folder)
     log = (evidence / "compositor.log").open("wb")
-    compositor = start_compositor(log)
+    compositor = labwc_session.start(log, False)
     try:
         # Install with the progress window, from a prefix that has never seen the runtime.
         code = run(raven, prefix, installer, ["/install", "/passive", "/norestart"], evidence / "install.log", evidence / "progress.png")

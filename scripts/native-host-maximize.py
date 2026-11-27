@@ -15,8 +15,8 @@ import shutil
 import subprocess
 import sys
 import time
+import labwc_session
 
-RUNTIME = Path(os.environ.get("RAVEN_TEST_RUNTIME") or f"/run/user/{os.getuid()}") / "raven-labwc-runtime"
 WINDOW = "title:frame restore"
 FAILURES = {
     10: "the compositor maximized the window and the program did not hear SC_MAXIMIZE",
@@ -27,26 +27,7 @@ FAILURES = {
 
 
 def environment():
-    return {"PATH": "/usr/bin:/bin", "XDG_RUNTIME_DIR": str(RUNTIME), "WAYLAND_DISPLAY": "wayland-0"}
-
-
-def start_compositor(log):
-    """Start a headless labwc that never touches the user's own session."""
-    if (RUNTIME / "wayland-0").exists():
-        probe = subprocess.run(["wlrctl", "toplevel", "list"], env=environment(), capture_output=True, timeout=10)
-        if probe.returncode == 0:
-            return None
-        (RUNTIME / "wayland-0").unlink(missing_ok=True)
-        (RUNTIME / "wayland-0.lock").unlink(missing_ok=True)
-    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    env = environment() | {"WLR_BACKENDS": "headless", "WLR_RENDERER": "pixman", "WLR_HEADLESS_OUTPUTS": "1"}
-    process = subprocess.Popen(["labwc"], env=env, stdout=log, stderr=log)
-    for _ in range(50):
-        if (RUNTIME / "wayland-0").exists():
-            time.sleep(0.5)
-            return process
-        time.sleep(0.1)
-    raise RuntimeError("isolated compositor did not start")
+    return labwc_session.environment(False)
 
 
 def toplevel(action):
@@ -63,7 +44,7 @@ def main():
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     with open(work / "compositor.log", "wb") as log:
-        compositor = start_compositor(log)
+        compositor = labwc_session.start(log, False)
         env = os.environ | environment() | {"RAVEN_PREFIX": str(work / "prefix")}
         env["PATH"] = os.environ["PATH"]
         program = subprocess.Popen([str(raven), "--run-process", "--execution=native", "--timeout-ms=60000", "--desktop=wayland", str(fixture), "--", "--host"],
