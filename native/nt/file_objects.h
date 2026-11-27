@@ -15,6 +15,16 @@ class FindObject;
 class DirectoryWatch;
 
 // An open file or directory; the host descriptor carries the Windows file pointer.
+// A COM port opened on a Linux serial device: what the comm functions set that termios does not keep.
+struct SerialPort {
+	std::mutex lock;
+	// ReadIntervalTimeout, ReadTotalTimeoutMultiplier, ReadTotalTimeoutConstant, WriteTotalTimeoutMultiplier, WriteTotalTimeoutConstant.
+	uint32_t timeouts[5] = {};
+	uint32_t mask = 0;
+	// The DCB as the program last set it, given back by GetCommState.
+	std::vector<uint8_t> dcb;
+};
+
 class FileObject : public KernelObject {
 public:
 	std::u16string_view type_name() const override { return u"File"; }
@@ -58,6 +68,8 @@ public:
 	bool skip_port_on_success = false, skip_event_on_success = false;
 	// The changes ReadDirectoryChangesW reports on a directory handle, from its first call on.
 	std::shared_ptr<DirectoryWatch> directory_watch;
+	// Set for a COM port opened on a serial device (a sandbox.conf "serial" line).
+	std::shared_ptr<SerialPort> serial;
 	bool writable() const { return access & (0x40000000U | 0x10000000U | 0x2U | 0x4U); }
 };
 

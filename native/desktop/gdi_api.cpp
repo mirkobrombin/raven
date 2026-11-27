@@ -2,6 +2,16 @@
 #include "gdi.h"
 #include "nt/api.h"
 #include "nt/text.h"
+#include "nt/sandbox.h"
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <mutex>
 #include <sys/mman.h>
 
 #include <algorithm>
@@ -120,6 +130,135 @@ uint32_t colorref(uint32_t rgb) { return ((rgb & 0xff) << 16) | (rgb & 0xff00) |
 uint32_t to_rgb(uint32_t color) { return colorref(color); }
 
 }
+
+// The open printers and their jobs. A handle is a number of this table, never a kernel object; a job collects what WritePrinter
+// sends and goes to the printer's target at EndDocPrinter (or ClosePrinter, for a job left open).
+class PrinterJobs {
+public:
+	uint64_t open(const Sandbox::Printer &printer)
+	{
+		std::lock_guard guard(lock);
+		const auto handle = next;
+		next += 4;
+		table[handle] = {printer, {}, 0};
+		return handle;
+	}
+	bool known(uint64_t handle)
+	{
+		std::lock_guard guard(lock);
+		return table.contains(handle);
+	}
+	uint32_t start(uint64_t handle)
+	{
+		std::lock_guard guard(lock);
+		const auto found = table.find(handle);
+		if (found == table.end())
+			return 0;
+		found->second.bytes.clear();
+		found->second.job = ++jobs;
+		return found->second.job;
+	}
+	bool write(uint64_t handle, const std::vector<uint8_t> &bytes)
+	{
+		std::lock_guard guard(lock);
+		const auto found = table.find(handle);
+		if (found == table.end())
+			return false;
+		if (!found->second.job)
+			found->second.job = ++jobs;  // WritePrinter without StartDocPrinter: Windows writes it as a job of its own
+		found->second.bytes.insert(found->second.bytes.end(), bytes.begin(), bytes.end());
+		return true;
+	}
+	bool finish(uint64_t handle)
+	{
+		Open done;
+		{
+			std::lock_guard guard(lock);
+			const auto found = table.find(handle);
+			if (found == table.end())
+				return false;
+			done = found->second;
+			found->second.bytes.clear();
+			found->second.job = 0;
+		}
+		deliver(done);
+		return true;
+	}
+	bool close(uint64_t handle)
+	{
+		Open done;
+		{
+			std::lock_guard guard(lock);
+			const auto found = table.find(handle);
+			if (found == table.end())
+				return false;
+			done = found->second;
+			table.erase(found);
+		}
+		if (done.job && !done.bytes.empty())
+			deliver(done);
+		return true;
+	}
+
+private:
+	struct Open {
+		Sandbox::Printer printer;
+		std::vector<uint8_t> bytes;
+		uint32_t job = 0;
+	};
+	static void deliver(const Open &done)
+	{
+		const auto &target = done.printer.target;
+		if (target.starts_with("file:")) {
+			const std::filesystem::path folder = target.substr(5);
+			std::error_code error;
+			std::filesystem::create_directories(folder, error);
+			char stamp[32];
+			const auto now = std::time(nullptr);
+			std::tm local{};
+			localtime_r(&now, &local);
+			std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &local);
+			const auto file = folder / (std::string(stamp) + "-job" + std::to_string(done.job) + ".prn");
+			std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char *>(done.bytes.data()), std::streamsize(done.bytes.size()));
+		}
+		else if (target.starts_with("cups:")) {
+			// lp reads the job from its standard input; the queue name is one argument, never a shell word.
+			int pipe_ends[2];
+			if (::pipe2(pipe_ends, O_CLOEXEC))
+				return;
+			posix_spawn_file_actions_t actions;
+			posix_spawn_file_actions_init(&actions);
+			posix_spawn_file_actions_adddup2(&actions, pipe_ends[0], 0);
+			const auto queue = target.substr(5);
+			std::string program = "lp", d = "-d", o = "-o", raw = "raw", quiet = "-s";
+			char *arguments[] = {program.data(), d.data(), const_cast<char *>(queue.c_str()), o.data(), raw.data(), quiet.data(), nullptr};
+			pid_t child = 0;
+			const bool started = posix_spawnp(&child, "lp", &actions, nullptr, arguments, environ) == 0;
+			posix_spawn_file_actions_destroy(&actions);
+			::close(pipe_ends[0]);
+			for (size_t sent = 0; started && sent < done.bytes.size();) {
+				const auto written = ::write(pipe_ends[1], done.bytes.data() + sent, done.bytes.size() - sent);
+				if (written <= 0)
+					break;
+				sent += size_t(written);
+			}
+			::close(pipe_ends[1]);
+			if (started)
+				::waitpid(child, nullptr, 0);
+		}
+	}
+	std::mutex lock;
+	std::map<uint64_t, Open> table;
+	uint64_t next = 0x7e0000;
+	uint32_t jobs = 0;
+};
+
+PrinterJobs &printer_jobs()
+{
+	static PrinterJobs jobs;
+	return jobs;
+}
+
 
 void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 {
@@ -1763,31 +1902,180 @@ void NativeDesktop::register_gdi_api(ApiRegistry &registry)
 		call.fail(120, 0);
 	});
 
-	// ---- printing is not provided ----
-	// With no printers there is no default one.
-	for (const auto *name : {"GetDefaultPrinterA", "GetDefaultPrinterW"})
-		registry.add(name, 2, [=, this](ApiCall &call) {
-			call.fail(2, 0);
-		});
-	// The list of printers is empty, and a printer named cannot be opened (ERROR_INVALID_PRINTER_NAME): programs that print receipts
-	// or reports carry on without printing, as on a machine with no printer installed.
-	for (const auto *name : {"EnumPrintersA", "EnumPrintersW"})
-		registry.add(name, 7, [](ApiCall &call) {
-			if (call[5]) call.store<uint32_t>(call[5], 0);
-			if (call[6]) call.store<uint32_t>(call[6], 0);
+	// ---- printers: the prefix's "printer NAME<tab>TARGET" lines ----
+	// Each printer passes what a program writes to it (WritePrinter, a RAW job, as receipt printers take) unchanged to its target:
+	// "file:/folder" saves each job as a file there, "cups:QUEUE" hands it to that Linux queue as raw data (lp -o raw). With no lines
+	// there are no printers, and programs carry on without printing, as on a machine with no printer installed.
+	// Drawing to a printer (StartDoc on a printer DC) is not provided.
+	for (const auto *name : {"GetDefaultPrinterA", "GetDefaultPrinterW"}) {
+		const bool wide = name[std::strlen(name) - 1] == 'W';
+		registry.add(name, 2, [wide](ApiCall &call) {
+			const auto list = sandbox().printers();
+			if (list.empty())
+				return call.fail(1801, 0);  // ERROR_INVALID_PRINTER_NAME: no default printer
+			const auto capacity = call[1] ? call.load<uint32_t>(call[1]) : 0;
+			const auto needed = (wide ? from_utf8(list.front().name).size() : list.front().name.size()) + 1;
+			if (call[1])
+				call.store<uint32_t>(call[1], uint32_t(needed));
+			if (!call[0] || capacity < needed)
+				return call.fail(122, 0);  // ERROR_INSUFFICIENT_BUFFER
+			if (wide)
+				call.put_wide(call[0], from_utf8(list.front().name), capacity);
+			else
+				call.put_narrow(call[0], list.front().name, capacity);
 			call.ret(1);
 		});
-	for (const auto *name : {"OpenPrinterA", "OpenPrinterW"})
+	}
+	// EnumPrinters(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcReturned): levels 1, 2, 4 and 5, strings after the records.
+	for (const auto *name : {"EnumPrintersA", "EnumPrintersW"}) {
+		const bool wide = name[std::strlen(name) - 1] == 'W';
+		registry.add(name, 7, [wide](ApiCall &call) {
+			const auto list = sandbox().printers();
+			const auto level = call.u32(2);
+			const size_t pw = call.pointer_width();
+			const auto align = [pw](size_t n) { return (n + pw - 1) / pw * pw; };
+			size_t record = 0;
+			switch (level) {
+			case 1: record = align(4) + 3 * pw; break;
+			case 2: record = 13 * pw + 8 * 4; break;
+			case 4: record = align(2 * pw + 4); break;
+			case 5: record = align(2 * pw + 12); break;
+			default: return call.fail(1804, 0);  // ERROR_INVALID_LEVEL
+			}
+			record = align(record);
+			const auto text_size = [wide](const std::string &text) {
+				return wide ? (from_utf8(text).size() + 1) * 2 : text.size() + 1;
+			};
+			const std::string port = "USB001:", driver = "Generic / Text Only", processor = "winprint", datatype = "RAW";
+			size_t needed = record * list.size();
+			for (const auto &printer : list) {
+				needed += 2 * text_size(printer.name);
+				if (level == 2)
+					needed += text_size(port) + text_size(driver) + text_size(processor) + text_size(datatype);
+				if (level == 5)
+					needed += text_size(port);
+			}
+			if (call[5])
+				call.store<uint32_t>(call[5], uint32_t(needed));
+			if (call[6])
+				call.store<uint32_t>(call[6], 0);
+			if (list.empty())
+				return call.ret(1);
+			if (!call[3] || call.u32(4) < needed)
+				return call.fail(122, 0);  // ERROR_INSUFFICIENT_BUFFER
+			const uint64_t base = call[3];
+			std::vector<uint8_t> zero(needed, 0);
+			call.write(base, zero);
+			uint64_t text = base + record * list.size();
+			const auto put = [&](const std::string &value) {
+				const auto at = text;
+				if (wide) {
+					const auto converted = from_utf8(value);
+					call.put_wide(at, converted, converted.size() + 1);
+				}
+				else
+					call.put_narrow(at, value, value.size() + 1);
+				text += text_size(value);
+				return at;
+			};
+			const uint32_t local = 0x40;  // PRINTER_ATTRIBUTE_LOCAL
+			for (size_t index = 0; index < list.size(); index++) {
+				const auto at = base + record * index;
+				const auto &printer = list[index];
+				switch (level) {
+				case 1:
+					call.store<uint32_t>(at, 0x00800000);  // PRINTER_ENUM_ICON8
+					call.store_pointer(at + align(4), put(printer.name));             // pDescription
+					call.store_pointer(at + align(4) + pw, put(printer.name));        // pName
+					break;
+				case 2:
+					call.store_pointer(at + 1 * pw, put(printer.name));               // pPrinterName
+					call.store_pointer(at + 2 * pw, put(printer.name));               // pShareName
+					call.store_pointer(at + 3 * pw, put(port));                       // pPortName
+					call.store_pointer(at + 4 * pw, put(driver));                     // pDriverName
+					call.store_pointer(at + 9 * pw, put(processor));                  // pPrintProcessor
+					call.store_pointer(at + 10 * pw, put(datatype));                  // pDatatype
+					call.store<uint32_t>(at + 13 * pw, local);                        // Attributes
+					call.store<uint32_t>(at + 13 * pw + 4, 1);                        // Priority
+					break;
+				case 4:
+					call.store_pointer(at, put(printer.name));                        // pPrinterName
+					text += text_size(printer.name);                                  // (pServerName stays null)
+					call.store<uint32_t>(at + 2 * pw, local);
+					break;
+				case 5:
+					call.store_pointer(at, put(printer.name));
+					text += text_size(printer.name);
+					call.store_pointer(at + pw, put(port));
+					call.store<uint32_t>(at + 2 * pw, local);
+					call.store<uint32_t>(at + 2 * pw + 4, 15000);
+					call.store<uint32_t>(at + 2 * pw + 8, 45000);
+					break;
+				}
+			}
+			if (call[6])
+				call.store<uint32_t>(call[6], uint32_t(list.size()));
+			call.ret(1);
+		});
+	}
+	for (const auto *name : {"OpenPrinterA", "OpenPrinterW", "OpenPrinter2A", "OpenPrinter2W"}) {
+		const bool wide = name[std::strlen(name) - 1] == 'W';
+		registry.add(name, std::strncmp(name, "OpenPrinter2", 12) ? 3 : 4, [wide](ApiCall &call) {
+			if (call[1])
+				call.store_pointer(call[1], 0);
+			if (!call[0])
+				return call.fail(1801, 0);
+			const auto wanted = wide ? call.wide(call[0]) : from_utf8(call.narrow(call[0]));
+			for (const auto &printer : sandbox().printers())
+				if (equal_fold(from_utf8(printer.name), wanted)) {
+					if (!call[1])
+						return call.fail(87, 0);
+					call.store_pointer(call[1], printer_jobs().open(printer));
+					return call.ret(1);
+				}
+			call.fail(1801, 0);  // ERROR_INVALID_PRINTER_NAME
+		});
+	}
+	registry.add("ClosePrinter", 1, [](ApiCall &call) {
+		if (!printer_jobs().close(call[0]))
+			return call.fail(6, 0);
+		call.ret(1);
+	});
+	// StartDocPrinter(hPrinter, Level, pDocInfo): DOC_INFO_1 { pDocName, pOutputFile, pDatatype }; returns the job's number.
+	for (const auto *name : {"StartDocPrinterA", "StartDocPrinterW"})
 		registry.add(name, 3, [](ApiCall &call) {
-			if (call[1]) call.store_pointer(call[1], 0);
-			call.fail(1801, 0);
+			const auto job = printer_jobs().start(call[0]);
+			if (!job)
+				return call.fail(6, 0);
+			call.ret(job);
 		});
-	for (const auto *name : {"OpenPrinter2A", "OpenPrinter2W"})
-		registry.add(name, 4, [](ApiCall &call) {
-			if (call[1]) call.store_pointer(call[1], 0);
-			call.fail(1801, 0);
+	for (const auto *name : {"StartPagePrinter", "EndPagePrinter"})
+		registry.add(name, 1, [](ApiCall &call) {
+			if (!printer_jobs().known(call[0]))
+				return call.fail(6, 0);
+			call.ret(1);
 		});
-	registry.add("ClosePrinter", 1, [](ApiCall &call) { call.fail(6, 0); });
+	// WritePrinter(hPrinter, pBuf, cbBuf, pcWritten)
+	registry.add("WritePrinter", 4, [](ApiCall &call) {
+		const auto size = call.u32(2);
+		if (call[3])
+			call.store<uint32_t>(call[3], 0);
+		if (!printer_jobs().known(call[0]))
+			return call.fail(6, 0);
+		if (size && !call[1])
+			return call.fail(87, 0);
+		if (!printer_jobs().write(call[0], size ? call.read(call[1], size) : std::vector<uint8_t>()))
+			return call.fail(6, 0);
+		if (call[3])
+			call.store<uint32_t>(call[3], size);
+		call.ret(1);
+	});
+	registry.add("EndDocPrinter", 1, [](ApiCall &call) {
+		if (!printer_jobs().finish(call[0]))
+			return call.fail(6, 0);
+		call.ret(1);
+	});
+	// Drawing to a printer DC is not provided.
 	for (const auto *name : {"StartDocW", "StartDocA", "EndDoc", "StartPage", "EndPage", "AbortDoc"})
 		registry.add(name, 2, [](ApiCall &call) { call.fail(120, 0); });
 	registry.add("GdiGetCodePage", 1, [](ApiCall &call) { call.ret(1252); });
