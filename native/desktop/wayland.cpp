@@ -149,6 +149,10 @@ struct WaylandPresentation::State {
 	zwp_confined_pointer_v1 *confined=nullptr;
 	zwp_locked_pointer_v1 *locked=nullptr;
 	int64_t relative_x=0,relative_y=0;
+	// The accelerated relative motion of the pointer frame being received, and whether the frame also moved the pointer to a place: a
+	// compositor may report a mouse by relative motion alone for a while (labwc over a full screen game), and the cursor follows it.
+	int64_t frame_x=0,frame_y=0;
+	bool moved_relatively=false,moved_to_place=false;
 	uint64_t constrained_window=0;
 #ifdef RAVEN_WAYLAND_VIEWPORTER
 	wp_viewporter *viewporter=nullptr;
@@ -298,9 +302,10 @@ struct WaylandPresentation::State {
 		if (relative || !relative_manager || !pointer) return;
 		relative=zwp_relative_pointer_manager_v1_get_relative_pointer(relative_manager,pointer);
 		static const zwp_relative_pointer_v1_listener listener{
-			[](void *data,zwp_relative_pointer_v1 *,uint32_t,uint32_t,wl_fixed_t,wl_fixed_t,wl_fixed_t dx,wl_fixed_t dy) {
+			[](void *data,zwp_relative_pointer_v1 *,uint32_t,uint32_t,wl_fixed_t accelerated_x,wl_fixed_t accelerated_y,wl_fixed_t dx,wl_fixed_t dy) {
 				// The unaccelerated movement in whole units; the fractions add up across reports.
 				auto &state=*static_cast<State *>(data);
+				state.frame_x+=accelerated_x; state.frame_y+=accelerated_y; state.moved_relatively=true;
 				state.relative_x+=dx; state.relative_y+=dy;
 				const auto x=int32_t(state.relative_x/256),y=int32_t(state.relative_y/256);
 				state.relative_x-=int64_t(x)*256; state.relative_y-=int64_t(y)*256;
@@ -325,6 +330,26 @@ struct WaylandPresentation::State {
 		else if (shape_device) wp_cursor_shape_device_v1_set_shape(shape_device,enter_serial,cursor_shape(cursor));
 #endif
 		if (display) wl_display_flush(display);
+	}
+
+	// The end of a pointer frame. When it moved the pointer only relatively, the cursor moves by that much within the window it is on;
+	// a held (locked) pointer stays put, as a cursor clipped to a point does.
+	void pointer_frame() {
+		if (moved_relatively && !moved_to_place && pointer_window && !locked) {
+			const auto x=int32_t(frame_x/256),y=int32_t(frame_y/256);
+			frame_x-=int64_t(x)*256; frame_y-=int64_t(y)*256;
+			const auto found=surfaces.find(pointer_window);
+			const auto limit=[](int64_t value,uint32_t size) {
+				return int32_t(size ? std::clamp<int64_t>(value,0,int64_t(size)-1) : value);
+			};
+			const auto width=found!=surfaces.end() ? found->second->width : 0,height=found!=surfaces.end() ? found->second->height : 0;
+			const auto next_x=limit(int64_t(pointer_x)+x,width),next_y=limit(int64_t(pointer_y)+y,height);
+			if (next_x!=pointer_x || next_y!=pointer_y) {
+				pointer_x=next_x; pointer_y=next_y;
+				pointer_event(DesktopEventKind::pointer_motion);
+			}
+		} else if (moved_to_place) frame_x=frame_y=0;
+		moved_relatively=moved_to_place=false;
 	}
 
 	void pointer_event(DesktopEventKind kind,uint32_t button=0,uint32_t pressed=0) {
@@ -370,7 +395,7 @@ struct WaylandPresentation::State {
 				value.enter=[](void *data,wl_pointer *,uint32_t serial,wl_surface *surface,wl_fixed_t x,wl_fixed_t y) {
 					auto &state=*static_cast<State *>(data); state.pointer_window=0; state.last_serial=serial;
 					for (const auto &[handle,window] : state.surfaces) if (window->proxy==surface) state.pointer_window=handle;
-					state.enter_serial=serial; state.pointer_inside=true; state.show_cursor();
+					state.enter_serial=serial; state.pointer_inside=true; state.moved_to_place=true; state.show_cursor();
 					state.pointer_x=coordinate(x); state.pointer_y=coordinate(y); state.pointer_event(DesktopEventKind::pointer_motion);
 				};
 				value.leave=[](void *data,wl_pointer *,uint32_t,wl_surface *) {
@@ -379,7 +404,7 @@ struct WaylandPresentation::State {
 				};
 				value.motion=[](void *data,wl_pointer *,uint32_t,wl_fixed_t x,wl_fixed_t y) {
 					auto &state=*static_cast<State *>(data); state.pointer_x=coordinate(x); state.pointer_y=coordinate(y);
-					state.pointer_event(DesktopEventKind::pointer_motion);
+					state.moved_to_place=true; state.pointer_event(DesktopEventKind::pointer_motion);
 				};
 				value.button=[](void *data,wl_pointer *,uint32_t serial,uint32_t,uint32_t button,uint32_t pressed) {
 					auto &state=*static_cast<State *>(data);
@@ -409,6 +434,11 @@ struct WaylandPresentation::State {
 					remainder-=delta;
 					if (delta) state.pointer_event(DesktopEventKind::pointer_wheel,uint32_t(delta),horizontal ? 1 : 0);
 				};
+				// Version 5 groups the pointer's events in frames; the source and end of scrolling and its steps add nothing here.
+				value.frame=[](void *data,wl_pointer *) { static_cast<State *>(data)->pointer_frame(); };
+				value.axis_source=[](void *,wl_pointer *,uint32_t) {};
+				value.axis_stop=[](void *,wl_pointer *,uint32_t,uint32_t) {};
+				value.axis_discrete=[](void *,wl_pointer *,uint32_t,int32_t) {};
 				return value;
 			}();
 			wl_pointer_add_listener(state.pointer,&listener,&state);
@@ -465,6 +495,8 @@ struct WaylandPresentation::State {
 					if (std::getenv("RAVEN_TRACE_KEYS")) fprintf(stderr,"modifiers %x %x %x group %u\n",depressed,latched,locked,group);
 					static_cast<State *>(data)->keyboard_event({0,depressed,latched,uint64_t(locked)|(uint64_t(group)<<32),DesktopEventKind::modifiers});
 				};
+				// Key repeat is the program's own business, as on Windows.
+				value.repeat_info=[](void *,wl_keyboard *,int32_t,int32_t) {};
 				return value;
 			}();
 			wl_keyboard_add_listener(state.keyboard,&listener,&state);
@@ -625,8 +657,9 @@ struct WaylandPresentation::State {
 		}
 		else if (!std::strcmp(interface,"wl_seat")) {
 			if (state.seat) { state.input_failed=true; return; }
-			state.seat=static_cast<wl_seat *>(wl_registry_bind(registry,name,&wl_seat_interface,1));
-			static const wl_seat_listener listener{capabilities,nullptr};
+			// Version 5 for the pointer's frames.
+			state.seat=static_cast<wl_seat *>(wl_registry_bind(registry,name,&wl_seat_interface,std::min(version,5U)));
+			static const wl_seat_listener listener{capabilities,[](void *,wl_seat *,const char *) {}};
 			wl_seat_add_listener(state.seat,&listener,&state);
 			state.make_data_device();
 		}

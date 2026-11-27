@@ -503,7 +503,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-server-protocol.h
                     COMMAND ${WAYLAND_SCANNER} server-header ${XDG_PROTOCOL} ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-server-protocol.h
                     DEPENDS ${XDG_PROTOCOL} VERBATIM)
-                add_executable(wayland_presentation_test desktop/wayland_test.cpp ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-server-protocol.h)
+                set(PROTOCOL_XML ${WAYLAND_PROTOCOLS_DATA}/unstable/relative-pointer/relative-pointer-unstable-v1.xml)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/relative-pointer-unstable-v1-server-protocol.h
+                    COMMAND ${WAYLAND_SCANNER} server-header ${PROTOCOL_XML} ${CMAKE_CURRENT_BINARY_DIR}/relative-pointer-unstable-v1-server-protocol.h
+                    DEPENDS ${PROTOCOL_XML} VERBATIM)
+                add_executable(wayland_presentation_test desktop/wayland_test.cpp ${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-server-protocol.h
+                    ${CMAKE_CURRENT_BINARY_DIR}/relative-pointer-unstable-v1-server-protocol.h)
                 target_include_directories(wayland_presentation_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
                 target_link_libraries(wayland_presentation_test PRIVATE raven_wayland PkgConfig::WAYLAND_SERVER Threads::Threads)
                 add_test(NAME native_wayland_popup_focus COMMAND wayland_presentation_test)

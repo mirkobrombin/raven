@@ -1,4 +1,5 @@
 #include "wayland.h"
+#include "relative-pointer-unstable-v1-server-protocol.h"
 #include "xdg-shell-server-protocol.h"
 #include <wayland-server.h>
 #include <atomic>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
@@ -25,7 +27,7 @@ static void check(bool value,const char *message)
 struct Compositor {
 	struct Shell { wl_resource *shell=nullptr,*role=nullptr,*parent=nullptr; bool popup=false,grab=false,denied=false,configured=false; uint32_t adjustment=0; };
 	wl_display *display=wl_display_create();
-	wl_resource *keyboard=nullptr,*focused=nullptr;
+	wl_resource *keyboard=nullptr,*focused=nullptr,*pointer=nullptr,*relative=nullptr;
 	std::map<wl_resource *,Shell> surfaces;
 	// How each positioner lets the compositor move a popup that would not fit, and what the newest popup was given.
 	std::map<wl_resource *,uint32_t> adjustments;
@@ -43,6 +45,8 @@ struct Compositor {
 	uint32_t serial=0,pressed=0;
 	// Set by the test: a key is pressed and released; the next frame committed to a window is answered with a request to close it.
 	std::atomic<bool> type{false},stop{false},close_on_commit{false};
+	// Set by the test: the next step of the pointer (see point).
+	std::atomic<int> pointer_step{0};
 	// The application id the newest toplevel was given.
 	std::string app_id;
 	std::mutex app_id_lock;
@@ -53,6 +57,23 @@ struct Compositor {
 		wl_keyboard_send_enter(keyboard,++serial,surface,&keys);
 		wl_array_release(&keys);
 		focused=surface;
+	}
+
+	// The pointer's steps, each a frame of its own: 1 enters the first window at 10,10; 2 moves 5,3 by relative motion alone, as labwc
+	// reports a mouse over a full screen game for a while; 3 moves relatively and to 40,30; 4 moves far beyond the window, relatively.
+	void point(int step) {
+		if (!pointer || !relative) return;
+		const auto moved=[&](double x,double y) {
+			zwp_relative_pointer_v1_send_relative_motion(relative,0,0,wl_fixed_from_double(x),wl_fixed_from_double(y),
+				wl_fixed_from_double(x),wl_fixed_from_double(y));
+		};
+		if (step==1) {
+			for (const auto &[surface,shell] : surfaces)
+				if (shell.role && !shell.popup) { wl_pointer_send_enter(pointer,++serial,surface,wl_fixed_from_int(10),wl_fixed_from_int(10)); break; }
+		} else if (step==2) moved(5,3);
+		else if (step==3) { moved(7,7); wl_pointer_send_motion(pointer,0,wl_fixed_from_int(40),wl_fixed_from_int(30)); }
+		else if (step==4) moved(1000,1000);
+		if (wl_resource_get_version(pointer)>=WL_POINTER_FRAME_SINCE_VERSION) wl_pointer_send_frame(pointer);
 	}
 
 	void press() {
@@ -75,7 +96,7 @@ static wl_resource *make(Compositor &compositor,wl_client *client,const wl_inter
 template<const wl_interface *interface> static void bind(wl_client *client,void *data,uint32_t version,uint32_t id)
 {
 	auto *resource=make(*static_cast<Compositor *>(data),client,interface,int(version),id);
-	if (interface==&wl_seat_interface) wl_seat_send_capabilities(resource,WL_SEAT_CAPABILITY_KEYBOARD);
+	if (interface==&wl_seat_interface) wl_seat_send_capabilities(resource,WL_SEAT_CAPABILITY_POINTER|WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
 static int dispatch(const void *data,void *target,uint32_t,const wl_message *message,wl_argument *arguments)
@@ -94,6 +115,8 @@ static int dispatch(const void *data,void *target,uint32_t,const wl_message *mes
 	}
 	const auto surface_of=[](wl_resource *role) { return static_cast<wl_resource *>(wl_resource_get_user_data(role)); };
 	if (request=="wl_seat.get_keyboard") compositor.keyboard=made;
+	else if (request=="wl_seat.get_pointer") compositor.pointer=made;
+	else if (request=="zwp_relative_pointer_manager_v1.get_relative_pointer") compositor.relative=made;
 	else if (request=="xdg_wm_base.get_xdg_surface") {
 		wl_resource_set_user_data(made,object(1));
 		compositor.surfaces[object(1)].shell=made;
@@ -184,6 +207,20 @@ static void exercise(raven::DesktopPresentation &desktop,Compositor &compositor)
 {
 	const std::vector<uint8_t> frame(64*48*4,0xff),menu(16*16*4,0x80);
 	desktop.present(1,"owner",64,48,frame);
+	// A mouse the compositor reports by relative motion alone moves the cursor by it, as it moves on Windows, kept to the window; motion
+	// to a place puts it there.
+	const auto pointed=[&](int step) {
+		compositor.pointer_step=step;
+		std::optional<std::pair<int32_t,int32_t>> place;
+		for (int attempt=0;attempt<50 && !place;++attempt)
+			for (const auto &event : desktop.poll(std::chrono::milliseconds(10)))
+				if (event.kind==raven::DesktopEventKind::pointer_motion && event.window==1) place=std::pair{event.x,event.y};
+		return place.value_or(std::pair{-1,-1});
+	};
+	check(pointed(1)==std::pair{10,10},"the pointer did not enter the window");
+	check(pointed(2)==std::pair{15,13},"relative motion alone did not move the cursor");
+	check(pointed(3)==std::pair{40,30},"motion to a place did not put the cursor there");
+	check(pointed(4)==std::pair{63,47},"relative motion took the cursor out of the window");
 	// Before any press the compositor refuses the grab; the popup it dismissed is forgotten, so that the same window can show it later.
 	bool refused=false;
 	try { desktop.popup(2,1,4,4,16,16,menu); } catch (const std::runtime_error &) { refused=true; }
@@ -273,7 +310,9 @@ int main()
 		!wl_global_create(compositor.display,&wl_compositor_interface,4,&compositor,bind<&wl_compositor_interface>) ||
 		!wl_global_create(compositor.display,&wl_subcompositor_interface,1,&compositor,bind<&wl_subcompositor_interface>) ||
 		!wl_global_create(compositor.display,&xdg_wm_base_interface,1,&compositor,bind<&xdg_wm_base_interface>) ||
-		!wl_global_create(compositor.display,&wl_seat_interface,1,&compositor,bind<&wl_seat_interface>) ||
+		!wl_global_create(compositor.display,&wl_seat_interface,5,&compositor,bind<&wl_seat_interface>) ||
+		!wl_global_create(compositor.display,&zwp_relative_pointer_manager_v1_interface,1,&compositor,
+			bind<&zwp_relative_pointer_manager_v1_interface>) ||
 		!wl_client_create(compositor.display,sockets[0])) {
 		std::cerr<<"cannot start the test compositor\n";
 		return 1;
@@ -289,6 +328,7 @@ int main()
 		auto *loop=wl_display_get_event_loop(compositor.display);
 		while (!compositor.stop) {
 			if (compositor.type.exchange(false)) compositor.press();
+			if (const int step=compositor.pointer_step.exchange(0)) compositor.point(step);
 			wl_display_flush_clients(compositor.display);
 			wl_event_loop_dispatch(loop,10);
 		}
