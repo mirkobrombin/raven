@@ -14,7 +14,7 @@ static const char *const names[] = {
 	"_o___std_exception_destroy", "_o___std_type_info_destroy_list", "_o___stdio_common_vsprintf", "_o__fpclass", "_o__get_osfhandle",
 	"_o_isalnum", "_o_isalpha", "_o_isdigit", "_o_isprint", "_o_toupper", "_set_thread_local_invalid_parameter_handler", "_setmaxstdio",
 	"_splitpath", "_strftime_l", "_strrev", "_strtof_l", "_strtoi64_l", "_strtold_l", "_strtoui64_l", "_umask", "_wfreopen_s", "_wtempnam",
-	"_wtmpnam", "asctime", "erf", "erfc", "remainder", "tgamma", "wcrtomb_s",
+	"_wtmpnam", "asctime", "erf", "erfc", "nan", "nanf", "nanl", "remainder", "tgamma", "wcrtomb_s",
 };
 
 typedef struct { int second, minute, hour, day, month, year, weekday, yearday, daylight; } calendar;
@@ -247,6 +247,14 @@ static int runtime(void)
 
 	if (set_handler(ignore_parameter) || set_handler(NULL) != ignore_parameter || set_handler(NULL))
 		return 68;
+
+	/* nan and nanf: a quiet NaN, the tag's number in its payload, as the EA app's libraries ask for one. */
+	typedef double (__cdecl *nan_function)(const char *);
+	typedef float (__cdecl *nanf_function)(const char *);
+	union { double value; unsigned long long bits; } wide = {((nan_function)find("nan"))("")};
+	union { float value; unsigned bits; } narrow = {((nanf_function)find("nanf"))("5")};
+	if (wide.bits != 0x7ff8000000000000ull || narrow.bits != 0x7fc00005u)
+		return 69;
 	return 0;
 }
 

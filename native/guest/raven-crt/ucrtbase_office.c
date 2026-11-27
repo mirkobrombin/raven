@@ -16,6 +16,24 @@ CRT float scalbnf(float x, int exponent) { return (float)ldexp(x, exponent); }
 CRT float tanhf(float x) { return (float)tanh(x); }
 CRT float nearbyintf(float x) { return (float)rint(x); }
 
+/* A quiet NaN; the tag's number, read as strtoull reads it, goes into the payload bits below the quiet bit, as nan("n-char-sequence")
+ * gives what strtod gives for "NAN(n-char-sequence)". */
+CRT double nan(const char *tag)
+{
+	union { double value; unsigned long long bits; } v;
+	v.bits = 0x7ff8000000000000ull | ((tag && *tag ? strtoull(tag, NULL, 0) : 0) & 0x0007ffffffffffffull);
+	return v.value;
+}
+
+CRT float nanf(const char *tag)
+{
+	union { float value; unsigned bits; } v;
+	v.bits = 0x7fc00000u | (unsigned)((tag && *tag ? strtoull(tag, NULL, 0) : 0) & 0x003fffffu);
+	return v.value;
+}
+
+CRT long double nanl(const char *tag) { return nan(tag); }
+
 /* The next representable value toward y: one step of the bit pattern, which is ordered like the magnitudes it encodes. */
 CRT double nextafter(double x, double y)
 {
