@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Mirko Brombin
  * See LICENSES/MIT.txt.
  */
-/* Raven C runtime component, part six: local time, the wide and descriptor forms of the file functions, the remaining string,
+/* Raven C runtime component, part six: local time, the wide and descriptor forms of the file functions, console keys, the remaining string,
  * conversion and math entry points, and the startup helpers that programs built by recent Visual C++ or MinGW-w64 import. This file
  * is included at the end of ucrtbase.c, so it shares the stream, descriptor and formatting helpers of the parts before it. */
 
@@ -772,12 +772,135 @@ CRT wchar_t *fgetws(wchar_t *buffer, int size, void *stream)
 CRT int getchar(void) { return fgetc(__acrt_iob_func(0)); }
 CRT int _putws(const wchar_t *text) { return fputws(text, __acrt_iob_func(1)) || fputwc(L'\n', __acrt_iob_func(1)) == 0xffff ? -1 : 0; }
 
-/* A console key without echo: the next byte of standard input. _kbhit reports a waiting key event on a console. */
-CRT int _getch(void)
+/* ---- console keys ---- */
+
+/* _getch and _getwch read a key without echo, _getche and _getwche echo its character. The keys are those of standard input: key presses
+ * when it is a console, where a key without a character (a function or arrow key) reads as 0, or 0xE0 for a key of the extended keyboard,
+ * and then as its scan code; otherwise its next character. _ungetch and _ungetwch keep one key aside for the next read, and fail while one
+ * is kept. _putch and _putwch write a character to the console, unbuffered. _kbhit reports a waiting key event on a console. */
+static SRWLOCK console_keys_lock = SRWLOCK_INIT;
+static int console_kept = -1, console_kept_scan;
+static HANDLE console_output;
+
+static int modifier_key(WORD key)
 {
-	unsigned char byte;
-	DWORD read = 0;
-	return ReadFile(GetStdHandle(STD_INPUT_HANDLE), &byte, 1, &read, NULL) && read ? byte : -1;
+	return key == VK_SHIFT || key == VK_CONTROL || key == VK_MENU || key == VK_CAPITAL || key == VK_NUMLOCK || key == VK_SCROLL ||
+		key == VK_LWIN || key == VK_RWIN;
+}
+
+/* The next key, -1 when there is none to read. *extended is set for the 0 or 0xE0 before a scan code and for the scan code, which are
+ * not echoed. */
+static int read_console_key(int wide, int *extended)
+{
+	*extended = 0;
+	if (console_kept != -1) {
+		const int key = console_kept;
+		*extended = console_kept_scan;
+		console_kept = -1;
+		console_kept_scan = 0;
+		return key;
+	}
+	HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+	DWORD mode, read = 0;
+	if (!GetConsoleMode(input, &mode)) {
+		char bytes[2];
+		wchar_t character;
+		if (!ReadFile(input, bytes, 1, &read, NULL) || !read)
+			return -1;
+		if (!wide)
+			return (unsigned char)bytes[0];
+		int length = 1;
+		if (IsDBCSLeadByte((BYTE)bytes[0]) && ReadFile(input, bytes + 1, 1, &read, NULL) && read)
+			length = 2;
+		return MultiByteToWideChar(CP_ACP, 0, bytes, length, &character, 1) == 1 ? character : -1;
+	}
+	for (;;) {
+		INPUT_RECORD record;
+		if (!ReadConsoleInputW(input, &record, 1, &read) || !read)
+			return -1;
+		const KEY_EVENT_RECORD *key = &record.Event.KeyEvent;
+		if (record.EventType != KEY_EVENT || !key->bKeyDown || (!key->uChar.UnicodeChar && modifier_key(key->wVirtualKeyCode)))
+			continue;
+		if (!key->uChar.UnicodeChar) {
+			*extended = console_kept_scan = 1;
+			console_kept = key->wVirtualScanCode;
+			return key->dwControlKeyState & ENHANCED_KEY ? 0xe0 : 0;
+		}
+		if (wide)
+			return key->uChar.UnicodeChar;
+		/* A character of two bytes in the ANSI code page reads as its lead byte, then the other. */
+		char bytes[2];
+		const int length = WideCharToMultiByte(CP_ACP, 0, &key->uChar.UnicodeChar, 1, bytes, 2, NULL, NULL);
+		if (length <= 0)
+			continue;
+		if (length == 2)
+			console_kept = (unsigned char)bytes[1];
+		return (unsigned char)bytes[0];
+	}
+}
+
+static HANDLE console_out(void)
+{
+	if (!console_output)
+		console_output = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+	return console_output;
+}
+
+static int put_console(const void *character, int wide)
+{
+	DWORD written = 0;
+	HANDLE output = console_out();
+	return output != INVALID_HANDLE_VALUE &&
+		(wide ? WriteConsoleW(output, character, 1, &written, NULL) : WriteConsoleA(output, character, 1, &written, NULL)) && written == 1;
+}
+
+static int console_key(int wide, int echo)
+{
+	int extended;
+	AcquireSRWLockExclusive(&console_keys_lock);
+	int key = read_console_key(wide, &extended);
+	if (echo && key != -1 && !extended) {
+		const wchar_t character = (wchar_t)key;
+		const char byte = (char)key;
+		put_console(wide ? (const void *)&character : (const void *)&byte, wide);
+	}
+	ReleaseSRWLockExclusive(&console_keys_lock);
+	return key;
+}
+
+CRT int _getch(void) { return console_key(0, 0); }
+CRT int _getche(void) { return console_key(0, 1); }
+CRT wint_t _getwch(void) { return (wint_t)console_key(1, 0); }
+CRT wint_t _getwche(void) { return (wint_t)console_key(1, 1); }
+
+static int unget_console_key(int key, int none)
+{
+	AcquireSRWLockExclusive(&console_keys_lock);
+	const int kept = key != none && console_kept == -1;
+	if (kept)
+		console_kept = key;
+	ReleaseSRWLockExclusive(&console_keys_lock);
+	return kept ? key : none;
+}
+
+CRT int _ungetch(int key) { return unget_console_key(key, -1); }
+CRT wint_t _ungetwch(wint_t key) { return (wint_t)unget_console_key(key, 0xffff); }
+
+CRT int _putch(int character)
+{
+	const char byte = (char)character;
+	AcquireSRWLockExclusive(&console_keys_lock);
+	const int done = put_console(&byte, 0);
+	ReleaseSRWLockExclusive(&console_keys_lock);
+	return done ? character : -1;
+}
+
+CRT wint_t _putwch(wchar_t character)
+{
+	AcquireSRWLockExclusive(&console_keys_lock);
+	const int done = put_console(&character, 1);
+	ReleaseSRWLockExclusive(&console_keys_lock);
+	return done ? character : 0xffff;
 }
 
 CRT int _kbhit(void)

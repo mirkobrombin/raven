@@ -6,8 +6,9 @@
  * rest: the exception and type_info helpers the C++ runtime libraries take under their _o_ names, the lock-free stream functions, more
  * conversions under a locale, file searches with 32-bit sizes, wide temporary names, path splitting and the C99 math functions erf, erfc,
  * tgamma and remainder. Also the msvcrt names libraries built by MinGW-w64 import (VLC's plugins among them): the secure scans, fscanf,
- * _vsnprintf_s, file searches with 64-bit sizes and pipes to a command. Included by ucrtbase.c, after the other parts, whose helpers it
- * shares. */
+ * _vsnprintf_s, file searches with 64-bit sizes and pipes to a command. Then the programs a program starts, which Python 3.14's
+ * python314.dll imports: system and _wsystem, the wide spawn and exec functions and _cwait. Included by ucrtbase.c, after the other parts,
+ * whose helpers it shares. */
 
 __asm__(".section .drectve\n\t.ascii \""
 	" -export:_o___std_exception_copy=raven_std_exception_copy -export:_o___std_exception_destroy=raven_std_exception_destroy"
@@ -570,4 +571,226 @@ CRT int _pclose(void *stream)
 	GetExitCodeProcess(process, &code);
 	CloseHandle(process);
 	return (int)code;
+}
+
+/* ---- programs a program starts ---- */
+
+/* A program that does not start: ENOEXEC for a file that is not one, EACCES for one locked or shared away, ENOMEM, or else ENOENT. */
+static int process_failure(void)
+{
+	const DWORD error = GetLastError();
+	set_errno(error == ERROR_BAD_EXE_FORMAT || error == ERROR_EXE_MACHINE_TYPE_MISMATCH ? 8 :
+		error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION ? 13 :
+		error == ERROR_NOT_ENOUGH_MEMORY || error == ERROR_OUTOFMEMORY ? 12 : 2);
+	return -1;
+}
+
+/* system and _wsystem hand a command to the command interpreter, the program ComSpec names or else cmd.exe on the path, and wait for it.
+ * The answer is the interpreter's exit code, or -1 with errno set when it does not start. A null command asks whether there is an
+ * interpreter: nonzero when there is, 0 with ENOENT when there is not. */
+static int command_interpreter(wchar_t *shell)
+{
+	const DWORD length = GetEnvironmentVariableW(L"ComSpec", shell, MAX_PATH);
+	if (length && length < MAX_PATH)
+		return 1;
+	const DWORD found = SearchPathW(NULL, L"cmd.exe", NULL, MAX_PATH, shell, NULL);
+	return found && found < MAX_PATH;
+}
+
+CRT int _wsystem(const wchar_t *command)
+{
+	wchar_t shell[MAX_PATH];
+	const int found = command_interpreter(shell);
+	if (!command) {
+		const DWORD attributes = found ? GetFileAttributesW(shell) : INVALID_FILE_ATTRIBUTES;
+		if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+			return 1;
+		set_errno(2);
+		return 0;
+	}
+	if (!found) {
+		set_errno(2);
+		return -1;
+	}
+	/* "interpreter" /c command, within the 32767 characters of a command line. */
+	const size_t length = wcslen(shell) + wcslen(command) + 7;
+	if (length > 32767) {
+		set_errno(7);
+		return -1;
+	}
+	wchar_t *line = malloc(length * sizeof *line);
+	if (!line) {
+		set_errno(12);
+		return -1;
+	}
+	lstrcpyW(line, L"\"");
+	lstrcatW(line, shell);
+	lstrcatW(line, L"\" /c ");
+	lstrcatW(line, command);
+	STARTUPINFOW startup = {sizeof startup};
+	PROCESS_INFORMATION child;
+	const BOOL started = CreateProcessW(shell, line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child);
+	free(line);
+	if (!started)
+		return process_failure();
+	DWORD code = (DWORD)-1;
+	CloseHandle(child.hThread);
+	WaitForSingleObject(child.hProcess, INFINITE);
+	GetExitCodeProcess(child.hProcess, &code);
+	CloseHandle(child.hProcess);
+	return (int)code;
+}
+
+CRT int system(const char *command)
+{
+	if (!command)
+		return _wsystem(NULL);
+	const int length = MultiByteToWideChar(CP_ACP, 0, command, -1, NULL, 0);
+	wchar_t *wide = length > 0 ? malloc((size_t)length * sizeof *wide) : NULL;
+	if (!wide) {
+		set_errno(length > 0 ? 12 : 42);
+		return -1;
+	}
+	MultiByteToWideChar(CP_ACP, 0, command, -1, wide, length);
+	const int result = _wsystem(wide);
+	free(wide);
+	return result;
+}
+
+/* _wspawnv and _wspawnve start a program with the arguments of a vector, joined by spaces as they are, and the environment of the calling
+ * process or the one given; _wexecv and _wexecve start it in place of the calling process, which ends once the new one runs. A name
+ * without an extension is tried with .com, .exe, .bat and .cmd, and a batch file runs through the command interpreter. _P_WAIT answers
+ * the program's exit code, _P_NOWAIT and _P_NOWAITO its process handle for _cwait, and _P_DETACH starts it without a console. Open handles
+ * stay open in the new process. */
+enum { SPAWN_WAIT, SPAWN_NOWAIT, SPAWN_OVERLAY, SPAWN_NOWAITO, SPAWN_DETACH };
+
+static int find_program(const wchar_t *name, wchar_t *path, int *batch)
+{
+	static const wchar_t *const extensions[] = {L".com", L".exe", L".bat", L".cmd"};
+	const size_t length = wcslen(name);
+	const wchar_t *dot = NULL;
+	for (const wchar_t *at = name; *at; ++at)
+		dot = *at == '.' ? at : *at == '\\' || *at == '/' || *at == ':' ? NULL : dot;
+	if (length + 5 > MAX_PATH)
+		return 0;
+	lstrcpyW(path, name);
+	if (!dot) {
+		size_t at = 0;
+		for (; at < sizeof extensions / sizeof *extensions; ++at) {
+			lstrcpyW(path + length, extensions[at]);
+			const DWORD attributes = GetFileAttributesW(path);
+			if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+				break;
+		}
+		if (at == sizeof extensions / sizeof *extensions)
+			return 0;
+	}
+	const size_t found = wcslen(path);
+	*batch = found >= 4 && (!lstrcmpiW(path + found - 4, L".bat") || !lstrcmpiW(path + found - 4, L".cmd"));
+	return 1;
+}
+
+static intptr_t spawn_program(int mode, const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment)
+{
+	wchar_t path[MAX_PATH], shell[MAX_PATH];
+	int batch = 0;
+	if (!name || !arguments || !arguments[0] || !arguments[0][0] || mode < SPAWN_WAIT || mode > SPAWN_DETACH) {
+		set_errno(22);
+		return -1;
+	}
+	if (!find_program(name, path, &batch) || (batch && !command_interpreter(shell))) {
+		set_errno(2);
+		return -1;
+	}
+	/* The arguments one space apart; a batch file's path and arguments make the interpreter's command: "shell" /s /c ""path" ...". */
+	size_t length = batch ? wcslen(shell) + wcslen(path) + 16 : 1;
+	for (const wchar_t *const *argument = arguments; *argument; ++argument)
+		length += wcslen(*argument) + 1;
+	if (length > 32767) {
+		set_errno(7);
+		return -1;
+	}
+	size_t size = 2;
+	if (environment)
+		for (const wchar_t *const *entry = environment; *entry; ++entry)
+			size += wcslen(*entry) + 1;
+	wchar_t *line = malloc(length * sizeof *line), *block = environment ? malloc(size * sizeof *block) : NULL;
+	if (!line || (environment && !block)) {
+		free(line);
+		free(block);
+		set_errno(12);
+		return -1;
+	}
+	line[0] = 0;
+	if (batch) {
+		lstrcatW(line, L"\"");
+		lstrcatW(line, shell);
+		lstrcatW(line, L"\" /s /c \"\"");
+		lstrcatW(line, path);
+		lstrcatW(line, L"\"");
+	}
+	for (const wchar_t *const *argument = batch ? arguments + 1 : arguments; *argument; ++argument) {
+		if (line[0])
+			lstrcatW(line, L" ");
+		lstrcatW(line, *argument);
+	}
+	if (batch)
+		lstrcatW(line, L"\"");
+	/* The environment block: each NAME=value with its terminator, then one more. */
+	if (block) {
+		wchar_t *at = block;
+		for (const wchar_t *const *entry = environment; *entry; ++entry) {
+			const size_t count = wcslen(*entry) + 1;
+			memcpy(at, *entry, count * sizeof *at);
+			at += count;
+		}
+		at[0] = at[1] = 0;
+	}
+	STARTUPINFOW startup = {sizeof startup};
+	PROCESS_INFORMATION child;
+	const DWORD flags = (block ? CREATE_UNICODE_ENVIRONMENT : 0) | (mode == SPAWN_DETACH ? DETACHED_PROCESS : 0);
+	const BOOL started = CreateProcessW(batch ? shell : path, line, NULL, NULL, TRUE, flags, block, NULL, &startup, &child);
+	free(line);
+	free(block);
+	if (!started)
+		return process_failure();
+	CloseHandle(child.hThread);
+	if (mode == SPAWN_NOWAIT || mode == SPAWN_NOWAITO)
+		return (intptr_t)child.hProcess;
+	DWORD code = 0;
+	if (mode == SPAWN_WAIT) {
+		WaitForSingleObject(child.hProcess, INFINITE);
+		GetExitCodeProcess(child.hProcess, &code);
+	}
+	CloseHandle(child.hProcess);
+	if (mode == SPAWN_OVERLAY)
+		ExitProcess(0);
+	return (intptr_t)code;
+}
+
+CRT intptr_t _wspawnv(int mode, const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(mode, name, arguments, NULL); }
+CRT intptr_t _wspawnve(int mode, const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment)
+{
+	return spawn_program(mode, name, arguments, environment);
+}
+CRT intptr_t _wexecv(const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(SPAWN_OVERLAY, name, arguments, NULL); }
+CRT intptr_t _wexecve(const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment)
+{
+	return spawn_program(SPAWN_OVERLAY, name, arguments, environment);
+}
+
+/* Waits for a program _wspawnv started without waiting, stores its exit code and closes its handle; the action is ignored, as Windows
+ * keeps no tree of processes. ECHILD for a handle that cannot be waited on. */
+CRT intptr_t _cwait(int *status, intptr_t process, int action)
+{
+	DWORD code;
+	if (WaitForSingleObject((HANDLE)process, INFINITE) != WAIT_OBJECT_0 || !GetExitCodeProcess((HANDLE)process, &code)) {
+		set_errno(10);
+		return -1;
+	}
+	if (status)
+		*status = (int)code;
+	if (process != -1 && process != -2)
+		CloseHandle((HANDLE)process);
+	return process;
 }
