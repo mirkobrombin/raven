@@ -1,9 +1,11 @@
 #define WIN32_LEAN_AND_MEAN
+#define _WIN32_WINNT 0x0600
 #include <windows.h>
 #include <iphlpapi.h>
 
 /* A program reads how the machine is networked before it opens its first socket: how many interfaces there are, a row for each, and one
-   row by index. Every answer has to agree with the others, and a bad request has to fail the way Windows fails it. */
+   row by index, and the LUID and name the newer calls know each interface by. Every answer has to agree with the others, and a bad
+   request has to fail the way Windows fails it. */
 typedef char mib_if_row_is_860_bytes[sizeof(MIB_IFROW) == 860 ? 1 : -1];
 
 static int failure;
@@ -64,7 +66,30 @@ int raven_entry(void)
 		expect(one.dwDescrLen == row->dwDescrLen, 14);
 		for (DWORD character = 0; character < one.dwDescrLen; ++character)
 			expect(one.bDescr[character] == row->bDescr[character], 15);
+		// The index, the LUID and the interface's name lead to one another, wide and narrow alike; the LUID carries the type.
+		NET_LUID luid, back;
+		NET_IFINDEX index = 0;
+		WCHAR name[IF_MAX_STRING_SIZE + 1];
+		char narrow[IF_MAX_STRING_SIZE + 1];
+		luid.Value = back.Value = 0;
+		expect(ConvertInterfaceIndexToLuid(row->dwIndex, &luid) == NO_ERROR && luid.Value != 0, 21);
+		expect(luid.Info.IfType == row->dwType, 22);
+		expect(ConvertInterfaceLuidToIndex(&luid, &index) == NO_ERROR && index == row->dwIndex, 23);
+		expect(ConvertInterfaceLuidToNameW(&luid, name, IF_MAX_STRING_SIZE + 1) == NO_ERROR && name[0], 24);
+		expect(ConvertInterfaceNameToLuidW(name, &back) == NO_ERROR && back.Value == luid.Value, 25);
+		back.Value = 0;
+		expect(ConvertInterfaceLuidToNameA(&luid, narrow, sizeof narrow) == NO_ERROR && narrow[0] == (char)name[0], 26);
+		expect(ConvertInterfaceNameToLuidA(narrow, &back) == NO_ERROR && back.Value == luid.Value, 27);
+		// A name buffer of two characters cannot hold any name.
+		expect(ConvertInterfaceLuidToNameW(&luid, name, 2) == ERROR_NOT_ENOUGH_MEMORY, 28);
 	}
+
+	// An index or a name no interface could have is refused.
+	NET_LUID none;
+	none.Value = 0;
+	expect(ConvertInterfaceIndexToLuid(0x7fffffffu, &none) == ERROR_FILE_NOT_FOUND, 29);
+	expect(ConvertInterfaceNameToLuidW(L"no such interface", &none) == ERROR_INVALID_NAME, 30);
+	expect(ConvertInterfaceIndexToLuid(1, NULL) == ERROR_INVALID_PARAMETER, 31);
 
 	// An index no interface has is refused, as Windows refuses it.
 	MIB_IFROW missing;

@@ -5,6 +5,7 @@
 #include "text.h"
 
 #include <algorithm>
+#include <array>
 #include <arpa/inet.h>
 #include <cstring>
 #include <ctime>
@@ -13,6 +14,8 @@
 #include <map>
 #include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -180,7 +183,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		cursor += 2 * width;
 		const size_t metric4_at = cursor; cursor += 8;
 		cursor = align(cursor, 8);
-		cursor += 8;
+		const size_t luid_at = cursor; cursor += 8;
 		cursor = align(cursor, width);
 		cursor += 2 * width;
 		cursor += 4;
@@ -273,6 +276,8 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 			put32(self + flags_at, 0x10 | 0x80);
 			put32(self + mtu_at, adapter.mtu);
 			put32(self + type_at, adapter.type);
+			const uint64_t luid = interface_luid(adapter.type, adapter.index);
+			std::memcpy(block.data() + self + luid_at, &luid, 8);
 			put32(self + status_at, adapter.status);
 			put32(self + index6_at, adapter.index);
 			put32(self + metric4_at, 25);
@@ -1507,6 +1512,12 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		}
 	};
 	registry.add("GetAwarenessFromDpiAwarenessContext", 1, [awareness_of](ApiCall &call) { call.ret(uint32_t(awareness_of(call[0]))); });
+	// The DPI a context draws at: 96 for an unaware or system aware one, as the system's DPI is 96; none (0) for a per-monitor context,
+	// whose DPI is the monitor's, or for a context that is not one.
+	registry.add("GetDpiFromDpiAwarenessContext", 1, [awareness_of](ApiCall &call) {
+		const int32_t awareness = awareness_of(call[0]);
+		call.ret(awareness == 0 || awareness == 1 ? 96 : 0);
+	});
 	// Two contexts are equal when they are the same context, not when they share an awareness: per-monitor aware and its second version,
 	// unaware and unaware with GDI scaling, are different contexts (WPF tells them apart to keep the bounds of each display per context).
 	registry.add("AreDpiAwarenessContextsEqual", 2, [awareness_of](ApiCall &call) {
@@ -1701,7 +1712,7 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		// MIB_IPFORWARD_ROW2: the interface LUID and index, the destination prefix (address and length), the next hop, then the
 		// lifetimes, metric, protocol and flags.
 		std::vector<uint8_t> row(104, 0);
-		const uint64_t luid = uint64_t(type) << 48 | uint64_t(index) << 24;
+		const uint64_t luid = interface_luid(type, index);
 		std::memcpy(row.data(), &luid, 8);
 		std::memcpy(row.data() + 8, &index, 4);
 		std::memcpy(row.data() + 12, destination.data(), 28);
@@ -1898,6 +1909,111 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 	// The newer interface calls name an interface by a LUID or a GUID, which no interface here has: the rows of MIB_IF_ROW2 carry a GUID
 	// of their own that nothing else refers to, so they are left to the older MIB_IFROW calls, which go by the index.
 	registry.add("ConvertInterfaceGuidToLuid", 2, [](ApiCall &call) { call.ret(1168); });
+	// A LUID is made from the interface's type and index (interface_luid), so the conversions go both ways over the host's interfaces.
+	// An interface's name is its type's word and the index in the LUID, as "ethernet_2"; a type without a word is named "iftype" and
+	// its number. They return their error code rather than setting the thread's last error.
+	const auto find_interface = [](auto &&matches) -> std::optional<HostInterface> {
+		for (const auto &interface : host_interfaces())
+			if (matches(interface))
+				return interface;
+		return std::nullopt;
+	};
+	static constexpr std::array<std::pair<uint32_t, std::string_view>, 6> type_words{{{1, "other"}, {if_type_ethernet, "ethernet"},
+		{23, "ppp"}, {if_type_loopback, "loopback"}, {if_type_wireless, "wireless"}, {131, "tunnel"}}};
+	const auto interface_name = [](uint64_t luid) {
+		const uint32_t type = uint32_t(luid >> 48), index = uint32_t(luid >> 24) & 0xffffff;
+		for (const auto &[number, word] : type_words)
+			if (number == type)
+				return std::string(word) + "_" + std::to_string(index);
+		return "iftype" + std::to_string(type) + "_" + std::to_string(index);
+	};
+	// The decimal number a whole string spells, if it is one of at most eight digits.
+	const auto decimal = [](std::string_view digits) -> std::optional<uint32_t> {
+		if (digits.empty() || digits.size() > 8)
+			return std::nullopt;
+		uint32_t value = 0;
+		for (const char digit : digits) {
+			if (digit < '0' || digit > '9')
+				return std::nullopt;
+			value = value * 10 + uint32_t(digit - '0');
+		}
+		return value;
+	};
+	const auto name_luid = [decimal](std::string_view name) -> std::optional<uint64_t> {
+		const size_t separator = name.rfind('_');
+		if (separator == std::string_view::npos)
+			return std::nullopt;
+		const auto index = decimal(name.substr(separator + 1));
+		const auto word = name.substr(0, separator);
+		std::optional<uint32_t> type;
+		for (const auto &[number, known] : type_words)
+			if (word == known)
+				type = number;
+		if (!type && word.starts_with("iftype"))
+			type = decimal(word.substr(6));
+		if (!index || !type || *index > 0xffffff || *type > 0xffff)
+			return std::nullopt;
+		return interface_luid(*type, *index);
+	};
+	registry.add("ConvertInterfaceIndexToLuid", 2, [find_interface](ApiCall &call) {
+		if (!call[1]) {
+			call.ret(error_invalid_parameter);
+			return;
+		}
+		const uint32_t index = call.u32(0);
+		const auto found = find_interface([index](const HostInterface &interface) { return index && interface.index == index; });
+		call.store<uint64_t>(call[1], found ? interface_luid(found->type, found->index) : 0);
+		call.ret(found ? 0 : 2);
+	});
+	registry.add("ConvertInterfaceLuidToIndex", 2, [find_interface](ApiCall &call) {
+		if (!call[0] || !call[1]) {
+			call.ret(error_invalid_parameter);
+			return;
+		}
+		const uint64_t luid = call.load<uint64_t>(call[0]);
+		const auto found = find_interface([luid](const HostInterface &interface) { return interface_luid(interface.type, interface.index) == luid; });
+		call.store<uint32_t>(call[1], found ? found->index : 0);
+		call.ret(found ? 0 : 2);
+	});
+	for (const bool wide : {false, true}) {
+		registry.add(wide ? "ConvertInterfaceLuidToNameW" : "ConvertInterfaceLuidToNameA", 3, [interface_name, wide](ApiCall &call) {
+			if (!call[0] || !call[1]) {
+				call.ret(error_invalid_parameter);
+				return;
+			}
+			const auto name = interface_name(call.load<uint64_t>(call[0]));
+			const size_t capacity = size_t(call[2]);
+			if (capacity <= name.size()) {
+				call.ret(8);
+				return;
+			}
+			if (wide)
+				call.put_wide(call[1], std::u16string(name.begin(), name.end()), capacity);
+			else
+				call.put_narrow(call[1], name, capacity);
+			call.ret(0);
+		});
+		registry.add(wide ? "ConvertInterfaceNameToLuidW" : "ConvertInterfaceNameToLuidA", 2, [name_luid, wide](ApiCall &call) {
+			if (!call[0] || !call[1]) {
+				call.ret(error_invalid_parameter);
+				return;
+			}
+			std::string name;
+			if (wide) {
+				for (const char16_t character : call.wide(call[0], 257))
+					name.push_back(character < 0x80 ? char(character) : '?');
+			} else {
+				name = call.narrow(call[0], 257);
+			}
+			const auto luid = name_luid(name);
+			if (!luid) {
+				call.ret(123);
+				return;
+			}
+			call.store<uint64_t>(call[1], *luid);
+			call.ret(0);
+		});
+	}
 	registry.add("GetIfEntry2", 1, [](ApiCall &call) { call.ret(1168); });
 	registry.add("SetProcessInformation", 4, [](ApiCall &call) { call.ret(1); });
 	registry.add("SetProcessPriorityBoost", 2, [](ApiCall &call) { call.ret(1); });

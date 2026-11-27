@@ -17,6 +17,9 @@ struct HostInterface {
 	uint32_t hardware_length = 0;
 };
 
+// NET_LUID: the interface type in the top 16 bits and the interface's own index in the 24 bits below them; the low 24 are reserved.
+inline uint64_t interface_luid(uint32_t type, uint32_t index) { return uint64_t(type & 0xffff) << 48 | uint64_t(index & 0xffffff) << 24; }
+
 // The interfaces of the host, in the order the system lists them.
 std::vector<HostInterface> host_interfaces();
 

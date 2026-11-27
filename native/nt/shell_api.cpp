@@ -148,6 +148,15 @@ std::vector<uint32_t> shell_icon(bool folder, int32_t size)
 void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeRegistry &hive)
 {
 	auto &paths = context.paths;
+	// No full-screen program, presentation or quiet time holds notifications back here: QUNS_ACCEPTS_NOTIFICATIONS.
+	registry.add("SHQueryUserNotificationState", 1, [](ApiCall &call) {
+		if (!call[0]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		call.store<uint32_t>(call[0], 5);
+		call.ret(0);
+	});
 	registry.add("SHGetFolderPathW", 5, [&paths](ApiCall &call) {
 		const int csidl = call.i32(1);
 		const auto location = folder_for(csidl, paths.user_profile(), call.process.mode() == NativeMode::x86);

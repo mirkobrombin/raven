@@ -804,5 +804,15 @@ int raven_entry(void)
 	BOOL enabled = FALSE;
 	if (!elevation_enabled || elevation_enabled(&enabled) != ERROR_SUCCESS || !enabled || elevation_enabled(NULL) != ERROR_INVALID_PARAMETER)
 		return 226;
+	/* The DPI of an awareness context: the system's 96 for an unaware and a system aware context, none for a per-monitor one. */
+	UINT (WINAPI *dpi_of_context)(DPI_AWARENESS_CONTEXT) = (void *)GetProcAddress(user32, "GetDpiFromDpiAwarenessContext");
+	if (!dpi_of_context || dpi_of_context(DPI_AWARENESS_CONTEXT_UNAWARE) != 96 || dpi_of_context(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE) != 96 ||
+		dpi_of_context(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != 0)
+		return 286;
+	/* SHQueryUserNotificationState: nothing holds notifications back, so a program may show its own. */
+	HRESULT (WINAPI *notification_state)(int *) = (void *)GetProcAddress(LoadLibraryW(L"shell32.dll"), "SHQueryUserNotificationState");
+	int state = 0;
+	if (!notification_state || notification_state(&state) != S_OK || state != 5 || notification_state(NULL) != E_INVALIDARG)
+		return 287;
 	return 0;
 }
