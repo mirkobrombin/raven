@@ -661,10 +661,25 @@ CRT int system(const char *command)
  * process or the one given; _wexecv and _wexecve start it in place of the calling process, which ends once the new one runs. A name
  * without an extension is tried with .com, .exe, .bat and .cmd, and a batch file runs through the command interpreter. _P_WAIT answers
  * the program's exit code, _P_NOWAIT and _P_NOWAITO its process handle for _cwait, and _P_DETACH starts it without a console. Open handles
- * stay open in the new process. */
+ * stay open in the new process. The p variants also look for a bare name in the folders of PATH. */
 enum { SPAWN_WAIT, SPAWN_NOWAIT, SPAWN_OVERLAY, SPAWN_NOWAITO, SPAWN_DETACH };
 
-static int find_program(const wchar_t *name, wchar_t *path, int *batch)
+/* The program a bare name names in the folders of PATH, tried with each extension when it has none. */
+static int search_program(const wchar_t *name, int extended, wchar_t *path)
+{
+	static const wchar_t *const extensions[] = {L".com", L".exe", L".bat", L".cmd"};
+	for (const wchar_t *at = name; *at; ++at)
+		if (*at == '\\' || *at == '/' || *at == ':')
+			return 0;
+	for (size_t at = 0; at < (extended ? 1 : sizeof extensions / sizeof *extensions); ++at) {
+		const DWORD found = SearchPathW(NULL, name, extended ? NULL : extensions[at], MAX_PATH, path, NULL);
+		if (found && found < MAX_PATH && !(GetFileAttributesW(path) & FILE_ATTRIBUTE_DIRECTORY))
+			return 1;
+	}
+	return 0;
+}
+
+static int find_program(const wchar_t *name, wchar_t *path, int *batch, int search)
 {
 	static const wchar_t *const extensions[] = {L".com", L".exe", L".bat", L".cmd"};
 	const size_t length = wcslen(name);
@@ -682,7 +697,11 @@ static int find_program(const wchar_t *name, wchar_t *path, int *batch)
 			if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY))
 				break;
 		}
-		if (at == sizeof extensions / sizeof *extensions)
+		if (at == sizeof extensions / sizeof *extensions && !(search && search_program(name, 0, path)))
+			return 0;
+	} else if (search) {
+		const DWORD attributes = GetFileAttributesW(path);
+		if ((attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) && !search_program(name, 1, path))
 			return 0;
 	}
 	const size_t found = wcslen(path);
@@ -690,7 +709,7 @@ static int find_program(const wchar_t *name, wchar_t *path, int *batch)
 	return 1;
 }
 
-static intptr_t spawn_program(int mode, const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment)
+static intptr_t spawn_program(int mode, const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment, int search)
 {
 	wchar_t path[MAX_PATH], shell[MAX_PATH];
 	int batch = 0;
@@ -698,7 +717,7 @@ static intptr_t spawn_program(int mode, const wchar_t *name, const wchar_t *cons
 		set_errno(22);
 		return -1;
 	}
-	if (!find_program(name, path, &batch) || (batch && !command_interpreter(shell))) {
+	if (!find_program(name, path, &batch, search) || (batch && !command_interpreter(shell))) {
 		set_errno(2);
 		return -1;
 	}
@@ -768,15 +787,77 @@ static intptr_t spawn_program(int mode, const wchar_t *name, const wchar_t *cons
 	return (intptr_t)code;
 }
 
-CRT intptr_t _wspawnv(int mode, const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(mode, name, arguments, NULL); }
+CRT intptr_t _wspawnv(int mode, const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(mode, name, arguments, NULL, 0); }
+CRT intptr_t _wspawnvp(int mode, const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(mode, name, arguments, NULL, 1); }
 CRT intptr_t _wspawnve(int mode, const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment)
 {
-	return spawn_program(mode, name, arguments, environment);
+	return spawn_program(mode, name, arguments, environment, 0);
 }
-CRT intptr_t _wexecv(const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(SPAWN_OVERLAY, name, arguments, NULL); }
+CRT intptr_t _wexecv(const wchar_t *name, const wchar_t *const *arguments) { return spawn_program(SPAWN_OVERLAY, name, arguments, NULL, 0); }
 CRT intptr_t _wexecve(const wchar_t *name, const wchar_t *const *arguments, const wchar_t *const *environment)
 {
-	return spawn_program(SPAWN_OVERLAY, name, arguments, environment);
+	return spawn_program(SPAWN_OVERLAY, name, arguments, environment, 0);
+}
+
+/* The narrow forms convert the name and arguments from the ANSI code page. */
+static wchar_t *widen(const char *text)
+{
+	const int length = MultiByteToWideChar(CP_ACP, 0, text, -1, NULL, 0);
+	wchar_t *wide = length > 0 ? malloc((size_t)length * sizeof *wide) : NULL;
+	if (wide)
+		MultiByteToWideChar(CP_ACP, 0, text, -1, wide, length);
+	return wide;
+}
+
+static intptr_t spawn_narrow(int mode, const char *name, const char *const *arguments, int search)
+{
+	size_t count = 0;
+	if (!name || !arguments) {
+		set_errno(22);
+		return -1;
+	}
+	while (arguments[count])
+		++count;
+	wchar_t *wide_name = widen(name), **wide = calloc(count + 1, sizeof *wide);
+	int complete = wide_name && wide;
+	for (size_t at = 0; complete && at < count; ++at)
+		complete = (wide[at] = widen(arguments[at])) != NULL;
+	intptr_t result = -1;
+	if (complete)
+		result = spawn_program(mode, wide_name, (const wchar_t *const *)wide, NULL, search);
+	else
+		set_errno(12);
+	for (size_t at = 0; wide && at < count; ++at)
+		free(wide[at]);
+	free(wide);
+	free(wide_name);
+	return result;
+}
+
+CRT intptr_t _spawnvp(int mode, const char *name, const char *const *arguments) { return spawn_narrow(mode, name, arguments, 1); }
+
+/* The l forms take the arguments in the call, ended by a null pointer. */
+CRT intptr_t _spawnlp(int mode, const char *name, const char *argument, ...)
+{
+	va_list list;
+	size_t count = 1;
+	va_start(list, argument);
+	while (argument && va_arg(list, const char *))
+		++count;
+	va_end(list);
+	const char **arguments = malloc((count + 1) * sizeof *arguments);
+	if (!arguments) {
+		set_errno(12);
+		return -1;
+	}
+	arguments[0] = argument;
+	va_start(list, argument);
+	for (size_t at = 1; at <= count; ++at)
+		arguments[at] = argument ? va_arg(list, const char *) : NULL;
+	va_end(list);
+	const intptr_t result = spawn_narrow(mode, name, arguments, 1);
+	free(arguments);
+	return result;
 }
 
 /* Waits for a program _wspawnv started without waiting, stores its exit code and closes its handle; the action is ignored, as Windows
@@ -794,3 +875,67 @@ CRT intptr_t _cwait(int *status, intptr_t process, int action)
 		CloseHandle((HANDLE)process);
 	return process;
 }
+
+CRT int freopen_s(void **out, const char *path, const char *mode, void *stream)
+{
+	if (!out || !mode || !stream)
+		return 22;
+	*out = freopen(path, mode, stream);
+	return *out ? 0 : *_errno();
+}
+
+/* _heapchk looks over the process heap the runtime allocates from: _HEAPOK, or _HEAPBADNODE when it is damaged. */
+CRT int _heapchk(void) { return HeapValidate(GetProcessHeap(), 0, NULL) ? -2 : -4; }
+
+/* The rotations of a 32-bit long. */
+CRT unsigned long _lrotl(unsigned long value, int shift)
+{
+	shift &= 31;
+	return shift ? (value << shift) | (value >> (32 - shift)) : value;
+}
+
+CRT unsigned long _lrotr(unsigned long value, int shift)
+{
+	shift &= 31;
+	return shift ? (value >> shift) | (value << (32 - shift)) : value;
+}
+
+/* _except1 is how a math function of the runtime reports a floating-point exception it found: `flags` names it (overflow 1, underflow 2,
+ * division by zero 4, invalid 8, inexact 16) and `control` is the caller's control word, MXCSR's masks on x64 and the x87 one on x86. A
+ * masked exception sets errno, as the C standard asks, and the function returns its result; an unmasked one is raised as the processor
+ * would raise it. */
+CRT double _except1(DWORD flags, int operation, double argument, double result, DWORD control, void *reserved)
+{
+	static const struct {
+		DWORD flag, code;
+		int error;
+	} kinds[] = {{8, EXCEPTION_FLT_INVALID_OPERATION, 33}, {4, EXCEPTION_FLT_DIVIDE_BY_ZERO, 34}, {1, EXCEPTION_FLT_OVERFLOW, 34},
+		{2, EXCEPTION_FLT_UNDERFLOW, 34}, {16, EXCEPTION_FLT_INEXACT_RESULT, 0}};
+#ifdef _WIN64
+	/* MXCSR masks invalid at bit 7, division by zero at 9, overflow at 10, underflow at 11 and precision at 12. */
+	static const int mask_bits[] = {7, 9, 10, 11, 12};
+#else
+	/* The x87 control word masks invalid at bit 0, division by zero at 2, overflow at 3, underflow at 4 and precision at 5. */
+	static const int mask_bits[] = {0, 2, 3, 4, 5};
+#endif
+	for (size_t at = 0; at < sizeof kinds / sizeof *kinds; ++at) {
+		if (!(flags & kinds[at].flag))
+			continue;
+		if (!(control & (1u << mask_bits[at]))) {
+			RaiseException(kinds[at].code, 0, 0, NULL);
+			break;
+		}
+		if (kinds[at].error)
+			set_errno(kinds[at].error);
+		break;
+	}
+	return result;
+}
+
+/* More of the _o_ names newer runtime libraries import. */
+__asm__(".section .drectve\n\t.ascii \""
+	" -export:_o___stdio_common_vswprintf=__stdio_common_vswprintf -export:_o__aligned_free=_aligned_free"
+	" -export:_o__aligned_malloc=_aligned_malloc -export:_o__dclass=_dclass -export:_o__free_base=free -export:_o__fullpath=_fullpath"
+	" -export:_o__ldclass=_ldclass -export:_o__malloc_base=malloc -export:_o_ceilf=ceilf -export:_o_memcpy_s=memcpy_s -export:_o_rand=rand"
+	" -export:_o_srand=srand"
+	"\"\n\t.text");

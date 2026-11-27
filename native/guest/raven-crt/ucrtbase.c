@@ -702,14 +702,18 @@ _Static_assert(sizeof(Stream) == 48, "a stream must have the size of msvcrt's FI
 #endif
 
 Stream streams[3] = {{.index = 0, .pushed = -1}, {.index = 1, .pushed = -1}, {.index = 2, .pushed = -1}};
+/* A standard stream follows the process's standard handle until freopen puts a file of its own behind it. */
+static BOOL standard_reopened[3];
 
 CRT void *__acrt_iob_func(unsigned index)
 {
 	static const DWORD ids[3] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
 	if (index > 2)
 		return NULL;
-	streams[index].index = (int)index;
-	streams[index].handle = GetStdHandle(ids[index]);
+	if (!standard_reopened[index]) {
+		streams[index].index = (int)index;
+		streams[index].handle = GetStdHandle(ids[index]);
+	}
 	return &streams[index];
 }
 

@@ -12,7 +12,7 @@
 #undef _daylight
 #undef _tzname
 /* msvcrt publishes the time zone as variables; the Universal CRT as functions that read the same values. */
-CRT long _timezone;
+CRT long _timezone, _dstbias;
 CRT int _daylight;
 CRT char *_tzname[2];
 static char standard_zone_name[64] = "UTC", daylight_zone_name[64] = "UTC";
@@ -23,6 +23,7 @@ CRT void _tzset(void)
 	const DWORD kind = GetTimeZoneInformation(&zone);
 	_timezone = zone.Bias * 60;
 	_daylight = kind != TIME_ZONE_ID_INVALID && zone.DaylightDate.wMonth != 0;
+	_dstbias = zone.DaylightBias * 60;
 	WideCharToMultiByte(CP_ACP, 0, zone.StandardName, -1, standard_zone_name, sizeof(standard_zone_name), NULL, NULL);
 	WideCharToMultiByte(CP_ACP, 0, zone.DaylightName, -1, daylight_zone_name, sizeof(daylight_zone_name), NULL, NULL);
 	_tzname[0] = standard_zone_name;
@@ -49,6 +50,7 @@ CRT int _get_daylight(int *hours)
 
 CRT long *__timezone(void) { return &_timezone; }
 CRT int *__daylight(void) { return &_daylight; }
+CRT long *__dstbias(void) { return &_dstbias; }
 CRT char **__tzname(void) { return _tzname; }
 
 static int day_of_year(int year, int month, int day)
@@ -481,10 +483,8 @@ CRT int _stat64i32(const char *path, StatBuffer64i32 *out)
 	return 0;
 }
 
-/* msvcrt's _stati64 keeps the 64-bit size with the times of its time_t: 32-bit for 32-bit programs, so the struct is _stat32i64 there. */
-#ifdef _WIN64
-CRT int _stati64(const char *path, StatBuffer *out) { return _stat64(path, out); }
-#else
+/* _stat32i64 keeps the 64-bit size with 32-bit times. msvcrt's _stati64 has the times of its time_t, 32-bit for 32-bit programs, so it is
+ * _stat32i64 there and _stat64 for 64-bit ones. */
 typedef struct {
 	unsigned st_dev;
 	unsigned short st_ino, st_mode;
@@ -494,7 +494,7 @@ typedef struct {
 	long st_atime, st_mtime, st_ctime;
 } StatBuffer32i64;
 
-CRT int _stati64(const char *path, StatBuffer32i64 *out)
+CRT int _stat32i64(const char *path, StatBuffer32i64 *out)
 {
 	StatBuffer full;
 	if (_stat64(path, &full))
@@ -512,6 +512,11 @@ CRT int _stati64(const char *path, StatBuffer32i64 *out)
 	out->st_ctime = (long)full.st_ctime;
 	return 0;
 }
+
+#ifdef _WIN64
+CRT int _stati64(const char *path, StatBuffer *out) { return _stat64(path, out); }
+#else
+CRT int _stati64(const char *path, StatBuffer32i64 *out) { return _stat32i64(path, out); }
 #endif
 
 CRT int _fstat64i32(int fd, StatBuffer64i32 *out)
@@ -711,6 +716,8 @@ static void *reopen(void *stream, void *opened)
 		descriptors[index].handle = fresh->handle;
 		descriptors[index].open = 1;
 		descriptors[fresh->index].open = 0;
+		if (old >= streams && old < streams + 3)
+			standard_reopened[old - streams] = TRUE;
 	}
 	HeapFree(GetProcessHeap(), 0, old->buffer);
 	*old = *fresh;
@@ -893,6 +900,21 @@ CRT int _putch(int character)
 	const int done = put_console(&byte, 0);
 	ReleaseSRWLockExclusive(&console_keys_lock);
 	return done ? character : -1;
+}
+
+/* _cputs writes a string to the console, whatever the standard output is: 0, or -1 once a character does not go. */
+CRT int _cputs(const char *text)
+{
+	if (!text) {
+		*_errno() = 22;
+		return -1;
+	}
+	int done = 1;
+	AcquireSRWLockExclusive(&console_keys_lock);
+	for (; done && *text; ++text)
+		done = put_console(text, 0);
+	ReleaseSRWLockExclusive(&console_keys_lock);
+	return done ? 0 : -1;
 }
 
 CRT wint_t _putwch(wchar_t character)

@@ -296,6 +296,13 @@ CRT int _ecvt_s(char *buffer, size_t size, double value, int count, int *point, 
 	return 0;
 }
 
+/* `count` significant digits in the runtime's own buffer, which the next call overwrites. */
+CRT char *_ecvt(double value, int count, int *point, int *sign)
+{
+	static char buffer[352];
+	return _ecvt_s(buffer, sizeof buffer, value, count, point, sign) ? NULL : buffer;
+}
+
 /* `count` digits after the point; the buffer is the runtime's own, as for _ecvt. */
 CRT char *_fcvt(double value, int count, int *point, int *sign)
 {

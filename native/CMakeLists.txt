@@ -3441,6 +3441,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_ucrt_python_x${width} COMMAND raven --run-process --execution=native ${ucrt_python_client})
                     set_tests_properties(native_ucrt_python_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-python-prefix${width})
+                    # The C runtime entry points the EA app's launchers and services import, and a reopened standard stream.
+                    set(ucrt_launcher_client ${CMAKE_CURRENT_BINARY_DIR}/ucrt-launcher${width}.exe)
+                    add_custom_command(OUTPUT ${ucrt_launcher_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${ucrt_launcher_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_launcher_client.c -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_launcher_client.c VERBATIM)
+                    add_custom_target(ucrt_launcher_fixture${width} ALL DEPENDS ${ucrt_launcher_client})
+                    add_test(NAME native_ucrt_launcher_x${width} COMMAND raven --run-process --execution=native ${ucrt_launcher_client})
+                    set_tests_properties(native_ucrt_launcher_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-launcher-prefix${width})
                     set(shell_info_client ${CMAKE_CURRENT_BINARY_DIR}/shell-info${width}.exe)
                     add_custom_command(OUTPUT ${shell_info_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
