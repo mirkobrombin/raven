@@ -574,6 +574,25 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 		default: call.fail(87);
 		}
 	});
+	// ravenhost.dll's RavenEmbedWindow(HWND, UINT64): a top-level window shown inside a window of another program on the host, by the
+	// host window system's id of it (an X11 window), as a plugin's editor shows in its host's; 0 shows it on its own again.
+	registry.add("RavenEmbedWindow", 2, [this](ApiCall &call) {
+		const auto *window = std::as_const(objects).window(call[0]);
+		if (!window || window->parent || (window->style & 0x40000000U)) {
+			call.fail(1400);
+			return;
+		}
+		if (!presentation.embed) {
+			call.fail(50);
+			return;
+		}
+		presentation.embed(call[0], call[1]);
+		if (call[1])
+			embedded.insert(call[0]);
+		else
+			embedded.erase(call[0]);
+		call.ret(1);
+	});
 	registry.add("SetParent", 2, [this](ApiCall &call) {
 		auto *window = objects.window(call[0]);
 		// HWND_MESSAGE takes the window off the desktop: it stays a top-level window that only receives messages.

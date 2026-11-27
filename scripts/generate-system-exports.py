@@ -60,7 +60,7 @@ NAMES_ONLY = {"ravenhost": ["RavenFontClose", "RavenFontGlyphs", "RavenFontInfo"
                             "RavenCanvasDestroy", "RavenCanvasDraw", "RavenCanvasPixels", "RavenCanvasSize", "RavenPathCombine", "RavenPathWiden",
                             "RavenShaderRequest", "RavenShaderResult", "RavenShaderRelease",
                             "RavenGrantPath", "RavenSandboxRead", "RavenSandboxWrite", "RavenSandboxLog", "RavenSnapshotList", "RavenSnapshotTake", "RavenSnapshotRestore", "RavenSnapshotDelete", "RavenHostOpen", "RavenHostApps", "RavenAppList", "RavenAppDiscard",
-                            "RavenAudioOpen", "RavenAudioSetEvent", "RavenAudioStart", "RavenAudioStop", "RavenAudioReset", "RavenAudioClose", "RavenLinkMap", "RavenLinkWait", "RavenLinkWake"]}
+                            "RavenAudioOpen", "RavenAudioSetEvent", "RavenAudioStart", "RavenAudioStop", "RavenAudioReset", "RavenAudioClose", "RavenLinkMap", "RavenLinkWait", "RavenLinkWake", "RavenEmbedWindow"]}
 # atlthunk.dll, the window procedure thunks of Windows 10, has no import library in mingw-w64; its four functions are listed here.
 NAMES_ONLY["atlthunk"] = ["AtlThunk_AllocateData", "AtlThunk_DataToCode", "AtlThunk_FreeData", "AtlThunk_InitData"]
 # combase.dll, Windows' COM and Windows Runtime base, has no import library in mingw-w64: the functions programs and the .NET runtime take from it.
@@ -99,7 +99,7 @@ NAMES_ONLY_WORDS = {**COMBASE_WORDS, **WINTYPES_WORDS, **SLC_WORDS, **SPPC_WORDS
                     "RavenShaderRequest": 2, "RavenShaderResult": 4, "RavenShaderRelease": 1,
                     "RavenGrantPath": 2, "RavenSandboxRead": 2, "RavenSandboxWrite": 1, "RavenSandboxLog": 2, "RavenSnapshotList": 2, "RavenSnapshotTake": 1, "RavenSnapshotRestore": 1, "RavenSnapshotDelete": 1, "RavenHostOpen": 1, "RavenHostApps": 2, "RavenAppList": 2, "RavenAppDiscard": 1,
                     "RavenAudioOpen": 6, "RavenAudioSetEvent": 2, "RavenAudioStart": 1, "RavenAudioStop": 1, "RavenAudioReset": 1, "RavenAudioClose": 1,
-                    "RavenLinkMap": 1, "RavenLinkWait": 3, "RavenLinkWake": 1}
+                    "RavenLinkMap": 1, "RavenLinkWait": 3, "RavenLinkWake": 1, "RavenEmbedWindow": 2}
 
 
 def exports(library):

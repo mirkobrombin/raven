@@ -2086,6 +2086,7 @@ bool NativeWindows::destroy(uint64_t handle)
 	if (!window || window->destroying) throw uint32_t(5);
 	window->destroying=true;window->visible=false;window->style&=~0x10000000U;
 	directory([handle] { withdraw_window(handle); });
+	if (embedded.erase(handle) && presentation.embed) presentation.embed(handle,0);
 	// The owner of a closing active window, a dialog's among them, becomes active and takes the keyboard back.
 	if (active==handle) activate(successor(handle));
 	if (focus==handle || objects.is_child(handle,focus)) set_focus(0);

@@ -6981,6 +6981,24 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics.exe monitors ${CMAKE_CURRENT_BINARY_DIR}/x11-monitors
                         $<TARGET_FILE:x11_monitors_tool>)
                     set_tests_properties(native_x11_primary_monitor PROPERTIES TIMEOUT 60)
+                    # A window shown inside a window of another program, as a plugin's editor shows in its host's (RavenEmbedWindow).
+                    if(RAVEN_DLLTOOL)
+                        set(EMBED_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/embed-fixtures)
+                        add_custom_command(OUTPUT ${EMBED_FIXTURES}/embed.exe
+                            COMMAND ${CMAKE_COMMAND} -E make_directory ${EMBED_FIXTURES}
+                            COMMAND ${RAVEN_DLLTOOL} -d ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/ravenhost64.def -l ${EMBED_FIXTURES}/ravenhost.a
+                            COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry
+                                -o ${EMBED_FIXTURES}/embed.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/embed_client.c ${EMBED_FIXTURES}/ravenhost.a
+                                -lgdi32 -luser32 -lkernel32
+                            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/embed_client.c ${PROJECT_SOURCE_DIR}/native/guest/raven-vsthost/ravenhost64.def
+                            VERBATIM)
+                        add_custom_target(embed_pe_fixture ALL DEPENDS ${EMBED_FIXTURES}/embed.exe)
+                        add_executable(x11_embed_test desktop/x11_embed_test.cpp)
+                        target_link_libraries(x11_embed_test PRIVATE PkgConfig::XCB_CLIENT)
+                        add_test(NAME native_x11_embed COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-x11-embed.py
+                            $<TARGET_FILE:x11_embed_test> $<TARGET_FILE:raven> ${EMBED_FIXTURES}/embed.exe ${CMAKE_CURRENT_BINARY_DIR}/x11-embed)
+                        set_tests_properties(native_x11_embed PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "embedded: child 200x100 at 0,0, pixel ff0000")
+                    endif()
                 endif()
             endif()
             if(RAVEN_WAYLAND_SCREEN_TESTS)

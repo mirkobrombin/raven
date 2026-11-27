@@ -210,6 +210,8 @@ private:
 	std::function<void(uint64_t)> surface_cleanup;
 	// Root windows that have a host window now.
 	std::set<uint64_t> host_windows;
+	// Top-level windows shown inside a window of another program on the host (RavenEmbedWindow).
+	std::set<uint64_t> embedded;
 	void remove_host_window(uint64_t handle);
 	struct Message {
 		uint64_t window, wparam, lparam;

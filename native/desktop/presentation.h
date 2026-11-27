@@ -90,6 +90,10 @@ struct DesktopPresentation {
 	// Keeps a top-level window above the top-level window that owns it, as Windows keeps an owned dialog; 0 for no owner. Given before the
 	// window's first frame.
 	std::function<void(uint64_t handle,uint64_t owner)> transient_for;
+	// Shows a top-level window inside a window of another program, the host window system's id of that window (an X11 window), as an
+	// editor shows in its host's; 0 shows it on its own again. Given before the window's first frame. Absent where the window system
+	// cannot show a window inside another program's.
+	std::function<void(uint64_t handle,uint64_t host)> embed;
 	// Whether the window's pixels carry premultiplied alpha, as those a layered window hands over do: the compositor blends them over
 	// what lies below instead of showing them opaque. Given before the frame.
 	std::function<void(uint64_t handle,bool alpha)> translucent;

@@ -47,10 +47,10 @@ template <typename T> struct Reply {
 constexpr const char *atom_names[]={"WM_PROTOCOLS","WM_DELETE_WINDOW","WM_NAME","WM_CLASS","_NET_WM_NAME","UTF8_STRING","STRING","TEXT",
 	"CLIPBOARD","TARGETS","text/plain;charset=utf-8","text/plain","RAVEN_SELECTION","INCR","_NET_WM_STATE","_NET_WM_STATE_MAXIMIZED_VERT",
 	"_NET_WM_STATE_MAXIMIZED_HORZ","_NET_WM_MOVERESIZE","_MOTIF_WM_HINTS","_NET_WM_WINDOW_TYPE","_NET_WM_WINDOW_TYPE_POPUP_MENU","ATOM","WM_CHANGE_STATE","WM_STATE",
-	"_NET_WM_STATE_FULLSCREEN"};
+	"_NET_WM_STATE_FULLSCREEN","_XEMBED_INFO"};
 enum Atom { wm_protocols, wm_delete_window, wm_name, wm_class, net_wm_name, utf8_string, string_type, text_type, clipboard, targets,
 	text_utf8, text_plain, raven_selection, incr, net_wm_state, maximized_vert, maximized_horz, net_wm_moveresize, motif_hints,
-	window_type, window_type_popup, atom_type, wm_change_state, wm_state, full_screen_state, atom_count };
+	window_type, window_type_popup, atom_type, wm_change_state, wm_state, full_screen_state, xembed_info, atom_count };
 
 }
 
@@ -63,6 +63,8 @@ struct XcbPresentation::State {
 		std::array<int32_t,4> screen{0,0,0,0};
 		uint64_t parent=0;
 		bool closed=false, close_posted=false, resized=false, maximized=false, mapped=false, iconic=false, full_screen=false;
+		// A window shown inside a window of another program (see embed), which the window manager never sees.
+		bool embedded=false;
 		uint32_t width=0,height=0,pending_width=0,pending_height=0;
 		std::string title;
 		// The frame the window shows, kept to repaint what the server exposes and to send only what changed.
@@ -79,6 +81,8 @@ struct XcbPresentation::State {
 	};
 	std::map<uint64_t,Hosted> hosted;
 	std::map<uint64_t,uint64_t> transient_owners;
+	// The host windows of other programs that top-level windows show inside, by handle (see embed).
+	std::map<uint64_t,xcb_window_t> embedders;
 	xcb_connection_t *connection=nullptr;
 	xcb_screen_t *screen=nullptr;
 	xcb_gcontext_t gc=0;
@@ -436,6 +440,22 @@ struct XcbPresentation::State {
 		xcb_flush(connection);
 	}
 
+	// A window inside another program's window, as XEmbed has it: a child of that window at its corner, which tells it is mapped. It has
+	// the screen's own visual, whatever the parent's, so the frames it is sent are drawn as in any other window.
+	xcb_window_t make_embedded(xcb_window_t parent,uint32_t width,uint32_t height) {
+		const xcb_window_t id=xcb_generate_id(connection);
+		const uint32_t mask=XCB_EVENT_MASK_EXPOSURE|XCB_EVENT_MASK_BUTTON_PRESS|XCB_EVENT_MASK_BUTTON_RELEASE|XCB_EVENT_MASK_POINTER_MOTION|
+			XCB_EVENT_MASK_ENTER_WINDOW|XCB_EVENT_MASK_LEAVE_WINDOW|XCB_EVENT_MASK_KEY_PRESS|XCB_EVENT_MASK_KEY_RELEASE|
+			XCB_EVENT_MASK_STRUCTURE_NOTIFY|XCB_EVENT_MASK_FOCUS_CHANGE;
+		const uint32_t values[]={XCB_BACK_PIXMAP_NONE,0,XCB_GRAVITY_NORTH_WEST,mask,screen->default_colormap,server_cursor(cursor)};
+		xcb_create_window(connection,screen->root_depth,id,parent,0,0,uint16_t(width),uint16_t(height),0,XCB_WINDOW_CLASS_INPUT_OUTPUT,
+			screen->root_visual,XCB_CW_BACK_PIXMAP|XCB_CW_BORDER_PIXEL|XCB_CW_BIT_GRAVITY|XCB_CW_EVENT_MASK|XCB_CW_COLORMAP|XCB_CW_CURSOR,values);
+		// Version 0 of the protocol, mapped (XEMBED_MAPPED).
+		const uint32_t info[]={0,1};
+		property(id,atoms[xembed_info],atoms[xembed_info],32,2,info);
+		return id;
+	}
+
 	xcb_window_t make_window(bool popup,int32_t x,int32_t y,uint32_t width,uint32_t height) {
 		const xcb_window_t id=xcb_generate_id(connection);
 		uint32_t mask=XCB_EVENT_MASK_EXPOSURE|XCB_EVENT_MASK_BUTTON_PRESS|XCB_EVENT_MASK_BUTTON_RELEASE|XCB_EVENT_MASK_POINTER_MOTION|
@@ -466,6 +486,19 @@ struct XcbPresentation::State {
 		if (found!=windows.end() && !found->second->is_popup && found->second->id)
 			property(window.id,XCB_ATOM_WM_TRANSIENT_FOR,XCB_ATOM_WINDOW,32,1,&found->second->id);
 		else xcb_delete_property(connection,window.id,XCB_ATOM_WM_TRANSIENT_FOR);
+	}
+
+	// Shows a top-level window inside a window of another program from its next frame on, or on its own again for 0.
+	void embed(uint64_t handle,uint64_t host) {
+		const auto known=embedders.find(handle);
+		if (known==embedders.end() ? !host : known->second==host) return;
+		if (host) embedders[handle]=xcb_window_t(host);
+		else embedders.erase(known);
+		// A window shown already is made again, in its new place, by its next frame.
+		if (const auto found=windows.find(handle); found!=windows.end() && !found->second->is_popup) {
+			destroy(*found->second);
+			windows.erase(found);
+		}
 	}
 
 	void transient_for(uint64_t handle,uint64_t owner) {
@@ -605,14 +638,19 @@ struct XcbPresentation::State {
 			window->width=width; window->height=height;
 			window->maximized=maximized.contains(handle);
 			window->full_screen=full_screens.contains(handle);
-			window->id=make_window(false,0,0,width,height);
-			property(window->id,atoms[wm_protocols],atoms[atom_type],32,1,&atoms[wm_delete_window]);
-			// Raven draws the frame itself, as on Wayland; the window manager adds none.
-			const uint32_t hints[]={2,0,0,0,0};
-			property(window->id,atoms[motif_hints],atoms[motif_hints],32,5,hints);
+			if (const auto embedder=embedders.find(handle); embedder!=embedders.end()) {
+				window->embedded=true;
+				window->id=make_embedded(embedder->second,width,height);
+			} else {
+				window->id=make_window(false,0,0,width,height);
+				property(window->id,atoms[wm_protocols],atoms[atom_type],32,1,&atoms[wm_delete_window]);
+				// Raven draws the frame itself, as on Wayland; the window manager adds none.
+				const uint32_t hints[]={2,0,0,0,0};
+				property(window->id,atoms[motif_hints],atoms[motif_hints],32,5,hints);
+				set_initial_state(*window);
+				apply_transient(handle,*window);
+			}
 			set_title(*window,title);
-			set_initial_state(*window);
-			apply_transient(handle,*window);
 			xcb_map_window(connection,window->id);
 			if (tracing()) std::fprintf(stderr,"x11: window %llx -> %x %ux%u\n",(unsigned long long)handle,window->id,width,height);
 			found=windows.emplace(handle,std::move(window)).first;
@@ -676,6 +714,11 @@ struct XcbPresentation::State {
 		last_time=event.time;
 		root_x=event.root_x; root_y=event.root_y;
 		if (pressed && dismisses(event.root_x,event.root_y)) return;
+		// No window manager gives the keyboard to a window inside another program's: a click on it takes it, as on a window of its own.
+		if (const auto *window=pressed ? window_of(event.event) : nullptr; window && window->embedded) {
+			xcb_set_input_focus(connection,XCB_INPUT_FOCUS_PARENT,window->id,event.time);
+			xcb_flush(connection);
+		}
 		pointer_window=handle_of(event.event);
 		pointer_x=event.event_x; pointer_y=event.event_y;
 		if (!pointer_window) return;
@@ -1109,6 +1152,7 @@ DesktopPresentation XcbPresentation::callbacks()
 	result.quiet=[this] { return state->quiet(); };
 	result.minimize=[this](uint64_t handle) { state->minimize(handle); };
 	result.transient_for=[this](uint64_t handle,uint64_t owner) { state->transient_for(handle,owner); };
+	result.embed=[this](uint64_t handle,uint64_t host) { state->embed(handle,host); };
 	result.full_screen=[this](uint64_t handle,bool wanted) { state->full_screen(handle,wanted); };
 	return result;
 }
