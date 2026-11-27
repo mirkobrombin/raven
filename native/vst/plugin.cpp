@@ -52,6 +52,10 @@ void wake(std::atomic<uint32_t> &word)
 	::syscall(SYS_futex, &word, FUTEX_WAKE, INT32_MAX, nullptr, nullptr, 0);
 }
 
+// How long the host's audio thread watches for a block to come back before it sleeps on it. Most blocks come back within this, and a
+// thread that never slept answers without waiting for its processor to wake up again, which is most of a block's round trip.
+constexpr auto block_watch = std::chrono::microseconds(300);
+
 // What a notice of the Windows side is handed to: a plugin object or a view, held while it takes it.
 class Receiver {
 public:
@@ -865,7 +869,12 @@ tresult PLUGIN_API Proxy::process(ProcessData &data)
 	wake(shared.request);
 	// The block comes back within a few milliseconds; a Windows side that stopped answering gives silence instead of holding the host's
 	// audio thread.
-	const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	const auto start = std::chrono::steady_clock::now(), limit = start + std::chrono::seconds(2), watched = start + block_watch;
+	for (unsigned round = 1; shared.done.load(std::memory_order_acquire) != asked; ++round) {
+		__builtin_ia32_pause();
+		if (!(round % 64) && std::chrono::steady_clock::now() >= watched)
+			break;
+	}
 	for (uint32_t seen; (seen = shared.done.load(std::memory_order_acquire)) != asked;) {
 		if (std::chrono::steady_clock::now() >= limit || !Bridge::instance().running()) {
 			for (int32 bus = 0; bus < data.numOutputs; ++bus)
