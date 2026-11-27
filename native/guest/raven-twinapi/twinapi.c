@@ -13,35 +13,19 @@
  * - Windows.Security.Authentication.OnlineId.OnlineIdSystemAuthenticator and Windows.Security.Authentication.Web.Core.
  *   WebAuthenticationCoreManager: the system has no Microsoft account and no web account provider, so a ticket request fails and a
  *   provider search finds none. Programs then sign in their own way; nothing here grants an identity or a licence.
- * - Windows.ApplicationModel.Core.CoreApplication: a desktop process, which has no package identity and no core window, and whose
- *   Properties are one property set for the whole process.
+ * - Windows.ApplicationModel.Core.CoreApplication: the process's one property set, and the view of an app it runs, which core_window.c
+ *   makes with its core window; a desktop process that runs none has no view.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
  * Asynchronous operations complete before they are returned and call a completion handler as soon as it is set. Events take handlers
  * and never raise them. A method this component does not serve, or an interface it does not have, is named in Raven's trace. */
-#define CINTERFACE
-#define COBJMACROS
-#define WIN32_LEAN_AND_MEAN
-#include <stddef.h>
-#include <windows.h>
-#include <winstring.h>
-#include <activation.h>
+#include "object.h"
 #include <appmodel.h>
 #include <iphlpapi.h>
 
-#define ALLOC(size) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (size))
-#define FREE(block) HeapFree(GetProcessHeap(), 0, (block))
-
-static LONG objects, tokens;
-
 /* Interfaces of the Windows Runtime, with the identifiers its metadata gives them; a parameterized one's identifier is derived from its
  * signature as the runtime derives it, and the signature is written beside it. */
-static const IID iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-static const IID iid_inspectable = {0xaf86e2e0, 0xb12d, 0x4c6a, {0x9c, 0x5a, 0xd7, 0xaa, 0x65, 0x10, 0x1e, 0x90}};
-static const IID iid_agile = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
-static const IID iid_factory = {0x00000035, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-static const IID iid_async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const IID iid_language = {0xea79a752, 0xf7c2, 0x4265, {0xb1, 0xbd, 0xc4, 0xde, 0xc4, 0xe4, 0xf0, 0x80}};
 static const IID iid_language2 = {0x6a47e5b5, 0xd94d, 0x4886, {0xa4, 0x04, 0xa5, 0xa5, 0xb9, 0xd5, 0xb4, 0x94}};
 static const IID iid_language_factory = {0x9b0252ac, 0x0c27, 0x44f8, {0xb7, 0x92, 0x97, 0x93, 0xfb, 0x66, 0xc6, 0x3e}};
@@ -112,234 +96,6 @@ static const IID iid_map_change = {0x60141efb, 0xf2f9, 0x5377, {0x96, 0xfd, 0xf8
 static const IID iid_api_information = {0x997439fe, 0xf681, 0x4a11, {0xb4, 0x16, 0xc1, 0x3a, 0x47, 0xe8, 0xba, 0x36}};
 static const IID iid_property_set = {0x8a43ed9f, 0xf4e6, 0x4421, {0xac, 0xf9, 0x1d, 0xab, 0x29, 0x86, 0x82, 0x0c}};
 
-/* What the Windows Runtime and Windows report when there is nothing to give. */
-#define NO_PACKAGE ((HRESULT)0x80073d54)
-#define NOT_FOUND ((HRESULT)0x80070490)
-#define NO_SUCH_USER ((HRESULT)0x80070525)
-#define DELEGATE_ASSIGNED ((HRESULT)0x80000018)
-
-static void trace(const char *first, const char *second)
-{
-	static void (WINAPI *raven_trace)(const char *);
-	static BOOL looked;
-	char line[200] = "twinapi: ";
-	size_t at = 9;
-	if (!looked) {
-		raven_trace = (void (WINAPI *)(const char *))GetProcAddress(LoadLibraryW(L"ravenhost.dll"), "RavenTrace");
-		looked = TRUE;
-	}
-	if (!raven_trace)
-		return;
-	for (const char *part = first; *part && at < 120; ++part)
-		line[at++] = *part;
-	for (const char *part = second; *part && at < 198; ++part)
-		line[at++] = *part;
-	line[at] = 0;
-	raven_trace(line);
-}
-
-static HRESULT missing(const char *method)
-{
-	trace(method, " is not implemented");
-	return E_NOTIMPL;
-}
-
-/* An object answers several interfaces, each a table pointer at its own place at the start of the object. Each table is preceded by the
- * number of its place, so a method finds the object from the interface it was called through. */
-#define FACES 8
-
-struct face_iid {
-	const IID *iid;
-	SIZE_T face;
-};
-
-struct object;
-
-struct kind {
-	const char *name;
-	const WCHAR *class_name;
-	/* Ends with a null identifier. */
-	const struct face_iid *iids;
-	/* NULL for an object that lives as long as the library. */
-	void (*destroy)(struct object *);
-};
-
-struct object {
-	const void *const *faces[FACES];
-	const struct kind *kind;
-	LONG refs;
-};
-
-#define TABLE(name, place, ...) \
-	static const struct { \
-		SIZE_T face; \
-		const void *slots[sizeof((const void *[]){__VA_ARGS__}) / sizeof(void *)]; \
-	} name = {place, {__VA_ARGS__}}
-
-static struct object *owner(void *iface)
-{
-	const SIZE_T face = ((const SIZE_T *)*(const void *const **)iface)[-1];
-	return (struct object *)((const void *const **)iface - face);
-}
-
-static BOOL same(REFIID left, REFIID right) { return !memcmp(left, right, sizeof(IID)); }
-
-static void trace_iid(const struct object *self, REFIID iid)
-{
-	static const char digits[] = "0123456789abcdef";
-	static const BYTE order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
-	char text[48];
-	size_t at = 0;
-	const BYTE *bytes = (const BYTE *)iid;
-	for (size_t index = 0; index < 16; ++index) {
-		if (index == 4 || index == 6 || index == 8 || index == 10)
-			text[at++] = '-';
-		text[at++] = digits[bytes[order[index]] >> 4];
-		text[at++] = digits[bytes[order[index]] & 15];
-	}
-	text[at] = 0;
-	char line[120] = "";
-	size_t used = 0;
-	for (const char *part = self->kind->name; *part && used < 70; ++part)
-		line[used++] = *part;
-	for (const char *part = " has no interface "; *part; ++part)
-		line[used++] = *part;
-	line[used] = 0;
-	trace(line, text);
-}
-
-static HRESULT WINAPI object_query(void *iface, REFIID iid, void **out)
-{
-	struct object *self = owner(iface);
-	if (!out)
-		return E_POINTER;
-	*out = NULL;
-	if (same(iid, &iid_unknown) || same(iid, &iid_inspectable) || same(iid, &iid_agile))
-		*out = &self->faces[0];
-	for (const struct face_iid *entry = self->kind->iids; !*out && entry->iid; ++entry)
-		if (same(iid, entry->iid))
-			*out = &self->faces[entry->face];
-	if (!*out) {
-		trace_iid(self, iid);
-		return E_NOINTERFACE;
-	}
-	if (self->kind->destroy)
-		InterlockedIncrement(&self->refs);
-	return S_OK;
-}
-
-static ULONG WINAPI object_reference(void *iface)
-{
-	struct object *self = owner(iface);
-	return self->kind->destroy ? (ULONG)InterlockedIncrement(&self->refs) : 2;
-}
-
-static ULONG WINAPI object_release(void *iface)
-{
-	struct object *self = owner(iface);
-	if (!self->kind->destroy)
-		return 1;
-	const LONG refs = InterlockedDecrement(&self->refs);
-	if (!refs) {
-		self->kind->destroy(self);
-		FREE(self);
-		InterlockedDecrement(&objects);
-	}
-	return (ULONG)refs;
-}
-
-static HRESULT WINAPI object_iids(void *iface, ULONG *count, IID **iids)
-{
-	if (!count || !iids)
-		return E_POINTER;
-	*count = 0;
-	*iids = NULL;
-	return S_OK;
-}
-
-static HRESULT WINAPI object_name(void *iface, HSTRING *name)
-{
-	const WCHAR *text = owner(iface)->kind->class_name;
-	if (!name)
-		return E_POINTER;
-	return WindowsCreateString(text, (UINT32)lstrlenW(text), name);
-}
-
-static HRESULT WINAPI object_trust(void *iface, TrustLevel *level)
-{
-	if (!level)
-		return E_POINTER;
-	*level = BaseTrust;
-	return S_OK;
-}
-
-#define INSPECTABLE (const void *)object_query, (const void *)object_reference, (const void *)object_release, (const void *)object_iids, \
-	(const void *)object_name, (const void *)object_trust
-
-/* A new object of a kind with its interface tables in place order, and one reference. */
-static void *make(size_t size, const struct kind *kind, const void *const *const *tables, size_t count)
-{
-	struct object *self = ALLOC(size);
-	if (!self)
-		return NULL;
-	for (size_t index = 0; index < count; ++index)
-		self->faces[index] = tables[index];
-	self->kind = kind;
-	self->refs = 1;
-	InterlockedIncrement(&objects);
-	return self;
-}
-
-static void *face_of(struct object *self, size_t face) { return &self->faces[face]; }
-
-static void release(void *iface)
-{
-	if (iface)
-		((IUnknown *)iface)->lpVtbl->Release((IUnknown *)iface);
-}
-
-static void reference(void *iface)
-{
-	if (iface)
-		((IUnknown *)iface)->lpVtbl->AddRef((IUnknown *)iface);
-}
-
-static HRESULT answer_flag(boolean *out, boolean value)
-{
-	if (!out)
-		return E_POINTER;
-	*out = value;
-	return S_OK;
-}
-
-static HRESULT answer_null(void **out)
-{
-	if (!out)
-		return E_POINTER;
-	*out = NULL;
-	return S_OK;
-}
-
-/* An event takes a handler for something that never happens: it gets a token of its own and is not kept. */
-static HRESULT WINAPI event_add(void *iface, void *handler, INT64 *out)
-{
-	if (!handler || !out)
-		return E_INVALIDARG;
-	*out = InterlockedIncrement(&tokens);
-	return S_OK;
-}
-
-static HRESULT WINAPI event_remove(void *iface, INT64 token) { return S_OK; }
-
-/* The activation factory face of a class that has only static members: the class cannot be instantiated. */
-static HRESULT WINAPI static_activate(void *iface, IInspectable **out)
-{
-	if (out)
-		*out = NULL;
-	return E_NOTIMPL;
-}
-
-#define FACTORY INSPECTABLE, (const void *)static_activate
 
 /* Asynchronous operations, complete when they are made: IAsyncOperation<T> at place 0 and IAsyncInfo at place 1. */
 struct operation {
@@ -1510,12 +1266,25 @@ static const struct kind web_kind = {"WebAuthenticationCoreManager", L"Windows.S
 static struct object web_core = {{web_factory_table.slots, web_statics_table.slots, web_statics2_table.slots, web_statics3_table.slots,
 	web_statics4_table.slots, web_statics5_table.slots}, &web_kind, 1};
 
-/* Windows.ApplicationModel.Core.CoreApplication in a desktop process: no package identity and no views. */
+/* Windows.ApplicationModel.Core.CoreApplication: the package identity is the package's, and the views are those of the app it runs.
+ * Id is the application's identifier within its package, the part of its user model identifier after the family name, which is at
+ * most 130 characters long. */
 static HRESULT WINAPI core_id(void *iface, HSTRING *out)
 {
-	if (out)
-		*out = NULL;
-	return NO_PACKAGE;
+	WCHAR model[130];
+	UINT32 length = ARRAYSIZE(model);
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (GetCurrentApplicationUserModelId(&length, model) != ERROR_SUCCESS)
+		return NO_PACKAGE;
+	const WCHAR *id = model;
+	while (*id && *id != L'!')
+		++id;
+	if (!*id)
+		return NO_PACKAGE;
+	++id;
+	return WindowsCreateString(id, (UINT32)lstrlenW(id), out);
 }
 
 static HRESULT WINAPI core_properties(void *iface, void **out)
@@ -1526,13 +1295,10 @@ static HRESULT WINAPI core_properties(void *iface, void **out)
 	return S_OK;
 }
 
-static HRESULT WINAPI core_no_view(void *iface, void **out)
-{
-	answer_null(out);
-	return NOT_FOUND;
-}
+static HRESULT WINAPI core_view(void *iface, void **out) { return application_view(out); }
+static HRESULT WINAPI core_run(void *iface, IUnknown *source) { return application_run(source); }
 
-static HRESULT WINAPI core_run(void *iface, void *source) { return missing("CoreApplication.Run"); }
+static HRESULT WINAPI core_run_factories(void *iface, void *factories) { return missing("CoreApplication.RunWithActivationFactories"); }
 static HRESULT WINAPI core_prelaunch(void *iface, boolean value) { return S_OK; }
 
 static HRESULT WINAPI core_restart(void *iface, HSTRING arguments, void **out)
@@ -1547,7 +1313,7 @@ static HRESULT WINAPI core_restart_user(void *iface, void *user, HSTRING argumen
 	return missing("CoreApplication.RequestRestartForUserAsync");
 }
 
-static HRESULT WINAPI core_exit(void *iface) { return missing("CoreApplication.Exit"); }
+static HRESULT WINAPI core_exit(void *iface) { return application_exit(); }
 static HRESULT WINAPI core_views(void *iface, void **out) { answer_null(out); return missing("CoreApplication.Views"); }
 
 static HRESULT WINAPI core_new_view(void *iface, void *first, void *second, void **out)
@@ -1558,12 +1324,12 @@ static HRESULT WINAPI core_new_view(void *iface, void *first, void *second, void
 
 TABLE(core_factory_table, 0, FACTORY);
 TABLE(core_table, 1, INSPECTABLE, (const void *)core_id, (const void *)event_add, (const void *)event_remove, (const void *)event_add,
-	(const void *)event_remove, (const void *)core_properties, (const void *)core_no_view, (const void *)core_run, (const void *)core_run);
+	(const void *)event_remove, (const void *)core_properties, (const void *)core_view, (const void *)core_run, (const void *)core_run_factories);
 TABLE(core2_table, 2, INSPECTABLE, (const void *)event_add, (const void *)event_remove, (const void *)event_add, (const void *)event_remove,
 	(const void *)event_add, (const void *)event_remove, (const void *)core_prelaunch);
 TABLE(core3_table, 3, INSPECTABLE, (const void *)core_restart, (const void *)core_restart_user);
 TABLE(core_exit_table, 4, INSPECTABLE, (const void *)core_exit, (const void *)event_add, (const void *)event_remove);
-TABLE(core_immersive_table, 5, INSPECTABLE, (const void *)core_views, (const void *)core_new_view, (const void *)core_no_view);
+TABLE(core_immersive_table, 5, INSPECTABLE, (const void *)core_views, (const void *)core_new_view, (const void *)core_view);
 TABLE(core_unhandled_table, 6, INSPECTABLE, (const void *)event_add, (const void *)event_remove);
 static const struct face_iid core_iids[] = {{&iid_factory, 0}, {&iid_core_application, 1}, {&iid_core_application2, 2},
 	{&iid_core_application3, 3}, {&iid_core_application_exit, 4}, {&iid_core_immersive, 5}, {&iid_core_unhandled_error, 6}, {NULL, 0}};
@@ -1728,13 +1494,6 @@ static HRESULT WINAPI app_languages(void *iface, void **out)
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	UINT32 name_length = 0;
-	LONG status = GetCurrentPackageFullName(&name_length, NULL);
-	if (status == ERROR_INSUFFICIENT_BUFFER)
-		return missing("ApplicationLanguages.Languages for a packaged process");
-	if (status != APPMODEL_ERROR_NO_PACKAGE)
-		return status ? HRESULT_FROM_WIN32(status) : E_UNEXPECTED;
-
 	WCHAR names[MOST_ITEMS * LOCALE_NAME_MAX_LENGTH + 1];
 	ULONG count = 0, size = ARRAYSIZE(names);
 	if (!GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, names, &size))
@@ -1818,7 +1577,8 @@ static const struct kind api_kind = {"ApiInformation", L"Windows.Foundation.Meta
 static struct object api_information = {{api_factory_table.slots, api_statics_table.slots}, &api_kind, 1};
 
 static struct object *const classes[] = {&language_factory, &app_languages_factory, &retail_info, &shared_mode, &analytics_info, &network_information,
-	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information};
+	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information,
+	&core_window_class, &core_cursor_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {
