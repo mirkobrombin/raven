@@ -26,6 +26,8 @@ import time
 
 sys.dont_write_bytecode = True
 import importlib.util
+
+import labwc_session
 _spec = importlib.util.spec_from_file_location("native_redist", Path(__file__).with_name("native-redist.py"))
 native_redist = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(native_redist)
@@ -82,7 +84,7 @@ def main():
     for name in ("hello64.exe", "forms64.exe", "xna64.exe", "hello20.exe"):
         shutil.copy(programs / name, folder / name)
     log = (evidence / "compositor.log").open("wb")
-    compositor = native_redist.start_compositor(log)
+    compositor = labwc_session.start(log, False)
     try:
         missing_runtime(raven, prefix, folder / "hello64.exe", evidence)
         step(raven, prefix, installer, ["/x:C:\\ndp", "/q"], evidence, "unpack")

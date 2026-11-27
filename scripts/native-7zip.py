@@ -21,6 +21,7 @@ import time
 import zipfile
 
 from PIL import Image
+import labwc_session
 
 sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location("native_redist", Path(__file__).with_name("native-redist.py"))
@@ -321,7 +322,7 @@ def main():
     shutil.rmtree(evidence, ignore_errors=True)
     evidence.mkdir(parents=True)
     with (evidence / "compositor.log").open("wb") as log:
-        compositor = native_redist.start_compositor(log)
+        compositor = labwc_session.start(log, False)
         try:
             # The Windows Installer package, installed by the msiexec the runtime builds.
             from_msi = evidence / "msi-prefix"

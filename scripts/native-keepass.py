@@ -17,6 +17,8 @@ import subprocess
 import sys
 import time
 
+import labwc_session
+
 sys.dont_write_bytecode = True
 
 
@@ -171,7 +173,7 @@ def main():
     shutil.rmtree(evidence, ignore_errors=True)
     evidence.mkdir(parents=True)
     with (evidence / "compositor.log").open("wb") as log:
-        compositor = native_redist.start_compositor(log)
+        compositor = labwc_session.start(log, False)
         try:
             prefix = evidence / "prefix"
             program = install(raven, prefix, netfx, keepass, evidence)

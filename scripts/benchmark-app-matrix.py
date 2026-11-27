@@ -21,6 +21,8 @@ import time
 
 sys.dont_write_bytecode = True
 import importlib.util
+
+import labwc_session
 _spec = importlib.util.spec_from_file_location("native_redist", Path(__file__).with_name("native-redist.py"))
 native_redist = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(native_redist)
@@ -159,7 +161,7 @@ def main():
     wanted = set(sys.argv[4:])
     evidence.mkdir(parents=True, exist_ok=True)
     log = (evidence / "compositor.log").open("wb")
-    compositor = native_redist.start_compositor(log)
+    compositor = labwc_session.start(log, False)
     rows, failures, measurements = [], [], []
     try:
         for name, installer, arguments, program, title in CASES:

@@ -21,6 +21,7 @@ import sys
 import time
 
 from PIL import Image
+import labwc_session
 
 # The compositor and the runs are the ones of the Visual C++ workflow, loaded without leaving compiled files in the tree.
 sys.dont_write_bytecode = True
@@ -305,7 +306,7 @@ def main():
     evidence.mkdir(parents=True)
     prefix = evidence / "prefix"
     with (evidence / "compositor.log").open("wb") as log:
-        compositor = native_redist.start_compositor(log)
+        compositor = labwc_session.start(log, False)
         try:
             program = install(raven, prefix, installer, evidence)
             public = prefix / "drive_c" / "Users" / "Public"

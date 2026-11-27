@@ -14,6 +14,8 @@ import importlib.util
 import shutil
 import sys
 
+import labwc_session
+
 # The compositor and the runs are the ones the 2015-2022 workflow uses, loaded without leaving compiled files in the tree.
 sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location("native_redist", Path(__file__).with_name("native-redist.py"))
@@ -59,7 +61,7 @@ def main():
     mode, which = sys.argv[5], sys.argv[6]
     evidence.mkdir(parents=True, exist_ok=True)
     log = (evidence / "compositor.log").open("wb")
-    compositor = native_redist.start_compositor(log)
+    compositor = labwc_session.start(log, False)
     try:
         if mode == "alone":
             package, arguments, checker = next(item for item in PACKAGES if item[0] == which)

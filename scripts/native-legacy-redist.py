@@ -17,6 +17,8 @@ import subprocess
 import sys
 import time
 
+import labwc_session
+
 # The compositor and the runs are the ones the 2015-2022 workflow uses, loaded without leaving compiled files in the tree.
 sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location("native_redist", Path(__file__).with_name("native-redist.py"))
@@ -71,7 +73,7 @@ def main():
     prefix = evidence / "prefix"
     shutil.rmtree(prefix, ignore_errors=True)
     log = (evidence / "compositor.log").open("wb")
-    compositor = native_redist.start_compositor(log)
+    compositor = labwc_session.start(log, False)
     try:
         for installer, _ in pairs:
             first_window(raven, prefix, installer, evidence / f"{installer.stem}.png", evidence / f"window-{installer.stem}.log")

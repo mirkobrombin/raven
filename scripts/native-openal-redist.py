@@ -12,6 +12,8 @@ import importlib.util
 import shutil
 import sys
 
+import labwc_session
+
 # The compositor and the runs are the ones of the Visual C++ workflow, loaded without leaving compiled files in the tree.
 sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location("native_redist", Path(__file__).with_name("native-redist.py"))
@@ -49,7 +51,7 @@ def main():
     prefix = evidence / "prefix"
     shutil.rmtree(prefix, ignore_errors=True)
     log = (evidence / "compositor.log").open("wb")
-    compositor = native_redist.start_compositor(log)
+    compositor = labwc_session.start(log, False)
     try:
         check(raven, prefix, check64, evidence, "before", 1)
         check(raven, prefix, check32, evidence, "before", 1)

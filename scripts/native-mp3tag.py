@@ -19,6 +19,8 @@ import sys
 import time
 import zlib
 
+import labwc_session
+
 sys.dont_write_bytecode = True
 
 
@@ -162,7 +164,7 @@ def main():
     evidence.mkdir(parents=True)
     files, cover = write_music(evidence / "music")
     with (evidence / "compositor.log").open("wb") as log:
-        compositor = native_redist.start_compositor(log)
+        compositor = labwc_session.start(log, False)
         try:
             prefix = evidence / "prefix"
             program = install(raven, prefix, setup, evidence)

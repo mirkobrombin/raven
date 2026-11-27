@@ -20,6 +20,7 @@ import time
 import zipfile
 
 from PIL import Image
+import labwc_session
 
 sys.dont_write_bytecode = True
 
@@ -155,7 +156,7 @@ def main():
     shutil.rmtree(f"{evidence / 'prefix'}.apps", ignore_errors=True)
     evidence.mkdir(parents=True)
     with (evidence / "compositor.log").open("wb") as log:
-        compositor = native_redist.start_compositor(log)
+        compositor = labwc_session.start(log, False)
         try:
             prefix = evidence / "prefix"
             program = install(raven, prefix, archive, directx, evidence)
