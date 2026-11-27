@@ -1310,9 +1310,6 @@ CRT int _ismbcprint(unsigned code) { return code >= 0x100 || (code >= 0x20 && co
 CRT unsigned _mbctolower(unsigned code) { return mb_lower(code); }
 CRT unsigned _mbctoupper(unsigned code) { return mb_upper(code); }
 
-/* _getch reads standard input directly and keeps no key aside, so a key cannot be pushed back: the call reports failure. */
-CRT int _ungetch(int key) { return -1; }
-
 CRT int asctime_s(char *buffer, size_t size, const RavenTime *time)
 {
 	static const char days[] = "SunMonTueWedThuFriSat", months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";

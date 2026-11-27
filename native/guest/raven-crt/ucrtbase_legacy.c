@@ -800,15 +800,6 @@ CRT int _isatty(int fd)
 	return handle != -1 && GetFileType((HANDLE)handle) == FILE_TYPE_CHAR ? 0x40 : 0;
 }
 
-/* There is no command interpreter: system says so for a null command, and fails for any other. */
-CRT int system(const char *command)
-{
-	if (!command)
-		return 0;
-	*_errno() = 2;
-	return -1;
-}
-
 /* The low-level I/O table msvcrt's own inline code reads: every slot names a descriptor that is not open. */
 static unsigned char closed_descriptors[4096];
 void *raven_pioinfo[64] = {

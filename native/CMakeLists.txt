@@ -3427,6 +3427,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_crt_errors_x${width} COMMAND raven --run-process --execution=native ${crt_client})
                     set_tests_properties(native_crt_errors_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/crt-errors-prefix${width})
+                    # The C runtime entry points Python 3.14 imports: commands, programs started from a vector, console keys.
+                    set(ucrt_python_client ${CMAKE_CURRENT_BINARY_DIR}/ucrt-python${width}.exe)
+                    add_custom_command(OUTPUT ${ucrt_python_client}
+                        COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                            -Wl,--entry,${crt_entry},--no-insert-timestamp
+                            -o ${ucrt_python_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_python_client.c -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_python_client.c VERBATIM)
+                    add_custom_target(ucrt_python_fixture${width} ALL DEPENDS ${ucrt_python_client})
+                    add_test(NAME native_ucrt_python_x${width} COMMAND raven --run-process --execution=native ${ucrt_python_client})
+                    set_tests_properties(native_ucrt_python_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-python-prefix${width})
                     set(shell_info_client ${CMAKE_CURRENT_BINARY_DIR}/shell-info${width}.exe)
                     add_custom_command(OUTPUT ${shell_info_client}
                         COMMAND ${crt_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
