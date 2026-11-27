@@ -197,3 +197,61 @@ HRESULT WINAPI static_activate(void *iface, IInspectable **out)
 		*out = NULL;
 	return E_NOTIMPL;
 }
+
+void *method(void *iface, size_t slot) { return (*(void ***)iface)[slot]; }
+
+HRESULT handlers_add(struct handlers *list, void *handler, INT64 *token)
+{
+	if (!handler || !token)
+		return E_INVALIDARG;
+	if (list->count == list->capacity) {
+		const UINT32 capacity = list->capacity ? list->capacity * 2 : 4;
+		struct handler_entry *grown = list->entries ? HeapReAlloc(GetProcessHeap(), 0, list->entries, capacity * sizeof *grown)
+			: ALLOC(capacity * sizeof *grown);
+		if (!grown)
+			return E_OUTOFMEMORY;
+		list->entries = grown;
+		list->capacity = capacity;
+	}
+	reference(handler);
+	list->entries[list->count].handler = handler;
+	list->entries[list->count++].token = *token = InterlockedIncrement(&tokens);
+	return S_OK;
+}
+
+HRESULT handlers_remove(struct handlers *list, INT64 token)
+{
+	for (UINT32 index = 0; index < list->count; ++index)
+		if (list->entries[index].token == token) {
+			release(list->entries[index].handler);
+			list->entries[index] = list->entries[--list->count];
+			return S_OK;
+		}
+	return S_OK;
+}
+
+void handlers_raise(struct handlers *list, void *sender, void *arguments)
+{
+	const UINT32 count = list->count;
+	if (!count)
+		return;
+	IUnknown **called = ALLOC(count * sizeof *called);
+	if (!called)
+		return;
+	for (UINT32 index = 0; index < count; ++index)
+		reference(called[index] = list->entries[index].handler);
+	for (UINT32 index = 0; index < count; ++index) {
+		((HRESULT (WINAPI *)(void *, void *, void *))method(called[index], 3))(called[index], sender, arguments);
+		release(called[index]);
+	}
+	FREE(called);
+}
+
+void handlers_clear(struct handlers *list)
+{
+	for (UINT32 index = 0; index < list->count; ++index)
+		release(list->entries[index].handler);
+	FREE(list->entries);
+	list->entries = NULL;
+	list->count = list->capacity = 0;
+}

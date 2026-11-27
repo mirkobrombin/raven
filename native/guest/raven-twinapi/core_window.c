@@ -98,79 +98,9 @@ enum {
 };
 
 /* Calls through a delegate: its Invoke is the fourth method of its table. */
-typedef HRESULT (WINAPI *typed_handler)(void *handler, void *sender, void *arguments);
 typedef HRESULT (WINAPI *plain_handler)(void *handler);
 typedef HRESULT (WINAPI *one_argument_handler)(void *handler, void *argument);
 typedef HRESULT (WINAPI *action_handler)(void *handler, void *action, INT32 status);
-
-static void *method(void *iface, size_t slot) { return (*(void ***)iface)[slot]; }
-
-/* The handlers of one event, each with its token. Raising an event calls a copy of the list, so a handler may add or remove handlers. */
-struct handler_entry {
-	INT64 token;
-	IUnknown *handler;
-};
-
-struct handlers {
-	struct handler_entry *entries;
-	UINT32 count, capacity;
-};
-
-static HRESULT handlers_add(struct handlers *list, void *handler, INT64 *token)
-{
-	if (!handler || !token)
-		return E_INVALIDARG;
-	if (list->count == list->capacity) {
-		const UINT32 capacity = list->capacity ? list->capacity * 2 : 4;
-		struct handler_entry *grown = list->entries ? HeapReAlloc(GetProcessHeap(), 0, list->entries, capacity * sizeof *grown)
-			: ALLOC(capacity * sizeof *grown);
-		if (!grown)
-			return E_OUTOFMEMORY;
-		list->entries = grown;
-		list->capacity = capacity;
-	}
-	reference(handler);
-	list->entries[list->count].handler = handler;
-	list->entries[list->count++].token = *token = InterlockedIncrement(&tokens);
-	return S_OK;
-}
-
-static HRESULT handlers_remove(struct handlers *list, INT64 token)
-{
-	for (UINT32 index = 0; index < list->count; ++index)
-		if (list->entries[index].token == token) {
-			release(list->entries[index].handler);
-			list->entries[index] = list->entries[--list->count];
-			return S_OK;
-		}
-	return S_OK;
-}
-
-static void handlers_raise(struct handlers *list, void *sender, void *arguments)
-{
-	const UINT32 count = list->count;
-	if (!count)
-		return;
-	IUnknown **called = ALLOC(count * sizeof *called);
-	if (!called)
-		return;
-	for (UINT32 index = 0; index < count; ++index)
-		reference(called[index] = list->entries[index].handler);
-	for (UINT32 index = 0; index < count; ++index) {
-		((typed_handler)method(called[index], 3))(called[index], sender, arguments);
-		release(called[index]);
-	}
-	FREE(called);
-}
-
-static void handlers_clear(struct handlers *list)
-{
-	for (UINT32 index = 0; index < list->count; ++index)
-		release(list->entries[index].handler);
-	FREE(list->entries);
-	list->entries = NULL;
-	list->count = list->capacity = 0;
-}
 
 /* The pixels of the window's DPI in device-independent pixels, of which there are 96 to an inch. */
 static FLOAT dips(HWND window, LONG pixels)

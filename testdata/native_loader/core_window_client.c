@@ -2,7 +2,8 @@
 // view sees, in order, Initialize with its application view, SetWindow with its core window, Load and Run, then Uninitialize. The view's
 // Activated event comes while Run processes events, with the arguments of a launch, and the app activates its window there. Run then
 // checks the window: its handle, bounds and dispatcher, work posted to the dispatcher, keys, characters, the mouse, a resize, and closing.
-// Built with SWAP_CHAIN, it also presents a Direct3D 11 frame through a swap chain made for its core window. Built with MSIX_VIEW, it is the app of a package and also checks its identifier there. The exit code names the first check that failed.
+// Built with SWAP_CHAIN, it also presents a Direct3D 11 frame through a swap chain made for its core window. Built with MSIX_VIEW, it is the app of a package and also checks
+// its identifier there, its package and the folders of its data; built without, that it has neither. The exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #ifdef SWAP_CHAIN
@@ -16,6 +17,8 @@ __declspec(dllimport) HRESULT WINAPI RoGetActivationFactory(void *name, const GU
 __declspec(dllimport) HRESULT WINAPI WindowsCreateString(const WCHAR *text, UINT32 length, void **string);
 __declspec(dllimport) const WCHAR *WINAPI WindowsGetStringRawBuffer(void *string, UINT32 *length);
 __declspec(dllimport) HRESULT WINAPI WindowsDeleteString(void *string);
+__declspec(dllimport) LONG WINAPI GetCurrentPackageFamilyName(UINT32 *length, WCHAR *name);
+__declspec(dllimport) LONG WINAPI GetCurrentPackagePath(UINT32 *length, WCHAR *path);
 
 /* An interface pointer seen as its table of methods; the first six are IInspectable's. */
 typedef struct {
@@ -38,6 +41,9 @@ static const GUID launch_activated = {0xfbc93e26, 0xa14a, 0x4b4f, {0x82, 0xb0, 0
 static const GUID async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const GUID display_statics = {0xc6a02a6c, 0xd452, 0x44dc, {0xba, 0x07, 0x96, 0xf3, 0xc6, 0xad, 0xf9, 0xd1}};
 static const GUID display4 = {0xc972ce2f, 0x1242, 0x46be, {0xb5, 0x36, 0xe1, 0xaa, 0xfe, 0x9e, 0x7a, 0xcf}};
+static const GUID package_statics = {0x4e534bdf, 0x2960, 0x4878, {0x97, 0xa4, 0x96, 0x24, 0xde, 0xb7, 0x2f, 0x2d}};
+static const GUID data_statics = {0x5612147b, 0xe843, 0x45e3, {0x94, 0xd8, 0x06, 0x16, 0x9e, 0x3c, 0x8e, 0x17}};
+static const GUID storage_item = {0x4207a996, 0xca2f, 0x42f7, {0xbd, 0xe8, 0x8b, 0x10, 0x45, 0x7a, 0x7f, 0x30}};
 static const GUID window_event = {0x272b1ef3, 0xc633, 0x4da5, {0xa2, 0x6c, 0xc6, 0xd0, 0xf5, 0x6b, 0x29, 0xda}};
 
 struct rect {
@@ -51,7 +57,7 @@ struct point {
 /* What the app saw, step by step. */
 static int steps, failed;
 static object *app_view, *window;
-static int activated, sized, keys, characters, presses, visible, closed, dispatched, uninitialized;
+static int activated, sized, keys, characters, presses, visible, closed, dispatched, uninitialized, data_changes;
 static struct point pressed_at;
 static BYTE left_pressed;
 static FLOAT width_seen;
@@ -79,7 +85,7 @@ static object *statics(const WCHAR *name, const GUID *iid)
 }
 
 /* A delegate: Invoke is its fourth method, after IUnknown's. Each one knows which event it was given to. */
-enum { ON_VIEW_ACTIVATED, ON_SIZE, ON_KEY, ON_CHARACTER, ON_PRESS, ON_VISIBILITY, ON_CLOSED, ON_DISPATCHED };
+enum { ON_VIEW_ACTIVATED, ON_SIZE, ON_KEY, ON_CHARACTER, ON_PRESS, ON_VISIBILITY, ON_CLOSED, ON_DISPATCHED, ON_DATA_CHANGED };
 
 struct delegate {
 	void **table;
@@ -100,6 +106,9 @@ static ULONG WINAPI delegate_release(struct delegate *self) { return (ULONG)Inte
 static HRESULT WINAPI delegate_invoke(struct delegate *self, object *sender, object *arguments)
 {
 	switch (self->which) {
+	case ON_DATA_CHANGED:
+		++data_changes;
+		break;
 	case ON_VIEW_ACTIVATED: {
 		INT32 kind = -1;
 		object *launch = NULL, *found = NULL;
@@ -191,7 +200,7 @@ static void *delegate_table[] = {delegate_query, delegate_add, delegate_release,
 static void *dispatched_table[] = {delegate_query, delegate_add, delegate_release, dispatched_invoke};
 static struct delegate on_view_activated = {delegate_table, 1, ON_VIEW_ACTIVATED}, on_size = {delegate_table, 1, ON_SIZE},
 	on_key = {delegate_table, 1, ON_KEY}, on_character = {delegate_table, 1, ON_CHARACTER}, on_press = {delegate_table, 1, ON_PRESS},
-	on_visibility = {delegate_table, 1, ON_VISIBILITY}, on_closed = {delegate_table, 1, ON_CLOSED},
+	on_visibility = {delegate_table, 1, ON_VISIBILITY}, on_closed = {delegate_table, 1, ON_CLOSED}, on_data_changed = {delegate_table, 1, ON_DATA_CHANGED},
 	on_dispatched = {dispatched_table, 1, ON_DISPATCHED};
 
 /* The view and its source, each an object of the Windows Runtime with one interface. */
@@ -412,6 +421,74 @@ static HRESULT WINAPI source_create(object *self, object **out)
 static void *source_table[] = {app_query, app_add, app_release, app_iids, app_name, app_trust, source_create};
 static object source = {source_table};
 
+/* A storage item's path or name, at its place in IStorageItem, compared with what it should be. */
+static BOOL item_text(object *folder, int slot, const WCHAR *expected)
+{
+	object *item = NULL;
+	void *text = NULL;
+	BOOL same = METHOD(folder, 0, query_method)(folder, &storage_item, (void **)&item) == S_OK &&
+		METHOD(item, slot, HRESULT (WINAPI *)(object *, void **))(item, &text) == S_OK && !lstrcmpiW(WindowsGetStringRawBuffer(text, NULL), expected);
+	WindowsDeleteString(text);
+	if (item)
+		METHOD(item, 2, release_method)(item);
+	return same;
+}
+
+/* The app's package and the folders of its data: a packaged app has both, any other process neither. */
+static int check_package(void)
+{
+	object *packages = statics(L"Windows.ApplicationModel.Package", &package_statics), *package = NULL;
+	object *datas = statics(L"Windows.Storage.ApplicationData", &data_statics), *data = NULL;
+	if (!packages || !datas)
+		return 20;
+#ifdef MSIX_VIEW
+	WCHAR family[128], path[MAX_PATH], local[MAX_PATH];
+	UINT32 length = ARRAYSIZE(family);
+	if (GetCurrentPackageFamilyName(&length, family) || (length = MAX_PATH, GetCurrentPackagePath(&length, path)))
+		return 21;
+	object *id = NULL, *location = NULL;
+	void *text = NULL;
+	if (METHOD(packages, 6, object_method)(packages, &package) != S_OK || METHOD(package, 6, object_method)(package, &id) != S_OK ||
+		METHOD(id, 13, HRESULT (WINAPI *)(object *, void **))(id, &text) != S_OK || lstrcmpW(WindowsGetStringRawBuffer(text, NULL), family))
+		return 22;
+	WindowsDeleteString(text);
+	if (METHOD(package, 7, object_method)(package, &location) != S_OK || !item_text(location, 12, path))
+		return 23;
+	/* LocalState under the user's local data, named so, and writable through its path. */
+	object *folder = NULL;
+	length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+	if (!length || length + 32 + lstrlenW(family) >= MAX_PATH)
+		return 24;
+	lstrcatW(local, L"\\Packages\\");
+	lstrcatW(local, family);
+	lstrcatW(local, L"\\LocalState");
+	if (METHOD(datas, 6, object_method)(datas, &data) != S_OK || METHOD(data, 12, object_method)(data, &folder) != S_OK ||
+		!item_text(folder, 12, local) || !item_text(folder, 11, L"LocalState"))
+		return 25;
+	lstrcatW(local, L"\\saved.txt");
+	HANDLE file = CreateFileW(local, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+	DWORD written = 0;
+	if (file == INVALID_HANDLE_VALUE || !WriteFile(file, "saved", 5, &written, NULL) || written != 5)
+		return 26;
+	CloseHandle(file);
+	/* SignalDataChanged reaches the handlers of DataChanged, and a removed one no longer. */
+	INT64 token = 0;
+	if (METHOD(data, 15, event_method)(data, (object *)&on_data_changed, &token) != S_OK ||
+		METHOD(data, 17, HRESULT (WINAPI *)(object *))(data) != S_OK || data_changes != 1 ||
+		METHOD(data, 16, HRESULT (WINAPI *)(object *, INT64))(data, token) != S_OK ||
+		METHOD(data, 17, HRESULT (WINAPI *)(object *))(data) != S_OK || data_changes != 1)
+		return 27;
+	METHOD(folder, 2, release_method)(folder);
+	METHOD(location, 2, release_method)(location);
+	METHOD(id, 2, release_method)(id);
+#else
+	if (METHOD(packages, 6, object_method)(packages, &package) != (HRESULT)0x80073d54 || package ||
+		METHOD(datas, 6, object_method)(datas, &data) != (HRESULT)0x80073d54 || data)
+		return 28;
+#endif
+	return 0;
+}
+
 int raven_entry(void)
 {
 	if (FAILED(RoInitialize(0)))
@@ -433,6 +510,9 @@ int raven_entry(void)
 	object *displays = statics(L"Windows.Graphics.Display.DisplayInformation", &display_statics), *display = NULL;
 	if (!displays || METHOD(displays, 6, object_method)(displays, &display) == S_OK || display)
 		return 8;
+	const int package = check_package();
+	if (package)
+		return package;
 	if (METHOD(core, 13, HRESULT (WINAPI *)(object *, object *))(core, &source) != S_OK)
 		return 4;
 	if (failed)

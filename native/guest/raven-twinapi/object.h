@@ -84,6 +84,26 @@ HRESULT WINAPI event_remove(void *iface, INT64 token);
 /* The activation factory face of a class that has only static members: the class cannot be instantiated. */
 HRESULT WINAPI static_activate(void *iface, IInspectable **out);
 
+/* The method at a place of an interface's table; a delegate's Invoke is at the fourth. */
+void *method(void *iface, size_t slot);
+
+/* The handlers of one event, each with its token. Raising an event calls a copy of the list, so a handler may add or remove handlers. */
+struct handler_entry {
+	INT64 token;
+	IUnknown *handler;
+};
+
+struct handlers {
+	struct handler_entry *entries;
+	UINT32 count, capacity;
+};
+
+HRESULT handlers_add(struct handlers *list, void *handler, INT64 *token);
+HRESULT handlers_remove(struct handlers *list, INT64 token);
+/* Calls each handler with the sender and the event's arguments. */
+void handlers_raise(struct handlers *list, void *sender, void *arguments);
+void handlers_clear(struct handlers *list);
+
 #define INSPECTABLE (const void *)object_query, (const void *)object_reference, (const void *)object_release, (const void *)object_iids, \
 	(const void *)object_name, (const void *)object_trust
 #define FACTORY INSPECTABLE, (const void *)static_activate
@@ -94,5 +114,7 @@ HRESULT application_run(IUnknown *source);
 HRESULT application_view(void **out);
 HRESULT application_exit(void);
 extern struct object core_window_class, core_cursor_class, display_information_class;
+/* The package of the app and its data, from package.c. */
+extern struct object package_class, application_data_class;
 
 #endif

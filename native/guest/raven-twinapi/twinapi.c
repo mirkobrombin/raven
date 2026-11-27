@@ -1578,7 +1578,8 @@ static struct object api_information = {{api_factory_table.slots, api_statics_ta
 
 static struct object *const classes[] = {&language_factory, &app_languages_factory, &retail_info, &shared_mode, &analytics_info, &network_information,
 	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information,
-	&core_window_class, &core_cursor_class, &display_information_class};
+	&core_window_class, &core_cursor_class, &display_information_class,
+	&package_class, &application_data_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {
