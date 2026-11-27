@@ -1740,6 +1740,88 @@ void register_security_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("SetEntriesInAclA", 4, [set_entries](ApiCall &call) { set_entries(call, false); });
 	registry.add("SetEntriesInAclW", 4, [set_entries](ApiCall &call) { set_entries(call, true); });
+	// GetExplicitEntriesFromAcl lists the entries of an access list as EXPLICIT_ACCESS records, each naming its trustee by SID, in one
+	// block the program frees with LocalFree: the records, then the SIDs they point to. An allowing entry grants (GRANT_ACCESS), a
+	// denying one denies (DENY_ACCESS) and an audit entry audits success or failure by its flags; other kinds are passed over. The A and
+	// W forms differ only in the trustee name they never write here.
+	const auto explicit_entries = [&context](ApiCall &call) {
+		if (!call[1] || !call[2]) {
+			call.ret(87);
+			return;
+		}
+		call.store<uint32_t>(call[1], 0);
+		call.store_pointer(call[2], 0);
+		if (!call[0]) {
+			call.ret(0);
+			return;
+		}
+		const auto header = call.read(call[0], acl_header);
+		uint16_t capacity, count;
+		std::memcpy(&capacity, header.data() + 2, 2);
+		std::memcpy(&count, header.data() + 4, 2);
+		if (capacity < acl_header || (header[0] != 2 && header[0] != 4)) {
+			call.ret(1336);
+			return;
+		}
+		const auto acl = call.read(call[0], capacity);
+		struct Entry {
+			uint32_t permissions, mode, inheritance;
+			std::vector<uint8_t> sid;
+		};
+		std::vector<Entry> entries;
+		for (size_t offset = acl_header, index = 0; index < count; ++index) {
+			uint16_t size = 0;
+			if (offset + 4 <= acl.size())
+				std::memcpy(&size, acl.data() + offset + 2, 2);
+			if (size < 16 || offset + size > acl.size() || 16 + 4 * size_t(acl[offset + 9]) > size) {
+				call.ret(1336);
+				return;
+			}
+			const uint8_t type = acl[offset], flags = acl[offset + 1];
+			uint32_t mode = type == 0 ? 1 : type == 1 ? 3 : type == 2 ? (flags & 0x40 ? 5 : 6) : 0;
+			if (mode) {
+				// The SID runs eight bytes and four per subauthority from the ninth byte of the entry; padding may follow it.
+				const auto sid = acl.begin() + offset + 8;
+				Entry entry{0, mode, uint32_t(flags & 0x1f), std::vector<uint8_t>(sid, sid + 8 + 4 * acl[offset + 9])};
+				std::memcpy(&entry.permissions, acl.data() + offset + 4, 4);
+				entries.push_back(std::move(entry));
+			}
+			offset += size;
+		}
+		if (entries.empty()) {
+			call.ret(0);
+			return;
+		}
+		const size_t width = call.pointer_width(), trustee_at = width == 4 ? 12 : 16, record = trustee_at + (width == 4 ? 20 : 32);
+		size_t total = record * entries.size();
+		for (const auto &entry : entries)
+			total += (entry.sid.size() + 7) & ~size_t(7);
+		const auto memory = context.allocator.allocate(total, true);
+		if (!memory) {
+			call.ret(8);
+			return;
+		}
+		std::vector<uint8_t> block(total);
+		size_t sid_at = record * entries.size();
+		for (size_t index = 0; index < entries.size(); ++index) {
+			const auto &entry = entries[index];
+			uint8_t *at = block.data() + record * index;
+			std::memcpy(at, &entry.permissions, 4);
+			std::memcpy(at + 4, &entry.mode, 4);
+			std::memcpy(at + 8, &entry.inheritance, 4);
+			// TRUSTEE: no multiple trustee, NO_MULTIPLE_TRUSTEE, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, then the SID's address.
+			const uint64_t sid = memory + sid_at;
+			std::memcpy(at + trustee_at + (width == 4 ? 16 : 24), &sid, width);
+			std::memcpy(block.data() + sid_at, entry.sid.data(), entry.sid.size());
+			sid_at += (entry.sid.size() + 7) & ~size_t(7);
+		}
+		call.write(memory, block);
+		call.store<uint32_t>(call[1], uint32_t(entries.size()));
+		call.store_pointer(call[2], memory);
+		call.ret(0);
+	};
+	registry.add("GetExplicitEntriesFromAclA", 3, explicit_entries);
+	registry.add("GetExplicitEntriesFromAclW", 3, explicit_entries);
 	// AddAce: ready-made entries go into the list at a position, or at its end for MAXDWORD, and the entries after them move up.
 	registry.add("AddAce", 5, [](ApiCall &call) {
 		if (!call[0] || !call[3]) {

@@ -176,6 +176,50 @@ Words words_from_bytes(std::span<const uint8_t> little_endian)
 	return value;
 }
 
+// The modulus and public exponent of a DER RSAPublicKey (a sequence of two integers), big-endian without leading zero bytes; nothing
+// when the bytes are not one.
+static std::optional<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> rsa_public_key(std::span<const uint8_t> der)
+{
+	size_t at = 0;
+	// The contents of the element of a tag at the position, which then moves past it.
+	const auto element = [&](uint8_t tag) -> std::optional<std::span<const uint8_t>> {
+		if (at + 2 > der.size() || der[at] != tag)
+			return std::nullopt;
+		size_t length = der[at + 1];
+		at += 2;
+		if (length & 0x80) {
+			const size_t count = length & 0x7f;
+			if (!count || count > 4 || at + count > der.size())
+				return std::nullopt;
+			length = 0;
+			for (size_t index = 0; index < count; ++index)
+				length = length << 8 | der[at++];
+		}
+		if (length > der.size() - at)
+			return std::nullopt;
+		const auto contents = der.subspan(at, length);
+		at += length;
+		return contents;
+	};
+	const auto sequence = element(0x30);
+	if (!sequence)
+		return std::nullopt;
+	der = *sequence;
+	at = 0;
+	const auto modulus = element(2), exponent = element(2);
+	if (!modulus || !exponent)
+		return std::nullopt;
+	const auto trimmed = [](std::span<const uint8_t> value) {
+		while (!value.empty() && !value.front())
+			value = value.subspan(1);
+		return std::vector<uint8_t>(value.begin(), value.end());
+	};
+	auto pair = std::pair(trimmed(*modulus), trimmed(*exponent));
+	if (pair.first.empty() || pair.second.empty())
+		return std::nullopt;
+	return pair;
+}
+
 // The remainder of value by modulus, one bit of the quotient at a time.
 Words remainder(const Words &value, const Words &modulus)
 {
@@ -2052,19 +2096,19 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	// PUBLICKEYBLOB of an RSA key: BLOBHEADER (type 6, version, algorithm), RSAPUBKEY ("RSA1", bit length, exponent), then the modulus,
 	// least significant byte first. A PRIVATEKEYBLOB (type 7, "RSA2") goes on with the two primes, their exponents and coefficient,
 	// and the private exponent; the provider keeps that pair as its signature or exchange key, after the algorithm.
-	registry.add("CryptImportKey", 6, [crypt](ApiCall &call) {
-		if (!crypt->providers.contains(call[0])) {
+	// Imports a key blob for a provider and hands its handle out through the last pointer; the exchange key decrypts a SIMPLEBLOB.
+	const auto import_key = [crypt](ApiCall &call, uint64_t provider, const std::vector<uint8_t> &blob, uint64_t exchange, uint64_t out) {
+		if (!crypt->providers.contains(provider)) {
 			call.fail(6);
 			return;
 		}
-		const auto blob = call.read(call[1], call.u32(2));
 		// PLAINTEXTKEYBLOB of a session key: BLOBHEADER (type 8, version, algorithm), the secret's length and the secret.
 		if (blob.size() >= 12 && blob[0] == 8) {
 			uint32_t algorithm = 0, length = 0;
 			std::memcpy(&algorithm, blob.data() + 4, 4);
 			std::memcpy(&length, blob.data() + 8, 4);
 			const auto *known = session_algorithm(algorithm);
-			if (!known || blob.size() < 12 + size_t(length) || !length || (known->fixed && length != known->fixed) || call[3]) {
+			if (!known || blob.size() < 12 + size_t(length) || !length || (known->fixed && length != known->fixed) || exchange) {
 				call.fail(known ? 0x80090005U : 0x80090008U);
 				return;
 			}
@@ -2073,7 +2117,7 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			key.secret.assign(blob.begin() + 12, blob.begin() + 12 + length);
 			const auto handle = crypt->next++;
 			crypt->keys[handle] = std::move(key);
-			call.store_pointer(call[5], handle);
+			call.store_pointer(out, handle);
 			call.ret(1);
 			return;
 		}
@@ -2106,11 +2150,45 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			key.private_blob.assign(blob.begin(), blob.begin() + 20 + length + 5 * half + length);
 		}
 		if (pair)
-			crypt->user_keys[{call[0], key.pair_algorithm == 0x2400 ? 2U : 1U}] = key;
+			crypt->user_keys[{provider, key.pair_algorithm == 0x2400 ? 2U : 1U}] = key;
 		crypt->keys[handle] = std::move(key);
-		call.store_pointer(call[5], handle);
+		call.store_pointer(out, handle);
 		call.ret(1);
+	};
+	registry.add("CryptImportKey", 6, [import_key](ApiCall &call) {
+		import_key(call, call[0], call.read(call[1], call.u32(2)), call[3], call[5]);
 	});
+	// CryptImportPublicKeyInfo(Ex) takes the public key of a certificate (CERT_PUBLIC_KEY_INFO: the algorithm's object identifier and
+	// parameters, then the key's bit string), which for RSA holds a DER RSAPublicKey, and imports it as the PUBLICKEYBLOB it amounts to.
+	const auto import_public = [import_key](ApiCall &call, uint64_t info, uint32_t algorithm, uint64_t out) {
+		const size_t width = call.pointer_width();
+		if (!info || !out) {
+			call.fail(87);
+			return;
+		}
+		const auto oid = call.narrow(call.load_pointer(info), 64);
+		const auto key = call.read(call.load_pointer(info + 4 * width), call.load<uint32_t>(info + 3 * width));
+		const auto numbers = rsa_public_key(key);
+		if (oid != "1.2.840.113549.1.1.1" || !numbers || numbers->second.size() > 4 || numbers->first.size() % 2) {
+			call.fail(0x80092002U);
+			return;
+		}
+		const auto &[modulus, exponent] = *numbers;
+		std::vector<uint8_t> blob{6, 2, 0, 0};
+		const uint32_t words[]{algorithm ? algorithm : 0xa400U, 0x31415352U, uint32_t(modulus.size() * 8), [&] {
+			uint32_t value = 0;
+			for (const auto byte : exponent)
+				value = value << 8 | byte;
+			return value;
+		}()};
+		for (const auto word : words)
+			for (int shift = 0; shift < 32; shift += 8)
+				blob.push_back(uint8_t(word >> shift));
+		blob.insert(blob.end(), modulus.rbegin(), modulus.rend());
+		import_key(call, call[0], blob, 0, out);
+	};
+	registry.add("CryptImportPublicKeyInfo", 4, [import_public](ApiCall &call) { import_public(call, call[2], 0, call[3]); });
+	registry.add("CryptImportPublicKeyInfoEx", 7, [import_public](ApiCall &call) { import_public(call, call[2], call.u32(3), call[6]); });
 	// A public key goes out as the PUBLICKEYBLOB it came in as, a session key as a PLAINTEXTKEYBLOB or sealed for an exchange key as a
 	// SIMPLEBLOB; a null buffer asks for the length.
 	registry.add("CryptExportKey", 6, [crypt](ApiCall &call) {

@@ -215,6 +215,210 @@ private:
 	size_t offset = 0;
 };
 
+// The BEGIN and END label of a Base64 form of CryptBinaryToString, empty for the bare one.
+static std::string_view base64_label(uint32_t form)
+{
+	switch (form) {
+	case 0: return "CERTIFICATE";
+	case 3: return "NEW CERTIFICATE REQUEST";
+	case 9: return "X509 CRL";
+	}
+	return {};
+}
+
+// The text CryptBinaryToString writes for bytes in a form; nothing for a form it does not write.
+static std::optional<std::string> binary_text(std::span<const uint8_t> bytes, uint32_t flags)
+{
+	const uint32_t form = flags & 0xffff;
+	const std::string end = flags & 0x40000000U ? "" : flags & 0x80000000U ? "\n" : "\r\n";
+	std::string text;
+	if (form == 2)
+		return std::string(bytes.begin(), bytes.end());
+	if (form == 0 || form == 1 || form == 3 || form == 9) {
+		std::string encoded(4 * ((bytes.size() + 2) / 3) + 1, '\0');
+		encoded.resize(size_t(EVP_EncodeBlock(reinterpret_cast<unsigned char *>(encoded.data()), bytes.data(), int(bytes.size()))));
+		const auto label = base64_label(form);
+		if (!label.empty())
+			text += "-----BEGIN " + std::string(label) + "-----" + (end.empty() ? "" : end);
+		for (size_t at = 0; at < encoded.size(); at += 64)
+			text += encoded.substr(at, 64) + end;
+		if (!label.empty())
+			text += "-----END " + std::string(label) + "-----" + end;
+		return text;
+	}
+	static constexpr char digits[] = "0123456789abcdef";
+	if (form == 0xc) {
+		for (const auto byte : bytes)
+			text += {digits[byte >> 4], digits[byte & 15]};
+		return text + end;
+	}
+	if (form == 4) {
+		// Pairs are parted by a space within a line of sixteen; without line ends the lines are parted by a space too.
+		for (size_t at = 0; at < bytes.size(); ++at) {
+			if (at && (at % 16 || end.empty()))
+				text += ' ';
+			text += {digits[bytes[at] >> 4], digits[bytes[at] & 15]};
+			if (at % 16 == 15 || at + 1 == bytes.size())
+				text += end;
+		}
+		return text;
+	}
+	return std::nullopt;
+}
+
+static void binary_to_string(ApiCall &call, bool wide)
+{
+	const auto flags = call.u32(2);
+	if (!call[4] || (!call[0] && call.u32(1))) {
+		call.fail(87, 0);
+		return;
+	}
+	const auto bytes = call[0] ? call.read(call[0], call.u32(1)) : std::vector<uint8_t>();
+	const auto text = binary_text(bytes, flags);
+	if (!text) {
+		call.fail(87, 0);
+		return;
+	}
+	const auto capacity = call.load<uint32_t>(call[4]);
+	// The bytes themselves are counted in bytes and get no terminator; text is counted in characters, the terminator included when
+	// only the length is asked or the buffer is short, and left out of the count written after a copy.
+	const bool raw = (flags & 0xffff) == 2;
+	const size_t length = text->size(), needed = raw ? length : length + 1;
+	if (!call[3] || capacity < needed) {
+		call.store<uint32_t>(call[4], uint32_t(needed));
+		if (call[3])
+			call.fail(234, 0);
+		else
+			call.ret(1);
+		return;
+	}
+	if (raw)
+		call.write(call[3], std::span(reinterpret_cast<const uint8_t *>(text->data()), length));
+	else if (wide)
+		call.put_wide(call[3], std::u16string(text->begin(), text->end()), needed);
+	else
+		call.put_narrow(call[3], *text, needed);
+	call.store<uint32_t>(call[4], uint32_t(length));
+	call.ret(1);
+}
+
+// The bytes a text of CryptStringToBinary stands for, in a form, and the form found for the ANY forms (6 Base64 with or without
+// BEGIN and END lines, 7 any form, 8 any hexadecimal); nothing when the text is not in the form.
+static std::optional<std::pair<std::vector<uint8_t>, uint32_t>> text_binary(std::string_view text, uint32_t form)
+{
+	const auto base64 = [](std::string_view body) -> std::optional<std::vector<uint8_t>> {
+		std::string clean;
+		for (const char character : body)
+			if (!std::isspace(static_cast<unsigned char>(character)))
+				clean += character;
+		if (clean.empty() || clean.size() % 4)
+			return std::nullopt;
+		std::vector<uint8_t> bytes(clean.size() / 4 * 3);
+		if (EVP_DecodeBlock(bytes.data(), reinterpret_cast<const unsigned char *>(clean.data()), int(clean.size())) < 0)
+			return std::nullopt;
+		bytes.resize(bytes.size() - (clean.ends_with("==") ? 2 : clean.ends_with('=') ? 1 : 0));
+		return bytes;
+	};
+	const auto framed = [&](std::string_view label) -> std::optional<std::vector<uint8_t>> {
+		const auto begin = text.find("-----BEGIN ");
+		if (begin == text.npos)
+			return std::nullopt;
+		const auto opened = text.find("-----", begin + 11);
+		const auto finish = text.find("-----END ", opened == text.npos ? begin : opened + 5);
+		if (opened == text.npos || finish == text.npos || (!label.empty() && text.substr(begin + 11, opened - begin - 11) != label))
+			return std::nullopt;
+		return base64(text.substr(opened + 5, finish - opened - 5));
+	};
+	const auto hex = [&](bool spaced) -> std::optional<std::vector<uint8_t>> {
+		std::vector<uint8_t> bytes;
+		int high = -1;
+		for (const char character : text) {
+			const int value = std::isxdigit(static_cast<unsigned char>(character)) ?
+				(std::isdigit(static_cast<unsigned char>(character)) ? character - '0' : std::tolower(character) - 'a' + 10) : -1;
+			if (value < 0) {
+				if (!std::isspace(static_cast<unsigned char>(character)) || high >= 0 || !spaced)
+					return std::nullopt;
+				continue;
+			}
+			if (high < 0)
+				high = value;
+			else {
+				bytes.push_back(uint8_t(high << 4 | value));
+				high = -1;
+			}
+		}
+		if (high >= 0 || bytes.empty())
+			return std::nullopt;
+		return bytes;
+	};
+	std::optional<std::vector<uint8_t>> bytes;
+	switch (form) {
+	case 0: case 3: case 9:
+		if ((bytes = framed(base64_label(form)))) return std::pair(*bytes, form);
+		return std::nullopt;
+	case 1:
+		if ((bytes = base64(text))) return std::pair(*bytes, 1U);
+		return std::nullopt;
+	case 2:
+		return std::pair(std::vector<uint8_t>(text.begin(), text.end()), 2U);
+	case 4:
+		if ((bytes = hex(true))) return std::pair(*bytes, 4U);
+		return std::nullopt;
+	case 0xc:
+		if ((bytes = hex(false))) return std::pair(*bytes, 0xcU);
+		return std::nullopt;
+	case 6: case 7:
+		if ((bytes = framed({}))) return std::pair(*bytes, 0U);
+		if ((bytes = base64(text))) return std::pair(*bytes, 1U);
+		if (form == 6) return std::nullopt;
+		return std::pair(std::vector<uint8_t>(text.begin(), text.end()), 2U);
+	case 8:
+		if ((bytes = hex(false))) return std::pair(*bytes, 0xcU);
+		if ((bytes = hex(true))) return std::pair(*bytes, 4U);
+		return std::nullopt;
+	}
+	return std::nullopt;
+}
+
+static void string_to_binary(ApiCall &call, bool wide)
+{
+	if (!call[0] || !call[4]) {
+		call.fail(87, 0);
+		return;
+	}
+	const auto length = call.u32(1);
+	std::string text;
+	if (wide) {
+		const auto read = length ? call.wide(call[0], length) : call.wide(call[0], 1 << 24);
+		for (const auto character : read)
+			text += character < 0x80 ? char(character) : '\x01';
+	} else {
+		text = length ? call.narrow(call[0], length) : call.narrow(call[0], 1 << 24);
+	}
+	if (length)
+		text.resize(std::min<size_t>(text.size(), length));
+	const auto found = text_binary(text, call.u32(2));
+	if (!found) {
+		call.fail(0x8009310bU, 0);
+		return;
+	}
+	const auto &[bytes, form] = *found;
+	const auto capacity = call.load<uint32_t>(call[4]);
+	call.store<uint32_t>(call[4], uint32_t(bytes.size()));
+	if (call[5])
+		call.store<uint32_t>(call[5], 0);
+	if (call[6])
+		call.store<uint32_t>(call[6], form);
+	if (call[3]) {
+		if (capacity < bytes.size()) {
+			call.fail(234, 0);
+			return;
+		}
+		call.write(call[3], bytes);
+	}
+	call.ret(1);
+}
+
 std::vector<uint8_t> der_of(X509 *certificate)
 {
 	const int length = i2d_X509(certificate, nullptr);
@@ -1840,24 +2044,48 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 				call.ret(converted.size() + 1);
 			}
 		});
-	registry.add("CertNameToStrW", 5, [](ApiCall &call) {
-		std::u16string text;
-		if (call[1]) {
-			const auto bytes = call.read(call.load_pointer(call[1] + call.pointer_width()), call.load<uint32_t>(call[1]));
-			const unsigned char *at = bytes.data();
-			if (X509_NAME *name = d2i_X509_NAME(nullptr, &at, long(bytes.size()))) {
-				text = from_utf8(name_text(name, call.u32(2)));
-				X509_NAME_free(name);
+	// CertNameToStrA and W write the same text, in the program's code page or UTF-16; the count includes the terminator.
+	for (const bool wide : {true, false})
+		registry.add(wide ? "CertNameToStrW" : "CertNameToStrA", 5, [&context, wide](ApiCall &call) {
+			std::string text;
+			if (call[1]) {
+				const auto bytes = call.read(call.load_pointer(call[1] + call.pointer_width()), call.load<uint32_t>(call[1]));
+				const unsigned char *at = bytes.data();
+				if (X509_NAME *name = d2i_X509_NAME(nullptr, &at, long(bytes.size()))) {
+					text = name_text(name, call.u32(2));
+					X509_NAME_free(name);
+				}
 			}
-		}
-		if (!call[3] || !call.u32(4)) {
-			call.ret(text.size() + 1);
-			return;
-		}
-		const auto converted = text.substr(0, call.u32(4) - 1);
-		call.put_wide(call[3], converted, converted.size() + 1);
-		call.ret(converted.size() + 1);
-	});
+			if (wide) {
+				const auto converted = from_utf8(text);
+				if (!call[3] || !call.u32(4)) {
+					call.ret(converted.size() + 1);
+					return;
+				}
+				const auto kept = converted.substr(0, call.u32(4) - 1);
+				call.put_wide(call[3], kept, kept.size() + 1);
+				call.ret(kept.size() + 1);
+				return;
+			}
+			const auto converted = to_ansi(from_utf8(text), context.launch.ansi_code_page);
+			if (!call[3] || !call.u32(4)) {
+				call.ret(converted.size() + 1);
+				return;
+			}
+			const auto kept = converted.substr(0, call.u32(4) - 1);
+			call.put_narrow(call[3], kept, kept.size() + 1);
+			call.ret(kept.size() + 1);
+		});
+
+	// CryptBinaryToString writes bytes as text and CryptStringToBinary reads them back, in the forms of CRYPT_STRING_*: Base64 bare
+	// (1) or between the BEGIN and END lines of a certificate (0), a request (3) or a revocation list (9), the bytes themselves (2),
+	// hexadecimal as space-separated pairs (4) or one run (0xc). Base64 breaks its lines after 64 characters and hexadecimal after
+	// 16 bytes; NOCRLF (0x40000000) writes no line ends, NOCR (0x80000000) ends lines with LF alone. The dump forms with addresses or
+	// characters beside the bytes (5, 0xa, 0xb) are not written.
+	registry.add("CryptBinaryToStringA", 5, [](ApiCall &call) { binary_to_string(call, false); });
+	registry.add("CryptBinaryToStringW", 5, [](ApiCall &call) { binary_to_string(call, true); });
+	registry.add("CryptStringToBinaryA", 7, [](ApiCall &call) { string_to_binary(call, false); });
+	registry.add("CryptStringToBinaryW", 7, [](ApiCall &call) { string_to_binary(call, true); });
 
 	// Data protection: the blob is sealed with AES-256-GCM under a key made from the prefix secret and the optional entropy.
 	const auto blob_in = [](ApiCall &call, uint64_t blob) {

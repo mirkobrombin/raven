@@ -730,10 +730,9 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.store<uint32_t>(call[2], uint32_t(name->size()));
 		call.ret(1);
 	};
-	registry.add("GetComputerNameExW", 3, [report_name](ApiCall &call) {
-		// The name goes to the second argument and its length to the third, as in GetComputerNameW.
-		report_name(call, call.u32(0), true);
-	});
+	// The name goes to the second argument and its length to the third, as in GetComputerName.
+	registry.add("GetComputerNameExW", 3, [report_name](ApiCall &call) { report_name(call, call.u32(0), true); });
+	registry.add("GetComputerNameExA", 3, [report_name](ApiCall &call) { report_name(call, call.u32(0), false); });
 	// Network accounts: the one account of the prefix, a member of Administrators, on a machine in a workgroup. Buffers come from the
 	// guest allocator and go back through NetApiBufferFree.
 	static constexpr std::u16string_view workgroup = u"WORKGROUP";
@@ -1283,30 +1282,35 @@ void register_host_api(ApiRegistry &registry, KernelContext &context)
 		call.put_wide(call[0], name, size_t(call.i32(1)));
 		call.ret(uint32_t(name.size() + 1));
 	});
-	registry.add("GetGeoInfoW", 5, [](ApiCall &call) {
-		if (call.u32(0) != 244) {
-			call.fail(87, 0);
-			return;
-		}
-		std::u16string text;
-		switch (call.u32(1)) {
-		case 4: text = u"US"; break;
-		case 5: text = u"USA"; break;
-		case 8: text = u"United States"; break;
-		case 9: text = u"United States"; break;
-		default:
-			call.fail(87, 0);
-			return;
-		}
-		if (call[2] && call.i32(3) > 0) {
-			if (size_t(call.i32(3)) <= text.size()) {
-				call.fail(122, 0);
+	// GetGeoInfoA and W tell the United States' names, in ASCII either way; the count includes the terminator.
+	for (const bool wide : {true, false})
+		registry.add(wide ? "GetGeoInfoW" : "GetGeoInfoA", 5, [wide](ApiCall &call) {
+			if (call.u32(0) != 244) {
+				call.fail(87, 0);
 				return;
 			}
-			call.put_wide(call[2], text, size_t(call.i32(3)));
-		}
-		call.ret(text.size() + 1);
-	});
+			std::u16string text;
+			switch (call.u32(1)) {
+			case 4: text = u"US"; break;
+			case 5: text = u"USA"; break;
+			case 8: text = u"United States"; break;
+			case 9: text = u"United States"; break;
+			default:
+				call.fail(87, 0);
+				return;
+			}
+			if (call[2] && call.i32(3) > 0) {
+				if (size_t(call.i32(3)) <= text.size()) {
+					call.fail(122, 0);
+					return;
+				}
+				if (wide)
+					call.put_wide(call[2], text, size_t(call.i32(3)));
+				else
+					call.put_narrow(call[2], std::string(text.begin(), text.end()), size_t(call.i32(3)));
+			}
+			call.ret(text.size() + 1);
+		});
 	registry.add("GetKeyboardLayoutList", 2, [](ApiCall &call) {
 		if (call.i32(0) > 0 && call[1])
 			call.store_pointer(call[1], 0x04090409);
