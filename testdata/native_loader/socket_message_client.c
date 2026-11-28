@@ -435,6 +435,60 @@ static int address_text(void)
 	return 0;
 }
 
+/* WSAAccept takes the connection when no condition is given; otherwise it asks the condition, with the caller's address, the listener's
+   address and the callback data, and refuses the connection the condition rejects. */
+static SOCKADDR_IN caller_seen, callee_seen;
+static DWORD_PTR data_seen;
+
+static void copy_address(SOCKADDR_IN *to, const WSABUF *from)
+{
+	for (unsigned index = 0; index < sizeof(*to); ++index) ((BYTE *)to)[index] = ((const BYTE *)from->buf)[index];
+}
+
+static int CALLBACK take_or_refuse(WSABUF *caller, WSABUF *caller_data, QOS *flow, QOS *group_flow, WSABUF *callee, WSABUF *callee_data,
+	GROUP *group, DWORD_PTR data)
+{
+	data_seen = data;
+	if (!caller || caller->len < sizeof(SOCKADDR_IN) || !callee || callee->len < sizeof(SOCKADDR_IN)) return CF_REJECT;
+	copy_address(&caller_seen, caller);
+	copy_address(&callee_seen, callee);
+	return data == 1 ? CF_ACCEPT : CF_REJECT;
+}
+
+static int conditional_accept(void)
+{
+	SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	SOCKET clients[3] = {socket(AF_INET, SOCK_STREAM, IPPROTO_TCP), socket(AF_INET, SOCK_STREAM, IPPROTO_TCP), socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)};
+	SOCKADDR_IN address, local, peer;
+	zero(&address, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	int size = sizeof(address);
+	if (listener == INVALID_SOCKET || bind(listener, (SOCKADDR *)&address, size) || getsockname(listener, (SOCKADDR *)&address, &size) ||
+		listen(listener, 4)) return 89;
+	for (int index = 0; index < 3; ++index)
+		if (clients[index] == INVALID_SOCKET || connect(clients[index], (SOCKADDR *)&address, size)) return 89;
+	int length = sizeof(local), peer_length = sizeof(peer);
+	SOCKET server = WSAAccept(listener, (SOCKADDR *)&peer, &peer_length, NULL, 0);
+	if (server == INVALID_SOCKET || getsockname(clients[0], (SOCKADDR *)&local, &length) || peer_length != sizeof(peer) ||
+		peer.sin_family != AF_INET || peer.sin_port != local.sin_port) return 90;
+	closesocket(server);
+	server = WSAAccept(listener, NULL, NULL, take_or_refuse, 1);
+	if (server == INVALID_SOCKET || data_seen != 1) return 91;
+	length = sizeof(local);
+	if (getsockname(clients[1], (SOCKADDR *)&local, &length) || caller_seen.sin_family != AF_INET || caller_seen.sin_port != local.sin_port ||
+		callee_seen.sin_family != AF_INET || callee_seen.sin_port != address.sin_port) return 92;
+	closesocket(server);
+	if (WSAAccept(listener, NULL, NULL, take_or_refuse, 2) != INVALID_SOCKET || WSAGetLastError() != WSAECONNREFUSED || data_seen != 2) return 93;
+	/* The refused connection is closed: its client reads the end of the stream or a reset, never waits. */
+	char byte;
+	const int read = recv(clients[2], &byte, 1, 0);
+	if (read != 0 && !(read == SOCKET_ERROR && WSAGetLastError() == WSAECONNRESET)) return 94;
+	for (int index = 0; index < 3; ++index) closesocket(clients[index]);
+	closesocket(listener);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	WSADATA data;
@@ -454,6 +508,8 @@ int raven_entry(void)
 	result = accepted_with_data();
 	if (result) return result;
 	result = address_text();
+	if (result) return result;
+	result = conditional_accept();
 	if (result) return result;
 	WSACleanup();
 	return 0;
