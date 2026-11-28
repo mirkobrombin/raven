@@ -12,7 +12,9 @@
  *   takes data in pieces and starts over each time it gives its value.
  * - MacAlgorithmProvider opens the HMAC of the same hashes. Its key signs with CryptographicEngine.Sign and checks a signature with
  *   VerifySignature; CreateHash gives a CryptographicHash keyed with the key material. AES-CMAC is named but not offered, as Raven's
- *   bcrypt has no CMAC, and opening it fails. */
+ *   bcrypt has no CMAC, and opening it fails.
+ * - SymmetricKeyAlgorithmProvider opens AES, DES and 3DES in CBC or ECB, with or without PKCS #7 padding, and AES-GCM; its keys encrypt
+ *   and decrypt with CryptographicEngine, AES-GCM through EncryptAndAuthenticate and DecryptAndAuthenticate with a sixteen-byte tag. */
 #include "object.h"
 #include "../raven-winrt/winrt.h"
 #include <bcrypt.h>
@@ -27,6 +29,10 @@ static const IID iid_mac_provider2 = {0x6da32a15, 0xd931, 0x42ed, {0x8e, 0x7e, 0
 static const IID iid_mac_provider_statics = {0xc9bdc147, 0xcc77, 0x4df0, {0x9e, 0x4e, 0xb9, 0x21, 0xe0, 0x80, 0x64, 0x4c}};
 static const IID iid_mac_names = {0x41412678, 0xfb1e, 0x43a4, {0x89, 0x5e, 0xa9, 0x02, 0x6e, 0x43, 0x90, 0xa3}};
 static const IID iid_key = {0xed2a3b70, 0x8e7b, 0x4009, {0x84, 0x01, 0xff, 0xd1, 0xa6, 0x2e, 0xeb, 0x27}};
+static const IID iid_cipher_provider = {0x3d7e4a33, 0x3bd0, 0x4902, {0x8a, 0xc8, 0x47, 0x0d, 0x50, 0xd2, 0x13, 0x76}};
+static const IID iid_cipher_provider_statics = {0x8d3b2326, 0x1f37, 0x491f, {0xb6, 0x0e, 0xf5, 0x43, 0x1b, 0x26, 0xb4, 0x83}};
+static const IID iid_cipher_names = {0x6870727b, 0xc996, 0x4eae, {0x84, 0xd7, 0x79, 0xb2, 0xae, 0xb7, 0x3b, 0x9c}};
+static const IID iid_sealed = {0x6fa42fe7, 0x1ecb, 0x4b00, {0xbe, 0xa5, 0x60, 0xb8, 0x3f, 0x86, 0x2f, 0x17}};
 static const IID iid_engine_statics = {0x9fea0639, 0x6ff7, 0x4c85, {0xa0, 0x95, 0x95, 0xeb, 0x31, 0x71, 0x5e, 0xb9}};
 
 typedef __x_ABI_CWindows_CStorage_CStreams_CIBuffer buffer;
@@ -477,10 +483,14 @@ static HRESULT computation_make(struct provider *provider, const BYTE *key, UINT
 	return S_OK;
 }
 
-/* A key of a MAC algorithm: its material, kept for signing. */
+struct cipher_provider;
+
+/* A key of a MAC algorithm, with its material kept for signing, or of a symmetric algorithm, with bcrypt's key. */
 struct key {
 	struct object base;
 	struct provider *provider;
+	struct cipher_provider *cipher;
+	BCRYPT_KEY_HANDLE handle;
 	BYTE *material;
 	UINT32 length;
 };
@@ -494,7 +504,9 @@ static void destroy_key(struct object *base)
 		SecureZeroMemory(self->material, self->length);
 		FREE(self->material);
 	}
-	release(face_of(&self->provider->base, 0));
+	if (self->handle)
+		BCryptDestroyKey(self->handle);
+	release(self->provider ? face_of(&self->provider->base, 0) : face_of((struct object *)self->cipher, 0));
 }
 
 static HRESULT WINAPI key_size(void *iface, UINT32 *out)
@@ -677,12 +689,175 @@ static const struct face_iid mac_names_iids[] = {{&iid_factory, 0}, {&iid_mac_na
 static const struct kind mac_names_kind = {"MacAlgorithmNames", L"Windows.Security.Cryptography.Core.MacAlgorithmNames", mac_names_iids, NULL};
 struct object mac_names_class = {{mac_names_factory_table.slots, mac_names_table.slots}, &mac_names_kind, 1};
 
+/* ---- the symmetric algorithms ---- */
+
+/* Each symmetric algorithm by its name, the bcrypt cipher and chaining mode behind it, and whether it pads to whole blocks with PKCS #7.
+ * RC2, RC4 and AES-CCM are named but not offered: Raven's bcrypt has none of them. */
+struct cipher {
+	const WCHAR *name, *cipher, *mode;
+	UINT32 block;
+	BOOL padded, chained, authenticated;
+};
+
+static const struct cipher ciphers[] = {
+	{L"AES_CBC", BCRYPT_AES_ALGORITHM, BCRYPT_CHAIN_MODE_CBC, 16, FALSE, TRUE, FALSE},
+	{L"AES_ECB", BCRYPT_AES_ALGORITHM, BCRYPT_CHAIN_MODE_ECB, 16, FALSE, FALSE, FALSE},
+	{L"AES_GCM", BCRYPT_AES_ALGORITHM, BCRYPT_CHAIN_MODE_GCM, 16, FALSE, FALSE, TRUE},
+	{L"AES_CBC_PKCS7", BCRYPT_AES_ALGORITHM, BCRYPT_CHAIN_MODE_CBC, 16, TRUE, TRUE, FALSE},
+	{L"AES_ECB_PKCS7", BCRYPT_AES_ALGORITHM, BCRYPT_CHAIN_MODE_ECB, 16, TRUE, FALSE, FALSE},
+	{L"DES_CBC", BCRYPT_DES_ALGORITHM, BCRYPT_CHAIN_MODE_CBC, 8, FALSE, TRUE, FALSE},
+	{L"DES_ECB", BCRYPT_DES_ALGORITHM, BCRYPT_CHAIN_MODE_ECB, 8, FALSE, FALSE, FALSE},
+	{L"DES_CBC_PKCS7", BCRYPT_DES_ALGORITHM, BCRYPT_CHAIN_MODE_CBC, 8, TRUE, TRUE, FALSE},
+	{L"DES_ECB_PKCS7", BCRYPT_DES_ALGORITHM, BCRYPT_CHAIN_MODE_ECB, 8, TRUE, FALSE, FALSE},
+	{L"3DES_CBC", BCRYPT_3DES_ALGORITHM, BCRYPT_CHAIN_MODE_CBC, 8, FALSE, TRUE, FALSE},
+	{L"3DES_ECB", BCRYPT_3DES_ALGORITHM, BCRYPT_CHAIN_MODE_ECB, 8, FALSE, FALSE, FALSE},
+	{L"3DES_CBC_PKCS7", BCRYPT_3DES_ALGORITHM, BCRYPT_CHAIN_MODE_CBC, 8, TRUE, TRUE, FALSE},
+	{L"3DES_ECB_PKCS7", BCRYPT_3DES_ALGORITHM, BCRYPT_CHAIN_MODE_ECB, 8, TRUE, FALSE, FALSE},
+};
+
+struct cipher_provider {
+	struct object base;
+	const struct cipher *algorithm;
+	BCRYPT_ALG_HANDLE handle;
+};
+
+static struct cipher_provider *cipher_provider_of(void *iface) { return (struct cipher_provider *)owner(iface); }
+
+static void destroy_cipher_provider(struct object *base)
+{
+	struct cipher_provider *self = (struct cipher_provider *)base;
+	if (self->handle)
+		BCryptCloseAlgorithmProvider(self->handle, 0);
+}
+
+static HRESULT WINAPI cipher_name(void *iface, HSTRING *out) { return answer_name(cipher_provider_of(iface)->algorithm->name, out); }
+
+static HRESULT WINAPI cipher_block(void *iface, UINT32 *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = cipher_provider_of(iface)->algorithm->block;
+	return S_OK;
+}
+
+static HRESULT WINAPI cipher_create_key(void *iface, void *material, void **out)
+{
+	static const void *const *const tables[] = {key_table.slots};
+	struct cipher_provider *provider = cipher_provider_of(iface);
+	BYTE *bytes;
+	UINT32 length;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!material)
+		return E_INVALIDARG;
+	HRESULT result = bytes_of(material, &bytes, &length);
+	if (FAILED(result))
+		return result;
+	struct key *self = make(sizeof *self, &key_kind, tables, 1);
+	if (!self)
+		return E_OUTOFMEMORY;
+	reference(face_of(&provider->base, 0));
+	self->cipher = provider;
+	self->length = length;
+	result = from_status(BCryptGenerateSymmetricKey(provider->handle, &self->handle, NULL, 0, bytes, length, 0));
+	if (FAILED(result)) {
+		self->handle = NULL;
+		release(face_of(&self->base, 0));
+		return result;
+	}
+	*out = face_of(&self->base, 0);
+	return S_OK;
+}
+
+TABLE(cipher_provider_table, 0, INSPECTABLE, (const void *)cipher_name, (const void *)cipher_block, (const void *)cipher_create_key);
+static const struct face_iid cipher_provider_iids[] = {{&iid_cipher_provider, 0}, {NULL, 0}};
+static const struct kind cipher_provider_kind = {"SymmetricKeyAlgorithmProvider",
+	L"Windows.Security.Cryptography.Core.SymmetricKeyAlgorithmProvider", cipher_provider_iids, destroy_cipher_provider};
+
+static HRESULT WINAPI open_cipher(void *iface, HSTRING name, void **out)
+{
+	static const void *const *const tables[] = {cipher_provider_table.slots};
+	const WCHAR *text = WindowsGetStringRawBuffer(name, NULL);
+	const struct cipher *algorithm = NULL;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	for (size_t at = 0; at < ARRAYSIZE(ciphers) && !algorithm; ++at)
+		if (!lstrcmpiW(text, ciphers[at].name))
+			algorithm = &ciphers[at];
+	if (!algorithm)
+		return NTE_NOT_SUPPORTED;
+	struct cipher_provider *self = make(sizeof *self, &cipher_provider_kind, tables, 1);
+	if (!self)
+		return E_OUTOFMEMORY;
+	self->algorithm = algorithm;
+	HRESULT result = from_status(BCryptOpenAlgorithmProvider(&self->handle, algorithm->cipher, NULL, 0));
+	if (FAILED(result))
+		self->handle = NULL;
+	else
+		result = from_status(BCryptSetProperty(self->handle, BCRYPT_CHAINING_MODE, (UCHAR *)algorithm->mode,
+			(ULONG)((lstrlenW(algorithm->mode) + 1) * sizeof(WCHAR)), 0));
+	if (FAILED(result)) {
+		release(face_of(&self->base, 0));
+		return result;
+	}
+	*out = face_of(&self->base, 0);
+	return S_OK;
+}
+
+TABLE(cipher_factory_table, 0, FACTORY);
+TABLE(cipher_statics_table, 1, INSPECTABLE, (const void *)open_cipher);
+static const struct face_iid cipher_class_iids[] = {{&iid_factory, 0}, {&iid_cipher_provider_statics, 1}, {NULL, 0}};
+static const struct kind cipher_class_kind = {"SymmetricKeyAlgorithmProvider", L"Windows.Security.Cryptography.Core.SymmetricKeyAlgorithmProvider",
+	cipher_class_iids, NULL};
+struct object cipher_provider_class = {{cipher_factory_table.slots, cipher_statics_table.slots}, &cipher_class_kind, 1};
+
+#define CIPHER_NAME(function, text) static HRESULT WINAPI function(void *iface, HSTRING *out) { return answer_name(text, out); }
+CIPHER_NAME(name_des_cbc, L"DES_CBC")
+CIPHER_NAME(name_des_ecb, L"DES_ECB")
+CIPHER_NAME(name_3des_cbc, L"3DES_CBC")
+CIPHER_NAME(name_3des_ecb, L"3DES_ECB")
+CIPHER_NAME(name_rc2_cbc, L"RC2_CBC")
+CIPHER_NAME(name_rc2_ecb, L"RC2_ECB")
+CIPHER_NAME(name_aes_cbc, L"AES_CBC")
+CIPHER_NAME(name_aes_ecb, L"AES_ECB")
+CIPHER_NAME(name_aes_gcm, L"AES_GCM")
+CIPHER_NAME(name_aes_ccm, L"AES_CCM")
+CIPHER_NAME(name_aes_cbc_pkcs7, L"AES_CBC_PKCS7")
+CIPHER_NAME(name_aes_ecb_pkcs7, L"AES_ECB_PKCS7")
+CIPHER_NAME(name_des_cbc_pkcs7, L"DES_CBC_PKCS7")
+CIPHER_NAME(name_des_ecb_pkcs7, L"DES_ECB_PKCS7")
+CIPHER_NAME(name_3des_cbc_pkcs7, L"3DES_CBC_PKCS7")
+CIPHER_NAME(name_3des_ecb_pkcs7, L"3DES_ECB_PKCS7")
+CIPHER_NAME(name_rc2_cbc_pkcs7, L"RC2_CBC_PKCS7")
+CIPHER_NAME(name_rc2_ecb_pkcs7, L"RC2_ECB_PKCS7")
+CIPHER_NAME(name_rc4, L"RC4")
+
+TABLE(cipher_names_factory_table, 0, FACTORY);
+TABLE(cipher_names_table, 1, INSPECTABLE, (const void *)name_des_cbc, (const void *)name_des_ecb, (const void *)name_3des_cbc,
+	(const void *)name_3des_ecb, (const void *)name_rc2_cbc, (const void *)name_rc2_ecb, (const void *)name_aes_cbc, (const void *)name_aes_ecb,
+	(const void *)name_aes_gcm, (const void *)name_aes_ccm, (const void *)name_aes_cbc_pkcs7, (const void *)name_aes_ecb_pkcs7,
+	(const void *)name_des_cbc_pkcs7, (const void *)name_des_ecb_pkcs7, (const void *)name_3des_cbc_pkcs7, (const void *)name_3des_ecb_pkcs7,
+	(const void *)name_rc2_cbc_pkcs7, (const void *)name_rc2_ecb_pkcs7, (const void *)name_rc4);
+static const struct face_iid cipher_names_iids[] = {{&iid_factory, 0}, {&iid_cipher_names, 1}, {NULL, 0}};
+static const struct kind cipher_names_kind = {"SymmetricAlgorithmNames", L"Windows.Security.Cryptography.Core.SymmetricAlgorithmNames",
+	cipher_names_iids, NULL};
+struct object cipher_names_class = {{cipher_names_factory_table.slots, cipher_names_table.slots}, &cipher_names_kind, 1};
+
 /* ---- CryptographicEngine ---- */
 
 /* The key behind a CryptographicKey of this component, or NULL for any other. */
 static struct key *own_key(void *given)
 {
 	return given && method(given, 0) == (void *)object_query && owner(given)->kind == &key_kind ? key_of(given) : NULL;
+}
+
+/* The key of a MAC algorithm, which signs. */
+static struct key *mac_key(void *given)
+{
+	struct key *key = own_key(given);
+	return key && key->provider ? key : NULL;
 }
 
 static HRESULT sign(struct key *key, void *data, BYTE *value)
@@ -706,7 +881,7 @@ static HRESULT sign(struct key *key, void *data, BYTE *value)
 
 static HRESULT WINAPI engine_sign(void *iface, void *given, void *data, void **out)
 {
-	struct key *key = own_key(given);
+	struct key *key = mac_key(given);
 	BYTE value[64];
 	if (!out)
 		return E_POINTER;
@@ -719,7 +894,7 @@ static HRESULT WINAPI engine_sign(void *iface, void *given, void *data, void **o
 
 static HRESULT WINAPI engine_verify(void *iface, void *given, void *data, void *signature, boolean *out)
 {
-	struct key *key = own_key(given);
+	struct key *key = mac_key(given);
 	BYTE value[64], *expected;
 	UINT32 length;
 	if (!out)
@@ -740,29 +915,160 @@ static HRESULT WINAPI engine_verify(void *iface, void *given, void *data, void *
 	return S_OK;
 }
 
-/* Encryption needs a key of a symmetric or asymmetric algorithm, which no provider here makes. */
-static HRESULT WINAPI engine_encrypt(void *iface, void *key, void *data, void *iv, void **out)
+/* Runs a symmetric key over the data: the IV is copied, so every call starts from the one given, or from zeros. */
+static HRESULT crypt(struct key *key, void *data, void *iv, BOOL encrypt, void **out)
 {
-	answer_null(out);
-	return missing("CryptographicEngine.Encrypt");
+	BYTE *bytes, *start, chain[16] = {0};
+	UINT32 length, start_length;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!key || !key->cipher || !data || key->cipher->algorithm->authenticated)
+		return E_INVALIDARG;
+	HRESULT result = bytes_of(data, &bytes, &length);
+	if (SUCCEEDED(result))
+		result = bytes_of(iv, &start, &start_length);
+	if (FAILED(result))
+		return result;
+	const UINT32 block = key->cipher->algorithm->block;
+	const BOOL chained = key->cipher->algorithm->chained;
+	if (chained && iv && start_length != block)
+		return E_INVALIDARG;
+	for (UINT32 at = 0; iv && at < start_length && at < sizeof chain; ++at)
+		chain[at] = start[at];
+	const ULONG flags = key->cipher->algorithm->padded ? BCRYPT_BLOCK_PADDING : 0;
+	ULONG size = 0;
+	NTSTATUS status = encrypt ? BCryptEncrypt(key->handle, bytes, length, NULL, chained ? chain : NULL, chained ? block : 0, NULL, 0, &size, flags)
+		: BCryptDecrypt(key->handle, bytes, length, NULL, chained ? chain : NULL, chained ? block : 0, NULL, 0, &size, flags);
+	if (status < 0)
+		return HRESULT_FROM_NT(status);
+	BYTE *output = ALLOC(size ? size : 1);
+	if (!output)
+		return E_OUTOFMEMORY;
+	status = encrypt ? BCryptEncrypt(key->handle, bytes, length, NULL, chained ? chain : NULL, chained ? block : 0, output, size, &size, flags)
+		: BCryptDecrypt(key->handle, bytes, length, NULL, chained ? chain : NULL, chained ? block : 0, output, size, &size, flags);
+	result = status < 0 ? HRESULT_FROM_NT(status) : new_buffer(output, size, out);
+	SecureZeroMemory(output, size);
+	FREE(output);
+	return result;
 }
 
-static HRESULT WINAPI engine_decrypt(void *iface, void *key, void *data, void *iv, void **out)
+static HRESULT WINAPI engine_encrypt(void *iface, void *key, void *data, void *iv, void **out) { return crypt(own_key(key), data, iv, TRUE, out); }
+static HRESULT WINAPI engine_decrypt(void *iface, void *key, void *data, void *iv, void **out) { return crypt(own_key(key), data, iv, FALSE, out); }
+
+/* EncryptedAndAuthenticatedData: the encrypted bytes and their tag. */
+struct sealed {
+	struct object base;
+	IUnknown *data, *tag;
+};
+
+static void destroy_sealed(struct object *base)
 {
-	answer_null(out);
-	return missing("CryptographicEngine.Decrypt");
+	struct sealed *self = (struct sealed *)base;
+	release(self->data);
+	release(self->tag);
+}
+
+static HRESULT WINAPI sealed_data(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	reference(*out = ((struct sealed *)owner(iface))->data);
+	return S_OK;
+}
+
+static HRESULT WINAPI sealed_tag(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	reference(*out = ((struct sealed *)owner(iface))->tag);
+	return S_OK;
+}
+
+TABLE(sealed_table, 0, INSPECTABLE, (const void *)sealed_data, (const void *)sealed_tag);
+static const struct face_iid sealed_iids[] = {{&iid_sealed, 0}, {NULL, 0}};
+static const struct kind sealed_kind = {"EncryptedAndAuthenticatedData", L"Windows.Security.Cryptography.Core.EncryptedAndAuthenticatedData",
+	sealed_iids, destroy_sealed};
+
+/* AES-GCM over the data with its nonce and the extra data it authenticates: a sixteen-byte tag is made, or checked. */
+static HRESULT seal(struct key *key, void *data, void *nonce, void *tag, void *extra, BOOL encrypt, BYTE **output, ULONG *size, BYTE *made_tag)
+{
+	BYTE *bytes, *nonce_bytes, *tag_bytes, *extra_bytes;
+	UINT32 length, nonce_length, tag_length, extra_length;
+	*output = NULL;
+	*size = 0;
+	if (!key || !key->cipher || !key->cipher->algorithm->authenticated || !data || !nonce || (!encrypt && !tag))
+		return E_INVALIDARG;
+	HRESULT result = bytes_of(data, &bytes, &length);
+	if (SUCCEEDED(result))
+		result = bytes_of(nonce, &nonce_bytes, &nonce_length);
+	if (SUCCEEDED(result))
+		result = bytes_of(tag, &tag_bytes, &tag_length);
+	if (SUCCEEDED(result))
+		result = bytes_of(extra, &extra_bytes, &extra_length);
+	if (FAILED(result))
+		return result;
+	if (!encrypt && tag_length != 16)
+		return E_INVALIDARG;
+	BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info;
+	BCRYPT_INIT_AUTH_MODE_INFO(info);
+	info.pbNonce = nonce_bytes;
+	info.cbNonce = nonce_length;
+	info.pbAuthData = extra_length ? extra_bytes : NULL;
+	info.cbAuthData = extra_length;
+	info.pbTag = encrypt ? made_tag : tag_bytes;
+	info.cbTag = 16;
+	if (!(*output = ALLOC(length ? length : 1)))
+		return E_OUTOFMEMORY;
+	const NTSTATUS status = encrypt ? BCryptEncrypt(key->handle, bytes, length, &info, NULL, 0, *output, length, size, 0)
+		: BCryptDecrypt(key->handle, bytes, length, &info, NULL, 0, *output, length, size, 0);
+	if (status < 0) {
+		FREE(*output);
+		*output = NULL;
+		return HRESULT_FROM_NT(status);
+	}
+	return S_OK;
 }
 
 static HRESULT WINAPI engine_encrypt_authenticated(void *iface, void *key, void *data, void *nonce, void *extra, void **out)
 {
-	answer_null(out);
-	return missing("CryptographicEngine.EncryptAndAuthenticate");
+	static const void *const *const tables[] = {sealed_table.slots};
+	BYTE *output, tag[16];
+	ULONG size;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	HRESULT result = seal(own_key(key), data, nonce, NULL, extra, TRUE, &output, &size, tag);
+	if (FAILED(result))
+		return result;
+	struct sealed *self = make(sizeof *self, &sealed_kind, tables, 1);
+	result = self ? new_buffer(output, size, (void **)&self->data) : E_OUTOFMEMORY;
+	if (SUCCEEDED(result))
+		result = new_buffer(tag, sizeof tag, (void **)&self->tag);
+	FREE(output);
+	if (FAILED(result)) {
+		if (self)
+			release(face_of(&self->base, 0));
+		return result;
+	}
+	*out = face_of(&self->base, 0);
+	return S_OK;
 }
 
 static HRESULT WINAPI engine_decrypt_authenticated(void *iface, void *key, void *data, void *nonce, void *tag, void *extra, void **out)
 {
-	answer_null(out);
-	return missing("CryptographicEngine.DecryptAndAuthenticate");
+	BYTE *output;
+	ULONG size;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	HRESULT result = seal(own_key(key), data, nonce, tag, extra, FALSE, &output, &size, NULL);
+	if (FAILED(result))
+		return result;
+	result = new_buffer(output, size, out);
+	SecureZeroMemory(output, size);
+	FREE(output);
+	return result;
 }
 
 static HRESULT WINAPI engine_derive(void *iface, void *key, void *parameters, UINT32 length, void **out)

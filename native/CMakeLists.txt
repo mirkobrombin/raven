@@ -6100,7 +6100,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(data_transfer_fixture${width} ALL DEPENDS ${data_transfer_client} twinapi_component)
                     add_test(NAME native_data_transfer_x${width} COMMAND raven --run-process --execution=native ${data_transfer_client})
                     set_tests_properties(native_data_transfer_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
-                    # Windows.Security.Cryptography: buffer conversions, hashes and an HMAC against published test vectors.
+                    # Windows.Security.Cryptography: buffer conversions, hashes, an HMAC and AES against published test vectors.
                     set(crypto_client ${CMAKE_CURRENT_BINARY_DIR}/crypto-client${width}.exe)
                     add_custom_command(OUTPUT ${crypto_client}
                         COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp

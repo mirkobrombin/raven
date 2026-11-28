@@ -1,6 +1,7 @@
 // Windows.Security.Cryptography as an app uses it: CryptographicBuffer's conversions to and from hexadecimal, Base64 and text, its
 // random bytes and comparisons, hashes of known inputs in one call and in pieces, and an HMAC signed and verified with the published
-// test vectors (FIPS 180-2 for SHA-256 of "abc", RFC 4231 case 2 for HMAC-SHA256). The exit code names the first check that failed.
+// test vectors (FIPS 180-2 for SHA-256 of "abc", RFC 4231 case 2 for HMAC-SHA256), and AES in ECB, CBC with PKCS #7 and GCM
+// (FIPS 197 appendix C.1, and test case 2 of the GCM specification). The exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <roapi.h>
@@ -27,6 +28,8 @@ static const GUID hash_names = {0x6b5e0516, 0xde96, 0x4f0a, {0x8d, 0x57, 0xdc, 0
 static const GUID mac_statics = {0xc9bdc147, 0xcc77, 0x4df0, {0x9e, 0x4e, 0xb9, 0x21, 0xe0, 0x80, 0x64, 0x4c}};
 static const GUID mac_names = {0x41412678, 0xfb1e, 0x43a4, {0x89, 0x5e, 0xa9, 0x02, 0x6e, 0x43, 0x90, 0xa3}};
 static const GUID mac_provider2 = {0x6da32a15, 0xd931, 0x42ed, {0x8e, 0x7e, 0xc3, 0x01, 0xca, 0xee, 0x11, 0x9c}};
+static const GUID cipher_statics = {0x8d3b2326, 0x1f37, 0x491f, {0xb6, 0x0e, 0xf5, 0x43, 0x1b, 0x26, 0xb4, 0x83}};
+static const GUID cipher_names = {0x6870727b, 0xc996, 0x4eae, {0x84, 0xd7, 0x79, 0xb2, 0xae, 0xb7, 0x3b, 0x9c}};
 static const GUID engine_statics = {0x9fea0639, 0x6ff7, 0x4c85, {0xa0, 0x95, 0x95, 0xeb, 0x31, 0x71, 0x5e, 0xb9}};
 
 struct reference {
@@ -235,6 +238,97 @@ static int check_mac(void)
 	return 0;
 }
 
+static object *from_hex(const WCHAR *value)
+{
+	object *made = NULL;
+	HSTRING string = text(value);
+	CALL(buffers, 11, string_object_method)(buffers, string, &made);
+	WindowsDeleteString(string);
+	return made;
+}
+
+typedef HRESULT (WINAPI *crypt_method)(object *, object *, object *, object *, object **);
+
+static int check_ciphers(void)
+{
+	object *names = factory(L"Windows.Security.Cryptography.Core.SymmetricAlgorithmNames", &cipher_names);
+	object *providers = factory(L"Windows.Security.Cryptography.Core.SymmetricKeyAlgorithmProvider", &cipher_statics), *provider = NULL,
+		*key = NULL, *sealed = NULL, *out = NULL, *back = NULL;
+	object *engine = factory(L"Windows.Security.Cryptography.Core.CryptographicEngine", &engine_statics);
+	HSTRING name = NULL;
+	if (!names || !providers || !engine) return 70;
+	/* AES-128 in ECB over one block. */
+	if (CALL(names, 13, string_method)(names, &name) != S_OK) return 71;
+	if (CALL(providers, 6, string_object_method)(providers, name, &provider) != S_OK || !provider) return 72;
+	WindowsDeleteString(name);
+	UINT32 block = 0, size = 0;
+	object *material = from_hex(L"000102030405060708090a0b0c0d0e0f"), *plain = from_hex(L"00112233445566778899aabbccddeeff");
+	if (CALL(provider, 7, number_method)(provider, &block) != S_OK || block != 16 ||
+		CALL(provider, 8, object_object_method)(provider, material, &key) != S_OK || !key ||
+		CALL(key, 6, number_method)(key, &size) != S_OK || size != 128) return 73;
+	if (CALL(engine, 6, crypt_method)(engine, key, plain, NULL, &out) != S_OK || !hex_is(out, L"69c4e0d86a7b0430d8cdb78070b4c55a")) return 74;
+	if (CALL(engine, 7, crypt_method)(engine, key, out, NULL, &back) != S_OK || !hex_is(back, L"00112233445566778899aabbccddeeff")) return 75;
+	release(out);
+	release(back);
+	release(key);
+	release(provider);
+	/* AES in CBC with PKCS #7: five bytes come back as one padded block and decrypt to the same five. */
+	CALL(names, 16, string_method)(names, &name);
+	if (CALL(providers, 6, string_object_method)(providers, name, &provider) != S_OK || !provider) return 76;
+	WindowsDeleteString(name);
+	object *iv = from_hex(L"0f0e0d0c0b0a09080706050403020100"), *hello = utf8(L"hello");
+	if (CALL(provider, 8, object_object_method)(provider, material, &key) != S_OK) return 77;
+	UINT32 length = 0;
+	BYTE *array = NULL;
+	if (CALL(engine, 6, crypt_method)(engine, key, hello, iv, &out) != S_OK ||
+		CALL(buffers, 10, HRESULT (WINAPI *)(object *, object *, UINT32 *, BYTE **))(buffers, out, &length, &array) != S_OK || length != 16)
+		return 78;
+	CoTaskMemFree(array);
+	if (CALL(engine, 7, crypt_method)(engine, key, out, iv, &back) != S_OK || !hex_is(back, L"68656c6c6f")) return 79;
+	release(out);
+	release(back);
+	release(key);
+	release(provider);
+	/* AES-GCM with a zero key and nonce over a zero block: the ciphertext and tag the specification gives, and a changed tag refused. */
+	CALL(names, 14, string_method)(names, &name);
+	if (CALL(providers, 6, string_object_method)(providers, name, &provider) != S_OK || !provider) return 80;
+	WindowsDeleteString(name);
+	object *zero_key = from_hex(L"00000000000000000000000000000000"), *nonce = from_hex(L"000000000000000000000000");
+	if (CALL(provider, 8, object_object_method)(provider, zero_key, &key) != S_OK) return 81;
+	if (CALL(engine, 8, HRESULT (WINAPI *)(object *, object *, object *, object *, object *, object **))(engine, key, zero_key, nonce, NULL,
+		&sealed) != S_OK || !sealed) return 82;
+	object *data = NULL, *tag = NULL;
+	if (CALL(sealed, 6, object_method)(sealed, &data) != S_OK || !hex_is(data, L"0388dace60b6a392f328c2b971b2fe78") ||
+		CALL(sealed, 7, object_method)(sealed, &tag) != S_OK || !hex_is(tag, L"ab6e47d42cec13bdf53a67b21257bddf")) return 83;
+	typedef HRESULT (WINAPI *open_method)(object *, object *, object *, object *, object *, object *, object **);
+	if (CALL(engine, 9, open_method)(engine, key, data, nonce, tag, NULL, &back) != S_OK || !hex_is(back, L"00000000000000000000000000000000"))
+		return 84;
+	release(back);
+	back = NULL;
+	object *wrong = from_hex(L"ab6e47d42cec13bdf53a67b21257bdde");
+	if (CALL(engine, 9, open_method)(engine, key, data, nonce, wrong, NULL, &back) == S_OK || back) return 85;
+	release(wrong);
+	release(data);
+	release(tag);
+	release(sealed);
+	release(key);
+	release(provider);
+	/* A name that is not offered. */
+	name = text(L"RC4");
+	if (CALL(providers, 6, string_object_method)(providers, name, &provider) == S_OK || provider) return 86;
+	WindowsDeleteString(name);
+	release(zero_key);
+	release(nonce);
+	release(iv);
+	release(hello);
+	release(material);
+	release(plain);
+	release(engine);
+	release(providers);
+	release(names);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	if (FAILED(RoInitialize(RO_INIT_MULTITHREADED))) return 1;
@@ -244,5 +338,7 @@ int raven_entry(void)
 		failed = check_hashes();
 	if (!failed)
 		failed = check_mac();
+	if (!failed)
+		failed = check_ciphers();
 	return failed;
 }
