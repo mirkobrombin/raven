@@ -3,7 +3,7 @@
 // Activated event comes while Run processes events, with the arguments of a launch, and the app activates its window there. Run then
 // checks the window: its handle, bounds and dispatcher, work posted to the dispatcher, keys, characters, the mouse, a resize, and closing.
 // Built with SWAP_CHAIN, it also presents a Direct3D 11 frame through a swap chain made for its core window. Built with MSIX_VIEW, it is the app of a package and also checks
-// its identifier there, its package and the folders of its data; built without, that it has neither. The exit code names the first check that failed.
+// its identifier there, its package, the folders of its data and its settings, which a second run reads back; built without, that it has neither. The exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #ifdef SWAP_CHAIN
@@ -26,6 +26,8 @@ typedef struct {
 } object;
 
 #define METHOD(self, index, type) ((type)((object *)(self))->table[index])
+
+__declspec(dllimport) HRESULT WINAPI RoActivateInstance(void *name, object **instance);
 
 typedef ULONG (WINAPI *release_method)(object *);
 typedef HRESULT (WINAPI *query_method)(object *, const GUID *, void **);
@@ -434,6 +436,158 @@ static BOOL item_text(object *folder, int slot, const WCHAR *expected)
 	return same;
 }
 
+#ifdef MSIX_VIEW
+static const GUID value_statics = {0x629bdbc8, 0xd932, 0x4ff4, {0x96, 0xb9, 0x8d, 0x96, 0xc5, 0xc1, 0xe8, 0x58}};
+static const GUID property_value = {0x4bd682dd, 0x7554, 0x40e9, {0x9a, 0x9b, 0x82, 0x65, 0x4e, 0xde, 0x7e, 0x62}};
+static const GUID string_object_map = {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x3b, 0x95, 0x39, 0x50, 0x6a, 0xca}};
+
+static void *text_of(const WCHAR *text)
+{
+	void *string = NULL;
+	WindowsCreateString(text, lstrlenW(text), &string);
+	return string;
+}
+
+static void drop(object *self)
+{
+	if (self)
+		METHOD(self, 2, release_method)(self);
+}
+
+/* The IMap<String, Object> of a property set or of a container's values. */
+static object *map_of(object *values)
+{
+	object *map = NULL;
+	return values && METHOD(values, 0, query_method)(values, &string_object_map, (void **)&map) == S_OK ? map : NULL;
+}
+
+static HRESULT insert(object *map, const WCHAR *key, object *value)
+{
+	void *name = text_of(key);
+	BYTE replaced = 0;
+	const HRESULT result = METHOD(map, 10, HRESULT (WINAPI *)(object *, void *, object *, BYTE *))(map, name, value, &replaced);
+	WindowsDeleteString(name);
+	return result;
+}
+
+/* The value of a key seen as an IPropertyValue, or NULL. */
+static object *lookup(object *map, const WCHAR *key)
+{
+	void *name = text_of(key);
+	object *value = NULL, *box = NULL;
+	if (METHOD(map, 6, HRESULT (WINAPI *)(object *, void *, object **))(map, name, &value) == S_OK && value)
+		METHOD(value, 0, query_method)(value, &property_value, (void **)&box);
+	WindowsDeleteString(name);
+	drop(value);
+	return box;
+}
+
+static INT32 int_at(object *map, const WCHAR *key)
+{
+	object *box = lookup(map, key);
+	INT32 number = -1;
+	if (!box || METHOD(box, 11, number_method)(box, &number) != S_OK)
+		number = -1;
+	drop(box);
+	return number;
+}
+
+static object *container_named(object *parent, const WCHAR *name, INT32 disposition, HRESULT *result)
+{
+	void *text = text_of(name);
+	object *child = NULL;
+	*result = METHOD(parent, 10, HRESULT (WINAPI *)(object *, void *, INT32, object **))(parent, text, disposition, &child);
+	WindowsDeleteString(text);
+	return child;
+}
+
+/* LocalSettings and RoamingSettings. The first run stores values of several kinds, a composite and a container; the run after it, which
+ * finds the file the first one left in LocalState, reads them all back. */
+static int check_settings(object *data, BOOL again)
+{
+	object *values_statics = statics(L"Windows.Foundation.PropertyValue", &value_statics);
+	object *local = NULL, *roaming = NULL, *values = NULL, *map = NULL, *roaming_map = NULL, *roaming_values = NULL;
+	INT32 locality = -1;
+	if (!values_statics || METHOD(data, 10, object_method)(data, &local) != S_OK || METHOD(data, 11, object_method)(data, &roaming) != S_OK ||
+		METHOD(local, 7, number_method)(local, &locality) != S_OK || locality != 0 ||
+		METHOD(roaming, 7, number_method)(roaming, &locality) != S_OK || locality != 1 ||
+		METHOD(local, 8, object_method)(local, &values) != S_OK || !(map = map_of(values)) ||
+		METHOD(roaming, 8, object_method)(roaming, &roaming_values) != S_OK || !(roaming_map = map_of(roaming_values)))
+		return 40;
+	HRESULT result;
+	if (!again) {
+		object *number = NULL, *text = NULL, *list = NULL, *composite = NULL, *composite_map = NULL, *real = NULL, *small = NULL;
+		void *hello = text_of(L"hello"), *items[2] = {text_of(L"a"), text_of(L"b")};
+		void *composite_name = text_of(L"Windows.Storage.ApplicationDataCompositeValue");
+		if (METHOD(values_statics, 10, HRESULT (WINAPI *)(object *, INT32, object **))(values_statics, 42, &number) != S_OK ||
+			METHOD(values_statics, 18, HRESULT (WINAPI *)(object *, void *, object **))(values_statics, hello, &text) != S_OK ||
+			METHOD(values_statics, 37, HRESULT (WINAPI *)(object *, UINT32, void **, object **))(values_statics, 2, items, &list) != S_OK ||
+			METHOD(values_statics, 15, HRESULT (WINAPI *)(object *, double, object **))(values_statics, 1.5, &real) != S_OK ||
+			METHOD(values_statics, 7, HRESULT (WINAPI *)(object *, BYTE, object **))(values_statics, 7, &small) != S_OK ||
+			RoActivateInstance(composite_name, &composite) != S_OK || !(composite_map = map_of(composite)))
+			return 41;
+		if (insert(map, L"count", number) != S_OK || insert(map, L"name", text) != S_OK || insert(map, L"list", list) != S_OK ||
+			insert(composite_map, L"x", real) != S_OK || insert(map, L"point", composite) != S_OK ||
+			insert(roaming_map, L"r", number) != S_OK)
+			return 42;
+		/* Settings keep boxes and composites only, and a null removes its key. */
+		if (insert(map, L"self", local) != (HRESULT)0x8007065e || insert(composite_map, L"nested", composite) != (HRESULT)0x8007065e ||
+			insert(map, L"gone", number) != S_OK || insert(map, L"gone", NULL) != S_OK || int_at(map, L"gone") != -1)
+			return 43;
+		object *child = container_named(local, L"Child", 1, &result);
+		if (result != (HRESULT)0x80070490 || child)
+			return 44;
+		child = container_named(local, L"Child", 0, &result);
+		object *child_values = NULL, *child_map = NULL, *doomed = container_named(local, L"Doomed", 0, &result);
+		if (!child || !doomed || METHOD(child, 8, object_method)(child, &child_values) != S_OK || !(child_map = map_of(child_values)) ||
+			insert(child_map, L"deep", small) != S_OK)
+			return 45;
+		void *doomed_name = text_of(L"doomed");
+		if (METHOD(local, 11, HRESULT (WINAPI *)(object *, void *))(local, doomed_name) != S_OK)
+			return 46;
+		WindowsDeleteString(doomed_name);
+		drop(child_map);
+		drop(child_values);
+		drop(child);
+		drop(doomed);
+		drop(composite_map);
+		drop(composite);
+		drop(real);
+		drop(small);
+		drop(number);
+		drop(text);
+		drop(list);
+		WindowsDeleteString(hello);
+		WindowsDeleteString(items[0]);
+		WindowsDeleteString(items[1]);
+		WindowsDeleteString(composite_name);
+	}
+	/* What was stored reads back the same, in this run and in the next. */
+	object *name = lookup(map, L"name"), *list = lookup(map, L"list"), *point = NULL, *point_map = NULL, *x = NULL;
+	void *text = NULL, **items = NULL;
+	UINT32 count = 0;
+	double real = 0;
+	if (int_at(map, L"count") != 42 || int_at(roaming_map, L"r") != 42 || !name || !list ||
+		METHOD(name, 19, HRESULT (WINAPI *)(object *, void **))(name, &text) != S_OK || lstrcmpW(WindowsGetStringRawBuffer(text, NULL), L"hello") ||
+		METHOD(list, 37, HRESULT (WINAPI *)(object *, UINT32 *, void ***))(list, &count, &items) != S_OK || count != 2 ||
+		lstrcmpW(WindowsGetStringRawBuffer(items[0], NULL), L"a") || lstrcmpW(WindowsGetStringRawBuffer(items[1], NULL), L"b"))
+		return again ? 50 : 47;
+	void *point_key = text_of(L"point");
+	if (METHOD(map, 6, HRESULT (WINAPI *)(object *, void *, object **))(map, point_key, &point) != S_OK || !(point_map = map_of(point)) ||
+		!(x = lookup(point_map, L"x")) || METHOD(x, 16, HRESULT (WINAPI *)(object *, double *))(x, &real) != S_OK || real != 1.5)
+		return again ? 51 : 48;
+	object *child = container_named(local, L"child", 1, &result), *child_values = NULL, *child_map = NULL, *deep = NULL, *children = NULL;
+	BYTE small = 0;
+	UINT32 size = 0;
+	if (!child || METHOD(child, 8, object_method)(child, &child_values) != S_OK || !(child_map = map_of(child_values)) ||
+		!(deep = lookup(child_map, L"deep")) || METHOD(deep, 8, HRESULT (WINAPI *)(object *, BYTE *))(deep, &small) != S_OK || small != 7 ||
+		METHOD(local, 9, object_method)(local, &children) != S_OK || METHOD(children, 7, HRESULT (WINAPI *)(object *, UINT32 *))(children, &size) != S_OK ||
+		size != 1)
+		return again ? 52 : 49;
+	return 0;
+}
+#endif
+
 /* The app's package and the folders of its data: a packaged app has both, any other process neither. */
 static int check_package(void)
 {
@@ -466,6 +620,9 @@ static int check_package(void)
 		!item_text(folder, 12, local) || !item_text(folder, 11, L"LocalState"))
 		return 25;
 	lstrcatW(local, L"\\saved.txt");
+	const int settings = check_settings(data, GetFileAttributesW(local) != INVALID_FILE_ATTRIBUTES);
+	if (settings)
+		return settings;
 	HANDLE file = CreateFileW(local, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
 	DWORD written = 0;
 	if (file == INVALID_HANDLE_VALUE || !WriteFile(file, "saved", 5, &written, NULL) || written != 5)

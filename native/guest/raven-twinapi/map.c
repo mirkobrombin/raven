@@ -21,10 +21,11 @@ static const IID iid_observable_property_map = {0x236aac9d, 0xfb12, 0x5c4d, {0xa
 static const IID iid_map_change = {0x60141efb, 0xf2f9, 0x5377, {0x96, 0xfd, 0xf8, 0xc6, 0x0d, 0x95, 0x58, 0xb5}};
 static const IID iid_property_set = {0x8a43ed9f, 0xf4e6, 0x4421, {0xac, 0xf9, 0x1d, 0xab, 0x29, 0x86, 0x82, 0x0c}};
 
-/* A snapshot is IMapView<String, Object> at place 0 and IIterable<IKeyValuePair<String, Object>> at place 1; its iterator hands out one
- * pair object per entry. */
+/* A snapshot is IMapView<String, V> at place 0 and IIterable<IKeyValuePair<String, V>> at place 1; its iterator hands out one pair object
+ * per entry. Which V it holds, and so the interfaces it answers, its map_types say. */
 struct pairs {
 	struct object base;
+	const struct map_types *types;
 	UINT32 count;
 	struct entry entries[];
 };
@@ -103,14 +104,11 @@ static HRESULT WINAPI pair_value(void *iface, IInspectable **out)
 }
 
 TABLE(pair_table, 0, INSPECTABLE, (const void *)pair_key, (const void *)pair_value);
-static const struct face_iid pair_iids[] = {{&iid_property_pair, 0}, {NULL, 0}};
-static const struct kind pair_kind = {"IKeyValuePair<String, Object>", L"Windows.Foundation.Collections.IKeyValuePair`2<String, Object>",
-	pair_iids, destroy_pair};
 
-static HRESULT pair_out(const struct entry *entry, void **out)
+static HRESULT pair_out(const struct map_types *types, const struct entry *entry, void **out)
 {
 	static const void *const *const tables[] = {pair_table.slots};
-	struct pair *self = make(sizeof *self, &pair_kind, tables, 1);
+	struct pair *self = make(sizeof *self, &types->pair, tables, 1);
 	if (!(*out = self ? face_of(&self->base, 0) : NULL))
 		return E_OUTOFMEMORY;
 	return keep(&self->entry, entry->key, entry->value);
@@ -122,7 +120,7 @@ static HRESULT WINAPI pair_current(void *iface, void **out)
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	return self->at < self->pairs->count ? pair_out(&self->pairs->entries[self->at], out) : E_BOUNDS;
+	return self->at < self->pairs->count ? pair_out(self->pairs->types, &self->pairs->entries[self->at], out) : E_BOUNDS;
 }
 
 static HRESULT WINAPI pair_has_current(void *iface, boolean *out)
@@ -145,7 +143,7 @@ static HRESULT WINAPI pair_many(void *iface, UINT32 capacity, void **items, UINT
 	if (!actual || (capacity && !items))
 		return E_POINTER;
 	for (*actual = 0; *actual < capacity && self->at < self->pairs->count; ++*actual, ++self->at) {
-		const HRESULT result = pair_out(&self->pairs->entries[self->at], &items[*actual]);
+		const HRESULT result = pair_out(self->pairs->types, &self->pairs->entries[self->at], &items[*actual]);
 		if (FAILED(result))
 			return result;
 	}
@@ -154,10 +152,6 @@ static HRESULT WINAPI pair_many(void *iface, UINT32 capacity, void **items, UINT
 
 TABLE(pair_iterator_table, 0, INSPECTABLE, (const void *)pair_current, (const void *)pair_has_current, (const void *)pair_next,
 	(const void *)pair_many);
-static const struct face_iid pair_iterator_iids[] = {{&iid_property_iterator, 0}, {NULL, 0}};
-static const struct kind pair_iterator_kind = {"IIterator<IKeyValuePair<String, Object>>",
-	L"Windows.Foundation.Collections.IIterator`1<Windows.Foundation.Collections.IKeyValuePair`2<String, Object>>", pair_iterator_iids,
-	destroy_pair_iterator};
 
 static HRESULT WINAPI pairs_first(void *iface, void **out)
 {
@@ -165,7 +159,7 @@ static HRESULT WINAPI pairs_first(void *iface, void **out)
 	struct pairs *pairs = (struct pairs *)owner(iface);
 	if (!out)
 		return E_POINTER;
-	struct pair_iterator *self = make(sizeof *self, &pair_iterator_kind, tables, 1);
+	struct pair_iterator *self = make(sizeof *self, &pairs->types->iterator, tables, 1);
 	if (!(*out = self ? face_of(&self->base, 0) : NULL))
 		return E_OUTOFMEMORY;
 	self->pairs = pairs;
@@ -204,17 +198,45 @@ static HRESULT WINAPI pairs_split(void *iface, void **first, void **second)
 
 TABLE(pairs_table, 0, INSPECTABLE, (const void *)pairs_lookup, (const void *)pairs_size, (const void *)pairs_has_key, (const void *)pairs_split);
 TABLE(pairs_iterable_table, 1, INSPECTABLE, (const void *)pairs_first);
-static const struct face_iid pairs_iids[] = {{&iid_property_view, 0}, {&iid_property_iterable, 1}, {NULL, 0}};
-static const struct kind pairs_kind = {"IMapView<String, Object>", L"Windows.Foundation.Collections.IMapView`2<String, Object>", pairs_iids,
-	destroy_pairs};
+
+void map_types_init(struct map_types *types)
+{
+	types->view_iids[0] = (struct face_iid){types->view_iid, 0};
+	types->view_iids[1] = (struct face_iid){types->iterable_iid, 1};
+	types->view_iids[2] = (struct face_iid){NULL, 0};
+	types->pair_iids[0] = (struct face_iid){types->pair_iid, 0};
+	types->pair_iids[1] = (struct face_iid){NULL, 0};
+	types->iterator_iids[0] = (struct face_iid){types->iterator_iid, 0};
+	types->iterator_iids[1] = (struct face_iid){NULL, 0};
+	types->view = (struct kind){"IMapView", types->view_name, types->view_iids, destroy_pairs};
+	types->pair = (struct kind){"IKeyValuePair", types->pair_name, types->pair_iids, destroy_pair};
+	types->iterator = (struct kind){"IIterator", types->iterator_name, types->iterator_iids, destroy_pair_iterator};
+}
+
+/* Maps from strings to objects. */
+static struct map_types object_types = {&iid_property_view, &iid_property_iterable, &iid_property_iterator, &iid_property_pair,
+	L"Windows.Foundation.Collections.IMapView`2<String, Object>", L"Windows.Foundation.Collections.IKeyValuePair`2<String, Object>",
+	L"Windows.Foundation.Collections.IIterator`1<Windows.Foundation.Collections.IKeyValuePair`2<String, Object>>"};
+static INIT_ONCE object_types_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK make_object_types(INIT_ONCE *once, void *parameter, void **context)
+{
+	map_types_init(&object_types);
+	return TRUE;
+}
 
 /* A snapshot holding its own copies of the keys and references to the values. */
-static struct pairs *snapshot(const struct entry *entries, UINT32 count)
+static struct pairs *snapshot(const struct map_types *types, const struct entry *entries, UINT32 count)
 {
 	static const void *const *const tables[] = {pairs_table.slots, pairs_iterable_table.slots};
-	struct pairs *self = make(offsetof(struct pairs, entries) + count * sizeof(struct entry), &pairs_kind, tables, 2);
+	if (!types) {
+		InitOnceExecuteOnce(&object_types_once, make_object_types, NULL, NULL);
+		types = &object_types;
+	}
+	struct pairs *self = make(offsetof(struct pairs, entries) + count * sizeof(struct entry), &types->view, tables, 2);
 	if (!self)
 		return NULL;
+	self->types = types;
 	for (; self->count < count; ++self->count)
 		if (FAILED(keep(&self->entries[self->count], entries[self->count].key, entries[self->count].value))) {
 			release(face_of(&self->base, 0));
@@ -223,14 +245,16 @@ static struct pairs *snapshot(const struct entry *entries, UINT32 count)
 	return self;
 }
 
-HRESULT map_view(const struct entry *entries, UINT32 count, void **out)
+HRESULT typed_map_view(const struct map_types *types, const struct entry *entries, UINT32 count, void **out)
 {
 	if (!out)
 		return E_POINTER;
-	struct pairs *self = snapshot(entries, count);
+	struct pairs *self = snapshot(types, entries, count);
 	*out = self ? face_of(&self->base, 0) : NULL;
 	return self ? S_OK : E_OUTOFMEMORY;
 }
+
+HRESULT map_view(const struct entry *entries, UINT32 count, void **out) { return typed_map_view(NULL, entries, count, out); }
 
 /* A property set: IObservableMap<String, Object> and IPropertySet at place 0, IMap<String, Object> at place 1,
  * IIterable<IKeyValuePair<String, Object>> at place 2. It calls the program's MapChanged handlers after each change, outside its lock,
@@ -245,6 +269,7 @@ struct property_set {
 	struct handlers handlers;
 	void (*watcher)(void *context);
 	void *context;
+	HRESULT (*accept)(IInspectable *value);
 };
 
 struct change {
@@ -366,11 +391,26 @@ static HRESULT WINAPI set_view(void *iface, void **out)
 	return result;
 }
 
+static HRESULT WINAPI set_remove(void *iface, HSTRING key);
+
 static HRESULT WINAPI set_insert(void *iface, HSTRING key, IInspectable *value, boolean *replaced)
 {
 	struct property_set *self = set_of(iface);
 	if (!replaced)
 		return E_POINTER;
+	*replaced = FALSE;
+	if (self->accept) {
+		/* Settings store no null: setting one removes the key, as on Windows. */
+		if (!value) {
+			boolean present = FALSE;
+			set_has_key(iface, key, &present);
+			*replaced = present;
+			return present ? set_remove(iface, key) : S_OK;
+		}
+		const HRESULT accepted = self->accept(value);
+		if (FAILED(accepted))
+			return accepted;
+	}
 	HRESULT result = S_OK;
 	IInspectable *old = NULL;
 	AcquireSRWLockExclusive(&self->lock);
@@ -444,7 +484,7 @@ static HRESULT WINAPI set_first(void *iface, void **out)
 {
 	struct property_set *self = set_of(iface);
 	AcquireSRWLockShared(&self->lock);
-	struct pairs *pairs = snapshot(self->entries, self->count);
+	struct pairs *pairs = snapshot(NULL, self->entries, self->count);
 	ReleaseSRWLockShared(&self->lock);
 	if (!out) {
 		if (pairs)
@@ -492,6 +532,37 @@ void property_set_watch(struct property_set *self, void (*watcher)(void *context
 }
 
 HRESULT property_set_view(struct property_set *self, void **out) { return set_view(face_of(&self->base, 1), out); }
+
+void property_set_accept(struct property_set *self, HRESULT (*accept)(IInspectable *value)) { self->accept = accept; }
+
+HRESULT property_set_entries(struct property_set *self, struct entry **out, UINT32 *count)
+{
+	HRESULT result = S_OK;
+	*out = NULL;
+	*count = 0;
+	AcquireSRWLockShared(&self->lock);
+	if (self->count && !(*out = ALLOC(self->count * sizeof **out)))
+		result = E_OUTOFMEMORY;
+	for (; SUCCEEDED(result) && *count < self->count; ++*count)
+		result = keep(&(*out)[*count], self->entries[*count].key, self->entries[*count].value);
+	ReleaseSRWLockShared(&self->lock);
+	if (FAILED(result)) {
+		entries_free(*out, *count);
+		*out = NULL;
+		*count = 0;
+	}
+	return result;
+}
+
+void entries_free(struct entry *entries, UINT32 count) { drop_entries(entries, count); }
+
+BOOL is_property_set(void *iface, struct property_set **out)
+{
+	const BOOL found = iface && method(iface, 0) == (void *)object_query && owner(iface)->kind == &set_kind;
+	if (out)
+		*out = found ? (struct property_set *)owner(iface) : NULL;
+	return found;
+}
 
 HRESULT property_set_insert(struct property_set *self, HSTRING key, IInspectable *value)
 {

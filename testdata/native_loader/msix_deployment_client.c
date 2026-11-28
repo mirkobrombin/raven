@@ -193,6 +193,10 @@ int raven_entry(void)
 		return check;
 	/* The package's app of the Windows Runtime runs its view in its core window, with the package's identity. */
 	check = launch(L"shell:AppsFolder\\" FAMILY L"!View", TRUE);
+	if (check)
+		return 100 + check;
+	/* Run again, it finds the settings the first run stored; its codes from 50 say so. */
+	check = launch(L"shell:AppsFolder\\" FAMILY L"!View", TRUE);
 	return check ? 100 + check : check_package_path();
 #else
 	const int check = install(manager, L"appx-good.msix", TRUST_E_NOSIGNATURE);

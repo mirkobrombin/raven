@@ -6053,12 +6053,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll
                         ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
                         ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     DEPENDS ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/object.h ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c VERBATIM)
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c VERBATIM)
                 add_custom_target(twinapi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
                 set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
                 foreach(width 64 32)

@@ -8,6 +8,7 @@
  *   GetCurrentPackageId reports it and its installed folder; a process that runs from no package gets NO_PACKAGE, as on Windows.
  * - Windows.Storage.ApplicationData.Current: the package's LocalState, RoamingState, TempState and LocalCache folders under
  *   %LOCALAPPDATA%\Packages\<family name>, made when first asked for. DataChanged is raised by SignalDataChanged; nothing roams.
+ * - Its LocalSettings and RoamingSettings, which settings.c keeps; nothing roams.
  * - Windows.Storage.StorageFolder for those folders: name, path, attributes, creation time and type. Apps read and write the files
  *   in them through the path; the asynchronous file operations are not served yet and are named in Raven's trace.
  */
@@ -318,12 +319,9 @@ static HRESULT make_part(WCHAR *path, const WCHAR *part)
 }
 
 /* A folder of the package's data, %LOCALAPPDATA%\Packages\<family name>\<leaf>, made with its parents when it is missing. */
-static HRESULT data_folder(const WCHAR *leaf, void **out)
+HRESULT package_data_path(const WCHAR *leaf, WCHAR *path)
 {
-	WCHAR family[PACKAGE_FAMILY_NAME_MAX_LENGTH + 1], path[MAX_PATH];
-	if (!out)
-		return E_POINTER;
-	*out = NULL;
+	WCHAR family[PACKAGE_FAMILY_NAME_MAX_LENGTH + 1];
 	HRESULT result = package_name(GetCurrentPackageFamilyName, family, ARRAYSIZE(family));
 	if (FAILED(result))
 		return result;
@@ -332,7 +330,17 @@ static HRESULT data_folder(const WCHAR *leaf, void **out)
 		return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
 	if (FAILED(result = make_part(path, L"Packages")) || FAILED(result = make_part(path, family)) || FAILED(result = make_part(path, leaf)))
 		return result;
-	return make_folder(path, out);
+	return S_OK;
+}
+
+static HRESULT data_folder(const WCHAR *leaf, void **out)
+{
+	WCHAR path[MAX_PATH];
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	const HRESULT result = package_data_path(leaf, path);
+	return FAILED(result) ? result : make_folder(path, out);
 }
 
 static HRESULT WINAPI data_version(void *iface, UINT32 *out)
@@ -361,17 +369,8 @@ static HRESULT WINAPI data_clear(void *iface, INT32 locality, void **out)
 	return missing("ApplicationData.ClearAsync");
 }
 
-static HRESULT WINAPI data_local_settings(void *iface, void **out)
-{
-	answer_null(out);
-	return missing("ApplicationData.LocalSettings");
-}
-
-static HRESULT WINAPI data_roaming_settings(void *iface, void **out)
-{
-	answer_null(out);
-	return missing("ApplicationData.RoamingSettings");
-}
+static HRESULT WINAPI data_local_settings(void *iface, void **out) { return settings_root(0, out); }
+static HRESULT WINAPI data_roaming_settings(void *iface, void **out) { return settings_root(1, out); }
 
 static HRESULT WINAPI data_local(void *iface, void **out) { return data_folder(L"LocalState", out); }
 static HRESULT WINAPI data_roaming(void *iface, void **out) { return data_folder(L"RoamingState", out); }

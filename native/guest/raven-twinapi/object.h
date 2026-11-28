@@ -116,8 +116,17 @@ HRESULT application_exit(void);
 extern struct object core_window_class, core_cursor_class, display_information_class;
 /* The package of the app and its data, from package.c. */
 extern struct object package_class, application_data_class;
-/* Windows.Foundation.PropertyValue, from value.c. */
+/* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */
+HRESULT package_data_path(const WCHAR *leaf, WCHAR *path);
+/* The root ApplicationDataContainer of a locality (0 local, 1 roaming), from settings.c, and the composite value class. */
+HRESULT settings_root(INT32 locality, void **out);
+extern struct object composite_value_class;
+/* Windows.Foundation.PropertyValue, from value.c, and boxes made as its Create methods make them: a scalar of a PropertyType from 1 to
+ * 19 but 13 (Inspectable), or an array of one, which the box copies. property_type_size is the size of one element of a type. */
 extern struct object property_value_class;
+HRESULT property_value_make(INT32 type, const void *value, void **out);
+HRESULT property_value_make_array(INT32 type, UINT32 count, const void *values, void **out);
+size_t property_type_size(INT32 type);
 
 /* Maps from strings to objects, from map.c. An entry holds its own copy of the key and a reference to the value. */
 struct entry {
@@ -127,6 +136,15 @@ struct entry {
 
 /* An IMapView<String, Object> holding its own copies of these entries. */
 HRESULT map_view(const struct entry *entries, UINT32 count, void **out);
+/* The interfaces of a map from strings to another type: the identifiers and names are given, map_types_init makes the kinds once. */
+struct map_types {
+	const IID *view_iid, *iterable_iid, *iterator_iid, *pair_iid;
+	const WCHAR *view_name, *pair_name, *iterator_name;
+	struct face_iid view_iids[3], pair_iids[2], iterator_iids[2];
+	struct kind view, pair, iterator;
+};
+void map_types_init(struct map_types *types);
+HRESULT typed_map_view(const struct map_types *types, const struct entry *entries, UINT32 count, void **out);
 /* A new, empty PropertySet with one reference, answered through property_set_face. A watcher, when set, is called after each change,
  * outside the set's lock; the set's own changes through these calls are changes too. */
 struct property_set;
@@ -135,6 +153,13 @@ void *property_set_face(struct property_set *self);
 void property_set_watch(struct property_set *self, void (*watcher)(void *context), void *context);
 HRESULT property_set_view(struct property_set *self, void **out);
 HRESULT property_set_insert(struct property_set *self, HSTRING key, IInspectable *value);
+/* Values the set refuses with accept's failure; with accept set, storing a null removes the key. */
+void property_set_accept(struct property_set *self, HRESULT (*accept)(IInspectable *value));
+/* A copy of the entries, which entries_free releases. */
+HRESULT property_set_entries(struct property_set *self, struct entry **out, UINT32 *count);
+void entries_free(struct entry *entries, UINT32 count);
+/* Whether an interface is one of this component's property sets, and which. */
+BOOL is_property_set(void *iface, struct property_set **out);
 extern struct object property_set_class;
 
 #endif

@@ -386,6 +386,7 @@
         "native/guest/raven-taskschd/taskschd_tables.h",
         "native/guest/raven-twinapi/core_window.c",
         "native/guest/raven-twinapi/map.c",
+        "native/guest/raven-twinapi/settings.c",
         "native/guest/raven-twinapi/object.c",
         "native/guest/raven-twinapi/object.h",
         "native/guest/raven-twinapi/package.c",

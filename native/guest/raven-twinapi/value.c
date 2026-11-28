@@ -523,3 +523,19 @@ TABLE(value_statics_table, 1, INSPECTABLE, (const void *)create_empty, (const vo
 static const struct face_iid value_factory_iids[] = {{&iid_factory, 0}, {&iid_property_value_statics, 1}, {NULL, 0}};
 static const struct kind value_factory_kind = {"PropertyValue", L"Windows.Foundation.PropertyValue", value_factory_iids, NULL};
 struct object property_value_class = {{value_factory_table.slots, value_statics_table.slots}, &value_factory_kind, 1};
+
+HRESULT property_value_make(INT32 type, const void *value, void **out)
+{
+	if (type < type_uint8 || type > SCALARS || type == type_inspectable)
+		return E_INVALIDARG;
+	return box(type, value, out);
+}
+
+HRESULT property_value_make_array(INT32 type, UINT32 count, const void *values, void **out)
+{
+	if (type < type_uint8 || type > SCALARS)
+		return E_INVALIDARG;
+	return box_array(type, count, values, out);
+}
+
+size_t property_type_size(INT32 type) { return type >= type_uint8 && type <= SCALARS ? types[type].size : 0; }
