@@ -197,6 +197,46 @@ static int queries(void)
 		return 42;
 	SysFreeString(instance);
 	IWbemClassObject_Release(object);
+
+	// What a launcher's system survey asks for: the processor's virtualization, the firmware, the board, the display adapter and the disk.
+	object = first(services, L"SELECT Name, NumberOfCores, MaxClockSpeed, VirtualizationFirmwareEnabled, Manufacturer FROM Win32_Processor", &total);
+	if (!object || total != 1 || IWbemClassObject_Get(object, L"VirtualizationFirmwareEnabled", 0, &value, &type, NULL) ||
+		V_VT(&value) != VT_BOOL || type != CIM_BOOLEAN)
+		return 50;
+	IWbemClassObject_Release(object);
+	object = first(services, L"SELECT Manufacturer, SMBIOSBIOSVersion, ReleaseDate, SerialNumber FROM Win32_BIOS", &total);
+	if (!object || total != 1 || IWbemClassObject_Get(object, L"Name", 0, &value, &type, NULL) || V_VT(&value) != VT_BSTR || !*V_BSTR(&value))
+		return 51;
+	VariantClear(&value);
+	if (IWbemClassObject_Get(object, L"PrimaryBIOS", 0, &value, &type, NULL) || V_VT(&value) != VT_BOOL || V_BOOL(&value) != VARIANT_TRUE)
+		return 52;
+	IWbemClassObject_Release(object);
+	object = first(services, L"SELECT Product, Version, SerialNumber, Manufacturer, Tag FROM Win32_BaseBoard", &total);
+	if (!object || total != 1 || IWbemClassObject_Get(object, L"Tag", 0, &value, &type, NULL) || V_VT(&value) != VT_BSTR ||
+		lstrcmpW(V_BSTR(&value), L"Base Board"))
+		return 53;
+	VariantClear(&value);
+	IWbemClassObject_Release(object);
+	object = first(services, L"SELECT Name, InstalledDisplayDrivers, DriverVersion, PNPDeviceID FROM Win32_VideoController", &total);
+	DISPLAY_DEVICEW adapter = {sizeof(adapter)};
+	if (!object || total < 1 || !EnumDisplayDevicesW(NULL, 0, &adapter, 0))
+		return 54;
+	if (IWbemClassObject_Get(object, L"Name", 0, &value, &type, NULL) || V_VT(&value) != VT_BSTR || lstrcmpW(V_BSTR(&value), adapter.DeviceString))
+		return 55;
+	VariantClear(&value);
+	if (IWbemClassObject_Get(object, L"PNPDeviceID", 0, &value, &type, NULL) || V_VT(&value) != VT_BSTR || lstrcmpW(V_BSTR(&value), adapter.DeviceID))
+		return 56;
+	VariantClear(&value);
+	IWbemClassObject_Release(object);
+	object = first(services, L"SELECT SerialNumber, Size, DeviceID FROM Win32_DiskDrive", &total);
+	if (!object || total != 1 || IWbemClassObject_Get(object, L"DeviceID", 0, &value, &type, NULL) || V_VT(&value) != VT_BSTR ||
+		lstrcmpW(V_BSTR(&value), L"\\\\.\\PHYSICALDRIVE0"))
+		return 57;
+	VariantClear(&value);
+	if (IWbemClassObject_Get(object, L"Size", 0, &value, &type, NULL) || V_VT(&value) != VT_BSTR || type != CIM_UINT64 || V_BSTR(&value)[0] == '0')
+		return 58;
+	VariantClear(&value);
+	IWbemClassObject_Release(object);
 	IWbemServices_Release(services);
 	IWbemLocator_Release(locator);
 	return 0;

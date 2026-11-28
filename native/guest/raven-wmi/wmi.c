@@ -7,8 +7,9 @@
  *
  * Windows serves the classes from a service of its own, with a repository of their schemas and providers for each; here the locator
  * hands out the root\cimv2 namespace in the program that asks, and its classes are filled from the system calls when a query runs:
- * Win32_OperatingSystem, Win32_Processor, Win32_ComputerSystem and Win32_Process. Queries are WQL's SELECT, with a WHERE clause of
- * comparisons joined by AND, OR and NOT. Values follow the conventions of the automation types: unsigned 16 and 32 bit integers travel as
+ * Win32_OperatingSystem, Win32_Processor, Win32_ComputerSystem, Win32_Process, Win32_BIOS and Win32_BaseBoard (from the SMBIOS tables),
+ * Win32_VideoController (one for each display adapter) and Win32_DiskDrive (the disk of the system drive). Queries are WQL's SELECT, with
+ * a WHERE clause of comparisons joined by AND, OR and NOT. Values follow the conventions of the automation types: unsigned 16 and 32 bit integers travel as
  * VT_I4, 64 bit integers as decimal strings, dates as DMTF text. Methods, events, writes back to the namespace and other namespaces are
  * not provided. */
 #define CINTERFACE
@@ -1025,7 +1026,8 @@ static const class_property processor_properties[] = {
 	{L"MaxClockSpeed", CIM_UINT32}, {L"Name", CIM_STRING}, {L"NumberOfCores", CIM_UINT32}, {L"NumberOfEnabledCore", CIM_UINT32},
 	{L"NumberOfLogicalProcessors", CIM_UINT32}, {L"ProcessorId", CIM_STRING}, {L"ProcessorType", CIM_UINT16}, {L"Revision", CIM_UINT16},
 	{L"Role", CIM_STRING}, {L"SocketDesignation", CIM_STRING}, {L"Status", CIM_STRING}, {L"SystemCreationClassName", CIM_STRING},
-	{L"SystemName", CIM_STRING}, {L"ThreadCount", CIM_UINT32}, {L"Version", CIM_STRING},
+	{L"SecondLevelAddressTranslationExtensions", CIM_BOOLEAN}, {L"SystemName", CIM_STRING}, {L"ThreadCount", CIM_UINT32},
+	{L"Version", CIM_STRING}, {L"VirtualizationFirmwareEnabled", CIM_BOOLEAN}, {L"VMMonitorModeExtensions", CIM_BOOLEAN},
 };
 
 static const class_property computer_system_properties[] = {
@@ -1044,16 +1046,52 @@ static const class_property process_properties[] = {
 	{L"VirtualSize", CIM_UINT64}, {L"WindowsVersion", CIM_STRING}, {L"WorkingSetSize", CIM_UINT64},
 };
 
+static const class_property bios_properties[] = {
+	{L"Caption", CIM_STRING}, {L"Description", CIM_STRING}, {L"Manufacturer", CIM_STRING},
+	{L"Name", CIM_STRING, TRUE}, {L"PrimaryBIOS", CIM_BOOLEAN}, {L"ReleaseDate", CIM_DATETIME}, {L"SerialNumber", CIM_STRING},
+	{L"SMBIOSBIOSVersion", CIM_STRING}, {L"SMBIOSMajorVersion", CIM_UINT16}, {L"SMBIOSMinorVersion", CIM_UINT16},
+	{L"SMBIOSPresent", CIM_BOOLEAN}, {L"SoftwareElementID", CIM_STRING, TRUE}, {L"SoftwareElementState", CIM_UINT16, TRUE},
+	{L"Status", CIM_STRING}, {L"TargetOperatingSystem", CIM_UINT16, TRUE}, {L"Version", CIM_STRING, TRUE},
+};
+
+static const class_property base_board_properties[] = {
+	{L"Caption", CIM_STRING}, {L"CreationClassName", CIM_STRING}, {L"Description", CIM_STRING}, {L"HostingBoard", CIM_BOOLEAN},
+	{L"Manufacturer", CIM_STRING}, {L"Model", CIM_STRING}, {L"Name", CIM_STRING}, {L"PoweredOn", CIM_BOOLEAN}, {L"Product", CIM_STRING},
+	{L"SerialNumber", CIM_STRING}, {L"Status", CIM_STRING}, {L"Tag", CIM_STRING, TRUE}, {L"Version", CIM_STRING},
+};
+
+static const class_property video_controller_properties[] = {
+	{L"AdapterCompatibility", CIM_STRING}, {L"AdapterRAM", CIM_UINT32}, {L"Availability", CIM_UINT16}, {L"Caption", CIM_STRING},
+	{L"CurrentBitsPerPixel", CIM_UINT32}, {L"CurrentHorizontalResolution", CIM_UINT32}, {L"CurrentRefreshRate", CIM_UINT32},
+	{L"CurrentVerticalResolution", CIM_UINT32}, {L"Description", CIM_STRING}, {L"DeviceID", CIM_STRING, TRUE}, {L"DriverDate", CIM_DATETIME},
+	{L"DriverVersion", CIM_STRING}, {L"InstalledDisplayDrivers", CIM_STRING}, {L"Name", CIM_STRING}, {L"PNPDeviceID", CIM_STRING},
+	{L"Status", CIM_STRING}, {L"VideoModeDescription", CIM_STRING}, {L"VideoProcessor", CIM_STRING},
+};
+
+static const class_property disk_drive_properties[] = {
+	{L"BytesPerSector", CIM_UINT32}, {L"Caption", CIM_STRING}, {L"Description", CIM_STRING}, {L"DeviceID", CIM_STRING, TRUE},
+	{L"Index", CIM_UINT32}, {L"InterfaceType", CIM_STRING}, {L"MediaType", CIM_STRING}, {L"Model", CIM_STRING}, {L"Name", CIM_STRING},
+	{L"Partitions", CIM_UINT32}, {L"SerialNumber", CIM_STRING}, {L"Size", CIM_UINT64}, {L"Status", CIM_STRING},
+};
+
 static void fill_operating_system(const class_schema *schema, instance_list *list);
 static void fill_processor(const class_schema *schema, instance_list *list);
 static void fill_computer_system(const class_schema *schema, instance_list *list);
 static void fill_process(const class_schema *schema, instance_list *list);
+static void fill_bios(const class_schema *schema, instance_list *list);
+static void fill_base_board(const class_schema *schema, instance_list *list);
+static void fill_video_controller(const class_schema *schema, instance_list *list);
+static void fill_disk_drive(const class_schema *schema, instance_list *list);
 
 static const class_schema schemas[] = {
 	{L"Win32_OperatingSystem", operating_system_properties, ARRAYSIZE(operating_system_properties), fill_operating_system},
 	{L"Win32_Processor", processor_properties, ARRAYSIZE(processor_properties), fill_processor},
 	{L"Win32_ComputerSystem", computer_system_properties, ARRAYSIZE(computer_system_properties), fill_computer_system},
 	{L"Win32_Process", process_properties, ARRAYSIZE(process_properties), fill_process},
+	{L"Win32_BIOS", bios_properties, ARRAYSIZE(bios_properties), fill_bios},
+	{L"Win32_BaseBoard", base_board_properties, ARRAYSIZE(base_board_properties), fill_base_board},
+	{L"Win32_VideoController", video_controller_properties, ARRAYSIZE(video_controller_properties), fill_video_controller},
+	{L"Win32_DiskDrive", disk_drive_properties, ARRAYSIZE(disk_drive_properties), fill_disk_drive},
 };
 
 static const class_schema *find_schema(const WCHAR *name, int length)
@@ -1392,6 +1430,10 @@ static void fill_processor(const class_schema *schema, instance_list *list)
 	computer_name(computer, ARRAYSIZE(computer));
 	put_text(object, L"SystemName", computer);
 	put_text(object, L"Version", L"");
+	/* The guest runs on the host's processor without a hypervisor of its own to hand out. */
+	put_number(object, L"VirtualizationFirmwareEnabled", 0);
+	put_number(object, L"VMMonitorModeExtensions", 0);
+	put_number(object, L"SecondLevelAddressTranslationExtensions", 0);
 	add_instance(list, object);
 }
 
@@ -1480,6 +1522,242 @@ static void fill_process(const class_schema *schema, instance_list *list)
 		add_instance(list, object);
 	}
 	CloseHandle(snapshot);
+}
+
+/* The SMBIOS tables of the firmware, as GetSystemFirmwareTable gives them: a header of four bytes and the length, then the structures,
+ * each a formatted part followed by its strings, the last string ended by two zero bytes. */
+typedef struct firmware_tables {
+	BYTE *raw;
+	const BYTE *data;
+	DWORD size;
+} firmware_tables;
+
+static void read_firmware(firmware_tables *tables)
+{
+	tables->raw = NULL;
+	tables->data = NULL;
+	tables->size = 0;
+	const DWORD provider = 0x52534d42 /* 'RSMB' */, size = GetSystemFirmwareTable(provider, 0, NULL, 0);
+	if (size < 8 || !(tables->raw = wmi_alloc(size)))
+		return;
+	if (GetSystemFirmwareTable(provider, 0, tables->raw, size) != size) {
+		wmi_free(tables->raw);
+		tables->raw = NULL;
+		return;
+	}
+	const DWORD length = *(const DWORD *)(tables->raw + 4);
+	tables->data = tables->raw + 8;
+	tables->size = length <= size - 8 ? length : size - 8;
+}
+
+/* The first structure of a type, or NULL; *strings is where its strings begin. */
+static const BYTE *firmware_structure(const firmware_tables *tables, BYTE type, const BYTE **strings)
+{
+	DWORD at = 0;
+	while (tables->data && at + 4 <= tables->size) {
+		const BYTE *structure = tables->data + at;
+		if (structure[1] < 4 || at + structure[1] > tables->size)
+			return NULL;
+		DWORD end = at + structure[1];
+		while (end + 1 < tables->size && (tables->data[end] || tables->data[end + 1]))
+			end++;
+		if (structure[0] == type) {
+			*strings = tables->data + at + structure[1];
+			return structure;
+		}
+		if (structure[0] == 127)
+			return NULL;
+		at = end + 2;
+	}
+	return NULL;
+}
+
+/* String number index of a structure (1 the first, 0 none) into text, empty when it is absent. */
+static void firmware_string(const firmware_tables *tables, const BYTE *structure, const BYTE *strings, DWORD offset, WCHAR *text, int size)
+{
+	*text = 0;
+	if (!structure || offset >= structure[1])
+		return;
+	BYTE index = structure[offset];
+	const BYTE *end = tables->data + tables->size;
+	for (const BYTE *at = strings; index && at < end && *at; index--) {
+		const BYTE *next = at;
+		while (next < end && *next)
+			next++;
+		if (index == 1) {
+			const int length = MultiByteToWideChar(CP_ACP, 0, (const char *)at, (int)(next - at), text, size - 1);
+			text[length > 0 ? length : 0] = 0;
+			return;
+		}
+		at = next + 1;
+	}
+}
+
+static void fill_bios(const class_schema *schema, instance_list *list)
+{
+	class_object *object = make_object(schema, TRUE);
+	if (!object)
+		return;
+	firmware_tables tables;
+	read_firmware(&tables);
+	const BYTE *strings = NULL, *system_strings = NULL;
+	const BYTE *bios = firmware_structure(&tables, 0, &strings), *system = firmware_structure(&tables, 1, &system_strings);
+	WCHAR vendor[128], version[128], date[32], serial[128], text[32];
+	firmware_string(&tables, bios, strings, 4, vendor, ARRAYSIZE(vendor));
+	firmware_string(&tables, bios, strings, 5, version, ARRAYSIZE(version));
+	firmware_string(&tables, bios, strings, 8, date, ARRAYSIZE(date));
+	firmware_string(&tables, system, system_strings, 7, serial, ARRAYSIZE(serial));
+	const WCHAR *name = *version ? version : L"Default System BIOS";
+	put_text(object, L"Name", name);
+	put_text(object, L"Caption", name);
+	put_text(object, L"Description", name);
+	put_text(object, L"SoftwareElementID", name);
+	put_text(object, L"Manufacturer", vendor);
+	put_text(object, L"SMBIOSBIOSVersion", version);
+	put_text(object, L"SerialNumber", serial);
+	put_text(object, L"Version", version);
+	put_text(object, L"Status", L"OK");
+	put_number(object, L"PrimaryBIOS", 1);
+	put_number(object, L"SoftwareElementState", 3);
+	put_number(object, L"TargetOperatingSystem", 0);
+	put_number(object, L"SMBIOSPresent", tables.data != NULL);
+	if (tables.raw) {
+		put_number(object, L"SMBIOSMajorVersion", tables.raw[1]);
+		put_number(object, L"SMBIOSMinorVersion", tables.raw[2]);
+	}
+	/* The firmware writes its date as mm/dd/yyyy (or mm/dd/yy before 2.3). */
+	if (lstrlenW(date) >= 8 && date[2] == '/' && date[5] == '/') {
+		if (lstrlenW(date) >= 10)
+			wsprintfW(text, L"%.4s%.2s%.2s000000.000000+000", date + 6, date, date + 3);
+		else
+			wsprintfW(text, L"19%.2s%.2s%.2s000000.000000+000", date + 6, date, date + 3);
+		put_text(object, L"ReleaseDate", text);
+	}
+	wmi_free(tables.raw);
+	add_instance(list, object);
+}
+
+static void fill_base_board(const class_schema *schema, instance_list *list)
+{
+	class_object *object = make_object(schema, TRUE);
+	if (!object)
+		return;
+	firmware_tables tables;
+	read_firmware(&tables);
+	const BYTE *strings = NULL, *board = firmware_structure(&tables, 2, &strings);
+	WCHAR text[128];
+	firmware_string(&tables, board, strings, 4, text, ARRAYSIZE(text));
+	put_text(object, L"Manufacturer", text);
+	firmware_string(&tables, board, strings, 5, text, ARRAYSIZE(text));
+	put_text(object, L"Product", text);
+	firmware_string(&tables, board, strings, 6, text, ARRAYSIZE(text));
+	put_text(object, L"Version", text);
+	firmware_string(&tables, board, strings, 7, text, ARRAYSIZE(text));
+	put_text(object, L"SerialNumber", text);
+	put_text(object, L"Tag", L"Base Board");
+	put_text(object, L"Name", L"Base Board");
+	put_text(object, L"Caption", L"Base Board");
+	put_text(object, L"Description", L"Base Board");
+	put_text(object, L"CreationClassName", L"Win32_BaseBoard");
+	put_text(object, L"Status", L"OK");
+	put_number(object, L"HostingBoard", 1);
+	put_number(object, L"PoweredOn", 1);
+	wmi_free(tables.raw);
+	add_instance(list, object);
+}
+
+/* One controller for each display adapter, as the display devices name them; the maker comes from the PCI vendor of its device id. */
+static void fill_video_controller(const class_schema *schema, instance_list *list)
+{
+	static const struct { const WCHAR *vendor, *name; } makers[] = {
+		{L"VEN_10DE", L"NVIDIA"}, {L"VEN_1002", L"Advanced Micro Devices, Inc."}, {L"VEN_8086", L"Intel Corporation"},
+		{L"VEN_1414", L"Microsoft Corporation"}, {L"VEN_15AD", L"VMware, Inc."}, {L"VEN_1AF4", L"Red Hat, Inc."},
+	};
+	DISPLAY_DEVICEW device = {sizeof(device)};
+	ULONG number = 0;
+	for (DWORD index = 0; EnumDisplayDevicesW(NULL, index, &device, 0); index++, device.cb = sizeof(device)) {
+		if (device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER)
+			continue;
+		class_object *object = make_object(schema, TRUE);
+		if (!object)
+			break;
+		WCHAR text[64];
+		wsprintfW(text, L"VideoController%u", ++number);
+		put_text(object, L"DeviceID", text);
+		put_text(object, L"Name", device.DeviceString);
+		put_text(object, L"Caption", device.DeviceString);
+		put_text(object, L"Description", device.DeviceString);
+		put_text(object, L"VideoProcessor", device.DeviceString);
+		put_text(object, L"PNPDeviceID", device.DeviceID);
+		for (ULONG i = 0; i < ARRAYSIZE(makers); i++) {
+			const int length = lstrlenW(makers[i].vendor);
+			for (const WCHAR *at = device.DeviceID; *at; at++)
+				if (CompareStringOrdinal(at, min(length, lstrlenW(at)), makers[i].vendor, length, TRUE) == CSTR_EQUAL) {
+					put_text(object, L"AdapterCompatibility", makers[i].name);
+					break;
+				}
+		}
+		DEVMODEW mode = {.dmSize = sizeof(mode)};
+		if (EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &mode)) {
+			put_number(object, L"CurrentHorizontalResolution", mode.dmPelsWidth);
+			put_number(object, L"CurrentVerticalResolution", mode.dmPelsHeight);
+			put_number(object, L"CurrentBitsPerPixel", mode.dmBitsPerPel);
+			put_number(object, L"CurrentRefreshRate", mode.dmDisplayFrequency);
+			text_builder builder = {0};
+			append_number(&builder, mode.dmPelsWidth, FALSE);
+			append(&builder, L" x ", -1);
+			append_number(&builder, mode.dmPelsHeight, FALSE);
+			append(&builder, L" x ", -1);
+			append_number(&builder, mode.dmBitsPerPel < 64 ? 1ULL << mode.dmBitsPerPel : 0, FALSE);
+			append(&builder, L" colors", -1);
+			put_text(object, L"VideoModeDescription", built(&builder));
+			wmi_free(builder.text);
+		}
+		WCHAR driver[128];
+		static const WCHAR display_class[] = L"SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000";
+		registry_text(HKEY_LOCAL_MACHINE, display_class, L"DriverVersion", driver, ARRAYSIZE(driver));
+		if (*driver)
+			put_text(object, L"DriverVersion", driver);
+		registry_text(HKEY_LOCAL_MACHINE, display_class, L"InstalledDisplayDrivers", driver, ARRAYSIZE(driver));
+		if (*driver)
+			put_text(object, L"InstalledDisplayDrivers", driver);
+		put_number(object, L"Availability", 3);
+		put_text(object, L"Status", L"OK");
+		add_instance(list, object);
+	}
+}
+
+/* The disk that holds the system drive, the one disk the guest sees; its serial is the volume's. */
+static void fill_disk_drive(const class_schema *schema, instance_list *list)
+{
+	WCHAR root[MAX_PATH], text[32];
+	if (!GetSystemDirectoryW(root, ARRAYSIZE(root)) || lstrlenW(root) < 3)
+		lstrcpyW(root, L"C:\\");
+	root[3] = 0;
+	class_object *object = make_object(schema, TRUE);
+	if (!object)
+		return;
+	put_text(object, L"DeviceID", L"\\\\.\\PHYSICALDRIVE0");
+	put_text(object, L"Name", L"\\\\.\\PHYSICALDRIVE0");
+	put_text(object, L"Model", L"Raven Virtual Disk");
+	put_text(object, L"Caption", L"Raven Virtual Disk");
+	put_text(object, L"Description", L"Disk drive");
+	put_text(object, L"InterfaceType", L"SCSI");
+	put_text(object, L"MediaType", L"Fixed hard disk media");
+	put_text(object, L"Status", L"OK");
+	put_number(object, L"Index", 0);
+	put_number(object, L"Partitions", 1);
+	DWORD serial = 0, sectors = 0, bytes = 0, free_clusters = 0, clusters = 0;
+	if (GetVolumeInformationW(root, NULL, 0, &serial, NULL, NULL, NULL, 0)) {
+		wsprintfW(text, L"%08X", serial);
+		put_text(object, L"SerialNumber", text);
+	}
+	if (GetDiskFreeSpaceW(root, &sectors, &bytes, &free_clusters, &clusters))
+		put_number(object, L"BytesPerSector", bytes);
+	ULARGE_INTEGER available, total, free;
+	if (GetDiskFreeSpaceExW(root, &available, &total, &free))
+		put_number(object, L"Size", total.QuadPart);
+	add_instance(list, object);
 }
 
 /* The relative path of an instance: its class and key; a class object's is its name. */
