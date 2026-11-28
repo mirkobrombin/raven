@@ -6,6 +6,8 @@
  * library as twinapi.appcore.dll and its neighbours serve them on Windows.
  *
  * - Windows.Globalization.Language: a BCP 47 tag with the names and layout direction of the locale of that name.
+ * - Windows.System.UserProfile.GlobalizationPreferences: the calendar, clock, currency, region, first weekday and languages of the
+ *   user's locale, which an app can read but not set.
  * - Windows.System.Profile.RetailInfo and SharedModeSettings: the computer is not a store demonstration unit and not a shared device.
  * - Windows.System.Profile.AnalyticsInfo: a desktop, of the family Windows.Desktop at the version Windows reports.
  * - Windows.Networking.Connectivity.NetworkInformation: one wired connection profile with Internet access when the computer has an IPv4
@@ -814,6 +816,92 @@ static const struct face_iid app_languages_iids[] = {{&iid_factory, 0}, {&iid_ap
 static const struct kind app_languages_kind = {"ApplicationLanguages", L"Windows.Globalization.ApplicationLanguages", app_languages_iids, NULL};
 static struct object app_languages_factory = {{language_factory_table.slots, app_languages_statics_table.slots}, &app_languages_kind, 1};
 
+/* Windows.System.UserProfile.GlobalizationPreferences, from the user's locale: its calendar, clock, currency, region and first day of
+ * the week, and the languages ApplicationLanguages gives. The preferences can only be read: setting them answers false, as for an app
+ * without the capability to change them. */
+static const IID iid_globalization = {0x01bf4326, 0xed37, 0x4e96, {0xb0, 0xe9, 0xc1, 0x34, 0x0d, 0x1e, 0xa1, 0x58}};
+static const IID iid_globalization2 = {0xfcce85f1, 0x4300, 0x4cd0, {0x9c, 0xac, 0x1a, 0x8e, 0x7b, 0x7e, 0x18, 0xf4}};
+
+/* One string, in a list of it. */
+static HRESULT one_name(const WCHAR *name, void **out)
+{
+	HSTRING_HEADER header;
+	HSTRING item;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	const HRESULT result = WindowsCreateStringReference(name, (UINT32)lstrlenW(name), &header, &item);
+	return FAILED(result) ? result : winrt_items(&string_list, (IInspectable **)&item, 1, FALSE, out);
+}
+
+static UINT32 locale_number(LCTYPE type)
+{
+	UINT32 value = 0;
+	GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, type | LOCALE_RETURN_NUMBER, (WCHAR *)&value, sizeof value / sizeof(WCHAR));
+	return value;
+}
+
+/* The calendar of the locale's CALID by the name the Windows Runtime gives it. */
+static HRESULT WINAPI preferred_calendars(void *iface, void **out)
+{
+	switch (locale_number(LOCALE_ICALENDARTYPE)) {
+	case 3: return one_name(L"JapaneseCalendar", out);
+	case 4: return one_name(L"TaiwanCalendar", out);
+	case 5: return one_name(L"KoreanCalendar", out);
+	case 6: return one_name(L"HijriCalendar", out);
+	case 7: return one_name(L"ThaiCalendar", out);
+	case 8: return one_name(L"HebrewCalendar", out);
+	case 22: return one_name(L"PersianCalendar", out);
+	case 23: return one_name(L"UmAlQuraCalendar", out);
+	default: return one_name(L"GregorianCalendar", out);
+	}
+}
+
+static HRESULT WINAPI preferred_clocks(void *iface, void **out)
+{
+	return one_name(locale_number(LOCALE_ITIME) ? L"24HourClock" : L"12HourClock", out);
+}
+
+static HRESULT WINAPI preferred_currencies(void *iface, void **out)
+{
+	WCHAR code[16];
+	if (!GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SINTLSYMBOL, code, ARRAYSIZE(code)))
+		return HRESULT_FROM_WIN32(GetLastError());
+	return one_name(code, out);
+}
+
+static HRESULT WINAPI home_region(void *iface, HSTRING *out)
+{
+	WCHAR region[16];
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, region, ARRAYSIZE(region)))
+		return HRESULT_FROM_WIN32(GetLastError());
+	return WindowsCreateString(region, (UINT32)lstrlenW(region), out);
+}
+
+/* LOCALE_IFIRSTDAYOFWEEK counts from Monday, DayOfWeek from Sunday. */
+static HRESULT WINAPI week_starts_on(void *iface, INT32 *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = (INT32)((locale_number(LOCALE_IFIRSTDAYOFWEEK) + 1) % 7);
+	return S_OK;
+}
+
+static HRESULT WINAPI try_set_region(void *iface, HSTRING region, boolean *out) { return answer_flag(out, FALSE); }
+static HRESULT WINAPI try_set_languages(void *iface, void *languages, boolean *out) { return answer_flag(out, FALSE); }
+
+TABLE(globalization_statics_table, 1, INSPECTABLE, (const void *)preferred_calendars, (const void *)preferred_clocks,
+	(const void *)preferred_currencies, (const void *)app_languages, (const void *)home_region, (const void *)week_starts_on);
+TABLE(globalization_statics2_table, 2, INSPECTABLE, (const void *)try_set_region, (const void *)try_set_languages);
+static const struct face_iid globalization_iids[] = {{&iid_factory, 0}, {&iid_globalization, 1}, {&iid_globalization2, 2}, {NULL, 0}};
+static const struct kind globalization_kind = {"GlobalizationPreferences", L"Windows.System.UserProfile.GlobalizationPreferences",
+	globalization_iids, NULL};
+static struct object globalization_preferences = {{language_factory_table.slots, globalization_statics_table.slots,
+	globalization_statics2_table.slots}, &globalization_kind, 1};
+
 /* Windows.Foundation.Metadata.ApiInformation. A type is present when a runtime class of that name is registered for activation. */
 static boolean registered(HSTRING type)
 {
@@ -856,7 +944,7 @@ static const struct face_iid api_iids[] = {{&iid_factory, 0}, {&iid_api_informat
 static const struct kind api_kind = {"ApiInformation", L"Windows.Foundation.Metadata.ApiInformation", api_iids, NULL};
 static struct object api_information = {{api_factory_table.slots, api_statics_table.slots}, &api_kind, 1};
 
-static struct object *const classes[] = {&language_factory, &app_languages_factory, &retail_info, &shared_mode, &analytics_info, &network_information,
+static struct object *const classes[] = {&language_factory, &app_languages_factory, &globalization_preferences, &retail_info, &shared_mode, &analytics_info, &network_information,
 	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information,
 	&core_window_class, &core_cursor_class, &display_information_class,
 	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class,

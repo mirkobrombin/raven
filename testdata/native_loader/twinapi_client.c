@@ -373,6 +373,59 @@ static int check_app_languages(void)
 	return 0;
 }
 
+/* GlobalizationPreferences: what the user's locale says, one name in each list, and the languages ApplicationLanguages gives; setting
+ * them is refused. */
+static const GUID globalization_statics = {0x01bf4326, 0xed37, 0x4e96, {0xb0, 0xe9, 0xc1, 0x34, 0x0d, 0x1e, 0xa1, 0x58}};
+static const GUID globalization_statics2 = {0xfcce85f1, 0x4300, 0x4cd0, {0x9c, 0xac, 0x1a, 0x8e, 0x7b, 0x7e, 0x18, 0xf4}};
+
+static BOOL first_is(object *list, const WCHAR *expected)
+{
+	UINT32 size = 0;
+	void *name = NULL;
+	BOOL same = METHOD(list, 7, HRESULT (WINAPI *)(object *, UINT32 *))(list, &size) == S_OK && size == 1 &&
+		METHOD(list, 6, HRESULT (WINAPI *)(object *, UINT32, void **))(list, 0, &name) == S_OK && name &&
+		!lstrcmpW(WindowsGetStringRawBuffer(name, NULL), expected);
+	WindowsDeleteString(name);
+	METHOD(list, 2, release_method)(list);
+	return same;
+}
+
+static int check_globalization(void)
+{
+	object *preferences = statics(L"Windows.System.UserProfile.GlobalizationPreferences", &globalization_statics), *list = NULL;
+	WCHAR text[16];
+	UINT32 number = 0;
+	if (!preferences) return 130;
+	if (METHOD(preferences, 6, object_method)(preferences, &list) != S_OK || !list) return 131;
+	GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_ICALENDARTYPE | LOCALE_RETURN_NUMBER, (WCHAR *)&number, 2);
+	if (number == 1 && !first_is(list, L"GregorianCalendar")) return 132;
+	GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_ITIME | LOCALE_RETURN_NUMBER, (WCHAR *)&number, 2);
+	if (METHOD(preferences, 7, object_method)(preferences, &list) != S_OK || !first_is(list, number ? L"24HourClock" : L"12HourClock"))
+		return 133;
+	GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SINTLSYMBOL, text, ARRAYSIZE(text));
+	if (METHOD(preferences, 8, object_method)(preferences, &list) != S_OK || !first_is(list, text)) return 134;
+	UINT32 size = 0;
+	if (METHOD(preferences, 9, object_method)(preferences, &list) != S_OK ||
+		METHOD(list, 7, HRESULT (WINAPI *)(object *, UINT32 *))(list, &size) != S_OK || !size) return 135;
+	METHOD(list, 2, release_method)(list);
+	void *region = NULL;
+	GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, text, ARRAYSIZE(text));
+	if (METHOD(preferences, 10, HRESULT (WINAPI *)(object *, void **))(preferences, &region) != S_OK ||
+		lstrcmpW(WindowsGetStringRawBuffer(region, NULL), text)) return 136;
+	WindowsDeleteString(region);
+	INT32 day = -1;
+	GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK | LOCALE_RETURN_NUMBER, (WCHAR *)&number, 2);
+	if (METHOD(preferences, 11, number_method)(preferences, &day) != S_OK || day != (INT32)((number + 1) % 7)) return 137;
+	object *setter = NULL;
+	struct reference italy = {1, 2, {0, 0}, L"IT"};
+	BYTE done = 1;
+	if (METHOD(preferences, 0, query_method)(preferences, &globalization_statics2, (void **)&setter) != S_OK ||
+		METHOD(setter, 6, HRESULT (WINAPI *)(object *, void *, BYTE *))(setter, &italy, &done) != S_OK || done) return 138;
+	METHOD(setter, 2, release_method)(setter);
+	METHOD(preferences, 2, release_method)(preferences);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	/* Programs that use the Windows Runtime use COM as well, as Office does. */
@@ -473,6 +526,8 @@ int raven_entry(void)
 		failure = check_metadata();
 	if (!failure)
 		failure = check_app_languages();
+	if (!failure)
+		failure = check_globalization();
 	if (!failure)
 		failure = check_property_values();
 	return failure ? failure : check_property_sets();
