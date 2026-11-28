@@ -1082,6 +1082,12 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 			call.fail(error);
 		}
 	});
+	// EndMenu closes the menu that shows, a shortcut menu's loop as well, which then ends with no command chosen.
+	registry.add("EndMenu", 0, [=, this](ApiCall &call) {
+		if (menu_active())
+			menu_close();
+		call.ret(1);
+	});
 	registry.add("GetWindowTextLengthA", 1, [=, this](ApiCall &call) { call.ret(send(call[0], 0x0e, 0, 0)); });
 	registry.add("GetDlgItemTextA", 4, [=, this](ApiCall &call) {
 		const auto child = [&]() -> uint64_t {
