@@ -59,6 +59,7 @@ const Adapter adapters[] = {
 	{"GlobalGetAtomNameA", {}, 1, 2},
 	{"CreateFileA", {0}},
 	{"GetFileAttributesA", {0}},
+	{"GetFileAttributesExA", {0}},
 	{"SetupDiGetClassDevsA", {1}},
 	{"SetFileAttributesA", {0}},
 	{"DeleteFileA", {0}},
