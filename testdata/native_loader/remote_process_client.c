@@ -33,6 +33,24 @@ static volatile DWORD child_value = 0x13579bdf;
 static volatile BYTE child_buffer[120017];
 static BYTE transferred[120017];
 
+/* A job counts the suspended child as active from the moment it joins, as a launcher that waits on the job for the game it starts
+   suspended expects: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION holds the page faults, then the total and the active processes. */
+static int test_job_accounting(HANDLE process)
+{
+	HANDLE job = CreateJobObjectW(NULL, NULL);
+	JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+	DWORD length = 0;
+	int result = 0;
+	if (!job) return 107;
+	if (!AssignProcessToJobObject(job, process) ||
+		!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof accounting, &length) ||
+		length != sizeof accounting || accounting.TotalProcesses != 1 || accounting.ActiveProcesses != 1 ||
+		accounting.TotalTerminatedProcesses != 0)
+		result = 108;
+	CloseHandle(job);
+	return result;
+}
+
 static int test_image_name(HANDLE process, const WCHAR *expected)
 {
 	WCHAR path[512];
@@ -620,6 +638,7 @@ int raven_entry(void)
 		return 8;
 	}
 	result = test_image_name(child.hProcess, child_image);
+	if (!result) result = test_job_accounting(child.hProcess);
 	if (!result) result = test_handle_count(query, child.hProcess, FALSE);
 	if (!result) result = test_child(query, read_memory, write_memory, &child);
 	if (result) {
