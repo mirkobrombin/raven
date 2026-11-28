@@ -233,6 +233,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     if(OPENSSL_FOUND)
         target_link_libraries(raven_cpu PUBLIC OpenSSL::Crypto)
         target_compile_definitions(raven_cpu PRIVATE RAVEN_OPENSSL=1)
+        target_compile_definitions(authenticode_test PRIVATE RAVEN_OPENSSL=1)
         # The Schannel package of SSPI is a TLS client over the same library.
         target_sources(raven_cpu PRIVATE nt/schannel_api.cpp nt/ntlm.cpp)
         add_executable(ntlm_test nt/ntlm_test.cpp)
@@ -2033,6 +2034,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 list(APPEND root_copies ${CMAKE_CURRENT_BINARY_DIR}/roots/${certificate_name})
             endforeach()
             add_custom_target(root_certificates ALL DEPENDS ${root_copies})
+            # Code signing and timestamping CAs whose roots Windows carries and host bundles dropped (VeriSign Class 3 G5 and VeriSign
+            # Universal, above many game signatures and their timestamps) are anchored by the roots beside the runtime alone: no
+            # download, no cache.
+            if(OPENSSL_FOUND)
+                add_test(NAME native_code_signing_roots COMMAND authenticode_test --anchored
+                    ${PROJECT_SOURCE_DIR}/testdata/authenticode/symantec-class3-sha256-code-signing-ca.pem
+                    ${PROJECT_SOURCE_DIR}/testdata/authenticode/symantec-sha256-timestamping-ca.pem)
+                set_tests_properties(native_code_signing_roots PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "PASS: certificates anchored"
+                    ENVIRONMENT "RAVEN_NO_ROOT_DOWNLOAD=1;XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/code-signing-roots-cache")
+            endif()
         endif()
         # The Windows Installer components (scripts/provision-installer.py): msi, cabinet, sxs and structured storage, for each program width.
         set(RAVEN_INSTALLER_COMPONENT_DIR "" CACHE PATH "Directory holding the installer components built by scripts/provision-installer.py")
