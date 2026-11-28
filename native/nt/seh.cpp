@@ -944,6 +944,63 @@ void register_exception_api(ApiRegistry &registry, KernelContext &context, Nativ
 		const auto *module = unwinder.module_at(call[1]);
 		call.ret(module ? module->loaded.base() : 0);
 	});
+	// StackWalk64(machine, process, thread, frame, context, ...): each call gives the next frame of the program's own x64 stack, as crash
+	// reporters walk it. The first call describes the frame the context is in; each later one moves the context to its caller's frame
+	// with the same tables RtlVirtualUnwind reads, until there is no caller. The memory, function table and module callbacks the caller
+	// may pass are not needed for the program's own process. A mark in the frame's reserved words tells the first call from the others.
+	registry.add("StackWalk64", 9, [&unwinder](ApiCall &call) {
+		constexpr uint64_t walked = 0x6b6c6177;
+		constexpr size_t frame_size = 152, reserved = 128, table_entry = 80;
+		if (call.u32(0) != 0x8664 || !call[3] || !call[4] || call[1] != UINT64_MAX) {
+			call.fail(87);
+			return;
+		}
+		try {
+			auto frame = call.read(call[3], frame_size);
+			auto context = call.read(call[4], x64_context::size);
+			const auto at = [&](size_t offset) {
+				uint64_t value = 0;
+				std::memcpy(&value, frame.data() + offset, 8);
+				return value;
+			};
+			const auto put = [&](size_t offset, uint64_t value) { std::memcpy(frame.data() + offset, &value, 8); };
+			// One frame up: by the function's unwind data, or as a leaf whose return address is on top of the stack.
+			const auto up = [&](ContextBytes &bytes) {
+				const uint64_t pc = context_rip(bytes);
+				if (const auto function = unwinder.lookup(pc))
+					unwinder.unwind(0, pc, *function, bytes);
+				else
+					unwinder.unwind_leaf(bytes);
+			};
+			if (at(reserved) == walked) {
+				const uint64_t stack = context_rsp(context);
+				up(context);
+				if (!context_rip(context) || context_rsp(context) <= stack) {
+					call.ret(0);
+					return;
+				}
+			}
+			// The program counter, the return address, the frame and the stack, each flat.
+			const uint64_t pc = context_rip(context);
+			auto caller = context;
+			up(caller);
+			const uint64_t addresses[] = {pc, context_rsp(caller) > context_rsp(context) ? context_rip(caller) : 0, context_register(context, 5),
+				context_rsp(context)};
+			for (size_t index = 0; index < 4; ++index) {
+				put(index * 16, addresses[index]);
+				const uint32_t flat = 3;
+				std::memcpy(frame.data() + index * 16 + 12, &flat, 4);
+			}
+			const auto function = unwinder.lookup(pc);
+			put(table_entry, function ? function->address : 0);
+			put(reserved, walked);
+			call.write(call[3], frame);
+			call.write(call[4], context);
+			call.ret(1);
+		} catch (...) {
+			call.ret(0);
+		}
+	});
 	registry.add("RtlPcToFileHeader", 2, [&unwinder](ApiCall &call) {
 		const auto *module = unwinder.module_at(call[0]);
 		const uint64_t base = module ? module->loaded.base() : 0;
