@@ -156,6 +156,8 @@ extern struct object cryptographic_buffer_class, hash_provider_class, hash_names
 	cryptographic_engine_class, cipher_provider_class, cipher_names_class;
 /* accesscache.c. */
 extern struct object storage_permissions_class;
+/* datetime.c. */
+extern struct object date_time_formatter_class;
 /* threading.c. */
 extern struct object thread_pool_class, thread_pool_timer_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */
