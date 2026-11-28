@@ -3006,6 +3006,38 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     endif()
                 endforeach()
             endif()
+            # The structures crypt32 hands back for a signed message, read through wincrypt.h at both widths: openssl signs a message with a
+            # certificate of known serial number and extensions, and the client finds every field where Windows keeps it.
+            if(OPENSSL_FOUND AND RAVEN_OPENSSL_TOOL)
+                set(signer_layout_folder ${CMAKE_CURRENT_BINARY_DIR}/signer-layout)
+                file(MAKE_DIRECTORY ${signer_layout_folder})
+                add_custom_command(OUTPUT ${signer_layout_folder}/signed-message.der
+                    COMMAND ${RAVEN_OPENSSL_TOOL} req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 -subj /CN=Raven
+                        -set_serial 0x0102030405060708090a0b0c0d0e0f10 -addext basicConstraints=critical,CA:FALSE -keyout signer-key.pem -out signer.pem
+                    COMMAND ${RAVEN_OPENSSL_TOOL} smime -sign -binary -nodetach -md sha256 -signer signer.pem -inkey signer-key.pem
+                        -in ${PROJECT_SOURCE_DIR}/testdata/native_loader/signer_layout_client.c -outform DER -out signed-message.der
+                    WORKING_DIRECTORY ${signer_layout_folder} VERBATIM)
+                foreach(width 64 32)
+                    if(width EQUAL 64)
+                        set(signer_layout_compiler ${RAVEN_MINGW64})
+                        set(signer_layout_entry raven_entry)
+                    else()
+                        set(signer_layout_compiler ${RAVEN_MINGW32})
+                        set(signer_layout_entry _raven_entry)
+                    endif()
+                    if(signer_layout_compiler)
+                        set(signer_layout_client ${signer_layout_folder}/signer-layout${width}.exe)
+                        add_custom_command(OUTPUT ${signer_layout_client}
+                            COMMAND ${signer_layout_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${signer_layout_entry},--no-insert-timestamp
+                                -o ${signer_layout_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/signer_layout_client.c -lcrypt32 -lkernel32 -lgcc
+                            DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/signer_layout_client.c VERBATIM)
+                        add_custom_target(signer_layout_fixture${width} ALL DEPENDS ${signer_layout_client} ${signer_layout_folder}/signed-message.der)
+                        add_test(NAME native_signer_layout_x${width} COMMAND raven --run-process --execution=native ${signer_layout_client})
+                        set_tests_properties(native_signer_layout_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                            ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/signer-layout-prefix${width}")
+                    endif()
+                endforeach()
+            endif()
             set(REMOTE_PROCESS_CLIENTS)
             set(SHARED_WAIT_CLIENTS)
             set(PREFIX_SETUP_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/prefix-setup-client.exe)
