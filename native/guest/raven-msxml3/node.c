@@ -288,6 +288,15 @@ void mx_node_init(mx_node *self, const void *vtbl, xmlNodePtr node, mx_type type
 		mx_tree_ref(self->held);
 }
 
+/* Whether a node of the interface iid answers riid as one it derives from, through the same table: text, CDATA sections and comments
+ * are character data, and a CDATA section is text. */
+static BOOL derives_from(const GUID *iid, REFIID riid)
+{
+	if (IsEqualGUID(riid, &IID_IXMLDOMCharacterData))
+		return IsEqualGUID(iid, &IID_IXMLDOMText) || IsEqualGUID(iid, &IID_IXMLDOMCDATASection) || IsEqualGUID(iid, &IID_IXMLDOMComment);
+	return IsEqualGUID(riid, &IID_IXMLDOMText) && IsEqualGUID(iid, &IID_IXMLDOMCDATASection);
+}
+
 HRESULT WINAPI nd_QueryInterface(IXMLDOMNode *iface, REFIID riid, void **out)
 {
 	mx_node *self = mx_node_from(iface);
@@ -299,7 +308,8 @@ HRESULT WINAPI nd_QueryInterface(IXMLDOMNode *iface, REFIID riid, void **out)
 		*out = self;
 		return S_OK;
 	}
-	if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDispatch) || IsEqualGUID(riid, &IID_IXMLDOMNode) || IsEqualGUID(riid, self->iid))
+	if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IDispatch) || IsEqualGUID(riid, &IID_IXMLDOMNode) || IsEqualGUID(riid, self->iid) ||
+		derives_from(self->iid, riid))
 		*out = iface;
 	else if (IsEqualGUID(riid, &IID_ISupportErrorInfo))
 	{
