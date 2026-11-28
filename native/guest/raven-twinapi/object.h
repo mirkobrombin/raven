@@ -171,6 +171,8 @@ HRESULT open_typed_stream(const WCHAR *path, void **out);
 extern struct object random_access_stream_class, stream_reference_class;
 /* A RandomAccessStreamReference over a stream, as CreateFromStream makes it. */
 HRESULT stream_reference_make(IUnknown *stream, void **out);
+/* Windows.Data.Json: JsonValue, JsonObject, JsonArray and JsonError, from json.c. */
+extern struct object json_value_class, json_object_class, json_array_class, json_error_class;
 /* Values read from and written to streams, from data.c. */
 extern struct object data_reader_class, data_writer_class;
 /* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */
