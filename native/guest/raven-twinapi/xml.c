@@ -1927,3 +1927,51 @@ TABLE(settings_factory_table, 0, INSPECTABLE, (const void *)settings_activate);
 static const struct face_iid settings_class_iids[] = {{&iid_factory, 0}, {NULL, 0}};
 static const struct kind settings_class_kind = {"XmlLoadSettings", L"Windows.Data.Xml.Dom.XmlLoadSettings", settings_class_iids, NULL};
 struct object xml_load_settings_class = {{settings_factory_table.slots}, &settings_class_kind, 1};
+
+HRESULT xml_document_from_text(const WCHAR *text, void **out)
+{
+	IInspectable *made = NULL;
+	HSTRING xml = NULL;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	HRESULT result = document_activate(NULL, &made);
+	if (SUCCEEDED(result))
+		result = WindowsCreateString(text, lstrlenW(text), &xml);
+	if (SUCCEEDED(result))
+		result = load_text(made, xml, NULL);
+	WindowsDeleteString(xml);
+	if (FAILED(result)) {
+		release(made);
+		return result;
+	}
+	*out = made;
+	return S_OK;
+}
+
+HRESULT xml_selected_texts(void *iface, const WCHAR *xpath, BSTR *texts, UINT32 capacity, UINT32 *count)
+{
+	IXMLDOMNode *root = dom_of(iface);
+	IXMLDOMNodeList *list = NULL;
+	*count = 0;
+	if (!root)
+		return E_INVALIDARG;
+	BSTR query = SysAllocString(xpath);
+	HRESULT result = query ? IXMLDOMNode_selectNodes(root, query, &list) : E_OUTOFMEMORY;
+	SysFreeString(query);
+	for (LONG index = 0; SUCCEEDED(result) && *count < capacity; ++index) {
+		IXMLDOMNode *item = NULL;
+		if (IXMLDOMNodeList_get_item(list, index, &item) != S_OK)
+			break;
+		result = IXMLDOMNode_get_text(item, &texts[*count]);
+		IXMLDOMNode_Release(item);
+		if (SUCCEEDED(result))
+			++*count;
+	}
+	if (list)
+		IXMLDOMNodeList_Release(list);
+	if (FAILED(result))
+		while (*count)
+			SysFreeString(texts[--*count]);
+	return result;
+}

@@ -178,6 +178,12 @@ HRESULT stream_reference_make(IUnknown *stream, void **out);
 extern struct object json_value_class, json_object_class, json_array_class, json_error_class;
 /* Windows.Data.Xml.Dom, from xml.c. */
 extern struct object xml_document_class, xml_load_settings_class;
+/* A new XmlDocument holding a text, through IXmlDocument; and the texts of the nodes, at most capacity, that an XPath expression selects
+ * in a document or node of ours, which the caller frees. */
+HRESULT xml_document_from_text(const WCHAR *text, void **out);
+HRESULT xml_selected_texts(void *iface, const WCHAR *xpath, BSTR *texts, UINT32 capacity, UINT32 *count);
+/* Windows.UI.Notifications: ToastNotificationManager and ToastNotification, from notifications.c. */
+extern struct object toast_manager_class, toast_notification_class;
 /* Values read from and written to streams, from data.c. */
 extern struct object data_reader_class, data_writer_class;
 /* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */

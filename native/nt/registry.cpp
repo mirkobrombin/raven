@@ -288,6 +288,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.ApplicationModel.DataTransfer.HtmlFormatHelper", u"raven-twinapi.dll"},
 		{u"Windows.ApplicationModel.DataTransfer.StandardDataFormats", u"raven-twinapi.dll"},
 		{u"Windows.System.Launcher", u"raven-twinapi.dll"}, {u"Windows.System.LauncherOptions", u"raven-twinapi.dll"},
+		{u"Windows.UI.Notifications.ToastNotification", u"raven-twinapi.dll"},
+		{u"Windows.UI.Notifications.ToastNotificationManager", u"raven-twinapi.dll"},
 		{u"Windows.UI.Popups.MessageDialog", u"raven-twinapi.dll"},
 		{u"Windows.UI.Popups.PopupMenu", u"raven-twinapi.dll"},
 		{u"Windows.UI.Popups.UICommand", u"raven-twinapi.dll"},
