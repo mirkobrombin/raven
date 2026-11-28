@@ -3,9 +3,10 @@
 
 testdata/native_loader/layered_window_client.c shows a 240x160 popup whose left half is opaque magenta and whose right half is fully
 transparent, over a larger window painted green. The capture must hold the magenta half whole, and the green in the right half. With
-"hidden" the program hands the pixels over before it shows the window.
+"hidden" the program hands the pixels over before it shows the window. With "blur" the popup is a plain window that paints the
+image and asks for blur behind, which must show it through its alpha the same way.
 
-usage: native-layered-window.py RAVEN CLIENT WORKDIR [hidden]
+usage: native-layered-window.py RAVEN CLIENT WORKDIR [hidden|blur]
 """
 
 from pathlib import Path

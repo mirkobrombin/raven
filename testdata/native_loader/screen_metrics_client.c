@@ -125,6 +125,12 @@ int raven_entry(void)
 			DwmSetWindowAttribute(window, 35, &wrong, sizeof wrong) != E_INVALIDARG || DwmSetWindowAttribute(window, 35, &fill, 2) != E_INVALIDARG ||
 			DwmSetWindowAttribute(window, 34, &standard, sizeof standard) != S_OK)
 			return 20;
+		/* Blur behind, as Qt asks for a translucent window: the client area's alpha shows what lies below; turning it off again. */
+		DWM_BLURBEHIND blur = {DWM_BB_ENABLE | DWM_BB_BLURREGION, TRUE, CreateRectRgn(0, 0, -1, -1), FALSE};
+		if (DwmEnableBlurBehindWindow(window, &blur) != S_OK) return 21;
+		blur.fEnable = FALSE;
+		if (DwmEnableBlurBehindWindow(window, &blur) != S_OK) return 21;
+		DeleteObject(blur.hRgnBlur);
 	}
 	ShowWindow(window, SW_MAXIMIZE);
 	if (next_width && next_height) {
