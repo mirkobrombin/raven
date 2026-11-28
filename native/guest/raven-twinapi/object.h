@@ -120,6 +120,8 @@ HRESULT application_view(void **out);
 HRESULT application_exit(void);
 /* The window of the app's CoreWindow, or NULL: what owns a dialog no window was given for. */
 HWND application_window(void);
+/* The messages of the core window that concern its ApplicationView, from view.c, which sees each before the core window does. */
+void application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 extern struct object core_window_class, core_cursor_class, display_information_class;
 /* The package of the app and its data, from package.c. */
 extern struct object package_class, application_data_class;
@@ -142,6 +144,8 @@ extern struct object open_picker_class, save_picker_class, folder_picker_class;
 extern struct object clipboard_class, data_package_class, standard_formats_class, html_format_helper_class, clipboard_content_options_class;
 /* popups.c. */
 extern struct object message_dialog_class, popup_menu_class, ui_command_class, ui_command_separator_class;
+/* view.c. */
+extern struct object application_view_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */
 extern struct object launcher_class, launcher_options_class;
 /* Windows.Storage.KnownFolders, from known.c. */

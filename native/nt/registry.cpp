@@ -289,6 +289,7 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.UI.Popups.PopupMenu", u"raven-twinapi.dll"},
 		{u"Windows.UI.Popups.UICommand", u"raven-twinapi.dll"},
 		{u"Windows.UI.Popups.UICommandSeparator", u"raven-twinapi.dll"},
+		{u"Windows.UI.ViewManagement.ApplicationView", u"raven-twinapi.dll"},
 		{u"Windows.Foundation.Uri", u"raven-web.dll"}, {u"Windows.Web.Http.HttpClient", u"raven-web.dll"},
 		{u"Windows.Web.Http.HttpMethod", u"raven-web.dll"}, {u"Windows.Web.Http.HttpRequestMessage", u"raven-web.dll"},
 		{u"Windows.Web.Http.HttpResponseMessage", u"raven-web.dll"}, {u"Windows.Web.Http.Filters.HttpBaseProtocolFilter", u"raven-web.dll"},

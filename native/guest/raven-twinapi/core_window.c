@@ -724,6 +724,7 @@ static LRESULT CALLBACK window_procedure(HWND handle, UINT message, WPARAM wpara
 	}
 	if (!self)
 		return DefWindowProcW(handle, message, wparam, lparam);
+	application_view_message(handle, message, wparam, lparam);
 	if (message == run_message && run_message) {
 		struct action *action = (struct action *)lparam;
 		if (InterlockedCompareExchange(&action->status, 0, 0) == ASYNC_STARTED) {

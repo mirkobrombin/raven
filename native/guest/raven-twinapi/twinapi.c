@@ -25,6 +25,7 @@
  * - Windows.ApplicationModel.DataTransfer.Clipboard, DataPackage, StandardDataFormats, HtmlFormatHelper and ClipboardContentOptions,
  *   in clipboard.c.
  * - Windows.UI.Popups.MessageDialog, PopupMenu, UICommand and UICommandSeparator, in popups.c.
+ * - Windows.UI.ViewManagement.ApplicationView and its title bar, in view.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -861,7 +862,7 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&data_writer_class, &random_access_stream_class, &stream_reference_class, &known_folders_class,
 	&open_picker_class, &save_picker_class, &folder_picker_class, &launcher_class, &launcher_options_class, &clipboard_class,
 	&data_package_class, &standard_formats_class, &html_format_helper_class, &clipboard_content_options_class,
-	&message_dialog_class, &popup_menu_class, &ui_command_class, &ui_command_separator_class};
+	&message_dialog_class, &popup_menu_class, &ui_command_class, &ui_command_separator_class, &application_view_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

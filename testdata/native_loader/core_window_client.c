@@ -1,7 +1,8 @@
 // An app of the Windows Runtime as Visual Studio's DirectX template writes one, in C: CoreApplication.Run takes its view source, and the
 // view sees, in order, Initialize with its application view, SetWindow with its core window, Load and Run, then Uninitialize. The view's
 // Activated event comes while Run processes events, with the arguments of a launch, and the app activates its window there. Run then
-// checks the window: its handle, bounds and dispatcher, work posted to the dispatcher, keys, characters, the mouse, a resize, and closing.
+// checks the window: its handle, bounds and dispatcher, work posted to the dispatcher, keys, characters, the mouse, a resize, its
+// ApplicationView (the launch size asked for before Run, title, sizes, title bar, full screen, view modes), and closing.
 // Built with SWAP_CHAIN, it also presents a Direct3D 11 frame through a swap chain made for its core window. Built with MSIX_VIEW, it is the app of a package and also checks
 // its identifier there, its package, the folders of its data and its settings, which a second run reads back; built without, that it has neither. The exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
@@ -47,6 +48,13 @@ static const GUID package_statics = {0x4e534bdf, 0x2960, 0x4878, {0x97, 0xa4, 0x
 static const GUID data_statics = {0x5612147b, 0xe843, 0x45e3, {0x94, 0xd8, 0x06, 0x16, 0x9e, 0x3c, 0x8e, 0x17}};
 static const GUID storage_item = {0x4207a996, 0xca2f, 0x42f7, {0xbd, 0xe8, 0x8b, 0x10, 0x45, 0x7a, 0x7f, 0x30}};
 static const GUID window_event = {0x272b1ef3, 0xc633, 0x4da5, {0xa2, 0x6c, 0xc6, 0xd0, 0xf5, 0x6b, 0x29, 0xda}};
+static const GUID view_iid = {0xd222d519, 0x4361, 0x451e, {0x96, 0xc4, 0x60, 0xf4, 0xf9, 0x74, 0x2d, 0xb0}};
+static const GUID view2_iid = {0xe876b196, 0xa545, 0x40dc, {0xb5, 0x94, 0x45, 0x0c, 0xba, 0x68, 0xcc, 0x00}};
+static const GUID view3_iid = {0x903c9ce5, 0x793a, 0x4fdf, {0xa2, 0xb2, 0xaf, 0x1a, 0xc2, 0x1e, 0x31, 0x08}};
+static const GUID view4_iid = {0x15e5cbec, 0x9e0f, 0x46b5, {0xbc, 0x3f, 0x9b, 0xf6, 0x53, 0xe7, 0x4b, 0x5e}};
+static const GUID view_statics2 = {0xaf338ae5, 0xcf64, 0x423c, {0x85, 0xe5, 0xf3, 0xe7, 0x24, 0x48, 0xfb, 0x23}};
+static const GUID view_statics3 = {0xa28d7594, 0x8c41, 0x4e13, {0x97, 0x19, 0x51, 0x64, 0x79, 0x6f, 0xe4, 0xc7}};
+static const GUID view_interop = {0xc446fb5d, 0x4793, 0x4896, {0xa8, 0xe2, 0xbe, 0x57, 0xa8, 0xbb, 0x0f, 0x50}};
 
 struct rect {
 	FLOAT x, y, width, height;
@@ -56,6 +64,11 @@ struct point {
 	FLOAT x, y;
 };
 
+/* Windows.Foundation.Size, which goes by value as one eight-byte structure. */
+struct size {
+	FLOAT width, height;
+};
+
 /* What the app saw, step by step. */
 static int steps, failed;
 static object *app_view, *window;
@@ -63,6 +76,7 @@ static int activated, sized, keys, characters, presses, visible, closed, dispatc
 static struct point pressed_at;
 static BYTE left_pressed;
 static FLOAT width_seen;
+static int bounds_changes, consolidations;
 
 static void fail(int code)
 {
@@ -87,7 +101,8 @@ static object *statics(const WCHAR *name, const GUID *iid)
 }
 
 /* A delegate: Invoke is its fourth method, after IUnknown's. Each one knows which event it was given to. */
-enum { ON_VIEW_ACTIVATED, ON_SIZE, ON_KEY, ON_CHARACTER, ON_PRESS, ON_VISIBILITY, ON_CLOSED, ON_DISPATCHED, ON_DATA_CHANGED };
+enum { ON_VIEW_ACTIVATED, ON_SIZE, ON_KEY, ON_CHARACTER, ON_PRESS, ON_VISIBILITY, ON_CLOSED, ON_DISPATCHED, ON_DATA_CHANGED, ON_BOUNDS,
+	ON_CONSOLIDATED };
 
 struct delegate {
 	void **table;
@@ -187,6 +202,12 @@ static HRESULT WINAPI delegate_invoke(struct delegate *self, object *sender, obj
 	case ON_CLOSED:
 		++closed;
 		break;
+	case ON_BOUNDS:
+		++bounds_changes;
+		break;
+	case ON_CONSOLIDATED:
+		++consolidations;
+		break;
 	}
 	return S_OK;
 }
@@ -203,7 +224,97 @@ static void *dispatched_table[] = {delegate_query, delegate_add, delegate_releas
 static struct delegate on_view_activated = {delegate_table, 1, ON_VIEW_ACTIVATED}, on_size = {delegate_table, 1, ON_SIZE},
 	on_key = {delegate_table, 1, ON_KEY}, on_character = {delegate_table, 1, ON_CHARACTER}, on_press = {delegate_table, 1, ON_PRESS},
 	on_visibility = {delegate_table, 1, ON_VISIBILITY}, on_closed = {delegate_table, 1, ON_CLOSED}, on_data_changed = {delegate_table, 1, ON_DATA_CHANGED},
-	on_dispatched = {dispatched_table, 1, ON_DISPATCHED};
+	on_dispatched = {dispatched_table, 1, ON_DISPATCHED}, on_bounds = {delegate_table, 1, ON_BOUNDS},
+	on_consolidated = {delegate_table, 1, ON_CONSOLIDATED};
+
+/* A boxed Windows.UI.Color, IReference<Color>, which the title bar keeps. */
+struct color {
+	BYTE a, r, g, b;
+};
+static HRESULT WINAPI color_value(object *self, struct color *out)
+{
+	*out = (struct color){0xff, 0x10, 0x60, 0xa0};
+	return S_OK;
+}
+static void *color_table[] = {delegate_query, delegate_add, delegate_release, NULL, NULL, NULL, color_value};
+static struct delegate boxed_color = {color_table, 1, 0};
+
+/* The view's ApplicationView, on the thread that runs the view: the launch size asked for, its title in the caption, its identifier,
+ * bounds and sizes, the title bar's colors, full screen and back, and the view modes. */
+static int check_application_view(HWND handle)
+{
+	object *views = statics(L"Windows.UI.ViewManagement.ApplicationView", &view_statics2), *view = NULL, *view2 = NULL, *view3 = NULL,
+		*view4 = NULL, *bar = NULL, *got = NULL;
+	if (!views || METHOD(views, 6, object_method)(views, &view) != S_OK || !view) return 70;
+	if (METHOD(view, 0, query_method)(view, &view2_iid, (void **)&view2) != S_OK || METHOD(view, 0, query_method)(view, &view3_iid,
+		(void **)&view3) != S_OK || METHOD(view, 0, query_method)(view, &view4_iid, (void **)&view4) != S_OK) return 71;
+	/* The title comes before the program's name in the caption. */
+	void *title = string(L"Report");
+	if (METHOD(view, 13, HRESULT (WINAPI *)(object *, void *))(view, title) != S_OK) return 72;
+	WindowsDeleteString(title);
+	WCHAR caption[MAX_PATH];
+	GetWindowTextW(handle, caption, MAX_PATH);
+	if (caption[0] != L'R' || caption[6] != L' ' || caption[7] != L'-' || caption[8] != L' ') return 73;
+	void *read = NULL;
+	if (METHOD(view, 14, HRESULT (WINAPI *)(object *, void **))(view, &read) != S_OK || lstrcmpW(WindowsGetStringRawBuffer(read, NULL), L"Report"))
+		return 74;
+	WindowsDeleteString(read);
+	/* Its identifier is the one ApplicationViewInterop gives for the core window. */
+	INT32 id = 0, interop_id = -1;
+	object *interops = statics(L"Windows.UI.ViewManagement.ApplicationView", &view_interop);
+	if (!interops || METHOD(view, 15, number_method)(view, &id) != S_OK ||
+		METHOD(interops, 6, HRESULT (WINAPI *)(object *, object *, INT32 *))(interops, window, &interop_id) != S_OK || id != interop_id || !id)
+		return 75;
+	METHOD(interops, 2, release_method)(interops);
+	/* Landscape, with the client area as its visible bounds, which change with the window. */
+	INT32 orientation = -1;
+	struct rect bounds = {0};
+	INT64 bounds_token = 0, consolidated_token = 0;
+	if (METHOD(view, 6, number_method)(view, &orientation) != S_OK || orientation != 0) return 76;
+	if (METHOD(view2, 8, HRESULT (WINAPI *)(object *, struct rect *))(view2, &bounds) != S_OK || bounds.width != 640.0f || bounds.height != 480.0f)
+		return 77;
+	if (METHOD(view2, 9, event_method)(view2, (object *)&on_bounds, &bounds_token) != S_OK ||
+		METHOD(view, 16, event_method)(view, (object *)&on_consolidated, &consolidated_token) != S_OK) return 78;
+	/* TryResizeView sizes the client area, but not under the preferred minimum. */
+	typedef HRESULT (WINAPI *resize_method)(object *, struct size, BYTE *);
+	typedef HRESULT (WINAPI *size_method)(object *, struct size);
+	BYTE done = 0;
+	if (METHOD(view3, 13, resize_method)(view3, (struct size){700, 500}, &done) != S_OK || !done) return 79;
+	METHOD(view2, 8, HRESULT (WINAPI *)(object *, struct rect *))(view2, &bounds);
+	if (bounds.width != 700.0f || bounds.height != 500.0f || !bounds_changes) return 80;
+	if (METHOD(view3, 14, size_method)(view3, (struct size){400, 300}) != S_OK ||
+		METHOD(view3, 13, resize_method)(view3, (struct size){300, 200}, &done) != S_OK || done) return 81;
+	/* The title bar keeps the colors it is given. */
+	if (METHOD(view3, 6, object_method)(view3, &bar) != S_OK || !bar) return 82;
+	if (METHOD(bar, 8, HRESULT (WINAPI *)(object *, object *))(bar, (object *)&boxed_color) != S_OK ||
+		METHOD(bar, 9, object_method)(bar, &got) != S_OK || got != (object *)&boxed_color) return 83;
+	METHOD(got, 2, release_method)(got);
+	if (METHOD(bar, 8, HRESULT (WINAPI *)(object *, object *))(bar, NULL) != S_OK) return 84;
+	/* Full screen: a borderless window over its monitor, and back. */
+	BYTE full = 0;
+	MONITORINFO monitor = {sizeof monitor};
+	RECT frame;
+	if (METHOD(view3, 9, flag_method)(view3, &full) != S_OK || full) return 85;
+	if (METHOD(view3, 10, flag_method)(view3, &full) != S_OK || !full) return 86;
+	GetMonitorInfoW(MonitorFromWindow(handle, MONITOR_DEFAULTTONEAREST), &monitor);
+	GetWindowRect(handle, &frame);
+	if (METHOD(view3, 9, flag_method)(view3, &full) != S_OK || !full || (GetWindowLongW(handle, GWL_STYLE) & WS_CAPTION) ||
+		!EqualRect(&frame, &monitor.rcMonitor)) return 87;
+	if (METHOD(view3, 11, HRESULT (WINAPI *)(object *))(view3) != S_OK || METHOD(view3, 9, flag_method)(view3, &full) != S_OK || full ||
+		(GetWindowLongW(handle, GWL_STYLE) & WS_CAPTION) != WS_CAPTION) return 88;
+	/* Only the default view mode. */
+	BYTE supported = 0, compact = 1;
+	if (METHOD(view4, 7, HRESULT (WINAPI *)(object *, INT32, BYTE *))(view4, 0, &supported) != S_OK || !supported ||
+		METHOD(view4, 7, HRESULT (WINAPI *)(object *, INT32, BYTE *))(view4, 1, &compact) != S_OK || compact) return 89;
+	METHOD(view2, 10, HRESULT (WINAPI *)(object *, INT64))(view2, bounds_token);
+	METHOD(bar, 2, release_method)(bar);
+	METHOD(view4, 2, release_method)(view4);
+	METHOD(view3, 2, release_method)(view3);
+	METHOD(view2, 2, release_method)(view2);
+	METHOD(view, 2, release_method)(view);
+	METHOD(views, 2, release_method)(views);
+	return 0;
+}
 
 /* The view and its source, each an object of the Windows Runtime with one interface. */
 static HRESULT WINAPI app_query(object *self, const GUID *iid, void **out)
@@ -328,6 +439,9 @@ static HRESULT WINAPI view_run(object *self)
 	if (METHOD(window, 7, HRESULT (WINAPI *)(object *, struct rect *))(window, &bounds) != S_OK || bounds.width <= 0 || bounds.height <= 0 ||
 		METHOD(window, 17, flag_method)(window, &shown) != S_OK || !shown)
 		fail(43);
+	/* The window has the size the app asked for before Run. */
+	if (bounds.width != 500.0f || bounds.height != 400.0f)
+		fail(90);
 #ifdef SWAP_CHAIN
 	/* As the DirectX template makes its swap chain: flip model, two buffers, the size of the window's bounds. */
 	static const GUID factory2 = {0x50c83a1c, 0xe072, 0x4c48, {0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0}};
@@ -386,12 +500,17 @@ static HRESULT WINAPI view_run(object *self)
 	frames(dispatcher, 2);
 	if (sized <= before || width_seen != 640.0f)
 		fail(48);
+	const int view_failed = check_application_view(handle);
+	if (view_failed)
+		fail(view_failed);
 	/* Closing the window ends ProcessUntilQuit. */
 	if (METHOD(window, 19, HRESULT (WINAPI *)(object *))(window) != S_OK)
 		fail(49);
 	METHOD(dispatcher, 7, HRESULT (WINAPI *)(object *, INT32))(dispatcher, 2);
 	if (closed != 1 || IsWindow(handle))
 		fail(50);
+	if (consolidations != 1)
+		fail(91);
 	if (info)
 		METHOD(info, 2, release_method)(info);
 	if (action)
@@ -670,6 +789,16 @@ int raven_entry(void)
 	const int package = check_package();
 	if (package)
 		return package;
+	/* A thread that runs no view has no ApplicationView; the launch size asked for now is the window's. */
+	object *views = statics(L"Windows.UI.ViewManagement.ApplicationView", &view_statics2), *no_view = NULL;
+	if (!views || METHOD(views, 6, object_method)(views, &no_view) != (HRESULT)0x80070490 || no_view)
+		return 9;
+	object *launch = statics(L"Windows.UI.ViewManagement.ApplicationView", &view_statics3);
+	struct size size = {0};
+	if (!launch || METHOD(launch, 9, HRESULT (WINAPI *)(object *, struct size))(launch, (struct size){500, 400}) != S_OK ||
+		METHOD(launch, 7, HRESULT (WINAPI *)(object *, INT32))(launch, 1) != S_OK ||
+		METHOD(launch, 8, HRESULT (WINAPI *)(object *, struct size *))(launch, &size) != S_OK || size.width != 500.0f || size.height != 400.0f)
+		return 10;
 	if (METHOD(core, 13, HRESULT (WINAPI *)(object *, object *))(core, &source) != S_OK)
 		return 4;
 	if (failed)
