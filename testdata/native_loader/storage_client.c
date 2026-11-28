@@ -591,6 +591,30 @@ static int check_known(void)
 	return 0;
 }
 
+/* A desktop app gives each picker the window it belongs to through IInitializeWithWindow; a handle that is no window is refused. */
+static const GUID initialize_with_window = {0x3e68d4bd, 0x7135, 0x4d10, {0x80, 0x18, 0x9f, 0xb6, 0xd9, 0xf3, 0x3f, 0xa1}};
+typedef HRESULT (WINAPI *window_method)(object *, HWND);
+
+static int check_window(void)
+{
+	static const WCHAR *const names[] = {L"Windows.Storage.Pickers.FileOpenPicker", L"Windows.Storage.Pickers.FileSavePicker",
+		L"Windows.Storage.Pickers.FolderPicker"};
+	HWND window = CreateWindowExW(0, L"STATIC", L"owner", WS_POPUP, 0, 0, 10, 10, NULL, NULL, NULL, NULL);
+	if (!window) return 190;
+	for (int at = 0; at < 3; ++at) {
+		struct reference name = {1, (UINT32)lstrlenW(names[at]), {0, 0}, names[at]};
+		object *instance = NULL, *initialize = NULL;
+		if (RoActivateInstance(&name, (void **)&instance) != S_OK || !instance) return 191;
+		if (!(initialize = query(instance, &initialize_with_window))) return 192;
+		if (METHOD(initialize, 3, window_method)(initialize, window) != S_OK) return 193;
+		if (METHOD(initialize, 3, window_method)(initialize, (HWND)(INT_PTR)0x7ffff0) != E_INVALIDARG) return 194;
+		release(initialize);
+		release(instance);
+	}
+	DestroyWindow(window);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	if (FAILED(RoInitialize(1))) return 1;
@@ -605,5 +629,8 @@ int raven_entry(void)
 	wsprintfW(base + length, L"raven-storage-%lu", GetCurrentProcessId());
 	if (!CreateDirectoryW(base, NULL)) return 4;
 	const int storage = check_storage(base);
-	return storage ? storage : check_known();
+	if (storage)
+		return storage;
+	const int known = check_known();
+	return known ? known : check_window();
 }

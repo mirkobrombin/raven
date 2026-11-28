@@ -1462,7 +1462,7 @@ static void destroy_display(struct object *base)
 
 static struct display *display_of(void *iface) { return (struct display *)owner(iface); }
 
-static HWND display_window(void) { return current_view && current_view->window ? current_view->window->handle : NULL; }
+HWND application_window(void) { return current_view && current_view->window ? current_view->window->handle : NULL; }
 
 static UINT display_dpi(void)
 {
@@ -1472,7 +1472,7 @@ static UINT display_dpi(void)
 		dpi_for_window = (UINT (WINAPI *)(HWND))GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
 		looked = TRUE;
 	}
-	const HWND window = display_window();
+	const HWND window = application_window();
 	const UINT dpi = dpi_for_window && window ? dpi_for_window(window) : 96;
 	return dpi ? dpi : 96;
 }
@@ -1525,7 +1525,7 @@ static HRESULT WINAPI display_diagonal(void *iface, void **out) { return answer_
 static void monitor_size(UINT32 *width, UINT32 *height)
 {
 	MONITORINFO info = {sizeof info};
-	const HWND window = display_window();
+	const HWND window = application_window();
 	if (window && GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &info)) {
 		*width = (UINT32)(info.rcMonitor.right - info.rcMonitor.left);
 		*height = (UINT32)(info.rcMonitor.bottom - info.rcMonitor.top);

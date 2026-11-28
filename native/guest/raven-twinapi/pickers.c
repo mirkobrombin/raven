@@ -11,6 +11,7 @@
  *   that file's name; CommitButtonText names its button and DefaultFileExtension completes a name typed without one.
  * - A file chosen to save is made empty when it is not there yet, so the storage file stands for it. Closing the dialog without a choice
  *   ends the operation with no file.
+ * - The dialog belongs to the window IInitializeWithWindow gave, as desktop apps give it, or else to the app's CoreWindow.
  * - ViewMode and SettingsIdentifier are kept but the dialog has one view and does not remember folders; every user is the process's. */
 #include "object.h"
 #include "../raven-winrt/winrt.h"
@@ -72,6 +73,8 @@ struct picker {
 	IUnknown *filter;
 	struct property_set *choices;
 	IUnknown *suggested;
+	/* What IInitializeWithWindow gave. */
+	HWND window;
 };
 
 static struct picker *picker_of(void *iface) { return (struct picker *)owner(iface); }
@@ -456,7 +459,7 @@ static HRESULT run_pick(struct winrt_async *operation, void *context, union winr
 	if (SUCCEEDED(outcome))
 		outcome = prepare(self, dialog, pick->several);
 	if (SUCCEEDED(outcome)) {
-		outcome = dialog->lpVtbl->Show(dialog, NULL);
+		outcome = dialog->lpVtbl->Show(dialog, self->window ? self->window : application_window());
 		/* No choice is no file, not an error. */
 		if (outcome == HRESULT_FROM_WIN32(ERROR_CANCELLED))
 			outcome = pick->several ? make_files(NULL, 0, &result->object) : S_OK;
@@ -485,6 +488,14 @@ static HRESULT start_pick(void *iface, const IID *operation, BOOL several, void 
 }
 
 static HRESULT WINAPI pick_file(void *iface, void **out) { return start_pick(iface, &iid_file_operation, FALSE, out); }
+static HRESULT WINAPI initialize_window(void *iface, HWND window)
+{
+	if (window && !IsWindow(window))
+		return E_INVALIDARG;
+	picker_of(iface)->window = window;
+	return S_OK;
+}
+
 static HRESULT WINAPI pick_files(void *iface, void **out) { return start_pick(iface, &iid_files_operation, TRUE, out); }
 static HRESULT WINAPI pick_folder(void *iface, void **out) { return start_pick(iface, &iid_folder_operation, FALSE, out); }
 
@@ -492,7 +503,8 @@ TABLE(open_table, 0, INSPECTABLE, (const void *)view_mode, (const void *)set_vie
 	(const void *)location, (const void *)set_location, (const void *)commit, (const void *)set_commit, (const void *)filter,
 	(const void *)pick_file, (const void *)pick_files);
 TABLE(open3_table, 1, INSPECTABLE, (const void *)user);
-static const struct face_iid open_iids[] = {{&iid_open_picker, 0}, {&iid_open_picker3, 1}, {NULL, 0}};
+TABLE(open_window_table, 2, UNKNOWN, (const void *)initialize_window);
+static const struct face_iid open_iids[] = {{&iid_open_picker, 0}, {&iid_open_picker3, 1}, {&iid_initialize_with_window, 2}, {NULL, 0}};
 static const struct kind open_kind = {"FileOpenPicker", L"Windows.Storage.Pickers.FileOpenPicker", open_iids, destroy_picker};
 
 TABLE(save_table, 0, INSPECTABLE, (const void *)settings, (const void *)set_settings, (const void *)location, (const void *)set_location,
@@ -501,26 +513,29 @@ TABLE(save_table, 0, INSPECTABLE, (const void *)settings, (const void *)set_sett
 	(const void *)pick_file);
 TABLE(save3_table, 1, INSPECTABLE, (const void *)enterprise, (const void *)set_enterprise);
 TABLE(save4_table, 2, INSPECTABLE, (const void *)user);
-static const struct face_iid save_iids[] = {{&iid_save_picker, 0}, {&iid_save_picker3, 1}, {&iid_save_picker4, 2}, {NULL, 0}};
+TABLE(save_window_table, 3, UNKNOWN, (const void *)initialize_window);
+static const struct face_iid save_iids[] = {{&iid_save_picker, 0}, {&iid_save_picker3, 1}, {&iid_save_picker4, 2},
+	{&iid_initialize_with_window, 3}, {NULL, 0}};
 static const struct kind save_kind = {"FileSavePicker", L"Windows.Storage.Pickers.FileSavePicker", save_iids, destroy_picker};
 
 TABLE(folder_table, 0, INSPECTABLE, (const void *)view_mode, (const void *)set_view_mode, (const void *)settings,
 	(const void *)set_settings, (const void *)location, (const void *)set_location, (const void *)commit, (const void *)set_commit,
 	(const void *)filter, (const void *)pick_folder);
 TABLE(folder3_table, 1, INSPECTABLE, (const void *)user);
-static const struct face_iid folder_iids[] = {{&iid_folder_picker, 0}, {&iid_folder_picker3, 1}, {NULL, 0}};
+TABLE(folder_window_table, 2, UNKNOWN, (const void *)initialize_window);
+static const struct face_iid folder_iids[] = {{&iid_folder_picker, 0}, {&iid_folder_picker3, 1}, {&iid_initialize_with_window, 2}, {NULL, 0}};
 static const struct kind folder_kind = {"FolderPicker", L"Windows.Storage.Pickers.FolderPicker", folder_iids, destroy_picker};
 
 static HRESULT new_picker(enum picker_type type, IInspectable **out)
 {
-	static const void *const *const open_tables[] = {open_table.slots, open3_table.slots};
-	static const void *const *const save_tables[] = {save_table.slots, save3_table.slots, save4_table.slots};
-	static const void *const *const folder_tables[] = {folder_table.slots, folder3_table.slots};
+	static const void *const *const open_tables[] = {open_table.slots, open3_table.slots, open_window_table.slots};
+	static const void *const *const save_tables[] = {save_table.slots, save3_table.slots, save4_table.slots, save_window_table.slots};
+	static const void *const *const folder_tables[] = {folder_table.slots, folder3_table.slots, folder_window_table.slots};
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	struct picker *self = type == SAVE_PICKER ? make(sizeof *self, &save_kind, save_tables, 3) :
-		make(sizeof *self, type == OPEN_PICKER ? &open_kind : &folder_kind, type == OPEN_PICKER ? open_tables : folder_tables, 2);
+	struct picker *self = type == SAVE_PICKER ? make(sizeof *self, &save_kind, save_tables, 4) :
+		make(sizeof *self, type == OPEN_PICKER ? &open_kind : &folder_kind, type == OPEN_PICKER ? open_tables : folder_tables, 3);
 	if (!self)
 		return E_OUTOFMEMORY;
 	InitializeSRWLock(&self->lock);

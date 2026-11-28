@@ -28,6 +28,9 @@
 extern LONG objects, tokens;
 
 extern const IID iid_unknown, iid_inspectable, iid_agile, iid_factory, iid_async_info;
+/* IInitializeWithWindow, through which a desktop app gives a picker or a dialog the window that owns it: its table is UNKNOWN and then
+ * Initialize. */
+extern const IID iid_initialize_with_window;
 
 /* An object answers several interfaces, each a table pointer at its own place at the start of the object. Each table is preceded by the
  * number of its place, so a method finds the object from the interface it was called through. */
@@ -108,12 +111,15 @@ void handlers_clear(struct handlers *list);
 #define INSPECTABLE (const void *)object_query, (const void *)object_reference, (const void *)object_release, (const void *)object_iids, \
 	(const void *)object_name, (const void *)object_trust
 #define FACTORY INSPECTABLE, (const void *)static_activate
+#define UNKNOWN (const void *)object_query, (const void *)object_reference, (const void *)object_release
 
 /* The app's view, from core_window.c: CoreApplication runs it, finds it and ends it, and its window and cursor classes are activated by
  * name. */
 HRESULT application_run(IUnknown *source);
 HRESULT application_view(void **out);
 HRESULT application_exit(void);
+/* The window of the app's CoreWindow, or NULL: what owns a dialog no window was given for. */
+HWND application_window(void);
 extern struct object core_window_class, core_cursor_class, display_information_class;
 /* The package of the app and its data, from package.c. */
 extern struct object package_class, application_data_class;
