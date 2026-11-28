@@ -7205,7 +7205,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/layered-window.exe ${CMAKE_CURRENT_BINARY_DIR}/layered-window-${mode} ${mode})
                     set_tests_properties(native_layered_window_${mode} PROPERTIES TIMEOUT 45)
                 endforeach()
-                foreach(mode normal scaled rotated resize dark frames)
+                foreach(mode normal scaled rotated resize dark frames colored)
                     add_test(NAME native_screen_metrics_${mode} COMMAND ${RAVEN_PIL_PYTHON} ${PROJECT_SOURCE_DIR}/scripts/native-screen-metrics.py
                         $<TARGET_FILE:raven> ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics.exe ${mode}
                         ${CMAKE_CURRENT_BINARY_DIR}/screen-metrics-${mode})

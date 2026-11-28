@@ -98,7 +98,7 @@ int raven_entry(void)
 	if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"') ++cursor; if (*cursor) ++cursor; }
 	else while (*cursor && *cursor != ' ') ++cursor;
 	int width = number(&cursor), height = number(&cursor);
-	/* The last number picks a variant: 1 the dark frame, 2 the bordered children. */
+	/* The last number picks a variant: 1 the dark frame, 2 the bordered children, 3 a caption of the program's colors. */
 	const int next_width = number(&cursor), next_height = number(&cursor), variant = number(&cursor), dark = variant == 1;
 	if (!width || !height) return 10;
 	HDC screen = GetDC(NULL);
@@ -116,6 +116,15 @@ int raven_entry(void)
 	if (dark) {
 		const BOOL on = TRUE;
 		if (DwmSetWindowAttribute(window, 20, &on, sizeof(on)) != S_OK || DwmSetWindowAttribute(NULL, 20, &on, sizeof(on)) != E_HANDLE) return 17;
+	}
+	/* DWMWA_CAPTION_COLOR and DWMWA_TEXT_COLOR take a COLORREF or DWMWA_COLOR_DEFAULT; only the border takes DWMWA_COLOR_NONE. */
+	if (variant == 3) {
+		const COLORREF fill = RGB(0x10, 0x60, 0xa0), text = RGB(0xff, 0xff, 0xff), none = 0xfffffffe, wrong = 0x01000000, standard = 0xffffffff;
+		if (DwmSetWindowAttribute(window, 35, &fill, sizeof fill) != S_OK || DwmSetWindowAttribute(window, 36, &text, sizeof text) != S_OK ||
+			DwmSetWindowAttribute(window, 34, &none, sizeof none) != S_OK || DwmSetWindowAttribute(window, 35, &none, sizeof none) != E_INVALIDARG ||
+			DwmSetWindowAttribute(window, 35, &wrong, sizeof wrong) != E_INVALIDARG || DwmSetWindowAttribute(window, 35, &fill, 2) != E_INVALIDARG ||
+			DwmSetWindowAttribute(window, 34, &standard, sizeof standard) != S_OK)
+			return 20;
 	}
 	ShowWindow(window, SW_MAXIMIZE);
 	if (next_width && next_height) {

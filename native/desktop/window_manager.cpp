@@ -1235,6 +1235,25 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 				drawing(call[0]);
 			}
 		}
+		// DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR and DWMWA_TEXT_COLOR of Windows 11: a COLORREF, or DWMWA_COLOR_DEFAULT for the theme's.
+		if (call.u32(1) >= 34 && call.u32(1) <= 36) {
+			if (!call[2] || call.u32(3) != 4) {
+				call.ret(0x80070057U);
+				return;
+			}
+			const uint32_t value = call.load<uint32_t>(call[2]);
+			// DWMWA_COLOR_NONE only leaves out the border.
+			if ((value >> 24) && value != 0xffffffffU && !(call.u32(1) == 34 && value == 0xfffffffeU)) {
+				call.ret(0x80070057U);
+				return;
+			}
+			auto &color = call.u32(1) == 34 ? window->border_color : call.u32(1) == 35 ? window->caption_fill : window->caption_text;
+			const std::optional<uint32_t> next = value == 0xffffffffU ? std::nullopt : std::optional<uint32_t>(value);
+			if (color != next) {
+				color = next;
+				drawing(call[0]);
+			}
+		}
 		call.ret(0);
 	});
 	// The compositor shows the frame through the client area within these margins, wherever the program left it black (see present).

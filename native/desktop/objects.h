@@ -258,6 +258,9 @@ struct DesktopWindow {
 	std::optional<std::array<int32_t,4>> glass{};
 	// The dark caption and border DWMWA_USE_IMMERSIVE_DARK_MODE asks for.
 	bool dark_frame = false;
+	// The colors DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR and DWMWA_TEXT_COLOR give the frame, as COLORREFs, in place of the theme's;
+	// a border of DWMWA_COLOR_NONE is not drawn.
+	std::optional<uint32_t> border_color{}, caption_fill{}, caption_text{};
 	// A child whose program answered its last WM_NCPAINT without the default handling, drawing its border itself.
 	bool own_frame = false;
 	uint64_t instance = 0,userdata = 0;

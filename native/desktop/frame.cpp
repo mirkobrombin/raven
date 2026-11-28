@@ -335,6 +335,8 @@ constexpr uint32_t shade(uint32_t r, uint32_t g, uint32_t b) { return r | g << 8
 
 uint32_t NativeWindows::caption_color(const DesktopWindow &window, bool is_active) const
 {
+	if (window.caption_fill)
+		return *window.caption_fill;
 	if (window.dark_frame)
 		return is_active ? shade(0x20, 0x20, 0x20) : shade(0x2b, 0x2b, 0x2b);
 	return is_active ? shade(0xef, 0xf4, 0xf9) : shade(0xf3, 0xf3, 0xf3);
@@ -346,7 +348,8 @@ void NativeWindows::paint_caption_buttons(uint64_t handle, const DesktopWindow &
 	CanvasSurface surface{canvas};
 	shapes::Shapes<CanvasSurface> shapes{surface};
 	const bool dark = window.dark_frame;
-	const uint32_t ink = dark ? (is_active ? shade(0xff, 0xff, 0xff) : shade(0x9a, 0x9a, 0x9a)) : is_active ? shade(0x1a, 0x1a, 0x1a) : shade(0x8a, 0x8a, 0x8a);
+	const uint32_t ink = window.caption_text ? *window.caption_text : dark ? (is_active ? shade(0xff, 0xff, 0xff) : shade(0x9a, 0x9a, 0x9a))
+		: is_active ? shade(0x1a, 0x1a, 0x1a) : shade(0x8a, 0x8a, 0x8a);
 	const bool maximized = (window.style & 0x01000000U) != 0;
 	const auto button = [&](DesktopRect rect, uint64_t hit) {
 		if (rect.right <= rect.left)
@@ -390,16 +393,17 @@ void NativeWindows::paint_modern_frame(uint64_t handle, const DesktopWindow &win
 	shapes::Shapes<CanvasSurface> shapes{surface};
 	const bool dark = window.dark_frame;
 	const uint32_t title = caption_color(window, is_active);
-	const uint32_t ink = dark ? (is_active ? shade(0xff, 0xff, 0xff) : shade(0x9a, 0x9a, 0x9a)) : is_active ? shade(0x1a, 0x1a, 0x1a) : shade(0x8a, 0x8a, 0x8a);
+	const uint32_t ink = window.caption_text ? *window.caption_text : dark ? (is_active ? shade(0xff, 0xff, 0xff) : shade(0x9a, 0x9a, 0x9a))
+		: is_active ? shade(0x1a, 0x1a, 0x1a) : shade(0x8a, 0x8a, 0x8a);
 	const int32_t client_top = layout.border + layout.caption_height + layout.menu_height;
 	// The ring, the caption and the menu bar share one surface color.
 	canvas.fill({0, 0, width, client_top}, title);
 	canvas.fill({0, client_top, layout.border, height}, title);
 	canvas.fill({width - layout.border, client_top, width, height}, title);
 	canvas.fill({0, height - layout.border, width, height}, title);
-	if (layout.border)
-		shapes.rounded(0, 0, width, height, 0, std::nullopt, dark ? (is_active ? shade(0x4a, 0x4a, 0x4a) : shade(0x3c, 0x3c, 0x3c))
-			: is_active ? shade(0xb9, 0xbf, 0xc7) : shade(0xd2, 0xd2, 0xd2));
+	if (layout.border && window.border_color != 0xfffffffeU)
+		shapes.rounded(0, 0, width, height, 0, std::nullopt, window.border_color ? *window.border_color
+			: dark ? (is_active ? shade(0x4a, 0x4a, 0x4a) : shade(0x3c, 0x3c, 0x3c)) : is_active ? shade(0xb9, 0xbf, 0xc7) : shade(0xd2, 0xd2, 0xd2));
 	if (layout.caption_height) {
 		auto &renderer = objects.text();
 		const int32_t text_left = layout.caption.left + (window.style & 0x80000U ? 22 : 8);
@@ -444,6 +448,8 @@ std::vector<DesktopRect> NativeWindows::menu_bar_items(const DesktopWindow &)
 
 uint32_t NativeWindows::caption_color(const DesktopWindow &window, bool is_active) const
 {
+	if (window.caption_fill)
+		return *window.caption_fill;
 	if (window.dark_frame)
 		return is_active ? 0x202020U : 0x2b2b2bU;
 	return is_active ? 0xf9f4efU : 0xf3f3f3U;
