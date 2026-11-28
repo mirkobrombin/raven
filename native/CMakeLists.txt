@@ -3257,6 +3257,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     -o ${UCRT_VC2022_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_vc2022_client.c -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_vc2022_client.c VERBATIM)
             add_custom_target(ucrt_vc2022_fixture ALL DEPENDS ${UCRT_VC2022_CLIENT})
+            # Every name of api-ms-win-crt-time-l1-1-0.dll, the 32-bit time forms among them, resolved and called through the API set.
+            set(UCRT_TIME_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/ucrt-time.exe)
+            add_custom_command(OUTPUT ${UCRT_TIME_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--no-insert-timestamp
+                    -o ${UCRT_TIME_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_time_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/ucrt_time_client.c VERBATIM)
+            add_custom_target(ucrt_time_fixture ALL DEPENDS ${UCRT_TIME_CLIENT})
             # The msvcrt entry points libraries built by MinGW-w64 import, as VLC's plugins do, resolved and called by name.
             set(MSVCRT_MINGW_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/msvcrt-mingw.exe)
             add_custom_command(OUTPUT ${MSVCRT_MINGW_CLIENT}
@@ -3530,6 +3538,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_ucrt_vc2022_x64 COMMAND raven --run-process --execution=native ${UCRT_VC2022_CLIENT})
             set_tests_properties(native_ucrt_vc2022_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-vc2022-prefix)
+            add_test(NAME native_ucrt_time_x64 COMMAND raven --run-process --execution=native ${UCRT_TIME_CLIENT})
+            set_tests_properties(native_ucrt_time_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-time-prefix)
             add_test(NAME native_msvcrt_mingw_x64 COMMAND raven --run-process --execution=native ${MSVCRT_MINGW_CLIENT})
             set_tests_properties(native_msvcrt_mingw_x64 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/msvcrt-mingw-prefix)
@@ -6754,6 +6765,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-vc2022.exe ${LOADER_SOURCES}/ucrt_vc2022_client.c -lkernel32
                     DEPENDS ${LOADER_SOURCES}/ucrt_vc2022_client.c VERBATIM)
                 add_custom_target(x86_ucrt_vc2022_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-vc2022.exe x86_ucrt_component)
+                add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-time.exe
+                    COMMAND ${RAVEN_MINGW32} -O1 -nostdlib -fno-stack-protector -fno-builtin
+                        -Wl,--entry,_raven_entry,--no-insert-timestamp
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-time.exe ${LOADER_SOURCES}/ucrt_time_client.c -lkernel32
+                    DEPENDS ${LOADER_SOURCES}/ucrt_time_client.c VERBATIM)
+                add_custom_target(x86_ucrt_time_fixture ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-time.exe x86_ucrt_component)
                 if(TARGET vulkan_thunk32_generated)
                     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/x86-vulkan-client.exe
                         COMMAND ${RAVEN_MINGW32} -O2 -nostdlib -fno-stack-protector -fno-builtin
@@ -6817,6 +6834,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-vc2022.exe)
                 set_tests_properties(native_ucrt_vc2022_x86 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-vc2022-prefix32)
+                add_test(NAME native_ucrt_time_x86 COMMAND raven --run-process --execution=native
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86-ucrt-time.exe)
+                set_tests_properties(native_ucrt_time_x86 PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                    ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/ucrt-time-prefix32)
                 add_test(NAME native_x86_d3d9_objects COMMAND raven --run-process --execution=native
                     ${CMAKE_CURRENT_BINARY_DIR}/x86-d3d9-client.exe)
                 set_tests_properties(native_x86_d3d9_objects PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
