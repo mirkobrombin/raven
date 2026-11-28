@@ -90,6 +90,9 @@ jobs:
       - name: Test the downloads of pinned files
         run: python3 scripts/test_downloads.py
 
+      - name: Test the choice of shard reports
+        run: python3 .github/scripts/test_shard_reports.py
+
       - name: Parse shell tools
         shell: bash
         run: |
