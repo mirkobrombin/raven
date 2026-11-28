@@ -75,5 +75,18 @@ int raven_entry(void)
 	if (LCIDToLocaleName(0x1234, name, LOCALE_NAME_MAX_LENGTH, 0)) return 21;
 	if (LCIDToLocaleName(0x459, name, LOCALE_NAME_MAX_LENGTH, 0) != 11 || lstrcmpW(name, L"sd-Deva-IN")) return 22;
 	if (LocaleNameToLCID(L"ar-EG", 0) != 0xc01) return 23;
+	/* The fields of numbers, money and dates with the values Windows gives for en-US. */
+	static const struct {
+		LCTYPE type;
+		const WCHAR *text;
+	} fields[] = {
+		{LOCALE_IDIGITS, L"2"}, {LOCALE_ILZERO, L"1"}, {LOCALE_SNATIVEDIGITS, L"0123456789"}, {LOCALE_SMONDECIMALSEP, L"."},
+		{LOCALE_SMONTHOUSANDSEP, L","}, {LOCALE_SMONGROUPING, L"3;0"}, {LOCALE_ICURRDIGITS, L"2"}, {LOCALE_ILDATE, L"0"},
+		{LOCALE_ICENTURY, L"1"}, {LOCALE_IDAYLZERO, L"0"}, {LOCALE_IMONLZERO, L"0"}, {LOCALE_ITIMEMARKPOSN, L"0"},
+		{LOCALE_SYEARMONTH, L"MMMM yyyy"}, {LOCALE_SENGCURRNAME, L"US Dollar"}, {LOCALE_SNATIVECURRNAME, L"US Dollar"},
+	};
+	for (unsigned index = 0; index < sizeof fields / sizeof *fields; ++index)
+		if (!GetLocaleInfoEx(L"en-US", fields[index].type, text, 64) || !same(text, fields[index].text))
+			return 24;
 	return 0;
 }
