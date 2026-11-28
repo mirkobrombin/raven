@@ -389,6 +389,8 @@ static HRESULT STDMETHODCALLTYPE info_close(void *iface)
 
 BOOL winrt_async_canceled(struct winrt_async *operation) { return InterlockedCompareExchange(&operation->canceled, 0, 0) != 0; }
 
+void *winrt_async_interface(struct winrt_async *operation) { return &operation->operation; }
+
 static const struct {
 	void *query, *add_ref, *release, *iids, *name, *trust, *put_progress, *get_progress, *put_completed, *get_completed, *results;
 } progress_table = {WINRT_INSPECTABLE, async_put_progress, async_get_progress, async_put_completed, async_get_completed, async_results};

@@ -27,6 +27,7 @@
  * - Windows.UI.Popups.MessageDialog, PopupMenu, UICommand and UICommandSeparator, in popups.c.
  * - Windows.UI.ViewManagement.ApplicationView and its title bar, in view.c.
  * - Windows.Security.Cryptography.CryptographicBuffer and the hash, MAC and symmetric algorithms of its Core, in crypto.c.
+ * - Windows.System.Threading.ThreadPool and ThreadPoolTimer, in threading.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -865,7 +866,7 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&data_package_class, &standard_formats_class, &html_format_helper_class, &clipboard_content_options_class,
 	&message_dialog_class, &popup_menu_class, &ui_command_class, &ui_command_separator_class, &application_view_class,
 	&cryptographic_buffer_class, &hash_provider_class, &hash_names_class, &mac_provider_class, &mac_names_class, &cryptographic_engine_class,
-	&cipher_provider_class, &cipher_names_class};
+	&cipher_provider_class, &cipher_names_class, &thread_pool_class, &thread_pool_timer_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

@@ -152,6 +152,8 @@ extern struct object application_view_class;
 /* crypto.c. */
 extern struct object cryptographic_buffer_class, hash_provider_class, hash_names_class, mac_provider_class, mac_names_class,
 	cryptographic_engine_class, cipher_provider_class, cipher_names_class;
+/* threading.c. */
+extern struct object thread_pool_class, thread_pool_timer_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */
 extern struct object launcher_class, launcher_options_class;
 /* Windows.Storage.KnownFolders, from known.c. */

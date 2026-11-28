@@ -150,6 +150,8 @@ HRESULT winrt_async_done(const IID *operation_iid, enum winrt_result kind, HRESU
 HRESULT winrt_wait(void *operation, BOOL with_progress, void *result);
 /* True once Cancel was called: work that checks it may end early with E_ABORT. */
 BOOL winrt_async_canceled(struct winrt_async *operation);
+/* The operation's own interface, without a new reference: for work that hands the operation to the app, as a work item's handler takes it. */
+void *winrt_async_interface(struct winrt_async *operation);
 
 /* Objects or strings in a list, kept in a snapshot: IVectorView<T> with IIterable<T> and the IIterator<T> they hand out, for any interface
  * type T, or for String with strings. The snapshot holds a reference to each item, or a copy of each string; *out is the view, or with
