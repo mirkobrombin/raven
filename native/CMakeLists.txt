@@ -1573,6 +1573,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_dependencies(menu_track_test menu_track_fixture raven-bootstrap)
             add_test(NAME native_menu_submenu_click COMMAND menu_track_test $<TARGET_FILE:raven-bootstrap> ${MENU_TRACK_FIXTURE})
             set_tests_properties(native_menu_submenu_click PROPERTIES TIMEOUT 15)
+            set(MENU_END_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/menu-end.exe)
+            add_custom_command(OUTPUT ${MENU_END_FIXTURE}
+                COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1a4000000,--no-insert-timestamp
+                    -o ${MENU_END_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/menu_end_client.c -lkernel32 -luser32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/menu_end_client.c VERBATIM)
+            add_custom_target(menu_end_fixture ALL DEPENDS ${MENU_END_FIXTURE})
+            add_executable(menu_end_test desktop/menu_end_test.cpp)
+            target_link_libraries(menu_end_test PRIVATE raven_cpu)
+            add_dependencies(menu_end_test menu_end_fixture raven-bootstrap)
+            add_test(NAME native_menu_end_from_thread COMMAND menu_end_test $<TARGET_FILE:raven-bootstrap> ${MENU_END_FIXTURE})
+            set_tests_properties(native_menu_end_from_thread PROPERTIES TIMEOUT 30)
             add_executable(outer_surface_test desktop/outer_surface_test.cpp)
             target_link_libraries(outer_surface_test PRIVATE raven_cpu)
             add_dependencies(outer_surface_test outer_surface_visible_fixture raven-bootstrap)

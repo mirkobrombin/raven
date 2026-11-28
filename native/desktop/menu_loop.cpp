@@ -392,13 +392,20 @@ uint64_t NativeWindows::track_popup_menu(uint64_t menu, uint32_t flags, int32_t 
 	tracked_command = 0;
 	try {
 		menu_open_popup(menu, root, x - top->outer.left, y - top->outer.top);
+		const auto me = environment.thread_id();
 		while (!popups.empty()) {
 			serve_sent();
 			flush_dirty();
 			deliver_pending();
 			if (!presentation.poll)
 				break;
-			for (const auto &event : presentation.poll(std::chrono::milliseconds(20)))
+			// The loop waits as a thread pumping its queue does: the other threads run meanwhile, and a message one of them sends to
+			// this thread's windows, as one that closes the menu with EndMenu, is answered at once.
+			if (block_hook && me) {
+				const auto wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+				block_hook([&] { return sent_for(me); }, wake);
+			}
+			for (const auto &event : presentation.poll(std::chrono::milliseconds(block_hook && me ? 0 : 20)))
 				receive(event);
 		}
 	} catch (...) {

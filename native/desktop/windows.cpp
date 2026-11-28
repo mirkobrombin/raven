@@ -600,7 +600,15 @@ bool NativeWindows::input_ready()
 // move for each turn of the owner's loop, and a press would reach the program long after the hand made it.
 uint32_t NativeWindows::input_thread(const DesktopEvent &event) const
 {
-	return owner(event.window ? event.window : focus);
+	// A menu's drop-down is no guest window: its input belongs to the thread of the window the menu opened on, which runs the menu
+	// while the other threads go on.
+	auto window=event.window ? event.window : focus;
+	for (size_t depth=0;depth<popups.size();++depth) {
+		const auto found=std::find_if(popups.begin(),popups.end(),[&](const MenuPopup &popup) { return popup.handle==window; });
+		if (found==popups.end()) break;
+		window=found->parent;
+	}
+	return owner(window);
 }
 
 bool NativeWindows::pending_for(uint32_t thread) const
@@ -1993,7 +2001,7 @@ uint64_t NativeWindows::send(uint64_t handle, uint32_t message, uint64_t wparam,
 		while (!item->done) {
 			serve_sent();
 			if (item->done) break;
-			block_hook([&] { return item->done || sent_for(me) || (!reported && std::chrono::steady_clock::now()-began>std::chrono::seconds(5)); });
+			block_hook([&] { return item->done || sent_for(me) || (!reported && std::chrono::steady_clock::now()-began>std::chrono::seconds(5)); },std::nullopt);
 			// A receiver that does not answer for seconds is named once: two threads waiting for each other stop the program here.
 			if (!reported && !item->done && std::chrono::steady_clock::now()-began>std::chrono::seconds(5)) {
 				reported=true;

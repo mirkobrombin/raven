@@ -3088,9 +3088,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 	kernel.present_frames=[&windows] { const DesktopScope desktop_scope; return windows.present_frames(); };
 	// Another process's message wakes a waiting thread when it lands, not at its next look.
 	set_foreign_nudge(threads.remote_nudge());
-	windows.set_block([&threads](std::function<bool()> ready) {
+	windows.set_block([&threads](std::function<bool()> ready, std::optional<std::chrono::steady_clock::time_point> wake) {
 		HostWait waiting;
-		threads.block([ready = std::move(ready)] { const DesktopScope desktop_scope; return ready(); }, std::nullopt, false, false, true);
+		threads.block([ready = std::move(ready)] { const DesktopScope desktop_scope; return ready(); }, wake, false, false, true);
 	});
 	windows.set_tell([&threads](uint32_t thread) { threads.tell(thread); });
 	threads.add_end_listener([&windows](uint32_t thread) { const DesktopScope desktop_scope; windows.thread_ended(thread); });

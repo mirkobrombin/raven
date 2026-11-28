@@ -56,7 +56,8 @@ public:
 		idle_drain = std::move(drain);
 	}
 	// Blocks the calling guest thread until the condition holds while the others run (a message sent to another thread's window).
-	void set_block(std::function<void(std::function<bool()>)> block) { block_hook = std::move(block); }
+	// Waits, letting the other threads run, until ready answers true or, when given, the time comes.
+	void set_block(std::function<void(std::function<bool()>, std::optional<std::chrono::steady_clock::time_point>)> block) { block_hook = std::move(block); }
 	// Wakes a guest thread whose wait for its messages, or for the answer to one it sent, may have ended: its queue changed, a window of
 	// it needs painting, or its message was answered. Those waits look again only when told, or for input, timers and other processes.
 	void set_tell(std::function<void(uint32_t)> tell)
@@ -250,7 +251,7 @@ public:
 	void thread_ended(uint32_t thread);
 private:
 	bool sent_for(uint32_t thread) const;
-	std::function<void(std::function<bool()>)> block_hook;
+	std::function<void(std::function<bool()>, std::optional<std::chrono::steady_clock::time_point>)> block_hook;
 	std::function<void(uint32_t)> tell_hook;
 	void tell(uint32_t thread) { if (tell_hook && thread) tell_hook(thread); }
 	// A window of the calling thread that needs painting, under the filter window when one is given.
