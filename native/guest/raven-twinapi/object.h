@@ -127,6 +127,8 @@ extern const struct winrt_items_kind string_list;
 extern const IID iid_folder_operation, iid_file_operation, iid_files_operation;
 /* Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, from pickers.c. */
 extern struct object open_picker_class, save_picker_class, folder_picker_class;
+/* Windows.System.Launcher and LauncherOptions, from launcher.c. */
+extern struct object launcher_class, launcher_options_class;
 /* Windows.Storage.KnownFolders, from known.c. */
 extern struct object known_folders_class;
 extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class, memory_stream_class;

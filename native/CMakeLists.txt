@@ -6057,12 +6057,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll
                         ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${twinapi_source}/launcher.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
                         ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${twinapi_source}/launcher.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     DEPENDS ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/object.h ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${twinapi_source}/launcher.c
                         ${winrt_source}/winrt.c ${winrt_source}/stream.c ${winrt_source}/winrt.h ${winrt_source}/foundation.h VERBATIM)
                 add_custom_target(twinapi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
                 set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
@@ -6091,6 +6091,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(storage_fixture${width} ALL DEPENDS ${storage_client} twinapi_component)
                     add_test(NAME native_storage_x${width} COMMAND raven --run-process --execution=native ${storage_client})
                     set_tests_properties(native_storage_x${width} PROPERTIES TIMEOUT 30 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # Windows.System.Launcher: an address and a file opened with the program registered for them, which is the client itself.
+                    set(system_launcher_client ${CMAKE_CURRENT_BINARY_DIR}/system-launcher-client${width}.exe)
+                    add_custom_command(OUTPUT ${system_launcher_client}
+                        COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp
+                            -o ${system_launcher_client} ${LOADER_SOURCES}/system_launcher_client.c -lruntimeobject -ladvapi32 -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/system_launcher_client.c VERBATIM)
+                    add_custom_target(system_launcher_fixture${width} ALL DEPENDS ${system_launcher_client} twinapi_component)
+                    add_test(NAME native_system_launcher_x${width} COMMAND raven --run-process --execution=native ${system_launcher_client})
+                    set_tests_properties(native_system_launcher_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/system-launcher-prefix${width})
                     # An app of the Windows Runtime run by CoreApplication.Run, with its core window, dispatcher and events.
                     set(core_window_client ${CMAKE_CURRENT_BINARY_DIR}/core-window-client${width}.exe)
                     add_custom_command(OUTPUT ${core_window_client}

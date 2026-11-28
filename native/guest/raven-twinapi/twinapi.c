@@ -21,6 +21,7 @@
  * - Windows.Storage.Streams.RandomAccessStream and RandomAccessStreamReference, in streams.c.
  * - Windows.Storage.KnownFolders, in known.c.
  * - Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, in pickers.c.
+ * - Windows.System.Launcher and LauncherOptions, in launcher.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -855,7 +856,7 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class,
 	&storage_file_class, &storage_folder_class, &file_io_class, &buffer_class, &memory_stream_class, &data_reader_class,
 	&data_writer_class, &random_access_stream_class, &stream_reference_class, &known_folders_class,
-	&open_picker_class, &save_picker_class, &folder_picker_class};
+	&open_picker_class, &save_picker_class, &folder_picker_class, &launcher_class, &launcher_options_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {
