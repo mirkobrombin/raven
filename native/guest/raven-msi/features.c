@@ -350,8 +350,8 @@ static BOOL usage_key(LPCWSTR product, BOOL create, HKEY *key)
 		return FALSE;
 	wsprintfW(rest, L"Products\\%s\\Usage", squashed);
 	user_data_key(path, FALSE, rest);
-	return create ? !RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, 0, KEY_READ | KEY_WRITE, NULL, key, NULL) :
-		!RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, key);
+	return create ? !installer_create(HKEY_LOCAL_MACHINE, path, KEY_READ | KEY_WRITE, key) :
+		!installer_open(HKEY_LOCAL_MACHINE, path, KEY_READ, key);
 }
 
 static feature_usage read_usage(HKEY key, LPCWSTR feature)
@@ -479,7 +479,7 @@ static DWORD source_context(const WCHAR *code, DWORD context)
 		return context;
 	WCHAR key[256];
 	HKEY root, handle;
-	if (source_key(code, MSIINSTALLCONTEXT_MACHINE, NULL, key, &root) && !RegOpenKeyExW(root, key, 0, KEY_READ, &handle)) {
+	if (source_key(code, MSIINSTALLCONTEXT_MACHINE, NULL, key, &root) && !installer_open(root, key, KEY_READ, &handle)) {
 		RegCloseKey(handle);
 		return MSIINSTALLCONTEXT_MACHINE;
 	}
@@ -496,7 +496,7 @@ UINT WINAPI MsiSourceListEnumSourcesW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONT
 	const WCHAR *kind = options & MSISOURCETYPE_URL ? L"URL" : L"Net";
 	if (!source_key(code, source_context(code, context), kind, key, &root))
 		return ERROR_INVALID_PARAMETER;
-	if (RegOpenKeyExW(root, key, 0, KEY_READ, &handle))
+	if (installer_open(root, key, KEY_READ, &handle))
 		return ERROR_NO_MORE_ITEMS;
 	WCHAR name[16], data[MAX_PATH * 2];
 	wsprintfW(name, L"%u", index + 1);
@@ -530,7 +530,7 @@ UINT WINAPI MsiSourceListGetInfoW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONTEXT 
 	if (!source_key(code, source_context(code, context), NULL, key, &root))
 		return ERROR_INVALID_PARAMETER;
 	HKEY handle;
-	if (RegOpenKeyExW(root, key, 0, KEY_READ, &handle))
+	if (installer_open(root, key, KEY_READ, &handle))
 		return ERROR_UNKNOWN_PRODUCT;
 	RegCloseKey(handle);
 	DWORD bytes = sizeof data, unused = 0;
@@ -538,15 +538,15 @@ UINT WINAPI MsiSourceListGetInfoW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONTEXT 
 		size = &unused;
 	data[0] = 0;
 	if (!lstrcmpW(property, INSTALLPROPERTY_PACKAGENAME))
-		RegGetValueW(root, key, L"PackageName", RRF_RT_REG_SZ, NULL, data, &bytes);
+		installer_get_value(root, key, L"PackageName", RRF_RT_REG_SZ, NULL, data, &bytes);
 	else if (!lstrcmpW(property, INSTALLPROPERTY_LASTUSEDSOURCE) || !lstrcmpW(property, INSTALLPROPERTY_LASTUSEDTYPE)) {
 		// The first network place is the one used, unless SetInfo said otherwise.
 		BOOL type = !lstrcmpW(property, INSTALLPROPERTY_LASTUSEDTYPE);
-		if (RegGetValueW(root, key, L"LastUsedSource", RRF_RT_REG_SZ, NULL, data, &bytes)) {
+		if (installer_get_value(root, key, L"LastUsedSource", RRF_RT_REG_SZ, NULL, data, &bytes)) {
 			WCHAR net[280];
 			wsprintfW(net, L"%s\\Net", key);
 			bytes = sizeof data;
-			if (RegGetValueW(root, net, L"1", RRF_RT_REG_SZ, NULL, data, &bytes))
+			if (installer_get_value(root, net, L"1", RRF_RT_REG_SZ, NULL, data, &bytes))
 				data[0] = 0;
 		}
 		if (type) {
@@ -555,7 +555,7 @@ UINT WINAPI MsiSourceListGetInfoW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONTEXT 
 	} else if (!lstrcmpW(property, INSTALLPROPERTY_MEDIAPACKAGEPATH) || !lstrcmpW(property, INSTALLPROPERTY_DISKPROMPT)) {
 		WCHAR media[280];
 		wsprintfW(media, L"%s\\Media", key);
-		RegGetValueW(root, media, !lstrcmpW(property, INSTALLPROPERTY_DISKPROMPT) ? L"DiskPrompt" : L"MediaPackage", RRF_RT_REG_SZ, NULL, data, &bytes);
+		installer_get_value(root, media, !lstrcmpW(property, INSTALLPROPERTY_DISKPROMPT) ? L"DiskPrompt" : L"MediaPackage", RRF_RT_REG_SZ, NULL, data, &bytes);
 	} else
 		return ERROR_UNKNOWN_PROPERTY;
 	return out_text_w(data, lstrlenW(data), out, size);
@@ -581,7 +581,7 @@ UINT WINAPI MsiSourceListEnumMediaDisksW(LPCWSTR code, LPCWSTR user, MSIINSTALLC
 	HKEY root, handle;
 	if (!source_key(code, source_context(code, context), L"Media", key, &root))
 		return ERROR_INVALID_PARAMETER;
-	if (RegOpenKeyExW(root, key, 0, KEY_READ, &handle))
+	if (installer_open(root, key, KEY_READ, &handle))
 		return ERROR_NO_MORE_ITEMS;
 	UINT status = ERROR_NO_MORE_ITEMS;
 	for (DWORD i = 0, seen = 0;; i++) {
@@ -661,7 +661,7 @@ UINT WINAPI MsiSourceListAddSourceExW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONT
 		return ERROR_INVALID_PARAMETER;
 	if (!source_key(code, source_context(code, context), options & MSISOURCETYPE_URL ? L"URL" : L"Net", key, &root))
 		return ERROR_INVALID_PARAMETER;
-	if (RegCreateKeyExW(root, key, 0, NULL, 0, KEY_READ | KEY_SET_VALUE, NULL, &handle, NULL))
+	if (installer_create(root, key, KEY_READ | KEY_SET_VALUE, &handle))
 		return ERROR_ACCESS_DENIED;
 	// An index asked for pushes the later ones down; none asked for goes last. A source already listed stays where it is.
 	DWORD count = 0;
@@ -704,7 +704,7 @@ UINT WINAPI MsiSourceListClearSourceW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONT
 	HKEY root, handle;
 	if (!code || !source || !source_key(code, source_context(code, context), options & MSISOURCETYPE_URL ? L"URL" : L"Net", key, &root))
 		return ERROR_INVALID_PARAMETER;
-	if (RegOpenKeyExW(root, key, 0, KEY_READ | KEY_SET_VALUE, &handle))
+	if (installer_open(root, key, KEY_READ | KEY_SET_VALUE, &handle))
 		return ERROR_SUCCESS;
 	BOOL shifted = FALSE;
 	for (DWORD i = 1;; i++) {
@@ -733,7 +733,7 @@ UINT WINAPI MsiSourceListClearAllExW(LPCWSTR code, LPCWSTR user, MSIINSTALLCONTE
 	HKEY root;
 	if (!code || !source_key(code, source_context(code, context), options & MSISOURCETYPE_URL ? L"URL" : L"Net", key, &root))
 		return ERROR_INVALID_PARAMETER;
-	RegDeleteTreeW(root, key);
+	installer_delete_tree(root, key);
 	return ERROR_SUCCESS;
 }
 
@@ -767,7 +767,7 @@ UINT WINAPI MsiSourceListClearMediaDiskW(LPCWSTR code, LPCWSTR user, MSIINSTALLC
 	HKEY root, handle;
 	if (!source_key(code, source_context(code, context), L"Media", key, &root))
 		return ERROR_INVALID_PARAMETER;
-	if (RegOpenKeyExW(root, key, 0, KEY_SET_VALUE, &handle))
+	if (installer_open(root, key, KEY_SET_VALUE, &handle))
 		return ERROR_SUCCESS;
 	wsprintfW(name, L"%u", disk);
 	RegDeleteValueW(handle, name);

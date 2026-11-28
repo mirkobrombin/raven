@@ -15,6 +15,54 @@ BOOL raven_clicktorun_feature(const WCHAR *product, const WCHAR *feature);
 #define INSTALLER_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Installer"
 #define UNINSTALL_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
 #define MACHINE_SID L"S-1-5-18"
+#ifndef RRF_SUBKEY_WOW6464KEY
+#define RRF_SUBKEY_WOW6464KEY 0x00010000
+#endif
+
+static BOOL starts_with(const WCHAR *text, const WCHAR *prefix)
+{
+	const int length = lstrlenW(prefix);
+	return lstrlenW(text) >= length && CompareStringOrdinal(text, length, prefix, length, TRUE) == CSTR_EQUAL &&
+		(text[length] == 0 || text[length] == L'\\');
+}
+
+REGSAM installer_view(HKEY root, const WCHAR *key, REGSAM view)
+{
+	if (root == HKEY_LOCAL_MACHINE && key && (starts_with(key, INSTALLER_KEY) || starts_with(key, L"Software\\Classes\\Installer")))
+		return KEY_WOW64_64KEY;
+	return view;
+}
+
+LSTATUS installer_open(HKEY root, const WCHAR *key, REGSAM access, HKEY *out)
+{
+	return RegOpenKeyExW(root, key, 0, access | installer_view(root, key, 0), out);
+}
+
+LSTATUS installer_create(HKEY root, const WCHAR *key, REGSAM access, HKEY *out)
+{
+	return RegCreateKeyExW(root, key, 0, NULL, 0, access | installer_view(root, key, 0), NULL, out, NULL);
+}
+
+LSTATUS installer_get_value(HKEY root, const WCHAR *key, const WCHAR *name, DWORD flags, DWORD *type, void *data, DWORD *size)
+{
+	return RegGetValueW(root, key, name, flags | (installer_view(root, key, 0) ? RRF_SUBKEY_WOW6464KEY : 0), type, data, size);
+}
+
+LSTATUS installer_delete_key(HKEY root, const WCHAR *key)
+{
+	return RegDeleteKeyExW(root, key, installer_view(root, key, 0), 0);
+}
+
+LSTATUS installer_delete_tree(HKEY root, const WCHAR *key)
+{
+	HKEY handle;
+	LSTATUS status = RegOpenKeyExW(root, key, 0, KEY_ALL_ACCESS | installer_view(root, key, 0), &handle);
+	if (status)
+		return status;
+	status = RegDeleteTreeW(handle, NULL);
+	RegCloseKey(handle);
+	return status ? status : installer_delete_key(root, key);
+}
 
 void product_user_sid(WCHAR out[80])
 {
@@ -199,7 +247,7 @@ UINT product_publish_features(msi_package *package)
 			reg_write_text(package, HKEY_LOCAL_MACHINE, key, feature->key, state == INSTALLSTATE_LOCAL ? L"" : L"\x06");
 		else if (state == INSTALLSTATE_ABSENT) {
 			HKEY handle;
-			if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_SET_VALUE, &handle)) {
+			if (!installer_open(HKEY_LOCAL_MACHINE, key, KEY_SET_VALUE, &handle)) {
 				undo_registry(package, HKEY_LOCAL_MACHINE, key, feature->key);
 				RegDeleteValueW(handle, feature->key);
 				RegCloseKey(handle);
@@ -245,14 +293,14 @@ UINT product_publish_components(msi_package *package)
 			msi_free(path);
 		} else if (component->action == INSTALLSTATE_ABSENT) {
 			HKEY handle;
-			if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ | KEY_SET_VALUE, &handle)) {
+			if (!installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ | KEY_SET_VALUE, &handle)) {
 				undo_registry(package, HKEY_LOCAL_MACHINE, key, squashed);
 				RegDeleteValueW(handle, squashed);
 				DWORD values = 0;
 				RegQueryInfoKeyW(handle, NULL, NULL, NULL, NULL, NULL, NULL, &values, NULL, NULL, NULL, NULL);
 				RegCloseKey(handle);
 				if (!values)
-					RegDeleteKeyW(HKEY_LOCAL_MACHINE, key);
+					installer_delete_key(HKEY_LOCAL_MACHINE, key);
 			}
 		}
 	}
@@ -264,7 +312,7 @@ static void delete_tree(HKEY root, const WCHAR *key)
 {
 	HKEY handle;
 	WCHAR name[256];
-	if (RegOpenKeyExW(root, key, 0, KEY_READ | KEY_WRITE, &handle))
+	if (installer_open(root, key, KEY_READ | KEY_WRITE, &handle))
 		return;
 	for (;;) {
 		DWORD size = ARRAYSIZE(name);
@@ -275,7 +323,7 @@ static void delete_tree(HKEY root, const WCHAR *key)
 		delete_tree(root, child);
 	}
 	RegCloseKey(handle);
-	RegDeleteKeyW(root, key);
+	installer_delete_key(root, key);
 }
 
 UINT product_unregister(msi_package *package)
@@ -300,8 +348,8 @@ UINT product_unregister(msi_package *package)
 		user_data_key(key, FALSE, rest);
 		WCHAR usage[300];
 		wsprintfW(usage, L"%s\\Usage", key);
-		RegDeleteKeyW(HKEY_LOCAL_MACHINE, usage);
-		RegDeleteKeyW(HKEY_LOCAL_MACHINE, key);
+		installer_delete_key(HKEY_LOCAL_MACHINE, usage);
+		installer_delete_key(HKEY_LOCAL_MACHINE, key);
 	}
 	published_key(key, machine, rest);
 	delete_tree(root, key);
@@ -313,13 +361,13 @@ UINT product_unregister(msi_package *package)
 		HKEY handle;
 		wsprintfW(rest, L"UpgradeCodes\\%s", squashed_upgrade);
 		published_key(key, machine, rest);
-		if (!RegOpenKeyExW(root, key, 0, KEY_READ | KEY_SET_VALUE, &handle)) {
+		if (!installer_open(root, key, KEY_READ | KEY_SET_VALUE, &handle)) {
 			RegDeleteValueW(handle, squashed);
 			DWORD values = 0;
 			RegQueryInfoKeyW(handle, NULL, NULL, NULL, NULL, NULL, NULL, &values, NULL, NULL, NULL, NULL);
 			RegCloseKey(handle);
 			if (!values)
-				RegDeleteKeyW(root, key);
+				installer_delete_key(root, key);
 		}
 	}
 	msi_free(upgrade);
@@ -337,7 +385,7 @@ static BOOL open_properties(const WCHAR *product, HKEY *result, BOOL *machine)
 	wsprintfW(rest, L"Products\\%s\\InstallProperties", squashed);
 	for (int pass = 0; pass < 2; pass++) {
 		user_data_key(key, pass == 0, rest);
-		if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, result)) {
+		if (!installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, result)) {
 			if (machine)
 				*machine = pass == 0;
 			return TRUE;
@@ -355,7 +403,7 @@ static BOOL open_published(const WCHAR *product, HKEY *handle)
 	wsprintfW(rest, L"Products\\%s", squashed);
 	for (int pass = 0; pass < 2; pass++) {
 		published_key(key, pass == 0, rest);
-		if (!RegOpenKeyExW(pass == 0 ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, 0, KEY_READ, handle))
+		if (!installer_open(pass == 0 ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, KEY_READ, handle))
 			return TRUE;
 	}
 	return FALSE;
@@ -384,8 +432,8 @@ static BOOL advertised_package(const WCHAR *product, WCHAR *path, DWORD room)
 		return FALSE;
 	WCHAR name[MAX_PATH], folder[MAX_PATH];
 	DWORD name_size = sizeof name, folder_size = sizeof folder;
-	BOOL found = !RegGetValueW(key, L"SourceList", L"PackageName", RRF_RT_REG_SZ, NULL, name, &name_size) &&
-		!RegGetValueW(key, L"SourceList\\Net", L"1", RRF_RT_REG_SZ, NULL, folder, &folder_size) &&
+	BOOL found = !installer_get_value(key, L"SourceList", L"PackageName", RRF_RT_REG_SZ, NULL, name, &name_size) &&
+		!installer_get_value(key, L"SourceList\\Net", L"1", RRF_RT_REG_SZ, NULL, folder, &folder_size) &&
 		(DWORD)lstrlenW(name) + lstrlenW(folder) < room;
 	RegCloseKey(key);
 	if (found) {
@@ -416,7 +464,7 @@ static BOOL component_recorded(const WCHAR *product, const WCHAR *component, WCH
 	for (int pass = 0; pass < 2; pass++) {
 		HKEY handle;
 		user_data_key(key, pass == 0, rest);
-		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle))
+		if (installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle))
 			continue;
 		DWORD size = room * sizeof(WCHAR), type;
 		LSTATUS status = RegQueryValueExW(handle, squashed, NULL, &type, (BYTE *)path, &size);
@@ -446,7 +494,7 @@ INSTALLSTATE product_feature_installed(const WCHAR *product, const WCHAR *featur
 	for (int pass = 0; pass < 2; pass++) {
 		HKEY handle;
 		user_data_key(key, pass == 0, rest);
-		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle))
+		if (installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle))
 			continue;
 		DWORD size = sizeof text, type;
 		text[0] = 0;
@@ -514,7 +562,7 @@ UINT WINAPI MsiGetProductCodeW(LPCWSTR component, LPWSTR out)
 	for (int pass = 0; pass < 2; pass++) {
 		HKEY handle;
 		user_data_key(key, pass == 0, rest);
-		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle))
+		if (installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle))
 			continue;
 		WCHAR name[40];
 		DWORD size = ARRAYSIZE(name);
@@ -537,7 +585,7 @@ UINT WINAPI MsiEnumClientsW(LPCWSTR component, DWORD index, LPWSTR out)
 	for (int pass = 0; pass < 2; pass++) {
 		HKEY handle;
 		user_data_key(key, pass == 0, rest);
-		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle))
+		if (installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle))
 			continue;
 		any = TRUE;
 		for (DWORD i = 0;; i++, seen++) {
@@ -570,7 +618,7 @@ UINT WINAPI MsiEnumProductsW(DWORD index, LPWSTR out)
 	for (int pass = 0; pass < 2; pass++) {
 		HKEY handle;
 		user_data_key(key, pass == 0, L"Products");
-		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle))
+		if (installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle))
 			continue;
 		for (DWORD i = 0;; i++, seen++) {
 			WCHAR name[40];
@@ -597,7 +645,7 @@ UINT WINAPI MsiEnumRelatedProductsW(LPCWSTR upgrade, DWORD reserved, DWORD index
 	for (int pass = 0; pass < 2; pass++) {
 		HKEY handle, root = pass == 0 ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
 		published_key(key, pass == 0, rest);
-		if (RegOpenKeyExW(root, key, 0, KEY_READ, &handle))
+		if (installer_open(root, key, KEY_READ, &handle))
 			continue;
 		for (DWORD i = 0;; i++, seen++) {
 			WCHAR name[40];
@@ -671,7 +719,7 @@ static BOOL qualifier_lookup(const WCHAR *category, const WCHAR *qualifier, cons
 	for (int machine = 1; machine >= 0; machine--) {
 		DWORD size = sizeof data;
 		published_key(key, machine, rest);
-		if (RegGetValueW(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, qualifier, RRF_RT_REG_MULTI_SZ, NULL, data, &size))
+		if (installer_get_value(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, qualifier, RRF_RT_REG_MULTI_SZ, NULL, data, &size))
 			continue;
 		WCHAR feature[MAX_FEATURE_CHARS + 1];
 		DWORD used = 0;

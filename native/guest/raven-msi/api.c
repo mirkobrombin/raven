@@ -610,7 +610,7 @@ UINT WINAPI MsiEnumComponentsW(DWORD index, LPWSTR out)
 	(void)sid;
 	wsprintfW(key, L"Software\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Components");
 	HKEY handle;
-	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle))
+	if (installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle))
 		return ERROR_NO_MORE_ITEMS;
 	DWORD size = ARRAYSIZE(name);
 	LSTATUS status = RegEnumKeyExW(handle, index, name, &size, NULL, NULL, NULL, NULL);

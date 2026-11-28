@@ -40,7 +40,7 @@ void undo_registry(msi_package *package, HKEY root, const WCHAR *key, const WCHA
 	undo_entry entry = { .kind = UNDO_REGISTRY, .root = root, .key = msi_copy(key), .name = name ? msi_copy(name) : NULL };
 	HKEY handle;
 	entry.size = 0;
-	if (!RegOpenKeyExW(root, key, 0, KEY_READ | reg_view, &handle)) {
+	if (!RegOpenKeyExW(root, key, 0, KEY_READ | installer_view(root, key, reg_view), &handle)) {
 		if (name && !RegQueryValueExW(handle, name, NULL, &entry.type, NULL, &entry.size)) {
 			entry.data = msi_alloc(entry.size + 2);
 			if (!RegQueryValueExW(handle, name, NULL, &entry.type, entry.data, &entry.size))
@@ -56,7 +56,7 @@ static void delete_key_tree(HKEY root, const WCHAR *key)
 {
 	HKEY handle;
 	WCHAR name[256];
-	if (RegOpenKeyExW(root, key, 0, KEY_READ | KEY_WRITE | reg_view, &handle))
+	if (RegOpenKeyExW(root, key, 0, KEY_READ | KEY_WRITE | installer_view(root, key, reg_view), &handle))
 		return;
 	for (;;) {
 		DWORD size = ARRAYSIZE(name);
@@ -68,7 +68,7 @@ static void delete_key_tree(HKEY root, const WCHAR *key)
 		msi_free(child);
 	}
 	RegCloseKey(handle);
-	RegDeleteKeyExW(root, key, reg_view, 0);
+	RegDeleteKeyExW(root, key, installer_view(root, key, reg_view), 0);
 }
 
 void script_entry_free(script_entry *entry)
@@ -116,18 +116,18 @@ void script_rollback(msi_package *package)
 		case UNDO_REGISTRY: {
 			HKEY handle;
 			if (entry->name && entry->existed) {
-				if (!RegCreateKeyExW(entry->root, entry->key, 0, NULL, 0, KEY_WRITE | reg_view, NULL, &handle, NULL)) {
+				if (!RegCreateKeyExW(entry->root, entry->key, 0, NULL, 0, KEY_WRITE | installer_view(entry->root, entry->key, reg_view), NULL, &handle, NULL)) {
 					RegSetValueExW(handle, entry->name, 0, entry->type, entry->data, entry->size);
 					RegCloseKey(handle);
 				}
 			} else if (entry->name) {
-				if (!RegOpenKeyExW(entry->root, entry->key, 0, KEY_READ | KEY_WRITE | reg_view, &handle)) {
+				if (!RegOpenKeyExW(entry->root, entry->key, 0, KEY_READ | KEY_WRITE | installer_view(entry->root, entry->key, reg_view), &handle)) {
 					RegDeleteValueW(handle, entry->name);
 					DWORD values = 0, keys = 0;
 					RegQueryInfoKeyW(handle, NULL, NULL, NULL, &keys, NULL, NULL, &values, NULL, NULL, NULL, NULL);
 					RegCloseKey(handle);
 					if (!values && !keys)
-						RegDeleteKeyExW(entry->root, entry->key, reg_view, 0);
+						RegDeleteKeyExW(entry->root, entry->key, installer_view(entry->root, entry->key, reg_view), 0);
 				}
 			} else if (!entry->existed)
 				delete_key_tree(entry->root, entry->key);
@@ -170,7 +170,7 @@ UINT reg_write(msi_package *package, HKEY root, const WCHAR *key, const WCHAR *n
 {
 	HKEY handle;
 	undo_registry(package, root, key, name);
-	LSTATUS status = RegCreateKeyExW(root, key, 0, NULL, 0, KEY_WRITE | reg_view, NULL, &handle, NULL);
+	LSTATUS status = RegCreateKeyExW(root, key, 0, NULL, 0, KEY_WRITE | installer_view(root, key, reg_view), NULL, &handle, NULL);
 	if (status)
 		return status;
 	status = RegSetValueExW(handle, name, 0, type, data, size);

@@ -163,7 +163,7 @@ static WCHAR *registered_patches(msi_package *package, const WCHAR *removing)
 		wsprintfW(rest, L"Products\\%s\\Patches", squashed);
 		user_data_key(key, package_is_machine(package), rest);
 		HKEY handle;
-		if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle)) {
+		if (!installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle)) {
 			for (DWORD i = 0;; i++) {
 				WCHAR name[40], guid[39], local[MAX_PATH], local_key[256];
 				DWORD size = ARRAYSIZE(name);
@@ -174,7 +174,7 @@ static WCHAR *registered_patches(msi_package *package, const WCHAR *removing)
 				wsprintfW(rest, L"Patches\\%s", name);
 				user_data_key(local_key, package_is_machine(package), rest);
 				size = sizeof local;
-				if (RegGetValueW(HKEY_LOCAL_MACHINE, local_key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &size))
+				if (installer_get_value(HKEY_LOCAL_MACHINE, local_key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &size))
 					continue;
 				UINT old = list ? lstrlenW(list) : 0;
 				WCHAR *longer = msi_alloc((old + lstrlenW(local) + 2) * sizeof(WCHAR));
@@ -263,7 +263,7 @@ UINT package_prepare(msi_package *package)
 static void published_list_rebuild(msi_package *package, HKEY root, const WCHAR *key)
 {
 	HKEY handle;
-	if (RegOpenKeyExW(root, key, 0, KEY_READ, &handle))
+	if (installer_open(root, key, KEY_READ, &handle))
 		return;
 	WCHAR list[1024];
 	DWORD used = 0;
@@ -346,20 +346,20 @@ UINT patches_register(msi_package *package)
 		if (!guid_squash(guid, one))
 			continue;
 		HKEY handle;
-		if (!RegOpenKeyExW(root, published, 0, KEY_SET_VALUE, &handle)) {
+		if (!installer_open(root, published, KEY_SET_VALUE, &handle)) {
 			RegDeleteValueW(handle, one);
 			RegCloseKey(handle);
 		}
 		wsprintfW(rest, L"Products\\%s\\Patches\\%s", squashed, one);
 		user_data_key(key, machine, rest);
-		RegDeleteTreeW(HKEY_LOCAL_MACHINE, key);
+		installer_delete_tree(HKEY_LOCAL_MACHINE, key);
 		wsprintfW(rest, L"Patches\\%s", one);
 		user_data_key(key, machine, rest);
 		WCHAR local[MAX_PATH];
 		DWORD size = sizeof local;
-		if (!RegGetValueW(HKEY_LOCAL_MACHINE, key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &size))
+		if (!installer_get_value(HKEY_LOCAL_MACHINE, key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &size))
 			DeleteFileW(local);
-		RegDeleteTreeW(HKEY_LOCAL_MACHINE, key);
+		installer_delete_tree(HKEY_LOCAL_MACHINE, key);
 	}
 	if ((patches && *patches) || (removing && *removing))
 		published_list_rebuild(package, root, published);
@@ -379,7 +379,7 @@ void patches_forget(msi_package *package)
 		wsprintfW(rest, L"Products\\%s\\Patches", squashed);
 		user_data_key(key, machine, rest);
 		HKEY handle;
-		if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &handle)) {
+		if (!installer_open(HKEY_LOCAL_MACHINE, key, KEY_READ, &handle)) {
 			for (DWORD i = 0;; i++) {
 				WCHAR name[40], one[256], local[MAX_PATH];
 				DWORD size = ARRAYSIZE(name);
@@ -388,15 +388,15 @@ void patches_forget(msi_package *package)
 				wsprintfW(rest, L"Patches\\%s", name);
 				user_data_key(one, machine, rest);
 				size = sizeof local;
-				if (!RegGetValueW(HKEY_LOCAL_MACHINE, one, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &size))
+				if (!installer_get_value(HKEY_LOCAL_MACHINE, one, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &size))
 					DeleteFileW(local);
-				RegDeleteTreeW(HKEY_LOCAL_MACHINE, one);
+				installer_delete_tree(HKEY_LOCAL_MACHINE, one);
 			}
 			RegCloseKey(handle);
 		}
 		wsprintfW(rest, L"Products\\%s\\Patches", squashed);
 		published_key(key, machine, rest);
-		RegDeleteTreeW(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key);
+		installer_delete_tree(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key);
 	}
 	msi_free(code);
 }
@@ -529,7 +529,7 @@ UINT WINAPI MsiEnumPatchesW(LPCWSTR product, DWORD index, LPWSTR patch, LPWSTR t
 	for (int pass = 0; pass < 2; pass++) {
 		published_key(key, pass == 0, rest);
 		HKEY handle;
-		if (RegOpenKeyExW(pass == 0 ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, 0, KEY_READ, &handle))
+		if (installer_open(pass == 0 ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, KEY_READ, &handle))
 			continue;
 		WCHAR name[40], data[1024];
 		LONG result = ERROR_NO_MORE_ITEMS;
@@ -606,7 +606,7 @@ UINT WINAPI MsiGetPatchInfoExW(LPCWSTR patch, LPCWSTR product, LPCWSTR user, MSI
 		user_data_key(key, machine, rest);
 		WCHAR local[MAX_PATH];
 		DWORD bytes = sizeof local;
-		if (RegGetValueW(HKEY_LOCAL_MACHINE, key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &bytes))
+		if (installer_get_value(HKEY_LOCAL_MACHINE, key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &bytes))
 			return ERROR_UNKNOWN_PATCH;
 		return out_text(local, out, size);
 	}
@@ -615,7 +615,7 @@ UINT WINAPI MsiGetPatchInfoExW(LPCWSTR patch, LPCWSTR product, LPCWSTR user, MSI
 		published_key(key, machine, rest);
 		WCHAR data[1024];
 		DWORD bytes = sizeof data;
-		if (RegGetValueW(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, one, RRF_RT_REG_SZ, NULL, data, &bytes))
+		if (installer_get_value(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, key, one, RRF_RT_REG_SZ, NULL, data, &bytes))
 			return ERROR_UNKNOWN_PATCH;
 		return out_text(data, out, size);
 	}
@@ -631,7 +631,7 @@ UINT WINAPI MsiGetPatchInfoExW(LPCWSTR patch, LPCWSTR product, LPCWSTR user, MSI
 	user_data_key(key, machine, rest);
 	BYTE data[1024];
 	DWORD bytes = sizeof data, type = 0;
-	if (RegGetValueW(HKEY_LOCAL_MACHINE, key, value, RRF_RT_REG_SZ | RRF_RT_REG_DWORD, &type, data, &bytes))
+	if (installer_get_value(HKEY_LOCAL_MACHINE, key, value, RRF_RT_REG_SZ | RRF_RT_REG_DWORD, &type, data, &bytes))
 		return bytes && !lstrcmpW(value, L"MoreInfoURL") ? out_text(L"", out, size) : ERROR_UNKNOWN_PATCH;
 	if (type == REG_DWORD) {
 		WCHAR number[16];
@@ -679,7 +679,7 @@ UINT WINAPI MsiGetPatchInfoW(LPCWSTR patch, LPCWSTR attribute, LPWSTR out, LPDWO
 	for (int machine = 1; machine >= 0; machine--) {
 		user_data_key(key, machine, rest);
 		DWORD bytes = sizeof local;
-		if (!RegGetValueW(HKEY_LOCAL_MACHINE, key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &bytes))
+		if (!installer_get_value(HKEY_LOCAL_MACHINE, key, L"LocalPackage", RRF_RT_REG_SZ, NULL, local, &bytes))
 			return out_text(local, out, size ? size : &unused);
 	}
 	return ERROR_UNKNOWN_PRODUCT;

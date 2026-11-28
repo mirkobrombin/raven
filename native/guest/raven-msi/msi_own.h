@@ -409,6 +409,15 @@ typedef struct {
 extern const extra_action extra_actions[];
 void reg_set_view(REGSAM view);
 
+// product.c: Windows Installer keeps what it knows (products, components, features, upgrade codes, patches, source lists) in the 64-bit
+// view of HKEY_LOCAL_MACHINE whatever the width of the program installing or asking; every other key opens in the view it is given.
+REGSAM installer_view(HKEY root, const WCHAR *key, REGSAM view);
+LSTATUS installer_open(HKEY root, const WCHAR *key, REGSAM access, HKEY *out);
+LSTATUS installer_create(HKEY root, const WCHAR *key, REGSAM access, HKEY *out);
+LSTATUS installer_get_value(HKEY root, const WCHAR *key, const WCHAR *name, DWORD flags, DWORD *type, void *data, DWORD *size);
+LSTATUS installer_delete_key(HKEY root, const WCHAR *key);
+LSTATUS installer_delete_tree(HKEY root, const WCHAR *key);
+
 // actions3.c
 extern const extra_action more_actions[];
 void assemblies_load(msi_package *package);

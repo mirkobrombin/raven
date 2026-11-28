@@ -454,7 +454,7 @@ static UINT publish_row(msi_record *row, void *context)
 	if (component->action == INSTALLSTATE_ABSENT) {
 		undo_registry(package, root, key, qualifier);
 		HKEY handle;
-		if (!RegOpenKeyExW(root, key, 0, KEY_SET_VALUE, &handle)) {
+		if (!installer_open(root, key, KEY_SET_VALUE, &handle)) {
 			RegDeleteValueW(handle, qualifier);
 			RegCloseKey(handle);
 		}
