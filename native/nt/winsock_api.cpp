@@ -62,6 +62,8 @@ public:
 	uint64_t select_window = 0, select_handle = 0;
 	uint32_t select_message = 0;
 	std::array<int32_t, 10> select_errors{};
+	// A connection WSAAccept's condition deferred, taken from the listener but not handed out: the next accept on the listener gives it.
+	uint64_t deferred = 0;
 };
 
 constexpr uint32_t wsaeintr = 10004, wsaebadf = 10009, wsaeacces = 10013, wsaefault = 10014, wsaeinval = 10022, wsaemfile = 10024,
@@ -69,7 +71,8 @@ constexpr uint32_t wsaeintr = 10004, wsaebadf = 10009, wsaeacces = 10013, wsaefa
 	wsaeprototype = 10041, wsaenoprotoopt = 10042, wsaeprotonosupport = 10043, wsaesocktnosupport = 10044, wsaeopnotsupp = 10045,
 	wsaeafnosupport = 10047, wsaeaddrinuse = 10048, wsaeaddrnotavail = 10049, wsaenetdown = 10050, wsaenetunreach = 10051,
 	wsaeconnaborted = 10053, wsaeconnreset = 10054, wsaenobufs = 10055, wsaeisconn = 10056, wsaenotconn = 10057, wsaeshutdown = 10058,
-	wsaetimedout = 10060, wsaeconnrefused = 10061, wsaehostunreach = 10065, wsanotinitialised = 10093, wsahost_not_found = 11001;
+	wsaetimedout = 10060, wsaeconnrefused = 10061, wsaehostunreach = 10065, wsanotinitialised = 10093, wsahost_not_found = 11001,
+	wsatry_again = 11002;
 constexpr uint64_t status_pending = 0x103, overlapped_error = 0xe0000000;
 constexpr uint32_t wsa_io_incomplete = 996;
 constexpr uint32_t fd_read = 0x1, fd_write = 0x2, fd_oob = 0x4, fd_accept = 0x8, fd_connect = 0x10, fd_close = 0x20;
@@ -583,6 +586,8 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			return;
 		}
 		socket_of(call[0])->closed = true;
+		if (const auto deferred = std::exchange(socket_of(call[0])->deferred, 0))
+			objects.close(deferred);
 		objects.close(call[0]);
 		// Transfers still pending on the socket end as aborted now: a busy process may not look at them again until their descriptor
 		// turns ready, which for a quiet connection can be the server's own timeout.
@@ -672,10 +677,18 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 	};
 	registry.add("connect", 3, connect_socket);
 	registry.add("WSAConnect", 7, connect_socket);
-	registry.add("accept", 3, [&objects, socket_of, fail, wait_ready, selected](ApiCall &call) {
+	const auto accept_socket = [&objects, socket_of, fail, wait_ready, selected](ApiCall &call) {
 		const auto socket = socket_of(call[0]);
 		if (!socket) {
 			fail(call, wsaenotsock);
+			return;
+		}
+		if (const auto deferred = std::exchange(socket->deferred, 0)) {
+			sockaddr_storage storage{};
+			socklen_t length = sizeof(storage);
+			::getpeername(socket_of(deferred)->descriptor, reinterpret_cast<sockaddr *>(&storage), &length);
+			put_address(call, call[1], call[2], storage, length);
+			call.ret(deferred);
 			return;
 		}
 		for (;;) {
@@ -718,6 +731,58 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 			}
 			wait_ready(socket->descriptor, POLLIN, std::nullopt);
 		}
+	};
+	registry.add("accept", 3, accept_socket);
+	// WSAAccept takes the connection as accept does; a condition function then decides on it from the caller's address and the
+	// listener's, and the callback data. CF_REJECT closes it (WSAECONNREFUSED), CF_DEFER keeps it for the next accept (WSATRY_AGAIN).
+	registry.add("WSAAccept", 5, [&objects, &context, socket_of, fail, accept_socket](ApiCall &call) {
+		accept_socket(call);
+		const uint64_t accepted = call.result, condition = call[3];
+		if (!condition || accepted == UINT64_MAX || uint32_t(accepted) == 0xffffffffU)
+			return;
+		const auto socket = socket_of(accepted);
+		sockaddr_storage caller{}, callee{};
+		socklen_t caller_length = sizeof(caller), callee_length = sizeof(callee);
+		::getpeername(socket->descriptor, reinterpret_cast<sockaddr *>(&caller), &caller_length);
+		::getsockname(socket->descriptor, reinterpret_cast<sockaddr *>(&callee), &callee_length);
+		// Two WSABUFs, each followed by its address: a length, then a pointer at the next pointer boundary.
+		const size_t width = call.pointer_width();
+		const uint64_t block = context.allocator.allocate(2 * (2 * width + sizeof(sockaddr_storage)));
+		const auto put_buffer = [&](uint64_t at, const sockaddr_storage &address, socklen_t length) {
+			const uint64_t data = at + 2 * width;
+			const uint64_t length_at = at + width;
+			call.store<uint32_t>(length_at, uint32_t(sizeof(sockaddr_storage)));
+			put_address(call, data, length_at, address, length);
+			call.store<uint32_t>(at, call.load<uint32_t>(length_at));
+			if (width == 8)
+				call.store<uint64_t>(at + 8, data);
+			else
+				call.store<uint32_t>(at + 4, uint32_t(data));
+			return at;
+		};
+		const uint64_t caller_buffer = put_buffer(block, caller, caller_length);
+		const uint64_t callee_buffer = put_buffer(block + 2 * width + sizeof(sockaddr_storage), callee, callee_length);
+		const uint64_t arguments[] = {caller_buffer, 0, 0, 0, callee_buffer, 0, 0, call[4]};
+		const auto decided = context.call(condition, arguments);
+		context.allocator.release(block);
+		if (decided.stop != NativeStop::returned)
+			throw decided;
+		constexpr uint32_t cf_accept = 0, cf_reject = 1, cf_defer = 2;
+		const uint32_t answer = uint32_t(decided.value);
+		if (answer == cf_accept) {
+			call.ret(accepted);
+			return;
+		}
+		if (answer == cf_defer) {
+			if (const auto listener = socket_of(call[0])) {
+				listener->deferred = accepted;
+				fail(call, wsatry_again);
+				return;
+			}
+		}
+		socket->closed = true;
+		objects.close(accepted);
+		fail(call, answer == cf_reject ? wsaeconnrefused : wsaeinval);
 	});
 
 	// Data transfer: every form reads and writes through one pair of helpers so blocking and flags behave the same.
