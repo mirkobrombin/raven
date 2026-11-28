@@ -6139,6 +6139,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(crypto_fixture${width} ALL DEPENDS ${crypto_client} twinapi_component)
                     add_test(NAME native_crypto_x${width} COMMAND raven --run-process --execution=native ${crypto_client})
                     set_tests_properties(native_crypto_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # Windows.Data.Json: a document parsed, read and written back, values and numbers, refused text, a built object and array.
+                    set(json_client ${CMAKE_CURRENT_BINARY_DIR}/json-client${width}.exe)
+                    add_custom_command(OUTPUT ${json_client}
+                        COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp
+                            -o ${json_client} ${LOADER_SOURCES}/json_client.c -lruntimeobject -lkernel32 -lgcc
+                        DEPENDS ${LOADER_SOURCES}/json_client.c VERBATIM)
+                    add_custom_target(json_fixture${width} ALL DEPENDS ${json_client} twinapi_component)
+                    add_test(NAME native_json_x${width} COMMAND raven --run-process --execution=native ${json_client})
+                    set_tests_properties(native_json_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                     # Windows.UI.Popups: commands, a MessageDialog chosen from and canceled, and a PopupMenu closed with EndMenu.
                     set(popups_client ${CMAKE_CURRENT_BINARY_DIR}/popups-client${width}.exe)
                     add_custom_command(OUTPUT ${popups_client}
