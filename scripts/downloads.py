@@ -24,7 +24,9 @@ def digest(path, algorithm="sha256"):
 
 
 def _copy(url, partial, size):
-    request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+    # Bytes preferred, any type accepted: Windows Update serves certificates as application/x-x509-ca-cert and refuses (406) a request
+    # that accepts only octet streams.
+    request = urllib.request.Request(url, headers={"Accept": "application/octet-stream, */*;q=0.1"})
     received = 0
     with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as output:
         while chunk := response.read(1024 * 1024):

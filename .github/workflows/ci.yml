@@ -259,6 +259,7 @@ jobs:
           - component: roots
             arguments: --output
             recipe: scripts/provision-roots.py
+            sources: native/nt/code_signing_roots.inc
           - component: vst3
             arguments: --output
             recipe: scripts/provision-vst3.py
