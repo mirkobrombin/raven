@@ -3229,6 +3229,25 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_module_handle_path COMMAND raven --run-process --execution=native ${MODULE_HANDLE_PATH_CLIENT})
             set_tests_properties(native_module_handle_path PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/module-handle-path-prefix")
+            # A library imported by a path relative to the program's folder, Sub/Folder.dll, and one loaded by such a path later.
+            set(FOLDER_IMPORT_FIXTURES ${CMAKE_CURRENT_BINARY_DIR}/folder-import)
+            add_custom_command(OUTPUT ${FOLDER_IMPORT_FIXTURES}/client.exe ${FOLDER_IMPORT_FIXTURES}/sub/folder.dll ${FOLDER_IMPORT_FIXTURES}/sub/later.dll
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${FOLDER_IMPORT_FIXTURES}/sub
+                COMMAND ${RAVEN_MINGW64} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_library_entry,--image-base,0x1f4100000,--no-insert-timestamp
+                    -o ${FOLDER_IMPORT_FIXTURES}/sub/folder.dll ${PROJECT_SOURCE_DIR}/testdata/native_loader/folder_import_library.c
+                COMMAND ${RAVEN_MINGW64} -shared -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_library_entry,--image-base,0x1f4300000,--no-insert-timestamp
+                    -o ${FOLDER_IMPORT_FIXTURES}/sub/later.dll ${PROJECT_SOURCE_DIR}/testdata/native_loader/folder_import_library.c
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1f4200000,--no-insert-timestamp
+                    -o ${FOLDER_IMPORT_FIXTURES}/client.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/folder_import_client.c -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/folder_import_library.c
+                    ${PROJECT_SOURCE_DIR}/testdata/native_loader/folder_import_client.c VERBATIM)
+            add_custom_target(folder_import_fixture ALL DEPENDS ${FOLDER_IMPORT_FIXTURES}/client.exe)
+            add_test(NAME native_folder_import COMMAND raven --run-process --execution=native ${FOLDER_IMPORT_FIXTURES}/client.exe)
+            set_tests_properties(native_folder_import PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/folder-import-prefix")
             # A directory listed through GetFileInformationByHandleEx, entry by entry, then ERROR_NO_MORE_FILES; a restarting class starts over.
             set(DIRECTORY_BY_HANDLE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/directory-by-handle.exe)
             add_custom_command(OUTPUT ${DIRECTORY_BY_HANDLE_CLIENT}
