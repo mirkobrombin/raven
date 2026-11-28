@@ -140,6 +140,8 @@ extern struct object open_picker_class, save_picker_class, folder_picker_class;
 /* Windows.ApplicationModel.DataTransfer: Clipboard, DataPackage, StandardDataFormats, HtmlFormatHelper and ClipboardContentOptions, from
  * clipboard.c. */
 extern struct object clipboard_class, data_package_class, standard_formats_class, html_format_helper_class, clipboard_content_options_class;
+/* popups.c. */
+extern struct object message_dialog_class, popup_menu_class, ui_command_class, ui_command_separator_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */
 extern struct object launcher_class, launcher_options_class;
 /* Windows.Storage.KnownFolders, from known.c. */

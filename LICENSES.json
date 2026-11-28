@@ -390,6 +390,7 @@
         "native/guest/raven-twinapi/storage.c",
         "native/guest/raven-twinapi/data.c",
         "native/guest/raven-twinapi/clipboard.c",
+        "native/guest/raven-twinapi/popups.c",
         "native/guest/raven-twinapi/known.c",
         "native/guest/raven-twinapi/launcher.c",
         "native/guest/raven-twinapi/streams.c",
