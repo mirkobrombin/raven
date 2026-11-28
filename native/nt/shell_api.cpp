@@ -8,6 +8,7 @@
 #include "text.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -474,8 +475,61 @@ void register_shell_api(ApiRegistry &registry, KernelContext &context, NativeReg
 		if (call[1]) call.store<int32_t>(call[1], int32_t(arguments.size()));
 		call.ret(block);
 	});
-	// The shell cannot show a tray icon yet; callers see an honest failure.
-	registry.add("Shell_NotifyIconW", 2, [](ApiCall &call) { call.fail(5); });
+	// Shell_NotifyIcon: the icon itself has no place on the Linux desktop yet, so adding, changing and removing it only succeed; a balloon
+	// (NIF_INFO), which Windows 10 shows as a notification, is shown as one, its title and text under the program's name. NOTIFYICONDATA
+	// holds the balloon from its second version on, after a tip of 128 characters; the fields are fixed arrays that need not end.
+	// A notification is shown under the program's file name, without .exe.
+	const auto program_name = [&context] {
+		auto program = context.launch.image_path.substr(context.launch.image_path.find_last_of(u'\\') + 1);
+		auto suffix = to_utf8(program.substr(program.size() < 4 ? 0 : program.size() - 4));
+		for (auto &character : suffix)
+			character = char(std::tolower(static_cast<unsigned char>(character)));
+		if (program.size() > 4 && suffix == ".exe")
+			program.resize(program.size() - 4);
+		return to_utf8(program);
+	};
+	const auto notify_icon = [program_name](ApiCall &call, bool wide_text) {
+		const uint32_t message = call.u32(0);
+		if (!call[1] || message > 4) {
+			call.ret(0);
+			return;
+		}
+		const bool wide = call.pointer_width() == 8;
+		const uint64_t unit = wide_text ? 2 : 1, tip = wide ? 40 : 24, info = tip + 128 * unit + 8, title = info + 256 * unit + 4;
+		const auto text = [&](uint64_t address, size_t count) {
+			std::string narrow;
+			std::u16string result;
+			for (size_t index = 0; index < count; ++index) {
+				const uint16_t character = wide_text ? call.load<uint16_t>(address + index * 2) : call.load<uint8_t>(address + index);
+				if (!character)
+					break;
+				if (wide_text)
+					result.push_back(char16_t(character));
+				else
+					narrow.push_back(char(character));
+			}
+			return wide_text ? result : from_ansi(narrow, 0);
+		};
+		if (message <= 1 && call.load<uint32_t>(call[1]) >= title + 64 * unit + 4 && (call.load<uint32_t>(call[1] + (wide ? 20 : 12)) & 0x10)) {
+			const auto body = text(call[1] + info, 256), heading = text(call[1] + title, 64);
+			if (!body.empty())
+				sandbox().notify(program_name(), to_utf8(heading), to_utf8(body));
+		}
+		call.ret(1);
+	};
+	registry.add("Shell_NotifyIconW", 2, [notify_icon](ApiCall &call) { notify_icon(call, true); });
+	registry.add("Shell_NotifyIconA", 2, [notify_icon](ApiCall &call) { notify_icon(call, false); });
+	// RavenNotify(application, title, text): a notification the runtime's own components show, a Windows Runtime toast among them, under the
+	// name they give or the program's. Nonzero when something was started to show it.
+	registry.add("RavenNotify", 3, [program_name](ApiCall &call) {
+		if (!call[2]) {
+			call.ret(0);
+			return;
+		}
+		const auto application = call[0] ? to_utf8(call.wide(call[0], 256)) : std::string();
+		const auto title = call[1] ? to_utf8(call.wide(call[1], 1024)) : std::string();
+		call.ret(sandbox().notify(application.empty() ? program_name() : application, title, to_utf8(call.wide(call[2], 8192))) ? 1 : 0);
+	});
 	// One of the shell icons as an icon handle the caller owns, made by the registry's CreateIcon; zero when it is not there.
 	const auto make_icon = [&registry, &context](ApiCall &call, bool folder, int32_t size) -> uint64_t {
 		const auto create_icon = registry.find("CreateIcon");

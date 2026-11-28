@@ -464,6 +464,24 @@ void Sandbox::refuse(const std::filesystem::path &host, std::string_view operati
 	output << stamp << '\t' << (program.empty() ? "-" : to_utf8(program)) << '\t' << operation << '\t' << host.string() << '\n';
 }
 
+// Text as a GVariant string for gdbus: quoted, its quotes and backslashes escaped, and control characters written as \u escapes.
+static std::string gvariant_string(std::string_view text)
+{
+	std::string quoted = "'";
+	for (const char character : text) {
+		if (character == '\\' || character == '\'')
+			quoted += '\\';
+		if (static_cast<unsigned char>(character) < 0x20 || character == 0x7f) {
+			char escape[8];
+			std::snprintf(escape, sizeof escape, "\\u%04x", unsigned(static_cast<unsigned char>(character)));
+			quoted += escape;
+		} else {
+			quoted += character;
+		}
+	}
+	return quoted + '\'';
+}
+
 bool Sandbox::open_address(std::string_view address) const
 {
 	// A confined runtime cannot reach the desktop's handlers: the broker opens the address, after the same checks; the one outside
@@ -483,14 +501,7 @@ bool Sandbox::open_address(std::string_view address) const
 		refuse(std::string(address), "open-address");
 		return false;
 	}
-	// The portal takes the address as a GVariant string: quoted, its quotes and backslashes escaped.
-	std::string quoted = "'";
-	for (const char character : address) {
-		if (character == '\\' || character == '\'')
-			quoted += '\\';
-		quoted += character;
-	}
-	quoted += '\'';
+	const auto quoted = gvariant_string(address);
 	const std::string text(address);
 	const pid_t child = ::fork();
 	if (child == 0) {
@@ -506,6 +517,36 @@ bool Sandbox::open_address(std::string_view address) const
 		if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
 			::_exit(0);
 		::execlp("xdg-open", "xdg-open", text.c_str(), static_cast<char *>(nullptr));
+		::_exit(127);
+	}
+	return child > 0;
+}
+
+bool Sandbox::notify(std::string_view application, std::string_view title, std::string_view text) const
+{
+	if (host_brokered())
+		return forwarded_notice(application, title, text);
+	if (confined())
+		return brokered_notice(application, title, text);
+	const auto name = gvariant_string(application), summary = gvariant_string(title), body = gvariant_string(text);
+	const std::string plain_name(application), plain_title(title), plain_text(text);
+	const pid_t child = ::fork();
+	if (child == 0) {
+		::setsid();
+		if (::fork() == 0) {
+			// Notify(app_name, replaces_id, app_icon, summary, body, actions, hints, expire_timeout): a new notification, no actions,
+			// the server's own timeout.
+			::execlp("gdbus", "gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
+				"/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify", name.c_str(), "0", "''",
+				summary.c_str(), body.c_str(), "@as []", "@a{sv} {}", "-1", static_cast<char *>(nullptr));
+			::_exit(127);
+		}
+		int status = 0;
+		::wait(&status);
+		if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+			::_exit(0);
+		::execlp("notify-send", "notify-send", "--app-name", plain_name.c_str(), "--", plain_title.c_str(), plain_text.c_str(),
+			static_cast<char *>(nullptr));
 		::_exit(127);
 	}
 	return child > 0;

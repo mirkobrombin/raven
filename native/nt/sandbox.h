@@ -60,6 +60,9 @@ public:
 	// Opens a web or mail address with the host's handler, through the desktop portal when there is one: the only addresses that leave
 	// the sandbox are http, https, ftp and mailto ones, and only whole, unbroken ones. False when the address is refused or nothing opens it.
 	bool open_address(std::string_view address) const;
+	// Shows a notification on the Linux desktop, through its notification service, or notify-send when gdbus is not there: a title and a
+	// text (UTF-8) under the name of the program. False when nothing could be started to show it.
+	bool notify(std::string_view application, std::string_view title, std::string_view text) const;
 	// The Linux programs the prefix shows its programs, each as C:\Program Files\Raven\Host\NAME.exe: a line "host-app NAME<tab>ID" of
 	// sandbox.conf names the program by its desktop entry.
 	struct HostApp {

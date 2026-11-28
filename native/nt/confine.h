@@ -33,6 +33,8 @@ int host_remove(const std::filesystem::path &host, bool directory);
 int host_rename(const std::filesystem::path &from, const std::filesystem::path &to);
 // Opens a web or mail address through the broker.
 bool brokered_address(std::string_view address);
+// Shows a notification on the Linux desktop through the broker.
+bool brokered_notice(std::string_view application, std::string_view title, std::string_view text);
 // Opens host files and addresses with an exposed Linux program through the broker.
 bool brokered_host(std::string_view name, const std::vector<std::string> &targets);
 
@@ -48,6 +50,7 @@ bool host_brokered();
 // checks the targets against together with its own program, and opens a web or mail address.
 bool forwarded_host(std::string_view name, const std::vector<std::string> &targets, std::string_view caller);
 bool forwarded_address(std::string_view address);
+bool forwarded_notice(std::string_view application, std::string_view title, std::string_view text);
 
 // Whether a program image is one of the runtime's trusted programs: its control panel or its file dialog, in the runtime's own folder.
 bool trusted_image(const std::filesystem::path &image);

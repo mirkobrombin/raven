@@ -1225,6 +1225,7 @@
 {"ShellExec_RunDLLW", 4},
 {"ShellExecuteExW", 1},
 {"ShellExecuteW", 6},
+{"Shell_NotifyIconA", 2},
 {"Shell_NotifyIconW", 2},
 {"ShouldAppsUseDarkMode", 0},
 {"ShouldSystemUseDarkMode", 0},

@@ -56,7 +56,7 @@ constexpr uint64_t read_rights = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_
 constexpr uint64_t run_rights = read_rights | LANDLOCK_ACCESS_FS_EXECUTE;
 
 enum : char { request_open = 'o', request_spawn = 's', request_address = 'a', request_host = 'h', request_change = 'c', request_link = 'l',
-	request_host_for = 'f' };
+	request_host_for = 'f', request_notice = 'n' };
 
 bool send_message(int socket, const std::string &bytes, const std::vector<int> &descriptors)
 {
@@ -334,7 +334,7 @@ void link_for(int socket)
 				parts.erase(parts.begin(), parts.begin() + 2);
 				send_message(socket, answer(sandbox().launch_on_host(name, parts, from_utf8(caller), true) ? 1 : 0, 0), {});
 			}
-		} else if (linked && (bytes.empty() || bytes[0] != request_address))
+		} else if (linked && (bytes.empty() || (bytes[0] != request_address && bytes[0] != request_notice)))
 			send_message(socket, answer(-1, EACCES), {});
 		else if (bytes.size() >= 9 && bytes[0] == request_open)
 			open_for(socket, bytes);
@@ -351,6 +351,12 @@ void link_for(int socket)
 			send_message(socket, answer(sandbox().open_on_host(name, parts) ? 1 : 0, 0), {});
 		} else if (bytes.size() >= 2 && bytes[0] == request_address)
 			send_message(socket, answer(sandbox().open_address(bytes.substr(1)) ? 1 : 0, 0), {});
+		else if (bytes.size() >= 2 && bytes[0] == request_notice) {
+			// The program's name, the title, then the text.
+			auto parts = request_parts(bytes);
+			parts.resize(3);
+			send_message(socket, answer(sandbox().notify(parts[0], parts[1], parts[2]) ? 1 : 0, 0), {});
+		}
 		else
 			send_message(socket, answer(-1, EINVAL), {});
 		for (const int descriptor : descriptors)
@@ -621,6 +627,26 @@ bool brokered_address(std::string_view address)
 	return opened;
 }
 
+static std::string notice_request(std::string_view application, std::string_view title, std::string_view text)
+{
+	std::string request(1, request_notice);
+	request += application;
+	request += '\0';
+	request += title;
+	request += '\0';
+	request += text;
+	return request;
+}
+
+bool brokered_notice(std::string_view application, std::string_view title, std::string_view text)
+{
+	std::vector<int> returned;
+	const bool shown = ask(notice_request(application, title, text), {}, returned) == 1;
+	for (const int descriptor : returned)
+		::close(descriptor);
+	return shown;
+}
+
 int host_broker_channel()
 {
 	std::vector<int> returned;
@@ -676,6 +702,15 @@ bool forwarded_address(std::string_view address)
 	for (const int descriptor : returned)
 		::close(descriptor);
 	return opened;
+}
+
+bool forwarded_notice(std::string_view application, std::string_view title, std::string_view text)
+{
+	std::vector<int> returned;
+	const bool shown = ask_on(outer_socket, outer_lock(), notice_request(application, title, text), {}, returned) == 1;
+	for (const int descriptor : returned)
+		::close(descriptor);
+	return shown;
 }
 
 }
