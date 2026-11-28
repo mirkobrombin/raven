@@ -1275,6 +1275,22 @@ void NativeWindows::register_manager_api(ApiRegistry &registry)
 		drawing(call[0]);
 		call.ret(0);
 	});
+	// Blur behind a window: since Windows 8 the compositor blurs nothing, but a window that enables it is composed through the alpha of
+	// its client area, which is how Qt and others make a window whose own pixels say where it is see-through. DWM_BLURBEHIND starts
+	// with its flags and fEnable on every width; the blur region and the transition flag change nothing without the blur.
+	registry.add("DwmEnableBlurBehindWindow", 2, [this](ApiCall &call) {
+		if (!std::as_const(objects).window(call[0]) || !call[1]) {
+			call.ret(0x80070057U);
+			return;
+		}
+		constexpr uint32_t dwm_bb_enable = 1;
+		if (call.load<uint32_t>(call[1]) & dwm_bb_enable) {
+			if (presentation.translucent)
+				presentation.translucent(call[0], call.load<uint32_t>(call[1] + 4) != 0);
+			drawing(call[0]);
+		}
+		call.ret(0);
+	});
 	// The compositor answers the hit test of the caption buttons it draws over an extended frame; every other message is the program's.
 	registry.add("DwmDefWindowProc", 5, [this](ApiCall &call) {
 		const auto *window = std::as_const(objects).window(call[0]);

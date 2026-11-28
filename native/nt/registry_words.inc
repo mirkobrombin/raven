@@ -259,6 +259,7 @@
 {"DuplicateHandle", 7},
 {"DuplicateToken", 3},
 {"DuplicateTokenEx", 6},
+{"DwmEnableBlurBehindWindow", 2},
 {"DwmExtendFrameIntoClientArea", 2},
 {"DwmFlush", 0},
 {"DwmGetCompositionTimingInfo", 2},
