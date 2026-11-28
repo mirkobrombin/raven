@@ -2772,6 +2772,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS32_COMPONENT_DIR}/regedit.exe $<TARGET_FILE_DIR:raven>/x86/regedit.exe)
             # Run at every build, so a component provisioned again reaches the runtime without relinking it.
             add_dependencies(raven raven_controls32_components)
+            # The 32-bit file dialog's picker and host program ship with the runtime too.
+            set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-picker.exe ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-host.exe)
             foreach(component raven-dwrite.dll raven-d2d1.dll)
                 if(EXISTS "${RAVEN_CONTROLS32_COMPONENT_DIR}/${component}")
                     add_custom_command(TARGET raven_controls32_components POST_BUILD
@@ -2821,6 +2823,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_CONTROLS_COMPONENT_DIR}/ucrtbase.dll $<TARGET_FILE_DIR:raven>/ucrtbase.dll)
             # Run at every build, so a component provisioned again reaches the runtime without relinking it.
             add_dependencies(raven raven_controls_components)
+            # The file dialog's picker and the program it runs the host's side through ship with the runtime, as the copies above put them.
+            set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-picker.exe ${CMAKE_CURRENT_BINARY_DIR}/raven-host.exe)
             set(EDIT_TEXT_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/edit-text.exe)
             add_custom_command(OUTPUT ${EDIT_TEXT_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib
