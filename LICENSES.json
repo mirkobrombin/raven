@@ -548,6 +548,7 @@
         "native/guest/raven-web/uri.c",
         "native/guest/raven-web/web.h",
         "native/guest/raven-winrt/winrt.c",
+        "native/guest/raven-winrt/stream.c",
         "native/guest/raven-winrt/winrt.h",
         "native/guest/raven-winscard/winscard.c",
         "native/guest/raven-wmi/wmi.c",

@@ -8,7 +8,8 @@
  *   properties; folders make, find, list, rename and delete what they hold, files are copied, moved, renamed and deleted. A name given
  *   to a folder's Get methods may reach into its subfolders with backslashes; a name made by Create, Rename, Copy or Move is one name.
  *   Listings come in the order of their names, folders before files. A deleted item is gone, as with PermanentDelete: nothing goes to a
- *   recycle bin. Opening a file as a stream is not served yet and is named in Raven's trace.
+ *   recycle bin. Files open as streams of raven-winrt: for reading, for reading and writing, for a
+ *   sequence of reads, or in a transaction whose writes go to a copy that replaces the file when committed.
  * - StorageFile.GetFileFromPathAsync and StorageFolder.GetFolderFromPathAsync, for a full path.
  * - Windows.Storage.FileIO: text in UTF-8 or UTF-16, whose byte order mark wins when reading, read and written whole, appended, or as
  *   lines; and bytes, through buffers. What is written carries no byte order mark.
@@ -51,6 +52,15 @@ static const IID iid_items_operation = {0x4b1c0fd7, 0x7a01, 0x5e7a, {0xa6, 0xfe,
 static const IID iid_string_operation = {0x3e1fe603, 0xf897, 0x5263, {0xb3, 0x28, 0x08, 0x06, 0x42, 0x6b, 0x8a, 0x79}};
 static const IID iid_properties_operation = {0x5186131a, 0x4467, 0x504b, {0x97, 0x7a, 0x07, 0x85, 0xa8, 0x23, 0x04, 0x85}};
 static const IID iid_buffer_operation = {0x3bee8834, 0xb9a7, 0x5a80, {0xa7, 0x46, 0x5e, 0xf0, 0x97, 0x22, 0x78, 0x78}};
+static const IID iid_stream_reference = {0x33ee3134, 0x1dd6, 0x4e3a, {0x80, 0x67, 0xd1, 0xc1, 0x62, 0xe8, 0x64, 0x2b}};
+static const IID iid_input_reference = {0x43929d18, 0x5ec9, 0x4b5a, {0x91, 0x9c, 0x42, 0x05, 0xb0, 0xc8, 0x04, 0xb6}};
+static const IID iid_stream_transaction = {0xf67cf363, 0xa53d, 0x4d94, {0xae, 0x2c, 0x67, 0x23, 0x2d, 0x93, 0xac, 0xdd}};
+static const IID iid_closable = {0x30d5a829, 0x7fa4, 0x4026, {0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e}};
+/* IAsyncOperation of IRandomAccessStream, IRandomAccessStreamWithContentType, IInputStream and StorageStreamTransaction. */
+static const IID iid_stream_operation = {0x430ecece, 0x1418, 0x5d19, {0x81, 0xb2, 0x5d, 0xdb, 0x38, 0x16, 0x03, 0xcc}};
+static const IID iid_typed_stream_operation = {0xc4a57c5e, 0x32b0, 0x55b3, {0xad, 0x13, 0xce, 0x1c, 0x23, 0x04, 0x1e, 0xd6}};
+static const IID iid_input_operation = {0xa8fe0732, 0x556d, 0x5841, {0xb7, 0xee, 0xb3, 0x45, 0x0f, 0xb5, 0x26, 0x66}};
+static const IID iid_transaction_operation = {0x0d81405a, 0x9bd3, 0x5e87, {0x82, 0xf4, 0x9b, 0x41, 0x28, 0xa8, 0x87, 0xeb}};
 static const IID iid_lines_operation = {0x92b02cd3, 0xaa6e, 0x573d, {0xbc, 0x03, 0x8d, 0x23, 0x09, 0xcb, 0xa3, 0xeb}};
 
 static const struct winrt_items_kind file_list = {&iid_file_view, &iid_file_iterable, &iid_file_iterator, FALSE, NULL};
@@ -712,36 +722,195 @@ static HRESULT WINAPI file_type(void *iface, HSTRING *out)
 	return WindowsCreateString(dot, length, out);
 }
 
-/* The MIME type the registry gives the file's extension, as Windows reads it. */
-static HRESULT WINAPI file_content_type(void *iface, HSTRING *out)
+/* The MIME type the registry gives a path's extension, as Windows reads it, into room for 128 characters. */
+static void content_type_of(const WCHAR *path, WCHAR *type)
 {
-	static const WCHAR unknown[] = L"application/octet-stream";
-	WCHAR path[MAX_PATH], key[MAX_PATH], type[128];
 	UINT32 length;
-	if (!out)
-		return E_POINTER;
-	path_of(item_of(iface), path);
+	WCHAR key[MAX_PATH];
 	const WCHAR *dot = extension(path, &length);
-	DWORD size = sizeof type;
+	DWORD size = 128 * sizeof(WCHAR);
 	if (dot) {
 		memcpy(key, dot, (size_t)length * sizeof(WCHAR));
 		key[length] = 0;
 		if (!RegGetValueW(HKEY_CLASSES_ROOT, key, L"Content Type", RRF_RT_REG_SZ, NULL, type, &size))
-			return WindowsCreateString(type, (UINT32)lstrlenW(type), out);
+			return;
 	}
-	return WindowsCreateString(unknown, ARRAYSIZE(unknown) - 1, out);
+	lstrcpyW(type, L"application/octet-stream");
+}
+
+static HRESULT WINAPI file_content_type(void *iface, HSTRING *out)
+{
+	WCHAR path[MAX_PATH], type[128];
+	if (!out)
+		return E_POINTER;
+	path_of(item_of(iface), path);
+	content_type_of(path, type);
+	return WindowsCreateString(type, (UINT32)lstrlenW(type), out);
+}
+
+/* FileAccessMode, and how the job's option asks a file to be opened. */
+#define ACCESS_READ 0
+#define ACCESS_READ_WRITE 1
+#define OPEN_TYPED 2
+#define OPEN_SEQUENTIAL 3
+
+/* A stream over a path: others may read and write beside a reader, and only read beside a writer. */
+static HRESULT open_stream(const WCHAR *path, BOOL write, const WCHAR *content_type, void **out)
+{
+	HANDLE file = CreateFileW(path, GENERIC_READ | (write ? GENERIC_WRITE : 0),
+		FILE_SHARE_READ | FILE_SHARE_DELETE | (write ? 0 : FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return last_error();
+	return winrt_file_stream(file, TRUE, write, content_type, out);
+}
+
+static HRESULT run_open(struct job *job, union winrt_value *result)
+{
+	WCHAR path[MAX_PATH], type[128];
+	path_of(job->item, path);
+	if (job->option == OPEN_TYPED)
+		content_type_of(path, type);
+	void *stream = NULL;
+	HRESULT outcome = open_stream(path, job->option == ACCESS_READ_WRITE, job->option == OPEN_TYPED ? type : NULL, &stream);
+	/* A sequence of reads is the stream's IInputStream. */
+	if (SUCCEEDED(outcome) && job->option == OPEN_SEQUENTIAL) {
+		void *input = NULL;
+		outcome = ((IUnknown *)stream)->lpVtbl->QueryInterface(stream, &IID___x_ABI_CWindows_CStorage_CStreams_CIInputStream, &input);
+		release(stream);
+		stream = input;
+	}
+	if (SUCCEEDED(outcome))
+		result->object = stream;
+	return outcome;
 }
 
 static HRESULT WINAPI file_open(void *iface, INT32 mode, void **out)
 {
-	answer_null(out);
-	return missing("StorageFile.OpenAsync");
+	if (mode != ACCESS_READ && mode != ACCESS_READ_WRITE) {
+		answer_null(out);
+		return E_INVALIDARG;
+	}
+	return start(&iid_stream_operation, WINRT_RESULT_OBJECT, new_job(run_open, iface, NULL, mode, NULL), out);
+}
+
+/* IRandomAccessStreamReference.OpenReadAsync and IInputStreamReference.OpenSequentialReadAsync of a file. */
+static HRESULT WINAPI file_open_read(void *iface, void **out)
+{
+	return start(&iid_typed_stream_operation, WINRT_RESULT_OBJECT, new_job(run_open, iface, NULL, OPEN_TYPED, NULL), out);
+}
+
+static HRESULT WINAPI file_open_sequential(void *iface, void **out)
+{
+	return start(&iid_input_operation, WINRT_RESULT_OBJECT, new_job(run_open, iface, NULL, OPEN_SEQUENTIAL, NULL), out);
+}
+
+/* Windows.Storage.StorageStreamTransaction: a stream over a copy of the file beside it, which CommitAsync puts in the file's place.
+ * A transaction closed or let go without a commit leaves the file as it was and removes the copy. */
+struct transaction {
+	struct object base;
+	void *stream;
+	WCHAR target[MAX_PATH], copy[MAX_PATH];
+	LONG committed;
+};
+
+static struct transaction *transaction_of(void *iface) { return (struct transaction *)owner(iface); }
+
+/* Closes a stream through its IClosable, so that it lets the copy go. */
+static void close_stream(void *stream)
+{
+	IUnknown *closable = NULL;
+	if (stream && SUCCEEDED(((IUnknown *)stream)->lpVtbl->QueryInterface(stream, &iid_closable, (void **)&closable))) {
+		((HRESULT (WINAPI *)(void *))method(closable, 6))(closable);
+		release(closable);
+	}
+}
+
+static void forget_copy(struct transaction *self)
+{
+	if (!InterlockedCompareExchange(&self->committed, 1, 0))
+		DeleteFileW(self->copy);
+}
+
+static void destroy_transaction(struct object *base)
+{
+	struct transaction *self = (struct transaction *)base;
+	close_stream(self->stream);
+	release(self->stream);
+	forget_copy(self);
+}
+
+static HRESULT WINAPI transaction_stream(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	reference(*out = transaction_of(iface)->stream);
+	return S_OK;
+}
+
+static HRESULT run_commit(struct job *job, union winrt_value *result)
+{
+	struct transaction *self = transaction_of(job->other);
+	if (InterlockedCompareExchange(&self->committed, 1, 0))
+		return E_ILLEGAL_METHOD_CALL;
+	if (!MoveFileExW(self->copy, self->target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		const HRESULT error = last_error();
+		InterlockedExchange(&self->committed, 0);
+		return error;
+	}
+	return S_OK;
+}
+
+static HRESULT WINAPI transaction_commit(void *iface, void **out)
+{
+	return start(NULL, WINRT_RESULT_NONE, new_job(run_commit, NULL, NULL, 0, iface), out);
+}
+
+static HRESULT WINAPI transaction_close(void *iface)
+{
+	struct transaction *self = transaction_of(iface);
+	close_stream(self->stream);
+	forget_copy(self);
+	return S_OK;
+}
+
+TABLE(transaction_table, 0, INSPECTABLE, (const void *)transaction_stream, (const void *)transaction_commit);
+TABLE(transaction_closable_table, 1, INSPECTABLE, (const void *)transaction_close);
+static const struct face_iid transaction_iids[] = {{&iid_stream_transaction, 0}, {&iid_closable, 1}, {NULL, 0}};
+static const struct kind transaction_kind = {"StorageStreamTransaction", L"Windows.Storage.StorageStreamTransaction", transaction_iids,
+	destroy_transaction};
+
+/* The copy is a new file in the same folder, so that putting it in the file's place is a rename. */
+static HRESULT run_transacted(struct job *job, union winrt_value *result)
+{
+	static const void *const *const tables[] = {transaction_table.slots, transaction_closable_table.slots};
+	WCHAR folder[MAX_PATH];
+	UINT32 length;
+	struct transaction *self = make(sizeof *self, &transaction_kind, tables, 2);
+	if (!self)
+		return E_OUTOFMEMORY;
+	path_of(job->item, self->target);
+	lstrcpyW(folder, self->target);
+	folder[leaf(self->target, &length) - self->target] = 0;
+	HRESULT outcome = exists(self->target, NULL) ? S_OK : NOT_THERE;
+	if (SUCCEEDED(outcome) && !GetTempFileNameW(folder, L"rvt", 0, self->copy))
+		outcome = last_error();
+	if (FAILED(outcome))
+		InterlockedExchange(&self->committed, 1);
+	if (SUCCEEDED(outcome) && !CopyFileW(self->target, self->copy, FALSE))
+		outcome = last_error();
+	if (SUCCEEDED(outcome))
+		outcome = open_stream(self->copy, TRUE, NULL, &self->stream);
+	if (FAILED(outcome)) {
+		release(face_of(&self->base, 0));
+		return outcome;
+	}
+	result->object = face_of(&self->base, 0);
+	return S_OK;
 }
 
 static HRESULT WINAPI file_open_transacted(void *iface, void **out)
 {
-	answer_null(out);
-	return missing("StorageFile.OpenTransactedWriteAsync");
+	return start(&iid_transaction_operation, WINRT_RESULT_OBJECT, new_job(run_transacted, iface, NULL, 0, NULL), out);
 }
 
 /* The path a copy or a move goes to: the name (or the file's own) in the folder, chosen by the option when something is there. */
@@ -846,23 +1015,26 @@ TABLE(item_table, 0, INSPECTABLE, (const void *)item_rename, (const void *)item_
 TABLE(folder_table, 1, INSPECTABLE, (const void *)folder_create_file, (const void *)folder_create_file_as, (const void *)folder_create_folder,
 	(const void *)folder_create_folder_as, (const void *)folder_get_file, (const void *)folder_get_folder, (const void *)folder_get_item,
 	(const void *)folder_files, (const void *)folder_folders, (const void *)folder_items);
+TABLE(file_read_table, 2, INSPECTABLE, (const void *)file_open_read);
+TABLE(file_sequential_table, 3, INSPECTABLE, (const void *)file_open_sequential);
 TABLE(file_table, 1, INSPECTABLE, (const void *)file_type, (const void *)file_content_type, (const void *)file_open,
 	(const void *)file_open_transacted, (const void *)file_copy, (const void *)file_copy_named, (const void *)file_copy_as,
 	(const void *)file_copy_replace, (const void *)file_move, (const void *)file_move_named, (const void *)file_move_as,
 	(const void *)file_move_replace);
 static const struct face_iid folder_iids[] = {{&iid_storage_item, 0}, {&iid_storage_folder, 1}, {NULL, 0}};
-static const struct face_iid file_iids[] = {{&iid_storage_item, 0}, {&iid_storage_file, 1}, {NULL, 0}};
+static const struct face_iid file_iids[] = {{&iid_storage_item, 0}, {&iid_storage_file, 1}, {&iid_stream_reference, 2}, {&iid_input_reference, 3},
+	{NULL, 0}};
 static const struct kind folder_kind = {"StorageFolder", L"Windows.Storage.StorageFolder", folder_iids, destroy_nothing};
 static const struct kind file_kind = {"StorageFile", L"Windows.Storage.StorageFile", file_iids, destroy_nothing};
 
 static HRESULT new_item(const WCHAR *path, BOOL folder, struct item **out)
 {
 	static const void *const *const folder_tables[] = {item_table.slots, folder_table.slots};
-	static const void *const *const file_tables[] = {item_table.slots, file_table.slots};
+	static const void *const *const file_tables[] = {item_table.slots, file_table.slots, file_read_table.slots, file_sequential_table.slots};
 	*out = NULL;
 	if ((size_t)lstrlenW(path) >= MAX_PATH)
 		return TOO_LONG;
-	struct item *self = make(sizeof *self, folder ? &folder_kind : &file_kind, folder ? folder_tables : file_tables, 2);
+	struct item *self = make(sizeof *self, folder ? &folder_kind : &file_kind, folder ? folder_tables : file_tables, folder ? 2 : 4);
 	if (!self)
 		return E_OUTOFMEMORY;
 	InitializeSRWLock(&self->lock);

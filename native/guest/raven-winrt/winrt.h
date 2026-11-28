@@ -3,8 +3,8 @@
  * See LICENSES/MIT.txt.
  */
 /* The plumbing of Raven's Windows Runtime components, shared so that each class only holds its own behaviour: objects that answer
- * several interfaces with one reference count, the IInspectable methods every interface has, asynchronous operations, boxed values,
- * and maps of strings with their iterators.
+ * several interfaces with one reference count, the IInspectable methods every interface has, asynchronous operations, lists and
+ * vectors, boxed values, buffers, streams over files (stream.c) and maps of strings with their iterators.
  *
  * An object is a struct that starts with struct winrt_object and holds one struct winrt_interface per interface it implements; its
  * class lists which interface identifier answers with which of them. Interface tables start with WINRT_INSPECTABLE, so QueryInterface,
@@ -171,6 +171,12 @@ HRESULT winrt_box(const IID *reference_iid, const void *value, size_t size, void
 HRESULT winrt_buffer(const BYTE *bytes, UINT32 length, UINT32 capacity, __x_ABI_CWindows_CStorage_CStreams_CIBuffer **out);
 /* The bytes of any IBuffer, through IBufferByteAccess. */
 HRESULT winrt_buffer_bytes(__x_ABI_CWindows_CStorage_CStreams_CIBuffer *buffer, BYTE **bytes, UINT32 *length);
+
+/* Windows.Storage.Streams.FileRandomAccessStream over a file handle, which it takes (and closes on failure): IRandomAccessStream with
+ * IInputStream, IOutputStream and IClosable, and with a content_type also IRandomAccessStreamWithContentType and IContentTypeProvider.
+ * Reading or writing a stream that may not answers E_ACCESSDENIED. *out is its IRandomAccessStream, or with a content type its
+ * IRandomAccessStreamWithContentType. */
+HRESULT winrt_file_stream(HANDLE file, BOOL can_read, BOOL can_write, const WCHAR *content_type, void **out);
 
 /* A map of strings, IMap<String, String> with its view and IIterable<IKeyValuePair<String, String>>, kept in insertion order, to embed
  * in an object; keys compare ignoring ASCII case when asked to, as header names do. The object's class lists its interfaces with

@@ -1,6 +1,7 @@
 // Files and folders of the Windows Runtime as an app uses them: a folder found by its path makes, finds, lists, copies, renames, moves and
-// deletes what it holds, FileIO reads and writes text, lines and bytes, and the Buffer class makes buffers. Every operation runs on its
-// own and calls its completion handler when it ends; the exit code names the first check that failed.
+// deletes what it holds, FileIO reads and writes text, lines and bytes, the Buffer class makes buffers, and a file opens as streams and
+// in a transaction. Every operation runs on its own and calls its completion handler when it ends; the exit code names the first check
+// that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -38,14 +39,29 @@ typedef HRESULT (WINAPI *create_method)(object *, UINT32, object **);
 typedef HRESULT (WINAPI *handler_method)(object *, object *);
 typedef HRESULT (WINAPI *results_method)(object *, void *);
 typedef HRESULT (WINAPI *action_results_method)(object *);
+typedef HRESULT (WINAPI *size_method)(object *, UINT64 *);
+typedef HRESULT (WINAPI *set_size_method)(object *, UINT64);
+typedef HRESULT (WINAPI *flag_method)(object *, BYTE *);
+typedef HRESULT (WINAPI *read_method)(object *, object *, UINT32, INT32, object **);
+typedef HRESULT (WINAPI *bytes_out_method)(object *, BYTE **);
+typedef HRESULT (WINAPI *plain_method)(object *);
+typedef HRESULT (WINAPI *mode_method)(object *, INT32, object **);
 
 static const GUID storage_item = {0x4207a996, 0xca2f, 0x42f7, {0xbd, 0xe8, 0x8b, 0x10, 0x45, 0x7a, 0x7f, 0x30}};
 static const GUID folder_statics = {0x08f327ff, 0x85d5, 0x48b9, {0xae, 0xe9, 0x28, 0x51, 0x1e, 0x33, 0x9f, 0x9f}};
 static const GUID file_io = {0x887411eb, 0x7f54, 0x4732, {0xa5, 0xf0, 0x5e, 0x43, 0xe3, 0xb8, 0xc2, 0xf5}};
+static const GUID random_access_stream = {0x905a0fe1, 0xbc53, 0x11df, {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
+static const GUID input_stream = {0x905a0fe2, 0xbc53, 0x11df, {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
+static const GUID output_stream = {0x905a0fe6, 0xbc53, 0x11df, {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
+static const GUID byte_access = {0x905a0fef, 0xbc53, 0x11df, {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
+static const GUID closable = {0x30d5a829, 0x7fa4, 0x4026, {0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e}};
+static const GUID stream_reference = {0x33ee3134, 0x1dd6, 0x4e3a, {0x80, 0x67, 0xd1, 0xc1, 0x62, 0xe8, 0x64, 0x2b}};
+static const GUID content_type_provider = {0x97d098a5, 0x3b99, 0x4de9, {0x88, 0xa5, 0xe1, 0x1d, 0x2f, 0x50, 0xc7, 0x95}};
 static const GUID buffer_factory = {0x71af914d, 0xc10f, 0x484b, {0xbc, 0x50, 0x14, 0xbc, 0x62, 0x3b, 0x3a, 0x27}};
 
 #define ALREADY_THERE ((HRESULT)0x800700b7)
 #define NOT_THERE ((HRESULT)0x80070002)
+#define CLOSED ((HRESULT)0x80000013)
 
 static object *statics(const WCHAR *name, const GUID *iid)
 {
@@ -79,7 +95,7 @@ static object handler = {handler_table};
 
 /* Waits for the operation a call made and answered made, and takes its results; an action (result NULL) has none. The operation is
  * read through its address, after the call has filled it. */
-static HRESULT finish(HRESULT made, object **made_operation, void *result)
+static HRESULT finish_at(HRESULT made, object **made_operation, void *result, int first)
 {
 	object *operation = *made_operation;
 	*made_operation = NULL;
@@ -87,17 +103,22 @@ static HRESULT finish(HRESULT made, object **made_operation, void *result)
 		return FAILED(made) ? made : E_FAIL;
 	ResetEvent(ended);
 	ended_status = -1;
-	HRESULT outcome = METHOD(operation, 6, handler_method)(operation, &handler);
+	HRESULT outcome = METHOD(operation, first, handler_method)(operation, &handler);
 	if (outcome == S_OK && WaitForSingleObject(ended, 10000) != WAIT_OBJECT_0)
 		outcome = E_ABORT;
 	if (outcome == S_OK)
-		outcome = result ? METHOD(operation, 8, results_method)(operation, result) : METHOD(operation, 8, action_results_method)(operation);
+		outcome = result ? METHOD(operation, first + 2, results_method)(operation, result) :
+			METHOD(operation, first + 2, action_results_method)(operation);
 	/* A completed operation succeeds; one that failed gives its error from GetResults. */
 	if (outcome == S_OK && ended_status != 1)
 		outcome = E_UNEXPECTED;
 	release(operation);
 	return outcome;
 }
+
+/* An operation, or one with progress, whose Progress methods come before Completed. */
+static HRESULT finish(HRESULT made, object **operation, void *result) { return finish_at(made, operation, result, 6); }
+static HRESULT finish_progress(HRESULT made, object **operation, void *result) { return finish_at(made, operation, result, 8); }
 
 static BOOL same(void *string, const WCHAR *text)
 {
@@ -116,6 +137,108 @@ static BOOL named(object *thing, const WCHAR *text)
 	WindowsDeleteString(name);
 	release(item);
 	return result;
+}
+
+static object *query(object *self, const GUID *iid)
+{
+	object *out = NULL;
+	return self && METHOD(self, 0, query_method)(self, iid, (void **)&out) == S_OK ? out : NULL;
+}
+
+/* The bytes of a buffer. */
+static BYTE *bytes_of(object *buffer)
+{
+	object *access = query(buffer, &byte_access);
+	BYTE *bytes = NULL;
+	if (access && METHOD(access, 3, bytes_out_method)(access, &bytes) != S_OK)
+		bytes = NULL;
+	release(access);
+	return bytes;
+}
+
+/* Text read whole from a file is the text. */
+static BOOL holds(object *io, object *file, const WCHAR *text)
+{
+	object *operation = NULL;
+	void *read = NULL;
+	const BOOL result = finish(METHOD(io, 6, item_method)(io, file, &operation), &operation, &read) == S_OK && same(read, text);
+	WindowsDeleteString(read);
+	return result;
+}
+
+/* A file holding "hello\r\nworld!" opened as streams: read, sought, written, flushed and closed, read only with its content type, and
+ * written in a transaction that replaces it when committed. */
+static int check_streams(object *io, object *buffers, object *folder, object *file)
+{
+	object *operation = NULL, *stream = NULL, *input, *output, *buffer = NULL, *got = NULL;
+	if (finish(METHOD(file, 8, mode_method)(file, 1, &operation), &operation, &stream) != S_OK || !stream) return 60;
+	UINT64 size = 0, position = 0;
+	BYTE flag = 0;
+	if (METHOD(stream, 6, size_method)(stream, &size) != S_OK || size != 13) return 61;
+	if (METHOD(stream, 13, flag_method)(stream, &flag) != S_OK || !flag) return 62;
+	if (METHOD(stream, 14, flag_method)(stream, &flag) != S_OK || !flag) return 63;
+	if (!(input = query(stream, &input_stream)) || !(output = query(stream, &output_stream))) return 64;
+	if (METHOD(buffers, 6, create_method)(buffers, 8, &buffer) != S_OK) return 65;
+	if (finish_progress(METHOD(input, 6, read_method)(input, buffer, 5, 0, &operation), &operation, &got) != S_OK || got != buffer) return 66;
+	UINT32 length = 0;
+	if (METHOD(buffer, 7, number_method)(buffer, &length) != S_OK || length != 5 || memcmp(bytes_of(buffer), "hello", 5)) return 67;
+	release(got);
+	if (METHOD(stream, 10, size_method)(stream, &position) != S_OK || position != 5) return 68;
+	if (METHOD(stream, 11, set_size_method)(stream, 13) != S_OK) return 69;
+	bytes_of(buffer)[0] = '?';
+	typedef HRESULT (WINAPI *length_method)(object *, UINT32);
+	if (METHOD(buffer, 8, length_method)(buffer, 1) != S_OK) return 70;
+	UINT32 written = 0;
+	if (finish_progress(METHOD(output, 6, item_method)(output, buffer, &operation), &operation, &written) != S_OK || written != 1) return 71;
+	BYTE flushed = 0;
+	if (finish(METHOD(output, 7, object_method)(output, &operation), &operation, &flushed) != S_OK || !flushed) return 72;
+	if (METHOD(stream, 6, size_method)(stream, &size) != S_OK || size != 14) return 73;
+	object *closer = query(stream, &closable);
+	if (!closer || METHOD(closer, 6, plain_method)(closer) != S_OK) return 74;
+	if (METHOD(input, 6, read_method)(input, buffer, 5, 0, &operation) != CLOSED) return 75;
+	release(closer);
+	release(input);
+	release(output);
+	release(stream);
+	if (!holds(io, file, L"hello\r\nworld!?")) return 76;
+
+	/* Read only, with the type of its extension. */
+	object *reference = query(file, &stream_reference), *provider;
+	if (!reference) return 77;
+	if (finish(METHOD(reference, 6, object_method)(reference, &operation), &operation, &stream) != S_OK || !stream) return 78;
+	if (!(provider = query(stream, &content_type_provider))) return 79;
+	void *type = NULL;
+	if (METHOD(provider, 6, string_method)(provider, &type) != S_OK || !type) return 80;
+	WindowsDeleteString(type);
+	object *random = query(stream, &random_access_stream);
+	if (!random || METHOD(random, 14, flag_method)(random, &flag) != S_OK || flag) return 81;
+	release(random);
+	if (!(output = query(stream, &output_stream)) || METHOD(output, 6, item_method)(output, buffer, &operation) != E_ACCESSDENIED) return 82;
+	release(output);
+	release(provider);
+	release(stream);
+	release(reference);
+
+	/* A transaction over a copy: the file changes only when it is committed, and no copy is left. */
+	object *transaction = NULL;
+	if (finish(METHOD(file, 9, object_method)(file, &operation), &operation, &transaction) != S_OK || !transaction) return 83;
+	if (METHOD(transaction, 6, object_method)(transaction, &stream) != S_OK || !stream) return 84;
+	if (METHOD(stream, 6, size_method)(stream, &size) != S_OK || size != 14) return 85;
+	if (METHOD(stream, 7, set_size_method)(stream, 2) != S_OK) return 86;
+	if (!holds(io, file, L"hello\r\nworld!?")) return 87;
+	if (finish(METHOD(transaction, 7, object_method)(transaction, &operation), &operation, NULL) != S_OK) return 88;
+	if (!holds(io, file, L"he")) return 89;
+	release(stream);
+	if (!(closer = query(transaction, &closable)) || METHOD(closer, 6, plain_method)(closer) != S_OK) return 90;
+	release(closer);
+	release(transaction);
+	object *list = NULL;
+	UINT32 count = 0;
+	if (finish(METHOD(folder, 15, object_method)(folder, &operation), &operation, &list) != S_OK || !list) return 91;
+	if (METHOD(list, 7, number_method)(list, &count) != S_OK || count != 2) return 92;
+	release(list);
+	release(buffer);
+	return 0;
 }
 
 static int check_storage(const WCHAR *base)
@@ -192,6 +315,9 @@ static int check_storage(const WCHAR *base)
 	WindowsDeleteString(moved);
 	if (GetFileAttributesW(expected) == INVALID_FILE_ATTRIBUTES) return 42;
 	release(storage);
+
+	const int streams = check_streams(io, buffers, folder, file);
+	if (streams) return streams;
 
 	/* Deleting a folder takes what it holds; it is not found afterwards. */
 	if (METHOD(sub, 0, query_method)(sub, &storage_item, (void **)&storage) != S_OK) return 43;
