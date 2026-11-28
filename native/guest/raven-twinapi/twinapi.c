@@ -18,6 +18,7 @@
  * - Windows.Foundation.PropertyValue: boxes of values, in value.c; Windows.Foundation.Collections.PropertySet, in map.c.
  * - Windows.Storage.StorageFile, StorageFolder, FileIO, Streams.Buffer and Streams.InMemoryRandomAccessStream, in storage.c.
  * - Windows.Storage.Streams.DataReader and DataWriter, in data.c.
+ * - Windows.Storage.Streams.RandomAccessStream and RandomAccessStreamReference, in streams.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -857,7 +858,7 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&core_window_class, &core_cursor_class, &display_information_class,
 	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class,
 	&storage_file_class, &storage_folder_class, &file_io_class, &buffer_class, &memory_stream_class, &data_reader_class,
-	&data_writer_class};
+	&data_writer_class, &random_access_stream_class, &stream_reference_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

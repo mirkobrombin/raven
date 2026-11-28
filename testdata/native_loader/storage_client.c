@@ -1,7 +1,8 @@
 // Files and folders of the Windows Runtime as an app uses them: a folder found by its path makes, finds, lists, copies, renames, moves and
 // deletes what it holds, FileIO reads and writes text, lines and bytes, the Buffer class makes buffers, a file opens as streams and in a
-// transaction, and DataWriter and DataReader carry values over buffers, file streams and streams in memory. Every operation runs on its
-// own and calls its completion handler when it ends; the exit code names the first check that failed.
+// transaction, DataWriter and DataReader carry values over buffers, file streams and streams in memory, and RandomAccessStream copies
+// between streams that references open. Every operation runs on its own and calls its completion handler when it ends; the exit code
+// names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -71,6 +72,9 @@ static const GUID data_writer = {0x64b89265, 0xd341, 0x4922, {0xb3, 0x8a, 0xdd, 
 static const GUID data_writer_factory = {0x338c67c2, 0x8b84, 0x4c2b, {0x9c, 0x50, 0x7b, 0x87, 0x67, 0x84, 0x7a, 0x1f}};
 static const GUID data_reader_factory = {0xd7527847, 0x57da, 0x4e15, {0x91, 0x4c, 0x06, 0x80, 0x66, 0x99, 0xa0, 0x98}};
 static const GUID data_reader_statics = {0x11fcbfc8, 0xf93a, 0x471b, {0xb1, 0x21, 0xf3, 0x79, 0xe3, 0x49, 0x31, 0x3c}};
+static const GUID stream_statics = {0x524cedcf, 0x6e29, 0x4ce5, {0x95, 0x73, 0x6b, 0x75, 0x3d, 0xb6, 0x6c, 0x3a}};
+static const GUID reference_statics = {0x857309dc, 0x3fbf, 0x4e7d, {0x98, 0x6f, 0xef, 0x3b, 0x1a, 0x07, 0xa9, 0x64}};
+static const GUID uri_factory = {0x44a9796f, 0x723e, 0x4fdf, {0xa2, 0x18, 0x03, 0x3e, 0x75, 0xb0, 0xc0, 0x84}};
 static const GUID buffer_factory = {0x71af914d, 0xc10f, 0x484b, {0xbc, 0x50, 0x14, 0xbc, 0x62, 0x3b, 0x3a, 0x27}};
 
 #define ALREADY_THERE ((HRESULT)0x800700b7)
@@ -361,6 +365,84 @@ static int check_data(object *io, object *file)
 	return 0;
 }
 
+/* The size of what a reference opens, and its content type. */
+static int opened_size(object *reference, UINT64 *size, void **type)
+{
+	object *operation = NULL, *stream = NULL, *random = NULL, *provider = NULL;
+	int failed = finish(METHOD(reference, 6, object_method)(reference, &operation), &operation, &stream) != S_OK || !stream;
+	if (!failed && (!(random = query(stream, &random_access_stream)) || METHOD(random, 6, size_method)(random, size) != S_OK)) failed = 1;
+	if (!failed && (!(provider = query(stream, &content_type_provider)) || METHOD(provider, 6, string_method)(provider, type) != S_OK))
+		failed = 1;
+	release(provider);
+	release(random);
+	release(stream);
+	return failed;
+}
+
+/* RandomAccessStream copies a file holding "stream" into a stream in memory, all of it, part of it, and closing both; references open
+ * the stream in memory, the file, and the file by its file:/// URI. */
+static int check_copies(object *file, const WCHAR *path)
+{
+	object *operation = NULL, *source = NULL, *instance = NULL, *memory, *input = NULL, *output = NULL;
+	object *copies = statics(L"Windows.Storage.Streams.RandomAccessStream", &stream_statics);
+	struct reference memory_name = {1, 50, {0, 0}, L"Windows.Storage.Streams.InMemoryRandomAccessStream"};
+	typedef HRESULT (WINAPI *copy_method)(object *, object *, object *, object **);
+	typedef HRESULT (WINAPI *copy_size_method)(object *, object *, object *, UINT64, object **);
+	UINT64 copied = 0, size = 0;
+	if (!copies) return 160;
+	if (finish(METHOD(file, 8, mode_method)(file, 0, &operation), &operation, &source) != S_OK || !source) return 161;
+	if (RoActivateInstance(&memory_name, (void **)&instance) != S_OK || !(memory = query(instance, &random_access_stream))) return 162;
+	release(instance);
+	if (METHOD(source, 8, position_method)(source, 0, &input) != S_OK || METHOD(memory, 9, position_method)(memory, 0, &output) != S_OK) return 163;
+	if (finish_progress(METHOD(copies, 6, copy_method)(copies, input, output, &operation), &operation, &copied) != S_OK || copied != 6) return 164;
+	release(input);
+	release(output);
+	if (METHOD(source, 8, position_method)(source, 0, &input) != S_OK || METHOD(memory, 9, position_method)(memory, 6, &output) != S_OK) return 165;
+	if (finish_progress(METHOD(copies, 7, copy_size_method)(copies, input, output, 3, &operation), &operation, &copied) != S_OK || copied != 3)
+		return 166;
+	release(input);
+	release(output);
+	if (METHOD(memory, 6, size_method)(memory, &size) != S_OK || size != 9) return 167;
+
+	object *references = statics(L"Windows.Storage.Streams.RandomAccessStreamReference", &reference_statics), *reference = NULL;
+	void *type = NULL;
+	if (!references) return 168;
+	if (METHOD(references, 8, item_method)(references, memory, &reference) != S_OK || !reference) return 169;
+	if (opened_size(reference, &size, &type) || size != 9 || !same(type, L"application/octet-stream")) return 170;
+	WindowsDeleteString(type);
+	release(reference);
+	if (METHOD(references, 6, item_method)(references, file, &reference) != S_OK || !reference) return 171;
+	if (opened_size(reference, &size, &type) || size != 6 || !type) return 172;
+	WindowsDeleteString(type);
+	release(reference);
+	WCHAR text[MAX_PATH + 8] = L"file:///";
+	lstrcatW(text, path);
+	for (WCHAR *at = text; *at; ++at)
+		if (*at == L'\\')
+			*at = L'/';
+	struct reference uri_text = {1, (UINT32)lstrlenW(text), {0, 0}, text};
+	object *uris = statics(L"Windows.Foundation.Uri", &uri_factory), *uri = NULL;
+	if (!uris || METHOD(uris, 6, name_method)(uris, &uri_text, &uri) != S_OK || !uri) return 173;
+	if (METHOD(references, 7, item_method)(references, uri, &reference) != S_OK || !reference) return 174;
+	if (opened_size(reference, &size, &type) || size != 6 || !type) return 175;
+	WindowsDeleteString(type);
+	release(reference);
+	release(uri);
+	release(uris);
+	release(references);
+
+	/* Copied and closed: neither takes more. */
+	if (METHOD(source, 8, position_method)(source, 0, &input) != S_OK || METHOD(memory, 9, position_method)(memory, 0, &output) != S_OK) return 176;
+	if (finish_progress(METHOD(copies, 8, copy_method)(copies, input, output, &operation), &operation, &copied) != S_OK || copied != 6) return 177;
+	if (METHOD(output, 7, object_method)(output, &operation) != CLOSED) return 178;
+	release(input);
+	release(output);
+	release(memory);
+	release(source);
+	release(copies);
+	return 0;
+}
+
 static int check_storage(const WCHAR *base)
 {
 	object *folders = statics(L"Windows.Storage.StorageFolder", &folder_statics), *io = statics(L"Windows.Storage.FileIO", &file_io);
@@ -440,6 +522,11 @@ static int check_storage(const WCHAR *base)
 	if (streams) return streams;
 	const int data = check_data(io, file);
 	if (data) return data;
+	WCHAR a_path[MAX_PATH];
+	lstrcpyW(a_path, base);
+	lstrcatW(a_path, L"\\a.txt");
+	const int copies = check_copies(file, a_path);
+	if (copies) return copies;
 
 	/* Deleting a folder takes what it holds; it is not found afterwards. */
 	if (METHOD(sub, 0, query_method)(sub, &storage_item, (void **)&storage) != S_OK) return 43;

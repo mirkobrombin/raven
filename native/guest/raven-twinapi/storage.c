@@ -764,6 +764,13 @@ static HRESULT open_stream(const WCHAR *path, BOOL write, const WCHAR *content_t
 	return winrt_file_stream(file, TRUE, write, content_type, out);
 }
 
+HRESULT open_typed_stream(const WCHAR *path, void **out)
+{
+	WCHAR type[128];
+	content_type_of(path, type);
+	return open_stream(path, FALSE, type, out);
+}
+
 static HRESULT run_open(struct job *job, union winrt_value *result)
 {
 	WCHAR path[MAX_PATH], type[128];

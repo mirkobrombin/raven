@@ -522,3 +522,29 @@ HRESULT winrt_memory_stream(void **out)
 	*out = &self->random;
 	return S_OK;
 }
+
+HRESULT winrt_stream_typed(void *stream, const WCHAR *content_type, void **out)
+{
+	struct stream *self, *made;
+	HSTRING type = NULL;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	IUnknown *random = NULL;
+	if (!stream || FAILED(((IUnknown *)stream)->lpVtbl->QueryInterface(stream, &iid_random_access_stream, (void **)&random)))
+		return E_INVALIDARG;
+	/* Only a stream of this file is known by its table; another component's stream answers E_NOTIMPL. */
+	if (((struct winrt_interface *)random)->table != &random_table) {
+		random->lpVtbl->Release(random);
+		return E_NOTIMPL;
+	}
+	self = stream_of(random);
+	HRESULT result = closed(self) ? RO_E_CLOSED : WindowsCreateString(content_type, (UINT32)lstrlenW(content_type), &type);
+	if (SUCCEEDED(result))
+		result = new_stream(self->file, self->can_read, self->can_write, type, 0, TYPED, &made);
+	if (SUCCEEDED(result))
+		*out = &made->with_type;
+	WindowsDeleteString(type);
+	random->lpVtbl->Release(random);
+	return result;
+}
