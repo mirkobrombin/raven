@@ -158,6 +158,17 @@ extern struct object cryptographic_buffer_class, hash_provider_class, hash_names
 extern struct object storage_permissions_class;
 /* datetime.c. */
 extern struct object date_time_formatter_class;
+/* Windows.Globalization.Calendar, from calendar.c, and what it shares with the formatter in datetime.c: the languages an app gives (or
+ * the user's, for NULL) as Windows names them, the list of them an app reads back, and the numeral systems by name, each with the
+ * digits it writes. */
+extern struct object calendar_class;
+#define GLOBALIZATION_LANGUAGES 8
+HRESULT language_list(void *languages, WCHAR (*list)[LOCALE_NAME_MAX_LENGTH], UINT32 *count);
+HRESULT language_names(const WCHAR (*list)[LOCALE_NAME_MAX_LENGTH], UINT32 count, void **out);
+/* The numeral system of the name, as it is spelled, or NULL; the digits of a text in it; the one the language writes. */
+const WCHAR *numeral_system(const WCHAR *name);
+void numeral_digits(const WCHAR *system, WCHAR *text);
+void numeral_default(const WCHAR *language, WCHAR out[16]);
 /* threading.c. */
 extern struct object thread_pool_class, thread_pool_timer_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */

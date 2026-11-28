@@ -24,7 +24,7 @@ enum part { YEAR, MONTH, DAY, WEEKDAY, HOUR, MINUTE, SECOND, PARTS };
 static const INT32 part_most[PARTS] = {FULL, NUMERIC, DEFAULT, FULL, DEFAULT, DEFAULT, DEFAULT};
 
 #define PICTURE 160
-#define LANGUAGES 8
+#define LANGUAGES GLOBALIZATION_LANGUAGES
 
 struct formatter {
 	struct object base;
@@ -468,10 +468,36 @@ static const struct {
 
 static INT32 numeral_index(const WCHAR *name)
 {
-	for (size_t index = 0; index < ARRAYSIZE(numeral_systems); ++index)
+	for (size_t index = 0; name && index < ARRAYSIZE(numeral_systems); ++index)
 		if (!lstrcmpiW(name, numeral_systems[index].name))
 			return (INT32)index;
 	return -1;
+}
+
+const WCHAR *numeral_system(const WCHAR *name)
+{
+	const INT32 index = numeral_index(name);
+	return index < 0 ? NULL : numeral_systems[index].name;
+}
+
+void numeral_digits(const WCHAR *system, WCHAR *text)
+{
+	const INT32 numerals = numeral_index(system);
+	if (numerals > 0)
+		for (WCHAR *digit = text; *digit; ++digit)
+			if (*digit >= L'0' && *digit <= L'9')
+				*digit = (WCHAR)(numeral_systems[numerals].zero + (*digit - L'0'));
+}
+
+void numeral_default(const WCHAR *language, WCHAR out[16])
+{
+	WCHAR digits[32] = {0};
+	/* The language's own digits when it names them first (LOCALE_SNATIVEDIGITS gives them; the numeral system is Latn otherwise). */
+	lstrcpyW(out, L"Latn");
+	if (GetLocaleInfoEx(language, LOCALE_SNATIVEDIGITS, digits, ARRAYSIZE(digits)))
+		for (size_t index = 1; index < ARRAYSIZE(numeral_systems); ++index)
+			if (digits[0] == numeral_systems[index].zero)
+				lstrcpyW(out, numeral_systems[index].name);
 }
 
 /* ---- Writing ---- */
@@ -512,11 +538,7 @@ static HRESULT write_time(struct formatter *self, const SYSTEMTIME *time, HSTRIN
 		} else if (!append(text, ARRAYSIZE(text), written))
 			return E_OUTOFMEMORY;
 	}
-	const INT32 numerals = numeral_index(self->numerals);
-	if (numerals > 0)
-		for (WCHAR *digit = text; *digit; ++digit)
-			if (*digit >= L'0' && *digit <= L'9')
-				*digit = (WCHAR)(numeral_systems[numerals].zero + (*digit - L'0'));
+	numeral_digits(self->numerals, text);
 	return WindowsCreateString(text, (UINT32)lstrlenW(text), out);
 }
 
@@ -560,13 +582,18 @@ static HRESULT names_answer(const WCHAR *const *names, UINT32 count, void **out)
 	return winrt_items(&string_list, (IInspectable **)items, count, FALSE, out);
 }
 
+HRESULT language_names(const WCHAR (*list)[LOCALE_NAME_MAX_LENGTH], UINT32 count, void **out)
+{
+	const WCHAR *names[LANGUAGES];
+	for (UINT32 index = 0; index < count && index < LANGUAGES; ++index)
+		names[index] = list[index];
+	return names_answer(names, count < LANGUAGES ? count : LANGUAGES, out);
+}
+
 static HRESULT WINAPI formatter_languages(void *iface, void **out)
 {
 	struct formatter *self = formatter_of(iface);
-	const WCHAR *names[LANGUAGES];
-	for (UINT32 index = 0; index < self->language_count; ++index)
-		names[index] = self->languages[index];
-	return names_answer(names, self->language_count, out);
+	return language_names((const WCHAR (*)[LOCALE_NAME_MAX_LENGTH])self->languages, self->language_count, out);
 }
 
 static HRESULT WINAPI formatter_region(void *iface, HSTRING *out) { return text_answer(formatter_of(iface)->region, out); }
@@ -576,10 +603,10 @@ static HRESULT WINAPI formatter_numerals(void *iface, HSTRING *out) { return tex
 
 static HRESULT WINAPI formatter_set_numerals(void *iface, HSTRING value)
 {
-	const INT32 index = numeral_index(WindowsGetStringRawBuffer(value, NULL));
-	if (index < 0)
+	const WCHAR *system = numeral_system(WindowsGetStringRawBuffer(value, NULL));
+	if (!system)
 		return E_INVALIDARG;
-	lstrcpyW(formatter_of(iface)->numerals, numeral_systems[index].name);
+	lstrcpyW(formatter_of(iface)->numerals, system);
 	return S_OK;
 }
 
@@ -638,8 +665,9 @@ static const struct kind formatter_kind = {"DateTimeFormatter", L"Windows.Global
 	destroy_formatter};
 
 /* The languages given, the first one Windows knows the one written in; none given, the user's. */
-static HRESULT take_languages(struct formatter *self, void *languages)
+HRESULT language_list(void *languages, WCHAR (*list)[LOCALE_NAME_MAX_LENGTH], UINT32 *count)
 {
+	*count = 0;
 	if (languages) {
 		void *iterator = NULL;
 		boolean more = FALSE;
@@ -647,28 +675,35 @@ static HRESULT take_languages(struct formatter *self, void *languages)
 		if (FAILED(result))
 			return result;
 		result = ((HRESULT (WINAPI *)(void *, boolean *))method(iterator, 7))(iterator, &more);
-		while (SUCCEEDED(result) && more && self->language_count < LANGUAGES) {
+		while (SUCCEEDED(result) && more && *count < LANGUAGES) {
 			HSTRING name = NULL;
 			WCHAR resolved[LOCALE_NAME_MAX_LENGTH];
 			if (FAILED(result = ((HRESULT (WINAPI *)(void *, HSTRING *))method(iterator, 6))(iterator, &name)))
 				break;
 			if (GetLocaleInfoEx(WindowsGetStringRawBuffer(name, NULL), LOCALE_SNAME, resolved, ARRAYSIZE(resolved)))
-				lstrcpyW(self->languages[self->language_count++], resolved);
+				lstrcpyW(list[(*count)++], resolved);
 			WindowsDeleteString(name);
 			result = ((HRESULT (WINAPI *)(void *, boolean *))method(iterator, 8))(iterator, &more);
 		}
 		release(iterator);
 		if (FAILED(result))
 			return result;
-		if (!self->language_count)
+		if (!*count)
 			return E_INVALIDARG;
 	} else {
-		if (!GetUserDefaultLocaleName(self->languages[0], LOCALE_NAME_MAX_LENGTH))
+		if (!GetUserDefaultLocaleName(list[0], LOCALE_NAME_MAX_LENGTH))
 			return HRESULT_FROM_WIN32(GetLastError());
-		self->language_count = 1;
+		*count = 1;
 	}
-	lstrcpyW(self->language, self->languages[0]);
 	return S_OK;
+}
+
+static HRESULT take_languages(struct formatter *self, void *languages)
+{
+	const HRESULT result = language_list(languages, self->languages, &self->language_count);
+	if (SUCCEEDED(result))
+		lstrcpyW(self->language, self->languages[0]);
+	return result;
 }
 
 /* A formatter for the languages, region, calendar and clock given, any of them NULL for the user's, with the parts or the template. */
@@ -710,15 +745,8 @@ static HRESULT make_formatter(const WCHAR *template_text, const INT32 *parts, vo
 		} else if (!GetLocaleInfoEx(self->language, LOCALE_SISO3166CTRYNAME, self->region, ARRAYSIZE(self->region)))
 			result = HRESULT_FROM_WIN32(GetLastError());
 	}
-	if (SUCCEEDED(result)) {
-		WCHAR digits[32] = {0};
-		/* The language's own digits when it names them first (LOCALE_SNATIVEDIGITS gives them; the numeral system is Latn otherwise). */
-		lstrcpyW(self->numerals, L"Latn");
-		if (GetLocaleInfoEx(self->language, LOCALE_SNATIVEDIGITS, digits, ARRAYSIZE(digits)))
-			for (size_t index = 1; index < ARRAYSIZE(numeral_systems); ++index)
-				if (digits[0] == numeral_systems[index].zero)
-					lstrcpyW(self->numerals, numeral_systems[index].name);
-	}
+	if (SUCCEEDED(result))
+		numeral_default(self->language, self->numerals);
 	if (SUCCEEDED(result)) {
 		if (template_text) {
 			if (lstrlenW(template_text) >= (int)ARRAYSIZE(self->template_name))
