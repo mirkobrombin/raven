@@ -261,6 +261,17 @@ void NativeWindows::track_pointer(uint64_t window)
 		post(tracked, 0x2a3, 0, 0);
 }
 
+// WM_CLIPBOARDUPDATE to each listener still there.
+void NativeWindows::clipboard_changed()
+{
+	for (auto listener = clipboard_listeners.begin(); listener != clipboard_listeners.end();)
+		if (objects.window(*listener)) {
+			post(*listener, 0x031d, 0, 0);
+			++listener;
+		} else
+			listener = clipboard_listeners.erase(listener);
+}
+
 void NativeWindows::register_ext_api(ApiRegistry &registry)
 {
 	// ---- DPI: one 96 dpi screen ----
@@ -530,6 +541,7 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		clipboard_owner = 0;
 		++clipboard_sequence;
 		clipboard_published = clipboard_sequence;
+		clipboard_changed();
 	};
 	registry.add("OpenClipboard", 1, [this, import_host](ApiCall &call) {
 		if (clipboard_window == UINT64_MAX) {
@@ -538,6 +550,7 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		}
 		import_host(call);
 		clipboard_window = call[0] ? call[0] : UINT64_MAX - 1;
+		clipboard_opened_sequence = clipboard_sequence;
 		call.ret(1);
 	});
 	registry.add("CloseClipboard", 0, [this, publish_host](ApiCall &call) {
@@ -547,6 +560,8 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 		}
 		clipboard_window = 0;
 		publish_host(call);
+		if (clipboard_sequence != clipboard_opened_sequence)
+			clipboard_changed();
 		call.ret(1);
 	});
 	registry.add("EmptyClipboard", 0, [this](ApiCall &call) {
@@ -607,6 +622,22 @@ void NativeWindows::register_ext_api(ApiRegistry &registry)
 	});
 	registry.add("GetClipboardOwner", 0, [this](ApiCall &call) { call.ret(clipboard_owner); });
 	registry.add("GetClipboardSequenceNumber", 0, [this, import_host](ApiCall &call) { import_host(call); call.ret(clipboard_sequence); });
+	// A listener gets WM_CLIPBOARDUPDATE once the clipboard closes after a change, and after text another host client copied comes in.
+	registry.add("AddClipboardFormatListener", 1, [this](ApiCall &call) {
+		if (!objects.window(call[0])) {
+			call.fail(1400);
+			return;
+		}
+		clipboard_listeners.insert(call[0]);
+		call.ret(1);
+	});
+	registry.add("RemoveClipboardFormatListener", 1, [this](ApiCall &call) {
+		if (!clipboard_listeners.erase(call[0])) {
+			call.fail(1400);
+			return;
+		}
+		call.ret(1);
+	});
 	registry.add("SetClipboardViewer", 1, [](ApiCall &call) { call.ret(0); });
 	registry.add("ChangeClipboardChain", 2, [](ApiCall &call) { call.ret(1); });
 

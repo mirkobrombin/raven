@@ -564,6 +564,10 @@ private:
 	// Sequence already offered to the host selection and the host selection already imported.
 	uint32_t clipboard_published=0;
 	uint64_t host_selection=0;
+	// The windows AddClipboardFormatListener registered, and the sequence the clipboard had when it was opened.
+	std::set<uint64_t> clipboard_listeners;
+	uint32_t clipboard_opened_sequence=0;
+	void clipboard_changed();
 	std::function<uint64_t(uint64_t)> global_allocator, global_data;
 	std::array<uint8_t,256> vk_state{},vk_async{};
 	// The mouse buttons count as keys too (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1 and 2), from the MK_ flags of a pointer message.

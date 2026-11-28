@@ -459,9 +459,6 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 	registry.add("EnableNonClientDpiScaling", 1, [](ApiCall &call) { call.ret(1); });
 
 	// A clipboard listener is told when the clipboard changes; registering one succeeds, and a window not registered cannot be removed.
-	registry.add("AddClipboardFormatListener", 1, [](ApiCall &call) { call.ret(call[0] ? 1 : 0); });
-	registry.add("RemoveClipboardFormatListener", 1, [](ApiCall &call) { call.ret(call[0] ? 1 : 0); });
-
 	// A system library Raven serves from the host has no COM classes of its own to hand out, as Windows answers for one it does not know.
 	registry.add("DllGetClassObject", 3, [](ApiCall &call) {
 		if (call[2])
