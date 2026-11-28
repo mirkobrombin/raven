@@ -1,12 +1,13 @@
 // Files and folders of the Windows Runtime as an app uses them: a folder found by its path makes, finds, lists, copies, renames, moves and
-// deletes what it holds, FileIO reads and writes text, lines and bytes, the Buffer class makes buffers, and a file opens as streams and
-// in a transaction. Every operation runs on its own and calls its completion handler when it ends; the exit code names the first check
-// that failed.
+// deletes what it holds, FileIO reads and writes text, lines and bytes, the Buffer class makes buffers, a file opens as streams and in a
+// transaction, and DataWriter and DataReader carry values over buffers and streams. Every operation runs on its own and calls its
+// completion handler when it ends; the exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 __declspec(dllimport) HRESULT WINAPI RoInitialize(int type);
 __declspec(dllimport) HRESULT WINAPI RoGetActivationFactory(void *name, const GUID *iid, void **factory);
+__declspec(dllimport) HRESULT WINAPI RoActivateInstance(void *name, void **instance);
 __declspec(dllimport) const WCHAR *WINAPI WindowsGetStringRawBuffer(void *string, UINT32 *length);
 __declspec(dllimport) HRESULT WINAPI WindowsDeleteString(void *string);
 
@@ -46,6 +47,15 @@ typedef HRESULT (WINAPI *read_method)(object *, object *, UINT32, INT32, object 
 typedef HRESULT (WINAPI *bytes_out_method)(object *, BYTE **);
 typedef HRESULT (WINAPI *plain_method)(object *);
 typedef HRESULT (WINAPI *mode_method)(object *, INT32, object **);
+typedef HRESULT (WINAPI *put_int32_method)(object *, INT32);
+typedef HRESULT (WINAPI *put_uint16_method)(object *, UINT16);
+typedef HRESULT (WINAPI *put_double_method)(object *, double);
+typedef HRESULT (WINAPI *put_string_method)(object *, void *, UINT32 *);
+typedef HRESULT (WINAPI *get_int32_method)(object *, INT32 *);
+typedef HRESULT (WINAPI *get_uint16_method)(object *, UINT16 *);
+typedef HRESULT (WINAPI *get_double_method)(object *, double *);
+typedef HRESULT (WINAPI *get_string_method)(object *, UINT32, void **);
+typedef HRESULT (WINAPI *position_method)(object *, UINT64, object **);
 
 static const GUID storage_item = {0x4207a996, 0xca2f, 0x42f7, {0xbd, 0xe8, 0x8b, 0x10, 0x45, 0x7a, 0x7f, 0x30}};
 static const GUID folder_statics = {0x08f327ff, 0x85d5, 0x48b9, {0xae, 0xe9, 0x28, 0x51, 0x1e, 0x33, 0x9f, 0x9f}};
@@ -57,6 +67,10 @@ static const GUID byte_access = {0x905a0fef, 0xbc53, 0x11df, {0x8c, 0x49, 0x00, 
 static const GUID closable = {0x30d5a829, 0x7fa4, 0x4026, {0x83, 0xbb, 0xd7, 0x5b, 0xae, 0x4e, 0xa9, 0x9e}};
 static const GUID stream_reference = {0x33ee3134, 0x1dd6, 0x4e3a, {0x80, 0x67, 0xd1, 0xc1, 0x62, 0xe8, 0x64, 0x2b}};
 static const GUID content_type_provider = {0x97d098a5, 0x3b99, 0x4de9, {0x88, 0xa5, 0xe1, 0x1d, 0x2f, 0x50, 0xc7, 0x95}};
+static const GUID data_writer = {0x64b89265, 0xd341, 0x4922, {0xb3, 0x8a, 0xdd, 0x4a, 0xf8, 0x80, 0x8c, 0x4e}};
+static const GUID data_writer_factory = {0x338c67c2, 0x8b84, 0x4c2b, {0x9c, 0x50, 0x7b, 0x87, 0x67, 0x84, 0x7a, 0x1f}};
+static const GUID data_reader_factory = {0xd7527847, 0x57da, 0x4e15, {0x91, 0x4c, 0x06, 0x80, 0x66, 0x99, 0xa0, 0x98}};
+static const GUID data_reader_statics = {0x11fcbfc8, 0xf93a, 0x471b, {0xb1, 0x21, 0xf3, 0x79, 0xe3, 0x49, 0x31, 0x3c}};
 static const GUID buffer_factory = {0x71af914d, 0xc10f, 0x484b, {0xbc, 0x50, 0x14, 0xbc, 0x62, 0x3b, 0x3a, 0x27}};
 
 #define ALREADY_THERE ((HRESULT)0x800700b7)
@@ -241,6 +255,84 @@ static int check_streams(object *io, object *buffers, object *folder, object *fi
 	return 0;
 }
 
+/* Values written by a DataWriter in both byte orders and read back by a DataReader, through a buffer, then through the file's streams;
+ * the file holds "he" when this starts. */
+static int check_data(object *io, object *file)
+{
+	object *instance = NULL, *writer, *buffer = NULL, *reader = NULL, *operation = NULL;
+	struct reference writer_name = {1, 34, {0, 0}, L"Windows.Storage.Streams.DataWriter"};
+	if (RoActivateInstance(&writer_name, (void **)&instance) != S_OK || !instance) return 100;
+	if (!(writer = query(instance, &data_writer))) return 101;
+	release(instance);
+	UINT32 count = 0;
+	NAME(text, L"héllo");
+	if (METHOD(writer, 18, put_int32_method)(writer, 0x01020304) != S_OK) return 102;
+	if (METHOD(writer, 10, put_int32_method)(writer, 0) != S_OK) return 103;
+	if (METHOD(writer, 20, put_uint16_method)(writer, 0x0506) != S_OK) return 104;
+	if (METHOD(writer, 27, put_string_method)(writer, &text, &count) != S_OK || count != 6) return 105;
+	if (METHOD(writer, 15, put_int32_method)(writer, 1) != S_OK) return 106;
+	if (METHOD(writer, 24, put_double_method)(writer, 1.5) != S_OK) return 107;
+	if (METHOD(writer, 6, number_method)(writer, &count) != S_OK || count != 21) return 108;
+	if (METHOD(writer, 31, object_method)(writer, &buffer) != S_OK || !buffer) return 109;
+	if (METHOD(buffer, 7, number_method)(buffer, &count) != S_OK || count != 21) return 110;
+	if (memcmp(bytes_of(buffer), "\1\2\3\4\6\5h\xc3\xa9llo\1", 13)) return 111;
+	if (METHOD(writer, 6, number_method)(writer, &count) != S_OK || count) return 112;
+	release(writer);
+
+	object *readers = statics(L"Windows.Storage.Streams.DataReader", &data_reader_statics);
+	if (!readers || METHOD(readers, 6, item_method)(readers, buffer, &reader) != S_OK || !reader) return 113;
+	INT32 number = 0;
+	UINT16 small = 0;
+	double real = 0;
+	BYTE flag = 0;
+	void *read = NULL;
+	if (METHOD(reader, 19, get_int32_method)(reader, &number) != S_OK || number != 0x01020304) return 114;
+	if (METHOD(reader, 10, put_int32_method)(reader, 0) != S_OK) return 115;
+	if (METHOD(reader, 21, get_uint16_method)(reader, &small) != S_OK || small != 0x0506) return 116;
+	if (METHOD(reader, 26, get_string_method)(reader, 6, &read) != S_OK || !same(read, L"héllo")) return 117;
+	WindowsDeleteString(read);
+	if (METHOD(reader, 16, flag_method)(reader, &flag) != S_OK || !flag) return 118;
+	if (METHOD(reader, 25, get_double_method)(reader, &real) != S_OK || real != 1.5) return 119;
+	if (METHOD(reader, 6, number_method)(reader, &count) != S_OK || count) return 120;
+	if (METHOD(reader, 13, flag_method)(reader, &flag) != E_BOUNDS) return 121;
+	release(reader);
+	release(readers);
+	release(buffer);
+
+	/* Through the file: a writer over its output stores and flushes, a reader over its input loads what was stored. */
+	object *stream = NULL, *output = NULL, *input = NULL;
+	if (finish(METHOD(file, 8, mode_method)(file, 1, &operation), &operation, &stream) != S_OK || !stream) return 122;
+	if (METHOD(stream, 9, position_method)(stream, 0, &output) != S_OK || !output) return 123;
+	object *writers = statics(L"Windows.Storage.Streams.DataWriter", &data_writer_factory);
+	if (!writers || METHOD(writers, 6, item_method)(writers, output, &writer) != S_OK || !writer) return 124;
+	NAME(word, L"stream");
+	if (METHOD(writer, 27, put_string_method)(writer, &word, &count) != S_OK || count != 6) return 125;
+	count = 0;
+	if (finish(METHOD(writer, 29, object_method)(writer, &operation), &operation, &count) != S_OK || count != 6) return 126;
+	BYTE flushed = 0;
+	if (finish(METHOD(writer, 30, object_method)(writer, &operation), &operation, &flushed) != S_OK || !flushed) return 127;
+	object *closer = query(writer, &closable);
+	if (!closer || METHOD(closer, 6, plain_method)(closer) != S_OK) return 128;
+	release(closer);
+	release(writer);
+	release(writers);
+	release(output);
+	if (!holds(io, file, L"stream")) return 129;
+	if (METHOD(stream, 8, position_method)(stream, 0, &input) != S_OK || !input) return 130;
+	object *makers = statics(L"Windows.Storage.Streams.DataReader", &data_reader_factory);
+	if (!makers || METHOD(makers, 6, item_method)(makers, input, &reader) != S_OK || !reader) return 131;
+	count = 0;
+	typedef HRESULT (WINAPI *load_method)(object *, UINT32, object **);
+	if (finish(METHOD(reader, 29, load_method)(reader, 100, &operation), &operation, &count) != S_OK || count != 6) return 132;
+	if (METHOD(reader, 26, get_string_method)(reader, 6, &read) != S_OK || !same(read, L"stream")) return 133;
+	WindowsDeleteString(read);
+	release(reader);
+	release(makers);
+	release(input);
+	release(stream);
+	return 0;
+}
+
 static int check_storage(const WCHAR *base)
 {
 	object *folders = statics(L"Windows.Storage.StorageFolder", &folder_statics), *io = statics(L"Windows.Storage.FileIO", &file_io);
@@ -318,6 +410,8 @@ static int check_storage(const WCHAR *base)
 
 	const int streams = check_streams(io, buffers, folder, file);
 	if (streams) return streams;
+	const int data = check_data(io, file);
+	if (data) return data;
 
 	/* Deleting a folder takes what it holds; it is not found afterwards. */
 	if (METHOD(sub, 0, query_method)(sub, &storage_item, (void **)&storage) != S_OK) return 43;

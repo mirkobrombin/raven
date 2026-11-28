@@ -17,6 +17,7 @@
  *   makes with its core window; a desktop process that runs none has no view.
  * - Windows.Foundation.PropertyValue: boxes of values, in value.c; Windows.Foundation.Collections.PropertySet, in map.c.
  * - Windows.Storage.StorageFile, StorageFolder, FileIO and Streams.Buffer, in storage.c.
+ * - Windows.Storage.Streams.DataReader and DataWriter, in data.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -855,7 +856,7 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information,
 	&core_window_class, &core_cursor_class, &display_information_class,
 	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class,
-	&storage_file_class, &storage_folder_class, &file_io_class, &buffer_class};
+	&storage_file_class, &storage_folder_class, &file_io_class, &buffer_class, &data_reader_class, &data_writer_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

@@ -119,6 +119,8 @@ extern struct object package_class, application_data_class;
 /* Files and folders, from storage.c: the StorageFolder of a path that exists, through its IStorageFolder, and the classes. */
 HRESULT make_folder(const WCHAR *path, void **out);
 extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class;
+/* Values read from and written to streams, from data.c. */
+extern struct object data_reader_class, data_writer_class;
 /* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */
 HRESULT package_data_path(const WCHAR *leaf, WCHAR *path);
 /* The root ApplicationDataContainer of a locality (0 local, 1 roaming), from settings.c, and the composite value class. */
