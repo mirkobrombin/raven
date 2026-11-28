@@ -63,6 +63,11 @@ def runtime_paths(build):
         mscoree.dll ucrtbase32.dll l_intl.nls dsound.dll raven-winmm.dll raven-msacm32.dll""".split()
     for root in (native, native / "x86"):
         files += [root / name for name in names if (root / name).exists()]
+    # Every guest component the build made, as CMake lists them, so that a new one ships without being named here.
+    components = native / "runtime-components.txt"
+    if components.exists():
+        files += [native / line for line in components.read_text().splitlines()
+                  if line and not line.startswith("..") and (native / line).exists()]
     files += sorted((native / "WinMetadata").glob("*.winmd"))
     paths = {path.relative_to(native).as_posix(): path for path in files}
     # Microsoft's code signing roots are not distributed: the runtime downloads them the first time it checks a signature. The 64-bit

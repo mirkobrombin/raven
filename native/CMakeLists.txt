@@ -2741,6 +2741,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RAVEN_SQLITE_COMPONENT_DIR}/winsqlite3.dll ${CMAKE_CURRENT_BINARY_DIR}/winsqlite3.dll
                 DEPENDS ${RAVEN_SQLITE_COMPONENT_DIR}/winsqlite3.dll VERBATIM)
             add_custom_target(sqlite_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/winsqlite3.dll)
+            set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/winsqlite3.dll)
             set(SQLITE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/sqlite-client.exe)
             add_custom_command(OUTPUT ${SQLITE_CLIENT}
                 COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
@@ -4962,6 +4963,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/ucrtbase32.dll ${CMAKE_CURRENT_BINARY_DIR}/ucrtbase32.o ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase32.def -lkernel32 -lgcc
                     DEPENDS ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase32.def ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_float.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_io.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_legacy.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_msvcrt.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_cpp.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_cxx.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_more.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_fiber.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_office.c ${PROJECT_SOURCE_DIR}/native/guest/raven-crt/ucrtbase_vc2022.c VERBATIM)
                 add_custom_target(x86_ucrt_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/ucrtbase32.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/ucrtbase32.dll)
                 # mscoree.dll, the system's entry to the .NET Framework, for each width: it hands every call to the shim implementation the
                 # installed Framework brings.
                 set(mscoree_source ${PROJECT_SOURCE_DIR}/native/guest/raven-mscoree)
@@ -4973,6 +4975,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/x86/mscoree.dll ${mscoree_source}/mscoree.c ${mscoree_source}/mscoree32.def -lkernel32 -luser32 -ladvapi32
                     DEPENDS ${mscoree_source}/mscoree.c ${mscoree_source}/mscoree64.def ${mscoree_source}/mscoree32.def VERBATIM)
                 add_custom_target(mscoree_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/mscoree.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mscoree.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/mscoree.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/mscoree.dll)
                 # taskschd.dll, the Task Scheduler's classes, for each width: Raven code on the public headers that keeps tasks as XML under
                 # System32\Tasks. Its trace of methods nobody wrote goes to the runtime through ravenhost.dll.
                 set(taskschd_source ${PROJECT_SOURCE_DIR}/native/guest/raven-taskschd)
@@ -4993,6 +4996,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${taskschd_source}/taskschd.c ${taskschd_source}/taskschd_tables.h ${taskschd_source}/taskschd64.def ${taskschd_source}/taskschd32.def
                         ${taskschd_source}/ravenhost64.def ${taskschd_source}/ravenhost32.def VERBATIM)
                 add_custom_target(taskschd_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/taskschd.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/taskschd.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/taskschd.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/taskschd.dll)
                 # webservices.dll, the XML reading of the Web Services API, for each width: Raven code on the public headers.
                 set(webservices_source ${PROJECT_SOURCE_DIR}/native/guest/raven-webservices)
                 set(webservices_flags -O2 -Wall -Wno-unused-parameter -ffreestanding -fno-builtin -shared -nostdlib -ffile-prefix-map=${PROJECT_SOURCE_DIR}=raven)
@@ -5004,6 +5008,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${webservices_source}/webservices.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lkernel32 -lgcc
                     DEPENDS ${webservices_source}/webservices.c VERBATIM)
                 add_custom_target(webservices_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/webservices.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/webservices.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/webservices.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/webservices.dll)
                 foreach(width 64 32)
                     set(webservices_client ${CMAKE_CURRENT_BINARY_DIR}/webservices-client${width}.exe)
                     if(width EQUAL 64)
@@ -5569,6 +5574,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${CMAKE_CURRENT_BINARY_DIR}/libravenhost-d3dcompiler32.a -lkernel32 -lgcc
                     DEPENDS ${d3dcompiler_source}/d3dcompiler.c ${d3dcompiler_source}/ravenhost64.def ${d3dcompiler_source}/ravenhost32.def VERBATIM)
                 add_custom_target(d3dcompiler_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler_47.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/d3dcompiler_47.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler_47.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/d3dcompiler_47.dll)
                 foreach(width 64 32)
                     set(d3dcompiler_client ${CMAKE_CURRENT_BINARY_DIR}/d3dcompiler-client${width}.exe)
                     if(width EQUAL 64)
@@ -5597,6 +5603,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${accprop_source}/accprop.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -loleaut32 -lole32 -luuid -lkernel32 -lgcc
                     DEPENDS ${accprop_source}/accprop.c VERBATIM)
                 add_custom_target(accprop_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-accprop.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-accprop.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-accprop.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-accprop.dll)
                 # icu.dll with icuuc.dll and icuin.dll forwarding to it, for each width: Raven code on the public documentation and the system's text functions.
                 # The 32-bit forwarders have no relocations, and the linker's default base for icuin.dll falls where images cannot be placed: both bases are fixed.
                 set(icu_source ${PROJECT_SOURCE_DIR}/native/guest/raven-icu)
@@ -5616,6 +5623,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${icu_files} ${icu_source}/stub.c ${icu_source}/internal.h ${icu_source}/icu.def ${icu_source}/icuuc.def ${icu_source}/icuin.def VERBATIM)
                 add_custom_target(icu_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/icu.dll ${CMAKE_CURRENT_BINARY_DIR}/icuuc.dll ${CMAKE_CURRENT_BINARY_DIR}/icuin.dll
                     ${CMAKE_CURRENT_BINARY_DIR}/x86/icu.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/icuuc.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/icuin.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/icu.dll ${CMAKE_CURRENT_BINARY_DIR}/icuuc.dll ${CMAKE_CURRENT_BINARY_DIR}/icuin.dll
+                    ${CMAKE_CURRENT_BINARY_DIR}/x86/icu.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/icuuc.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/icuin.dll)
                 # hlink.dll, the flat hyperlink functions for each width: Raven code on the public headers.
                 set(hlink_source ${PROJECT_SOURCE_DIR}/native/guest/raven-hlink)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hlink.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/hlink.dll
@@ -5626,6 +5635,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${hlink_source}/hlink.c ${hlink_source}/hlink.def ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lole32 -lkernel32 -lgcc
                     DEPENDS ${hlink_source}/hlink.c ${hlink_source}/hlink.def VERBATIM)
                 add_custom_target(hlink_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/hlink.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/hlink.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/hlink.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/hlink.dll)
                 # raven-d3d10_1.dll, Direct3D 10.1 device creation over the d3d10core.dll the runtime is given, for each width.
                 set(d3d10_source ${PROJECT_SOURCE_DIR}/native/guest/raven-d3d10)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/raven-d3d10_1.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-d3d10_1.dll
@@ -5636,6 +5646,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${d3d10_source}/d3d10_1.c -lkernel32 -lgcc
                     DEPENDS ${d3d10_source}/d3d10_1.c VERBATIM)
                 add_custom_target(d3d10_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-d3d10_1.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-d3d10_1.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-d3d10_1.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-d3d10_1.dll)
                 foreach(width 64 32)
                     set(d3d10_client ${CMAKE_CURRENT_BINARY_DIR}/d3d10-client${width}.exe)
                     if(width EQUAL 64)
@@ -5880,6 +5891,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${deployment_sources} ${winrt_source}/winrt.h ${winrt_source}/foundation.h
                         ${PROJECT_SOURCE_DIR}/native/guest/raven-appx/appxpackaging.h VERBATIM)
                 add_custom_target(deployment_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-deployment.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-deployment.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-deployment.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-deployment.dll)
                 # raven-web.dll, the HTTP classes of the Windows Runtime (Windows.Web.Http, its Headers and Filters) and Windows.Foundation.Uri,
                 # for each width: Raven code over WinINet, on the C declarations scripts/generate-winrt-header.py writes from Microsoft's
                 # published metadata (native/guest/raven-web/windows.web.http.h and native/guest/raven-winrt/foundation.h).
@@ -5895,6 +5907,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-web.dll ${web_sources} ${web_libraries}
                     DEPENDS ${web_sources} ${web_source}/web.h ${winrt_source}/winrt.h ${winrt_source}/foundation.h ${web_source}/windows.web.http.h VERBATIM)
                 add_custom_target(web_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-web.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-web.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-web.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-web.dll)
                 foreach(width 64 32)
                     set(web_client ${CMAKE_CURRENT_BINARY_DIR}/web-client${width}.exe)
                     if(width EQUAL 64)
@@ -5923,6 +5936,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${uisettings_source}/uisettings.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -luser32 -lkernel32 -lgcc
                     DEPENDS ${uisettings_source}/uisettings.c VERBATIM)
                 add_custom_target(uisettings_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-uisettings.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-uisettings.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-uisettings.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-uisettings.dll)
                 set(uisettings_client ${CMAKE_CURRENT_BINARY_DIR}/uisettings-client64.exe)
                 add_custom_command(OUTPUT ${uisettings_client}
                     COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,raven_entry,--no-insert-timestamp
@@ -5940,6 +5954,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${bcp47langs_source} -lkernel32
                     DEPENDS ${bcp47langs_source} VERBATIM)
                 add_custom_target(bcp47langs_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/bcp47langs.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/bcp47langs.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/bcp47langs.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/bcp47langs.dll)
                 # dcomp.dll, the visual layer of Windows.UI.Composition and the compositor clock for each width: Raven code on the public headers.
                 set(composition_source ${PROJECT_SOURCE_DIR}/native/guest/raven-composition)
                 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll
@@ -5955,6 +5970,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${composition_source}/composition.c ${composition_source}/composition_tables.h ${composition_source}/composition_interfaces.h
                         ${composition_source}/dcomp64.def ${composition_source}/dcomp32.def VERBATIM)
                 add_custom_target(composition_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/dcomp.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dcomp.dll)
                 foreach(width 64 32)
                     set(composition_client ${CMAKE_CURRENT_BINARY_DIR}/composition-client${width}.exe)
                     if(width EQUAL 64)
@@ -6012,6 +6028,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${coremessaging_source}/coremessaging.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -luser32 -lkernel32 -lgcc
                     DEPENDS ${coremessaging_source}/coremessaging.c VERBATIM)
                 add_custom_target(coremessaging_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/coremessaging.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/coremessaging.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/coremessaging.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/coremessaging.dll)
                 foreach(width 64 32)
                     set(coremessaging_client ${CMAKE_CURRENT_BINARY_DIR}/coremessaging-client${width}.exe)
                     if(width EQUAL 64)
@@ -6043,6 +6060,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/object.h ${twinapi_source}/core_window.c ${twinapi_source}/package.c
                         ${twinapi_source}/value.c ${twinapi_source}/map.c VERBATIM)
                 add_custom_target(twinapi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
                 foreach(width 64 32)
                     set(twinapi_client ${CMAKE_CURRENT_BINARY_DIR}/twinapi-client${width}.exe)
                     if(width EQUAL 64)
@@ -6105,6 +6123,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${netlist_source}/netlist.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -loleaut32 -liphlpapi -luuid -lkernel32 -lgcc
                     DEPENDS ${netlist_source}/netlist.c VERBATIM)
                 add_custom_target(netlist_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-netlist.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-netlist.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-netlist.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-netlist.dll)
                 foreach(width 64 32)
                     set(netlist_client ${CMAKE_CURRENT_BINARY_DIR}/netlist-client${width}.exe)
                     if(width EQUAL 64)
@@ -6138,6 +6157,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -lwinhttp -lole32 -ladvapi32 -lkernel32 -lgcc
                     DEPENDS ${bits_source}/bits.c ${taskschd_source}/ravenhost64.def ${taskschd_source}/ravenhost32.def VERBATIM)
                 add_custom_target(bits_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-bits.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-bits.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-bits.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-bits.dll)
                 foreach(width 64 32)
                     set(bits_client ${CMAKE_CURRENT_BINARY_DIR}/bits-client${width}.exe)
                     if(width EQUAL 64)
@@ -6171,6 +6191,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -loleaut32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     DEPENDS ${wmi_source}/wmi.c ${taskschd_source}/ravenhost64.def ${taskschd_source}/ravenhost32.def VERBATIM)
                 add_custom_target(wmi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-wmi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-wmi.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-wmi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-wmi.dll)
                 foreach(width 64 32)
                     set(wmi_client ${CMAKE_CURRENT_BINARY_DIR}/wmi-client${width}.exe)
                     if(width EQUAL 64)
@@ -6220,6 +6241,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         DEPENDS ${webengine_source}/engine.c ${webengine_source}/external.c ${webengine_source}/engine_cef.h
                             ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def VERBATIM)
                     add_custom_target(webengine_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-webengine.dll ${cef_folder}/raven-cefhost.exe)
+                    set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-webengine.dll ${cef_folder}/raven-cefhost.exe)
                 endif()
                 # EmbeddedBrowserWebView.dll, Raven's WebView2 runtime over the page engine, built when RAVEN_WEBVIEW2_SDK_DIRECTORY names the
                 # output of scripts/provision-webview2-sdk.py. It stands where a program's WebView2Loader.dll looks for it, in a folder named
@@ -6245,6 +6267,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         DEPENDS ${webview_source}/webview.c ${webview_source}/webview.rc ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def
                         VERBATIM)
                     add_custom_target(webview_component ALL DEPENDS ${webview_folder}/EmbeddedBrowserWebView.dll)
+                    set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${webview_folder}/EmbeddedBrowserWebView.dll)
                 endif()
                 # raven-ieframe.dll, the WebBrowser control of ieframe that hosts embed, for each width: Raven code on the public headers.
                 # The control draws pages with raven-webengine.dll when the runtime has it.
@@ -6264,6 +6287,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${ieframe_source}/ieframe.c ${ieframe_source}/engine.c ${webengine_source}/webengine.h ${taskschd_source}/ravenhost64.def
                         ${taskschd_source}/ravenhost32.def VERBATIM)
                 add_custom_target(ieframe_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-ieframe.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-ieframe.dll)
                 foreach(width 64 32)
                     set(ieframe_client ${CMAKE_CURRENT_BINARY_DIR}/ieframe-client${width}.exe)
                     if(width EQUAL 64)
@@ -6316,6 +6340,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${media_source}/avrt.c ${media_source}/mfplat.c ${media_source}/mmdevapi.c ${media_source}/msacm32.c ${media_source}/resampledmo.c
                         ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c VERBATIM)
                 add_custom_target(media_component ALL DEPENDS ${media_components})
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${media_components})
                 # A media library imports both, as cri_ware_unity.dll does; the fixture does too, and asks each one for its answers.
                 foreach(width 64 32)
                     set(media_client ${CMAKE_CURRENT_BINARY_DIR}/media-client${width}.exe)
@@ -6390,6 +6415,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         -o ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll ${winscard_source}/winscard.c -lkernel32
                     DEPENDS ${winscard_source}/winscard.c VERBATIM)
                 add_custom_target(winscard_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/winscard.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/winscard.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/winscard.dll)
                 foreach(width 64 32)
                     set(winscard_client ${CMAKE_CURRENT_BINARY_DIR}/winscard-client${width}.exe)
                     if(width EQUAL 64)
@@ -6429,6 +6455,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     DEPENDS ${winmm_files} ${winmm_source}/winmm_private.h ${PROJECT_SOURCE_DIR}/native/nt/raven_audio.h audio_imports
                     VERBATIM)
                 add_custom_target(winmm_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-winmm.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-winmm.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-winmm.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-winmm.dll)
                 # dsound.dll for each width: DirectSound's devices, buffers and capture, mixed by a guest thread into one stream of the engine.
                 set(dsound_source ${PROJECT_SOURCE_DIR}/native/guest/raven-dsound)
                 set(dsound_files ${dsound_source}/device.c ${dsound_source}/buffer.c ${dsound_source}/mixer.c ${dsound_source}/capture.c)
@@ -6444,6 +6471,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         ${PROJECT_SOURCE_DIR}/native/nt/raven_audio.h audio_imports
                     VERBATIM)
                 add_custom_target(dsound_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/dsound.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dsound.dll)
+                set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/dsound.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/dsound.dll)
                 # The fixture plays and records on the null device, so the pace of its buffers is the engine's alone.
                 foreach(width 64 32)
                     if(width EQUAL 64)
@@ -8179,3 +8207,11 @@ foreach(target IN LISTS host_feature_targets)
     string(APPEND host_features "${target}: $<JOIN:$<TARGET_PROPERTY:${target},COMPILE_DEFINITIONS>, >\n")
 endforeach()
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/host-features.txt CONTENT "${host_features}")
+# The guest components built here, one path a line under this build directory, which scripts/package-native.py ships beside the runtime.
+get_property(runtime_components GLOBAL PROPERTY RAVEN_RUNTIME_COMPONENTS)
+set(runtime_component_lines "")
+foreach(component IN LISTS runtime_components)
+    file(RELATIVE_PATH component ${CMAKE_CURRENT_BINARY_DIR} ${component})
+    string(APPEND runtime_component_lines "${component}\n")
+endforeach()
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/runtime-components.txt CONTENT "${runtime_component_lines}")
