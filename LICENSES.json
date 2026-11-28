@@ -392,6 +392,7 @@
         "native/guest/raven-twinapi/clipboard.c",
         "native/guest/raven-twinapi/popups.c",
         "native/guest/raven-twinapi/view.c",
+        "native/guest/raven-twinapi/crypto.c",
         "native/guest/raven-twinapi/known.c",
         "native/guest/raven-twinapi/launcher.c",
         "native/guest/raven-twinapi/streams.c",
