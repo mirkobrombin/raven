@@ -1,7 +1,7 @@
 // Files and folders of the Windows Runtime as an app uses them: a folder found by its path makes, finds, lists, copies, renames, moves and
 // deletes what it holds, FileIO reads and writes text, lines and bytes, the Buffer class makes buffers, a file opens as streams and in a
-// transaction, and DataWriter and DataReader carry values over buffers and streams. Every operation runs on its own and calls its
-// completion handler when it ends; the exit code names the first check that failed.
+// transaction, and DataWriter and DataReader carry values over buffers, file streams and streams in memory. Every operation runs on its
+// own and calls its completion handler when it ends; the exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -315,7 +315,6 @@ static int check_data(object *io, object *file)
 	if (!closer || METHOD(closer, 6, plain_method)(closer) != S_OK) return 128;
 	release(closer);
 	release(writer);
-	release(writers);
 	release(output);
 	if (!holds(io, file, L"stream")) return 129;
 	if (METHOD(stream, 8, position_method)(stream, 0, &input) != S_OK || !input) return 130;
@@ -327,9 +326,38 @@ static int check_data(object *io, object *file)
 	if (METHOD(reader, 26, get_string_method)(reader, 6, &read) != S_OK || !same(read, L"stream")) return 133;
 	WindowsDeleteString(read);
 	release(reader);
-	release(makers);
 	release(input);
 	release(stream);
+
+	/* A stream in memory grows as a writer stores into it, reads back what was stored, and is cut by its size. */
+	struct reference memory_name = {1, 50, {0, 0}, L"Windows.Storage.Streams.InMemoryRandomAccessStream"};
+	object *instance_memory = NULL;
+	UINT64 size = 0;
+	if (RoActivateInstance(&memory_name, (void **)&instance_memory) != S_OK || !instance_memory) return 134;
+	if (!(stream = query(instance_memory, &random_access_stream))) return 135;
+	release(instance_memory);
+	if (METHOD(stream, 9, position_method)(stream, 0, &output) != S_OK || !output) return 136;
+	if (METHOD(writers, 6, item_method)(writers, output, &writer) != S_OK || !writer) return 137;
+	NAME(memory, L"memory");
+	if (METHOD(writer, 27, put_string_method)(writer, &memory, &count) != S_OK || count != 6) return 138;
+	if (METHOD(writer, 18, put_int32_method)(writer, -2) != S_OK) return 139;
+	if (finish(METHOD(writer, 29, object_method)(writer, &operation), &operation, &count) != S_OK || count != 10) return 140;
+	if (METHOD(stream, 6, size_method)(stream, &size) != S_OK || size != 10) return 141;
+	if (METHOD(stream, 8, position_method)(stream, 0, &input) != S_OK || !input) return 142;
+	if (METHOD(makers, 6, item_method)(makers, input, &reader) != S_OK || !reader) return 143;
+	if (finish(METHOD(reader, 29, load_method)(reader, 100, &operation), &operation, &count) != S_OK || count != 10) return 144;
+	if (METHOD(reader, 26, get_string_method)(reader, 6, &read) != S_OK || !same(read, L"memory")) return 145;
+	WindowsDeleteString(read);
+	if (METHOD(reader, 19, get_int32_method)(reader, &number) != S_OK || number != -2) return 146;
+	if (METHOD(stream, 7, set_size_method)(stream, 3) != S_OK) return 147;
+	if (METHOD(stream, 6, size_method)(stream, &size) != S_OK || size != 3) return 148;
+	release(reader);
+	release(input);
+	release(writer);
+	release(output);
+	release(stream);
+	release(writers);
+	release(makers);
 	return 0;
 }
 

@@ -2,10 +2,11 @@
  * Copyright (c) 2026 Mirko Brombin
  * See LICENSES/MIT.txt.
  */
-/* Windows.Storage.Streams.FileRandomAccessStream: a stream over a file handle. Each stream keeps its own position, and reads and writes
- * go to the file at that position, so the streams cloned from one or taken at a position share the file but not where they are. The
- * file is closed when the last stream over it goes. Reads, writes and flushes run as operations on threads of their own; a stream
- * that was closed answers RO_E_CLOSED. */
+/* Windows.Storage.Streams.FileRandomAccessStream, a stream over a file handle, and InMemoryRandomAccessStream, a stream over bytes in
+ * memory that grow as they are written. Each stream keeps its own position, and reads and writes go to what it is over at that
+ * position, so the streams cloned from one or taken at a position share the file or the bytes but not where they are. What they share
+ * goes when the last stream over it goes. Reads, writes and flushes run as operations on threads of their own; a stream that was closed
+ * answers RO_E_CLOSED. */
 #include "winrt.h"
 
 #ifndef RO_E_CLOSED
@@ -18,20 +19,45 @@ static const IID iid_content_type_provider = {0x97d098a5, 0x3b99, 0x4de9, {0x88,
 
 typedef __x_ABI_CWindows_CStorage_CStreams_CIBuffer buffer_type;
 
-/* The file the streams share. */
+/* The file or the bytes the streams share: a file when handle is set. */
 struct shared_file {
 	LONG refs;
 	HANDLE handle;
-	/* Held exclusively while the size changes, shared for reads and writes. */
+	/* For a file, held exclusively while the size changes and shared for reads and writes; for bytes, held exclusively by writes too,
+	 * since they may move the bytes. */
 	SRWLOCK lock;
+	BYTE *bytes;
+	UINT64 size, capacity;
 };
 
 static void put_file(struct shared_file *file)
 {
 	if (file && !InterlockedDecrement(&file->refs)) {
-		CloseHandle(file->handle);
+		if (file->handle)
+			CloseHandle(file->handle);
+		WINRT_FREE(file->bytes);
 		WINRT_FREE(file);
 	}
+}
+
+/* Room for size bytes in memory, the new ones zeroed. */
+static HRESULT memory_room(struct shared_file *file, UINT64 size)
+{
+	if (size <= file->capacity)
+		return S_OK;
+	if (size > 0x7fffffff)
+		return E_OUTOFMEMORY;
+	UINT64 capacity = file->capacity ? file->capacity : 4096;
+	while (capacity < size)
+		capacity *= 2;
+	if (capacity > 0x7fffffff)
+		capacity = size;
+	BYTE *bytes = file->bytes ? WINRT_REALLOC(file->bytes, (SIZE_T)capacity) : WINRT_ALLOC((SIZE_T)capacity);
+	if (!bytes)
+		return E_OUTOFMEMORY;
+	file->bytes = bytes;
+	file->capacity = capacity;
+	return S_OK;
 }
 
 struct stream {
@@ -78,6 +104,12 @@ static HRESULT STDMETHODCALLTYPE stream_size(void *iface, UINT64 *out)
 		return E_POINTER;
 	if (closed(self))
 		return RO_E_CLOSED;
+	if (!self->file->handle) {
+		AcquireSRWLockShared(&self->file->lock);
+		*out = self->file->size;
+		ReleaseSRWLockShared(&self->file->lock);
+		return S_OK;
+	}
 	if (!GetFileSizeEx(self->file->handle, &size))
 		return last_error();
 	*out = (UINT64)size.QuadPart;
@@ -94,8 +126,16 @@ static HRESULT STDMETHODCALLTYPE stream_set_size(void *iface, UINT64 size)
 	if (size > (UINT64)MAXLONGLONG)
 		return E_INVALIDARG;
 	AcquireSRWLockExclusive(&self->file->lock);
-	LARGE_INTEGER at = {.QuadPart = (LONGLONG)size};
-	const HRESULT result = SetFilePointerEx(self->file->handle, at, NULL, FILE_BEGIN) && SetEndOfFile(self->file->handle) ? S_OK : last_error();
+	HRESULT result;
+	if (self->file->handle) {
+		LARGE_INTEGER at = {.QuadPart = (LONGLONG)size};
+		result = SetFilePointerEx(self->file->handle, at, NULL, FILE_BEGIN) && SetEndOfFile(self->file->handle) ? S_OK : last_error();
+	} else if (SUCCEEDED(result = memory_room(self->file, size))) {
+		/* Bytes a smaller size cut off are zero if it grows again. */
+		if (size < self->file->size)
+			memset(self->file->bytes + size, 0, (SIZE_T)(self->file->size - size));
+		self->file->size = size;
+	}
 	ReleaseSRWLockExclusive(&self->file->lock);
 	return result;
 }
@@ -207,9 +247,32 @@ static HRESULT start_transfer(struct stream *self, buffer_type *buffer, UINT32 c
 	return winrt_async_start(operation, progress, kind, work, transfer, free_transfer, out);
 }
 
-/* One positioned transfer of the file, at most count bytes. */
+/* One positioned transfer of bytes in memory: a write past the end grows them, zeroing any gap. */
+static HRESULT memory_io(struct shared_file *file, BOOL write, UINT64 position, BYTE *bytes, UINT32 count, UINT32 *done)
+{
+	HRESULT result = S_OK;
+	*done = 0;
+	AcquireSRWLockExclusive(&file->lock);
+	if (write) {
+		if (SUCCEEDED(result = memory_room(file, position + count))) {
+			memcpy(file->bytes + position, bytes, count);
+			if (position + count > file->size)
+				file->size = position + count;
+			*done = count;
+		}
+	} else if (position < file->size) {
+		*done = file->size - position < count ? (UINT32)(file->size - position) : count;
+		memcpy(bytes, file->bytes + position, *done);
+	}
+	ReleaseSRWLockExclusive(&file->lock);
+	return result;
+}
+
+/* One positioned transfer of the file or the bytes, at most count bytes. */
 static HRESULT file_io(struct shared_file *file, BOOL write, UINT64 position, BYTE *bytes, UINT32 count, UINT32 *done)
 {
+	if (!file->handle)
+		return memory_io(file, write, position, bytes, count, done);
 	OVERLAPPED at = {.Offset = (DWORD)position, .OffsetHigh = (DWORD)(position >> 32)};
 	DWORD moved = 0;
 	*done = 0;
@@ -307,7 +370,7 @@ static HRESULT flush_work(struct winrt_async *operation, void *context, union wi
 	struct transfer *transfer = context;
 	if (closed(transfer->stream))
 		return RO_E_CLOSED;
-	if (!FlushFileBuffers(transfer->stream->file->handle))
+	if (transfer->stream->file->handle && !FlushFileBuffers(transfer->stream->file->handle))
 		return last_error();
 	result->boolean = TRUE;
 	return S_OK;
@@ -378,12 +441,13 @@ static const struct winrt_class whole_class = {L"Windows.Storage.Streams.FileRan
 static const struct winrt_class typed_class = {L"Windows.Storage.Streams.FileRandomAccessStream", typed_entries, stream_destroy};
 static const struct winrt_class input_class = {L"Windows.Storage.Streams.FileInputStream", input_entries, stream_destroy};
 static const struct winrt_class output_class = {L"Windows.Storage.Streams.FileOutputStream", output_entries, stream_destroy};
+static const struct winrt_class memory_class = {L"Windows.Storage.Streams.InMemoryRandomAccessStream", whole_entries, stream_destroy};
 
 static HRESULT new_stream(struct shared_file *file, BOOL can_read, BOOL can_write, HSTRING content_type, UINT64 position, int part,
 	struct stream **out)
 {
 	const struct winrt_class *kind = part == INPUT_PART ? &input_class : part == OUTPUT_PART ? &output_class :
-		part == TYPED ? &typed_class : &whole_class;
+		part == TYPED ? &typed_class : file->handle ? &whole_class : &memory_class;
 	*out = NULL;
 	struct stream *self = winrt_new(kind, sizeof(*self), NULL);
 	if (!self)
@@ -437,5 +501,24 @@ HRESULT winrt_file_stream(HANDLE handle, BOOL can_read, BOOL can_write, const WC
 		return result;
 	}
 	*out = content_type ? &self->with_type : &self->random;
+	return S_OK;
+}
+
+HRESULT winrt_memory_stream(void **out)
+{
+	struct stream *self;
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	struct shared_file *file = WINRT_ALLOC(sizeof(*file));
+	if (!file)
+		return E_OUTOFMEMORY;
+	InitializeSRWLock(&file->lock);
+	const HRESULT result = new_stream(file, TRUE, TRUE, NULL, 0, WHOLE, &self);
+	if (FAILED(result)) {
+		WINRT_FREE(file);
+		return result;
+	}
+	*out = &self->random;
 	return S_OK;
 }

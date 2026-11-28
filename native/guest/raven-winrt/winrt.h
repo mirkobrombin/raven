@@ -177,6 +177,8 @@ HRESULT winrt_buffer_bytes(__x_ABI_CWindows_CStorage_CStreams_CIBuffer *buffer, 
  * Reading or writing a stream that may not answers E_ACCESSDENIED. *out is its IRandomAccessStream, or with a content type its
  * IRandomAccessStreamWithContentType. */
 HRESULT winrt_file_stream(HANDLE file, BOOL can_read, BOOL can_write, const WCHAR *content_type, void **out);
+/* Windows.Storage.Streams.InMemoryRandomAccessStream: the same over bytes in memory, empty at first, through its IRandomAccessStream. */
+HRESULT winrt_memory_stream(void **out);
 
 /* A map of strings, IMap<String, String> with its view and IIterable<IKeyValuePair<String, String>>, kept in insertion order, to embed
  * in an object; keys compare ignoring ASCII case when asked to, as header names do. The object's class lists its interfaces with

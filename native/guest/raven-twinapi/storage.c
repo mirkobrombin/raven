@@ -13,7 +13,7 @@
  * - StorageFile.GetFileFromPathAsync and StorageFolder.GetFolderFromPathAsync, for a full path.
  * - Windows.Storage.FileIO: text in UTF-8 or UTF-16, whose byte order mark wins when reading, read and written whole, appended, or as
  *   lines; and bytes, through buffers. What is written carries no byte order mark.
- * - Windows.Storage.Streams.Buffer, with IBufferByteAccess.
+ * - Windows.Storage.Streams.Buffer, with IBufferByteAccess, and InMemoryRandomAccessStream.
  *
  * Each operation does its work on a thread of its own, through raven-winrt, and ends with what Windows ends it with: a missing item is
  * ERROR_FILE_NOT_FOUND, an existing one a name may not take ERROR_ALREADY_EXISTS, a bad name ERROR_INVALID_NAME, and an item of the
@@ -1149,6 +1149,15 @@ TABLE(buffer_create_table, 1, INSPECTABLE, (const void *)buffer_create);
 static const struct face_iid buffer_class_iids[] = {{&iid_factory, 0}, {&iid_buffer_factory, 1}, {NULL, 0}};
 static const struct kind buffer_class_kind = {"Buffer", L"Windows.Storage.Streams.Buffer", buffer_class_iids, NULL};
 struct object buffer_class = {{buffer_factory_table.slots, buffer_create_table.slots}, &buffer_class_kind, 1};
+
+/* new Windows.Storage.Streams.InMemoryRandomAccessStream(): an empty stream over bytes in memory, from raven-winrt. */
+static HRESULT WINAPI memory_activate(void *iface, IInspectable **out) { return winrt_memory_stream((void **)out); }
+
+TABLE(memory_factory_table, 0, INSPECTABLE, (const void *)memory_activate);
+static const struct face_iid memory_class_iids[] = {{&iid_factory, 0}, {NULL, 0}};
+static const struct kind memory_class_kind = {"InMemoryRandomAccessStream", L"Windows.Storage.Streams.InMemoryRandomAccessStream",
+	memory_class_iids, NULL};
+struct object memory_stream_class = {{memory_factory_table.slots}, &memory_class_kind, 1};
 
 /* Windows.Storage.FileIO. The job's other is the file; its option the encoding. */
 static HRESULT read_whole(void *file, BYTE **bytes, DWORD *size)

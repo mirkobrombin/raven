@@ -118,7 +118,7 @@ extern struct object core_window_class, core_cursor_class, display_information_c
 extern struct object package_class, application_data_class;
 /* Files and folders, from storage.c: the StorageFolder of a path that exists, through its IStorageFolder, and the classes. */
 HRESULT make_folder(const WCHAR *path, void **out);
-extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class;
+extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class, memory_stream_class;
 /* Values read from and written to streams, from data.c. */
 extern struct object data_reader_class, data_writer_class;
 /* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */
