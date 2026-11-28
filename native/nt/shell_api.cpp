@@ -81,7 +81,9 @@ constexpr KnownFolder known_folders[] = {
 	{0x1777f761, 0x06, nullptr}, {0xa4115719, 0x16, nullptr}, {0x0139d44e, 0x17, nullptr}, {0xae50c081, 0x27, nullptr},
 	{0x6365d5a7, -1, u"C:\\Program Files\\Common Files"}, {0x0762d272, -1, u"C:\\Users"},
 	{0xed4824af, 0x2e, nullptr}, {0x3214fab5, 0x35, nullptr}, {0xb6ebfb86, 0x36, nullptr}, {0x2400183a, 0x37, nullptr},
-	{0x5cd7aee2, -1, u"%PROFILE%\\AppData\\Local\\Programs"}, {0xbcbd3057, -1, u"%PROFILE%\\AppData\\Local\\Programs\\Common"}};
+	{0x5cd7aee2, -1, u"%PROFILE%\\AppData\\Local\\Programs"}, {0xbcbd3057, -1, u"%PROFILE%\\AppData\\Local\\Programs\\Common"},
+	{0xab5fb87b, -1, u"%PROFILE%\\Pictures\\Camera Roll"}, {0x3b193882, -1, u"%PROFILE%\\Pictures\\Saved Pictures"},
+	{0xb7bede81, -1, u"%PROFILE%\\Pictures\\Screenshots"}, {0xde92c1c7, -1, u"%PROFILE%\\Music\\Playlists"}, {0x31c0dd25, -1, u"%PROFILE%\\3D Objects"}};
 
 // The double-NUL terminated file lists of SHFileOperation.
 // A list of names each ended by a zero and the list by one more, wide or in the ANSI code page.

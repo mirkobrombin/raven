@@ -118,6 +118,10 @@ extern struct object core_window_class, core_cursor_class, display_information_c
 extern struct object package_class, application_data_class;
 /* Files and folders, from storage.c: the StorageFolder of a path that exists, through its IStorageFolder, and the classes. */
 HRESULT make_folder(const WCHAR *path, void **out);
+/* IAsyncOperation<StorageFolder>, from storage.c. */
+extern const IID iid_folder_operation;
+/* Windows.Storage.KnownFolders, from known.c. */
+extern struct object known_folders_class;
 extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class, memory_stream_class;
 /* A file opened for reading as an IRandomAccessStreamWithContentType, its type that of its extension, from storage.c. */
 HRESULT open_typed_stream(const WCHAR *path, void **out);

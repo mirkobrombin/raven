@@ -1,8 +1,8 @@
 // Files and folders of the Windows Runtime as an app uses them: a folder found by its path makes, finds, lists, copies, renames, moves and
 // deletes what it holds, FileIO reads and writes text, lines and bytes, the Buffer class makes buffers, a file opens as streams and in a
 // transaction, DataWriter and DataReader carry values over buffers, file streams and streams in memory, and RandomAccessStream copies
-// between streams that references open. Every operation runs on its own and calls its completion handler when it ends; the exit code
-// names the first check that failed.
+// between streams that references open; KnownFolders gives the user's libraries. Every operation runs on its own and calls its completion
+// handler when it ends; the exit code names the first check that failed.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -75,6 +75,9 @@ static const GUID data_reader_statics = {0x11fcbfc8, 0xf93a, 0x471b, {0xb1, 0x21
 static const GUID stream_statics = {0x524cedcf, 0x6e29, 0x4ce5, {0x95, 0x73, 0x6b, 0x75, 0x3d, 0xb6, 0x6c, 0x3a}};
 static const GUID reference_statics = {0x857309dc, 0x3fbf, 0x4e7d, {0x98, 0x6f, 0xef, 0x3b, 0x1a, 0x07, 0xa9, 0x64}};
 static const GUID uri_factory = {0x44a9796f, 0x723e, 0x4fdf, {0xa2, 0x18, 0x03, 0x3e, 0x75, 0xb0, 0xc0, 0x84}};
+static const GUID known_statics = {0x5a2a7520, 0x4802, 0x452d, {0x9a, 0xd9, 0x43, 0x51, 0xad, 0xa7, 0xec, 0x35}};
+static const GUID known_statics3 = {0xc5194341, 0x9742, 0x4ed5, {0x82, 0x3d, 0xfc, 0x14, 0x01, 0x14, 0x87, 0x64}};
+static const GUID camera_roll_statics = {0x5d115e66, 0x27e8, 0x492f, {0xb8, 0xe5, 0x2f, 0x90, 0x89, 0x6c, 0xd4, 0xcd}};
 static const GUID buffer_factory = {0x71af914d, 0xc10f, 0x484b, {0xbc, 0x50, 0x14, 0xbc, 0x62, 0x3b, 0x3a, 0x27}};
 
 #define ALREADY_THERE ((HRESULT)0x800700b7)
@@ -544,6 +547,50 @@ static int check_storage(const WCHAR *base)
 	return 0;
 }
 
+/* Whether a storage folder's path is the profile's with the given ending, and the folder is there. */
+static int folder_at(object *folder, const WCHAR *ending)
+{
+	object *item = NULL;
+	void *path = NULL;
+	WCHAR expected[MAX_PATH];
+	const DWORD length = GetEnvironmentVariableW(L"USERPROFILE", expected, MAX_PATH - 40);
+	if (!folder || !length || length >= MAX_PATH - 40) return 0;
+	lstrcatW(expected, ending);
+	const int found = METHOD(folder, 0, query_method)(folder, &storage_item, (void **)&item) == S_OK &&
+		METHOD(item, 12, string_method)(item, &path) == S_OK && same(path, expected) &&
+		(GetFileAttributesW(expected) & (FILE_ATTRIBUTE_DIRECTORY | 0x80000000u)) == FILE_ATTRIBUTE_DIRECTORY;
+	WindowsDeleteString(path);
+	release(item);
+	return found;
+}
+
+/* KnownFolders gives the user's libraries and the folders in them, made if missing, for the process's user too; HomeGroup is not a
+ * folder Raven has. */
+static int check_known(void)
+{
+	object *known = statics(L"Windows.Storage.KnownFolders", &known_statics), *folder = NULL, *operation = NULL;
+	if (!known) return 180;
+	if (METHOD(known, 7, object_method)(known, &folder) != S_OK || !folder_at(folder, L"\\Pictures")) return 181;
+	release(folder);
+	if (METHOD(known, 9, object_method)(known, &folder) != S_OK || !folder_at(folder, L"\\Documents")) return 182;
+	release(folder);
+	folder = NULL;
+	if (METHOD(known, 10, object_method)(known, &folder) != E_NOTIMPL || folder) return 183;
+	release(known);
+	object *camera = statics(L"Windows.Storage.KnownFolders", &camera_roll_statics);
+	if (!camera || METHOD(camera, 6, object_method)(camera, &folder) != S_OK || !folder_at(folder, L"\\Pictures\\Camera Roll")) return 184;
+	release(folder);
+	release(camera);
+	typedef HRESULT (WINAPI *for_user_method)(object *, object *, int, object **);
+	object *users = statics(L"Windows.Storage.KnownFolders", &known_statics3);
+	if (!users) return 185;
+	if (finish(METHOD(users, 6, for_user_method)(users, NULL, 5, &operation), &operation, &folder) != S_OK || !folder_at(folder, L"\\Music"))
+		return 186;
+	release(folder);
+	release(users);
+	return 0;
+}
+
 int raven_entry(void)
 {
 	if (FAILED(RoInitialize(1))) return 1;
@@ -553,5 +600,6 @@ int raven_entry(void)
 	if (!length || length >= MAX_PATH - 32) return 3;
 	wsprintfW(base + length, L"raven-storage-%lu", GetCurrentProcessId());
 	if (!CreateDirectoryW(base, NULL)) return 4;
-	return check_storage(base);
+	const int storage = check_storage(base);
+	return storage ? storage : check_known();
 }
