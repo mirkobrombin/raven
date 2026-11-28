@@ -6148,6 +6148,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_custom_target(json_fixture${width} ALL DEPENDS ${json_client} twinapi_component)
                     add_test(NAME native_json_x${width} COMMAND raven --run-process --execution=native ${json_client})
                     set_tests_properties(native_json_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    # Windows.Data.Xml.Dom: a document read through its nodes and XPath, nodes built and changed, load settings, a file loaded and saved;
+                    # over the msxml3.dll of the installer components.
+                    if(TARGET installer_components_${width})
+                        set(xml_client ${CMAKE_CURRENT_BINARY_DIR}/xml-client${width}.exe)
+                        add_custom_command(OUTPUT ${xml_client}
+                            COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp
+                                -o ${xml_client} ${LOADER_SOURCES}/xml_client.c -lruntimeobject -lkernel32 -lgcc
+                            DEPENDS ${LOADER_SOURCES}/xml_client.c VERBATIM)
+                        add_custom_target(xml_fixture${width} ALL DEPENDS ${xml_client} twinapi_component installer_components_${width})
+                        add_test(NAME native_xml_x${width} COMMAND raven --run-process --execution=native ${xml_client})
+                        set_tests_properties(native_xml_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                    endif()
                     # Windows.UI.Popups: commands, a MessageDialog chosen from and canceled, and a PopupMenu closed with EndMenu.
                     set(popups_client ${CMAKE_CURRENT_BINARY_DIR}/popups-client${width}.exe)
                     add_custom_command(OUTPUT ${popups_client}
