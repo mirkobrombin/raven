@@ -1371,13 +1371,20 @@ void register_platform_api(ApiRegistry &registry, KernelContext &context)
 			context.allocator.release(call[0]);
 		call.ret(0);
 	});
-	registry.add("WindowsGetStringRawBuffer", 2, [](ApiCall &call) {
+	// A null string's buffer is an empty string, as on Windows: one per process, made the first time it is asked for.
+	registry.add("WindowsGetStringRawBuffer", 2, [&context, empty = std::make_shared<std::atomic<uint64_t>>(0)](ApiCall &call) {
 		if (!call[0]) {
 			if (call[1])
 				call.store<uint32_t>(call[1], 0);
-			static const uint16_t empty = 0;
-			(void)empty;
-			call.ret(0);
+			uint64_t text = empty->load(std::memory_order_acquire);
+			if (!text) {
+				const uint64_t made = context.allocator.allocate(2, true);
+				if (made && !empty->compare_exchange_strong(text, made, std::memory_order_acq_rel))
+					context.allocator.release(made);
+				else
+					text = made;
+			}
+			call.ret(text);
 			return;
 		}
 		if (call[1])

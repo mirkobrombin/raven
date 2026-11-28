@@ -595,6 +595,10 @@ int raven_entry(void)
 {
 	if (FAILED(RoInitialize(1))) return 1;
 	if (!(ended = CreateEventW(NULL, TRUE, FALSE, NULL))) return 2;
+	/* A null string is empty, with an empty buffer to read, as programs that never check for null rely on. */
+	UINT32 empty_length = 1;
+	const WCHAR *empty = WindowsGetStringRawBuffer(NULL, &empty_length);
+	if (!empty || *empty || empty_length) return 5;
 	WCHAR base[MAX_PATH];
 	const DWORD length = GetTempPathW(MAX_PATH - 32, base);
 	if (!length || length >= MAX_PATH - 32) return 3;
