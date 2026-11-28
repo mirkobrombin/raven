@@ -1,0 +1,12 @@
+$ hvf mmu4k
+guest SCTLR_EL1=0x30d01985 TCR_EL1=0x100803519 (TG0=0 => 4K)
+guest returned 0x3333; host sees frame3=0x1111 frame1=0x2222 frame0=0x0 frame2=0x0
+RESULT mmu4k: PASS (VA 0x50000000->frame3, VA 0x50001000->frame1 of one 16K host page, code runs from 4K L3 pages)
+$ hvf ipa4k 1
+set_ipa_granule(4KB) ret=0x0, config granule now=0
+hv_vm_map(host+0x1000, IPA 0x80001000, size 0x1000) -> 0x0
+guest exit ESR=0x5a000000 x0=0x4b4b4b4b
+neighbour IPA 0x80002000 access: exit reason=1 ESR=0x93c08007 (EC 0x24 = data abort from lower EL => unmapped)
+RESULT ipa4k(use4k=1): PASS
+$ hvf maxvcpu
+hv_vm_get_max_vcpu_count=64; created=64; first failure at index 64 with 0xfae94005; phys_footprint base=1786432 after=7753280 => 91.0 KiB per vCPU (thread stack 64K incl.)

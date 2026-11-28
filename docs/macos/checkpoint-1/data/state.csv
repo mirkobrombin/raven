@@ -1,0 +1,26 @@
+time,block,phase,load1,load5,thermal,power,battery
+13:26:15,spikes_gate,start,1.41,2.31,0,AC Power,80%
+13:26:16,spikes_gate,end,1.41,2.31,0,AC Power,80%
+13:34:32,spikes_exc_signal,start,1.44,1.95,0,AC Power,80%
+13:34:33,spikes_exc_signal,end,1.44,1.95,0,AC Power,80%
+13:43:19,spikes_exc_mach,start,1.42,2.03,0,AC Power,80%
+13:43:29,spikes_exc_mach,end,1.51,2.03,0,AC Power,80%
+13:44:29,spikes_hvf_roundtrip,start,1.13,1.84,0,AC Power,80%
+13:44:32,spikes_hvf_roundtrip,end,1.52,1.90,0,AC Power,80%
+13:46:02,spikes_hvf_shmspin,start,1.49,1.78,0,AC Power,80%
+13:46:03,spikes_hvf_shmspin,end,1.49,1.78,0,AC Power,80%
+13:57:32,spikes_waits,start,1.76,2.00,0,AC Power,80%
+13:58:51,spikes_waits,end,2.28,2.10,0,AC Power,80%
+13:59:51,spikes_barriers,start,1.46,1.90,0,AC Power,80%
+14:00:03,spikes_barriers,end,1.66,1.92,0,AC Power,80%
+14:01:03,spikes_jit,start,1.32,1.78,0,AC Power,80%
+14:01:03,spikes_jit,end,1.32,1.78,0,AC Power,80%
+14:02:03,spikes_x18_toggle,start,1.36,1.67,0,AC Power,80%
+14:02:03,spikes_x18_toggle,end,1.36,1.67,0,AC Power,80%
+14:03:03,e_channel_native,start,1.59,1.67,0,AC Power,80%
+14:03:10,e_channel_native,end,2.31,1.81,0,AC Power,80%
+14:04:10,e_boundary,start,2.17,1.85,0,AC Power,80%
+14:04:53,e_boundary,end,2.52,1.98,0,AC Power,80%
+14:05:53,c_translator,start,1.98,1.92,0,AC Power,80%
+14:05:59,c_translator,end,1.98,1.92,0,AC Power,80%
+14:06:59,d_wine_call-x86_64,start,2.54,2.10,0,AC Power,80%

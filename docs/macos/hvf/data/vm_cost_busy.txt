@@ -1,0 +1,36 @@
+loadavg before: 61.07 21.82 11.96
+loadavg after: 59.14 22.07 12.11
+30 processes per configuration; times in us, memory (phys_footprint) in KiB
+none
+  start_kib        median    1696.0  min    1680.0  max    1728.0  stdev     15.2
+  process_wall_us  median   13180.6  min    9737.3  max  127693.7  stdev  22259.2
+bare
+  create_us        median     105.2  min      78.2  max    2324.5  stdev    404.4
+  destroy_us       median      81.0  min      36.0  max    1478.8  stdev    269.4
+  start_kib        median    1696.0  min    1696.0  max    1728.0  stdev     13.5
+  created_kib      median    1808.0  min    1808.0  max    1840.0  stdev     13.5
+  process_wall_us  median   15152.9  min    9821.7  max   55353.3  stdev   9904.5
+vm 256 MiB
+  vm_us            median     122.2  min     100.1  max    3476.6  stdev    729.6
+  load_us          median     174.8  min     138.1  max    2703.5  stdev    456.8
+  thread_us        median    1473.2  min    1100.0  max    9231.0  stdev   1948.1
+  first_call_us    median     180.8  min     128.5  max    1899.7  stdev    336.6
+  teardown_us      median     264.1  min     150.4  max    2662.5  stdev    517.7
+  start_kib        median    1696.0  min    1680.0  max    1728.0  stdev     14.0
+  vm_kib           median    1872.0  min    1840.0  max    1904.0  stdev     14.3
+  loaded_kib       median    1936.0  min    1920.0  max    1984.0  stdev     17.3
+  thread_kib       median    2224.0  min    2192.0  max    2256.0  stdev     18.7
+  called_kib       median    2352.0  min    2320.0  max    2400.0  stdev     21.3
+  process_wall_us  median   16240.2  min   11542.6  max  154478.0  stdev  26944.6
+vm 1024 MiB
+  vm_us            median     142.1  min     118.3  max     805.8  stdev    165.2
+  load_us          median     168.2  min     135.9  max     312.8  stdev     43.6
+  thread_us        median    1369.1  min    1075.0  max   13304.1  stdev   3086.5
+  first_call_us    median     170.4  min     138.7  max     571.1  stdev     79.1
+  teardown_us      median     229.9  min     168.1  max    6166.9  stdev   1101.5
+  start_kib        median    1696.0  min    1680.0  max    1728.0  stdev     15.3
+  vm_kib           median    1888.0  min    1840.0  max    1920.0  stdev     18.4
+  loaded_kib       median    1968.0  min    1920.0  max    2000.0  stdev     17.7
+  thread_kib       median    2240.0  min    2208.0  max    2256.0  stdev     14.7
+  called_kib       median    2368.0  min    2320.0  max    2416.0  stdev     20.6
+  process_wall_us  median   15481.2  min   11573.4  max  118360.7  stdev  19522.0

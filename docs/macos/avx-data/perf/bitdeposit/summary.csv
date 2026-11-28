@@ -1,0 +1,11 @@
+workload,configuration,metric,n,median,p95,stddev,min,max,median_ratio_to_native
+bitdeposit,native,warm_ns_per_call,5,37449.896,44387.271,2832.496,36857.395,44387.271,1.000
+bitdeposit,process-loop,warm_ns_per_call,5,40346.583,40997.938,487.238,39633.688,40997.938,1.077
+bitdeposit,process-call,warm_ns_per_call,5,40193.605,41560.688,643.644,39807.688,41560.688,1.073
+bitdeposit,vm-loop,warm_ns_per_call,5,40291.541,42896.438,1318.832,39723.834,42896.438,1.076
+bitdeposit,vm-call,warm_ns_per_call,5,42975.938,46682.730,2578.914,40539.062,46682.730,1.148
+bitdeposit,native,first_ns,5,38542.000,40083.000,819.869,37959.000,40083.000,1.000
+bitdeposit,process-loop,first_ns,5,76625.000,143500.000,26912.080,73958.000,143500.000,1.988
+bitdeposit,process-call,first_ns,5,77625.000,97000.000,8015.239,75709.000,97000.000,2.014
+bitdeposit,vm-loop,first_ns,5,112875.000,117375.000,3604.598,107042.000,117375.000,2.929
+bitdeposit,vm-call,first_ns,5,105792.000,118916.000,5903.941,103208.000,118916.000,2.745

@@ -1,0 +1,24 @@
+spin3s         rep0: exit 2 -> mode LOST
+spin3s         rep1: exit 2 -> mode LOST
+spin3s         rep2: exit 2 -> mode LOST
+signal         rep0: exit 0 -> mode kept, x18 kept
+signal         rep1: exit 0 -> mode kept, x18 kept
+signal         rep2: exit 0 -> mode kept, x18 kept
+mach           rep0: signal 10 -> killed by signal
+mach           rep1: signal 10 -> killed by signal
+mach           rep2: signal 10 -> killed by signal
+malloc         rep0: exit 3 -> call returned, mode+x18 kept
+malloc         rep1: exit 3 -> call returned, mode+x18 kept
+malloc         rep2: exit 3 -> call returned, mode+x18 kept
+printf in custom mode
+printf         rep0: exit 3 -> call returned, mode+x18 kept
+printf in custom mode
+printf         rep1: exit 3 -> call returned, mode+x18 kept
+printf in custom mode
+printf         rep2: exit 3 -> call returned, mode+x18 kept
+getpid         rep0: exit 3 -> call returned, mode+x18 kept
+getpid         rep1: exit 3 -> call returned, mode+x18 kept
+getpid         rep2: exit 3 -> call returned, mode+x18 kept
+enable_twice   rep0: signal 5 -> killed by signal
+enable_twice   rep1: signal 5 -> killed by signal
+enable_twice   rep2: signal 5 -> killed by signal

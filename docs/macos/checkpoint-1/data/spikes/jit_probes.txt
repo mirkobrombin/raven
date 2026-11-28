@@ -1,0 +1,18 @@
+=== spikes_jit 14:01:03
+== jit probes, signing variant: jit_adhoc_noruntime
+    MAP_JIT code returned 42
+  mmap MAP_JIT RWX + toggle + exec   exit=0 PASS
+    mmap(RWX, no MAP_JIT) errno=13 Permission denied
+  mmap RWX without MAP_JIT + exec    exit=1 FAIL
+    mprotect(RWX) errno=13 Permission denied
+  mprotect RW->RWX (non-JIT) + exec  exit=1 FAIL
+  mprotect RW->RX (non-JIT) + exec   exit=0 PASS
+== jit probes, signing variant: jit_adhoc_runtime_allowjit
+    MAP_JIT code returned 42
+  mmap MAP_JIT RWX + toggle + exec   exit=0 PASS
+    mmap(RWX, no MAP_JIT) errno=13 Permission denied
+  mmap RWX without MAP_JIT + exec    exit=1 FAIL
+    mprotect(RWX) errno=13 Permission denied
+  mprotect RW->RWX (non-JIT) + exec  exit=1 FAIL
+  mprotect RW->RX (non-JIT) + exec   killed by signal 9 (Killed: 9) FAIL
+--- spikes_jit exit=0 14:01:03
