@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <unordered_set>
 
 namespace raven {
 
@@ -36,15 +37,22 @@ inline socklen_t local_socket_address(const std::string &name, sockaddr_un &stor
 	return socklen_t(offsetof(sockaddr_un, sun_path) + path.size() + 1);
 }
 
-// Whether a live socket is bound to a host socket file: the kernel lists every bound socket, with its path, in /proc/net/unix.
-inline bool local_socket_bound(const std::string &path)
+// The host socket files live sockets are bound to: the kernel lists every bound socket, with its path last, in /proc/net/unix.
+inline std::unordered_set<std::string> bound_local_sockets()
 {
+	std::unordered_set<std::string> paths;
 	std::ifstream list("/proc/net/unix");
 	std::string line;
 	while (std::getline(list, line))
-		if (line.size() > path.size() && line.compare(line.size() - path.size(), path.size(), path) == 0 && line[line.size() - path.size() - 1] == ' ')
-			return true;
-	return false;
+		if (const auto space = line.rfind(' '); space != std::string::npos)
+			paths.insert(line.substr(space + 1));
+	return paths;
+}
+
+// Whether a live socket is bound to a host socket file.
+inline bool local_socket_bound(const std::string &path)
+{
+	return bound_local_sockets().contains(path);
 }
 
 // Binds a socket to a shared name. A socket file no live socket is bound to any more, left by a process that ended, is replaced.

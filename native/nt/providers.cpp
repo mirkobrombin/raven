@@ -4385,8 +4385,9 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 		return NativeResult{NativeStop::exited,request.code,request.instruction,0};
 	};
 	// A start a warm host forked ahead waits here for its request, before its guest runs: its standard streams and its time limit are the
-	// request's.
+	// request's, and only from now on does it take the requests of the other processes.
 	if (warm_ready()) {
+		enable_process_requests();
 		deadline = std::chrono::steady_clock::now() + timeout;
 		object_api.set_deadline(deadline);
 		windows.set_deadline(deadline);

@@ -5,6 +5,7 @@
 #include "kernel_context.h"
 #include "sandbox.h"
 #include "text.h"
+#include "warm_host.h"
 
 #include <algorithm>
 #include <cstring>
@@ -191,7 +192,10 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		if (peer) channel = peer.get();
 		return channel ? channel->request_process(objects, context.threads, std::move(request)) : std::nullopt;
 	};
-	enable_process_requests();
+	// A start a warm host forked ahead is no process of the prefix until its request comes: it takes requests only from then on (warm_ready),
+	// as until then it waits for that request alone and would answer no other.
+	if (!warm_waiting())
+		enable_process_requests();
 	objects.process_request = [&context](const InheritedHandle &request) {
 		// No program may change the memory, the threads' tokens or read the memory of the runtime's control panel and file dialog.
 		if (sandbox().trusted() && (request.kind == "process:write" || request.kind == "process:read" || request.kind == "process:allocate" ||
@@ -511,7 +515,7 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 			object = std::make_shared<SelfProcessObject>();
 		} else {
 			object = find_child(pid_t(id));
-			if (!object && runtime_process_alive(pid_t(id)))
+			if (!object && WindowsProcesses().contains(pid_t(id)))
 				object = std::make_shared<ProcessObject>(pid_t(id), true);
 		}
 		if (!object)
@@ -968,13 +972,14 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint32_t> ids;
 		if (capacity) {
 			ids.push_back(uint32_t(::getpid()));
+			const WindowsProcesses processes;
 			std::error_code error;
 			for (const auto &entry : std::filesystem::directory_iterator("/proc", error)) {
 				if (ids.size() == capacity) break;
 				const auto name = entry.path().filename().string();
 				if (name.empty() || !std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; })) continue;
 				const auto pid = pid_t(std::stol(name));
-				if (pid != ::getpid() && runtime_process_alive(pid)) ids.push_back(uint32_t(pid));
+				if (pid != ::getpid() && processes.contains(pid)) ids.push_back(uint32_t(pid));
 			}
 			if (error) {
 				call.fail(5);
@@ -1080,14 +1085,15 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 			// Every running instance of the runtime is a Windows process here: the programs this one started, its parent, and the
 			// processes those started in turn. The name is the program each one runs; its parent is the instance that started it.
 			const auto image = context.launch.image_path;
-			snapshot->processes.push_back({uint32_t(::getpid()), runtime_process_alive(::getppid()) ? uint32_t(::getppid()) : 0, image.substr(image.find_last_of(u'\\') + 1)});
+			const WindowsProcesses processes;
+			snapshot->processes.push_back({uint32_t(::getpid()), processes.contains(::getppid()) ? uint32_t(::getppid()) : 0, image.substr(image.find_last_of(u'\\') + 1)});
 			std::error_code error;
 			for (const auto &entry : std::filesystem::directory_iterator("/proc", error)) {
 				const auto name = entry.path().filename().string();
 				if (name.empty() || !std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; }))
 					continue;
 				const auto pid = pid_t(std::stol(name));
-				if (pid == ::getpid() || !runtime_process_alive(pid))
+				if (pid == ::getpid() || !processes.contains(pid))
 					continue;
 				std::ifstream arguments(entry.path() / "cmdline", std::ios::binary);
 				// The program is the runtime's first argument that is not an option: the last one for the processes it starts, and
@@ -1110,7 +1116,7 @@ void register_process_info_api(ApiRegistry &registry, KernelContext &context)
 				pid_t parent = 0;
 				if (const auto close = text.rfind(')'); close != std::string::npos)
 					std::sscanf(text.c_str() + close + 2, "%*c %d", &parent);
-				snapshot->processes.push_back({uint32_t(pid), runtime_process_alive(parent) ? uint32_t(parent) : 0,
+				snapshot->processes.push_back({uint32_t(pid), processes.contains(parent) ? uint32_t(parent) : 0,
 					from_utf8(std::filesystem::path(last).filename().string())});
 			}
 		}

@@ -83,6 +83,16 @@ bool process_requests_bound(pid_t pid)
 	return local_socket_bound(address.sun_path);
 }
 
+WindowsProcesses::WindowsProcesses() : bound(bound_local_sockets()) {}
+
+bool WindowsProcesses::contains(pid_t pid) const
+{
+	if (pid == ::getpid())
+		return true;
+	socklen_t length;
+	return runtime_process_alive(pid) && bound.contains(process_address(pid, length).sun_path);
+}
+
 std::shared_ptr<HandleChannel> process_request_channel(pid_t pid)
 {
 	if (!runtime_process_alive(pid))

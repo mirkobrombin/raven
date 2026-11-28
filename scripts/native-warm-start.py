@@ -2,7 +2,8 @@
 """Starts the same program three times: the first leaves a warm host behind, the second prepares it, and the third must be a process
 forked from it, not the raven command itself. Each start must still read the standard input it was given, write to its own standard
 output and end with the program's exit status. The host forks each start before its request, so the third comes later than the time a
-start may take, which must count from the request."""
+start may take, which must count from the request; and the start forked ahead behind it is no process yet: each start sees itself alone
+among the processes of its name, and asking it for its image is quick."""
 
 import os
 import signal
@@ -48,7 +49,7 @@ def start(name, check_host):
 	launcher.stdin.close()
 	output = launcher.stdout.read()
 	status = launcher.wait(timeout=60)
-	if output != b"GOT " + name.encode() + b"\n" or status != 23:
+	if output != b"GOT " + name.encode() + b"\nSEEN 1 QUICK\n" or status != 23:
 		sys.exit(f"{name}: output {output!r}, status {status}")
 
 

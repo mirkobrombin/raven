@@ -6,6 +6,8 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_set>
 #include <vector>
 #include <sys/types.h>
 
@@ -64,5 +66,15 @@ void enable_process_requests();
 std::shared_ptr<HandleChannel> process_request_channel(pid_t pid);
 // Whether a process keeps bound the socket the other Raven processes of this prefix send it requests on.
 bool process_requests_bound(pid_t pid);
+// The processes of this prefix a program sees and may ask: the runtime instances that take requests, this one among them. A start a warm
+// host forked ahead runs the runtime too but takes requests only once its own request came, so until then it is no process here. The
+// bound sockets are read once, when the set is made.
+class WindowsProcesses {
+public:
+	WindowsProcesses();
+	bool contains(pid_t pid) const;
+private:
+	std::unordered_set<std::string> bound;
+};
 
 }
