@@ -3071,6 +3071,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     add_test(NAME native_remote_process_x${width} COMMAND raven --run-process --execution=native --timeout-ms=45000 ${remote_client})
                     set_tests_properties(native_remote_process_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                         ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/remote-process-prefix${width};RAVEN_PARALLEL=1")
+                    # The ANSI forms of the shell's path and string functions, made from the wide ones.
+                    set(shlwapi_ansi_client ${CMAKE_CURRENT_BINARY_DIR}/shlwapi-ansi${width}.exe)
+                    add_custom_command(OUTPUT ${shlwapi_ansi_client}
+                        COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${remote_entry},--no-insert-timestamp
+                            -o ${shlwapi_ansi_client} ${PROJECT_SOURCE_DIR}/testdata/native_loader/shlwapi_ansi_client.c -lshlwapi -lkernel32 -lgcc
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/shlwapi_ansi_client.c VERBATIM)
+                    add_custom_target(shlwapi_ansi_fixture${width} ALL DEPENDS ${shlwapi_ansi_client})
+                    add_test(NAME native_shlwapi_ansi_x${width} COMMAND raven --run-process --execution=native ${shlwapi_ansi_client})
+                    set_tests_properties(native_shlwapi_ansi_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/shlwapi-ansi-prefix${width}")
                     set(token_client ${CMAKE_CURRENT_BINARY_DIR}/token${width}.exe)
                     add_custom_command(OUTPUT ${token_client}
                         COMMAND ${remote_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector
