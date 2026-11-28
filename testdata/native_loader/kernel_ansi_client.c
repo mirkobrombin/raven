@@ -35,6 +35,10 @@ int raven_entry(void)
 	if (GetFileAttributesA("ansi-dir\\two.txt")!=INVALID_FILE_ATTRIBUTES || GetFileAttributesA("ansi-dir\\three.txt")==INVALID_FILE_ATTRIBUTES) return 7;
 	if (!MoveFileExA("ansi-dir\\three.txt","ansi-dir\\four.txt",0) || !MoveFileWithProgressA("ansi-dir\\four.txt","ansi-dir\\three.txt",NULL,NULL,0) ||
 		GetFileAttributesA("ansi-dir\\four.txt")!=INVALID_FILE_ATTRIBUTES) return 90;
+	WIN32_FILE_ATTRIBUTE_DATA attributes;
+	if (!GetFileAttributesExA("ansi-dir\\three.txt",GetFileExInfoStandard,&attributes) || attributes.nFileSizeLow!=sizeof data-1 ||
+		(attributes.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) || GetFileAttributesExA("ansi-dir\\four.txt",GetFileExInfoStandard,&attributes) ||
+		GetLastError()!=ERROR_FILE_NOT_FOUND) return 96;
 	/* A console program such as 7-Zip's switches the file functions to the OEM code page: 0x82 is e acute there, and in ANSI 0xe9 is. */
 	SetFileApisToOEM();
 	if (AreFileApisANSI()) return 91;
