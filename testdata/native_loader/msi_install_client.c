@@ -108,6 +108,13 @@ int raven_entry(void)
 	WCHAR version[32];
 	if (MsiGetProductInfoW(product, L"VersionString", version, &size) != ERROR_SUCCESS || size != 5)
 		return 6;
+	/* The Windows Installer keeps what it knows in the 64-bit view of the registry, whatever the width of the program that installed: a
+	   64-bit program asks there about a product a 32-bit setup installed. */
+	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+			L"Software\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\25C3E1B7D4A906F4C8E2D1A5B6C7D809\\InstallProperties",
+			0, KEY_READ | KEY_WOW64_64KEY, &key))
+		return 37;
+	RegCloseKey(key);
 
 	if (MsiConfigureProductW(product, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT) != ERROR_SUCCESS)
 		return 7;
