@@ -397,6 +397,7 @@
         "native/guest/raven-twinapi/accesscache.c",
         "native/guest/raven-twinapi/datetime.c",
         "native/guest/raven-twinapi/json.c",
+        "native/guest/raven-twinapi/xml.c",
         "native/guest/raven-twinapi/known.c",
         "native/guest/raven-twinapi/launcher.c",
         "native/guest/raven-twinapi/streams.c",

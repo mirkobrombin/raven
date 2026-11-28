@@ -274,6 +274,7 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.Storage.Streams.DataReader", u"raven-twinapi.dll"}, {u"Windows.Storage.Streams.DataWriter", u"raven-twinapi.dll"},
 		{u"Windows.Data.Json.JsonValue", u"raven-twinapi.dll"}, {u"Windows.Data.Json.JsonObject", u"raven-twinapi.dll"},
 		{u"Windows.Data.Json.JsonArray", u"raven-twinapi.dll"}, {u"Windows.Data.Json.JsonError", u"raven-twinapi.dll"},
+		{u"Windows.Data.Xml.Dom.XmlDocument", u"raven-twinapi.dll"}, {u"Windows.Data.Xml.Dom.XmlLoadSettings", u"raven-twinapi.dll"},
 		{u"Windows.Storage.Streams.InMemoryRandomAccessStream", u"raven-twinapi.dll"},
 		{u"Windows.Storage.Streams.RandomAccessStream", u"raven-twinapi.dll"},
 		{u"Windows.Storage.Streams.RandomAccessStreamReference", u"raven-twinapi.dll"},

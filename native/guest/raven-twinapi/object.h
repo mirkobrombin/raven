@@ -167,12 +167,17 @@ extern struct object known_folders_class;
 extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class, memory_stream_class;
 /* A file opened for reading as an IRandomAccessStreamWithContentType, its type that of its extension, from storage.c. */
 HRESULT open_typed_stream(const WCHAR *path, void **out);
+/* The file a URI of the package (ms-appx:///) or of a file (file:///) names, into a MAX_PATH buffer, from streams.c; S_FALSE for a URI
+ * of any other scheme. */
+HRESULT uri_file_path(void *uri, WCHAR *path);
 /* RandomAccessStream and RandomAccessStreamReference, from streams.c. */
 extern struct object random_access_stream_class, stream_reference_class;
 /* A RandomAccessStreamReference over a stream, as CreateFromStream makes it. */
 HRESULT stream_reference_make(IUnknown *stream, void **out);
 /* Windows.Data.Json: JsonValue, JsonObject, JsonArray and JsonError, from json.c. */
 extern struct object json_value_class, json_object_class, json_array_class, json_error_class;
+/* Windows.Data.Xml.Dom, from xml.c. */
+extern struct object xml_document_class, xml_load_settings_class;
 /* Values read from and written to streams, from data.c. */
 extern struct object data_reader_class, data_writer_class;
 /* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */

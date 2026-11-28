@@ -273,15 +273,11 @@ static HRESULT path_of_uri(const WCHAR *base, HSTRING escaped, WCHAR *path)
 	return S_OK;
 }
 
-static HRESULT WINAPI reference_from_uri(void *iface, uri_type *uri, void **out)
+HRESULT uri_file_path(void *iface, WCHAR *path)
 {
+	uri_type *uri = iface;
 	HSTRING scheme = NULL, escaped = NULL;
 	WCHAR base[MAX_PATH] = L"";
-	if (!out)
-		return E_POINTER;
-	*out = NULL;
-	if (!uri)
-		return E_INVALIDARG;
 	HRESULT result = uri->lpVtbl->get_SchemeName(uri, &scheme);
 	if (SUCCEEDED(result))
 		result = uri->lpVtbl->get_Path(uri, &escaped);
@@ -294,20 +290,34 @@ static HRESULT WINAPI reference_from_uri(void *iface, uri_type *uri, void **out)
 			if (error)
 				result = HRESULT_FROM_WIN32(error);
 		} else if (CompareStringOrdinal(name, (int)length, L"file", -1, TRUE) != CSTR_EQUAL)
-			result = missing("RandomAccessStreamReference.CreateFromUri for this scheme");
+			result = S_FALSE;
 	}
-	struct stream_ref *self = NULL;
-	if (SUCCEEDED(result) && !(self = new_reference()))
-		result = E_OUTOFMEMORY;
-	if (SUCCEEDED(result))
-		result = path_of_uri(base, escaped, self->path);
-	if (FAILED(result) && self)
-		release(face_of(&self->base, 0));
-	else if (SUCCEEDED(result))
-		*out = face_of(&self->base, 0);
+	if (result == S_OK)
+		result = path_of_uri(base, escaped, path);
 	WindowsDeleteString(scheme);
 	WindowsDeleteString(escaped);
 	return result;
+}
+
+static HRESULT WINAPI reference_from_uri(void *iface, uri_type *uri, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	if (!uri)
+		return E_INVALIDARG;
+	struct stream_ref *self = new_reference();
+	if (!self)
+		return E_OUTOFMEMORY;
+	HRESULT result = uri_file_path(uri, self->path);
+	if (result == S_FALSE)
+		result = missing("RandomAccessStreamReference.CreateFromUri for this scheme");
+	if (result != S_OK) {
+		release(face_of(&self->base, 0));
+		return result;
+	}
+	*out = face_of(&self->base, 0);
+	return S_OK;
 }
 
 TABLE(reference_factory_table, 0, FACTORY);

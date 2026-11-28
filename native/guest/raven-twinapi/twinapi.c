@@ -957,7 +957,8 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&message_dialog_class, &popup_menu_class, &ui_command_class, &ui_command_separator_class, &application_view_class,
 	&cryptographic_buffer_class, &hash_provider_class, &hash_names_class, &mac_provider_class, &mac_names_class, &cryptographic_engine_class,
 	&cipher_provider_class, &cipher_names_class, &thread_pool_class, &thread_pool_timer_class,
-	&storage_permissions_class, &date_time_formatter_class, &json_value_class, &json_object_class, &json_array_class, &json_error_class};
+	&storage_permissions_class, &date_time_formatter_class, &json_value_class, &json_object_class, &json_array_class, &json_error_class,
+	&xml_document_class, &xml_load_settings_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {
