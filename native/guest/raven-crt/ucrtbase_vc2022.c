@@ -115,6 +115,260 @@ CRT char *asctime(const RavenTime *time)
 	return text;
 }
 
+/* The 32-bit forms of api-ms-win-crt-time: the 64-bit calendar, held to the range a 32-bit time can name, 1970 to January 2038. */
+static int fits_32(long long seconds) { return seconds >= 0 && seconds <= 0x7fffffffLL; }
+
+CRT RavenTime *_gmtime32(const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return _gmtime64(&wide);
+}
+
+CRT int _gmtime32_s(RavenTime *out, const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return _gmtime64_s(out, time ? &wide : NULL);
+}
+
+CRT int _localtime32_s(RavenTime *out, const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return _localtime64_s(out, time ? &wide : NULL);
+}
+
+CRT RavenTime *_localtime32(const long *time)
+{
+	static RavenTime result;
+	return _localtime32_s(&result, time) ? NULL : &result;
+}
+
+/* A time past 2038 is refused, and the structure is then left as it was given. */
+static long fit_time(RavenTime *time, long long (*make)(RavenTime *))
+{
+	if (!time)
+		return -1;
+	RavenTime normal = *time;
+	const long long seconds = make(&normal);
+	if (!fits_32(seconds))
+		return -1;
+	*time = normal;
+	return (long)seconds;
+}
+
+CRT long _mkgmtime32(RavenTime *time) { return fit_time(time, _mkgmtime64); }
+CRT long _mktime32(RavenTime *time) { return fit_time(time, _mktime64); }
+CRT double _difftime32(long later, long earlier) { return (double)later - (double)earlier; }
+
+CRT char *_ctime32(const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return _ctime64(&wide);
+}
+
+/* The _s forms of ctime: a buffer too small for the 26 characters of the text gets an empty string and ERANGE. */
+static int time_text_s(char *buffer, size_t size, const long long *time)
+{
+	if (!buffer || !size)
+		return 22;
+	buffer[0] = 0;
+	if (!time || *time < 0)
+		return 22;
+	if (size < 26)
+		return 34;
+	const char *text = _ctime64(time);
+	if (!text)
+		return 22;
+	memcpy(buffer, text, strlen(text) + 1);
+	return 0;
+}
+
+CRT int _ctime64_s(char *buffer, size_t size, const long long *time) { return time_text_s(buffer, size, time); }
+
+CRT int _ctime32_s(char *buffer, size_t size, const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return time_text_s(buffer, size, time ? &wide : NULL);
+}
+
+CRT wchar_t *_wctime32(const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return _wctime64(&wide);
+}
+
+CRT int _wctime32_s(wchar_t *buffer, size_t size, const long *time)
+{
+	const long long wide = time ? *time : -1;
+	return _wctime64_s(buffer, size, time ? &wide : NULL);
+}
+
+static void widen_text(wchar_t *to, const char *text)
+{
+	while ((*to++ = (unsigned char)*text++))
+		;
+}
+
+CRT wchar_t *_wasctime(const RavenTime *time)
+{
+	static wchar_t text[26];
+	const char *narrow = asctime(time);
+	if (!narrow)
+		return NULL;
+	widen_text(text, narrow);
+	return text;
+}
+
+CRT int _wasctime_s(wchar_t *buffer, size_t size, const RavenTime *time)
+{
+	char text[26];
+	if (!buffer || !size)
+		return 22;
+	buffer[0] = 0;
+	if (size < 26)
+		return 34;
+	const int failure = asctime_s(text, sizeof text, time);
+	if (failure)
+		return failure;
+	widen_text(buffer, text);
+	return 0;
+}
+
+CRT size_t _wcsftime_l(wchar_t *to, size_t capacity, const wchar_t *format, const void *time, _locale_t locale)
+{
+	return wcsftime(to, capacity, format, time);
+}
+
+typedef struct {
+	long time;
+	unsigned short milliseconds;
+	short zone, daylight;
+} RavenTimeB32;
+
+CRT void _ftime32(RavenTimeB32 *out)
+{
+	RavenTimeB now;
+	_ftime64(&now);
+	out->time = (long)now.time;
+	out->milliseconds = now.milliseconds;
+	out->zone = now.zone;
+	out->daylight = now.daylight;
+}
+
+CRT int _ftime32_s(RavenTimeB32 *out)
+{
+	if (!out)
+		return 22;
+	_ftime32(out);
+	return 0;
+}
+
+CRT int _get_dstbias(long *seconds)
+{
+	if (!seconds)
+		return 22;
+	_tzset();
+	*seconds = _dstbias;
+	return 0;
+}
+
+/* The local time as calendar fields; the milliseconds are the answer. _setsystime sets the clock from them. */
+CRT unsigned _getsystime(RavenTime *out)
+{
+	SYSTEMTIME now;
+	TIME_ZONE_INFORMATION zone;
+	const DWORD kind = GetTimeZoneInformation(&zone);
+	GetLocalTime(&now);
+	fill_tm(out, &now, kind == TIME_ZONE_ID_DAYLIGHT);
+	return now.wMilliseconds;
+}
+
+CRT unsigned _setsystime(const RavenTime *time, unsigned milliseconds)
+{
+	const SYSTEMTIME local = {(WORD)(time->year + 1900), (WORD)(time->month + 1), (WORD)time->weekday, (WORD)time->day, (WORD)time->hour,
+		(WORD)time->minute, (WORD)time->second, (WORD)milliseconds};
+	return SetLocalTime(&local) ? 0 : GetLastError();
+}
+
+/* The _s forms of _strdate and _strtime: nine characters, mm/dd/yy or hh:mm:ss and the terminator. */
+static int clock_text_s(char *buffer, size_t size, char *(*make)(char *))
+{
+	if (!buffer || !size)
+		return 22;
+	if (size < 9) {
+		buffer[0] = 0;
+		return 34;
+	}
+	make(buffer);
+	return 0;
+}
+
+CRT int _strdate_s(char *buffer, size_t size) { return clock_text_s(buffer, size, _strdate); }
+CRT int _strtime_s(char *buffer, size_t size) { return clock_text_s(buffer, size, _strtime); }
+
+CRT wchar_t *_wstrdate(wchar_t *to)
+{
+	char text[9];
+	widen_text(to, _strdate(text));
+	return to;
+}
+
+CRT wchar_t *_wstrtime(wchar_t *to)
+{
+	char text[9];
+	widen_text(to, _strtime(text));
+	return to;
+}
+
+typedef struct {
+	long access_time, modify_time;
+} RavenUtime32;
+
+static const RavenUtime *widen_times(RavenUtime *wide, const RavenUtime32 *times)
+{
+	if (!times)
+		return NULL;
+	wide->access_time = times->access_time;
+	wide->modify_time = times->modify_time;
+	return wide;
+}
+
+CRT int _utime32(const char *path, const RavenUtime32 *times)
+{
+	RavenUtime wide;
+	return _utime64(path, widen_times(&wide, times));
+}
+
+CRT int _wutime32(const wchar_t *path, const RavenUtime32 *times)
+{
+	RavenUtime wide;
+	return _wutime64(path, widen_times(&wide, times));
+}
+
+/* The file times of an open descriptor; no times means now. */
+CRT int _futime64(int fd, const RavenUtime *times)
+{
+	const HANDLE file = (HANDLE)descriptor_handle(fd);
+	if (file == INVALID_HANDLE_VALUE) {
+		set_errno(9);
+		return -1;
+	}
+	FILETIME access, modify;
+	if (times) {
+		access = unix_to_file_time(times->access_time);
+		modify = unix_to_file_time(times->modify_time);
+	} else {
+		GetSystemTimeAsFileTime(&modify);
+		access = modify;
+	}
+	return SetFileTime(file, NULL, &access, &modify) ? 0 : windows_failure();
+}
+
+CRT int _futime32(int fd, const RavenUtime32 *times)
+{
+	RavenUtime wide;
+	return _futime64(fd, widen_times(&wide, times));
+}
+
 /* ---- streams and descriptors: the runtime's streams take no locks, so the lock-free forms are the same functions ---- */
 
 CRT size_t _fread_nolock(void *data, size_t size, size_t count, void *stream) { return fread(data, size, count, stream); }
