@@ -402,6 +402,39 @@ static int accepted_with_data(void)
 	return 0;
 }
 
+static int same_text(const char *text, const char *expected)
+{
+	while (*text && *text == *expected) ++text, ++expected;
+	return *text == *expected;
+}
+
+static int same_wide(const WCHAR *text, const char *expected)
+{
+	while (*text && *text == (WCHAR)*expected) ++text, ++expected;
+	return *text == (WCHAR)*expected;
+}
+
+/* inet_ntop and inet_pton, narrow and wide, for both families, with their failures. */
+static int address_text(void)
+{
+	IN_ADDR four;
+	IN6_ADDR six;
+	char text[INET6_ADDRSTRLEN];
+	WCHAR wide[INET6_ADDRSTRLEN];
+	BYTE expected_six[16] = {0x20, 0x01, 0x0d, 0xb8};
+	expected_six[15] = 1;
+	if (inet_pton(AF_INET, "192.168.1.20", &four) != 1 || four.s_addr != htonl(0xc0a80114)) return 80;
+	if (inet_ntop(AF_INET, &four, text, sizeof(text)) != text || !same_text(text, "192.168.1.20")) return 81;
+	if (InetPtonW(AF_INET6, L"2001:db8::1", &six) != 1) return 82;
+	for (int index = 0; index < 16; ++index) if (six.s6_addr[index] != expected_six[index]) return 83;
+	if (InetNtopW(AF_INET6, &six, wide, INET6_ADDRSTRLEN) != wide || !same_wide(wide, "2001:db8::1")) return 84;
+	if (inet_pton(AF_INET, "300.1.2.3", &four) != 0) return 85;
+	if (inet_pton(12345, "1.2.3.4", &four) != -1 || WSAGetLastError() != WSAEAFNOSUPPORT) return 86;
+	if (inet_ntop(AF_INET, &four, text, 4) != NULL || WSAGetLastError() != ERROR_INVALID_PARAMETER) return 87;
+	if (inet_ntop(12345, &four, text, sizeof(text)) != NULL || WSAGetLastError() != WSAEAFNOSUPPORT) return 88;
+	return 0;
+}
+
 int raven_entry(void)
 {
 	WSADATA data;
@@ -419,6 +452,8 @@ int raven_entry(void)
 	result = selected_batch();
 	if (result) return result;
 	result = accepted_with_data();
+	if (result) return result;
+	result = address_text();
 	if (result) return result;
 	WSACleanup();
 	return 0;

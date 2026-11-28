@@ -2784,6 +2784,66 @@ void register_winsock_api(ApiRegistry &registry, KernelContext &context)
 		call.put_narrow(*text_block, text, 32);
 		call.ret(*text_block);
 	});
+	// inet_ntop and inet_pton (InetNtopW and InetPtonW the same in UTF-16) convert between an IPv4 or IPv6 address and its text, as the
+	// host's own functions write and read it; the Windows family numbers are mapped to the host's.
+	const auto address_size = [](int family) -> size_t {
+		return family == AF_INET ? sizeof(in_addr) : family == AF_INET6 ? sizeof(in6_addr) : 0;
+	};
+	const auto to_text = [address_size](ApiCall &call, bool wide) {
+		constexpr uint32_t invalid_parameter = 87;
+		const int family = host_family(call.i32(0));
+		const size_t size = address_size(family);
+		if (!size) {
+			call.fail(wsaeafnosupport, 0);
+			return;
+		}
+		if (!call[1] || !call[2]) {
+			call.fail(invalid_parameter, 0);
+			return;
+		}
+		const auto address = call.read(call[1], size);
+		char text[INET6_ADDRSTRLEN] = {};
+		::inet_ntop(family, address.data(), text, sizeof(text));
+		const std::string_view written(text);
+		if (call[3] <= written.size()) {
+			call.fail(invalid_parameter, 0);
+			return;
+		}
+		if (wide)
+			call.put_wide(call[2], std::u16string(written.begin(), written.end()), size_t(call[3]));
+		else
+			call.put_narrow(call[2], written, size_t(call[3]));
+		call.ret(call[2]);
+	};
+	const auto from_text = [address_size](ApiCall &call, bool wide) {
+		const int family = host_family(call.i32(0));
+		const size_t size = address_size(family);
+		if (!size) {
+			call.fail(wsaeafnosupport, uint64_t(-1));
+			return;
+		}
+		if (!call[1] || !call[2]) {
+			call.fail(wsaefault, uint64_t(-1));
+			return;
+		}
+		std::string text;
+		if (wide) {
+			for (const char16_t character : call.wide(call[1], INET6_ADDRSTRLEN))
+				text.push_back(character < 0x80 ? char(character) : '?');
+		} else
+			text = call.narrow(call[1], INET6_ADDRSTRLEN);
+		uint8_t address[sizeof(in6_addr)] = {};
+		if (::inet_pton(family, text.c_str(), address) != 1) {
+			call.ret(0);
+			return;
+		}
+		call.write(call[2], std::span<const uint8_t>(address, size));
+		call.ret(1);
+	};
+	registry.add("inet_ntop", 4, [to_text](ApiCall &call) { to_text(call, false); });
+	registry.add("InetNtopW", 4, [to_text](ApiCall &call) { to_text(call, true); });
+	registry.add("inet_pton", 3, [from_text](ApiCall &call) { from_text(call, false); });
+	registry.add("InetPtonW", 3, [from_text](ApiCall &call) { from_text(call, true); });
 	// getservbyname and getservbyport answer from the services database into one SERVENT the process reuses, as Winsock's per-thread
 	// one is reused; the 64-bit layout keeps the protocol before the port.
 	auto service_block = std::make_shared<uint64_t>(0);
