@@ -54,6 +54,7 @@ static const GUID view3_iid = {0x903c9ce5, 0x793a, 0x4fdf, {0xa2, 0xb2, 0xaf, 0x
 static const GUID view4_iid = {0x15e5cbec, 0x9e0f, 0x46b5, {0xbc, 0x3f, 0x9b, 0xf6, 0x53, 0xe7, 0x4b, 0x5e}};
 static const GUID view_statics2 = {0xaf338ae5, 0xcf64, 0x423c, {0x85, 0xe5, 0xf3, 0xe7, 0x24, 0x48, 0xfb, 0x23}};
 static const GUID view_statics3 = {0xa28d7594, 0x8c41, 0x4e13, {0x97, 0x19, 0x51, 0x64, 0x79, 0x6f, 0xe4, 0xc7}};
+static const GUID core_view3 = {0x07ebe1b3, 0xa4cf, 0x4550, {0xab, 0x70, 0xb0, 0x7e, 0x85, 0x33, 0x0b, 0xc8}};
 static const GUID view_interop = {0xc446fb5d, 0x4793, 0x4896, {0xa8, 0xe2, 0xbe, 0x57, 0xa8, 0xbb, 0x0f, 0x50}};
 
 struct rect {
@@ -76,7 +77,7 @@ static int activated, sized, keys, characters, presses, visible, closed, dispatc
 static struct point pressed_at;
 static BYTE left_pressed;
 static FLOAT width_seen;
-static int bounds_changes, consolidations;
+static int bounds_changes, consolidations, layouts;
 
 static void fail(int code)
 {
@@ -102,7 +103,7 @@ static object *statics(const WCHAR *name, const GUID *iid)
 
 /* A delegate: Invoke is its fourth method, after IUnknown's. Each one knows which event it was given to. */
 enum { ON_VIEW_ACTIVATED, ON_SIZE, ON_KEY, ON_CHARACTER, ON_PRESS, ON_VISIBILITY, ON_CLOSED, ON_DISPATCHED, ON_DATA_CHANGED, ON_BOUNDS,
-	ON_CONSOLIDATED };
+	ON_CONSOLIDATED, ON_LAYOUT };
 
 struct delegate {
 	void **table;
@@ -208,6 +209,9 @@ static HRESULT WINAPI delegate_invoke(struct delegate *self, object *sender, obj
 	case ON_CONSOLIDATED:
 		++consolidations;
 		break;
+	case ON_LAYOUT:
+		++layouts;
+		break;
 	}
 	return S_OK;
 }
@@ -225,7 +229,7 @@ static struct delegate on_view_activated = {delegate_table, 1, ON_VIEW_ACTIVATED
 	on_key = {delegate_table, 1, ON_KEY}, on_character = {delegate_table, 1, ON_CHARACTER}, on_press = {delegate_table, 1, ON_PRESS},
 	on_visibility = {delegate_table, 1, ON_VISIBILITY}, on_closed = {delegate_table, 1, ON_CLOSED}, on_data_changed = {delegate_table, 1, ON_DATA_CHANGED},
 	on_dispatched = {dispatched_table, 1, ON_DISPATCHED}, on_bounds = {delegate_table, 1, ON_BOUNDS},
-	on_consolidated = {delegate_table, 1, ON_CONSOLIDATED};
+	on_consolidated = {delegate_table, 1, ON_CONSOLIDATED}, on_layout = {delegate_table, 1, ON_LAYOUT};
 
 /* A boxed Windows.UI.Color, IReference<Color>, which the title bar keeps. */
 struct color {
@@ -290,6 +294,33 @@ static int check_application_view(HWND handle)
 		METHOD(bar, 9, object_method)(bar, &got) != S_OK || got != (object *)&boxed_color) return 83;
 	METHOD(got, 2, release_method)(got);
 	if (METHOD(bar, 8, HRESULT (WINAPI *)(object *, object *))(bar, NULL) != S_OK) return 84;
+	/* Extended into its title bar, the view reaches the window's top under the caption buttons, and the strip still moves it. */
+	object *core3 = NULL, *core_bar = NULL;
+	BYTE extended = 1, bar_visible = 0;
+	double height = 0, inset = 0;
+	INT64 layout_token = 0;
+	if (METHOD(app_view, 0, query_method)(app_view, &core_view3, (void **)&core3) != S_OK ||
+		METHOD(core3, 7, object_method)(core3, &core_bar) != S_OK || !core_bar) return 92;
+	if (METHOD(core_bar, 7, flag_method)(core_bar, &extended) != S_OK || extended ||
+		METHOD(core_bar, 10, HRESULT (WINAPI *)(object *, double *))(core_bar, &height) != S_OK || height <= 0 ||
+		METHOD(core_bar, 9, HRESULT (WINAPI *)(object *, double *))(core_bar, &inset) != S_OK || inset <= 0 ||
+		METHOD(core_bar, 13, flag_method)(core_bar, &bar_visible) != S_OK || !bar_visible) return 93;
+	if (METHOD(core_bar, 11, event_method)(core_bar, (object *)&on_layout, &layout_token) != S_OK ||
+		METHOD(core_bar, 6, HRESULT (WINAPI *)(object *, BYTE))(core_bar, 1) != S_OK || layouts != 1) return 94;
+	RECT outer;
+	POINT origin = {0, 0};
+	GetWindowRect(handle, &outer);
+	ClientToScreen(handle, &origin);
+	const LRESULT hit = SendMessageW(handle, WM_NCHITTEST, 0, MAKELPARAM(outer.left + 60, outer.top + 12));
+	if (origin.y != outer.top || hit != HTCAPTION) return 95;
+	if (METHOD(core_bar, 6, HRESULT (WINAPI *)(object *, BYTE))(core_bar, 0) != S_OK) return 96;
+	origin = (POINT){0, 0};
+	ClientToScreen(handle, &origin);
+	GetWindowRect(handle, &outer);
+	if (origin.y <= outer.top) return 97;
+	METHOD(core_bar, 12, HRESULT (WINAPI *)(object *, INT64))(core_bar, layout_token);
+	METHOD(core_bar, 2, release_method)(core_bar);
+	METHOD(core3, 2, release_method)(core3);
 	/* Full screen: a borderless window over its monitor, and back. */
 	BYTE full = 0;
 	MONITORINFO monitor = {sizeof monitor};

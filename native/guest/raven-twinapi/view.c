@@ -19,10 +19,14 @@
  * - Only the default view mode is supported: TryEnterViewModeAsync completes with false for any other. TryConsolidateAsync closes the
  *   window, and Consolidated is raised as the window goes, as initiated by the app or by the user.
  * - TerminateAppOnFinalViewClose is kept: the app has one view and ends when its window closes.
+ * - CoreApplicationViewTitleBar: a view extended into its title bar has its client area up to the window's top, with the desktop's
+ *   caption buttons over its right, whose width is the right inset; the caption's strip, as high as Height, still moves the window.
+ *   The title bar is visible unless the view is full screen.
  * - VisibleBounds is the client area on the screen; VisibleBoundsChanged is raised when the window moves or changes size. Screen
  *   capture, system overlays and the desired bounds mode are kept as set. */
 #include "object.h"
 #include "../raven-winrt/winrt.h"
+#include <uxtheme.h>
 
 static const IID iid_view = {0xd222d519, 0x4361, 0x451e, {0x96, 0xc4, 0x60, 0xf4, 0xf9, 0x74, 0x2d, 0xb0}};
 static const IID iid_view2 = {0xe876b196, 0xa545, 0x40dc, {0xb5, 0x94, 0x45, 0x0c, 0xba, 0x68, 0xcc, 0x00}};
@@ -201,6 +205,136 @@ static HRESULT put_color(void *iface, size_t which, IUnknown *value)
 	paint_caption(window, window && GetActiveWindow() == window);
 	return S_OK;
 }
+
+/* ---- CoreApplicationViewTitleBar ---- */
+
+static const IID iid_core_title_bar = {0x006d35e3, 0xe1f1, 0x431b, {0x95, 0x08, 0x29, 0xb9, 0x69, 0x26, 0xac, 0x53}};
+
+struct core_title_bar {
+	struct object base;
+	boolean extended;
+	struct handlers layout, visibility;
+};
+
+static struct core_title_bar *core_title_bar_of(void *iface) { return (struct core_title_bar *)owner(iface); }
+
+static UINT system_metric(int index, HWND window)
+{
+	static int (WINAPI *metric_for_dpi)(int, UINT);
+	static BOOL looked;
+	if (!looked) {
+		metric_for_dpi = (int (WINAPI *)(int, UINT))GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForDpi");
+		looked = TRUE;
+	}
+	return (UINT)(metric_for_dpi ? metric_for_dpi(index, window_dpi(window)) : GetSystemMetrics(index));
+}
+
+/* The caption's height in pixels: what the view covers once it is extended into the title bar. */
+static LONG caption_pixels(HWND window)
+{
+	return (LONG)(system_metric(SM_CYCAPTION, window) + system_metric(SM_CYFRAME, window) + system_metric(SM_CXPADDEDBORDER, window));
+}
+
+static HRESULT (WINAPI *dwm_function(const char *name))(void)
+{
+	HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+	return dwm ? (HRESULT (WINAPI *)(void))GetProcAddress(dwm, name) : NULL;
+}
+
+/* Gives the caption over the view's top the desktop's caption buttons, or takes it back. */
+static void extend_frame(HWND window, BOOL extended)
+{
+	typedef HRESULT (WINAPI *extend_type)(HWND, const MARGINS *);
+	static extend_type extend;
+	if (!extend && !(extend = (extend_type)dwm_function("DwmExtendFrameIntoClientArea")))
+		return;
+	const MARGINS margins = {0, 0, extended ? (int)caption_pixels(window) : 0, 0};
+	extend(window, &margins);
+	SetWindowPos(window, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+}
+
+static struct view main_view;
+static struct core_title_bar core_title_bar;
+
+static HRESULT WINAPI set_core_extended(void *iface, boolean value)
+{
+	struct core_title_bar *self = core_title_bar_of(iface);
+	if (!!self->extended == !!value)
+		return S_OK;
+	self->extended = value;
+	if (application_window())
+		extend_frame(application_window(), value);
+	handlers_raise(&self->layout, iface, NULL);
+	return S_OK;
+}
+
+static HRESULT WINAPI core_extended(void *iface, boolean *out) { return answer_flag(out, core_title_bar_of(iface)->extended); }
+
+static HRESULT WINAPI core_left_inset(void *iface, DOUBLE *out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = 0;
+	return S_OK;
+}
+
+/* The caption buttons' width, on the right of the caption. */
+static HRESULT WINAPI core_right_inset(void *iface, DOUBLE *out)
+{
+	typedef HRESULT (WINAPI *attribute_type)(HWND, DWORD, void *, DWORD);
+	static attribute_type attribute;
+	const HWND window = application_window();
+	RECT buttons = {0};
+	if (!out)
+		return E_POINTER;
+	*out = 0;
+	if (!attribute)
+		attribute = (attribute_type)dwm_function("DwmGetWindowAttribute");
+	/* DWMWA_CAPTION_BUTTON_BOUNDS. */
+	if (window && attribute && attribute(window, 5, &buttons, sizeof buttons) == S_OK)
+		*out = to_dips(window, buttons.right - buttons.left);
+	return S_OK;
+}
+
+static HRESULT WINAPI core_height(void *iface, DOUBLE *out)
+{
+	const HWND window = application_window();
+	if (!out)
+		return E_POINTER;
+	*out = window ? to_dips(window, caption_pixels(window)) : 0;
+	return S_OK;
+}
+
+static HRESULT WINAPI core_add_layout(void *iface, void *handler, INT64 *token) { return handlers_add(&core_title_bar_of(iface)->layout, handler, token); }
+static HRESULT WINAPI core_remove_layout(void *iface, INT64 token) { return handlers_remove(&core_title_bar_of(iface)->layout, token); }
+
+/* The title bar shows unless the view is full screen. */
+static HRESULT WINAPI core_visible(void *iface, boolean *out);
+
+static HRESULT WINAPI core_add_visibility(void *iface, void *handler, INT64 *token)
+{
+	return handlers_add(&core_title_bar_of(iface)->visibility, handler, token);
+}
+
+static HRESULT WINAPI core_remove_visibility(void *iface, INT64 token) { return handlers_remove(&core_title_bar_of(iface)->visibility, token); }
+
+TABLE(core_title_bar_table, 0, INSPECTABLE, (const void *)set_core_extended, (const void *)core_extended, (const void *)core_left_inset,
+	(const void *)core_right_inset, (const void *)core_height, (const void *)core_add_layout, (const void *)core_remove_layout,
+	(const void *)core_visible, (const void *)core_add_visibility, (const void *)core_remove_visibility);
+static const struct face_iid core_title_bar_iids[] = {{&iid_core_title_bar, 0}, {NULL, 0}};
+static const struct kind core_title_bar_kind = {"CoreApplicationViewTitleBar", L"Windows.ApplicationModel.Core.CoreApplicationViewTitleBar",
+	core_title_bar_iids, NULL};
+static struct core_title_bar core_title_bar = {{{core_title_bar_table.slots}, &core_title_bar_kind, 1}};
+
+HRESULT application_title_bar(void **out)
+{
+	if (!out)
+		return E_POINTER;
+	reference(*out = face_of(&core_title_bar.base, 0));
+	return S_OK;
+}
+
+static void title_bar_visibility_changed(void) { handlers_raise(&core_title_bar.visibility, face_of(&core_title_bar.base, 0), NULL); }
 
 /* ---- ApplicationView ---- */
 
@@ -394,6 +528,7 @@ static BOOL enter_full_screen(struct view *self, HWND window)
 	self->style = GetWindowLongPtrW(window, GWL_STYLE);
 	self->extended = GetWindowLongPtrW(window, GWL_EXSTYLE);
 	self->full_screen = TRUE;
+	title_bar_visibility_changed();
 	SetWindowLongPtrW(window, GWL_STYLE, (self->style & ~(LONG_PTR)(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE)) | WS_POPUP);
 	SetWindowLongPtrW(window, GWL_EXSTYLE, self->extended & ~(LONG_PTR)(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME));
 	SetWindowPos(window, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top, monitor.rcMonitor.right - monitor.rcMonitor.left,
@@ -413,6 +548,7 @@ static HRESULT WINAPI view_exit_full_screen(void *iface)
 	if (!self->full_screen || !window)
 		return S_OK;
 	self->full_screen = FALSE;
+	title_bar_visibility_changed();
 	SetWindowLongPtrW(window, GWL_STYLE, self->style);
 	SetWindowLongPtrW(window, GWL_EXSTYLE, self->extended);
 	SetWindowPlacement(window, &self->placement);
@@ -529,6 +665,8 @@ TABLE(view7_table, 4, INSPECTABLE, (const void *)view_persisted_id, (const void 
 static const struct face_iid view_iids[] = {{&iid_view, 0}, {&iid_view2, 1}, {&iid_view3, 2}, {&iid_view4, 3}, {&iid_view7, 4}, {NULL, 0}};
 static const struct kind view_kind = {"ApplicationView", L"Windows.UI.ViewManagement.ApplicationView", view_iids, NULL};
 /* The app has one view, on the thread that runs it. */
+static HRESULT WINAPI core_visible(void *iface, boolean *out) { return answer_flag(out, !main_view.full_screen); }
+
 static struct view main_view = {{{view_table.slots, view2_table.slots, view3_table.slots, view4_table.slots, view7_table.slots}, &view_kind, 1},
 	SRWLOCK_INIT, NULL, NULL, {0}, {0}, FALSE, 0, 0, {0}, {192, 48}, TRUE};
 
@@ -552,9 +690,35 @@ static const struct kind consolidated_kind = {"ApplicationViewConsolidatedEventA
 
 /* ---- the core window's messages that concern the view ---- */
 
-void application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+BOOL application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam, LRESULT *result)
 {
 	struct view *self = &main_view;
+	/* A view extended into its title bar has its client area up to the window's top, under the desktop's caption buttons, and the
+	 * caption's strip still moves the window and sizes it from its top edge. */
+	if (core_title_bar.extended && !self->full_screen) {
+		if (message == WM_NCCALCSIZE && wparam) {
+			NCCALCSIZE_PARAMS *sizes = (NCCALCSIZE_PARAMS *)lparam;
+			const LONG top = sizes->rgrc[0].top;
+			*result = DefWindowProcW(window, message, wparam, lparam);
+			/* A maximized window reaches past the screen by its frame, which stays out of the view. */
+			sizes->rgrc[0].top = top + (IsZoomed(window) ? (LONG)(system_metric(SM_CYFRAME, window) + system_metric(SM_CXPADDEDBORDER, window)) : 0);
+			return TRUE;
+		}
+		if (message == WM_NCHITTEST) {
+			typedef BOOL (WINAPI *default_type)(HWND, UINT, WPARAM, LPARAM, LRESULT *);
+			static default_type dwm_default;
+			if (!dwm_default)
+				dwm_default = (default_type)dwm_function("DwmDefWindowProc");
+			if (dwm_default && dwm_default(window, message, wparam, lparam, result))
+				return TRUE;
+			*result = DefWindowProcW(window, message, wparam, lparam);
+			POINT at = {(SHORT)LOWORD(lparam), (SHORT)HIWORD(lparam)};
+			ScreenToClient(window, &at);
+			if (*result == HTCLIENT && at.y >= 0 && at.y < caption_pixels(window))
+				*result = at.y < (LONG)system_metric(SM_CYFRAME, window) && !IsZoomed(window) ? HTTOP : HTCAPTION;
+			return TRUE;
+		}
+	}
 	switch (message) {
 	case WM_CREATE:
 		/* What the app asked for before its view was made. */
@@ -563,6 +727,11 @@ void application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM l
 		else if (launch_mode == LAUNCH_FULL_SCREEN)
 			enter_full_screen(self, window);
 		show_title(self, window);
+		if (core_title_bar.extended)
+			extend_frame(window, TRUE);
+		break;
+	case WM_DPICHANGED:
+		handlers_raise(&core_title_bar.layout, face_of(&core_title_bar.base, 0), NULL);
 		break;
 	case WM_SHOWWINDOW:
 		if (wparam && launch_mode == LAUNCH_MAXIMIZED && !self->full_screen && !self->shown) {
@@ -601,6 +770,7 @@ void application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM l
 		break;
 	}
 	}
+	return FALSE;
 }
 
 /* ---- the class ---- */

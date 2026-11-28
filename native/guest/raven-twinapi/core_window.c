@@ -724,7 +724,9 @@ static LRESULT CALLBACK window_procedure(HWND handle, UINT message, WPARAM wpara
 	}
 	if (!self)
 		return DefWindowProcW(handle, message, wparam, lparam);
-	application_view_message(handle, message, wparam, lparam);
+	LRESULT answer = 0;
+	if (application_view_message(handle, message, wparam, lparam, &answer))
+		return answer;
 	if (message == run_message && run_message) {
 		struct action *action = (struct action *)lparam;
 		if (InterlockedCompareExchange(&action->status, 0, 0) == ASYNC_STARTED) {
@@ -1383,8 +1385,7 @@ static HRESULT WINAPI view_dispatcher(void *iface, void **out)
 
 static HRESULT WINAPI view_title_bar(void *iface, void **out)
 {
-	answer_null(out);
-	return missing("CoreApplicationView.TitleBar");
+	return application_title_bar(out);
 }
 
 static HRESULT WINAPI view_add_hosted_closing(void *iface, void *handler, INT64 *token)

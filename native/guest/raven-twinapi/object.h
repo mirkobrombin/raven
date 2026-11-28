@@ -120,8 +120,11 @@ HRESULT application_view(void **out);
 HRESULT application_exit(void);
 /* The window of the app's CoreWindow, or NULL: what owns a dialog no window was given for. */
 HWND application_window(void);
-/* The messages of the core window that concern its ApplicationView, from view.c, which sees each before the core window does. */
-void application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+/* The messages of the core window that concern its ApplicationView, from view.c, which sees each before the core window does: TRUE when
+ * it answered the message with *result. */
+BOOL application_view_message(HWND window, UINT message, WPARAM wparam, LPARAM lparam, LRESULT *result);
+/* The CoreApplicationViewTitleBar of the app's view, from view.c. */
+HRESULT application_title_bar(void **out);
 extern struct object core_window_class, core_cursor_class, display_information_class;
 /* The package of the app and its data, from package.c. */
 extern struct object package_class, application_data_class;
