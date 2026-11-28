@@ -252,12 +252,12 @@ void register_job_api(ApiRegistry &registry, KernelContext &context)
 		std::vector<uint8_t> data;
 		switch (call.u32(1)) {
 		case info_basic_accounting: {
-			// JOBOBJECT_BASIC_ACCOUNTING_INFORMATION: times, page faults, process counts.
+			// JOBOBJECT_BASIC_ACCOUNTING_INFORMATION: four times, the page faults, then the total, active and terminated processes; the last
+			// counts only those a limit ended, which no limit here does.
 			data.assign(48, 0);
-			const uint32_t total = job->total_processes, active = uint32_t(job->members.size()), terminated = 0;
-			std::memcpy(data.data() + 32, &total, 4);
-			std::memcpy(data.data() + 36, &active, 4);
-			std::memcpy(data.data() + 40, &terminated, 4);
+			const uint32_t total = job->total_processes, active = uint32_t(job->members.size());
+			std::memcpy(data.data() + 36, &total, 4);
+			std::memcpy(data.data() + 40, &active, 4);
 			break;
 		}
 		case info_basic_limit:
