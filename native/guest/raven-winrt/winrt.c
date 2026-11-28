@@ -10,6 +10,8 @@
 const IID WINRT_OWN = {0xf2f0b0c8, 0x3a9c, 0x4f6b, {0x9f, 0x1e, 0x52, 0xe2, 0xf6, 0xc0, 0xa7, 0xd1}};
 const IID WINRT_OWN_2 = {0xf2f0b0c8, 0x3a9c, 0x4f6b, {0x9f, 0x1e, 0x52, 0xe2, 0xf6, 0xc0, 0xa7, 0xd2}};
 const IID WINRT_OWN_3 = {0xf2f0b0c8, 0x3a9c, 0x4f6b, {0x9f, 0x1e, 0x52, 0xe2, 0xf6, 0xc0, 0xa7, 0xd3}};
+/* IAsyncAction, which foundation.h does not declare. */
+static const IID async_action = {0x5a648006, 0x843a, 0x4da9, {0x86, 0x5b, 0x9d, 0x26, 0xe5, 0xdf, 0xad, 0x7b}};
 /* IAgileObject, which marks an object any thread may call without marshaling. */
 static const IID agile_object = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
 
@@ -320,6 +322,8 @@ static HRESULT STDMETHODCALLTYPE async_results(void *iface, void *out)
 		case WINRT_RESULT_BOOLEAN:
 			*(boolean *)out = self->result.boolean;
 			break;
+		case WINRT_RESULT_NONE:
+			break;
 		}
 	LeaveCriticalSection(&self->lock);
 	return result;
@@ -396,6 +400,20 @@ static const struct {
 static const IAsyncInfoVtbl info_table = {WINRT_INSPECTABLE, (void *)info_id, (void *)info_status, (void *)info_error, (void *)info_cancel,
 	(void *)info_close};
 
+static HRESULT STDMETHODCALLTYPE action_results(void *iface)
+{
+	struct winrt_async *self = async_of(iface);
+	EnterCriticalSection(&self->lock);
+	const HRESULT result = self->closed ? E_ILLEGAL_METHOD_CALL : self->status == Started ? E_ILLEGAL_METHOD_CALL :
+		self->status == Canceled ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : self->status == Error ? self->error : S_OK;
+	LeaveCriticalSection(&self->lock);
+	return result;
+}
+
+static const struct {
+	void *query, *add_ref, *release, *iids, *name, *trust, *put_completed, *get_completed, *results;
+} action_table = {WINRT_INSPECTABLE, async_put_completed, async_get_completed, action_results};
+
 static const struct winrt_entry async_entries[] = {
 	WINRT_ENTRY(struct winrt_async, operation, WINRT_OWN), WINRT_ENTRY(struct winrt_async, info, IID_IAsyncInfo), WINRT_END};
 static const struct winrt_class async_class = {L"Windows.Foundation.IAsyncOperation", async_entries, async_destroy};
@@ -433,6 +451,21 @@ static DWORD WINAPI async_run(void *parameter)
 	return 0;
 }
 
+static struct winrt_async *new_async(const IID *operation_iid, BOOL with_progress, enum winrt_result kind)
+{
+	struct winrt_async *self = winrt_new(&async_class, sizeof(*self), operation_iid);
+	if (!self)
+		return NULL;
+	self->operation.table = kind == WINRT_RESULT_NONE ? (const void *)&action_table : with_progress ? (const void *)&progress_table :
+		(const void *)&plain_table;
+	self->info.table = &info_table;
+	InitializeCriticalSection(&self->lock);
+	self->status = Started;
+	self->id = (UINT32)InterlockedIncrement(&operation_ids);
+	self->kind = kind;
+	return self;
+}
+
 HRESULT winrt_async_start(const IID *operation_iid, BOOL with_progress, enum winrt_result kind, winrt_work work, void *context,
 	void (*free_context)(void *), void **out)
 {
@@ -442,18 +475,12 @@ HRESULT winrt_async_start(const IID *operation_iid, BOOL with_progress, enum win
 		return E_POINTER;
 	}
 	*out = NULL;
-	struct winrt_async *self = winrt_new(&async_class, sizeof(*self), operation_iid);
+	struct winrt_async *self = new_async(operation_iid, with_progress, kind);
 	if (!self) {
 		if (free_context)
 			free_context(context);
 		return E_OUTOFMEMORY;
 	}
-	self->operation.table = with_progress ? (const void *)&progress_table : (const void *)&plain_table;
-	self->info.table = &info_table;
-	InitializeCriticalSection(&self->lock);
-	self->status = Started;
-	self->id = (UINT32)InterlockedIncrement(&operation_ids);
-	self->kind = kind;
 	self->work = work;
 	self->context = context;
 	self->free_context = free_context;
@@ -469,6 +496,41 @@ HRESULT winrt_async_start(const IID *operation_iid, BOOL with_progress, enum win
 	CloseHandle(thread);
 	*out = &self->operation;
 	return S_OK;
+}
+
+HRESULT winrt_async_done(const IID *operation_iid, enum winrt_result kind, HRESULT error, const union winrt_value *result, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	*out = NULL;
+	struct winrt_async *self = new_async(operation_iid, FALSE, kind);
+	if (!self)
+		return E_OUTOFMEMORY;
+	HRESULT made = S_OK;
+	if (FAILED(error)) {
+		self->status = Error;
+		self->error = error;
+	} else {
+		self->status = Completed;
+		if (result && kind == WINRT_RESULT_STRING)
+			made = WindowsDuplicateString(result->string, &self->result.string);
+		else if (result && kind != WINRT_RESULT_NONE) {
+			self->result = *result;
+			if (kind == WINRT_RESULT_OBJECT && self->result.object)
+				((IUnknown *)self->result.object)->lpVtbl->AddRef(self->result.object);
+		}
+	}
+	if (FAILED(made)) {
+		winrt_release(&self->operation);
+		return made;
+	}
+	*out = &self->operation;
+	return S_OK;
+}
+
+HRESULT winrt_action_start(winrt_work work, void *context, void (*free_context)(void *), void **out)
+{
+	return winrt_async_start(&async_action, FALSE, WINRT_RESULT_NONE, work, context, free_context, out);
 }
 
 /* Waiting for an operation: a completion handler that signals an event. */
@@ -537,31 +599,60 @@ HRESULT winrt_wait(void *operation, BOOL with_progress, void *result)
 	return SUCCEEDED(outcome) ? table[completed + 2](operation, result) : outcome;
 }
 
-/* Objects in a list. */
+/* Objects or strings in a list. */
 
 struct items {
 	struct winrt_object base;
 	struct winrt_interface view, iterable, iterator;
 	const struct winrt_items_kind *kind;
-	IInspectable **items;
-	UINT32 count, position;
+	SRWLOCK lock;
+	void **items;
+	UINT32 count, capacity, position;
 };
 
 static struct items *items_of(void *iface) { return (struct items *)winrt_object_of(iface); }
+
+static void forget_item(const struct winrt_items_kind *kind, void *item)
+{
+	if (kind->strings)
+		WindowsDeleteString(item);
+	else
+		winrt_put(item);
+}
+
+static HRESULT item_out(const struct winrt_items_kind *kind, void *item, void **out)
+{
+	if (kind->strings)
+		return WindowsDuplicateString(item, (HSTRING *)out);
+	if (item)
+		((IUnknown *)item)->lpVtbl->AddRef(item);
+	*out = item;
+	return S_OK;
+}
 
 static void items_destroy(struct winrt_object *object)
 {
 	struct items *self = (struct items *)object;
 	for (UINT32 index = 0; index < self->count; ++index)
-		winrt_put(self->items[index]);
+		forget_item(self->kind, self->items[index]);
 	WINRT_FREE(self->items);
 }
 
-static HRESULT item_out(IInspectable *item, void **out)
+static HRESULT grow_items(struct items *self, UINT32 count)
 {
-	if (item)
-		item->lpVtbl->AddRef(item);
-	*out = item;
+	if (count <= self->capacity)
+		return S_OK;
+	UINT32 capacity = self->capacity ? self->capacity : 8;
+	while (capacity < count) {
+		if (capacity > 0x7fffffff / 2)
+			return E_OUTOFMEMORY;
+		capacity *= 2;
+	}
+	void **items = self->items ? WINRT_REALLOC(self->items, capacity * sizeof(*items)) : WINRT_ALLOC(capacity * sizeof(*items));
+	if (!items)
+		return E_OUTOFMEMORY;
+	self->items = items;
+	self->capacity = capacity;
 	return S_OK;
 }
 
@@ -571,30 +662,41 @@ static HRESULT STDMETHODCALLTYPE items_at(void *iface, UINT32 index, void **out)
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	return index < self->count ? item_out(self->items[index], out) : E_BOUNDS;
+	AcquireSRWLockShared(&self->lock);
+	const HRESULT result = index < self->count ? item_out(self->kind, self->items[index], out) : E_BOUNDS;
+	ReleaseSRWLockShared(&self->lock);
+	return result;
 }
 
 static HRESULT STDMETHODCALLTYPE items_size(void *iface, UINT32 *out)
 {
+	struct items *self = items_of(iface);
 	if (!out)
 		return E_POINTER;
-	*out = items_of(iface)->count;
+	AcquireSRWLockShared(&self->lock);
+	*out = self->count;
+	ReleaseSRWLockShared(&self->lock);
 	return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE items_index(void *iface, IInspectable *value, UINT32 *index, boolean *found)
+static HRESULT STDMETHODCALLTYPE items_index(void *iface, void *value, UINT32 *index, boolean *found)
 {
 	struct items *self = items_of(iface);
 	if (!index || !found)
 		return E_POINTER;
 	*index = 0;
 	*found = FALSE;
-	for (UINT32 at = 0; at < self->count; ++at)
-		if (self->items[at] == value) {
+	AcquireSRWLockShared(&self->lock);
+	for (UINT32 at = 0; at < self->count; ++at) {
+		INT32 order = 1;
+		if (self->kind->strings ? SUCCEEDED(WindowsCompareStringOrdinal(self->items[at], value, &order)) && !order :
+				self->items[at] == value) {
 			*index = at;
 			*found = TRUE;
 			break;
 		}
+	}
+	ReleaseSRWLockShared(&self->lock);
 	return S_OK;
 }
 
@@ -603,10 +705,21 @@ static HRESULT copy_items(struct items *self, UINT32 start, UINT32 capacity, voi
 	if (!count || (capacity && !into))
 		return E_POINTER;
 	UINT32 taken = 0;
-	for (; start + taken < self->count && taken < capacity; ++taken)
-		item_out(self->items[start + taken], &into[taken]);
+	HRESULT result = S_OK;
+	AcquireSRWLockShared(&self->lock);
+	if (start > self->count)
+		result = E_BOUNDS;
+	for (; SUCCEEDED(result) && start + taken < self->count && taken < capacity; ++taken)
+		result = item_out(self->kind, self->items[start + taken], &into[taken]);
+	ReleaseSRWLockShared(&self->lock);
+	if (FAILED(result)) {
+		/* The last slot is the item that failed, which holds nothing. */
+		for (UINT32 index = 0; index + 1 < taken; ++index)
+			forget_item(self->kind, into[index]);
+		taken = 0;
+	}
 	*count = taken;
-	return S_OK;
+	return result;
 }
 
 static HRESULT STDMETHODCALLTYPE items_many(void *iface, UINT32 start, UINT32 capacity, void **into, UINT32 *count)
@@ -614,12 +727,19 @@ static HRESULT STDMETHODCALLTYPE items_many(void *iface, UINT32 start, UINT32 ca
 	return copy_items(items_of(iface), start, capacity, into, count);
 }
 
+static HRESULT snapshot(struct items *self, BOOL iterator, void **out)
+{
+	AcquireSRWLockShared(&self->lock);
+	const HRESULT result = winrt_items(self->kind, (IInspectable **)self->items, self->count, iterator, out);
+	ReleaseSRWLockShared(&self->lock);
+	return result;
+}
+
 static HRESULT STDMETHODCALLTYPE items_first(void *iface, void **out)
 {
-	struct items *self = items_of(iface);
 	if (!out)
 		return E_POINTER;
-	return winrt_items(self->kind, self->items, self->count, TRUE, out);
+	return snapshot(items_of(iface), TRUE, out);
 }
 
 static HRESULT STDMETHODCALLTYPE items_current(void *iface, void **out)
@@ -628,7 +748,7 @@ static HRESULT STDMETHODCALLTYPE items_current(void *iface, void **out)
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	return self->position < self->count ? item_out(self->items[self->position], out) : E_BOUNDS;
+	return self->position < self->count ? item_out(self->kind, self->items[self->position], out) : E_BOUNDS;
 }
 
 static HRESULT STDMETHODCALLTYPE items_has_current(void *iface, boolean *out)
@@ -659,6 +779,133 @@ static HRESULT STDMETHODCALLTYPE items_take(void *iface, UINT32 capacity, void *
 	return result;
 }
 
+/* The methods that change a vector. */
+static HRESULT STDMETHODCALLTYPE vector_view(void *iface, void **out)
+{
+	if (!out)
+		return E_POINTER;
+	return snapshot(items_of(iface), FALSE, out);
+}
+
+static HRESULT STDMETHODCALLTYPE vector_set(void *iface, UINT32 index, void *value)
+{
+	struct items *self = items_of(iface);
+	void *kept = NULL, *old = NULL;
+	HRESULT result = item_out(self->kind, value, &kept);
+	if (FAILED(result))
+		return result;
+	AcquireSRWLockExclusive(&self->lock);
+	if (index < self->count) {
+		old = self->items[index];
+		self->items[index] = kept;
+		kept = NULL;
+	} else
+		result = E_BOUNDS;
+	ReleaseSRWLockExclusive(&self->lock);
+	if (FAILED(result))
+		forget_item(self->kind, kept);
+	else
+		forget_item(self->kind, old);
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE vector_insert(void *iface, UINT32 index, void *value)
+{
+	struct items *self = items_of(iface);
+	void *kept = NULL;
+	HRESULT result = item_out(self->kind, value, &kept);
+	if (FAILED(result))
+		return result;
+	AcquireSRWLockExclusive(&self->lock);
+	if (index > self->count)
+		result = E_BOUNDS;
+	else if (SUCCEEDED(result = grow_items(self, self->count + 1))) {
+		memmove(&self->items[index + 1], &self->items[index], (self->count - index) * sizeof(*self->items));
+		self->items[index] = kept;
+		++self->count;
+	}
+	ReleaseSRWLockExclusive(&self->lock);
+	if (FAILED(result))
+		forget_item(self->kind, kept);
+	return result;
+}
+
+/* Removes the item at index, or with last the last one, under one hold of the lock. */
+static HRESULT remove_item(struct items *self, UINT32 index, BOOL last)
+{
+	void *old = NULL;
+	HRESULT result = S_OK;
+	AcquireSRWLockExclusive(&self->lock);
+	if (last)
+		index = self->count - 1;
+	if (self->count && index < self->count) {
+		old = self->items[index];
+		memmove(&self->items[index], &self->items[index + 1], (self->count - index - 1) * sizeof(*self->items));
+		--self->count;
+	} else
+		result = E_BOUNDS;
+	ReleaseSRWLockExclusive(&self->lock);
+	if (SUCCEEDED(result))
+		forget_item(self->kind, old);
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE vector_remove(void *iface, UINT32 index) { return remove_item(items_of(iface), index, FALSE); }
+
+static HRESULT STDMETHODCALLTYPE vector_append(void *iface, void *value)
+{
+	struct items *self = items_of(iface);
+	void *kept = NULL;
+	HRESULT result = item_out(self->kind, value, &kept);
+	if (FAILED(result))
+		return result;
+	AcquireSRWLockExclusive(&self->lock);
+	if (SUCCEEDED(result = grow_items(self, self->count + 1)))
+		self->items[self->count++] = kept;
+	ReleaseSRWLockExclusive(&self->lock);
+	if (FAILED(result))
+		forget_item(self->kind, kept);
+	return result;
+}
+
+static HRESULT STDMETHODCALLTYPE vector_remove_end(void *iface) { return remove_item(items_of(iface), 0, TRUE); }
+
+/* Replaces the items with a copy of others, letting the old ones go outside the lock. */
+static HRESULT replace_items(struct items *self, void **values, UINT32 count)
+{
+	void **kept = count ? WINRT_ALLOC(count * sizeof(*kept)) : NULL;
+	if (count && !kept)
+		return E_OUTOFMEMORY;
+	for (UINT32 made = 0; made < count; ++made) {
+		const HRESULT result = item_out(self->kind, values[made], &kept[made]);
+		if (FAILED(result)) {
+			while (made)
+				forget_item(self->kind, kept[--made]);
+			WINRT_FREE(kept);
+			return result;
+		}
+	}
+	AcquireSRWLockExclusive(&self->lock);
+	void **old = self->items;
+	const UINT32 old_count = self->count;
+	self->items = kept;
+	self->count = self->capacity = count;
+	ReleaseSRWLockExclusive(&self->lock);
+	for (UINT32 index = 0; index < old_count; ++index)
+		forget_item(self->kind, old[index]);
+	WINRT_FREE(old);
+	return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE vector_clear(void *iface) { return replace_items(items_of(iface), NULL, 0); }
+
+static HRESULT STDMETHODCALLTYPE vector_replace(void *iface, UINT32 count, void **values)
+{
+	if (count && !values)
+		return E_POINTER;
+	return replace_items(items_of(iface), values, count);
+}
+
 static const struct {
 	void *query, *add_ref, *release, *iids, *name, *trust, *at, *size, *index, *many;
 } items_view_table = {WINRT_INSPECTABLE, items_at, items_size, items_index, items_many};
@@ -668,34 +915,64 @@ static const struct {
 static const struct {
 	void *query, *add_ref, *release, *iids, *name, *trust, *current, *has_current, *move_next, *many;
 } items_iterator_table = {WINRT_INSPECTABLE, items_current, items_has_current, items_move_next, items_take};
+static const struct {
+	void *query, *add_ref, *release, *iids, *name, *trust, *at, *size, *view, *index, *set, *insert, *remove, *append, *remove_end, *clear,
+		*many, *replace;
+} vector_table = {WINRT_INSPECTABLE, items_at, items_size, vector_view, items_index, vector_set, vector_insert, vector_remove,
+	vector_append, vector_remove_end, vector_clear, items_many, vector_replace};
 static const struct winrt_entry items_view_entries[] = {
 	WINRT_ENTRY(struct items, view, WINRT_OWN), WINRT_ENTRY(struct items, iterable, WINRT_OWN_2), WINRT_END};
 static const struct winrt_entry items_iterator_entries[] = {WINRT_ENTRY(struct items, iterator, WINRT_OWN_3), WINRT_END};
 static const struct winrt_class items_view_class = {L"Windows.Foundation.Collections.IVectorView`1", items_view_entries, items_destroy};
 static const struct winrt_class items_iterator_class = {L"Windows.Foundation.Collections.IIterator`1", items_iterator_entries, items_destroy};
+static const struct winrt_class vector_class = {L"Windows.Foundation.Collections.IVector`1", items_view_entries, items_destroy};
 
-HRESULT winrt_items(const struct winrt_items_kind *kind, IInspectable **items, UINT32 count, BOOL iterator, void **out)
+static HRESULT new_items(const struct winrt_items_kind *kind, const struct winrt_class *type, const IID *own, IInspectable **items,
+	UINT32 count, struct items **out)
 {
-	if (!out)
-		return E_POINTER;
 	*out = NULL;
-	struct items *self = winrt_new_own(iterator ? &items_iterator_class : &items_view_class, sizeof(*self), kind->view, kind->iterable,
-		kind->iterator);
+	struct items *self = winrt_new_own(type, sizeof(*self), own, kind->iterable, kind->iterator);
 	if (!self)
 		return E_OUTOFMEMORY;
-	self->view.table = &items_view_table;
+	self->view.table = type == &vector_class ? (const void *)&vector_table : (const void *)&items_view_table;
 	self->iterable.table = &items_iterable_table;
 	self->iterator.table = &items_iterator_table;
 	self->kind = kind;
-	if (count && !(self->items = WINRT_ALLOC(count * sizeof(*items)))) {
-		winrt_release(iterator ? &self->iterator : &self->view);
-		return E_OUTOFMEMORY;
+	InitializeSRWLock(&self->lock);
+	HRESULT result = grow_items(self, count);
+	for (; SUCCEEDED(result) && self->count < count; ++self->count)
+		if (FAILED(result = item_out(kind, items[self->count], &self->items[self->count])))
+			break;
+	if (FAILED(result)) {
+		winrt_release(type == &items_iterator_class ? &self->iterator : &self->view);
+		return result;
 	}
-	for (UINT32 index = 0; index < count; ++index)
-		item_out(items[index], (void **)&self->items[index]);
-	self->count = count;
-	*out = iterator ? &self->iterator : &self->view;
+	*out = self;
 	return S_OK;
+}
+
+HRESULT winrt_items(const struct winrt_items_kind *kind, IInspectable **items, UINT32 count, BOOL iterator, void **out)
+{
+	struct items *self;
+	if (!out)
+		return E_POINTER;
+	const HRESULT result = new_items(kind, iterator ? &items_iterator_class : &items_view_class, kind->view, items, count, &self);
+	*out = FAILED(result) ? NULL : iterator ? (void *)&self->iterator : (void *)&self->view;
+	return result;
+}
+
+HRESULT winrt_vector(const struct winrt_items_kind *kind, IInspectable **items, UINT32 count, void **out)
+{
+	struct items *self;
+	if (!out)
+		return E_POINTER;
+	if (!kind->vector) {
+		*out = NULL;
+		return E_INVALIDARG;
+	}
+	const HRESULT result = new_items(kind, &vector_class, kind->vector, items, count, &self);
+	*out = SUCCEEDED(result) ? &self->view : NULL;
+	return result;
 }
 
 /* Boxed values. */

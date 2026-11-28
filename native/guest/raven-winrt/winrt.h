@@ -115,6 +115,7 @@ WCHAR *winrt_utf16(const char *text, UINT32 bytes, UINT32 *length);
  * own and gives the result; the completion handler runs once, on that thread, or at once on the thread that sets it when the operation
  * has already ended, as the Windows Runtime documents. The progress handler is kept and given back; no progress is reported. */
 enum winrt_result {
+	WINRT_RESULT_NONE, /* nothing: an IAsyncAction */
 	WINRT_RESULT_OBJECT, /* an interface pointer, which the operation owns */
 	WINRT_RESULT_STRING, /* an HSTRING, which the operation owns */
 	WINRT_RESULT_UINT64,
@@ -139,18 +140,29 @@ typedef HRESULT (*winrt_work)(struct winrt_async *operation, void *context, unio
  * run or the operation could not start. */
 HRESULT winrt_async_start(const IID *operation_iid, BOOL with_progress, enum winrt_result kind, winrt_work work, void *context,
 	void (*free_context)(void *), void **out);
+/* The same for an IAsyncAction, whose work gives no result. */
+HRESULT winrt_action_start(winrt_work work, void *context, void (*free_context)(void *), void **out);
+/* An operation (or, with WINRT_RESULT_NONE, an action) that has already ended: in error when error failed, otherwise Completed with a
+ * reference to the result object or a copy of its string. */
+HRESULT winrt_async_done(const IID *operation_iid, enum winrt_result kind, HRESULT error, const union winrt_value *result, void **out);
 /* Waits for any operation, ours or another component's, and takes its results into *result (as its GetResults gives them): for work
  * that runs one operation after another on its own thread. */
 HRESULT winrt_wait(void *operation, BOOL with_progress, void *result);
 /* True once Cancel was called: work that checks it may end early with E_ABORT. */
 BOOL winrt_async_canceled(struct winrt_async *operation);
 
-/* Objects in a list, kept in a snapshot: IVectorView<T> with IIterable<T> and the IIterator<T> they hand out, for any interface type T.
- * The snapshot holds a reference to each item; *out is the view, or with iterator the iterator at the first item. */
+/* Objects or strings in a list, kept in a snapshot: IVectorView<T> with IIterable<T> and the IIterator<T> they hand out, for any interface
+ * type T, or for String with strings. The snapshot holds a reference to each item, or a copy of each string; *out is the view, or with
+ * iterator the iterator at the first item. Items are passed as IInspectable pointers or HSTRINGs. */
 struct winrt_items_kind {
 	const IID *view, *iterable, *iterator;
+	BOOL strings;
+	/* IVector<T>, for winrt_vector. */
+	const IID *vector;
 };
 HRESULT winrt_items(const struct winrt_items_kind *kind, IInspectable **items, UINT32 count, BOOL iterator, void **out);
+/* An IVector<T> with IIterable<T> that starts with the items: it changes under a lock, and its views and iterators are snapshots. */
+HRESULT winrt_vector(const struct winrt_items_kind *kind, IInspectable **items, UINT32 count, void **out);
 
 /* Boxed values, IReference<T> for a value type T of the given size: UINT64, DateTime, TimeSpan. */
 HRESULT winrt_box(const IID *reference_iid, const void *value, size_t size, void **out);

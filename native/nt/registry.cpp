@@ -269,6 +269,8 @@ void NativeRegistry::register_runtime_classes()
 		{u"Windows.Foundation.Metadata.ApiInformation", u"raven-twinapi.dll"}, {u"Windows.Foundation.PropertyValue", u"raven-twinapi.dll"},
 		{u"Windows.Foundation.Collections.PropertySet", u"raven-twinapi.dll"},
 		{u"Windows.Storage.ApplicationDataCompositeValue", u"raven-twinapi.dll"},
+		{u"Windows.Storage.StorageFile", u"raven-twinapi.dll"}, {u"Windows.Storage.StorageFolder", u"raven-twinapi.dll"},
+		{u"Windows.Storage.FileIO", u"raven-twinapi.dll"}, {u"Windows.Storage.Streams.Buffer", u"raven-twinapi.dll"},
 		{u"Windows.Foundation.Uri", u"raven-web.dll"}, {u"Windows.Web.Http.HttpClient", u"raven-web.dll"},
 		{u"Windows.Web.Http.HttpMethod", u"raven-web.dll"}, {u"Windows.Web.Http.HttpRequestMessage", u"raven-web.dll"},
 		{u"Windows.Web.Http.HttpResponseMessage", u"raven-web.dll"}, {u"Windows.Web.Http.Filters.HttpBaseProtocolFilter", u"raven-web.dll"},

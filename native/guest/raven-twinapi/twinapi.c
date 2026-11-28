@@ -16,12 +16,14 @@
  * - Windows.ApplicationModel.Core.CoreApplication: the process's one property set, and the view of an app it runs, which core_window.c
  *   makes with its core window; a desktop process that runs none has no view.
  * - Windows.Foundation.PropertyValue: boxes of values, in value.c; Windows.Foundation.Collections.PropertySet, in map.c.
+ * - Windows.Storage.StorageFile, StorageFolder, FileIO and Streams.Buffer, in storage.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
  * Asynchronous operations complete before they are returned and call a completion handler as soon as it is set. Events take handlers
  * and never raise them. A method this component does not serve, or an interface it does not have, is named in Raven's trace. */
 #include "object.h"
+#include "../raven-winrt/winrt.h"
 #include <appmodel.h>
 #include <iphlpapi.h>
 
@@ -84,293 +86,14 @@ static const IID iid_string_iterator = {0x8c304ebb, 0x6615, 0x50a4, {0x88, 0x29,
 static const IID iid_api_information = {0x997439fe, 0xf681, 0x4a11, {0xb4, 0x16, 0xc1, 0x3a, 0x47, 0xe8, 0xba, 0x36}};
 
 
-/* Asynchronous operations, complete when they are made: IAsyncOperation<T> at place 0 and IAsyncInfo at place 1. */
-struct operation {
-	struct object base;
-	IUnknown *result;
-	IUnknown *handler;
-};
+/* The collections this file hands out. */
+static const struct winrt_items_kind profile_list = {&iid_profile_view, &iid_profile_iterable, &iid_profile_iterator, FALSE, NULL};
+static const struct winrt_items_kind lan_list = {&iid_lan_view, &iid_lan_iterable, &iid_lan_iterator, FALSE, NULL};
+static const struct winrt_items_kind host_list = {&iid_host_view, &iid_host_iterable, &iid_host_iterator, FALSE, NULL};
+static const struct winrt_items_kind string_list = {&iid_string_view, &iid_string_iterable, &iid_string_iterator, TRUE, NULL};
 
-static void destroy_operation(struct object *base)
-{
-	struct operation *self = (struct operation *)base;
-	release(self->result);
-	release(self->handler);
-}
-
-typedef HRESULT (WINAPI *completion)(IUnknown *handler, void *operation, INT32 status);
-
-static HRESULT WINAPI operation_set_completed(void *iface, IUnknown *handler)
-{
-	struct operation *self = (struct operation *)owner(iface);
-	if (!handler)
-		return E_INVALIDARG;
-	if (InterlockedCompareExchangePointer((void **)&self->handler, handler, NULL))
-		return DELEGATE_ASSIGNED;
-	reference(handler);
-	/* AsyncStatus.Completed */
-	return ((completion)((void **)handler->lpVtbl)[3])(handler, face_of(&self->base, 0), 1);
-}
-
-static HRESULT WINAPI operation_completed(void *iface, IUnknown **out)
-{
-	struct operation *self = (struct operation *)owner(iface);
-	if (!out)
-		return E_POINTER;
-	reference(*out = self->handler);
-	return S_OK;
-}
-
-static HRESULT WINAPI operation_results(void *iface, IUnknown **out)
-{
-	struct operation *self = (struct operation *)owner(iface);
-	if (!out)
-		return E_POINTER;
-	reference(*out = self->result);
-	return S_OK;
-}
-
-static HRESULT WINAPI info_id(void *iface, UINT32 *out)
-{
-	if (!out)
-		return E_POINTER;
-	*out = 1;
-	return S_OK;
-}
-
-static HRESULT WINAPI info_status(void *iface, INT32 *out)
-{
-	if (!out)
-		return E_POINTER;
-	*out = 1;
-	return S_OK;
-}
-
-static HRESULT WINAPI info_error(void *iface, HRESULT *out)
-{
-	if (!out)
-		return E_POINTER;
-	*out = S_OK;
-	return S_OK;
-}
-
-static HRESULT WINAPI info_nothing(void *iface) { return S_OK; }
-
-TABLE(operation_table, 0, INSPECTABLE, (const void *)operation_set_completed, (const void *)operation_completed, (const void *)operation_results);
-TABLE(info_table, 1, INSPECTABLE, (const void *)info_id, (const void *)info_status, (const void *)info_error, (const void *)info_nothing,
-	(const void *)info_nothing);
-
-static const struct face_iid provider_operation_iids[] = {{&iid_provider_operation, 0}, {&iid_async_info, 1}, {NULL, 0}};
-static const struct kind provider_operation = {"IAsyncOperation<WebAccountProvider>",
-	L"Windows.Foundation.IAsyncOperation`1<Windows.Security.Credentials.WebAccountProvider>", provider_operation_iids, destroy_operation};
-static const struct face_iid ticket_operation_iids[] = {{&iid_ticket_operation, 0}, {&iid_async_info, 1}, {NULL, 0}};
-static const struct kind ticket_operation = {"IAsyncOperation<OnlineIdSystemTicketResult>",
-	L"Windows.Foundation.IAsyncOperation`1<Windows.Security.Authentication.OnlineId.OnlineIdSystemTicketResult>", ticket_operation_iids,
-	destroy_operation};
-
-/* An operation that has finished with a result, which it takes a reference to; a null result is a result too. */
-static HRESULT completed(const struct kind *kind, IUnknown *result, void **out)
-{
-	static const void *const *const tables[] = {operation_table.slots, info_table.slots};
-	if (!out)
-		return E_POINTER;
-	struct operation *self = make(sizeof *self, kind, tables, 2);
-	if (!(*out = self ? face_of(&self->base, 0) : NULL))
-		return E_OUTOFMEMORY;
-	reference(self->result = result);
-	return S_OK;
-}
-
-/* Read-only collections: IVectorView<T> at place 0 and IIterable<T> at place 1 over objects or strings, and their iterators. A map view
- * with nothing in it is the same collection seen as IMapView<string, IInspectable>. */
+/* The most languages a list of them is read with. */
 #define MOST_ITEMS 4
-
-struct vector {
-	struct object base;
-	const struct kind *iterator;
-	BOOL strings;
-	UINT32 count;
-	void *items[MOST_ITEMS];
-};
-
-struct iterator {
-	struct object base;
-	struct vector *vector;
-	UINT32 at;
-};
-
-static void destroy_vector(struct object *base)
-{
-	struct vector *self = (struct vector *)base;
-	for (UINT32 index = 0; index < self->count; ++index)
-		if (self->strings)
-			WindowsDeleteString(self->items[index]);
-		else
-			release(self->items[index]);
-}
-
-static void destroy_iterator(struct object *base) { release(face_of(&((struct iterator *)base)->vector->base, 0)); }
-
-/* An item handed out: a string copy or a new reference. */
-static HRESULT item_out(struct vector *self, UINT32 index, void **out)
-{
-	if (self->strings)
-		return WindowsDuplicateString(self->items[index], (HSTRING *)out);
-	reference(*out = self->items[index]);
-	return S_OK;
-}
-
-static HRESULT WINAPI vector_at(void *iface, UINT32 index, void **out)
-{
-	struct vector *self = (struct vector *)owner(iface);
-	if (!out)
-		return E_POINTER;
-	*out = NULL;
-	return index < self->count ? item_out(self, index, out) : E_BOUNDS;
-}
-
-static HRESULT WINAPI vector_size(void *iface, UINT32 *out)
-{
-	if (!out)
-		return E_POINTER;
-	*out = ((struct vector *)owner(iface))->count;
-	return S_OK;
-}
-
-static HRESULT WINAPI vector_index(void *iface, void *value, UINT32 *index, boolean *found)
-{
-	struct vector *self = (struct vector *)owner(iface);
-	if (!index || !found)
-		return E_POINTER;
-	*index = 0;
-	*found = FALSE;
-	for (UINT32 at = 0; at < self->count; ++at) {
-		INT32 order = 1;
-		if (self->strings ? SUCCEEDED(WindowsCompareStringOrdinal(self->items[at], value, &order)) && !order : self->items[at] == value) {
-			*index = at;
-			*found = TRUE;
-			break;
-		}
-	}
-	return S_OK;
-}
-
-static HRESULT many(struct vector *self, UINT32 start, UINT32 capacity, void **items, UINT32 *actual)
-{
-	if (!actual || (capacity && !items))
-		return E_POINTER;
-	*actual = 0;
-	if (start > self->count)
-		return E_BOUNDS;
-	while (start + *actual < self->count && *actual < capacity) {
-		const HRESULT result = item_out(self, start + *actual, &items[*actual]);
-		if (FAILED(result))
-			return result;
-		++*actual;
-	}
-	return S_OK;
-}
-
-static HRESULT WINAPI vector_many(void *iface, UINT32 start, UINT32 capacity, void **items, UINT32 *actual)
-{
-	return many((struct vector *)owner(iface), start, capacity, items, actual);
-}
-
-static HRESULT WINAPI iterator_current(void *iface, void **out)
-{
-	struct iterator *self = (struct iterator *)owner(iface);
-	if (!out)
-		return E_POINTER;
-	*out = NULL;
-	return self->at < self->vector->count ? item_out(self->vector, self->at, out) : E_BOUNDS;
-}
-
-static HRESULT WINAPI iterator_has_current(void *iface, boolean *out)
-{
-	struct iterator *self = (struct iterator *)owner(iface);
-	return answer_flag(out, self->at < self->vector->count);
-}
-
-static HRESULT WINAPI iterator_next(void *iface, boolean *out)
-{
-	struct iterator *self = (struct iterator *)owner(iface);
-	if (self->at < self->vector->count)
-		++self->at;
-	return answer_flag(out, self->at < self->vector->count);
-}
-
-static HRESULT WINAPI iterator_many(void *iface, UINT32 capacity, void **items, UINT32 *actual)
-{
-	struct iterator *self = (struct iterator *)owner(iface);
-	const HRESULT result = many(self->vector, self->at, capacity, items, actual);
-	if (SUCCEEDED(result))
-		self->at += *actual;
-	return result;
-}
-
-TABLE(iterator_table, 0, INSPECTABLE, (const void *)iterator_current, (const void *)iterator_has_current, (const void *)iterator_next,
-	(const void *)iterator_many);
-
-static HRESULT WINAPI vector_first(void *iface, void **out)
-{
-	static const void *const *const tables[] = {iterator_table.slots};
-	struct vector *vector = (struct vector *)owner(iface);
-	if (!out)
-		return E_POINTER;
-	struct iterator *self = make(sizeof *self, vector->iterator, tables, 1);
-	if (!(*out = self ? face_of(&self->base, 0) : NULL))
-		return E_OUTOFMEMORY;
-	self->vector = vector;
-	reference(face_of(&vector->base, 0));
-	return S_OK;
-}
-
-TABLE(vector_table, 0, INSPECTABLE, (const void *)vector_at, (const void *)vector_size, (const void *)vector_index, (const void *)vector_many);
-TABLE(iterable_table, 1, INSPECTABLE, (const void *)vector_first);
-
-#define COLLECTION(prefix, type_name, view, iterable, iterator) \
-	static const struct face_iid prefix##_view_iids[] = {{&view, 0}, {&iterable, 1}, {NULL, 0}}; \
-	static const struct kind prefix##_view = {"IVectorView<" type_name ">", L"Windows.Foundation.Collections.IVectorView`1<" type_name ">", \
-		prefix##_view_iids, destroy_vector}; \
-	static const struct face_iid prefix##_iterator_iids[] = {{&iterator, 0}, {NULL, 0}}; \
-	static const struct kind prefix##_iterator = {"IIterator<" type_name ">", L"Windows.Foundation.Collections.IIterator`1<" type_name ">", \
-		prefix##_iterator_iids, destroy_iterator};
-
-COLLECTION(profile, "Windows.Networking.Connectivity.ConnectionProfile", iid_profile_view, iid_profile_iterable, iid_profile_iterator)
-COLLECTION(lan, "Windows.Networking.Connectivity.LanIdentifier", iid_lan_view, iid_lan_iterable, iid_lan_iterator)
-COLLECTION(host, "Windows.Networking.HostName", iid_host_view, iid_host_iterable, iid_host_iterator)
-COLLECTION(string, "String", iid_string_view, iid_string_iterable, iid_string_iterator)
-
-/* A collection of objects or strings, which it takes references to or copies of. */
-static HRESULT collection(const struct kind *view, const struct kind *iterator, const void *const *table, BOOL strings, void *const *items,
-	UINT32 count, void **out)
-{
-	const void *const *const tables[] = {table, iterable_table.slots};
-	if (!out)
-		return E_POINTER;
-	struct vector *self = make(sizeof *self, view, tables, 2);
-	if (!(*out = self ? face_of(&self->base, 0) : NULL))
-		return E_OUTOFMEMORY;
-	self->iterator = iterator;
-	self->strings = strings;
-	for (; self->count < count && self->count < MOST_ITEMS; ++self->count) {
-		if (strings) {
-			const HRESULT hr = WindowsDuplicateString(items[self->count], (HSTRING *)&self->items[self->count]);
-			if (FAILED(hr)) {
-				release(*out);
-				*out = NULL;
-				return hr;
-			}
-		} else
-			reference(self->items[self->count] = items[self->count]);
-	}
-	return S_OK;
-}
-
-static HRESULT empty_collection(const struct kind *view, const struct kind *iterator, void **out)
-{
-	return collection(view, iterator, vector_table.slots, FALSE, NULL, 0, out);
-}
 
 
 /* Windows.System.Profile.RetailInfo and SharedModeSettings. */
@@ -513,7 +236,7 @@ static HRESULT WINAPI profile_names(void *iface, void **out)
 	HRESULT result = WindowsCreateString(network_name, ARRAYSIZE(network_name) - 1, &name);
 	if (FAILED(result))
 		return result;
-	result = collection(&string_view, &string_iterator, vector_table.slots, TRUE, (void *const *)&name, 1, out);
+	result = winrt_items(&string_list, (IInspectable **)&name, 1, FALSE, out);
 	WindowsDeleteString(name);
 	return result;
 }
@@ -578,8 +301,8 @@ static struct object connection_profile = {{profile_table.slots, profile2_table.
 
 static HRESULT WINAPI network_profiles(void *iface, void **out)
 {
-	void *profile = face_of(&connection_profile, 0);
-	return collection(&profile_view, &profile_iterator, vector_table.slots, FALSE, &profile, connected() ? 1 : 0, out);
+	IInspectable *profile = face_of(&connection_profile, 0);
+	return winrt_items(&profile_list, &profile, connected() ? 1 : 0, FALSE, out);
 }
 
 static HRESULT WINAPI network_internet_profile(void *iface, void **out)
@@ -590,8 +313,8 @@ static HRESULT WINAPI network_internet_profile(void *iface, void **out)
 	return S_OK;
 }
 
-static HRESULT WINAPI network_lan_identifiers(void *iface, void **out) { return empty_collection(&lan_view, &lan_iterator, out); }
-static HRESULT WINAPI network_host_names(void *iface, void **out) { return empty_collection(&host_view, &host_iterator, out); }
+static HRESULT WINAPI network_lan_identifiers(void *iface, void **out) { return winrt_items(&lan_list, NULL, 0, FALSE, out); }
+static HRESULT WINAPI network_host_names(void *iface, void **out) { return winrt_items(&host_list, NULL, 0, FALSE, out); }
 
 static HRESULT WINAPI network_proxy(void *iface, void *uri, void **out)
 {
@@ -653,7 +376,8 @@ static HRESULT WINAPI for_user_ticket(void *iface, void *request, void **out)
 {
 	if (!request)
 		return E_INVALIDARG;
-	return completed(&ticket_operation, (IUnknown *)face_of(&no_ticket, 0), out);
+	const union winrt_value ticket = {.object = face_of(&no_ticket, 0)};
+	return winrt_async_done(&iid_ticket_operation, WINRT_RESULT_OBJECT, S_OK, &ticket, out);
 }
 
 static HRESULT WINAPI for_user_set_application(void *iface, GUID value)
@@ -761,7 +485,7 @@ static struct object ticket_request_factory = {{ticket_request_factory_table.slo
 
 /* Windows.Security.Authentication.Web.Core: there is no web account provider. A search for one finds none, and a request names a
  * provider, which a program cannot have from this system. */
-static HRESULT no_provider(void **out) { return completed(&provider_operation, NULL, out); }
+static HRESULT no_provider(void **out) { return winrt_async_done(&iid_provider_operation, WINRT_RESULT_OBJECT, S_OK, NULL, out); }
 
 static HRESULT WINAPI web_one(void *iface, void *request, void **out)
 {
@@ -1052,7 +776,7 @@ static HRESULT WINAPI app_languages(void *iface, void **out)
 	if (count > MOST_ITEMS || size < 2 || size > ARRAYSIZE(names) || names[size - 1] || names[size - 2])
 		return E_UNEXPECTED;
 
-	void *items[MOST_ITEMS];
+	IInspectable *items[MOST_ITEMS];
 	HSTRING_HEADER headers[MOST_ITEMS];
 	const WCHAR *name = names, *end = names + size - 1;
 	for (ULONG index = 0; index < count; ++index) {
@@ -1063,12 +787,12 @@ static HRESULT WINAPI app_languages(void *iface, void **out)
 		const HRESULT hr = WindowsCreateStringReference(name, length, &headers[index], &item);
 		if (FAILED(hr))
 			return hr;
-		items[index] = item;
+		items[index] = (IInspectable *)item;
 		name += length + 1;
 	}
 	if (name != end)
 		return E_UNEXPECTED;
-	return collection(&string_view, &string_iterator, vector_table.slots, TRUE, items, count, out);
+	return winrt_items(&string_list, items, count, FALSE, out);
 }
 
 static HRESULT WINAPI app_manifest_languages(void *iface, void **out)
@@ -1130,7 +854,8 @@ static struct object api_information = {{api_factory_table.slots, api_statics_ta
 static struct object *const classes[] = {&language_factory, &app_languages_factory, &retail_info, &shared_mode, &analytics_info, &network_information,
 	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information,
 	&core_window_class, &core_cursor_class, &display_information_class,
-	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class};
+	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class,
+	&storage_file_class, &storage_folder_class, &file_io_class, &buffer_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {
