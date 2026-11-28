@@ -3248,6 +3248,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             add_test(NAME native_folder_import COMMAND raven --run-process --execution=native ${FOLDER_IMPORT_FIXTURES}/client.exe)
             set_tests_properties(native_folder_import PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                 ENVIRONMENT "RAVEN_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/folder-import-prefix")
+            # Balloons of a tray icon shown as notifications of the Linux desktop, through a gdbus that records its calls.
+            set(NOTIFICATION_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/notification.exe)
+            add_custom_command(OUTPUT ${NOTIFICATION_CLIENT}
+                COMMAND ${RAVEN_MINGW64} -nostdlib -O1 -fno-builtin -fno-stack-protector
+                    -Wl,--entry,raven_entry,--image-base,0x1f4400000,--no-insert-timestamp
+                    -o ${NOTIFICATION_CLIENT} ${PROJECT_SOURCE_DIR}/testdata/native_loader/notification_client.c -lshell32 -lkernel32
+                DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/notification_client.c VERBATIM)
+            add_custom_target(notification_fixture ALL DEPENDS ${NOTIFICATION_CLIENT})
+            add_test(NAME native_notification COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-notification.py
+                $<TARGET_FILE:raven> ${NOTIFICATION_CLIENT} ${CMAKE_CURRENT_BINARY_DIR}/notification-work)
+            set_tests_properties(native_notification PROPERTIES TIMEOUT 90)
             # A directory listed through GetFileInformationByHandleEx, entry by entry, then ERROR_NO_MORE_FILES; a restarting class starts over.
             set(DIRECTORY_BY_HANDLE_CLIENT ${CMAKE_CURRENT_BINARY_DIR}/directory-by-handle.exe)
             add_custom_command(OUTPUT ${DIRECTORY_BY_HANDLE_CLIENT}
