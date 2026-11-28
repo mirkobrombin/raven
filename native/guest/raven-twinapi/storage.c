@@ -43,10 +43,10 @@ static const IID iid_string_vector = {0x98b9acc1, 0x4b56, 0x532e, {0xac, 0x73, 0
 static const IID iid_string_view = {0x2f13c006, 0xa03a, 0x5f69, {0xb0, 0x90, 0x75, 0xa4, 0x3e, 0x33, 0x42, 0x3e}};
 static const IID iid_string_iterable = {0xe2fcc7c1, 0x3bfc, 0x5a0b, {0xb2, 0xb0, 0x72, 0xe7, 0x69, 0xd1, 0xcb, 0x7e}};
 static const IID iid_string_iterator = {0x8c304ebb, 0x6615, 0x50a4, {0x88, 0x29, 0x87, 0x9e, 0xcd, 0x44, 0x32, 0x36}};
-static const IID iid_file_operation = {0x5e52f8ce, 0xaced, 0x5a42, {0x95, 0xb4, 0xf6, 0x74, 0xdd, 0x84, 0x88, 0x5e}};
+const IID iid_file_operation = {0x5e52f8ce, 0xaced, 0x5a42, {0x95, 0xb4, 0xf6, 0x74, 0xdd, 0x84, 0x88, 0x5e}};
 const IID iid_folder_operation = {0x6be9e7d7, 0xe83a, 0x5cbc, {0x80, 0x2c, 0x17, 0x68, 0x96, 0x0b, 0x52, 0xc3}};
 static const IID iid_item_operation = {0x5fc9c137, 0xebb7, 0x5e6c, {0x9c, 0xba, 0x68, 0x6f, 0x2e, 0xc2, 0xb0, 0xbb}};
-static const IID iid_files_operation = {0x03362e33, 0xe413, 0x5f29, {0x97, 0xd0, 0x48, 0xa4, 0x78, 0x09, 0x35, 0xf9}};
+const IID iid_files_operation = {0x03362e33, 0xe413, 0x5f29, {0x97, 0xd0, 0x48, 0xa4, 0x78, 0x09, 0x35, 0xf9}};
 static const IID iid_folders_operation = {0xca40b21b, 0xaeb1, 0x5a61, {0x9e, 0x08, 0x3b, 0xd5, 0xd9, 0x59, 0x40, 0x23}};
 static const IID iid_items_operation = {0x4b1c0fd7, 0x7a01, 0x5e7a, {0xa6, 0xfe, 0xbe, 0x45, 0x00, 0x28, 0x3f, 0x23}};
 static const IID iid_string_operation = {0x3e1fe603, 0xf897, 0x5263, {0xb3, 0x28, 0x08, 0x06, 0x42, 0x6b, 0x8a, 0x79}};
@@ -66,7 +66,7 @@ static const IID iid_lines_operation = {0x92b02cd3, 0xaa6e, 0x573d, {0xbc, 0x03,
 static const struct winrt_items_kind file_list = {&iid_file_view, &iid_file_iterable, &iid_file_iterator, FALSE, NULL};
 static const struct winrt_items_kind folder_list = {&iid_folder_view, &iid_folder_iterable, &iid_folder_iterator, FALSE, NULL};
 static const struct winrt_items_kind item_list = {&iid_item_view, &iid_item_iterable, &iid_item_iterator, FALSE, NULL};
-static const struct winrt_items_kind line_list = {&iid_string_view, &iid_string_iterable, &iid_string_iterator, TRUE, &iid_string_vector};
+const struct winrt_items_kind string_list = {&iid_string_view, &iid_string_iterable, &iid_string_iterator, TRUE, &iid_string_vector};
 
 /* FileAttributes, StorageItemTypes, CreationCollisionOption, NameCollisionOption and UnicodeEncoding. */
 #define READ_ONLY_ATTRIBUTE 1
@@ -1051,18 +1051,39 @@ static HRESULT new_item(const WCHAR *path, BOOL folder, struct item **out)
 	return S_OK;
 }
 
-HRESULT make_folder(const WCHAR *path, void **out)
+/* A storage file or folder for a path that is one, through IStorageFile or IStorageFolder. */
+static HRESULT make_at(const WCHAR *path, BOOL want_folder, void **out)
 {
 	struct item *self;
 	BOOL folder = FALSE;
 	if (!out)
 		return E_POINTER;
 	*out = NULL;
-	if (!exists(path, &folder) || !folder)
-		return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
-	const HRESULT result = new_item(path, TRUE, &self);
+	if (!exists(path, &folder) || folder != want_folder)
+		return want_folder ? HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND) : NOT_THERE;
+	const HRESULT result = new_item(path, want_folder, &self);
 	if (SUCCEEDED(result))
 		*out = face_of(&self->base, 1);
+	return result;
+}
+
+HRESULT make_folder(const WCHAR *path, void **out) { return make_at(path, TRUE, out); }
+
+HRESULT make_file(const WCHAR *path, void **out) { return make_at(path, FALSE, out); }
+
+HRESULT make_files(const WCHAR *const *paths, UINT32 count, void **out)
+{
+	IInspectable **faces = count ? ALLOC(count * sizeof *faces) : NULL;
+	HRESULT result = count && !faces ? E_OUTOFMEMORY : S_OK;
+	UINT32 made = 0;
+	for (; SUCCEEDED(result) && made < count; ++made)
+		if (FAILED(result = make_file(paths[made], (void **)&faces[made])))
+			break;
+	if (SUCCEEDED(result))
+		result = winrt_items(&file_list, faces, count, FALSE, out);
+	for (UINT32 index = 0; index < made; ++index)
+		release(faces[index]);
+	FREE(faces);
 	return result;
 }
 
@@ -1381,7 +1402,7 @@ static HRESULT run_read_lines(struct job *job, union winrt_value *result)
 			++at;
 	}
 	if (SUCCEEDED(outcome))
-		outcome = winrt_vector(&line_list, (IInspectable **)lines, count, &result->object);
+		outcome = winrt_vector(&string_list, (IInspectable **)lines, count, &result->object);
 	for (UINT32 index = 0; index < count; ++index)
 		WindowsDeleteString(lines[index]);
 	FREE(lines);

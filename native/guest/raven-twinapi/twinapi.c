@@ -20,6 +20,7 @@
  * - Windows.Storage.Streams.DataReader and DataWriter, in data.c.
  * - Windows.Storage.Streams.RandomAccessStream and RandomAccessStreamReference, in streams.c.
  * - Windows.Storage.KnownFolders, in known.c.
+ * - Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, in pickers.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -82,18 +83,12 @@ static const IID iid_lan_iterator = {0x2c5d2f7e, 0xce9c, 0x5253, {0xa0, 0xf4, 0x
 static const IID iid_host_view = {0xf4706ab1, 0x55a3, 0x5270, {0xaf, 0xb2, 0x73, 0x29, 0x88, 0xfe, 0x82, 0x27}};
 static const IID iid_host_iterable = {0x9e5f3ed0, 0xcf1c, 0x5d38, {0x83, 0x2c, 0xac, 0xea, 0x61, 0x64, 0xbf, 0x5c}};
 static const IID iid_host_iterator = {0x557bf83c, 0xa428, 0x5dbd, {0xa0, 0xfe, 0x05, 0xf6, 0xee, 0x54, 0x3d, 0x45}};
-/* The same of string */
-static const IID iid_string_view = {0x2f13c006, 0xa03a, 0x5f69, {0xb0, 0x90, 0x75, 0xa4, 0x3e, 0x33, 0x42, 0x3e}};
-static const IID iid_string_iterable = {0xe2fcc7c1, 0x3bfc, 0x5a0b, {0xb2, 0xb0, 0x72, 0xe7, 0x69, 0xd1, 0xcb, 0x7e}};
-static const IID iid_string_iterator = {0x8c304ebb, 0x6615, 0x50a4, {0x88, 0x29, 0x87, 0x9e, 0xcd, 0x44, 0x32, 0x36}};
 static const IID iid_api_information = {0x997439fe, 0xf681, 0x4a11, {0xb4, 0x16, 0xc1, 0x3a, 0x47, 0xe8, 0xba, 0x36}};
-
 
 /* The collections this file hands out. */
 static const struct winrt_items_kind profile_list = {&iid_profile_view, &iid_profile_iterable, &iid_profile_iterator, FALSE, NULL};
 static const struct winrt_items_kind lan_list = {&iid_lan_view, &iid_lan_iterable, &iid_lan_iterator, FALSE, NULL};
 static const struct winrt_items_kind host_list = {&iid_host_view, &iid_host_iterable, &iid_host_iterator, FALSE, NULL};
-static const struct winrt_items_kind string_list = {&iid_string_view, &iid_string_iterable, &iid_string_iterator, TRUE, NULL};
 
 /* The most languages a list of them is read with. */
 #define MOST_ITEMS 4
@@ -859,7 +854,8 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&core_window_class, &core_cursor_class, &display_information_class,
 	&package_class, &application_data_class, &property_value_class, &property_set_class, &composite_value_class,
 	&storage_file_class, &storage_folder_class, &file_io_class, &buffer_class, &memory_stream_class, &data_reader_class,
-	&data_writer_class, &random_access_stream_class, &stream_reference_class, &known_folders_class};
+	&data_writer_class, &random_access_stream_class, &stream_reference_class, &known_folders_class,
+	&open_picker_class, &save_picker_class, &folder_picker_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

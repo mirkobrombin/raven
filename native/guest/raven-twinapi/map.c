@@ -199,6 +199,8 @@ static HRESULT WINAPI pairs_split(void *iface, void **first, void **second)
 TABLE(pairs_table, 0, INSPECTABLE, (const void *)pairs_lookup, (const void *)pairs_size, (const void *)pairs_has_key, (const void *)pairs_split);
 TABLE(pairs_iterable_table, 1, INSPECTABLE, (const void *)pairs_first);
 
+static void destroy_set(struct object *base);
+
 void map_types_init(struct map_types *types)
 {
 	types->view_iids[0] = (struct face_iid){types->view_iid, 0};
@@ -211,6 +213,12 @@ void map_types_init(struct map_types *types)
 	types->view = (struct kind){"IMapView", types->view_name, types->view_iids, destroy_pairs};
 	types->pair = (struct kind){"IKeyValuePair", types->pair_name, types->pair_iids, destroy_pair};
 	types->iterator = (struct kind){"IIterator", types->iterator_name, types->iterator_iids, destroy_pair_iterator};
+	if (types->map_iid) {
+		types->map_iids[0] = (struct face_iid){types->map_iid, 1};
+		types->map_iids[1] = (struct face_iid){types->iterable_iid, 2};
+		types->map_iids[2] = (struct face_iid){NULL, 0};
+		types->map = (struct kind){"IMap", types->map_name, types->map_iids, destroy_set};
+	}
 }
 
 /* Maps from strings to objects. */
@@ -257,7 +265,7 @@ HRESULT typed_map_view(const struct map_types *types, const struct entry *entrie
 HRESULT map_view(const struct entry *entries, UINT32 count, void **out) { return typed_map_view(NULL, entries, count, out); }
 
 /* A property set: IObservableMap<String, Object> and IPropertySet at place 0, IMap<String, Object> at place 1,
- * IIterable<IKeyValuePair<String, Object>> at place 2. It calls the program's MapChanged handlers after each change, outside its lock,
+ * IIterable<IKeyValuePair<String, Object>> at place 2; a typed map is the same with only places 1 and 2 of its own types. It calls the program's MapChanged handlers after each change, outside its lock,
  * and then its watcher, as the settings that persist it keep one. An iterator walks a snapshot taken when it is made. */
 enum map_change { change_reset, change_inserted, change_removed, change_changed };
 
@@ -270,6 +278,8 @@ struct property_set {
 	void (*watcher)(void *context);
 	void *context;
 	HRESULT (*accept)(IInspectable *value);
+	/* What its views and iterators hold; objects when NULL. */
+	const struct map_types *types;
 };
 
 struct change {
@@ -386,7 +396,7 @@ static HRESULT WINAPI set_view(void *iface, void **out)
 {
 	struct property_set *self = set_of(iface);
 	AcquireSRWLockShared(&self->lock);
-	const HRESULT result = map_view(self->entries, self->count, out);
+	const HRESULT result = typed_map_view(self->types, self->entries, self->count, out);
 	ReleaseSRWLockShared(&self->lock);
 	return result;
 }
@@ -484,7 +494,7 @@ static HRESULT WINAPI set_first(void *iface, void **out)
 {
 	struct property_set *self = set_of(iface);
 	AcquireSRWLockShared(&self->lock);
-	struct pairs *pairs = snapshot(NULL, self->entries, self->count);
+	struct pairs *pairs = snapshot(self->types, self->entries, self->count);
 	ReleaseSRWLockShared(&self->lock);
 	if (!out) {
 		if (pairs)
@@ -524,6 +534,19 @@ struct property_set *property_set_make(void)
 }
 
 void *property_set_face(struct property_set *self) { return face_of(&self->base, 0); }
+
+struct property_set *typed_map_make(const struct map_types *types)
+{
+	static const void *const *const tables[] = {set_observable_table.slots, set_map_table.slots, set_iterable_table.slots};
+	struct property_set *self = make(sizeof *self, &types->map, tables, 3);
+	if (self) {
+		InitializeSRWLock(&self->lock);
+		self->types = types;
+	}
+	return self;
+}
+
+void *map_face(struct property_set *self) { return face_of(&self->base, 1); }
 
 void property_set_watch(struct property_set *self, void (*watcher)(void *context), void *context)
 {

@@ -1648,7 +1648,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
             set(PICKER_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/picker-client.exe)
             add_custom_command(OUTPUT ${PICKER_FIXTURE}
                 COMMAND ${RAVEN_MINGW64} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,raven_entry,--no-insert-timestamp
-                    -o ${PICKER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c -lcomdlg32 -lole32 -luuid -lkernel32
+                    -o ${PICKER_FIXTURE} ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c -lcomdlg32 -lole32 -lruntimeobject -luuid -lkernel32
                 DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/picker_client.c VERBATIM)
             add_custom_target(picker_fixture ALL DEPENDS ${PICKER_FIXTURE})
             add_executable(frame_restore_test desktop/frame_restore_test.cpp)
@@ -6053,12 +6053,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/x86
                     COMMAND ${RAVEN_MINGW64} ${accprop_flags} -Wl,--entry,DllMain,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll
                         ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     COMMAND ${RAVEN_MINGW32} ${accprop_flags} -Wl,--entry,_DllMain@12,--kill-at,--no-insert-timestamp -o ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll
                         ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c ${winrt_source}/winrt.c ${winrt_source}/stream.c ${PROJECT_SOURCE_DIR}/native/guest/raven-dwrite/crt.c -lruntimeobject -liphlpapi -lshell32 -lole32 -ladvapi32 -luser32 -lkernel32 -lgcc
                     DEPENDS ${twinapi_source}/twinapi.c ${twinapi_source}/object.c ${twinapi_source}/object.h ${twinapi_source}/core_window.c ${twinapi_source}/package.c
-                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c
+                        ${twinapi_source}/value.c ${twinapi_source}/map.c ${twinapi_source}/settings.c ${twinapi_source}/storage.c ${twinapi_source}/data.c ${twinapi_source}/streams.c ${twinapi_source}/known.c ${twinapi_source}/pickers.c
                         ${winrt_source}/winrt.c ${winrt_source}/stream.c ${winrt_source}/winrt.h ${winrt_source}/foundation.h VERBATIM)
                 add_custom_target(twinapi_component ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
                 set_property(GLOBAL APPEND PROPERTY RAVEN_RUNTIME_COMPONENTS ${CMAKE_CURRENT_BINARY_DIR}/raven-twinapi.dll ${CMAKE_CURRENT_BINARY_DIR}/x86/raven-twinapi.dll)
@@ -6733,7 +6733,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 if(TARGET raven_wayland AND TARGET picker_fixture AND RAVEN_CONTROLS_COMPONENT_DIR AND RAVEN_LABWC AND RAVEN_WLRCTL AND RAVEN_WTYPE)
                     add_test(NAME native_file_picker COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-picker.py
                         $<TARGET_FILE:raven> ${PICKER_FIXTURE} ${CMAKE_CURRENT_BINARY_DIR}/file-picker)
-                    set_tests_properties(native_file_picker PROPERTIES TIMEOUT 120 RESOURCE_LOCK raven_compositor)
+                    set_tests_properties(native_file_picker PROPERTIES TIMEOUT 240 RESOURCE_LOCK raven_compositor)
                 endif()
                 find_program(RAVEN_XCLIP xclip)
                 if(RAVEN_X11_TESTS AND RAVEN_SKIA_LIBRARY AND RAVEN_XCLIP AND RAVEN_CONTROLS_COMPONENT_DIR AND EXISTS ${RAVEN_TESTDATA_DIR}/npp/notepad++.exe)

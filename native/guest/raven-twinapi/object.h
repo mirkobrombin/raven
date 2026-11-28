@@ -118,8 +118,15 @@ extern struct object core_window_class, core_cursor_class, display_information_c
 extern struct object package_class, application_data_class;
 /* Files and folders, from storage.c: the StorageFolder of a path that exists, through its IStorageFolder, and the classes. */
 HRESULT make_folder(const WCHAR *path, void **out);
-/* IAsyncOperation<StorageFolder>, from storage.c. */
-extern const IID iid_folder_operation;
+/* A storage file for the path of a file, and IVectorView<StorageFile> of those of several. */
+HRESULT make_file(const WCHAR *path, void **out);
+HRESULT make_files(const WCHAR *const *paths, UINT32 count, void **out);
+/* IVectorView<String> and IVector<String> of strings, from storage.c. */
+extern const struct winrt_items_kind string_list;
+/* IAsyncOperation<StorageFolder>, <StorageFile> and <IVectorView<StorageFile>>, from storage.c. */
+extern const IID iid_folder_operation, iid_file_operation, iid_files_operation;
+/* Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, from pickers.c. */
+extern struct object open_picker_class, save_picker_class, folder_picker_class;
 /* Windows.Storage.KnownFolders, from known.c. */
 extern struct object known_folders_class;
 extern struct object storage_file_class, storage_folder_class, file_io_class, buffer_class, memory_stream_class;
@@ -149,15 +156,22 @@ struct entry {
 
 /* An IMapView<String, Object> holding its own copies of these entries. */
 HRESULT map_view(const struct entry *entries, UINT32 count, void **out);
-/* The interfaces of a map from strings to another type: the identifiers and names are given, map_types_init makes the kinds once. */
+/* The interfaces of a map from strings to another type: the identifiers and names are given, map_types_init makes the kinds once. A
+ * map_iid and map_name, when given, make a mutable map of the type too. */
 struct map_types {
 	const IID *view_iid, *iterable_iid, *iterator_iid, *pair_iid;
 	const WCHAR *view_name, *pair_name, *iterator_name;
-	struct face_iid view_iids[3], pair_iids[2], iterator_iids[2];
-	struct kind view, pair, iterator;
+	const IID *map_iid;
+	const WCHAR *map_name;
+	struct face_iid view_iids[3], pair_iids[2], iterator_iids[2], map_iids[3];
+	struct kind view, pair, iterator, map;
 };
 void map_types_init(struct map_types *types);
 HRESULT typed_map_view(const struct map_types *types, const struct entry *entries, UINT32 count, void **out);
+/* A new, empty IMap<String, V> of the types, kept in insertion order, with one reference: a property set that answers only the map
+ * and its IIterable, through map_face. */
+struct property_set *typed_map_make(const struct map_types *types);
+void *map_face(struct property_set *self);
 /* A new, empty PropertySet with one reference, answered through property_set_face. A watcher, when set, is called after each change,
  * outside the set's lock; the set's own changes through these calls are changes too. */
 struct property_set;
