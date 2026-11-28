@@ -725,7 +725,9 @@ bool NativePaths::set_dll_directory(std::optional<std::u16string> path)
 std::optional<NativePaths::Resolved> NativePaths::find_library(std::u16string_view image_path, std::u16string_view name,
 	bool wide, uint32_t flags) const
 {
-	if (name.find_first_of(u"/\\:") != name.npos)
+	// A full path names the file itself. A relative one, a folder and a file below it included, is looked for below each folder of the
+	// search, as LoadLibraryEx appends the whole relative path to every one.
+	if (name.find(u':') != name.npos || name.starts_with(u'\\') || name.starts_with(u'/'))
 		return resolve(name);
 	const auto program = full(image_path);
 	const auto application = program.substr(0, program.find_last_of(u'\\'));

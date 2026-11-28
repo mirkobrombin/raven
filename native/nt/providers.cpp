@@ -3949,7 +3949,10 @@ NativeResult run_native_process(ModuleSet &modules, PEModule &entry,
 				name = "system32-" + identity;
 			} else {
 				if (!system_folder && (program_may_replace(identity) || !modules.all().contains(identity)) && apiset_host(identity).empty()) {
-					const auto resolved = paths.resolve(from_utf8(name));
+					auto resolved = paths.resolve(from_utf8(name));
+					// A relative path that is not in the current directory is looked for below each folder of the search, as Windows does.
+					if ((!resolved || !resolved->exists) && has_launch && name.find(':') == name.npos && name[0] != '\\' && name[0] != '/')
+						resolved = paths.find_library(launch->image_path, from_utf8(name), true, flags);
 					if (!resolved || !resolved->exists || !std::filesystem::is_regular_file(resolved->host)) {
 						environment.set_last_error(126);
 						return 0;

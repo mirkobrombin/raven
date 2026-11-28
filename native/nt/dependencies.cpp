@@ -133,7 +133,13 @@ void load_initial_dependencies(ModuleSet &modules,
 									if (file==identity && entry.is_regular_file(error)) { bytes=ModuleBytes::map(entry.path()); redirected=entry.path(); break; }
 								}
 							}
-						if (!bytes) bytes=source(identity);
+						// An import that names its library by a path relative to the folders searched, as Core/Activation64.dll, is looked for at
+						// that path; the module is known by its file name.
+						auto requested=symbol.module;
+						for (auto &character:requested) character=character=='\\' ? '/' : character>='A' && character<='Z' ? char(character+('a'-'A')) : character;
+						if (requested.find('.')==requested.npos) requested+=".dll";
+						const bool relative=requested.find('/')!=requested.npos;
+						if (!bytes) bytes=source(relative ? requested : identity);
 						if (!bytes) {
 							const auto system_names=system_library_names();
 							if (tolerate_missing || std::find(system_names.begin(),system_names.end(),identity)!=system_names.end()) break;
@@ -142,6 +148,7 @@ void load_initial_dependencies(ModuleSet &modules,
 						const PEImage image(*bytes);validate_native_image(image,identity,is_64);
 						if (!(image.characteristics & 0x2000)) throw std::runtime_error("native startup dependency must be a DLL: "+identity);
 						staged.reserve(staged.size()+1);pending.reserve(pending.size()+1);
+						if (relative && redirected.empty()) redirected=bytes->origin();
 						auto &module=modules.add(identity,std::move(*bytes));
 						if (!redirected.empty()) module.file=redirected;
 						staged.push_back(&module);pending.push_back(&module);

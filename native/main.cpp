@@ -640,13 +640,13 @@ int main(int argc, char **argv)
 						std::map<std::string, std::vector<std::filesystem::path>, std::less<>> files;
 					};
 					auto listings = std::make_shared<std::pair<std::mutex, std::map<std::filesystem::path, Listing>>>();
-					const auto find_file = [&, listings](const std::filesystem::path &folder, std::string_view name) {
-						std::optional<std::filesystem::path> selected;
+					// The entries of a folder that carry a name, whatever its case.
+					const auto listed = [listings](const std::filesystem::path &folder, std::string_view name) {
 						std::vector<std::filesystem::path> matches;
 						raven::warm_watch(folder);
 						struct stat status{};
 						if (::stat(folder.c_str(), &status) != 0)
-							return selected;
+							return matches;
 						{
 							std::lock_guard lock(listings->first);
 							auto &listing = listings->second[folder];
@@ -665,7 +665,24 @@ int main(int argc, char **argv)
 							if (const auto found = listing.files.find(name); found != listing.files.end())
 								matches = found->second;
 						}
-						for (const auto &path : matches) {
+						return matches;
+					};
+					const auto find_file = [&, listed](std::filesystem::path folder, std::string_view name) {
+						std::optional<std::filesystem::path> selected;
+						// A name with folders in it, as an import that names Core/Activation64.dll, is looked for below the folder.
+						for (auto slash = name.find('/'); slash != name.npos; slash = name.find('/')) {
+							std::optional<std::filesystem::path> below;
+							for (const auto &path : listed(folder, name.substr(0, slash))) {
+								std::error_code error;
+								if (std::filesystem::is_directory(path, error))
+									below = path;
+							}
+							if (!below)
+								return selected;
+							folder = *below;
+							name.remove_prefix(slash + 1);
+						}
+						for (const auto &path : listed(folder, name)) {
 							std::error_code error;
 							if (!std::filesystem::is_regular_file(path, error))
 								continue;

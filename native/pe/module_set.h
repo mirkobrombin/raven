@@ -26,12 +26,15 @@ public:
 	ModuleBytes &operator=(const ModuleBytes &) = delete;
 	static std::optional<ModuleBytes> map(const std::filesystem::path &path);
 	operator std::span<const uint8_t>() const { return view; }
+	// The host file the bytes were mapped from; empty for bytes made in memory.
+	const std::filesystem::path &origin() const { return file; }
 
 private:
 	ModuleBytes() = default;
 	std::vector<uint8_t> owned;
 	std::shared_ptr<const void> mapping;
 	std::span<const uint8_t> view;
+	std::filesystem::path file;
 };
 
 struct PEModule {

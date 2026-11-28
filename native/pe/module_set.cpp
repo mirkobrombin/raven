@@ -13,6 +13,10 @@ namespace raven {
 
 static std::string module_name(std::string name)
 {
+	// An import may name its library by a path relative to the folders searched, as a protected game imports Core/Activation64.dll; the
+	// module it loads is known by its file name, as Windows lists it.
+	if (const auto slash = name.find_last_of("/\\"); slash != name.npos && slash != 0 && name.find(':') == name.npos)
+		name.erase(0, slash + 1);
 	if (name.empty() || name == "." || name == "..")
 		throw std::runtime_error("invalid module identity");
 	for (auto &character : name) {
@@ -46,6 +50,7 @@ std::optional<ModuleBytes> ModuleBytes::map(const std::filesystem::path &path)
 	ModuleBytes result;
 	result.mapping = std::shared_ptr<const void>(address, [size](const void *mapped) { ::munmap(const_cast<void *>(mapped), size); });
 	result.view = {static_cast<const uint8_t *>(address), size};
+	result.file = path;
 	return result;
 }
 
