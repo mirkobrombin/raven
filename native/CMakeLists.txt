@@ -2263,6 +2263,18 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                 add_test(NAME native_msi_install_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msi-install.exe)
                 set_tests_properties(native_msi_install_${installer_arch} PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
                     ENVIRONMENT RAVEN_PREFIX=${fixture}/install-prefix)
+                # A prefix where a 32-bit setup's products were recorded under Wow6432Node has them in the 64-bit view from the next
+                # program on.
+                if(installer_arch STREQUAL x64)
+                    add_custom_command(OUTPUT ${fixture}/installer-view.exe
+                        COMMAND ${installer_compiler} -O2 -nostdlib -fno-stack-protector -fno-builtin -Wl,--entry,${installer_entry},--no-insert-timestamp
+                            -o ${fixture}/installer-view.exe ${PROJECT_SOURCE_DIR}/testdata/native_loader/installer_view_client.c -ladvapi32 -lkernel32
+                        DEPENDS ${PROJECT_SOURCE_DIR}/testdata/native_loader/installer_view_client.c VERBATIM)
+                    add_custom_target(installer_view_fixture ALL DEPENDS ${fixture}/installer-view.exe)
+                    add_test(NAME native_installer_view COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/installer-view.exe)
+                    set_tests_properties(native_installer_view PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Native entry returned 0 "
+                        ENVIRONMENT RAVEN_PREFIX=${fixture}/installer-view-prefix)
+                endif()
                 # The same package with its own dialogs at the full user interface level: another thread cancels the wizard once, then
                 # goes through it, and what it chose is what the package installs.
                 add_test(NAME native_msi_ui_${installer_arch} COMMAND raven --run-process --execution=native --timeout-ms=60000 ${fixture}/msi-ui.exe)
