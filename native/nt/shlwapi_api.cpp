@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstring>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 #include <sys/stat.h>
 
@@ -1378,6 +1379,114 @@ void register_shlwapi_api(ApiRegistry &registry, KernelContext &context)
 		call.ret(hls_to_rgb(hue, std::clamp(value, 0, 240), saturation));
 	});
 	registry.add("AssocQueryStringW", 6, [](ApiCall &call) { call.ret(0x80070483U); });
+
+	// The ANSI forms of the path and string functions run their wide forms: each string the program gives is widened from its code page
+	// into guest memory, the wide form runs on those copies, and what it wrote is narrowed back into the program's buffers. A pointer it
+	// answers moves to the same character of the program's own text, a count of characters to the bytes they take there. The argument
+	// kinds: 'i' a string read, 'b' a path buffer read and changed in place, 'o' a buffer written, 'c' a character, 'v' anything else;
+	// the result: 'v' as it is, 'p' a pointer into the first argument, 'n' a count of characters of the first argument. A buffer holds
+	// MAX_PATH characters unless the argument at `capacity` gives its size.
+	struct AnsiForm {
+		const char *name, *arguments;
+		char result;
+		int capacity = -1;
+	};
+	const auto ansi = [&registry, &context](const AnsiForm &form) {
+		const auto wide = registry.find(std::string(form.name) + "W");
+		if (!wide)
+			throw std::logic_error(std::string("ANSI form without a wide one: ") + form.name);
+		const auto run = wide->second;
+		registry.add(std::string(form.name) + "A", wide->first, [&context, form, run](ApiCall &call) {
+			constexpr size_t path_size = 260;
+			const size_t count = std::strlen(form.arguments);
+			std::vector<uint64_t> arguments(count), blocks(count, 0);
+			std::vector<size_t> sizes(count, 0);
+			std::vector<std::u16string> given(count);
+			bool made = true;
+			for (size_t index = 0; index < count; ++index) {
+				const char kind = form.arguments[index];
+				arguments[index] = call[index];
+				if (kind == 'c') {
+					const uint32_t value = call.u32(index) & 0xffff;
+					std::string bytes;
+					if (value > 0xff)
+						bytes.push_back(char(value >> 8));
+					bytes.push_back(char(value & 0xff));
+					const auto widened = from_ansi(bytes, 0);
+					arguments[index] = widened.empty() ? 0 : widened[0];
+				}
+				if (kind == 'v' || kind == 'c' || !call[index])
+					continue;
+				if (kind != 'o')
+					given[index] = from_ansi(call.narrow(call[index]), 0);
+				size_t size = kind == 'i' ? 0 : kind == 'o' && form.capacity >= 0 ? size_t(call.u32(size_t(form.capacity))) : path_size;
+				sizes[index] = std::max(size, given[index].size() + 1);
+				if (!(blocks[index] = context.allocator.allocate(sizes[index] * 2))) {
+					made = false;
+					break;
+				}
+				call.put_wide(blocks[index], given[index], sizes[index]);
+				arguments[index] = blocks[index];
+			}
+			if (made) {
+				ApiCall inner(call.process, call.environment, arguments);
+				run(inner);
+				uint64_t result = inner.result;
+				for (size_t index = 0; index < count; ++index)
+					if (blocks[index] && form.arguments[index] != 'i')
+						call.put_narrow(call[index], to_ansi(call.wide(blocks[index], sizes[index]), 0), sizes[index]);
+				if (form.result == 'p' && result && blocks[0]) {
+					const auto text = call.wide(blocks[0], sizes[0]);
+					const size_t before = std::min<size_t>((result - blocks[0]) / 2, text.size());
+					result = call[0] + to_ansi(std::u16string_view(text).substr(0, before), 0).size();
+				} else if (form.result == 'n') {
+					result = to_ansi(std::u16string_view(given[0]).substr(0, std::min<size_t>(result, given[0].size())), 0).size();
+				}
+				call.ret(result);
+			} else {
+				call.fail(8);
+			}
+			for (const auto block : blocks)
+				if (block)
+					context.allocator.release(block);
+		});
+	};
+	ansi({"PathAddBackslash", "b", 'p'});
+	ansi({"PathAddExtension", "bi", 'v'});
+	ansi({"PathAppend", "bi", 'v'});
+	ansi({"PathCanonicalize", "oi", 'v'});
+	ansi({"PathCombine", "oii", 'p'});
+	ansi({"PathCommonPrefix", "iio", 'n'});
+	ansi({"PathCompactPathEx", "oivv", 'v', 2});
+	ansi({"PathFileExists", "i", 'v'});
+	ansi({"PathGetDriveNumber", "i", 'v'});
+	ansi({"PathIsDirectory", "i", 'v'});
+	ansi({"PathIsDirectoryEmpty", "i", 'v'});
+	ansi({"PathIsFileSpec", "i", 'v'});
+	ansi({"PathIsNetworkPath", "i", 'v'});
+	ansi({"PathIsPrefix", "ii", 'v'});
+	ansi({"PathIsRelative", "i", 'v'});
+	ansi({"PathIsRoot", "i", 'v'});
+	ansi({"PathIsUNC", "i", 'v'});
+	ansi({"PathMatchSpec", "ii", 'v'});
+	ansi({"PathQuoteSpaces", "b", 'v'});
+	ansi({"PathRelativePathTo", "oivii", 'v'});
+	ansi({"PathRemoveBackslash", "b", 'p'});
+	ansi({"PathRemoveExtension", "b", 'v'});
+	ansi({"PathRemoveFileSpec", "b", 'v'});
+	ansi({"PathSearchAndQualify", "iov", 'v', 2});
+	ansi({"PathSkipRoot", "i", 'p'});
+	ansi({"PathStripPath", "b", 'v'});
+	ansi({"PathUnquoteSpaces", "b", 'v'});
+	ansi({"StrChr", "ic", 'p'});
+	ansi({"StrCmpN", "iiv", 'v'});
+	ansi({"StrCmpNI", "iiv", 'v'});
+	ansi({"StrPBrk", "ii", 'p'});
+	ansi({"StrStr", "ii", 'p'});
+	ansi({"StrStrI", "ii", 'p'});
+	ansi({"StrToInt", "i", 'v'});
+	ansi({"StrToIntEx", "ivv", 'v'});
+	ansi({"StrTrim", "bi", 'v'});
 }
 
 }
