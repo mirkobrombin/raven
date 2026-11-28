@@ -277,7 +277,14 @@ static int check_menu(object *first, object *second, HWND window)
 	if (!closer) return 65;
 	/* The menu shows from this thread's loop and ends without a choice. */
 	if (ended(operation) != 1) return 66;
-	WaitForSingleObject(closer, INFINITE);
+	/* The other thread may still be sending: its message is answered while this thread waits, so a menu that closed by itself, as it
+	 * does with no display, leaves no thread waiting on the other. */
+	while (MsgWaitForMultipleObjects(1, &closer, FALSE, 10000, QS_ALLINPUT) == WAIT_OBJECT_0 + 1) {
+		MSG message;
+		while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE))
+			DispatchMessageW(&message);
+	}
+	if (WaitForSingleObject(closer, 0)) return 69;
 	CloseHandle(closer);
 	if (CALL(operation, 8, object_method)(operation, &result) != S_OK || result) return 67;
 	if (invoked_count != 2) return 68;
