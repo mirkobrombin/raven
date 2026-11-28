@@ -5606,6 +5606,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(chained_unwind_fixture ALL DEPENDS ${chained_unwind_client})
                         add_test(NAME native_chained_unwind_x64 COMMAND raven --run-process --execution=native ${chained_unwind_client})
                         set_tests_properties(native_chained_unwind_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        # A crash reporter's walk of its own stack with StackWalk64, frame by frame up through its callers.
+                        set(stack_walk_client ${CMAKE_CURRENT_BINARY_DIR}/stack-walk64.exe)
+                        add_custom_command(OUTPUT ${stack_walk_client}
+                            COMMAND ${webservices_compiler} -nostdlib -O2 -fno-optimize-sibling-calls -fno-builtin -fno-stack-protector
+                                -Wl,--entry,${webservices_entry},--no-insert-timestamp -o ${stack_walk_client} ${LOADER_SOURCES}/stack_walk_client.c -ldbghelp -lkernel32
+                            DEPENDS ${LOADER_SOURCES}/stack_walk_client.c VERBATIM)
+                        add_custom_target(stack_walk_fixture ALL DEPENDS ${stack_walk_client})
+                        add_test(NAME native_stack_walk_x64 COMMAND raven --run-process --execution=native ${stack_walk_client})
+                        set_tests_properties(native_stack_walk_x64 PROPERTIES TIMEOUT 20 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
                         set(frame_unwind_client ${CMAKE_CURRENT_BINARY_DIR}/frame-unwind64.exe)
                         add_custom_command(OUTPUT ${frame_unwind_client}
                             COMMAND ${webservices_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${webservices_entry},--no-insert-timestamp
