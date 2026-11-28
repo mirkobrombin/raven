@@ -549,6 +549,30 @@ void NativeRegistry::seed()
 			close(key);
 		}
 	}
+	// Windows Installer keeps what it knows about installed products in the 64-bit view, whatever the width of the setup. Raven's
+	// engine once wrote what 32-bit setups installed under Wow6432Node, where 64-bit programs never look: a hive from then has that
+	// moved to the 64-bit view, what is already there kept as it is.
+	const std::u16string stale = fold(u"HKEY_LOCAL_MACHINE\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData");
+	const std::u16string_view target = u"HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData";
+	std::vector<std::u16string> moved;
+	for (auto found = keys.lower_bound(stale); found != keys.end() && found->first.starts_with(stale); ++found)
+		if (found->first.size() == stale.size() || found->first[stale.size()] == u'\\')
+			moved.push_back(found->first);
+	if (!moved.empty()) {
+		uint64_t key = 0;
+		uint32_t disposition = 0;
+		if (!create(0x80000002ULL, u"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer", key, disposition))
+			close(key);
+		for (const auto &folded : moved) {
+			const auto source = keys.find(folded);
+			const std::u16string path = std::u16string(target) + source->second.path.substr(stale.size());
+			auto &destination = keys.try_emplace(fold(path), Key{path, {}}).first->second;
+			for (auto &[name, value] : source->second.values)
+				destination.values.try_emplace(name, std::move(value));
+			keys.erase(source);
+		}
+		added = true;
+	}
 	seeding = false;
 	if (added)
 		save();
