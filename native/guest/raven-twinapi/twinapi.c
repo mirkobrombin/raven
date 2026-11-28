@@ -22,6 +22,7 @@
  * - Windows.Storage.Streams.DataReader and DataWriter, in data.c.
  * - Windows.Storage.Streams.RandomAccessStream and RandomAccessStreamReference, in streams.c.
  * - Windows.Storage.KnownFolders, in known.c.
+ * - Windows.Storage.AccessCache.StorageApplicationPermissions with its FutureAccessList and MostRecentlyUsedList, in accesscache.c.
  * - Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, in pickers.c.
  * - Windows.System.Launcher and LauncherOptions, in launcher.c.
  * - Windows.ApplicationModel.DataTransfer.Clipboard, DataPackage, StandardDataFormats, HtmlFormatHelper and ClipboardContentOptions,
@@ -954,7 +955,8 @@ static struct object *const classes[] = {&language_factory, &app_languages_facto
 	&data_package_class, &standard_formats_class, &html_format_helper_class, &clipboard_content_options_class,
 	&message_dialog_class, &popup_menu_class, &ui_command_class, &ui_command_separator_class, &application_view_class,
 	&cryptographic_buffer_class, &hash_provider_class, &hash_names_class, &mac_provider_class, &mac_names_class, &cryptographic_engine_class,
-	&cipher_provider_class, &cipher_names_class, &thread_pool_class, &thread_pool_timer_class};
+	&cipher_provider_class, &cipher_names_class, &thread_pool_class, &thread_pool_timer_class,
+	&storage_permissions_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

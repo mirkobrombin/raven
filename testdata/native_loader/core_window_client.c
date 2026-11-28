@@ -738,6 +738,128 @@ static int check_settings(object *data, BOOL again)
 }
 #endif
 
+/* StorageApplicationPermissions: its lists belong to a package. */
+static const GUID permissions_statics = {0x4391dfaa, 0xd033, 0x48f9, {0x80, 0x60, 0x3e, 0xc8, 0x47, 0xd2, 0xe3, 0xf1}};
+
+#ifdef MSIX_VIEW
+static const GUID access_list = {0x2caff6ad, 0xde90, 0x47f5, {0xb2, 0xc3, 0xdd, 0x36, 0xc9, 0xfd, 0xd4, 0x53}};
+
+struct access_entry {
+	void *token, *metadata;
+};
+
+typedef HRESULT (WINAPI *token_object_method)(object *, void *, object **);
+
+static UINT32 entry_count(object *list)
+{
+	object *view = NULL;
+	UINT32 size = 0xffffffff;
+	if (METHOD(list, 20, object_method)(list, &view) == S_OK) {
+		METHOD(view, 7, HRESULT (WINAPI *)(object *, UINT32 *))(view, &size);
+		METHOD(view, 2, release_method)(view);
+	}
+	return size;
+}
+
+static BOOL contains(object *list, const WCHAR *token)
+{
+	void *text = text_of(token);
+	BYTE found = 0;
+	const BOOL done = METHOD(list, 17, HRESULT (WINAPI *)(object *, void *, BYTE *))(list, text, &found) == S_OK;
+	WindowsDeleteString(text);
+	return done && found;
+}
+
+/* The status an operation that has ended is in, and its result when it completed. */
+static INT32 ended_with(object *operation, object **result)
+{
+	object *info = NULL;
+	INT32 status = -1;
+	if (!operation || METHOD(operation, 0, query_method)(operation, &async_info, (void **)&info) != S_OK)
+		return -1;
+	METHOD(info, 7, number_method)(info, &status);
+	METHOD(info, 2, release_method)(info);
+	if (status == 1 && result)
+		METHOD(operation, 8, object_method)(operation, result);
+	return status;
+}
+
+/* FutureAccessList and MostRecentlyUsedList with the LocalState folder in them: a first run adds it, the next finds it again. */
+static int check_access_cache(object *folder, const WCHAR *path, BOOL again)
+{
+	object *permissions = statics(L"Windows.Storage.AccessCache.StorageApplicationPermissions", &permissions_statics);
+	object *future = NULL, *recent_list = NULL, *recent = NULL;
+	if (!permissions || METHOD(permissions, 6, object_method)(permissions, &future) != S_OK ||
+		METHOD(permissions, 7, object_method)(permissions, &recent_list) != S_OK ||
+		METHOD(recent_list, 0, query_method)(recent_list, &access_list, (void **)&recent) != S_OK)
+		return 100;
+	UINT32 most = 0;
+	if (METHOD(future, 21, HRESULT (WINAPI *)(object *, UINT32 *))(future, &most) != S_OK || most != 1000 ||
+		METHOD(recent, 21, HRESULT (WINAPI *)(object *, UINT32 *))(recent, &most) != S_OK || most != 25)
+		return 101;
+	if (again) {
+		/* What the first run added is still there. */
+		if (!contains(future, L"saved") || entry_count(future) != 1 || entry_count(recent) != 1)
+			return 102;
+	} else {
+		void *saved = text_of(L"saved"), *meta = text_of(L"meta"), *two = text_of(L"two"), *made = NULL, *again_made = NULL;
+		if (METHOD(future, 18, HRESULT (WINAPI *)(object *))(future) != S_OK || entry_count(future) != 0)
+			return 103;
+		if (METHOD(future, 9, HRESULT (WINAPI *)(object *, void *, object *, void *))(future, saved, folder, meta) != S_OK ||
+			METHOD(future, 7, HRESULT (WINAPI *)(object *, object *, void *, void **))(future, folder, two, &made) != S_OK || !made ||
+			WindowsGetStringRawBuffer(made, NULL)[0] != L'{')
+			return 104;
+		BYTE allowed = 0;
+		if (!contains(future, L"saved") || entry_count(future) != 2 ||
+			METHOD(future, 19, HRESULT (WINAPI *)(object *, object *, BYTE *))(future, folder, &allowed) != S_OK || !allowed)
+			return 105;
+		object *view = NULL;
+		struct access_entry first = {0};
+		if (METHOD(future, 20, object_method)(future, &view) != S_OK ||
+			METHOD(view, 6, HRESULT (WINAPI *)(object *, UINT32, struct access_entry *))(view, 0, &first) != S_OK ||
+			lstrcmpW(WindowsGetStringRawBuffer(first.token, NULL), L"saved") || lstrcmpW(WindowsGetStringRawBuffer(first.metadata, NULL), L"meta"))
+			return 106;
+		WindowsDeleteString(first.token);
+		WindowsDeleteString(first.metadata);
+		METHOD(view, 2, release_method)(view);
+		if (METHOD(future, 16, HRESULT (WINAPI *)(object *, void *))(future, made) != S_OK || entry_count(future) != 1)
+			return 107;
+		/* The folder back by its token, not as a file, and a token that names nothing refused. */
+		object *operation = NULL, *found = NULL, *none_found = NULL;
+		if (METHOD(future, 12, token_object_method)(future, saved, &operation) != S_OK || ended_with(operation, &found) != 1 || !found ||
+			!item_text(found, 12, path))
+			return 108;
+		METHOD(found, 2, release_method)(found);
+		METHOD(operation, 2, release_method)(operation);
+		if (METHOD(future, 11, token_object_method)(future, saved, &operation) != S_OK || ended_with(operation, NULL) != 3)
+			return 109;
+		METHOD(operation, 2, release_method)(operation);
+		void *none = text_of(L"none");
+		if (METHOD(future, 12, token_object_method)(future, none, &none_found) != E_INVALIDARG || none_found)
+			return 110;
+		WindowsDeleteString(none);
+		/* The recent list keeps an item once: added again, it keeps its token. */
+		METHOD(recent, 18, HRESULT (WINAPI *)(object *))(recent);
+		WindowsDeleteString(made);
+		made = NULL;
+		if (METHOD(recent, 7, HRESULT (WINAPI *)(object *, object *, void *, void **))(recent, folder, meta, &made) != S_OK ||
+			METHOD(recent, 7, HRESULT (WINAPI *)(object *, object *, void *, void **))(recent, folder, two, &again_made) != S_OK ||
+			lstrcmpW(WindowsGetStringRawBuffer(made, NULL), WindowsGetStringRawBuffer(again_made, NULL)) || entry_count(recent) != 1)
+			return 111;
+		WindowsDeleteString(made);
+		WindowsDeleteString(again_made);
+		WindowsDeleteString(saved);
+		WindowsDeleteString(meta);
+		WindowsDeleteString(two);
+	}
+	METHOD(recent, 2, release_method)(recent);
+	METHOD(recent_list, 2, release_method)(recent_list);
+	METHOD(future, 2, release_method)(future);
+	METHOD(permissions, 2, release_method)(permissions);
+	return 0;
+}
+#endif
+
 /* The app's package and the folders of its data: a packaged app has both, any other process neither. */
 static int check_package(void)
 {
@@ -769,10 +891,16 @@ static int check_package(void)
 	if (METHOD(datas, 6, object_method)(datas, &data) != S_OK || METHOD(data, 12, object_method)(data, &folder) != S_OK ||
 		!item_text(folder, 12, local) || !item_text(folder, 11, L"LocalState"))
 		return 25;
+	WCHAR state[MAX_PATH];
+	lstrcpyW(state, local);
 	lstrcatW(local, L"\\saved.txt");
-	const int settings = check_settings(data, GetFileAttributesW(local) != INVALID_FILE_ATTRIBUTES);
+	const BOOL again = GetFileAttributesW(local) != INVALID_FILE_ATTRIBUTES;
+	const int settings = check_settings(data, again);
 	if (settings)
 		return settings;
+	const int cache = check_access_cache(folder, state, again);
+	if (cache)
+		return cache;
 	HANDLE file = CreateFileW(local, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
 	DWORD written = 0;
 	if (file == INVALID_HANDLE_VALUE || !WriteFile(file, "saved", 5, &written, NULL) || written != 5)
@@ -792,6 +920,9 @@ static int check_package(void)
 	if (METHOD(packages, 6, object_method)(packages, &package) != (HRESULT)0x80073d54 || package ||
 		METHOD(datas, 6, object_method)(datas, &data) != (HRESULT)0x80073d54 || data)
 		return 28;
+	object *permissions = statics(L"Windows.Storage.AccessCache.StorageApplicationPermissions", &permissions_statics), *list = NULL;
+	if (!permissions || METHOD(permissions, 6, object_method)(permissions, &list) != (HRESULT)0x80073d54 || list)
+		return 29;
 #endif
 	return 0;
 }

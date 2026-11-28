@@ -138,8 +138,10 @@ extern const struct winrt_items_kind string_list;
 /* IVectorView<IStorageItem> of storage items and IAsyncOperation<IVectorView<IStorageItem>>, from storage.c. */
 extern const struct winrt_items_kind item_list;
 extern const IID iid_items_operation;
-/* IAsyncOperation<StorageFolder>, <StorageFile> and <IVectorView<StorageFile>>, from storage.c. */
-extern const IID iid_folder_operation, iid_file_operation, iid_files_operation;
+/* IAsyncOperation<StorageFolder>, <StorageFile>, <IVectorView<StorageFile>> and <IStorageItem>, from storage.c, and IStorageItem. */
+extern const IID iid_folder_operation, iid_file_operation, iid_files_operation, iid_item_operation, iid_storage_item;
+/* The full path of any IStorageItem, ours or not, into a MAX_PATH buffer. */
+HRESULT path_of_any(void *iface, WCHAR *path);
 /* Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, from pickers.c. */
 extern struct object open_picker_class, save_picker_class, folder_picker_class;
 /* Windows.ApplicationModel.DataTransfer: Clipboard, DataPackage, StandardDataFormats, HtmlFormatHelper and ClipboardContentOptions, from
@@ -152,6 +154,8 @@ extern struct object application_view_class;
 /* crypto.c. */
 extern struct object cryptographic_buffer_class, hash_provider_class, hash_names_class, mac_provider_class, mac_names_class,
 	cryptographic_engine_class, cipher_provider_class, cipher_names_class;
+/* accesscache.c. */
+extern struct object storage_permissions_class;
 /* threading.c. */
 extern struct object thread_pool_class, thread_pool_timer_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */
