@@ -4,6 +4,7 @@
 /* Imported as programs import them, from the Windows Runtime's API set. */
 __declspec(dllimport) HRESULT WINAPI RoInitialize(int type);
 __declspec(dllimport) HRESULT WINAPI RoGetActivationFactory(void *name, const GUID *iid, void **factory);
+__declspec(dllimport) HRESULT WINAPI RoActivateInstance(void *name, void **instance);
 __declspec(dllimport) void WINAPI CoTaskMemFree(void *block);
 __declspec(dllimport) const WCHAR *WINAPI WindowsGetStringRawBuffer(void *string, UINT32 *length);
 __declspec(dllimport) HRESULT WINAPI WindowsDeleteString(void *string);
@@ -320,6 +321,37 @@ static int check_property_values(void)
 	return 0;
 }
 
+/* Windows.Foundation.Collections.PropertySet: each one a program activates is its own map, which keeps the boxes put in it. */
+static int check_property_sets(void)
+{
+	typedef HRESULT (WINAPI *insert_method)(object *, void *, object *, BYTE *);
+	struct reference class_name = {1, 42, {0, 0}, L"Windows.Foundation.Collections.PropertySet"};
+	struct reference key = {1, 5, {0, 0}, L"Score"};
+	object *first = NULL, *second = NULL, *first_map = NULL, *second_map = NULL, *maker, *boxed = NULL, *found = NULL;
+	if (RoActivateInstance(&class_name, (void **)&first) != S_OK || !first || RoActivateInstance(&class_name, (void **)&second) != S_OK ||
+		!second || first == second) return 120;
+	if (METHOD(first, 0, query_method)(first, &property_map, (void **)&first_map) != S_OK ||
+		METHOD(second, 0, query_method)(second, &property_map, (void **)&second_map) != S_OK) return 121;
+	maker = statics(L"Windows.Foundation.PropertyValue", &property_value_statics);
+	if (!maker || METHOD(maker, 10, HRESULT (WINAPI *)(object *, INT32, object **))(maker, 42, &boxed) != S_OK) return 122;
+	BYTE replaced = 1;
+	if (METHOD(first_map, 10, insert_method)(first_map, &key, boxed, &replaced) != S_OK || replaced) return 123;
+	UINT32 size = 0;
+	INT32 score = 0;
+	if (METHOD(first_map, 7, HRESULT (WINAPI *)(object *, UINT32 *))(first_map, &size) != S_OK || size != 1 ||
+		METHOD(first_map, 6, HRESULT (WINAPI *)(object *, void *, object **))(first_map, &key, &found) != S_OK || !found ||
+		METHOD(found, 11, HRESULT (WINAPI *)(object *, INT32 *))(found, &score) != S_OK || score != 42) return 124;
+	if (METHOD(second_map, 7, HRESULT (WINAPI *)(object *, UINT32 *))(second_map, &size) != S_OK || size != 0) return 125;
+	METHOD(found, 2, release_method)(found);
+	METHOD(boxed, 2, release_method)(boxed);
+	METHOD(maker, 2, release_method)(maker);
+	METHOD(first_map, 2, release_method)(first_map);
+	METHOD(second_map, 2, release_method)(second_map);
+	METHOD(first, 2, release_method)(first);
+	METHOD(second, 2, release_method)(second);
+	return 0;
+}
+
 static int check_app_languages(void)
 {
 	object *factory = statics(L"Windows.Globalization.ApplicationLanguages", &app_languages_statics), *view = NULL;
@@ -441,5 +473,7 @@ int raven_entry(void)
 		failure = check_metadata();
 	if (!failure)
 		failure = check_app_languages();
-	return failure ? failure : check_property_values();
+	if (!failure)
+		failure = check_property_values();
+	return failure ? failure : check_property_sets();
 }

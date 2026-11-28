@@ -119,4 +119,22 @@ extern struct object package_class, application_data_class;
 /* Windows.Foundation.PropertyValue, from value.c. */
 extern struct object property_value_class;
 
+/* Maps from strings to objects, from map.c. An entry holds its own copy of the key and a reference to the value. */
+struct entry {
+	HSTRING key;
+	IInspectable *value;
+};
+
+/* An IMapView<String, Object> holding its own copies of these entries. */
+HRESULT map_view(const struct entry *entries, UINT32 count, void **out);
+/* A new, empty PropertySet with one reference, answered through property_set_face. A watcher, when set, is called after each change,
+ * outside the set's lock; the set's own changes through these calls are changes too. */
+struct property_set;
+struct property_set *property_set_make(void);
+void *property_set_face(struct property_set *self);
+void property_set_watch(struct property_set *self, void (*watcher)(void *context), void *context);
+HRESULT property_set_view(struct property_set *self, void **out);
+HRESULT property_set_insert(struct property_set *self, HSTRING key, IInspectable *value);
+extern struct object property_set_class;
+
 #endif
