@@ -6189,6 +6189,16 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
                         add_custom_target(xml_fixture${width} ALL DEPENDS ${xml_client} twinapi_component installer_components_${width})
                         add_test(NAME native_xml_x${width} COMMAND raven --run-process --execution=native ${xml_client})
                         set_tests_properties(native_xml_x${width} PROPERTIES TIMEOUT 60 PASS_REGULAR_EXPRESSION "Native entry returned 0 ")
+                        # Windows.UI.Notifications: templates, toasts shown as notifications of the desktop, one with no popup.
+                        set(toast_client ${CMAKE_CURRENT_BINARY_DIR}/toast-client${width}.exe)
+                        add_custom_command(OUTPUT ${toast_client}
+                            COMMAND ${twinapi_compiler} -nostdlib -O1 -fno-builtin -fno-stack-protector -Wl,--entry,${twinapi_entry},--no-insert-timestamp
+                                -o ${toast_client} ${LOADER_SOURCES}/toast_client.c -lruntimeobject -lkernel32 -lgcc
+                            DEPENDS ${LOADER_SOURCES}/toast_client.c VERBATIM)
+                        add_custom_target(toast_fixture${width} ALL DEPENDS ${toast_client} twinapi_component installer_components_${width})
+                        add_test(NAME native_toast_x${width} COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/native-notification.py
+                            $<TARGET_FILE:raven> ${toast_client} ${CMAKE_CURRENT_BINARY_DIR}/toast-work${width} toast)
+                        set_tests_properties(native_toast_x${width} PROPERTIES TIMEOUT 90)
                     endif()
                     # Windows.UI.Popups: commands, a MessageDialog chosen from and canceled, and a PopupMenu closed with EndMenu.
                     set(popups_client ${CMAKE_CURRENT_BINARY_DIR}/popups-client${width}.exe)

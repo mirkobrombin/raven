@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Check that a balloon of a tray icon reaches the Linux desktop as a notification.
+"""Check that a balloon of a tray icon, or a toast of the Windows Runtime, reaches the Linux desktop as a notification.
 
-testdata/native_loader/notification_client.c shows two balloons. A gdbus put first on PATH records how it is called; each balloon
-must call the notification service's Notify with the program's name, the balloon's title and its text as GVariant strings.
+testdata/native_loader/notification_client.c shows two balloons; with "toast", testdata/native_loader/toast_client.c shows two toasts
+and one that asks for no popup. A gdbus put first on PATH records how it is called: each notification must call the notification
+service's Notify with the program's name, the title and the text as GVariant strings, and nothing else may be shown.
 
-usage: native-notification.py RAVEN CLIENT WORKDIR
+usage: native-notification.py RAVEN CLIENT WORKDIR [toast]
 """
 
 from pathlib import Path
@@ -13,16 +14,19 @@ import subprocess
 import sys
 import time
 
-EXPECTED = [
-    ["'notification'", "0", "''", "'Backup'", "'It\\'s done\\u000aall files'", "@as []", "@a{sv} {}", "-1"],
-    ["'notification'", "0", "''", "'Second'", "'Plain text'", "@as []", "@a{sv} {}", "-1"],
-]
+# The title and the text of each notification, in the order of their titles.
+SHOWN = {
+    "balloon": [("'Backup'", "'It\\'s done\\u000aall files'"), ("'Second'", "'Plain text'")],
+    "toast": [("'Template title'", "'Template text'"), ("'Title'", "'Line one\\u000aLine two'")],
+}
 HEAD = ["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications",
         "--method", "org.freedesktop.Notifications.Notify"]
 
 
 def main():
     raven, client, work = (Path(argument).resolve() for argument in sys.argv[1:4])
+    mode = sys.argv[4] if len(sys.argv) > 4 else "balloon"
+    expected = [HEAD + [f"'{client.stem}'", "0", "''", title, text, "@as []", "@a{sv} {}", "-1"] for title, text in SHOWN[mode]]
     work.mkdir(parents=True, exist_ok=True)
     folder = work / "bin"
     folder.mkdir(exist_ok=True)
@@ -43,13 +47,16 @@ def main():
     calls = []
     while time.monotonic() < deadline:
         calls = [line.split("\0")[:-1] for line in record.read_text().split("\n")[:-1]] if record.exists() else []
-        if len(calls) >= len(EXPECTED):
+        if len(calls) >= len(expected):
             break
         time.sleep(0.1)
+    # A notification that should not have been shown would come as late as the others.
+    time.sleep(1)
+    calls = [line.split("\0")[:-1] for line in record.read_text().split("\n")[:-1]] if record.exists() else []
     calls.sort(key=lambda call: call[len(HEAD) + 3:len(HEAD) + 4])
-    if calls != [HEAD + expected for expected in EXPECTED]:
+    if calls != expected:
         raise SystemExit(f"notification calls differ: {calls!r}")
-    print("Both balloons reached the notification service")
+    print(f"Each {mode} reached the notification service")
 
 
 if __name__ == "__main__":
