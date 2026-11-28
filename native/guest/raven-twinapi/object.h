@@ -22,6 +22,7 @@
 #define NOT_FOUND ((HRESULT)0x80070490)
 #define NO_SUCH_USER ((HRESULT)0x80070525)
 #define DELEGATE_ASSIGNED ((HRESULT)0x80000018)
+#define TYPE_MISMATCH ((HRESULT)0x80020005)
 
 /* Objects alive, which decide whether the library may unload, and the last event token handed out. */
 extern LONG objects, tokens;
@@ -123,10 +124,16 @@ HRESULT make_file(const WCHAR *path, void **out);
 HRESULT make_files(const WCHAR *const *paths, UINT32 count, void **out);
 /* IVectorView<String> and IVector<String> of strings, from storage.c. */
 extern const struct winrt_items_kind string_list;
+/* IVectorView<IStorageItem> of storage items and IAsyncOperation<IVectorView<IStorageItem>>, from storage.c. */
+extern const struct winrt_items_kind item_list;
+extern const IID iid_items_operation;
 /* IAsyncOperation<StorageFolder>, <StorageFile> and <IVectorView<StorageFile>>, from storage.c. */
 extern const IID iid_folder_operation, iid_file_operation, iid_files_operation;
 /* Windows.Storage.Pickers.FileOpenPicker, FileSavePicker and FolderPicker, from pickers.c. */
 extern struct object open_picker_class, save_picker_class, folder_picker_class;
+/* Windows.ApplicationModel.DataTransfer: Clipboard, DataPackage, StandardDataFormats, HtmlFormatHelper and ClipboardContentOptions, from
+ * clipboard.c. */
+extern struct object clipboard_class, data_package_class, standard_formats_class, html_format_helper_class, clipboard_content_options_class;
 /* Windows.System.Launcher and LauncherOptions, from launcher.c. */
 extern struct object launcher_class, launcher_options_class;
 /* Windows.Storage.KnownFolders, from known.c. */
@@ -136,6 +143,8 @@ extern struct object storage_file_class, storage_folder_class, file_io_class, bu
 HRESULT open_typed_stream(const WCHAR *path, void **out);
 /* RandomAccessStream and RandomAccessStreamReference, from streams.c. */
 extern struct object random_access_stream_class, stream_reference_class;
+/* A RandomAccessStreamReference over a stream, as CreateFromStream makes it. */
+HRESULT stream_reference_make(IUnknown *stream, void **out);
 /* Values read from and written to streams, from data.c. */
 extern struct object data_reader_class, data_writer_class;
 /* The folder %LOCALAPPDATA%\Packages\<family name>\<leaf> of the running package, made when missing, into a MAX_PATH buffer. */
@@ -149,6 +158,8 @@ extern struct object property_value_class;
 HRESULT property_value_make(INT32 type, const void *value, void **out);
 HRESULT property_value_make_array(INT32 type, UINT32 count, const void *values, void **out);
 size_t property_type_size(INT32 type);
+/* The string in any IPropertyValue box; TYPE_MISMATCH for anything else. */
+HRESULT property_value_string(IUnknown *value, HSTRING *out);
 
 /* Maps from strings to objects, from map.c. An entry holds its own copy of the key and a reference to the value. */
 struct entry {
@@ -160,12 +171,24 @@ struct entry {
 HRESULT map_view(const struct entry *entries, UINT32 count, void **out);
 /* The interfaces of a map from strings to another type: the identifiers and names are given, map_types_init makes the kinds once. A
  * map_iid and map_name, when given, make a mutable map of the type too. */
+struct map_face {
+	const IID *iid;
+	const void *const *table;
+};
+/* A view and a map may answer interfaces of their own besides the collection's, as a runtime class that is a map does: map_faces at
+ * places 3 on of the map and view_faces at places 2 on of its views, the kind then named map_class and view_class. Their methods
+ * read and change the map through map_lookup_any and map_insert_any. */
 struct map_types {
 	const IID *view_iid, *iterable_iid, *iterator_iid, *pair_iid;
 	const WCHAR *view_name, *pair_name, *iterator_name;
 	const IID *map_iid;
 	const WCHAR *map_name;
-	struct face_iid view_iids[3], pair_iids[2], iterator_iids[2], map_iids[3];
+	const struct map_face *map_faces, *view_faces;
+	UINT32 map_face_count, view_face_count;
+	const char *map_class, *view_class;
+	struct face_iid view_iids[FACES], pair_iids[2], iterator_iids[2], map_iids[FACES];
+	const void *const *view_tables[FACES];
+	const void *const *map_tables[FACES];
 	struct kind view, pair, iterator, map;
 };
 void map_types_init(struct map_types *types);
@@ -174,6 +197,12 @@ HRESULT typed_map_view(const struct map_types *types, const struct entry *entrie
  * and its IIterable, through map_face. */
 struct property_set *typed_map_make(const struct map_types *types);
 void *map_face(struct property_set *self);
+/* The value of a key in a map or a view of one, through any of its interfaces; E_BOUNDS when it has none. */
+HRESULT map_lookup_any(void *iface, HSTRING key, IInspectable **out);
+/* Sets a key of a map, through any of its interfaces. */
+HRESULT map_insert_any(void *iface, HSTRING key, IInspectable *value);
+/* IMapView<String, Object>, IMap<String, Object>, and IIterable, IIterator and IKeyValuePair of their pairs, from map.c. */
+extern const IID iid_property_view, iid_property_iterable, iid_property_iterator, iid_property_pair, iid_property_map;
 /* A new, empty PropertySet with one reference, answered through property_set_face. A watcher, when set, is called after each change,
  * outside the set's lock; the set's own changes through these calls are changes too. */
 struct property_set;

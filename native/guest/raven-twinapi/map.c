@@ -8,13 +8,13 @@
 
 /* IMapView<String, Object>, and IIterable and IIterator of pinterface({02b51929-c1c4-4a7e-8940-0312b5c18500};string;
  * cinterface(IInspectable)) */
-static const IID iid_property_view = {0xbb78502a, 0xf79d, 0x54fa, {0x92, 0xc9, 0x90, 0xc5, 0x03, 0x9f, 0xdf, 0x7e}};
-static const IID iid_property_iterable = {0xfe2f3d47, 0x5d47, 0x5499, {0x83, 0x74, 0x43, 0x0c, 0x7c, 0xda, 0x02, 0x04}};
-static const IID iid_property_iterator = {0x5db5fa32, 0x707c, 0x5849, {0xa0, 0x6b, 0x91, 0xc8, 0xeb, 0x9d, 0x10, 0xe8}};
+const IID iid_property_view = {0xbb78502a, 0xf79d, 0x54fa, {0x92, 0xc9, 0x90, 0xc5, 0x03, 0x9f, 0xdf, 0x7e}};
+const IID iid_property_iterable = {0xfe2f3d47, 0x5d47, 0x5499, {0x83, 0x74, 0x43, 0x0c, 0x7c, 0xda, 0x02, 0x04}};
+const IID iid_property_iterator = {0x5db5fa32, 0x707c, 0x5849, {0xa0, 0x6b, 0x91, 0xc8, 0xeb, 0x9d, 0x10, 0xe8}};
 /* pinterface({02b51929-c1c4-4a7e-8940-0312b5c18500};string;cinterface(IInspectable)) */
-static const IID iid_property_pair = {0x09335560, 0x6c6b, 0x5a26, {0x93, 0x48, 0x97, 0xb7, 0x81, 0x13, 0x2b, 0x20}};
+const IID iid_property_pair = {0x09335560, 0x6c6b, 0x5a26, {0x93, 0x48, 0x97, 0xb7, 0x81, 0x13, 0x2b, 0x20}};
 /* pinterface({3c2925fe-8519-45c1-aa79-197b6718c1c1};string;cinterface(IInspectable)) */
-static const IID iid_property_map = {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x3b, 0x95, 0x39, 0x50, 0x6a, 0xca}};
+const IID iid_property_map = {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x3b, 0x95, 0x39, 0x50, 0x6a, 0xca}};
 /* pinterface({65df2bf5-bf39-41b5-aebc-5a9d865e472b};string;cinterface(IInspectable)) */
 static const IID iid_observable_property_map = {0x236aac9d, 0xfb12, 0x5c4d, {0xa4, 0x1c, 0x9e, 0x44, 0x5f, 0xb4, 0xd7, 0xec}};
 /* pinterface({9939f4df-050a-4c0f-aa60-77075f9c4777};string) */
@@ -200,6 +200,8 @@ TABLE(pairs_table, 0, INSPECTABLE, (const void *)pairs_lookup, (const void *)pai
 TABLE(pairs_iterable_table, 1, INSPECTABLE, (const void *)pairs_first);
 
 static void destroy_set(struct object *base);
+/* The kind of a mutable map of the types, made with the property set's tables below. */
+static void map_kind_init(struct map_types *types);
 
 void map_types_init(struct map_types *types)
 {
@@ -210,15 +212,18 @@ void map_types_init(struct map_types *types)
 	types->pair_iids[1] = (struct face_iid){NULL, 0};
 	types->iterator_iids[0] = (struct face_iid){types->iterator_iid, 0};
 	types->iterator_iids[1] = (struct face_iid){NULL, 0};
-	types->view = (struct kind){"IMapView", types->view_name, types->view_iids, destroy_pairs};
+	types->view_tables[0] = pairs_table.slots;
+	types->view_tables[1] = pairs_iterable_table.slots;
+	for (UINT32 at = 0; at < types->view_face_count; ++at) {
+		types->view_iids[2 + at] = (struct face_iid){types->view_faces[at].iid, 2 + at};
+		types->view_tables[2 + at] = types->view_faces[at].table;
+	}
+	types->view_iids[2 + types->view_face_count] = (struct face_iid){NULL, 0};
+	types->view = (struct kind){types->view_faces ? types->view_class : "IMapView", types->view_name, types->view_iids, destroy_pairs};
 	types->pair = (struct kind){"IKeyValuePair", types->pair_name, types->pair_iids, destroy_pair};
 	types->iterator = (struct kind){"IIterator", types->iterator_name, types->iterator_iids, destroy_pair_iterator};
-	if (types->map_iid) {
-		types->map_iids[0] = (struct face_iid){types->map_iid, 1};
-		types->map_iids[1] = (struct face_iid){types->iterable_iid, 2};
-		types->map_iids[2] = (struct face_iid){NULL, 0};
-		types->map = (struct kind){"IMap", types->map_name, types->map_iids, destroy_set};
-	}
+	if (types->map_iid)
+		map_kind_init(types);
 }
 
 /* Maps from strings to objects. */
@@ -241,7 +246,8 @@ static struct pairs *snapshot(const struct map_types *types, const struct entry 
 		InitOnceExecuteOnce(&object_types_once, make_object_types, NULL, NULL);
 		types = &object_types;
 	}
-	struct pairs *self = make(offsetof(struct pairs, entries) + count * sizeof(struct entry), &types->view, tables, 2);
+	struct pairs *self = make(offsetof(struct pairs, entries) + count * sizeof(struct entry), &types->view,
+		types->view_face_count ? types->view_tables : tables, 2 + types->view_face_count);
 	if (!self)
 		return NULL;
 	self->types = types;
@@ -524,6 +530,21 @@ static const struct face_iid set_iids[] = {{&iid_observable_property_map, 0}, {&
 	{&iid_property_iterable, 2}, {NULL, 0}};
 static const struct kind set_kind = {"PropertySet", L"Windows.Foundation.Collections.PropertySet", set_iids, destroy_set};
 
+static void map_kind_init(struct map_types *types)
+{
+	types->map_iids[0] = (struct face_iid){types->map_iid, 1};
+	types->map_iids[1] = (struct face_iid){types->iterable_iid, 2};
+	types->map_tables[0] = set_observable_table.slots;
+	types->map_tables[1] = set_map_table.slots;
+	types->map_tables[2] = set_iterable_table.slots;
+	for (UINT32 at = 0; at < types->map_face_count; ++at) {
+		types->map_iids[2 + at] = (struct face_iid){types->map_faces[at].iid, 3 + at};
+		types->map_tables[3 + at] = types->map_faces[at].table;
+	}
+	types->map_iids[2 + types->map_face_count] = (struct face_iid){NULL, 0};
+	types->map = (struct kind){types->map_faces ? types->map_class : "IMap", types->map_name, types->map_iids, destroy_set};
+}
+
 struct property_set *property_set_make(void)
 {
 	static const void *const *const tables[] = {set_observable_table.slots, set_map_table.slots, set_iterable_table.slots};
@@ -537,8 +558,7 @@ void *property_set_face(struct property_set *self) { return face_of(&self->base,
 
 struct property_set *typed_map_make(const struct map_types *types)
 {
-	static const void *const *const tables[] = {set_observable_table.slots, set_map_table.slots, set_iterable_table.slots};
-	struct property_set *self = make(sizeof *self, &types->map, tables, 3);
+	struct property_set *self = make(sizeof *self, &types->map, types->map_tables, 3 + types->map_face_count);
 	if (self) {
 		InitializeSRWLock(&self->lock);
 		self->types = types;
@@ -547,6 +567,20 @@ struct property_set *typed_map_make(const struct map_types *types)
 }
 
 void *map_face(struct property_set *self) { return face_of(&self->base, 1); }
+
+HRESULT map_lookup_any(void *iface, HSTRING key, IInspectable **out)
+{
+	struct object *base = owner(iface);
+	if (base->kind->destroy == destroy_pairs)
+		return lookup(((struct pairs *)base)->entries, ((struct pairs *)base)->count, key, out);
+	return set_lookup(face_of(base, 1), key, out);
+}
+
+HRESULT map_insert_any(void *iface, HSTRING key, IInspectable *value)
+{
+	boolean replaced;
+	return set_insert(face_of(owner(iface), 1), key, value, &replaced);
+}
 
 void property_set_watch(struct property_set *self, void (*watcher)(void *context), void *context)
 {

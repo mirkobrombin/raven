@@ -17,7 +17,6 @@
 static const IID iid_property_value = {0x4bd682dd, 0x7554, 0x40e9, {0x9a, 0x9b, 0x82, 0x65, 0x4e, 0xde, 0x7e, 0x62}};
 static const IID iid_property_value_statics = {0x629bdbc8, 0xd932, 0x4ff4, {0x96, 0xb9, 0x8d, 0x96, 0xc5, 0xc1, 0xe8, 0x58}};
 
-#define TYPE_MISMATCH ((HRESULT)0x80020005)
 #define OVERFLOW ((HRESULT)0x8002000a)
 
 /* PropertyType: the scalar types from 1 to 19, an array of one of them 1024 above it. */
@@ -539,3 +538,14 @@ HRESULT property_value_make_array(INT32 type, UINT32 count, const void *values, 
 }
 
 size_t property_type_size(INT32 type) { return type >= type_uint8 && type <= SCALARS ? types[type].size : 0; }
+
+HRESULT property_value_string(IUnknown *value, HSTRING *out)
+{
+	IUnknown *box = NULL;
+	*out = NULL;
+	if (!value || FAILED(value->lpVtbl->QueryInterface(value, &iid_property_value, (void **)&box)))
+		return TYPE_MISMATCH;
+	const HRESULT result = ((HRESULT (WINAPI *)(void *, HSTRING *))method(box, 19))(box, out);
+	release(box);
+	return result;
+}

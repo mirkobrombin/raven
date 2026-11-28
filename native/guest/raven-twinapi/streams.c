@@ -224,6 +224,8 @@ static HRESULT WINAPI reference_from_stream(void *iface, IUnknown *stream, void 
 	return S_OK;
 }
 
+HRESULT stream_reference_make(IUnknown *stream, void **out) { return reference_from_stream(NULL, stream, out); }
+
 static int hex(WCHAR digit)
 {
 	return digit >= L'0' && digit <= L'9' ? digit - L'0' : digit >= L'a' && digit <= L'f' ? digit - L'a' + 10 :

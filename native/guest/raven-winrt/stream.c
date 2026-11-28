@@ -504,7 +504,9 @@ HRESULT winrt_file_stream(HANDLE handle, BOOL can_read, BOOL can_write, const WC
 	return S_OK;
 }
 
-HRESULT winrt_memory_stream(void **out)
+HRESULT winrt_memory_stream(void **out) { return winrt_memory_stream_of(NULL, 0, out); }
+
+HRESULT winrt_memory_stream_of(const BYTE *bytes, UINT32 length, void **out)
 {
 	struct stream *self;
 	if (!out)
@@ -514,13 +516,79 @@ HRESULT winrt_memory_stream(void **out)
 	if (!file)
 		return E_OUTOFMEMORY;
 	InitializeSRWLock(&file->lock);
-	const HRESULT result = new_stream(file, TRUE, TRUE, NULL, 0, WHOLE, &self);
+	HRESULT result = memory_room(file, length);
+	if (SUCCEEDED(result)) {
+		if (length)
+			memcpy(file->bytes, bytes, length);
+		file->size = length;
+		result = new_stream(file, TRUE, TRUE, NULL, 0, WHOLE, &self);
+	}
 	if (FAILED(result)) {
+		WINRT_FREE(file->bytes);
 		WINRT_FREE(file);
 		return result;
 	}
 	*out = &self->random;
 	return S_OK;
+}
+
+HRESULT winrt_stream_read_all(void *stream, BYTE **bytes, UINT32 *length)
+{
+	IUnknown *source = stream, *random = NULL;
+	__x_ABI_CWindows_CStorage_CStreams_CIInputStream *input = NULL;
+	*bytes = NULL;
+	*length = 0;
+	if (!source)
+		return E_INVALIDARG;
+	HRESULT result;
+	if (SUCCEEDED(source->lpVtbl->QueryInterface(source, &iid_random_access_stream, (void **)&random))) {
+		result = ((HRESULT (STDMETHODCALLTYPE *)(void *, UINT64, void **))((void **)*(void **)random)[8])(random, 0, (void **)&input);
+		winrt_put(random);
+	} else
+		result = source->lpVtbl->QueryInterface(source, &IID___x_ABI_CWindows_CStorage_CStreams_CIInputStream, (void **)&input);
+	UINT32 capacity = 0;
+	while (SUCCEEDED(result)) {
+		buffer_type *piece = NULL, *read = NULL;
+		void *operation = NULL;
+		BYTE *data;
+		UINT32 count = 0;
+		if (FAILED(result = winrt_buffer(NULL, 0, 65536, &piece)))
+			break;
+		result = input->lpVtbl->ReadAsync(input, piece, 65536, InputStreamOptions_None, (void *)&operation);
+		if (SUCCEEDED(result))
+			result = winrt_wait(operation, TRUE, &read);
+		winrt_put(operation);
+		winrt_put(piece);
+		if (SUCCEEDED(result))
+			result = winrt_buffer_bytes(read, &data, &count);
+		if (SUCCEEDED(result) && count) {
+			if (*length + (UINT64)count > 0x7fffffff)
+				result = E_OUTOFMEMORY;
+			else if (*length + count > capacity) {
+				const UINT32 grown = (*length + count) * 2;
+				BYTE *moved = *bytes ? WINRT_REALLOC(*bytes, grown) : WINRT_ALLOC(grown);
+				if (moved) {
+					*bytes = moved;
+					capacity = grown;
+				} else
+					result = E_OUTOFMEMORY;
+			}
+			if (SUCCEEDED(result)) {
+				memcpy(*bytes + *length, data, count);
+				*length += count;
+			}
+		}
+		winrt_put(read);
+		if (!count)
+			break;
+	}
+	winrt_put(input);
+	if (FAILED(result)) {
+		WINRT_FREE(*bytes);
+		*bytes = NULL;
+		*length = 0;
+	}
+	return result;
 }
 
 HRESULT winrt_stream_typed(void *stream, const WCHAR *content_type, void **out)
