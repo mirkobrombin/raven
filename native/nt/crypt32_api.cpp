@@ -30,7 +30,9 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <unistd.h>
+#include <utility>
 
 namespace raven {
 
@@ -208,6 +210,14 @@ public:
 	}
 	size_t dword() { return reserve(4, 4); }
 	size_t pointer() { return reserve(width, width); }
+	// A CRYPT_*_BLOB, or any structure of its own that opens with a DWORD and holds a pointer: it starts where a pointer could, so after
+	// a DWORD a 64-bit program finds it at the next 8 bytes. The offsets of its size and of its data.
+	std::pair<size_t, size_t> blob()
+	{
+		reserve(0, width);
+		const auto size_at = dword();
+		return {size_at, pointer()};
+	}
 	size_t size() const { return (offset + width - 1) / width * width; }
 	const size_t width;
 
@@ -578,13 +588,16 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		const size_t width = call.pointer_width();
 		Layout info(width);
 		const auto version_at = info.dword();
-		const auto serial_size = info.dword(), serial_data = info.pointer();
-		const auto algorithm_name = info.pointer(), parameters_size = info.dword(), parameters_data = info.pointer();
-		const auto issuer_size = info.dword(), issuer_data = info.pointer();
+		const auto [serial_size, serial_data] = info.blob();
+		const auto algorithm_name = info.pointer();
+		const auto [parameters_size, parameters_data] = info.blob();
+		const auto [issuer_size, issuer_data] = info.blob();
 		const auto not_before = info.reserve(8, 4), not_after = info.reserve(8, 4);
-		const auto subject_size = info.dword(), subject_data = info.pointer();
-		const auto key_algorithm_name = info.pointer(), key_parameters_size = info.dword(), key_parameters_data = info.pointer();
-		const auto key_size = info.dword(), key_data = info.pointer(), key_unused = info.dword();
+		const auto [subject_size, subject_data] = info.blob();
+		const auto key_algorithm_name = info.pointer();
+		const auto [key_parameters_size, key_parameters_data] = info.blob();
+		const auto [key_size, key_data] = info.blob();
+		const auto key_unused = info.dword();
 		const auto issuer_unique = info.reserve(width == 4 ? 12 : 24, width), subject_unique = info.reserve(width == 4 ? 12 : 24, width);
 		const auto extension_count = info.dword(), extension_data = info.pointer();
 		Layout head(width);
@@ -624,8 +637,8 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		const auto *extensions = X509_get0_extensions(certificate.get());
 		const int extension_total = extensions ? sk_X509_EXTENSION_num(extensions) : 0;
 		Layout extension(width);
-		const auto extension_oid = extension.pointer(), extension_critical = extension.dword(), extension_size = extension.dword(),
-			extension_value = extension.pointer();
+		const auto extension_oid = extension.pointer(), extension_critical = extension.dword();
+		const auto [extension_size, extension_value] = extension.blob();
 		size_t extension_bytes = size_t(extension_total) * extension.size();
 		for (int index = 0; index < extension_total; ++index) {
 			X509_EXTENSION *entry = sk_X509_EXTENSION_value(extensions, index);
@@ -1514,22 +1527,16 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 		Layout info(width);
 		info.dword();
 		CertInfoLayout offsets{};
-		offsets.serial_size = info.dword();
-		offsets.serial_data = info.pointer();
+		std::tie(offsets.serial_size, offsets.serial_data) = info.blob();
 		info.pointer();
-		info.dword();
-		info.pointer();
-		offsets.issuer_size = info.dword();
-		offsets.issuer_data = info.pointer();
+		info.blob();
+		std::tie(offsets.issuer_size, offsets.issuer_data) = info.blob();
 		info.reserve(8, 4);
 		info.reserve(8, 4);
-		info.dword();
+		info.blob();
 		info.pointer();
-		info.pointer();
-		info.dword();
-		info.pointer();
-		info.dword();
-		info.pointer();
+		info.blob();
+		info.blob();
 		info.dword();
 		info.reserve(width == 4 ? 12 : 24, width);
 		info.reserve(width == 4 ? 12 : 24, width);
@@ -1581,11 +1588,16 @@ void register_crypt32_api(ApiRegistry &registry, KernelContext &context)
 	const auto signer_image = [serial_bytes](PKCS7_SIGNER_INFO *signer, uint64_t base, size_t width) {
 		Packed packed{{}, base, width};
 		Layout info(width);
-		const auto version = info.dword(), issuer_size = info.dword(), issuer_data = info.pointer(), serial_size = info.dword(),
-			serial_data = info.pointer(), hash_oid = info.pointer(), hash_parameters_size = info.dword(), hash_parameters = info.pointer(),
-			encryption_oid = info.pointer(), encryption_parameters_size = info.dword(), encryption_parameters = info.pointer(),
-			encrypted_size = info.dword(), encrypted_data = info.pointer(), signed_count = info.dword(), signed_list = info.pointer(),
-			unsigned_count = info.dword(), unsigned_list = info.pointer();
+		const auto version = info.dword();
+		const auto [issuer_size, issuer_data] = info.blob();
+		const auto [serial_size, serial_data] = info.blob();
+		const auto hash_oid = info.pointer();
+		const auto [hash_parameters_size, hash_parameters] = info.blob();
+		const auto encryption_oid = info.pointer();
+		const auto [encryption_parameters_size, encryption_parameters] = info.blob();
+		const auto [encrypted_size, encrypted_data] = info.blob();
+		const auto [signed_count, signed_list] = info.blob();
+		const auto [unsigned_count, unsigned_list] = info.blob();
 		packed.reserve(info.size());
 		packed.put32(version, uint32_t(ASN1_INTEGER_get(signer->version)));
 		packed.put_blob(issuer_size, issuer_data, der_encoding(i2d_X509_NAME, signer->issuer_and_serial->issuer));
