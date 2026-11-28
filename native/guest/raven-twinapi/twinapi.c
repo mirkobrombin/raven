@@ -15,6 +15,7 @@
  *   provider search finds none. Programs then sign in their own way; nothing here grants an identity or a licence.
  * - Windows.ApplicationModel.Core.CoreApplication: the process's one property set, and the view of an app it runs, which core_window.c
  *   makes with its core window; a desktop process that runs none has no view.
+ * - Windows.Foundation.PropertyValue: boxes of values, in value.c.
  * - Windows.Foundation.Metadata.ApiInformation: a type is present when Raven registers a runtime class of that name, and so are its
  *   members; no API contract is reported present, so programs take the paths they keep for systems without one.
  *
@@ -1579,7 +1580,7 @@ static struct object api_information = {{api_factory_table.slots, api_statics_ta
 static struct object *const classes[] = {&language_factory, &app_languages_factory, &retail_info, &shared_mode, &analytics_info, &network_information,
 	&online_id, &ticket_request_factory, &web_core, &core_application, &api_information,
 	&core_window_class, &core_cursor_class, &display_information_class,
-	&package_class, &application_data_class};
+	&package_class, &application_data_class, &property_value_class};
 
 __declspec(dllexport) HRESULT WINAPI DllGetActivationFactory(HSTRING name, IActivationFactory **out)
 {

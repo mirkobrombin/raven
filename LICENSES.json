@@ -388,6 +388,7 @@
         "native/guest/raven-twinapi/object.c",
         "native/guest/raven-twinapi/object.h",
         "native/guest/raven-twinapi/package.c",
+        "native/guest/raven-twinapi/value.c",
         "native/guest/raven-twinapi/twinapi.c",
         "native/guest/raven-uisettings/uisettings.c",
         "native/guest/raven-bcp47langs/bcp47langs.c",

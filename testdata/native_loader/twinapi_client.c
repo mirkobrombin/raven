@@ -232,6 +232,94 @@ static int check_analytics(void)
 	return 0;
 }
 
+/* Windows.Foundation.PropertyValue: a box reports its type and class name, answers IReference<T> of its own type and no other, and reads
+ * as any numeric type that holds its value; a value that does not fit overflows, and a floating value or a string is not an integer. An
+ * array box hands out a copy of its elements. */
+static const GUID property_value_statics = {0x629bdbc8, 0xd932, 0x4ff4, {0x96, 0xb9, 0x8d, 0x96, 0xc5, 0xc1, 0xe8, 0x58}};
+static const GUID property_value = {0x4bd682dd, 0x7554, 0x40e9, {0x9a, 0x9b, 0x82, 0x65, 0x4e, 0xde, 0x7e, 0x62}};
+static const GUID reference_int32 = {0x548cefbd, 0xbc8a, 0x5fa0, {0x8d, 0xf2, 0x95, 0x74, 0x40, 0xfc, 0x8b, 0xf4}};
+static const GUID reference_int64 = {0x4dda9e24, 0xe69f, 0x5c6a, {0xa0, 0xa6, 0x93, 0x42, 0x73, 0x65, 0xaf, 0x2a}};
+static const GUID reference_array_int32 = {0xa6d080a5, 0xb087, 0x5bc2, {0x9a, 0x9f, 0x5c, 0xd6, 0x87, 0xb4, 0xd1, 0xf7}};
+
+static int check_property_values(void)
+{
+	typedef HRESULT (WINAPI *int32_method)(object *, INT32, object **);
+	typedef HRESULT (WINAPI *read_int32)(object *, INT32 *);
+	object *statics_face = statics(L"Windows.Foundation.PropertyValue", &property_value_statics), *boxed = NULL, *other = NULL, *empty = (object *)1;
+	if (!statics_face) return 100;
+	if (METHOD(statics_face, 6, object_method)(statics_face, &empty) != S_OK || empty) return 101;
+	if (METHOD(statics_face, 10, int32_method)(statics_face, -5, &boxed) != S_OK || !boxed) return 102;
+	INT32 type = 0;
+	BYTE numeric = 0;
+	if (METHOD(boxed, 6, number_method)(boxed, &type) != S_OK || type != 4 || METHOD(boxed, 7, flag_method)(boxed, &numeric) != S_OK || !numeric)
+		return 103;
+	INT64 wide = 0;
+	UINT32 unsigned_value = 7;
+	double real = 0;
+	if (METHOD(boxed, 13, HRESULT (WINAPI *)(object *, INT64 *))(boxed, &wide) != S_OK || wide != -5) return 104;
+	if (METHOD(boxed, 12, HRESULT (WINAPI *)(object *, UINT32 *))(boxed, &unsigned_value) != (HRESULT)0x8002000a || unsigned_value != 7) return 105;
+	if (METHOD(boxed, 16, HRESULT (WINAPI *)(object *, double *))(boxed, &real) != S_OK || real != -5.0) return 106;
+	void *text = NULL;
+	if (METHOD(boxed, 19, HRESULT (WINAPI *)(object *, void **))(boxed, &text) != (HRESULT)0x80020005) return 107;
+	object *reference = NULL;
+	INT32 held = 0;
+	if (METHOD(boxed, 0, query_method)(boxed, &reference_int32, (void **)&reference) != S_OK ||
+		METHOD(reference, 6, read_int32)(reference, &held) != S_OK || held != -5) return 108;
+	METHOD(reference, 2, release_method)(reference);
+	if (METHOD(boxed, 0, query_method)(boxed, &reference_int64, (void **)&other) != E_NOINTERFACE || other) return 109;
+	void *name = NULL;
+	if (METHOD(boxed, 4, HRESULT (WINAPI *)(object *, void **))(boxed, &name) != S_OK ||
+		lstrcmpW(WindowsGetStringRawBuffer(name, NULL), L"Windows.Foundation.IReference`1<Int32>")) return 110;
+	WindowsDeleteString(name);
+	METHOD(boxed, 2, release_method)(boxed);
+
+	/* 300 does not fit a byte; 1.5 is no integer, but reads as a float. */
+	BYTE small = 0;
+	FLOAT single = 0;
+	if (METHOD(statics_face, 9, HRESULT (WINAPI *)(object *, UINT16, object **))(statics_face, 300, &boxed) != S_OK ||
+		METHOD(boxed, 8, HRESULT (WINAPI *)(object *, BYTE *))(boxed, &small) != (HRESULT)0x8002000a) return 111;
+	METHOD(boxed, 2, release_method)(boxed);
+	if (METHOD(statics_face, 15, HRESULT (WINAPI *)(object *, double, object **))(statics_face, 1.5, &boxed) != S_OK ||
+		METHOD(boxed, 11, read_int32)(boxed, &held) != (HRESULT)0x80020005 ||
+		METHOD(boxed, 15, HRESULT (WINAPI *)(object *, FLOAT *))(boxed, &single) != S_OK || single != 1.5f) return 112;
+	METHOD(boxed, 2, release_method)(boxed);
+
+	/* A string box and a GUID box give back what they hold. */
+	struct reference word = {1, 5, {0, 0}, L"Raven"};
+	if (METHOD(statics_face, 18, string_method)(statics_face, &word, &boxed) != S_OK ||
+		METHOD(boxed, 19, HRESULT (WINAPI *)(object *, void **))(boxed, &text) != S_OK ||
+		lstrcmpW(WindowsGetStringRawBuffer(text, NULL), L"Raven")) return 113;
+	WindowsDeleteString(text);
+	METHOD(boxed, 2, release_method)(boxed);
+	GUID guid = {0}, back = {0};
+	guid.Data1 = 0x12345678;
+	guid.Data4[7] = 9;
+	if (METHOD(statics_face, 20, HRESULT (WINAPI *)(object *, GUID, object **))(statics_face, guid, &boxed) != S_OK ||
+		METHOD(boxed, 20, HRESULT (WINAPI *)(object *, GUID *))(boxed, &back) != S_OK || !IsEqualGUID(&guid, &back)) return 114;
+	METHOD(boxed, 2, release_method)(boxed);
+
+	/* An array box: its type is the element's with 1024 added, and reading it, as the box or as IReferenceArray<Int32>, copies it. */
+	const INT32 numbers[3] = {1, 2, 3};
+	INT32 *copy = NULL;
+	INT64 *wrong = NULL;
+	UINT32 count = 0;
+	if (METHOD(statics_face, 29, HRESULT (WINAPI *)(object *, UINT32, const INT32 *, object **))(statics_face, 3, numbers, &boxed) != S_OK ||
+		METHOD(boxed, 6, number_method)(boxed, &type) != S_OK || type != 1028) return 115;
+	if (METHOD(boxed, 29, HRESULT (WINAPI *)(object *, UINT32 *, INT32 **))(boxed, &count, &copy) != S_OK || count != 3 || !copy ||
+		copy[0] != 1 || copy[2] != 3) return 116;
+	CoTaskMemFree(copy);
+	copy = NULL;
+	if (METHOD(boxed, 31, HRESULT (WINAPI *)(object *, UINT32 *, INT64 **))(boxed, &count, &wrong) != (HRESULT)0x80020005 || wrong) return 117;
+	if (METHOD(boxed, 0, query_method)(boxed, &reference_array_int32, (void **)&reference) != S_OK ||
+		METHOD(reference, 6, HRESULT (WINAPI *)(object *, UINT32 *, INT32 **))(reference, &count, &copy) != S_OK || count != 3 || copy[1] != 2)
+		return 118;
+	CoTaskMemFree(copy);
+	METHOD(reference, 2, release_method)(reference);
+	METHOD(boxed, 2, release_method)(boxed);
+	METHOD(statics_face, 2, release_method)(statics_face);
+	return 0;
+}
+
 static int check_app_languages(void)
 {
 	object *factory = statics(L"Windows.Globalization.ApplicationLanguages", &app_languages_statics), *view = NULL;
@@ -351,5 +439,7 @@ int raven_entry(void)
 		failure = check_analytics();
 	if (!failure)
 		failure = check_metadata();
-	return failure ? failure : check_app_languages();
+	if (!failure)
+		failure = check_app_languages();
+	return failure ? failure : check_property_values();
 }

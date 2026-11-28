@@ -116,5 +116,7 @@ HRESULT application_exit(void);
 extern struct object core_window_class, core_cursor_class, display_information_class;
 /* The package of the app and its data, from package.c. */
 extern struct object package_class, application_data_class;
+/* Windows.Foundation.PropertyValue, from value.c. */
+extern struct object property_value_class;
 
 #endif
